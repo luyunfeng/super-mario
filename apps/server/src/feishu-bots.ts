@@ -3,8 +3,8 @@ import { botConversationId } from '../../../packages/core/src/bot-agent-routing.
 import { createFeishuIntegration } from '../../../plugins/feishu.ts';
 import { allowedBotGroup, canRelayBotScope, nextRelayPath } from '../../../packages/core/src/bot-group-policy.ts';
 import type { FeishuMessageSource, FeishuSendContext, FeishuOptions } from '../../../plugins/feishu.ts';
-import { createFeishuBotConfig, sameBotScope } from '../../../packages/core/src/feishu-bot-config.ts';
-import type { FeishuBotSettings } from '../../../packages/core/src/feishu-bot-config.ts';
+import { createFeishuBotConfig, sameBotScope } from '../../../plugins/feishu-bot-config.ts';
+import type { FeishuBotSettings } from '../../../plugins/feishu-bot-config.ts';
 import type { EventBus, Store } from '../../../packages/plugin-sdk/src/index.ts';
 import type { AppConfig, InboxThing, Json, Message, Project, Todo } from '../../../packages/protocol/src/index.ts';
 import type { BotScope, FeishuBot, FeishuBotInput, MailboxEntry } from '../../../packages/protocol/src/bots.ts';

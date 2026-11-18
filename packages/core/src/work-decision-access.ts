@@ -15,11 +15,25 @@ type Envelope = { revision?: number; relay?: unknown; resultRelayEntryId?: strin
 function deny(): never { return scopeError('工作决定来源路由或身份范围无效', 403); }
 const identifier = (value: unknown): value is string => typeof value === 'string' && value.trim() === value && value.length > 0;
 
+export interface ChannelRouteLedgerSpec {
+  channel: string;
+  envelopeCollection: string;
+  dispatchCollection: string;
+  eventKeyPrefix: string;
+}
+
+const defaultChannelSpec: ChannelRouteLedgerSpec = {
+  channel: 'feishu',
+  envelopeCollection: 'feishu.bot.envelopes',
+  dispatchCollection: 'feishu.bot.dispatch',
+  eventKeyPrefix: 'feishu-in:',
+};
+
 /** Historical source authority only. The host must separately assertBotInput for
  * current writes, and seal message.routes in work-decisions' source proof.
  * No writes or caches: all evidence survives a Store/process restart.
  */
-export function authorizeWorkDecisionSource(store: Store, scope: BotScope, source: Message): void {
+export function authorizeWorkDecisionSource(store: Store, scope: BotScope, source: Message, channels: readonly ChannelRouteLedgerSpec[] = [defaultChannelSpec]): void {
   if (source.role !== 'user' || source.readOnly || source.origin !== undefined && source.origin !== 'user') deny();
   const target = validateBotScope(store, scope, { allowArchived: true });
   if (target.kind === 'unmarked') deny();
@@ -33,9 +47,10 @@ export function authorizeWorkDecisionSource(store: Store, scope: BotScope, sourc
   if ('routes' in source) deny();
   const route = store.get<HistoricalRoute>('message.routes', source.id);
   if (route && (Array.isArray(route) || route.resumed || route.relay !== undefined || route.resultRelayEntryId !== undefined)) deny();
+  const matchedChannel = route ? channels.find(item => item.channel === route.channel) : undefined;
   if (source.conversationId === 'main') {
-    // The legacy main Feishu connector writes a plain route without bot identity.
-    if (route && (route.channel !== 'feishu' || !identifier(route.accountId) || !identifier(route.target)
+    // Direct main-channel connectors write a plain route without bot identity.
+    if (route && (!matchedChannel || !identifier(route.accountId) || !identifier(route.target)
       || route.botId !== undefined || route.scope !== undefined || route.inputId !== undefined || route.envelopeId !== undefined)) deny();
     return;
   }
@@ -43,7 +58,7 @@ export function authorizeWorkDecisionSource(store: Store, scope: BotScope, sourc
     if (route) deny(); // The project runtime never creates a channel route.
     return;
   }
-  if (!route || route.channel !== 'feishu' || !identifier(route.botId) || !identifier(route.accountId)
+  if (!route || !matchedChannel || !identifier(route.botId) || !identifier(route.accountId)
     || !identifier(route.target) || !identifier(route.envelopeId) || route.inputId !== source.id
     || !identifier(route.sourceMessageId) || !Number.isSafeInteger(route.revision) || route.revision! < 1 || !route.scope) deny();
   const owner = validateBotScope(store, route.scope, { allowArchived: true });
@@ -54,13 +69,13 @@ export function authorizeWorkDecisionSource(store: Store, scope: BotScope, sourc
     || source.todoId !== (owner.kind === 'task' ? owner.todoId : undefined)) deny();
   narrow(owner);
   const envelope = store.get<MailboxEntry>('event.mailboxes', route.envelopeId);
-  const stamp = store.get<Envelope>('feishu.bot.envelopes', route.envelopeId);
-  const receipt = store.get<{ status: string; id?: string }>('feishu.bot.dispatch', `${route.botId}:${route.accountId}:${route.envelopeId}`);
+  const stamp = store.get<Envelope>(matchedChannel.envelopeCollection, route.envelopeId);
+  const receipt = store.get<{ status: string; id?: string }>(matchedChannel.dispatchCollection, `${route.botId}:${route.accountId}:${route.envelopeId}`);
   // A2A/model requests are also stored as role:user. Only the real inbound user
   // path is evidence; a valid bot hash or an inherited result route is insufficient.
   if (!envelope || envelope.id !== route.envelopeId || envelope.direction !== 'inbox'
     || envelope.botId !== route.botId || !sameBotScope(envelope.scope, owner)
-    || envelope.eventKey !== `feishu-in:${JSON.stringify([route.botId, route.accountId, route.sourceMessageId])}`
+    || envelope.eventKey !== `${matchedChannel.eventKeyPrefix}${JSON.stringify([route.botId, route.accountId, route.sourceMessageId])}`
     || envelope.sourceMessageId !== route.sourceMessageId || envelope.target !== route.target
     || envelope.text !== source.text || envelope.origin?.kind !== 'direct' && envelope.origin?.kind !== 'group'
     || !stamp || stamp.revision !== route.revision || stamp.relay !== undefined || stamp.resultRelayEntryId !== undefined

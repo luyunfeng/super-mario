@@ -41,7 +41,26 @@ export interface KnowledgeBackend {
   remove(id: string): Promise<boolean>;
 }
 export interface Routine { name: string; run(): Promise<Json> }
-export interface ContributionMap { event_subscriptions: PluginEventSubscription; [point: `${string}.${string}`]: Json; skills: Json; context_providers: Json; model_providers: Json; channels: Json; connectors: Json; inbox_triage: Json; terminal_hosts: Json; screen_parsers: Json; interaction_policies: Json; api: Json; events: Json; hooks: PluginHook; services: PluginService; service_wrappers: PluginServiceWrapper; tools: Tool; executors: Executor; knowledge_backends: KnowledgeBackend; routines: Routine; web_extensions: WebExtension }
+/** JSON-serializable channel metadata so core outbox, attention and approvals stay platform-agnostic. */
+export interface ChannelContribution {
+  [key: string]: Json | undefined;
+  id: string;
+  name: string;
+  outboxPrefixes?: string[];
+  approvalKinds?: string[];
+  sourcePrefix?: string;
+}
+export interface InboxTriageContribution {
+  [key: string]: Json | undefined;
+  id: string;
+  service: string;
+}
+export interface TerminalHostContribution {
+  [key: string]: Json | undefined;
+  id: string;
+  name: string;
+}
+export interface ContributionMap { event_subscriptions: PluginEventSubscription; [point: `${string}.${string}`]: Json; skills: Json; context_providers: Json; model_providers: Json; channels: ChannelContribution; connectors: Json; inbox_triage: InboxTriageContribution; terminal_hosts: TerminalHostContribution; screen_parsers: Json; interaction_policies: Json; api: Json; events: Json; hooks: PluginHook; services: PluginService; service_wrappers: PluginServiceWrapper; tools: Tool; executors: Executor; knowledge_backends: KnowledgeBackend; routines: Routine; web_extensions: WebExtension }
 export interface ExtensionPointDefinition { id: string; version: 1; transport?: 'json' | 'local' }
 export interface Contributions {
   definePoint(definition: ExtensionPointDefinition): Dispose;

@@ -1,3 +1,4 @@
+import type { Approval } from "../../protocol/src/index.ts";
 import type {
   BackgroundHost,
   EventInput,
@@ -24,6 +25,8 @@ export function createBackground({
   effects,
   propose,
   now = Date.now,
+  acceptChannel,
+  channelApprovalKind,
 }: {
   store: Store;
   events: EventBus;
@@ -32,10 +35,12 @@ export function createBackground({
     input: Parameters<ReturnType<typeof createApprovalService>["propose"]>[0],
   ) => ReturnType<ReturnType<typeof createApprovalService>["propose"]>;
   now?: () => number;
+  acceptChannel?: (channel: string) => boolean;
+  channelApprovalKind?: (channel: string) => Approval["kind"];
 }) {
   const eventbox = createEventbox({ store, events, now });
   const schedules = createSchedules({ store, eventbox, now });
-  const outbox = createOutbox({ store, effects, eventbox, propose, now });
+  const outbox = createOutbox({ store, effects, eventbox, propose, now, acceptChannel, channelApprovalKind });
   let closed = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let lastCleanup = 0;

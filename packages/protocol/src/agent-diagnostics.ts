@@ -1,5 +1,5 @@
 /** Diagnostic evidence is separate from ExecutorInfo.available and terminal/session state. */
-export type DiagnosticExecutorId = 'codex' | 'claude-code';
+export type DiagnosticExecutorId = string;
 export type DiagnosticErrorCode = 'not-configured' | 'missing' | 'permission-denied' | 'profile-unavailable'
   | 'profile-mismatch' | 'timeout' | 'output-limit' | 'execution-failed' | 'unrecognized-output';
 export interface AgentDiagnostics {

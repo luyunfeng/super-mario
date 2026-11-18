@@ -3,7 +3,7 @@ import type { ExecutionResult, Run } from '../../protocol/src/index.ts';
 import { executionProgress } from './execution-progress.ts';
 
 /** Poll only native result records. Terminal activity is never completion evidence. */
-export function createRunMonitor(options: { store: Store; events: EventBus; machines: () => MachineClient | undefined; onResult: (run: Run, result: ExecutionResult) => void }) {
+export function createRunMonitor(options: { store: Store; events: EventBus; machines: () => MachineClient | undefined; onResult: (run: Run, result: ExecutionResult) => void; legacyTrustedSources?: () => ReadonlySet<string> }) {
   let closed = false;
   let pending: Promise<void> | undefined;
   async function inspect() {
@@ -27,7 +27,7 @@ export function createRunMonitor(options: { store: Store; events: EventBus; mach
         const trustedSource = !['screen', 'text', 'runner', 'demo', 'unknown', 'idle', 'terminal-idle'].includes(result.source.trim().toLowerCase())
           && (current.nativeResultSources !== undefined
             ? current.nativeResultSources.includes(result.source)
-            : !current.nativeResume && ['codex-json', 'claude-result', 'claude-stream-json'].includes(result.source));
+            : !current.nativeResume && (options.legacyTrustedSources ? options.legacyTrustedSources().has(result.source) : ['codex-json', 'claude-result', 'claude-stream-json'].includes(result.source)));
         const pinnedSessionId = current.nativeResume?.nativeSessionId ?? current.nativeSessionId;
         const matchingThread = !pinnedSessionId || result.nativeSessionId === pinnedSessionId;
         // Validate before *any* evidence is persisted, including output and provenance.

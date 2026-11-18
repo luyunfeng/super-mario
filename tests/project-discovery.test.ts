@@ -203,9 +203,11 @@ test('real node transport advertises both read-only methods and returns director
   t.after(async () => { await agent.close(); await new Promise<void>(resolve => server.close(() => resolve())); });
   await done;
   const entry = await readFile(new URL('../bin/super-mario-agent.js', import.meta.url), 'utf8');
-  assert.ok(entry.includes('../dist/plugins/project-discovery.js'));
-  assert.ok(entry.includes('../plugins/project-discovery.ts'));
-  assert.ok(entry.includes('...discovery.handlers'));
+  assert.ok(entry.includes('../dist/apps/agent-node/src/node-plugins.js'));
+  assert.ok(entry.includes('../apps/agent-node/src/node-plugins.ts'));
+  const nodePluginsSource = await readFile(new URL('../apps/agent-node/src/node-plugins.ts', import.meta.url), 'utf8');
+  assert.ok(nodePluginsSource.includes('../../../plugins/project-discovery.ts'));
+  assert.ok(nodePluginsSource.includes('discovery.handlers'));
 });
 
 

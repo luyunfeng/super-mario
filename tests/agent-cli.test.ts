@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { stripTypeScriptTypes } from 'node:module';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { test, type TestContext } from 'node:test';
@@ -167,6 +168,11 @@ test('agent CLI loads compiled modules, including guarded artifacts, and passes 
       return { handlers: { 'extension.load': async () => ({}), 'extension.status': async () => ({}), 'extension.call': async () => ({}) }, close: async () => writeFile(dataDir + '/artifacts-closed', 'done') };
     }
   `);
+  const nodePluginsSource = await readFile(fileURLToPath(new URL('../apps/agent-node/src/node-plugins.ts', import.meta.url)), 'utf8');
+  await writeFile(
+    join(dir, 'dist/apps/agent-node/src/node-plugins.js'),
+    stripTypeScriptTypes(nodePluginsSource, { mode: 'strip' }).replace(/(from\s+['"][^'"]+)\.ts(['"])/g, '$1.js$2'),
+  );
   await writeFile(join(dir, 'dist/apps/agent-node/src/index.js'), `
     import { writeFile } from 'node:fs/promises';
     export async function startAgentNode(options) {

@@ -28,17 +28,21 @@ export function createInboxHandlingSources(options: {
   store: Store;
   personalAccount(): PersonalReplyAccount | undefined;
   mailboxAccess(entry: MailboxEntry): { active: boolean; reason?: string; replyAvailable: boolean; replyReason?: string; binding?: string };
+  dependentPlugins?: () => readonly string[];
+  resolvePersonalTarget?: (store: Store, id: string, account?: PersonalReplyAccount) => unknown;
 }) {
   const { store } = options;
+  const resolveTarget = options.resolvePersonalTarget ?? personalInboxReplyTarget;
   return function read(ref: InboxHandlingRef): InboxHandlingSource {
     if (!ref || !['personal', 'mailbox'].includes(ref.kind) || typeof ref.id !== 'string' || !ref.id.trim()) fail('收件来源无效', 400);
     let result: InboxHandlingSource;
-    const pluginGeneration=['inbox-triage','feishu'].map(id=>store.get<{revision?:number}>('core.plugin-settings',id)?.revision??1);
+    const pluginIds = options.dependentPlugins ? options.dependentPlugins() : ['inbox-triage', 'feishu'];
+    const pluginGeneration = pluginIds.map(id => store.get<{ revision?: number }>('core.plugin-settings', id)?.revision ?? 1);
     if (ref.kind === 'personal') {
       const item = store.get<InboxItem>('inbox', ref.id);
       if (!item) fail('收件消息不存在', 404);
       let replyReason: string | undefined;
-      try { personalInboxReplyTarget(store, ref.id, options.personalAccount()); }
+      try { resolveTarget(store, ref.id, options.personalAccount()); }
       catch (error) { replyReason = error instanceof Error ? error.message : '个人回复连接不可用'; }
       result = { ...ref, version: item.version, title: item.title, text: item.text,
         ...(item.projectId ? { projectId: item.projectId } : {}), ...(item.todoId ? { todoId: item.todoId } : {}),

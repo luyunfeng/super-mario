@@ -10,7 +10,6 @@ import { scheduledWorkApprovalKind } from './scheduled-work.ts';
 import { authorizeWorkDecisionSource } from './work-decision-access.ts';
 import { buildWorkContext } from './work-context.ts';
 import { createKnowledgeSourceSettings } from './knowledge-source-settings.ts';
-import { createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/knowledge-source-reader.ts';
 import { createReplyTracking } from './reply-tracking.ts';
 import { createWorkDecisionService } from './work-decision-service.ts';
 import { createAgentSessions, nativeResumeSpec, nativeResultSources } from './agent-sessions.ts';
@@ -21,7 +20,8 @@ import { createProjectFollowUp } from './project-follow-up.ts';
 import { applyPolicyPreset } from './policy-presets.ts';
 import { createProjectFolders } from './project-folders.ts';
 import { createWebPresence } from './web-presence.ts';
-import { buildWindowBrief, formatWindowBrief, createBriefingSettings } from './briefing.ts';
+import { createBriefingSettings } from './briefing.ts';
+import { reminderReference, reminderSourceId, wireWorkbenchBackground } from './workbench-background.ts';
 import { createAwayNotifications } from './away-notifications.ts';
 import { collectAttention } from './attention.ts';
 import { randomUUID, createHash } from 'node:crypto';
@@ -41,7 +41,6 @@ import { createApprovalService } from './approvals.ts';
 import { createSupervision } from './supervision.ts';
 import { loadExtensions } from './extension-loader.ts';
 import { createInboxService, ruleTriage } from './inbox.ts';
-import { createInboxTriage } from '../../../plugins/inbox-triage.ts';
 import { createStore } from './store.ts';
 import { createEventBus } from './events.ts';
 import { createBackground } from './background.ts';
@@ -53,8 +52,7 @@ import { createScopedAgents } from './scoped-agents.ts';
 import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
-import { createSystemExtensions } from '../../../plugins/index.ts';
-import { workspaceSplash } from '../../../plugins/workspace-splash.ts';
+import { createSystemExtensions, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import type { AppConfig, Approval, BotScope, ExecutionResult, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
@@ -114,7 +112,7 @@ export async function createWorkbench(config: AppConfig) {
     if (input.conversationId.startsWith('bot:') && !configuredBots().some(bot => input.conversationId.startsWith(`bot:${bot.id}:`))) throw new InputError('机器人来源已失效', 403);
     assertBotInput(input);
   } });
-  for (const extension of createSystemExtensions({ demo: config.demo, actions: { scheduledWorkList: input => scheduledWork.list(input) as unknown as Json, scheduledWorkPropose: input => scheduledWork.propose(input,true) as unknown as Json, scheduledWorkCancel: input => scheduledWork.cancel(input,true) as unknown as Json, knowledgeReaderService: () => protectedReaderService(), workDecisionsList: input => workDecisions.list(input) as unknown as Json, workDecisionRecord: input => workDecisions.recordFromAgent(input) as unknown as Json, workDecisionCorrect: input => workDecisions.changeFromAgent(input) as unknown as Json, workDecisionWithdraw: input => workDecisions.changeFromAgent(input, true) as unknown as Json, workDecisionReference: input => workDecisions.referenceFromAgent(input) as unknown as Json, inboxList: readInbox, inboxHandlingRead: readInboxHandlingFromAgent, inboxAssignProject: assignInboxProject, agentSessions: async input => await agentSessions.discover(input) as unknown as Json, resumeSession: async input => { const source = currentAgentInput() ?? agent.currentInput(); return await agentSessions.proposeResume({ ...input, key: source ? `${source.id}:${requiredText(input.key, '恢复请求标识')}` : input.key }, source) as unknown as Json; }, botsList: () => botsStatus(), botRelay: relayFromAgent, mailboxesList: input => mailboxes.list(input as Parameters<typeof mailboxes.list>[0]) as unknown as Json, mailboxPropose: input => { if (!mailboxProposer) throw new InputError('机器人信箱尚未连接', 503); return mailboxProposer(input); }, projectsList: () => projects.list() as unknown as Json, projectCreate: async input => await createProject(input) as unknown as Json, projectsDiscover: discoverProjects, knowledgeSource: input => {
+  for (const extension of createSystemExtensions({ demo: config.demo, actions: { triageAgent: { status: () => inboxClassifier.status(), ask: (text, context) => inboxClassifier.ask(text, context) }, ruleTriage, scheduledWorkList: input => scheduledWork.list(input) as unknown as Json, scheduledWorkPropose: input => scheduledWork.propose(input,true) as unknown as Json, scheduledWorkCancel: input => scheduledWork.cancel(input,true) as unknown as Json, knowledgeReaderService: () => protectedReaderService(), workDecisionsList: input => workDecisions.list(input) as unknown as Json, workDecisionRecord: input => workDecisions.recordFromAgent(input) as unknown as Json, workDecisionCorrect: input => workDecisions.changeFromAgent(input) as unknown as Json, workDecisionWithdraw: input => workDecisions.changeFromAgent(input, true) as unknown as Json, workDecisionReference: input => workDecisions.referenceFromAgent(input) as unknown as Json, inboxList: readInbox, inboxHandlingRead: readInboxHandlingFromAgent, inboxAssignProject: assignInboxProject, agentSessions: async input => await agentSessions.discover(input) as unknown as Json, resumeSession: async input => { const source = currentAgentInput() ?? agent.currentInput(); return await agentSessions.proposeResume({ ...input, key: source ? `${source.id}:${requiredText(input.key, '恢复请求标识')}` : input.key }, source) as unknown as Json; }, botsList: () => botsStatus(), botRelay: relayFromAgent, mailboxesList: input => mailboxes.list(input as Parameters<typeof mailboxes.list>[0]) as unknown as Json, mailboxPropose: input => { if (!mailboxProposer) throw new InputError('机器人信箱尚未连接', 503); return mailboxProposer(input); }, projectsList: () => projects.list() as unknown as Json, projectCreate: async input => await createProject(input) as unknown as Json, projectsDiscover: discoverProjects, knowledgeSource: input => {
     const source=currentAgentInput()??agent.currentInput();if(!source||source.role!=='user'||source.readOnly||source.origin&&source.origin!=='user')throw new InputError('来源投放需要当前用户输入',403);
     validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
     return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
@@ -130,19 +128,33 @@ export async function createWorkbench(config: AppConfig) {
   const inboxClassifier = createInboxClassifier({config,store,events,contributions,ready:()=>agent.status().available});
   const inboxHandlingRuntime = createInboxHandlingRuntime({config,store,events,contributions,ready:()=>agent.status().available});
   const inbox = createInboxService({ store, events, createTodo: input => createTodo(input, false),
-    triage: createInboxTriage({ agent: inboxClassifier, fallback: ruleTriage, enabled: () => !config.demo && plugins.list().some(plugin => plugin.id === 'inbox-triage' && plugin.status === 'active') }) });
-  const knowledgeCurator = createKnowledgeCurator({ store, events, dataDir: config.dataDir, knowledge, machines: () => machines, enabled: () => plugins.list().some(p => p.id === 'knowledge-local' && p.status === 'active'), validProject: id => projects.list().some(p => p.id === id && !p.archivedAt), readSource: readProtectedKnowledgeSource });
+    triage: async thing => {
+      if (!config.demo) {
+        const active = contributions.list('inbox_triage')[0]?.value;
+        if (active) {
+          try {
+            const value = await plugins.invocations.use(active.service, thing as unknown as Json);
+            if (value && typeof value === 'object' && !Array.isArray(value) && ['action', 'fyi', 'noise'].includes(String((value as Record<string, unknown>).tier)) && typeof (value as Record<string, unknown>).reason === 'string') {
+              return value as { tier: 'action' | 'fyi' | 'noise'; reason: string };
+            }
+          } catch { /* Fall back to deterministic local rules when service or model fails. */ }
+        }
+      }
+      const result = ruleTriage(thing);
+      return { tier: result.tier, reason: `规则回退：${result.reason}` };
+    } });
+  const knowledgeCurator = createKnowledgeCurator({ store, events, dataDir: config.dataDir, knowledge, machines: () => machines, enabled: () => contributions.list('knowledge_backends').length > 0, validProject: id => projects.list().some(p => p.id === id && !p.archivedAt), readSource: readProtectedKnowledgeSource, allowedProviders: () => [...new Set(['codex', 'claude-code', ...contributions.list('executors').filter(e => e.value.mode === 'real').map(e => e.value.kind || e.id)])] });
   const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text)=>scopedAgents.postProject(id,text),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
   const controllers = new Map<string, AbortController>();
   const jobs = new Set<Promise<void>>();
   let closing = false;
-  const approvals = createApprovalService({ store, events, execute: executeApproved, publish: background.publish });
+  const approvals = createApprovalService({ store, events, execute: executeApproved, publish: background.publish, allowedKinds: () => contributions.list('channels').flatMap(entry => entry.value.approvalKinds ?? []) });
   const inboxHandlingSources = createInboxHandlingSources({store,personalAccount:()=>knowledgeAccount(),mailboxAccess:entry=>mailboxHandlingAccess(entry)});
   const inboxHandling = createInboxHandling({store,events,
     readSource(ref) {
       let source = inboxHandlingSources(ref);
-      if(!plugins.list().some(p=>p.id==='feishu'&&p.status==='active'))source={...source,replyAvailable:false,replyReason:'请先启用飞书插件'};
-      return plugins.list().some(p=>p.id==='inbox-triage'&&p.status==='active') ? source : {...source,active:false,reason:'请先启用收件箱整理插件'};
+      if(!contributions.list('channels').length)source={...source,replyAvailable:false,replyReason:'请先启用飞书插件'};
+      return contributions.list('inbox_triage').length ? source : {...source,active:false,reason:'请先启用收件箱整理插件'};
     },
     available:()=>inboxHandlingRuntime.status(),
     think:(source,conversationId,text)=>inboxHandlingRuntime.ask(source,conversationId,text),
@@ -169,14 +181,6 @@ export async function createWorkbench(config: AppConfig) {
   const reporting = createTodoReporting({ store, events });
   const reviewSettings = () => ({ maxReworks: store.get<{ maxReworks: number }>('workbench.settings', 'run-review')?.maxReworks ?? 2 });
   const runReview = createRunReview({ store, events, dispatch, completeTodo: id => updateTodo(id, { completed: true }), maxReworks: () => reviewSettings().maxReworks });
-  function reminderReference(todo: Todo) {
-    return { ref: `reminder:${JSON.stringify([todo.id, todo.reminderAt])}`, version: todo.reminderVersion ?? 1 };
-  }
-  function reminderSourceId(todo: Todo) {
-    // Preserve generation-1 deduplication when reconciling legacy events.
-    return (todo.reminderVersion ?? 1) === 1 ? `reminder:${todo.id}:${todo.reminderAt}`
-      : `reminder:${JSON.stringify([todo.id, todo.reminderAt, todo.reminderVersion])}`;
-  }
   const supervision = createSupervision({ store, events, publish: input => {
     const data = input.data as {todoId?:string;reminderAt?:string};
     // Only the stored Todo supplies the generation, never incoming metadata.
@@ -232,89 +236,7 @@ export async function createWorkbench(config: AppConfig) {
     enabled: () => plugins.list().some(plugin => plugin.id === 'daily-brief' && plugin.status === 'active') });
   supervisorAgent.start();
   const expireTimer = setInterval(() => interactions.expireTick(), 30_000); expireTimer.unref();
-  const offReview = background.eventbox.subscribe('core', {
-    name: 'review-cards', types: [{ type: 'supervisor.review.created', version: 1 }], effects: 'none',
-    handler(event) {
-      const data = event.data as unknown as { id: string; runIds: string[]; text: string };
-      if (store.get('background.review-cards', data.id)) return { status: 'done' };
-      store.transaction(() => {
-        const runId = data.runIds.length === 1 && store.get<Run>('runs', data.runIds[0]!) ? data.runIds[0] : undefined;
-        const card = interactions.open({ kind: 'review', title: '后台督办复核建议', body: data.text, runId });
-        store.put('background.review-cards', data.id, { cardId: card.id });
-      });
-      return { status: 'done' };
-    },
-  });
-  const offSupervisor = background.eventbox.subscribe('core', {
-    name: 'supervisor-review', types: [{ type: 'supervision.signal', version: 1 }], effects: 'ledger', serial: 'none', timeoutMs: 600000,
-    async handler(event) {
-      const data = event.data as unknown as { id: string; kind: string };
-      if (!['review','stalled','orphaned','needs_you'].includes(data.kind) || store.get('supervisor.processed', data.id)) return { status: 'done' };
-      if (!supervision.signals().some(s => s.id === data.id && !s.resolvedAt)) return { status: 'skip', reason: 'signal_resolved' };
-      if (supervisorAgent.settings().canResume || !supervisorRuntime.status().available) return { status: 'retry', reason: '督办暂停或模型未就绪', afterSec: 30, deferred: true };
-      await supervisorAgent.flush();
-      return store.get('supervisor.processed', data.id) ? { status: 'done' } : { status: 'retry', reason: '等待批处理间隔', afterSec: 30, deferred: true };
-    },
-  });
-  // Reconcile old claimed reminders and open signals before the worker starts.
-  store.transaction(() => {
-    for (const signal of supervision.signals().filter(s => !s.resolvedAt)) {
-      background.publish({ type: 'supervision.signal', typeVersion: 1, sourceId: `signal:${signal.id}`, data: { id: signal.id, kind: signal.kind, text: signal.text, ...(signal.runId ? { runId: signal.runId } : {}), ...(signal.todoId ? { todoId: signal.todoId } : {}) }, subject: { kind: signal.runId ? 'run' : 'todo', id: signal.runId || signal.todoId || signal.id } });
-      if (signal.kind === 'reminder' && signal.todoId) {
-        const todo = store.get<Todo>('todos', signal.todoId);
-        if (todo?.remindedAt && todo.reminderAt) background.publish({ type:'todo.reminder_due', typeVersion:1, sourceId:reminderSourceId(todo), staleIf:reminderReference(todo), data:{todoId:todo.id,title:todo.title,reminderAt:todo.reminderAt},subject:{kind:'todo',id:todo.id} });
-      }
-    }
-    store.put('eventbox.migrations','core-v1',{completedAt:new Date().toISOString()});
-  });
-  const offBrief = background.eventbox.subscribe('core', {
-    name:'dailybrief', types:[{type:'schedule.due',version:1}], effects:'none',
-    async handler(event) {
-      const data = event.data as unknown as {owner:string;name:string;scheduledFor:string;scheduleId:string};
-      if(data.owner!=='daily-brief' || !['morning','evening','interval'].includes(data.name)) return {status:'skip',reason:'not_a_brief'};
-      if(!plugins.list().some(p=>p.id==='daily-brief'&&p.status==='active')) return {status:'retry',reason:'插件已停用',afterSec:60,deferred:true};
-      if(store.get('background.briefs',event.id)) return {status:'done'};
-      const routine=contributions.list('routines').find(item=>item.id==='dailybrief');
-      // Counts are calculated here from persisted facts; the routine is also callable by plugins.
-      if(!routine) return {status:'skip',reason:'brief_unavailable'};
-      await routine.value.run();
-      const to = data.scheduledFor || event.createdAt;
-      if (data.name === 'interval' && !briefing.inActiveWindow(to)) return {status:'skip',reason:'outside_active_window'};
-      const windowKey = `${data.scheduleId || data.name}:${to}`;
-      if (store.get('briefing.windows', windowKey)) return {status:'done'};
-      const previous = store.get<{to:string}>('briefing.cursors','last')?.to;
-      if (previous && Date.parse(previous) >= Date.parse(to)) return {status:'skip',reason:'window_already_covered'};
-      const hours = data.name === 'interval' ? briefing.settings().intervalHours : data.name === 'morning' ? 15 : 9;
-      const from = previous || new Date(Date.parse(to) - hours * 3600000).toISOString();
-      const facts=buildWindowBrief(store,from,to);
-      const globalBot = notificationBots().filter(b => b.scope.kind === 'global' && b.enabled && b.configured && b.connected && b.paired && b.replyTarget).sort((a,b)=>a.id.localeCompare(b.id))[0];
-      const briefChannel = globalBot ? notificationChannel(globalBot) : 'feishu.bot';
-      store.transaction(()=>{
-        store.put('background.briefs',event.id,{id:event.id,createdAt:new Date().toISOString(),facts});
-        store.put('briefing.windows',windowKey,{eventId:event.id});
-        store.put('briefing.cursors','last',{to});
-        background.outbox.enqueue('daily-brief',{dedupKey:`brief:${windowKey}`,channel:briefChannel,target:'owner',content:{text:formatWindowBrief(facts,data.name)},causedBy:event.id,...(event.staleIf?{staleIf:event.staleIf}:{})});
-      });
-      return {status:'done'};
-    },
-  });
-  const offNotifications=background.eventbox.subscribe('core',{
-    name:'notifications',types:[{type:'todo.reminder_due',version:1},{type:'supervisor.review.created',version:1}],effects:'none',
-    handler(event){
-      const data=event.data as unknown as {todoId?:string;title?:string;text?:string;messageId?:string;id?:string;reminderAt?:string};
-      if(event.type==='todo.reminder_due') { const todo=data.todoId?store.get<Todo>('todos',data.todoId):undefined; if(!todo||todo.completedAt||!data.reminderAt||todo.reminderAt!==data.reminderAt)return{status:'skip',reason:'reminder_changed'}; }
-      const message=data.messageId?store.get<Message>('messages',data.messageId):undefined;
-      // A review card already has its own notification event; avoid a second summary of the same review.
-      if(event.type==='interaction.user_required'&&data.id&&store.get<import('./interactions.ts').Card>('interactions',data.id)?.kind==='review')return{status:'skip',reason:'review_has_notification'};
-      const text=event.type==='todo.reminder_due'?`待办提醒：${data.title}\n/#todos`:event.type==='supervisor.review.created'?`督办复核建议：${(data.text||'').slice(0,1000)}\n/#supervision`:`${(message?.text||'有交互事项需要你处理').slice(0,1000)}\n/#interactions`;
-      background.outbox.enqueue(event.type==='todo.reminder_due'?'reminders':'supervisor',{dedupKey:`notification:${event.id}`,channel:'feishu.bot',target:'owner',content:{text},causedBy:event.id,...(data.todoId?{relatedTo:{kind:'todo',id:data.todoId}}:{}),...(event.staleIf?{staleIf:event.staleIf}:{})});
-      return{status:'done'};
-    },
-  });
   const awayNotifications = createAwayNotifications({ store, events, background, presence, bots: () => notificationBots(), channel: bot => notificationChannel(bot) });
-  if(!background.schedules.forOwner('daily-brief').list().length) {
-    for(const [name,cron] of [['morning','0 9 * * *'],['evening','0 18 * * *']]) background.schedules.forOwner('daily-brief').create({name:name!,kind:'cron',cron:cron!,tz:'Asia/Shanghai'});
-  }
   const projectFollowUp = createProjectFollowUp({ store, events, schedules: background.schedules, settings: briefing.settings,
     enqueue(input) {
       if (!projectFollowUp.isCurrent(input.projectId, input.key)) throw new InputError('项目跟进配置已变化', 409);
@@ -327,65 +249,17 @@ export async function createWorkbench(config: AppConfig) {
         content: { text: input.text }, relatedTo: { kind: 'project', id: input.projectId }, ...(input.staleIf ? { staleIf: input.staleIf } : {}) });
     },
   });
-  const offProjectBrief = background.eventbox.subscribe('core', { name: 'project-dailybrief', types: [{ type: 'schedule.due', version: 1 }], effects: 'none', handler: event => projectFollowUp.handle(event) });
-  for(const name of ['core.plan.propose','core.agent.ask','core.approval.propose','core.interaction.open','core.inbox.ingest']) contributions.add('services',name,{
-    name,version:1,async handler(value) {
-      if(!value||typeof value!=='object'||Array.isArray(value)) throw new InputError('服务参数必须为对象');
-      const owner=requiredText(value.__owner,'插件身份');
-      if (name === 'core.inbox.ingest') {
-        if (!plugins.list().some(plugin => plugin.id === owner && plugin.status === 'active')) throw new InputError('采集插件未启用', 409);
-        const sourceId = requiredText(value.sourceId, '来源标识');
-        if (!/^[A-Za-z0-9._-]{1,100}$/.test(sourceId) || !Array.isArray(value.items) || value.items.length > 500) throw new InputError('采集来源或消息批次无效');
-        // ExtensionContext injects __owner. A plugin cannot impersonate Feishu or
-        // another connector, nor assign lifecycle/project state through intake.
-        const source = `plugin:${owner}:${sourceId}`;
-        if (value.evidence !== undefined && (!Array.isArray(value.evidence) || value.evidence.length > 500)) throw new InputError('回复证据批次无效');
-        await inbox.ingest(source, value.items as unknown as import('../../protocol/src/index.ts').InboxThing[]);
-        if (value.evidence !== undefined) {
-          if (!plugins.list().some(plugin => plugin.id === owner && plugin.status === 'active')) throw new InputError('采集插件已停止', 409);
-          waitingReplies.observeSource(source, value.evidence as unknown as import('../../protocol/src/index.ts').CollectedReplyEvidence[]);
-        }
-        return { accepted: true, count: value.items.length, source };
-      }
-      if(name==='core.plan.propose') return proposePlan({...value,start:false}) as unknown as Json;
-      if(name==='core.agent.ask') { background.claimModel(owner); return await agent.ask(requiredText(value.text,'问题'),{readOnly:true}) as unknown as Json; }
-      if(name==='core.approval.propose') {
-        if(typeof value.kind!=='string'||!value.kind.startsWith(`plugin:${owner}.`)) throw new InputError('审批 kind 必须属于调用插件',403);
-        const key=typeof value.dedupKey==='string'?`${owner}:${value.dedupKey}`:undefined;
-        return store.transaction(()=>{
-          const old=key?store.get<{id:string}>('background.approval-requests',key):undefined;
-          if(old){const approval=store.get<Approval>('approvals',old.id);if(approval)return approval as unknown as Json;}
-          const approval=approvals.propose(value as unknown as Parameters<typeof approvals.propose>[0]);
-          if(key)store.put('background.approval-requests',key,{id:approval.id});return approval as unknown as Json;
-        });
-      }
-      return interactions.open(value as unknown as Parameters<typeof interactions.open>[0]) as unknown as Json;
-    },
+  const wiredBackground = wireWorkbenchBackground({
+    store, events, background, plugins, contributions, briefing, supervision, supervisorAgent, supervisorRuntime,
+    agent, inbox, waitingReplies, approvals, interactions, presence, projectFollowUp, proposePlan,
+    notificationBots: () => notificationBots(), notificationChannel: bot => notificationChannel(bot),
+    changed, isClosing: () => closing, createInputError: (message, status) => new InputError(message, status), requiredText,
   });
-  for(const plugin of plugins.list())background.host.ownerEnabled(plugin.id,plugin.status==='active');
-  background.start();
-  const offInteractionNotice = events.subscribe(event => {
-    if (event.type !== 'interactions.user_required' || !event.data || typeof event.data !== 'object' || Array.isArray(event.data) || typeof event.data.id !== 'string') return;
-    const id = event.data.id;
-    // The origin is persisted immediately after open(). Defer observation until that write completes.
-    void Promise.resolve().then(() => {
-      if (closing) return;
-      const card = store.get<import('./interactions.ts').Card>('interactions', id);
-      if (!card || card.userNotifiedAt) return;
-      const origin = store.get<{ inputId?: string }>('interaction-origins', id);
-      const now = new Date().toISOString(), messageId = `interaction-notice:${id}`;
-      store.transaction(() => {
-        store.put('interactions', id, { ...card, userNotifiedAt: now });
-        const message: Message = { id: messageId, conversationId: 'main', role: 'assistant', origin: 'notification', replyTo: origin?.inputId,
-          projectId: card.projectId, text: `需要你处理：${card.title}\n${card.suggestion ?? card.body}\n请在“交互卡”中核对并回答。`, status: 'done', createdAt: now };
-        store.put('messages', messageId, message);
-        store.put('notifications.source-presence',`interaction:${id}`,{present:presence.status().present});
-        background.publish({type:'interaction.user_required',typeVersion:1,sourceId:`interaction-notice:${id}`,data:{id,messageId},subject:{kind:'interaction',id}});
-      });
-      changed('messages.changed', { messageId }); changed('notifications.message', { messageId });
-    }).catch(error => { if (!closing) console.error('交互卡通知保存失败', error instanceof Error ? error.message : 'unknown'); });
-  });
-  const monitor = createRunMonitor({ store, events, machines: () => machines, onResult: finishRun });
+  const monitor = createRunMonitor({ store, events, machines: () => machines, onResult: finishRun, legacyTrustedSources: () => {
+    const sources = new Set<string>(['codex-json', 'claude-result', 'claude-stream-json']);
+    for (const item of executorInfo()) for (const src of item.nativeResultSources ?? []) sources.add(src);
+    return sources;
+  } });
   function proposePlan(input: Record<string, unknown>, fromAgent = false) {
     const source = fromAgent ? currentAgentInput() ?? agent.currentInput() : undefined;
     if (Array.isArray(input.tasks) && input.tasks.some(task => task && typeof task === 'object' && 'nativeResume' in task)) throw new InputError('原生线程恢复须通过单独恢复审批，不能作为新任务静默派发', 403);
@@ -538,8 +412,8 @@ export async function createWorkbench(config: AppConfig) {
     const remote: Executor[] = [];
     for (const machine of machines?.list() ?? []) {
       for (const info of machine.executors ?? []) {
-        if (!plugins.list().some(plugin => plugin.id === 'terminal-host' && plugin.status === 'active')) continue;
-        if (!plugins.list().some(plugin => plugin.id === `executor-${info.id}` && plugin.status === 'active')) continue;
+        if (!contributions.list('terminal_hosts').length) continue;
+        if (!contributions.list('executors').some(entry => entry.id === info.id)) continue;
         remote.push({ ...info, machineId: machine.id, id: `${machine.id}/${info.id}`, name: `${info.name} · ${machine.name}`,
           available: machine.online && info.available,
           reason: machine.online ? info.reason : '执行机离线',
@@ -758,7 +632,7 @@ export async function createWorkbench(config: AppConfig) {
       const {kind:_,...params}=action;
       const run=dispatch({...params,...(source.projectId?{projectId:source.projectId}:{}),...(source.todoId?{todoId:source.todoId}:{})},key,true,()=>{
         const latest=inboxHandlingSources({kind:source.kind,id:source.id});
-        if(!latest.active||latest.version!==source.version||latest.binding!==source.binding||!plugins.list().some(p=>p.id==='inbox-triage'&&p.status==='active'))throw Object.assign(new InputError('收件派发前来源或插件授权已变化',409),{delivery:'no'});
+        if(!latest.active||latest.version!==source.version||latest.binding!==source.binding||!contributions.list('inbox_triage').length)throw Object.assign(new InputError('收件派发前来源或插件授权已变化',409),{delivery:'no'});
       });
       return {runId:run.id,todoCompleted:false};
     }
@@ -828,7 +702,7 @@ export async function createWorkbench(config: AppConfig) {
     if(job)knowledgeSourceApproval.check(job);
     return result as unknown as import('../../protocol/src/index.ts').KnowledgeSourceResult;
   }
-  function attention() { return collectAttention({ plans: plans.list(), approvals: approvals.list(), interactions: interactions.list(), inbox: inbox.list(), mailboxes: mailboxes.list(), projects: projects.list(), bots: botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[] }); }
+  function attention() { return collectAttention({ plans: plans.list(), approvals: approvals.list(), interactions: interactions.list(), inbox: inbox.list(), mailboxes: mailboxes.list(), projects: projects.list(), bots: botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[], channels: contributions.list('channels').map(entry => entry.value) }); }
   function skipChannel() {
     store.put('settings', 'setup.channel-skipped', { skipped: true });
     events.publish('setup.changed', {});
@@ -1016,8 +890,8 @@ export async function createWorkbench(config: AppConfig) {
     async close() {
       if (closing) return;
       closing = true;
-      await offProjectBrief(); projectFollowUp.close();
-      supervision.close(); plans.close(); clearInterval(expireTimer); await awayNotifications.close(); await offReview(); await offSupervisor(); await offBrief(); await offNotifications(); await offInteractionNotice();
+      await wiredBackground.close(); projectFollowUp.close();
+      supervision.close(); plans.close(); clearInterval(expireTimer); await awayNotifications.close();
       await knowledgeCurator.close();
       await monitor.close();
       await approvals.close();

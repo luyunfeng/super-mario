@@ -1,4 +1,4 @@
-import { hasKnowledgeSourceHTML } from '../../../plugins/knowledge-source-reader.ts';
+import { hasKnowledgeSourceHTML } from '../../protocol/src/index.ts';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -8,7 +8,7 @@ import type { Store, EventBus, KnowledgeBackend, MachineClient } from '../../plu
 import type { KnowledgeEntry, Json } from '../../protocol/src/index.ts';
 import type { KnowledgeSourceResult } from '../../protocol/src/knowledge-source-reader.ts';
 const exec = promisify(execFile);
-type Settings = { enabled: boolean; machineId?: string; provider: 'codex' | 'claude-code' };
+type Settings = { enabled: boolean; machineId?: string; provider: string };
 type Scope = { layer: 'personal' | 'project'; projectId?: string };
 type Binding = { machineId: string; workerId: string; provider: string; scope: Scope };
 const jobScope = (job?: Pick<Job, 'layer' | 'projectId'>): Scope => job?.layer === 'project' ? { layer: 'project', projectId: job.projectId } : { layer: 'personal' };
@@ -21,7 +21,7 @@ const defaults: Settings = { enabled: false, provider: 'codex' };
 /** A durable queue delegates each source to one persistent CLI worker on an execution node.
  * Only the server imports validated pages into the knowledge backend. It never retries an uncertain turn.
  */
-export function createKnowledgeCurator(options: { store: Store; events: EventBus; dataDir: string; knowledge: () => KnowledgeBackend; machines: () => MachineClient | undefined; enabled: () => boolean; validProject: (id: string) => boolean; readSource?: (url: string, signal?: AbortSignal, job?: Job) => Promise<KnowledgeSourceResult | undefined> }) {
+export function createKnowledgeCurator(options: { store: Store; events: EventBus; dataDir: string; knowledge: () => KnowledgeBackend; machines: () => MachineClient | undefined; enabled: () => boolean; validProject: (id: string) => boolean; readSource?: (url: string, signal?: AbortSignal, job?: Job) => Promise<KnowledgeSourceResult | undefined>; allowedProviders?: () => readonly string[] }) {
   const { store, events } = options;
   const lifecycle = new AbortController();
   const directory = join(options.dataDir, 'plugins', 'knowledge-local');
@@ -348,9 +348,9 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
     sourceRejected(id:string,reason:string) { const job=store.get<Job>(jobsCollection,id);if(job?.status==='awaiting_approval')save(job,{status:'failed',error:`来源读取确认已失效：${reason}`}); },
     async configure(input: Record<string, unknown>) {
       if (configuring) throw new CuratorError('知识 Agent 正在修改配置', 409);
-      if (typeof input.enabled !== 'boolean' || !['codex', 'claude-code'].includes(String(input.provider))) throw new CuratorError('请选择是否启用及有效的 CLI 类型');
+      if (typeof input.enabled !== 'boolean' || !(options.allowedProviders ? options.allowedProviders() : ['codex', 'claude-code']).includes(String(input.provider))) throw new CuratorError('请选择是否启用及有效的 CLI 类型');
       if (input.machineId !== undefined && typeof input.machineId !== 'string') throw new CuratorError('执行机标识无效');
-      const next: Settings = { enabled: input.enabled, provider: input.provider as Settings['provider'], ...(input.machineId ? { machineId: String(input.machineId) } : {}) };
+      const next: Settings = { enabled: input.enabled, provider: String(input.provider), ...(input.machineId ? { machineId: String(input.machineId) } : {}) };
       const current = settings();
       const pausing = !next.enabled && next.machineId === current.machineId && next.provider === current.provider;
       if (!pausing && jobs().some(job => job.status === 'running')) throw new CuratorError('知识 Agent 正在整理，请完成后再修改配置', 409);

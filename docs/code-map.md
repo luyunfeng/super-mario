@@ -37,11 +37,11 @@
 | `packages/core/src/plugin-invocations.ts` | 钩子、JSON 服务与有序包装的超时/清理边界 |
 | `apps/server/src/agent-artifacts.ts`、`apps/agent-node/src/agent-artifacts.ts` | 远端代码暂存确认、导入前完整性检查和版本绑定调用 |
 | `packages/plugin-sdk/src/json.ts`、`permissions.ts`、`agent-artifacts.ts` | 公开 JSON、权限名称和制品校验接口 |
-| `scripts/check-plugin-boundaries.mjs` | 系统与第三方插件统一 AST 导入检查，CI 失败 gate |
+| `scripts/check-plugin-boundaries.mjs` | 系统/第三方插件与核心/共享包的双向 AST 导入边界检查，CI 失败 gate |
 | `packages/core/src/plugin-host.ts` | 贡献注册、启停、依赖与资源释放 |
 | `packages/core/src/agent-runtime/` | 唯一导入 pi 的目录，模型与插件工具桥接 |
-| `plugins/index.ts` | 默认插件和主 Agent 业务工具 |
-| `apps/server/src/feishu.ts` | 飞书配置、私聊配对、异步回复关联与启停 |
+| `plugins/index.ts` | 8 个默认系统插件（内聚各自扩展贡献、服务与 Agent 工具）及开屏扩展入口 |
+| `apps/server/src/feishu-gateway.ts`、`feishu.ts` | 飞书单连接、多机器人、个人采集与回复通道的宿主网关挂载 |
 | `packages/core/src/integration-config.ts` | 本地私密配置，公开状态排除密钥 |
 | `packages/core/src/inbox.ts` | 消息去重、规则分拣、版本校验与确认转待办 |
 | `packages/core/src/machines.ts` | 执行机 RPC、连接替换隔离与瞬态事件 |
@@ -76,7 +76,7 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `apps/server/src/feishu-bots.ts`、`packages/core/src/feishu-bot-config.ts` | 独立连接、私密配置、配对、事件路由与改绑失效 |
+| `apps/server/src/feishu-bots.ts`、`plugins/feishu-bot-config.ts` | 独立连接、私密配置、配对、事件路由与改绑失效 |
 | `packages/core/src/event-mailboxes.ts`、`bot-scopes.ts` | 业务收发信箱、范围归类、版本确认与中断状态 |
 | `packages/core/src/scoped-agents.ts`、`agent-input.ts` | 独立会话及共享工具的调用来源 |
 | `plugins/feishu-registration.ts`、`apps/server/src/feishu-registration.ts` | 扫码登录、自动配置/发布回读及注册记录 |

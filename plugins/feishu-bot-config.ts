@@ -1,8 +1,60 @@
 import { randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { validateBotGroupConfig } from './bot-group-policy.ts';
-import type { BotGroupAccess, BotCollaboration, BotScope, FeishuBotInput } from '../../protocol/src/bots.ts';
+import type { BotCollaboration, BotGroupAccess, BotScope, FeishuBotInput } from '../packages/protocol/src/index.ts';
+
+function record(value: unknown, fields: string[]): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('配置必须是对象');
+  if (Object.keys(value).some(key => !fields.includes(key))) throw new Error('配置包含未知字段');
+  return value as Record<string, unknown>;
+}
+
+function identifier(value: unknown, prefix = ''): string {
+  if (typeof value !== 'string' || !value || value.trim() !== value || /\s/.test(value)
+    || !value.startsWith(prefix) || value.length <= prefix.length) throw new Error('标识符无效');
+  return value;
+}
+
+function array(value: unknown, max: number): unknown[] {
+  if (!Array.isArray(value) || value.length > max) throw new Error(`数组最多允许 ${max} 项`);
+  return value;
+}
+
+/** Undefined preserves existing configuration; explicit empty values clear it. No remote lookups. */
+export function validateBotGroupConfig(input: { groupChats?: unknown; collaboration?: unknown; executorId?: unknown }): {
+  groupChats?: BotGroupAccess[]; collaboration?: BotCollaboration; executorId?: string;
+} {
+  const config = record(input, ['groupChats', 'collaboration', 'executorId']);
+  const result: { groupChats?: BotGroupAccess[]; collaboration?: BotCollaboration; executorId?: string } = {};
+  if (config.executorId !== undefined) {
+    if (typeof config.executorId !== 'string' || config.executorId.trim() !== config.executorId) throw new Error('executorId 无效');
+    result.executorId = config.executorId;
+  }
+  if (config.groupChats !== undefined) {
+    const groups = array(config.groupChats, 20).map(value => {
+      const group = record(value, ['chatId', 'mentionOnly', 'allowedSenderIds']);
+      const chatId = identifier(group.chatId, 'oc_');
+      if (typeof group.mentionOnly !== 'boolean') throw new Error('mentionOnly 必须是布尔值');
+      const allowedSenderIds = [...new Set(array(group.allowedSenderIds, 100).map(id => identifier(id, 'ou_')))];
+      return { chatId, mentionOnly: group.mentionOnly, allowedSenderIds };
+    });
+    // Duplicate groups must agree: silently selecting one could widen permissions.
+    const unique = new Map<string, BotGroupAccess>();
+    for (const group of groups) {
+      const previous = unique.get(group.chatId);
+      if (previous && (previous.mentionOnly !== group.mentionOnly
+        || previous.allowedSenderIds.length !== group.allowedSenderIds.length
+        || previous.allowedSenderIds.some(id => !group.allowedSenderIds.includes(id)))) throw new Error('重复群配置冲突');
+      unique.set(group.chatId, group);
+    }
+    result.groupChats = [...unique.values()];
+  }
+  if (config.collaboration !== undefined) {
+    const collaboration = record(config.collaboration, ['peerBotIds']);
+    result.collaboration = { peerBotIds: [...new Set(array(collaboration.peerBotIds, 32).map(id => identifier(id)))] };
+  }
+  return result;
+}
 
 /** Private configuration only. Never publish these records into events or snapshots. */
 export interface FeishuBotSettings {
@@ -11,6 +63,7 @@ export interface FeishuBotSettings {
   executorId?: string; groupChats?: BotGroupAccess[]; collaboration?: BotCollaboration;
   revision: number; createdAt: string; updatedAt: string; archivedAt?: string;
 }
+
 export function validateBotScope(value: unknown): BotScope {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('机器人 scope 必须为对象');
   const scope = value as Record<string, unknown>;
@@ -20,10 +73,12 @@ export function validateBotScope(value: unknown): BotScope {
     || (scope.kind === 'project' && !text('projectId')) || (scope.kind === 'task' && (!text('todoId') || (scope.projectId !== undefined && !text('projectId'))))) throw new Error('机器人 scope 无效');
   return structuredClone(value) as BotScope;
 }
+
 export function sameBotScope(a: BotScope, b: BotScope): boolean {
   return a.kind === b.kind && (a.kind !== 'project' || (b.kind === 'project' && a.projectId === b.projectId))
     && (a.kind !== 'task' || (b.kind === 'task' && a.todoId === b.todoId && a.projectId === b.projectId));
 }
+
 export function createFeishuBotConfig(dataDir: string, legacyAppId?: string) {
   const file = join(dataDir, 'bots.json');
   let rows: FeishuBotSettings[] = [];

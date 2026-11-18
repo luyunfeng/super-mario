@@ -98,3 +98,21 @@ test('ledger and none event handlers cannot bypass the host with direct network 
  assert.equal(result.violations.length,3);assert.ok(result.violations.every((v:{path:string})=>v.path==='plugins/unsafe.ts'));
  assert.equal(runCli(['--root',root],()=>{},()=>{}),1);
 });
+
+test('reverse boundary: core and shared packages cannot import individual plugins or apps', t => {
+  const root = fixture(t, {
+    'packages/protocol/src/leak.ts': "import '../../../plugins/feishu.ts';",
+    'packages/plugin-sdk/src/leak.ts': "import '../../core/src/store.ts';",
+    'packages/core/src/domain.ts': "import '../../../plugins/knowledge-source-reader.ts';\nimport '../../../apps/server/src/index.ts';",
+    'packages/core/src/workbench.ts': "import '../../../plugins/index.ts';",
+    'plugins/index.ts': "export {};",
+  });
+  const result = checkPluginBoundaries(root);
+  assert.equal(result.violations.length, 4);
+  assert.deepEqual(result.violations.map((v: { path: string }) => v.path).sort(), [
+    'packages/core/src/domain.ts',
+    'packages/core/src/domain.ts',
+    'packages/plugin-sdk/src/leak.ts',
+    'packages/protocol/src/leak.ts',
+  ]);
+});

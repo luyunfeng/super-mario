@@ -25,18 +25,22 @@ export function createOutbox({
   propose,
   now = Date.now,
   sendTimeoutMs = 30000,
+  acceptChannel,
+  channelApprovalKind,
 }: {
   store: Store;
   effects: ReturnType<typeof createEffects>;
   eventbox: Eventbox;
   propose: (input: {
-    kind: "feishu-reply";
+    kind: Approval["kind"];
     title: string;
     details: string;
     params: Record<string, Json>;
   }) => Approval;
   now?: () => number;
   sendTimeoutMs?: number;
+  acceptChannel?: (channel: string) => boolean;
+  channelApprovalKind?: (channel: string) => Approval["kind"];
 }) {
   const sendControllers = new Map<string, AbortController>();
   const senders = new Map<
@@ -183,8 +187,15 @@ export function createOutbox({
         text: input.content?.text,
       }))
         backgroundText(value, key);
-      if (input.channel !== "feishu.bot" && !/^feishu\.bot:[a-zA-Z0-9_-]+:[a-f0-9]{16}$/.test(input.channel) && !/^feishu\.personal:[a-f0-9]{16}$/.test(input.channel))
-        backgroundError("不支持此飞书发件渠道");
+      if (
+        !senders.has(input.channel) &&
+        !(acceptChannel
+          ? acceptChannel(input.channel)
+          : /^[a-z0-9][a-z0-9_-]*\.(?:bot|personal)(?::[a-zA-Z0-9_-]+)?(?::[a-f0-9]{16})?$/.test(
+              input.channel,
+            ))
+      )
+        backgroundError("不支持此发件渠道");
       const id = digest([owner, input.dedupKey]),
         hash = digest(input);
       for (const at of [input.window?.notBefore, input.window?.expiresAt])
@@ -275,7 +286,11 @@ export function createOutbox({
         if (!a)
           return store.transaction(() => {
             const approval = propose({
-              kind: "feishu-reply",
+              kind:
+                channelApprovalKind?.(item.channel) ??
+                (item.channel.startsWith("feishu.")
+                  ? "feishu-reply"
+                  : "channel-reply"),
               title: "确认发送通知",
               details: `${item.owner} → ${item.channel} / ${item.target}\n${item.content.text}`,
               params: {

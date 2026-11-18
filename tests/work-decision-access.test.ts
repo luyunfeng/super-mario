@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { authorizeWorkDecisionSource } from '../packages/core/src/work-decision-access.ts';
 import { botConversationId } from '../packages/core/src/bot-agent-routing.ts';
-import { createFeishuBotConfig } from '../packages/core/src/feishu-bot-config.ts';
+import { createFeishuBotConfig } from '../plugins/feishu-bot-config.ts';
 import { createStore } from '../packages/core/src/store.ts';
 import { createEventBus } from '../packages/core/src/events.ts';
 import { createWorkDecisions } from '../packages/core/src/work-decisions.ts';

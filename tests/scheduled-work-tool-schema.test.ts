@@ -29,7 +29,7 @@ async function fixture(t: test.TestContext) {
   const host = new PluginHost({ store, contributions, dataDir: dir, events });
   let received: Record<string, unknown> | undefined;
   let receipt: unknown;
-  const builtin = createSystemExtensions({ demo: false, actions: {
+  const dailyBrief = createSystemExtensions({ demo: false, actions: {
     dispatch: () => { throw new Error('No dispatch in schema tests'); }, createTodo: () => null,
     scheduledWorkList: () => [], scheduledWorkCancel: () => null,
     scheduledWorkPropose: input => {
@@ -37,8 +37,8 @@ async function fixture(t: test.TestContext) {
       receipt = work.propose(input as unknown as ScheduledWorkInput, source.id);
       return receipt as unknown as JsonObject;
     },
-  } }).find(extension => extension.id === 'builtin-tools')!;
-  host.register(builtin);
+  } }).find(extension => extension.id === 'daily-brief')!;
+  host.register(dailyBrief);
   await host.start();
   t.after(async () => {
     await host.close(); work.close(); await approvals.close(); schedules.close(); await eventbox.close();

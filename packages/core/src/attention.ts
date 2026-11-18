@@ -40,9 +40,10 @@ interface AttentionInput {
   mailboxes?: readonly MailboxEntry[];
   projects?: readonly Project[];
   bots?: readonly Pick<FeishuBot, 'id' | 'name'>[];
+  channels?: ReadonlyArray<{ id: string; name: string; sourcePrefix?: string }>;
 }
 
-export function collectAttention({ approvals = [], interactions = [], inbox = [], mailboxes = [], projects = [], bots = [], plans = [] }: AttentionInput = {}): AttentionItem[] {
+export function collectAttention({ approvals = [], interactions = [], inbox = [], mailboxes = [], projects = [], bots = [], plans = [], channels }: AttentionInput = {}): AttentionItem[] {
   const rows: AttentionItem[] = [];
   const projectNames = new Map(projects.map(project => [project.id, project.name]));
   const project = (projectId?: string) => projectId ? { projectId, projectName: projectNames.get(projectId) } : {};
@@ -90,18 +91,24 @@ export function collectAttention({ approvals = [], interactions = [], inbox = []
   }
   for (const item of inbox) {
     const humanFocus = item.origin?.kind === 'direct' || (item.origin?.kind === 'group' && item.origin.mentionedMe === true);
-    if ((item.tier !== 'action' && !humanFocus) || item.archivedAt || (!item.source.startsWith('feishu:') && !item.source.startsWith('plugin:'))) continue;
+    const matchedChannel = channels?.find(channel => item.source.startsWith(channel.sourcePrefix ?? `${channel.id}:`));
+    const allowedSource = item.source.startsWith('plugin:')
+      || (channels !== undefined
+        ? Boolean(matchedChannel)
+        : /^[a-z0-9][a-z0-9_-]*:/i.test(item.source) && !/^demo:/i.test(item.source));
+    if ((item.tier !== 'action' && !humanFocus) || item.archivedAt || !allowedSource) continue;
     // Mailbox records only enrich source context. They are not another copy of the
     // same message and do not create unsupported mailbox-to-todo actions.
     const linked = mailboxes.find(entry => entry.direction === 'inbox' && entry.resultId === item.id);
     const projectId = item.projectId ?? (linked && 'projectId' in linked.scope ? linked.scope.projectId : undefined);
     rows.push({ id: `inbox:${item.id}`, type: 'inbox', version: item.version, title: item.title,
       context: item.todoId ? '这条消息已关联待办，可忽略更新' : '把这条消息转成待办，或忽略',
-      detail: [item.text, item.reason].filter(Boolean).join('\n\n'), source: item.origin?.connector || (item.source.startsWith('feishu:') ? '飞书' : '插件消息'), origin: item.origin, createdAt: item.receivedAt || item.updatedAt,
+      detail: [item.text, item.reason].filter(Boolean).join('\n\n'), source: item.origin?.connector || matchedChannel?.name || (item.source.startsWith('plugin:') ? '插件消息' : '外部渠道'), origin: item.origin, createdAt: item.receivedAt || item.updatedAt,
       ...project(projectId), actions: [...(item.todoId ? [] : [action('inbox', item.id, 'confirm', item.version, '转成待办')]), action('inbox', item.id, 'archive', item.version, '忽略')] });
   }
-  // Robot event mail is another Feishu source, not a fourth user-facing entity.
+  // Robot event mail is another channel source, not a fourth user-facing entity.
   // Unmarked input must be classified before confirmation; no implicit global route.
+  const mailboxChannelName = channels?.[0]?.name || '飞书';
   for (const item of mailboxes) {
     if (item.status !== 'pending' || !item.requiresConfirmation || (item.resultId && inbox.some(entry => entry.id === item.resultId))) continue;
     const unmarked = item.scope.kind === 'unmarked';
@@ -110,7 +117,7 @@ export function collectAttention({ approvals = [], interactions = [], inbox = []
     const outgoing = item.direction === 'outbox';
     rows.push({ id: `mailbox:${item.id}`, type: outgoing ? 'approval' : 'inbox', version: item.version, title: item.title,
       context: unmarked ? '先选择全局、项目或待办范围，再确认处理。' : outgoing ? '确认后由机器人发送，不以你的个人身份代发。' : '确认后交给 Agent 处理，不代表任务已完成。',
-      detail: item.text, source: bot ? `飞书 · ${bot.name}` : '飞书机器人', origin: item.origin, createdAt: item.createdAt, ...project(projectId),
+      detail: item.text, source: bot ? `${mailboxChannelName} · ${bot.name}` : `${mailboxChannelName}机器人`, origin: item.origin, createdAt: item.createdAt, ...project(projectId),
       ...(unmarked ? { route: { href: '#channels/advanced', label: '去归类' } } : {}),
       actions: [...(unmarked ? [] : [action('mailboxes', item.id, 'confirm', item.version, outgoing ? '确认发送' : '交给 Agent')]), action('mailboxes', item.id, 'reject', item.version, '拒绝')] });
   }

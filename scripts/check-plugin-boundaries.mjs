@@ -53,6 +53,26 @@ export function checkPluginBoundaries(root = process.cwd()) {
           report(node, specifier, 'pi SDK is private to core/agent-runtime');
           return;
         }
+        const sharedPkg = path.startsWith('packages/protocol/') || path.startsWith('packages/plugin-sdk/');
+        const corePkg = path.startsWith('packages/core/');
+        if ((sharedPkg || corePkg) && (specifier.startsWith('.') || isAbsolute(specifier) || specifier.startsWith('file:'))) {
+          let target;
+          try { target = specifier.startsWith('file:') ? fileURLToPath(specifier) : resolve(dirname(file), specifier); }
+          catch { report(node, specifier, 'invalid file import'); return; }
+          const local = relative(root, target).replaceAll('\\', '/');
+          if (sharedPkg && (local.startsWith('packages/core/') || local.startsWith('plugins/') || local.startsWith('apps/'))) {
+            report(node, specifier, 'shared protocol/plugin-sdk cannot import core, plugins, or apps');
+            return;
+          }
+          if (corePkg && local.startsWith('apps/')) {
+            report(node, specifier, 'core cannot import apps');
+            return;
+          }
+          if (corePkg && local.startsWith('plugins/') && !(path === 'packages/core/src/workbench.ts' && /^plugins\/index\.(ts|js)$/.test(local))) {
+            report(node, specifier, 'core modules cannot import individual plugin implementations');
+            return;
+          }
+        }
         if (!plugin) return;
         // Resolve relative paths before checking: nested examples get no special exemption.
         if (specifier.startsWith('.') || isAbsolute(specifier) || specifier.startsWith('file:')) {

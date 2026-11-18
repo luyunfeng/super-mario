@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createIntegrationConfig } from '../../../packages/core/src/integration-config.ts';
-import { createFeishuBotConfig } from '../../../packages/core/src/feishu-bot-config.ts';
+import { createFeishuBotConfig } from '../../../plugins/feishu-bot-config.ts';
 import { createPersonalProvider, PersonalAuthError, personalProblem } from '../../../plugins/feishu-personal.ts';
 import { PERSONAL_COLLECTION_BOUNDARY, preparePersonalCheckpoint } from '../../../plugins/feishu.ts';
 import type { PersonalCheckpoint } from '../../../plugins/feishu-personal.ts';

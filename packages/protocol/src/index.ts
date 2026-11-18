@@ -1,6 +1,7 @@
 export type { ScheduledWorkInput, ScheduledWorkTiming, ScheduledWorkAction, ScheduledWorkScope, ScheduledWorkRecord, ScheduledWorkOccurrence } from './scheduled-work.ts';
 export { CODEX_MODEL_CONFIG, codexModelConfig, codexConfigArgs, codexTextItem } from './codex-model-policy.ts';
 export type { InboxHandlingRef, InboxHandlingSource, InboxHandlingAction, InboxHandlingView, InboxHandlingRequest, InboxHandlingState, InboxSuggestion } from './inbox-handling.ts';
+export { hasKnowledgeSourceHTML } from './knowledge-source-reader.ts';
 export type { KnowledgeSourceResult, KnowledgeSourceReader, KnowledgeSourceReaderOptions, KnowledgeSourceErrorCode, KnowledgeSourceRunCLI } from './knowledge-source-reader.ts';
 export type { AgentDiagnostics, DiagnosticErrorCode, DiagnosticExecutorId } from './agent-diagnostics.ts';
 export type { TerminalHostInstance, TerminalRecoveryBinding, TerminalRecoveryCheck, TerminalRecoveryTarget, TerminalRecoveryPane, TerminalRecoveryWriteResult, RecoveredTerminalAction } from './terminal-recovery.ts';
@@ -57,7 +58,7 @@ export interface SessionBinding { machineId?: string; agentInstanceId?: string; 
 
 /** A finished CLI turn is distinct from completion of its associated todo. */
 export interface ExecutionResult { progress?: ExecutionProgress; state: 'running' | 'completed' | 'failed' | 'unknown'; text: string; source: string; exitCode?: number; nativeSessionId?: string }
-export interface Approval { id: string; version: number; title: string; details: string; kind: 'dispatch' | 'input' | 'feishu-reply' | `plugin:${string}.${string}`; params: JsonObject; todoId?: string; status: 'pending' | 'running' | 'completed' | 'rejected' | 'failed' | 'unknown'; result?: Json; error?: string; createdAt: string; updatedAt: string }
+export interface Approval { id: string; version: number; title: string; details: string; kind: 'dispatch' | 'input' | 'channel-reply' | 'feishu-reply' | `plugin:${string}.${string}`; params: JsonObject; todoId?: string; status: 'pending' | 'running' | 'completed' | 'rejected' | 'failed' | 'unknown'; result?: Json; error?: string; createdAt: string; updatedAt: string }
 export interface AutomationSettings { tickSeconds: number; stalledMinutes: number; stalledFactorOfEstimate?: number; needsYouMinutes: number; remindersEnabled: boolean }
 export interface SupervisionSignal { id: string; kind: 'review' | 'stalled' | 'orphaned' | 'reminder' | 'waiting' | 'needs_you'; text: string; runId?: string; todoId?: string; createdAt: string; resolvedAt?: string }
 

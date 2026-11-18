@@ -37,3 +37,29 @@ export interface KnowledgeSourceReader {
   handles(url: string): boolean;
   read(url: string, options?: { signal?: AbortSignal }): Promise<KnowledgeSourceResult>;
 }
+
+/** HTML outside explicit Markdown code is not a normalized document. Fenced,
+ * indented and inline examples remain source data, including complete HTML pages.
+ */
+export function hasKnowledgeSourceHTML(text: string): boolean {
+  if (/^\s*<\s*(?:!doctype\s+html|html|head|body|script|form)\b/i.test(text)) return true;
+  let fence: { char: string; length: number } | undefined;
+  const prose: string[] = [];
+  let markdownProse = false;
+  for (const line of text.split('\n')) {
+    if (fence) {
+      const close = /^ {0,3}(`+|~+)\s*$/.exec(line);
+      if (close && close[1]![0] === fence.char && close[1]!.length >= fence.length) fence = undefined;
+      continue;
+    }
+    const start = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (start && (start[1]![0] !== '`' || !start[2]!.includes('`'))) {
+      fence = { char: start[1]![0]!, length: start[1]!.length }; continue;
+    }
+    if (markdownProse && /^(?: {4}|\t)/.test(line)) continue;
+    prose.push(line);
+    if (line.trim() && !/^\s*</.test(line)) markdownProse = true;
+  }
+  const outsideCode = prose.join('\n').replace(/(`+)([^`]|(?!\1)`)*?\1(?!`)/g, '');
+  return /<\s*(?:!doctype\s+html|html|head|body|script|form)\b/i.test(outsideCode);
+}

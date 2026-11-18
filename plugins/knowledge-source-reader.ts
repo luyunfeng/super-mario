@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PluginService } from '../packages/plugin-sdk/src/index.ts';
 import { extractKnowledgeAttachment, supportsKnowledgeAttachment, KnowledgeAttachmentError } from './knowledge-attachment-parser.ts';
-import type { KnowledgeSourceErrorCode, KnowledgeSourceReader, KnowledgeSourceReaderOptions, KnowledgeSourceResult, KnowledgeSourceRunCLI } from '../packages/protocol/src/index.ts';
+import { hasKnowledgeSourceHTML, type KnowledgeSourceErrorCode, type KnowledgeSourceReader, type KnowledgeSourceReaderOptions, type KnowledgeSourceResult, type KnowledgeSourceRunCLI } from '../packages/protocol/src/index.ts';
+export { hasKnowledgeSourceHTML };
 
 const MAX_BYTES = 1024 * 1024;
 const TIMEOUT_MS = 30_000;
@@ -92,33 +93,6 @@ export function isProtectedKnowledgeURL(input: string, trustedHosts: readonly st
   const authority = match[1]!;
   const host = authority.slice(authority.lastIndexOf('@') + 1).split(':', 1)[0]!.toLowerCase().replace(/\.$/, '');
   return protectedHost(host, match[2]!);
-}
-
-/** HTML outside explicit Markdown code is not a normalized document. Fenced,
- * indented and inline examples remain source data, including complete HTML pages.
- */
-export function hasKnowledgeSourceHTML(text: string): boolean {
-  // A whole HTML response remains HTML even when the server indents it.
-  if (/^\s*<\s*(?:!doctype\s+html|html|head|body|script|form)\b/i.test(text)) return true;
-  let fence: { char: string; length: number } | undefined;
-  const prose: string[] = [];
-  let markdownProse = false;
-  for (const line of text.split('\n')) {
-    if (fence) {
-      const close = /^ {0,3}(`+|~+)\s*$/.exec(line);
-      if (close && close[1]![0] === fence.char && close[1]!.length >= fence.length) fence = undefined;
-      continue;
-    }
-    const start = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (start && (start[1]![0] !== '`' || !start[2]!.includes('`'))) {
-      fence = { char: start[1]![0]!, length: start[1]!.length }; continue;
-    }
-    if (markdownProse && /^(?: {4}|\t)/.test(line)) continue;
-    prose.push(line);
-    if (line.trim() && !/^\s*</.test(line)) markdownProse = true;
-  }
-  const outsideCode = prose.join('\n').replace(/(`+)([^`]|(?!\1)`)*?\1(?!`)/g, '');
-  return /<\s*(?:!doctype\s+html|html|head|body|script|form)\b/i.test(outsideCode);
 }
 
 /** Fixed CLI recipes verified with local lark-cli help and embedded read-only skills.

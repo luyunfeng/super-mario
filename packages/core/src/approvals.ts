@@ -37,8 +37,8 @@ function snapshot(value: unknown): Json {
   check(value);
   return JSON.parse(JSON.stringify(value)) as Json;
 }
-function validate(input: Input): Input {
-  if (!['dispatch', 'input', 'feishu-reply'].includes(input.kind) && !/^plugin:[\w.-]+\.[\w.-]+$/.test(input.kind)) throw new ApprovalError('不支持的审批 kind');
+function validate(input: Input, allowedKinds?: readonly string[]): Input {
+  if (!['dispatch', 'input', 'channel-reply', 'feishu-reply'].includes(input.kind) && !/^plugin:[\w.-]+\.[\w.-]+$/.test(input.kind) && !allowedKinds?.includes(input.kind)) throw new ApprovalError('不支持的审批 kind');
   text(input.title, 'title');
   text(input.details, 'details', true);
   if (input.todoId !== undefined) text(input.todoId, 'todoId');
@@ -48,11 +48,12 @@ function validate(input: Input): Input {
 }
 
 /** Own one service per database. close() must finish before closing its store. */
-export function createApprovalService({ store, events, execute, publish }: {
+export function createApprovalService({ store, events, execute, publish, allowedKinds }: {
   store: Store;
   events: EventBus;
   publish?: (input: import('../../plugin-sdk/src/index.ts').EventInput) => unknown;
   execute: (approval: Approval) => Promise<Json>;
+  allowedKinds?: () => readonly string[];
 }) {
   let closed = false;
   const jobs = new Set<Promise<Approval>>();
@@ -81,7 +82,7 @@ export function createApprovalService({ store, events, execute, publish }: {
     propose(input: Input): Approval {
       open();
       if (!input || typeof input !== 'object') throw new ApprovalError('审批输入必须为对象');
-      const fields = validate(input);
+      const fields = validate(input, allowedKinds?.());
       const now = new Date().toISOString();
       const item: Approval = { ...fields, id: randomUUID(), version: 1, status: 'pending', createdAt: now, updatedAt: now };
       store.put(collection, item.id, item);
@@ -96,7 +97,7 @@ export function createApprovalService({ store, events, execute, publish }: {
           throw new ApprovalError('无效的审批修改字段');
         }
         if (previous.version === Number.MAX_SAFE_INTEGER) throw new ApprovalError('审批版本已达上限', 409);
-        const fields = validate({ ...previous, ...patch });
+        const fields = validate({ ...previous, ...patch }, allowedKinds?.());
         const { todoId: _, ...rest } = previous;
         const next: Approval = { ...rest, ...fields, version: previous.version + 1, updatedAt: new Date().toISOString() };
         store.put(collection, id, next);
