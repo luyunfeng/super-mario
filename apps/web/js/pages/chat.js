@@ -1,6 +1,7 @@
 // 对话：主页。顶部是“等你处理”，中间是消息流，输入框固定在底部。
 import { h, keyedList, replace } from '../lib/dom.js';
 import { timeAgo } from '../lib/format.js';
+import { renderFormattedText } from '../lib/markdown.js';
 import { icon } from '../ui/icons.js';
 import { Button, Banner, Card, Pill } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
@@ -93,7 +94,7 @@ export function createChatPage({ api, store, scope, router }) {
     }
     if (message.role === 'user') {
       return h('article', { class: 'msg msg--user', dataset: { id: message.id } },
-        h('div', { class: 'msg__bubble' }, text),
+        h('div', { class: 'msg__bubble' }, renderFormattedText(text)),
         h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.status === 'failed' && ' · 发送失败'));
     }
     const label = message.origin === 'result' ? '执行结果' : message.origin === 'notification' ? '提醒' : '主 Agent';
@@ -101,7 +102,7 @@ export function createChatPage({ api, store, scope, router }) {
       h('span', { class: 'msg__avatar', 'aria-hidden': 'true' }, 'M'),
       h('div', { class: 'msg__col' },
         h('span', { class: 'msg__label' }, label),
-        h('div', { class: 'msg__bubble' }, text),
+        h('div', { class: 'msg__bubble' }, renderFormattedText(text)),
         h('span', { class: 'msg__meta' }, timeAgo(message.createdAt))));
   }
 

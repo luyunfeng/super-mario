@@ -14,7 +14,7 @@ function requestKey() {
 }
 
 export function createCliSessions({ api, store, router }) {
-  let data = null, error = '', loading = false, seq = 0, signature = '', identity = '';
+  let data = null, error = '', loading = false, seq = 0, signature = '', identity = '', painted = '';
   const cache = new Map();
   // 保留未知请求，关闭抽屉或切页也不能使同一次申请获得新的 key。
   const requests = new Map();
@@ -33,6 +33,9 @@ export function createCliSessions({ api, store, router }) {
   const selection = () => new URLSearchParams({ ...(machines.value ? { machineId: machines.value } : {}), ...(projects.value ? { projectId: projects.value } : {}) }).toString();
   function invalidate() { seq++; cache.clear(); data = null; loading = false; error = ''; }
   function paint() {
+    const renderKey = JSON.stringify([ready(), error, loading, data, keyword.value.trim().toLowerCase(), machines.value, signature]);
+    if (renderKey === painted) return;
+    painted = renderKey;
     replace(notice, !ready() ? Banner({ tone: 'warn', children: '连接不可用，请连接服务后重新读取。' })
       : error ? Banner({ tone: 'danger', children: `读取失败：${error}` }) : loading ? text('正在读取 CLI 历史…') : data ? [text(`采集时间：${data.capturedAt}`), data.reason && Banner({ tone: 'warn', children: data.reason })] : null);
     const query = keyword.value.trim().toLowerCase();

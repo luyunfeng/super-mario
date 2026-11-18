@@ -49,12 +49,12 @@ export function openKnowledgeDrawer({ api, store, entry, defaults = {}, onSaved 
 }
 
 export function knowledgeRow(entry, { projectName, onOpen }) {
-  return h('div', { class: 'item item--click', tabindex: 0, role: 'button', dataset: { id: entry.id },
+  return h('div', { class: `item item--click knowledge-item knowledge-item--${entry.layer}`, tabindex: 0, role: 'button', dataset: { id: entry.id },
     onclick: () => onOpen(entry), onkeydown: (event) => { if (event.key === 'Enter') onOpen(entry); } },
   h('div', { class: 'item__main' },
     h('span', { class: 'item__title' }, entry.title),
     h('span', { class: 'item__meta truncate' }, entry.content.replace(/\s+/g, ' ').slice(0, 100))),
   h('div', { class: 'item__end' },
-    Pill(layerNames[entry.layer] + (entry.layer === 'project' && projectName ? ` · ${projectName}` : ''), entry.layer === 'global' ? 'info' : ''),
+    Pill(layerNames[entry.layer] + (entry.layer === 'project' && projectName ? ` · ${projectName}` : ''), entry.layer === 'global' ? 'info' : entry.layer === 'project' ? 'warn' : ''),
     h('span', { class: 'muted small' }, timeAgo(entry.updatedAt))));
 }

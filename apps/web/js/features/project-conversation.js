@@ -1,5 +1,6 @@
 // 项目工作对话复用真实隔离会话。快照只更新消息区，草稿按项目留在内存。
 import { h, replace, keyedList } from '../lib/dom.js';
+import { renderFormattedText } from '../lib/markdown.js';
 import { Button, Banner, Empty, TextArea } from '../ui/kit.js';
 import { createCodeSidebar } from './code-sidebar.js';
 
@@ -18,10 +19,16 @@ export function createProjectConversation({ api, store, bindFolder }) {
   const messages = h('div', { class: 'project-conversation__messages', role: 'log', 'aria-label': '项目对话' });
   const text = TextArea({ rows: 3, placeholder: '告诉我这个文件夹里要做什么，我们持续推进。', 'aria-label': '项目目标' });
   text.addEventListener('input', () => drafts.set(projectId, text.value));
+  text.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) {
+      event.preventDefault();
+      void submit();
+    }
+  });
   const send = Button({ label: '发送目标', kind: 'primary', onClick: submit });
   const notice = h('div', { 'aria-live': 'polite' });
   const composer = h('div', { class: 'project-conversation__composer stack' }, text, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), send), notice);
-  const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', null, code.toggle), status, progress, messages, composer), code.el);
+  const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, code.toggle), status, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId);
 
   function paint() {
@@ -38,7 +45,7 @@ export function createProjectConversation({ api, store, bindFolder }) {
     const rows = workspace?.messages ?? [];
     if (!rows.length) { replace(messages, Empty({ title: workspace ? '在这个文件夹里持续工作' : '正在读取项目对话…', text: workspace ? '直接输入目标，项目工作会话负责拆解并跟进。' : undefined })); messages._keyed = undefined; return; }
     if (!messages._keyed) messages.replaceChildren();
-    keyedList(messages, rows, m => m.id, m => h('div', { class: `msg msg--${m.role === 'user' ? 'user' : 'assistant'}` }, h('div', { class: 'msg__col' }, h('span', { class: 'msg__label' }, m.role === 'user' ? '我' : '项目助手'), h('div', { class: 'msg__bubble' }, m.text), m.status && ['failed', 'unknown', 'pending'].includes(m.status) && h('span', { class: 'msg__meta' }, ({ failed: '处理失败，请查看原因', unknown: '结果未知，请核对，勿重复发送', pending: '处理中' })[m.status]))));
+    keyedList(messages, rows, m => m.id, m => h('div', { class: `msg msg--${m.role === 'user' ? 'user' : 'assistant'}` }, h('div', { class: 'msg__col' }, h('span', { class: 'msg__label' }, m.role === 'user' ? '我' : '项目助手'), h('div', { class: 'msg__bubble' }, m.role === 'user' ? m.text : renderFormattedText(m.text)), m.status && ['failed', 'unknown', 'pending'].includes(m.status) && h('span', { class: 'msg__meta' }, ({ failed: '处理失败，请查看原因', unknown: '结果未知，请核对，勿重复发送', pending: '处理中' })[m.status]))));
   }
   async function load() {
     if (!projectId || projectId === 'all') return;

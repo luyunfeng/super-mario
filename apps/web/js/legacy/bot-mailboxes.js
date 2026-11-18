@@ -210,19 +210,36 @@ export function createBotMailboxesUI({ api, element, getState, onChanged, showRe
     botList.replaceChildren();
     if (!bots.length) botList.append(node('p', '尚无独立机器人。可以手动接入或扫码添加。', 'muted'));
     for (const bot of bots) {
-      const card = node('article', undefined, 'card'); card.dataset.botId = bot.id;
-      card.append(node('h3', bot.name), node('p', `状态：${bot.enabled ? '已启用' : '已停用'}；${bot.configured ? '凭证已配置' : '缺少凭证'}；${bot.connected ? '已连接' : '未连接'}；${bot.paired ? '已配对' : '未配对'}`), node('p', `工作范围：${scopeText(bot.scope)}；人工确认：${bot.requireConfirmation ? '需要' : '不需要'}`));
+      const card = node('article', undefined, 'card bot-card'); card.dataset.botId = bot.id;
+      const head = node('div', undefined, 'bot-card__head');
+      const badges = node('div', undefined, 'bot-card__badges');
+      badges.append(
+        node('span', bot.enabled ? '已启用' : '已停用', `pill ${bot.enabled ? 'pill--ok' : ''}`),
+        node('span', bot.connected ? '已连接' : '未连接', `pill ${bot.connected ? 'pill--ok' : 'pill--warn'}`),
+        node('span', bot.paired ? '已配对' : '未配对', `pill ${bot.paired ? 'pill--info' : ''}`),
+        node('span', scopeText(bot.scope), 'pill'),
+      );
+      head.append(node('h3', bot.name), badges);
       const bound = snapshot.executors?.find(item => item.id === bot.executorId);
-      card.append(node('p', `绑定执行者：${bot.executorId ? bound?.name || '原绑定已不可用（保留）' : '未绑定'}；已配置群：${bot.groupChats?.length || 0}；协作对象：${bot.collaboration?.peerBotIds.length || 0}`), node('p', '机器人仅为渠道身份。配置计数不代表飞书收发已通过；绑定约束直接派发与计划，协作须双方允许。', 'muted'));
+      card.append(
+        head,
+        node('p', `状态：${bot.enabled ? '已启用' : '已停用'}；${bot.configured ? '凭证已配置' : '缺少凭证'}；${bot.connected ? '已连接' : '未连接'}；${bot.paired ? '已配对' : '未配对'}`),
+        node('p', `工作范围：${scopeText(bot.scope)}；人工确认：${bot.requireConfirmation ? '需要' : '不需要'}`),
+        node('p', `绑定执行者：${bot.executorId ? bound?.name || '原绑定已不可用（保留）' : '未绑定'}；已配置群：${bot.groupChats?.length || 0}；协作对象：${bot.collaboration?.peerBotIds.length || 0}`),
+        node('p', '机器人仅为渠道身份。配置计数不代表飞书收发已通过；绑定约束直接派发与计划，协作须双方允许。', 'muted'),
+      );
       if (bot.pairingCode) card.append(node('p', `配对码：${bot.pairingCode}`));
       if (bot.reason) card.append(node('p', `连接说明：${human(bot.reason)}`));
+      const actions = node('div', undefined, 'bot-card__actions');
       const current = epoch;
-      button(card, '编辑', () => { if (current === epoch) editBot(bot); });
-      button(card, bot.enabled ? '停用机器人' : '启用机器人', () => { if (current === epoch) void write(`/feishu/bots/${pathId(bot.id)}`, 'PATCH', { enabled: !bot.enabled }, '已更新连接开关。'); });
-      button(card, '归档机器人', () => {
+      button(actions, '编辑', () => { if (current === epoch) editBot(bot); });
+      button(actions, bot.enabled ? '停用机器人' : '启用机器人', () => { if (current === epoch) void write(`/feishu/bots/${pathId(bot.id)}`, 'PATCH', { enabled: !bot.enabled }, '已更新连接开关。'); });
+      button(actions, '归档机器人', () => {
         if (current !== epoch || busy || !window.confirm(`归档机器人“${bot.name}”？此操作将移除该连接，保留信箱记录。`)) return;
         void write(`/feishu/bots/${pathId(bot.id)}`, 'DELETE', undefined, '已归档机器人。', () => { if (editingId === bot.id) clearBotForm(); });
-      }); botList.append(card);
+      });
+      card.append(actions);
+      botList.append(card);
     }
   }
   async function loadBots(current = epoch) {

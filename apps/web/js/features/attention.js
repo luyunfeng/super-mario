@@ -16,12 +16,14 @@ const TYPES = {
 export function createAttention({ api, store }) {
   const list = h('div', { class: 'attn__list' });
   const more = h('button', { class: 'btn btn--ghost btn--sm', type: 'button' });
+  const foldBtn = h('button', { class: 'btn btn--ghost btn--sm', type: 'button' }, '最小化');
   const title = h('h2', { id: 'attention-title' }, '等你处理');
   const count = h('span', { class: 'pill pill--danger', id: 'attention-count' });
   const root = h('section', { class: 'attn card', id: 'attention', 'aria-labelledby': 'attention-title', 'aria-live': 'polite', hidden: true },
-    h('header', { class: 'attn__head' }, title, count, h('span', { class: 'grow' }), more),
+    h('header', { class: 'attn__head' }, title, count, h('span', { class: 'grow' }), more, foldBtn),
     list);
   let expanded = false;
+  let minimized = false;
   let items = [];
   // 一屏放不下很多卡片：窄屏默认只显示 1 条，桌面 2 条，其余收在“还有 N 件”里。
   const limit = () => (matchMedia('(max-width: 767px)').matches ? 1 : 2);
@@ -128,19 +130,24 @@ export function createAttention({ api, store }) {
   }
 
   more.addEventListener('click', () => { expanded = !expanded; paint(); });
+  foldBtn.addEventListener('click', () => { minimized = !minimized; paint(); });
 
   function paint() {
     root.hidden = items.length === 0;
     count.textContent = String(items.length);
+    root.classList.toggle('is-minimized', minimized);
+    list.hidden = minimized;
+    foldBtn.textContent = minimized ? '展开处理' : '最小化';
+    foldBtn.setAttribute('aria-expanded', String(!minimized));
     const visible = expanded ? items : items.slice(0, limit());
     keyedList(list, visible, item => item.id, renderCard, item => `${item.id}:${item.version}:${item.title}:${item.detail?.length}`);
-    more.hidden = items.length <= limit();
+    more.hidden = minimized || items.length <= limit();
     more.textContent = expanded ? '收起' : `还有 ${items.length - limit()} 件`;
   }
 
   return {
     el: root,
     update(next) { items = next; paint(); },
-    expand() { expanded = true; paint(); },
+    expand() { expanded = true; minimized = false; paint(); },
   };
 }

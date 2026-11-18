@@ -9,7 +9,7 @@
 | 位置 | 职责 |
 | --- | --- |
 | `bin/super-mario.js` | 服务端命令、帮助、信号关停；选择源码或编译产物 |
-| `bin/super-mario-agent.js` | 执行机命令与机器标识 |
+| `bin/super-mario-agent.js`、`apps/agent-node/src/node-plugins.ts` | 执行机命令、机器标识与节点侧插件生命周期统一装配 |
 | `apps/server/src/index.ts` | HTTP API、静态 Web、浏览器事件、机器连接 |
 | `apps/agent-node/src/index.ts` | 主动连接、心跳、注册方法 RPC、重连 |
 | `apps/web/` | 原生浏览器模块（ES Module），无前端构建框架；结构见下表 |
@@ -22,7 +22,7 @@
 | `packages/core/src/knowledge-curator.ts` | 来源队列、资料读取、CLI 委派、知识导入和本地 Git 记录 |
 | `plugins/knowledge-worker.ts` | 执行机上的常驻 Codex / Claude JSONL 连接与结果持久化 |
 | `apps/web/js/main.js`、`shell.js` | 启动装配；外壳（导航、顶栏搜索、项目范围、连接状态） |
-| `apps/web/js/lib/` | `api`（接口与令牌）、`store`（快照 + 实时推送，唯一数据来源）、`router`（地址即状态、旧地址重定向）、`alerts`（提醒点纯函数）、`scope`（项目范围）、`dom`（`h()` 与只重绘变化行的 `keyedList`）、`format` |
+| `apps/web/js/lib/` | `api`（接口与令牌）、`store`（快照 + 实时推送，唯一数据来源）、`router`（地址即状态、旧地址重定向）、`alerts`（提醒点纯函数）、`scope`（项目范围）、`dom`（`h()` 与只重绘变化行的 `keyedList`）、`format`、`markdown`（安全 DOM 结构化富文本渲染） |
 | `apps/web/js/ui/` | 通用组件：`kit`（按钮、卡片、选项卡、表单）、`overlay`（抽屉、确认框、轻提示）、`hint`（右上角作用说明）、`icons` |
 | `apps/web/js/pages/` | 五个页面：`chat`、`agent`、`projects`、`memory`、`channels`；只组装，不含业务细节 |
 | `apps/web/js/features/` | 页面内的功能块：等你处理、待办、执行（列表/详情/发起）、自动处理、自动跟进、记忆条目与整理、项目跟进设置、高级、快捷键、搜索、开屏 |
@@ -31,7 +31,7 @@
 | `apps/web/css/` | `base`（设计令牌）、`layout`（外壳与窄屏）、`components`（组件）、`pages`（页面） |
 | `packages/core/src/attention.ts`、`todo-sections.ts`、`policy-presets.ts` | 只读待处理聚合、服务端待办分区、规则预设与真实命中统计 |
 | `packages/core/src/config.ts` | 命令参数与环境变量 |
-| `packages/core/src/workbench.ts` | 装配、待办、异步派活与业务入口 |
+| `packages/core/src/workbench.ts`、`workbench-background.ts` | 核心装配、待办、异步派活与常驻事件/核心服务桥接 |
 | `packages/core/src/store.ts` | SQLite JSON 文档存储与同步事务 |
 | `packages/core/src/events.ts` | 持久事件与进程内订阅 |
 | `packages/core/src/plugin-invocations.ts` | 钩子、JSON 服务与有序包装的超时/清理边界 |

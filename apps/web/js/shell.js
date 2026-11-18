@@ -7,7 +7,7 @@ import { alertLabel } from './lib/alerts.js';
 import { PAGES } from './lib/router.js';
 
 export const PAGE_NAMES = { chat: '对话', inbox: '收件箱', outbox: '发件箱', agent: 'Agent', projects: '项目', memory: '记忆', channels: '渠道' };
-const NAV_ICONS = { chat: 'chat', inbox: 'inbox', outbox: 'channels', agent: 'agent', projects: 'projects', memory: 'memory', channels: 'channels' };
+const NAV_ICONS = { chat: 'chat', inbox: 'inbox', outbox: 'outbox', agent: 'agent', projects: 'projects', memory: 'memory', channels: 'channels' };
 
 export function createShell({ api, store, router, scope }) {
   // —— 导航 ——
@@ -34,8 +34,10 @@ export function createShell({ api, store, router, scope }) {
 
   // —— 项目范围 ——
   const scopeSelect = h('select', { class: 'select topbar__scope', 'aria-label': '项目范围', id: 'scope-select' }, h('option', { value: '' }, '全部项目'));
-  scopeSelect.addEventListener('change', () => scope.set(scopeSelect.value));
-  scope.subscribe((value) => { scopeSelect.value = value; });
+  const syncScopeClass = () => scopeSelect.classList.toggle('is-scoped', Boolean(scopeSelect.value));
+  scopeSelect.addEventListener('change', () => { scope.set(scopeSelect.value); syncScopeClass(); });
+  scope.subscribe((value) => { scopeSelect.value = value; syncScopeClass(); });
+  syncScopeClass();
 
   // —— 连接状态 ——
   const connDot = h('span', { class: 'dot', 'aria-hidden': 'true' });
@@ -92,6 +94,7 @@ export function createShell({ api, store, router, scope }) {
       scopeSelect.dataset.sig = signature;
       replace(scopeSelect, h('option', { value: '' }, '全部项目'), items.map(item => h('option', { value: item.id }, item.name)));
       scopeSelect.value = scope.get();
+      syncScopeClass();
     },
     setConnection({ connection, unauthorized, loadError }) {
       const tone = connection === 'online' ? 'ok' : connection === 'connecting' ? 'warn' : 'danger';

@@ -92,8 +92,21 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
     const machine = snapshot.machines?.find(m => m.id === project?.workspace?.machineId);
     binding.hidden = isAll;
     replace(binding, project?.workspace
-      ? [h('strong', null, `电脑：${machine?.name ?? project.workspace.machineId} · ${machine?.online ? '在线' : '离线'}`), h('code', { class: 'folder-path' }, `文件夹：${project.workspace.cwd}`), h('span', { class: 'small muted' }, '文件夹将在操作前检查是否存在。'), Button({ label: '更换绑定文件夹', size: 'sm', onClick: () => folders(project) })]
-      : [h('span', null, '尚未绑定文件夹，已有项目数据保留。'), Button({ label: '绑定文件夹', size: 'sm', onClick: () => folders(project) })]);
+      ? [
+          h('span', { class: 'project-binding__machine' },
+            h('span', { class: `dot dot--${machine?.online ? 'ok' : 'danger'}`, 'aria-hidden': 'true' }),
+            h('strong', null, `电脑：${machine?.name ?? project.workspace.machineId} · ${machine?.online ? '在线' : '离线'}`)),
+          h('code', { class: 'folder-path' }, `文件夹：${project.workspace.cwd}`),
+          h('span', { class: 'small muted' }, '文件夹将在操作前检查是否存在。'),
+          h('span', { class: 'grow' }),
+          Button({ label: '更换绑定文件夹', size: 'sm', onClick: () => folders(project) }),
+        ]
+      : [
+          h('span', { class: 'dot dot--warn', 'aria-hidden': 'true' }),
+          h('span', null, '尚未绑定文件夹，已有项目数据保留。'),
+          h('span', { class: 'grow' }),
+          Button({ label: '绑定文件夹', size: 'sm', onClick: () => folders(project) }),
+        ]);
     const items = [
       ...(isAll ? [] : [{ id: 'workspace', label: '工作区' }]),
       { id: 'todos', label: '待办', count: open || null },

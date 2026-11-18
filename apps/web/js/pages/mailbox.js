@@ -43,8 +43,9 @@ export function createMailboxPage({ api, store, router, direction }) {
       h('div', { class: 'page__actions' }, h('a', { class: 'btn btn--sm', href: router.href(incoming ? 'outbox' : 'inbox') }, incoming ? '查看发件箱' : '查看收件箱'), Hint(`nav.${direction}`))),
     h('div', { class: 'stack' },
       incoming && h('p', { class: 'small muted' }, '按来源、处理阶段和项目查看消息。已转待办表示消息已处理，不代表任务完成。'),
-      incoming && sourceChips, incoming && stageChips,
-      h('div', { class: 'row row--wrap mailbox-filters' }, h('div', { class: 'grow', style: { minWidth: '180px' } }, query), incoming && projectFilter, filter), summary, notice, list, more)));
+      h('div', { class: 'mailbox-toolbar stack' },
+        incoming && sourceChips, incoming && stageChips,
+        h('div', { class: 'row row--wrap mailbox-filters' }, h('div', { class: 'grow', style: { minWidth: '180px' } }, query), incoming && projectFilter, filter)), summary, notice, list, more)));
 
   function records() {
     const personal = incoming ? (snapshot?.inbox ?? []).map(item => updated.get(item.id)?.version > item.version ? updated.get(item.id) : item).map(item => ({
@@ -142,14 +143,18 @@ export function createMailboxPage({ api, store, router, direction }) {
   }
   const tone = item => ['unknown', 'failed'].includes(item.raw.status) ? 'danger' : ['已发送', '已处理', '已转待办'].includes(item.status) ? 'ok' : item.status === '需要处理' || item.status === '待确认' ? 'warn' : '';
   function card(item) {
-    return Card({ title: item.title, sub: `${item.source} · ${timeAgo(item.time)}`, className: 'mailbox-card',
+    const mod = incoming ? stage(item) : tone(item) || 'default';
+    const handleBtn = incoming && !item.raw.archivedAt && item.raw.status !== 'archived'
+      ? Button({ label: '处理与建议', size: 'sm', kind: 'secondary', onClick: () => openInboxHandlingDrawer({ api, store, source: { kind: item.kind, id: item.raw.id } }) })
+      : null;
+    return Card({ title: item.title, sub: `${item.source} · ${timeAgo(item.time)}`, className: `mailbox-card mailbox-card--${mod}`,
       tools: h('div', { class: 'row row--wrap' }, incoming && stage(item) !== 'info' && Pill(STAGES.find(([key]) => key === stage(item))[1], stage(item) === 'human' ? 'warn' : ''), Pill(item.status, tone(item))), body: h('div', { class: 'stack' },
         incoming && metadata(item),
         incoming && handlingState(item) && h('p',{class:'small muted'},handlingState(item).label),
         h('p', { class: 'mailbox-preview' }, item.text || '这条消息没有文本正文。'),
         item.raw.target && h('p', { class: 'small muted mailbox-meta' }, `发送目标：${item.raw.target}`),
         item.raw.error && Banner({ tone: 'danger', children: item.raw.error }),
-        h('div', { class: 'row row--wrap' }, Button({ label: '查看原文与详情', size: 'sm', onClick: () => open(item.id) }), ...actions(item))) });
+        h('div', { class: 'row row--wrap' }, Button({ label: '查看原文与详情', size: 'sm', onClick: () => open(item.id) }), handleBtn, ...actions(item))) });
   }
   async function act(item, operation) {
     if (pending.has(item.id) || uncertain.has(item.id)) return;
