@@ -1,0 +1,85 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { chromium, expect, type Page } from '@playwright/test';
+import { startServer } from '../apps/server/src/index.ts';
+
+async function withMailbox(run: (server: Awaited<ReturnType<typeof startServer>>, page: Page) => Promise<void>) {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-mailbox-'));
+  const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: dir, demo: true });
+  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+    const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+    await run(server, page); assert.deepEqual(errors, []);
+  } finally { await browser.close(); await server.close(); await rm(dir, { recursive: true, force: true }); }
+}
+
+test('收件箱默认展示行动/知会/低优先级；查看原文、搜索、转待办、归档与刷新持久化', { timeout: 40000 }, async () => {
+  await withMailbox(async (server, page) => {
+    for (const [index, text] of ['请完成离线评审', '这是一条普通知会', '收到'].entries()) {
+      await server.app.inbox.ingest('feishu:offline:owner', [{ thread: `thread-${index}`, last: `msg-${index}`, title: `测试会话${index}`, text }]);
+    }
+    await page.goto(server.url + '/#inbox');
+    await expect(page.locator('#inbox h1')).toHaveText('收件箱');
+    await expect(page.locator('#inbox .mailbox-card')).toHaveCount(3);
+    for (const label of ['需要处理', '知会', '低优先级']) await expect(page.locator('#inbox .pill', { hasText: new RegExp(`^${label}$`) })).toBeVisible();
+    await page.getByLabel('搜索收件箱').fill('普通知会');
+    await expect(page.locator('#inbox .mailbox-card')).toHaveCount(1);
+    await page.getByLabel('搜索收件箱').fill('');
+    const card = page.locator('#inbox .mailbox-card', { hasText: '测试会话0' });
+    await card.getByRole('button', { name: '查看原文与详情' }).click();
+    const drawer = page.getByRole('dialog', { name: '收件箱消息详情' });
+    await expect(drawer.locator('pre')).toHaveText('请完成离线评审');
+    await drawer.getByRole('button', { name: '转为待办', exact: true }).click();
+    await expect(drawer.getByRole('link', { name: '查看待办' })).toBeVisible();
+    assert.equal(server.app.todos().length, 1);
+    await drawer.locator('.drawer__foot').getByRole('button', { name: '关闭', exact: true }).click();
+    const low = page.locator('#inbox .mailbox-card', { hasText: '测试会话2' });
+    await low.getByRole('button', { name: '归档', exact: true }).click();
+    await expect(low).toContainText('已归档');
+    await page.reload();
+    await expect(page.locator('#inbox .mailbox-card')).toHaveCount(3);
+    await page.getByLabel('收件箱状态').selectOption('archived');
+    await expect(page.locator('#inbox .mailbox-card')).toHaveCount(2);
+    await page.locator('#inbox .mailbox-card', { hasText: '测试会话2' }).getByRole('button', { name: '恢复到收件箱' }).click();
+    await expect(page.locator('#inbox .mailbox-card')).toHaveCount(1);
+    await page.getByLabel('收件箱状态').selectOption('all');
+    await expect(page.locator('#inbox .mailbox-card')).toHaveCount(3);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    // A new collection arrives while the page stays open: the existing WebSocket refresh updates it.
+    await server.app.inbox.ingest('feishu:offline:owner', [{ thread: 'later', last: 'new', title: '后来采集的消息', text: '新的知会内容' }]);
+    await expect(page.locator('#inbox .mailbox-card')).toHaveCount(4);
+    await expect(page.locator('.nav__name', { hasText: /^发件箱$/ })).toBeVisible();
+  });
+});
+
+test('发件箱展示实际投递状态、内容与目标，合并重复记录；页面只读且空箱不伪造记录', { timeout: 40000 }, async () => {
+  await withMailbox(async (server, page) => {
+    const writes: string[] = [];
+    page.on('request', request => { if (request.method() !== 'GET' && !request.url().endsWith('/presence')) writes.push(request.url()); });
+    await page.goto(server.url + '/#outbox');
+    await expect(page.getByText('还没有发件记录', { exact: true })).toBeVisible();
+    const createdAt = new Date().toISOString();
+    for (const [index, status] of ['needs_approval', 'sent', 'unknown'].entries()) {
+      server.app.store.put('outbox.items', `out-${index}`, { id: `out-${index}`, owner: 'user', version: 1, dedupKey: `key-${index}`, channel: 'feishu.bot', target: 'oc_offline_target', content: { text: `测试通知${index}\n完整发送正文` }, contentHash: `hash-${index}`, status, attempt: 0, createdAt, updatedAt: createdAt });
+    }
+    server.app.mailboxes.put({ direction: 'outbox', botId: 'offline-bot', scope: { kind: 'global' }, eventKey: 'key-1', title: '同一投递的重复记录', text: '重复记录', target: 'oc_offline_target', requiresConfirmation: true });
+    server.app.mailboxes.put({ direction: 'outbox', botId: 'offline-bot', scope: { kind: 'global' }, eventKey: 'draft-only', title: '机器人待确认草稿', text: '草稿正文', target: 'oc_offline_target', requiresConfirmation: true });
+    await page.reload();
+    await expect(page.locator('#outbox .mailbox-card')).toHaveCount(4);
+    await expect(page.locator('#outbox')).not.toContainText('同一投递的重复记录');
+    await page.getByLabel('发件箱状态').selectOption('failed');
+    await expect(page.locator('#outbox .mailbox-card')).toHaveCount(1);
+    await page.getByRole('button', { name: '查看原文与详情' }).click();
+    const drawer = page.getByRole('dialog', { name: '发件箱消息详情' });
+    await expect(drawer).toContainText('结果未知'); await expect(drawer).toContainText('oc_offline_target');
+    await expect(drawer.locator('pre')).toHaveText('测试通知2\n完整发送正文');
+    await expect(drawer).toContainText('不会自动重复发送');
+    assert.deepEqual(writes, []);
+    assert.ok(await drawer.evaluate(el => el.scrollWidth <= el.clientWidth));
+  });
+});

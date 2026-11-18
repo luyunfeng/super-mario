@@ -1,0 +1,119 @@
+import { randomUUID } from 'node:crypto';
+import { constants, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { ExtensionContext, KnowledgeBackend, KnowledgeQuery } from '../packages/plugin-sdk/src/index.ts';
+import type { KnowledgeEntry, KnowledgeLayer } from '../packages/protocol/src/index.ts';
+
+const layers: KnowledgeLayer[] = ['personal', 'global', 'project'];
+const collection = 'knowledge';
+
+function safeId(id: string): string {
+  if (typeof id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(id)) {
+    throw new Error('Invalid knowledge id: use 1–128 letters, digits, underscores or hyphens');
+  }
+  return id;
+}
+
+function validateScope(layer: KnowledgeLayer | undefined, projectId: string | undefined): void {
+  if (layer !== undefined && !layers.includes(layer)) throw new Error('Invalid knowledge layer');
+  if (projectId !== undefined && (typeof projectId !== 'string' || !projectId.trim())) {
+    throw new Error('projectId must be a non-empty string');
+  }
+}
+
+function validateEntry(entry: KnowledgeEntry): void {
+  safeId(entry.id);
+  validateScope(entry.layer, entry.projectId);
+  if (!layers.includes(entry.layer)) throw new Error('Knowledge layer is required');
+  if (entry.layer === 'project' && !entry.projectId) throw new Error('Project knowledge requires projectId');
+  if (typeof entry.title !== 'string' || !entry.title.trim()) throw new Error('Knowledge title is required');
+  if (typeof entry.content !== 'string') throw new Error('Knowledge content must be a string');
+  if (typeof entry.updatedAt !== 'string' || !Number.isFinite(Date.parse(entry.updatedAt))) {
+    throw new Error('Invalid knowledge updatedAt');
+  }
+}
+
+/** Only this backend owns knowledge files. Store entries are a rebuildable index. */
+export function createLocalKnowledge(context: ExtensionContext): KnowledgeBackend {
+  const directory = join(context.dataDir, 'knowledge');
+  function ensureDirectory(): void {
+    mkdirSync(context.dataDir, { recursive: true });
+    if (!existsSync(directory)) mkdirSync(directory);
+    const info = lstatSync(directory);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Knowledge directory must be a real directory');
+  }
+  function filePath(id: string): string { return join(directory, `${safeId(id)}.md`); }
+
+  function readEntry(id: string): KnowledgeEntry {
+    // O_NOFOLLOW prevents a manually added symlink from reading outside this backend.
+    const fd = openSync(filePath(id), constants.O_RDONLY | constants.O_NOFOLLOW);
+    let markdown: string;
+    try { markdown = readFileSync(fd, 'utf8'); } finally { closeSync(fd); }
+    const match = /^---\n([^\n]+)\n---\n([\s\S]*)$/.exec(markdown);
+    if (!match) throw new Error(`Invalid knowledge Markdown: ${id}`);
+    const metadata: unknown = JSON.parse(match[1]!);
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      throw new Error(`Invalid knowledge metadata: ${id}`);
+    }
+    const entry = { ...metadata, content: match[2]! } as KnowledgeEntry;
+    validateEntry(entry);
+    if (entry.id !== id) throw new Error(`Knowledge filename and metadata id differ: ${id}`);
+    return entry;
+  }
+
+  return {
+    async list(query: KnowledgeQuery = {}) {
+      validateScope(query.layer, query.projectId);
+      if (query.query !== undefined && typeof query.query !== 'string') throw new Error('query must be a string');
+      ensureDirectory();
+      const entries: KnowledgeEntry[] = [];
+      for (const file of readdirSync(directory, { withFileTypes: true })) {
+        if (!file.name.endsWith('.md')) continue;
+        if (!file.isFile()) throw new Error(`Knowledge Markdown must be a regular file: ${file.name}`);
+        entries.push(readEntry(file.name.slice(0, -3)));
+      }
+      // Reconcile only after every file parses, so corrupt Markdown cannot erase the index.
+      context.store.transaction(() => {
+        const ids = new Set(entries.map(entry => entry.id));
+        for (const old of context.store.list<KnowledgeEntry>(collection)) {
+          if (!ids.has(old.id)) context.store.remove(collection, old.id);
+        }
+        for (const entry of entries) context.store.put(collection, entry.id, entry);
+      });
+      const keywords = (query.query ?? '').trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+      return entries.filter(entry => {
+        const text = `${entry.title}\n${entry.content}`.toLocaleLowerCase();
+        return (!query.layer || entry.layer === query.layer)
+          && (!query.projectId || entry.projectId === query.projectId)
+          && keywords.every(keyword => text.includes(keyword));
+      }).sort((a, b) => a.id.localeCompare(b.id));
+    },
+    async put(input) {
+      const entry: KnowledgeEntry = {
+        id: input.id ?? randomUUID(), layer: input.layer, title: input.title,
+        content: input.content, updatedAt: new Date().toISOString(),
+        ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+      };
+      validateEntry(entry);
+      ensureDirectory();
+      const { content, ...metadata } = entry;
+      const temporary = join(directory, `.${randomUUID()}.tmp`);
+      // Rename publishes a complete file. A failed index update is repaired by list().
+      try {
+        writeFileSync(temporary, `---\n${JSON.stringify(metadata)}\n---\n${content}`, { flag: 'wx', mode: 0o600 });
+        renameSync(temporary, filePath(entry.id));
+      } finally { rmSync(temporary, { force: true }); }
+      context.store.put(collection, entry.id, entry);
+      return entry;
+    },
+    async remove(id) {
+      const path = filePath(id);
+      ensureDirectory();
+      let removed = false;
+      try { rmSync(path); removed = true; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      context.store.remove(collection, id);
+      return removed;
+    },
+  };
+}

@@ -1,0 +1,39 @@
+范围：本任务暂存源码快照；使用隔离临时目录。
+没有创建分支/worktree；没有操作现有服务、真实任务、发送开关、外部账号或付费模型。
+
+$ npm test
+ℹ tests 478
+ℹ suites 0
+ℹ pass 478
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 30295.597919
+
+$ PLAYWRIGHT_CHROMIUM_EXECUTABLE=<installed Chromium> npm run test:web
+ℹ tests 29
+ℹ suites 0
+ℹ pass 29
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 40851.857942
+
+$ typecheck / build / lint:plugins
+
+> super-mario@0.1.0 typecheck
+> tsc --noEmit
+
+
+> super-mario@0.1.0 build
+> tsc -p tsconfig.build.json && node scripts/copy-web.mjs
+
+
+> super-mario@0.1.0 lint:plugins
+> node scripts/check-plugin-boundaries.mjs
+
+Plugin boundaries OK (17 plugin files checked).
+
+真实飞书/跨物理机器：未验收。48080：未更新。线上验证命令：未执行，沿用09:58既有跟进。

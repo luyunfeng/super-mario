@@ -1,0 +1,40 @@
+{
+  "providerUnderTest": "claude-code protocol",
+  "simulatedClaude": true,
+  "realClaudeStarted": false,
+  "modelBackend": "real Codex",
+  "covered": [
+    "actual startServer + agent RPC + curator + claude-code worker path",
+    "production Claude argv guards validated by adapter",
+    "real Codex synthesis with production no-tools policy",
+    "scope persistence and native Codex threads"
+  ],
+  "notCovered": [
+    "real Claude startup/authentication",
+    "real Claude safe-mode enforcement",
+    "real Claude native session semantics"
+  ],
+  "protocolAndSynthesisPassed": true,
+  "checks": {
+    "threeJobsCompleted": true,
+    "twoPages": true,
+    "threeRaw": true,
+    "oldPageUpdated": true,
+    "oldAndNewFactsPreserved": true,
+    "scopesCorrect": true,
+    "outerProviderConfirmed": true,
+    "outerWorkerReuseAndSeparation": true,
+    "nativeCodexThreadsReuseAndSeparation": true,
+    "guardValidation": true,
+    "knowledgeGitCleanNoRemote": true,
+    "allCapturedDescendantsExited": true,
+    "allServicesClosed": true
+  },
+  "realModelJobCount": 3,
+  "head": "6803a0e873709f18bd17d14084138ae52dc5c17a",
+  "repositoryBaselineEqual": false,
+  "headUnchanged": true,
+  "indexUnchanged": true,
+  "repositoryNote": "Verifier wrote only its new /tmp directory. Concurrent workspace changes observed; attribution unverified. See before/after evidence.",
+  "baselineNote": "6803a0e + configuration-source fix, later committed as 489694d; main thread edited AGENTS/docs during validation. Not evidence of verifier source writes."
+}

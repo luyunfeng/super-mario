@@ -1,0 +1,26 @@
+{
+  "codeCommits": [
+    "f18fa76",
+    "85c0374"
+  ],
+  "unitFull": {
+    "passed": 845,
+    "failed": 0
+  },
+  "additionalPluginRegression": {
+    "passed": 8,
+    "failed": 0,
+    "includesNewPluginReplyObservation": true
+  },
+  "browserFull": {
+    "passed": 93,
+    "failed": 0
+  },
+  "typecheck": "passed",
+  "pluginBoundaryFiles": 23,
+  "package": "compiled tarball real agent CLI / WS / configured diagnostic / recovery metadata / HTTP reply tracking passed",
+  "visual": "synthetic demo data; desktop diagnostic +390px waiting and matched reply; no JS/HTTP errors",
+  "realExternal": "local read-only CLI status checked; no paid model, manual Feishu/OAuth/send or real terminal pane control",
+  "preview": "existing e482c3a kept while its read-only personal collection is processing; full new code update pending safe idle gap",
+  "goal": "active; daemon identity/atomic recovery unavailable upstream; thread replies missing parent remain unmatched; G10/G12/G21 and external acceptance remain"
+}

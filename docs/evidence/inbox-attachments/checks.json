@@ -1,0 +1,18 @@
+{
+  "codeCommits": ["eb214bc", "6da0613", "0a6314d"],
+  "unit": {"passed": 1128, "failed": 0, "cancelled": 0},
+  "browser": {"passed": 128, "failed": 0},
+  "typecheck": "passed",
+  "pluginBoundaries": {"files": 27, "result": "passed"},
+  "build": "passed",
+  "package": "compiled tarball: actual agent CLI/WS, configured diagnostic, recovery metadata, reply tracking, scheduled work/source reader/inbox APIs and shipped Web modules; compiled PDF/DOCX worker parses real synthetic fixture bytes",
+  "ui": "actual local Web → HTTP → SQLite suggestion creation, chat navigation, source editing, old-approval rejection and current approval; synthetic desktop/390px evidence only",
+  "sourceAttachments": "real PDF/DOCX parser libraries; source-reader download bytes and canonical references tested with synthetic CLI; no real private files read",
+  "nativeCLI": "Codex and Claude default configuration each passed a real temporary product task; see real-cli-checks.json; no automatic Todo completion or redispatch",
+  "preview": {"version": "0a6314d", "updated": true, "graceful": true, "forcedKill": false, "retainedInbox": 6666, "primaryFactsEqual": true, "personalCollectionBefore": false, "personalCollectionAfter": false, "pluginFlagsUnchanged": true, "privateDurableBackup": true},
+  "previewVisual": {"desktopAnd390": true, "tokenConsumed": true, "initialCards": 50, "totalInbox": 6666, "scheduledWork": true, "sourceReader": true, "handling": true, "businessHTTPWrites": 0, "newSendEffects": 0, "errors": [], "failedRequests": []},
+  "privateEvidence": "actual-user screenshots, SQLite backups and full CLI reports stay outside the repository; no real tokens in artifacts",
+  "remainingValidation": ["real primary-model handling suggestions", "real persistent CLI knowledge curation", "real Feishu messages/groups/A2A and protected document permission", "cross-physical-machine"],
+  "unsupported": ["OCR", "legacy Office/XLSX/PPTX", "binary attachments from arbitrary public URLs", "upstream daemon identity and atomic recovery"],
+  "goal": "active; milestone completion is not whole-product acceptance"
+}

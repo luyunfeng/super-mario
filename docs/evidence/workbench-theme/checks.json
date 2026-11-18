@@ -1,0 +1,79 @@
+{
+  "source": "apps/web/css/{base,layout,components,pages}.css",
+  "data": "isolated local demo fixtures, no external messages",
+  "theme": {
+    "--bg": "#f3ebdd",
+    "--surface": "#fff9ed",
+    "--text": "#17130f",
+    "--brand": "#c7352a",
+    "--text-3": "#756b60",
+    "--line": "#d8c7a9"
+  },
+  "checks": [
+    {
+      "route": "inbox",
+      "viewport": "1440x1000",
+      "overflow": false
+    },
+    {
+      "route": "inbox",
+      "viewport": "390x844",
+      "overflow": false
+    },
+    {
+      "route": "projects/bf91d1b8-8443-4b15-9428-275924b1abd7/settings",
+      "viewport": "1440x1000",
+      "overflow": false
+    },
+    {
+      "route": "projects/bf91d1b8-8443-4b15-9428-275924b1abd7/settings",
+      "viewport": "390x844",
+      "overflow": false
+    },
+    {
+      "route": "memory",
+      "viewport": "1440x1000",
+      "overflow": false
+    },
+    {
+      "route": "memory",
+      "viewport": "390x844",
+      "overflow": false
+    },
+    {
+      "route": "agent",
+      "viewport": "1440x1000",
+      "overflow": false
+    },
+    {
+      "route": "agent",
+      "viewport": "390x844",
+      "overflow": false
+    },
+    {
+      "route": "chat",
+      "viewport": "1440x1000",
+      "overflow": false
+    },
+    {
+      "route": "chat",
+      "viewport": "390x844",
+      "overflow": false
+    },
+    {
+      "route": "channels",
+      "viewport": "1440x1000",
+      "overflow": false
+    },
+    {
+      "route": "channels",
+      "viewport": "390x844",
+      "overflow": false
+    }
+  ],
+  "sourceFiltering": true,
+  "drawer": true,
+  "errors": [],
+  "failed": [],
+  "existingPreviewUpdated": false
+}

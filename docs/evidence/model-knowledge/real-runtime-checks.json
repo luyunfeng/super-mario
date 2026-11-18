@@ -1,0 +1,152 @@
+{
+  "scope": "Isolated temporary services and synthetic business data; real installed model CLI except the explicit declaration probe.",
+  "primary": {
+    "baseline": "b2e1930 + then-uncommitted launcher/policy changes, later committed as 452eb67",
+    "realModel": true,
+    "turns": [
+      {
+        "id": "synthetic-a",
+        "status": "completed",
+        "durationMs": 7705,
+        "suggestionCount": 1,
+        "currentSourceVersion": true,
+        "foreignMarkerAbsent": true,
+        "jsonParseable": true,
+        "editable": true
+      },
+      {
+        "id": "synthetic-b",
+        "status": "completed",
+        "durationMs": 8915,
+        "suggestionCount": 1,
+        "currentSourceVersion": true,
+        "foreignMarkerAbsent": true,
+        "jsonParseable": true,
+        "editable": true
+      }
+    ],
+    "isolatedConversations": true,
+    "before": {
+      "todos": 0,
+      "runs": 0,
+      "approvals": 0,
+      "outbox.items": 0,
+      "event.mailboxes": 0
+    },
+    "after": {
+      "todos": 0,
+      "runs": 0,
+      "approvals": 0,
+      "outbox.items": 0,
+      "event.mailboxes": 0
+    },
+    "noEffects": true,
+    "serverClosed": true,
+    "configCopyRemoved": true
+  },
+  "curation": {
+    "realModel": true,
+    "provider": "codex",
+    "protocol": "app-server JSONL",
+    "passed": true,
+    "jobStatuses": [
+      "completed",
+      "completed",
+      "completed"
+    ],
+    "pageCount": 2,
+    "personalSessionReused": true,
+    "projectSessionSeparated": true,
+    "scopeFactsChecked": true,
+    "git": {
+      "clean": true,
+      "remotes": 0,
+      "implicitLocalVersioning": true
+    },
+    "cleanup": [
+      {
+        "name": "server",
+        "closed": true
+      },
+      {
+        "name": "worker",
+        "closed": true
+      },
+      {
+        "name": "agent",
+        "closed": true
+      }
+    ],
+    "baseline": "452eb67 predecessor tree with then-current policy; scope-ack added afterward, separately regression-tested"
+  },
+  "overview": {
+    "realModel": true,
+    "runFactsSynthetic": true,
+    "externalRun": false,
+    "checks": {
+      "answerContainsAllCodes": true,
+      "unknownExplicit": true,
+      "unacceptedMention": true,
+      "waitingDecisionMention": true,
+      "factReadParentExecutions": 1,
+      "factReadSuccessful": 1,
+      "businessUnchanged": true,
+      "effectsEmpty": true,
+      "outboxEmpty": true,
+      "businessWrites": []
+    },
+    "elapsedMs": 17070,
+    "serviceClosed": true,
+    "baselineChangedDuringCheck": true,
+    "baselineNote": "Main thread committed changes and restored generated evidence while read-only verification ran; not evidence of worker repository writes."
+  },
+  "terminal": {
+    "realHost": true,
+    "producerSynthetic": true,
+    "host": "Herdr 0.9.5",
+    "protocol": 22,
+    "baseline": "452eb67",
+    "assertions": {
+      "read": true,
+      "stream": true,
+      "automaticReconnect": true,
+      "stableAgentInstanceId": true,
+      "singleStart": true,
+      "singleUnchangedBinding": true,
+      "retainedOutput": true,
+      "oldWatchNoMisroute": true
+    },
+    "cleanup": {
+      "observersAndAgent": true,
+      "paneRemoved": true,
+      "serverClosed": true,
+      "producerExited": true
+    },
+    "result": "PASS",
+    "limitation": "Only same-agent network reconnect. Not daemon restart/identity or atomic control recovery; producer was not Codex."
+  },
+  "nativeDeclarationProbe": {
+    "version": "codex-cli 0.162.0",
+    "exec": {
+      "requests": 6,
+      "declaredTools": [
+        "request_user_input"
+      ]
+    },
+    "knowledgeWorker": {
+      "requests": 1,
+      "declaredTools": [
+        "request_user_input"
+      ]
+    },
+    "mcpStarts": 0,
+    "realModelCalled": false,
+    "limitation": "request_user_input remains declared; invocation rejection is covered by fake CLI regression tests, not exercised in this native declaration probe"
+  },
+  "remaining": [
+    "Real Feishu IM/group/A2A and permission/attachment acceptance remain paused or unverified.",
+    "Second physical Linux node unverified.",
+    "Host daemon identity/atomic recovery unsupported.",
+    "OCR, legacy Office, XLSX/PPTX and arbitrary public URL binary attachments unsupported."
+  ]
+}

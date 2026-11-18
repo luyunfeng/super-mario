@@ -1,0 +1,29 @@
+import type { Json, Message } from './index.ts';
+
+/** Draft/confirmation evidence for existing Inbox/Todo/Approval records, not another task model. */
+export interface InboxHandlingRef { kind: 'personal' | 'mailbox'; id: string }
+export interface InboxHandlingSource extends InboxHandlingRef {
+  version: number; title: string; text: string; projectId?: string; todoId?: string;
+  active: boolean; reason?: string; replyAvailable: boolean; replyReason?: string;
+  /** Opaque host identity/grant generation; never a profile or token. */
+  binding?: string;
+}
+export type InboxHandlingAction =
+  | { kind: 'todo'; title: string; notes: string }
+  | { kind: 'dispatch'; executorId: string; prompt: string; doneWhen: string; expectMinutes: number; cwd?: string }
+  | { kind: 'reply'; text: string }
+  | { kind: 'conclusion'; text: string };
+export interface InboxSuggestion {
+  id: string; version: number; source: InboxHandlingRef; sourceVersion: number; conversationId: string;
+  action: InboxHandlingAction; status: 'draft' | 'submitted' | 'executing' | 'applied' | 'stale' | 'unknown';
+  approvalId?: string; result?: Json; error?: string; createdAt: string; updatedAt: string;
+}
+export interface InboxHandlingRequest {
+  id: string; key: string; conversationId: string; status: 'pending' | 'completed' | 'failed' | 'unknown';
+  error?: string; createdAt: string; updatedAt: string;
+}
+export interface InboxHandlingView {
+  source: InboxHandlingSource; conversationId: string; available: boolean; reason?: string;
+  messages: Message[]; suggestions: InboxSuggestion[]; requests: InboxHandlingRequest[];
+}
+export interface InboxHandlingState { source:InboxHandlingRef;stage:'human'|'ai'|'processing';label:string;runId?:string }

@@ -1,0 +1,116 @@
+// 自动跟进：提醒与简报。展示当前节奏，细项在抽屉里调整。
+import { h, replace } from '../lib/dom.js';
+import { Button, Card, Field, Input, Check, Banner } from '../ui/kit.js';
+import { openDrawer } from '../ui/overlay.js';
+
+export function createFollowUpCard({ api, store }) {
+  let automation = null;
+  let supervisor = null;
+  let briefing = null;
+  let presence = null;
+  let error = '';
+  let seq = 0;
+  const summary = h('p', { id: 'follow-summary' }, '正在读取…');
+  const state = h('div', { role: 'status' });
+  const body = [state, summary, h('div', { class: 'row row--wrap' },
+    Button({ label: '调整节奏', size: 'sm', onClick: () => openSettings() }),
+    Button({ label: '简报与离场通知设置', size: 'sm', onClick: () => openBriefingSettings() }),
+    Button({ label: '查看简报', size: 'sm', onClick: () => openBrief() }))];
+  const el = Card({ title: '自动跟进', hint: 'agent.followup', body, id: 'agent-follow-up' });
+
+  function paint() {
+    if (!automation || !supervisor) { summary.textContent = error || '正在读取…'; return; }
+    summary.textContent = `每 ${automation.tickSeconds} 秒检查一次；超过 ${automation.needsYouMinutes} 分钟没人处理就提醒你；到期提醒${automation.remindersEnabled ? '已开启' : '已关闭'}。`;
+    replace(state,
+      !supervisor.available && Banner({ tone: 'warn', children: `自动跟进 Agent 暂不可用：${supervisor.reason ?? ''}` }),
+      supervisor.canResume && Banner({
+        tone: 'warn', children: '自动跟进上一次没有正常完成，已暂停。请先核对状态，再决定是否恢复。',
+        action: Button({ label: '恢复自动跟进', size: 'sm', onClick: async () => { await api.post('/supervisor/resume', {}); await load(); store.refresh(); } }),
+      }));
+  }
+
+  async function load() {
+    const stamp = ++seq;
+    try {
+      const [auto, sup, brief, web] = await Promise.all([api.get('/automation'), api.get('/supervisor/settings'), api.get('/briefing/settings'), api.get('/presence')]);
+      if (stamp !== seq) return;
+      automation = auto; supervisor = sup; briefing = brief; presence = web; error = '';
+    } catch (cause) { if (stamp !== seq) return; error = `读取跟进设置失败：${cause.message}`; }
+    paint();
+  }
+
+  function openBriefingSettings() {
+    if (!briefing) return;
+    const zone = Input({ value: briefing.timezone });
+    const morning = Input({ type:'time',value:briefing.morning });
+    const evening = Input({ type:'time',value:briefing.evening });
+    const start = Input({ type:'time',value:briefing.activeStart });
+    const end = Input({ type:'time',value:briefing.activeEnd });
+    const hours = Input({ type:'number',min:1,max:168,value:briefing.intervalHours });
+    const interval = Check({label:'启用间隔简报',checked:briefing.intervalEnabled});
+    const away = Check({label:'离开页面后通知结果和待决定',checked:briefing.awayNotifications});
+    const message = h('div',{role:'alert'});
+    const backlog = (presence?.notifications ?? []).filter(n => n.status === 'pending');
+    const drawer = openDrawer({title:'简报与离场通知',body:[
+      h('p',{class:'muted'},'摘要按项目汇总。间隔简报仅在指定时段产生；投递沿用当前发送授权。'),
+      Field({label:'时区',control:zone}),
+      h('div',{class:'form-row'},Field({label:'早间时间',control:morning}),Field({label:'晚间时间',control:evening})), interval,
+      Field({label:'间隔（小时）',control:hours}),
+      h('div',{class:'form-row'},Field({label:'时段开始',control:start}),Field({label:'时段结束',control:end})),away,
+      h('p',null,`待路由通知 ${backlog.length} 条`),backlog.map(n => h('p',{class:'small'},n.reason)),message],
+      footer:Button({label:'保存简报设置',kind:'primary',onClick:async()=>{
+        try { briefing = await api.put('/briefing/settings',{timezone:zone.value,morning:morning.value,evening:evening.value,activeStart:start.value,activeEnd:end.value,intervalHours:Number(hours.value),intervalEnabled:interval.querySelector('input').checked,awayNotifications:away.querySelector('input').checked});drawer.close();await load(); }
+        catch(error){replace(message,Banner({tone:'danger',children:`保存失败：${error.message}`}));}
+      }})});
+  }
+
+  function openSettings() {
+    if (!automation || !supervisor) return;
+    const num = (value, min, max, step = 1) => Input({ type: 'number', min, max, step, value, required: true });
+    const tick = num(automation.tickSeconds, 1, 3600);
+    const stalled = num(automation.stalledMinutes, 1, 43200);
+    const factor = num(automation.stalledFactorOfEstimate, 1, 10, 'any');
+    const needs = num(automation.needsYouMinutes, 1, 43200);
+    const batch = num(supervisor.batchSeconds, 1, 3600);
+    const gap = num(supervisor.minGapMinutes, 1, 43200);
+    const reminders = Check({ label: '到期前提醒我', checked: automation.remindersEnabled });
+    const message = h('div', { role: 'alert' });
+    const drawer = openDrawer({
+      title: '调整跟进节奏', subtitle: '通常不需要改，默认值适合大多数人。',
+      body: [reminders,
+        h('div', { class: 'form-row' }, Field({ label: '检查间隔（秒）', control: tick }), Field({ label: '多久没人处理就提醒你（分钟）', control: needs })),
+        h('div', { class: 'form-row' }, Field({ label: '判定停滞的时长（分钟）', control: stalled }), Field({ label: '或预计用时的倍数', control: factor })),
+        h('div', { class: 'form-row' }, Field({ label: '合并消息的间隔（秒）', control: batch }), Field({ label: '两次跟进之间最短间隔（分钟）', control: gap })),
+        message],
+      footer: [Button({ label: '取消', onClick: () => drawer.close() }), Button({
+        label: '保存', kind: 'primary',
+        onClick: async () => {
+          try {
+            await api.put('/automation', { tickSeconds: Number(tick.value), stalledMinutes: Number(stalled.value), stalledFactorOfEstimate: Number(factor.value), needsYouMinutes: Number(needs.value), remindersEnabled: reminders.querySelector('input').checked });
+            await api.put('/supervisor/settings', { batchSeconds: Number(batch.value), minGapMinutes: Number(gap.value) });
+          } catch (cause) { replace(message, Banner({ tone: 'danger', children: `保存没有成功：${cause.message}。请核对后重试。` })); return; }
+          drawer.close(); await load();
+        },
+      })],
+    });
+  }
+
+  async function openBrief() {
+    const content = h('div', { class: 'stack' }, h('p', { class: 'muted' }, '正在读取…'));
+    openDrawer({ title: '简报与提醒', body: content });
+    try {
+      const brief = await api.get('/brief');
+      if (!brief) { replace(content, h('p', { class: 'muted' }, '暂时没有简报，请确认简报插件已启用。')); return; }
+      const groups = brief.sections || { 逾期: brief.todos?.overdue || [], 等待中: brief.todos?.waiting || [], 待处理: brief.todos?.upcoming || [], 已完成: brief.todos?.completed || [] };
+      const blocks = Object.entries(groups).filter(([, items]) => items.length)
+        .map(([name, items]) => h('div', { class: 'stack' }, h('h3', null, name), items.map(item => h('p', null, item.title))));
+      if (brief.window) blocks.unshift(h('div',{class:'stack'},h('p',{class:'small muted'},`${brief.window.from} → ${brief.window.to}`),
+        brief.window.projects.map(p => h('section',{class:'stack'},h('h3',null,p.name),
+          [['进展',[...p.progress,...p.todoUpdates]],['待办完成',p.completed],['执行结束，待验收',p.ended],['失败',p.failed],['待决定',p.decisions]].map(([label,items]) => h('div',null,h('strong',null,`${label} ${items.length}`),items.map(i=>h('p',null,i.title))))))));
+      for (const signal of brief.signals || []) blocks.push(h('p', null, signal.text));
+      replace(content, blocks.length ? blocks : h('p', { class: 'muted' }, '当前没有需要跟进的内容。'));
+    } catch (cause) { replace(content, h('p', { class: 'text-danger' }, `简报暂时不可读：${cause.message}`)); }
+  }
+
+  return { el, load };
+}

@@ -1,0 +1,25 @@
+{
+  "codeCommit": "440da8f",
+  "unit": { "passed": 1014, "failed": 0 },
+  "browser": { "passed": 119, "failed": 0 },
+  "typecheck": "passed",
+  "pluginBoundaries": { "files": 24, "result": "passed" },
+  "build": "passed",
+  "package": "compiled tarball: real agent CLI/WS registration, configured diagnostic, recovery metadata, reply tracking, scheduled-work and source-reader HTTP, shipped Web modules passed with synthetic executors",
+  "ui": "real-ui-check.ts exercised actual Web/HTTP/SQLite schedule creation/cancellation and reader configuration; 1440x1000 and390x844 screenshots use isolated synthetic data",
+  "reviewRepairs": [
+    "explicit project reassignment retry uses latest known version without losing the draft",
+    "removed bot invalidates pending protected-source consent",
+    "personal account verification keeps protected sources queued",
+    "knowledge retry request key remains idempotent across restart"
+  ],
+  "preview": { "runningArtifact": "6d330a3", "newFeatureArtifactUpdated": false, "styleCommit": "6b85b3a" },
+  "external": "no new OAuth, private document reads, paid model calls, real message send, deployment or restart",
+  "remaining": [
+    "per-message handling conversation and editable suggestions",
+    "PDF/Office knowledge attachments",
+    "real account/remote executor acceptance",
+    "upstream daemon identity and atomic recovery unavailable"
+  ],
+  "goal": "active; this is a milestone, not whole-product completion"
+}

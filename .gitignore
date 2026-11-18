@@ -1,0 +1,36 @@
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+coverage/
+.turbo/
+
+# 日志
+*.log
+
+# 环境变量（保留模板 .env.example）
+.env
+.env.*
+!.env.example
+
+# SQLite 数据库文件
+*.sqlite
+*.sqlite3
+*.db
+*-journal
+*-wal
+*-shm
+
+# 操作系统与编辑器
+.DS_Store
+.idea/
+.vscode/
+!.vscode/extensions.json
+
+# 本地运行数据目录
+data/
+.workbench/
+
+# 临时文件
+tmp/
+.super-mario/

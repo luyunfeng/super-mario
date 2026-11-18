@@ -1,0 +1,34 @@
+{
+  "codex": {
+    "passed": true,
+    "baseline": "96ea6c853454e448bc31b4d136e16c56fb29f7bc",
+    "baselineHasFeatureDiff": true,
+    "source": "codex-json",
+    "state": "completed",
+    "proofExact": true,
+    "todoNotCompleted": true,
+    "noRedispatch": true,
+    "resourcesClosed": true,
+    "exactVersion": "not collected: existing shell shim --version failed; actual task execution succeeded"
+  },
+  "claude": {
+    "passed": true,
+    "baseline": "6da06139abdaff476ddfac60490a1cb624e3de9d",
+    "source": "claude-stream-json",
+    "state": "completed",
+    "proofExact": true,
+    "todoNotCompleted": true,
+    "noRedispatch": true,
+    "resourcesClosed": true,
+    "version": "2.1.295 (Claude Code)",
+    "configuration": "existing default; scratch/data only isolated"
+  },
+  "node": "v24.18.0",
+  "herdr": "herdr 0.9.5",
+  "scope": "127.0.0.1 temporary server + independent logical node + real installed CLI + owned Herdr pane; synthetic proof file only",
+  "notValidated": [
+    "cross-physical-machine",
+    "real Feishu/OAuth/groups",
+    "daemon restart atomic recovery"
+  ]
+}

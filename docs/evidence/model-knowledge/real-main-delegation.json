@@ -1,0 +1,116 @@
+{
+  "passed": true,
+  "versions": {
+    "node": "v24.18.0",
+    "codex": "codex-cli 0.162.0"
+  },
+  "mainRequest": {
+    "count": 1,
+    "limitMs": 120000,
+    "success": true,
+    "elapsedMs": 34995,
+    "toolCalls": [
+      {
+        "name": "executors_list",
+        "success": true
+      },
+      {
+        "name": "work_dispatch",
+        "success": true
+      }
+    ],
+    "nativeProviderRounds": "One user ask; normal product tool loop. No second user ask or retry."
+  },
+  "externalElapsedMs": 14617,
+  "dispatchCalls": 1,
+  "discoveryCalls": 1,
+  "executorStarts": 1,
+  "checks": {
+    "discovered": true,
+    "discoveryBeforeDispatch": true,
+    "explicitModelSelectedCodex": true,
+    "oneRealDispatch": true,
+    "oneExecutorStart": true,
+    "oneRun": true,
+    "oneSession": true,
+    "realRunCompleted": true,
+    "nativeIdentityMatches": true,
+    "proofExact": true,
+    "onlyProofFile": true,
+    "todoOpen": true,
+    "todoLinked": true,
+    "sourceLinked": true,
+    "parentFactVisible": true,
+    "resultMessageVisible": true,
+    "noPendingApproval": true,
+    "noOutbox": true,
+    "oneNecessaryStartEffect": true,
+    "noForbiddenToolAttempts": true,
+    "nativeNoNetworkTools": true,
+    "nativeJSONLTerminal": true
+  },
+  "proof": {
+    "exists": true,
+    "bytes": 24,
+    "exact": true,
+    "sha256": "7a8c628f61847464d521ec1525b67a608d6f8486de027bf892bb2a8bb25b1f10"
+  },
+  "scratchFiles": [
+    "proof.txt"
+  ],
+  "outboxCount": 0,
+  "cleanup": {
+    "w8:pN": "closed",
+    "agentClosed": true,
+    "servicesClosed": true,
+    "serverClosed": true,
+    "remainingTrackedProcesses": [],
+    "modelConfigDeleted": true,
+    "herdrDaemonStillRunning": true,
+    "ownPaneAbsent": true
+  },
+  "harnessCorrections": [
+    {
+      "issue": "Todo check used completed===false, but product Todo uses optional completedAt",
+      "resolution": "Read isolated database read-only; completedAt is absent; Todo remains open; no product mutation or model retry"
+    },
+    {
+      "issue": "Request incorrectly described the fixed payload as 22 bytes",
+      "resolution": "Literal payload remained MAIN_AGENT_DELEGATED_OK followed by LF; actual 24 bytes compared with Buffer exactly; no request resent"
+    }
+  ],
+  "todoEvidence": {
+    "id": "ba7a8e17-d04c-4a2b-b150-c8aec70986c2",
+    "completedAt": null,
+    "completedFieldExists": false,
+    "readMethod": "read-only SQLite on owned isolated DB after shutdown"
+  },
+  "baseline": "05174faaaecbac40332f9c09643e681c9cb26440",
+  "boundary": "Actual primary model -> actual discovery and work_dispatch -> same-machine isolated node -> real Herdr and Codex JSONL. Temporary database and scratch. No real user project/messages.",
+  "run": {
+    "status": "completed",
+    "executionMode": "task",
+    "resultSource": "codex-json"
+  },
+  "nativeResult": {
+    "state": "completed",
+    "source": "codex-json",
+    "exitCode": 0
+  },
+  "nativeIdentityMatches": true,
+  "followupFactRead": {
+    "method": "actual runs_list.execute; no second model request",
+    "runCount": 1
+  },
+  "necessaryEffects": [
+    {
+      "kind": "executor.start",
+      "status": "confirmed"
+    }
+  ],
+  "limitations": [
+    "One tiny task only; second physical machine not covered.",
+    "No packet capture; native command inspected for expected proof and no network command.",
+    "Feishu/other channels not configured, no approvals granted."
+  ]
+}

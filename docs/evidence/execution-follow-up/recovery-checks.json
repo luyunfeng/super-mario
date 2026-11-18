@@ -1,0 +1,37 @@
+{
+  "storagePatch": "6d330a3",
+  "lockRegressionCases": 8,
+  "relatedWorkerSuitePassed": 103,
+  "shutdownAndStoreSuitePassed": 21,
+  "restoredRecords": 1534,
+  "overwrittenExistingRecords": 0,
+  "allPreUpdateInboxRetained": true,
+  "allLatestInboxRetained": true,
+  "primaryFactsEqual": true,
+  "forcedStop": false,
+  "privateDurableBackup": true,
+  "preview": {
+    "code": "6d330a3",
+    "preserved": {
+      "projects": 2,
+      "todos": 1,
+      "knowledge": 1,
+      "runs": 1
+    },
+    "previousInboxRetained": 4052,
+    "nowInbox": 4991,
+    "agentInstanceReported": true,
+    "recoveryIdentity": "unknown",
+    "diagnosticCapability": true,
+    "diagnosticRan": false,
+    "replyEndpoint": true,
+    "observedSources": 460,
+    "sourceTruncated": true,
+    "personalEnabled": true,
+    "triageEnabled": true,
+    "desktopAnd390": true,
+    "errors": [],
+    "bad": [],
+    "businessWrites": 0
+  }
+}

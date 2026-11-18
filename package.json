@@ -1,0 +1,58 @@
+{
+  "name": "super-mario",
+  "version": "0.1.0",
+  "description": "A small, local-first AI workbench",
+  "type": "module",
+  "engines": {
+    "node": ">=24.9.0"
+  },
+  "bin": {
+    "super-mario": "bin/super-mario.js",
+    "super-mario-agent": "bin/super-mario-agent.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "docs"
+  ],
+  "scripts": {
+    "start": "node bin/super-mario.js",
+    "dev": "SUPER_MARIO_DEV=1 node --watch bin/super-mario.js",
+    "test": "node --test --test-concurrency=8 tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "lint:plugins": "node scripts/check-plugin-boundaries.mjs",
+    "test:web": "node --test --test-concurrency=4 tests/*browser.spec.ts",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-web.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.5.2",
+    "@earendil-works/pi-coding-agent": "1.5.2",
+    "@larksuiteoapi/node-sdk": "1.76.0",
+    "@xterm/xterm": "6.0.0",
+    "acorn": "8.19.0",
+    "croner": "11.0.1",
+    "mammoth": "1.13.0",
+    "pdf-parse": "2.4.5",
+    "qrcode": "1.5.4",
+    "ws": "8.18.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "24.10.1",
+    "@types/qrcode": "1.5.6",
+    "@types/ws": "8.18.1",
+    "typescript": "7.0.2"
+  },
+  "exports": {
+    "./plugin-sdk": {
+      "types": "./dist/packages/plugin-sdk/src/index.d.ts",
+      "default": "./dist/packages/plugin-sdk/src/index.js"
+    },
+    "./protocol": {
+      "types": "./dist/packages/protocol/src/index.d.ts",
+      "default": "./dist/packages/protocol/src/index.js"
+    }
+  }
+}

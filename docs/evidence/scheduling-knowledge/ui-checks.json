@@ -1,0 +1,23 @@
+{
+  "data": "isolated synthetic fixture; no personal data, real CLI, model or messages",
+  "checks": [
+    {
+      "name": "Web → actual HTTP → SQLite schedule creation/cancel",
+      "passed": true,
+      "modelCalls": 0,
+      "realExternalCalls": 0
+    },
+    {
+      "name": "Web → actual HTTP → SQLite reader settings",
+      "passed": true,
+      "authorization": "unchecked",
+      "enabled": false
+    }
+  ],
+  "viewports": [
+    "1440x1000",
+    "390x844"
+  ],
+  "errors": [],
+  "failed": []
+}

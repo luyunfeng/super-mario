@@ -1,0 +1,20 @@
+{
+  "data": "isolated synthetic inbox/project; model unavailable; no real CLI, account or messages",
+  "route": "inbox → source detail → handling drawer",
+  "realHTTP": true,
+  "sqlite": true,
+  "manualDraft": true,
+  "exactApproval": true,
+  "fullUIApproval": true,
+  "routeChangeClosesOverlays": true,
+  "todoProjectRetained": true,
+  "todoCompleted": false,
+  "sourceHandled": true,
+  "viewports": [
+    "1440x1000",
+    "390x844"
+  ],
+  "overflow": false,
+  "errors": [],
+  "failed": []
+}

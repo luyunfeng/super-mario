@@ -1,0 +1,237 @@
+// 定时配置、到期动作与任务验收是三层事实；这里不从审批结果推断 Run 完成。
+import { h, replace } from '../lib/dom.js';
+import { Button, Card, Field, Input, Select, TextArea, Banner, Empty } from '../ui/kit.js';
+import { openDrawer } from '../ui/overlay.js';
+
+const approvalText = value => ({ pending: '待批准', approved: '已批准', executing: '处理中', completed: '已处理', rejected: '已拒绝', unknown: '结果未知', failed: '失败' }[value] ?? '未确认');
+const timeText = value => value ? (Number.isNaN(Date.parse(value)) ? value : new Date(value).toLocaleString('zh-CN')) : '未提供';
+const chatLink = () => h('a', { href: '#chat' }, '去对话核对与确认');
+const line = text => h('p', { class: 'item__meta' }, text);
+const timingText = s => s.kind === 'once' ? `一次 · ${timeText(s.at)}` : s.kind === 'interval' ? `每 ${s.everySec / 60} 分钟${s.anchorAt ? ` · 起点 ${timeText(s.anchorAt)}` : ''}` : `cron ${s.cron} · ${s.tz}`;
+function occurrenceText(o) {
+  if (o.status === 'unknown') return '动作结果未知，停止堆积；请核对原记录';
+  if (o.status === 'claimed') return '已认领，动作结果尚未确认';
+  if (o.status === 'skipped') return '本次已跳过';
+  if (o.kind === 'dispatch') return `已生成派发审批 · ${approvalText(o.approvalStatus)}；任务最终完成情况未确认，请到对话查看执行记录`;
+  return '事实简报已生成（仅程序汇总已接入事实，不调用模型、不外发）';
+}
+
+export function createScheduledWorkCard({ api, store, scope }) {
+  const currentScope = () => scope?.get?.() ?? '';
+  const currentToken = () => api.token?.() ?? '';
+  const snapshot = () => store.view.snapshot ?? {};
+  let identity = JSON.stringify([currentScope(), currentToken()]);
+  let generation = 0, items = [], result = null, error = '', loaded = false;
+  let inFlight = null, queued = false, timer, editor = null, previousSnapshot;
+  const notice = h('div', { role: 'status' });
+  const list = h('div', { class: 'stack' });
+  const add = Button({ label: '创建定时工作', size: 'sm', onClick: openCreate });
+  const el = Card({ title: '定时工作', id: 'agent-scheduled-work', sub: '按时间生成事实简报，或提交派发审批。', tools: add, body: [notice, list] });
+
+  // 身份或顶栏范围改变即失效，旧读写响应不能回填新范围。
+  function syncIdentity() {
+    const next = JSON.stringify([currentScope(), currentToken()]);
+    if (next === identity) return false;
+    identity = next; generation += 1; items = []; result = null; loaded = false; error = '';
+    editor?.close(); paint();
+    return true;
+  }
+  function valid(stamp) { syncIdentity(); return stamp === generation; }
+  function requestRead() {
+    syncIdentity(); clearTimeout(timer);
+    timer = setTimeout(() => { load(); }, 60);
+  }
+  async function load() {
+    syncIdentity();
+    if (inFlight?.stamp === generation) { queued = true; return; }
+    const stamp = generation, projectId = currentScope();
+    const flight = { stamp }; inFlight = flight;
+    try {
+      const data = await api.get(`/scheduled-work${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`);
+      if (!valid(stamp)) { queued = true; return; }
+      if (!Array.isArray(data?.items)) throw new Error('返回数据格式无效');
+      items = data.items; result = data; error = ''; loaded = true;
+    } catch (cause) {
+      if (!valid(stamp)) { queued = true; return; }
+      error = cause.status === 404 ? '当前服务缺少定时工作 API 支持，请升级服务。' : `读取失败：${cause.message}`;
+    } finally {
+      if (inFlight === flight) inFlight = null;
+      paint();
+      if (queued) { queued = false; requestRead(); }
+    }
+  }
+  function paint() {
+    replace(notice, error ? Banner({ tone: 'warn', children: `${error} 列表状态未确认${loaded ? '，以下保留上次数据' : ''}。` }) : !loaded ? '正在读取定时工作…' : null,
+      result?.truncated && line(`仅显示前 ${result.limit ?? 100} 项，共 ${result.total} 项。`));
+    replace(list, items.map(renderItem), !items.length && loaded && !error ? Empty({ title: '当前范围没有定时工作' }) : null);
+  }
+  function renderItem(item) {
+    const project = snapshot().projects?.find(p => p.id === item.projectId);
+    const history = [...(item.occurrences ?? [])].sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor));
+    const latest = history[0];
+    const details = h('details', { class: 'fold', style: { minWidth: '0', overflowWrap: 'anywhere' } }, h('summary', null, '最近记录与来源'),
+      h('div', { class: 'fold__body' },
+        line(`来源消息：${item.source?.messageId ?? '未提供'} · ${timeText(item.source?.createdAt)}`),
+        line(`创建审批：${item.approvalId} · ${approvalText(item.approvalStatus)}`),
+        item.action.kind === 'dispatch' && line(`执行者：${item.action.executorId} · 工作目录：${item.action.cwd ?? '默认'}`),
+        history.map(o => h('div', null, line(`${timeText(o.scheduledFor)} · ${occurrenceText(o)}`),
+          o.approvalId && line(`派发审批：${o.approvalId} · ${approvalText(o.approvalStatus)}`),
+          o.result?.messageId && line(`结果消息：${o.result.messageId}`), o.error && line(o.error), o.approvalId && chatLink())),
+        item.occurrencesTruncated && line(`最近记录已截断：显示 ${history.length} 条，共 ${item.occurrenceTotal} 条。`)));
+    return h('article', { class: 'stack', style: { minWidth: '0' }, dataset: { workId: item.id } },
+      h('strong', { class: 'item__title' }, item.title),
+      line(`范围：${item.projectId ? project?.name ?? item.projectId : '全局'}${item.todoId ? ` · 待办 ${item.todoId}` : ''}`),
+      line(timingText(item.schedule)),
+      line(`配置状态：${({ pending: '待创建确认', active: '已生效（仅配置生效）', cancelled: '已取消计划' })[item.status] ?? '未确认'} · 创建审批 ${approvalText(item.approvalStatus)}`),
+      line(item.scheduleStatus === 'done' && item.schedule.kind === 'once' ? '单次计划已触发' : `调度状态：${({ active: '等待触发', paused: '已暂停', done: '已结束', cancelled: '已取消' })[item.scheduleStatus] ?? '未确认'}`),
+      line(`下次触发：${item.nextAt ? timeText(item.nextAt) : '未提供'}`),
+      line(`最新实际结果：${latest ? occurrenceText(latest) : '尚无到期动作记录'}`),
+      item.action.kind === 'brief' && line('事实简报仅程序汇总已接入事实，不自动调用模型或外发。'),
+      line('上次动作结果未知或派发审批待批准时，暂停生成新动作。取消计划不会终止已派发的任务。'),
+      h('div', { class: 'row row--wrap' }, chatLink(), item.status !== 'cancelled' && Button({ label: '取消计划', size: 'sm', onClick: () => openCancel(item) })), details);
+  }
+
+  function managedDrawer(options) {
+    editor?.close();
+    const stamp = generation;
+    let closed = false;
+    const drawer = openDrawer({ ...options, onClose: () => { closed = true; clearInterval(guard); if (editor === drawer) editor = null; } });
+    // 仅抽屉存在时检查本地身份，不发网络请求；覆盖没有 store 通知的令牌替换。
+    const guard = setInterval(() => { if (!valid(stamp)) { drawer.close(); requestRead(); } }, 250);
+    drawer.active = () => !closed && drawer.el.open && valid(stamp);
+    editor = drawer;
+    return drawer;
+  }
+  function openCancel(item) {
+    if (syncIdentity()) { requestRead(); return; }
+    const message = h('div', { role: 'status' });
+    let busy = false;
+    const drawer = managedDrawer({ title: '取消定时工作', body: [
+      h('p', { class: 'item__title' }, item.title), line(`确认取消当前版本 ${item.version}。只取消计划，不终止已派发的任务，也不自动批准任何事项。`), message],
+      footer: Button({ label: `确认取消版本 ${item.version}`, kind: 'danger', onClick: async () => {
+        if (busy || !drawer.active()) return;
+        busy = true;
+        try {
+          await api.post(`/scheduled-work/${encodeURIComponent(item.id)}/cancel`, { version: item.version });
+          if (!drawer.active()) return;
+          replace(message, Banner({ children: '已取消计划；已派发的任务不受影响。' }));
+          requestRead();
+          // 成功后保留结果，按钮不可重复提交。
+        } catch (cause) {
+          if (!drawer.active()) return;
+          replace(message, Banner({ tone: 'warn', children: cause.status === 409 ? '版本已变化，请核对最新列表后重新确认取消。未自动重试。' : `取消结果未确认：${cause.message}。请核对后再操作，未自动重试。` }));
+          requestRead();
+          // 失败后也锁住该版本，避免对不确定结果重复写。
+        }
+      } }) });
+  }
+  function openCreate() {
+    if (syncIdentity()) requestRead();
+    const key = crypto.randomUUID();
+    const title = Input({ name: 'title', required: true });
+    const projects = () => (snapshot().projects ?? []).filter(p => !p.archivedAt);
+    const project = Select({ name: 'projectId', options: [['', '全局（不绑定项目）'], ...projects().map(p => [p.id, p.name])], value: currentScope() });
+    const todo = Select({ name: 'todoId', options: [['', '不关联待办']] });
+    const frequency = Select({ name: 'frequency', options: [['once', '一次'], ['daily', '每天'], ['interval', '间隔'], ['cron', '高级 cron']] });
+    const once = Input({ type: 'datetime-local', name: 'at' });
+    const daily = Input({ type: 'time', value: '09:00', name: 'dailyTime' });
+    const minutes = Input({ type: 'number', min: 1 / 6, step: 'any', value: 60, name: 'minutes' });
+    const cron = Input({ name: 'cron', placeholder: '0 9 * * *' });
+    const zone = Input({ name: 'tz', value: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai' });
+    const action = Select({ name: 'action', options: [['brief', '事实简报'], ['dispatch', '派给执行者']] });
+    const executors = snapshot().executors ?? [];
+    const executor = Select({ name: 'executorId', options: [['', '请选择实际执行者'], ...executors.map(e => [e.id, `${e.name} · ${e.id} · ${e.available ? '可用' : e.reason ?? '离线或不可用'}`])] });
+    const availability = h('p', { class: 'item__meta' });
+    const prompt = TextArea({ name: 'prompt' });
+    const doneWhen = TextArea({ name: 'doneWhen' });
+    const estimate = Input({ type: 'number', min: 1, step: 1, value: 30, name: 'expectMinutes' });
+    const cwd = Input({ name: 'cwd', placeholder: '可选，执行机上的工作目录' });
+    const message = h('div', { role: 'status' });
+    const preview = h('div', { class: 'item__meta', 'aria-label': '创建预览', style: { whiteSpace: 'pre-wrap' } });
+    const onceField = Field({ label: '本地触发时间', control: once, hint: '使用浏览器当地时区；无效的夏令时时间会拒绝提交。' });
+    const dailyField = Field({ label: '每天时间', control: daily });
+    const intervalField = Field({ label: '间隔分钟', control: minutes, hint: '最少 10 秒（1/6 分钟）。' });
+    const cronField = Field({ label: 'cron 表达式', control: cron, hint: '表达式交由服务端校验。' });
+    const zoneField = Field({ label: 'IANA 时区', control: zone });
+    const dispatchFields = h('div', { class: 'stack' }, Field({ label: '执行者', control: executor }), availability,
+      Field({ label: '目标', control: prompt }), Field({ label: '完成标准', control: doneWhen }),
+      Field({ label: '预计分钟', control: estimate }), Field({ label: '工作目录', control: cwd }));
+    function updateTodos() {
+      replace(todo, h('option', { value: '' }, '不关联待办'), (snapshot().todos ?? []).filter(t => (t.projectId ?? '') === project.value).map(t => h('option', { value: t.id }, t.title)));
+    }
+    project.addEventListener('change', updateTodos); updateTodos();
+    function body() {
+      if (!title.value.trim()) throw new Error('请填写标题。');
+      if (project.value && !projects().some(p => p.id === project.value)) throw new Error('项目已不可用，请关闭后核对项目。');
+      if (todo.value && !(snapshot().todos ?? []).some(t => t.id === todo.value && (t.projectId ?? '') === project.value)) throw new Error('关联待办已不属于所选项目，请重新选择。');
+      let schedule;
+      if (frequency.value === 'once') {
+        const date = new Date(once.value);
+        const local = !Number.isNaN(date.getTime()) && `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}T${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+        if (!once.value || local !== once.value) throw new Error('本地触发时间无效，请检查本机时区和夏令时。');
+        schedule = { kind: 'once', at: date.toISOString() };
+      } else if (frequency.value === 'interval') {
+        const everySec = Number(minutes.value) * 60;
+        if (!Number.isFinite(everySec) || everySec < 10) throw new Error('间隔至少为 10 秒。');
+        schedule = { kind: 'interval', everySec };
+      } else {
+        if (!zone.value.trim()) throw new Error('请填写 IANA 时区。');
+        try { new Intl.DateTimeFormat('en', { timeZone: zone.value.trim() }); } catch { throw new Error('IANA 时区无效。'); }
+        if (frequency.value === 'daily' && !/^\d{2}:\d{2}$/.test(daily.value)) throw new Error('请填写每天时间。');
+        const [hour, minute] = daily.value.split(':').map(Number);
+        const expression = frequency.value === 'daily' ? `${minute} ${hour} * * *` : cron.value.trim();
+        if (!expression) throw new Error('请填写 cron 表达式。');
+        schedule = { kind: 'cron', cron: expression, tz: zone.value.trim() };
+      }
+      let workAction = { kind: 'brief' };
+      if (action.value === 'dispatch') {
+        const selected = (snapshot().executors ?? []).find(e => e.id === executor.value);
+        if (!selected?.available) throw new Error(`执行者不可用：${selected?.reason ?? '请选择在线、可用的实际执行者'}。`);
+        if (!prompt.value.trim() || !doneWhen.value.trim()) throw new Error('请填写目标和完成标准。');
+        const expectMinutes = Number(estimate.value);
+        if (!Number.isInteger(expectMinutes) || expectMinutes < 1) throw new Error('预计分钟必须为正整数。');
+        workAction = { kind: 'dispatch', executorId: selected.id, prompt: prompt.value.trim(), doneWhen: doneWhen.value.trim(), expectMinutes, ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}) };
+      }
+      return { key, title: title.value.trim(), schedule, action: workAction, ...(project.value ? { projectId: project.value } : {}), ...(todo.value ? { todoId: todo.value } : {}) };
+    }
+    function sync() {
+      onceField.hidden = frequency.value !== 'once'; dailyField.hidden = frequency.value !== 'daily';
+      intervalField.hidden = frequency.value !== 'interval'; cronField.hidden = frequency.value !== 'cron';
+      zoneField.hidden = !['daily', 'cron'].includes(frequency.value); dispatchFields.hidden = action.value !== 'dispatch';
+      const selected = (snapshot().executors ?? []).find(e => e.id === executor.value);
+      availability.textContent = selected ? `${selected.name}：${selected.available ? '当前可用；到期仍需派发审批' : selected.reason ?? '离线或不可用'}` : '没有选择执行者；不会创建虚拟执行者。';
+      try { preview.textContent = `提交预览（不会执行）：\n${JSON.stringify(body(), null, 2)}`; }
+      catch (cause) { preview.textContent = `提交预览：${cause.message}`; }
+    }
+    let busy = false, submitted = false;
+    const form = h('div', { class: 'stack' },
+      Field({ label: '标题', control: title, required: true }), Field({ label: '项目', control: project, hint: '默认继承顶栏。切换顶栏范围会关闭此抽屉，避免误提交。' }),
+      Field({ label: '关联待办', control: todo }), Field({ label: '频率', control: frequency }), onceField, dailyField, intervalField, cronField, zoneField,
+      Field({ label: '动作', control: action }), line('事实简报只程序汇总已接入事实，不自动调用模型或外发。派发每次到期仍会生成审批，审批生成不代表任务完成。'), dispatchFields, preview, message);
+    form.addEventListener('input', sync); form.addEventListener('change', sync);
+    const save = Button({ label: '提交创建审批', kind: 'primary', onClick: async () => {
+      if (busy || submitted || !drawer.active()) return;
+      let payload;
+      try { payload = body(); } catch (cause) { replace(message, Banner({ tone: 'warn', children: cause.message })); return; }
+      busy = true; save.disabled = true;
+      try {
+        const approval = await api.post('/scheduled-work', payload);
+        if (!drawer.active()) return;
+        submitted = true;
+        replace(message, Banner({ children: h('div', null, `已提交创建审批 · ${approvalText(approval.status)} · ${approval.id}。请到对话确认后才生效。`, chatLink()) }));
+        for (const input of form.querySelectorAll('input, select, textarea')) input.disabled = true;
+        requestRead();
+      } catch (cause) {
+        if (!drawer.active()) return;
+        replace(message, Banner({ tone: 'warn', children: `${cause.status === 404 ? '当前服务缺少定时工作 API 支持。' : cause.status === 409 ? '创建冲突（409）。' : `提交失败或结果未知：${cause.message}。`} 草稿和请求标识已保留，请先到对话核对；不会自动重试。` }), chatLink());
+      } finally { busy = false; if (drawer.active()) save.disabled = submitted; }
+    } });
+    const drawer = managedDrawer({ title: '创建定时工作', subtitle: '提交只创建审批，需要你在现有对话中确认。', body: form, footer: save });
+    sync();
+  }
+  scope?.subscribe?.(() => { syncIdentity(); requestRead(); });
+  return { el, load: requestRead, onState() {
+    const changed = syncIdentity();
+    if (changed || previousSnapshot !== store.view.snapshot) { previousSnapshot = store.view.snapshot; requestRead(); }
+  } };
+}

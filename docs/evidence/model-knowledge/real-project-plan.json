@@ -1,0 +1,68 @@
+{
+  "synthetic": true,
+  "externalRun": false,
+  "requestCount": 1,
+  "boundary": "Real project Web HTTP POST -> projectWorkspace.post -> scopedAgents.postProject; HTTP workspace polling. Only task_plan execute wrapped for counting; original implementation retained.",
+  "model": "codex-cli/default",
+  "demo": false,
+  "elapsedMs": 29692,
+  "checks": {
+    "oneRequest": true,
+    "modelReplyDone": true,
+    "actualToolCalled": true,
+    "allActualCallsSucceeded": true,
+    "onePendingPlan": true,
+    "exactlyTwoTasks": true,
+    "taskAcceptanceAndDuration": true,
+    "projectBound": true,
+    "sourceBound": true,
+    "notStarted": true,
+    "noRuns": true,
+    "effectsEmpty": true,
+    "outboxEmpty": true,
+    "noMachines": true,
+    "todosUnchanged": true,
+    "noApprovals": true,
+    "noForbiddenToolAttempts": true,
+    "answerWaits": true,
+    "noExecutionClaim": true,
+    "stepOneDirectoryInventory": true,
+    "stepTwoVerifiableProposal": true,
+    "noExecutorAssigned": true
+  },
+  "actualTaskPlanCalls": 1,
+  "successfulTaskPlanCalls": 1,
+  "blockedToolAttempts": [],
+  "counts": {
+    "plans": 1,
+    "tasks": 2,
+    "runs": 0,
+    "effects": 0,
+    "outbox": 0,
+    "machines": 0
+  },
+  "uncovered": [
+    "未测试用户点击开始、批准、真实派发及业务完成",
+    "未连接真实文件或执行机，未测试外发",
+    "仅一次合成项目真实模型对话；文字语义以私有响应为证据，自动断言包含启发式匹配"
+  ],
+  "passed": true,
+  "serviceClosed": true,
+  "remainingTrackedProcesses": [],
+  "modelConfigDeleted": true,
+  "baselineUnchanged": true,
+  "baseline": {
+    "before": {
+      "head": "05174faaaecbac40332f9c09643e681c9cb26440",
+      "diffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": "",
+      "untracked": {}
+    },
+    "after": {
+      "head": "05174faaaecbac40332f9c09643e681c9cb26440",
+      "diffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": "",
+      "untracked": {}
+    }
+  }
+}

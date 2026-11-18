@@ -1,0 +1,56 @@
+{
+  "requestCount": 1,
+  "elapsedMs": 46607,
+  "checks": {
+    "parentToolCalls": 2,
+    "parentToolSuccess": 0,
+    "onePendingRecord": false,
+    "onePendingApproval": false,
+    "sourceBound": false,
+    "projectBound": false,
+    "timingCorrect": false,
+    "briefAction": false,
+    "noEffectiveSchedule": true,
+    "noOccurrences": true,
+    "effectsEmpty": true,
+    "outboxEmpty": true,
+    "noRuns": true,
+    "noForbiddenToolAttempts": true,
+    "answerSaysPending": true,
+    "answerDoesNotClaimEffective": true
+  },
+  "pendingRecordCount": 0,
+  "pendingApprovalCount": 0,
+  "effectiveScheduledWorkCount": 0,
+  "passed": false,
+  "serviceClosed": true,
+  "remainingTrackedProcesses": [],
+  "modelConfigDeleted": true,
+  "baselineUnchanged": true,
+  "failureFacts": {
+    "toolError": "包含无效或非宿主字段",
+    "observedSchedule": {
+      "cron": "0 9 * * *",
+      "timezone": "Asia/Shanghai"
+    },
+    "observedActionAfterCorrection": {
+      "type": "brief"
+    },
+    "requiredProtocol": {
+      "schedule": {
+        "kind": "cron",
+        "cron": "0 9 * * *",
+        "tz": "Asia/Shanghai"
+      },
+      "action": {
+        "kind": "brief"
+      }
+    },
+    "requestRetries": 0,
+    "withinSingleAskProposalAttempts": 2,
+    "recordOutcome": "无周期记录；无创建审批；不是 pending",
+    "answerOutcome": "明确提交失败、没有待审批提议、尚未生效"
+  },
+  "baseline": "bffc9fa with documentation changes only",
+  "fixture": "Temporary isolated service and synthetic project; actual model, actual proposal tool. No approval executed."
+}

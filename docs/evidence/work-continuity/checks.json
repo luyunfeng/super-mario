@@ -1,0 +1,41 @@
+{
+  "code": "e482c3a",
+  "commits": [
+    "70419a2",
+    "e482c3a"
+  ],
+  "unit": {
+    "passed": 760,
+    "failed": 0
+  },
+  "browser": {
+    "passed": 82,
+    "failed": 0
+  },
+  "typecheck": "passed",
+  "pluginBoundaries": {
+    "passed": true,
+    "files": 21
+  },
+  "package": {
+    "entrypoint": true,
+    "compiledHttpDecisionReadWrite": true,
+    "webAsset": true,
+    "personalCollectionDefaultOff": true
+  },
+  "preview": {
+    "code": "e482c3a",
+    "styleCommit": "6b85b3a",
+    "memoryDecisionsVisible": true,
+    "decisionEndpoint": true,
+    "runObservationsEndpoint": true,
+    "desktopAnd390": true,
+    "tokenConsumed": true,
+    "businessWrites": 0,
+    "errors": [],
+    "failed": [],
+    "personalCollectionEnabledUnchanged": true
+  },
+  "externalValidation": "No manual real Feishu/OAuth/paid-model test; existing user-enabled collection setting preserved",
+  "goal": "active; G03/G06/G10/G11/G12/G21 and external acceptance still need work"
+}

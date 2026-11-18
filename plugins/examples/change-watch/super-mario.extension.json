@@ -1,0 +1,1 @@
+{"id":"change-watch","name":"待办变化通知示例","version":"1.0.0","apiVersion":1,"main":"index.js","permissions":["store.read","store.write","schedule.manage","eventbox.subscribe:schedule.","outbox.enqueue:feishu.bot"]}

@@ -1,0 +1,70 @@
+{
+  "commit": "489694d",
+  "checks": {
+    "unit": {
+      "pass": 1217,
+      "fail": 0,
+      "cancelled": 0
+    },
+    "browser": {
+      "pass": 129,
+      "fail": 0,
+      "cancelled": 0,
+      "baseline": "bffc9fa",
+      "note": "Full browser baseline bffc9fa; later backend CLI/tool changes leave apps/web unchanged. Final preview separately checked at desktop and 390px."
+    },
+    "typecheck": true,
+    "pluginFilesChecked": 28,
+    "build": true,
+    "compiledTarballSmoke": true,
+    "compiledPackageNestedScheduleSchema": true,
+    "realNaturalLanguageScheduleProposal": true,
+    "compiledActionAndPolicySchemas": true,
+    "realInputApprovalProposal": true,
+    "realProjectPendingPlan": true,
+    "realMainAgentCodexDelegation": true,
+    "codexBackedClaudeProtocolSimulation": true,
+    "compiledPackageClaudeProtocolFixture": true,
+    "realClaudeRetestedAfterFix": false
+  },
+  "previewUpdate": {
+    "version": "489694d",
+    "graceful": true,
+    "forcedKill": false,
+    "coldInboxRetained": 6666,
+    "liveInboxRetained": 6666,
+    "nowInbox": 6666,
+    "primaryFactsEqual": true,
+    "personalEnabledBefore": false,
+    "personalEnabledAfter": false,
+    "pluginFlagsUnchanged": true,
+    "privateDurableBackup": true,
+    "newEndpoints": true
+  },
+  "livePreview": {
+    "version": "489694d",
+    "desktopAnd390": true,
+    "tokenConsumed": true,
+    "defaultInboxCards": 50,
+    "sourceRecords": 6666,
+    "oldInboxRetained": 6666,
+    "scheduledWorkUI": true,
+    "protectedReaderUI": true,
+    "handlingUI": true,
+    "modelLauncherUI": true,
+    "modelInvoked": false,
+    "readerInvoked": false,
+    "personalEnabled": false,
+    "primaryFactsEqual": true,
+    "businessHTTPWrites": 0,
+    "newSendEffects": 0,
+    "errors": [],
+    "failed": []
+  },
+  "screenshots": "Actual user-data screenshots remain private outside the repository; prior synthetic desktop/narrow screenshots remain in evidence/workbench-theme and inbox-attachments.",
+  "notDone": [
+    "Real Feishu IM/group/A2A not resumed.",
+    "Real document permission and second physical machine unverified.",
+    "Daemon identity/atomic recovery remains unsupported."
+  ]
+}

@@ -1,0 +1,1042 @@
+import { createInboxClassifier } from './agent-runtime/inbox-classifier.ts';
+import { createInboxHandlingRuntime } from './agent-runtime/inbox-handling.ts';
+import { createInboxHandling, inboxHandlingApprovalKind } from './inbox-handling.ts';
+import { createInboxHandlingSources } from './inbox-handling-source.ts';
+import type { InboxHandlingSource, InboxHandlingAction } from '../../protocol/src/inbox-handling.ts';
+import { createKnowledgeSourceApproval, knowledgeSourceApprovalKind } from './knowledge-source-approval.ts';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { createScheduledWorkService } from './scheduled-work-service.ts';
+import { scheduledWorkApprovalKind } from './scheduled-work.ts';
+import { authorizeWorkDecisionSource } from './work-decision-access.ts';
+import { buildWorkContext } from './work-context.ts';
+import { createKnowledgeSourceSettings } from './knowledge-source-settings.ts';
+import { createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/knowledge-source-reader.ts';
+import { createReplyTracking } from './reply-tracking.ts';
+import { createWorkDecisionService } from './work-decision-service.ts';
+import { createAgentSessions, nativeResumeSpec, nativeResultSources } from './agent-sessions.ts';
+import { executionProgress } from './execution-progress.ts';
+import { createTodoReporting } from './todo-reporting.ts';
+import { createRunReview } from './run-review.ts';
+import { createProjectFollowUp } from './project-follow-up.ts';
+import { applyPolicyPreset } from './policy-presets.ts';
+import { createProjectFolders } from './project-folders.ts';
+import { createWebPresence } from './web-presence.ts';
+import { buildWindowBrief, formatWindowBrief, createBriefingSettings } from './briefing.ts';
+import { createAwayNotifications } from './away-notifications.ts';
+import { collectAttention } from './attention.ts';
+import { randomUUID, createHash } from 'node:crypto';
+import { join } from 'node:path';
+import { PluginCallError } from './plugin-invocations.ts';
+import { createProjectWorkspace } from './project-workspace.ts';
+import { createProjects } from './projects.ts';
+import { createKnowledgeCurator } from './knowledge-curator.ts';
+import { createModelConfig } from './model-config.ts';
+import { createPlans } from './plans.ts';
+import { createPolicies, validatePolicyPatch, type PolicyConfig } from './policies.ts';
+import { createInteractions } from './interactions.ts';
+import { createSupervisorAgent } from './supervisor-agent.ts';
+import { createEffects } from './effects.ts';
+import { createRunMonitor } from './run-monitor.ts';
+import { createApprovalService } from './approvals.ts';
+import { createSupervision } from './supervision.ts';
+import { loadExtensions } from './extension-loader.ts';
+import { createInboxService, ruleTriage } from './inbox.ts';
+import { createInboxTriage } from '../../../plugins/inbox-triage.ts';
+import { createStore } from './store.ts';
+import { createEventBus } from './events.ts';
+import { createBackground } from './background.ts';
+import { createEventMailboxes } from './event-mailboxes.ts';
+import { validateBotScope } from './bot-scopes.ts';
+import { botConversationId, botForConversation, pinBotExecutor, relaySender } from './bot-agent-routing.ts';
+import { canRelayBotScope } from './bot-group-policy.ts';
+import { createScopedAgents } from './scoped-agents.ts';
+import { createContributions, PluginHost } from './plugin-host.ts';
+import { createAgentRuntime } from './agent-runtime/index.ts';
+import { currentAgentInput } from './agent-input.ts';
+import { createSystemExtensions } from '../../../plugins/index.ts';
+import { workspaceSplash } from '../../../plugins/workspace-splash.ts';
+import type { AppConfig, Approval, BotScope, ExecutionResult, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
+import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
+
+export class InputError extends Error {
+  status: number;
+  constructor(message: string, status = 400) { super(message); this.status = status; }
+}
+export function requiredText(value: unknown, name: string): string {
+  if (typeof value !== 'string' || !value.trim()) throw new InputError(`${name}不能为空`);
+  return value.trim();
+}
+export function optionalText(value: unknown, name: string): string | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (typeof value !== 'string') throw new InputError(`${name}必须是文本`);
+  return value.trim() || undefined;
+}
+function dueDate(value: unknown): string | undefined {
+  const text = optionalText(value, '截止日期');
+  if (text && Number.isNaN(Date.parse(text))) throw new InputError('截止日期格式无效');
+  return text;
+}
+/** Owns application services. HTTP and future channels call the same methods. */
+export async function createWorkbench(config: AppConfig) {
+  config = { ...config };
+  const modelConfig = createModelConfig(config);
+  const store = createStore(join(config.dataDir, 'workbench.sqlite'));
+  const events = createEventBus(store);
+  const mailboxes = createEventMailboxes({ store, events });
+  const projects = createProjects({ store, events });
+  const waitingReplies = createReplyTracking({ store, events });
+  const effects = createEffects({ store, events });
+  const contributions = createContributions();
+  const knowledgeReaderSettings = createKnowledgeSourceSettings(store, events);
+  const protectedReaderContext = new AsyncLocalStorage<{ source: string; current: () => boolean; credentialAuthorized?:boolean }>();
+  let knowledgeAccount: () => {profile:string;appId:string;openId:string} | undefined = () => undefined;
+  let knowledgeAccountReady = () => false;
+  let mailboxHandlingAccess: Parameters<typeof createInboxHandlingSources>[0]['mailboxAccess'] = () => ({ active: false, replyAvailable: false, reason: '机器人处理入口尚未连接' });
+  let replyToInboxSource: ((source: InboxHandlingSource, text: string, key: string) => Promise<Json>) | undefined;
+  const background = createBackground({ store, events, effects, propose: input => approvals.propose(input) });
+  const briefing = createBriefingSettings(store, background.schedules);
+  const plugins = new PluginHost({ store, events, contributions, dataDir: config.dataDir, background: background.host });
+  let machines: MachineClient | undefined;
+  const projectFolders = createProjectFolders(() => machines);
+  let replyToFeishu: ((chatId: string, text: string, key: string) => Promise<void>) | undefined;
+  let channelStatus = () => ({ connected: false, reason: '请在 Web 配置飞书' });
+  let botsStatus: () => Json = () => [];
+  let notificationBots: () => import('../../protocol/src/index.ts').FeishuBot[] = () => botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[];
+  const presence = createWebPresence();
+  let notificationChannel: (bot: import('../../protocol/src/index.ts').FeishuBot) => string = () => { throw new InputError('通知渠道尚未连接', 503); };
+  let mailboxProposer: ((input: Record<string, unknown>) => Json) | undefined;
+  let botRelay: ((input: { sourceBotId: string; targetBotId: string; text: string; key: string; parentEntryId?: string; chatId?: string; sourceMessageId?: string }) => Promise<import('../../protocol/src/bots.ts').MailboxEntry>) | undefined;
+  const configuredBots = () => botsStatus() as unknown as import('../../protocol/src/bots.ts').FeishuBot[];
+  const agentSessions = createAgentSessions({ store, machines: () => machines, executors: executorInfo, propose: input => approvals.propose(input), pinExecutor: (source, id) => pinBotExecutor(configuredBots(), source, id) });
+  let channelBindingsReady = false;
+  let botScopeAccess: (scope: BotScope, botId: string, input?: Message) => boolean = () => true;
+  const workDecisions = createWorkDecisionService({ store, events, currentInput: () => currentAgentInput() ?? agent.currentInput(), assertCurrentInput: input => {
+    if (input.conversationId.startsWith('bot:') && !configuredBots().some(bot => input.conversationId.startsWith(`bot:${bot.id}:`))) throw new InputError('机器人来源已失效', 403);
+    assertBotInput(input);
+  } });
+  for (const extension of createSystemExtensions({ demo: config.demo, actions: { scheduledWorkList: input => scheduledWork.list(input) as unknown as Json, scheduledWorkPropose: input => scheduledWork.propose(input,true) as unknown as Json, scheduledWorkCancel: input => scheduledWork.cancel(input,true) as unknown as Json, knowledgeReaderService: () => protectedReaderService(), workDecisionsList: input => workDecisions.list(input) as unknown as Json, workDecisionRecord: input => workDecisions.recordFromAgent(input) as unknown as Json, workDecisionCorrect: input => workDecisions.changeFromAgent(input) as unknown as Json, workDecisionWithdraw: input => workDecisions.changeFromAgent(input, true) as unknown as Json, workDecisionReference: input => workDecisions.referenceFromAgent(input) as unknown as Json, inboxList: readInbox, inboxHandlingRead: readInboxHandlingFromAgent, inboxAssignProject: assignInboxProject, agentSessions: async input => await agentSessions.discover(input) as unknown as Json, resumeSession: async input => { const source = currentAgentInput() ?? agent.currentInput(); return await agentSessions.proposeResume({ ...input, key: source ? `${source.id}:${requiredText(input.key, '恢复请求标识')}` : input.key }, source) as unknown as Json; }, botsList: () => botsStatus(), botRelay: relayFromAgent, mailboxesList: input => mailboxes.list(input as Parameters<typeof mailboxes.list>[0]) as unknown as Json, mailboxPropose: input => { if (!mailboxProposer) throw new InputError('机器人信箱尚未连接', 503); return mailboxProposer(input); }, projectsList: () => projects.list() as unknown as Json, projectCreate: async input => await createProject(input) as unknown as Json, projectsDiscover: discoverProjects, knowledgeSource: input => {
+    const source=currentAgentInput()??agent.currentInput();if(!source||source.role!=='user'||source.readOnly||source.origin&&source.origin!=='user')throw new InputError('来源投放需要当前用户输入',403);
+    validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
+    return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
+  }, knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0]) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
+  plugins.register(workspaceSplash);
+  for (const loaded of await loadExtensions(config.dataDir, { reservedIds: plugins.list().map(item => item.id) })) plugins.register(loaded.extension, loaded.config);
+  try { await plugins.start(); } catch (error) { store.close(); throw error; }
+  const agent = createAgentRuntime({ config, store, events, contributions, executors: executorInfo, workDecisions: workDecisions.context, botContext, projectContext:id=>projectWorkspace.context(id) });
+  const scopedAgents = createScopedAgents({ config, store, events, contributions, executors: executorInfo, workDecisions: workDecisions.context, botContext, projectContext:id=>projectWorkspace.context(id), validScope: (scope, botId, input) => botScopeAccess(scope, botId, input) });
+  const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
+    allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read'],
+    systemPrompt: '你是独立后台督办 Agent。只读证据和知识，核对验收标准并给出建议。不得启动任务、批准权限、修改待办或把执行结束当作业务完成。证据不足时明确说明未知。' });
+  const inboxClassifier = createInboxClassifier({config,store,events,contributions,ready:()=>agent.status().available});
+  const inboxHandlingRuntime = createInboxHandlingRuntime({config,store,events,contributions,ready:()=>agent.status().available});
+  const inbox = createInboxService({ store, events, createTodo: input => createTodo(input, false),
+    triage: createInboxTriage({ agent: inboxClassifier, fallback: ruleTriage, enabled: () => !config.demo && plugins.list().some(plugin => plugin.id === 'inbox-triage' && plugin.status === 'active') }) });
+  const knowledgeCurator = createKnowledgeCurator({ store, events, dataDir: config.dataDir, knowledge, machines: () => machines, enabled: () => plugins.list().some(p => p.id === 'knowledge-local' && p.status === 'active'), validProject: id => projects.list().some(p => p.id === id && !p.archivedAt), readSource: readProtectedKnowledgeSource });
+  const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text)=>scopedAgents.postProject(id,text),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
+  const controllers = new Map<string, AbortController>();
+  const jobs = new Set<Promise<void>>();
+  let closing = false;
+  const approvals = createApprovalService({ store, events, execute: executeApproved, publish: background.publish });
+  const inboxHandlingSources = createInboxHandlingSources({store,personalAccount:()=>knowledgeAccount(),mailboxAccess:entry=>mailboxHandlingAccess(entry)});
+  const inboxHandling = createInboxHandling({store,events,
+    readSource(ref) {
+      let source = inboxHandlingSources(ref);
+      if(!plugins.list().some(p=>p.id==='feishu'&&p.status==='active'))source={...source,replyAvailable:false,replyReason:'请先启用飞书插件'};
+      return plugins.list().some(p=>p.id==='inbox-triage'&&p.status==='active') ? source : {...source,active:false,reason:'请先启用收件箱整理插件'};
+    },
+    available:()=>inboxHandlingRuntime.status(),
+    think:(source,conversationId,text)=>inboxHandlingRuntime.ask(source,conversationId,text),
+    proposeApproval:input=>approvals.propose(input),rejectApproval:(id,version)=>{approvals.reject(id,version);},execute:executeInboxHandling,
+  });
+  const scheduledWork = createScheduledWorkService({store,events,schedules:background.schedules,approvals,currentInput:()=>currentAgentInput()??agent.currentInput(),
+    ready:()=>channelBindingsReady,enabled:()=>plugins.list().some(p=>p.id==='daily-brief'&&p.status==='active'),
+    facts:scope=>buildWorkContext(store,scope,undefined,{executors:executorInfo()}) as unknown as Json,
+    authorize(scope,source){
+      const target=validateBotScope(store,scope.todoId?{kind:'task',todoId:scope.todoId,...(scope.projectId?{projectId:scope.projectId}:{})}:scope.projectId?{kind:'project',projectId:scope.projectId}:{kind:'global'});
+      authorizeWorkDecisionSource(store,target,source);
+      if(channelBindingsReady){
+        if(source.conversationId.startsWith('bot:')&&!configuredBots().some(b=>source.conversationId.startsWith(`bot:${b.id}:`)))throw new InputError('机器人来源已失效',403);
+        assertBotInput(source);
+        if(scope.action.kind==='dispatch')pinBotExecutor(configuredBots(),source,scope.action.executorId);
+      }
+    }});
+  const offScheduledWork=background.eventbox.subscribe('core',{name:'scheduled-work',types:[{type:'schedule.due',version:1}],effects:'none',handler:event=>scheduledWork.handle(event)});
+  const knowledgeSourceApproval = createKnowledgeSourceApproval({store,events,proposeApproval:input=>approvals.propose(input),rejectApproval:(id,version)=>{approvals.reject(id,version);},
+    readerIdentity(){const settings=knowledgeReaderSettings.read(),account=knowledgeAccount();return {enabled:settings.enabled,configured:!!(settings.profile||account?.profile),key:digestReaderIdentity(settings,account),ready:!!settings.profile||knowledgeAccountReady()};},
+    validateJob(job){if(job.requestOrigin==='agent'){const source=job.sourceMessageId?store.get<Message>('messages',job.sourceMessageId):undefined;if(!source)throw new InputError('原来源请求不存在',409);validateSourceActor(source,job.layer,job.projectId);}},
+    onApproved:id=>knowledgeCurator.sourceApproved(id),onRejected:(id,reason)=>knowledgeCurator.sourceRejected(id,reason)});
+  const offKnowledgeApprovals=events.subscribe(event=>{if(['knowledge.reader.changed','projects.changed','todos.changed','plugins.changed','approvals.changed','bots.changed','feishu.bots.changed'].includes(event.type))knowledgeSourceApproval.sync();});
+  const reporting = createTodoReporting({ store, events });
+  const reviewSettings = () => ({ maxReworks: store.get<{ maxReworks: number }>('workbench.settings', 'run-review')?.maxReworks ?? 2 });
+  const runReview = createRunReview({ store, events, dispatch, completeTodo: id => updateTodo(id, { completed: true }), maxReworks: () => reviewSettings().maxReworks });
+  function reminderReference(todo: Todo) {
+    return { ref: `reminder:${JSON.stringify([todo.id, todo.reminderAt])}`, version: todo.reminderVersion ?? 1 };
+  }
+  function reminderSourceId(todo: Todo) {
+    // Preserve generation-1 deduplication when reconciling legacy events.
+    return (todo.reminderVersion ?? 1) === 1 ? `reminder:${todo.id}:${todo.reminderAt}`
+      : `reminder:${JSON.stringify([todo.id, todo.reminderAt, todo.reminderVersion])}`;
+  }
+  const supervision = createSupervision({ store, events, publish: input => {
+    const data = input.data as {todoId?:string;reminderAt?:string};
+    // Only the stored Todo supplies the generation, never incoming metadata.
+    const todo = input.type === 'todo.reminder_due' && data.todoId ? store.get<Todo>('todos', data.todoId) : undefined;
+    return background.publish(todo && todo.reminderAt === data.reminderAt ? { ...input, sourceId: reminderSourceId(todo), staleIf: reminderReference(todo) } : input);
+  }, enabled: () => plugins.list().some(plugin => plugin.id === 'daily-brief' && plugin.status === 'active') });
+  supervision.start();
+  const policies = createPolicies({ store, events });
+  const plans = createPlans({ store, events, dispatch: (input, key) => {
+    const planId = key?.match(/^plan:([^:]+):/)?.[1];
+    const origin = planId ? store.get<{ sourceMessageId?: string; projectId?: string; conversationId?: string; todoId?: string }>('plan-origins', planId) : undefined;
+    return dispatch({ ...input, sourceMessageId: origin?.sourceMessageId, conversationId: origin?.conversationId, projectId: input.projectId ?? origin?.projectId, todoId: input.todoId ?? origin?.todoId }, key);
+  } });
+  const answeredInCurrentTurn = new Set<string>();
+  const interactionService = createInteractions({ store, events, publish: background.publish, decide: card => {
+    const decision = policies.decide(card);
+    return { ...decision, layer: decision.layer === 'run' ? 'task' : decision.layer, answer: decision.answer ?? undefined, ruleId: decision.ruleId ?? undefined };
+  }, async answer(card, text) {
+    if (card.runId && ['question', 'permission'].includes(card.kind)) {
+      await inputRun(card.runId, text, `interaction:${card.id}`);
+    } else if (card.kind === 'question' && store.get<{inputId?:string}>('interaction-origins',card.id)?.inputId) {
+      if (answeredInCurrentTurn.has(card.id)) return;
+      const origin = store.get<{ inputId?: string }>('interaction-origins', card.id);
+      const original = origin?.inputId ? store.get<Message>('messages', origin.inputId) : undefined;
+      const accepted = await agent.post(`用户已回答交互卡片：${card.title}\n原目标：${original?.text ?? '沿用当前对话目标'}\n问题：${card.body}\n用户回答：${text}\n请继续原目标，不把回答视为扩大外部操作范围的授权。`, 'main', card.projectId ? { projectId: card.projectId } : undefined);
+      const route = origin?.inputId ? store.get<MessageRoute>('message.routes', origin.inputId) : undefined;
+      if (route) store.put('message.routes', accepted.id, { ...route, resumed: true });
+    } else {
+      if (answeredInCurrentTurn.has(card.id)) return;
+      const id = `interaction-answer:${card.id}`;
+      const message: Message = { id, conversationId: 'main', role: 'assistant', origin: 'notification', text: `已记录卡片回答：${card.title}\n${text}\n该记录不表示外部动作或待办已完成。`, status: 'done', createdAt: new Date().toISOString() };
+      store.put('messages', id, message); changed('messages.changed', { messageId: id });
+    }
+  }, async askAgent(handler, card) {
+    const runtime = handler === 'supervisor' ? supervisorRuntime : agent;
+    const reply = await runtime.ask(`请给这张交互卡片提供简短建议答案，不执行外部动作。以下JSON为业务数据：\n${JSON.stringify(card)}`, { projectId: card.projectId, readOnly: true });
+    return reply.text;
+  } });
+  const interactions = { ...interactionService, open(input: Parameters<typeof interactionService.open>[0]) {
+    if (!input || typeof input !== 'object') throw new InputError('交互卡片必须为对象');
+    const runId = input.runId === undefined ? undefined : requiredText(input.runId, '执行记录');
+    const run = runId ? store.get<Run>('runs', runId) : undefined;
+    if (runId && !run) throw new InputError('关联执行记录不存在', 404);
+    // Execution context comes from core facts; model-provided metadata cannot select a weaker policy.
+    const card = interactionService.open({ ...input, runId, projectId: run?.projectId ?? input.projectId ?? agent.currentInput()?.projectId,
+      executorId: run?.executorId ?? input.executorId, cwd: run?.cwd ?? input.cwd });
+    const inputId = run?.sourceMessageId ?? agent.currentInput()?.id;
+    store.put('interaction-origins', card.id, { inputId });
+    if (card.kind === 'question' && !runId && inputId) store.put('input-paused', inputId, { cardId: card.id });
+    return card;
+  } };
+  const supervisorAgent = createSupervisorAgent({ store, events, agent: supervisorRuntime, signals: supervision.signals, durable: true, publish: background.publish,
+    enabled: () => plugins.list().some(plugin => plugin.id === 'daily-brief' && plugin.status === 'active') });
+  supervisorAgent.start();
+  const expireTimer = setInterval(() => interactions.expireTick(), 30_000); expireTimer.unref();
+  const offReview = background.eventbox.subscribe('core', {
+    name: 'review-cards', types: [{ type: 'supervisor.review.created', version: 1 }], effects: 'none',
+    handler(event) {
+      const data = event.data as unknown as { id: string; runIds: string[]; text: string };
+      if (store.get('background.review-cards', data.id)) return { status: 'done' };
+      store.transaction(() => {
+        const runId = data.runIds.length === 1 && store.get<Run>('runs', data.runIds[0]!) ? data.runIds[0] : undefined;
+        const card = interactions.open({ kind: 'review', title: '后台督办复核建议', body: data.text, runId });
+        store.put('background.review-cards', data.id, { cardId: card.id });
+      });
+      return { status: 'done' };
+    },
+  });
+  const offSupervisor = background.eventbox.subscribe('core', {
+    name: 'supervisor-review', types: [{ type: 'supervision.signal', version: 1 }], effects: 'ledger', serial: 'none', timeoutMs: 600000,
+    async handler(event) {
+      const data = event.data as unknown as { id: string; kind: string };
+      if (!['review','stalled','orphaned','needs_you'].includes(data.kind) || store.get('supervisor.processed', data.id)) return { status: 'done' };
+      if (!supervision.signals().some(s => s.id === data.id && !s.resolvedAt)) return { status: 'skip', reason: 'signal_resolved' };
+      if (supervisorAgent.settings().canResume || !supervisorRuntime.status().available) return { status: 'retry', reason: '督办暂停或模型未就绪', afterSec: 30, deferred: true };
+      await supervisorAgent.flush();
+      return store.get('supervisor.processed', data.id) ? { status: 'done' } : { status: 'retry', reason: '等待批处理间隔', afterSec: 30, deferred: true };
+    },
+  });
+  // Reconcile old claimed reminders and open signals before the worker starts.
+  store.transaction(() => {
+    for (const signal of supervision.signals().filter(s => !s.resolvedAt)) {
+      background.publish({ type: 'supervision.signal', typeVersion: 1, sourceId: `signal:${signal.id}`, data: { id: signal.id, kind: signal.kind, text: signal.text, ...(signal.runId ? { runId: signal.runId } : {}), ...(signal.todoId ? { todoId: signal.todoId } : {}) }, subject: { kind: signal.runId ? 'run' : 'todo', id: signal.runId || signal.todoId || signal.id } });
+      if (signal.kind === 'reminder' && signal.todoId) {
+        const todo = store.get<Todo>('todos', signal.todoId);
+        if (todo?.remindedAt && todo.reminderAt) background.publish({ type:'todo.reminder_due', typeVersion:1, sourceId:reminderSourceId(todo), staleIf:reminderReference(todo), data:{todoId:todo.id,title:todo.title,reminderAt:todo.reminderAt},subject:{kind:'todo',id:todo.id} });
+      }
+    }
+    store.put('eventbox.migrations','core-v1',{completedAt:new Date().toISOString()});
+  });
+  const offBrief = background.eventbox.subscribe('core', {
+    name:'dailybrief', types:[{type:'schedule.due',version:1}], effects:'none',
+    async handler(event) {
+      const data = event.data as unknown as {owner:string;name:string;scheduledFor:string;scheduleId:string};
+      if(data.owner!=='daily-brief' || !['morning','evening','interval'].includes(data.name)) return {status:'skip',reason:'not_a_brief'};
+      if(!plugins.list().some(p=>p.id==='daily-brief'&&p.status==='active')) return {status:'retry',reason:'插件已停用',afterSec:60,deferred:true};
+      if(store.get('background.briefs',event.id)) return {status:'done'};
+      const routine=contributions.list('routines').find(item=>item.id==='dailybrief');
+      // Counts are calculated here from persisted facts; the routine is also callable by plugins.
+      if(!routine) return {status:'skip',reason:'brief_unavailable'};
+      await routine.value.run();
+      const to = data.scheduledFor || event.createdAt;
+      if (data.name === 'interval' && !briefing.inActiveWindow(to)) return {status:'skip',reason:'outside_active_window'};
+      const windowKey = `${data.scheduleId || data.name}:${to}`;
+      if (store.get('briefing.windows', windowKey)) return {status:'done'};
+      const previous = store.get<{to:string}>('briefing.cursors','last')?.to;
+      if (previous && Date.parse(previous) >= Date.parse(to)) return {status:'skip',reason:'window_already_covered'};
+      const hours = data.name === 'interval' ? briefing.settings().intervalHours : data.name === 'morning' ? 15 : 9;
+      const from = previous || new Date(Date.parse(to) - hours * 3600000).toISOString();
+      const facts=buildWindowBrief(store,from,to);
+      const globalBot = notificationBots().filter(b => b.scope.kind === 'global' && b.enabled && b.configured && b.connected && b.paired && b.replyTarget).sort((a,b)=>a.id.localeCompare(b.id))[0];
+      const briefChannel = globalBot ? notificationChannel(globalBot) : 'feishu.bot';
+      store.transaction(()=>{
+        store.put('background.briefs',event.id,{id:event.id,createdAt:new Date().toISOString(),facts});
+        store.put('briefing.windows',windowKey,{eventId:event.id});
+        store.put('briefing.cursors','last',{to});
+        background.outbox.enqueue('daily-brief',{dedupKey:`brief:${windowKey}`,channel:briefChannel,target:'owner',content:{text:formatWindowBrief(facts,data.name)},causedBy:event.id,...(event.staleIf?{staleIf:event.staleIf}:{})});
+      });
+      return {status:'done'};
+    },
+  });
+  const offNotifications=background.eventbox.subscribe('core',{
+    name:'notifications',types:[{type:'todo.reminder_due',version:1},{type:'supervisor.review.created',version:1}],effects:'none',
+    handler(event){
+      const data=event.data as unknown as {todoId?:string;title?:string;text?:string;messageId?:string;id?:string;reminderAt?:string};
+      if(event.type==='todo.reminder_due') { const todo=data.todoId?store.get<Todo>('todos',data.todoId):undefined; if(!todo||todo.completedAt||!data.reminderAt||todo.reminderAt!==data.reminderAt)return{status:'skip',reason:'reminder_changed'}; }
+      const message=data.messageId?store.get<Message>('messages',data.messageId):undefined;
+      // A review card already has its own notification event; avoid a second summary of the same review.
+      if(event.type==='interaction.user_required'&&data.id&&store.get<import('./interactions.ts').Card>('interactions',data.id)?.kind==='review')return{status:'skip',reason:'review_has_notification'};
+      const text=event.type==='todo.reminder_due'?`待办提醒：${data.title}\n/#todos`:event.type==='supervisor.review.created'?`督办复核建议：${(data.text||'').slice(0,1000)}\n/#supervision`:`${(message?.text||'有交互事项需要你处理').slice(0,1000)}\n/#interactions`;
+      background.outbox.enqueue(event.type==='todo.reminder_due'?'reminders':'supervisor',{dedupKey:`notification:${event.id}`,channel:'feishu.bot',target:'owner',content:{text},causedBy:event.id,...(data.todoId?{relatedTo:{kind:'todo',id:data.todoId}}:{}),...(event.staleIf?{staleIf:event.staleIf}:{})});
+      return{status:'done'};
+    },
+  });
+  const awayNotifications = createAwayNotifications({ store, events, background, presence, bots: () => notificationBots(), channel: bot => notificationChannel(bot) });
+  if(!background.schedules.forOwner('daily-brief').list().length) {
+    for(const [name,cron] of [['morning','0 9 * * *'],['evening','0 18 * * *']]) background.schedules.forOwner('daily-brief').create({name:name!,kind:'cron',cron:cron!,tz:'Asia/Shanghai'});
+  }
+  const projectFollowUp = createProjectFollowUp({ store, events, schedules: background.schedules, settings: briefing.settings,
+    enqueue(input) {
+      if (!projectFollowUp.isCurrent(input.projectId, input.key)) throw new InputError('项目跟进配置已变化', 409);
+      const candidates = notificationBots().filter(bot => bot.enabled && bot.configured && bot.connected && bot.paired && bot.replyTarget).sort((a, b) => a.id.localeCompare(b.id));
+      const bot = candidates.find(bot => bot.scope.kind === 'project' && bot.scope.projectId === input.projectId)
+        ?? candidates.find(bot => bot.scope.kind === 'global');
+      // No bot means a held, visible outbound intent, never an inferred recipient.
+      // Its schedule revision is checked again by outbox immediately before send.
+      return background.outbox.enqueue('daily-brief', { dedupKey: `project-brief:${input.key}`, channel: bot ? notificationChannel(bot) : 'feishu.bot', target: 'owner',
+        content: { text: input.text }, relatedTo: { kind: 'project', id: input.projectId }, ...(input.staleIf ? { staleIf: input.staleIf } : {}) });
+    },
+  });
+  const offProjectBrief = background.eventbox.subscribe('core', { name: 'project-dailybrief', types: [{ type: 'schedule.due', version: 1 }], effects: 'none', handler: event => projectFollowUp.handle(event) });
+  for(const name of ['core.plan.propose','core.agent.ask','core.approval.propose','core.interaction.open','core.inbox.ingest']) contributions.add('services',name,{
+    name,version:1,async handler(value) {
+      if(!value||typeof value!=='object'||Array.isArray(value)) throw new InputError('服务参数必须为对象');
+      const owner=requiredText(value.__owner,'插件身份');
+      if (name === 'core.inbox.ingest') {
+        if (!plugins.list().some(plugin => plugin.id === owner && plugin.status === 'active')) throw new InputError('采集插件未启用', 409);
+        const sourceId = requiredText(value.sourceId, '来源标识');
+        if (!/^[A-Za-z0-9._-]{1,100}$/.test(sourceId) || !Array.isArray(value.items) || value.items.length > 500) throw new InputError('采集来源或消息批次无效');
+        // ExtensionContext injects __owner. A plugin cannot impersonate Feishu or
+        // another connector, nor assign lifecycle/project state through intake.
+        const source = `plugin:${owner}:${sourceId}`;
+        if (value.evidence !== undefined && (!Array.isArray(value.evidence) || value.evidence.length > 500)) throw new InputError('回复证据批次无效');
+        await inbox.ingest(source, value.items as unknown as import('../../protocol/src/index.ts').InboxThing[]);
+        if (value.evidence !== undefined) {
+          if (!plugins.list().some(plugin => plugin.id === owner && plugin.status === 'active')) throw new InputError('采集插件已停止', 409);
+          waitingReplies.observeSource(source, value.evidence as unknown as import('../../protocol/src/index.ts').CollectedReplyEvidence[]);
+        }
+        return { accepted: true, count: value.items.length, source };
+      }
+      if(name==='core.plan.propose') return proposePlan({...value,start:false}) as unknown as Json;
+      if(name==='core.agent.ask') { background.claimModel(owner); return await agent.ask(requiredText(value.text,'问题'),{readOnly:true}) as unknown as Json; }
+      if(name==='core.approval.propose') {
+        if(typeof value.kind!=='string'||!value.kind.startsWith(`plugin:${owner}.`)) throw new InputError('审批 kind 必须属于调用插件',403);
+        const key=typeof value.dedupKey==='string'?`${owner}:${value.dedupKey}`:undefined;
+        return store.transaction(()=>{
+          const old=key?store.get<{id:string}>('background.approval-requests',key):undefined;
+          if(old){const approval=store.get<Approval>('approvals',old.id);if(approval)return approval as unknown as Json;}
+          const approval=approvals.propose(value as unknown as Parameters<typeof approvals.propose>[0]);
+          if(key)store.put('background.approval-requests',key,{id:approval.id});return approval as unknown as Json;
+        });
+      }
+      return interactions.open(value as unknown as Parameters<typeof interactions.open>[0]) as unknown as Json;
+    },
+  });
+  for(const plugin of plugins.list())background.host.ownerEnabled(plugin.id,plugin.status==='active');
+  background.start();
+  const offInteractionNotice = events.subscribe(event => {
+    if (event.type !== 'interactions.user_required' || !event.data || typeof event.data !== 'object' || Array.isArray(event.data) || typeof event.data.id !== 'string') return;
+    const id = event.data.id;
+    // The origin is persisted immediately after open(). Defer observation until that write completes.
+    void Promise.resolve().then(() => {
+      if (closing) return;
+      const card = store.get<import('./interactions.ts').Card>('interactions', id);
+      if (!card || card.userNotifiedAt) return;
+      const origin = store.get<{ inputId?: string }>('interaction-origins', id);
+      const now = new Date().toISOString(), messageId = `interaction-notice:${id}`;
+      store.transaction(() => {
+        store.put('interactions', id, { ...card, userNotifiedAt: now });
+        const message: Message = { id: messageId, conversationId: 'main', role: 'assistant', origin: 'notification', replyTo: origin?.inputId,
+          projectId: card.projectId, text: `需要你处理：${card.title}\n${card.suggestion ?? card.body}\n请在“交互卡”中核对并回答。`, status: 'done', createdAt: now };
+        store.put('messages', messageId, message);
+        store.put('notifications.source-presence',`interaction:${id}`,{present:presence.status().present});
+        background.publish({type:'interaction.user_required',typeVersion:1,sourceId:`interaction-notice:${id}`,data:{id,messageId},subject:{kind:'interaction',id}});
+      });
+      changed('messages.changed', { messageId }); changed('notifications.message', { messageId });
+    }).catch(error => { if (!closing) console.error('交互卡通知保存失败', error instanceof Error ? error.message : 'unknown'); });
+  });
+  const monitor = createRunMonitor({ store, events, machines: () => machines, onResult: finishRun });
+  function proposePlan(input: Record<string, unknown>, fromAgent = false) {
+    const source = fromAgent ? currentAgentInput() ?? agent.currentInput() : undefined;
+    if (Array.isArray(input.tasks) && input.tasks.some(task => task && typeof task === 'object' && 'nativeResume' in task)) throw new InputError('原生线程恢复须通过单独恢复审批，不能作为新任务静默派发', 403);
+    const normalized = source && Array.isArray(input.tasks) ? { ...input, tasks: input.tasks.map(task => {
+      if (!task || typeof task !== 'object' || Array.isArray(task)) return task;
+      const args = task as Record<string, unknown>;
+      return { ...args, executorId: pinBotExecutor(configuredBots(), source, args.executorId) };
+    }) } : input;
+    const plan = plans.propose(normalized as unknown as Parameters<typeof plans.propose>[0]);
+    store.put('plan-origins', plan.id, { sourceMessageId: source?.id, projectId: source?.projectId, conversationId: source?.conversationId, todoId: source?.todoId });
+    // A model cannot approve the policy changes it just proposed.
+    if (source && plan.tasks.some(task => task.policy !== undefined)) store.put('input-paused', source.id, { planId: plan.id });
+    // Explicit start from the main Agent follows a current user request. Other plans await the Web action.
+    return input.start === true && source && !plan.tasks.some(task => task.policy !== undefined) ? plans.start(plan.id, plan.version) : plan;
+  }
+  async function answerQuestion(id: string, version: number, text: string): Promise<Json> {
+    const source = agent.currentInput();
+    const card = store.get<import('./interactions.ts').Card>('interactions', id);
+    if (!source || !card) throw new InputError('没有当前用户输入或交互卡不存在', 404);
+    if (card.kind !== 'question') throw new InputError('权限、计划和验收卡需要用户直接确认，主 Agent 不能代批', 403);
+    const origin = store.get<{ inputId?: string }>('interaction-origins', id);
+    if (origin?.inputId === source.id) throw new InputError('不能自行回答当前轮次刚提出的问题', 403);
+    answeredInCurrentTurn.add(id);
+    try { return await interactions.answer(id, version, text, 'user_chat') as unknown as Json; }
+    finally { answeredInCurrentTurn.delete(id); }
+  }
+  async function executeApproved(approval: Approval): Promise<Json> {
+    if (approval.todoId && !store.get<Todo>('todos', approval.todoId)) throw new InputError('关联待办不存在', 404);
+    // A persisted binding wins over a mutated kind/params: never fall through to
+    // another handler or the generic plugin acknowledgement for an edited approval.
+    if (approval.kind === inboxHandlingApprovalKind || store.get('inbox-handling.approvals',approval.id)) return inboxHandling.executeApproved(approval);
+    if (approval.params.outboxId) return await background.outbox.approve(approval) as unknown as Json;
+    if (approval.kind === knowledgeSourceApprovalKind) { knowledgeSourceApproval.approve(approval); return {jobId:approval.params.jobId,queued:true}; }
+    if (approval.kind === scheduledWorkApprovalKind) return scheduledWork.approveCreation(approval);
+    if (approval.kind.startsWith('plugin:')) return {accepted:true,kind:approval.kind};
+    if (approval.kind === 'dispatch') {
+      const params: JsonObject = { ...approval.params, ...(approval.todoId ? { todoId: approval.todoId } : {}) };
+      if (params.nativeResume !== undefined) await agentSessions.validateExecution(params);
+      scheduledWork.assertDispatchCurrent(approval);
+      const run = dispatch(params, `approval:${approval.id}:${approval.version}`, true);
+      return { accepted: true, runId: run.id };
+    }
+    if (approval.kind === 'input') return inputRun(requiredText(approval.params.id, '执行记录'), requiredText(approval.params.text, '输入'), `approval:${approval.id}:${approval.version}`);
+    if (!replyToFeishu) throw new InputError('飞书连接不可用', 503);
+    await replyToFeishu(requiredText(approval.params.chatId, '目标会话'), requiredText(approval.params.text, '回复内容'), `approval:${approval.id}:${approval.version}`);
+    return { accepted: true, identity: 'bot', todoCompleted: false };
+  }
+  function finishRun(run: Run, result: ExecutionResult) {
+    const messageId = `run-result:${run.id}`;
+    if (store.get('messages', messageId)) return;
+    const now = new Date().toISOString();
+    const progress = run.nativeResultSources?.includes(result.source) ? executionProgress(result.progress) : undefined;
+    const next: Run = { ...run, ...(progress ? { progress } : {}), ...(typeof result.nativeSessionId === 'string' ? { nativeSessionId: result.nativeSessionId } : {}), status: result.state === 'completed' ? 'completed' : 'failed', output: result.text, resultSource: result.source, updatedAt: now };
+    const message: Message = { id: messageId, conversationId: run.conversationId, role: 'assistant', origin: 'result', replyTo: run.sourceMessageId, projectId: run.projectId, todoId: run.todoId,
+      text: `执行${next.status === 'completed' ? '完成' : '失败'}：${run.prompt}\n${result.text || '执行端没有返回文字结果'}\n结果来源：${result.source}；关联待办需你验收后再完成。`, status: 'done', createdAt: now };
+    store.transaction(() => { store.put('runs', run.id, next); store.put('messages', messageId, message); store.put('notifications.source-presence',`run:${run.id}`,{present:presence.status().present}); background.publish({type:'run.finished',typeVersion:1,sourceId:`run:${run.id}:finished`,data:{runId:run.id,messageId,status:next.status},subject:{kind:'run',id:run.id}}); });
+    changed('runs.changed', { id: run.id }); changed('messages.changed', { messageId }); changed('runs.result', { runId: run.id, messageId });
+  }
+  // A crash does not tell us whether an external action ran. Never replay it on startup.
+  for (const run of store.list<Run>('runs')) {
+    if (run.status === 'running' || run.status === 'queued') {
+      store.put('runs', run.id, { ...run, status: 'unknown', error: '服务重启，执行结果尚未确认', updatedAt: new Date().toISOString() });
+    }
+  }
+  function changed(type: string, data: unknown) { events.publish(type, data as Json); }
+  function knowledge(): KnowledgeBackend {
+    const backend = contributions.list('knowledge_backends')[0]?.value;
+    if (!backend) throw new InputError('请启用本地知识库插件', 503);
+    return {
+      list: query => backend.list(query), remove: id => backend.remove(id),
+      async put(input) {
+        const payload = { layer: input.layer, title: input.title, content: input.content, ...(input.id === undefined ? {} : { id: input.id }), ...(input.projectId === undefined ? {} : { projectId: input.projectId }) };
+        const value = await plugins.invocations.invoke('knowledge.put', payload, async changed => {
+          if (!changed || typeof changed !== 'object' || Array.isArray(changed)) throw new PluginCallError('知识钩子必须返回对象');
+          for (const field of ['id', 'layer', 'projectId'] as const) if (changed[field] !== payload[field]) throw new PluginCallError('知识钩子不能改变归属或标识');
+          return await backend.put(changed as unknown as Parameters<KnowledgeBackend['put']>[0]) as unknown as Json;
+        });
+        return value as unknown as KnowledgeEntry;
+      },
+    };
+  }
+  function todos(): Todo[] {
+    return store.list<Todo>('todos').sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+  function readInbox(input: Record<string, unknown>): Json {
+    const offset = input.offset ?? 0, limit = input.limit ?? 50;
+    if (!Number.isSafeInteger(offset) || (offset as number) < 0 || !Number.isSafeInteger(limit) || (limit as number) < 1 || (limit as number) > 100) throw new InputError('收件箱分页参数无效');
+    const query = typeof input.query === 'string' ? input.query.toLowerCase() : '';
+    const items = inbox.list().filter(item => (!input.projectId || item.projectId === input.projectId) && (!input.todoId || item.todoId === input.todoId)
+      && (!input.kind || (item.origin?.kind ?? 'unknown') === input.kind) && (input.mentionedMe !== true || (item.origin?.kind === 'group' && item.origin.mentionedMe === true))
+      && (!query || [item.title, item.text, item.origin?.chatName, item.origin?.senderName].some(text => text?.toLowerCase().includes(query))));
+    return { items: items.slice(offset as number, (offset as number) + (limit as number)), total: items.length, offset, hasMore: (offset as number) + (limit as number) < items.length } as unknown as Json;
+  }
+  function readInboxHandlingFromAgent(input: Record<string,unknown>):Json {
+    if(!['personal','mailbox'].includes(String(input.kind)))throw new InputError('请选择收件来源');
+    const actor=currentAgentInput()??agent.currentInput();
+    if(!actor)throw new InputError('缺少当前会话范围',403);
+    assertBotInput(actor);
+    if(configuredBots().some(bot=>actor.conversationId.startsWith(`bot:${bot.id}:`)&&bot.scope.kind==='unmarked'&&!actor.projectId&&!actor.todoId))throw new InputError('未归类身份不能读取收件处理记录',403);
+    const own:BotScope=actor.todoId?{kind:'task',todoId:actor.todoId,...(actor.projectId?{projectId:actor.projectId}:{})}:actor.projectId?{kind:'project',projectId:actor.projectId}:{kind:'global'};
+    const ref={kind:input.kind as 'personal'|'mailbox',id:requiredText(input.id,'收件标识')};
+    const source=inboxHandlingSources(ref);
+    const target:BotScope=source.todoId?{kind:'task',todoId:source.todoId,...(source.projectId?{projectId:source.projectId}:{})}:source.projectId?{kind:'project',projectId:source.projectId}:{kind:'global'};
+    if(!canRelayBotScope(own,target))throw new InputError('不能读取其他范围的收件处理记录',403);
+    const view=inboxHandling.read(ref);
+    // Web belongs to the authenticated owner. A scoped model gets only this
+    // revision, so reassignment never imports another project's old discussion.
+    return (own.kind==='global'?view:{...view,messages:view.messages.filter(message=>message.conversationId===view.conversationId),suggestions:view.suggestions.filter(item=>item.conversationId===view.conversationId)}) as unknown as Json;
+  }
+  function assignInboxProject(input: Record<string, unknown>): Json {
+    const source = currentAgentInput() ?? agent.currentInput();
+    if (!source || source.role !== 'user' || source.readOnly) throw new InputError('归入项目需要当前用户输入，不能依据只读回报执行', 403);
+    assertBotInput(source);
+    if (source.conversationId !== 'main' && botForConversation(configuredBots(), source.conversationId)?.scope.kind !== 'global') throw new InputError('只有主对话或全局机器人能调整收件箱项目归属', 403);
+    return inbox.assignProject(requiredText(input.id, '收件消息'), input.version as number, optionalText(input.projectId, '项目')) as unknown as Json;
+  }
+  function createTodo(input: Record<string, unknown>, notify = true): Todo {
+    const now = new Date().toISOString();
+    const todo: Todo = { id: randomUUID(), title: requiredText(input.title, '标题'), notes: optionalText(input.notes, '备注') ?? '', projectId: optionalText(input.projectId, '项目'), dueAt: dueDate(input.dueAt), reminderAt: dueDate(input.reminderAt), reminderVersion: 1, waitingOn: optionalText(input.waitingOn, '等待对象'), createdAt: now, updatedAt: now };
+    store.put('todos', todo.id, todo); if (notify) changed('todos.changed', { id: todo.id });
+    return todo;
+  }
+  function updateTodo(id: string, patch: Record<string, unknown>): Todo {
+    const todo = store.get<Todo>('todos', id);
+    if (!todo) throw new InputError('待办不存在', 404);
+    if (patch.completed !== undefined && typeof patch.completed !== 'boolean') throw new InputError('completed必须为布尔值');
+    const next = { ...todo, updatedAt: new Date().toISOString() };
+    if (patch.title !== undefined) next.title = requiredText(patch.title, '标题');
+    if (patch.notes !== undefined) next.notes = optionalText(patch.notes, '备注') ?? '';
+    if (patch.projectId !== undefined) next.projectId = optionalText(patch.projectId, '项目');
+    if (patch.dueAt !== undefined) next.dueAt = dueDate(patch.dueAt);
+    if (patch.waitingOn !== undefined) next.waitingOn = optionalText(patch.waitingOn, '等待对象');
+    if (patch.reminderAt !== undefined) next.reminderAt = dueDate(patch.reminderAt);
+    if (patch.completed !== undefined) next.completedAt = patch.completed ? new Date().toISOString() : undefined;
+    const cycleChanged = next.waitingOn !== todo.waitingOn || next.reminderAt !== todo.reminderAt
+      || next.projectId !== todo.projectId || !!next.completedAt !== !!todo.completedAt;
+    if (cycleChanged) { next.reminderVersion = (todo.reminderVersion ?? 1) + 1; next.remindedAt = undefined; }
+    store.transaction(() => {
+      store.put('todos', id, next);
+      // Check the final ownership, including a combined project/completion PATCH.
+      if (patch.completed === true) { reporting.assertCanComplete(id); runReview.assertCanComplete(id); }
+      if (todo.completedAt && patch.completed === false) { reporting.onReopen(id); runReview.onReopen(id); }
+      if (cycleChanged) waitingReplies.invalidate(id);
+      changed('todos.changed', { id });
+    });
+    return next;
+  }
+  function executors(): Executor[] {
+    const local = contributions.list('executors').map(entry => entry.value);
+    const remote: Executor[] = [];
+    for (const machine of machines?.list() ?? []) {
+      for (const info of machine.executors ?? []) {
+        if (!plugins.list().some(plugin => plugin.id === 'terminal-host' && plugin.status === 'active')) continue;
+        if (!plugins.list().some(plugin => plugin.id === `executor-${info.id}` && plugin.status === 'active')) continue;
+        remote.push({ ...info, machineId: machine.id, id: `${machine.id}/${info.id}`, name: `${info.name} · ${machine.name}`,
+          available: machine.online && info.available,
+          reason: machine.online ? info.reason : '执行机离线',
+          async execute({ prompt, cwd, executionMode = 'task', nativeResume, signal }) {
+            signal.throwIfAborted();
+            // Only this RPC adapter requires a remote working directory.
+            if (!cwd?.trim()) throw Object.assign(new InputError('远端工作目录不能为空'), { delivery: 'no' });
+            if (nativeResume && (nativeResume.executorId !== info.id || !machine.capabilities.includes('executor.resume'))) throw Object.assign(new InputError('执行机不支持此原生线程恢复，请升级代理', 409), { delivery: 'no' });
+            const session = await machines!.call(machine.id, nativeResume ? 'executor.resume' : 'executor.start', { executorId: info.id, prompt, cwd: cwd.trim(), mode: executionMode, ...(nativeResume ? { nativeSessionId: nativeResume.nativeSessionId } : {}) });
+            if (!session || typeof session !== 'object' || Array.isArray(session) || typeof session.sessionId !== 'string') throw new Error('执行机未返回有效会话');
+            return { text: '已启动外部 CLI，会自动采集原生结果。', pending: true, sessionId: session.sessionId };
+          },
+        });
+      }
+    }
+    return [...local.filter(entry => entry.mode === 'demo' || !remote.some(other => other.id.endsWith(`/${entry.id}`))), ...remote];
+  }
+  function hostStatus(id: string): Json {
+    if (id === 'feishu') return channelStatus();
+    if (id === 'inbox-triage') return { available: true, method: !config.demo && inboxClassifier.status().available ? 'isolated-model-with-rule-fallback' : 'local-rules', count: inbox.list().length };
+    return { available: executors().some(entry => entry.mode === 'real' && entry.available), machines: machines?.list().map(machine => ({ id: machine.id, online: machine.online })) ?? [] };
+  }
+  function executorInfo() { return executors().map(({ execute: _, ...info }) => info); }
+  function dispatch(input: Record<string, unknown>, key?: string, nativeApproved = false, executionGuard?:()=>void): Run {
+    if (closing) throw new InputError('服务正在关闭', 503);
+    const prompt = requiredText(input.prompt, '工作内容');
+    let requestedExecutor = optionalText(input.executorId, '执行者');
+    const projectId = optionalText(input.projectId, '项目');
+    const conversationId = optionalText(input.conversationId, '对话') ?? 'main';
+    if (conversationId !== 'main') {
+      const source = typeof input.sourceMessageId === 'string' ? store.get<Message>('messages', input.sourceMessageId) : undefined;
+      const allowed = conversationId.startsWith('bot:') || (projectId && conversationId === `project:${projectId}:work`);
+      if (!allowed || !source || source.role !== 'user' || source.conversationId !== conversationId || source.projectId !== projectId) throw new InputError('执行对话与来源消息不匹配');
+    }
+    // A durable run wins over changed defaults and offline machines. Replaying a
+    // key only reads its original result, including unknown; it never launches again.
+    if (key) {
+      const previous = store.get<string>('dispatch-keys', key);
+      const run = previous && store.get<Run>('runs', previous);
+      if (run) {
+        if (run.prompt !== prompt || (requestedExecutor !== undefined && run.executorId !== requestedExecutor)
+          || run.projectId !== projectId || run.conversationId !== conversationId
+          || (input.cwd !== undefined && run.cwd !== input.cwd)
+          || (input.todoId !== undefined && run.todoId !== input.todoId)
+          || (input.executionMode !== undefined && run.executionMode !== input.executionMode)
+          || (input.doneWhen !== undefined && run.doneWhen !== input.doneWhen)
+          || (input.expectMinutes !== undefined && run.expectMinutes !== input.expectMinutes) || JSON.stringify(run.nativeResume) !== JSON.stringify(input.nativeResume)) throw new InputError('同一派发标识不能用于不同工作', 409);
+        return run;
+      }
+    }
+    const nativeResume = input.nativeResume === undefined ? undefined : nativeResumeSpec(input.nativeResume);
+    if (nativeResume && !nativeApproved) throw new InputError('原生恢复必须先通过明确的恢复审批，不能直接派发', 403);
+    // A robot's optional executor binding is enforced here, not only in its prompt.
+    // Durable idempotent results above remain readable after a later rebind.
+    const inputMessage = typeof input.sourceMessageId === 'string' ? store.get<Message>('messages', input.sourceMessageId) : undefined;
+    assertBotInput(inputMessage);
+    requestedExecutor = optionalText(pinBotExecutor(configuredBots(), inputMessage, requestedExecutor), '执行者');
+    const project = projectId ? store.get<Project>('projects', projectId) : undefined;
+    if (projectId && !project) throw new InputError('项目不存在', 404);
+    if (project?.archivedAt) throw new InputError('项目已归档，不能派发工作', 409);
+    const workspace = project?.workspace;
+    const entries = executors();
+    const explicitExecutor = entries.find(entry => entry.id === requestedExecutor);
+    if (workspace && requestedExecutor && explicitExecutor && explicitExecutor.machineId !== workspace.machineId) throw new InputError('执行者不在项目绑定的电脑上', 409);
+    if (workspace) {
+      // Persisted computer metadata is not evidence of a live connection.
+      const computer = machines?.list().find(machine => machine.id === workspace.machineId);
+      if (!computer?.online) throw new InputError('项目绑定的电脑离线或尚未连接', 503);
+    }
+    const choices = entries.filter(entry => entry.available && (!workspace || (entry.machineId === workspace.machineId && entry.mode === 'real')));
+    const executorId = requestedExecutor ?? (config.demo ? choices.find(entry => entry.mode === 'demo')?.id : undefined) ?? choices.find(entry => /codex/i.test(entry.id))?.id ?? choices[0]?.id;
+    if (!executorId) throw new InputError(workspace ? '项目绑定的电脑没有可用执行者' : '没有可用执行者，请连接执行机', 503);
+    const executor = entries.find(entry => entry.id === executorId);
+    if (workspace && executor && (executor.machineId !== workspace.machineId || executor.mode !== 'real')) throw new InputError('执行者不在项目绑定的电脑上或不支持真实执行', 409);
+    // Explicit approved parameters retain priority over project defaults.
+    const cwd = optionalText(input.cwd, '工作目录') ?? workspace?.cwd ?? executor?.defaultCwd;
+    const executionMode = input.executionMode ?? 'task';
+    if (!['task', 'interactive'].includes(String(executionMode))) throw new InputError('executionMode必须为task或interactive');
+    const doneWhen = optionalText(input.doneWhen, '验收标准');
+    const expectMinutes = input.expectMinutes;
+    if (expectMinutes !== undefined && (typeof expectMinutes !== 'number' || !Number.isFinite(expectMinutes) || expectMinutes <= 0 || expectMinutes > 10080)) throw new InputError('预计时长必须为1周内的正数分钟');
+    if (executor?.mode === 'real' && executionMode === 'task' && (!doneWhen || !expectMinutes)) throw new InputError('真实任务需要验收标准 doneWhen 和预计时长 expectMinutes');
+    const taskPolicy = input.policy as Partial<PolicyConfig> | undefined;
+    if (taskPolicy !== undefined) {
+      try { validatePolicyPatch(taskPolicy); } catch (error) { throw new InputError(error instanceof Error ? error.message : '无效任务策略'); }
+    }
+    const todoId = optionalText(input.todoId, '待办');
+    if (todoId && !store.get<Todo>('todos', todoId)) throw new InputError('关联待办不存在', 404);
+    if (!executor?.available) throw new InputError(executor?.reason ?? '执行者不可用', 503);
+    const now = new Date().toISOString();
+    const proofSources = nativeResultSources(executor);
+    const run: Run = { id: randomUUID(), ...(nativeResume ? { nativeResume } : {}), ...(proofSources.length ? { nativeResultSources: proofSources } : {}), executorId, conversationId, prompt, ...(executor.mode === 'real' ? { machineId: executor.machineId } : {}), cwd, executionMode: executionMode as 'task' | 'interactive', projectId, todoId, sourceMessageId: optionalText(input.sourceMessageId, '来源消息'), doneWhen, expectMinutes: expectMinutes as number | undefined, status: 'queued', output: '', createdAt: now, updatedAt: now };
+    store.transaction(() => {
+      store.put('runs', run.id, run); if (key) store.put('dispatch-keys', key, run.id);
+      if (taskPolicy) policies.write({ runId: run.id, ...(run.projectId ? { projectId: run.projectId } : {}) }, taskPolicy, { notify: false });
+    });
+    if (taskPolicy) changed('policies.changed', {});
+    const controller = new AbortController(); controllers.set(run.id, controller);
+    changed('runs.changed', { id: run.id });
+    // Launch asynchronously so a long-running executor never holds the HTTP request open.
+    const job = Promise.resolve().then(async () => {
+      const update = (patch: Partial<Run>) => {
+        const next = { ...store.get<Run>('runs', run.id)!, ...patch, updatedAt: new Date().toISOString() };
+        store.put('runs', run.id, next); changed('runs.changed', { id: run.id });
+      };
+      update({ status: 'running' });
+      try {
+        // Real actions retain the durable claim; execution belongs to the executor.
+        const execute = async () => {
+          const original = JSON.parse(JSON.stringify(run)) as JsonObject;
+          const prepared = await plugins.invocations.hooks('work.dispatch', 'before', original);
+          if (!prepared || typeof prepared !== 'object' || Array.isArray(prepared)) throw new PluginCallError('派活钩子必须返回对象');
+          for (const field of Object.keys(original)) if (field !== 'prompt' && JSON.stringify(prepared[field]) !== JSON.stringify(original[field])) throw new PluginCallError('派活钩子只能改写 prompt，不能改变执行者、模式或工作范围');
+          const effectivePrompt = requiredText(prepared.prompt, '钩子改写后的任务');
+          controller.signal.throwIfAborted();
+          executionGuard?.();
+          if(executionGuard&&effectivePrompt!==prompt)throw Object.assign(new InputError('已确认的收件任务内容不能被钩子改写',409),{delivery:'no'});
+          assertBotInput(inputMessage);
+          update({ prompt: effectivePrompt });
+          const result = await executor.execute({ prompt: effectivePrompt, cwd, executionMode: run.executionMode, ...(nativeResume ? { nativeResume } : {}), signal: controller.signal, onOutput: text => update({ output: (store.get<Run>('runs', run.id)?.output ?? '') + text }) });
+          if (result.sessionId) update({ sessionId: result.sessionId });
+          const metadata = JSON.parse(JSON.stringify(result)) as JsonObject;
+          const evidenceSnapshot = JSON.stringify(metadata.nativeResult);
+          const decorated = await plugins.invocations.hooks('work.dispatch', 'after', metadata);
+          if (!decorated || typeof decorated !== 'object' || Array.isArray(decorated) || typeof decorated.text !== 'string' || decorated.sessionId !== metadata.sessionId || decorated.pending !== metadata.pending || JSON.stringify(decorated.nativeResult) !== evidenceSnapshot) throw new PluginCallError('结果钩子只能改写展示正文，不能伪造原生会话或完成状态', true);
+          const { nativeResult: _rawProof, ...display } = result;
+          return { ...display, text: decorated.text, ...(evidenceSnapshot === undefined ? {} : { nativeResult: JSON.parse(evidenceSnapshot) as ExecutionResult }) };
+        };
+        const result = executor.mode === 'real'
+          ? await effects.perform({ key: `run:${run.id}:start`, kind: nativeResume ? 'executor.resume' : 'executor.start', target: executor.machineId, summary: prompt, content: { executorId, prompt, ...(nativeResume ? { nativeResume: { ...nativeResume } } : {}), ...(cwd === undefined ? {} : { cwd }), executionMode: String(executionMode) }, run: execute })
+          : await execute();
+        if (nativeResume && !result.pending && !controller.signal.aborted) {
+          const proof = result.nativeResult;
+          if (!proof || !['completed', 'failed'].includes(proof.state) || typeof proof.text !== 'string'
+            || proof.nativeSessionId !== nativeResume.nativeSessionId || !run.nativeResultSources?.includes(proof.source)) {
+            update({ status: 'unknown', sessionId: result.sessionId, output: result.text, error: '原生恢复同步结果缺少匹配的线程证据；不会自动重试' });
+          } else finishRun({ ...store.get<Run>('runs', run.id)!, ...(result.sessionId ? { sessionId: result.sessionId } : {}) }, proof);
+        } else {
+          update({ status: controller.signal.aborted ? (executor.mode === 'demo' ? 'cancelled' : 'unknown') : (result.pending ? 'running' : 'completed'), sessionId: result.sessionId, output: result.text });
+          if (!result.pending && !controller.signal.aborted) finishRun(store.get<Run>('runs', run.id)!, { state: 'completed', text: result.text, source: executor.mode });
+        }
+      } catch (error) {
+        update({ status: controller.signal.aborted ? (executor.mode === 'demo' ? 'cancelled' : 'unknown') : ((error as { delivery?: string }).delivery === 'unknown' ? 'unknown' : 'failed'), error: error instanceof Error ? error.message : String(error) });
+      } finally { controllers.delete(run.id); }
+    });
+    jobs.add(job); void job.then(() => jobs.delete(job), error => { jobs.delete(job); console.error('执行记录保存失败：', error instanceof Error ? error.message : String(error)); });
+    return run;
+  }
+  function remoteRun(id: string) {
+    const run = store.get<Run>('runs', id);
+    if (!run) throw new InputError('执行记录不存在', 404);
+    if (!run.machineId || !run.sessionId || !machines) throw new InputError('该执行没有远程会话', 409);
+    if (!executors().some(entry => entry.id === run.executorId && entry.available)) throw new InputError('执行者不可用或插件已停用', 503);
+    return run as Run & { machineId: string; sessionId: string };
+  }
+  async function readRun(id: string): Promise<Json> {
+    const run = remoteRun(id);
+    return machines!.call(run.machineId, 'executor.read', { sessionId: run.sessionId });
+  }
+  function runObservations(id: string) {
+    const run = store.get<Run>('runs', id);
+    if (!run) throw new InputError('执行记录不存在', 404);
+    const cards = interactions.list().filter(card => card.runId === id && card.status === 'open' && card.handler === 'user');
+    const pending = approvals.list().filter(approval => approval.status === 'pending' && (approval.params.runId === id || (approval.kind === 'input' && approval.params.id === id)));
+    return { runId: id, status: run.status, progress: executionProgress(run.progress) ?? null,
+      blockedBy: [...cards.map(card => ({ id: card.id, kind: card.kind, title: card.title, version: card.version, createdAt: card.createdAt, href: '#chat' })),
+        ...pending.map(approval => ({ id: approval.id, kind: 'approval', title: approval.title, version: approval.version, createdAt: approval.createdAt, href: '#chat' }))] };
+  }
+  async function inputRun(id: string, text: string, key: string = randomUUID()): Promise<Json> {
+    if (closing) throw new InputError('服务正在关闭', 503);
+    const run = remoteRun(id);
+    if (run.executionMode === 'task') throw new InputError('任务模式不接受交互输入；请新建任务或选择交互模式', 409);
+    return effects.perform({ key, kind: 'executor.input', target: run.id, summary: '发送会话输入', content: { text }, run: () => machines!.call(run.machineId, 'executor.input', { sessionId: run.sessionId, text: requiredText(text, '输入') }) });
+  }
+  async function cancel(id: string) {
+    const run = store.get<Run>('runs', id);
+    if (!run) throw new InputError('执行记录不存在', 404);
+    const controller = controllers.get(id);
+    if (!controller && run.machineId && run.sessionId && ['running', 'unknown'].includes(run.status)) {
+      remoteRun(id);
+      if (!machines) throw new InputError('执行机尚未连接', 503);
+      await effects.perform({ key: `interrupt:${run.id}:${randomUUID()}`, kind: 'executor.interrupt', target: run.id, summary: '请求中断', run: () => machines!.call(run.machineId!, 'executor.interrupt', { sessionId: run.sessionId! }) });
+      return { accepted: true };
+    }
+    if (!controller) throw new InputError('该执行当前无法取消', 409);
+    controller.abort(); return { accepted: true };
+  }
+  // Read models derive from facts; opening a page never approves or dispatches work.
+  function digestReaderIdentity(settings:ReturnType<typeof knowledgeReaderSettings.read>,account:ReturnType<typeof knowledgeAccount>) {
+    return createHash('sha256').update(JSON.stringify([settings.revision,settings.profile||account?.profile,settings.profile?null:account])).digest('hex');
+  }
+  async function executeInboxHandling(source: InboxHandlingSource, action: InboxHandlingAction, key: string): Promise<Json> {
+    // An approval is for one concrete inbox revision. Never accept a new project
+    // or destination from the model while translating it to existing operations.
+    const current = inboxHandlingSources({kind:source.kind,id:source.id});
+    if (!current.active || current.version !== source.version || current.binding !== source.binding) throw Object.assign(new InputError('原收件内容或授权已变化',409),{delivery:'no'});
+    if (action.kind === 'reply') {
+      if (!replyToInboxSource || !current.replyAvailable) throw Object.assign(new InputError('当前来源没有可用回复连接',409),{delivery:'no'});
+      const receipt=await replyToInboxSource(current,action.text,key);
+      const handled=store.transaction(()=>{
+        const latest=inboxHandlingSources({kind:source.kind,id:source.id});
+        // A new message or reclassification during I/O is a new decision. Keep
+        // its inbox row open even though the old approved reply was delivered.
+        if(!latest.active||latest.version!==source.version||latest.binding!==source.binding)return false;
+        if(source.kind==='personal')inbox.archive(source.id,source.version);
+        else mailboxes.resolve(source.id,source.version,key);
+        return true;
+      });
+      return {...(receipt as JsonObject),inboxHandled:handled,todoCompleted:false};
+    }
+    if (action.kind === 'dispatch') {
+      if (source.kind === 'mailbox') {
+        const entry=mailboxes.get(source.id), bot=configuredBots().find(bot=>bot.id===entry.botId);
+        if (!bot || bot.executorId && bot.executorId!==action.executorId) throw Object.assign(new InputError('建议执行者与机器人当前绑定不符',409),{delivery:'no'});
+      }
+      const {kind:_,...params}=action;
+      const run=dispatch({...params,...(source.projectId?{projectId:source.projectId}:{}),...(source.todoId?{todoId:source.todoId}:{})},key,true,()=>{
+        const latest=inboxHandlingSources({kind:source.kind,id:source.id});
+        if(!latest.active||latest.version!==source.version||latest.binding!==source.binding||!plugins.list().some(p=>p.id==='inbox-triage'&&p.status==='active'))throw Object.assign(new InputError('收件派发前来源或插件授权已变化',409),{delivery:'no'});
+      });
+      return {runId:run.id,todoCompleted:false};
+    }
+    return store.transaction(()=>{
+      if (action.kind === 'todo') {
+        if (source.kind === 'personal') {
+          const result=inbox.confirm(source.id,source.version,{title:action.title,notes:action.notes});
+          changed('todos.changed',{id:result.todoId});return result;
+        }
+        const todo=source.todoId?store.get<Todo>('todos',source.todoId):createTodo({title:action.title,notes:action.notes,...(source.projectId?{projectId:source.projectId}:{})},false);
+        if(!todo)throw new InputError('关联待办不存在',409);
+        mailboxes.resolve(source.id,source.version,todo.id);changed('todos.changed',{id:todo.id});return{todoId:todo.id};
+      }
+      if(source.kind==='personal')inbox.archive(source.id,source.version);
+      else mailboxes.resolve(source.id,source.version,`conclusion:${key}`);
+      return {recorded:true,text:action.text,todoCompleted:false};
+    });
+  }
+  function validateSourceActor(source:Message,layer:unknown,projectId?:string) {
+    if(source.role!=='user'||source.readOnly||source.origin&&source.origin!=='user')throw new InputError('来源请求不是可写用户指令',403);
+    const own=source.todoId?{kind:'task' as const,todoId:source.todoId,...(source.projectId?{projectId:source.projectId}:{})}:source.projectId?{kind:'project' as const,projectId:source.projectId}:{kind:'global' as const};
+    authorizeWorkDecisionSource(store,own,source);assertBotInput(source);
+    if(source.conversationId!=='main'&&(own.kind==='project'||own.kind==='task')&&(!source.projectId||layer!=='project'||projectId!==source.projectId))throw new InputError('来源不能写入当前范围以外的知识',403);
+  }
+  function knowledgeReaderView() {
+    knowledgeSourceApproval.sync();
+    const settings = knowledgeReaderSettings.read(), account = knowledgeAccount();
+    return { ...settings, connection: settings.profile ? 'explicit-profile' : account ? 'personal-feishu' : 'missing', authorization: 'unchecked' };
+  }
+  function protectedReaderService() {
+    return { name: 'knowledge-local.source.read', version: 1 as const, async handler(input: Json, signal: AbortSignal) {
+      const bound = protectedReaderContext.getStore();
+      if(currentAgentInput()&&!bound?.credentialAuthorized)throw Object.assign(new InputError('模型读取受保护来源须先投放并由主人确认',403),{code:'AWAITING_APPROVAL'});
+      if (bound) {
+        let requested: URL;
+        try { requested = new URL((input as { url: string }).url); } catch { throw Object.assign(new Error('来源链接无效'), { code: 'INVALID_URL' }); }
+        if (`${requested.origin}${requested.pathname}` !== bound.source) throw Object.assign(new Error('来源与原链接不匹配'), { code: 'CROSS_ORIGIN' });
+        if (!bound.current()) throw Object.assign(new Error('来源服务已变化'), { code: 'CONNECTION_CHANGED' });
+      }
+      const settings = knowledgeReaderSettings.read(), account = knowledgeAccount();
+      if (!settings.enabled) throw Object.assign(new InputError('请在记忆整理设置中开启受保护来源读取', 409), { code: 'READER_DISABLED' });
+      const profile = settings.profile || account?.profile;
+      const identity = JSON.stringify([settings.revision, settings.profile ? null : account]);
+      const reader = createKnowledgeSourceReader({ profile, trustedHosts: settings.trustedHosts });
+      const result = await createKnowledgeSourceReaderService(reader).handler(input, signal);
+      if (bound && !bound.current()) throw Object.assign(new Error('来源服务已变化'), { code: 'CONNECTION_CHANGED' });
+      if (identity !== JSON.stringify([knowledgeReaderSettings.read().revision, settings.profile ? null : knowledgeAccount()])) throw Object.assign(new InputError('读取期间连接或设置已变化，请重新投放来源', 409), { code: 'CONNECTION_CHANGED' });
+      return result;
+    } };
+  }
+  async function readProtectedKnowledgeSource(url: string, signal?: AbortSignal, job?: import('./knowledge-curator.ts').Job) {
+    const settings = knowledgeReaderSettings.read();
+    if (!isProtectedKnowledgeURL(url, settings.trustedHosts)) return undefined;
+    if (!plugins.list().some(p => p.id === 'knowledge-local' && p.status === 'active')) throw new InputError('请先启用本地知识插件', 409);
+    if(job)knowledgeSourceApproval.check(job);
+    const service = contributions.list('services').find(entry => entry.value.name === 'knowledge-local.source.read');
+    if (!service) throw new InputError('受保护来源读取服务不可用', 503);
+    // Bind before wrappers run. AsyncLocalStorage isolates overlapping requests;
+    // contribution identity detects disable/re-enable even when status is active again.
+    const requested = new URL(url);
+    const identity = JSON.stringify([settings.revision, settings.profile ? null : knowledgeAccount()]);
+    const current = () => contributions.list('services').some(entry => entry.value === service.value)
+      && identity === JSON.stringify([knowledgeReaderSettings.read().revision, settings.profile ? null : knowledgeAccount()]);
+    const result = await protectedReaderContext.run({ source: `${requested.origin}${requested.pathname}`, current,credentialAuthorized:!!job },
+      () => plugins.invocations.use('knowledge-local.source.read', { url }, { timeoutMs: 30000, signal }));
+    if (!current()) throw Object.assign(new Error('来源服务已变化'), { code: 'CONNECTION_CHANGED' });
+    if(job)knowledgeSourceApproval.check(job);
+    return result as unknown as import('../../protocol/src/index.ts').KnowledgeSourceResult;
+  }
+  function attention() { return collectAttention({ plans: plans.list(), approvals: approvals.list(), interactions: interactions.list(), inbox: inbox.list(), mailboxes: mailboxes.list(), projects: projects.list(), bots: botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[] }); }
+  function skipChannel() {
+    store.put('settings', 'setup.channel-skipped', { skipped: true });
+    events.publish('setup.changed', {});
+    return { skipped: true };
+  }
+  async function snapshot(): Promise<Snapshot> {
+    let entries: KnowledgeEntry[] = [];
+    if (contributions.list('knowledge_backends').length) entries = await knowledge().list();
+    const agentState = agent.status();
+    const computers = machines?.list() ?? store.list<import('../../protocol/src/index.ts').MachineInfo>('machines');
+    const channel = channelStatus();
+    const registeredBots = botsStatus() as unknown as Array<{ name: string; enabled: boolean; connected: boolean; reason?: string }>;
+    const connected = channel.connected || registeredBots.some(bot => bot.enabled && bot.connected);
+    const problems: NonNullable<Snapshot['problems']> = [];
+    if (!agentState.available) problems.push({ area: 'agent', message: '主 Agent 尚未就绪', fix: '打开模型配置，核对接入方式与凭证。' });
+    if (!computers.length) problems.push({ area: 'agent', message: '还没有连接电脑', fix: '在 Agent 中查看电脑接入说明。' });
+    for (const computer of computers.filter(item => !item.online)) problems.push({ area: 'agent', message: `电脑“${computer.name}”已离线`, fix: '请检查该电脑上的工作台代理是否在运行。' });
+    for (const plugin of plugins.list().filter(item => item.status === 'failed')) problems.push({ area: plugin.id === 'feishu' ? 'channel' : 'agent', message: `插件“${plugin.name}”不可用`, fix: '在 Agent 高级设置中查看诊断信息。' });
+    if (supervisorAgent.settings().canResume) problems.push({ area: 'agent', message: '自动跟进已暂停', fix: '核对模型配置后，在自动跟进卡片中恢复。' });
+    const publicReason = (reason: string) => reason.replace(/WebSocket|Herdr|SSH|hook/gi, '连接服务').replace(/\bID\b/g, '标识');
+    if (!connected) problems.push({ area: 'channel', message: `飞书尚未连接${channel.reason ? `：${publicReason(channel.reason)}` : ''}`, fix: '进入渠道，按向导连接机器人；暂时不用也可以先跳过。' });
+    for(const bot of registeredBots.filter(bot => bot.enabled && !bot.connected)) problems.push({ area: 'channel', message: `机器人“${bot.name}”未连接${bot.reason ? `：${publicReason(bot.reason)}` : ''}`, fix: '在渠道高级设置中核对应用权限与连接状态。' });
+    return { attentionCount: attention().length, problems,
+      setup: { agent: agentState.available && computers.some(item => item.online), project: projects.list().some(item => !item.archivedAt), memory: entries.length > 0, channel: connected ? 'done' : store.get<{ skipped: boolean }>('settings', 'setup.channel-skipped')?.skipped ? 'skipped' : 'todo' },
+      agentTurns: store.list<Message>('messages').filter(message => message.role === 'user').map(({ id, todoId, conversationId, role, status, createdAt }) => ({ id, todoId, conversationId, role, status, createdAt })), background: background.summary(), webExtensions: contributions.list('web_extensions'), projects: projects.list(), version: '0.1.0', mode: config.demo ? 'demo' : 'live', agent: agent.status(), plugins: plugins.list(), executors: executorInfo(), machines: machines?.list() ?? store.list('machines'), inbox: inbox.list(), inboxHandling:inboxHandling.states(), approvals: approvals.list(), signals: supervision.signals(), todos: todos(), knowledge: entries, messages: store.list<Message>('messages').filter(message => message.conversationId === 'main'), runs: store.list<Run>('runs').sort((a, b) => b.createdAt.localeCompare(a.createdAt)) };
+  }
+  async function createProject(input: Record<string, unknown>) {
+    const prepared = await projectFolders.prepare(input);
+    return projects.create(prepared as unknown as Parameters<typeof projects.create>[0]);
+  }
+  function updateProject(id: string, input: Record<string, unknown>): Project {
+    const previous = projects.list().find(project => project.id === id);
+    if (!previous || previous.archivedAt) throw new InputError('项目不存在或已归档', 404);
+    const { confirmed, expectedUpdatedAt, ...patch } = input;
+    if (expectedUpdatedAt !== undefined && expectedUpdatedAt !== previous.updatedAt) throw new InputError('项目设置已变化，请刷新后重试', 409);
+    if (confirmed !== undefined && typeof confirmed !== 'boolean') throw new InputError('confirmed必须为布尔值');
+    // Moving a trusted workspace never carries its old directory authority along.
+    const moved = patch.workspace !== undefined && JSON.stringify(patch.workspace) !== JSON.stringify(previous.workspace);
+    if (moved && patch.followUp === undefined && previous.followUp?.automation === 'quiet') patch.followUp = { ...previous.followUp, automation: 'conservative' };
+    const next = store.transaction(() => {
+      const project = projects.update(id, patch as Parameters<typeof projects.update>[1]);
+      if (patch.followUp !== undefined) {
+        const mode = project.followUp!.automation, scope = { projectId: id };
+        if (mode === 'inherit') policies.reset(scope, { notify: false });
+        else {
+          if (mode === 'quiet' && !project.workspace) throw new InputError('少打扰需要先绑定项目工作区目录', 409);
+          let config;
+          try { config = applyPolicyPreset(policies.read(scope), mode === 'quiet' ? 'low-interruption' : mode,
+            { confirmed: confirmed === true, trustedDirectories: mode === 'quiet' ? [project.workspace!.cwd] : [] }); }
+          catch (error) { throw new InputError(error instanceof Error ? error.message : '项目自动处理设置无效'); }
+          policies.write(scope, config, { notify: false });
+        }
+      }
+      return project;
+    });
+    if (patch.followUp !== undefined) changed('policies.changed', {});
+    return next;
+  }
+  async function discoverProjects(input: Record<string, unknown>): Promise<Json> {
+    const id = optionalText(input.machineId, '电脑');
+    if (input.roots !== undefined && (!Array.isArray(input.roots) || !input.roots.every(root => typeof root === 'string'))) throw new InputError('扫描根目录必须为文本列表');
+    const computers = machines?.list() ?? [];
+    const targets = id ? computers.filter(computer => computer.id === id) : computers.filter(computer => computer.online && computer.capabilities.includes('workspace.projects'));
+    if (!targets.length) throw new InputError('没有提供项目文件夹发现的电脑，请连接或升级电脑代理', 503);
+    return await Promise.all(targets.map(async computer => {
+      try { const folders = await projectFolders.discover(computer.id, input.roots as string[] | undefined); return { machineId: computer.id, machineName: computer.name, available: true, ...folders }; }
+      catch (error) { return { machineId: computer.id, machineName: computer.name, available: false, error: error instanceof Error ? error.message : '无法读取项目文件夹' }; }
+    })) as unknown as Json;
+  }
+  function assertBotInput(input: Message | undefined) {
+    if (!input) return;
+    const bots = configuredBots(), configured = bots.find(bot => input.conversationId.startsWith(`bot:${bot.id}:`));
+    if (!configured && input.conversationId.startsWith('bot:')) throw new InputError('来源机器人已移除，请重新确认当前工作', 409);
+    if (!configured) return;
+    let scope = configured.scope;
+    if (scope.kind === 'unmarked') {
+      scope = input.todoId ? { kind: 'task', todoId: input.todoId, ...(input.projectId ? { projectId: input.projectId } : {}) }
+        : input.projectId ? { kind: 'project', projectId: input.projectId }
+        : input.conversationId === botConversationId({ id: configured.id, scope: { kind: 'global' } }) ? { kind: 'global' } : scope;
+    }
+    botForConversation(bots, input.conversationId, scope);
+    if (!botScopeAccess(scope, configured.id, input)) throw new InputError('机器人输入授权或绑定范围已失效，请重新确认当前工作', 409);
+  }
+  function botContext(conversationId: string, scope?: BotScope): Json {
+    const bots = configuredBots(), own = botForConversation(bots, conversationId, scope);
+    const summarize = (bot: typeof bots[number]) => ({ id: bot.id, name: bot.name, scope: bot.scope, executorId: bot.executorId ?? null, groupChats: bot.groupChats?.map(group => group.chatId) ?? [] });
+    if (!own) return conversationId === 'main' ? { mainIdentities: bots.filter(bot => bot.enabled && bot.paired && bot.scope.kind === 'global').map(summarize) } : {};
+    const peers = bots.filter(peer => own.scope.kind !== 'unmarked' && peer.enabled && peer.paired && own.collaboration?.peerBotIds.includes(peer.id)
+      && peer.collaboration?.peerBotIds.includes(own.id) && canRelayBotScope(own.scope, peer.scope));
+    return { self: { ...summarize(own), scope: scope ?? own.scope }, peers: peers.map(summarize), instructions: '机器人是可选渠道身份。绑定执行者时直接派发须使用该执行者，其他协作使用 bot_handoff；范围和确认仍由服务端核验。' } as unknown as Json;
+  }
+  async function relayFromAgent(input: Record<string, unknown>): Promise<Json> {
+    if (!botRelay) throw new InputError('机器人协作路由尚未连接', 503);
+    const source = currentAgentInput() ?? agent.currentInput();
+    const sender = relaySender(configuredBots(), source, input.sourceBotId);
+    const parent = source && mailboxes.list().find(entry => entry.direction === 'inbox' && entry.botId === sender.id
+      && entry.resultId === source.id);
+    if (input.parentEntryId !== undefined && input.parentEntryId !== parent?.id) throw new InputError('协作父信件必须来自当前输入', 403);
+    const target = configuredBots().find(bot => bot.id === input.targetBotId);
+    const inheritedChat = parent?.target && sender.groupChats?.some(group => group.chatId === parent.target)
+      && target?.groupChats?.some(group => group.chatId === parent.target) ? parent.target : undefined;
+    const chatId = input.chatId === undefined ? inheritedChat : requiredText(input.chatId, '群会话');
+    const key = `${source!.id}:${requiredText(input.key, '协作请求标识')}`;
+    return await botRelay({ sourceBotId: sender.id, targetBotId: requiredText(input.targetBotId, '目标机器人'),
+      text: requiredText(input.text, '协作请求'), key, sourceMessageId: source!.id, ...(parent ? { parentEntryId: parent.id } : {}),
+      ...(chatId === undefined ? {} : { chatId }) }) as unknown as Json;
+  }
+  function modelStatus() {
+    return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
+  }
+  return {
+    modelStatus, agentSessions, runObservations, scheduledWork, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); projectFollowUp.sync(); return result; } },
+    projectFollowUp,
+    taskClosure: {
+      reporting, review: runReview, settings: reviewSettings,
+      state(id: string) {
+        const state = reporting.get(id), todo = store.get<Todo>('todos', id)!;
+        // Return only assistant evidence explicitly associated with this Todo,
+        // including robot conversations; never merge their raw user histories.
+        const messages = store.list<Message>('messages').filter(message => message.role === 'assistant' && message.status === 'done' && message.todoId === id && message.projectId === todo.projectId);
+        const ids = new Set(messages.map(message => message.id));
+        const outbox = background.outbox.list().filter(item => item.relatedTo?.kind === 'todo' && item.relatedTo.id === id || item.relatedTo?.kind === 'message' && ids.has(item.relatedTo.id));
+        return { reporting: state, review: store.get('run-reviews', id) ? runReview.get(id) : null, sources: { messages, outbox } };
+      },
+      configureSettings(input: Record<string, unknown>) {
+        if (Object.keys(input).some(key => key !== 'maxReworks') || !Number.isSafeInteger(input.maxReworks) || (input.maxReworks as number) < 0 || (input.maxReworks as number) > 10) throw new InputError('返工上限必须为0到10的整数');
+        store.put('workbench.settings', 'run-review', { maxReworks: input.maxReworks });
+        changed('task-closure.settings', {}); return reviewSettings();
+      },
+    },
+    setNotificationChannel(channel: typeof notificationChannel) { notificationChannel = channel; },
+    setNotificationBots(source: typeof notificationBots) { notificationBots = source; },
+    postScoped(text: string, scope: BotScope, botId: string) {
+      return scopedAgents.post(text, validateBotScope(store, scope), botId);
+    },
+    async postScopedResult(input: { text: string; scope: BotScope; botId: string; sourceMessageId?: string }) {
+      const scope = validateBotScope(store, input.scope);
+      const source = input.sourceMessageId ? store.get<Message>('messages', input.sourceMessageId) : undefined;
+      if (input.sourceMessageId && (!source || source.role !== 'user')) throw new InputError('协作回报的来源消息不存在', 409);
+      // A result is data, never a new grant to dispatch, write knowledge or relay again.
+      const context = { readOnly: true, origin: 'result' as const, ...(source ? { replyTo: source.id } : {}) };
+      if (source?.conversationId === 'main') {
+        if (scope.kind !== 'global') throw new InputError('项目机器人不能回报到无关主会话', 403);
+        return agent.post(requiredText(input.text, '协作回报'), 'main', { ...context, projectId: source.projectId, todoId: source.todoId });
+      }
+      if (source && source.conversationId !== botConversationId({ id: input.botId, scope })) throw new InputError('协作回报不属于发起机器人', 403);
+      return scopedAgents.post(requiredText(input.text, '协作回报'), scope, input.botId, context);
+    },
+    setBotsStatus(status: () => Json) { botsStatus = status; },
+    setBotRelay(relay: NonNullable<typeof botRelay>) { botRelay = relay; },
+    setBotScopeAccess(validate: typeof botScopeAccess) { botScopeAccess = validate; channelBindingsReady = true; scheduledWork.sync(); },
+    setMailboxProposer(propose: (input: Record<string, unknown>) => Json) { mailboxProposer = propose; },
+    async configureModel(input: Record<string, unknown>) {
+      if (agent.configurationBusy() || supervisorRuntime.configurationBusy()) throw new InputError('Agent 正在处理对话，请稍后保存模型配置', 409);
+      if (!scopedAgents.tryLockConfiguration()) throw new InputError('项目或事项 Agent 正在处理对话，请稍后保存模型配置', 409);
+      agent.lockConfiguration(); supervisorRuntime.lockConfiguration(); inboxClassifier.lockConfiguration(); inboxHandlingRuntime.lockConfiguration();
+      try {
+        await Promise.all([inboxClassifier.abortCurrent(),inboxHandlingRuntime.abortCurrent()]);
+        modelConfig.write(input);
+        await Promise.all([agent.reloadConfiguration(), supervisorRuntime.reloadConfiguration(), scopedAgents.reloadConfiguration()]);
+        changed('model.changed', {});
+        return modelStatus();
+      } finally { agent.unlockConfiguration(); supervisorRuntime.unlockConfiguration(); scopedAgents.unlockConfiguration(); inboxClassifier.unlockConfiguration(); inboxHandlingRuntime.unlockConfiguration(); }
+    },
+    config, store, events, effects, plugins, contributions, workDecisions, waitingReplies, inboxClassifier, inboxHandling, inboxHandlingRuntime, agent, supervisorRuntime, supervisorAgent, policies, plans, proposePlan, interactions, inbox, approvals, supervision, monitor,
+    setInboxReplyHost(access: typeof mailboxHandlingAccess, reply: NonNullable<typeof replyToInboxSource>) { mailboxHandlingAccess=access;replyToInboxSource=reply; },
+    readInboxHandlingSource: inboxHandlingSources,
+    setFeishuSender(send: typeof replyToFeishu, ownerTarget?: () => string | undefined, accountId?: () => string | undefined, sendFromOutbox?: typeof replyToFeishu) {
+      if(!send)background.outbox.registerChannel('feishu.bot',async()=>{throw Object.assign(new Error('渠道未配置'),{delivery:'no'});},()=>undefined);
+      if(send) background.outbox.registerChannel('feishu.bot',async(target,text,key)=>{if(!replyToFeishu)throw Object.assign(new Error('飞书未连接'),{delivery:'no'});if(sendFromOutbox)await plugins.invocations.invoke('channel.send',{chatId:target,text,key},async input=>{if(!input||typeof input!=='object'||Array.isArray(input)||input.chatId!==target||input.key!==key)throw new PluginCallError('渠道钩子不能改变发送目标或标识');await sendFromOutbox(target,requiredText(input.text,'发送内容'),key);return null;});else await replyToFeishu(target,text,key);},ownerTarget || (()=>store.get<{chatId:string}>('settings',`feishu.owner.${config.feishu?.appId||''}`)?.chatId),accountId);
+      replyToFeishu = send ? async (chatId, text, key) => {
+        await plugins.invocations.invoke('channel.send', { chatId, text, key }, async input => {
+          if (!input || typeof input !== 'object' || Array.isArray(input) || input.chatId !== chatId || input.key !== key) throw new PluginCallError('渠道钩子不能改变发送目标或动作标识');
+          await send(chatId, requiredText(input.text, '发送内容'), key); return null;
+        });
+      } : undefined;
+    },
+    async delegateTodo(id: string) {
+      const todo = store.get<Todo>('todos', id);
+      if (!todo) throw new InputError('待办不存在', 404);
+      if (todo.completedAt) throw new InputError('该待办已完成', 409);
+      return agent.post(`请处理待办 ${todo.id}：${todo.title}\n${todo.notes}\n先结合知识选择执行者与目录，给出验收标准，再异步派发。不要把执行结束直接当成待办已完成。`, 'main', { ...(todo.projectId ? { projectId: todo.projectId } : {}), todoId: todo.id });
+    }, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; }, snapshot, todos, createTodo, updateTodo, dispatch, cancel, knowledge,
+    async close() {
+      if (closing) return;
+      closing = true;
+      await offProjectBrief(); projectFollowUp.close();
+      supervision.close(); plans.close(); clearInterval(expireTimer); await awayNotifications.close(); await offReview(); await offSupervisor(); await offBrief(); await offNotifications(); await offInteractionNotice();
+      await knowledgeCurator.close();
+      await monitor.close();
+      await approvals.close();
+      for (const controller of controllers.values()) controller.abort();
+      try {
+        const stopped = await Promise.allSettled([inboxClassifier.close(), inboxHandlingRuntime.close(), projectWorkspace.close(), background.close(), interactions.close(), supervisorAgent.close(), agent.close({ abort: true }), supervisorRuntime.close({ abort: true }), scopedAgents.close({ abort: true })]);
+        const failures = stopped.filter(item => item.status === 'rejected');
+        if (failures.length) throw new AggregateError(failures.map(item => item.status === 'rejected' ? item.reason : undefined), 'Agent 运行时关闭失败');
+      }
+      finally {
+        await Promise.allSettled([...jobs]);
+        await inboxHandling.close();
+        await effects.close();
+        scheduledWork.close(); offScheduledWork(); offKnowledgeApprovals();
+        waitingReplies.close();
+        await inbox.close();
+        await mailboxes.close();
+        try { await plugins.close(); } finally { store.close(); }
+      }
+    },
+  };
+}

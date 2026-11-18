@@ -1,0 +1,1 @@
+{"id":"approval-followup","name":"确认后继续示例","version":"1.0.0","apiVersion":1,"main":"index.js","permissions":["store.read","store.write","eventbox.publish:approval-followup.","eventbox.subscribe:approval-followup.","eventbox.subscribe:approval.","service.use:core.approval.propose"]}

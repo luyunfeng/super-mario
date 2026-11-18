@@ -1,0 +1,93 @@
+// Agent：配置谁来干活。模型、执行者与电脑、CLI 会话、自动处理、自动跟进；其余收进“高级”。
+import { h, replace } from '../lib/dom.js';
+import { Button, Card, Dot, Pill, Empty, Banner } from '../ui/kit.js';
+import { Hint, hintCopy } from '../ui/hint.js';
+import { openModelDrawer } from '../features/model-drawer.js';
+import { openAddComputer, openComputer } from '../features/computers.js';
+import { createPolicyCard } from '../features/policy.js';
+import { createFollowUpCard } from '../features/follow-up.js';
+import { createCliSessions } from '../features/cli-sessions.js';
+import { createAdvanced } from '../features/advanced.js';
+import { createScheduledWorkCard } from '../features/scheduled-work.js';
+
+const MODE_NAMES = { api: '模型 API', 'codex-cli': 'Codex 命令行' };
+
+export function createAgentPage({ api, store, router, consoleDrawer, scope }) {
+  let model = null;
+  let modelError = '';
+  let modelSeq = 0;
+
+  // —— 模型 ——
+  const modelStatus = h('div', { class: 'row' });
+  const modelDetail = h('p', { class: 'muted small' });
+  const modelCard = Card({
+    title: '主 Agent 模型', hint: 'agent.model', id: 'agent-model',
+    body: [modelStatus, modelDetail, h('div', null, Button({ label: '更改模型', onClick: () => model && openModelDrawer({ api, config: model, onSaved: async () => { await loadModel(); await store.refresh(); } }) }))],
+  });
+
+  async function loadModel() {
+    const stamp = ++modelSeq;
+    try { const value = await api.get('/model'); if (stamp !== modelSeq) return; model = value; modelError = ''; }
+    catch (cause) { if (stamp !== modelSeq) return; modelError = cause.message; }
+    paintModel();
+  }
+
+  function paintModel() {
+    const snapshot = store.view.snapshot;
+    if (!snapshot) return;
+    const available = snapshot.agent.available;
+    replace(modelStatus, Dot(available ? 'ok' : 'danger'), h('strong', null, available ? '可用' : '不可用'),
+      h('span', { class: 'muted small' }, snapshot.agent.reason ?? ''));
+    modelDetail.textContent = modelError ? `读取模型配置失败：${modelError}`
+      : model ? `来源：${MODE_NAMES[model.mode] ?? model.mode}${model.provider && model.mode !== 'codex-cli' ? ` · ${model.provider}` : ''}${model.model ? ` · ${model.model}` : ' · 尚未选择模型'}`
+      : '正在读取…';
+  }
+
+  // —— 执行者与电脑 ——
+  const computerList = h('div', { class: 'list' });
+  const executorList = h('div', { class: 'list' });
+  const computersCard = Card({
+    title: '执行者与电脑', hint: 'agent.executors', id: 'agent-computers',
+    tools: Button({ label: '添加电脑', icon: 'plus', size: 'sm', onClick: () => openAddComputer({ api }) }),
+    body: [computerList, h('h3', null, '可用的执行者'), executorList],
+  });
+
+  function paintComputers(snapshot) {
+    const machines = snapshot.machines ?? [];
+    replace(computerList, machines.length ? machines.map(machine => h('div', { class: 'item item--click', onclick: () => openComputer({ api, machine, state: () => store.view.snapshot, consoleDrawer }), tabindex: 0, role: 'button', onkeydown: (event) => { if (event.key === 'Enter') event.currentTarget.click(); } },
+      Dot(machine.online ? 'ok' : ''), h('div', { class: 'item__main' }, h('span', { class: 'item__title' }, machine.name),
+        h('span', { class: 'item__meta' }, `${machine.online ? '在线' : '离线'} · ${(machine.executors ?? []).map(item => item.name).join('、') || '没有执行者'}`)),
+      h('span', { class: 'muted' }, '›')))
+      : Empty({ title: '还没有连接电脑', text: '连接一台电脑后，Agent 才能在上面运行 Claude Code 或 Codex。' }));
+    replace(executorList, (snapshot.executors ?? []).map(item => h('div', { class: 'item' },
+      Dot(item.available ? 'ok' : 'warn'),
+      h('div', { class: 'item__main' }, h('span', { class: 'item__title' }, item.name), h('span', { class: 'item__meta' }, item.available ? item.description : item.reason ?? '暂不可用')),
+      item.mode === 'demo' && Pill('演示'))));
+  }
+
+  const cliSessions = createCliSessions({ api, store, router });
+  const policy = createPolicyCard({ api, store });
+  const followUp = createFollowUpCard({ api, store });
+  const scheduledWork = createScheduledWorkCard({ api, store, scope });
+  const advanced = createAdvanced({ api, store, router });
+
+  const el = h('section', { class: 'page', id: 'agent' },
+    h('div', { class: 'page__inner' },
+      h('header', { class: 'page__head' },
+        h('div', { class: 'page__title' }, h('h1', null, 'Agent'), h('p', { class: 'page__sub' }, hintCopy('nav.agent').tag)),
+        h('div', { class: 'page__actions' }, Hint('nav.agent'))),
+      h('div', { class: 'stack stack--lg' }, modelCard, computersCard, cliSessions.el, policy.el, followUp.el, scheduledWork.el, advanced.el)));
+
+  return {
+    el,
+    onShow(route) {
+      scheduledWork.load(); loadModel(); policy.load(); followUp.load(); cliSessions.onShow();
+      const target = { rules: 'agent-rules', 'follow-up': 'agent-follow-up', advanced: 'agent-advanced' }[route.parts[0]];
+      if (target) requestAnimationFrame(() => document.getElementById(target)?.scrollIntoView({ block: 'start' }));
+      if (route.parts[0] === 'advanced') advanced.el.open = true;
+    },
+    onState({ snapshot }) {
+      scheduledWork.onState(); cliSessions.onState(); paintModel(); paintComputers(snapshot); policy.setProjects(snapshot.projects ?? []); advanced.update(snapshot);
+    },
+  };
+}

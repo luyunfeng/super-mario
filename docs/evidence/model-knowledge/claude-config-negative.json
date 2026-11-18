@@ -1,0 +1,17 @@
+{
+  "baseline": "6803a0e",
+  "timing": "Before the user questioned real Claude testing and the assistant committed to Codex-backed simulation. Not rerun afterward.",
+  "realClaudeStarted": true,
+  "version": "2.1.295",
+  "jobsSubmitted": 1,
+  "jobStatus": "failed",
+  "fixedError": "CLI returned Not logged in",
+  "knowledgePages": 0,
+  "rawSaved": true,
+  "externalRuns": 0,
+  "approvals": 0,
+  "outbox": 0,
+  "cleanupComplete": true,
+  "remainingTwoJobsNotSubmitted": true,
+  "coverage": "Session reuse, project isolation and updates not covered by this failed real-provider run."
+}

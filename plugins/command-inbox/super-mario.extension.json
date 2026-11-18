@@ -1,0 +1,10 @@
+{
+  "id": "command-inbox",
+  "name": "命令收件箱",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "main": "index.js",
+  "runtime": "local",
+  "permissions": ["service.use:core.inbox.ingest", "contribute:tools", "contribute:connectors"],
+  "config": { "command": "", "args": [], "collectEnabled": false }
+}
