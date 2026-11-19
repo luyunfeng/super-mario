@@ -1,11 +1,12 @@
 import { CODEX_MODEL_CONFIG, codexModelConfig, codexConfigArgs, codexTextItem } from '../packages/protocol/src/index.ts';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { lstatSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { NodeHandler } from '../packages/plugin-sdk/src/index.ts';
 import type { Json, JsonObject } from '../packages/protocol/src/index.ts';
 import type { DiagnosticLauncher } from './agent-diagnostics.ts';
+import { cleanKnowledgeWorkerStorage, prepareKnowledgeWorkspace, readKnowledgeRecord } from './knowledge-worker-storage.ts';
 import { validateTaskLauncher } from './task-runner.ts';
 
 class WorkerError extends Error {}
@@ -77,6 +78,7 @@ export function createKnowledgeWorker(options: { dataDir: string; commands?: { c
 } {
   const jobsDir = join(resolve(options.dataDir), 'knowledge-jobs');
   mkdirSync(jobsDir, { recursive: true, mode: 0o700 });
+  if (!lstatSync(options.dataDir).isDirectory() || !lstatSync(jobsDir).isDirectory()) throw new WorkerError('Invalid knowledge storage directory');
   // Snapshot trusted local configuration. launchers override legacy commands, then PATH defaults.
   const launchers: Partial<Record<Provider, DiagnosticLauncher>> = {};
   for (const [id, value] of Object.entries(options.launchers ?? {})) {
@@ -106,7 +108,7 @@ export function createKnowledgeWorker(options: { dataDir: string; commands?: { c
   // A crashed service cannot know whether the remote model finished. Never replay.
   for (const name of readdirSync(jobsDir)) {
     if (!/^[a-zA-Z0-9_-]{1,128}\.json$/.test(name)) continue;
-    const raw = object(JSON.parse(readFileSync(join(jobsDir, name), 'utf8')));
+    const raw = object(readKnowledgeRecord(join(jobsDir, name)));
     if (raw.id !== name.slice(0, -5) || !['running', 'completed', 'failed', 'unknown'].includes(String(raw.status)) ||
         (raw.text !== undefined && typeof raw.text !== 'string') || (raw.error !== undefined && typeof raw.error !== 'string')) throw new WorkerError(`Invalid knowledge job file: ${name}`);
     // Legacy jobs belonged to the personal worker; keep their durable dedupe evidence.
@@ -283,10 +285,7 @@ export function createKnowledgeWorker(options: { dataDir: string; commands?: { c
     if (failed?.status === 'rejected') throw failed.reason;
   }
   async function launch(provider: Provider, target: Scope): Promise<Worker> {
-    // Sibling directories preserve ../ test fixtures and never use a user's project repository.
-    const suffix = target.layer === 'personal' ? '' : '-' + createHash('sha256').update(scopeKey(target)).digest('hex');
-    const cwd = join(resolve(options.dataDir), 'knowledge-workspace' + suffix);
-    mkdirSync(cwd, { recursive: true, mode: 0o700 });
+    const cwd = prepareKnowledgeWorkspace(options.dataDir, target);
     const sessionId = provider === 'claude-code' ? randomUUID() : undefined;
     const args = provider === 'codex'
       ? ['app-server', '--stdio', ...codexConfigArgs(CODEX_MODEL_CONFIG)]
@@ -402,6 +401,18 @@ export function createKnowledgeWorker(options: { dataDir: string; commands?: { c
       return { ...snapshot(w), ...(!w && params.scope !== undefined ? { scope: { ...target } } : {}), ...(job ? { job: { ...job, scope: { ...job.scope } } } : {}),
         pool: [...workers.values()].map(w => ({ ...snapshot(w), ...(w.job ? { activeJobId: w.job.id } : {}) })) };
     },
+    'workspace.knowledge.purge': params => serial(async () => {
+      if (closed || Object.keys(params).some(key => key !== 'projectId')) throw new WorkerError('Invalid project cleanup request');
+      const target = scope({ layer: 'project', projectId: params.projectId! });
+      if (target.layer !== 'project') throw new WorkerError('Missing project scope');
+      const key = scopeKey(target), worker = workers.get(key);
+      cleanKnowledgeWorkerStorage(options.dataDir, target.projectId, jobs, Boolean(worker), false);
+      if (worker) await terminate(worker);
+      cleanKnowledgeWorkerStorage(options.dataDir, target.projectId, jobs, Boolean(worker), true);
+      workers.delete(key);
+      for (const [id, job] of jobs) if (scopeKey(job.scope) === key) jobs.delete(id);
+      return { projectId: target.projectId, purged: true };
+    }),
     'executor.knowledge.stop': params => serial(async () => {
       if (params.workerId !== undefined || params.scope !== undefined) await terminate(select(params));
       else await terminateAll();

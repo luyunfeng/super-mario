@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { constants, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { constants, closeSync, fstatSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { ExtensionContext, KnowledgeBackend, KnowledgeQuery } from '../packages/plugin-sdk/src/index.ts';
 import type { KnowledgeEntry, KnowledgeLayer } from '../packages/protocol/src/index.ts';
 
@@ -34,10 +34,13 @@ function validateEntry(entry: KnowledgeEntry): void {
 }
 
 /** Only this backend owns knowledge files. Store entries are a rebuildable index. */
-export function createLocalKnowledge(context: ExtensionContext): KnowledgeBackend {
+function localFiles(context: Pick<ExtensionContext, 'store' | 'dataDir'>): KnowledgeBackend & { purgeProjectPages(projectId: string, deferStoreCleanup: boolean): KnowledgeEntry[] } {
   const directory = join(context.dataDir, 'knowledge');
   function ensureDirectory(): void {
-    mkdirSync(context.dataDir, { recursive: true });
+    for (const path of [dirname(context.dataDir), context.dataDir]) {
+      mkdirSync(path, { recursive: true });
+      if (!lstatSync(path).isDirectory()) throw new Error('Knowledge storage requires a real directory');
+    }
     if (!existsSync(directory)) mkdirSync(directory);
     const info = lstatSync(directory);
     if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Knowledge directory must be a real directory');
@@ -48,7 +51,11 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
     // O_NOFOLLOW prevents a manually added symlink from reading outside this backend.
     const fd = openSync(filePath(id), constants.O_RDONLY | constants.O_NOFOLLOW);
     let markdown: string;
-    try { markdown = readFileSync(fd, 'utf8'); } finally { closeSync(fd); }
+    try {
+      const info = fstatSync(fd);
+      if (!info.isFile() || info.nlink !== 1) throw new Error('Knowledge Markdown must be a private regular file');
+      markdown = readFileSync(fd, 'utf8');
+    } finally { closeSync(fd); }
     const match = /^---\n([^\n]+)\n---\n([\s\S]*)$/.exec(markdown);
     if (!match) throw new Error(`Invalid knowledge Markdown: ${id}`);
     const metadata: unknown = JSON.parse(match[1]!);
@@ -61,17 +68,35 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
     return entry;
   }
 
+  function readAll() {
+    ensureDirectory();
+    const entries: KnowledgeEntry[] = [];
+    for (const file of readdirSync(directory, { withFileTypes: true })) {
+      if (!file.name.endsWith('.md')) continue;
+      if (!file.isFile()) throw new Error(`Knowledge Markdown must be a regular file: ${file.name}`);
+      entries.push(readEntry(file.name.slice(0, -3)));
+    }
+    return entries;
+  }
+
   return {
+    purgeProjectPages(projectId, deferStoreCleanup) {
+      const entries = readAll(), retained: KnowledgeEntry[] = [];
+      for (const entry of entries) {
+        if (entry.layer === 'project' && entry.projectId === projectId) {
+          rmSync(filePath(entry.id));
+          if (!deferStoreCleanup) context.store.remove(collection, entry.id);
+        } else retained.push(entry);
+      }
+      if (!deferStoreCleanup) for (const cached of context.store.list<KnowledgeEntry>(collection)) {
+        if (cached.layer === 'project' && cached.projectId === projectId) context.store.remove(collection, cached.id);
+      }
+      return retained.sort((a, b) => a.id.localeCompare(b.id));
+    },
     async list(query: KnowledgeQuery = {}) {
       validateScope(query.layer, query.projectId);
       if (query.query !== undefined && typeof query.query !== 'string') throw new Error('query must be a string');
-      ensureDirectory();
-      const entries: KnowledgeEntry[] = [];
-      for (const file of readdirSync(directory, { withFileTypes: true })) {
-        if (!file.name.endsWith('.md')) continue;
-        if (!file.isFile()) throw new Error(`Knowledge Markdown must be a regular file: ${file.name}`);
-        entries.push(readEntry(file.name.slice(0, -3)));
-      }
+      const entries = readAll();
       // Reconcile only after every file parses, so corrupt Markdown cannot erase the index.
       context.store.transaction(() => {
         const ids = new Set(entries.map(entry => entry.id));
@@ -98,12 +123,15 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
       ensureDirectory();
       const { content, ...metadata } = entry;
       const temporary = join(directory, `.${randomUUID()}.tmp`);
-      // Rename publishes a complete file. A failed index update is repaired by list().
-      try {
-        writeFileSync(temporary, `---\n${JSON.stringify(metadata)}\n---\n${content}`, { flag: 'wx', mode: 0o600 });
-        renameSync(temporary, filePath(entry.id));
-      } finally { rmSync(temporary, { force: true }); }
-      context.store.put(collection, entry.id, entry);
+      // Check the host's project write barrier before publishing any file. If the
+      // filesystem write fails the index rolls back; list() can repair a failed commit.
+      context.store.transaction(() => {
+        context.store.put(collection, entry.id, entry);
+        try {
+          writeFileSync(temporary, `---\n${JSON.stringify(metadata)}\n---\n${content}`, { flag: 'wx', mode: 0o600 });
+          renameSync(temporary, filePath(entry.id));
+        } finally { rmSync(temporary, { force: true }); }
+      });
       return entry;
     },
     async remove(id) {
@@ -116,4 +144,14 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
       return removed;
     },
   };
+}
+
+export function createLocalKnowledge(context: Pick<ExtensionContext, 'store' | 'dataDir'>): KnowledgeBackend {
+  const { list, put, remove } = localFiles(context);
+  return { list, put, remove };
+}
+
+/** Maintenance works even when the plugin's runtime contributions are disabled. */
+export function purgeLocalProjectPages(context: Pick<ExtensionContext, 'store' | 'dataDir'>, projectId: string, deferStoreCleanup = false) {
+  return localFiles(context).purgeProjectPages(projectId, deferStoreCleanup);
 }

@@ -20,6 +20,7 @@ export interface FeishuRegistrationOptions {
     update(id: string, input: { enabled: boolean }): unknown | Promise<unknown>;
     bindOwner?(id: string, openId: string): unknown | Promise<unknown>;
   };
+  validateBindingScope?: (scope: BotScope) => BotScope;
   provider?: FeishuRegistrationProvider;
   fetch?: typeof fetch;
 }
@@ -154,6 +155,7 @@ export function createFeishuRegistration(options: FeishuRegistrationOptions) {
       if (closed) throw new Error('飞书注册服务已关闭');
       if (running.size) throw new Error('已有飞书注册正在进行，请先完成或取消');
       const input = inputOf(value);
+      if (options.validateBindingScope) input.scope = options.validateBindingScope(input.scope);
       const job: FeishuRegistrationJob = { id: randomUUID(), status: 'queued', progress: '正在准备注册', missingSteps: [] };
       jobs.set(job.id, { input, job }); changed(job);
       const abort = new AbortController();
@@ -161,6 +163,11 @@ export function createFeishuRegistration(options: FeishuRegistrationOptions) {
       const task = Promise.resolve().then(() => { abort.signal.throwIfAborted(); return execute(input, job, abort); }).catch(() => {}).finally(() => running.delete(job.id));
       running.set(job.id, { abort, task });
       return snapshot(job);
+    },
+    hasPendingScope(matches: (scope: BotScope) => boolean) {
+      // A cancelled task can still be unwinding an awaited bot create/update.
+      return [...jobs.values()].some(({ input, job }) =>
+        (activeStatuses.has(job.status) || running.has(job.id)) && matches(input.scope));
     },
     get(id: string) { const entry = jobs.get(id); return entry ? snapshot(entry.job) : undefined; },
     list() { return [...jobs.values()].map(entry => snapshot(entry.job)); },

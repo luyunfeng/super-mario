@@ -32,6 +32,10 @@ export function createCliSessions({ api, store, router }) {
   const ready = () => store.view.connection === 'online' && !store.view.unauthorized;
   const selection = () => new URLSearchParams({ ...(machines.value ? { machineId: machines.value } : {}), ...(projects.value ? { projectId: projects.value } : {}) }).toString();
   function invalidate() { seq++; cache.clear(); data = null; loading = false; error = ''; }
+  window.addEventListener('workspace:project-purged', ({ detail }) => {
+    for (const [key, record] of requests) if (record.payload?.projectId === detail.projectId) requests.delete(key);
+    invalidate(); paint();
+  });
   function paint() {
     const renderKey = JSON.stringify([ready(), error, loading, data, keyword.value.trim().toLowerCase(), machines.value, signature]);
     if (renderKey === painted) return;

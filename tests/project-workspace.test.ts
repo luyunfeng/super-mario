@@ -97,7 +97,11 @@ test("memory model sees one project, persists traceable knowledge and never comp
         createdAt: "now",
       });
     }
-    await service.run("a", true);
+    const running = service.run("a", true);
+    assert.throws(() => service.assertProjectPurgeAllowed("a"), { status: 409 });
+    service.assertProjectPurgeAllowed("b");
+    await running;
+    service.assertProjectPurgeAllowed("a");
     assert.match(prompt, /A context/);
     assert.doesNotMatch(prompt, /SECRET/);
     assert.equal(service.memory("a").status, "completed");

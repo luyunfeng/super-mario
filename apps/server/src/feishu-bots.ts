@@ -24,6 +24,7 @@ export interface FeishuBotsApp {
   postScoped(text: string, scope: BotScope, botId: string): Promise<Message>;
   /** Host injects readOnly result context; it must never dispatch a new request. */
   postScopedResult?(input: { text: string; scope: BotScope; botId: string; sourceMessageId?: string }): Promise<Message>;
+  isProjectPurging?(projectId: string): boolean;
   attention?(): AttentionItem[];
   projects?: { list(): Project[] };
   todos?: () => Todo[];
@@ -107,6 +108,13 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (todo.projectId && !projects.some(project => project.id === todo.projectId && !project.archivedAt)) throw noDelivery('待办项目不存在或已归档');
       // A completed todo remains an addressable context. No result ever completes it here.
       return { kind: 'task', todoId: todo.id, ...(todo.projectId ? { projectId: todo.projectId } : {}) };
+    }
+    return scope;
+  }
+  function validateBindingScope(input: BotScope): BotScope {
+    const scope = validateScope(input);
+    if ('projectId' in scope && scope.projectId && app.isProjectPurging?.(scope.projectId)) {
+      throw Object.assign(noDelivery('项目正在清理，无法绑定飞书机器人'), { status: 409 });
     }
     return scope;
   }
@@ -565,7 +573,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (message) void track('replies', reply(message));
   });
   return {
-    canUseScope,
+    canUseScope, validateBindingScope,
+    hasBoundScope(matches: (scope: BotScope) => boolean) {
+      return settings.list().some(bot => !bot.archivedAt && matches(bot.scope));
+    },
     inboxHandlingStatus(id: string) {
       try {
         const entry = app.mailboxes.list().find(item => item.id === id && item.direction === 'inbox');
@@ -602,12 +613,12 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     },
     async create(input: FeishuBotInput) {
       if (closed) throw noDelivery('控制器已关闭');
-      const scope = validateScope(input.scope); const bot = settings.write(undefined, { ...input, scope }); if (bot.appSecret) secrets.add(bot.appSecret);
+      const scope = validateBindingScope(input.scope); const bot = settings.write(undefined, { ...input, scope }); if (bot.appSecret) secrets.add(bot.appSecret);
       await restart(bot.id); return publicBot(settings.read(bot.id));
     },
     async update(id: string, input: Partial<FeishuBotInput>) {
       if (closed) throw noDelivery('控制器已关闭');
-      const previous = settings.read(id); const scope = validateScope(input.scope ?? previous.scope);
+      const previous = settings.read(id); const scope = validateBindingScope(input.scope ?? previous.scope);
       stampExisting(previous);
       const bot = settings.write(id, { ...input, scope }); if (bot.appSecret) secrets.add(bot.appSecret);
       await restart(id); return publicBot(bot);

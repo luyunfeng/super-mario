@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, symlinkSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -305,4 +306,40 @@ test('status explicitly echoes requested scope without inventing worker identity
     const legacy = await service.handlers['executor.knowledge.status']!({}, () => {}) as JsonObject;
     assert.equal(legacy.scope, undefined);
   } finally { await service.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('project purge stops only its scoped worker, validates files and is idempotent after restart', async () => {
+  const f = setup();
+  const target = { layer: 'project', projectId: 'A' }, other = { layer: 'project', projectId: 'B' };
+  const cwd = (scope: typeof target) => join(f.dir, 'knowledge-workspace-' + createHash('sha256').update(JSON.stringify(scope)).digest('hex'));
+  const purge = (service = f.service, params: JsonObject = { projectId: 'A' }) =>
+    service.handlers['workspace.knowledge.purge']!(params, () => {});
+  try {
+    for (const scope of [other, target]) {
+      const worker = await f.call('start', { scope, provider: 'codex' });
+      await f.call('submit', { scope, workerId: worker.workerId!, jobId: scope.projectId, prompt: 'result-' + scope.projectId });
+      await until(() => f.call('status', { scope, jobId: scope.projectId }), row => job(row).status === 'completed');
+    }
+    const native = join(f.dir, 'external-native');
+    mkdirSync(native); writeFileSync(join(native, 'untouched'), 'native history');
+    await assert.rejects(async () => purge(f.service, { projectId: 'A', cwd: native }));
+    const link = join(cwd(target), 'redirect');
+    symlinkSync(native, link);
+    await assert.rejects(async () => purge());
+    assert.equal((await f.call('status', { scope: target })).state, 'idle');
+    assert.ok(existsSync(join(f.dir, 'knowledge-jobs', 'A.json')));
+    rmSync(link);
+    assert.deepEqual(await purge(), { projectId: 'A', purged: true });
+    assert.equal(existsSync(cwd(target)), false);
+    assert.equal(existsSync(join(f.dir, 'knowledge-jobs', 'A.json')), false);
+    assert.equal((await f.call('status', { scope: target })).state, 'stopped');
+    assert.equal((await f.call('status', { scope: other })).state, 'idle');
+    assert.ok(existsSync(cwd(other)));
+    assert.ok(existsSync(join(f.dir, 'knowledge-jobs', 'B.json')));
+    assert.equal(readFileSync(join(native, 'untouched'), 'utf8'), 'native history');
+    await f.service.close();
+    const restarted = f.make();
+    try { assert.deepEqual(await purge(restarted), { projectId: 'A', purged: true }); }
+    finally { await restarted.close(); }
+  } finally { await f.cleanup(); }
 });

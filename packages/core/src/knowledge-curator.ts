@@ -1,7 +1,8 @@
+import { finishKnowledgeSwap, purifyKnowledgeHistory } from './knowledge-history.ts';
 import { hasKnowledgeSourceHTML } from '../../protocol/src/index.ts';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile, rename, lstat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, writeFile, rename, lstat, unlink, realpath, readdir } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Store, EventBus, KnowledgeBackend, MachineClient } from '../../plugin-sdk/src/index.ts';
@@ -13,7 +14,7 @@ type Scope = { layer: 'personal' | 'project'; projectId?: string };
 type Binding = { machineId: string; workerId: string; provider: string; scope: Scope };
 const jobScope = (job?: Pick<Job, 'layer' | 'projectId'>): Scope => job?.layer === 'project' ? { layer: 'project', projectId: job.projectId } : { layer: 'personal' };
 const scopeKey = (scope: Scope) => JSON.stringify(scope);
-export interface Job { id: string; title: string; url?: string; text?: string; layer: 'personal' | 'project'; projectId?: string; status: 'queued' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'unknown'; requestOrigin?: 'web'|'agent'; sourceMessageId?: string; approvalId?: string; retryOf?: string; knowledgeIds: string[]; error?: string; recoveryPending?: boolean; knowledgeVersions?: Record<string, string>; createdAt: string; updatedAt: string }
+export interface Job { id: string; title: string; url?: string; text?: string; layer: 'personal' | 'project'; projectId?: string; status: 'queued' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'unknown'; requestOrigin?: 'web'|'agent'; sourceMessageId?: string; approvalId?: string; machineId?: string; retryOf?: string; knowledgeIds: string[]; error?: string; recoveryPending?: boolean; knowledgeVersions?: Record<string, string>; createdAt: string; updatedAt: string }
 class CuratorError extends Error { status: number; constructor(message: string, status = 400) { super(message); this.status = status; } }
 const jobsCollection = 'knowledge.sources', configCollection = 'knowledge.curator';
 const defaults: Settings = { enabled: false, provider: 'codex' };
@@ -21,14 +22,35 @@ const defaults: Settings = { enabled: false, provider: 'codex' };
 /** A durable queue delegates each source to one persistent CLI worker on an execution node.
  * Only the server imports validated pages into the knowledge backend. It never retries an uncertain turn.
  */
-export function createKnowledgeCurator(options: { store: Store; events: EventBus; dataDir: string; knowledge: () => KnowledgeBackend; machines: () => MachineClient | undefined; enabled: () => boolean; validProject: (id: string) => boolean; readSource?: (url: string, signal?: AbortSignal, job?: Job) => Promise<KnowledgeSourceResult | undefined>; allowedProviders?: () => readonly string[] }) {
+export function createKnowledgeCurator(options: { store: Store; events: EventBus; dataDir: string; knowledge: () => KnowledgeBackend; purgeLocalPages?: (managedDir: string, projectId: string, deferStoreCleanup: boolean) => KnowledgeEntry[]; machines: () => MachineClient | undefined; enabled: () => boolean; validProject: (id: string) => boolean; projectPurging?: (id: string) => boolean; readSource?: (url: string, signal?: AbortSignal, job?: Job) => Promise<KnowledgeSourceResult | undefined>; allowedProviders?: () => readonly string[] }) {
   const { store, events } = options;
   const lifecycle = new AbortController();
-  const directory = join(options.dataDir, 'plugins', 'knowledge-local');
+  const directory = resolve(options.dataDir, 'plugins', 'knowledge-local');
+  const purging = new Set<string>();
+  const projectPurging = (id: string) => purging.has(id) || options.projectPurging?.(id);
+  // Paths are derived only from the private data root. Reject directory redirects
+  // before opening content, including when the knowledge plugin is disabled.
+  async function ensureDirectories() {
+    for (const path of [resolve(options.dataDir), dirname(directory), directory,
+      join(directory, 'knowledge'), join(directory, 'raw'), join(directory, 'wiki')]) {
+      try { await mkdir(path, { mode: 0o700 }); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+      if (!(await lstat(path)).isDirectory()) throw new CuratorError('知识存储目录不能是符号链接或普通文件', 409);
+    }
+  }
   let closed = false, configuring = false, inflight: Promise<void> | undefined;
   let worker: { state: string; reason?: string; pid?: number; sessionId?: string; scope?: Scope; workerId?: string; pool?: Json[] } = { state: 'disabled' };
   const legacy = store.get<Omit<Binding, 'scope'>>(configCollection, 'binding');
   const bindings = new Map((store.get<Binding[]>(configCollection, 'bindings') ?? (legacy ? [{ ...legacy, scope: jobScope() }] : [])).map(b => [scopeKey(b.scope), b]));
+  const locationsCollection = 'knowledge.worker-locations';
+  type Location = { machineId: string; projectId: string };
+  function rememberLocation(scope: Scope, machineId: string) {
+    if (scope.layer !== 'project' || !scope.projectId) return;
+    const key = JSON.stringify([scope.projectId, machineId]);
+    if (!store.get(locationsCollection, key)) store.put(locationsCollection, key, { machineId, projectId: scope.projectId });
+  }
+  // Pausing or switching workers clears live bindings but not node-owned result files.
+  for (const binding of bindings.values()) rememberLocation(binding.scope, binding.machineId);
   function saveBindings() { store.put(configCollection, 'bindings', [...bindings.values()]); store.remove(configCollection, 'binding'); }
   // Stop only workers this curator bound, including scopes that are no longer selected.
   // Offline bindings remain durable so reconnect can clean them up without killing on disconnect.
@@ -76,28 +98,137 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
   const changed = () => events.publish('knowledge.curator.changed', {});
   function save(job: Job, patch: Partial<Job>) { const next = { ...job, ...patch, updatedAt: new Date().toISOString() }; store.put(jobsCollection, next.id, next); changed(); return next; }
   function status() { return { settings: settings(), worker: { ...worker }, versioning: { ...gitState }, jobs: jobs().map(({ text: _text, ...job }) => job) }; }
-  async function git(...args: string[]) { return (await exec('git', ['-C', directory, ...args], { timeout: 15000, maxBuffer: 1024 * 1024 })).stdout.trim(); }
-  /** The canonical knowledge files, immutable sources and generated map share a private local repository. */
+  async function git(...args: string[]) {
+    // Ignore ambient GIT_DIR, GIT_WORK_TREE, index/object paths and global configuration.
+    const env = { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CEILING_DIRECTORIES: dirname(directory), GIT_TERMINAL_PROMPT: '0' };
+    return (await exec('git', ['-C', directory, '-c', 'core.hooksPath=/dev/null', ...args], { env, timeout: 15000, maxBuffer: 1024 * 1024 })).stdout.trim();
+  }
+  function enqueueWrite(action: () => Promise<void>): Promise<void> {
+    const operation = writes.then(action);
+    writes = operation.catch(() => {});
+    return operation;
+  }
+  async function writeIndex(entries: KnowledgeEntry[]) {
+    const groups = new Map<string, KnowledgeEntry[]>();
+    for (const entry of entries) { const key = entry.layer === 'project' ? `项目：${entry.projectId}` : entry.layer === 'global' ? '全局知识' : '个人知识'; const group = groups.get(key) || []; group.push(entry); groups.set(key, group); }
+    const lines = ['# 知识地图', '', '由工作台根据已保存知识自动维护。原始资料位于 raw/，知识正文位于 knowledge/。', ''];
+    for (const [group, values] of groups) { lines.push(`## ${group}`, ''); for (const page of values) lines.push(`- [${page.title.replace(/[\[\]\r\n]/g, ' ')}](../knowledge/${page.id}.md)`); lines.push(''); }
+    const file = join(directory, 'wiki', 'index.md'), temp = file + '.' + randomUUID() + '.tmp';
+    try { await writeFile(temp, lines.join('\n'), { flag: 'wx', mode: 0o600 }); await rename(temp, file); }
+    finally { await unlink(temp).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
+  }
   function rebuildIndex(message = 'knowledge: update knowledge map'): Promise<void> {
-    const operation = writes.then(async () => {
-      const entries = await options.knowledge().list();
-      await mkdir(join(directory, 'wiki'), { recursive: true });
-      const groups = new Map<string, KnowledgeEntry[]>();
-      for (const entry of entries) { const key = entry.layer === 'project' ? `项目：${entry.projectId}` : entry.layer === 'global' ? '全局知识' : '个人知识'; const group = groups.get(key) || []; group.push(entry); groups.set(key, group); }
-      const lines = ['# 知识地图', '', '由工作台根据已保存知识自动维护。原始资料位于 raw/，知识正文位于 knowledge/。', ''];
-      for (const [group, values] of groups) { lines.push(`## ${group}`, ''); for (const page of values) lines.push(`- [${page.title.replace(/[\[\]\r\n]/g, ' ')}](../knowledge/${page.id}.md)`); lines.push(''); }
-      const file = join(directory, 'wiki', 'index.md'), temp = file + '.tmp';
-      await writeFile(temp, lines.join('\n'), { mode: 0o600 }); await rename(temp, file);
+    return enqueueWrite(async () => {
+      await ensureDirectories();
+      await finishKnowledgeSwap(directory, store);
+      await writeIndex(await options.knowledge().list());
       try {
-        await mkdir(join(directory, 'raw'), { recursive: true });
         try { const info = await lstat(join(directory, '.git')); if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('知识目录的 .git 必须为独立目录'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; await git('init', '--quiet'); }
+        const root = await realpath(directory);
+        const paths = await git('rev-parse', '--path-format=absolute', '--show-toplevel', '--absolute-git-dir', '--git-common-dir');
+        if (paths !== [root, join(root, '.git'), join(root, '.git')].join('\n')) throw new Error('Git 顶层或元数据目录不属于工作台知识库');
         // Stage only this backend's own files. No remotes, global Git config, or user repository is touched.
         await git('add', '--', 'knowledge', 'raw', 'wiki');
-        if (await git('diff', '--cached', '--name-only')) await git('-c', 'user.name=Super Mario', '-c', 'user.email=knowledge@localhost', 'commit', '--quiet', '-m', message);
+        const staged = await git('diff', '--cached', '--no-renames', '--name-only', '-z', '--', 'knowledge', 'raw', 'wiki');
+        const pathsToCommit = [...new Set(staged.split('\0').filter(Boolean).map(path => path.split('/')[0]!))];
+        if (pathsToCommit.length) await git('-c', 'user.name=Super Mario', '-c', 'user.email=knowledge@localhost', 'commit', '--quiet', '-m', message, '--only', '--', ...pathsToCommit);
         gitState = { available: true, head: await git('rev-parse', '--short', 'HEAD') };
       } catch (error) { gitState = { available: false, reason: `知识已保存，但本地版本记录失败：${error instanceof Error ? error.message : String(error)}` }; }
     });
-    writes = operation.catch(() => {}); return operation;
+  }
+  async function prepareWorkerPurge(projectId: string, owned: Job[]) {
+    const client = options.machines(), nodes = client?.list() ?? [];
+    const key = 'purge-workers:' + projectId;
+    const receipt = store.get<{ machineIds: string[]; legacy?: Record<string,string> }>(configCollection, key) ?? { machineIds: [] };
+    const locations = new Set(store.list<Location>(locationsCollection).filter(row => row.projectId === projectId).map(row => row.machineId));
+    for (const binding of bindings.values()) if (binding.scope.projectId === projectId) locations.add(binding.machineId);
+    for (const job of owned) {
+      if (job.machineId) { locations.add(job.machineId); continue; }
+      if (!job.knowledgeVersions && !['running','completed','unknown'].includes(job.status)) continue;
+      // Old jobs had no machineId. A scoped acknowledgement proves ownership; settings alone cannot.
+      let machineId = receipt.legacy?.[job.id];
+      if (!machineId) {
+        for (const node of nodes.filter(node => node.online && node.capabilities.includes('executor.knowledge.status'))) {
+          const scope = jobScope(job);
+          const response = await client!.call(node.id, 'executor.knowledge.status', { scope, jobId: job.id }).catch(() => undefined) as { job?: { id?: string; scope?: Scope } } | undefined;
+          if (response?.job?.id === job.id && confirmedScope(response.job.scope, scope)) {
+            machineId = node.id;
+            (receipt.legacy ??= {})[job.id] = machineId;
+            store.put(configCollection, key, receipt);
+            break;
+          }
+        }
+        if (!machineId) throw new CuratorError('旧知识任务的原执行机未确认，请连接原执行机后重试', 409);
+      }
+      locations.add(machineId);
+    }
+    const pending = [...locations].filter(id => !receipt.machineIds.includes(id));
+    for (const id of pending) {
+      if (!nodes.some(node => node.id === id && node.online && node.capabilities.includes('workspace.knowledge.purge')))
+        throw new CuratorError('知识整理执行机需要在线并支持项目清理：' + id, 409);
+    }
+    return async () => {
+      for (const id of pending) {
+        const result = await client!.call(id, 'workspace.knowledge.purge', { projectId }).catch(() => undefined) as { projectId?: string; purged?: boolean } | undefined;
+        if (result?.projectId !== projectId || result.purged !== true) throw new CuratorError('执行机未确认清理项目知识，可重试：' + id, 409);
+        receipt.machineIds.push(id);
+        store.put(configCollection, key, receipt);
+      }
+    };
+  }
+  /** The caller first establishes its durable project write barrier and captures job IDs.
+   * Only recorded knowledge-worker machines receive a scoped RPC. No workspace paths are supplied.
+   * Only an independently verified, private linear Git history can be replaced.
+   */
+  async function purgeProject(projectId: string, { deferStoreCleanup = false } = {}) {
+    if (!projectId?.trim()) throw new CuratorError('缺少项目标识');
+    if (purging.has(projectId)) throw new CuratorError('项目知识清理中', 409);
+    const purgePages = options.purgeLocalPages;
+    if (!purgePages) throw new CuratorError('未连接本地知识文件清理接口', 503);
+    purging.add(projectId);
+    try {
+      await inflight;
+      await enqueueWrite(async () => {
+        await ensureDirectories();
+        const sources = jobs();
+        const owners = new Map(sources.map(job => [job.id, job.layer === 'project' ? job.projectId : undefined]));
+        // Unknown working files can be user backups or interrupted writes with unknown
+        // ownership. Inspect only private filenames/types; leave all originals intact on conflict.
+        const rawFiles: string[] = [];
+        for (const folder of ['raw', 'knowledge', 'wiki']) {
+          for (const entry of await readdir(join(directory, folder), { withFileTypes: true })) {
+            const id = /^([A-Za-z0-9][A-Za-z0-9_-]{0,127})\.md$/.exec(entry.name)?.[1];
+            const file = join(directory, folder, entry.name);
+            if (!entry.isFile() || (await lstat(file)).nlink !== 1 || (folder === 'wiki' ? entry.name !== 'index.md' : !id)
+              || (folder === 'raw' && !owners.has(id!))) throw new CuratorError('托管知识目录含未知文件、链接或无归属的来源快照', 409);
+            if (folder === 'raw' && owners.get(id!) === projectId) rawFiles.push(file);
+          }
+        }
+        const owned = sources.filter(job => job.layer === 'project' && job.projectId === projectId);
+        const cleanWorkers = await prepareWorkerPurge(projectId, owned);
+        const head = await purifyKnowledgeHistory(directory, store, projectId, owners);
+        await cleanWorkers();
+        for (const file of rawFiles) await unlink(file);
+        // The backend reads canonical metadata, including pages absent from a stale SQLite index.
+        await writeIndex(purgePages(directory, projectId, deferStoreCleanup));
+        const key = scopeKey({ layer: 'project', projectId });
+        if (!deferStoreCleanup) store.transaction(() => {
+          store.remove(configCollection, 'purge-workers:' + projectId);
+          for (const row of store.list<Location>(locationsCollection)) {
+            if (row.projectId === projectId) store.remove(locationsCollection, JSON.stringify([projectId, row.machineId]));
+          }
+          for (const job of owned) store.remove(jobsCollection, job.id);
+          if (bindings.has(key)) store.put(configCollection, 'bindings', [...bindings.values()].filter(b => scopeKey(b.scope) !== key));
+        });
+        bindings.delete(key);
+        if (worker.scope?.projectId === projectId) worker = { state: 'waiting' };
+        else if (worker.pool) delete worker.pool;
+        gitState = head ? { available: true, head } : { available: false, reason: '当前知识库尚无版本记录' };
+        changed();
+      });
+      return { history: 'purged' as const };
+    } finally { purging.delete(projectId); }
   }
   function addSource(input: Record<string, unknown>, provenance: {requestOrigin:'web'|'agent';sourceMessageId?:string} = {requestOrigin:'web'}) {
     const text = typeof input.text === 'string' ? input.text.trim() : '';
@@ -108,7 +239,7 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
     const layer = input.layer ?? 'personal';
     if (!['personal', 'project'].includes(String(layer))) throw new CuratorError('整理来源仅支持个人知识或项目知识');
     const projectId = typeof input.projectId === 'string' ? input.projectId : undefined;
-    if (layer === 'project' && (!projectId || !options.validProject(projectId))) throw new CuratorError('请选择有效的未归档项目');
+    if (layer === 'project' && (!projectId || projectPurging(projectId) || !options.validProject(projectId))) throw new CuratorError('请选择有效的未归档项目');
     const now = new Date().toISOString();
     const job: Job = { requestOrigin:provenance.requestOrigin,...(provenance.sourceMessageId?{sourceMessageId:provenance.sourceMessageId}:{}),id: randomUUID(), title: typeof input.title === 'string' && input.title.trim() ? input.title.trim().slice(0, 500) : url || text.slice(0, 70), ...(url ? { url } : {}), ...(text ? { text } : {}), layer: layer as Job['layer'], ...(layer === 'project' ? { projectId } : {}), status: 'queued', knowledgeIds: [], createdAt: now, updatedAt: now };
     store.put(jobsCollection, job.id, job); changed(); queueMicrotask(() => { if (!closed) void tick(); }); return job;
@@ -178,7 +309,7 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
   }
   function checkDestination(job: Job) {
     if (!options.enabled()) throw sourceError({ code: 'READER_DISABLED' });
-    if (job.layer === 'project' && (!job.projectId || !options.validProject(job.projectId))) throw new CuratorError('目标项目已归档或不存在，请重新选择项目');
+    if (job.layer === 'project' && (!job.projectId || projectPurging(job.projectId) || !options.validProject(job.projectId))) throw new CuratorError('目标项目已归档或不存在，请重新选择项目');
   }
   // Budget the complete source string sent to the model, including title, origin,
   // scope, trust header and protected-source references. Raw snapshots stay intact.
@@ -259,15 +390,16 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
         scopeKey(other.scope) !== scopeKey(expected.scope))) scopeUnconfirmed();
   }
   async function cycle() {
-    if (closed || configuring) return;
+    if (closed || configuring || purging.size) return;
     const config = settings(), machineClient = options.machines();
-    const active = jobs().find(job => job.status === 'running' || job.recoveryPending);
+    const availableJobs = jobs().filter(job => !job.projectId || !projectPurging(job.projectId));
+    const active = availableJobs.find(job => job.status === 'running' || job.recoveryPending);
     if (!options.enabled()) { const reason = await stopBindings(); worker = { state: 'disabled', reason: reason || '请启用本地知识插件' }; return; }
     if (!config.enabled) {
       const reason = await stopBindings();
       if (!active || reason) { worker = { state: 'disabled', reason: reason || '知识整理 Agent 已暂停；新资料会保留在队列中' }; return; }
     }
-    const next = jobs().find(job => job.status === 'queued');
+    const next = availableJobs.find(job => job.status === 'queued');
     const scope = jobScope(active || next), key = scopeKey(scope);
     let binding = bindings.get(key);
     const machineId = binding?.machineId || config.machineId;
@@ -277,7 +409,10 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
     try {
       if (!active) {
         // start is idempotent for a live scope and refreshes bindings after idle eviction.
+        // A lost start acknowledgement can still leave a private workspace on the node.
+        rememberLocation(scope, machine.id);
         const started = await machineClient.call(machine.id, 'executor.knowledge.start', { provider: config.provider, scope }) as Record<string, Json>;
+        if (scope.projectId && projectPurging(scope.projectId)) return;
         const candidate: Binding = { machineId: machine.id, workerId: String(started.workerId || ''), provider: config.provider, scope };
         confirmWorker(started, candidate);
         binding = candidate;
@@ -327,7 +462,7 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
         JSON.stringify({ destination: { layer: next.layer, projectId: next.projectId }, source, globalGuidance: globalGuidance.slice(0, 60).map(page => ({ title: page.title, content: page.content.slice(0, 8000) })), existingPages: currentPages.map(page => ({ id: page.id, title: page.title, content: page.content.slice(0, 8000) })).slice(0, 60) })].join('\n');
       if (closed) return;
       try { checkDestination(next); } catch (error) { save(next, { status: 'failed', error: error instanceof Error ? error.message : String(error) }); return; }
-      save(next, { status: 'running', error: undefined, knowledgeVersions: Object.fromEntries(currentPages.map(page => [page.id, page.updatedAt])) });
+      save(next, { status: 'running', machineId: binding.machineId, error: undefined, knowledgeVersions: Object.fromEntries(currentPages.map(page => [page.id, page.updatedAt])) });
       try { await machineClient.call(binding.machineId, 'executor.knowledge.submit', { workerId: binding.workerId, scope, jobId: next.id, prompt }, { timeoutMs: 30000 }); worker = { ...worker, state: 'running' }; }
       catch (error) { save(next, { status: 'unknown', recoveryPending: true, error: `提交结果未确认，不会自动重发：${error instanceof Error ? error.message : String(error)}` }); }
     } catch (error) {
@@ -343,7 +478,7 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
   void rebuildIndex('knowledge: initialize local knowledge history').then(changed).catch(error => { gitState = { available: false, reason: error instanceof Error ? error.message : String(error) }; });
   const timer = setInterval(() => { void tick(); }, 2000); timer.unref();
   return {
-    status, addSource, rebuildIndex,
+    status, addSource, rebuildIndex, purgeProject,
     sourceApproved(id:string) { const job=store.get<Job>(jobsCollection,id);if(!job||job.status!=='awaiting_approval')throw new CuratorError('来源未在等待读取确认',409);save(job,{status:'queued',error:undefined}); },
     sourceRejected(id:string,reason:string) { const job=store.get<Job>(jobsCollection,id);if(job?.status==='awaiting_approval')save(job,{status:'failed',error:`来源读取确认已失效：${reason}`}); },
     async configure(input: Record<string, unknown>) {

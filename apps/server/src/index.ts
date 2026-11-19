@@ -164,7 +164,7 @@ export async function startServer(config: AppConfig, dependencies: { botFactory?
           const input = await body(req);
           const scope = validateBotScope(app.store, input.scope);
           try { return json(res, 202, await registrationView(registrations.start({ ...input, scope } as unknown as FeishuRegistrationInput))); }
-          catch (error) { throw new InputError(error instanceof Error ? error.message : '无法开始扫码接入'); }
+          catch (error) { throw new InputError(error instanceof Error ? error.message : '无法开始扫码接入', (error as {status?:number})?.status === 409 ? 409 : 400); }
         }
         const registrationRoute = path.match(/^\/api\/v1\/feishu\/registrations\/([^/]+)(?:\/(cancel))?$/);
         if (registrationRoute) {
@@ -176,7 +176,7 @@ export async function startServer(config: AppConfig, dependencies: { botFactory?
         }
         if (path === '/api/v1/feishu/bots' && method === 'POST') {
           try { return json(res, 201, await bots.create(await body(req) as unknown as FeishuBotInput)); }
-          catch (error) { throw new InputError(error instanceof Error ? error.message : '机器人配置无效'); }
+          catch (error) { throw new InputError(error instanceof Error ? error.message : '机器人配置无效', (error as {status?:number})?.status === 409 ? 409 : 400); }
         }
         const relayRoute = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/relay$/);
         if (relayRoute && method === 'POST') {
@@ -198,7 +198,7 @@ export async function startServer(config: AppConfig, dependencies: { botFactory?
             if (method === 'PATCH' && !botRoute[2]) return json(res, 200, await bots.update(id, await body(req) as unknown as Partial<FeishuBotInput>));
             if (method === 'DELETE' && !botRoute[2]) return json(res, 200, await bots.archive(id));
             if (method === 'POST' && botRoute[2] === 'collect') return json(res, 200, await bots.collect(id));
-          } catch (error) { throw new InputError(error instanceof Error ? error.message : '机器人操作失败'); }
+          } catch (error) { throw new InputError(error instanceof Error ? error.message : '机器人操作失败', (error as {status?:number})?.status === 409 ? 409 : 400); }
         }
         if (path === '/api/v1/mailboxes' && method === 'GET') {
           return json(res, 200, app.mailboxes.list(Object.fromEntries([...url.searchParams].filter(([key]) => ['direction', 'scope', 'projectId', 'todoId', 'botId', 'status'].includes(key)))));
@@ -361,6 +361,8 @@ export async function startServer(config: AppConfig, dependencies: { botFactory?
         if (todo && method === 'PATCH') return json(res, 200, app.updateTodo(todo[1], await body(req)));
         if (path === '/api/v1/projects' && method === 'GET') return json(res, 200, app.projects.list());
         if (path === '/api/v1/projects' && method === 'POST') return json(res, 201, await app.createProject(await body(req)));
+        const purgeProject = path.match(/^\/api\/v1\/projects\/([^/]+)\/purge$/);
+        if (purgeProject && method === 'POST') return json(res, 200, await app.purgeProject(decodeURIComponent(purgeProject[1]!), await body(req), gateway.assertProjectPurgeAllowed));
         const restoreProject = path.match(/^\/api\/v1\/projects\/([^/]+)\/restore$/);
         if (restoreProject && method === 'POST') return json(res, 200, app.projects.restore(decodeURIComponent(restoreProject[1])));
         const projectFollowUp = path.match(/^\/api\/v1\/projects\/([^/]+)\/follow-up$/);

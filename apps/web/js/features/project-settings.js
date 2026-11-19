@@ -5,7 +5,7 @@ import { confirmDialog, toast } from '../ui/overlay.js';
 
 const AUTOMATION = [['inherit', '沿用全局设置'], ['conservative', '保守：审批都交给我'], ['balanced', '平衡：普通提问自动回答'], ['quiet', '少打扰：受信目录内自动处理']];
 
-export function createProjectSettings({ api, store, router, bindFolder }) {
+export function createProjectSettings({ api, store, router, bindFolder, purge }) {
   let projectId = '';
   let workspace = null;
   let seq = 0;
@@ -37,7 +37,7 @@ export function createProjectSettings({ api, store, router, bindFolder }) {
           await api.del(`/projects/${encodeURIComponent(editingId)}`);
           await store.refresh();
           if (router.current.canonical === route) router.go(router.href('projects', 'all', 'todos'));
-        } }))] });
+        } }), Button({ label: '彻底移除项目', kind: 'danger', onClick: () => purge(project) }))] });
 
     const time = Input({ type: 'time', value: followUp.briefingTime });
     const briefing = Check({ label: '每天发送项目简报', checked: followUp.briefingEnabled !== false });
@@ -88,5 +88,8 @@ export function createProjectSettings({ api, store, router, bindFolder }) {
     paint();
   }
 
-  return { el: root, show(id) { if (projectId !== id) { seq++; projectId = id; workspace = null; dirty = false; paint(true); } else paint(); load(); }, update: () => paint() };
+  return { el: root, forget(id) {
+    if (projectId !== id) return;
+    seq++; projectId = ''; workspace = null; dirty = false; painted = ''; replace(root);
+  }, show(id) { if (projectId !== id) { seq++; projectId = id; workspace = null; dirty = false; paint(true); } else paint(); load(); }, update: () => paint() };
 }

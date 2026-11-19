@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
+import { botConversationId } from '../packages/core/src/bot-agent-routing.ts';
 import { createContributions } from '../packages/core/src/plugin-host.ts';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -378,4 +380,73 @@ test('configuration lock blocks posts/new identities and reloads all lazy runtim
   await manager.close();
   assert.equal(manager.tryLockConfiguration(), false);
   await assert.rejects(manager.post('closed', { kind: 'global' }, 'new'), /关闭/);
+});
+
+test('project purge drops idle owned runtimes and histories, retaining shared and other conversations', async t => {
+  const f = await fixture(t), agents = createScopedAgents(f);
+  t.after(() => agents.close());
+  for (const id of ['a', 'b']) f.store.put('projects', id, { id });
+  f.store.put('todos', 'task', { id: 'task', projectId: 'a' });
+  await agents.postProject('a', 'work');
+  await assert.rejects(agents.withProjectPurge('a', () => assert.fail()), { status: 409 });
+  await agents.askMemory('a', 'remember');
+  const projectBot = botConversationId({ id: 'bot', scope: { kind: 'project', projectId: 'a' } });
+  const taskBot = botConversationId({ id: 'bot', scope: { kind: 'task', projectId: 'a', todoId: 'task' } });
+  const sharedBot = botConversationId({ id: 'bot', scope: { kind: 'global' } });
+  for (const id of [projectBot, taskBot, sharedBot]) {
+    f.store.put('messages', id, { conversationId: id, projectId: 'a', ...(id === taskBot ? { todoId: 'task' } : {}) });
+  }
+  const owned = ['project:a:work', 'project:a:memory', projectBot, taskBot];
+  const retained = ['project:b:work', sharedBot, 'main'];
+  const dir = (id: string) => join(f.config.dataDir, 'pi/agents', createHash('sha256').update(id).digest('hex'));
+  for (const id of [...owned, ...retained]) {
+    await mkdir(dir(id), { recursive: true });
+    await writeFile(join(dir(id), 'session'), id);
+  }
+  await assert.rejects(agents.withProjectPurge('a', async () => {
+    await assert.rejects(agents.post('late', { kind: 'project', projectId: 'a' }, 'bot'), { status: 409 });
+    assert.throws(() => agents.postProject('a', 'late'), { status: 409 });
+    await agents.postProject('b', 'continue');
+    throw new Error('host refused');
+  }), /host refused/);
+  for (const id of owned) assert.equal(await readFile(join(dir(id), 'session'), 'utf8'), id);
+  assert.equal(await agents.withProjectPurge('a', removeHistory => { removeHistory(); return 42; }), 42);
+  for (const id of owned) await assert.rejects(access(dir(id)), { code: 'ENOENT' });
+  for (const id of retained) assert.equal(await readFile(join(dir(id), 'session'), 'utf8'), id);
+  assert.deepEqual(agents.list().map(x => x.conversationId), ['project:b:work']);
+});
+
+test('purge rejects symlinks at the managed root, history and nested paths before callback', async t => {
+  const f = await fixture(t), agents = createScopedAgents(f);
+  const outside = await mkdtemp(join(tmpdir(), 'mario-preserve-workspace-'));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  f.store.put('projects', 'a', { id: 'a', workspace: { cwd: outside } });
+  await writeFile(join(outside, 'keep'), 'workspace');
+  const pi = join(f.config.dataDir, 'pi');
+  const root = join(pi, 'agents');
+  const history = join(root, createHash('sha256').update('project:a:work').digest('hex'));
+  for (const path of [pi, root, history, join(history, 'inside')]) {
+    await symlink(outside, path);
+    await assert.rejects(agents.withProjectPurge('a', () => assert.fail('unsafe callback')), { status: 409 });
+    await rm(path);
+    await mkdir(path);
+  }
+  assert.equal(await readFile(join(outside, 'keep'), 'utf8'), 'workspace');
+});
+
+test('history removal rechecks paths after the host awaits its dependencies', async t => {
+  const f = await fixture(t), agents = createScopedAgents(f);
+  const history = join(f.config.dataDir, 'pi/agents', createHash('sha256').update('project:a:work').digest('hex'));
+  const outside = join(f.config.dataDir, 'user-workspace');
+  await mkdir(outside);
+  await writeFile(join(outside, 'keep'), 'keep');
+  await mkdir(history, { recursive: true });
+  await assert.rejects(agents.withProjectPurge('a', async removeHistory => {
+    await symlink(outside, join(history, 'late-link'));
+    removeHistory();
+  }), { status: 409 });
+  assert.equal(await readFile(join(outside, 'keep'), 'utf8'), 'keep');
+  await rm(join(history, 'late-link'));
+  await agents.withProjectPurge('a', removeHistory => removeHistory());
+  await assert.rejects(access(history), { code: 'ENOENT' });
 });

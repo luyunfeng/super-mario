@@ -423,7 +423,8 @@ test('新建目录校验单个名称，处理重名，成功回填后由用户�
       const body = route.request().postDataJSON();
       requests.push(body);
       if (body.name === '重名') return json(route, { error: 'EEXIST' }, 409);
-      const parent = body.parent?.startsWith('/') ? body.parent : ['/home/a', body.parent].filter(Boolean).join('/');
+      if (body.parent === '/missing') return json(route, { error: '父目录不存在或不可访问' }, 400);
+      const parent = body.parent === '/work-alias' ? '/work' : ['/home/a', body.parent].filter(Boolean).join('/');
       await json(route, { cwd: parent + '/' + body.name, exists: true }, 201);
     });
     await go(first.id);
@@ -450,12 +451,16 @@ test('新建目录校验单个名称，处理重名，成功回填后由用户�
     await name.fill('子项目');
     await create.click();
     await expect(path).toHaveValue('/home/a/code-work/子项目');
-    await location.fill('/work');
+    await location.fill('/missing');
     await name.fill('官网');
+    await create.click();
+    await expect(drawer).toContainText('父目录不存在或不可访问');
+    await expect(path).toHaveValue('/home/a/code-work/子项目');
+    await location.fill('/work-alias');
     await create.click();
     await expect(path).toHaveValue('/work/官网');
     assert.deepEqual(requests, [{ name: '重名' }, { name: '默认位置' },
-      { parent: 'code-work', name: '子项目' }, { parent: '/work', name: '官网' }]);
+      { parent: 'code-work', name: '子项目' }, { parent: '/missing', name: '官网' }, { parent: '/work-alias', name: '官网' }]);
     assert.deepEqual(writes, []);
     await drawer.getByRole('button', { name: '添加此文件夹' }).click();
     await expect(drawer).toHaveCount(0);
