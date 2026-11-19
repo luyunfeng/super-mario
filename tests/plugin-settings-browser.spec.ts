@@ -19,6 +19,11 @@ test('从插件配置固定入口，刷新、停用与恢复，并从窄屏打�
   await page.goto(server.url + '/#agent');
   await page.locator('#agent-advanced > summary').click();
   await page.getByRole('button', { name: '打开插件配置' }).click();
+  await dialog.getByRole('button', { name: '编辑 JSON' }).click();
+  await dialog.getByLabel('JSON 配置').fill('{"defaultDays":30,"sessionLimit":8}');
+  await dialog.getByRole('button', {name:'保存设置'}).click();
+  await expect(dialog.getByRole('status')).toHaveText('设置已保存');
+  await dialog.getByLabel('搜索插件').fill('feishu');
   await plugin.getByRole('checkbox').check();
   await dialog.getByRole('button', { name: '关闭' }).click();
   await pin.click();
@@ -26,6 +31,7 @@ test('从插件配置固定入口，刷新、停用与恢复，并从窄屏打�
   await page.reload();
   await expect(pin).toBeVisible();
   await settings.click();
+  await dialog.getByLabel('搜索插件').fill('feishu');
   await plugin.getByRole('button', { name: '停用' }).click();
   await expect(plugin.getByRole('button', { name: '主机器人配置' })).toBeDisabled();
   await expect(pin).toHaveCount(0);
@@ -35,6 +41,7 @@ test('从插件配置固定入口，刷新、停用与恢复，并从窄屏打�
   await expect(pin).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await settings.click();
+  await dialog.getByLabel('搜索插件').fill('feishu');
   await plugin.getByRole('checkbox').uncheck();
   await plugin.getByRole('button', { name: '主机器人配置' }).click();
   await expect(dialog).toHaveCount(0);

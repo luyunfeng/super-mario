@@ -27,7 +27,7 @@ export function createShell({ api, store, router, scope }) {
     h('a', { class: 'brand', href: router.href('home'), 'aria-label': 'Super Mario，回到首页' },
       h('span', { class: 'brand__logo', 'aria-hidden': 'true' }, 'M'),
       h('span', { class: 'brand__name' }, 'Super Mario', h('span', { class: 'brand__sub' }, '个人 AI 工作台'))),
-    nav, pluginSettings.nav);
+    nav, pluginSettings.nav, pluginSettings.footer);
 
   // —— 搜索 ——
   const searchInput = h('input', { class: 'search__input', type: 'search', id: 'workspace-search', placeholder: '搜索待办、执行与记忆', autocomplete: 'off', 'aria-label': '搜索待办、执行与记忆', 'aria-controls': 'search-results' });
@@ -69,7 +69,7 @@ export function createShell({ api, store, router, scope }) {
   const loading = h('div', { class: 'page__inner', id: 'loading', role: 'status' }, h('p', { class: 'muted' }, '正在加载工作台…'));
   const failure = h('div', { class: 'page__inner', id: 'error', role: 'alert', hidden: true });
   const view = h('main', { id: 'view', tabindex: '-1' }, loading, failure);
-  const mainCol = h('div', { class: 'main-col' }, topbar, view, pluginSettings.right, pluginSettings.footer);
+  const mainCol = h('div', { class: 'main-col' }, topbar, view, pluginSettings.right);
   const root = h('div', { class: 'app', id: 'workspace' }, sidebar, mainCol);
 
   return {

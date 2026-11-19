@@ -1,3 +1,4 @@
+import { preferences } from './plugin-preferences.js';
 import { h, replace } from '../lib/dom.js';
 import { openDrawer } from '../ui/overlay.js';
 
@@ -11,7 +12,8 @@ export function openTokenStatistics({ api, store }) {
   const off = store.subscribe(({ snapshot, unauthorized }) => {
     if (api.token() !== token || unauthorized || !snapshot?.plugins.some(p => p.id === 'token-statistics' && p.status === 'active')) drawer.close();
   });
-  let rows = [], days = 7, agent = '', model = '', note = '', busy = false;
+  const options = preferences('token-statistics');
+  let rows = [], days = options.defaultDays, agent = '', model = '', note = '', busy = false;
   const controls = h('div', { class: 'usage-controls' }), report = h('div');
   body.append(controls, report);
   function paint() {
@@ -47,7 +49,7 @@ export function openTokenStatistics({ api, store }) {
     try {
       const data=await api.get('/agents/sessions');
       const sessions=data.machines.filter(m=>m.online && m.available).flatMap(m=>m.sessions.map(s=>({...s,machineId:m.machineId}))).sort((a,b)=>(b.fileModifiedAt??'').localeCompare(a.fileModifiedAt??''));
-      const batch=sessions.slice(0,16), next=[]; let failures=0, partial=0;
+      const batch=sessions.slice(0,options.sessionLimit), next=[]; let failures=0, partial=0;
       for (const s of batch) {
         if (!drawer.el.open || api.token()!==token) return;
         try {

@@ -1,3 +1,4 @@
+import { preferenceEditor } from './plugin-preferences.js';
 import { openTokenStatistics } from './token-statistics.js';
 import { h, replace, keyedList, readLocal, writeLocal } from '../lib/dom.js';
 import { PAGES } from '../lib/router.js';
@@ -5,6 +6,19 @@ import { Button, Pill } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 import { systemText } from '../copy/terms.js';
 
+const descriptions = {
+  'token-statistics':'从 Codex 和 Claude Code 的本地会话日志统计 Token，按日期、模型和 Agent 查看分布。',
+  'workspace-splash':'进入工作台时播放开屏动画。',
+  'builtin-tools':'让工作台 Agent 查询可用执行器、项目和知识。',
+  'knowledge-local':'把个人、全局和项目记忆保存在本地 Markdown 文件中。',
+  'executor-codex':'通过执行机将任务交给 Codex CLI。',
+  'executor-pi':'通过执行机将任务交给 Pi CLI。',
+  'executor-claude-code':'通过执行机将任务交给 Claude Code。',
+  'terminal-host':'连接执行机上的终端会话，提供终端状态。',
+  feishu:'连接飞书机器人，管理消息收发和机器人绑定。',
+  'inbox-triage':'整理进入收件箱的消息。',
+  'daily-brief':'汇总待办和执行进展，生成每日简报。',
+};
 const key = 'sm.pluginSidebar.v1';
 const status = { active: ['已启用', 'ok'], waiting: ['等待配置', 'warn'], disabled: ['已停用', ''], failed: ['不可用', 'danger'] };
 
@@ -25,7 +39,10 @@ export function createPluginSettings({ api, store, router }) {
   let rightPinned = readLocal('sm.tokenStats.right', false) === true;
   const launch = () => openTokenStatistics({ api, store });
   const right = h('button', { class: 'plugin-right', hidden: true, onclick: launch }, 'Token 统计');
-  let drawer;
+  let drawer, selected = 'token-statistics';
+  const menu = h('div',{class:'settings-menu'});
+  const search = h('input',{type:'search',placeholder:'搜索插件', 'aria-label':'搜索插件',oninput:()=>paint()});
+  const layout = h('div',{class:'settings-layout'},h('aside',{},search,menu),list);
   function openFeature(item) {
     drawer?.close();
     if (item.route === '#agent?tokenStats=1') launch();
@@ -55,7 +72,13 @@ export function createPluginSettings({ api, store, router }) {
       list._keyed = undefined;
       return;
     }
-    keyedList(list, plugins, p => p.id, plugin => {
+    const query=search.value.trim().toLowerCase();
+    const matches=plugins.filter(p=>[p.name,p.id,descriptions[p.id]].join(' ').toLowerCase().includes(query));
+    if (!matches.some(p=>p.id===selected)) selected=matches[0]?.id;
+    keyedList(menu,matches,p=>p.id,p=>h('button',{type:'button','aria-pressed':String(selected===p.id),onclick:()=>{selected=p.id;paint();}},
+      h('strong',{},systemText(p.name)),h('small',{},status[p.status]?.[0] ?? p.status)),p=>JSON.stringify([selected===p.id,p.name,p.status]));
+    if (!matches.length) { replace(list,h('p',{},'没有匹配的插件')); return; }
+    keyedList(list, matches.filter(p=>p.id===selected), p => p.id, plugin => {
       const entries = features(plugin);
       return h('section', { class: 'plugin-section', 'aria-label': systemText(plugin.name) },
         h('div', { class: 'row' }, h('strong', null, systemText(plugin.name)), Pill(...(status[plugin.status] ?? ['未知', ''])),
@@ -64,6 +87,9 @@ export function createPluginSettings({ api, store, router }) {
             await store.refresh();
             if (store.view.loadError) throw new Error(store.view.loadError);
           } })),
+        h('p',{},descriptions[plugin.id] ?? (entries.length ? '提供以下工作台功能：'+entries.map(e=>e.label).join('、') : '此插件由执行环境提供，已声明的能力见下方。')),
+        h('code',{class:'small muted'},plugin.id),
+        preferenceEditor(plugin.id),
         plugin.capabilities?.length > 0 && h('details', null, h('summary', { class: 'small' }, '查看插件声明的能力'), h('ul', null, plugin.capabilities.map(name => h('li', null, name)))),
         plugin.error && h('p', { class: 'small' }, plugin.error),
         entries.map(item => h('div', { class: 'row' },
@@ -78,7 +104,8 @@ export function createPluginSettings({ api, store, router }) {
   }
   function open() {
     if (drawer?.el.open) return;
-    drawer = openDrawer({ title: '插件配置', subtitle: '启停影响整个工作台。侧边栏布局仅保存在此浏览器。', body: [shortcuts, list], onClose: () => { drawer = undefined; } });
+    drawer = openDrawer({ title: '插件配置', wide:true, subtitle: '选择插件，查看用途并调整设置。启停影响整个工作台。', body: [shortcuts, layout], onClose: () => { drawer = undefined; } });
+    drawer.el.classList.add('settings-dialog');
     paint();
   }
   const footer = h('footer', { class: 'plugin-footer' }, Button({ label: '插件配置', size: 'sm', onClick: open }));
