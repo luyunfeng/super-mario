@@ -33,8 +33,18 @@ test('local product: authenticated Web/API, knowledge, todos, asynchronous work 
     assert.equal((await fetch(`${running.url}/missing.js`)).status, 404);
     const initial = await state();
     assert.equal(initial.mode, 'demo');
-    assert.equal(initial.plugins.filter(plugin => plugin.id !== 'workspace-splash').length, 9);
+    const webFeatureIds = new Set(['workspace-splash', 'token-statistics']);
+    const coreIds = initial.plugins.map(plugin => plugin.id).filter(id => !webFeatureIds.has(id)).sort();
+    assert.deepEqual(coreIds, [
+      'builtin-tools', 'daily-brief', 'executor-claude-code', 'executor-codex', 'executor-pi',
+      'feishu', 'inbox-triage', 'knowledge-local', 'terminal-host',
+    ]);
     assert.ok(initial.webExtensions?.some(entry => entry.id === 'workspace-splash'));
+    const tokenStats = initial.plugins.find(plugin => plugin.id === 'token-statistics');
+    assert.ok(tokenStats);
+    assert.equal(tokenStats.status, 'active');
+    assert.deepEqual(tokenStats.capabilities, ['usage.read']);
+    assert.deepEqual(tokenStats.navigation, [{ id: 'dashboard', label: 'Token 统计', route: '#agent?tokenStats=1' }]);
     assert.ok(initial.plugins.every(plugin => plugin.enabled));
     assert.ok(initial.executors.find(executor => executor.id === 'demo' && executor.mode === 'demo'));
     assert.equal((await request('/todos', 'POST', { title: ' ' })).status, 400);
