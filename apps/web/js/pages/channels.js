@@ -64,6 +64,7 @@ export function createChannelsPage({ api, store, router }) {
       !active && h('form', { class: 'row', onsubmit: async (event) => {
         event.preventDefault();
         if (!name.value.trim()) return;
+        event.currentTarget.querySelector('button').disabled = true;
         try { job = await api.post('/feishu/registrations', { name: name.value.trim(), scope: { kind: mainSetup() ? 'global' : 'unmarked' }, requireConfirmation: true }); creating = false; error = ''; }
         catch (cause) { error = cause.status && cause.status < 500 ? `没有开始创建：${systemText(cause.message)}` : '创建结果未知，请先到飞书后台核对，系统不会自动重试。'; if (!cause.status || cause.status >= 500) job = { id: '', status: 'unknown' }; }
         paint(); schedule();
@@ -144,7 +145,18 @@ export function createChannelsPage({ api, store, router }) {
     clearTimeout(timer);
     const waiting = (job && !JOB_DONE.has(job.status)) || bots.some(bot => !bot.paired);
     if (!waiting || router.current.page !== 'channels') return;
-    timer = setTimeout(async () => { await load(); schedule(); }, 2500);
+    timer = setTimeout(async () => {
+      const id = job?.id;
+      if (id && !JOB_DONE.has(job.status)) {
+        try {
+          const next = await api.get('/feishu/registrations/' + encodeURIComponent(id));
+          if (router.current.page !== 'channels' || job?.id !== id) return;
+          job = next; error = ''; paint();
+          if (JOB_DONE.has(job.status)) await load();
+        } catch { error = '读取扫码进度失败，正在重新连接。'; paint(); }
+      } else await load();
+      schedule();
+    }, job?.status === 'queued' ? 350 : 1500);
   }
 
   return {

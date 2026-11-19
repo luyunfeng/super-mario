@@ -77,7 +77,7 @@ export function createFeishuRegistration(options: FeishuRegistrationOptions) {
       const job: FeishuRegistrationJob = {
         id: previous.id, status: interrupted ? 'unknown' : previous.status,
         progress: interrupted ? '服务在注册期间退出；请先到飞书后台确认结果，系统不会自动重试' : previous.progress,
-        missingSteps: previous.status === 'completed' ? [] : feishuRegistrationSteps(priorAppId),
+        missingSteps: previous.botId && previous.status !== 'completed' ? feishuRegistrationSteps(priorAppId) : [],
         ...(previous.botId ? { botId: previous.botId } : {}),
       };
       jobs.set(job.id, { input, job });
@@ -129,8 +129,17 @@ export function createFeishuRegistration(options: FeishuRegistrationOptions) {
       if (job.status === 'cancelled') return;
       // Never expose third-party exception text, request bodies, secrets, tokens or cookies.
       const outcome = abort.signal.aborted || closed ? 'cancelled' : error instanceof RegistrationError ? error.outcome : 'failed';
-      job.missingSteps = feishuRegistrationSteps();
-      finish(job, outcome, outcome === 'unknown' ? '外部操作结果未知；请到飞书后台确认，系统不会自动重试' : outcome === 'expired' ? '二维码已过期，请重新发起注册' : outcome === 'cancelled' ? '注册已取消；已经发生的外部操作不会撤销，请到飞书后台核对' : '注册未完成；请检查飞书后台和网络后重新发起');
+      // Permission and release instructions only apply once an application exists.
+      job.missingSteps = createdBotId ? job.missingSteps : [];
+      const failure: Partial<Record<FeishuRegistrationStatus, string>> = {
+        queued: '未能取得飞书登录二维码，请重新生成。',
+        waiting_for_scan: '扫码登录未完成，请重新生成二维码，并在手机上确认登录。',
+        creating_app: '飞书应用创建或凭证读取失败，请先到开放平台核对同名应用。',
+        configuring: '飞书机器人配置未完成，请核对应用配置。',
+        publishing: '飞书应用发布未完成，请核对版本状态。',
+        verifying: '飞书应用核验未通过，请核对线上版本。',
+      };
+      finish(job, outcome, outcome === 'unknown' ? '外部操作结果未知；请到飞书后台确认，系统不会自动重试' : outcome === 'expired' ? '二维码已过期，请重新生成' : outcome === 'cancelled' ? '注册已取消；已经发生的外部操作不会撤销，请到飞书后台核对' : failure[job.status] ?? '飞书注册未完成，请核对当前阶段。');
     }
   }
   return {

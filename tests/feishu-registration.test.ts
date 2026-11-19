@@ -263,3 +263,61 @@ test('unknown application creation is not retried or routed through a second cre
     assert.equal(count, 1); assert.ok(!fake.calls.some(c => c.url.includes('/app/create')));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('only definite template rejection permits one self-built app creation', async t => {
+  const template = 'manifest/upsert_by_template', ordinary = 'app/create';
+  const rejected = () => Response.json({ code: 12345 });
+  const success = () => Response.json({ code: 0, data: { clientId: appId } });
+  const cases: Array<{
+    name: string; templateResponse(): Response; fallbackResponse?: () => Response; outcome?: 'unknown' | 'failed';
+  }> = [
+    { name: 'template success', templateResponse: success },
+    { name: 'template business rejection', templateResponse: rejected, fallbackResponse: success },
+    { name: 'template endpoint missing', templateResponse: () => new Response(null, { status: 404 }), fallbackResponse: success },
+    { name: 'HTTP timeout', templateResponse: () => new Response(null, { status: 408 }), outcome: 'unknown' },
+    { name: 'server error with code', templateResponse: () => Response.json({ code: 123 }, { status: 503 }), outcome: 'unknown' },
+    { name: 'malformed JSON', templateResponse: () => new Response('{'), outcome: 'unknown' },
+    { name: 'missing code', templateResponse: () => Response.json({}), outcome: 'unknown' },
+    { name: 'missing ID after success', templateResponse: () => Response.json({ code: 0 }), outcome: 'unknown' },
+    { name: 'ordinary create rejected', templateResponse: rejected, fallbackResponse: rejected, outcome: 'failed' },
+    { name: 'ordinary create timed out', templateResponse: rejected, fallbackResponse: () => { throw new DOMException('Timed out', 'TimeoutError'); }, outcome: 'unknown' },
+  ];
+  for (const scenario of cases) await t.test(scenario.name, async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'mario-create-')), fake = webFetch();
+    const attempts: string[] = [];
+    let fallbackBody: unknown;
+    try {
+      const provider = createFeishuRegistrationProvider({ dataDir, fetch: (address, init) => {
+        const path = new URL(String(address)).pathname.replace('/developers/v1/', '');
+        if (path === template || path === ordinary) {
+          attempts.push(path);
+          if (path === template) return Promise.resolve(scenario.templateResponse());
+          fallbackBody = JSON.parse(String(init?.body));
+          return Promise.resolve(scenario.fallbackResponse!());
+        }
+        return fake.fetcher(address, init);
+      } });
+      const operation = provider.register({ name: 'Test', signal: new AbortController().signal, progress() {} });
+      if (scenario.outcome) await assert.rejects(operation, (e: unknown) => e instanceof RegistrationError && e.outcome === scenario.outcome);
+      else assert.equal((await operation).verified, true);
+      assert.deepEqual(attempts, scenario.fallbackResponse ? [template, ordinary] : [template]);
+      if (scenario.fallbackResponse) assert.deepEqual(fallbackBody, {
+        appSceneType: 0, name: 'Test', desc: 'AI workbench bot', avatar: 'https://open.feishu.cn/icon.png',
+        i18n: { zh_cn: { name: 'Test', description: 'AI workbench bot' } }, primaryLang: 'zh_cn',
+      });
+    } finally { rmSync(dataDir, { recursive: true, force: true }); }
+  });
+});
+
+test('failed QR initialization reports its stage without showing app setup steps, including after restart', async () => {
+  const f = fixture({ async register() { throw new RegistrationError('failed'); } });
+  try {
+    const job = await settled(f.service, f.service.start(input).id);
+    assert.equal(job.status, 'failed');
+    assert.match(job.progress, /二维码/);
+    assert.deepEqual(job.missingSteps, []);
+    const restored = createFeishuRegistration(f.options);
+    try { assert.deepEqual(restored.get(job.id)?.missingSteps, []); }
+    finally { await restored.close(); }
+  } finally { await f.cleanup(); }
+});

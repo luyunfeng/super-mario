@@ -17,6 +17,19 @@ export class RegistrationError extends Error {
   readonly outcome: 'failed' | 'unknown' | 'expired';
   constructor(outcome: 'failed' | 'unknown' | 'expired') { super(`Feishu registration ${outcome}`); this.outcome = outcome; }
 }
+class PlatformHttpError extends RegistrationError {
+  readonly status: number;
+  constructor(status: number, method: string) {
+    super(status >= 500 && method === 'POST' ? 'unknown' : 'failed');
+    this.status = status;
+  }
+}
+class PlatformBusinessRejection extends RegistrationError {
+  constructor() { super('failed'); }
+}
+function isDefiniteCreateRejection(error: unknown) {
+  return error instanceof PlatformBusinessRejection || (error instanceof PlatformHttpError && error.status === 404);
+}
 const open = 'https://open.feishu.cn';
 const accounts = 'https://accounts.feishu.cn';
 export const FEISHU_BOT_SCOPES = ['im:message.p2p_msg:readonly', 'im:message.group_at_msg:readonly', 'im:message:send_as_bot', 'contact:user.id:readonly'] as const;
@@ -145,7 +158,7 @@ export function createFeishuRegistrationProvider(options: {
               if (method !== 'GET' && method !== 'HEAD') throw new RegistrationError('unknown');
               url = next; await response.body?.cancel(); continue;
             }
-            if (!response.ok) { await response.body?.cancel(); throw new RegistrationError(response.status >= 500 && method === 'POST' ? 'unknown' : 'failed'); }
+            if (!response.ok) { await response.body?.cancel(); throw new PlatformHttpError(response.status, method); }
             const text = await response.text(); boundedSignal.throwIfAborted();
             return { text, headers: response.headers, url: url.href };
           }
@@ -154,6 +167,7 @@ export function createFeishuRegistrationProvider(options: {
         const json = async (address: string, body: unknown, headers: Record<string, string> = {}) => {
           const response = await request(address, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
           const payload = row(JSON.parse(response.text));
+          if (typeof payload.code === 'number' && payload.code !== 0) throw new PlatformBusinessRejection();
           if (payload.code !== 0) throw new RegistrationError('failed');
           return { data: { ...payload, ...row(payload.data) }, headers: response.headers };
         };
@@ -171,11 +185,14 @@ export function createFeishuRegistrationProvider(options: {
           }
           return { csrf, userId: str(user.id ?? user.userId ?? user.user_id), email: str(user.email), origin: new URL(page.url).origin };
         };
-        let page = cookies.length ? await pageInfo() : undefined;
+        // An unusable cached console login can always be replaced by a fresh scan.
+        let page = cookies.length ? await pageInfo().catch(() => undefined) : undefined;
+        context.signal.throwIfAborted();
         if (!page?.csrf || !page.userId) {
           cookies = [];
-          const loginHeaders = { 'x-api-version': '1.0.28', 'x-app-id': '12', 'x-locale': 'zh-CN', 'x-terminal-type': '2', 'x-device-info': 'device_id=0;device_name=Chrome;device_os=Linux;device_model=Chrome;lark_version=;channel=Release;package_name=feishu;tt_app_id=1658;is_dpop_support=true;is_iframe=false' };
-          const initialized = await json(`${accounts}/accounts/qrlogin/init`, { biz_type: null, redirect_uri: 'https://ask.feishu.cn/' }, loginHeaders);
+          const loginHeaders = { accept: 'application/json', 'x-api-version': '1.0.28', 'x-app-id': '12', 'x-locale': 'zh-CN', 'x-terminal-type': '2', 'x-device-info': 'device_id=0;device_name=Chrome;device_os=Linux;device_model=Chrome;lark_version=;channel=Release;package_name=feishu;tt_app_id=1658;is_dpop_support=true;is_iframe=false' };
+          const loginUrl = (step: 'init' | 'polling') => `${accounts}/accounts/qrlogin/${step}?_r=${Date.now()}`;
+          const initialized = await json(loginUrl('init'), { biz_type: null, redirect_uri: 'https://ask.feishu.cn/' }, loginHeaders);
           const token = str(row(initialized.data.step_info).token), flowKey = initialized.headers.get('x-flow-key');
           if (!token || !flowKey) throw new RegistrationError('failed');
           const deadline = Date.now() + (options.loginTimeoutMs ?? 120_000);
@@ -183,7 +200,12 @@ export function createFeishuRegistrationProvider(options: {
           context.progress({ stage: 'waiting_for_scan', url: JSON.stringify({ qrlogin: { token } }), expiresAt: new Date(deadline).toISOString() });
           for (;;) {
             context.signal.throwIfAborted(); if (Date.now() >= deadline) throw new RegistrationError('expired');
-            const poll = await json(`${accounts}/accounts/qrlogin/polling`, { biz_type: null }, { ...loginHeaders, 'x-flow-key': flowKey });
+            // Polling only reads this challenge. A transient transport error must not discard the displayed QR.
+            const poll = await json(loginUrl('polling'), { biz_type: null }, { ...loginHeaders, 'x-flow-key': flowKey }).catch(error => {
+              if (context.signal.aborted || !(error instanceof TypeError || error?.name === 'TimeoutError' || (error instanceof PlatformHttpError && error.status >= 500))) throw error;
+              return undefined;
+            });
+            if (!poll) { await delay(options.pollMs ?? 1500, undefined, { signal: context.signal }); continue; }
             const step = row(poll.data.step_info);
             if (step.status === 5) throw new RegistrationError('expired');
             if (poll.data.next_step === 'enter_app') {
@@ -205,14 +227,28 @@ export function createFeishuRegistrationProvider(options: {
         const upload = await request(`${activePage.origin}/developers/v1/app/upload/image`, { method: 'POST', headers: { 'x-csrf-token': activePage.csrf!, origin: activePage.origin, referer: `${activePage.origin}/app` }, body: form });
         const uploaded = row(JSON.parse(upload.text)); const avatar = str(row(uploaded.data).url ?? uploaded.url);
         if (uploaded.code !== 0 || !avatar) throw new RegistrationError('failed');
+        const description = 'AI workbench bot';
+        const i18n = { zh_cn: { name: context.name, description } };
+        // Only a business rejection or an absent endpoint confirms the create did not succeed.
+        async function createApp(path: string, body: Row): Promise<Row> {
+          try { return await post(path, body); }
+          catch (error) {
+            if (isDefiniteCreateRejection(error)) throw error;
+            throw new RegistrationError('unknown');
+          }
+        }
         let created: Row;
         try {
-          created = await post('manifest/upsert_by_template', { appManifestTemplateID: 'developer_console', createAppUserCustomField: { i18n: { zh_cn: { name: context.name, description: 'AI workbench bot' } }, avatar, primaryLang: 'zh_cn' }, cid: randomUUID(), HTTPHead: {} });
-        } catch (error) { if (error instanceof RegistrationError) throw error; throw new RegistrationError('unknown'); }
+          created = await createApp('manifest/upsert_by_template', { appManifestTemplateID: 'developer_console', createAppUserCustomField: { i18n, avatar, primaryLang: 'zh_cn' }, cid: randomUUID(), HTTPHead: {} });
+        } catch (error) {
+          if (!isDefiniteCreateRejection(error)) throw error;
+          context.signal.throwIfAborted();
+          created = await createApp('app/create', { appSceneType: 0, name: context.name, desc: description, avatar, i18n, primaryLang: 'zh_cn' });
+        }
         const appId = str(created.ClientID ?? created.clientID ?? created.clientId ?? created.appId);
         if (!appIdValid(appId)) throw new RegistrationError('unknown');
-        const appSecret = str((await post(`secret/${appId}`)).secret);
-        if (!appSecret) throw new RegistrationError('failed');
+        const appSecret = str((await post(`secret/${appId}`).catch(() => { throw new RegistrationError('unknown'); })).secret);
+        if (!appSecret) throw new RegistrationError('unknown');
         const result: RegistrationResult = { appId, appSecret, verified: false, missingSteps: feishuRegistrationSteps(appId) };
         try {
           context.progress({ stage: 'configuring' });
