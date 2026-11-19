@@ -594,3 +594,28 @@ test('late send response after restart cannot add a message ID to the new genera
   assert.deepEqual(ids, ['om_stale_response']);
   assert.deepEqual(integration.status(), { connected: true });
 });
+
+test('configured message renderer sends cards once, retains reply thread, and falls back before send for long text', async t=>{
+ const {buildFeishuMessageCard}=await import('../apps/server/src/feishu-cards.ts');
+ const {integration,http}=setup({renderMessage:(text,context)=>buildFeishuMessageCard(text,{webBase:'https://work.example/',...context?.presentation})});
+ t.after(()=>integration.close());
+ await integration.send('oc_fake_chat','结果内容',{replyTo:'om_parent',threadId:'omt_thread',presentation:{kind:'result',route:'projects/p/runs/r'}});
+ let sent=http.calls.filter(c=>c.url.includes('/im/v1/messages'));
+ assert.equal(sent.length,1);assert.match(sent[0]!.url,/om_parent\/reply$/);
+ assert.equal(sent[0]!.body.reply_in_thread,true);assert.equal(sent[0]!.body.msg_type,'interactive');
+ assert.match(String(sent[0]!.body.content),/#projects\/p\/runs\/r/);
+ const long='中'.repeat(7000);await integration.send('oc_fake_chat',long);
+ sent=http.calls.filter(c=>c.url.includes('/im/v1/messages'));assert.equal(sent.length,2);assert.equal(sent[1]!.body.msg_type,'text');assert.equal(JSON.parse(String(sent[1]!.body.content)).text,long);
+ http.setSendCode(10003);await assert.rejects(integration.send('oc_fake_chat','卡片发送失败'),/未自动重试/);
+ assert.equal(http.calls.filter(c=>c.url.includes('/im/v1/messages')).length,3,'no text retry after uncertain card send');
+});
+
+test('real SDK card callback returns toast and replacement card without waiting for model queue; old generations do nothing', async t=>{
+ let calls=0;const {integration,socket}=setup({onCardAction:input=>{calls++;assert.equal(input.operatorId,'ou_owner');assert.equal(input.chatId,'oc_owner');return{toast:{type:'success',content:'已刷新'},card:{type:'raw',data:{elements:[]}}};}});
+ t.after(()=>integration.close());await integration.start();const dispatcher=socket.dispatcher;
+ const event={schema:'2.0',header:{event_id:'card-event',event_type:'card.action.trigger'},event:{operator:{open_id:'ou_owner'},context:{open_chat_id:'oc_owner',open_message_id:'om_card'},action:{value:{kind:'workbench.navigate'}}}};
+ const result=await dispatcher.invoke(event,{needCheck:false}) as any;
+ assert.equal(result.toast.content,'已刷新');assert.equal(result.card.type,'raw');assert.equal(calls,1);
+ await integration.close();const stale=await dispatcher.invoke(event,{needCheck:false}) as any;
+ assert.equal(stale.toast.type,'info');assert.equal(calls,1);
+});

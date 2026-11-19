@@ -1,6 +1,7 @@
 import { randomInt } from 'node:crypto';
 import { createFeishuIntegration } from '../../../plugins/feishu.ts';
 import { createIntegrationConfig } from '../../../packages/core/src/integration-config.ts';
+import { buildFeishuMessageCard } from './feishu-cards.ts';
 import type { AppConfig, Message, MessageRoute } from '../../../packages/protocol/src/index.ts';
 import type { createWorkbench } from '../../../packages/core/src/workbench.ts';
 
@@ -38,7 +39,7 @@ export function createFeishuController(app: Awaited<ReturnType<typeof createWork
     if (!active || closed || !enabled()) throw Object.assign(new Error('飞书尚未启用'),{delivery:'no'});
     const deliver = async () => {
       if (closed || !enabled() || epoch !== generation || active !== integration) throw Object.assign(new Error('飞书发送已取消'), { delivery: 'no' });
-      await active.send(chatId, text);
+      await active.send(chatId, text, { presentation: { kind: /^工作台[^\n]*简报\n/.test(text) || key.includes('brief') ? 'brief' : key.includes('result') ? 'result' : 'reply' } });
     };
     // Test adapters may omit Effects; the product composition always supplies it.
     if (app.effects && tracked) await app.effects.perform({ key, kind: 'feishu.send', target: chatId, summary: '机器人回复', content: { text }, run: deliver });
@@ -110,6 +111,7 @@ export function createFeishuController(app: Awaited<ReturnType<typeof createWork
     if (closed || !enabled()) return;
     const current = settings.read(), epoch = generation;
     integration = factory({
+      renderMessage: (text, context) => buildFeishuMessageCard(text, { webBase: process.env.SUPER_MARIO_WEB_URL, ...context?.presentation }),
       appId: current.appId, appSecret: current.appSecret, profile: current.profile, collectEnabled: current.collectEnabled === true,
       async onMessage(text, source) {
         if (closed || epoch !== generation || !enabled() || source.chatType !== 'p2p') return;

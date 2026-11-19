@@ -35,7 +35,8 @@ export function preparePersonalCheckpoint(binding: PersonalCheckpoint['binding']
   };
   return checkpoint;
 }
-export interface FeishuSendContext { card?: Record<string, unknown>; replyTo?: string; threadId?: string }
+export interface FeishuSendContext { card?: Record<string, unknown>; replyTo?: string; threadId?: string; presentation?: { title?: string; kind?: 'reply' | 'result' | 'brief' | 'notice'; route?: string } }
+export interface FeishuCardAction { operatorId: string; chatId: string; messageId: string; value: Record<string, unknown> }
 export interface PersonalChatDetail { mode?: 'p2p' | 'group'; userCount?: number }
 export interface FeishuOptions {
   personalChatDetail?: (chatId: string) => Promise<PersonalChatDetail>;
@@ -53,6 +54,9 @@ export interface FeishuOptions {
   reconnectTimeoutMs?: number;
   onMessage: (text: string, source: FeishuMessageSource) => Promise<string | void>;
   onInbox: (things: InboxThing[]) => Promise<void>;
+  renderMessage?: (text: string, context?: FeishuSendContext) => Record<string, unknown> | undefined;
+  /** Fast, authenticated by the host; never route card callbacks through the model queue. */
+  onCardAction?: (action: FeishuCardAction) => Record<string, unknown>;
   fetch?: typeof fetch;
   runCLI?: (args: string[]) => Promise<unknown>;
   wsFactory?: FeishuWSFactory;
@@ -190,7 +194,8 @@ export function createFeishuIntegration(options: FeishuOptions) {
   }
   async function send(chatId: string, text: string, context?: FeishuSendContext): Promise<void> {
     if (!chatId.trim() || !text.trim()) throw new Error('飞书发送需要 chatId 和非空文本');
-    const payload = context?.card ? { msg_type: 'interactive', content: JSON.stringify(context.card) }
+    const card = context?.card ?? options.renderMessage?.(text, context);
+    const payload = card ? { msg_type: 'interactive', content: JSON.stringify(card) }
       : { msg_type: 'text', content: JSON.stringify({ text }) };
     if (context?.replyTo) {
       await postMessage(`/open-apis/im/v1/messages/${encodeURIComponent(context.replyTo)}/reply`, {
@@ -538,7 +543,17 @@ export function createFeishuIntegration(options: FeishuOptions) {
     connectionReason = '正在连接飞书'; operationReason = undefined;
     try {
       const logger = createLogger(epoch);
-      const dispatcher = new EventDispatcher({ logger }).register({ 'im.message.receive_v1': event => receive(event, epoch) });
+      const dispatcher = new EventDispatcher({ logger }).register({
+        'im.message.receive_v1': event => receive(event, epoch),
+        'card.action.trigger': (event: unknown) => {
+          const data = object(event), context = object(data.context), operator = object(data.operator);
+          if (!running || epoch !== generation || !options.onCardAction) return { toast: { type: 'info', content: '卡片入口已失效，请重新发送「工作台」' } };
+          try {
+            return options.onCardAction({ operatorId: string(operator.open_id), chatId: string(context.open_chat_id),
+              messageId: string(context.open_message_id), value: object(object(data.action).value) });
+          } catch { return { toast: { type: 'error', content: '卡片暂时不可用，请重新发送「工作台」' } }; }
+        },
+      });
       ws = (options.wsFactory ?? (params => new WSClient(params)))({
         appId: options.appId, appSecret: options.appSecret, autoReconnect: true, handshakeTimeoutMs: 15_000, logger,
         onReady: () => { if (running && epoch === generation) { connectionReason = ''; clearTimeout(startupTimer); } },

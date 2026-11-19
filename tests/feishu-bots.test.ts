@@ -102,7 +102,8 @@ test('dashboard is an owner-only private global command with durable delivery de
   assert.ok(a.instance.sent.every(([target]) => target === 'owner'));
   for (const context of a.instance.contexts.slice(-2)) {
     assert.ok(context?.card);
-    assert.doesNotMatch(JSON.stringify(context.card), /"tag":"button"/);
+    assert.match(JSON.stringify(context.card), /workbench.navigate/);
+    assert.doesNotMatch(JSON.stringify(context.card), /"url"/);
   }
   assert.equal(f.posts.length, 0);
   const entries = f.mailboxes.list().filter(entry => entry.eventKey.startsWith('feishu-dashboard:'));
@@ -758,4 +759,28 @@ test('internal readOnly result requires its durable receipt and the original liv
   assert.equal(f.controller.canUseScope(a.bot.scope, a.bot.id, forged), false);
   await f.controller.update(b.bot.id, { enabled: false });
   assert.equal(f.controller.canUseScope(a.bot.scope, a.bot.id, message), false);
+});
+
+test('owner card buttons page current facts, survive restart and reject forwarding, expiry and rebinding', async t=>{
+ const f=fixture(t),a=await f.add('CardNavigation',{kind:'global'},true);await a.pair();
+ for(let n=0;n<7;n++)f.store.put('inbox','card-inbox-'+n,{id:'card-inbox-'+n,title:'待处理来信'+n,text:'本地内容'+n,source:'controlled',tier:'action',updatedAt:'2026-11-20'});
+ await a.instance.options.onMessage('工作台',source('navigate'));
+ const card=a.instance.contexts.at(-1)!.card as any;
+ const actions=card.elements.filter((e:any)=>e.tag==='action').flatMap((e:any)=>e.actions);
+ const value=actions.find((a:any)=>a.value?.view==='inbox').value;
+ const press=(patch:Record<string,unknown>={})=>f.instances.at(-1)!.options.onCardAction!({operatorId:'human',chatId:'owner',messageId:'platform-card',value,...patch});
+ const response=press() as any;assert.equal(response.card.type,'raw');
+ await f.restart();assert.equal((press() as any).card.type,'raw','navigation grant survives controller restart');
+ assert.match(JSON.stringify(response.card),/待处理来信0/);assert.doesNotMatch(JSON.stringify(response.card),/待处理来信6/);
+ const next=response.card.data.elements.filter((e:any)=>e.tag==='action').flatMap((e:any)=>e.actions).find((a:any)=>a.text.content==='下一页').value;
+ assert.match(JSON.stringify(press({value:next})),/待处理来信6/);
+ f.store.remove('inbox','card-inbox-6');assert.doesNotMatch(JSON.stringify(press({value:next})),/待处理来信6/);
+ for(const patch of [{operatorId:'intruder'},{chatId:'forwarded-chat'},{messageId:''},{value:{...value,page:-1}},{value:{...value,view:'approve'}},{value:{...value,navigation:'forged'}}])assert.equal('card' in press(patch),false);
+ assert.equal(f.posts.length,0);assert.equal(f.mailboxes.list().filter(e=>e.direction==='outbox').length,2,'pairing and initial dashboard only; navigation never sends a new message');
+ await f.controller.update(a.bot.id,{name:'RenamedCardNavigation'});assert.equal('card' in press(),false);
+ const latest=f.instances.at(-1)!;await latest.options.onMessage('工作台',source('fresh-nav'));
+ const latestCard=latest.contexts.at(-1)!.card as any;
+ const fresh=latestCard.elements.filter((e:any)=>e.tag==='action').flatMap((e:any)=>e.actions).find((a:any)=>a.value?.view==='home').value;
+ const cap=f.store.get<any>('feishu.card.navigation',fresh.navigation)!;f.store.put('feishu.card.navigation',fresh.navigation,{...cap,expiresAt:0});
+ assert.equal('card' in latest.options.onCardAction!({operatorId:'human',chatId:'owner',messageId:'platform-card',value:fresh}),false);
 });

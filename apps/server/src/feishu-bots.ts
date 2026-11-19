@@ -1,6 +1,8 @@
 import { createHash, randomInt } from 'node:crypto';
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
 import { buildFeishuDashboard } from './feishu-dashboard.ts';
+import { buildFeishuMessageCard } from './feishu-cards.ts';
+import type { FeishuCardAction } from '../../../plugins/feishu.ts';
 import { botConversationId } from '../../../packages/core/src/bot-agent-routing.ts';
 import { createFeishuIntegration } from '../../../plugins/feishu.ts';
 import { allowedBotGroup, canRelayBotScope, nextRelayPath } from '../../../packages/core/src/bot-group-policy.ts';
@@ -14,7 +16,7 @@ import type { BotScope, FeishuBot, FeishuBotInput, MailboxEntry } from '../../..
 export type FeishuMailboxInput = Pick<MailboxEntry, 'direction' | 'scope' | 'botId' | 'eventKey' | 'title' | 'text' | 'requiresConfirmation'>
   & Partial<Pick<MailboxEntry, 'target' | 'sourceMessageId' | 'replyTo' | 'origin'>>;
 export interface FeishuBotsApp {
-  store: Pick<Store, 'get' | 'put' | 'list' | 'transaction'>;
+  store: Pick<Store, 'get' | 'put' | 'list' | 'transaction'> & Partial<Pick<Store, 'remove'>>;
   events: Pick<EventBus, 'publish' | 'subscribe'>;
   mailboxes: {
     put(input: FeishuMailboxInput): MailboxEntry | Promise<MailboxEntry>;
@@ -39,6 +41,7 @@ export interface FeishuBotAdapter {
 }
 export type FeishuBotFactory = (options: FeishuOptions) => FeishuBotAdapter;
 type Owner = { chatId: string; senderId?: string };
+type CardNavigation = { botId: string; appId: string; revision: number; owner: Owner; expiresAt: number };
 type Route = { channel: 'feishu'; accountId: string; botId: string; target: string; scope: BotScope; revision: number; inputId: string; sourceMessageId?: string };
 type Relay = { sourceMessageId?: string; sourceFingerprint?: string; sourceRouteFingerprint?: string; sourceBotId: string; sourceRevision: number; targetRevision: number; parentEntryId?: string; path: string[]; rootId: string; expiresAt: number; chatId?: string; fingerprint: string };
 type Envelope = { dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
@@ -72,6 +75,32 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   const inboxJobs = new Map<string, Promise<{ id: string }>>();
   const secrets = new Set(settings.list().map(row => row.appSecret).filter(Boolean));
   let closed = false;
+  let nextCardCleanup = 0;
+  function navigation(bot: FeishuBotSettings, paired: Owner, eventKey: string) {
+    if (!paired.senderId) return;
+    const id = createHash('sha256').update(eventKey).digest('hex');
+    if (Date.now() >= nextCardCleanup) {
+      for (const row of app.store.list<CardNavigation & { id: string }>('feishu.card.navigation'))
+        if (row.expiresAt < Date.now()) app.store.remove?.('feishu.card.navigation', row.id);
+      nextCardCleanup = Date.now() + 3600000;
+    }
+    if (!app.store.get('feishu.card.navigation', id)) app.store.put('feishu.card.navigation', id,
+      { id, botId: bot.id, appId: bot.appId, revision: bot.revision, owner: paired, expiresAt: Date.now() + 86400000 });
+    return id;
+  }
+  function cardAction(bot: FeishuBotSettings, epoch: number, input: FeishuCardAction): Record<string, unknown> {
+    const fail = { toast: { type: 'info', content: '卡片已过期或配对已改变，请在主人私聊重新发送「工作台」' } };
+    const value = input.value;
+    if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || value.kind !== 'workbench.navigate'
+      || typeof value.navigation !== 'string' || !['home', 'tasks', 'inbox'].includes(String(value.view))
+      || !Number.isSafeInteger(value.page) || (value.page as number) < 0 || (value.page as number) > 100000 || !input.messageId) return fail;
+    const cap = app.store.get<CardNavigation>('feishu.card.navigation', value.navigation), paired = owner(bot);
+    if (!cap || cap.expiresAt <= Date.now() || cap.botId !== bot.id || cap.appId !== bot.appId || cap.revision !== bot.revision
+      || !cap.owner.senderId || cap.owner.senderId !== input.operatorId || cap.owner.chatId !== input.chatId
+      || paired?.senderId !== input.operatorId || paired.chatId !== input.chatId) return fail;
+    const dashboard = buildFeishuDashboard(app, webBase, { view: value.view as 'home' | 'tasks' | 'inbox', page: value.page as number, navigation: value.navigation });
+    return { toast: { type: 'success', content: '已读取最新状态' }, card: { type: 'raw', data: dashboard.card } };
+  }
   function runtime(id: string) {
     let state = runtimes.get(id);
     if (!state) { state = { epoch: 0, code: String(randomInt(100000, 1000000)), expires: Date.now() + 600_000, operations: Promise.resolve() }; runtimes.set(id, state); }
@@ -366,7 +395,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     }
     if (!group && paired && bot.scope.kind === 'global' && ['工作台', '/dashboard'].includes(text.trim())) {
       const eventKey = `feishu-dashboard:${JSON.stringify([bot.id, bot.appId, source.messageId])}`;
-      const dashboard = buildFeishuDashboard(app, webBase);
+      const dashboard = buildFeishuDashboard(app, webBase, { navigation: navigation(bot, paired, eventKey) });
       const entry = await put(bot, { direction: 'outbox', eventKey, title: '工作台', text: dashboard.text,
         target: paired.chatId, sourceMessageId: source.messageId, requiresConfirmation: false }, bot.scope,
       { dashboard: { card: dashboard.card, owner: paired } });
@@ -400,6 +429,9 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!bot.appSecret) { report(id, noDelivery('缺少机器人 appSecret')); return; }
       if (!active(id, epoch, bot.revision)) return;
       const adapter = factory({ appId: bot.appId, appSecret: bot.appSecret, groupMessages: Boolean(bot.groupChats?.length), ...(bot.profile ? { profile: bot.profile } : {}),
+        renderMessage: (text, context) => buildFeishuMessageCard(text, { title: bot.name, webBase,
+          route: 'projectId' in bot.scope && bot.scope.projectId ? `projects/${encodeURIComponent(bot.scope.projectId)}/workspace` : 'chat', ...context?.presentation }),
+        onCardAction: input => cardAction(bot, epoch, input),
         onMessage: (text, source) => track(id, receive(bot, epoch, text, source)),
         onInbox: things => track(id, ingest(bot, epoch, things)),
       });
@@ -465,8 +497,13 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         || dashboard.owner.chatId !== target || owner(bot)?.chatId !== target || owner(bot)?.senderId !== dashboard.owner.senderId)) {
         throw noDelivery('工作台卡片缺少有效的配对记录');
       }
-      const context = dashboard ? { card: dashboard.card } : stamp?.platformReplyTo || stamp?.threadId
-        ? { replyTo: stamp.platformReplyTo, threadId: stamp.threadId } : undefined;
+      const context: FeishuSendContext = dashboard ? { card: dashboard.card } : stamp?.platformReplyTo || stamp?.threadId
+        ? { ...(stamp.platformReplyTo ? { replyTo: stamp.platformReplyTo } : {}), ...(stamp.threadId ? { threadId: stamp.threadId } : {}) } : {
+        ...(stamp?.platformReplyTo ? { replyTo: stamp.platformReplyTo } : {}), ...(stamp?.threadId ? { threadId: stamp.threadId } : {}),
+        presentation: { title: entry.title, kind: /^工作台[^\n]*简报\n/.test(body) || key.includes('brief') ? 'brief' : key.includes('result') ? 'result' : entry.replyTo ? 'reply' : 'notice',
+          route: key.includes('result') ? `projects/${encodeURIComponent('projectId' in bot.scope && bot.scope.projectId || 'all')}/runs`
+            : 'projectId' in bot.scope && bot.scope.projectId ? `projects/${encodeURIComponent(bot.scope.projectId)}/workspace` : bot.scope.kind === 'task' ? 'projects/all/todos' : 'chat' },
+      };
       try { await adapter.send(target, body, context); }
       catch (error) { throw Object.assign(new Error(redact(error)), { delivery: (error as { delivery?: string })?.delivery === 'no' ? 'no' : 'unknown' }); }
     };
