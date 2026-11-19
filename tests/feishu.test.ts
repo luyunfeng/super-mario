@@ -623,9 +623,9 @@ test('configured message renderer sends cards once, retains reply thread, and fa
 });
 
 test('real SDK card callback returns toast and replacement card without waiting for model queue; old generations do nothing', async t=>{
- let calls=0;const {integration,socket}=setup({onCardAction:input=>{calls++;assert.equal(input.operatorId,'ou_owner');assert.equal(input.chatId,'oc_owner');return{toast:{type:'success',content:'已刷新'},card:{type:'raw',data:{elements:[]}}};}});
+ let calls=0;const {integration,socket}=setup({onCardAction:input=>{calls++;assert.deepEqual(input.formValue,{prompt:'验收'});assert.equal(input.operatorId,'ou_owner');assert.equal(input.chatId,'oc_owner');return{toast:{type:'success',content:'已刷新'},card:{type:'raw',data:{elements:[]}}};}});
  t.after(()=>integration.close());await integration.start();const dispatcher=socket.dispatcher;
- const event={schema:'2.0',header:{event_id:'card-event',event_type:'card.action.trigger'},event:{operator:{open_id:'ou_owner'},context:{open_chat_id:'oc_owner',open_message_id:'om_card'},action:{value:{kind:'workbench.navigate'}}}};
+ const event={schema:'2.0',header:{event_id:'card-event',event_type:'card.action.trigger'},event:{operator:{open_id:'ou_owner'},context:{open_chat_id:'oc_owner',open_message_id:'om_card'},action:{value:{kind:'workbench.navigate'},form_value:{prompt:'验收'}}}};
  const result=await dispatcher.invoke(event,{needCheck:false}) as any;
  assert.equal(result.toast.content,'已刷新');assert.equal(result.card.type,'raw');assert.equal(calls,1);
  await integration.close();const stale=await dispatcher.invoke(event,{needCheck:false}) as any;

@@ -1,4 +1,4 @@
-import { sessionCard, sessionCardSnapshot, type SessionList, type SessionCardSnapshot } from './feishu-session-card.ts';
+import { resumeForm, sessionCard, sessionCardSnapshot, type SessionList, type SessionCardSnapshot } from './feishu-session-card.ts';
 import { createHash, randomInt } from 'node:crypto';
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
 import { chooseCommandTarget, createCommandMentionEvidence, type CommandCandidate, type CommandClassifier, type CommandIdentity, type CommandRoute, type CommandTarget } from './feishu-command-routing.ts';
@@ -27,7 +27,7 @@ export interface FeishuBotsApp {
     process(id: string, version: number): unknown | Promise<unknown>;
     list(): MailboxEntry[];
   };
-  agentSessions?: { discover(input: Record<string, never>): Promise<SessionList> };
+  agentSessions?: { discover(input: Record<string, never>): Promise<SessionList>; proposeResume?(input: Record<string, unknown>): Promise<{id: string; status: string}> };
   projectWorkspace?: { post(id: string, text: string): Promise<Message> };
   postScoped(text: string, scope: BotScope, botId: string): Promise<Message>;
   /** Host injects readOnly result context; it must never dispatch a new request. */
@@ -141,6 +141,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       { id, botId: bot.id, appId: bot.appId, revision: bot.revision, owner: paired, expiresAt: Date.now() + 86400000 });
     return id;
   }
+  const resumeJobs = new Set<string>();
   const sessionReads = new Map<string,Promise<void>>();
   function showSessionList(bot: FeishuBotSettings, epoch:number, paired:Owner, messageId:string): Promise<void> {
     const jobKey = JSON.stringify([bot.id,bot.revision,messageId]);
@@ -170,7 +171,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   function cardAction(bot: FeishuBotSettings, epoch: number, input: FeishuCardAction): Record<string, unknown> {
     const fail = { toast: { type: 'info', content: '卡片已过期或配对已改变，请在主人私聊重新发送「工作台」' } };
     const value = input.value;
-    if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || !['workbench.navigate','workbench.chat','workbench.sessions','workbench.readSessions'].includes(String(value.kind))
+    if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || !['workbench.navigate','workbench.chat','workbench.sessions','workbench.readSessions','workbench.resumeForm','workbench.resumeSubmit'].includes(String(value.kind))
       || typeof value.navigation !== 'string'
       || !input.messageId) return fail;
     const cap = app.store.get<CardNavigation>('feishu.card.navigation', value.navigation), paired = owner(bot);
@@ -181,6 +182,42 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!app.agentSessions) return fail;
       void track(bot.id,showSessionList(bot,epoch,paired,input.messageId)).catch(error=>report(bot.id,error));
       return {toast:{type:'info',content:'正在读取会话，结果会发到当前私聊'}};
+    }
+    if (value.kind === 'workbench.resumeForm' || value.kind === 'workbench.resumeSubmit') {
+      const index = value.index;
+      if (typeof index !== 'number' || !Number.isSafeInteger(index) || index < 0) return fail;
+      const row = cap.sessionSnapshot?.rows[index];
+      const sessions = app.agentSessions;
+      if (!row?.machineId || !row.resumable || !sessions?.proposeResume) return fail;
+      if (value.kind === 'workbench.resumeForm') return {card:{type:'raw',data:resumeForm(row,value.navigation,index)}};
+      const fields = input.formValue ?? {};
+      const read = (name: string) => typeof fields[name] === 'string' ? fields[name].trim() : '';
+      const prompt = read('prompt'), doneWhen = read('doneWhen'), minutes = Number(read('minutes'));
+      if (!prompt || !doneWhen || prompt.length > 4000 || doneWhen.length > 4000 ||
+        !Number.isSafeInteger(minutes) || minutes <= 0 || minutes > 10080 || read('stopped') !== '已停止')
+        return {toast:{type:'error',content:'请填写目标和验收条件（各最多 4000 字）、1～10080 的整数分钟，并输入「已停止」。'}};
+      const key = 'feishu-resume-' + digest([value.navigation,index]);
+      const submit = async () => {
+        let text: string;
+        try {
+          const approval = await sessions.proposeResume!({machineId:row.machineId,executorId:row.agent,
+            nativeSessionId:row.id,cwd:row.cwd,prompt,doneWhen,expectMinutes:minutes,key});
+          text = '恢复申请 ' + approval.id + (approval.status === 'pending' ? ' 已提交，请到审批中心核对目标并批准。' : ' 当前状态为 ' + approval.status);
+        } catch (error) {
+          text = '恢复申请未确认：' + redact(error);
+        }
+        if (!active(bot.id,epoch,bot.revision) || owner(bot)?.senderId !== paired.senderId || owner(bot)?.chatId !== paired.chatId) return;
+        const entry = await put(bot,{direction:'outbox',eventKey:'feishu-dashboard:resume:'+digest([key,text]),
+          title:'恢复申请',text,target:paired.chatId,requiresConfirmation:false},bot.scope,
+          {dashboard:{owner:paired,card:buildFeishuMessageCard(text,{title:'恢复申请',webBase,navigation:value.navigation as string})!}});
+        if (entry.status === 'ready') await app.mailboxes.process(entry.id,entry.version);
+      };
+      const jobKey = digest([key,prompt,doneWhen,minutes]);
+      if (!resumeJobs.has(jobKey)) {
+        resumeJobs.add(jobKey);
+        void track(bot.id,submit().finally(()=>resumeJobs.delete(jobKey))).catch(error=>report(bot.id,error));
+      }
+      return {toast:{type:'info',content:'正在核验会话，申请结果会发到当前私聊'}};
     }
     if (value.kind === 'workbench.sessions') {
       if (!cap.sessionSnapshot || !Number.isSafeInteger(value.page) || (value.page as number) < 0) return fail;

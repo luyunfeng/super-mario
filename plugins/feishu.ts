@@ -41,7 +41,7 @@ export function preparePersonalCheckpoint(binding: PersonalCheckpoint['binding']
   return checkpoint;
 }
 export interface FeishuSendContext { mention?: { openId: string; name: string }; card?: Record<string, unknown>; replyTo?: string; threadId?: string; onSent?: (messageId: string) => void; presentation?: { navigation?: string; title?: string; kind?: 'reply' | 'result' | 'brief' | 'notice'; route?: string } }
-export interface FeishuCardAction { operatorId: string; chatId: string; messageId: string; value: Record<string, unknown> }
+export interface FeishuCardAction { formValue?: Record<string, unknown>; operatorId: string; chatId: string; messageId: string; value: Record<string, unknown> }
 export interface PersonalChatDetail { mode?: 'p2p' | 'group'; userCount?: number }
 export interface FeishuOptions {
   personalChatDetail?: (chatId: string) => Promise<PersonalChatDetail>;
@@ -684,7 +684,8 @@ export function createFeishuIntegration(options: FeishuOptions) {
           if (!running || epoch !== generation || !options.onCardAction) return { toast: { type: 'info', content: '卡片入口已失效，请重新发送「工作台」' } };
           try {
             return options.onCardAction({ operatorId: string(operator.open_id), chatId: string(context.open_chat_id),
-              messageId: string(context.open_message_id), value: object(object(data.action).value) });
+              messageId: string(context.open_message_id), value: object(object(data.action).value),
+              ...(object(data.action).form_value ? { formValue: object(object(data.action).form_value) } : {}) });
           } catch { return { toast: { type: 'error', content: '卡片暂时不可用，请重新发送「工作台」' } }; }
         },
       });

@@ -816,23 +816,35 @@ test('主人选项目、切回主 Agent 后，引用原卡仍进入原项目并�
 
 test('CLI 会话卡限定主人，读取与重复回调只发送一张，分页跨重启',async t=>{
   const f=fixture(t), a=await f.add('NativeCard',{kind:'global'});await a.pair();
-  let scans=0;
+  let scans=0; const proposals: Record<string,unknown>[] = [];
   f.app.agentSessions={ async discover() {
     scans++;
-    return {capturedAt:'2026-11-20',machines:[{machineName:'测试电脑',truncated:true,sessions:Array.from({length:7},(_,i)=>({
-      executorId:'codex',nativeSessionId:'native-'+i,cwd:'/tmp/project',resumable:false,
+    return {capturedAt:'2026-11-20',machines:[{machineId:'machine',machineName:'测试电脑',truncated:true,sessions:Array.from({length:7},(_,i)=>({
+      executorId:'codex',nativeSessionId:'native-'+i,cwd:'/tmp/project',resumable:i===0,
     }))}]};
-  }};
+  }, async proposeResume(input) { proposals.push(input); return {id:"approval-fixture",status:"pending"}; }};
   await a.instance.options.onMessage('工作台',source('dashboard'));
   const buttons=(card:any)=>card.elements.flatMap((row:any)=>row.actions??[]);
   const value=buttons(a.instance.contexts.at(-1)?.card).find((b:any)=>b.value?.kind==='workbench.readSessions').value;
-  const click=(value:Record<string,unknown>,id='human')=>f.instances.at(-1)!.options.onCardAction!({operatorId:id,chatId:'owner',messageId:'source-card',value}) as any;
+  const click=(value:Record<string,unknown>,id='human',formValue?:Record<string,unknown>)=>f.instances.at(-1)!.options.onCardAction!({operatorId:id,chatId:'owner',messageId:'source-card',value,formValue}) as any;
   click(value,'other');assert.equal(scans,0);
   click(value);click(value);
   for(let n=0;n<25 && !a.instance.sent.some(s=>s[1].includes('本次发现'));n++)await tick();
   assert.equal(scans,1);
   const card=a.instance.contexts.at(-1)!.card;
   assert.match(JSON.stringify(card),/native-0/);assert.doesNotMatch(JSON.stringify(card),/native-6/);
+  const open=buttons(card).find((b:any)=>b.text.content==='申请恢复').value;
+  assert.equal(click(open,'other').card,undefined);
+  const form=click(open).card.data.body.elements.find((el:any)=>el.tag==='form');
+  const submit=form.elements.find((el:any)=>el.form_action_type==='submit').behaviors[0].value;
+  assert.equal(click(submit).toast.type,'error');
+  const fields={prompt:'继续检查',doneWhen:'所有测试通过',minutes:'10',stopped:'已停止',machineId:'forged'};
+  click(submit,'other',fields);assert.equal(proposals.length,0);
+  click(submit,'human',fields);click(submit,'human',fields);
+  await tick();
+  assert.equal(proposals.length,1); assert.equal(proposals[0].machineId,'machine');
+  assert.equal(proposals[0].nativeSessionId,'native-0');
+  assert.match(a.instance.sent.at(-1)![1],/approval-fixture.*已提交/);
   const next=buttons(card).find((b:any)=>b.text.content==='下一页').value;
   await f.restart();
   assert.match(JSON.stringify(click(next).card),/native-6/);
