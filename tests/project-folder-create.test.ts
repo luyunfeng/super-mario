@@ -27,7 +27,7 @@ test('HTTP creates one new directory on the selected node without overwriting or
   const attempts: string[] = [];
   const disconnected = createProjectFolders({
     list: () => server.machines.list(),
-    async call(_machine, method) {
+    async call(_machine: string, method: string) {
       attempts.push(method);
       throw Object.assign(new Error('connection lost'), { delivery: 'unknown' });
     },
