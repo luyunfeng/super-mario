@@ -3,6 +3,7 @@ import { createCliSessionDiscovery } from '../../../plugins/cli-session-discover
 import { createExecutionServices } from '../../../plugins/executors.ts';
 import { createProjectDiscovery } from '../../../plugins/project-discovery.ts';
 import { createTerminalHost } from '../../../plugins/terminal-host.ts';
+import { createLiveTerminalServices } from '../../../plugins/live-terminals.ts';
 import { createAgentArtifactLoader } from './agent-artifacts.ts';
 import type { startAgentNode } from './index.ts';
 import type { ExecutorInfo } from '../../../packages/protocol/src/index.ts';
@@ -90,9 +91,11 @@ export async function loadDefaultNodePlugins(options: DefaultNodePluginOptions):
   const artifacts = createAgentArtifactLoader({ dataDir });
   const host = createTerminalHost({ command: terminalCommand });
   const services = createExecutionServices({ host, dataDir, machineId, agentInstanceId, launchers, validateResume: cliSessions.validateResume });
+  const live = createLiveTerminalServices({ command: terminalCommand });
   const executors = await services.describe(machineId);
 
   return composeNodePlugins([
+    { id: 'live-terminals', handlers: live.handlers, onDisconnect: live.disconnect, close: live.close },
     {
       id: 'executors',
       handlers: services.handlers,

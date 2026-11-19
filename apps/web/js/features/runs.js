@@ -8,12 +8,14 @@ import { confirmDialog, openDrawer, toast } from '../ui/overlay.js';
 import { systemText } from '../copy/terms.js';
 
 import { openTaskClosure, refreshTaskClosure } from './task-closure.js';
+import { createLiveTerminals } from './live-terminals.js';
 
 const PLAN_STATUS = { pending: ['待确认', 'warn'], running: ['启动中', 'info'], started: ['已启动', 'ok'], rejected: ['已拒绝', ''], partial: ['部分启动', 'warn'], unknown: ['结果未知', 'danger'] };
 const PHASE_LABELS = { starting: '启动', thinking: '思考', tool: '调用工具', responding: '生成回复', waiting: '等待' };
 const FILTERS = [['all', '全部'], ['active', '执行中'], ['problem', '失败 / 未知'], ['ended', '已结束']];
 
 export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }) {
+  const live = createLiveTerminals({ api, store, router });
   let projectId = 'all';
   let filter = 'all';
   let runId = '';
@@ -91,7 +93,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
   const listView = h('div', { class: 'stack stack--lg' },
     h('div', { class: 'row row--between row--wrap' }, seg.el,
       Button({ label: '发起执行', icon: 'plus', kind: 'primary', onClick: () => openLaunch() })),
-    plansBox, list);
+    live.el, plansBox, list);
 
   function runRow(run) {
     const status = runStatus[run.status] ?? { text: run.status, tone: '' };
@@ -109,7 +111,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       || (filter === 'problem' && isRunProblem(run)) || (filter === 'ended' && !isRunActive(run) && !isRunProblem(run)))
       .sort((a, b) => Number(isRunProblem(b)) - Number(isRunProblem(a)) || b.createdAt.localeCompare(a.createdAt));
     if (!rows.length) {
-      replace(list, Empty({ title: filter === 'all' ? '还没有执行记录' : '没有符合条件的执行', text: filter === 'all' ? 'Agent 派出的任务会记录在这里，也可以自己发起一个。' : undefined }));
+      replace(list, Empty({ title: filter === 'all' ? '还没有工作台派发记录' : '没有符合条件的执行', text: filter === 'all' ? '独立启动的 CLI 在上方“项目现场终端”中查看。工作台派发或手动发起的任务会记录在这里。' : undefined }));
       list._keyed = undefined;
       return;
     }
@@ -249,8 +251,8 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
 
   return {
     el,
-    show(id, nextRunId = '') { plansSignature = ''; projectId = id; if (nextRunId !== runId) { detailTab = 'timeline'; observationsSeq++; observationsSignature = ''; observations = null; observationsError = ''; } runId = nextRunId; apply(); },
-    update() { refreshTaskClosure(api); apply(); },
+    show(id, nextRunId = '') { plansSignature = ''; projectId = id; live.show(id); if (nextRunId !== runId) { detailTab = 'timeline'; observationsSeq++; observationsSignature = ''; observations = null; observationsError = ''; } runId = nextRunId; apply(); },
+    update() { live.update(); refreshTaskClosure(api); apply(); },
     launch: openLaunch,
     count(snapshot, id) {
       const runs = (snapshot.runs ?? []).filter(run => id === 'all' || run.projectId === id);
