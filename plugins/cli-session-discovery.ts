@@ -1,4 +1,5 @@
 import { summarizeNativeUsage } from './native-session-usage.ts';
+import { readNativeTranscript, transcriptRange } from './native-session-transcript.ts';
 import { constants } from 'node:fs';
 import { lstat, open, opendir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -269,6 +270,20 @@ export function createCliSessionDiscovery(options: Options = {}) {
     return visibleParents([session])[0];
   }
   const handlers = {
+    'agents.transcript': async (params: unknown) => {
+      only(params, ['executorId', 'nativeSessionId', 'cwd', 'offset', 'snapshot']);
+      const target = params as Selection;
+      if (!['codex', 'claude-code'].includes(target.executorId) || !validId(target.nativeSessionId)) throw new Error('无效会话');
+      const range = transcriptRange(params.offset, params.snapshot);
+      const cwd = await realpath(absolute(target.cwd));
+      if (!await projects.nativeDirectoryFilter(() => {})(cwd)) throw new Error('目录不在会话读取范围');
+      const { result, logs, found, conflicts } = await scan(target);
+      const key = `${target.executorId}:${target.nativeSessionId}`;
+      const [log] = logs.values();
+      // An incomplete scan cannot prove uniqueness or exclude a conflicting header.
+      if (result.truncated || !log || logs.size !== 1 || conflicts.has(key) || found.get(key)?.cwd !== cwd) throw new Error('未找到唯一匹配的完整会话日志');
+      return readNativeTranscript(log, range, noLinks);
+    },
     'agents.usage': async (params: unknown) => {
       only(params, ['executorId', 'nativeSessionId', 'cwd']);
       const target = params as Selection;
