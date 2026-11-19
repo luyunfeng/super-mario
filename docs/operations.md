@@ -239,7 +239,7 @@ npx playwright install chromium
 npm run test:web
 ```
 
-已有 Chromium 时可设置 `PLAYWRIGHT_CHROMIUM_EXECUTABLE=/path/to/chrome`。浏览器用例覆盖七入口、作用标签、窄屏、断线恢复、记忆、待办、渠道、审批、自动跟进和终端重连；隔离用例使用本地假通道。
+已有 Chromium 时可设置 `PLAYWRIGHT_CHROMIUM_EXECUTABLE=/path/to/chrome`。浏览器用例覆盖八入口、作用标签、窄屏、断线恢复、记忆、待办、渠道、审批、自动跟进和终端重连；隔离用例使用本地假通道。
 
 显式验证真实外部 Codex：`node scripts/verify-codex.mjs --codex-main`。需要已登录的 Codex 和正在运行的终端宿主，任务仅写新建的临时目录，输出证据路径；`--codex-main` 使用真实 pi 主 Agent、真实 Codex 模型、独立执行节点和真实外部 CLI，并验证后台模型复核。不带该参数时，主 Agent 为演示模式。可选 `--with-main-agent` 另测真实 pi 模型，测试会临时复制当前未过期的 Codex 登录且不刷新原凭证，结束删除；环境不支持该认证或网络时会如实失败。
 
@@ -340,3 +340,5 @@ Agent→执行者与电脑→电脑详情，点击“检查安装与登录”后
 当前飞书CLI的话题格式可能只保留thread而缺少直接parent；这种消息不会自动停催。消息编辑、删除或缺少身份类型也不当作新回复。采集窗口可能不完整，未找到匹配不表示对方没有回复。
 
 其他可信CLI/Skill连接器可在现有 `core.inbox.ingest` 批次中附加可选 `evidence`（SDK的`CollectedReplyEvidence[]`）；来源强制绑定插件和其sourceId命名空间，不能冒充飞书或其他账号。只需已有采集服务权限，不另建插件平台。普通命令收件箱的旧`items`格式保持兼容；具体司内命令仍需适配真实字段，未宣称One Context已实接。
+
+打开工作台默认进入首页。「需要我」集中显示待决定和明确找你的消息；已转待办的来信由待办列表接手。「重要紧急」收录逾期或未来 24 小时到期的未完成待办，其余进入「重要不急」。顶部项目选择对首页各区生效。简报使用最近 24 小时的真实工作记录；项目总结单列未归项目。群聊动态只收录人数已核实且不超过 50 人的飞书群，按群显示条数与最近消息。

@@ -323,8 +323,8 @@ export async function startServer(config: AppConfig, dependencies: { botFactory?
           const input = await body(req);
           return json(res, 200, approval[2] === 'approve' ? await app.approvals.approve(approval[1], input.version as number) : app.approvals.reject(approval[1], input.version as number));
         }
-        if (path === '/api/v1/brief' && method === 'GET') {
-          app.supervision.tick();
+        if ((path === '/api/v1/brief' || path === '/api/v1/brief/current') && method === 'GET') {
+          if (path === '/api/v1/brief') app.supervision.tick();
           const brief = app.supervision.brief();
           if (!brief) throw new InputError('请启用每日简报插件', 503);
           return json(res, 200, brief);

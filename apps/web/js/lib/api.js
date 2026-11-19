@@ -39,13 +39,13 @@ function consumeSharedToken() {
   const fragment = url.hash.slice(1);
   const tokenOnly = fragment.startsWith('token=');
   const question = fragment.indexOf('?');
-  const route = tokenOnly ? 'chat' : question < 0 ? fragment : fragment.slice(0, question);
+  const route = tokenOnly ? 'home' : question < 0 ? fragment : fragment.slice(0, question);
   const params = new URLSearchParams(tokenOnly ? fragment : question < 0 ? '' : fragment.slice(question + 1));
   const shared = params.get('token') ?? url.searchParams.get('token');
   if (shared === null) return null;
   params.delete('token');
   url.searchParams.delete('token');
-  url.hash = `${route || 'chat'}${params.size ? `?${params}` : ''}`;
+  url.hash = `${route || 'home'}${params.size ? `?${params}` : ''}`;
   history.replaceState(history.state, '', url.pathname + url.search + url.hash);
   return shared.trim();
 }

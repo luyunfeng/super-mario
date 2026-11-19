@@ -6,8 +6,8 @@ import { hintCopy } from './ui/hint.js';
 import { alertLabel } from './lib/alerts.js';
 import { PAGES } from './lib/router.js';
 
-export const PAGE_NAMES = { chat: '对话', inbox: '收件箱', outbox: '发件箱', agent: 'Agent', projects: '项目', memory: '记忆', channels: '渠道' };
-const NAV_ICONS = { chat: 'chat', inbox: 'inbox', outbox: 'outbox', agent: 'agent', projects: 'projects', memory: 'memory', channels: 'channels' };
+export const PAGE_NAMES = { home: '首页', chat: '对话', inbox: '收件箱', outbox: '发件箱', agent: 'Agent', projects: '项目', memory: '记忆', channels: '渠道' };
+const NAV_ICONS = { home: 'home', chat: 'chat', inbox: 'inbox', outbox: 'outbox', agent: 'agent', projects: 'projects', memory: 'memory', channels: 'channels' };
 
 export function createShell({ api, store, router, scope }) {
   // —— 导航 ——
@@ -22,7 +22,7 @@ export function createShell({ api, store, router, scope }) {
     return el;
   }));
   const sidebar = h('aside', { class: 'sidebar' },
-    h('a', { class: 'brand', href: router.href('chat'), 'aria-label': 'Super Mario，回到对话' },
+    h('a', { class: 'brand', href: router.href('home'), 'aria-label': 'Super Mario，回到首页' },
       h('span', { class: 'brand__logo', 'aria-hidden': 'true' }, 'M'),
       h('span', { class: 'brand__name' }, 'Super Mario', h('span', { class: 'brand__sub' }, '个人 AI 工作台'))),
     nav);

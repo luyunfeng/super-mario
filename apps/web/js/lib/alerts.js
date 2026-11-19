@@ -1,6 +1,8 @@
 // 提醒点：只表示“需要你行动”。纯函数，无副作用，导航、窄屏底栏和浏览器标题共用同一份结果。
 // 返回 { chat, agent, projects, memory, channels }，每项是 null 或 { count?, dot? }。
 
+import { personalGroupSize } from './group-size.js';
+
 export function computeAlerts(snapshot, attention, local = {}) {
   if (!snapshot) return { chat: null, inbox: null, outbox: null, agent: null, projects: null, memory: null, channels: null };
   const problems = snapshot.problems ?? [];
@@ -9,7 +11,7 @@ export function computeAlerts(snapshot, attention, local = {}) {
   const now = local.now ?? Date.now();
 
   const waiting = attention.length;
-  const inboxWaiting = (snapshot.inbox ?? []).filter(item => item.tier === 'action' && !item.todoId && !item.archivedAt).length;
+  const inboxWaiting = (snapshot.inbox ?? []).filter(item => item.tier === 'action' && !(personalGroupSize(item.origin) > 50) && !item.todoId && !item.archivedAt).length;
   const overdue = (snapshot.todos ?? []).some(todo => !todo.completedAt && todo.dueAt && new Date(todo.dueAt).getTime() < now);
   const failedRun = (snapshot.runs ?? []).some(run => (run.status === 'failed' || run.status === 'unknown') && !seen.has(run.id));
 

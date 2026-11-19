@@ -15,6 +15,7 @@ import { installShortcuts } from './features/shortcuts.js';
 import { openQuickTodo } from './features/quick-todo.js';
 import { playSplash, stopSplash } from './features/splash.js';
 import { createConsole } from './legacy/terminal.js';
+import { createHomePage } from './pages/home.js';
 import { createChatPage } from './pages/chat.js';
 import { createMailboxPage } from './pages/mailbox.js';
 import { createAgentPage } from './pages/agent.js';
@@ -47,6 +48,7 @@ const ctx = {
 };
 
 const pages = {
+  home: createHomePage(ctx),
   chat: createChatPage(ctx),
   inbox: createMailboxPage({ ...ctx, direction: 'inbox' }),
   outbox: createMailboxPage({ ...ctx, direction: 'outbox' }),

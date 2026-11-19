@@ -1,4 +1,5 @@
 import { h, replace, keyedList } from '../lib/dom.js';
+import { personalGroupSize } from '../lib/group-size.js';
 import { timeAgo, formatDate } from '../lib/format.js';
 import { Banner, Button, Card, Empty, Input, Pill, Select } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
@@ -31,7 +32,7 @@ export function createMailboxPage({ api, store, router, direction }) {
   const projectFilter = Select({ 'aria-label': '收件项目', value: 'all', options: [['all', '全部项目']] });
   const query = Input({ type: 'search', placeholder: '搜索消息内容、来源或发送目标', 'aria-label': `搜索${name}` });
   const filter = Select({ 'aria-label': `${name}状态`, value: 'all', options: incoming
-    ? [['all', '全部消息'], ['action', '需要处理'], ['fyi', '知会'], ['noise', '低优先级'], ['archived', '已归档'], ['todo', '已转待办']]
+    ? [['all', '全部消息'], ['action', '需要处理'], ['fyi', '知会'], ['noise', '低优先级'], ['archived', '已归档'], ['todo', '已转待办'], ['large-group', '已忽略的大群']]
     : [['all', '全部状态'], ['pending', '待确认'], ['sending', '等待与发送中'], ['sent', '已发送'], ['failed', '失败或结果未知'], ['closed', '已取消、拒绝或过期']] });
   const summary = h('p', { class: 'small muted', role: 'status' });
   const notice = h('div');
@@ -82,6 +83,7 @@ export function createMailboxPage({ api, store, router, direction }) {
   function stage(item) {
     const raw = item.raw;
     if (raw.todoId || raw.archivedAt || ['completed', 'rejected', 'archived'].includes(raw.status)) return 'done';
+    if (item.kind === 'personal' && personalGroupSize(raw.origin) > 50) return 'info';
     if(handlingState(item))return handlingState(item).stage;
     if (item.kind === 'mailbox') return raw.status === 'pending' ? 'human' : raw.status === 'ready' ? 'ai' : raw.status === 'processing' ? 'processing' : 'human';
     if (originKind(item) === 'direct' || (originKind(item) === 'group' && raw.origin?.mentionedMe === true) || raw.tier === 'action') return 'human';
@@ -102,6 +104,8 @@ export function createMailboxPage({ api, store, router, direction }) {
       if (omit !== 'project' && projectFilter.value !== 'all' && (projectId(item) || 'none') !== projectFilter.value) return false;
     }
     const value = filter.value;
+    if (incoming && item.kind === 'personal' && personalGroupSize(raw.origin) > 50 && !raw.todoId && !raw.archivedAt) return value === 'large-group';
+    if (value === 'large-group') return item.kind === 'personal' && personalGroupSize(raw.origin) > 50;
     if (value === 'all') return true;
     if (incoming) {
       if (value === 'archived') return Boolean(raw.archivedAt) || raw.status === 'archived';

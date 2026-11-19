@@ -35,14 +35,14 @@ async function withApp(run: (ctx: { server: Server; browser: Browser; open: (has
   finally { await browser.close(); await server.close(); await rm(dir, { recursive: true, force: true }); }
 }
 
-test('外壳：七个入口都有作用文字，没有“刷新”按钮，各页面零报错', { timeout: 60000 }, async () => {
+test('外壳：八个入口都有作用文字，没有“刷新”按钮，各页面零报错', { timeout: 60000 }, async () => {
   await withApp(async ({ open }) => {
     const { page, errors } = await open('#chat');
     const items = page.locator('.nav__item');
-    await expect(items).toHaveCount(7);
-    assert.deepEqual(await page.locator('.nav__name').allInnerTexts(), ['对话', '收件箱', '发件箱', 'Agent', '项目', '记忆', '渠道']);
+    await expect(items).toHaveCount(8);
+    assert.deepEqual(await page.locator('.nav__name').allInnerTexts(), ['首页', '对话', '收件箱', '发件箱', 'Agent', '项目', '记忆', '渠道']);
     for (const desc of await page.locator('.nav__desc').allInnerTexts()) { const han = (desc.match(/\p{Script=Han}/gu) ?? []).length; assert.ok(han > 0 && han <= 10, `${desc}（${han} 个汉字）`); }
-    for (const hash of ['chat', 'inbox', 'outbox', 'agent', 'projects', 'memory', 'channels']) {
+    for (const hash of ['home', 'chat', 'inbox', 'outbox', 'agent', 'projects', 'memory', 'channels']) {
       await page.goto(page.url().split('#')[0] + '#' + hash);
       await expect(page.locator(`#${hash}`)).toBeVisible();
       await expect(page.locator(`#${hash} .hint__btn`).first()).toBeVisible();
@@ -274,7 +274,7 @@ test('开屏每次加载播放，站内导航沿用 loop，支持跳过和减少
 test('分享链接带令牌：自动连接、从地址栏抹掉、保留页面和其他参数', { timeout: 40000 }, async () => {
   const token = 'offline-link-credential';
   await withApp(async ({ server, browser }) => {
-    for (const [suffix, route] of [[`/#agent?token=${encodeURIComponent(token)}`, 'agent'], [`/?token=${encodeURIComponent(token)}&keep=1#memory`, 'memory'], [`/#token=${encodeURIComponent(token)}`, 'chat']] as const) {
+    for (const [suffix, route] of [[`/#agent?token=${encodeURIComponent(token)}`, 'agent'], [`/?token=${encodeURIComponent(token)}&keep=1#memory`, 'memory'], [`/#token=${encodeURIComponent(token)}`, 'home']] as const) {
       const context = await browser.newContext();
       const page = await context.newPage();
       await page.addInitScript(() => { sessionStorage.setItem('super-mario-token', 'stale-credential'); });
@@ -313,7 +313,7 @@ test('令牌错误：不进入工作台，可在连接面板更正', { timeout: 
     await page.locator('#token').fill('offline-valid');
     await page.locator('#auth-form').getByRole('button', { name: '连接工作台' }).click();
     await expect(page.locator('#view.is-loading')).toHaveCount(0);
-    await expect(page.locator('#chat')).toBeVisible();
+    await expect(page.locator('#home')).toBeVisible();
   }, 'offline-valid');
 });
 
@@ -412,5 +412,47 @@ test('刷新主机器人入口保留已有机器人的配置进度', async () =>
     await expect(wizard.getByRole('button', { name: '已发布，启用连接' })).toBeVisible();
     await expect(wizard.getByRole('button', { name: '绑定', exact: true })).toBeDisabled();
     await expect(wizard.getByRole('button', { name: '生成二维码' })).toHaveCount(0);
+  });
+});
+
+test('首页默认进入，按期限分待办并跟随所选项目', async () => {
+  await withApp(async ({ open, post }) => {
+    const project = await post('/projects', { name: '首页项目' });
+    await post('/todos', { title: '今天核对账单', projectId: project.id, dueAt: new Date(Date.now() + 3600000).toISOString() });
+    await post('/todos', { title: '准备下季度材料', projectId: project.id });
+    await post('/todos', { title: '未归项目的事项' });
+    const { page } = await open('', { width: 390, height: 844 });
+    const home = page.locator('#home');
+    await expect(home).toBeVisible();
+    await expect(home.locator('section.card').filter({ has: page.getByRole('heading', { name: '重要紧急' }) })).toContainText('今天核对账单');
+    await expect(home.locator('section.card').filter({ has: page.getByRole('heading', { name: '重要不急' }) })).toContainText('准备下季度材料');
+    await page.locator('#scope-select').selectOption(project.id);
+    await expect(home).not.toContainText('未归项目的事项');
+    await expect(home.locator('.home-project').filter({ hasText: '首页项目' })).toContainText('未完成待办 2 项');
+    await expect(home).toContainText('执行结束');
+    assert.ok(await home.evaluate(el => el.scrollWidth <= el.clientWidth));
+  });
+});
+
+test('首页群聊动态仅收录人数已核实且不超过 50 人的群', async () => {
+  await withApp(async ({ open }) => {
+    const { page } = await open('#chat');
+    await page.route('**/api/v1/state', async route => {
+      const response = await route.fetch();
+      const state = await response.json();
+      const receivedAt = new Date().toISOString();
+      state.inbox = [50, 51, undefined].map(size => ({
+        id: 'message-' + size, source: 'feishu:personal', title: '测试群-' + size, text: '排查结果已同步', tier: 'fyi', receivedAt,
+        origin: { kind: 'group', connector: '飞书', chatId: 'chat-' + size, personalGroupUserCount: size },
+      }));
+      await route.fulfill({ json: state });
+    });
+    await page.goto(page.url().split('#')[0] + '#home');
+    await page.reload();
+    const home = page.locator('#home');
+    await home.getByText('群聊动态 · 1 个群').click();
+    await expect(home).toContainText('测试群-50');
+    await expect(home).not.toContainText('测试群-51');
+    await expect(home).not.toContainText('测试群-undefined');
   });
 });

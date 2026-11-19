@@ -1,9 +1,9 @@
 // 地址即状态：#页面/子页/…。旧地址只做重定向，不再各占一个页面。
 
-export const PAGES = ['chat', 'inbox', 'outbox', 'agent', 'projects', 'memory', 'channels'];
+export const PAGES = ['home', 'chat', 'inbox', 'outbox', 'agent', 'projects', 'memory', 'channels'];
 
 const ALIASES = {
-  overview: 'chat', interactions: 'chat', approvals: 'chat',
+  overview: 'home', interactions: 'chat', approvals: 'chat',
   todos: 'projects/all/todos', runs: 'projects/all/runs', plans: 'projects/all/runs', terminals: 'projects/all/runs',
   knowledge: 'memory', supervision: 'agent/follow-up', policies: 'agent/rules', settings: 'agent',
 };
@@ -16,8 +16,8 @@ export function parseRoute(hash) {
   let parts = raw.split('/').filter(Boolean).map(decodeURIComponent);
   const alias = ALIASES[parts[0]];
   if (alias) parts = [...alias.split('/'), ...parts.slice(1)];
-  const page = PAGES.includes(parts[0]) ? parts[0] : 'chat';
-  const canonical = PAGES.includes(parts[0]) ? parts : ['chat'];
+  const page = PAGES.includes(parts[0]) ? parts[0] : 'home';
+  const canonical = PAGES.includes(parts[0]) ? parts : ['home'];
   return { page, parts: canonical.slice(1), canonical: `#${canonical.map(encodeURIComponent).join('/')}`, query };
 }
 

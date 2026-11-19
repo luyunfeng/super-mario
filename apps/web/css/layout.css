@@ -22,8 +22,8 @@
 .nav { display: flex; flex-direction: column; gap: 3px; }
 /* 桌面端自然分隔「高频收发对话（前3项）」与「工作台资产与渠道（后4项）」 */
 @media (min-width: 1024px) {
-  .nav__item:nth-child(3) { margin-bottom: 8px; }
-  .nav__item:nth-child(4)::before {
+  .nav__item[data-nav="outbox"] { margin-bottom: 8px; }
+  .nav__item[data-nav="agent"]::before {
     content: ""; position: absolute; top: -5px; left: 8px; right: 8px; height: 1px; background: var(--line); pointer-events: none;
   }
 }
@@ -161,3 +161,8 @@
   .conn__pop { width: min(320px, calc(100vw - 24px)); }
   .topbar__space { display: none; }
 }
+
+.home-priorities { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(230px,100%),1fr)); gap:12px; }
+.home-row { display:block; padding:6px 0; overflow-wrap:anywhere; }
+.home-project { padding:12px 0; border-bottom:1px solid var(--line); }
+.home-project:last-child { border-bottom:0; }

@@ -6,6 +6,7 @@ const circle = (cx, cy, r) => ['circle', { cx, cy, r }];
 const rect = (x, y, width, height, rx) => ['rect', { x, y, width, height, rx }];
 
 const shapes = {
+  home: [p('m3 10 9-7 9 7v10h-6v-6H9v6H3Z')],
   chat: [p('M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z')],
   inbox: [p('M4 4h16l2 10v6H2v-6L4 4Z'), p('M2 14h6l2 3h4l2-3h6')],
   outbox: [p('M4 13v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6'), p('M12 15V3'), p('m7 8 5-5 5 5')],
