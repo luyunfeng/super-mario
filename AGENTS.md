@@ -13,10 +13,12 @@
 - 主要支持 Linux，Node.js 24.9+。安装后用 `super-mario` 启动服务端，同一服务提供 Web。
 - 执行机代理命令为 `super-mario-agent`，主动连接服务端；不要求服务端安装全部外部 CLI。
 - 默认绑定 `127.0.0.1`。访问令牌、监听地址、端口、数据目录都可通过命令参数或环境变量设置。
-- 数据目录默认 `~/.super-mario/`，数据库首次启动自动创建，不依赖外部数据库服务。
+- 正式服务固定使用 `~/.super-mario/`，首次启动自动创建数据库。正式环境只使用 Web 端口 `48080`，执行机代理连接该端口。
 - 开发入口保持简单：`npm install`、`npm run dev`、`npm test`、`npm run typecheck`。
 - 必须提供不依赖 API Key、飞书账号、真实执行机的本地演示与验证路径。演示模式明确标注，不冒充模型或真实 CLI 执行。
-- 开发改动验证通过后主动重启本项目唯一预览实例，复用运行配置中的令牌和数据目录。开发预览启动或重启后，交付带令牌的可点击链接，优先用 `/#chat?token=...` 片段。更新了版本时在链接附上 `?v=<部署提交>`，确保旧页面重新加载。页面自动连接后清理地址栏中的令牌；真实令牌只读仓库外运行配置，不写入代码、文档或提交。
+- 开发调试按需运行 `npm run dev`，默认地址为 `http://localhost:3001`。开发数据保存在 `$XDG_CACHE_HOME/super-mario/dev`，未设置 `XDG_CACHE_HOME` 时使用 `~/.cache/super-mario/dev`。需要一次性环境时可传 `--port 0 --data-dir <临时目录>`。调试结束即退出。日常调试和测试只操作开发实例。
+- 正式发布时，从已通过测试和类型检查的提交运行 `npm run build`。构建成功后，将构建产物放入 `~/.local/share/super-mario/releases/<SHA>/`，把 `~/.local/share/super-mario/current` 符号链接切换到 `releases/<SHA>`，再执行 `systemctl --user restart super-mario.service super-mario-agent.service`。
+- 正式服务端和代理从 `~/.super-mario/runtime.env` 读取同一稳定访问令牌，版本切换和重启沿用该令牌。发布后交付正式 Web 链接，格式为 `/?v=<部署提交>#chat?token=<访问令牌>`。页面自动连接后清理地址栏中的令牌。真实令牌不得写入代码、文档或提交。
 - 用户提供的测试凭证只用于独立测试配置，保存在仓库外。产品默认凭证留空，由使用者自行填写；不在代码、测试、文档或提交中保存真实密钥。
 - 缺少外部配置时页面仍能打开，相关能力显示缺少什么配置；不要用模拟成功掩盖缺失。
 

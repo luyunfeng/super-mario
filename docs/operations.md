@@ -1,29 +1,49 @@
 # 操作手册
 
-## 启动
+## 本地开发
 
-需要 Linux 和 Node.js 24.9+。首次启动自动创建数据库，无需安装数据库服务。
+需要 Linux 和 Node.js 24.9+。在仓库根目录运行：
 
 ```bash
 npm install
-npm start -- --demo
+npm run dev
 ```
 
-默认地址 `http://127.0.0.1:3000`，数据目录 `~/.super-mario/`。演示模式只验证产品流程，不调用模型、飞书或真实 CLI。
+默认打开 `http://localhost:3001`。开发数据保存在 `$XDG_CACHE_HOME/super-mario/dev`，未设置 `XDG_CACHE_HOME` 时使用 `~/.cache/super-mario/dev`。下次启动可继续使用这些数据。
 
-开发时运行 `npm run dev -- --demo`。修改源代码后自动重启；Web 静态文件刷新即可。若已经构建过，开发模式仍读取源码，普通启动优先使用构建产物。
+需要一次性验证时，可用临时目录和系统分配的空闲端口，打开启动日志中的地址。以下示例使用演示模式，无需模型密钥、飞书账号或真实执行机。
+
+```bash
+dev_data_dir=$(mktemp -d) && npm run dev -- --demo --port 0 --data-dir "$dev_data_dir"
+```
+
+开发实例按需启动，调试结束按 Ctrl+C 退出。源码修改会触发开发进程重启，Web 静态文件刷新页面即可。开发模式直接读取源码。
+
+## 正式部署与更新
+
+正式服务固定使用 `~/.super-mario/`，首次启动自动创建数据库。服务端使用唯一的正式 Web 端口 `48080`，浏览器和执行机代理连接同一地址。服务端和代理从 `~/.super-mario/runtime.env` 读取同一稳定的 `SUPER_MARIO_TOKEN`，升级和重启时沿用该值。
+
+1. 确定待发布的提交，在该提交上运行 `npm test` 和 `npm run typecheck`。
+2. 验证通过后，从该提交运行 `npm run build`。将产物放入 `~/.local/share/super-mario/releases/<SHA>/`，其中 `<SHA>` 为已验证的提交 SHA，构建期间正式服务继续运行原版本。
+3. 构建成功后，将符号链接 `~/.local/share/super-mario/current` 切换到 `releases/<SHA>`，再执行：
+
+   ```bash
+   systemctl --user restart super-mario.service super-mario-agent.service
+   systemctl --user is-active super-mario.service super-mario-agent.service
+   ```
+
+4. 确认两个服务均为 `active`，打开原正式 Web 地址，核对执行机已重新上线。分享链接使用 `/?v=<部署提交>#chat?token=<访问令牌>`。
 
 ## 安装命令行
 
 ```bash
 npm run build
 npm install -g .
-super-mario --demo
 ```
 
 也可运行 `npm pack` 生成安装包，再用 `npm install -g ./super-mario-0.1.0.tgz` 安装。打包时自动构建，不需要在目标机器运行 TypeScript 编译器。
 
-用 `super-mario --help` 查看全部参数，按 Ctrl+C 关闭。
+用 `super-mario --help` 查看全部参数。
 
 ## 模型与访问配置
 
@@ -261,7 +281,7 @@ npm run test:web
 - CLI 原生结果：执行机 `task-results/`，包括任务配置与结果；包含工作内容，按私有数据保存。
 - 外部动作：数据库 `effects` 集合；已发送但未确认的动作不会自动重放。
 - pi：`pi/`，独立认证和会话目录，不读取用户项目的插件与指令。
-- 换端口或数据目录可启动独立测试实例。备份时先停止服务，再复制整个数据目录。
+- 启动独立测试实例时，同时使用临时数据目录和空闲端口。备份时先停止服务，再复制整个数据目录。
 - 插件失败可在 Web 查看原因，修正后重新启用；停用不会撤回已发生的外部动作。
 - 中断时未确认的执行记为“结果未知”，不自动重派。执行结束不会自动完成待办。
 

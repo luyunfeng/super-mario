@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test, type TestContext } from 'node:test';
+import { readServerOptions } from '../packages/core/src/config.ts';
 import { startServer } from '../apps/server/src/index.ts';
 import { startAgentNode } from '../apps/agent-node/src/index.ts';
 import type { Approval, AutomationSettings, ExecutionResult, JsonObject, Message, Run, Snapshot, SupervisionSignal, Todo } from '../packages/protocol/src/index.ts';
@@ -181,8 +182,24 @@ test('HTTP custom plugin loads real JS and disabling revokes contributions, even
   assert.equal(f.running.app.store.get('acceptance', 'disposed'), 2);
 });
 
+test('dev server isolates default data and port and honors explicit overrides', () => {
+  const options = (env: NodeJS.ProcessEnv, args: string[] = []) => {
+    const { dataDir, port } = readServerOptions(args, env);
+    return [dataDir, port];
+  };
+  const dev = { SUPER_MARIO_DEV: '1' };
+  const cache = join(tmpdir(), 'cache');
+  const fallback = join(homedir(), '.cache', 'super-mario', 'dev');
+  assert.deepEqual(options({ XDG_CACHE_HOME: cache }), [join(homedir(), '.super-mario'), 3000]);
+  assert.deepEqual(options(dev), [fallback, 3001]);
+  assert.deepEqual(options({ ...dev, XDG_CACHE_HOME: 'relative' }), [fallback, 3001]);
+  assert.deepEqual(options({ ...dev, XDG_CACHE_HOME: cache }), [join(cache, 'super-mario', 'dev'), 3001]);
+  const overrides = { ...dev, SUPER_MARIO_DATA_DIR: join(cache, 'env'), SUPER_MARIO_PORT: '4321' };
+  assert.deepEqual(options(overrides), [overrides.SUPER_MARIO_DATA_DIR, 4321]);
+  assert.deepEqual(options(overrides, ['--data-dir', join(cache, 'cli'), '--port', '0']), [join(cache, 'cli'), 0]);
+});
+
 test('incomplete optional Feishu environment keeps the Web available and reports missing configuration', async () => {
-  const { readServerOptions } = await import('../packages/core/src/config.ts');
   const dataDir = await mkdtemp(join(tmpdir(), 'mario-missing-connector-'));
   const config = readServerOptions(['--demo', '--port', '0', '--data-dir', dataDir], { SUPER_MARIO_FEISHU_ENABLED: '1' });
   const running = await startServer(config);
