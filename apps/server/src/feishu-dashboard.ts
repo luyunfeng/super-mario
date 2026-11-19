@@ -3,7 +3,7 @@ import type { InboxItem, MachineInfo, Project, Run, Todo } from '../../../packag
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
 import { cardButtons, cardDocument, cardPlain, cardSection, cardWebBase } from './feishu-cards.ts';
 
-type DashboardApp = Pick<FeishuBotsApp, 'store' | 'projectWorkspace'> & { attention?: () => AttentionItem[] };
+type DashboardApp = Pick<FeishuBotsApp, 'store' | 'projectWorkspace' | 'agentSessions'> & { attention?: () => AttentionItem[] };
 export type DashboardView = 'home' | 'tasks' | 'inbox' | 'projects';
 const label = (value: string, max = 100) => value.replace(/\s+/g, ' ').trim().slice(0, max);
 
@@ -43,6 +43,7 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
   if (view === 'home') {
     section('等你处理', waiting.length ? '等你拍板 · ' + waiting.length + ' 项\n' + waiting.slice(0, 3).map(a => '• ' + label(a.title)).join('\n') : '当前没有等你拍板的事。');
     if (waiting.length > 3) section('更多待决定', `还有 ${waiting.length - 3} 项，请打开主对话核对。`);
+    if (app.agentSessions && options.navigation) elements.push(...cardButtons([{label:'查看 CLI 会话',value:{kind:'workbench.readSessions',navigation:options.navigation}}]));
     section('此刻', `Agent 执行 · ${working.length} 项进行中 · ${review.length} 项执行结束待验收 · ${issues.length} 项失败或结果未知\n收件箱 · ${action.length} 条需处理 · ${inbox.length - action.length} 条知会\n电脑 · ${machines.filter(m => m.online).length} / ${machines.length} 台在线`);
     if (action.length) section('来信摘要', action.slice(0, 3).map(item => '• ' + label(item.title)).join('\n') + (action.length > 3 ? `\n还有 ${action.length - 3} 条，可在收件箱查看。` : ''));
     for (const run of working.slice(0, 2)) {

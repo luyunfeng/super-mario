@@ -813,3 +813,29 @@ test('主人选项目、切回主 Agent 后，引用原卡仍进入原项目并�
  assert.equal(projectInputs.length,2);
  assert.match(a.instance.sent.at(-1)![1],/重新选择/);
 });
+
+test('CLI 会话卡限定主人，读取与重复回调只发送一张，分页跨重启',async t=>{
+  const f=fixture(t), a=await f.add('NativeCard',{kind:'global'});await a.pair();
+  let scans=0;
+  f.app.agentSessions={ async discover() {
+    scans++;
+    return {capturedAt:'2026-11-20',machines:[{machineName:'测试电脑',truncated:true,sessions:Array.from({length:7},(_,i)=>({
+      executorId:'codex',nativeSessionId:'native-'+i,cwd:'/tmp/project',resumable:false,
+    }))}]};
+  }};
+  await a.instance.options.onMessage('工作台',source('dashboard'));
+  const buttons=(card:any)=>card.elements.flatMap((row:any)=>row.actions??[]);
+  const value=buttons(a.instance.contexts.at(-1)?.card).find((b:any)=>b.value?.kind==='workbench.readSessions').value;
+  const click=(value:Record<string,unknown>,id='human')=>f.instances.at(-1)!.options.onCardAction!({operatorId:id,chatId:'owner',messageId:'source-card',value}) as any;
+  click(value,'other');assert.equal(scans,0);
+  click(value);click(value);
+  for(let n=0;n<25 && !a.instance.sent.some(s=>s[1].includes('本次发现'));n++)await tick();
+  assert.equal(scans,1);
+  const card=a.instance.contexts.at(-1)!.card;
+  assert.match(JSON.stringify(card),/native-0/);assert.doesNotMatch(JSON.stringify(card),/native-6/);
+  const next=buttons(card).find((b:any)=>b.text.content==='下一页').value;
+  await f.restart();
+  assert.match(JSON.stringify(click(next).card),/native-6/);
+  assert.equal(click(next,'other').card,undefined);
+  assert.equal(f.posts.length,0);
+});
