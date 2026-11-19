@@ -153,6 +153,39 @@ test('real Web provider performs QR login, configuration, publish/readback and r
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('console login follows the regional accounts hop and keeps cookies scoped to that domain', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mario-regional-console-')), fake = webFetch();
+  try {
+    const fetcher: typeof fetch = async (address, init) => {
+      const url = String(address);
+      if (url === 'https://open.feishu.cn/app') return Response.redirect('https://accounts.larkoffice.com/login', 302);
+      if (url === 'https://accounts.larkoffice.com/login') {
+        assert.equal(new Headers(init?.headers).get('cookie'), null);
+        return new Response(null, { status: 302, headers: { location: 'https://open.larkoffice.com/app', 'set-cookie': 'regional=id; Domain=.larkoffice.com; Path=/' } });
+      }
+      if (url === 'https://open.larkoffice.com/app') assert.equal(new Headers(init?.headers).get('cookie'), 'regional=id');
+      return fake.fetcher(address, init);
+    };
+    const result = await createFeishuRegistrationProvider({ dataDir: dir, fetch: fetcher }).register({ name: 'Regional', signal: new AbortController().signal, progress() {} });
+    assert.equal(result.verified, true);
+    assert.ok(fake.calls.filter(c => c.url.includes('/developers/')).every(c => new URL(c.url).hostname === 'open.larkoffice.com'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('blocked console redirect reports only the hostname and never reaches application creation', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mario-blocked-console-')), fake = webFetch();
+  try {
+    const fetcher: typeof fetch = (address, init) => String(address) === 'https://open.feishu.cn/app'
+      ? Promise.resolve(Response.redirect('https://other.invalid/login?ticket=sensitive', 302)) : fake.fetcher(address, init);
+    let diagnostic;
+    const provider = createFeishuRegistrationProvider({ dataDir: dir, fetch: fetcher });
+    await assert.rejects(provider.register({ name: 'Blocked', signal: new AbortController().signal, progress() {}, trace(info) { diagnostic = info; } }));
+    assert.deepEqual(diagnostic, { step: 'console-identity', httpStatus: 302, reason: 'redirect-host', redirectHost: 'other.invalid' });
+    assert.equal(fake.calls.some(c => c.url.includes('other.invalid')), false);
+    assert.equal(fake.creates(), 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('scanner ownership is resolved with the newly created app token, not a cross-app open_id', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'mario-registration-owner-')), fake = webFetch({ recognizedOwner: true });
   try {

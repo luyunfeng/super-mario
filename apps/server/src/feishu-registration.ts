@@ -140,7 +140,7 @@ export function createFeishuRegistration(options: FeishuRegistrationOptions) {
       if (latest) job.diagnostic = { ...latest, at: new Date().toISOString() };
       const failure: Partial<Record<FeishuRegistrationStatus, string>> = {
         queued: '未能取得飞书登录二维码，请重新生成。',
-        waiting_for_scan: '扫码登录未完成，请重新生成二维码，并在手机上确认登录。',
+        waiting_for_scan: latest?.step === 'console-identity' ? '扫码已完成，读取飞书开放平台身份失败。请使用下方日志 ID 排查。' : '扫码登录未完成，请重新生成二维码，并在手机上确认登录。',
         creating_app: '飞书应用创建或凭证读取失败，请先到开放平台核对同名应用。',
         configuring: '飞书机器人配置未完成，请核对应用配置。',
         publishing: '飞书应用发布未完成，请核对版本状态。',

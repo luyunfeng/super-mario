@@ -56,6 +56,7 @@ export function createChannelsPage({ api, store, router }) {
             job.diagnostic.httpStatus && ' · HTTP ' + job.diagnostic.httpStatus,
             job.diagnostic.platformCode !== undefined && ' · 飞书业务码 ' + job.diagnostic.platformCode,
             job.diagnostic.reason && ' · ' + job.diagnostic.reason,
+            job.diagnostic.redirectHost && ' · 跳转主机 ' + job.diagnostic.redirectHost,
             job.diagnostic.platformLogId && ' · 飞书日志 ID：' + job.diagnostic.platformLogId)),
       qr, job.status === 'unknown' && Banner({ tone: 'danger', children: '结果未知。请先到飞书后台核对，系统不会自动重复创建。' }),
       job.expiresAt && h('p', { class: 'muted small' }, `二维码有效期至 ${new Date(job.expiresAt).toLocaleString('zh-CN')}`), steps,

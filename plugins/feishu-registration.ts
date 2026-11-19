@@ -11,7 +11,7 @@ export interface RegistrationProgress { stage: RegistrationStage; url?: string; 
 export interface RegistrationResult { appId: string; appSecret: string; verified: boolean; outcome?: 'unknown'; missingSteps: RegistrationStep[]; ownerOpenId?: string }
 export interface RegistrationTrace {
   step: 'qr-init' | 'qr-poll' | 'cross-login' | 'login-session' | 'console-identity' | 'app-setup';
-  httpStatus?: number; platformCode?: number; platformLogId?: string;
+  httpStatus?: number; platformCode?: number; platformLogId?: string; redirectHost?: string;
   reason?: 'redirect-host' | 'transport' | 'missing-console-identity' | 'missing-qr' | 'invalid-response';
 }
 export interface RegistrationContext {
@@ -76,7 +76,8 @@ function appIcon(): Buffer {
 
 interface Cookie { name: string; value: string; domain: string; path: string; hostOnly: boolean; expiresAt?: number }
 // Only these Feishu hosts may receive requests. Redirects are checked before sending any header.
-const hosts = new Set(['accounts.feishu.cn', 'ask.feishu.cn', 'open.feishu.cn', 'open.larkoffice.com']);
+const consoles = new Set(['open.feishu.cn', 'open.larkoffice.com']);
+const hosts = new Set([...consoles, 'accounts.feishu.cn', 'accounts.larkoffice.com', 'ask.feishu.cn']);
 function checkedURL(value: string) {
   const url = new URL(value);
   if (url.protocol !== 'https:' || !hosts.has(url.hostname) || url.port || url.username || url.password) throw new RegistrationError('failed');
@@ -86,7 +87,7 @@ function validCookie(value: unknown): value is Cookie {
   const c = row(value);
   return typeof c.name === 'string' && /^[!#$%&'*+.^_`|~\w-]+$/.test(c.name)
     && typeof c.value === 'string' && !/[\s;\x00-\x1f\x7f]/.test(c.value)
-    && typeof c.domain === 'string' && (hosts.has(c.domain) || c.domain === 'feishu.cn')
+    && typeof c.domain === 'string' && (hosts.has(c.domain) || c.domain === 'feishu.cn' || c.domain === 'larkoffice.com')
     && typeof c.path === 'string' && c.path.startsWith('/') && !/[\r\n]/.test(c.path)
     && typeof c.hostOnly === 'boolean' && (c.expiresAt === undefined || typeof c.expiresAt === 'number' && c.expiresAt > Date.now());
 }
@@ -132,7 +133,12 @@ export function createFeishuRegistrationProvider(options: {
         const begin = (step: RegistrationTrace['step']) => { trace = { step }; context.trace?.(trace); };
         const allowed = (address: string) => {
           try { return checkedURL(address); }
-          catch (error) { record({ reason: 'redirect-host' }); throw error; }
+          catch (error) {
+            // The location may carry a one-time ticket. Keep only its DNS hostname.
+            const host = URL.canParse(address) ? new URL(address).hostname : '';
+            record({ reason: 'redirect-host', ...(/^[a-z0-9.-]{1,253}$/i.test(host) ? { redirectHost: host } : {}) });
+            throw error;
+          }
         };
         async function request(address: string, init: RequestInit = {}): Promise<{ text: string; headers: Headers; url: string }> {
           let url = allowed(address), method = init.method ?? 'GET', body = init.body;
@@ -194,6 +200,10 @@ export function createFeishuRegistrationProvider(options: {
         const pageInfo = async () => {
           begin('console-identity');
           const page = await request(`${open}/app`);
+          if (!consoles.has(new URL(page.url).hostname)) {
+            record({ reason: 'missing-console-identity' });
+            throw new RegistrationError('failed');
+          }
           const csrf = page.text.match(/\b(?:window\.csrfToken\s*=|csrfToken\s*:)\s*['"]([^'"]+)['"]/)?.[1];
           // Parse only the balanced JSON object; never evaluate console JavaScript.
           const start = page.text.search(/\bwindow\.user\s*=/);
