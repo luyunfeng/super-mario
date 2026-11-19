@@ -134,3 +134,37 @@ test('CLI settings HTTP save/read/restart uses isolated demo without launching a
   assert.equal(restored.cliConfigDir, body.cliConfigDir);
   assert.equal(restored.source, 'saved');
 });
+
+test('custom Anthropic gateway accepts a full messages URL and a model outside the catalog', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-anthropic-gateway-'));
+  const requests: unknown[] = [];
+  const gateway = createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk;
+    requests.push([new URL(req.url!, 'http://localhost').pathname, req.headers['x-api-key'], JSON.parse(body).model]);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const events = [
+      { type: 'message_start', message: { id: 'fixture', role: 'assistant', type: 'message', content: [], usage: { input_tokens: 2, output_tokens: 0 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'gateway OK' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 2 } },
+      { type: 'message_stop' },
+    ];
+    for (const event of events) res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    res.end();
+  });
+  await new Promise<void>(r => gateway.listen(0, '127.0.0.1', r));
+
+  const base = 'http://127.0.0.1:' + (gateway.address() as { port: number }).port;
+  const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: dir, demo: false });
+  t.after(async () => { await server.close(); gateway.closeAllConnections(); await new Promise<void>(r => gateway.close(() => r())); await rm(dir, { recursive: true, force: true }); });
+  const model = 'namespace/offline-model';
+  for (const suffix of ['/v1/messages', '/v1', '']) {
+    const response = await fetch(server.url + '/api/v1/model', { method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'api', provider: 'anthropic', model, apiKey: 'fixture-key', baseUrl: base + suffix }) });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).runtime.main.available, true);
+    assert.equal((await server.app.agent.ask('test gateway')).text, 'gateway OK');
+    assert.deepEqual(requests.at(-1), ['/v1/messages', 'fixture-key', model]);
+  }
+});

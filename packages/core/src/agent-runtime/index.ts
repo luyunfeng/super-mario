@@ -152,13 +152,19 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     }
     if (config.model && config.model.provider !== 'codex-cli') {
       const { provider, model: id, baseUrl, apiKey } = config.model;
-      if (provider === 'openai-compatible') {
+      // The Anthropic client appends /v1/messages. Accept a gateway root,
+      // a versioned base, or the full endpoint copied from a working curl command.
+      const endpoint = provider === 'anthropic' && baseUrl
+        ? baseUrl.replace(/\/v1(?:\/messages)?\/?$/, '') : baseUrl;
+      const customAnthropic = provider === 'anthropic' && endpoint && !modelRuntime.getModel(provider, id);
+      if (provider === 'openai-compatible' || customAnthropic) {
         modelRuntime.registerProvider(provider, {
-          baseUrl, api: 'openai-completions', authHeader: true,
+          baseUrl: endpoint, api: customAnthropic ? 'anthropic-messages' : 'openai-completions',
+          ...(customAnthropic ? {} : { authHeader: true }),
           models: [{ id, name: id, reasoning: false, input: ['text'],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 4096 }],
         });
-      } else if (baseUrl) modelRuntime.registerProvider(provider, { baseUrl });
+      } else if (endpoint) modelRuntime.registerProvider(provider, { baseUrl: endpoint });
       const key = apiKey || (provider === 'openai-compatible' ? process.env.OPENAI_API_KEY : undefined);
       if (key) await modelRuntime.setRuntimeApiKey(provider, key);
     }
