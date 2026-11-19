@@ -321,3 +321,20 @@ test('failed QR initialization reports its stage without showing app setup steps
     finally { await restored.close(); }
   } finally { await f.cleanup(); }
 });
+
+test('failed QR poll keeps a searchable local ID and upstream diagnostic across restart', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mario-qr-log-'));
+  const f = fixture(createFeishuRegistrationProvider({ dataDir: dir, fetch: async address => {
+    if (new URL(String(address)).pathname.endsWith('/init')) return Response.json({code:0,data:{step_info:{token:'qr-test'}}}, {headers:{'x-flow-key':'private-flow'}});
+    return Response.json({code:12345,message:secret}, {headers:{'x-tt-logid':'test-upstream-12345'}});
+  }}));
+  try {
+    const job = await settled(f.service, f.service.start(input).id);
+    assert.equal(job.status, 'failed');
+    assert.deepEqual(job.diagnostic, {step:'qr-poll',httpStatus:200,platformCode:12345,platformLogId:'test-upstream-12345',at:job.diagnostic?.at});
+    const restored = createFeishuRegistration(f.options);
+    try { assert.deepEqual(restored.get(job.id)?.diagnostic, job.diagnostic); }
+    finally { await restored.close(); }
+    assert.ok(!JSON.stringify(job).includes(secret));
+  } finally { await f.cleanup(); rmSync(dir, {recursive:true,force:true}); }
+});

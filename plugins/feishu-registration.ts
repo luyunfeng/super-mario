@@ -9,7 +9,13 @@ export type RegistrationStage = 'waiting_for_scan' | 'creating_app' | 'configuri
 export interface RegistrationStep { code: string; message: string; url: string }
 export interface RegistrationProgress { stage: RegistrationStage; url?: string; expiresAt?: string }
 export interface RegistrationResult { appId: string; appSecret: string; verified: boolean; outcome?: 'unknown'; missingSteps: RegistrationStep[]; ownerOpenId?: string }
+export interface RegistrationTrace {
+  step: 'qr-init' | 'qr-poll' | 'cross-login' | 'login-session' | 'console-identity' | 'app-setup';
+  httpStatus?: number; platformCode?: number; platformLogId?: string;
+  reason?: 'redirect-host' | 'transport' | 'missing-console-identity' | 'missing-qr' | 'invalid-response';
+}
 export interface RegistrationContext {
+  trace?(info: RegistrationTrace): void;
   name: string; signal: AbortSignal; progress(info: RegistrationProgress): void;
 }
 export interface FeishuRegistrationProvider { register(context: RegistrationContext): Promise<RegistrationResult> }
@@ -119,8 +125,17 @@ export function createFeishuRegistrationProvider(options: {
           chmodSync(sessionFile, 0o600);
           try { const saved = row(JSON.parse(readFileSync(sessionFile, 'utf8'))); cookies = Array.isArray(saved.cookies) ? saved.cookies.filter(validCookie) : []; } catch { /* An invalid cache requires a new scan. */ }
         }
+        let trace: RegistrationTrace = { step: 'console-identity' };
+        const record = (input: Partial<RegistrationTrace>) => {
+          trace = { ...trace, ...input }; context.trace?.(trace);
+        };
+        const begin = (step: RegistrationTrace['step']) => { trace = { step }; context.trace?.(trace); };
+        const allowed = (address: string) => {
+          try { return checkedURL(address); }
+          catch (error) { record({ reason: 'redirect-host' }); throw error; }
+        };
         async function request(address: string, init: RequestInit = {}): Promise<{ text: string; headers: Headers; url: string }> {
-          let url = checkedURL(address), method = init.method ?? 'GET', body = init.body;
+          let url = allowed(address), method = init.method ?? 'GET', body = init.body;
           const boundedSignal = AbortSignal.any([context.signal, AbortSignal.timeout(options.timeoutMs ?? 15_000)]);
           for (let hop = 0; hop < 10; hop++) {
             boundedSignal.throwIfAborted();
@@ -129,7 +144,10 @@ export function createFeishuRegistrationProvider(options: {
             const available = cookies.filter(c => validCookie(c) && (c.hostOnly ? url.hostname === c.domain : url.hostname === c.domain || url.hostname.endsWith(`.${c.domain}`)) && (url.pathname === c.path || url.pathname.startsWith(c.path.endsWith('/') ? c.path : `${c.path}/`)));
             headers.delete('cookie');
             if (available.length) headers.set('cookie', available.sort((a, b) => b.path.length - a.path.length).map(c => `${c.name}=${c.value}`).join('; '));
-            const response = await (options.fetch ?? fetch)(url.href, { ...init, method, body, headers, redirect: 'manual', signal: boundedSignal });
+            begin(trace.step);
+            const response = await (options.fetch ?? fetch)(url.href, { ...init, method, body, headers, redirect: 'manual', signal: boundedSignal }).catch(error => { record({ reason: 'transport' }); throw error; });
+            const upstream = response.headers.get('x-tt-logid') || response.headers.get('x-request-id');
+            record({ httpStatus: response.status, ...(upstream && /^[A-Za-z0-9_-]{8,96}$/.test(upstream) ? { platformLogId: upstream } : {}) });
             boundedSignal.throwIfAborted();
             for (const header of response.headers.getSetCookie()) {
               const parts = header.split(';').map(v => v.trim()), first = parts.shift() ?? '', equal = first.indexOf('=');
@@ -153,7 +171,7 @@ export function createFeishuRegistrationProvider(options: {
             }
             if ([301, 302, 303, 307, 308].includes(response.status)) {
               const location = response.headers.get('location'); if (!location) throw new RegistrationError('failed');
-              const next = checkedURL(new URL(location, url).href);
+              const next = allowed(new URL(location, url).href);
               // Console POSTs must never silently replay on a redirect.
               if (method !== 'GET' && method !== 'HEAD') throw new RegistrationError('unknown');
               url = next; await response.body?.cancel(); continue;
@@ -166,12 +184,15 @@ export function createFeishuRegistrationProvider(options: {
         }
         const json = async (address: string, body: unknown, headers: Record<string, string> = {}) => {
           const response = await request(address, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
-          const payload = row(JSON.parse(response.text));
+          let payload: Row;
+          try { payload = row(JSON.parse(response.text)); } catch (error) { record({ reason: 'invalid-response' }); throw error; }
+          if (Number.isSafeInteger(payload.code)) record({ platformCode: Number(payload.code) });
           if (typeof payload.code === 'number' && payload.code !== 0) throw new PlatformBusinessRejection();
           if (payload.code !== 0) throw new RegistrationError('failed');
           return { data: { ...payload, ...row(payload.data) }, headers: response.headers };
         };
         const pageInfo = async () => {
+          begin('console-identity');
           const page = await request(`${open}/app`);
           const csrf = page.text.match(/\b(?:window\.csrfToken\s*=|csrfToken\s*:)\s*['"]([^'"]+)['"]/)?.[1];
           // Parse only the balanced JSON object; never evaluate console JavaScript.
@@ -192,15 +213,17 @@ export function createFeishuRegistrationProvider(options: {
           cookies = [];
           const loginHeaders = { accept: 'application/json', 'x-api-version': '1.0.28', 'x-app-id': '12', 'x-locale': 'zh-CN', 'x-terminal-type': '2', 'x-device-info': 'device_id=0;device_name=Chrome;device_os=Linux;device_model=Chrome;lark_version=;channel=Release;package_name=feishu;tt_app_id=1658;is_dpop_support=true;is_iframe=false' };
           const loginUrl = (step: 'init' | 'polling') => `${accounts}/accounts/qrlogin/${step}?_r=${Date.now()}`;
+          begin('qr-init');
           const initialized = await json(loginUrl('init'), { biz_type: null, redirect_uri: 'https://ask.feishu.cn/' }, loginHeaders);
           const token = str(row(initialized.data.step_info).token), flowKey = initialized.headers.get('x-flow-key');
-          if (!token || !flowKey) throw new RegistrationError('failed');
+          if (!token || !flowKey) { record({ reason: 'missing-qr' }); throw new RegistrationError('failed'); }
           const deadline = Date.now() + (options.loginTimeoutMs ?? 120_000);
           // Feishu mobile scanner consumes this JSON payload, not a browser navigation URL.
           context.progress({ stage: 'waiting_for_scan', url: JSON.stringify({ qrlogin: { token } }), expiresAt: new Date(deadline).toISOString() });
           for (;;) {
             context.signal.throwIfAborted(); if (Date.now() >= deadline) throw new RegistrationError('expired');
             // Polling only reads this challenge. A transient transport error must not discard the displayed QR.
+            begin('qr-poll');
             const poll = await json(loginUrl('polling'), { biz_type: null }, { ...loginHeaders, 'x-flow-key': flowKey }).catch(error => {
               if (context.signal.aborted || !(error instanceof TypeError || error?.name === 'TimeoutError' || (error instanceof PlatformHttpError && error.status >= 500))) throw error;
               return undefined;
@@ -209,13 +232,15 @@ export function createFeishuRegistrationProvider(options: {
             const step = row(poll.data.step_info);
             if (step.status === 5) throw new RegistrationError('expired');
             if (poll.data.next_step === 'enter_app') {
-              const cross = str(step.cross_login_uri); if (cross) await request(cross);
+              const cross = str(step.cross_login_uri); if (cross) { begin('cross-login'); await request(cross); }
+              begin('login-session');
               await request('https://ask.feishu.cn/'); page = await pageInfo(); break;
             }
             await delay(options.pollMs ?? 1500, undefined, { signal: context.signal });
           }
         }
-        if (!page?.csrf || !page.userId) throw new RegistrationError('failed');
+        if (!page?.csrf || !page.userId) { record({ reason: 'missing-console-identity' }); throw new RegistrationError('failed'); }
+        begin('app-setup');
         context.signal.throwIfAborted(); privateWrite(sessionFile, { cookies: cookies.filter(validCookie) });
         const activePage = page;
         const post = async (path: string, body: unknown = {}) => (await json(`${activePage.origin}/developers/v1/${path}`, body, { 'x-csrf-token': activePage.csrf!, origin: activePage.origin, referer: `${activePage.origin}/app` })).data;

@@ -50,6 +50,13 @@ export function createChannelsPage({ api, store, router }) {
     return h('div', { class: 'stack', dataset: { job: job.status } },
       h('div', { class: 'row' }, Pill(JOB_LABELS[job.status] ?? '等待处理', job.status === 'failed' || job.status === 'unknown' ? 'danger' : job.status === 'completed' ? 'ok' : 'info'),
         job.progress && h('span', { class: 'muted small' }, systemText(job.progress))),
+      job.id && ['failed', 'unknown', 'expired', 'needs_configuration'].includes(job.status) &&
+        h('div', { class: 'small muted' }, '日志 ID：', h('code', null, job.id),
+          job.diagnostic && h('span', null, ' · ', job.diagnostic.step,
+            job.diagnostic.httpStatus && ' · HTTP ' + job.diagnostic.httpStatus,
+            job.diagnostic.platformCode !== undefined && ' · 飞书业务码 ' + job.diagnostic.platformCode,
+            job.diagnostic.reason && ' · ' + job.diagnostic.reason,
+            job.diagnostic.platformLogId && ' · 飞书日志 ID：' + job.diagnostic.platformLogId)),
       qr, job.status === 'unknown' && Banner({ tone: 'danger', children: '结果未知。请先到飞书后台核对，系统不会自动重复创建。' }),
       job.expiresAt && h('p', { class: 'muted small' }, `二维码有效期至 ${new Date(job.expiresAt).toLocaleString('zh-CN')}`), steps,
       !JOB_DONE.has(job.status) && Button({ label: '取消本次创建', size: 'sm', onClick: async () => { job = await api.post(`/feishu/registrations/${encodeURIComponent(job.id)}/cancel`, {}); paint(); } }));

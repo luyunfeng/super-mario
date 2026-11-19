@@ -3,14 +3,14 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { join } from 'node:path';
 import type { BotScope, FeishuBotInput } from '../../../packages/protocol/src/bots.ts';
 import { createFeishuRegistrationProvider, feishuRegistrationSteps, RegistrationError } from '../../../plugins/feishu-registration.ts';
-import type { FeishuRegistrationProvider, RegistrationStage, RegistrationStep } from '../../../plugins/feishu-registration.ts';
+import type { FeishuRegistrationProvider, RegistrationStage, RegistrationStep, RegistrationTrace } from '../../../plugins/feishu-registration.ts';
 
 export interface FeishuRegistrationInput { name: string; scope: BotScope; requireConfirmation?: boolean }
 export type FeishuRegistrationStatus = 'queued' | 'waiting_for_scan' | 'creating_app' | 'configuring' | 'publishing' | 'verifying' | 'completed' | 'needs_configuration' | 'failed' | 'unknown' | 'cancelled' | 'expired';
 /** This is the entire public payload for APIs, events and durable job snapshots. */
 export interface FeishuRegistrationJob {
   id: string; status: FeishuRegistrationStatus; progress: string; url?: string; expiresAt?: string;
-  missingSteps: RegistrationStep[]; botId?: string;
+  missingSteps: RegistrationStep[]; botId?: string; diagnostic?: RegistrationTrace & { at: string };
 }
 export interface FeishuRegistrationOptions {
   dataDir: string;
@@ -78,6 +78,7 @@ export function createFeishuRegistration(options: FeishuRegistrationOptions) {
         id: previous.id, status: interrupted ? 'unknown' : previous.status,
         progress: interrupted ? '服务在注册期间退出；请先到飞书后台确认结果，系统不会自动重试' : previous.progress,
         missingSteps: previous.botId && previous.status !== 'completed' ? feishuRegistrationSteps(priorAppId) : [],
+        ...(previous.diagnostic ? { diagnostic: previous.diagnostic } : {}),
         ...(previous.botId ? { botId: previous.botId } : {}),
       };
       jobs.set(job.id, { input, job });
@@ -91,12 +92,16 @@ export function createFeishuRegistration(options: FeishuRegistrationOptions) {
     try { options.events.publish('feishu.registration.changed', snapshot(job)); } catch { /* Metadata is already durable. */ }
   }
   function finish(job: FeishuRegistrationJob, status: FeishuRegistrationStatus, progress: string) {
+    if (['failed', 'expired', 'unknown', 'needs_configuration'].includes(status)) {
+      console.warn(JSON.stringify({ event: 'feishu.registration', logId: job.id, stage: job.status, status, ...job.diagnostic }));
+    }
     job.status = status; job.progress = progress; delete job.url; delete job.expiresAt; changed(job);
   }
   async function execute(input: FeishuRegistrationInput, job: FeishuRegistrationJob, abort: AbortController) {
     let createdBotId: string | undefined, enabling = false;
+    let latest: RegistrationTrace | undefined;
     try {
-      const result = await provider.register({ name: input.name, signal: abort.signal, progress(info) {
+      const result = await provider.register({ name: input.name, signal: abort.signal, trace(info) { latest = info; }, progress(info) {
         if (closed || abort.signal.aborted || !Object.hasOwn(progressText, info.stage)) return;
         job.status = info.stage; job.progress = progressText[info.stage];
         if (info.stage === 'waiting_for_scan') {
@@ -119,6 +124,7 @@ export function createFeishuRegistration(options: FeishuRegistrationOptions) {
         if (abort.signal.aborted || closed) { await options.bots.update(bot.id, { enabled: false }); abort.signal.throwIfAborted(); }
         job.missingSteps = []; finish(job, 'completed', recognized ? '应用已发布并识别扫码用户；直接私聊机器人即可开始使用' : '应用已发布，权限及长连接已核验；未能识别扫码用户，请使用机器人配对码完成绑定');
       } else {
+        if (latest) job.diagnostic = { ...latest, at: new Date().toISOString() };
         job.missingSteps = feishuRegistrationSteps(result.appId);
         finish(job, result.outcome === 'unknown' ? 'unknown' : 'needs_configuration', result.outcome === 'unknown' ? '应用已创建；版本创建或发布结果未知，请到飞书后台确认，系统不会自动重试' : '应用凭证已保存；配置尚未核验，机器人保持禁用，请按链接完成配置');
       }
@@ -131,6 +137,7 @@ export function createFeishuRegistration(options: FeishuRegistrationOptions) {
       const outcome = abort.signal.aborted || closed ? 'cancelled' : error instanceof RegistrationError ? error.outcome : 'failed';
       // Permission and release instructions only apply once an application exists.
       job.missingSteps = createdBotId ? job.missingSteps : [];
+      if (latest) job.diagnostic = { ...latest, at: new Date().toISOString() };
       const failure: Partial<Record<FeishuRegistrationStatus, string>> = {
         queued: '未能取得飞书登录二维码，请重新生成。',
         waiting_for_scan: '扫码登录未完成，请重新生成二维码，并在手机上确认登录。',
