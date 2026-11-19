@@ -20,9 +20,7 @@ async function withApp(run: (ctx: { server: Server; browser: Browser; open: (has
     return response.json();
   };
   const open = async (hash = '#chat', size = { width: 1440, height: 900 }) => {
-    const context = await browser.newContext({ viewport: size });
-    // 开屏只在第一次出现；测试默认视为已看过，开屏本身有单独的测试。
-    await context.addInitScript(() => { if (!sessionStorage.getItem('__fresh')) localStorage.setItem('sm.splash.seen', 'true'); });
+    const context = await browser.newContext({ viewport: size, reducedMotion: 'reduce' });
     if(token)await context.addInitScript(value=>sessionStorage.setItem('super-mario-token',value),token);
     const page = await context.newPage();
     const errors: string[] = [];
@@ -242,7 +240,7 @@ test('切换页面后滚动回到顶部', { timeout: 30000 }, async () => {
   });
 });
 
-test('开屏只在第一次出现，且不拦截操作', { timeout: 30000 }, async () => {
+test('开屏每次加载播放，站内导航沿用 loop，支持跳过和减少动态', { timeout: 30000 }, async () => {
   await withApp(async ({ server, browser }) => {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const page = await context.newPage();
@@ -255,12 +253,21 @@ test('开屏只在第一次出现，且不拦截操作', { timeout: 30000 }, asy
     await video.evaluate((el: HTMLVideoElement) => { el.currentTime = el.duration - .25; });
     const loop = page.locator('video.splash-background');
     await expect.poll(() => loop.evaluate((el: HTMLVideoElement) => el.loop && el.videoWidth > 0 && el.currentTime > 0)).toBe(true);
-    await page.locator('#message-text').fill('开屏期间可以输入');
-    await expect(page.locator('.splash')).toHaveCount(0, { timeout: 6000 });
     await page.reload();
-    await expect(page.locator('#workspace')).toBeVisible();
-    await page.waitForTimeout(600);
-    await expect(page.locator('.splash')).toHaveCount(0);
+    await expect(video).toBeVisible();
+    await page.locator('#message-text').fill('开屏期间可以输入');
+    await expect(page.locator('#message-text')).toHaveValue('开屏期间可以输入');
+    await expect(loop).toBeVisible();
+    await page.locator('[data-nav=agent]').click();
+    await expect(page.locator('#agent')).toBeVisible();
+    await expect(video).toHaveCount(0);
+    await expect(loop).toBeVisible();
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(loop).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator('#view.is-loading')).toHaveCount(0);
+    await expect(video).toHaveCount(0);
+    await expect(loop).toHaveCount(0);
   });
 });
 
@@ -270,7 +277,7 @@ test('分享链接带令牌：自动连接、从地址栏抹掉、保留页面�
     for (const [suffix, route] of [[`/#agent?token=${encodeURIComponent(token)}`, 'agent'], [`/?token=${encodeURIComponent(token)}&keep=1#memory`, 'memory'], [`/#token=${encodeURIComponent(token)}`, 'chat']] as const) {
       const context = await browser.newContext();
       const page = await context.newPage();
-      await page.addInitScript(() => { sessionStorage.setItem('super-mario-token', 'stale-credential'); localStorage.setItem('sm.splash.seen', 'true'); });
+      await page.addInitScript(() => { sessionStorage.setItem('super-mario-token', 'stale-credential'); });
       const headers: (string | undefined)[] = [];
       const rejected: number[] = [];
       page.on('request', request => { if (request.url().includes('/api/v1/state')) headers.push(request.headers().authorization); });
@@ -280,7 +287,15 @@ test('分享链接带令牌：自动连接、从地址栏抹掉、保留页面�
       await expect(page.locator('#view.is-loading')).toHaveCount(0);
       assert.ok(!page.url().includes('token='));
       if (suffix.includes('keep=1')) assert.equal(new URL(page.url()).searchParams.get('keep'), '1');
-      assert.equal(await page.evaluate(() => sessionStorage.getItem('super-mario-token')), token);
+      const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('super-mario-token')!));
+      assert.equal(saved.value, token);
+      assert.ok(Math.abs(saved.expiresAt - Date.now() - 30 * 86400000) < 30000);
+      const next = await context.newPage();
+      await next.goto(server.url + '/#inbox');
+      await expect(next.locator('#view.is-loading')).toHaveCount(0);
+      await next.evaluate(() => localStorage.setItem('super-mario-token', JSON.stringify({value:'old',expiresAt:Date.now()-1})));
+      await next.reload();
+      await expect(next.locator('#error')).toBeVisible();
       assert.ok(headers.length > 0 && headers.every(header => header === `Bearer ${token}`));
       assert.deepEqual(rejected, []);
       await context.close();
@@ -291,7 +306,6 @@ test('分享链接带令牌：自动连接、从地址栏抹掉、保留页面�
 test('令牌错误：不进入工作台，可在连接面板更正', { timeout: 30000 }, async () => {
   await withApp(async ({ server, browser }) => {
     const page = await (await browser.newContext()).newPage();
-    await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
     await page.goto(server.url + '/#token=offline-invalid');
     await expect(page.locator('#error')).toContainText('访问令牌无效');
     await expect(page.locator('#view.is-loading')).toHaveCount(1);

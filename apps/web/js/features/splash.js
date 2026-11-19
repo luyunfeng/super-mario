@@ -1,4 +1,4 @@
-import { h, readLocal, writeLocal } from '../lib/dom.js';
+import { h } from '../lib/dom.js';
 
 let stopCurrent;
 export function stopSplash() { stopCurrent?.(); }
@@ -39,10 +39,9 @@ function playBackground() {
   sync();
 }
 
-export function playSplash({ title = 'Super Mario', durationMs, force = false } = {}) {
+export function playSplash({ title = 'Super Mario', durationMs } = {}) {
   stopSplash();
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  if (!force && readLocal('sm.splash.seen', false)) return playBackground();
 
   const video = bootVideo('intro', 'splash__video');
   const el = h('div', { class: 'splash', 'aria-label': title + ' 开屏' }, video,
@@ -65,15 +64,11 @@ export function playSplash({ title = 'Super Mario', durationMs, force = false } 
   matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', stop, options);
   video.addEventListener('playing', () => {
     clearTimeout(timer);
-    writeLocal('sm.splash.seen', true);
     timer = setTimeout(enterWorkbench, durationMs ?? (video.duration + 2) * 1000);
   }, { ...options, once: true });
   video.addEventListener('ended', enterWorkbench, options);
   video.addEventListener('error', stop, options);
-  for (const event of ['pointerdown', 'keydown', 'beforeinput']) window.addEventListener(event, () => {
-    writeLocal('sm.splash.seen', true);
-    enterWorkbench();
-  }, { ...options, capture: true });
+  for (const event of ['pointerdown', 'keydown', 'beforeinput']) window.addEventListener(event, enterWorkbench, { ...options, capture: true });
   document.body.append(el);
   video.play().catch(() => { if (!events.signal.aborted) stop(); });
 }

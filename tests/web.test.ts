@@ -27,13 +27,13 @@ test('外壳只有一个挂载点，保留跳到主内容和终端资源', () =>
   assert.match(html, /type="module" src="\/js\/main.js"/);
 });
 
-test('页面脚本不把文本当 HTML 执行，访问令牌只存会话', () => {
+test('页面脚本不把文本当 HTML 执行，访问令牌只由接口客户端保存', () => {
   for (const [file, source] of scripts) {
     assert.doesNotMatch(source, /\.(?:innerHTML|outerHTML)\s*=|insertAdjacentHTML\s*\(|document\.write\s*\(|\beval\s*\(/, file);
   }
   const api = scripts.get('js/lib/api.js')!;
-  assert.match(api, /sessionStorage\.setItem\(TOKEN_KEY/);
-  for (const [file, source] of scripts) assert.doesNotMatch(source, /localStorage\.setItem\([^)]*(?:token|secret)/i, file);
+  assert.match(api, /localStorage\.setItem\(TOKEN_KEY/);
+  for (const [file, source] of scripts) if (file !== 'js/lib/api.js') assert.doesNotMatch(source, /localStorage\.setItem\([^)]*(?:token|secret)/i, file);
 });
 
 test('终端观察保持只读边界，关闭不取消远端工作', () => {

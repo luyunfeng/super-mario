@@ -101,9 +101,9 @@ router.subscribe((route) => {
 
 window.addEventListener('workspace:preview-splash', () => {
   const entry = (store.view.snapshot?.webExtensions ?? []).find(item => item.value?.renderer === 'brand-splash');
-  if (entry) playSplash({ ...entry.value, force: true });
+  if (entry) playSplash(entry.value);
 });
-// 开屏由“开屏”插件提供：插件启用且是第一次打开时播放一次，不拦截操作。
+// 开屏由“开屏”插件提供：当前页面取得快照并发现插件启用时播放；后续快照沿用当前状态。
 let splashEnabled = false;
 store.subscribe(({ snapshot }) => {
   if (!snapshot) return;

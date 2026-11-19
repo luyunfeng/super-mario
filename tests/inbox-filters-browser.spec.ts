@@ -218,3 +218,26 @@ test('归入项目后转待办继承项目；刷新和重复确认均不重复�
   assert.equal(f.server.app.todos().length, 1);
   assert.equal(f.server.app.store.list('runs').length, 0);
 });
+
+test('同群跨消息聚合，沿用已确认项目提出建议，确认后才移动消息', async t => {
+  const f = await fixture(t);
+  const origin = { kind: 'group' as const, connector: '飞书', chatName: '协作讨论', chatId: 'oc_1', mentionedMe: true };
+  const input = (thread: string, chatId = origin.chatId) => ({ thread, last: '1', title: thread, text: '跟进工作', origin: { ...origin, chatId } });
+  await f.server.app.inbox.ingest('feishu:fixture', [input('已知归属'), input('跟进一'), input('跟进二'), input('同名另一群', 'oc_2')]);
+  const known = f.item('已知归属');
+  await f.api(`/inbox/${known.id}/project`, 'PATCH', { version: known.version, projectId: f.project.id });
+  const page = await f.open();
+  await chip(page, '群@我').click();
+  const groups = page.locator('#inbox .mailbox-group');
+  await expect(groups).toHaveCount(3);
+  const group = groups.filter({ hasText: '建议合并到' });
+  await expect(group).toContainText('2 条消息');
+  await expect(group).toContainText(f.project.name);
+  const msg = f.item('跟进一');
+  assert.ok(!msg.projectId);
+  await group.getByRole('button', { name: '展开消息' }).click();
+  await write(page, group.getByRole('button', { name: `归入「${f.project.name}」` }).first(),
+    '/inbox/' + (await group.locator('.mailbox-card h2').first().innerText() === '跟进一' ? msg.id : f.item('跟进二').id) + '/project', 'PATCH');
+  await expect(group).toContainText('1 条消息');
+  await expect(groups.filter({hasText:'建议按此群集中跟进'})).toHaveCount(1);
+});

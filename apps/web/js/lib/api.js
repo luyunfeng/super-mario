@@ -6,8 +6,29 @@ export class ApiError extends Error {
   constructor(message, status) { super(message); this.name = 'ApiError'; this.status = status; }
 }
 
-function readToken() { try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } }
-function saveToken(value) { try { sessionStorage.setItem(TOKEN_KEY, value); } catch { /* 本次会话仍可使用内存中的令牌。 */ } }
+const TOKEN_LIFETIME = 30 * 24 * 60 * 60 * 1000;
+function remember(value) {
+  const record = { value, expiresAt: Date.now() + TOKEN_LIFETIME };
+  try {
+    if (value) localStorage.setItem(TOKEN_KEY, JSON.stringify(record));
+    else localStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
+  } catch { /* 禁用浏览器存储时仍可在当前页面连接。 */ }
+  return record;
+}
+function readToken() {
+  try {
+    const saved = localStorage.getItem(TOKEN_KEY);
+    if (saved) {
+      const record = JSON.parse(saved);
+      if (typeof record?.value === 'string' && record.expiresAt > Date.now()) return record;
+      return remember('');
+    }
+    const legacy = sessionStorage.getItem(TOKEN_KEY);
+    if (legacy) return remember(legacy);
+  } catch { /* 无有效的本地凭据。 */ }
+  return { value: '', expiresAt: 0 };
+}
 
 /**
  * 分享链接带令牌：优先放在 # 片段里（不会发给服务端），也兼容 ?token=。
@@ -30,12 +51,14 @@ function consumeSharedToken() {
 }
 
 export function createApi() {
-  let token = readToken();
+  let credential = readToken();
+  const currentToken = () => credential.expiresAt > Date.now() ? credential.value : '';
   const shared = consumeSharedToken();
-  if (shared !== null) { token = shared; saveToken(token); }
+  if (shared !== null) credential = remember(shared);
   let onUnauthorized = () => {};
 
   async function api(path, { method = 'GET', body, headers, keepalive = false } = {}) {
+    const token = currentToken();
     const init = {
       method,
       keepalive,
@@ -62,8 +85,8 @@ export function createApi() {
   api.put = (path, body) => api(path, { method: 'PUT', body });
   api.patch = (path, body) => api(path, { method: 'PATCH', body });
   api.del = (path) => api(path, { method: 'DELETE' });
-  api.token = () => token;
-  api.setToken = (value) => { token = value.trim(); saveToken(token); };
+  api.token = currentToken;
+  api.setToken = (value) => { credential = remember(value.trim()); };
   api.onUnauthorized = (fn) => { onUnauthorized = fn; };
   return api;
 }

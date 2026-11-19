@@ -250,6 +250,59 @@ export function createMailboxPage({ api, store, router, direction }) {
     if (!drawer) drawer = openDrawer({ title: `${name}消息详情`, body: [], footer: [], wide: true, onClose: () => { drawer = undefined; selected = undefined; detailKey = undefined; } });
     detail();
   }
+  const expandedGroups = new Map();
+  function chatKey(item) {
+    const origin = item.raw.origin;
+    if (originKind(item) !== 'group' || !origin.chatId) return;
+    return JSON.stringify([origin.connector || item.raw.source || item.source, origin.chatId]);
+  }
+  function groupedRows(all, visible) {
+    // 用全量历史识别同群已确认的项目，再按当前筛选结果聚合，避免跨页漏消息。
+    const history = new Map(), groups = new Map(), rows = [];
+    const projects = (snapshot?.projects ?? []).filter(p => !p.archivedAt);
+    for (const item of all) {
+      const key = chatKey(item), id = projectId(item);
+      if (!key || !id) continue;
+      if (!history.has(key)) history.set(key, new Set());
+      history.get(key).add(id);
+    }
+    for (const item of visible) {
+      const chat = chatKey(item);
+      if (!chat) { rows.push(item); continue; }
+      const project = projectId(item) || '';
+      const id = JSON.stringify([project, chat]);
+      let group = groups.get(id);
+      if (!group) {
+        const name = item.raw.origin.chatName || item.title;
+        const prior = history.get(chat);
+        const candidates = prior ? projects.filter(p => prior.has(p.id))
+          : projects.filter(p => p.name.trim().length >= 2 && name.toLowerCase().includes(p.name.trim().toLowerCase()));
+        group = { id, project, name, items: [], candidates, prior: Boolean(prior), latest: item };
+        groups.set(id, group); rows.push(group);
+      }
+      group.items.push(item);
+      if (item.time > group.latest.time) group.latest = item;
+    }
+    return rows;
+  }
+  function groupCard(group) {
+    const { items, latest, candidates } = group;
+    const limit = expandedGroups.get(group.id) || 0;
+    const expand = n => { expandedGroups.set(group.id, n); paint(); };
+    const suggested = candidates.length === 1 ? candidates[0] : undefined;
+    return Card({ title: group.name, className: 'mailbox-group', sub: `${items.length} 条消息 · ${items.filter(i => i.raw.origin.mentionedMe).length} 条群@我 · ${items.filter(i => stage(i) === 'human').length} 条待人决策`,
+      tools: Button({ label: limit ? '收起消息' : '展开消息', size: 'sm', onClick: () => expand(limit ? 0 : 10) }),
+      body: h('div', { class: 'stack' },
+        h('p', { class: 'mailbox-preview' }, '最近 · ', latest.raw.origin.senderName || latest.raw.sender || '群成员', ' · ', timeAgo(latest.time), '　', latest.text),
+        !group.project && h('div', { class: 'small muted' }, suggested
+          ? `建议合并到「${suggested.name}」：${group.prior ? '同群消息已有此归属' : '群名包含项目名'}。展开消息可逐条确认。`
+          : candidates.length ? `同群涉及多个项目：${candidates.map(p => p.name).join('、')}。请按消息选择。`
+          : h('span', null, '建议按此群集中跟进，可', h('a', { href: router.href('projects') }, '新建项目'), '或展开消息选择已有项目。')),
+        items.slice(0, limit).map(item => h('div', { class: 'stack' }, card(item),
+          !group.project && suggested && item.kind === 'personal' && Button({ label: `归入「${suggested.name}」`, size: 'sm',
+            disabled: pending.has(item.id) || uncertain.has(item.id), onClick: () => saveProject(item, { projectId: suggested.id, version: item.raw.version }) }))),
+        limit > 0 && limit < items.length && Button({ label: '更多群消息', size: 'sm', onClick: () => expand(limit + 10) })) });
+  }
   function paint() {
     // Late reads and action completions can arrive after navigation. Keep their data,
     // but leave the hidden DOM untouched until onShow; alerts use global state.
@@ -260,14 +313,31 @@ export function createMailboxPage({ api, store, router, direction }) {
     if (incoming) paintFilters(all);
     const visible = all.filter(item => matches(item));
     if (incoming) visible.sort((a, b) => (stage(a) === 'human' ? 0 : 1) - (stage(b) === 'human' ? 0 : 1));
-    const window = visible.slice(0, displayLimit);
+    const rows = incoming ? groupedRows(all, visible) : visible;
+    const window = rows.slice(0, displayLimit);
+    const grouped = rows.some(row => row.items);
     summary.textContent = `共 ${all.length} 条${incoming ? '收件' : '发件'}记录，显示 ${window.length} / 匹配 ${visible.length} 条`;
-    more.hidden = window.length >= visible.length;
+    if (grouped) summary.textContent = `匹配 ${visible.length} 条消息，按群聚合后显示 ${window.length} / ${rows.length} 项`;
+    more.hidden = window.length >= rows.length;
     replace(notice, error && Banner({ tone: 'danger', children: error }), loadError && Banner({ tone: 'danger', children: loadError, action: Button({ label: '重试读取', size: 'sm', onClick: () => load() }) }),
       !incoming && deliveries.length >= 200 && h('p', { class: 'small muted' }, '自动发送记录当前展示最近 200 条。'));
     // Cache only the displayed window. Unchanged snapshots and read completions
     // preserve cards (and focus); signatures also cover action state and labels.
-    if (visible.length) keyedList(list, window, item => item.id, card, item => JSON.stringify([
+    if (grouped) {
+      const sections = new Map();
+      for (const row of window) {
+        const key = row.items ? row.project : 'individual';
+        if (!sections.has(key)) sections.set(key, []);
+        sections.get(key).push(row);
+      }
+      const render = ([key, entries]) => h('section', { class: 'stack' },
+        h('h2', null, key === 'individual' ? '其他消息' : key ? snapshot.projects.find(p => p.id === key)?.name || '项目不可用' : '未归项目'),
+        entries.map(row => row.items ? groupCard(row) : card(row)));
+      keyedList(list, [...sections], ([key]) => 'section:' + key, render, ([key, entries]) => JSON.stringify([
+        key, entries, snapshot.projects, entries.flatMap(row => [expandedGroups.get(row.id),
+          ...(row.items || [row]).map(item => [stage(item), pending.has(item.id), uncertain.has(item.id), handlingState(item)])])
+      ]));
+    } else if (visible.length) keyedList(list, window, item => item.id, card, item => JSON.stringify([
       item, incoming && projectName(item),
       incoming && handlingState(item),
       (snapshot?.todos ?? []).find(todo => todo.id === item.raw.todoId)?.projectId,
