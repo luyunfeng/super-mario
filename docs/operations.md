@@ -127,7 +127,7 @@ SUPER_MARIO_TOKEN='同一访问令牌' super-mario-agent \
 
 新用户可按四步引导配置 Agent、创建项目、添加记忆和连接渠道，渠道可先跳过。引导根据实际数据更新，不阻止对话。Agent 高级区可以回看进度。作用标签可聚焦、悬停或点击查看说明；单项隐藏和全局关闭只保存在本机。
 
-开屏以线条勾出 M 印章，填入朱红后淡入工作台。仅本机首次成功取得快照时自动播放，最长 1.2 秒，不夺焦点、不阻挡操作；点击或按键可关闭。再次加载不播放，Agent → 高级 → 界面 → 预览开屏可重播；减少动画偏好下立即结束。
+工作台使用 wynneceles 的开屏影片（分镜、动作与剪辑），按原比例静音播放。素材限非商业用途，详见[来源及素材许可](https://github.com/wynneceles/ai-boot-animations/blob/main/claude/assets/LICENSE.md)。仅本机首次成功取得快照时自动播放，默认播放全片约 22 秒，不夺焦点、不阻挡操作；点击或按键可关闭。再次加载不播放，Agent → 高级 → 界面 → 预览开屏可重播；减少动画偏好下立即结束。
 
 在「Agent → 高级 → 电脑接入与终端」查看在线电脑和真实终端。执行详情“终端”也可打开同一画面。关闭观察不会关闭远端进程；未关联工作台执行的终端只读，关联的交互执行需先点“接管输入”才能发送文本，任务执行只允许中断。已结束执行不提供写操作，不提供完整历史回放。工作区、标签页管理、远程安装和文件编辑尚未接入 Web。
 
@@ -210,7 +210,7 @@ export default {
 
 源码插件使用 `packages/plugin-sdk/` 的接口，安装包的 TypeScript 插件可从 `super-mario/plugin-sdk` 导入类型。依赖写在 manifest 的 `dependencies` 中；资源使用 `contribute`、`onEvent`、`defer` 登记，停用时统一释放。坏插件显示失败，其余能力继续运行。当前是可信插件同进程执行，没有进程沙箱，也不提供代码热替换。
 
-前端展示通过同一 `context.contribute('web_extensions', id, value)` 注册。当前最小实现支持 `{slot:'startup', renderer:'brand-splash', title, subtitle, durationMs}`；声明时 `durationMs` 为 600–5000；浏览器实际显示限制在 1.2 秒内。服务端只把启用中的贡献放入快照，浏览器选择已知渲染器并负责卸载。该扩展点支持声明式开屏，不是任意前端 JavaScript 或自定义页面加载器。
+前端展示通过同一 `context.contribute('web_extensions', id, value)` 注册。当前最小实现支持 `{slot:'startup', renderer:'brand-splash', title, subtitle, durationMs}`；声明时 `durationMs` 为 600–5000 毫秒，省略时播放至片尾。服务端只把启用中的贡献放入快照，浏览器选择已知渲染器并负责卸载。该扩展点支持声明式开屏，不是任意前端 JavaScript 或自定义页面加载器。
 
 自定义扩展点须在清单 `extensionPoints` 中声明 `<插件ID>.<名称>` 和 `version:1`，消费者声明提供者依赖。可调用行为使用 `provide/use` 的 JSON 服务；`hook` 与 `wrap` 统一登记和清理。显式 `permissions` 只允许清单授予的 SDK 调用，旧插件不声明时仍是可信本地模式。开发时运行 `npm run lint:plugins`，系统及第三方插件均禁止导入核心内部实现。完整接口与权限表见 [架构第 5 节](architecture.md#5-插件模型)。
 

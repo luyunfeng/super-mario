@@ -3,7 +3,9 @@ import { policyPresets, applyPolicyPreset, policyRuleHits } from '../../../packa
 import { todoSections, todoDecisionIds } from '../../../packages/core/src/todo-sections.ts';
 import { createAgentArtifacts } from './agent-artifacts.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createWorkbench, InputError, requiredText } from '../../../packages/core/src/workbench.ts';
 import { createMachineHub } from '../../../packages/core/src/machines.ts';
@@ -450,6 +452,25 @@ export async function startServer(config: AppConfig, dependencies: { botFactory?
       }
       // 静态资源按目录提供：只允许 apps/web 下已知类型的文件，拒绝 .. 和隐藏文件。
       if (req.method !== 'GET') throw new InputError('页面不存在', 404);
+      if (path === '/assets/boot/intro.mp4' || path === '/assets/boot/intro-avc.mp4') {
+        const file = new URL('../../web' + path, import.meta.url);
+        const { size } = await stat(file);
+        const range = req.headers.range;
+        const match = range?.match(/^bytes=(\d+)-(\d*)$/);
+        const start = match ? Number(match[1]) : 0;
+        const end = match?.[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+        if (start > end) {
+          res.writeHead(416, { 'content-range': 'bytes */' + size }).end(); return;
+        }
+        res.writeHead(match ? 206 : 200, {
+          'content-type': 'video/mp4', 'accept-ranges': 'bytes', 'content-length': end - start + 1,
+          ...(match ? { 'content-range': `bytes ${start}-${end}/${size}` } : {}),
+        });
+        // 跳过开屏会取消浏览器读流，连接已关闭时无需再回错误响应。
+        try { await pipeline(createReadStream(file, { start, end }), res); }
+        catch (error) { if (!res.destroyed) res.destroy(error instanceof Error ? error : undefined); }
+        return;
+      }
       const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
       let assetURL: URL;
       let contentType: string;

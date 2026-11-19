@@ -25,7 +25,7 @@ export interface Run { progress?: ExecutionProgress; nativeResume?: NativeResume
 export interface ExecutorInfo { nativeResultSources?: string[]; id: string; name: string; kind: string; machineId: string; available: boolean; mode: 'demo' | 'real'; description: string; reason?: string; defaultCwd?: string }
 export interface PluginInfo { id: string; name: string; enabled: boolean; status: 'active' | 'disabled' | 'waiting' | 'failed'; error?: string; capabilities: string[] }
 /** Declarative browser contribution. The browser owns rendering and cleanup; no server-supplied script executes. */
-export interface WebExtension { slot: 'startup'; renderer: 'brand-splash'; title: string; subtitle: string; durationMs: number }
+export interface WebExtension { slot: 'startup'; renderer: 'brand-splash'; title: string; subtitle: string; durationMs?: number }
 export interface AppEvent { id: number; type: string; data: Json; createdAt: string }
 export interface MachineInfo { agentInstanceId?: string; id: string; name: string; online: boolean; platform: string; connectedAt: string; capabilities: string[]; executors?: ExecutorInfo[] }
 export interface ModelConfig { provider: string; model: string; baseUrl?: string; apiKey?: string; cliCommand?: string; cliConfigDir?: string }

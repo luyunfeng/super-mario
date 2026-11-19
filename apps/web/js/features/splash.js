@@ -1,31 +1,41 @@
-import { h, svg, readLocal, writeLocal } from '../lib/dom.js';
+import { h, readLocal, writeLocal } from '../lib/dom.js';
 
 let stopCurrent;
-export function playSplash({ title = 'Super Mario', subtitle = '让每一个目标，都有下一步。', durationMs = 1200, force = false } = {}) {
+export function playSplash({ title = 'Super Mario', durationMs, force = false } = {}) {
   if (!force && readLocal('sm.splash.seen', false)) return;
-  writeLocal('sm.splash.seen', true);
   stopCurrent?.();
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
-  const mark = svg([
-    ['rect', { x: 2, y: 2, width: 20, height: 20, rx: 4, pathLength: 1, class: 'splash__stamp' }],
-    ['path', { d: 'M6.8 16.2V7.8L12 13.2L17.2 7.8V16.2', pathLength: 1, class: 'splash__letter' }],
-  ], 'splash__logo');
-  const el = h('div', { class: 'splash', 'aria-hidden': 'true' }, mark,
-    h('div', { class: 'splash__title' }, title), h('div', { class: 'splash__sub' }, subtitle));
-  const duration = Math.min(1200, Math.max(600, durationMs));
-  el.style.setProperty('--splash-time', duration + 'ms');
-  document.body.append(el);
-
-  // 输入仍交给下面的工作台。手动预览和自动播放共用一套清理逻辑。
+  const video = h('video', { class: 'splash__video', muted: true, playsInline: true });
+  // 两个文件是同一段影片。优先选浏览器能解码的版本。
+  video.src = video.canPlayType('video/mp4; codecs="hvc1"')
+    ? '/assets/boot/intro.mp4' : '/assets/boot/intro-avc.mp4';
+  const el = h('div', { class: 'splash', 'aria-label': title + ' 开屏' }, video,
+    h('span', { class: 'splash__hint' }, '点击或按键跳过'));
   const events = new AbortController();
+  const options = { signal: events.signal };
+  let timer = setTimeout(stop, 5000);
   function stop() {
     events.abort();
     clearTimeout(timer);
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
     el.remove();
     stopCurrent = undefined;
   }
-  const timer = setTimeout(stop, duration);
   stopCurrent = stop;
-  for (const event of ['pointerdown', 'keydown']) window.addEventListener(event, stop, { capture: true, signal: events.signal });
+  video.addEventListener('playing', () => {
+    clearTimeout(timer);
+    writeLocal('sm.splash.seen', true);
+    timer = setTimeout(stop, durationMs ?? (video.duration + 2) * 1000);
+  }, { ...options, once: true });
+  video.addEventListener('ended', stop, options);
+  video.addEventListener('error', stop, options);
+  for (const event of ['pointerdown', 'keydown', 'beforeinput']) window.addEventListener(event, () => {
+    writeLocal('sm.splash.seen', true);
+    stop();
+  }, { ...options, capture: true });
+  document.body.append(el);
+  video.play().catch(() => { if (!events.signal.aborted) stop(); });
 }
