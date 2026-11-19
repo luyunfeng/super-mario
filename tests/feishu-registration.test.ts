@@ -172,6 +172,28 @@ test('console login follows the regional accounts hop and keeps cookies scoped t
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('scanned session follows console 302 to login.feishu.cn before creating the bot', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mario-console-login-')), fake = webFetch();
+  let visitedLogin = false;
+  try {
+    const fetcher: typeof fetch = async (address, init) => {
+      const url = String(address);
+      if (url === 'https://open.feishu.cn/app' && !visitedLogin) return Response.redirect('https://login.feishu.cn/sso', 302);
+      if (url === 'https://login.feishu.cn/sso') {
+        assert.match(new Headers(init?.headers).get('cookie') ?? '', /session=private-session-cookie/);
+        visitedLogin = true;
+        return Response.redirect('https://open.feishu.cn/app', 302);
+      }
+      return fake.fetcher(address, init);
+    };
+    const provider = createFeishuRegistrationProvider({ dataDir: dir, fetch: fetcher });
+    const result = await provider.register({ name: 'Main', signal: new AbortController().signal, progress() {} });
+    assert.ok(visitedLogin);
+    assert.equal(result.verified, true);
+    assert.equal(fake.creates(), 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('blocked console redirect reports only the hostname and never reaches application creation', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'mario-blocked-console-')), fake = webFetch();
   try {

@@ -77,7 +77,7 @@ function appIcon(): Buffer {
 interface Cookie { name: string; value: string; domain: string; path: string; hostOnly: boolean; expiresAt?: number }
 // Only these Feishu hosts may receive requests. Redirects are checked before sending any header.
 const consoles = new Set(['open.feishu.cn', 'open.larkoffice.com']);
-const hosts = new Set([...consoles, 'accounts.feishu.cn', 'accounts.larkoffice.com', 'ask.feishu.cn']);
+const hosts = new Set([...consoles, 'login.feishu.cn', 'accounts.feishu.cn', 'accounts.larkoffice.com', 'ask.feishu.cn']);
 function checkedURL(value: string) {
   const url = new URL(value);
   if (url.protocol !== 'https:' || !hosts.has(url.hostname) || url.port || url.username || url.password) throw new RegistrationError('failed');
