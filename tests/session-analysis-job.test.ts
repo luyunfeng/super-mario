@@ -48,3 +48,12 @@ test('Claude只提取匹配会话的公开消息与工具结果', () => {
   assert.match(transcriptRecord(raw, 'claude-code', 'a'), /公开回复/); assert.doesNotMatch(transcriptRecord(raw, 'claude-code', 'a'), /PRIVATE/);
   assert.equal(transcriptRecord(raw, 'claude-code', 'b'), '');
 });
+
+
+test('工具输出中的图像保留附件标记，不把编码图片当对话正文喂给模型', () => {
+  const raw = { type: 'response_item', payload: { type: 'function_call_output', call_id: 'image', output: [
+    { type: 'input_text', text: '截图说明' }, { type: 'input_image', image_url: 'data:image/png;base64,PRIVATE_BINARY' }, { passed: 42 },
+  ] } };
+  const text = transcriptRecord(raw, 'codex', 'session');
+  assert.match(text, /截图说明/); assert.match(text, /图像附件/); assert.match(text, /passed.*42/); assert.doesNotMatch(text, /PRIVATE_BINARY/);
+});

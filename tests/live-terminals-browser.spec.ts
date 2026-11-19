@@ -25,7 +25,8 @@ rl.createInterface({input:process.stdin}).on('line',line=>{const data=JSON.parse
 `, { mode: 0o700 });
   const live = createLiveTerminalServices({ command, env: { HERDR_ENV: '1', FAKE_LIVE_DIR: dir } });
   const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: join(dir, 'server'), demo: true, token: 'offline-token' });
-  const node = startAgentNode({ url: server.url, token: 'offline-token', machineId: 'live-machine', name: '测试电脑', dataDir: join(dir, 'node'), handlers: { ...live.handlers, 'agents.session': async () => ({}), 'agents.transcript': async () => { const data = Buffer.from(Array.from({ length: 601 }, (_, i) => JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `完整对话第${i}条` }] } })).join('\n') + '\n'); return { data: data.toString('base64'), nextOffset: data.length, snapshot: { size: data.length, dev: 1, ino: 2 }, eof: true }; } }, executors: [], onDisconnect: live.disconnect });
+  let hideNative = false;
+  const node = startAgentNode({ url: server.url, token: 'offline-token', machineId: 'live-machine', name: '测试电脑', dataDir: join(dir, 'node'), handlers: { ...live.handlers, 'terminal.live.list': async params => { const value = await live.handlers['terminal.live.list']!(params, () => {}) as any; if (hideNative) for (const pane of value.panes) delete pane.nativeSessionId; return value; }, 'agents.sessions': async () => ({ sessions: [{ executorId: 'codex', nativeSessionId: 'native-full-thread', cwd: dir, metadataTimestamp: '2026-11-20T00:00:00Z' }], roots: [dir], warnings: [], truncated: false }), 'agents.session': async () => ({}), 'agents.transcript': async () => { const data = Buffer.from(Array.from({ length: 601 }, (_, i) => JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `完整对话第${i}条` }] } })).join('\n') + '\n'); return { data: data.toString('base64'), nextOffset: data.length, snapshot: { size: data.length, dev: 1, ino: 2 }, eof: true }; } }, executors: [], onDisconnect: live.disconnect });
   const project = server.app.projects.create({ name: 'CLI 现场项目', workspace: { machineId: 'live-machine', cwd: dir } });
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   async function inputs() { try { return (await readFile(join(dir, 'inputs'), 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); } catch { return []; } }
@@ -68,6 +69,16 @@ rl.createInterface({input:process.stdin}).on('line',line=>{const data=JSON.parse
     assert.equal((await inputs()).length, 0, '分析不能向现场终端发送输入');
     await drawer.getByRole('button', { name: '最近输出' }).click();
     await expect(drawer.locator('pre')).toContainText('正在修改页面');
+    await drawer.getByRole('button', { name: '关闭观察' }).click();
+    hideNative = true;
+    const withoutId = page.waitForResponse(async response => response.url().includes('/machines/live-machine/call') && response.request().postDataJSON()?.method === 'terminal.live.list' && !(await response.json()).panes[0]?.nativeSessionId);
+    await panel.getByRole('button', { name: '重新读取现场' }).click();
+    await withoutId; await page.evaluate(() => new Promise(requestAnimationFrame));
+    await panel.getByRole('button', { name: '打开现场' }).click();
+    await drawer.getByRole('button', { name: '一键分析完整对话' }).click();
+    await expect(drawer).toContainText('终端未提供可核验的会话 ID');
+    await drawer.getByRole('button', { name: /2026-11-20.*native-full-thread/ }).click();
+    await expect(drawer.getByRole('region', { name: '对话分析结果' })).toContainText('601 条公开对话');
     await drawer.getByRole('button', { name: '接管输入', exact: true }).click();
     await expect(drawer.getByRole('status')).toContainText('已接管');
     await drawer.locator('.xterm-helper-textarea').pressSequentially('test');
@@ -119,6 +130,6 @@ rl.createInterface({input:process.stdin}).on('line',line=>{const data=JSON.parse
     await page.setViewportSize({ width: 390, height: 844 });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     assert.deepEqual(errors, []);
-    assert.match(await readFile(join(dir, 'opens'), 'utf8'), /^observe\ncontrol\nobserve\n$/);
+    assert.match(await readFile(join(dir, 'opens'), 'utf8'), /^observe\nobserve\ncontrol\nobserve\n$/);
   } finally { await browser?.close(); await node.close(); await live.close(); await server.close(); await rm(dir, { recursive: true, force: true }); }
 });

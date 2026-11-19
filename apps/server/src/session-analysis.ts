@@ -13,15 +13,17 @@ export function transcriptRecord(raw: unknown, executor: string, sessionId: stri
   const render = (blocks: unknown): string => typeof blocks === 'string' ? blocks : Array.isArray(blocks) ? blocks.map(value => {
     const b = object(value);
     if (['text', 'input_text', 'output_text'].includes(b.type)) return typeof b.text === 'string' ? b.text : '';
+    if (['input_image', 'output_image', 'image'].includes(b.type)) return '[图像附件：未解析视觉内容]';
     if (b.type === 'tool_use') return `工具调用 ${b.name}: ${JSON.stringify(b.input)}`;
     if (b.type === 'tool_result') return `工具结果 ${b.tool_use_id}: ${render(b.content)}`;
-    return '';
+    if (['thinking', 'reasoning', 'redacted_thinking'].includes(b.type)) return '';
+    return JSON.stringify(value);
   }).filter(Boolean).join('\n') : '';
   if (executor === 'codex') {
     if (row.type !== 'response_item') return '';
     if (p.type === 'message' && ['user', 'assistant'].includes(p.role)) return `[${row.timestamp ?? ''} ${p.role}]\n${render(p.content)}`;
     if (['function_call', 'custom_tool_call'].includes(p.type)) return `[工具调用 ${p.name} ${p.call_id ?? ''}]\n${typeof p.arguments === 'string' ? p.arguments : p.input ?? ''}`;
-    if (['function_call_output', 'custom_tool_call_output'].includes(p.type)) return `[工具结果 ${p.call_id ?? ''}]\n${typeof p.output === 'string' ? p.output : JSON.stringify(p.output)}`;
+    if (['function_call_output', 'custom_tool_call_output'].includes(p.type)) return `[工具结果 ${p.call_id ?? ''}]\n${typeof p.output === 'string' ? p.output : Array.isArray(p.output) ? render(p.output) : JSON.stringify(p.output)}`;
   } else if (executor === 'claude-code' && row.sessionId === sessionId && ['user', 'assistant'].includes(row.type)) {
     const text = render(object(row.message).content);
     if (text) return `[${row.timestamp ?? ''} ${row.type}]\n${text}`;
