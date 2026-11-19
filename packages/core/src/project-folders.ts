@@ -1,3 +1,4 @@
+import { posix } from 'node:path';
 import type { MachineClient } from '../../plugin-sdk/src/index.ts';
 import type { ProjectDiscovery, ProjectWorkspaceBinding } from '../../protocol/src/index.ts';
 
@@ -32,6 +33,24 @@ export function createProjectFolders(source: MachineClient | (() => MachineClien
     if (!result || typeof result !== 'object' || Array.isArray(result) || result.exists !== true || typeof result.cwd !== 'string' || !result.cwd.startsWith('/') || /[\0\r\n]/.test(result.cwd)) throw new ProjectFolderError('电脑未能确认这个文件夹，请重新选择', 502);
     return { machineId: machine.id, cwd: result.cwd };
   }
+  async function createDirectory(machineId: string, input: Record<string, unknown>) {
+    const { parent, name } = input;
+    if (Object.keys(input).some(key => key !== 'parent' && key !== 'name') ||
+      (parent !== undefined && (typeof parent !== 'string' || !parent.trim() || parent.length > 4096 || parent.split('/').includes('..') || /\p{Cc}/u.test(parent))) ||
+      typeof name !== 'string' || !name.trim() || name === '.' || name === '..' || /[/\\\p{Cc}]/u.test(name)) throw new ProjectFolderError('请提供单个文件夹名和有效父目录');
+    const machine = available(machineId, 'workspace.directory.create');
+    let result;
+    try { result = await machines.call(machine.id, 'workspace.directory.create', { ...(parent === undefined ? {} : { parent }), name }, { timeoutMs: 15000 }); }
+    catch (error) {
+      if (error instanceof Error && error.message === '同名文件或文件夹已存在') throw new ProjectFolderError(error.message, 409);
+      if (error instanceof Error && ['父目录不存在或不可访问', '相对父目录必须位于执行机主目录内', '父目录不可用或无权创建文件夹'].includes(error.message)) throw new ProjectFolderError(error.message);
+      if (error && typeof error === 'object' && 'delivery' in error && error.delivery === 'no') throw error;
+      throw new ProjectFolderError('新建目录结果未知，请检查电脑上的目录后再操作', 502);
+    }
+    if (!result || typeof result !== 'object' || Array.isArray(result) || result.exists !== true || typeof result.cwd !== 'string' ||
+      !posix.isAbsolute(result.cwd) || /\p{Cc}/u.test(result.cwd) || posix.normalize(result.cwd) !== result.cwd || result.cwd.endsWith('/') || posix.basename(result.cwd) !== name) throw new ProjectFolderError('新建目录结果未知，电脑未确认预期路径', 502);
+    return { cwd: result.cwd, exists: true };
+  }
   async function discover(machineId: string, roots: string[] = []): Promise<ProjectDiscovery> {
     const machine = available(machineId, 'workspace.projects');
     if (roots.length > 12 || roots.some(root => !root.startsWith('/') || /[\0\r\n]/.test(root))) throw new ProjectFolderError('扫描根目录必须是绝对目录，最多添加 12 个');
@@ -45,5 +64,5 @@ export function createProjectFolders(source: MachineClient | (() => MachineClien
   async function prepare(input: Record<string, unknown>) {
     return input.workspace === undefined ? input : { ...input, workspace: await validate(input.workspace) };
   }
-  return { discover, validate, prepare };
+  return { discover, validate, prepare, createDirectory };
 }

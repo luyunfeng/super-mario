@@ -1,6 +1,6 @@
-// 文件夹发现只读远端电脑。只有用户点击添加或绑定才写入项目。
+// 目录发现只读。新建文件夹写入执行机，添加或绑定才写入工作台项目。
 import { h, replace } from '../lib/dom.js';
-import { Button, Banner, Field, Input, Select } from '../ui/kit.js';
+import { Button, Banner, Field, Fold, Input, Select } from '../ui/kit.js';
 import { folderTree, folderKey, hiddenFolders, setFolderHidden, onFolderVisibilityChange } from './project-folder-visibility.js';
 import { openDrawer } from '../ui/overlay.js';
 
@@ -35,9 +35,64 @@ export function openProjectFolders({ api, store, router, project }) {
   const capable = () => Boolean(machine()?.online && machine()?.capabilities?.includes('workspace.projects'));
   const addedKey = (id, path) => `${id}\n${path}`;
   const existing = (id, path) => (store.view.snapshot?.projects ?? []).find(p => p.workspace?.machineId === id && p.workspace.cwd === path);
+  const parent = Input({ placeholder: '留空使用主目录，可填 code-work 或绝对路径' });
+  const folderName = Input({ placeholder: '例如 官网改版' });
+  const createMessage = h('div', { 'aria-live': 'polite' });
+  const createButton = Button({ label: '创建文件夹', onClick: createFolder });
+  const createPanel = Fold({ title: '新建文件夹', body: [
+    Field({ label: '新文件夹名称', control: folderName }), Field({ label: '位置（可选）', control: parent, hint: '默认位置 ~，即所选电脑的用户主目录。' }),
+    createButton, createMessage,
+  ] });
+  let selection = 0, creating = false, filledPath = '';
+  const unknownCreates = new Set();
+  const createKey = () => JSON.stringify([computer.value, parent.value.trim(), folderName.value.trim()]);
+  function updateCreate() {
+    const current = store.view.snapshot?.machines?.find(m => m.id === computer.value);
+    const supported = current?.online && current.capabilities?.includes('workspace.directory.create');
+    const unknown = unknownCreates.has(createKey());
+    createButton.disabled = creating || !supported || unknown;
+    parent.disabled = folderName.disabled = creating || !supported;
+    if (!supported) replace(createMessage, Banner({ tone: 'warn', children: current?.online
+      ? '这台电脑暂不支持新建文件夹，请更新电脑代理。' : '请选择在线电脑。' }));
+    else if (unknown) replace(createMessage, Banner({ tone: 'warn', children: '创建结果未知，请在电脑上核对该目录。' }));
+  }
+  for (const input of [parent, folderName]) input.addEventListener('input', () => { replace(createMessage); updateCreate(); });
+  cwd.addEventListener('input', () => { filledPath = ''; });
+  async function createFolder() {
+    updateCreate();
+    if (closed || createButton.disabled) return;
+    const base = parent.value.trim(), child = folderName.value.trim();
+    if (base.split('/').includes('..') || /\p{Cc}/u.test(base) || !child || child === '.' || child === '..' || /[/\\\p{Cc}]/u.test(child)) {
+      replace(createMessage, Banner({ tone: 'warn', children: '请填写单个文件夹名称，位置中不能含有 .. 路径段。' }));
+      return;
+    }
+    const stamp = selection, key = createKey();
+    const isCurrent = () => !closed && selection === stamp;
+    creating = true;
+    updateCreate();
+    replace(createMessage);
+    try {
+      const value = await api.post(`/machines/${encodeURIComponent(computer.value)}/directories`, { ...(base ? { parent: base } : {}), name: child });
+      if (value?.exists !== true || typeof value.cwd !== 'string' || !value.cwd.startsWith('/')) throw new Error('缺少完整路径');
+      if (!isCurrent()) return;
+      cwd.value = filledPath = value.cwd;
+      folderName.value = '';
+      replace(createMessage, Banner({ children: '文件夹已创建，完整路径已填入下方。' }));
+    } catch (error) {
+      if (!error.status || error.status >= 500) unknownCreates.add(key);
+      else if (isCurrent()) {
+        const reason = /EEXIST|已存在|重名/.test(error.message) ? '该名称已存在，请更换文件夹名称。' : error.message;
+        replace(createMessage, Banner({ tone: 'danger', children: reason }));
+      }
+    } finally {
+      creating = false;
+      if (!closed) updateCreate();
+    }
+  }
+  updateCreate();
   const drawer = openDrawer({ title: project ? '绑定文件夹' : '添加项目文件夹', subtitle: '按目录筛选已有会话中的项目文件夹，不遍历目录。',
-    body: [Field({ label: '电脑', control: computer }), h('div', { class: 'row row--wrap' }, Field({ label: '筛选目录', control: root }), Button({ label: '加入目录筛选', onClick: () => scan(true) })), visibility, Button({ label: '刷新目录', size: 'sm', onClick: () => scan() }), results,
-      h('hr'), h('strong', null, '手动选择已存在的文件夹'), Field({ label: '文件夹', control: cwd }), !project && Field({ label: '项目名称（可选）', control: name }),
+    body: [Field({ label: '电脑', control: computer }), h('div', { class: 'folder-filter-row' }, Field({ label: '筛选目录', control: root }), Button({ label: '加入目录筛选', onClick: () => scan(true) })), visibility, Button({ label: '刷新目录', size: 'sm', onClick: () => scan() }), results,
+      h('hr'), h('strong', null, '手动选择文件夹'), createPanel, Field({ label: '文件夹', control: cwd }), !project && Field({ label: '项目名称（可选）', control: name }),
       Button({ label: project ? '绑定此文件夹' : '添加此文件夹', kind: 'primary', dataset: { folderWrite: '1' }, onClick: () => save(cwd.value.trim(), name.value.trim()) }), message],
     onClose() { unsubscribe(); closed = true; generation++; },
   });
@@ -122,7 +177,15 @@ export function openProjectFolders({ api, store, router, project }) {
       filterResults();
     } catch (error) { if (!closed && stamp === generation) replace(results, Banner({ tone: 'danger', children: `无法发现项目：${error.message}` })); }
   }
-  computer.addEventListener('change', () => { root.value = ''; redraw = undefined; void scan(); });
+  computer.addEventListener('change', () => {
+    selection++;
+    if (filledPath) cwd.value = filledPath = '';
+    parent.value = folderName.value = root.value = '';
+    replace(createMessage);
+    updateCreate();
+    redraw = undefined;
+    void scan();
+  });
   void scan();
   return drawer;
 }

@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
 import { workspaceCode } from './workspace-code.ts';
-import { lstat, open, opendir, realpath, stat } from 'node:fs/promises';
+import { lstat, mkdir, open, opendir, realpath, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, isAbsolute, join, normalize, parse, resolve, relative } from 'node:path';
 import type { DiscoveredProject, ProjectDiscovery } from '../packages/protocol/src/index.ts';
@@ -105,7 +105,7 @@ export function parseSessionHeader(text: string, nestedPayload = false): Record<
   return fields(nestedPayload);
 }
 
-/** Read-only inventory. No terminal, process spawning, project persistence or directory creation. */
+/** Discovery is read-only. Only workspace.directory.create writes a directory. */
 export function createProjectDiscovery(options: { home?: string; codexHome?: string; claudeHome?: string; cwd?: string; roots?: string[]; temporaryRoots?: string[]; ignoreEnvironmentRoots?: boolean } = {}) {
   const home = absolute(options.home ?? homedir());
   const canonicalHome = realpath(home).catch(() => home);
@@ -132,6 +132,34 @@ export function createProjectDiscovery(options: { home?: string; codexHome?: str
       if (!(await stat(canonical)).isDirectory()) throw new Error('not directory');
       return { cwd: canonical, exists: true as const };
     } catch { throw new Error('文件夹不存在、不可访问或不是目录'); }
+  }
+
+  async function createDirectory(params: unknown) {
+    paramsOnly(params, ['parent', 'name']);
+    const { parent, name } = params;
+    if (parent !== undefined && (typeof parent !== 'string' || !parent.trim() || parent.length > 4096 || parent.split('/').includes('..') || /\p{Cc}/u.test(parent))) throw new Error('父目录路径无效');
+    if (typeof name !== 'string' || !name.trim() || name === '.' || name === '..' || /[/\\\p{Cc}]/u.test(name)) throw new Error('名称必须是单个文件夹名');
+    const base = await canonicalHome;
+    const root = await realpath(resolve(base, parent ?? '.')).catch(() => { throw new Error('父目录不存在或不可访问'); });
+    if (parent && !isAbsolute(parent)) {
+      const rest = relative(base, root);
+      if (rest === '..' || rest.startsWith('../')) throw new Error('相对父目录必须位于执行机主目录内');
+    }
+    // On Linux, anchor every lookup to an open directory, including the final mkdir.
+    const flags = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
+    let handle = await open('/', flags);
+    try {
+      for (const part of root.split('/').filter(Boolean)) {
+        const next = await open(join('/proc/self/fd', String(handle.fd), part), flags);
+        await handle.close();
+        handle = next;
+      }
+      await mkdir(join('/proc/self/fd', String(handle.fd), name), { mode: 0o700 });
+      return { cwd: join(root, name), exists: true as const };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('同名文件或文件夹已存在');
+      throw new Error('父目录不可用或无权创建文件夹');
+    } finally { await handle.close(); }
   }
 
   // Session inventory keeps its metadata-only contract and original path policy.
@@ -337,6 +365,6 @@ export function createProjectDiscovery(options: { home?: string; codexHome?: str
     // Plain objects satisfy the transport's JSON boundary without changing shared contracts.
     return { ...result, projects: result.projects.map(project => ({ ...project })) };
   }
-  const handlers = { 'workspace.projects': projects, 'workspace.directory': directory, 'workspace.code': workspaceCode } satisfies Record<string, NodeHandler>;
+  const handlers = { 'workspace.projects': projects, 'workspace.directory': directory, 'workspace.directory.create': createDirectory, 'workspace.code': workspaceCode } satisfies Record<string, NodeHandler>;
   return { handlers, nativeDirectoryFilter };
 }

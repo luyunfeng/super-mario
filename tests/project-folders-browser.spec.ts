@@ -27,7 +27,7 @@ async function withFolders(run: (ctx: { page: Page; base: string; first: any; se
     page.on('pageerror', e => errors.push(e.message));
     const writes: any[] = [], scans: string[] = [], imported: any[] = [];
     const machines = [
-      { id: 'a', name: '电脑甲', online: true, capabilities: ['workspace.projects', 'workspace.directory'] },
+      { id: 'a', name: '电脑甲', online: true, capabilities: ['workspace.projects', 'workspace.directory', 'workspace.directory.create'] },
       { id: 'b', name: '电脑乙', online: true, capabilities: ['workspace.projects', 'workspace.directory'] },
       { id: 'off', name: '离线电脑', online: false, capabilities: ['workspace.projects'] },
       { id: 'legacy', name: '旧电脑', online: true, capabilities: [] },
@@ -394,3 +394,114 @@ for (const entry of ['目录树', '更多文件夹']) {
     });
   });
 }
+
+test('目录筛选按钮和输入框在桌面和窄屏底边一致且不溢出', async t => {
+  await withFolders(async ({ page, go, first }) => {
+    await go(first.id);
+    await page.getByRole('button', { name: '从电脑添加 / 发现项目' }).click();
+    const input = page.getByLabel('筛选目录', { exact: true });
+    const button = page.getByRole('button', { name: '加入目录筛选' });
+    await page.locator('dialog.drawer').evaluate(el => Promise.all(el.getAnimations().map(animation => animation.finished)).then(() => {}));
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      const field = await input.boundingBox(), action = await button.boundingBox();
+      assert.ok(field && action);
+      const inputBottom = field.y + field.height, buttonBottom = action.y + action.height;
+      t.diagnostic(`${width}px: input bottom=${inputBottom}px, button bottom=${buttonBottom}px`);
+      assert.ok(action.x >= field.x + field.width);
+      assert.ok(Math.abs(inputBottom - buttonBottom) <= 1);
+      assert.ok(field.x >= 0 && action.x + action.width <= width, JSON.stringify({ width, field, action }));
+    }
+  });
+});
+
+test('新建目录校验单个名称，处理重名，成功回填后由用户决定是否添加项目', async () => {
+  await withFolders(async ({ page, first, writes, go, json }) => {
+    const requests: unknown[] = [];
+    await page.route('**/machines/a/directories', async route => {
+      assert.equal(route.request().method(), 'POST');
+      const body = route.request().postDataJSON();
+      requests.push(body);
+      if (body.name === '重名') return json(route, { error: 'EEXIST' }, 409);
+      const parent = body.parent?.startsWith('/') ? body.parent : ['/home/a', body.parent].filter(Boolean).join('/');
+      await json(route, { cwd: parent + '/' + body.name, exists: true }, 201);
+    });
+    await go(first.id);
+    await page.getByRole('button', { name: '从电脑添加 / 发现项目' }).click();
+    const drawer = page.locator('dialog.drawer');
+    await drawer.getByText('新建文件夹', { exact: true }).click();
+    const location = drawer.getByLabel('位置（可选）');
+    await expect(location).toHaveValue('');
+    const name = drawer.getByLabel('新文件夹名称');
+    const create = drawer.getByRole('button', { name: '创建文件夹' });
+    await name.fill('父/子');
+    await create.click();
+    await expect(drawer).toContainText('单个文件夹名称');
+    assert.deepEqual(requests, []);
+    await name.fill('重名');
+    await create.click();
+    await expect(drawer).toContainText('该名称已存在');
+    const path = drawer.getByLabel('文件夹', { exact: true });
+    await expect(path).toHaveValue('');
+    await name.fill('默认位置');
+    await create.click();
+    await expect(path).toHaveValue('/home/a/默认位置');
+    await location.fill('code-work');
+    await name.fill('子项目');
+    await create.click();
+    await expect(path).toHaveValue('/home/a/code-work/子项目');
+    await location.fill('/work');
+    await name.fill('官网');
+    await create.click();
+    await expect(path).toHaveValue('/work/官网');
+    assert.deepEqual(requests, [{ name: '重名' }, { name: '默认位置' },
+      { parent: 'code-work', name: '子项目' }, { parent: '/work', name: '官网' }]);
+    assert.deepEqual(writes, []);
+    await drawer.getByRole('button', { name: '添加此文件夹' }).click();
+    await expect(drawer).toHaveCount(0);
+    assert.deepEqual(writes, [{ name: '官网', workspace: { machineId: 'a', cwd: '/work/官网' } }]);
+  });
+});
+
+test('新建目录等待回执时只提交一次，换机不回填，结果未知不重发', async () => {
+  await withFolders(async ({ page, first, writes, go, json }) => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const requests: string[] = [];
+    await page.route('**/machines/*/directories', async route => {
+      requests.push(route.request().url());
+      if (requests.length > 1) return json(route, { error: '执行机回执丢失' }, 502);
+      await gate;
+      await json(route, { cwd: '/work/new', exists: true }, 201);
+    });
+    await go(first.id);
+    await page.getByRole('button', { name: '从电脑添加 / 发现项目' }).click();
+    const drawer = page.locator('dialog.drawer');
+    await drawer.getByText('新建文件夹', { exact: true }).click();
+    const parent = drawer.getByLabel('位置（可选）'), name = drawer.getByLabel('新文件夹名称');
+    const create = drawer.getByRole('button', { name: '创建文件夹' });
+    const computer = drawer.getByLabel('电脑', { exact: true });
+    await parent.fill('/work');
+    await name.fill('new');
+    await create.evaluate(button => { (button as HTMLButtonElement).click(); (button as HTMLButtonElement).click(); });
+    await expect.poll(() => requests.length).toBe(1);
+    await expect(create).toBeDisabled();
+    await computer.selectOption('b');
+    await expect(drawer).toContainText('暂不支持新建文件夹');
+    await expect(parent).toHaveValue('');
+    await expect(name).toHaveValue('');
+    release();
+    await expect(create).not.toHaveAttribute('aria-busy', 'true');
+    await expect(drawer.getByLabel('文件夹', { exact: true })).toHaveValue('');
+    await expect(create).toBeDisabled();
+    await computer.selectOption('a');
+    await parent.fill('/work');
+    await name.fill('另一个');
+    await create.click();
+    await expect(drawer).toContainText('创建结果未知');
+    await expect(create).toBeDisabled();
+    await expect(drawer.getByLabel('文件夹', { exact: true })).toHaveValue('');
+    assert.equal(requests.length, 2);
+    assert.deepEqual(writes, []);
+  });
+});

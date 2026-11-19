@@ -282,6 +282,8 @@ export async function startServer(config: AppConfig, dependencies: { botFactory?
           else app.inbox.reopen(inbox[1]);
           return json(res, 200, { ok: true });
         }
+        const machineDirectories = path.match(/^\/api\/v1\/machines\/([^/]+)\/directories$/);
+        if (machineDirectories && method === 'POST') return json(res, 201, await projectFolders.createDirectory(decodeURIComponent(machineDirectories[1]), await body(req)));
         const discoveredProjects = path.match(/^\/api\/v1\/machines\/([^/]+)\/projects$/);
         if (discoveredProjects && method === 'GET') return json(res, 200, await projectFolders.discover(decodeURIComponent(discoveredProjects[1]), url.searchParams.getAll('root')));
         const diagnose = path.match(/^\/api\/v1\/machines\/([^/]+)\/diagnostics$/);
