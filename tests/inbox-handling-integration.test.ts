@@ -123,7 +123,7 @@ test('bot reply preserves original message; channel hook cannot replace the appr
   const incoming=f.server.app.mailboxes.list({direction:'inbox',botId:bot.id})[0]!,route='/inbox-handling/mailbox/'+incoming.id,view=(await f.api(route)).data as InboxHandlingView;
   assert.equal(view.source.active,true);assert.equal(view.source.replyAvailable,true);
   const save=await f.api(route+'/suggestions','POST',{sourceVersion:incoming.version,action:{kind:'reply',text:'已确认机器人回复'}}),approval=await f.confirm(save.data,route),initial=adapter.sent.length;
-  const sent=await f.approve(approval);assert.equal(sent.data.status,'completed',JSON.stringify(sent.data));assert.equal(adapter.sent.length,initial+1);assert.equal(adapter.sent.at(-1)?.text,'已确认机器人回复');assert.deepEqual(adapter.sent.at(-1)?.context,{replyTo:'original-bot-input',threadId:undefined});
+  const sent=await f.approve(approval);assert.equal(sent.data.status,'completed',JSON.stringify(sent.data));assert.equal(adapter.sent.length,initial+1);assert.equal(adapter.sent.at(-1)?.text,'已确认机器人回复');assert.deepEqual(adapter.sent.at(-1)?.context,{replyTo:'original-bot-input'});
   f.server.app.plugins.register({id:'alter-reply',name:'Synthetic policy',capabilities:[],activate(c){c.hook('channel.send','before',value=>({action:'continue',value:{...(value as JsonObject),text:'未确认的替换正文'}}));}});await f.server.app.plugins.start();
   await adapter.options.onMessage('第二条机器人来源',origin('next-bot-input'));
   const second=f.server.app.mailboxes.list({direction:'inbox',botId:bot.id}).find(item=>item.id!==incoming.id)!,secondRoute='/inbox-handling/mailbox/'+second.id;

@@ -38,12 +38,13 @@ test('paired dashboard uses startup URL and delivers one interactive request thr
   const bot = await server.bots.create({ name: '主机器人', appId: 'cli_0123456789abcdef', appSecret: 'test-secret', scope: { kind: 'global' } });
   const source = { messageId: 'pair', chatId: 'owner', senderId: 'human', chatType: 'p2p' };
   await adapter.onMessage(bot.pairingCode!, source);
+  requests.length = 0; // Pairing now has its own card; count only this dashboard command.
   await Promise.all([1, 2].map(() => adapter.onMessage('/dashboard', { ...source, messageId: 'command' })));
   const cards = requests.filter(request => request.msg_type === 'interactive');
   assert.equal(cards.length, 1, JSON.stringify(server.app.mailboxes.list().map(entry => [entry.title, entry.status, entry.error])));
   assert.equal(cards[0].receive_id, 'owner');
   assert.ok(JSON.parse(cards[0].content).elements.some((element: { actions?: { url: string }[] }) =>
-    element.actions?.some(action => action.url === 'https://work.example/#home')));
+    element.actions?.some(action => action.url === 'https://work.example/#chat')));
   assert.doesNotMatch(cards[0].content, /test-dashboard-token|localhost|127\.0\.0\.1/);
   assert.equal(server.app.mailboxes.list({ botId: bot.id }).find(entry => entry.sourceMessageId === 'command')?.status, 'completed');
 });

@@ -149,6 +149,10 @@ test('agent CLI loads compiled modules, including guarded artifacts, and passes 
   await copyFile(entry, join(dir, 'bin/super-mario-agent.js'));
   // Compiled-module doubles verify selection and wiring without requiring a project build.
   await writeFile(join(dir, 'dist/plugins/agent-diagnostics.js'), `export function createAgentDiagnostics() { return { handlers: { 'executor.diagnostics': async () => ({}) }, probe() { throw new Error('must not diagnose during startup'); } }; }`);
+  await writeFile(join(dir, 'dist/plugins/live-terminals.js'), `
+    import { writeFile } from 'node:fs/promises';
+    export function createLiveTerminalServices() { return { handlers: { 'terminal.live.list': async () => ({panes:[]}) }, disconnect: async () => {}, close: async () => writeFile(${JSON.stringify(join(dir, 'live-closed'))}, 'done') }; }
+  `);
   await writeFile(join(dir, 'dist/plugins/terminal-host.js'), `
     export function createTerminalHost(options) {
       if (Object.keys(options).some(key => key !== 'command')) throw new Error('Unexpected host options');
@@ -203,7 +207,7 @@ test('agent CLI loads compiled modules, including guarded artifacts, and passes 
     return output.includes('执行机代理已启动') || undefined;
   });
   const options = JSON.parse(await readFile(join(dir, 'options.json'), 'utf8'));
-  assert.deepEqual(options.handlers, ['executor.sessions', 'executor.diagnostics', 'extension.load', 'extension.status', 'extension.call', 'workspace.projects', 'workspace.directory', 'agents.sessions', 'agents.session']);
+  assert.deepEqual(options.handlers, ['terminal.live.list', 'executor.sessions', 'executor.diagnostics', 'extension.load', 'extension.status', 'extension.call', 'workspace.projects', 'workspace.directory', 'agents.sessions', 'agents.session']);
   assert.deepEqual(options.executors, [{ id: 'compiled-test', machineId: options.machineId }]);
   assert.equal(options.onDisconnect, 'function');
   assert.equal(options.dataDir, dir);
@@ -212,4 +216,5 @@ test('agent CLI loads compiled modules, including guarded artifacts, and passes 
   assert.equal(await readFile(join(dir, 'disconnected'), 'utf8'), 'done');
   assert.equal(await readFile(join(dir, 'closed'), 'utf8'), 'done');
   assert.equal(await readFile(join(dir, 'artifacts-closed'), 'utf8'), 'done');
+  assert.equal(await readFile(join(dir, 'live-closed'), 'utf8'), 'done');
 });

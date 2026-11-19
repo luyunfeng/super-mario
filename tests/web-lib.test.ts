@@ -35,13 +35,13 @@ test('提醒点：逾期待办和未查看的失败执行出现在项目；查�
   assert.equal(computeAlerts({ ...snapshot, runs: [{ id: 'u', status: 'unknown' }] }, [], { seenRunIds: [] }).projects?.dot, true);
 });
 
-test('路由：旧地址重定向到新位置，未知地址回到对话', async () => {
+test('路由：旧地址重定向到新位置，未知地址回到首页', async () => {
   const { parseRoute } = await lib('lib/router.js');
   const cases: Record<string, [string, string[]]> = {
-    '': ['chat', []], '#overview': ['chat', []], '#inbox': ['inbox', []], '#outbox': ['outbox', []], '#approvals': ['chat', []], '#interactions': ['chat', []],
+    '': ['home', []], '#overview': ['home', []], '#inbox': ['inbox', []], '#outbox': ['outbox', []], '#approvals': ['chat', []], '#interactions': ['chat', []],
     '#todos': ['projects', ['all', 'todos']], '#runs': ['projects', ['all', 'runs']], '#plans': ['projects', ['all', 'runs']], '#terminals': ['projects', ['all', 'runs']],
     '#knowledge': ['memory', []], '#supervision': ['agent', ['follow-up']], '#policies': ['agent', ['rules']], '#settings': ['agent', []],
-    '#projects/abc/runs/r1': ['projects', ['abc', 'runs', 'r1']], '#nope': ['chat', []],
+    '#projects/abc/runs/r1': ['projects', ['abc', 'runs', 'r1']], '#nope': ['home', []],
   };
   for (const [hash, [page, parts]] of Object.entries(cases)) {
     const route = parseRoute(hash);
