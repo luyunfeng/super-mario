@@ -137,6 +137,31 @@ test('invalid requests do not persist messages', async t => {
   await runtime.close();
 });
 
+test('SDK阶段和可见正文实时入库；不公开thinking原文或工具参数，最终正文不重复拼接', async t => {
+  const options = await fixture(t, false), sdk = fakeSDK();
+  const snapshots: Message[] = [];
+  options.events.subscribe(event => {
+    if (event.type !== 'messages.changed' || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) return;
+    const message = options.store.get<Message>('messages', String(event.data.messageId));
+    if (message?.role === 'assistant') snapshots.push(structuredClone(message));
+  });
+  sdk.session.prompt = async () => {
+    const send = (event: unknown) => { for (const listener of sdk.listeners) listener(event); };
+    const base = { role: 'assistant', content: [{ type: 'thinking', thinking: 'private-thought' }, { type: 'text', text: '可见回复' }], stopReason: 'stop' };
+    send({ type: 'message_update', message: base, assistantMessageEvent: { type: 'thinking_delta', delta: 'private-thought' } });
+    send({ type: 'tool_execution_start', toolName: 'read', args: { password: 'private-tool-argument' } });
+    await new Promise(resolve => setTimeout(resolve, 270));
+    send({ type: 'message_update', message: base, assistantMessageEvent: { type: 'text_delta', delta: '可见回复' } });
+    await new Promise(resolve => setTimeout(resolve, 270));
+    send({ type: 'message_end', message: base });
+  };
+  const runtime = createAgentRuntime(options, sdk.load); await runtime.post('hi'); await runtime.close();
+  assert.ok(snapshots.some(message => message.status === 'pending' && message.progress?.toolName === 'read'));
+  assert.ok(snapshots.some(message => message.status === 'pending' && message.text === '可见回复'));
+  assert.equal(snapshots.at(-1)!.text, '可见回复'); assert.equal(snapshots.at(-1)!.status, 'done');
+  assert.ok(!JSON.stringify(snapshots).includes('private-thought')); assert.ok(!JSON.stringify(snapshots).includes('private-tool-argument'));
+});
+
 test('live turns are serial; stream and thrown failures are visible and do not block later messages', async t => {
   const options = await fixture(t, false);
   const sdk = fakeSDK();

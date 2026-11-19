@@ -26,9 +26,10 @@ rl.createInterface({input:process.stdin}).on('line',line=>{const data=JSON.parse
   const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: join(dir, 'server'), demo: true, token: 'offline-token' });
   const node = startAgentNode({ url: server.url, token: 'offline-token', machineId: 'live-machine', name: '测试电脑', dataDir: join(dir, 'node'), handlers: live.handlers, executors: [], onDisconnect: live.disconnect });
   const project = server.app.projects.create({ name: 'CLI 现场项目', workspace: { machineId: 'live-machine', cwd: dir } });
-  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   async function inputs() { try { return (await readFile(join(dir, 'inputs'), 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); } catch { return []; } }
   try {
+    browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
     await expect.poll(() => server.machines.list().some(machine => machine.online)).toBe(true);
     const page = await browser.newPage({ viewport: { width: 1100, height: 850 }, reducedMotion: 'reduce' });
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
@@ -48,14 +49,53 @@ rl.createInterface({input:process.stdin}).on('line',line=>{const data=JSON.parse
     await expect(drawer.getByRole('status')).toContainText('已接管');
     await drawer.locator('.xterm-helper-textarea').pressSequentially('test');
     await expect.poll(async () => (await inputs()).filter(input => input.type === 'terminal.input').map(input => Buffer.from(input.bytes, 'base64').toString()).join('')).toBe('test');
-    await drawer.getByRole('button', { name: '停止接管' }).click();
+    // Keep one frame response in flight while input fails. It must not revive control.
+    let frameStarted!: () => void, unblockFrame!: () => void;
+    const framePending = new Promise<void>(resolve => { frameStarted = resolve; });
+    const frameGate = new Promise<void>(resolve => { unblockFrame = resolve; });
+    let failedInputs = 0;
+    await page.route('**/machines/live-machine/call', async route => {
+      const method = route.request().postDataJSON()?.method;
+      if (method === 'terminal.live.frames') {
+        const response = await route.fetch(); frameStarted(); await frameGate;
+        await route.fulfill({ response });
+      } else if (method === 'terminal.live.input') {
+        failedInputs++;
+        await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'fixture input failure' }) });
+      } else await route.continue();
+    });
+    await framePending;
+    await drawer.locator('.xterm-helper-textarea').pressSequentially('xyz');
+    await expect(drawer.getByRole('status')).toContainText('已断开');
+    unblockFrame();
+    await expect(drawer.getByRole('button', { name: '接管输入', exact: true })).toBeDisabled();
+    await expect(drawer).toContainText('输入未自动重试');
+    await page.waitForTimeout(800);
+    assert.equal(failedInputs, 1, '排队输入在首次失败后丢弃');
+    await expect(drawer.getByRole('button', { name: '接管输入', exact: true })).toBeDisabled();
+    await page.unrouteAll({ behavior: 'wait' });
+    await drawer.getByRole('button', { name: '重新观察' }).click();
     await expect(drawer.getByRole('status')).toContainText('只读');
-    await drawer.getByRole('button', { name: '关闭观察' }).click();
+    // A delayed recent-output response must not survive a project switch.
+    let readStarted!: () => void, unblockRead!: () => void;
+    const readPending = new Promise<void>(resolve => { readStarted = resolve; });
+    const readGate = new Promise<void>(resolve => { unblockRead = resolve; });
+    await page.route('**/machines/live-machine/call', async route => {
+      if (route.request().postDataJSON()?.method !== 'terminal.live.read') return route.continue();
+      const response = await route.fetch(); readStarted(); await readGate; await route.fulfill({ response });
+    });
+    await drawer.getByRole('button', { name: '最近输出' }).click();
+    await readPending;
+    const other = server.app.projects.create({ name: '另一个项目' });
+    await page.evaluate(id => { location.hash = `projects/${id}/runs`; }, other.id);
+    await expect(drawer).toHaveCount(0);
+    unblockRead();
+    await page.unrouteAll({ behavior: 'wait' });
     await expect(drawer).toHaveCount(0);
     assert.equal(server.app.store.list('runs').length, 0);
     await page.setViewportSize({ width: 390, height: 844 });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     assert.deepEqual(errors, []);
     assert.match(await readFile(join(dir, 'opens'), 'utf8'), /^observe\ncontrol\nobserve\n$/);
-  } finally { await browser.close(); await node.close(); await live.close(); await server.close(); await rm(dir, { recursive: true, force: true }); }
+  } finally { await browser?.close(); await node.close(); await live.close(); await server.close(); await rm(dir, { recursive: true, force: true }); }
 });

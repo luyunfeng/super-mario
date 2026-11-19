@@ -1,6 +1,8 @@
 import { createHash, randomInt } from 'node:crypto';
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
 import { buildFeishuDashboard } from './feishu-dashboard.ts';
+import { createAgentProgressStream } from './agent-progress-stream.ts';
+import { buildAgentProgressCard } from '../../../plugins/agent-progress-card.ts';
 import { buildFeishuMessageCard } from './feishu-cards.ts';
 import type { FeishuCardAction } from '../../../plugins/feishu.ts';
 import { botConversationId } from '../../../packages/core/src/bot-agent-routing.ts';
@@ -37,6 +39,7 @@ export interface FeishuBotsApp {
 }
 export interface FeishuBotAdapter {
   start(): Promise<void>; close(): Promise<void>; send(target: string, text: string, context?: FeishuSendContext): Promise<void>;
+  updateCard?(messageId: string, card: Record<string, unknown>): Promise<void>;
   collect(): Promise<InboxThing[]>; status(): { connected: boolean; reason?: string };
 }
 export type FeishuBotFactory = (options: FeishuOptions) => FeishuBotAdapter;
@@ -44,7 +47,7 @@ type Owner = { chatId: string; senderId?: string };
 type CardNavigation = { botId: string; appId: string; revision: number; owner: Owner; expiresAt: number };
 type Route = { channel: 'feishu'; accountId: string; botId: string; target: string; scope: BotScope; revision: number; inputId: string; sourceMessageId?: string };
 type Relay = { sourceMessageId?: string; sourceFingerprint?: string; sourceRouteFingerprint?: string; sourceBotId: string; sourceRevision: number; targetRevision: number; parentEntryId?: string; path: string[]; rootId: string; expiresAt: number; chatId?: string; fingerprint: string };
-type Envelope = { dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
+type Envelope = { progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
 type Routed = Route & Envelope & { envelopeId: string };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
 type Runtime = { epoch: number; adapter?: FeishuBotAdapter; reason?: string; code: string; expires: number; operations: Promise<void> };
@@ -75,6 +78,49 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   const inboxJobs = new Map<string, Promise<{ id: string }>>();
   const secrets = new Set(settings.list().map(row => row.appSecret).filter(Boolean));
   let closed = false;
+  function progressRoute(message: Message) {
+    if (closed || message.role !== 'assistant' || !message.replyTo || !message.progress) return;
+    const route = app.store.get<Routed>('message.routes', message.replyTo);
+    if (!route?.botId || route.channel !== 'feishu' || !route.target) return;
+    try {
+      const bot = current(route.botId), state = runtime(bot.id), adapter = state.adapter;
+      if (!adapter?.updateCard || route.accountId !== bot.appId || route.revision !== bot.revision || !sameBotScope(route.scope, bot.scope)) return;
+      const source = app.mailboxes.list().find(item => item.id === route.envelopeId);
+      if (!source || (!route.group && !route.relay && owner(bot)?.chatId !== route.target)) return;
+      checkEnvelope(source, bot);
+      return { bot, route, state, adapter };
+    } catch { return; }
+  }
+  const progressStreams = createAgentProgressStream({
+    valid: message => Boolean(progressRoute(message)),
+    async create(message) {
+      const current = progressRoute(message); if (!current) throw noDelivery('进度卡片来源已失效');
+      const { bot, route } = current;
+      const entry = await put(bot, { direction: 'outbox', eventKey: `feishu-progress:${message.id}`, title: `${bot.name} · 实时进度`,
+        text: '本轮 Agent 的进度和回复会在同一张卡片中更新。', target: route.target, replyTo: route.inputId, sourceMessageId: route.sourceMessageId, requiresConfirmation: false }, route.scope,
+        { progressMessageId: message.id, group: route.group, relay: route.relay, platformReplyTo: route.platformReplyTo, threadId: route.threadId });
+      if (entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
+      const sent = app.store.get<{ messageId: string }>('feishu.bot.progress', message.id);
+      if (!sent?.messageId) throw new Error('进度卡片发送结果未确认，保留最终回复通道');
+      return sent.messageId;
+    },
+    async patch(platformId, message) {
+      const current = progressRoute(message); if (!current) throw noDelivery('进度卡片来源已失效');
+      const { bot, route, adapter } = current;
+      const sent = app.store.get<{ messageId: string; botId: string; revision: number; target: string }>('feishu.bot.progress', message.id);
+      if (!sent || sent.messageId !== platformId || sent.botId !== bot.id || sent.revision !== bot.revision || sent.target !== route.target) throw noDelivery('进度卡片绑定已变化');
+      const card = buildAgentProgressCard(message.progress!, { title: `${bot.name} · 回复进度`, text: message.text, status: message.status, subject: 'reply' });
+      const update = async () => {
+        if (!progressRoute(message)) throw noDelivery('进度卡片来源已失效');
+        await adapter.updateCard!(platformId, card);
+      };
+      if (app.plugins?.invocations) await app.plugins.invocations.invoke('channel.send', { botId: bot.id, accountId: bot.appId, chatId: route.target, target: route.target, key: `progress:${message.id}`, text: message.text || message.progress!.detail || '正在处理' }, async input => {
+        if (!input || typeof input !== 'object' || Array.isArray(input) || input.botId !== bot.id || input.target !== route.target || input.chatId !== route.target || input.accountId !== bot.appId || input.key !== `progress:${message.id}` || input.text !== (message.text || message.progress!.detail || '正在处理')) throw noDelivery('渠道钩子不能改变进度卡片归属');
+        await update(); return null;
+      }); else await update();
+    },
+    failed(message, error) { const route = message.replyTo ? app.store.get<Routed>('message.routes', message.replyTo) : undefined; if (route?.botId) report(route.botId, new Error(`实时进度显示中断：${redact(error)}。最终回复仍使用原通道。`)); },
+  });
   let nextCardCleanup = 0;
   function navigation(bot: FeishuBotSettings, paired: Owner, eventKey: string) {
     if (!paired.senderId) return;
@@ -504,13 +550,20 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           route: key.includes('result') ? `projects/${encodeURIComponent('projectId' in bot.scope && bot.scope.projectId || 'all')}/runs`
             : 'projectId' in bot.scope && bot.scope.projectId ? `projects/${encodeURIComponent(bot.scope.projectId)}/workspace` : bot.scope.kind === 'task' ? 'projects/all/todos' : 'chat' },
       };
+      if (stamp?.progressMessageId) {
+        const message = app.store.get<Message>('messages', stamp.progressMessageId);
+        const provenance = message && progressRoute(message);
+        if (!message?.progress || !provenance || provenance.bot.id !== bot.id || provenance.route.target !== target) throw noDelivery('进度卡片缺少有效消息来源');
+        context.card = buildAgentProgressCard(message.progress, { title: `${bot.name} · 回复进度`, text: message.text, status: message.status, subject: 'reply' });
+        context.onSent = messageId => app.store.put('feishu.bot.progress', message.id, { messageId, botId: bot.id, revision: bot.revision, target });
+      }
       try { await adapter.send(target, body, context); }
       catch (error) { throw Object.assign(new Error(redact(error)), { delivery: (error as { delivery?: string })?.delivery === 'no' ? 'no' : 'unknown' }); }
     };
     const run = async () => {
       try {
       if (app.plugins?.invocations) await app.plugins.invocations.invoke('channel.send', { botId, accountId: bot.appId, chatId: target, target, text, key }, async input => {
-        if ((stamp?.inboxReplySource || stamp?.dashboard) && (!input || typeof input !== 'object' || Array.isArray(input) || input.text !== text)) throw noDelivery('确认的回复正文不能被渠道钩子改写');
+        if ((stamp?.inboxReplySource || stamp?.dashboard || stamp?.progressMessageId) && (!input || typeof input !== 'object' || Array.isArray(input) || input.text !== text)) throw noDelivery('确认的回复正文不能被渠道钩子改写');
         if (!input || typeof input !== 'object' || Array.isArray(input) || input.botId !== botId || input.accountId !== bot.appId
           || input.chatId !== target || input.target !== target || input.key !== key || typeof input.text !== 'string' || !input.text.trim()) throw noDelivery('渠道钩子不能改变机器人、目标或动作标识');
         await deliver(input.text); return null;
@@ -567,7 +620,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     }
   }
   async function reply(message: Message) {
-    if (message.role !== 'assistant' || !message.replyTo || !['done', 'failed'].includes(message.status ?? '')) return;
+    if (message.role !== 'assistant' || !message.replyTo || !['pending', 'done', 'failed'].includes(message.status ?? '')) return;
     const route = app.store.get<Routed>('message.routes', message.replyTo);
     if (route?.channel !== 'feishu' || !route.botId) return;
     let bot: FeishuBotSettings;
@@ -582,10 +635,13 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         if (!delegated) return;
         checkEnvelope(delegated, current(delegated.botId));
       }
-      if (route.relay) await returnResult(input, bot, message, route.relay);
+      if (route.relay && message.status !== 'pending') await returnResult(input, bot, message, route.relay);
       if (!route.target) return;
       if (!route.group && !route.relay && owner(bot)?.chatId !== route.target) return;
     } catch { return; }
+    const streamed = await progressStreams.update(message);
+    // Long answers retain the ordinary full-text delivery; the bounded card is a preview.
+    if (message.status === 'pending' || (streamed && Array.from(message.text).length <= 4000)) return;
     const state = runtime(bot.id), epoch = state.epoch;
     const entry = await put(bot, { direction: 'outbox', eventKey: `feishu-reply:${JSON.stringify([bot.id, bot.appId, route.inputId, message.id])}`,
       title: bot.name, text: message.text, target: route.target, replyTo: route.inputId, sourceMessageId: route.sourceMessageId, requiresConfirmation: false }, route.scope, { resultRelayEntryId: route.resultRelayEntryId, group: route.group, relay: route.relay, platformReplyTo: route.platformReplyTo, threadId: route.threadId });
@@ -653,6 +709,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     async start() { if (closed) throw noDelivery('控制器已关闭'); await Promise.all(settings.list().filter(bot => !bot.archivedAt).map(bot => restart(bot.id))); },
     async close() {
       if (closed) return; closed = true;
+      await progressStreams.close();
       for (const state of runtimes.values()) state.epoch++;
       await off(); await Promise.all([...runtimes.values()].map(state => state.operations));
       await Promise.allSettled([...runtimes.values()].map(state => state.adapter?.close()));

@@ -61,6 +61,18 @@ function setup(extra: Partial<FeishuOptions> = {}, socketOptions = {}) {
 }
 const envelope = (messages: unknown[], extra = {}) => ({ ok: true, identity: 'user', data: { messages, ...extra } });
 
+test('进度卡保存真实发送标识并PATCH同一消息，不重发创建', async t => {
+  const { integration, http } = setup(); t.after(() => integration.close());
+  let sent = '';
+  await integration.send('oc_owner', '进度', { card: { elements: [] }, onSent: id => { sent = id; } });
+  assert.ok(sent);
+  const updated = { schema: '2.0', body: { elements: [] } };
+  await integration.updateCard(sent, updated);
+  const call = http.calls.at(-1)!;
+  assert.equal(call.method, 'PATCH'); assert.ok(call.url.endsWith(`/messages/${encodeURIComponent(sent)}`));
+  assert.deepEqual(call.body, { content: JSON.stringify(updated) });
+});
+
 test('real dispatcher acknowledges before a slow business callback; dedupes by message_id and preserves identity', async t => {
   let release!: (value: string) => void;
   const answer = new Promise<string>(resolve => { release = resolve; });

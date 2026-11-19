@@ -13,7 +13,8 @@ fs.appendFileSync(path.join(dir,'calls'),JSON.stringify(args)+'\\n');
 if(args[0]==='pane'&&args[1]==='list')console.log(JSON.stringify({result:{panes:[JSON.parse(fs.readFileSync(path.join(dir,'pane'),'utf8'))]}}));
 else if(args[0]==='pane'&&args[1]==='read')console.log('real fixture output\\nnext line');
 else if(args.slice(0,2).join(' ')==='terminal session'){
- console.log(JSON.stringify({type:'terminal.frame',seq:5,full:process.env.FAKE_LIVE_BAD!=='1',encoding:'ansi',width:80,height:24,bytes:Buffer.from('live fixture').toString('base64')}));
+ console.log(JSON.stringify({type:'terminal.frame',seq:5,full:process.env.FAKE_LIVE_BAD!=='1',encoding:'ansi',width:80,height:24,bytes:(process.env.FAKE_LIVE_OVERSIZED==='1'?Buffer.alloc(800000):Buffer.from('live fixture')).toString('base64')}));
+ if(process.env.FAKE_LIVE_LARGE==='1')for(let seq=6;seq<=8;seq++)console.log(JSON.stringify({type:'terminal.frame',seq,full:false,encoding:'ansi',width:80,height:24,bytes:Buffer.alloc(450000,65).toString('base64')}));
  readline.createInterface({input:process.stdin}).on('line',line=>{fs.appendFileSync(path.join(dir,'inputs'),line+'\\n');if(JSON.parse(line).type==='terminal.release')process.exit(0)});
  setInterval(()=>{},1000);
 }else process.exit(2);
@@ -67,4 +68,29 @@ test('Herdr环境缺失、缺少完整帧或非法输入均明确失败', async 
   const good = await fixture(t); const lease = await good.call('open', { ...good.target, mode: 'control' });
   await assert.rejects(good.call('input', { connectionId: lease.connectionId, data: 'bad base64' }), /格式无效/);
   await good.call('release', { connectionId: lease.connectionId }); assert.ok(!(await good.inputs()).some(item => item.type === 'terminal.input'));
+});
+
+test('大帧积压按RPC上限分批读取，保持序号且不丢数据', async t => {
+  const f = await fixture(t, { FAKE_LIVE_LARGE: '1' });
+  const lease = await f.call('open', { ...f.target, mode: 'observe' });
+  let after = -1; const seqs: number[] = [];
+  for (let i = 0; i < 10 && after < 8; i++) {
+    const value = await f.call('frames', { connectionId: lease.connectionId, after });
+    assert.ok(Buffer.byteLength(JSON.stringify({ type: 'result', id: 'fixture', result: value })) < 1024 * 1024);
+    for (const frame of value.frames) { seqs.push(frame.seq); after = frame.seq; }
+  }
+  assert.deepEqual(seqs, [5, 6, 7, 8]);
+});
+test('观察期间终端身份或目录变化，旧帧不再交付', async t => {
+  const f = await fixture(t);
+  const lease = await f.call('open', { ...f.target, mode: 'observe' });
+  f.pane.foreground_cwd = tmpdir(); await f.state();
+  await assert.rejects(f.call('frames', { connectionId: lease.connectionId, after: -1 }), /退出、替换或切换目录/);
+  await assert.rejects(f.call('frames', { connectionId: lease.connectionId, after: -1 }), /已断开/);
+});
+
+test('单帧超过RPC预算时关闭观察，不交付超限响应', async t => {
+  const f = await fixture(t, { FAKE_LIVE_OVERSIZED: '1' });
+  await assert.rejects(f.call('open', { ...f.target, mode: 'observe' }), /中断/);
+  assert.deepEqual(await f.inputs(), []);
 });

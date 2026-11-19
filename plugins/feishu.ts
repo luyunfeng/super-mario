@@ -35,7 +35,7 @@ export function preparePersonalCheckpoint(binding: PersonalCheckpoint['binding']
   };
   return checkpoint;
 }
-export interface FeishuSendContext { card?: Record<string, unknown>; replyTo?: string; threadId?: string; presentation?: { title?: string; kind?: 'reply' | 'result' | 'brief' | 'notice'; route?: string } }
+export interface FeishuSendContext { card?: Record<string, unknown>; replyTo?: string; threadId?: string; onSent?: (messageId: string) => void; presentation?: { title?: string; kind?: 'reply' | 'result' | 'brief' | 'notice'; route?: string } }
 export interface FeishuCardAction { operatorId: string; chatId: string; messageId: string; value: Record<string, unknown> }
 export interface PersonalChatDetail { mode?: 'p2p' | 'group'; userCount?: number }
 export interface FeishuOptions {
@@ -186,6 +186,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
       if (closed || epoch !== generation) throw new Error('飞书发送请求已取消');
       const id = string(object(data.data).message_id);
       if (id) remember(id);
+      return id;
     } catch (error) {
       const detail = `发送失败，未自动重试（网络中断时结果可能为 unknown）：${reason(error, bearer ? [bearer] : [])}`;
       if (!closed && epoch === generation) operationReason = detail;
@@ -198,12 +199,21 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const payload = card ? { msg_type: 'interactive', content: JSON.stringify(card) }
       : { msg_type: 'text', content: JSON.stringify({ text }) };
     if (context?.replyTo) {
-      await postMessage(`/open-apis/im/v1/messages/${encodeURIComponent(context.replyTo)}/reply`, {
+      const id = await postMessage(`/open-apis/im/v1/messages/${encodeURIComponent(context.replyTo)}/reply`, {
         ...payload, ...(context.threadId ? { reply_in_thread: true } : {}),
       });
+      if (id) context.onSent?.(id);
       return;
     }
-    await postMessage('/open-apis/im/v1/messages?receive_id_type=chat_id', { receive_id: chatId, ...payload });
+    const id = await postMessage('/open-apis/im/v1/messages?receive_id_type=chat_id', { receive_id: chatId, ...payload });
+    if (id) context?.onSent?.(id);
+  }
+  async function updateCard(messageId: string, card: Record<string, unknown>) {
+    if (!messageId.trim()) throw new Error('卡片更新缺少消息标识');
+    const epoch = generation, signal = controller.signal, bearer = await getToken();
+    if (closed || epoch !== generation) throw new Error('飞书卡片更新已取消');
+    await request(`/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, { content: JSON.stringify(card) }, bearer, signal, 'PATCH');
+    if (closed || epoch !== generation) throw new Error('飞书卡片更新已取消');
   }
   async function drain(epoch: number) {
     if (!running || epoch !== generation || drainingGeneration === epoch) return;
@@ -610,5 +620,5 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const detail = [channelReason, identityReason, operationReason].filter(Boolean).join('；');
     return { connected, ...(detail ? { reason: detail } : {}) };
   }
-  return { start, close, send, collect, collectBatch, status };
+  return { start, close, send, updateCard, collect, collectBatch, status };
 }

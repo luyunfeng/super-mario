@@ -300,6 +300,19 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       ...(user.projectId === undefined ? {} : { projectId: user.projectId }),
       ...(user.todoId === undefined ? {} : { todoId: user.todoId }),
     };
+    let progressTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastProgressWrite = 0;
+    let progressFailure: unknown;
+    const publishProgress = () => {
+      clearTimeout(progressTimer); progressTimer = undefined;
+      if (assistant.status !== 'pending') return;
+      lastProgressWrite = Date.now(); save(structuredClone(assistant));
+    };
+    const progress = (phase: NonNullable<Message['progress']>['phase'], detail: string, toolName?: string) => {
+      assistant.progress = { phase, detail, ...(toolName ? { toolName } : {}), observedAt: new Date().toISOString() };
+      if (Date.now() - lastProgressWrite >= 250) publishProgress();
+      else progressTimer ??= setTimeout(() => { try { publishProgress(); } catch (error) { progressFailure = error; } }, 250);
+    };
     try {
       await ready;
       if (!config.demo && stopping) throw new Error('运行时已关闭，本条输入未执行。');
@@ -314,8 +327,25 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         syncTools();
         let failure: string | undefined;
         const replies: string[] = [];
+        progress('thinking', '正在处理你的请求');
         // message_end contains complete text, unlike deltas which may be replayed or revised.
         const unsubscribe = session.subscribe(event => {
+          if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') {
+            const name = /^[a-zA-Z0-9_.:-]{1,80}$/.test(event.toolName) ? event.toolName : 'tool';
+            progress('tool', event.type === 'tool_execution_start' ? '正在调用工具' : '工具调用已返回', name);
+            return;
+          }
+          if (event.type === 'message_update' && event.message.role === 'assistant') {
+            const stream = event.assistantMessageEvent;
+            if (stream.type === 'text_delta') {
+              // Only model-visible response text is streamed. Never publish raw
+              // thinking blocks, tool arguments/results, or system context.
+              const current = event.message.content.filter(block => block.type === 'text').map(block => block.text).join('');
+              assistant.text = [...replies, current].filter(Boolean).join('\n\n');
+              progress('responding', '正在生成回复');
+            } else if (stream.type === 'thinking_start') progress('thinking', '正在整理思路');
+            return;
+          }
           if (event.type !== 'message_end' || event.message.role !== 'assistant') return;
           const message = event.message;
           replies.push(message.content.filter(block => block.type === 'text').map(block => block.text).join(''));
@@ -324,7 +354,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           }
         });
         try { await session.prompt(user.text, { expandPromptTemplates: false }); }
-        finally { unsubscribe(); }
+        finally { unsubscribe(); clearTimeout(progressTimer); progressTimer = undefined; }
+        if (progressFailure) throw progressFailure;
         if (failure) throw new Error(failure);
         assistant.text = replies.filter(Boolean).join('\n\n');
         if (!assistant.text) throw new Error('模型未返回文字回复。');
@@ -335,6 +366,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       assistant.text = `回复失败：${safeError(error)}`;
       events.publish('agent.error', { conversationId: ownConversation, messageId: user.id, error: safeError(error) });
     } finally {
+      clearTimeout(progressTimer);
       activeInput = undefined;
       currentProjectId = undefined;
     }

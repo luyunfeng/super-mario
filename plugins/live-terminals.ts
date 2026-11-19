@@ -10,6 +10,8 @@ interface Target { paneId: string; terminalId: string; cwd: string }
 interface LivePane extends Target { title: string; agent: string; state: string; nativeSessionId?: string }
 interface Frame { seq: number; full: boolean; width: number; height: number; data: string }
 interface Lease { target: Target; mode: 'observe' | 'control'; child: ChildProcessWithoutNullStreams; frames: Frame[]; bytes: number; lastSeq: number; touched: number; ready: boolean; error?: string }
+// Leave room for the RPC envelope under MachineHub's 1 MiB message limit.
+const FRAME_RESPONSE_BYTES = 768 * 1024;
 const row = (value: unknown): Record<string, any> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 function text(value: unknown): string { if (typeof value !== 'string' || !value || value.length > 4096 || /[\0\r\n]/.test(value)) throw new Error('终端参数无效'); return value; }
 const json = (value: unknown) => value as Json;
@@ -82,7 +84,7 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
       const child = spawn(command, ['terminal', 'session', mode, target.terminalId, ...(mode === 'control' ? ['--takeover'] : [])], { env, stdio: ['pipe', 'pipe', 'pipe'] });
       const id = randomUUID(), lease: Lease = { target, mode, child, frames: [], bytes: 0, lastSeq: -1, touched: Date.now(), ready: false };
       leases.set(id, lease);
-      child.stdin.on('error', () => { lease.error = '终端输入连接已断开，未自动重试'; });
+      child.stdin.on('error', () => { lease.error = '终端输入连接已断开，未自动重试'; void release(id); });
       child.stderr.resume();
       const lines = createInterface({ input: child.stdout });
       try {
@@ -97,7 +99,7 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
               if (value.type !== 'terminal.frame' || value.encoding !== 'ansi' || typeof value.full !== 'boolean'
                 || !Number.isSafeInteger(value.seq) || value.seq <= lease.lastSeq || !value.full && value.seq !== lease.lastSeq + 1
                 || !Number.isInteger(value.width) || value.width < 1 || value.width > 1000 || !Number.isInteger(value.height) || value.height < 1 || value.height > 1000
-                || typeof value.bytes !== 'string' || value.bytes.length > 2 * 1024 * 1024 || Buffer.from(value.bytes, 'base64').toString('base64') !== value.bytes || !lease.ready && !value.full) throw new Error();
+                || typeof value.bytes !== 'string' || value.bytes.length > FRAME_RESPONSE_BYTES - 1024 || Buffer.from(value.bytes, 'base64').toString('base64') !== value.bytes || !lease.ready && !value.full) throw new Error();
               const frame: Frame = { seq: value.seq, full: value.full, width: value.width, height: value.height, data: value.bytes };
               lease.frames.push(frame); lease.bytes += frame.data.length; lease.lastSeq = frame.seq;
               while (lease.frames.length > 256 || lease.bytes > 2 * 1024 * 1024) lease.bytes -= lease.frames.shift()!.data.length;
@@ -110,9 +112,18 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
       } catch (error) { await release(id); throw error; }
     },
     'terminal.live.frames': async params => {
-      const { lease } = leaseOf(params), after = row(params).after;
+      const { id, lease } = leaseOf(params), after = row(params).after;
       if (!Number.isSafeInteger(after) || after < -1) throw new Error('终端序号无效');
-      const frames = lease.frames.filter(frame => frame.seq > after);
+      try { await check(lease.target); } catch (error) { await release(id); throw error; }
+      if (leases.get(id) !== lease || lease.error) throw new Error('终端观察已断开，请重新打开');
+      const frames: Frame[] = [];
+      let size = 0;
+      for (const frame of lease.frames) {
+        if (frame.seq <= after) continue;
+        const bytes = Buffer.byteLength(JSON.stringify(frame)) + 1;
+        if (size + bytes > FRAME_RESPONSE_BYTES) break;
+        frames.push(frame); size += bytes;
+      }
       if (frames.length && !(after === -1 ? frames[0]!.full : frames[0]!.full || frames[0]!.seq === after + 1)) throw new Error('终端画面已过期，请重新打开以获取完整画面');
       return json({ frames, mode: lease.mode });
     },
@@ -122,8 +133,15 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
       const bytes = row(params).data;
       if (typeof bytes !== 'string' || !bytes || bytes.length > 65536 || Buffer.from(bytes, 'base64').toString('base64') !== bytes) throw new Error('终端输入格式无效');
       try { await check(lease.target); } catch (error) { await release(id); throw error; }
+      if (leases.get(id) !== lease || lease.error) throw new Error('终端输入连接已断开，未自动重试');
       // One write to the already-bound controller stream; never retry uncertain input.
-      await new Promise<void>((resolve, reject) => lease.child.stdin.write(JSON.stringify({ type: 'terminal.input', bytes }) + '\n', error => error ? reject(new Error('终端输入结果未知，未自动重试')) : resolve()));
+      try {
+        await new Promise<void>((resolve, reject) => lease.child.stdin.write(JSON.stringify({ type: 'terminal.input', bytes }) + '\n', error => error ? reject(new Error('终端输入结果未知，未自动重试')) : resolve()));
+      } catch (error) {
+        lease.error = '终端输入结果未知，未自动重试';
+        await release(id);
+        throw error;
+      }
       return { requested: true };
     },
     'terminal.live.read': async params => {

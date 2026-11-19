@@ -8,7 +8,7 @@ const encode = text => btoa(Array.from(new TextEncoder().encode(text), value => 
 /** External live panes are observed in place. No Run, resume, or completion is invented. */
 export function createLiveTerminals({ api, store, router }) {
   let projectId = 'all', rows = [], loading = false, error = '', revision = 0, timer, drawer;
-  let closeTerminal = () => {}, signature = '';
+  let closeTerminal = () => {}, signature = '', openedItem;
   const body = h('div', { class: 'stack' });
   const el = Card({ title: '项目现场终端', sub: '同目录下的现场会话，打开后可实时观察并接管输入', id: 'project-live-terminals', body });
   const visible = () => router.current.page === 'projects' && router.current.parts?.[1] === 'runs' && !router.current.parts?.[2];
@@ -39,13 +39,15 @@ export function createLiveTerminals({ api, store, router }) {
       return data.panes.map(pane => ({ ...pane, machineId: machine.id, machineName: machine.name }));
     }));
     if (stamp !== revision || identity !== context() || !visible()) return;
-    rows = results.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+    const nextRows = results.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+    if (openedItem && !nextRows.some(item => item.machineId === openedItem.machineId && item.paneId === openedItem.paneId && item.terminalId === openedItem.terminalId && item.cwd === openedItem.cwd)) closeTerminal();
+    rows = nextRows;
     error = results.filter(result => result.status === 'rejected').map(result => result.reason.message).join('；');
     if (!machines.length) error = projectId !== 'all' ? '项目绑定的电脑未连接，或项目尚未绑定目录。' : '还没有在线执行机。';
     loading = false; paint(); timer = setTimeout(load, 5000);
   }
   function open(item) {
-    closeTerminal();
+    closeTerminal(); openedItem = item;
     const identity = context(), token = api.token?.();
     let lease, epoch = 0, disposed = false, frameTimer, terminal, controlling = false, ready = false, writes = Promise.resolve();
     const current = stamp => !disposed && stamp === epoch && identity === context() && token === api.token?.();
@@ -61,7 +63,7 @@ export function createLiveTerminals({ api, store, router }) {
     async function release(value) { if (value) await call(item.machineId, 'terminal.live.release', { connectionId: value }).catch(() => {}); }
     closeTerminal = () => {
       if (disposed) return;
-      disposed = true; epoch++; clearTimeout(frameTimer); terminal?.dispose(); void release(lease); lease = undefined;
+      disposed = true; openedItem = undefined; epoch++; clearTimeout(frameTimer); terminal?.dispose(); void release(lease); lease = undefined;
       if (drawer?.el.open) drawer.close(); drawer = undefined;
     };
     drawer = openDrawer({ title: '现场终端', subtitle: `${item.agent} · ${item.cwd}`, wide: true,
@@ -80,7 +82,7 @@ export function createLiveTerminals({ api, store, router }) {
       const stamp = epoch, id = lease;
       // Preserve ordering. A failed input closes control rather than replaying bytes.
       writes = writes.then(async () => { if (current(stamp) && ready) await call(item.machineId, 'terminal.live.input', { connectionId: id, data: encode(data) }); })
-        .catch(cause => { if (current(stamp)) { ready = false; controlling = false; controls(); replace(failure, Banner({ tone: 'danger', children: `${cause.message}。输入未自动重试。` })); void release(lease); lease = undefined; } });
+        .catch(cause => { if (current(stamp)) { epoch++; clearTimeout(frameTimer); ready = false; controlling = false; controls(); status.textContent = '现场连接已断开'; replace(failure, Banner({ tone: 'danger', children: `${cause.message}。输入未自动重试。` })); void release(lease); lease = undefined; } });
     });
     async function poll(stamp, seq = -1) {
       if (!current(stamp)) { closeTerminal(); return; }
@@ -96,7 +98,7 @@ export function createLiveTerminals({ api, store, router }) {
         }
         status.textContent = controlling ? '已接管：可直接在终端中输入' : '正在观察现场画面（只读）'; controls();
         frameTimer = setTimeout(() => poll(stamp, seq), 400);
-      } catch (cause) { if (current(stamp)) { ready = false; controlling = false; controls(); status.textContent = '现场连接已断开'; replace(failure, Banner({ tone: 'danger', children: cause.message })); void release(lease); lease = undefined; } }
+      } catch (cause) { if (current(stamp)) { epoch++; clearTimeout(frameTimer); ready = false; controlling = false; controls(); status.textContent = '现场连接已断开'; replace(failure, Banner({ tone: 'danger', children: cause.message })); void release(lease); lease = undefined; } }
     }
     async function connect(mode) {
       const stamp = ++epoch; clearTimeout(frameTimer); ready = false; controlling = false; controls(); replace(failure);

@@ -9,6 +9,7 @@ import { createAttention } from '../features/attention.js';
 import { createCodeSidebar } from '../features/code-sidebar.js';
 import { createRecentWork } from '../features/recent-work.js';
 import { systemText } from '../copy/terms.js';
+import { agentProgress } from '../ui/agent-progress.js';
 
 const EXAMPLES = ['梳理本周待办，给我下一步建议', '检查正在执行的任务进展', '把官网首页的报错修一下'];
 
@@ -105,6 +106,7 @@ export function createChatPage({ api, store, scope, router }) {
       h('span', { class: 'msg__avatar', 'aria-hidden': 'true' }, 'M'),
       h('div', { class: 'msg__col' },
         h('span', { class: 'msg__label' }, label),
+        agentProgress(message),
         h('div', { class: 'msg__bubble' }, renderFormattedText(text)),
         h('span', { class: 'msg__meta' }, timeAgo(message.createdAt))));
   }
@@ -160,9 +162,10 @@ export function createChatPage({ api, store, scope, router }) {
       recent.update(state);
       const list = state.messages ?? [];
       const follow = nearBottom();
-      keyedList(messages, list, item => item.id, renderMessage, item => `${item.id}:${item.status}:${item.text}`);
+      keyedList(messages, list, item => item.id, renderMessage, item => `${item.id}:${item.status}:${item.text}:${JSON.stringify(item.progress)}`);
       hero.hidden = list.length > 0 || !setup.hidden;
       if (list.length !== lastCount) { lastCount = list.length; if (follow) scrollToEnd(true); }
+      else if (follow && list.at(-1)?.status === 'pending') scrollToEnd(true);
       send.disabled = sending || !state.agent.available;
       input.placeholder = state.agent.available ? '说出目标，Enter 发送，Shift + Enter 换行' : '主 Agent 暂不可用，请先完成模型配置';
       const projects = (state.projects ?? []).filter(item => !item.archivedAt);
