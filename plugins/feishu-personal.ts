@@ -63,6 +63,7 @@ export interface PersonalProvider {
 }
 export function createPersonalProvider(options: {
   application: () => PersonalApplication | undefined; fallbackApplication?: () => PersonalApplication | undefined; runCLI?: PersonalCLI;
+  collectionPageLimit?: number;
 }): PersonalProvider {
   const cli = options.runCLI ?? runPersonalCLI;
   // Share only within this provider and verified identity. Cache empty results too
@@ -133,6 +134,7 @@ export function createPersonalProvider(options: {
       const current = await verify(account, signal);
       if (current.openId !== account.openId) throw new PersonalAuthError('failed');
       const adapter = createFeishuIntegration({ appId: account.appId, appSecret: '', profile: account.profile, personalOpenId: account.openId,
+        ...(options.collectionPageLimit ? { personalCollectionPageLimit: options.collectionPageLimit } : {}),
         personalChatDetail: chatId => chatDetail(account, signal, chatId),
         runCLI: args => cli(args, { signal }), onMessage: async () => undefined, onInbox: async () => {} });
       try {

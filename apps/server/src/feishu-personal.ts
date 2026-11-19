@@ -16,6 +16,7 @@ export interface PersonalStatus {
   enabled: boolean; account?: { name: string }; url?: string; expiresAt?: string;
   error?: string; recovery?: 'connect_application' | 'permissions' | 'retry'; permissionUrl?: string;
   lastCompletedThrough?: string; hasMore?: boolean; collectionPages?: number; collectionBoundary?: string;
+  collecting?: boolean; privateCompletedThrough?: string;
   lastCollectedAt?: string; collected?: number; demo?: boolean;
 }
 /** Owns personal consent and collection separately from all bot connections. */
@@ -49,13 +50,17 @@ export function createPersonalMessages(options: {
                 && lane.chatIds.length <= 10 && lane.chatIds.every(validChatId))
             && (lane.token === undefined || typeof lane.token === 'string' && lane.token.length > 0)
             && (lane.restarted === undefined || typeof lane.restarted === 'boolean')
-            && Array.isArray(lane.seen) && lane.seen.length <= 4096 && lane.seen.every((token: unknown) => typeof token === 'string')))) throw new Error('个人飞书分页记录无效');
+            && Array.isArray(lane.seen) && lane.seen.length <= 4096 && lane.seen.every((token: unknown) => typeof token === 'string'))
+          || c.window.directory !== undefined && (!c.window.directory || typeof c.window.directory.done !== 'boolean'
+            || c.window.directory.retryAt !== undefined && (!Number.isFinite(c.window.directory.retryAt) || c.window.directory.retryAt < 0))
+          || c.window.privateRange !== undefined && (!c.window.privateRange || !date(c.window.privateRange.start) || !date(c.window.privateRange.end) || Date.parse(c.window.privateRange.start) > Date.parse(c.window.privateRange.end)))) throw new Error('个人飞书分页记录无效');
       if (!data.account || !['appId', 'openId', 'profile'].every(key => c.binding[key] === data.account[key])) delete data.checkpoint;
     }
     saved = data;
     chmodSync(file, 0o600);
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   const provider = options.provider ?? createPersonalProvider({
+    collectionPageLimit: 3,
     application: () => {
       const current = createIntegrationConfig(config.dataDir, config.feishu).read();
       return current.profile ? { profile: current.profile, appId: current.appId } : undefined;
@@ -80,7 +85,9 @@ export function createPersonalMessages(options: {
     const boundary = saved.checkpoint?.notBefore
       ? `从 ${new Date(saved.checkpoint.notBefore).toLocaleString('zh-CN')} 重新开始采集，不回填此前历史。` + PERSONAL_COLLECTION_BOUNDARY.replace('首次读取最近24小时；', '')
       : PERSONAL_COLLECTION_BOUNDARY;
-    return { collectionBoundary: saved.checkpoint?.groupRetryFrom ? boundary + ' 当前仅完成私聊采集；待群名单恢复后补扫。' : boundary, lastCompletedThrough: saved.checkpoint?.lastCompletedThrough,
+    return { collecting: Boolean(collecting), privateCompletedThrough: saved.checkpoint?.directThrough ?? saved.checkpoint?.lastCompletedThrough,
+      collectionBoundary: saved.checkpoint?.window?.directory?.retryAt ? boundary + ' 群读取暂不可用，已延后重试；私聊继续采集。'
+        : saved.checkpoint?.groupRetryFrom ? boundary + ' 私聊进度已独立保存，群消息仍在低优先级补读。' : boundary, lastCompletedThrough: saved.checkpoint?.lastCompletedThrough,
       hasMore: !!saved.checkpoint?.window, collectionPages: saved.checkpoint?.pages ?? 0 };
   }
   const status = () => structuredClone({ ...view, ...progress() });
@@ -99,7 +106,9 @@ export function createPersonalMessages(options: {
   function schedule() {
     clearTimeout(timer);
     if (closed || !view.enabled) return;
-    timer = setTimeout(() => { void collect().catch(() => {}); }, saved.checkpoint?.window ? 250 : options.pollMs ?? 120_000); timer.unref();
+    const window = saved.checkpoint?.window;
+    const pending = window && (!window.lanes[0]?.done || !window.directory?.retryAt || window.directory.retryAt <= Date.now());
+    timer = setTimeout(() => { void collect().catch(() => {}); }, pending ? 250 : options.pollMs ?? 120_000); timer.unref();
   }
   async function collect(): Promise<{ collected: number }> {
     if (closed || view.status !== 'connected' || !view.enabled || !saved.account) throw new Error('请先授权飞书账号并开启采集');

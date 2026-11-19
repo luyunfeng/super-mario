@@ -132,3 +132,5 @@
 回看与轮次：`features/recent-work.js` 从快照派生近 24 小时结果，已读不参与筛选；`todo-history.ts` 只投影当前 Todo 同项目的 Run 与原验收意图，通过稳定游标分页。`features/todo-history.js` 负责抽屉、迟到读取隔离与原记录导航；`attention.js` 以未变卡片 DOM 缓存保留翻页草稿。
 
 飞书展示：`apps/server/src/feishu-cards.ts` 统一段落、分区、状态与按钮布局；`feishu-dashboard.ts` 生成只读工作台/执行/收件分页；`feishu-bots.ts` 固定回调的机器人版本、配对主人、会话与时限。`plugins/feishu.ts` 只适配平台发送及 `card.action.trigger`，长连接回调不进入模型队列。
+
+个人采集批次：`plugins/feishu.ts:collectIncremental` 先读私聊，再按 active_time 取最多一页群候选，按3页预算分批；私聊范围和群原窗口分别持久化。`feishu-personal.ts` 宿主在入箱后提交断点，公开私聊/完整水位和读取中状态。兼容入口保留原全路读取；生产宿主显式启用有界模式。

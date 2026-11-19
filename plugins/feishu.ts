@@ -1,4 +1,4 @@
-import { allowedPersonalChats, scopedLanes, searchFilter, unmutedIds, type SearchLane } from './feishu-personal-scope.ts';
+import { allowedPersonalChats, scopedLanes, searchFilter, unmutedIds, validChatId, type SearchLane } from './feishu-personal-scope.ts';
 import { execFile } from 'node:child_process';
 import { EventDispatcher, WSClient } from '@larksuiteoapi/node-sdk';
 import type { InboxThing } from '../packages/protocol/src/index.ts';
@@ -19,10 +19,14 @@ export interface PersonalCheckpoint {
   directThrough?: string;
   groupRetryFrom?: string;
   pages: number;
-  window?: { start: string; end: string; lanes: SearchLane[] };
+  window?: { start: string; end: string; lanes: SearchLane[];
+    /** Incremental directory traversal is private progress, not a claim that all groups were read. */
+    directory?: { done: boolean; retryAt?: number };
+    privateRange?: { start: string; end: string };
+  };
 }
 export interface PersonalBatch { items: InboxThing[]; checkpoint: PersonalCheckpoint; hasMore: boolean; evidence?: CollectedReplyEvidence[] }
-export const PERSONAL_COLLECTION_BOUNDARY = '首次读取最近24小时；后续从已完成水位重叠5分钟读取。仅搜索私聊和当前账号明确未免打扰的群；群名单不可用时仅采集私聊，保留群回扫起点。分页未完成时保持原窗口；默认分页采集按命中消息独立入箱。旧collect按会话聚合，上下文每会话最多50条。不保证永久历史或任意旧编辑的全量同步。';
+export const PERSONAL_COLLECTION_BOUNDARY = '首次读取最近24小时；后续从已完成水位重叠5分钟读取。私聊优先；群聊只选按最近活跃时间排序的前100个会话中，未解散且明确未免打扰的群，最低优先级分批读取。未完成的群读取保留原时间范围，私聊可独立推进。默认分页采集按命中消息独立入箱。不保证全部群、永久历史或任意旧编辑的全量同步。';
 /** Pin the window before the first read as well as after each successful ingestion. */
 export function preparePersonalCheckpoint(binding: PersonalCheckpoint['binding'], previous?: PersonalCheckpoint): PersonalCheckpoint {
   const sameAccount = previous && (['appId', 'openId', 'profile'] as const).every(key => previous.binding[key] === binding[key]);
@@ -46,6 +50,8 @@ export interface FeishuOptions {
   profile?: string;
   /** Verified personal account identity, distinct from the robot's own mention ID. */
   personalOpenId?: string;
+  /** Product polling bounds each persisted batch; legacy adapter callers keep their existing full-route read. */
+  personalCollectionPageLimit?: number;
   /** Enable self-identity resolution for precise group mentions; default off. */
   groupMessages?: boolean;
   /** Exact command group selected by the main bot controller. */
@@ -331,6 +337,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
   async function cli(args: string[]): Promise<Row[]> { return (await cliPage(args)).messages; }
   /** One page per route per batch keeps private chats and mentions moving even in busy groups. */
   async function collectBatch(previous?: PersonalCheckpoint): Promise<PersonalBatch> {
+    if (options.personalCollectionPageLimit) return collectIncremental(previous, options.personalCollectionPageLimit);
     if (closed || !options.profile || !options.personalOpenId) throw new Error('个人采集缺少已核验账号');
     const binding = { appId: options.appId, openId: options.personalOpenId, profile: options.profile };
     const checkpoint = preparePersonalCheckpoint(binding, previous);
@@ -404,6 +411,94 @@ export function createFeishuIntegration(options: FeishuOptions) {
       delete checkpoint.window;
     }
     return { items, checkpoint, hasMore, evidence };
+  }
+  /** Large group directories must not hold private messages or durable progress behind a full scan. */
+  async function collectIncremental(previous: PersonalCheckpoint | undefined, limit: number): Promise<PersonalBatch> {
+    if (closed || !options.profile || !options.personalOpenId) throw new Error('个人采集缺少已核验账号');
+    if (!Number.isSafeInteger(limit) || limit < 2 || limit > 10) throw new Error('采集页数限制无效');
+    const checkpoint = preparePersonalCheckpoint({ appId: options.appId, openId: options.personalOpenId, profile: options.profile }, previous);
+    const window = checkpoint.window!;
+    if (!window.directory) {
+      // One-time migration: old full-membership lanes are no longer the selected group scope.
+      window.lanes = window.lanes.slice(0, 1); window.directory = { done: false };
+    }
+    const directory = window.directory;
+    const direct = window.lanes[0]!;
+    if (direct.done) {
+      // Group windows retain their original end. A new private window can move independently.
+      const end = new Date(Math.floor(Math.max(Date.now(), Date.parse(checkpoint.directThrough ?? window.end)) / 1000) * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      const start = new Date(Math.max(Date.parse(checkpoint.directThrough ?? window.end) - 300000,
+        checkpoint.notBefore ? Date.parse(checkpoint.notBefore) : -Infinity)).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      window.privateRange = { start, end }; direct.done = false; direct.seen = []; delete direct.token; delete direct.restarted;
+    }
+    const privateRange = window.privateRange ?? { start: window.start, end: window.end };
+    const privateRows = await readIncrementalLane(direct, privateRange.start, privateRange.end);
+    checkpoint.pages++;
+    if (direct.done) { checkpoint.directThrough = privateRange.end; checkpoint.groupRetryFrom ??= window.start; }
+
+    // Group reading is best effort and lowest priority: use only the newest active
+    // directory page, never enumerate thousands of old memberships before messages.
+    const deferGroups = () => { controller.signal.throwIfAborted(); directory.retryAt = Date.now() + pollMs; };
+    if (directory.retryAt && directory.retryAt <= Date.now()) delete directory.retryAt;
+    if (direct.done && !directory.retryAt && !directory.done && !window.lanes.slice(1).some(lane => !lane.done)) {
+      try {
+        const page = await readData(['+chat-list', '--types', 'group', '--sort', 'active_time', '--exclude-muted', '--page-size', '100']);
+        if (!Array.isArray(page.chats) || typeof page.has_more !== 'boolean') throw new Error('个人群名单分页无效');
+        const known = new Set(window.lanes.flatMap(lane => lane.chatIds ?? []));
+        const ids = [...new Set(page.chats.slice(0, 100).filter((chat: Row) => validChatId(chat?.chat_id) && chat.chat_mode !== 'p2p'
+          && (chat.chat_status === undefined || chat.chat_status === 'normal')).map((chat: Row) => chat.chat_id as string))].filter(id => !known.has(id));
+        const allowed = await unmutedIds(ids, readData);
+        window.lanes.push(...scopedLanes(allowed).slice(1).sort((a, b) => Number(b.mentions) - Number(a.mentions)));
+        directory.done = true;
+      } catch { deferGroups(); }
+    }
+    const groupRows: Row[] = [];
+    let pages = 1;
+    for (const lane of window.lanes.slice(1)) {
+      if (!direct.done || directory.retryAt || lane.done || pages >= limit) continue;
+      try {
+        // Settings must still be affirmative immediately before body search, including resumed cursors.
+        const allowed = await unmutedIds(lane.chatIds!, readData);
+        if (allowed.length !== lane.chatIds!.length) {
+          // Split changed scopes into fresh searches. Never attach an old token to new chat IDs.
+          lane.done = true; delete lane.token; lane.seen = [];
+          window.lanes.push(...scopedLanes(allowed).slice(1).filter(next => next.mentions === lane.mentions));
+          continue;
+        }
+        groupRows.push(...await readIncrementalLane(lane, checkpoint.groupRetryFrom ?? window.start, window.end));
+        checkpoint.pages++; pages++;
+      } catch { deferGroups(); break; }
+    }
+    const scoped = privateRows.concat(groupRows);
+    const messages = checkpoint.notBefore ? scoped.filter(hit => {
+      const at = isoTime(hit.create_time); return at !== undefined && Date.parse(at) >= Date.parse(checkpoint.notBefore!);
+    }) : scoped;
+    const items = await messageThings(messages), evidence = messageEvidence(messages);
+    const hasMore = !directory.done || window.lanes.some(lane => !lane.done);
+    if (!hasMore) {
+      checkpoint.lastCompletedThrough = window.end;
+      if (checkpoint.directThrough && Date.parse(checkpoint.directThrough) > Date.parse(window.end)) checkpoint.groupRetryFrom = window.end;
+      else { delete checkpoint.directThrough; delete checkpoint.groupRetryFrom; }
+      delete checkpoint.window;
+    }
+    return { items, checkpoint, hasMore, evidence };
+  }
+  async function readIncrementalLane(lane: SearchLane, start: string, end: string): Promise<Row[]> {
+    const read = () => cliPage(['+messages-search', '--exclude-sender-type', 'bot', '--start', start, '--end', end,
+      '--page-size', '50', '--no-reactions', ...searchFilter(lane), ...(lane.token ? ['--page-token', lane.token] : [])]);
+    let page;
+    try { page = await read(); } catch (error) {
+      if (!lane.token || object(error).kind !== 'cursor' || lane.restarted) throw error;
+      lane.restarted = true; delete lane.token; lane.seen = []; page = await read();
+    }
+    const more = page.data.has_more === true || page.pagination.complete === false;
+    if (!more && page.data.has_more !== false && page.pagination.complete !== true) throw new Error('飞书分页缺少完成标记');
+    const next = string(page.data.page_token);
+    if (more && (!next || next === lane.token || lane.seen.includes(next) || lane.seen.length >= 4096)) throw new Error('飞书分页游标无效，保留已完成进度');
+    lane.done = !more;
+    if (more) { if (lane.token) lane.seen.push(lane.token); lane.token = next; }
+    else { lane.seen = []; delete lane.token; }
+    return scopedHits(page.messages, lane);
   }
   function messageEvidence(messages: Row[]): CollectedReplyEvidence[] {
     const matches = new Map(messages.map(row => [JSON.stringify([row.chat_id, row.message_id]), row]));

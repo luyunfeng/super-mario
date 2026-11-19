@@ -19,13 +19,15 @@ export function createPersonalMessagesUI({ api, store, router, onConnectApplicat
   let loaded = false;
   const body = h('div', { class: 'stack' });
   const el = Card({ title: '个人消息采集（可选）', hint: 'channel.collect', id: 'channel-collect', body });
-  const summary = () => state.enabled ? '正在采集' : state.status === 'connected' ? '已停止采集（账号已授权）' : labels[state.status] ?? '未授权';
+  const summary = () => state.enabled ? state.collecting ? '正在读取一批消息…' : '自动采集已开启' : state.status === 'connected' ? '已停止采集（账号已授权）' : labels[state.status] ?? '未授权';
   function completeness() {
     const completed = typeof state.lastCompletedThrough === 'string' && Number.isFinite(Date.parse(state.lastCompletedThrough));
     // Only show the public boundary explanation, never configuration or cursor diagnostics.
     const boundary = typeof state.collectionBoundary === 'string' ? state.collectionBoundary.trim() : '';
     const privateBoundary = /profile|page[\s_-]*token|cursor|access[\s_-]*token|refresh[\s_-]*token|https?:\/\/|配置名称|分页令牌|游标/i.test(boundary);
     return h('dl', { class: 'kv small', 'aria-label': '采集完整性' },
+      h('dt', null, '私聊最近读到'), h('dd', null, state.privateCompletedThrough && Number.isFinite(Date.parse(state.privateCompletedThrough))
+        ? new Date(state.privateCompletedThrough).toLocaleString('zh-CN') : '尚无已完成的私聊批次。'),
       h('dt', null, '最近完整读到'), h('dd', null, completed
         ? h('time', { datetime: state.lastCompletedThrough }, new Date(state.lastCompletedThrough).toLocaleString('zh-CN'))
         : '未提供完整性证据，不能确认窗口已完整读取。'),
@@ -84,7 +86,8 @@ export function createPersonalMessagesUI({ api, store, router, onConnectApplicat
       loadError && Banner({ tone: 'danger', children: loadError }),
       state.recovery === 'connect_application' && Button({ label: '扫码连接飞书应用', disabled: working, onClick: () => { drawer.close(); onConnectApplication(); } }),
       state.recovery === 'permissions' && permissionUrl && h('a', { href: permissionUrl, target: '_blank', rel: 'noopener noreferrer' }, '打开此应用的飞书权限设置（应用管理员操作）'),
-      state.lastCollectedAt && h('p', { class: 'small muted' }, `最近采集：${new Date(state.lastCollectedAt).toLocaleString('zh-CN')}，整理 ${state.collected ?? 0} 条消息记录。`),
+      state.lastCollectedAt && h('p', { class: 'small muted' }, `最近一批：${new Date(state.lastCollectedAt).toLocaleString('zh-CN')}，读取并提交 ${state.collected ?? 0} 条消息记录。`),
+      state.lastCollectedAt && state.collected === 0 && h('p', { class: 'small muted' }, state.hasMore ? '本批没有可入箱消息；其余读取仍在继续，不能据此判断所有来源都没有新消息。' : '本批没有可入箱消息。起点以前的历史消息不会自动回填。'),
       loaded && completeness());
     const disabled = working || !loaded || state.demo;
     replace(drawer.foot,

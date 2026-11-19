@@ -101,7 +101,7 @@ test('分页未完成 → 完成水位 → 停止：保留历史证据，采集�
 
 test('旧 provider 无水位不宣称全量完成；边界隐藏内部信息，长文本安全换行', { timeout: 30000 }, async () => fixture(async page => {
   await reply(page, 'get', { ...connected, collectionBoundary: undefined, lastCollectedAt: watermark, collected: 8 });
-  await expect(dialog(page)).toContainText('整理 8 条消息记录');
+  await expect(dialog(page)).toContainText('读取并提交 8 条消息记录');
   await expect(evidence(page)).toContainText('未提供完整性证据');
   await expect(evidence(page)).toContainText('未提供分页状态');
   await expect(evidence(page)).toContainText('未提供页数');
@@ -187,4 +187,14 @@ test('扫码授权与采集开关分离：初始禁用、取消互斥、过期�
   await reply(page, 'put', { ...connected, hasMore: true, collectionPages: 0 });
   await expect(dialog(page).getByRole('button', { name: '停止采集', exact: true })).toBeEnabled();
   assert.equal((await writes(page)).length, 5);
+}));
+
+test('私聊进度与群补读分开显示；零消息说明范围，不冒充完整采集',()=>fixture(async page=>{
+ const direct='2026-11-20T00:20:00Z';
+ await reply(page,'get',{...connected,collecting:true,privateCompletedThrough:direct,hasMore:true,collectionPages:3,lastCompletedThrough:watermark,lastCollectedAt:direct,collected:0});
+ await expect(dialog(page)).toContainText('正在读取一批消息');
+ await expect(evidence(page)).toContainText('私聊最近读到');
+ await expect(dialog(page)).toContainText('本批没有可入箱消息；其余读取仍在继续');
+ await expect(evidence(page).locator(`time[datetime="${watermark}"]`)).toBeVisible();
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.deepEqual(await writes(page),[]);
 }));
