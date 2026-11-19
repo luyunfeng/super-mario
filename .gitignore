@@ -30,6 +30,8 @@ coverage/
 # 本地运行数据目录
 data/
 .workbench/
+/knowledge/
+/wiki/
 
 # 临时文件
 tmp/
