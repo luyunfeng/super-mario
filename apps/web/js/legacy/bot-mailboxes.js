@@ -41,6 +41,7 @@ export function createBotMailboxesUI({ api, element, getState, onChanged, showRe
   const project = field(form, 'projectId', '所属项目', 'select');
   const todo = field(form, 'todoId', '所属待办', 'select');
   const confirmation = field(form, 'requireConfirmation', '处理前需要人工确认'); confirmation.type = 'checkbox'; confirmation.checked = true;
+  const direct = field(form, 'ownerDirectReply', '主机器人直接处理已配对主人的私聊'); direct.type = 'checkbox'; direct.parentElement.classList.add('checkbox');
   const enabled = field(form, 'enabled', '启用连接'); enabled.type = 'checkbox';
   confirmation.parentElement.classList.add('checkbox'); enabled.parentElement.classList.add('checkbox');
   const appId = field(form, 'appId', '应用标识（手动接入）'); appId.autocomplete = 'off';
@@ -202,7 +203,7 @@ export function createBotMailboxesUI({ api, element, getState, onChanged, showRe
     executor.value = ''; options(executor, [[bot.executorId || '', '原绑定执行者已不可用']], '不绑定执行者'); executor.value = bot.executorId || '';
     name.value = bot.name; scope.value = bot.scope.kind;
     project.value = bot.scope.projectId || ''; render(); todo.value = bot.scope.todoId || '';
-    appId.value = bot.appId; secret.value = ''; confirmation.checked = bot.requireConfirmation; enabled.checked = bot.enabled;
+    appId.value = bot.appId; secret.value = ''; confirmation.checked = bot.requireConfirmation; direct.checked = !!bot.ownerDirectReply; enabled.checked = bot.enabled;
     formTitle.textContent = `编辑机器人：${bot.name}`; form.scrollIntoView({ block: 'nearest' }); sync();
   }
   const human = value => String(value || '').replace(/WebSocket/gi, '实时连接').replace(/Herdr|SSH|hook/gi, '连接服务').replace(/\bID\b|appId|botId|projectId/gi, '标识').replace(/cli_[\w]+|ou_[\w]+|oc_[\w]+/g, '（已隐藏）').replace(/知识/g, '记忆').replace(/执行机/g, '电脑').replace(/事项/g, '待办');
@@ -282,7 +283,7 @@ export function createBotMailboxesUI({ api, element, getState, onChanged, showRe
     const value = { kind: scope.value };
     if (scope.value === 'project' || (scope.value === 'task' && project.value)) value.projectId = project.value;
     if (scope.value === 'task') value.todoId = todo.value;
-    const body = { name: name.value.trim(), scope: value, requireConfirmation: confirmation.checked, enabled: enabled.checked };
+    const body = { name: name.value.trim(), scope: value, requireConfirmation: confirmation.checked, ownerDirectReply: value.kind === 'global' && direct.checked, enabled: enabled.checked };
     if (!body.name) { error.textContent = '请填写机器人名称。'; return; }
     if (qr) {
       secret.value = '';

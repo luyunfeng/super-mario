@@ -206,7 +206,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       ...(bot.executorId ? { executorId: bot.executorId } : {}),
       ...(bot.groupChats ? { groupChats: structuredClone(bot.groupChats) } : {}),
       ...(bot.collaboration ? { collaboration: structuredClone(bot.collaboration) } : {}),
-      requireConfirmation: bot.requireConfirmation, ...(bot.profile ? { profile: bot.profile } : {}),
+      ownerDirectReply: bot.ownerDirectReply === true, requireConfirmation: bot.requireConfirmation, ...(bot.profile ? { profile: bot.profile } : {}),
       connected: !closed && bot.enabled && pluginEnabled() && status.connected, paired,
       ...(!closed && !paired && !ownerCandidate(bot) && bot.enabled && pluginEnabled() ? { pairingCode: state.code } : {}),
       ...(state.reason || status.reason || (!paired && ownerCandidate(bot)) ? { reason: redact(state.reason ?? status.reason ?? '已识别扫码用户，直接私聊机器人即可绑定') } : {}), createdAt: bot.createdAt, updatedAt: bot.updatedAt };
@@ -600,11 +600,13 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       return;
     }
     const context: Omit<Envelope, 'revision'> = group ? { group: structuredClone(source), platformReplyTo: source.messageId, threadId: source.threadId ?? source.rootId } : {};
+    const ownerDirect = bot.scope.kind === 'global' && bot.ownerDirectReply === true && !group
+      && source.senderType === 'user' && !!paired?.senderId && paired.senderId === source.senderId;
     const entry = await put(bot, { direction: 'inbox', eventKey: `feishu-in:${JSON.stringify([bot.id, bot.appId, source.messageId])}`,
       title: bot.name, text, target: source.chatId, sourceMessageId: source.messageId,
       origin: { kind: group ? 'group' : 'direct', connector: '飞书机器人', chatId: source.chatId,
         ...(source.chatName ? { chatName: source.chatName } : {}), ...(source.senderName ? { senderName: source.senderName } : {}) },
-      requiresConfirmation: bot.requireConfirmation || bot.scope.kind === 'unmarked' }, bot.scope, context);
+      requiresConfirmation: (bot.requireConfirmation && !ownerDirect) || bot.scope.kind === 'unmarked' }, bot.scope, context);
     if (active(bot.id, epoch, bot.revision) && !entry.requiresConfirmation && entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
     else if (active(bot.id, epoch, bot.revision) && entry.status === 'pending') {
       const receipt = await put(bot, { direction: 'outbox', eventKey: `feishu-received:${entry.id}`, title: '收件确认',

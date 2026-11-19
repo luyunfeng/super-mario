@@ -6,12 +6,21 @@ interface State { latest: Message; platformId?: string; task?: Promise<void>; di
  */
 export function createAgentProgressStream(options: {
   create(message: Message): Promise<string>; patch(id: string, message: Message): Promise<void>;
-  valid(message: Message): boolean; failed?(message: Message, error: unknown): void; intervalMs?: number;
+  valid(message: Message): boolean; failed?(message: Message, error: unknown): void; intervalMs?: number; firstProgressMs?: number;
 }) {
   const streams = new Map<string, State>(); let closed = false;
   const final = (message: Message) => ['done', 'failed'].includes(message.status ?? '');
+  const delegating = (m: Message) => ['work_dispatch', 'bot_handoff'].includes(m.progress?.toolName ?? '');
   async function drain(state: State) {
     try {
+      // Give short answers a single ordinary reply. A handoff wakes this delay immediately.
+      if (!state.platformId && !state.lastWrite && !final(state.latest) && !delegating(state.latest)) {
+        await new Promise<void>(resolve => {
+          const timer = setTimeout(() => { state.wake = undefined; resolve(); }, options.firstProgressMs ?? 5000);
+          state.wake = () => { clearTimeout(timer); state.wake = undefined; resolve(); };
+        });
+        if (final(state.latest)) { state.dirty = false; state.failed = true; return; }
+      }
       while (state.dirty && !state.failed && !state.final && !closed) {
         if (state.platformId && !final(state.latest)) {
           const delay = (options.intervalMs ?? 1000) - (Date.now() - state.lastWrite);
@@ -49,7 +58,7 @@ export function createAgentProgressStream(options: {
         if (state.final) return true;
         state.latest = structuredClone(message); state.dirty = true;
       }
-      if (final(message)) state.wake?.();
+      if (final(message) || delegating(message)) state.wake?.();
       start(state);
       if (!final(message)) return false;
       while (!closed && !state.failed && !state.final && (state.task || state.dirty)) { start(state); await state.task; }

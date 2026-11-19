@@ -12,8 +12,8 @@ import type { FeishuBotsApp, FeishuBotFactory } from '../apps/server/src/feishu-
 import type { FeishuOptions } from '../plugins/feishu.ts';
 import type { Message } from '../packages/protocol/src/index.ts';
 
-async function until(check: () => boolean) { for (let n = 0; n < 500; n++) { if (check()) return; await delay(5); } assert.fail('进度没有收敛'); }
-async function fixture(t: test.TestContext) {
+async function until(check: () => boolean) { for (let n = 0; n < 1600; n++) { if (check()) return; await delay(5); } assert.fail('进度没有收敛'); }
+async function fixture(t: test.TestContext, ownerDirectReply = false) {
   const dir = mkdtempSync(join(tmpdir(), 'mario-progress-'));
   const store = createStore(join(dir, 'test.sqlite')), events = createEventBus(store), mailboxes = createEventMailboxes({ store, events });
   let adapterOptions!: FeishuOptions, patchFails = false;
@@ -31,7 +31,7 @@ async function fixture(t: test.TestContext) {
   } };
   const controller = createFeishuBotsController(app, { host: '127.0.0.1', port: 0, dataDir: dir, demo: true }, { factory });
   mailboxes.setHandlers({ inbox: entry => controller.dispatchInbox(entry), outbox: entry => controller.send(entry.botId, entry.target!, entry.text, entry.eventKey) });
-  const bot = await controller.create({ name: '测试Agent', appId: 'cli_OfflineProgress', appSecret: 'test-secret', scope: { kind: 'global' }, requireConfirmation: false });
+  const bot = await controller.create({ name: '测试Agent', appId: 'cli_OfflineProgress', appSecret: 'test-secret', scope: { kind: 'global' }, ownerDirectReply, requireConfirmation: ownerDirectReply });
   const source = (messageId: string) => ({ messageId, chatId: 'owner', senderId: 'human', senderType: 'user' as const, chatType: 'p2p' });
   await adapterOptions.onMessage(controller.list()[0]!.pairingCode!, source('pair')); sends.length = 0;
   await adapterOptions.onMessage('测试请求', source('request'));
@@ -72,4 +72,12 @@ test('长回复保留完整正文，不能只交付截断的进度预览', async
   const f = await fixture(t); f.publish({}); await until(() => f.sends.length === 1);
   const text = '完整正文'.repeat(1100); f.publish({ status: 'done', text });
   await until(() => f.sends.length === 2); assert.equal(f.sends[1]!.text, text);
+});
+test('配对主人直接问答：启用收件确认时仍可直接回答，快答只发一次正文', async t => {
+  const f = await fixture(t,true);
+  f.publish({});
+  f.publish({ status: 'done', text: '直接答案' });
+  await until(() => f.sends.length > 0);
+  assert.deepEqual(f.sends.map(s => s.text), ['直接答案']);
+  assert.equal(f.patches.length, 0);
 });

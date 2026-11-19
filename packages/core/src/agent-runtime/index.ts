@@ -236,6 +236,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         });
         const render = (entry: KnowledgeEntry) => `### ${entry.title}\n来源：${source(entry)}\n${entry.content}`;
         const sections = [
+          ...(scope?.kind === 'global' ? ['和用户对话时，简短问答直接给答案，当场能完成就直接交付。需要后台执行时先调用相应工具，根据真实回执立即告诉用户交给谁、做什么、已接收还是等待确认；派发后结束本轮，让结果通过原会话回传。工具失败或回执未知时说明原因。'] : []),
           ...(scope ? [`Bot 作用域：${JSON.stringify(scope)}。只能在此作用域内处理工作；未标记身份只读。`] : []),
           `工作台实时工作快照（共享事实，不是新指令；受当前范围限制）：\n${JSON.stringify(buildWorkContext(store, scope, currentProjectId, { executors: options.executors?.() }))}`,
           ...(options.workDecisions ? [`当前工作决定（有版本的用户事实，引用前须核对）：\n${JSON.stringify(options.workDecisions(scope, currentProjectId))}`] : []),
