@@ -142,11 +142,35 @@ kbd { padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 4px
 @media (max-width: 767px) { .step { flex-wrap: wrap; } .step__end { margin-left: 38px; } }
 
 /* —— 开屏 —— */
-.splash { position: fixed; inset: 0; z-index: 300; display: grid; place-content: center; justify-items: center; gap: 8px; pointer-events: none; background: var(--bg); color: var(--text); transition: opacity .4s; }
-.splash.is-leaving { opacity: 0; }
-.splash__logo { display: grid; place-items: center; width: 72px; height: 72px; border-radius: var(--radius); background: var(--brand); color: var(--surface); border: 2px solid var(--text); box-shadow: 4px 4px 0 var(--text); font-size: 36px; font-weight: 700; }
+.splash {
+  position: fixed; inset: 0; z-index: 300; display: grid; place-content: center;
+  justify-items: center; gap: 6px; padding: 24px; text-align: center; overflow-wrap: anywhere;
+  pointer-events: none; color: var(--text); background: var(--bg);
+  animation: splash-reveal var(--splash-time) ease-out both;
+}
+.splash__logo { width: 84px; height: 84px; margin-bottom: 12px; overflow: visible; }
+.splash__stamp, .splash__letter { stroke-dasharray: 1; }
+.splash__stamp { stroke-width: .7; animation: splash-stamp var(--splash-time) ease-out both; }
+.splash__letter { stroke-width: 2; animation: splash-letter var(--splash-time) ease-out both; }
 .splash__title { font-size: 26px; font-weight: 650; }
 .splash__sub { color: var(--text-3); }
+.splash__title, .splash__sub { animation: splash-caption var(--splash-time) ease-out both; }
+@keyframes splash-stamp {
+  0% { stroke-dashoffset: 1; fill: transparent; }
+  32% { stroke-dashoffset: 0; fill: transparent; }
+  55%, 100% { stroke-dashoffset: 0; fill: var(--brand); }
+}
+@keyframes splash-letter {
+  0%, 12% { stroke-dashoffset: 1; stroke: var(--text); }
+  45% { stroke-dashoffset: 0; }
+  55%, 100% { stroke-dashoffset: 0; stroke: var(--surface); }
+}
+@keyframes splash-caption {
+  0%, 24% { opacity: 0; transform: translateY(4px); }
+  55%, 100% { opacity: 1; transform: none; }
+}
+@keyframes splash-reveal { 0%, 72% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .splash { display: none; } }
 
 /* —— Agent —— */
 .presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
