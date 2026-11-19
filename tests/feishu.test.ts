@@ -415,7 +415,7 @@ test('group opt-in resolves bot identity once and compares raw SDK open_id rathe
   await tick();
   assert.deepEqual(sources.map(source => source.mentionedSelf), [true, false, false, false, false, true]);
   assert.ok(sources.every(source => source.senderType === 'user'));
-  assert.deepEqual(sources[0], { chatId: 'oc_fake_chat', messageId: 'om_self', chatType: 'group', senderId: 'ou_fake_sender', senderType: 'user', mentionedSelf: true, threadId: 'omt_thread', rootId: 'om_root' });
+  assert.deepEqual(sources[0], { chatId: 'oc_fake_chat', messageId: 'om_self', chatType: 'group', senderId: 'ou_fake_sender', senderType: 'user', mentionedSelf: true, mentions: [{ key: '@_user_1', openId: 'ou_fake_bot', name: 'different name' }], threadId: 'omt_thread', rootId: 'om_root' });
   assert.equal(http.calls.length, 2);
   socket.disconnect(); socket.reconnect(); await tick();
   assert.equal(http.calls.length, 2);
@@ -630,4 +630,38 @@ test('real SDK card callback returns toast and replacement card without waiting 
  assert.equal(result.toast.content,'已刷新');assert.equal(result.card.type,'raw');assert.equal(calls,1);
  await integration.close();const stale=await dispatcher.invoke(event,{needCheck:false}) as any;
  assert.equal(stale.toast.type,'info');assert.equal(calls,1);
+});
+
+test('总指挥群只扩展指定群的人类入口，保留未解析点名并过滤发送回声', async t => {
+  const sources: FeishuMessageSource[] = [];
+  const chatId = 'oc_command';
+  const { integration, socket, http } = setup({ commandGroupChatId: chatId,
+    renderMessage: () => ({ schema: '2.0' }), onMessage: async (_, source) => { sources.push(source); } });
+  t.after(() => integration.close());
+  await integration.start(); await tick();
+  const group = { chat_id: chatId, chat_type: 'group' };
+  await socket.emit('om_plain', group);
+  await socket.emit('om_plain', group);
+  await socket.emit('om_other', { ...group, chat_id: 'oc_other' });
+  for (const sender of ['app', 'bot', 'unknown']) await socket.emit('om_' + sender, group, sender);
+  await socket.emit('om_mention', { ...group, mentions: [{ key: '@_user_1', id: { open_id: 'ou_target', app_id: 'cli_target' }, name: '项目' }, {}] });
+  await tick();
+  assert.deepEqual(sources.map(s => s.messageId), ['om_plain', 'om_mention']);
+  assert.deepEqual(sources[1]!.mentions, [{ key: '@_user_1', openId: 'ou_target', appId: 'cli_target', name: '项目' }, {}]);
+  const mention = { openId: 'ou_target', name: '项目' };
+  const text = '<at user_id="all">测试</at>';
+  let receipt = '';
+  await integration.send(chatId, text, { mention, onSent: id => { receipt = id; } });
+  const sent = http.calls.at(-1)!;
+  assert.ok(sent.url.endsWith('/im/v1/messages?receive_id_type=chat_id'));
+  assert.deepEqual(sent.body, { receive_id: chatId, msg_type: 'post',
+    content: JSON.stringify({ zh_cn: { content: [[{ tag: 'at', user_id: 'ou_target' }, { tag: 'text', text: ' ' + text }]] } }) });
+  assert.ok(receipt);
+  await socket.emit(receipt, group);
+  await tick();
+  assert.equal(sources.length, 2);
+  const count = http.calls.length;
+  await assert.rejects(integration.send(chatId, text, { mention: { ...mention, openId: credentials.appId } }), /openId/);
+  await assert.rejects(integration.send('oc_other', text, { mention }), /总指挥群/);
+  assert.equal(http.calls.length, count);
 });

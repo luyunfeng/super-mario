@@ -6,7 +6,8 @@ import type { CollectedReplyEvidence } from '../packages/protocol/src/index.ts';
 
 /** Factory injection keeps tests offline while exercising the real SDK dispatcher. */
 export type FeishuWSFactory = (options: ConstructorParameters<typeof WSClient>[0]) => Pick<WSClient, 'start' | 'close' | 'getConnectionStatus'>;
-export interface FeishuMessageSource { chatId: string; messageId: string; chatType?: string; chatName?: string; senderName?: string; senderId?: string; senderType?: 'user' | 'bot'; mentionedSelf?: boolean; threadId?: string; rootId?: string }
+export interface FeishuMention { key?: string; openId?: string; appId?: string; name?: string }
+export interface FeishuMessageSource { mentions?: FeishuMention[]; chatId: string; messageId: string; chatType?: string; chatName?: string; senderName?: string; senderId?: string; senderType?: 'user' | 'bot'; mentionedSelf?: boolean; threadId?: string; rootId?: string }
 /** Private resume data. The host commits it only after durable inbox ingestion. */
 export interface PersonalCheckpoint {
   version: 1;
@@ -35,7 +36,7 @@ export function preparePersonalCheckpoint(binding: PersonalCheckpoint['binding']
   };
   return checkpoint;
 }
-export interface FeishuSendContext { card?: Record<string, unknown>; replyTo?: string; threadId?: string; onSent?: (messageId: string) => void; presentation?: { title?: string; kind?: 'reply' | 'result' | 'brief' | 'notice'; route?: string } }
+export interface FeishuSendContext { mention?: { openId: string; name: string }; card?: Record<string, unknown>; replyTo?: string; threadId?: string; onSent?: (messageId: string) => void; presentation?: { title?: string; kind?: 'reply' | 'result' | 'brief' | 'notice'; route?: string } }
 export interface FeishuCardAction { operatorId: string; chatId: string; messageId: string; value: Record<string, unknown> }
 export interface PersonalChatDetail { mode?: 'p2p' | 'group'; userCount?: number }
 export interface FeishuOptions {
@@ -47,6 +48,8 @@ export interface FeishuOptions {
   personalOpenId?: string;
   /** Enable self-identity resolution for precise group mentions; default off. */
   groupMessages?: boolean;
+  /** Exact command group selected by the main bot controller. */
+  commandGroupChatId?: string;
   /** A profile only identifies an account; it never grants background collection. */
   collectEnabled?: boolean;
   pollMs?: number;
@@ -195,6 +198,19 @@ export function createFeishuIntegration(options: FeishuOptions) {
   }
   async function send(chatId: string, text: string, context?: FeishuSendContext): Promise<void> {
     if (!chatId.trim() || !text.trim()) throw new Error('飞书发送需要 chatId 和非空文本');
+    if (context?.mention) {
+      const { openId } = context.mention;
+      if (!options.commandGroupChatId || options.commandGroupChatId !== chatId || context.replyTo || context.threadId || context.card) throw new Error('点名消息必须直接发送到当前总指挥群');
+      if (!/^ou_[A-Za-z0-9_-]+$/.test(openId)) throw new Error('点名需要发送方可见的目标机器人 openId');
+      // Separate structured nodes keep user text literal, including any embedded @ markup.
+      const content = { zh_cn: { content: [[{ tag: 'at', user_id: openId }, { tag: 'text', text: ' ' + text }]] } };
+      const id = await postMessage('/open-apis/im/v1/messages?receive_id_type=chat_id', {
+        receive_id: chatId, msg_type: 'post', content: JSON.stringify(content),
+      });
+      if (!id) throw new Error('飞书点名消息缺少 message_id，发送结果未知');
+      context.onSent?.(id);
+      return;
+    }
     const card = context?.card ?? options.renderMessage?.(text, context);
     const payload = card ? { msg_type: 'interactive', content: JSON.stringify(card) }
       : { msg_type: 'text', content: JSON.stringify({ text }) };
@@ -239,7 +255,11 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const message = object(data.message);
     // Never feed bot messages (including our own replies) back into the model.
     if (sender.sender_type !== 'user' || message.message_type !== 'text') return;
-    if (options.groupMessages === true && message.chat_type === 'group' && !botOpenId) return;
+    const commandGroup = !!options.commandGroupChatId && message.chat_id === options.commandGroupChatId;
+    if (message.chat_type === 'group' && !commandGroup) {
+      if (options.groupMessages && !botOpenId) return;
+      if (options.commandGroupChatId && !options.groupMessages) return;
+    }
     const messageId = string(message.message_id), chatId = string(message.chat_id);
     if (!messageId || !chatId || seen.has(messageId)) return;
     let text: string;
@@ -248,11 +268,19 @@ export function createFeishuIntegration(options: FeishuOptions) {
     if (!text.trim()) return;
     if (queue.length >= 100) { operationReason = '飞书消息队列已满，消息未处理'; return; }
     remember(messageId);
+    // Preserve unknown entries too: an unresolved @ must not look like a message with no addressee.
+    const mentions = Array.isArray(message.mentions) ? message.mentions.map(raw => {
+      const mention = object(raw), id = object(mention.id);
+      const openId = string(id.open_id), appId = string(id.app_id);
+      return { ...(string(mention.key) && { key: string(mention.key) }), ...(openId && { openId }),
+        ...(appId && { appId }), ...(string(mention.name) && { name: string(mention.name) }) };
+    }) : undefined;
     const source: FeishuMessageSource = {
       chatId, messageId, chatType: string(message.chat_type) || undefined,
       senderId: string(object(sender.sender_id).open_id) || undefined, senderType: 'user',
       // EventDispatcher preserves the SDK's nested id; CLI-normalized mentions differ.
-      mentionedSelf: !!botOpenId && Array.isArray(message.mentions) && message.mentions.some(mention => string(object(object(mention).id).open_id) === botOpenId),
+      mentionedSelf: !!botOpenId && !!mentions?.some(mention => mention.openId === botOpenId),
+      ...(mentions && { mentions }),
       ...(string(message.thread_id) ? { threadId: string(message.thread_id) } : {}),
       ...(string(message.root_id) ? { rootId: string(message.root_id) } : {}),
     };
@@ -549,7 +577,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     controller = new AbortController();
     token = undefined; tokenRequest = undefined; collecting = undefined;
     botOpenId = undefined;
-    identityReason = options.groupMessages === true ? '群消息不可用，正在读取机器人身份' : undefined;
+    identityReason = options.groupMessages || options.commandGroupChatId ? '群消息不可用，正在读取机器人身份' : undefined;
     connectionReason = '正在连接飞书'; operationReason = undefined;
     try {
       const logger = createLogger(epoch);
@@ -598,7 +626,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
         if (running && epoch === generation) { connectionReason = reason(error); clearTimeout(startupTimer); client.close({ force: true }); }
       });
     } catch (error) { connectionReason = reason(error); clearTimeout(startupTimer); ws?.close({ force: true }); }
-    if (options.groupMessages === true) void resolveBotIdentity(epoch);
+    if (options.groupMessages || options.commandGroupChatId) void resolveBotIdentity(epoch);
     if (options.collectEnabled === true && options.profile?.trim()) void poll(epoch);
   }
   async function close(): Promise<void> {
