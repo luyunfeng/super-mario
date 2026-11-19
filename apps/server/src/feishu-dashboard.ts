@@ -3,8 +3,8 @@ import type { InboxItem, MachineInfo, Project, Run, Todo } from '../../../packag
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
 import { cardButtons, cardDocument, cardPlain, cardSection, cardWebBase } from './feishu-cards.ts';
 
-type DashboardApp = Pick<FeishuBotsApp, 'store'> & { attention?: () => AttentionItem[] };
-export type DashboardView = 'home' | 'tasks' | 'inbox';
+type DashboardApp = Pick<FeishuBotsApp, 'store' | 'projectWorkspace'> & { attention?: () => AttentionItem[] };
+export type DashboardView = 'home' | 'tasks' | 'inbox' | 'projects';
 const label = (value: string, max = 100) => value.replace(/\s+/g, ' ').trim().slice(0, max);
 
 /** Owner-only, read-only views. Callback buttons refresh this card; URL buttons navigate to Web. */
@@ -62,12 +62,26 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
         run.progress?.detail && '最近进展：' + label(run.progress.detail, 200), run.error && '原因：' + label(run.error, 200)].filter(Boolean).join('\n'));
       buttons([['查看执行', 'projects/' + encodeURIComponent(project || 'all') + '/runs/' + encodeURIComponent(run.id)]]);
     }
-  } else {
+  } else if (view === 'inbox') {
     const rows = [...action, ...inbox.filter(item => item.tier !== 'action')]; total = rows.length;
     page = Math.min(Math.max(0, options.page ?? 0), Math.max(0, Math.ceil(total / pageSize) - 1));
     if (!rows.length) section('收件箱', '当前没有未处理来信。');
     for (const item of rows.slice(page * pageSize, (page + 1) * pageSize))
       section(item.tier === 'action' ? '需要处理' : '知会即可', label(item.title) + '\n' + label(item.text ?? '', 200));
+  }
+  if ((view === 'home' || view === 'projects') && options.navigation && app.projectWorkspace) {
+    const activeProjects = app.store.list<Project>('projects').filter(p => !p.archivedAt);
+    if (view === 'projects') {
+      total = activeProjects.length;
+      page = Math.min(Math.max(0,options.page ?? 0), Math.max(0, Math.ceil(total / pageSize) - 1));
+    }
+    const rows = activeProjects.slice(page * pageSize, (page + 1) * pageSize);
+    for (const project of rows) {
+      section('项目 Agent', label(project.name));
+      elements.push(...cardButtons([{ label: '在这里聊', value: { kind: 'workbench.chat', projectId: project.id, navigation: options.navigation } }]));
+    }
+    if (view === 'home' && activeProjects.length > pageSize) elements.push(...cardButtons([{ label:'全部项目',value:{kind:'workbench.navigate',navigation:options.navigation,view:'projects',page:0} }]));
+    elements.push(...cardButtons([{ label: '切回主 Agent', value: { kind: 'workbench.chat', projectId: '', navigation: options.navigation } }]));
   }
   if (options.navigation) {
     const value = (target: DashboardView, targetPage = 0) => ({ kind: 'workbench.navigate', navigation: options.navigation, view: target, page: targetPage });
@@ -89,6 +103,6 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
   buttons([['主对话', 'chat'], ['执行列表', 'projects/all/runs'], ['发起执行', 'projects/all/runs/new']]);
   elements.push({ tag: 'note', elements: [cardPlain('仅供已配对的主人私聊查看。按钮导航不会批准、发件或验收；数据为卡片生成时的快照。')] });
   const date = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' }).format(options.now ?? new Date());
-  const title = `${date} · ${view === 'home' ? '今日工作台' : view === 'tasks' ? '任务进展' : '收件箱'}`;
+  const title = `${date} · ${view === 'home' ? '今日工作台' : view === 'tasks' ? '任务进展' : view === 'projects' ? '项目 Agent' : '收件箱'}`;
   return { text: lines.join('\n\n'), card: cardDocument(title, elements) };
 }

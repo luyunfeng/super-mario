@@ -784,3 +784,32 @@ test('owner card buttons page current facts, survive restart and reject forwardi
  const cap=f.store.get<any>('feishu.card.navigation',fresh.navigation)!;f.store.put('feishu.card.navigation',fresh.navigation,{...cap,expiresAt:0});
  assert.equal('card' in latest.options.onCardAction!({operatorId:'human',chatId:'owner',messageId:'platform-card',value:fresh}),false);
 });
+
+test('主人选项目、切回主 Agent 后，引用原卡仍进入原项目并在原话题返回',async t=>{
+ const f=fixture(t), a=await f.add('ProjectCard',{kind:'global'});await a.pair();
+ f.store.put('projects','p',{id:'p',name:'项目 P'});
+ const projectInputs:string[]=[];
+ f.app.projectWorkspace={async post(projectId,text){
+   projectInputs.push(text);return {id:'p-'+projectInputs.length,role:'user',text,createdAt:'',conversationId:'project:'+projectId+':work'};
+ }};
+ await a.instance.options.onMessage('工作台',source('dash'));
+ const card=a.instance.contexts.at(-1)!.card as any;
+ const actions=card.elements.flatMap((el:any)=>el.actions??[]).filter((a:any)=>a.value?.kind==='workbench.chat');
+ const press=(projectId:string,messageId:string,operatorId='human')=>a.instance.options.onCardAction!({chatId:'owner',operatorId,messageId,value:actions.find((a:any)=>a.value.projectId===projectId).value}) as any;
+ assert.notEqual(press('p','card-project','other').toast.type,'success');
+ assert.equal(press('p','card-project').toast.type,'success');
+ await a.instance.options.onMessage('第一问',source('question'));
+ assert.deepEqual(projectInputs,['第一问']);
+ assert.equal(press('','card-main').toast.type,'success');
+ await a.instance.options.onMessage('普通提问',source('main-q'));
+ assert.equal(f.posts.at(-1)?.text,'普通提问');
+ await a.instance.options.onMessage('跟进',{...source('follow'),parentId:'card-project',rootId:'card-project'});
+ assert.deepEqual(projectInputs,['第一问','跟进']);
+ f.reply('p-2');await tick();
+ assert.equal(a.instance.contexts.at(-1)?.replyTo,'follow');
+ assert.equal(a.instance.contexts.at(-1)?.threadId,'card-project');
+ f.store.put('projects','p',{id:'p',name:'P',archivedAt:'today'});
+ await a.instance.options.onMessage('归档后的追问',{...source('archived'),parentId:'card-project'});
+ assert.equal(projectInputs.length,2);
+ assert.match(a.instance.sent.at(-1)![1],/重新选择/);
+});

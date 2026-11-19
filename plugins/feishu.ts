@@ -7,7 +7,7 @@ import type { CollectedReplyEvidence } from '../packages/protocol/src/index.ts';
 /** Factory injection keeps tests offline while exercising the real SDK dispatcher. */
 export type FeishuWSFactory = (options: ConstructorParameters<typeof WSClient>[0]) => Pick<WSClient, 'start' | 'close' | 'getConnectionStatus'>;
 export interface FeishuMention { key?: string; openId?: string; appId?: string; name?: string }
-export interface FeishuMessageSource { mentions?: FeishuMention[]; chatId: string; messageId: string; chatType?: string; chatName?: string; senderName?: string; senderId?: string; senderType?: 'user' | 'bot'; mentionedSelf?: boolean; threadId?: string; rootId?: string }
+export interface FeishuMessageSource { mentions?: FeishuMention[]; chatId: string; messageId: string; chatType?: string; chatName?: string; senderName?: string; senderId?: string; senderType?: 'user' | 'bot'; mentionedSelf?: boolean; parentId?: string; threadId?: string; rootId?: string }
 /** Private resume data. The host commits it only after durable inbox ingestion. */
 export interface PersonalCheckpoint {
   version: 1;
@@ -288,6 +288,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
       mentionedSelf: !!botOpenId && !!mentions?.some(mention => mention.openId === botOpenId),
       ...(mentions && { mentions }),
       ...(string(message.thread_id) ? { threadId: string(message.thread_id) } : {}),
+      ...(string(message.parent_id) ? { parentId: string(message.parent_id) } : {}),
       ...(string(message.root_id) ? { rootId: string(message.root_id) } : {}),
     };
     queue.push({ text, source, generation: epoch });
