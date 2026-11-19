@@ -13,7 +13,7 @@ import { closeOverlays } from './ui/overlay.js';
 import { createSearch } from './features/search.js';
 import { installShortcuts } from './features/shortcuts.js';
 import { openQuickTodo } from './features/quick-todo.js';
-import { playSplash } from './features/splash.js';
+import { playSplash, stopSplash } from './features/splash.js';
 import { createConsole } from './legacy/terminal.js';
 import { createChatPage } from './pages/chat.js';
 import { createMailboxPage } from './pages/mailbox.js';
@@ -101,15 +101,17 @@ router.subscribe((route) => {
 
 window.addEventListener('workspace:preview-splash', () => {
   const entry = (store.view.snapshot?.webExtensions ?? []).find(item => item.value?.renderer === 'brand-splash');
-  playSplash({ ...(entry?.value ?? {}), force: true });
+  if (entry) playSplash({ ...entry.value, force: true });
 });
 // 开屏由“开屏”插件提供：插件启用且是第一次打开时播放一次，不拦截操作。
-let splashChecked = false;
+let splashEnabled = false;
 store.subscribe(({ snapshot }) => {
-  if (!snapshot || splashChecked) return;
-  splashChecked = true;
+  if (!snapshot) return;
   const entry = (snapshot.webExtensions ?? []).find(item => item.value?.renderer === 'brand-splash');
+  if (Boolean(entry) === splashEnabled) return;
+  splashEnabled = Boolean(entry);
   if (entry) playSplash(entry.value);
+  else stopSplash();
 });
 store.connect();
 router.start();

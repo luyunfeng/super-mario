@@ -452,7 +452,7 @@ export async function startServer(config: AppConfig, dependencies: { botFactory?
       }
       // 静态资源按目录提供：只允许 apps/web 下已知类型的文件，拒绝 .. 和隐藏文件。
       if (req.method !== 'GET') throw new InputError('页面不存在', 404);
-      if (path === '/assets/boot/intro.mp4' || path === '/assets/boot/intro-avc.mp4') {
+      if (/^\/assets\/boot\/(intro|loop)(-avc)?\.mp4$/.test(path)) {
         const file = new URL('../../web' + path, import.meta.url);
         const { size } = await stat(file);
         const range = req.headers.range;

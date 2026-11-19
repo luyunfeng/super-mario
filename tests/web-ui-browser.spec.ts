@@ -252,7 +252,9 @@ test('开屏只在第一次出现，且不拦截操作', { timeout: 30000 }, asy
     const video = page.locator('.splash video');
     await expect.poll(() => video.evaluate((el: HTMLVideoElement) => el.currentTime)).toBeGreaterThan(0);
     assert.ok(await video.evaluate((el: HTMLVideoElement) => el.muted && el.videoWidth > 0));
-    await page.keyboard.press('Escape');
+    await video.evaluate((el: HTMLVideoElement) => { el.currentTime = el.duration - .25; });
+    const loop = page.locator('video.splash-background');
+    await expect.poll(() => loop.evaluate((el: HTMLVideoElement) => el.loop && el.videoWidth > 0 && el.currentTime > 0)).toBe(true);
     await page.locator('#message-text').fill('开屏期间可以输入');
     await expect(page.locator('.splash')).toHaveCount(0, { timeout: 6000 });
     await page.reload();
