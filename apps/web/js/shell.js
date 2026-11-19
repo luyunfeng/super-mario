@@ -69,7 +69,7 @@ export function createShell({ api, store, router, scope }) {
   const loading = h('div', { class: 'page__inner', id: 'loading', role: 'status' }, h('p', { class: 'muted' }, '正在加载工作台…'));
   const failure = h('div', { class: 'page__inner', id: 'error', role: 'alert', hidden: true });
   const view = h('main', { id: 'view', tabindex: '-1' }, loading, failure);
-  const mainCol = h('div', { class: 'main-col' }, topbar, view, pluginSettings.footer);
+  const mainCol = h('div', { class: 'main-col' }, topbar, view, pluginSettings.right, pluginSettings.footer);
   const root = h('div', { class: 'app', id: 'workspace' }, sidebar, mainCol);
 
   return {

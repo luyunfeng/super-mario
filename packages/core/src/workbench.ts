@@ -1,3 +1,4 @@
+import { tokenStatistics } from '../../../plugins/token-statistics.ts';
 import { excludesPersonalGroupFromBrief } from '../../protocol/src/inbox-origin.ts';
 import { createCommandProjectRouter } from './agent-runtime/command-project-router.ts';
 import { createInboxClassifier } from './agent-runtime/inbox-classifier.ts';
@@ -121,6 +122,7 @@ export async function createWorkbench(config: AppConfig) {
     return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
   }, knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0]) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
   plugins.register(workspaceSplash);
+  plugins.register(tokenStatistics);
   for (const loaded of await loadExtensions(config.dataDir, { reservedIds: plugins.list().map(item => item.id) })) plugins.register(loaded.extension, loaded.config);
   try { await plugins.start(); } catch (error) { store.close(); throw error; }
   const agent = createAgentRuntime({ config, store, events, contributions, executors: executorInfo, workDecisions: workDecisions.context, botContext, projectContext:id=>projectWorkspace.context(id) });

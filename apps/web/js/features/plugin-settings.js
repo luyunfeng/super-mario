@@ -1,3 +1,4 @@
+import { openTokenStatistics } from './token-statistics.js';
 import { h, replace, keyedList, readLocal, writeLocal } from '../lib/dom.js';
 import { PAGES } from '../lib/router.js';
 import { Button, Pill } from '../ui/kit.js';
@@ -21,14 +22,19 @@ export function createPluginSettings({ api, store, router }) {
   const nav = h('nav', { class: 'plugin-links', 'aria-label': '已固定的插件功能' });
   const list = h('div', { class: 'stack' });
   const shortcuts = h('div', { class: 'row plugin-mobile-pins' });
+  let rightPinned = readLocal('sm.tokenStats.right', false) === true;
+  const launch = () => openTokenStatistics({ api, store });
+  const right = h('button', { class: 'plugin-right', hidden: true, onclick: launch }, 'Token 统计');
   let drawer;
   function openFeature(item) {
     drawer?.close();
-    router.go(item.route);
+    if (item.route === '#agent?tokenStats=1') launch();
+    else router.go(item.route);
   }
   function paint() {
     const { snapshot, unauthorized, loadError } = store.view;
     const plugins = unauthorized ? [] : snapshot?.plugins ?? [];
+    right.hidden = !rightPinned || !plugins.some(p => p.id === 'token-statistics' && p.status === 'active');
     const available = new Map();
     for (const plugin of plugins.filter(plugin => plugin.status === 'active')) {
       for (const item of features(plugin)) available.set(item.key, item);
@@ -62,7 +68,9 @@ export function createPluginSettings({ api, store, router }) {
         plugin.error && h('p', { class: 'small' }, plugin.error),
         entries.map(item => h('div', { class: 'row' },
           Button({ label: item.label, size: 'sm', disabled: !available.has(item.key), onClick: () => openFeature(item) }),
-          h('label', null, h('input', { type: 'checkbox', checked: pins.has(item.key), onchange: e => {
+          plugin.id === 'token-statistics' ? h('label', null, h('input', { type: 'checkbox', checked: rightPinned, onchange: e => {
+            rightPinned = e.target.checked; writeLocal('sm.tokenStats.right',rightPinned); paint();
+          } }), ' 固定到右侧') : h('label', null, h('input', { type: 'checkbox', checked: pins.has(item.key), onchange: e => {
             if (e.target.checked) pins.add(item.key); else pins.delete(item.key);
             writeLocal(key, [...pins]); paint();
           } }), ' 固定到侧边栏'))));
@@ -76,5 +84,5 @@ export function createPluginSettings({ api, store, router }) {
   const footer = h('footer', { class: 'plugin-footer' }, Button({ label: '插件配置', size: 'sm', onClick: open }));
   store.subscribe(paint);
   paint();
-  return { nav, footer, open };
+  return { nav, footer, open, right };
 }

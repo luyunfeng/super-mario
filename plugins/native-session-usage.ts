@@ -18,6 +18,19 @@ export function summarizeNativeUsage(text: string, executor: string, sessionId: 
   const records: Counts[] = [];
   const claude = new Map<string, Counts>();
   let cumulative: Counts = {}, windowTokens: number | null = null;
+  let model = '未知', prevTotal = '';
+  const buckets = new Map<string, { day: string; model: string; input: number; output: number; cached: number; samples: number }>();
+  const metadata = new Map<string, [string, string]>();
+  function bucket(day: string, model: string, usage: Counts) {
+    if (!day || usage.input === undefined || usage.output === undefined) return;
+    const key = JSON.stringify([day, model]);
+    const row = buckets.get(key) ?? { day, model, input: 0, output: 0, cached: 0, samples: 0 };
+    row.input += usage.input + (executor === 'claude-code' ? (usage.cacheWrite ?? 0) + (usage.cached ?? 0) : 0);
+    row.cached += usage.cached ?? 0;
+    row.output += usage.output;
+    row.samples++;
+    buckets.set(key, row);
+  }
   let userMessages = 0, assistantMessages = 0, toolCalls = 0;
   const toolNames = new Map<string, number>();
   function countTool(name: unknown) {
@@ -31,8 +44,11 @@ export function summarizeNativeUsage(text: string, executor: string, sessionId: 
     let row: unknown;
     try { row = JSON.parse(line); } catch { partial = true; continue; }
     if (!object(row)) continue;
+    const time = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
+    const day = Number.isFinite(time) ? new Date(time).toISOString().slice(0, 10) : '';
     if (executor === 'codex' && object(row.payload)) {
       const p = row.payload;
+      if (row.type === 'turn_context' && typeof p.model === 'string') model = p.model.slice(0, 120);
       if (row.type === 'response_item') {
         if (p.type === 'message' && p.role === 'user') userMessages++;
         if (p.type === 'message' && p.role === 'assistant') assistantMessages++;
@@ -43,7 +59,12 @@ export function summarizeNativeUsage(text: string, executor: string, sessionId: 
       cumulative = counts(info.total_token_usage, codexFields);
       windowTokens = counts(info, { window: 'model_context_window' }).window ?? null;
       const last = counts(info.last_token_usage, codexFields);
-      if (Object.keys(last).length) records.push(last);
+      const signature = JSON.stringify(cumulative);
+      if (Object.keys(last).length && (signature === '{}' || signature !== prevTotal)) {
+        records.push(last);
+        bucket(day, model, last);
+      }
+      prevTotal = signature;
     } else if (executor === 'claude-code' && row.sessionId === sessionId && object(row.message)) {
       const msg = row.message;
       const blocks = Array.isArray(msg.content) ? msg.content.filter(object) : [];
@@ -54,15 +75,20 @@ export function summarizeNativeUsage(text: string, executor: string, sessionId: 
       const usage = counts(msg.usage, claudeFields);
       if (!Object.keys(usage).length) continue;
       if (typeof msg.id !== 'string' || !msg.id) { partial = true; continue; }
+      metadata.set(msg.id, [day, typeof msg.model === 'string' ? msg.model.slice(0, 120) : '未知']);
       const prev = claude.get(msg.id);
       claude.set(msg.id, { ...prev, ...usage });
     }
   }
   if (executor === 'claude-code') {
-    for (const usage of claude.values()) records.push(usage);
+    for (const [id, usage] of claude) {
+      records.push(usage);
+      const [day, name] = metadata.get(id)!;
+      bucket(day, name, usage);
+    }
     for (const field of Object.keys(claudeFields)) {
       if (records.length && records.every(record => field in record)) cumulative[field] = records.reduce((sum, record) => sum + record[field]!, 0);
     }
   }
-  return { partial, cumulative, windowTokens, userMessages, assistantMessages, toolCalls, tools: [...toolNames].map(([name, calls]) => ({ name, calls })), records: records.slice(-20).reverse() };
+  return { daily: [...buckets.values()], partial, cumulative, windowTokens, userMessages, assistantMessages, toolCalls, tools: [...toolNames].map(([name, calls]) => ({ name, calls })), records: records.slice(-20).reverse() };
 }
