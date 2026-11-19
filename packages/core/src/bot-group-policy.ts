@@ -78,3 +78,20 @@ export function nextRelayPath(sourceBotId: string, targetBotId: string, parentPa
     || new Set(path).size !== path.length || path.includes(targetBotId) || path.length >= 8) throw new Error('协作路径无效或超过 8 个机器人');
   return [...path, targetBotId];
 }
+
+export interface CommandGroupMember {
+  botId: string; appId: string; projectId?: string; openId?: string; status: 'joined' | 'failed' | 'unknown';
+}
+export interface CommandGroup {
+  chatId: string; mainBotId: string; mainAppId: string; ownerFingerprint: string; members: CommandGroupMember[];
+}
+
+/** Membership grants access only to the exact app and bound project recorded by the group creator. */
+export function joinedCommandMember(group: CommandGroup, bot: Pick<FeishuBot, 'id' | 'appId' | 'scope'>) {
+  const matches = group.members.filter(member => member.botId === bot.id);
+  if (matches.length !== 1) return;
+  const member = matches[0]!;
+  if (member.appId !== bot.appId || member.status !== 'joined') return;
+  if (bot.id === group.mainBotId) return bot.scope.kind === 'global' ? member : undefined;
+  return bot.scope.kind === 'project' && member.projectId === bot.scope.projectId ? member : undefined;
+}

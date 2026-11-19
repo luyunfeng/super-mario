@@ -1,5 +1,6 @@
 import { createHash, randomInt } from 'node:crypto';
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
+import { chooseCommandTarget, createCommandMentionEvidence, type CommandCandidate, type CommandClassifier, type CommandIdentity, type CommandRoute, type CommandTarget } from './feishu-command-routing.ts';
 import { buildFeishuDashboard } from './feishu-dashboard.ts';
 import { createAgentProgressStream } from './agent-progress-stream.ts';
 import { buildAgentProgressCard } from '../../../plugins/agent-progress-card.ts';
@@ -7,7 +8,7 @@ import { buildFeishuMessageCard } from './feishu-cards.ts';
 import type { FeishuCardAction } from '../../../plugins/feishu.ts';
 import { botConversationId } from '../../../packages/core/src/bot-agent-routing.ts';
 import { createFeishuIntegration } from '../../../plugins/feishu.ts';
-import { allowedBotGroup, canRelayBotScope, nextRelayPath } from '../../../packages/core/src/bot-group-policy.ts';
+import { joinedCommandMember, type CommandGroup, allowedBotGroup, canRelayBotScope, nextRelayPath } from '../../../packages/core/src/bot-group-policy.ts';
 import type { FeishuMessageSource, FeishuSendContext, FeishuOptions } from '../../../plugins/feishu.ts';
 import { createFeishuBotConfig, sameBotScope } from '../../../plugins/feishu-bot-config.ts';
 import type { FeishuBotSettings } from '../../../plugins/feishu-bot-config.ts';
@@ -28,6 +29,7 @@ export interface FeishuBotsApp {
   postScoped(text: string, scope: BotScope, botId: string): Promise<Message>;
   /** Host injects readOnly result context; it must never dispatch a new request. */
   postScopedResult?(input: { text: string; scope: BotScope; botId: string; sourceMessageId?: string }): Promise<Message>;
+  routeCommandProject?: CommandClassifier;
   attention?(): AttentionItem[];
   projects?: { list(): Project[] };
   todos?: () => Todo[];
@@ -47,10 +49,10 @@ type Owner = { chatId: string; senderId?: string };
 type CardNavigation = { botId: string; appId: string; revision: number; owner: Owner; expiresAt: number };
 type Route = { channel: 'feishu'; accountId: string; botId: string; target: string; scope: BotScope; revision: number; inputId: string; sourceMessageId?: string };
 type Relay = { sourceMessageId?: string; sourceFingerprint?: string; sourceRouteFingerprint?: string; sourceBotId: string; sourceRevision: number; targetRevision: number; parentEntryId?: string; path: string[]; rootId: string; expiresAt: number; chatId?: string; fingerprint: string };
-type Envelope = { progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
+type Envelope = { command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
 type Routed = Route & Envelope & { envelopeId: string };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
-type Runtime = { epoch: number; adapter?: FeishuBotAdapter; reason?: string; code: string; expires: number; operations: Promise<void> };
+type Runtime = { commandSubscription?: string; epoch: number; adapter?: FeishuBotAdapter; reason?: string; code: string; expires: number; operations: Promise<void> };
 const noDelivery = (message: string) => Object.assign(new Error(message), { delivery: 'no' as const });
 
 // Only startup settings may supply a destination. Keep credentials and URL parameters out of cards.
@@ -75,6 +77,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   const runtimes = new Map<string, Runtime>();
   const tasks = new Set<Promise<unknown>>();
   const relayJobs = new Map<string, { input: string; job: Promise<MailboxEntry> }>();
+  const commandJobs = new Map<string, Promise<void>>();
+  const mentionEvidence = createCommandMentionEvidence();
   const inboxJobs = new Map<string, Promise<{ id: string }>>();
   const secrets = new Set(settings.list().map(row => row.appSecret).filter(Boolean));
   let closed = false;
@@ -98,7 +102,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const { bot, route } = current;
       const entry = await put(bot, { direction: 'outbox', eventKey: `feishu-progress:${message.id}`, title: `${bot.name} · 实时进度`,
         text: '本轮 Agent 的进度和回复会在同一张卡片中更新。', target: route.target, replyTo: route.inputId, sourceMessageId: route.sourceMessageId, requiresConfirmation: false }, route.scope,
-        { progressMessageId: message.id, group: route.group, relay: route.relay, platformReplyTo: route.platformReplyTo, threadId: route.threadId });
+        { progressMessageId: message.id, group: route.group, command: route.command, relay: route.relay, platformReplyTo: route.platformReplyTo, threadId: route.threadId });
       if (entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
       const sent = app.store.get<{ messageId: string }>('feishu.bot.progress', message.id);
       if (!sent?.messageId) throw new Error('进度卡片发送结果未确认，保留最终回复通道');
@@ -208,6 +212,12 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       ...(state.reason || status.reason || (!paired && ownerCandidate(bot)) ? { reason: redact(state.reason ?? status.reason ?? '已识别扫码用户，直接私聊机器人即可绑定') } : {}), createdAt: bot.createdAt, updatedAt: bot.updatedAt };
   }
   async function put(bot: FeishuBotSettings, input: Omit<FeishuMailboxInput, 'botId' | 'scope'>, scope: BotScope = bot.scope, extra: Omit<Envelope, 'revision'> = {}) {
+    if (extra.command) {
+      const previous = app.mailboxes.list().find(row => row.eventKey === input.eventKey && row.botId === bot.id && row.direction === input.direction);
+      if (previous && (app.store.get<Envelope>('feishu.bot.envelopes', previous.id)?.command !== extra.command
+        || previous.target !== input.target || previous.sourceMessageId !== input.sourceMessageId || !sameBotScope(previous.scope, scope)
+        || (input.direction === 'inbox' && previous.text !== input.text))) throw noDelivery('总指挥群邮箱标识冲突');
+    }
     const entry = await app.mailboxes.put({ ...input, scope: structuredClone(scope), botId: bot.id });
     // Keep revisions outside the fixed public envelope. Scope equality alone cannot detect A→B→A.
     const stamp = app.store.get<{ revision: number }>('feishu.bot.envelopes', entry.id);
@@ -230,7 +240,15 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         || digest(original) !== stamp.inboxReplySource.fingerprint) throw noDelivery('原收件内容或处理范围已变化');
       checkEnvelope(original, bot);
     }
-    if (stamp?.group && (!owner(bot) || stamp.group.senderType !== 'user' || !allowedBotGroup(bot, stamp.group, owner(bot)?.senderId) || entry.target !== stamp.group.chatId)) throw noDelivery('群成员权限或群绑定已变化');
+    if (stamp?.command) {
+      const route = app.store.get<CommandRoute>('feishu.command.routes', stamp.command);
+      if (!route || entry.target !== route.chatId || entry.sourceMessageId !== route.messageId
+        || !stamp.group || stamp.group.chatId !== route.chatId || stamp.group.messageId !== route.messageId
+        || stamp.group.senderId !== route.main.ownerId || stamp.group.senderType !== 'user'
+        || !(bot.id === route.target?.botId || (entry.direction === 'outbox' && bot.id === route.main.botId))) throw noDelivery('指挥群来源不匹配');
+      validateCommand(route);
+    } else if (stamp?.group?.chatId && stamp.group.chatId === commandGroup()?.chatId) throw noDelivery('总指挥群需要已验证的主人指令');
+    else if (stamp?.group && (!owner(bot) || stamp.group.senderType !== 'user' || !allowedBotGroup(bot, stamp.group, owner(bot)?.senderId) || entry.target !== stamp.group.chatId)) throw noDelivery('群成员权限或群绑定已变化');
     if (stamp?.resultRelayEntryId) {
       const delegated = app.mailboxes.list().find(item => item.id === stamp.resultRelayEntryId);
       if (!delegated) throw noDelivery('协作来源不存在');
@@ -412,11 +430,143 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         title: thing.title, text: thing.text, sourceMessageId: thing.last, origin: thing.origin, requiresConfirmation: true });
     }
   }
+  const commandGroup = () => app.store.get<CommandGroup>('feishu.command-group', 'current');
+  function commandIdentity(bot: FeishuBotSettings): CommandIdentity | undefined {
+    const sender = owner(bot)?.senderId;
+    if (sender) return { botId: bot.id, appId: bot.appId, revision: bot.revision, ownerId: sender };
+  }
+  function commandMain(group: CommandGroup) {
+    const bot = current(group.mainBotId), paired = owner(bot);
+    if (!joinedCommandMember(group, bot) || group.mainAppId !== bot.appId || !paired?.senderId ||
+      digest([bot.id, bot.appId, paired.senderId, paired.chatId]) !== group.ownerFingerprint) throw noDelivery('总指挥群主机器人或配对已变化');
+    return bot;
+  }
+  function validateCommand(route: CommandRoute) {
+    const group = commandGroup();
+    if (!group || group.chatId !== route.chatId) throw noDelivery('总指挥群已变化');
+    const main = commandMain(group);
+    if (digest(commandIdentity(main)) !== digest(route.main)) throw noDelivery('总指挥群来源授权已变化');
+    if (route.target) {
+      const target = current(route.target.botId), member = joinedCommandMember(group, target);
+      if (!member || target.scope.kind !== 'project' || target.scope.projectId !== route.target.projectId
+        || target.appId !== route.target.appId || target.revision !== route.target.revision
+        || owner(target)?.senderId !== route.target.ownerId || (member.openId && route.target.openId && member.openId !== route.target.openId))
+        throw noDelivery('总指挥群项目成员或配对已变化');
+    }
+  }
+  function subscription(bot: FeishuBotSettings) {
+    const group = commandGroup();
+    return group && joinedCommandMember(group, bot) ? group.chatId : undefined;
+  }
+  const awaitingMain = new Set<string>();
+  function remindIfMainMissed(key: string, bot: FeishuBotSettings, epoch: number, source: FeishuMessageSource, group: CommandGroup) {
+    if (awaitingMain.has(key) || awaitingMain.size >= 512 || app.store.get('feishu.command.routes', key)) return;
+    awaitingMain.add(key);
+    const remind = async () => {
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      if (!active(bot.id, epoch, bot.revision) || commandJobs.has(key) || app.store.get('feishu.command.routes', key)) return;
+      const live = commandGroup(), paired = owner(bot);
+      if (!live || live.chatId !== source.chatId || live.ownerFingerprint !== group.ownerFingerprint || !joinedCommandMember(live, bot)
+        || !paired || paired.senderId !== source.senderId) return;
+      commandMain(live);
+      // The project app can authenticate its own paired user but cannot speak for the main app.
+      // A private hint is safe even if only mentioned bots received the original group event.
+      const entry = await put(bot, { direction: 'outbox', eventKey: 'command-help:' + key, title: '总指挥群路由提示',
+        text: '总指挥机器人尚未确认收到这条群消息。若群里没有分派反馈，请把原任务再发一次，只 @ 总指挥机器人，并在正文写明项目全名。',
+        target: paired.chatId, sourceMessageId: source.messageId, requiresConfirmation: false });
+      if (entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
+    };
+    void track(bot.id, remind().finally(() => awaitingMain.delete(key)));
+  }
+  function commandInput(bot: FeishuBotSettings, epoch: number, text: string, source: FeishuMessageSource, group: CommandGroup) {
+    const self = joinedCommandMember(group, bot), identity = commandIdentity(bot);
+    if (!self || !identity || source.senderType !== 'user' || source.senderId !== identity.ownerId) return;
+    let main: FeishuBotSettings;
+    try { main = commandMain(group); } catch { return; }
+    const mention = source.mentions?.length === 1 ? source.mentions[0] : undefined;
+    const key = JSON.stringify([main.id, main.appId, group.chatId, source.messageId]);
+    const evidenceKey = JSON.stringify([key, group.ownerFingerprint, mention?.key]);
+    if (bot.id !== main.id) {
+      if (source.mentionedSelf && mention) {
+        if (mention.key) mentionEvidence.observe(evidenceKey, digest(identity));
+        remindIfMainMissed(key, bot, epoch, source, group);
+      }
+      return;
+    }
+    const pending = commandJobs.get(key);
+    if (pending) return pending;
+    const fingerprint = digest([identity, text, source.mentions ?? []]);
+    const job = (async () => {
+      let route = app.store.get<CommandRoute>('feishu.command.routes', key);
+      if (!route) {
+        const projects = app.projects?.list() ?? app.store.list<Project>('projects');
+        const candidates: CommandCandidate[] = [];
+        for (const row of settings.list()) {
+          if (!row.enabled || row.archivedAt || row.scope.kind !== 'project') continue;
+          const member = joinedCommandMember(group, row), target = commandIdentity(row), projectId = row.scope.projectId;
+          const project = projects.find(p => p.id === projectId && !p.archivedAt);
+          if (!member || !target || !project) continue;
+          const learned = app.store.get<string>('feishu.command.mentions', digest([group.chatId, group.ownerFingerprint, target]));
+          candidates.push({ project: { id: project.id, name: project.name, description: project.description },
+            target: { ...target, projectId, openId: member.openId ?? learned, name: row.name } });
+        }
+        let choice = await chooseCommandTarget(text, source, self, candidates, app.routeCommandProject?.bind(app));
+        if (!choice.target && !source.mentionedSelf && mention?.key && mention.openId && !mention.appId) {
+          const witness = await mentionEvidence.find(evidenceKey);
+          const match = candidates.find(c => {
+            const { botId, appId, revision, ownerId } = c.target;
+            return digest({ botId, appId, revision, ownerId }) === witness && (!c.target.openId || c.target.openId === mention.openId);
+          });
+          if (match) {
+            const target: CommandTarget = { ...match.target, openId: mention.openId };
+            choice = { target };
+          }
+        }
+        route = { main: identity, chatId: source.chatId, messageId: source.messageId, fingerprint, ...choice };
+        if (!active(main.id, epoch, main.revision)) return;
+        try { validateCommand(route); }
+        catch {
+          route = { ...route, target: undefined, question: '机器人绑定或项目状态已变化。请把原任务再发一次，并只 @ 一个有效的项目机器人。' };
+          validateCommand(route);
+        }
+        app.store.transaction(() => {
+          app.store.put('feishu.command.routes', key, route!);
+          if (route!.target && choice.target?.openId && mention?.openId === choice.target.openId) {
+            const {botId, appId, revision, ownerId} = choice.target;
+            app.store.put('feishu.command.mentions', digest([group.chatId, group.ownerFingerprint, {botId, appId, revision, ownerId}]), mention.openId);
+          }
+        });
+      }
+      if (route.fingerprint !== fingerprint || !active(main.id, epoch, main.revision)) return;
+      validateCommand(route);
+      const stamp = { command: key, group: structuredClone(source) };
+      let feedback = route.question;
+      if (route.target) {
+        const target = current(route.target.botId);
+        const entry = await put(target, { direction: 'inbox', eventKey: 'feishu-command:in:' + key, title: target.name, text,
+          target: source.chatId, sourceMessageId: source.messageId, requiresConfirmation: target.requireConfirmation,
+          origin: { kind: 'group', chatId: source.chatId, connector: '飞书总指挥群' } }, target.scope, stamp);
+        if (entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
+        const state = app.mailboxes.list().find(row => row.id === entry.id)?.status;
+        feedback = state === 'completed' ? `已分派给「${target.name}」，项目 Agent 已接收。`
+          : state === 'pending' ? `已转给「${target.name}」，等待你在工作台确认后处理。`
+          : `「${target.name}」的派发状态为 ${state ?? 'unknown'}，请核对工作台收件箱。`;
+      }
+      validateCommand(route);
+      const reply = await put(main, { direction: 'outbox', eventKey: 'feishu-command:feedback:' + key, title: '总指挥群分派',
+        text: feedback!, target: source.chatId, sourceMessageId: source.messageId, requiresConfirmation: false }, main.scope, stamp);
+      if (reply.status === 'ready') await app.mailboxes.process(reply.id, reply.version);
+    })().finally(() => commandJobs.delete(key));
+    commandJobs.set(key, job);
+    return job;
+  }
   async function receive(bot: FeishuBotSettings, epoch: number, text: string, source: Parameters<FeishuOptions['onMessage']>[1]) {
     if (!active(bot.id, epoch, bot.revision) || !['p2p', 'group'].includes(source.chatType ?? '') || !source.chatId || !source.messageId || !text.trim()) return;
     let paired = owner(bot);
     const group = source.chatType === 'group';
     if (group) {
+      const command = commandGroup();
+      if (command?.chatId === source.chatId) return commandInput(bot, epoch, text, source, command);
       // Only a private conversation can verify an owner; group membership never pairs a bot.
       if (!paired || source.senderType !== 'user' || !allowedBotGroup(bot, source, paired.senderId)) return;
     } else {
@@ -474,7 +624,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       try { bot = current(id); settings.assertUnique(bot.appId, id); } catch (error) { report(id, error); return; }
       if (!bot.appSecret) { report(id, noDelivery('缺少机器人 appSecret')); return; }
       if (!active(id, epoch, bot.revision)) return;
-      const adapter = factory({ appId: bot.appId, appSecret: bot.appSecret, groupMessages: Boolean(bot.groupChats?.length), ...(bot.profile ? { profile: bot.profile } : {}),
+      const chatId = subscription(bot);
+      state.commandSubscription = chatId;
+      const adapter = factory({ appId: bot.appId, appSecret: bot.appSecret, groupMessages: Boolean(bot.groupChats?.length || (chatId && bot.scope.kind === 'project')),
+        ...(chatId && bot.scope.kind === 'global' ? { commandGroupChatId: chatId } : {}), ...(bot.profile ? { profile: bot.profile } : {}),
         renderMessage: (text, context) => buildFeishuMessageCard(text, { title: bot.name, webBase,
           route: 'projectId' in bot.scope && bot.scope.projectId ? `projects/${encodeURIComponent(bot.scope.projectId)}/workspace` : 'chat', ...context?.presentation }),
         onCardAction: input => cardAction(bot, epoch, input),
@@ -500,6 +653,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       || stored.sourceMessageId !== entry.sourceMessageId || stored.replyTo !== entry.replyTo || !['ready', 'processing', 'completed'].includes(stored.status)
       || stored.eventKey !== entry.eventKey || stored.text !== entry.text || stored.target !== entry.target || !sameBotScope(stored.scope, entry.scope)) throw noDelivery('邮箱条目未确认或版本无效');
     const stamp = app.store.get<Envelope>('feishu.bot.envelopes', entry.id);
+    if (entry.eventKey.startsWith('feishu-command:') && !stamp?.command) throw noDelivery('缺少总指挥群来源');
     if (entry.eventKey.startsWith('feishu-a2a:') && !stamp?.relay) throw noDelivery('缺少内部协作印记');
     if (entry.target && !stamp?.group && !stamp?.relay) {
       if (owner(bot)?.chatId !== entry.target) throw noDelivery('消息不属于已配对会话');
@@ -524,8 +678,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   }
   async function send(botId: string, target: string, text: string, key: string): Promise<void> {
     const bot = current(botId), state = runtime(botId), epoch = state.epoch, adapter = state.adapter;
-    if (!adapter || !text.trim() || !key || !owner(bot) || (owner(bot)?.chatId !== target && !bot.groupChats?.some(group => group.chatId === target))) throw noDelivery('机器人未连接、内容为空或目标未配对');
     const existing = app.mailboxes.list().find(item => item.botId === botId && item.direction === 'outbox' && item.eventKey === key);
+    const command = existing && app.store.get<Envelope>('feishu.bot.envelopes', existing.id)?.command;
+    if (!adapter || !text.trim() || !key || !owner(bot) || (target === commandGroup()?.chatId ? !command
+      : owner(bot)?.chatId !== target && !bot.groupChats?.some(group => group.chatId === target))) throw noDelivery('机器人未连接、内容为空或目标未配对');
     // Standalone callers create a pending proactive envelope. Main's confirmed outbox
     // handler calls send again using exactly entry.eventKey; no recursive processing.
     const entry = existing ?? await put(bot, { direction: 'outbox', eventKey: key, title: '飞书发送', text, target, requiresConfirmation: true });
@@ -550,6 +706,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           route: key.includes('result') ? `projects/${encodeURIComponent('projectId' in bot.scope && bot.scope.projectId || 'all')}/runs`
             : 'projectId' in bot.scope && bot.scope.projectId ? `projects/${encodeURIComponent(bot.scope.projectId)}/workspace` : bot.scope.kind === 'task' ? 'projects/all/todos' : 'chat' },
       };
+      if (stamp?.command && key === 'feishu-command:feedback:' + stamp.command) {
+        const target = app.store.get<CommandRoute>('feishu.command.routes', stamp.command)?.target;
+        if (target?.openId) context.mention = { openId: target.openId, name: target.name };
+      }
       if (stamp?.progressMessageId) {
         const message = app.store.get<Message>('messages', stamp.progressMessageId);
         const provenance = message && progressRoute(message);
@@ -563,7 +723,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const run = async () => {
       try {
       if (app.plugins?.invocations) await app.plugins.invocations.invoke('channel.send', { botId, accountId: bot.appId, chatId: target, target, text, key }, async input => {
-        if ((stamp?.inboxReplySource || stamp?.dashboard || stamp?.progressMessageId) && (!input || typeof input !== 'object' || Array.isArray(input) || input.text !== text)) throw noDelivery('确认的回复正文不能被渠道钩子改写');
+        if ((stamp?.inboxReplySource || stamp?.dashboard || stamp?.command || stamp?.progressMessageId) && (!input || typeof input !== 'object' || Array.isArray(input) || input.text !== text)) throw noDelivery('确认的回复正文不能被渠道钩子改写');
         if (!input || typeof input !== 'object' || Array.isArray(input) || input.botId !== botId || input.accountId !== bot.appId
           || input.chatId !== target || input.target !== target || input.key !== key || typeof input.text !== 'string' || !input.text.trim()) throw noDelivery('渠道钩子不能改变机器人、目标或动作标识');
         await deliver(input.text); return null;
@@ -644,7 +804,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (message.status === 'pending' || (streamed && Array.from(message.text).length <= 4000)) return;
     const state = runtime(bot.id), epoch = state.epoch;
     const entry = await put(bot, { direction: 'outbox', eventKey: `feishu-reply:${JSON.stringify([bot.id, bot.appId, route.inputId, message.id])}`,
-      title: bot.name, text: message.text, target: route.target, replyTo: route.inputId, sourceMessageId: route.sourceMessageId, requiresConfirmation: false }, route.scope, { resultRelayEntryId: route.resultRelayEntryId, group: route.group, relay: route.relay, platformReplyTo: route.platformReplyTo, threadId: route.threadId });
+      title: bot.name, text: message.text, target: route.target, replyTo: route.inputId, sourceMessageId: route.sourceMessageId, requiresConfirmation: false }, route.scope, { resultRelayEntryId: route.resultRelayEntryId, group: route.group, command: route.command, relay: route.relay, platformReplyTo: route.platformReplyTo, threadId: route.threadId });
     if (active(bot.id, epoch, bot.revision) && entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
   }
   const off = app.events.subscribe(event => {
@@ -659,6 +819,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   });
   return {
     canUseScope,
+    async refreshCommandGroup() {
+      await Promise.all(settings.list().filter(bot => bot.enabled && !bot.archivedAt &&
+        runtime(bot.id).commandSubscription !== subscription(bot)).map(bot => restart(bot.id)));
+    },
     inboxHandlingStatus(id: string) {
       try {
         const entry = app.mailboxes.list().find(item => item.id === id && item.direction === 'inbox');
@@ -679,7 +843,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const stamp = app.store.get<Envelope>('feishu.bot.envelopes', input.id);
       const entry = await put(bot, { direction: 'outbox', eventKey: `inbox-suggestion:${key}`, title: '已确认的收件回复', text,
         target: input.target, sourceMessageId: input.sourceMessageId, requiresConfirmation: false }, input.scope,
-        { group: stamp?.group, platformReplyTo: stamp?.platformReplyTo ?? input.sourceMessageId, threadId: stamp?.threadId,
+        { group: stamp?.group, command: stamp?.command, platformReplyTo: stamp?.platformReplyTo ?? (stamp?.command ? undefined : input.sourceMessageId), threadId: stamp?.threadId,
           inboxReplySource: { id: input.id, version, fingerprint: digest(input) } });
       await app.mailboxes.process(entry.id, entry.version);
       const result = app.mailboxes.list().find(item=>item.id===entry.id);
