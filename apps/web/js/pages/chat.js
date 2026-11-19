@@ -37,7 +37,7 @@ export function createChatPage({ api, store, scope, router }) {
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '对话'), h('p', { class: 'page__sub' }, hintCopy('nav.chat').tag)),
         h('div', { class: 'page__actions' }, code.toggle, Hint('nav.chat'))),
-      banner, attention.el, setup, runStrip, recent.el));
+      banner, attention.el, setup, runStrip));
   const scroller = h('div', { class: 'chat__scroll', id: 'chat-scroll' }, h('div', { class: 'chat__inner' }, messages, hero));
 
   // —— 输入框 ——
@@ -46,6 +46,7 @@ export function createChatPage({ api, store, scope, router }) {
   const send = h('button', { class: 'btn btn--primary btn--sm composer__send', type: 'submit', 'aria-label': '发送' }, icon('send'), '发送');
   const status = h('p', { class: 'small composer__status', role: 'status' });
   const form = h('form', { class: 'composer', id: 'message-form' },
+    recent.el,
     h('div', { class: 'composer__box' }, input, h('div', { class: 'composer__bar' }, scopeSelect, h('span', { class: 'grow' }), send)), status);
 
   const el = h('section', { class: 'page page--chat', id: 'chat' }, h('div', { class: 'chat-code-main' }, top, scroller, form), code.el);
