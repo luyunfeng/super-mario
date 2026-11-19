@@ -27,7 +27,7 @@ export function cardDocument(title: string, elements: Record<string, unknown>[],
 
 /** Formatting is computed before the single remote send; oversize content uses its original text. */
 export function buildFeishuMessageCard(text: string, options: {
-  title?: string; webBase?: string; route?: string; kind?: 'reply' | 'result' | 'brief' | 'notice';
+  title?: string; webBase?: string; navigation?: string; route?: string; kind?: 'reply' | 'result' | 'brief' | 'notice';
 } = {}): Record<string, unknown> | undefined {
   if (Buffer.byteLength(text, 'utf8') > 18000) return;
   const kind = options.kind ?? 'reply';
@@ -38,9 +38,12 @@ export function buildFeishuMessageCard(text: string, options: {
   for (let start = 0; start < chars.length; start += 1200)
     body.push({ tag: 'div', text: cardPlain(chars.slice(start, start + 1200).join('')) });
   if (kind === 'result') body.push({ tag: 'note', elements: [cardPlain('执行结果与待办验收分别记录，请核对实际交付。')] });
+  const destination = (view: 'inbox' | 'home') => options.navigation
+    ? { value: { kind: 'workbench.navigate', navigation: options.navigation, view, page: 0 } }
+    : { route: view };
   body.push(...cardButtons([
     { label: kind === 'result' ? '查看执行' : kind === 'brief' ? '查看完整简报' : '继续处理', route: options.route ?? (kind === 'result' ? 'projects/all/runs' : kind === 'brief' ? 'home' : 'chat'), primary: true },
-    { label: '📥 收件箱', route: 'inbox' }, { label: '🏠 工作台', route: 'home' },
+    { label: '📥 收件箱', ...destination('inbox') }, { label: '🏠 工作台', ...destination('home') },
   ], cardWebBase(options.webBase)));
   const card = cardDocument(options.title ? `${titles[kind]} · ${options.title.slice(0, 60)}` : titles[kind], body, kind === 'notice' ? 'orange' : 'blue');
   return Buffer.byteLength(JSON.stringify(card), 'utf8') <= 24000 ? card : undefined;

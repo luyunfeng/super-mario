@@ -21,3 +21,11 @@ test('card navigation rejects credential-bearing bases and invalid routes, split
  assert.deepEqual(cardButtons([{label:'invalid',route:'javascript:alert(1)'}],'https://work.example/'),[]);
  assert.doesNotMatch(JSON.stringify(buildFeishuMessageCard('正文',{webBase:'https://work.example/?token=private'})),/"url"|private/);
 });
+
+test('主人私聊工作台和收件箱按钮仅触发原生导航，即使配置了网页地址', () => {
+ const card = buildFeishuMessageCard('收件确认', { webBase: 'https://work.example/', navigation: 'owner-nav' })!;
+ const actions = (card.elements as any[]).flatMap(row => row.actions ?? []);
+ assert.deepEqual(actions.slice(1).map(button => [button.value.view,button.value.navigation,button.url]), [
+   ['inbox','owner-nav',undefined], ['home','owner-nav',undefined],
+ ]);
+});

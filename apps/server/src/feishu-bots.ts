@@ -708,6 +708,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           route: key.includes('result') ? `projects/${encodeURIComponent('projectId' in bot.scope && bot.scope.projectId || 'all')}/runs`
             : 'projectId' in bot.scope && bot.scope.projectId ? `projects/${encodeURIComponent(bot.scope.projectId)}/workspace` : bot.scope.kind === 'task' ? 'projects/all/todos' : 'chat' },
       };
+      const paired = owner(bot);
+      if (context.presentation && !stamp?.progressMessageId && bot.scope.kind === 'global' && paired?.senderId && paired.chatId === target) {
+        context.presentation.navigation = navigation(bot, paired, entry.id);
+      }
       if (stamp?.command && key === 'feishu-command:feedback:' + stamp.command) {
         const target = app.store.get<CommandRoute>('feishu.command.routes', stamp.command)?.target;
         if (target?.openId) context.mention = { openId: target.openId, name: target.name };

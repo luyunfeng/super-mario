@@ -40,7 +40,7 @@ export function preparePersonalCheckpoint(binding: PersonalCheckpoint['binding']
   };
   return checkpoint;
 }
-export interface FeishuSendContext { mention?: { openId: string; name: string }; card?: Record<string, unknown>; replyTo?: string; threadId?: string; onSent?: (messageId: string) => void; presentation?: { title?: string; kind?: 'reply' | 'result' | 'brief' | 'notice'; route?: string } }
+export interface FeishuSendContext { mention?: { openId: string; name: string }; card?: Record<string, unknown>; replyTo?: string; threadId?: string; onSent?: (messageId: string) => void; presentation?: { navigation?: string; title?: string; kind?: 'reply' | 'result' | 'brief' | 'notice'; route?: string } }
 export interface FeishuCardAction { operatorId: string; chatId: string; messageId: string; value: Record<string, unknown> }
 export interface PersonalChatDetail { mode?: 'p2p' | 'group'; userCount?: number }
 export interface FeishuOptions {
