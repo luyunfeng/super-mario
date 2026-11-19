@@ -381,9 +381,6 @@ export function createProjectWorkspace(options: {
       return save({ ...memory(id), enabled });
     },
     run,
-    assertProjectPurgeAllowed(id: string) {
-      if (jobs.has(id)) throw Object.assign(Error("项目记忆正在提炼或写入，请稍后重试"), { status: 409 });
-    },
     async close() {
       closed = true;
       clearInterval(timer);

@@ -21,13 +21,11 @@ export function createProjectDiscoveryList({ api, store, router, openFolders }) 
   const pending = new Set(), uncertain = new Set();
   const bindingKey = folderKey;
   const computers = () => (store.view.snapshot?.machines ?? []).filter(machine => machine.online && machine.capabilities?.includes('workspace.projects'));
-  const registered = () => new Map((store.view.snapshot?.projects ?? []).filter(project => project.workspace).map(project => [bindingKey(project.workspace.machineId, project.workspace.cwd), project]));
+  const registered = () => new Set((store.view.snapshot?.projects ?? []).filter(project => project.workspace).map(project => bindingKey(project.workspace.machineId, project.workspace.cwd)));
   function paint() {
     const bound = registered(), hidden = hiddenFolders();
-    const candidates = items.filter(item => {
-      const project = bound.get(bindingKey(item.machineId, item.cwd));
-      return item.exists && (!project || project.archivedAt);
-    });
+    // Archived bindings still own their directory. Only an explicit restore may surface the project.
+    const candidates = items.filter(item => item.exists && !bound.has(bindingKey(item.machineId, item.cwd)));
     const hiddenCount = candidates.filter(item => hidden.has(bindingKey(item.machineId, item.cwd))).length;
     const query = search.value.trim().toLocaleLowerCase();
     const visible = candidates.filter(item => (showHidden || !hidden.has(bindingKey(item.machineId, item.cwd))) &&
@@ -37,7 +35,7 @@ export function createProjectDiscoveryList({ api, store, router, openFolders }) 
     toggle.setAttribute('aria-pressed', String(showHidden));
     function renderCandidate(item) {
       const id = bindingKey(item.machineId, item.cwd), isHidden = hidden.has(id);
-      const archived = bound.get(id) ?? foundArchived.get(id);
+      const archived = foundArchived.get(id);
       const label = archived ? '恢复项目' : '添加';
       const button = Button({ label, ariaLabel: label + ' ' + (archived?.name ?? item.name), size: 'sm', onClick: () => add(item, archived) });
       button.disabled = pending.has(id) || uncertain.has(id);

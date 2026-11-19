@@ -156,7 +156,7 @@ export function openProjectFolders({ api, store, router, project }) {
         tree);
       redraw = () => {
         const hidden = hiddenFolders(), query = filter.value.trim().toLocaleLowerCase();
-        const items = (value.projects ?? []).filter(item => (showHidden.checked || !hidden.has(folderKey(id, item.cwd)))
+        const items = (value.projects ?? []).filter(item => (showHidden.checked || (!hidden.has(folderKey(id, item.cwd)) && !existing(id, item.cwd)?.archivedAt))
           && `${item.name} ${item.cwd}`.toLocaleLowerCase().includes(query));
         replace(tree, folderTree({ machineId: id, homeDir: value.homeDir, items, expansion, searching: Boolean(query), renderCandidate: item => renderCandidate(item, hidden) }));
         if (!items.length && value.projects?.length) tree.append(h('p', { class: 'muted' }, '没有符合条件的文件夹。'));

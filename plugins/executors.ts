@@ -6,7 +6,6 @@ import { buildNativeResumeCommand, validateNativeSessionId } from './session-res
 import { validateTaskLauncher } from './task-runner.ts';
 import type { AgentDiagnosticsOptions } from './agent-diagnostics.ts';
 import type { TerminalHostInstance } from '../packages/protocol/src/index.ts';
-import { purgeExecutorSession } from './executor-purge.ts';
 import { readTaskResult } from './task-results.ts';
 import { createKnowledgeWorker } from './knowledge-worker.ts';
 import type { ExecutorInfo, Json, JsonObject, NativeResumeSpec, SessionBinding } from '../packages/protocol/src/index.ts';
@@ -96,13 +95,12 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
       bindings.set(row.sessionId, row as SessionBinding);
     }
   }
-  function save(directory = options.dataDir, rows = [...bindings.values()]) {
-    mkdirSync(directory, { recursive: true });
-    const target = join(directory, 'executor-sessions.json');
-    const temp = `${target}.${randomUUID()}.tmp`;
+  function save() {
+    mkdirSync(options.dataDir, { recursive: true });
+    const temp = `${file}.${randomUUID()}.tmp`;
     try {
-      writeFileSync(temp, JSON.stringify(rows, null, 2), { mode: 0o600 });
-      renameSync(temp, target);
+      writeFileSync(temp, JSON.stringify([...bindings.values()], null, 2), { mode: 0o600 });
+      renameSync(temp, file);
     } finally { rmSync(temp, { force: true }); }
   }
   function binding(params: JsonObject): SessionBinding {
@@ -210,14 +208,6 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
   }
   const handlers: Record<string, NodeHandler> = {
     ...knowledgeWorker.handlers,
-    'workspace.executor.purge': async params => purgeExecutorSession(params, {
-      dataDir: options.dataDir, machineId, bindings,
-      forget(sessionId, directory) {
-        save(directory, [...bindings.values()].filter(binding => binding.sessionId !== sessionId));
-        bindings.delete(sessionId);
-        currentSessions.delete(sessionId);
-      },
-    }),
     'executor.start': params => launch(params),
     ...(options.validateResume ? { 'executor.resume': (params: JsonObject) => launch(params, true) } : {}),
     'executor.recovery': async params => {

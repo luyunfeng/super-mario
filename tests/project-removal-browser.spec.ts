@@ -18,6 +18,24 @@ test('settings removes a project only after confirmation and restores the same h
   t.after(async () => { await browser.close(); await server.close(); await rm(dir, { recursive: true, force: true }); });
   const page = await browser.newPage();
   await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+  // Keep reporting the archived folder on every scan, alongside an unrelated candidate.
+  const peer = dir + '-peer';
+  const homeDir = tmpdir();
+  const machineId = project.workspace!.machineId;
+  await page.route('**/api/v1/state', async route => {
+    const response = await route.fetch();
+    const state = await response.json();
+    state.machines = [{ id: machineId, name: '测试电脑', online: true, capabilities: ['workspace.projects', 'workspace.directory'] }];
+    await route.fulfill({ response, json: state });
+  });
+  let scans = 0;
+  await page.route('**/api/v1/machines/*/projects*', async route => {
+    scans++;
+    await route.fulfill({ json: { homeDir, roots: [], warnings: [], truncated: false, projects: [
+      { name: '原目录', cwd: dir, exists: true, sources: ['codex'] },
+      { name: '其他目录', cwd: peer, exists: true, sources: ['codex'] },
+    ] } });
+  });
   await page.goto(server.url + '/#projects/' + project.id + '/settings');
   const item = page.getByRole('navigation', { name: '项目列表' }).getByRole('link', { name: /设计图/ });
   const remove = page.getByRole('button', { name: '移除项目', exact: true });
@@ -31,7 +49,24 @@ test('settings removes a project only after confirmation and restores the same h
   await dialog.getByRole('button', { name: '确认移除' }).click();
   await expect(page).toHaveURL(/#projects\/all\/todos$/);
   await expect(item).toHaveCount(0);
+  const discovered = page.locator('.project-discovered');
+  const visiblePeer = discovered.getByRole('button', { name: '添加 其他目录' });
+  await expect(visiblePeer).toBeVisible();
+  await expect(discovered).not.toContainText('原目录');
+  const before = scans;
+  await discovered.getByRole('button', { name: '刷新目录' }).click();
+  await expect.poll(() => scans).toBeGreaterThan(before);
+  await expect(discovered).not.toContainText('原目录');
   await page.reload();
+  await expect(visiblePeer).toBeVisible();
+  await expect(discovered).not.toContainText('原目录');
+  await discovered.getByRole('button', { name: '更多文件夹 / 手动绑定' }).click();
+  const picker = page.locator('dialog.drawer');
+  await expect(picker.locator('.folder-results')).toContainText('其他目录');
+  await expect(picker.locator('.folder-results')).not.toContainText('原目录');
+  await picker.getByLabel('显示已隐藏').check();
+  await expect(picker.locator('.folder-results')).toContainText('原目录');
+  await picker.getByRole('button', { name: '关闭', exact: true }).click();
   await page.getByText('已移除的项目', { exact: true }).click();
   await expect(item).toHaveCount(0);
   assert.ok(server.app.projects.list()[0].archivedAt);
@@ -42,80 +77,4 @@ test('settings removes a project only after confirmation and restores the same h
   const restored = server.app.projects.list()[0];
   assert.deepEqual({ ...restored, updatedAt: project.updatedAt }, project);
   assert.deepEqual(server.app.store.get('todos', todo.id), savedTodo);
-});
-
-test('purge requires the exact name in both entry points and clears only the confirmed project', async t => {
-  const dir = await mkdtemp(join(tmpdir(), 'mario-project-purge-ui-'));
-  const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: dir, demo: true });
-  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
-  t.after(async () => { await browser.close(); await server.close(); await rm(dir, { recursive: true, force: true }); });
-  const first = server.app.projects.create({ name: '资料甲' });
-  const other = server.app.projects.create({ name: '资料乙' });
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
-  const calls: Array<{ method: string; body: unknown; path: string }> = [];
-  // Exercise the Web contract independently of backend purge implementation.
-  let reject = true;
-  await page.route('**/api/v1/projects/*/purge', async route => {
-    const request = route.request();
-    const path = new URL(request.url()).pathname;
-    calls.push({ method: request.method(), body: request.postDataJSON(), path });
-    if (reject) return route.fulfill({ status: 409, json: { error: '项目还有执行中的任务' } });
-    const id = path.split('/').at(-2)!;
-    server.app.store.remove('projects', id);
-    server.app.events.publish('projects.changed', { id });
-    await route.fulfill({ status: 200, json: { ok: true } });
-  });
-  const go = async (id: string, tab: string) => {
-    await page.goto(server.url + '/#projects/' + id + '/' + tab);
-    await expect(page).toHaveURL(new RegExp(id + '/' + tab + '$'));
-  };
-  const target = page.getByRole('textbox', { name: '项目目标' });
-  await go(other.id, 'workspace');
-  await target.fill('保留乙的草稿');
-  await go(first.id, 'workspace');
-  await target.fill('甲的草稿');
-  await page.getByRole('tab', { name: '项目设置' }).click();
-  const action = page.getByRole('button', { name: '彻底移除项目', exact: true });
-  const dialog = page.getByRole('dialog', { name: /彻底移除/ });
-  const confirm = dialog.getByRole('button', { name: '确认彻底移除' });
-  const name = dialog.getByRole('textbox', { name: '确认项目名称' });
-  await action.click();
-  await expect(dialog).toContainText('无法恢复');
-  await expect(confirm).toBeDisabled();
-  await name.fill(first.name + ' ');
-  await expect(confirm).toBeDisabled();
-  await dialog.getByRole('button', { name: '取消' }).click();
-  assert.deepEqual(calls, []);
-  await action.click(); await name.fill(first.name); await confirm.click();
-  await expect(page.getByRole('alert').filter({ hasText: '项目还有执行中的任务' })).toBeVisible();
-  await go(first.id, 'workspace'); await expect(target).toHaveValue('甲的草稿');
-  await go(first.id, 'settings');
-  const secondTab = await context.newPage();
-  await secondTab.goto(server.url + '/#projects/' + first.id + '/workspace');
-  await secondTab.getByRole('textbox', { name: '项目目标' }).fill('另一标签页的甲草稿');
-  reject = false;
-  await action.click(); await name.fill(first.name); await confirm.click();
-  await expect(page).toHaveURL(/#projects\/all\/todos$/);
-  await expect(page.locator(`[data-project="${first.id}"]`)).toHaveCount(0);
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('sm.scope')!)), '');
-  await go(other.id, 'workspace'); await expect(target).toHaveValue('保留乙的草稿');
-  await expect(secondTab).toHaveURL(/#projects\/all\/todos$/);
-  // Reuse the ID only in this fixture to make a retained in-memory draft observable.
-  server.app.store.put('projects', first.id, first);
-  server.app.events.publish('projects.changed', { id: first.id });
-  await expect(page.locator(`.proj__item[data-project="${first.id}"]`)).toBeVisible();
-  await go(first.id, 'workspace'); await expect(target).toHaveValue('');
-  await secondTab.locator(`.proj__item[data-project="${first.id}"]`).click();
-  await expect(secondTab.getByRole('textbox', { name: '项目目标' })).toHaveValue('');
-  server.app.projects.archive(first.id);
-  await go(other.id, 'settings');
-  await page.getByText('已移除的项目', { exact: true }).click();
-  await page.getByRole('button', { name: '彻底移除 ' + first.name }).click();
-  await name.fill(other.name); await expect(confirm).toBeDisabled();
-  await name.fill(first.name); await confirm.click();
-  await expect(page.getByRole('button', { name: '重新添加 ' + first.name })).toHaveCount(0);
-  await expect(page).toHaveURL(new RegExp(other.id + '/settings$'));
-  assert.deepEqual(calls, Array(3).fill({ method: 'POST', body: { confirmName: first.name }, path: '/api/v1/projects/' + first.id + '/purge' }));
 });

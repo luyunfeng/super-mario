@@ -57,9 +57,14 @@ test('real node discovers folders read-only; HTTP binds canonical remote paths, 
   const duplicate=await call('/projects','POST',{name:'不覆盖原名称',workspace:{machineId:'workspace-computer',cwd:repo}});assert.equal(duplicate.data.id,first.data.id);assert.equal(duplicate.data.name,'已绑定目录');
   const todo = await call('/todos','POST',{title:'保留历史',projectId:first.data.id});
   assert.equal(todo.status,201);
+  assert.equal('purgeProject' in server.app, false);
+  const purgePath = '/projects/'+first.data.id+'/purge';
+  const confirmation = {confirmName:first.data.name};
+  assert.equal((await call(purgePath,'POST',confirmation)).status,404);
   const removed = await call('/projects/'+first.data.id, 'DELETE');
   assert.equal(removed.status, 200);
   assert.ok(removed.data.archivedAt);
+  assert.equal((await call(purgePath,'POST',confirmation)).status,404);
   assert.equal(await readFile(join(repo, 'keep.txt'), 'utf8'), 'project files stay on the node');
   const rediscovered = await call('/machines/workspace-computer/projects');
   assert.equal(rediscovered.status, 200);

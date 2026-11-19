@@ -53,6 +53,12 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
   return { dir, host, options, service, call, start };
 }
 
+test('node handlers do not expose project purge operations', async t => {
+  const { service } = await fixture(t);
+  assert.equal(service.handlers['workspace.executor.purge'], undefined);
+  assert.equal(service.handlers['workspace.knowledge.purge'], undefined);
+});
+
 test('interactive argv preserves prompts as one positional argument; bindings persist and recover', async t => {
   const { dir, host, options, call, start } = await fixture(t);
   const prompt = '--help $(touch nope); "quoted"\nnext line';

@@ -5,7 +5,6 @@ import { personalInboxReplyTarget } from '../../../packages/core/src/inbox-handl
 import { replyAsPersonalUser } from '../../../plugins/feishu-personal-reply.ts';
 import type { PersonalProvider } from '../../../plugins/feishu-personal.ts';
 import type { FeishuRegistrationProvider } from '../../../plugins/feishu-registration.ts';
-import type { BotScope } from '../../../packages/protocol/src/bots.ts';
 import type { AppConfig, Json } from '../../../packages/protocol/src/index.ts';
 import { createFeishuController } from './feishu.ts';
 import { createPersonalMessages } from './feishu-personal.ts';
@@ -76,7 +75,6 @@ export function createFeishuGateway(
     events: { publish: (type, data) => app.events.publish(type, data as unknown as Json) },
     bots,
     provider: dependencies.registrationProvider,
-    validateBindingScope: bots.validateBindingScope,
   });
   async function registrationView(job: FeishuRegistrationJob) {
     if (!job.url) return job;
@@ -134,12 +132,5 @@ export function createFeishuGateway(
   );
   app.setFeishuStatus(() => ({ ...feishu.status(), reason: feishu.status().reason ?? '' }));
 
-  function assertProjectPurgeAllowed(projectId: string, todoIds: string[]): void {
-    const ownedTodos = new Set(todoIds);
-    const matches = (scope: BotScope) => scope.kind === 'project' ? scope.projectId === projectId
-      : scope.kind === 'task' && (scope.projectId === projectId || ownedTodos.has(scope.todoId));
-    if (registrations.hasPendingScope(matches)) throw new InputError('项目或其待办有进行中的飞书机器人注册，请等待注册结束或取消后重试', 409);
-    if (bots.hasBoundScope(matches)) throw new InputError('项目或其待办已绑定飞书机器人，请先调整机器人范围或归档机器人', 409);
-  }
-  return { feishu, personal, personalView, bots, registrations, registrationView, proposeMail, assertProjectPurgeAllowed };
+  return { feishu, personal, personalView, bots, registrations, registrationView, proposeMail };
 }

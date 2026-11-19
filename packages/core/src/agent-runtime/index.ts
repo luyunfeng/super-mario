@@ -1,5 +1,4 @@
-import { scopedHistoryName } from '../scoped-history.ts';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
@@ -138,7 +137,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     const sdk = await loadSDK();
     // Never use the user's cwd, ~/.pi, project settings, or resource packages.
     const legacy = !scope && ['main', 'supervisor'].includes(ownConversation);
-    const agentDir = legacy ? resolve(config.dataDir, 'pi') : resolve(config.dataDir, 'pi', 'agents', scopedHistoryName(ownConversation));
+    const agentDir = legacy ? resolve(config.dataDir, 'pi') : resolve(config.dataDir, 'pi', 'agents', createHash('sha256').update(ownConversation).digest('hex'));
     const cwd = ownConversation === 'main' ? join(agentDir, 'workspace') : join(agentDir, legacy ? 'workspace-supervisor' : 'workspace');
     const sessionDir = join(agentDir, 'sessions', legacy ? ownConversation : 'conversation');
     await mkdir(cwd, { recursive: true });

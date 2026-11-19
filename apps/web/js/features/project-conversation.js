@@ -66,13 +66,11 @@ export function createProjectConversation({ api, store, bindFolder }) {
     pending.add(id); notices.delete(id); paint();
     try {
       const answer = await api.post(`/projects/${encodeURIComponent(id)}/messages`, { text: draft.trim() });
-      if (!pending.has(id)) return;
       if (answer?.status === 'unknown') { unknown.add(id); notices.set(id, '处理结果未知，请先核对项目对话和执行记录，勿重复发送。'); }
       if (drafts.get(id) === draft) drafts.delete(id);
       if (stamp === generation) { if (text.value === draft) text.value = ''; await load(); }
       void store.refresh().catch(() => {});
     } catch (error) {
-      if (!pending.has(id)) return;
       if (!error.status || error.status >= 500 || /unknown/i.test(error.message)) {
         unknown.add(id);
         notices.set(id, '发送结果未知，请先核对项目对话和执行记录；本页不会重复发送。');
@@ -81,12 +79,6 @@ export function createProjectConversation({ api, store, bindFolder }) {
   }
   return {
     el,
-    forget(id) {
-      drafts.delete(id); notices.delete(id); pending.delete(id); unknown.delete(id);
-      if (projectId !== id) return;
-      generation++; request++; projectId = ''; workspace = undefined; text.value = '';
-      paint();
-    },
     show(id) {
       if (projectId !== id) { if (projectId) drafts.set(projectId, text.value); generation++; request++; projectId = id; workspace = undefined; text.value = drafts.get(id) ?? ''; }
       paint(); void load();

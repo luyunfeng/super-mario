@@ -46,21 +46,14 @@ export function openDrawer({ title, subtitle, body, footer, wide = false, onClos
 }
 
 /** 破坏性或高风险操作的确认。正文必须写明后果，按钮用具体动词。 */
-export function confirmDialog({ title, message, confirmLabel = '确认', danger = false, confirmName }) {
+export function confirmDialog({ title, message, confirmLabel = '确认', danger = false }) {
   return new Promise((resolve) => {
     let answer = false;
     const ok = h('button', { class: `btn ${danger ? 'btn--danger' : 'btn--primary'}`, type: 'button' }, confirmLabel);
     const cancel = h('button', { class: 'btn', type: 'button' }, '取消');
-    const name = confirmName === undefined ? null : h('input', { class: 'input', autocomplete: 'off', 'aria-label': '确认项目名称' });
-    if (name) {
-      ok.disabled = true;
-      name.addEventListener('input', () => { ok.disabled = name.value !== confirmName; });
-    }
     const el = h('dialog', { class: 'modal', 'aria-label': title },
-      h('h2', null, title), h('div', { class: 'small' }, message),
-      name && h('label', { class: 'field' }, '请输入完整项目名称以确认', name),
-      h('div', { class: 'modal__actions' }, cancel, ok));
-    ok.addEventListener('click', () => { if (name && name.value !== confirmName) return; answer = true; el.close(); });
+      h('h2', null, title), h('div', { class: 'small' }, message), h('div', { class: 'modal__actions' }, cancel, ok));
+    ok.addEventListener('click', () => { answer = true; el.close(); });
     cancel.addEventListener('click', () => el.close());
     el.addEventListener('close', () => { el.remove(); resolve(answer); });
     document.body.append(el);

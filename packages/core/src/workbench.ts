@@ -43,7 +43,6 @@ import { createApprovalService } from './approvals.ts';
 import { createSupervision } from './supervision.ts';
 import { loadExtensions } from './extension-loader.ts';
 import { createInboxService, ruleTriage } from './inbox.ts';
-import { createProjectPurge } from './project-purge.ts';
 import { createStore } from './store.ts';
 import { createEventBus } from './events.ts';
 import { createBackground } from './background.ts';
@@ -55,7 +54,7 @@ import { createScopedAgents } from './scoped-agents.ts';
 import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
-import { createSystemExtensions, purgeLocalProjectPages, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createSystemExtensions, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import type { AppConfig, Approval, BotScope, ExecutionResult, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
@@ -81,7 +80,7 @@ function dueDate(value: unknown): string | undefined {
 export async function createWorkbench(config: AppConfig) {
   config = { ...config };
   const modelConfig = createModelConfig(config);
-  const store = createStore(join(config.dataDir, 'workbench.sqlite'), true);
+  const store = createStore(join(config.dataDir, 'workbench.sqlite'));
   const events = createEventBus(store);
   const mailboxes = createEventMailboxes({ store, events });
   const projects = createProjects({ store, events });
@@ -146,8 +145,7 @@ export async function createWorkbench(config: AppConfig) {
       const result = ruleTriage(thing);
       return { tier: result.tier, reason: `规则回退：${result.reason}` };
     } });
-  const knowledgeCurator = createKnowledgeCurator({ store, events, dataDir: config.dataDir, knowledge,
-    purgeLocalPages: (directory, id, defer) => purgeLocalProjectPages({ store, dataDir: directory }, id, defer), machines: () => machines, enabled: () => contributions.list('knowledge_backends').length > 0, validProject: id => projects.list().some(p => p.id === id && !p.archivedAt), readSource: readProtectedKnowledgeSource, allowedProviders: () => [...new Set(['codex', 'claude-code', ...contributions.list('executors').filter(e => e.value.mode === 'real' && e.value.knowledgeWorker !== false).map(e => e.value.kind || e.id)])] });
+  const knowledgeCurator = createKnowledgeCurator({ store, events, dataDir: config.dataDir, knowledge, machines: () => machines, enabled: () => contributions.list('knowledge_backends').length > 0, validProject: id => projects.list().some(p => p.id === id && !p.archivedAt), readSource: readProtectedKnowledgeSource, allowedProviders: () => [...new Set(['codex', 'claude-code', ...contributions.list('executors').filter(e => e.value.mode === 'real' && e.value.knowledgeWorker !== false).map(e => e.value.kind || e.id)])] });
   const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text)=>scopedAgents.postProject(id,text),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
   const controllers = new Map<string, AbortController>();
   const jobs = new Set<Promise<void>>();
@@ -339,7 +337,6 @@ export async function createWorkbench(config: AppConfig) {
         const value = await plugins.invocations.invoke('knowledge.put', payload, async changed => {
           if (!changed || typeof changed !== 'object' || Array.isArray(changed)) throw new PluginCallError('知识钩子必须返回对象');
           for (const field of ['id', 'layer', 'projectId'] as const) if (changed[field] !== payload[field]) throw new PluginCallError('知识钩子不能改变归属或标识');
-          if (payload.projectId && (projectRemoval.fenced(payload.projectId) || !store.get('projects',payload.projectId))) throw new InputError('目标项目已移除或不存在',409);
           return await backend.put(changed as unknown as Parameters<KnowledgeBackend['put']>[0]) as unknown as Json;
         });
         return value as unknown as KnowledgeEntry;
@@ -735,22 +732,6 @@ export async function createWorkbench(config: AppConfig) {
       setup: { agent: agentState.available && computers.some(item => item.online), project: projects.list().some(item => !item.archivedAt), memory: entries.length > 0, channel: connected ? 'done' : store.get<{ skipped: boolean }>('settings', 'setup.channel-skipped')?.skipped ? 'skipped' : 'todo' },
       agentTurns: store.list<Message>('messages').filter(message => message.role === 'user').map(({ id, todoId, conversationId, role, status, createdAt }) => ({ id, todoId, conversationId, role, status, createdAt })), background: background.summary(), webExtensions: contributions.list('web_extensions'), projects: projects.list(), version: '0.1.0', mode: config.demo ? 'demo' : 'live', agent: agent.status(), plugins: plugins.list(), executors: executorInfo(), machines: machines?.list() ?? store.list('machines'), inbox: inbox.list(), inboxHandling:inboxHandling.states(), approvals: approvals.list(), signals: supervision.signals(), todos: todos(), knowledge: entries, messages: store.list<Message>('messages').filter(message => message.conversationId === 'main'), runs: store.list<Run>('runs').sort((a, b) => b.createdAt.localeCompare(a.createdAt)) };
   }
-  // Recover synchronous startup state before installing fences for interrupted removals.
-  const projectRemoval = createProjectPurge(store,currentAgentInput);
-  async function purgeProject(id: string, input: Record<string,unknown>, dependencies: (projectId:string,todoIds:string[]) => void = () => {}) {
-    const result = await projectRemoval.purge(id,input,{
-      check: todoIds => { projectWorkspace.assertProjectPurgeAllowed(id); dependencies(id,todoIds); },
-      machines,
-      checkRuns: runIds => {
-        if (runIds.some(runId => controllers.has(runId) && store.get<Run>('runs',runId)?.machineId)) throw new InputError('项目执行正在启动，请稍后重试',409);
-      },
-      lock: commit => scopedAgents.withProjectPurge(id,commit),
-      stop: runIds => { for (const runId of runIds) controllers.get(runId)?.abort(); },
-      cleanKnowledge: () => knowledgeCurator.purgeProject(id,{deferStoreCleanup:true}),
-    });
-    changed('projects.changed',{});
-    return result;
-  }
   async function createProject(input: Record<string, unknown>) {
     const prepared = await projectFolders.prepare(input);
     return projects.create(prepared as unknown as Parameters<typeof projects.create>[0]);
@@ -836,7 +817,7 @@ export async function createWorkbench(config: AppConfig) {
     return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
   }
   return {
-    modelStatus, agentSessions, runObservations, scheduledWork, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, purgeProject, isProjectPurging: projectRemoval.fenced, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    modelStatus, agentSessions, runObservations, scheduledWork, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {

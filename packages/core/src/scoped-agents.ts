@@ -1,5 +1,4 @@
-import { botConversationId } from './bot-agent-routing.ts';
-import { checkScopedHistory } from './scoped-history.ts';
+import { createHash } from 'node:crypto';
 import type { BotScope } from '../../protocol/src/bots.ts';
 import type { AppConfig, ExecutorInfo, Message, Project, Todo, Json } from '../../protocol/src/index.ts';
 import type { Contributions, EventBus, Store } from '../../plugin-sdk/src/index.ts';
@@ -22,11 +21,6 @@ interface Options {
  */
 export function createScopedAgents(options: Options) {
   const agents = new Map<string, { botId: string; scope: BotScope; conversationId: string; runtime: Runtime }>();
-  const purging = new Set<string>();
-  function conflict(): never { throw Object.assign(new Error('项目 Agent 正忙或正在删除项目，请稍后重试'), { status: 409 }); }
-  function checkAdmission(scope: BotScope) {
-    if ('projectId' in scope && scope.projectId && purging.has(scope.projectId)) conflict();
-  }
   let closed = false;
   let configuring = false;
 
@@ -51,13 +45,12 @@ export function createScopedAgents(options: Options) {
       scope = { kind: 'task', todoId: todo.id, ...(todo.projectId ? { projectId: todo.projectId } : {}) };
     } else scope = { kind: input.kind };
     if (options.validScope?.(structuredClone(scope), botId) === false) throw new Error('Bot 作用域已失效');
-    checkAdmission(scope);
-    return { scope, conversationId: botConversationId({ id: botId, scope }) };
+    const digest = createHash('sha256').update(JSON.stringify(scope)).digest('hex');
+    return { scope, conversationId: `bot:${botId}:${digest}` };
   }
 
   function projectAgent(projectId:string,role:'work'|'memory'='work') {
     if(closed||configuring)throw new Error('项目 Agent 已关闭或正在应用配置');
-    checkAdmission({kind:'project',projectId});
     const project=options.store.get<Project>('projects',projectId);
     if(!project||project.archivedAt)throw Object.assign(new Error('项目不存在或已归档'),{status:404});
     const conversationId=`project:${projectId}:${role}`;
@@ -71,35 +64,6 @@ export function createScopedAgents(options: Options) {
     return entry.runtime;
   }
   return {
-    async withProjectPurge<T>(projectId: string, commit: (removeHistory: () => void) => Promise<T> | T): Promise<T> {
-      if (closed || configuring || purging.has(projectId)) conflict();
-      const owned = [...agents.values()].filter(entry => 'projectId' in entry.scope && entry.scope.projectId === projectId);
-      if (owned.some(entry => entry.runtime.configurationBusy())) conflict();
-      const conversations = new Set([`project:${projectId}:work`, `project:${projectId}:memory`, ...owned.map(entry => entry.conversationId)]);
-      // A shared/global conversation can carry a project tag. Only a matching
-      // canonical bot scope digest proves that the entire directory is owned.
-      for (const row of options.store.list<Message>('messages')) {
-        if (!row.conversationId?.startsWith('bot:')) continue;
-        const end = row.conversationId.lastIndexOf(':');
-        const id = row.conversationId.slice(4, end);
-        const scope: BotScope = row.todoId ? { kind: 'task', projectId, todoId: row.todoId } : { kind: 'project', projectId };
-        if (id && botConversationId({ id, scope }) === row.conversationId) conversations.add(row.conversationId);
-      }
-      purging.add(projectId);
-      try {
-        for (const entry of owned) {
-          try { await entry.runtime.close(); } finally { agents.delete(entry.conversationId); }
-        }
-        checkScopedHistory(options.config.dataDir, conversations, false);
-        let active = true;
-        try {
-          return await commit(() => {
-            if (!active) conflict();
-            checkScopedHistory(options.config.dataDir, conversations, true);
-          });
-        } finally { active = false; }
-      } finally { purging.delete(projectId); }
-    },
     postProject(projectId:string,text:string){return projectAgent(projectId).post(text);},
     askMemory(projectId:string,text:string){return projectAgent(projectId,'memory').ask(text,{readOnly:true});},
     projectStatus(projectId:string){const id=`project:${projectId}:work`;return{conversationId:id,...(agents.get(id)?.runtime.status()??{available:options.config.demo||Boolean(options.config.model),reason:'项目 Agent 按需初始化'})};},
@@ -132,7 +96,7 @@ export function createScopedAgents(options: Options) {
       }));
     },
     tryLockConfiguration(): boolean {
-      if (closed || configuring || purging.size || [...agents.values()].some(agent => agent.runtime.configurationBusy())) return false;
+      if (closed || configuring || [...agents.values()].some(agent => agent.runtime.configurationBusy())) return false;
       const locked: Runtime[] = [];
       try {
         for (const { runtime } of agents.values()) { runtime.lockConfiguration(); locked.push(runtime); }

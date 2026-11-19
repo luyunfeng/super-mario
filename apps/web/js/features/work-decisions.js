@@ -120,9 +120,6 @@ export function createWorkDecisions({ api, store, router, scope }) {
     }
   }
 
-  window.addEventListener('workspace:project-purged', ({ detail }) => {
-    for (const key of drafts.keys()) if (key.startsWith(detail.projectId + ':')) drafts.delete(key);
-  });
   scope.subscribe(() => {
     currentScope = scope.get(); ++scopeGeneration; ++sequence; data = null; failure = ''; loading = false;
     clearTimeout(timer); editor?.close(); editor = undefined; paint();

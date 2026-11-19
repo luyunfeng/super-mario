@@ -3,14 +3,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Store } from '../../plugin-sdk/src/index.ts';
 
-export interface StoredDocument { collection: string; id: string; value: unknown }
-export interface WorkbenchStore extends Store {
-  documents(): StoredDocument[];
-  guardWrites(check: (document: StoredDocument) => void): () => void;
-}
-export function createStore(dbPath: string, administrative: true): WorkbenchStore;
-export function createStore(dbPath: string): Store;
-export function createStore(dbPath: string, _administrative?: true): WorkbenchStore {
+export function createStore(dbPath: string): Store {
   if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
   // Tolerate short-lived readers, but still surface a persistent commit lock.
@@ -26,8 +19,6 @@ export function createStore(dbPath: string, _administrative?: true): WorkbenchSt
   const list = db.prepare('SELECT value FROM documents WHERE collection = ? ORDER BY rowid');
   const put = db.prepare('INSERT INTO documents VALUES (?, ?, ?) ON CONFLICT(collection, id) DO UPDATE SET value = excluded.value');
   const remove = db.prepare('DELETE FROM documents WHERE collection = ? AND id = ?');
-  const all = db.prepare('SELECT collection, id, value FROM documents');
-  const guards = new Set<(document: StoredDocument) => void>();
   let sequence = 0;
   let transactionDepth = 0;
   let writeFailure: Error | undefined;
@@ -42,8 +33,6 @@ export function createStore(dbPath: string, _administrative?: true): WorkbenchSt
     }
   }
   return {
-    documents() { return all.all().map(row => ({ collection: String(row.collection), id: String(row.id), value: JSON.parse(String(row.value)) })); },
-    guardWrites(check) { guards.add(check); return () => { guards.delete(check); }; },
     listAfter<T>(collection: string, id: number, limit = 1000): T[] { return after.all(collection, id, limit).map(row => JSON.parse(row.value as string) as T); },
     get<T>(collection: string, id: string): T | undefined {
       const row = get.get(collection, id);
@@ -56,7 +45,6 @@ export function createStore(dbPath: string, _administrative?: true): WorkbenchSt
       assertWritable();
       const json = JSON.stringify(value);
       if (json === undefined) throw new TypeError('Store values must be JSON documents');
-      for (const check of guards) check({collection, id, value});
       put.run(collection, id, json);
     },
     remove(collection, id) { assertWritable(); return remove.run(collection, id).changes > 0; },

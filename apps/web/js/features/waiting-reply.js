@@ -10,11 +10,6 @@ const short = value => value.length > 28 ? `${value.slice(0, 12)}…${value.slic
 const time = value => value ? new Date(value).toLocaleString('zh-CN') : '时间未知';
 const wrap = { minWidth: '0', maxWidth: '100%', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' };
 
-export function forgetWaitingReplyDrafts(api, todoIds) {
-  const drafts = draftsByApi.get(api)?.get(api.token());
-  for (const id of todoIds) drafts?.delete(id);
-}
-
 export function refreshWaitingReply(api) {
   if (active?.api === api) active.refresh();
 }

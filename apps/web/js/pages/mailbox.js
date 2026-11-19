@@ -30,12 +30,6 @@ export function createMailboxPage({ api, store, router, direction }) {
   const sourceChips = h('div', { class: 'mailbox-chips', role: 'group', 'aria-label': '消息来源' });
   const stageChips = h('div', { class: 'mailbox-chips', role: 'group', 'aria-label': '处理阶段' });
   const projectFilter = Select({ 'aria-label': '收件项目', value: 'all', options: [['all', '全部项目']] });
-  window.addEventListener('workspace:project-purged', ({ detail }) => {
-    for (const [key, draft] of drafts) if (draft.projectId === detail.projectId) drafts.delete(key);
-    for (const [key, item] of updated) if (item.projectId === detail.projectId) updated.delete(key);
-    if (projectFilter.value === detail.projectId) projectFilter.value = 'all';
-    detailKey = undefined;
-  });
   const query = Input({ type: 'search', placeholder: '搜索消息内容、来源或发送目标', 'aria-label': `搜索${name}` });
   const filter = Select({ 'aria-label': `${name}状态`, value: 'all', options: incoming
     ? [['all', '全部消息'], ['action', '需要处理'], ['fyi', '知会'], ['noise', '低优先级'], ['archived', '已归档'], ['todo', '已转待办'], ['large-group', '已忽略的大群']]

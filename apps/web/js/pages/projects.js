@@ -1,13 +1,11 @@
 // 项目：让 Agent 持续跟进。左侧项目列表（首项“全部”），右侧是所选项目的待办 / 执行 / 资料 / 跟进。
 // 地址：#projects/<项目或 all>/<标签>/<执行编号>
-import { h, replace, keyedList, readLocal, writeLocal } from '../lib/dom.js';
+import { h, replace, keyedList } from '../lib/dom.js';
 import { Button, Tabs, Empty } from '../ui/kit.js';
-import { confirmDialog } from '../ui/overlay.js';
 import { Hint } from '../ui/hint.js';
 import { createProjectDiscoveryList } from '../features/project-discovery-list.js';
 import { openProjectFolders } from '../features/project-folders.js';
 import { createProjectConversation } from '../features/project-conversation.js';
-import { forgetWaitingReplyDrafts } from '../features/waiting-reply.js';
 import { createTodosTab } from '../features/todos-tab.js';
 import { createRunsTab } from '../features/runs.js';
 import { createProjectSettings } from '../features/project-settings.js';
@@ -21,13 +19,12 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
   let runId = '';
   let launchRequested = false;
   let lastProjects = '';
-  let previousSnapshot;
 
   const todos = createTodosTab({ api, store, router });
   const runs = createRunsTab({ api, store, router, consoleDrawer, markRunSeen });
   const folders = (project) => openProjectFolders({ api, store, router, project });
   const discovered = createProjectDiscoveryList({ api, store, router, openFolders: () => folders() });
-  const settings = createProjectSettings({ api, store, router, bindFolder: folders, purge });
+  const settings = createProjectSettings({ api, store, router, bindFolder: folders });
   const conversation = createProjectConversation({ api, store, bindFolder: folders });
   const memoryList = h('div', { class: 'list' });
   const memory = h('div', { class: 'stack stack--lg', id: 'panel-memory', role: 'tabpanel' },
@@ -43,39 +40,6 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
 
   const removedList = h('div', { class: 'list' });
   const removed = h('details', { hidden: true }, h('summary', null, '已移除的项目'), removedList);
-
-  async function purge(project) {
-    const token = api.token();
-    const ok = await confirmDialog({
-      title: `彻底移除“${project.name}”？`,
-      message: '项目及其关联的工作台历史将永久删除，无法恢复。电脑上的文件夹和文件会保留。',
-      confirmName: project.name, confirmLabel: '确认彻底移除', danger: true,
-    });
-    if (!ok || api.token() !== token) return;
-    // Keep the pre-request snapshot: a WebSocket update may arrive before the POST response.
-    const snapshot = store.view.snapshot;
-    await api.post(`/projects/${encodeURIComponent(project.id)}/purge`, { confirmName: project.name });
-    if (api.token() !== token) return;
-    await store.refresh();
-    // A refresh can fail after a successful write. Still discard this tab's private state.
-    if (api.token() === token && store.view.snapshot.projects.some(item => item.id === project.id)) forgetProject(project.id, snapshot);
-  }
-
-  function forgetProject(id, snapshot) {
-    const runIds = new Set(snapshot.runs.filter(run => run.projectId === id).map(run => run.id));
-    const seen = readLocal('sm.seenRuns', []);
-    if (Array.isArray(seen) && seen.some(runId => runIds.has(runId))) {
-      writeLocal('sm.seenRuns', seen.filter(runId => !runIds.has(runId)));
-    }
-    conversation.forget(id);
-    settings.forget(id);
-    forgetWaitingReplyDrafts(api, snapshot.todos.filter(todo => todo.projectId === id).map(todo => todo.id));
-    window.dispatchEvent(new CustomEvent('workspace:project-purged', { detail: { projectId: id } }));
-    if (scope.get() === id) scope.set('');
-    if (router.current.page === 'projects' && router.current.parts[0] === id) {
-      router.go(router.href('projects', 'all', 'todos'));
-    }
-  }
 
   function itemFor(id, name, snapshot) {
     const open = todos.count(snapshot, id);
@@ -99,8 +63,7 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
       Button({ label: '重新添加', ariaLabel: `重新添加 ${project.name}`, size: 'sm', onClick: async () => {
         await api.post(`/projects/${encodeURIComponent(project.id)}/restore`, {});
         await store.refresh();
-      } }),
-      Button({ label: '彻底移除', ariaLabel: `彻底移除 ${project.name}`, kind: 'danger', size: 'sm', onClick: () => purge(project) }))));
+      } }))));
     replace(projectList, items.map(item => itemFor(item.id, item.name, snapshot)));
   }
 
@@ -174,7 +137,7 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
     if (!snapshot) return;
     const projects = (snapshot.projects ?? []).filter(item => !item.archivedAt);
     const known = projectId === 'all' || projects.some(item => item.id === projectId);
-    if (!known) { if (router.current.page !== 'projects') return; router.go(router.href('projects', 'all', 'todos')); return; }
+    if (!known) { router.go(router.href('projects', 'all', 'todos')); return; }
     paintList(snapshot);
     paintDetail(snapshot);
     if (tab === 'memory') paintMemory(snapshot);
@@ -208,14 +171,6 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
       render(); void discovered.show();
     },
     onState({ snapshot }) {
-      // Every tab receives the updated project list, including archived projects.
-      if (previousSnapshot && previousSnapshot !== snapshot) {
-        const remaining = new Set(snapshot.projects.map(project => project.id));
-        for (const project of previousSnapshot.projects) {
-          if (!remaining.has(project.id)) forgetProject(project.id, previousSnapshot);
-        }
-      }
-      previousSnapshot = snapshot;
       todos.update(snapshot);
       runs.update();
       if (tab === 'settings') settings.update();
