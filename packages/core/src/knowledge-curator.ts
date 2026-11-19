@@ -348,7 +348,7 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
     sourceRejected(id:string,reason:string) { const job=store.get<Job>(jobsCollection,id);if(job?.status==='awaiting_approval')save(job,{status:'failed',error:`来源读取确认已失效：${reason}`}); },
     async configure(input: Record<string, unknown>) {
       if (configuring) throw new CuratorError('知识 Agent 正在修改配置', 409);
-      if (typeof input.enabled !== 'boolean' || !(options.allowedProviders ? options.allowedProviders() : ['codex', 'claude-code']).includes(String(input.provider))) throw new CuratorError('请选择是否启用及有效的 CLI 类型');
+      if (typeof input.enabled !== 'boolean' || !(options.allowedProviders ? options.allowedProviders() : ['codex', 'claude-code', 'pi']).includes(String(input.provider))) throw new CuratorError('请选择是否启用及有效的 CLI 类型');
       if (input.machineId !== undefined && typeof input.machineId !== 'string') throw new CuratorError('执行机标识无效');
       const next: Settings = { enabled: input.enabled, provider: String(input.provider), ...(input.machineId ? { machineId: String(input.machineId) } : {}) };
       const current = settings();

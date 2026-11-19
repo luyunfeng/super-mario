@@ -41,6 +41,13 @@ log({argv:process.argv.slice(2),pid:process.pid,cwd:process.cwd()});
 let count = 0;
 for(const m of messages()) {
  log(m);
+ if (m.type === 'get_state') { send({type:'response', id:m.id, command:m.type, success:true, data:{sessionId:'pi-session'}}); continue; }
+ if (m.type === 'prompt') {
+  send({type:'response', id:m.id, command:m.type, success:true});
+  const text = JSON.stringify({pages:[{id:null,title:'Knowledge',content:m.message}],summary:'summary'});
+  send({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text}]}});
+  send({type:'agent_settled',aborted:false}); continue;
+ }
  if (m.method === 'config/read') { send({id:m.id,result:{config:{mcp_servers:{'test.canary':{command:'never-run'}}}}}); continue; }
  if (m.method === 'initialize') { send({id:m.id,result:process.argv[1].includes('broken-init') ? null : {}}); continue; }
  if (m.method === 'thread/start') { send({id:m.id,result:{thread:{id:session}}}); continue; }
@@ -87,7 +94,7 @@ function setup() {
   const dir = mkdtempSync(join(tmpdir(), 'mario-knowledge-test-'));
   const command = join(dir, 'fake-cli.cjs');
   writeFileSync(command, `#!${process.execPath}\n${fake}`); chmodSync(command, 0o700);
-  const make = () => createKnowledgeWorker({ dataDir: dir, commands: { codex: command, claude: command } });
+  const make = () => createKnowledgeWorker({ dataDir: dir, commands: { codex: command, claude: command }, launchers: { pi: { command } } });
   const service = make();
   return { dir, service, make, call: async (name: string, params: JsonObject = {}) => await service.handlers[`executor.knowledge.${name}`]!(params, () => {}) as JsonObject,
     wire: () => readFileSync(join(dir, 'knowledge-workspace', 'wire.jsonl'), 'utf8').trim().split('\n').map(v => JSON.parse(v)),
@@ -99,7 +106,7 @@ async function until(read: () => Promise<JsonObject>, predicate: (value: JsonObj
 }
 function job(value: JsonObject): JsonObject { return value.job as JsonObject; }
 
-for (const provider of ['codex', 'claude-code']) {
+for (const provider of ['codex', 'claude-code', 'pi']) {
   test(`${provider}: persistent process/session, dedupe, structured results and restrictions`, async () => {
     const f = setup();
     try {
@@ -114,7 +121,7 @@ for (const provider of ['codex', 'claude-code']) {
         await f.call('submit', { workerId: first.workerId!, jobId: id, prompt: 'never execute again' });
       }
       const wire = f.wire();
-      assert.equal(wire.filter(m => m.method === 'turn/start' || m.type === 'user').length, 3);
+      assert.equal(wire.filter(m => m.method === 'turn/start' || m.type === 'user' || m.type === 'prompt').length, 3);
       assert.equal(wire.filter(m => m.argv).length, 1);
       assert.equal(wire[0].cwd, join(f.dir, 'knowledge-workspace'));
       if (provider === 'codex') {
@@ -125,6 +132,9 @@ for (const provider of ['codex', 'claude-code']) {
         assert.equal(wire.filter(m => m.method === 'config/read').length, 1);
         assert.equal(wire.find(m => m.method === 'turn/start').params.outputSchema.properties.pages.maxItems, 8);
         assert(wire[0].argv.includes('--stdio'));
+      } else if (provider === 'pi') {
+        for (const flag of ['--no-tools', '--no-session', '--no-extensions', '--no-context-files']) assert(wire[0].argv.includes(flag));
+        assert.equal(first.sessionId, 'pi-session');
       } else {
         const args: string[] = wire[0].argv;
         assert.equal(args[args.indexOf('--tools') + 1], '');

@@ -9,7 +9,7 @@ import type { DiagnosticLauncher } from './agent-diagnostics.ts';
 import { validateTaskLauncher } from './task-runner.ts';
 
 class WorkerError extends Error {}
-type Provider = 'codex' | 'claude-code';
+type Provider = 'codex' | 'claude-code' | 'pi';
 type Scope = { layer: 'personal' } | { layer: 'project'; projectId: string };
 type Job = { id: string; scope: Scope; status: 'running' | 'completed' | 'failed' | 'unknown'; text?: string; error?: string };
 type Pending = { method: string; job?: Job; resolve: (value: JsonObject) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
@@ -80,10 +80,10 @@ export function createKnowledgeWorker(options: { dataDir: string; commands?: { c
   // Snapshot trusted local configuration. launchers override legacy commands, then PATH defaults.
   const launchers: Partial<Record<Provider, DiagnosticLauncher>> = {};
   for (const [id, value] of Object.entries(options.launchers ?? {})) {
-    if (id !== 'codex' && id !== 'claude-code') throw new WorkerError('Invalid launcher executor');
+    if (id !== 'codex' && id !== 'claude-code' && id !== 'pi') throw new WorkerError('Invalid launcher executor');
     launchers[id] = validateTaskLauncher(value);
   }
-  const commands = { codex: options.commands?.codex ?? 'codex', 'claude-code': options.commands?.claude ?? 'claude' };
+  const commands = { pi: 'pi', codex: options.commands?.codex ?? 'codex', 'claude-code': options.commands?.claude ?? 'claude' };
   const jobs = new Map<string, Job>();
   const workers = new Map<string, Worker>();
   let used = 0;
@@ -167,7 +167,7 @@ export function createKnowledgeWorker(options: { dataDir: string; commands?: { c
       const timer = setTimeout(() => { fail(w, 'CLI RPC timed out'); }, 15_000);
       timer.unref();
       w.pending.set(id, { method, job: w.job, resolve, reject, timer });
-      try { send(w, { id, method, params }); } catch { fail(w, 'CLI request failed'); }
+      try { send(w, w.provider === 'pi' ? { id: String(id), type: method, ...params } : { id, method, params }); } catch { fail(w, 'CLI request failed'); }
     });
   }
   function complete(w: Worker, value: unknown) {
@@ -234,6 +234,30 @@ export function createKnowledgeWorker(options: { dataDir: string; commands?: { c
     }
     if (message.method === 'error' && p.willRetry !== true) fail(w, 'CLI reported an error', 'failed');
   }
+  function piMessage(w: Worker, message: JsonObject) {
+    if (message.type === 'response') {
+      const pending = w.pending.get(Number(message.id));
+      if (!pending || pending.method !== message.command) return;
+      w.pending.delete(Number(message.id)); clearTimeout(pending.timer);
+      if (message.success === true) pending.resolve(object(message.data ?? {}));
+      else pending.reject(new WorkerError('Pi RPC request failed'));
+      return;
+    }
+    if (!w.job) return;
+    if (message.type === 'tool_execution_start') { fail(w, 'Pi attempted tool use', 'failed'); return; }
+    if (message.type === 'message_end') {
+      const result = object(message.message);
+      if (result.role !== 'assistant') return;
+      const blocks = Array.isArray(result.content) ? result.content.map(object) : [];
+      if (blocks.some(b => b.type === 'toolCall')) { fail(w, 'Pi attempted tool use', 'failed'); return; }
+      w.text = result.stopReason === 'stop' ? blocks.filter(b => b.type === 'text').map(b => b.text).join('') : '';
+    }
+    // A low-level run may retry. Only the settled event closes the submitted prompt.
+    if (message.type === 'agent_settled') {
+      if (message.aborted || !w.text) finish(w, 'failed', undefined, 'Pi turn failed');
+      else complete(w, JSON.parse(w.text));
+    }
+  }
   function claudeMessage(w: Worker, message: JsonObject) {
     if (typeof message.session_id === 'string' && message.session_id !== w.sessionId) throw new WorkerError('Claude session mismatch');
     if (message.type === 'control_request') {
@@ -290,6 +314,8 @@ export function createKnowledgeWorker(options: { dataDir: string; commands?: { c
     const sessionId = provider === 'claude-code' ? randomUUID() : undefined;
     const args = provider === 'codex'
       ? ['app-server', '--stdio', ...codexConfigArgs(CODEX_MODEL_CONFIG)]
+      : provider === 'pi'
+      ? ['--mode', 'rpc', '--no-session', '--no-tools', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files', '--system-prompt', RULES]
       : ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--tools', '',
         '--permission-mode', 'plan', '--permission-prompts', 'none', '--system-prompt', RULES,
         '--json-schema', JSON.stringify(SCHEMA), '--session-id', sessionId!, '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
@@ -299,7 +325,7 @@ export function createKnowledgeWorker(options: { dataDir: string; commands?: { c
     const launcher = launchers[provider];
     const command = launcher?.command ?? commands[provider];
     const env = { ...process.env };
-    if (launcher?.profile) env[provider === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'] = launcher.profile.configDir;
+    if (launcher?.profile) env[provider === 'pi' ? 'PI_CODING_AGENT_DIR' : provider === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'] = launcher.profile.configDir;
     const child = spawn(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
     let exited!: () => void;
     const w: Worker = { id: randomUUID(), provider, scope: target, used: ++used, state: 'idle', child, ...(sessionId ? { sessionId } : {}),
@@ -326,7 +352,7 @@ export function createKnowledgeWorker(options: { dataDir: string; commands?: { c
         if (!line.trim()) continue;
         try {
           const message = object(JSON.parse(line));
-          if (provider === 'codex') codexMessage(w, message); else claudeMessage(w, message);
+          if (provider === 'codex') codexMessage(w, message); else if (provider === 'pi') piMessage(w, message); else claudeMessage(w, message);
         } catch { buffer = ''; fail(w, 'Invalid CLI output', 'failed'); return; }
         if (!['idle', 'running'].includes(w.state)) { buffer = ''; return; }
       }
@@ -344,6 +370,7 @@ export function createKnowledgeWorker(options: { dataDir: string; commands?: { c
         if (typeof id !== 'string' || !id) throw new WorkerError('Missing Codex thread id');
         w.sessionId = id;
       }
+      if (provider === 'pi') w.sessionId = string(await rpc(w, 'get_state', {}), 'sessionId');
       if (!alive(w)) throw new WorkerError('CLI exited during initialization');
     } catch (error) { fail(w, error instanceof Error && error.message === 'Invalid CLI RPC response' ? 'Invalid CLI RPC response during initialization' : 'CLI initialization failed', 'failed'); await terminate(w); w.state = 'failed'; }
     return w;
@@ -352,7 +379,7 @@ export function createKnowledgeWorker(options: { dataDir: string; commands?: { c
     'executor.knowledge.start': params => serial(async () => {
       if (closed) throw new WorkerError('Knowledge worker service is closed');
       const provider = string(params, 'provider');
-      if (provider !== 'codex' && provider !== 'claude-code') throw new WorkerError('Unsupported knowledge provider');
+      if (provider !== 'codex' && provider !== 'claude-code' && provider !== 'pi') throw new WorkerError('Unsupported knowledge provider');
       const target = scope(params.scope), key = scopeKey(target);
       // Switching provider retires the whole owned pool, never a live job implicitly.
       if ([...workers.values()].some(w => w.provider !== provider && w.state !== 'stopped')) {
@@ -386,6 +413,10 @@ export function createKnowledgeWorker(options: { dataDir: string; commands?: { c
         void rpc(w, 'turn/start', { threadId: w.sessionId!, input: [{ type: 'text', text: prompt, text_elements: [] }],
           approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly', networkAccess: false }, outputSchema: SCHEMA })
           .catch(() => { if (w.job === job) fail(w, 'Codex turn/start failed; outcome unknown'); });
+      } else if (w.provider === 'pi') {
+        void rpc(w, 'prompt', { message: prompt }).catch(() => {
+          if (w.job === job) fail(w, 'Pi prompt request failed', 'failed');
+        });
       } else {
         try { send(w, { type: 'user', session_id: w.sessionId!, message: { role: 'user', content: prompt } }); }
         catch { fail(w, 'CLI request failed'); }

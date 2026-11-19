@@ -62,8 +62,7 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
     try { return host.describeInstance ? await host.describeInstance(scope) : unknown; }
     catch { return unknown; }
   }
-  const { pi: _piLauncher, ...knowledgeLaunchers } = launchers;
-  const knowledgeWorker = createKnowledgeWorker({ dataDir: options.dataDir, launchers: knowledgeLaunchers });
+  const knowledgeWorker = createKnowledgeWorker({ dataDir: options.dataDir, launchers });
   const hasCommand = options.hasCommand ?? onPath;
   const file = join(options.dataDir, 'executor-sessions.json');
   const bindings = new Map<string, SessionBinding>();

@@ -66,7 +66,7 @@ export function openCuratorDrawer({ api, store, onChanged }) {
     const enabled = Check({ label: '启用整理 Agent', checked: value.settings.enabled });
     const machine = Select({ options: [['', '尚未选择电脑'], ...machines.map(item => [item.id, item.name])], value: value.settings.machineId ?? '' });
     if (value.settings.machineId && machine.value !== value.settings.machineId) { machine.append(h('option', { value: value.settings.machineId }, '原电脑离线或不可用')); machine.value = value.settings.machineId; }
-    const provider = Select({ options: [['codex', 'Codex'], ['claude-code', 'Claude Code']], value: value.settings.provider });
+    const provider = Select({ options: [['codex', 'Codex'], ['claude-code', 'Claude Code'], ['pi', 'Pi CLI']], value: value.settings.provider });
     const message = h('div', { role: 'status', style: wrap });
     const save = Button({ label: '保存整理设置', kind: 'primary', onClick: async () => {
       if (!isCurrent() || saving) return;

@@ -74,7 +74,7 @@ const close = async (page: Page) => { await page.getByRole('button', { name: '�
 test('SSE 快照推进 queued → running → awaiting_approval → completed，worker/reader 草稿与 DOM 始终保留', { timeout: 20000 }, async t => {
   const f = await fixture(t); const { page } = f;
   await page.getByLabel('启用整理 Agent', { exact: true }).check();
-  await page.getByLabel('用哪个执行者').selectOption('codex');
+  await page.getByLabel('用哪个执行者').selectOption('pi');
   await page.getByText('高级设置', { exact: true }).click();
   await page.getByLabel('已有命令行连接名称').fill('reader-draft');
   await page.getByLabel('额外精确受信域名').fill('draft.example.com');
@@ -84,7 +84,7 @@ test('SSE 快照推进 queued → running → awaiting_approval → completed，
     await expect(row(page).getByText(label, { exact: true })).toBeVisible();
     if (status === 'awaiting_approval') await expect(row(page).getByRole('link', { name: '去确认来源读取' })).toHaveAttribute('href', '#chat');
     await expect(page.getByLabel('启用整理 Agent', { exact: true })).toBeChecked();
-    await expect(page.getByLabel('用哪个执行者')).toHaveValue('codex');
+    await expect(page.getByLabel('用哪个执行者')).toHaveValue('pi');
     await expect(page.getByLabel('已有命令行连接名称')).toHaveValue('reader-draft');
     await expect(page.getByLabel('额外精确受信域名')).toHaveValue('draft.example.com');
     assert.ok(await page.getByLabel('用哪个执行者').evaluate(el => el === (window as any).originalControl));
