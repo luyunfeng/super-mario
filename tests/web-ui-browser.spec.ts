@@ -375,9 +375,26 @@ test('主 Agent 有独立的全局机器人入口，进入向导不发起外部�
       return route.fulfill({ json: { id: 'fixture', status: 'queued' } });
     });
     await card.getByRole('link', { name: '配置机器人' }).click();
-    await expect(page.getByLabel('机器人名称', { exact: true })).toHaveValue('主 Agent');
+    await expect(page.getByLabel('机器人名称', { exact: true })).toHaveValue('Super Mario · 主 Agent');
     assert.equal(registration, undefined);
+    await page.getByLabel('机器人名称', { exact: true }).fill('我的团队助手');
     await page.getByRole('button', { name: '生成二维码' }).click();
-    await expect.poll(() => registration).toEqual({ name: '主 Agent', scope: { kind: 'global' }, requireConfirmation: true });
+    await expect.poll(() => registration).toEqual({ name: '我的团队助手', scope: { kind: 'global' }, requireConfirmation: true });
+  });
+});
+
+test('创建项目机器人默认使用项目名，提交时保留项目范围', async () => {
+  await withApp(async ({ open, post }) => {
+    const project = await post('/projects', {name:'年度预算'});
+    const { page } = await open('#channels/project-bot/' + project.id);
+    await expect(page.getByLabel('机器人名称', { exact:true })).toHaveValue('Super Mario · 年度预算');
+    let request: unknown;
+    await page.route('**/api/v1/feishu/registrations', async route => {
+      if (route.request().method() !== 'POST') return route.continue();
+      request = route.request().postDataJSON();
+      return route.fulfill({json:{id:'fixture',status:'queued'}});
+    });
+    await page.getByRole('button',{name:'生成二维码'}).click();
+    await expect.poll(() => request).toEqual({name:'Super Mario · 年度预算',scope:{kind:'project',projectId:project.id},requireConfirmation:true});
   });
 });

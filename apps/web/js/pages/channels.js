@@ -17,6 +17,7 @@ export function createChannelsPage({ api, store, router }) {
   let job = null;
   let selected = '';
   let creating = false;
+  let nameDraft;
   let error = '';
   let seq = 0;
   let timer;
@@ -55,20 +56,27 @@ export function createChannelsPage({ api, store, router }) {
   }
 
   function renderCreate() {
-    const name = Input({ value: mainSetup() ? '主 Agent' : '', placeholder: '给机器人起个名字，例如：我的 Agent', maxLength: 80, 'aria-label': '机器人名称' });
+    const projectSetup = router.current.parts[0] === 'project-bot';
+    const project = projectSetup && projects().find(item => item.id === router.current.parts[1]);
+    const label = mainSetup() ? '主 Agent' : project ? project.name : '工作助手';
+    const suggested = ('Super Mario · ' + label).slice(0, 80).replace(/[\uD800-\uDBFF]$/, '');
+    const name = Input({ value: nameDraft ?? suggested, maxLength: 80, required: true, 'aria-label': '机器人名称' });
+    name.addEventListener('input', () => { nameDraft = name.value; });
+    const scope = mainSetup() ? { kind: 'global' } : project ? { kind: 'project', projectId: project.id } : { kind: 'unmarked' };
     const active = job && (!JOB_DONE.has(job.status) || job.status === 'unknown');
     return h('div', { class: 'stack' },
+      projectSetup && h('p', { class: 'small' }, project ? '负责项目：' + project.name : '项目不可用，请返回项目页重新选择。'),
       mainSetup() && h('p', { class: 'small' }, '为主 Agent 创建全局飞书机器人，可跟进所有项目。'),
       !bots.length && !active && h('ol', { class: 'howto small' },
         h('li', null, '扫码创建机器人（用飞书扫一扫）'), h('li', null, '在飞书里私聊它，回复配对码'), h('li', null, mainSetup() ? '确认全局机器人已连接' : '选择它负责的项目')),
       !active && h('form', { class: 'row', onsubmit: async (event) => {
         event.preventDefault();
-        if (!name.value.trim()) return;
+        if (!name.value.trim() || (projectSetup && !project)) return;
         event.currentTarget.querySelector('button').disabled = true;
-        try { job = await api.post('/feishu/registrations', { name: name.value.trim(), scope: { kind: mainSetup() ? 'global' : 'unmarked' }, requireConfirmation: true }); creating = false; error = ''; }
+        try { job = await api.post('/feishu/registrations', { name: name.value.trim(), scope, requireConfirmation: true }); creating = false; error = ''; }
         catch (cause) { error = cause.status && cause.status < 500 ? `没有开始创建：${systemText(cause.message)}` : '创建结果未知，请先到飞书后台核对，系统不会自动重试。'; if (!cause.status || cause.status >= 500) job = { id: '', status: 'unknown' }; }
         paint(); schedule();
-      } }, h('div', { class: 'grow' }, name), h('button', { class: 'btn btn--primary', type: 'submit' }, '生成二维码')),
+      } }, h('div', { class: 'grow' }, name), h('button', { class: 'btn btn--primary', type: 'submit', disabled: projectSetup && !project }, '生成二维码')),
       renderJob());
   }
 
@@ -98,7 +106,7 @@ export function createChannelsPage({ api, store, router }) {
       Dot(bot.connected ? 'ok' : 'warn'), h('div', { class: 'item__main' }, h('span', { class: 'item__title' }, bot.name), h('span', { class: 'item__meta' }, `${scopeText(bot.scope)} · ${bot.paired ? '已配对' : '未配对'}`)),
       !bot.enabled && Pill('已停用')))),
       current && !showCreate && renderBot(current),
-      showCreate ? renderCreate() : Button({ label: '添加另一个机器人', icon: 'plus', size: 'sm', onClick: () => { creating = true; job = null; paint(); } }),
+      showCreate ? renderCreate() : Button({ label: '添加另一个机器人', icon: 'plus', size: 'sm', onClick: () => { creating = true; nameDraft = undefined; job = null; paint(); } }),
       !bots.length && !showCreate && Empty({ title: '还没有机器人' }));
   }
 
@@ -162,7 +170,8 @@ export function createChannelsPage({ api, store, router }) {
   return {
     el,
     onShow(route) {
-      if (route.parts[0] === 'main-bot') { selected = ''; creating = true; }
+      nameDraft = undefined;
+      if (['main-bot', 'project-bot'].includes(route.parts[0])) { selected = ''; creating = true; }
       else if (route.parts[0] === 'bot') { selected = route.parts[1] || ''; creating = false; }
       else creating = false;
       load().then(schedule); if (route.parts[0] === 'advanced') advanced.open = true; },
@@ -172,7 +181,7 @@ export function createChannelsPage({ api, store, router }) {
       replace(problemBox, configured && problems.map(item => Banner({ tone: 'danger', children: `${item.message}。${item.fix}` })));
       // 向导里可能有正在输入的内容：只有项目列表变了才重绘。
       const signature = JSON.stringify(projects().map(item => [item.id, item.name]));
-      if (signature !== projectSig) { projectSig = signature; if (bots.length) paint(); }
+      if (signature !== projectSig) { projectSig = signature; if (router.current.page === 'channels') paint(); }
       mailboxes?.update(snapshot);
     },
   };

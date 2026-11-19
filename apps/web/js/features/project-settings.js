@@ -71,9 +71,9 @@ export function createProjectSettings({ api, store, router, bindFolder }) {
       : h('p', { class: 'muted' }, workspace?.error ? `无法读取：${workspace.error}` : '正在读取…') });
 
     const bots = workspace?.bots ?? [];
-    const channel = Card({ title: '飞书机器人', sub: '负责这个项目的机器人', body: bots.length
+    const channel = Card({ title: '飞书机器人', sub: '负责这个项目的机器人', tools: h('a', { class: 'btn btn--sm', href: router.href('channels', 'project-bot', editingId) }, '创建项目机器人'), body: bots.length
       ? bots.map(bot => h('div', { class: 'item' }, h('div', { class: 'item__main' }, h('span', { class: 'item__title' }, bot.name), h('span', { class: 'item__meta' }, bot.connected ? '已连接' : '未连接'))))
-      : [h('p', { class: 'muted' }, '还没有机器人负责这个项目。'), h('div', null, h('a', { class: 'btn btn--sm', href: router.href('channels') }, '去渠道连接'))] });
+      : h('p', { class: 'muted' }, '还没有机器人负责这个项目。') });
     const folder = Card({ title: '工作区文件夹', body: [h('p', { class: 'folder-path' }, project.workspace ? `${(store.view.snapshot?.machines ?? []).find(m => m.id === project.workspace.machineId)?.name ?? project.workspace.machineId} · ${project.workspace.cwd}` : '尚未绑定文件夹，原有数据保留。'), Button({ label: project.workspace ? '更换绑定文件夹' : '绑定文件夹', onClick: () => bindFolder(project) })] });
     replace(root, folder, info, follow, memory, channel);
   }
