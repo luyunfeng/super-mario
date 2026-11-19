@@ -304,3 +304,21 @@ test('interactive result stays unknown and invalid task modes never create panes
   await assert.rejects(call('executor.start', { executorId: 'codex', cwd: dir, prompt: 'x', mode: 'invalid' }), /Invalid mode/);
   assert.equal(host.creates.length, 1);
 });
+
+test('pi advertises native task results and accepts only a new task', async t => {
+  const { host, options, dir } = await fixture(t);
+  const launcher = { command: '/local/pi-test', profile: { configDir: join(dir, 'pi-profile') } };
+  const service = createExecutionServices({ ...options, launchers: { pi: launcher },
+    hasCommand: cmd => cmd === launcher.command, validateResume: async () => {} });
+  const info = (await service.describe('machine')).find(entry => entry.id === 'pi');
+  assert.equal(info?.available, true);
+  assert.deepEqual(info?.nativeResultSources, ['pi-json']);
+  const params = { executorId: 'pi', cwd: dir, prompt: 'work' };
+  await assert.rejects(service.handlers['executor.start']!(params, () => {}), /new tasks only/);
+  await assert.rejects(service.handlers['executor.resume']!({ ...params, mode: 'task', nativeSessionId: 'old' }, () => {}), /new tasks only/);
+  assert.equal(host.creates.length, 0);
+  await service.handlers['executor.start']!({ ...params, mode: 'task' }, () => {});
+  const config = JSON.parse(await readFile(host.creates[0]!.argv[2]!, 'utf8'));
+  assert.equal(config.executorId, 'pi');
+  assert.deepEqual(config.launcher, launcher);
+});

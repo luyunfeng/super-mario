@@ -15,7 +15,7 @@ export function recoverySummary(data) {
 
 /** Only explicit clicks probe the CLI. Raw remote text is never diagnostic UI copy. */
 export function agentDiagnostics({ api, machine, active }) {
-  return h('div', { class: 'stack' }, ...['codex', 'claude-code'].map(executorId => {
+  return h('div', { class: 'stack' }, ...['codex', 'claude-code', 'pi'].map(executorId => {
     const supported = machine.capabilities?.includes('executor.diagnostics');
     const result = h('div', { class: 'stack small', role: 'status' }, !supported ? '旧代理缺少诊断支持，请升级执行机代理。' : '尚未检查安装与本地凭证。');
     const button = Button({ label: '检查安装与登录', size: 'sm', disabled: !machine.online || !supported, onClick: async () => {
@@ -36,6 +36,6 @@ export function agentDiagnostics({ api, machine, active }) {
         if (active()) replace(result, unsupportedApi(error) ? '代理缺少诊断支持，请升级执行机代理。' : '检查失败或超时，本地凭证状态未知。');
       }
     } });
-    return h('section', { class: 'stack' }, h('h4', null, executorId === 'codex' ? 'Codex' : 'Claude Code'), button, result);
+    return h('section', { class: 'stack' }, h('h4', null, ({ codex: 'Codex', 'claude-code': 'Claude Code', pi: 'Pi CLI' })[executorId]), button, result);
   }), h('p', { class: 'muted small' }, '安装和 PATH 不代表已登录。本地凭证检查不证明模型调用成功。启动器和配置目录由执行机启动配置决定。'));
 }

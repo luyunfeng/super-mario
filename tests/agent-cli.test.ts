@@ -83,7 +83,10 @@ for (const override of [false, true]) {
     // Explicitly erase an inherited override so the default-command case is deterministic.
     delete (env as NodeJS.ProcessEnv).SUPER_MARIO_TERMINAL_COMMAND;
     if (override) (env as NodeJS.ProcessEnv).SUPER_MARIO_TERMINAL_COMMAND = command;
-    const child = spawn(process.execPath, [entry, '--url', `http://127.0.0.1:${address.port}`, '--data-dir', dir, '--name', 'CLI test'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const piCommand = join(dir, 'custom-pi');
+    await writeFile(piCommand, '#!/bin/sh\n[ "$1" = "--version" ] || exit 99\necho 0.64.0\n', { mode: 0o700 });
+    Object.assign(env, { SUPER_MARIO_PI_COMMAND: override ? join(dir, 'missing') : piCommand, PI_CODING_AGENT_DIR: dir });
+    const child = spawn(process.execPath, [entry, ...(override ? ['--pi-command', piCommand] : []), '--url', `http://127.0.0.1:${address.port}`, '--data-dir', dir, '--name', 'CLI test'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     t.after(() => stop(child));
     let output = '';
     child.stdout.on('data', chunk => { output += chunk; });
@@ -101,7 +104,7 @@ for (const override of [false, true]) {
       assert.ok(hello.capabilities.includes(method), method);
     }
     assert.deepEqual(hello.executors?.map(e => [e.id, e.available, e.machineId, e.mode]), [
-      ['codex', true, 'test-machine', 'real'], ['claude-code', true, 'test-machine', 'real'],
+      ['codex', true, 'test-machine', 'real'], ['claude-code', true, 'test-machine', 'real'], ['pi', true, 'test-machine', 'real'],
     ]);
     // The signal handler is registered after the startup log.
     await waitFor(() => output.includes('执行机代理已启动') || undefined);
@@ -117,6 +120,10 @@ for (const override of [false, true]) {
       assert.equal(result.error, undefined);
       return result.result;
     }
+    const status = await call('node.status') as { cli: { pi: boolean } };
+    assert.equal(status.cli.pi, true);
+    const diagnostic = await call('executor.diagnostics', { executorId: 'pi' }) as JsonObject;
+    assert.deepEqual(diagnostic.version, { state: 'known', value: '0.64.0' });
     assert.deepEqual(await call('executor.sessions'), [binding]);
     await call('executor.input', { sessionId: binding.sessionId, text: 'follow up' }, /Historical session ownership/);
     await call('terminal.input', { paneId: binding.paneId, text: 'raw' }, /Historical session ownership/);

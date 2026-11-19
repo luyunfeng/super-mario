@@ -287,7 +287,7 @@ export async function startServer(config: AppConfig, dependencies: { botFactory?
         const diagnose = path.match(/^\/api\/v1\/machines\/([^/]+)\/diagnostics$/);
         if (diagnose && method === 'POST') {
           const input = await body(req);
-          if (Object.keys(input).some(key => key !== 'executorId') || !['codex', 'claude-code'].includes(input.executorId as string)) throw new InputError('执行者诊断参数无效');
+          if (Object.keys(input).some(key => key !== 'executorId') || !['codex', 'claude-code', 'pi'].includes(input.executorId as string)) throw new InputError('执行者诊断参数无效');
           return json(res, 200, await machines.call(decodeURIComponent(diagnose[1]!), 'executor.diagnostics', { executorId: input.executorId as string }, { timeoutMs: 25000 }));
         }
         const recovery = path.match(/^\/api\/v1\/machines\/([^/]+)\/recovery$/);

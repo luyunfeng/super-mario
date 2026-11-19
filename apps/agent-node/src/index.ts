@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { accessSync, constants, statSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { delimiter, isAbsolute, join } from 'node:path';
 import WebSocket from 'ws';
 import type { NodeOptions } from '../../../packages/plugin-sdk/src/index.ts';
 import type { JsonObject, NodeMessage } from '../../../packages/protocol/src/index.ts';
 
 /** Resolve executables without invoking a shell or starting an external agent. */
 function cliAvailable(command: string): boolean {
-  for (const directory of (process.env.PATH ?? '').split(delimiter)) {
-    const path = join(directory || '.', command);
+  const candidates = isAbsolute(command) ? [command] : (process.env.PATH ?? '').split(delimiter).filter(Boolean).map(dir => join(dir, command));
+  for (const path of candidates) {
     try {
       if (!statSync(path).isFile()) continue;
       accessSync(path, constants.X_OK);
@@ -48,7 +48,7 @@ function handlerError(error: unknown, token: string): string {
   return message.split(/[\r\n\u2028\u2029]/, 1)[0].trim().slice(0, 500) || 'handler failed';
 }
 
-export function startAgentNode(options: NodeOptions): { close(): Promise<void> } {
+export function startAgentNode(options: NodeOptions & { piCommand?: string }): { close(): Promise<void> } {
   if (!options.token?.trim()) throw new Error('Agent node token is required');
   if (!options.machineId?.trim()) throw new Error('Agent node machineId is required');
   // One logical agent lifetime; reconnects retain it, a fresh agent gets a new value.
@@ -136,7 +136,7 @@ export function startAgentNode(options: NodeOptions): { close(): Promise<void> }
           complete({ type: 'result', id, result: {
             machineId: options.machineId, name: options.name, platform: process.platform,
             arch: process.arch, nodeVersion: process.version, pid: process.pid, agentInstanceId,
-            uptime: process.uptime(), cli: { codex: cliAvailable('codex'), claude: cliAvailable('claude') },
+            uptime: process.uptime(), cli: { codex: cliAvailable('codex'), claude: cliAvailable('claude'), pi: cliAvailable(options.piCommand ?? 'pi') },
           } });
           return;
         }

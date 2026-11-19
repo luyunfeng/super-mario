@@ -190,6 +190,8 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     const minutesField = Field({ label: '预计用时（分钟）', control: minutes });
     const sync = () => {
       const chosen = executors.find(item => item.id === executor.value);
+      mode.disabled = Boolean(chosen?.taskOnly);
+      if (mode.disabled) mode.value = 'task';
       const real = chosen ? chosen.mode === 'real' : snapshot.mode !== 'demo';
       const required = real && mode.value === 'task';
       for (const [field, control] of [[criteriaField, criteria], [minutesField, minutes]]) { control.required = required; field.querySelector('.field__req')?.remove(); if (required) field.querySelector('label').append(h('span', { class: 'field__req' }, '*')); }

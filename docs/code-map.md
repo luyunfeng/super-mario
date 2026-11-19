@@ -40,7 +40,7 @@
 | `scripts/check-plugin-boundaries.mjs` | 系统/第三方插件与核心/共享包的双向 AST 导入边界检查，CI 失败 gate |
 | `packages/core/src/plugin-host.ts` | 贡献注册、启停、依赖与资源释放 |
 | `packages/core/src/agent-runtime/` | 唯一导入 pi 的目录，模型与插件工具桥接 |
-| `plugins/index.ts` | 8 个默认系统插件（内聚各自扩展贡献、服务与 Agent 工具）及开屏扩展入口 |
+| `plugins/index.ts` | 9 个默认系统插件（内聚各自扩展贡献、服务与 Agent 工具）及开屏扩展入口 |
 | `apps/server/src/feishu-gateway.ts`、`feishu.ts` | 飞书单连接、多机器人、个人采集与回复通道的宿主网关挂载 |
 | `packages/core/src/integration-config.ts` | 本地私密配置，公开状态排除密钥 |
 | `packages/core/src/inbox.ts` | 消息去重、规则分拣、版本校验与确认转待办 |

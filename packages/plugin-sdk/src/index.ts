@@ -32,6 +32,8 @@ export interface Tool {
   execute(args: JsonObject, signal: AbortSignal): Promise<Json>;
 }
 export interface Executor extends ExecutorInfo {
+  /** False for task-only executors without a resident knowledge worker. */
+  knowledgeWorker?: boolean;
   execute(request: { prompt: string; cwd?: string; executionMode?: 'task' | 'interactive'; nativeResume?: NativeResumeSpec; signal: AbortSignal; onOutput?: (text: string) => void }): Promise<{ text: string; pending?: boolean; sessionId?: string; nativeResult?: ExecutionResult }>;
 }
 export interface KnowledgeQuery { layer?: KnowledgeLayer; projectId?: string; query?: string }

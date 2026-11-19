@@ -103,7 +103,7 @@ SUPER_MARIO_TOKEN='同一访问令牌' super-mario-agent \
 
 代理会自动重连，机器标识保存在 `~/.super-mario/agent/machine.json`。可以用 `--data-dir` 指定独立目录。
 
-执行机需要安装 `codex` 或 `claude`，并先在机器上完成对应 CLI 登录。终端宿主命令为 `herdr`，需有正在运行且兼容画面观察协议的服务与活动工作区；代理不自动安装或启动宿主。可用 `SUPER_MARIO_TERMINAL_COMMAND` 指定命令路径。
+执行机可使用 Codex、Claude Code 或 Pi CLI。在项目发起执行时选择对应电脑的执行器，主 Agent 也可通过执行器列表发现并派发。Pi 使用执行机上配置的模型提供方；可用 `--pi-command <路径>` 或 `SUPER_MARIO_PI_COMMAND` 指定启动程序。Pi 用于外部任务执行，知识整理与历史会话恢复仍使用原有提供方。终端宿主命令为 `herdr`，需有正在运行且兼容画面观察协议的服务与活动工作区；代理不自动安装或启动宿主。可用 `SUPER_MARIO_TERMINAL_COMMAND` 指定命令路径。
 
 ## Web 工作台
 

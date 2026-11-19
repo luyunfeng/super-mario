@@ -5,7 +5,7 @@ import type { ExecutionProgress, ExecutionResult } from '../packages/protocol/sr
 export interface TaskConfig {
   prompt: string;
   cwd: string;
-  executorId: 'codex' | 'claude-code';
+  executorId: 'codex' | 'claude-code' | 'pi';
   resultsPath: string;
   nativeSessionId?: string;
   /** Trusted local launcher snapshot; never supplied through executor RPC parameters. */
@@ -58,6 +58,7 @@ export function createNativeCollector(executorId: TaskConfig['executorId'], expe
     if (expectedNativeSessionId !== undefined && id !== expectedNativeSessionId) sessionMismatch = true;
   };
   let outcome: 'completed' | 'failed' | undefined;
+  let piTurn: typeof outcome;
   return {
     event(value: unknown) {
       if (!value || typeof value !== 'object') return;
@@ -87,6 +88,40 @@ export function createNativeCollector(executorId: TaskConfig['executorId'], expe
         }
         if (event.type === 'turn.completed') outcome = 'completed';
         if (event.type === 'turn.failed') { outcome = 'failed'; text ||= JSON.stringify(event.error ?? 'Codex turn failed'); }
+      } else if (executorId === 'pi') {
+        if (event.type === 'session' && typeof event.id === 'string') {
+          observeSession(event.id);
+          observeProgress({ phase: 'starting', detail: '原生会话已启动' });
+        } else if (event.type === 'agent_start' || event.type === 'turn_start' || event.type === 'auto_retry_start') {
+          // A prior low-level run can be followed by recovery or another turn.
+          outcome = undefined;
+          piTurn = undefined;
+          text = '';
+          observeProgress({ phase: 'thinking', detail: '等待原生回应' });
+        } else if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') {
+          observeProgress({ phase: 'tool', toolName: progressToolName(event.toolName, 'tool'),
+            detail: event.type === 'tool_execution_start' ? '工具调用开始' : '工具调用结束' });
+        } else if (event.type === 'message_end' && event.message && typeof event.message === 'object') {
+          const message = event.message as Record<string, unknown>;
+          if (message.role !== 'assistant') return;
+          text = Array.isArray(message.content) ? message.content
+            .filter(block => block?.type === 'text' && typeof block.text === 'string')
+            .map(block => block.text).join('') : '';
+          piTurn = undefined;
+          outcome = undefined;
+          if (message.stopReason === 'stop' && Array.isArray(message.content)) piTurn = 'completed';
+          if (['error', 'aborted', 'length'].includes(String(message.stopReason))) {
+            piTurn = 'failed';
+            text = [text, message.errorMessage || `pi stopReason=${message.stopReason}`].join('\n').trim();
+          }
+          observeProgress({ phase: 'responding', detail: '收到原生回应' });
+        } else if (event.type === 'agent_settled') {
+          if (event.aborted === true) { outcome = 'failed'; text ||= 'pi task aborted'; }
+          else if (event.aborted === false) outcome = piTurn;
+        } else if (event.type === 'auto_retry_end' && event.success === false) {
+          piTurn = 'failed';
+          if (typeof event.finalError === 'string') text = event.finalError;
+        }
       } else {
         if (typeof event.session_id === 'string') observeSession(event.session_id);
         // Claude emits complete assistant message.content blocks without partial-message flags.
@@ -123,7 +158,7 @@ export function createNativeCollector(executorId: TaskConfig['executorId'], expe
       if (missingIdentity) state = 'unknown';
       // Conflicting identity is a permanent failure, even before exit or after a signal.
       if (sessionMismatch) state = 'failed';
-      return { state, text: sessionMismatch ? `原生恢复返回了不同的线程；未自动重试。\n${text}` : missingIdentity ? `原生恢复缺少匹配的线程证据，结果未知。\n${text}` : text, source: executorId === 'codex' ? 'codex-json' : 'claude-stream-json',
+      return { state, text: sessionMismatch ? `原生恢复返回了不同的线程；未自动重试。\n${text}` : missingIdentity ? `原生恢复缺少匹配的线程证据，结果未知。\n${text}` : text, source: executorId === 'pi' ? 'pi-json' : executorId === 'codex' ? 'codex-json' : 'claude-stream-json',
         ...(exitCode !== undefined ? { exitCode } : {}), ...(nativeSessionId ? { nativeSessionId } : {}), ...(progress ? { progress: { ...progress } } : {}) };
     },
   };

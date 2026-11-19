@@ -213,6 +213,10 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
       },
     },
     {
+      id: 'executor-pi', name: 'Pi CLI 执行器', capabilities: ['executor.pi'],
+      activate(context) { context.contribute('executors', 'pi', { ...realExecutor('pi', 'Pi CLI'), knowledgeWorker: false }); },
+    },
+    {
       id: 'terminal-host', name: '终端宿主', capabilities: ['terminal.status'],
       activate(context) {
         context.contribute('terminal_hosts', 'herdr', { id: 'terminal-host', name: '终端宿主' });

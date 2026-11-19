@@ -33,7 +33,7 @@ test('local product: authenticated Web/API, knowledge, todos, asynchronous work 
     assert.equal((await fetch(`${running.url}/missing.js`)).status, 404);
     const initial = await state();
     assert.equal(initial.mode, 'demo');
-    assert.equal(initial.plugins.filter(plugin => plugin.id !== 'workspace-splash').length, 8);
+    assert.equal(initial.plugins.filter(plugin => plugin.id !== 'workspace-splash').length, 9);
     assert.ok(initial.webExtensions?.some(entry => entry.id === 'workspace-splash'));
     assert.ok(initial.plugins.every(plugin => plugin.enabled));
     assert.ok(initial.executors.find(executor => executor.id === 'demo' && executor.mode === 'demo'));

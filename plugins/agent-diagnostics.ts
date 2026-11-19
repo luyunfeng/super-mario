@@ -27,7 +27,7 @@ export interface AgentDiagnosticsOptions {
   /** Trusted process environment snapshot. Credential values never enter the response. */
   env?: NodeJS.ProcessEnv;
 }
-const ids: DiagnosticExecutorId[] = ['codex', 'claude-code'];
+const ids: DiagnosticExecutorId[] = ['codex', 'claude-code', 'pi'];
 const notes = [
   '仅按需运行固定的只读 version/status；不登录、不切换 profile、不调用模型。',
   '认证仅表示 CLI 报告的本地凭证状态，不证明凭证有效或任务可执行。',
@@ -99,7 +99,8 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): {
   async function probe(executorId: DiagnosticExecutorId): Promise<AgentDiagnostics> {
     if (!ids.includes(executorId)) throw new Error('Unsupported diagnostic executor');
     const configured = launchers[executorId];
-    const inherited = configured && !configured.profile ? sourceEnv[executorId === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'] : undefined;
+    const profileKey = executorId === 'pi' ? 'PI_CODING_AGENT_DIR' : executorId === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR';
+    const inherited = configured && !configured.profile ? sourceEnv[profileKey] : undefined;
     const invalidProfile = inherited !== undefined && (!validText(inherited) || !isAbsolute(inherited));
     const spec = configured && inherited && !invalidProfile ? { ...configured, profile: { configDir: resolve(inherited) } } : configured;
     const result: AgentDiagnostics = {
@@ -127,7 +128,7 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): {
         if (!statSync(spec.profile.configDir).isDirectory()) throw new Error();
         accessSync(spec.profile.configDir, constants.R_OK | constants.X_OK);
       } catch { fail('profile', 'profile-unavailable'); return result; }
-      childEnv[executorId === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'] = spec.profile.configDir;
+      childEnv[profileKey] = spec.profile.configDir;
     }
     async function run(args: string[]) {
       return new Promise<{ code: number; stdout: string; stderr: string; failure?: DiagnosticErrorCode }>(done => {
@@ -149,9 +150,13 @@ export function createAgentDiagnostics(options: AgentDiagnosticsOptions = {}): {
       return result;
     }
     result.launcher.state = 'available';
-    const match = (executorId === 'codex' ? /^codex-cli (\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?)$/ : /^(\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?) \(Claude Code\)$/).exec(version.stdout.trim());
+    const match = (executorId === 'pi' ? /^(\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?)$/ : executorId === 'codex' ? /^codex-cli (\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?)$/ : /^(\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?) \(Claude Code\)$/).exec(version.stdout.trim());
     if (match) result.version = { state: 'known', value: match[1] };
     else fail('version', 'unrecognized-output');
+    if (executorId === 'pi') {
+      result.notes.push('pi 仅探测版本，认证状态未知。');
+      return result;
+    }
     const auth = await run(executorId === 'codex' ? ['login', 'status'] : ['auth', 'status', '--json']);
     if (auth.failure) { fail('authentication', auth.failure); return result; }
     if (executorId === 'claude-code') {

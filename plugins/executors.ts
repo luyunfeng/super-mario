@@ -11,7 +11,7 @@ import { createKnowledgeWorker } from './knowledge-worker.ts';
 import type { ExecutorInfo, Json, JsonObject, NativeResumeSpec, SessionBinding } from '../packages/protocol/src/index.ts';
 import type { Dispose, NodeHandler, TerminalHost } from '../packages/plugin-sdk/src/index.ts';
 
-const commands = { codex: 'codex', 'claude-code': 'claude' } as const;
+const commands = { codex: 'codex', 'claude-code': 'claude', pi: 'pi' } as const;
 function onPath(name: string): boolean {
   return (isAbsolute(name) ? [name] : (process.env.PATH ?? '').split(delimiter).map(dir => join(dir || '.', name))).some(file => {
     try { accessSync(file, constants.X_OK); return statSync(file).isFile(); } catch { return false; }
@@ -50,7 +50,7 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
   const scope = { machineId, ...(agentInstanceId ? { agentInstanceId } : {}) };
   const launchers: NonNullable<AgentDiagnosticsOptions['launchers']> = {};
   for (const [id, spec] of Object.entries(options.launchers ?? {})) {
-    if (id !== 'codex' && id !== 'claude-code') throw new Error('Invalid launcher executor');
+    if (id !== 'codex' && id !== 'claude-code' && id !== 'pi') throw new Error('Invalid launcher executor');
     launchers[id] = validateTaskLauncher(spec);
   }
   async function describeHost(): Promise<TerminalHostInstance> {
@@ -62,7 +62,8 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
     try { return host.describeInstance ? await host.describeInstance(scope) : unknown; }
     catch { return unknown; }
   }
-  const knowledgeWorker = createKnowledgeWorker({ dataDir: options.dataDir, launchers });
+  const { pi: _piLauncher, ...knowledgeLaunchers } = launchers;
+  const knowledgeWorker = createKnowledgeWorker({ dataDir: options.dataDir, launchers: knowledgeLaunchers });
   const hasCommand = options.hasCommand ?? onPath;
   const file = join(options.dataDir, 'executor-sessions.json');
   const bindings = new Map<string, SessionBinding>();
@@ -150,10 +151,11 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
     if (!resume && ['resume', 'nativeResume', 'nativeSessionId'].some(key => Object.hasOwn(params, key))) throw new Error('Use executor.resume for native resume');
     if (resume && Object.keys(params).some(key => !['executorId', 'nativeSessionId', 'prompt', 'cwd', 'mode'].includes(key))) throw new Error('Invalid resume parameter');
     const executorId = string(params, 'executorId');
-    if (executorId !== 'codex' && executorId !== 'claude-code') throw new Error('Unsupported executor');
+    if (executorId !== 'codex' && executorId !== 'claude-code' && executorId !== 'pi') throw new Error('Unsupported executor');
+    if (executorId === 'pi' && (resume || params.mode !== 'task')) throw new Error('Pi supports new tasks only');
     const launcher = launchers[executorId];
     const command = launcher?.command ?? commands[executorId];
-    const env = launcher?.profile ? { [executorId === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR']: launcher.profile.configDir } : undefined;
+    const env = launcher?.profile ? { [executorId === 'pi' ? 'PI_CODING_AGENT_DIR' : executorId === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR']: launcher.profile.configDir } : undefined;
     const prompt = string(params, 'prompt');
     const cwd = directory(string(params, 'cwd'));
     const checkAvailable = async () => {
@@ -275,9 +277,9 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
       return Object.entries(commands).map(([id, command]) => {
         const configuredCommand = launchers[id as keyof typeof commands]?.command ?? command;
         const present = hasCommand(configuredCommand);
-        return { id, name: id === 'codex' ? 'Codex' : 'Claude Code', kind: 'cli', machineId, defaultCwd: process.cwd(), available: status.available && present, mode: 'real',
-          ...(options.validateResume ? { nativeResultSources: [id === 'codex' ? 'codex-json' : 'claude-stream-json'] } : {}),
-          description: '交互式 PTY；可用性仅检查终端和 PATH，不证明已认证。屏幕状态为 unknown；未接入原生 hook 或审批。',
+        return { id, name: id === 'pi' ? 'Pi' : id === 'codex' ? 'Codex' : 'Claude Code', kind: 'cli', machineId, defaultCwd: process.cwd(), available: status.available && present, mode: 'real',
+          ...(id === 'pi' ? { taskOnly: true, nativeResultSources: ['pi-json'] } : options.validateResume ? { nativeResultSources: [id === 'codex' ? 'codex-json' : 'claude-stream-json'] } : {}),
+          description: id === 'pi' ? 'pi CLI 单次任务，使用 JSONL 事件采集结果。可用性仅检查终端和命令。' : '交互式 PTY；可用性仅检查终端和 PATH，不证明已认证。屏幕状态为 unknown；未接入原生 hook 或审批。',
           ...(!status.available ? { reason: status.reason ?? 'Terminal host unavailable' } : !present ? { reason: `${command} is not on PATH` } : {}) };
       });
     },

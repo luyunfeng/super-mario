@@ -11,7 +11,7 @@
 - **两个可部署程序**：服务端（核心 + 插件）和执行机代理。执行机代理装在每台执行机上，主动用 WebSocket 连接服务端，在本机贴近 CLI 工作（hooks、transcript、终端运行时、Codex 协议）。服务端不再经 SSH 操作执行机。
 - **核心定义接口，插件提供实现**：执行机、外部 Agent、飞书、知识存储、收件箱分拣、简报等都通过扩展点接入。核心不出现任何具体平台或 CLI 的名字。
 - **接口按“可跨进程”设计**：首版插件在服务端进程内运行，但插件接口只传可序列化数据和已登记的回调。以后改为子进程插件时，插件代码不用改。
-- **首期加载全部系统插件**：系统插件 8 个，首次启动全部启用，可在 Web 中单独停用。
+- **首期加载全部系统插件**：系统插件 9 个，首次启动全部启用，可在 Web 中单独停用。
 - **自动处理全部可配置**：谁来回答卡片、哪些可以自动处理、多久上交、何时打扰用户，都是配置项（第 4.12 节），代码里只有默认值，没有写死的规则。
 - **系统插件清单**：飞书、Claude Code、Codex、终端运行时宿主、本地知识库、收件箱分拣、每日简报、内置主 Agent 工具集。Web 终端协议（全量加增量、重连、背压）属于核心网关，不再单列插件。
 
@@ -888,6 +888,7 @@ interface OutboxApi {
 | --- | --- | --- | --- |
 | `builtin-tools` | `tools` | 主 Agent 的基础工具：派活、查执行状态、列执行者、查知识、建/改待办、问用户 | 核心服务 |
 | `knowledge-local` | `knowledge_backends`、`context_providers`、`tools` | 三层知识：Markdown 文件为事实源，SQLite FTS 索引；每轮注入全局原则，其余按需检索；执行者能力描述也存在这里 | — |
+| `executor-pi` | `executors` | 在绑定执行机运行 Pi CLI 单次任务，按原生 JSON 事件回报结果 | `terminal-host` |
 | `executor-claude-code` | `executors`（双端）、`screen_parsers` | 在终端运行时中启动 Claude Code；hooks 取提问、权限、计划，transcript 取正文；读屏发送并确认；`--resume` 恢复 | `terminal-host` |
 | `executor-codex` | `executors`（双端）、`screen_parsers` | 在终端运行时中启动 Codex，加入其共享 app-server 取状态、审批并发送；加入不了退回读屏；`resume` 恢复 | `terminal-host` |
 | `terminal-host` | `terminal_hosts`（执行机一侧） | 在执行机本机调用终端运行时：面板创建、读屏、按键、画面流、控制权；版本与能力握手 | — |
@@ -1023,7 +1024,7 @@ interface OutboxApi {
 | 事项 | 决定 |
 | --- | --- |
 | 命名 | 统一用 `super-mario`：npm 包作用域 `@super-mario/*`（如 `@super-mario/core`、`@super-mario/plugin-feishu`）；插件清单 `super-mario.extension.json`；宿主版本键 `engines["super-mario"]`；服务端命令 `super-mario`，执行机代理命令 `super-mario-agent`；数据目录 `~/.super-mario/`；环境变量前缀 `SUPER_MARIO_` |
-| 首期插件 | 8 个系统插件全部默认启用；支持本地目录加载自写插件；不做市场 |
+| 首期插件 | 9 个系统插件全部默认启用；支持本地目录加载自写插件；不做市场 |
 | 自动回答与审批 | 全部可配置（第 4.12 节）；默认审批交给用户、Agent 只答普通提问 |
 | 常设授权 | 并入可配置规则；CLI 自身的会话级“总是允许”照常可用 |
 | 执行机代理部署 | 在执行机上运行一条安装命令，填服务端地址和配对码；首次连接后在 Web 确认 |

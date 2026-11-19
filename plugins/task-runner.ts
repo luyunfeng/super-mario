@@ -23,37 +23,63 @@ export function validateTaskLauncher(value: unknown): NonNullable<TaskConfig['la
 }
 
 export async function runTask(config: TaskConfig): Promise<number> {
-  if (!config || typeof config !== 'object' || !['codex', 'claude-code'].includes(config.executorId) ||
+  if (!config || typeof config !== 'object' || !['codex', 'claude-code', 'pi'].includes(config.executorId) ||
       typeof config.prompt !== 'string' || !config.prompt.trim() || config.prompt.includes('\0') ||
       typeof config.cwd !== 'string' || !isAbsolute(config.cwd) || config.cwd.includes('\0') ||
       typeof config.resultsPath !== 'string' || !isAbsolute(config.resultsPath) || config.resultsPath.includes('\0')) throw new Error('Invalid task config');
+  const pi = config.executorId === 'pi';
+  if (pi && config.nativeSessionId !== undefined) throw new Error('Pi task resume is unsupported');
   const launcher = config.launcher === undefined ? undefined : validateTaskLauncher(config.launcher);
   const collector = createNativeCollector(config.executorId, config.nativeSessionId);
   let finished = false;
+  let malformed = false;
   const persist = (code?: number, signal?: string | null, error?: string) => {
     const result = collector.result(code, signal);
-    if (error) { result.state = 'failed'; result.text ||= error; }
+    if (pi && result.state === 'completed' && malformed) {
+      result.state = 'unknown';
+      result.text = 'Incomplete or malformed pi JSONL stream';
+    }
+    if (error) { result.state = 'failed'; result.text = error; }
+    if (pi && code && !result.text) result.text = `pi exited with code ${code}`;
     saveTaskResult(config.resultsPath, result, process.pid);
   };
   persist();
   const resume = config.nativeSessionId !== undefined ? buildNativeResumeCommand({ ...config, nativeSessionId: config.nativeSessionId, mode: 'task' }) : undefined;
-  const command = launcher?.command ?? resume?.command ?? (config.executorId === 'codex' ? 'codex' : 'claude');
-  const args = resume?.args ?? (config.executorId === 'codex'
+  const command = launcher?.command ?? resume?.command ?? (pi ? 'pi' : config.executorId === 'codex' ? 'codex' : 'claude');
+  const args = resume?.args ?? (pi ? ['--mode', 'json'] : config.executorId === 'codex'
     ? ['exec', '--json', '--sandbox', 'workspace-write', '--skip-git-repo-check', '--output-last-message', `${config.resultsPath}.last-message`, '--', config.prompt]
     : ['-p', '--output-format', 'stream-json', '--verbose', '--', config.prompt]);
   // No shell, approval bypass, or automatic retry. All CLI output remains visible in the PTY.
   const env = { ...process.env };
-  if (launcher?.profile) env[config.executorId === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'] = launcher.profile.configDir;
-  const child = spawn(command, args, { cwd: config.cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
-  child.stdout.pipe(process.stdout, { end: false });
-  child.stderr.pipe(process.stderr, { end: false });
-  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
-  lines.on('line', line => {
-    try { collector.event(JSON.parse(line)); } catch { return; }
+  if (launcher?.profile) env[pi ? 'PI_CODING_AGENT_DIR' : config.executorId === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'] = launcher.profile.configDir;
+  const child = spawn(command, args, { cwd: config.cwd, env, stdio: [pi ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+  child.stdout!.pipe(process.stdout, { end: false });
+  child.stderr!.pipe(process.stderr, { end: false });
+  let inputError: Error | undefined;
+  if (pi) {
+    // Even after --, Pi interprets an @-prefixed positional argument as a file.
+    child.stdin!.on('error', error => { inputError = error; });
+    child.stdin!.end(config.prompt);
+  }
+  const onLine = (line: string) => {
+    try {
+      const event = JSON.parse(line);
+      // Deltas can arrive per token. Persist the authoritative message at message_end.
+      if (pi && event?.type === 'message_update') return;
+      collector.event(event);
+    } catch { malformed = true; return; }
     persist();
     const observed = collector.result();
     if (config.nativeSessionId && observed.nativeSessionId && observed.nativeSessionId !== config.nativeSessionId) child.kill('SIGTERM');
-  });
+  };
+  if (pi) {
+    let pending = '';
+    child.stdout!.setEncoding('utf8').on('data', (chunk: string) => {
+      const records = (pending + chunk).split('\n');
+      pending = records.pop()!;
+      for (const line of records) onLine(line);
+    }).on('end', () => { if (pending) malformed = true; });
+  } else createInterface({ input: child.stdout!, crlfDelay: Infinity }).on('line', onLine);
   const onExit = () => { if (!finished) persist(undefined, 'runner-exit'); };
   let interrupted: NodeJS.Signals | undefined;
   const onSignal = (signal: NodeJS.Signals) => {
@@ -72,7 +98,7 @@ export async function runTask(config: TaskConfig): Promise<number> {
     // close follows drained stdout, so the final JSON event is included before finalization.
     child.on('close', (code, signal) => {
       finished = true;
-      persist(code ?? undefined, interrupted ?? signal, spawnError?.message);
+      persist(code ?? undefined, interrupted ?? signal, spawnError?.message ?? (interrupted || signal ? undefined : inputError?.message));
       process.removeListener('exit', onExit);
       process.removeListener('SIGTERM', onTerm);
       process.removeListener('SIGINT', onInt);

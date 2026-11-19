@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +15,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, script: stri
   t.after(() => rm(dir, { recursive: true, force: true }));
   const bin = join(dir, 'bin');
   await mkdir(bin);
-  const cli = join(bin, executorId === 'codex' ? 'codex' : 'claude');
+  const cli = join(bin, executorId === 'claude-code' ? 'claude' : executorId);
   await writeFile(cli, `#!${process.execPath}\n${script}`);
   await chmod(cli, 0o700);
   const config: TaskConfig = { prompt: '--help $(touch unsafe); "quoted"\nnext', cwd: dir, executorId, resultsPath: join(dir, 'result.json'), ...(nativeSessionId !== undefined ? { nativeSessionId } : {}) };
@@ -259,4 +261,91 @@ test('a resumed CLI that reports the wrong identity is stopped instead of contin
  const f=await fixture(t,`console.log(JSON.stringify({type:'thread.started',thread_id:'wrong-native'}));setInterval(()=>{},1000);`,'codex','expected-native');
  await f.done;
  const result=readTaskResult(f.config.resultsPath);assert.equal(result.state,'failed');assert.match(result.text,/不同的线程/);assert.equal(result.nativeSessionId,'wrong-native');
+});
+
+test('real pi CLI completes a runner task against an isolated loopback model', { timeout: 30000 }, async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-pi-cli-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const requests: string[] = [];
+  const server = createServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    requests.push(body);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    for (const [delta, finish_reason] of [[{ role: 'assistant', content: '本地\u2028结果' }, null], [{}, 'stop']]) {
+      res.write(`data: ${JSON.stringify({ id: 'fixture', model: 'fixture', object: 'chat.completion.chunk',
+        choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
+    }
+    res.end('data: [DONE]\n\n');
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const addr = server.address();
+  assert.ok(addr && typeof addr === 'object');
+  const profile = join(dir, 'profile');
+  await mkdir(profile);
+  await writeFile(join(profile, 'settings.json'), JSON.stringify({ defaultProvider: 'local-test', defaultModel: 'fixture' }));
+  await writeFile(join(profile, 'models.json'), JSON.stringify({ providers: { 'local-test': {
+    baseUrl: `http://127.0.0.1:${addr.port}/v1`, apiKey: 'local-test', api: 'openai-completions',
+    models: [{ id: 'fixture', name: 'Fixture' }],
+  } } }));
+  const prompt = '@absent-file --help $(touch unsafe)\n中文';
+  const config: TaskConfig = { executorId: 'pi', prompt, cwd: dir, resultsPath: join(dir, 'result.json'),
+    launcher: { command: fileURLToPath(new URL('../node_modules/.bin/pi', import.meta.url)), profile: { configDir: profile } } };
+  const path = join(dir, 'config.json');
+  await writeFile(path, JSON.stringify(config));
+  const { stdout, stderr } = await promisify(execFile)(process.execPath,
+    [fileURLToPath(new URL('../plugins/task-runner.ts', import.meta.url)), path],
+    { cwd: dir, env: { HOME: dir, PATH: process.env.PATH, PI_OFFLINE: '1' }, timeout: 25000 });
+  const result = readTaskResult(config.resultsPath);
+  assert.equal(result.state, 'completed', JSON.stringify({ result, stdout, stderr }));
+  assert.equal(result.source, 'pi-json');
+  assert.equal(result.text, '本地\u2028结果');
+  assert.equal(result.exitCode, 0);
+  assert.ok(result.nativeSessionId);
+  assert.equal(requests.length, 1);
+  assert.ok(requests[0]!.includes(JSON.stringify(prompt).slice(1, -1)));
+});
+
+test('pi waits for settlement across retries and recognises terminal failures', () => {
+  const c = createNativeCollector('pi');
+  const end = (stopReason: string) => c.event({ type: 'message_end', message: {
+    role: 'assistant', content: [{ type: 'text', text: 'partial' }], stopReason, errorMessage: 'fixture failure',
+  } });
+  const settle = () => c.event({ type: 'agent_settled', aborted: false });
+  for (const reason of ['error', 'length', 'aborted']) {
+    end(reason);
+    settle();
+    assert.equal(c.result(0).state, 'failed');
+    assert.match(c.result(0).text, /fixture failure/);
+    c.event({ type: 'agent_start' });
+  }
+  end('toolUse');
+  settle();
+  assert.equal(c.result(0).state, 'unknown');
+  end('stop');
+  c.event({ type: 'agent_end', willRetry: false });
+  assert.equal(c.result(0).state, 'unknown');
+  settle();
+  assert.equal(c.result().state, 'running');
+  assert.equal(c.result(0).state, 'completed');
+  assert.equal(c.result(2).state, 'failed');
+  assert.equal(c.result(undefined, 'SIGTERM').state, 'unknown');
+  c.event({ type: 'agent_settled', aborted: true });
+  assert.equal(c.result(0).state, 'failed');
+});
+
+test('pi runner keeps damaged JSONL unknown even with native success and exit zero', async t => {
+  for (const badRecord of ['{bad json}\n', '{"type":']) {
+    const f = await fixture(t, `
+      require('node:fs').readFileSync(0);
+      console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'done'}]}}));
+      console.log(JSON.stringify({type:'agent_settled',aborted:false}));
+      process.stdout.write(${JSON.stringify(badRecord)});
+    `, 'pi');
+    assert.equal(await f.done, 0);
+    const result = readTaskResult(f.config.resultsPath);
+    assert.equal(result.state, 'unknown');
+    assert.equal(result.source, 'pi-json');
+  }
 });

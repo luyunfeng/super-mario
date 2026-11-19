@@ -84,14 +84,14 @@ async function setup(t: TestContext, demo = false, directory?: string) {
 
 const signal = () => new AbortController().signal;
 
-test('exactly eight system extensions; real executors reject without external effects', async t => {
+test('exactly nine system extensions; real executors reject without external effects', async t => {
   const host = await setup(t);
   assert.deepEqual(host.extensions.map(item => item.id), [
-    'builtin-tools', 'knowledge-local', 'executor-claude-code', 'executor-codex',
+    'builtin-tools', 'knowledge-local', 'executor-claude-code', 'executor-codex', 'executor-pi',
     'terminal-host', 'feishu', 'inbox-triage', 'daily-brief',
   ]);
   const executors = host.contributions.list('executors');
-  assert.deepEqual(executors.map(item => item.id), ['claude-code', 'codex']);
+  assert.deepEqual(executors.map(item => item.id), ['claude-code', 'codex', 'pi']);
   for (const { value } of executors) {
     assert.equal(value.available, false);
     assert.equal(value.mode, 'real');
@@ -102,7 +102,7 @@ test('exactly eight system extensions; real executors reject without external ef
   }
   const listTool = host.contributions.list('tools').find(item => item.id === 'executors_list')!.value;
   const result = await listTool.execute({}, signal());
-  assert.equal((result as unknown[]).length, 2);
+  assert.equal((result as unknown[]).length, 3);
   assert.ok(!JSON.stringify(result).includes('execute'));
   for (const id of ['terminal_host_status', 'feishu_status', 'inbox_triage_status']) {
     const status = host.contributions.list('tools').find(item => item.id === id)!.value;
@@ -127,7 +127,7 @@ test('demo executor is separate, delayed, explicitly marked, and owned by Codex 
   assert.match(result.text, /示例任务/);
   assert.deepEqual(output, [result.text]);
   await host.disable('executor-codex');
-  assert.deepEqual(host.contributions.list('executors').map(item => item.id), ['claude-code']);
+  assert.deepEqual(host.contributions.list('executors').map(item => item.id), ['claude-code', 'pi']);
 });
 
 test('demo cancellation rejects before start and while waiting without success output', async t => {

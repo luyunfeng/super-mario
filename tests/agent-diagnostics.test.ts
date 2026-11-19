@@ -266,3 +266,12 @@ test('repeated explicit probes are fresh and honor bounded execFile options', as
     assert.equal(options.killSignal, 'SIGKILL');
   }
 });
+
+test('pi RPC probes only the configured launcher version', async t => {
+  const { stub, file } = await fixture(t);
+  const { service, calls } = stub('pi', [{ stdout: '0.64.0\n' }]);
+  const result = await service.handlers['executor.diagnostics']({ executorId: 'pi' }, () => {}) as JsonObject;
+  assert.deepEqual(result.version, { state: 'known', value: '0.64.0' });
+  assert.deepEqual(result.authentication, { state: 'unknown', scope: 'local-default' });
+  assert.deepEqual(calls.map(call => [call.file, call.args]), [[file, ['--version']]]);
+});

@@ -97,7 +97,7 @@ test('hello, welcome, heartbeat and read-only status use the shared wire protoco
   assert.equal(result.nodeVersion, process.version);
   assert.equal(result.arch, process.arch);
   assert.ok(typeof result.uptime === 'number' && result.uptime >= 0);
-  assert.deepEqual(result.cli, { codex: true, claude: false });
+  assert.deepEqual(result.cli, { codex: true, claude: false, pi: false });
   await assert.rejects(access(marker), { code: 'ENOENT' });
   peer.socket.send(JSON.stringify({ type: 'call', id: 'unsupported-1', method: 'shell.execute', params: { command: 'anything' } }));
   const unsupported = await waitFor(() => peer.messages.find((m) => m.type === 'result' && m.id === 'unsupported-1'));

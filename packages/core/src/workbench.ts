@@ -143,7 +143,7 @@ export async function createWorkbench(config: AppConfig) {
       const result = ruleTriage(thing);
       return { tier: result.tier, reason: `规则回退：${result.reason}` };
     } });
-  const knowledgeCurator = createKnowledgeCurator({ store, events, dataDir: config.dataDir, knowledge, machines: () => machines, enabled: () => contributions.list('knowledge_backends').length > 0, validProject: id => projects.list().some(p => p.id === id && !p.archivedAt), readSource: readProtectedKnowledgeSource, allowedProviders: () => [...new Set(['codex', 'claude-code', ...contributions.list('executors').filter(e => e.value.mode === 'real').map(e => e.value.kind || e.id)])] });
+  const knowledgeCurator = createKnowledgeCurator({ store, events, dataDir: config.dataDir, knowledge, machines: () => machines, enabled: () => contributions.list('knowledge_backends').length > 0, validProject: id => projects.list().some(p => p.id === id && !p.archivedAt), readSource: readProtectedKnowledgeSource, allowedProviders: () => [...new Set(['codex', 'claude-code', ...contributions.list('executors').filter(e => e.value.mode === 'real' && e.value.knowledgeWorker !== false).map(e => e.value.kind || e.id)])] });
   const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text)=>scopedAgents.postProject(id,text),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
   const controllers = new Map<string, AbortController>();
   const jobs = new Set<Promise<void>>();
@@ -491,6 +491,7 @@ export async function createWorkbench(config: AppConfig) {
     // Explicit approved parameters retain priority over project defaults.
     const cwd = optionalText(input.cwd, '工作目录') ?? workspace?.cwd ?? executor?.defaultCwd;
     const executionMode = input.executionMode ?? 'task';
+    if (executor?.taskOnly && executionMode !== 'task') throw new InputError('此执行器仅支持任务模式');
     if (!['task', 'interactive'].includes(String(executionMode))) throw new InputError('executionMode必须为task或interactive');
     const doneWhen = optionalText(input.doneWhen, '验收标准');
     const expectMinutes = input.expectMinutes;

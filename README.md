@@ -58,7 +58,7 @@ Super Mario 的产品体验与底层选型吸收了以下项目的优秀设计�
 ![项目持续工作区](docs/screenshots/03-project-workspace.png)
 
 ### 4. 外部 Agent、执行机诊断与自动跟进简报
-统一管理主 Agent 模型（API 或本机 Codex CLI）、在线执行机、Codex / Claude Code 执行器、原生 CLI 历史会话恢复审批，以及保守 / 平衡 / 少打扰三种策略预设与早晚/间隔窗口简报。
+统一管理主 Agent 模型（API 或本机 Codex CLI）、在线执行机、Codex / Claude Code / Pi CLI 执行器、原生 CLI 历史会话恢复审批，以及保守 / 平衡 / 少打扰三种策略预设与早晚/间隔窗口简报。
 
 ![外部 Agent 与执行机](docs/screenshots/04-agent-executors.png)
 
@@ -100,7 +100,7 @@ Markdown 文件为事实源并自动维护本地 Git 记录，支持独立常驻
 | `packages/protocol/` | 前后端、渠道与执行机共享的序列化协议类型 |
 | `packages/plugin-sdk/` | 唯一插件开发接口（工具、执行器、知识后端、钩子、服务、后台事件与权限） |
 | `packages/core/` | 核心状态机、SQLite 事务存储、审批/副作用账本、工作态势快照与 `pi` 运行时封装 |
-| `plugins/` | 8 个默认系统插件、PDF/DOCX 解析 worker 及可选 `command-inbox` 采集插件 |
+| `plugins/` | 9 个默认系统插件、PDF/DOCX 解析 worker 及可选 `command-inbox` 采集插件 |
 | `apps/server/` | 同源 HTTP API、静态资源服务、WebSocket 推送与飞书连接器宿主接线 |
 | `apps/agent-node/` | 执行机 WebSocket 客户端、心跳重连、制品 SHA256 确认加载与本机 RPC |
 | `apps/web/` | 无构建框架的原生浏览器模块化前端（`lib/`、`ui/`、`features/`、`pages/`、`css/`） |
