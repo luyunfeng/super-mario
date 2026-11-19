@@ -60,14 +60,9 @@ super-mario --provider anthropic --model '<可用模型ID>'
 
 模型 ID 需与所安装 pi 版本的模型目录一致。本轮已验证真实 Codex CLI 模型；其他云端 API 分支需按实际账号与网络验证。缺少模型或凭证时 Web 仍可打开，并显示助手不可用原因。
 
-```bash
-export SUPER_MARIO_TOKEN='自行设置的访问令牌'
-super-mario --host 0.0.0.0 --port 48080
-```
-
 监听外部地址时必须设置令牌。在 Web 右上角连接状态面板输入同一令牌；也可使用 `http://主机:端口/#chat?token=你的令牌` 自动连接。页面读取后清理地址栏，在当前浏览器保存令牌 30 天，继续保留所选页面；兼容旧的 `?token=` 链接。代理连接也使用该令牌；不要将它提交进仓库。
 
-| 参数 | 环境变量 | 默认值 |
+| 参数 | 环境变量 | 单独运行 `super-mario` 时的默认值 |
 | --- | --- | --- |
 | `--host` | `SUPER_MARIO_HOST` | `127.0.0.1` |
 | `--port` | `SUPER_MARIO_PORT` | `3000` |
