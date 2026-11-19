@@ -1,4 +1,3 @@
-import { tokenStatistics } from '../../../plugins/token-statistics.ts';
 import { excludesPersonalGroupFromBrief } from '../../protocol/src/inbox-origin.ts';
 import { createCommandProjectRouter } from './agent-runtime/command-project-router.ts';
 import { createInboxClassifier } from './agent-runtime/inbox-classifier.ts';
@@ -56,7 +55,7 @@ import { createScopedAgents } from './scoped-agents.ts';
 import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
-import { createSystemExtensions, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { tokenStatistics, createSystemExtensions, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import type { AppConfig, Approval, BotScope, ExecutionResult, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 

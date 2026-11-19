@@ -6,6 +6,7 @@ import { createLocalKnowledge } from './knowledge-local.ts';
 import { isProtectedKnowledgeURL } from './knowledge-source-reader.ts';
 import { actionProposeParameters, taskPolicyParameters } from './tool-parameters.ts';
 
+export { tokenStatistics } from './token-statistics.ts';
 export { workspaceSplash } from './workspace-splash.ts';
 export { createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from './knowledge-source-reader.ts';
 

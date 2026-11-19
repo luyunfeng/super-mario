@@ -446,7 +446,7 @@ export async function startServer(config: AppConfig, dependencies: { botFactory?
         if (path === '/api/v1/messages' && method === 'POST') {
           const input = await body(req);
           if (typeof input.text !== 'string' || !input.text.trim()) throw new InputError('消息不能为空');
-          return json(res, 202, await app.agent.post(input.text, 'main', typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : undefined));
+          return json(res, 202, await app.agent.post(input.text, 'main', { ...(typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : {}), ...(input.readOnly === true ? { readOnly: true } : {}) }));
         }
         if (path === '/api/v1/runs' && method === 'POST') return json(res, 202, app.dispatch(await body(req), typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : undefined));
         const observations = path.match(/^\/api\/v1\/runs\/([^/]+)\/observations$/);

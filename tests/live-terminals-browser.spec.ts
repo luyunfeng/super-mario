@@ -19,6 +19,7 @@ else if(args[0]==='pane'&&args[1]==='read')console.log('独立CLI近期输出：
 else if(args[0]==='terminal'){
 fs.appendFileSync(path.join(dir,'opens'),args[2]+'\\n');
 console.log(JSON.stringify({type:'terminal.frame',seq:0,full:true,encoding:'ansi',width:80,height:24,bytes:Buffer.from('LIVE CODEX OUTPUT').toString('base64')}));
+let seq=0;setInterval(()=>console.log(JSON.stringify({type:'terminal.frame',seq:++seq,full:true,encoding:'ansi',width:80,height:24,bytes:Buffer.from('LIVE CODEX OUTPUT').toString('base64')})),600);
 rl.createInterface({input:process.stdin}).on('line',line=>{const data=JSON.parse(line);fs.appendFileSync(path.join(dir,'inputs'),line+'\\n');if(data.type==='terminal.release')process.exit(0)});setInterval(()=>{},1000);
 }else process.exit(2);
 `, { mode: 0o700 });
@@ -39,10 +40,32 @@ rl.createInterface({input:process.stdin}).on('line',line=>{const data=JSON.parse
     await expect(panel).toContainText('独立启动的 Codex');
     await expect(panel).toContainText('正在工作');
     assert.equal(server.app.store.list('runs').length, 0, '独立现场不伪造工作台执行');
+    await page.evaluate(() => {
+      const Original = (window as any).Terminal;
+      (window as any).terminalPaint = { resets: 0, resizes: 0, writes: [], contrast: 0 };
+      (window as any).Terminal = class extends Original {
+        constructor(options: any) { super(options); (window as any).terminalPaint.contrast = options.minimumContrastRatio; }
+        reset() { (window as any).terminalPaint.resets++; return super.reset(); }
+        resize(cols: number, rows: number) { (window as any).terminalPaint.resizes++; return super.resize(cols, rows); }
+        write(data: Uint8Array, callback: () => void) { (window as any).terminalPaint.writes.push(new TextDecoder().decode(data)); return super.write(data, callback); }
+      };
+    });
     await panel.getByRole('button', { name: '打开现场' }).click();
     const drawer = page.getByRole('dialog', { name: '现场终端', exact: true });
     await expect(drawer.getByRole('status')).toContainText('只读');
     assert.equal((await inputs()).length, 0);
+    await page.waitForTimeout(900);
+    const paint = await page.evaluate(() => (window as any).terminalPaint);
+    assert.equal(paint.contrast, 7); assert.equal(paint.resets, 0); assert.equal(paint.resizes, 0, '相同尺寸的完整帧不重复调整画布'); assert.ok(paint.writes.length >= 2);
+    assert.match(paint.writes[0], /\x1b\[\?2026h.*LIVE CODEX OUTPUT.*\x1b\[\?2026l/s);
+    const accepted = page.waitForResponse(response => response.url().endsWith('/api/v1/messages') && response.request().method() === 'POST');
+    await drawer.getByRole('button', { name: '一键分析对话' }).click();
+    const response = await accepted, input = await response.json();
+    assert.equal(response.request().postDataJSON().readOnly, true);
+    assert.equal(server.app.store.get<any>('messages', input.id)?.readOnly, true);
+    assert.match(input.text, /独立CLI近期输出/);
+    await expect(drawer.getByRole('region', { name: '对话分析结果' })).toContainText('本地演示');
+    assert.equal((await inputs()).length, 0, '分析不能向现场终端发送输入');
     await drawer.getByRole('button', { name: '最近输出' }).click();
     await expect(drawer.locator('pre')).toContainText('正在修改页面');
     await drawer.getByRole('button', { name: '接管输入', exact: true }).click();
