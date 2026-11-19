@@ -58,6 +58,7 @@ export function createPluginSettings({ api, store, router }) {
             await store.refresh();
             if (store.view.loadError) throw new Error(store.view.loadError);
           } })),
+        plugin.capabilities?.length > 0 && h('details', null, h('summary', { class: 'small' }, '查看插件声明的能力'), h('ul', null, plugin.capabilities.map(name => h('li', null, name)))),
         plugin.error && h('p', { class: 'small' }, plugin.error),
         entries.map(item => h('div', { class: 'row' },
           Button({ label: item.label, size: 'sm', disabled: !available.has(item.key), onClick: () => openFeature(item) }),

@@ -278,3 +278,29 @@ test('metadata-only histories remain listed and support exact resume for both pr
     assert.equal(row.cwd, f.cwd);
   }
 });
+
+test('usage reads native records on demand, preserves files and returns counts only', async t => {
+  const f = await fixture(t);
+  const path = await f.codex('thread');
+  const original = await readFile(path,'utf8') + '\n' + [
+    { type: 'response_item', payload: { type: 'function_call', arguments: 'private' } },
+    { type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 90 }, last_token_usage: { cached_input_tokens: 20 }, model_context_window: 1000 } } },
+  ].map(row => JSON.stringify(row)).join('\n');
+  await writeFile(path, original);
+  const usage = f.discovery().handlers['agents.usage'];
+  const target = { executorId: 'codex', nativeSessionId: 'thread', cwd: f.cwd };
+  const report = await usage(target);
+  assert.equal(report.cumulative.input, 90);
+  assert.equal(report.records[0]?.cached, 20);
+  assert.equal(report.toolCalls, 1);
+  assert.equal(report.windowTokens, 1000);
+  assert.equal(JSON.stringify(report).includes('private'), false);
+  assert.equal(await readFile(path,'utf8'), original);
+  await assert.rejects(usage({ ...target, cwd: f.home }));
+  const cp = await f.claude('test');
+  const rows = [1,2].map(output_tokens => JSON.stringify({ type: 'assistant', sessionId: 'test', cwd: f.cwd, message: { id: 'msg', usage: { input_tokens: 15, output_tokens } } }));
+  await writeFile(cp, rows.join('\n'));
+  const c = await usage({ ...target, executorId: 'claude-code', nativeSessionId: 'test' });
+  assert.deepEqual(c.cumulative, { input: 15, output: 2 });
+  assert.equal(c.records.length, 1);
+});

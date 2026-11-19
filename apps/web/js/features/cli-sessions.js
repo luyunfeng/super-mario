@@ -57,6 +57,7 @@ export function createCliSessions({ api, store, router }) {
             text(`观测时间：${session.observedAt}\n元数据时间：${session.metadataTimestamp ?? '未知'}\n文件记录更新：${session.fileModifiedAt ?? '未知'}\n来源：session-metadata`),
             session.parentNativeSessionId && text(`父会话：${session.parentNativeSessionId}`),
             session.relatedRunIds.length > 0 && h('div', { class: 'row row--wrap' }, session.relatedRunIds.map(id => Button({ label: `查看关联执行 ${id}`, size: 'sm', onClick: () => router.go(router.href('projects', 'all', 'runs', id)) }))),
+            online && current?.capabilities.includes('agents.usage') && Button({ label: '上下文与 Token 用量', size: 'sm', onClick: () => openUsage(machine, session) }),
             session.resumable && online && machine.available
               ? Button({ label: '申请恢复', size: 'sm', onClick: () => openResume(machine, session) })
               : text(session.reason || machine.reason || (!online ? '电脑离线，不能申请恢复。' : '此记录暂不支持恢复。'))))),
@@ -97,6 +98,28 @@ export function createCliSessions({ api, store, router }) {
   for (const control of [machines, projects]) control.addEventListener('change', () => load());
   keyword.addEventListener('input', paint);
   router.subscribe(route => { if (route.page !== 'agent') { seq++; loading = false; } });
+
+  async function openUsage(machine, session) {
+    const body = h('div', { class: 'stack' }, text('正在读取会话日志…'));
+    const drawer = openDrawer({ title: '上下文与 Token 用量', subtitle: session.nativeSessionId, body });
+    const auth = context();
+    const query = new URLSearchParams({ machineId: machine.machineId, executorId: session.executorId, nativeSessionId: session.nativeSessionId, cwd: session.cwd });
+    try {
+      const usage = await api.get('/agents/sessions/usage?' + query);
+      if (!drawer.el.open || auth !== context()) return;
+      const names = { input: '输入', cached: '缓存读取', cacheWrite: '缓存创建', output: '输出', reasoning: '推理', total: '合计' };
+      const describe = record => Object.entries(record).map(([k, n]) => (names[k] ?? k) + ' ' + n.toLocaleString()).join(' · ') || '日志未提供';
+      replace(body,
+        usage.partial && Banner({ tone: 'warn', children: '只统计了可读取的日志片段。大文件最多读取末尾 8 MiB。' }),
+        text('用户消息记录 ' + usage.userMessages + ' · 助手消息记录 ' + usage.assistantMessages + ' · 工具调用记录 ' + usage.toolCalls),
+        usage.tools.length > 0 && text('工具：' + usage.tools.map(tool => tool.name + ' × ' + tool.calls).join('、')),
+        h('strong', null, session.executorId === 'codex' ? '日志报告的累计用量' : '已读消息去重后的用量'),
+        text(describe(usage.cumulative)), text('模型上下文窗口：' + (usage.windowTokens?.toLocaleString() ?? '未知')),
+        text(session.executorId === 'codex' ? '输入包含缓存读取，输出包含推理。' : '普通输入、缓存读取和缓存创建分别计数。'),
+        h('strong', null, '最近用量记录（最新在前）'),
+        usage.records.length ? usage.records.map(r => text(describe(r))) : text('日志未提供用量记录。'));
+    } catch (error) { if (drawer.el.open && auth === context()) replace(body, text(error.message)); }
+  }
 
   function openResume(machine, session) {
     const auth = api.token();

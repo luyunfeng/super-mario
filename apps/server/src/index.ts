@@ -144,6 +144,13 @@ export async function startServer(config: AppConfig, dependencies: { botFactory?
           ...(url.searchParams.has('projectId') ? { projectId: requiredText(url.searchParams.get('projectId'), '项目') } : {}),
           ...(url.searchParams.has('todoId') ? { todoId: requiredText(url.searchParams.get('todoId'), '事项') } : {}),
         }));
+        if (path === '/api/v1/agents/sessions/usage' && method === 'GET') {
+          const machine = machines.list().find(m => m.id === url.searchParams.get('machineId'));
+          if (!machine?.online) throw new InputError('执行机离线', 503);
+          if (!machine.capabilities.includes('agents.usage')) throw new InputError('请升级执行机代理以查看会话用量', 409);
+          const field = (key: string) => requiredText(url.searchParams.get(key), key);
+          return json(res, 200, await machines.call(machine.id, 'agents.usage', { executorId: field('executorId'), nativeSessionId: field('nativeSessionId'), cwd: field('cwd') }));
+        }
         if (path === '/api/v1/agents/sessions/resume' && method === 'POST') return json(res, 201, await app.agentSessions.proposeResume(await body(req)));
         if (path === '/api/v1/agents/sessions/resume-request' && method === 'GET') return json(res, 200, { approval: app.agentSessions.request(requiredText(url.searchParams.get('machineId'), '电脑'), requiredText(url.searchParams.get('key'), '请求标识')) });
         if (path === '/api/v1/feishu/personal' && method === 'GET') return json(res, 200, await personalView());

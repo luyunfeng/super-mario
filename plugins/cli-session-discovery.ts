@@ -1,3 +1,4 @@
+import { summarizeNativeUsage } from './native-session-usage.ts';
 import { constants } from 'node:fs';
 import { lstat, open, opendir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -59,6 +60,7 @@ export function createCliSessionDiscovery(options: Options = {}) {
 
   async function scan(target?: Selection) {
     const result: AgentSessionDiscovery = { sessions: [], roots: [], warnings: [], truncated: false };
+    const logs = new Map<string, { path: string; dev: number; ino: number }>();
     const found = new Map<string, ObservedAgentSession>();
     const conflicts = new Set<string>();
     let directories = 0, entries = 0, files = 0;
@@ -80,7 +82,7 @@ export function createCliSessionDiscovery(options: Options = {}) {
         // fstat detects an oversized file without reading one byte beyond the head budget.
         const buffer = Buffer.alloc(max);
         const { bytesRead } = await file.read(buffer, 0, max, 0);
-        return { text: buffer.subarray(0, bytesRead).toString('utf8'), cut: info.size > bytesRead, observedAt: new Date().toISOString(), fileModifiedAt: info.mtime.toISOString() };
+        return { dev: info.dev, ino: info.ino, text: buffer.subarray(0, bytesRead).toString('utf8'), cut: info.size > bytesRead, observedAt: new Date().toISOString(), fileModifiedAt: info.mtime.toISOString() };
       } catch (error) { if (!missing(error)) { cut(); warn('部分会话元数据无法读取'); } }
       finally { await file?.close(); }
     }
@@ -157,7 +159,12 @@ export function createCliSessionDiscovery(options: Options = {}) {
         if (!object(row)) continue;
         const meta = executorId === 'codex' ? row.type === 'session_meta' && object(row.payload) ? row.payload : undefined : row;
         if (meta) matched = await add(executorId, meta, data.observedAt, false, row.timestamp, data.fileModifiedAt) || matched;
-        if (matched) break;
+        if (matched) {
+          if (target && path.endsWith('.jsonl') && meta && (meta.id === target.nativeSessionId && executorId === 'codex' || executorId === 'claude-code' && (meta.sessionId ?? meta.session_id) === target.nativeSessionId)) {
+            logs.set(path, { path, dev: data.dev, ino: data.ino });
+          }
+          break;
+        }
       }
       if (!matched) {
         if (data.cut || lines.length > 8) cut();
@@ -199,7 +206,7 @@ export function createCliSessionDiscovery(options: Options = {}) {
       await walk(join(claudeRoot, 'projects'), 'claude-code', 2);
       await walk(join(claudeRoot, 'sessions'), 'claude-code', 1);
     }
-    return { result, found, conflicts };
+    return { result, found, conflicts, logs };
   }
 
   function visibleParents(sessions: ObservedAgentSession[]) {
@@ -262,6 +269,29 @@ export function createCliSessionDiscovery(options: Options = {}) {
     return visibleParents([session])[0];
   }
   const handlers = {
+    'agents.usage': async (params: unknown) => {
+      only(params, ['executorId', 'nativeSessionId', 'cwd']);
+      const target = params as Selection;
+      if (!['codex', 'claude-code'].includes(target.executorId) || !validId(target.nativeSessionId)) throw new Error('无效会话');
+      const cwd = await realpath(absolute(target.cwd));
+      if (!await projects.nativeDirectoryFilter(() => {})(cwd)) throw new Error('目录不在会话读取范围');
+      const { logs, found, conflicts } = await scan(target);
+      const key = target.executorId + ':' + target.nativeSessionId;
+      const [log] = logs.values();
+      if (!log || logs.size !== 1 || conflicts.has(key) || found.get(key)?.cwd !== cwd || !await noLinks(log.path)) throw new Error('未找到唯一匹配的会话日志');
+      const file = await open(log.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        const stat = await file.stat();
+        if (!stat.isFile() || stat.dev !== log.dev || stat.ino !== log.ino) throw new Error('会话日志已被替换');
+        const size = Math.min(stat.size, 8 * 1024 * 1024), start = stat.size - size;
+        const buffer = Buffer.alloc(size);
+        const { bytesRead } = await file.read(buffer, 0, size, start);
+        const bytes = buffer.subarray(0, bytesRead);
+        const boundary = start ? bytes.indexOf(10) : -1;
+        const text = start && boundary < 0 ? '' : bytes.subarray(boundary + 1).toString('utf8');
+        return summarizeNativeUsage(text, target.executorId, target.nativeSessionId, start > 0 || bytesRead !== size);
+      } finally { await file.close(); }
+    },
     'agents.sessions': async (params: unknown) => { const result = await sessions(params); return { ...result, sessions: result.sessions.map(session => ({ ...session })) }; },
     'agents.session': async (params: unknown) => { only(params, ['executorId', 'nativeSessionId', 'cwd']); return { ...await validateResume(params as Selection) }; },
   } satisfies Record<string, NodeHandler>;
