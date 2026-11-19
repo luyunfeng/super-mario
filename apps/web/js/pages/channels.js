@@ -95,7 +95,14 @@ export function createChannelsPage({ api, store, router }) {
     return h('ol', { class: 'wsteps' },
       step(1, '扫码创建机器人', true, h('p', { class: 'muted small' }, `「${bot.name}」${bot.connected ? '已连接' : '未连接'}${bot.reason ? `：${systemText(bot.reason)}` : ''}`)),
       step(2, '在飞书里完成配对', paired, paired ? h('p', { class: 'muted small' }, '已配对，由服务端确认。')
-        : h('p', { class: 'small' }, bot.pairingCode ? `请在飞书里私聊「${bot.name}」，发送配对码：` : '创建后，在飞书里私聊机器人，按提示发送配对码。', bot.pairingCode && h('code', { class: 'pairing' }, bot.pairingCode))),
+        : !bot.enabled ? h('div', { class: 'stack' },
+          h('p', { class: 'small' }, '工作台连接已停用。确认飞书版本已发布后，可启用现有机器人。'),
+          Button({ label: '已发布，启用连接', size: 'sm', onClick: async () => {
+            try { await api.patch(`/feishu/bots/${encodeURIComponent(bot.id)}`, { enabled: true }); await load(); schedule(); }
+            catch (cause) { error = systemText(cause.message); paint(); }
+          } }))
+        : !bot.connected ? h('p', { class: 'small' }, bot.reason || '等待飞书长连接建立。')
+        : h('p', { class: 'small' }, bot.pairingCode ? `请在飞书里私聊「${bot.name}」，发送配对码：` : (bot.reason || '等待配对信息。'), bot.pairingCode && h('code', { class: 'pairing' }, bot.pairingCode))),
       step(3, '选择它负责的项目', bound, h('div', { class: 'row row--wrap' }, h('div', { style: { minWidth: '200px' } }, bind),
         Button({ label: '绑定', size: 'sm', onClick: async () => {
           await api.patch(`/feishu/bots/${encodeURIComponent(bot.id)}`, { scope: bind.value === GLOBAL ? { kind: 'global' } : { kind: 'project', projectId: bind.value } });
