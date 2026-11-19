@@ -9,11 +9,8 @@ import { readFile, stat } from 'node:fs/promises';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createWorkbench, InputError, requiredText } from '../../../packages/core/src/workbench.ts';
 import { createMachineHub } from '../../../packages/core/src/machines.ts';
-import type { PersonalProvider } from '../../../plugins/feishu-personal.ts';
-import type { FeishuBotFactory } from './feishu-bots.ts';
 import type { FeishuRegistrationInput } from './feishu-registration.ts';
-import type { FeishuRegistrationProvider } from '../../../plugins/feishu-registration.ts';
-import { createFeishuGateway } from './feishu-gateway.ts';
+import { createFeishuGateway, type FeishuGatewayDependencies } from './feishu-gateway.ts';
 import { validateBotScope } from '../../../packages/core/src/bot-scopes.ts';
 import type { AppConfig, FeishuBotInput, JsonObject, NodeMessage } from '../../../packages/protocol/src/index.ts';
 
@@ -34,7 +31,7 @@ function json(res: ServerResponse, status: number, value: unknown) {
   res.end(JSON.stringify(value));
 }
 /** One HTTP server serves both the product and its API; no second frontend process is needed. */
-export async function startServer(config: AppConfig, dependencies: { botFactory?: FeishuBotFactory; registrationProvider?: FeishuRegistrationProvider; personalProvider?: PersonalProvider } = {}) {
+export async function startServer(config: AppConfig, dependencies: FeishuGatewayDependencies = {}) {
   const app = await createWorkbench(config);
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const machines = createMachineHub(app);
@@ -165,6 +162,10 @@ export async function startServer(config: AppConfig, dependencies: { botFactory?
           catch (error) { throw new InputError(error instanceof Error ? error.message : '消息采集失败'); }
         }
         if (path === '/api/v1/feishu' && method === 'GET') return json(res, 200, feishu.status());
+        if (path === '/api/v1/feishu/command-group') {
+          if (method === 'GET') return json(res,200,gateway.commandGroup.get());
+          if (method === 'POST') return json(res,200,await gateway.commandGroup.sync(await body(req)));
+        }
         if (path === '/api/v1/feishu/bots' && method === 'GET') return json(res, 200, bots.list());
         if (path === '/api/v1/feishu/registrations' && method === 'GET') return json(res, 200, await Promise.all(registrations.list().map(registrationView)));
         if (path === '/api/v1/feishu/registrations' && method === 'POST') {

@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import QRCode from 'qrcode';
+import { Client, LoggerLevel } from '@larksuiteoapi/node-sdk';
+import { createFeishuBotConfig } from '../../../plugins/feishu-bot-config.ts';
+import { createCommandGroup, createCommandGroupPlatform, type CommandGroupPlatform } from './feishu-command-group.ts';
 import { InputError, requiredText, type createWorkbench } from '../../../packages/core/src/workbench.ts';
 import { personalInboxReplyTarget } from '../../../packages/core/src/inbox-handling-source.ts';
 import { replyAsPersonalUser } from '../../../plugins/feishu-personal-reply.ts';
@@ -13,6 +16,7 @@ import { createFeishuRegistration, type FeishuRegistrationJob } from './feishu-r
 
 export type FeishuGatewayDependencies = {
   botFactory?: FeishuBotFactory;
+  commandGroupPlatform?: CommandGroupPlatform;
   registrationProvider?: FeishuRegistrationProvider;
   personalProvider?: PersonalProvider;
 };
@@ -38,6 +42,16 @@ export function createFeishuGateway(
     return value.url ? { ...value, qrDataUrl: await QRCode.toDataURL(value.url, { width: 280, margin: 2, errorCorrectionLevel: 'M' }) } : value;
   }
   const bots = createFeishuBotsController(app, config, { factory: dependencies.botFactory, webBase: process.env.SUPER_MARIO_WEB_URL });
+  const commandGroup = createCommandGroup({
+    store:app.store, bots:bots.list, projects:app.projects.list,
+    enabled:()=>app.plugins.list().some(p=>p.id==='feishu' && p.status==='active'),
+    platform:dependencies.commandGroupPlatform ?? createCommandGroupPlatform(appId=>{
+      const bot=createFeishuBotConfig(config.dataDir,config.feishu?.appId).list().find(row=>row.appId===appId && !row.archivedAt && row.enabled && (row.scope.kind==='global' || row.scope.kind==='project'));
+      if (!bot?.appSecret) throw new Error('机器人凭证不可用');
+      return new Client({appId,appSecret:bot.appSecret,loggerLevel:LoggerLevel.fatal});
+    },app.store),
+    refresh:()=>bots.refreshCommandGroup(),
+  });
   app.setInboxReplyHost(entry => bots.inboxHandlingStatus(entry.id), async (source, text, key) => {
     if (!app.plugins.list().some(p => p.id === 'feishu' && p.status === 'active')) throw Object.assign(new InputError('飞书插件已停用', 409), { delivery: 'no' });
     if (source.kind === 'mailbox') return bots.replyToInbox(source.id, source.version, text, key);
@@ -132,5 +146,5 @@ export function createFeishuGateway(
   );
   app.setFeishuStatus(() => ({ ...feishu.status(), reason: feishu.status().reason ?? '' }));
 
-  return { feishu, personal, personalView, bots, registrations, registrationView, proposeMail };
+  return { feishu, personal, personalView, bots, registrations, registrationView, proposeMail, commandGroup };
 }
