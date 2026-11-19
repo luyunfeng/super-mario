@@ -14,7 +14,7 @@ test('项目执行页发现独立CLI：真实HTTP/RPC观察、近期输出、显
   await writeFile(command, `#!${process.execPath}
 const fs=require('node:fs'),path=require('node:path'),rl=require('node:readline');
 const args=process.argv.slice(2),dir=process.env.FAKE_LIVE_DIR;
-if(args[0]==='pane'&&args[1]==='list')console.log(JSON.stringify({result:{panes:[{pane_id:'live-pane',terminal_id:'live-terminal',foreground_cwd:dir,agent:'codex',agent_status:'working',terminal_title_stripped:'独立启动的 Codex'}]}}));
+if(args[0]==='pane'&&args[1]==='list')console.log(JSON.stringify({result:{panes:[{pane_id:'live-pane',terminal_id:'live-terminal',foreground_cwd:dir,agent:'codex',agent_session:{kind:'id',value:'native-full-thread'},agent_status:'working',terminal_title_stripped:'独立启动的 Codex'}]}}));
 else if(args[0]==='pane'&&args[1]==='read')console.log('独立CLI近期输出：正在修改页面');
 else if(args[0]==='terminal'){
 fs.appendFileSync(path.join(dir,'opens'),args[2]+'\\n');
@@ -25,7 +25,7 @@ rl.createInterface({input:process.stdin}).on('line',line=>{const data=JSON.parse
 `, { mode: 0o700 });
   const live = createLiveTerminalServices({ command, env: { HERDR_ENV: '1', FAKE_LIVE_DIR: dir } });
   const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: join(dir, 'server'), demo: true, token: 'offline-token' });
-  const node = startAgentNode({ url: server.url, token: 'offline-token', machineId: 'live-machine', name: '测试电脑', dataDir: join(dir, 'node'), handlers: live.handlers, executors: [], onDisconnect: live.disconnect });
+  const node = startAgentNode({ url: server.url, token: 'offline-token', machineId: 'live-machine', name: '测试电脑', dataDir: join(dir, 'node'), handlers: { ...live.handlers, 'agents.session': async () => ({}), 'agents.transcript': async () => { const data = Buffer.from(Array.from({ length: 601 }, (_, i) => JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `完整对话第${i}条` }] } })).join('\n') + '\n'); return { data: data.toString('base64'), nextOffset: data.length, snapshot: { size: data.length, dev: 1, ino: 2 }, eof: true }; } }, executors: [], onDisconnect: live.disconnect });
   const project = server.app.projects.create({ name: 'CLI 现场项目', workspace: { machineId: 'live-machine', cwd: dir } });
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   async function inputs() { try { return (await readFile(join(dir, 'inputs'), 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); } catch { return []; } }
@@ -58,13 +58,13 @@ rl.createInterface({input:process.stdin}).on('line',line=>{const data=JSON.parse
     const paint = await page.evaluate(() => (window as any).terminalPaint);
     assert.equal(paint.contrast, 7); assert.equal(paint.resets, 0); assert.equal(paint.resizes, 0, '相同尺寸的完整帧不重复调整画布'); assert.ok(paint.writes.length >= 2);
     assert.match(paint.writes[0], /\x1b\[\?2026h.*LIVE CODEX OUTPUT.*\x1b\[\?2026l/s);
-    const accepted = page.waitForResponse(response => response.url().endsWith('/api/v1/messages') && response.request().method() === 'POST');
-    await drawer.getByRole('button', { name: '一键分析对话' }).click();
-    const response = await accepted, input = await response.json();
-    assert.equal(response.request().postDataJSON().readOnly, true);
-    assert.equal(server.app.store.get<any>('messages', input.id)?.readOnly, true);
-    assert.match(input.text, /独立CLI近期输出/);
-    await expect(drawer.getByRole('region', { name: '对话分析结果' })).toContainText('本地演示');
+    const accepted = page.waitForResponse(response => response.url().endsWith('/api/v1/agents/sessions/analyze') && response.request().method() === 'POST');
+    await drawer.getByRole('button', { name: '一键分析完整对话' }).click();
+    const response = await accepted, job = await response.json();
+    assert.equal(response.request().postDataJSON().nativeSessionId, 'native-full-thread');
+    const analysis = drawer.getByRole('region', { name: '对话分析结果' });
+    await expect(analysis).toContainText('601 条公开对话');
+    await expect(analysis).toContainText(/演示模式.*未调用模型/);
     assert.equal((await inputs()).length, 0, '分析不能向现场终端发送输入');
     await drawer.getByRole('button', { name: '最近输出' }).click();
     await expect(drawer.locator('pre')).toContainText('正在修改页面');

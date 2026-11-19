@@ -1,3 +1,4 @@
+import { createSessionAnalysis } from './session-analysis.ts';
 import { createProjectFolders } from '../../../packages/core/src/project-folders.ts';
 import { policyPresets, applyPolicyPreset, policyRuleHits } from '../../../packages/core/src/policy-presets.ts';
 import { todoSections, todoDecisionIds } from '../../../packages/core/src/todo-sections.ts';
@@ -36,6 +37,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const machines = createMachineHub(app);
   app.setMachineClient(machines);
+  const sessionAnalysis = createSessionAnalysis({ store: app.store, config: app.config, available: () => app.agent.status().available, call: (id, method, params) => machines.call(id, method, params) });
   const projectFolders = createProjectFolders(machines);
   const artifacts = createAgentArtifacts({ store: app.store, events: app.events, machines: () => machines });
   const gateway = createFeishuGateway(app, config, dependencies);
@@ -147,6 +149,24 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (!machine.capabilities.includes('agents.usage')) throw new InputError('请升级执行机代理以查看会话用量', 409);
           const field = (key: string) => requiredText(url.searchParams.get(key), key);
           return json(res, 200, await machines.call(machine.id, 'agents.usage', { executorId: field('executorId'), nativeSessionId: field('nativeSessionId'), cwd: field('cwd') }));
+        }
+        if (path === '/api/v1/agents/sessions/analysis-sources' && method === 'GET') {
+          const machine = machines.list().find(row => row.id === url.searchParams.get('machineId'));
+          if (!machine?.online) throw new InputError('执行机离线', 503);
+          const cwd = requiredText(url.searchParams.get('cwd'), '会话目录');
+          return json(res, 200, await machines.call(machine.id, 'agents.sessions', { roots: [cwd] }));
+        }
+        if (path === '/api/v1/agents/sessions/analyze' && method === 'POST') {
+          const input = await body(req), machine = machines.list().find(row => row.id === input.machineId);
+          if (!machine?.online) throw new InputError('执行机离线', 503);
+          if (!machine.capabilities.includes('agents.transcript')) throw new InputError('请升级执行机代理以读取完整会话', 409);
+          return json(res, 202, sessionAnalysis.start(input));
+        }
+        const analysisJob = path.match(/^\/api\/v1\/agents\/sessions\/analysis\/([^/]+)$/);
+        if (analysisJob && method === 'GET') {
+          const job = sessionAnalysis.get(decodeURIComponent(analysisJob[1]!));
+          if (!job) throw new InputError('分析记录不存在', 404);
+          return json(res, 200, job);
         }
         if (path === '/api/v1/agents/sessions/resume' && method === 'POST') return json(res, 201, await app.agentSessions.proposeResume(await body(req)));
         if (path === '/api/v1/agents/sessions/resume-request' && method === 'GET') return json(res, 200, { approval: app.agentSessions.request(requiredText(url.searchParams.get('machineId'), '电脑'), requiredText(url.searchParams.get('key'), '请求标识')) });
@@ -581,7 +601,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject); server.listen(config.port, config.host, () => { server.off('error', reject); resolve(); });
     });
-  } catch (error) { await Promise.allSettled([personal.close(), registrations.close(), feishu.close(), bots.close()]); machines.close(); await app.close(); throw error; }
+  } catch (error) { await Promise.allSettled([sessionAnalysis.close(), personal.close(), registrations.close(), feishu.close(), bots.close()]); machines.close(); await app.close(); throw error; }
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : config.port;
   const url = `http://${config.host.includes(':') ? `[${config.host}]` : config.host}:${port}`;
@@ -594,7 +614,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
     closing = (async () => {
       // Cancel read-only model work before waiting for collectors that may be
       // awaiting it. Otherwise an in-flight triage turn deadlocks shutdown.
-      const readonlyStop = Promise.allSettled([app.supervisorRuntime.close({ abort: true }), app.inboxClassifier.close(), app.inboxHandlingRuntime.close()]);
+      const readonlyStop = Promise.allSettled([sessionAnalysis.close(), app.supervisorRuntime.close({ abort: true }), app.inboxClassifier.close(), app.inboxHandlingRuntime.close()]);
       await personal.close();
       await registrations.close();
       await feishu.close();
