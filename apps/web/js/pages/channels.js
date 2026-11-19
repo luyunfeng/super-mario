@@ -16,6 +16,8 @@ export function createChannelsPage({ api, store, router }) {
   const mainSetup = () => router.current.parts[0] === 'main-bot';
   let job = null;
   let selected = '';
+  let registrations = [];
+  let restoreScope = false;
   let creating = false;
   let nameDraft;
   let error = '';
@@ -38,29 +40,29 @@ export function createChannelsPage({ api, store, router }) {
       h('div', { class: 'wstep__main' }, h('strong', null, title), content));
   }
 
-  function renderJob() {
-    if (!job) return null;
-    const qr = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(job.qrDataUrl || '') && h('img', { class: 'qr', src: job.qrDataUrl, alt: '使用飞书扫描，创建机器人', width: 240, height: 240 });
-    const steps = (job.missingSteps || []).map((item) => {
+  function renderJob(record = job) {
+    if (!record) return null;
+    const qr = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(record.qrDataUrl || '') && h('img', { class: 'qr', src: record.qrDataUrl, alt: '使用飞书扫描，创建机器人', width: 240, height: 240 });
+    const steps = (record.missingSteps || []).map((item) => {
       const text = typeof item === 'string' ? item : item.message || item.title || item.description || '请核查飞书配置';
       let link;
       try { const url = new URL(item.url); if (url.protocol === 'https:' && ['open.feishu.cn', 'open.larksuite.com'].includes(url.hostname)) link = h('a', { href: url.href, target: '_blank', rel: 'noopener noreferrer' }, '前往飞书配置'); } catch { /* 没有链接。 */ }
       return h('p', { class: 'small' }, systemText(text), ' ', link);
     });
-    return h('div', { class: 'stack', dataset: { job: job.status } },
-      h('div', { class: 'row' }, Pill(JOB_LABELS[job.status] ?? '等待处理', job.status === 'failed' || job.status === 'unknown' ? 'danger' : job.status === 'completed' ? 'ok' : 'info'),
-        job.progress && h('span', { class: 'muted small' }, systemText(job.progress))),
-      job.id && ['failed', 'unknown', 'expired', 'needs_configuration'].includes(job.status) &&
-        h('div', { class: 'small muted' }, '日志 ID：', h('code', null, job.id),
-          job.diagnostic && h('span', null, ' · ', job.diagnostic.step,
-            job.diagnostic.httpStatus && ' · HTTP ' + job.diagnostic.httpStatus,
-            job.diagnostic.platformCode !== undefined && ' · 飞书业务码 ' + job.diagnostic.platformCode,
-            job.diagnostic.reason && ' · ' + job.diagnostic.reason,
-            job.diagnostic.redirectHost && ' · 跳转主机 ' + job.diagnostic.redirectHost,
-            job.diagnostic.platformLogId && ' · 飞书日志 ID：' + job.diagnostic.platformLogId)),
-      qr, job.status === 'unknown' && Banner({ tone: 'danger', children: '结果未知。请先到飞书后台核对，系统不会自动重复创建。' }),
-      job.expiresAt && h('p', { class: 'muted small' }, `二维码有效期至 ${new Date(job.expiresAt).toLocaleString('zh-CN')}`), steps,
-      !JOB_DONE.has(job.status) && Button({ label: '取消本次创建', size: 'sm', onClick: async () => { job = await api.post(`/feishu/registrations/${encodeURIComponent(job.id)}/cancel`, {}); paint(); } }));
+    return h('div', { class: 'stack', dataset: { job: record.status } },
+      h('div', { class: 'row' }, Pill(JOB_LABELS[record.status] ?? '等待处理', record.status === 'failed' || record.status === 'unknown' ? 'danger' : record.status === 'completed' ? 'ok' : 'info'),
+        record.progress && h('span', { class: 'muted small' }, systemText(record.progress))),
+      record.id && ['failed', 'unknown', 'expired', 'needs_configuration'].includes(record.status) &&
+        h('div', { class: 'small muted' }, '日志 ID：', h('code', null, record.id),
+          record.diagnostic && h('span', null, ' · ', record.diagnostic.step,
+            record.diagnostic.httpStatus && ' · HTTP ' + record.diagnostic.httpStatus,
+            record.diagnostic.platformCode !== undefined && ' · 飞书业务码 ' + record.diagnostic.platformCode,
+            record.diagnostic.reason && ' · ' + record.diagnostic.reason,
+            record.diagnostic.redirectHost && ' · 跳转主机 ' + record.diagnostic.redirectHost,
+            record.diagnostic.platformLogId && ' · 飞书日志 ID：' + record.diagnostic.platformLogId)),
+      qr, record.status === 'unknown' && Banner({ tone: 'danger', children: '结果未知。请先到飞书后台核对，系统不会自动重复创建。' }),
+      record.expiresAt && h('p', { class: 'muted small' }, `二维码有效期至 ${new Date(record.expiresAt).toLocaleString('zh-CN')}`), steps,
+      !JOB_DONE.has(record.status) && Button({ label: '取消本次创建', size: 'sm', onClick: async () => { job = await api.post(`/feishu/registrations/${encodeURIComponent(record.id)}/cancel`, {}); paint(); } }));
   }
 
   function renderCreate() {
@@ -93,7 +95,8 @@ export function createChannelsPage({ api, store, router }) {
     const paired = Boolean(bot.paired);
     const bound = bot.scope?.kind === 'project' || bot.scope?.kind === 'global';
     return h('ol', { class: 'wsteps' },
-      step(1, '扫码创建机器人', true, h('p', { class: 'muted small' }, `「${bot.name}」${bot.connected ? '已连接' : '未连接'}${bot.reason ? `：${systemText(bot.reason)}` : ''}`)),
+      step(1, '扫码创建机器人', true, [h('p', { class: 'muted small' }, `「${bot.name}」${bot.connected ? '已连接' : '未连接'}${bot.reason ? `：${systemText(bot.reason)}` : ''}`),
+      !bot.enabled && renderJob(registrations.findLast(item => item.botId === bot.id && ['needs_configuration', 'unknown'].includes(item.status)) ?? null)]),
       step(2, '在飞书里完成配对', paired, paired ? h('p', { class: 'muted small' }, '已配对，由服务端确认。')
         : !bot.enabled ? h('div', { class: 'stack' },
           h('p', { class: 'small' }, '工作台连接已停用。确认飞书版本已发布后，可启用现有机器人。'),
@@ -104,7 +107,7 @@ export function createChannelsPage({ api, store, router }) {
         : !bot.connected ? h('p', { class: 'small' }, bot.reason || '等待飞书长连接建立。')
         : h('p', { class: 'small' }, bot.pairingCode ? `请在飞书里私聊「${bot.name}」，发送配对码：` : (bot.reason || '等待配对信息。'), bot.pairingCode && h('code', { class: 'pairing' }, bot.pairingCode))),
       step(3, '选择它负责的项目', bound, h('div', { class: 'row row--wrap' }, h('div', { style: { minWidth: '200px' } }, bind),
-        Button({ label: '绑定', size: 'sm', onClick: async () => {
+        Button({ label: '绑定', size: 'sm', disabled: !paired, onClick: async () => {
           await api.patch(`/feishu/bots/${encodeURIComponent(bot.id)}`, { scope: bind.value === GLOBAL ? { kind: 'global' } : { kind: 'project', projectId: bind.value } });
           await load(); store.refresh();
         } }), h('span', { class: 'muted small' }, scopeText(bot.scope)))));
@@ -113,11 +116,11 @@ export function createChannelsPage({ api, store, router }) {
   function paint() {
     const current = bots.find(bot => bot.id === selected) ?? (creating ? null : bots[0]);
     selected = current?.id ?? '';
-    const showCreate = creating || !bots.length || (job && (!JOB_DONE.has(job.status) || job.status === 'unknown'));
+    const showCreate = creating || !bots.length || (job && !job.botId);
     replace(wizard,
       error && Banner({ tone: 'danger', children: error }),
       bots.length > 0 && h('div', { class: 'list' }, bots.map(bot => h('div', { class: `item item--click ${bot.id === selected ? 'is-selected' : ''}`, tabindex: 0, role: 'button', dataset: { bot: bot.id },
-        onclick: () => { selected = bot.id; creating = false; paint(); }, onkeydown: (event) => { if (event.key === 'Enter') event.currentTarget.click(); } },
+        onclick: () => { if (job && JOB_DONE.has(job.status)) job = null; selected = bot.id; creating = false; paint(); }, onkeydown: (event) => { if (event.key === 'Enter') event.currentTarget.click(); } },
       Dot(bot.connected ? 'ok' : 'warn'), h('div', { class: 'item__main' }, h('span', { class: 'item__title' }, bot.name), h('span', { class: 'item__meta' }, `${scopeText(bot.scope)} · ${bot.paired ? '已配对' : '未配对'}`)),
       !bot.enabled && Pill('已停用')))),
       current && !showCreate && renderBot(current),
@@ -155,9 +158,16 @@ export function createChannelsPage({ api, store, router }) {
     if (results[0].status === 'fulfilled') bots = results[0].value;
     if (results[2].status === 'fulfilled') {
       const jobs = results[2].value;
-      job = job?.id ? jobs.find(item => item.id === job.id) ?? job : jobs.find(item => !JOB_DONE.has(item.status) || item.status === 'unknown') ?? null;
+      registrations = jobs;
+      job = job?.id ? jobs.find(item => item.id === job.id) ?? job : jobs.find(item => !JOB_DONE.has(item.status) || (item.status === 'unknown' && !item.botId)) ?? null;
     }
-    if (job?.botId && bots.some(bot => bot.id === job.botId) && job.status === 'completed') {
+    if (restoreScope && results[0].status === 'fulfilled') {
+      restoreScope = false;
+      const match = bots.find(bot => mainSetup() ? bot.scope?.kind === 'global'
+        : bot.scope?.kind === 'project' && bot.scope.projectId === router.current.parts[1]);
+      if (match) { selected = match.id; creating = false; }
+    }
+    if (job?.botId && bots.some(bot => bot.id === job.botId) && JOB_DONE.has(job.status)) {
       selected = job.botId; creating = false; job = null;
     }
     error = results.some(item => item.status === 'rejected') ? '部分渠道信息读取失败，请检查连接和访问权限。' : '';
@@ -166,7 +176,7 @@ export function createChannelsPage({ api, store, router }) {
 
   function schedule() {
     clearTimeout(timer);
-    const waiting = (job && !JOB_DONE.has(job.status)) || bots.some(bot => !bot.paired);
+    const waiting = (job && !JOB_DONE.has(job.status)) || bots.some(bot => bot.enabled && !bot.paired);
     if (!waiting || router.current.page !== 'channels') return;
     timer = setTimeout(async () => {
       const id = job?.id;
@@ -186,6 +196,7 @@ export function createChannelsPage({ api, store, router }) {
     el,
     onShow(route) {
       nameDraft = undefined;
+      restoreScope = ['main-bot', 'project-bot'].includes(route.parts[0]);
       if (['main-bot', 'project-bot'].includes(route.parts[0])) { selected = ''; creating = true; }
       else if (route.parts[0] === 'bot') { selected = route.parts[1] || ''; creating = false; }
       else creating = false;

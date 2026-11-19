@@ -208,6 +208,23 @@ test('blocked console redirect reports only the hostname and never reaches appli
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('delayed publication becomes verified without submitting a second release', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mario-publication-delay-')), fake = webFetch();
+  let reads = 0;
+  try {
+    const fetcher: typeof fetch = (url, init) => {
+      if (String(url).includes('/app_version/list/') && ++reads === 1)
+        return Promise.resolve(Response.json({ code: 0, data: { versions: [{ versionId: 'version-1', versionStatus: 1 }] } }));
+      return fake.fetcher(url, init);
+    };
+    const provider = createFeishuRegistrationProvider({ dataDir: dir, fetch: fetcher, pollMs: 0 });
+    const result = await provider.register({ name: 'Delayed', signal: new AbortController().signal, progress() {} });
+    assert.equal(result.verified, true);
+    assert.equal(reads, 2);
+    assert.equal(fake.calls.filter(c => c.url.includes('/publish/commit/')).length, 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('scanner ownership is resolved with the newly created app token, not a cross-app open_id', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'mario-registration-owner-')), fake = webFetch({ recognizedOwner: true });
   try {

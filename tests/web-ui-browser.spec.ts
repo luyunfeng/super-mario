@@ -398,3 +398,19 @@ test('创建项目机器人默认使用项目名，提交时保留项目范围',
     await expect.poll(() => request).toEqual({name:'Super Mario · 年度预算',scope:{kind:'project',projectId:project.id},requireConfirmation:true});
   });
 });
+
+test('刷新主机器人入口保留已有机器人的配置进度', async () => {
+  await withApp(async ({ open, post }) => {
+    const bot = await post('/feishu/bots', { name: '全局助手', scope: { kind: 'global' }, appId: 'cli_0123456789abcdef', appSecret: 'test', enabled: false });
+    const { page } = await open('#channels/main-bot');
+    await page.route('**/api/v1/feishu/registrations', route => route.fulfill({ json: [
+      { id: 'registration-test', botId: bot.id, status: 'needs_configuration', progress: '检查权限', missingSteps: [] },
+    ] }));
+    await page.reload();
+    const wizard = page.locator('#channel-bot');
+    await expect(wizard.getByText('检查权限')).toBeVisible();
+    await expect(wizard.getByRole('button', { name: '已发布，启用连接' })).toBeVisible();
+    await expect(wizard.getByRole('button', { name: '绑定', exact: true })).toBeDisabled();
+    await expect(wizard.getByRole('button', { name: '生成二维码' })).toHaveCount(0);
+  });
+});

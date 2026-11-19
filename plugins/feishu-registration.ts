@@ -10,7 +10,7 @@ export interface RegistrationStep { code: string; message: string; url: string }
 export interface RegistrationProgress { stage: RegistrationStage; url?: string; expiresAt?: string }
 export interface RegistrationResult { appId: string; appSecret: string; verified: boolean; outcome?: 'unknown'; missingSteps: RegistrationStep[]; ownerOpenId?: string }
 export interface RegistrationTrace {
-  step: 'qr-init' | 'qr-poll' | 'cross-login' | 'login-session' | 'console-identity' | 'app-setup';
+  step: 'qr-init' | 'qr-poll' | 'cross-login' | 'login-session' | 'console-identity' | 'app-setup' | 'verify-release' | 'verify-subscriptions' | 'verify-permissions';
   httpStatus?: number; platformCode?: number; platformLogId?: string; redirectHost?: string;
   reason?: 'redirect-host' | 'transport' | 'missing-console-identity' | 'missing-qr' | 'invalid-response';
 }
@@ -313,14 +313,22 @@ export function createFeishuRegistrationProvider(options: {
             if (!versionId) throw new RegistrationError('unknown');
             await post(`publish/commit/${appId}/${versionId}`, { clientId: appId });
             context.progress({ stage: 'verifying' });
-            const versions = await post(`app_version/list/${appId}`);
-            if (!rows(versions.versions).some(v => str(v.versionId ?? v.version_id ?? v.id) === versionId && v.versionStatus === 2)) return result;
+            begin('verify-release');
+            // Publication can become visible after the commit response. Repeat only the status read.
+            for (let attempt = 0; ; attempt++) {
+              const versions = await post(`app_version/list/${appId}`);
+              if (rows(versions.versions).some(v => str(v.versionId ?? v.version_id ?? v.id) === versionId && v.versionStatus === 2)) break;
+              if (attempt === 4) return result;
+              await delay(options.pollMs ?? 1500, undefined, { signal: context.signal });
+            }
           } catch { context.signal.throwIfAborted(); result.outcome = 'unknown'; return result; }
+          begin('verify-subscriptions');
           const events = await post(`event/${appId}`, { needEventDetail: true });
           const callbacks = await post(`callback/${appId}`);
           const subscribed = [...ids(events.events), ...ids(events.appEvents), ...rows(events.appEventDetails).flatMap(v => ids(v.items)), ...rows(events.eventDetails).flatMap(v => ids(v.items))];
           if (events.eventMode !== 4 || !eventNames.every(e => subscribed.includes(e)) || callbacks.callbackMode !== 4 || !callbackNames.every(e => ids(callbacks.callbacks).includes(e))) return result;
           // Public API readback checks actually granted tenant scopes after publication, not the console catalog.
+          begin('verify-permissions');
           const tokenRaw = await request(`${open}/open-apis/auth/v3/tenant_access_token/internal`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ app_id: appId, app_secret: appSecret }) });
           const tokenPayload = row(JSON.parse(tokenRaw.text)); const token = str(tokenPayload.tenant_access_token);
           if (tokenPayload.code !== 0 || !token) return result;
