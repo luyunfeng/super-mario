@@ -2,6 +2,8 @@
 
 实现采用模块化单体。接口细节以类型、注释和测试为准。
 
+开发交接使用本地 `Spec/context.md`。修复问题后，记录用户看到的现象、改动后的行为和验证结果，注明仍待实测的部分。同一问题更新原条目。每份检出通过 `git rev-parse --git-path info/exclude` 定位本地排除文件，在其中加入 `/Spec/`。提交中保留代码、测试和长期有效的操作说明。
+
 `packages/core/src/work-context.ts` 从共享库构建按范围过滤的工作快照；`agent-runtime/index.ts:before_agent_start` 每轮注入，覆盖 Web 和全局/项目/事项机器人。`tests/work-context.test.ts` 测过滤与容量，`tests/bot-global-context.test.ts` 测真实 pi SDK、HTTP、SQLite 与替身飞书收发的跨 Agent 态势读取和刷新。
 
 功能覆盖与参考证据见 [功能清单](feature-inventory.md)。待办时间编辑入口为 `apps/web/js/features/todos-tab.js`：浏览器本地时区展示、显式清空、未改时间不提交。后端复用 `workbench.ts:updateTodo`、`supervision.ts:tick` 和现有持久事件管线；端到端回归为 `tests/todo-reminder-browser.spec.ts`。
@@ -16,9 +18,9 @@
 | `packages/protocol/src/index.ts` | Web/代理的数据与消息类型 |
 | `packages/plugin-sdk/src/index.ts` | 插件、工具、知识与执行者接口 |
 | `packages/core/src/model-config.ts` | 私密主模型配置、校验、读取脱敏与重启恢复 |
-| `packages/core/src/projects.ts`、`project-folders.ts` | 文件夹项目绑定、目录去重、远端校验/发现、保留旧数据与归档 |
-| `plugins/project-discovery.ts`、`bin/super-mario-agent.js` | 本机历史目录与 Git 项目发现，现有目录校验，节点能力注册 |
-| `apps/web/js/features/project-discovery-list.js`、`project-folders.js`、`project-conversation.js` | 自动候选目录、显式导入/绑定、按项目保留的持续工作对话 |
+| `packages/core/src/projects.ts`、`project-folders.ts` | 文件夹项目绑定、目录去重、远端校验/发现、项目归档与恢复 |
+| `plugins/project-discovery.ts`、`bin/super-mario-agent.js` | Codex / Claude 用户会话目录发现，现有目录校验，节点能力注册 |
+| `apps/web/js/features/project-discovery-list.js`、`project-folders.js`、`project-conversation.js` | 按电脑主目录展开候选、显式导入/绑定、按项目保留的持续工作对话 |
 | `packages/core/src/knowledge-curator.ts` | 来源队列、资料读取、CLI 委派、知识导入和本地 Git 记录 |
 | `plugins/knowledge-worker.ts` | 执行机上的常驻 Codex / Claude JSONL 连接与结果持久化 |
 | `apps/web/js/main.js`、`shell.js` | 启动装配；外壳（导航、顶栏搜索、项目范围、连接状态） |

@@ -357,6 +357,8 @@ export async function startServer(config: AppConfig, dependencies: { botFactory?
         if (todo && method === 'PATCH') return json(res, 200, app.updateTodo(todo[1], await body(req)));
         if (path === '/api/v1/projects' && method === 'GET') return json(res, 200, app.projects.list());
         if (path === '/api/v1/projects' && method === 'POST') return json(res, 201, await app.createProject(await body(req)));
+        const restoreProject = path.match(/^\/api\/v1\/projects\/([^/]+)\/restore$/);
+        if (restoreProject && method === 'POST') return json(res, 200, app.projects.restore(decodeURIComponent(restoreProject[1])));
         const projectFollowUp = path.match(/^\/api\/v1\/projects\/([^/]+)\/follow-up$/);
         if (projectFollowUp && method === 'PUT') {
           const input = await body(req);

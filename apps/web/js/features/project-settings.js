@@ -30,10 +30,13 @@ export function createProjectSettings({ api, store, router, bindFolder }) {
     const editingId = projectId;
     const info = Card({ title: '项目信息', sub: '名称和一句话目标', body: [Field({ label: '名称', control: name, required: true }), Field({ label: '一句话目标', control: description }),
       h('div', { class: 'row' }, Button({ label: '保存', kind: 'primary', onClick: async () => { await api.patch(`/projects/${encodeURIComponent(editingId)}`, { name: name.value.trim(), description: description.value.trim() }); dirty = false; store.refresh(); } }),
-        Button({ label: '归档项目', kind: 'ghost', onClick: async () => {
-          const ok = await confirmDialog({ title: '归档这个项目？', message: '归档后它不再出现在项目列表里；已有的待办、执行和记忆不会被删除。', confirmLabel: '归档', danger: true });
+        Button({ label: '移除项目', kind: 'ghost', onClick: async () => {
+          const route = router.current.canonical;
+          const ok = await confirmDialog({ title: `移除“${project.name}”？`, message: '项目将从已添加列表移除。电脑上的文件夹和文件保持原样，已有的对话、待办、执行和资料都会保留。可在“已移除的项目”中重新添加。', confirmLabel: '确认移除', danger: true });
           if (!ok) return;
-          await api.del(`/projects/${encodeURIComponent(editingId)}`); store.refresh(); router.go(router.href('projects'));
+          await api.del(`/projects/${encodeURIComponent(editingId)}`);
+          await store.refresh();
+          if (router.current.canonical === route) router.go(router.href('projects', 'all', 'todos'));
         } }))] });
 
     const time = Input({ type: 'time', value: followUp.briefingTime });

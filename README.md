@@ -53,7 +53,7 @@ Super Mario 的产品体验与底层选型吸收了以下项目的优秀设计�
 ![统一收件箱与分流](docs/screenshots/02-inbox-triage.png)
 
 ### 3. 项目持续工作区
-每个项目绑定一台执行机上的真实目录（自动发现 Codex / Claude 历史目录并过滤临时目录与 linked worktree），在同一工作区内沉淀持续对话、待办、执行记录、项目记忆与独立跟进策略。
+项目页按电脑列出 Codex / Claude 用户会话使用过的文件夹。从用户主目录逐级展开，点「添加」进入项目工作区。移除项目会保留文件夹和项目历史，在「已移除的项目」中点「重新添加」即可继续工作。
 
 ![项目持续工作区](docs/screenshots/03-project-workspace.png)
 

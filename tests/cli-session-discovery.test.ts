@@ -263,3 +263,18 @@ test('file record modification and metadata creation time remain distinct from p
  const row=(await f.discovery().handlers['agents.sessions']({})).sessions[0];
  assert.equal(row.metadataTimestamp,'2020-01-01T00:00:00.000Z');assert.equal(row.fileModifiedAt,'2026-11-17T01:00:00.000Z');assert.equal(row.state,'historical');assert.equal('lastActiveAt' in row,false);
 });
+
+
+test('metadata-only histories remain listed and support exact resume for both providers', async t => {
+  const f = await fixture(t);
+  await f.codex('legacy');
+  await f.claude('legacy');
+  const discovery = f.discovery();
+  const inventory = await discovery.handlers['agents.sessions']({});
+  assert.deepEqual(inventory.sessions.map(row => row.id).sort(), ['claude-code:legacy', 'codex:legacy']);
+  for (const executorId of ['codex', 'claude-code'] as const) {
+    const row = await discovery.validateResume({ executorId, nativeSessionId: 'legacy', cwd: f.cwd });
+    assert.equal(row.id, executorId + ':legacy');
+    assert.equal(row.cwd, f.cwd);
+  }
+});

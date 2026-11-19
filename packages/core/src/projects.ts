@@ -79,6 +79,12 @@ export function createProjects({ store, events }: { store: Store; events: EventB
         ...(input.description === undefined ? {} : { description: input.description.trim() }),
         ...(input.followUp === undefined ? {} : { followUp: structuredClone(input.followUp) }), updatedAt: new Date().toISOString() });
     },
+    restore(id: string): Project {
+      const project = read(id);
+      if (!project.archivedAt) return structuredClone(project);
+      delete project.archivedAt;
+      return save({ ...project, updatedAt: new Date().toISOString() });
+    },
     archive(id: string): Project {
       const project = read(id);
       if (project.archivedAt) return structuredClone(project);

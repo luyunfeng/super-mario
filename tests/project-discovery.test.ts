@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { access, chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { delimiter, join, relative } from 'node:path';
+import { join, relative } from 'node:path';
 import { test } from 'node:test';
 import type { TestContext } from 'node:test';
 import { execFile } from 'node:child_process';
@@ -30,14 +30,23 @@ async function fixture(t: TestContext) {
     return path;
   }
   function discovery(roots: string[] = []) { return createProjectDiscovery({ home, cwd, roots, temporaryRoots: [join(base, 'temporary')] }).handlers; }
-  return { base, home, cwd, file, git, discovery };
+  async function codex(name: string, cwd: string, text = 'fixture request') {
+    await file(join(home,'.codex/sessions',name + '.jsonl'), [
+      {type:'session_meta', payload:{cwd}, timestamp:'2026-11-16T01:00:00Z'},
+      {type:'event_msg',payload:{type:'user_message',message:text}},
+    ].map(row => JSON.stringify(row)).join('\n'));
+  }
+  async function claude(name: string, cwd: string) {
+    await file(join(home,'.claude/projects/test',name+'.jsonl'), JSON.stringify({type:'user',cwd,message:{role:'user',content:[{type:'text',text:'fixture request'}]}}));
+  }
+  return { base, home, cwd, file, git, discovery, codex, claude };
 }
 
-test('explicit shallow Git inventory retains ordinary gitfiles, skipped folders, symlinks and root de-duplication', async t => {
+test('Git-only folders never become automatic projects; canonical root aliases are deduplicated', async t => {
   const f = await fixture(t);
   const root = join(f.base, 'code');
-  const repo = await f.git(join(root, 'repo'));
-  const worktree = await f.git(join(root, 'org', 'worktree'), true);
+  await f.git(join(root, 'repo'));
+  await f.git(join(root, 'org', 'worktree'), true);
   await f.git(join(root, 'node_modules', 'ignored'));
   await f.git(join(root, '.cache', 'ignored'));
   const outside = await f.git(join(f.base, 'outside'));
@@ -45,38 +54,38 @@ test('explicit shallow Git inventory retains ordinary gitfiles, skipped folders,
   await symlink(root, join(f.base, 'root-link'));
   await symlink(root, join(root, 'loop'));
   const result = await f.discovery()['workspace.projects']({ roots: [root, join(f.base, 'root-link')] });
-  assert.deepEqual(result.projects.map(p => p.cwd).sort(), [repo, worktree].sort());
+  assert.deepEqual(result.projects.map(p => p.cwd).sort(), []);
   assert.deepEqual(result.roots, [root]);
-  assert.ok(result.projects.every(p => p.exists && p.sources.includes('git')));
   assert.equal(result.truncated, false);
 });
 
-test('history discovers folders without Git, missing folders and merges canonical sources with latest time', async t => {
+test('history discovers existing non-Git folders and merges canonical sources with latest time', async t => {
   const f = await fixture(t);
   const project = join(f.base, 'plain'); await mkdir(project);
   const alias = join(f.base, 'alias'); await symlink(project, alias);
   const gone = join(f.base, 'gone');
   await f.file(join(f.home, '.codex/sessions/2026/11/16/new.jsonl'), JSON.stringify({ type: 'session_meta', timestamp: '2026-11-16T01:00:00Z', payload: { cwd: alias } }) + '\n' + 'private prompt\n'.repeat(10000));
   await f.file(join(f.home, '.claude.json'), JSON.stringify({ projects: { [project]: {}, [gone]: {} } }));
-  await f.file(join(f.home, '.claude/projects/encoded/one.jsonl'), JSON.stringify({ type: 'user', cwd: project, timestamp: '2026-11-16T02:00:00Z', message: { content: 'PRIVATE-PROMPT' } }) + '\n');
+  await f.file(join(f.home, '.claude/projects/encoded/one.jsonl'), JSON.stringify({ type: 'user', cwd: project, timestamp: '2026-11-16T02:00:00Z', message: { role:'user', content: 'PRIVATE-PROMPT' } }) + '\n');
+  await f.codex('with-user',alias);
   const result = await f.discovery()['workspace.projects']({});
-  assert.equal(result.projects.length, 2);
+  assert.equal(result.projects.length, 1);
   const row = result.projects.find(p => p.cwd === project)!;
   assert.deepEqual(row.sources.sort(), ['claude', 'codex']);
   assert.equal(row.lastUsedAt, '2026-11-16T02:00:00.000Z');
-  assert.equal(result.projects.find(p => p.cwd === gone)?.exists, false);
+  assert.equal(result.projects.find(p => p.cwd === gone)?.exists, undefined);
   assert.ok(!JSON.stringify(result).includes('PRIVATE-PROMPT'));
   assert.equal(result.truncated, false, 'large transcript body does not truncate a fully identified header');
 });
 
-test('Claude pretty session metadata and project indexes resolve paths without guessing encoded names', async t => {
+test('Claude pretty session metadata and project indexes alone do not establish dialogue', async t => {
   const f = await fixture(t);
   const first = join(f.base, 'first'); await mkdir(first);
   const second = join(f.base, 'second'); await mkdir(second);
   await f.file(join(f.home, '.claude/sessions/123.json'), JSON.stringify({ cwd: first }, null, 2));
   await f.file(join(f.home, '.claude/projects/not-a-decodable-path/sessions-index.json'), JSON.stringify({ originalPath: second, entries: [{ projectPath: second, modified: '2026-11-15T00:00:00Z' }] }));
   const result = await f.discovery()['workspace.projects']({});
-  assert.deepEqual(result.projects.map(p => p.cwd).sort(), [first, second].sort());
+  assert.deepEqual(result.projects.map(p => p.cwd).sort(), []);
 });
 
 test('bad, absent and unreadable metadata is skipped with bounded non-content warnings', async t => {
@@ -89,19 +98,21 @@ test('bad, absent and unreadable metadata is skipped with bounded non-content wa
   t.after(() => chmod(locked, 0o700).catch(() => {}));
   const result = await f.discovery()['workspace.projects']({});
   assert.deepEqual(result.projects, []);
-  assert.ok(result.warnings.length >= 2 && result.warnings.length <= 12);
+  assert.ok(result.warnings.length >= 1 && result.warnings.length <= 12);
   assert.ok(!JSON.stringify(result).includes('PRIVATE'));
 });
 
 test('large header reads only bounded scalars and never treats a prompt string as cwd', async t => {
   const f = await fixture(t);
   const project = join(f.base, 'plain'); await mkdir(project);
-  await f.file(join(f.home, '.codex/sessions/good.jsonl'), JSON.stringify({ type: 'session_meta', payload: { cwd: project, base_instructions: { text: 'x'.repeat(40000) } } }));
   await f.file(join(f.home, '.codex/sessions/trap.jsonl'), JSON.stringify({ type: 'session_meta', payload: { instructions: { cwd: '/must-not-be-discovered', text: 'x'.repeat(40000) } } }));
+  await f.file(join(f.home,'.codex/sessions/good.jsonl'), [
+    JSON.stringify({type:'session_meta',payload:{cwd:project,base_instructions:{text:'x'.repeat(95000)}}}),
+    JSON.stringify({type:'event_msg',payload:{type:'user_message',message:'fixture request'}}),
+  ].join('\n'));
   const result = await f.discovery()['workspace.projects']({});
   assert.deepEqual(result.projects.map(p => p.cwd), [project]);
-  assert.equal(result.truncated, true);
-  assert.ok(result.warnings.length);
+  assert.equal(result.truncated, false);
 });
 
 test('symlinked metadata files and directories are never traversed', async t => {
@@ -116,41 +127,36 @@ test('symlinked metadata files and directories are never traversed', async t => 
 
 test('session and directory budgets report truncation and prefer recent dated session paths', async t => {
   const f = await fixture(t);
-  for (let i = 0; i < 270; i++) await f.file(join(f.home, '.codex/sessions/2026/11/16', `session-${String(i).padStart(4, '0')}.jsonl`), JSON.stringify({ type: 'session_meta', payload: { cwd: join(f.base, `project-${i}`) } }));
+  for (let i = 0; i < 270; i++) {
+    const cwd = join(f.base, 'project-'+i); await mkdir(cwd);
+    await f.codex('session-'+String(i).padStart(4,'0'),cwd);
+  }
+  await f.claude('independent-budget', f.cwd);
   const result = await f.discovery()['workspace.projects']({});
+  assert.ok(result.projects.some(p => p.cwd === f.cwd && p.sources.includes('claude')));
   assert.equal(result.truncated, true);
-  assert.equal(result.projects.length, 256);
+  assert.equal(result.projects.length, 257);
   assert.ok(result.projects.some(p => p.cwd.endsWith('project-269')));
   assert.ok(!result.projects.some(p => p.cwd.endsWith('project-0')));
 });
 
-test('shallow depth and huge directory fan-out are bounded honestly', async t => {
+test('explicit roots constrain canonical history paths, override environment roots and fail closed when invalid', async t => {
   const f = await fixture(t);
-  const root = join(f.base, 'code');
-  await f.git(join(root, 'org', 'group', 'deep'));
-  let result = await f.discovery([root])['workspace.projects']({});
-  assert.deepEqual(result.projects, []);
-  assert.equal(result.truncated, true);
-  for (let i = 0; i < 520; i++) await mkdir(join(root, `empty-${i}`));
-  result = await f.discovery([root])['workspace.projects']({});
-  assert.equal(result.truncated, true);
-});
-
-test('default uses CLI history only; environment and RPC roots opt into directory scanning', async t => {
-  const f = await fixture(t);
-  const common = await f.git(join(f.home, 'code', 'common'));
-  const sibling = await f.git(join(f.base, 'sibling'));
-  const extra = await f.git(join(f.base, 'extra-root', 'extra'));
-  const other = await f.git(join(f.base, 'other-root', 'other'));
-  process.env.SUPER_MARIO_PROJECT_ROOTS = [join(f.base, 'extra-root'), 'relative-invalid'].join(delimiter);
-  const handlers = createProjectDiscovery({ home: f.home, cwd: f.cwd, temporaryRoots: [] }).handlers;
-  await f.file(join(f.home, '.claude.json'), JSON.stringify({ projects: { [common]: {} } }));
-  const defaults = await handlers['workspace.projects']({});
-  assert.ok([common, extra].every(cwd => defaults.projects.some(p => p.cwd === cwd)));
-  assert.ok(!defaults.projects.some(p => p.cwd === sibling), 'nearby repositories are not implicitly scanned');
-  const selected = await handlers['workspace.projects']({ roots: [join(f.base, 'other-root')] });
-  assert.deepEqual(selected.projects.map(p => p.cwd).sort(), [common, extra, other].sort());
-  assert.ok(selected.warnings.length > 0);
+  const root = join(f.base,'code'), other = join(f.base,'code-other');
+  const nested = await f.git(join(root,'repo'));
+  await mkdir(other); await f.git(join(root,'git-only'));
+  await f.codex('nested',nested); await f.claude('other',other);
+  const alias = join(f.base,'alias'); await symlink(root,alias);
+  process.env.SUPER_MARIO_PROJECT_ROOTS = other;
+  const projects = f.discovery()['workspace.projects'];
+  assert.deepEqual((await projects({})).projects.map(p=>p.cwd),[other]);
+  const selected = await projects({roots:[alias,root,join(root,'gone')]});
+  assert.deepEqual(selected.roots,[root]); assert.deepEqual(selected.projects.map(p=>p.cwd),[nested]);
+  assert.ok(selected.warnings.length);
+  for (const roots of [[join(root,'gone')], ['/'], ['relative'], [1]]) {
+    const result = await projects({roots});
+    assert.deepEqual(result.projects,[]); assert.ok(result.warnings.length);
+  }
 });
 
 test('directory RPC canonicalizes existing folders, rejects invalid requests and never creates paths', async t => {
@@ -163,7 +169,7 @@ test('directory RPC canonicalizes existing folders, rejects invalid requests and
   for (const params of [{}, { cwd: 'relative' }, { cwd: '/bad\0path' }, { cwd: f.cwd, extra: true }, { cwd: missing }, { cwd: join(f.base, 'file') }, { cwd: 1 }, null, []]) {
     await assert.rejects(handlers['workspace.directory'](params));
   }
-  for (const params of [{ root: f.cwd }, { roots: 'bad' }, { roots: [1] }, { roots: ['relative'] }, { roots: Array(33).fill(f.cwd) }, null]) {
+  for (const params of [{ root: f.cwd }, { roots: 'bad' }, { roots: Array(33).fill(f.cwd) }, null]) {
     await assert.rejects(handlers['workspace.projects'](params));
   }
   await assert.rejects(access(missing), { code: 'ENOENT' });
@@ -193,7 +199,7 @@ test('real node transport advertises both read-only methods and returns director
           assert.ok(message.error);
           socket.send(JSON.stringify({ type: 'call', id: 'projects', method: 'workspace.projects', params: {} }));
         } else if (message.id === 'projects') {
-          assert.deepEqual(message.result, { projects: [], roots: [], warnings: [], truncated: false });
+          assert.deepEqual(message.result, { homeDir:f.home, projects: [], roots: [], warnings: [], truncated: false });
           resolve();
         }
       } catch (error) { reject(error); }
@@ -227,14 +233,19 @@ test('real linked worktrees and their history subfolders are excluded, main repo
   const submodule = join(root, 'module'); await mkdir(submodule);
   const moduleGit = join(main, '.git', 'modules', 'module'); await mkdir(moduleGit, { recursive: true });
   await f.file(join(submodule, '.git'), 'gitdir: ' + moduleGit + '\n');
-  const namedWorktree = await f.git(join(root, 'worktrees-real-project'));
+  await f.git(join(root, 'worktrees-real-project'));
   await f.file(join(f.home, '.claude.json'), JSON.stringify({ projects: { [linked]: {}, [nested]: {}, [alias]: {}, [main]: {}, [ordinary]: {}, [submodule]: {} } }));
   await f.file(join(f.home, '.codex/sessions/one.jsonl'), JSON.stringify({ type: 'session_meta', payload: { cwd: linked } }));
+  const abandoned = join(root,'super-mario-worktrees','executor-contract'), broken = join(root,'broken');
+  await mkdir(abandoned,{recursive:true}); await mkdir(broken);
+  await f.file(join(broken,'.git'),'gitdir: '+join(main,'.git/worktrees/removed'));
+  for (const [i,path] of [abandoned,broken,linked,nested,alias,main,ordinary,submodule].entries()) await f.codex('trace-'+i,path);
   const handlers = f.discovery();
   const history = await handlers['workspace.projects']({});
   assert.deepEqual(history.projects.map(p => p.cwd).sort(), [main, ordinary, submodule].sort());
+  assert.equal((await handlers['workspace.directory']({cwd:abandoned})).exists,true);
   const scanned = await handlers['workspace.projects']({ roots: [root, linked, nested] });
-  assert.deepEqual(scanned.projects.map(p => p.cwd).sort(), [main, ordinary, submodule, namedWorktree].sort());
+  assert.deepEqual(scanned.projects.map(p => p.cwd).sort(), [main, ordinary, submodule].sort());
   assert.deepEqual(await handlers['workspace.directory']({ cwd: linked }), { cwd: linked, exists: true });
   assert.ok(await readFile(join(linked, '.git'), 'utf8'), 'discovery leaves real directories intact');
 });
@@ -246,6 +257,7 @@ test('temporary history directories and aliases are excluded but ordinary histor
   const alias = join(f.base, 'alias-to-temp'); await symlink(transient, alias);
   await f.file(join(f.home, '.claude.json'), JSON.stringify({ projects: { [transient]: {}, [ordinary]: {}, [alias]: {}, [join(temporary, 'gone')]: {} } }));
   await f.file(join(f.home, '.codex/sessions/one.jsonl'), JSON.stringify({ type: 'session_meta', payload: { cwd: transient } }));
+  for (const [i,path] of [transient,ordinary,alias].entries()) await f.claude('trace-'+i,path);
   const handlers = f.discovery();
   for (const params of [{}, { roots: [temporary, f.base] }]) {
     const result = await handlers['workspace.projects'](params);
@@ -258,11 +270,11 @@ test('temporary history directories and aliases are excluded but ordinary histor
 });
 
 
-test('CLI project indexes larger than a transcript header still supply history projects', async t => {
+test('config-only projects stay excluded regardless of config size', async t => {
   const f = await fixture(t), project = join(f.base, 'index-project'); await mkdir(project);
   await f.file(join(f.home, '.claude.json'), JSON.stringify({ padding: 'PRIVATE'.repeat(4000), projects: { [project]: {} } }));
   const result = await f.discovery()['workspace.projects']({});
-  assert.deepEqual(result.projects.map(p => p.cwd), [project]);
+  assert.deepEqual(result.projects.map(p => p.cwd), []);
   assert.equal(result.truncated, false);
   assert.ok(!JSON.stringify(result).includes('PRIVATE'));
 });
@@ -272,4 +284,43 @@ test('internal history-only reuse ignores configured code roots without mutating
  process.env.SUPER_MARIO_PROJECT_ROOTS=root;
  const handlers=createProjectDiscovery({home:f.home,roots:[],temporaryRoots:[],ignoreEnvironmentRoots:true}).handlers;
  const result=await handlers['workspace.projects']({});assert.deepEqual(result.projects,[]);assert.deepEqual(result.roots,[]);assert.equal(process.env.SUPER_MARIO_PROJECT_ROOTS,root);
+});
+
+test('home, config, Codex dated scratch and stale worktree containers excluded before and after canonicalization', async t => {
+  const f = await fixture(t), alias = join(f.base,'home-alias');
+  await symlink(f.home,alias);
+  const paths = [f.home, join(f.home,'.config/app'), join(f.home,'.codex/tmp/work'), join(f.home,'.claude/projects/fake'),
+    join(f.home,'Documents/Codex/2026-11-19/session'),join(f.base,'super-mario-worktrees/executor-contract')];
+  for (const [i,path] of paths.entries()) {
+    await mkdir(path,{recursive:true}); await f.codex('ignored-'+i,path);
+  }
+  const retained = join(f.home,'Documents/Codex/my-project'); await mkdir(retained); await f.claude('valid',retained);
+  const result = await createProjectDiscovery({home:alias,temporaryRoots:[]}).handlers['workspace.projects']({});
+  assert.equal(result.homeDir,f.home); assert.deepEqual(result.projects.map(p=>p.cwd),[retained]);
+});
+
+test('metadata, generated user wrappers, empty input, subagents and tool results cannot supply dialogue evidence', async t => {
+  const f=await fixture(t), dir=join(f.home,'.claude/projects/test');
+  for (const [i,text] of ['   ','# AGENTS.md instructions for fixture','<environment_context>fixture</environment_context>'].entries()) await f.codex('wrapper-'+i,f.cwd,text);
+  for (const [i,row] of [
+    {type:'assistant',message:{role:'assistant',content:'fixture'}},
+    {type:'user',isMeta:true,message:{role:'user',content:'fixture'}},
+    {type:'user',isSidechain:true,message:{role:'user',content:'fixture'}},
+    {type:'user',message:{role:'user',content:[{type:'tool_result',content:'fixture'}]}},
+    {type:'user',message:{role:'user',content:'<local-command-stdout>fixture</local-command-stdout>'}},
+  ].entries()) await f.file(join(dir,i+'.jsonl'),JSON.stringify({...row,cwd:f.cwd}));
+  await f.file(join(dir,'subagents/agent.jsonl'),JSON.stringify({type:'user',cwd:f.cwd,message:{role:'user',content:'fixture'}}));
+  const result=await f.discovery()['workspace.projects']({});
+  assert.deepEqual(result.projects,[]); assert.equal(result.truncated,false);
+});
+
+test('multi-GB sparse transcripts remain bounded; both providers reach smaller transcripts', {timeout: 30000}, async t => {
+  const f = await fixture(t);
+  const cliFiles = [[join(f.home,'.codex/sessions/z-large.jsonl'),2_200_000_000],
+    [join(f.home,'.claude/projects/test/z-large.jsonl'),1_200_000_000]] as const;
+  for (const [path,size] of cliFiles) { await f.file(path,''); await truncate(path,size); }
+  await f.codex('a-small',f.cwd); await f.claude('a-small',f.cwd);
+  const result = await f.discovery()['workspace.projects']({});
+  assert.equal(result.truncated,true);
+  assert.deepEqual(result.projects.map(p => p.sources.sort()),[['claude','codex']]);
 });

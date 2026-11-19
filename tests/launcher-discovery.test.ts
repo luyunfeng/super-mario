@@ -20,10 +20,13 @@ async function fixture(t: TestContext) {
     await writeFile(path, typeof value === 'string' ? value : JSON.stringify(value));
   }
   async function codex(root: string, id: string, cwd: string) {
-    await file(join(root, 'sessions/2026/11/17', `${id}.jsonl`), { type: 'session_meta', payload: { id, cwd } });
+    await file(join(root, 'sessions/2026/11/17', `${id}.jsonl`), [
+      { type: 'session_meta', payload: { id, cwd } },
+      { type: 'event_msg', payload: { type: 'user_message', message: 'Review the project tests.' } },
+    ].map(record => JSON.stringify(record)).join('\n'));
   }
   async function claude(root: string, id: string, cwd: string) {
-    await file(join(root, 'projects/encoded', `${id}.jsonl`), { sessionId: id, cwd });
+    await file(join(root, 'projects/encoded', `${id}.jsonl`), { sessionId: id, cwd, type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'Review the project tests.' }] } });
   }
   const defaults = { home, temporaryRoots: [temporary], ignoreEnvironmentRoots: true, roots: [] };
   const explicit = { ...defaults, codexHome, claudeHome };
@@ -45,7 +48,8 @@ test('explicit CLI config roots isolate history, project indexes and exact resum
   await f.file(join(f.claudeHome, 'projects/index/sessions-index.json'), {
     entries: [{ sessionId: 'indexed', projectPath: indexOnly }],
   });
-  await f.file(join(f.claudeHome, 'sessions/pretty.json'), { session_id: 'pretty', cwd: selected });
+  const headerOnly = await f.dir('header-only');
+  await f.file(join(f.claudeHome, 'sessions/pretty.json'), { session_id: 'pretty', cwd: headerOnly });
   const d = createCliSessionDiscovery(f.explicit);
   const inventory = await d.handlers['agents.sessions']({});
   // roots: [] limits the session inventory; omit it to inspect all profile history.
@@ -53,8 +57,11 @@ test('explicit CLI config roots isolate history, project indexes and exact resum
   assert.deepEqual(inventory.sessions, []);
   assert.deepEqual(all.sessions.map(s => s.id).sort(), ['claude-code:indexed', 'claude-code:pretty', 'claude-code:shared', 'codex:shared']);
   assert.equal(all.truncated, false);
+  for (const [nativeSessionId, cwd] of [['pretty', headerOnly], ['indexed', indexOnly]]) {
+    assert.equal((await d.validateResume({ executorId: 'claude-code', nativeSessionId, cwd })).cwd, cwd);
+  }
   const projects = await createProjectDiscovery(f.explicit).handlers['workspace.projects']({});
-  assert.deepEqual(projects.projects.map(p => p.cwd).sort(), [selected, configOnly, indexOnly].sort());
+  assert.deepEqual(projects.projects.map(p => p.cwd).sort(), [selected]);
   for (const executorId of ['codex', 'claude-code'] as const) {
     assert.equal((await d.validateResume({ executorId, nativeSessionId: 'shared', cwd: selected })).cwd, selected);
     await assert.rejects(d.validateResume({ executorId, nativeSessionId: 'shared', cwd: other }), /未找到/);
@@ -70,9 +77,9 @@ test('omitted provider roots retain default home history independently and leave
   await f.file(join(f.home, '.claude.json'), { projects: { [global]: {} } });
   await f.codex(f.codexHome, 'configured', configured);
   const defaults = await createProjectDiscovery(f.defaults).handlers['workspace.projects']({});
-  assert.deepEqual(defaults.projects.map(p => p.cwd).sort(), [defaultCode, defaultClaude, global].sort());
+  assert.deepEqual(defaults.projects.map(p => p.cwd).sort(), [defaultCode, defaultClaude].sort());
   const mixed = { ...f.defaults, codexHome: f.codexHome };
-  assert.deepEqual((await createProjectDiscovery(mixed).handlers['workspace.projects']({})).projects.map(p => p.cwd).sort(), [configured, defaultClaude, global].sort());
+  assert.deepEqual((await createProjectDiscovery(mixed).handlers['workspace.projects']({})).projects.map(p => p.cwd).sort(), [configured, defaultClaude].sort());
   assert.deepEqual((await createCliSessionDiscovery(mixed).handlers['agents.sessions']({ roots: [f.base] })).sessions.map(s => s.nativeSessionId).sort(), ['configured', 'default-claude']);
   const claudeOnly = { ...f.defaults, claudeHome: f.claudeHome };
   assert.deepEqual((await createProjectDiscovery(claudeOnly).handlers['workspace.projects']({})).projects.map(p => p.cwd), [defaultCode]);
@@ -164,7 +171,7 @@ test('explicit histories reuse real Git worktree and canonical temporary filters
     const sessions = await d.handlers['agents.sessions']({ roots });
     assert.deepEqual(sessions.sessions.map(s => s.nativeSessionId).sort(), roots[0] === f.base ? ['main', 'main', 'named', 'named'] : []);
     const projects = await p.handlers['workspace.projects']({ roots });
-    assert.deepEqual(projects.projects.map(p => p.cwd).sort(), [main, named].sort());
+    assert.deepEqual(projects.projects.map(p => p.cwd).sort(), roots[0] === f.base ? [main, named].sort() : []);
   }
   for (const executorId of ['codex', 'claude-code'] as const) {
     assert.equal((await d.validateResume({ executorId, nativeSessionId: 'nested', cwd: nested })).cwd, nested);

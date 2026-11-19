@@ -7,7 +7,7 @@ import type { DiscoveredProject, ProjectDiscovery } from '../packages/protocol/s
 import type { NodeHandler } from '../packages/plugin-sdk/src/index.ts';
 
 // Per request budgets bound disk work and memory, including directories with huge fan-out.
-const limits = { roots: 32, directories: 512, entries: 8192, perDirectory: 512, sessions: 256, projects: 512, head: 16 * 1024, index: 1024 * 1024, warnings: 12 };
+const limits = { roots: 32, directories: 512, entries: 8192, perDirectory: 512, sessions: 256, head: 16 * 1024, transcript: 1024 * 1024, providerBytes: 32 * 1024 * 1024, warnings: 12 };
 const skipped = new Set(['node_modules', '.git', '.cache', 'cache', 'caches', 'Cache', 'Caches', '.npm', '.local', '.venv', 'venv', 'dist', 'build', 'vendor', 'Library', '.Trash']);
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -33,6 +33,18 @@ async function noLinks(path: string): Promise<boolean> {
 function date(value: unknown): string | undefined {
   const time = typeof value === 'number' || typeof value === 'string' ? new Date(value).getTime() : NaN;
   return Number.isFinite(time) ? new Date(time).toISOString() : undefined;
+}
+
+// CLI wrappers and tool results can carry the user role without a user turn.
+function userText(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const text = value.trim();
+  return !!text && !/^(?:\[tool output for unknown call\]|# AGENTS\.md instructions\b|<(?:environment_context|permissions instructions|collaboration_mode|skills_instructions|system-reminder|environment_details|INSTRUCTIONS|skill|codex_delegation|local-command-[^>]+|command-name|command-message|task-notification|subagent_notification|user_instructions|turn_aborted)\b)/i.test(text);
+}
+function userContent(value: unknown, blockType: string): boolean {
+  if (typeof value === 'string') return userText(value);
+  return Array.isArray(value) && !value.some(block => object(block) && block.type === 'tool_result')
+    && value.some(block => object(block) && block.type === blockType && userText(block.text));
 }
 
 // Extract scalar object headers from an incomplete first line. Strings and nested values
@@ -122,58 +134,10 @@ export function createProjectDiscovery(options: { home?: string; codexHome?: str
     } catch { throw new Error('文件夹不存在、不可访问或不是目录'); }
   }
 
-  async function projects(params: unknown) {
-    paramsOnly(params, ['roots']);
-    const requested = params.roots === undefined ? configuredRoots : rootList(params.roots);
-    const result: ProjectDiscovery = { projects: [], roots: [], warnings: [], truncated: false };
-    const found = new Map<string, DiscoveredProject>();
+  // Session inventory keeps its metadata-only contract and original path policy.
+  // Project discovery applies its stronger transcript and workspace checks separately.
+  function nativeDirectoryFilter(warn: (message: string) => void, excludeStale = false) {
     const worktreeCache = new Map<string, boolean>();
-    let directories = 0, entriesRead = 0, sessions = 0;
-    function warn(message: string) {
-      if (result.warnings.includes(message)) return;
-      if (result.warnings.length < limits.warnings) result.warnings.push(message);
-      else result.truncated = true;
-    }
-    async function add(raw: unknown, source: string, lastUsedAt?: unknown) {
-      let path: string;
-      try { path = absolute(raw); } catch { warn('部分项目元数据缺少有效绝对目录，已跳过'); return; }
-      if (temporary(path)) return;
-      let exists = true;
-      try {
-        path = await realpath(path);
-        if (!(await stat(path)).isDirectory()) { warn('部分项目路径不是文件夹，已跳过'); return; }
-      } catch (error) {
-        if (!missing(error)) { warn('部分项目文件夹不可访问，已跳过'); return; }
-        exists = false;
-      }
-      if (temporary(path) || await inLinkedWorktree(path)) return;
-      if (!exists && source === 'git') return;
-      const time = date(lastUsedAt);
-      const previous = found.get(path);
-      if (previous) {
-        if (!previous.sources.includes(source)) previous.sources.push(source);
-        if (time && (!previous.lastUsedAt || time > previous.lastUsedAt)) previous.lastUsedAt = time;
-        return;
-      }
-      if (found.size >= limits.projects) { result.truncated = true; return; }
-      found.set(path, { name: basename(path) || path, cwd: path, sources: [source], exists, ...(time ? { lastUsedAt: time } : {}) });
-    }
-    async function children(path: string) {
-      if (directories >= limits.directories || entriesRead >= limits.entries) { result.truncated = true; return []; }
-      directories++;
-      try {
-        // Explicit scan roots may be links, but recursive traversal never follows directory links.
-        if ((await lstat(path)).isSymbolicLink()) return [];
-        const out = [];
-        const dir = await opendir(path);
-        for await (const entry of dir) {
-          if (out.length >= limits.perDirectory || entriesRead >= limits.entries) { result.truncated = true; break; }
-          entriesRead++;
-          out.push(entry);
-        }
-        return out.sort((a, b) => b.name.localeCompare(a.name));
-      } catch (error) { if (!missing(error)) warn('部分目录无法读取，已跳过'); return []; }
-    }
     async function head(path: string, maxBytes = limits.head): Promise<{ text: string; cut: boolean } | undefined> {
       let file;
       try {
@@ -188,7 +152,7 @@ export function createProjectDiscovery(options: { home?: string; codexHome?: str
       finally { await file?.close(); }
     }
     // A .git file can also belong to a submodule or a separated git-dir. Only
-    // commondir identifies a linked worktree. Inspect ancestors too: CLI history
+    // the worktrees admin path or commondir identifies a linked worktree. Inspect ancestors too: CLI history
     // often stores a worktree's subdirectory rather than its root.
     async function inLinkedWorktree(path: string): Promise<boolean> {
       const cached = worktreeCache.get(path);
@@ -202,7 +166,7 @@ export function createProjectDiscovery(options: { home?: string; codexHome?: str
           if (target) {
             const gitdir = resolve(path, target);
             const common = await head(join(gitdir, 'commondir'));
-            linked = Boolean(common && !common.cut && common.text.trim() && resolve(gitdir, common.text.trim()) !== gitdir);
+            linked = (excludeStale && /\/worktrees\/[^/]+$/.test(gitdir)) || Boolean(common && !common.cut && common.text.trim() && resolve(gitdir, common.text.trim()) !== gitdir);
           }
         }
         // A repository boundary prevents classifying an independent nested repo
@@ -214,73 +178,147 @@ export function createProjectDiscovery(options: { home?: string; codexHome?: str
       worktreeCache.set(path, linked);
       return linked;
     }
-    async function metadata(path: string, source: string, kind: 'session' | 'config' | 'index') {
-      if (sessions >= limits.sessions) { result.truncated = true; return; }
-      try { if (!await noLinks(path)) { warn('部分项目元数据路径是软链接，未读取'); return; } }
-      catch (error) { if (!missing(error)) warn('部分项目元数据无法读取，已跳过'); return; }
-      // Project indexes are JSON documents, unlike transcript headers. Give them
-      // a separate bounded budget so ordinary large CLI configs are not discarded.
-      const data = await head(path, kind === 'session' ? limits.head : limits.index);
-      if (!data) return;
-      sessions++;
-      if (kind !== 'session') {
-        if (data.cut) { result.truncated = true; warn('部分项目索引超过读取上限，已跳过'); return; }
-        try {
-          const value: unknown = JSON.parse(data.text);
-          if (!object(value)) throw new Error('metadata');
-          if (kind === 'config') {
-            if (object(value.projects)) for (const [path, info] of Object.entries(value.projects)) {
-              await add(path, source, object(info) ? info.lastUsedAt ?? info.lastSessionDate : undefined);
-            }
-          } else {
-            if (value.originalPath !== undefined) await add(value.originalPath, source);
-            if (Array.isArray(value.entries)) for (const entry of value.entries) {
-              if (object(entry) && entry.projectPath !== undefined) await add(entry.projectPath, source, entry.modified);
-            }
-          }
-        } catch { warn('部分项目元数据格式无效，已跳过'); }
+    return async (path: string) => !temporary(path) && !await inLinkedWorktree(path);
+  }
+
+  async function projects(params: unknown) {
+    paramsOnly(params, ['roots']);
+    if (params.roots !== undefined && (!Array.isArray(params.roots) || params.roots.length > limits.roots)) throw new Error('roots 必须是最多 32 个绝对目录');
+    const requested = params.roots as unknown[] | undefined;
+    const [homeDir, codexRoot, claudeRoot] = await Promise.all([canonicalHome, codexHome, claudeHome]);
+    const result: ProjectDiscovery = { homeDir, projects: [], roots: [], warnings: [], truncated: false };
+    const found = new Map<string, DiscoveredProject>();
+    const configRoots = ['/etc', codexRoot, claudeRoot, ...['.codex', '.claude', '.config', '.cache', '.local', '.super-mario', '.ssh', 'tmp', 'temp'].map(name => join(homeDir, name))];
+    function warn(message: string) {
+      if (result.warnings.includes(message)) return;
+      if (result.warnings.length < limits.warnings) result.warnings.push(message);
+      else result.truncated = true;
+    }
+    const environment = options.ignoreEnvironmentRoots ? [] : (process.env.SUPER_MARIO_PROJECT_ROOTS ?? '').split(delimiter).filter(Boolean);
+    const scopes = requested?.length ? requested : [...(configuredRoots ?? []), ...environment];
+    for (const raw of scopes.slice(0, limits.roots)) {
+      try {
+        const root = (await directory({cwd: raw})).cwd;
+        if (root === parse(root).root) throw new Error('whole disk');
+        if (!result.roots.includes(root)) result.roots.push(root);
+      } catch { warn('指定扫描目录无效、不存在或为文件系统根目录，已跳过'); }
+    }
+    if (scopes.length > limits.roots) result.truncated = true;
+    if (scopes.length && !result.roots.length) return { ...result, projects: [] };
+    const nativeAllowed = nativeDirectoryFilter(warn, true);
+    function excluded(path: string) {
+      if (temporary(path) || path === homeDir || path === parse(path).root) return true;
+      if (configRoots.some(root => path === root || path.startsWith(root + '/'))) return true;
+      if (path.split('/').some(part => /^(?:\.?worktrees?|.+-worktrees)$/.test(part) || part === '.git')) return true;
+      return /^\d{4}-\d{2}-\d{2}(?:\/|$)/.test(relative(join(homeDir, 'Documents', 'Codex'), path));
+    }
+
+    async function add(raw: unknown, source: string, timestamp: unknown) {
+      let path: string;
+      try {
+        path = absolute(raw);
+        if (excluded(path)) return;
+        path = await realpath(path);
+        if (result.roots.length && !result.roots.some(root => path === root || path.startsWith(root + '/'))) return;
+        if (excluded(path) || !(await stat(path)).isDirectory() || !await nativeAllowed(path)) return;
+      } catch (error) { if (!missing(error)) warn('部分会话目录无效或无法访问，已跳过'); return; }
+      const time = date(timestamp);
+      const previous = found.get(path);
+      if (previous) {
+        if (!previous.sources.includes(source)) previous.sources.push(source);
+        if (time && (!previous.lastUsedAt || time > previous.lastUsedAt)) previous.lastUsedAt = time;
         return;
       }
-      // Only inspect a bounded head. Never read the rest of a transcript or retain prompt text.
-      const lines = path.endsWith('.json') && !data.cut ? [data.text] : data.text.split('\n');
-      if (data.cut) lines.pop();
-      let matched = false;
-      for (const line of lines.slice(0, 8)) {
-        if (!line.trim()) continue;
-        try {
-          const row: unknown = JSON.parse(line);
-          if (!object(row)) continue;
-          const meta = source === 'codex' ? row.type === 'session_meta' && object(row.payload) ? row.payload : undefined : row;
-          if (meta?.cwd !== undefined) { await add(meta.cwd, source, meta.timestamp ?? row.timestamp); matched = true; break; }
-        } catch { warn('部分会话元数据格式无效，已跳过'); }
-      }
-      if (!matched && data.cut) {
-        // Large session_meta may include instructions after cwd. Extract only header scalars.
-        const row = parseSessionHeader(data.text.split('\n', 1)[0], source === 'codex');
-        const meta = source === 'codex' ? row.type === 'session_meta' && object(row.payload) ? row.payload : undefined : row;
-        if (meta?.cwd !== undefined) { await add(meta.cwd, source, meta.timestamp ?? row.timestamp); matched = true; }
-        if (!matched) { result.truncated = true; warn('部分会话头超过读取上限，无法识别文件夹'); }
-      }
-      if (!matched && !data.cut) {
-        if (lines.length > 8) result.truncated = true;
-        warn('部分会话元数据缺少目录，已跳过');
-      }
+      found.set(path, { name: basename(path), cwd: path, sources: [source], exists: true, ...(time ? {lastUsedAt: time} : {}) });
     }
-    async function walkMetadata(root: string, source: string, depth: number) {
-      try { if (!await noLinks(root)) { warn('部分项目元数据路径是软链接，未读取'); return; } }
-      catch (error) { if (!missing(error)) warn('部分项目元数据无法读取，已跳过'); return; }
-      for (const entry of await children(root)) {
-        if (sessions >= limits.sessions) { result.truncated = true; break; }
-        if (entry.isSymbolicLink() || skipped.has(entry.name)) continue;
-        const path = join(root, entry.name);
-        if (entry.isDirectory()) {
-          if (depth > 0) await walkMetadata(path, source, depth - 1);
-          else result.truncated = true;
-        } else if (entry.isFile()) {
-          if (entry.name === 'sessions-index.json') await metadata(path, source, 'index');
-          else if (entry.name.endsWith('.jsonl') || entry.name.endsWith('.json')) await metadata(path, source, 'session');
+
+    async function scanProvider(source: 'codex' | 'claude', root: string) {
+      let directories = 0, entriesRead = 0, sessions = 0, bytes = 0;
+      const deadline = performance.now() + 8000;
+      function exhausted() {
+        return sessions >= limits.sessions || bytes >= limits.providerBytes || performance.now() >= deadline;
+      }
+      async function children(path: string) {
+        if (directories >= limits.directories || entriesRead >= limits.entries) { result.truncated = true; return []; }
+        directories++;
+        try {
+          // Explicit scan roots may be links, but recursive traversal never follows directory links.
+          if ((await lstat(path)).isSymbolicLink()) return [];
+          const out = [];
+          const dir = await opendir(path);
+          for await (const entry of dir) {
+            if (out.length >= limits.perDirectory || entriesRead >= limits.entries) { result.truncated = true; break; }
+            entriesRead++;
+            out.push(entry);
+          }
+          return out.sort((a, b) => b.name.localeCompare(a.name));
+        } catch (error) { if (!missing(error)) warn('部分目录无法读取，已跳过'); return []; }
+      }
+      async function metadata(path: string) {
+        sessions++;
+        let file;
+        try {
+          file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+          const info = await file.stat();
+          if (!info.isFile()) return;
+          const end = Math.min(info.size, limits.transcript, limits.providerBytes - bytes);
+          const buffer = Buffer.alloc(Math.min(65536, end));
+          const decoder = new TextDecoder();
+          let offset = 0, partial = '', cwd: unknown, created: unknown;
+          while (offset < end && performance.now() < deadline) {
+            const {bytesRead} = await file.read(buffer, 0, Math.min(buffer.length, end - offset), offset);
+            if (!bytesRead) break;
+            offset += bytesRead;
+            bytes += bytesRead;
+            const lines = (partial + decoder.decode(buffer.subarray(0, bytesRead), {stream: offset < info.size})).split('\n');
+            partial = offset < info.size ? lines.pop()! : '';
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              let row: unknown;
+              try { row = JSON.parse(line); }
+              catch { warn('部分会话记录格式无效，已跳过'); continue; }
+              if (!object(row)) continue;
+              if (source === 'codex') {
+                const payload = row.payload;
+                if (!object(payload)) continue;
+                if (row.type === 'session_meta') {
+                  if (object(payload.source) && payload.source.subagent || payload.source === 'exec') return;
+                  cwd = payload.cwd;
+                  created = payload.timestamp ?? row.timestamp;
+                } else if (cwd && ((row.type === 'event_msg' && payload.type === 'user_message' && userText(payload.message))
+                  || (row.type === 'response_item' && payload.type === 'message' && payload.role === 'user' && userContent(payload.content, 'input_text')))) {
+                  await add(cwd, source, row.timestamp ?? created);
+                  return;
+                }
+              } else if (row.type === 'user' && !row.isMeta && !row.isSidechain && !row.isCompactSummary && !row.agentId
+                && !row.sourceToolAssistantUUID && !row.isSynthetic && object(row.message) && row.message.role === 'user' && userContent(row.message.content, 'text')) {
+                await add(row.cwd, source, row.timestamp);
+                return;
+              }
+            }
+          }
+          if (offset < info.size) result.truncated = true;
+        } catch (error) { if (!missing(error)) warn('部分会话历史无法读取，已跳过'); }
+        finally { await file?.close(); }
+      }
+      async function walkMetadata(root: string, depth: number) {
+        try { if (!await noLinks(root)) { warn('部分项目元数据路径是软链接，未读取'); return; } }
+        catch (error) { if (!missing(error)) warn('部分项目元数据无法读取，已跳过'); return; }
+        for (const entry of await children(root)) {
+          if (exhausted()) { result.truncated = true; break; }
+          if (entry.isSymbolicLink() || skipped.has(entry.name)) continue;
+          const path = join(root, entry.name);
+          if (entry.isDirectory()) {
+            if (source === 'claude' && entry.name === 'subagents') continue;
+            if (depth > 0) await walkMetadata(path, depth - 1);
+            else result.truncated = true;
+          } else if (entry.isFile()) {
+            if (entry.name.endsWith('.jsonl')) await metadata(path);
+          }
         }
       }
+
+      await walkMetadata(root, source === 'codex' ? 3 : 2);
     }
 
     async function available(root: string, explicit: boolean, label: string) {
@@ -290,53 +328,15 @@ export function createProjectDiscovery(options: { home?: string; codexHome?: str
       warn(`${label} 显式配置目录不存在或不可用，未读取项目历史`);
       return false;
     }
-    const codexRoot = await codexHome, claudeRoot = await claudeHome;
-    if (options.claudeHome === undefined) await metadata(join(await canonicalHome, '.claude.json'), 'claude', 'config');
-    if (await available(codexRoot, options.codexHome !== undefined, 'Codex')) await walkMetadata(join(codexRoot, 'sessions'), 'codex', 3);
-    if (await available(claudeRoot, options.claudeHome !== undefined, 'Claude')) {
-      await metadata(join(claudeRoot, 'config.json'), 'claude', 'config');
-      await walkMetadata(join(claudeRoot, 'projects'), 'claude', 2);
-      await walkMetadata(join(claudeRoot, 'sessions'), 'claude', 1);
-    }
+    // Each provider owns a byte, file and time budget. A busy provider cannot
+    // exhaust the other's allowance or force a full transcript scan.
+    if (await available(codexRoot, options.codexHome !== undefined, 'Codex')) await scanProvider('codex', join(codexRoot, 'sessions'));
+    if (await available(claudeRoot, options.claudeHome !== undefined, 'Claude')) await scanProvider('claude', join(claudeRoot, 'projects'));
 
-    // Default inventory comes from CLI project history, not arbitrary nearby repositories.
-    // Git traversal is opt-in through explicit roots or SUPER_MARIO_PROJECT_ROOTS.
-    const envRoots: string[] = [];
-    for (const value of (options.ignoreEnvironmentRoots ? '' : process.env.SUPER_MARIO_PROJECT_ROOTS ?? '').split(delimiter).filter(Boolean)) {
-      try { envRoots.push(absolute(value)); } catch { warn('环境变量包含无效扫描目录，已跳过'); }
-      if (envRoots.length >= limits.roots) { result.truncated = true; break; }
-    }
-    const visited = new Map<string, number>();
-    async function scan(path: string, depth: number) {
-      if (temporary(path) || await inLinkedWorktree(path)) return;
-      if ((visited.get(path) ?? -1) >= depth) return;
-      visited.set(path, depth);
-      try {
-        const git = await lstat(join(path, '.git'));
-        if (git.isFile() || git.isDirectory()) { await add(path, 'git'); return; }
-      } catch (error) { if (!missing(error)) warn('部分项目标记不可访问，已跳过'); }
-      for (const entry of await children(path)) {
-        if (!entry.isDirectory() || entry.isSymbolicLink() || skipped.has(entry.name) || entry.name.startsWith('.')) continue;
-        if (depth > 0) await scan(join(path, entry.name), depth - 1);
-        else result.truncated = true;
-      }
-    }
-    for (const root of [...new Set([...(requested ?? []), ...envRoots])]) {
-      if (result.roots.length >= limits.roots) { result.truncated = true; break; }
-      // A filesystem root is never a recursive discovery root, even if explicitly requested.
-      if (root === parse(root).root) { warn('为避免扫描整盘，已跳过文件系统根目录'); continue; }
-      try {
-        const canonical = (await directory({ cwd: root })).cwd;
-        if (canonical === parse(canonical).root) { warn('为避免扫描整盘，已跳过文件系统根目录'); continue; }
-        if (result.roots.includes(canonical)) continue;
-        result.roots.push(canonical);
-        await scan(canonical, 2);
-      } catch { if (requested?.includes(root) || envRoots.includes(root)) warn('指定扫描目录不存在或不可访问，已跳过'); }
-    }
     result.projects = [...found.values()].sort((a, b) => (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? '') || a.cwd.localeCompare(b.cwd));
     // Plain objects satisfy the transport's JSON boundary without changing shared contracts.
     return { ...result, projects: result.projects.map(project => ({ ...project })) };
   }
   const handlers = { 'workspace.projects': projects, 'workspace.directory': directory, 'workspace.code': workspaceCode } satisfies Record<string, NodeHandler>;
-  return { handlers };
+  return { handlers, nativeDirectoryFilter };
 }

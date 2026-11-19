@@ -38,6 +38,9 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
   const projectList = h('nav', { class: 'proj__list', 'aria-label': '项目列表' });
   const newButton = Button({ label: '从电脑添加 / 发现项目', icon: 'plus', size: 'sm', onClick: () => folders() });
 
+  const removedList = h('div', { class: 'list' });
+  const removed = h('details', { hidden: true }, h('summary', null, '已移除的项目'), removedList);
+
   function itemFor(id, name, snapshot) {
     const open = todos.count(snapshot, id);
     const { problem } = runs.count(snapshot, id);
@@ -49,9 +52,18 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
 
   function paintList(snapshot) {
     const items = [{ id: 'all', name: '全部' }, ...(snapshot.projects ?? []).filter(item => !item.archivedAt)];
-    const signature = JSON.stringify([projectId, tab, items.map(item => [item.id, item.name]), snapshot.todos.map(todo => [todo.id, todo.projectId, !!todo.completedAt]), snapshot.runs.map(run => [run.id, run.status, run.projectId])]);
+    const archived = (snapshot.projects ?? []).filter(item => item.archivedAt);
+    const signature = JSON.stringify([projectId, tab, archived.map(item => [item.id, item.name, item.workspace]), items.map(item => [item.id, item.name]), snapshot.todos.map(todo => [todo.id, todo.projectId, !!todo.completedAt]), snapshot.runs.map(run => [run.id, run.status, run.projectId])]);
     if (signature === lastProjects) return;
     lastProjects = signature;
+    removed.hidden = !archived.length;
+    replace(removedList, archived.map(project => h('div', { class: 'item' },
+      h('div', { class: 'item__main' }, h('strong', null, project.name),
+        project.workspace && h('span', { class: 'folder-path' }, `${project.workspace.machineId} · ${project.workspace.cwd}`)),
+      Button({ label: '重新添加', ariaLabel: `重新添加 ${project.name}`, size: 'sm', onClick: async () => {
+        await api.post(`/projects/${encodeURIComponent(project.id)}/restore`, {});
+        await store.refresh();
+      } }))));
     replace(projectList, items.map(item => itemFor(item.id, item.name, snapshot)));
   }
 
@@ -67,7 +79,7 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
     binding, tabs.el, panelHost);
 
   const empty = h('div', { hidden: true }, Empty({ title: '还没有项目', text: '从电脑发现项目文件夹，添加后持续推进工作。' }));
-  const layout = h('div', { class: 'proj' }, h('aside', { class: 'proj__side' }, h('div', { class: 'row row--between proj__side-head' }, h('strong', null, '项目'), newButton), projectList), detail);
+  const layout = h('div', { class: 'proj' }, h('aside', { class: 'proj__side' }, h('div', { class: 'row row--between proj__side-head' }, h('strong', null, '项目'), newButton), projectList, removed), detail);
 
   const el = h('section', { class: 'page', id: 'projects' },
     h('div', { class: 'page__inner page__inner--wide' },
@@ -112,7 +124,7 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
       ...(isAll ? [] : [{ id: 'workspace', label: '工作区' }]),
       { id: 'todos', label: '待办', count: open || null },
       { id: 'runs', label: '执行', count: problem || active || null, alert: problem > 0 },
-      ...(isAll ? [] : [{ id: 'memory', label: '资料', count: (snapshot.knowledge ?? []).filter(k => k.layer === 'project' && k.projectId === projectId).length || null }, { id: 'settings', label: '跟进' }]),
+      ...(isAll ? [] : [{ id: 'memory', label: '资料', count: (snapshot.knowledge ?? []).filter(k => k.layer === 'project' && k.projectId === projectId).length || null }, { id: 'settings', label: '项目设置' }]),
     ];
     tabs.update(items, tab);
     if (detailHint.dataset.key !== tab) { detailHint.dataset.key = tab; replace(detailHint, HINT_KEYS[tab] ? Hint(HINT_KEYS[tab]) : null); }
@@ -125,7 +137,7 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
     if (!snapshot) return;
     const projects = (snapshot.projects ?? []).filter(item => !item.archivedAt);
     const known = projectId === 'all' || projects.some(item => item.id === projectId);
-    if (!known) { router.go(router.href('projects')); return; }
+    if (!known) { router.go(router.href('projects', 'all', 'todos')); return; }
     paintList(snapshot);
     paintDetail(snapshot);
     if (tab === 'memory') paintMemory(snapshot);

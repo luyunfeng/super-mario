@@ -56,6 +56,8 @@
 
 ## 文档与命名
 
+- 近期修复与尚待验证的问题维护在本地 `Spec/context.md`，同一问题更新原条目。`Spec/` 通过本地 Git 排除规则忽略。开发交接约定见 `docs/code-map.md`。
+
 - 少写文档。长期文档保留代码地图、操作手册和必要的架构说明，不在文档复制接口细节和实现代码。
 - 接口细节以 TypeScript 类型、代码注释和测试为准。更新行为时同步操作手册，不为每个功能另建说明书。
 - 项目名 `super-mario`；包作用域 `@super-mario/*`；插件清单 `super-mario.extension.json`；环境变量前缀 `SUPER_MARIO_`。

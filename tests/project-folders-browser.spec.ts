@@ -47,10 +47,10 @@ async function withFolders(run: (ctx: { page: Page; base: string; first: any; se
       scans.push(route.request().url());
       const id = new URL(route.request().url()).pathname.split('/').at(-2);
       await json(route, { projects: id === 'a' ? [
-        { name: '甲', cwd: '/work/alpha', sources: ['目录扫描'], exists: true },
+        { name: '甲', cwd: '/work/alpha', sources: ['codex'], exists: true },
         { name: '新增', cwd: '/work/new', sources: ['codex', 'git'], exists: true },
         { name: '已移除', cwd: '/work/gone', sources: ['工作历史'], exists: false },
-      ] : [{ name: '乙', cwd: '/work/beta', sources: ['目录扫描'], exists: true }], roots: ['/work'], warnings: ['仅扫描授权目录'], truncated: true });
+      ] : [{ name: '乙', cwd: '/work/beta', sources: ['codex'], exists: true }], homeDir: '/work', roots: ['/work'], warnings: ['部分历史记录无法读取'], truncated: true });
     });
     await page.route('**/api/v1/projects', async route => {
       if (route.request().method() !== 'POST') return route.fallback();
@@ -76,8 +76,12 @@ test('文件夹发现：自动扫描但不导入；显示真实来源、已添�
     await expect(page.locator('.project-binding')).toContainText('电脑甲 · 在线');
     await expect(page.locator('.project-binding')).toContainText('/work/alpha');
     await expect(page.locator('.project-discovered')).toContainText('新增');
+    await expect(page.locator('.project-discovered')).toContainText('结果已截断。找不到目标文件夹时，可在“更多文件夹 / 手动绑定”中输入绝对路径。');
     assert.equal(writes.length,0);assert.ok(scans.some(url=>url.includes('/machines/a/projects')));assert.ok(scans.some(url=>url.includes('/machines/b/projects')));
     await page.getByRole('button', { name: '从电脑添加 / 发现项目' }).click();
+    await expect(page.locator('dialog.drawer')).toContainText('按目录筛选已有会话中的项目文件夹，不遍历目录。');
+    await expect(page.locator('.folder-results')).toContainText('结果已截断。找不到目标文件夹时，可在下方输入绝对路径，手动绑定。');
+    await expect(page.locator('.folder-results')).toContainText('筛选目录：/work');
     await expect(page.locator('[data-cwd="/work/alpha"]')).toContainText('已添加');
     await expect(page.locator('[data-cwd="/work/gone"]')).toContainText('目录不存在');
     await expect(page.locator('[data-cwd="/work/new"]')).toContainText('来源：本机会话历史、代码仓库');
@@ -91,18 +95,18 @@ test('文件夹发现：自动扫描但不导入；显示真实来源、已添�
   });
 });
 
-test('扫描根目录可累加；切电脑不提交草稿；离线与旧电脑不发扫描请求', { timeout: 40000 }, async () => {
+test('筛选目录可累加；切电脑不提交草稿；离线与旧电脑不发扫描请求', { timeout: 40000 }, async () => {
   await withFolders(async ({ page, first, scans, writes, go }) => {
     await go(first.id);
     await page.getByRole('button', { name: '从电脑添加 / 发现项目' }).click();
     await expect(page.locator('.folder-results')).toContainText('/work/new');
     await page.getByRole('textbox', { name: '文件夹', exact: true }).fill('/manual/draft');
-    await page.getByRole('textbox', { name: '扫描根目录', exact: true }).fill('/extra');
-    await page.getByRole('button', { name: '扫描此目录' }).click();
+    await page.getByRole('textbox', { name: '筛选目录', exact: true }).fill('/extra');
+    await page.getByRole('button', { name: '加入目录筛选' }).click();
     await expect.poll(() => scans.some(url=>new URL(url).searchParams.getAll('root').includes('/extra'))).toBe(true);
     assert.deepEqual(new URL(scans.find(url=>new URL(url).searchParams.getAll('root').includes('/extra'))!).searchParams.getAll('root'), ['/work', '/extra']);
-    await page.getByRole('textbox', { name: '扫描根目录', exact: true }).fill('/other');
-    await page.getByRole('button', { name: '扫描此目录' }).click();
+    await page.getByRole('textbox', { name: '筛选目录', exact: true }).fill('/other');
+    await page.getByRole('button', { name: '加入目录筛选' }).click();
     await expect.poll(() => scans.some(url=>new URL(url).searchParams.getAll('root').includes('/other'))).toBe(true);
     assert.deepEqual(new URL(scans.find(url=>new URL(url).searchParams.getAll('root').includes('/other'))!).searchParams.getAll('root'), ['/work', '/extra', '/other']);
     await page.getByLabel('电脑', { exact: true }).selectOption('b');
@@ -174,7 +178,7 @@ test('旧扫描与旧项目响应不污染新选择；unknown 写操作只发送
     });
     await go(first.id);
     await page.getByRole('button', { name: '从电脑添加 / 发现项目' }).click();
-    await expect(page.locator('.folder-results')).toContainText('正在读取项目历史');
+    await expect(page.locator('.folder-results')).toContainText('正在读取会话历史');
     await page.getByLabel('电脑', { exact: true }).selectOption('b');
     await expect(page.locator('.folder-results')).toContainText('/work/beta');
     release();
@@ -266,8 +270,8 @@ test('添加请求结果未知不假报失败、不重放；手动名称草稿�
     await page.getByRole('button', { name: '从电脑添加 / 发现项目' }).click();
     await page.getByLabel('文件夹', { exact: true }).fill('/existing/manual');
     await page.getByLabel('项目名称', { exact: true }).fill('手动名称草稿');
-    await page.getByLabel('扫描根目录', { exact: true }).fill('/extra');
-    await page.getByRole('button', { name: '扫描此目录' }).click();
+    await page.getByLabel('筛选目录', { exact: true }).fill('/extra');
+    await page.getByRole('button', { name: '加入目录筛选' }).click();
     await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue('手动名称草稿');
     await page.getByRole('button', { name: '添加此文件夹' }).click();
     await expect(page.locator('dialog.drawer')).toContainText('添加或绑定结果未知');
@@ -281,7 +285,7 @@ test('完整目录清单：超过八个仍全部显示；隐藏可恢复并跨�
     const longPath = '/work/' + '完整显示的目录名称'.repeat(18);
     await page.route('**/api/v1/machines/*/projects*', route => {
       const id = new URL(route.request().url()).pathname.split('/').at(-2);
-      return json(route, { projects: id === 'a' ? Array.from({ length: 14 }, (_, n) => ({ name: `目录-${n}`, cwd: n === 13 ? longPath : `/work/discovered-${n}`, sources: ['git'], exists: true })) : [], roots: ['/work'], warnings: [], truncated: false });
+      return json(route, { projects: id === 'a' ? Array.from({ length: 14 }, (_, n) => ({ name: `目录-${n}`, cwd: n === 13 ? longPath : `/work/discovered-${n}`, sources: ['git'], exists: true })) : [], homeDir: '/work', roots: ['/work'], warnings: [], truncated: false });
     });
     await go(first.id);
     const list = page.locator('.project-discovered');
@@ -316,3 +320,77 @@ test('完整目录清单：超过八个仍全部显示；隐藏可恢复并跨�
     assert.deepEqual(writes, []); // 筛选、隐藏和恢复均没有项目写入。
   });
 });
+
+test('按电脑展开用户目录，搜索展开匹配路径，刷新保留展开状态', { timeout: 40000 }, async () => {
+  await withFolders(async ({ page, first, writes, go, json }) => {
+    let scans = 0;
+    await page.route('**/api/v1/machines/*/projects*', route => {
+      scans++;
+      const legacy = route.request().url().includes('/machines/b/');
+      return json(route, {
+        homeDir: legacy ? undefined : '/home/me',
+        projects: ['/home/me/code/group/repo', '/home/mee/external'].map(cwd => ({
+          cwd, name: cwd.split('/').at(-1), exists: true, sources: ['git'],
+        })),
+      });
+    });
+    await go(first.id);
+    const list = page.locator('.project-discovered');
+    const a = list.getByRole('region', { name: '电脑甲' }), b = list.getByRole('region', { name: '电脑乙' });
+    await expect(a.getByRole('button', { name: '收起 /home/me', exact: true })).toBeVisible();
+    await expect(b.getByRole('button', { name: '展开 /home', exact: true })).toBeVisible();
+    await expect(a.getByRole('button', { name: '添加 repo' })).toHaveCount(0);
+    await a.getByRole('button', { name: '展开 /home/me/code', exact: true }).click();
+    await a.getByRole('button', { name: '展开 /home/me/code/group', exact: true }).click();
+    await expect(a.getByRole('button', { name: '添加 repo' })).toBeVisible();
+    await expect(b.getByRole('button', { name: '添加 repo' })).toHaveCount(0);
+    await expect(a.getByRole('button', { name: '添加 code' })).toHaveCount(0);
+    const before = scans;
+    await list.getByRole('button', { name: '刷新目录' }).click();
+    await expect.poll(() => scans).toBeGreaterThan(before);
+    await list.getByRole('searchbox').fill('external');
+    await expect(a.getByRole('button', { name: '添加 external' })).toBeVisible();
+    await expect(b.getByRole('button', { name: '添加 external' })).toBeVisible();
+    await list.getByRole('searchbox').fill('');
+    await expect(a.getByRole('button', { name: '添加 repo' })).toBeVisible();
+    assert.deepEqual(writes, []);
+  });
+});
+
+for (const entry of ['目录树', '更多文件夹']) {
+  test(`${entry}遇到已归档目录时由用户明确恢复原项目`, { timeout: 40000 }, async () => {
+    await withFolders(async ({ page, base, old, first, go, json }) => {
+      const endpoint = `${base}/api/v1/projects/${old.id}`;
+      const archived = await (await fetch(endpoint, { method: 'DELETE' })).json();
+      assert.ok(archived.archivedAt);
+      let adds = 0, restores = 0;
+      await page.route('**/api/v1/projects', async route => {
+        if (route.request().method() !== 'POST') return route.fallback();
+        adds++;
+        await json(route, { ...archived, workspace: route.request().postDataJSON().workspace }, 201);
+      });
+      page.on('request', request => {
+        if (request.method() === 'POST' && request.url() === endpoint + '/restore') restores++;
+      });
+      await go(first.id);
+      const list = page.locator('.project-discovered');
+      if (entry === '目录树') await list.getByRole('button', { name: '添加 新增', exact: true }).click();
+      else {
+        await list.getByRole('button', { name: '更多文件夹 / 手动绑定' }).click();
+        await page.locator('[data-cwd="/work/new"]').getByRole('button', { name: '添加', exact: true }).click();
+      }
+      const surface = entry === '目录树' ? list : page.locator('dialog.drawer');
+      const restore = surface.getByRole('button', { name: /^恢复项目/ });
+      await expect(restore).toBeVisible();
+      assert.equal(restores, 0);
+      await restore.click();
+      await expect(page.locator('.proj__title')).toHaveText(old.name);
+      await expect(page).toHaveURL(new RegExp(old.id + '/workspace$'));
+      assert.equal(adds, 1);
+      assert.equal(restores, 1);
+      const projects = await (await fetch(base + '/api/v1/projects')).json();
+      const original = projects.find((project: { id: string }) => project.id === old.id);
+      assert.ok(original && !original.archivedAt);
+    });
+  });
+}

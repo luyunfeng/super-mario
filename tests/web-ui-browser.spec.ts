@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium, expect, type Browser, type Page } from '@playwright/test';
@@ -35,7 +35,7 @@ async function withApp(run: (ctx: { server: Server; browser: Browser; open: (has
   finally { await browser.close(); await server.close(); await rm(dir, { recursive: true, force: true }); }
 }
 
-test('外壳：八个入口都有作用文字，没有“刷新”按钮，各页面零报错', { timeout: 60000 }, async () => {
+test('外壳：八个入口都有作用文字，仅项目目录可刷新，各页面零报错', { timeout: 60000 }, async () => {
   await withApp(async ({ open }) => {
     const { page, errors } = await open('#chat');
     const items = page.locator('.nav__item');
@@ -46,7 +46,10 @@ test('外壳：八个入口都有作用文字，没有“刷新”按钮，各�
       await page.goto(page.url().split('#')[0] + '#' + hash);
       await expect(page.locator(`#${hash}`)).toBeVisible();
       await expect(page.locator(`#${hash} .hint__btn`).first()).toBeVisible();
-      assert.equal(await page.getByRole('button', { name: /刷新/ }).count(), 0, `${hash} 页不应有刷新按钮`);
+      if (hash === 'projects') {
+        await expect(page.locator('#projects .project-discovered').getByRole('button', { name: '刷新目录', exact: true })).toBeVisible();
+      }
+      await expect(page.getByRole('button', { name: /刷新/ })).toHaveCount(hash === 'projects' ? 1 : 0);
     }
     assert.deepEqual(errors, []);
   });
@@ -181,19 +184,33 @@ test('待办：行内添加、完成、快捷键 c；执行详情有时间线/�
 test('项目：自动发现电脑文件夹，点击才导入，默认工作区并保留顶栏联动', { timeout: 40000 }, async () => {
   await withApp(async ({ open,server }) => {
     const home=await mkdtemp(join(tmpdir(),'mario-project-workspace-ui-'));
-    const folder=join(home,'官网改版');await mkdir(join(folder,'.git'),{recursive:true});
-    const discovery=createProjectDiscovery({home,cwd:folder,temporaryRoots:[],roots:[home]});
+    const parent = join(home, '工作');
+    const folder = join(parent, '官网改版');
+    const sessions = join(home, '.codex', 'sessions', '2026', '11', '19');
+    await mkdir(folder, { recursive: true });
+    await mkdir(sessions, { recursive: true });
+    const id = '59e69fb0-2657-40d3-a952-c434020524bd';
+    const timestamp = '2026-11-19T10:00:00.000Z';
+    await writeFile(join(sessions, `rollout-2026-11-19T10-00-00-${id}.jsonl`), [
+      { type: 'session_meta', timestamp, payload: { id, cwd: folder, source: 'cli', timestamp } },
+      { type: 'event_msg', timestamp, payload: { type: 'user_message', message: '查看官网改版进度' } },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+    const discovery = createProjectDiscovery({ home, cwd: folder, temporaryRoots: [], ignoreEnvironmentRoots: true });
     const node=startAgentNode({url:server.url,token:'folder-ui-token',machineId:'folder-ui',name:'项目电脑',dataDir:join(home,'node'),handlers:discovery.handlers});
     try {
       await expect.poll(()=>server.machines.list().some(machine=>machine.online)).toBe(true);
       const {page}=await open('#projects');
-      await expect(page.locator('.project-discovered')).toContainText('官网改版');assert.equal(server.app.projects.list().length,0);
-      await page.locator('.project-discovered').getByRole('button',{name:'官网改版',exact:true}).click();
+      const candidates = page.locator('.project-discovered').getByRole('region', { name: '项目电脑' });
+      await candidates.getByRole('button', { name: `展开 ${parent}`, exact: true }).click();
+      const add = candidates.getByRole('button', { name: '添加 官网改版', exact: true });
+      await expect(add).toBeVisible();
+      assert.equal(server.app.projects.list().length, 0);
+      await add.click();
       await expect(page.locator('.proj__title')).toHaveText('官网改版');
       await expect(page.locator('[data-tab=workspace]')).toHaveAttribute('aria-selected','true');
       await expect(page.locator('.project-binding')).toContainText(folder);
       assert.deepEqual(server.app.projects.list()[0]?.workspace,{machineId:'folder-ui',cwd:folder});
-      assert.deepEqual(await page.locator('.proj__detail [role=tab]').allInnerTexts().then(list=>list.map(text=>text.replace(/\s+\d+$/,''))),['工作区','待办','执行','资料','跟进']);
+      assert.deepEqual(await page.locator('.proj__detail [role=tab]').allInnerTexts().then(list=>list.map(text=>text.replace(/\s+\d+$/,''))),['工作区','待办','执行','资料','项目设置']);
       await page.locator('[data-tab=settings]').click();await expect(page.locator('#panel-settings')).toContainText('怎么跟进');
       await expect(page.locator('#scope-select option:checked')).toHaveText('官网改版');
       await page.locator('#scope-select').selectOption('');await expect(page.locator('.proj__title')).toHaveText('全部项目');

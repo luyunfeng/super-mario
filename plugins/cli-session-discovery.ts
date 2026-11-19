@@ -214,15 +214,12 @@ export function createCliSessionDiscovery(options: Options = {}) {
     only(params, ['roots']);
     const requested = params.roots === undefined ? configuredRoots : rootsList(params.roots);
     const { result, found } = await scan();
-    // The shared filter reads history only here; opt-in code roots belong to project browsing.
-    // Reuse the established temporary/Git-worktree filter for every automatic scope.
-    const candidates = await projects.handlers['workspace.projects']({});
-    const authorized = new Set(candidates.projects.filter(project => project.exists).map(project => project.cwd));
-    // Project discovery may fail to parse a large pretty header that this scanner
-    // decoded. Its partial scan only affects this inventory if a session lacks a candidate.
-    result.truncated ||= candidates.truncated && [...found.values()].some(session => !authorized.has(session.cwd));
-    for (const warning of candidates.warnings) if (!result.warnings.includes(warning)) {
-      if (result.warnings.length < limits.warnings) result.warnings.push(warning); else result.truncated = true;
+    const allowed = projects.nativeDirectoryFilter(message => {
+      if (!result.warnings.includes(message) && result.warnings.length < limits.warnings) result.warnings.push(message);
+    });
+    const authorized = new Set<string>();
+    for (const cwd of new Set([...found.values()].map(session => session.cwd))) {
+      if (await allowed(cwd)) authorized.add(cwd);
     }
     if (requested) for (const raw of requested) {
       try {
