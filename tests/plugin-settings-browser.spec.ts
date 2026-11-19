@@ -16,7 +16,9 @@ test('从插件配置固定入口，刷新、停用与恢复，并从窄屏打�
   const dialog = page.getByRole('dialog', { name: '插件配置' });
   const plugin = dialog.locator('section').filter({ has: page.getByRole('button', { name: '主机器人配置' }) });
   const pin = page.getByRole('navigation', { name: '已固定的插件功能' }).getByRole('link', { name: '主机器人配置' });
-  await settings.click();
+  await page.goto(server.url + '/#agent');
+  await page.locator('#agent-advanced > summary').click();
+  await page.getByRole('button', { name: '打开插件配置' }).click();
   await plugin.getByRole('checkbox').check();
   await dialog.getByRole('button', { name: '关闭' }).click();
   await pin.click();

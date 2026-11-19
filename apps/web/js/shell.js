@@ -73,7 +73,7 @@ export function createShell({ api, store, router, scope }) {
   const root = h('div', { class: 'app', id: 'workspace' }, sidebar, mainCol);
 
   return {
-    root, view, searchInput, results,
+    root, view, searchInput, results, openPluginSettings: pluginSettings.open,
     setActive(page) {
       for (const [key, { el }] of Object.entries(navItems)) {
         if (key === page) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current');

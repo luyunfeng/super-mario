@@ -53,7 +53,7 @@ async function fixture(body: (f: any) => Promise<void>, noScope = false) {
       const api = createApi(), scope = createScope(); scope.set('a');
       const snapshot = { agent: { available: true }, projects: [{ id: 'a', name: '项目甲' }, { id: 'b', name: '项目乙' }], todos: [{ id: 'todo-a', title: '甲待办', projectId: 'a' }, { id: 'todo-b', title: '乙待办', projectId: 'b' }], machines: [], executors: [{ id: 'real-cli', name: '实际 CLI', available: true }, { id: 'offline-cli', name: '离线 CLI', available: false, reason: '电脑离线' }], plugins: [], runs: [], knowledge: [] };
       const store = { view: { snapshot, connection: 'online', unauthorized: false }, refresh() {} };
-      const component = createAgentPage({ api, store, ...(noScope ? {} : { scope }), router: { current: { page: 'agent' }, subscribe() {} }, consoleDrawer: {} });
+      const component = createAgentPage({ api, store, ...(noScope ? {} : { scope }), router: { href: (...parts: string[]) => '#' + parts.map(encodeURIComponent).join('/'), current: { page: 'agent' }, subscribe() {} }, consoleDrawer: {} });
       document.body.replaceChildren(component.el); component.el.classList.add('is-active');
       (window as any).scheduledTest = { api, store, scope, component, emit() { store.view.snapshot = { ...store.view.snapshot }; component.onState(store.view); } };
       component.onState(store.view); component.onShow({ parts: [] });

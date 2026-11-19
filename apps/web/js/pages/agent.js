@@ -12,7 +12,7 @@ import { createScheduledWorkCard } from '../features/scheduled-work.js';
 
 const MODE_NAMES = { api: '模型 API', 'codex-cli': 'Codex 命令行' };
 
-export function createAgentPage({ api, store, router, consoleDrawer, scope }) {
+export function createAgentPage({ api, store, router, consoleDrawer, scope, shell }) {
   let model = null;
   let modelError = '';
   let modelSeq = 0;
@@ -92,7 +92,7 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope }) {
   const policy = createPolicyCard({ api, store });
   const followUp = createFollowUpCard({ api, store });
   const scheduledWork = createScheduledWorkCard({ api, store, scope });
-  const advanced = createAdvanced({ api, store, router });
+  const advanced = createAdvanced({ api, store, router, openPluginSettings: shell?.openPluginSettings });
 
   const el = h('section', { class: 'page', id: 'agent' },
     h('div', { class: 'page__inner' },

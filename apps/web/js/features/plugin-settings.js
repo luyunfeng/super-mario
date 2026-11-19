@@ -67,11 +67,13 @@ export function createPluginSettings({ api, store, router }) {
           } }), ' 固定到侧边栏'))));
     }, plugin => JSON.stringify([plugin, features(plugin).map(item => pins.has(item.key))]));
   }
-  const footer = h('footer', { class: 'plugin-footer' }, Button({ label: '插件配置', size: 'sm', onClick: () => {
+  function open() {
+    if (drawer?.el.open) return;
     drawer = openDrawer({ title: '插件配置', subtitle: '启停影响整个工作台。侧边栏布局仅保存在此浏览器。', body: [shortcuts, list], onClose: () => { drawer = undefined; } });
     paint();
-  } }));
+  }
+  const footer = h('footer', { class: 'plugin-footer' }, Button({ label: '插件配置', size: 'sm', onClick: open }));
   store.subscribe(paint);
   paint();
-  return { nav, footer };
+  return { nav, footer, open };
 }
