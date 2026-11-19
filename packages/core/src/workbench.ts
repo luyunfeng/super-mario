@@ -1,4 +1,5 @@
 import { excludesPersonalGroupFromBrief } from '../../protocol/src/inbox-origin.ts';
+import { createCommandProjectRouter } from './agent-runtime/command-project-router.ts';
 import { createInboxClassifier } from './agent-runtime/inbox-classifier.ts';
 import { createInboxHandlingRuntime } from './agent-runtime/inbox-handling.ts';
 import { createInboxHandling, inboxHandlingApprovalKind } from './inbox-handling.ts';
@@ -150,6 +151,7 @@ export async function createWorkbench(config: AppConfig) {
   const controllers = new Map<string, AbortController>();
   const jobs = new Set<Promise<void>>();
   let closing = false;
+  const commandRouter = createCommandProjectRouter(config, () => !closing && inboxClassifier.status().available);
   const approvals = createApprovalService({ store, events, execute: executeApproved, publish: background.publish, allowedKinds: () => contributions.list('channels').flatMap(entry => entry.value.approvalKinds ?? []) });
   const inboxHandlingSources = createInboxHandlingSources({store,personalAccount:()=>knowledgeAccount(),mailboxAccess:entry=>mailboxHandlingAccess(entry)});
   const inboxHandling = createInboxHandling({store,events,
@@ -817,7 +819,7 @@ export async function createWorkbench(config: AppConfig) {
     return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
   }
   return {
-    modelStatus, agentSessions, runObservations, scheduledWork, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    routeCommandProject: commandRouter.route, modelStatus, agentSessions, runObservations, scheduledWork, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {
@@ -865,6 +867,7 @@ export async function createWorkbench(config: AppConfig) {
       if (!scopedAgents.tryLockConfiguration()) throw new InputError('项目或事项 Agent 正在处理对话，请稍后保存模型配置', 409);
       agent.lockConfiguration(); supervisorRuntime.lockConfiguration(); inboxClassifier.lockConfiguration(); inboxHandlingRuntime.lockConfiguration();
       try {
+        commandRouter.cancel();
         await Promise.all([inboxClassifier.abortCurrent(),inboxHandlingRuntime.abortCurrent()]);
         modelConfig.write(input);
         await Promise.all([agent.reloadConfiguration(), supervisorRuntime.reloadConfiguration(), scopedAgents.reloadConfiguration()]);
@@ -894,6 +897,7 @@ export async function createWorkbench(config: AppConfig) {
     async close() {
       if (closing) return;
       closing = true;
+      commandRouter.cancel();
       await wiredBackground.close(); projectFollowUp.close();
       supervision.close(); plans.close(); clearInterval(expireTimer); await awayNotifications.close();
       await knowledgeCurator.close();
