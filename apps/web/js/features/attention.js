@@ -17,14 +17,18 @@ export function createAttention({ api, store }) {
   const list = h('div', { class: 'attn__list' });
   const more = h('button', { class: 'btn btn--ghost btn--sm', type: 'button' });
   const foldBtn = h('button', { class: 'btn btn--ghost btn--sm', type: 'button' }, '最小化');
+  const nextBtn = h('button', { class: 'btn btn--ghost btn--sm', type: 'button' }, '下一件');
   const title = h('h2', { id: 'attention-title' }, '等你处理');
   const count = h('span', { class: 'pill pill--danger', id: 'attention-count' });
   const root = h('section', { class: 'attn card', id: 'attention', 'aria-labelledby': 'attention-title', 'aria-live': 'polite', hidden: true },
-    h('header', { class: 'attn__head' }, title, count, h('span', { class: 'grow' }), more, foldBtn),
+    h('header', { class: 'attn__head' }, title, count, h('span', { class: 'grow' }), nextBtn, more, foldBtn),
     list);
   let expanded = false;
   let minimized = false;
   let items = [];
+  let currentId;
+  // Keep each unchanged card's DOM while paging; an unfinished answer is a draft.
+  const cards = new Map();
   // 一屏放不下很多卡片：窄屏默认只显示 1 条，桌面 2 条，其余收在“还有 N 件”里。
   const limit = () => (matchMedia('(max-width: 767px)').matches ? 1 : 2);
 
@@ -73,7 +77,7 @@ export function createAttention({ api, store }) {
     return { text: '已接收，等待结果' };
   }
 
-  function renderCard(item) {
+  function createCard(item) {
     const type = TYPES[item.type] ?? { text: '待处理', tone: '' };
     const note = h('p', { class: 'small', role: 'status' });
     const actions = h('div', { class: 'attn__actions' });
@@ -118,7 +122,7 @@ export function createAttention({ api, store }) {
 
     const detail = item.detail && h('details', { class: 'attn__detail' }, h('summary', null, '详情'), h('pre', null, item.detail));
     const context = [item.context, item.projectName && `项目：${item.projectName}`, item.source && `来自：${item.source}`].filter(Boolean).join(' · ');
-    return h('article', { class: `attn__card ${item.highRisk ? 'is-risk' : ''}`, dataset: { type: item.type, id: item.id } },
+    return h('article', { class: `attn__card ${item.highRisk ? 'is-risk' : ''}`, tabindex: -1, dataset: { type: item.type, id: item.id } },
       h('header', { class: 'attn__top' },
         Pill(type.text, type.tone), item.highRisk && Pill('高风险', 'danger'),
         h('h3', { class: 'attn__title' }, item.title), h('span', { class: 'attn__time muted small' }, timeAgo(item.createdAt))),
@@ -129,8 +133,25 @@ export function createAttention({ api, store }) {
       item.route && h('a', { class: 'small', href: item.route.href }, item.route.label));
   }
 
+  function renderCard(item) {
+    const signature = JSON.stringify(item), previous = cards.get(item.id);
+    if (previous?.signature === signature) return previous.node;
+    const node = createCard(item);
+    cards.set(item.id, { signature, node });
+    return node;
+  }
+
   more.addEventListener('click', () => { expanded = !expanded; paint(); });
   foldBtn.addEventListener('click', () => { minimized = !minimized; paint(); });
+  nextBtn.addEventListener('click', () => {
+    if (!items.length) return;
+    currentId = items[(items.findIndex(item => item.id === currentId) + 1) % items.length].id;
+    minimized = false;
+    paint();
+    const target = [...list.children].find(node => node.dataset.id === currentId);
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+  });
 
   function paint() {
     root.hidden = items.length === 0;
@@ -139,15 +160,23 @@ export function createAttention({ api, store }) {
     list.hidden = minimized;
     foldBtn.textContent = minimized ? '展开处理' : '最小化';
     foldBtn.setAttribute('aria-expanded', String(!minimized));
-    const visible = expanded ? items : items.slice(0, limit());
+    const selected = Math.max(0, items.findIndex(item => item.id === currentId));
+    const offset = Math.floor(selected / limit()) * limit();
+    const visible = expanded ? items : items.slice(offset, offset + limit());
     keyedList(list, visible, item => item.id, renderCard, item => `${item.id}:${item.version}:${item.title}:${item.detail?.length}`);
     more.hidden = minimized || items.length <= limit();
     more.textContent = expanded ? '收起' : `还有 ${items.length - limit()} 件`;
+    nextBtn.setAttribute('aria-label', `下一件待处理，共 ${items.length} 件`);
   }
 
   return {
     el: root,
-    update(next) { items = next; paint(); },
+    update(next) {
+      items = next;
+      const ids = new Set(items.map(item => item.id));
+      for (const id of cards.keys()) if (!ids.has(id)) cards.delete(id);
+      paint();
+    },
     expand() { expanded = true; minimized = false; paint(); },
   };
 }

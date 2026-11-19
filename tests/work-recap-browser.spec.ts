@@ -1,0 +1,93 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { chromium, expect, type Page } from '@playwright/test';
+import { startServer } from '../apps/server/src/index.ts';
+import type { Run } from '../packages/protocol/src/index.ts';
+
+async function fixture(t: test.TestContext) {
+  const dir=await mkdtemp(join(tmpdir(),'mario-work-recap-'));
+  const server=await startServer({host:'127.0.0.1',port:0,dataDir:dir,demo:true,token:'recap-fixture'});
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  const page=await browser.newPage({viewport:{width:1440,height:1000}});page.setDefaultTimeout(7000);
+  const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  t.after(async()=>{await browser.close();await server.close();await rm(dir,{recursive:true,force:true});assert.deepEqual(errors,[]);});
+  const api=async(path:string)=>fetch(server.url+'/api/v1'+path,{headers:{Authorization:'Bearer recap-fixture'}});
+  const open=async(hash='chat')=>{await page.goto(server.url+`/#${hash}?token=recap-fixture`);await expect(page.locator('#message-text')).toBeVisible();};
+  return{server,page,api,open};
+}
+
+test('recent completion remains after viewing, follows project scope and opens actual todo execution rounds', {timeout:45000},async t=>{
+ const {server,page,api,open}=await fixture(t);
+ const project=server.app.projects.create({name:'验收项目'}),other=server.app.projects.create({name:'另一个项目'});
+ const todo=server.app.createTodo({title:'已验收的工作',projectId:project.id});server.app.updateTodo(todo.id,{completed:true});
+ const foreign=server.app.createTodo({title:'其他项目的工作',projectId:other.id});server.app.updateTodo(foreign.id,{completed:true});
+ const now=new Date().toISOString();
+ const run:Run={id:'recap-result',todoId:todo.id,projectId:project.id,executorId:'demo',conversationId:'main',prompt:'隔离执行结果',output:'受控执行结果，不是真实模型',resultSource:'demo',status:'completed',createdAt:now,updatedAt:now};
+ server.app.store.put('runs',run.id,run);
+ server.app.store.put('runs','uncertain',{...run,id:'uncertain',status:'unknown',prompt:'结果未知不能当完成'});
+ await open();await page.getByRole('button',{name:'最近完成 3',exact:true}).click();
+ let drawer=page.getByRole('dialog',{name:'最近完成',exact:true});
+ await expect(drawer).toContainText('待办完成 2 项 · 执行结束 1 次');await expect(drawer).not.toContainText('结果未知不能当完成');
+ await drawer.getByRole('button',{name:'关闭',exact:true}).click();
+ await page.locator('#message-form').getByLabel('项目范围',{exact:true}).selectOption(project.id);
+ await page.getByRole('button',{name:'最近完成 2',exact:true}).click();drawer=page.getByRole('dialog',{name:'最近完成',exact:true});
+ await expect(drawer).not.toContainText('其他项目的工作');
+ await drawer.getByRole('link',{name:'隔离执行结果',exact:true}).click();
+ await expect(page).toHaveURL(/runs\/recap-result/);
+ await page.goto(server.url+'/#chat');await page.getByRole('button',{name:'最近完成 2',exact:true}).click();
+ drawer=page.getByRole('dialog',{name:'最近完成',exact:true});await expect(drawer.getByRole('link',{name:'隔离执行结果',exact:true})).toBeVisible();
+ await drawer.getByRole('button',{name:'已验收的工作',exact:true}).click();
+ const history=page.getByRole('dialog',{name:'执行历史',exact:true});await expect(history).toContainText('共 2 轮 · 待办已确认完成');
+ await expect(history).toContainText('结果未知');await history.getByText('查看本轮结果',{exact:true}).first().click();
+ await expect(history).toContainText('受控执行结果');
+ await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ assert.equal((await fetch(server.url+`/api/v1/todos/${todo.id}/history`)).status,401);
+ assert.equal((await api('/todos/missing/history')).status,404);
+ assert.equal((await api(`/todos/${todo.id}/history?before=foreign`)).status,400);
+ assert.equal(server.app.todos().find(x=>x.id===todo.id)?.completedAt!==undefined,true);
+});
+
+test('next attention cycles and wraps without submitting, preserves drafts, handles removed cards and minimized mobile', {timeout:45000},async t=>{
+ const {server,page,open}=await fixture(t);const now=new Date().toISOString();
+ for(let i=1;i<=3;i++) server.app.store.put('interactions','q'+i,{id:'q'+i,version:1,kind:'question',title:'待回答问题'+i,body:'受控问题',status:'open',handler:'user',layer:'default',expiresAt:'2099-01-01T00:00:00Z',createdAt:now,updatedAt:now});
+ const writes:string[]=[];page.on('request',r=>{if(r.method()!=='GET'&&/\/(answer|approve|confirm|reject)(?:\?|$)/.test(r.url()))writes.push(r.url());});
+ await open();const next=page.getByRole('button',{name:'下一件待处理，共 3 件',exact:true});
+ const active=()=>page.evaluate(()=>document.activeElement?.getAttribute('data-id'));
+ await next.click();assert.equal(await active(),'interaction:q1');
+ await page.getByLabel('回答：待回答问题1',{exact:true}).fill('保留未发出的回答');
+ await next.click();assert.equal(await active(),'interaction:q2');
+ await next.click();assert.equal(await active(),'interaction:q3');
+ await next.click();assert.equal(await active(),'interaction:q1');
+ await expect(page.getByLabel('回答：待回答问题1',{exact:true})).toHaveValue('保留未发出的回答');
+ await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'最小化',exact:true}).click();
+ await next.click();assert.equal(await active(),'interaction:q2');await expect(page.getByLabel('回答：待回答问题2',{exact:true})).toBeVisible();
+ server.app.store.remove('interactions','q2');server.app.events.publish('interactions.changed',{});
+ await expect(page.getByRole('button',{name:'下一件待处理，共 2 件',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'下一件待处理，共 2 件',exact:true}).click();assert.equal(await active(),'interaction:q1');
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.deepEqual(writes,[]);
+ for(const id of ['q1','q3'])server.app.store.remove('interactions',id);server.app.events.publish('interactions.changed',{});
+ await expect(page.locator('#attention')).toBeHidden();
+});
+
+test('history closing invalidates late reads and failed reads expose a retry without business writes', {timeout:45000},async t=>{
+ const {server,page,open}=await fixture(t);
+ const todo=server.app.createTodo({title:'历史读取边界'});
+ await open();await page.goto(server.url+'/#projects/all/todos');
+ let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve);let slow=true;
+ await page.route('**/api/v1/todos/*/history',async route=>{
+   if(slow){await gate;await route.fulfill({json:{todo:{id:todo.id,title:todo.title},total:0,rounds:[]}});}
+   else await route.fulfill({status:503,json:{error:'隔离读取失败'}});
+ });
+ await page.getByRole('button',{name:'执行历史',exact:true}).click();
+ let dialog=page.getByRole('dialog',{name:'执行历史',exact:true});await expect(dialog).toContainText('正在读取');
+ await dialog.getByRole('button',{name:'关闭',exact:true}).click();slow=false;
+ await page.getByRole('button',{name:'执行历史',exact:true}).click();dialog=page.getByRole('dialog',{name:'执行历史',exact:true});
+ await expect(dialog).toContainText('读取失败');release();
+ await expect(dialog).toContainText('隔离读取失败');await expect(dialog).not.toContainText('还没有关联执行记录');
+ await page.unroute('**/api/v1/todos/*/history');await dialog.getByRole('button',{name:'重新读取历史',exact:true}).click();
+ await expect(dialog).toContainText('还没有关联执行记录');assert.equal(server.app.store.list('runs').length,0);
+});

@@ -7,6 +7,7 @@ import { Button, Banner, Card, Pill } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
 import { createAttention } from '../features/attention.js';
 import { createCodeSidebar } from '../features/code-sidebar.js';
+import { createRecentWork } from '../features/recent-work.js';
 import { systemText } from '../copy/terms.js';
 
 const EXAMPLES = ['梳理本周待办，给我下一步建议', '检查正在执行的任务进展', '把官网首页的报错修一下'];
@@ -21,6 +22,7 @@ const SETUP_STEPS = [
 export function createChatPage({ api, store, scope, router }) {
   const attention = createAttention({ api, store });
   const code = createCodeSidebar({ api, store });
+  const recent = createRecentWork({ api, store, router, scope });
   const banner = h('div', { id: 'chat-banner' });
   const setup = h('div', { id: 'onboarding' });
   const runStrip = h('div', { id: 'run-strip', hidden: true });
@@ -35,7 +37,7 @@ export function createChatPage({ api, store, scope, router }) {
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '对话'), h('p', { class: 'page__sub' }, hintCopy('nav.chat').tag)),
         h('div', { class: 'page__actions' }, code.toggle, Hint('nav.chat'))),
-      banner, attention.el, setup, runStrip));
+      banner, attention.el, setup, runStrip, recent.el));
   const scroller = h('div', { class: 'chat__scroll', id: 'chat-scroll' }, h('div', { class: 'chat__inner' }, messages, hero));
 
   // —— 输入框 ——
@@ -147,13 +149,14 @@ export function createChatPage({ api, store, scope, router }) {
 
   return {
     el,
-    onShow() { requestAnimationFrame(() => { scrollToEnd(true); }); },
+    onShow() { recent.refresh(); requestAnimationFrame(() => { scrollToEnd(true); }); },
     focus() { input.focus(); },
     onState({ snapshot: state, attention: items }) {
       snapshot = state;
       code.show(scope.get());
       attention.update(items);
       renderBanner(state); renderSetup(state); renderRuns(state);
+      recent.update(state);
       const list = state.messages ?? [];
       const follow = nearBottom();
       keyedList(messages, list, item => item.id, renderMessage, item => `${item.id}:${item.status}:${item.text}`);

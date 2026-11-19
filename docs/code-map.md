@@ -128,3 +128,5 @@
 周期模型参数：`plugins/index.ts` 的 `scheduled_work_propose` 声明严格嵌套Schema，仅适配参数；`scheduled-work-service.ts` 仍核对当前用户，`scheduled-work.ts` 仍协调创建审批和到期调度。实际注册工具与core透传回归在 `tests/scheduled-work-tool-schema.test.ts`。
 
 审批动作与单任务策略参数：`plugins/tool-parameters.ts` 只描述模型可见JSON Schema，由 `plugins/index.ts` 注册。`approvals.ts`、`plans.ts` 与 `policies.ts` 仍是原事实和校验来源；`tests/action-policy-tool-schema.test.ts` 通过实际SDK及原工具验证不提前执行。
+
+回看与轮次：`features/recent-work.js` 从快照派生近 24 小时结果，已读不参与筛选；`todo-history.ts` 只投影当前 Todo 同项目的 Run 与原验收意图，通过稳定游标分页。`features/todo-history.js` 负责抽屉、迟到读取隔离与原记录导航；`attention.js` 以未变卡片 DOM 缓存保留翻页草稿。

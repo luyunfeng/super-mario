@@ -340,6 +340,8 @@ export async function startServer(config: AppConfig, dependencies: { botFactory?
         if (path === '/api/v1/effects' && method === 'GET') return json(res, 200, app.effects.list());
         if (path === '/api/v1/task-closure/settings' && method === 'GET') return json(res, 200, app.taskClosure.settings());
         if (path === '/api/v1/task-closure/settings' && method === 'PUT') return json(res, 200, app.taskClosure.configureSettings(await body(req)));
+        const todoHistory = path.match(/^\/api\/v1\/todos\/([^/]+)\/history$/);
+        if (todoHistory && method === 'GET') return json(res, 200, app.taskClosure.history(decodeURIComponent(todoHistory[1]!), url.searchParams.get('before') ?? undefined));
         const closure = path.match(/^\/api\/v1\/todos\/([^/]+)\/(closure|reporting|report|review|review\/decide)$/);
         if (closure) {
           const todoId = decodeURIComponent(closure[1]!);

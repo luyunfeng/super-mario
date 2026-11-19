@@ -325,7 +325,7 @@ body:has(.splash-background) #root { position: relative; }
 
 /* Keep navigation controls usable when pending cards wrap on a narrow screen. */
 .attn__head { flex-wrap: wrap; }
-.attn__card:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+.attn__card:focus { outline: 2px solid var(--brand); outline-offset: -2px; }
 .recent-work-entry { padding: 4px 0 8px; }
 .recent-work-entry .btn { max-width: 100%; }
 [data-todo-history] .card__body { overflow-wrap: anywhere; }

@@ -16,6 +16,7 @@ import { createWorkDecisionService } from './work-decision-service.ts';
 import { createAgentSessions, nativeResumeSpec, nativeResultSources } from './agent-sessions.ts';
 import { executionProgress } from './execution-progress.ts';
 import { createTodoReporting } from './todo-reporting.ts';
+import { readTodoHistory } from './todo-history.ts';
 import { createRunReview } from './run-review.ts';
 import { createProjectFollowUp } from './project-follow-up.ts';
 import { applyPolicyPreset } from './policy-presets.ts';
@@ -820,6 +821,7 @@ export async function createWorkbench(config: AppConfig) {
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {
+      history: (id: string, before?: string) => readTodoHistory(store, id, before),
       reporting, review: runReview, settings: reviewSettings,
       state(id: string) {
         const state = reporting.get(id), todo = store.get<Todo>('todos', id)!;
