@@ -43,6 +43,29 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope }) {
       : '正在读取…';
   }
 
+  const botStatus = h('div', { class: 'stack', role: 'status' });
+  const botCard = Card({
+    title: '主 Agent 的飞书机器人', id: 'agent-bot',
+    tools: h('a', { class: 'btn btn--sm', href: router.href('channels', 'main-bot') }, '配置机器人'),
+    body: botStatus,
+  });
+  let botRequest = 0;
+  async function loadBots() {
+    const stamp = ++botRequest;
+    try {
+      const bots = (await api.get('/feishu/bots')).filter(bot => bot.scope?.kind === 'global');
+      if (stamp !== botRequest) return;
+      replace(botStatus, bots.length ? bots.map(bot => h('div', { class: 'row row--wrap' },
+        Dot(bot.enabled && bot.paired && bot.connected ? 'ok' : 'warn'), h('strong', null, bot.name),
+        Pill(bot.enabled ? bot.connected ? '已连接' : '未连接' : '已停用'), Pill(bot.paired ? '已配对' : '未配对'),
+        h('a', { href: router.href('channels', 'bot', bot.id) }, '管理')))
+        : h('p', { class: 'muted small' }, '尚未绑定全局机器人。配置后，主 Agent 可用它在飞书中跟进各项目。'));
+    } catch (cause) {
+      if (stamp === botRequest) replace(botStatus, Banner({ tone: 'warn', children: '读取飞书机器人失败：' + cause.message,
+        action: Button({ label: '重试', size: 'sm', onClick: loadBots }) }));
+    }
+  }
+
   // —— 执行者与电脑 ——
   const computerList = h('div', { class: 'list' });
   const executorList = h('div', { class: 'list' });
@@ -76,12 +99,12 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope }) {
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, 'Agent'), h('p', { class: 'page__sub' }, hintCopy('nav.agent').tag)),
         h('div', { class: 'page__actions' }, Hint('nav.agent'))),
-      h('div', { class: 'stack stack--lg' }, modelCard, computersCard, cliSessions.el, policy.el, followUp.el, scheduledWork.el, advanced.el)));
+      h('div', { class: 'stack stack--lg' }, modelCard, botCard, computersCard, cliSessions.el, policy.el, followUp.el, scheduledWork.el, advanced.el)));
 
   return {
     el,
     onShow(route) {
-      scheduledWork.load(); loadModel(); policy.load(); followUp.load(); cliSessions.onShow();
+      scheduledWork.load(); loadModel(); loadBots(); policy.load(); followUp.load(); cliSessions.onShow();
       const target = { rules: 'agent-rules', 'follow-up': 'agent-follow-up', advanced: 'agent-advanced' }[route.parts[0]];
       if (target) requestAnimationFrame(() => document.getElementById(target)?.scrollIntoView({ block: 'start' }));
       if (route.parts[0] === 'advanced') advanced.el.open = true;

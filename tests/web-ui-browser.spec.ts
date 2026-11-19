@@ -362,3 +362,22 @@ test('审批：先“改一下”再批准，批准的是最新版本；旧版�
     assert.equal(stored.find((item: any) => item.id === approval.id).version, approval.version + 2);
   });
 });
+
+test('主 Agent 有独立的全局机器人入口，进入向导不发起外部注册', async () => {
+  await withApp(async ({ open }) => {
+    const { page } = await open('#agent');
+    const card = page.locator('#agent-bot');
+    await expect(card).toContainText('尚未绑定全局机器人');
+    let registration: unknown;
+    await page.route('**/api/v1/feishu/registrations', async route => {
+      if (route.request().method() !== 'POST') return route.continue();
+      registration = route.request().postDataJSON();
+      return route.fulfill({ json: { id: 'fixture', status: 'queued' } });
+    });
+    await card.getByRole('link', { name: '配置机器人' }).click();
+    await expect(page.getByLabel('机器人名称', { exact: true })).toHaveValue('主 Agent');
+    assert.equal(registration, undefined);
+    await page.getByRole('button', { name: '生成二维码' }).click();
+    await expect.poll(() => registration).toEqual({ name: '主 Agent', scope: { kind: 'global' }, requireConfirmation: true });
+  });
+});

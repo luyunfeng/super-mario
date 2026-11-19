@@ -13,6 +13,7 @@ const GLOBAL = '__global';
 
 export function createChannelsPage({ api, store, router }) {
   let bots = [];
+  const mainSetup = () => router.current.parts[0] === 'main-bot';
   let job = null;
   let selected = '';
   let creating = false;
@@ -54,15 +55,16 @@ export function createChannelsPage({ api, store, router }) {
   }
 
   function renderCreate() {
-    const name = Input({ placeholder: '给机器人起个名字，例如：我的 Agent', maxLength: 80, 'aria-label': '机器人名称' });
+    const name = Input({ value: mainSetup() ? '主 Agent' : '', placeholder: '给机器人起个名字，例如：我的 Agent', maxLength: 80, 'aria-label': '机器人名称' });
     const active = job && (!JOB_DONE.has(job.status) || job.status === 'unknown');
     return h('div', { class: 'stack' },
+      mainSetup() && h('p', { class: 'small' }, '为主 Agent 创建全局飞书机器人，可跟进所有项目。'),
       !bots.length && !active && h('ol', { class: 'howto small' },
-        h('li', null, '扫码创建机器人（用飞书扫一扫）'), h('li', null, '在飞书里私聊它，回复配对码'), h('li', null, '选择它负责的项目')),
+        h('li', null, '扫码创建机器人（用飞书扫一扫）'), h('li', null, '在飞书里私聊它，回复配对码'), h('li', null, mainSetup() ? '确认全局机器人已连接' : '选择它负责的项目')),
       !active && h('form', { class: 'row', onsubmit: async (event) => {
         event.preventDefault();
         if (!name.value.trim()) return;
-        try { job = await api.post('/feishu/registrations', { name: name.value.trim(), scope: { kind: 'unmarked' }, requireConfirmation: true }); creating = false; error = ''; }
+        try { job = await api.post('/feishu/registrations', { name: name.value.trim(), scope: { kind: mainSetup() ? 'global' : 'unmarked' }, requireConfirmation: true }); creating = false; error = ''; }
         catch (cause) { error = cause.status && cause.status < 500 ? `没有开始创建：${systemText(cause.message)}` : '创建结果未知，请先到飞书后台核对，系统不会自动重试。'; if (!cause.status || cause.status >= 500) job = { id: '', status: 'unknown' }; }
         paint(); schedule();
       } }, h('div', { class: 'grow' }, name), h('button', { class: 'btn btn--primary', type: 'submit' }, '生成二维码')),
@@ -131,6 +133,9 @@ export function createChannelsPage({ api, store, router }) {
       const jobs = results[2].value;
       job = job?.id ? jobs.find(item => item.id === job.id) ?? job : jobs.find(item => !JOB_DONE.has(item.status) || item.status === 'unknown') ?? null;
     }
+    if (job?.botId && bots.some(bot => bot.id === job.botId) && job.status === 'completed') {
+      selected = job.botId; creating = false; job = null;
+    }
     error = results.some(item => item.status === 'rejected') ? '部分渠道信息读取失败，请检查连接和访问权限。' : '';
     paint();
   }
@@ -144,7 +149,11 @@ export function createChannelsPage({ api, store, router }) {
 
   return {
     el,
-    onShow(route) { load().then(schedule); if (route.parts[0] === 'advanced') advanced.open = true; },
+    onShow(route) {
+      if (route.parts[0] === 'main-bot') { selected = ''; creating = true; }
+      else if (route.parts[0] === 'bot') { selected = route.parts[1] || ''; creating = false; }
+      else creating = false;
+      load().then(schedule); if (route.parts[0] === 'advanced') advanced.open = true; },
     onState({ snapshot }) {
       const problems = (snapshot.problems ?? []).filter(item => item.area === 'channel');
       const configured = snapshot.setup?.channel === 'done';
