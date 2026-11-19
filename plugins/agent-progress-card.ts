@@ -89,6 +89,14 @@ export function buildAgentProgressCard(progress: ExecutionProgress, options: Age
   if (detail) elements.push(block('progress_detail', `公开摘要：${detail}`));
   if (text) elements.push(block('progress_text', text));
   elements.push(block('progress_observed', `观察时间：${publicText(progress.observedAt, 80) || '未知'}`, true));
+  if (reply && progress.recentSteps?.length) {
+    const steps = progress.recentSteps.slice(-8).map(step => publicText(step, 160)).filter(Boolean);
+    if (steps.length) {
+      elements.splice(0, elements.length,
+        ...(text ? [block('progress_text', text)] : []),
+        block('progress_history', '处理经过\n' + steps.map(step => '· ' + step).join('\n'), true));
+    }
+  }
   return {
     schema: '2.0',
     config: { update_multi: true, width_mode: 'default' },

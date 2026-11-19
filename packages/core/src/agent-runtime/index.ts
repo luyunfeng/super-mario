@@ -310,7 +310,10 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       lastProgressWrite = Date.now(); save(structuredClone(assistant));
     };
     const progress = (phase: NonNullable<Message['progress']>['phase'], detail: string, toolName?: string) => {
-      assistant.progress = { phase, detail, ...(toolName ? { toolName } : {}), observedAt: new Date().toISOString() };
+      const step = toolName ? detail + ' · ' + toolName : detail;
+      const previous = assistant.progress?.recentSteps ?? [];
+      const recentSteps = previous.at(-1) === step ? previous : [...previous.slice(-7), step];
+      assistant.progress = { phase, detail, ...(toolName ? { toolName } : {}), recentSteps, observedAt: new Date().toISOString() };
       if (Date.now() - lastProgressWrite >= 250) publishProgress();
       else progressTimer ??= setTimeout(() => { try { publishProgress(); } catch (error) { progressFailure = error; } }, 250);
     };
@@ -333,7 +336,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         const unsubscribe = session.subscribe(event => {
           if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') {
             const name = /^[a-zA-Z0-9_.:-]{1,80}$/.test(event.toolName) ? event.toolName : 'tool';
-            progress('tool', event.type === 'tool_execution_start' ? '正在调用工具' : '工具调用已返回', name);
+            progress('tool', event.type === 'tool_execution_start' ? '正在调用工具' : event.isError ? '工具调用失败' : '工具调用已返回', name);
             return;
           }
           if (event.type === 'message_update' && event.message.role === 'assistant') {

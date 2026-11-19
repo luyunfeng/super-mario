@@ -121,3 +121,10 @@ test('empty optional data produces a useful minimal card with no invented result
   assert.equal(card.body.elements.length, 2);
   assert.equal(card.body.elements[1].text.content, '观察时间：未知');
 });
+
+test('答复卡保留最近公开步骤，最终答案先于处理记录', () => {
+  const card = buildAgentProgressCard({ ...observation, recentSteps: Array.from({length:10}, (_,n)=>'步骤 '+n) }, {subject:'reply', title:'主 Agent', text:'查询结果',status:'done'});
+  assert.equal(card.body.elements[0].text.content,'查询结果');
+  assert.match(bodyText(card), /步骤 2[\s\S]+步骤 9/);
+  assert.doesNotMatch(bodyText(card), /步骤 [01]\n/);
+});
