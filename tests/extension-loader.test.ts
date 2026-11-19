@@ -125,3 +125,15 @@ test('missing extensions directory is empty; symlink root is reported as a faile
   await host.start();
   assert.equal(host.list()[0]!.status, 'failed');
 });
+
+test('publishes declared navigation before activation and isolates invalid plugin entries', async t => {
+  const { dataDir, install, host } = await setup(t);
+  const entry = { id: 'items', label: '收件箱', route: '#inbox' };
+  await install('sample', { navigation: [entry] });
+  await install('duplicate', { navigation: [entry, entry] });
+  await install('external', { navigation: [{ ...entry, route: 'https://example.com' }] });
+  for (const { extension, config } of await loadExtensions(dataDir)) host.register(extension, config);
+  assert.deepEqual(host.list().find(plugin => plugin.id === 'sample')?.navigation, [entry]);
+  await host.start();
+  for (const id of ['duplicate', 'external']) assert.equal(host.list().find(plugin => plugin.id === id)?.status, 'failed');
+});

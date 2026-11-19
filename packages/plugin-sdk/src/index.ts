@@ -98,6 +98,8 @@ export interface ExtensionContext extends Partial<BackgroundContext> {
   defer(dispose: Dispose): void;
 }
 export interface Extension {
+  /** Stable feature IDs and internal workbench routes for optional sidebar links. */
+  navigation?: import('../../protocol/src/index.ts').PluginNavigationItem[];
   id: string;
   name: string;
   capabilities: string[];

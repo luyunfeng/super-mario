@@ -13,6 +13,20 @@ const object = (value: unknown): value is Record<string, unknown> => value !== n
 const stringList = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string');
 const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
+function readNavigation(value: unknown): Extension['navigation'] {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('Invalid plugin navigation');
+  const ids = new Set<string>();
+  return value.map(item => {
+    if (!object(item) || !validId(item.id) || ids.has(item.id) ||
+        typeof item.label !== 'string' || !item.label.trim() ||
+        typeof item.route !== 'string' || !/^#[a-z]+(?:\/[\w-]+)*(?:\?[\w=&-]+)?$/.test(item.route) ||
+        new URLSearchParams(item.route.split('?')[1]).has('token')) throw new Error('Invalid plugin navigation entry');
+    ids.add(item.id);
+    return { id: item.id, label: item.label.trim(), route: item.route };
+  });
+}
+
 function failed(id: string, reason: unknown): Extension {
   const message = reason instanceof Error ? reason.message : String(reason);
   return { id, name: id, capabilities: [], activate() { throw new Error(message); } };
@@ -93,7 +107,7 @@ export async function loadExtensions(dataDir: string, options: { reservedIds?: s
       }
       const sdk = extension as unknown as Extension;
       if (sdk.permissions !== undefined) assertPluginPermissions(sdk.permissions);
-      loaded.push({ extension: { ...sdk, extensionPoints: manifest.extensionPoints as Extension['extensionPoints'] ?? sdk.extensionPoints, permissions: manifest.permissions as string[] | undefined ?? sdk.permissions, name: manifest.name as string | undefined ?? sdk.name,
+      loaded.push({ extension: { ...sdk, navigation: readNavigation(manifest.navigation ?? sdk.navigation), extensionPoints: manifest.extensionPoints as Extension['extensionPoints'] ?? sdk.extensionPoints, permissions: manifest.permissions as string[] | undefined ?? sdk.permissions, name: manifest.name as string | undefined ?? sdk.name,
         dependencies: [...new Set([...(sdk.dependencies ?? []), ...(manifest.dependencies as string[] | undefined ?? [])])],
         activate: context => sdk.activate(context) }, config });
     } catch (error) { loaded.push({ extension: failed(id, error), config }); }

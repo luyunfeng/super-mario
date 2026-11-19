@@ -182,6 +182,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
       },
     },
     {
+      navigation: [{ id: 'curator', label: '记忆整理', route: '#memory?curator=1' }],
       id: 'knowledge-local', name: '本地 Markdown 知识', capabilities: ['knowledge.read', 'knowledge.write'],
       async activate(context) {
         const backend = createLocalKnowledge(context);
@@ -226,6 +227,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
       },
     },
     {
+      navigation: [{ id: 'main-bot', label: '主机器人配置', route: '#channels/main-bot' }],
       id: 'feishu', name: '飞书适配', capabilities: ['feishu.status'],
       activate(context) {
         context.contribute('channels', 'feishu', { id: 'feishu', name: '飞书', outboxPrefixes: ['feishu.bot', 'feishu.personal'], approvalKinds: ['feishu-reply'], sourcePrefix: 'feishu:' });

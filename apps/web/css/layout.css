@@ -166,3 +166,15 @@
 .home-row { display:block; padding:6px 0; overflow-wrap:anywhere; }
 .home-project { padding:12px 0; border-bottom:1px solid var(--line); }
 .home-project:last-child { border-bottom:0; }
+
+.plugin-footer { display: flex; justify-content: flex-end; padding: 3px 12px; border-top: 1px solid var(--line); background: var(--surface); }
+.plugin-links { display: grid; gap: 3px; border-top: 1px solid var(--line); padding-top: 6px; }
+.plugin-links[hidden] { display: none; }
+.plugin-links a { overflow-wrap: anywhere; }
+.plugin-section { display: grid; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.plugin-section .row { flex-wrap: wrap; }
+@media (max-width: 767px) { .plugin-links { display: none; } }
+.plugin-mobile-pins.row { display: none; }
+@media (max-width: 767px) {
+  .plugin-mobile-pins.row:not([hidden]) { display: flex; flex-wrap: wrap; margin-bottom: 12px; }
+}

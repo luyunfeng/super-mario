@@ -78,7 +78,7 @@ export class PluginHost {
     if (this.entries.has(extension.id)) throw new Error(`Plugin already registered: ${extension.id}`);
     const enabled = this.options.store.get<{ enabled: boolean }>(settingsCollection, extension.id)?.enabled !== false;
     this.entries.set(extension.id, {
-      extension, config, info: { id: extension.id, name: extension.name, capabilities: [...extension.capabilities], enabled, status: enabled ? 'waiting' : 'disabled' },
+      extension, config, info: { ...(extension.navigation && { navigation: structuredClone(extension.navigation) }), id: extension.id, name: extension.name, capabilities: [...extension.capabilities], enabled, status: enabled ? 'waiting' : 'disabled' },
     });
     try { this.checkCycles(); }
     catch (error) { this.entries.delete(extension.id); throw error; }

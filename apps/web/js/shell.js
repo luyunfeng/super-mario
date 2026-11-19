@@ -4,6 +4,7 @@ import { icon } from './ui/icons.js';
 import { Button, Input } from './ui/kit.js';
 import { hintCopy } from './ui/hint.js';
 import { alertLabel } from './lib/alerts.js';
+import { createPluginSettings } from './features/plugin-settings.js';
 import { PAGES } from './lib/router.js';
 
 export const PAGE_NAMES = { home: '首页', chat: '对话', inbox: '收件箱', outbox: '发件箱', agent: 'Agent', projects: '项目', memory: '记忆', channels: '渠道' };
@@ -21,11 +22,12 @@ export function createShell({ api, store, router, scope }) {
     navItems[page] = { el, badge };
     return el;
   }));
+  const pluginSettings = createPluginSettings({ api, store, router });
   const sidebar = h('aside', { class: 'sidebar' },
     h('a', { class: 'brand', href: router.href('home'), 'aria-label': 'Super Mario，回到首页' },
       h('span', { class: 'brand__logo', 'aria-hidden': 'true' }, 'M'),
       h('span', { class: 'brand__name' }, 'Super Mario', h('span', { class: 'brand__sub' }, '个人 AI 工作台'))),
-    nav);
+    nav, pluginSettings.nav);
 
   // —— 搜索 ——
   const searchInput = h('input', { class: 'search__input', type: 'search', id: 'workspace-search', placeholder: '搜索待办、执行与记忆', autocomplete: 'off', 'aria-label': '搜索待办、执行与记忆', 'aria-controls': 'search-results' });
@@ -67,7 +69,7 @@ export function createShell({ api, store, router, scope }) {
   const loading = h('div', { class: 'page__inner', id: 'loading', role: 'status' }, h('p', { class: 'muted' }, '正在加载工作台…'));
   const failure = h('div', { class: 'page__inner', id: 'error', role: 'alert', hidden: true });
   const view = h('main', { id: 'view', tabindex: '-1' }, loading, failure);
-  const mainCol = h('div', { class: 'main-col' }, topbar, view);
+  const mainCol = h('div', { class: 'main-col' }, topbar, view, pluginSettings.footer);
   const root = h('div', { class: 'app', id: 'workspace' }, sidebar, mainCol);
 
   return {
