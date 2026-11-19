@@ -20,6 +20,7 @@ function needsOwner(view, inScope) {
     const source = sources.get(item.id);
     if (source?.todoId || source?.archivedAt) return false;
     const origin = item.origin ?? source?.origin;
+    if (origin?.kind === 'group' && origin.connector === '飞书' && origin.personalGroupObserved !== true) return false;
     if (personalGroupSize(origin) > 50) return false;
     const stage = stages.get(item.id);
     if (stage) return stage === 'human';
@@ -36,7 +37,7 @@ function groupDigest(inbox, inScope, now) {
   for (const item of inbox) {
     const origin = item.origin;
     const size = personalGroupSize(origin);
-    if (!inScope(item) || !origin?.chatId || size === undefined || size > 50) continue;
+    if (!inScope(item) || !origin?.chatId || origin.personalGroupObserved !== true || size === undefined || size > 50) continue;
     const time = Date.parse(item.receivedAt);
     if (!Number.isFinite(time) || time <= now - day || time > now || item.tier === 'noise') continue;
     const key = JSON.stringify([item.source, origin.chatId, item.projectId]);

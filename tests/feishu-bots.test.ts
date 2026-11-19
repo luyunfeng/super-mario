@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { createFeishuBotsController } from '../apps/server/src/feishu-bots.ts';
+import { createFeishuBotsController, dashboardWebBase } from '../apps/server/src/feishu-bots.ts';
 import type { FeishuBotsApp, FeishuBotFactory, FeishuMailboxInput } from '../apps/server/src/feishu-bots.ts';
 import { createStore } from '../packages/core/src/store.ts';
 import { createEventBus } from '../packages/core/src/events.ts';
@@ -87,6 +87,47 @@ function fixture(t: test.TestContext) {
     disable() { enabled = false; events.publish('plugins.changed', { id: 'feishu' }); },
     deny() { denied = true; }, uncertain() { uncertain = true; }, postFail() { postFailure = true; }, hookCount: () => hookCount };
 }
+
+test('dashboard is an owner-only private global command with durable delivery deduplication', async t => {
+  const f = fixture(t), a = await f.add('Dashboard', { kind: 'global' }, true);
+  const receive = a.instance.options.onMessage;
+  await receive('工作台', source('unpaired'));
+  await a.pair();
+  await receive('工作台', source('wrong-chat', 'other'));
+  await receive('/dashboard', source('wrong-owner', 'owner', 'other'));
+  await receive('工作台', source('group', 'owner', 'human', 'group'));
+  await Promise.all([receive('工作台', source('dashboard')), receive('工作台', source('dashboard'))]);
+  await receive('/dashboard', source('slash'));
+  assert.equal(a.instance.sent.length, 2);
+  assert.ok(a.instance.sent.every(([target]) => target === 'owner'));
+  for (const context of a.instance.contexts.slice(-2)) {
+    assert.ok(context?.card);
+    assert.doesNotMatch(JSON.stringify(context.card), /"tag":"button"/);
+  }
+  assert.equal(f.posts.length, 0);
+  const entries = f.mailboxes.list().filter(entry => entry.eventKey.startsWith('feishu-dashboard:'));
+  assert.deepEqual(entries.map(entry => entry.status), ['completed', 'completed']);
+  await f.restart();
+  const restarted = f.instances.at(-1)!;
+  await restarted.options.onMessage('工作台', source('dashboard'));
+  assert.equal(restarted.sent.length, 0);
+  await restarted.options.onMessage('/dashboard {"card":{},"target":"other"}', source('custom'));
+  assert.equal(restarted.contexts.at(-1)?.card, undefined);
+  assert.equal(f.mailboxes.list().filter(entry => entry.direction === 'inbox').length, 1);
+  const b = await f.add('UnmarkedDashboard', { kind: 'unmarked' });
+  await b.pair();
+  await b.instance.options.onMessage('/dashboard', source('ordinary'));
+  assert.equal(b.instance.contexts.at(-1)?.card, undefined);
+});
+
+test('dashboard URL uses a configured remote HTTP origin with no credentials', () => {
+  const config = { host: '0.0.0.0', port: 8080 };
+  assert.equal(dashboardWebBase(config, 'https://work.example:8443/'), 'https://work.example:8443');
+  for (const url of [undefined, 'https://u:p@work.example', 'https://work.example/?token=fake',
+    'https://work.example/#chat?token=fake', 'http://127.1', 'http://localhost.', 'http://[::1]', 'file:///tmp/work']) {
+    assert.equal(dashboardWebBase(config, url), undefined);
+  }
+});
 
 test('two bots pair independently, reject arbitrary senders and route replies/results once without cross-talk', async t => {
   const f = fixture(t), a = await f.add('A'), b = await f.add('B');

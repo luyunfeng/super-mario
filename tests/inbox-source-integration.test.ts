@@ -1,3 +1,4 @@
+import { chatDirectory } from './feishu-scope-fixture.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
@@ -10,9 +11,10 @@ import type {Json,JsonObject} from '../packages/protocol/src/index.ts';
 
 test('personal CLI metadata distinguishes direct, group mentions and own messages without guessing',async()=>{
  const own='ou_personal',calls:string[][]=[];
- const item=(chat:string,extra={})=>({message_id:'om_'+chat,chat_id:chat,chat_name:chat,chat_type:'group',create_time:'2026-11-17T00:00:00Z',sender:{id:'ou_other',name:'Another user'},content:'A real-shaped fixture',...extra});
+ const item=(chat:string,extra={})=>({message_id:'om_'+chat,chat_id:'oc_'+chat,chat_name:chat,chat_type:'group',create_time:'2026-11-17T00:00:00Z',sender:{id:'ou_other',name:'Another user'},content:'A real-shaped fixture',...extra});
  const hits=[item('direct',{chat_type:'p2p'}),item('mention',{mentions:[{id:own,name:'same name'}]}),item('other',{mentions:[{id:'ou_other_bot',name:'same name'}]}),item('unknown',{chat_type:undefined}),item('own',{sender:{id:own,name:'Me'}})];
  const provider=createPersonalProvider({application:()=>undefined,runCLI:async args=>{calls.push(args);
+  const directory=chatDirectory(args,['oc_mention','oc_other','oc_unknown']);if(directory)return directory;
   if(args.includes('status'))return{appId:'cli_fixture',identity:'user',verified:true,identities:{user:{available:true,openId:own,userName:'Me',scope:PERSONAL_MESSAGE_SCOPES.join(' ')}}};
   if(args.includes('+messages-search')){
    const messages=args.includes('p2p')?[hits[0],hits[4]]:args.includes('--is-at-me')?[hits[1]]:[hits[2],hits[3],hits[1]];
@@ -25,7 +27,7 @@ test('personal CLI metadata distinguishes direct, group mentions and own message
  assert.equal(result.find(x=>x.title==='direct')?.origin?.kind,'direct');
  assert.equal(result.find(x=>x.title==='mention')?.origin?.mentionedMe,true);
  assert.equal(result.find(x=>x.title==='other')?.origin?.mentionedMe,false);
- assert.equal(result.find(x=>x.title==='unknown')?.origin?.kind,'unknown');
+ assert.equal(result.find(x=>x.title==='unknown')?.origin?.kind,'group');
  assert.ok(calls.every(args=>args[0]==='--profile'&&args[1]==='fixture'));
  assert.equal(calls.filter(args=>args.includes('+messages-search')).length,3);
  assert.ok(calls.some(args=>args.includes('--chat-type')&&args.includes('p2p')));

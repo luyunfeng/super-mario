@@ -1,4 +1,6 @@
 import { createHash, randomInt } from 'node:crypto';
+import type { AttentionItem } from '../../../packages/core/src/attention.ts';
+import { buildFeishuDashboard } from './feishu-dashboard.ts';
 import { botConversationId } from '../../../packages/core/src/bot-agent-routing.ts';
 import { createFeishuIntegration } from '../../../plugins/feishu.ts';
 import { allowedBotGroup, canRelayBotScope, nextRelayPath } from '../../../packages/core/src/bot-group-policy.ts';
@@ -22,6 +24,7 @@ export interface FeishuBotsApp {
   postScoped(text: string, scope: BotScope, botId: string): Promise<Message>;
   /** Host injects readOnly result context; it must never dispatch a new request. */
   postScopedResult?(input: { text: string; scope: BotScope; botId: string; sourceMessageId?: string }): Promise<Message>;
+  attention?(): AttentionItem[];
   projects?: { list(): Project[] };
   todos?: () => Todo[];
   plugins?: {
@@ -38,15 +41,30 @@ export type FeishuBotFactory = (options: FeishuOptions) => FeishuBotAdapter;
 type Owner = { chatId: string; senderId?: string };
 type Route = { channel: 'feishu'; accountId: string; botId: string; target: string; scope: BotScope; revision: number; inputId: string; sourceMessageId?: string };
 type Relay = { sourceMessageId?: string; sourceFingerprint?: string; sourceRouteFingerprint?: string; sourceBotId: string; sourceRevision: number; targetRevision: number; parentEntryId?: string; path: string[]; rootId: string; expiresAt: number; chatId?: string; fingerprint: string };
-type Envelope = { inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
+type Envelope = { dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
 type Routed = Route & Envelope & { envelopeId: string };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
 type Runtime = { epoch: number; adapter?: FeishuBotAdapter; reason?: string; code: string; expires: number; operations: Promise<void> };
 const noDelivery = (message: string) => Object.assign(new Error(message), { delivery: 'no' as const });
 
+// Only startup settings may supply a destination. Keep credentials and URL parameters out of cards.
+export function dashboardWebBase(config: Pick<AppConfig, 'host' | 'port'>, configured?: string): string | undefined {
+  try {
+    const host = config.host.includes(':') && !config.host.startsWith('[') ? `[${config.host}]` : config.host;
+    if (!configured && !config.port) return;
+    const url = new URL(configured || `http://${host}:${config.port}`);
+    const hostname = url.hostname.toLowerCase().replace(/\.$/, '');
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash
+      || /^(?:127\.|0\.)/.test(hostname) || ['[::]', '[::1]'].includes(hostname) || hostname.startsWith('[::ffff:')
+      || hostname === 'localhost' || hostname.endsWith('.localhost')) return;
+    return url.origin;
+  } catch { return; }
+}
+
 /** Composition uses a narrow host interface so mailbox/workbench can install handlers without a cycle. */
-export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig, options: { factory?: FeishuBotFactory } = {}) {
+export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig, options: { factory?: FeishuBotFactory; webBase?: string } = {}) {
   const settings = createFeishuBotConfig(config.dataDir, config.feishu?.appId);
+  const webBase = dashboardWebBase(config, options.webBase);
   const factory = options.factory ?? createFeishuIntegration;
   const runtimes = new Map<string, Runtime>();
   const tasks = new Set<Promise<unknown>>();
@@ -346,6 +364,16 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       }
       if (paired.chatId !== source.chatId || (paired.senderId && paired.senderId !== source.senderId)) return;
     }
+    if (!group && paired && bot.scope.kind === 'global' && ['工作台', '/dashboard'].includes(text.trim())) {
+      const eventKey = `feishu-dashboard:${JSON.stringify([bot.id, bot.appId, source.messageId])}`;
+      const dashboard = buildFeishuDashboard(app, webBase);
+      const entry = await put(bot, { direction: 'outbox', eventKey, title: '工作台', text: dashboard.text,
+        target: paired.chatId, sourceMessageId: source.messageId, requiresConfirmation: false }, bot.scope,
+      { dashboard: { card: dashboard.card, owner: paired } });
+      const latest = app.mailboxes.list().find(item => item.id === entry.id);
+      if (active(bot.id, epoch, bot.revision) && latest?.status === 'ready') await app.mailboxes.process(latest.id, latest.version);
+      return;
+    }
     const context: Omit<Envelope, 'revision'> = group ? { group: structuredClone(source), platformReplyTo: source.messageId, threadId: source.threadId ?? source.rootId } : {};
     const entry = await put(bot, { direction: 'inbox', eventKey: `feishu-in:${JSON.stringify([bot.id, bot.appId, source.messageId])}`,
       title: bot.name, text, target: source.chatId, sourceMessageId: source.messageId,
@@ -432,13 +460,20 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const deliver = async (body: string) => {
       if (!active(botId, epoch, bot.revision) || adapter !== state.adapter) throw noDelivery('机器人发送已取消');
       checkEnvelope(entry, current(botId));
-      try { await adapter.send(target, body, stamp?.platformReplyTo || stamp?.threadId ? { replyTo: stamp.platformReplyTo, threadId: stamp.threadId } : undefined); }
+      const dashboard = stamp?.dashboard;
+      if (key.startsWith('feishu-dashboard:') && (!dashboard || bot.scope.kind !== 'global'
+        || dashboard.owner.chatId !== target || owner(bot)?.chatId !== target || owner(bot)?.senderId !== dashboard.owner.senderId)) {
+        throw noDelivery('工作台卡片缺少有效的配对记录');
+      }
+      const context = dashboard ? { card: dashboard.card } : stamp?.platformReplyTo || stamp?.threadId
+        ? { replyTo: stamp.platformReplyTo, threadId: stamp.threadId } : undefined;
+      try { await adapter.send(target, body, context); }
       catch (error) { throw Object.assign(new Error(redact(error)), { delivery: (error as { delivery?: string })?.delivery === 'no' ? 'no' : 'unknown' }); }
     };
     const run = async () => {
       try {
       if (app.plugins?.invocations) await app.plugins.invocations.invoke('channel.send', { botId, accountId: bot.appId, chatId: target, target, text, key }, async input => {
-        if(stamp?.inboxReplySource&&(!input||typeof input!=='object'||Array.isArray(input)||input.text!==text))throw noDelivery('确认的回复正文不能被渠道钩子改写');
+        if ((stamp?.inboxReplySource || stamp?.dashboard) && (!input || typeof input !== 'object' || Array.isArray(input) || input.text !== text)) throw noDelivery('确认的回复正文不能被渠道钩子改写');
         if (!input || typeof input !== 'object' || Array.isArray(input) || input.botId !== botId || input.accountId !== bot.appId
           || input.chatId !== target || input.target !== target || input.key !== key || typeof input.text !== 'string' || !input.text.trim()) throw noDelivery('渠道钩子不能改变机器人、目标或动作标识');
         await deliver(input.text); return null;

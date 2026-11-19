@@ -222,8 +222,7 @@ test('thread collection expands platform thread id and exposes truncated paginat
   t.after(() => integration.close());
   const things = await integration.collect();
   assert.equal(things[0]!.thread, 'feishu:oc_fake:omt_fake');
-  assert.ok(calls[1]!.includes('+threads-messages-list'));
-  assert.ok(calls[1]!.includes('omt_fake'));
+  assert.ok(calls.some(args => args.includes('+threads-messages-list') && args.includes('omt_fake')));
   assert.match(integration.status().reason!, /未采集分页/);
 });
 
@@ -507,6 +506,16 @@ test('identity timeout is bounded by the abort signal and leaves private receipt
   await socket.emit('om_timeout_private'); await tick();
   assert.deepEqual(sources.map(source => source.messageId), ['om_timeout_private']);
   assert.equal(infoCalls, 1);
+});
+
+test('adapter serializes an internal dashboard as an interactive Feishu message', async t => {
+  const { integration, http } = setup();
+  t.after(() => integration.close());
+  const card = { elements: [{ tag: 'markdown', content: '工作台' }] };
+  await integration.send('oc_owner', '工作台', { card });
+  const request = http.calls.at(-1)!;
+  assert.match(request.url, /messages\?receive_id_type=chat_id$/);
+  assert.deepEqual(request.body, { receive_id: 'oc_owner', msg_type: 'interactive', content: JSON.stringify(card) });
 });
 
 test('send reply context and automatic answers preserve thread without using thread ID as message ID', async t => {

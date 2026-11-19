@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { collectAttention } from '../packages/core/src/attention.ts';
 import type { InboxThing, Todo } from '../packages/protocol/src/index.ts';
 import { createStore } from '../packages/core/src/store.ts';
 import { createEventBus } from '../packages/core/src/events.ts';
@@ -393,4 +394,43 @@ test('unknown origins can be enriched; invalid origins reject a whole batch befo
   await f.inbox.ingest('source', [{ ...thing, origin: { kind: 'group', mentionedMe: false } }]);
   assert.equal(f.inbox.list()[0].version, before.version + 1);
   assert.deepEqual(f.inbox.list()[0].origin, { kind: 'group', mentionedMe: false });
+});
+
+test('个人群超过50人跳过自动分拣和关注摘要，保留历史、归档和人工待办', async t => {
+  const classified: string[] = [];
+  const f = fixture(t, async item => { classified.push(item.thread); return { tier: 'action', reason: '测试分拣' }; });
+  const source = 'feishu:cli_test:ou_test';
+  const group = (thread: string, count?: number): InboxThing => ({ ...thing, thread,
+    origin: { kind: 'group', connector: '飞书', chatId: thread, mentionedMe: true, personalGroupObserved: true, personalGroupUserCount: count } });
+  await f.inbox.ingest(source, [group('large', 51), group('boundary', 50), group('unknown')]);
+  assert.deepEqual(classified, ['boundary', 'unknown']);
+  const all = f.inbox.list();
+  assert.equal(all.length, 3);
+  const large = all.find(item => item.thread === 'large')!;
+  const attention = collectAttention({ inbox: all });
+  assert.equal(attention.length, 2);
+  assert.ok(attention.every(item => item.id !== 'inbox:' + large.id));
+  const previous = all.find(item => item.thread === 'unknown')!;
+  const {todoId} = f.inbox.confirm(previous.id, previous.version);
+  await f.inbox.ingest(source, [group('unknown', 80), {...group('unknown', 80), last: 'edited'}]);
+  const updated = f.inbox.list().find(item => item.id === previous.id)!;
+  assert.equal(updated.todoId, todoId);
+  assert.ok(updated.archivedAt);
+  assert.equal(updated.origin?.personalGroupUserCount, 80);
+  assert.equal(classified.length, 2);
+  assert.equal(f.count(), 1);
+});
+
+test('旧群记录经受限搜索重读后才进入简报；第三方来源不能声明观测标记', async t => {
+  const f = fixture(t);
+  const source = 'feishu:cli_test:ou_test';
+  const item: InboxThing = {...thing, origin: {kind:'group', connector:'飞书', chatId:'oc_test', mentionedMe:true, personalGroupUserCount:50}};
+  await f.inbox.ingest(source,[item]);
+  assert.equal(collectAttention({inbox:f.inbox.list()}).length,0);
+  const verified: InboxThing = {...item, origin: {...item.origin!, personalGroupObserved:true}};
+  await f.inbox.ingest(source,[verified]);
+  assert.equal(f.inbox.list()[0].origin?.personalGroupObserved,true);
+  assert.equal(collectAttention({inbox:f.inbox.list()}).length,1);
+  await f.inbox.ingest('plugin:other:messages',[verified]);
+  assert.equal(f.inbox.list().find(i => i.source.startsWith('plugin:'))?.origin?.personalGroupObserved,undefined);
 });

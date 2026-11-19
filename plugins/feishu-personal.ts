@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createFeishuIntegration } from './feishu.ts';
-import type { PersonalBatch, PersonalCheckpoint } from './feishu.ts';
+import type { PersonalBatch, PersonalChatDetail, PersonalCheckpoint } from './feishu.ts';
 export type { PersonalBatch, PersonalCheckpoint } from './feishu.ts';
 
 // Only read permissions. Sending as the user is never requested by this flow.
@@ -65,6 +65,34 @@ export function createPersonalProvider(options: {
   application: () => PersonalApplication | undefined; fallbackApplication?: () => PersonalApplication | undefined; runCLI?: PersonalCLI;
 }): PersonalProvider {
   const cli = options.runCLI ?? runPersonalCLI;
+  // Share only within this provider and verified identity. Cache empty results too
+  // so inaccessible chats cannot trigger a detail request on every search page.
+  const details = new Map<string, { detail: PersonalChatDetail; expiresAt: number }>();
+  async function chatDetail(account: PersonalAccount, signal: AbortSignal, chatId: string): Promise<PersonalChatDetail> {
+    signal.throwIfAborted();
+    const key = JSON.stringify([account.appId, account.profile, account.openId, chatId]);
+    const cached = details.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.detail;
+    const detail: PersonalChatDetail = {};
+    try {
+      const raw = await cli(['--profile', account.profile, '--as', 'user', 'im', 'chats', 'get', '--chat-id', chatId, '--format', 'json'], { signal });
+      if (raw.ok === true && raw.identity === 'user') {
+        const mode = raw.data?.chat_mode;
+        if (mode === 'topic') detail.mode = 'group';
+        else if (mode === 'group' || mode === 'p2p') detail.mode = mode;
+        const rawCount = raw.data?.user_count;
+        const count = typeof rawCount === 'string' && /^\d+$/.test(rawCount) ? Number(rawCount) : rawCount;
+        if (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0) detail.userCount = count;
+      }
+    } catch {
+      // Metadata lookup is optional. Cancellation still propagates below.
+    }
+    signal.throwIfAborted();
+    details.delete(key);
+    if (details.size >= 256) details.delete(details.keys().next().value!);
+    details.set(key, { detail, expiresAt: Date.now() + 60_000 });
+    return detail;
+  }
   async function verify(account: PersonalApplication, signal: AbortSignal): Promise<PersonalAccount> {
     const raw = await cli(['--profile', account.profile, 'auth', 'status', '--json', '--verify'], { signal });
     const data = raw.data ?? raw, user = data.identities?.user;
@@ -105,16 +133,22 @@ export function createPersonalProvider(options: {
       const current = await verify(account, signal);
       if (current.openId !== account.openId) throw new PersonalAuthError('failed');
       const adapter = createFeishuIntegration({ appId: account.appId, appSecret: '', profile: account.profile, personalOpenId: account.openId,
+        personalChatDetail: chatId => chatDetail(account, signal, chatId),
         runCLI: args => cli(args, { signal }), onMessage: async () => undefined, onInbox: async () => {} });
-      try { return await adapter.collectBatch(checkpoint); } finally { await adapter.close(); }
+      try {
+        return await adapter.collectBatch(checkpoint);
+      } finally { await adapter.close(); }
     },
     async collect(account, signal) {
       const current = await verify(account, signal);
       if (current.openId !== account.openId) throw new PersonalAuthError('failed');
       // Personal collection has its own lifecycle; it does not open a second bot WebSocket.
       const adapter = createFeishuIntegration({ appId: '', appSecret: '', profile: account.profile, personalOpenId: account.openId,
+        personalChatDetail: chatId => chatDetail(account, signal, chatId),
         runCLI: args => cli(args, { signal }), onMessage: async () => undefined, onInbox: async () => {} });
-      try { return await adapter.collect(); } finally { await adapter.close(); }
+      try {
+        return await adapter.collect();
+      } finally { await adapter.close(); }
     },
   };
 }

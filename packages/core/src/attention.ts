@@ -1,3 +1,4 @@
+import { excludesPersonalGroupFromBrief } from '../../protocol/src/inbox-origin.ts';
 import type { Approval, InboxItem, InboxOrigin, JsonObject, MailboxEntry, Project, FeishuBot } from '../../protocol/src/index.ts';
 import type { Plan } from './plans.ts';
 
@@ -90,6 +91,7 @@ export function collectAttention({ approvals = [], interactions = [], inbox = []
       actions: [action('plans', item.id, 'start', item.version, '开始执行'), action('plans', item.id, 'reject', item.version, '拒绝')] });
   }
   for (const item of inbox) {
+    if (excludesPersonalGroupFromBrief(item)) continue;
     const humanFocus = item.origin?.kind === 'direct' || (item.origin?.kind === 'group' && item.origin.mentionedMe === true);
     const matchedChannel = channels?.find(channel => item.source.startsWith(channel.sourcePrefix ?? `${channel.id}:`));
     const allowedSource = item.source.startsWith('plugin:')

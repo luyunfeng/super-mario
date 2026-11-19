@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startServer } from '../apps/server/src/index.ts';
-import type { FeishuOptions } from '../plugins/feishu.ts';
+import { createFeishuIntegration, type FeishuOptions } from '../plugins/feishu.ts';
 import type { FeishuBotFactory } from '../apps/server/src/feishu-bots.ts';
 import type { MailboxEntry, Message } from '../packages/protocol/src/index.ts';
 import { runWithAgentInput } from '../packages/core/src/agent-input.ts';
@@ -13,6 +13,41 @@ const settle = async (predicate: () => boolean) => {
   for (let i = 0; i < 200; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 5)); }
   assert.fail('local event workflow did not settle');
 };
+test('paired dashboard uses startup URL and delivers one interactive request through the real gateway', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-dashboard-'));
+  const previous = process.env.SUPER_MARIO_WEB_URL;
+  process.env.SUPER_MARIO_WEB_URL = 'https://work.example';
+  t.after(async () => {
+    if (previous === undefined) delete process.env.SUPER_MARIO_WEB_URL;
+    else process.env.SUPER_MARIO_WEB_URL = previous;
+  });
+  const requests: Array<{ msg_type: string; receive_id: string; content: string }> = [];
+  let adapter!: FeishuOptions;
+  const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: dir, demo: true, token: 'test-dashboard-token' }, {
+    botFactory(options) {
+      adapter = options;
+      const integration = createFeishuIntegration({ ...options, fetch: async (url, init) => {
+        if (String(url).includes('tenant_access_token')) return Response.json({ code: 0, tenant_access_token: 'fake', expire: 7200 });
+        requests.push(JSON.parse(String(init?.body)));
+        return Response.json({ code: 0, data: { message_id: 'fake-' + requests.length } });
+      } });
+      return { ...integration, start: async () => {}, status: () => ({ connected: true }) };
+    },
+  });
+  t.after(async () => { try { await server.close(); } finally { await rm(dir, { recursive: true, force: true }); } });
+  const bot = await server.bots.create({ name: '主机器人', appId: 'cli_0123456789abcdef', appSecret: 'test-secret', scope: { kind: 'global' } });
+  const source = { messageId: 'pair', chatId: 'owner', senderId: 'human', chatType: 'p2p' };
+  await adapter.onMessage(bot.pairingCode!, source);
+  await Promise.all([1, 2].map(() => adapter.onMessage('/dashboard', { ...source, messageId: 'command' })));
+  const cards = requests.filter(request => request.msg_type === 'interactive');
+  assert.equal(cards.length, 1, JSON.stringify(server.app.mailboxes.list().map(entry => [entry.title, entry.status, entry.error])));
+  assert.equal(cards[0].receive_id, 'owner');
+  assert.ok(JSON.parse(cards[0].content).elements.some((element: { actions?: { url: string }[] }) =>
+    element.actions?.some(action => action.url === 'https://work.example/#home')));
+  assert.doesNotMatch(cards[0].content, /test-dashboard-token|localhost|127\.0\.0\.1/);
+  assert.equal(server.app.mailboxes.list({ botId: bot.id }).find(entry => entry.sourceMessageId === 'command')?.status, 'completed');
+});
+
 test('HTTP multi-bot inbox confirmation dispatches isolated project context and returns only through its own outbox', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'mario-bot-api-'));
   const adapters = new Map<string, { options: FeishuOptions; sent: [string, string][]; closed: boolean }>();

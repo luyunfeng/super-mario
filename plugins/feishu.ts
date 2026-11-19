@@ -1,3 +1,4 @@
+import { allowedPersonalChats, scopedLanes, searchFilter, unmutedIds, type SearchLane } from './feishu-personal-scope.ts';
 import { execFile } from 'node:child_process';
 import { EventDispatcher, WSClient } from '@larksuiteoapi/node-sdk';
 import type { InboxThing } from '../packages/protocol/src/index.ts';
@@ -11,24 +12,30 @@ export interface PersonalCheckpoint {
   version: 1;
   binding: { appId: string; openId: string; profile: string };
   lastCompletedThrough?: string;
+  // A directory outage may finish private reads while group coverage is pending.
+  directThrough?: string;
+  groupRetryFrom?: string;
   pages: number;
-  window?: { start: string; end: string; lanes: Array<{ done: boolean; token?: string; seen: string[]; restarted?: boolean }> };
+  window?: { start: string; end: string; lanes: SearchLane[] };
 }
 export interface PersonalBatch { items: InboxThing[]; checkpoint: PersonalCheckpoint; hasMore: boolean; evidence?: CollectedReplyEvidence[] }
-export const PERSONAL_COLLECTION_BOUNDARY = '首次读取最近24小时；后续从已完成水位重叠5分钟读取。分页未完成时保持原窗口；默认分页采集按命中消息独立入箱。旧collect按会话聚合，上下文每会话最多50条。不保证永久历史或任意旧编辑的全量同步。';
+export const PERSONAL_COLLECTION_BOUNDARY = '首次读取最近24小时；后续从已完成水位重叠5分钟读取。仅搜索私聊和当前账号明确未免打扰的群；群名单不可用时仅采集私聊，保留群回扫起点。分页未完成时保持原窗口；默认分页采集按命中消息独立入箱。旧collect按会话聚合，上下文每会话最多50条。不保证永久历史或任意旧编辑的全量同步。';
 /** Pin the window before the first read as well as after each successful ingestion. */
 export function preparePersonalCheckpoint(binding: PersonalCheckpoint['binding'], previous?: PersonalCheckpoint): PersonalCheckpoint {
   const sameAccount = previous && (['appId', 'openId', 'profile'] as const).every(key => previous.binding[key] === binding[key]);
   const checkpoint: PersonalCheckpoint = sameAccount ? structuredClone(previous) : { version: 1, binding, pages: 0 };
   const wholeSecond = (ms: number) => new Date(Math.floor(ms / 1000) * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const through = checkpoint.directThrough ?? checkpoint.lastCompletedThrough;
   checkpoint.window ??= {
-    start: wholeSecond(checkpoint.lastCompletedThrough ? Date.parse(checkpoint.lastCompletedThrough) - 300_000 : Date.now() - 86_400_000),
-    end: wholeSecond(Date.now()), lanes: Array.from({ length: 3 }, () => ({ done: false, seen: [] })),
+    start: wholeSecond(through ? Date.parse(through) - 300_000 : Date.now() - 86_400_000),
+    end: wholeSecond(Date.now()), lanes: scopedLanes([]),
   };
   return checkpoint;
 }
-export interface FeishuSendContext { replyTo?: string; threadId?: string }
+export interface FeishuSendContext { card?: Record<string, unknown>; replyTo?: string; threadId?: string }
+export interface PersonalChatDetail { mode?: 'p2p' | 'group'; userCount?: number }
 export interface FeishuOptions {
+  personalChatDetail?: (chatId: string) => Promise<PersonalChatDetail>;
   appId: string;
   appSecret: string;
   profile?: string;
@@ -180,13 +187,15 @@ export function createFeishuIntegration(options: FeishuOptions) {
   }
   async function send(chatId: string, text: string, context?: FeishuSendContext): Promise<void> {
     if (!chatId.trim() || !text.trim()) throw new Error('飞书发送需要 chatId 和非空文本');
+    const payload = context?.card ? { msg_type: 'interactive', content: JSON.stringify(context.card) }
+      : { msg_type: 'text', content: JSON.stringify({ text }) };
     if (context?.replyTo) {
       await postMessage(`/open-apis/im/v1/messages/${encodeURIComponent(context.replyTo)}/reply`, {
-        msg_type: 'text', content: JSON.stringify({ text }), ...(context.threadId ? { reply_in_thread: true } : {}),
+        ...payload, ...(context.threadId ? { reply_in_thread: true } : {}),
       });
       return;
     }
-    await postMessage('/open-apis/im/v1/messages?receive_id_type=chat_id', { receive_id: chatId, msg_type: 'text', content: JSON.stringify({ text }) });
+    await postMessage('/open-apis/im/v1/messages?receive_id_type=chat_id', { receive_id: chatId, ...payload });
   }
   async function drain(epoch: number) {
     if (!running || epoch !== generation || drainingGeneration === epoch) return;
@@ -234,7 +243,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     queueMicrotask(() => { void drain(epoch); });
   }
 
-  async function cliPage(args: string[]): Promise<{ messages: Row[]; data: Row; pagination: Row }> {
+  async function cliEnvelope(args: string[]): Promise<Row> {
     const epoch = generation, signal = controller.signal;
     const argv = ['--profile', options.profile!, '--as', 'user', 'im', ...args, '--format', 'json'];
     const raw = options.runCLI ? await options.runCLI(argv) : await new Promise<unknown>((resolve, reject) => {
@@ -253,6 +262,21 @@ export function createFeishuIntegration(options: FeishuOptions) {
     if (epoch !== generation) throw new Error('飞书采集请求已取消');
     const envelope = object(raw);
     if (envelope.ok !== true || envelope.identity !== 'user') throw new Error(`lark-cli 必须返回成功的 user 身份结果：${string(object(envelope.error).message) || '身份或响应错误'}`);
+    return envelope;
+  }
+  const readData = async (args: string[]) => object((await cliEnvelope(args)).data);
+  async function groupScope() {
+    try { return await allowedPersonalChats(readData); }
+    catch { controller.signal.throwIfAborted(); return undefined; }
+  }
+  // A directory scan may span many pages. Recheck just before each body read,
+  // including a cursor replay. A different ID set cannot use the old token.
+  async function stillUnmuted(ids: string[]) {
+    try { return (await unmutedIds(ids, readData)).length === ids.length; }
+    catch { controller.signal.throwIfAborted(); return false; }
+  }
+  async function cliPage(args: string[]): Promise<{ messages: Row[]; data: Row; pagination: Row }> {
+    const envelope = await cliEnvelope(args);
     const data = object(envelope.data);
     if (!Array.isArray(data.messages)) throw new Error('lark-cli 响应缺少 data.messages');
     if (data.has_more === true || object(object(envelope.meta).pagination).complete === false) operationReason = '个人消息采集为最近 24 小时的有界窗口；每路搜索和每会话上下文最多 50 条，存在未采集分页';
@@ -265,12 +289,18 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const binding = { appId: options.appId, openId: options.personalOpenId, profile: options.profile };
     const checkpoint = preparePersonalCheckpoint(binding, previous);
     const window = checkpoint.window!;
-    const filters = [['--chat-type', 'p2p'], ['--chat-type', 'group', '--is-at-me'], []];
-    const batches: Row[][] = [];
-    for (const [index, lane] of window.lanes.entries()) {
+    let allowed = await groupScope();
+    window.lanes = scopedLanes(allowed ?? [], window.lanes);
+    const privateRows: Row[] = [];
+    const groupRows: Row[] = [];
+    for (const lane of window.lanes) {
       if (lane.done) continue;
-      const read = () => cliPage(['+messages-search', '--exclude-sender-type', 'bot', '--start', window.start, '--end', window.end,
-        '--page-size', '50', '--no-reactions', ...filters[index]!, ...(lane.token ? ['--page-token', lane.token] : [])]);
+      const start = lane.chatIds ? checkpoint.groupRetryFrom ?? window.start : window.start;
+      const read = async () => {
+        if (lane.chatIds && !(await stillUnmuted(lane.chatIds))) return;
+        return cliPage(['+messages-search', '--exclude-sender-type', 'bot', '--start', start, '--end', window.end,
+        '--page-size', '50', '--no-reactions', ...searchFilter(lane), ...(lane.token ? ['--page-token', lane.token] : [])]);
+      };
       let page;
       try { page = await read(); }
       catch (error) {
@@ -280,6 +310,11 @@ export function createFeishuIntegration(options: FeishuOptions) {
         if (lane.restarted) throw new Error('飞书分页游标回扫后再次失效，保留原窗口并停止');
         lane.restarted = true; delete lane.token; lane.seen = [];
         page = await read();
+      }
+      if (!page) {
+        allowed = undefined;
+        window.lanes = [window.lanes[0]!];
+        break;
       }
       const more = page.data.has_more === true || page.pagination.complete === false;
       if (!more && page.data.has_more !== false && page.pagination.complete !== true) throw new Error('飞书分页缺少完成标记，保留原窗口');
@@ -297,15 +332,25 @@ export function createFeishuIntegration(options: FeishuOptions) {
         delete lane.token;
       }
       checkpoint.pages++;
-      batches.push(page.messages);
+      (lane.chatIds ? groupRows : privateRows).push(...scopedHits(page.messages, lane));
     }
-    const messages = batches.flat();
+    const messages = allowed === undefined ? privateRows : privateRows.concat(groupRows);
     // Collect outgoing metadata before inbox filtering; never send outgoing text
     // to inbox sorting. Selection hints stay bounded and local to the observer.
     const evidence = messageEvidence(messages);
-    const items = messageThings(messages);
+    const items = await messageThings(messages);
     const hasMore = window.lanes.some(lane => !lane.done);
-    if (!hasMore) { checkpoint.lastCompletedThrough = window.end; delete checkpoint.window; }
+    if (!hasMore) {
+      if (allowed === undefined) {
+        checkpoint.groupRetryFrom ??= window.start;
+        checkpoint.directThrough = window.end;
+      } else {
+        checkpoint.lastCompletedThrough = window.end;
+        delete checkpoint.groupRetryFrom;
+        delete checkpoint.directThrough;
+      }
+      delete checkpoint.window;
+    }
     return { items, checkpoint, hasMore, evidence };
   }
   function messageEvidence(messages: Row[]): CollectedReplyEvidence[] {
@@ -335,24 +380,40 @@ export function createFeishuIntegration(options: FeishuOptions) {
     }
     return evidence;
   }
+  // Only scoped search results enter evidence, detail and legacy history reads.
+  function scopedHits(rows: Row[], lane: SearchLane): Row[] {
+    if (!lane.chatIds) return rows.filter(hit => hit.chat_type === 'p2p' || !hit.chat_type)
+      .map(hit => ({ ...hit, chat_type: 'p2p', personalGroupObserved: false }));
+    return rows.filter(hit => lane.chatIds!.includes(string(hit.chat_id)) && hit.chat_type !== 'p2p')
+      .map(hit => ({ ...hit, personalGroupObserved: true }));
+  }
+  async function personalChatOrigin(hit: Row): Promise<Pick<NonNullable<InboxThing['origin']>, 'kind' | 'personalGroupUserCount' | 'personalGroupObserved'>> {
+    if (hit.chat_type === 'p2p') return { kind: 'direct' };
+    const detail = await options.personalChatDetail?.(string(hit.chat_id));
+    const mode = hit.chat_type === 'group' ? 'group' : detail?.mode;
+    if (mode === 'p2p') return { kind: 'direct' };
+    if (mode !== 'group' && !hit.personalGroupObserved) return { kind: 'unknown' };
+    return { kind: 'group', ...(hit.personalGroupObserved === true ? {personalGroupObserved: true as const} : {}), ...(detail?.mode !== 'p2p' && detail?.userCount !== undefined ? { personalGroupUserCount: detail.userCount } : {}) };
+  }
   /** Default paged provider: each search hit owns its durable inbox identity.
    * Context changes cannot erase requests on other pages or affect provenance.
    * The host scopes identity by account; three search lanes share these IDs.
    * Legacy collect/collectOnce below retain conversation aggregation and keys;
    * no migration or deletion of existing conversation inbox entries is needed.
    */
-  function messageThings(messages: Row[]): InboxThing[] {
+  async function messageThings(messages: Row[]): Promise<InboxThing[]> {
     const matches = new Map(messages.map(row => [JSON.stringify([row.chat_id, row.message_id]), row]));
     const things: InboxThing[] = [];
     for (const hit of matches.values()) {
       const chat = string(hit.chat_id), id = string(hit.message_id);
       if (!chat || !id || hit.deleted === true || string(object(hit.sender).id) === options.personalOpenId) continue;
       const sender = string(object(hit.sender).name) || string(object(hit.sender).id) || 'unknown';
-      const kind = hit.chat_type === 'p2p' ? 'direct' : hit.chat_type === 'group' ? 'group' : 'unknown';
+      const chatOrigin = await personalChatOrigin(hit);
+      const { kind } = chatOrigin;
       const mentionedMe = !!options.personalOpenId && Array.isArray(hit.mentions) && hit.mentions.some(mention =>
         string(object(mention).id) === options.personalOpenId || string(object(object(mention).id).open_id) === options.personalOpenId);
       things.push({
-        origin: { kind, connector: '飞书', chatId: chat, ...(string(hit.chat_name) ? { chatName: string(hit.chat_name) } : {}),
+        origin: { ...chatOrigin, connector: '飞书', chatId: chat, ...(string(hit.chat_name) ? { chatName: string(hit.chat_name) } : {}),
           senderName: sender, ...(kind === 'group' ? { mentionedMe } : {}) },
         thread: `feishu:message:${JSON.stringify([chat, id])}`,
         last: `${id}${hit.update_time ? `:${String(hit.update_time)}` : ''}`,
@@ -371,12 +432,14 @@ export function createFeishuIntegration(options: FeishuOptions) {
     // Message search rejects fractional seconds with API code 99992402, although
     // Date.toISOString() emits them. Its time filter needs whole-second RFC 3339.
     const start = new Date(Date.now() - 86_400_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
-    const search = (filters: string[] = []) => cli(['+messages-search', '--exclude-sender-type', 'bot', '--start', start, '--page-size', '50', '--no-reactions', ...filters]);
-    // Dedicated priority windows stop busy groups from consuming every search slot.
-    // These are the same user's read grants; no new authorization or automatic action.
-    const batches = options.personalOpenId
-      ? await Promise.all([search(['--chat-type', 'p2p']), search(['--chat-type', 'group', '--is-at-me']), search()])
-      : [await search()];
+    const search = async (lane: SearchLane) => scopedHits(await cli(['+messages-search', '--exclude-sender-type', 'bot', '--start', start,
+      '--page-size', '50', '--no-reactions', ...searchFilter(lane)]), lane);
+    const batches = [await search({ done: false, seen: [] })];
+    const lanes = scopedLanes(await groupScope() ?? []);
+    for (const lane of lanes.slice(1)) {
+      if (!(await stillUnmuted(lane.chatIds!))) return enrich(batches[0]!);
+      batches.push(await search(lane));
+    }
     return enrich(batches.flat());
   }
   async function enrich(messages: Row[]): Promise<InboxThing[]> {
@@ -395,23 +458,24 @@ export function createFeishuIntegration(options: FeishuOptions) {
       if (closed) throw new Error('飞书适配器已关闭');
       const hit = hits[0]!;
       const threadId = string(hit.thread_id);
+      if (hit.personalGroupObserved && !(await stillUnmuted([string(hit.chat_id)]))) continue;
       const history = await cli(threadId
         ? ['+threads-messages-list', '--thread', threadId, '--order', 'desc', '--page-size', '50', '--no-reactions']
         : ['+chat-messages-list', '--chat-id', string(hit.chat_id), '--order', 'desc', '--page-size', '50', '--no-reactions']);
       const rows = new Map<string, Row>();
-      for (const row of [...hits, ...history]) if (string(row.message_id) && row.deleted !== true) rows.set(string(row.message_id), row);
+      for (const row of [...hits, ...history.filter(row => !row.chat_id || row.chat_id === hit.chat_id)]) if (string(row.message_id) && row.deleted !== true) rows.set(string(row.message_id), row);
       const context = [...rows.values()]
         .map((row): Row => ({ ...row, create_time: isoTime(row.create_time) }))
         .sort((a, b) => (Date.parse(string(a.create_time)) || 0) - (Date.parse(string(b.create_time)) || 0) || string(a.message_id).localeCompare(string(b.message_id)));
       const last = context.at(-1)!;
       const sender = (row: Row) => string(object(row.sender).name) || string(object(row.sender).id) || 'unknown';
-      // Search enrichment supplies the real conversation type. IDs and names alone
-      // cannot tell a private chat from a group. Mentions refer to the account, not a bot.
-      const kind = hit.chat_type === 'p2p' ? 'direct' : hit.chat_type === 'group' ? 'group' : 'unknown';
+      // Mentions refer to the verified personal account, distinct from the bot.
+      const chatOrigin = await personalChatOrigin(hit);
+      const { kind } = chatOrigin;
       const mentionedMe = kind === 'group' && !!options.personalOpenId && hits.some(row => Array.isArray(row.mentions)
         && row.mentions.some(mention => string(object(mention).id) === options.personalOpenId || string(object(object(mention).id).open_id) === options.personalOpenId));
       things.push({
-        origin: { kind, connector: '飞书', chatId: string(hit.chat_id), ...(string(hit.chat_name) ? { chatName: string(hit.chat_name) } : {}), senderName: sender(last), ...(kind === 'group' && options.personalOpenId ? { mentionedMe } : {}) },
+        origin: { ...chatOrigin, connector: '飞书', chatId: string(hit.chat_id), ...(string(hit.chat_name) ? { chatName: string(hit.chat_name) } : {}), senderName: sender(last), ...(kind === 'group' && options.personalOpenId ? { mentionedMe } : {}) },
         thread: `feishu:${key}`, last: `${string(last.message_id)}${last.update_time ? `:${String(last.update_time)}` : ''}`,
         title: string(hit.chat_name) || string(hit.chat_id),
         text: context.map(row => `[${string(row.message_id)}] ${sender(row)}: ${string(row.content)}`).join('\n'),

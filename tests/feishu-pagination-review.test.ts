@@ -1,3 +1,4 @@
+import { chatDirectory } from './feishu-scope-fixture.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -18,7 +19,7 @@ function providerWith(read: (args: string[]) => Record<string, any>) {
   const runCLI: PersonalCLI = async args => args.includes('status')
     ? { appId: account.appId, identity: 'user', verified: true, identities: { user: {
       available: true, openId: account.openId, scope: PERSONAL_MESSAGE_SCOPES.join(' '),
-    } } } : read(args);
+    } } } : chatDirectory(args, ['oc_same']) ?? read(args);
   return createPersonalProvider({ application: () => account, runCLI });
 }
 
@@ -59,8 +60,8 @@ test('review: 达到seen上限的路线耗尽后，服务提交的断页记录�
   const checkpoint = preparePersonalCheckpoint(account);
   checkpoint.pages = 4098;
   checkpoint.window!.lanes[0] = { done: false, token: 'final-page', seen: Array.from({ length: 4096 }, (_, n) => `seen-${n}`) };
-  checkpoint.window!.lanes[1] = { done: true, seen: [] };
-  checkpoint.window!.lanes[2] = { done: false, token: 'general-current', seen: Array.from({ length: 4095 }, (_, n) => `general-${n}`) };
+  checkpoint.window!.lanes[1] = { done: true, seen: [], chatIds: ['oc_same'], mentions: true };
+  checkpoint.window!.lanes[2] = { done: false, chatIds: ['oc_same'], mentions: false, token: 'general-current', seen: Array.from({ length: 4095 }, (_, n) => `general-${n}`) };
   writeFileSync(file, JSON.stringify({ account, enabled: true, checkpoint }));
   const provider = providerWith(args => args.includes('p2p') || args.includes('general-next') ? envelope()
     : envelope([], { has_more: true, page_token: 'general-next' }));

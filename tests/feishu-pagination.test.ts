@@ -1,3 +1,4 @@
+import { chatDirectory } from './feishu-scope-fixture.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
@@ -16,11 +17,14 @@ const value = (args: string[], flag: string) => args.includes(flag) ? args[args.
 const route = (args: string[]) => args.includes('--is-at-me') ? 1 : args.includes('p2p') ? 0 : 2;
 const row = (n: number, extra = {}) => ({ message_id: `om_${n}`, chat_id: `oc_${n}`, chat_type: 'group', create_time: '2026-11-17T00:00:00Z', content: `消息${n}`, sender: { id: 'ou_other', name: '对方' }, ...extra });
 const envelope = (messages: unknown[] = [], data = {}, meta = {}) => ({ ok: true, identity: 'user', data: { messages, has_more: false, ...data }, meta });
-function providerWith(search: (args: string[]) => unknown | Promise<unknown>, calls: string[][] = []) {
+function providerWith(search: (args: string[]) => unknown | Promise<unknown>, calls: string[][] = [], chat?: (id: string) => Record<string, unknown>, groupIds = () => Array.from({length: 10}, (_, n) => `oc_${n}`)) {
   const runCLI: PersonalCLI = async args => {
     calls.push(args);
+    const directory = chatDirectory(args, groupIds());
+    if (directory) return directory;
     if (args.includes('status')) return { appId: account.appId, identity: 'user', verified: true, identities: { user: { available: true, openId: account.openId, userName: account.name, scope: PERSONAL_MESSAGE_SCOPES.join(' ') } } };
     if (args.includes('+messages-search')) return await search(args) as Record<string, any>;
+    if (args.includes('chats') && chat) return chat(value(args, '--chat-id')!);
     return envelope();
   };
   return createPersonalProvider({ application: () => account, runCLI });
@@ -48,18 +52,18 @@ async function connect(service: ReturnType<typeof createPersonalMessages>) { ser
 test('生产 provider 跨页超过50条，三路公平读取并去重，保留精确个人@和来源', async () => {
   const calls: string[][] = [];
   const direct = row(100, { chat_type: 'p2p' });
-  const mention = row(101, { mentions: [{ id: account.openId }] });
+  const mention = row(101, { chat_id: 'oc_3', mentions: [{ id: account.openId }] });
   const p = providerWith(args => {
     if (route(args) === 0) return envelope([direct]);
     if (route(args) === 1) return envelope([mention]);
-    return value(args, '--page-token') ? envelope(Array.from({ length: 10 }, (_, n) => row(n + 50)))
-      : envelope([direct, mention, ...Array.from({ length: 48 }, (_, n) => row(n))], { has_more: true, page_token: 'opaque-next' });
+    return value(args, '--page-token') ? envelope(Array.from({ length: 10 }, (_, n) => row(n + 50, {chat_id:'oc_1'})))
+      : envelope([direct, mention, ...Array.from({ length: 48 }, (_, n) => row(n, {chat_id:'oc_1'}))], { has_more: true, page_token: 'opaque-next' });
   }, calls);
   const first = await p.collectBatch!(account, signal());
   assert.equal(first.items.length, 50); assert.equal(first.hasMore, true);
   assert.equal(first.checkpoint.lastCompletedThrough, undefined);
   assert.equal(first.items.find(item => item.origin?.chatId === 'oc_100')!.origin!.kind, 'direct');
-  assert.equal(first.items.find(item => item.origin?.chatId === 'oc_101')!.origin!.mentionedMe, true);
+  assert.equal(first.items.find(item => item.origin?.chatId === 'oc_3')!.origin!.mentionedMe, true);
   const second = await p.collectBatch!(account, signal(), first.checkpoint);
   assert.equal(first.items.length + second.items.length, 60);
   assert.equal(second.hasMore, false); assert.equal(second.checkpoint.lastCompletedThrough, first.checkpoint.window!.end);
@@ -226,4 +230,107 @@ test('同一窗口回扫后token再次失效时停止，不在批次间无限回
   const snapshot = structuredClone(first.checkpoint);
   await assert.rejects(p.collectBatch!(account, signal(), first.checkpoint), /回扫后再次失效/);
   assert.equal(reads, 3); assert.deepEqual(first.checkpoint, snapshot);
+});
+
+test('个人分页采集从同账号群详情读取用户数，同群只查一次，失败保留未知', async () => {
+  const calls: string[][] = [];
+  const rows = [row(1), row(2, {chat_id: 'oc_1'}), row(3), row(4), row(5),
+    row(6, {chat_type: 'p2p'}), row(7, {chat_type: 'unknown'}),
+    row(8, {chat_name: '100人', user_count: '100'})];
+  const provider = providerWith(() => envelope(rows), calls, chat => {
+    if (chat === 'oc_4') throw new Error('denied');
+    const count = ({oc_1: '51', oc_3: '50', oc_5: '51.5'} as Record<string,string>)[chat];
+    return {ok: true, identity: 'user', data: {user_count: count, bot_count: '100'}};
+  });
+  const batch = await provider.collectBatch!(account, signal());
+  assert.deepEqual(batch.items.sort((a,b) => Number(a.last.slice(3)) - Number(b.last.slice(3))).map(item => item.origin?.personalGroupUserCount), [51,51,50,undefined,undefined,undefined,undefined,undefined]);
+  const queries = calls.filter(args => args.includes('chats'));
+  assert.deepEqual(queries.map(args => value(args, '--chat-id')), ['oc_1','oc_3','oc_4','oc_5','oc_7','oc_8']);
+  assert.ok(queries.every(args => value(args, '--profile') === account.profile && value(args, '--as') === 'user'));
+});
+
+test('分页和会话聚合均按详情 chat_mode 补来源，只有已确认的群携带人数和个人@', async () => {
+  const samples = [
+    {chat_mode: 'group', user_count: 51}, {chat_mode: 'p2p', user_count: 100},
+    {chat_type: 'group', user_count: '80'}, {chat_mode: 'topic', user_count: 60},
+    {chat_mode: 'group', user_count: 0}, {chat_mode: 'group', user_count: '050'},
+    ...[-1, 1.2, '', '1e3', '9007199254740992', Number.MAX_SAFE_INTEGER + 1].map(user_count => ({chat_mode: 'group', user_count})),
+  ];
+  const rows = samples.map((_, n) => row(n, {chat_type: undefined, mentions: [{id: account.openId}]}));
+  const provider = providerWith(args => envelope(route(args) === 0 ? [] : rows), [], id => ({
+    ok: true, identity: 'user', data: samples[Number(id.slice(3))],
+  }), () => rows.map(r => r.chat_id));
+  for (const items of [(await provider.collectBatch!(account, signal())).items, await provider.collect(account, signal())]) {
+    items.sort((a,b) => Number(a.last.slice(3)) - Number(b.last.slice(3)));
+    assert.deepEqual(items.map(item => item.origin?.kind), ['group','direct','group','group', ...Array(8).fill('group')]);
+    assert.deepEqual(items.map(item => item.origin?.personalGroupUserCount), [51,undefined,80,60,0,50,...Array(6).fill(undefined)]);
+    for (const {origin} of items) assert.equal(origin?.mentionedMe, origin?.kind === 'group' ? true : undefined);
+  }
+});
+
+test('同账号跨页复用详情和失败结果，隔离账号，到期重新取数', async t => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  let count = 50;
+  const calls: string[][] = [];
+  const provider = providerWith(args => envelope(route(args) === 0 ? [] : [row(1, {chat_type: undefined}), row(2, {chat_type: undefined})],
+    args.includes('--page-token') ? {} : {has_more: true, page_token: 'next'}), calls, id => {
+    if (id === 'oc_2' && count === 50) throw new Error('denied');
+    return {ok: true, identity: 'user', data: {chat_mode: 'group', user_count: count}};
+  });
+  const first = await provider.collectBatch!(account, signal());
+  count = 51;
+  const next = await provider.collectBatch!(account, signal(), first.checkpoint);
+  assert.deepEqual(next.items.map(i => i.origin?.personalGroupUserCount), [50, undefined]);
+  assert.equal(next.items[1].origin?.kind, 'group');
+  assert.equal(calls.filter(args => args.includes('chats')).length, 2);
+  const separate = await provider.collectBatch!({...account, profile: 'another-profile'}, signal());
+  assert.deepEqual(separate.items.map(i => i.origin?.personalGroupUserCount), [51, 51]);
+  now += 60_000;
+  const refreshed = await provider.collectBatch!(account, signal());
+  assert.deepEqual(refreshed.items.map(i => i.origin?.personalGroupUserCount), [51, 51]);
+  assert.equal(calls.filter(args => args.includes('chats')).length, 6);
+});
+
+test('群详情缓存达到256条后淘汰最早记录', async () => {
+  let ids: number[] = [];
+  const calls: string[][] = [];
+  const provider = providerWith(() => envelope(ids.map(n => row(n))), calls,
+    () => ({ok: true, identity: 'user', data: {chat_mode: 'group', user_count: 50}}), () => ids.map(n => 'oc_'+n));
+  for (let start = 0; start < 257; start += 50) {
+    ids = Array.from({length: Math.min(50, 257 - start)}, (_, n) => start + n);
+    await provider.collectBatch!(account, signal());
+  }
+  ids = [256, 0];
+  await provider.collectBatch!(account, signal());
+  const queries = calls.filter(args => args.includes('chats'));
+  assert.equal(queries.length, 258);
+  assert.equal(value(queries.at(-1)!, '--chat-id'), 'oc_0');
+});
+
+test('多批群 checkpoint 落盘重启后只续读未完成的群范围', async t => {
+  const calls: string[][] = [];
+  const groups = Array.from({length: 23}, (_, n) => 'oc_' + n);
+  let pendingScope: string | undefined;
+  const p = providerWith(args => {
+    const scope = value(args, '--chat-id');
+    if (route(args) !== 2 || !scope) return envelope();
+    pendingScope ??= scope;
+    if (scope === pendingScope && !value(args,'--page-token')) return envelope([], {has_more:true,page_token:'pending-scope'});
+    return envelope();
+  }, calls, undefined, () => groups);
+  const f = fixture(t,p);
+  await connect(f.service);
+  await f.service.enable(true);
+  await until(() => f.service.status().collectionPages === 7);
+  await f.service.close();
+  assert.equal(f.read().checkpoint.window.lanes.length,7);
+  const before = calls.length;
+  groups.reverse();
+  const resumed = f.restart();
+  await until(() => Boolean(resumed.status().lastCompletedThrough));
+  const reads = calls.slice(before).filter(args => args.includes('+messages-search'));
+  assert.equal(reads.length,1);
+  assert.equal(value(reads[0]!, '--chat-id'),pendingScope);
+  assert.equal(value(reads[0]!, '--page-token'),'pending-scope');
 });

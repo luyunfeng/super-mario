@@ -443,7 +443,7 @@ test('首页群聊动态仅收录人数已核实且不超过 50 人的群', asyn
       const receivedAt = new Date().toISOString();
       state.inbox = [50, 51, undefined].map(size => ({
         id: 'message-' + size, source: 'feishu:personal', title: '测试群-' + size, text: '排查结果已同步', tier: 'fyi', receivedAt,
-        origin: { kind: 'group', connector: '飞书', chatId: 'chat-' + size, personalGroupUserCount: size },
+        origin: { kind: 'group', connector: '飞书', chatId: 'chat-' + size, personalGroupObserved: true, personalGroupUserCount: size },
       }));
       await route.fulfill({ json: state });
     });
@@ -454,5 +454,14 @@ test('首页群聊动态仅收录人数已核实且不超过 50 人的群', asyn
     await expect(home).toContainText('测试群-50');
     await expect(home).not.toContainText('测试群-51');
     await expect(home).not.toContainText('测试群-undefined');
+  });
+});
+
+test('机器人卡片的发起执行入口只打开表单', async () => {
+  await withApp(async ({ open, server }) => {
+    const count = server.app.store.list('runs').length;
+    const { page } = await open('#projects/all/runs/new');
+    await expect(page.getByRole('dialog', { name: '发起执行', exact: true })).toBeVisible();
+    assert.equal(server.app.store.list('runs').length, count);
   });
 });

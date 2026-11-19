@@ -17,6 +17,7 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
   let projectId = 'all';
   let tab = 'todos';
   let runId = '';
+  let launchRequested = false;
   let lastProjects = '';
 
   const todos = createTodosTab({ api, store, router });
@@ -128,6 +129,7 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
     paintList(snapshot);
     paintDetail(snapshot);
     if (tab === 'memory') paintMemory(snapshot);
+    if (launchRequested && router.current.page === 'projects') { launchRequested = false; runs.launch(); }
   }
 
   // 顶栏切换项目范围时，项目页跟着切换。
@@ -146,7 +148,8 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
       tab = TABS.includes(nextTab) ? nextTab : projectId === 'all' ? 'todos' : 'workspace';
       if (projectId === 'all' && ['workspace', 'memory', 'settings'].includes(tab)) tab = 'todos';
       scope.set(projectId === 'all' ? '' : projectId);  // 顶栏的项目范围跟随当前所看的项目
-      runId = tab === 'runs' ? nextRun ?? '' : '';
+      launchRequested = tab === 'runs' && nextRun === 'new';
+      runId = tab === 'runs' && !launchRequested ? nextRun ?? '' : '';
       if (!id) { router.go(router.href('projects', projectId, tab)); return; }
       lastProjects = '';
       todos.show(projectId);

@@ -1,3 +1,4 @@
+import { excludesPersonalGroupFromAutomation } from '../../protocol/src/inbox-origin.ts';
 import { createHash } from 'node:crypto';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
 import type { InboxItem, InboxThing, Project, Todo } from '../../protocol/src/index.ts';
@@ -85,17 +86,32 @@ export function createInboxService({ store, events, createTodo, triage }: {
       required(source, 'source');
       if (!Array.isArray(things)) throw new InboxError('things必须为数组');
       // Validate and snapshot the entire batch before queueing any writes or model calls.
-      const batch = things.map(validateThing);
+      const batch = things.map(value => {
+        const thing = validateThing(value);
+        if (thing.origin && !source.startsWith('feishu:')) delete thing.origin.personalGroupObserved;
+        return thing;
+      });
       const job = queue.then(async () => {
         for (const thing of batch) {
           const id = createHash('sha256').update(JSON.stringify([source, thing.thread])).digest('hex');
           const existing = store.get<InboxItem>(collection, id);
           if (existing?.last === thing.last) {
             // A duplicate may add verified provenance, but cannot change user decisions.
-            if ((!existing.origin || existing.origin.kind === 'unknown') && thing.origin && thing.origin.kind !== 'unknown') {
-              store.put(collection, id, { ...existing, origin: thing.origin, version: existing.version + 1, updatedAt: new Date().toISOString() });
+            const addedCount = thing.origin?.personalGroupUserCount !== undefined && existing.origin?.personalGroupUserCount !== thing.origin.personalGroupUserCount;
+            const observed = thing.origin?.personalGroupObserved && !existing.origin?.personalGroupObserved;
+            if (observed || addedCount || ((!existing.origin || existing.origin.kind === 'unknown') && thing.origin && thing.origin.kind !== 'unknown')) {
+              const origin = { ...existing.origin, ...thing.origin };
+              store.put(collection, id, { ...existing, origin, version: existing.version + 1, updatedAt: new Date().toISOString() });
               changed(id);
             }
+            continue;
+          }
+          if (excludesPersonalGroupFromAutomation(thing.origin)) {
+            const item: InboxItem = { ...existing, ...thing, id, source, version: (existing?.version ?? 0) + 1,
+              tier: existing?.tier ?? 'fyi', reason: existing?.reason ?? '群人数超过50，跳过自动分拣',
+              updatedAt: new Date().toISOString() };
+            store.put(collection, id, item);
+            changed(id);
             continue;
           }
           const result = triage ? await triage(structuredClone(thing)) : ruleTriage(thing);

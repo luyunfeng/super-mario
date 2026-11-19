@@ -37,7 +37,7 @@ export function createFeishuGateway(
     const value = personal.status();
     return value.url ? { ...value, qrDataUrl: await QRCode.toDataURL(value.url, { width: 280, margin: 2, errorCorrectionLevel: 'M' }) } : value;
   }
-  const bots = createFeishuBotsController(app, config, { factory: dependencies.botFactory });
+  const bots = createFeishuBotsController(app, config, { factory: dependencies.botFactory, webBase: process.env.SUPER_MARIO_WEB_URL });
   app.setInboxReplyHost(entry => bots.inboxHandlingStatus(entry.id), async (source, text, key) => {
     if (!app.plugins.list().some(p => p.id === 'feishu' && p.status === 'active')) throw Object.assign(new InputError('飞书插件已停用', 409), { delivery: 'no' });
     if (source.kind === 'mailbox') return bots.replyToInbox(source.id, source.version, text, key);

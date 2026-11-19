@@ -17,5 +17,11 @@ export function normalizeInboxOrigin(value: unknown): InboxOrigin | undefined {
     if (typeof input.mentionedMe !== 'boolean') return fail();
     if (result.kind === 'group') result.mentionedMe = input.mentionedMe;
   }
+  if (result.kind === 'group' && result.connector === '飞书' && input.personalGroupUserCount !== undefined) {
+    const count = input.personalGroupUserCount;
+    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) return fail();
+    result.personalGroupUserCount = count;
+  }
+  if (result.kind === 'group' && result.connector === '飞书' && input.personalGroupObserved === true) result.personalGroupObserved = true;
   return result;
 }

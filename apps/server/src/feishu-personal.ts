@@ -1,3 +1,4 @@
+import { validChatId } from '../../../plugins/feishu-personal-scope.ts';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -37,8 +38,14 @@ export function createPersonalMessages(options: {
       const date = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value));
       if (c.version !== 1 || !c.binding || !['appId', 'openId', 'profile'].every(key => typeof c.binding[key] === 'string')
         || !Number.isSafeInteger(c.pages) || c.pages < 0 || c.lastCompletedThrough !== undefined && !date(c.lastCompletedThrough)
+        || (c.directThrough !== undefined && !date(c.directThrough)) || (c.groupRetryFrom !== undefined && !date(c.groupRetryFrom))
+        || (c.directThrough === undefined) !== (c.groupRetryFrom === undefined)
         || c.window && (!date(c.window.start) || !date(c.window.end) || Date.parse(c.window.start) > Date.parse(c.window.end)
-          || !Array.isArray(c.window.lanes) || c.window.lanes.length !== 3 || !c.window.lanes.every((lane: any) => typeof lane.done === 'boolean'
+          || !Array.isArray(c.window.lanes) || c.window.lanes.length < 1 || !c.window.lanes.every((lane: any, index: number) => lane && typeof lane.done === 'boolean'
+            && (lane.chatIds === undefined
+              ? lane.mentions === undefined && (index === 0 || c.window.lanes.length === 3 && c.window.lanes.every((entry: any) => !entry?.chatIds))
+              : index > 0 && typeof lane.mentions === 'boolean' && Array.isArray(lane.chatIds) && lane.chatIds.length > 0
+                && lane.chatIds.length <= 10 && lane.chatIds.every(validChatId))
             && (lane.token === undefined || typeof lane.token === 'string' && lane.token.length > 0)
             && (lane.restarted === undefined || typeof lane.restarted === 'boolean')
             && Array.isArray(lane.seen) && lane.seen.length <= 4096 && lane.seen.every((token: unknown) => typeof token === 'string')))) throw new Error('个人飞书分页记录无效');
@@ -69,7 +76,7 @@ export function createPersonalMessages(options: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let expiration: ReturnType<typeof setTimeout> | undefined;
   function progress() {
-    return { collectionBoundary: PERSONAL_COLLECTION_BOUNDARY, lastCompletedThrough: saved.checkpoint?.lastCompletedThrough,
+    return { collectionBoundary: saved.checkpoint?.groupRetryFrom ? PERSONAL_COLLECTION_BOUNDARY + ' 当前仅完成私聊采集；待群名单恢复后补扫。' : PERSONAL_COLLECTION_BOUNDARY, lastCompletedThrough: saved.checkpoint?.lastCompletedThrough,
       hasMore: !!saved.checkpoint?.window, collectionPages: saved.checkpoint?.pages ?? 0 };
   }
   const status = () => structuredClone({ ...view, ...progress() });

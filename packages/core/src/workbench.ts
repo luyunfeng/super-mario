@@ -1,3 +1,4 @@
+import { excludesPersonalGroupFromBrief } from '../../protocol/src/inbox-origin.ts';
 import { createInboxClassifier } from './agent-runtime/inbox-classifier.ts';
 import { createInboxHandlingRuntime } from './agent-runtime/inbox-handling.ts';
 import { createInboxHandling, inboxHandlingApprovalKind } from './inbox-handling.ts';
@@ -348,7 +349,7 @@ export async function createWorkbench(config: AppConfig) {
     const offset = input.offset ?? 0, limit = input.limit ?? 50;
     if (!Number.isSafeInteger(offset) || (offset as number) < 0 || !Number.isSafeInteger(limit) || (limit as number) < 1 || (limit as number) > 100) throw new InputError('收件箱分页参数无效');
     const query = typeof input.query === 'string' ? input.query.toLowerCase() : '';
-    const items = inbox.list().filter(item => (!input.projectId || item.projectId === input.projectId) && (!input.todoId || item.todoId === input.todoId)
+    const items = inbox.list().filter(item => !excludesPersonalGroupFromBrief(item) && (!input.projectId || item.projectId === input.projectId) && (!input.todoId || item.todoId === input.todoId)
       && (!input.kind || (item.origin?.kind ?? 'unknown') === input.kind) && (input.mentionedMe !== true || (item.origin?.kind === 'group' && item.origin.mentionedMe === true))
       && (!query || [item.title, item.text, item.origin?.chatName, item.origin?.senderName].some(text => text?.toLowerCase().includes(query))));
     return { items: items.slice(offset as number, (offset as number) + (limit as number)), total: items.length, offset, hasMore: (offset as number) + (limit as number) < items.length } as unknown as Json;

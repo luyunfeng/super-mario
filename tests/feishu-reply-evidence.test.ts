@@ -1,3 +1,4 @@
+import { chatDirectory } from './feishu-scope-fixture.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFeishuIntegration } from '../plugins/feishu.ts';
@@ -14,7 +15,7 @@ const rawRow = (message_id: string, extra = {}) => ({
 async function collect(messages: unknown[]) {
   const adapter = createFeishuIntegration({ appId: 'cli_0123456789abcdef', appSecret: '', profile: 'offline', personalOpenId: 'ou_me',
     onMessage: async () => {}, onInbox: async () => {},
-    runCLI: async () => ({ ok: true, identity: 'user', data: { messages, has_more: false } }),
+    runCLI: async args => chatDirectory(args, ['oc_chat']) ?? ({ ok: true, identity: 'user', data: { messages, has_more: false } }),
   });
   try { return await adapter.collectBatch(); } finally { await adapter.close(); }
 }
