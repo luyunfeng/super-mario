@@ -37,7 +37,8 @@ export function createPersonalMessages(options: {
       const c = data.checkpoint;
       const date = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value));
       if (c.version !== 1 || !c.binding || !['appId', 'openId', 'profile'].every(key => typeof c.binding[key] === 'string')
-        || !Number.isSafeInteger(c.pages) || c.pages < 0 || c.lastCompletedThrough !== undefined && !date(c.lastCompletedThrough)
+        || !Number.isSafeInteger(c.pages) || c.pages < 0 || c.notBefore !== undefined && !date(c.notBefore)
+        || c.lastCompletedThrough !== undefined && !date(c.lastCompletedThrough)
         || (c.directThrough !== undefined && !date(c.directThrough)) || (c.groupRetryFrom !== undefined && !date(c.groupRetryFrom))
         || (c.directThrough === undefined) !== (c.groupRetryFrom === undefined)
         || c.window && (!date(c.window.start) || !date(c.window.end) || Date.parse(c.window.start) > Date.parse(c.window.end)
@@ -76,7 +77,10 @@ export function createPersonalMessages(options: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let expiration: ReturnType<typeof setTimeout> | undefined;
   function progress() {
-    return { collectionBoundary: saved.checkpoint?.groupRetryFrom ? PERSONAL_COLLECTION_BOUNDARY + ' 当前仅完成私聊采集；待群名单恢复后补扫。' : PERSONAL_COLLECTION_BOUNDARY, lastCompletedThrough: saved.checkpoint?.lastCompletedThrough,
+    const boundary = saved.checkpoint?.notBefore
+      ? `从 ${new Date(saved.checkpoint.notBefore).toLocaleString('zh-CN')} 重新开始采集，不回填此前历史。` + PERSONAL_COLLECTION_BOUNDARY.replace('首次读取最近24小时；', '')
+      : PERSONAL_COLLECTION_BOUNDARY;
+    return { collectionBoundary: saved.checkpoint?.groupRetryFrom ? boundary + ' 当前仅完成私聊采集；待群名单恢复后补扫。' : boundary, lastCompletedThrough: saved.checkpoint?.lastCompletedThrough,
       hasMore: !!saved.checkpoint?.window, collectionPages: saved.checkpoint?.pages ?? 0 };
   }
   const status = () => structuredClone({ ...view, ...progress() });

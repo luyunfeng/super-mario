@@ -7,6 +7,34 @@ const get = (args: string[], flag: string) => args.includes(flag) ? args[args.in
 const message = (chat_id: string, chat_type = 'group') => ({chat_id, chat_type, message_id: 'om_' + chat_id, sender: {id: 'ou_other', id_type: 'open_id'},
   create_time: '2026-11-16T12:00:00Z', content: 'fixture'});
 const ok = (data: unknown) => ({ok: true, identity: 'user', data});
+
+test('手动重新开始后，分页、重叠读取和回复证据均不回填起点前的历史', async t => {
+  const floor = '2026-11-16T12:00:00Z';
+  let now = Date.parse('2026-11-16T12:03:00Z');
+  t.mock.method(Date, 'now', () => now);
+  const starts: string[] = [];
+  const integration = adapter(args => {
+    if (args.includes('+chat-list')) return ok({chats: [], has_more: false});
+    assert.ok(args.includes('+messages-search'));
+    starts.push(get(args, '--start')!);
+    return ok({ messages: [
+      {...message('oc_dm', 'p2p'), message_id: 'om_old', create_time: '2026-11-16T11:59:00Z'},
+      {...message('oc_dm', 'p2p'), message_id: 'om_new', create_time: '2026-11-16T12:01:00Z'},
+    ], has_more: false });
+  });
+  t.after(() => integration.close());
+  const initial = {version: 1 as const, binding, pages: 0, notBefore: floor, lastCompletedThrough: floor};
+  const batch = await integration.collectBatch(initial);
+  assert.deepEqual(batch.items.map(item => item.last), ['om_new']);
+  assert.deepEqual(batch.evidence?.map(item => item.messageId), ['om_new']);
+  assert.equal(batch.checkpoint.notBefore, floor);
+  now = Date.parse('2026-11-16T12:04:00Z');
+  const resumed = await integration.collectBatch(JSON.parse(JSON.stringify(batch.checkpoint)));
+  assert.deepEqual(resumed.items.map(item => item.last), ['om_new']);
+  assert.deepEqual(starts, [floor, floor]);
+  const another = preparePersonalCheckpoint({...binding, openId: 'ou_another'}, resumed.checkpoint);
+  assert.equal(another.notBefore, undefined, '不得把旧账号的清理下限施加到另一个账号');
+});
 function adapter(runCLI: (args: string[]) => unknown) {
   return createFeishuIntegration({...binding, appSecret:'', personalOpenId: binding.openId, runCLI: async args => runCLI(args), onMessage: async () => {}, onInbox: async () => {}});
 }

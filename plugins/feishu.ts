@@ -11,6 +11,8 @@ export interface FeishuMessageSource { chatId: string; messageId: string; chatTy
 export interface PersonalCheckpoint {
   version: 1;
   binding: { appId: string; openId: string; profile: string };
+  /** An explicit fresh start must also bound later overlapping reads and replays. */
+  notBefore?: string;
   lastCompletedThrough?: string;
   // A directory outage may finish private reads while group coverage is pending.
   directThrough?: string;
@@ -27,7 +29,8 @@ export function preparePersonalCheckpoint(binding: PersonalCheckpoint['binding']
   const wholeSecond = (ms: number) => new Date(Math.floor(ms / 1000) * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const through = checkpoint.directThrough ?? checkpoint.lastCompletedThrough;
   checkpoint.window ??= {
-    start: wholeSecond(through ? Date.parse(through) - 300_000 : Date.now() - 86_400_000),
+    start: wholeSecond(Math.max(through ? Date.parse(through) - 300_000 : Date.now() - 86_400_000,
+      checkpoint.notBefore ? Date.parse(checkpoint.notBefore) : -Infinity)),
     end: wholeSecond(Date.now()), lanes: scopedLanes([]),
   };
   return checkpoint;
@@ -334,7 +337,13 @@ export function createFeishuIntegration(options: FeishuOptions) {
       checkpoint.pages++;
       (lane.chatIds ? groupRows : privateRows).push(...scopedHits(page.messages, lane));
     }
-    const messages = allowed === undefined ? privateRows : privateRows.concat(groupRows);
+    const scopedMessages = allowed === undefined ? privateRows : privateRows.concat(groupRows);
+    // A server cursor can return an old edit or an out-of-window hit. A manual
+    // fresh-start boundary applies to both inbox content and reply observation.
+    const messages = checkpoint.notBefore ? scopedMessages.filter(hit => {
+      const created = isoTime(hit.create_time);
+      return created !== undefined && Date.parse(created) >= Date.parse(checkpoint.notBefore!);
+    }) : scopedMessages;
     // Collect outgoing metadata before inbox filtering; never send outgoing text
     // to inbox sorting. Selection hints stay bounded and local to the observer.
     const evidence = messageEvidence(messages);
