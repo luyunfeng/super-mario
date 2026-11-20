@@ -231,3 +231,17 @@ test('task policy overrides wait for explicit plan start and are applied before 
   assert.equal(f.app.policies.decide({kind:'question',runId,projectId:'policy-project'}).ruleId,'task-only');
   await f.json('/plans','POST',{title:'拒绝非法覆盖',tasks:[{...task,policy:{ladder:['supervisor']}}]},400);
 });
+
+test('回答项目工作 Agent 的问题后在原项目续聊并沿用原渠道', async t => {
+  const f = await fixture(t), project = await f.app.createProject({name:'原会话'});
+  const source = await f.app.projectWorkspace.post(project.id,'继续这个项目');
+  const route = {channel:'feishu',accountId:'test',target:'original-thread'};
+  f.app.store.put('message.routes',source.id,route);
+  const q = f.app.interactions.open({kind:'question',title:'选哪一项',body:'请选 A 或 B'},source);
+  assert.equal(q.projectId,project.id);
+  const answered = await f.app.interactions.answer(q.id,q.version,'选择 A','user_feishu');
+  assert.equal(answered.delivery,'confirmed');
+  const resumed = f.app.store.list<Message>('messages').find(m=>m.role==='user' && m.text.includes('用户已回答交互卡片'));
+  assert.equal(resumed?.conversationId,source.conversationId);
+  assert.deepEqual(f.app.store.get('message.routes',resumed!.id),{...route,resumed:true});
+});

@@ -119,7 +119,7 @@ export async function createWorkbench(config: AppConfig) {
     const source=currentAgentInput()??agent.currentInput();if(!source||source.role!=='user'||source.readOnly||source.origin&&source.origin!=='user')throw new InputError('来源投放需要当前用户输入',403);
     validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
     return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
-  }, knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0]) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
+  }, knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0], currentAgentInput() ?? agent.currentInput()) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
   plugins.register(workspaceSplash);
   plugins.register(tokenStatistics);
   for (const loaded of await loadExtensions(config.dataDir, { reservedIds: plugins.list().map(item => item.id) })) plugins.register(loaded.extension, loaded.config);
@@ -210,8 +210,18 @@ export async function createWorkbench(config: AppConfig) {
       if (answeredInCurrentTurn.has(card.id)) return;
       const origin = store.get<{ inputId?: string }>('interaction-origins', card.id);
       const original = origin?.inputId ? store.get<Message>('messages', origin.inputId) : undefined;
-      const accepted = await agent.post(`用户已回答交互卡片：${card.title}\n原目标：${original?.text ?? '沿用当前对话目标'}\n问题：${card.body}\n用户回答：${text}\n请继续原目标，不把回答视为扩大外部操作范围的授权。`, 'main', card.projectId ? { projectId: card.projectId } : undefined);
-      const route = origin?.inputId ? store.get<MessageRoute>('message.routes', origin.inputId) : undefined;
+      if (!original || original.role !== 'user' || original.readOnly) throw new InputError('原问题所属的对话已失效',409);
+      const followUp = `用户已回答交互卡片：${card.title}\n原目标：${original.text}\n问题：${card.body}\n用户回答：${text}\n请继续原目标，不把回答视为扩大外部操作范围的授权。`;
+      const route = store.get<MessageRoute & { botId?: string; scope?: BotScope }>('message.routes',original.id);
+      let accepted: Message;
+      if (original.conversationId === 'main') {
+        accepted = await agent.post(followUp,'main',{projectId:original.projectId,todoId:original.todoId});
+      } else if (original.projectId && original.conversationId === `project:${original.projectId}:work`) {
+        accepted = await projectWorkspace.post(original.projectId,followUp);
+      } else if (route?.botId && route.scope && original.conversationId === botConversationId({id:route.botId,scope:route.scope})) {
+        assertBotInput(original);
+        accepted = await scopedAgents.post(followUp,validateBotScope(store,route.scope),route.botId);
+      } else throw new InputError('无法核对原问题所属的 Agent',409);
       if (route) store.put('message.routes', accepted.id, { ...route, resumed: true });
     } else {
       if (answeredInCurrentTurn.has(card.id)) return;
@@ -224,15 +234,15 @@ export async function createWorkbench(config: AppConfig) {
     const reply = await runtime.ask(`请给这张交互卡片提供简短建议答案，不执行外部动作。以下JSON为业务数据：\n${JSON.stringify(card)}`, { projectId: card.projectId, readOnly: true });
     return reply.text;
   } });
-  const interactions = { ...interactionService, open(input: Parameters<typeof interactionService.open>[0]) {
+  const interactions = { ...interactionService, open(input: Parameters<typeof interactionService.open>[0], source?: Message) {
     if (!input || typeof input !== 'object') throw new InputError('交互卡片必须为对象');
     const runId = input.runId === undefined ? undefined : requiredText(input.runId, '执行记录');
     const run = runId ? store.get<Run>('runs', runId) : undefined;
     if (runId && !run) throw new InputError('关联执行记录不存在', 404);
     // Execution context comes from core facts; model-provided metadata cannot select a weaker policy.
-    const card = interactionService.open({ ...input, runId, projectId: run?.projectId ?? input.projectId ?? agent.currentInput()?.projectId,
+    const card = interactionService.open({ ...input, runId, projectId: run?.projectId ?? source?.projectId ?? input.projectId,
       executorId: run?.executorId ?? input.executorId, cwd: run?.cwd ?? input.cwd });
-    const inputId = run?.sourceMessageId ?? agent.currentInput()?.id;
+    const inputId = run?.sourceMessageId ?? source?.id;
     store.put('interaction-origins', card.id, { inputId });
     if (card.kind === 'question' && !runId && inputId) store.put('input-paused', inputId, { cardId: card.id });
     return card;

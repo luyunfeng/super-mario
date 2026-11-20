@@ -2,7 +2,8 @@ import { resumeForm, sessionCard, sessionCardSnapshot, type SessionList, type Se
 import { createHash, randomInt } from 'node:crypto';
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
 import { chooseCommandTarget, createCommandMentionEvidence, type CommandCandidate, type CommandClassifier, type CommandIdentity, type CommandRoute, type CommandTarget } from './feishu-command-routing.ts';
-import { buildFeishuDashboard } from './feishu-dashboard.ts';
+import type { Card } from '../../../packages/core/src/interactions.ts';
+import { buildFeishuDashboard, questionForm, type DashboardView } from './feishu-dashboard.ts';
 import { createAgentProgressStream } from './agent-progress-stream.ts';
 import { buildAgentProgressCard } from '../../../plugins/agent-progress-card.ts';
 import { buildFeishuMessageCard } from './feishu-cards.ts';
@@ -28,6 +29,7 @@ export interface FeishuBotsApp {
     list(): MailboxEntry[];
   };
   agentSessions?: { discover(input: Record<string, never>): Promise<SessionList>; proposeResume?(input: Record<string, unknown>): Promise<{id: string; status: string}> };
+  interactions?: { answer(id: string, version: number, text: string, by: string): Promise<Card> };
   projectWorkspace?: { post(id: string, text: string): Promise<Message> };
   postScoped(text: string, scope: BotScope, botId: string): Promise<Message>;
   /** Host injects readOnly result context; it must never dispatch a new request. */
@@ -52,7 +54,7 @@ type Owner = { chatId: string; senderId?: string };
 type CardNavigation = { sessionSnapshot?: SessionCardSnapshot; botId: string; appId: string; revision: number; owner: Owner; expiresAt: number };
 type Route = { channel: 'feishu'; accountId: string; botId: string; target: string; scope: BotScope; revision: number; inputId: string; sourceMessageId?: string };
 type Relay = { sourceMessageId?: string; sourceFingerprint?: string; sourceRouteFingerprint?: string; sourceBotId: string; sourceRevision: number; targetRevision: number; parentEntryId?: string; path: string[]; rootId: string; expiresAt: number; chatId?: string; fingerprint: string };
-type Envelope = { chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
+type Envelope = { questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
 type Routed = Route & Envelope & { envelopeId: string };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
 type Runtime = { commandSubscription?: string; epoch: number; adapter?: FeishuBotAdapter; reason?: string; code: string; expires: number; operations: Promise<void> };
@@ -171,13 +173,43 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   function cardAction(bot: FeishuBotSettings, epoch: number, input: FeishuCardAction): Record<string, unknown> {
     const fail = { toast: { type: 'info', content: '卡片已过期或配对已改变，请在主人私聊重新发送「工作台」' } };
     const value = input.value;
-    if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || !['workbench.navigate','workbench.chat','workbench.sessions','workbench.readSessions','workbench.resumeForm','workbench.resumeSubmit'].includes(String(value.kind))
+    if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || !['workbench.navigate','workbench.chat','workbench.sessions','workbench.readSessions','workbench.resumeForm','workbench.resumeSubmit','workbench.questionForm','workbench.answerQuestion'].includes(String(value.kind))
       || typeof value.navigation !== 'string'
       || !input.messageId) return fail;
     const cap = app.store.get<CardNavigation>('feishu.card.navigation', value.navigation), paired = owner(bot);
     if (!cap || cap.expiresAt <= Date.now() || cap.botId !== bot.id || cap.appId !== bot.appId || cap.revision !== bot.revision
       || !cap.owner.senderId || cap.owner.senderId !== input.operatorId || cap.owner.chatId !== input.chatId
       || paired?.senderId !== input.operatorId || paired.chatId !== input.chatId) return fail;
+    if (value.kind === 'workbench.questionForm' || value.kind === 'workbench.answerQuestion') {
+      const service = app.interactions;
+      const question = typeof value.id === 'string' && app.store.get<Card>('interactions',value.id);
+      if (!service || !question || question.kind !== 'question' || question.handler !== 'user' || question.version !== value.version ||
+          question.status !== 'open' || !(Date.parse(question.expiresAt) > Date.now()))
+        return {toast:{type:'info',content:'问题已变化，请返回工作台重新查看。'}};
+      if (value.kind === 'workbench.questionForm') {
+        const form = questionForm(question,value.navigation);
+        return Buffer.byteLength(JSON.stringify(form)) <= 24000 ? {card:{type:'raw',data:form}}
+          : {toast:{type:'info',content:'问题全文超过飞书卡片容量，请到 Web 主对话查看并回答。'}};
+      }
+      const answer = input.formValue?.answer;
+      if (typeof answer !== 'string' || !answer.trim() || answer.length > 2000)
+        return {toast:{type:'error',content:'请填写回答，最多 2000 字。'}};
+      const reply = async () => {
+        let result: string;
+        try {
+          const card = await service.answer(question.id,question.version,answer.trim(),'user_feishu');
+          result = card.delivery === 'confirmed' ? '回答已送达。' : card.delivery === 'failed' ? '回答已记录，但送达失败。' : '回答已记录，送达结果待核对。';
+        } catch (error) { result = '提交回答未确认：' + redact(error); }
+        if (!active(bot.id,epoch,bot.revision) || owner(bot)?.senderId !== paired.senderId || owner(bot)?.chatId !== paired.chatId) return;
+        const text = question.title.slice(0,200) + '\n' + result;
+        const entry = await put(bot,{direction:'outbox',eventKey:'feishu-dashboard:answer:'+digest([value.navigation,question.id,question.version,result]),
+          title:'回答回执',text,target:paired.chatId,requiresConfirmation:false},bot.scope,
+          {platformReplyTo:input.messageId,dashboard:{owner:paired,card:buildFeishuMessageCard(text,{title:'回答回执',webBase,navigation:value.navigation as string})!}});
+        if (entry.status === 'ready') await app.mailboxes.process(entry.id,entry.version);
+      };
+      void track(bot.id,reply()).catch(error=>report(bot.id,error));
+      return {toast:{type:'info',content:'正在提交，送达结果会发到当前私聊'}};
+    }
     if (value.kind === 'workbench.readSessions') {
       if (!app.agentSessions) return fail;
       void track(bot.id,showSessionList(bot,epoch,paired,input.messageId)).catch(error=>report(bot.id,error));
@@ -233,8 +265,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       });
       return { toast: { type: 'success', content: project ? '接下来与「' + project.name + '」项目 Agent 对话' : '已切回主 Agent' } };
     }
-    if (!['home','tasks','inbox','projects'].includes(String(value.view)) || !Number.isSafeInteger(value.page) || (value.page as number) < 0 || (value.page as number) > 100000) return fail;
-    const dashboard = buildFeishuDashboard(app, webBase, { view: value.view as 'home' | 'tasks' | 'inbox' | 'projects', page: value.page as number, navigation: value.navigation });
+    if (!['home','tasks','inbox','projects','questions'].includes(String(value.view)) || !Number.isSafeInteger(value.page) || (value.page as number) < 0 || (value.page as number) > 100000) return fail;
+    const dashboard = buildFeishuDashboard(app, webBase, { view: value.view as DashboardView, page: value.page as number, navigation: value.navigation });
     return { toast: { type: 'success', content: '已读取最新状态' }, card: { type: 'raw', data: dashboard.card } };
   }
   function runtime(id: string) {
@@ -693,7 +725,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (active(bot.id, epoch, bot.revision) && latest?.status === 'ready') await app.mailboxes.process(latest.id, latest.version);
       return;
     }
-    const context: Omit<Envelope, 'revision'> = group ? { group: structuredClone(source), platformReplyTo: source.messageId, threadId: source.threadId ?? source.rootId } : {};
+    const threadId = source.threadId ?? source.rootId;
+    const context: Omit<Envelope, 'revision'> = group || threadId ? {
+      ...(group ? { group: structuredClone(source) } : {}), platformReplyTo: source.messageId, threadId,
+    } : {};
     if (!group && bot.scope.kind === 'global' && paired?.senderId && paired.senderId === source.senderId) {
       const lookup = (id: string) => app.store.get<{projectId:string;revision:number;senderId:string;expiresAt:number}>('feishu.chat-target',digest([bot.id,source.chatId,id]));
       const bound = (source.parentId && lookup(source.parentId)) || (source.rootId && lookup(source.rootId)) || lookup('');
@@ -816,7 +851,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         || dashboard.owner.chatId !== target || owner(bot)?.chatId !== target || owner(bot)?.senderId !== dashboard.owner.senderId)) {
         throw noDelivery('工作台卡片缺少有效的配对记录');
       }
-      const context: FeishuSendContext = dashboard ? { card: dashboard.card } : stamp?.platformReplyTo || stamp?.threadId
+      const context: FeishuSendContext = dashboard ? { card: dashboard.card, ...(stamp.platformReplyTo ? {replyTo:stamp.platformReplyTo} : {}) } : stamp?.platformReplyTo || stamp?.threadId
         ? { ...(stamp.platformReplyTo ? { replyTo: stamp.platformReplyTo } : {}), ...(stamp.threadId ? { threadId: stamp.threadId } : {}) } : {
         ...(stamp?.platformReplyTo ? { replyTo: stamp.platformReplyTo } : {}), ...(stamp?.threadId ? { threadId: stamp.threadId } : {}),
         presentation: { title: entry.title, kind: /^工作台[^\n]*简报\n/.test(body) || key.includes('brief') ? 'brief' : key.includes('result') ? 'result' : entry.replyTo ? 'reply' : 'notice',
@@ -826,6 +861,14 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const paired = owner(bot);
       if (context.presentation && !stamp?.progressMessageId && bot.scope.kind === 'global' && paired?.senderId && paired.chatId === target) {
         context.presentation.navigation = navigation(bot, paired, entry.id);
+      }
+      if (stamp?.questionId && app.interactions && !stamp.group && !stamp.relay && bot.scope.kind === 'global' &&
+          paired?.senderId && paired.chatId === target) {
+        const q = app.store.get<Card>('interactions',stamp.questionId);
+        if (q?.kind === 'question' && q.handler === 'user' && q.status === 'open' && Date.parse(q.expiresAt) > Date.now()) {
+          const form = questionForm(q,navigation(bot,paired,entry.id)!);
+          if (Buffer.byteLength(JSON.stringify(form)) <= 24000) context.card = form;
+        }
       }
       if (stamp?.command && key === 'feishu-command:feedback:' + stamp.command) {
         const target = app.store.get<CommandRoute>('feishu.command.routes', stamp.command)?.target;
@@ -852,7 +895,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const run = async () => {
       try {
       if (app.plugins?.invocations) await app.plugins.invocations.invoke('channel.send', { botId, accountId: bot.appId, chatId: target, target, text, key }, async input => {
-        if ((stamp?.inboxReplySource || stamp?.dashboard || stamp?.command || stamp?.progressMessageId) && (!input || typeof input !== 'object' || Array.isArray(input) || input.text !== text)) throw noDelivery('确认的回复正文不能被渠道钩子改写');
+        if ((stamp?.inboxReplySource || stamp?.dashboard || stamp?.questionId || stamp?.command || stamp?.progressMessageId) && (!input || typeof input !== 'object' || Array.isArray(input) || input.text !== text)) throw noDelivery('确认的回复正文不能被渠道钩子改写');
         if (!input || typeof input !== 'object' || Array.isArray(input) || input.botId !== botId || input.accountId !== bot.appId
           || input.chatId !== target || input.target !== target || input.key !== key || typeof input.text !== 'string' || !input.text.trim()) throw noDelivery('渠道钩子不能改变机器人、目标或动作标识');
         await deliver(input.text); return null;
@@ -932,8 +975,11 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     // Long answers retain the ordinary full-text delivery; the bounded card is a preview.
     if (message.status === 'pending' || (streamed && Array.from(message.text).length <= 4000)) return;
     const state = runtime(bot.id), epoch = state.epoch;
+    const noticeId = message.origin === 'notification' && message.id.startsWith('interaction-notice:')
+      ? message.id.slice('interaction-notice:'.length) : undefined;
+    const questionId = noticeId && app.store.get<{inputId?:string}>('interaction-origins',noticeId)?.inputId === message.replyTo ? noticeId : undefined;
     const entry = await put(bot, { direction: 'outbox', eventKey: `feishu-reply:${JSON.stringify([bot.id, bot.appId, route.inputId, message.id])}`,
-      title: bot.name, text: message.text, target: route.target, replyTo: route.inputId, sourceMessageId: route.sourceMessageId, requiresConfirmation: false }, route.scope, { resultRelayEntryId: route.resultRelayEntryId, chatProject: route.chatProject, group: route.group, command: route.command, relay: route.relay, platformReplyTo: route.platformReplyTo, threadId: route.threadId });
+      title: bot.name, text: message.text, target: route.target, replyTo: route.inputId, sourceMessageId: route.sourceMessageId, requiresConfirmation: false }, route.scope, { questionId, resultRelayEntryId: route.resultRelayEntryId, chatProject: route.chatProject, group: route.group, command: route.command, relay: route.relay, platformReplyTo: route.platformReplyTo ?? (questionId ? route.sourceMessageId : undefined), threadId: route.threadId });
     if (active(bot.id, epoch, bot.revision) && entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
   }
   const off = app.events.subscribe(event => {

@@ -9,6 +9,7 @@ import type { FeishuBotsApp, FeishuBotFactory, FeishuMailboxInput } from '../app
 import { createStore } from '../packages/core/src/store.ts';
 import { createEventBus } from '../packages/core/src/events.ts';
 import { createEffects } from '../packages/core/src/effects.ts';
+import { createInteractions } from '../packages/core/src/interactions.ts';
 import { createEventMailboxes } from '../packages/core/src/event-mailboxes.ts';
 import type { FeishuSendContext, FeishuOptions } from '../plugins/feishu.ts';
 import type { BotScope, MailboxEntry } from '../packages/protocol/src/bots.ts';
@@ -850,4 +851,45 @@ test('CLI 会话卡限定主人，读取与重复回调只发送一张，分页�
   assert.match(JSON.stringify(click(next).card),/native-6/);
   assert.equal(click(next,'other').card,undefined);
   assert.equal(f.posts.length,0);
+});
+
+test('主人在工作台回答真实问题，保留版本检查和执行机送达回执', async t => {
+  const f = fixture(t), bot = await f.add('Questions');
+  await bot.pair();
+  const delivered: string[] = [];
+  const service = createInteractions({store:f.store, events:f.events, decide:()=>({handler:'user',layer:'default'}),
+    answer:async (_,answer)=>{ delivered.push(answer); throw Object.assign(new Error('超时'),{delivery:'unknown'}); }});
+  f.app.interactions = service;
+  const q = service.open({kind:'question',title:'选择版本',body:'要验收哪个版本？'});
+  const perm = service.open({kind:'permission',title:'执行授权',body:'允许执行？'});
+  await bot.instance.options.onMessage('工作台',source('questions'));
+  const actions = (card:any) => card.elements.flatMap((row:any)=>row.actions??[]);
+  const list = actions(bot.instance.contexts.at(-1)?.card).find((b:any)=>b.value?.view==='questions').value;
+  const click = (value:Record<string,unknown>, formValue?:Record<string,unknown>, operatorId='human') =>
+    bot.instance.options.onCardAction!({operatorId,chatId:'owner',messageId:'om-dashboard',value,formValue}) as any;
+  const page = click(list).card.data;
+  assert.doesNotMatch(JSON.stringify(page),/执行授权/);
+  const open = actions(page).find((b:any)=>b.value?.kind==='workbench.questionForm').value;
+  assert.equal(click(open,undefined,'another').card,undefined);
+  assert.equal(click({...open,id:perm.id}).card,undefined);
+  const form = click(open).card.data.body.elements;
+  assert.match(JSON.stringify(form),/要验收哪个版本/);
+  await bot.instance.options.onMessage('开始验收',source('origin'));
+  const input = f.posts.at(-1)!;
+  f.store.put('interaction-origins',q.id,{inputId:input.id});
+  f.reply(input.id,'interaction-notice:'+q.id,'notification');
+  await tick();
+  const notice = bot.instance.contexts.at(-1);
+  assert.match(JSON.stringify(notice?.card),/submit_answer/);
+  assert.equal(notice?.replyTo,'origin');
+  const submit = form.find((e:any)=>e.tag==='form').elements[1].behaviors[0].value;
+  assert.equal(click(submit,{answer:' '}).toast.type,'error');
+  click(submit,{answer:'版本 A'});
+  assert.match(click(submit,{answer:'版本 B'}).toast.content,/已变化/);
+  await tick();
+  assert.deepEqual(delivered,['版本 A']);
+  assert.match(bot.instance.sent.at(-1)![1],/送达结果待核对/);
+  assert.equal(f.store.get<{answeredBy:string}>('interactions',q.id)?.answeredBy,'user_feishu');
+  assert.equal(f.posts.length,1);
+  await service.close();
 });

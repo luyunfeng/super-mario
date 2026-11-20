@@ -1,10 +1,11 @@
 import type { FeishuBotsApp } from './feishu-bots.ts';
 import type { InboxItem, MachineInfo, Project, Run, Todo } from '../../../packages/protocol/src/index.ts';
+import type { Card } from '../../../packages/core/src/interactions.ts';
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
 import { cardButtons, cardDocument, cardPlain, cardSection, cardWebBase } from './feishu-cards.ts';
 
-type DashboardApp = Pick<FeishuBotsApp, 'store' | 'projectWorkspace' | 'agentSessions'> & { attention?: () => AttentionItem[] };
-export type DashboardView = 'home' | 'tasks' | 'inbox' | 'projects';
+type DashboardApp = Pick<FeishuBotsApp, 'store' | 'projectWorkspace' | 'agentSessions' | 'interactions'> & { attention?: () => AttentionItem[] };
+export type DashboardView = 'home' | 'tasks' | 'inbox' | 'projects' | 'questions';
 const label = (value: string, max = 100) => value.replace(/\s+/g, ' ').trim().slice(0, max);
 
 /** Owner-only, read-only views. Callback buttons refresh this card; URL buttons navigate to Web. */
@@ -40,8 +41,13 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
   elements.push({ tag: 'hr' });
   let total = 0, page = 0;
   const pageSize = 5;
+  const questions = app.interactions && options.navigation ? app.store.list<Card>('interactions').filter(card =>
+    card.kind === 'question' && card.status === 'open' && card.handler === 'user' &&
+    Date.parse(card.expiresAt) > (options.now?.getTime() ?? Date.now())).sort((a,b) => a.createdAt.localeCompare(b.createdAt)) : [];
   if (view === 'home') {
     section('等你处理', waiting.length ? '等你拍板 · ' + waiting.length + ' 项\n' + waiting.slice(0, 3).map(a => '• ' + label(a.title)).join('\n') : '当前没有等你拍板的事。');
+    if (questions.length) elements.push(...cardButtons([{label:'待回答的问题（' + questions.length + '）',
+      value:{kind:'workbench.navigate',navigation:options.navigation,view:'questions',page:0}}]));
     if (waiting.length > 3) section('更多待决定', `还有 ${waiting.length - 3} 项，请打开主对话核对。`);
     if (app.agentSessions && options.navigation) elements.push(...cardButtons([{label:'查看 CLI 会话',value:{kind:'workbench.readSessions',navigation:options.navigation}}]));
     section('此刻', `Agent 执行 · ${working.length} 项进行中 · ${review.length} 项执行结束待验收 · ${issues.length} 项失败或结果未知\n收件箱 · ${action.length} 条需处理 · ${inbox.length - action.length} 条知会\n电脑 · ${machines.filter(m => m.online).length} / ${machines.length} 台在线`);
@@ -62,6 +68,14 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
       section(labels[run.status], [project ? projects.get(project) : '未归项目', machine?.name, title,
         run.progress?.detail && '最近进展：' + label(run.progress.detail, 200), run.error && '原因：' + label(run.error, 200)].filter(Boolean).join('\n'));
       buttons([['查看执行', 'projects/' + encodeURIComponent(project || 'all') + '/runs/' + encodeURIComponent(run.id)]]);
+    }
+  } else if (view === 'questions') {
+    total = questions.length;
+    page = Math.min(Math.max(0, options.page ?? 0), Math.max(0, Math.ceil(total / pageSize) - 1));
+    if (!total) section('待回答的问题','目前没有需要你回答的问题。');
+    for (const question of questions.slice(page * pageSize, (page + 1) * pageSize)) {
+      section('待回答',label(question.title) + '\n' + label(question.body,200));
+      elements.push(...cardButtons([{label:'回答这个问题',value:{kind:'workbench.questionForm',navigation:options.navigation,id:question.id,version:question.version}}]));
     }
   } else if (view === 'inbox') {
     const rows = [...action, ...inbox.filter(item => item.tier !== 'action')]; total = rows.length;
@@ -104,6 +118,19 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
   buttons([['主对话', 'chat'], ['执行列表', 'projects/all/runs'], ['发起执行', 'projects/all/runs/new']]);
   elements.push({ tag: 'note', elements: [cardPlain('仅供已配对的主人私聊查看。按钮导航不会批准、发件或验收；数据为卡片生成时的快照。')] });
   const date = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' }).format(options.now ?? new Date());
-  const title = `${date} · ${view === 'home' ? '今日工作台' : view === 'tasks' ? '任务进展' : view === 'projects' ? '项目 Agent' : '收件箱'}`;
+  const title = `${date} · ${view === 'home' ? '今日工作台' : view === 'tasks' ? '任务进展' : view === 'projects' ? '项目 Agent' : view === 'questions' ? '待回答的问题' : '收件箱'}`;
   return { text: lines.join('\n\n'), card: cardDocument(title, elements) };
+}
+
+export function questionForm(question: Card, navigation: string) {
+  const submit = {kind:'workbench.answerQuestion',navigation,id:question.id,version:question.version};
+  return {schema:'2.0',header:{template:'orange',title:cardPlain('回答 Agent 的问题')},body:{elements:[
+    {tag:'div',text:cardPlain(question.title)},
+    {tag:'div',text:cardPlain(question.body)},
+    {tag:'form',name:'answer_question',elements:[
+      {tag:'input',name:'answer',required:true,width:'fill',input_type:'multiline_text',rows:3,max_length:2000,placeholder:cardPlain('输入你的回答')},
+      {tag:'button',name:'submit_answer',form_action_type:'submit',type:'primary',text:cardPlain('发送回答'),behaviors:[{type:'callback',value:submit}]},
+    ]},
+    {tag:'button',text:cardPlain('返回问题列表'),behaviors:[{type:'callback',value:{kind:'workbench.navigate',navigation,view:'questions',page:0}}]},
+  ]}};
 }
