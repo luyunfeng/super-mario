@@ -17,6 +17,7 @@ import { createReplyTracking } from './reply-tracking.ts';
 import { createWorkDecisionService } from './work-decision-service.ts';
 import { createAgentSessions, nativeResumeSpec, nativeResultSources } from './agent-sessions.ts';
 import { executionProgress } from './execution-progress.ts';
+import { createTodoDecisions } from './todo-decisions.ts';
 import { createTodoReporting } from './todo-reporting.ts';
 import { readTodoHistory } from './todo-history.ts';
 import { createRunReview } from './run-review.ts';
@@ -116,6 +117,7 @@ export async function createWorkbench(config: AppConfig) {
     if (input.conversationId.startsWith('bot:') && !configuredBots().some(bot => input.conversationId.startsWith(`bot:${bot.id}:`))) throw new InputError('机器人来源已失效', 403);
     assertBotInput(input);
   } });
+  const todoDecisions = createTodoDecisions(store, workDecisions);
   for (const extension of createSystemExtensions({ demo: config.demo, actions: { triageAgent: { status: () => inboxClassifier.status(), ask: (text, context) => inboxClassifier.ask(text, context) }, ruleTriage, scheduledWorkList: input => scheduledWork.list(input) as unknown as Json, scheduledWorkPropose: input => scheduledWork.propose(input,true) as unknown as Json, scheduledWorkCancel: input => scheduledWork.cancel(input,true) as unknown as Json, knowledgeReaderService: () => protectedReaderService(), workDecisionsList: input => workDecisions.list(input) as unknown as Json, workDecisionRecord: input => workDecisions.recordFromAgent(input) as unknown as Json, workDecisionCorrect: input => workDecisions.changeFromAgent(input) as unknown as Json, workDecisionWithdraw: input => workDecisions.changeFromAgent(input, true) as unknown as Json, workDecisionReference: input => workDecisions.referenceFromAgent(input) as unknown as Json, inboxList: readInbox, inboxHandlingRead: readInboxHandlingFromAgent, inboxAssignProject: assignInboxProject, agentSessions: async input => await agentSessions.discover(input) as unknown as Json, resumeSession: async input => { const source = currentAgentInput() ?? agent.currentInput(); return await agentSessions.proposeResume({ ...input, key: source ? `${source.id}:${requiredText(input.key, '恢复请求标识')}` : input.key }, source) as unknown as Json; }, botsList: () => botsStatus(), botRelay: relayFromAgent, mailboxesList: input => mailboxes.list(input as Parameters<typeof mailboxes.list>[0]) as unknown as Json, mailboxPropose: input => { if (!mailboxProposer) throw new InputError('机器人信箱尚未连接', 503); return mailboxProposer(input); }, projectsList: () => projects.list() as unknown as Json, projectCreate: async input => await createProject(input) as unknown as Json, projectsDiscover: discoverProjects, knowledgeSource: input => {
     const source=currentAgentInput()??agent.currentInput();if(!source||source.role!=='user'||source.readOnly||source.origin&&source.origin!=='user')throw new InputError('来源投放需要当前用户输入',403);
     validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
@@ -449,6 +451,23 @@ export async function createWorkbench(config: AppConfig) {
     });
     return next;
   }
+  function delegateTodo(id: string): Promise<Message>;
+  function delegateTodo(id: string, executorId: string, doneWhen?: unknown, expectMinutes?: unknown): Promise<Run>;
+  function delegateTodo(id: string, executorId?: unknown, doneWhen?: unknown, expectMinutes?: unknown): Promise<Message | Run>;
+  async function delegateTodo(id: string, executorId?: unknown, doneWhen?: unknown, expectMinutes?: unknown): Promise<Message | Run> {
+    const todo = store.get<Todo>('todos', id);
+    if (!todo) throw new InputError('待办不存在', 404);
+    if (todo.completedAt) throw new InputError('该待办已完成', 409);
+    const task = `请处理待办 ${todo.id}：${todo.title}\n${todo.notes}`.trimEnd();
+    const scope = { projectId: todo.projectId, todoId: id };
+    if (executorId !== undefined) {
+      const selected = requiredText(executorId, '执行者');
+      const criterion = optionalText(doneWhen, '验收标准');
+      const prompt = criterion ? `${task}\n验收标准：${criterion}` : task;
+      return dispatch({ ...scope, executorId: selected, prompt, doneWhen: criterion, expectMinutes });
+    }
+    return agent.post(`${task}\n先结合知识选择执行者与目录，给出验收标准，再异步派发。不要把执行结束直接当成待办已完成。`, 'main', scope);
+  }
   function executors(): Executor[] {
     const local = contributions.list('executors').map(entry => entry.value);
     const remote: Executor[] = [];
@@ -483,7 +502,10 @@ export async function createWorkbench(config: AppConfig) {
     if (closing) throw new InputError('服务正在关闭', 503);
     const prompt = requiredText(input.prompt, '工作内容');
     let requestedExecutor = optionalText(input.executorId, '执行者');
-    const projectId = optionalText(input.projectId, '项目');
+    const todoId = optionalText(input.todoId, '待办');
+    const todo = todoId ? store.get<Todo>('todos', todoId) : undefined;
+    const requestedProject = optionalText(input.projectId, '项目');
+    const projectId = requestedProject ?? todo?.projectId;
     const conversationId = optionalText(input.conversationId, '对话') ?? 'main';
     if (conversationId !== 'main') {
       const source = typeof input.sourceMessageId === 'string' ? store.get<Message>('messages', input.sourceMessageId) : undefined;
@@ -496,10 +518,12 @@ export async function createWorkbench(config: AppConfig) {
       const previous = store.get<string>('dispatch-keys', key);
       const run = previous && store.get<Run>('runs', previous);
       if (run) {
-        if (run.prompt !== prompt || (requestedExecutor !== undefined && run.executorId !== requestedExecutor)
+        const requestHash = store.get<string>('dispatch-prompt-hashes', key);
+        const samePrompt = requestHash ? createHash('sha256').update(prompt).digest('hex') === requestHash : run.prompt === prompt;
+        if (!samePrompt || (requestedExecutor !== undefined && run.executorId !== requestedExecutor)
           || run.projectId !== projectId || run.conversationId !== conversationId
           || (input.cwd !== undefined && run.cwd !== input.cwd)
-          || (input.todoId !== undefined && run.todoId !== input.todoId)
+          || run.todoId !== todoId || run.sourceMessageId !== optionalText(input.sourceMessageId, '来源消息')
           || (input.executionMode !== undefined && run.executionMode !== input.executionMode)
           || (input.doneWhen !== undefined && run.doneWhen !== input.doneWhen)
           || (input.expectMinutes !== undefined && run.expectMinutes !== input.expectMinutes) || JSON.stringify(run.nativeResume) !== JSON.stringify(input.nativeResume)) throw new InputError('同一派发标识不能用于不同工作', 409);
@@ -543,8 +567,10 @@ export async function createWorkbench(config: AppConfig) {
     if (taskPolicy !== undefined) {
       try { validatePolicyPatch(taskPolicy); } catch (error) { throw new InputError(error instanceof Error ? error.message : '无效任务策略'); }
     }
-    const todoId = optionalText(input.todoId, '待办');
-    if (todoId && !store.get<Todo>('todos', todoId)) throw new InputError('关联待办不存在', 404);
+    if (todoId && !todo) throw new InputError('关联待办不存在', 404);
+    if (todo && todo.projectId !== projectId) throw new InputError('待办与派单项目不匹配', 409);
+    if (todo && ((inputMessage?.todoId && inputMessage.todoId !== todoId) ||
+      (inputMessage?.projectId && inputMessage.projectId !== projectId))) throw new InputError('待办与来源消息的范围不匹配', 403);
     if (!executor?.available) throw new InputError(executor?.reason ?? '执行者不可用', 503);
     const now = new Date().toISOString();
     const proofSources = nativeResultSources(executor);
@@ -564,19 +590,35 @@ export async function createWorkbench(config: AppConfig) {
       };
       update({ status: 'running' });
       try {
-        // Real actions retain the durable claim; execution belongs to the executor.
+        const original = JSON.parse(JSON.stringify(run)) as JsonObject;
+        const prepared = await plugins.invocations.hooks('work.dispatch', 'before', original);
+        if (!prepared || typeof prepared !== 'object' || Array.isArray(prepared)) throw new PluginCallError('派活钩子必须返回对象');
+        for (const field of Object.keys(original)) if (field !== 'prompt' && JSON.stringify(prepared[field]) !== JSON.stringify(original[field])) throw new PluginCallError('派活钩子只能改写 prompt，不能改变执行者、模式或工作范围');
+        const effectivePrompt = requiredText(prepared.prompt, '钩子改写后的任务');
+        if (executionGuard && effectivePrompt !== prompt) throw Object.assign(new InputError('已确认的收件任务内容不能被钩子改写', 409), { delivery: 'no' });
+        if (effectivePrompt !== prompt) {
+          if (key) store.put('dispatch-prompt-hashes', key, createHash('sha256').update(prompt).digest('hex'));
+          update({ prompt: effectivePrompt });
+        }
+        // Keep the run's task separate: review/rework reuses it and resolves current decisions again.
+        const currentDecisions = () => {
+          if (!todoId) return '';
+          const current = store.get<Todo>('todos', todoId);
+          if (!current || current.projectId !== projectId) {
+            throw Object.assign(new InputError('待办归属已变更，请核对后重新派单', 409), { delivery: 'no' });
+          }
+          return todoDecisions.context(todoId);
+        };
+        const decisions = currentDecisions();
+        const finalPrompt = decisions ? `${effectivePrompt}\n\n${decisions}` : effectivePrompt;
         const execute = async () => {
-          const original = JSON.parse(JSON.stringify(run)) as JsonObject;
-          const prepared = await plugins.invocations.hooks('work.dispatch', 'before', original);
-          if (!prepared || typeof prepared !== 'object' || Array.isArray(prepared)) throw new PluginCallError('派活钩子必须返回对象');
-          for (const field of Object.keys(original)) if (field !== 'prompt' && JSON.stringify(prepared[field]) !== JSON.stringify(original[field])) throw new PluginCallError('派活钩子只能改写 prompt，不能改变执行者、模式或工作范围');
-          const effectivePrompt = requiredText(prepared.prompt, '钩子改写后的任务');
           controller.signal.throwIfAborted();
           executionGuard?.();
-          if(executionGuard&&effectivePrompt!==prompt)throw Object.assign(new InputError('已确认的收件任务内容不能被钩子改写',409),{delivery:'no'});
           assertBotInput(inputMessage);
-          update({ prompt: effectivePrompt });
-          const result = await executor.execute({ prompt: effectivePrompt, cwd, executionMode: run.executionMode, ...(nativeResume ? { nativeResume } : {}), signal: controller.signal, onOutput: text => update({ output: (store.get<Run>('runs', run.id)?.output ?? '') + text }) });
+          if (currentDecisions() !== decisions) {
+            throw Object.assign(new InputError('待办决定已变更，请核对后重新派单', 409), { delivery: 'no' });
+          }
+          const result = await executor.execute({ prompt: finalPrompt, cwd, executionMode: run.executionMode, ...(nativeResume ? { nativeResume } : {}), signal: controller.signal, onOutput: text => update({ output: (store.get<Run>('runs', run.id)?.output ?? '') + text }) });
           if (result.sessionId) update({ sessionId: result.sessionId });
           const metadata = JSON.parse(JSON.stringify(result)) as JsonObject;
           const evidenceSnapshot = JSON.stringify(metadata.nativeResult);
@@ -586,7 +628,7 @@ export async function createWorkbench(config: AppConfig) {
           return { ...display, text: decorated.text, ...(evidenceSnapshot === undefined ? {} : { nativeResult: JSON.parse(evidenceSnapshot) as ExecutionResult }) };
         };
         const result = executor.mode === 'real'
-          ? await effects.perform({ key: `run:${run.id}:start`, kind: nativeResume ? 'executor.resume' : 'executor.start', target: executor.machineId, summary: prompt, content: { executorId, prompt, ...(nativeResume ? { nativeResume: { ...nativeResume } } : {}), ...(cwd === undefined ? {} : { cwd }), executionMode: String(executionMode) }, run: execute })
+          ? await effects.perform({ key: `run:${run.id}:start`, kind: nativeResume ? 'executor.resume' : 'executor.start', target: executor.machineId, summary: prompt, content: { executorId, prompt: finalPrompt, ...(nativeResume ? { nativeResume: { ...nativeResume } } : {}), ...(cwd === undefined ? {} : { cwd }), executionMode: String(executionMode) }, run: execute })
           : await execute();
         if (nativeResume && !result.pending && !controller.signal.aborted) {
           const proof = result.nativeResult;
@@ -913,7 +955,7 @@ export async function createWorkbench(config: AppConfig) {
         return modelStatus();
       } finally { agent.unlockConfiguration(); supervisorRuntime.unlockConfiguration(); scopedAgents.unlockConfiguration(); inboxClassifier.unlockConfiguration(); inboxAssistantRuntime.unlockConfiguration(); inboxHandlingRuntime.unlockConfiguration(); }
     },
-    config, store, events, effects, plugins, contributions, workDecisions, waitingReplies, inboxAssistant, inboxClassifier, inboxHandling, inboxHandlingRuntime, agent, supervisorRuntime, supervisorAgent, policies, plans, proposePlan, interactions, inbox, approvals, supervision, monitor,
+    config, store, events, effects, plugins, contributions, workDecisions, todoDecisions, waitingReplies, inboxAssistant, inboxClassifier, inboxHandling, inboxHandlingRuntime, agent, supervisorRuntime, supervisorAgent, policies, plans, proposePlan, interactions, inbox, approvals, supervision, monitor,
     setInboxReplyHost(access: typeof mailboxHandlingAccess, reply: NonNullable<typeof replyToInboxSource>) { mailboxHandlingAccess=access;replyToInboxSource=reply; },
     readInboxHandlingSource: inboxHandlingSources,
     setFeishuSender(send: typeof replyToFeishu, ownerTarget?: () => string | undefined, accountId?: () => string | undefined, sendFromOutbox?: typeof replyToFeishu) {
@@ -926,12 +968,7 @@ export async function createWorkbench(config: AppConfig) {
         });
       } : undefined;
     },
-    async delegateTodo(id: string) {
-      const todo = store.get<Todo>('todos', id);
-      if (!todo) throw new InputError('待办不存在', 404);
-      if (todo.completedAt) throw new InputError('该待办已完成', 409);
-      return agent.post(`请处理待办 ${todo.id}：${todo.title}\n${todo.notes}\n先结合知识选择执行者与目录，给出验收标准，再异步派发。不要把执行结束直接当成待办已完成。`, 'main', { ...(todo.projectId ? { projectId: todo.projectId } : {}), todoId: todo.id });
-    }, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; }, snapshot, todos, createTodo, updateTodo, dispatch, cancel, knowledge,
+    delegateTodo, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; }, snapshot, todos, createTodo, updateTodo, dispatch, cancel, knowledge,
     async close() {
       if (closing) return;
       closing = true;

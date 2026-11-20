@@ -13,7 +13,7 @@ import { createMachineHub } from '../../../packages/core/src/machines.ts';
 import type { FeishuRegistrationInput } from './feishu-registration.ts';
 import { createFeishuGateway, type FeishuGatewayDependencies } from './feishu-gateway.ts';
 import { validateBotScope } from '../../../packages/core/src/bot-scopes.ts';
-import type { AppConfig, FeishuBotInput, JsonObject, NodeMessage } from '../../../packages/protocol/src/index.ts';
+import type { AppConfig, FeishuBotInput, JsonObject, NodeMessage, Todo } from '../../../packages/protocol/src/index.ts';
 
 async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []; let size = 0;
@@ -26,6 +26,14 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
   try { value = JSON.parse(Buffer.concat(chunks).toString() || '{}'); } catch { throw new InputError('请求必须是有效JSON'); }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new InputError('请求必须是JSON对象');
   return value as Record<string, unknown>;
+}
+// A drawer can stay open while another client moves the todo. Pin writes to the
+// project the user saw, including the unassigned scope (null).
+function checkTodoScope(app: Awaited<ReturnType<typeof createWorkbench>>, id: string, input: Record<string, unknown>) {
+  if (!('expectedProjectId' in input)) return;
+  const todo = app.store.get<Todo>('todos', id);
+  if (!todo) throw new InputError('待办不存在', 404);
+  if (input.expectedProjectId !== (todo.projectId ?? null)) throw new InputError('待办所属项目已改变，请重新打开', 409);
 }
 function json(res: ServerResponse, status: number, value: unknown) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -368,6 +376,18 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (path === '/api/v1/effects' && method === 'GET') return json(res, 200, app.effects.list());
         if (path === '/api/v1/task-closure/settings' && method === 'GET') return json(res, 200, app.taskClosure.settings());
         if (path === '/api/v1/task-closure/settings' && method === 'PUT') return json(res, 200, app.taskClosure.configureSettings(await body(req)));
+        const todoDecisions = path.match(/^\/api\/v1\/todos\/([^/]+)\/decisions(?:\/([^/]+)\/withdraw)?$/);
+        if (todoDecisions) {
+          const todoId = decodeURIComponent(todoDecisions[1]!);
+          const decisionId = todoDecisions[2];
+          if (method === 'GET' && !decisionId) return json(res, 200, { decisions: app.todoDecisions.list(todoId) });
+          if (method === 'POST') {
+            const input = await body(req);
+            checkTodoScope(app, todoId, input);
+            if (decisionId) return json(res, 200, app.todoDecisions.withdraw(todoId, decodeURIComponent(decisionId)));
+            return json(res, 201, app.todoDecisions.add(todoId, input.text));
+          }
+        }
         const todoHistory = path.match(/^\/api\/v1\/todos\/([^/]+)\/history$/);
         if (todoHistory && method === 'GET') return json(res, 200, app.taskClosure.history(decodeURIComponent(todoHistory[1]!), url.searchParams.get('before') ?? undefined));
         const closure = path.match(/^\/api\/v1\/todos\/([^/]+)\/(closure|reporting|report|review|review\/decide)$/);
@@ -382,7 +402,12 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (closure[2] === 'review/decide' && method === 'POST') return json(res, 200, app.taskClosure.review.decide({ ...input, todoId } as Parameters<typeof app.taskClosure.review.decide>[0]));
         }
         const delegate = path.match(/^\/api\/v1\/todos\/([^/]+)\/delegate$/);
-        if (delegate && method === 'POST') return json(res, 202, await app.delegateTodo(delegate[1]));
+        if (delegate && method === 'POST') {
+          const todoId = decodeURIComponent(delegate[1]!);
+          const input = await body(req);
+          checkTodoScope(app, todoId, input);
+          return json(res, 202, await app.delegateTodo(todoId, input.executorId, input.doneWhen, input.expectMinutes));
+        }
         if(path==='/api/v1/inbox/assistant'&&method==='GET')return json(res,200,{...app.inboxAssistant.status(),conversations:app.inboxAssistant.list()});
         if(path==='/api/v1/inbox/assistant'&&method==='PUT')return json(res,200,app.inboxAssistant.configure((await body(req)).enabled));
         const conversationAction=path.match(/^\/api\/v1\/inbox\/conversations\/([^/]+)\/(answer|archive|retry)$/);
