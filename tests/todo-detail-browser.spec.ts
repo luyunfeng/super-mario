@@ -1,0 +1,109 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test from 'node:test';
+import { chromium, expect } from '@playwright/test';
+import { startServer } from '../apps/server/src/index.ts';
+import type { Run, Todo } from '../packages/protocol/src/index.ts';
+
+const decision = '本轮只交付带列名的 CSV';
+const doneWhen = '核对导出文件的行数';
+const dueAt = '2034-05-06T09:08:07.654Z';
+
+async function fixture(t: test.TestContext) {
+  const dataDir = await mkdtemp(join(tmpdir(), 'mario-todo-detail-'));
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  let server: Awaited<ReturnType<typeof startServer>> | undefined;
+  t.after(async () => {
+    try { await browser?.close(); }
+    finally {
+      try { await server?.close(); }
+      finally { await rm(dataDir, { recursive: true, force: true }); }
+    }
+  });
+  const token = 'offline-todo-detail';
+  server = await startServer({ dataDir, token, demo: true, host: '127.0.0.1', port: 0 });
+  const { app } = server;
+  const project = app.projects.create({ name: '导出工具' });
+  const todo = app.createTodo({ projectId: project.id, title: '核对导出清单', notes: '使用样例订单', dueAt });
+  app.taskClosure.reporting.configure({ todoId: todo.id, required: true, version: 0 });
+  // 保留一轮已有的待验收交付，才能发现派单意外覆盖验收标准或关联执行。
+  const previous = app.dispatch({ executorId: 'demo', projectId: project.id, todoId: todo.id,
+    prompt: '生成首版导出清单', doneWhen, expectMinutes: 1 });
+  await expect.poll(() => app.store.get<Run>('runs', previous.id)?.status).toBe('completed');
+  app.taskClosure.review.attach({ todoId: todo.id, runId: previous.id });
+  const { reporting, review } = app.taskClosure.state(todo.id);
+  const runs = () => app.store.list<Run>('runs').filter(run => run.todoId === todo.id && run.id !== previous.id);
+  function checkTodo() {
+    const stored = app.store.get<Todo>('todos', todo.id)!;
+    assert.equal(stored.dueAt, dueAt);
+    assert.equal(stored.completedAt, undefined);
+    const current = app.taskClosure.state(todo.id);
+    assert.deepEqual(current.reporting, reporting);
+    assert.deepEqual(current.review, review);
+  }
+  browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  const page = await browser.newPage();
+  await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+  await page.goto(`${server.url}/#projects/${project.id}/todos?token=${token}`);
+  return { page, todo, runs, checkTodo };
+}
+
+test('待办详情记录及撤回决定，两次显式派单各自使用当时的决定并保留截止日与验收', { timeout: 40000 }, async t => {
+  const { page, todo, runs, checkTodo } = await fixture(t);
+  const row = page.locator('#panel-todos').locator(`[data-id="${todo.id}"]`);
+  const open = row.getByRole('button', { name: '详情', exact: true });
+  const detail = page.getByRole('dialog', { name: '待办详情', exact: true });
+
+  async function dispatchDemo() {
+    const before = new Set(runs().map(run => run.id));
+    await detail.getByRole('button', { name: '交给 Agent', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '选择派单方式', exact: true });
+    await dialog.getByLabel('执行器', { exact: true }).selectOption('demo');
+    assert.equal(runs().length, before.size, '选择执行器后必须等待用户确认');
+    const [response] = await Promise.all([
+      page.waitForResponse(res => new URL(res.url()).pathname === `/api/v1/todos/${todo.id}/delegate`
+        && res.request().method() === 'POST'),
+      dialog.getByRole('button', { name: '确认派单', exact: true }).click(),
+    ]);
+    assert.equal(response.status(), 202);
+    assert.equal(response.request().postDataJSON().executorId, 'demo');
+    await expect(dialog).toHaveCount(0);
+    const newRuns = () => runs().filter(run => !before.has(run.id));
+    await expect.poll(() => newRuns().map(run => run.status)).toEqual(['completed']);
+    const [run] = newRuns();
+    assert.ok(run);
+    assert.equal(run.executorId, 'demo');
+    assert.equal(run.projectId, todo.projectId);
+    assert.equal(run.resultSource, 'demo');
+    // 内置 demo 直接回显 execute 收到的 prompt，包含派发时注入的上下文。
+    const echo = /^演示输入：([\s\S]+)$/m.exec(run.output);
+    assert.ok(echo, '内置 demo 应回显执行器输入');
+    const executorPrompt = echo[1]!;
+    assert.ok(executorPrompt.includes(todo.title));
+    checkTodo();
+    return { id: run.id, output: run.output, executorPrompt };
+  }
+
+  await open.click();
+  await expect(detail.getByRole('heading', { name: todo.title, exact: true })).toBeVisible();
+  await expect(detail).toContainText(todo.notes);
+  await detail.getByLabel('新决策', { exact: true }).fill(decision);
+  await detail.getByRole('button', { name: '添加决策', exact: true }).click();
+  await expect(detail).toContainText(decision);
+  await expect(detail).toContainText('生效中');
+  assert.equal(runs().length, 0);
+  checkTodo();
+  const first = await dispatchDemo();
+  assert.ok(first.executorPrompt.includes(decision), '首次执行器输入应包含已记录的决定');
+
+  await open.click();
+  await detail.getByRole('button', { name: '撤回', exact: true }).click();
+  await expect(detail).toContainText('已撤回');
+  assert.equal(runs().length, 1);
+  checkTodo();
+  const second = await dispatchDemo();
+  assert.ok(!second.executorPrompt.includes(decision), '再次派单的执行器输入应排除已撤回的决定');
+  assert.equal(runs().find(run => run.id === first.id)?.output, first.output, '撤回应保留首轮交付记录');
+});

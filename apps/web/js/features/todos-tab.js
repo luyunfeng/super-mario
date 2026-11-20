@@ -6,6 +6,7 @@ import { Button, Empty, Fold, Field, Input, TextArea, Select, Pill } from '../ui
 import { openDrawer, toast } from '../ui/overlay.js';
 
 import { openTaskClosure, refreshTaskClosure } from './task-closure.js';
+import { openTodoDetail, openTodoDelegate } from './todo-detail.js';
 import { openTodoHistory } from './todo-history.js';
 import { openWaitingReply, refreshWaitingReply } from './waiting-reply.js';
 
@@ -100,10 +101,11 @@ export function createTodosTab({ api, store, router }) {
       h('div', { class: 'item__main item--click', onclick: () => openEdit(todo), tabindex: 0, role: 'button', onkeydown: (event) => { if (event.key === 'Enter') openEdit(todo); } },
         h('span', { class: `item__title ${done ? 'is-done' : ''}` }, todo.title),
         meta.length > 0 && h('span', { class: 'item__meta' }, meta.flatMap((part, index) => index ? [' · ', part] : [part]))),
+      Button({ label: '详情', size: 'sm', onClick: () => openTodoDetail({ api, store, router, todo, openEdit }) }),
       !todo.completedAt && todo.waitingOn && todo.reminderAt && Button({ label: '跟踪回复', size: 'sm', onClick: () => openWaitingReply({ api, store, todo }) }),
       Button({ label: '答复与验收', size: 'sm', onClick: () => openTaskClosure({ api, store, router, todo }) }),
       Button({ label: '执行历史', size: 'sm', onClick: () => openTodoHistory({ api, store, router, todo }) }),
-      !done && Button({ label: '交给 Agent', size: 'sm', onClick: async () => { await api.post(`/todos/${encodeURIComponent(todo.id)}/delegate`, {}); toast('已交给 Agent，进展可以在“执行”里看到', 'ok'); store.refresh(); } }));
+      !done && Button({ label: '交给 Agent', size: 'sm', onClick: () => openTodoDelegate({ api, store, todo }) }));
   }
 
   function paint() {
@@ -128,17 +130,19 @@ export function createTodosTab({ api, store, router }) {
     paint();
   }
 
+  const todoSignature = snapshot => JSON.stringify((snapshot?.todos ?? []).map(todo => [todo.id, todo.updatedAt]));
+
   return {
     el,
     show(id) {
       if (id !== projectId) search.value = '';
-      projectId = id; signature = ''; paint(); load();
+      projectId = id; signature = todoSignature(store.view.snapshot); paint(); load();
     },
     /** 快照里的待办变了才重新读取分区。 */
     update(snapshot) {
       refreshTaskClosure(api);
       refreshWaitingReply(api);
-      const next = JSON.stringify((snapshot.todos ?? []).map(todo => [todo.id, todo.updatedAt]));
+      const next = todoSignature(snapshot);
       if (next !== signature) { signature = next; load(); }
     },
     count: (snapshot, id) => (snapshot.todos ?? []).filter(todo => !todo.completedAt && (id === 'all' || todo.projectId === id)).length,
