@@ -2,6 +2,7 @@
 // 个人消息采集需要单独授权，默认关闭，只读。手动接入、信箱和事件收进“高级”。
 import { h, replace } from '../lib/dom.js';
 import { Button, Banner, Card, Check, Dot, Empty, Field, Fold, Input, Pill, Select } from '../ui/kit.js';
+import { openDrawer } from '../ui/overlay.js';
 import { Hint, hintCopy } from '../ui/hint.js';
 import { createPersonalMessagesUI } from '../features/personal-messages.js';
 import { createBotMailboxesUI } from '../legacy/bot-mailboxes.js';
@@ -155,11 +156,55 @@ export function createChannelsPage({ api, store, router, shell }) {
       if (request === webRequest) replace(webStatus, Banner({ tone: 'danger', children: '无法读取网页版网关状态：' + systemText(cause.message) }));
     }
   }
+  async function configureWebGateway() {
+    const path = '/feishu/web/settings';
+    const drawer = openDrawer({ title: '配置网关', body: '正在读取网关配置…' });
+    try {
+      const settings = await api.get(path);
+      if (!drawer.el.open) return;
+      if (typeof settings?.baseUrl !== 'string' || typeof settings.hasToken !== 'boolean') throw Error('响应格式无效');
+      const address = Input({ type: 'url', value: settings.baseUrl, required: true });
+      const token = Input({ type: 'password', autocomplete: 'new-password' });
+      const tokenHint = h('span', { class: 'field__hint', 'aria-live': 'polite' });
+      const failure = h('div', { role: 'alert' });
+      function updateTokenHint() {
+        failure.textContent = '';
+        const changed = address.value.trim() !== settings.baseUrl;
+        token.required = changed || !settings.hasToken;
+        tokenHint.textContent = changed ? '更换地址时须填写新网关的令牌。'
+          : settings.hasToken ? '已配置令牌。留空保留原令牌。' : '首次配置，请填写网关令牌。';
+      }
+      address.addEventListener('input', updateTokenHint);
+      token.addEventListener('invalid', () => { failure.textContent = tokenHint.textContent; });
+      token.addEventListener('input', () => { failure.textContent = ''; });
+      updateTokenHint();
+      const save = Button({ label: '保存配置', kind: 'primary', type: 'submit' });
+      replace(drawer.body, h('form', { class: 'stack', onsubmit: async event => {
+        event.preventDefault();
+        if (save.disabled) return;
+        const baseUrl = address.value.trim(), secret = token.value.trim();
+        if (token.required && !secret) { failure.textContent = tokenHint.textContent; token.focus(); return; }
+        save.disabled = true;
+        failure.textContent = '';
+        try {
+          await api.put(path, { baseUrl, ...(secret ? { token: secret } : {}) });
+          token.value = '';
+          drawer.close();
+          await refreshWebGateway();
+        } catch { failure.textContent = '保存失败，请核对网关地址和令牌后重试。'; }
+        finally { save.disabled = false; }
+      } },
+      h('p', { class: 'small muted' }, '默认地址指向运行工作台服务端的本机。请先运行兼容网关，在网关中登录飞书并开启监听。'),
+      Field({ label: '网关地址', control: address }), Field({ label: '网关令牌', control: token, hint: tokenHint }),
+      failure, save));
+    } catch { replace(drawer.body, Banner({ tone: 'danger', children: '无法读取网关配置，请关闭后重试。' })); }
+  }
   const webCard = Card({ title: '飞书网页版网关（可选）', id: 'channel-feishu-web',
     body: h('div', { class: 'stack' },
-      h('p', { class: 'small' }, '先在兼容网关登录飞书并开启监听，再在工作台服务端配置网关地址。'),
+      h('p', { class: 'small' }, '运行兼容网关，登录飞书并开启监听。网关与工作台服务端同机时，点击「配置网关」，保留默认地址并填写网关令牌。'),
       h('p', { class: 'small muted' }, '启用后每 15 秒同步一次私聊。网关暂时无法核实群聊的折叠状态，因此小群也暂不采集。需要处理群聊时可使用飞书 CLI。'),
       webStatus, h('div', { class: 'row row--wrap' },
+      Button({ label: '配置网关', size: 'sm', onClick: configureWebGateway }),
       Button({ label: '刷新网关状态', size: 'sm', onClick: refreshWebGateway }),
       Button({ label: '管理网页版插件', size: 'sm', onClick: () => shell.openPluginSettings('feishu-web') }))) });
 

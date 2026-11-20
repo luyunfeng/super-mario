@@ -1,3 +1,4 @@
+import { createFeishuWebConfig } from './feishu-web-config.ts';
 import { createInboxAssistant, type InboxAnalysis } from './inbox-assistant.ts';
 import { excludesPersonalGroupFromBrief } from '../../protocol/src/inbox-origin.ts';
 import { createCommandProjectRouter } from './agent-runtime/command-project-router.ts';
@@ -82,6 +83,8 @@ function dueDate(value: unknown): string | undefined {
 /** Owns application services. HTTP and future channels call the same methods. */
 export async function createWorkbench(config: AppConfig) {
   config = { ...config };
+  const webConfig = createFeishuWebConfig(config.dataDir, config.feishuWeb);
+  let closing = false;
   const modelConfig = createModelConfig(config);
   const store = createStore(join(config.dataDir, 'workbench.sqlite'));
   const events = createEventBus(store);
@@ -123,24 +126,33 @@ export async function createWorkbench(config: AppConfig) {
     validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
     return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
   }, knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0], currentAgentInput() ?? agent.currentInput()) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
-  const webOptions = config.feishuWeb ?? {
-    baseUrl: process.env.SUPER_MARIO_FEISHU_WEB_BASE_URL ?? '',
-    token: process.env.SUPER_MARIO_FEISHU_WEB_TOKEN,
-  };
-  const webSource = createFeishuWebSource({
-    ...webOptions,
-    onInbox: async (items, account) => {
-      if (!account?.accountKey?.trim()) throw new Error('网页版网关未提供已核验的账号');
-      const key = createHash('sha256').update(JSON.stringify([new URL(webOptions.baseUrl).origin, account.accountKey])).digest('hex');
-      const webAccount = 'feishu:web:' + key;
-      await inbox.ingest(webAccount, items);
-    },
+  function makeWebSource() {
+    const options = webConfig.read();
+    return createFeishuWebSource({
+      ...options, pollIntervalMs: config.feishuWeb?.pollIntervalMs,
+      onInbox: async (items, account) => {
+        if (!account?.accountKey?.trim()) throw new Error('网页版网关未提供已核验的账号');
+        const key = createHash('sha256').update(JSON.stringify([options.baseUrl, account.accountKey])).digest('hex');
+        await inbox.ingest('feishu:web:' + key, items);
+      },
+    });
+  }
+  let webSource = makeWebSource();
+  let webQueue = Promise.resolve();
+  function serializeWeb<T>(action: () => T | Promise<T>) {
+    const result = webQueue.then(action);
+    webQueue = result.then(() => {}, () => {});
+    return result;
+  }
+  const stopWeb = () => serializeWeb(() => webSource.stop());
+  const webExtension = createFeishuWebExtension({
+    start() { if (!closing) webSource.start(); }, stop: stopWeb,
   });
   // The host defaults new plugins to enabled. Seed only the first registration and preserve later user choices.
   if (!store.get('core.plugin-settings', 'feishu-web')) {
     store.put('core.plugin-settings', 'feishu-web', { enabled: false, revision: 1 });
   }
-  plugins.register(createFeishuWebExtension(webSource));
+  plugins.register({ ...webExtension, activate: context => serializeWeb(() => webExtension.activate(context)) });
   plugins.register(workspaceSplash);
   plugins.register(tokenStatistics);
   for (const loaded of await loadExtensions(config.dataDir, { reservedIds: plugins.list().map(item => item.id) })) plugins.register(loaded.extension, loaded.config);
@@ -203,7 +215,6 @@ export async function createWorkbench(config: AppConfig) {
   const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text)=>scopedAgents.postProject(id,text),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
   const controllers = new Map<string, AbortController>();
   const jobs = new Set<Promise<void>>();
-  let closing = false;
   const commandRouter = createCommandProjectRouter(config, () => !closing && inboxClassifier.status().available);
   const approvals = createApprovalService({ store, events, execute: executeApproved, publish: background.publish, allowedKinds: () => contributions.list('channels').flatMap(entry => entry.value.approvalKinds ?? []) });
   const inboxHandlingSources = createInboxHandlingSources({store,personalAccount:()=>knowledgeAccount(),mailboxAccess:entry=>mailboxHandlingAccess(entry)});
@@ -979,7 +990,24 @@ export async function createWorkbench(config: AppConfig) {
         return modelStatus();
       } finally { agent.unlockConfiguration(); supervisorRuntime.unlockConfiguration(); scopedAgents.unlockConfiguration(); inboxClassifier.unlockConfiguration(); inboxAssistantRuntime.unlockConfiguration(); inboxHandlingRuntime.unlockConfiguration(); }
     },
-    feishuWebStatus: () => webSource.status(),
+    feishuWebStatus() {
+      const status = webSource.status();
+      const error = webConfig.error();
+      return error ? { ...status, connected: false, error } : status;
+    },
+    feishuWebSettings: webConfig.public,
+    configureFeishuWeb(input: Record<string, unknown>) {
+      return serializeWeb(async () => {
+        if (closing) throw new InputError('工作台正在关闭', 409);
+        if (webConfig.save(input)) {
+          const enabled = webSource.status().enabled;
+          await webSource.stop();
+          webSource = makeWebSource();
+          if (enabled && !closing) webSource.start();
+        }
+        return webConfig.public();
+      });
+    },
     config, store, events, effects, plugins, contributions, workDecisions, todoDecisions, waitingReplies, inboxAssistant, inboxClassifier, inboxHandling, inboxHandlingRuntime, agent, supervisorRuntime, supervisorAgent, policies, plans, proposePlan, interactions, inbox, approvals, supervision, monitor,
     setInboxReplyHost(access: typeof mailboxHandlingAccess, reply: NonNullable<typeof replyToInboxSource>) { mailboxHandlingAccess=access;replyToInboxSource=reply; },
     readInboxHandlingSource: inboxHandlingSources,
@@ -997,7 +1025,7 @@ export async function createWorkbench(config: AppConfig) {
     async close() {
       if (closing) return;
       closing = true;
-      await webSource.stop();
+      await stopWeb();
       commandRouter.cancel();
       await wiredBackground.close(); projectFollowUp.close();
       supervision.close(); plans.close(); clearInterval(expireTimer); await awayNotifications.close();

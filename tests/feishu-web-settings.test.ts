@@ -27,3 +27,20 @@ test('网页版默认停用，切换网页版保留个人 CLI 的采集选择', 
     assert.equal((await state('personal')).enabled, cliBefore.enabled);
   }
 });
+
+test('渠道配置接口要求工作台认证，保存结果不回显网关令牌', async t => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'web-settings-'));
+  const service = await startServer({ dataDir, host: '127.0.0.1', port: 0, demo: true, token: 'fixture-workbench',
+    feishuWeb: { baseUrl: 'http://127.0.0.1:4310' } });
+  t.after(async () => { await service.close(); await rm(dataDir, { recursive: true, force: true }); });
+  const url = service.url + '/api/v1/feishu/web/settings';
+  const headers = { authorization: 'Bearer fixture-workbench', 'content-type': 'application/json' };
+  assert.equal((await fetch(url)).status, 401);
+  const fixture = 'synthetic-test-gateway';
+  const response = await fetch(url, { method: 'PUT', headers, body: JSON.stringify({ baseUrl: 'http://127.0.0.1:4310', token: fixture }) });
+  assert.equal(response.status, 200);
+  assert.ok(!(await response.text()).includes(fixture));
+  const saved = await (await fetch(url, { headers })).json();
+  assert.equal(saved.hasToken, true);
+  assert.ok(!JSON.stringify(saved).includes(fixture));
+});
