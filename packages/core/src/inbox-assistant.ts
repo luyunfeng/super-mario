@@ -340,7 +340,9 @@ export function createInboxAssistant(options: {
             t.projectId === group.view.projectId &&
             (!t.completedAt || linked.has(t.id)),
         )
-        .slice(-10);
+        // Keep this conversation's own work in view before unrelated recent Todos.
+        .sort((a, b) => Number(linked.has(a.id)) - Number(linked.has(b.id)))
+        .slice(-20);
       const runs = store
         .list<Run>("runs")
         .filter(
@@ -393,7 +395,7 @@ export function createInboxAssistant(options: {
           result.disposition,
         ) ||
         !Array.isArray(result.tasks) ||
-        result.tasks.length > 4 ||
+        result.tasks.length > 20 ||
         (result.disposition === "waiting_user" &&
           (typeof result.question !== "string" ||
             !result.question.trim() ||

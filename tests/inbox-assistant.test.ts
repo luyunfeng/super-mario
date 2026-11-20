@@ -430,3 +430,41 @@ test("absent task references emitted as null or empty strings are accepted, fore
   assert.equal(f.service.list()[0].status, "failed");
   assert.equal(f.store.list("todos").length, 1);
 });
+
+test("a conversation can contain several actual topics, and its linked work stays visible ahead of other recent todos", async (t) => {
+  let calls = 0;
+  const f = fixture(t, async (input) => {
+    if (++calls === 1)
+      return {
+        summary: "五项独立合成工作",
+        disposition: "work",
+        tasks: Array.from({ length: 5 }, (_, i) => ({
+          key: "topic-" + i,
+          title: "合成目标" + i,
+          notes: "独立目标的合成证据",
+        })),
+      };
+    assert.equal(input.todos.length, 20);
+    assert.equal(Object.keys(input.taskKeys).length, 5);
+    for (const id of Object.values(input.taskKeys))
+      assert.ok(input.todos.some((todo: Todo) => todo.id === id));
+    return watching;
+  });
+  f.store.put("inbox", "a", message("a"));
+  await f.service.tick();
+  assert.equal(f.service.list()[0].status, "watching");
+  assert.equal(f.store.list("todos").length, 5);
+  for (let i = 0; i < 23; i++)
+    f.store.put("todos", "other-" + i, {
+      id: "other-" + i,
+      title: "其他会话事项",
+      notes: "合成数据",
+      createdAt: time,
+      updatedAt: time,
+    });
+  f.store.put("inbox", "b", message("b"));
+  await f.service.tick();
+  assert.equal(calls, 2);
+  assert.equal(f.service.list()[0].status, "watching");
+  assert.equal(f.store.list("todos").length, 28);
+});

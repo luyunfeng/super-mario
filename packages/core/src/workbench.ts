@@ -166,7 +166,7 @@ export async function createWorkbench(config: AppConfig) {
       try {
       const answer=await inboxAssistantRuntime.ask([
         '默认在后台处理，不要因为私聊、@或一句感叹就要求主人决策。根据提供的会话上下文判断实际事项；存在省略时保留不确定，零散发言合并为一件工作，延续已有事项时引用existingTodoId。不要虚构完成。',
-        '只有缺少关键事实且必须由主人回答时使用waiting_user并提出具体question；知会用watching，无意义闲聊用quiet，有明确工作才用work并给tasks。任务key跨轮保持稳定，保持已有事项的标题和人工备注。',
+        '只有缺少关键事实且必须由主人回答时使用waiting_user并提出具体question；知会用watching，无意义闲聊用quiet，有明确工作才用work并给tasks。任务最多20项，按实际目标合并，不能每条消息都建事项；已明确回复解决的讨论不要再建待办。任务key跨轮保持稳定，保持已有事项的标题和人工备注。',
         '只返回JSON：{"summary":"简明会话结论","disposition":"watching|quiet|waiting_user|work","question":"仅需要主人回答时填写","tasks":[{"key":"稳定事项标识","title":"实际工作标题","notes":"目标与现有证据","existingTodoId":"延续已有事项才填写"}]}。没有工作时tasks为空。注意truncated=true表示原文有省略，不据此编造事实。',
         JSON.stringify(payload)
       ].join('\n'),{readOnly:true});
