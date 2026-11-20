@@ -398,3 +398,35 @@ test("main Agent shared context sees scoped merged progress, never raw cross-pro
   assert.equal(scoped.inboxAssistant?.items[0].projectId, "p");
   assert.doesNotMatch(JSON.stringify(scoped.inboxAssistant), /合成消息/);
 });
+
+test("absent task references emitted as null or empty strings are accepted, foreign references still fail", async (t) => {
+  let calls = 0;
+  const f = fixture(
+    t,
+    async () =>
+      ({
+        summary: "合成事项",
+        disposition: "work",
+        tasks: [
+          {
+            key: "stable",
+            title: "合成待办",
+            notes: "仅本地整理",
+            existingTodoId: ++calls === 1 ? null : calls === 2 ? "" : "foreign",
+          },
+        ],
+      }) as unknown as InboxAnalysis,
+  );
+  f.store.put("inbox", "a", message("a"));
+  await f.service.tick();
+  assert.equal(f.service.list()[0].status, "watching");
+  assert.equal(f.store.list("todos").length, 1);
+  f.store.put("inbox", "b", message("b"));
+  await f.service.tick();
+  assert.equal(f.service.list()[0].status, "watching");
+  assert.equal(f.store.list("todos").length, 1);
+  f.store.put("inbox", "c", message("c"));
+  await f.service.tick();
+  assert.equal(f.service.list()[0].status, "failed");
+  assert.equal(f.store.list("todos").length, 1);
+});

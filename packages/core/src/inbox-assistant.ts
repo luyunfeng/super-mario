@@ -101,7 +101,14 @@ export function createInboxAssistant(options: {
     return [
       Object.values(row?.tasks ?? {}).map((id) => {
         const todo = store.get<Todo>("todos", id);
-        return [id, todo?.projectId, todo?.title, todo?.notes, todo?.dueAt, todo?.completedAt];
+        return [
+          id,
+          todo?.projectId,
+          todo?.title,
+          todo?.notes,
+          todo?.dueAt,
+          todo?.completedAt,
+        ];
       }),
       store
         .list<Run>("runs")
@@ -369,6 +376,14 @@ export function createInboxAssistant(options: {
         answers: (row.answers ?? []).slice(-2),
         previousSummary: row.summary,
       });
+      // Optional references are often emitted as JSON null or an empty string.
+      // Canonicalize absence; a nonempty reference must still match a supplied Todo.
+      if (result && Array.isArray(result.tasks))
+        result.tasks = result.tasks.map((task) =>
+          task && (task.existingTodoId === null || task.existingTodoId === "")
+            ? { ...task, existingTodoId: undefined }
+            : task,
+        );
       if (
         !result ||
         typeof result.summary !== "string" ||
