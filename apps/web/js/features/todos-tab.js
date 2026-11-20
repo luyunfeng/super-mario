@@ -25,6 +25,7 @@ function localTime(value, withTime = false) {
 export function createTodosTab({ api, store, router }) {
   let projectId = 'all';
   let data = null;
+  let loadError = '';
   let seq = 0;
   let signature = '';
 
@@ -38,8 +39,9 @@ export function createTodosTab({ api, store, router }) {
       .then(() => { title.value = ''; due.value = ''; }, (error) => { toast(`没有添加成功：${error.message}`, 'danger'); });
     store.refresh();
   } }, h('div', { class: 'grow', style: { minWidth: '200px' } }, title), due, h('button', { class: 'btn btn--primary', type: 'submit' }, '添加'));
+  const search = Input({ type: 'search', placeholder: '搜索标题或备注', 'aria-label': '搜索待办标题或备注', oninput: paint });
   const list = h('div', { class: 'stack' });
-  const el = h('div', { class: 'stack stack--lg', id: 'panel-todos', role: 'tabpanel' }, form, list);
+  const el = h('div', { class: 'stack stack--lg', id: 'panel-todos', role: 'tabpanel' }, form, search, list);
 
   const inScope = (todo) => projectId === 'all' || todo.projectId === projectId;
   const projectName = (id) => (store.view.snapshot?.projects ?? []).find(item => item.id === id)?.name;
@@ -105,27 +107,33 @@ export function createTodosTab({ api, store, router }) {
   }
 
   function paint() {
+    if (loadError) { replace(list, h('p', { class: 'text-danger' }, loadError)); return; }
     if (!data) { replace(list, h('p', { class: 'muted' }, '正在读取…')); return; }
     const sections = data.sections ?? data;
-    const groups = ORDER.map(name => [name, (sections[name] ?? []).filter(inScope)]).filter(([, items]) => items.length);
-    const finished = DONE.flatMap(name => (sections[name] ?? []).filter(inScope));
+    const query = search.value.trim().toLowerCase();
+    const matches = todo => inScope(todo) && (!query || [todo.title, todo.notes].some(value => value?.toLowerCase().includes(query)));
+    const groups = ORDER.map(name => [name, (sections[name] ?? []).filter(matches)]).filter(([, items]) => items.length);
+    const finished = DONE.flatMap(name => (sections[name] ?? []).filter(matches));
     const blocks = groups.map(([name, items]) => h('div', { class: 'group', dataset: { section: name } },
       h('h3', { class: 'group__title' }, name, h('span', { class: 'tab__count' }, items.length)),
       h('div', { class: 'list' }, items.map(todo => row(todo, false)))));
-    if (finished.length) blocks.push(Fold({ title: `已完成 ${finished.length}`, body: h('div', { class: 'list' }, finished.map(todo => row(todo, true))) }));
-    replace(list, blocks.length ? blocks : Empty({ title: '还没有待办', text: '在上面写下第一件要做的事，回车即可添加。' }));
+    if (finished.length) blocks.push(Fold({ title: `已完成 ${finished.length}`, open: Boolean(query), body: h('div', { class: 'list' }, finished.map(todo => row(todo, true))) }));
+    replace(list, blocks.length ? blocks : Empty(query ? { title: '没有匹配的待办', text: '试试其他关键词，或清空搜索查看全部待办。' } : { title: '还没有待办', text: '在上面写下第一件要做的事，回车即可添加。' }));
   }
 
   async function load() {
     const stamp = ++seq;
-    try { const value = await api.get('/todos?view=sections'); if (stamp !== seq) return; data = value; }
-    catch (error) { if (stamp !== seq) return; replace(list, h('p', { class: 'text-danger' }, `读取待办失败：${error.message}`)); return; }
+    try { const value = await api.get('/todos?view=sections'); if (stamp !== seq) return; data = value; loadError = ''; }
+    catch (error) { if (stamp !== seq) return; loadError = `读取待办失败：${error.message}`; }
     paint();
   }
 
   return {
     el,
-    show(id) { projectId = id; signature = ''; load(); },
+    show(id) {
+      if (id !== projectId) search.value = '';
+      projectId = id; signature = ''; paint(); load();
+    },
     /** 快照里的待办变了才重新读取分区。 */
     update(snapshot) {
       refreshTaskClosure(api);
