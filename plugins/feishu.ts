@@ -1,3 +1,4 @@
+import type { PersonalAiMessage } from '../packages/protocol/src/index.ts';
 import { allowedPersonalChats, scopedLanes, searchFilter, unmutedIds, validChatId, type SearchLane } from './feishu-personal-scope.ts';
 import { execFile } from 'node:child_process';
 import { EventDispatcher, WSClient } from '@larksuiteoapi/node-sdk';
@@ -25,7 +26,7 @@ export interface PersonalCheckpoint {
     privateRange?: { start: string; end: string };
   };
 }
-export interface PersonalBatch { items: InboxThing[]; checkpoint: PersonalCheckpoint; hasMore: boolean; evidence?: CollectedReplyEvidence[] }
+export interface PersonalBatch { aiMessages?: PersonalAiMessage[]; items: InboxThing[]; checkpoint: PersonalCheckpoint; hasMore: boolean; evidence?: CollectedReplyEvidence[] }
 export const PERSONAL_COLLECTION_BOUNDARY = '首次读取最近24小时；后续从已完成水位重叠5分钟读取。私聊优先；群聊只选按最近活跃时间排序的前100个会话中，未解散且明确未免打扰的群，最低优先级分批读取。未完成的群读取保留原时间范围，私聊可独立推进。默认分页采集按命中消息独立入箱。不保证全部群、永久历史或任意旧编辑的全量同步。';
 /** Pin the window before the first read as well as after each successful ingestion. */
 export function preparePersonalCheckpoint(binding: PersonalCheckpoint['binding'], previous?: PersonalCheckpoint): PersonalCheckpoint {
@@ -411,7 +412,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     // Collect outgoing metadata before inbox filtering; never send outgoing text
     // to inbox sorting. Selection hints stay bounded and local to the observer.
     const evidence = messageEvidence(messages);
-    const items = await messageThings(messages);
+    const { items, aiMessages } = await messageThings(messages, evidence);
     const hasMore = window.lanes.some(lane => !lane.done);
     if (!hasMore) {
       if (allowed === undefined) {
@@ -424,7 +425,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
       }
       delete checkpoint.window;
     }
-    return { items, checkpoint, hasMore, evidence };
+    return { items, checkpoint, hasMore, evidence, aiMessages };
   }
   /** Large group directories must not hold private messages or durable progress behind a full scan. */
   async function collectIncremental(previous: PersonalCheckpoint | undefined, limit: number): Promise<PersonalBatch> {
@@ -487,7 +488,8 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const messages = checkpoint.notBefore ? scoped.filter(hit => {
       const at = isoTime(hit.create_time); return at !== undefined && Date.parse(at) >= Date.parse(checkpoint.notBefore!);
     }) : scoped;
-    const items = await messageThings(messages), evidence = messageEvidence(messages);
+    const evidence = messageEvidence(messages);
+    const { items, aiMessages } = await messageThings(messages, evidence);
     const hasMore = !directory.done || window.lanes.some(lane => !lane.done);
     if (!hasMore) {
       checkpoint.lastCompletedThrough = window.end;
@@ -495,7 +497,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
       else { delete checkpoint.directThrough; delete checkpoint.groupRetryFrom; }
       delete checkpoint.window;
     }
-    return { items, checkpoint, hasMore, evidence };
+    return { items, checkpoint, hasMore, evidence, aiMessages };
   }
   async function readIncrementalLane(lane: SearchLane, start: string, end: string): Promise<Row[]> {
     const read = () => cliPage(['+messages-search', '--start', start, '--end', end,
@@ -546,7 +548,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
   function scopedHits(rows: Row[], lane: SearchLane): Row[] {
     rows = rows.filter(collectSender);
     if (!lane.chatIds) return rows.filter(hit => hit.chat_type === 'p2p' || !hit.chat_type)
-      .map(hit => ({ ...hit, chat_type: 'p2p', personalGroupObserved: false }));
+      .map(hit => ({ ...hit, chat_type: 'p2p', explicitDirect: hit.chat_type === 'p2p', personalGroupObserved: false }));
     return rows.filter(hit => lane.chatIds!.includes(string(hit.chat_id)) && hit.chat_type !== 'p2p')
       .map(hit => ({ ...hit, personalGroupObserved: true }));
   }
@@ -564,14 +566,37 @@ export function createFeishuIntegration(options: FeishuOptions) {
    * Legacy collect/collectOnce below retain conversation aggregation and keys;
    * no migration or deletion of existing conversation inbox entries is needed.
    */
-  async function messageThings(messages: Row[]): Promise<InboxThing[]> {
+  async function messageThings(messages: Row[], evidence: CollectedReplyEvidence[]) {
     const matches = new Map(messages.map(row => [JSON.stringify([row.chat_id, row.message_id]), row]));
+    const anchors = new Map(evidence.map(anchor => [JSON.stringify([anchor.chatId, anchor.messageId]), anchor]));
+    const changed = new Set(messages.filter(hit => hit.updated === true || hit.edited === true || hit.deleted === true)
+      .map(hit => JSON.stringify([hit.chat_id, hit.message_id])));
+    const aiMessages: PersonalAiMessage[] = [];
     const things: InboxThing[] = [];
-    for (const hit of matches.values()) {
+    for (const [key, hit] of matches) {
       const chat = string(hit.chat_id), id = string(hit.message_id);
-      if (!chat || !id || hit.deleted === true || string(object(hit.sender).id) === options.personalOpenId) continue;
-      const sender = string(hit.sender_name) || string(object(hit.sender).name) || string(object(hit.sender).id) || 'unknown';
+      if (!chat || !id || hit.deleted === true) continue;
+      const own = string(object(hit.sender).id) === options.personalOpenId;
+      const anchor = anchors.get(key), text = string(hit.content);
+      const type = hit.msg_type ?? hit.message_type;
+      const aiEligible = anchor && validChatId(chat) && /^om_[a-zA-Z0-9_-]+$/.test(id) && !changed.has(key)
+        && (!type || type === 'text') && text.trim() && !botSender(hit);
+      if (own && !aiEligible) continue;
       const chatOrigin = await personalChatOrigin(hit);
+      if (aiEligible) {
+        // A group lane can never become a direct chat through an inconsistent detail response.
+        const direct = hit.personalGroupObserved === false && (hit.explicitDirect ||
+          (await options.personalChatDetail?.(chat).catch(() => undefined))?.mode === 'p2p');
+        const count = chatOrigin.personalGroupUserCount;
+        const smallGroup = chatOrigin.personalGroupObserved && count !== undefined && Number.isSafeInteger(count) && count > 0 && count <= 50;
+        if (direct || smallGroup) {
+          aiMessages.push({ chatId: chat, messageId: id, text, senderId: anchor.senderId, senderIdType: anchor.senderIdType,
+            createdAt: anchor.createdAt, ...(anchor.threadId && { threadId: anchor.threadId }), ...(anchor.rootId && { rootId: anchor.rootId }),
+            ...(direct ? { kind: 'direct' } : { kind: 'group', groupObserved: true, groupUserCount: count }) });
+        }
+      }
+      if (own) continue;
+      const sender = string(hit.sender_name) || string(object(hit.sender).name) || string(object(hit.sender).id) || 'unknown';
       const { kind } = chatOrigin;
       const mentionedMe = !!options.personalOpenId && Array.isArray(hit.mentions) && hit.mentions.some(mention =>
         string(object(mention).id) === options.personalOpenId || string(object(object(mention).id).open_id) === options.personalOpenId);
@@ -585,7 +610,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
         sender, receivedAt: isoTime(hit.create_time),
       });
     }
-    return things;
+    return { items: things, aiMessages };
   }
   async function collectOnce(): Promise<InboxThing[]> {
     if (!options.profile?.trim()) return [];

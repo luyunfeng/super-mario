@@ -1,3 +1,4 @@
+export type { PersonalAiMessage } from "./personal-ai.ts";
 export type { InboxConversation } from './inbox-conversations.ts';
 export type { TodoHistory, TodoExecutionRound } from './todo-history.ts';
 export type { ScheduledWorkInput, ScheduledWorkTiming, ScheduledWorkAction, ScheduledWorkScope, ScheduledWorkRecord, ScheduledWorkOccurrence } from './scheduled-work.ts';

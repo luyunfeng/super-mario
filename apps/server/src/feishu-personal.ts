@@ -9,6 +9,7 @@ import { PERSONAL_COLLECTION_BOUNDARY, preparePersonalCheckpoint } from '../../.
 import type { PersonalCheckpoint } from '../../../plugins/feishu-personal.ts';
 import type { PersonalAccount, PersonalProvider } from '../../../plugins/feishu-personal.ts';
 import type { AppConfig, InboxThing } from '../../../packages/protocol/src/index.ts';
+import type { PersonalAiMessage } from '../../../packages/protocol/src/personal-ai.ts';
 import type { CollectedReplyEvidence } from '../../../packages/protocol/src/waiting-replies.ts';
 
 export interface PersonalStatus {
@@ -21,9 +22,11 @@ export interface PersonalStatus {
 }
 /** Owns personal consent and collection separately from all bot connections. */
 export function createPersonalMessages(options: {
-  config: AppConfig; provider?: PersonalProvider; pollMs?: number;
+  config: AppConfig; provider?: PersonalProvider; pollMs?: number; aiEnabled?(): boolean;
   stopPreviousCollection?(): Promise<void>;
   canCollect(): boolean; ingest(source: string, things: InboxThing[]): Promise<unknown>;
+  /** Detached observer work must recheck this collection generation immediately before writing. */
+  observeAi?(source: string, messages: PersonalAiMessage[], assertCurrent: () => void): void | Promise<void>;
   observeReplies?(source: string, evidence: CollectedReplyEvidence[]): Promise<unknown> | unknown;
 }) {
   const { config } = options;
@@ -108,7 +111,7 @@ export function createPersonalMessages(options: {
     if (closed || !view.enabled) return;
     const window = saved.checkpoint?.window;
     const pending = window && (!window.lanes[0]?.done || !window.directory?.retryAt || window.directory.retryAt <= Date.now());
-    timer = setTimeout(() => { void collect().catch(() => {}); }, pending ? 250 : options.pollMs ?? 120_000); timer.unref();
+    timer = setTimeout(() => { void collect().catch(() => {}); }, pending ? 250 : options.pollMs ?? (options.aiEnabled?.() ? 30_000 : 120_000)); timer.unref();
   }
   async function collect(): Promise<{ collected: number }> {
     if (closed || view.status !== 'connected' || !view.enabled || !saved.account) throw new Error('请先授权飞书账号并开启采集');
@@ -150,6 +153,14 @@ export function createPersonalMessages(options: {
         await options.ingest(source, things);
         // Ingest may yield while stop, cancel or new authorization changes the owner.
         assertCurrent();
+        if (batch?.aiMessages?.length && options.observeAi) {
+          const observationError = '个人 AI 消息处理失败，普通消息采集继续。';
+          let observed = true;
+          try { await options.observeAi(source, batch.aiMessages, assertCurrent); } catch { observed = false; }
+          assertCurrent();
+          if (!observed) view.error = observationError;
+          else if (view.error === observationError) delete view.error;
+        }
         if (batch) {
           if (!['appId', 'openId', 'profile'].every(key => batch.checkpoint.binding[key as keyof PersonalCheckpoint['binding']] === account[key as keyof PersonalAccount])) throw new Error('采集账号已变化');
           const previous = saved.checkpoint;
@@ -172,7 +183,7 @@ export function createPersonalMessages(options: {
     collecting = task; return task;
   }
   return {
-    status,
+    status, reschedule: schedule,
     // Internal only: the browser never receives the CLI profile or account IDs.
     sourceAccount() { return view.status === 'connected' && saved.account ? { profile: saved.account.profile, appId: saved.account.appId, openId: saved.account.openId } : undefined; },
     start() {
