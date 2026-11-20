@@ -140,10 +140,31 @@ export function createChannelsPage({ api, store, router, shell }) {
   const webStatus = h('div', { class: 'stack', 'aria-live': 'polite' });
   let webRequest = 0;
   let webPluginState;
+  let webTimer, webAbort, webEnabled = false, fastChecks = 0;
+  const webVisible = () => router.current.page === 'channels' && !document.hidden;
+  function pauseWebStatus() {
+    clearTimeout(webTimer);
+    webRequest++;
+    webAbort?.abort();
+  }
+  router.subscribe(route => {
+    if (route.page !== 'channels') { pauseWebStatus(); fastChecks = 0; }
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (webVisible()) refreshWebGateway();
+    else pauseWebStatus();
+  });
+  function followWebLogin() {
+    fastChecks = 6;
+    return refreshWebGateway();
+  }
   async function refreshWebGateway() {
-    const request = ++webRequest;
+    pauseWebStatus();
+    if (!webVisible()) return;
+    const request = webRequest;
+    webAbort = new AbortController();
     try {
-      const state = await api.get('/feishu/web');
+      const state = await api('/feishu/web', { signal: webAbort.signal });
       if (request !== webRequest) return;
       if (typeof state?.enabled !== 'boolean' || typeof state.connected !== 'boolean') throw Error('响应格式无效');
       const received = Date.parse(state.lastReceivedAt);
@@ -153,8 +174,19 @@ export function createChannelsPage({ api, store, router, shell }) {
         h('p', { class: 'small muted' }, '最近收到消息：', Number.isFinite(received)
           ? h('time', { datetime: state.lastReceivedAt }, new Date(received).toLocaleString('zh-CN')) : '暂无记录'),
         state.error && Banner({ tone: 'danger', children: state.error }));
+      webEnabled = state.enabled;
+      if (state.connected || !state.enabled) fastChecks = 0;
     } catch (cause) {
       if (request === webRequest) replace(webStatus, Banner({ tone: 'danger', children: '无法读取网页版网关状态：' + systemText(cause.message) }));
+    } finally {
+      if (request === webRequest) webAbort = undefined;
+      if (request === webRequest && webVisible() && (webEnabled || fastChecks > 0)) {
+        const delay = fastChecks > 0 ? 5000 : 15000;
+        webTimer = setTimeout(() => {
+          if (fastChecks > 0) fastChecks--;
+          refreshWebGateway();
+        }, delay);
+      }
     }
   }
   async function configureWebGateway() {
@@ -205,7 +237,7 @@ export function createChannelsPage({ api, store, router, shell }) {
       h('p', { class: 'small' }, '运行兼容网关，登录飞书并开启监听。网关与工作台服务端同机时，点击「配置网关」，保留默认地址并填写网关令牌。'),
       h('p', { class: 'small muted' }, '启用后每 15 秒同步一次私聊。工作台读取网关快照，不主动将消息标记为已读。网关暂时无法核实群聊的折叠状态，因此小群也暂不采集。需要处理群聊时可使用飞书 CLI。'),
       webStatus, h('div', { class: 'row row--wrap' },
-      Button({ label: '扫码登录', size: 'sm', onClick: () => openFeishuWebLogin(api, refreshWebGateway) }),
+      Button({ label: '扫码登录', size: 'sm', onClick: () => openFeishuWebLogin(api, followWebLogin) }),
       Button({ label: '配置网关', size: 'sm', onClick: configureWebGateway }),
       Button({ label: '刷新网关状态', size: 'sm', onClick: refreshWebGateway }),
       Button({ label: '管理网页版插件', size: 'sm', onClick: () => shell.openPluginSettings('feishu-web') }))) });
@@ -281,6 +313,7 @@ export function createChannelsPage({ api, store, router, shell }) {
     onState({ snapshot }) {
       const webPlugin = snapshot.plugins?.find(plugin => plugin.id === 'feishu-web');
       const next = JSON.stringify([webPlugin?.enabled, webPlugin?.status]);
+      if (webPluginState !== next && webPlugin) webEnabled = webPlugin.enabled;
       if (webPluginState !== undefined && webPluginState !== next && router.current.page === 'channels') refreshWebGateway();
       webPluginState = next;
       const problems = (snapshot.problems ?? []).filter(item => item.area === 'channel');

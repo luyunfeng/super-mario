@@ -57,11 +57,12 @@ export function createApi() {
   if (shared !== null) credential = remember(shared);
   let onUnauthorized = () => {};
 
-  async function api(path, { method = 'GET', body, headers, keepalive = false } = {}) {
+  async function api(path, { method = 'GET', body, headers, signal, keepalive = false } = {}) {
     const token = currentToken();
     const init = {
       method,
       keepalive,
+      signal,
       headers: {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),

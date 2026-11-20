@@ -183,3 +183,106 @@ test('网页版扫码只在点击后启动，展示失效、条件不足及成�
   assert.equal(starts, 5);
   assert.equal(polls, 4);
 });
+
+test('渠道页按可见性同步网关，扫码成功后限次加快刷新', { timeout: 40000 }, async t => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'mario-web-follow-ui-'));
+  const server = await startServer({ host: '127.0.0.1', port: 0, demo: true, dataDir });
+  t.after(async () => { await server.close(); await rm(dataDir, { recursive: true, force: true }); });
+  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+  let reads = 0, connected = false, success = false;
+  await page.clock.install();
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+  let lastReceivedAt = '2026-01-01T00:00:00Z';
+  await page.route('**/api/v1/feishu/web', route => route.fulfill({ json: { enabled: true, connected, lastReceivedAt, error: '读取序号 ' + ++reads } }));
+  await page.route('**/api/v1/feishu/web/login', route => route.fulfill({ json: { state: success ? 'success' : 'waiting' } }));
+  await page.goto(server.url + '/#channels');
+  const card = page.locator('#channel-feishu-web');
+  const login = card.getByRole('button', { name: '扫码登录' });
+  const drawer = page.getByRole('dialog', { name: '网页版网关扫码登录' });
+  await expect(card).toContainText('未连接');
+
+  async function expectRead(count: number) {
+    await expect(card).toContainText('读取序号 ' + count);
+  }
+  async function startConfirmed() {
+    const count = reads;
+    await login.click();
+    await expect(drawer).toContainText('网关登录成功');
+    await page.keyboard.press('Escape');
+    await expectRead(count + 1);
+  }
+  async function tickRead(ms: number) {
+    const count = reads;
+    await page.clock.fastForward(ms);
+    await expectRead(count + 1);
+  }
+  connected = true;
+  await tickRead(15000);
+  await expect(card).toContainText('已连接');
+  lastReceivedAt = '2026-01-02T00:00:00Z';
+  await tickRead(15000);
+  await expect(card.locator('time')).toHaveAttribute('datetime', lastReceivedAt);
+  connected = false;
+  await tickRead(15000);
+  await login.click();
+  await expect(drawer).toContainText('请用飞书扫描二维码');
+  await page.keyboard.press('Escape');
+  await expect(card).toContainText('未连接');
+  success = true;
+  await startConfirmed();
+  for (let i = 1; i <= 3; i++) {
+    connected = i === 3;
+    await tickRead(5000);
+  }
+  await expect(card).toContainText('已连接');
+  connected = false;
+  await startConfirmed();
+  for (let i = 0; i < 6; i++) await tickRead(5000);
+  let stable = reads;
+  await page.clock.fastForward(5000);
+  assert.equal(reads, stable);
+  await tickRead(10000);
+  async function setHidden(hidden: boolean) {
+    await page.evaluate(value => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, hidden);
+  }
+  // Delay delivery after fetch has resolved, when abort alone cannot discard the result.
+  const held = await page.evaluateHandle(() => {
+    const original = window.fetch;
+    let ready!: () => void, release!: () => void;
+    const captured = new Promise<void>(resolve => { ready = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    window.fetch = async (...args) => {
+      const response = await original(...args);
+      if (String(args[0]).endsWith('/feishu/web')) {
+        window.fetch = original;
+        const data = await response.json();
+        ready();
+        await gate;
+        return Response.json(data);
+      }
+      return response;
+    };
+    return { captured, release };
+  });
+  await page.clock.fastForward(15000);
+  await held.evaluate(state => state.captured);
+  await setHidden(true);
+  stable = reads;
+  await page.clock.fastForward(60000);
+  assert.equal(reads, stable);
+  await setHidden(false);
+  await expectRead(stable + 1);
+  await held.evaluate(state => state.release());
+  await expectRead(stable + 1);
+  await page.evaluate(() => { location.hash = '#home'; });
+  await expect(card).toBeHidden();
+  stable = reads;
+  await page.clock.fastForward(60000);
+  assert.equal(reads, stable);
+});
