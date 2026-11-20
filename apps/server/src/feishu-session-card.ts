@@ -34,7 +34,7 @@ export function sessionCard(data: SessionCardSnapshot, navigation: string, reque
 
 export function resumeForm(row: SessionCardSnapshot['rows'][number], navigation: string, index: number) {
   const field = (name: string, label: string) => ({
-    tag: 'input', name, required: true, label_position: 'top', width: 'fill', max_length: 4000, label: cardPlain(label), placeholder: cardPlain(label),
+    tag: 'input', name, required: true, label_position: 'top', width: 'fill', max_length: 1000, label: cardPlain(label), placeholder: cardPlain(label),
   });
   return {
     schema: '2.0', header: {template:'blue', title:cardPlain('申请恢复 CLI 会话')},

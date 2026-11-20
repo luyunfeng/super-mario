@@ -192,8 +192,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           : {toast:{type:'info',content:'问题全文超过飞书卡片容量，请到 Web 主对话查看并回答。'}};
       }
       const answer = input.formValue?.answer;
-      if (typeof answer !== 'string' || !answer.trim() || answer.length > 2000)
-        return {toast:{type:'error',content:'请填写回答，最多 2000 字。'}};
+      if (typeof answer !== 'string' || !answer.trim() || answer.length > 1000)
+        return {toast:{type:'error',content:'请填写回答，最多 1000 字。'}};
       const reply = async () => {
         let result: string;
         try {
@@ -225,9 +225,9 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const fields = input.formValue ?? {};
       const read = (name: string) => typeof fields[name] === 'string' ? fields[name].trim() : '';
       const prompt = read('prompt'), doneWhen = read('doneWhen'), minutes = Number(read('minutes'));
-      if (!prompt || !doneWhen || prompt.length > 4000 || doneWhen.length > 4000 ||
+      if (!prompt || !doneWhen || prompt.length > 1000 || doneWhen.length > 1000 ||
         !Number.isSafeInteger(minutes) || minutes <= 0 || minutes > 10080 || read('stopped') !== '已停止')
-        return {toast:{type:'error',content:'请填写目标和验收条件（各最多 4000 字）、1～10080 的整数分钟，并输入「已停止」。'}};
+        return {toast:{type:'error',content:'请填写目标和验收条件（各最多 1000 字）、1～10080 的整数分钟，并输入「已停止」。'}};
       const key = 'feishu-resume-' + digest([value.navigation,index]);
       const submit = async () => {
         let text: string;

@@ -128,7 +128,7 @@ export function questionForm(question: Card, navigation: string) {
     {tag:'div',text:cardPlain(question.title)},
     {tag:'div',text:cardPlain(question.body)},
     {tag:'form',name:'answer_question',elements:[
-      {tag:'input',name:'answer',required:true,width:'fill',input_type:'multiline_text',rows:3,max_length:2000,placeholder:cardPlain('输入你的回答')},
+      {tag:'input',name:'answer',required:true,width:'fill',input_type:'multiline_text',rows:3,max_length:1000,placeholder:cardPlain('输入你的回答')},
       {tag:'button',name:'submit_answer',form_action_type:'submit',type:'primary',text:cardPlain('发送回答'),behaviors:[{type:'callback',value:submit}]},
     ]},
     {tag:'button',text:cardPlain('返回问题列表'),behaviors:[{type:'callback',value:{kind:'workbench.navigate',navigation,view:'questions',page:0}}]},

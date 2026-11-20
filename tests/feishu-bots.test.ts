@@ -839,7 +839,9 @@ test('CLI 会话卡限定主人，读取与重复回调只发送一张，分页�
   const form=click(open).card.data.body.elements.find((el:any)=>el.tag==='form');
   const submit=form.elements.find((el:any)=>el.form_action_type==='submit').behaviors[0].value;
   assert.equal(click(submit).toast.type,'error');
+  assert.ok(form.elements.filter((el:any)=>el.tag==='input').every((el:any)=>el.max_length===1000));
   const fields={prompt:'继续检查',doneWhen:'所有测试通过',minutes:'10',stopped:'已停止',machineId:'forged'};
+  assert.equal(click(submit,'human',{...fields,prompt:'长'.repeat(1001)}).toast.type,'error');
   click(submit,'other',fields);assert.equal(proposals.length,0);
   click(submit,'human',fields);click(submit,'human',fields);
   await tick();
@@ -883,6 +885,8 @@ test('主人在工作台回答真实问题，保留版本检查和执行机送�
   assert.match(JSON.stringify(notice?.card),/submit_answer/);
   assert.equal(notice?.replyTo,'origin');
   const submit = form.find((e:any)=>e.tag==='form').elements[1].behaviors[0].value;
+  assert.equal(form.find((el:any)=>el.tag==='form').elements[0].max_length,1000);
+  assert.equal(click(submit,{answer:'长'.repeat(1001)}).toast.type,'error');
   assert.equal(click(submit,{answer:' '}).toast.type,'error');
   click(submit,{answer:'版本 A'});
   assert.match(click(submit,{answer:'版本 B'}).toast.content,/已变化/);
