@@ -10,7 +10,7 @@ const messages = {
   expired: '二维码已过期，请重新发起',
 };
 type State = keyof typeof messages;
-interface LoginView { state: State; message: string; qrDataUrl?: string }
+export interface LoginView { state: State; message: string; qrDataUrl?: string }
 
 // Each instance belongs to one validated gateway configuration. The upstream
 // poll operates on the gateway's current login and takes no session identifier.
