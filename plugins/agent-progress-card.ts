@@ -44,7 +44,7 @@ const replyTerminalLabels = { done: '回复完成', failed: '回复失败', canc
  * The adapter must select PUBLIC summaries/output and redact secrets at source.
  * Never pass raw reasoning, system prompts, tool environments or event dumps.
  */
-function publicText(value: string | undefined, limit: number): string {
+export function publicText(value: string | undefined, limit: number): string {
   const clean = (value ?? '')
     .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '[凭证已隐藏]')
     .replace(/\bBearer\s+[^\s"'<>]+/gi, 'Bearer [凭证已隐藏]')

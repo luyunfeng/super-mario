@@ -1,5 +1,6 @@
 import type { FeishuBotsApp } from './feishu-bots.ts';
-import type { InboxItem, MachineInfo, Project, Run, Todo } from '../../../packages/protocol/src/index.ts';
+import type { InboxItem, MachineInfo, Message, Project, Run, Todo } from '../../../packages/protocol/src/index.ts';
+import { publicText } from '../../../plugins/agent-progress-card.ts';
 import type { Card } from '../../../packages/core/src/interactions.ts';
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
 import { cardButtons, cardDocument, cardPlain, cardSection, cardWebBase } from './feishu-cards.ts';
@@ -51,11 +52,6 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
     if (waiting.length > 3) section('更多待决定', `还有 ${waiting.length - 3} 项，请打开主对话核对。`);
     if (app.agentSessions && options.navigation) elements.push(...cardButtons([{label:'查看 CLI 会话',value:{kind:'workbench.readSessions',navigation:options.navigation}}]));
     section('此刻', `Agent 执行 · ${working.length} 项进行中 · ${review.length} 项执行结束待验收 · ${issues.length} 项失败或结果未知\n收件箱 · ${action.length} 条需处理 · ${inbox.length - action.length} 条知会\n电脑 · ${machines.filter(m => m.online).length} / ${machines.length} 台在线`);
-    if (action.length) section('来信摘要', action.slice(0, 3).map(item => '• ' + label(item.title)).join('\n') + (action.length > 3 ? `\n还有 ${action.length - 3} 条，可在收件箱查看。` : ''));
-    for (const run of working.slice(0, 2)) {
-      section('正在推进', label(run.prompt));
-      buttons([['查看执行', `projects/${encodeURIComponent(run.projectId && projects.has(run.projectId) ? run.projectId : 'all')}/runs/${encodeURIComponent(run.id)}`]]);
-    }
   } else if (view === 'tasks') {
     const rows = [...working, ...issues, ...review]; total = rows.length;
     page = Math.min(Math.max(0, options.page ?? 0), Math.max(0, Math.ceil(total / pageSize) - 1));
@@ -86,17 +82,40 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
   }
   if ((view === 'home' || view === 'projects') && options.navigation && app.projectWorkspace) {
     const activeProjects = app.store.list<Project>('projects').filter(p => !p.archivedAt);
+    const latest = new Map<string, Message>();
+    const conversations = new Set(activeProjects.map(p => `project:${p.id}:work`));
+    for (const message of app.store.list<Message>('messages')) {
+      if (!conversations.has(message.conversationId) || message.role !== 'assistant' || message.readOnly ||
+          message.origin === 'notification' || !['done','failed'].includes(message.status ?? '') || !message.text.trim()) continue;
+      const previous = latest.get(message.conversationId);
+      if (!previous || previous.createdAt <= message.createdAt) latest.set(message.conversationId,message);
+    }
+    const activity = (project: Project) => latest.get(`project:${project.id}:work`)?.createdAt ?? '';
+    activeProjects.sort((a,b) => activity(b).localeCompare(activity(a)));
     if (view === 'projects') {
       total = activeProjects.length;
       page = Math.min(Math.max(0,options.page ?? 0), Math.max(0, Math.ceil(total / pageSize) - 1));
     }
-    const rows = activeProjects.slice(page * pageSize, (page + 1) * pageSize);
+    const limit = view === 'home' ? 3 : pageSize;
+    const rows = activeProjects.slice(page * pageSize, page * pageSize + limit);
     for (const project of rows) {
-      section('项目 Agent', label(project.name));
+      const reply = latest.get(`project:${project.id}:work`);
+      const machine = machines.find(m => m.id === project.workspace?.machineId);
+      const summary = reply ? publicText(reply.text,140).replace(/\s+/g,' ') : '';
+      const detail = [label(project.name), machine?.name && label(machine.name,64),
+        summary && (reply?.status === 'failed' ? '上次回复失败 · ' : '') + summary].filter(Boolean).join('\n');
+      section('项目 Agent', detail);
       elements.push(...cardButtons([{ label: '在这里聊', value: { kind: 'workbench.chat', projectId: project.id, navigation: options.navigation } }]));
     }
-    if (view === 'home' && activeProjects.length > pageSize) elements.push(...cardButtons([{ label:'全部项目',value:{kind:'workbench.navigate',navigation:options.navigation,view:'projects',page:0} }]));
+    if (view === 'home' && activeProjects.length > limit) elements.push(...cardButtons([{ label:'全部项目',value:{kind:'workbench.navigate',navigation:options.navigation,view:'projects',page:0} }]));
     elements.push(...cardButtons([{ label: '切回主 Agent', value: { kind: 'workbench.chat', projectId: '', navigation: options.navigation } }]));
+  }
+  if (view === 'home') {
+    if (action.length) section('来信摘要', action.slice(0, 3).map(item => '• ' + label(item.title)).join('\n') + (action.length > 3 ? `\n还有 ${action.length - 3} 条，可在收件箱查看。` : ''));
+    for (const run of working.slice(0, 2)) {
+      section('正在推进', label(run.prompt));
+      buttons([['查看执行', `projects/${encodeURIComponent(run.projectId && projects.has(run.projectId) ? run.projectId : 'all')}/runs/${encodeURIComponent(run.id)}`]]);
+    }
   }
   if (options.navigation) {
     const value = (target: DashboardView, targetPage = 0) => ({ kind: 'workbench.navigate', navigation: options.navigation, view: target, page: targetPage });
