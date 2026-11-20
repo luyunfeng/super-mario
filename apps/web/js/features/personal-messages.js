@@ -66,6 +66,7 @@ export function createPersonalMessagesUI({ api, store, router, onConnectApplicat
         h('span', null, `${state.account?.name ? `${state.account.name} · ` : ''}${summary()}`)),
       Button({ label: state.status === 'connected' ? '管理采集' : waiting.has(state.status) ? '查看授权进度' : '授权飞书账号', kind: 'primary', size: 'sm', onClick: open })),
       loaded && completeness(),
+      h('p', { class: 'small muted' }, '特别关注智能纪要助手：收集会议消息，优先分析决定、进展和待跟进事项。'),
       h('a', { class: 'small', href: router.href('inbox') }, '查看采集消息 → 收件箱'),
       loadError && Banner({ tone: 'danger', children: loadError, action: Button({ label: '重试读取', size: 'sm', onClick: () => refresh() }) }));
     if (!drawer) return;

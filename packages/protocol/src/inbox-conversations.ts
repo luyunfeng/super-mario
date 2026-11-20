@@ -4,6 +4,7 @@ export interface InboxConversation {
   projectId?: string;
   title: string;
   person: string;
+  meetingMinutes?: true;
   chatName?: string;
   kind: "direct" | "group";
   messageIds: string[];

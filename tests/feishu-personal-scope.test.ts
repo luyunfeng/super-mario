@@ -170,3 +170,21 @@ test('同轮名单确认后发生免打扰，后续群搜索、游标重试和�
     }
   }
 });
+
+test('个人采集仅将指定纪要机器人标为特别关注，机器人不作为个人回复证据', async t => {
+  const name = '智能纪要助手';
+  const rows = [
+    { message_id: 'minutes', sender: { sender_type: 'app', id_type: 'app_id', id: 'cli_minutes', name } },
+    { message_id: 'notice', sender: { sender_type: 'app', id_type: 'app_id', id: 'cli_other', name: '其他机器人' } },
+    { message_id: 'person', sender: { sender_type: 'user', id_type: 'open_id', id: 'ou_person', name } },
+  ].map(row => ({ ...message('oc_private', 'p2p'), content: '会议决定由测试小组复核', ...row }));
+  const integration = adapter(args => {
+    if (args.includes('+chat-list')) return ok({ chats: [], has_more: false });
+    assert.ok(!args.includes('--exclude-sender-type'));
+    return ok({ messages: rows, has_more: false });
+  });
+  t.after(() => integration.close());
+  const batch = await integration.collectBatch();
+  assert.deepEqual(batch.items.map(item => [item.last, !!item.origin?.meetingMinutes]), [['minutes', true], ['person', false]]);
+  assert.deepEqual(batch.evidence?.map(row => row.messageId), ['person']);
+});

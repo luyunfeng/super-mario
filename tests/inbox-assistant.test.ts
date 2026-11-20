@@ -468,3 +468,18 @@ test("a conversation can contain several actual topics, and its linked work stay
   assert.equal(f.service.list()[0].status, "watching");
   assert.equal(f.store.list("todos").length, 28);
 });
+
+test('纪要优先于普通会话进入分析，保留较长会议原文', async t => {
+  const minutes = '合成资料'.repeat(200) + '会议决定下周验证';
+  const { store, service } = fixture(t, async input => {
+    assert.equal(input.meetingMinutes, true);
+    assert.equal(input.messages[0].text, minutes);
+    assert.equal(input.messages[0].truncated, false);
+    return { summary: '下周验证', disposition: 'watching', tasks: [] };
+  });
+  store.put('inbox', 'ordinary', message('ordinary', { receivedAt: new Date(now - 60000).toISOString() }));
+  store.put('inbox', 'minutes', message('minutes', { text: minutes,
+    origin: { kind: 'direct', connector: '飞书', chatId: 'oc_minutes', senderName: '智能纪要助手', meetingMinutes: true } }));
+  await service.tick();
+  assert.equal(service.list().find(group => group.meetingMinutes)?.summary, '下周验证');
+});

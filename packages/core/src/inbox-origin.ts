@@ -13,6 +13,7 @@ export function normalizeInboxOrigin(value: unknown): InboxOrigin | undefined {
     if (typeof input[key] !== 'string' || input[key].length > 1000 || input[key].includes('\0')) return fail();
     if (input[key].trim()) result[key] = input[key].trim();
   }
+  if (result.connector === '飞书' && input.meetingMinutes === true) result.meetingMinutes = true;
   if (input.mentionedMe !== undefined) {
     if (typeof input.mentionedMe !== 'boolean') return fail();
     if (result.kind === 'group') result.mentionedMe = input.mentionedMe;

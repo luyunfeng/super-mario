@@ -76,6 +76,19 @@ const object = (value: unknown): Row => value !== null && typeof value === 'obje
 const string = (value: unknown): string => typeof value === 'string' ? value : '';
 const origin = 'https://open.feishu.cn';
 
+// Match connector metadata only. Quoting the bot or naming a group after it is not provenance.
+function botSender(hit: Row) {
+  const sender = object(hit.sender);
+  const type = string(sender.sender_type) || string(hit.sender_type) || string(sender.type);
+  return type === 'app' || type === 'bot' || (!type && sender.id_type === 'app_id');
+}
+function meetingMinutes(hit: Row) {
+  if (!botSender(hit)) return false;
+  const name = string(hit.sender_name) || string(object(hit.sender).name);
+  return name === '智能纪要助手' || (hit.chat_type === 'p2p' && hit.chat_name === '智能纪要助手');
+}
+const collectSender = (hit: Row) => !botSender(hit) || meetingMinutes(hit);
+
 /** Platform timestamps use milliseconds; CLI output may use seconds or ISO dates. */
 function isoTime(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
@@ -352,7 +365,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
       const start = lane.chatIds ? checkpoint.groupRetryFrom ?? window.start : window.start;
       const read = async () => {
         if (lane.chatIds && !(await stillUnmuted(lane.chatIds))) return;
-        return cliPage(['+messages-search', '--exclude-sender-type', 'bot', '--start', start, '--end', window.end,
+        return cliPage(['+messages-search', '--start', start, '--end', window.end,
         '--page-size', '50', '--no-reactions', ...searchFilter(lane), ...(lane.token ? ['--page-token', lane.token] : [])]);
       };
       let page;
@@ -485,7 +498,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     return { items, checkpoint, hasMore, evidence };
   }
   async function readIncrementalLane(lane: SearchLane, start: string, end: string): Promise<Row[]> {
-    const read = () => cliPage(['+messages-search', '--exclude-sender-type', 'bot', '--start', start, '--end', end,
+    const read = () => cliPage(['+messages-search', '--start', start, '--end', end,
       '--page-size', '50', '--no-reactions', ...searchFilter(lane), ...(lane.token ? ['--page-token', lane.token] : [])]);
     let page;
     try { page = await read(); } catch (error) {
@@ -505,6 +518,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const matches = new Map(messages.map(row => [JSON.stringify([row.chat_id, row.message_id]), row]));
     const evidence: CollectedReplyEvidence[] = [];
     for (const hit of matches.values()) {
+      if (botSender(hit)) continue; // Meeting notifications are not personal reply evidence.
       const chatId = string(hit.chat_id), messageId = string(hit.message_id);
       const sender = object(hit.sender), senderId = string(sender.id), senderIdType = string(sender.id_type);
       if (!chatId || !messageId || !senderId || !senderIdType) continue;
@@ -530,6 +544,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
   }
   // Only scoped search results enter evidence, detail and legacy history reads.
   function scopedHits(rows: Row[], lane: SearchLane): Row[] {
+    rows = rows.filter(collectSender);
     if (!lane.chatIds) return rows.filter(hit => hit.chat_type === 'p2p' || !hit.chat_type)
       .map(hit => ({ ...hit, chat_type: 'p2p', personalGroupObserved: false }));
     return rows.filter(hit => lane.chatIds!.includes(string(hit.chat_id)) && hit.chat_type !== 'p2p')
@@ -562,7 +577,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
         string(object(mention).id) === options.personalOpenId || string(object(object(mention).id).open_id) === options.personalOpenId);
       things.push({
         origin: { ...chatOrigin, connector: '飞书', chatId: chat, ...(string(hit.chat_name) ? { chatName: string(hit.chat_name) } : {}),
-          senderName: sender, ...(string(object(hit.sender).id) ? { senderId: string(object(hit.sender).id), senderIdType: string(object(hit.sender).id_type) || 'unknown' } : {}), ...(kind === 'group' ? { mentionedMe } : {}) },
+          senderName: sender, ...(meetingMinutes(hit) ? { meetingMinutes: true as const } : {}), ...(string(object(hit.sender).id) ? { senderId: string(object(hit.sender).id), senderIdType: string(object(hit.sender).id_type) || 'unknown' } : {}), ...(kind === 'group' ? { mentionedMe } : {}) },
         thread: `feishu:message:${JSON.stringify([chat, id])}`,
         last: `${id}${hit.update_time ? `:${String(hit.update_time)}` : ''}`,
         title: string(hit.chat_name) || chat,
@@ -580,7 +595,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     // Message search rejects fractional seconds with API code 99992402, although
     // Date.toISOString() emits them. Its time filter needs whole-second RFC 3339.
     const start = new Date(Date.now() - 86_400_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
-    const search = async (lane: SearchLane) => scopedHits(await cli(['+messages-search', '--exclude-sender-type', 'bot', '--start', start,
+    const search = async (lane: SearchLane) => scopedHits(await cli(['+messages-search', '--start', start,
       '--page-size', '50', '--no-reactions', ...searchFilter(lane)]), lane);
     const batches = [await search({ done: false, seen: [] })];
     const lanes = scopedLanes(await groupScope() ?? []);
@@ -611,7 +626,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
         ? ['+threads-messages-list', '--thread', threadId, '--order', 'desc', '--page-size', '50', '--no-reactions']
         : ['+chat-messages-list', '--chat-id', string(hit.chat_id), '--order', 'desc', '--page-size', '50', '--no-reactions']);
       const rows = new Map<string, Row>();
-      for (const row of [...hits, ...history.filter(row => !row.chat_id || row.chat_id === hit.chat_id)]) if (string(row.message_id) && row.deleted !== true) rows.set(string(row.message_id), row);
+      for (const row of [...hits, ...history.filter(row => collectSender(row) && (!row.chat_id || row.chat_id === hit.chat_id))]) if (string(row.message_id) && row.deleted !== true) rows.set(string(row.message_id), row);
       const context = [...rows.values()]
         .map((row): Row => ({ ...row, create_time: isoTime(row.create_time) }))
         .sort((a, b) => (Date.parse(string(a.create_time)) || 0) - (Date.parse(string(b.create_time)) || 0) || string(a.message_id).localeCompare(string(b.message_id)));
@@ -623,7 +638,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
       const mentionedMe = kind === 'group' && !!options.personalOpenId && hits.some(row => Array.isArray(row.mentions)
         && row.mentions.some(mention => string(object(mention).id) === options.personalOpenId || string(object(object(mention).id).open_id) === options.personalOpenId));
       things.push({
-        origin: { ...chatOrigin, connector: '飞书', chatId: string(hit.chat_id), ...(string(hit.chat_name) ? { chatName: string(hit.chat_name) } : {}), senderName: sender(last), ...(kind === 'group' && options.personalOpenId ? { mentionedMe } : {}) },
+        origin: { ...chatOrigin, connector: '飞书', chatId: string(hit.chat_id), ...(string(hit.chat_name) ? { chatName: string(hit.chat_name) } : {}), senderName: sender(last), ...(hits.some(meetingMinutes) ? { meetingMinutes: true as const } : {}), ...(kind === 'group' && options.personalOpenId ? { mentionedMe } : {}) },
         thread: `feishu:${key}`, last: `${string(last.message_id)}${last.update_time ? `:${String(last.update_time)}` : ''}`,
         title: string(hit.chat_name) || string(hit.chat_id),
         text: context.map(row => `[${string(row.message_id)}] ${sender(row)}: ${string(row.content)}`).join('\n'),

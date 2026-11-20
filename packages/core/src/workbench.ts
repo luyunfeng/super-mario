@@ -139,6 +139,7 @@ export async function createWorkbench(config: AppConfig) {
   const inboxHandlingRuntime = createInboxHandlingRuntime({config,store,events,contributions,ready:()=>agent.status().available});
   const inbox = createInboxService({ store, events, createTodo: input => createTodo(input, false),
     triage: async thing => {
+      if (thing.origin?.meetingMinutes) return { tier: 'fyi', reason: '特别关注：智能纪要助手的会议资料' };
       if (thing.thread.startsWith('feishu:message:')) return { ...ruleTriage(thing), reason: '原文已入箱，由主 Agent 按联系人合并整理' };
       if (!config.demo) {
         const active = contributions.list('inbox_triage')[0]?.value;
@@ -167,6 +168,7 @@ export async function createWorkbench(config: AppConfig) {
       const timeout=setTimeout(()=>{void inboxAssistantRuntime.abortCurrent();},120000);timeout.unref();
       try {
       const answer=await inboxAssistantRuntime.ask([
+        ...(input.meetingMinutes ? ['这是特别关注的会议资料。结合本轮提供的项目、已有待办、执行记录和历次会议摘要，分析已确认决定、进展变化、负责人、期限与未决问题。只归纳有原文依据的事项，区分讨论建议与承诺；仅有纪要链接时保留链接并说明内容待核实。'] : []),
         '默认在后台处理，不要因为私聊、@或一句感叹就要求主人决策。根据提供的会话上下文判断实际事项；存在省略时保留不确定，零散发言合并为一件工作，延续已有事项时引用existingTodoId。不要虚构完成。',
         '只有缺少关键事实且必须由主人回答时使用waiting_user并提出具体question；知会用watching，无意义闲聊用quiet，有明确工作才用work并给tasks。任务最多20项，按实际目标合并，不能每条消息都建事项；已明确回复解决的讨论不要再建待办。任务key跨轮保持稳定，保持已有事项的标题和人工备注。',
         '只返回JSON：{"summary":"简明会话结论","disposition":"watching|quiet|waiting_user|work","question":"仅需要主人回答时填写","tasks":[{"key":"稳定事项标识","title":"实际工作标题","notes":"目标与现有证据","existingTodoId":"延续已有事项才填写"}]}。没有工作时tasks为空。注意truncated=true表示原文有省略，不据此编造事实。',
@@ -394,6 +396,7 @@ export async function createWorkbench(config: AppConfig) {
     const query = typeof input.query === 'string' ? input.query.toLowerCase() : '';
     const items = inbox.list().filter(item => !excludesPersonalGroupFromBrief(item) && (!input.projectId || item.projectId === input.projectId) && (!input.todoId || item.todoId === input.todoId)
       && (!input.kind || (item.origin?.kind ?? 'unknown') === input.kind) && (input.mentionedMe !== true || (item.origin?.kind === 'group' && item.origin.mentionedMe === true))
+      && (input.meetingMinutes !== true || item.origin?.meetingMinutes === true)
       && (!query || [item.title, item.text, item.origin?.chatName, item.origin?.senderName].some(text => text?.toLowerCase().includes(query))));
     return { items: items.slice(offset as number, (offset as number) + (limit as number)), total: items.length, offset, hasMore: (offset as number) + (limit as number) < items.length } as unknown as Json;
   }

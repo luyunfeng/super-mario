@@ -57,6 +57,7 @@ export function createInboxAssistant(options: {
   enabled(): boolean;
   analyze(input: {
     title: string;
+    meetingMinutes?: true;
     messages: Array<{
       id: string;
       at: string;
@@ -240,6 +241,7 @@ export function createInboxAssistant(options: {
             ...(latest.projectId ? { projectId: latest.projectId } : {}),
             title,
             person,
+            ...(items.some(item => item.origin?.meetingMinutes) ? { meetingMinutes: true as const } : {}),
             ...(chatName ? { chatName } : {}),
             kind: latest.origin!.kind as "direct" | "group",
             messageIds: items.map((item) => item.id),
@@ -280,6 +282,7 @@ export function createInboxAssistant(options: {
                 a.row?.answers?.length && a.row.processedHash !== a.signature,
               ),
             ) ||
+          Number(Boolean(b.view.meetingMinutes)) - Number(Boolean(a.view.meetingMinutes)) ||
           Number(a.view.kind === "group") - Number(b.view.kind === "group") ||
           a.view.latestAt.localeCompare(b.view.latestAt),
       );
@@ -359,14 +362,18 @@ export function createInboxAssistant(options: {
           output: run.output.slice(-400),
           error: run.error?.slice(0, 400),
         }));
+      // Spend the extra meeting budget on the newest minutes while keeping older messages in context.
+      let extra = 12000;
+      const messages = group.items.slice(-20).reverse().map(item => {
+        const allowance = item.origin?.meetingMinutes ? Math.min(extra, Math.max(0, item.text.length - 400)) : 0;
+        extra -= allowance;
+        const text = item.text.slice(0, 400 + allowance);
+        return { id: item.id, at: item.receivedAt ?? item.updatedAt, text, truncated: text.length < item.text.length };
+      }).reverse();
       const result = await options.analyze({
         title: group.view.title,
-        messages: group.items.slice(-20).map((item) => ({
-          id: item.id,
-          at: item.receivedAt ?? item.updatedAt,
-          text: item.text.slice(0, 400),
-          truncated: item.text.length > 400,
-        })),
+        ...(group.view.meetingMinutes ? { meetingMinutes: true } : {}),
+        messages,
         todos: todos.map((t) => ({ ...t, notes: t.notes.slice(-400) })),
         taskKeys: Object.fromEntries(
           Object.entries(row.tasks).filter(([, id]) =>

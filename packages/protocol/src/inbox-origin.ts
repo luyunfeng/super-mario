@@ -5,6 +5,8 @@ export interface InboxOrigin {
   chatId?: string;
   chatName?: string;
   senderName?: string;
+  /** Recognized Feishu meeting minutes bot, for read-only analysis priority. */
+  meetingMinutes?: true;
   senderId?: string;
   senderIdType?: string;
   /** Exact personal-account mention evidence; a bot mention does not imply this. */
