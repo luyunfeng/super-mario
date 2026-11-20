@@ -44,3 +44,15 @@ test('渠道配置接口要求工作台认证，保存结果不回显网关令�
   assert.equal(saved.hasToken, true);
   assert.ok(!JSON.stringify(saved).includes(fixture));
 });
+
+test('扫码发起和轮询均需工作台认证，浏览页面不会触发登录', async t => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'web-login-auth-'));
+  const service = await startServer({ dataDir, host: '127.0.0.1', port: 0, demo: true,
+    token: 'fixture-workbench', feishuWeb: { baseUrl: '' } });
+  t.after(async () => { await service.close(); await rm(dataDir, { recursive: true, force: true }); });
+  for (const suffix of ['login', 'login/poll']) {
+    const url = service.url + '/api/v1/feishu/web/' + suffix;
+    assert.equal((await fetch(url, { method: 'POST' })).status, 401);
+    assert.equal((await fetch(url, { headers: { authorization: 'Bearer fixture-workbench' } })).status, 404);
+  }
+});

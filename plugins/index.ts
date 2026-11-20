@@ -6,6 +6,7 @@ import { createLocalKnowledge } from './knowledge-local.ts';
 import { isProtectedKnowledgeURL } from './knowledge-source-reader.ts';
 import { actionProposeParameters, taskPolicyParameters } from './tool-parameters.ts';
 
+export { createFeishuWebLogin } from './feishu-web-login.ts';
 export { createFeishuWebSource } from './feishu-web-source.ts';
 
 export function createFeishuWebExtension(source: { start(): void; stop(): Promise<void> }): Extension {

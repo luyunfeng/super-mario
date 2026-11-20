@@ -40,6 +40,7 @@ test('网页版网关独立展示状态，启停走插件管理，CLI 保持开�
   await expect(web).toContainText('已停用');
   await expect(web).toContainText('网关与工作台服务端同机时，点击「配置网关」，保留默认地址并填写网关令牌');
   await expect(web).toContainText('每 15 秒同步一次私聊');
+  await expect(web).toContainText('工作台读取网关快照，不主动将消息标记为已读');
   await expect(web).toContainText('无法核实群聊的折叠状态，因此小群也暂不采集');
   await expect(web).toContainText('需要处理群聊时可使用飞书 CLI');
   await expect(cli).toContainText('自动采集已开启');
@@ -127,4 +128,58 @@ test('网关配置只读取公开状态，同地址留空保留令牌，换地�
   await open.click();
   await expect(address).toHaveValue(next);
   await expect(token).toHaveValue('');
+});
+
+test('网页版扫码只在点击后启动，展示失效、条件不足及成功，并在关闭后停止轮询', { timeout: 40000 }, async t => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'mario-web-login-ui-'));
+  const server = await startServer({ host: '127.0.0.1', port: 0, demo: true, dataDir });
+  t.after(async () => { await server.close(); await rm(dataDir, { recursive: true, force: true }); });
+  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  let starts = 0, polls = 0;
+  // Hold each response until the browser has observed the preceding state.
+  // Under parallel load a wall-clock fixture could expire the QR before the assertion runs.
+  const advance: Array<() => void> = [];
+  const gates = Array.from({ length: 3 }, (_, i) => new Promise<void>(resolve => { advance[i] = resolve; }));
+  const qrDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j65kAAAAASUVORK5CYII=';
+  await page.route('**/api/v1/feishu/web/login**', async route => {
+    assert.equal(route.request().method(), 'POST');
+    if (route.request().url().endsWith('/poll')) {
+      const index = polls++;
+      await gates[index];
+      return route.fulfill({ json: [{ state: 'waiting', qrDataUrl }, { state: 'scanned' }, { state: 'expired' }, { state: 'success' }][index] });
+    }
+    starts++;
+    return route.fulfill({ json: starts === 1 ? { state: 'starting' } : starts === 2 ? { state: 'failed', message: '请先启用网关监听' } : starts === 4 ? { state: 'idle' } : { state: 'waiting', qrDataUrl } });
+  });
+  await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+  await page.goto(server.url + '/#channels');
+  const button = page.locator('#channel-feishu-web').getByRole('button', { name: '扫码登录' });
+  const drawer = page.getByRole('dialog', { name: '网页版网关扫码登录' });
+  await expect(button).toBeVisible();
+  assert.equal(starts, 0);
+  await button.click();
+  await expect(drawer).toContainText('正在准备二维码');
+  advance[0]();
+  await expect(drawer.getByRole('img')).toHaveAttribute('src', qrDataUrl);
+  advance[1]();
+  await expect(drawer).toContainText('已扫码，请在飞书确认登录');
+  advance[2]();
+  await expect(drawer).toContainText('二维码已失效');
+  await expect(drawer.getByRole('img')).toHaveCount(0);
+  await drawer.getByRole('button', { name: '重新发起登录' }).click();
+  await expect(drawer).toContainText('网关登录失败');
+  await expect(drawer).toContainText('请先启用网关监听');
+  await drawer.getByRole('button', { name: '重新发起登录' }).click();
+  await expect(drawer).toContainText('网关登录成功');
+  await page.keyboard.press('Escape');
+  await button.click();
+  await expect(drawer).toContainText('当前没有进行中的登录');
+  await drawer.getByRole('button', { name: '重新发起登录' }).click();
+  await expect(drawer.getByRole('img')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(1800);
+  assert.equal(starts, 5);
+  assert.equal(polls, 4);
 });

@@ -3,6 +3,7 @@
 import { h, replace } from '../lib/dom.js';
 import { Button, Banner, Card, Check, Dot, Empty, Field, Fold, Input, Pill, Select } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
+import { openFeishuWebLogin } from '../features/feishu-web-login.js';
 import { Hint, hintCopy } from '../ui/hint.js';
 import { createPersonalMessagesUI } from '../features/personal-messages.js';
 import { createBotMailboxesUI } from '../legacy/bot-mailboxes.js';
@@ -202,8 +203,9 @@ export function createChannelsPage({ api, store, router, shell }) {
   const webCard = Card({ title: '飞书网页版网关（可选）', id: 'channel-feishu-web',
     body: h('div', { class: 'stack' },
       h('p', { class: 'small' }, '运行兼容网关，登录飞书并开启监听。网关与工作台服务端同机时，点击「配置网关」，保留默认地址并填写网关令牌。'),
-      h('p', { class: 'small muted' }, '启用后每 15 秒同步一次私聊。网关暂时无法核实群聊的折叠状态，因此小群也暂不采集。需要处理群聊时可使用飞书 CLI。'),
+      h('p', { class: 'small muted' }, '启用后每 15 秒同步一次私聊。工作台读取网关快照，不主动将消息标记为已读。网关暂时无法核实群聊的折叠状态，因此小群也暂不采集。需要处理群聊时可使用飞书 CLI。'),
       webStatus, h('div', { class: 'row row--wrap' },
+      Button({ label: '扫码登录', size: 'sm', onClick: () => openFeishuWebLogin(api, refreshWebGateway) }),
       Button({ label: '配置网关', size: 'sm', onClick: configureWebGateway }),
       Button({ label: '刷新网关状态', size: 'sm', onClick: refreshWebGateway }),
       Button({ label: '管理网页版插件', size: 'sm', onClick: () => shell.openPluginSettings('feishu-web') }))) });

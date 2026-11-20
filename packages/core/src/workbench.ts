@@ -58,7 +58,7 @@ import { createScopedAgents } from './scoped-agents.ts';
 import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
-import { createFeishuWebExtension, createFeishuWebSource, tokenStatistics, createSystemExtensions, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, createSystemExtensions, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import type { AppConfig, Approval, BotScope, ExecutionResult, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
@@ -138,6 +138,7 @@ export async function createWorkbench(config: AppConfig) {
     });
   }
   let webSource = makeWebSource();
+  let webLogin = createFeishuWebLogin(webConfig.read());
   let webQueue = Promise.resolve();
   function serializeWeb<T>(action: () => T | Promise<T>) {
     const result = webQueue.then(action);
@@ -995,6 +996,14 @@ export async function createWorkbench(config: AppConfig) {
       const error = webConfig.error();
       return error ? { ...status, connected: false, error } : status;
     },
+    startFeishuWebLogin: () => serializeWeb(() => {
+      if (closing) throw new InputError('工作台正在关闭', 409);
+      return webLogin.start();
+    }),
+    pollFeishuWebLogin: () => serializeWeb(() => {
+      if (closing) throw new InputError('工作台正在关闭', 409);
+      return webLogin.poll();
+    }),
     feishuWebSettings: webConfig.public,
     configureFeishuWeb(input: Record<string, unknown>) {
       return serializeWeb(async () => {
@@ -1003,6 +1012,7 @@ export async function createWorkbench(config: AppConfig) {
           const enabled = webSource.status().enabled;
           await webSource.stop();
           webSource = makeWebSource();
+          webLogin = createFeishuWebLogin(webConfig.read());
           if (enabled && !closing) webSource.start();
         }
         return webConfig.public();
