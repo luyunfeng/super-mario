@@ -15,7 +15,7 @@ export type InboxHandlingAction =
   | { kind: 'conclusion'; text: string };
 export interface InboxSuggestion {
   id: string; version: number; source: InboxHandlingRef; sourceVersion: number; conversationId: string;
-  action: InboxHandlingAction; status: 'draft' | 'submitted' | 'executing' | 'applied' | 'stale' | 'unknown';
+  action: InboxHandlingAction; status: 'draft' | 'discarded' | 'submitted' | 'executing' | 'applied' | 'stale' | 'unknown';
   approvalId?: string; result?: Json; error?: string; createdAt: string; updatedAt: string;
 }
 export interface InboxHandlingRequest {

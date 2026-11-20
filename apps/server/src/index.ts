@@ -49,7 +49,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
   const projectFolders = createProjectFolders(machines);
   const artifacts = createAgentArtifacts({ store: app.store, events: app.events, machines: () => machines });
   const gateway = createFeishuGateway(app, config, dependencies);
-  const { feishu, personal, personalView, bots, registrations, registrationView, proposeMail } = gateway;
+  const { feishu, personal, personalAi, personalAiView, configurePersonalAi, personalView, bots, registrations, registrationView, proposeMail } = gateway;
   const authorized = (req: IncomingMessage, url: URL) => !config.token || req.headers.authorization === `Bearer ${config.token}` || url.searchParams.get('token') === config.token;
   const server = createServer(async (req, res) => {
     try {
@@ -178,6 +178,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         }
         if (path === '/api/v1/agents/sessions/resume' && method === 'POST') return json(res, 201, await app.agentSessions.proposeResume(await body(req)));
         if (path === '/api/v1/agents/sessions/resume-request' && method === 'GET') return json(res, 200, { approval: app.agentSessions.request(requiredText(url.searchParams.get('machineId'), '电脑'), requiredText(url.searchParams.get('key'), '请求标识')) });
+        if (path === '/api/v1/feishu/personal/ai') {
+          if (method === 'GET') return json(res, 200, personalAiView());
+          if (method === 'PUT') return json(res, 200, configurePersonalAi(await body(req)));
+        }
         if (path === '/api/v1/feishu/personal' && method === 'GET') return json(res, 200, await personalView());
         if (path === '/api/v1/feishu/personal/authorize' && method === 'POST') { personal.authorize(); return json(res, 202, await personalView()); }
         if (path === '/api/v1/feishu/personal/cancel' && method === 'POST') return json(res, 200, personal.cancel());
@@ -285,7 +289,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 200, app.workDecisions.changeFromWeb({ ...input, id: decodeURIComponent(decisionChange[1]!) }, !!decisionChange[2]));
         }
         if (path === '/api/v1/inbox' && method === 'GET') return json(res, 200, app.inbox.list());
-        const handling = path.match(/^\/api\/v1\/inbox-handling\/(personal|mailbox)\/([^/]+)(?:\/(messages|suggestions)(?:\/([^/]+)\/confirm)?)?$/);
+        const handling = path.match(/^\/api\/v1\/inbox-handling\/(personal|mailbox)\/([^/]+)(?:\/(messages|suggestions)(?:\/([^/]+)\/(confirm|discard))?)?$/);
         if(handling){
           const ref={kind:handling[1] as 'personal'|'mailbox',id:decodeURIComponent(handling[2]!)};
           if(method==='GET'&&!handling[3])return json(res,200,app.inboxHandling.read(ref));
@@ -294,8 +298,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             if(handling[3]==='messages'&&!handling[4])return json(res,202,app.inboxHandling.post(ref,input as unknown as Parameters<typeof app.inboxHandling.post>[1]));
             if(handling[3]==='suggestions'){
               if(handling[4]){
-                if(Object.keys(input).some(key=>!['sourceVersion','version'].includes(key)))throw new InputError('建议确认参数无效');
-                return json(res,201,app.inboxHandling.confirm(ref,{sourceVersion:input.sourceVersion as number,version:input.version as number,id:decodeURIComponent(handling[4])}));
+                if(Object.keys(input).some(key=>!['sourceVersion','version'].includes(key)))throw new InputError('建议操作参数无效');
+                const change = {sourceVersion:input.sourceVersion as number,version:input.version as number,id:decodeURIComponent(handling[4])};
+                if (handling[5] === 'discard') return json(res,200,app.inboxHandling.discard(ref,change));
+                return json(res,201,app.inboxHandling.confirm(ref,change));
               }
               return json(res,input.id?200:201,app.inboxHandling.save(ref,input as unknown as Parameters<typeof app.inboxHandling.save>[1]));
             }
@@ -632,7 +638,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject); server.listen(config.port, config.host, () => { server.off('error', reject); resolve(); });
     });
-  } catch (error) { await Promise.allSettled([sessionAnalysis.close(), personal.close(), registrations.close(), feishu.close(), bots.close()]); machines.close(); await app.close(); throw error; }
+  } catch (error) { await Promise.allSettled([sessionAnalysis.close(), personalAi.close(), personal.close(), registrations.close(), feishu.close(), bots.close()]); machines.close(); await app.close(); throw error; }
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : config.port;
   const url = `http://${config.host.includes(':') ? `[${config.host}]` : config.host}:${port}`;
@@ -647,6 +653,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       // awaiting it. Otherwise an in-flight triage turn deadlocks shutdown.
       const readonlyStop = Promise.allSettled([sessionAnalysis.close(), app.supervisorRuntime.close({ abort: true }), app.inboxClassifier.close(), app.inboxHandlingRuntime.close()]);
       await personal.close();
+      await personalAi.close();
       await registrations.close();
       await feishu.close();
       await bots.close();

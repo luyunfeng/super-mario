@@ -3,8 +3,8 @@ import { Banner, Button, Card, Field, Input, Select, TextArea } from '../ui/kit.
 import { openDrawer, confirmDialog } from '../ui/overlay.js';
 
 const TYPES = [['todo', '待办'], ['dispatch', '派发执行'], ['reply', '回复草稿'], ['conclusion', '处理结论']];
-const STATUS = { draft: '草稿', submitted: '已提交审批（未执行）', executing: '执行中', applied: '已应用（不代表待办完成）', stale: '来源已过期', unknown: '结果未知', pending: '已持久受理，等待模型处理', completed: '模型请求已完成', failed: '模型请求失败' };
-const locked = suggestion => ['applied', 'unknown', 'executing', 'stale'].includes(suggestion.status);
+const STATUS = { draft: '草稿', discarded: '已丢弃', submitted: '已提交审批（未执行）', executing: '执行中', applied: '已应用（不代表待办完成）', stale: '来源已过期', unknown: '结果未知', pending: '已持久受理，等待模型处理', completed: '模型请求已完成', failed: '模型请求失败' };
+const locked = suggestion => ['discarded', 'applied', 'unknown', 'executing', 'stale'].includes(suggestion.status);
 const sessions = new WeakMap();
 const tokenWatches = new WeakMap();
 
@@ -151,6 +151,7 @@ export function openInboxHandlingDrawer({ api, store, source }) {
         item.result?.outboxId&&h('a',{href:'#outbox',onClick:()=>drawer.close()},'查看实际发件记录'),
         item.status === 'submitted' && h('p', { class: 'small muted' }, '可编辑并保存新版，旧审批将失效。'), reason && h('p', { class: 'small muted' }, reason),
         h('div', { class: 'row row--wrap' }, Button({ label: '编辑建议', disabled: writing || locked(item) || local.writeLocks.has(item.id), onClick: () => startEditor(item) }),
+          item.status === 'draft' && !item.approvalId && Button({ label: '丢弃草稿', disabled: writing || local.writeLocks.has(item.id) || !view.source.active || item.sourceVersion !== view.source.version, onClick: () => discard(item) }),
           Button({ label: '检查并提交审批', disabled: writing || Boolean(reason), onClick: () => showConfirmation(item) }))) });
     }));
     if (editor) updateEditorState();
@@ -273,6 +274,14 @@ export function openInboxHandlingDrawer({ api, store, source }) {
       h('pre', { class: 'mailbox-content' }, actionText(item.action)),
       h('p', null, '只提交当前内容审批。审批通过后的执行或回复结果另行记录。未保存的编辑内容不会提交。'), reason && h('p', null, reason),
       Button({ label: '提交当前建议审批', disabled: writing || Boolean(reason), onClick: () => submit(item) })) }));
+  }
+  async function discard(item) {
+    await post(`/suggestions/${encodeURIComponent(item.id)}/discard`, { sourceVersion: item.sourceVersion, version: item.version }, saved => {
+      if (editor?.id === saved.id) { editor = undefined; replace(editorHost); }
+      if (preview?.id === saved.id) { preview = undefined; replace(confirmation); }
+      view.suggestions = view.suggestions.map(row => row.id === saved.id ? saved : row);
+      say('草稿已丢弃，可在建议历史中查看。');
+    });
   }
   async function submit(item) {
     if (confirmReason(item)) return;

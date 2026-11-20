@@ -252,6 +252,26 @@ export function createInboxHandling(options: InboxHandlingOptions) {
       track(Promise.resolve().then(() => runThink(row, current)));
       return publicRequest(row);
     },
+    // A connector has already awaited the isolated model. Commit its complete
+    // batch once, against the same source generation, before exposing drafts.
+    saveModelDrafts(ref: InboxHandlingRef, conversationId: string, key: string, requestText: string, actions: InboxHandlingAction[]) {
+      open();
+      const current = source(ref);
+      writable(current, current.value.version);
+      if (current.conversationId !== conversationId) fail('来源已变化', 409);
+      const validated = actions.map(actionValue);
+      const id = digest({ source: refValue(ref), key });
+      return store.transaction(() => {
+        const previous = store.get<RequestRow>(requests, id);
+        if (previous) {
+          if (previous.conversationId !== conversationId || previous.status !== 'completed') fail('原请求状态已变化', 409);
+          return;
+        }
+        const now = new Date().toISOString();
+        for (const action of validated) draft(current, action);
+        putRequest({ id, source: refValue(ref), text: requestText, key, conversationId, status: 'completed', createdAt: now, updatedAt: now });
+      });
+    },
     save(ref: InboxHandlingRef, input: { sourceVersion: number; action: InboxHandlingAction; id?: string; version?: number }): InboxSuggestion {
       open(); fields(input, ['sourceVersion', 'action', 'id', 'version']);
       const current = source(ref); writable(current, input.sourceVersion); const action = actionValue(input.action);
@@ -262,6 +282,20 @@ export function createInboxHandling(options: InboxHandlingOptions) {
         rejectOldApproval(row);
         const { approvalId: _, result: __, error: ___, ...rest } = row;
         return putSuggestion({ ...rest, version: row.version + 1, action, status: 'draft', updatedAt: new Date().toISOString() });
+      });
+    },
+    discard(ref: InboxHandlingRef, input: { sourceVersion: number; id: string; version: number }): InboxSuggestion {
+      open(); fields(input, ['sourceVersion', 'id', 'version']);
+      text(input.id); version(input.version); version(input.sourceVersion);
+      return store.transaction(() => {
+        const row = store.get<InboxSuggestion>(suggestions, input.id);
+        if (!row || row.source.kind !== ref.kind || row.source.id !== ref.id) fail('建议不存在', 404);
+        if (row.version !== input.version || row.sourceVersion !== input.sourceVersion) fail('建议版本已变化，请刷新', 409);
+        if (row.status === 'discarded') return row;
+        const current = source(ref);
+        writable(current, input.sourceVersion);
+        if (row.conversationId !== current.conversationId || row.status !== 'draft' || row.approvalId) fail('仅可丢弃未提交的草稿', 409);
+        return putSuggestion({ ...row, status: 'discarded', updatedAt: new Date().toISOString() });
       });
     },
     confirm(ref: InboxHandlingRef, input: { sourceVersion: number; id: string; version: number }): Approval {

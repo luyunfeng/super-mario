@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import QRCode from 'qrcode';
+import { createPersonalAi } from '../../../packages/core/src/personal-ai.ts';
+import { createPersonalAiHandler } from './personal-ai-handler.ts';
 import { Client, LoggerLevel } from '@larksuiteoapi/node-sdk';
 import { createFeishuBotConfig } from '../../../plugins/feishu-bot-config.ts';
 import { createCommandGroup, createCommandGroupPlatform, type CommandGroupPlatform } from './feishu-command-group.ts';
@@ -28,7 +30,9 @@ export function createFeishuGateway(
   dependencies: FeishuGatewayDependencies = {},
 ) {
   const feishu = createFeishuController(app, config);
-  const personal = createPersonalMessages({
+  const personal: ReturnType<typeof createPersonalMessages> = createPersonalMessages({
+    aiEnabled: () => personalAi.status().enabled,
+    observeAi: (source, messages, assertCurrent) => personalAi.observe(source, messages, assertCurrent),
     config,
     provider: dependencies.personalProvider,
     stopPreviousCollection: () => feishu.pausePersonalCollection(),
@@ -36,6 +40,36 @@ export function createFeishuGateway(
     ingest: (source, things) => app.inbox.ingest(source, things),
     observeReplies: (source, evidence) => app.waitingReplies.observeSource(source, evidence),
   });
+  const handlePersonalAi = createPersonalAiHandler(app);
+  const personalAi = createPersonalAi({
+    store: app.store,
+    account: () => {
+      const account = personal.sourceAccount();
+      return account ? `feishu:${account.appId}:${account.openId}` : undefined;
+    },
+    handle: (source, trigger, question, context, assertCurrent) =>
+      handlePersonalAi(source, trigger, question, context, () => {
+        assertCurrent();
+        if (!personal.status().enabled || !['feishu', 'inbox-triage'].every(id =>
+          app.plugins.list().some(plugin => plugin.id === id && plugin.status === 'active'))) {
+          throw new InputError('个人消息采集已停止', 409);
+        }
+      }),
+  });
+  function personalAiView() {
+    const account = personal.sourceAccount();
+    const accountKey = account ? createHash('sha256').update(JSON.stringify([account.profile, account.appId, account.openId])).digest('hex') : '';
+    return { ...personalAi.status(), accountKey };
+  }
+  function configurePersonalAi(input: Record<string, unknown>) {
+    const { expectedAccountKey, ...settings } = input;
+    if (expectedAccountKey !== undefined && personalAiView().accountKey !== expectedAccountKey) throw new InputError('个人账号已变更，请重新打开设置', 409);
+    if (!personal.sourceAccount()) throw new InputError('请先连接个人飞书账号', 409);
+    try { personalAi.configure(settings); }
+    catch (error) { throw new InputError(error instanceof Error ? error.message : '个人 AI 设置无效'); }
+    personal.reschedule();
+    return personalAiView();
+  }
   app.setKnowledgeSourceAccount(() => personal.sourceAccount(), () => personal.status().status !== 'verifying');
   async function personalView() {
     const value = personal.status();
@@ -146,5 +180,5 @@ export function createFeishuGateway(
   );
   app.setFeishuStatus(() => ({ ...feishu.status(), reason: feishu.status().reason ?? '' }));
 
-  return { feishu, personal, personalView, bots, registrations, registrationView, proposeMail, commandGroup };
+  return { feishu, personal, personalAi, personalAiView, configurePersonalAi, personalView, bots, registrations, registrationView, proposeMail, commandGroup };
 }

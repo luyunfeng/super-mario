@@ -971,7 +971,7 @@ export async function createWorkbench(config: AppConfig) {
         });
       } : undefined;
     },
-    delegateTodo, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; }, snapshot, todos, createTodo, updateTodo, dispatch, cancel, knowledge,
+    delegateTodo, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; }, listExecutors: executorInfo, snapshot, todos, createTodo, updateTodo, dispatch, cancel, knowledge,
     async close() {
       if (closing) return;
       closing = true;
