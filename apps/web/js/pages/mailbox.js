@@ -123,6 +123,7 @@ export function createMailboxPage({ api, store, router, direction }) {
     return ['cancelled', 'expired', 'rejected'].includes(raw.status);
   }
   function clearFilters() {
+    if(incoming&&router.current.query?.get('conversation'))location.hash=router.href('inbox');
     query.value = ''; filter.value = 'all'; projectFilter.value = 'all'; sourceFilter = 'all'; stageFilter = 'all'; resetWindow();
   }
   function resetWindow() { displayLimit = PAGE_SIZE; paint(); }
@@ -322,11 +323,11 @@ export function createMailboxPage({ api, store, router, direction }) {
     dirty = true;
     if (router.current.page !== direction) return;
     dirty = false;
-    if(incoming)replace(assistantHeader,conversationsUI.header(snapshot?.inboxAssistant));
+    const target=router.current.query?.get('conversation');
+    if(incoming)replace(assistantHeader,conversationsUI.header(snapshot?.inboxAssistant),target&&h('a',{href:router.href('inbox'),onclick:clearFilters},'查看全部会话'));
     const all = records();
     if (incoming) paintFilters(all);
-    const target=router.current.query?.get('conversation');
-    const visible = all.filter(item => matches(item)&&(!target||item.conversation?.id===target));
+    const visible = all.filter(item => target ? item.conversation?.id===target : matches(item));
     if (incoming) visible.sort((a, b) => (stage(a) === 'human' ? 0 : 1) - (stage(b) === 'human' ? 0 : 1));
     const rows = incoming ? groupedRows(all, visible) : visible;
     const window = rows.slice(0, displayLimit);

@@ -116,6 +116,15 @@ test(
       await expect(
         inbox.getByText("合成上下文 1", { exact: false }),
       ).toBeVisible();
+      // Opening a question from attention must bypass stale mailbox filters.
+      await page.getByLabel("搜索收件箱",{exact:true}).fill("不存在的合成筛选");
+      await expect(inbox.getByText("没有匹配的消息",{exact:true})).toBeVisible();
+      const conversationId=assistant.list()[0].id;
+      await page.evaluate(id=>{location.hash="inbox?conversation="+id;},conversationId);
+      await expect(inbox).toContainText("核对合成交付");
+      await inbox.getByRole("link",{name:"查看全部会话",exact:true}).click();
+      await expect(page.getByLabel("搜索收件箱",{exact:true})).toHaveValue("");
+      assert.equal(await page.evaluate(()=>location.hash.includes("conversation=")),false);
       await page.setViewportSize({ width: 390, height: 844 });
       assert.ok(
         await page.evaluate(
