@@ -74,6 +74,12 @@ export function createProjectWorkspace(options: {
       }
     );
   }
+  function visibleMemory(id: string): ProjectMemory {
+    const state = memory(id);
+    if (!options.demo && !options.available() && ["idle", "waiting", "queued"].includes(state.status))
+      return { ...state, status: "waiting", error: "请配置模型后使用项目记忆 Agent" };
+    return state;
+  }
   function save(value: ProjectMemory) {
     store.put(collection, value.projectId, value);
     events.publish("projects.memory.changed", { projectId: value.projectId });
@@ -280,6 +286,17 @@ export function createProjectWorkspace(options: {
   return {
     memory,
     progress,
+    memoryConversation(id: string) {
+      project(id);
+      const state = visibleMemory(id);
+      const messages = store.list<Message>("messages")
+        .filter(m => m.conversationId === `project:${id}:memory` && (!m.projectId || m.projectId === id));
+      return {
+        status: state.status, attemptAt: state.attemptAt, updatedAt: state.updatedAt,
+        error: state.error, mode: state.mode, summary: state.summary,
+        messages: messages.slice(-60),
+      };
+    },
     context(id: string): Json {
       const existing = store.get<Project>("projects", id);
       if (!existing)
@@ -305,7 +322,7 @@ export function createProjectWorkspace(options: {
     },
     async view(id: string) {
       const p = project(id),
-        m = memory(id);
+        m = visibleMemory(id);
       return {
         project: p,
         progress: progress(id),
@@ -340,11 +357,6 @@ export function createProjectWorkspace(options: {
                 page: "",
               };
             }),
-            ...(!options.demo &&
-            !options.available() &&
-            ["idle", "waiting", "queued"].includes(m.status)
-              ? { status: "waiting", error: "请配置模型后使用项目记忆 Agent" }
-              : {}),
           },
         },
         bots: options

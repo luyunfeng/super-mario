@@ -1,6 +1,7 @@
 // 项目的“跟进”：项目信息、Agent 怎么盯这个项目、记忆整理、绑定的飞书机器人。
 import { h, replace } from '../lib/dom.js';
 import { Button, Card, Field, Input, TextArea, Select, Check, Pill } from '../ui/kit.js';
+import { memoryStatus, openProjectMemory } from './project-memory.js';
 import { confirmDialog, toast } from '../ui/overlay.js';
 
 const AUTOMATION = [['inherit', '沿用全局设置'], ['conservative', '保守：审批都交给我'], ['balanced', '平衡：普通提问自动回答'], ['quiet', '少打扰：受信目录内自动处理']];
@@ -68,10 +69,18 @@ export function createProjectSettings({ api, store, router, bindFolder }) {
       } }))] });
 
     const memoryAgent = workspace?.agents?.memory;
+    const openMemory = () => openProjectMemory(api, editingId, project.name);
     const memory = Card({ title: '记忆整理', sub: '让 Agent 把这个项目里的资料整理成记忆', body: memoryAgent ? [
-      h('div', { class: 'row row--between' }, h('span', null, memoryAgent.enabled ? '已开启' : '未开启'), Pill(memoryAgent.status === 'idle' ? '空闲' : String(memoryAgent.status), memoryAgent.enabled ? 'ok' : '')),
-      h('div', null, Button({ label: memoryAgent.enabled ? '关闭整理' : '开启整理', onClick: async () => { await api.put(`/projects/${encodeURIComponent(editingId)}/memory`, { enabled: !memoryAgent.enabled }); await load(); store.refresh(); } }))]
+      h('div', { class: 'row row--between' }, h('span', null, memoryAgent.enabled ? '已开启' : '未开启'), Pill(memoryStatus(memoryAgent.status), memoryAgent.enabled ? 'ok' : '')),
+      h('div', { class: 'row row--wrap' }, Button({ label: '查看整理会话', onClick: openMemory }), Button({ label: memoryAgent.enabled ? '关闭整理' : '开启整理', onClick: async () => { await api.put(`/projects/${encodeURIComponent(editingId)}/memory`, { enabled: !memoryAgent.enabled }); await load(); store.refresh(); } }))]
       : h('p', { class: 'muted' }, workspace?.error ? `无法读取：${workspace.error}` : '正在读取…') });
+
+    if (memoryAgent) {
+      memory.style.cursor = 'pointer';
+      memory.addEventListener('click', event => {
+        if (!event.target.closest('button')) openMemory();
+      });
+    }
 
     const bots = workspace?.bots ?? [];
     const channel = Card({ title: '飞书机器人', sub: '负责这个项目的机器人', tools: h('a', { class: 'btn btn--sm', href: router.href('channels', 'project-bot', editingId) }, '创建项目机器人'), body: bots.length

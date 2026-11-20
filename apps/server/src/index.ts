@@ -418,6 +418,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if(projectWorkspace){const id=decodeURIComponent(projectWorkspace[1]);
           if(projectWorkspace[2]==='workspace'&&method==='GET')return json(res,200,await app.projectWorkspace.view(id));
           if(projectWorkspace[2]==='messages'&&method==='POST')return json(res,202,await app.projectWorkspace.post(id,requiredText((await body(req)).text,'目标')));
+          if(projectWorkspace[2]==='memory'&&method==='GET')return json(res,200,app.projectWorkspace.memoryConversation(id));
           if(projectWorkspace[2]==='memory'&&method==='POST')return json(res,202,app.projectWorkspace.request(id));
           if(projectWorkspace[2]==='memory'&&method==='PUT')return json(res,200,app.projectWorkspace.configure(id,(await body(req)).enabled as boolean));
         }
