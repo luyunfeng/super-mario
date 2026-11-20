@@ -4,7 +4,7 @@ import type { createSchedules } from './schedules.ts';
 
 const defaults: BriefingSettings = { timezone:'Asia/Shanghai', morning:'09:00', evening:'18:00', intervalHours:4, intervalEnabled:false, activeStart:'09:00', activeEnd:'21:00', awayNotifications:true };
 const clock = (s: unknown): s is string => typeof s === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(s);
-export function buildWindowBrief(store: Store, from: string, to: string, projectId?: string) {
+export function buildWindowBrief(store: Store, from: string, to: string, projectId?: string, conversations: readonly import('../../protocol/src/inbox-conversations.ts').InboxConversation[] = []) {
   if (!Number.isFinite(Date.parse(from)) || !Number.isFinite(Date.parse(to)) || Date.parse(from) >= Date.parse(to)) throw new Error('摘要时间窗无效');
   const changed = (date: string) => Date.parse(date) > Date.parse(from) && Date.parse(date) <= Date.parse(to);
   const beforeEnd = (date: string) => Date.parse(date) <= Date.parse(to);
@@ -23,7 +23,7 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
       completed: scopedTodos.filter(t => t.completedAt && changed(t.completedAt)).map(t => ({id:t.id,title:t.title})),
       ended: scopedRuns.filter(r => r.status === 'completed' && changed(r.updatedAt)).map(r => ({id:r.id,title:r.prompt,result:r.output.slice(0,800)})),
       failed: scopedRuns.filter(r => r.status === 'failed' && changed(r.updatedAt)).map(r => ({id:r.id,title:r.prompt,error:(r.error || r.output).slice(0,800)})),
-      decisions: [...cards.filter(c => (c.projectId ?? '') === project.id).map(c => ({id:c.id,title:c.title})),...approvals.filter(a => {
+      decisions: [...conversations.filter(c=>c.status==='waiting_user'&&(c.projectId??'')===project.id).map(c=>({id:c.id,title:`${c.title}：${c.question}`})),...cards.filter(c => (c.projectId ?? '') === project.id).map(c => ({id:c.id,title:c.title})),...approvals.filter(a => {
         const todo = a.todoId ? todos.find(t => t.id === a.todoId) : undefined;
         return (todo?.projectId ?? (typeof a.params.projectId === 'string' ? a.params.projectId : '')) === project.id;
       }).map(a => ({id:a.id,title:a.title})),...plans.filter(p => {
@@ -33,15 +33,17 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
     };
   }) };
 }
-export function formatWindowBrief(brief: ReturnType<typeof buildWindowBrief> & { overdue?: {id:string;title:string}[] }, name: string) {
-  const rows = [`工作台${({morning:'早间',evening:'晚间',interval:'间隔'} as Record<string,string>)[name] || ''}简报`, `${brief.from} → ${brief.to}`];
-  for (const p of brief.projects) {
-    rows.push(`\n${p.name}`);
-    for (const [label, items] of [['进展', [...p.progress,...p.todoUpdates]],['待办完成',p.completed],['执行结束，待验收',p.ended],['失败',p.failed],['待决定（含积压）',p.decisions]] as const) {
-      rows.push(`${label} ${items.length}${items.length ? '：' + items.slice(0,20).map(i => `${i.title.slice(0,200)} [${i.id}]${'error' in i && typeof i.error === 'string' ? '：'+i.error.slice(0,200) : 'result' in i && typeof i.result === 'string' ? '：'+i.result.slice(0,200) : 'status' in i ? '：'+i.status : ''}`).join('；') : ''}${items.length>20?'；其余请在工作台查看':''}`);
-    }
+export function formatWindowBrief(brief: ReturnType<typeof buildWindowBrief> & { overdue?: {id:string;title:string}[] }, name: string, timezone='Asia/Shanghai') {
+  const date=new Intl.DateTimeFormat('zh-CN',{timeZone:timezone,month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+  const rows=[`工作台${({morning:'早间',evening:'晚间',interval:'间隔',project:'项目'} as Record<string,string>)[name]||''}简报`,`${date.format(new Date(brief.from))} — ${date.format(new Date(brief.to))}（${timezone}）`];
+  let changed=false;
+  for(const p of brief.projects){
+    const sections=[['待你决定',p.decisions],['执行失败',p.failed],['已完成待办',p.completed],['执行结束，待验收',p.ended],['进行中',p.progress],['事项更新',p.todoUpdates]] as const;
+    const nonempty=sections.filter(([,items])=>items.length);if(!nonempty.length)continue;changed=true;rows.push(`\n${p.name}`);
+    for(const [label,items] of nonempty)rows.push(`${label} ${items.length}：`+items.slice(0,20).map(i=>`${i.title.slice(0,200)}${'error' in i&&typeof i.error==='string'?'：'+i.error.slice(0,200):'result' in i&&typeof i.result==='string'?'：'+i.result.slice(0,200):''}`).join('；')+(items.length>20?'；其余请在工作台查看':''));
   }
-  if (brief.overdue) rows.push(`\n逾期提醒 ${brief.overdue.length}${brief.overdue.length ? '：' + brief.overdue.slice(0,20).map(t => `${t.title.slice(0,200)} [${t.id}]`).join('；') : ''}${brief.overdue.length > 20 ? '；其余请在工作台查看' : ''}`);
+  if(brief.overdue?.length){changed=true;rows.push(`\n逾期待办 ${brief.overdue.length}：`+brief.overdue.slice(0,20).map(t=>t.title.slice(0,200)).join('；'));}
+  if(!changed)rows.push('本期暂无新的工作变化，也没有待决定事项。');
   return rows.join('\n');
 }
 export function createBriefingSettings(store: Store, schedules: ReturnType<typeof createSchedules>) {

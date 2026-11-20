@@ -8,7 +8,7 @@ import type { InboxSuggestion, InboxHandlingRequest } from '../../protocol/src/i
 
 /** Read shared facts at execution time, across channel histories. Never read private settings
  * or copy raw chats. Scope filtering precedes counts, selection and rendering. */
-export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: BotScope, projectId?: string, live?: { executors?: ExecutorInfo[] }) {
+export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: BotScope, projectId?: string, live?: { executors?: ExecutorInfo[]; inboxConversations?: import("../../protocol/src/inbox-conversations.ts").InboxConversation[] }) {
   if (scope?.kind === 'unmarked') return { scope: { kind: 'unmarked' }, unavailable: '未标记身份不提供工作事实，请先归类' };
   const project = scope?.kind === 'project' || scope?.kind === 'task' ? scope.projectId : projectId;
   const task = scope?.kind === 'task' ? scope.todoId : undefined;
@@ -97,6 +97,9 @@ export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: Bot
       blockedBy: decisions.filter(decision => decision.runId === r.id).map(({ collection, id, title, version }) => ({ collection, id, title, version })), updatedAt: r.updatedAt ?? r.createdAt }))),
       counts: Object.fromEntries(['queued', 'running', 'completed', 'failed', 'cancelled', 'unknown'].map(status => [status, runs.filter(r => r.status === status).length])) },
     externalAgents,
+    inboxAssistant: take((live?.inboxConversations ?? []).filter(c => (!restricted || c.projectId === project) && (task === undefined || c.todoIds.includes(task))).map(c => ({
+      id: c.id, projectId:c.projectId, title:clip(c.title), status:c.status, summary:clip(c.summary,400), question:clip(c.question,400), todoIds:c.todoIds.filter(id => todos.some(t => t.id===id)), updatedAt:c.updatedAt,
+    }))),
     inboxHandling:{
       suggestions:take(handlingSuggestions.map(item=>({id:item.id,source:item.source,sourceVersion:item.sourceVersion,kind:item.action.kind,status:item.status,approvalId:item.approvalId,
         ...(item.result&&typeof item.result==='object'&&!Array.isArray(item.result)?{result:{runId:item.result.runId,todoId:item.result.todoId,outboxId:item.result.outboxId}}:{}),updatedAt:item.updatedAt}))),

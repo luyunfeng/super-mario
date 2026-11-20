@@ -316,3 +316,11 @@ test('principles mode returns before all full-context callbacks and excludes per
     assert.doesNotMatch(f.sdk.sessions[0].contexts[0], /PRIVATE_RESULT|SDK_MACHINE_PRIVATE_CWD|工作快照|当前项目/);
   } finally { await runtime.close(); }
 });
+
+test('background main-model analysis uses the fixed main workspace while conversations stay isolated',async t=>{
+ const f=await fixture(t);const workspace=join(f.config.dataDir,'pi','workspace');
+ const brain=createInboxClassifier({config:f.config,store:f.store,events:f.events,contributions:f.contributions,ready:()=>true,workspaceDir:workspace,systemPrompt:'合成后台收件角色',loadSDK:f.sdk.load});
+ t.after(()=>brain.close());await brain.ask('SYNTHETIC_CONTACT_A');await brain.ask('SYNTHETIC_CONTACT_B');
+ assert.deepEqual(f.sdk.sessions.map(s=>s.options.cwd),[workspace,workspace]);
+ assert.ok(f.sdk.sessions.every(s=>s.history.length===1));assert.ok(f.sdk.sessions.every(s=>s.activeTools.length===0));
+});

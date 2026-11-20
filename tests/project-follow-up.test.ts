@@ -151,7 +151,7 @@ test('SQLite restart preserves dedup, grants and cursor; next day has its own wi
   assert.equal((await f.follow.handle(old)).status, 'skip');
   assert.equal((await f.follow.handle(f.due('2026-01-02T09:00:00Z'))).status, 'done');
   assert.equal(f.sent.length, 2);
-  assert.match(f.sent[1].text, /2026-01-01T09:00:00.000Z → 2026-01-02T09:00:00.000Z/);
+  assert.match(f.sent[1].text, /01\/01 09:00 — 01\/02 09:00（UTC）/);
 });
 
 test('overdueReminders adds scoped incomplete facts independently of approval presets', async t => {
@@ -160,12 +160,12 @@ test('overdueReminders adds scoped incomplete facts independently of approval pr
   f.todo('done', 'p', { dueAt: '2025-12-30T00:00:00Z', completedAt: '2025-12-31T00:00:00Z' });
   f.todo('elsewhere', 'else', { dueAt: '2025-12-30T00:00:00Z' });
   await f.follow.handle(f.due());
-  assert.match(f.sent[0].text, /逾期提醒 1：Todo overdue/);
+  assert.match(f.sent[0].text, /逾期待办 1：Todo overdue/);
   for (const [automation, overdueReminders, day] of [['balanced', false, '02'], ['conservative', true, '03'], ['inherit', true, '04'], ['quiet', true, '05']] as const) {
     f.patch({ followUp: { briefingTime: '09:00', automation, overdueReminders } });
     await f.follow.handle(f.due(`2026-01-${day}T09:00:00Z`));
-    if (overdueReminders) assert.match(f.sent.at(-1)!.text, /逾期提醒 1：Todo overdue/);
-    else assert.doesNotMatch(f.sent.at(-1)!.text, /逾期提醒/);
+    if (overdueReminders) assert.match(f.sent.at(-1)!.text, /逾期待办 1：Todo overdue/);
+    else assert.doesNotMatch(f.sent.at(-1)!.text, /逾期待办/);
   }
   assert.equal(f.store.get<Todo>('todos', 'overdue')?.remindedAt, undefined);
 });

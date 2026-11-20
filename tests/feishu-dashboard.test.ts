@@ -40,3 +40,20 @@ test('主人首页按项目工作会话的公开答复排序，最近三个会�
   assert.match(JSON.stringify(home.card),/全部项目/);
   assert.match(buildFeishuDashboard(app,undefined,{view:'projects',navigation:'grant'}).text,/项目d/);
 });
+
+
+test('merged owner inbox counts conversations once and keeps other connector messages',()=>{
+  const rows:Record<string,unknown[]>={inbox:[
+    {id:'a',source:'feishu:personal',tier:'action',title:'不得逐条重复甲',origin:{kind:'direct'}},
+    {id:'b',source:'feishu:personal',tier:'action',title:'不得逐条重复乙',origin:{kind:'direct'}},
+    {id:'other',source:'plugin:synthetic',tier:'action',title:'其他连接器事项',text:'独立原文'},
+  ]};
+  const app={store:{list:(k:string)=>rows[k]??[]} as FeishuBotsApp['store'],inboxAssistant:{list:()=>[{
+    id:'person',version:1,title:'合并联系人',person:'合成联系人',kind:'direct' as const,messageIds:['a','b'],pendingCount:2,latestAt:'2026-11-20',preview:'',status:'waiting_user' as const,summary:'两条消息一件工作',question:'选择哪个合成环境？',todoIds:[],
+  }]}};
+  const view=buildFeishuDashboard(app,undefined,{view:'inbox'});
+  assert.match(view.text,/合并联系人/);
+  assert.match(view.text,/其他连接器事项/);
+  assert.doesNotMatch(view.text,/不得逐条重复/);
+  assert.match(JSON.stringify(view.card),/待你回复/);
+});

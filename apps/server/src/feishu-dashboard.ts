@@ -5,7 +5,7 @@ import type { Card } from '../../../packages/core/src/interactions.ts';
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
 import { cardButtons, cardDocument, cardPlain, cardSection, cardWebBase } from './feishu-cards.ts';
 
-type DashboardApp = Pick<FeishuBotsApp, 'store' | 'projectWorkspace' | 'agentSessions' | 'interactions'> & { attention?: () => AttentionItem[] };
+type DashboardApp = Pick<FeishuBotsApp, 'store' | 'projectWorkspace' | 'agentSessions' | 'interactions'> & { inboxAssistant?:{list():import('../../../packages/protocol/src/inbox-conversations.ts').InboxConversation[]}; attention?: () => AttentionItem[] };
 export type DashboardView = 'home' | 'tasks' | 'inbox' | 'projects' | 'questions';
 const label = (value: string, max = 100) => value.replace(/\s+/g, ' ').trim().slice(0, max);
 
@@ -25,7 +25,7 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
   const working = runs.filter(r => r.status === 'running' || r.status === 'queued');
   const review = runs.filter(r => r.status === 'completed' && r.todoId && tasks.has(r.todoId) && !tasks.get(r.todoId)?.completedAt);
   const issues = runs.filter(r => r.status === 'failed' || r.status === 'unknown');
-  const inbox = app.store.list<InboxItem>('inbox').filter(item => {
+  const rawInbox = app.store.list<InboxItem>('inbox').filter(item => {
     if (item.todoId || item.archivedAt || item.tier === 'noise') return false;
     if (item.origin?.connector === '飞书' || item.source.startsWith('feishu:')) {
       const origin = item.origin;
@@ -33,10 +33,16 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
     }
     return true;
   });
+  const people=app.inboxAssistant?.list();
+  const covered=new Set((people??[]).flatMap(p=>p.messageIds));
+  const inbox: Array<Pick<InboxItem,'title'|'text'|'tier'>>=[
+    ...(people??[]).filter(p=>p.pendingCount&&p.status!=='quiet').map(p=>({title:p.title,text:[p.summary,p.question].filter(Boolean).join('\n')||'主 Agent 正在后台整理',tier:(p.status==='waiting_user'?'action':'fyi') as InboxItem['tier']})),
+    ...rawInbox.filter(item=>!covered.has(item.id)),
+  ];
   const action = inbox.filter(item => item.tier === 'action');
   const metrics = [
     ['进行中', String(working.length)], ['结束待验收', String(review.length)],
-    ['需要处理', String(action.length)], ['知会即可', String(inbox.length - action.length)],
+    [people?'待你回复':'需要处理', String(action.length)], [people?'后台跟进':'知会即可', String(inbox.length - action.length)],
   ];
   elements.push({ tag: 'div', fields: metrics.map(([title, value]) => ({ is_short: true, text: { tag: 'lark_md', content: `${title}\n**${value}**` } })) });
   elements.push({ tag: 'hr' });

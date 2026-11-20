@@ -1,3 +1,4 @@
+import type { InboxConversation } from '../../protocol/src/inbox-conversations.ts';
 import { excludesPersonalGroupFromBrief } from '../../protocol/src/inbox-origin.ts';
 import type { Approval, InboxItem, InboxOrigin, JsonObject, MailboxEntry, Project, FeishuBot } from '../../protocol/src/index.ts';
 import type { Plan } from './plans.ts';
@@ -34,6 +35,7 @@ interface InteractionInput {
   suggestion?: string; userNotifiedAt?: string;
 }
 interface AttentionInput {
+  inboxConversations?: readonly InboxConversation[];
   approvals?: readonly Approval[];
   interactions?: readonly InteractionInput[];
   inbox?: readonly InboxItem[];
@@ -44,7 +46,7 @@ interface AttentionInput {
   channels?: ReadonlyArray<{ id: string; name: string; sourcePrefix?: string }>;
 }
 
-export function collectAttention({ approvals = [], interactions = [], inbox = [], mailboxes = [], projects = [], bots = [], plans = [], channels }: AttentionInput = {}): AttentionItem[] {
+export function collectAttention({ inboxConversations = [], approvals = [], interactions = [], inbox = [], mailboxes = [], projects = [], bots = [], plans = [], channels }: AttentionInput = {}): AttentionItem[] {
   const rows: AttentionItem[] = [];
   const projectNames = new Map(projects.map(project => [project.id, project.name]));
   const project = (projectId?: string) => projectId ? { projectId, projectName: projectNames.get(projectId) } : {};
@@ -90,15 +92,22 @@ export function collectAttention({ approvals = [], interactions = [], inbox = []
       source: 'Agent', createdAt: item.createdAt, ...project(taskProject),
       actions: [action('plans', item.id, 'start', item.version, '开始执行'), action('plans', item.id, 'reject', item.version, '拒绝')] });
   }
+  const covered = new Set((inboxConversations).flatMap(group=>group.messageIds));
+  for (const group of inboxConversations) if(group.status==='waiting_user'&&group.question)rows.push({
+    id:`conversation:${group.id}`,type:'inbox',version:group.version,title:group.title,context:'主 Agent 已合并上下文，需要你回复',
+    detail:[group.summary,group.question].filter(Boolean).join('\n\n'),source:'主 Agent · 收件整理',createdAt:group.latestAt,...project(group.projectId),
+    actions:[],route:{href:`#inbox?conversation=${encodeURIComponent(group.id)}`,label:'查看合并会话并回复'},
+  });
   for (const item of inbox) {
+    if(covered.has(item.id))continue;
     if (excludesPersonalGroupFromBrief(item)) continue;
-    const humanFocus = item.origin?.kind === 'direct' || (item.origin?.kind === 'group' && item.origin.mentionedMe === true);
     const matchedChannel = channels?.find(channel => item.source.startsWith(channel.sourcePrefix ?? `${channel.id}:`));
     const allowedSource = item.source.startsWith('plugin:')
       || (channels !== undefined
         ? Boolean(matchedChannel)
         : /^[a-z0-9][a-z0-9_-]*:/i.test(item.source) && !/^demo:/i.test(item.source));
-    if ((item.tier !== 'action' && !humanFocus) || item.archivedAt || !allowedSource) continue;
+    if (item.tier === 'noise') continue;
+    if ((item.tier !== 'action') || item.archivedAt || !allowedSource) continue;
     // Mailbox records only enrich source context. They are not another copy of the
     // same message and do not create unsupported mailbox-to-todo actions.
     const linked = mailboxes.find(entry => entry.direction === 'inbox' && entry.resultId === item.id);

@@ -555,14 +555,14 @@ export function createFeishuIntegration(options: FeishuOptions) {
     for (const hit of matches.values()) {
       const chat = string(hit.chat_id), id = string(hit.message_id);
       if (!chat || !id || hit.deleted === true || string(object(hit.sender).id) === options.personalOpenId) continue;
-      const sender = string(object(hit.sender).name) || string(object(hit.sender).id) || 'unknown';
+      const sender = string(hit.sender_name) || string(object(hit.sender).name) || string(object(hit.sender).id) || 'unknown';
       const chatOrigin = await personalChatOrigin(hit);
       const { kind } = chatOrigin;
       const mentionedMe = !!options.personalOpenId && Array.isArray(hit.mentions) && hit.mentions.some(mention =>
         string(object(mention).id) === options.personalOpenId || string(object(object(mention).id).open_id) === options.personalOpenId);
       things.push({
         origin: { ...chatOrigin, connector: '飞书', chatId: chat, ...(string(hit.chat_name) ? { chatName: string(hit.chat_name) } : {}),
-          senderName: sender, ...(kind === 'group' ? { mentionedMe } : {}) },
+          senderName: sender, ...(string(object(hit.sender).id) ? { senderId: string(object(hit.sender).id), senderIdType: string(object(hit.sender).id_type) || 'unknown' } : {}), ...(kind === 'group' ? { mentionedMe } : {}) },
         thread: `feishu:message:${JSON.stringify([chat, id])}`,
         last: `${id}${hit.update_time ? `:${String(hit.update_time)}` : ''}`,
         title: string(hit.chat_name) || chat,

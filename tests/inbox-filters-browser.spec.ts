@@ -57,7 +57,7 @@ async function fixture(t: test.TestContext) {
   }
   const project = await api<Project>('/projects', 'POST', { name: '离线收件归类项目' }, 201);
   const otherProject = await api<Project>('/projects', 'POST', { name: '离线另一项目' }, 201);
-  await running.app.inbox.ingest('feishu:fixture', things);
+  await running.app.inbox.ingest('plugin:fixture:messages', things);
   const item = (thread: string) => {
     const found = running.app.inbox.list().find(entry => entry.thread === thread);
     assert.ok(found, `缺少 fixture ${thread}`);
@@ -118,20 +118,20 @@ test('来源 chips 完整计数；个人 @ 只信元数据，不把他人 @、�
   await expect(card(page, '群聊 @我 私聊标题不能推断来源')).toBeVisible();
 });
 
-test('待人决策优先于知会分拣；fyi 私聊仍可转待办，筛选不执行 AI', { timeout: 40000 }, async t => {
+test('普通连接器明确事项优先；fyi 私聊保持知会，手动操作入口仍可用', { timeout: 40000 }, async t => {
   const f = await fixture(t);
   assert.equal(f.item('direct-fyi').tier, 'fyi');
   const beforeRuns = f.server.app.store.list('runs');
   const page = await f.open();
   await expect(cards(page)).toHaveCount(things.length);
   const decisions = (await cards(page).allTextContents()).map(text => text.includes('待人决策'));
-  assert.deepEqual(decisions, [true, true, true, true, false, false, false, false], '待人决策必须排在列表最前');
-  await chip(page, '待人决策').click();
+  assert.deepEqual(decisions, [true, true, true, false, false, false, false, false], '只有明确事项进入待人决策并排在列表最前');
   await chip(page, '私聊').click();
+  await page.getByLabel('收件箱状态', {exact:true}).selectOption('fyi');
   await expect(cards(page)).toHaveCount(1);
   const direct = card(page, '离线私聊知会');
   await expect(direct).toContainText('知会');
-  await expect(direct).toContainText('待人决策');
+  await expect(direct).not.toContainText('待人决策');
   await expect(direct.getByRole('button', { name: '转为待办', exact: true })).toBeVisible();
   assert.equal(f.server.app.todos().length, 0);
   assert.deepEqual(f.server.app.store.list('runs'), beforeRuns);
@@ -144,7 +144,7 @@ test('来源、状态、关键词与项目组合筛选；空结果清除恢复�
   const extras = Array.from({ length: 13 }, (_, index): InboxThing => ({
     thread: `extra-${index}`, last: '1', title: `完整清单-${index}`, text: '离线长消息' + '长内容'.repeat(100), origin: { kind: 'unknown' },
   }));
-  await f.server.app.inbox.ingest('feishu:fixture', extras);
+  await f.server.app.inbox.ingest('plugin:fixture:messages', extras);
   const page = await f.open();
   await expect(cards(page)).toHaveCount(things.length + extras.length);
   await chip(page, '群@我').click();
@@ -223,7 +223,7 @@ test('同群跨消息聚合，沿用已确认项目提出建议，确认后才�
   const f = await fixture(t);
   const origin = { kind: 'group' as const, connector: '飞书', chatName: '协作讨论', chatId: 'oc_1', mentionedMe: true };
   const input = (thread: string, chatId = origin.chatId) => ({ thread, last: '1', title: thread, text: '跟进工作', origin: { ...origin, chatId } });
-  await f.server.app.inbox.ingest('feishu:fixture', [input('已知归属'), input('跟进一'), input('跟进二'), input('同名另一群', 'oc_2')]);
+  await f.server.app.inbox.ingest('plugin:fixture:messages', [input('已知归属'), input('跟进一'), input('跟进二'), input('同名另一群', 'oc_2')]);
   const known = f.item('已知归属');
   await f.api(`/inbox/${known.id}/project`, 'PATCH', { version: known.version, projectId: f.project.id });
   const page = await f.open();

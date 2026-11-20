@@ -119,7 +119,7 @@ export function createFeishuGateway(
       const entry = app.mailboxes.put({ direction: 'outbox', botId: bot.id, scope: bot.scope, eventKey: key, title: '工作台通知', text, target, requiresConfirmation: false });
       const result = await app.mailboxes.process(entry.id);
       if (result.status !== 'completed') throw Object.assign(new Error(result.error ?? '通知未送达'), { delivery: result.status === 'unknown' ? 'unknown' : 'no' });
-    }, () => notificationBots().find(b => b.id === bot.id && identity(b) === snapshot && b.enabled && b.paired)?.replyTarget);
+    }, () => notificationBots().find(b => b.id === bot.id && identity(b) === snapshot && b.enabled && b.paired)?.replyTarget, () => notificationBots().some(b=>b.id===bot.id&&identity(b)===snapshot&&b.enabled&&b.paired)?snapshot:undefined);
     return channel;
   });
   app.setBotScopeAccess((scope, botId, input) => bots.canUseScope(scope, botId, input));

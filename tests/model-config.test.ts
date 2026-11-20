@@ -140,6 +140,8 @@ test('custom Anthropic gateway accepts a full messages URL and a model outside t
   const requests: unknown[] = [];
   const gateway = createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
+    // A model-catalog GET is metadata discovery, not an inference request.
+    if (!body && req.method==='GET') {res.writeHead(200,{'Content-Type':'application/json'});res.end('{"data":[]}');return;}
     requests.push([new URL(req.url!, 'http://localhost').pathname, req.headers['x-api-key'], JSON.parse(body).model]);
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     const events = [

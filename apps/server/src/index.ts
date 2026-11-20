@@ -383,6 +383,11 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         }
         const delegate = path.match(/^\/api\/v1\/todos\/([^/]+)\/delegate$/);
         if (delegate && method === 'POST') return json(res, 202, await app.delegateTodo(delegate[1]));
+        if(path==='/api/v1/inbox/assistant'&&method==='GET')return json(res,200,{...app.inboxAssistant.status(),conversations:app.inboxAssistant.list()});
+        if(path==='/api/v1/inbox/assistant'&&method==='PUT')return json(res,200,app.inboxAssistant.configure((await body(req)).enabled));
+        const conversationAction=path.match(/^\/api\/v1\/inbox\/conversations\/([^/]+)\/(answer|archive|retry)$/);
+        if(conversationAction&&method==='POST'){const input=await body(req),id=decodeURIComponent(conversationAction[1]!);
+          return json(res,200,conversationAction[2]==='answer'?app.inboxAssistant.answer(id,input.version as number,input.text as string):conversationAction[2]==='archive'?app.inboxAssistant.archive(id,input.version as number):app.inboxAssistant.retry(id,input.version as number));}
         if (path === '/api/v1/todos' && method === 'GET') return json(res, 200, url.searchParams.get('view') === 'sections' ? todoSections(app.todos(), new Date(), todoDecisionIds(app.store)) : app.todos());
         if (path === '/api/v1/todos' && method === 'POST') return json(res, 201, app.createTodo(await body(req)));
         const todo = path.match(/^\/api\/v1\/todos\/([^/]+)$/);

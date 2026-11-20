@@ -40,5 +40,5 @@ test('window bounds and optional overdue formatting preserve existing behavior',
   const brief = buildWindowBrief(store, from, to, 'a');
   assert.doesNotMatch(formatWindowBrief(brief, 'morning'), /逾期提醒/);
   assert.match(formatWindowBrief(brief, 'morning'), /^工作台早间简报/);
-  assert.match(formatWindowBrief({ ...brief, overdue: [{ id: 'x', title: 'late' }] }, 'project'), /逾期提醒 1：late \[x\]/);
+  assert.match(formatWindowBrief({ ...brief, overdue: [{ id: 'x', title: 'late' }] }, 'project'), /逾期待办 1：late/);
 });

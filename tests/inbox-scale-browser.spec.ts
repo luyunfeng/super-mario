@@ -145,11 +145,11 @@ test('5000 条全量筛选与计数，DOM 初始 50、加载更多和精确搜�
   }
   await expect(chip(page, '已处理')).toHaveText('已处理1000');
   await expect(page.getByLabel('收件项目', { exact: true }).locator('option[value="a"]')).toHaveText('项目甲 (2500)');
-  await expect(cards(page).first()).toContainText('待人决策');
+  await expect(cards(page).first()).toContainText('知会');
   await expect(page.getByRole('heading', { name: '离线消息-200', exact: true })).toHaveCount(0);
   await page.locator('#inbox').getByRole('button', { name: '加载更多', exact: true }).click();
   await expect(cards(page)).toHaveCount(100);
-  await expect(page.getByRole('heading', { name: '离线消息-200', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '离线消息-99', exact: true })).toBeVisible();
   // Each filter dimension resets the display window, without truncating counts.
   await chip(page, '私聊').click(); await expect(cards(page)).toHaveCount(50);
   await expect(summary(page)).toContainText('匹配 1250 条');

@@ -134,3 +134,6 @@
 飞书展示：`apps/server/src/feishu-cards.ts` 统一段落、分区、状态与按钮布局；`feishu-dashboard.ts` 生成只读工作台/执行/收件分页；`feishu-bots.ts` 固定回调的机器人版本、配对主人、会话与时限。`plugins/feishu.ts` 只适配平台发送及 `card.action.trigger`，长连接回调不进入模型队列。
 
 个人采集批次：`plugins/feishu.ts:collectIncremental` 先读私聊，再按 active_time 取最多一页群候选，按3页预算分批；私聊范围和群原窗口分别持久化。`feishu-personal.ts` 宿主在入箱后提交断点，公开私聊/完整水位和读取中状态。兼容入口保留原全路读取；生产宿主显式启用有界模式。
+
+
+个人会话后台整理：`inbox-assistant.ts` 持久保存合并结论、主人答案及已有待办关联；原始 `inbox` 与回复依据不变。`workbench.ts` 使用主模型配置、固定主工作目录与无工具隔离分析，按输入签名及真实 Todo/Run 变化驱动。`protocol/src/inbox-conversations.ts` 是共享投影；`features/inbox-conversations.js` 提供合并卡片与回复续办。`attention.ts`、简报和飞书收件卡共用投影，不重复计数逐条消息。内部只读简报通过宿主专用 `outbox.enqueueNotice`，绑定精确内容、账号和主人，不对插件或模型暴露。

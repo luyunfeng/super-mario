@@ -286,7 +286,7 @@ test("shipped plugins exercise scheduler and confirmed resumption without occupy
   }
 });
 
-test("daily brief schedule invokes the registered routine and produces one approval-gated notification", async () => {
+test("daily brief schedule produces a held notification without approval when no owner is configured", async () => {
   const f = await fixture();
   let calls = 0;
   try {
@@ -312,8 +312,9 @@ test("daily brief schedule invokes the registered routine and produces one appro
     assert.equal(f.server.app.store.list("background.briefs").length, 1);
     assert.equal(
       f.server.app.background.outbox.list()[0].status,
-      "needs_approval",
+      "held",
     );
+    assert.equal(f.server.app.approvals.list().length,0);
     await f.server.app.background.tick();
     await f.server.app.background.eventbox.drain();
     assert.equal(calls, 1);

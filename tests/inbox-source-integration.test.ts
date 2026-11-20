@@ -49,11 +49,12 @@ test('SDK intake forces connector namespace, keeps provenance and never accepts 
  await app.plugins.setEnabled('local-source',false);await assert.rejects(use({sourceId:'messages',items:[]}),/inactive|停用|active|disposed|closed/i);
 });
 
-test('human attention keeps personal direct chats and exact group mentions even when triage says FYI',()=>{
+test('FYI private chats and exact mentions stay in background instead of becoming human decisions',()=>{
  const base={id:'direct',source:'plugin:internal:messages',thread:'t',last:'one',title:'FYI fixture',text:'A user should see this',reason:'fyi',tier:'fyi' as const,version:1,updatedAt:'2026-11-17T00:00:00Z'};
  const result=collectAttention({inbox:[{...base,origin:{kind:'direct',connector:'Internal source'}},{...base,id:'mention',origin:{kind:'group',mentionedMe:true}},{...base,id:'other',origin:{kind:'group',mentionedMe:false}},{...base,id:'archived',origin:{kind:'direct'},archivedAt:base.updatedAt}]});
- assert.deepEqual(result.map(item=>item.id).sort(),['inbox:direct','inbox:mention']);
- assert.equal(result.find(item=>item.id==='inbox:direct')?.source,'Internal source');
+ assert.deepEqual(result,[]);
+ const actionable=collectAttention({inbox:[{...base,tier:'action',origin:{kind:'direct',connector:'Internal source'}}]});
+ assert.equal(actionable[0]?.source,'Internal source');
 });
 
 test('main Agent can classify a source message into a project with its current version; readOnly and scoped inputs cannot',async t=>{

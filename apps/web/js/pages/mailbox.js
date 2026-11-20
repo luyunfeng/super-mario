@@ -1,3 +1,4 @@
+import { createInboxConversationsUI } from '../features/inbox-conversations.js';
 import { h, replace, keyedList } from '../lib/dom.js';
 import { personalGroupSize } from '../lib/group-size.js';
 import { timeAgo, formatDate } from '../lib/format.js';
@@ -43,14 +44,16 @@ export function createMailboxPage({ api, store, router, direction }) {
     h('header', { class: 'page__head' }, h('div', { class: 'page__title' }, h('h1', null, name), h('p', { class: 'page__sub' }, hintCopy(`nav.${direction}`).tag)),
       h('div', { class: 'page__actions' }, h('a', { class: 'btn btn--sm', href: router.href(incoming ? 'outbox' : 'inbox') }, incoming ? '查看发件箱' : '查看收件箱'), Hint(`nav.${direction}`))),
     h('div', { class: 'stack' },
-      incoming && h('p', { class: 'small muted' }, '按来源、处理阶段和项目查看消息。已转待办表示消息已处理，不代表任务完成。'),
+      incoming && h('p', { class: 'small muted' }, '主 Agent 按联系人合并上下文并在后台跟进。需要你补充信息时会明确提问，原消息仍可追溯。'),
       h('div', { class: 'mailbox-toolbar stack' },
         incoming && sourceChips, incoming && stageChips,
         h('div', { class: 'row row--wrap mailbox-filters' }, h('div', { class: 'grow', style: { minWidth: '180px' } }, query), incoming && projectFilter, filter)), summary, notice, list, more)));
 
+  const conversationsUI=createInboxConversationsUI({api,store,router,redraw:()=>paint(),openSource:id=>open(id)});
   function records() {
+    const conversationByMessage=new Map((snapshot?.inboxConversations??[]).flatMap(group=>group.messageIds.map(id=>[id,group])));
     const personal = incoming ? (snapshot?.inbox ?? []).map(item => updated.get(item.id)?.version > item.version ? updated.get(item.id) : item).map(item => ({
-      id: `personal:${item.id}`, kind: 'personal', raw: item,
+      id: `personal:${item.id}`, kind: 'personal', raw: item, conversation:conversationByMessage.get(item.id),
       title: /^oc_/.test(item.title) ? item.origin?.chatName || '会话消息' : item.title,
       text: readable(item.text), source: item.origin?.connector || (item.source?.startsWith('feishu:') ? '飞书采集' : '收件消息'),
       status: item.todoId ? '已转待办' : item.archivedAt ? '已归档' : TIER[item.tier] ?? '待查看',
@@ -82,11 +85,12 @@ export function createMailboxPage({ api, store, router, direction }) {
   }
   function stage(item) {
     const raw = item.raw;
+    if(item.conversation){const c=item.conversation;if(!c.pendingCount)return 'done';if(c.status==='waiting_user')return 'human';if(c.status==='processing')return 'processing';if(['queued','failed'].includes(c.status))return 'ai';return c.status==='watching'&&c.todoIds.some(id=>!snapshot.todos.find(t=>t.id===id)?.completedAt)?'processing':'info';}
     if (raw.todoId || raw.archivedAt || ['completed', 'rejected', 'archived'].includes(raw.status)) return 'done';
     if (item.kind === 'personal' && personalGroupSize(raw.origin) > 50) return 'info';
     if(handlingState(item))return handlingState(item).stage;
     if (item.kind === 'mailbox') return raw.status === 'pending' ? 'human' : raw.status === 'ready' ? 'ai' : raw.status === 'processing' ? 'processing' : 'human';
-    if (originKind(item) === 'direct' || (originKind(item) === 'group' && raw.origin?.mentionedMe === true) || raw.tier === 'action') return 'human';
+    if (raw.tier === 'action') return 'human';
     // FYI/noise does not itself mean an AI execution is waiting.
     return 'info';
   }
@@ -125,7 +129,8 @@ export function createMailboxPage({ api, store, router, direction }) {
   function paintFilters(all) {
     function chips(el, options, dimension, active, change) {
       replace(el, options.map(([key, label]) => {
-        const count = all.filter(item => matches(item, dimension) && (key === 'all' || (dimension === 'stage' ? stage(item) === key : key === 'mentioned' ? originKind(item) === 'group' && item.raw.origin?.mentionedMe === true : originKind(item) === key))).length;
+        const matched = all.filter(item => matches(item, dimension) && (key === 'all' || (dimension === 'stage' ? stage(item) === key : key === 'mentioned' ? originKind(item) === 'group' && item.raw.origin?.mentionedMe === true : originKind(item) === key)));
+        const count=new Set(matched.map(item=>item.conversation?.id??item.id)).size;
         return h('button', { type: 'button', class: 'mailbox-chip', 'aria-pressed': String(active === key), onclick: () => { change(key); resetWindow(); } }, label, h('span', { class: 'mailbox-chip__count' }, count));
       }));
     }
@@ -135,7 +140,7 @@ export function createMailboxPage({ api, store, router, direction }) {
     const ids = new Set([...all.map(projectId).filter(Boolean), ...(snapshot?.projects ?? []).filter(project => !project.archivedAt).map(project => project.id)]);
     if (!['all', 'none'].includes(current)) ids.add(current);
     const options = [['all', '全部项目'], ['none', '未归项目'], ...[...ids].map(id => [id, snapshot?.projects?.find(project => project.id === id)?.name || '项目不可用'])];
-    replace(projectFilter, options.map(([id, label]) => h('option', { value: id }, `${label} (${all.filter(item => matches(item, 'project') && (id === 'all' || (projectId(item) || 'none') === id)).length})`)));
+    replace(projectFilter, options.map(([id, label]) => h('option', { value: id }, `${label} (${new Set(all.filter(item => matches(item, 'project') && (id === 'all' || (projectId(item) || 'none') === id)).map(item=>item.conversation?.id??item.id)).size})`)));
     projectFilter.value = current;
   }
   function metadata(item) {
@@ -271,6 +276,7 @@ export function createMailboxPage({ api, store, router, direction }) {
       history.get(key).add(id);
     }
     for (const item of visible) {
+      if(item.conversation){const c=item.conversation;let group=groups.get('person:'+c.id);if(!group){group={id:'person:'+c.id,project:c.projectId||'',name:c.title,conversation:c,items:[]};groups.set(group.id,group);rows.push(group);}group.items.push(item);continue;}
       const chat = chatKey(item);
       if (!chat) { rows.push(item); continue; }
       const project = projectId(item) || '';
@@ -290,6 +296,7 @@ export function createMailboxPage({ api, store, router, direction }) {
     return rows;
   }
   function groupCard(group) {
+    if(group.conversation)return conversationsUI.card(group.conversation,group.items);
     const { items, latest, candidates } = group;
     const limit = expandedGroups.get(group.id) || 0;
     const expand = n => { expandedGroups.set(group.id, n); paint(); };
@@ -307,21 +314,25 @@ export function createMailboxPage({ api, store, router, direction }) {
             disabled: pending.has(item.id) || uncertain.has(item.id), onClick: () => saveProject(item, { projectId: suggested.id, version: item.raw.version }) }))),
         limit > 0 && limit < items.length && Button({ label: '更多群消息', size: 'sm', onClick: () => expand(limit + 10) })) });
   }
+  const assistantHeader=h('div');
+  if(incoming)summary.before(assistantHeader);
   function paint() {
     // Late reads and action completions can arrive after navigation. Keep their data,
     // but leave the hidden DOM untouched until onShow; alerts use global state.
     dirty = true;
     if (router.current.page !== direction) return;
     dirty = false;
+    if(incoming)replace(assistantHeader,conversationsUI.header(snapshot?.inboxAssistant));
     const all = records();
     if (incoming) paintFilters(all);
-    const visible = all.filter(item => matches(item));
+    const target=router.current.query?.get('conversation');
+    const visible = all.filter(item => matches(item)&&(!target||item.conversation?.id===target));
     if (incoming) visible.sort((a, b) => (stage(a) === 'human' ? 0 : 1) - (stage(b) === 'human' ? 0 : 1));
     const rows = incoming ? groupedRows(all, visible) : visible;
     const window = rows.slice(0, displayLimit);
     const grouped = rows.some(row => row.items);
     summary.textContent = `共 ${all.length} 条${incoming ? '收件' : '发件'}记录，显示 ${window.length} / 匹配 ${visible.length} 条`;
-    if (grouped) summary.textContent = `匹配 ${visible.length} 条消息，按群聚合后显示 ${window.length} / ${rows.length} 项`;
+    if (grouped) summary.textContent = `匹配 ${visible.length} 条消息，按联系人与会话合并后显示 ${window.length} / ${rows.length} 项`;
     more.hidden = window.length >= rows.length;
     replace(notice, error && Banner({ tone: 'danger', children: error }), loadError && Banner({ tone: 'danger', children: loadError, action: Button({ label: '重试读取', size: 'sm', onClick: () => load() }) }),
       !incoming && deliveries.length >= 200 && h('p', { class: 'small muted' }, '自动发送记录当前展示最近 200 条。'));
@@ -334,13 +345,13 @@ export function createMailboxPage({ api, store, router, direction }) {
         if (!sections.has(key)) sections.set(key, []);
         sections.get(key).push(row);
       }
-      const render = ([key, entries]) => h('section', { class: 'stack' },
-        h('h2', null, key === 'individual' ? '其他消息' : key ? snapshot.projects.find(p => p.id === key)?.name || '项目不可用' : '未归项目'),
-        entries.map(row => row.items ? groupCard(row) : card(row)));
-      keyedList(list, [...sections], ([key]) => 'section:' + key, render, ([key, entries]) => JSON.stringify([
-        key, entries, snapshot.projects, entries.flatMap(row => [expandedGroups.get(row.id),
-          ...(row.items || [row]).map(item => [stage(item), pending.has(item.id), uncertain.has(item.id), handlingState(item)])])
-      ]));
+      const flat=[...sections].flatMap(([key,entries])=>[{header:key},...entries]);
+      keyedList(list,flat,row=>row.header!==undefined?'heading:'+row.header:row.id,row=>row.header!==undefined
+        ? h('h2',null,row.header==='individual'?'其他消息':row.header?snapshot.projects.find(p=>p.id===row.header)?.name||'项目不可用':'未归项目')
+        : row.items?groupCard(row):card(row),row=>JSON.stringify([
+          row,snapshot.projects,row.conversation&&conversationsUI.signature(row.conversation),expandedGroups.get(row.id),
+          ...(row.items||[row]).filter(item=>item.raw).map(item=>[stage(item),pending.has(item.id),uncertain.has(item.id),handlingState(item)])
+        ]));
     } else if (visible.length) keyedList(list, window, item => item.id, card, item => JSON.stringify([
       item, incoming && projectName(item),
       incoming && handlingState(item),

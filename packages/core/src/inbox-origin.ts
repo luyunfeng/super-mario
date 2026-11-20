@@ -8,7 +8,7 @@ export function normalizeInboxOrigin(value: unknown): InboxOrigin | undefined {
   const input = value as Record<string, unknown>;
   if (!['direct', 'group', 'agent', 'unknown'].includes(String(input.kind))) return fail();
   const result: InboxOrigin = { kind: input.kind as InboxOrigin['kind'] };
-  for (const key of ['connector', 'chatId', 'chatName', 'senderName'] as const) {
+  for (const key of ['connector', 'chatId', 'chatName', 'senderName', 'senderId', 'senderIdType'] as const) {
     if (input[key] === undefined) continue;
     if (typeof input[key] !== 'string' || input[key].length > 1000 || input[key].includes('\0')) return fail();
     if (input[key].trim()) result[key] = input[key].trim();

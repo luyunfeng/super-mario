@@ -35,7 +35,7 @@ async function withApp(run: (ctx: { server: Server; browser: Browser; open: (has
   finally { await browser.close(); await server.close(); await rm(dir, { recursive: true, force: true }); }
 }
 
-test('外壳：八个入口都有作用文字，仅项目目录可刷新，各页面零报错', { timeout: 60000 }, async () => {
+test('外壳：八个入口都有作用文字，目录与总指挥群有专用刷新入口，各页面零报错', { timeout: 60000 }, async () => {
   await withApp(async ({ open }) => {
     const { page, errors } = await open('#chat');
     const items = page.locator('.nav__item');
@@ -49,7 +49,7 @@ test('外壳：八个入口都有作用文字，仅项目目录可刷新，各�
       if (hash === 'projects') {
         await expect(page.locator('#projects .project-discovered').getByRole('button', { name: '刷新目录', exact: true })).toBeVisible();
       }
-      await expect(page.getByRole('button', { name: /刷新/ })).toHaveCount(hash === 'projects' ? 1 : 0);
+      assert.deepEqual(await page.getByRole('button', { name: /刷新/ }).allTextContents(),hash === 'projects'?['刷新目录']:hash === 'agent'?['刷新群状态']:[],hash);
     }
     assert.deepEqual(errors, []);
   });

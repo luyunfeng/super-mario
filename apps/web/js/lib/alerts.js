@@ -11,7 +11,9 @@ export function computeAlerts(snapshot, attention, local = {}) {
   const now = local.now ?? Date.now();
 
   const waiting = attention.length;
-  const inboxWaiting = (snapshot.inbox ?? []).filter(item => item.tier === 'action' && !(personalGroupSize(item.origin) > 50) && !item.todoId && !item.archivedAt).length;
+  const covered=new Set((snapshot.inboxConversations??[]).flatMap(group=>group.messageIds));
+  const waitingPeople=(snapshot.inboxConversations??[]).filter(group=>group.status==='waiting_user').length;
+  const inboxWaiting = waitingPeople + (snapshot.inbox ?? []).filter(item => !covered.has(item.id) && item.tier === 'action' && !(personalGroupSize(item.origin) > 50) && !item.todoId && !item.archivedAt).length;
   const overdue = (snapshot.todos ?? []).some(todo => !todo.completedAt && todo.dueAt && new Date(todo.dueAt).getTime() < now);
   const failedRun = (snapshot.runs ?? []).some(run => (run.status === 'failed' || run.status === 'unknown') && !seen.has(run.id));
 

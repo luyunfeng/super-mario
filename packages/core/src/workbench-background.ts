@@ -26,6 +26,7 @@ export function reminderSourceId(todo: Todo) {
 }
 
 export interface WorkbenchBackgroundDeps {
+  conversations?:()=>import('../../protocol/src/inbox-conversations.ts').InboxConversation[];
   store: ReturnType<typeof createStore>;
   events: ReturnType<typeof createEventBus>;
   background: ReturnType<typeof createBackground>;
@@ -165,7 +166,7 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
       if (previous && Date.parse(previous) >= Date.parse(to)) return { status: 'skip', reason: 'window_already_covered' };
       const hours = data.name === 'interval' ? briefing.settings().intervalHours : data.name === 'morning' ? 15 : 9;
       const from = previous || new Date(Date.parse(to) - hours * 3600000).toISOString();
-      const facts = buildWindowBrief(store, from, to);
+      const facts = buildWindowBrief(store, from, to, undefined, deps.conversations?.());
       const globalBot = notificationBots()
         .filter(b => b.scope.kind === 'global' && b.enabled && b.configured && b.connected && b.paired && b.replyTarget)
         .sort((a, b) => a.id.localeCompare(b.id))[0];
@@ -174,11 +175,11 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
         store.put('background.briefs', event.id, { id: event.id, createdAt: new Date().toISOString(), facts });
         store.put('briefing.windows', windowKey, { eventId: event.id });
         store.put('briefing.cursors', 'last', { to });
-        background.outbox.enqueue('daily-brief', {
+        background.outbox.enqueueNotice('daily-brief', {
           dedupKey: `brief:${windowKey}`,
           channel: briefChannel,
           target: 'owner',
-          content: { text: formatWindowBrief(facts, data.name) },
+          content: { text: formatWindowBrief(facts, data.name, briefing.settings().timezone) },
           causedBy: event.id,
           ...(event.staleIf ? { staleIf: event.staleIf } : {}),
         });

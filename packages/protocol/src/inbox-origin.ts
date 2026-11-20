@@ -5,6 +5,8 @@ export interface InboxOrigin {
   chatId?: string;
   chatName?: string;
   senderName?: string;
+  senderId?: string;
+  senderIdType?: string;
   /** Exact personal-account mention evidence; a bot mention does not imply this. */
   mentionedMe?: boolean;
   /** Feishu personal collection only. Verified chat user_count, excluding bots. */

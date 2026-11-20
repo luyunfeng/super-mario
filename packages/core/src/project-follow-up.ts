@@ -31,7 +31,8 @@ const windows = 'project-follow-up.windows';
 const cursors = 'project-follow-up.cursors';
 
 /** Owns read-only project summaries. The host retains all outbound authorization. */
-export function createProjectFollowUp({ store, events, schedules, settings, enqueue }: {
+export function createProjectFollowUp({ store, events, schedules, settings, enqueue, conversations }: {
+  conversations?:()=>import('../../protocol/src/inbox-conversations.ts').InboxConversation[];
   store: Store;
   events: EventBus;
   schedules: Pick<ReturnType<typeof createSchedules>, 'forOwner'>;
@@ -104,11 +105,11 @@ export function createProjectFollowUp({ store, events, schedules, settings, enqu
     const previous = store.get<{to: string}>(cursors, id)?.to;
     if (store.get(windows, key) || (previous && Date.parse(previous) >= Date.parse(to))) return { status: 'skip', reason: 'project_window_already_covered' };
     const from = previous ?? new Date(Date.parse(to) - 86400000).toISOString();
-    const brief = buildWindowBrief(store, from, to, id);
+    const brief = buildWindowBrief(store, from, to, id, conversations?.());
     const follow = store.get<Project>('projects', id)!.followUp!;
     const overdue = follow.overdueReminders
       ? store.list<Todo>('todos').filter(t => t.projectId === id && !t.completedAt && t.dueAt && Date.parse(t.dueAt) < Date.parse(to) && Date.parse(t.createdAt) <= Date.parse(to)).map(t => ({ id: t.id, title: t.title })) : undefined;
-    const text = formatWindowBrief({ ...brief, ...(overdue ? { overdue } : {}) }, 'project');
+    const text = formatWindowBrief({ ...brief, ...(overdue ? { overdue } : {}) }, 'project', settings().timezone);
     // Claim before the outbound callback. It can have acted before throwing or crashing;
     // keep unknown claims across restart instead of repeating an uncertain action.
     store.transaction(() => {

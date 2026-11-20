@@ -2,7 +2,7 @@
 export const hints = {
   'nav.home': { tag: '今天先做什么', detail: '需要你决定的事、待办截止时间和各项目的最近进展。', example: '查看今天需要确认的事项。' },
   'nav.chat': { tag: '说出目标，Agent 来办', detail: '你只需要说想做什么。Agent 会结合记忆选择执行者，并把结果带回来。', example: '把登录页的报错修一下。' },
-  'nav.inbox': { tag: '收到的消息都在这', detail: '查看采集到的飞书消息和机器人收件。知会与低优先级消息也会保留，可以查看原文、归档或转为待办。', example: '把这条消息转为待办。' },
+  'nav.inbox': { tag: '收到的消息都在这', detail: '消息按联系人与会话合并，主 Agent 默认在后台整理、合成事项并跟进。只有需要你补充信息时才提示回复，原文始终保留。', example: '补充一个答案，让主 Agent 继续处理。' },
   'nav.outbox': { tag: '查看发送内容和结果', detail: '查看待确认的发送内容、发送进度和结果。结果未知时先核对实际送达情况。', example: '查看一条通知是否已发送。' },
   'nav.agent': { tag: '配置谁来干活', detail: '设置主 Agent 的模型和可用执行者。你也可以决定哪些事可以自动处理。', example: '选模型，接入一台电脑。' },
   'nav.projects': { tag: '让 Agent 持续跟进', detail: '一个项目聚合它的待办、执行和资料。跟进能力以当前已启用的设置为准。', example: '新建“官网改版”项目。' },
@@ -22,5 +22,5 @@ export const hints = {
   'memory.global': { tag: '通用的工作原则', detail: '保存所有项目通用的工作方式。全局不表示对外公开。', example: '变更前先阅读现有实现。' },
   'memory.project': { tag: '某个项目的背景', detail: '记忆与所选项目关联。不要把不同项目的约束混在一起。', example: '这个项目使用浅色界面。' },
   'channel.bot': { tag: '在飞书里和 Agent 对话', detail: '机器人接收发给它的消息。连接机器人不代表能读取你的所有私人聊天。', example: '向机器人交代今天的目标。' },
-  'channel.collect': { tag: '把消息变成待办', detail: '个人消息采集需要单独授权，默认关闭。采集只读取消息，不自动代你回复。', example: '把需要回应的消息转为待办。' },
+  'channel.collect': { tag: '让主 Agent 整理消息', detail: '个人消息采集需要单独授权，默认关闭。采集只读取消息，不自动代你回复。', example: '把需要回应的消息转为待办。' },
 };

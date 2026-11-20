@@ -57,7 +57,10 @@ test('configured main API receives one isolated tool-free request and creates no
   const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
-    requests.push(JSON.parse(Buffer.concat(chunks).toString()));
+    // The SDK may probe model metadata with an empty GET before the completion.
+    const body=Buffer.concat(chunks).toString();
+    if (!body && req.method==='GET') {res.writeHead(200,{'Content-Type':'application/json'});res.end('{"data":[]}');return;}
+    requests.push(JSON.parse(body));
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     const data = { id: 'r', model: 'test-main', object: 'chat.completion.chunk', created: 1,
       choices: [{ index: 0, delta: { role: 'assistant', content: '{"projectId":"a"}' }, finish_reason: 'stop' }] };

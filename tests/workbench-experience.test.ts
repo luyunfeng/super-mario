@@ -166,7 +166,7 @@ test('HTTP 替身飞书：离场问题经原审批只投递一次；机器人改
     server.app.background.publish({type:'schedule.due',typeVersion:1,sourceId:'fake-bot-brief',data:{owner:'daily-brief',name:'morning',scheduleId:'fake-schedule',scheduledFor:new Date().toISOString()}});
     await server.app.background.eventbox.drain();await server.app.background.outbox.tick();
     const brief=server.app.background.outbox.list().find(i=>i.owner==='daily-brief')!;assert.match(brief.channel,new RegExp(':'+b.id+':'));
-    const briefApproval=server.app.approvals.list().find(a=>a.id===brief.approvalId)!;await server.app.approvals.approve(briefApproval.id,briefApproval.version);assert.equal(adapters.reduce((n,a)=>n+a.sent.length,0),2);
+    assert.equal(brief.status,'sent');assert.equal(brief.approvalId,undefined);assert.equal(adapters.reduce((n,a)=>n+a.sent.length,0),2);
     uncertain=true;const unknown=await publish('unknown');const unknownApproval=server.app.approvals.list().find(a=>a.id===unknown.approvalId)!;await server.app.approvals.approve(unknownApproval.id,unknownApproval.version);
     await server.app.background.outbox.tick();await server.app.background.outbox.tick();assert.equal(adapters.reduce((n,a)=>n+a.sent.length,0),3);assert.equal(server.app.background.outbox.list().find(i=>i.id===unknown.id)!.status,'unknown');
 
@@ -186,7 +186,7 @@ test('隔离间隔调度：时间窗与项目事实、静默时段、防重复�
     server.app.store.put('projects','a',{id:'a',name:'A'});server.app.store.put('todos','a-todo',{id:'a-todo',projectId:'a',title:'完成验收',completedAt:'2026-11-17T10:00:00Z',updatedAt:'2026-11-17T10:00:00Z'});
     await emit('off-hours','2026-11-17T08:00:00Z');assert.equal(server.app.store.list('background.briefs').length,0);
     await emit('window1','2026-11-17T11:00:00Z');await emit('duplicate-other-source','2026-11-17T11:00:00Z');assert.equal(server.app.store.list('background.briefs').length,1);
-    assert.match(server.app.background.outbox.list()[0].content.text,/待办完成 1：完成验收/);
+    assert.match(server.app.background.outbox.list()[0].content.text,/已完成待办 1：完成验收/);
     await server.close();server=await startServer({host:'127.0.0.1',port:0,dataDir:dir,demo:true});
     await emit('window2','2026-11-17T13:00:00Z');const records=server.app.store.list<{facts:{from:string;to:string;projects:{completed:unknown[]}[]}}>('background.briefs');
     assert.equal(records.length,2);const next=records.find(r=>r.facts.to==='2026-11-17T13:00:00Z')!;assert.equal(next.facts.from,'2026-11-17T11:00:00Z');assert.equal(next.facts.projects[0].completed.length,0);

@@ -78,6 +78,10 @@ export function createOutbox({
     );
   }
   function grant(item: OutboxItem) {
+    const notice=store.get<{contentHash:string;version:number;accountId?:string;target?:string}>('outbox.notice-grants',item.id);
+    if(notice){const channel=senders.get(item.channel);return item.owner==='daily-brief'&&item.target==='owner'&&notice.contentHash===item.contentHash&&notice.version===item.version
+      &&Boolean(notice.accountId)&&notice.accountId===channel?.accountId?.()&&Boolean(notice.target)&&notice.target===channel?.ownerTarget();}
+
     const reply = store.get<{ accountId: string; target: string }>(
       "outbox.reply-grants",
       item.id,
@@ -98,6 +102,17 @@ export function createOutbox({
         `${item.owner}:${item.channel}`,
       )?.enabled === true
     );
+  }
+  // Retire only identifiable old core-brief approvals. Never replay an old notification
+  // or touch an execution/reply approval, a sending item, or an uncertain delivery.
+  for(const item of store.list<OutboxItem>(collection)) {
+    if(item.owner!=='daily-brief'||item.status!=='needs_approval'||!item.causedBy||!store.get('background.briefs',item.causedBy)||!item.approvalId)continue;
+    const approval=store.get<Approval>('approvals',item.approvalId);
+    if(approval?.status!=='pending'||approval.params.outboxId!==item.id||approval.params.contentHash!==item.contentHash||approval.params.outboxVersion!==item.version)continue;
+    store.transaction(()=>{
+      save({...item,status:'cancelled',error:'旧简报审批已撤销，后续只读简报自动投递',updatedAt:timestamp()});
+      store.put('approvals',approval.id,{...approval,status:'rejected',version:approval.version+1,error:'系统已移除旧简报审批；没有发送旧消息',updatedAt:timestamp()});
+    });
   }
   for (const item of store.list<OutboxItem>(collection)) {
     if (item.status !== "sending") continue;
@@ -137,6 +152,16 @@ export function createOutbox({
       return () => {
         senders.delete(channel);
       };
+    },
+    /** Host-only read-only brief delivery. Not exposed through plugin OutboxApi or model tools. */
+    enqueueNotice(owner:string,input:OutboxInput) {
+      if(owner!=='daily-brief'||input.target!=='owner')backgroundError('仅允许向主人投递内部工作简报',403);
+      return store.transaction(()=>{const result=service.enqueue(owner,input);
+        if(!store.get('outbox.notice-grants',result.id)){
+          const item=read(result.id),channel=senders.get(item.channel);
+          store.put('outbox.notice-grants',result.id,{contentHash:item.contentHash,version:item.version,accountId:channel?.accountId?.(),target:channel?.ownerTarget()});
+        }return result;
+      });
     },
     enqueueReply(input: OutboxInput, accountId: string) {
       return store.transaction(() => {
@@ -273,6 +298,11 @@ export function createOutbox({
       )
         return save({ ...item, status: "held", updatedAt: timestamp() });
       if (!grant(item) && !approved(item)) {
+        if(store.get('outbox.notice-grants',item.id)){
+          if(item.status==='held'&&item.error==='简报发送连接未就绪或主人绑定已变化')return item;
+          return save({...item,status:'held',error:'简报发送连接未就绪或主人绑定已变化',updatedAt:timestamp()});
+        }
+
         const a = item.approvalId
           ? store.get<Approval>("approvals", item.approvalId)
           : undefined;

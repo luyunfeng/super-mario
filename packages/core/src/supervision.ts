@@ -33,7 +33,8 @@ function validate(patch: Partial<AutomationSettings>): void {
 /** One scheduler per store. Notifications are local events, never external actions.
  * Reminder claims deliberately precede publishing: an uncertain publish is not retried.
  */
-export function createSupervision({ store, events, enabled = () => true, now = () => new Date(), publish }: {
+export function createSupervision({ store, events, enabled = () => true, now = () => new Date(), publish, conversations }: {
+  conversations?:()=>import('../../protocol/src/inbox-conversations.ts').InboxConversation[];
   store: Store; events: EventBus; enabled?: () => boolean; now?: () => Date; publish?: (event: import('../../plugin-sdk/src/index.ts').EventInput) => unknown;
 }) {
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -178,7 +179,7 @@ export function createSupervision({ store, events, enabled = () => true, now = (
       const runs: Record<Run['status'], number> = { queued: 0, running: 0, completed: 0, failed: 0, cancelled: 0, unknown: 0 };
       for (const run of store.list<Run>('runs')) runs[run.status]++;
       // Serialization removes optional undefined fields from protocol records.
-      return JSON.parse(JSON.stringify({ window: buildWindowBrief(store,new Date(timestamp-86400000).toISOString(),new Date(timestamp).toISOString()), sections: todoSections(todos, new Date(timestamp), todoDecisionIds(store)), todos: partitions, runs, signals: signals().filter(signal => !signal.resolvedAt) })) as JsonObject;
+      return JSON.parse(JSON.stringify({ window: buildWindowBrief(store,new Date(timestamp-86400000).toISOString(),new Date(timestamp).toISOString(),undefined,conversations?.()), sections: todoSections(todos, new Date(timestamp), todoDecisionIds(store)), todos: partitions, runs, signals: signals().filter(signal => !signal.resolvedAt) })) as JsonObject;
     },
   };
 }
