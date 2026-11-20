@@ -33,7 +33,7 @@ test('local product: authenticated Web/API, knowledge, todos, asynchronous work 
     assert.equal((await fetch(`${running.url}/missing.js`)).status, 404);
     const initial = await state();
     assert.equal(initial.mode, 'demo');
-    const webFeatureIds = new Set(['workspace-splash', 'token-statistics']);
+    const webFeatureIds = new Set(['workspace-splash', 'token-statistics', 'feishu-web']);
     const coreIds = initial.plugins.map(plugin => plugin.id).filter(id => !webFeatureIds.has(id)).sort();
     assert.deepEqual(coreIds, [
       'builtin-tools', 'daily-brief', 'executor-claude-code', 'executor-codex', 'executor-pi',
@@ -45,7 +45,8 @@ test('local product: authenticated Web/API, knowledge, todos, asynchronous work 
     assert.equal(tokenStats.status, 'active');
     assert.deepEqual(tokenStats.capabilities, ['usage.read']);
     assert.deepEqual(tokenStats.navigation, [{ id: 'dashboard', label: 'Token 统计', route: '#agent?tokenStats=1' }]);
-    assert.ok(initial.plugins.every(plugin => plugin.enabled));
+    assert.equal(initial.plugins.find(plugin => plugin.id === 'feishu-web')?.status, 'disabled');
+    assert.ok(initial.plugins.filter(plugin => plugin.id !== 'feishu-web').every(plugin => plugin.enabled));
     assert.ok(initial.executors.find(executor => executor.id === 'demo' && executor.mode === 'demo'));
     assert.equal((await request('/todos', 'POST', { title: ' ' })).status, 400);
     assert.equal((await request('/knowledge', 'POST', { layer: 'project', title: '项目', content: '资料' })).status, 400);

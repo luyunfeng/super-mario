@@ -15,6 +15,7 @@ const descriptions = {
   'executor-pi':'通过执行机将任务交给 Pi CLI。',
   'executor-claude-code':'通过执行机将任务交给 Claude Code。',
   'terminal-host':'连接执行机上的终端会话，提供终端状态。',
+  'feishu-web':'通过飞书网页版网关接收消息。',
   feishu:'连接飞书机器人，管理消息收发和机器人绑定。',
   'inbox-triage':'整理进入收件箱的消息。',
   'daily-brief':'汇总待办和执行进展，生成每日简报。',
@@ -102,7 +103,8 @@ export function createPluginSettings({ api, store, router }) {
           } }), ' 固定到侧边栏'))));
     }, plugin => JSON.stringify([plugin, features(plugin).map(item => pins.has(item.key))]));
   }
-  function open() {
+  function open(pluginId) {
+    if (typeof pluginId === 'string') { selected = pluginId; search.value = ''; }
     if (drawer?.el.open) return;
     drawer = openDrawer({ title: '插件配置', wide:true, subtitle: '选择插件，查看用途并调整设置。启停影响整个工作台。', body: [shortcuts, layout], onClose: () => { drawer = undefined; } });
     drawer.el.classList.add('settings-dialog');

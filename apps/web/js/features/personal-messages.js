@@ -23,7 +23,7 @@ export function createPersonalMessagesUI({ api, store, router, onConnectApplicat
   const personalAI = createPersonalAI({ api, store, accountState });
   const aiButton = () => accountState() && Button({ label: '个人消息 /ai 设置', size: 'sm', onClick: personalAI.open });
   const body = h('div', { class: 'stack' });
-  const el = Card({ title: '个人消息采集（可选）', hint: 'channel.collect', id: 'channel-collect', body });
+  const el = Card({ title: '飞书 CLI 个人消息采集（可选）', hint: 'channel.collect', id: 'channel-collect', body });
   const summary = () => !loaded ? (loadError ? '账号状态无法核实' : '正在读取账号状态…') : state.enabled ? state.collecting ? '正在读取一批消息…' : '自动采集已开启' : state.status === 'connected' ? '已停止采集（账号已授权）' : labels[state.status] ?? '未授权';
   function completeness() {
     const completed = typeof state.lastCompletedThrough === 'string' && Number.isFinite(Date.parse(state.lastCompletedThrough));

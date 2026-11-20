@@ -57,7 +57,7 @@ import { createScopedAgents } from './scoped-agents.ts';
 import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
-import { tokenStatistics, createSystemExtensions, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createFeishuWebExtension, createFeishuWebSource, tokenStatistics, createSystemExtensions, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import type { AppConfig, Approval, BotScope, ExecutionResult, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
@@ -123,10 +123,27 @@ export async function createWorkbench(config: AppConfig) {
     validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
     return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
   }, knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0], currentAgentInput() ?? agent.currentInput()) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
+  const webOptions = config.feishuWeb ?? {
+    baseUrl: process.env.SUPER_MARIO_FEISHU_WEB_BASE_URL ?? '',
+    token: process.env.SUPER_MARIO_FEISHU_WEB_TOKEN,
+  };
+  const webSource = createFeishuWebSource({
+    ...webOptions,
+    onInbox: async (items, account) => {
+      if (!account?.accountKey?.trim()) throw new Error('网页版网关未提供已核验的账号');
+      const key = createHash('sha256').update(JSON.stringify([new URL(webOptions.baseUrl).origin, account.accountKey])).digest('hex');
+      const webAccount = 'feishu:web:' + key;
+      await inbox.ingest(webAccount, items);
+    },
+  });
+  // The host defaults new plugins to enabled. Seed only the first registration and preserve later user choices.
+  if (!store.get('core.plugin-settings', 'feishu-web')) {
+    store.put('core.plugin-settings', 'feishu-web', { enabled: false, revision: 1 });
+  }
+  plugins.register(createFeishuWebExtension(webSource));
   plugins.register(workspaceSplash);
   plugins.register(tokenStatistics);
   for (const loaded of await loadExtensions(config.dataDir, { reservedIds: plugins.list().map(item => item.id) })) plugins.register(loaded.extension, loaded.config);
-  try { await plugins.start(); } catch (error) { store.close(); throw error; }
   const agent = createAgentRuntime({ config, store, events, contributions, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, projectContext:id=>projectWorkspace.context(id) });
   const scopedAgents = createScopedAgents({ config, store, events, contributions, executors: executorInfo, workDecisions: workDecisions.context, botContext, projectContext:id=>projectWorkspace.context(id), validScope: (scope, botId, input) => botScopeAccess(scope, botId, input) });
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
@@ -155,9 +172,13 @@ export async function createWorkbench(config: AppConfig) {
       const result = ruleTriage(thing);
       return { tier: result.tier, reason: `规则回退：${result.reason}` };
     } });
+  try { await plugins.start(); } catch (error) { store.close(); throw error; }
   const inboxAssistant = createInboxAssistant({store,events,workspace:inboxAssistantWorkspace,
     context:id=>id?projectWorkspace.context(id):{scope:'personal'},
-    enabled:()=>plugins.list().some(p=>p.id==='inbox-triage'&&p.status==='active') && plugins.list().some(p=>p.id==='feishu'&&p.status==='active'),
+    enabled: () => {
+      const active = plugins.list().filter(plugin => plugin.status === 'active').map(plugin => plugin.id);
+      return active.includes('inbox-triage') && (active.includes('feishu') || active.includes('feishu-web'));
+    },
     available:()=>{const status=inboxAssistantRuntime.status();return status.available?status:{available:false,reason:'主模型尚未就绪，原消息已保存，等待后台整理。'};},createTodo:input=>createTodo(input,false),updateTodo:(id,input)=>updateTodo(id,input),archive:(id,version)=>inbox.archive(id,version),
     async analyze(input){
       if(config.demo)return {summary:'【演示】已合并本会话消息，未调用真实模型。',disposition:'watching',tasks:[]};
@@ -958,6 +979,7 @@ export async function createWorkbench(config: AppConfig) {
         return modelStatus();
       } finally { agent.unlockConfiguration(); supervisorRuntime.unlockConfiguration(); scopedAgents.unlockConfiguration(); inboxClassifier.unlockConfiguration(); inboxAssistantRuntime.unlockConfiguration(); inboxHandlingRuntime.unlockConfiguration(); }
     },
+    feishuWebStatus: () => webSource.status(),
     config, store, events, effects, plugins, contributions, workDecisions, todoDecisions, waitingReplies, inboxAssistant, inboxClassifier, inboxHandling, inboxHandlingRuntime, agent, supervisorRuntime, supervisorAgent, policies, plans, proposePlan, interactions, inbox, approvals, supervision, monitor,
     setInboxReplyHost(access: typeof mailboxHandlingAccess, reply: NonNullable<typeof replyToInboxSource>) { mailboxHandlingAccess=access;replyToInboxSource=reply; },
     readInboxHandlingSource: inboxHandlingSources,
@@ -975,6 +997,7 @@ export async function createWorkbench(config: AppConfig) {
     async close() {
       if (closing) return;
       closing = true;
+      await webSource.stop();
       commandRouter.cancel();
       await wiredBackground.close(); projectFollowUp.close();
       supervision.close(); plans.close(); clearInterval(expireTimer); await awayNotifications.close();

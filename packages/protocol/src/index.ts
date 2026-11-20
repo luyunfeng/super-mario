@@ -33,7 +33,7 @@ export interface WebExtension { slot: 'startup'; renderer: 'brand-splash'; title
 export interface AppEvent { id: number; type: string; data: Json; createdAt: string }
 export interface MachineInfo { agentInstanceId?: string; id: string; name: string; online: boolean; platform: string; connectedAt: string; capabilities: string[]; executors?: ExecutorInfo[] }
 export interface ModelConfig { provider: string; model: string; baseUrl?: string; apiKey?: string; cliCommand?: string; cliConfigDir?: string }
-export interface AppConfig { host: string; port: number; dataDir: string; token?: string; demo: boolean; model?: ModelConfig; feishu?: { appId: string; appSecret: string; profile?: string; collectEnabled?: boolean; pollMs?: number } }
+export interface AppConfig { host: string; port: number; dataDir: string; token?: string; demo: boolean; model?: ModelConfig; feishuWeb?: { baseUrl: string; token?: string; pollIntervalMs?: number }; feishu?: { appId: string; appSecret: string; profile?: string; collectEnabled?: boolean; pollMs?: number } }
 /** A project is a durable workspace on one connected machine, not an execution attempt. */
 export interface ProjectWorkspaceBinding { machineId: string; cwd: string }
 export interface WebPresenceInput { tabId: string; visible: boolean; focused: boolean; sequence?: number }

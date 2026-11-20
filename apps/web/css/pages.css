@@ -329,3 +329,5 @@ body:has(.splash-background) #root { position: relative; }
 .recent-work-entry { padding: 4px 0 8px; }
 .recent-work-entry .btn { max-width: 100%; }
 [data-todo-history] .card__body { overflow-wrap: anywhere; }
+
+.channel-gateways { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 16px; align-items: start; }

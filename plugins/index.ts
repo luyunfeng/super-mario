@@ -6,6 +6,18 @@ import { createLocalKnowledge } from './knowledge-local.ts';
 import { isProtectedKnowledgeURL } from './knowledge-source-reader.ts';
 import { actionProposeParameters, taskPolicyParameters } from './tool-parameters.ts';
 
+export { createFeishuWebSource } from './feishu-web-source.ts';
+
+export function createFeishuWebExtension(source: { start(): void; stop(): Promise<void> }): Extension {
+  return {
+    id: 'feishu-web', name: '飞书网页版网关', capabilities: ['feishu-web.inbox.read'],
+    activate(context) {
+      context.defer(() => source.stop());
+      source.start();
+    },
+  };
+}
+
 export { tokenStatistics } from './token-statistics.ts';
 export { workspaceSplash } from './workspace-splash.ts';
 export { createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from './knowledge-source-reader.ts';

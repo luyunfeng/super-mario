@@ -11,7 +11,7 @@ const JOB_LABELS = { queued: '准备中', waiting_for_scan: '等待扫码', crea
 const JOB_DONE = new Set(['completed', 'needs_configuration', 'failed', 'unknown', 'cancelled', 'canceled', 'expired']);
 const GLOBAL = '__global';
 
-export function createChannelsPage({ api, store, router }) {
+export function createChannelsPage({ api, store, router, shell }) {
   let bots = [];
   const mainSetup = () => router.current.parts[0] === 'main-bot';
   let job = null;
@@ -135,6 +135,34 @@ export function createChannelsPage({ api, store, router }) {
   } });
   const collectCard = personal.el;
 
+  const webStatus = h('div', { class: 'stack', 'aria-live': 'polite' });
+  let webRequest = 0;
+  let webPluginState;
+  async function refreshWebGateway() {
+    const request = ++webRequest;
+    try {
+      const state = await api.get('/feishu/web');
+      if (request !== webRequest) return;
+      if (typeof state?.enabled !== 'boolean' || typeof state.connected !== 'boolean') throw Error('响应格式无效');
+      const received = Date.parse(state.lastReceivedAt);
+      replace(webStatus,
+        h('div', { class: 'row' }, Pill(state.enabled ? '已启用' : '已停用', state.enabled ? 'info' : ''),
+          state.enabled && Pill(state.connected ? '已连接' : '未连接', state.connected ? 'ok' : 'warn')),
+        h('p', { class: 'small muted' }, '最近收到消息：', Number.isFinite(received)
+          ? h('time', { datetime: state.lastReceivedAt }, new Date(received).toLocaleString('zh-CN')) : '暂无记录'),
+        state.error && Banner({ tone: 'danger', children: state.error }));
+    } catch (cause) {
+      if (request === webRequest) replace(webStatus, Banner({ tone: 'danger', children: '无法读取网页版网关状态：' + systemText(cause.message) }));
+    }
+  }
+  const webCard = Card({ title: '飞书网页版网关（可选）', id: 'channel-feishu-web',
+    body: h('div', { class: 'stack' },
+      h('p', { class: 'small' }, '先在兼容网关登录飞书并开启监听，再在工作台服务端配置网关地址。'),
+      h('p', { class: 'small muted' }, '启用后每 15 秒同步一次私聊。网关暂时无法核实群聊的折叠状态，因此小群也暂不采集。需要处理群聊时可使用飞书 CLI。'),
+      webStatus, h('div', { class: 'row row--wrap' },
+      Button({ label: '刷新网关状态', size: 'sm', onClick: refreshWebGateway }),
+      Button({ label: '管理网页版插件', size: 'sm', onClick: () => shell.openPluginSettings('feishu-web') }))) });
+
   // —— 高级 ——
   const advancedHost = h('div', { class: 'legacy' });
   let mailboxes;
@@ -149,7 +177,8 @@ export function createChannelsPage({ api, store, router }) {
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '渠道'), h('p', { class: 'page__sub' }, hintCopy('nav.channels').tag)),
         h('div', { class: 'page__actions' }, Hint('nav.channels'))),
-      problemBox, h('div', { class: 'stack stack--lg' }, botCard, collectCard, advanced)));
+      problemBox, h('div', { class: 'stack stack--lg' }, botCard, h('p', { class: 'small muted' }, '两种接入方式可独立启停，也可同时使用。同一飞书账号建议只开启一种。'),
+        h('div', { class: 'channel-gateways' }, collectCard, webCard), advanced)));
 
   async function load() {
     const stamp = ++seq;
@@ -200,8 +229,13 @@ export function createChannelsPage({ api, store, router }) {
       if (['main-bot', 'project-bot'].includes(route.parts[0])) { selected = ''; creating = true; }
       else if (route.parts[0] === 'bot') { selected = route.parts[1] || ''; creating = false; }
       else creating = false;
+      refreshWebGateway();
       load().then(schedule); if (route.parts[0] === 'advanced') advanced.open = true; },
     onState({ snapshot }) {
+      const webPlugin = snapshot.plugins?.find(plugin => plugin.id === 'feishu-web');
+      const next = JSON.stringify([webPlugin?.enabled, webPlugin?.status]);
+      if (webPluginState !== undefined && webPluginState !== next && router.current.page === 'channels') refreshWebGateway();
+      webPluginState = next;
       const problems = (snapshot.problems ?? []).filter(item => item.area === 'channel');
       const configured = snapshot.setup?.channel === 'done';
       replace(problemBox, configured && problems.map(item => Banner({ tone: 'danger', children: `${item.message}。${item.fix}` })));
