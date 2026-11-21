@@ -6,7 +6,7 @@ import { stableJson } from './eventbox.ts';
 export const knowledgeSourceApprovalKind = 'plugin:knowledge-local.read-source' as const;
 export interface KnowledgeSourceApprovalJob {
   id: string; url?: string; layer: 'personal' | 'project'; projectId?: string;
-  requestOrigin?: 'web' | 'agent'; sourceMessageId?: string;
+  requestOrigin?: 'web' | 'agent' | 'meeting'; sourceMessageId?: string; sourceKey?: string;
 }
 type SavedJob = KnowledgeSourceApprovalJob & { status?: string };
 type ReaderIdentity = { enabled: boolean; configured: boolean; key: string; ready?: boolean };
@@ -54,6 +54,7 @@ function synchronous<T>(callback: () => T): T {
 }
 function identityFields(job: KnowledgeSourceApprovalJob) {
   return { id: job.id, url: job.url ?? null, layer: job.layer, projectId: job.projectId ?? null,
+    ...(job.sourceKey ? { sourceKey: job.sourceKey } : {}),
     requestOrigin: job.requestOrigin ?? null, sourceMessageId: job.sourceMessageId ?? null };
 }
 
@@ -100,7 +101,8 @@ export function createKnowledgeSourceApproval(options: Options) {
     // Snapshot all message evidence except lifecycle fields. role/readOnly/origin
     // are evidence only: a reflected user role can NEVER approve an Agent job.
     let evidence: unknown = null;
-    if (job.sourceMessageId) {
+    if (job.requestOrigin === 'meeting' && (!options.validateJob || !job.sourceMessageId || !job.sourceKey || job.layer !== 'personal')) fail('SOURCE_INVALID');
+    if (job.sourceMessageId && job.requestOrigin !== 'meeting') {
       const message = store.get<Record<string, unknown>>('messages', job.sourceMessageId);
       if (!message || message.id !== job.sourceMessageId) fail('SOURCE_CHANGED');
       const { status: _status, updatedAt: _updatedAt, ...content } = message;
@@ -157,8 +159,8 @@ export function createKnowledgeSourceApproval(options: Options) {
           if (reason) { invalidate(row, reason); return new KnowledgeSourceApprovalError(reason); }
         }
         const current = source(input), identity = reader();
-        // Only the host-authenticated direct Web/API path carries this intent.
-        if (current.job.requestOrigin === 'web') return;
+        // The host validates a meeting link against the original inbox item and collecting account.
+        if (current.job.requestOrigin === 'web' || current.job.requestOrigin === 'meeting') return;
         if (row?.approved) return;
         if (row) return new KnowledgeSourceApprovalError('AWAITING_APPROVAL', row.approvalId);
         const publicParams = params(current.job, identity.key);

@@ -109,3 +109,43 @@ for (const action of ['cancel', 'archive'] as const) test(`${action}: 读取中�
   await assert.rejects(readFile(f.raw(job.id)), { code: 'ENOENT' });
   assert.equal(f.submissions.length, 0);
 });
+
+test('重复采集会议文档在重启后仍只整理一份，个人知识保留正文和原消息来源', async t => {
+  let reads = 0;
+  const f = await fixture(t, async () => { reads++; return normalized('会议决定：以合成数据验收。'); });
+  const provenance = { requestOrigin: 'meeting' as const, sourceMessageId: 'inbox-1', sourceKey: 'account/docx/Synthetic' };
+  const input = { layer: 'personal', url };
+  assert.throws(() => f.curator.addSource({ ...input, layer: 'project', projectId: 'p' }, provenance), /个人未分类/);
+  assert.throws(() => f.curator.addSource({ ...input, text: '通知预览' }, provenance), /须通过来源读取器/);
+  const job = f.curator.addSource(input, provenance);
+  assert.equal(f.job(job.id).sourceKey, provenance.sourceKey);
+  assert.equal(f.curator.addSource(input, { ...provenance, sourceMessageId: 'inbox-2' }).id, job.id);
+  await f.until(() => f.job(job.id).status === 'completed');
+  const [page] = await f.knowledge.list({ layer: 'personal' });
+  assert.ok(page?.content.includes(url));
+  assert.ok(page.content.includes('来源收件记录：inbox-1'));
+  assert.match(await readFile(f.raw(job.id), 'utf8'), /以合成数据验收/);
+  await f.restart();
+  assert.equal(f.curator.addSource(input, provenance).status, 'completed');
+  assert.equal(f.curator.status().jobs.length, 1);
+  assert.equal(reads, 1);
+});
+
+test('会议文档未被受保护读取器接管时，初次整理与显式重试均不发起公网请求', async t => {
+  let reads = 0;
+  const f = await fixture(t, async () => { reads++; return undefined; });
+  const network = t.mock.method(globalThis, 'fetch', async () => { throw Error('unexpected fetch'); });
+  const provenance = { requestOrigin: 'meeting' as const, sourceMessageId: 'inbox-1', sourceKey: 'account/docx/Synthetic' };
+  const job = f.curator.addSource({ url }, provenance);
+  await f.until(() => f.job(job.id).status === 'failed');
+  assert.match(f.job(job.id).error!, /MEETING_READER_REQUIRED/);
+  assert.equal(f.curator.addSource({ url }, provenance).status, 'failed');
+  const retry = f.curator.retry(job.id);
+  assert.equal(retry.sourceMessageId, job.sourceMessageId);
+  assert.equal(f.job(retry.id).sourceKey, provenance.sourceKey);
+  await f.until(() => f.job(retry.id).status === 'failed');
+  assert.match(f.job(retry.id).error!, /MEETING_READER_REQUIRED/);
+  assert.equal(reads, 2);
+  assert.equal(network.mock.callCount(), 0);
+  assert.equal(f.submissions.length, 0);
+});

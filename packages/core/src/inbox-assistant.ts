@@ -53,6 +53,7 @@ export function createInboxAssistant(options: {
   events: EventBus;
   workspace: string;
   context?(projectId?: string): unknown;
+  isMeetingMaterial?(item: InboxItem): boolean;
   available(): { available: boolean; reason?: string };
   enabled(): boolean;
   analyze(input: {
@@ -77,6 +78,7 @@ export function createInboxAssistant(options: {
   now?: () => number;
   debounceMs?: number;
 }) {
+  const isMeetingMaterial = (item: InboxItem) => item.origin?.meetingMinutes && (options.isMeetingMaterial?.(item) ?? true);
   const { store, events } = options,
     now = options.now ?? Date.now;
   let closed = false,
@@ -241,7 +243,7 @@ export function createInboxAssistant(options: {
             ...(latest.projectId ? { projectId: latest.projectId } : {}),
             title,
             person,
-            ...(items.some(item => item.origin?.meetingMinutes) ? { meetingMinutes: true as const } : {}),
+            ...(isMeetingMaterial(latest) ? { meetingMinutes: true as const } : {}),
             ...(chatName ? { chatName } : {}),
             kind: latest.origin!.kind as "direct" | "group",
             messageIds: items.map((item) => item.id),
@@ -365,7 +367,7 @@ export function createInboxAssistant(options: {
       // Spend the extra meeting budget on the newest minutes while keeping older messages in context.
       let extra = 12000;
       const messages = group.items.slice(-20).reverse().map(item => {
-        const allowance = item.origin?.meetingMinutes ? Math.min(extra, Math.max(0, item.text.length - 400)) : 0;
+        const allowance = isMeetingMaterial(item) ? Math.min(extra, Math.max(0, item.text.length - 400)) : 0;
         extra -= allowance;
         const text = item.text.slice(0, 400 + allowance);
         return { id: item.id, at: item.receivedAt ?? item.updatedAt, text, truncated: text.length < item.text.length };

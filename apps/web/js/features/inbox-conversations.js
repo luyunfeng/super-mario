@@ -114,7 +114,7 @@ export function createInboxConversationsUI({
       return Card({
         title: group.title,
         className: "mailbox-group",
-        sub: `${group.meetingMinutes ? "特别关注 · 会议纪要 · " : ""}${group.messageIds.length} 条消息已合并 · ${group.kind === "direct" ? "私聊" : group.chatName || "群聊"}`,
+        sub: `${group.messageIds.length} 条消息已合并 · ${group.kind === "direct" ? "私聊" : group.chatName || "群聊"}`,
         tools: Pill(
           LABEL[group.status] || "后台处理中",
           question ? "warn" : group.status === "failed" ? "danger" : "",

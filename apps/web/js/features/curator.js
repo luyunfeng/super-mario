@@ -96,10 +96,13 @@ export function openCuratorDrawer({ api, store, onChanged }) {
       jobs.length ? h('div', { class: 'list' }, jobs.map(job => {
         const attempt = attempts.get(job.id);
         const next = successor(job);
+        const meeting = job.requestOrigin === 'meeting';
         const canRetry = job.status === 'failed' || job.status === 'unknown';
         return h('div', { class: 'item', dataset: { jobId: job.id }, style: wrap },
           h('div', { class: 'item__main', style: wrap },
-            h('span', { class: 'item__title' }, job.url ?? job.title ?? (job.text || job.id)),
+            h('span', { class: 'item__title' }, (meeting && job.title) || job.url || job.title || job.text || job.id),
+            meeting && h('span', { class: 'item__meta' }, '会议资料 · 个人记忆'),
+            meeting && job.url?.startsWith('https://') && h('a', { class: 'small', href: job.url, target: '_blank', rel: 'noopener noreferrer' }, '查看原文档'),
             h('span', { class: 'item__meta' }, `${timeAgo(job.updatedAt ?? job.createdAt)}${job.error ? ` · ${job.error}` : ''}`),
             next && h('p', { class: 'small' }, `新整理任务：${next.id}（${STATUS[next.status] ?? (DONE.has(next.status) ? '已整理' : '结果未确认')}）`),
             !next && attempt?.accepted && h('p', { class: 'small' }, `已提交新整理任务${attempt.newId ? `：${attempt.newId}` : '，旧服务未返回任务引用'}；进度以队列为准。`),

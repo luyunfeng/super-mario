@@ -7,6 +7,7 @@ import { createInboxHandlingRuntime } from './agent-runtime/inbox-handling.ts';
 import { createInboxHandling, inboxHandlingApprovalKind } from './inbox-handling.ts';
 import { createInboxHandlingSources } from './inbox-handling-source.ts';
 import type { InboxHandlingSource, InboxHandlingAction } from '../../protocol/src/inbox-handling.ts';
+import { enqueueMeetingMemory, meetingMemorySources } from './meeting-memory.ts';
 import { createKnowledgeSourceApproval, knowledgeSourceApprovalKind } from './knowledge-source-approval.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createScheduledWorkService } from './scheduled-work-service.ts';
@@ -46,7 +47,7 @@ import { createRunMonitor } from './run-monitor.ts';
 import { createApprovalService } from './approvals.ts';
 import { createSupervision } from './supervision.ts';
 import { loadExtensions } from './extension-loader.ts';
-import { createInboxService, ruleTriage } from './inbox.ts';
+import { createInboxService, inboxItemId, ruleTriage } from './inbox.ts';
 import { createStore } from './store.ts';
 import { createEventBus } from './events.ts';
 import { createBackground } from './background.ts';
@@ -59,7 +60,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
 import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, createSystemExtensions, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
-import type { AppConfig, Approval, BotScope, ExecutionResult, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
+import type { AppConfig, Approval, BotScope, ExecutionResult, InboxItem, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
 export class InputError extends Error {
@@ -169,7 +170,7 @@ export async function createWorkbench(config: AppConfig) {
   const inboxHandlingRuntime = createInboxHandlingRuntime({config,store,events,contributions,ready:()=>agent.status().available});
   const inbox = createInboxService({ store, events, createTodo: input => createTodo(input, false),
     triage: async thing => {
-      if (thing.origin?.meetingMinutes) return { tier: 'fyi', reason: '特别关注：智能纪要助手的会议资料' };
+      if (thing.origin?.meetingMinutes) return { tier: 'fyi', reason: '会议来源消息：可查看原文和纪要链接' };
       if (thing.thread.startsWith('feishu:message:')) return { ...ruleTriage(thing), reason: '原文已入箱，由主 Agent 按联系人合并整理' };
       if (!config.demo) {
         const active = contributions.list('inbox_triage')[0]?.value;
@@ -187,6 +188,7 @@ export async function createWorkbench(config: AppConfig) {
     } });
   try { await plugins.start(); } catch (error) { store.close(); throw error; }
   const inboxAssistant = createInboxAssistant({store,events,workspace:inboxAssistantWorkspace,
+    isMeetingMaterial: item => meetingMemorySources(item, knowledgeReaderSettings.read().trustedHosts).length > 0,
     context:id=>id?projectWorkspace.context(id):{scope:'personal'},
     enabled: () => {
       const active = plugins.list().filter(plugin => plugin.status === 'active').map(plugin => plugin.id);
@@ -213,6 +215,20 @@ export async function createWorkbench(config: AppConfig) {
       } finally {clearTimeout(timeout);}
     }});
   const knowledgeCurator = createKnowledgeCurator({ store, events, dataDir: config.dataDir, knowledge, machines: () => machines, enabled: () => contributions.list('knowledge_backends').length > 0, validProject: id => projects.list().some(p => p.id === id && !p.archivedAt), readSource: readProtectedKnowledgeSource, allowedProviders: () => [...new Set(['codex', 'claude-code', ...contributions.list('executors').filter(e => e.value.mode === 'real' && e.value.knowledgeWorker !== false).map(e => e.value.kind || e.id)])] });
+  // Reconcile already collected minutes once per account on its first successful batch.
+  // Later batches also inspect replayed items so a crash before checkpoint commit loses no source.
+  const reconciledMeetingAccounts = new Set<string>();
+  function collectMeetingMemory(source: string, batch: InboxThing[]) {
+    const account = knowledgeAccount();
+    if (!account || source !== `feishu:${account.appId}:${account.openId}`) return;
+    const items = reconciledMeetingAccounts.has(source)
+      ? batch.filter(thing => thing.origin?.meetingMinutes)
+          .map(thing => store.get<InboxItem>('inbox', inboxItemId(source, thing.thread)))
+          .filter((item): item is InboxItem => !!item)
+      : inbox.list().filter(item => item.source === source && item.origin?.meetingMinutes);
+    enqueueMeetingMemory(items, knowledgeCurator.addSource, knowledgeReaderSettings.read().trustedHosts);
+    reconciledMeetingAccounts.add(source);
+  }
   const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text)=>scopedAgents.postProject(id,text),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
   const controllers = new Map<string, AbortController>();
   const jobs = new Set<Promise<void>>();
@@ -244,7 +260,16 @@ export async function createWorkbench(config: AppConfig) {
   const offScheduledWork=background.eventbox.subscribe('core',{name:'scheduled-work',types:[{type:'schedule.due',version:1}],effects:'none',handler:event=>scheduledWork.handle(event)});
   const knowledgeSourceApproval = createKnowledgeSourceApproval({store,events,proposeApproval:input=>approvals.propose(input),rejectApproval:(id,version)=>{approvals.reject(id,version);},
     readerIdentity(){const settings=knowledgeReaderSettings.read(),account=knowledgeAccount();return {enabled:settings.enabled,configured:!!(settings.profile||account?.profile),key:digestReaderIdentity(settings,account),ready:!!settings.profile||knowledgeAccountReady()};},
-    validateJob(job){if(job.requestOrigin==='agent'){const source=job.sourceMessageId?store.get<Message>('messages',job.sourceMessageId):undefined;if(!source)throw new InputError('原来源请求不存在',409);validateSourceActor(source,job.layer,job.projectId);}},
+    validateJob(job){
+      if (job.requestOrigin === 'meeting') {
+        const item = job.sourceMessageId && store.get<InboxItem>('inbox', job.sourceMessageId);
+        const account = knowledgeAccount(), settings = knowledgeReaderSettings.read();
+        if (!item || !account || item.source !== `feishu:${account.appId}:${account.openId}` ||
+            (settings.profile && settings.profile !== account.profile) ||
+            !meetingMemorySources(item, settings.trustedHosts).some(source => source.input.url === job.url && source.provenance.sourceKey === job.sourceKey))
+          throw new InputError('会议来源或个人读取账号已变化', 409);
+      }
+      if(job.requestOrigin==='agent'){const source=job.sourceMessageId?store.get<Message>('messages',job.sourceMessageId):undefined;if(!source)throw new InputError('原来源请求不存在',409);validateSourceActor(source,job.layer,job.projectId);}},
     onApproved:id=>knowledgeCurator.sourceApproved(id),onRejected:(id,reason)=>knowledgeCurator.sourceRejected(id,reason)});
   const offKnowledgeApprovals=events.subscribe(event=>{if(['knowledge.reader.changed','projects.changed','todos.changed','plugins.changed','approvals.changed','bots.changed','feishu.bots.changed'].includes(event.type))knowledgeSourceApproval.sync();});
   const reporting = createTodoReporting({ store, events });
@@ -808,6 +833,8 @@ export async function createWorkbench(config: AppConfig) {
     const settings = knowledgeReaderSettings.read();
     if (!isProtectedKnowledgeURL(url, settings.trustedHosts)) return undefined;
     if (!plugins.list().some(p => p.id === 'knowledge-local' && p.status === 'active')) throw new InputError('请先启用本地知识插件', 409);
+    if (job?.requestOrigin === 'meeting' && !knowledgeAccountReady())
+      throw Object.assign(new Error('正在核验采集账号'), { code: 'SOURCE_READER_NOT_READY' });
     if(job)knowledgeSourceApproval.check(job);
     const service = contributions.list('services').find(entry => entry.value.name === 'knowledge-local.source.read');
     if (!service) throw new InputError('受保护来源读取服务不可用', 503);
@@ -935,7 +962,7 @@ export async function createWorkbench(config: AppConfig) {
     return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
   }
   return {
-    routeCommandProject: commandRouter.route, modelStatus, agentSessions, runObservations, scheduledWork, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, agentSessions, runObservations, scheduledWork, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {

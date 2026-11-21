@@ -24,6 +24,7 @@ export interface PersonalStatus {
 export function createPersonalMessages(options: {
   config: AppConfig; provider?: PersonalProvider; pollMs?: number; aiEnabled?(): boolean;
   stopPreviousCollection?(): Promise<void>;
+  collectMeetingMemory?(source: string, things: InboxThing[]): void;
   canCollect(): boolean; ingest(source: string, things: InboxThing[]): Promise<unknown>;
   /** Detached observer work must recheck this collection generation immediately before writing. */
   observeAi?(source: string, messages: PersonalAiMessage[], assertCurrent: () => void): void | Promise<void>;
@@ -153,6 +154,7 @@ export function createPersonalMessages(options: {
         await options.ingest(source, things);
         // Ingest may yield while stop, cancel or new authorization changes the owner.
         assertCurrent();
+        options.collectMeetingMemory?.(source, things);
         if (batch?.aiMessages?.length && options.observeAi) {
           const observationError = '个人 AI 消息处理失败，普通消息采集继续。';
           let observed = true;

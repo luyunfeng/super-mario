@@ -38,6 +38,7 @@ export function createFeishuGateway(
     stopPreviousCollection: () => feishu.pausePersonalCollection(),
     canCollect: () => ['feishu', 'inbox-triage'].every(id => app.plugins.list().some(plugin => plugin.id === id && plugin.status === 'active')),
     ingest: (source, things) => app.inbox.ingest(source, things),
+    collectMeetingMemory: app.collectMeetingMemory,
     observeReplies: (source, evidence) => app.waitingReplies.observeSource(source, evidence),
   });
   const handlePersonalAi = createPersonalAiHandler(app);

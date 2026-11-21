@@ -47,3 +47,40 @@ test('removing the originating bot invalidates pending source consent and preven
   assert.equal((await f.api('/approvals/' + waiting.approvalId + '/approve', 'POST', { version: 1 })).status, 409);
   assert.equal(await f.reads(), 0); assert.equal(f.submitted(), 0);
 });
+
+test('个人采集补入会议文档，使用采集账号读取真实来源接口并保留正文快照', async t => {
+  const f = await fixture(t), app = f.server.app;
+  const account = { profile: 'offline', appId: 'cli_test', openId: 'ou_reader' };
+  app.setKnowledgeSourceAccount(() => account);
+  const handle = `feishu:${account.appId}:${account.openId}`;
+  const url = 'https://tenant.feishu.cn/docx/Meeting123';
+  const thing = { origin: { kind: 'direct' as const, chatId: 'oc_minutes', connector: '飞书', meetingMinutes: true as const },
+    thread: 'feishu:message:["oc_minutes","om_minutes"]', last: 'om_minutes', title: '会议资料', text: `[周会纪要](${url})` };
+  await app.inbox.ingest(handle, [thing]);
+  app.collectMeetingMemory(handle, []);
+  app.collectMeetingMemory(handle, [thing]);
+  const jobs = () => app.knowledgeCurator.status().jobs;
+  await until(() => ['failed','completed'].includes(jobs()[0]?.status || ''));
+  assert.equal(jobs().length, 1);
+  const job = jobs()[0]!;
+  assert.equal(job.status, 'completed', job.error);
+  assert.equal(job.requestOrigin, 'meeting');
+  assert.equal(await f.reads(), 2);
+  const raw = await readFile(join(f.dir,'server','plugins','knowledge-local','raw',job.id+'.md'),'utf8');
+  assert.match(raw, /Protected material/);
+  const [entry] = await app.knowledge().list({ layer: 'personal' });
+  assert.ok(entry?.content.includes(url));
+  assert.ok(entry.content.includes(job.sourceMessageId!));
+});
+
+test('会议文档不能改用其他已配置的读取身份', async t => {
+  const f = await fixture(t), app = f.server.app;
+  app.setKnowledgeSourceAccount(() => ({ profile: 'other-profile', appId: 'cli_test', openId: 'ou_reader' }));
+  const handle = 'feishu:cli_test:ou_reader';
+  const thing = { origin: { kind: 'direct' as const, chatId: 'oc_minutes', connector: '飞书', meetingMinutes: true as const },
+    thread: 'feishu:message:["oc_minutes","om_minutes"]', last: 'om_minutes', title: '会议资料', text: 'https://tenant.feishu.cn/docx/Meeting456' };
+  await app.inbox.ingest(handle, [thing]);
+  app.collectMeetingMemory(handle, [thing]);
+  await until(() => app.knowledgeCurator.status().jobs[0]?.status === 'failed');
+  assert.equal(await f.reads(), 0);
+});

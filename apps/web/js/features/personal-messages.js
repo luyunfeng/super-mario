@@ -74,7 +74,7 @@ export function createPersonalMessagesUI({ api, store, router, onConnectApplicat
       aiButton(),
       loaded && !accountState() && h('p', { class: 'small muted' }, state.demo ? '演示模式无法配置个人消息 /ai。' : '账号授权状态确认后可配置个人消息 /ai。'),
       loaded && completeness(),
-      h('p', { class: 'small muted' }, '特别关注智能纪要助手：收集会议消息，优先分析决定、进展和待跟进事项。'),
+      h('p', { class: 'small muted' }, '智能纪要助手发来的会议内容和纪要文档会进入整理队列，整理后可在「记忆 → 个人」查看。'),
       h('a', { class: 'small', href: router.href('inbox') }, '查看采集消息 → 收件箱'),
       loadError && Banner({ tone: 'danger', children: loadError, action: Button({ label: '重试读取', size: 'sm', onClick: () => refresh() }) }));
     if (!drawer) return;

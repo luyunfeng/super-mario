@@ -96,6 +96,19 @@ test('SSE 快照推进 queued → running → awaiting_approval → completed，
   f.event(); await pause(page); assert.equal(gets(f).length, count);
 });
 
+test('会议资料队列显示纪要标题、原文档、目标归属和读取失败原因', { timeout: 20000 }, async t => {
+  const f = await fixture(t);
+  const url = 'https://example.feishu.cn/docx/SyntheticMinutes';
+  f.value.jobs = [{ ...job('failed'), title: '样例会议纪要', url, requestOrigin: 'meeting', error: '所选账号没有这份资料的访问权限' }];
+  f.event();
+  const source = row(f.page);
+  await expect(source.getByText('样例会议纪要', { exact: true })).toBeVisible();
+  await expect(source.getByText('会议资料 · 个人记忆', { exact: true })).toBeVisible();
+  await expect(source.getByRole('link', { name: '查看原文档' })).toHaveAttribute('href', url);
+  await expect(source.getByText('失败', { exact: true })).toBeVisible();
+  await expect(source).toContainText('所选账号没有这份资料的访问权限');
+});
+
 test('unknown 必须确认，取消不 POST；成功只显示新任务引用，活动 retryOf 阻止旧行重复整理', { timeout: 20000 }, async t => {
   const f = await fixture(t, 'unknown'); const { page } = f;
   await expect(row(page)).toContainText('结果未确认');

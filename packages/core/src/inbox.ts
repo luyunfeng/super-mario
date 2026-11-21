@@ -36,6 +36,9 @@ function validateThing(value: unknown): InboxThing {
     ...(thing.sender !== undefined ? { sender: thing.sender as string } : {}),
     ...(thing.receivedAt !== undefined ? { receivedAt: thing.receivedAt as string } : {}) };
 }
+export function inboxItemId(source: string, thread: string) {
+  return createHash('sha256').update(JSON.stringify([source, thread])).digest('hex');
+}
 export function ruleTriage(thing: InboxThing): Triage {
   const text = `${thing.title}\n${thing.text}`;
   const keyword = text.match(/请|帮|需要|待办|截止/)?.[0];
@@ -93,7 +96,7 @@ export function createInboxService({ store, events, createTodo, triage }: {
       });
       const job = queue.then(async () => {
         for (const thing of batch) {
-          const id = createHash('sha256').update(JSON.stringify([source, thing.thread])).digest('hex');
+          const id = inboxItemId(source, thing.thread);
           const existing = store.get<InboxItem>(collection, id);
           if (existing?.last === thing.last) {
             // A duplicate may add verified provenance, but cannot change user decisions.
