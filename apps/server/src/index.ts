@@ -280,6 +280,16 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           const input=await body(req);if(Object.keys(input).some(key=>key!=='version'))throw new InputError('周期工作取消参数无效');
           return json(res,200,app.scheduledWork.cancel({id:decodeURIComponent(cancelScheduled[1]!),version:input.version}));
         }
+        if (path === '/api/v1/followups' && method === 'GET') {
+          return json(res, 200, { items: app.followups.list(Object.fromEntries(url.searchParams)) });
+        }
+        if (path === '/api/v1/followups' && method === 'POST') {
+          return json(res, 201, app.followups.create(await body(req)));
+        }
+        const cancelFollowup = path.match(/^\/api\/v1\/followups\/([^/]+)\/cancel$/);
+        if (cancelFollowup && method === 'POST') {
+          return json(res, 200, app.followups.cancel(decodeURIComponent(cancelFollowup[1]!)));
+        }
         if (path === '/api/v1/work-decisions' && method === 'GET') {
           for (const key of url.searchParams.keys()) if (!['projectId', 'todoId'].includes(key)) throw new InputError('工作决定查询参数无效');
           return json(res, 200, app.workDecisions.list(Object.fromEntries(url.searchParams)));

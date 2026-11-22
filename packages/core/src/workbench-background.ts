@@ -1,4 +1,5 @@
 import { buildWindowBrief, createBriefingSettings, formatWindowBrief } from './briefing.ts';
+import { buildBriefingPrompt } from './prompts.ts';
 import type { createAgentRuntime } from './agent-runtime/index.ts';
 import type { createApprovalService } from './approvals.ts';
 import type { createBackground } from './background.ts';
@@ -26,6 +27,8 @@ export function reminderSourceId(todo: Todo) {
 }
 
 export interface WorkbenchBackgroundDeps {
+  demo?: boolean;
+  consumePendingBriefNotices?: () => { title: string; text: string; createdAt: string }[];
   conversations?:()=>import('../../protocol/src/inbox-conversations.ts').InboxConversation[];
   store: ReturnType<typeof createStore>;
   events: ReturnType<typeof createEventBus>;
@@ -167,6 +170,29 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
       const hours = data.name === 'interval' ? briefing.settings().intervalHours : data.name === 'morning' ? 15 : 9;
       const from = previous || new Date(Date.parse(to) - hours * 3600000).toISOString();
       const facts = buildWindowBrief(store, from, to, undefined, deps.conversations?.());
+      const tz = briefing.settings().timezone;
+      const pendingNotices = deps.consumePendingBriefNotices?.() ?? [];
+      const baseText = formatWindowBrief(facts, data.name, tz);
+      const fallbackText = pendingNotices.length
+        ? `${baseText}\n\n待汇总通知 ${pendingNotices.length}：\n${pendingNotices.map(n => `- ${n.title}：${n.text.slice(0, 300)}`).join('\n')}`
+        : baseText;
+      let briefText = fallbackText;
+      if (!deps.demo && agent.status().available) {
+        try {
+          const prompt = buildBriefingPrompt(data.name, fallbackText, tz);
+          const reply = await Promise.race([
+            agent.ask(prompt, { readOnly: true }),
+            new Promise<never>((_, reject) => {
+              const t = setTimeout(() => reject(new Error('简报模型总结超时')), 45000);
+              t.unref();
+            }),
+          ]);
+          const summary = reply.status === 'done' ? reply.text?.trim() : '';
+          if (summary) briefText = `${fallbackText.split('\n')[0]}\n${summary}`;
+        } catch {
+          // Fall back to deterministic facts brief if model call fails or times out.
+        }
+      }
       const globalBot = notificationBots()
         .filter(b => b.scope.kind === 'global' && b.enabled && b.configured && b.connected && b.paired && b.replyTarget)
         .sort((a, b) => a.id.localeCompare(b.id))[0];
@@ -179,7 +205,7 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
           dedupKey: `brief:${windowKey}`,
           channel: briefChannel,
           target: 'owner',
-          content: { text: formatWindowBrief(facts, data.name, briefing.settings().timezone) },
+          content: { text: briefText },
           causedBy: event.id,
           ...(event.staleIf ? { staleIf: event.staleIf } : {}),
         });

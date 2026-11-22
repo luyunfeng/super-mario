@@ -258,3 +258,16 @@ test('needs_you signals include actual runs associated with their todo', async t
   assert.deepEqual(JSON.parse(f.calls[0].text.split('\n').at(-1)!).runs, [run]);
   assert.deepEqual(f.calls[0].context, { projectId: 'project' });
 });
+
+test('SILENT supervisor reply marks signal processed without emitting review event', async t => {
+  const f = fixture(t);
+  const emitted: unknown[] = [];
+  f.events.subscribe(e => { if (e.type === 'supervisor.review') emitted.push(e); });
+  f.respondWith(async () => ({ ...answer(), text: 'SILENT: 误报，任务已正常完成' }));
+  f.add(signal('false-alarm'));
+  const review = await f.service.flush();
+  assert.equal(review?.status, 'silent');
+  assert.equal(emitted.length, 0);
+  // Second flush should not re-process the silently absorbed signal.
+  assert.equal(await f.service.flush(), undefined);
+});

@@ -148,3 +148,40 @@ node scripts/verify-package.mjs # 临时目录打包安装与 CLI 启动冒烟�
 - [操作手册](docs/operations.md)：部署参数、模型与飞书配置、知识整理、多机器人协作与排错指南。
 - [代码地图](docs/code-map.md)：各功能模块对应的精确源码与测试文件索引。
 - [开发约定](AGENTS.md)：工程原则、模块边界与测试规范。
+- 交互式架构与使用教程图：启动服务后访问 `/guide.html`（或在工作台首页最下方展开）。
+
+---
+
+## AI README（给 AI Agent / 编程助手的快速接入指南）
+
+> 如果你是接手开发、调试或集成 Super Mario 的 AI Agent，按本节即可在 1 分钟内建立全局心智并安全改动代码。
+
+### 1. 架构硬约束（改动前必读）
+- **单一 `pi` 封装边界**：`@earendil-works/pi-coding-agent` 只能在 `packages/core/src/agent-runtime/` 内导入；插件与外围模块禁止直接依赖 `pi`。
+- **插件双向 AST 边界**：`plugins/` 下的文件只能导入 `packages/plugin-sdk/`、`packages/protocol/` 与同级插件，严禁反向导入 `packages/core/`（CI 通过 `npm run lint:plugins` 强校验）。
+- **只读放开，写动作收口**：主 Agent、督办（`supervisor-agent.ts`）、收件处理（`inbox-handling.ts`）与主动跟进（`followups.ts`）的只读调研工具（`calendar_agenda`、`workspace_code_*`、`knowledge_list`、`runs_list` 等）默认免审批；所有写操作与外发必须经过 `approvals` / `outbox` / `effects`，`unknown` 状态禁止自动重试或重派。
+- **状态分离**：执行结束（`status=completed`）≠ 待办验收完成；会话断线 ≠ 进程退出。
+
+### 2. 高频改动定位表
+| 需求类型 | 首选入口文件 |
+| --- | --- |
+| 修改主 Agent / 督办 / 收件 / 简报提示词 | `packages/core/src/prompts.ts` |
+| 调整每轮工作态势快照（Markdown + JSON） | `packages/core/src/work-context.ts`、`packages/core/src/agent-runtime/index.ts` |
+| 扩展主 Agent 主动跟进、静默巡检与分级通知 | `packages/core/src/followups.ts`、`packages/core/src/workbench-background.ts` |
+| 注册新的内置工具或外部只读数据源 | `plugins/index.ts`、`plugins/feishu-calendar.ts`、`packages/core/src/workbench.ts` |
+| 调整飞书卡片展示、外链按钮与引用回复续派 | `apps/server/src/feishu-cards.ts`、`apps/server/src/feishu-bots.ts` |
+| 修改 Web 页面或首页交互图解 | `apps/web/js/pages/`、`apps/web/guide.html` |
+
+### 3. 外部 AI / 自动化快速接入方式
+1. **HTTP API 接入**（带 `Authorization: Bearer <SUPER_MARIO_TOKEN>`）：
+   - `GET /api/v1/snapshot`：读取工作台全局状态快照（项目、待办、执行、收件箱、审批）。
+   - `POST /api/v1/messages`：向主 Agent（`pi` 总调度官）投递自然语言目标。
+   - `GET / POST /api/v1/followups`：查询或创建只读主动跟进/静默巡检任务。
+   - `GET /api/v1/projects/:id/code?kind=tree|file|diff&path=...`：只读浏览项目代码与 Git Diff。
+2. **自定义插件扩展**：在 `<dataDir>/extensions/<plugin-name>/` 放置 `super-mario.extension.json` 与入口模块，实现 `@super-mario/plugin-sdk` 声明的工具、只读采集器或定时例行任务。
+
+### 4. 提交前必跑验证与安全检查
+```bash
+npm run typecheck && npm run lint:plugins && npm test && npm run build
+```
+- 严禁将真实访问令牌、API Key、内网 IP/主机名、个人飞书账号或真实聊天/会议记录写入代码、测试夹具或文档；所有测试均使用隔离临时目录、空闲端口与合成数据。

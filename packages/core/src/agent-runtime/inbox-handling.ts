@@ -7,6 +7,7 @@ import { createAgentRuntime } from './index.ts';
 type LoadSDK = NonNullable<Parameters<typeof createAgentRuntime>[1]>;
 interface Options {
   config: AppConfig; store: Store; events: EventBus; contributions: Contributions; ready: () => boolean;
+  allowedTools?: string[];
 }
 const failed = '收件处理失败或已取消，请重试。';
 const invalid = '收件处理来源或会话无效。';
@@ -153,9 +154,13 @@ export function createInboxHandlingRuntime(options: Options, loadSDK: LoadSDK = 
         },
       };
     };
+    const hasReadTools = Boolean(options.allowedTools?.length);
     const runtime = createAgentRuntime({ config: structuredClone(options.config), store, events,
-      contributions: options.contributions, conversationId, allowedTools: [], contextMode: 'principles',
-      canUseScope: () => !signal.aborted, systemPrompt: instructions,
+      contributions: options.contributions, conversationId, allowedTools: options.allowedTools ?? [], contextMode: 'principles',
+      canUseScope: () => !signal.aborted,
+      systemPrompt: hasReadTools
+        ? `${instructions}\n如已开放只读调研工具，请先查清相关项目进度、待办、知识、日程或代码事实再起草建议，禁止编造或使用【待补充】占位符；严禁执行任何写操作或外发。`
+        : instructions,
     }, safeSDK);
     return { binding, controller, runtime, busy: 0, used: ++clock, prompted: false, tail: Promise.resolve(),
       async flushCredentials() { await Promise.all(credentialDrains.map(flush => flush())); } };

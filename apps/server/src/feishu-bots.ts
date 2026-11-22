@@ -888,6 +888,17 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           previous?.(messageId);
           if (binding?.projectId === stamp.chatProject) app.store.put('feishu.chat-target',digest([bot.id,target,messageId]),binding);
         };
+      } else if (context.presentation && bot.scope.kind === 'global' && paired?.senderId && paired.chatId === target) {
+        const scopeProjectId = entry.scope.kind === 'project' || entry.scope.kind === 'task' ? entry.scope.projectId : undefined;
+        const targetProjectId = scopeProjectId ?? stamp?.chatProject;
+        if (targetProjectId) {
+          const previous = context.onSent;
+          const binding = { projectId: targetProjectId, revision: bot.revision, senderId: paired.senderId, expiresAt: Date.now() + 7 * 24 * 3600 * 1000 };
+          context.onSent = messageId => {
+            previous?.(messageId);
+            app.store.put('feishu.chat-target', digest([bot.id, target, messageId]), binding);
+          };
+        }
       }
       try { await adapter.send(target, body, context); }
       catch (error) { throw Object.assign(new Error(redact(error)), { delivery: (error as { delivery?: string })?.delivery === 'no' ? 'no' : 'unknown' }); }

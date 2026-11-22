@@ -67,6 +67,35 @@ export function createHomePage({ api, router, scope, store }) {
     h('header', { class: 'page__head' }, h('h1', null, '首页'), Hint('nav.home')), body));
   let brief, briefError, lastRead = 0, request = 0;
   const link = (href, text) => h('a', { class: 'home-row', href }, text);
+  const guideFrameWrap = h('div', { hidden: true, style: 'margin-top:12px;' });
+  let guideLoaded = false;
+  const guideToggle = h('button', {
+    class: 'btn btn--sm', type: 'button',
+    onclick: () => {
+      const opening = guideFrameWrap.hidden;
+      guideFrameWrap.hidden = !opening;
+      guideToggle.textContent = opening ? '收起动态图解' : '展开动态图解';
+      if (opening && !guideLoaded) {
+        guideLoaded = true;
+        guideFrameWrap.append(h('iframe', {
+          src: '/guide.html?embed=1',
+          title: 'Super Mario 使用教程与架构思路图',
+          style: 'width:100%;height:760px;border:1px solid var(--line, #D1CFC5);border-radius:10px;background:#FAF9F5;',
+        }));
+      }
+    },
+  }, '展开动态图解');
+  const guideCard = Card({
+    title: '使用教程与架构思路图',
+    sub: 'pi 总调度官 · 会前主动简报 · 只读调研与审批闭环',
+    tools: h('div', { class: 'row' },
+      guideToggle,
+      h('a', { class: 'btn btn--sm btn--primary', href: '/guide.html', target: '_blank', rel: 'noopener' }, '独立页面打开 ↗')),
+    body: [
+      muted('点击「展开动态图解」可直接在首页交互查看 4 条核心场景的数据流动画与五步上手教程，或点击右上角在新标签全屏浏览。'),
+      guideFrameWrap,
+    ],
+  });
   function draw() {
     const view = store.view;
     if (!view.snapshot || router.current.page !== 'home') return;
@@ -115,7 +144,8 @@ export function createHomePage({ api, router, scope, store }) {
         updates.filter(([,items]) => items.length).map(([name, items]) => h('p', null, name + ' ' + items.length + ' 项 · ' + items.slice(0, 2).map(i => i.title).join('、'))),
         chats.length > 0 && muted('有群聊动态：' + chats.map(g => g.name).join('、')),
         window && !chats.length && !updates.some(([,items]) => items.length) && muted('最近 24 小时没有更新。'));
-    }) : muted('当前范围内没有项目。') }));
+    }) : muted('当前范围内没有项目。') }),
+    guideCard);
   }
   scope.subscribe(draw);
   async function readBrief() {

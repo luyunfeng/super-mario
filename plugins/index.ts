@@ -22,6 +22,7 @@ export function createFeishuWebExtension(source: { start(): void; stop(): Promis
 export { tokenStatistics } from './token-statistics.ts';
 export { workspaceSplash } from './workspace-splash.ts';
 export { createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from './knowledge-source-reader.ts';
+export { fetchCalendarAgenda } from './feishu-calendar.ts';
 
 function tool(name: string, description: string, execute: Tool['execute'], properties: JsonObject = {}): Tool {
   return { name, description, parameters: { type: 'object', properties, additionalProperties: false }, execute };
@@ -82,6 +83,12 @@ export interface SystemActions {
   scheduledWorkList?(input: Record<string, unknown>): Json;
   scheduledWorkPropose?(input: Record<string, unknown>): Json;
   scheduledWorkCancel?(input: Record<string, unknown>): Json;
+  followupCreate?(input: Record<string, unknown>): Json;
+  followupList?(input: Record<string, unknown>): Json;
+  followupCancel?(id: string): Json;
+  notifyUser?(input: Record<string, unknown>): Json;
+  calendarAgenda?(input: { start?: string; end?: string }, signal: AbortSignal): Promise<Json>;
+  workspaceCode?(input: { projectId?: string; kind: 'tree' | 'file' | 'diff'; path?: string }): Promise<Json>;
   knowledgeReaderService?(): import('../packages/plugin-sdk/src/index.ts').PluginService;
   inboxList?(input: Record<string, unknown>): Json;
   inboxHandlingRead?(input: Record<string, unknown>): Json;
@@ -155,6 +162,11 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           }, { id: { type: 'string' }, version: { type: 'integer' }, text: { type: 'string' } }));
           if (actions.projectsList) context.contribute('tools', 'projects_list', tool('projects_list', '列出工作台项目及归档状态。', async (_args, signal) => { signal.throwIfAborted(); return actions.projectsList!(); }));
           if (actions.projectsDiscover) context.contribute('tools', 'projects_discover', tool('projects_discover', '只读发现已连接电脑上已有的项目文件夹。不会创建项目或执行工作；开发项目先发现目录，再绑定电脑和目录。', async (args, signal) => { signal.throwIfAborted(); return actions.projectsDiscover!(args); }, { machineId: { type: 'string' }, roots: { type: 'array', items: { type: 'string' } } }));
+          if (actions.workspaceCode) {
+            context.contribute('tools', 'workspace_code_list', tool('workspace_code_list', '只读浏览已绑定项目工作区的目录结构（受敏感文件与根目录边界保护）。', async (args, signal) => { signal.throwIfAborted(); return actions.workspaceCode!({ projectId: typeof args.projectId === 'string' ? args.projectId : undefined, kind: 'tree', path: typeof args.path === 'string' ? args.path : '' }); }, { projectId: { type: 'string', description: '已绑定目录的项目 ID。' }, path: { type: 'string', description: '可选，项目内相对目录路径。' } }));
+            context.contribute('tools', 'workspace_code_read', tool('workspace_code_read', '只读读取已绑定项目工作区的 UTF-8 文本文件内容（受敏感文件与大小上限保护）。', async (args, signal) => { signal.throwIfAborted(); return actions.workspaceCode!({ projectId: typeof args.projectId === 'string' ? args.projectId : undefined, kind: 'file', path: String(args.path ?? '') }); }, { projectId: { type: 'string', description: '已绑定目录的项目 ID。' }, path: { type: 'string', description: '项目内相对文件路径。' } }));
+            context.contribute('tools', 'workspace_git_diff', tool('workspace_git_diff', '只读查看已绑定项目工作区指定文件相对 HEAD 的 Git diff，用于核验实际代码改动。', async (args, signal) => { signal.throwIfAborted(); return actions.workspaceCode!({ projectId: typeof args.projectId === 'string' ? args.projectId : undefined, kind: 'diff', path: String(args.path ?? '') }); }, { projectId: { type: 'string', description: '已绑定目录的项目 ID。' }, path: { type: 'string', description: '项目内相对文件路径。' } }));
+          }
           if (actions.projectCreate) context.contribute('tools', 'project_create', tool('project_create', '导入现有项目文件夹并保留持续工作上下文。先 projects_discover，再提供 workspace 的电脑和目录；未提供文件夹的旧式项目只归集资料，不会运行任务。', async (args, signal) => { signal.throwIfAborted(); return actions.projectCreate!(args); }, { name: { type: 'string' }, description: { type: 'string' }, workspace: { type: 'object', properties: { machineId: { type: 'string' }, cwd: { type: 'string' } }, required: ['machineId', 'cwd'], additionalProperties: false } }));
           if (actions.supervisorRead) context.contribute('tools', 'supervisor_read', tool('supervisor_read', '读取独立后台督办的状态与建议，不代表任务自动验收。', async (_args, signal) => { signal.throwIfAborted(); return actions.supervisorRead!(); }));
           if (actions.propose) {
@@ -250,6 +262,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         if (actions?.botRelay) context.contribute('tools', 'bot_handoff', tool('bot_handoff', '向明确授权的机器人协作对象委派请求；复用现有项目/事项范围与确认信箱，不等于已执行或已外发。sourceBotId仅主对话选择全局机器人时填写，机器人会话不可冒用其他身份。', async args => actions.botRelay!(args), { targetBotId: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' }, sourceBotId: { type: 'string' }, chatId: { type: 'string' } }));
         if (actions?.mailboxesList) context.contribute('tools', 'mailboxes_list', tool('mailboxes_list', '查看全局、项目、事项或未标记的事件收件箱和发件箱；主 Agent 可按需查询全部进展。', async (args, signal) => { signal.throwIfAborted(); return actions.mailboxesList!(args); }, { direction: { type: 'string', enum: ['inbox', 'outbox'] }, scope: { type: 'string', enum: ['global', 'project', 'task', 'unmarked'] }, projectId: { type: 'string' }, todoId: { type: 'string' }, botId: { type: 'string' }, status: { type: 'string' } }));
         if (actions?.mailboxPropose) context.contribute('tools', 'mailbox_propose', tool('mailbox_propose', '向机器人发件箱提交一条待用户确认的消息草稿。提交不代表发送，不能代替用户确认。', async (args, signal) => { signal.throwIfAborted(); return actions.mailboxPropose!(args); }, { botId: { type: 'string' }, target: { type: 'string' }, text: { type: 'string' }, title: { type: 'string' } }));
+        if (actions?.calendarAgenda) context.contribute('tools', 'calendar_agenda', tool('calendar_agenda', '只读查询主人飞书日历的日程安排、入会链接、参会状态及自动计算的时间冲突。用于早报、会前 10 分钟简报准备与冲突检查；start/end 为可选 ISO 8601 时间（默认今日）。', async (args, signal) => { signal.throwIfAborted(); return actions.calendarAgenda!({ ...(typeof args.start === 'string' ? { start: args.start } : {}), ...(typeof args.end === 'string' ? { end: args.end } : {}) }, signal); }, { start: { type: 'string', description: '可选，起始 ISO 时间。' }, end: { type: 'string', description: '可选，结束 ISO 时间。' } }));
       },
     },
     {
@@ -273,6 +286,45 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         context.contribute('routines', 'dailybrief', { name: 'dailybrief', async run() { return actions?.brief?.() ?? dailyBrief(context); } });
         if (actions?.brief) context.contribute('tools', 'brief_read', tool('brief_read', '读取待办、执行和督办事实简报。', async (_args, signal) => { signal.throwIfAborted(); return actions.brief!(); }));
         if (actions?.scheduledWorkList) context.contribute('tools', 'scheduled_work_list', tool('scheduled_work_list', '读取当前范围的周期工作及实际审批/结果；创建确认、到期派发和执行完成分别计算。', async args => actions.scheduledWorkList!(args), { projectId: { type: 'string' }, todoId: { type: 'string' } }));
+        if (actions?.followupCreate) {
+          context.contribute('tools', 'schedule_followup', tool('schedule_followup',
+            '为自己（主 Agent）预约一次性跟进或周期只读巡检（无需审批，到期在只读上下文自动唤醒，例如会前 10 分钟准备简报、2 小时后复核进展）。push="asked" 表示默认静默，仅发现值得通知的变化时调用 notify_user；push="always" 表示到期整理结果后直接推给主人。',
+            async (args, signal) => { signal.throwIfAborted(); return actions.followupCreate!(args); }, {
+              id: { type: 'string', description: '可选，稳定标识；重复传入同 id 会更新原跟进。' },
+              title: { type: 'string', description: '简短跟进标题，例如“17:30 项目例会·会前简报”。' },
+              prompt: { type: 'string', description: '到期唤醒时要执行的只读调研与整理指令。' },
+              push: { type: 'string', enum: ['asked', 'always'], description: '默认 asked（无事不打扰，有事调 notify_user）；always 到点直接推结论。' },
+              projectId: { type: 'string', description: '可选，关联项目 ID。' },
+              todoId: { type: 'string', description: '可选，关联待办 ID。' },
+              schedule: {
+                type: 'object',
+                description: '调度时间：once({kind:"once",at:"2026-11-21T17:20:00+08:00"})、interval({kind:"interval",everySec:3600}) 或 cron({kind:"cron",cron:"0 9 * * 1-5",tz:"Asia/Shanghai"})。',
+                properties: {
+                  kind: { type: 'string', enum: ['once', 'interval', 'cron'] },
+                  at: { type: 'string' },
+                  everySec: { type: 'integer', minimum: 10 },
+                  anchorAt: { type: 'string' },
+                  cron: { type: 'string' },
+                  tz: { type: 'string' },
+                },
+                required: ['kind'],
+              },
+            }));
+        }
+        if (actions?.followupList) context.contribute('tools', 'followups_list', tool('followups_list', '查看已预约的主动跟进和静默巡检任务及上次运行结果。', async (args, signal) => { signal.throwIfAborted(); return actions.followupList!(args); }, { projectId: { type: 'string' }, todoId: { type: 'string' }, status: { type: 'string', enum: ['active', 'done', 'cancelled'] } }));
+        if (actions?.followupCancel) context.contribute('tools', 'followup_cancel', tool('followup_cancel', '取消不再需要的主动跟进或巡检任务。', async (args, signal) => { signal.throwIfAborted(); return actions.followupCancel!(String(args.id ?? '')); }, { id: { type: 'string' } }));
+        if (actions?.notifyUser) context.contribute('tools', 'notify_user', tool('notify_user', '向主人发送一条主动通知或会前简报卡片。urgency="now" 立即推送到 Web 和飞书；urgency="brief" 放入下一次早晚简报汇总，不立即打扰。可附带最多 4 个外链按钮（如入会链接、云文档链接）。', async (args, signal) => { signal.throwIfAborted(); return actions.notifyUser!(args); }, {
+          title: { type: 'string', description: '卡片标题。' },
+          text: { type: 'string', description: '通知正文，面向手机端阅读，先给结论再分点。' },
+          urgency: { type: 'string', enum: ['now', 'brief'], description: '默认 now 立即推；brief 延后汇总进简报。' },
+          projectId: { type: 'string' },
+          todoId: { type: 'string' },
+          dedupKey: { type: 'string' },
+          links: {
+            type: 'array',
+            items: { type: 'object', properties: { label: { type: 'string' }, url: { type: 'string' } }, required: ['label', 'url'], additionalProperties: false },
+          },
+        }));
         if (actions?.scheduledWorkPropose) {
           // Describe the strict host protocol here; execution still passes unchanged to core validation.
           const nonempty: JsonObject = { type: 'string', minLength: 1, pattern: '\\S' };

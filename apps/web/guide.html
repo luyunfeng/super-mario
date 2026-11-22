@@ -1,0 +1,664 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Super Mario · 使用教程与架构思路图</title>
+  <style>
+    :root {
+      --bg: #FAF9F5;
+      --surface: #FFFFFF;
+      --surface-alt: #F0EEE6;
+      --oat: #E3DACC;
+      --border: #D1CFC5;
+      --text: #141413;
+      --text-2: #3D3D3A;
+      --muted: #87867F;
+      --accent: #D97757;
+      --accent-soft: #FBECE6;
+      --olive: #788C5D;
+      --olive-soft: #EEF3E8;
+      --blue: #4F7CAC;
+      --blue-soft: #EAF1F8;
+      --amber: #C48B28;
+      --amber-soft: #FBF4E4;
+      --serif: ui-serif, Georgia, "Songti SC", "Noto Serif SC", serif;
+      --sans: system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: var(--sans); line-height: 1.6; }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 44px 24px 64px; }
+    body.embed .wrap { padding: 20px 16px 28px; }
+    body.embed .top-bar .back-link { display: none; }
+
+    .eyebrow {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .top-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 28px;
+      border-bottom: 1.5px solid var(--border);
+      padding-bottom: 20px;
+    }
+    h1 {
+      font-family: var(--serif);
+      font-weight: 500;
+      font-size: clamp(24px, 3vw, 34px);
+      letter-spacing: -0.01em;
+      margin: 0 0 6px;
+    }
+    .lead { color: var(--text-2); margin: 0; font-size: 15px; max-width: 680px; }
+    .top-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 14px; border-radius: 8px;
+      border: 1.5px solid var(--border); background: var(--surface);
+      color: var(--text); font-size: 13px; font-weight: 500;
+      cursor: pointer; text-decoration: none; transition: all 0.16s ease;
+    }
+    .btn:hover { border-color: var(--text); background: var(--surface-alt); }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn.primary:hover { filter: brightness(0.95); }
+    .btn.active { background: var(--text); border-color: var(--text); color: #fff; }
+
+    .tabs { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+    .panel {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      padding: 22px;
+      margin-bottom: 24px;
+    }
+    .panel-head {
+      display: flex; flex-wrap: wrap; align-items: center;
+      justify-content: space-between; gap: 12px; margin-bottom: 16px;
+    }
+    .panel-title { font-family: var(--serif); font-size: 20px; font-weight: 500; margin: 0; }
+
+    /* Scenario bar */
+    .scenarios { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .scenario-btn {
+      padding: 7px 12px; border-radius: 999px; font-size: 12.5px;
+      border: 1.5px solid var(--border); background: var(--surface-alt);
+      color: var(--text-2); cursor: pointer; transition: all 0.16s ease;
+    }
+    .scenario-btn:hover { border-color: var(--accent); color: var(--text); }
+    .scenario-btn.is-active { background: var(--accent-soft); border-color: var(--accent); color: #9A4123; font-weight: 600; }
+
+    .arch-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.7fr) minmax(260px, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+    @media (max-width: 900px) { .arch-grid { grid-template-columns: 1fr; } }
+
+    .svg-stage {
+      background: var(--bg);
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      overflow-x: auto;
+    }
+    svg.arch-svg { width: 100%; min-width: 600px; height: auto; display: block; }
+    .layer-box { fill: #FFFFFF; stroke: #D1CFC5; stroke-width: 1.2; rx: 10; }
+    .layer-label { font-family: var(--mono); font-size: 10px; fill: #87867F; letter-spacing: 0.08em; }
+
+    .node { cursor: pointer; transition: transform 0.15s ease; }
+    .node rect { fill: #FAF9F5; stroke: #D1CFC5; stroke-width: 1.4; rx: 8; transition: all 0.2s ease; }
+    .node:hover rect { stroke: var(--accent); fill: #FFFDF9; }
+    .node.is-selected rect { stroke: var(--accent); stroke-width: 2.2; fill: var(--accent-soft); }
+    .node.is-lit rect { stroke: var(--olive); stroke-width: 2.4; fill: var(--olive-soft); }
+    .node-title { font-size: 12.5px; font-weight: 600; fill: #141413; pointer-events: none; }
+    .node-sub { font-size: 10.5px; fill: #66655E; pointer-events: none; }
+    .badge-pill { font-family: var(--mono); font-size: 9.5px; fill: #9A4123; pointer-events: none; }
+
+    .edge { fill: none; stroke: #D1CFC5; stroke-width: 1.6; stroke-dasharray: 4 4; transition: stroke 0.25s ease, stroke-width 0.25s ease; }
+    .edge.is-active {
+      stroke: var(--accent);
+      stroke-width: 2.6;
+      stroke-dasharray: 7 5;
+      animation: dashFlow 0.8s linear infinite;
+    }
+    @keyframes dashFlow {
+      from { stroke-dashoffset: 24; }
+      to { stroke-dashoffset: 0; }
+    }
+
+    .inspector {
+      background: var(--bg);
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+    }
+    .inspector-tag {
+      display: inline-block; font-family: var(--mono); font-size: 11px;
+      padding: 2px 8px; border-radius: 999px;
+      background: var(--oat); color: var(--text-2); margin-bottom: 8px;
+    }
+    .inspector h3 { margin: 0 0 8px; font-size: 17px; font-family: var(--serif); font-weight: 500; }
+    .inspector p { margin: 0 0 12px; font-size: 13.5px; color: var(--text-2); }
+    .inspector ul { margin: 0 0 12px; padding-left: 18px; font-size: 13px; color: var(--text-2); }
+    .inspector li { margin-bottom: 5px; }
+
+    .step-ticker {
+      margin-top: 14px;
+      padding: 12px 14px;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: 8px;
+      font-size: 13px;
+    }
+    .step-ticker strong { color: var(--accent); font-family: var(--mono); font-size: 12px; }
+    .step-controls { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+
+    /* Tutorial cards */
+    .steps-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+      gap: 14px;
+    }
+    .step-card {
+      background: var(--bg);
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .step-num {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--accent);
+      font-weight: 600;
+      letter-spacing: 0.06em;
+    }
+    .step-card h3 { margin: 0; font-size: 16px; font-family: var(--serif); font-weight: 500; }
+    .step-card p { margin: 0; font-size: 13px; color: var(--text-2); }
+    .prompt-chip {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--surface);
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      color: var(--text);
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      transition: border-color 0.15s ease;
+    }
+    .prompt-chip:hover { border-color: var(--accent); }
+    .prompt-chip span.copy { font-size: 11px; color: var(--accent); white-space: nowrap; }
+
+    .rules-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 12px;
+    }
+    .rule-card {
+      background: var(--bg);
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .rule-card h4 { margin: 0 0 6px; font-size: 14px; color: var(--text); }
+    .rule-card p { margin: 0; font-size: 12.5px; color: var(--text-2); }
+    .pill-ok { background: var(--olive-soft); color: #4A5A36; }
+    .pill-warn { background: var(--amber-soft); color: #7E5611; }
+    .pill-info { background: var(--blue-soft); color: #2D5379; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top-bar">
+      <div>
+        <div class="eyebrow">SUPER MARIO · ARCHITECTURE &amp; PLAYBOOK</div>
+        <h1>使用教程与架构思路图</h1>
+        <p class="lead">默认主 Agent（pi）作为总调度官：只读调研全面放开，主动预约跟进与静默巡检，外部写操作与外发严格走确认闭环。</p>
+      </div>
+      <div class="top-actions">
+        <a class="btn back-link" href="/#home">← 返回工作台首页</a>
+        <a class="btn primary back-link" href="/#chat">去和主 Agent 对话</a>
+      </div>
+    </div>
+
+    <div class="tabs" role="tablist">
+      <button class="btn active" data-tab="arch" type="button">1. 动态架构思路图</button>
+      <button class="btn" data-tab="tutorial" type="button">2. 五步上手教程</button>
+      <button class="btn" data-tab="safety" type="button">3. 安全与防打扰设计</button>
+    </div>
+
+    <!-- TAB 1: ARCHITECTURE -->
+    <section class="panel" id="tab-arch">
+      <div class="panel-head">
+        <div>
+          <div class="eyebrow">INTERACTIVE FLOW</div>
+          <h2 class="panel-title">点击节点看职责，点击场景看实时数据流</h2>
+        </div>
+      </div>
+
+      <div class="scenarios" id="scenario-bar">
+        <button class="scenario-btn is-active" data-scene="premeeting" type="button">🔔 场景 A：会前 10 分钟主动简报</button>
+        <button class="scenario-btn" data-scene="dispatch" type="button">🚀 场景 B：派活执行 &amp; 回复卡片续派</button>
+        <button class="scenario-btn" data-scene="inbox" type="button">📥 场景 C：收件只读查证 &amp; 草稿确认</button>
+        <button class="scenario-btn" data-scene="supervise" type="button">🛡️ 场景 D：督办巡检 &amp; 静默消化</button>
+      </div>
+
+      <div class="arch-grid">
+        <div class="svg-stage">
+          <svg class="arch-svg" viewBox="0 0 760 470" aria-label="Super Mario 架构思路图">
+            <defs>
+              <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="#D97757" />
+              </marker>
+              <marker id="arrow-muted" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="#C4C2B8" />
+              </marker>
+            </defs>
+
+            <!-- Layer 1: Channels -->
+            <rect class="layer-box" x="14" y="12" width="732" height="90" />
+            <text class="layer-label" x="28" y="30">01 · 入口与飞书渠道层</text>
+
+            <g class="node" data-node="web" transform="translate(30, 40)">
+              <rect width="195" height="50" />
+              <text class="node-title" x="12" y="22">Web 工作台</text>
+              <text class="node-sub" x="12" y="38">首页 · 对话 · 项目 · 代码侧栏</text>
+            </g>
+            <g class="node" data-node="feishu-bot" transform="translate(260, 40)">
+              <rect width="225" height="50" />
+              <text class="node-title" x="12" y="22">飞书机器人 &amp; 交互卡片</text>
+              <text class="node-sub" x="12" y="38">外链按钮 · 回复卡片直接续派</text>
+            </g>
+            <g class="node" data-node="feishu-collect" transform="translate(520, 40)">
+              <rect width="210" height="50" />
+              <text class="node-title" x="12" y="22">飞书个人只读采集</text>
+              <text class="node-sub" x="12" y="38">私聊/群 · 日历冲突 · 会议纪要</text>
+            </g>
+
+            <!-- Layer 2: Core & Agents -->
+            <rect class="layer-box" x="14" y="124" width="732" height="196" />
+            <text class="layer-label" x="28" y="142">02 · 服务端核心与 PI 总调度中枢（模块化单体 + SQLITE）</text>
+
+            <g class="node is-selected" data-node="pi-main" transform="translate(30, 154)">
+              <rect width="240" height="72" />
+              <text class="node-title" x="12" y="22">pi 主 Agent（总调度官）</text>
+              <text class="node-sub" x="12" y="39">紧凑态势快照 · 自主编排与调研</text>
+              <text class="badge-pill" x="12" y="58">schedule_followup · notify_user</text>
+            </g>
+            <g class="node" data-node="scheduler" transform="translate(300, 154)">
+              <rect width="205" height="72" />
+              <text class="node-title" x="12" y="22">持久事件 &amp; 调度引擎</text>
+              <text class="node-sub" x="12" y="39">eventbox · schedules · dailybrief</text>
+              <text class="badge-pill" x="12" y="58">once / interval / cron · asked</text>
+            </g>
+            <g class="node" data-node="sub-agents" transform="translate(532, 154)">
+              <rect width="198" height="72" />
+              <text class="node-title" x="12" y="22">后台智囊团（只读）</text>
+              <text class="node-sub" x="12" y="39">督办（SILENT 消化）· 收件助理</text>
+              <text class="badge-pill" x="12" y="58">查实后起草 / 阻塞才打扰</text>
+            </g>
+
+            <g class="node" data-node="readonly-tools" transform="translate(30, 244)">
+              <rect width="335" height="60" />
+              <text class="node-title" x="12" y="22">只读调研工具层（免审批放开）</text>
+              <text class="node-sub" x="12" y="40">calendar_agenda · workspace_code/diff · knowledge · inbox</text>
+            </g>
+            <g class="node" data-node="safety-ledger" transform="translate(395, 244)">
+              <rect width="335" height="60" />
+              <text class="node-title" x="12" y="22">安全边界 &amp; 副作用账本（写动作收口）</text>
+              <text class="node-sub" x="12" y="40">approvals · outbox · effects（unknown 绝不重派）</text>
+            </g>
+
+            <!-- Layer 3: Agent Nodes -->
+            <rect class="layer-box" x="14" y="344" width="732" height="108" />
+            <text class="layer-label" x="28" y="362">03 · 远端执行机代理（SUPER-MARIO-AGENT · 出站 WEBSOCKET）</text>
+
+            <g class="node" data-node="agent-node" transform="translate(30, 374)">
+              <rect width="235" height="62" />
+              <text class="node-title" x="12" y="23">执行机代理 &amp; 工作区</text>
+              <text class="node-sub" x="12" y="41">项目目录绑定 · 只读代码/Git Diff RPC</text>
+            </g>
+            <g class="node" data-node="cli-executors" transform="translate(295, 374)">
+              <rect width="225" height="62" />
+              <text class="node-title" x="12" y="23">外部 CLI 执行者</text>
+              <text class="node-sub" x="12" y="41">Claude Code · Codex · Pi CLI</text>
+            </g>
+            <g class="node" data-node="native-result" transform="translate(548, 374)">
+              <rect width="182" height="62" />
+              <text class="node-title" x="12" y="23">原生结果回传</text>
+              <text class="node-sub" x="12" y="41">结果归档 ≠ 待办验收</text>
+            </g>
+
+            <!-- Edges -->
+            <path id="edge-web-pi" class="edge" d="M 128 90 L 128 154" marker-end="url(#arrow-muted)" />
+            <path id="edge-bot-pi" class="edge" d="M 320 90 L 210 154" marker-end="url(#arrow-muted)" />
+            <path id="edge-collect-tools" class="edge" d="M 625 90 L 625 154" marker-end="url(#arrow-muted)" />
+            <path id="edge-pi-sched" class="edge" d="M 270 188 L 300 188" marker-end="url(#arrow-muted)" />
+            <path id="edge-sched-pi" class="edge" d="M 300 202 L 270 202" marker-end="url(#arrow-muted)" />
+            <path id="edge-pi-tools" class="edge" d="M 150 226 L 150 244" marker-end="url(#arrow-muted)" />
+            <path id="edge-sub-tools" class="edge" d="M 560 226 L 340 244" marker-end="url(#arrow-muted)" />
+            <path id="edge-pi-ledger" class="edge" d="M 270 216 L 440 244" marker-end="url(#arrow-muted)" />
+            <path id="edge-ledger-bot" class="edge" d="M 480 244 C 480 140, 420 130, 390 90" marker-end="url(#arrow-muted)" />
+            <path id="edge-ledger-cli" class="edge" d="M 520 304 L 420 374" marker-end="url(#arrow-muted)" />
+            <path id="edge-tools-node" class="edge" d="M 160 304 L 145 374" marker-end="url(#arrow-muted)" />
+            <path id="edge-cli-result" class="edge" d="M 520 405 L 548 405" marker-end="url(#arrow-muted)" />
+            <path id="edge-result-sub" class="edge" d="M 640 374 L 640 226" marker-end="url(#arrow-muted)" />
+          </svg>
+        </div>
+
+        <div class="inspector" id="inspector">
+          <span class="inspector-tag" id="ins-tag">核心中枢</span>
+          <h3 id="ins-title">pi 主 Agent（总调度官）</h3>
+          <p id="ins-desc">每轮注入紧凑 Markdown 态势概览与共享事实，负责理解目标、自主只读查证、拆解任务并预约后续主动跟进。</p>
+          <ul id="ins-points">
+            <li>早报读日历后自动调用 <code>schedule_followup</code> 约会前 10 分钟简报</li>
+            <li>支持静默巡检（<code>push="asked"</code>），无异常不打扰，有变化调 <code>notify_user</code></li>
+            <li>不直接执行高危外部动作，对外回复和派活统一走审批/草稿门控</li>
+          </ul>
+          <div class="step-ticker">
+            <strong id="ticker-step">STEP 1/4 · 会前主动简报</strong>
+            <div id="ticker-text" style="margin-top:4px;">早间简报定时触发，唤醒 pi 主 Agent（只读上下文）。</div>
+            <div class="step-controls">
+              <button class="btn" id="btn-prev" type="button">上一步</button>
+              <button class="btn primary" id="btn-next" type="button">下一步</button>
+              <button class="btn" id="btn-play" type="button">暂停自动播放</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: TUTORIAL -->
+    <section class="panel" id="tab-tutorial">
+      <div class="panel-head">
+        <div>
+          <div class="eyebrow">QUICKSTART · 5 STEPS</div>
+          <h2 class="panel-title">五步上手：把 Super Mario 用成主动工作搭档</h2>
+        </div>
+      </div>
+      <div class="steps-grid">
+        <article class="step-card">
+          <span class="step-num">STEP 01 · 配置底座</span>
+          <h3>接入主模型与执行机</h3>
+          <p>在「Agent」页配置主模型（Codex CLI / OpenAI 兼容 / Anthropic），并在开发机运行 <code>super-mario-agent</code> 主动连回服务端。</p>
+          <a class="btn" href="/#agent" target="_top">打开 Agent 配置 →</a>
+        </article>
+
+        <article class="step-card">
+          <span class="step-num">STEP 02 · 绑定项目与记忆</span>
+          <h3>让 Agent 懂你的代码与原则</h3>
+          <p>在「项目」页发现并绑定本机代码目录；在「记忆」页写下全局工作原则，项目知识和个人记忆分层隔离。</p>
+          <a class="btn" href="/#projects" target="_top">管理项目与目录 →</a>
+        </article>
+
+        <article class="step-card">
+          <span class="step-num">STEP 03 · 接通飞书</span>
+          <h3>机器人互动 + 个人只读采集</h3>
+          <p>在「渠道」页绑定飞书机器人（支持全局/项目/事项作用域），并授权个人飞书账号，即可解锁私聊/群采集、会议纪要和<strong>飞书日历冲突检测</strong>。</p>
+          <a class="btn" href="/#channels" target="_top">配置飞书渠道 →</a>
+        </article>
+
+        <article class="step-card">
+          <span class="step-num">STEP 04 · 交给 pi 主动调度</span>
+          <h3>会前简报 &amp; 无事不打扰巡检</h3>
+          <p>直接对主 Agent 说出调度意图，它会自动查日历/项目/代码，并预约免审批的只读自唤醒（点击下方示例可复制）：</p>
+          <div class="prompt-chip" data-copy="查一下我今天的飞书日程和冲突，给重要会议在会前 10 分钟预约一份会前简报">
+            <span>查今日日程，重要会议前 10 分钟发会前简报</span>
+            <span class="copy">复制</span>
+          </div>
+          <div class="prompt-chip" data-copy="帮我设一个每小时的静默巡检（push=asked），检查项目有没有失败或卡住的 Run，有异常再通知我">
+            <span>每小时静默巡检失败/卡住的任务，有异常再叫我</span>
+            <span class="copy">复制</span>
+          </div>
+        </article>
+
+        <article class="step-card">
+          <span class="step-num">STEP 05 · 飞书卡片闭环</span>
+          <h3>直接回复卡片续派 &amp; 核对代码</h3>
+          <p>后台 Agent 跑完后飞书会收到<strong>绿色结果卡</strong>，直接<strong>引用回复这张卡</strong>就能继续给对应项目的 Agent 派活；也可让主 Agent 直接读工作区代码与 Git Diff 帮你把关。</p>
+          <div class="prompt-chip" data-copy="帮我看看这个项目最近改了哪些代码（workspace_git_diff），对照待办检查有没有遗漏">
+            <span>查当前项目 Git Diff，对照待办检查遗漏</span>
+            <span class="copy">复制</span>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- TAB 3: SAFETY -->
+    <section class="panel" id="tab-safety">
+      <div class="panel-head">
+        <div>
+          <div class="eyebrow">GUARDRAILS</div>
+          <h2 class="panel-title">为什么敢让它主动跑？4 条硬安全底线</h2>
+        </div>
+      </div>
+      <div class="rules-grid">
+        <div class="rule-card">
+          <span class="inspector-tag pill-ok">只读放开 · 写动作收口</span>
+          <h4>主动唤醒强制 readOnly</h4>
+          <p>早报、会前简报、静默巡检、督办与收件处理都允许充分调用只读工具查证；但对外发消息、派发写任务、审批均须经 <code>approvals</code> 显式确认。</p>
+        </div>
+        <div class="rule-card">
+          <span class="inspector-tag pill-warn">事实与验收分离</span>
+          <h4>执行结束 ≠ 待办完成</h4>
+          <p>后台 CLI 返回 <code>completed</code> 只记录原生执行结果，绝不自动勾选待办完成；需要你或督办对照 <code>doneWhen</code> 核验实际交付。</p>
+        </div>
+        <div class="rule-card">
+          <span class="inspector-tag pill-warn">副作用幂等账本</span>
+          <h4>unknown 绝不自动重派</h4>
+          <p>发送消息或启动执行中途断线、超时或进程重启，一律标记 <code>unknown</code> 等人核实，杜绝重复发消息或重复跑变更脚本。</p>
+        </div>
+        <div class="rule-card">
+          <span class="inspector-tag pill-info">少打扰原则</span>
+          <h4>静默消化 + 分级通知</h4>
+          <p>督办与巡检确认无异常时返回 <code>SILENT:</code> 静默归档；低优先级进展走 <code>urgency="brief"</code> 汇总进早晚报，只把真正需要你拍板的 P0 立即推飞书。</p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    if (new URLSearchParams(location.search).get('embed') === '1') {
+      document.body.classList.add('embed');
+    }
+
+    const NODES = {
+      'web': {
+        tag: '入口层', title: 'Web 工作台',
+        desc: '浏览器端主界面，提供首页态势、主对话、项目工作区、代码只读侧栏、终端观察和待办/收发件管理。',
+        points: ['实时状态通过 WebSocket 与服务端同步', '支持按项目范围（Scope）过滤全部视图', '首页底部内置本交互图解并支持独立全屏打开']
+      },
+      'feishu-bot': {
+        tag: '飞书互动', title: '飞书机器人 & 交互卡片',
+        desc: '支持全局、项目、事项多机器人与群内 @ 协作，推送带外链按钮和工作台导航的交互卡片。',
+        points: ['后台结果卡采用绿色主题并自动绑定项目上下文', '直接引用回复结果卡即可续派给对应项目 Agent', '正文中的会议/文档外链自动提取为卡片快捷按钮']
+      },
+      'feishu-collect': {
+        tag: '只读数据源', title: '飞书个人只读采集',
+        desc: '通过授权的个人飞书账号（lark-cli）只读拉取私聊、群聊、智能纪要和日程数据。',
+        points: ['私聊与群聊增量分页采集，独立持久化游标', 'calendar_agenda 自动计算重叠时间冲突并提取入会链接', '会议纪要自动归集进知识整理队列']
+      },
+      'pi-main': {
+        tag: '核心中枢', title: 'pi 主 Agent（总调度官）',
+        desc: '基于 pi SDK 封装的总调度官，每轮读取紧凑 Markdown 态势摘要，统筹查证、拆解任务与主动跟进。',
+        points: ['支持 schedule_followup 预约一次性跟进或周期巡检', '支持 notify_user 按 now/brief 两级紧急度通知主人', '早晚报由程序算真实事实后调用主 Agent 做高密度总结']
+      },
+      'scheduler': {
+        tag: '后台驱动', title: '持久事件 & 调度引擎',
+        desc: '由 eventbox、schedules 和 dailybrief 组成的持久化后台调度体系，重启不丢任务、幂等不重跑。',
+        points: ['支持 once / interval / cron 与用户时区', 'push="asked" 巡检模式默认安静，有事才推送', '同时承载早晚简报、项目跟进、待办提醒与主动跟进']
+      },
+      'sub-agents': {
+        tag: '后台智囊', title: '督办 Agent & 收件助理（只读）',
+        desc: '独立后台只读运行时：督办核验 Run 交付证据，收件助理合并对话并帮主人起草可执行建议。',
+        points: ['已开放只读工具白名单（知识/待办/Run/代码/日历）', '督办确认误报或正常推进时回复 SILENT: 静默归档', '收件草稿必须先查实再起草，不写空壳占位符']
+      },
+      'readonly-tools': {
+        tag: '只读调研', title: '只读调研工具层（免审批放开）',
+        desc: '面向主 Agent、督办与收件处理的安全只读能力集合，所有读取受项目作用域与敏感文件白名单保护。',
+        points: ['calendar_agenda：日历安排 + 时间冲突检测', 'workspace_code_list / read / git_diff：查看项目代码与改动', 'knowledge_list / todos_list / runs_list / inbox_list']
+      },
+      'safety-ledger': {
+        tag: '安全底线', title: '安全边界 & 副作用账本',
+        desc: '所有写操作和对外动作统一经过 approvals、outbox 和 effects 账本，杜绝越权与重复执行。',
+        points: ['内容版本绑定：审批后内容变化自动失效', 'unknown 状态绝不自动重试，等人核实', '发送授权与连接开关相互独立']
+      },
+      'agent-node': {
+        tag: '执行机代理', title: 'super-mario-agent（远端代理）',
+        desc: '运行在各台开发机上，通过出站 WebSocket 主动连接服务端，免 SSH、断线自动重连。',
+        points: ['安全暴露项目目录发现与只读代码/Diff RPC', '过滤 .env / 密钥 / 私钥与目录越界访问', '托管本机终端会话与 CLI 进程生命周期']
+      },
+      'cli-executors': {
+        tag: '外部执行者', title: '外部 CLI 执行者',
+        desc: '在真实开发目录中执行编码、排查和测试任务，支持 Claude Code、Codex 与 Pi CLI。',
+        points: ['派发必须声明 doneWhen 与 expectMinutes', '会话断线不杀进程，可随时回终端接管', '只读与可写会话权限清晰分离']
+      },
+      'native-result': {
+        tag: '结果回传', title: '原生结果回传',
+        desc: '从 CLI 原生协议与记录中提取真实阶段与结果，不靠终端读屏猜测完成。',
+        points: ['Run 结束自动写入共享事实并触发督办核验', '离场或开启始终通知时推送绿色飞书结果卡', '执行 completed 与待办验收严格分离']
+      }
+    };
+
+    const SCENES = {
+      premeeting: [
+        { nodes: ['scheduler', 'pi-main'], edges: ['edge-sched-pi'], text: '早报或会前 10 分钟定时触发，eventbox 唤醒 pi 主 Agent（强制只读）。' },
+        { nodes: ['pi-main', 'readonly-tools', 'feishu-collect'], edges: ['edge-pi-tools', 'edge-collect-tools'], text: '主 Agent 调用 calendar_agenda 查日程与时间冲突，并交叉检索收件箱、待办与项目进展。' },
+        { nodes: ['pi-main', 'scheduler'], edges: ['edge-pi-sched'], text: '若在早报发现下午有重要会议，主 Agent 自动调用 schedule_followup 预约会前 10 分钟准备。' },
+        { nodes: ['pi-main', 'safety-ledger', 'feishu-bot'], edges: ['edge-pi-ledger', 'edge-ledger-bot'], text: '整理 3 条高密度议题并调用 notify_user，经 outbox 推送带入会/文档外链按钮的飞书卡片。' }
+      ],
+      dispatch: [
+        { nodes: ['web', 'feishu-bot', 'pi-main'], edges: ['edge-web-pi', 'edge-bot-pi'], text: '你在 Web 或飞书下达目标，主 Agent 先查知识与执行器，明确 doneWhen 与预计耗时。' },
+        { nodes: ['pi-main', 'safety-ledger', 'cli-executors'], edges: ['edge-pi-ledger', 'edge-ledger-cli'], text: '通过副作用账本派发到远端执行机代理，由 Claude Code / Codex 在真实项目目录异步执行。' },
+        { nodes: ['cli-executors', 'native-result', 'sub-agents'], edges: ['edge-cli-result', 'edge-result-sub'], text: '执行结束回传原生结果，督办核对交付证据，并经由 outbox 推送绿色结果卡片。' },
+        { nodes: ['feishu-bot', 'pi-main'], edges: ['edge-ledger-bot', 'edge-bot-pi'], text: '卡片自动绑定项目上下文；你在飞书直接引用回复这张卡，即可无缝续派给同一个项目 Agent。' }
+      ],
+      inbox: [
+        { nodes: ['feishu-collect', 'sub-agents'], edges: ['edge-collect-tools'], text: '飞书个人只读采集将私聊、群聊与会议纪要入箱，按联系人合并交给收件处理助手。' },
+        { nodes: ['sub-agents', 'readonly-tools', 'agent-node'], edges: ['edge-sub-tools', 'edge-tools-node'], text: '收件助手调用只读工具（待办、知识、项目代码/Diff）先查实情况，不凭截断原文盲猜。' },
+        { nodes: ['sub-agents', 'safety-ledger'], edges: ['edge-pi-ledger'], text: '生成完整无占位符的回复/待办/派活草稿，经版本绑定进入待你确认队列（绝不私自外发）。' },
+        { nodes: ['safety-ledger', 'feishu-bot'], edges: ['edge-ledger-bot'], text: '你一键确认后，由副作用账本精确执行一次并记录回执。' }
+      ],
+      supervise: [
+        { nodes: ['native-result', 'sub-agents'], edges: ['edge-result-sub'], text: '30 秒督办巡检捕获任务结束、卡住或孤儿信号，唤醒独立只读督办 Agent。' },
+        { nodes: ['sub-agents', 'readonly-tools', 'agent-node'], edges: ['edge-sub-tools', 'edge-tools-node'], text: '督办调用 runs_list 与 workspace_git_diff 核验真实改动，不轻信执行者自述。' },
+        { nodes: ['sub-agents'], edges: [], text: '若属正常推进或误报，督办返回 SILENT: 静默归档，不弹卡、不打扰你。' },
+        { nodes: ['sub-agents', 'safety-ledger', 'feishu-bot'], edges: ['edge-ledger-bot'], text: '确有真实阻塞或需验收拍板时，才输出带推荐选项的简明结论卡推送通知。' }
+      ]
+    };
+
+    // Node inspector
+    function selectNode(id) {
+      const data = NODES[id];
+      if (!data) return;
+      document.querySelectorAll('.node').forEach(el => el.classList.toggle('is-selected', el.dataset.node === id));
+      document.getElementById('ins-tag').textContent = data.tag;
+      document.getElementById('ins-title').textContent = data.title;
+      document.getElementById('ins-desc').textContent = data.desc;
+      document.getElementById('ins-points').innerHTML = data.points.map(p => `<li>${p}</li>`).join('');
+    }
+    document.querySelectorAll('.node').forEach(el => {
+      el.addEventListener('click', () => selectNode(el.dataset.node));
+    });
+
+    // Scenario player
+    let currentScene = 'premeeting';
+    let stepIndex = 0;
+    let playing = true;
+    let timer = null;
+
+    function renderStep() {
+      const steps = SCENES[currentScene];
+      const step = steps[stepIndex];
+      document.querySelectorAll('.node').forEach(el => el.classList.toggle('is-lit', step.nodes.includes(el.dataset.node)));
+      document.querySelectorAll('.edge').forEach(el => {
+        const active = step.edges.includes(el.id);
+        el.classList.toggle('is-active', active);
+        el.setAttribute('marker-end', active ? 'url(#arrow)' : 'url(#arrow-muted)');
+      });
+      const label = document.querySelector(`.scenario-btn[data-scene="${currentScene}"]`)?.textContent ?? '';
+      document.getElementById('ticker-step').textContent = `STEP ${stepIndex + 1}/${steps.length} · ${label}`;
+      document.getElementById('ticker-text').textContent = step.text;
+    }
+
+    function scheduleNext() {
+      clearInterval(timer);
+      if (!playing) return;
+      timer = setInterval(() => {
+        stepIndex = (stepIndex + 1) % SCENES[currentScene].length;
+        renderStep();
+      }, 3200);
+    }
+
+    document.querySelectorAll('.scenario-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        currentScene = btn.dataset.scene;
+        stepIndex = 0;
+        document.querySelectorAll('.scenario-btn').forEach(b => b.classList.toggle('is-active', b === btn));
+        renderStep();
+        scheduleNext();
+      });
+    });
+
+    document.getElementById('btn-prev').addEventListener('click', () => {
+      const len = SCENES[currentScene].length;
+      stepIndex = (stepIndex - 1 + len) % len;
+      renderStep();
+      scheduleNext();
+    });
+    document.getElementById('btn-next').addEventListener('click', () => {
+      stepIndex = (stepIndex + 1) % SCENES[currentScene].length;
+      renderStep();
+      scheduleNext();
+    });
+    document.getElementById('btn-play').addEventListener('click', (e) => {
+      playing = !playing;
+      e.target.textContent = playing ? '暂停自动播放' : '继续自动播放';
+      scheduleNext();
+    });
+
+    // Tabs (scroll / focus)
+    document.querySelectorAll('.tabs .btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tabs .btn').forEach(b => b.classList.toggle('active', b === btn));
+        const target = document.getElementById('tab-' + btn.dataset.tab);
+        target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+
+    // Copy chips
+    document.querySelectorAll('.prompt-chip').forEach(chip => {
+      chip.addEventListener('click', async () => {
+        const text = chip.dataset.copy;
+        try { await navigator.clipboard.writeText(text); } catch {}
+        const label = chip.querySelector('.copy');
+        if (label) {
+          label.textContent = '已复制 ✓';
+          setTimeout(() => { label.textContent = '复制'; }, 1400);
+        }
+      });
+    });
+
+    renderStep();
+    scheduleNext();
+  </script>
+</body>
+</html>

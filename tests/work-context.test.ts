@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStore } from '../packages/core/src/store.ts';
-import { buildWorkContext } from '../packages/core/src/work-context.ts';
+import { buildWorkContext, formatWorkContextMarkdown } from '../packages/core/src/work-context.ts';
 
 async function fixture(t: test.TestContext) {
   const dir = await mkdtemp(join(tmpdir(), 'mario-work-context-'));
@@ -127,4 +127,15 @@ test('executor projection refreshes across SQLite connections, bounds groups and
   const unmarked = buildWorkContext({ list() { throw new Error('must not read'); }, get() { throw new Error('must not read'); } },
     { kind: 'unmarked' }, undefined, { executors });
   assert.deepEqual(Object.keys(unmarked).sort(), ['scope', 'unavailable']);
+});
+
+test('formatWorkContextMarkdown renders concise overview and respects unmarked scope', async t => {
+  const store = await fixture(t);
+  const md = formatWorkContextMarkdown(buildWorkContext(store, { kind: 'global' }));
+  assert.match(md, /待你拍板 \(2\)/);
+  assert.match(md, /开放待办 \(2\)/);
+  assert.match(md, /执行态势/);
+  assert.match(md, /global-machine\(离线\)/);
+  const unmarked = formatWorkContextMarkdown(buildWorkContext(store, { kind: 'unmarked' }));
+  assert.match(unmarked, /当前范围不可用/);
 });

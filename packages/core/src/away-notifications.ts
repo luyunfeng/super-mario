@@ -11,8 +11,10 @@ export function createAwayNotifications({ store, background, presence, bots, cha
   function flush() {
     // Re-register unchanged routes after restart so already queued outbox items can resume.
     for (const bot of bots().filter(b => b.scope.kind !== 'unmarked' && b.enabled && b.configured && b.connected && b.paired && b.replyTarget)) channel(bot);
-    const disabled = store.get<{enabled:boolean}>('notifications.settings','away')?.enabled === false;
-    if (disabled || presence.status().present) {
+    const settings = store.get<{enabled?:boolean; alwaysNotifyRuns?:boolean}>('notifications.settings','away');
+    const disabled = settings?.enabled === false;
+    const alwaysNotifyRuns = settings?.alwaysNotifyRuns === true;
+    if (disabled || (presence.status().present && !alwaysNotifyRuns)) {
       for (const item of list().filter(i => ['pending','queued'].includes(i.status))) {
         const outgoing = item.outboxId ? background.outbox.list().find(o=>o.id===item.outboxId) : undefined;
         // A return to Web may suppress unsent notifications, never rewrite uncertain delivery.
@@ -61,8 +63,15 @@ export function createAwayNotifications({ store, background, presence, bots, cha
     const plan = data.decisionKind === 'plan' ? store.get<{title:string}>('plans',data.decisionId!) : undefined;
     const originalRoute = message?.replyTo ? store.get<{channel:string}>('message.routes',message.replyTo) : undefined;
     const atSource = store.get<{present:boolean}>('notifications.source-presence',data.runId ? `run:${data.runId}` : `interaction:${data.id}`)?.present;
-    const skip = (atSource ?? data.webPresent ?? presence.status().present) || store.get<{enabled:boolean}>('notifications.settings','away')?.enabled === false || Boolean(originalRoute?.channel);
-    store.put('notifications.away',id,{ id,text:message?.text ?? (approval ? `等待审批：${approval.title}\n${approval.details}` : plan ? `等待确认计划：${plan.title}` : '有工作结果或决定需要你查看'),projectId,todoId,cardId:data.id,...(data.decisionKind?{decision:{kind:data.decisionKind,id:data.decisionId!,version:data.version!}}:{}),status:skip?'skipped':'pending',...(skip?{reason:Boolean(originalRoute?.channel)?'沿用原路回复，避免重复通知':'用户在场或已关闭离场通知'}:{}) });
+    const awaySettings = store.get<{enabled?:boolean; alwaysNotifyRuns?:boolean}>('notifications.settings','away');
+    const isRunFinish = event.type === 'run.finished';
+    const present = atSource ?? data.webPresent ?? presence.status().present;
+    const skip = (present && !(isRunFinish && awaySettings?.alwaysNotifyRuns === true)) || awaySettings?.enabled === false || Boolean(originalRoute?.channel);
+    const project = projectId ? store.get<Project>('projects', projectId) : undefined;
+    const runHeader = originRun ? `后台 Agent · ${originRun.machineId || originRun.executorId}${project ? ` · ${project.name}` : ''}` : '';
+    const fallbackText = message?.text
+      ?? (approval ? `等待审批：${approval.title}\n${approval.details}` : plan ? `等待确认计划：${plan.title}` : originRun ? `${runHeader}\n${originRun.error || originRun.output || '执行已结束'}` : '有工作结果或决定需要你查看');
+    store.put('notifications.away',id,{ id,text:fallbackText,projectId,todoId,cardId:data.id,...(data.decisionKind?{decision:{kind:data.decisionKind,id:data.decisionId!,version:data.version!}}:{}),status:skip?'skipped':'pending',...(skip?{reason:Boolean(originalRoute?.channel)?'沿用原路回复，避免重复通知':'用户在场或已关闭离场通知'}:{}) });
     flush(); return {status:'done'};
   } });
   // Normalize user-visible replies and decisions into the existing durable eventbox.
