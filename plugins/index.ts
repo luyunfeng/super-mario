@@ -274,24 +274,36 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             signal.throwIfAborted(); return actions.createTodo(args);
           }, { title: { type: 'string' }, notes: { type: 'string' }, projectId: { type: 'string' }, dueAt: { type: 'string' }, reminderAt: { type: 'string' }, waitingOn: { type: 'string' } }));
         }
-        context.contribute('tools', 'todos_list', tool('todos_list', '查看待办及完成事实。可用 query 按标题和备注搜索行动项。查询日历时，用用户时区的起止时间按截止时间筛选。', async (args, signal) => {
+        context.contribute('tools', 'todos_list', tool('todos_list', '读取工作台待办。status=open 查未完成，done 查已完成，all 或省略可查全部。overdue=true 仅查已过截止时间的未完成事项。可按项目、标题和备注关键词及截止时段组合筛选。', async (args, signal) => {
           signal.throwIfAborted();
           if (args.query !== undefined && typeof args.query !== 'string') throw new Error('待办关键词须为文本');
+          if (args.status !== undefined && (typeof args.status !== 'string' || !['open', 'done', 'all'].includes(args.status))) throw new Error('待办状态无效');
+          if (args.overdue !== undefined && typeof args.overdue !== 'boolean') throw new Error('逾期筛选须为布尔值');
           const words = (args.query ?? '').trim().normalize('NFC').toLowerCase().split(/\s+/).filter(Boolean);
+          const from = timeBoundary(args.dueFrom, -Infinity);
+          const before = timeBoundary(args.dueBefore, Infinity);
+          if (from >= before) throw new Error('待办查询起点必须早于终点');
+          const bounded = args.dueFrom !== undefined || args.dueBefore !== undefined;
+          const now = Date.now();
           const todos = context.store.list<Todo>('todos').filter(todo => {
+            if (args.projectId !== undefined && args.projectId !== todo.projectId) return false;
+            if (args.todoId !== undefined && args.todoId !== todo.id) return false;
+            if ((args.status === 'open' && todo.completedAt) || (args.status === 'done' && !todo.completedAt)) return false;
+            const due = Date.parse(todo.dueAt ?? '');
+            if (args.overdue && (todo.completedAt || !(due < now))) return false;
+            if (bounded && !(due >= from && due < before)) return false;
             if (!words.length) return true;
             const text = [todo.title, todo.notes].join('\n').normalize('NFC').toLowerCase();
             return words.every(word => text.includes(word));
           });
-          if (args.dueFrom === undefined && args.dueBefore === undefined) return todos as unknown as Json;
-          const from = timeBoundary(args.dueFrom, -Infinity);
-          const before = timeBoundary(args.dueBefore, Infinity);
-          if (from >= before) throw new Error('待办查询起点必须早于终点');
-          return todos.filter(todo => {
-            const due = Date.parse(todo.dueAt ?? '');
-            return due >= from && due < before;
-          }).sort((a, b) => Date.parse(a.dueAt!) - Date.parse(b.dueAt!)) as unknown as Json;
-        }, { query: { type: 'string', description: '标题或备注中的关键词，多词用空格分隔' }, dueFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, dueBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' } }));
+          if (bounded || args.overdue || args.status) {
+            const due = (todo: Todo) => todo.dueAt ? Date.parse(todo.dueAt) : Infinity;
+            todos.sort((a, b) => due(a) - due(b));
+          }
+          return todos as unknown as Json;
+        }, { query: { type: 'string', description: '标题或备注中的关键词，多词用空格分隔' }, projectId: { type: 'string' },
+          status: { type: 'string', enum: ['open', 'done', 'all'] }, overdue: { type: 'boolean' },
+          dueFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, dueBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' } }));
         const runStates = ['queued', 'running', 'completed', 'failed', 'cancelled', 'unknown'];
         context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。query 按关键词检索目标、输出、错误、分支和执行 ID，返回含出处的摘录，最近更新在前。updatedFrom 含起点，updatedBefore 不含终点，按记录更新时间筛选。用 id 读取一条完整执行记录。machineId、executorId 精确匹配执行记录登记的 ID。status 可限定登记状态。worktreeRunId 仅列出在指定工作树中另起的执行。', async ({ worktreeRunId, query, status, id, projectId, todoId, machineId, executorId, updatedFrom, updatedBefore }, signal) => {
           signal.throwIfAborted();

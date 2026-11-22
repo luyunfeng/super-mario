@@ -1213,3 +1213,55 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
     assert.equal(server.app.store.list('runs').length, 14);
   } finally { await server.close(); }
 });
+
+test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后仍以待办完成记录为准', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const answer = '逾期的月报待办是“月报待验收”。';
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /关联执行已结束仍可能待验收/);
+      const question = JSON.stringify(req.content);
+      if (question.includes('逾期')) return call('todos_list', { query: '月报', status: 'open', overdue: true }, 'overdue');
+      if (question.includes('已经完成')) return call('todos_list', { query: '月报', status: 'done' }, 'done');
+      return call('todos_list', { query: '月报', status: 'open' }, 'open');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    const titles = JSON.parse(raw).map((todo: {title: string}) => todo.title);
+    if (req.callId === 'overdue') {
+      assert.deepEqual(titles, ['月报待验收']);
+      return { role: 'assistant', content: answer };
+    }
+    if (req.callId === 'done') assert.deepEqual(titles, ['月报已验收']);
+    else assert.deepEqual(titles, ['月报待验收', '月报后续', '月报未定期限']);
+    return { role: 'assistant', content: titles.join('、') };
+  }, options => {
+    adapter = options;
+    return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    const project = await api('/projects', { name: '月报项目' });
+    const other = await api('/projects', { name: '独立项目' });
+    const past = '2000-01-01T00:00:00Z';
+    const pending = await api('/todos', { title: '月报待验收', dueAt: past, projectId: project.id });
+    await api('/todos', { title: '月报未定期限', projectId: project.id });
+    await api('/todos', { title: '月报后续', dueAt: '2099-12-01T00:00:00Z', projectId: project.id });
+    const done = await api('/todos', { title: '月报已验收', dueAt: past, projectId: project.id });
+    server.app.updateTodo(done.id, { completed: true });
+    await api('/todos', { title: '另一个项目的月报', dueAt: past, projectId: other.id });
+    server.app.store.put('runs', 'finished', { id: 'finished', projectId: project.id, todoId: pending.id, status: 'completed',
+      createdAt: past, updatedAt: past, executorId: 'fixture', conversationId: 'main', prompt: '月报', output: '执行结束' });
+    const path = '/projects/' + project.id + '/messages';
+    assert.equal(await ask('哪些月报待办尚未完成？', path), '月报待验收、月报后续、月报未定期限');
+    assert.equal(await ask('哪些月报已经完成？', path), '月报已验收');
+    assert.equal(await ask('哪些月报待办逾期？', path), answer);
+    const bot = await api('/feishu/bots', { name: '月报待办查询', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage('哪些月报待办逾期？', { ...source, messageId: 'question' });
+    await t.waitFor(() => assert.ok(sent.includes(answer)));
+    assert.equal(server.app.todos().find(todo => todo.id === pending.id)?.completedAt, undefined);
+  } finally { await server.close(); }
+});
