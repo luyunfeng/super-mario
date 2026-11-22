@@ -7,7 +7,7 @@ import { openDrawer, confirmDialog } from '../ui/overlay.js';
 
 const LAYER_HINT = { personal: 'memory.personal', global: 'memory.global', project: 'memory.project' };
 
-function originalSources(api, entry, selected) {
+function originalSources(api, entry, selected, line) {
   const path = '/knowledge/' + encodeURIComponent(entry.id) + '/sources';
   const body = h('div', { class: 'stack' });
   const section = h('details', { open: Boolean(selected) }, h('summary', null, '查看原始资料'), body);
@@ -18,11 +18,22 @@ function originalSources(api, entry, selected) {
       const { sources } = await api.get(path);
       replace(body, sources.length ? sources.map(source => {
         const text = h('pre', { class: 'small', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } });
-        const detail = h('details', { open: source.id === selected }, h('summary', null, source.title), text);
+        const notice = h('span', { role: 'status', hidden: true }, '引用的行号超出原文范围。');
+        const detail = h('details', { open: source.id === selected }, h('summary', null, source.title), notice, text);
         detail.addEventListener('toggle', async () => {
           if (!detail.open) return;
           text.textContent = '正在读取原文…';
-          try { text.textContent = (await api.get(path + '/' + encodeURIComponent(source.id))).content; }
+          try {
+            const { content } = await api.get(path + '/' + encodeURIComponent(source.id));
+            text.textContent = content;
+            if (selected !== source.id || !Number.isSafeInteger(line) || line < 1) return;
+            const lines = content.split('\n');
+            if (line > lines.length) { notice.hidden = false; return; }
+            const mark = h('mark', null, lines[line - 1]);
+            replace(text, lines.slice(0, line - 1).join('\n') + (line > 1 ? '\n' : ''), mark,
+              (line < lines.length ? '\n' : '') + lines.slice(line).join('\n'));
+            if (detail.open && section.open && mark.isConnected) mark.scrollIntoView({ block: 'center' });
+          }
           catch (error) { text.textContent = error.message; }
         });
         return detail;
@@ -33,7 +44,7 @@ function originalSources(api, entry, selected) {
   return section;
 }
 
-export function openKnowledgeDrawer({ api, store, entry, sourceId, defaults = {}, onSaved }) {
+export function openKnowledgeDrawer({ api, store, entry, sourceId, line, defaults = {}, onSaved }) {
   const projects = (store.view.snapshot?.projects ?? []).filter(item => !item.archivedAt);
   const layer = Select({ options: Object.entries(layerNames), value: entry?.layer ?? defaults.layer ?? 'personal', name: 'layer' });
   const project = Select({ options: [['', '请选择项目'], ...projects.map(item => [item.id, item.name])], value: entry?.projectId ?? defaults.projectId ?? '', name: 'projectId' });
@@ -67,7 +78,7 @@ export function openKnowledgeDrawer({ api, store, entry, sourceId, defaults = {}
   });
   const drawer = openDrawer({
     title: entry ? '编辑记忆' : '添加记忆', subtitle: entry ? `更新于 ${timeAgo(entry.updatedAt)}` : undefined,
-    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), entry && originalSources(api, entry, sourceId), note],
+    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), entry && originalSources(api, entry, sourceId, line), note],
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();

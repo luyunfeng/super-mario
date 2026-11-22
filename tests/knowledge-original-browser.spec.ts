@@ -16,8 +16,9 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   server.app.store.put('knowledge.sources', job.id, { ...job, status: 'completed', knowledgeIds: [entry.id] });
   const rawDir = join(dir, 'plugins', 'knowledge-local', 'raw'), path = join(rawDir, job.id + '.md');
   await mkdir(rawDir, { recursive: true });
-  await writeFile(path, '[09:15] <em>合成原文</em>');
-  const route = '#memory?entry=' + entry.id + '&source=' + job.id;
+  const original = '开场\n[09:15] <em>合成原文</em>\n散会';
+  await writeFile(path, original);
+  const route = '#memory?entry=' + entry.id + '&source=' + job.id + '&line=2';
   server.app.store.put('messages', 'citation', { id: 'citation', conversationId: 'main', role: 'assistant', status: 'done',
     createdAt: new Date().toISOString(), text: '依据见[查看原文](' + route + ')' });
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
@@ -29,7 +30,7 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   const dialog = page.getByRole('dialog', { name: '编辑记忆' });
   await dialog.getByText('查看原始资料').click();
   await dialog.getByText('合成会议原文', { exact: true }).click();
-  await expect(dialog.locator('pre')).toHaveText('[09:15] <em>合成原文</em>');
+  await expect(dialog.locator('pre')).toHaveText(original);
   await expect(dialog.locator('pre em')).toHaveCount(0);
   await dialog.getByRole('button', { name: '关闭' }).click();
   await page.evaluate(() => { location.hash = '#chat'; });
@@ -37,7 +38,8 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   await expect(dialog.locator('pre')).toBeVisible();
   await page.reload();
   await expect(dialog.locator('pre')).toBeVisible();
-  await expect(dialog.locator('pre')).toHaveText('[09:15] <em>合成原文</em>');
+  await expect(dialog.locator('pre')).toHaveText(original);
+  await expect(dialog.locator('pre mark')).toHaveText('[09:15] <em>合成原文</em>');
   await page.evaluate(id => { location.hash = '#memory?entry=' + id + '&source=missing'; }, entry.id);
   await expect(dialog.getByText('引用的来源已不可用。')).toBeVisible();
   await expect(dialog.locator('pre')).toBeHidden();

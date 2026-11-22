@@ -3,7 +3,7 @@ import { h } from './dom.js';
 
 function renderInline(line) {
   const parts = [];
-  const pattern = /(\[查看原文\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&source=[A-Za-z0-9_-]{1,128}\)|`[^`\n]+`|\*\*(?:[^*]|\*(?!\*))+?\*\*)/g;
+  const pattern = /(\[查看原文\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&source=[A-Za-z0-9_-]{1,128}(?:&line=[1-9][0-9]{0,8})?\)|`[^`\n]+`|\*\*(?:[^*]|\*(?!\*))+?\*\*)/g;
   let last = 0;
   for (const match of line.matchAll(pattern)) {
     if (match.index > last) parts.push(line.slice(last, match.index));

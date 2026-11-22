@@ -523,7 +523,17 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
       return call('knowledge_original', { pageId, sourceId, offset: 4000 }, 'last-page');
     }
     assert.match(materials, /原话依据甲/);
-    assert.ok(materials.includes('[查看原文](#memory?entry=' + pageId + '&source=' + sourceId + ')'));
+    if (req.callId === 'last-page') {
+      assert.ok(materials.includes('[查看原文](#memory?entry=' + pageId + '&source=' + sourceId + ')'));
+      return call('knowledge_original', { pageId, sourceId, query: '原话依据甲' }, 'hits');
+    }
+    if (req.callId === 'hits') {
+      assert.ok(materials.includes('&line=11)'));
+      assert.ok(!materials.includes('&line=12)'));
+      return call('knowledge_original', { pageId, sourceId, query: '原话依据甲', offset: 11 }, 'more-hits');
+    }
+    assert.ok(materials.includes('&line=12)'));
+    assert.ok(!materials.includes('&line=11)'));
     assert.doesNotMatch(materials, /另一个项目的结论/);
     return { role: 'assistant', content: answer };
   }, options => {
@@ -541,7 +551,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     server.app.store.put('knowledge.sources', job.id, { ...job, status: 'completed', knowledgeIds: [pageId] });
     const raw = join(dir, 'plugins', 'knowledge-local', 'raw');
     await mkdir(raw, { recursive: true });
-    await writeFile(join(raw, job.id + '.md'), '字'.repeat(4000) + '原话依据甲');
+    await writeFile(join(raw, job.id + '.md'), '字'.repeat(4000) + '\n原话依据甲'.repeat(11));
 
     const question = title + '有哪些决定？还有哪些事要确认？';
     assert.equal(await ask(question, '/projects/' + projectId + '/messages'), answer);

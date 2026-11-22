@@ -288,10 +288,12 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         });
         if (actions?.knowledgeSource) context.contribute('tools', 'knowledge_ingest', tool('knowledge_ingest', '将用户明确提供的资料加入独立知识 Agent 整理队列，默认个人知识；受保护来源先生成主人读取审批，不自动申请权限。入队或批准都不代表整理完成。', async (args, signal) => { signal.throwIfAborted(); return actions.knowledgeSource!(args); }, { url: { type: 'string' }, text: { type: 'string' }, title: { type: 'string' }, layer: { type: 'string', enum: ['personal', 'project'] }, projectId: { type: 'string' } }));
         if (actions?.knowledgeOriginal) context.contribute('tools', 'knowledge_original', tool('knowledge_original',
-          '用知识页 ID 列出已保存的来源；加来源 ID 分段读取原文，用 nextOffset 续读。', async (args, signal) => {
-            const { pageId, sourceId, projectId, offset = 0 } = args;
+          '用知识页 ID 列出已保存的来源；加来源 ID 分段读取原文。提供 query 按原文字面搜索，每行返回一次，按 nextOffset 继续同一查询。', async (args, signal) => {
+            const { pageId, sourceId, projectId, query, offset = 0 } = args;
             if (typeof pageId !== 'string' || !pageId || (sourceId !== undefined && typeof sourceId !== 'string') ||
                 typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) throw new Error('请提供知识页和有效的读取位置');
+            if (query !== undefined && (!sourceId || typeof query !== 'string' || !query.trim() || query.length > 200 || /[\r\n]/.test(query)))
+              throw new Error('请指定来源和不超过 200 个字符的单行关键词');
             signal.throwIfAborted();
             const result = await actions.knowledgeOriginal!(pageId, sourceId, typeof projectId === 'string' ? projectId : undefined);
             if (result.sources) {
@@ -299,10 +301,27 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
               return { sources: result.sources.slice(offset, end), nextOffset: end < result.sources.length ? end : null } as Json;
             }
             if (typeof sourceId !== 'string' || typeof result.content !== 'string' || typeof result.title !== 'string') throw new Error('来源正文不可用');
+            const route = '#memory?entry=' + encodeURIComponent(pageId) + '&source=' + encodeURIComponent(sourceId);
+            if (typeof query === 'string') {
+              const lines = result.content.split('\n');
+              const matches = [];
+              let index = offset;
+              while (index < lines.length && matches.length < 10) {
+                const line = lines[index++]!;
+                const hit = line.indexOf(query);
+                if (hit < 0) continue;
+                const before = Array.from(line.slice(Math.max(0, hit - 162), hit));
+                const after = Array.from(line.slice(hit + query.length, hit + query.length + 202));
+                const excerpt = (before.length > 80 ? '…' : '') + before.slice(-80).join('') + query +
+                  after.slice(0, 100).join('') + (after.length > 100 ? '…' : '');
+                matches.push({ line: index, excerpt, webCitation: `[查看原文](${route}&line=${index})` });
+              }
+              return { title: result.title, matches, nextOffset: index < lines.length ? index : null } as Json;
+            }
             const chars = Array.from(result.content);
             const end = offset + 4000;
-            return { title: result.title, webCitation: `[查看原文](#memory?entry=${encodeURIComponent(pageId)}&source=${encodeURIComponent(sourceId)})`, text: chars.slice(offset, end).join(''), nextOffset: end < chars.length ? end : null } as Json;
-          }, { pageId: { type: 'string' }, sourceId: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
+            return { title: result.title, webCitation: `[查看原文](${route})`, text: chars.slice(offset, end).join(''), nextOffset: end < chars.length ? end : null } as Json;
+          }, { pageId: { type: 'string' }, sourceId: { type: 'string' }, query: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
         if (actions?.knowledgeJobs) context.contribute('tools', 'knowledge_jobs', tool('knowledge_jobs', '查看知识整理队列、真实 Agent 状态及生成的知识标识。', async (_args, signal) => { signal.throwIfAborted(); return actions.knowledgeJobs!(); }));
       },
     },
