@@ -195,6 +195,7 @@ export function createTodosTab({ api, store, router }) {
           const after = Array.from(dependencies.selectedOptions, option => option.value);
           const savedAfter = parent.value === todo.parentTodoId ? todo.afterTodoIds ?? [] : [];
           if (after.length !== savedAfter.length || after.some(id => !savedAfter.includes(id))) patch.afterTodoIds = after;
+          if ('afterTodoIds' in patch || 'parentTodoId' in patch || 'projectId' in patch) patch.expectedAfterTodoIds = todo.afterTodoIds ?? [];
           if (responsible.value.trim() !== (todo.responsiblePerson ?? '')) patch.responsiblePerson = responsible.value.trim();
           if (session.value !== (assigned?.runId ?? '')) patch.responsibleRunId = session.value;
           if (waiting.value.trim() !== (todo.waitingOn ?? '')) patch.waitingOn = waiting.value.trim();

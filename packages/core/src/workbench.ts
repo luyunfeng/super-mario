@@ -955,6 +955,14 @@ export async function createWorkbench(config: AppConfig) {
   function updateTodo(id: string, patch: Record<string, unknown>): Todo {
     const todo = store.get<Todo>('todos', id);
     if (!todo) throw new InputError('待办不存在', 404);
+    if (patch.expectedAfterTodoIds !== undefined) {
+      const expected = patch.expectedAfterTodoIds;
+      if (!Array.isArray(expected) || expected.some(id => typeof id !== 'string') || new Set(expected).size !== expected.length)
+        throw new InputError('原前置子项须为不重复的标识数组');
+      const current = todo.afterTodoIds ?? [];
+      if (expected.length !== current.length || current.some(id => !expected.includes(id)))
+        throw new InputError('前置依赖已被修改，请重新打开详情核对后再保存', 409);
+    }
     if (patch.expectedTitle !== undefined && patch.expectedTitle !== todo.title) {
       throw new InputError('标题已被修改，请核对最新标题', 409);
     }

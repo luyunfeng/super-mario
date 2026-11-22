@@ -250,6 +250,14 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await editor.getByLabel('前置子项').selectOption(prerequisite.id);
   await editor.getByRole('button', { name: '保存' }).click();
   await expect.poll(() => server.app.store.get<Todo>('todos', spring.id)?.parentTodoId).toBe(created.id);
+  await panel.locator('.todo').getByRole('button', { name: /切换夏令时的待办/ }).click();
+  await editor.getByLabel('上级待办').selectOption('');
+  server.app.updateTodo(spring.id, { afterTodoIds: [] });
+  await editor.getByRole('button', { name: '保存' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: '前置依赖已被修改' })).toBeVisible();
+  assert.equal(server.app.store.get<Todo>('todos', spring.id)?.parentTodoId, created.id);
+  await editor.getByRole('button', { name: '取消' }).click();
+  server.app.updateTodo(spring.id, { afterTodoIds: [prerequisite.id] });
   assert.throws(() => server.app.updateTodo(created.id, { parentTodoId: spring.id }), /循环/);
   assert.throws(() => server.app.updateTodo(todo.id, { parentTodoId: created.id }), /当前项目/);
   assert.deepEqual(server.app.store.get<Todo>('todos', spring.id)?.afterTodoIds, [prerequisite.id]);

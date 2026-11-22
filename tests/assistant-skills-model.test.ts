@@ -1627,18 +1627,35 @@ test('Web 与飞书助手读取已核实的回复时间，重新等待时旧匹�
 });
 
 test('Web 登记项目子项，飞书项目助手查询直接子项的完成数', async t => {
-  let parentId = '', prerequisiteId = '';
+  let parentId = '', prerequisiteId = '', childId = '', newerId = '';
   let adapter!: FeishuOptions;
   const sent: string[] = [];
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.match(req.system, /子项全部完成也不能代为验收上级/);
       assert.match(req.system, /前置项全部完成只表示依赖满足/);
+      if (JSON.stringify(req.content).includes('移除前置')) {
+        assert.match(req.system, /重读详情并请用户根据最新依赖决定/);
+        return call('todo_detail', { todoId: childId }, 'before-remove');
+      }
       if (JSON.stringify(req.content).includes('登记子项')) return call('todo_create', { title: '核对明细', parentTodoId: parentId, afterTodoIds: [prerequisiteId] }, 'add-child');
       return call('todos_list', { parentTodoId: parentId, status: 'all' }, 'children');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    if (req.callId === 'remove') {
+      assert.match(raw, /前置依赖已被修改/);
+      return call('todo_detail', { todoId: childId }, 'latest-dependencies');
+    }
     const result = JSON.parse(raw);
+    if (req.callId === 'before-remove') {
+      assert.deepEqual(result.todo.afterTodoIds, [prerequisiteId]);
+      server.app.updateTodo(childId, { afterTodoIds: [prerequisiteId, newerId] });
+      return call('todo_update', { id: childId, expectedAfterTodoIds: result.todo.afterTodoIds, afterTodoIds: [] }, 'remove');
+    }
+    if (req.callId === 'latest-dependencies') {
+      assert.deepEqual(result.todo.afterTodoIds, [prerequisiteId, newerId]);
+      return { role: 'assistant', content: '现在有两项前置依赖，请核对后决定。' };
+    }
     if (req.callId === 'add-child') {
       assert.equal(result.parentTodoId, parentId);
       assert.deepEqual(result.afterTodoIds, [prerequisiteId]);
@@ -1669,5 +1686,10 @@ test('Web 登记项目子项，飞书项目助手查询直接子项的完成数'
     await adapter.onMessage(bot.pairingCode, { ...chat, messageId: 'pair' });
     await adapter.onMessage('交付验收的子项完成了几个？', { ...chat, messageId: 'count' });
     await t.waitFor(() => assert.ok(sent.includes('核对明细的前置项已完成。直接子项完成 1 / 2')));
+    childId = child;
+    newerId = (await api('/todos', { ...item, title: '交叉复核', parentTodoId: parentId })).id;
+    await adapter.onMessage('为核对明细移除前置整理附件', { ...chat, messageId: 'remove' });
+    await t.waitFor(() => assert.ok(sent.includes('现在有两项前置依赖，请核对后决定。')));
+    assert.deepEqual(server.app.todos().find(todo => todo.id === childId)?.afterTodoIds, [prerequisiteId, newerId]);
   } finally { await server.close(); }
 });
