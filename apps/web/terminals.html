@@ -170,6 +170,7 @@
       <div class="top-right">
         <span class="conn-pill"><span class="status-dot" id="conn-dot"></span><span id="conn-text">连接中</span></span>
         <button class="btn" id="btn-control" type="button" hidden>接管输入</button>
+        <button class="btn" id="btn-takeover" type="button" title="自动任务接管与终端弹窗拦截">🤖 自动接管</button>
         <button class="btn" id="btn-theme" type="button" title="切换终端明暗主题">🌓</button>
         <button class="btn active" id="btn-files" type="button">📁 文件</button>
         <button class="btn" id="btn-refresh" type="button">↻</button>
@@ -197,6 +198,21 @@
           <button class="btn primary" type="submit">发送</button>
         </form>
       </main>
+
+      <aside class="files-sidebar" id="takeover-sidebar" hidden>
+        <div class="files-hdr">
+          <div>
+            <strong style="font-size:13px;">🤖 自动接管</strong>
+            <div class="files-path">已绑定项目的目录信任弹窗自动放行，其余弹窗可一键远程按键</div>
+          </div>
+          <button class="btn" id="btn-takeover-scan" type="button">立即扫描</button>
+        </div>
+        <div class="side-pad" style="display:flex;flex-direction:column;gap:6px;font-size:12px;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="chk-takeover-enabled" /> 启用后台自动巡检（15s）</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="chk-takeover-trust" /> 自动放行已绑定项目的信任目录弹窗</label>
+        </div>
+        <div class="side-scroll" id="takeover-list"></div>
+      </aside>
 
       <aside class="files-sidebar" id="files-sidebar">
         <div class="files-hdr">
@@ -306,10 +322,20 @@
       if (!conn) return;
       conn.epoch++;
       clearTimeout(conn.timer);
+      if (conn.ws) { try { conn.ws.close(); } catch {} conn.ws = null; }
       const id = conn.connectionId;
       conn.connectionId = null;
       if (id) { try { await callMachine(conn.machineId, 'terminal.live.release', { connectionId: id }); } catch {} }
       conn.term?.dispose();
+    }
+
+    function liveWsUrl(params) {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const u = new URL(`${proto}//${location.host}/api/v1/live-terminal`);
+      const token = getToken();
+      if (token) u.searchParams.set('token', token);
+      for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') u.searchParams.set(k, String(v));
+      return u.href;
     }
 
     async function stopAllModes() {
@@ -332,41 +358,24 @@
         theme: dark ? DARK_THEME : LIGHT_THEME,
       });
       term.open(container);
-      const conn = { machineId: activeMachine.id, connectionId: null, term, timer: null, epoch: 1, writes: Promise.resolve() };
+      const ws = new WebSocket(liveWsUrl({ machineId: activeMachine.id, mode: 'full', cols, rows }));
+      const conn = { machineId: activeMachine.id, connectionId: null, ws, term, timer: null, epoch: 1 };
       fullConn = conn;
       setConnStatus(false, '正在接入 Herdr 完整界面…');
       document.getElementById('top-title').textContent = `${activeMachine.name} · Herdr 完整界面`;
-      document.getElementById('top-sub').textContent = fileRootCwd || '与本地客户端多端同步';
+      document.getElementById('top-sub').textContent = fileRootCwd || 'WebSocket 实时流 · 与本地客户端同步';
 
-      try {
-        const res = await callMachine(activeMachine.id, 'terminal.live.full.open', { cols, rows });
-        if (fullConn !== conn) { await callMachine(activeMachine.id, 'terminal.live.release', { connectionId: res.connectionId }).catch(() => {}); return; }
-        conn.connectionId = res.connectionId;
-        setConnStatus(true, '已连接');
-        term.focus();
-
-        term.onData(data => {
-          if (!conn.connectionId) return;
-          conn.writes = conn.writes.then(() => callMachine(conn.machineId, 'terminal.live.input', { connectionId: conn.connectionId, data: enc(data) })).catch(() => {});
-        });
-
-        const poll = async (after = -1) => {
-          if (fullConn !== conn || !conn.connectionId) return;
-          try {
-            const out = await callMachine(conn.machineId, 'terminal.live.frames', { connectionId: conn.connectionId, after });
-            if (fullConn !== conn) return;
-            let seq = after;
-            for (const f of out.frames || []) { term.write(dec(f.data)); seq = f.seq; }
-            conn.timer = setTimeout(() => poll(seq), 120);
-          } catch (err) {
-            if (fullConn === conn) setConnStatus(false, '已断开：' + err.message);
-          }
-        };
-        void poll(-1);
-      } catch (err) {
-        setConnStatus(false, '接入失败');
-        term.write(`\r\n无法启动 Herdr 完整界面：${err.message}\r\n可切换顶部「单窗格」模式继续使用。\r\n`);
-      }
+      term.onData(data => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'input', data: enc(data) }));
+      });
+      ws.onmessage = ev => {
+        if (fullConn !== conn) return;
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'ready') { setConnStatus(true, '已连接 (WS)'); term.focus(); }
+        else if (msg.type === 'frame') { term.write(dec(msg.data)); }
+        else if (msg.type === 'error') { setConnStatus(false, '断开：' + msg.message); term.write(`\r\n[断开] ${msg.message}\r\n`); }
+      };
+      ws.onclose = () => { if (fullConn === conn) setConnStatus(false, '连接已关闭'); };
     }
 
     async function startSingleMode(pane, openMode = 'observe') {
@@ -592,10 +601,10 @@
     document.getElementById('viewer-mode').addEventListener('click', () => { viewerShowingDiff = !viewerShowingDiff; void openFileViewer(); });
     document.getElementById('viewer-close').addEventListener('click', () => { document.getElementById('file-viewer').hidden = true; });
 
-    // Quick send bar works in both Full and Single modes
+    // Quick send bar works in both Full (WS) and Single modes
     async function sendRaw(str) {
-      if (mode === 'full' && fullConn?.connectionId) {
-        await callMachine(fullConn.machineId, 'terminal.live.input', { connectionId: fullConn.connectionId, data: enc(str) });
+      if (mode === 'full' && fullConn?.ws?.readyState === WebSocket.OPEN) {
+        fullConn.ws.send(JSON.stringify({ type: 'input', data: enc(str) }));
       } else if (mode === 'single' && selectedPane) {
         if (singleConn?.mode !== 'control') await startSingleMode(selectedPane, 'control');
         if (singleConn?.connectionId) await callMachine(singleConn.machineId, 'terminal.live.input', { connectionId: singleConn.connectionId, data: enc(str) });
@@ -615,11 +624,73 @@
     function triggerFullResize() {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
-        if (mode !== 'full' || !fullConn?.connectionId) return;
+        if (mode !== 'full' || !fullConn?.ws || fullConn.ws.readyState !== WebSocket.OPEN) return;
         const { cols, rows } = calcColsRows(document.getElementById('full-term'));
         fullConn.term.resize(cols, rows);
-        void callMachine(fullConn.machineId, 'terminal.live.resize', { connectionId: fullConn.connectionId, cols, rows }).catch(() => {});
-      }, 150);
+        fullConn.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+      }, 120);
+    }
+
+    // Auto-sync right file tree when Herdr focused pane switches
+    setInterval(async () => {
+      if (mode !== 'full' || !activeMachine || document.hidden) return;
+      try {
+        const res = await callMachine(activeMachine.id, 'terminal.live.list', {});
+        const focused = (res.panes || []).find(p => p.focused);
+        if (focused?.cwd && focused.cwd !== fileRootCwd) {
+          fileRootCwd = focused.cwd;
+          fileRelPath = '';
+          document.getElementById('top-sub').textContent = `${focused.title} · ${focused.cwd}`;
+          void loadFileTree();
+        }
+      } catch {}
+    }, 2500);
+
+    // Auto-takeover drawer
+    async function loadTakeover() {
+      try {
+        const data = await api('GET', '/takeover');
+        document.getElementById('chk-takeover-enabled').checked = Boolean(data.settings?.enabled);
+        document.getElementById('chk-takeover-trust').checked = Boolean(data.settings?.autoTrustBoundProjects);
+        const listEl = document.getElementById('takeover-list');
+        const items = data.items || [];
+        listEl.innerHTML = items.length ? items.slice(0, 30).map(item => `
+          <div class="pane-card" style="cursor:default;">
+            <div class="pane-card-title">${esc(item.title)} · ${esc(item.paneTitle)}</div>
+            <div class="pane-card-meta">${esc(item.status)} · ${esc(item.cwd.split('/').slice(-2).join('/'))}</div>
+            ${item.actionNote ? `<div style="font-size:11.5px;color:var(--text-2);margin-top:4px;">${esc(item.actionNote)}</div>` : ''}
+            ${item.status === 'open' ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px;">
+              ${(item.options || []).map(o => `<button class="btn" data-tk-key="${esc(item.key)}" data-tk-keys="${esc(o.keys)}" style="padding:3px 7px;font-size:11px;">${esc(o.label)}</button>`).join('')}
+            </div>` : ''}
+          </div>
+        `).join('') : '<div style="padding:16px;color:var(--muted);text-align:center;">当前没有卡住的终端弹窗</div>';
+        listEl.querySelectorAll('[data-tk-key]').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            try { await api('POST', '/takeover/answer', { key: btn.dataset.tkKey, keys: btn.dataset.tkKeys }); } catch {}
+            void loadTakeover();
+          });
+        });
+      } catch {}
+    }
+    document.getElementById('btn-takeover').addEventListener('click', (e) => {
+      const sb = document.getElementById('takeover-sidebar');
+      sb.hidden = !sb.hidden;
+      e.target.classList.toggle('active', !sb.hidden);
+      if (!sb.hidden) void loadTakeover();
+      triggerFullResize();
+    });
+    document.getElementById('btn-takeover-scan').addEventListener('click', async () => {
+      await api('POST', '/takeover/scan', {});
+      void loadTakeover();
+    });
+    for (const id of ['chk-takeover-enabled', 'chk-takeover-trust']) {
+      document.getElementById(id).addEventListener('change', async () => {
+        await api('PUT', '/takeover', {
+          enabled: document.getElementById('chk-takeover-enabled').checked,
+          autoTrustBoundProjects: document.getElementById('chk-takeover-trust').checked,
+        });
+      });
     }
     window.addEventListener('resize', triggerFullResize);
     window.addEventListener('beforeunload', () => { void stopAllModes(); });

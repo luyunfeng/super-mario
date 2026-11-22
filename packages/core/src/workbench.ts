@@ -29,6 +29,7 @@ import { createProjectFolders } from './project-folders.ts';
 import { createWebPresence } from './web-presence.ts';
 import { createBriefingSettings } from './briefing.ts';
 import { createAgentFollowups } from './followups.ts';
+import { createAutoTakeover } from './auto-takeover.ts';
 import { INBOX_ASSISTANT_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT } from './prompts.ts';
 import { reminderReference, reminderSourceId, wireWorkbenchBackground } from './workbench-background.ts';
 import { createAwayNotifications } from './away-notifications.ts';
@@ -296,6 +297,12 @@ export async function createWorkbench(config: AppConfig) {
     name: 'agent-followups', types: [{ type: 'schedule.due', version: 1 }], effects: 'none', timeoutMs: 120000,
     handler: event => followups.handle(event),
   });
+  const autoTakeover = createAutoTakeover({
+    store, events, machines: () => machines,
+    openCard: input => interactions.open(input),
+    withdrawCard: id => { try { const card = store.get<{ version: number; status: string }>('interactions', id); if (card?.status === 'open') interactions.withdraw(id, card.version); } catch {} },
+  });
+  if (!config.demo) autoTakeover.start();
   const knowledgeSourceApproval = createKnowledgeSourceApproval({store,events,proposeApproval:input=>approvals.propose(input),rejectApproval:(id,version)=>{approvals.reject(id,version);},
     readerIdentity(){const settings=knowledgeReaderSettings.read(),account=knowledgeAccount();return {enabled:settings.enabled,configured:!!(settings.profile||account?.profile),key:digestReaderIdentity(settings,account),ready:!!settings.profile||knowledgeAccountReady()};},
     validateJob(job){
@@ -1002,7 +1009,7 @@ export async function createWorkbench(config: AppConfig) {
     return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
   }
   return {
-    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, agentSessions, runObservations, scheduledWork, followups, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, agentSessions, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {
@@ -1119,7 +1126,7 @@ export async function createWorkbench(config: AppConfig) {
         await Promise.allSettled([...jobs]);
         await inboxHandling.close();
         await effects.close();
-        scheduledWork.close(); followups.close(); offScheduledWork(); offFollowups(); offKnowledgeApprovals();
+        scheduledWork.close(); followups.close(); autoTakeover.close(); offScheduledWork(); offFollowups(); offKnowledgeApprovals();
         waitingReplies.close();
         await inbox.close();
         await mailboxes.close();

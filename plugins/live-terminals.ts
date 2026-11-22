@@ -1,5 +1,5 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readdir, readlink, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -9,7 +9,77 @@ import type { NodeHandler } from '../packages/plugin-sdk/src/index.ts';
 import type { Json } from '../packages/protocol/src/index.ts';
 
 interface Target { paneId: string; terminalId: string; cwd: string }
-interface LivePane extends Target { title: string; agent: string; state: string; nativeSessionId?: string }
+interface LivePane extends Target { title: string; agent: string; state: string; focused?: boolean; nativeSessionId?: string }
+export interface ScreenPromptOption { label: string; keys: string }
+export interface DetectedScreenPrompt {
+  kind: 'trust_dir' | 'permission' | 'choice';
+  rev: string;
+  title: string;
+  excerpt: string;
+  options: ScreenPromptOption[];
+}
+
+/** Deterministic screen-dialog parser. Computes a content hash (rev) so answering
+ * can re-verify the screen and refuse to press keys if the prompt already changed.
+ */
+export function detectScreenPrompt(rawText: string): DetectedScreenPrompt | undefined {
+  const clean = (rawText ?? '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r/g, '');
+  const lines = clean.split('\n').map(l => l.trimEnd()).filter(l => l.trim().length > 0).slice(-28);
+  if (!lines.length) return undefined;
+  const tail = lines.slice(-14).join('\n');
+  const rev = createHash('sha256').update(tail).digest('hex').slice(0, 16);
+
+  if (/(?:do you trust|trust the files in this folder|trust this workspace|yes,\s*(?:i trust|proceed))/i.test(tail)) {
+    return {
+      kind: 'trust_dir',
+      rev,
+      title: '终端等待信任目录确认',
+      excerpt: tail.slice(-500),
+      options: [
+        { label: '信任并继续 (Enter)', keys: '\r' },
+        { label: '取消 (Esc)', keys: '\x1b' },
+      ],
+    };
+  }
+
+  const numbered: ScreenPromptOption[] = [];
+  for (const line of lines.slice(-10)) {
+    const m = line.match(/^\s*(?:[❯>›•]\s*)?([1-5])[.)]\s+(.{2,80})$/);
+    if (m) numbered.push({ label: `${m[1]}. ${m[2]!.trim()}`, keys: `${m[1]}\r` });
+  }
+  const isPermission = /(?:allow|approve|permission|do you want to (?:run|proceed|execute|edit|create|make)|proceed\?|confirm)/i.test(tail);
+  if (isPermission && numbered.length >= 2) {
+    return {
+      kind: 'permission',
+      rev,
+      title: '终端等待权限确认',
+      excerpt: tail.slice(-500),
+      options: numbered.slice(0, 4),
+    };
+  }
+  if (isPermission && /(?:\[y\/n\]|\(y\/n\)|yes\/no)/i.test(tail)) {
+    return {
+      kind: 'permission',
+      rev,
+      title: '终端等待确认 (y/n)',
+      excerpt: tail.slice(-500),
+      options: [
+        { label: '允许 (y)', keys: 'y\r' },
+        { label: '拒绝 (n)', keys: 'n\r' },
+      ],
+    };
+  }
+  if (numbered.length >= 2 && /[❯>›]\s*1[.)]/.test(tail)) {
+    return {
+      kind: 'choice',
+      rev,
+      title: '终端等待选择选项',
+      excerpt: tail.slice(-500),
+      options: numbered.slice(0, 4),
+    };
+  }
+  return undefined;
+}
 interface Frame { seq: number; full: boolean; width: number; height: number; data: string }
 interface Lease { target: Target; mode: 'observe' | 'control' | 'full'; child: ChildProcessWithoutNullStreams; frames: Frame[]; bytes: number; lastSeq: number; touched: number; ready: boolean; error?: string; width?: number; height?: number }
 // Lightweight Linux PTY bridge for `herdr session attach <session>` so the web
@@ -166,6 +236,7 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
       result.push({ paneId: pane.pane_id, terminalId: pane.terminal_id, cwd: directory,
         title: typeof pane.terminal_title_stripped === 'string' ? pane.terminal_title_stripped : typeof pane.label === 'string' ? pane.label : '现场终端',
         agent, state: typeof pane.agent_status === 'string' ? pane.agent_status : 'unknown',
+        ...(pane.focused === true ? { focused: true } : {}),
         ...(nativeSessionId ? { nativeSessionId } : {}) });
     }
     return result;
@@ -331,6 +402,40 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
       const output = await run(['pane', 'read', target.paneId, '--source', 'recent-unwrapped', '--lines', '300', '--format', 'text']);
       await check(target);
       return { text: output.slice(-200_000), source: 'host-recent-output', completeHistory: false };
+    },
+    'terminal.live.scan_prompts': async params => {
+      const panes = await list(row(params).cwd);
+      const prompts: Array<Record<string, unknown>> = [];
+      for (const pane of panes.slice(0, 24)) {
+        if (pane.state === 'working') continue;
+        try {
+          const textOut = await run(['pane', 'read', pane.paneId, '--source', 'recent-unwrapped', '--lines', '40', '--format', 'text']);
+          const detected = detectScreenPrompt(textOut);
+          if (detected) {
+            prompts.push({
+              paneId: pane.paneId, terminalId: pane.terminalId, cwd: pane.cwd,
+              title: pane.title, agent: pane.agent, state: pane.state,
+              prompt: detected,
+            });
+          }
+        } catch { /* ignore unreadable pane */ }
+      }
+      return json({ prompts, observedAt: new Date().toISOString() });
+    },
+    'terminal.live.answer_prompt': async params => {
+      const input = row(params);
+      const target = { paneId: text(input.paneId), terminalId: text(input.terminalId), cwd: text(input.cwd) };
+      const expectedRev = text(input.rev);
+      const keys = typeof input.keys === 'string' && input.keys.length > 0 && input.keys.length <= 64 ? input.keys : '';
+      if (!keys) throw new Error('按键内容无效');
+      await check(target);
+      const currentText = await run(['pane', 'read', target.paneId, '--source', 'recent-unwrapped', '--lines', '40', '--format', 'text']);
+      const detected = detectScreenPrompt(currentText);
+      if (!detected || detected.rev !== expectedRev) {
+        return json({ applied: false, reason: 'prompt_changed' });
+      }
+      await run(['pane', 'send-text', '--pane', target.paneId, '--', keys]);
+      return json({ applied: true, rev: expectedRev });
     },
     'terminal.live.release': async params => { await release(text(row(params).connectionId)); return { released: true }; },
   };

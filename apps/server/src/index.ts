@@ -304,6 +304,19 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (!trace) throw new InputError('未找到该轮次的上下文追踪记录', 404);
           return json(res, 200, trace);
         }
+        if (path === '/api/v1/takeover' && method === 'GET') {
+          return json(res, 200, { settings: app.autoTakeover.settings(), items: app.autoTakeover.list() });
+        }
+        if (path === '/api/v1/takeover' && method === 'PUT') {
+          return json(res, 200, { settings: app.autoTakeover.configure(await body(req)) });
+        }
+        if (path === '/api/v1/takeover/scan' && method === 'POST') {
+          return json(res, 200, { items: await app.autoTakeover.scanOnce() });
+        }
+        if (path === '/api/v1/takeover/answer' && method === 'POST') {
+          const input = await body(req);
+          return json(res, 200, await app.autoTakeover.answerPrompt(requiredText(input.key, 'key'), String(input.keys ?? ''), 'user'));
+        }
         if (path === '/api/v1/work-decisions' && method === 'GET') {
           for (const key of url.searchParams.keys()) if (!['projectId', 'todoId'].includes(key)) throw new InputError('工作决定查询参数无效');
           return json(res, 200, app.workDecisions.list(Object.fromEntries(url.searchParams)));
@@ -605,11 +618,85 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
   });
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
-    if (!authorized(req, url) || !['/api/v1/events', '/api/v1/node', '/api/v1/terminal'].includes(url.pathname) || (url.pathname.endsWith('/node') && !config.token)) {
+    if (!authorized(req, url) || !['/api/v1/events', '/api/v1/node', '/api/v1/terminal', '/api/v1/live-terminal'].includes(url.pathname) || (url.pathname.endsWith('/node') && !config.token)) {
       socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); return;
     }
     sockets.handleUpgrade(req, socket, head, ws => {
       ws.on('error', () => {});
+      if (url.pathname === '/api/v1/live-terminal') {
+        const machineId = url.searchParams.get('machineId') || '';
+        const mode = url.searchParams.get('mode') || 'full';
+        let connectionId = '';
+        let seq = -1;
+        let closed = false;
+        let pollTimer: ReturnType<typeof setTimeout> | undefined;
+        let writeChain = Promise.resolve();
+        const cleanup = () => {
+          if (closed) return;
+          closed = true;
+          clearTimeout(pollTimer);
+          if (connectionId) {
+            const id = connectionId; connectionId = '';
+            void machines.call(machineId, 'terminal.live.release', { connectionId: id }).catch(() => {});
+          }
+        };
+        ws.on('close', cleanup);
+        ws.on('message', raw => {
+          if (closed || !connectionId) return;
+          try {
+            const msg = JSON.parse(String(raw)) as Record<string, unknown>;
+            if (msg.type === 'input' && typeof msg.data === 'string') {
+              writeChain = writeChain.then(async () => { await machines.call(machineId, 'terminal.live.input', { connectionId, data: msg.data as string }); }).catch(() => {});
+            } else if (msg.type === 'resize' && Number.isInteger(msg.cols) && Number.isInteger(msg.rows)) {
+              void machines.call(machineId, 'terminal.live.resize', { connectionId, cols: msg.cols as number, rows: msg.rows as number }).catch(() => {});
+            }
+          } catch {}
+        });
+        void (async () => {
+          try {
+            const openRes = mode === 'full'
+              ? await machines.call(machineId, 'terminal.live.full.open', {
+                  cols: Number(url.searchParams.get('cols')) || 120,
+                  rows: Number(url.searchParams.get('rows')) || 36,
+                }) as { connectionId: string }
+              : await machines.call(machineId, 'terminal.live.open', {
+                  paneId: url.searchParams.get('paneId') || '',
+                  terminalId: url.searchParams.get('terminalId') || '',
+                  cwd: url.searchParams.get('cwd') || '',
+                  mode: mode === 'control' ? 'control' : 'observe',
+                }) as { connectionId: string };
+            if (closed) { void machines.call(machineId, 'terminal.live.release', { connectionId: openRes.connectionId }).catch(() => {}); return; }
+            connectionId = openRes.connectionId;
+            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ready', connectionId, mode }));
+            const pump = async () => {
+              if (closed || !connectionId || ws.readyState !== WebSocket.OPEN) return;
+              try {
+                const res = await machines.call(machineId, 'terminal.live.frames', { connectionId, after: seq }) as { frames?: Array<{ seq: number; width?: number; height?: number; data: string }> };
+                if (closed || ws.readyState !== WebSocket.OPEN) return;
+                for (const frame of res.frames ?? []) {
+                  ws.send(JSON.stringify({ type: 'frame', ...frame }));
+                  seq = frame.seq;
+                }
+                pollTimer = setTimeout(() => { void pump(); }, 60);
+              } catch (err) {
+                if (!closed && ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({ type: 'error', message: err instanceof Error ? err.message : '连接中断' }));
+                  ws.close();
+                }
+                cleanup();
+              }
+            };
+            void pump();
+          } catch (err) {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'error', message: err instanceof Error ? err.message : '打开终端失败' }));
+              ws.close();
+            }
+            cleanup();
+          }
+        })();
+        return;
+      }
       if (url.pathname === '/api/v1/events') {
         ws.send(JSON.stringify({ type: 'connected' }));
         const off = app.events.subscribe(event => {
