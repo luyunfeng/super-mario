@@ -275,6 +275,38 @@ test('项目：自动发现电脑文件夹，点击才导入，默认工作区�
       await expect(page.locator('[data-tab=workspace]')).toHaveAttribute('aria-selected','true');
       await expect(page.locator('.project-binding')).toContainText(folder);
       assert.deepEqual(server.app.projects.list()[0]?.workspace,{machineId:'folder-ui',cwd:folder});
+      const project = server.app.projects.list()[0]!;
+      const todo = server.app.createTodo({ projectId: project.id, title: '核对首页' });
+      const input = page.getByRole('textbox', { name: '项目目标' });
+      await input.fill('项目草稿');
+      await page.goto(server.url + '/#projects/' + project.id + '/todos/detail/' + todo.id);
+      await page.getByRole('link', { name: '就此待办提问' }).click();
+      await expect(input).toHaveValue('');
+      await expect(page.locator('#panel-workspace')).toContainText('当前待办：核对首页');
+      await input.fill('这项进展如何？');
+      const second = server.app.createTodo({ projectId: project.id, title: '核对导航' });
+      await page.goto(server.url + '/#projects/' + project.id + '/workspace?todo=' + second.id);
+      await expect(input).toHaveValue('');
+      await input.fill('导航事项草稿');
+      await page.goBack();
+      await expect(input).toHaveValue('这项进展如何？');
+      await page.getByRole('link', { name: '返回项目对话' }).click();
+      await expect(input).toHaveValue('项目草稿');
+      await page.goBack();
+      await expect(input).toHaveValue('这项进展如何？');
+      await page.route('**/projects/' + project.id + '/messages', async route => {
+        const response = await route.fetch();
+        await route.fulfill({ response, json: { ...await response.json(), todoId: 'wrong-item' } });
+      }, { times: 1 });
+      await page.getByRole('button', { name: '发送目标' }).click();
+      await expect(page.locator('#panel-workspace')).toContainText('处理结果未知');
+      await expect(input).toHaveValue('这项进展如何？');
+      await page.getByRole('button', { name: '核对发送回执' }).click();
+      await expect(input).toHaveValue('');
+      await expect.poll(() => server.app.store.list<{ todoId?: string; role: string }>('messages')
+        .filter(message => message.todoId === todo.id && message.role === 'user').length).toBe(1);
+      await page.getByRole('link', { name: '返回项目对话' }).click();
+      await expect(input).toHaveValue('项目草稿');
       assert.deepEqual(await page.locator('.proj__detail [role=tab]').allInnerTexts().then(list=>list.map(text=>text.replace(/\s+\d+$/,''))),['工作区','待办','执行','资料','项目设置']);
       await page.locator('[data-tab=settings]').click();await expect(page.locator('#panel-settings')).toContainText('怎么跟进');
       await expect(page.locator('#scope-select option:checked')).toHaveText('官网改版');

@@ -79,6 +79,7 @@ export function createMessageSubmissions({ api, context, onConfirmed, onStatus, 
     if (keyed ? reply.requestId !== ticket.record.id : !legacy) return false;
     if ((keyed || reply.conversationId !== undefined) && reply.conversationId !== ctx.conversation) return false;
     if ((keyed || reply.projectId !== undefined) && (reply.projectId ?? null) !== (ctx.projectId ?? null)) return false;
+    if ((reply.todoId ?? null) !== (ctx.todoId ?? null)) return false;
     if ((keyed || reply.text !== undefined) && (typeof reply.text !== 'string' || ticket.record.hash !== digest(JSON.stringify(reply.text)))) return false;
     if (!['done', 'pending'].includes(reply.status) && !(keyed && reply.status === 'failed')) return false;
     save(ticket.key, entries(ticket.key).filter(row => row.id !== ticket.record.id));

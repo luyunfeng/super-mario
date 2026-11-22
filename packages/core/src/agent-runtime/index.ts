@@ -351,6 +351,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         const projectContextData = currentProjectId && options.projectContext ? options.projectContext(currentProjectId) : undefined;
         const replyChannel = activeInput && store.get<{ channel: string }>('message.routes', activeInput.id)?.channel;
         const sections = [
+          ...(activeInput?.todoId ? ['本轮消息关联的待办 ID 是 ' + JSON.stringify(activeInput.todoId) + '。用户说“这项”时用 todo_detail 核对该事项的最新事实。关联待办本身不授权修改、派发或验收。'] : []),
           ...(replyChannel === 'feishu' ? ['本轮回复渠道是飞书。引用工作台消息时使用可读出处。'] : []),
           ...(activeInput?.readOnly ? ['本轮只读，请查阅事实后回答。' + (
             activeReadOnlyAction === 'schedule_followup' ? '如有必要，可为重要会议安排会前跟进。' :

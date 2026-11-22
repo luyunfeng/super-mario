@@ -133,6 +133,8 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
         current.waitingOn ? '等待' + current.waitingOn : runs.some(isRunActive) ? '查看执行进展。' :
         latest?.status === 'completed' ? '核对交付结果并验收。' : latest ? '查看执行历史，确认是否重新派单。' : '可补充决策或发起派单。'),
       h('div', { class: 'row row--wrap' }, action('编辑待办', () => openEdit(current)),
+        project && !project.archivedAt && h('a', { class: 'btn btn--sm', onclick: () => close?.(),
+          href: router.href('projects', project.id, 'workspace') + '?todo=' + encodeURIComponent(current.id) }, '就此待办提问'),
         current.waitingOn && current.reminderAt && !current.completedAt && action('跟踪回复', () => openWaitingReply(context)),
         action('答复与验收', () => openTaskClosure(context)),
         !current.completedAt && action('交给 Agent', () => openTodoDelegate(context)))));

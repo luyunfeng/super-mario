@@ -49,8 +49,8 @@ async function fixture(t: TestContext, respond: (request: Request, turn: number)
     assert.ok(response.ok, await response.clone().text());
     return response.json();
   };
-  const ask = async (text: string, path = '/messages') => {
-    const input = await api(path, { text });
+  const ask = async (text: string, path = '/messages', todoId?: string) => {
+    const input = await api(path, { text, todoId });
     for (let i = 0; i < 500; i++) {
       const reply = server.app.store.list<Message>('messages').find(m => m.replyTo === input.id && (m.status === 'done' || m.status === 'failed'));
       if (reply) { assert.equal(reply.status, 'done', reply.text); return reply.text; }
@@ -1389,6 +1389,7 @@ test('Web 与飞书仅更新选定待办的期限，保留提醒并拒绝并发�
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
     if (mode === 'requests') {
+      assert.ok(JSON.parse(req.system).some((entry: { content: string }) => entry.content.includes('本轮消息关联的待办 ID 是 ' + JSON.stringify(id))));
       assert.match(req.system, /查询时不替用户回答、授权或验收/);
       assert.deepEqual(JSON.parse(raw).pendingRequests, [{ kind: 'review', title: '确认清单', body: '确认哪份清单？' }]);
       return { role: 'assistant', content: '本事项需要你确认哪份清单。' };
@@ -1474,7 +1475,7 @@ test('Web 与飞书仅更新选定待办的期限，保留提醒并拒绝并发�
     server.app.interactions.open({ kind: 'review', title: '确认清单', body: '确认哪份清单？' }, origin);
     server.app.interactions.open({ kind: 'review', title: '其他事项的问题', body: '确认哪份清单？', runId: 'other-run' });
     mode = 'requests';
-    assert.equal(await ask('这件事等我决定什么？', path), '本事项需要你确认哪份清单。');
+    assert.equal(await ask('这件事等我决定什么？', path, id), '本事项需要你确认哪份清单。');
     await adapter.onMessage('本事项等我决定什么？', { ...source, messageId: 'requests' });
     await t.waitFor(() => assert.ok(sent.includes('本事项需要你确认哪份清单。')));
     mode = 'session';
