@@ -81,6 +81,51 @@ function replyRecord(api, store, todo) {
   return record;
 }
 
+function conversationHistory({ api, store, router, todo, close }) {
+  const owner = store.view.snapshotOwner;
+  const rows = h('div', { class: 'stack' });
+  const notice = h('p', { class: 'small', role: 'status' });
+  let before, sequence = 0;
+  const more = Button({ label: '查看更早消息', size: 'sm', onClick: () => load(before) });
+  const refresh = Button({ label: '重新读取对话', size: 'sm', onClick: () => load() });
+  const panel = h('details', { ontoggle: () => { if (panel.open) load(); } },
+    h('summary', null, '关联的项目对话'), rows, notice, more, refresh);
+  more.hidden = true;
+  function available() {
+    return todo.projectId && owner === store.view.snapshotOwner && owner === api.draftOwner() &&
+      !store.view.unauthorized && matchesScope(store, todo) &&
+      store.view.snapshot.plugins.some(p => p.id === 'conversation-search' && p.status === 'active');
+  }
+  async function load(cursor) {
+    if (!available()) return;
+    const stamp = ++sequence;
+    more.disabled = refresh.disabled = true;
+    notice.textContent = '正在读取…';
+    try {
+      const result = await api.post('/project-message-search', { projectId: todo.projectId, todoId: todo.id, before: cursor, limit: 10 });
+      if (stamp !== sequence || !panel.isConnected || !available()) return;
+      if (!cursor) replace(rows);
+      for (const message of result.hits) {
+        const href = router.href('projects', todo.projectId, 'workspace') + '?' + new URLSearchParams({ at: message.id, todo: todo.id });
+        rows.append(h('a', { href, onclick: () => close?.() }, (message.role === 'user' ? '我' : '项目助手') +
+          ' · ' + formatDate(message.createdAt, true) + ' · ' + message.preview));
+      }
+      before = result.nextBefore;
+      more.hidden = !before;
+      notice.textContent = rows.childElementCount ? '' : '尚无关联的项目对话。';
+    } catch (error) {
+      if (stamp === sequence && available()) notice.textContent = '读取失败：' + error.message;
+    } finally {
+      if (stamp === sequence) more.disabled = refresh.disabled = false;
+    }
+  }
+  function update() {
+    panel.hidden = !available();
+    if (panel.hidden && panel.open) { ++sequence; panel.open = false; replace(rows); }
+  }
+  return { panel, update };
+}
+
 export function openTodoDetail({ api, store, router, todo, openEdit }) {
   if (!matchesScope(store, todo)) { toast('待办归属已变更，请重新打开'); return; }
   const detail = createTodoDetail({ api, store, router, todo, openEdit, close: () => drawer.close() });
@@ -92,12 +137,14 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
   const summary = h('div', { class: 'stack' });
   const next = h('div', { class: 'stack' });
   const attention = createAttention({ api, store, task: true });
-  const el = h('div', { class: 'stack' }, summary, attention.el, replyRecord(api, store, todo),
+  const history = conversationHistory({ api, store, router, todo, close });
+  const el = h('div', { class: 'stack' }, summary, attention.el, history.panel, replyRecord(api, store, todo),
     decisionSection(api, todo, () => el.isConnected && el.closest('dialog')?.open !== false && matchesScope(store, todo)), next);
   function paint() {
     const snapshot = store.view.snapshot;
     const current = snapshot?.todos.find(item => item.id === todo.id);
     if (!current || !matchesScope(store, todo)) return;
+    history.update();
     attention.update((store.view.attention ?? []).filter(item => item.type === 'interaction' && item.todoId === current.id && item.projectId === current.projectId));
     const project = snapshot.projects?.find(item => item.id === current.projectId);
     const sources = (snapshot.inbox ?? []).filter(item => item.todoId === current.id && (item.projectId ?? null) === (current.projectId ?? null));

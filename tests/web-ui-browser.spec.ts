@@ -277,6 +277,11 @@ test('项目：自动发现电脑文件夹，点击才导入，默认工作区�
       assert.deepEqual(server.app.projects.list()[0]?.workspace,{machineId:'folder-ui',cwd:folder});
       const project = server.app.projects.list()[0]!;
       const todo = server.app.createTodo({ projectId: project.id, title: '核对首页' });
+      for (let index = 0; index < 11; index++) {
+        const id = 'older-todo-question-' + index;
+        server.app.store.put('messages', id, { id, role: 'user', text: '较早问题 ' + index, status: 'done',
+          conversationId: 'project:' + project.id + ':work', todoId: todo.id, projectId: project.id, createdAt: new Date(index).toISOString() });
+      }
       const input = page.getByRole('textbox', { name: '项目目标' });
       await input.fill('项目草稿');
       await page.goto(server.url + '/#projects/' + project.id + '/todos/detail/' + todo.id);
@@ -303,10 +308,21 @@ test('项目：自动发现电脑文件夹，点击才导入，默认工作区�
       await expect(input).toHaveValue('这项进展如何？');
       await page.getByRole('button', { name: '核对发送回执' }).click();
       await expect(input).toHaveValue('');
-      await expect.poll(() => server.app.store.list<{ todoId?: string; role: string }>('messages')
-        .filter(message => message.todoId === todo.id && message.role === 'user').length).toBe(1);
+      await expect.poll(() => server.app.store.list<{ todoId?: string; role: string; text: string }>('messages')
+        .filter(message => message.todoId === todo.id && message.role === 'user' && message.text === '这项进展如何？').length).toBe(1);
       await page.getByRole('link', { name: '返回项目对话' }).click();
       await expect(input).toHaveValue('项目草稿');
+      await server.app.projectWorkspace.post(project.id, '另一项的原文', undefined, second.id);
+      await page.goto(server.url + '/#projects/' + project.id + '/todos/detail/' + todo.id);
+      await page.getByText('关联的项目对话', { exact: true }).click();
+      const history = page.locator('details[open]').filter({ hasText: '关联的项目对话' });
+      await expect(history.getByRole('link')).toHaveCount(10);
+      await history.getByRole('button', { name: '查看更早消息' }).click();
+      await expect(history).toContainText('较早问题 0');
+      await expect(history).not.toContainText('另一项的原文');
+      await history.getByRole('link', { name: /^我 · .*这项进展如何/ }).click();
+      await expect(page.locator('.msg.is-search-hit')).toContainText('这项进展如何');
+      await expect(page.locator('#panel-workspace')).toContainText('当前待办：核对首页');
       assert.deepEqual(await page.locator('.proj__detail [role=tab]').allInnerTexts().then(list=>list.map(text=>text.replace(/\s+\d+$/,''))),['工作区','待办','执行','资料','项目设置']);
       await page.locator('[data-tab=settings]').click();await expect(page.locator('#panel-settings')).toContainText('怎么跟进');
       await expect(page.locator('#scope-select option:checked')).toHaveText('官网改版');

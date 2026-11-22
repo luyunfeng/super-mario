@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Extension, Json, Store } from '../packages/plugin-sdk/src/index.ts';
 
-import type { Message, Project } from '../packages/protocol/src/index.ts';
+import type { Message, Project, Todo } from '../packages/protocol/src/index.ts';
 
 type SavedSearch = { id: string; name: string; query: string };
 type SearchBook = {
@@ -103,12 +103,18 @@ function messageCitation(projectId: string, id: string) {
 
 function projectMessages(store: Store, input: Json, excludeId?: string) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, '检索参数无效');
-  const { query, before, limit = 5, mode = 'phrase' } = input;
+  const { query, todoId, before, limit = 5, mode = 'phrase' } = input;
   if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 25) fail(400, '每页须为 1 至 25 条');
   if (before !== undefined && (typeof before !== 'string' || !before)) fail(400, '消息游标无效');
-  if (typeof query !== 'string' || !query.trim() || query.length > 500) fail(400, '检索词须为 1 至 500 个字符');
+  if (todoId !== undefined) {
+    if (typeof todoId !== 'string' || typeof input.projectId !== 'string' ||
+        store.get<Todo>('todos', todoId)?.projectId !== input.projectId) fail(404, '未找到当前项目的待办');
+  }
+  const listByTodo = todoId !== undefined && query === undefined;
+  if (!listByTodo && (typeof query !== 'string' || !query.trim() || query.length > 500)) fail(400, '检索词须为 1 至 500 个字符');
   if (mode !== 'phrase' && mode !== 'keywords') fail(400, '检索方式无效');
-  const terms = mode === 'keywords' ? [...new Set(query.trim().split(/\s+/u))] : [query.trim()];
+  let terms: string[] = [];
+  if (typeof query === 'string') terms = mode === 'keywords' ? [...new Set(query.trim().split(/\s+/u))] : [query.trim()];
   if (terms.length > 8) fail(400, '最多可组合 8 个关键词');
   const scope = input.projectId;
   if (scope !== undefined && (typeof scope !== 'string' || !scope.trim())) fail(400, '项目 ID 无效');
@@ -118,7 +124,7 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
   let pastCursor = before === undefined;
   for (const message of store.list<Message>('messages').reverse()) {
     const project = projects.get(message.conversationId);
-    if (!project || !readableMessage(message, project, excludeId)) continue;
+    if (!project || (todoId !== undefined && message.todoId !== todoId) || !readableMessage(message, project, excludeId)) continue;
     const matches = [];
     for (const pattern of patterns) {
       const match = pattern.exec(message.text);
@@ -137,7 +143,8 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
       return { before: message.text.slice(Math.max(0, start - 18), start), match: match[0], after: message.text.slice(end, end + 32) };
     });
     hits.push({ projectId: project.id, projectName: project.name, createdAt: message.createdAt, id: message.id,
-      role: message.role, webCitation: messageCitation(project.id, message.id), ...excerpts[0], ...(excerpts.length > 1 ? { excerpts } : {}) });
+      role: message.role, webCitation: messageCitation(project.id, message.id), ...(todoId !== undefined && { todoId, status: message.status }),
+      ...(listByTodo ? { preview: message.text.slice(0, 120) } : excerpts[0]), ...(excerpts.length > 1 ? { excerpts } : {}) });
   }
   if (!pastCursor) fail(404, '未找到当前检索的消息游标');
   return { hits, nextBefore: null };
@@ -149,9 +156,9 @@ export const conversationSearch: Extension = {
   activate(context) {
     context.contribute('tools', 'project_message_search', {
       name: 'project_message_search',
-      description: '从新到旧查找项目工作对话。默认按连续原文匹配；mode=keywords 要求同一条消息含全部关键词（空格分隔，最多 8 个，顺序不限）。返回发言角色、消息 ID 和命中前后的摘录。可用 nextBefore 继续查更早的结果。',
-      parameters: { type: 'object', required: ['query'], additionalProperties: false, properties: {
-        query: { type: 'string' }, mode: { type: 'string', enum: ['phrase', 'keywords'] }, projectId: { type: 'string' }, before: { type: 'string' },
+      description: '从新到旧查找项目工作对话。默认按连续原文匹配；mode=keywords 要求同一条消息含全部关键词（空格分隔，最多 8 个，顺序不限）。返回发言角色、消息 ID 和命中前后的摘录。传 projectId 和 todoId 可限定一项待办，省略 query 则列出该项最近消息。可用 nextBefore 继续查更早的结果。',
+      parameters: { type: 'object', additionalProperties: false, properties: {
+        query: { type: 'string' }, todoId: { type: 'string' }, mode: { type: 'string', enum: ['phrase', 'keywords'] }, projectId: { type: 'string' }, before: { type: 'string' },
       } },
       async execute(args, signal) {
         signal.throwIfAborted();
@@ -162,13 +169,15 @@ export const conversationSearch: Extension = {
       name: 'project_message_read',
       description: '按检索命中的项目 ID 和消息 ID 读取一条项目工作消息的正文。续读时传回 nextOffset 和 version。',
       parameters: { type: 'object', required: ['projectId', 'id'], additionalProperties: false, properties: {
-        projectId: { type: 'string' }, id: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, version: { type: 'string' },
+        projectId: { type: 'string' }, todoId: { type: 'string' }, id: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, version: { type: 'string' },
       } },
-      async execute({ projectId, id, offset = 0, version, excludeId }, signal) {
+      async execute({ projectId, todoId, id, offset = 0, version, excludeId }, signal) {
         signal.throwIfAborted();
         if (typeof projectId !== 'string' || typeof id !== 'string') fail(400, '缺少项目或消息 ID');
         const project = context.store.get<Project>('projects', projectId);
         const message = context.store.get<Message>('messages', id);
+        if (todoId !== undefined && (typeof todoId !== 'string' || context.store.get<Todo>('todos', todoId)?.projectId !== projectId ||
+            message?.todoId !== todoId)) fail(404, '未找到当前待办的可读消息');
         if (!project || !message || !readableMessage(message, project, excludeId)) fail(404, '未找到当前项目的可读消息');
         if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || (offset > 0 && typeof version !== 'string'))
           fail(400, '续读需要有效位置和原版本');
