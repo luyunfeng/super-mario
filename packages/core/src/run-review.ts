@@ -158,6 +158,21 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
   return {
     get,
     assertCanComplete,
+    /** Evidence for one project-memory source. A later round cannot accept an older Run. */
+    memoryEvidence(value: Run) {
+      if (!value.projectId || !value.todoId) return undefined;
+      const item = store.get<RunReview>(reviews, value.todoId);
+      if (!item || item.runId !== value.id || store.get<Todo>('todos', value.todoId)?.projectId !== value.projectId) return undefined;
+      let status: RunReview['status'] | 'invalidated' = item.status;
+      if (status === 'accepted') {
+        try { assertCanComplete(value.todoId); }
+        catch (error) {
+          if (!(error instanceof RunReviewError)) throw error;
+          status = 'invalidated';
+        }
+      }
+      return { status, version: item.version, updatedAt: item.updatedAt };
+    },
     /** Call only for completed -> reopened, inside the host's Todo transaction.
      * No event is published here: the outer transaction has not committed yet.
      */

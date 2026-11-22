@@ -51,6 +51,7 @@ export function createProjectWorkspace(options: {
     reason?: string;
   };
   post: (id: string, text: string, requestId?: string) => Promise<Message>;
+  reviewEvidence?: (run: Run) => { status: string; version: number; updatedAt: string } | undefined;
   projectDecisions?: (id: string) => unknown;
   summarize: (id: string, text: string) => Promise<Message>;
   now?: () => number;
@@ -128,14 +129,14 @@ export function createProjectWorkspace(options: {
     const p = project(id);
     if (p.archivedAt)
       throw Object.assign(Error("项目已归档，不能继续提炼"), { status: 409 });
-    const current = memory(id),
-      input = { ...facts(id), recordedDecisions: options.projectDecisions?.(id) },
+    const current = memory(id);
+    if (!manual && (!current.enabled || ["failed", "unknown"].includes(current.status))) return;
+    const sources = facts(id),
+      input = { ...sources, runs: sources.runs.map(run => ({ ...run, review: options.reviewEvidence?.(run) })), recordedDecisions: options.projectDecisions?.(id) },
       signature = hash(input);
     if (
       !manual &&
-      (!current.enabled ||
-        ["failed", "unknown"].includes(current.status) ||
-        signature === current.sourceHash ||
+      (signature === current.sourceHash ||
         (current.attemptAt && now() - Date.parse(current.attemptAt) < 60000) ||
         (!input.messages.length && !input.todos.length && !input.runs.length))
     )
@@ -235,6 +236,12 @@ export function createProjectWorkspace(options: {
           ).find((k) => k.id === knowledgeId);
           if (latest?.updatedAt !== before?.updatedAt)
             throw Error("提炼期间记忆已被人工修改，保留当前版本");
+          // Review decisions can change while the model is composing its summary.
+          if (options.reviewEvidence && input.runs.some(({ review, id: runId }) => {
+            const latestRun = store.get<Run>("runs", runId);
+            const latestReview = latestRun?.projectId === id ? options.reviewEvidence!(latestRun) : undefined;
+            return review?.status !== latestReview?.status || review?.version !== latestReview?.version;
+          })) throw Error("提炼期间验收记录已变化，请重新整理");
           const sourceIds = [
             ...input.messages.map((m) => m.id),
             ...input.todos.map((t) => t.id),

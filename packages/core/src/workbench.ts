@@ -450,7 +450,7 @@ export async function createWorkbench(config: AppConfig) {
     enqueueMeetingMemory(items, knowledgeCurator.addSource, knowledgeReaderSettings.read().trustedHosts);
     reconciledMeetingAccounts.add(source);
   }
-  const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,projectDecisions:id=>workDecisions.context({kind:"project",projectId:id}),onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text,requestId)=>scopedAgents.postProject(id,text,requestId),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
+  const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,reviewEvidence:run=>runReview.memoryEvidence(run),projectDecisions:id=>workDecisions.context({kind:"project",projectId:id}),onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text,requestId)=>scopedAgents.postProject(id,text,requestId),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
   const controllers = new Map<string, AbortController>();
   const jobs = new Set<Promise<void>>();
   const commandRouter = createCommandProjectRouter(config, () => !closing && inboxClassifier.status().available);

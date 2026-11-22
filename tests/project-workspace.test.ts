@@ -65,6 +65,7 @@ test("memory model sees one project, persists traceable knowledge and never comp
     available: () => true,
     agentStatus: () => ({ conversationId: "work", available: true }),
     post: async () => answer("work"),
+    reviewEvidence: () => ({ status: "reopened", version: 3, updatedAt: "now" }),
     projectDecisions: id => ({ items: [{ text: "当前版本的决定 " + id }] }),
     summarize: async (_id, text) => {
       prompt = text;
@@ -98,10 +99,14 @@ test("memory model sees one project, persists traceable knowledge and never comp
         createdAt: "now",
       });
     }
+    f.store.put("runs", "run-a", { id: "run-a", projectId: "a", output: "执行者自报完成", status: "completed" });
     await f.knowledge.put({ id: "project-memory-a", projectId: "a", layer: "project", title: "旧记忆", content: "人工确认的决定" });
     await service.run("a", true);
     assert.match(prompt, /A context/);
     assert.match(prompt, /人工确认的决定/);
+    const evidence = JSON.parse(prompt.split("\n").at(-1)!);
+    assert.equal(evidence.runs[0].status, "completed");
+    assert.equal(evidence.runs[0].review.status, "reopened");
     assert.match(prompt, /当前版本的决定 a/);
     assert.doesNotMatch(prompt, /SECRET/);
     assert.equal(service.memory("a").status, "completed");
@@ -282,4 +287,28 @@ test("HTTP project workspace has isolated real queues/history, progress, demo me
 test('automatic memory is opt-in for legacy projects and skips unchanged evidence after one refinement',async()=>{
  const f=fixture();let time=Date.parse('2026-01-01T00:00:00Z'),calls=0;const service=createProjectWorkspace({...f,now:()=>time,demo:false,knowledge:()=>f.knowledge,bots:()=>[],available:()=>true,agentStatus:()=>({conversationId:'work',available:true}),post:async()=>answer('work'),summarize:async()=>{calls++;return answer(JSON.stringify({summary:'confirmed summary',decisions:[],nextSteps:[],risks:[]}));}});
  try{f.store.put('todos','task',{id:'task',projectId:'a',title:'work',notes:'',createdAt:'now',updatedAt:'now'});await service.run('a',false);assert.equal(calls,0);service.configure('a',true);await service.run('a',false);assert.equal(calls,1);time+=120000;await service.run('a',false);assert.equal(calls,1);const memory=await service.view('a');assert.equal(memory.agents.memory.sources[0].title,'work');}finally{await service.close();f.store.close();}
+});
+
+test("review changed during summarization preserves the previous knowledge page", async () => {
+  const f = fixture();
+  let accepted = true;
+  const service = createProjectWorkspace({
+    ...f, demo: false, knowledge: () => f.knowledge, bots: () => [], available: () => true,
+    agentStatus: () => ({ conversationId: "work", available: true }), post: async () => answer("work"),
+    reviewEvidence: () => ({ status: accepted ? "accepted" : "reopened", version: accepted ? 2 : 3, updatedAt: "now" }),
+    summarize: async () => {
+      accepted = false;
+      return answer(JSON.stringify({ summary: "已验收", decisions: [], nextSteps: [], risks: [] }));
+    },
+  });
+  try {
+    f.store.put("runs", "run-a", { id: "run-a", projectId: "a", output: "执行结果" });
+    await f.knowledge.put({ id: "project-memory-a", projectId: "a", layer: "project", title: "既有记忆", content: "保留" });
+    await service.run("a", true);
+    assert.match(service.memory("a").error!, /验收记录已变化/);
+    assert.equal(f.pages.get("project-memory-a")?.content, "保留");
+  } finally {
+    await service.close();
+    f.store.close();
+  }
 });
