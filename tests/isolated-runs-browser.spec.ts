@@ -29,9 +29,24 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   const server = await startServer({ dataDir: join(root, 'server'), host: '127.0.0.1', port: 0, demo: true, token: 'worktree-fixture' });
   const discovery = createProjectDiscovery({ home: root, cwd, roots: [], temporaryRoots: [] });
   const starts = new Map<string, string>();
+  let baseReads = 0, groupedCheckouts = 0;
+
   const node = startAgentNode({ url: server.url, token: 'worktree-fixture', machineId: 'fixture', name: 'fixture', dataDir: join(root, 'node'),
     executors: [{ id: 'codex', machineId: 'fixture', name: '协议替身', kind: 'cli', available: true, mode: 'real', description: 'fixture' }],
-    handlers: { ...discovery.handlers, 'executor.start': async args => {
+    handlers: { ...discovery.handlers,
+      'workspace.worktreeBase': async args => {
+        const pinned = await discovery.handlers['workspace.worktreeBase'](args);
+        baseReads++;
+        // Another developer advances HEAD after the group's checkpoint.
+        const next = git(cwd, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'concurrent change');
+        git(cwd, 'update-ref', 'HEAD', next);
+        return pinned;
+      },
+      'workspace.prepareRunWorktree': async args => {
+        if (args.base && ++groupedCheckouts === 2) throw new Error('合成的工作树创建失败');
+        return discovery.handlers['workspace.prepareRunWorktree'](args);
+      },
+      'executor.start': async args => {
       const path = String(args.cwd);
       assert.equal(await readFile(join(path, 'shared.txt'), 'utf8'), 'baseline');
       assert.match(String(args.prompt), /本次使用独立 Git 工作树/);
@@ -79,5 +94,41 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   const rejected = server.app.dispatch({ ...input, cwd: plain, projectId: nonGit.id });
   await expect.poll(() => server.app.store.get<Run>('runs', rejected.id)?.status).toBe('unknown');
   assert.equal(starts.size, 2);
+
+  await page.goto(server.url + '/#projects/' + project.id + '/runs');
+  await page.getByRole('button', { name: '发起执行', exact: true }).first().click();
+  await drawer.getByLabel('要做什么').fill('同一任务跑三份');
+  await drawer.getByLabel('怎样算完成').fill('核对输出');
+  await drawer.getByLabel('预计用时').fill('2');
+  await drawer.getByLabel('从当前提交创建独立 Git 工作树').check();
+  await drawer.getByLabel('从同一提交并行执行').selectOption('3');
+  const sent = page.waitForRequest(r => r.method() === 'POST' && r.url().endsWith('/api/v1/runs'));
+  await drawer.getByRole('button', { name: '开始执行' }).click();
+  const request = await sent;
+  await expect(page).toHaveURL(/compare=group$/);
+  const cards = page.getByRole('region', { name: '执行对比' }).getByRole('article');
+  await expect(cards).toHaveCount(3);
+  await expect.poll(() => starts.size).toBe(4);
+  const groupRuns = server.app.store.list<Run>('runs').filter(run => run.comparisonRunIds);
+  const ids = groupRuns[0]!.comparisonRunIds!;
+  assert.deepEqual(new Set(ids), new Set(groupRuns.map(run => run.id)));
+  assert.ok(groupRuns.every(run => run.worktree?.base === base));
+  assert.equal(baseReads, 1);
+  assert.equal(groupedCheckouts, 3);
+  assert.notEqual(git(cwd, 'rev-parse', 'HEAD'), base);
+  for (const run of groupRuns.filter(run => starts.has(run.cwd!))) {
+    assert.equal(run.worktree?.base, base);
+    assert.equal(git(run.cwd!, 'rev-parse', 'HEAD'), base);
+  }
+  await expect(cards.filter({ hasText: '合成的工作树创建失败' })).toHaveCount(1);
+  const replay = (copies: number) => fetch(request.url(), { method: 'POST', headers: {
+    authorization: 'Bearer worktree-fixture', 'content-type': 'application/json',
+    'idempotency-key': request.headers()['idempotency-key']!,
+  }, body: JSON.stringify({ ...request.postDataJSON(), copies }) });
+  assert.deepEqual((await (await replay(3)).json()).comparisonRunIds, ids);
+  assert.equal((await replay(2)).status, 409);
+  assert.equal(groupedCheckouts, 3);
+  await page.reload();
+  await expect(cards).toHaveCount(3);
 
 });

@@ -196,7 +196,10 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     const canIsolate = binding && snapshot.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active')
       && snapshot.machines?.some(m => m.id === binding.machineId && m.capabilities.includes('workspace.prepareRunWorktree'));
     let isolated = false;
-    const isolation = canIsolate && Check({ label: '从当前提交创建独立 Git 工作树', onChange: value => { isolated = value; } });
+    const canCompare = canIsolate && snapshot.machines.some(m => m.id === binding.machineId && m.capabilities.includes('workspace.worktreeBase'));
+    const copies = Select({ options: [['1', '1 次'], ['2', '2 次'], ['3', '3 次'], ['4', '4 次']] });
+    const copiesField = canCompare && Field({ label: '从同一提交并行执行', control: copies });
+    const isolation = canIsolate && Check({ label: '从当前提交创建独立 Git 工作树', onChange: value => { isolated = value; sync(); } });
     const message = h('div', { role: 'alert' });
     const criteriaField = Field({ label: '怎样算完成', control: criteria });
     const minutesField = Field({ label: '预计用时（分钟）', control: minutes });
@@ -208,6 +211,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
         isolation.hidden = mode.value !== 'task';
         if (isolation.hidden) { isolated = false; isolation.querySelector('input').checked = false; }
       }
+      if (copiesField) copiesField.hidden = !isolated;
       const real = chosen ? chosen.mode === 'real' : snapshot.mode !== 'demo';
       const required = real && mode.value === 'task';
       for (const [field, control] of [[criteriaField, criteria], [minutesField, minutes]]) { control.required = required; field.querySelector('.field__req')?.remove(); if (required) field.querySelector('label').append(h('span', { class: 'field__req' }, '*')); }
@@ -217,7 +221,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       title: '发起执行', subtitle: projectId === 'all' ? '不归属于某个项目' : `归属项目：${(snapshot.projects ?? []).find(item => item.id === projectId)?.name ?? ''}`,
       body: [!executors.length && Banner({ tone: 'warn', children: '现在没有可用的执行者。请先在 Agent 里连接一台电脑。', action: h('a', { class: 'btn btn--sm', href: router.href('agent') }, '去连接') }),
         Field({ label: '要做什么', control: prompt, required: true }), Field({ label: '谁来做', control: executor }),
-        binding && h('p', { class: 'muted folder-path' }, `继承项目文件夹：${binding.cwd}`), Field({ label: '关联待办', control: todo }), criteriaField, minutesField, isolation,
+        binding && h('p', { class: 'muted folder-path' }, `继承项目文件夹：${binding.cwd}`), Field({ label: '关联待办', control: todo }), criteriaField, minutesField, isolation, copiesField,
         Fold({ title: '更多选项', body: [Field({ label: binding ? '目录（继承项目）' : '目录', control: cwd }), Field({ label: '执行方式', control: mode })] }), message],
       footer: [Button({ label: '取消', onClick: () => drawer.close() }), Button({
         label: '开始执行', kind: 'primary',
@@ -225,10 +229,10 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
           if (uncertain) return;
           if (binding && !executors.some(item => item.id === executor.value)) { replace(message, Banner({ tone: 'warn', children: '绑定电脑没有可用执行者，不能改用其他电脑。' })); return; }
           if (!prompt.value.trim()) { replace(message, Banner({ tone: 'danger', children: '请写下要做什么。' })); return; }
-          const body = { prompt: prompt.value.trim(), ...(isolated && { isolatedWorktree: true }), ...(executor.value ? { executorId: executor.value } : {}), ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}),
+          const body = { prompt: prompt.value.trim(), ...(isolated && { isolatedWorktree: true, ...(canCompare && { copies: Number(copies.value) }) }), ...(executor.value ? { executorId: executor.value } : {}), ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}),
             ...(launchProjectId !== 'all' ? { projectId: launchProjectId } : {}), ...(todo.value ? { todoId: todo.value } : {}), ...(criteria.value.trim() ? { doneWhen: criteria.value.trim() } : {}),
             ...(minutes.value ? { expectMinutes: Number(minutes.value) } : {}), executionMode: mode.value };
-          try { const run = await api.post('/runs', body, { 'Idempotency-Key': key }); drawer.close(); store.refresh(); router.go(router.href('projects', launchProjectId, 'runs', run.id)); }
+          try { const run = await api.post('/runs', body, { 'Idempotency-Key': key }); drawer.close(); store.refresh(); router.go(router.href('projects', launchProjectId, 'runs', run.id) + (run.comparisonRunIds ? '?compare=group' : '')); }
           catch (error) { uncertain = !error.status || error.status >= 500 || /unknown/i.test(error.message); if (uncertain) button.disabled = true; replace(message, Banner({ tone: 'danger', children: uncertain ? '执行结果未知，请先核对执行记录和电脑，不要重复发起。' : `没有开始执行：${systemText(error.message)}` })); }
         },
       })],

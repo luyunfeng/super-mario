@@ -68,18 +68,27 @@ export async function readCommitDiff(params: JsonObject): Promise<Json> {
   return { path, text };
 }
 
+const runGit = async (dir: string, args: string[]) => (await execute('git', [...gitArgs, ...args], {
+  ...gitOptions(dir), timeout: 30000,
+})).stdout;
+
+export async function worktreeBase({ cwd, base }: JsonObject): Promise<string> {
+  if (typeof cwd !== 'string' || !isAbsolute(cwd) || cwd === '/' || sensitiveWorkspacePath(cwd)
+    || await realpath(cwd) !== cwd || (await runGit(cwd, ['rev-parse', '--show-toplevel'])).trimEnd() !== cwd)
+    throw new Error('请将项目绑定到 Git 仓库根目录');
+  if (base !== undefined && (typeof base !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(base)))
+    throw new Error('起始提交无效');
+  const resolved = (await runGit(cwd, ['rev-parse', '--verify', (base ?? 'HEAD') + '^{commit}'])).trim();
+  if (base !== undefined && base !== resolved) throw new Error('工作树起始提交不匹配');
+  return resolved;
+}
+
 // Only the saved project binding and a server-generated run ID determine the destination.
 export async function prepareRunWorktree(params: JsonObject): Promise<Json> {
   const { cwd, id } = params;
-  if (typeof cwd !== 'string' || !isAbsolute(cwd) || cwd === '/' || sensitiveWorkspacePath(cwd)
-    || await realpath(cwd) !== cwd || typeof id !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id)) {
+  if (typeof cwd !== 'string' || typeof id !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id))
     throw new Error('工作树来源或执行标识无效');
-  }
-  const runGit = async (dir: string, args: string[]) => (await execute('git', [...gitArgs, ...args], {
-    ...gitOptions(dir), timeout: 30000,
-  })).stdout;
-  if ((await runGit(cwd, ['rev-parse', '--show-toplevel'])).trimEnd() !== cwd) throw new Error('请将项目绑定到 Git 仓库根目录');
-  const base = (await runGit(cwd, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
+  const base = await worktreeBase(params);
   const parent = cwd + '-worktrees';
   await mkdir(parent, { recursive: true, mode: 0o700 });
   if (await realpath(parent) !== parent) throw new Error('工作树父目录已重定向');

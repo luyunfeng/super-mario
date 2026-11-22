@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { prepareRunWorktree, readCommitDiff } from './task-git.ts';
+import { prepareRunWorktree, readCommitDiff, worktreeBase } from './task-git.ts';
 import { workspaceCode } from './workspace-code.ts';
 import { lstat, mkdir, open, opendir, realpath, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -366,6 +366,6 @@ export function createProjectDiscovery(options: { home?: string; codexHome?: str
     // Plain objects satisfy the transport's JSON boundary without changing shared contracts.
     return { ...result, projects: result.projects.map(project => ({ ...project })) };
   }
-  const handlers = { 'workspace.projects': projects, 'workspace.directory': directory, 'workspace.directory.create': createDirectory, 'workspace.code': workspaceCode, 'workspace.commitDiff': readCommitDiff, 'workspace.prepareRunWorktree': prepareRunWorktree } satisfies Record<string, NodeHandler>;
+  const handlers = { 'workspace.projects': projects, 'workspace.directory': directory, 'workspace.directory.create': createDirectory, 'workspace.code': workspaceCode, 'workspace.commitDiff': readCommitDiff, 'workspace.prepareRunWorktree': prepareRunWorktree, 'workspace.worktreeBase': worktreeBase } satisfies Record<string, NodeHandler>;
   return { handlers, nativeDirectoryFilter };
 }

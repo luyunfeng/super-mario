@@ -670,6 +670,9 @@ export async function createWorkbench(config: AppConfig) {
     const prompt = requiredText(input.prompt, '工作内容');
     if (input.isolatedWorktree !== undefined && typeof input.isolatedWorktree !== 'boolean') throw new InputError('独立工作树选项无效');
     const isolated = input.isolatedWorktree === true;
+    const copies = input.copies === undefined ? 1 : input.copies;
+    if (typeof copies !== 'number' || !Number.isInteger(copies) || copies < 1 || copies > 4 || copies > 1 && !isolated)
+      throw new InputError('对比执行需要 2 至 4 个独立工作树');
     let requestedExecutor = optionalText(input.executorId, '执行者');
     const todoId = optionalText(input.todoId, '待办');
     const todo = todoId ? store.get<Todo>('todos', todoId) : undefined;
@@ -691,7 +694,7 @@ export async function createWorkbench(config: AppConfig) {
         const samePrompt = requestHash ? createHash('sha256').update(prompt).digest('hex') === requestHash : run.prompt === prompt;
         if (!samePrompt || (requestedExecutor !== undefined && run.executorId !== requestedExecutor)
           || run.projectId !== projectId || run.conversationId !== conversationId
-          || Boolean(run.worktree) !== isolated || (input.cwd !== undefined && (run.worktree?.source ?? run.cwd) !== input.cwd)
+          || (run.comparisonRunIds?.length ?? 1) !== copies || Boolean(run.worktree) !== isolated || (input.cwd !== undefined && (run.worktree?.source ?? run.cwd) !== input.cwd)
           || run.todoId !== todoId || run.sourceMessageId !== optionalText(input.sourceMessageId, '来源消息')
           || (input.executionMode !== undefined && run.executionMode !== input.executionMode)
           || (input.doneWhen !== undefined && run.doneWhen !== input.doneWhen)
@@ -730,7 +733,7 @@ export async function createWorkbench(config: AppConfig) {
       if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
       if (!workspace || cwd !== workspace.cwd || !requestedExecutor || executionMode !== 'task' || nativeResume)
         throw new InputError('独立工作树需要绑定项目根目录、指定执行者和新任务模式');
-      if (!machines?.list().some(m => m.id === workspace.machineId && m.capabilities.includes('workspace.prepareRunWorktree')))
+      if (!machines?.list().some(m => m.id === workspace.machineId && m.capabilities.includes('workspace.prepareRunWorktree') && (copies === 1 || m.capabilities.includes('workspace.worktreeBase'))))
         throw new InputError('请升级执行机代理以创建独立工作树', 409);
     }
     if (executor?.taskOnly && executionMode !== 'task') throw new InputError('此执行器仅支持任务模式');
@@ -750,107 +753,141 @@ export async function createWorkbench(config: AppConfig) {
     if (!executor?.available) throw new InputError(executor?.reason ?? '执行者不可用', 503);
     const now = new Date().toISOString();
     const proofSources = nativeResultSources(executor);
-    const id = randomUUID();
-    const destination = isolated && workspace ? join(workspace.cwd + '-worktrees', id) : cwd;
-    const run: Run = { id, ...(isolated && workspace ? { worktree: { source: workspace.cwd } } : {}), ...(nativeResume ? { nativeResume } : {}), ...(proofSources.length ? { nativeResultSources: proofSources } : {}), executorId, conversationId, prompt, ...(executor.mode === 'real' ? { machineId: executor.machineId } : {}), cwd: destination, executionMode: executionMode as 'task' | 'interactive', projectId, todoId, sourceMessageId: optionalText(input.sourceMessageId, '来源消息'), doneWhen, expectMinutes: expectMinutes as number | undefined, status: 'queued', output: '', createdAt: now, updatedAt: now };
+    const ids = Array.from({ length: copies }, () => randomUUID());
+    const runs = ids.map((id): Run => ({
+      id, executorId, conversationId, prompt, projectId, todoId, doneWhen,
+      ...(copies > 1 && { comparisonRunIds: ids }),
+      ...(isolated && workspace && { worktree: { source: workspace.cwd } }),
+      ...(nativeResume && { nativeResume }),
+      ...(proofSources.length && { nativeResultSources: proofSources }),
+      ...(executor.mode === 'real' && { machineId: executor.machineId }),
+      cwd: isolated && workspace ? join(workspace.cwd + '-worktrees', id) : cwd,
+      executionMode: executionMode as Run['executionMode'], sourceMessageId: optionalText(input.sourceMessageId, '来源消息'),
+      expectMinutes: expectMinutes as number | undefined, status: 'queued', output: '', createdAt: now, updatedAt: now,
+    }));
     store.transaction(() => {
-      store.put('runs', run.id, run); if (key) store.put('dispatch-keys', key, run.id);
-      if (taskPolicy) policies.write({ runId: run.id, ...(run.projectId ? { projectId: run.projectId } : {}) }, taskPolicy, { notify: false });
+      for (const run of runs) {
+        store.put('runs', run.id, run);
+        if (taskPolicy) policies.write({ runId: run.id, ...(run.projectId ? { projectId: run.projectId } : {}) }, taskPolicy, { notify: false });
+      }
+      if (key) store.put('dispatch-keys', key, runs[0]!.id);
     });
     if (taskPolicy) changed('policies.changed', {});
-    const controller = new AbortController(); controllers.set(run.id, controller);
-    changed('runs.changed', { id: run.id });
-    // Launch asynchronously so a long-running executor never holds the HTTP request open.
-    const job = Promise.resolve().then(async () => {
-      const update = (patch: Partial<Run>) => {
-        const next = { ...store.get<Run>('runs', run.id)!, ...patch, updatedAt: new Date().toISOString() };
-        store.put('runs', run.id, next); changed('runs.changed', { id: run.id });
-      };
-      update({ status: 'running' });
-      try {
-        const original = JSON.parse(JSON.stringify(run)) as JsonObject;
-        const prepared = await plugins.invocations.hooks('work.dispatch', 'before', original);
-        if (!prepared || typeof prepared !== 'object' || Array.isArray(prepared)) throw new PluginCallError('派活钩子必须返回对象');
-        for (const field of Object.keys(original)) if (field !== 'prompt' && JSON.stringify(prepared[field]) !== JSON.stringify(original[field])) throw new PluginCallError('派活钩子只能改写 prompt，不能改变执行者、模式或工作范围');
-        const effectivePrompt = requiredText(prepared.prompt, '钩子改写后的任务');
-        if (executionGuard && effectivePrompt !== prompt) throw Object.assign(new InputError('已确认的收件任务内容不能被钩子改写', 409), { delivery: 'no' });
-        if (effectivePrompt !== prompt) {
-          if (key) store.put('dispatch-prompt-hashes', key, createHash('sha256').update(prompt).digest('hex'));
-          update({ prompt: effectivePrompt });
-        }
-        // Keep the run's task separate: review/rework reuses it and resolves current decisions again.
-        const currentDecisions = () => {
-          if (!todoId) return '';
-          const current = store.get<Todo>('todos', todoId);
-          if (!current || current.projectId !== projectId) {
-            throw Object.assign(new InputError('待办归属已变更，请核对后重新派单', 409), { delivery: 'no' });
+    // Git checkout is serialized within the group. Once a checkout finishes its executor can run alongside the others.
+    let commonBase: Promise<Json> | undefined;
+    let previousCheckout = Promise.resolve();
+    for (const run of runs) {
+      const destination = run.cwd;
+      const controller = new AbortController(); controllers.set(run.id, controller);
+      changed('runs.changed', { id: run.id });
+      // Launch asynchronously so a long-running executor never holds the HTTP request open.
+      const job = Promise.resolve().then(async () => {
+        const update = (patch: Partial<Run>) => {
+          const next = { ...store.get<Run>('runs', run.id)!, ...patch, updatedAt: new Date().toISOString() };
+          store.put('runs', run.id, next); changed('runs.changed', { id: run.id });
+        };
+        update({ status: 'running' });
+        try {
+          const original = JSON.parse(JSON.stringify(run)) as JsonObject;
+          const prepared = await plugins.invocations.hooks('work.dispatch', 'before', original);
+          if (!prepared || typeof prepared !== 'object' || Array.isArray(prepared)) throw new PluginCallError('派活钩子必须返回对象');
+          for (const field of Object.keys(original)) if (field !== 'prompt' && JSON.stringify(prepared[field]) !== JSON.stringify(original[field])) throw new PluginCallError('派活钩子只能改写 prompt，不能改变执行者、模式或工作范围');
+          const effectivePrompt = requiredText(prepared.prompt, '钩子改写后的任务');
+          if (executionGuard && effectivePrompt !== prompt) throw Object.assign(new InputError('已确认的收件任务内容不能被钩子改写', 409), { delivery: 'no' });
+          if (effectivePrompt !== prompt) {
+            if (key) store.put('dispatch-prompt-hashes', key, createHash('sha256').update(prompt).digest('hex'));
+            update({ prompt: effectivePrompt });
           }
-          return todoDecisions.context(todoId);
-        };
-        // Exact approved payloads and existing native threads retain their original terms.
-        const guidance = projectId && !nativeApproved && !executionGuard ? await currentProjectInstructions(projectId) : '';
-        const decisions = currentDecisions();
-        const includeOfficeGuide = executor.mode === 'real' && executionMode === 'task' && !nativeApproved && !executionGuard
-          && plugins.list().some(plugin => plugin.id === 'office-documents' && plugin.status === 'active')
-          && machines?.list().some(machine => machine.id === executor.machineId && machine.online && machine.capabilities.includes('office.guide'));
-        const checkWorktreeBinding = () => {
-          if (!isolated || !workspace) return;
-          const currentProject = store.get<Project>('projects', projectId!);
-          if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active') || currentProject?.archivedAt
-            || currentProject?.workspace?.cwd !== workspace.cwd || currentProject.workspace.machineId !== workspace.machineId)
-            throw Object.assign(new InputError('项目绑定或执行对比插件已变更，请重新核对', 409), { delivery: 'no' });
-        };
-        if (isolated && workspace) {
-          executionGuard?.();
-          assertBotInput(inputMessage);
-          controller.signal.throwIfAborted();
-          checkWorktreeBinding();
-          const receipt = await effects.perform({ key: `run:${run.id}:worktree`, kind: 'workspace.prepareRunWorktree',
-            target: workspace.machineId, summary: '为本次任务创建独立工作树', content: { cwd: workspace.cwd, id: run.id },
-            run: () => machines!.call(workspace.machineId, 'workspace.prepareRunWorktree', { cwd: workspace.cwd, id: run.id }, { timeoutMs: 90000 }) });
-          if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) || receipt.cwd !== destination
-            || receipt.branch !== 'super-mario/' + run.id || typeof receipt.base !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(receipt.base))
-            throw Object.assign(new Error('工作树回执无效，请核对执行机'), { delivery: 'unknown' });
-          update({ worktree: { source: workspace.cwd, branch: receipt.branch, base: receipt.base } });
-        }
-        const isolationGuide = isolated ? '本次使用独立 Git 工作树。所有项目改动在当前工作目录中完成，记录改动文件、提交和测试证据；合并和清理工作树由用户决定。' : '';
-        const finalPrompt = [effectivePrompt, decisions, guidance, isolationGuide, includeOfficeGuide ? officeWorkerGuide : ''].filter(Boolean).join('\n\n');
-        const execute = async () => {
-          controller.signal.throwIfAborted();
-          checkWorktreeBinding();
-          executionGuard?.();
-          assertBotInput(inputMessage);
-          if (currentDecisions() !== decisions) {
-            throw Object.assign(new InputError('待办决定已变更，请核对后重新派单', 409), { delivery: 'no' });
+          // Keep the run's task separate: review/rework reuses it and resolves current decisions again.
+          const currentDecisions = () => {
+            if (!todoId) return '';
+            const current = store.get<Todo>('todos', todoId);
+            if (!current || current.projectId !== projectId) {
+              throw Object.assign(new InputError('待办归属已变更，请核对后重新派单', 409), { delivery: 'no' });
+            }
+            return todoDecisions.context(todoId);
+          };
+          // Exact approved payloads and existing native threads retain their original terms.
+          const guidance = projectId && !nativeApproved && !executionGuard ? await currentProjectInstructions(projectId) : '';
+          const decisions = currentDecisions();
+          const includeOfficeGuide = executor.mode === 'real' && executionMode === 'task' && !nativeApproved && !executionGuard
+            && plugins.list().some(plugin => plugin.id === 'office-documents' && plugin.status === 'active')
+            && machines?.list().some(machine => machine.id === executor.machineId && machine.online && machine.capabilities.includes('office.guide'));
+          const checkWorktreeBinding = () => {
+            if (!isolated || !workspace) return;
+            const currentProject = store.get<Project>('projects', projectId!);
+            if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active') || currentProject?.archivedAt
+              || currentProject?.workspace?.cwd !== workspace.cwd || currentProject.workspace.machineId !== workspace.machineId)
+              throw Object.assign(new InputError('项目绑定或执行对比插件已变更，请重新核对', 409), { delivery: 'no' });
+          };
+          if (isolated && workspace) {
+            executionGuard?.();
+            assertBotInput(inputMessage);
+            controller.signal.throwIfAborted();
+            checkWorktreeBinding();
+            let base: string | undefined;
+            if (copies > 1) {
+              commonBase ??= machines!.call(workspace.machineId, 'workspace.worktreeBase', { cwd: workspace.cwd });
+              const value = await commonBase;
+              if (typeof value !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value)) throw new Error('工作树起点回执无效');
+              base = value;
+              update({ worktree: { source: workspace.cwd, base } });
+            }
+            const params = { cwd: workspace.cwd, id: run.id, ...(base && { base }) };
+            const checkout = previousCheckout.then(() => {
+              controller.signal.throwIfAborted();
+              checkWorktreeBinding();
+              assertBotInput(inputMessage);
+              return effects.perform({ key: `run:${run.id}:worktree`, kind: 'workspace.prepareRunWorktree',
+                target: workspace.machineId, summary: '为本次任务创建独立工作树', content: params,
+                run: () => machines!.call(workspace.machineId, 'workspace.prepareRunWorktree', params, { timeoutMs: 90000 }) });
+            });
+            previousCheckout = checkout.then(() => {}, () => {});
+            const receipt = await checkout;
+            if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) || receipt.cwd !== destination
+              || (base !== undefined && receipt.base !== base) || receipt.branch !== 'super-mario/' + run.id || typeof receipt.base !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(receipt.base))
+              throw Object.assign(new Error('工作树回执无效，请核对执行机'), { delivery: 'unknown' });
+            update({ worktree: { source: workspace.cwd, branch: receipt.branch, base: receipt.base } });
           }
-          const result = await executor.execute({ prompt: finalPrompt, cwd: destination, executionMode: run.executionMode, ...(nativeResume ? { nativeResume } : {}), signal: controller.signal, onOutput: text => update({ output: (store.get<Run>('runs', run.id)?.output ?? '') + text }) });
-          if (result.sessionId) update({ sessionId: result.sessionId });
-          const metadata = JSON.parse(JSON.stringify(result)) as JsonObject;
-          const evidenceSnapshot = JSON.stringify(metadata.nativeResult);
-          const decorated = await plugins.invocations.hooks('work.dispatch', 'after', metadata);
-          if (!decorated || typeof decorated !== 'object' || Array.isArray(decorated) || typeof decorated.text !== 'string' || decorated.sessionId !== metadata.sessionId || decorated.pending !== metadata.pending || JSON.stringify(decorated.nativeResult) !== evidenceSnapshot) throw new PluginCallError('结果钩子只能改写展示正文，不能伪造原生会话或完成状态', true);
-          const { nativeResult: _rawProof, ...display } = result;
-          return { ...display, text: decorated.text, ...(evidenceSnapshot === undefined ? {} : { nativeResult: JSON.parse(evidenceSnapshot) as ExecutionResult }) };
-        };
-        const result = executor.mode === 'real'
-          ? await effects.perform({ key: `run:${run.id}:start`, kind: nativeResume ? 'executor.resume' : 'executor.start', target: executor.machineId, summary: prompt, content: { executorId, prompt: finalPrompt, ...(nativeResume ? { nativeResume: { ...nativeResume } } : {}), ...(destination === undefined ? {} : { cwd: destination }), executionMode: String(executionMode) }, run: execute })
-          : await execute();
-        if (nativeResume && !result.pending && !controller.signal.aborted) {
-          const proof = result.nativeResult;
-          if (!proof || !['completed', 'failed'].includes(proof.state) || typeof proof.text !== 'string'
-            || proof.nativeSessionId !== nativeResume.nativeSessionId || !run.nativeResultSources?.includes(proof.source)) {
-            update({ status: 'unknown', sessionId: result.sessionId, output: result.text, error: '原生恢复同步结果缺少匹配的线程证据；不会自动重试' });
-          } else finishRun({ ...store.get<Run>('runs', run.id)!, ...(result.sessionId ? { sessionId: result.sessionId } : {}) }, proof);
-        } else {
-          update({ status: controller.signal.aborted ? (executor.mode === 'demo' ? 'cancelled' : 'unknown') : (result.pending ? 'running' : 'completed'), sessionId: result.sessionId, output: result.text });
-          if (!result.pending && !controller.signal.aborted) finishRun(store.get<Run>('runs', run.id)!, { state: 'completed', text: result.text, source: executor.mode });
-        }
-      } catch (error) {
-        update({ status: controller.signal.aborted ? (executor.mode === 'demo' ? 'cancelled' : 'unknown') : ((error as { delivery?: string }).delivery === 'unknown' ? 'unknown' : 'failed'), error: error instanceof Error ? error.message : String(error) });
-      } finally { controllers.delete(run.id); }
-    });
-    jobs.add(job); void job.then(() => jobs.delete(job), error => { jobs.delete(job); console.error('执行记录保存失败：', error instanceof Error ? error.message : String(error)); });
-    return run;
+          const isolationGuide = isolated ? '本次使用独立 Git 工作树。所有项目改动在当前工作目录中完成，记录改动文件、提交和测试证据；合并和清理工作树由用户决定。' : '';
+          const finalPrompt = [effectivePrompt, decisions, guidance, isolationGuide, includeOfficeGuide ? officeWorkerGuide : ''].filter(Boolean).join('\n\n');
+          const execute = async () => {
+            controller.signal.throwIfAborted();
+            checkWorktreeBinding();
+            executionGuard?.();
+            assertBotInput(inputMessage);
+            if (currentDecisions() !== decisions) {
+              throw Object.assign(new InputError('待办决定已变更，请核对后重新派单', 409), { delivery: 'no' });
+            }
+            const result = await executor.execute({ prompt: finalPrompt, cwd: destination, executionMode: run.executionMode, ...(nativeResume ? { nativeResume } : {}), signal: controller.signal, onOutput: text => update({ output: (store.get<Run>('runs', run.id)?.output ?? '') + text }) });
+            if (result.sessionId) update({ sessionId: result.sessionId });
+            const metadata = JSON.parse(JSON.stringify(result)) as JsonObject;
+            const evidenceSnapshot = JSON.stringify(metadata.nativeResult);
+            const decorated = await plugins.invocations.hooks('work.dispatch', 'after', metadata);
+            if (!decorated || typeof decorated !== 'object' || Array.isArray(decorated) || typeof decorated.text !== 'string' || decorated.sessionId !== metadata.sessionId || decorated.pending !== metadata.pending || JSON.stringify(decorated.nativeResult) !== evidenceSnapshot) throw new PluginCallError('结果钩子只能改写展示正文，不能伪造原生会话或完成状态', true);
+            const { nativeResult: _rawProof, ...display } = result;
+            return { ...display, text: decorated.text, ...(evidenceSnapshot === undefined ? {} : { nativeResult: JSON.parse(evidenceSnapshot) as ExecutionResult }) };
+          };
+          const result = executor.mode === 'real'
+            ? await effects.perform({ key: `run:${run.id}:start`, kind: nativeResume ? 'executor.resume' : 'executor.start', target: executor.machineId, summary: prompt, content: { executorId, prompt: finalPrompt, ...(nativeResume ? { nativeResume: { ...nativeResume } } : {}), ...(destination === undefined ? {} : { cwd: destination }), executionMode: String(executionMode) }, run: execute })
+            : await execute();
+          if (nativeResume && !result.pending && !controller.signal.aborted) {
+            const proof = result.nativeResult;
+            if (!proof || !['completed', 'failed'].includes(proof.state) || typeof proof.text !== 'string'
+              || proof.nativeSessionId !== nativeResume.nativeSessionId || !run.nativeResultSources?.includes(proof.source)) {
+              update({ status: 'unknown', sessionId: result.sessionId, output: result.text, error: '原生恢复同步结果缺少匹配的线程证据；不会自动重试' });
+            } else finishRun({ ...store.get<Run>('runs', run.id)!, ...(result.sessionId ? { sessionId: result.sessionId } : {}) }, proof);
+          } else {
+            update({ status: controller.signal.aborted ? (executor.mode === 'demo' ? 'cancelled' : 'unknown') : (result.pending ? 'running' : 'completed'), sessionId: result.sessionId, output: result.text });
+            if (!result.pending && !controller.signal.aborted) finishRun(store.get<Run>('runs', run.id)!, { state: 'completed', text: result.text, source: executor.mode });
+          }
+        } catch (error) {
+          update({ status: controller.signal.aborted ? (executor.mode === 'demo' ? 'cancelled' : 'unknown') : ((error as { delivery?: string }).delivery === 'unknown' ? 'unknown' : 'failed'), error: error instanceof Error ? error.message : String(error) });
+        } finally { controllers.delete(run.id); }
+      });
+      jobs.add(job); void job.then(() => jobs.delete(job), error => { jobs.delete(job); console.error('执行记录保存失败：', error instanceof Error ? error.message : String(error)); });
+    }
+    return runs[0]!;
   }
   function remoteRun(id: string) {
     const run = store.get<Run>('runs', id);

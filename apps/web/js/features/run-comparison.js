@@ -43,18 +43,19 @@ export function compareRuns({ run, runs, projectId, router, executorName, api, s
     .sort((a, b) => Number(Boolean(run.todoId && b.todoId === run.todoId)) - Number(Boolean(run.todoId && a.todoId === run.todoId))
       || b.createdAt.localeCompare(a.createdAt));
   const selected = router.current.query.get('compare');
-  if (!peers.length && !selected) return null;
+  const group = run.comparisonRunIds;
+  if (!peers.length && !selected && !group) return null;
   const href = id => router.href('projects', projectId, 'runs', id);
   const pick = Select({
     'aria-label': '选择对比执行',
-    options: [['', '选择对比执行'], ...peers.map(item => [item.id, `${item.prompt} · ${formatDate(item.createdAt, true)} · ${item.id}`])],
+    options: [['', '选择对比执行'], ...(group ? [['group', '本次对比组']] : []), ...peers.map(item => [item.id, `${item.prompt} · ${formatDate(item.createdAt, true)} · ${item.id}`])],
     value: selected || '',
     onChange: event => router.go(href(run.id) + (event.target.value ? '?compare=' + encodeURIComponent(event.target.value) : '')),
   });
-  function card(item) {
+  function card(item, index) {
     const status = runStatus[item.status] ?? { text: item.status, tone: '' };
     return h('article', { class: 'card card__body stack' },
-      h('h3', null, item.prompt), Pill(status.text, status.tone),
+      h('h3', null, index === undefined ? item.prompt : `执行 ${index + 1} · ${item.prompt}`), Pill(status.text, status.tone),
       h('span', { class: 'small' }, executorName(item.executorId), ' · ', formatDate(item.createdAt, true)),
       h('div', null, item.usage
         ? `本次 Token：输入 ${item.usage.input.toLocaleString()} · 输出 ${item.usage.output.toLocaleString()}`
@@ -65,6 +66,7 @@ export function compareRuns({ run, runs, projectId, router, executorName, api, s
           item.commitChanges.base.slice(0, 10) + ' → ' + item.commitChanges.head.slice(0, 10)),
         item.commitChanges.files > 0 && Button({ label: '查看文件差异', size: 'sm', onClick: () => openCommitDiff({ item, api, store, router }) }))
         : h('span', { class: 'muted small' }, '目录内已提交差异：未上报'),
+      item.worktree?.base && h('div', { class: 'small' }, '工作树起点：', h('code', { title: item.worktree.base }, item.worktree.base.slice(0, 10))),
       item.cwd && h('div', null, '工作目录：', item.cwd),
       item.doneWhen && h('div', null, '完成标准：', item.doneWhen),
       h('pre', { class: 'output' }, item.output || '暂无输出'),
@@ -75,6 +77,9 @@ export function compareRuns({ run, runs, projectId, router, executorName, api, s
   const peer = peers.find(item => item.id === selected);
   return h('section', { class: 'stack', 'aria-label': '执行对比' }, pick,
     selected && h('a', { href: href(run.id) }, '关闭对比'),
-    peer ? h('div', { class: 'run-comparison' }, card(run), card(peer))
+    selected === 'group' && group ? h('div', { class: 'run-comparison' }, group.map((id, index) => {
+      const item = id === run.id ? run : peers.find(candidate => candidate.id === id && candidate.comparisonRunIds?.[0] === group[0]);
+      return item ? card(item, index) : h('p', { class: 'muted' }, `执行 ${index + 1} 的记录不可用。`);
+    })) : peer ? h('div', { class: 'run-comparison' }, card(run), card(peer))
       : selected && h('p', { class: 'muted' }, '此记录无法与当前执行对比。'));
 }
