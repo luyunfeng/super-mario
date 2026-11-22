@@ -3,7 +3,7 @@ import { h, replace } from '../lib/dom.js';
 import { appendConversationQuestion, createConversationDrafts } from '../lib/conversation-drafts.js';
 import { quoteDraftKey } from '../lib/message-quote.js';
 import { layerNames, timeAgo } from '../lib/format.js';
-import { Button, Field, Input, TextArea, Select, Pill } from '../ui/kit.js';
+import { Button, Check, Field, Input, TextArea, Select, Pill } from '../ui/kit.js';
 import { hintCopy } from '../ui/hint.js';
 import { openDrawer, confirmDialog } from '../ui/overlay.js';
 
@@ -144,10 +144,43 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   function handoff(source) {
     if (!canReadEntry()) { note.textContent = '当前无法读取这份会议资料。'; return; }
     if (hasUnsavedChanges()) { note.textContent = '请先保存记忆修改，再准备交接稿。'; return; }
-    const question = '请准备会议交接稿。知识页 ID 为 ' + entry.id + '，选中的会议来源 ID 为 ' + source.id +
-      '。请核对原文，整理接手方需要了解的决定、行动项当前进度和未决问题。只起草，供我核对。';
-    try { appendConversationQuestion({ api, store, router, scope }, entry.projectId, question); }
-    catch (error) { note.textContent = error.message; }
+    const task = TextArea({ rows: 3, maxLength: 8000 });
+    const status = h('p', { role: 'status' });
+    let includeTranscript = false;
+    const include = source.materialKind === 'meeting-transcript' && Check({
+      label: '附上这份会议转写', onChange: value => { includeTranscript = value; },
+    });
+    const apply = Button({ label: '加入对话草稿', kind: 'primary', onClick: async () => {
+      if (apply.disabled || !canReadEntry()) { status.textContent = '当前无法读取这份会议资料。'; return; }
+      apply.disabled = true;
+      const instruction = task.value.trim();
+      const attach = includeTranscript;
+      task.disabled = true;
+      const checkbox = include && include.querySelector('input');
+      if (checkbox) checkbox.disabled = true;
+      try {
+        const parts = ['请准备会议交接稿。知识页 ID 为 ' + entry.id + '，选中的会议来源 ID 为 ' + source.id +
+          '。请核对原文，整理接手方需要了解的决定、行动项当前进度和未决问题。只起草，供我核对。'];
+        if (instruction) parts.push('给接手方的任务：' + instruction);
+        if (attach) {
+          const { content } = await api.get('/knowledge/' + encodeURIComponent(entry.id) + '/sources/' + encodeURIComponent(source.id));
+          if (!content?.trim()) throw new Error('所选转写没有正文。');
+          const chars = Array.from(content);
+          const cut = chars.length > 5000;
+          const excerpt = cut ? chars.slice(0, 2500).join('') + '\n〔中段已省略〕\n' + chars.slice(-2500).join('') : content;
+          parts.push((cut ? '请附以下转写节选（首尾各 2500 字符）：' : '请附以下会议转写：') +
+            '\n' + excerpt.replace(/\r\n?/g, '\n').split('\n').map(line => '> ' + line).join('\n'));
+        }
+        if (!options.el.open) return;
+        if (!canReadEntry()) throw new Error('当前无法读取这份会议资料。');
+        appendConversationQuestion({ api, store, router, scope }, entry.projectId, parts.join('\n\n'));
+        options.close();
+      } catch (error) { status.textContent = error.message; }
+      finally { apply.disabled = false; task.disabled = false; if (checkbox) checkbox.disabled = false; }
+    } });
+    const options = openDrawer({ title: '准备会议交接稿', subtitle: source.title, body: [
+      Field({ label: '给接手方的任务（可选）', control: task }), include, status,
+    ], footer: apply });
   }
   function hasUnsavedChanges() {
     return fields.some((field, i) => field.value !== baseline[i]) || changedScope() || (protection.value === 'locked') !== Boolean(reviewed.contentLocked);

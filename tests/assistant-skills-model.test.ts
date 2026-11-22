@@ -501,6 +501,8 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
       assert.ok(req.tools.includes('knowledge_list'));
       if (JSON.stringify(req.content).includes('起草交接')) {
         assert.match(req.system, /默认只给交接摘要/);
+        assert.match(req.system, /本轮只起草时不要代为执行/);
+        assert.match(req.system, /不补写省略部分/);
         assert.match(req.system, /准备交接稿只在当前对话回复/);
         return call('knowledge_original', { pageId }, 'handoff-sources');
       }
