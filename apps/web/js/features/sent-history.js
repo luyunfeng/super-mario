@@ -2,8 +2,8 @@
 import { h, replace } from '../lib/dom.js';
 import { openDrawer } from '../ui/overlay.js';
 
-export function attachSentHistory({ input, store, context }) {
-  let recalled;
+export function attachSentHistory({ input, store, context, currentConversationOnly = false }) {
+  let recalled, searchDrawer;
   const prefix = owner => 'sm.sent-history.' + owner + '.';
   function entries(owner, key) {
     try {
@@ -30,12 +30,14 @@ export function attachSentHistory({ input, store, context }) {
     const field = h('input', { class: 'input', 'aria-label': '搜索已发送内容', placeholder: '输入关键词' });
     const list = h('div', { class: 'stack' });
     let selected = 0, rows = [], unsubscribe;
-    const drawer = openDrawer({ title: '已发送内容', body: [field, list], onClose: () => unsubscribe?.() });
+    const drawer = openDrawer({ title: '已发送内容', body: [field, list], onClose() { unsubscribe?.(); if (searchDrawer === drawer) searchDrawer = undefined; } });
+    searchDrawer = drawer;
     function valid() {
       const now = context();
       return drawer.el.open && input.isConnected && now.draftsEnabled && now.key === scope.key && now.owner === scope.owner;
     }
     function keys() {
+      if (currentConversationOnly) return [scope.key];
       const result = [JSON.stringify(['main', ''])];
       for (const project of store.view.snapshot?.projects ?? []) {
         if (project.archivedAt) continue;
@@ -109,5 +111,5 @@ export function attachSentHistory({ input, store, context }) {
     put(next);
     recalled = { key: scope.key, owner: scope.owner, text: next };
   });
-  return { record };
+  return { record, reset() { recalled = undefined; searchDrawer?.close(); } };
 }

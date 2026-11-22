@@ -1,5 +1,6 @@
 import { h, replace, debounce } from '../lib/dom.js';
 import { Banner, Button, Card, Field, Input, Select, TextArea } from '../ui/kit.js';
+import { attachSentHistory } from './sent-history.js';
 import { createConversationDrafts } from '../lib/conversation-drafts.js';
 import { attachSavedPrompts } from './saved-prompts.js';
 import { openDrawer, confirmDialog } from '../ui/overlay.js';
@@ -57,12 +58,11 @@ export function openInboxHandlingDrawer({ api, store, source }) {
   const owner = drafts.owner();
   let credentials = sessions.get(api);
   if (!credentials) { credentials = new Map(); sessions.set(api, credentials); }
-  let records = credentials.get(token);
-  if (!records) { records = new Map(); credentials.set(token, records); }
+  let records = credentials.get(owner);
+  if (!records) { records = new Map(); credentials.set(owner, records); }
   const sourceKey = JSON.stringify([source.kind, source.id]);
-  let local = records.get(sourceKey);
-  if (!local) { local = { messageAttempt: null, writeLocks: new Set() }; records.set(sourceKey, local); }
-  local.acknowledgedUnknown ??= new Set();
+  const emptySession = () => ({ messageAttempt: null, writeLocks: new Set(), acknowledgedUnknown: new Set() });
+  let local = emptySession();
   const path = `/inbox-handling/${source.kind}/${encodeURIComponent(source.id)}`;
   let view, alive = true, readRevision = 0, writeRevision = 0, writing = false, editor, preview;
   let lastSnapshot = store.view.snapshot;
@@ -72,6 +72,10 @@ export function openInboxHandlingDrawer({ api, store, source }) {
   const message = TextArea({ rows: 3, 'aria-label': '处理指令', placeholder: '输入这条消息的处理要求', disabled: true });
   message.addEventListener('input', () => { if (draftKey && current()) drafts.write(draftKey, message.value); });
   const prompts = attachSavedPrompts({ api, store, input: message, getScope: () => sourceKey });
+  const history = attachSentHistory({ input: message, store, currentConversationOnly: true, context() {
+    return { key: draftKey, owner, draftsEnabled: current() && store.view.snapshotOwner === owner &&
+      store.view.snapshot?.plugins?.some(plugin => plugin.id === 'conversation-drafts' && plugin.status === 'active') };
+  } });
   const send = Button({ label: '发送处理指令', onClick: sendMessage, disabled: true });
   const create = Button({ label: '手工新建建议', onClick: () => startEditor(), disabled: true });
   const fresh = Button({label:'核对后发起新分析',onClick:async()=>{
@@ -99,7 +103,7 @@ export function openInboxHandlingDrawer({ api, store, source }) {
     if (!alive) return;
     alive = false; readRevision++; writeRevision++;
     if (local.messageAttempt?.status === 'submitting') local.messageAttempt.status = 'unknown';
-    prompts.dispose(); schedule.cancel(); unsubscribe?.(); unwatch();
+    history.reset(); prompts.dispose(); schedule.cancel(); unsubscribe?.(); unwatch();
   }
   function current() { return alive && drawer.el.open && api.token?.() === token && drafts.owner() === owner && !store.view.unauthorized; }
   function say(text) { replace(notice, text && Banner({ tone: 'warn', children: text })); }
@@ -128,6 +132,13 @@ export function openInboxHandlingDrawer({ api, store, source }) {
       // A changed source assignment can identify a different conversation. Restore only after resolving it.
       const key = next.source.active && next.conversationId ? JSON.stringify(['inbox', source.kind, source.id, next.conversationId]) : undefined;
       if (draftKey !== key) {
+        history.reset();
+        if (local.messageAttempt?.status === 'submitting') local.messageAttempt.status = 'unknown';
+        writeRevision++; writing = false;
+        local = (key && records.get(key)) || emptySession();
+        if (key) records.set(key, local);
+        editor = undefined; preview = undefined;
+        replace(editorHost); replace(confirmation); replace(result); say('');
         draftKey = key;
         message.value = key ? drafts.read(key) : '';
       }
@@ -136,6 +147,7 @@ export function openInboxHandlingDrawer({ api, store, source }) {
       const attempt = local.messageAttempt;
       const found = attempt && view.requests.find(r => r.key === attempt.key);
       if (found) {
+        recordAccepted(attempt, found);
         attempt.status = found.status;
         if (['completed', 'failed'].includes(found.status)) local.messageAttempt = null;
       }
@@ -249,7 +261,7 @@ export function openInboxHandlingDrawer({ api, store, source }) {
       const unknown = !error.status || error.status >= 500;
       if (!unknown && lockKey) local.writeLocks.delete(lockKey);
       if (suffix === '/messages') {
-        if (unknown) local.messageAttempt.status = 'unknown';
+        if (unknown && local.messageAttempt) local.messageAttempt.status = 'unknown';
         else local.messageAttempt = null;
       }
       if (error.status === 409 && editor && suffix === '/suggestions') { editor.conflict = true; schedule(); }
@@ -258,16 +270,27 @@ export function openInboxHandlingDrawer({ api, store, source }) {
       if (current() && revision === writeRevision) { writing = false; if (view) paint(); }
     }
   }
+  function recordAccepted(attempt, request) {
+    if (!attempt?.draft || attempt.owner !== owner || attempt.target !== draftKey || request.key !== attempt.key ||
+        request.conversationId !== view.conversationId || !request.id ||
+        !['pending', 'completed', 'failed'].includes(request.status)) return;
+    const original = attempt.draft;
+    delete attempt.draft;
+    history.record({ key: draftKey, owner, draft: original });
+  }
   async function sendMessage() {
     if (send.disabled || !message.value.trim()) return;
     const original = message.value, target = draftKey, text = original.trim();
     const key = crypto.randomUUID();
-    local.messageAttempt = { key, status: 'submitting' };
+    local.messageAttempt = { key, status: 'submitting', draft: original, target, owner };
     await post('/messages', { sourceVersion: view.source.version, text, key }, request => {
+      if (!local.messageAttempt || local.messageAttempt.key !== key) return;
       local.messageAttempt.status = request.status;
-      if (request.id && ['pending', 'completed'].includes(request.status)) {
+      recordAccepted(local.messageAttempt, request);
+      if (request.key === key && request.conversationId === view.conversationId && target === draftKey &&
+          request.id && ['pending', 'completed'].includes(request.status)) {
         drafts.clearIf(target, original);
-        if (target === draftKey && message.value === original) message.value = drafts.read(target);
+        if (message.value === original) message.value = drafts.read(target);
       }
       say(`${STATUS[request.status] || request.status} · 请求 ID：${request.id}。受理不代表模型已完成。`);
     });

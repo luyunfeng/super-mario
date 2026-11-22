@@ -118,7 +118,7 @@ test('202只受理、unknown不重放，GET请求事实；仅快照变化debounc
   let data = view(), abort = true;
   setHandler(c => {
     if (c.method === 'GET') return { data };
-    data = view({ requests: [{ id: 'durable-request', key: c.body.key, status: 'pending' }] });
+    data = view({ requests: [{ id: 'durable-request', key: c.body.key, conversationId: 'c1', status: 'pending' }] });
     return abort ? { abort: true } : { data: data.requests[0], status: 202 };
   });
   await open(page); await expect(page.getByRole('button', { name: '发送处理指令' })).toBeEnabled();
@@ -128,7 +128,7 @@ test('202只受理、unknown不重放，GET请求事实；仅快照变化debounc
   await emit(page); await expect(drawer(page)).toContainText('durable-request'); await expect(drawer(page)).toContainText('已持久受理，等待模型处理');
   assert.equal(calls.filter(c => c.method === 'POST').length, 1);
   const key = calls.find(c => c.method === 'POST')!.body.key; assert.ok(key);
-  data = view({ requests: [{ id: 'durable-request', key, status: 'failed', error: '模型失败' }] }); await emit(page); await expect(drawer(page)).toContainText('模型请求失败');
+  data = view({ requests: [{ id: 'durable-request', key, conversationId: 'c1', status: 'failed', error: '模型失败' }] }); await emit(page); await expect(drawer(page)).toContainText('模型请求失败');
   await expect(page.getByRole('button', { name: '发送处理指令' })).toBeEnabled(); abort = false;
   await page.getByRole('button', { name: '发送处理指令' }).click(); await expect(drawer(page)).toContainText('受理不代表模型已完成');
   const posts = calls.filter(c => c.method === 'POST'); assert.equal(posts.length, 2); assert.notEqual(posts[0]!.body.key, posts[1]!.body.key);
@@ -219,4 +219,37 @@ test('建议保存结果未知锁定请求，关闭再开不重放；建议执�
   await expect(page.getByLabel('待办备注', { exact: true })).toBeDisabled();
   await expect(page.getByLabel('待办备注', { exact: true })).toHaveValue('运行前草稿');
   await expect(page.getByRole('button', { name: '保存建议（不执行）' })).toBeDisabled();
+}));
+
+
+test('处理指令可在本来源回取，改绑后关闭搜索且不能读取旧会话', async () => fixture(async ({ page, calls, setHandler }) => {
+  await page.evaluate(() => {
+    const { api, store } = (window as any).handling;
+    store.view.snapshotOwner = api.draftOwner();
+    store.view.snapshot.plugins = [{ id: 'conversation-drafts', status: 'active' }];
+  });
+  let conversationId = 'first';
+  setHandler(c => c.method === 'GET' ? { data: view({ conversationId }) } :
+    { status: 202, data: { id: 'receipt', key: c.body.key, conversationId, status: 'pending' } });
+  await open(page);
+  const input = page.getByLabel('处理指令', { exact: true });
+  await input.fill('先整理交付要求');
+  await page.getByRole('button', { name: '发送处理指令' }).click();
+  await expect(input).toHaveValue('');
+  await input.press('ArrowUp');
+  await expect(input).toHaveValue('先整理交付要求');
+  await input.press('ArrowDown');
+  await input.press('Control+r');
+  const search = page.getByRole('dialog', { name: '已发送内容' });
+  await expect(search.getByRole('button', { name: '先整理交付要求' })).toBeVisible();
+  conversationId = 'second';
+  await emit(page);
+  await expect(search).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '发送处理指令' })).toBeEnabled();
+  await input.press('ArrowUp');
+  await expect(input).toHaveValue('');
+  await input.press('Control+r');
+  await expect(search).toContainText('没有匹配的已发送内容');
+  await search.getByLabel('搜索已发送内容').press('Escape');
+  assert.equal(calls.filter(c => c.method === 'POST').length, 1);
 }));
