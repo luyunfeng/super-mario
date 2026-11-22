@@ -42,7 +42,7 @@ export function createSearch({ shell, store, router, api }) {
     return { state, update };
   }
   const conversations = remoteGroup(conversationSearchActive,
-    async query => (await api.post('/project-message-search', { query })).hits, '项目对话检索失败：');
+    async query => (await api.post('/project-message-search', { query, limit: 6 })).hits, '项目对话检索失败：');
   const meetings = remoteGroup(snapshot => snapshot?.plugins?.some(p => p.id === 'knowledge-local' && p.status === 'active'),
     async query => (await api.get('/knowledge/meeting-search?' + new URLSearchParams({ query }))).meetings, '会议检索失败：');
 
@@ -79,20 +79,31 @@ export function createSearch({ shell, store, router, api }) {
     });
   }
 
-  function openMeetingResults(query) {
+  function messageLinks(rows, snapshot) {
+    return rows.flatMap(hit => {
+      const project = snapshot.projects?.find(p => !p.archivedAt && p.id === hit.projectId);
+      if (!project) return [];
+      return [{ text: [project.name + ' · ' + (hit.role === 'user' ? '你' : '项目助手') + ' · ', hit.before,
+        h('mark', null, hit.match), hit.after], href: router.href('projects', project.id, 'workspace') + '?at=' + encodeURIComponent(hit.id) }];
+    });
+  }
+
+  function openResults(query, kind) {
     results.hidden = true;
+    const isMeeting = kind === '会议';
+    const moreLabel = '查看更多' + kind;
     const owner = api.draftOwner();
     const current = () => drawer.el.open && api.draftOwner() === owner && store.view.snapshotOwner === owner &&
-      !store.view.unauthorized && store.view.snapshot?.plugins?.some(p => p.id === 'knowledge-local' && p.status === 'active');
+      !store.view.unauthorized && store.view.snapshot?.plugins?.some(p => p.id === (isMeeting ? 'knowledge-local' : 'conversation-search') && p.status === 'active');
     const status = h('p', { role: 'status' });
     const list = h('div', { class: 'stack' });
     const rows = new Map();
-    let offset = 0;
-    const more = Button({ label: '查看更多会议', size: 'sm', onClick: load });
+    let cursor = isMeeting ? 0 : undefined;
+    const more = Button({ label: moreLabel, size: 'sm', onClick: load });
     let signature;
     function render() {
       if (!current()) { drawer.close(); return; }
-      const links = meetingLinks([...rows.values()], store.view.snapshot);
+      const links = (isMeeting ? meetingLinks : messageLinks)([...rows.values()], store.view.snapshot);
       const next = JSON.stringify(links);
       if (next === signature) return;
       signature = next;
@@ -103,23 +114,27 @@ export function createSearch({ shell, store, router, api }) {
         } }, hit.text)));
     }
     async function load() {
-      if (!current() || more.disabled || offset === null) return;
+      if (!current() || more.disabled || cursor === null) return;
       more.disabled = true;
-      status.textContent = '正在读取会议…';
+      status.textContent = '正在读取' + kind + '…';
       try {
-        const reply = await api.get('/knowledge/meeting-search?' + new URLSearchParams({ query, offset: String(offset) }));
+        const reply = isMeeting
+          ? await api.get('/knowledge/meeting-search?' + new URLSearchParams({ query, offset: String(cursor) }))
+          : await api.post('/project-message-search', { query, before: cursor, limit: 25 });
         if (!current()) return;
-        for (const row of reply.meetings) rows.set(row.sourceId, row);
+        for (const row of (isMeeting ? reply.meetings : reply.hits)) rows.set(isMeeting ? row.sourceId : row.id, row);
         render();
-        more.textContent = '查看更多会议';
-        offset = reply.nextOffset;
-        more.hidden = offset === null;
-        status.textContent = reply.total ? '已显示 ' + list.childElementCount + ' / ' + reply.total + ' 场会议' : '没有匹配的会议';
+        more.textContent = moreLabel;
+        cursor = isMeeting ? reply.nextOffset : reply.nextBefore;
+        more.hidden = cursor === null;
+        const count = list.childElementCount;
+        if (isMeeting) status.textContent = reply.total ? '已显示 ' + count + ' / ' + reply.total + ' 场会议' : '没有匹配的会议';
+        else status.textContent = '已显示 ' + count + ' 条消息';
       } catch (error) {
-        if (current()) { status.textContent = '会议检索失败：' + error.message; more.textContent = '重试'; }
+        if (current()) { status.textContent = kind + '检索失败：' + error.message; more.textContent = '重试'; }
       } finally { more.disabled = false; }
     }
-    const drawer = openDrawer({ title: '会议搜索结果', subtitle: query, body: [status, list, more], onClose: () => unsubscribe() });
+    const drawer = openDrawer({ title: kind + '搜索结果', subtitle: query, body: [status, list, more], onClose: () => unsubscribe() });
     const unsubscribe = store.subscribe(render);
     void load();
   }
@@ -133,12 +148,7 @@ export function createSearch({ shell, store, router, api }) {
       : (snapshot.runs ?? []).filter(item => match(item.prompt, item.output));
     return [
       ['主对话', pluginActive ? chatHits(query, snapshot.messages ?? []) : []],
-      ['项目工作对话', conversations.state.hits.flatMap(hit => {
-        const project = snapshot.projects?.find(p => !p.archivedAt && p.id === hit.projectId);
-        if (!project) return [];
-        return [{ text: [project.name + ' · ' + (hit.role === 'user' ? '你' : '项目助手') + ' · ', hit.before,
-          h('mark', null, hit.match), hit.after], href: router.href('projects', project.id, 'workspace') + '?at=' + encodeURIComponent(hit.id) }];
-      })],
+      ['项目工作对话', messageLinks(conversations.state.hits, snapshot)],
       ['待办', (snapshot.todos ?? []).filter(item => match(item.title, item.notes)).map(item => ({ text: item.title, href: router.href('projects', projectKey(item), 'todos', 'detail', item.id) }))],
       ['执行', runs.map(item => ({ text: item.prompt, href: router.href('projects', projectKey(item), 'runs', item.id) }))],
       ['会议', meetingLinks(meetings.state.hits, snapshot)],
@@ -177,7 +187,8 @@ export function createSearch({ shell, store, router, api }) {
           event.preventDefault(); router.go(hit.href);
         }
       } }, hit.text)),
-      name === '会议' && hits.length > 5 && Button({ label: '查看全部匹配会议', size: 'sm', onClick: () => openMeetingResults(query) }),
+      name === '项目工作对话' && hits.length > 5 && Button({ label: '查看全部匹配消息', size: 'sm', onClick: () => openResults(query, '消息') }),
+      name === '会议' && hits.length > 5 && Button({ label: '查看全部匹配会议', size: 'sm', onClick: () => openResults(query, '会议') }),
     ]), savedEnabled && h('div', { class: 'saved-search-actions' },
       query && h('button', { class: 'btn btn--sm', type: 'button', onclick: () => open(query) }, '保存当前检索'),
       h('button', { class: 'btn btn--sm', type: 'button', onclick: () => open() }, '管理保存的检索')));

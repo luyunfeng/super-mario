@@ -92,23 +92,32 @@ function savedSearches(store: Store, input: Json): Json {
 }
 
 function projectMessages(store: Store, input: Json) {
-  const query = input && typeof input === 'object' && !Array.isArray(input) && input.query;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, '检索参数无效');
+  const { query, before, limit = 5 } = input;
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 25) fail(400, '每页须为 1 至 25 条');
+  if (before !== undefined && (typeof before !== 'string' || !before)) fail(400, '消息游标无效');
   if (typeof query !== 'string' || !query.trim() || query.length > 500) fail(400, '检索词须为 1 至 500 个字符');
   const projects = new Map(store.list<Project>('projects').filter(p => !p.archivedAt).map(p => ['project:' + p.id + ':work', p.id]));
   const hits = [];
   const pattern = new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
+  let pastCursor = before === undefined;
   for (const message of store.list<Message>('messages').reverse()) {
     const projectId = projects.get(message.conversationId);
     if (!projectId || (message.projectId && message.projectId !== projectId) ||
       !['user', 'assistant'].includes(message.role) || (message.origin && message.origin !== 'user')) continue;
     const match = pattern.exec(message.text);
     if (!match) continue;
+    if (!pastCursor) {
+      pastCursor = message.id === before;
+      continue;
+    }
+    if (hits.length === limit) return { hits, nextBefore: hits[hits.length - 1].id };
     const start = match.index, end = start + match[0].length;
     hits.push({ projectId, id: message.id, role: message.role, before: message.text.slice(Math.max(0, start - 18), start),
       match: match[0], after: message.text.slice(end, end + 32) });
-    if (hits.length === 5) break;
   }
-  return { hits };
+  if (!pastCursor) fail(404, '未找到当前检索的消息游标');
+  return { hits, nextBefore: null };
 }
 
 export const conversationSearch: Extension = {

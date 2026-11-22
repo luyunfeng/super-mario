@@ -111,6 +111,21 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     assert.equal((await api(workspacePath + '?before=historic&after=historic')).status, 400);
     await expect(composer).toHaveValue('翻页期间的合成草稿');
 
+    await search.fill('后续记录');
+    await results.getByRole('button', { name: '查看全部匹配消息' }).click();
+    const messageDrawer = page.getByRole('dialog', { name: '消息搜索结果' });
+    const moreMessages = messageDrawer.getByRole('button', { name: '查看更多消息' });
+    await expect(messageDrawer.getByRole('link')).toHaveCount(25);
+    putMessage('concurrent-hit', work, '后续记录 新增');
+    await moreMessages.click();
+    await expect(messageDrawer.getByRole('link')).toHaveCount(50);
+    await moreMessages.click();
+    await expect(messageDrawer.getByRole('link')).toHaveCount(75);
+    await expect(moreMessages).toBeHidden();
+    await messageDrawer.getByRole('link', { name: /后续记录 0$/ }).click();
+    await expect(original).toBeFocused();
+    await expect(original).toContainText('后续记录 0');
+
     await search.fill('季度复核');
     await saveQuery.click();
     await expect(drawer.getByLabel('检索词', { exact: true })).toHaveValue('季度复核');
