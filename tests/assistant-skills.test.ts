@@ -9,7 +9,7 @@ import { createStore } from '../packages/core/src/store.ts';
 import { createContributions, PluginHost } from '../packages/core/src/plugin-host.ts';
 import { createEventBus } from '../packages/core/src/events.ts';
 import type { JsonObject } from '../packages/plugin-sdk/src/index.ts';
-import { assistantSkills } from '../plugins/assistant-skills.ts';
+import { createAssistantSkills } from '../plugins/assistant-skills.ts';
 
 import { workGuide } from '../plugins/workbench-work-guide.ts';
 
@@ -21,7 +21,7 @@ async function fixture(t: test.TestContext) {
   const dir = await mkdtemp(join(tmpdir(), 'assistant-skills-'));
   const store = createStore(join(dir, 'test.sqlite')), contributions = createContributions();
   const host = new PluginHost({ store, dataDir: dir, events: createEventBus(store), contributions });
-  host.register(assistantSkills);
+  host.register(createAssistantSkills());
   await host.start();
   t.after(async () => { await host.close(); store.close(); await rm(dir, { recursive: true, force: true }); });
   const call = async (input: JsonObject) => await host.invocations.use('assistant-skills.manage', input) as JsonObject;
@@ -48,7 +48,7 @@ test('ZIP preview, digest-bound installation, resource reads and removal use one
   await assert.rejects(call({ action: 'preview', archive: data }), { status: 409 });
   const read = { action: 'read', name: info.name };
   assert.equal((await call(read)).text, manifest);
-  const tool = contributions.list('tools')[0].value;
+  const tool = contributions.list('tools').find(entry => entry.value.name === 'assistant_skill_read')!.value;
   assert.equal(tool.name, 'assistant_skill_read');
   const args = { name: info.name, path: 'docs/参考.md' };
   assert.deepEqual(await tool.execute(args, new AbortController().signal), { ...args, text: '说明正文', nextOffset: null });
@@ -108,7 +108,7 @@ test('builtin guide uses release resources with an existing catalog and never ch
   const read = { action: 'read', name: 'workbench.work' };
   assert.ok(workGuide.files.has('SKILL.md'));
   assert.equal((await call(read)).text, workGuide.files.get('SKILL.md'));
-  const tool = contributions.list('tools')[0].value;
+  const tool = contributions.list('tools').find(entry => entry.value.name === 'assistant_skill_read')!.value;
   for (const [path, text] of workGuide.files) {
     assert.deepEqual(await call({ ...read, path }), { name: read.name, path, text });
     const page = await tool.execute({ name: read.name, path }, new AbortController().signal) as JsonObject;

@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { crc32 } from 'node:zlib';
+import { registerMachineSkillCatalog } from './machine-skill-catalog.ts';
 import { workGuide } from './workbench-work-guide.ts';
 import { fromBufferPromise, type ZipFile } from 'yauzl';
 import { isAlias, isMap, isNode, isPair, isScalar, parseDocument, visit } from 'yaml';
-import type { Extension, Json, JsonObject, Store } from '../packages/plugin-sdk/src/index.ts';
+import type { Extension, ExtensionContext, Json, JsonObject, MachineClient, Store } from '../packages/plugin-sdk/src/index.ts';
 
 const maxArchive = 4 * 1024 * 1024;
 const maxExpanded = 16 * 1024 * 1024;
@@ -151,87 +152,94 @@ function keys(input: JsonObject, allowed: readonly string[]) {
   if (Object.keys(input).some(key => !allowed.includes(key))) fail(400, '技能请求包含未知字段');
 }
 
-export const assistantSkills: Extension = {
-  id: 'assistant-skills', name: '助手技能', capabilities: ['assistant.skills'],
-  permissions: ['service.provide:assistant-skills.manage', 'contribute:tools', 'store.read', 'store.write'],
-  activate(context) {
-    const { store } = context;
-    const lifetime = new AbortController();
-    let inspecting = false;
-    context.provide('assistant-skills.manage', async (input, requestSignal) => {
-      if (!input || typeof input !== 'object' || Array.isArray(input) || typeof input.action !== 'string' || !Object.hasOwn(fields, input.action))
-        fail(400, '技能操作无效');
-      const action = input.action as keyof typeof fields;
-      keys(input, ['action', ...fields[action]]);
-      if (action === 'list') return list(catalog(store));
-      if (action === 'read') return resource(store, input.name, input.path);
-      const revision = input.revision;
-      if (action !== 'preview' && (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0 || revision >= Number.MAX_SAFE_INTEGER))
-        fail(400, '技能目录版本无效');
-      if (action === 'install' && (typeof input.digest !== 'string' || !/^[a-f0-9]{64}$/.test(input.digest))) fail(400, '请提供预览摘要');
-      const signal = AbortSignal.any([requestSignal, lifetime.signal]);
-      let loaded: Loaded | undefined;
-      if (action !== 'remove') {
-        if (inspecting) fail(409, '正在检查另一个技能包，请稍后重试');
-        inspecting = true;
-        try { loaded = await inspect(input.archive, signal); } finally { inspecting = false; }
-        signal.throwIfAborted();
-        if (action === 'preview') {
-          const book = catalog(store), name = loaded.info.name;
-          if (book.skills.some(skill => skill.name === name)) fail(409, '同名技能已安装');
-          if (book.skills.length >= 32) fail(400, '最多可安装 32 个技能');
-          return { ...loaded.info, files: [...loaded.files.keys()].sort(), digest: loaded.digest };
-        }
-        if (input.digest !== loaded.digest) fail(409, '技能包已变化，请重新预览');
+export function createAssistantSkills(getMachines: () => MachineClient | undefined = () => undefined): Extension {
+  return {
+    id: 'assistant-skills', name: '助手技能', capabilities: ['assistant.skills'],
+    permissions: ['service.provide:assistant-skills.manage', 'service.provide:assistant-skills.machine-catalog', 'contribute:tools', 'store.read', 'store.write'],
+    activate(context) {
+      activateInstalledSkills(context);
+      registerMachineSkillCatalog(context, getMachines);
+    },
+  };
+}
+
+function activateInstalledSkills(context: ExtensionContext) {
+  const { store } = context;
+  const lifetime = new AbortController();
+  let inspecting = false;
+  context.provide('assistant-skills.manage', async (input, requestSignal) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input) || typeof input.action !== 'string' || !Object.hasOwn(fields, input.action))
+      fail(400, '技能操作无效');
+    const action = input.action as keyof typeof fields;
+    keys(input, ['action', ...fields[action]]);
+    if (action === 'list') return list(catalog(store));
+    if (action === 'read') return resource(store, input.name, input.path);
+    const revision = input.revision;
+    if (action !== 'preview' && (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0 || revision >= Number.MAX_SAFE_INTEGER))
+      fail(400, '技能目录版本无效');
+    if (action === 'install' && (typeof input.digest !== 'string' || !/^[a-f0-9]{64}$/.test(input.digest))) fail(400, '请提供预览摘要');
+    const signal = AbortSignal.any([requestSignal, lifetime.signal]);
+    let loaded: Loaded | undefined;
+    if (action !== 'remove') {
+      if (inspecting) fail(409, '正在检查另一个技能包，请稍后重试');
+      inspecting = true;
+      try { loaded = await inspect(input.archive, signal); } finally { inspecting = false; }
+      signal.throwIfAborted();
+      if (action === 'preview') {
+        const book = catalog(store), name = loaded.info.name;
+        if (book.skills.some(skill => skill.name === name)) fail(409, '同名技能已安装');
+        if (book.skills.length >= 32) fail(400, '最多可安装 32 个技能');
+        return { ...loaded.info, files: [...loaded.files.keys()].sort(), digest: loaded.digest };
       }
-      if (action === 'remove' && input.name === workGuide.name) fail(409, '内置技能无法移除');
-      const name = loaded ? loaded.info.name : skillName(input.name);
-      return store.transaction(() => {
-        const book = catalog(store);
-        if (revision !== book.revision) fail(409, '技能目录已更新，请重新加载');
-        const index = book.skills.findIndex(skill => skill.name === name);
-        if (loaded) {
-          if (index >= 0) fail(409, '同名技能已安装');
-          if (book.skills.length >= 32) fail(400, '最多可安装 32 个技能');
-          for (const [path, data] of loaded.files) store.put('assistant-skills.files', name + '/' + path, data.toString('base64'));
-          store.put('assistant-skills.paths', name, [...loaded.files.keys()]);
-          book.skills.push(loaded.info);
-          book.skills.sort((a, b) => a.name.localeCompare(b.name));
-        } else {
-          if (index < 0) fail(404, '技能不存在');
-          for (const path of store.get<string[]>('assistant-skills.paths', name)!) store.remove('assistant-skills.files', name + '/' + path);
-          store.remove('assistant-skills.paths', name);
-          book.skills.splice(index, 1);
-        }
-        book.revision++;
-        store.put('assistant-skills', 'catalog', book);
-        return list(book);
-      });
+      if (input.digest !== loaded.digest) fail(409, '技能包已变化，请重新预览');
+    }
+    if (action === 'remove' && input.name === workGuide.name) fail(409, '内置技能无法移除');
+    const name = loaded ? loaded.info.name : skillName(input.name);
+    return store.transaction(() => {
+      const book = catalog(store);
+      if (revision !== book.revision) fail(409, '技能目录已更新，请重新加载');
+      const index = book.skills.findIndex(skill => skill.name === name);
+      if (loaded) {
+        if (index >= 0) fail(409, '同名技能已安装');
+        if (book.skills.length >= 32) fail(400, '最多可安装 32 个技能');
+        for (const [path, data] of loaded.files) store.put('assistant-skills.files', name + '/' + path, data.toString('base64'));
+        store.put('assistant-skills.paths', name, [...loaded.files.keys()]);
+        book.skills.push(loaded.info);
+        book.skills.sort((a, b) => a.name.localeCompare(b.name));
+      } else {
+        if (index < 0) fail(404, '技能不存在');
+        for (const path of store.get<string[]>('assistant-skills.paths', name)!) store.remove('assistant-skills.files', name + '/' + path);
+        store.remove('assistant-skills.paths', name);
+        book.skills.splice(index, 1);
+      }
+      book.revision++;
+      store.put('assistant-skills', 'catalog', book);
+      return list(book);
     });
-    context.contribute('tools', 'assistant_skill_read', {
-      name: 'assistant_skill_read', description: '每次读取至多 6000 个字符。用 nextOffset 继续读取技能的 SKILL.md 或包内 UTF-8 文本。',
-      parameters: { type: 'object', properties: { name: { type: 'string' }, path: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }, required: ['name'], additionalProperties: false },
-      async execute(args, signal) {
-        signal.throwIfAborted();
-        lifetime.signal.throwIfAborted();
-        keys(args, ['name', 'path', 'offset']);
-        const offset = args.offset === undefined ? 0 : args.offset;
-        if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) fail(400, '阅读偏移须为非负整数');
-        const { name, path, text } = resource(store, args.name, args.path);
-        const page: string[] = [];
-        let position = 0;
-        // Iterate Unicode code points without allocating an array for the entire resource.
-        for (const character of text) {
-          if (position >= offset) {
-            if (page.length === 6000) return { name, path, text: page.join(''), nextOffset: position };
-            page.push(character);
-          }
-          position++;
+  });
+  context.contribute('tools', 'assistant_skill_read', {
+    name: 'assistant_skill_read', description: '每次读取至多 6000 个字符。用 nextOffset 继续读取技能的 SKILL.md 或包内 UTF-8 文本。',
+    parameters: { type: 'object', properties: { name: { type: 'string' }, path: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }, required: ['name'], additionalProperties: false },
+    async execute(args, signal) {
+      signal.throwIfAborted();
+      lifetime.signal.throwIfAborted();
+      keys(args, ['name', 'path', 'offset']);
+      const offset = args.offset === undefined ? 0 : args.offset;
+      if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) fail(400, '阅读偏移须为非负整数');
+      const { name, path, text } = resource(store, args.name, args.path);
+      const page: string[] = [];
+      let position = 0;
+      // Iterate Unicode code points without allocating an array for the entire resource.
+      for (const character of text) {
+        if (position >= offset) {
+          if (page.length === 6000) return { name, path, text: page.join(''), nextOffset: position };
+          page.push(character);
         }
-        if (position < offset) fail(400, '阅读偏移超出文件末尾');
-        return { name, path, text: page.join(''), nextOffset: null };
-      },
-    });
-    context.defer(() => lifetime.abort(Object.assign(new Error('助手技能插件已停用'), { status: 503 })));
-  },
-};
+        position++;
+      }
+      if (position < offset) fail(400, '阅读偏移超出文件末尾');
+      return { name, path, text: page.join(''), nextOffset: null };
+    },
+  });
+  context.defer(() => lifetime.abort(Object.assign(new Error('助手技能插件已停用'), { status: 503 })));
+}

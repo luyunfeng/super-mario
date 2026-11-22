@@ -372,6 +372,13 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (machineDirectories && method === 'POST') return json(res, 201, await projectFolders.createDirectory(decodeURIComponent(machineDirectories[1]), await body(req)));
         const discoveredProjects = path.match(/^\/api\/v1\/machines\/([^/]+)\/projects$/);
         if (discoveredProjects && method === 'GET') return json(res, 200, await projectFolders.discover(decodeURIComponent(discoveredProjects[1]), url.searchParams.getAll('root')));
+        const machineSkills = path.match(/^\/api\/v1\/machines\/([^/]+)\/skills$/);
+        if (machineSkills && method === 'GET') {
+          if (url.searchParams.size) throw new InputError('技能清单不接受路径或查询参数');
+          if (!app.plugins.list().some(plugin => plugin.id === 'assistant-skills' && plugin.status === 'active'))
+            throw new InputError('助手技能插件已停用', 503);
+          return json(res, 200, await app.plugins.invocations.use('assistant-skills.machine-catalog', { machineId: decodeURIComponent(machineSkills[1]!) }));
+        }
         const diagnose = path.match(/^\/api\/v1\/machines\/([^/]+)\/diagnostics$/);
         if (diagnose && method === 'POST') {
           const input = await body(req);

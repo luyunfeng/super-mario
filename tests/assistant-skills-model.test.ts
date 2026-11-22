@@ -145,3 +145,31 @@ test('Web 查询工作进展时按内置指南读取本轮执行记录，仅报�
     assert.equal(denied.status, 503);
   } finally { await server.close(); }
 });
+
+test('主助手只在查询指定执行机后取得该机器技能元数据', async t => {
+  const id = 'synthetic-machine';
+  const { server, ask, requests } = await fixture(t, (req, turn) => {
+    if (turn === 1) {
+      assert.ok(req.tools.includes('machine_skills_list'));
+      assert.ok(!req.system.includes('sample-inventory'));
+      return call('machine_skills_list', { machineId: id }, 'inventory');
+    }
+    const result = JSON.stringify(req.content);
+    assert.ok(result.includes('sample-inventory') && !result.includes('private-file-body'));
+    return { role: 'assistant', content: '该电脑报告了 sample-inventory。执行状态尚未验证。' };
+  });
+  const seen: string[] = [];
+  server.app.setMachineClient({
+    list: () => [{ id, name: '合成电脑', online: true, platform: 'linux', connectedAt: '', capabilities: ['skills.catalog'], executors: [] }],
+    async call(machine, method, params) {
+      assert.equal(machine, id); assert.deepEqual(params, {});
+      seen.push(method);
+      return { skills: [{ name: 'sample-inventory', description: '样例清单', source: 'shared', text: 'private-file-body' }], truncated: false };
+    },
+  });
+  try {
+    assert.equal(await ask('合成电脑上发现了哪些技能？'), '该电脑报告了 sample-inventory。执行状态尚未验证。');
+    assert.deepEqual(seen, ['skills.catalog']);
+    assert.deepEqual(requests.map(r => r.lastRole), ['user', 'tool']);
+  } finally { await server.close(); }
+});

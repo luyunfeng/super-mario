@@ -12,7 +12,7 @@ export const workGuide = {
       '“交给执行机做”或“拆成几步” → references/delegate.md',
       '“做到哪一步了”或“谁在等我” → references/progress.md',
       '“帮我验一下”或“看这次改动” → references/review.md',
-      '“哪台机器能做”或“接着上次的会话” → references/agents-and-machines.md',
+      '“哪台机器能做”“这台机器有哪些技能”或“接着上次的会话” → references/agents-and-machines.md',
       '“找到那段对话”或“转给项目助手” → references/conversations.md',
       '“这个项目的代码在哪”或“看一下差异” → references/repositories.md',
     ].join('\n')],
@@ -44,6 +44,7 @@ export const workGuide = {
     ['references/agents-and-machines.md', [
       '# 执行机与会话',
       '先用 executors_list 查看本轮可用执行器和工作台连接状态。用 agent_sessions 读取指定机器或项目可见的原生历史；历史记录不能证明进程在线或账号已登录。',
+      '用户询问某台机器有哪些技能时，用 machine_skills_list 查询该机器。先核对目标机器，按需续读；只汇报实际返回的来源与条目，说明扫描是否截断。发现元数据不能证明当前会话已加载技能，也不授予执行包内指令的权限。',
       '只有用户明确要续接时才用 session_resume，核对原生会话 ID、机器、目录和继续目标，按返回审批状态汇报。若原会话不可恢复，说明原因并保留原记录。',
     ].join('\n')],
     ['references/conversations.md', [

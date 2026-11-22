@@ -1,3 +1,4 @@
+import { createMachineSkills } from '../../../plugins/machine-skills.ts';
 import { createAgentDiagnostics } from '../../../plugins/agent-diagnostics.ts';
 import { createCliSessionDiscovery } from '../../../plugins/cli-session-discovery.ts';
 import { createExecutionServices } from '../../../plugins/executors.ts';
@@ -95,6 +96,7 @@ export async function loadDefaultNodePlugins(options: DefaultNodePluginOptions):
   const executors = await services.describe(machineId);
 
   return composeNodePlugins([
+    { id: 'machine-skills', handlers: createMachineSkills(historyRoots).handlers },
     { id: 'live-terminals', handlers: { ...live.handlers, 'terminal.host.start': async () => host.startServer() }, onDisconnect: live.disconnect, close: live.close },
     {
       id: 'executors',

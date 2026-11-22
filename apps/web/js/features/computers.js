@@ -2,6 +2,7 @@
 import { h, replace } from '../lib/dom.js';
 import { Button, Pill, Empty, copyText } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
+import { createMachineSkills } from './machine-skills.js';
 import { agentDiagnostics, recoverySummary, recoveryUnavailable, legacyRecovery, unsupportedApi } from './agent-diagnostics.js';
 
 let currentComputer;
@@ -30,22 +31,34 @@ export function openComputer({ api, machine, state, consoleDrawer }) {
     if (api.token() !== token) { drawer?.close(); return false; }
     return Boolean(drawer?.el.open && currentComputer === drawer);
   };
+  const skills = createMachineSkills({ api, machineId: machine.id, state, active });
+  const connection = h('dd', null, machine.online ? '在线' : '离线');
   const recovery = h('p', { class: 'muted small', role: 'status' });
   const list = h('div', { class: 'stack' });
   const body = h('div', { class: 'stack stack--lg' },
     h('dl', { class: 'kv' },
-      h('dt', null, '状态'), h('dd', null, machine.online ? '在线' : '离线'),
+      h('dt', null, '状态'), connection,
       h('dt', null, '系统'), h('dd', null, machine.platform || '未知')),
     h('div', { class: 'stack' }, h('h3', null, '执行者'),
       (machine.executors ?? []).length
         ? (machine.executors).map(item => h('div', { class: 'row row--between' }, h('span', null, item.name), Pill(item.available ? '可用' : '不可用', item.available ? 'ok' : 'warn')))
         : h('p', { class: 'muted small' }, '这台电脑还没有报告可用的执行者。')),
+    skills.el,
     agentDiagnostics({ api, machine, active }),
     h('div', { class: 'stack' }, h('h3', null, '恢复状态'), recovery),
     h('div', { class: 'stack' }, h('h3', null, '终端'), list));
   drawer = openDrawer({ title: machine.name, subtitle: '电脑详情', body, onClose: () => { seq++; clearInterval(timer); } });
   currentComputer = drawer;
-  timer = setInterval(active, 250);
+  skills.update();
+  timer = setInterval(() => {
+    if (!active()) return;
+    skills.update();
+    const machines = state()?.machines;
+    if (!machines) return;
+    const online = machines.find(item => item.id === machine.id)?.online;
+    const label = typeof online === 'boolean' ? (online ? '在线' : '离线') : '未知';
+    if (connection.textContent !== label) connection.textContent = label;
+  }, 250);
   const recoveryRead = !machine.online ? Promise.resolve(null) : machine.capabilities?.includes('executor.recovery')
     ? api.get(`/machines/${encodeURIComponent(machine.id)}/recovery`).then(data => {
       if (!active()) return null;
