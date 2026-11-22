@@ -57,6 +57,29 @@ function decisionSection(api, todo, valid) {
   return section('决策', list, Field({ label: '新决策', control: input }), add);
 }
 
+function replyRecord(api, store, todo) {
+  const body = h('p', { class: 'small', 'aria-live': 'polite' });
+  let request = 0;
+  async function load() {
+    const sequence = ++request;
+    body.textContent = '正在读取…';
+    try {
+      const row = await api.get(todoPath(todo) + '/waiting-reply?view=summary');
+      if (sequence !== request || !matchesScope(store, todo)) return;
+      if (!row) { body.textContent = '没有可核对的回复跟踪记录。'; return; }
+      const status = { waiting: '尚未匹配直接回复', matched: '已匹配直接回复', superseded: '已被后续等待替代', invalidated: '跟踪已失效' };
+      const cycle = row.currentCycle === true ? '当前等待' : row.currentCycle === false ? '历史等待' : '归属周期待核对';
+      body.textContent = [cycle + ' · 第 ' + row.cycle + ' 轮', row.waitingOn, status[row.status],
+        row.repliedAt && '回复时间 ' + new Date(row.repliedAt).toLocaleString('zh-CN')].filter(Boolean).join(' · ');
+    } catch (error) {
+      if (sequence === request) body.textContent = '读取回复跟踪记录失败：' + error.message;
+    }
+  }
+  const record = h('details', { ontoggle: () => { if (record.open) load(); } },
+    h('summary', null, '回复跟踪记录'), body, Button({ label: '刷新记录', size: 'sm', onClick: load }));
+  return record;
+}
+
 export function openTodoDetail({ api, store, router, todo, openEdit }) {
   if (!matchesScope(store, todo)) { toast('待办归属已变更，请重新打开'); return; }
   const detail = createTodoDetail({ api, store, router, todo, openEdit, close: () => drawer.close() });
@@ -67,7 +90,7 @@ export function openTodoDetail({ api, store, router, todo, openEdit }) {
 export function createTodoDetail({ api, store, router, todo, openEdit, close }) {
   const summary = h('div', { class: 'stack' });
   const next = h('div', { class: 'stack' });
-  const el = h('div', { class: 'stack' }, summary,
+  const el = h('div', { class: 'stack' }, summary, replyRecord(api, store, todo),
     decisionSection(api, todo, () => el.isConnected && el.closest('dialog')?.open !== false && matchesScope(store, todo)), next);
   function paint() {
     const snapshot = store.view.snapshot;

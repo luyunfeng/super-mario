@@ -428,7 +428,11 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 200, await machines.call(decodeURIComponent(machine[1]), rpc, input.params as JsonObject, rpc === 'terminal.host.start' ? { timeoutMs: 50_000 } : undefined));
         }
         const waitingReply = path.match(/^\/api\/v1\/todos\/([^/]+)\/waiting-reply(\/sources)?$/);
-        if (waitingReply && method === 'GET') return json(res, 200, waitingReply[2] ? app.waitingReplies.sources(decodeURIComponent(waitingReply[1]!), url.searchParams.get('query') ?? '') : app.waitingReplies.get(decodeURIComponent(waitingReply[1]!)));
+        if (waitingReply && method === 'GET') {
+          const id = decodeURIComponent(waitingReply[1]!);
+          if (waitingReply[2]) return json(res, 200, app.waitingReplies.sources(id, url.searchParams.get('query') ?? ''));
+          return json(res, 200, url.searchParams.get('view') === 'summary' ? app.waitingReplies.summary(id) : app.waitingReplies.get(id));
+        }
         if (waitingReply && method === 'POST' && !waitingReply[2]) return json(res, 201, app.waitingReplies.arm(decodeURIComponent(waitingReply[1]!), await body(req)));
         if (path === '/api/v1/approvals' && method === 'GET') return json(res, 200, app.approvals.list());
         if (path === '/api/v1/approvals' && method === 'POST') {

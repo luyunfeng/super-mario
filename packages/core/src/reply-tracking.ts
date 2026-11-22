@@ -26,6 +26,18 @@ export function createReplyTracking({ store, events }: { store: Store; events: E
     // only a fallback, since observer errors are deliberately isolated.
     invalidate: waits.invalidate,
     get(id: string) { todo(id); return waits.get(id) ?? null; },
+    summary(id: string) {
+      const current = todo(id);
+      const wait = waits.get(id);
+      // A matched reply clears the reminder and advances its generation exactly once.
+      // An older match may still describe a prior request, even to the same person.
+      return wait && wait.scope.projectId === current.projectId ? {
+        status: wait.status, cycle: wait.cycle, waitingOn: wait.waitingOn, startedAt: wait.startedAt,
+        currentCycle: wait.reminderVersion === undefined ? null :
+          (current.reminderVersion ?? 1) === wait.reminderVersion + (wait.status === 'matched' ? 1 : 0),
+        repliedAt: wait.hit?.evidence.createdAt,
+      } : null;
+    },
     observeSource(source: string, input: Array<NormalizedReplyEvidence & { label?: string; preview?: string }>) {
       if (!identifier(source) || !Array.isArray(input) || input.length > 500) fail('消息证据来源无效');
       // Validate the complete batch before any partial record or reminder mutation.
