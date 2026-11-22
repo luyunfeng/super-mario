@@ -220,6 +220,16 @@ test('会议日回顾按用户时区跨夏令时分页，重试只列一次并�
   assert.equal(first.meetings[0].sourceId, 'retry');
   assert.deepEqual(f.curator.renameMeeting('retry', { expectedTitle: base.title, title: '已核对的评审名称' }), { title: '已核对的评审名称' });
   assert.equal((await read()).meetings[0].title, '已核对的评审名称');
+  const search = (query: string, offset = 0) => f.curator.searchMeetings(query, 'sample', offset);
+  const renamed = await search('核对的评审');
+  assert.equal(renamed.total, 1);
+  assert.deepEqual(renamed.meetings[0].pages, [{ id: same.id, title: same.title }]);
+  const original = await search(base.title);
+  assert.equal(original.nextOffset, 25);
+  assert.ok(original.meetings.some(row => row.sourceId === 'undated' && row.startedAt === null));
+  const remaining = await search(base.title, original.nextOffset!);
+  assert.ok(remaining.meetings.some(row => row.sourceId === 'retry' && row.title === '已核对的评审名称'));
+  assert.equal(remaining.nextOffset, null);
   assert.throws(() => f.curator.renameMeeting(base.id, { expectedTitle: base.title, title: '并发修改' }), /标题已变化/);
   assert.equal((await f.curator.pageSources(same.id)).sources?.[0].title, '已核对的评审名称');
   await f.restart();
@@ -234,6 +244,7 @@ test('会议日回顾按用户时区跨夏令时分页，重试只列一次并�
   await assert.rejects(f.curator.meetingDay('2030-02-31', 'UTC'), /日期/);
   await assert.rejects(f.curator.meetingDay('2030-11-03', 'Invalid/Zone'), /时区/);
   f.archive();
+  await assert.rejects(search(base.title), /项目不可用/);
   await assert.rejects(read(), /项目不可用/);
   assert.equal((await f.curator.meetingDay('2030-11-03', 'UTC')).total, 0);
 });

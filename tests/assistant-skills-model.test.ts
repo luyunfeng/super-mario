@@ -507,7 +507,9 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
         assert.match(req.system, /本轮只起草时不要代为执行/);
         assert.match(req.system, /不补写省略部分/);
         assert.match(req.system, /准备交接稿只在当前对话回复/);
-        return call('knowledge_original', { pageId }, 'handoff-sources');
+        assert.ok(req.tools.includes('meeting_search'));
+        assert.match(req.system, /同名时用日期或项目消歧/);
+        return call('meeting_search', { query: '核对后的评审标题' }, 'handoff-find');
       }
       const missing = JSON.stringify(req.content).includes('独立评审会');
       assert.match(req.system, /检索无结果时，说明缺少会议正文/);
@@ -533,6 +535,13 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
       return call('knowledge_list', { query: title }, 'minutes');
     }
     const materials = JSON.stringify(req.content);
+    if (req.callId === 'handoff-find') {
+      const result = JSON.parse(typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text);
+      assert.equal(result.total, 1);
+      assert.equal(result.meetings[0].sourceId, sourceId);
+      assert.deepEqual(result.meetings[0].pages, [{ id: pageId, title }]);
+      return call('knowledge_original', { pageId: result.meetings[0].pages[0].id }, 'handoff-sources');
+    }
     if (req.callId === 'handoff-sources') {
       const result = JSON.parse(typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text);
       assert.equal(result.sources[0].meeting, true);
@@ -617,7 +626,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     server.app.knowledgeCurator.addSource({ ...meeting, title: '无日期来源' });
     server.app.knowledgeCurator.addSource({ ...meeting, title: '稍晚的评审', meetingStartedAt: '2032-02-28T23:59Z' });
     server.app.knowledgeCurator.addSource({ ...meeting, title: '次日会议', meetingStartedAt: '2032-02-29T00:00Z' });
-    server.app.knowledgeCurator.addSource({ ...meeting, projectId: other.id, title: '其他项目资料', meetingStartedAt: '2032-02-28T09:00Z' });
+    server.app.knowledgeCurator.addSource({ ...meeting, projectId: other.id, title: '核对后的评审标题', meetingStartedAt: '2032-02-28T09:00Z' });
     const raw = join(dir, 'plugins', 'knowledge-local', 'raw');
     await mkdir(raw, { recursive: true });
     await writeFile(join(raw, job.id + '.md'), '字'.repeat(2600) + '只在中间出现' + '文'.repeat(2600) + '\n原话依据甲'.repeat(11));
@@ -628,7 +637,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     const question = '按 UTC 回顾 2032-02-28 的会议：' + title + '有哪些决定？样本复核现在完成了吗？';
     assert.equal(await ask(question, '/projects/' + projectId + '/messages'), decision + '样本复核待办尚未验收。');
     assert.equal(await ask('独立评审会定了什么？', '/projects/' + projectId + '/messages'), '当前项目缺少该次会议正文。');
-    const handoff = '请为样本评审起草交接并附上转写，不发送。';
+    const handoff = '请为「核对后的评审标题」起草交接并附上转写，不发送。';
     const handoffText = await ask(handoff, '/projects/' + projectId + '/messages');
     assert.match(handoffText, /交接草稿/);
     const bot = await api('/feishu/bots', { name: '项目纪要', appId: 'cli_5555555555555555', appSecret: 'offline-fixture',

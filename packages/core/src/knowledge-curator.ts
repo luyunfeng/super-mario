@@ -111,6 +111,35 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
   function meetingTitles() {
     return new Map(store.list<{ id: string; title: string }>(titlesCollection).map(row => [row.id, row.title]));
   }
+  function visibleMeetings(projectId?: string) {
+    if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
+    if (projectId && !options.validProject(projectId)) throw new CuratorError('项目不可用', 404);
+    // The queue preserves insertion order. Follow retries to their original source and report its latest attempt.
+    const all = jobs(), roots = meetingRoots(all), titles = meetingTitles();
+    const latest = new Map<string, Job>();
+    const visibility = new Map<string, boolean>(projectId ? [[projectId, true]] : []);
+    for (const job of all) {
+      const root = roots.get(job.id);
+      if (!root) continue;
+      if (projectId && (job.layer !== 'project' || job.projectId !== projectId)) continue;
+      if (job.projectId) {
+        if (!visibility.has(job.projectId)) visibility.set(job.projectId, options.validProject(job.projectId));
+        if (!visibility.get(job.projectId)) continue;
+      }
+      latest.set(root, job);
+    }
+    return { latest, titleOf: (job: Job) => titles.get(roots.get(job.id) ?? job.id) ?? job.title };
+  }
+  async function meetingRecords(batch: Job[], projectId: string | undefined, titleOf: (job: Job) => string) {
+    const pages = new Map((batch.some(job => job.knowledgeIds.length) ? await options.knowledge().list({ projectId }) : []).map(p => [p.id, p]));
+    return batch.map(job => ({
+      sourceId: job.id, title: titleOf(job), startedAt: job.meetingStartedAt ?? null, status: job.status,
+      pages: job.knowledgeIds.flatMap(id => {
+        const page = pages.get(id);
+        return page && page.layer === job.layer && page.projectId === job.projectId ? [{ id, title: page.title }] : [];
+      }),
+    }));
+  }
   function status() {
     const all = jobs(), titles = meetingTitles(), roots = titles.size ? meetingRoots(all) : new Map<string, string>();
     return { settings: settings(), worker: { ...worker }, versioning: { ...gitState },
@@ -459,9 +488,17 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
       changed();
       return { title: title || job.title };
     },
+    async searchMeetings(query: string, projectId?: string, offset = 0) {
+      const needle = query.trim().normalize('NFC').toLowerCase();
+      if (!needle || needle.length > 500 || !Number.isSafeInteger(offset) || offset < 0) throw new CuratorError('请核对会议标题关键词和分页位置');
+      const { latest, titleOf } = visibleMeetings(projectId);
+      const matches = [...latest.values()].reverse().filter(job => [titleOf(job), job.title].some(title =>
+        title.normalize('NFC').toLowerCase().includes(needle)));
+      const meetings = await meetingRecords(matches.slice(offset, offset + 25), projectId, titleOf);
+      const end = offset + meetings.length;
+      return { meetings, total: matches.length, nextOffset: end < matches.length ? end : null };
+    },
     async meetingDay(date: string, timezone: string, projectId?: string, offset = 0) {
-      if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
-      if (projectId && !options.validProject(projectId)) throw new CuratorError('项目不可用', 404);
       const day = new Date(date + 'T00:00:00Z');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== date)
         throw new CuratorError('请指定有效的回顾日期 YYYY-MM-DD');
@@ -470,36 +507,17 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
       try { localDay = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }); }
       catch { throw new CuratorError('回顾时区无效'); }
 
-      // The queue preserves insertion order. Follow retries to their original source and report its latest attempt.
-      const all = jobs(), roots = meetingRoots(all), titles = meetingTitles();
-      const latest = new Map<string, Job>();
-      const visibility = new Map<string, boolean>(projectId ? [[projectId, true]] : []);
-      for (const job of all) {
-        const root = roots.get(job.id);
-        if (!root) continue;
-        if (projectId && (job.layer !== 'project' || job.projectId !== projectId)) continue;
-        if (job.projectId) {
-          if (!visibility.has(job.projectId)) visibility.set(job.projectId, options.validProject(job.projectId));
-          if (!visibility.get(job.projectId)) continue;
-        }
-        latest.set(root, job);
-      }
+      const { latest, titleOf } = visibleMeetings(projectId);
       const undated = [...latest.values()].filter(job => !job.meetingStartedAt).length;
       const dated = [...latest.values()].filter(job => job.meetingStartedAt && localDay.format(new Date(job.meetingStartedAt)) === date)
         .sort((a, b) => Date.parse(a.meetingStartedAt!) - Date.parse(b.meetingStartedAt!) || a.id.localeCompare(b.id));
       const batch = dated.slice(offset, offset + 25);
-      const pages = new Map((batch.some(job => job.knowledgeIds.length) ? await options.knowledge().list({ projectId }) : []).map(p => [p.id, p]));
+      const records = await meetingRecords(batch, projectId, titleOf);
       const clock = new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-      const meetings = batch.map(job => {
-        const localTime = clock.format(new Date(job.meetingStartedAt!));
+      const meetings = records.map(row => {
+        const localTime = clock.format(new Date(row.startedAt!));
         const dayPart = localTime < '12:00' ? 'morning' : localTime < '18:00' ? 'afternoon' : 'evening';
-        return {
-          sourceId: job.id, title: titles.get(roots.get(job.id) ?? job.id) ?? job.title, startedAt: job.meetingStartedAt!, localTime, dayPart, status: job.status,
-          pages: job.knowledgeIds.flatMap(id => {
-            const page = pages.get(id);
-            return page && page.layer === job.layer && page.projectId === job.projectId ? [{ id, title: page.title }] : [];
-          }),
-        };
+        return { ...row, localTime, dayPart };
       });
       return { date, timezone, total: dated.length, undated, meetings, nextOffset: offset + batch.length < dated.length ? offset + batch.length : null };
     },

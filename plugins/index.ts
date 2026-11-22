@@ -160,6 +160,7 @@ export interface SystemActions {
   knowledgeRevision?(id: string, commit?: string, projectId?: string): ReturnType<NonNullable<KnowledgeBackend['revision']>>;
   knowledgeOriginal?(pageId: string, sourceId?: string, projectId?: string, handoffExcerpt?: boolean): Promise<{
     sources?: { id: string; title: string; createdAt: string; meeting?: boolean; speakerNames?: Record<string, string>; materialKind?: 'meeting-transcript'; meetingStartedAt?: string }[]; truncated?: boolean; content?: string; title?: string }>;
+  searchMeetings?(query: string, projectId?: string, offset?: number): Promise<Json>;
   meetingDay?(date: string, timezone?: string, projectId?: string, offset?: number): Promise<Json>;
   knowledgeJobs?(): Json;
   dispatch(input: Record<string, unknown>): Json;
@@ -389,6 +390,13 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             const end = offset + 4000;
             return { title: result.title, webCitation: `[查看原文](${route})`, text: chars.slice(offset, end).join(''), nextOffset: end < chars.length ? end : null } as Json;
           }, { pageId: { type: 'string' }, sourceId: { type: 'string' }, handoffExcerpt: { type: 'boolean', description: '用户明确要求附转写时获取交接用正文；长文只保留首尾。' }, query: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
+        if (actions?.searchMeetings) context.contribute('tools', 'meeting_search', tool('meeting_search',
+          '按会议当前标题或登记标题检索可见会议，包含未注明日期的来源。返回当前标题、开始时间、整理状态和可读知识页。', async (args, signal) => {
+            signal.throwIfAborted();
+            if (typeof args.query !== 'string' || (args.projectId !== undefined && typeof args.projectId !== 'string') ||
+                (args.offset !== undefined && typeof args.offset !== 'number')) throw new Error('请核对会议标题关键词、项目和分页位置');
+            return actions.searchMeetings!(args.query, args.projectId, args.offset);
+          }, { query: { type: 'string' }, projectId: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
         if (actions?.meetingDay) context.contribute('tools', 'meeting_day', tool('meeting_day',
           '按指定日期和时区读取可见会议来源。默认使用工作台时区。返回整理状态、可读知识页以及范围内未注明会议日期的来源数。', async (args, signal) => {
             signal.throwIfAborted();
