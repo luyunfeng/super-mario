@@ -70,8 +70,10 @@ function runCitation(run: Run) {
   return '[查看执行](#projects/' + encodeURIComponent(run.projectId ?? 'all') + '/runs/' + encodeURIComponent(run.id) + ')';
 }
 
-function runEvidence(run: Run, patterns: RegExp[]) {
-  const fields = Object.entries({ error: run.error ?? '', output: run.output, prompt: run.prompt, branch: run.worktree?.branch ?? '', id: run.id });
+function runEvidence(run: Run, patterns: RegExp[], criterionOnly: boolean) {
+  const doneWhen = run.doneWhen ?? '';
+  const fields = Object.entries(criterionOnly ? { doneWhen } :
+    { error: run.error ?? '', output: run.output, prompt: run.prompt, doneWhen, branch: run.worktree?.branch ?? '', id: run.id });
   const evidence = [];
   for (const pattern of patterns) {
     const source = fields.find(([, text]) => text && pattern.test(text));
@@ -373,8 +375,9 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           status: { type: 'string', enum: ['open', 'done', 'all'] }, overdue: { type: 'boolean' },
           dueFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, dueBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' } }));
         const runStates = ['queued', 'running', 'completed', 'failed', 'cancelled', 'unknown'];
-        context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。query 按关键词检索目标、输出、错误、分支和执行 ID，返回含出处的摘录，最近更新在前。updatedFrom 含起点，updatedBefore 不含终点，按记录更新时间筛选。用 id 读取一条完整执行记录。machineId、executorId 精确匹配执行记录登记的 ID。status 可限定登记状态。worktreeRunId 仅列出在指定工作树中另起的执行。', async ({ worktreeRunId, query, status, id, projectId, todoId, machineId, executorId, updatedFrom, updatedBefore }, signal) => {
+        context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。query 按关键词检索目标、验收标准、输出、错误、分支和执行 ID，返回含出处的摘录，最近更新在前。updatedFrom 含起点，updatedBefore 不含终点，按记录更新时间筛选。用 id 读取一条完整执行记录。machineId、executorId 精确匹配执行记录登记的 ID。status 可限定登记状态。worktreeRunId 仅列出在指定工作树中另起的执行。', async ({ worktreeRunId, query, queryField, status, id, projectId, todoId, machineId, executorId, updatedFrom, updatedBefore }, signal) => {
           signal.throwIfAborted();
+          if (queryField !== undefined && (queryField !== 'doneWhen' || query === undefined)) throw new Error('限定验收标准检索须传 query 和 queryField=doneWhen');
           if (worktreeRunId !== undefined && (typeof worktreeRunId !== 'string' || !worktreeRunId.trim())) throw new Error('缺少工作树所属执行 ID');
           if (query !== undefined && (typeof query !== 'string' || !query.trim() || query.length > 500)) throw new Error('检索词须为 1 至 500 个字符');
           if (status !== undefined && (typeof status !== 'string' || !runStates.includes(status))) throw new Error('执行状态无效');
@@ -400,7 +403,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           }
           const patterns = [...new Set(query.trim().split(/\s+/u))].map(term => new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'));
           return runs.flatMap(run => {
-            const evidence = runEvidence(run, patterns);
+            const evidence = runEvidence(run, patterns, queryField === 'doneWhen');
             if (!evidence) return [];
             return [{ id: run.id, projectId: run.projectId, todoId: run.todoId, machineId: run.machineId, executorId: run.executorId, status: run.status, updatedAt: run.updatedAt, evidence, webCitation: runCitation(run) }];
           }) as unknown as Json;
@@ -408,6 +411,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           machineId: { type: 'string', description: '执行记录中登记的机器完整 ID，区分大小写。' },
           executorId: { type: 'string', description: '执行器完整 ID，保留远端执行器 ID 中的机器前缀。' },
           updatedFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, updatedBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' },
+          queryField: { type: 'string', enum: ['doneWhen'], description: '只搜索登记的验收标准时使用。' },
           query: { type: 'string', description: '多个关键词用空格分隔，须全部出现在同一条执行记录中。' }, status: { type: 'string', enum: runStates } }));
         context.contribute('tools', 'executors_list', tool('executors_list', '列出执行器及真实可用状态。', async (_args, signal) => {
           signal.throwIfAborted();

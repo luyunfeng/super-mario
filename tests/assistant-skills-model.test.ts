@@ -1159,6 +1159,7 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
   let adapter!: FeishuOptions;
   const sent: string[] = [];
   const day = { updatedFrom: '2026-03-08T00:00:00-05:00', updatedBefore: '2026-03-09T00:00:00-04:00' };
+  const criterionQuestion = '哪个任务要求保存签收单作为验收条件？';
   const machineQuestion = '只查 Build-A 上 worker/1 执行器的“账期”记录。';
   const machineAnswer = 'Build-A 上 worker/1 登记了账期核验。';
   const dayQuestion = '纽约当地 3 月 8 日更新过哪些执行？按 2026 年查询。';
@@ -1167,6 +1168,10 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
   const { server, api, ask, requests } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.match(req.system, /日志出现“失败”不能证明执行状态为 failed/);
+      if (JSON.stringify(req.content).includes(criterionQuestion)) {
+        assert.match(req.system, /queryField=doneWhen/);
+        return call('runs_list', { query: '保存 签收单', queryField: 'doneWhen' }, 'criterion');
+      }
       if (JSON.stringify(req.content).includes(machineQuestion)) {
         assert.match(req.system, /旧执行未登记机器就说明未知/);
         return call('runs_list', { machineId: 'Build-A', executorId: 'worker/1', query: '账期' }, 'machine');
@@ -1181,6 +1186,11 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
     const rows = JSON.parse(raw);
+    if (req.callId === 'criterion') {
+      assert.deepEqual(rows.map((row: {id: string}) => row.id), ['partial']);
+      assert.deepEqual(rows[0].evidence.map((hit: {field: string}) => hit.field), ['doneWhen', 'doneWhen']);
+      return { role: 'assistant', content: 'partial 的登记要求是保存签收单。' };
+    }
     if (req.callId === 'machine') {
       assert.deepEqual(rows.map((r: {id: string}) => r.id), ['target']);
       assert.equal(rows[0].machineId, 'Build-A');
@@ -1221,7 +1231,8 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
       const at = new Date(i * 1000).toISOString();
       const run: Run = { id, executorId: 'fixture', prompt: '汇总', projectId: id === 'foreign' ? other.id : project.id,
         createdAt: at, updatedAt: at, conversationId: 'main', status: id === 'failed' ? 'failed' : 'completed',
-        output: id === 'recovered' ? 'E[503] 失败后已恢复' : '', error: id === 'failed' ? 'E[503] 无响应' : id === 'foreign' ? 'E[503] 其他项目私有内容' : undefined };
+        doneWhen: ['partial', 'foreign'].includes(id) ? '保存签收单' : undefined,
+        output: id === 'recovered' ? 'E[503] 失败后已恢复' : id === 'failed' ? '保存签收单' : '', error: id === 'failed' ? 'E[503] 无响应' : id === 'foreign' ? 'E[503] 其他项目私有内容' : undefined };
       server.app.store.put('runs', id, run);
     }
     for (const [id, updatedAt] of [['prior', '2026-03-08T04:59:59.999Z'], ['at-start', day.updatedFrom],
@@ -1236,6 +1247,7 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
         createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', conversationId: 'main', status: 'completed', output: '' };
       server.app.store.put('runs', id, run);
     }
+    assert.equal(await ask(criterionQuestion, '/projects/' + project.id + '/messages'), 'partial 的登记要求是保存签收单。');
     assert.equal(await ask(machineQuestion, '/projects/' + project.id + '/messages'), machineAnswer);
     const listRuns = server.app.contributions.list('tools').find(item => item.value.name === 'runs_list')!.value;
     const signal = new AbortController().signal;
@@ -1260,6 +1272,8 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
     await adapter.onMessage(dayQuestion, { ...source, messageId: 'day-question' });
     await t.waitFor(() => assert.ok(sent.includes(dayAnswer)));
     assert.equal(requests.filter(req => req.callId === 'detail').length, 2);
+    await adapter.onMessage(criterionQuestion, { ...source, messageId: 'criterion-question' });
+    await t.waitFor(() => assert.ok(sent.includes('partial 的登记要求是保存签收单。')));
     await adapter.onMessage(machineQuestion, { ...source, messageId: 'machine-question' });
     await t.waitFor(() => assert.ok(sent.includes(machineAnswer)));
     assert.equal(server.app.store.list('runs').length, 14);

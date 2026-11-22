@@ -22,7 +22,7 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     const now = new Date().toISOString();
     server.app.store.put('runs', 'synthetic-report', {
       id: 'synthetic-report', conversationId: 'main', executorId: 'fixture', projectId,
-      status: 'completed', prompt: '生成账单', output: '月报准备就绪', createdAt: now, updatedAt: now,
+      status: 'completed', prompt: '生成账单', doneWhen: '逐行核对留存签收单', output: '月报准备就绪', createdAt: now, updatedAt: now,
     });
     for (let i = 0; i < 26; i++) {
       const id = 'search-run-' + i;
@@ -81,6 +81,8 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await expect(cited).toContainText(keyword);
     await page.goBack();
     await expect(sourceLink).toBeVisible();
+    await search.fill('签收单');
+    await expect(results.getByRole('link', { name: '生成账单 · 验收标准 · 逐行核对留存签收单' })).toBeVisible();
     await search.fill('最近七天 复核凭证');
     const runHits = results.getByRole('link');
     await expect(runHits.first()).toHaveText('复核凭证明细');

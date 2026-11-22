@@ -84,7 +84,7 @@ export function searchRunHits(query, snapshot, now = Date.now()) {
       else if (title.includes(phrase)) score = 3;
       else if (terms.every(term => place.includes(term))) score = 2;
       else {
-        const sources = [['分支', run.worktree?.branch], ['错误', run.error], ['输出', run.output],
+        const sources = [['验收标准', run.doneWhen], ['分支', run.worktree?.branch], ['错误', run.error], ['输出', run.output],
           ['执行 ID', run.id], ['原生会话', run.nativeSessionId], ['会话', run.sessionId], ['执行器', fields.agent], ['状态', fields.state]];
         const missing = patterns.filter((_pattern, i) => !place.includes(terms[i]));
         let matched = true;
