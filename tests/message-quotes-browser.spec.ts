@@ -40,7 +40,7 @@ test('主对话和项目工作会话独立恢复引用，发送时逐行引用�
   const chat = page.locator('#chat'), workspace = page.locator('#panel-workspace');
   const mainPreview = chat.locator('[data-message-quote]'), workPreview = workspace.locator('[data-message-quote]');
   const mainQuote = chat.locator('#messages [data-id="quote-main-original"]').getByRole('button', { name: '引用消息', exact: true });
-  const projectQuote = workspace.locator('.msg--user').filter({ hasText: '工作记录' }).getByRole('button', { name: '引用消息', exact: true });
+  const projectQuote = workspace.locator('[data-id="quote-work-original"]').getByRole('button', { name: '引用消息', exact: true });
   const mainInput = chat.getByLabel('给 Agent 的消息'), projectInput = workspace.getByLabel('项目目标');
   const scope = chat.getByLabel('项目范围'), projectUrl = server.url + '/#projects/' + project.id + '/workspace';
   await mainInput.fill('请补充依据。');
@@ -98,6 +98,22 @@ test('主对话和项目工作会话独立恢复引用，发送时逐行引用�
   await page.reload();
   await expect(projectInput).toHaveValue('');
   await expect(workPreview).toBeHidden();
+  await projectQuote.click();
+  await workspace.getByRole('button', { name: '选择引用片段' }).click();
+  const picker = page.getByRole('dialog', { name: '选择引用片段' });
+  const passage = picker.getByLabel('选择要引用的原文');
+  await expect(passage).toHaveValue(projectOriginal);
+  const apply = picker.getByRole('button', { name: '引用选中段落' });
+  await expect(apply).toBeDisabled();
+  await passage.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(5, 10));
+  await apply.click();
+  await expect(workPreview).toContainText('第二项已核');
+  await expect(workPreview).not.toContainText('工作记录');
+  await projectInput.fill('这段有依据吗？');
+  await page.reload();
+  await expect(workPreview).toContainText('第二项已核');
+  await workspace.getByRole('button', { name: '发送目标', exact: true }).click();
+  await expect.poll(() => sent(projectConversation).at(-1)).toBe('> 第二项已核\n\n这段有依据吗？');
 
   await page.goto(server.url + '/#chat');
   await scope.selectOption('');

@@ -1,10 +1,11 @@
 import { splitLeadingQuote } from './markdown.js';
+import { openDrawer } from '../ui/overlay.js';
 import { h, replace } from './dom.js';
 
 // Store the selection separately so replacing a quote never overwrites typed words.
 export function createMessageQuote({ drafts, input }) {
   const bar = h('div', { class: 'message-quote message-quote--draft', dataset: { messageQuote: '' }, hidden: true });
-  let currentKey = null, currentOwner, selected = '';
+  let currentKey = null, currentOwner, selected = '', passageDrawer;
   const storageKey = key => JSON.stringify(['quote', key]);
 
   function decode(raw) {
@@ -15,13 +16,38 @@ export function createMessageQuote({ drafts, input }) {
     return null;
   }
 
+  function choosePassage(value) {
+    const key = currentKey, owner = currentOwner, original = selected;
+    if (!key || owner !== drafts.owner()) return;
+    const field = h('textarea', { class: 'textarea', rows: 5, readOnly: true, 'aria-label': '选择要引用的原文', value: value.text });
+    const current = () => currentKey === key && owner === drafts.owner() && selected === original &&
+      drawer.el.open && drafts.read(storageKey(key)) === original;
+    const apply = h('button', { type: 'button', class: 'btn btn--primary btn--sm', disabled: true,
+      onclick() {
+        if (!current()) { restore(currentKey); return; }
+        const passage = field.value.slice(field.selectionStart, field.selectionEnd);
+        if (!passage.trim()) return;
+        setSelection(JSON.stringify({ ...value, text: passage }));
+        input.focus();
+      } }, '引用选中段落');
+    field.addEventListener('select', () => { apply.disabled = !field.value.slice(field.selectionStart, field.selectionEnd).trim(); });
+    const drawer = openDrawer({ title: '选择引用片段', body: field, footer: apply, onClose() {
+      if (passageDrawer === drawer) passageDrawer = undefined;
+    } });
+    passageDrawer = drawer;
+    field.focus();
+    field.setSelectionRange(0, 0);
+  }
+
   function paint(raw) {
+    passageDrawer?.close();
     const value = decode(raw);
     selected = value ? raw : '';
     bar.hidden = !value;
     replace(bar, value && [
       h('div', { class: 'message-quote__preview', title: value.text },
         h('strong', null, value.label), ' · ', value.text),
+      h('button', { type: 'button', class: 'btn btn--ghost btn--sm', onclick: () => choosePassage(value) }, '选择引用片段'),
       h('button', { type: 'button', class: 'btn btn--ghost btn--sm', 'aria-label': '移除引用', onclick: () => {
         if (!currentKey || currentOwner !== drafts.owner()) return;
         drafts.clearIf(storageKey(currentKey), selected);
