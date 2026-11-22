@@ -19,6 +19,8 @@ export function createFeishuWebExtension(source: { start(): void; stop(): Promis
   };
 }
 
+export { todoCalendar } from './todo-calendar.ts';
+export { conversationSearch } from './conversation-search.ts';
 export { tokenStatistics } from './token-statistics.ts';
 export { workspaceSplash } from './workspace-splash.ts';
 export { createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from './knowledge-source-reader.ts';

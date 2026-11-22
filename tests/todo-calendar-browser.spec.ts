@@ -1,0 +1,86 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { chromium, expect } from '@playwright/test';
+import { startServer } from '../apps/server/src/index.ts';
+import type { Todo } from '../packages/protocol/src/index.ts';
+
+test('项目待办日历按本地日期展示，支持改期、按时段新增和返回列表', { timeout: 60000 }, async t => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'mario-calendar-'));
+  const server = await startServer({ dataDir, demo: true, host: '127.0.0.1', port: 0 });
+  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  t.after(async () => {
+    await browser.close();
+    await server.close();
+    await rm(dataDir, { recursive: true, force: true });
+  });
+  const page = await browser.newPage({ timezoneId: 'America/Los_Angeles', viewport: { width: 1440, height: 1000 } });
+  page.setDefaultTimeout(5000);
+  await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+  const project = server.app.projects.create({ name: '日历项目' });
+  const dueAt = '2030-04-01T01:05:12.345Z';
+  const reminderAt = '2030-03-30T01:00:00Z';
+  const todo = server.app.createTodo({ title: '本地三月末', projectId: project.id, dueAt, reminderAt });
+  server.app.createTodo({ title: '尚未安排', projectId: project.id });
+  server.app.createTodo({ title: '其他范围', dueAt });
+  const done = server.app.createTodo({ title: '完成的待办', projectId: project.id, dueAt });
+  server.app.store.put('todos', done.id, { ...done, completedAt: dueAt });
+  const read = () => server.app.store.get<Todo>('todos', todo.id)!;
+  const root = page.getByRole('region', { name: '待办日历' });
+  const base = `${server.url}/#projects/${project.id}/todos`;
+  await page.goto(base);
+  await page.getByRole('button', { name: '日历', exact: true }).click();
+  await expect(root).toBeVisible();
+  await page.goto(base + '/month/2030-03-31');
+  const entry = root.getByRole('button', { name: /本地三月末/ });
+  await expect(root.locator('[data-day="2030-03-31"]')).toContainText(todo.title);
+  await expect(root.getByText('其他范围', { exact: false })).toHaveCount(0);
+  await expect(root.getByText('完成的待办', { exact: false })).toHaveCount(0);
+  await root.getByRole('checkbox', { name: '显示已完成' }).check();
+  await expect(root.getByText('完成的待办', { exact: false })).toBeVisible();
+  await page.route(`**/todos/${todo.id}`, route => route.fulfill({
+    status: 503, contentType: 'application/json', body: JSON.stringify({ error: '暂时无法保存' }),
+  }), { times: 1 });
+  const target = root.locator('[data-day="2030-03-27"]');
+  await entry.dragTo(target);
+  await expect(page.getByText('没有改期成功：暂时无法保存', { exact: true })).toBeVisible();
+  assert.equal(read().dueAt, dueAt);
+  await entry.dragTo(target);
+  await expect.poll(() => read().dueAt).toBe('2030-03-28T01:05:12.345Z');
+  assert.equal(read().reminderAt, reminderAt);
+  await root.getByRole('button', { name: '周', exact: true }).click();
+  await root.getByRole('button', { name: '查看 2030-03-27', exact: true }).click();
+  await expect(page).toHaveURL(/\/day\/2030-03-27$/);
+  await page.reload();
+  await entry.click();
+  const editor = page.getByRole('dialog', { name: '编辑待办' });
+  await expect(editor.getByLabel('截止时间', { exact: true })).toHaveValue('18:05');
+  await editor.getByLabel('截止时间', { exact: true }).fill('08:40');
+  await editor.getByRole('button', { name: '保存' }).click();
+  await expect.poll(() => read().dueAt).toBe('2030-03-27T15:40:00.000Z');
+  await expect(editor).toHaveCount(0);
+  await root.getByRole('button', { name: '添加待办 2030-03-27 11:00' }).click();
+  const panel = page.locator('#panel-todos');
+  await panel.getByRole('textbox', { name: '添加待办' }).fill('日历时段新建');
+  await panel.getByRole('button', { name: '添加', exact: true }).click();
+  await expect(root.getByRole('button', { name: /日历时段新建/ })).toBeVisible();
+  const created = server.app.store.list<Todo>('todos').find(item => item.title === '日历时段新建')!;
+  assert.equal(created.projectId, project.id);
+  assert.equal(created.dueAt, '2030-03-27T18:00:00.000Z');
+  await root.getByRole('button', { name: '下一页' }).click();
+  await expect(page).toHaveURL(/\/day\/2030-03-28$/);
+  await root.getByRole('button', { name: '1 项没有截止日期，查看列表' }).click();
+  await expect(panel.locator('.todo', { hasText: '尚未安排' })).toBeVisible();
+  const disabled = await fetch(server.url + '/api/v1/plugins/todo-calendar', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: false }),
+  });
+  assert.equal(disabled.status, 200);
+  await page.goto(base + '/month/2030-03-31');
+  await page.reload();
+  await expect(panel.getByRole('group', { name: '待办视图' })).toBeHidden();
+  await expect(root).toHaveCount(0);
+  await expect(page).toHaveURL(base);
+  await expect(panel.locator('.todo', { hasText: '尚未安排' })).toBeVisible();
+});

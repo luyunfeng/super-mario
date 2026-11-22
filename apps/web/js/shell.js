@@ -31,7 +31,7 @@ export function createShell({ api, store, router, scope }) {
     nav, pluginSettings.nav, pluginSettings.footer);
 
   // —— 搜索 ——
-  const searchInput = h('input', { class: 'search__input', type: 'search', id: 'workspace-search', placeholder: '搜索待办、执行与记忆', autocomplete: 'off', 'aria-label': '搜索待办、执行与记忆', 'aria-controls': 'search-results' });
+  const searchInput = h('input', { class: 'search__input', type: 'search', id: 'workspace-search', placeholder: '搜索待办、执行、记忆与项目', autocomplete: 'off', 'aria-label': '搜索待办、执行、记忆与项目', 'aria-controls': 'search-results' });
   const results = h('div', { class: 'search__results', id: 'search-results', hidden: true });
   const search = h('div', { class: 'search' }, icon('search', 'search__icon'), searchInput, h('kbd', { class: 'search__kbd' }, '/'), results);
 

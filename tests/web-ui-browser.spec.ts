@@ -49,7 +49,8 @@ test('外壳：八个入口都有作用文字，目录与总指挥群有专用�
       if (hash === 'projects') {
         await expect(page.locator('#projects .project-discovered').getByRole('button', { name: '刷新目录', exact: true })).toBeVisible();
       }
-      assert.deepEqual(await page.getByRole('button', { name: /刷新/ }).allTextContents(),hash === 'projects'?['刷新目录']:hash === 'agent'?['刷新群状态']:[],hash);
+      const refreshActions = { projects: ['刷新目录'], agent: ['刷新群状态'], channels: ['刷新网关状态'] };
+      assert.deepEqual(await page.getByRole('button', { name: /刷新/ }).allTextContents(), refreshActions[hash as keyof typeof refreshActions] ?? [], hash);
     }
     assert.deepEqual(errors, []);
   });
@@ -65,6 +66,51 @@ test('个人消息采集：演示页说明扫码路径，不要求填写配置�
     await expect(drawer.locator('input, pre')).toHaveCount(0);
     await expect(drawer.getByRole('button', { name: '授权飞书账号', exact: true })).toBeDisabled();
     assert.ok(await drawer.evaluate(el => el.scrollWidth <= el.clientWidth), '窄屏抽屉不能横向溢出');
+    assert.deepEqual(errors, []);
+  });
+});
+
+test('全局搜索从历史正文定位主对话消息，并隔离其他会话和工具记录', { timeout: 30000 }, async () => {
+  await withApp(async ({ open, server, post }) => {
+    const put = (id: string, text: string, extra = {}) => server.app.store.put('messages', id, {
+      id, text, role: 'assistant', conversationId: 'main', status: 'done', createdAt: new Date().toISOString(), ...extra,
+    });
+    put('old-answer', '合成记录'.repeat(20) + 'Needle 已验收');
+    put('user-question', '先查 needle', { role: 'user' });
+    put('outside', 'needle 私有', { conversationId: 'supervisor' });
+    put('notice', 'needle 通知', { origin: 'notification' });
+    put('output', 'needle 输出', { origin: 'result' });
+    for (let i = 0; i < 35; i++) put('later-' + i, '后续回复 ' + i, { progress: { phase: 'tool', detail: 'needle', updatedAt: new Date().toISOString() } });
+
+    const { page, errors } = await open('#memory');
+    const search = page.locator('#workspace-search');
+    await search.fill('needle');
+    const hits = page.locator('#search-results .search__hit');
+    await expect(hits).toHaveCount(2);
+    await expect(hits.first()).toContainText('你 · ');
+    await expect(hits.last().locator('mark')).toHaveText('Needle');
+    await hits.last().click();
+    const target = page.locator('#messages [data-id="old-answer"]');
+    await expect(target).toBeInViewport();
+    await expect(target).toBeFocused();
+    await expect(page).toHaveURL(/#chat\?at=old-answer$/);
+    await page.reload();
+    await expect(target).toBeFocused();
+    await expect(target).toBeInViewport();
+
+    await search.fill('needle');
+    await post('/plugins/conversation-search', { enabled: false });
+    await expect(hits).toHaveCount(0);
+    await expect(target).not.toHaveClass(/is-search-hit/);
+    await post('/projects', { name: 'needle 示例项目' });
+    await expect(hits).toHaveCount(1);
+    await expect(hits.first()).toHaveText('needle 示例项目');
+    await page.reload();
+    await expect(page.locator('#message-form')).toBeVisible();
+    await expect(target).not.toBeInViewport();
+    await post('/plugins/conversation-search', { enabled: true });
+    await search.fill('needle');
+    await expect(hits).toHaveCount(3);
     assert.deepEqual(errors, []);
   });
 });

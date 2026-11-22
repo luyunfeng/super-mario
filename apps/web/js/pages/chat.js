@@ -5,6 +5,7 @@ import { renderFormattedText } from '../lib/markdown.js';
 import { icon } from '../ui/icons.js';
 import { Button, Banner, Card, Pill } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
+import { conversationSearchActive } from '../features/search.js';
 import { createAttention } from '../features/attention.js';
 import { createCodeSidebar } from '../features/code-sidebar.js';
 import { createRecentWork } from '../features/recent-work.js';
@@ -55,6 +56,31 @@ export function createChatPage({ api, store, scope, router }) {
   let sending = false;
   let snapshot = null;
   let lastCount = 0;
+  let pendingMessage = '';
+  let scrollFrame;
+  let markedMessage;
+
+  function revealMessage() {
+    if (!snapshot || router.current.page !== 'chat') return;
+    if (!conversationSearchActive(snapshot)) {
+      markedMessage?.classList.remove('is-search-hit');
+      markedMessage = undefined;
+      if (pendingMessage) scrollToEnd(true);
+      pendingMessage = '';
+      return;
+    }
+    if (!pendingMessage) return;
+    const row = messages.querySelector(`[data-id="${CSS.escape(pendingMessage)}"]`);
+    if (!row) return;
+    pendingMessage = '';
+    cancelAnimationFrame(scrollFrame);
+    markedMessage?.classList.remove('is-search-hit');
+    markedMessage = row;
+    row.classList.add('is-search-hit');
+    row.tabIndex = -1;
+    row.focus({ preventScroll: true });
+    row.scrollIntoView({ block: 'center' });
+  }
 
   function autosize() { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 200)}px`; }
   input.addEventListener('input', autosize);
@@ -85,7 +111,11 @@ export function createChatPage({ api, store, scope, router }) {
   }
 
   function nearBottom() { return scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop < 80; }
-  function scrollToEnd(force = false) { if (force || nearBottom()) requestAnimationFrame(() => { scroller.scrollTop = scroller.scrollHeight; }); }
+  function scrollToEnd(force = false) {
+    if (!force && !nearBottom()) return;
+    cancelAnimationFrame(scrollFrame);
+    scrollFrame = requestAnimationFrame(() => { scroller.scrollTop = scroller.scrollHeight; });
+  }
 
   function renderMessage(message) {
     const text = message.origin === 'notification' ? systemText(message.text) : message.text;
@@ -152,7 +182,13 @@ export function createChatPage({ api, store, scope, router }) {
 
   return {
     el,
-    onShow() { recent.refresh(); requestAnimationFrame(() => { scrollToEnd(true); }); },
+    onShow(route) {
+      recent.refresh();
+      pendingMessage = route.query.get('at') || '';
+      markedMessage?.classList.remove('is-search-hit');
+      if (pendingMessage) revealMessage();
+      else scrollToEnd(true);
+    },
     focus() { input.focus(); },
     onState({ snapshot: state, attention: items }) {
       snapshot = state;
@@ -166,6 +202,7 @@ export function createChatPage({ api, store, scope, router }) {
       hero.hidden = list.length > 0 || !setup.hidden;
       if (list.length !== lastCount) { lastCount = list.length; if (follow) scrollToEnd(true); }
       else if (follow && list.at(-1)?.status === 'pending') scrollToEnd(true);
+      revealMessage();
       send.disabled = sending || !state.agent.available;
       input.placeholder = state.agent.available ? '说出目标，Enter 发送，Shift + Enter 换行' : '主 Agent 暂不可用，请先完成模型配置';
       const projects = (state.projects ?? []).filter(item => !item.archivedAt);

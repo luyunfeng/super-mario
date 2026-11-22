@@ -2,9 +2,10 @@
 // 待办是否完成由你确认；执行结束不会自动完成待办。
 import { h, replace } from '../lib/dom.js';
 import { formatDate } from '../lib/format.js';
-import { Button, Empty, Fold, Field, Input, TextArea, Select, Pill } from '../ui/kit.js';
+import { Button, Empty, Fold, Field, Input, TextArea, Select, Segmented } from '../ui/kit.js';
 import { openDrawer, toast } from '../ui/overlay.js';
 
+import { todoCalendar, localDate, dueInstant, calendarRoute } from './todo-calendar.js';
 import { openTaskClosure, refreshTaskClosure } from './task-closure.js';
 import { openTodoDetail, openTodoDelegate } from './todo-detail.js';
 import { openTodoHistory } from './todo-history.js';
@@ -12,16 +13,6 @@ import { openWaitingReply, refreshWaitingReply } from './waiting-reply.js';
 
 const ORDER = ['需要你', '逾期', '今天', '等待中', '之后', '某天'];
 const DONE = ['刚完成', '已完成'];
-
-// HTML date controls use wall time in the browser's zone, not the UTC date prefix.
-function localTime(value, withTime = false) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return '';
-  const pad = number => String(number).padStart(2, '0');
-  const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-  return withTime ? `${day}T${pad(date.getHours())}:${pad(date.getMinutes())}` : day;
-}
 
 export function createTodosTab({ api, store, router }) {
   let projectId = 'all';
@@ -32,17 +23,31 @@ export function createTodosTab({ api, store, router }) {
 
   const title = Input({ placeholder: '添加待办：输入标题，回车添加', 'aria-label': '添加待办', id: 'todo-title', maxLength: 500 });
   const due = Input({ type: 'date', 'aria-label': '截止日期', style: { maxWidth: '170px' } });
+  let calendar = null;
+  let showDone = false;
+  let calendarEnabled = false;
+  const time = Input({ type: 'time', hidden: true, 'aria-label': '截止时间', style: { maxWidth: '125px' } });
   const form = h('form', { class: 'row row--wrap todo-add', onsubmit: async (event) => {
     event.preventDefault();
     const text = title.value.trim();
     if (!text) return;
-    await api.post('/todos', { title: text, ...(projectId !== 'all' ? { projectId } : {}), ...(due.value ? { dueAt: new Date(`${due.value}T23:59:00`).toISOString() } : {}) })
-      .then(() => { title.value = ''; due.value = ''; }, (error) => { toast(`没有添加成功：${error.message}`, 'danger'); });
-    store.refresh();
-  } }, h('div', { class: 'grow', style: { minWidth: '200px' } }, title), due, h('button', { class: 'btn btn--primary', type: 'submit' }, '添加'));
+    try {
+      if (calendar && time.value && !due.value) throw new Error('请填写截止日期');
+      await api.post('/todos', { title: text, ...(projectId !== 'all' ? { projectId } : {}),
+        ...(due.value ? { dueAt: dueInstant(due.value, time.value || '23:59') } : {}) });
+      title.value = ''; due.value = ''; time.value = '';
+      store.refresh();
+    } catch (error) { toast(`没有添加成功：${error.message}`, 'danger'); }
+  } }, h('div', { class: 'grow', style: { minWidth: '200px' } }, title), due, time, h('button', { class: 'btn btn--primary', type: 'submit' }, '添加'));
   const search = Input({ type: 'search', placeholder: '搜索标题或备注', 'aria-label': '搜索待办标题或备注', oninput: paint });
   const list = h('div', { class: 'stack' });
-  const el = h('div', { class: 'stack stack--lg', id: 'panel-todos', role: 'tabpanel' }, form, search, list);
+  function navigate(mode, date) {
+    const base = router.href('projects', projectId, 'todos');
+    router.go(mode === 'list' ? base : `${base}/${mode}/${localDate(date)}`);
+  }
+  const views = Segmented({ options: [['list', '列表'], ['calendar', '日历']], label: '待办视图', value: 'list',
+    onChange: view => navigate(view === 'calendar' ? 'month' : 'list', new Date()) });
+  const el = h('div', { class: 'stack stack--lg', id: 'panel-todos', role: 'tabpanel' }, form, h('div', { class: 'row row--wrap' }, h('div', { class: 'grow' }, search), views.el), list);
 
   const inScope = (todo) => projectId === 'all' || todo.projectId === projectId;
   const projectName = (id) => (store.view.snapshot?.projects ?? []).find(item => item.id === id)?.name;
@@ -50,9 +55,11 @@ export function createTodosTab({ api, store, router }) {
   function openEdit(todo) {
     const name = Input({ value: todo.title, required: true });
     const notes = TextArea({ value: todo.notes ?? '', rows: 4 });
-    const originalDue = localTime(todo.dueAt);
-    const originalReminder = localTime(todo.reminderAt, true);
+    const originalDue = localDate(todo.dueAt);
+    const originalReminder = localDate(todo.reminderAt, true);
     const dueInput = Input({ type: 'date', value: originalDue });
+    const originalClock = localDate(todo.dueAt, true).slice(11);
+    const clock = calendar ? Input({ type: 'time', value: originalClock }) : null;
     const reminder = Input({ type: 'datetime-local', value: originalReminder });
     const waiting = Input({ value: todo.waitingOn ?? '', placeholder: '例如：张三回复' });
     const projects = (store.view.snapshot?.projects ?? []).filter(item => !item.archivedAt);
@@ -60,20 +67,23 @@ export function createTodosTab({ api, store, router }) {
     const drawer = openDrawer({
       title: '编辑待办',
       body: [Field({ label: '标题', control: name, required: true }), Field({ label: '备注', control: notes }),
-        h('div', { class: 'form-row' }, Field({ label: '截止日期', control: dueInput, hint: '留空取消截止日期。' }), Field({ label: '在等谁', control: waiting, hint: '填写后会进入“等待中”。' })),
+        h('div', { class: 'form-row' }, Field({ label: '截止日期', control: dueInput, hint: '留空取消截止日期。' }), clock && Field({ label: '截止时间', control: clock }), Field({ label: '在等谁', control: waiting, hint: '填写后会进入“等待中”。' })),
         Field({ label: '提醒时间', control: reminder, hint: '按本机时区填写；留空取消。到点检查需在 Agent 中开启提醒，外发仍需渠道与发送授权。' }),
         Field({ label: '所属项目', control: project })],
       footer: [Button({ label: '取消', onClick: () => drawer.close() }), Button({
         label: '保存', kind: 'primary', onClick: async () => {
           if (!name.value.trim()) throw new Error('请填写标题');
-          if (!dueInput.reportValidity() || !reminder.reportValidity()) return;
+          if (!dueInput.reportValidity() || (clock && !clock.reportValidity()) || !reminder.reportValidity()) return;
           // Omit unchanged values: re-sending reminderAt clears its claim in the API.
           // It also preserves seconds/precision that these minute/date controls cannot show.
           const dates = {};
-          if (dueInput.value !== originalDue) dates.dueAt = dueInput.value ? new Date(`${dueInput.value}T23:59:00`).toISOString() : '';
+          if (dueInput.value !== originalDue || (clock && clock.value !== originalClock)) {
+            if (!dueInput.value && clock?.value && !originalDue) throw new Error('请填写截止日期');
+            dates.dueAt = dueInput.value ? dueInstant(dueInput.value, clock?.value || '23:59') : '';
+          }
           if (reminder.value !== originalReminder) {
             const at = reminder.value ? new Date(reminder.value) : undefined;
-            if (at && (!Number.isFinite(at.getTime()) || localTime(at.toISOString(), true) !== reminder.value)) throw new Error('提醒时间无效，请检查本机时区和夏令时');
+            if (at && (!Number.isFinite(at.getTime()) || localDate(at.toISOString(), true) !== reminder.value)) throw new Error('提醒时间无效，请检查本机时区和夏令时');
             dates.reminderAt = at ? at.toISOString() : '';
           }
           await api.patch(`/todos/${encodeURIComponent(todo.id)}`, {
@@ -116,6 +126,23 @@ export function createTodosTab({ api, store, router }) {
     const matches = todo => inScope(todo) && (!query || [todo.title, todo.notes].some(value => value?.toLowerCase().includes(query)));
     const groups = ORDER.map(name => [name, (sections[name] ?? []).filter(matches)]).filter(([, items]) => items.length);
     const finished = DONE.flatMap(name => (sections[name] ?? []).filter(matches));
+    if (calendar) {
+      replace(list, todoCalendar({ ...calendar, todos: [...groups.flatMap(([, items]) => items), ...finished], showDone, navigate,
+        onShowDone: value => { showDone = value; paint(); }, open: openEdit, showList: () => navigate('list'),
+        add: (day, clock) => { due.value = day; time.value = clock; title.focus(); },
+        move: async (todo, day, clock) => {
+          try {
+            const original = new Date(todo.dueAt);
+            if (!clock && localDate(original) === day) return;
+            const target = new Date(dueInstant(day, clock || localDate(original, true).slice(11)));
+            if (!clock) target.setSeconds(original.getSeconds(), original.getMilliseconds());
+            if (+target === +original) return;
+            await api.patch(`/todos/${encodeURIComponent(todo.id)}`, { dueAt: target.toISOString() });
+            await store.refresh();
+          } catch (error) { toast(`没有改期成功：${error.message}`, 'danger'); }
+        } }));
+      return;
+    }
     const blocks = groups.map(([name, items]) => h('div', { class: 'group', dataset: { section: name } },
       h('h3', { class: 'group__title' }, name, h('span', { class: 'tab__count' }, items.length)),
       h('div', { class: 'list' }, items.map(todo => row(todo, false)))));
@@ -132,14 +159,29 @@ export function createTodosTab({ api, store, router }) {
 
   const todoSignature = snapshot => JSON.stringify((snapshot?.todos ?? []).map(todo => [todo.id, todo.updatedAt]));
 
+  const calendarActive = snapshot => snapshot?.plugins?.some(plugin =>
+    plugin.id === 'todo-calendar' && plugin.enabled && plugin.status === 'active') === true;
+  function syncCalendar(snapshot) {
+    calendarEnabled = snapshot ? calendarActive(snapshot) : undefined;
+    const route = router.current;
+    const requested = route.page === 'projects' && route.parts[1] === 'todos' && calendarRoute(route.parts);
+    calendar = calendarEnabled ? requested : null;
+    if (!calendar) time.value = '';
+    time.hidden = !calendar;
+    views.el.hidden = !calendarEnabled;
+    views.set(calendar ? 'calendar' : 'list');
+    if (snapshot && !calendarEnabled && requested) navigate('list');
+  }
+
   return {
     el,
     show(id) {
-      if (id !== projectId) search.value = '';
-      projectId = id; signature = todoSignature(store.view.snapshot); paint(); load();
+      if (id !== projectId) { search.value = ''; title.value = ''; due.value = ''; time.value = ''; }
+      projectId = id; syncCalendar(store.view.snapshot); signature = todoSignature(store.view.snapshot); paint(); load();
     },
     /** 快照里的待办变了才重新读取分区。 */
     update(snapshot) {
+      if (calendarActive(snapshot) !== calendarEnabled) { syncCalendar(snapshot); paint(); }
       refreshTaskClosure(api);
       refreshWaitingReply(api);
       const next = todoSignature(snapshot);

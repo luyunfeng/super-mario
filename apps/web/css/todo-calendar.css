@@ -1,0 +1,22 @@
+.todo-calendar { min-width: 0; }
+.cal-scroll { overflow: auto; max-height: 65vh; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.cal-grid { display: grid; gap: 1px; background: var(--line); }
+.cal-month { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.cal-head, .cal-hour, .cal-cell, .cal-axis > .cal-day { background: var(--surface); padding: 4px; }
+.cal-head, .cal-hour { color: var(--text-2); font-size: 12px; }
+.cal-head { text-align: center; }
+.cal-cell { display: flex; flex-direction: column; min-width: 0; gap: 2px; position: relative; }
+.cal-cell[data-today=true] { background: var(--brand-soft); }
+.cal-cell[data-outside=true] { background: var(--surface-2); }
+.cal-month .cal-cell { min-height: 76px; }
+.cal-day, .cal-entry, .cal-slot { font: inherit; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.cal-day { align-self: flex-start; color: var(--text-2); font-size: 12px; }
+.cal-day:hover { text-decoration: underline; }
+.cal-axis > .cal-day, .cal-axis > .cal-head { position: sticky; top: 0; align-self: stretch; z-index: 2; }
+.cal-axis .cal-cell { min-height: 38px; }
+.cal-slot { position: absolute; inset: 0; text-align: right; color: transparent; }
+.cal-slot:hover, .cal-slot:focus-visible { color: var(--brand); background: var(--brand-soft); }
+.cal-entry { position: relative; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 3px solid var(--brand); background: var(--surface-2); padding: 2px 4px; font-size: 12px; }
+.cal-entry[data-status=已逾期] { border-color: var(--danger); color: var(--danger); }
+.cal-entry[data-status=已完成] { color: var(--text-3); text-decoration: line-through; }
+.cal-entry[data-status=等待中] { border-color: var(--warn); }

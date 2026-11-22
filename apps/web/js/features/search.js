@@ -1,13 +1,41 @@
-// 全局搜索：待办、执行、记忆、项目。只在本地快照里查找，结果按类型分组。
+// 全局搜索：只在当前工作台快照里查找，结果按类型分组。
 import { h, replace } from '../lib/dom.js';
+
+export function conversationSearchActive(snapshot) {
+  return snapshot?.plugins?.some(plugin => plugin.id === 'conversation-search' && plugin.status === 'active') ?? false;
+}
 
 export function createSearch({ shell, store, router }) {
   const { searchInput: input, results } = shell;
 
+  function chatHits(query, messages) {
+    const hits = [];
+    const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
+    // 快照按消息插入顺序排列。只搜索主对话气泡的正文，不读取工具进展或通知详情。
+    for (let i = messages.length - 1; i >= 0 && hits.length < 5; i--) {
+      const message = messages[i];
+      if (message.conversationId !== 'main' || (message.origin && message.origin !== 'user')) continue;
+      const match = pattern.exec(message.text);
+      if (!match) continue;
+      const index = match.index;
+      const after = index + match[0].length;
+      const start = Math.max(0, index - 18);
+      const end = Math.min(message.text.length, after + 32);
+      hits.push({
+        text: [message.role === 'user' ? '你 · ' : '主 Agent · ', start ? '…' : '', message.text.slice(start, index),
+          h('mark', null, match[0]), message.text.slice(after, end), end < message.text.length ? '…' : ''],
+        href: `${router.href('chat')}?at=${encodeURIComponent(message.id)}`,
+      });
+    }
+    return hits;
+  }
+
   function groups(query, snapshot) {
-    const match = (...values) => values.some(value => String(value ?? '').toLowerCase().includes(query));
+    const folded = query.toLowerCase();
+    const match = (...values) => values.some(value => String(value ?? '').toLowerCase().includes(folded));
     const projectKey = item => item.projectId || 'all';
     return [
+      ['主对话', conversationSearchActive(snapshot) ? chatHits(query, snapshot.messages ?? []) : []],
       ['待办', (snapshot.todos ?? []).filter(item => match(item.title, item.notes)).map(item => ({ text: item.title, href: router.href('projects', projectKey(item), 'todos') }))],
       ['执行', (snapshot.runs ?? []).filter(item => match(item.prompt, item.output)).map(item => ({ text: item.prompt, href: router.href('projects', projectKey(item), 'runs', item.id) }))],
       ['记忆', (snapshot.knowledge ?? []).filter(item => match(item.title, item.content)).map(item => ({ text: item.title, href: `${router.href('memory')}?entry=${encodeURIComponent(item.id)}` }))],
@@ -16,18 +44,32 @@ export function createSearch({ shell, store, router }) {
   }
 
   function paint() {
-    const query = input.value.trim().toLowerCase();
+    const query = input.value.trim();
     const snapshot = store.view.snapshot;
-    results.hidden = !query || !snapshot;
-    if (results.hidden) return;
+    results.hidden = !query || !snapshot || store.view.unauthorized;
+    if (results.hidden) { results.replaceChildren(); return; }
     const found = groups(query, snapshot);
     if (!found.length) { replace(results, h('p', { class: 'search__group' }, '没有找到匹配的内容')); return; }
     replace(results, found.map(([name, hits]) => [
       h('div', { class: 'search__group' }, name),
-      hits.slice(0, 5).map(hit => h('a', { class: 'search__hit truncate', href: hit.href, onclick: () => { input.value = ''; results.hidden = true; } }, hit.text)),
+      hits.slice(0, 5).map(hit => h('a', { class: 'search__hit truncate', href: hit.href, onclick: event => {
+        input.value = ''; results.hidden = true;
+        if (hit.href === location.hash && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+          event.preventDefault(); router.go(hit.href);
+        }
+      } }, hit.text)),
     ]));
   }
 
+  store.subscribe(({ snapshot, unauthorized }) => {
+    const label = conversationSearchActive(snapshot) && !unauthorized ? '搜索对话、待办、执行、记忆与项目' : '搜索待办、执行、记忆与项目';
+    input.placeholder = label;
+    input.setAttribute('aria-label', label);
+    if (!snapshot || unauthorized) {
+      results.hidden = true;
+      results.replaceChildren();
+    } else if (document.activeElement === input || !results.hidden) paint();
+  });
   input.addEventListener('input', paint);
   input.addEventListener('focus', paint);
   input.addEventListener('keydown', (event) => {
