@@ -27,16 +27,31 @@ export const voiceInput: Extension = {
       if (!endpoint || !model) fail(503, '服务端需配置 SUPER_MARIO_TRANSCRIPTION_URL 和 SUPER_MARIO_TRANSCRIPTION_MODEL');
       const form = new FormData();
       form.set('model', model);
+      const responseFormat = process.env.SUPER_MARIO_TRANSCRIPTION_RESPONSE_FORMAT?.trim();
+      if (responseFormat) {
+        if (!['json', 'verbose_json', 'diarized_json'].includes(responseFormat)) fail(503, '转写响应格式配置无效');
+        form.set('response_format', responseFormat);
+        if (responseFormat === 'diarized_json') form.set('chunking_strategy', 'auto');
+      }
       form.set('file', new Blob([bytes], { type: formats.get(input.format) }), 'audio.' + input.format);
       const key = process.env.SUPER_MARIO_TRANSCRIPTION_API_KEY?.trim();
       const signal = AbortSignal.any([request, lifetime.signal]);
       const response = await fetch(endpoint, { method: 'POST', redirect: 'error', body: form, signal,
         headers: key ? { authorization: 'Bearer ' + key } : {} });
       if (!response.ok) { await response.body?.cancel(); fail(502, '转写服务返回 HTTP ' + response.status); }
-      const answer = await response.json().catch(() => fail(502, '转写服务返回了无效的 JSON')) as { text?: unknown } | null;
+      const answer = await response.json().catch(() => fail(502, '转写服务返回了无效的 JSON')) as { text?: unknown; segments?: unknown } | null;
       if (typeof answer?.text !== 'string' || !answer.text.trim()) fail(422, '转写服务未返回可用文字');
       signal.throwIfAborted();
-      return { text: answer.text.trim() };
+      const segments = [];
+      if (Array.isArray(answer.segments)) {
+        for (const row of answer.segments) {
+          if (!row || typeof row.text !== 'string' || !row.text.trim() ||
+              !Number.isFinite(row.start) || !Number.isFinite(row.end) || row.start < 0 || row.end < row.start) continue;
+          const speaker = typeof row.speaker === 'string' ? row.speaker.trim() : '';
+          segments.push({ start: row.start, end: row.end, text: row.text.trim(), ...(speaker ? { speaker } : {}) });
+        }
+      }
+      return { text: answer.text.trim(), ...(segments.length ? { segments } : {}) };
     });
   },
 };

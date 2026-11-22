@@ -8,6 +8,7 @@ import { startServer } from '../apps/server/src/index.ts';
 
 test('录音经认证服务转写后追加到当前草稿，失败和切换项目保留草稿', async t => {
   const calls: { model: unknown; file: string; audio: string; auth?: string }[] = [];
+  let requestedFormat: FormDataEntryValue | null, chunking: FormDataEntryValue | null;
   let finish: (() => void) | undefined;
   const upstream = createServer(async (req, res) => {
     const chunks = [];
@@ -16,15 +17,20 @@ test('录音经认证服务转写后追加到当前草稿，失败和切换项�
     const file = form.get('file') as File;
     calls.push({ model: form.get('model'), file: file.name, audio: await file.text(), auth: req.headers.authorization });
     if (calls.length === 2) await new Promise<void>(resolve => { finish = resolve; });
-    res.end(JSON.stringify({ text: '合成转写' }));
+    requestedFormat = form.get('response_format'); chunking = form.get('chunking_strategy');
+    res.end(JSON.stringify({ text: '合成转写', ...(requestedFormat && { segments: [
+      { start: 0, end: 1.25, speaker: 'A', text: '合成' }, { start: 1.25, end: 2, text: '转写' },
+      { start: 5, end: 2, speaker: '错误标签', text: '时间无效' },
+    ] }) }));
   });
   await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
   t.after(() => { finish?.(); upstream.closeAllConnections(); upstream.close(); });
   const address = upstream.address();
   if (!address || typeof address === 'string') throw new Error('转写测试服务未监听');
-  const keys = ['SUPER_MARIO_TRANSCRIPTION_URL', 'SUPER_MARIO_TRANSCRIPTION_MODEL', 'SUPER_MARIO_TRANSCRIPTION_API_KEY'];
+  const keys = ['SUPER_MARIO_TRANSCRIPTION_URL', 'SUPER_MARIO_TRANSCRIPTION_MODEL', 'SUPER_MARIO_TRANSCRIPTION_API_KEY', 'SUPER_MARIO_TRANSCRIPTION_RESPONSE_FORMAT'];
   const previous = keys.map(k => process.env[k]);
   t.after(() => keys.forEach((k, i) => { if (previous[i] === undefined) delete process.env[k]; else process.env[k] = previous[i]; }));
+  delete process.env.SUPER_MARIO_TRANSCRIPTION_RESPONSE_FORMAT;
   delete process.env.SUPER_MARIO_TRANSCRIPTION_URL;
   process.env.SUPER_MARIO_TRANSCRIPTION_MODEL = 'fixture-model';
   process.env.SUPER_MARIO_TRANSCRIPTION_API_KEY = 'fixture-key';
@@ -86,10 +92,16 @@ test('录音经认证服务转写后追加到当前草稿，失败和切换项�
   const work = page.getByLabel('项目目标');
   await expect(work).toBeEditable();
   finish!();
+  process.env.SUPER_MARIO_TRANSCRIPTION_RESPONSE_FORMAT = 'diarized_json';
   await upload();
   await expect(work).toHaveValue('合成转写');
   await organize.click();
   await expect(review).toContainText('保存到项目记忆 · 转写项目');
+  expect(requestedFormat!).toBe('diarized_json');
+  expect(chunking!).toBe('auto');
+  delete process.env.SUPER_MARIO_TRANSCRIPTION_RESPONSE_FORMAT;
+  const annotated = '合成转写\n\n录音分段（音频内时间）：\n[0–1.25 秒] A：合成\n[1.25–2 秒] 转写';
+  await expect(review.getByLabel('转写正文')).toHaveValue(annotated);
   await expect(review.getByLabel('会议开始时间（可选）')).toHaveValue('');
   await expect(review.getByLabel('会议时区（UTC 偏移）')).toBeDisabled();
   await review.getByLabel('会议开始时间（可选）').fill('2032-02-29T00:10');
@@ -99,12 +111,12 @@ test('录音经认证服务转写后追加到当前草稿，失败和切换项�
   expect(server.app.knowledgeCurator.status().jobs).toHaveLength(0);
   await review.getByLabel('会议时区（UTC 偏移）').fill('+05:45');
   await review.getByLabel('会议标题').fill('合成评审');
-  await review.getByLabel('转写正文').fill('会中提议复核，负责人待确认。');
+  await review.getByLabel('转写正文').fill(annotated + '\n负责人待确认。');
   await review.getByRole('button', { name: '提交会议整理' }).click();
   await expect(review).toHaveCount(0);
   const jobs = server.app.knowledgeCurator.status().jobs;
   expect(jobs).toHaveLength(1);
-  expect(server.app.store.get<{ text: string }>('knowledge.sources', jobs[0].id)?.text).toBe('会中提议复核，负责人待确认。');
+  expect(server.app.store.get<{ text: string }>('knowledge.sources', jobs[0].id)?.text).toBe(annotated + '\n负责人待确认。');
   expect(jobs[0]).toMatchObject({ title: '合成评审', meetingStartedAt: '2032-02-29T00:10:00+05:45', materialKind: 'meeting-transcript', projectId: project.id, layer: 'project', status: 'queued' });
   await expect(work).toHaveValue('合成转写');
   const record = page.getByRole('button', { name: '录音后转写' });

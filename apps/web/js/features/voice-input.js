@@ -121,7 +121,11 @@ export function createVoiceInput(input, beforeListen, api) {
         coverage.push('〔手动暂停，距开始录音的秒数：' + ranges.join('、') + '〕');
       }
       const text = [...coverage, result.text].join('\n');
-      transcript = { title, text, startedAt };
+      // Keep the full provider text even if timing exists for only some utterances.
+      const segments = result.segments?.map(row => '[' + row.start + '–' + row.end + ' 秒] ' +
+        (row.speaker ? row.speaker + '：' : '') + row.text);
+      const reviewedText = segments?.length ? text + '\n\n录音分段（音频内时间）：\n' + segments.join('\n') : text;
+      transcript = { title, text: reviewedText, startedAt };
       const addition = coverage.length && input.value && !input.value.endsWith('\n') ? '\n' + text : text;
       meeting.hidden = !destination;
       if (input.maxLength >= 0 && input.value.length + addition.length > input.maxLength) {
