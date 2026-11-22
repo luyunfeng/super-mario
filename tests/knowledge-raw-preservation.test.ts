@@ -126,6 +126,7 @@ test('重复采集会议文档在重启后仍只整理一份，个人知识保�
   assert.ok(page.content.includes('来源收件记录：inbox-1'));
   assert.match(f.submissions[0]!, /保留支撑决定的原文时间戳/);
   assert.match(f.submissions[0]!, /只有意见分歧时保留分歧/);
+  assert.match(f.submissions[0]!, /不用提问日或资料保存日代替会议日/);
   assert.match(f.submissions[0]!, /会议决定：以合成数据验收/);
   assert.match(await readFile(f.raw(job.id), 'utf8'), /以合成数据验收/);
   await f.restart();

@@ -487,12 +487,15 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
   const deliveries: string[] = [];
   const title = '合成样本评审会';
   const excerpt = '[09:12] 决定采用样本甲。[09:14] 建议周五前复核；负责人待定。';
-  const answer = '决定采用样本甲。周五是建议期限，负责人待确认。';
+  const decision = '决定采用样本甲。周五是建议期限，负责人待确认。';
+  let accepted = false;
   const { server, api, ask, requests, dir } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.match(req.system, /区分明确决定、建议、行动项和未决问题/);
       assert.match(req.system, /未明确的负责人或期限写待确认/);
       assert.match(req.system, /整理纪要不触发建待办、委派或外发/);
+      assert.match(req.system, /参会人名单不能证明任务归属/);
+      assert.match(req.system, /待办后来改期不能改写会议原话/);
       assert.ok(req.tools.includes('knowledge_list'));
       const missing = JSON.stringify(req.content).includes('独立评审会');
       assert.match(req.system, /检索无结果时，说明缺少会议正文/);
@@ -522,6 +525,12 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
       assert.doesNotMatch(materials, /原话依据甲/);
       return call('knowledge_original', { pageId, sourceId, offset: 4000 }, 'last-page');
     }
+    if (req.callId === 'action-status') {
+      const rows = JSON.parse(typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text);
+      assert.deepEqual(rows.map((row: { title: string }) => row.title), ['复核样本']);
+      assert.equal(Boolean(rows[0].completedAt), accepted);
+      return { role: 'assistant', content: decision + (rows[0].completedAt ? '样本复核待办已验收。' : '样本复核待办尚未验收。') };
+    }
     assert.match(materials, /原话依据甲/);
     if (req.callId === 'last-page') {
       assert.ok(materials.includes('[查看原文](#memory?entry=' + pageId + '&source=' + sourceId + ')'));
@@ -535,7 +544,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     assert.ok(materials.includes('&line=12)'));
     assert.ok(!materials.includes('&line=11)'));
     assert.doesNotMatch(materials, /另一个项目的结论/);
-    return { role: 'assistant', content: answer };
+    return call('todos_list', { query: '样本甲 复核' }, 'action-status');
   }, options => {
     adapter = options;
     return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
@@ -553,18 +562,24 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     await mkdir(raw, { recursive: true });
     await writeFile(join(raw, job.id + '.md'), '字'.repeat(4000) + '\n原话依据甲'.repeat(11));
 
-    const question = title + '有哪些决定？还有哪些事要确认？';
-    assert.equal(await ask(question, '/projects/' + projectId + '/messages'), answer);
+    const review = await api('/todos', { title: '复核样本', notes: '核对样本甲', projectId });
+    await api('/todos', { title: '不相关事项', projectId });
+    await api('/todos', { title: '另一个项目复核样本甲', projectId: other.id });
+    const question = title + '有哪些决定？样本复核现在完成了吗？';
+    assert.equal(await ask(question, '/projects/' + projectId + '/messages'), decision + '样本复核待办尚未验收。');
     assert.equal(await ask('独立评审会定了什么？', '/projects/' + projectId + '/messages'), '当前项目缺少该次会议正文。');
     const bot = await api('/feishu/bots', { name: '项目纪要', appId: 'cli_5555555555555555', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId }, requireConfirmation: false });
     const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    server.app.updateTodo(review.id, { completed: true });
+    accepted = true;
+    const before = server.app.todos();
     await adapter.onMessage(question, { ...source, messageId: 'minutes-question' });
-    await t.waitFor(() => assert.ok(deliveries.includes(answer)));
+    await t.waitFor(() => assert.ok(deliveries.includes(decision + '样本复核待办已验收。')));
     assert.equal(requests.filter(req => req.callId === 'minutes').length, 2);
-    assert.equal(requests.filter(req => req.callId === 'last-page').length, 2);
-    assert.equal(server.app.todos().length, 0);
+    assert.equal(requests.filter(req => req.callId === 'action-status').length, 2);
+    assert.deepEqual(server.app.todos(), before);
   } finally { await server.close(); }
 });
 

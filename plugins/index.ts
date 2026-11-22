@@ -242,9 +242,15 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             signal.throwIfAborted(); return actions.createTodo(args);
           }, { title: { type: 'string' }, notes: { type: 'string' }, projectId: { type: 'string' }, dueAt: { type: 'string' }, reminderAt: { type: 'string' }, waitingOn: { type: 'string' } }));
         }
-        context.contribute('tools', 'todos_list', tool('todos_list', '查看待办及完成事实。查询日历时，用用户时区的起止时间按截止时间筛选。', async (args, signal) => {
+        context.contribute('tools', 'todos_list', tool('todos_list', '查看待办及完成事实。可用 query 按标题和备注搜索行动项。查询日历时，用用户时区的起止时间按截止时间筛选。', async (args, signal) => {
           signal.throwIfAborted();
-          const todos = context.store.list<Todo>('todos');
+          if (args.query !== undefined && typeof args.query !== 'string') throw new Error('待办关键词须为文本');
+          const words = (args.query ?? '').trim().normalize('NFC').toLowerCase().split(/\s+/).filter(Boolean);
+          const todos = context.store.list<Todo>('todos').filter(todo => {
+            if (!words.length) return true;
+            const text = [todo.title, todo.notes].join('\n').normalize('NFC').toLowerCase();
+            return words.every(word => text.includes(word));
+          });
           if (args.dueFrom === undefined && args.dueBefore === undefined) return todos as unknown as Json;
           const from = dueBoundary(args.dueFrom, -Infinity);
           const before = dueBoundary(args.dueBefore, Infinity);
@@ -253,7 +259,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             const due = Date.parse(todo.dueAt ?? '');
             return due >= from && due < before;
           }).sort((a, b) => Date.parse(a.dueAt!) - Date.parse(b.dueAt!)) as unknown as Json;
-        }, { dueFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, dueBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' } }));
+        }, { query: { type: 'string', description: '标题或备注中的关键词，多词用空格分隔' }, dueFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, dueBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' } }));
         context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。指定 worktreeRunId 时只列出在该工作树中另起的执行。', async ({ worktreeRunId }, signal) => {
           signal.throwIfAborted();
           const runs = context.store.list<Run>('runs');
