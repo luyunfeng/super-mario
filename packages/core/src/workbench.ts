@@ -907,10 +907,29 @@ export async function createWorkbench(config: AppConfig) {
     }
     return parentId;
   }
+  function dependenciesFor(value: unknown, parentId: string | undefined, projectId: string | undefined, childId?: string) {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value)) throw new InputError('前置子项须为标识数组');
+    const ids = [...new Set(value.map(id => requiredText(id, '前置子项')))];
+    if (!ids.length) return undefined;
+    if (!parentId) throw new InputError('只有同一上级下的子项可以设置前置依赖', 409);
+    const pending = [...ids], visited = new Set<string>();
+    while (pending.length) {
+      const id = pending.pop()!;
+      if (id === childId) throw new InputError('子项依赖不能形成循环', 409);
+      if (visited.has(id)) continue;
+      visited.add(id);
+      const item = store.get<Todo>('todos', id);
+      if (!item || item.projectId !== projectId || item.parentTodoId !== parentId) throw new InputError('前置子项须属于同一上级', 409);
+      pending.push(...(item.afterTodoIds ?? []));
+    }
+    return ids;
+  }
   function newTodo(input: Record<string, unknown>): Todo {
     const now = new Date().toISOString();
     const projectId = optionalText(input.projectId, '项目');
-    return { id: randomUUID(), parentTodoId: parentFor(input.parentTodoId, projectId), priority: todoPriority(input.priority), responsiblePerson: optionalText(input.responsiblePerson, '负责人'), title: requiredText(input.title, '标题'), notes: optionalText(input.notes, '备注') ?? '', projectId, dueAt: dueDate(input.dueAt), reminderAt: dueDate(input.reminderAt), reminderVersion: 1, waitingOn: optionalText(input.waitingOn, '等待对象'), createdAt: now, updatedAt: now };
+    const parentTodoId = parentFor(input.parentTodoId, projectId);
+    return { id: randomUUID(), afterTodoIds: dependenciesFor(input.afterTodoIds, parentTodoId, projectId), parentTodoId, priority: todoPriority(input.priority), responsiblePerson: optionalText(input.responsiblePerson, '负责人'), title: requiredText(input.title, '标题'), notes: optionalText(input.notes, '备注') ?? '', projectId, dueAt: dueDate(input.dueAt), reminderAt: dueDate(input.reminderAt), reminderVersion: 1, waitingOn: optionalText(input.waitingOn, '等待对象'), createdAt: now, updatedAt: now };
   }
   function registerChatTodo(input: Record<string, unknown>): Json {
     const requested = newTodo(input);
@@ -951,6 +970,9 @@ export async function createWorkbench(config: AppConfig) {
       delete next.parentTodoId;
     }
     if (patch.parentTodoId !== undefined) next.parentTodoId = parentFor(patch.parentTodoId, next.projectId, id);
+    const moved = next.projectId !== todo.projectId || next.parentTodoId !== todo.parentTodoId;
+    if (moved) delete next.afterTodoIds;
+    if (patch.afterTodoIds !== undefined) next.afterTodoIds = dependenciesFor(patch.afterTodoIds, next.parentTodoId, next.projectId, id);
     if (patch.responsiblePerson !== undefined) {
       next.responsiblePerson = optionalText(patch.responsiblePerson, '负责人');
       if (next.responsiblePerson) delete next.responsibleSession;
@@ -974,11 +996,15 @@ export async function createWorkbench(config: AppConfig) {
       || next.projectId !== todo.projectId || !!next.completedAt !== !!todo.completedAt;
     if (cycleChanged) { next.reminderVersion = (todo.reminderVersion ?? 1) + 1; next.remindedAt = undefined; }
     store.transaction(() => {
-      if (next.projectId !== todo.projectId) {
+      if (moved) {
         for (const child of store.list<Todo>('todos')) {
-          if (child.parentTodoId !== id) continue;
+          const losesParent = child.parentTodoId === id && next.projectId !== todo.projectId;
+          if (!losesParent && !child.afterTodoIds?.includes(id)) continue;
           const detached = { ...child, updatedAt: next.updatedAt };
-          delete detached.parentTodoId;
+          if (losesParent) {
+            delete detached.parentTodoId;
+            delete detached.afterTodoIds;
+          } else detached.afterTodoIds = child.afterTodoIds?.filter(prerequisite => prerequisite !== id);
           store.put('todos', child.id, detached);
           changed('todos.changed', { id: child.id });
         }

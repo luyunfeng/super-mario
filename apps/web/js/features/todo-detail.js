@@ -109,6 +109,10 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
     const action = (label, fn) => Button({ label, size: 'sm', onClick: () => { close?.(); fn(); } });
     replace(summary, h('h2', null, current.title), current.notes && h('p', null, current.notes),
       sources.length > 0 && section('来源', sources.map(item => h('p', null, [item.source, item.title || item.id].filter(Boolean).join(' · ')))),
+      current.afterTodoIds?.length > 0 && section('前置子项', current.afterTodoIds.map(id => {
+        const item = related.find(candidate => candidate.id === id && candidate.parentTodoId === current.parentTodoId);
+        return item ? h('div', null, todoLink(item), item.completedAt ? ' · 已完成' : ' · 待完成') : '无法核对此子项';
+      })),
       parent && section('上级待办', todoLink(parent)),
       children.length > 0 && section('子待办', h('p', null, '已完成 ' + children.filter(item => item.completedAt).length + ' / ' + children.length),
         children.map(item => h('div', null, todoLink(item), item.completedAt ? ' · 已完成' : ' · 未完成'))),

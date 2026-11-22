@@ -125,6 +125,7 @@ function timeBoundary(value: Json | undefined, fallback: number, label = '待办
   throw new Error(label + '需要带时区的 ISO 时间');
 }
 
+const afterTodoIdsParameter = { type: 'array', items: { type: 'string' }, description: '直接前置子项的完整 ID 列表，只能选同一上级的子项。空数组清除依赖。' };
 const priorityParameter = { type: 'string', enum: ['high', 'normal', 'low'], description: '待办优先级，未标记视为普通' };
 const reminderParameter = { type: 'string', description: '未来的提醒时间，使用带时区的 ISO 时间。修改时传空字符串可取消提醒。' };
 
@@ -267,14 +268,14 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if (actions.updateTodo) context.contribute('tools', 'todo_update', tool('todo_update', '修改指定待办的标题、备注、优先级、等待对象、提醒或截止时间，仅传用户要求修改的字段。改期须传 todo_detail 所见的 expectedDueAt，原无期限用空字符串，清除期限用 dueAt 空字符串。', async (args, signal) => {
             signal.throwIfAborted(); const { id, ...patch } = args;
             if (patch.completed !== undefined) throw new Error('请由用户在 Web 验收并完成待办');
-            const editable = ['title', 'notes', 'parentTodoId', 'responsiblePerson', 'responsibleRunId', 'waitingOn', 'reminderAt', 'dueAt', 'priority'];
+            const editable = ['title', 'notes', 'parentTodoId', 'afterTodoIds', 'responsiblePerson', 'responsibleRunId', 'waitingOn', 'reminderAt', 'dueAt', 'priority'];
             if (Object.keys(patch).some(key => !editable.includes(key) && key !== 'expectedDueAt')) throw new Error('不支持的待办修改字段');
             if (!editable.some(key => patch[key] !== undefined)) throw new Error('请指定需要修改的字段');
             if (patch.dueAt !== undefined && typeof patch.expectedDueAt !== 'string') throw new Error('改期前请核对当前截止时间');
             if (patch.dueAt !== undefined && patch.dueAt !== '') timeBoundary(patch.dueAt, 0, '待办截止时间');
             validateAssistantReminder(patch.reminderAt);
             return actions.updateTodo!(String(id ?? ''), patch);
-          }, { id: { type: 'string' }, dueAt: { type: 'string', description: '带时区的 ISO 时间，空字符串清除期限' }, expectedDueAt: { type: 'string' }, title: { type: 'string' }, notes: { type: 'string' }, parentTodoId: { type: 'string', description: '同项目上级待办 ID，空字符串解除' }, responsibleRunId: { type: 'string', description: '使用已有执行记录的电脑和会话登记负责方，空字符串清除负责会话' }, responsiblePerson: { type: 'string', description: '登记负责人姓名，清除时传空字符串' }, waitingOn: { type: 'string' }, priority: priorityParameter, reminderAt: reminderParameter }));
+          }, { id: { type: 'string' }, dueAt: { type: 'string', description: '带时区的 ISO 时间，空字符串清除期限' }, expectedDueAt: { type: 'string' }, title: { type: 'string' }, notes: { type: 'string' }, afterTodoIds: afterTodoIdsParameter, parentTodoId: { type: 'string', description: '同项目上级待办 ID，空字符串解除' }, responsibleRunId: { type: 'string', description: '使用已有执行记录的电脑和会话登记负责方，空字符串清除负责会话' }, responsiblePerson: { type: 'string', description: '登记负责人姓名，清除时传空字符串' }, waitingOn: { type: 'string' }, priority: priorityParameter, reminderAt: reminderParameter }));
           if (actions.knowledgeActionStatus) context.contribute('tools', 'knowledge_action_status', tool('knowledge_action_status',
             '只读查询已读知识页某一行动项原文所关联待办的当前状态与登记期限。', async (args, signal) => {
               signal.throwIfAborted(); return await actions.knowledgeActionStatus!(args) as Json;
@@ -290,7 +291,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             signal.throwIfAborted();
             validateAssistantReminder(args.reminderAt);
             return actions.createTodo(args);
-          }, { title: { type: 'string' }, parentTodoId: { type: 'string' }, notes: { type: 'string' }, projectId: { type: 'string' }, dueAt: { type: 'string' }, priority: priorityParameter, reminderAt: reminderParameter, responsiblePerson: { type: 'string', description: '登记负责人姓名，清除时传空字符串' }, waitingOn: { type: 'string' } }));
+          }, { title: { type: 'string' }, afterTodoIds: afterTodoIdsParameter, parentTodoId: { type: 'string' }, notes: { type: 'string' }, projectId: { type: 'string' }, dueAt: { type: 'string' }, priority: priorityParameter, reminderAt: reminderParameter, responsiblePerson: { type: 'string', description: '登记负责人姓名，清除时传空字符串' }, waitingOn: { type: 'string' } }));
         }
         context.contribute('tools', 'todos_list', tool('todos_list', '读取工作台待办。status=open 查未完成，done 查已完成，all 或省略可查全部。overdue=true 仅查已过截止时间的未完成事项。可按项目、优先级、标题和备注关键词及截止时段组合筛选。', async (args, signal) => {
           signal.throwIfAborted();

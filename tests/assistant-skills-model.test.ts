@@ -1604,23 +1604,27 @@ test('Web 与飞书助手读取已核实的回复时间，重新等待时旧匹�
 });
 
 test('Web 登记项目子项，飞书项目助手查询直接子项的完成数', async t => {
-  let parentId = '';
+  let parentId = '', prerequisiteId = '';
   let adapter!: FeishuOptions;
   const sent: string[] = [];
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.match(req.system, /子项全部完成也不能代为验收上级/);
-      if (JSON.stringify(req.content).includes('登记子项')) return call('todo_create', { title: '核对明细', parentTodoId: parentId }, 'add-child');
+      assert.match(req.system, /前置项全部完成只表示依赖满足/);
+      if (JSON.stringify(req.content).includes('登记子项')) return call('todo_create', { title: '核对明细', parentTodoId: parentId, afterTodoIds: [prerequisiteId] }, 'add-child');
       return call('todos_list', { parentTodoId: parentId, status: 'all' }, 'children');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
     const result = JSON.parse(raw);
     if (req.callId === 'add-child') {
       assert.equal(result.parentTodoId, parentId);
+      assert.deepEqual(result.afterTodoIds, [prerequisiteId]);
       return { role: 'assistant', content: result.id };
     }
     assert.deepEqual(result.map((row: {title:string}) => row.title).sort(), ['整理附件', '核对明细']);
-    return { role: 'assistant', content: '直接子项完成 ' + result.filter((row: {completedAt?:string}) => row.completedAt).length + ' / ' + result.length };
+    const pending = result.find((row: { title:string }) => row.title === '核对明细');
+    assert.deepEqual(pending.afterTodoIds, [result.find((row: { completedAt?:string }) => row.completedAt).id]);
+    return { role: 'assistant', content: '核对明细的前置项已完成。直接子项完成 ' + result.filter((row: {completedAt?:string}) => row.completedAt).length + ' / ' + result.length };
   }, options => {
     adapter = options;
     return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
@@ -1631,16 +1635,16 @@ test('Web 登记项目子项，飞书项目助手查询直接子项的完成数'
     const item = { projectId: project.id };
     parentId = (await api('/todos', { ...item, title: '交付验收' })).id;
     await api('/todos', { ...item, title: '核对明细' });
-    const child = await ask('为交付验收登记子项“核对明细”', '/projects/' + project.id + '/messages');
+    prerequisiteId = (await api('/todos', { ...item, title: '整理附件', parentTodoId: parentId })).id;
+    const child = await ask('为交付验收登记子项“核对明细”，等整理附件完成后再做', '/projects/' + project.id + '/messages');
     assert.equal(server.app.todos().find(todo => todo.id === child)?.parentTodoId, parentId);
     await api('/todos', { ...item, title: '更细的步骤', parentTodoId: child });
-    const done = await api('/todos', { ...item, title: '整理附件', parentTodoId: parentId });
-    server.app.updateTodo(done.id, { completed: true });
+    server.app.updateTodo(prerequisiteId, { completed: true });
     const bot = await api('/feishu/bots', { name: '子项进展', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
     const chat = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...chat, messageId: 'pair' });
     await adapter.onMessage('交付验收的子项完成了几个？', { ...chat, messageId: 'count' });
-    await t.waitFor(() => assert.ok(sent.includes('直接子项完成 1 / 2')));
+    await t.waitFor(() => assert.ok(sent.includes('核对明细的前置项已完成。直接子项完成 1 / 2')));
   } finally { await server.close(); }
 });

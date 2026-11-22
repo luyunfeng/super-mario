@@ -136,7 +136,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         if (old && (old.layer !== 'project' || old.projectId !== scopedProject)) throw new Error('知识不属于当前作用域');
       }
     } else if (name === 'todo_update') {
-      if (scope.kind === 'task' && args.parentTodoId !== undefined) throw new Error('请在项目对话中调整待办层级');
+      if (scope.kind === 'task' && (args.parentTodoId !== undefined || args.afterTodoIds !== undefined)) throw new Error('请在项目对话中调整待办层级');
       if (args.responsibleRunId) {
         const run = store.get<{ projectId?: string; todoId?: string }>('runs', String(args.responsibleRunId));
         if (!run || !inScope(run)) throw new Error('负责会话不属于当前作用域');
