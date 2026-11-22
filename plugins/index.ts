@@ -61,6 +61,15 @@ function demoExecutor(): Executor {
   };
 }
 
+function dueBoundary(value: Json | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+    const time = Date.parse(value);
+    if (Number.isFinite(time)) return time;
+  }
+  throw new Error('待办查询边界需要带时区的 ISO 时间');
+}
+
 function dailyBrief(context: ExtensionContext): Json {
   const todos = context.store.list<Todo>('todos');
   const runs = context.store.list<Run>('runs');
@@ -185,9 +194,18 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             signal.throwIfAborted(); return actions.createTodo(args);
           }, { title: { type: 'string' }, notes: { type: 'string' }, projectId: { type: 'string' }, dueAt: { type: 'string' }, reminderAt: { type: 'string' }, waitingOn: { type: 'string' } }));
         }
-        context.contribute('tools', 'todos_list', tool('todos_list', '查看待办及完成事实。', async (_args, signal) => {
-          signal.throwIfAborted(); return context.store.list<Todo>('todos') as unknown as Json;
-        }));
+        context.contribute('tools', 'todos_list', tool('todos_list', '查看待办及完成事实。查询日历时，用用户时区的起止时间按截止时间筛选。', async (args, signal) => {
+          signal.throwIfAborted();
+          const todos = context.store.list<Todo>('todos');
+          if (args.dueFrom === undefined && args.dueBefore === undefined) return todos as unknown as Json;
+          const from = dueBoundary(args.dueFrom, -Infinity);
+          const before = dueBoundary(args.dueBefore, Infinity);
+          if (from >= before) throw new Error('待办查询起点必须早于终点');
+          return todos.filter(todo => {
+            const due = Date.parse(todo.dueAt ?? '');
+            return due >= from && due < before;
+          }).sort((a, b) => Date.parse(a.dueAt!) - Date.parse(b.dueAt!)) as unknown as Json;
+        }, { dueFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, dueBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' } }));
         context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。', async (_args, signal) => {
           signal.throwIfAborted(); return context.store.list<Run>('runs') as unknown as Json;
         }));
