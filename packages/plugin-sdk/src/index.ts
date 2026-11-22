@@ -7,7 +7,7 @@ export * from './agent-artifacts.ts';
 export type { Json, JsonObject } from '../../protocol/src/index.ts';
 export type { InboxThing, InboxOrigin, NormalizedReplyEvidence, CollectedReplyEvidence } from '../../protocol/src/index.ts';
 export { assertJson } from './json.ts';
-import type { AppEvent, ExecutionResult, ExecutorInfo, Json, JsonObject, KnowledgeEntry, KnowledgeImportance, KnowledgeLayer, PaneInfo, TerminalFrame, WebExtension } from '../../protocol/src/index.ts';
+import type { AppEvent, ExecutionResult, ExecutorInfo, Json, JsonObject, KnowledgeEntry, KnowledgeEditSource, KnowledgeImportance, KnowledgeLayer, PaneInfo, TerminalFrame, WebExtension } from '../../protocol/src/index.ts';
 export type Dispose = () => void | Promise<void>;
 /** SQLite and the event bus are intentionally small, synchronous local interfaces. */
 export interface Store {
@@ -40,7 +40,7 @@ export interface KnowledgeQuery { minRelevance?: number; importance?: KnowledgeI
 export interface KnowledgeBackend {
   revision?(id: string, commit?: string): Promise<{ entry: KnowledgeEntry; commit: string; previous?: string } | null>;
   list(query?: KnowledgeQuery): Promise<KnowledgeEntry[]>;
-  put(entry: Omit<KnowledgeEntry, 'id' | 'updatedAt' | 'importance' | 'relevance'> & { id?: string; relevance?: number | null; importance?: KnowledgeImportance | null }, expectedUpdatedAt?: string): Promise<KnowledgeEntry>;
+  put(entry: Omit<KnowledgeEntry, 'id' | 'updatedAt' | 'factsEdit' | 'importance' | 'relevance'> & { id?: string; relevance?: number | null; importance?: KnowledgeImportance | null }, expectedUpdatedAt?: string, editSource?: KnowledgeEditSource): Promise<KnowledgeEntry>;
   remove(id: string): Promise<boolean>;
 }
 export interface Routine { name: string; run(): Promise<Json> }

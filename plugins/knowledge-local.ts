@@ -158,7 +158,7 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         || (keywords.length ? b.updatedAt.localeCompare(a.updatedAt) : 0)
         || a.id.localeCompare(b.id));
     },
-    async put(input, expectedUpdatedAt) {
+    async put(input, expectedUpdatedAt, editSource) {
       const entry: KnowledgeEntry = {
         id: input.id ?? randomUUID(), layer: input.layer, title: input.title,
         content: input.content, updatedAt: new Date().toISOString(),
@@ -178,6 +178,10 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         entry.updatedAt = new Date(Date.parse(prior.updatedAt) + 1).toISOString();
       const facts = input.confirmedFacts === undefined ? prior?.confirmedFacts : input.confirmedFacts;
       if (facts !== undefined && facts !== '') entry.confirmedFacts = facts;
+      // Record the entry point only when the facts themselves change, including a clear.
+      if (entry.confirmedFacts === prior?.confirmedFacts) {
+        if (prior?.factsEdit) entry.factsEdit = prior.factsEdit;
+      } else if (editSource) entry.factsEdit = { source: editSource, at: entry.updatedAt };
       const relevance = input.relevance === undefined ? prior?.relevance : input.relevance;
       if (relevance != null) entry.relevance = relevance;
       const importance = input.importance === undefined ? prior?.importance : input.importance;

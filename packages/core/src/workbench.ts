@@ -689,12 +689,12 @@ export async function createWorkbench(config: AppConfig) {
     return {
       ...(backend.revision ? { revision: backend.revision.bind(backend) } : {}),
       list: query => backend.list(query), remove: id => backend.remove(id),
-      async put(input, expectedUpdatedAt) {
+      async put(input, expectedUpdatedAt, editSource) {
         const payload = { ...(input.confirmedFacts === undefined ? {} : { confirmedFacts: input.confirmedFacts }), ...(input.relevance === undefined ? {} : { relevance: input.relevance }), ...(input.importance === undefined ? {} : { importance: input.importance }), ...(input.tags === undefined ? {} : { tags: input.tags }), layer: input.layer, title: input.title, content: input.content, ...(input.id === undefined ? {} : { id: input.id }), ...(input.projectId === undefined ? {} : { projectId: input.projectId }) };
         const value = await plugins.invocations.invoke('knowledge.put', payload, async changed => {
           if (!changed || typeof changed !== 'object' || Array.isArray(changed)) throw new PluginCallError('知识钩子必须返回对象');
           for (const field of ['id', 'layer', 'projectId'] as const) if (changed[field] !== payload[field]) throw new PluginCallError('知识钩子不能改变归属或标识');
-          return await backend.put(changed as unknown as Parameters<KnowledgeBackend['put']>[0], expectedUpdatedAt) as unknown as Json;
+          return await backend.put(changed as unknown as Parameters<KnowledgeBackend['put']>[0], expectedUpdatedAt, editSource) as unknown as Json;
         });
         return value as unknown as KnowledgeEntry;
       },
@@ -703,7 +703,11 @@ export async function createWorkbench(config: AppConfig) {
   async function changeKnowledgeMetadata(field: 'facts' | 'tag' | 'importance' | 'relevance', args: Record<string, unknown>): Promise<Json> {
     const id = requiredText(args.id, '知识页标识');
     const version = requiredText(args.updatedAt, '已读版本');
-    const projectId = currentAgentInput()?.projectId ?? optionalText(args.projectId, '项目');
+    const actor = currentAgentInput() ?? agent.currentInput();
+    if (!actor || actor.role !== 'user' || actor.readOnly || (actor.origin && actor.origin !== 'user'))
+      throw new InputError('修改知识页需要当前用户输入', 403);
+    assertBotInput(actor);
+    const projectId = actor.projectId ?? optionalText(args.projectId, '项目');
     const backend = knowledge();
     const page = (await backend.list()).find(item => item.id === id);
     if (!page || (projectId && (page.layer !== 'project' || page.projectId !== projectId)) ||
@@ -745,7 +749,8 @@ export async function createWorkbench(config: AppConfig) {
       if (tags.includes(tag) === add) return { changed: false, id, tags, updatedAt: version };
       update = { tags: add ? [...tags, tag] : tags.filter(value => value !== tag) };
     }
-    const saved = await backend.put({ ...page, ...update }, version);
+    const route = store.get<MessageRoute>('message.routes', actor.id);
+    const saved = await backend.put({ ...page, ...update }, version, route?.channel === 'feishu' ? 'feishu' : 'conversation');
     const receipt = { changed: true, id, tags: saved.tags ?? [], importance: saved.importance ?? null, relevance: saved.relevance ?? null, updatedAt: saved.updatedAt };
     try { await knowledgeCurator.rebuildIndex(); }
     catch { return { ...receipt, warning: '知识页已保存，知识索引刷新失败' }; }

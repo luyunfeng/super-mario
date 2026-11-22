@@ -788,6 +788,8 @@ test('Web 追加确认事实，飞书按唯一原文更正并保留其他事实'
     id = (await api('/knowledge', { ...input, projectId: project.id })).id;
     foreign = (await api('/knowledge', { ...input, projectId: other.id })).id;
     assert.equal(await ask('给送审约定追加已确认事实：验收人在场', '/projects/' + project.id + '/messages'), '已保存确认事实。');
+    const appended = await server.app.knowledgeRevision(id);
+    assert.deepEqual(appended?.entry.factsEdit, { source: 'conversation', at: appended?.entry.updatedAt });
     operation = 'correct';
     const bot = await api('/feishu/bots', { name: '事实核对', appId: 'cli_4444444444444444', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
@@ -799,6 +801,9 @@ test('Web 追加确认事实，飞书按唯一原文更正并保留其他事实'
     assert.equal(pages.find(p => p.id === id)?.confirmedFacts, '周四送审，周三开会\n验收人在场');
     assert.equal(pages.find(p => p.id === id)?.content, input.content);
     assert.equal(pages.find(p => p.id === foreign)?.confirmedFacts, input.confirmedFacts);
+    const corrected = await server.app.knowledgeRevision(id);
+    assert.deepEqual(corrected?.entry.factsEdit, { source: 'feishu', at: corrected?.entry.updatedAt });
+    assert.deepEqual((await server.app.knowledgeRevision(id, corrected?.previous))?.entry.factsEdit, appended?.entry.factsEdit);
     operation = 'remove';
     assert.equal(await ask('删除送审约定里“验收人在场”这一条确认事实', '/projects/' + project.id + '/messages'), '已保存确认事实。');
     assert.equal((await server.app.knowledge().list({ projectId: project.id }))[0]?.confirmedFacts, '周四送审，周三开会');

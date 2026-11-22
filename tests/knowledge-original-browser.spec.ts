@@ -289,6 +289,7 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   await expect(row).toContainText('#待评审 · #接口');
   await expect(page.locator('.knowledge-item')).toHaveCount(1);
   const [saved] = await server.app.knowledge().list({ tag: '待评审' });
+  expect(saved!.factsEdit).toEqual({ source: 'workbench', at: saved!.updatedAt });
   expect(saved!.importance).toBe('P0');
   expect(saved!.relevance).toBe(80);
   const scored = await server.app.knowledge().list({ minRelevance: 0 });
@@ -297,13 +298,16 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   const headers = { authorization: 'Bearer fixture' };
   const url = server.url + '/api/v1/knowledge/' + saved!.id;
   expect((await page.request.patch(url, { headers, data: { content: '修正正文' } })).ok()).toBe(true);
-  expect((await server.app.knowledge().list({ tag: '接口' }))[0]?.content).toBe('修正正文');
+  const revised = (await server.app.knowledge().list({ tag: '接口' }))[0];
+  expect(revised?.content).toBe('修正正文');
+  expect(revised?.factsEdit).toEqual(saved!.factsEdit);
   expect((await page.request.patch(url, { headers, data: { tags: '接口' } })).status()).toBe(400);
   expect((await page.request.patch(url, { headers, data: { importance: 'P9' } })).status()).toBe(400);
   expect((await page.request.patch(url, { headers, data: { relevance: 4.5 } })).status()).toBe(400);
   await page.reload();
   await expect(row).toContainText('修正正文');
   await row.click();
+  await expect(drawer.getByText('最近更正：工作台接口 · ' + saved!.updatedAt, { exact: true })).toBeVisible();
   await expect(facts).toHaveValue('第一项\n最终验收日为周五');
   await facts.fill('');
   await expect(drawer.locator('[name=relevance]')).toHaveValue('80');
