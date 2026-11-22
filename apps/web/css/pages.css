@@ -339,3 +339,6 @@ body:has(.splash-background) #root { position: relative; }
 [data-todo-history] .card__body { overflow-wrap: anywhere; }
 
 .channel-gateways { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 16px; align-items: start; }
+
+.run-comparison { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 12px; }
+.run-comparison > article { min-width: 0; overflow-wrap: anywhere; }

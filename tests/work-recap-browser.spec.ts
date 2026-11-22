@@ -91,3 +91,44 @@ test('history closing invalidates late reads and failed reads expose a retry wit
  await page.unroute('**/api/v1/todos/*/history');await dialog.getByRole('button',{name:'重新读取历史',exact:true}).click();
  await expect(dialog).toContainText('还没有关联执行记录');assert.equal(server.app.store.list('runs').length,0);
 });
+
+test('execution comparison keeps project boundaries, opens either record and survives reload', async t => {
+  const { server, page, open } = await fixture(t);
+  const project = server.app.projects.create({ name: '对比项目' });
+  const other = server.app.projects.create({ name: '独立项目' });
+  const now = new Date().toISOString();
+  const first: Run = {
+    id: 'first', projectId: project.id, prompt: '第一轮任务', executorId: 'demo', conversationId: 'main',
+    status: 'completed', output: '第一轮交付', createdAt: now, updatedAt: now,
+  };
+  server.app.store.put('runs', first.id, first);
+  server.app.store.put('runs', 'second', { ...first, id: 'second', output: '', error: '校验失败', status: 'failed' });
+  server.app.store.put('runs', 'outside', { ...first, id: 'outside', projectId: other.id, output: '其他项目交付' });
+  await open();
+  const base = server.url + '/#projects/all/runs/first';
+  await page.goto(base);
+  const comparison = page.getByRole('region', { name: '执行对比' });
+  await comparison.getByRole('combobox').selectOption('second');
+  await expect(page).toHaveURL(/compare=second$/);
+  await page.reload();
+  await expect(comparison.getByRole('article')).toHaveCount(2);
+  await expect(comparison.getByRole('article').first()).toContainText('第一轮交付');
+  await expect(comparison.getByRole('article').last()).toContainText('校验失败');
+  await comparison.getByRole('link', { name: '查看执行详情' }).last().click();
+  await expect(page).toHaveURL(/runs\/second$/);
+  await page.goto(base + '?compare=outside');
+  await expect(comparison).toContainText('此记录无法与当前执行对比');
+  await expect(comparison).not.toContainText('其他项目交付');
+  await comparison.getByRole('link', { name: '关闭对比' }).click();
+  await expect(page).toHaveURL(base);
+  const disabled = await fetch(server.url + '/api/v1/plugins/run-comparison', {
+    method: 'POST', headers: { authorization: 'Bearer recap-fixture', 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled: false }),
+  });
+  assert.equal(disabled.status, 200);
+  await page.goto(base + '?compare=second');
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '第一轮任务' })).toBeVisible();
+  await expect(comparison).toHaveCount(0);
+  assert.equal(server.app.store.list('runs').length, 3);
+});

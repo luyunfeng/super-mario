@@ -8,6 +8,7 @@ import { confirmDialog, openDrawer, toast } from '../ui/overlay.js';
 import { systemText } from '../copy/terms.js';
 
 import { openTaskClosure, refreshTaskClosure } from './task-closure.js';
+import { compareRuns } from './run-comparison.js';
 import { createLiveTerminals } from './live-terminals.js';
 
 const PLAN_STATUS = { pending: ['待确认', 'warn'], running: ['启动中', 'info'], started: ['已启动', 'ok'], rejected: ['已拒绝', ''], partial: ['部分启动', 'warn'], unknown: ['结果未知', 'danger'] };
@@ -134,6 +135,8 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     markRunSeen(run.id);
     const status = runStatus[run.status] ?? { text: run.status, tone: '' };
     const todo = run.todoId && snapshot.todos.find(item => item.id === run.todoId);
+    const comparison = !store.view.unauthorized && snapshot.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active')
+      && compareRuns({ run, runs: snapshot.runs, projectId, router, executorName });
     const tabs = Tabs({ items: [{ id: 'timeline', label: '时间线' }, { id: 'result', label: '结果' }, { id: 'terminal', label: '终端' }], active: detailTab, label: '执行详情', onSelect: (id) => { detailTab = id; paintDetail(); } });
 
     const timeline = [
@@ -161,7 +164,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       run.status === 'unknown' && Banner({ tone: 'danger', children: '动作已发出，但没有收到确认。请先到电脑上核对，不要重复发起。' }),
       run.status === 'failed' && Banner({ tone: 'danger', children: run.error ? systemText(run.error) : '执行失败，请查看“结果”。' }),
       progressView(run, observations ? observations.progress : run.progress, true),
-      tabs.el, panels[detailTab],
+      comparison, tabs.el, panels[detailTab],
       h('div', { class: 'card card--tight accept' }, h('div', { class: 'card__body' },
         h('div', { class: 'stack' },
           h('strong', null, '验收'),

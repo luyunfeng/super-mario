@@ -34,6 +34,10 @@ export const conversationEdit: Extension = {
   id: 'conversation-edit', name: '编辑为新消息', capabilities: ['web.conversation.edit'], activate() {},
 };
 
+export const runComparison: Extension = {
+  id: 'run-comparison', name: '执行对比', capabilities: ['web.runComparison'], activate() {},
+};
+
 export const shortcutSettings: Extension = {
   id: 'shortcut-settings', name: '快捷键设置', capabilities: ['web.shortcuts'], activate() {},
 };

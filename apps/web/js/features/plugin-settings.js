@@ -9,6 +9,7 @@ import { openDrawer } from '../ui/overlay.js';
 import { systemText } from '../copy/terms.js';
 
 const descriptions = {
+  'run-comparison':'并排查看同一项目的两次执行。',
   'shortcut-settings':'调整本浏览器的全局快捷键。',
   'start-page':'选择直接打开工作台时显示的页面，设置在同一服务的浏览器之间共享。',
   'todo-calendar':'按日、周或月查看项目待办的截止时间。',
