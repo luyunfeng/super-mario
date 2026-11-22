@@ -567,3 +567,55 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     assert.equal(server.app.todos().length, 0);
   } finally { await server.close(); }
 });
+
+test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目的旧版', { timeout: 30000 }, async t => {
+  let pageId = '', foreignId = '', adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const answer = '保存记录中，样本从甲改为乙。会议决定时间未记录。';
+  const { server, api, ask, requests } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /savedAt 是知识页保存时间/);
+      assert.ok(req.tools.includes('knowledge_revision'));
+      return call('knowledge_revision', { pageId: foreignId }, 'foreign');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[]).map(p => p.text).join('');
+    if (req.callId === 'foreign') {
+      assert.match(raw, /知识页不可用/);
+      assert.doesNotMatch(raw, /其他项目样本/);
+      return call('knowledge_revision', { pageId }, 'current');
+    }
+    const result = JSON.parse(raw);
+    if (req.callId === 'current') {
+      assert.equal(result.text, '样本乙');
+      assert.ok(result.previous && result.savedAt);
+      return call('knowledge_revision', { pageId, commit: result.previous }, 'prior');
+    }
+    if (req.callId === 'prior') {
+      assert.equal(result.nextOffset, 4000);
+      return call('knowledge_revision', { pageId, commit: result.commit, offset: result.nextOffset }, 'tail');
+    }
+    assert.equal(result.text, '样本甲');
+    return { role: 'assistant', content: answer };
+  }, options => {
+    adapter = options;
+    return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    const project = await api('/projects', { name: '修订项目' });
+    const other = await api('/projects', { name: '独立项目' });
+    const input = { layer: 'project', projectId: project.id, title: '验收样本' };
+    pageId = (await api('/knowledge', { ...input, content: '测'.repeat(4000) + '样本甲' })).id;
+    await api('/knowledge', { ...input, id: pageId, content: '样本乙' });
+    foreignId = (await api('/knowledge', { ...input, projectId: other.id, content: '其他项目样本' })).id;
+    const question = '验收样本上一版写的什么？';
+    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), answer);
+    const bot = await api('/feishu/bots', { name: '修订查询', appId: 'cli_4444444444444444', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(question, { ...source, messageId: 'revision-question' });
+    await t.waitFor(() => assert.ok(sent.includes(answer)));
+    assert.equal(requests.filter(req => req.callId === 'tail').length, 2);
+  } finally { await server.close(); }
+});

@@ -306,7 +306,7 @@ export async function createWorkbench(config: AppConfig) {
     const source=currentAgentInput()??agent.currentInput();if(!source||source.role!=='user'||source.readOnly||source.origin&&source.origin!=='user')throw new InputError('来源投放需要当前用户输入',403);
     validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
     return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
-  }, knowledgeOriginal: (pageId, sourceId, projectId) => knowledgeCurator.pageSources(pageId, sourceId, projectId ?? currentAgentInput()?.projectId), knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0], currentAgentInput() ?? agent.currentInput()) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
+  }, knowledgeRevision: (id, commit, projectId) => knowledgeRevision(id, commit, projectId ?? currentAgentInput()?.projectId), knowledgeOriginal: (pageId, sourceId, projectId) => knowledgeCurator.pageSources(pageId, sourceId, projectId ?? currentAgentInput()?.projectId), knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0], currentAgentInput() ?? agent.currentInput()) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
   function makeWebSource() {
     const options = webConfig.read();
     return createFeishuWebSource({
@@ -699,6 +699,18 @@ export async function createWorkbench(config: AppConfig) {
         return value as unknown as KnowledgeEntry;
       },
     };
+  }
+  async function knowledgeRevision(id: string, commit?: string, projectId?: string) {
+    const backend = knowledge();
+    const current = (await backend.list()).find(page => page.id === id);
+    const visible = (entry: KnowledgeEntry) =>
+      (projectId === undefined || (entry.layer === 'project' && entry.projectId === projectId)) &&
+      (!entry.projectId || projects.list().some(p => p.id === entry.projectId && !p.archivedAt));
+    if (!current || !visible(current)) throw new InputError('知识页不可用', 404);
+    if (!backend.revision) throw new InputError('当前知识插件不支持版本记录', 503);
+    const result = await backend.revision(id, commit);
+    return result && result.entry.id === id && result.entry.layer === current.layer &&
+      result.entry.projectId === current.projectId && visible(result.entry) ? result : null;
   }
   function todos(): Todo[] {
     return store.list<Todo>('todos').sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -1419,7 +1431,7 @@ export async function createWorkbench(config: AppConfig) {
         });
       } : undefined;
     },
-    delegateTodo, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; }, listExecutors: executorInfo, snapshot, todos, createTodo, updateTodo, dispatch, cancel, knowledge,
+    delegateTodo, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; }, listExecutors: executorInfo, snapshot, knowledgeRevision, todos, createTodo, updateTodo, dispatch, cancel, knowledge,
     async close() {
       if (closing) return;
       closing = true;

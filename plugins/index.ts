@@ -1,5 +1,5 @@
 import { setTimeout } from 'node:timers/promises';
-import type { Executor, Extension, ExtensionContext, KnowledgeQuery, Tool } from '../packages/plugin-sdk/src/index.ts';
+import type { Executor, Extension, ExtensionContext, KnowledgeBackend, KnowledgeQuery, Tool } from '../packages/plugin-sdk/src/index.ts';
 import type { InboxThing, Json, JsonObject, Run, Todo } from '../packages/protocol/src/index.ts';
 import { createInboxTriage } from './inbox-triage.ts';
 import { createLocalKnowledge } from './knowledge-local.ts';
@@ -147,6 +147,7 @@ export interface SystemActions {
   projectCreate?(input: Record<string, unknown>): Json | Promise<Json>;
   projectsDiscover?(input: Record<string, unknown>): Promise<Json>;
   knowledgeSource?(input: Record<string, unknown>): Json;
+  knowledgeRevision?(id: string, commit?: string, projectId?: string): ReturnType<NonNullable<KnowledgeBackend['revision']>>;
   knowledgeOriginal?(pageId: string, sourceId?: string, projectId?: string): Promise<{
     sources?: { id: string; title: string; createdAt: string }[]; content?: string; title?: string }>;
   knowledgeJobs?(): Json;
@@ -287,6 +288,20 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           return { protected: classifyProtected(String(url ?? ''), Array.isArray(trustedHosts) ? trustedHosts : []) };
         });
         if (actions?.knowledgeSource) context.contribute('tools', 'knowledge_ingest', tool('knowledge_ingest', '将用户明确提供的资料加入独立知识 Agent 整理队列，默认个人知识；受保护来源先生成主人读取审批，不自动申请权限。入队或批准都不代表整理完成。', async (args, signal) => { signal.throwIfAborted(); return actions.knowledgeSource!(args); }, { url: { type: 'string' }, text: { type: 'string' }, title: { type: 'string' }, layer: { type: 'string', enum: ['personal', 'project'] }, projectId: { type: 'string' } }));
+        if (actions?.knowledgeRevision) context.contribute('tools', 'knowledge_revision', tool('knowledge_revision',
+          '查知识页已保存的修订。首次仅传 pageId，按 previous 查上一版。用 commit 和 nextOffset 续读同一版正文。', async (args, signal) => {
+            const { pageId, commit, offset = 0, projectId } = args;
+            if (typeof pageId !== 'string' || !pageId || (commit !== undefined && typeof commit !== 'string') ||
+                typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || (offset > 0 && !commit))
+              throw new Error('请提供知识页、有效修订和读取位置');
+            signal.throwIfAborted();
+            const revision = await actions.knowledgeRevision!(pageId, commit, typeof projectId === 'string' ? projectId : undefined);
+            if (!revision) return { available: false } as Json;
+            const { title, content, updatedAt } = revision.entry;
+            const chars = Array.from(content), end = offset + 4000;
+            return { available: true, title, savedAt: updatedAt, commit: revision.commit, previous: revision.previous ?? null,
+              text: chars.slice(offset, end).join(''), nextOffset: end < chars.length ? end : null } as Json;
+          }, { pageId: { type: 'string' }, commit: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
         if (actions?.knowledgeOriginal) context.contribute('tools', 'knowledge_original', tool('knowledge_original',
           '用知识页 ID 列出已保存的来源；加来源 ID 分段读取原文。提供 query 按原文字面搜索，每行返回一次，按 nextOffset 继续同一查询。', async (args, signal) => {
             const { pageId, sourceId, projectId, query, offset = 0 } = args;

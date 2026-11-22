@@ -548,12 +548,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (path === '/api/v1/knowledge/sources' && method === 'POST') return json(res, 201, app.knowledgeCurator.addSource(await body(req)));
         const knowledgeRevision = path.match(/^\/api\/v1\/knowledge\/([^/]+)\/revision$/);
         if (knowledgeRevision && method === 'GET') {
-          const backend = app.knowledge();
-          const id = decodeURIComponent(knowledgeRevision[1]!);
-          const current = (await backend.list()).find(page => page.id === id);
-          if (!current || (current.projectId && !app.projects.list().some(p => p.id === current.projectId && !p.archivedAt))) throw new InputError('知识页不可用', 404);
-          if (!backend.revision) throw new InputError('当前知识插件不支持版本记录', 503);
-          return json(res, 200, { revision: await backend.revision(id, url.searchParams.get('commit') ?? undefined) });
+          return json(res, 200, { revision: await app.knowledgeRevision(decodeURIComponent(knowledgeRevision[1]!), url.searchParams.get('commit') ?? undefined) });
         }
         const pageSources = path.match(/^\/api\/v1\/knowledge\/([^/]+)\/sources(?:\/([^/]+))?$/);
         if (pageSources && method === 'GET') return json(res, 200, await app.knowledgeCurator.pageSources(
