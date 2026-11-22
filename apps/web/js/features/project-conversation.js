@@ -2,6 +2,7 @@
 import { h, replace, keyedList } from '../lib/dom.js';
 import { createConversationDrafts } from '../lib/conversation-drafts.js';
 import { createMessageQuote } from '../lib/message-quote.js';
+import { createMessageEdit } from '../lib/message-edit.js';
 import { agentProgress } from '../ui/agent-progress.js';
 import { renderFormattedText } from '../lib/markdown.js';
 import { Button, Banner, Empty, TextArea } from '../ui/kit.js';
@@ -29,6 +30,7 @@ export function createProjectConversation({ api, store, bindFolder }) {
   const messages = h('div', { class: 'project-conversation__messages', role: 'log', 'aria-label': '项目对话' });
   const text = TextArea({ rows: 3, placeholder: '告诉我这个文件夹里要做什么，我们持续推进。', 'aria-label': '项目目标' });
   const quote = createMessageQuote({ drafts, input: text });
+  const edit = createMessageEdit({ input: text, quote, context: composerContext });
   const prompts = attachSavedPrompts({ api, store, input: text, getScope: () => projectId });
   text.addEventListener('input', () => {
     syncDraft();
@@ -42,11 +44,11 @@ export function createProjectConversation({ api, store, bindFolder }) {
   });
   const send = Button({ label: '发送目标', kind: 'primary', onClick: submit });
   const notice = h('div', { 'aria-live': 'polite' });
-  const composer = h('div', { class: 'project-conversation__composer stack' }, quote.bar, prompts.menu, text, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, send), notice);
+  const composer = h('div', { class: 'project-conversation__composer stack' }, edit.notice, quote.bar, prompts.menu, text, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, send), notice);
   const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, favorites.button, transcript.button, code.toggle)), status, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
-  let draftKey, owner, enabled, quotesEnabled, epoch = 0;
-  function syncDraft() {
+  let draftKey, owner, enabled, quotesEnabled, editEnabled, epoch = 0;
+  function composerContext() {
     const { snapshot, snapshotOwner, unauthorized } = store.view;
     const currentOwner = drafts.owner();
     const valid = snapshot && !unauthorized && snapshotOwner === currentOwner;
@@ -54,7 +56,16 @@ export function createProjectConversation({ api, store, bindFolder }) {
     const nextEnabled = !!valid && snapshot.plugins?.some(p => p.id === 'conversation-drafts' && p.status === 'active');
     const key = valid && project() ? JSON.stringify(['project', projectId]) : null;
     const nextQuotes = !!key && snapshot.plugins?.some(p => p.id === 'conversation-quotes' && p.status === 'active');
-    if (owner === nextOwner && enabled === nextEnabled && quotesEnabled === nextQuotes && draftKey === key) return;
+    const allowEdit = !!key && snapshot.plugins?.some(p => p.id === 'conversation-edit' && p.status === 'active');
+    return { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled };
+  }
+  function syncDraft() {
+    const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
+    const sameDraft = owner === nextOwner && enabled === nextEnabled && quotesEnabled === nextQuotes && draftKey === key;
+    if (sameDraft && editEnabled === allowEdit) return;
+    editEnabled = allowEdit;
+    edit.reset();
+    if (sameDraft) return;
     quote.restore(nextQuotes ? key : null);
     if (owner !== nextOwner) {
       generation++; request++; workspace = undefined;
@@ -88,6 +99,7 @@ export function createProjectConversation({ api, store, bindFolder }) {
       const user = m.role === 'user';
       const canQuote = quotesEnabled && m.conversationId === `project:${projectId}:work` && (user || m.role === 'assistant')
         && m.origin !== 'notification' && typeof m.text === 'string' && m.text.trim();
+      const canEdit = editEnabled && user && m.conversationId === `project:${projectId}:work` && (!m.projectId || m.projectId === projectId);
       const statusText = { failed: '处理失败，请查看原因', unknown: '结果未知，请核对，勿重复发送', pending: '处理中' }[m.status];
       return h('div', { class: 'msg msg--' + (user ? 'user' : 'assistant') },
         h('div', { class: 'msg__col' },
@@ -95,8 +107,8 @@ export function createProjectConversation({ api, store, bindFolder }) {
           agentProgress(m),
           h('div', { class: 'msg__bubble' }, user && !/^> /m.test(m.text) ? m.text : renderFormattedText(m.text)),
           statusText && h('span', { class: 'msg__meta' }, statusText),
-          h('span', null, favorites.mark(m, projectId), prompts.fromMessage(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
-    }, m => JSON.stringify([prompts.epoch, favorites.epoch, quotesEnabled, projectId, m]));
+          h('span', null, favorites.mark(m, projectId), prompts.fromMessage(m), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
+    }, m => JSON.stringify([prompts.epoch, favorites.epoch, quotesEnabled, editEnabled, owner, projectId, m]));
   }
   async function load() {
     if (!draftKey) return;
@@ -118,6 +130,7 @@ export function createProjectConversation({ api, store, bindFolder }) {
     const body = captured ? quote.compose(captured, draft.trim()) : draft.trim();
     if (!key || send.disabled || !body) return;
     const submission = Symbol();
+    const finishEdit = edit.onAccepted();
     pending.set(id, submission); notices.delete(id); paint();
     try {
       const answer = await api.post(`/projects/${encodeURIComponent(id)}/messages`, { text: body });
@@ -127,6 +140,7 @@ export function createProjectConversation({ api, store, bindFolder }) {
       else if (!answer?.id || answer.role !== 'user' || !['pending', 'done'].includes(answer.status)) {
         unknown.add(id); notices.set(id, '处理结果未知，请先核对项目对话和执行记录，勿重复发送。');
       } else {
+        finishEdit();
         drafts.clearIf(key, draft);
         if (captured) quote.accepted(key, captured);
         if (draftKey === key && text.value === draft) text.value = drafts.read(key);

@@ -2,6 +2,7 @@
 import { h, keyedList, replace } from '../lib/dom.js';
 import { createConversationDrafts } from '../lib/conversation-drafts.js';
 import { createMessageQuote } from '../lib/message-quote.js';
+import { createMessageEdit } from '../lib/message-edit.js';
 import { timeAgo } from '../lib/format.js';
 import { renderFormattedText } from '../lib/markdown.js';
 import { icon } from '../ui/icons.js';
@@ -55,19 +56,20 @@ export function createChatPage({ api, store, scope, router }) {
   const input = h('textarea', { class: 'composer__input', id: 'message-text', rows: 1, placeholder: '说出目标，Enter 发送，Shift + Enter 换行', 'aria-label': '给 Agent 的消息', maxLength: 20000 });
   const drafts = createConversationDrafts({ api, store });
   const quote = createMessageQuote({ drafts, input });
+  const edit = createMessageEdit({ input, quote, context: composerContext });
   const prompts = attachSavedPrompts({ api, store, input, getScope: scope.get });
   const scopeSelect = h('select', { class: 'composer__scope', 'aria-label': '项目范围' }, h('option', { value: '' }, '全部项目'));
   const send = h('button', { class: 'btn btn--primary btn--sm composer__send', type: 'submit', 'aria-label': '发送' }, icon('send'), '发送');
   const status = h('p', { class: 'small composer__status', role: 'status' });
   const form = h('form', { class: 'composer', id: 'message-form' },
     recent.el,
-    h('div', { class: 'composer__box' }, quote.bar, prompts.menu, input, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, h('span', { class: 'grow' }), send)), status);
+    h('div', { class: 'composer__box' }, edit.notice, quote.bar, prompts.menu, input, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, h('span', { class: 'grow' }), send)), status);
 
   const el = h('section', { class: 'page page--chat', id: 'chat' }, h('div', { class: 'chat-code-main' }, top, scroller, form), code.el);
 
   const pending = new Map();
-  let draftKey, owner, enabled, quotesEnabled, epoch = 0;
-  function syncDraft() {
+  let draftKey, owner, enabled, quotesEnabled, editEnabled, epoch = 0;
+  function composerContext() {
     const { snapshot, snapshotOwner, unauthorized } = store.view;
     const currentOwner = drafts.owner();
     const valid = snapshot && !unauthorized && snapshotOwner === currentOwner;
@@ -76,7 +78,16 @@ export function createChatPage({ api, store, scope, router }) {
     const id = scope.get() || '';
     const key = valid && (!id || snapshot.projects?.some(p => p.id === id && !p.archivedAt)) ? JSON.stringify(['main', id]) : null;
     const nextQuotes = !!key && snapshot.plugins?.some(p => p.id === 'conversation-quotes' && p.status === 'active');
-    if (owner === nextOwner && enabled === nextEnabled && quotesEnabled === nextQuotes && draftKey === key) return;
+    const allowEdit = !!key && snapshot.plugins?.some(p => p.id === 'conversation-edit' && p.status === 'active');
+    return { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled };
+  }
+  function syncDraft() {
+    const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
+    const sameDraft = owner === nextOwner && enabled === nextEnabled && quotesEnabled === nextQuotes && draftKey === key;
+    if (sameDraft && editEnabled === allowEdit) return;
+    editEnabled = allowEdit;
+    edit.reset();
+    if (sameDraft) return;
     quote.restore(nextQuotes ? key : null);
     if (owner !== nextOwner) pending.clear();
     if (owner !== nextOwner || enabled !== nextEnabled || quotesEnabled !== nextQuotes) epoch++;
@@ -85,7 +96,7 @@ export function createChatPage({ api, store, scope, router }) {
     input.value = key ? drafts.read(key) : '';
     autosize();
     input.disabled = !key;
-    send.disabled = !key || pending.has(key) || !snapshot?.agent.available;
+    send.disabled = !key || pending.has(key) || !store.view.snapshot?.agent.available;
     status.textContent = '';
   }
   store.subscribe(syncDraft);
@@ -129,7 +140,10 @@ export function createChatPage({ api, store, scope, router }) {
     if (!event.defaultPrevented && event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); }
   });
   scopeSelect.addEventListener('change', () => scope.set(scopeSelect.value));
-  scope.subscribe((value) => { syncDraft(); prompts.changeScope(); transcript.close(); scopeSelect.value = value; code.show(value); });
+  scope.subscribe(value => {
+    syncDraft(); prompts.changeScope(); transcript.close(); scopeSelect.value = value; code.show(value);
+    if (store.view.snapshot) paintMessages(store.view.snapshot.messages ?? []);
+  });
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -139,6 +153,7 @@ export function createChatPage({ api, store, scope, router }) {
     const text = captured ? quote.compose(captured, draft.trim()) : draft.trim();
     if (!key || !text || pending.has(key) || !store.view.snapshot?.agent.available) return;
     const stamp = epoch, submission = Symbol();
+    const finishEdit = edit.onAccepted();
     pending.set(key, submission); send.disabled = true; status.textContent = ''; status.className = 'small composer__status muted';
     try {
       const answer = await api.post('/messages', { text, ...(projectId ? { projectId } : {}) });
@@ -150,6 +165,7 @@ export function createChatPage({ api, store, scope, router }) {
           status.textContent = answer?.status === 'failed' ? '发送失败，内容已保留。' : '发送结果未知，内容已保留。请先核对对话。';
         }
       } else {
+        finishEdit();
         drafts.clearIf(key, draft);
         if (captured) quote.accepted(key, captured);
         if (draftKey === key) {
@@ -192,9 +208,10 @@ export function createChatPage({ api, store, scope, router }) {
     }
     const canQuote = quotesEnabled && message.conversationId === 'main' && typeof message.text === 'string' && message.text.trim();
     if (message.role === 'user') {
+      const canEdit = editEnabled && message.conversationId === 'main' && (!scope.get() || scope.get() === message.projectId);
       return h('article', { class: 'msg msg--user', dataset: { id: message.id } },
         h('div', { class: 'msg__bubble' }, renderFormattedText(text)),
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.status === 'failed' && ' · 发送失败', mark, canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.status === 'failed' && ' · 发送失败', mark, canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
     }
     const personal = message.conversationId === 'main' && (!message.origin || message.origin === 'user');
     const label = personal ? assistantLabel : message.origin === 'result' ? '执行结果' : '主 Agent';
@@ -205,6 +222,12 @@ export function createChatPage({ api, store, scope, router }) {
         agentProgress(message, api),
         h('div', { class: 'msg__bubble' }, renderFormattedText(text)),
         h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, canQuote && message.role === 'assistant' && quote.action(message, label))));
+  }
+
+  function paintMessages(list) {
+    keyedList(messages, list, item => item.id, renderMessage, item => JSON.stringify([
+      prompts.epoch, favorites.epoch, quotesEnabled, editEnabled, owner, draftKey, item,
+    ]));
   }
 
   function renderSetup(state) {
@@ -271,7 +294,7 @@ export function createChatPage({ api, store, scope, router }) {
       recent.update(state);
       const list = state.messages ?? [];
       const follow = nearBottom();
-      keyedList(messages, list, item => item.id, renderMessage, item => `${prompts.epoch}:${favorites.epoch}:${quotesEnabled}:${item.id}:${item.status}:${item.text}:${JSON.stringify(item.progress)}`);
+      paintMessages(list);
       hero.hidden = list.length > 0 || !setup.hidden;
       if (list.length !== lastCount) { lastCount = list.length; if (follow) scrollToEnd(true); }
       else if (follow && list.at(-1)?.status === 'pending') scrollToEnd(true);

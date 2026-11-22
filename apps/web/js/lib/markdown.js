@@ -35,22 +35,28 @@ function makeCodeBlock(lang, codeText) {
     h('pre', null, codeText));
 }
 
+// Consume the contiguous leading block and one blank separator. Preserve body
+// indentation and any further newlines when reopening a sent message for edits.
+export function splitLeadingQuote(text) {
+  const lead = text.match(/^(?: {0,3}>[^\r\n]*(?:\r\n|\r|\n|$))+/);
+  if (!lead) return null;
+  const passage = lead[0].replace(/(?:\r\n|\r|\n)$/, '').split(/\r\n|\r|\n/)
+    .map(line => line.replace(/^ {0,3}> ?/, '')).join('\n');
+  if (!passage.trim()) return null;
+  return { passage, body: text.slice(lead[0].length).replace(/^[ \t]*(?:\r\n|\r|\n)/, '') };
+}
+
 /** 将纯文本安全渲染为紧凑纯文本或轻量富文本节点。 */
 export function renderFormattedText(raw) {
   let text = String(raw ?? '');
-  // Only the leading block is a referenced passage. Fenced code and the rest of
-  // the message keep their usual rendering, even when they contain > lines.
-  const lead = text.match(/^(?: {0,3}>[^\n]*(?:\n|$))+/);
   let quoted;
-  if (lead) {
-    const passage = lead[0].trimEnd().split('\n').map(line => line.replace(/^ {0,3}> ?/, '')).join('\n');
-    if (passage.trim()) {
-      const summary = passage.replace(/\s+/g, ' ').trim();
-      quoted = h('details', { class: 'message-quote' },
-        h('summary', { class: 'message-quote__preview' }, '引用 · ', summary.slice(0, 100), summary.length > 100 && '…'),
-        h('p', { class: 'md-p' }, passage));
-      text = text.slice(lead[0].length).trimStart();
-    }
+  const reference = splitLeadingQuote(text);
+  if (reference) {
+    const summary = reference.passage.replace(/\s+/g, ' ').trim();
+    quoted = h('details', { class: 'message-quote' },
+      h('summary', { class: 'message-quote__preview' }, '引用 · ', summary.slice(0, 100), summary.length > 100 && '…'),
+      h('p', { class: 'md-p' }, reference.passage));
+    text = reference.body;
   }
   const hasMarkdown = text.includes('\n') || text.includes('`') || text.includes('**') || /^\s*(?:[-*]\s|\d+\.\s)/.test(text);
   if (!hasMarkdown) return quoted ? h('div', { class: 'md' }, quoted, text) : text;

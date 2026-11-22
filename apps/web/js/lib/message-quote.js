@@ -1,3 +1,4 @@
+import { splitLeadingQuote } from './markdown.js';
 import { h, replace } from './dom.js';
 
 // Store the selection separately so replacing a quote never overwrites typed words.
@@ -34,11 +35,29 @@ export function createMessageQuote({ drafts, input }) {
     currentOwner = drafts.owner();
     paint(key ? drafts.read(storageKey(key)) : '');
   }
+  function setSelection(raw) {
+    if (!currentKey || currentOwner !== drafts.owner()) return;
+    drafts.write(storageKey(currentKey), raw);
+    paint(raw);
+  }
+  // With quote controls off, editing a sent message still replaces the whole
+  // draft. An older hidden quote must not reappear beside its replacement.
+  function swapHidden(key, raw) {
+    if (currentKey || !key || currentOwner !== drafts.owner()) return '';
+    const path = storageKey(key);
+    const before = drafts.read(path);
+    if (before !== raw) drafts.write(path, raw);
+    return before;
+  }
+  function restoreMessage(text) {
+    const reference = splitLeadingQuote(text);
+    setSelection(reference ? JSON.stringify({ text: reference.passage, label: '原消息引用' }) : '');
+    return reference ? reference.body : text;
+  }
   function select(message, label) {
     if (!currentKey || currentOwner !== drafts.owner() || !message.text?.trim()) return;
     const raw = JSON.stringify({ id: message.id, text: message.text.trim(), label });
-    drafts.write(storageKey(currentKey), raw);
-    paint(raw);
+    setSelection(raw);
     input.focus();
   }
   function action(message, label) {
@@ -57,5 +76,5 @@ export function createMessageQuote({ drafts, input }) {
     drafts.clearIf(storageKey(key), raw);
     if (key === currentKey) restore(key);
   }
-  return { bar, restore, select, action, capture: () => selected, compose, accepted };
+  return { bar, restore, restoreMessage, setSelection, swapHidden, select, action, capture: () => selected, compose, accepted };
 }
