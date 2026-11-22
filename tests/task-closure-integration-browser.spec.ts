@@ -181,7 +181,11 @@ test('Chromium 用户返工只创建一个新 Run，重复 HTTP 决定不双发'
   await d.getByLabel('选择交付', { exact: true }).selectOption(run.id);
   await clickWrite(f.page, d.getByRole('button', { name: '关联所选交付', exact: true }), f.base + '/review', 'POST');
   await d.getByLabel('返工缺陷', { exact: true }).fill('补充本地替身的第二轮验证证据');
+  await expect(d).toContainText('首次交付');
   await d.getByRole('button', { name: '要求返工', exact: true }).click();
+  const confirmation = f.page.getByRole('dialog', { name: '确认返工？', exact: true });
+  await expect(confirmation).toContainText('第 1 轮返工');
+  await expect(confirmation).toContainText(doneWhen);
   assert.equal(f.calls.length, 1, '打开确认框不能派发');
   const confirmed = await clickWrite(f.page,
     f.page.getByRole('dialog', { name: '确认返工？', exact: true }).getByRole('button', { name: '确认派发返工', exact: true }),

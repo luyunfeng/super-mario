@@ -194,6 +194,7 @@ test('default limit allows exactly two reworks, zero forbids any and invalid dyn
   for (let i = 1; i <= 2; i++) {
     const next = f.review.decide(decision(f.review.get('todo'), 'rework'));
     assert.equal(next.round, i);
+    assert.ok(String(f.calls.at(-1)?.input.prompt).includes(`第 ${i} 轮，上限 2 轮`));
     f.patch({ status: 'completed', resultSource: 'real', output: '已修复' }, next.runId);
   }
   assert.throws(() => f.review.decide(decision(f.review.get('todo'), 'rework')), /上限/);

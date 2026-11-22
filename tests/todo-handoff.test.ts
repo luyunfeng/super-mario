@@ -86,7 +86,13 @@ test('执行器收到当前事项的决定，重复标识复用旧执行，返�
   const retry = app.taskClosure.review.decide({ ...review, action: 'rework', defects: '修正合成报告格式' });
   await started(retry.runId);
   assert.equal(calls.length, 2);
-  assert.match(String(calls[1].prompt), /修正合成报告格式/);
+  const rework = String(calls[1].prompt);
+  assert.ok(rework.includes(run.id));
+  assert.match(rework, /第 1 轮，上限 2 轮/);
+  assert.match(rework, /"previousStatus":"failed"/);
+  assert.match(rework, /核对报告/);
+  assert.match(rework, /修正合成报告格式/);
+  assert.match(rework, /本轮实际核验/);
   assert.match(String(calls[1].prompt), /导出 JSON/);
   assert.doesNotMatch(String(calls[1].prompt), /导出 CSV|其他事项背景/);
   assert.equal(app.todos().find(item => item.id === todo.id)?.completedAt, undefined);

@@ -88,7 +88,7 @@ export function openTaskClosure({ api, store, router, todo, runId, title = '答�
     sync();
   }
   function paintState() {
-    state.textContent = `答复版本 ${reporting.version} · 周期 ${reporting.cycle} · ${reporting.report ? '已记录答复' : '未记录答复'}${review ? ` · 验收 ${review.status} · 版本 ${review.version}` : ' · 尚未关联交付'}`;
+    state.textContent = `答复版本 ${reporting.version} · 周期 ${reporting.cycle} · ${reporting.report ? '已记录答复' : '未记录答复'}${review ? ` · 验收 ${review.status} · ${review.round ? `返工第 ${review.round} 轮` : '首次交付'} · 版本 ${review.version}` : ' · 尚未关联交付'}`;
     const run = (store.view.snapshot?.runs ?? []).find(item => item.id === review?.runId && item.todoId === todo.id && item.projectId === todo.projectId);
     replace(evidence, review ? [h('p', null, `完成标准：${review.doneWhen}`), h('p', null, `关联交付：${run?.prompt ?? review.runId}`), run && h('p', null, `执行状态：${run.status} · 证据来源：${run.resultSource ?? '无'}`), run?.output && h('pre', { class: 'output' }, run.output), h('p', { style: { overflowWrap: 'anywhere' } }, `证据版本：${review.evidenceVersion}`), review.error && h('p', { class: 'text-danger' }, review.error)] : []);
     candidates();
@@ -142,7 +142,7 @@ export function openTaskClosure({ api, store, router, todo, runId, title = '答�
       body.defects = defects.value.trim();
       if (body.defects.length < 4) return;
       busy = true; sync();
-      const ok = await confirmDialog({ title: '确认返工？', message: `将按当前完成标准派发一次返工：${body.defects}`, confirmLabel: '确认派发返工', danger: true });
+      const ok = await confirmDialog({ title: '确认返工？', message: `将派发第 ${review.round + 1} 轮返工。完成标准：${review.doneWhen}。本轮缺陷：${body.defects}`, confirmLabel: '确认派发返工', danger: true });
       busy = false; sync();
       if (!ok || !alive) return;
     }

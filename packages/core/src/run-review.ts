@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { reworkPrompt } from './prompts.ts';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
 import type { Message, Run, Todo } from '../../protocol/src/index.ts';
 
@@ -219,12 +220,13 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
           return { receipt, replay: true, notify: true };
         }
         if (!['completed', 'failed'].includes(value.status)) throw new RunReviewError('仅completed或failed可返工，unknown不自动重试', 409);
-        if (item.round >= limit()) throw new RunReviewError('已达到返工上限', 409);
+        const maxRounds = limit();
+        if (item.round >= maxRounds) throw new RunReviewError('已达到返工上限', 409);
         if (typeof value.expectMinutes !== 'number' || !Number.isFinite(value.expectMinutes) || value.expectMinutes <= 0 || value.expectMinutes > 10080) throw new RunReviewError('返工需要有效预计耗时', 409);
         const result: RunReview = { ...item, version: item.version + 1, round: item.round + 1, status: 'dispatching', updatedAt: now };
         // Preserve provenance for the host's final scope guard, never an approved
         // flag or nativeResume. A rework always starts a new piece of work.
-        const params: Record<string, unknown> = { prompt: `${value.prompt}\n\n用户验收要求返工：\n${request.defects}`,
+        const params: Record<string, unknown> = { prompt: reworkPrompt(value, request.defects!, result.round, maxRounds),
           executorId: value.executorId, conversationId: value.conversationId, todoId: item.todoId,
           doneWhen: item.doneWhen, expectMinutes: value.expectMinutes,
           ...(value.projectId !== undefined ? { projectId: value.projectId } : {}),
