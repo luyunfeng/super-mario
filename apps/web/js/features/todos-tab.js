@@ -1,6 +1,6 @@
 // 项目的“待办”：顶部始终有添加输入框；按服务端算好的分区展示。
 // 待办是否完成由你确认；执行结束不会自动完成待办。
-import { h, replace } from '../lib/dom.js';
+import { h, replace, readLocal, writeLocal } from '../lib/dom.js';
 import { formatDate, todoPriorityLabels } from '../lib/format.js';
 import { Button, Empty, Fold, Field, Input, TextArea, Select, Segmented } from '../ui/kit.js';
 import { openDrawer, toast } from '../ui/overlay.js';
@@ -13,6 +13,38 @@ import { openWaitingReply, refreshWaitingReply } from './waiting-reply.js';
 
 const ORDER = ['需要你', '逾期', '今天', '等待中', '之后', '某天'];
 const DONE = ['刚完成', '已完成'];
+
+const periods = [['all', '全部期限'], ['none', '无截止日期'], ['today', '今天（含逾期）'], ['week', '本周（含逾期）'], ['month', '本月（含逾期）']];
+const orders = [['recent', '最近更新'], ['due', '截止时间最早'], ['priority', '优先级最高']];
+
+function dateRanges(now) {
+  const year = now.getFullYear(), month = now.getMonth(), day = now.getDate();
+  const midnight = offset => new Date(year, month, day + offset).getTime();
+  const monday = -((now.getDay() + 6) % 7);
+  return { today: [midnight(0), midnight(1)], week: [midnight(monday), midnight(monday + 7)],
+    month: [+new Date(year, month, 1), +new Date(year, month + 1, 1)] };
+}
+
+function matchesPeriod(todo, period, ranges, now) {
+  if (period === 'all') return true;
+  const due = Date.parse(todo.dueAt);
+  if (period === 'none') return !Number.isFinite(due);
+  const [start, end] = ranges[period];
+  return (!todo.completedAt && due < now) || (start <= due && due < end);
+}
+
+function orderTodos(items, order) {
+  const rank = { high: 0, normal: 1, low: 2 };
+  const due = todo => todo.dueAt ? Date.parse(todo.dueAt) : Infinity;
+  return items.sort((a, b) => {
+    if (order === 'priority') {
+      const difference = rank[a.priority ?? 'normal'] - rank[b.priority ?? 'normal'];
+      if (difference) return difference;
+    }
+    if (order !== 'recent' && due(a) !== due(b)) return due(a) - due(b);
+    return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+  });
+}
 
 export function createTodosTab({ api, store, router }) {
   let projectId = 'all';
@@ -41,6 +73,15 @@ export function createTodosTab({ api, store, router }) {
     } catch (error) { toast(`没有添加成功：${error.message}`, 'danger'); }
   } }, h('div', { class: 'grow', style: { minWidth: '200px' } }, title), priority, due, time, h('button', { class: 'btn btn--primary', type: 'submit' }, '添加'));
   const search = Input({ type: 'search', placeholder: '搜索标题或备注', 'aria-label': '搜索待办标题或备注', oninput: paint });
+  function preference(label, options, key) {
+    const saved = readLocal(key, options[0][0]);
+    const value = options.some(([id]) => id === saved) ? saved : options[0][0];
+    return Select({ options, value, 'aria-label': label, style: { width: 'auto' },
+      onchange: event => { writeLocal(key, event.target.value); paint(); } });
+  }
+  const period = preference('按截止日期筛选', periods, 'sm.todos.period');
+  const sort = preference('分组内排序', orders, 'sm.todos.order');
+  const listControls = h('div', { class: 'row row--wrap' }, period, sort);
   const list = h('div', { class: 'stack' });
   function navigate(mode, date) {
     const base = router.href('projects', projectId, 'todos');
@@ -49,7 +90,7 @@ export function createTodosTab({ api, store, router }) {
   const views = Segmented({ options: [['list', '列表'], ['calendar', '日历']], label: '待办视图', value: 'list',
     onChange: view => navigate(view === 'calendar' ? 'month' : 'list', new Date()) });
   const listPanel = h('div', { class: 'stack stack--lg' }, form,
-    h('div', { class: 'row row--wrap' }, h('div', { class: 'grow' }, search), views.el), list);
+    h('div', { class: 'row row--wrap' }, h('div', { class: 'grow' }, search), listControls, views.el), list);
   const detailPanel = h('div', { class: 'stack', hidden: true });
   const el = h('div', { id: 'panel-todos', role: 'tabpanel' }, listPanel, detailPanel);
   let detailId, detail;
@@ -146,8 +187,21 @@ export function createTodosTab({ api, store, router }) {
     const sections = data.sections ?? data;
     const query = search.value.trim().toLowerCase();
     const matches = todo => inScope(todo) && (!query || [todo.title, todo.notes].some(value => value?.toLowerCase().includes(query)));
-    const groups = ORDER.map(name => [name, (sections[name] ?? []).filter(matches)]).filter(([, items]) => items.length);
-    const finished = DONE.flatMap(name => (sections[name] ?? []).filter(matches));
+    const now = new Date();
+    const ranges = dateRanges(now);
+    const selected = todo => calendar || matchesPeriod(todo, period.value, ranges, now);
+    const rows = name => {
+      const items = (sections[name] ?? []).filter(todo => matches(todo) && selected(todo));
+      return calendar ? items : orderTodos(items, sort.value);
+    };
+    if (!calendar) {
+      const candidates = Object.values(sections).flat().filter(matches);
+      for (const [index, [key, label]] of periods.entries()) {
+        period.options[index].textContent = label + ' · ' + candidates.filter(todo => matchesPeriod(todo, key, ranges, now)).length;
+      }
+    }
+    const groups = ORDER.map(name => [name, rows(name)]).filter(([, items]) => items.length);
+    const finished = DONE.flatMap(rows);
     if (calendar) {
       replace(list, todoCalendar({ ...calendar, todos: [...groups.flatMap(([, items]) => items), ...finished], showDone, navigate,
         onShowDone: value => { showDone = value; paint(); }, open: openEdit, showList: () => navigate('list'),
@@ -172,7 +226,11 @@ export function createTodosTab({ api, store, router }) {
       h('h3', { class: 'group__title' }, name, h('span', { class: 'tab__count' }, items.length)),
       h('div', { class: 'list' }, items.map(todo => row(todo, false)))));
     if (finished.length) blocks.push(Fold({ title: `已完成 ${finished.length}`, open: Boolean(query), body: h('div', { class: 'list' }, finished.map(todo => row(todo, true))) }));
-    replace(list, blocks.length ? blocks : Empty(query ? { title: '没有匹配的待办', text: '试试其他关键词，或清空搜索查看全部待办。' } : { title: '还没有待办', text: '在上面写下第一件要做的事，回车即可添加。' }));
+    const hidden = (sections['需要你'] ?? []).filter(todo => matches(todo) && !selected(todo)).length;
+    if (hidden) blocks.unshift(Button({ label: '另有 ' + hidden + ' 项需要你处理，查看全部期限', size: 'sm', onClick: () => {
+      period.value = 'all'; writeLocal('sm.todos.period', 'all'); paint();
+    } }));
+    replace(list, blocks.length ? blocks : Empty(query || period.value !== 'all' ? { title: '没有匹配的待办', text: '试试其他关键词或截止日期范围。' } : { title: '还没有待办', text: '在上面写下第一件要做的事，回车即可添加。' }));
   }
 
   async function load() {
@@ -192,6 +250,7 @@ export function createTodosTab({ api, store, router }) {
     const requested = route.page === 'projects' && route.parts[1] === 'todos' && calendarRoute(route.parts);
     calendar = calendarEnabled ? requested : null;
     if (!calendar) time.value = '';
+    listControls.hidden = Boolean(calendar);
     time.hidden = !calendar;
     views.el.hidden = !calendarEnabled;
     views.set(calendar ? 'calendar' : 'list');
