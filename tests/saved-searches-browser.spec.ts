@@ -179,6 +179,11 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await filters.getByLabel('已结束').check();
     await filters.getByLabel('季度复核项目').check();
     await filters.getByLabel('更新时间').selectOption('7d');
+    await expect(filters.getByRole('status')).toHaveText('匹配 1 条执行记录');
+    server.app.store.put('runs', 'arrived-report', { id: 'arrived-report', projectId, conversationId: 'main', executorId: 'fixture',
+      prompt: '新增账单核验', status: 'completed', output: '', createdAt: now, updatedAt: now });
+    server.app.events.publish('runs.changed', { id: 'arrived-report' });
+    await expect(filters.getByRole('status')).toHaveText('匹配 2 条执行记录');
     await filters.getByRole('button', { name: '应用筛选' }).click();
     const builtQuery = '账单 state:completed project:=' + projectId + ' since:7d';
     await expect(search).toHaveValue(builtQuery);
@@ -202,6 +207,22 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await expect(search).toHaveValue(builtQuery);
     await expect(results.getByRole('link', { name: '生成账单' })).toBeVisible();
 
+    await search.fill(builtQuery + ' status:working HTTP:503');
+    await filtersButton.click();
+    await expect(filters.getByRole('status')).toHaveText('匹配 0 条执行记录');
+    await filters.getByRole('button', { name: '清除执行状态条件' }).click();
+    await expect(filters.getByLabel('已结束')).not.toBeChecked();
+    await expect(filters.getByLabel('执行中')).not.toBeChecked();
+    await expect(filters.getByLabel('季度复核项目')).toBeChecked();
+    await expect(filters.getByLabel('更新时间')).toHaveValue('7d');
+    await filters.getByRole('button', { name: '应用筛选' }).click();
+    await expect(search).toHaveValue('账单 project:=' + projectId + ' since:7d HTTP:503');
+    await filtersButton.click();
+    await filters.getByRole('button', { name: '清除全部条件' }).click();
+    await expect(filters.getByLabel('更新时间')).toHaveValue('');
+    await expect(filters.getByRole('button', { name: '清除全部条件' })).toBeDisabled();
+    await filters.getByRole('button', { name: '应用筛选' }).click();
+    await expect(search).toHaveValue('账单 HTTP:503');
     await manage.click();
     await button('编辑 本季复核').click();
     await drawer.getByLabel('名称', { exact: true }).fill('复核项目');
