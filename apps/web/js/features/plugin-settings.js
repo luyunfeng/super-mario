@@ -8,6 +8,7 @@ import { systemText } from '../copy/terms.js';
 
 const descriptions = {
   'todo-calendar':'按日、周或月查看项目待办的截止时间。',
+  'message-favorites':'收藏工作台消息，查看快照或从备份恢复。',
   'conversation-export':'下载或复制主对话和项目工作对话的 Markdown 记录。',
   'conversation-search':'在顶栏搜索主对话和执行记录，保存常用检索条件。',
   'token-statistics':'从 Codex 和 Claude Code 的本地会话日志统计 Token，按日期、模型和 Agent 查看分布。',

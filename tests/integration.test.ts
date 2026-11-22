@@ -33,7 +33,7 @@ test('local product: authenticated Web/API, knowledge, todos, asynchronous work 
     assert.equal((await fetch(`${running.url}/missing.js`)).status, 404);
     const initial = await state();
     assert.equal(initial.mode, 'demo');
-    const webFeatureIds = new Set(['workspace-splash', 'token-statistics', 'feishu-web', 'todo-calendar', 'conversation-search', 'conversation-export']);
+    const webFeatureIds = new Set(['workspace-splash', 'token-statistics', 'feishu-web', 'todo-calendar', 'conversation-search', 'conversation-export', 'message-favorites']);
     const coreIds = initial.plugins.map(plugin => plugin.id).filter(id => !webFeatureIds.has(id)).sort();
     assert.deepEqual(coreIds, [
       'builtin-tools', 'daily-brief', 'executor-claude-code', 'executor-codex', 'executor-pi',

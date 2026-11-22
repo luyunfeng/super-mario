@@ -16,11 +16,11 @@ import { createFeishuGateway, type FeishuGatewayDependencies } from './feishu-ga
 import { validateBotScope } from '../../../packages/core/src/bot-scopes.ts';
 import type { AppConfig, FeishuBotInput, JsonObject, NodeMessage, Todo } from '../../../packages/protocol/src/index.ts';
 
-async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function body(req: IncomingMessage, maxBytes = 1024 * 1024): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []; let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 1024 * 1024) throw new InputError('请求内容过大', 413);
+    if (size > maxBytes) throw new InputError('请求内容过大', 413);
     chunks.push(chunk);
   }
   let value: unknown;
@@ -577,6 +577,14 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             const result = await app.plugins.invocations.use('conversation-export.markdown', input, { signal: controller.signal, timeoutMs: 30000 });
             return json(res, 200, result);
           } finally { res.off('close', abort); }
+        }
+        if (path === '/api/v1/message-favorites' && method === 'POST') {
+          if (!app.plugins.list().some(plugin => plugin.id === 'message-favorites' && plugin.status === 'active')) {
+            throw new InputError('消息收藏插件已停用', 503);
+          }
+          // A complete portable backup can exceed the normal 1 MiB mutation limit.
+          const input = await body(req, 8 * 1024 * 1024 + 1024) as JsonObject;
+          return json(res, 200, await app.plugins.invocations.use('message-favorites.manage', input));
         }
         if (path === '/api/v1/saved-searches' && (method === 'GET' || method === 'POST')) {
           const input = method === 'GET' ? { action: 'list' } : await body(req) as JsonObject;

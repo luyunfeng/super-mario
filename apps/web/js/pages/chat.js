@@ -5,6 +5,7 @@ import { renderFormattedText } from '../lib/markdown.js';
 import { icon } from '../ui/icons.js';
 import { Button, Banner, Card, Pill } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
+import { createMessageFavorites } from '../features/message-favorites.js';
 import { createConversationExport } from '../features/conversation-export.js';
 import { conversationSearchActive } from '../features/search.js';
 import { createAttention } from '../features/attention.js';
@@ -23,6 +24,7 @@ const SETUP_STEPS = [
 ];
 
 export function createChatPage({ api, store, scope, router }) {
+  const favorites = createMessageFavorites({ api, store });
   const transcript = createConversationExport({ api, store });
   const attention = createAttention({ api, store });
   const code = createCodeSidebar({ api, store });
@@ -40,7 +42,7 @@ export function createChatPage({ api, store, scope, router }) {
     h('div', { class: 'chat__inner chat__inner--top' },
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '对话'), h('p', { class: 'page__sub' }, hintCopy('nav.chat').tag)),
-        h('div', { class: 'page__actions' }, transcript.button, code.toggle, Hint('nav.chat'))),
+        h('div', { class: 'page__actions' }, favorites.button, transcript.button, code.toggle, Hint('nav.chat'))),
       banner, attention.el, setup, runStrip));
   const scroller = h('div', { class: 'chat__scroll', id: 'chat-scroll' }, h('div', { class: 'chat__inner' }, messages, hero));
 
@@ -120,18 +122,19 @@ export function createChatPage({ api, store, scope, router }) {
   }
 
   function renderMessage(message) {
+    const mark = message.conversationId === 'main' ? favorites.mark(message) : null;
     const text = message.origin === 'notification' ? systemText(message.text) : message.text;
     if (message.origin === 'notification') {
       // 系统提醒只留一行摘要；完整内容（含原始数据）折叠在“详情”里。
       const [first, ...rest] = text.split('\n');
       return h('article', { class: 'msg msg--system', dataset: { id: message.id } },
         h('span', { class: 'msg__note' }, first, ' ', h('span', { class: 'msg__meta' }, timeAgo(message.createdAt))),
-        rest.length > 0 && h('details', null, h('summary', null, '详情'), h('pre', null, rest.join('\n'))));
+        rest.length > 0 && h('details', null, h('summary', null, '详情'), h('pre', null, rest.join('\n'))), mark);
     }
     if (message.role === 'user') {
       return h('article', { class: 'msg msg--user', dataset: { id: message.id } },
         h('div', { class: 'msg__bubble' }, renderFormattedText(text)),
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.status === 'failed' && ' · 发送失败'));
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.status === 'failed' && ' · 发送失败', mark));
     }
     const label = message.origin === 'result' ? '执行结果' : message.origin === 'notification' ? '提醒' : '主 Agent';
     return h('article', { class: 'msg msg--assistant', dataset: { id: message.id } },
@@ -140,7 +143,7 @@ export function createChatPage({ api, store, scope, router }) {
         h('span', { class: 'msg__label' }, label),
         agentProgress(message, api),
         h('div', { class: 'msg__bubble' }, renderFormattedText(text)),
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt))));
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark)));
   }
 
   function renderSetup(state) {
@@ -200,7 +203,7 @@ export function createChatPage({ api, store, scope, router }) {
       recent.update(state);
       const list = state.messages ?? [];
       const follow = nearBottom();
-      keyedList(messages, list, item => item.id, renderMessage, item => `${item.id}:${item.status}:${item.text}:${JSON.stringify(item.progress)}`);
+      keyedList(messages, list, item => item.id, renderMessage, item => `${favorites.epoch}:${item.id}:${item.status}:${item.text}:${JSON.stringify(item.progress)}`);
       hero.hidden = list.length > 0 || !setup.hidden;
       if (list.length !== lastCount) { lastCount = list.length; if (follow) scrollToEnd(true); }
       else if (follow && list.at(-1)?.status === 'pending') scrollToEnd(true);
