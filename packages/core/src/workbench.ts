@@ -148,11 +148,12 @@ export async function createWorkbench(config: AppConfig) {
       && (join(other.cwd) === directory || join(other.cwd).startsWith(directory + '/'))
       && ['queued', 'running', 'unknown'].includes(other.status));
   }
-  async function runWorktreeStatus(id: string, includeCleanup = false): Promise<Json> {
+  async function runWorktreeStatus(id: string, includeCleanup = false, offset = 0, version?: string): Promise<Json> {
     if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
     const run = store.get<Run>('runs', id);
     if (!run?.worktree?.branch || !run.machineId) throw new InputError('执行缺少工作树创建回执', 404);
-    if (includeCleanup && run.worktree.removedAt) {
+    if (!Number.isSafeInteger(offset) || offset < 0 || (offset > 0 && !version)) throw new InputError('工作树文件分页参数无效');
+    if (includeCleanup && run.worktree.removedAt && !offset && !version) {
       const { branch, removedAt, branchDeletedAt } = run.worktree;
       // A deletion receipt is historical evidence even if the machine is now offline.
       if (branchDeletedAt) return { branch, removedAt, branchDeletedAt };
@@ -167,9 +168,10 @@ export async function createWorkbench(config: AppConfig) {
     if (!machines || !machine?.online) throw new InputError('执行机离线', 503);
     if (!machine.capabilities.includes('workspace.inspectRunWorktree')) throw new InputError('请升级执行机代理以查看工作树状态', 409);
     if (run.worktree.removedAt) throw new InputError(run.worktree.branchDeletedAt ? '工作树目录和执行分支已清理' : '工作树目录已清理，分支已保留', 410);
-    const state = await machines.call(machine.id, 'workspace.inspectRunWorktree', { id, source: run.worktree.source });
+    const state = await machines.call(machine.id, 'workspace.inspectRunWorktree', { id, source: run.worktree.source, offset, ...(version && { version }) });
     if (!state || typeof state !== 'object' || Array.isArray(state) || !run.cwd || state.cwd !== run.cwd)
       throw new InputError('工作树状态回执与执行目录不符', 502);
+    if (version && (state.version !== version || state.offset !== offset)) throw new InputError('执行机未确认当前文件页，请刷新或升级代理', 409);
     const blockingRunIds = worktreeBlockingRuns(machine.id, run.cwd).map(other => other.id);
     return { ...state, blockingRunIds, blockedByRuns: blockingRunIds.length > 0 };
   }
@@ -339,7 +341,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(todoCalendar);
   plugins.register(conversationSearch);
   plugins.register(conversationDrafts);
-  plugins.register(createRunComparison(readRunCommitDiff, id => runWorktreeStatus(id, true), readRunWorktreeChange, runWorktreeHistory));
+  plugins.register(createRunComparison(readRunCommitDiff, (id, offset, version) => runWorktreeStatus(id, true, offset, version), readRunWorktreeChange, runWorktreeHistory));
   plugins.register(shortcutSettings);
   plugins.register(conversationQuotes);
   plugins.register(conversationEdit);

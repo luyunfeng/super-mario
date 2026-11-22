@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, realpath } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -170,7 +171,7 @@ async function resolveRunWorktree({ source, id }: JsonObject) {
   return { target, record, head, sourceHead };
 }
 
-export async function inspectRunWorktree(params: JsonObject) {
+async function worktreeSnapshot(params: JsonObject) {
   const { target, record, head, sourceHead } = await resolveRunWorktree(params);
   const unmerged = Number((await runGit(target, ['rev-list', '--count', sourceHead + '..' + head])).trim());
   const overrides = await filterOverrides(target);
@@ -193,15 +194,28 @@ export async function inspectRunWorktree(params: JsonObject) {
       hidden++;
       continue;
     }
-    if (files.length < 250) files.push({ path, ...(previousPath && { previousPath }), index, worktree });
+    files.push({ path, ...(previousPath && { previousPath }), index, worktree });
   }
   return { cwd: target, branch: record.find(field => field.startsWith('branch refs/heads/'))?.slice('branch refs/heads/'.length) ?? null,
-    head, sourceHead, unmerged, files, total, hidden, ignored, locked: record.some(field => field === 'locked' || field.startsWith('locked ')), truncated: total > hidden + files.length };
+    head, sourceHead, unmerged, files, total, hidden, ignored, locked: record.some(field => field === 'locked' || field.startsWith('locked ')) };
+}
+
+export async function inspectRunWorktree(params: JsonObject) {
+  const offset = params.offset ?? 0;
+  if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || (offset > 0 && typeof params.version !== 'string'))
+    throw new Error('工作树文件分页参数无效');
+  const state = await worktreeSnapshot(params);
+  // Bind the cursor to visible names and statuses. File contents are versioned separately by the patch reader.
+  const version = createHash('sha256').update(JSON.stringify(state)).digest('hex');
+  if (params.version !== undefined && params.version !== version) throw new Error('工作树文件列表已变化，请从第一页重新读取');
+  const files = state.files.slice(offset, offset + 250);
+  const nextOffset = offset + files.length < state.files.length ? offset + files.length : null;
+  return { ...state, files, version, offset, nextOffset, truncated: nextOffset !== null };
 }
 
 export async function readWorktreeChange(params: JsonObject): Promise<Json> {
   const { path, area } = params;
-  const snapshot = await inspectRunWorktree(params);
+  const snapshot = await worktreeSnapshot(params);
   const file = snapshot.files.find(entry => entry.path === path);
   if (typeof path !== 'string' || !file || (area !== 'index' && area !== 'working'))
     throw new Error('请从工作树当前可见的修改中选择文件');
@@ -232,7 +246,7 @@ export async function readWorktreeChange(params: JsonObject): Promise<Json> {
 }
 
 export async function removeRunWorktree(params: JsonObject): Promise<Json> {
-  const snapshot = await inspectRunWorktree(params);
+  const snapshot = await worktreeSnapshot(params);
   const source = String(params.source);
   if (snapshot.branch !== 'super-mario/' + params.id || snapshot.head !== params.head)
     return { removed: false, reason: '分支或提交已经变化，请刷新后再核对。' };

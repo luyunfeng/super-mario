@@ -616,8 +616,8 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 200, await app.readRunWorktreeChange(decodeURIComponent(worktreeChange[1]!), url.searchParams.get('path') ?? '', url.searchParams.get('area') ?? ''));
         const worktreeStatus = path.match(/^\/api\/v1\/runs\/([^/]+)\/worktree-status$/);
         if (worktreeStatus && method === 'GET') {
-          if (url.searchParams.size) throw new InputError('工作树状态只接受执行 ID');
-          return json(res, 200, await app.runWorktreeStatus(decodeURIComponent(worktreeStatus[1]!)));
+          if ([...url.searchParams.keys()].some(key => key !== 'offset' && key !== 'version')) throw new InputError('工作树状态仅接受分页参数');
+          return json(res, 200, await app.runWorktreeStatus(decodeURIComponent(worktreeStatus[1]!), false, Number(url.searchParams.get('offset') ?? 0), url.searchParams.get('version') ?? undefined));
         }
         const commitDiff = path.match(/^\/api\/v1\/runs\/([^/]+)\/commit-diff$/);
         if (commitDiff && method === 'GET') {

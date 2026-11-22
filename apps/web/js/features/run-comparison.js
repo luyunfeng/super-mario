@@ -163,10 +163,11 @@ export function openWorktreeStatus(options) {
         file.index !== '?' && file.index !== ' ' && action('index', '查看暂存差异'),
         file.worktree !== ' ' && action('working', file.index === '?' ? '查看未跟踪文件' : '查看未暂存差异')), output);
   }
-  async function load() {
+  async function load(offset = 0, version) {
     replace(area, h('p', { role: 'status' }, '正在读取工作树…'));
     try {
-      const value = await api.get('/runs/' + encodeURIComponent(item.id) + '/worktree-status');
+      const query = new URLSearchParams({ offset: String(offset), ...(version && { version }) });
+      const value = await api.get('/runs/' + encodeURIComponent(item.id) + '/worktree-status?' + query);
       if (!active()) return;
       replace(area, h('strong', null, value.branch ?? '分离的 HEAD'), h('code', null, value.cwd),
         h('p', null, '当前提交 ', h('code', null, value.head.slice(0, 10)), ' · 来源提交 ', h('code', null, value.sourceHead.slice(0, 10))),
@@ -174,7 +175,11 @@ export function openWorktreeStatus(options) {
         h('strong', null, `未提交文件（含未跟踪）：${value.total}`),
         value.files.map(fileRow),
         value.hidden > 0 && h('small', null, `已隐藏 ${value.hidden} 个受限文件。`),
-        value.truncated && h('small', null, '仅显示前 250 个可见文件。'),
+        (offset > 0 || value.nextOffset > 0) && h('div', { class: 'row row--wrap' },
+          offset > 0 && Button({ label: '上一页文件', onClick: () => load(Math.max(0, offset - 250), value.version) }),
+          h('small', null, `可见文件 ${offset + 1}–${offset + value.files.length} / ${value.total - value.hidden}`),
+          value.nextOffset > 0 && Button({ label: '下一页文件', onClick: () => load(value.nextOffset, value.version) })),
+        value.truncated && value.nextOffset === undefined && h('small', null, '执行机仅返回前 250 个可见文件，升级代理可翻页。'),
         value.locked && h('p', null, 'Git 工作树已锁定，暂时无法清理目录。'),
         value.ignored > 0 && h('p', null, `有 ${value.ignored} 个 Git 忽略项，清理前请先移走需要保留的文件。`),
         value.blockedByRuns && h('section', { class: 'stack', 'aria-label': '阻止清理的执行' },
@@ -199,11 +204,11 @@ export function openWorktreeStatus(options) {
                 if (active()) replace(area, h('p', null, '工作树目录已清理，分支已保留。'));
                 options.store.refresh();
               } catch (error) {
-                if (active()) replace(area, h('p', null, error.message), Button({ label: '重新核对状态', onClick: load }));
+                if (active()) replace(area, h('p', null, error.message), Button({ label: '重新核对状态', onClick: () => load() }));
               }
             } }),
-        Button({ label: '刷新状态', size: 'sm', onClick: load }));
-    } catch (error) { if (active()) replace(area, h('p', null, error.message), Button({ label: '重试', onClick: load })); }
+        Button({ label: '刷新状态', size: 'sm', onClick: () => load() }));
+    } catch (error) { if (active()) replace(area, h('p', null, error.message), Button({ label: '重试', onClick: () => load() })); }
   }
   void load();
 }

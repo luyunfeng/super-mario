@@ -436,4 +436,31 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   for (const path of ['ordinary.txt', 'attributes.txt', 'secrets.json', '.env'])
     await assert.rejects(server.app.readRunWorktreeChange(peer.id, path, 'index'), /可见/);
 
+  const many = join(peer.cwd!, 'many');
+  await mkdir(many);
+  for (let i = 0; i < 255; i++) await writeFile(join(many, String(i).padStart(3, '0')), 'fixture ' + i);
+  const listPage = async (offset = 0, version?: string) => JSON.parse(JSON.stringify(await statusTool.execute({
+    id: peer.id, offset, ...(version && { version }),
+  }, new AbortController().signal)));
+  const start = await listPage();
+  assert.equal(start.files.length, 250);
+  assert.equal(start.nextOffset, 250);
+  const end = await listPage(start.nextOffset, start.version);
+  assert.equal(end.nextOffset, null);
+  assert.equal(new Set([...start.files, ...end.files].map(f => f.path)).size, start.total - start.hidden);
+  const last = end.files.find((f: { path: string }) => f.path === 'many/254');
+  assert.ok(last);
+  await page.reload();
+  await page.getByRole('button', { name: '查看工作树状态' }).click();
+  await status.getByRole('button', { name: '下一页文件' }).click();
+  const lastRow = status.locator('code').filter({ hasText: /^many\/254$/ }).locator('..');
+  await lastRow.getByRole('button', { name: '查看未跟踪文件' }).click();
+  await expect(lastRow.locator('pre')).toHaveText('fixture 254');
+  await rm(join(many, '000'));
+  await assert.rejects(listPage(start.nextOffset, start.version), /文件列表已变化/);
+  await status.getByRole('button', { name: '上一页文件' }).click();
+  await expect(status).toContainText('文件列表已变化');
+  await status.getByRole('button', { name: '重试' }).click();
+  await expect(status.getByRole('button', { name: '下一页文件' })).toBeVisible();
+
 });

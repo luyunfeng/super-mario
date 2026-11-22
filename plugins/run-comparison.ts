@@ -8,7 +8,7 @@ function visibleChanges(changes: Json | undefined, files: Json[]): Record<string
   return { changes: changes.filter(change => change && typeof change === 'object' && !Array.isArray(change) && paths.has(change.path)) };
 }
 
-export function createRunComparison(read: (id: string, path?: string) => Promise<Json>, status: (id: string) => Promise<Json>,
+export function createRunComparison(read: (id: string, path?: string) => Promise<Json>, status: (id: string, offset?: number, version?: string) => Promise<Json>,
   change: (id: string, path: string, area: string) => Promise<Json>, history: (id: string, mode: string, offset: number, version?: string, commit?: string, path?: string) => Promise<Json>): Extension {
   return {
     id: 'run-comparison', name: '执行对比', capabilities: ['web.runComparison', 'runs.diff.read'],
@@ -21,7 +21,7 @@ export function createRunComparison(read: (id: string, path?: string) => Promise
         async execute({ id, path, area, offset = 0, version }, signal) {
           signal.throwIfAborted();
           if (typeof id !== 'string' || !id) throw new Error('缺少执行 ID');
-          if (path !== undefined || area !== undefined || offset !== 0 || version !== undefined) {
+          if (path !== undefined || area !== undefined) {
             if (typeof path !== 'string' || (area !== 'index' && area !== 'working')) throw new Error('请同时指定文件和差异区域');
             if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || offset > 0 && typeof version !== 'string') throw new Error('续读需要有效位置和原版本');
             const result = await change(id, path, area);
@@ -33,7 +33,8 @@ export function createRunComparison(read: (id: string, path?: string) => Promise
             const truncated = offset + text.length < result.text.length;
             return { ...result, text, truncated, version: current, nextOffset: truncated ? offset + text.length : null };
           }
-          const result = await status(id);
+          if (typeof offset !== 'number' || (version !== undefined && typeof version !== 'string')) throw new Error('工作树文件分页参数无效');
+          const result = await status(id, offset, version);
           signal.throwIfAborted();
           return result;
         },
