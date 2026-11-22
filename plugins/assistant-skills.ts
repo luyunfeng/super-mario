@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { crc32 } from 'node:zlib';
+import { workGuide } from './workbench-work-guide.ts';
 import { fromBufferPromise, type ZipFile } from 'yauzl';
 import { isAlias, isMap, isNode, isPair, isScalar, parseDocument, visit } from 'yaml';
 import type { Extension, Json, JsonObject, Store } from '../packages/plugin-sdk/src/index.ts';
@@ -121,8 +122,19 @@ function catalog(store: Store): Catalog {
   return store.get<Catalog>('assistant-skills', 'catalog') ?? { skills: [], revision: 0 };
 }
 
+// Builtins travel with the release. Only the user-installed catalog has a database revision.
+function list(book: Catalog) {
+  return { ...book, builtinSkills: [{ name: workGuide.name, description: workGuide.description }] };
+}
+
 function resource(store: Store, nameValue: Json | undefined, pathValue: Json | undefined) {
-  const name = skillName(nameValue), path = filePath(pathValue === undefined ? 'SKILL.md' : pathValue);
+  const path = filePath(pathValue === undefined ? 'SKILL.md' : pathValue);
+  if (nameValue === workGuide.name) {
+    const text = workGuide.files.get(path);
+    if (text === undefined) fail(404, '技能文件不存在');
+    return { name: workGuide.name, path, text };
+  }
+  const name = skillName(nameValue);
   const raw = store.get<string>('assistant-skills.files', name + '/' + path);
   if (raw === undefined) fail(404, '技能文件不存在');
   const bytes = Buffer.from(raw, 'base64');
@@ -151,7 +163,7 @@ export const assistantSkills: Extension = {
         fail(400, '技能操作无效');
       const action = input.action as keyof typeof fields;
       keys(input, ['action', ...fields[action]]);
-      if (action === 'list') return catalog(store);
+      if (action === 'list') return list(catalog(store));
       if (action === 'read') return resource(store, input.name, input.path);
       const revision = input.revision;
       if (action !== 'preview' && (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0 || revision >= Number.MAX_SAFE_INTEGER))
@@ -172,6 +184,7 @@ export const assistantSkills: Extension = {
         }
         if (input.digest !== loaded.digest) fail(409, '技能包已变化，请重新预览');
       }
+      if (action === 'remove' && input.name === workGuide.name) fail(409, '内置技能无法移除');
       const name = loaded ? loaded.info.name : skillName(input.name);
       return store.transaction(() => {
         const book = catalog(store);
@@ -192,7 +205,7 @@ export const assistantSkills: Extension = {
         }
         book.revision++;
         store.put('assistant-skills', 'catalog', book);
-        return book;
+        return list(book);
       });
     });
     context.contribute('tools', 'assistant_skill_read', {

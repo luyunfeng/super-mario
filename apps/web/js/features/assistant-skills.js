@@ -90,23 +90,30 @@ export function createAssistantSkills({ api, store }) {
         status.textContent = '已删除技能「' + name + '」。';
       }, true);
     }
+    function skillCard(skill, removable) {
+      const remove = removable && Button({ label: '删除', ariaLabel: '删除 ' + skill.name, size: 'sm', onClick() {
+        removing = skill.name; errors.replaceChildren(); renderList();
+      } });
+      return h('article', { class: 'card' }, h('div', { class: 'card__body stack' },
+        h('strong', null, skill.name), h('p', { class: 'small' }, skill.description),
+        h('div', { class: 'row row--wrap' },
+          Button({ label: '查看', ariaLabel: '查看 ' + skill.name, size: 'sm', onClick: () => showFile(skill.name) }), remove),
+        removable && removing === skill.name && h('div', { class: 'stack' },
+          h('p', null, '从助手中删除技能「' + skill.name + '」？'),
+          h('div', { class: 'row row--wrap' },
+            Button({ label: '取消', onClick() { removing = undefined; renderList(); } }),
+            Button({ label: '确认删除', kind: 'danger', onClick: () => removeSkill(skill.name, book.revision) })))));
+    }
     function renderList() {
       upload.disabled = !book;
       if (!book) { replace(rows, Button({ label: '重新读取技能列表', onClick: () => run('读取列表', loadList) })); return; }
-      replace(rows, h('h3', null, '已安装技能'),
-        !book.skills.length && h('p', { class: 'muted' }, '还没有安装助手技能。'),
-        book.skills.map(skill => h('article', { class: 'card' }, h('div', { class: 'card__body stack' },
-          h('strong', null, skill.name), h('p', { class: 'small' }, skill.description),
-          h('div', { class: 'row row--wrap' },
-            Button({ label: '查看', ariaLabel: '查看 ' + skill.name, size: 'sm', onClick: () => showFile(skill.name) }),
-            Button({ label: '删除', ariaLabel: '删除 ' + skill.name, size: 'sm', onClick() {
-              removing = skill.name; errors.replaceChildren(); renderList();
-            } })),
-          removing === skill.name && h('div', { class: 'stack' },
-            h('p', null, '从助手中删除技能「' + skill.name + '」？'),
-            h('div', { class: 'row row--wrap' },
-              Button({ label: '取消', onClick() { removing = undefined; renderList(); } }),
-              Button({ label: '确认删除', kind: 'danger', onClick: () => removeSkill(skill.name, book.revision) })))))));
+      const builtin = book.builtinSkills ?? [];
+      replace(rows,
+        builtin.length > 0 && h('section', { class: 'stack', 'aria-label': '内置技能' }, h('h3', null, '内置技能'),
+          builtin.map(skill => skillCard(skill, false))),
+        h('section', { class: 'stack', 'aria-label': '用户安装的技能' }, h('h3', null, '用户安装的技能'),
+          !book.skills.length && h('p', { class: 'muted' }, '还没有安装助手技能。'),
+          book.skills.map(skill => skillCard(skill, true))));
     }
     function showFile(name, filePath) {
       return run('读取文件', async () => {

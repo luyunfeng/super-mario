@@ -1,0 +1,62 @@
+// Shipped with the skills plugin. The dotted name cannot collide with an imported ZIP skill.
+const name = 'workbench.work';
+const description = '在工作台记录待办、派活、查进展和验收证据，定位执行机、会话与项目代码。';
+
+export const workGuide = {
+  name, description,
+  files: new Map<string, string>([
+    ['SKILL.md', [
+      '---', 'name: ' + name, 'description: ' + description, '---', '# 工作指南',
+      '先看用户要的结果，再用 assistant_skill_read 读取对应文件。只用本轮提供的工具，遵守当前项目、机器人和审批范围。',
+      '“记一下”或“提醒我” → references/record.md',
+      '“交给执行机做”或“拆成几步” → references/delegate.md',
+      '“做到哪一步了”或“谁在等我” → references/progress.md',
+      '“帮我验一下”或“看这次改动” → references/review.md',
+      '“哪台机器能做”或“接着上次的会话” → references/agents-and-machines.md',
+      '“找到那段对话”或“转给项目助手” → references/conversations.md',
+      '“这个项目的代码在哪”或“看一下差异” → references/repositories.md',
+    ].join('\n')],
+    ['references/record.md', [
+      '# 待办和提醒',
+      '用户说“记一下周五交报告”，先用 todos_list 核对是否已有同一事项。新事项用 todo_create，已有关联事项且要修改时用本轮可用的 todo_update。保存后回报标题和实际保存的时间，到这里结束。',
+      '截止时间用 dueAt，提醒时间用 reminderAt，按工作台时区理解相对日期。只给了截止日期时保留两者区别。项目不明确时，避免把事项放进一个猜测的项目。',
+      '用户要求持续盯进展时，再按授权设置跟进。查询某天的待办和查会议分别使用 todos_list 和 calendar_agenda。',
+    ].join('\n')],
+    ['references/delegate.md', [
+      '# 派活',
+      '先定位对应项目、待办、已有执行和可用执行器。把已有的 projectId、todoId 随任务传入，避免同一工作另开一份。执行器或目录不明时先查 executors_list、projects_list。',
+      '单项执行用 work_dispatch，提供具体产物、可核验的 doneWhen 和 expectMinutes。多步工作用 task_plan，每步给验收标准。用户只要计划时留待启动，明确要求立即执行时才传 start=true。',
+      '依据回执说明谁接手、在等审批还是已启动。回执为 unknown 时先查 runs_list；外部动作的结果未查清前保留原记录。交付结果回到原会话后再核对。',
+    ].join('\n')],
+    ['references/progress.md', [
+      '# 工作进展',
+      '状态查询保持只读。用 runs_list 找到同一项目、待办或执行记录。用 todos_list 核对待办是否已验收。需要看谁在等用户时，用 interactions_list 读取待回答或待确认的卡片。',
+      '执行状态和业务结果分别汇报。queued 表示等待执行，running 表示执行中，completed 需要结合输出和验收标准，failed 说明已记录的原因，unknown 表示结果待核实。',
+      '必要时用 work_read 查看关联执行的当前屏幕。离线、终端 idle 或一段自述都不足以证明完成。只有进展问题时，不发新指令，不重派。',
+      '先说用户关心的事项、当前结果，再给证据、卡点和需要谁做什么。只引用本轮查到的链接。记录不可读时，说明具体缺哪份证据。',
+    ].join('\n')],
+    ['references/review.md', [
+      '# 核对交付',
+      '从 runs_list 取这次执行的 doneWhen 和输出，逐项对照用户要求。涉及绑定的代码仓库时，通过 workspace_code_read 或 workspace_git_diff 核对实际文件和差异。',
+      '给出每项已核实的结果、依据和待验部分。执行者说测试通过但没有测试记录时，明确证据来自执行者报告。需要返工时说明复现条件和可核验的预期。',
+      '待办完成与权限审批由用户确认。若需要用户验收，用现有验收卡；创建新卡前用 interactions_list 核对已有卡片。',
+    ].join('\n')],
+    ['references/agents-and-machines.md', [
+      '# 执行机与会话',
+      '先用 executors_list 查看本轮可用执行器和工作台连接状态。用 agent_sessions 读取指定机器或项目可见的原生历史；历史记录不能证明进程在线或账号已登录。',
+      '只有用户明确要续接时才用 session_resume，核对原生会话 ID、机器、目录和继续目标，按返回审批状态汇报。若原会话不可恢复，说明原因并保留原记录。',
+    ].join('\n')],
+    ['references/conversations.md', [
+      '# 对话与交接',
+      '分清 Web 主对话、项目工作对话、执行机会话和已绑定的飞书机器人。需要同事接手时，根据本轮的渠道身份与授权协作对象选择目标。',
+      '使用 bot_handoff 前核对接手方、工作目标和需回报的证据。给用户回报真实投递状态，待接手方返回后再汇总。',
+      '查找、收藏或导出已有对话时，可使用 Web 的历史搜索及会话操作。只在本轮工具确实支持对应操作时报告已经修改。',
+    ].join('\n')],
+    ['references/repositories.md', [
+      '# 项目与代码',
+      '用 projects_list 找到项目及其实际绑定。需查本机已有目录时用 projects_discover。仓库 URL 和工单链接只说明来源，不能推断执行机上的路径。',
+      '浏览绑定工作区时，先用 workspace_code_list 定位文件，再用 workspace_code_read 查看内容或 workspace_git_diff 核对改动。读不到时说明机器、权限或绑定状态。',
+      '记录关联、修改代码和提交改动是不同的动作。按用户授权分别处理，保留原有项目和待办的其他关联。',
+    ].join('\n')],
+  ]) as ReadonlyMap<string, string>,
+};

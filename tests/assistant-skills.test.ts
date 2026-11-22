@@ -11,6 +11,9 @@ import { createEventBus } from '../packages/core/src/events.ts';
 import type { JsonObject } from '../packages/plugin-sdk/src/index.ts';
 import { assistantSkills } from '../plugins/assistant-skills.ts';
 
+import { workGuide } from '../plugins/workbench-work-guide.ts';
+
+const builtinSkills = [{ name: 'workbench.work', description: workGuide.description }];
 const manifest = '---\nname: demo-skill\ndescription: >-\n  简要说明\n---\n\n# 技能正文\n';
 const archive = (zip: JSZip) => zip.generateAsync({ type: 'base64', compression: 'DEFLATE', platform: 'UNIX' });
 
@@ -33,13 +36,14 @@ test('ZIP preview, digest-bound installation, resource reads and removal use one
   const digest = createHash('sha256').update(Buffer.from(data, 'base64')).digest('hex');
   const info = { name: 'demo-skill', description: '简要说明' };
   assert.deepEqual(await call({ action: 'preview', archive: data }), { ...info, files: ['SKILL.md','docs/参考.md','empty.txt','image.bin','long.txt'], digest });
-  assert.deepEqual(await call({ action: 'list' }), { revision: 0, skills: [] });
+  assert.deepEqual(await call({ action: 'list' }), { revision: 0, skills: [], builtinSkills });
   const install = { action: 'install', archive: data, digest, revision: 0 };
   await assert.rejects(call({ ...install, digest: '1'.repeat(64) }), { status: 409 });
   const race = await Promise.allSettled([call(install), call(install)]);
   assert.equal(race.filter(result => result.status === 'fulfilled').length, 1);
   assert.equal(race.find(result => result.status === 'rejected')?.reason.status, 409);
-  assert.deepEqual(await call({ action: 'list' }), { revision: 1, skills: [info] });
+  assert.deepEqual(race.find(result => result.status === 'fulfilled')?.value, { revision: 1, skills: [info], builtinSkills });
+  assert.deepEqual(await call({ action: 'list' }), { revision: 1, skills: [info], builtinSkills });
   await assert.rejects(call({ ...install, revision: 1 }), { status: 409 });
   await assert.rejects(call({ action: 'preview', archive: data }), { status: 409 });
   const read = { action: 'read', name: info.name };
@@ -61,7 +65,7 @@ test('ZIP preview, digest-bound installation, resource reads and removal use one
   await assert.rejects(tool.execute(args, new AbortController().signal), { status: 503 });
   await host.setEnabled('assistant-skills', true);
   assert.equal((await call(read)).text, manifest);
-  assert.deepEqual(await call({ action: 'remove', name: info.name, revision: 1 }), { revision: 2, skills: [] });
+  assert.deepEqual(await call({ action: 'remove', name: info.name, revision: 1 }), { revision: 2, skills: [], builtinSkills });
   assert.deepEqual(store.list('assistant-skills.files'), []);
   await assert.rejects(call(read), { status: 404 });
 });
@@ -79,7 +83,7 @@ test('archive validation rejects ambiguous layouts, nonregular entries and size 
   ];
   for (const zip of invalidPackages) await assert.rejects(call({ action: 'preview', archive: await archive(zip) }), { status: 400 });
   await assert.rejects(call({ action: 'preview', archive: 'bad base64!' }), { status: 400 });
-  assert.deepEqual(await call({ action: 'list' }), { revision: 0, skills: [] });
+  assert.deepEqual(await call({ action: 'list' }), { revision: 0, skills: [], builtinSkills });
 });
 
 test('skill catalog refuses a 33rd installation and accepts another after removal', async t => {
@@ -94,4 +98,27 @@ test('skill catalog refuses a 33rd installation and accepts another after remova
   await assert.rejects(call({ action: 'install', ...extra, revision: 32 }), { status: 400 });
   await call({ action: 'remove', name: 'test-0', revision: 32 });
   assert.equal((await call({ action: 'install', ...extra, revision: 33 })).revision, 34);
+});
+
+test('builtin guide uses release resources with an existing catalog and never changes its stored revision', async t => {
+  const { call, store, contributions } = await fixture(t);
+  const existing = { revision: 8, skills: [{ name: 'old-skill', description: '既有技能' }] };
+  store.put('assistant-skills', 'catalog', existing);
+  assert.deepEqual(await call({ action: 'list' }), { ...existing, builtinSkills });
+  const read = { action: 'read', name: 'workbench.work' };
+  assert.ok(workGuide.files.has('SKILL.md'));
+  assert.equal((await call(read)).text, workGuide.files.get('SKILL.md'));
+  const tool = contributions.list('tools')[0].value;
+  for (const [path, text] of workGuide.files) {
+    assert.deepEqual(await call({ ...read, path }), { name: read.name, path, text });
+    const page = await tool.execute({ name: read.name, path }, new AbortController().signal) as JsonObject;
+    assert.equal(page.text, Array.from(text).slice(0, 6000).join(''));
+  }
+  await assert.rejects(call({ ...read, path: 'missing.md' }), { status: 404 });
+  await assert.rejects(call({ ...read, path: '../outside' }), { status: 400 });
+  await assert.rejects(call({ action: 'remove', name: read.name, revision: 8 }), { status: 409 });
+  const shadow = await archive(new JSZip().file('SKILL.md', manifest.replace('demo-skill', read.name)));
+  await assert.rejects(call({ action: 'preview', archive: shadow }), { status: 400 });
+  assert.deepEqual(store.get('assistant-skills', 'catalog'), existing);
+  assert.deepEqual(store.list('assistant-skills.files'), []);
 });

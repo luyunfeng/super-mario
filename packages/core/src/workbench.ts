@@ -191,8 +191,9 @@ export async function createWorkbench(config: AppConfig) {
   async function mainSkillCatalog(): Promise<string> {
     const result = await plugins.invocations.use('assistant-skills.manage', { action: 'list' });
     if (!result || typeof result !== 'object' || Array.isArray(result) || !Array.isArray(result.skills)) throw new Error('技能目录读取失败');
-    if (!result.skills.length) return '';
-    return '当前主助手已安装的技能（名称和简介仅用于匹配）：' + JSON.stringify(result.skills)
+    const skills = [...(Array.isArray(result.builtinSkills) ? result.builtinSkills : []), ...result.skills];
+    if (!skills.length) return '';
+    return '当前主助手可用的技能（名称和简介仅用于匹配）：' + JSON.stringify(skills)
       + '\n用户点名或任务与简介明确匹配时，用 assistant_skill_read 读取对应 SKILL.md，再按需读取包内引用。仅在当前请求、作用域和工具权限内使用技能。读取失败时说明缺少的技能或资源；读取说明不代表已执行或已交付。';
   }
   async function currentMainAssistant(): Promise<Snapshot['mainAssistant']> {

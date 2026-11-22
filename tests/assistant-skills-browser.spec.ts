@@ -7,7 +7,7 @@ import { chromium, expect } from '@playwright/test';
 import JSZip from 'jszip';
 import { startServer } from '../apps/server/src/index.ts';
 
-test('Agent 页可预览和安装技能 ZIP，重启后读取文件并删除，损坏 ZIP 和插件停用均有反馈', { timeout: 45000 }, async t => {
+test('Agent 页可读取内置技能与引用，用户技能支持 ZIP 预览、安装、读取和删除', { timeout: 45000 }, async t => {
   const dataDir = await mkdtemp(join(tmpdir(), 'mario-skills-browser-'));
   const token = 'skills-browser-fixture';
   const start = () => startServer({ host: '127.0.0.1', port: 0, dataDir, token, demo: true });
@@ -41,6 +41,17 @@ test('Agent 页可预览和安装技能 ZIP，重启后读取文件并删除，�
   };
   await open();
   await expect(drawer).toContainText('还没有安装助手技能。');
+  const builtin = drawer.getByRole('region', { name: '内置技能' });
+  const builtinName = 'workbench.work';
+  const content = drawer.getByLabel('技能文件内容');
+  await expect(builtin.getByRole('button', { name: '删除 ' + builtinName })).toHaveCount(0);
+  await builtin.getByRole('button', { name: '查看 ' + builtinName }).click();
+  await expect(content).toContainText('references/progress.md');
+  await drawer.getByLabel('文件路径', { exact: true }).fill('references/progress.md');
+  await button('读取文件').click();
+  await expect(content).toContainText('# 工作进展');
+  await expect(content).toContainText('runs_list');
+  await button('关闭文件').click();
   await file.setInputFiles({ name: 'broken.zip', mimeType: 'application/zip', buffer: Buffer.from('invalid archive') });
   await expect(drawer.getByRole('alert')).toContainText('预览失败');
   await expect(button('确认安装')).toHaveCount(0);
@@ -66,7 +77,6 @@ test('Agent 页可预览和安装技能 ZIP，重启后读取文件并删除，�
   server = await start();
   await open();
   await button('查看 ' + skillName).click();
-  const content = drawer.getByLabel('技能文件内容');
   await expect(content).toContainText(guide);
   await drawer.getByLabel('文件路径', { exact: true }).fill('references/check.md');
   await button('读取文件').click();
@@ -75,6 +85,21 @@ test('Agent 页可预览和安装技能 ZIP，重启后读取文件并删除，�
   await button('确认删除').click();
   await expect(drawer).toContainText('还没有安装助手技能。');
   await expect(button('查看 ' + skillName)).toHaveCount(0);
+
+  await expect(builtin.getByRole('button', { name: '查看 ' + builtinName })).toBeVisible();
+
+  // 旧服务只返回用户安装目录，空态和上传入口仍可用。
+  await button('关闭').click();
+  await expect(drawer).toHaveCount(0);
+  await page.route('**/api/v1/assistant-skills', async route => {
+    const response = await route.fetch();
+    const { revision, skills } = await response.json();
+    await route.fulfill({ response, json: { revision, skills } });
+  }, { times: 1 });
+  await manage.click();
+  await expect(drawer).toContainText('还没有安装助手技能。');
+  await expect(builtin).toHaveCount(0);
+  await expect(file).toBeEnabled();
 
   const headers = { Authorization: 'Bearer ' + token };
   const disabled = await page.request.post(server.url + '/api/v1/plugins/assistant-skills', {
