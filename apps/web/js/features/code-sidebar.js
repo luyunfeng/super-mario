@@ -11,7 +11,7 @@ function diffLineClass(line) {
   return 'diff-line';
 }
 
-function renderDiffLines(text) {
+export function renderDiffLines(text) {
   const lines = text.split('\n');
   const nodes = [];
   for (let i = 0; i < lines.length; i++) {

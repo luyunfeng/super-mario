@@ -136,7 +136,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     const status = runStatus[run.status] ?? { text: run.status, tone: '' };
     const todo = run.todoId && snapshot.todos.find(item => item.id === run.todoId);
     const comparison = !store.view.unauthorized && snapshot.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active')
-      && compareRuns({ run, runs: snapshot.runs, projectId, router, executorName });
+      && compareRuns({ run, runs: snapshot.runs, projectId, router, executorName, api, store });
     const tabs = Tabs({ items: [{ id: 'timeline', label: '时间线' }, { id: 'result', label: '结果' }, { id: 'terminal', label: '终端' }], active: detailTab, label: '执行详情', onSelect: (id) => { detailTab = id; paintDetail(); } });
 
     const timeline = [

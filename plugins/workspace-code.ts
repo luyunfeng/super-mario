@@ -9,11 +9,11 @@ import type { Json } from '../packages/protocol/src/index.ts';
 const execute = promisify(execFile);
 const limit = 256 * 1024;
 // Deny credentials by component, including aliases resolved through symlinks.
-const sensitive = (path: string) => path.split(/[\\/]/).some(p => /^(\.git|\.ssh|\.aws|\.gnupg|\.codex|\.claude|\.docker|\.env(?:\..*)?|\.npmrc|\.pypirc|\.netrc|\.?credentials(?:\..*)?|secrets?(?:\..*)?|auth\.json|service-account\.json|id_(?:rsa|ed25519))$/i.test(p) || /\.(pem|key|p12|pfx|sqlite|sqlite3|db)$/i.test(p));
+export const sensitiveWorkspacePath = (path: string) => path.split(/[\\/]/).some(p => /^(\.git|\.ssh|\.aws|\.gnupg|\.codex|\.claude|\.docker|\.env(?:\..*)?|\.npmrc|\.pypirc|\.netrc|\.?credentials(?:\..*)?|secrets?(?:\..*)?|auth\.json|service-account\.json|id_(?:rsa|ed25519))$/i.test(p) || /\.(pem|key|p12|pfx|sqlite|sqlite3|db)$/i.test(p));
 function inside(root: string, path: string) {
   const rel = relative(root, path);
   if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('路径越出项目根目录');
-  if (sensitive(rel)) throw new Error('敏感文件不可浏览');
+  if (sensitiveWorkspacePath(rel)) throw new Error('敏感文件不可浏览');
 }
 export const workspaceCode: NodeHandler = async (params): Promise<Json> => {
   if (typeof params.cwd !== 'string' || !isAbsolute(params.cwd) || /[\0\r\n]/.test(params.cwd)) throw new Error('项目根目录无效');
@@ -21,7 +21,7 @@ export const workspaceCode: NodeHandler = async (params): Promise<Json> => {
   const root = await realpath(params.cwd);
   if (root !== resolve(params.cwd)) throw new Error('项目根目录已变化，请重新绑定');
   if (root === resolve('/')) throw new Error('不能浏览文件系统根目录');
-  if (sensitive(root)) throw new Error('敏感项目目录不可浏览');
+  if (sensitiveWorkspacePath(root)) throw new Error('敏感项目目录不可浏览');
   const path = params.path ?? '';
   if (typeof path !== 'string' || isAbsolute(path) || /[\0\r\n]/.test(path)) throw new Error('只接受项目内相对路径');
   const requested = resolve(root, path); inside(root, requested);
@@ -34,7 +34,7 @@ export const workspaceCode: NodeHandler = async (params): Promise<Json> => {
     let scanned = 0, truncated = false;
     for await (const child of children) {
       if (++scanned > 2048) { truncated = true; break; }
-      if (sensitive(child.name) || child.name === 'node_modules') continue;
+      if (sensitiveWorkspacePath(child.name) || child.name === 'node_modules') continue;
       const candidate = resolve(canonical, child.name);
       try {
         const target = await realpath(candidate); inside(root, target);

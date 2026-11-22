@@ -15,7 +15,7 @@ import { createMachineHub } from '../../../packages/core/src/machines.ts';
 import type { FeishuRegistrationInput } from './feishu-registration.ts';
 import { createFeishuGateway, type FeishuGatewayDependencies } from './feishu-gateway.ts';
 import { validateBotScope } from '../../../packages/core/src/bot-scopes.ts';
-import type { AppConfig, FeishuBotInput, JsonObject, NodeMessage, Todo } from '../../../packages/protocol/src/index.ts';
+import type { AppConfig, FeishuBotInput, JsonObject, NodeMessage, Run, Todo } from '../../../packages/protocol/src/index.ts';
 
 async function body(req: IncomingMessage, maxBytes = 1024 * 1024): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []; let size = 0;
@@ -599,6 +599,19 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 202, await app.agent.post(input.text, 'main', { requestId: messageRequestId(req), ...(typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : {}), ...(input.readOnly === true ? { readOnly: true } : {}) }));
         }
         if (path === '/api/v1/runs' && method === 'POST') return json(res, 202, app.dispatch(await body(req), typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : undefined));
+        const commitDiff = path.match(/^\/api\/v1\/runs\/([^/]+)\/commit-diff$/);
+        if (commitDiff && method === 'GET') {
+          if (!app.plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
+          if ([...url.searchParams.keys()].some(key => key !== 'path')) throw new InputError('仅接受文件路径');
+          const run = app.store.get<Run>('runs', decodeURIComponent(commitDiff[1]!));
+          if (!run?.commitChanges || !run.machineId || !run.cwd) throw new InputError('执行缺少历史提交记录', 404);
+          const machine = machines.list().find(item => item.id === run.machineId);
+          if (!machine?.online) throw new InputError('执行机离线', 503);
+          if (!machine.capabilities.includes('workspace.commitDiff')) throw new InputError('请升级执行机代理以查看历史差异', 409);
+          return json(res, 200, await machines.call(machine.id, 'workspace.commitDiff', {
+            cwd: run.cwd, range: run.commitChanges, ...(url.searchParams.has('path') && { path: url.searchParams.get('path')! }),
+          }));
+        }
         const observations = path.match(/^\/api\/v1\/runs\/([^/]+)\/observations$/);
         if (observations && method === 'GET') return json(res, 200, app.runObservations(decodeURIComponent(observations[1]!)));
         const cancel = path.match(/^\/api\/v1\/runs\/([^/]+)\/cancel$/);
