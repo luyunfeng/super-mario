@@ -306,7 +306,7 @@ export async function createWorkbench(config: AppConfig) {
     const source=currentAgentInput()??agent.currentInput();if(!source||source.role!=='user'||source.readOnly||source.origin&&source.origin!=='user')throw new InputError('来源投放需要当前用户输入',403);
     validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
     return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
-  }, knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoHistory: args => readTodoHistory(store, requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0], currentAgentInput() ?? agent.currentInput()) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
+  }, knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0], currentAgentInput() ?? agent.currentInput()) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
   function makeWebSource() {
     const options = webConfig.read();
     return createFeishuWebSource({
@@ -381,6 +381,9 @@ export async function createWorkbench(config: AppConfig) {
   const reviewSettings = () => ({ maxReworks: store.get<{ maxReworks: number }>('workbench.settings', 'run-review')?.maxReworks ?? 2 });
   const runReview = createRunReview({ store, events, dispatch, completeTodo: id => updateTodo(id, { completed: true }), maxReworks: () => reviewSettings().maxReworks });
   const reviewEvidence = runReview.evidenceForRun;
+  function todoHistory(id: string, before?: string) {
+    return readTodoHistory(store, id, before, reviewEvidence);
+  }
   const agent = createAgentRuntime({ config, store, events, contributions, reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
   const scopedAgents = createScopedAgents({ config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: (scope, botId, input) => botScopeAccess(scope, botId, input) });
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
@@ -1320,7 +1323,7 @@ export async function createWorkbench(config: AppConfig) {
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {
-      history: (id: string, before?: string) => readTodoHistory(store, id, before),
+      history: todoHistory,
       reporting, review: runReview, settings: reviewSettings,
       state(id: string) {
         const state = reporting.get(id), todo = store.get<Todo>('todos', id)!;

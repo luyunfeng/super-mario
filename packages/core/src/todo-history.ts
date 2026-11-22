@@ -1,10 +1,10 @@
-import type { RunReview, RunReviewDecision } from './run-review.ts';
+import type { ReviewEvidenceReader, RunReview, RunReviewDecision } from './run-review.ts';
 import type { Store } from '../../plugin-sdk/src/index.ts';
 import type { Run, Todo } from '../../protocol/src/index.ts';
 import type { TodoHistory } from '../../protocol/src/todo-history.ts';
 
 /** Derive history from existing facts; do not copy task state into a second ledger. */
-export function readTodoHistory(store: Pick<Store, 'get' | 'list'>, id: string, before?: string): TodoHistory {
+export function readTodoHistory(store: Pick<Store, 'get' | 'list'>, id: string, before?: string, reviewEvidence?: ReviewEvidenceReader): TodoHistory {
   const todo = store.get<Todo>('todos', id);
   if (!todo) throw Object.assign(new Error('待办不存在'), { status: 404 });
   // A moved todo cannot bring the previous project's execution evidence into its new scope.
@@ -19,6 +19,7 @@ export function readTodoHistory(store: Pick<Store, 'get' | 'list'>, id: string, 
     todo: { id, title: todo.title, projectId: todo.projectId, completedAt: todo.completedAt }, total: runs.length,
     rounds: runs.slice(start, end).map((run, index) => ({
       number: start + index + 1,
+      review: reviewEvidence?.(run),
       run: { id: run.id, executorId: run.executorId, prompt: run.prompt, status: run.status, createdAt: run.createdAt,
         updatedAt: run.updatedAt, doneWhen: run.doneWhen, resultSource: run.resultSource,
         output: run.output.slice(0, 4000), error: run.error?.slice(0, 2000) },

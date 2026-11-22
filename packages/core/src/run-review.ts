@@ -1,3 +1,4 @@
+import type { ExecutionReviewEvidence } from '../../protocol/src/todo-history.ts';
 import { createHash } from 'node:crypto';
 import { reworkPrompt } from './prompts.ts';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
@@ -25,7 +26,7 @@ export interface RunReview {
   createdAt: string;
   updatedAt: string;
 }
-export type ReviewEvidenceReader = (run: Run) => { status: RunReview['status'] | 'invalidated'; version: number; updatedAt: string } | undefined;
+export type ReviewEvidenceReader = (run: Run) => ExecutionReviewEvidence | undefined;
 export interface RunReviewDecision {
   todoId: string;
   version: number;

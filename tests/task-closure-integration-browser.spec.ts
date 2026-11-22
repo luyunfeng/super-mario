@@ -169,6 +169,11 @@ test('Chromium 真实闭环：需答复阻止假完成，记录 finishRun Messag
   assert.equal(f.stored<TodoReportingState>('todo.reporting', f.todo.id)!.cycle, 2);
   assert.equal(f.calls.length, 1);
   assert.deepEqual(f.errors, []);
+  await d.getByRole('button', { name: '关闭', exact: true }).click();
+  await f.row.getByRole('button', { name: '执行历史', exact: true }).click();
+  const round = f.page.getByRole('dialog', { name: '执行历史' }).locator('[data-round="1"]');
+  await expect(round).toContainText('当前验收状态：已重开');
+  await expect(round).toContainText('历史决定：用户已验收');
   t.diagnostic(`SQLite: Run ${run.id} → Message ${message.id} → accepted → reopened cycle=2；未报告验收及旧证据复用均为 409；本地替身执行 1 次`);
 });
 

@@ -397,7 +397,12 @@ test('Web 和飞书项目助手查返工依据，可翻页，跨项目读取被�
     if (req.callId === 'foreign') return call('todo_history', { todoId }, 'latest');
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[]).map(p => p.text).join('');
     const result = JSON.parse(raw);
-    if (req.callId === 'latest') return call('todo_history', { todoId, before: result.nextBefore }, 'older');
+    if (req.callId === 'latest') {
+      const rework = result.rounds.find((round: { run: { id: string } }) => round.run.id === 'review-1');
+      assert.equal(rework.run.status, 'completed');
+      assert.equal(rework.review.status, 'pending');
+      return call('todo_history', { todoId, before: result.nextBefore }, 'older');
+    }
     return { role: 'assistant', content: '记录的返工原因是' + result.rounds[0].decisions[0].defects };
   }, options => {
     adapter = options;
@@ -416,6 +421,7 @@ test('Web 和飞书项目助手查返工依据，可翻页，跨项目读取被�
     }
     server.app.store.put('run-review.intents', 'review-history', { request: { todoId, runId: 'review-0', action: 'rework', defects: '合计缺一行' },
       result: { todoId, runId: 'review-1', status: 'pending', updatedAt: new Date(1000).toISOString() } });
+    server.app.store.put('run-reviews', todoId, { todoId, runId: 'review-1', status: 'pending', version: 2, updatedAt: new Date(1000).toISOString() });
     const question = '复核汇总第一次为什么返工？';
     assert.equal(await ask(question), '记录的返工原因是合计缺一行');
     projectOnly = true;

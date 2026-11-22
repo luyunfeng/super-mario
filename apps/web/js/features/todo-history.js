@@ -3,6 +3,11 @@ import { formatDate, runStatus } from '../lib/format.js';
 import { Button, Banner, Pill } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 
+const reviewLabels = {
+  accepted: '已验收', pending: '待验收', reopened: '已重开', invalidated: '验收证据已失效',
+  dispatching: '正在派发返工', unknown: '派发结果未知',
+};
+
 export function openTodoHistory({ api, store, router, todo }) {
   let alive = true, sequence = 0, before;
   const list = h('div', { class: 'stack', dataset: { todoHistory: todo.id } });
@@ -32,8 +37,9 @@ export function openTodoHistory({ api, store, router, todo }) {
           : h('p', { class: 'small muted' }, '尚无结果记录。'),
         round.outputTruncated && h('p', { class: 'small muted' }, '摘要仅显示前 4000 字符，完整结果请打开执行记录。'),
         run.resultSource && h('p', { class: 'small muted' }, `结果来源：${run.resultSource}`),
+        round.review && h('p', { class: 'small' }, '当前验收状态：' + (reviewLabels[round.review.status] ?? '未知')),
         round.decisions.map(decision => h('div', { class: 'row row--wrap small' },
-          `${decision.action === 'accept' ? '用户已验收' : '用户要求返工'} · ${formatDate(decision.at, true)}${decision.defects ? ' · ' + decision.defects : ''}`,
+          `历史决定：${decision.action === 'accept' ? '用户已验收' : '用户要求返工'} · ${formatDate(decision.at, true)}${decision.defects ? ' · ' + decision.defects : ''}`,
           decision.dispatchStatus === 'unknown' && h('span', null, '返工派发结果未知'),
           decision.dispatchStatus === 'dispatching' && h('span', null, '正在派发返工'),
           decision.reworkRunId && runLink('打开本次返工执行', decision.reworkRunId, projectId))),
