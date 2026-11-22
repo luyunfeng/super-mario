@@ -5,6 +5,7 @@ import { Button, Input } from './ui/kit.js';
 import { hintCopy } from './ui/hint.js';
 import { alertLabel } from './lib/alerts.js';
 import { createPluginSettings } from './features/plugin-settings.js';
+import { openTerminalWall } from './features/terminal-wall.js';
 import { PAGES } from './lib/router.js';
 
 export const PAGE_NAMES = { home: '首页', chat: '对话', inbox: '收件箱', outbox: '发件箱', agent: 'Agent', projects: '项目', memory: '记忆', channels: '渠道' };
@@ -63,7 +64,7 @@ export function createShell({ api, store, router, scope }) {
   });
   tokenInput.value = api.token();
 
-  const terminalsLink = h('a', { class: 'btn btn--sm', href: '/terminals.html', target: '_blank', rel: 'noopener', title: 'Herdr 多屏现场终端墙：与本地电脑多屏同看、随时接管发话' }, '多屏现场');
+  const terminalsLink = Button({ label: '多屏现场', size: 'sm', onClick: () => openTerminalWall(api, scope.get()) });
   const inspectorLink = h('a', { class: 'btn btn--sm', href: '/inspector.html', target: '_blank', rel: 'noopener', title: '查看 Pi 上下文窗口、提示词分布与历史会话' }, '上下文透视');
   const topbar = h('header', { class: 'topbar' }, search, h('span', { class: 'topbar__space' }), terminalsLink, inspectorLink, scopeSelect, conn);
 

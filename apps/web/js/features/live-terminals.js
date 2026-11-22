@@ -1,6 +1,7 @@
 import { h, replace } from '../lib/dom.js';
 import { Banner, Button, Card, Empty, Pill } from '../ui/kit.js';
 import { renderFormattedText } from '../lib/markdown.js';
+import { openTerminalWall } from './terminal-wall.js';
 import { openDrawer } from '../ui/overlay.js';
 
 const STATES = { working: '正在工作', blocked: '等待你输入', idle: '等待输入', done: '终端已停下', unknown: '状态待确认' };
@@ -12,7 +13,7 @@ export function createLiveTerminals({ api, store, router }) {
   let closeTerminal = () => {}, signature = '', openedItem;
   let historyRows = [], historyLoading = false, historyError = '', historyLimit = 15;
   const body = h('div', { class: 'stack' });
-  const wallLink = h('a', { class: 'btn btn--sm btn--primary', href: '/terminals.html', target: '_blank', rel: 'noopener' }, '多屏现场墙 ↗');
+  const wallLink = Button({ label: '多屏现场墙', size: 'sm', onClick: () => openTerminalWall(api, projectId) });
   const el = Card({ title: '项目会话（现场 + 历史）', sub: '合并展示项目目录及子目录下的活终端与历史 CLI 对话，按会话去重', id: 'project-live-terminals', tools: wallLink, body });
   const visible = () => router.current.page === 'projects' && router.current.parts?.[1] === 'runs' && !router.current.parts?.[2];
   const context = () => JSON.stringify([api.token?.(), projectId, store.view.snapshot?.projects?.find(p => p.id === projectId)?.workspace,
@@ -236,7 +237,7 @@ export function createLiveTerminals({ api, store, router }) {
     void connect('observe');
   }
   router.subscribe(() => { if (!visible()) { clearTimeout(timer); revision++; closeTerminal(); } });
-  return { el, show(id) { if (id !== projectId) { projectId = id; wallLink.href = id && id !== 'all' ? `/terminals.html?projectId=${encodeURIComponent(id)}` : '/terminals.html'; revision++; rows = []; historyRows = []; closeTerminal(); signature = context(); } if (visible()) { void load(); void loadHistory(); } }, update() {
+  return { el, show(id) { if (id !== projectId) { projectId = id; revision++; rows = []; historyRows = []; closeTerminal(); signature = context(); } if (visible()) { void load(); void loadHistory(); } }, update() {
     const key = context(); if (key !== signature) { signature = key; revision++; rows = []; historyRows = []; closeTerminal(); if (visible()) { void load(); void loadHistory(); } }
   } };
 }

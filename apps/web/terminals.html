@@ -21,6 +21,8 @@
       --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
       --sans: system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     }
+    [hidden] { display: none !important; }
+    .xterm { text-spacing-trim: space-all; }
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 13px; overflow: hidden; }
     .app { display: grid; grid-template-rows: 46px minmax(0, 1fr); height: 100vh; }
@@ -143,13 +145,20 @@
       font-family: var(--mono); font-size: 11.5px; line-height: 1.5; white-space: pre; color: var(--text);
     }
 
-    .auth-overlay {
-      position: fixed; inset: 0; background: rgba(20, 20, 19, 0.55); z-index: 50;
-      display: flex; align-items: center; justify-content: center;
+    @media (max-width: 950px) {
+      .app { grid-template-rows: auto minmax(0, 1fr); }
+      .topbar, .top-left, .top-right { flex-wrap: wrap; }
+      .topbar { padding: 6px; gap: 4px; }
+      .pane-sidebar { width: min(200px, 30vw); }
+      .files-sidebar { width: min(320px, 34vw); }
     }
-    .auth-card {
-      background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-      padding: 20px; width: min(360px, 92vw); display: flex; flex-direction: column; gap: 10px;
+    @media (max-width: 620px) {
+      .title-wrap { max-width: 44vw; }
+      .seg button, .btn { padding: 4px 6px; }
+      .top-left, .top-right { gap: 4px; }
+      .body { position: relative; }
+      .files-sidebar { position: absolute; inset: 0 0 0 auto; width: 78vw; max-width: none; z-index: 2; }
+      .multi-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -159,12 +168,15 @@
       <div class="top-left">
         <div class="seg" id="mode-seg">
           <button data-mode="single" type="button">单窗格</button>
-          <button data-mode="full" class="active" type="button">完整界面</button>
-          <button data-mode="multi" type="button">多屏</button>
+          <button data-mode="full" type="button">完整界面</button>
+          <button data-mode="multi" class="active" type="button">多屏</button>
         </div>
+        <select id="machine-select" aria-label="执行机" class="btn" hidden></select>
+        <select id="session-select" aria-label="Herdr 会话" class="btn" hidden></select>
+        <button class="btn" id="start-host" type="button" hidden>启动终端宿主</button>
         <div class="title-wrap">
-          <div class="title-main" id="top-title">正在连接 Herdr 完整客户端…</div>
-          <div class="title-sub" id="top-sub">本地与 Web 多端同时在线</div>
+          <div class="title-main" id="top-title">正在连接执行机…</div>
+          <div class="title-sub" id="top-sub"></div>
         </div>
       </div>
       <div class="top-right">
@@ -174,7 +186,7 @@
         <button class="btn" id="btn-theme" type="button" title="切换终端明暗主题">🌓</button>
         <button class="btn active" id="btn-files" type="button">📁 文件</button>
         <button class="btn" id="btn-refresh" type="button">↻</button>
-        <a class="btn" href="/#projects/all/runs">← 工作台</a>
+
       </div>
     </header>
 
@@ -242,18 +254,12 @@
     </div>
   </div>
 
-  <div class="auth-overlay" id="auth-overlay" hidden>
-    <div class="auth-card">
-      <strong>需要工作台访问令牌</strong>
-      <input class="input" id="token-input" type="password" placeholder="输入 SUPER_MARIO_TOKEN" />
-      <button class="btn primary" id="token-save" type="button">连接</button>
-    </div>
-  </div>
-
   <script src="/vendor/xterm.js"></script>
-  <script>
+  <script type="module">
+    import { createApi } from '/js/lib/api.js';
+    const client = window.frameElement?.workbenchApi ?? createApi();
     const enc = text => btoa(Array.from(new TextEncoder().encode(text), b => String.fromCharCode(b)).join(''));
-    const dec = b64 => new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0)));
+    const dec = b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
     const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const qs = new URLSearchParams(location.search);
     const filterProjectId = qs.get('projectId') || '';
@@ -261,33 +267,16 @@
     const LIGHT_THEME = { background: '#FAF9F5', foreground: '#1C1C1A', cursor: '#D97757', selectionBackground: '#E8DDD3' };
     const DARK_THEME = { background: '#111317', foreground: '#E6EDF3', cursor: '#D97757', selectionBackground: '#2A3142' };
 
-    function getToken() {
-      const fromUrl = qs.get('token') || new URLSearchParams(location.hash.replace(/^#/, '')).get('token');
-      if (fromUrl) return fromUrl;
-      try {
-        const saved = JSON.parse(localStorage.getItem('super-mario-token') || 'null');
-        if (saved?.value && (!saved.expiresAt || saved.expiresAt > Date.now())) return saved.value;
-      } catch {}
-      return '';
-    }
-
-    async function api(method, path, body) {
-      const token = getToken();
-      const res = await fetch('/api/v1' + path, {
-        method,
-        headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(body ? { 'content-type': 'application/json' } : {}) },
-        ...(body ? { body: JSON.stringify(body) } : {}),
-      });
-      if (res.status === 401) { document.getElementById('auth-overlay').hidden = false; throw new Error('unauthorized'); }
-      document.getElementById('auth-overlay').hidden = true;
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || '请求失败');
-      return data;
-    }
+    const api = (method, path, body) => client(path, { method, body });
     const callMachine = (machineId, method, params) => api('POST', `/machines/${encodeURIComponent(machineId)}/call`, { method, params });
     const readMachineCode = (machineId, cwd, kind, path = '') => api('GET', `/machines/${encodeURIComponent(machineId)}/code?cwd=${encodeURIComponent(cwd)}&kind=${encodeURIComponent(kind)}&path=${encodeURIComponent(path)}`);
 
-    let mode = 'full';
+    let mode = 'multi';
+    let selectedSession = '';
+    let inventoryReady = false;
+    let inventoryRevision = 0;
+    let treeRevision = 0;
+    let viewerRevision = 0;
     let dark = false;
     let machines = [];
     let activeMachine = null;
@@ -295,9 +284,8 @@
     let selectedPane = null;
     let currentProject = null;
 
-    // Active leases
-    let fullConn = null;   // { machineId, connectionId, term, timer, epoch }
-    let singleConn = null; // { machineId, pane, connectionId, mode, term, timer, epoch }
+    let fullConn = null;
+    let singleConn = null;
     let multiConns = [];
 
     // File browser state
@@ -318,154 +306,120 @@
       return { cols, rows };
     }
 
-    async function releaseConn(conn) {
+    function releaseConn(conn) {
       if (!conn) return;
-      conn.epoch++;
-      clearTimeout(conn.timer);
-      if (conn.ws) { try { conn.ws.close(); } catch {} conn.ws = null; }
-      const id = conn.connectionId;
-      conn.connectionId = null;
-      if (id) { try { await callMachine(conn.machineId, 'terminal.live.release', { connectionId: id }); } catch {} }
-      conn.term?.dispose();
+      conn.ready = false;
+      conn.ws.onmessage = null;
+      conn.ws.onclose = null;
+      conn.ws.close();
+      conn.term.dispose();
     }
 
     function liveWsUrl(params) {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const u = new URL(`${proto}//${location.host}/api/v1/live-terminal`);
-      const token = getToken();
+      const token = client.token();
       if (token) u.searchParams.set('token', token);
       for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') u.searchParams.set(k, String(v));
       return u.href;
     }
 
-    async function stopAllModes() {
-      await releaseConn(fullConn); fullConn = null;
-      await releaseConn(singleConn); singleConn = null;
-      for (const c of multiConns) await releaseConn(c);
+    function stopAllModes() {
+      releaseConn(fullConn);
+      releaseConn(singleConn);
+      multiConns.forEach(releaseConn);
+      fullConn = singleConn = null;
       multiConns = [];
-      document.getElementById('full-term').innerHTML = '';
-      document.getElementById('single-term').innerHTML = '';
-      document.getElementById('multi-grid').innerHTML = '';
+      for (const id of ['full-term', 'single-term', 'multi-grid']) document.getElementById(id).replaceChildren();
+      updateControlButton();
     }
 
-    async function startFullMode() {
-      if (!activeMachine) { setConnStatus(false, '无在线执行机'); return; }
-      const container = document.getElementById('full-term');
-      container.innerHTML = '';
+    function updateMultiStatus() {
+      const ready = multiConns.filter(conn => conn.ready).length;
+      setConnStatus(ready === multiConns.length, '多屏观察 · 已连接 ' + ready + '/' + multiConns.length);
+    }
+
+    function connectTerminal(container, openMode, pane) {
+      const full = openMode === 'full';
+      const interactive = openMode !== 'observe';
       const { cols, rows } = calcColsRows(container);
       const term = new window.Terminal({
-        convertEol: false, cursorBlink: true, fontSize: 13, cols, rows,
-        theme: dark ? DARK_THEME : LIGHT_THEME,
+        convertEol: false, cursorBlink: interactive, disableStdin: !interactive,
+        rightClickSelectsWord: false,
+        fontSize: mode === 'multi' ? 11.5 : 13, cols, rows, theme: dark ? DARK_THEME : LIGHT_THEME,
       });
       term.open(container);
-      const ws = new WebSocket(liveWsUrl({ machineId: activeMachine.id, mode: 'full', cols, rows }));
-      const conn = { machineId: activeMachine.id, connectionId: null, ws, term, timer: null, epoch: 1 };
-      fullConn = conn;
-      setConnStatus(false, '正在接入 Herdr 完整界面…');
-      document.getElementById('top-title').textContent = `${activeMachine.name} · Herdr 完整界面`;
-      document.getElementById('top-sub').textContent = fileRootCwd || 'WebSocket 实时流 · 与本地客户端同步';
-
+      const machineId = activeMachine.id;
+      const ws = new WebSocket(liveWsUrl({ machineId, session: selectedSession, mode: openMode, cols, rows,
+        paneId: pane?.paneId, terminalId: pane?.terminalId, cwd: pane?.cwd }));
+      const conn = { ws, term, mode: openMode, ready: false, machineId, session: selectedSession };
       term.onData(data => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'input', data: enc(data) }));
+        if (interactive && conn.ready && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'input', data: enc(data) }));
       });
-      ws.onmessage = ev => {
-        if (fullConn !== conn) return;
-        const msg = JSON.parse(ev.data);
-        if (msg.type === 'ready') { setConnStatus(true, '已连接 (WS)'); term.focus(); }
-        else if (msg.type === 'frame') { term.write(dec(msg.data)); }
-        else if (msg.type === 'error') { setConnStatus(false, '断开：' + msg.message); term.write(`\r\n[断开] ${msg.message}\r\n`); }
+      if (full) container.oncontextmenu = event => { if (!event.shiftKey) event.preventDefault(); };
+      const disconnected = reason => {
+        conn.ready = false;
+        updateControlButton();
+        if (mode === 'multi') updateMultiStatus();
+        else setConnStatus(false, reason);
+        term.writeln('\r\n[' + reason + ']');
       };
-      ws.onclose = () => { if (fullConn === conn) setConnStatus(false, '连接已关闭'); };
+      let failure = '';
+      ws.onmessage = ev => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'ready') {
+          conn.ready = true;
+          conn.session = msg.session || conn.session;
+          if (mode === 'multi') updateMultiStatus();
+          else setConnStatus(true, interactive ? '已连接（可输入）' : '已连接（只读）');
+          updateControlButton();
+          if (interactive) term.focus();
+          if (full) void syncFocus(conn);
+        } else if (msg.type === 'frame') {
+          if (!full && msg.width && msg.height && (term.cols !== msg.width || term.rows !== msg.height)) term.resize(msg.width, msg.height);
+          if (!full && msg.full && conn.painted) term.write('\x1bc');
+          term.write(dec(msg.data));
+          conn.painted = true;
+        } else if (msg.type === 'error') {
+          failure = msg.message || '终端连接失败';
+          disconnected(failure);
+        }
+      };
+      ws.onclose = () => { if (!failure) disconnected('连接已关闭'); };
+      return conn;
     }
 
-    async function startSingleMode(pane, openMode = 'observe') {
-      await releaseConn(singleConn); singleConn = null;
+    function startSingleMode(pane, openMode = 'observe') {
+      releaseConn(singleConn);
+      singleConn = null;
       if (!pane) { setConnStatus(false, '请选择左侧终端'); return; }
       selectedPane = pane;
       renderPaneList();
       const container = document.getElementById('single-term');
-      container.innerHTML = '';
-      const term = new window.Terminal({
-        convertEol: false, cursorBlink: true, fontSize: 13,
-        theme: dark ? DARK_THEME : LIGHT_THEME,
-      });
-      term.open(container);
-      const conn = { machineId: pane.machineId, pane, connectionId: null, mode: openMode, term, timer: null, epoch: 1, writes: Promise.resolve() };
-      singleConn = conn;
+      container.replaceChildren();
+      singleConn = connectTerminal(container, openMode, pane);
       document.getElementById('top-title').textContent = pane.title;
-      document.getElementById('top-sub').textContent = `${pane.agent} · ${pane.machineName} · ${pane.cwd}`;
-      updateControlButton();
+      document.getElementById('top-sub').textContent = pane.cwd;
+      setRoot(pane.cwd);
       setConnStatus(false, openMode === 'control' ? '正在接管…' : '正在观察…');
-      if (pane.cwd && pane.cwd !== fileRootCwd) { fileRootCwd = pane.cwd; fileRelPath = ''; void loadFileTree(); }
-
-      try {
-        const res = await callMachine(pane.machineId, 'terminal.live.open', { paneId: pane.paneId, terminalId: pane.terminalId, cwd: pane.cwd, mode: openMode });
-        if (singleConn !== conn) { await callMachine(pane.machineId, 'terminal.live.release', { connectionId: res.connectionId }).catch(() => {}); return; }
-        conn.connectionId = res.connectionId;
-        setConnStatus(true, openMode === 'control' ? '已接管' : '已连接（只读）');
-        updateControlButton();
-        if (openMode === 'control') term.focus();
-
-        term.onData(data => {
-          if (conn.mode !== 'control' || !conn.connectionId) return;
-          conn.writes = conn.writes.then(() => callMachine(conn.machineId, 'terminal.live.input', { connectionId: conn.connectionId, data: enc(data) })).catch(() => {});
-        });
-
-        const poll = async (after = -1) => {
-          if (singleConn !== conn || !conn.connectionId) return;
-          try {
-            const out = await callMachine(conn.machineId, 'terminal.live.frames', { connectionId: conn.connectionId, after });
-            if (singleConn !== conn) return;
-            let seq = after;
-            for (const f of out.frames || []) {
-              if (f.width && f.height && (term.cols !== f.width || term.rows !== f.height)) term.resize(f.width, f.height);
-              term.write(dec(f.data)); seq = f.seq;
-            }
-            conn.timer = setTimeout(() => poll(seq), 180);
-          } catch (err) {
-            if (singleConn === conn) setConnStatus(false, '已断开');
-          }
-        };
-        void poll(-1);
-      } catch (err) {
-        setConnStatus(false, '接入失败');
-        term.write(`\r\n无法连接终端：${err.message}\r\n`);
-      }
+      updateControlButton();
     }
 
-    async function startMultiMode() {
+    function startMultiMode() {
       const grid = document.getElementById('multi-grid');
-      grid.innerHTML = '';
       const picks = panes.slice(0, 4);
-      if (!picks.length) { grid.innerHTML = '<div style="padding:24px;color:var(--muted);">当前没有活终端</div>'; return; }
-      setConnStatus(true, `多屏观察 (${picks.length})`);
+      document.getElementById('top-title').textContent = activeMachine.name;
+      document.getElementById('top-sub').textContent = selectedSession;
+      setRoot(currentProject?.workspace?.cwd || selectedPane?.cwd || '');
+      if (!picks.length) { setConnStatus(false, '当前没有活终端'); return; }
+      setConnStatus(false, '多屏观察 · ' + picks.length + ' 个窗格');
       for (const pane of picks) {
         const tile = document.createElement('div');
         tile.className = 'multi-tile';
-        tile.innerHTML = `<div class="multi-tile-hdr"><strong>${esc(pane.title)}</strong><button class="btn" style="padding:2px 7px;font-size:11px;">单屏接管</button></div><div style="min-height:0;overflow:auto;padding:4px;"></div>`;
+        tile.innerHTML = `<div class="multi-tile-hdr"><strong>${esc(pane.title)}</strong><button class="btn">单独查看</button></div><div style="min-height:0;overflow:auto;padding:4px;"></div>`;
         grid.append(tile);
-        tile.querySelector('button').addEventListener('click', () => { selectedPane = pane; void switchMode('single'); });
-        const term = new window.Terminal({ convertEol: false, fontSize: 11.5, theme: dark ? DARK_THEME : LIGHT_THEME });
-        term.open(tile.lastElementChild);
-        const conn = { machineId: pane.machineId, connectionId: null, term, timer: null, epoch: 1 };
-        multiConns.push(conn);
-        callMachine(pane.machineId, 'terminal.live.open', { paneId: pane.paneId, terminalId: pane.terminalId, cwd: pane.cwd, mode: 'observe' })
-          .then(res => {
-            conn.connectionId = res.connectionId;
-            const poll = async (after = -1) => {
-              if (!conn.connectionId) return;
-              try {
-                const out = await callMachine(conn.machineId, 'terminal.live.frames', { connectionId: conn.connectionId, after });
-                let seq = after;
-                for (const f of out.frames || []) {
-                  if (f.width && f.height && (term.cols !== f.width || term.rows !== f.height)) term.resize(f.width, f.height);
-                  term.write(dec(f.data)); seq = f.seq;
-                }
-                conn.timer = setTimeout(() => poll(seq), 280);
-              } catch {}
-            };
-            void poll(-1);
-          }).catch(err => term.write(`连接失败：${err.message}`));
+        tile.querySelector('button').addEventListener('click', () => { selectedPane = pane; switchMode('single'); });
+        multiConns.push(connectTerminal(tile.lastElementChild, 'observe', pane));
       }
     }
 
@@ -475,20 +429,28 @@
       const isCtrl = singleConn?.mode === 'control';
       btn.textContent = isCtrl ? '停止接管' : '接管输入';
       btn.classList.toggle('ctrl-on', isCtrl);
+      const writable = mode === 'single' ? isCtrl && singleConn.ready : mode === 'full' && fullConn?.ready;
+      for (const field of document.getElementById('cmd-form').elements) field.disabled = !writable;
     }
 
-    async function switchMode(next) {
+    function switchMode(next) {
       mode = next;
-      await stopAllModes();
+      stopAllModes();
       document.querySelectorAll('#mode-seg button').forEach(b => b.classList.toggle('active', b.dataset.mode === next));
-      document.getElementById('pane-sidebar').hidden = next === 'full';
+      document.getElementById('pane-sidebar').hidden = next === 'multi';
       document.getElementById('full-term').hidden = next !== 'full';
       document.getElementById('single-term').hidden = next !== 'single';
       document.getElementById('multi-grid').hidden = next !== 'multi';
-      updateControlButton();
-      if (next === 'full') await startFullMode();
-      else if (next === 'single') await startSingleMode(selectedPane || panes[0], 'observe');
-      else await startMultiMode();
+      document.getElementById('cmd-form').hidden = next === 'multi';
+      if (!activeMachine || !inventoryReady) return;
+      if (next === 'full') {
+        setConnStatus(false, '正在连接…');
+        document.getElementById('top-title').textContent = activeMachine.name + ' · ' + selectedSession;
+        document.getElementById('top-sub').textContent = '';
+        setRoot('');
+        fullConn = connectTerminal(document.getElementById('full-term'), 'full');
+      } else if (next === 'single') startSingleMode(selectedPane || panes[0]);
+      else startMultiMode();
     }
 
     function renderPaneList() {
@@ -502,13 +464,32 @@
       list.querySelectorAll('.pane-card').forEach(el => {
         el.addEventListener('click', () => {
           const target = panes.find(p => p.terminalId === el.dataset.tid);
-          if (target) void startSingleMode(target, 'observe');
+          if (!target) return;
+          if (mode === 'full') {
+            const conn = fullConn;
+            if (!conn?.ready || !activeMachine.capabilities.includes('terminal.live.focus')) return;
+            callMachine(conn.machineId, 'terminal.live.focus', {
+              ...(conn.session ? { session: conn.session } : {}), paneId: target.paneId, terminalId: target.terminalId, cwd: target.cwd,
+            }).then(() => { if (fullConn === conn) void syncFocus(conn); }).catch(error => {
+              if (fullConn === conn) document.getElementById('top-sub').textContent = error.message;
+            });
+          } else { selectedPane = target; switchMode('single'); }
         });
       });
     }
 
     // —— Right File & Git Sidebar ——
+    function setRoot(cwd) {
+      if (fileRootCwd === cwd) return;
+      fileRootCwd = cwd;
+      fileRelPath = selectedFile = '';
+      viewerRevision++;
+      document.getElementById('file-viewer').hidden = true;
+      void loadFileTree();
+    }
+
     async function loadFileTree() {
+      const revision = ++treeRevision;
       const listEl = document.getElementById('tree-list');
       if (!activeMachine || !fileRootCwd) {
         document.getElementById('files-root').textContent = '未定位目录';
@@ -518,6 +499,7 @@
       document.getElementById('files-root').textContent = fileRelPath ? `${fileRootCwd}/${fileRelPath}` : fileRootCwd;
       try {
         const res = await readMachineCode(activeMachine.id, fileRootCwd, 'tree', fileRelPath);
+        if (revision !== treeRevision) return;
         const entries = (res.entries || []).sort((a, b) => Number(b.directory) - Number(a.directory) || a.name.localeCompare(b.name));
         listEl.innerHTML = entries.map(e => `<div class="tree-row ${selectedFile === e.path ? 'active' : ''}" data-path="${esc(e.path)}" data-dir="${e.directory ? '1' : '0'}">
           <span>${e.directory ? '📁' : '📄'}</span><span>${esc(e.name)}</span>
@@ -529,12 +511,14 @@
           });
         });
       } catch (err) {
+        if (revision !== treeRevision) return;
         listEl.innerHTML = `<div style="padding:14px;color:var(--muted);">读取目录失败：${esc(err.message)}</div>`;
       }
     }
 
     async function openFileViewer() {
       if (!activeMachine || !fileRootCwd || !selectedFile) return;
+      const revision = ++viewerRevision;
       const viewer = document.getElementById('file-viewer');
       viewer.hidden = false;
       document.getElementById('viewer-name').textContent = `${selectedFile}${viewerShowingDiff ? ' (Git Diff)' : ''}`;
@@ -542,29 +526,98 @@
       document.getElementById('viewer-pre').textContent = '读取中…';
       try {
         const res = await readMachineCode(activeMachine.id, fileRootCwd, viewerShowingDiff ? 'diff' : 'file', selectedFile);
-        document.getElementById('viewer-pre').textContent = viewerShowingDiff ? (res.diff || '（相对 HEAD 无改动）') : (res.text || '');
+        if (revision !== viewerRevision) return;
+        document.getElementById('viewer-pre').textContent = viewerShowingDiff ? (res.text || '（相对 HEAD 无改动）') : (res.text || '');
       } catch (err) {
+        if (revision !== viewerRevision) return;
         document.getElementById('viewer-pre').textContent = `无法读取：${err.message}`;
       }
     }
 
-    async function bootstrap() {
+    const machineSelect = document.getElementById('machine-select');
+    const sessionSelect = document.getElementById('session-select');
+    const startHost = document.getElementById('start-host');
+
+    async function loadMachine(machine, preferredSession = '') {
+      const revision = ++inventoryRevision;
+      stopAllModes();
+      activeMachine = machine;
+      selectedSession = '';
+      inventoryReady = false;
+      selectedPane = null;
+      panes = [];
+      renderPaneList();
+      setRoot('');
+      sessionSelect.replaceChildren();
+      sessionSelect.hidden = true;
+      startHost.hidden = true;
+      document.getElementById('top-title').textContent = machine?.name || '无在线执行机';
+      document.getElementById('top-sub').textContent = '';
+      if (!machine) { setConnStatus(false, '执行机离线'); return; }
+      setConnStatus(false, '正在读取终端会话…');
       try {
-        const snap = await api('GET', '/snapshot');
-        currentProject = filterProjectId ? (snap.projects || []).find(p => p.id === filterProjectId && !p.archivedAt) : null;
-        machines = (snap.machines || []).filter(m => m.online);
-        activeMachine = (currentProject?.workspace && machines.find(m => m.id === currentProject.workspace.machineId)) || machines[0] || null;
-        if (activeMachine) {
-          const res = await callMachine(activeMachine.id, 'terminal.live.list', currentProject?.workspace ? { cwd: currentProject.workspace.cwd } : {});
-          panes = (res.panes || []).map(p => ({ ...p, machineId: activeMachine.id, machineName: activeMachine.name }));
-          selectedPane = panes[0] || null;
-          fileRootCwd = currentProject?.workspace?.cwd || selectedPane?.cwd || '';
+        if (machine.capabilities.includes('terminal.live.sessions')) {
+          const { sessions } = await callMachine(machine.id, 'terminal.live.sessions', {});
+          if (revision !== inventoryRevision) return;
+          const running = sessions.filter(s => s.running);
+          if (!running.length) {
+            startHost.hidden = !machine.capabilities.includes('terminal.host.start');
+            setConnStatus(false, '没有运行中的 Herdr 会话');
+            return;
+          }
+          for (const session of running) sessionSelect.add(new Option(session.name, session.name));
+          selectedSession = running.find(s => s.name === preferredSession)?.name || running.find(s => s.current)?.name
+            || running.find(s => s.default)?.name || running[0].name;
+          sessionSelect.value = selectedSession;
+          sessionSelect.hidden = false;
         }
+        const result = await callMachine(machine.id, 'terminal.live.list', {
+          ...(selectedSession ? { session: selectedSession } : {}),
+          ...(currentProject?.workspace ? { cwd: currentProject.workspace.cwd } : {}),
+        });
+        if (revision !== inventoryRevision) return;
+        inventoryReady = true;
+        panes = result.panes || [];
+        selectedPane = panes.find(p => p.focused) || panes[0] || null;
         renderPaneList();
-        void loadFileTree();
-        await switchMode(mode);
-      } catch {}
+        switchMode(mode);
+      } catch (error) {
+        if (revision !== inventoryRevision) return;
+        setConnStatus(false, error.message);
+        if (!selectedSession) startHost.hidden = !machine.capabilities.includes('terminal.host.start');
+      }
     }
+
+    async function bootstrap() {
+      const revision = ++inventoryRevision;
+      try {
+        const snap = await api('GET', '/state');
+        if (revision !== inventoryRevision) return;
+        currentProject = filterProjectId ? (snap.projects || []).find(p => p.id === filterProjectId && !p.archivedAt) : null;
+        machines = (snap.machines || []).filter(m => m.online && (!filterProjectId || m.id === currentProject?.workspace?.machineId));
+        machineSelect.replaceChildren(...machines.map(m => new Option(m.name, m.id)));
+        machineSelect.hidden = machines.length < 2;
+        const machine = machines.find(m => m.id === activeMachine?.id) || machines[0] || null;
+        if (machine) machineSelect.value = machine.id;
+        await loadMachine(machine, selectedSession);
+      } catch (error) {
+        if (revision === inventoryRevision) { stopAllModes(); setConnStatus(false, error.message); }
+      }
+    }
+
+    machineSelect.onchange = () => void loadMachine(machines.find(m => m.id === machineSelect.value));
+    sessionSelect.onchange = () => void loadMachine(activeMachine, sessionSelect.value);
+    startHost.onclick = async () => {
+      const machine = activeMachine;
+      if (!machine || startHost.disabled) return;
+      startHost.disabled = true;
+      try {
+        await callMachine(machine.id, 'terminal.host.start', {});
+        if (machine === activeMachine) await loadMachine(machine);
+      } catch (error) {
+        if (machine === activeMachine) setConnStatus(false, error.message);
+      } finally { startHost.disabled = false; }
+    };
 
     // Events
     document.querySelectorAll('#mode-seg button').forEach(b => b.addEventListener('click', () => void switchMode(b.dataset.mode)));
@@ -574,7 +627,7 @@
       const sb = document.getElementById('files-sidebar');
       sb.hidden = !sb.hidden;
       e.target.classList.toggle('active', !sb.hidden);
-      if (mode === 'full' && fullConn?.connectionId) triggerFullResize();
+      if (mode === 'full') triggerFullResize();
     });
     document.getElementById('btn-theme').addEventListener('click', () => {
       dark = !dark;
@@ -602,49 +655,48 @@
     document.getElementById('viewer-close').addEventListener('click', () => { document.getElementById('file-viewer').hidden = true; });
 
     // Quick send bar works in both Full (WS) and Single modes
-    async function sendRaw(str) {
-      if (mode === 'full' && fullConn?.ws?.readyState === WebSocket.OPEN) {
-        fullConn.ws.send(JSON.stringify({ type: 'input', data: enc(str) }));
-      } else if (mode === 'single' && selectedPane) {
-        if (singleConn?.mode !== 'control') await startSingleMode(selectedPane, 'control');
-        if (singleConn?.connectionId) await callMachine(singleConn.machineId, 'terminal.live.input', { connectionId: singleConn.connectionId, data: enc(str) });
-      }
+    function sendRaw(str) {
+      const conn = mode === 'full' ? fullConn : singleConn;
+      if (!conn?.ready || conn.mode === 'observe' || conn.ws.readyState !== WebSocket.OPEN) return false;
+      conn.ws.send(JSON.stringify({ type: 'input', data: enc(str) }));
+      return true;
     }
-    document.getElementById('cmd-form').addEventListener('submit', async (e) => {
+    document.getElementById('cmd-form').addEventListener('submit', e => {
       e.preventDefault();
       const input = document.getElementById('cmd-input');
-      const text = input.value.trim();
-      if (!text) return;
-      await sendRaw(text + '\r');
-      input.value = '';
+      if (input.value && sendRaw(input.value + '\r')) input.value = '';
     });
-    document.getElementById('btn-ctrlc').addEventListener('click', () => void sendRaw('\x03'));
+    document.getElementById('btn-ctrlc').addEventListener('click', () => sendRaw('\x03'));
 
     let resizeTimer;
     function triggerFullResize() {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
-        if (mode !== 'full' || !fullConn?.ws || fullConn.ws.readyState !== WebSocket.OPEN) return;
+        if (mode !== 'full' || !fullConn?.ready || fullConn.ws.readyState !== WebSocket.OPEN) return;
         const { cols, rows } = calcColsRows(document.getElementById('full-term'));
         fullConn.term.resize(cols, rows);
         fullConn.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
       }, 120);
     }
 
-    // Auto-sync right file tree when Herdr focused pane switches
-    setInterval(async () => {
-      if (mode !== 'full' || !activeMachine || document.hidden) return;
+    async function syncFocus(conn) {
+      if (!conn?.ready || conn.pendingFocus || document.hidden) return;
+      conn.pendingFocus = true;
       try {
-        const res = await callMachine(activeMachine.id, 'terminal.live.list', {});
+        const res = await callMachine(conn.machineId, 'terminal.live.list', conn.session ? { session: conn.session } : {});
+        if (fullConn !== conn || !conn.ready) return;
         const focused = (res.panes || []).find(p => p.focused);
-        if (focused?.cwd && focused.cwd !== fileRootCwd) {
-          fileRootCwd = focused.cwd;
-          fileRelPath = '';
-          document.getElementById('top-sub').textContent = `${focused.title} · ${focused.cwd}`;
-          void loadFileTree();
-        }
-      } catch {}
-    }, 2500);
+        selectedPane = focused || null;
+        const cwd = currentProject?.workspace?.cwd;
+        panes = (res.panes || []).filter(p => !cwd || p.cwd === cwd || p.cwd.startsWith(cwd.replace(/\/$/, '') + '/'));
+        renderPaneList();
+        setRoot(focused?.cwd || '');
+        document.getElementById('top-sub').textContent = focused ? focused.title + ' · ' + focused.cwd : '';
+      } catch (error) {
+        if (fullConn === conn) { setRoot(''); document.getElementById('top-sub').textContent = error.message; }
+      } finally { conn.pendingFocus = false; }
+    }
+    setInterval(() => void syncFocus(fullConn), 2500);
 
     // Auto-takeover drawer
     async function loadTakeover() {
@@ -693,14 +745,11 @@
       });
     }
     window.addEventListener('resize', triggerFullResize);
-    window.addEventListener('beforeunload', () => { void stopAllModes(); });
-    document.getElementById('token-save').addEventListener('click', () => {
-      const val = document.getElementById('token-input').value.trim();
-      if (!val) return;
-      localStorage.setItem('super-mario-token', JSON.stringify({ value: val, expiresAt: Date.now() + 30 * 86400000 }));
-      void bootstrap();
-    });
-
+    if (matchMedia('(max-width: 950px)').matches) {
+      document.getElementById('files-sidebar').hidden = true;
+      document.getElementById('btn-files').classList.remove('active');
+    }
+    window.addEventListener('pagehide', stopAllModes);
     void bootstrap();
   </script>
 </body>

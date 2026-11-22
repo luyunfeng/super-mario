@@ -142,6 +142,9 @@ dialog { color: var(--text); }
   box-shadow: var(--shadow-pop);
 }
 .drawer[open] { display: flex; flex-direction: column; animation: drawer-in .18s ease-out; }
+.drawer.terminal-wall { width: 100vw; max-width: 100vw; }
+.terminal-wall .drawer__body { display: flex; padding: 0; }
+.terminal-wall iframe { flex: 1; min-width: 0; border: 0; }
 .drawer--wide { width: min(760px, 100vw); }
 .drawer::backdrop, .modal::backdrop { background: rgb(23 19 15 / 44%); backdrop-filter: blur(1px); }
 .drawer__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line); background: var(--surface); }

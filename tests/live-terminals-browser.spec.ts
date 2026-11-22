@@ -133,3 +133,79 @@ rl.createInterface({input:process.stdin}).on('line',line=>{const data=JSON.parse
     assert.match(await readFile(join(dir, 'opens'), 'utf8'), /^observe\nobserve\ncontrol\nobserve\n$/);
   } finally { await browser?.close(); await node.close(); await live.close(); await server.close(); await rm(dir, { recursive: true, force: true }); }
 });
+
+test('工作台两个入口原地打开多屏，切换命名会话，完整界面聚焦并释放连接', { timeout: 40000 }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-wall-browser-'));
+  const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: join(dir, 'server'), demo: true, token: 'wall-fixture' });
+  const opened: Array<{ session: unknown; mode: unknown }> = [];
+  const leases = new Set<string>();
+  let selectedPane = 'pane-a', started = false;
+  const lease = (session: unknown, mode: unknown) => {
+    opened.push({ session, mode });
+    const connectionId = 'lease-' + opened.length;
+    leases.add(connectionId);
+    return { connectionId, session: String(session) };
+  };
+  const node = startAgentNode({
+    url: server.url, token: 'wall-fixture', machineId: 'wall-machine', name: '测试执行机',
+    dataDir: join(dir, 'node'), executors: [],
+    handlers: {
+      'terminal.host.start': async () => { started = true; return { started }; },
+      'terminal.live.sessions': async () => ({ sessions: started ? [
+        { name: 'first', running: true, default: true }, { name: 'second', running: true, default: false },
+      ] : [] }),
+      'terminal.live.list': async ({ session }) => ({ panes: ['pane-a', 'pane-b'].map(paneId => ({
+        paneId, terminalId: paneId, title: String(session) + ' ' + paneId, cwd: dir, agent: 'shell', focused: paneId === selectedPane,
+      })) }),
+      'terminal.live.open': async ({ session, mode }) => lease(session, mode),
+      'terminal.live.full.open': async ({ session }) => lease(session, 'full'),
+      'terminal.live.focus': async ({ session, paneId }) => {
+        assert.equal(session, 'second'); selectedPane = String(paneId); return { focused: true };
+      },
+      'terminal.live.frames': async () => ({ frames: [] }),
+      'terminal.live.release': async ({ connectionId }) => ({ released: leases.delete(String(connectionId)) }),
+    },
+  });
+  const project = server.app.projects.create({ name: '终端测试项目', workspace: { machineId: 'wall-machine', cwd: dir } });
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  try {
+    browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+    await expect.poll(() => server.machines.list().some(m => m.id === 'wall-machine' && m.online)).toBe(true);
+    const page = await browser.newPage();
+    await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+    const errors: string[] = []; page.on('pageerror', err => errors.push(err.message));
+    await page.goto(server.url + '/#projects/' + project.id + '/runs?token=wall-fixture');
+    const top = page.getByRole('button', { name: '多屏现场', exact: true });
+    await expect(top).toBeVisible();
+    const before = page.url();
+    await page.evaluate(() => localStorage.removeItem('super-mario-token'));
+    await page.locator('#project-live-terminals').getByRole('button', { name: '多屏现场墙' }).click();
+    const wall = page.getByRole('dialog', { name: '多屏现场', exact: true });
+    const frame = wall.frameLocator('iframe');
+    await expect(frame.getByRole('button', { name: '启动终端宿主' })).toBeVisible();
+    await frame.getByRole('button', { name: '启动终端宿主' }).click();
+    await expect(frame.locator('.multi-tile')).toHaveCount(2);
+    await expect.poll(() => opened.filter(c => c.session === 'first' && c.mode === 'observe').length).toBe(2);
+    assert.equal(page.url(), before);
+    assert.equal(page.context().pages().length, 1);
+    assert.ok(!(await wall.locator('iframe').getAttribute('src'))?.includes('token'));
+    await expect(frame.locator('input[type=password]')).toHaveCount(0);
+    await frame.getByLabel('Herdr 会话').selectOption('second');
+    await expect(frame.locator('.multi-tile').first()).toContainText('second pane-a');
+    await frame.getByRole('button', { name: '完整界面' }).click();
+    await expect(frame.locator('#conn-text')).toContainText('可输入');
+    await frame.locator('.pane-card').filter({ hasText: 'second pane-b' }).click();
+    await expect(frame.locator('#top-sub')).toContainText('second pane-b');
+    assert.equal(opened.filter(c => c.mode === 'full' && c.session === 'second').length, 1);
+    await wall.getByRole('button', { name: '关闭', exact: true }).click();
+    await expect.poll(() => leases.size).toBe(0);
+    await top.click();
+    await expect(frame.locator('.multi-tile')).toHaveCount(2);
+    await wall.getByRole('button', { name: '关闭', exact: true }).click();
+    await expect.poll(() => leases.size).toBe(0);
+    assert.equal(page.url(), before);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser?.close(); await node.close(); await server.close(); await rm(dir, { recursive: true, force: true });
+  }
+});
