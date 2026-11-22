@@ -3,7 +3,7 @@ import { h } from './dom.js';
 
 function renderInline(line) {
   const parts = [];
-  const pattern = /(\[查看原文\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&source=[A-Za-z0-9_-]{1,128}(?:&line=[1-9][0-9]{0,8})?\)|\[查看修订\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&revision=(?:[a-f0-9]{40}|[a-f0-9]{64})\)|`[^`\n]+`|\*\*(?:[^*]|\*(?!\*))+?\*\*)/g;
+  const pattern = /(\[查看待办\]\(#projects\/[A-Za-z0-9_-]{1,128}\/todos\/detail\/[A-Za-z0-9_-]{1,128}\)|\[查看原文\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&source=[A-Za-z0-9_-]{1,128}(?:&line=[1-9][0-9]{0,8})?\)|\[查看修订\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&revision=(?:[a-f0-9]{40}|[a-f0-9]{64})\)|`[^`\n]+`|\*\*(?:[^*]|\*(?!\*))+?\*\*)/g;
   let last = 0;
   for (const match of line.matchAll(pattern)) {
     if (match.index > last) parts.push(line.slice(last, match.index));
@@ -59,7 +59,7 @@ export function renderFormattedText(raw) {
       h('p', { class: 'md-p' }, reference.passage));
     text = reference.body;
   }
-  const hasMarkdown = text.includes('\n') || text.includes('`') || text.includes('**') || /\[查看(?:原文|修订)\]\(/.test(text) || /^\s*(?:[-*]\s|\d+\.\s)/.test(text);
+  const hasMarkdown = text.includes('\n') || text.includes('`') || text.includes('**') || /\[查看(?:原文|修订|待办)\]\(/.test(text) || /^\s*(?:[-*]\s|\d+\.\s)/.test(text);
   if (!hasMarkdown) return quoted ? h('div', { class: 'md' }, quoted, text) : text;
 
   const blocks = quoted ? [quoted] : [];

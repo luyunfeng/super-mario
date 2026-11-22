@@ -740,6 +740,10 @@ export async function createWorkbench(config: AppConfig) {
     });
     return { page, items };
   }
+  function actionTodoLink(todo: Todo) {
+    const webPath = '#projects/' + encodeURIComponent(todo.projectId ?? 'all') + '/todos/detail/' + encodeURIComponent(todo.id);
+    return { webPath, webCitation: '[查看待办](' + webPath + ')' };
+  }
   async function knowledgeActionStatus(args: Record<string, unknown>, projectId?: string) {
     const { page, items } = await prepareKnowledgeActions(args, projectId);
     return { results: items.map(({ line, key }) => {
@@ -747,7 +751,7 @@ export async function createWorkbench(config: AppConfig) {
       if (!linkedId) return { actionLine: line, status: 'unlinked' };
       const todo = store.get<Todo>('todos', linkedId);
       if (!todo || todo.projectId !== page.projectId) return { actionLine: line, status: 'unavailable' };
-      return { actionLine: line, status: todo.completedAt ? 'completed' : 'open', todoId: todo.id, title: todo.title,
+      return { actionLine: line, status: todo.completedAt ? 'completed' : 'open', todoId: todo.id, title: todo.title, ...actionTodoLink(todo),
         ...(todo.completedAt ? { completedAt: todo.completedAt } : {}), ...(todo.dueAt ? { dueAt: todo.dueAt } : {}) };
     }) };
   }
@@ -759,12 +763,12 @@ export async function createWorkbench(config: AppConfig) {
       if (existing) {
         const todo = store.get<Todo>('todos', existing);
         if (!todo || todo.projectId !== page.projectId) throw new InputError('先前确认的待办已删除或移动，请人工核对', 409);
-        return { created: false, todo };
+        return { created: false, todo, ...actionTodoLink(todo) };
       }
       const todo = createTodo({ title: line, projectId: page.projectId, dueAt,
         notes: '来源：' + page.title + '\n知识页：' + page.id + '\n来源版本：' + page.updatedAt + '\n行动项原文：' + line }, false);
       store.put('knowledge.action-todos', key, todo.id);
-      return { created: true, todo };
+      return { created: true, todo, ...actionTodoLink(todo) };
     }));
     for (const result of results) if (result.created) changed('todos.changed', { id: result.todo.id });
     return results;

@@ -207,7 +207,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
       const labels = { open: '待验收', completed: '已验收', unlinked: '此行未关联待办', unavailable: '原待办不可读取' };
       replace(todoReceipt, results.map(row => h('span', { style: { display: 'block' } },
         row.actionLine + ' · ' + labels[row.status] + (row.title && row.title !== row.actionLine ? ' · ' + row.title : '') +
-        (row.dueAt ? ' · 登记期限 ' + row.dueAt : ''))));
+        (row.dueAt ? ' · 登记期限 ' + row.dueAt : ''), row.webPath && [' · ', h('a', { href: row.webPath }, '查看待办')])));
       note.textContent = '';
       todoReceipt.hidden = false;
     } catch (error) { note.textContent = '未能读取待办进度：' + error.message; }
@@ -228,7 +228,8 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
         const created = results.filter(row => row.created).length;
         note.textContent = '';
         todoReceipt.hidden = false;
-        todoReceipt.textContent = '已新建 ' + created + ' 项待办，已有 ' + (results.length - created) + ' 项。';
+        replace(todoReceipt, '已新建 ' + created + ' 项待办，已有 ' + (results.length - created) + ' 项。',
+          results.map(row => h('span', { style: { display: 'block' } }, row.todo.title, ' · ', h('a', { href: row.webPath }, '查看待办'))));
       } catch (error) { note.textContent = '未能确认行动项：' + error.message; }
     } });
   const save = Button({

@@ -370,6 +370,7 @@ test('正文多行行动项在确认后批量入待办，重试复用，失败�
     await expect(dialog).toContainText('已新建 ' + created + ' 项待办，已有 ' + (2 - created) + ' 项');
   }
   const existing = server.app.todos().find(todo => todo.title === lines[0])!;
+  await expect(dialog.getByRole('link', { name: '查看待办' }).first()).toHaveAttribute('href', '#projects/all/todos/detail/' + existing.id);
   const checkStatus = async () => {
     await dialog.locator('[name=content]').evaluate((el: HTMLTextAreaElement) => el.select());
     await dialog.getByRole('button', { name: '查看选中行的待办进度' }).click();
@@ -382,6 +383,21 @@ test('正文多行行动项在确认后批量入待办，重试复用，失败�
   server.app.store.remove('todos', existing.id);
   await checkStatus();
   await expect(dialog).toContainText('复核样本甲 · 原待办不可读取');
+  const detail = dialog.getByRole('link', { name: '查看待办' });
+  await expect(detail).toHaveCount(1);
+  const href = await detail.getAttribute('href');
+  await detail.click();
+  await expect(page.locator('#panel-todos').getByRole('heading', { name: lines[1] })).toBeVisible();
+  await page.reload();
+  await expect(page.locator('#panel-todos').getByRole('heading', { name: lines[1] })).toBeVisible();
+  server.app.store.put('messages', 'action-link', { id: 'action-link', conversationId: 'main', role: 'assistant', status: 'done',
+    createdAt: new Date().toISOString(), text: '已确认。[查看待办](' + href + ') [查看待办](https://example.invalid)' });
+  await page.goto(server.url + '/#chat');
+  await page.reload();
+  const citation = page.getByRole('link', { name: '查看待办' });
+  await expect(citation).toHaveCount(1);
+  await citation.click();
+  await expect(page.locator('#panel-todos').getByRole('heading', { name: lines[1] })).toBeVisible();
   const response = await page.request.post(server.url + '/api/v1/knowledge/' + entry.id + '/action-todos', {
     headers: { authorization: 'Bearer fixture' }, data: { updatedAt: entry.updatedAt, actions: [lines[2], lines[0]].map(actionLine => ({ actionLine })) },
   });

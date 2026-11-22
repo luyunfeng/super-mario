@@ -859,6 +859,7 @@ test('Web 追加确认事实，飞书按唯一原文更正并保留其他事实'
 test('Web 确认会议行动项，飞书批量确认复用原待办并添加新项', async t => {
   const line = '复核合成样本，负责人待定';
   const second = '提交验收摘要';
+  let projectId = '';
   let adapter!: FeishuOptions, pageId = '', otherId = '', version = '', repeat = false, todoId = '';
   const sent: string[] = [];
   const confirm = (step: string, id = pageId, updatedAt = version, actionLine = line) =>
@@ -866,6 +867,7 @@ test('Web 确认会议行动项，飞书批量确认复用原待办并添加新�
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.ok(req.tools.includes('knowledge_action_status'));
+      assert.match(req.system, /飞书回复写明待办当前标题、状态和已登记的期限/);
       assert.match(req.system, /unlinked 只表示这行没有关联/);
       assert.ok(req.tools.includes('knowledge_action_todo'));
       assert.match(req.system, /逐项按 results 报告新建或复用/);
@@ -889,6 +891,7 @@ test('Web 确认会议行动项，飞书批量确认复用原待办并添加新�
       if (repeat) {
         assert.equal(row.todoId, todoId);
         assert.equal(row.title, '修订后的标题');
+        assert.equal(row.webCitation, '[查看待办](#projects/' + projectId + '/todos/detail/' + todoId + ')');
         assert.ok(row.completedAt);
       }
       return confirm('foreign', otherId);
@@ -912,12 +915,13 @@ test('Web 确认会议行动项，飞书批量确认复用原待办并添加新�
       assert.deepEqual(receipt.results.map((row: {created:boolean}) => row.created), [false, true]);
       assert.equal(receipt.results[0].todo.id, todoId);
       assert.equal(receipt.results[1].todo.dueAt, '2030-06-02T12:00:00+08:00');
-      return { role: 'assistant', content: '已有复核待办，已新建摘要待办。' };
+      const [existing, added] = receipt.results;
+      return { role: 'assistant', content: existing.todo.title + '已验收。已新建' + added.todo.title + '，登记期限 ' + added.todo.dueAt + '。' };
     }
     assert.equal(receipt.created, !repeat);
     if (repeat) assert.equal(receipt.todo.id, todoId);
     todoId = receipt.todo.id;
-    return { role: 'assistant', content: receipt.created ? '已建立复核待办。' : '已找到原待办。' };
+    return { role: 'assistant', content: '已建立复核待办。' + receipt.webCitation };
   }, options => {
     adapter = options;
     return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
@@ -925,12 +929,14 @@ test('Web 确认会议行动项，飞书批量确认复用原待办并添加新�
   });
   try {
     const project = await api('/projects', { name: '合成项目' });
+    projectId = project.id;
     const other = await api('/projects', { name: '独立项目' });
     const input = { title: '合成会议', content: ['行动项', line, second].join('\n'), layer: 'project' };
     pageId = (await api('/knowledge', { ...input, projectId: project.id })).id;
     otherId = (await api('/knowledge', { ...input, projectId: other.id })).id;
     const question = '请把合成会议中的“' + line + '”建成待办';
-    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), '已建立复核待办。');
+    const answer = await ask(question, '/projects/' + project.id + '/messages');
+    assert.equal(answer, '已建立复核待办。[查看待办](#projects/' + projectId + '/todos/detail/' + todoId + ')');
     const [todo] = server.app.todos();
     assert.equal(todo.projectId, project.id);
     assert.equal(todo.dueAt, undefined);
@@ -942,7 +948,7 @@ test('Web 确认会议行动项，飞书批量确认复用原待办并添加新�
     const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
     await adapter.onMessage(question + '，同时加入“提交验收摘要”，截止 2030 年 6 月 2 日北京时间中午。', { ...source, messageId: 'confirm-line' });
-    await t.waitFor(() => assert.ok(sent.includes('已有复核待办，已新建摘要待办。')));
+    await t.waitFor(() => assert.ok(sent.includes('修订后的标题已验收。已新建提交验收摘要，登记期限 2030-06-02T12:00:00+08:00。')));
     assert.deepEqual(server.app.todos().map(item => item.title).sort(), ['修订后的标题', second].sort());
   } finally { await server.close(); }
 });
