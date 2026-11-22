@@ -114,6 +114,22 @@ test('主对话和项目工作会话独立恢复引用，发送时逐行引用�
   await expect(workPreview).toContainText('第二项已核');
   await workspace.getByRole('button', { name: '发送目标', exact: true }).click();
   await expect.poll(() => sent(projectConversation).at(-1)).toBe('> 第二项已核\n\n这段有依据吗？');
+  await projectInput.fill('目标中已写的问题');
+  await projectQuote.click();
+  await page.goto(server.url + '/#chat');
+  await scope.selectOption('');
+  await mainQuote.click();
+  await mainPreview.getByRole('button', { name: '引用到其他对话' }).click();
+  const target = page.getByRole('dialog', { name: '引用到其他对话' });
+  await target.getByRole('button', { name: '项目工作对话 · 合成引用项目（替换已有引用）' }).click();
+  await expect(workPreview).toContainText('本周结论');
+  await expect(projectInput).toHaveValue('目标中已写的问题');
+  assert.equal(sent(projectConversation).length, 2);
+  await workPreview.getByRole('button', { name: '引用到其他对话' }).click();
+  await target.getByRole('button', { name: '主对话 · 合成引用项目' }).click();
+  await expect(mainPreview).toContainText('本周结论');
+  assert.equal(sent('main').length, 1);
+
 
   await page.goto(server.url + '/#chat');
   await scope.selectOption('');

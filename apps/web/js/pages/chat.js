@@ -59,7 +59,7 @@ export function createChatPage({ api, store, scope, router }) {
   // —— 输入框 ——
   const input = h('textarea', { class: 'composer__input', id: 'message-text', rows: 1, placeholder: '说出目标，Enter 发送，Shift + Enter 换行', 'aria-label': '给 Agent 的消息', maxLength: 20000 });
   const drafts = createConversationDrafts({ api, store });
-  const quote = createMessageQuote({ drafts, input });
+  const quote = createMessageQuote({ drafts, input, store, router, scope });
   const edit = createMessageEdit({ input, quote, context: composerContext });
   const prompts = attachSavedPrompts({ api, store, input, getScope: scope.get });
   const history = attachSentHistory({ input, store, context: composerContext });
@@ -303,6 +303,7 @@ export function createChatPage({ api, store, scope, router }) {
   return {
     el,
     onShow(route) {
+      quote.restore(quotesEnabled ? draftKey : null);
       prompts.reset();
       recent.refresh();
       pendingMessage = route.query.get('favorite') || route.query.get('at') || '';

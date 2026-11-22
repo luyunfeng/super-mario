@@ -15,7 +15,7 @@ import { createReplyTranslation } from './reply-translation.js';
 import { createMessageFavorites } from './message-favorites.js';
 import { createConversationExport } from './conversation-export.js';
 
-export function createProjectConversation({ api, store, router, bindFolder }) {
+export function createProjectConversation({ api, store, router, scope, bindFolder }) {
   const code = createCodeSidebar({ api, store });
   let projectId = '';
   const translation = createReplyTranslation({ api, store, getScope: () => projectId, getConversationId: () => `project:${projectId}:work` });
@@ -33,7 +33,7 @@ export function createProjectConversation({ api, store, router, bindFolder }) {
   const progress = h('p', { class: 'muted small' });
   const messages = h('div', { class: 'project-conversation__messages', role: 'log', 'aria-label': '项目对话' });
   const text = TextArea({ rows: 3, placeholder: '告诉我这个文件夹里要做什么，我们持续推进。', 'aria-label': '项目目标' });
-  const quote = createMessageQuote({ drafts, input: text });
+  const quote = createMessageQuote({ drafts, input: text, store, router, scope });
   const edit = createMessageEdit({ input: text, quote, context: composerContext });
   const prompts = attachSavedPrompts({ api, store, input: text, getScope: () => projectId });
   const history = attachSentHistory({ input: text, store, context: composerContext });
@@ -224,6 +224,7 @@ export function createProjectConversation({ api, store, router, bindFolder }) {
         generation++; request++; projectId = id; workspace = undefined;
         syncDraft();
       }
+      quote.restore(quotesEnabled ? draftKey : null);
       paint(); void load();
     },
     update() { paint(); void load(); },

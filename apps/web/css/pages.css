@@ -81,9 +81,9 @@ kbd { padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 4px
 /* 结构化富文本气泡 */
 .md { display: grid; gap: 8px; white-space: normal; }
 .message-quote { min-width: 0; padding: 6px 10px; border-left: 3px solid var(--brand); background: var(--surface-2); color: var(--text-2); }
-.message-quote--draft:not([hidden]) { display: flex; align-items: center; gap: 8px; }
+.message-quote--draft:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .message-quote__preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.message-quote--draft .message-quote__preview { flex: 1; }
+.message-quote--draft .message-quote__preview { flex: 1 1 12em; }
 summary.message-quote__preview { cursor: pointer; }
 .md-p { margin: 0; white-space: pre-wrap; line-height: 1.62; }
 .md-list { margin: 0; padding-left: 20px; display: grid; gap: 4px; list-style: disc; }

@@ -3,7 +3,7 @@ import { openDrawer } from '../ui/overlay.js';
 import { h, replace } from './dom.js';
 
 // Store the selection separately so replacing a quote never overwrites typed words.
-export function createMessageQuote({ drafts, input }) {
+export function createMessageQuote({ drafts, input, store, router, scope }) {
   const bar = h('div', { class: 'message-quote message-quote--draft', dataset: { messageQuote: '' }, hidden: true });
   let currentKey = null, currentOwner, selected = '', passageDrawer;
   const storageKey = key => JSON.stringify(['quote', key]);
@@ -39,6 +39,51 @@ export function createMessageQuote({ drafts, input }) {
     field.setSelectionRange(0, 0);
   }
 
+  function forward() {
+    const key = currentKey, owner = currentOwner, raw = selected;
+    if (!key || owner !== drafts.owner() || !raw) return;
+    const targets = h('div', { class: 'stack' });
+    const drawer = openDrawer({ title: '引用到其他对话', body: targets, onClose: () => unsubscribe() });
+    const current = () => drawer.el.open && key === currentKey && owner === drafts.owner() &&
+      owner === store.view.snapshotOwner && !store.view.unauthorized && raw === selected &&
+      store.view.snapshot?.plugins?.some(p => p.id === 'conversation-quotes' && p.status === 'active');
+    function destinations() {
+      const projects = (store.view.snapshot?.projects ?? []).filter(p => !p.archivedAt);
+      const mainScope = scope.get() || '';
+      const project = projects.find(p => p.id === mainScope);
+      return [
+        { key: JSON.stringify(['main', mainScope]), name: project ? '主对话 · ' + project.name : '主对话', route: router.href('chat') },
+        ...projects.map(p => ({ key: JSON.stringify(['project', p.id]), name: '项目工作对话 · ' + p.name,
+          route: router.href('projects', p.id, 'workspace') })),
+      ].filter(target => target.key !== key);
+    }
+    let lastChoices;
+    function draw() {
+      if (!current()) { drawer.close(); return; }
+      const choices = destinations().map(item => ({ ...item, existing: drafts.read(storageKey(item.key)) }));
+      const signature = JSON.stringify(choices);
+      if (signature === lastChoices) return;
+      lastChoices = signature;
+      replace(targets, choices.length ? choices.map(target => {
+        const path = storageKey(target.key);
+        const existing = target.existing;
+        return h('button', { class: 'btn btn--secondary', type: 'button', onclick() {
+          if (!current() || !destinations().some(item => item.key === target.key)) { drawer.close(); return; }
+          if (drafts.read(path) !== existing) { draw(); return; }
+          drafts.write(path, raw);
+          drawer.close();
+          router.go(target.route);
+        } }, target.name + (existing ? '（替换已有引用）' : ''));
+      }) : h('p', { class: 'small muted' }, '暂无其他对话可选。'));
+    }
+    let projects = store.view.snapshot?.projects;
+    const unsubscribe = store.subscribe(() => {
+      if (!current()) drawer.close();
+      else if (projects !== store.view.snapshot?.projects) { projects = store.view.snapshot?.projects; draw(); }
+    });
+    draw();
+  }
+
   function paint(raw) {
     passageDrawer?.close();
     const value = decode(raw);
@@ -48,6 +93,7 @@ export function createMessageQuote({ drafts, input }) {
       h('div', { class: 'message-quote__preview', title: value.text },
         h('strong', null, value.label), ' · ', value.text),
       h('button', { type: 'button', class: 'btn btn--ghost btn--sm', onclick: () => choosePassage(value) }, '选择引用片段'),
+      h('button', { type: 'button', class: 'btn btn--ghost btn--sm', onclick: forward }, '引用到其他对话'),
       h('button', { type: 'button', class: 'btn btn--ghost btn--sm', 'aria-label': '移除引用', onclick: () => {
         if (!currentKey || currentOwner !== drafts.owner()) return;
         drafts.clearIf(storageKey(currentKey), selected);

@@ -25,7 +25,7 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
   const folders = (project) => openProjectFolders({ api, store, router, project });
   const discovered = createProjectDiscoveryList({ api, store, router, openFolders: () => folders() });
   const settings = createProjectSettings({ api, store, router, bindFolder: folders });
-  const conversation = createProjectConversation({ api, store, router, bindFolder: folders });
+  const conversation = createProjectConversation({ api, store, router, scope, bindFolder: folders });
   const memoryList = h('div', { class: 'list' });
   const memory = h('div', { class: 'stack stack--lg', id: 'panel-memory', role: 'tabpanel' },
     h('div', { class: 'row row--between' }, h('span', { class: 'muted' }, '只对这个项目生效的背景和资料。'),
