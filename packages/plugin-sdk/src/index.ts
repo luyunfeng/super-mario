@@ -36,7 +36,7 @@ export interface Executor extends ExecutorInfo {
   knowledgeWorker?: boolean;
   execute(request: { prompt: string; cwd?: string; executionMode?: 'task' | 'interactive'; nativeResume?: NativeResumeSpec; signal: AbortSignal; onOutput?: (text: string) => void }): Promise<{ text: string; pending?: boolean; sessionId?: string; nativeResult?: ExecutionResult }>;
 }
-export interface KnowledgeQuery { layer?: KnowledgeLayer; projectId?: string; query?: string }
+export interface KnowledgeQuery { tag?: string; layer?: KnowledgeLayer; projectId?: string; query?: string }
 export interface KnowledgeBackend {
   revision?(id: string, commit?: string): Promise<{ entry: KnowledgeEntry; commit: string; previous?: string } | null>;
   list(query?: KnowledgeQuery): Promise<KnowledgeEntry[]>;

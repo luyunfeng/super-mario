@@ -24,6 +24,12 @@ function validateScope(layer: KnowledgeLayer | undefined, projectId: string | un
   }
 }
 
+function normalizedTags(tags: unknown): string[] {
+  if (!Array.isArray(tags) || tags.length > 64 || tags.some(tag => typeof tag !== 'string' || !tag.trim() || tag.length > 100 || /[\r\n]/.test(tag)))
+    throw Object.assign(new Error('最多可填写 64 个标签，每个标签须为 1 至 100 字的单行文本'), { status: 400 });
+  return [...new Set(tags.map(tag => tag.trim()))];
+}
+
 function validateEntry(entry: KnowledgeEntry): void {
   safeId(entry.id);
   validateScope(entry.layer, entry.projectId);
@@ -63,6 +69,7 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
     }
     const entry = { ...metadata, content: match[2]! } as KnowledgeEntry;
     validateEntry(entry);
+    if (entry.tags !== undefined) entry.tags = normalizedTags(entry.tags);
     if (entry.id !== id) throw new Error(`Knowledge filename and metadata id differ: ${id}`);
     return entry;
   }
@@ -119,6 +126,7 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         const text = `${entry.title}\n${entry.content}`.toLocaleLowerCase();
         return (!query.layer || entry.layer === query.layer)
           && (!query.projectId || entry.projectId === query.projectId)
+          && (query.tag === undefined || entry.tags?.includes(query.tag))
           && keywords.every(keyword => text.includes(keyword));
       }).sort((a, b) => a.id.localeCompare(b.id));
     },
@@ -141,6 +149,8 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         throw Object.assign(new Error('知识页已有新版本或已删除，请先核对最新内容'), { status: 409 });
       if (prior && Date.parse(prior.updatedAt) >= Date.parse(entry.updatedAt))
         entry.updatedAt = new Date(Date.parse(prior.updatedAt) + 1).toISOString();
+      const tags = input.tags === undefined ? prior?.tags : normalizedTags(input.tags);
+      if (tags?.length) entry.tags = tags;
       const { content, ...metadata } = entry;
       const temporary = join(directory, `.${randomUUID()}.tmp`);
       // Rename publishes a complete file. A failed index update is repaired by list().

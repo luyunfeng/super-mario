@@ -90,6 +90,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   const project = Select({ options: [['', '请选择项目'], ...projects.map(item => [item.id, item.name])], value: entry?.projectId ?? defaults.projectId ?? '', name: 'projectId' });
   const title = Input({ name: 'title', value: entry?.title ?? '', required: true, placeholder: '一句话概括，例如“发布流程”' });
   const content = TextArea({ name: 'content', value: entry?.content ?? '', rows: 10, required: true, placeholder: '写下 Agent 工作时需要知道的内容' });
+  const tags = TextArea({ name: 'tags', value: (entry?.tags ?? []).join('\n'), rows: 2, placeholder: '每行一个标签' });
   let expectedUpdatedAt = entry?.updatedAt;
   const conflict = h('div', { class: 'stack' });
   const note = h('p', { class: 'small text-danger', role: 'alert' });
@@ -155,7 +156,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
       note.textContent = '';
       if (!title.value.trim() || !content.value.trim()) { note.textContent = '请填写标题和内容。'; return; }
       if (layer.value === 'project' && !project.value) { note.textContent = '请选择所属项目。'; return; }
-      const body = { ...(entry ? { expectedUpdatedAt } : {}), layer: layer.value, title: title.value.trim(), content: content.value.trim(), ...(layer.value === 'project' ? { projectId: project.value } : {}) };
+      const body = { ...(entry ? { expectedUpdatedAt } : {}), tags: tags.value.split('\n').map(tag => tag.trim()).filter(Boolean), layer: layer.value, title: title.value.trim(), content: content.value.trim(), ...(layer.value === 'project' ? { projectId: project.value } : {}) };
       try { await (entry ? api.patch(`/knowledge/${encodeURIComponent(entry.id)}`, body) : api.post('/knowledge', body)); }
       catch (error) {
         note.textContent = `没有保存成功：${error.message}。草稿已保留。`;
@@ -167,6 +168,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
           if (!latest) { conflict.textContent = '该知识页已删除。'; return; }
           replace(conflict, h('strong', null, '当前已保存版本'),
             h('span', null, [layerNames[latest.layer], latest.projectId, latest.title].filter(Boolean).join(' · ')),
+            h('span', { class: 'small' }, '标签：' + (latest.tags?.join('、') || '无')),
             h('pre', { class: 'small', style: { whiteSpace: 'pre-wrap' } }, latest.content),
             Button({ label: '已核对新版，继续编辑草稿', onClick() {
               expectedUpdatedAt = latest.updatedAt;
@@ -189,7 +191,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   });
   const drawer = openDrawer({
     title: entry ? '编辑记忆' : '添加记忆', subtitle: entry ? `更新于 ${timeAgo(entry.updatedAt)}` : undefined,
-    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
+    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), Field({ label: '标签', control: tags }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();
@@ -217,6 +219,7 @@ export function knowledgeRow(entry, { projectName, onOpen, pattern }) {
     onclick: () => onOpen(entry), onkeydown: (event) => { if (event.key === 'Enter') onOpen(entry); } },
   h('div', { class: 'item__main' },
     h('span', { class: 'item__title' }, title),
+    Boolean(entry.tags?.length) && h('span', { class: 'item__meta' }, entry.tags.map(tag => '#' + tag).join(' · ')),
     (excerpts.length ? excerpts : [summary]).map(text => h('span', { class: 'item__meta truncate' }, text))),
   h('div', { class: 'item__end' },
     Pill(layerNames[entry.layer] + (entry.layer === 'project' && projectName ? ` · ${projectName}` : ''), entry.layer === 'global' ? 'info' : entry.layer === 'project' ? 'warn' : ''),

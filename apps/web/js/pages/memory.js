@@ -56,6 +56,8 @@ export function createMemoryPage({ api, store, router, scope }) {
   const layerNote = h('p', { class: 'muted small', id: 'layer-note' });
   const search = Input({ type: 'search', placeholder: '搜索记忆', 'aria-label': '搜索记忆', style: { maxWidth: '220px' } });
   search.addEventListener('input', () => paint());
+  const tagFilter = Select({ options: [['', '全部标签']], 'aria-label': '按标签筛选' });
+  tagFilter.addEventListener('change', () => paint());
   const list = h('div', { class: 'list' });
   const curatorLine = h('div', { class: 'row row--between curator', id: 'curator-line' });
 
@@ -65,7 +67,7 @@ export function createMemoryPage({ api, store, router, scope }) {
         h('div', { class: 'page__title' }, h('h1', null, '记忆'), h('p', { class: 'page__sub' }, hintCopy('nav.memory').tag)),
         h('div', { class: 'page__actions' }, Hint('nav.memory'))),
       h('div', { class: 'stack stack--lg' }, quick,
-        h('div', { class: 'stack' }, h('div', { class: 'row row--between row--wrap' }, seg.el, search), layerNote),
+        h('div', { class: 'stack' }, h('div', { class: 'row row--between row--wrap' }, seg.el, tagFilter, search), layerNote),
         list, curatorLine, decisions.el)));
 
   function paint() {
@@ -81,10 +83,20 @@ export function createMemoryPage({ api, store, router, scope }) {
       replace(project, h('option', { value: '' }, '选择项目'), projects.map(item => h('option', { value: item.id }, item.name)));
     }
     layerNote.textContent = layer === 'all' ? '' : hintCopy(LAYER_HINT[layer]).detail;
-    const rows = (snapshot.knowledge ?? [])
+    const scoped = (snapshot.knowledge ?? [])
       .filter(item => layer === 'all' || item.layer === layer)
       // 选了项目范围时，别的项目的资料不显示；个人和全局记忆始终显示。
-      .filter(item => !scope.get() || item.layer !== 'project' || item.projectId === scope.get())
+      .filter(item => !scope.get() || item.layer !== 'project' || item.projectId === scope.get());
+    const tags = [...new Set(scoped.flatMap(item => item.tags ?? []))].sort((a, b) => a.localeCompare(b));
+    const tagSignature = JSON.stringify(tags);
+    if (tagFilter.dataset.sig !== tagSignature) {
+      const selected = tagFilter.value;
+      replace(tagFilter, h('option', { value: '' }, '全部标签'), tags.map(tag => h('option', { value: tag }, tag)));
+      tagFilter.value = tags.includes(selected) ? selected : '';
+      tagFilter.dataset.sig = tagSignature;
+    }
+    tagFilter.hidden = !tags.length;
+    const rows = scoped.filter(item => !tagFilter.value || item.tags?.includes(tagFilter.value))
       .filter(item => !pattern || pattern.test(item.title) || pattern.test(item.content))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     if (!rows.length) {
