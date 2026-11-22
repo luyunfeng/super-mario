@@ -38,6 +38,7 @@ async function setup(t: TestContext) {
 
 test('显式派单复用机器、范围和验收校验；默认交给主 Agent', async t => {
   const { app, todo, machines, calls, started } = await setup(t);
+  app.updateTodo(todo.id, { dueAt: '2030-04-01T09:00:00Z', waitingOn: '等待合成样本', reminderAt: '2030-03-31T08:00:00Z' });
   const intent = await app.delegateTodo(todo.id);
   assert.equal(intent.conversationId, 'main'); assert.equal(intent.todoId, todo.id);
   await assert.rejects(app.delegateTodo(todo.id, 'two/codex', '提供报告', 5), /绑定的电脑/);
@@ -53,6 +54,12 @@ test('显式派单复用机器、范围和验收校验；默认交给主 Agent',
   assert.equal((await started(run.id)).status, 'running');
   assert.equal(calls[0].cwd, '/fixture'); assert.match(String(calls[0].prompt), /提供报告/);
   assert.match(String(calls[0].prompt), /只使用合成样本/);
+  for (const text of [intent.text, String(calls[0].prompt)]) {
+    assert.match(text, /2030-04-01T09:00:00Z/);
+    assert.match(text, /等待合成样本/);
+    assert.match(text, /缺少证据/);
+    assert.doesNotMatch(text, /2030-03-31/);
+  }
   assert.equal(app.todos().find(item => item.id === todo.id)?.completedAt, undefined);
 });
 

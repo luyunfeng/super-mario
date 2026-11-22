@@ -30,7 +30,7 @@ import { createWebPresence } from './web-presence.ts';
 import { createBriefingSettings } from './briefing.ts';
 import { createAgentFollowups } from './followups.ts';
 import { createAutoTakeover } from './auto-takeover.ts';
-import { formatProjectInstructions, INBOX_ASSISTANT_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT } from './prompts.ts';
+import { todoDelegationPrompt, formatProjectInstructions, INBOX_ASSISTANT_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT } from './prompts.ts';
 import { reminderReference, reminderSourceId, wireWorkbenchBackground } from './workbench-background.ts';
 import { createAwayNotifications } from './away-notifications.ts';
 import { collectAttention } from './attention.ts';
@@ -611,15 +611,14 @@ export async function createWorkbench(config: AppConfig) {
     const todo = store.get<Todo>('todos', id);
     if (!todo) throw new InputError('待办不存在', 404);
     if (todo.completedAt) throw new InputError('该待办已完成', 409);
-    const task = `请处理待办 ${todo.id}：${todo.title}\n${todo.notes}`.trimEnd();
     const scope = { projectId: todo.projectId, todoId: id };
     if (executorId !== undefined) {
       const selected = requiredText(executorId, '执行者');
       const criterion = optionalText(doneWhen, '验收标准');
-      const prompt = criterion ? `${task}\n验收标准：${criterion}` : task;
+      const prompt = todoDelegationPrompt(todo, 'executor', criterion);
       return dispatch({ ...scope, executorId: selected, prompt, doneWhen: criterion, expectMinutes });
     }
-    return agent.post(`${task}\n先结合知识选择执行者与目录，给出验收标准，再异步派发。不要把执行结束直接当成待办已完成。`, 'main', scope);
+    return agent.post(todoDelegationPrompt(todo, 'main'), 'main', scope);
   }
   function executors(): Executor[] {
     const local = contributions.list('executors').map(entry => entry.value);
