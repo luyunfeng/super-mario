@@ -1,3 +1,4 @@
+import { officeWorkerGuide } from '../../../plugins/office/guide.ts';
 import { createMachineSkills } from '../../../plugins/machine-skills.ts';
 import { createAgentDiagnostics } from '../../../plugins/agent-diagnostics.ts';
 import { createCliSessionDiscovery } from '../../../plugins/cli-session-discovery.ts';
@@ -96,6 +97,10 @@ export async function loadDefaultNodePlugins(options: DefaultNodePluginOptions):
   const executors = await services.describe(machineId);
 
   return composeNodePlugins([
+    { id: 'office-documents', handlers: { 'office.guide': async params => {
+      if (Object.keys(params).length) throw new Error('Office 指南不接受参数');
+      return { guide: officeWorkerGuide };
+    } } },
     { id: 'machine-skills', handlers: createMachineSkills(historyRoots).handlers },
     { id: 'live-terminals', handlers: { ...live.handlers, 'terminal.host.start': async () => host.startServer() }, onDisconnect: live.disconnect, close: live.close },
     {

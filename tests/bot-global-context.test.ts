@@ -49,6 +49,7 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
       assert.ok(system.includes(marker));
       const facts = JSON.parse(system.split(marker).at(-1)!.split('\n')[0]);
       expectedSkills.push(system.includes(skillName));
+      assert.equal(input.tools.some((tool: any) => tool.function.name === 'office_create'), facts.scope.kind === 'global');
       assert.equal(system.includes('workbench.work'), facts.scope.kind === 'global');
       assert.equal(input.tools.some((tool: any) => tool.function.name === 'machine_skills_list'), facts.scope.kind === 'global');
       assert.ok(!system.includes(skillInstruction), 'only skill metadata belongs in the system prompt');

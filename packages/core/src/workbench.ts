@@ -63,7 +63,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
-import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, conversationSearch, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import type { AppConfig, Approval, BotScope, ExecutionResult, InboxItem, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
@@ -184,6 +184,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(savedPrompts);
   plugins.register(projectInstructions);
   plugins.register(assistantProfile);
+  plugins.register(officeDocuments);
   plugins.register(createAssistantSkills(() => machines));
   plugins.register(createMessageFavorites((source, offset, signal) => readNativeFavoritePage(machines, source, offset, signal)));
   plugins.register(createConversationExport((source, includeWork, signal) => exportNativeConversation(machines, source, includeWork, signal)));
@@ -753,7 +754,10 @@ export async function createWorkbench(config: AppConfig) {
         // Exact approved payloads and existing native threads retain their original terms.
         const guidance = projectId && !nativeApproved && !executionGuard ? await currentProjectInstructions(projectId) : '';
         const decisions = currentDecisions();
-        const finalPrompt = [effectivePrompt, decisions, guidance].filter(Boolean).join('\n\n');
+        const includeOfficeGuide = executor.mode === 'real' && executionMode === 'task' && !nativeApproved && !executionGuard
+          && plugins.list().some(plugin => plugin.id === 'office-documents' && plugin.status === 'active')
+          && machines?.list().some(machine => machine.id === executor.machineId && machine.online && machine.capabilities.includes('office.guide'));
+        const finalPrompt = [effectivePrompt, decisions, guidance, includeOfficeGuide ? officeWorkerGuide : ''].filter(Boolean).join('\n\n');
         const execute = async () => {
           controller.signal.throwIfAborted();
           executionGuard?.();

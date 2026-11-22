@@ -53,7 +53,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     ? ['knowledge_list', 'executors_list'].includes(name)
     : scopeTools.has(name) && !(scope.kind === 'task' && name === 'todo_create')
       && !(!scopedProject && ['knowledge_put', 'knowledge_source', 'knowledge_ingest'].includes(name)));
-  const allowed = (name: string) => options.canUseScope?.(activeInput) !== false && (mainIdentity || (name !== 'assistant_skill_read' && name !== 'machine_skills_list')) && scopeAllows(name) && (!options.allowedTools || options.allowedTools.includes(name)) && (!(activeInput?.readOnly || (activeInput && store.get('input-paused', activeInput.id))) || readTools.has(name));
+  const allowed = (name: string) => options.canUseScope?.(activeInput) !== false && (mainIdentity || (name !== 'assistant_skill_read' && name !== 'machine_skills_list' && name !== 'office_create')) && scopeAllows(name) && (!options.allowedTools || options.allowedTools.includes(name)) && (!(activeInput?.readOnly || (activeInput && store.get('input-paused', activeInput.id))) || readTools.has(name));
   // This is the execution boundary, not a prompt convention. Unknown tools fail closed.
   function inScope(record: { id?: unknown; projectId?: unknown; todoId?: unknown }, todo = false): boolean {
     if (!scope || scope.kind === 'global') return true;

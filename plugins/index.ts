@@ -23,6 +23,8 @@ export { todoCalendar } from './todo-calendar.ts';
 export { createConversationExport } from './conversation-export.ts';
 export { createMessageFavorites, messageFavorites } from './message-favorites.ts';
 export { createAssistantSkills } from './assistant-skills.ts';
+export { officeWorkerGuide } from './office/guide.ts';
+export { officeDocuments } from './office/index.ts';
 export { assistantProfile } from './assistant-profile.ts';
 export { projectInstructions } from './project-instructions.ts';
 export { savedPrompts } from './saved-prompts.ts';

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { crc32 } from 'node:zlib';
 import { registerMachineSkillCatalog } from './machine-skill-catalog.ts';
+import { officeGuide } from './office/guide.ts';
 import { workGuide } from './workbench-work-guide.ts';
 import { fromBufferPromise, type ZipFile } from 'yauzl';
 import { isAlias, isMap, isNode, isPair, isScalar, parseDocument, visit } from 'yaml';
@@ -124,16 +125,17 @@ function catalog(store: Store): Catalog {
 }
 
 // Builtins travel with the release. Only the user-installed catalog has a database revision.
-function list(book: Catalog) {
-  return { ...book, builtinSkills: [{ name: workGuide.name, description: workGuide.description }] };
+function list(book: Catalog, guides: typeof workGuide[]) {
+  return { ...book, builtinSkills: guides.map(({ name, description }) => ({ name, description })) };
 }
 
-function resource(store: Store, nameValue: Json | undefined, pathValue: Json | undefined) {
+function resource(store: Store, guides: typeof workGuide[], nameValue: Json | undefined, pathValue: Json | undefined) {
   const path = filePath(pathValue === undefined ? 'SKILL.md' : pathValue);
-  if (nameValue === workGuide.name) {
-    const text = workGuide.files.get(path);
+  const builtin = guides.find(guide => guide.name === nameValue);
+  if (builtin) {
+    const text = builtin.files.get(path);
     if (text === undefined) fail(404, '技能文件不存在');
-    return { name: workGuide.name, path, text };
+    return { name: builtin.name, path, text };
   }
   const name = skillName(nameValue);
   const raw = store.get<string>('assistant-skills.files', name + '/' + path);
@@ -165,6 +167,8 @@ export function createAssistantSkills(getMachines: () => MachineClient | undefin
 
 function activateInstalledSkills(context: ExtensionContext) {
   const { store } = context;
+  const guides = () => context.contributions.list('tools').some(item => item.value.name === 'office_create')
+    ? [workGuide, officeGuide] : [workGuide];
   const lifetime = new AbortController();
   let inspecting = false;
   context.provide('assistant-skills.manage', async (input, requestSignal) => {
@@ -172,8 +176,8 @@ function activateInstalledSkills(context: ExtensionContext) {
       fail(400, '技能操作无效');
     const action = input.action as keyof typeof fields;
     keys(input, ['action', ...fields[action]]);
-    if (action === 'list') return list(catalog(store));
-    if (action === 'read') return resource(store, input.name, input.path);
+    if (action === 'list') return list(catalog(store), guides());
+    if (action === 'read') return resource(store, guides(), input.name, input.path);
     const revision = input.revision;
     if (action !== 'preview' && (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0 || revision >= Number.MAX_SAFE_INTEGER))
       fail(400, '技能目录版本无效');
@@ -193,7 +197,7 @@ function activateInstalledSkills(context: ExtensionContext) {
       }
       if (input.digest !== loaded.digest) fail(409, '技能包已变化，请重新预览');
     }
-    if (action === 'remove' && input.name === workGuide.name) fail(409, '内置技能无法移除');
+    if (action === 'remove' && guides().some(guide => guide.name === input.name)) fail(409, '内置技能无法移除');
     const name = loaded ? loaded.info.name : skillName(input.name);
     return store.transaction(() => {
       const book = catalog(store);
@@ -214,7 +218,7 @@ function activateInstalledSkills(context: ExtensionContext) {
       }
       book.revision++;
       store.put('assistant-skills', 'catalog', book);
-      return list(book);
+      return list(book, guides());
     });
   });
   context.contribute('tools', 'assistant_skill_read', {
@@ -226,7 +230,7 @@ function activateInstalledSkills(context: ExtensionContext) {
       keys(args, ['name', 'path', 'offset']);
       const offset = args.offset === undefined ? 0 : args.offset;
       if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) fail(400, '阅读偏移须为非负整数');
-      const { name, path, text } = resource(store, args.name, args.path);
+      const { name, path, text } = resource(store, guides(), args.name, args.path);
       const page: string[] = [];
       let position = 0;
       // Iterate Unicode code points without allocating an array for the entire resource.

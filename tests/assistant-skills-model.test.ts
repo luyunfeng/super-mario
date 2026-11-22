@@ -173,3 +173,33 @@ test('主助手只在查询指定执行机后取得该机器技能元数据', as
     assert.deepEqual(requests.map(r => r.lastRole), ['user', 'tool']);
   } finally { await server.close(); }
 });
+
+test('Web 主助手按请求生成 Word 并返回可以从文件列表取回的交付物', async t => {
+  const title = '合成周报', source = '# 交付\n\n已验证三个合成样例。';
+  const { server, api, ask } = await fixture(t, (req, turn) => {
+    if (turn === 1) {
+      assert.ok(req.tools.includes('office_create'));
+      assert.ok(req.system.includes('workbench.office'));
+      return call('assistant_skill_read', {name:'workbench.office'}, 'read-office-guide');
+    }
+    if (turn === 2) {
+      assert.equal(req.lastRole, 'tool');
+      assert.ok(JSON.stringify(req.content).includes('office_create'));
+      assert.ok(JSON.stringify(req.content).includes('文件名和内容摘要'));
+      return call('office_create', { title, format: 'docx', source }, 'save-word');
+    }
+    assert.equal(req.lastRole, 'tool');
+    const text = typeof req.content === 'string' ? req.content : (req.content as Array<{text:string}>).map(x=>x.text).join('');
+    const result = JSON.parse(text);
+    assert.ok(result.size > 0 && result.summary && !result.base64);
+    return { role: 'assistant', content: '已生成 ' + result.filename + '，可从「办公文件」下载。' };
+  });
+  try {
+    assert.equal(await ask('把这份周报导出成 Word。'), '已生成 合成周报.docx，可从「办公文件」下载。');
+    const docs = await api('/office-documents', { action: 'list' });
+    assert.equal(docs.length, 1);
+    const payload = await api('/office-documents', { action: 'download', id: docs[0].id });
+    const zip = await JSZip.loadAsync(Buffer.from(payload.base64, 'base64'));
+    assert.match(await zip.file('word/document.xml')!.async('string'), /已验证三个合成样例/);
+  } finally { await server.close(); }
+});
