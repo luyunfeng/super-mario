@@ -175,16 +175,25 @@ export async function inspectRunWorktree(params: JsonObject) {
   const unmerged = Number((await runGit(target, ['rev-list', '--count', sourceHead + '..' + head])).trim());
   const overrides = await filterOverrides(target);
   const raw = await runGit(target, [...overrides, '-c', 'core.fsmonitor=false', 'status', '--porcelain=v1', '-z',
-    '--ignored=matching', '--no-renames', '--untracked-files=all', '--ignore-submodules=none']);
-  const files: { path: string; index: string; worktree: string }[] = [];
+    '--ignored=matching', '--find-renames', '--untracked-files=all', '--ignore-submodules=none']);
+  const files: { path: string; previousPath?: string; index: string; worktree: string }[] = [];
   let total = 0, hidden = 0, ignored = 0;
-  for (const entry of raw.split('\0')) {
-    if (!entry) continue;
+  const entries = raw.split('\0');
+  for (let i = 0; i < entries.length - 1; i++) {
+    const entry = entries[i]!;
     if (entry.startsWith('!! ')) { ignored++; continue; }
     total++;
     const path = entry.slice(3);
-    if (sensitiveWorkspacePath(path) || /[\x00-\x1f\x7f]/.test(path)) { hidden++; continue; }
-    if (files.length < 250) files.push({ path, index: entry[0]!, worktree: entry[1]! });
+    const index = entry[0]!, worktree = entry[1]!;
+    // Porcelain v1 -z emits the destination first and the original path as its own field.
+    const renamed = /[RC]/.test(index + worktree);
+    const previousPath = renamed ? entries[++i] : undefined;
+    if (renamed && !previousPath) throw new Error('工作树改名回执不完整');
+    if ([path, ...(previousPath ? [previousPath] : [])].some(name => sensitiveWorkspacePath(name) || /[\x00-\x1f\x7f]/.test(name))) {
+      hidden++;
+      continue;
+    }
+    if (files.length < 250) files.push({ path, ...(previousPath && { previousPath }), index, worktree });
   }
   return { cwd: target, branch: record.find(field => field.startsWith('branch refs/heads/'))?.slice('branch refs/heads/'.length) ?? null,
     head, sourceHead, unmerged, files, total, hidden, ignored, locked: record.some(field => field === 'locked' || field.startsWith('locked ')), truncated: total > hidden + files.length };
@@ -205,8 +214,19 @@ export async function readWorktreeChange(params: JsonObject): Promise<Json> {
   }
   if (file.index === '?' || (area === 'index' ? file.index : file.worktree) === ' ') throw new Error('该区域的文件状态已变化，请刷新');
   const overrides = await filterOverrides(snapshot.cwd);
-  const text = await runGit(snapshot.cwd, [...overrides, '-c', 'core.fsmonitor=false', 'diff', '--no-ext-diff', '--no-textconv',
-    '--no-renames', '--no-color', '--submodule=short', '--ignore-submodules=none', ...(area === 'index' ? ['--cached'] : []), '--', path]);
+  const selectedStatus = area === 'index' ? file.index : file.worktree;
+  const previous = /[RC]/.test(selectedStatus) ? file.previousPath : undefined;
+  const paths = previous ? [previous, path] : [path];
+  const raw = await runGit(snapshot.cwd, [...overrides, '-c', 'core.fsmonitor=false', 'diff', '--no-ext-diff', '--no-textconv',
+    '--find-renames', '--raw', '--patch', '-z', '--no-color', '--submodule=short', '--ignore-submodules=none',
+    ...(area === 'index' ? ['--cached'] : []), '--', ...paths]);
+  // Git pathspecs can include descendants. Only release a patch whose raw record
+  // names exactly the selected file (and the approved source for a rename).
+  const boundary = raw.indexOf('\0\0');
+  const changed = raw.slice(0, boundary).split('\0').slice(1);
+  if (raw && (boundary < 0 || changed.length !== paths.length || changed.some((name, i) => name !== paths[i])))
+    throw new Error('差异路径与所选文件不符，请刷新工作树状态');
+  const text = raw ? raw.slice(boundary + 2) : '';
   if (/^Binary files /m.test(text) || /[\x00-\x08\x0b\x0c\x0e-\x1f\ufffd]/.test(text)) throw new Error('仅支持 UTF-8 文本差异');
   return { path, area, kind: 'diff', text };
 }

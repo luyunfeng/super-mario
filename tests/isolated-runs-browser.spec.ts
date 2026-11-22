@@ -404,11 +404,36 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   await expect(page.getByText('工作树目录或分支已变化，执行未启动', { exact: false }).first()).toBeVisible();
 
   git(peer.cwd!, 'mv', '.gitattributes', 'attributes.txt');
+  const original = await readFile(join(peer.cwd!, 'attributes.txt'), 'utf8');
+  await writeFile(join(peer.cwd!, 'attributes.txt'), original + '\nworking-only');
+  await page.goto(server.url + '/#projects/' + project.id + '/runs/' + peer.id);
+  await page.getByRole('button', { name: '查看工作树状态' }).click();
+  const renameRow = status.locator('code').filter({ hasText: '.gitattributes → attributes.txt' }).locator('..');
+  await expect(renameRow).toContainText('暂存区：重命名');
+  await expect(renameRow).toContainText('工作区：修改');
+  await renameRow.getByRole('button', { name: '查看暂存差异' }).click();
+  await expect(renameRow.locator('pre')).toContainText('rename from .gitattributes');
+  await expect(renameRow.locator('pre')).not.toContainText('working-only');
+  await renameRow.getByRole('button', { name: '查看未暂存差异' }).click();
+  await expect(renameRow.locator('pre')).toContainText('+working-only');
+  await status.getByRole('button', { name: '关闭' }).click();
+  await writeFile(join(peer.cwd!, 'attributes.txt'), original);
   git(peer.cwd!, 'commit', '-qm', '改名示例');
   await page.goto(server.url + '/#projects/' + project.id + '/runs/' + peer.id);
   await page.getByRole('button', { name: '查看提交历史' }).click();
   await history.getByRole('button', { name: '改名示例' }).click();
   await expect(detail.getByRole('option', { name: '.gitattributes → attributes.txt · 重命名 · +0 / −0' })).toHaveCount(1);
   await expect(detail.locator('pre.code-sidebar__text')).toContainText('rename to attributes.txt');
+
+  await writeFile(join(peer.cwd!, '.env'), 'private fixture');
+  git(peer.cwd!, 'add', '.env');
+  git(peer.cwd!, 'commit', '-qm', 'restricted fixture');
+  git(peer.cwd!, 'mv', '.env', 'ordinary.txt');
+  git(peer.cwd!, 'mv', 'attributes.txt', 'secrets.json');
+  const restricted = await statusTool.execute({ id: peer.id }, new AbortController().signal);
+  assert.match(JSON.stringify(restricted), /"hidden":2/);
+  assert.doesNotMatch(JSON.stringify(restricted), /ordinary\.txt|secrets\.json|attributes\.txt|\.env/);
+  for (const path of ['ordinary.txt', 'attributes.txt', 'secrets.json', '.env'])
+    await assert.rejects(server.app.readRunWorktreeChange(peer.id, path, 'index'), /可见/);
 
 });

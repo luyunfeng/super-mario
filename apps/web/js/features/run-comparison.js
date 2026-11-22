@@ -137,7 +137,7 @@ export function openRetainedBranch(options) {
 export function openWorktreeStatus(options) {
   const { item, api } = options;
   const { area, active } = openRunDrawer(options, '工作树状态');
-  const names = { M: '修改', T: '类型变化', A: '新增', D: '删除', U: '冲突' };
+  const names = { M: '修改', T: '类型变化', A: '新增', D: '删除', R: '重命名', C: '复制', U: '冲突' };
   function fileState(file) {
     if (file.index === '?') return '未跟踪';
     if (['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'].includes(file.index + file.worktree)) return '合并冲突';
@@ -158,7 +158,7 @@ export function openWorktreeStatus(options) {
         } catch (error) { if (active() && stamp === sequence) output.textContent = error.message; }
       } });
     }
-    return h('div', { class: 'stack' }, h('code', null, file.path), h('small', { class: 'muted' }, fileState(file)),
+    return h('div', { class: 'stack' }, h('code', null, file.previousPath ? file.previousPath + ' → ' + file.path : file.path), h('small', { class: 'muted' }, fileState(file)),
       h('div', { class: 'row row--wrap' },
         file.index !== '?' && file.index !== ' ' && action('index', '查看暂存差异'),
         file.worktree !== ' ' && action('working', file.index === '?' ? '查看未跟踪文件' : '查看未暂存差异')), output);

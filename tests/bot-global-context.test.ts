@@ -57,6 +57,7 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
       assert.match(system, /合并提交按第一父提交比较/);
       assert.match(system, /不能据此认定执行者身份/);
       assert.match(system, /previousPath 是原路径，用新 path 查补丁/);
+      assert.match(system, /实时状态含 previousPath/);
       assert.match(system, /从可见列表取 path，再传 area=index/);
       assert.match(system, /查询状态不授权删除/);
       assert.match(system, /即使列表为空也不要声称可以清理/);
