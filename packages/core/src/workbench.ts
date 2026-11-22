@@ -306,7 +306,7 @@ export async function createWorkbench(config: AppConfig) {
     const source=currentAgentInput()??agent.currentInput();if(!source||source.role!=='user'||source.readOnly||source.origin&&source.origin!=='user')throw new InputError('来源投放需要当前用户输入',403);
     validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
     return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
-  }, editConfirmedFacts: args => changeKnowledgeMetadata('facts', args), changeKnowledgeAlias: args => changeKnowledgeMetadata('alias', args), changeKnowledgeTag: args => changeKnowledgeMetadata('tag', args), setKnowledgeRelevance: args => changeKnowledgeMetadata('relevance', args), setKnowledgeImportance: args => changeKnowledgeMetadata('importance', args), knowledgeRevision: (id, commit, projectId) => knowledgeRevision(id, commit, projectId ?? currentAgentInput()?.projectId), knowledgeOriginal: (pageId, sourceId, projectId) => knowledgeCurator.pageSources(pageId, sourceId, projectId ?? currentAgentInput()?.projectId), knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0], currentAgentInput() ?? agent.currentInput()) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
+  }, confirmKnowledgeTodo, editConfirmedFacts: args => changeKnowledgeMetadata('facts', args), changeKnowledgeAlias: args => changeKnowledgeMetadata('alias', args), changeKnowledgeTag: args => changeKnowledgeMetadata('tag', args), setKnowledgeRelevance: args => changeKnowledgeMetadata('relevance', args), setKnowledgeImportance: args => changeKnowledgeMetadata('importance', args), knowledgeRevision: (id, commit, projectId) => knowledgeRevision(id, commit, projectId ?? currentAgentInput()?.projectId), knowledgeOriginal: (pageId, sourceId, projectId) => knowledgeCurator.pageSources(pageId, sourceId, projectId ?? currentAgentInput()?.projectId), knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0], currentAgentInput() ?? agent.currentInput()) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
   function makeWebSource() {
     const options = webConfig.read();
     return createFeishuWebSource({
@@ -700,6 +700,37 @@ export async function createWorkbench(config: AppConfig) {
         return value as unknown as KnowledgeEntry;
       },
     };
+  }
+  async function confirmKnowledgeTodo(args: Record<string, unknown>): Promise<Json> {
+    const actor = currentAgentInput() ?? agent.currentInput();
+    if (!actor || actor.role !== 'user' || actor.readOnly || actor.todoId || (actor.origin && actor.origin !== 'user'))
+      throw new InputError('确认行动项需要当前用户在工作台或项目对话中提出', 403);
+    assertBotInput(actor);
+    const projectId = actor.projectId ?? optionalText(args.projectId, '项目');
+    const id = requiredText(args.id, '知识页标识');
+    const page = (await knowledge().list()).find(item => item.id === id);
+    if (!page || (projectId && (page.layer !== 'project' || page.projectId !== projectId)) ||
+        (page.projectId && !projects.list().some(p => p.id === page.projectId && !p.archivedAt))) throw new InputError('知识页不可用', 404);
+    if (page.updatedAt !== requiredText(args.updatedAt, '已读版本')) throw new InputError('会议资料已有新版本，请重新核对行动项', 409);
+    const line = requiredText(args.actionLine, '行动项原文');
+    const matches = page.content.split(/\r\n|[\r\n]/).filter(text => text.trim() === line);
+    if (matches.length !== 1) throw new InputError('行动项须唯一匹配已读正文中的完整一行');
+    const key = createHash('sha256').update(JSON.stringify([id, page.layer, page.projectId, line])).digest('hex');
+    // Keep the confirmation even after edits to the todo. A lost receipt must not create a second task.
+    const result = store.transaction(() => {
+      const existing = store.get<string>('knowledge.action-todos', key);
+      if (existing) {
+        const todo = store.get<Todo>('todos', existing);
+        if (!todo || todo.projectId !== page.projectId) throw new InputError('先前确认的待办已删除或移动，请人工核对', 409);
+        return { created: false, todo };
+      }
+      const todo = createTodo({ title: line, projectId: page.projectId, dueAt: args.dueAt,
+        notes: '来源：' + page.title + '\n知识页：' + id + '\n来源版本：' + page.updatedAt + '\n行动项原文：' + line }, false);
+      store.put('knowledge.action-todos', key, todo.id);
+      return { created: true, todo };
+    });
+    if (result.created) changed('todos.changed', { id: result.todo.id });
+    return result as unknown as Json;
   }
   async function changeKnowledgeMetadata(field: 'facts' | 'alias' | 'tag' | 'importance' | 'relevance', args: Record<string, unknown>): Promise<Json> {
     const id = requiredText(args.id, '知识页标识');

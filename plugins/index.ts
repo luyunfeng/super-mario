@@ -99,13 +99,13 @@ function demoExecutor(): Executor {
   };
 }
 
-function dueBoundary(value: Json | undefined, fallback: number): number {
+function dueBoundary(value: Json | undefined, fallback: number, label = '待办查询边界'): number {
   if (value === undefined) return fallback;
   if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
     const time = Date.parse(value);
     if (Number.isFinite(time)) return time;
   }
-  throw new Error('待办查询边界需要带时区的 ISO 时间');
+  throw new Error(label + '需要带时区的 ISO 时间');
 }
 
 function dailyBrief(context: ExtensionContext): Json {
@@ -150,6 +150,7 @@ export interface SystemActions {
   projectCreate?(input: Record<string, unknown>): Json | Promise<Json>;
   projectsDiscover?(input: Record<string, unknown>): Promise<Json>;
   knowledgeSource?(input: Record<string, unknown>): Json;
+  confirmKnowledgeTodo?(args: Record<string, unknown>): Promise<Json>;
   editConfirmedFacts?(args: Record<string, unknown>): Promise<Json>;
   setKnowledgeRelevance?(args: Record<string, unknown>): Promise<Json>;
   setKnowledgeImportance?(args: Record<string, unknown>): Promise<Json>;
@@ -238,6 +239,14 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             if (patch.completed !== undefined) throw new Error('请由用户在 Web 验收并完成待办');
             return actions.updateTodo!(String(id ?? ''), patch);
           }, { id: { type: 'string' }, title: { type: 'string' }, notes: { type: 'string' }, waitingOn: { type: 'string' }, reminderAt: { type: 'string' } }));
+          if (actions.confirmKnowledgeTodo) context.contribute('tools', 'knowledge_action_todo', tool('knowledge_action_todo',
+            '将用户明确选定的已保存知识页行动项加入待办。传入页 id、已读 updatedAt 和正文中的完整行动项行。重复确认会返回已有待办。',
+            async (args, signal) => {
+              signal.throwIfAborted();
+              if (args.dueAt !== undefined) dueBoundary(args.dueAt, NaN, '行动项期限');
+              return actions.confirmKnowledgeTodo!(args);
+            },
+            { id: { type: 'string' }, updatedAt: { type: 'string' }, actionLine: { type: 'string' }, dueAt: { type: 'string', description: '仅在期限明确时传带时区的 ISO 时间' } }));
           context.contribute('tools', 'todo_create', tool('todo_create', '创建一个待处理事项。', async (args, signal) => {
             signal.throwIfAborted(); return actions.createTodo(args);
           }, { title: { type: 'string' }, notes: { type: 'string' }, projectId: { type: 'string' }, dueAt: { type: 'string' }, reminderAt: { type: 'string' }, waitingOn: { type: 'string' } }));

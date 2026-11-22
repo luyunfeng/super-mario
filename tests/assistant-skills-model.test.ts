@@ -848,3 +848,68 @@ test('Web 追加确认事实，飞书按唯一原文更正并保留其他事实'
     assert.equal((await server.app.knowledge().list({ projectId: project.id }))[0]?.confirmedFacts, '周四送审，周三开会');
   } finally { await server.close(); }
 });
+
+test('Web 确认会议行动项，飞书重复确认取回同一待办', async t => {
+  const line = '复核合成样本，负责人待定';
+  let adapter!: FeishuOptions, pageId = '', otherId = '', version = '', repeat = false, todoId = '';
+  const sent: string[] = [];
+  const confirm = (step: string, id = pageId, updatedAt = version, actionLine = line) =>
+    call('knowledge_action_todo', { id, updatedAt, actionLine }, step);
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.ok(req.tools.includes('knowledge_action_todo'));
+      assert.match(req.system, /版本冲突须重新展示变化并让用户确认/);
+      return call('knowledge_list', { query: '合成会议' }, 'page');
+    }
+    const text = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    if (req.callId === 'page') {
+      const pages = JSON.parse(text);
+      assert.deepEqual(pages.map((p: { id: string }) => p.id), [pageId]);
+      version = pages[0].updatedAt;
+      return confirm('foreign', otherId);
+    }
+    if (req.callId === 'foreign') {
+      assert.match(text, /作用域|知识页不可用/);
+      return confirm('stale', pageId, '旧版本');
+    }
+    if (req.callId === 'stale') {
+      assert.match(text, /新版本/);
+      return confirm('missing', pageId, version, '不存在的行');
+    }
+    if (req.callId === 'missing') {
+      assert.match(text, /唯一匹配/);
+      return confirm('confirmed');
+    }
+    const receipt = JSON.parse(text);
+    assert.equal(receipt.created, !repeat);
+    if (repeat) assert.equal(receipt.todo.id, todoId);
+    todoId = receipt.todo.id;
+    return { role: 'assistant', content: receipt.created ? '已建立复核待办。' : '已找到原待办。' };
+  }, options => {
+    adapter = options;
+    return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    const project = await api('/projects', { name: '合成项目' });
+    const other = await api('/projects', { name: '独立项目' });
+    const input = { title: '合成会议', content: '行动项\n' + line, layer: 'project' };
+    pageId = (await api('/knowledge', { ...input, projectId: project.id })).id;
+    otherId = (await api('/knowledge', { ...input, projectId: other.id })).id;
+    const question = '请把合成会议中的“' + line + '”建成待办';
+    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), '已建立复核待办。');
+    const [todo] = server.app.todos();
+    assert.equal(todo.projectId, project.id);
+    assert.equal(todo.dueAt, undefined);
+    assert.ok(todo.notes.includes(version) && todo.notes.includes(pageId) && todo.notes.includes(line));
+    server.app.updateTodo(todoId, { title: '修订后的标题' });
+    repeat = true;
+    const bot = await api('/feishu/bots', { name: '会议确认', appId: 'cli_4444444444444444', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(question, { ...source, messageId: 'confirm-line' });
+    await t.waitFor(() => assert.ok(sent.includes('已找到原待办。')));
+    assert.deepEqual(server.app.todos().map(item => item.title), ['修订后的标题']);
+  } finally { await server.close(); }
+});
