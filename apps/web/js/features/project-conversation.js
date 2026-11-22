@@ -5,12 +5,14 @@ import { renderFormattedText } from '../lib/markdown.js';
 import { Button, Banner, Empty, TextArea } from '../ui/kit.js';
 import { createCodeSidebar } from './code-sidebar.js';
 import { attachSavedPrompts } from './saved-prompts.js';
+import { createProjectInstructions } from './project-instructions.js';
 import { createMessageFavorites } from './message-favorites.js';
 import { createConversationExport } from './conversation-export.js';
 
 export function createProjectConversation({ api, store, bindFolder }) {
   const code = createCodeSidebar({ api, store });
   let projectId = '';
+  const instructions = createProjectInstructions({ api, store, getProjectId: () => projectId });
   const favorites = createMessageFavorites({ api, store });
   const transcript = createConversationExport({ api, store, getProjectId: () => projectId });
   let generation = 0;
@@ -35,7 +37,7 @@ export function createProjectConversation({ api, store, bindFolder }) {
   const send = Button({ label: '发送目标', kind: 'primary', onClick: submit });
   const notice = h('div', { 'aria-live': 'polite' });
   const composer = h('div', { class: 'project-conversation__composer stack' }, prompts.menu, text, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, send), notice);
-  const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, favorites.button, transcript.button, code.toggle)), status, messages, composer), code.el);
+  const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, favorites.button, transcript.button, code.toggle)), status, messages, composer), code.el);
   let credential = api.token(), identity = 0;
   store.subscribe(() => {
     if (credential === api.token()) return;
@@ -47,6 +49,7 @@ export function createProjectConversation({ api, store, bindFolder }) {
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId);
 
   function paint() {
+    instructions.update();
     code.show(projectId);
     const p = project();
     const machine = store.view.snapshot?.machines?.find(m => m.id === p?.workspace?.machineId);
@@ -108,6 +111,7 @@ export function createProjectConversation({ api, store, bindFolder }) {
     el,
     show(id) {
       if (projectId !== id) {
+        instructions.close();
         prompts.changeScope();
         transcript.close();
         if (projectId) drafts.set(projectId, text.value);

@@ -582,6 +582,12 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             return json(res, 200, result);
           } finally { res.off('close', abort); }
         }
+        if (path === '/api/v1/project-instructions' && method === 'POST') {
+          if (!app.plugins.list().some(plugin => plugin.id === 'project-instructions' && plugin.status === 'active')) {
+            throw new InputError('项目工作指令插件已停用', 503);
+          }
+          return json(res, 200, await app.plugins.invocations.use('project-instructions.manage', await body(req) as JsonObject));
+        }
         if (path === '/api/v1/saved-prompts' && method === 'POST') {
           if (!app.plugins.list().some(plugin => plugin.id === 'saved-prompts' && plugin.status === 'active')) {
             throw new InputError('常用提示词插件已停用', 503);

@@ -160,6 +160,9 @@ test('approved explicit cwd stays exact when the project folder changes', async 
   const project = f.app.projects.create({ name: '工作区', workspace: binding });
   const params = { ...task, projectId: project.id, executorId: 'computer-a/codex', cwd: '/approved/exact' };
   const approval = f.app.approvals.propose({ kind: 'dispatch', title: '执行精确参数', details: '', params });
+  await f.app.plugins.invocations.use('project-instructions.manage', {
+    action: 'save', projectId: project.id, revision: 0, notes: '审批之后才保存的工作要求',
+  });
   f.app.projects.update(project.id, { workspace: { ...binding, cwd: '/work/moved' } });
   const approved = await f.app.approvals.approve(approval.id, approval.version);
   assert.equal(approved.status, 'completed');
@@ -167,6 +170,7 @@ test('approved explicit cwd stays exact when the project folder changes', async 
   await settled(f.app, run.id);
   assert.equal(run.cwd, params.cwd);
   assert.equal(f.calls[0].params.cwd, params.cwd);
+  assert.equal(f.calls[0].params.prompt, params.prompt);
 });
 
 test('project context carries the folder binding and project work conversations retain source validation', async t => {

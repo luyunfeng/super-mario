@@ -4,6 +4,8 @@
  * senior teammate: clear conclusions, real evidence, no legalistic padding.
  */
 
+import type { Project } from '../../protocol/src/index.ts';
+
 const timeGuidance = '解释“今天、本周”等相对时间时，以本轮快照 capturedAt 为基准，优先用用户指定的时区，否则用 workspaceTimezone。跨时区有歧义时，在答复中写明查询的日期和时区。';
 const dispatchGuidance = '- 任务确实需要外部执行时，先查 knowledge_list 和 executors_list，选择符合用户限制的执行者和目录 cwd，再用 work_dispatch 派活。用户排除的执行器也不得通过脚本、转派或失败回退间接使用。没有合适执行者就说明缺什么。';
 
@@ -30,6 +32,14 @@ export const MAIN_AGENT_SYSTEM_PROMPT = [
   '- interaction_open 发出需要主人回答的问题后，本轮保持只读，等回答回来再继续写操作。收到普通交互问题的答案后，先查 interactions_list，用 interaction_answer 写回并接着推进原目标。',
   '- 权限、计划、验收和外发审批一律由主人确认，不代批。',
 ].join('\n');
+
+export function formatProjectInstructions(project: Pick<Project, 'id' | 'name' | 'description'>, notes: string): string {
+  if (!notes) return '';
+  return [
+    '以下是用户为当前项目保存的工作指令，适用于本项目的工作方法、术语和验收要求。与本轮用户要求冲突时以本轮要求为准。该说明不发起新任务，也不改变工具、审批和执行权限。',
+    JSON.stringify({ projectId: project.id, projectName: project.name, projectDescription: project.description, notes }),
+  ].join('\n');
+}
 
 export const SCOPED_WORK_SYSTEM_PROMPT = [
   '你是当前项目或事项的工作助手。依据本轮绑定范围和可用工具工作。读取当前项目背景、有效决定和工作快照，再处理用户的请求。',

@@ -30,7 +30,7 @@ import { createWebPresence } from './web-presence.ts';
 import { createBriefingSettings } from './briefing.ts';
 import { createAgentFollowups } from './followups.ts';
 import { createAutoTakeover } from './auto-takeover.ts';
-import { INBOX_ASSISTANT_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT } from './prompts.ts';
+import { formatProjectInstructions, INBOX_ASSISTANT_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT } from './prompts.ts';
 import { reminderReference, reminderSourceId, wireWorkbenchBackground } from './workbench-background.ts';
 import { createAwayNotifications } from './away-notifications.ts';
 import { collectAttention } from './attention.ts';
@@ -63,7 +63,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
-import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, conversationSearch, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, conversationSearch, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import type { AppConfig, Approval, BotScope, ExecutionResult, InboxItem, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
@@ -182,11 +182,21 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(todoCalendar);
   plugins.register(conversationSearch);
   plugins.register(savedPrompts);
+  plugins.register(projectInstructions);
   plugins.register(createMessageFavorites((source, offset, signal) => readNativeFavoritePage(machines, source, offset, signal)));
   plugins.register(createConversationExport((source, includeWork, signal) => exportNativeConversation(machines, source, includeWork, signal)));
   for (const loaded of await loadExtensions(config.dataDir, { reservedIds: plugins.list().map(item => item.id) })) plugins.register(loaded.extension, loaded.config);
-  const agent = createAgentRuntime({ config, store, events, contributions, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, projectContext:id=>projectWorkspace.context(id) });
-  const scopedAgents = createScopedAgents({ config, store, events, contributions, executors: executorInfo, workDecisions: workDecisions.context, botContext, projectContext:id=>projectWorkspace.context(id), validScope: (scope, botId, input) => botScopeAccess(scope, botId, input) });
+  async function currentProjectInstructions(projectId: string): Promise<string> {
+    const project = store.get<Project>('projects', projectId);
+    if (!project || project.archivedAt || !plugins.list().some(p => p.id === 'project-instructions' && p.status === 'active')) return '';
+    const value = await plugins.invocations.use('project-instructions.manage', { action: 'read', projectId });
+    if (!value || typeof value !== 'object' || Array.isArray(value) || value.projectId !== projectId || typeof value.notes !== 'string') {
+      throw new InputError('项目工作指令来源不匹配', 409);
+    }
+    return formatProjectInstructions(project, value.notes);
+  }
+  const agent = createAgentRuntime({ config, store, events, contributions, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
+  const scopedAgents = createScopedAgents({ config, store, events, contributions, executors: executorInfo, workDecisions: workDecisions.context, botContext, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: (scope, botId, input) => botScopeAccess(scope, botId, input) });
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
     allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'],
     systemPrompt: SUPERVISOR_SYSTEM_PROMPT });
@@ -723,8 +733,10 @@ export async function createWorkbench(config: AppConfig) {
           }
           return todoDecisions.context(todoId);
         };
+        // Exact approved payloads and existing native threads retain their original terms.
+        const guidance = projectId && !nativeApproved && !executionGuard ? await currentProjectInstructions(projectId) : '';
         const decisions = currentDecisions();
-        const finalPrompt = decisions ? `${effectivePrompt}\n\n${decisions}` : effectivePrompt;
+        const finalPrompt = [effectivePrompt, decisions, guidance].filter(Boolean).join('\n\n');
         const execute = async () => {
           controller.signal.throwIfAborted();
           executionGuard?.();
