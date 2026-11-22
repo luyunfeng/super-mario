@@ -21,7 +21,7 @@ async function fixture(t: test.TestContext, ownerDirectReply = false) {
   const factory: FeishuBotFactory = options => {
     adapterOptions = options;
     return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
-      async send(_target, text, context) { sends.push({ text, card: context?.card }); context?.onSent?.('om_progress'); },
+      async send(_target, text, context) { sends.push({ text, card: context?.card }); context?.onSent?.(context.card ? 'om_progress' : 'om_text'); },
       async updateCard(id, card) { patches.push({ id, card }); if (patchFails) throw new Error('fake patch failure'); },
     };
   };
@@ -41,24 +41,30 @@ async function fixture(t: test.TestContext, ownerDirectReply = false) {
     store.put('messages', message.id, message); events.publish('messages.changed', { messageId: message.id });
   };
   t.after(async () => { await controller.close(); await mailboxes.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
-  return { store, controller, bot, sends, patches, publish, failPatch() { patchFails = true; } };
+  async function quoteCard() {
+    await adapterOptions.onMessage('继续', { ...source('follow-up'), parentId: 'om_progress' });
+    return store.get<{ replyReference?: unknown }>('message.routes', 'input')?.replyReference;
+  }
+  return { quoteCard, store, controller, bot, sends, patches, publish, failPatch() { patchFails = true; } };
 }
 
 test('一轮只创建一张进度卡，工具/答复更新同一ID，完成后不重复发送最终文本', async t => {
   const f = await fixture(t); f.publish({}); await until(() => f.sends.length === 1);
   assert.ok(f.sends[0]!.card);
   f.publish({ text: '部分回复', progress: { phase: 'tool', toolName: 'read', detail: '读取资料', observedAt: new Date().toISOString() } });
-  f.publish({ status: 'done', text: '最终回复' });
+  f.publish({ status: 'done', text: '最终回复 token=synthetic' });
   await until(() => f.patches.some(item => JSON.stringify(item.card).includes('回复完成')));
   assert.equal(f.sends.length, 1); assert.ok(f.patches.every(item => item.id === 'om_progress'));
   assert.match(JSON.stringify(f.patches.at(-1)!.card), /最终回复/);
-  f.publish({ status: 'done', text: '最终回复' }); await delay(15); assert.equal(f.sends.length, 1);
+  f.publish({ status: 'done', text: '最终回复 token=synthetic' }); await delay(15); assert.equal(f.sends.length, 1);
+  assert.deepEqual(await f.quoteCard(), { text: '最终回复 token=[凭证已隐藏]', truncated: false });
 });
 test('卡片更新失败停止增量；最终回复沿用原通道且不重发创建', async t => {
   const f = await fixture(t); f.publish({}); await until(() => f.sends.length === 1);
   f.failPatch(); f.publish({ status: 'done', text: '保留最终答复' });
   await until(() => f.sends.length === 2);
   assert.equal(f.patches.length, 1); assert.equal(f.sends[1]!.text, '保留最终答复');
+  assert.deepEqual(await f.quoteCard(), { unavailable: true });
 });
 test('机器人停用后迟到进度和结果不能再更新卡片或发送', async t => {
   const f = await fixture(t); f.publish({}); await until(() => f.sends.length === 1);

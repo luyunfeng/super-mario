@@ -100,6 +100,14 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       return { bot, route, state, adapter };
     } catch { return; }
   }
+  function rememberProgressReply(bot: FeishuBotSettings, target: string, platformId: string, entryId: string,
+    message: Message, card: ReturnType<typeof buildAgentProgressCard>, route: Routed) {
+    if (message.status !== 'done' || route.command || route.relay) return;
+    // Quote the delivered public block, including its redaction and display limit.
+    const text = card.body.elements.find(element => element.element_id === 'progress_text')?.text.content;
+    if (text) app.store.put('feishu.bot.reply-references', digest([bot.id, bot.appId, bot.revision, target, platformId]),
+      { entryId, text, truncated: false });
+  }
   const progressStreams = createAgentProgressStream({
     valid: message => Boolean(progressRoute(message)),
     async create(message) {
@@ -116,12 +124,13 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     async patch(platformId, message) {
       const current = progressRoute(message); if (!current) throw noDelivery('进度卡片来源已失效');
       const { bot, route, adapter } = current;
-      const sent = app.store.get<{ messageId: string; botId: string; revision: number; target: string }>('feishu.bot.progress', message.id);
+      const sent = app.store.get<{ messageId: string; botId: string; revision: number; target: string; entryId?: string }>('feishu.bot.progress', message.id);
       if (!sent || sent.messageId !== platformId || sent.botId !== bot.id || sent.revision !== bot.revision || sent.target !== route.target) throw noDelivery('进度卡片绑定已变化');
       const card = buildAgentProgressCard(message.progress!, { title: `${bot.name} · 回复进度`, text: message.text, status: message.status, subject: 'reply' });
       const update = async () => {
         if (!progressRoute(message)) throw noDelivery('进度卡片来源已失效');
         await adapter.updateCard!(platformId, card);
+        if (sent.entryId) rememberProgressReply(bot, route.target, platformId, sent.entryId, message, card, route);
       };
       if (app.plugins?.invocations) await app.plugins.invocations.invoke('channel.send', { botId: bot.id, accountId: bot.appId, chatId: route.target, target: route.target, key: `progress:${message.id}`, text: message.text || message.progress!.detail || '正在处理' }, async input => {
         if (!input || typeof input !== 'object' || Array.isArray(input) || input.botId !== bot.id || input.target !== route.target || input.chatId !== route.target || input.accountId !== bot.appId || input.key !== `progress:${message.id}` || input.text !== (message.text || message.progress!.detail || '正在处理')) throw noDelivery('渠道钩子不能改变进度卡片归属');
@@ -900,8 +909,12 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         const message = app.store.get<Message>('messages', stamp.progressMessageId);
         const provenance = message && progressRoute(message);
         if (!message?.progress || !provenance || provenance.bot.id !== bot.id || provenance.route.target !== target) throw noDelivery('进度卡片缺少有效消息来源');
-        context.card = buildAgentProgressCard(message.progress, { title: `${bot.name} · 回复进度`, text: message.text, status: message.status, subject: 'reply' });
-        context.onSent = messageId => app.store.put('feishu.bot.progress', message.id, { messageId, botId: bot.id, revision: bot.revision, target });
+        const card = buildAgentProgressCard(message.progress, { title: `${bot.name} · 回复进度`, text: message.text, status: message.status, subject: 'reply' });
+        context.card = card;
+        context.onSent = messageId => {
+          app.store.put('feishu.bot.progress', message.id, { messageId, botId: bot.id, revision: bot.revision, target, entryId: entry.id });
+          rememberProgressReply(bot, target, messageId, entry.id, message, card, provenance.route);
+        };
       }
       if (stamp?.chatProject && stamp.platformReplyTo) {
         const binding = app.store.get<{projectId:string}>('feishu.chat-target',digest([bot.id,target,stamp.platformReplyTo]));
