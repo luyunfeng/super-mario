@@ -158,8 +158,8 @@ export interface SystemActions {
   changeKnowledgeAlias?(args: Record<string, unknown>): Promise<Json>;
   changeKnowledgeTag?(args: Record<string, unknown>): Promise<Json>;
   knowledgeRevision?(id: string, commit?: string, projectId?: string): ReturnType<NonNullable<KnowledgeBackend['revision']>>;
-  knowledgeOriginal?(pageId: string, sourceId?: string, projectId?: string): Promise<{
-    sources?: { id: string; title: string; createdAt: string; meeting?: boolean; materialKind?: 'meeting-transcript'; meetingStartedAt?: string }[]; content?: string; title?: string }>;
+  knowledgeOriginal?(pageId: string, sourceId?: string, projectId?: string, handoffExcerpt?: boolean): Promise<{
+    sources?: { id: string; title: string; createdAt: string; meeting?: boolean; materialKind?: 'meeting-transcript'; meetingStartedAt?: string }[]; truncated?: boolean; content?: string; title?: string }>;
   meetingDay?(date: string, timezone?: string, projectId?: string, offset?: number): Promise<Json>;
   knowledgeJobs?(): Json;
   dispatch(input: Record<string, unknown>): Json;
@@ -353,19 +353,22 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           }, { pageId: { type: 'string' }, commit: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
         if (actions?.knowledgeOriginal) context.contribute('tools', 'knowledge_original', tool('knowledge_original',
           '用知识页 ID 列出已保存的来源；加来源 ID 分段读取原文。提供 query 按原文字面搜索，每行返回一次，按 nextOffset 继续同一查询。', async (args, signal) => {
-            const { pageId, sourceId, projectId, query, offset = 0 } = args;
+            const { pageId, sourceId, projectId, query, handoffExcerpt, offset = 0 } = args;
             if (typeof pageId !== 'string' || !pageId || (sourceId !== undefined && typeof sourceId !== 'string') ||
                 typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) throw new Error('请提供知识页和有效的读取位置');
             if (query !== undefined && (!sourceId || typeof query !== 'string' || !query.trim() || query.length > 200 || /[\r\n]/.test(query)))
               throw new Error('请指定来源和不超过 200 个字符的单行关键词');
             signal.throwIfAborted();
-            const result = await actions.knowledgeOriginal!(pageId, sourceId, typeof projectId === 'string' ? projectId : undefined);
+            if (handoffExcerpt !== undefined && (typeof handoffExcerpt !== 'boolean' ||
+                (handoffExcerpt && (!sourceId || query !== undefined || args.offset !== undefined)))) throw new Error('交接节选须指定转写来源，不能同时搜索或分页');
+            const result = await actions.knowledgeOriginal!(pageId, sourceId, typeof projectId === 'string' ? projectId : undefined, handoffExcerpt);
             if (result.sources) {
               const end = offset + 25;
               return { sources: result.sources.slice(offset, end), nextOffset: end < result.sources.length ? end : null } as Json;
             }
             if (typeof sourceId !== 'string' || typeof result.content !== 'string' || typeof result.title !== 'string') throw new Error('来源正文不可用');
             const route = '#memory?entry=' + encodeURIComponent(pageId) + '&source=' + encodeURIComponent(sourceId);
+            if (handoffExcerpt) return { title: result.title, text: result.content, truncated: result.truncated, webCitation: `[查看原文](${route})` } as Json;
             if (typeof query === 'string') {
               const lines = result.content.split('\n');
               const matches = [];
@@ -385,7 +388,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             const chars = Array.from(result.content);
             const end = offset + 4000;
             return { title: result.title, webCitation: `[查看原文](${route})`, text: chars.slice(offset, end).join(''), nextOffset: end < chars.length ? end : null } as Json;
-          }, { pageId: { type: 'string' }, sourceId: { type: 'string' }, query: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
+          }, { pageId: { type: 'string' }, sourceId: { type: 'string' }, handoffExcerpt: { type: 'boolean', description: '用户明确要求附转写时获取交接用正文；长文只保留首尾。' }, query: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
         if (actions?.meetingDay) context.contribute('tools', 'meeting_day', tool('meeting_day',
           '按指定日期和时区读取可见会议来源。默认使用工作台时区。返回整理状态、可读知识页以及范围内未注明会议日期的来源数。', async (args, signal) => {
             signal.throwIfAborted();

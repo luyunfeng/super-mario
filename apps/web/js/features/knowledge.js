@@ -163,11 +163,9 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
           '。请核对原文，整理接手方需要了解的决定、行动项当前进度和未决问题。只起草，供我核对。'];
         if (instruction) parts.push('给接手方的任务：' + instruction);
         if (attach) {
-          const { content } = await api.get('/knowledge/' + encodeURIComponent(entry.id) + '/sources/' + encodeURIComponent(source.id));
-          if (!content?.trim()) throw new Error('所选转写没有正文。');
-          const chars = Array.from(content);
-          const cut = chars.length > 5000;
-          const excerpt = cut ? chars.slice(0, 2500).join('') + '\n〔中段已省略〕\n' + chars.slice(-2500).join('') : content;
+          const { content: excerpt, truncated: cut } = await api.get('/knowledge/' + encodeURIComponent(entry.id) +
+            '/sources/' + encodeURIComponent(source.id) + '?view=handoff');
+          if (!excerpt?.trim()) throw new Error('所选转写没有正文。');
           parts.push((cut ? '请附以下转写节选（首尾各 2500 字符）：' : '请附以下会议转写：') +
             '\n' + excerpt.replace(/\r\n?/g, '\n').split('\n').map(line => '> ' + line).join('\n'));
         }

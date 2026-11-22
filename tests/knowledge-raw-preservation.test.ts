@@ -134,6 +134,7 @@ test('重复采集会议文档在重启后仍只整理一份，个人知识保�
   const evidence = await f.curator.pageSources(page.id);
   assert.deepEqual(evidence.sources?.map(row => row.id), [job.id]);
   const original = await f.curator.pageSources(page.id, job.id);
+  await assert.rejects(f.curator.pageSources(page.id, job.id, undefined, true), /不是已核对的会议转写/);
   assert.equal(original.content, await readFile(f.raw(job.id), 'utf8'));
   assert.equal(f.curator.addSource(input, provenance).status, 'completed');
   assert.equal(f.curator.status().jobs.length, 1);
@@ -179,6 +180,9 @@ test('核对后的项目会议转写按会议提示词整理，重复提交复�
   assert.equal(sources?.[0].meetingStartedAt, '2032-02-29T00:10:00+05:45');
   const original = await f.curator.pageSources(page!.id, job.id, 'sample');
   assert.ok(original.content?.endsWith(input.text));
+  const attachment = await f.curator.pageSources(page!.id, job.id, 'sample', true);
+  assert.equal(attachment.content, input.text);
+  assert.equal(attachment.truncated, false);
   assert.equal(f.curator.addSource({ ...input, meetingStartedAt: '2032-02-29T00:10:00+05:45' }).id, job.id);
   assert.notEqual(f.curator.addSource({ ...input, meetingStartedAt: '2032-03-01T00:10+05:45' }).id, job.id);
   const legacy = createHash('sha256').update(JSON.stringify([input.layer, input.projectId, input.title, input.text])).digest('hex');
