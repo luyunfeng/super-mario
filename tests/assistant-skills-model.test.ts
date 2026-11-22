@@ -2,7 +2,7 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import JSZip from 'jszip';
@@ -58,7 +58,7 @@ async function fixture(t: TestContext, respond: (request: Request, turn: number)
     }
     throw new Error('模型回合未结束');
   };
-  return { server, api, ask, requests };
+  return { server, api, ask, requests, dir };
 }
 
 function call(name: string, args: object, id: string): Reply {
@@ -483,12 +483,12 @@ test('主对话查日程与待办时收到日历不可用原因和独立的待�
 });
 
 test('Web 与飞书项目会话可按会议主题核对决定、建议和未决事项', { timeout: 30000 }, async t => {
-  let projectId = '', adapter!: FeishuOptions;
+  let projectId = '', pageId = '', otherPage = '', sourceId = '', adapter!: FeishuOptions;
   const deliveries: string[] = [];
   const title = '合成样本评审会';
   const excerpt = '[09:12] 决定采用样本甲。[09:14] 建议周五前复核；负责人待定。';
   const answer = '决定采用样本甲。周五是建议期限，负责人待确认。';
-  const { server, api, ask, requests } = await fixture(t, req => {
+  const { server, api, ask, requests, dir } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.match(req.system, /区分明确决定、建议、行动项和未决问题/);
       assert.match(req.system, /未明确的负责人或期限写待确认/);
@@ -503,7 +503,26 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
       assert.doesNotMatch(materials, /另一个项目的结论|样本甲/);
       return { role: 'assistant', content: '当前项目缺少该次会议正文。' };
     }
-    assert.ok(materials.includes(excerpt));
+    if (req.callId === 'minutes') {
+      assert.ok(materials.includes(excerpt));
+      assert.ok(req.tools.includes('knowledge_original'));
+      assert.match(req.system, /只引用读到的文字/);
+      return call('knowledge_original', { pageId: otherPage }, 'denied-source');
+    }
+    if (req.callId === 'denied-source') {
+      assert.match(materials, /知识页不可用/);
+      return call('knowledge_original', { pageId }, 'sources');
+    }
+    if (req.callId === 'sources') {
+      assert.ok(materials.includes(sourceId));
+      return call('knowledge_original', { pageId, sourceId }, 'first-page');
+    }
+    if (req.callId === 'first-page') {
+      assert.match(materials, /4000/);
+      assert.doesNotMatch(materials, /原话依据甲/);
+      return call('knowledge_original', { pageId, sourceId, offset: 4000 }, 'last-page');
+    }
+    assert.match(materials, /原话依据甲/);
     assert.doesNotMatch(materials, /另一个项目的结论/);
     return { role: 'assistant', content: answer };
   }, options => {
@@ -514,8 +533,15 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
   try {
     projectId = (await api('/projects', { name: '样本项目' })).id;
     const other = await api('/projects', { name: '独立项目' });
-    await api('/knowledge', { layer: 'project', projectId, title, content: excerpt });
-    await api('/knowledge', { layer: 'project', projectId: other.id, title, content: '独立评审会：另一个项目的结论' });
+    pageId = (await api('/knowledge', { layer: 'project', projectId, title, content: excerpt })).id;
+    otherPage = (await api('/knowledge', { layer: 'project', projectId: other.id, title, content: '独立评审会：另一个项目的结论' })).id;
+    const job = server.app.knowledgeCurator.addSource({ title, text: excerpt, layer: 'project', projectId });
+    sourceId = job.id;
+    server.app.store.put('knowledge.sources', job.id, { ...job, status: 'completed', knowledgeIds: [pageId] });
+    const raw = join(dir, 'plugins', 'knowledge-local', 'raw');
+    await mkdir(raw, { recursive: true });
+    await writeFile(join(raw, job.id + '.md'), '字'.repeat(4000) + '原话依据甲');
+
     const question = title + '有哪些决定？还有哪些事要确认？';
     assert.equal(await ask(question, '/projects/' + projectId + '/messages'), answer);
     assert.equal(await ask('独立评审会定了什么？', '/projects/' + projectId + '/messages'), '当前项目缺少该次会议正文。');
@@ -526,6 +552,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     await adapter.onMessage(question, { ...source, messageId: 'minutes-question' });
     await t.waitFor(() => assert.ok(deliveries.includes(answer)));
     assert.equal(requests.filter(req => req.callId === 'minutes').length, 2);
+    assert.equal(requests.filter(req => req.callId === 'last-page').length, 2);
     assert.equal(server.app.todos().length, 0);
   } finally { await server.close(); }
 });

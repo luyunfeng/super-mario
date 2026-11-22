@@ -147,6 +147,8 @@ export interface SystemActions {
   projectCreate?(input: Record<string, unknown>): Json | Promise<Json>;
   projectsDiscover?(input: Record<string, unknown>): Promise<Json>;
   knowledgeSource?(input: Record<string, unknown>): Json;
+  knowledgeOriginal?(pageId: string, sourceId?: string, projectId?: string): Promise<{
+    sources?: { id: string; title: string; createdAt: string }[]; content?: string; title?: string }>;
   knowledgeJobs?(): Json;
   dispatch(input: Record<string, unknown>): Json;
   createTodo(input: Record<string, unknown>): Json;
@@ -285,6 +287,22 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           return { protected: classifyProtected(String(url ?? ''), Array.isArray(trustedHosts) ? trustedHosts : []) };
         });
         if (actions?.knowledgeSource) context.contribute('tools', 'knowledge_ingest', tool('knowledge_ingest', '将用户明确提供的资料加入独立知识 Agent 整理队列，默认个人知识；受保护来源先生成主人读取审批，不自动申请权限。入队或批准都不代表整理完成。', async (args, signal) => { signal.throwIfAborted(); return actions.knowledgeSource!(args); }, { url: { type: 'string' }, text: { type: 'string' }, title: { type: 'string' }, layer: { type: 'string', enum: ['personal', 'project'] }, projectId: { type: 'string' } }));
+        if (actions?.knowledgeOriginal) context.contribute('tools', 'knowledge_original', tool('knowledge_original',
+          '用知识页 ID 列出已保存的来源；加来源 ID 分段读取原文，用 nextOffset 续读。', async (args, signal) => {
+            const { pageId, sourceId, projectId, offset = 0 } = args;
+            if (typeof pageId !== 'string' || !pageId || (sourceId !== undefined && typeof sourceId !== 'string') ||
+                typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) throw new Error('请提供知识页和有效的读取位置');
+            signal.throwIfAborted();
+            const result = await actions.knowledgeOriginal!(pageId, sourceId, typeof projectId === 'string' ? projectId : undefined);
+            if (result.sources) {
+              const end = offset + 25;
+              return { sources: result.sources.slice(offset, end), nextOffset: end < result.sources.length ? end : null } as Json;
+            }
+            if (typeof result.content !== 'string' || typeof result.title !== 'string') throw new Error('来源正文不可用');
+            const chars = Array.from(result.content);
+            const end = offset + 4000;
+            return { title: result.title, text: chars.slice(offset, end).join(''), nextOffset: end < chars.length ? end : null } as Json;
+          }, { pageId: { type: 'string' }, sourceId: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
         if (actions?.knowledgeJobs) context.contribute('tools', 'knowledge_jobs', tool('knowledge_jobs', '查看知识整理队列、真实 Agent 状态及生成的知识标识。', async (_args, signal) => { signal.throwIfAborted(); return actions.knowledgeJobs!(); }));
       },
     },

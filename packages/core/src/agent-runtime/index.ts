@@ -55,8 +55,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   const infrastructureErrors: unknown[] = [];
 
   const mainIdentity = scope ? scope.kind === 'global' : ownConversation === 'main';
-  const readTools = new Set(['machine_skills_list', 'assistant_skill_read', 'knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'todo_history', 'work_read', 'brief_read', 'interactions_list', 'projects_list', 'projects_discover', 'knowledge_jobs', 'agent_sessions', 'inbox_list', 'inbox_handling_read', 'scheduled_work_list', 'work_decisions_list', 'work_decision_reference', 'bots_list', 'mailboxes_list', 'supervisor_read', 'followups_list', 'calendar_agenda', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff', 'run_commit_diff', 'run_worktree_status', 'run_worktree_history']);
-  const scopeTools = new Set(['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'todo_history', 'projects_list', 'work_read', 'work_dispatch', 'todo_create', 'knowledge_ingest', 'knowledge_source', 'knowledge_put', 'task_plan', 'bot_handoff', 'agent_sessions', 'session_resume', 'inbox_list', 'inbox_handling_read', 'scheduled_work_list', 'work_decisions_list', 'work_decision_record', 'work_decision_reference', 'work_decision_correct', 'work_decision_withdraw', 'scheduled_work_propose', 'scheduled_work_cancel', 'schedule_followup', 'followups_list', 'followup_cancel', 'notify_user', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff', 'run_commit_diff', 'run_worktree_status', 'run_worktree_history']);
+  const readTools = new Set(['knowledge_original', 'machine_skills_list', 'assistant_skill_read', 'knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'todo_history', 'work_read', 'brief_read', 'interactions_list', 'projects_list', 'projects_discover', 'knowledge_jobs', 'agent_sessions', 'inbox_list', 'inbox_handling_read', 'scheduled_work_list', 'work_decisions_list', 'work_decision_reference', 'bots_list', 'mailboxes_list', 'supervisor_read', 'followups_list', 'calendar_agenda', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff', 'run_commit_diff', 'run_worktree_status', 'run_worktree_history']);
+  const scopeTools = new Set(['knowledge_original', 'knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'todo_history', 'projects_list', 'work_read', 'work_dispatch', 'todo_create', 'knowledge_ingest', 'knowledge_source', 'knowledge_put', 'task_plan', 'bot_handoff', 'agent_sessions', 'session_resume', 'inbox_list', 'inbox_handling_read', 'scheduled_work_list', 'work_decisions_list', 'work_decision_record', 'work_decision_reference', 'work_decision_correct', 'work_decision_withdraw', 'scheduled_work_propose', 'scheduled_work_cancel', 'schedule_followup', 'followups_list', 'followup_cancel', 'notify_user', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff', 'run_commit_diff', 'run_worktree_status', 'run_worktree_history']);
   const scopeAllows = (name: string) => !scope || scope.kind === 'global' || (scope.kind === 'unmarked'
     ? ['knowledge_list', 'executors_list'].includes(name)
     : scopeTools.has(name) && !(scope.kind === 'task' && name === 'todo_create')
@@ -100,7 +100,10 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       const run = store.get<{ projectId?: string; todoId?: string }>('runs', String(args.worktreeRunId));
       if (!run || !inScope(run)) throw new Error('原工作树不属于当前作用域');
     }
-    if (name === 'knowledge_list') {
+    if (name === 'knowledge_original') {
+      if (!scopedProject) throw new Error('当前作用域没有可读取的项目原文');
+      args.projectId = scopedProject;
+    } else if (name === 'knowledge_list') {
       if (args.projectId !== undefined && args.projectId !== scopedProject) throw new Error('跨作用域 projectId');
       if (args.layer !== undefined && args.layer !== 'global' && !(args.layer === 'project' && scopedProject)) throw new Error('作用域禁止此知识层');
       // Do not pin projectId here: backends apply it to global entries too. Filter the result below.

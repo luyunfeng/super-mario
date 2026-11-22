@@ -377,10 +377,10 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
   const timer = setInterval(() => { void tick(); }, 2000); timer.unref();
   return {
     status, addSource, rebuildIndex,
-    async pageSources(pageId: string, sourceId?: string) {
+    async pageSources(pageId: string, sourceId?: string, projectId?: string) {
       if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
       const page = (await options.knowledge().list()).find(entry => entry.id === pageId);
-      if (!page || (page.projectId && !options.validProject(page.projectId))) throw new CuratorError('知识页不可用', 404);
+      if (!page || (projectId !== undefined && (page.layer !== 'project' || page.projectId !== projectId)) || (page.projectId && !options.validProject(page.projectId))) throw new CuratorError('知识页不可用', 404);
       // Use persisted import receipts. Markdown references in editable pages cannot grant file access.
       const matches = jobs().filter(job => job.layer === page.layer && job.projectId === page.projectId &&
         job.knowledgeIds.includes(pageId));
