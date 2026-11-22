@@ -9,6 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import { readFile, stat } from 'node:fs/promises';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createWorkbench, InputError, requiredText } from '../../../packages/core/src/workbench.ts';
+import { listTraceSessions, readTraceSession, readTurnTrace } from '../../../packages/core/src/agent-traces.ts';
 import { createMachineHub } from '../../../packages/core/src/machines.ts';
 import type { FeishuRegistrationInput } from './feishu-registration.ts';
 import { createFeishuGateway, type FeishuGatewayDependencies } from './feishu-gateway.ts';
@@ -289,6 +290,19 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         const cancelFollowup = path.match(/^\/api\/v1\/followups\/([^/]+)\/cancel$/);
         if (cancelFollowup && method === 'POST') {
           return json(res, 200, app.followups.cancel(decodeURIComponent(cancelFollowup[1]!)));
+        }
+        if (path === '/api/v1/traces/sessions' && method === 'GET') {
+          return json(res, 200, { sessions: listTraceSessions(app.store) });
+        }
+        const traceSessionMatch = path.match(/^\/api\/v1\/traces\/sessions\/([^/]+)$/);
+        if (traceSessionMatch && method === 'GET') {
+          return json(res, 200, readTraceSession(app.store, decodeURIComponent(traceSessionMatch[1]!)));
+        }
+        const traceTurnMatch = path.match(/^\/api\/v1\/traces\/turns\/([^/]+)$/);
+        if (traceTurnMatch && method === 'GET') {
+          const trace = readTurnTrace(app.store, decodeURIComponent(traceTurnMatch[1]!));
+          if (!trace) throw new InputError('未找到该轮次的上下文追踪记录', 404);
+          return json(res, 200, trace);
         }
         if (path === '/api/v1/work-decisions' && method === 'GET') {
           for (const key of url.searchParams.keys()) if (!['projectId', 'todoId'].includes(key)) throw new InputError('工作决定查询参数无效');

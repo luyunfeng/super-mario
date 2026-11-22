@@ -63,7 +63,8 @@ export function createShell({ api, store, router, scope }) {
   });
   tokenInput.value = api.token();
 
-  const topbar = h('header', { class: 'topbar' }, search, h('span', { class: 'topbar__space' }), scopeSelect, conn);
+  const inspectorLink = h('a', { class: 'btn btn--sm', href: '/inspector.html', target: '_blank', rel: 'noopener', title: '查看 Pi 上下文窗口、提示词分布与历史会话' }, '上下文透视');
+  const topbar = h('header', { class: 'topbar' }, search, h('span', { class: 'topbar__space' }), inspectorLink, scopeSelect, conn);
 
   // —— 内容区 ——
   const loading = h('div', { class: 'page__inner', id: 'loading', role: 'status' }, h('p', { class: 'muted' }, '正在加载工作台…'));

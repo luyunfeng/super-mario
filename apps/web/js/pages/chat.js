@@ -106,7 +106,7 @@ export function createChatPage({ api, store, scope, router }) {
       h('span', { class: 'msg__avatar', 'aria-hidden': 'true' }, 'M'),
       h('div', { class: 'msg__col' },
         h('span', { class: 'msg__label' }, label),
-        agentProgress(message),
+        agentProgress(message, api),
         h('div', { class: 'msg__bubble' }, renderFormattedText(text)),
         h('span', { class: 'msg__meta' }, timeAgo(message.createdAt))));
   }
