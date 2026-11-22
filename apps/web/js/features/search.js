@@ -3,6 +3,7 @@ import { h, replace } from '../lib/dom.js';
 import { openDrawer } from '../ui/overlay.js';
 import { Button } from '../ui/kit.js';
 import { searchRunHits } from './run-search.js';
+import { openRunFilters } from './run-search-filters.js';
 import { openSavedSearches } from './saved-searches.js';
 
 export function conversationSearchActive(snapshot) {
@@ -198,12 +199,20 @@ export function createSearch({ shell, store, router, api }) {
     const href = focused?.getAttribute('href');
     const action = focused?.tagName === 'BUTTON' ? focused.textContent : null;
     const found = query ? groups(query, snapshot) : [];
+    const apply = value => { input.value = value; input.focus(); paint(); };
+    const openFilters = () => {
+      const owner = api.draftOwner();
+      results.hidden = true;
+      results.replaceChildren();
+      openRunFilters({ query, snapshot, store, onApply: apply, authorized: () => api.draftOwner() === owner &&
+        store.view.snapshotOwner === owner && conversationSearchActive(store.view.snapshot) && !store.view.unauthorized });
+    };
     const open = initialQuery => {
       results.hidden = true;
       results.replaceChildren();
       openSavedSearches({
         api, store, initialQuery, isEnabled: () => conversationSearchActive(store.view.snapshot) && !store.view.unauthorized,
-        onApply(value) { input.value = value; input.focus(); paint(); },
+        onApply: apply,
       });
     };
     replace(results, query && !found.length && !searches.some(group => group.pending || group.error) && h('p', { class: 'search__group' }, '没有找到匹配的内容'), searches.map(group => group.error && h('p', { class: 'search__group' }, group.error)), found.map(([name, hits]) => [
@@ -219,6 +228,7 @@ export function createSearch({ shell, store, router, api }) {
       name === '项目工作对话' && hits.length > 5 && Button({ label: '查看全部匹配消息', size: 'sm', onClick: () => openResults(query, '消息') }),
       name === '会议' && hits.length > 5 && Button({ label: '查看全部匹配会议', size: 'sm', onClick: () => openResults(query, '会议') }),
     ]), savedEnabled && h('div', { class: 'saved-search-actions' },
+      Button({ label: '筛选执行记录', size: 'sm', onClick: openFilters }),
       query && h('button', { class: 'btn btn--sm', type: 'button', onclick: () => open(query) }, '保存当前检索'),
       h('button', { class: 'btn btn--sm', type: 'button', onclick: () => open() }, '管理保存的检索')));
     if (focused) {

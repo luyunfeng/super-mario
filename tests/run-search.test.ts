@@ -49,3 +49,10 @@ test('local calendar tokens select half-open date intervals and a rolling week e
   assert.deepEqual(ids('本周'), ['today']);
   assert.deepEqual(ids('最近七天'), ['prior', 'midnight', 'late', 'today']);
 });
+
+test('picked IDs are exact while manually typed partial filters still match names and paths', () => {
+  const snapshot = { runs: [{ id: 'first', machineId: 'linux' }, { id: 'second', machineId: 'linux-2' }, { id: 'third', machineId: 'LINUX' }] };
+  const ids = (q: string) => searchRunHits(q, snapshot).map((hit: {run: {id: string}}) => hit.run.id);
+  assert.deepEqual(ids('host:=LINUX'), ['third']);
+  assert.deepEqual(ids('machine:linux'), ['first', 'second', 'third']);
+});

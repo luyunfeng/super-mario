@@ -9,35 +9,46 @@ const windows = new Map([['24h', 1], ['7d', 7], ['30d', 30]]);
 const states = new Set(['queued', 'running', 'completed', 'failed', 'unknown', 'cancelled']);
 const lower = (...parts) => parts.filter(Boolean).join('\n').toLowerCase();
 
+// The editor and matcher recognize the same tokens. Unknown operators remain free text.
+export function runCondition(token) {
+  const word = token.toLowerCase();
+  if (word === '最近七天') return ['since', '7d'];
+  if (['昨天', '今天', '本周'].includes(word)) return ['since', word];
+  const colon = word.indexOf(':');
+  if (colon <= 0) return;
+  const key = word.slice(0, colon), value = word.slice(colon + 1);
+  if (['since', 'after', 'updated'].includes(key) && windows.has(value)) return ['since', value];
+  const field = dimensions.get(key);
+  if (!field || !value || (field === 'state' && !states.has(value) && value !== 'working')) return;
+  if (field !== 'state' && value.startsWith('=')) return [field, token.slice(colon + 1)];
+  return [field, field === 'state' && value === 'working' ? 'running' : value];
+}
+
 export function searchRunHits(query, snapshot, now = Date.now()) {
   const terms = [];
   const filters = new Map();
   let since, before;
-  for (const word of query.trim().toLowerCase().split(/\s+/)) {
-    const colon = word.indexOf(':');
-    const key = word.slice(0, colon);
-    const value = word.slice(colon + 1);
-    const field = dimensions.get(key);
-    if (colon > 0 && ['since', 'after', 'updated'].includes(key) && windows.has(value)) {
+  for (const word of query.trim().split(/\s+/)) {
+    const condition = runCondition(word);
+    if (!condition) { if (word) terms.push(word.toLowerCase()); continue; }
+    const [field, value] = condition;
+    if (field !== 'since') {
+      if (!filters.has(field)) filters.set(field, []);
+      filters.get(field).push(value);
+    } else if (windows.has(value)) {
       since = now - windows.get(value) * 86400000;
       before = now + 1;
-    } else if (word === '最近七天') {
-      since = now - 7 * 86400000;
-      before = now + 1;
-    } else if (word === '昨天' || word === '今天' || word === '本周') {
+    } else {
       // Use local date arithmetic: consecutive midnights may be 23 or 25 hours apart.
       const start = new Date(now);
       start.setHours(0, 0, 0, 0);
-      if (word === '昨天') start.setDate(start.getDate() - 1);
-      if (word === '本周') start.setDate(start.getDate() - (start.getDay() + 6) % 7);
+      if (value === '昨天') start.setDate(start.getDate() - 1);
+      if (value === '本周') start.setDate(start.getDate() - (start.getDay() + 6) % 7);
       const end = new Date(start);
-      end.setDate(end.getDate() + (word === '本周' ? 7 : 1));
+      end.setDate(end.getDate() + (value === '本周' ? 7 : 1));
       since = start.getTime();
       before = end.getTime();
-    } else if (colon > 0 && field && value && (field !== 'state' || states.has(value) || value === 'working')) {
-      if (!filters.has(field)) filters.set(field, []);
-      filters.get(field).push(field === 'state' && value === 'working' ? 'running' : value);
-    } else if (word) terms.push(word);
+    }
   }
   const names = items => new Map((items ?? []).map(item => [item.id, item.name]));
   const machines = names(snapshot.machines);
@@ -58,7 +69,12 @@ export function searchRunHits(query, snapshot, now = Date.now()) {
       agent: lower(run.executorId, executors.get(run.executorId)),
       state: run.status,
     };
-    const accepts = ([field, values]) => values.some(value => field === 'state' ? fields.state === value : fields[field].includes(value));
+    const ids = { machine: run.machineId, project: run.projectId, agent: run.executorId };
+    const accepts = ([field, values]) => values.some(value => {
+      if (field === 'state') return fields.state === value;
+      if (value.startsWith('=')) return ids[field] === value.slice(1);
+      return fields[field].includes(value);
+    });
     if (!conditions.every(accepts)) continue;
     let score = 0, excerpt = '';
     if (terms.length) {

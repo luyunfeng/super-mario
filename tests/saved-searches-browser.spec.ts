@@ -169,9 +169,27 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await expect(original).toBeFocused();
     await expect(original).toContainText('后续记录 0');
 
-    await search.fill('季度复核');
+    await search.fill('账单 status:working updated:24h');
+    const filtersButton = results.getByRole('button', { name: '筛选执行记录' });
+    const filters = page.getByRole('dialog', { name: '筛选执行记录' });
+    await filtersButton.click();
+    await expect(filters.getByLabel('执行中')).toBeChecked();
+    await expect(filters.getByLabel('更新时间')).toHaveValue('24h');
+    await filters.getByLabel('执行中').uncheck();
+    await filters.getByLabel('已结束').check();
+    await filters.getByLabel('季度复核项目').check();
+    await filters.getByLabel('更新时间').selectOption('7d');
+    await filters.getByRole('button', { name: '应用筛选' }).click();
+    const builtQuery = '账单 state:completed project:=' + projectId + ' since:7d';
+    await expect(search).toHaveValue(builtQuery);
+    await expect(results.getByRole('link', { name: '生成账单' })).toBeVisible();
+    await filtersButton.click();
+    await filters.getByLabel('已结束').uncheck();
+    await filters.getByRole('button', { name: '关闭' }).click();
+    await expect(search).toHaveValue(builtQuery);
+    await search.focus();
     await saveQuery.click();
-    await expect(drawer.getByLabel('检索词', { exact: true })).toHaveValue('季度复核');
+    await expect(drawer.getByLabel('检索词', { exact: true })).toHaveValue(builtQuery);
     await drawer.getByLabel('名称', { exact: true }).fill('本季复核');
     await button('保存').click();
     await expect(button('套用 本季复核')).toBeVisible();
@@ -181,8 +199,8 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await search.click();
     await manage.click();
     await button('套用 本季复核').click();
-    await expect(search).toHaveValue('季度复核');
-    await expect(results.getByRole('link', { name: '季度复核项目' })).toBeVisible();
+    await expect(search).toHaveValue(builtQuery);
+    await expect(results.getByRole('link', { name: '生成账单' })).toBeVisible();
 
     await manage.click();
     await button('编辑 本季复核').click();
@@ -241,6 +259,7 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await search.fill('季度复核');
     await expect(results.getByRole('link', { name: '季度复核项目' })).toBeVisible();
     await expect(manage).toHaveCount(0);
+    await expect(filtersButton).toHaveCount(0);
     await expect(saveQuery).toHaveCount(0);
     assert.equal((await api('/saved-searches')).status, 503);
     assert.deepEqual(errors, []);
