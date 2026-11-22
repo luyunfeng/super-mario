@@ -325,6 +325,8 @@ test('早晚简报向模型说明计划时间、日历证据和只读边界', { 
     const request = requests.find(r => JSON.stringify(r.content).includes('工作台早间简报'));
     assert.ok(request);
     assert.ok(!request.tools.includes('calendar_agenda'));
+    assert.ok(request.tools.includes('schedule_followup'));
+    assert.ok(!request.tools.includes('notify_user'));
     const prompt = JSON.stringify(request.content);
     for (const expected of [scheduledFor, '逾期待办 1：合成积压事项', '日程未核实', '等待执行 1：合成任务-queued', '进行中 1：合成任务-running',
       '执行结果未知 1：合成任务-unknown', '执行已取消 1：合成任务-cancelled']) assert.ok(prompt.includes(expected), expected);
@@ -345,8 +347,11 @@ test('早晚简报向模型说明计划时间、日历证据和只读边界', { 
     await server.app.background.eventbox.drain();
     const evening = requests.find(r => JSON.stringify(r.content).includes('工作台晚间简报'));
     assert.ok(evening);
+    assert.ok(evening.system.includes('需要新增提醒、通知、派活或变更记录时，只给出建议'));
     assert.ok(!evening.tools.includes('calendar_agenda'));
-    assert.ok(!evening.tools.includes('work_dispatch'));
+    for (const name of ['work_dispatch', 'schedule_followup', 'notify_user', 'followup_cancel']) {
+      assert.ok(!evening.tools.includes(name), name);
+    }
     for (const expected of [eveningTime, 'Asia/Shanghai', '仍记录为运行中，本期无更新 1：合成任务-running', '明天最早的安排', '不能证明实际参会', '日程未核实', '本轮只读']) {
       assert.ok(JSON.stringify(evening.content).includes(expected), expected);
     }

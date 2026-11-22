@@ -181,7 +181,7 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
         try {
           const prompt = buildBriefingPrompt(data.name, fallbackText, tz, to);
           const reply = await Promise.race([
-            agent.ask(prompt, { readOnly: true }),
+            agent.ask(prompt, { readOnly: true, ...(data.name === 'morning' ? { readOnlyAction: 'schedule_followup' as const } : {}) }),
             new Promise<never>((_, reject) => {
               const t = setTimeout(() => reject(new Error('简报模型总结超时')), 45000);
               t.unref();

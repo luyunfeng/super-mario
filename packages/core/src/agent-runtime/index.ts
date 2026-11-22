@@ -16,7 +16,8 @@ type SDK = typeof import('@earendil-works/pi-coding-agent');
 interface Options { mainSkillCatalog?: () => Promise<string>; mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>; projectInstructions?: (projectId: string) => Promise<string>; inboxConversations?: () => import("../../../protocol/src/inbox-conversations.ts").InboxConversation[]; workspaceDir?: string; contextMode?: 'full' | 'principles'; workDecisions?: (scope?:BotScope, projectId?:string)=>unknown; config: AppConfig; store: Store; events: EventBus; contributions: Contributions; conversationId?: string; scope?: BotScope; canUseScope?: (input?: Message) => boolean; allowedTools?: string[]; systemPrompt?: string; projectContext?: (projectId:string)=>Json; executors?: () => ExecutorInfo[]; botContext?: (conversationId:string, scope?:BotScope)=>Json }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' | 'replyTo' | 'requestId'>;
+type ReadOnlyAction = 'schedule_followup' | 'notify_user';
+type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' | 'replyTo' | 'requestId'> & { readOnlyAction?: ReadOnlyAction };
 
 /** The second argument is a narrow test seam; all pi imports stay in this directory. */
 export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK> = () => import('@earendil-works/pi-coding-agent')) {
@@ -39,6 +40,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   // Assigned only when the serial queue starts this message, never at post time.
   let currentProjectId: string | undefined;
   let activeInput: Message | undefined;
+  let activeReadOnlyAction: ReadOnlyAction | undefined;
   let settleCredentials = async () => {};
   let queue = Promise.resolve();
   let queuedInputs = 0;
@@ -50,13 +52,21 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   const infrastructureErrors: unknown[] = [];
 
   const mainIdentity = scope ? scope.kind === 'global' : ownConversation === 'main';
-  const readTools = new Set(['machine_skills_list', 'assistant_skill_read', 'knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'interactions_list', 'projects_list', 'projects_discover', 'knowledge_jobs', 'agent_sessions', 'inbox_list', 'inbox_handling_read', 'scheduled_work_list', 'work_decisions_list', 'work_decision_reference', 'bots_list', 'mailboxes_list', 'supervisor_read', 'schedule_followup', 'followups_list', 'followup_cancel', 'notify_user', 'calendar_agenda', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff']);
+  const readTools = new Set(['machine_skills_list', 'assistant_skill_read', 'knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'interactions_list', 'projects_list', 'projects_discover', 'knowledge_jobs', 'agent_sessions', 'inbox_list', 'inbox_handling_read', 'scheduled_work_list', 'work_decisions_list', 'work_decision_reference', 'bots_list', 'mailboxes_list', 'supervisor_read', 'followups_list', 'calendar_agenda', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff']);
   const scopeTools = new Set(['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'projects_list', 'work_read', 'work_dispatch', 'todo_create', 'knowledge_ingest', 'knowledge_source', 'knowledge_put', 'task_plan', 'bot_handoff', 'agent_sessions', 'session_resume', 'inbox_list', 'inbox_handling_read', 'scheduled_work_list', 'work_decisions_list', 'work_decision_record', 'work_decision_reference', 'work_decision_correct', 'work_decision_withdraw', 'scheduled_work_propose', 'scheduled_work_cancel', 'schedule_followup', 'followups_list', 'followup_cancel', 'notify_user', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff']);
   const scopeAllows = (name: string) => !scope || scope.kind === 'global' || (scope.kind === 'unmarked'
     ? ['knowledge_list', 'executors_list'].includes(name)
     : scopeTools.has(name) && !(scope.kind === 'task' && name === 'todo_create')
       && !(!scopedProject && ['knowledge_put', 'knowledge_source', 'knowledge_ingest'].includes(name)));
-  const allowed = (name: string) => options.canUseScope?.(activeInput) !== false && (mainIdentity || (name !== 'assistant_skill_read' && name !== 'machine_skills_list' && name !== 'office_create')) && scopeAllows(name) && (!options.allowedTools || options.allowedTools.includes(name)) && (!(activeInput?.readOnly || (activeInput && store.get('input-paused', activeInput.id))) || readTools.has(name));
+  function allowed(name: string) {
+    if (options.canUseScope?.(activeInput) === false || !scopeAllows(name) ||
+      (options.allowedTools && !options.allowedTools.includes(name))) return false;
+    if (!mainIdentity && ['assistant_skill_read', 'machine_skills_list', 'office_create'].includes(name)) return false;
+    if (readTools.has(name)) return true;
+    if (activeInput && store.get('input-paused', activeInput.id)) return false;
+    // Only the scheduler can grant a specific follow-up action for this queued turn.
+    return !activeInput?.readOnly || name === activeReadOnlyAction;
+  }
   // This is the execution boundary, not a prompt convention. Unknown tools fail closed.
   function inScope(record: { id?: unknown; projectId?: unknown; todoId?: unknown }, todo = false): boolean {
     if (!scope || scope.kind === 'global') return true;
@@ -296,6 +306,10 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         const workDecisionsData = options.workDecisions ? options.workDecisions(scope, currentProjectId) : undefined;
         const projectContextData = currentProjectId && options.projectContext ? options.projectContext(currentProjectId) : undefined;
         const sections = [
+          ...(activeInput?.readOnly ? ['本轮只读，请查阅事实后回答。' + (
+            activeReadOnlyAction === 'schedule_followup' ? '如有必要，可为重要会议安排会前跟进。' :
+            activeReadOnlyAction === 'notify_user' ? '需要提醒主人时，可按本次跟进的推送策略调用 notify_user。' :
+            '需要新增提醒、通知、派活或变更记录时，只给出建议。')] : []),
           ...(identity ? [identity] : []),
           ...(skillCatalog ? [skillCatalog] : []),
           ...(projectInstructions ? [projectInstructions] : []),
@@ -393,7 +407,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     state = { available: false, reason: safeError(error) };
   }).then(() => { events.publish('agent.status', { conversationId: ownConversation, ...state }); });
 
-  async function reply(user: Message) {
+  async function reply(user: Message, readOnlyAction?: ReadOnlyAction) {
     const assistant: Message = {
       id: randomUUID(), conversationId: ownConversation, role: 'assistant', replyTo: user.id, text: '',
       createdAt: new Date().toISOString(), status: 'pending',
@@ -426,6 +440,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       } else {
         if (!session) throw new Error('模型会话尚未就绪。');
         activeInput = user;
+        activeReadOnlyAction = readOnlyAction;
         currentProjectId = scope && scope.kind !== 'global' ? scopedProject : user.projectId;
         const turnStartMs = Date.now();
         activeTrace = {
@@ -617,6 +632,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       }
       activeTrace = undefined;
       activeInput = undefined;
+      activeReadOnlyAction = undefined;
       currentProjectId = undefined;
     }
     // Persistence/event failures escape to close(), instead of becoming unhandled rejections.
@@ -673,13 +689,14 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         return existing;
       }
       // Yield before processing: posting acknowledges durable acceptance, not model completion.
+      const readOnlyAction = context?.readOnlyAction;
       queuedInputs++;
-      queue = queue.then(async () => { try { await setImmediate(); await reply(message); } finally { queuedInputs--; } })
+      queue = queue.then(async () => { try { await setImmediate(); await reply(message, readOnlyAction); } finally { queuedInputs--; } })
         .catch(error => { infrastructureErrors.push(error); });
       events.publish('messages.changed', { conversationId, messageId: message.id });
       return message;
     },
-    async ask(text: string, context?: { projectId?: string; todoId?: string; readOnly?: boolean; origin?: Message['origin']; replyTo?: string }): Promise<Message> {
+    async ask(text: string, context?: Omit<PostContext, 'requestId'>): Promise<Message> {
       const accepted = await this.post(text, ownConversation, context);
       const pending = queue;
       await pending;

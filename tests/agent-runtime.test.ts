@@ -448,6 +448,34 @@ test('read-only model assessments cannot register mutation tools and ask surface
   await runtime.close();
 });
 
+test('主动跟进的通知权限仅对本轮生效，等待用户回答时立即撤回', async t => {
+  const f = await fixture(t, false), sdk = fakeSDK();
+  let sent = 0;
+  f.contributions.add('tools', 'notify', { name: 'notify_user', description: 'notify', parameters: { type: 'object' },
+    async execute() { sent++; return {}; } });
+  const runtime = createAgentRuntime(f, sdk.load);
+  const original = sdk.session.prompt.bind(sdk.session);
+  sdk.session.prompt = async (text, options) => {
+    const notify = () => sdk.tools.get('notify_user').execute('check', {}, new AbortController().signal);
+    if (text === '巡查') {
+      assert.ok(sdk.calls.activeTools.includes('notify_user'));
+      await notify();
+      f.store.put('input-paused', runtime.currentInput()!.id, { cardId: 'fixture' });
+    } else {
+      assert.ok(!sdk.calls.activeTools.includes('notify_user'));
+    }
+    await assert.rejects(notify(), /等待交互卡回答/);
+    return original(text, options);
+  };
+  try {
+    await Promise.all([
+      runtime.ask('巡查', { readOnly: true, readOnlyAction: 'notify_user' }),
+      runtime.ask('晚报', { readOnly: true }),
+    ]);
+    assert.equal(sent, 1);
+  } finally { await runtime.close(); }
+});
+
 test('opening a blocking question prevents writes from the old turn but permits its new continuation', async t => {
   const f=await fixture(t,false);const sdk=fakeSDK();let writes=0;
   f.contributions.add('tools','write',{name:'todo_create',description:'write',parameters:{type:'object'},async execute(){writes++;return {saved:true}}});

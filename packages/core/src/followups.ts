@@ -83,7 +83,7 @@ export function createAgentFollowups(options: {
   outbox: Pick<ReturnType<typeof createOutbox>, 'enqueueNotice'>;
   agent: {
     status: () => { available: boolean; reason?: string };
-    ask: (text: string, context?: { projectId?: string; readOnly?: boolean }) => Promise<Message>;
+    ask: (text: string, context?: { projectId?: string; readOnly?: boolean; readOnlyAction?: 'notify_user' }) => Promise<Message>;
   };
   resolveChannel: (projectId?: string, todoId?: string) => string;
   enabled: () => boolean;
@@ -268,7 +268,7 @@ export function createAgentFollowups(options: {
 
     try {
       const reply = await Promise.race([
-        agent.ask(prompt, { ...(record.projectId ? { projectId: record.projectId } : {}), readOnly: true }),
+        agent.ask(prompt, { ...(record.projectId ? { projectId: record.projectId } : {}), readOnly: true, readOnlyAction: 'notify_user' }),
         new Promise<never>((_, reject) => {
           const timer = setTimeout(() => reject(new Error('主动跟进执行超时')), 60000);
           timer.unref();
