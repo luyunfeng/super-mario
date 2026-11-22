@@ -208,20 +208,29 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   return drawer;
 }
 
-export function knowledgeRow(entry, { projectName, onOpen, pattern }) {
+export function knowledgeRow(entry, { projectName, onOpen, pattern, matches }) {
   const summary = entry.content.replace(/\s+/g, ' ').slice(0, 100);
   const excerpts = [];
   let title = entry.title;
   if (pattern) {
-    const hit = pattern.exec(title);
-    if (hit) title = [title.slice(0, hit.index), h('mark', null, hit[0]), title.slice(hit.index + hit[0].length)];
-    for (const line of entry.content.split('\n')) {
-      const match = pattern.exec(line);
-      if (!match) continue;
-      const start = Math.max(0, match.index - 30);
-      const after = match.index + match[0].length;
-      excerpts.push([start ? '…' : '', line.slice(start, match.index), h('mark', null, match[0]),
-        line.slice(after, after + 60), after + 60 < line.length ? '…' : '']);
+    function highlight(text) {
+      const parts = [];
+      let end = 0;
+      for (const hit of text.matchAll(pattern)) {
+        parts.push(text.slice(end, hit.index), h('mark', null, hit[0]));
+        end = hit.index + hit[0].length;
+      }
+      return [...parts, text.slice(end)];
+    }
+    title = highlight(title.normalize('NFC'));
+    for (const raw of entry.content.split('\n')) {
+      const line = raw.normalize('NFC');
+      if (!matches(line)) continue;
+      const first = line.matchAll(pattern).next().value;
+      if (!first) continue;
+      const start = Math.max(0, first.index - 30);
+      const end = Math.min(line.length, first.index + first[0].length + 60);
+      excerpts.push([start ? '…' : '', highlight(line.slice(start, end)), end < line.length ? '…' : '']);
       if (excerpts.length === 2) break;
     }
   }

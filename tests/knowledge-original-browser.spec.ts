@@ -197,6 +197,9 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   await server.app.knowledge().put({ layer: 'personal', title, content });
   await server.app.knowledge().put({ layer: 'personal', title: '相关参考', content: '附录', importance: 'P3', relevance: 60 });
   await server.app.knowledge().put({ layer: 'personal', title: '次要参考', content: '附录', importance: 'P3', relevance: 0 });
+  await server.app.knowledge().put({ layer: 'personal', title: 'Cafe\u0301 发布资料', content: '标题命中' });
+  await server.app.knowledge().put({ layer: 'personal', title: '发布补充', content: '发布时检查 CAFÉ\nCAFÉ 发布完成', importance: 'P0' });
+  await server.app.knowledge().put({ layer: 'personal', title: '附带说明', content: 'café 发布', importance: 'P0' });
   await server.app.knowledge().put({ layer: 'personal', title: '待分类参考', content: '附录' });
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
   t.after(() => browser.close());
@@ -205,6 +208,10 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   await page.goto(server.url + '/#memory?token=fixture');
   const search = page.getByRole('searchbox', { name: '搜索记忆' });
   const row = page.locator('.knowledge-item').filter({ hasText: title });
+  await search.fill('发布 café');
+  await expect(page.locator('.knowledge-item .item__title')).toHaveText(['Café 发布资料', '发布补充', '附带说明']);
+  await expect(page.locator('.knowledge-item').nth(1).locator('.item__meta mark')).toHaveText(['发布', 'CAFÉ', 'CAFÉ', '发布']);
+  expect((await server.app.knowledge().list({ query: '发布 café' })).map(page => page.title)).toEqual(['Cafe\u0301 发布资料', '发布补充', '附带说明']);
   await search.fill('[v2]');
   await expect(row.locator('mark')).toHaveText(['[V2]', '[v2]', '[V2]']);
   await expect(row).toContainText('第二处 [V2] <示例>');
@@ -261,6 +268,6 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   await drawer.getByRole('button', { name: '保存', exact: true }).click();
   await expect(drawer).toHaveCount(0);
   expect(await server.app.knowledge().list({ tag: '待评审' })).toEqual([]);
-  expect(await server.app.knowledge().list({ importance: 'P0' })).toEqual([]);
+  expect((await server.app.knowledge().list({ importance: 'P0' })).some(p => p.id === saved!.id)).toBe(false);
   expect(await server.app.knowledge().list({ minRelevance: 80 })).toEqual([]);
 });

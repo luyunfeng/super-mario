@@ -76,7 +76,13 @@ export function createMemoryPage({ api, store, router, scope }) {
     const snapshot = store.view.snapshot;
     if (!snapshot) return;
     const query = search.value.trim();
-    const pattern = query ? new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu') : null;
+    const words = query.normalize('NFC').toLowerCase().split(/\s+/).filter(Boolean);
+    const escaped = words.map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const pattern = words.length ? new RegExp(escaped.join('|'), 'giu') : null;
+    const matches = line => {
+      const folded = line.normalize('NFC').toLowerCase();
+      return words.every(word => folded.includes(word));
+    };
     const projects = (snapshot.projects ?? []).filter(item => !item.archivedAt);
     const names = new Map(projects.map(item => [item.id, item.name]));
     const signature = JSON.stringify(projects.map(item => [item.id, item.name]));
@@ -100,16 +106,31 @@ export function createMemoryPage({ api, store, router, scope }) {
     tagFilter.hidden = !tags.length;
     importanceFilter.hidden = !scoped.some(item => item.importance);
     if (importanceFilter.hidden) importanceFilter.value = '';
+    const titleHits = new Set();
+    const hitCounts = new Map();
     const rows = scoped.filter(item => !importanceFilter.value || item.importance === importanceFilter.value)
       .filter(item => !tagFilter.value || item.tags?.includes(tagFilter.value))
-      .filter(item => !pattern || pattern.test(item.title) || pattern.test(item.content))
-      .sort((a, b) => (a.importance ?? 'P4').localeCompare(b.importance ?? 'P4') || (b.relevance ?? -1) - (a.relevance ?? -1) || b.updatedAt.localeCompare(a.updatedAt));
+      .filter(item => {
+        if (!words.length) return true;
+        if (matches(item.title)) titleHits.add(item.id);
+        let count = 0;
+        for (const line of item.content.split('\n')) {
+          if (matches(line) && ++count === 99) break;
+        }
+        hitCounts.set(item.id, count);
+        return titleHits.has(item.id) || count > 0;
+      })
+      .sort((a, b) => Number(titleHits.has(b.id)) - Number(titleHits.has(a.id))
+        || (a.importance ?? 'P4').localeCompare(b.importance ?? 'P4')
+        || (b.relevance ?? -1) - (a.relevance ?? -1)
+        || (hitCounts.get(b.id) ?? 0) - (hitCounts.get(a.id) ?? 0)
+        || b.updatedAt.localeCompare(a.updatedAt));
     if (!rows.length) {
       replace(list, Empty({ title: query || importanceFilter.value ? '没有找到匹配的记忆' : '还没有记忆', text: query || importanceFilter.value ? undefined : '在上面写一句话，Agent 之后工作时会参考它。' }));
       list._keyed = undefined;
     } else {
       if (!list._keyed) list.replaceChildren();
-      keyedList(list, rows, item => item.id, item => knowledgeRow(item, { pattern, projectName: names.get(item.projectId), onOpen: entry => openKnowledgeDrawer({ api, store, router, scope, entry }) }),
+      keyedList(list, rows, item => item.id, item => knowledgeRow(item, { pattern, matches, projectName: names.get(item.projectId), onOpen: entry => openKnowledgeDrawer({ api, store, router, scope, entry }) }),
         item => `${item.id}:${item.updatedAt}:${names.get(item.projectId)}:${query}`);
     }
     const pending = pendingJobs(curator).length;

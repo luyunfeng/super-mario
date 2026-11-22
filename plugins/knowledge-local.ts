@@ -130,16 +130,31 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         }
         for (const entry of entries) context.store.put(collection, entry.id, entry);
       });
-      const keywords = (query.query ?? '').trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-      return entries.filter(entry => {
-        const text = `${entry.title}\n${entry.content}`.toLocaleLowerCase();
-        return (!query.layer || entry.layer === query.layer)
-          && (!query.projectId || entry.projectId === query.projectId)
-          && (query.minRelevance === undefined || (entry.relevance ?? -1) >= query.minRelevance)
-          && (query.importance === undefined || entry.importance === query.importance)
-          && (query.tag === undefined || entry.tags?.includes(query.tag))
-          && keywords.every(keyword => text.includes(keyword));
-      }).sort((a, b) => (a.importance ?? 'P4').localeCompare(b.importance ?? 'P4') || (b.relevance ?? -1) - (a.relevance ?? -1) || a.id.localeCompare(b.id));
+      const keywords = (query.query ?? '').trim().normalize('NFC').toLowerCase().split(/\s+/).filter(Boolean);
+      const titleHits = new Set<string>();
+      const hitCounts = new Map<string, number>();
+      return entries.filter(entry => (!query.layer || entry.layer === query.layer)
+        && (!query.projectId || entry.projectId === query.projectId)
+        && (query.minRelevance === undefined || (entry.relevance ?? -1) >= query.minRelevance)
+        && (query.importance === undefined || entry.importance === query.importance)
+        && (query.tag === undefined || entry.tags?.includes(query.tag))).filter(entry => {
+        if (!keywords.length) return true;
+        const title = entry.title.normalize('NFC').toLowerCase();
+        if (keywords.every(keyword => title.includes(keyword))) titleHits.add(entry.id);
+        const body = entry.content.normalize('NFC').toLowerCase();
+        if (!titleHits.has(entry.id) && !keywords.every(word => title.includes(word) || body.includes(word))) return false;
+        let count = 0;
+        for (const line of body.split('\n')) {
+          if (keywords.every(word => line.includes(word)) && ++count === 99) break;
+        }
+        hitCounts.set(entry.id, count);
+        return true;
+      }).sort((a, b) => Number(titleHits.has(b.id)) - Number(titleHits.has(a.id))
+        || (a.importance ?? 'P4').localeCompare(b.importance ?? 'P4')
+        || (b.relevance ?? -1) - (a.relevance ?? -1)
+        || (hitCounts.get(b.id) ?? 0) - (hitCounts.get(a.id) ?? 0)
+        || (keywords.length ? b.updatedAt.localeCompare(a.updatedAt) : 0)
+        || a.id.localeCompare(b.id));
     },
     async put(input, expectedUpdatedAt) {
       const entry: KnowledgeEntry = {
