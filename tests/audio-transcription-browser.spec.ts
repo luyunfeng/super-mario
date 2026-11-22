@@ -88,6 +88,14 @@ test('录音经认证服务转写后追加到当前草稿，失败和切换项�
   await expect(work).toHaveValue('合成转写');
   await organize.click();
   await expect(review).toContainText('保存到项目记忆 · 转写项目');
+  await expect(review.getByLabel('会议开始时间（可选）')).toHaveValue('');
+  await expect(review.getByLabel('会议时区（UTC 偏移）')).toBeDisabled();
+  await review.getByLabel('会议开始时间（可选）').fill('2032-02-29T00:10');
+  await review.getByLabel('会议时区（UTC 偏移）').fill('+24:00');
+  await review.getByRole('button', { name: '提交会议整理' }).click();
+  await expect(review.getByRole('status')).toContainText('请核对会议日期');
+  expect(server.app.knowledgeCurator.status().jobs).toHaveLength(0);
+  await review.getByLabel('会议时区（UTC 偏移）').fill('+05:45');
   await review.getByLabel('会议标题').fill('合成评审');
   await review.getByLabel('转写正文').fill('会中提议复核，负责人待确认。');
   await review.getByRole('button', { name: '提交会议整理' }).click();
@@ -95,7 +103,7 @@ test('录音经认证服务转写后追加到当前草稿，失败和切换项�
   const jobs = server.app.knowledgeCurator.status().jobs;
   expect(jobs).toHaveLength(1);
   expect(server.app.store.get<{ text: string }>('knowledge.sources', jobs[0].id)?.text).toBe('会中提议复核，负责人待确认。');
-  expect(jobs[0]).toMatchObject({ title: '合成评审', materialKind: 'meeting-transcript', projectId: project.id, layer: 'project', status: 'queued' });
+  expect(jobs[0]).toMatchObject({ title: '合成评审', meetingStartedAt: '2032-02-29T00:10:00+05:45', materialKind: 'meeting-transcript', projectId: project.id, layer: 'project', status: 'queued' });
   await expect(work).toHaveValue('合成转写');
   const record = page.getByRole('button', { name: '录音后转写' });
   await record.click();

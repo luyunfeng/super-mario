@@ -70,7 +70,7 @@ function originalSources(api, entry, selected, line, ask) {
         const action = h('button', { type: 'button', class: 'btn btn--ghost btn--sm', hidden: true,
           onclick: () => ask(source, original) }, '引用原文追问');
         const notice = h('span', { role: 'status', hidden: true }, '引用的行号超出原文范围。');
-        const detail = h('details', { open: source.id === selected }, h('summary', null, source.title), notice, text, action);
+        const detail = h('details', { open: source.id === selected }, h('summary', null, source.title, source.meetingStartedAt && ' · ' + source.meetingStartedAt), notice, text, action);
         detail.addEventListener('toggle', async () => {
           if (!detail.open) return;
           action.hidden = true;

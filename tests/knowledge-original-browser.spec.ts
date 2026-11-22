@@ -10,7 +10,7 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   const server = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1', token: 'fixture', demo: true });
   t.after(async () => { await server.close(); await rm(dir, { recursive: true, force: true }); });
   const knowledge = server.app.knowledge();
-  const job = server.app.knowledgeCurator.addSource({ title: '合成会议原文', text: '待核对的结论' });
+  const job = server.app.knowledgeCurator.addSource({ materialKind: 'meeting-transcript', meetingStartedAt: '2032-02-29T00:10+05:45', title: '合成会议原文', text: '待核对的结论' });
   const entry = await knowledge.put({ title: '合成评审记录', content: '结论摘要', layer: 'personal' });
   const other = await knowledge.put({ title: '另一条记忆', content: '原始资料：raw/' + job.id + '.md', layer: 'personal' });
   server.app.store.put('knowledge.sources', job.id, { ...job, status: 'completed', knowledgeIds: [entry.id] });
@@ -34,7 +34,7 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   await page.locator('.knowledge-item').filter({ hasText: entry.title }).click();
   const dialog = page.getByRole('dialog', { name: '编辑记忆' });
   await dialog.getByText('查看原始资料').click();
-  await dialog.getByText('合成会议原文', { exact: true }).click();
+  await dialog.getByText('合成会议原文 · 2032-02-29T00:10:00+05:45', { exact: true }).click();
   await expect(dialog.locator('pre')).toHaveText(original);
   await expect(dialog.locator('pre em')).toHaveCount(0);
   await dialog.getByRole('button', { name: '关闭' }).click();

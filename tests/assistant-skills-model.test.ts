@@ -495,6 +495,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
       assert.match(req.system, /区分明确决定、建议、行动项和未决问题/);
       assert.match(req.system, /未明确的负责人或期限写待确认/);
       assert.match(req.system, /整理纪要不触发建待办、委派或外发/);
+      assert.match(req.system, /createdAt 仅为资料登记时间/);
       assert.match(req.system, /参会人名单不能证明任务归属/);
       assert.match(req.system, /待办后来改期不能改写会议原话/);
       assert.ok(req.tools.includes('knowledge_list'));
@@ -521,6 +522,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     }
     if (req.callId === 'sources') {
       assert.ok(materials.includes(sourceId));
+      assert.ok(materials.includes('2032-02-29T00:10:00+05:45'));
       return call('knowledge_original', { pageId, sourceId }, 'first-page');
     }
     if (req.callId === 'first-page') {
@@ -562,7 +564,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     const other = await api('/projects', { name: '独立项目' });
     pageId = (await api('/knowledge', { layer: 'project', projectId, title, content: excerpt })).id;
     otherPage = (await api('/knowledge', { layer: 'project', projectId: other.id, title, content: '独立评审会：另一个项目的结论' })).id;
-    const job = server.app.knowledgeCurator.addSource({ title, text: excerpt, layer: 'project', projectId });
+    const job = server.app.knowledgeCurator.addSource({ materialKind: 'meeting-transcript', meetingStartedAt: '2032-02-29T00:10+05:45', title, text: excerpt, layer: 'project', projectId });
     sourceId = job.id;
     server.app.store.put('knowledge.sources', job.id, { ...job, status: 'completed', knowledgeIds: [pageId] });
     const raw = join(dir, 'plugins', 'knowledge-local', 'raw');

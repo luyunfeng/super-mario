@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createKnowledgeCurator, type Job } from '../packages/core/src/knowledge-curator.ts';
@@ -160,16 +161,28 @@ test('会议文档未被受保护读取器接管时，初次整理与显式重�
 
 test('核对后的项目会议转写按会议提示词整理，重复提交复用任务', async t => {
   const f = await fixture(t);
-  const input = { materialKind: 'meeting-transcript', title: '样本评审', text: '提议周五复核，负责人未定。', layer: 'project', projectId: 'sample' };
+  const input = { materialKind: 'meeting-transcript', title: '样本评审', text: '提议周五复核，负责人未定。', meetingStartedAt: '2032-02-29T00:10+05:45', layer: 'project', projectId: 'sample' };
+  assert.throws(() => f.curator.addSource({ ...input, meetingStartedAt: '2031-02-29T00:10+05:45' }), /有效日期/);
+  assert.throws(() => f.curator.addSource({ ...input, meetingStartedAt: '2032-02-29T00:10' }), /UTC 偏移/);
   const job = f.curator.addSource(input);
   await f.until(() => f.job(job.id).status === 'completed');
+  assert.ok(f.submissions[0]!.includes('用户填写的会议开始时间：2032-02-29T00:10:00+05:45'));
+  assert.match(f.submissions[0]!, /不用上传时间推算相对期限/);
   assert.match(f.submissions[0]!, /识别有歧义的人名、数字和术语保留原话/);
   assert.match(f.submissions[0]!, /按议题区分已决定事项、提议、行动项和未决问题/);
   const [page] = await f.knowledge.list({ projectId: 'sample' });
   assert.match(page!.content, /用户核对的会议转写/);
+  assert.ok(page!.content.includes('会议开始时间：2032-02-29T00:10:00+05:45'));
   assert.ok((await readFile(f.raw(job.id), 'utf8')).endsWith(input.text));
   await f.restart();
-  assert.equal(f.curator.addSource(input).id, job.id);
+  const { sources } = await f.curator.pageSources(page!.id, undefined, 'sample');
+  assert.equal(sources?.[0].meetingStartedAt, '2032-02-29T00:10:00+05:45');
+  const original = await f.curator.pageSources(page!.id, job.id, 'sample');
+  assert.ok(original.content?.endsWith(input.text));
+  assert.equal(f.curator.addSource({ ...input, meetingStartedAt: '2032-02-29T00:10:00+05:45' }).id, job.id);
+  assert.notEqual(f.curator.addSource({ ...input, meetingStartedAt: '2032-03-01T00:10+05:45' }).id, job.id);
+  const legacy = createHash('sha256').update(JSON.stringify([input.layer, input.projectId, input.title, input.text])).digest('hex');
+  assert.equal(f.curator.addSource({ ...input, meetingStartedAt: undefined }).id, 'transcript-' + legacy);
   assert.equal(f.submissions.length, 1);
   assert.throws(() => f.curator.addSource({ ...input, url }), /须提供正文/);
   f.archive();

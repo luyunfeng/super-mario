@@ -18,15 +18,31 @@ export function createVoiceInput(input, beforeListen, api) {
     if (!transcript || !destination) return;
     const captured = binding;
     const title = Input({ value: transcript.title, maxLength: 500 });
+    const started = Input({ type: 'datetime-local' });
+    const offset = Input({ placeholder: '+08:00', disabled: true });
+    let customOffset = false;
+    offset.addEventListener('input', () => { customOffset = Boolean(offset.value); });
+    started.addEventListener('input', () => {
+      offset.disabled = !started.value;
+      if (!started.value) { offset.value = ''; customOffset = false; return; }
+      if (customOffset) return;
+      const minutes = -new Date(started.value).getTimezoneOffset();
+      if (Number.isFinite(minutes)) offset.value = (minutes < 0 ? '-' : '+') +
+        String(Math.floor(Math.abs(minutes) / 60)).padStart(2, '0') + ':' + String(Math.abs(minutes) % 60).padStart(2, '0');
+    });
     const body = TextArea({ value: transcript.text, rows: 12, maxLength: 200000 });
     const status = h('p', { role: 'status' });
     const save = Button({ label: '提交会议整理', onClick: async () => {
       if (binding !== captured || !destination || !review?.el.open) return;
       if (!title.value.trim() || !body.value.trim()) { status.textContent = '请填写会议标题并核对转写正文。'; return; }
+      if (started.validity.badInput || (started.value && !/^(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(offset.value.trim()))) {
+        status.textContent = '请核对会议日期和 UTC 偏移，例如 +08:00。'; return;
+      }
       save.disabled = true;
       const dialog = review;
       try {
         const job = await api.post('/knowledge/sources', { materialKind: 'meeting-transcript', title: title.value.trim(),
+          ...(started.value ? { meetingStartedAt: started.value + offset.value.trim() } : {}),
           text: body.value.trim(), layer: destination.projectId ? 'project' : 'personal', ...(destination.projectId ? { projectId: destination.projectId } : {}) });
         if (binding !== captured || review !== dialog) return;
         dialog.close(); transcript = null; meeting.hidden = true;
@@ -36,7 +52,8 @@ export function createVoiceInput(input, beforeListen, api) {
       finally { save.disabled = false; }
     } });
     const dialog = openDrawer({ title: '核对会议转写', subtitle: '保存到' + destination.label,
-      body: [Field({ label: '会议标题', control: title }), Field({ label: '转写正文', control: body }), status],
+      body: [Field({ label: '会议标题', control: title }), Field({ label: '会议开始时间（可选）', control: started }),
+        Field({ label: '会议时区（UTC 偏移）', control: offset, hint: '默认使用本机在所选日期的偏移，可按会议所在地修改。' }), Field({ label: '转写正文', control: body }), status],
       footer: save, onClose: () => { if (review === dialog) review = null; } });
     review = dialog;
   }
