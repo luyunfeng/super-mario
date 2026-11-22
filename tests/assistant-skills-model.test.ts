@@ -1034,11 +1034,21 @@ test('Web 确认会议行动项，飞书批量确认复用原待办并添加新�
 
 test('Web 与飞书项目助手检索项目原话，范围固定且排除当前提问', async t => {
   let adapter!: FeishuOptions, otherId = '', currentProjectId = '';
+  let selectedTodo = '';
   const sent: string[] = [];
   const query = '[乙] 抽样批次';
   const sourceText = '记录抽样批次。'.padEnd(3999, '甲') + '📝先核对来源。' + '其余字段待复核。'.repeat(10) + '选定[乙]。';
   const answer = '原话要求“先核对来源”。';
   const { server, api, ask, requests } = await fixture(t, req => {
+    if (req.lastRole === 'user' && JSON.stringify(req.content).includes('上次这个问题怎么回答的')) {
+      assert.match(req.system, /不要用时间相邻的消息推测对应关系/);
+      return call('project_message_search', { projectId: currentProjectId, todoId: selectedTodo, replyTo: 'original' }, 'direct-answer');
+    }
+    if (req.callId === 'direct-answer') {
+      const result = JSON.parse(typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text);
+      assert.deepEqual(result.hits.map((m: {id:string;status:string}) => [m.id, m.status]), [['direct', 'done']]);
+      return { role: 'assistant', content: result.hits[0].preview };
+    }
     if (req.lastRole === 'user' && JSON.stringify(req.content).includes('本事项聊过什么')) {
       assert.match(req.system, /没有命中只说明未找到显式关联/);
       return call('project_message_search', {}, 'task-messages');
@@ -1126,6 +1136,16 @@ test('Web 与飞书项目助手检索项目原话，范围固定且排除当前�
     await adapter!.onMessage(taskBot.pairingCode, { ...source, messageId: 'task-pair' });
     await adapter!.onMessage('本事项聊过什么？', { ...source, messageId: 'task-history' });
     await t.waitFor(() => assert.ok(sent.includes('找到本事项的一条历史记录。')));
+    selectedTodo = task.id;
+    for (const [id, replyTo, todoId, text] of [
+      ['direct', 'original', task.id, '上一次答复：保留乙组。'],
+      ['adjacent', 'partial', task.id, '相邻的其他答复'],
+      ['wrong-task', 'original', 'other-task', '另一事项的答复'],
+    ]) server.app.store.put('messages', id, { id, replyTo, todoId, text, projectId: project.id, conversationId: 'project:' + project.id + ':work',
+      role: 'assistant', status: 'done', createdAt });
+    assert.equal(await ask('上次这个问题怎么回答的？', '/projects/' + project.id + '/messages', task.id), '上一次答复：保留乙组。');
+    await adapter!.onMessage('上次这个问题怎么回答的？', { ...source, messageId: 'task-answer' });
+    await t.waitFor(() => assert.ok(sent.includes('上一次答复：保留乙组。')));
     const message = server.app.store.get<Message>('messages', 'original')!;
     server.app.store.put('messages', message.id, { ...message, text: '合成修改后的正文' });
     const reader = server.app.contributions.list('tools').find(item => item.value.name === 'project_message_read')!.value;

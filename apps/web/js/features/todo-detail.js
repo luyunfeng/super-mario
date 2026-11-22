@@ -85,11 +85,14 @@ function conversationHistory({ api, store, router, todo, close }) {
   const owner = store.view.snapshotOwner;
   const rows = h('div', { class: 'stack' });
   const notice = h('p', { class: 'small', role: 'status' });
-  let before, sequence = 0;
+  let before, question, sequence = 0;
+  const selection = h('p', { class: 'small', hidden: true });
+  const back = Button({ label: '返回全部关联消息', size: 'sm', onClick: () => { question = undefined; load(); } });
+  back.hidden = true;
   const more = Button({ label: '查看更早消息', size: 'sm', onClick: () => load(before) });
   const refresh = Button({ label: '重新读取对话', size: 'sm', onClick: () => load() });
   const panel = h('details', { ontoggle: () => { if (panel.open) load(); } },
-    h('summary', null, '关联的项目对话'), rows, notice, more, refresh);
+    h('summary', null, '关联的项目对话'), selection, back, rows, notice, more, refresh);
   more.hidden = true;
   function available() {
     return todo.projectId && owner === store.view.snapshotOwner && owner === api.draftOwner() &&
@@ -99,20 +102,26 @@ function conversationHistory({ api, store, router, todo, close }) {
   async function load(cursor) {
     if (!available()) return;
     const stamp = ++sequence;
+    selection.hidden = back.hidden = !question;
+    selection.textContent = question ? '原提问：' + question.preview : '';
+    if (!cursor) { replace(rows); before = undefined; more.hidden = true; }
     more.disabled = refresh.disabled = true;
     notice.textContent = '正在读取…';
     try {
-      const result = await api.post('/project-message-search', { projectId: todo.projectId, todoId: todo.id, before: cursor, limit: 10 });
+      const result = await api.post('/project-message-search', { projectId: todo.projectId, todoId: todo.id, replyTo: question?.id, before: cursor, limit: 10 });
       if (stamp !== sequence || !panel.isConnected || !available()) return;
-      if (!cursor) replace(rows);
       for (const message of result.hits) {
         const href = router.href('projects', todo.projectId, 'workspace') + '?' + new URLSearchParams({ at: message.id, todo: todo.id });
-        rows.append(h('a', { href, onclick: () => close?.() }, (message.role === 'user' ? '我' : '项目助手') +
-          ' · ' + formatDate(message.createdAt, true) + ' · ' + message.preview));
+        const state = { pending: '处理中', failed: '处理失败', unknown: '结果未知' }[message.status];
+        rows.append(h('div', { class: 'row row--wrap' },
+          h('a', { href, onclick: () => close?.() }, [message.role === 'user' ? '我' : '项目助手',
+            formatDate(message.createdAt, true), state, message.preview].filter(Boolean).join(' · ')),
+          message.role === 'user' && Button({ label: '查看对应回答', size: 'sm', onClick: () => { question = message; load(); } })));
+
       }
       before = result.nextBefore;
       more.hidden = !before;
-      notice.textContent = rows.childElementCount ? '' : '尚无关联的项目对话。';
+      notice.textContent = rows.childElementCount ? '' : question ? '尚未查到这条提问的对应回答。' : '尚无关联的项目对话。';
     } catch (error) {
       if (stamp === sequence && available()) notice.textContent = '读取失败：' + error.message;
     } finally {

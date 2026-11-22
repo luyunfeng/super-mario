@@ -320,7 +320,15 @@ test('项目：自动发现电脑文件夹，点击才导入，默认工作区�
       await history.getByRole('button', { name: '查看更早消息' }).click();
       await expect(history).toContainText('较早问题 0');
       await expect(history).not.toContainText('另一项的原文');
-      await history.getByRole('link', { name: /^我 · .*这项进展如何/ }).click();
+      const original = history.getByRole('link', { name: /^我 · .*这项进展如何/ });
+      await original.locator('..').getByRole('button', { name: '查看对应回答' }).click();
+      await expect(history.getByRole('link')).toHaveCount(1);
+      await expect(history.getByRole('link')).toContainText('【本地演示】已收到：这项进展如何');
+      await history.getByRole('button', { name: '返回全部关联消息' }).click();
+      await history.getByRole('link', { name: /^我 · .*较早问题 / }).first().locator('..').getByRole('button', { name: '查看对应回答' }).click();
+      await expect(history).toContainText('尚未查到这条提问的对应回答');
+      await history.getByRole('button', { name: '返回全部关联消息' }).click();
+      await original.click();
       await expect(page.locator('.msg.is-search-hit')).toContainText('这项进展如何');
       await expect(page.locator('#panel-workspace')).toContainText('当前待办：核对首页');
       assert.deepEqual(await page.locator('.proj__detail [role=tab]').allInnerTexts().then(list=>list.map(text=>text.replace(/\s+\d+$/,''))),['工作区','待办','执行','资料','项目设置']);
