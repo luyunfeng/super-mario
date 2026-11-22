@@ -7,6 +7,19 @@ const active = store => !store.view.unauthorized && !!store.view.snapshot?.plugi
   plugin => plugin.id === 'saved-prompts' && plugin.status === 'active');
 const post = (api, body) => api.post('/saved-prompts', body);
 
+// Preserve the user's order within each match group, including the bare "/" list.
+function matchingPrompts(items, filter) {
+  if (!filter) return items.slice(0, 25);
+  const exact = [], prefix = [], substring = [];
+  for (const item of items) {
+    const name = item.name.toLowerCase();
+    if (name === filter) exact.push(item);
+    else if (name.startsWith(filter)) prefix.push(item);
+    else if (name.includes(filter)) substring.push(item);
+  }
+  return [...exact, ...prefix, ...substring].slice(0, 25);
+}
+
 function suggestedName(text, items) {
   const words = text.trim().match(/[\p{L}\p{Nd}\p{Mn}_.-]+/gu) ?? [];
   const base = [...words.join('-')].slice(0, 20).join('').replace(/-+$/, '').toLowerCase() || 'prompt';
@@ -186,13 +199,13 @@ export function attachSavedPrompts({ api, store, input, getScope = () => '' }) {
     input.dispatchEvent(new Event('input', { bubbles: true }));
     inserting = false;
   }
-  const query = () => /^\/[\p{L}\p{Nd}\p{Mn}_.-]*$/u.test(input.value) ? input.value.slice(1).toLocaleLowerCase() : null;
+  const query = () => /^\/[\p{L}\p{Nd}\p{Mn}_.-]*$/u.test(input.value) ? input.value.slice(1).toLowerCase() : null;
   let validMenu;
   function draw() {
     if (!validMenu?.()) { reset(); return; }
     const filter = query();
     if (filter === null) { reset(); return; }
-    matches = items.filter(item => item.name.toLocaleLowerCase().includes(filter));
+    matches = matchingPrompts(items, filter);
     selected = Math.min(selected, Math.max(0, matches.length - 1));
     replace(menu, matches.length ? matches.map((item, index) =>
       Button({ label: '/' + item.name, kind: index === selected ? 'primary' : 'secondary', size: 'sm', onClick() {

@@ -186,4 +186,24 @@ test('插件设置可管理提示词；并发编辑保留草稿，已打开的�
   await expect(input).toHaveValue('/');
   await updatedItem.click();
   await expect(input).toHaveValue('改名后的提示词正文。');
+
+  // A later exact match must still be found beyond the bare slash menu's display limit.
+  const manage = (data: Record<string, unknown>) => first.request.post(server.url + '/api/v1/saved-prompts', {
+    headers: { authorization: 'Bearer ' + token }, data,
+  });
+  const list = await manage({ action: 'list' });
+  let { revision } = await list.json();
+  const names = ['xplan', 'plan-beta', 'plan-alpha', ...Array.from({ length: 24 }, (_, i) => 'item-' + i), 'plan'];
+  for (const name of names) {
+    const response = await manage({ action: 'create', revision, name, text: '正文 ' + name });
+    assert.equal(response.status(), 200);
+    revision = (await response.json()).revision;
+  }
+  await input.fill('/');
+  const rows = first.getByRole('group', { name: '提示词候选' }).getByRole('button');
+  await expect(rows).toHaveCount(25);
+  await input.fill('/PLAN');
+  await expect(rows).toHaveText(['/plan', '/plan-beta', '/plan-alpha', '/xplan']);
+  await input.press('Enter');
+  await expect(input).toHaveValue('正文 plan');
 });
