@@ -25,6 +25,7 @@ export interface RunReview {
   createdAt: string;
   updatedAt: string;
 }
+export type ReviewEvidenceReader = (run: Run) => { status: RunReview['status'] | 'invalidated'; version: number; updatedAt: string } | undefined;
 export interface RunReviewDecision {
   todoId: string;
   version: number;
@@ -158,11 +159,12 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
   return {
     get,
     assertCanComplete,
-    /** Evidence for one project-memory source. A later round cannot accept an older Run. */
-    memoryEvidence(value: Run) {
-      if (!value.projectId || !value.todoId) return undefined;
+    /** Evidence for one visible execution. A later round cannot accept an older Run. */
+    evidenceForRun(value: Run) {
+      if (!value.todoId) return undefined;
+      const todo = store.get<Todo>('todos', value.todoId);
       const item = store.get<RunReview>(reviews, value.todoId);
-      if (!item || item.runId !== value.id || store.get<Todo>('todos', value.todoId)?.projectId !== value.projectId) return undefined;
+      if (!item || item.runId !== value.id || !todo || todo.projectId !== value.projectId) return undefined;
       let status: RunReview['status'] | 'invalidated' = item.status;
       if (status === 'accepted') {
         try { assertCanComplete(value.todoId); }

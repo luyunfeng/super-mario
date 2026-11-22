@@ -378,8 +378,11 @@ export async function createWorkbench(config: AppConfig) {
     }
     return formatProjectInstructions(project, value.notes);
   }
-  const agent = createAgentRuntime({ config, store, events, contributions, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
-  const scopedAgents = createScopedAgents({ config, store, events, contributions, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: (scope, botId, input) => botScopeAccess(scope, botId, input) });
+  const reviewSettings = () => ({ maxReworks: store.get<{ maxReworks: number }>('workbench.settings', 'run-review')?.maxReworks ?? 2 });
+  const runReview = createRunReview({ store, events, dispatch, completeTodo: id => updateTodo(id, { completed: true }), maxReworks: () => reviewSettings().maxReworks });
+  const reviewEvidence = runReview.evidenceForRun;
+  const agent = createAgentRuntime({ config, store, events, contributions, reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
+  const scopedAgents = createScopedAgents({ config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: (scope, botId, input) => botScopeAccess(scope, botId, input) });
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
     allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'],
     systemPrompt: SUPERVISOR_SYSTEM_PROMPT });
@@ -450,7 +453,7 @@ export async function createWorkbench(config: AppConfig) {
     enqueueMeetingMemory(items, knowledgeCurator.addSource, knowledgeReaderSettings.read().trustedHosts);
     reconciledMeetingAccounts.add(source);
   }
-  const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,reviewEvidence:run=>runReview.memoryEvidence(run),projectDecisions:id=>workDecisions.context({kind:"project",projectId:id}),onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text,requestId)=>scopedAgents.postProject(id,text,requestId),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
+  const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,reviewEvidence,projectDecisions:id=>workDecisions.context({kind:"project",projectId:id}),onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text,requestId)=>scopedAgents.postProject(id,text,requestId),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
   const controllers = new Map<string, AbortController>();
   const jobs = new Set<Promise<void>>();
   const commandRouter = createCommandProjectRouter(config, () => !closing && inboxClassifier.status().available);
@@ -468,7 +471,7 @@ export async function createWorkbench(config: AppConfig) {
   });
   const scheduledWork = createScheduledWorkService({store,events,schedules:background.schedules,approvals,currentInput:()=>currentAgentInput()??agent.currentInput(),
     ready:()=>channelBindingsReady,enabled:()=>plugins.list().some(p=>p.id==='daily-brief'&&p.status==='active'),
-    facts:scope=>buildWorkContext(store,scope,undefined,{executors:executorInfo(),inboxConversations:inboxAssistant.list()}) as unknown as Json,
+    facts:scope=>buildWorkContext(store,scope,undefined,{reviewEvidence,executors:executorInfo(),inboxConversations:inboxAssistant.list()}) as unknown as Json,
     authorize(scope,source){
       const target=validateBotScope(store,scope.todoId?{kind:'task',todoId:scope.todoId,...(scope.projectId?{projectId:scope.projectId}:{})}:scope.projectId?{kind:'project',projectId:scope.projectId}:{kind:'global'});
       authorizeWorkDecisionSource(store,target,source);
@@ -517,8 +520,6 @@ export async function createWorkbench(config: AppConfig) {
     onApproved:id=>knowledgeCurator.sourceApproved(id),onRejected:(id,reason)=>knowledgeCurator.sourceRejected(id,reason)});
   const offKnowledgeApprovals=events.subscribe(event=>{if(['knowledge.reader.changed','projects.changed','todos.changed','plugins.changed','approvals.changed','bots.changed','feishu.bots.changed'].includes(event.type))knowledgeSourceApproval.sync();});
   const reporting = createTodoReporting({ store, events });
-  const reviewSettings = () => ({ maxReworks: store.get<{ maxReworks: number }>('workbench.settings', 'run-review')?.maxReworks ?? 2 });
-  const runReview = createRunReview({ store, events, dispatch, completeTodo: id => updateTodo(id, { completed: true }), maxReworks: () => reviewSettings().maxReworks });
   const supervision = createSupervision({ store, events, conversations:()=>inboxAssistant.list(), publish: input => {
     const data = input.data as {todoId?:string;reminderAt?:string};
     // Only the stored Todo supplies the generation, never incoming metadata.

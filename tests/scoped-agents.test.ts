@@ -416,3 +416,32 @@ test('memory turn sends evidence instructions without ambient project knowledge 
     await runtime.close();
   }
 });
+
+test('Web and bot project prompts refresh visible execution reviews each turn', async t => {
+  const f = await fixture(t, false);
+  seed(f);
+  for (const project of ['A', 'B']) {
+    f.store.put('runs', project, { id: project, projectId: project, todoId: project.toLowerCase(), status: 'completed', createdAt: 'today' });
+  }
+  for (const conversationId of ['project:A:work', 'bot:project:A']) {
+    const sdk = fakeSDK();
+    let version = 1;
+    const runtime = createAgentRuntime({
+      ...f, conversationId, scope: { kind: 'project', projectId: 'A' },
+      reviewEvidence(run) {
+        assert.equal(run.id, 'A');
+        return { status: version === 1 ? 'accepted' : 'reopened', version, updatedAt: 'today' };
+      },
+    }, sdk.load);
+    try {
+      await runtime.ask('这轮验收了吗？');
+      assert.match(sdk.calls.context.systemPrompt, /"review":\{"status":"accepted","version":1/);
+      version++;
+      await runtime.ask('现在呢？');
+      assert.match(sdk.calls.context.systemPrompt, /"review":\{"status":"reopened","version":2/);
+      assert.doesNotMatch(sdk.calls.context.systemPrompt, /"status":"accepted"/);
+    } finally {
+      await runtime.close();
+    }
+  }
+});

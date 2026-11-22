@@ -1,3 +1,4 @@
+import type { ReviewEvidenceReader } from './run-review.ts';
 import type { Approval, BotScope, ExecutorInfo, MachineInfo, Project, Run, Todo } from '../../protocol/src/index.ts';
 import type { Store } from '../../plugin-sdk/src/index.ts';
 import type { WaitingReplySnapshot } from '../../protocol/src/index.ts';
@@ -9,7 +10,7 @@ import type { InboxSuggestion, InboxHandlingRequest } from '../../protocol/src/i
 
 /** Read shared facts at execution time, across channel histories. Never read private settings
  * or copy raw chats. Scope filtering precedes counts, selection and rendering. */
-export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: BotScope, projectId?: string, live?: { executors?: ExecutorInfo[]; inboxConversations?: import("../../protocol/src/inbox-conversations.ts").InboxConversation[] }) {
+export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: BotScope, projectId?: string, live?: { reviewEvidence?: ReviewEvidenceReader; executors?: ExecutorInfo[]; inboxConversations?: import("../../protocol/src/inbox-conversations.ts").InboxConversation[] }) {
   if (scope?.kind === 'unmarked') return { scope: { kind: 'unmarked' }, unavailable: '未标记身份不提供工作事实，请先归类' };
   const project = scope?.kind === 'project' || scope?.kind === 'task' ? scope.projectId : projectId;
   const task = scope?.kind === 'task' ? scope.todoId : undefined;
@@ -81,6 +82,7 @@ export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: Bot
       needsYou: take(recent(decisions.filter(d => d.runId !== undefined && runIds.has(d.runId)))),
     };
   }), 8);
+  const recentRuns = take(recent(runs));
   return {
     capturedAt: new Date().toISOString(), workspaceTimezone: readBriefingSettings(store).timezone,
     scope: task ? { kind: 'task', todoId: task, projectId: project } : project ? { kind: 'project', projectId: project } : { kind: 'global' },
@@ -93,10 +95,10 @@ export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: Bot
         memory: memory?.summary ? { summary: clip(memory.summary, 400), updatedAt: memory.updatedAt } : null };
     }), 8),
     todos: take(recent(open).map(t => ({ id: t.id, projectId: t.projectId, title: clip(t.title), dueAt: t.dueAt, waitingOn: clip(t.waitingOn), reminderAt: t.reminderAt, ...(waiting.has(t.id) ? { replyTracking: { status: waiting.get(t.id)!.status, cycle: waiting.get(t.id)!.cycle, matchedAt: waiting.get(t.id)!.hit?.processedAt } } : {}) }))),
-    runs: { ...take(recent(runs).map(r => ({ id: r.id, projectId: r.projectId, todoId: r.todoId, status: r.status,
+    runs: { ...recentRuns, items: recentRuns.items.map(r => ({ review: live?.reviewEvidence?.(r), id: r.id, projectId: r.projectId, todoId: r.todoId, status: r.status,
       executorId: r.executorId, sessionId: r.sessionId, nativeSessionId: r.nativeSessionId, nativeResume: r.nativeResume, machineId: r.machineId ?? executors.get(r.executorId)?.machineId,
       error: clip(r.error, 400), prompt: clip(r.prompt), output: clip(r.output, 400), doneWhen: clip(r.doneWhen), resultSource: r.resultSource, progress: executionProgress(r.progress),
-      blockedBy: decisions.filter(decision => decision.runId === r.id).map(({ collection, id, title, version }) => ({ collection, id, title, version })), updatedAt: r.updatedAt ?? r.createdAt }))),
+      blockedBy: decisions.filter(decision => decision.runId === r.id).map(({ collection, id, title, version }) => ({ collection, id, title, version })), updatedAt: r.updatedAt ?? r.createdAt })),
       counts: Object.fromEntries(['queued', 'running', 'completed', 'failed', 'cancelled', 'unknown'].map(status => [status, runs.filter(r => r.status === status).length])) },
     externalAgents,
     inboxAssistant: take((live?.inboxConversations ?? []).filter(c => (!restricted || c.projectId === project) && (task === undefined || c.todoIds.includes(task))).map(c => ({
@@ -149,7 +151,7 @@ export function formatWorkContextMarkdown(context: ReturnType<typeof buildWorkCo
   }
   const counts = context.runs.counts;
   const activeRuns = context.runs.items.filter(r => ['queued', 'running', 'failed', 'unknown'].includes(r.status));
-  lines.push(`\n### 执行态势（运行中 ${(counts.running ?? 0) + (counts.queued ?? 0)} / 已完成待核对 ${counts.completed ?? 0} / 失败 ${counts.failed ?? 0} / 未知 ${counts.unknown ?? 0}）`);
+  lines.push(`\n### 执行态势（运行中 ${(counts.running ?? 0) + (counts.queued ?? 0)} / 执行已结束 ${counts.completed ?? 0} / 失败 ${counts.failed ?? 0} / 未知 ${counts.unknown ?? 0}）`);
   for (const run of activeRuns.slice(0, 6)) {
     const extra = run.error ? `错误：${run.error.slice(0, 100)}` : run.progress?.detail ? `进度：${run.progress.detail.slice(0, 100)}` : '';
     lines.push(`- [${run.status}] ${run.prompt.slice(0, 80)}${extra ? ` — ${extra}` : ''} (runId=${run.id})`);

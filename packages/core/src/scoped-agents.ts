@@ -1,3 +1,4 @@
+import type { ReviewEvidenceReader } from './run-review.ts';
 import { createHash } from 'node:crypto';
 import type { BotScope } from '../../protocol/src/bots.ts';
 import type { AppConfig, MainAssistantProfile, ExecutorInfo, Message, Project, Todo, Json } from '../../protocol/src/index.ts';
@@ -7,6 +8,7 @@ import { createAgentRuntime } from './agent-runtime/index.ts';
 
 type Runtime = ReturnType<typeof createAgentRuntime>;
 interface Options {
+  reviewEvidence?: ReviewEvidenceReader;
   config: AppConfig; store: Store; events: EventBus; contributions: Contributions;
   /** Optional host validation (for example, whether this bot binding is still enabled). */
   executors?: () => ExecutorInfo[];

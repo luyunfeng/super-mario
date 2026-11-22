@@ -1,3 +1,4 @@
+import type { ReviewEvidenceReader } from '../run-review.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
@@ -13,7 +14,8 @@ import type { Contributions, EventBus, Store } from '../../../plugin-sdk/src/ind
 import type { AgentSession, ExtensionFactory, ToolDefinition } from '@earendil-works/pi-coding-agent';
 
 type SDK = typeof import('@earendil-works/pi-coding-agent');
-interface Options { mainSkillCatalog?: () => Promise<string>; mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>; projectInstructions?: (projectId: string) => Promise<string>; inboxConversations?: () => import("../../../protocol/src/inbox-conversations.ts").InboxConversation[]; workspaceDir?: string; contextMode?: 'full' | 'principles' | 'project-memory'; workDecisions?: (scope?:BotScope, projectId?:string)=>unknown; config: AppConfig; store: Store; events: EventBus; contributions: Contributions; conversationId?: string; scope?: BotScope; canUseScope?: (input?: Message) => boolean; allowedTools?: string[]; systemPrompt?: string; projectContext?: (projectId:string)=>Json; executors?: () => ExecutorInfo[]; botContext?: (conversationId:string, scope?:BotScope)=>Json }
+interface Options {
+  reviewEvidence?: ReviewEvidenceReader; mainSkillCatalog?: () => Promise<string>; mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>; projectInstructions?: (projectId: string) => Promise<string>; inboxConversations?: () => import("../../../protocol/src/inbox-conversations.ts").InboxConversation[]; workspaceDir?: string; contextMode?: 'full' | 'principles' | 'project-memory'; workDecisions?: (scope?:BotScope, projectId?:string)=>unknown; config: AppConfig; store: Store; events: EventBus; contributions: Contributions; conversationId?: string; scope?: BotScope; canUseScope?: (input?: Message) => boolean; allowedTools?: string[]; systemPrompt?: string; projectContext?: (projectId:string)=>Json; executors?: () => ExecutorInfo[]; botContext?: (conversationId:string, scope?:BotScope)=>Json }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 type ReadOnlyAction = 'schedule_followup' | 'notify_user';
@@ -325,7 +327,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           id: entry.id, layer: entry.layer, projectId: entry.projectId ?? null,
         });
         const render = (entry: KnowledgeEntry) => `### ${entry.title}\n来源：${source(entry)}\n${entry.content}`;
-        const workContext = buildWorkContext(store, scope, currentProjectId, { executors: options.executors?.(), inboxConversations:options.inboxConversations?.() });
+        const workContext = buildWorkContext(store, scope, currentProjectId, { reviewEvidence: options.reviewEvidence, executors: options.executors?.(), inboxConversations:options.inboxConversations?.() });
         const workDecisionsData = options.workDecisions ? options.workDecisions(scope, currentProjectId) : undefined;
         const projectContextData = currentProjectId && options.projectContext ? options.projectContext(currentProjectId) : undefined;
         const sections = [

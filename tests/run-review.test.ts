@@ -469,14 +469,14 @@ test('native resumed remote executors keep their machine-qualified identity duri
 
 test('project memory gets only a matching review and detects changed acceptance evidence', t => {
   const f = fixture(t);
-  const read = () => f.review.memoryEvidence(f.store.get<Run>('runs', f.original.id)!);
+  const read = () => f.review.evidenceForRun(f.store.get<Run>('runs', f.original.id)!);
   assert.equal(read(), undefined);
   const attached = f.review.attach({ todoId: f.todo.id, runId: f.original.id });
   assert.equal(read()?.status, 'pending');
   f.review.decide(decision(attached));
   assert.equal(read()?.status, 'accepted');
-  assert.equal(f.review.memoryEvidence({ ...f.original, projectId: 'other' }), undefined);
-  assert.equal(f.review.memoryEvidence({ ...f.original, id: 'other' }), undefined);
+  assert.equal(f.review.evidenceForRun({ ...f.original, projectId: 'other' }), undefined);
+  assert.equal(f.review.evidenceForRun({ ...f.original, id: 'other' }), undefined);
   f.patch({ output: '更新后的执行结果' });
   assert.equal(read()?.status, 'invalidated');
   f.review.onReopen(f.todo.id);

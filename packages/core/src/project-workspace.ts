@@ -1,3 +1,4 @@
+import type { ReviewEvidenceReader } from './run-review.ts';
 import { createHash } from "node:crypto";
 import type {
   Store,
@@ -51,7 +52,7 @@ export function createProjectWorkspace(options: {
     reason?: string;
   };
   post: (id: string, text: string, requestId?: string) => Promise<Message>;
-  reviewEvidence?: (run: Run) => { status: string; version: number; updatedAt: string } | undefined;
+  reviewEvidence?: ReviewEvidenceReader;
   projectDecisions?: (id: string) => unknown;
   summarize: (id: string, text: string) => Promise<Message>;
   now?: () => number;
