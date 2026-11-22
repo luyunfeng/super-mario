@@ -1,4 +1,4 @@
-// 全局搜索：只在当前工作台快照里查找，结果按类型分组。
+// 全局搜索按类型展示；项目工作消息通过插件查询，不进入全局快照。
 import { h, replace } from '../lib/dom.js';
 import { searchRuns } from './run-search.js';
 import { openSavedSearches } from './saved-searches.js';
@@ -9,6 +9,31 @@ export function conversationSearchActive(snapshot) {
 
 export function createSearch({ shell, store, router, api }) {
   const { searchInput: input, results } = shell;
+
+  let searchKey, generation = 0, timer, projectHits = [], projectError = '', pending = false;
+  function updateProjectSearch(query, enabled) {
+    const key = enabled && query ? JSON.stringify([api.token(), query]) : '';
+    if (searchKey === key) return;
+    searchKey = key;
+    const stamp = ++generation;
+    clearTimeout(timer);
+    projectHits = []; projectError = ''; pending = Boolean(key);
+    if (!key) return;
+    const current = () => stamp === generation && key === JSON.stringify([api.token(), query]) && conversationSearchActive(store.view.snapshot) && !store.view.unauthorized;
+    timer = setTimeout(async () => {
+      if (!current()) return;
+      try {
+        const reply = await api.post('/project-message-search', { query });
+        if (!current()) return;
+        projectHits = reply.hits;
+      } catch (error) {
+        if (!current()) return;
+        projectError = '项目对话检索失败：' + error.message;
+      }
+      pending = false;
+      if (!results.hidden) paint();
+    }, 180);
+  }
 
   function chatHits(query, messages) {
     const hits = [];
@@ -41,6 +66,12 @@ export function createSearch({ shell, store, router, api }) {
       : (snapshot.runs ?? []).filter(item => match(item.prompt, item.output));
     return [
       ['主对话', pluginActive ? chatHits(query, snapshot.messages ?? []) : []],
+      ['项目工作对话', projectHits.flatMap(hit => {
+        const project = snapshot.projects?.find(p => !p.archivedAt && p.id === hit.projectId);
+        if (!project) return [];
+        return [{ text: [project.name + ' · ' + (hit.role === 'user' ? '你' : '项目助手') + ' · ', hit.before,
+          h('mark', null, hit.match), hit.after], href: router.href('projects', project.id, 'workspace') + '?at=' + encodeURIComponent(hit.id) }];
+      })],
       ['待办', (snapshot.todos ?? []).filter(item => match(item.title, item.notes)).map(item => ({ text: item.title, href: router.href('projects', projectKey(item), 'todos', 'detail', item.id) }))],
       ['执行', runs.map(item => ({ text: item.prompt, href: router.href('projects', projectKey(item), 'runs', item.id) }))],
       ['记忆', (snapshot.knowledge ?? []).filter(item => match(item.title, item.content)).map(item => ({ text: item.title, href: `${router.href('memory')}?entry=${encodeURIComponent(item.id)}` }))],
@@ -52,6 +83,7 @@ export function createSearch({ shell, store, router, api }) {
     const query = input.value.trim();
     const snapshot = store.view.snapshot;
     const savedEnabled = conversationSearchActive(snapshot);
+    updateProjectSearch(query, savedEnabled && !store.view.unauthorized);
     results.hidden = !snapshot || store.view.unauthorized || (!query && !savedEnabled);
     if (results.hidden) { results.replaceChildren(); return; }
     const found = query ? groups(query, snapshot) : [];
@@ -63,7 +95,7 @@ export function createSearch({ shell, store, router, api }) {
         onApply(value) { input.value = value; input.focus(); paint(); },
       });
     };
-    replace(results, query && !found.length && h('p', { class: 'search__group' }, '没有找到匹配的内容'), found.map(([name, hits]) => [
+    replace(results, query && !found.length && !pending && !projectError && h('p', { class: 'search__group' }, '没有找到匹配的内容'), projectError && h('p', { class: 'search__group' }, projectError), found.map(([name, hits]) => [
       h('div', { class: 'search__group' }, name),
       hits.slice(0, 5).map(hit => h('a', { class: 'search__hit truncate', href: hit.href, onclick: event => {
         input.value = ''; results.hidden = true;
@@ -81,12 +113,13 @@ export function createSearch({ shell, store, router, api }) {
     input.placeholder = label;
     input.setAttribute('aria-label', label);
     if (!snapshot || unauthorized) {
+      updateProjectSearch('', false);
       results.hidden = true;
       results.replaceChildren();
     } else if (document.activeElement === input || !results.hidden) paint();
   });
   input.addEventListener('input', paint);
-  input.addEventListener('focus', paint);
+  input.addEventListener('focus', () => { searchKey = undefined; paint(); });
   input.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') { results.hidden = true; input.blur(); }
     if (event.key === 'Enter') { results.querySelector('.search__hit')?.click(); }

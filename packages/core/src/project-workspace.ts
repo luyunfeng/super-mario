@@ -320,9 +320,12 @@ export function createProjectWorkspace(options: {
         }),
       );
     },
-    async view(id: string) {
+    async view(id: string, at?: string) {
       const p = project(id),
         m = visibleMemory(id);
+      const history = store.list<Message>('messages').filter(m => m.conversationId === `project:${id}:work` && (!m.projectId || m.projectId === id));
+      const anchor = at ? history.findIndex(m => m.id === at) : -1;
+      const end = anchor < 0 ? history.length : Math.min(history.length, Math.max(60, anchor + 30));
       return {
         project: p,
         progress: progress(id),
@@ -366,10 +369,7 @@ export function createProjectWorkspace(options: {
               (b.scope.kind === "project" || b.scope.kind === "task") &&
               b.scope.projectId === id,
           ),
-        messages: store
-          .list<Message>("messages")
-          .filter((x) => x.conversationId === `project:${id}:work`)
-          .slice(-60),
+        messages: history.slice(Math.max(0, end - 60), end),
         knowledge: (
           await options.knowledge().list({ layer: "project", projectId: id })
         ).map(({ content, ...k }) => k),

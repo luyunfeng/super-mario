@@ -48,6 +48,7 @@ function json(res: ServerResponse, status: number, value: unknown) {
   res.end(JSON.stringify(value));
 }
 const conversationReaders = new Map<string, { id: string; disabled: string; service: string; limit?: number; timeoutMs?: number }>([
+  ['/api/v1/project-message-search', { id: 'conversation-search', disabled: '对话搜索插件已停用', service: 'conversation-search.projects', limit: 4096 }],
   ['/api/v1/conversation-export', { id: 'conversation-export', disabled: '对话导出插件已停用', service: 'conversation-export.markdown' }],
   ['/api/v1/message-favorites', { id: 'message-favorites', disabled: '消息收藏插件已停用', service: 'message-favorites.manage', limit: 8 * 1024 * 1024 + 1024 }],
   ['/api/v1/inbox-translation', { id: 'reply-translation', disabled: '回复翻译插件已停用', service: 'reply-translation.inbox', timeoutMs: 120000 }],
@@ -522,7 +523,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 200, await machines.call(machine.id, 'workspace.code', { cwd: project.workspace.cwd, kind, path: url.searchParams.get('path') ?? '' }));
         }
         if(projectWorkspace){const id=decodeURIComponent(projectWorkspace[1]);
-          if(projectWorkspace[2]==='workspace'&&method==='GET')return json(res,200,await app.projectWorkspace.view(id));
+          if(projectWorkspace[2]==='workspace'&&method==='GET')return json(res,200,await app.projectWorkspace.view(id, url.searchParams.get('at') ?? undefined));
           if (projectWorkspace[2] === 'messages' && method === 'POST') {
             const text = requiredText((await body(req)).text, '目标');
             return json(res, 202, await app.projectWorkspace.post(id, text, messageRequestId(req)));

@@ -14,7 +14,7 @@ import { createReplyTranslation } from './reply-translation.js';
 import { createMessageFavorites } from './message-favorites.js';
 import { createConversationExport } from './conversation-export.js';
 
-export function createProjectConversation({ api, store, bindFolder }) {
+export function createProjectConversation({ api, store, router, bindFolder }) {
   const code = createCodeSidebar({ api, store });
   let projectId = '';
   const translation = createReplyTranslation({ api, store, getScope: () => projectId, getConversationId: () => `project:${projectId}:work` });
@@ -26,7 +26,8 @@ export function createProjectConversation({ api, store, bindFolder }) {
   const drafts = createConversationDrafts({ api, store });
   const pending = new Map();
   const notices = new Map();
-  let workspace;
+  let workspace, anchor = '', focused = false;
+  const locationNote = h('div', { class: 'small', hidden: true });
   const status = h('div', { 'aria-live': 'polite' });
   const progress = h('p', { class: 'muted small' });
   const messages = h('div', { class: 'project-conversation__messages', role: 'log', 'aria-label': '项目对话' });
@@ -47,7 +48,7 @@ export function createProjectConversation({ api, store, bindFolder }) {
   const send = Button({ label: '发送目标', kind: 'primary', onClick: submit });
   const notice = h('div', { 'aria-live': 'polite' });
   const composer = h('div', { class: 'project-conversation__composer stack' }, edit.notice, quote.bar, prompts.menu, text, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, send), notice);
-  const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, favorites.button, transcript.button, code.toggle)), status, messages, composer), code.el);
+  const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, favorites.button, transcript.button, code.toggle)), status, locationNote, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
   let draftKey, owner, enabled, quotesEnabled, editEnabled, epoch = 0;
   const submissions = createMessageSubmissions({ api, context: submissionContext, onConfirmed: clearSubmittedDraft, captureEdit: edit.onAccepted,
@@ -111,6 +112,9 @@ export function createProjectConversation({ api, store, bindFolder }) {
     replace(notice, notices.get(projectId) ? Banner({ tone: 'warn', children: notices.get(projectId) }) : null);
     const rows = workspace?.messages ?? [];
     const translationEpoch = translation.update(rows);
+    locationNote.hidden = !anchor;
+    if (anchor) replace(locationNote, workspace && !rows.some(row => row.id === anchor) && '当前项目中找不到这条消息。 ',
+      h('a', { href: router.href('projects', projectId, 'workspace') }, '返回最新消息'));
     if (!rows.length) { replace(messages, Empty({ title: workspace ? '在这个文件夹里持续工作' : '正在读取项目对话…', text: workspace ? '直接输入目标，项目工作会话负责拆解并跟进。' : undefined })); messages._keyed = undefined; return; }
     if (!messages._keyed) messages.replaceChildren();
     keyedList(messages, rows, m => m.id, m => {
@@ -120,20 +124,24 @@ export function createProjectConversation({ api, store, bindFolder }) {
       const canEdit = editEnabled && user && m.conversationId === `project:${projectId}:work` && (!m.projectId || m.projectId === projectId);
       const statusText = { failed: '处理失败，请查看原因', unknown: '结果未知，请核对，勿重复发送', pending: '处理中' }[m.status];
       const bubble = h('div', { class: 'msg__bubble' }, user && !/^> /m.test(m.text) ? m.text : renderFormattedText(m.text));
-      return h('div', { class: 'msg msg--' + (user ? 'user' : 'assistant') },
+      return h('div', { class: 'msg msg--' + (user ? 'user' : 'assistant') + (m.id === anchor ? ' is-search-hit' : ''), dataset: { id: m.id } },
         h('div', { class: 'msg__col' },
           h('span', { class: 'msg__label' }, user ? '我' : '项目助手'),
           agentProgress(m),
           bubble,
           statusText && h('span', { class: 'msg__meta' }, statusText),
           h('span', null, favorites.mark(m, projectId), prompts.fromMessage(m), translation.action(m, bubble), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
-    }, m => JSON.stringify([prompts.epoch, favorites.epoch, translationEpoch, quotesEnabled, editEnabled, owner, projectId, m]));
+    }, m => JSON.stringify([prompts.epoch, favorites.epoch, translationEpoch, quotesEnabled, editEnabled, owner, projectId, anchor, m]));
+    if (anchor && !focused && el.isConnected && router.current.page === 'projects' && router.current.parts[1] === 'workspace') {
+      const row = messages.querySelector('[data-id="' + CSS.escape(anchor) + '"]');
+      if (row) { focused = true; row.tabIndex = -1; row.focus({ preventScroll: true }); row.scrollIntoView({ block: 'center' }); }
+    }
   }
   async function load() {
     if (!draftKey) return;
     const id = projectId, stamp = generation, order = ++request;
     try {
-      const value = await api.get(`/projects/${encodeURIComponent(id)}/workspace`);
+      const value = await api.get(`/projects/${encodeURIComponent(id)}/workspace` + (anchor ? '?at=' + encodeURIComponent(anchor) : ''));
       if (stamp !== generation || order !== request) return;
       workspace = value;
       paint();
@@ -165,7 +173,9 @@ export function createProjectConversation({ api, store, bindFolder }) {
         clearSubmittedDraft(ctx);
         if (answer.status === 'failed') notices.set(id, '消息已受理，处理失败。');
       }
-      if (draftKey === key) await load();
+      if (confirmed && draftKey === key && anchor && router.current.page === 'projects' && router.current.parts[1] === 'workspace') {
+        router.go(router.href('projects', id, 'workspace'));
+      } else if (draftKey === key) await load();
       void store.refresh().catch(() => {});
     } catch (error) {
       syncDraft();
@@ -182,7 +192,9 @@ export function createProjectConversation({ api, store, bindFolder }) {
   }
   return {
     el,
-    show(id) {
+    show(id, at) {
+      if (anchor !== (at || '') || projectId !== id) workspace = undefined;
+      anchor = at || ''; focused = false;
       if (projectId !== id) {
         instructions.close();
         prompts.changeScope();

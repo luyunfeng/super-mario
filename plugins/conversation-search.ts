@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import type { Extension, Json, Store } from '../packages/plugin-sdk/src/index.ts';
 
+import type { Message, Project } from '../packages/protocol/src/index.ts';
+
 type SavedSearch = { id: string; name: string; query: string };
 type SearchBook = {
   revision: number;
@@ -89,10 +91,31 @@ function savedSearches(store: Store, input: Json): Json {
   });
 }
 
+function projectMessages(store: Store, input: Json) {
+  const query = input && typeof input === 'object' && !Array.isArray(input) && input.query;
+  if (typeof query !== 'string' || !query.trim() || query.length > 500) fail(400, '检索词须为 1 至 500 个字符');
+  const projects = new Map(store.list<Project>('projects').filter(p => !p.archivedAt).map(p => ['project:' + p.id + ':work', p.id]));
+  const hits = [];
+  const pattern = new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
+  for (const message of store.list<Message>('messages').reverse()) {
+    const projectId = projects.get(message.conversationId);
+    if (!projectId || (message.projectId && message.projectId !== projectId) ||
+      !['user', 'assistant'].includes(message.role) || (message.origin && message.origin !== 'user')) continue;
+    const match = pattern.exec(message.text);
+    if (!match) continue;
+    const start = match.index, end = start + match[0].length;
+    hits.push({ projectId, id: message.id, role: message.role, before: message.text.slice(Math.max(0, start - 18), start),
+      match: match[0], after: message.text.slice(end, end + 32) });
+    if (hits.length === 5) break;
+  }
+  return { hits };
+}
+
 export const conversationSearch: Extension = {
   id: 'conversation-search', name: '对话历史搜索', capabilities: ['conversation.search'],
-  permissions: ['service.provide:conversation-search.saved', 'store.read', 'store.write'],
+  permissions: ['service.provide:conversation-search.saved', 'service.provide:conversation-search.projects', 'store.read', 'store.write'],
   activate(context) {
+    context.provide('conversation-search.projects', input => projectMessages(context.store, input));
     context.provide('conversation-search.saved', input => savedSearches(context.store, input));
   },
 };

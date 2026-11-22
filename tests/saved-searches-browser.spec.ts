@@ -24,6 +24,17 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
       id: 'synthetic-report', conversationId: 'main', executorId: 'fixture', projectId,
       status: 'completed', prompt: '生成账单', output: '月报准备就绪', createdAt: now, updatedAt: now,
     });
+    const archived = await server.app.createProject({ name: '归档测试' });
+    server.app.projects.archive(archived.id);
+    const keyword = '合成[定位]';
+    const putMessage = (id: string, conversationId: string, text: string, scope = projectId) =>
+      server.app.store.put('messages', id, { id, projectId: scope, conversationId, role: 'user', text, createdAt: now, status: 'done' });
+    const work = 'project:' + projectId + ':work';
+    putMessage('historic', work, '旧记录 ' + keyword);
+    for (let i = 0; i < 75; i++) putMessage('later-' + i, work, '后续记录 ' + i);
+    putMessage('archived', 'project:' + archived.id + ':work', keyword, archived.id);
+    putMessage('wrong-scope', work, keyword, archived.id);
+    putMessage('bot-private', 'bot:fixture', keyword);
     browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors: string[] = [];
@@ -38,6 +49,19 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     const manage = results.getByRole('button', { name: '管理保存的检索', exact: true });
     const saveQuery = results.getByRole('button', { name: '保存当前检索', exact: true });
     await expect(search).toHaveAccessibleName(/搜索对话/);
+    await search.fill(keyword);
+    const hit = results.getByRole('link', { name: /季度复核项目.*旧记录/ });
+    await expect(hit).toBeVisible();
+    assert.deepEqual((await (await api('/project-message-search', { query: keyword })).json()).hits.map((h: { id: string }) => h.id), ['historic']);
+    await hit.click();
+    const original = page.locator('#panel-workspace .msg.is-search-hit');
+    await expect(original).toBeFocused();
+    await expect(original).toContainText(keyword);
+    await page.reload();
+    await expect(original).toBeFocused();
+    await page.getByRole('link', { name: '返回最新消息' }).click();
+    await expect(page.locator('#panel-workspace .msg').last()).toContainText('后续记录 74');
+    await expect(original).toHaveCount(0);
     await search.fill('季度复核');
     await saveQuery.click();
     await expect(drawer.getByLabel('检索词', { exact: true })).toHaveValue('季度复核');
@@ -105,6 +129,7 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await expect(button('套用 另一窗口的检索')).toBeVisible();
 
     assert.ok((await api('/plugins/conversation-search', { enabled: false })).ok);
+    assert.equal((await api('/project-message-search', { query: keyword })).status, 503);
     await expect(drawer).toBeHidden();
     await search.fill('季度复核');
     await expect(results.getByRole('link', { name: '季度复核项目' })).toBeVisible();
