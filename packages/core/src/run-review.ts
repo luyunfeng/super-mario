@@ -108,11 +108,17 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
     const realSource = typeof source === 'string' && source.trim() !== ''
       && !['demo', 'screen', 'runner', 'terminal-idle', 'idle', 'unknown'].includes(source.trim().toLowerCase())
       && (source === 'real' || value.nativeResultSources?.includes(source));
-    if (value.status !== 'completed' || !realSource || !value.output?.trim()
-      || (value.nativeResume && (!value.nativeSessionId
-        || value.nativeSessionId !== value.nativeResume.nativeSessionId
-        || (value.executorId !== value.nativeResume.executorId && value.executorId !== `${value.machineId}/${value.nativeResume.executorId}`)))) {
+    if (value.status !== 'completed' || !realSource || !value.output?.trim()) {
       throw new RunReviewError('需要真实completed及有效来源和完成证据', 409);
+    }
+    if (!value.nativeResume) return;
+    if (!value.nativeSessionId || value.nativeSessionId !== value.nativeResume.nativeSessionId) {
+      throw new RunReviewError('原生会话编号缺失或与恢复请求不符。', 409);
+    }
+    const executor = value.nativeResume.executorId;
+    const remoteMatch = value.machineId && value.executorId === `${value.machineId}/${executor}`;
+    if (!executor || (value.executorId !== executor && !remoteMatch)) {
+      throw new RunReviewError('执行者与恢复请求或绑定电脑不符。', 409);
     }
   }
   function assertCanComplete(todoId: string): void {

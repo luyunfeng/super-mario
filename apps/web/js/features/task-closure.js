@@ -48,6 +48,16 @@ export function openTaskClosure({ api, store, router, todo, runId, title = '答�
     return Boolean((message.value || receipt) && (!outbox.value || receipt && receiptAllowed(receipt))
       && (!reporting?.requireDelivery || receipt?.status === 'sent'));
   }
+  function resumeMismatch(run) {
+    if (!run?.nativeResume) return '';
+    if (!run.nativeSessionId || run.nativeSessionId !== run.nativeResume.nativeSessionId) return '原生会话编号缺失或与恢复请求不符。';
+    const executor = run.nativeResume.executorId;
+    const remoteMatch = run.machineId && run.executorId === run.machineId + '/' + executor;
+    if (!executor || (run.executorId !== executor && !remoteMatch)) {
+      return '执行者与恢复请求或绑定电脑不符。';
+    }
+    return '';
+  }
   function sync() {
     const locked = busy || pending.has(todo.id) || !loaded || stale || locks.has(todo.id) || review?.status === 'unknown' || review?.status === 'dispatching';
     for (const input of [required, delivery]) input.disabled = busy || pending.has(todo.id) || !loaded;
@@ -66,7 +76,7 @@ export function openTaskClosure({ api, store, router, todo, runId, title = '答�
     const sourceOK = typeof source === 'string' && source.trim() !== ''
       && !['demo', 'screen', 'runner', 'terminal-idle', 'idle', 'unknown'].includes(source.trim().toLowerCase())
       && (source === 'real' || nativeSources.includes(source));
-    accept.disabled = locked || dirty || review?.status !== 'pending' || run?.status !== 'completed' || !sourceOK || !run?.output?.trim() || Boolean(run?.nativeResume && (!run.nativeSessionId || run.nativeSessionId !== run.nativeResume.nativeSessionId || run.executorId !== run.nativeResume.executorId));
+    accept.disabled = locked || dirty || review?.status !== 'pending' || run?.status !== 'completed' || !sourceOK || !run?.output?.trim() || Boolean(resumeMismatch(run));
     rework.disabled = locked || review?.status !== 'pending' || !['completed', 'failed'].includes(run?.status) || defects.value.trim().length < 4;
     deliveryHint.textContent = delivery.checked
       ? '必须选择实际 sent 出站回执才能满足渠道送达；queued / unknown 未确认送达，不能记录为送达证据。这里只记录已有回执，不触发发送。'
@@ -90,7 +100,12 @@ export function openTaskClosure({ api, store, router, todo, runId, title = '答�
   function paintState() {
     state.textContent = `答复版本 ${reporting.version} · 周期 ${reporting.cycle} · ${reporting.report ? '已记录答复' : '未记录答复'}${review ? ` · 验收 ${review.status} · ${review.round ? `返工第 ${review.round} 轮` : '首次交付'} · 版本 ${review.version}` : ' · 尚未关联交付'}`;
     const run = (store.view.snapshot?.runs ?? []).find(item => item.id === review?.runId && item.todoId === todo.id && item.projectId === todo.projectId);
-    replace(evidence, review ? [h('p', null, `完成标准：${review.doneWhen}`), h('p', null, `关联交付：${run?.prompt ?? review.runId}`), run && h('p', null, `执行状态：${run.status} · 证据来源：${run.resultSource ?? '无'}`), run?.output && h('pre', { class: 'output' }, run.output), h('p', { style: { overflowWrap: 'anywhere' } }, `证据版本：${review.evidenceVersion}`), review.error && h('p', { class: 'text-danger' }, review.error)] : []);
+    const mismatch = run?.status === 'completed' && resumeMismatch(run);
+    replace(evidence, review ? [h('p', null, `完成标准：${review.doneWhen}`), h('p', null, `关联交付：${run?.prompt ?? review.runId}`), run && h('p', null, `执行状态：${run.status} · 证据来源：${run.resultSource ?? '无'}`), run?.nativeResume && h('dl', { class: 'kv' },
+      h('dt', null, '请求恢复的会话'), h('dd', null, run.nativeResume.nativeSessionId),
+      h('dt', null, '结果所属会话'), h('dd', null, run.nativeSessionId || '未上报'),
+      h('dt', null, '执行者'), h('dd', null, run.executorId)),
+      mismatch && h('p', { class: 'text-danger' }, mismatch), run?.output && h('pre', { class: 'output' }, run.output), h('p', { style: { overflowWrap: 'anywhere' } }, `证据版本：${review.evidenceVersion}`), review.error && h('p', { class: 'text-danger' }, review.error)] : []);
     candidates();
   }
   async function read() {

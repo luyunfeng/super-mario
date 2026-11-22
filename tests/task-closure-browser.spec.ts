@@ -309,3 +309,28 @@ test('验收来源：执行者名含 demo 可通过，声明不可洗白观察�
   await expect(accept).toBeEnabled();
   assert.equal(writes(requests).length, 1);
 }));
+
+test('恢复执行按绑定电脑、执行器和原生会话核对，身份不符时展示原因', async () => fixture(async ({ page, requests, setHandler }) => {
+  setHandler(req => {
+    if (req.path.endsWith('/closure')) return { body: { reporting: initialReporting, review: initialReview } };
+    if (req.path.endsWith('/decide')) return { body: { ...initialReview, status: 'accepted' } };
+  });
+  await page.evaluate(() => (window as any).changeRun({ machineId: 'machine', executorId: 'other/custom',
+    nativeResume: { executorId: 'custom', nativeSessionId: 'fixture' }, nativeSessionId: 'fixture' }));
+  await open(page);
+  const drawer = dialog(page), accept = drawer.getByRole('button', { name: '验收通过并完成待办' });
+  await expect(accept).toBeDisabled();
+  await expect(drawer).toContainText('执行者与恢复请求或绑定电脑不符');
+  await page.evaluate(() => (window as any).changeRun({ executorId: 'machine/custom', nativeSessionId: 'different' }));
+  await drawer.getByRole('button', { name: '只读刷新' }).click();
+  await expect(drawer).toContainText('原生会话编号缺失或与恢复请求不符');
+  await expect(drawer.getByText('different', { exact: true })).toBeVisible();
+  await expect(drawer.getByText('fixture', { exact: true })).toBeVisible();
+  await expect(accept).toBeDisabled();
+  await page.evaluate(() => (window as any).changeRun({ nativeSessionId: 'fixture' }));
+  await drawer.getByRole('button', { name: '只读刷新' }).click();
+  await expect(accept).toBeEnabled();
+  await accept.click();
+  await expect(drawer).toContainText('验收 accepted');
+  assert.equal(writes(requests).length, 1);
+}));

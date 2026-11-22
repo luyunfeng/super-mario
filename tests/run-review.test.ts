@@ -105,6 +105,8 @@ test('accept rejects invalid evidence, undeclared vendors and mismatched native 
     { output: ' ' }, { status: 'failed' }, { status: 'unknown' }, { status: 'running' },
     { nativeResume: { executorId: 'generic-plugin', nativeSessionId: 'expected' }, nativeSessionId: 'different' },
     { nativeResume: { executorId: 'other-plugin', nativeSessionId: 'same' }, nativeSessionId: 'same' },
+    { executorId: 'other/generic-plugin', machineId: 'machine', nativeResume: { executorId: 'generic-plugin', nativeSessionId: 'thread' }, nativeSessionId: 'thread' },
+    { executorId: 'undefined/generic-plugin', machineId: undefined, nativeResume: { executorId: 'generic-plugin', nativeSessionId: 'thread' }, nativeSessionId: 'thread' },
     { nativeResume: { executorId: 'generic-plugin', nativeSessionId: '' }, nativeSessionId: '' } ];
   for (const patch of patches) {
     f.store.put('runs', 'original', { ...f.original, ...patch });
@@ -321,6 +323,14 @@ test('legacy native result needs an explicit host declaration, without vendor in
   f.patch({ nativeResultSources: ['plugin-result'] });
   assert.throws(() => f.review.decide(decision(attached)), conflict);
   assert.equal(f.review.decide(decision(f.review.get('todo'))).status, 'accepted');
+});
+
+test('验收匹配绑定电脑、执行器与原生会话的完成证据', t => {
+  const f = fixture(t);
+  f.patch({ machineId: 'fixture', executorId: 'fixture/generic-plugin', nativeSessionId: 'thread',
+    nativeResume: { executorId: 'generic-plugin', nativeSessionId: 'thread' } });
+  const review = f.review.attach({ todoId: 'todo', runId: 'original' });
+  assert.equal(f.review.decide(decision(review)).status, 'accepted');
 });
 
 test('global main user requests can delegate into projects but explicit scope cannot be crossed', t => {
