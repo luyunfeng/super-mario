@@ -106,6 +106,25 @@ export function openWorktreeStatus(options) {
     return [file.index !== ' ' && '暂存区：' + (names[file.index] ?? file.index),
       file.worktree !== ' ' && '工作区：' + (names[file.worktree] ?? file.worktree)].filter(Boolean).join(' · ');
   }
+  function fileRow(file) {
+    const output = h('div');
+    let sequence = 0;
+    function action(area, label) {
+      return Button({ label, size: 'sm', onClick: async () => {
+        const stamp = ++sequence;
+        output.textContent = '正在读取…';
+        try {
+          const reply = await api.get('/runs/' + encodeURIComponent(item.id) + '/worktree-change?' + new URLSearchParams({ path: file.path, area }));
+          if (active() && stamp === sequence) replace(output, h('pre', { class: 'code-sidebar__text', tabindex: 0 },
+            reply.kind === 'untracked' ? reply.text : reply.text ? renderDiffLines(reply.text) : '没有文本差异。'));
+        } catch (error) { if (active() && stamp === sequence) output.textContent = error.message; }
+      } });
+    }
+    return h('div', { class: 'stack' }, h('code', null, file.path), h('small', { class: 'muted' }, fileState(file)),
+      h('div', { class: 'row row--wrap' },
+        file.index !== '?' && file.index !== ' ' && action('index', '查看暂存差异'),
+        file.worktree !== ' ' && action('working', file.index === '?' ? '查看未跟踪文件' : '查看未暂存差异')), output);
+  }
   async function load() {
     replace(area, h('p', { role: 'status' }, '正在读取工作树…'));
     try {
@@ -115,8 +134,7 @@ export function openWorktreeStatus(options) {
         h('p', null, '当前提交 ', h('code', null, value.head.slice(0, 10)), ' · 来源提交 ', h('code', null, value.sourceHead.slice(0, 10))),
         h('p', null, `有 ${value.unmerged} 个提交尚未进入来源目录当前 HEAD。`),
         h('strong', null, `未提交文件（含未跟踪）：${value.total}`),
-        value.files.map(file => h('div', { class: 'stack' }, h('code', null, file.path),
-          h('small', { class: 'muted' }, fileState(file)))),
+        value.files.map(fileRow),
         value.hidden > 0 && h('small', null, `已隐藏 ${value.hidden} 个受限文件。`),
         value.truncated && h('small', null, '仅显示前 250 个可见文件。'),
         value.locked && h('p', null, 'Git 工作树已锁定，暂时无法清理目录。'),

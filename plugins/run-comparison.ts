@@ -1,16 +1,32 @@
+import { createHash } from 'node:crypto';
 import type { Extension } from '../packages/plugin-sdk/src/index.ts';
 import type { Json } from '../packages/protocol/src/index.ts';
 
-export function createRunComparison(read: (id: string, path?: string) => Promise<Json>, status: (id: string) => Promise<Json>): Extension {
+export function createRunComparison(read: (id: string, path?: string) => Promise<Json>, status: (id: string) => Promise<Json>,
+  change: (id: string, path: string, area: string) => Promise<Json>): Extension {
   return {
     id: 'run-comparison', name: '执行对比', capabilities: ['web.runComparison', 'runs.diff.read'],
     activate(context) {
       context.contribute('tools', 'run_worktree_status', {
         name: 'run_worktree_status', description: '读取本次执行独立工作树的当前分支、未提交文件和未进入来源目录当前 HEAD 的提交数。文件列表可能截断。目录已清理时返回 removedAt，以及保留分支的实时状态或分支删除回执时间 branchDeletedAt。',
-        parameters: { type: 'object', required: ['id'], additionalProperties: false, properties: { id: { type: 'string' } } },
-        async execute({ id }, signal) {
+        parameters: { type: 'object', required: ['id'], additionalProperties: false, properties: { id: { type: 'string' },
+          path: { type: 'string', description: '当前状态列出的可见文件' }, area: { type: 'string', enum: ['index', 'working'] },
+          offset: { type: 'integer', minimum: 0 }, version: { type: 'string', description: '续读时传入上页版本' } } },
+        async execute({ id, path, area, offset = 0, version }, signal) {
           signal.throwIfAborted();
           if (typeof id !== 'string' || !id) throw new Error('缺少执行 ID');
+          if (path !== undefined || area !== undefined || offset !== 0 || version !== undefined) {
+            if (typeof path !== 'string' || (area !== 'index' && area !== 'working')) throw new Error('请同时指定文件和差异区域');
+            if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || offset > 0 && typeof version !== 'string') throw new Error('续读需要有效位置和原版本');
+            const result = await change(id, path, area);
+            signal.throwIfAborted();
+            if (!result || typeof result !== 'object' || Array.isArray(result) || typeof result.text !== 'string') throw new Error('文件差异回执无效');
+            const current = createHash('sha256').update(JSON.stringify([id, path, area, result.kind, result.text])).digest('hex');
+            if (version !== undefined && version !== current) throw new Error('文件差异已变化，请从头读取');
+            const text = result.text.slice(offset, offset + 16000);
+            const truncated = offset + text.length < result.text.length;
+            return { ...result, text, truncated, version: current, nextOffset: truncated ? offset + text.length : null };
+          }
           const result = await status(id);
           signal.throwIfAborted();
           return result;

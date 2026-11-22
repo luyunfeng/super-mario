@@ -608,6 +608,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         const cleanupWorktree = path.match(/^\/api\/v1\/runs\/([^/]+)\/worktree-cleanup$/);
         if (cleanupWorktree && method === 'POST')
           return json(res, 200, await app.cleanupRunWorktree(decodeURIComponent(cleanupWorktree[1]!), await body(req)));
+        const worktreeChange = path.match(/^\/api\/v1\/runs\/([^/]+)\/worktree-change$/);
+        if (worktreeChange && method === 'GET')
+          return json(res, 200, await app.readRunWorktreeChange(decodeURIComponent(worktreeChange[1]!), url.searchParams.get('path') ?? '', url.searchParams.get('area') ?? ''));
         const worktreeStatus = path.match(/^\/api\/v1\/runs\/([^/]+)\/worktree-status$/);
         if (worktreeStatus && method === 'GET') {
           if (url.searchParams.size) throw new InputError('工作树状态只接受执行 ID');

@@ -173,6 +173,17 @@ export async function createWorkbench(config: AppConfig) {
     const blockingRunIds = worktreeBlockingRuns(machine.id, run.cwd).map(other => other.id);
     return { ...state, blockingRunIds, blockedByRuns: blockingRunIds.length > 0 };
   }
+  async function readRunWorktreeChange(id: string, path: string, area: string): Promise<Json> {
+    if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
+    if (!path || (area !== 'index' && area !== 'working')) throw new InputError('请选择文件和差异区域');
+    const run = store.get<Run>('runs', id);
+    if (!run?.worktree?.branch || !run.machineId) throw new InputError('执行缺少工作树创建回执', 404);
+    if (run.worktree.removedAt) throw new InputError('工作树目录已清理', 410);
+    const machine = machines?.list().find(m => m.id === run.machineId);
+    if (!machines || !machine?.online) throw new InputError('执行机离线', 503);
+    if (!machine.capabilities.includes('workspace.readWorktreeChange')) throw new InputError('请升级执行机代理以查看工作树文件差异', 409);
+    return machines.call(machine.id, 'workspace.readWorktreeChange', { id, source: run.worktree.source, path, area });
+  }
   const cleaningWorktrees = new Map<string, { machineId: string; cwd: string }>();
   async function cleanupRunWorktree(id: string, input: Record<string, unknown>): Promise<Json> {
     if (input.confirmed !== true || typeof input.head !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(input.head)
@@ -314,7 +325,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(todoCalendar);
   plugins.register(conversationSearch);
   plugins.register(conversationDrafts);
-  plugins.register(createRunComparison(readRunCommitDiff, id => runWorktreeStatus(id, true)));
+  plugins.register(createRunComparison(readRunCommitDiff, id => runWorktreeStatus(id, true), readRunWorktreeChange));
   plugins.register(shortcutSettings);
   plugins.register(conversationQuotes);
   plugins.register(conversationEdit);
@@ -1288,7 +1299,7 @@ export async function createWorkbench(config: AppConfig) {
     return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
   }
   return {
-    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, renameRunWorktree, runWorktreeStatus, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {

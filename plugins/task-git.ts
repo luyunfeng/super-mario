@@ -1,7 +1,7 @@
 import { mkdir, realpath } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { sensitiveWorkspacePath } from './workspace-code.ts';
+import { sensitiveWorkspacePath, workspaceCode } from './workspace-code.ts';
 import { execFile, execFileSync } from 'node:child_process';
 import { commitChanges, type Json, type JsonObject } from '../packages/protocol/src/index.ts';
 
@@ -139,6 +139,27 @@ export async function inspectRunWorktree({ source, id }: JsonObject) {
   }
   return { cwd: target, branch: record.find(field => field.startsWith('branch refs/heads/'))?.slice('branch refs/heads/'.length) ?? null,
     head, sourceHead, unmerged, files, total, hidden, ignored, locked: record.some(field => field === 'locked' || field.startsWith('locked ')), truncated: total > hidden + files.length };
+}
+
+export async function readWorktreeChange(params: JsonObject): Promise<Json> {
+  const { path, area } = params;
+  const snapshot = await inspectRunWorktree(params);
+  const file = snapshot.files.find(entry => entry.path === path);
+  if (typeof path !== 'string' || !file || (area !== 'index' && area !== 'working'))
+    throw new Error('请从工作树当前可见的修改中选择文件');
+  if (file.index === '?' && area === 'working') {
+    const target = resolve(snapshot.cwd, path);
+    if (await realpath(target) !== target) throw new Error('未跟踪的符号链接不可浏览');
+    const result = await workspaceCode({ cwd: snapshot.cwd, path, kind: 'file' }, () => {});
+    if (!result || typeof result !== 'object' || Array.isArray(result) || typeof result.text !== 'string') throw new Error('文件不可读');
+    return { path, area, kind: 'untracked', text: result.text };
+  }
+  if (file.index === '?' || (area === 'index' ? file.index : file.worktree) === ' ') throw new Error('该区域的文件状态已变化，请刷新');
+  const overrides = await filterOverrides(snapshot.cwd);
+  const text = await runGit(snapshot.cwd, [...overrides, '-c', 'core.fsmonitor=false', 'diff', '--no-ext-diff', '--no-textconv',
+    '--no-renames', '--no-color', '--submodule=short', '--ignore-submodules=none', ...(area === 'index' ? ['--cached'] : []), '--', path]);
+  if (/^Binary files /m.test(text) || /[\x00-\x08\x0b\x0c\x0e-\x1f\ufffd]/.test(text)) throw new Error('仅支持 UTF-8 文本差异');
+  return { path, area, kind: 'diff', text };
 }
 
 export async function removeRunWorktree(params: JsonObject): Promise<Json> {
