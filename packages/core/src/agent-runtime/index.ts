@@ -93,6 +93,10 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         if (!todo || !inScope(todo, true)) throw new Error('todoId 不属于当前作用域');
       }
     };
+    if (name === 'work_dispatch' && args.worktreeRunId !== undefined) {
+      const run = store.get<{ projectId?: string; todoId?: string }>('runs', String(args.worktreeRunId));
+      if (!run || !inScope(run)) throw new Error('原工作树不属于当前作用域');
+    }
     if (name === 'knowledge_list') {
       if (args.projectId !== undefined && args.projectId !== scopedProject) throw new Error('跨作用域 projectId');
       if (args.layer !== undefined && args.layer !== 'global' && !(args.layer === 'project' && scopedProject)) throw new Error('作用域禁止此知识层');

@@ -59,6 +59,8 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
       assert.ok(!input.tools.some((tool: any) => /remove_worktree|worktree_cleanup/.test(tool.function.name)));
       assert.match(system, /仅当用户明确要求独立工作树/);
       assert.match(system, /只要求比较已有记录时保持只读/);
+      assert.match(system, /要接着原会话对话时使用会话恢复流程/);
+      assert.equal(input.tools.find((tool: any) => tool.function.name === 'work_dispatch')?.function.parameters.properties.worktreeRunId.type, 'string');
       assert.equal(input.tools.find((tool: any) => tool.function.name === 'work_dispatch')?.function.parameters.properties.copies.maximum, 4);
       assert.equal(input.tools.find((tool: any) => tool.function.name === 'work_dispatch')?.function.parameters.properties.isolatedWorktree.type, 'boolean');
       expectedSkills.push(system.includes(skillName));

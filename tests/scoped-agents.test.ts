@@ -338,6 +338,8 @@ test('task bridge pins todoId including nested plans and denies creating unrelat
   assert.deepEqual(await invoke('run_commit_diff', { id: 'one' }), { id: 'one' });
   await assert.rejects(invoke('run_commit_diff', { id: 'two' }), /作用域/);
   await assert.rejects(invoke('run_worktree_status', { id: 'two' }), /作用域/);
+  await assert.rejects(invoke('work_dispatch', { worktreeRunId: 'two' }), /作用域/);
+  assert.deepEqual(await invoke('work_dispatch', { worktreeRunId: 'one' }), { worktreeRunId: 'one', todoId: 'a', projectId: 'A' });
   assert.deepEqual((await invoke('task_plan', { tasks: [{}] })).tasks, [{ projectId: 'A', todoId: 'a' }]);
   await assert.rejects(invoke('task_plan', { tasks: [{ todoId: 'a2' }] }), /跨作用域/);
   await assert.rejects(invoke('work_dispatch', { todoId: 'a2' }), /跨作用域/);

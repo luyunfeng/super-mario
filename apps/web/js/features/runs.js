@@ -167,6 +167,8 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       run.worktree && h('p', { class: 'muted small' }, run.worktree.branchDeletedAt ? '工作树目录已清理 · 执行分支已删除' : run.worktree.removedAt ? `工作树目录已清理 · 保留分支 ${run.worktree.branch}` : run.worktree.branch
         ? `独立工作树：${run.cwd} · ${run.worktree.branch} · 起点 ${run.worktree.base.slice(0, 10)}`
         : `独立工作树尚无创建回执 · 来源 ${run.worktree.source}`),
+      comparisonEnabled && run.worktree?.branch && !run.worktree.removedAt && Button({ label: '在此工作树发起执行', size: 'sm', onClick: () => openLaunch(run) }),
+      run.worktreeRunId && h('a', { href: router.href('projects', run.projectId, 'runs', run.worktreeRunId) }, '查看原工作树'),
       comparisonEnabled && run.worktree?.removedAt && !run.worktree.branchDeletedAt && Button({ label: '查看保留分支', size: 'sm', onClick: () => openRetainedBranch({ item: run, api, store, router }) }),
       comparisonEnabled && run.worktree?.branch && !run.worktree.removedAt && Button({ label: '查看工作树状态', size: 'sm', onClick: () => openWorktreeStatus({ item: run, api, store, router }) }),
       run.status === 'unknown' && Banner({ tone: 'danger', children: '动作已发出，但没有收到确认。请先到电脑上核对，不要重复发起。' }),
@@ -183,22 +185,24 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
   }
 
   // —— 发起执行 ——
-  function openLaunch() {
+  function openLaunch(parentRun) {
     const snapshot = store.view.snapshot;
-    const launchProjectId = projectId;
+    const launchProjectId = parentRun?.projectId ?? projectId;
     const binding = snapshot.projects?.find(item => item.id === launchProjectId)?.workspace;
     const executors = (snapshot.executors ?? []).filter(item => item.available && (!binding || item.machineId === binding.machineId));
+    const launchToken = api.token();
     const key = uuid();
     let uncertain = false;
     const prompt = TextArea({ rows: 4, placeholder: '例如：修复登录页的报错，并跑通现有测试', required: true });
     const executor = Select({ options: [...(!binding ? [['', '自动选择（推荐）']] : []), ...executors.map(item => [item.id, item.name])] });
-    const cwd = Input({ value: binding?.cwd ?? '', readOnly: Boolean(binding), placeholder: '留空使用这台电脑的默认目录' });
-    const todos = (snapshot.todos ?? []).filter(todo => !todo.completedAt && (projectId === 'all' || todo.projectId === projectId));
+    if (parentRun) executor.value = parentRun.executorId;
+    const cwd = Input({ value: parentRun?.cwd ?? binding?.cwd ?? '', readOnly: Boolean(binding), placeholder: '留空使用这台电脑的默认目录' });
+    const todos = (snapshot.todos ?? []).filter(todo => !todo.completedAt && (launchProjectId === 'all' || todo.projectId === launchProjectId));
     const todo = Select({ options: [['', '不关联'], ...todos.map(item => [item.id, item.title])] });
     const criteria = Input({ placeholder: '例如：npm test 通过，登录页无报错' });
     const minutes = Input({ type: 'number', min: 1, max: 10080, placeholder: '例如：15' });
     const mode = Select({ options: [['task', '任务：做完就结束'], ['interactive', '交互会话：可以持续对话']] });
-    const canIsolate = binding && snapshot.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active')
+    const canIsolate = !parentRun && binding && snapshot.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active')
       && snapshot.machines?.some(m => m.id === binding.machineId && m.capabilities.includes('workspace.prepareRunWorktree'));
     let isolated = false;
     const canCompare = canIsolate && snapshot.machines.some(m => m.id === binding.machineId && m.capabilities.includes('workspace.worktreeBase'));
@@ -223,24 +227,29 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     };
     for (const control of [executor, mode]) control.addEventListener('change', sync);
     const drawer = openDrawer({
-      title: '发起执行', subtitle: projectId === 'all' ? '不归属于某个项目' : `归属项目：${(snapshot.projects ?? []).find(item => item.id === projectId)?.name ?? ''}`,
+      onClose: () => { offRoute(); offStore(); },
+      title: '发起执行', subtitle: launchProjectId === 'all' ? '不归属于某个项目' : `归属项目：${(snapshot.projects ?? []).find(item => item.id === launchProjectId)?.name ?? ''}`,
       body: [!executors.length && Banner({ tone: 'warn', children: '现在没有可用的执行者。请先在 Agent 里连接一台电脑。', action: h('a', { class: 'btn btn--sm', href: router.href('agent') }, '去连接') }),
         Field({ label: '要做什么', control: prompt, required: true }), Field({ label: '谁来做', control: executor }),
-        binding && h('p', { class: 'muted folder-path' }, `继承项目文件夹：${binding.cwd}`), Field({ label: '关联待办', control: todo }), criteriaField, minutesField, isolation, copiesField,
-        Fold({ title: '更多选项', body: [Field({ label: binding ? '目录（继承项目）' : '目录', control: cwd }), Field({ label: '执行方式', control: mode })] }), message],
+        binding && h('p', { class: 'muted folder-path' }, parentRun ? `复用工作树：${parentRun.worktree.name ?? parentRun.worktree.branch} · ${parentRun.cwd}` : `继承项目文件夹：${binding.cwd}`), Field({ label: '关联待办', control: todo }), criteriaField, minutesField, isolation, copiesField,
+        Fold({ title: '更多选项', body: [Field({ label: parentRun ? '原工作树目录' : binding ? '目录（继承项目）' : '目录', control: cwd }), Field({ label: '执行方式', control: mode })] }), message],
       footer: [Button({ label: '取消', onClick: () => drawer.close() }), Button({
         label: '开始执行', kind: 'primary',
         onClick: async (_event, button) => {
-          if (uncertain) return;
+          if (uncertain || api.token() !== launchToken || !drawer.el.open) return;
           if (binding && !executors.some(item => item.id === executor.value)) { replace(message, Banner({ tone: 'warn', children: '绑定电脑没有可用执行者，不能改用其他电脑。' })); return; }
           if (!prompt.value.trim()) { replace(message, Banner({ tone: 'danger', children: '请写下要做什么。' })); return; }
-          const body = { prompt: prompt.value.trim(), ...(isolated && { isolatedWorktree: true, ...(canCompare && { copies: Number(copies.value) }) }), ...(executor.value ? { executorId: executor.value } : {}), ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}),
+          const body = { prompt: prompt.value.trim(), ...(parentRun && { worktreeRunId: parentRun.id }), ...(isolated && { isolatedWorktree: true, ...(canCompare && { copies: Number(copies.value) }) }), ...(executor.value ? { executorId: executor.value } : {}), ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}),
             ...(launchProjectId !== 'all' ? { projectId: launchProjectId } : {}), ...(todo.value ? { todoId: todo.value } : {}), ...(criteria.value.trim() ? { doneWhen: criteria.value.trim() } : {}),
             ...(minutes.value ? { expectMinutes: Number(minutes.value) } : {}), executionMode: mode.value };
           try { const run = await api.post('/runs', body, { 'Idempotency-Key': key }); drawer.close(); store.refresh(); router.go(router.href('projects', launchProjectId, 'runs', run.id) + (run.comparisonRunIds ? '?compare=group' : '')); }
           catch (error) { uncertain = !error.status || error.status >= 500 || /unknown/i.test(error.message); if (uncertain) button.disabled = true; replace(message, Banner({ tone: 'danger', children: uncertain ? '执行结果未知，请先核对执行记录和电脑，不要重复发起。' : `没有开始执行：${systemText(error.message)}` })); }
         },
       })],
+    });
+    const offRoute = router.subscribe(() => drawer.close());
+    const offStore = store.subscribe(view => {
+      if (view.unauthorized || api.token() !== launchToken || parentRun && !view.snapshot?.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active')) drawer.close();
     });
     sync();
   }

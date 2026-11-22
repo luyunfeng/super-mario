@@ -247,7 +247,7 @@ export async function createWorkbench(config: AppConfig) {
     if (!machines || !machine?.online) throw new InputError('执行机离线', 503);
     if (!machine.capabilities.includes('workspace.commitDiff')) throw new InputError('请升级执行机代理以查看历史差异', 409);
     return machines.call(machine.id, 'workspace.commitDiff', {
-      cwd: run.worktree?.source ?? run.cwd, range: run.commitChanges, ...(path !== undefined && { path }),
+      cwd: run.worktree?.source ?? (run.worktreeRunId && store.get<Run>('runs', run.worktreeRunId)?.worktree?.source) ?? run.cwd, range: run.commitChanges, ...(path !== undefined && { path }),
     });
   }
   async function readWorkspaceCode(input: { projectId?: string; kind: 'tree' | 'file' | 'diff'; path?: string }): Promise<Json> {
@@ -780,6 +780,7 @@ export async function createWorkbench(config: AppConfig) {
     const prompt = requiredText(input.prompt, '工作内容');
     if (input.isolatedWorktree !== undefined && typeof input.isolatedWorktree !== 'boolean') throw new InputError('独立工作树选项无效');
     const isolated = input.isolatedWorktree === true;
+    const worktreeRunId = input.worktreeRunId === undefined ? undefined : requiredText(input.worktreeRunId, '工作树所属执行');
     const copies = input.copies === undefined ? 1 : input.copies;
     if (typeof copies !== 'number' || !Number.isInteger(copies) || copies < 1 || copies > 4 || copies > 1 && !isolated)
       throw new InputError('对比执行需要 2 至 4 个独立工作树');
@@ -804,7 +805,7 @@ export async function createWorkbench(config: AppConfig) {
         const samePrompt = requestHash ? createHash('sha256').update(prompt).digest('hex') === requestHash : run.prompt === prompt;
         if (!samePrompt || (requestedExecutor !== undefined && run.executorId !== requestedExecutor)
           || run.projectId !== projectId || run.conversationId !== conversationId
-          || (run.comparisonRunIds?.length ?? 1) !== copies || Boolean(run.worktree) !== isolated || (input.cwd !== undefined && (run.worktree?.source ?? run.cwd) !== input.cwd)
+          || run.worktreeRunId !== worktreeRunId || (run.comparisonRunIds?.length ?? 1) !== copies || Boolean(run.worktree) !== isolated || (input.cwd !== undefined && (run.worktree?.source ?? run.cwd) !== input.cwd)
           || run.todoId !== todoId || run.sourceMessageId !== optionalText(input.sourceMessageId, '来源消息')
           || (input.executionMode !== undefined && run.executionMode !== input.executionMode)
           || (input.doneWhen !== undefined && run.doneWhen !== input.doneWhen)
@@ -837,7 +838,18 @@ export async function createWorkbench(config: AppConfig) {
     const executor = entries.find(entry => entry.id === executorId);
     if (workspace && executor && (executor.machineId !== workspace.machineId || executor.mode !== 'real')) throw new InputError('执行者不在项目绑定的电脑上或不支持真实执行', 409);
     // Explicit approved parameters retain priority over project defaults.
-    const cwd = optionalText(input.cwd, '工作目录') ?? workspace?.cwd ?? executor?.defaultCwd;
+    const parentRun = worktreeRunId ? store.get<Run>('runs', worktreeRunId) : undefined;
+    if (worktreeRunId) {
+      if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
+      if (!workspace || !parentRun?.worktree?.branch || parentRun.projectId !== projectId || parentRun.machineId !== workspace.machineId
+        || parentRun.worktree.source !== workspace.cwd || parentRun.worktree.removedAt || !parentRun.cwd)
+        throw new InputError('原执行工作树不可用或项目绑定已变化', 409);
+      if (isolated || nativeResume || !requestedExecutor || input.cwd !== undefined && input.cwd !== parentRun.cwd)
+        throw new InputError('复用工作树需要指定执行者并使用原执行目录');
+      if (!machines?.list().some(m => m.id === workspace.machineId && m.capabilities.includes('workspace.inspectRunWorktree')))
+        throw new InputError('请升级执行机代理以核对原工作树', 409);
+    }
+    const cwd = optionalText(input.cwd, '工作目录') ?? parentRun?.cwd ?? workspace?.cwd ?? executor?.defaultCwd;
     if (cwd && [...cleaningWorktrees.values()].some(tree => tree.machineId === executor?.machineId &&
       (join(cwd) === tree.cwd || join(cwd).startsWith(tree.cwd + '/')))) throw new InputError('执行目录正在清理', 409);
     const executionMode = input.executionMode ?? 'task';
@@ -869,6 +881,7 @@ export async function createWorkbench(config: AppConfig) {
     const runs = ids.map((id): Run => ({
       id, executorId, conversationId, prompt, projectId, todoId, doneWhen,
       ...(copies > 1 && { comparisonRunIds: ids }),
+      ...(worktreeRunId && { worktreeRunId }),
       ...(isolated && workspace && { worktree: { source: workspace.cwd } }),
       ...(nativeResume && { nativeResume }),
       ...(proofSources.length && { nativeResultSources: proofSources }),
@@ -926,7 +939,7 @@ export async function createWorkbench(config: AppConfig) {
             && plugins.list().some(plugin => plugin.id === 'office-documents' && plugin.status === 'active')
             && machines?.list().some(machine => machine.id === executor.machineId && machine.online && machine.capabilities.includes('office.guide'));
           const checkWorktreeBinding = () => {
-            if (!isolated || !workspace) return;
+            if ((!isolated && !worktreeRunId) || !workspace) return;
             const currentProject = store.get<Project>('projects', projectId!);
             if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active') || currentProject?.archivedAt
               || currentProject?.workspace?.cwd !== workspace.cwd || currentProject.workspace.machineId !== workspace.machineId)
@@ -961,10 +974,19 @@ export async function createWorkbench(config: AppConfig) {
               throw Object.assign(new Error('工作树回执无效，请核对执行机'), { delivery: 'unknown' });
             update({ worktree: { source: workspace.cwd, branch: receipt.branch, base: receipt.base } });
           }
-          const isolationGuide = isolated ? '本次使用独立 Git 工作树。所有项目改动在当前工作目录中完成，记录改动文件、提交和测试证据；合并和清理工作树由用户决定。' : '';
+          const isolationGuide = worktreeRunId ? '本次在原执行工作树中开始新任务。先核对现有文件和未提交修改，保留已有工作。仅报告本次产生的结果和验证证据。' : isolated ? '本次使用独立 Git 工作树。所有项目改动在当前工作目录中完成，记录改动文件、提交和测试证据；合并和清理工作树由用户决定。' : '';
           const finalPrompt = [effectivePrompt, decisions, guidance, isolationGuide, includeOfficeGuide ? officeWorkerGuide : ''].filter(Boolean).join('\n\n');
           const execute = async () => {
             controller.signal.throwIfAborted();
+            if (worktreeRunId) {
+              const state = await runWorktreeStatus(worktreeRunId).catch(error => {
+                // Only the read was sent. The executor has not been invoked.
+                throw Object.assign(new Error(error instanceof Error ? error.message : '原工作树状态未核实'), { delivery: 'no' });
+              });
+              if (!state || typeof state !== 'object' || Array.isArray(state) || state.cwd !== destination || state.branch !== parentRun?.worktree?.branch)
+                throw Object.assign(new InputError('工作树目录或分支已变化，执行未启动', 409), { delivery: 'no' });
+              controller.signal.throwIfAborted();
+            }
             checkWorktreeBinding();
             executionGuard?.();
             assertBotInput(inputMessage);

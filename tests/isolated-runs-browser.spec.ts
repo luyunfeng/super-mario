@@ -28,6 +28,7 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   await writeFile(join(cwd, 'shared.txt'), 'original pending change');
   const server = await startServer({ dataDir: join(root, 'server'), host: '127.0.0.1', port: 0, demo: true, token: 'worktree-fixture' });
   const discovery = createProjectDiscovery({ home: root, cwd, roots: [], temporaryRoots: [] });
+  const continuedIn: string[] = [];
   const starts = new Map<string, string>();
   let incompleteBranchStatus = false;
   let baseReads = 0, groupedCheckouts = 0;
@@ -50,6 +51,11 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
       },
       'executor.start': async args => {
       const path = String(args.cwd);
+      if (String(args.prompt).includes('本次在原执行工作树中开始新任务')) {
+        assert.equal(await readFile(join(path, 'shared.txt'), 'utf8'), starts.get(path));
+        continuedIn.push(path);
+        return { sessionId: 'followup-' + continuedIn.length };
+      }
       assert.equal(await readFile(join(path, 'shared.txt'), 'utf8'), 'baseline');
       assert.match(String(args.prompt), /本次使用独立 Git 工作树/);
       starts.set(path, String(args.prompt));
@@ -266,5 +272,33 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   assert.equal(groupedCheckouts, 3);
   await page.reload();
   await expect(cards).toHaveCount(3);
+  await page.goto(server.url + '/#projects/' + project.id + '/runs/' + peer.id);
+  await page.getByRole('button', { name: '在此工作树发起执行' }).click();
+  await expect(drawer).toContainText(peer.cwd!);
+  await drawer.getByLabel('要做什么').fill('检查前一项任务留下的文件');
+  await drawer.getByLabel('怎样算完成').fill('逐项核对修改');
+  await drawer.getByLabel('预计用时').fill('2');
+  const followupSent = page.waitForRequest(r => r.method() === 'POST' && r.url().endsWith('/api/v1/runs'));
+  await drawer.getByRole('button', { name: '开始执行' }).click();
+  const followupRequest = await followupSent;
+  await expect.poll(() => continuedIn).toEqual([peer.cwd]);
+  const child = server.app.store.list<Run>('runs').find(run => run.worktreeRunId === peer.id)!;
+  assert.equal(child.cwd, peer.cwd);
+  assert.equal(child.worktree, undefined);
+  await page.getByRole('link', { name: '查看原工作树' }).click();
+  await expect(page).toHaveURL(new RegExp(peer.id + '$'));
+  const startAgain = (body: Record<string, unknown>, key: string) => fetch(followupRequest.url(), { method: 'POST', headers: {
+    authorization: 'Bearer worktree-fixture', 'content-type': 'application/json', 'idempotency-key': key,
+  }, body: JSON.stringify(body) });
+  const params = followupRequest.postDataJSON();
+  const sameKey = followupRequest.headers()['idempotency-key']!;
+  assert.equal((await (await startAgain(params, sameKey)).json()).id, child.id);
+  assert.equal((await startAgain({ ...params, worktreeRunId: first.id }, sameKey)).status, 409);
+  assert.equal((await startAgain({ ...params, worktreeRunId: first.id }, 'removed')).status, 409);
+  assert.equal((await startAgain({ ...params, projectId: nonGit.id }, 'cross-project')).status, 409);
+  git(peer.cwd!, 'switch', '-c', 'changed-branch');
+  const stale = await (await startAgain(params, 'stale-branch')).json();
+  await expect.poll(() => server.app.store.get<Run>('runs', stale.id)?.status).toBe('failed');
+  assert.deepEqual(continuedIn, [peer.cwd]);
 
 });
