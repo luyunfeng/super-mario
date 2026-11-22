@@ -46,11 +46,11 @@ export function createSearch({ shell, store, router, api }) {
   const meetings = remoteGroup(snapshot => snapshot?.plugins?.some(p => p.id === 'knowledge-local' && p.status === 'active'),
     async query => (await api.get('/knowledge/meeting-search?' + new URLSearchParams({ query }))).meetings, '会议检索失败：');
 
-  function chatHits(query, messages) {
+  function chatHits(query, messages, limit = 6) {
     const hits = [];
     const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
     // 快照按消息插入顺序排列。只搜索主对话气泡的正文，不读取工具进展或通知详情。
-    for (let i = messages.length - 1; i >= 0 && hits.length < 5; i--) {
+    for (let i = messages.length - 1; i >= 0 && hits.length < limit; i--) {
       const message = messages[i];
       if (message.conversationId !== 'main' || (message.origin && message.origin !== 'user')) continue;
       const match = pattern.exec(message.text);
@@ -91,6 +91,8 @@ export function createSearch({ shell, store, router, api }) {
   function openResults(query, kind) {
     results.hidden = true;
     const isMeeting = kind === '会议';
+    const isMain = kind === '主对话消息';
+    let visibleLimit = 25;
     const moreLabel = '查看更多' + kind;
     const owner = api.draftOwner();
     const current = () => drawer.el.open && api.draftOwner() === owner && store.view.snapshotOwner === owner &&
@@ -103,18 +105,34 @@ export function createSearch({ shell, store, router, api }) {
     let signature;
     function render() {
       if (!current()) { drawer.close(); return; }
-      const links = (isMeeting ? meetingLinks : messageLinks)([...rows.values()], store.view.snapshot);
-      const next = JSON.stringify(links);
+      const snapshot = store.view.snapshot;
+      let links;
+      if (isMain) {
+        links = chatHits(query, snapshot.messages ?? [], visibleLimit + 1);
+        more.hidden = links.length <= visibleLimit;
+        links = links.slice(0, visibleLimit);
+        status.textContent = '已显示 ' + links.length + ' 条消息';
+      } else {
+        links = (isMeeting ? meetingLinks : messageLinks)([...rows.values()], snapshot);
+      }
+      const next = JSON.stringify(links, (_key, value) => value instanceof Node ? value.textContent : value);
       if (next === signature) return;
       signature = next;
+      const focusedHref = list.contains(document.activeElement) && document.activeElement.getAttribute('href');
       replace(list, links.map(hit =>
         h('a', { href: hit.href, onclick: event => {
           if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
           event.preventDefault(); drawer.close(); input.value = ''; router.go(hit.href);
         } }, hit.text)));
+      if (focusedHref) [...list.children].find(link => link.getAttribute('href') === focusedHref)?.focus({ preventScroll: true });
     }
     async function load() {
       if (!current() || more.disabled || cursor === null) return;
+      if (isMain) {
+        visibleLimit += 25;
+        render();
+        return;
+      }
       more.disabled = true;
       status.textContent = '正在读取' + kind + '…';
       try {
@@ -136,7 +154,8 @@ export function createSearch({ shell, store, router, api }) {
     }
     const drawer = openDrawer({ title: kind + '搜索结果', subtitle: query, body: [status, list, more], onClose: () => unsubscribe() });
     const unsubscribe = store.subscribe(render);
-    void load();
+    if (isMain) render();
+    else void load();
   }
 
   function groups(query, snapshot) {
@@ -187,6 +206,7 @@ export function createSearch({ shell, store, router, api }) {
           event.preventDefault(); router.go(hit.href);
         }
       } }, hit.text)),
+      name === '主对话' && hits.length > 5 && Button({ label: '查看全部主对话消息', size: 'sm', onClick: () => openResults(query, '主对话消息') }),
       name === '项目工作对话' && hits.length > 5 && Button({ label: '查看全部匹配消息', size: 'sm', onClick: () => openResults(query, '消息') }),
       name === '会议' && hits.length > 5 && Button({ label: '查看全部匹配会议', size: 'sm', onClick: () => openResults(query, '会议') }),
     ]), savedEnabled && h('div', { class: 'saved-search-actions' },

@@ -82,8 +82,27 @@ test('全局搜索从历史正文定位主对话消息，并隔离其他会话�
     put('output', 'needle 输出', { origin: 'result' });
     for (let i = 0; i < 35; i++) put('later-' + i, '后续回复 ' + i, { progress: { phase: 'tool', detail: 'needle', updatedAt: new Date().toISOString() } });
 
+    for (let i = 0; i < 37; i++) put('archive-' + i, '历史批次 ' + i);
+    put('private-batch', '历史批次 隐藏消息', { conversationId: 'supervisor' });
     const { page, errors } = await open('#memory');
     const search = page.locator('#workspace-search');
+    await search.fill('历史批次');
+    await expect(page.locator('#search-results .search__hit')).toHaveCount(5);
+    await page.getByRole('button', { name: '查看全部主对话消息' }).click();
+    const matches = page.getByRole('dialog', { name: '主对话消息搜索结果' });
+    await expect(matches.getByRole('link')).toHaveCount(25);
+    const more = matches.getByRole('button', { name: '查看更多主对话消息' });
+    await more.click();
+    await expect(matches.getByRole('link')).toHaveCount(37);
+    await expect(more).toBeHidden();
+    const oldest = matches.getByRole('link', { name: /历史批次 0$/ });
+    await oldest.focus();
+    put('arrived-during-search', '历史批次 新到消息');
+    server.app.events.publish('messages.changed', { conversationId: 'main', messageId: 'arrived-during-search' });
+    await expect(matches.getByRole('link')).toHaveCount(38);
+    await expect(oldest).toBeFocused();
+    await oldest.press('Enter');
+    await expect(page.locator('#messages [data-id="archive-0"]')).toBeFocused();
     await search.fill('needle');
     const hits = page.locator('#search-results .search__hit');
     await expect(hits).toHaveCount(2);
