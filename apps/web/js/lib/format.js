@@ -1,4 +1,5 @@
 // 时间与状态文案。状态词全站统一：“已结束”不等于“待办完成”。
+export const todoPriorityLabels = { normal: '普通优先级', high: '高优先级', low: '低优先级' };
 
 export function timeAgo(value, now = Date.now()) {
   if (!value) return '';

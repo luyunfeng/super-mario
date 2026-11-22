@@ -888,9 +888,14 @@ export async function createWorkbench(config: AppConfig) {
     if (source.conversationId !== 'main' && botForConversation(configuredBots(), source.conversationId)?.scope.kind !== 'global') throw new InputError('只有主对话或全局机器人能调整收件箱项目归属', 403);
     return inbox.assignProject(requiredText(input.id, '收件消息'), input.version as number, optionalText(input.projectId, '项目')) as unknown as Json;
   }
+  function todoPriority(value: unknown): NonNullable<Todo['priority']> {
+    if (value === undefined) return 'normal';
+    if (value === 'high' || value === 'normal' || value === 'low') return value;
+    throw new InputError('待办优先级须为 high、normal 或 low');
+  }
   function newTodo(input: Record<string, unknown>): Todo {
     const now = new Date().toISOString();
-    return { id: randomUUID(), title: requiredText(input.title, '标题'), notes: optionalText(input.notes, '备注') ?? '', projectId: optionalText(input.projectId, '项目'), dueAt: dueDate(input.dueAt), reminderAt: dueDate(input.reminderAt), reminderVersion: 1, waitingOn: optionalText(input.waitingOn, '等待对象'), createdAt: now, updatedAt: now };
+    return { id: randomUUID(), priority: todoPriority(input.priority), title: requiredText(input.title, '标题'), notes: optionalText(input.notes, '备注') ?? '', projectId: optionalText(input.projectId, '项目'), dueAt: dueDate(input.dueAt), reminderAt: dueDate(input.reminderAt), reminderVersion: 1, waitingOn: optionalText(input.waitingOn, '等待对象'), createdAt: now, updatedAt: now };
   }
   function registerChatTodo(input: Record<string, unknown>): Json {
     const requested = newTodo(input);
@@ -921,6 +926,7 @@ export async function createWorkbench(config: AppConfig) {
     }
     if (patch.completed !== undefined && typeof patch.completed !== 'boolean') throw new InputError('completed必须为布尔值');
     const next = { ...todo, updatedAt: new Date().toISOString() };
+    if (patch.priority !== undefined) next.priority = todoPriority(patch.priority);
     if (patch.title !== undefined) next.title = requiredText(patch.title, '标题');
     if (patch.notes !== undefined) next.notes = optionalText(patch.notes, '备注') ?? '';
     if (patch.projectId !== undefined) next.projectId = optionalText(patch.projectId, '项目');

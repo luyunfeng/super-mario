@@ -57,10 +57,12 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await entry.click();
   const editor = page.getByRole('dialog', { name: '编辑待办' });
   await expect(editor.getByLabel('截止时间', { exact: true })).toHaveValue('18:05');
+  await editor.getByLabel('优先级', { exact: true }).selectOption('low');
   await editor.getByLabel('截止时间', { exact: true }).fill('08:40');
   await editor.getByRole('button', { name: '保存' }).click();
   await expect.poll(() => read().dueAt).toBe('2030-03-27T15:40:00.000Z');
   await expect(editor).toHaveCount(0);
+  assert.equal(read().priority, 'low');
   await expect(entry).toHaveAccessibleName(/08:40/);
   const dropSlot = root.locator('[data-day="2030-03-27"][data-hour="10"]');
   await entry.dragTo(dropSlot);
@@ -100,11 +102,13 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   assert.equal(read().notes, '同时保存的备注');
   await root.getByRole('button', { name: '添加待办 2030-03-27 11:00' }).click();
   const panel = page.locator('#panel-todos');
+  await panel.getByLabel('新待办优先级').selectOption('high');
   await panel.getByRole('textbox', { name: '添加待办' }).fill('日历时段新建');
   await panel.getByRole('button', { name: '添加', exact: true }).click();
   await expect(root.getByRole('button', { name: /日历时段新建/ })).toBeVisible();
   const created = server.app.store.list<Todo>('todos').find(item => item.title === '日历时段新建')!;
   assert.equal(created.projectId, project.id);
+  assert.equal(created.priority, 'high');
   assert.equal(created.dueAt, '2030-03-27T18:00:00.000Z');
   await root.getByRole('button', { name: '下一页' }).click();
   await expect(page).toHaveURL(/\/day\/2030-03-28$/);

@@ -122,6 +122,8 @@ test('todo agenda uses a half-open local date window and keeps undated todos in 
   const agenda = await list.execute({ dueFrom: '2026-03-08T00:00:00-05:00', dueBefore: '2026-03-09T00:00:00-04:00' }, signal());
   assert.deepEqual((agenda as unknown as Todo[]).map(todo => todo.id), ['start', 'late']);
   assert.equal((await list.execute({}, signal()) as unknown[]).length, 4);
+  assert.equal((await list.execute({ priority: 'normal' }, signal()) as unknown[]).length, 4);
+  await assert.rejects(list.execute({ priority: 'urgent' }, signal()), /优先级/);
   await assert.rejects(list.execute({ status: 'running' }, signal()), /待办状态/);
   await assert.rejects(list.execute({ overdue: 'true' }, signal()), /布尔值/);
   host.store.put('todos', 'closed', { id: 'closed', projectId: 'p', completedAt: '2026-03-08T00:00Z' });

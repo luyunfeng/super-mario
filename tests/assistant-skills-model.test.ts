@@ -1433,13 +1433,17 @@ test('Web 和飞书登记相同待办时复用原记录，多个历史匹配时�
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.match(req.system, /created=false 表示找到了原有待办/);
+      assert.match(req.system, /逾期、执行顺序和用户标记的优先级分别判断/);
+      if (JSON.stringify(req.content).includes('列出高优先级')) return call('todos_list', { priority: 'high', status: 'open' }, 'high');
       const repeat = JSON.stringify(req.content).includes('再次');
-      return call('todo_create', { title, dueAt: repeat ? '2099-01-30T14:00:00+08:00' : dueAt,
+      return call('todo_create', { title, priority: repeat ? 'low' : 'high', dueAt: repeat ? '2099-01-30T14:00:00+08:00' : dueAt,
         notes: repeat ? '新的说明' : '初次说明' }, 'register');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
     if (raw.includes('多个同名同期限待办')) return { role: 'assistant', content: '请选定具体待办。' };
+    if (req.callId === 'high') return { role: 'assistant', content: JSON.parse(raw).map((todo: {id: string}) => todo.id).join('、') };
     const todo = JSON.parse(raw);
+    assert.equal(todo.priority, 'high');
     assert.equal(todo.notes, '初次说明');
     return { role: 'assistant', content: (todo.created ? '已登记 ' : '已有待办 ') + todo.id };
   }, options => {
@@ -1454,17 +1458,19 @@ test('Web 和飞书登记相同待办时复用原记录，多个历史匹配时�
     const previous = await api('/todos', { title, dueAt, projectId: project.id });
     server.app.updateTodo(previous.id, { completed: true });
     await api('/todos', { title, projectId: project.id });
-    const added = await ask('登记复核预算，截止北京时间2099年1月30日14点', path);
+    const added = await ask('登记高优先级待办复核预算，截止北京时间2099年1月30日14点', path);
     const first = server.app.todos().find(todo => todo.notes === '初次说明')!;
     assert.equal(added, '已登记 ' + first.id);
     const bot = await api('/feishu/bots', { name: '预算登记', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
     const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
-    await adapter.onMessage('再次登记同一事项', { ...source, messageId: 'repeat' });
+    await adapter.onMessage('再次登记同一事项，优先级填低', { ...source, messageId: 'repeat' });
     await t.waitFor(() => assert.ok(sent.includes('已有待办 ' + first.id)));
     assert.deepEqual(server.app.todos().find(todo => todo.id === first.id), first);
     assert.equal(server.app.todos().length, 4);
+    await adapter.onMessage('列出高优先级的未完成待办', { ...source, messageId: 'high' });
+    await t.waitFor(() => assert.ok(sent.includes(first.id)));
     await api('/todos', { projectId: project.id, title, dueAt });
     assert.equal(await ask('再次登记同一事项', path), '请选定具体待办。');
     assert.equal(server.app.todos().length, 5);
