@@ -98,21 +98,58 @@ export function openSavedPrompts({ api, store, initialText, isCurrent = () => tr
     drawer.body.querySelector('input')?.focus();
   }
   function editor() {
-    const name = Input({ required: true, value: draft.name, disabled: busy, oninput: e => { draft.name = e.target.value; } });
-    const body = TextArea({ required: true, rows: 6, value: draft.text, disabled: busy, oninput: e => { draft.text = e.target.value; } });
+    const name = Input({ required: true, value: draft.name, disabled: busy });
+    const body = TextArea({ required: true, rows: 6, value: draft.text, disabled: busy });
     const exists = doc.items.some(item => item.id === draft.id);
     const gone = draft.id && !exists;
-    return h('form', { class: 'stack', onsubmit(event) {
+    const full = !exists && doc.items.length >= 100;
+    const nameHint = h('span'), bodyHint = h('span');
+    const form = h('form', { class: 'stack', oninput: validate, onsubmit(event) {
       event.preventDefault();
-      const data = { name: draft.name.trim().replace(/^\//, ''), text: draft.text.trim() };
+      if (busy || stale || full || !form.reportValidity()) return;
+      const data = { name: draft.name, text: draft.text };
       void request(exists ? { action: 'update', id: draft.id, ...data } : { action: 'create', ...data });
+    }, onkeydown(event) {
+      if (!event.isComposing && event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
     } },
-    Field({ label: '名称', control: name, hint: '最多 32 个字符，可使用字母、汉字、数字、点、下划线和短横线。' }),
-    Field({ label: '提示词正文', control: body, hint: '最多 8000 个字符。' }),
+    Field({ label: '名称', control: name, hint: nameHint }),
+    Field({ label: '提示词正文', control: body, hint: bodyHint }),
+    full && h('p', { role: 'status' }, '已保存 100 条提示词。请先删除一条，再新增。'),
     gone && h('p', { role: 'status' }, '原提示词已删除，可将草稿另存为新提示词。'),
     h('div', { class: 'row row--wrap' },
-      Button({ label: gone ? '另存为新提示词' : '保存', kind: 'primary', type: 'submit', disabled: busy || stale }),
+      Button({ label: gone ? '另存为新提示词' : '保存', kind: 'primary', type: 'submit', disabled: busy || stale || full }),
       Button({ label: '取消', disabled: busy, onClick() { draft = undefined; error = ''; draw(); } })));
+    for (const [input, hint] of [[name, nameHint], [body, bodyHint]]) {
+      hint.id = input.id + '-hint';
+      input.setAttribute('aria-describedby', hint.id);
+    }
+    function validate() {
+      draft.name = name.value;
+      draft.text = body.value;
+      const trim = /^\p{White_Space}+|(?<!\p{White_Space})\p{White_Space}+$/gu;
+      const label = name.value.replace(trim, '').replace(/^\//, '');
+      const text = body.value.replace(trim, '');
+      const count = [...text].length;
+      let nameError = '', bodyError = '';
+      if (!/^[\p{L}\p{Nd}\p{Mn}_.-]{1,32}$/u.test(label)) nameError = '请输入 1 至 32 个字母、汉字、组合标记、数字、点、下划线或短横线。';
+      else {
+        const same = new RegExp('^' + label.replaceAll('.', '\\.') + '$', 'iu');
+        if (doc.items.some(item => item.id !== draft.id && same.test(item.name))) nameError = '提示词名称已被使用。';
+      }
+      if (!count || count > 8000) bodyError = '正文须为 1 至 8000 个字符。';
+      else if (/(?![\n\t])[\p{Cc}\p{Cs}]/u.test(text)) bodyError = '正文中的控制字符仅支持换行和制表符。';
+      name.setCustomValidity(nameError);
+      body.setCustomValidity(bodyError);
+      name.setAttribute('aria-invalid', String(Boolean(name.value && nameError)));
+      body.setAttribute('aria-invalid', String(Boolean(body.value && bodyError)));
+      nameHint.textContent = nameError || '在输入框键入 /' + label + ' 可选择此模板。';
+      bodyHint.textContent = (bodyError || '最多 8000 个字符。') + (count > 6400 ? ' 当前 ' + count + ' / 8000' : '');
+    }
+    validate();
+    return form;
   }
   function move(index, direction) {
     const ids = doc.items.map(item => item.id);
