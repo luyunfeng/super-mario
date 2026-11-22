@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
+import { acceptMessage } from '../message-receipts.ts';
 import { runWithAgentInput } from '../agent-input.ts';
 import { buildWorkContext, formatWorkContextMarkdown } from '../work-context.ts';
 import { MAIN_AGENT_SYSTEM_PROMPT } from '../prompts.ts';
@@ -14,6 +15,8 @@ import type { AgentSession, ExtensionFactory, ToolDefinition } from '@earendil-w
 type SDK = typeof import('@earendil-works/pi-coding-agent');
 interface Options { mainSkillCatalog?: () => Promise<string>; mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>; projectInstructions?: (projectId: string) => Promise<string>; inboxConversations?: () => import("../../../protocol/src/inbox-conversations.ts").InboxConversation[]; workspaceDir?: string; contextMode?: 'full' | 'principles'; workDecisions?: (scope?:BotScope, projectId?:string)=>unknown; config: AppConfig; store: Store; events: EventBus; contributions: Contributions; conversationId?: string; scope?: BotScope; canUseScope?: (input?: Message) => boolean; allowedTools?: string[]; systemPrompt?: string; projectContext?: (projectId:string)=>Json; executors?: () => ExecutorInfo[]; botContext?: (conversationId:string, scope?:BotScope)=>Json }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' | 'replyTo' | 'requestId'>;
 
 /** The second argument is a narrow test seam; all pi imports stay in this directory. */
 export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK> = () => import('@earendil-works/pi-coding-agent')) {
@@ -642,7 +645,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       events.publish('agent.status', { conversationId: ownConversation, ...state });
     },
     status() { return closed ? { available: false, reason: '运行时已关闭。' } : { ...state }; },
-    async post(text: string, conversationId: string = ownConversation, context?: { projectId?: string; todoId?: string; readOnly?: boolean; origin?: Message['origin']; replyTo?: string }): Promise<Message> {
+    async post(text: string, conversationId: string = ownConversation, context?: PostContext): Promise<Message> {
       if (closed) throw new Error('运行时已关闭。');
       // Admission checks have no executing input; a previous turn may still be active.
       if (options.canUseScope?.(undefined) === false) throw new Error('机器人已停用或绑定范围已改变');
@@ -656,18 +659,24 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       const projectId = scope && scope.kind !== 'global' ? scopedProject : context?.projectId;
       const todoId = scope?.kind === 'task' ? scope.todoId : context?.todoId;
       if (todoId !== undefined && (typeof todoId !== 'string' || !todoId.trim())) throw new Error('todoId 必须是非空字符串');
+      const requestId = context?.requestId;
       const message: Message = {
-        id: randomUUID(), conversationId, ...(context?.origin ? { origin: context.origin } : {}), ...(context?.replyTo ? { replyTo: context.replyTo } : {}), role: 'user', text: text.trim(),
+        ...(requestId !== undefined ? { requestId } : {}), id: randomUUID(), conversationId, ...(context?.origin ? { origin: context.origin } : {}), ...(context?.replyTo ? { replyTo: context.replyTo } : {}), role: 'user', text: text.trim(),
         ...(projectId === undefined ? {} : { projectId }),
         ...(todoId === undefined ? {} : { todoId }),
         ...(context?.readOnly || scope?.kind === 'unmarked' ? { readOnly: true } : {}),
         createdAt: new Date().toISOString(), status: 'pending',
       };
-      save(message);
+      const existing = acceptMessage(store, message);
+      if (existing) {
+        if (options.canUseScope?.(existing) === false) throw Object.assign(new Error('原消息作用域已失效'), { status: 403 });
+        return existing;
+      }
       // Yield before processing: posting acknowledges durable acceptance, not model completion.
       queuedInputs++;
       queue = queue.then(async () => { try { await setImmediate(); await reply(message); } finally { queuedInputs--; } })
         .catch(error => { infrastructureErrors.push(error); });
+      events.publish('messages.changed', { conversationId, messageId: message.id });
       return message;
     },
     async ask(text: string, context?: { projectId?: string; todoId?: string; readOnly?: boolean; origin?: Message['origin']; replyTo?: string }): Promise<Message> {

@@ -50,7 +50,7 @@ export function createProjectWorkspace(options: {
     available: boolean;
     reason?: string;
   };
-  post: (id: string, text: string) => Promise<Message>;
+  post: (id: string, text: string, requestId?: string) => Promise<Message>;
   summarize: (id: string, text: string) => Promise<Message>;
   now?: () => number;
   onMemorySaved?: () => Promise<void>;
@@ -375,10 +375,10 @@ export function createProjectWorkspace(options: {
         ).map(({ content, ...k }) => k),
       };
     },
-    post(id: string, text: string) {
+    post(id: string, text: string, requestId?: string) {
       if (project(id).archivedAt)
         throw Object.assign(Error("项目已归档"), { status: 409 });
-      return options.post(id, text);
+      return options.post(id, text, requestId);
     },
     request(id: string) {
       if (project(id).archivedAt)

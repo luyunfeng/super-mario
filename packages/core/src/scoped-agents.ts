@@ -68,7 +68,7 @@ export function createScopedAgents(options: Options) {
     return entry.runtime;
   }
   return {
-    postProject(projectId:string,text:string){return projectAgent(projectId).post(text);},
+    postProject(projectId:string,text:string,requestId?:string){return projectAgent(projectId).post(text,undefined,{requestId});},
     askMemory(projectId:string,text:string){return projectAgent(projectId,'memory').ask(text,{readOnly:true});},
     projectStatus(projectId:string){const id=`project:${projectId}:work`;return{conversationId:id,...(agents.get(id)?.runtime.status()??{available:options.config.demo||Boolean(options.config.model),reason:'项目 Agent 按需初始化'})};},
     async post(text: string, scope: BotScope, botId: string, context?: { readOnly?: boolean; origin?: Message['origin']; replyTo?: string }): Promise<Message> {

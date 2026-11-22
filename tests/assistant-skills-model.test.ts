@@ -1,6 +1,7 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -246,5 +247,58 @@ test('主会话、项目工作和飞书机器人将 Markdown 引用作为用户�
       const text = typeof req.content === 'string' ? req.content : (req.content as {text?: string}[]).map(part => part.text).join('');
       assert.ok(text.includes(inputs[i]));
     }
+  } finally { await server.close(); }
+});
+
+
+test('重复发送与查询回执只触发一轮实际 SDK 请求，主对话和项目各自核对回执', async t => {
+  const { server, api, requests } = await fixture(t, () => ({ role: 'assistant', content: '已收到合成问题' }));
+  try {
+    const key = randomUUID();
+    const project = await api('/projects', { name: '合成回执项目' });
+    const post = (path: string, id: string, text: string, extra = {}) => fetch(server.url + '/api/v1' + path, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': id },
+      body: JSON.stringify({ text, ...extra }),
+    });
+    const receipt = (path: string, id: string) => fetch(server.url + '/api/v1' + path + '/receipts/' + id);
+    const projectPath = '/projects/' + project.id + '/messages';
+    assert.equal((await receipt('/messages', key)).status, 404);
+    assert.equal((await post('/messages', 'malformed', '无效请求')).status, 400);
+    assert.equal(requests.length, 0);
+    for (const [i, path] of ['/messages', projectPath].entries()) {
+      const text = i ? '请核对项目问题。' : '请核对主对话问题。';
+      const responses = await Promise.all([post(path, key, text), post(path, key, text)]);
+      const records: Message[] = [];
+      for (const res of responses) {
+        assert.equal(res.status, 202);
+        records.push(await res.json());
+      }
+      assert.equal(records[0]!.id, records[1]!.id);
+      assert.equal(records[0]!.requestId, key);
+      const conflict = await post(path, key, '修改后的问题');
+      assert.equal(conflict.status, 409);
+      if (i === 0) {
+        assert.equal((await receipt(projectPath, key)).status, 404);
+        assert.equal((await post(path, key, text, { readOnly: true })).status, 409);
+        assert.equal((await post(path, key, text, { projectId: project.id })).status, 409);
+      }
+      // Completion updates the same user row. Looking it up must never enter the model queue.
+      const user = records[0]!;
+      for (let tries = 0; tries < 500 && server.app.store.get<Message>('messages', user.id)?.status === 'pending'; tries++) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      const res = await receipt(path, key);
+      assert.equal(res.status, 200);
+      const saved = await res.json();
+      assert.equal(saved.id, user.id);
+      assert.equal(saved.status, 'done');
+      assert.equal(saved.text, text);
+      assert.deepEqual(await (await post(path, key, text)).json(), saved);
+      assert.equal(requests.length, i + 1);
+      assert.ok(JSON.stringify(requests[i]!.content).includes(text));
+      assert.ok(!JSON.stringify(requests[i]).includes(key));
+    }
+    server.app.projects.archive(project.id);
+    assert.equal((await receipt(projectPath, key)).status, 404);
   } finally { await server.close(); }
 });

@@ -1,4 +1,5 @@
 import { createSessionAnalysis } from './session-analysis.ts';
+import { readMessageReceipt } from '../../../packages/core/src/message-receipts.ts';
 import { createProjectFolders } from '../../../packages/core/src/project-folders.ts';
 import { policyPresets, applyPolicyPreset, policyRuleHits } from '../../../packages/core/src/policy-presets.ts';
 import { todoSections, todoDecisionIds } from '../../../packages/core/src/todo-sections.ts';
@@ -28,6 +29,12 @@ async function body(req: IncomingMessage, maxBytes = 1024 * 1024): Promise<Recor
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new InputError('请求必须是JSON对象');
   return value as Record<string, unknown>;
 }
+function messageRequestId(req: IncomingMessage) {
+  const keys = req.headersDistinct['idempotency-key'];
+  if (keys && keys.length !== 1) throw new InputError('发送请求号只能指定一次');
+  return keys?.[0];
+}
+
 // A drawer can stay open while another client moves the todo. Pin writes to the
 // project the user saw, including the unassigned scope (null).
 function checkTodoScope(app: Awaited<ReturnType<typeof createWorkbench>>, id: string, input: Record<string, unknown>) {
@@ -516,7 +523,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         }
         if(projectWorkspace){const id=decodeURIComponent(projectWorkspace[1]);
           if(projectWorkspace[2]==='workspace'&&method==='GET')return json(res,200,await app.projectWorkspace.view(id));
-          if(projectWorkspace[2]==='messages'&&method==='POST')return json(res,202,await app.projectWorkspace.post(id,requiredText((await body(req)).text,'目标')));
+          if (projectWorkspace[2] === 'messages' && method === 'POST') {
+            const text = requiredText((await body(req)).text, '目标');
+            return json(res, 202, await app.projectWorkspace.post(id, text, messageRequestId(req)));
+          }
           if(projectWorkspace[2]==='memory'&&method==='GET')return json(res,200,app.projectWorkspace.memoryConversation(id));
           if(projectWorkspace[2]==='memory'&&method==='POST')return json(res,202,app.projectWorkspace.request(id));
           if(projectWorkspace[2]==='memory'&&method==='PUT')return json(res,200,app.projectWorkspace.configure(id,(await body(req)).enabled as boolean));
@@ -569,10 +579,19 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           await app.knowledgeCurator.rebuildIndex();
           app.events.publish('knowledge.changed', { id: knowledge[1] }); return json(res, 200, { removed });
         }
+        const messageReceipt = path.match(/^\/api\/v1(?:\/projects\/([^/]+))?\/messages\/receipts\/([^/]+)$/);
+        if (messageReceipt && method === 'GET') {
+          const projectId = messageReceipt[1] && decodeURIComponent(messageReceipt[1]);
+          if (projectId && !app.projects.list().some(p => p.id === projectId && !p.archivedAt))
+            throw new InputError('项目不存在或已归档', 404);
+          const receipt = readMessageReceipt(app.store, projectId ? `project:${projectId}:work` : 'main', messageReceipt[2]!);
+          if (!receipt) throw new InputError('当前会话中未找到这次发送的回执', 404);
+          return json(res, 200, receipt);
+        }
         if (path === '/api/v1/messages' && method === 'POST') {
           const input = await body(req);
           if (typeof input.text !== 'string' || !input.text.trim()) throw new InputError('消息不能为空');
-          return json(res, 202, await app.agent.post(input.text, 'main', { ...(typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : {}), ...(input.readOnly === true ? { readOnly: true } : {}) }));
+          return json(res, 202, await app.agent.post(input.text, 'main', { requestId: messageRequestId(req), ...(typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : {}), ...(input.readOnly === true ? { readOnly: true } : {}) }));
         }
         if (path === '/api/v1/runs' && method === 'POST') return json(res, 202, app.dispatch(await body(req), typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : undefined));
         const observations = path.match(/^\/api\/v1\/runs\/([^/]+)\/observations$/);
