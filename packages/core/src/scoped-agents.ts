@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { BotScope } from '../../protocol/src/bots.ts';
-import type { AppConfig, ExecutorInfo, Message, Project, Todo, Json } from '../../protocol/src/index.ts';
+import type { AppConfig, MainAssistantProfile, ExecutorInfo, Message, Project, Todo, Json } from '../../protocol/src/index.ts';
 import type { Contributions, EventBus, Store } from '../../plugin-sdk/src/index.ts';
 import { SCOPED_WORK_SYSTEM_PROMPT } from './prompts.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
@@ -11,6 +11,7 @@ interface Options {
   /** Optional host validation (for example, whether this bot binding is still enabled). */
   executors?: () => ExecutorInfo[];
   botContext?: (conversationId:string, scope?:BotScope)=>Json;
+  mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>;
   projectInstructions?: (projectId: string) => Promise<string>;
   projectContext?: (projectId:string)=>Json;
   workDecisions?: (scope?:BotScope, projectId?:string)=>unknown;

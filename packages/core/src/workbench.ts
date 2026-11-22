@@ -63,7 +63,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
-import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, conversationSearch, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, conversationSearch, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import type { AppConfig, Approval, BotScope, ExecutionResult, InboxItem, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
@@ -183,9 +183,17 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(conversationSearch);
   plugins.register(savedPrompts);
   plugins.register(projectInstructions);
+  plugins.register(assistantProfile);
   plugins.register(createMessageFavorites((source, offset, signal) => readNativeFavoritePage(machines, source, offset, signal)));
   plugins.register(createConversationExport((source, includeWork, signal) => exportNativeConversation(machines, source, includeWork, signal)));
   for (const loaded of await loadExtensions(config.dataDir, { reservedIds: plugins.list().map(item => item.id) })) plugins.register(loaded.extension, loaded.config);
+  async function currentMainAssistant(): Promise<Snapshot['mainAssistant']> {
+    if (!plugins.list().some(p => p.id === 'assistant-profile' && p.status === 'active')) return;
+    const result = await plugins.invocations.use('assistant-profile.manage', { action: 'read' });
+    if (!result || typeof result !== 'object' || Array.isArray(result) || typeof result.name !== 'string'
+      || typeof result.revision !== 'number' || !Number.isSafeInteger(result.revision)) throw new InputError('主助手资料无效', 500);
+    return { name: result.name, revision: result.revision };
+  }
   async function currentProjectInstructions(projectId: string): Promise<string> {
     const project = store.get<Project>('projects', projectId);
     if (!project || project.archivedAt || !plugins.list().some(p => p.id === 'project-instructions' && p.status === 'active')) return '';
@@ -195,8 +203,8 @@ export async function createWorkbench(config: AppConfig) {
     }
     return formatProjectInstructions(project, value.notes);
   }
-  const agent = createAgentRuntime({ config, store, events, contributions, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
-  const scopedAgents = createScopedAgents({ config, store, events, contributions, executors: executorInfo, workDecisions: workDecisions.context, botContext, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: (scope, botId, input) => botScopeAccess(scope, botId, input) });
+  const agent = createAgentRuntime({ config, store, events, contributions, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
+  const scopedAgents = createScopedAgents({ config, store, events, contributions, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: (scope, botId, input) => botScopeAccess(scope, botId, input) });
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
     allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'],
     systemPrompt: SUPERVISOR_SYSTEM_PROMPT });
@@ -935,10 +943,13 @@ export async function createWorkbench(config: AppConfig) {
     for (const computer of computers.filter(item => !item.online)) problems.push({ area: 'agent', message: `电脑“${computer.name}”已离线`, fix: '请检查该电脑上的工作台代理是否在运行。' });
     for (const plugin of plugins.list().filter(item => item.status === 'failed')) problems.push({ area: plugin.id === 'feishu' ? 'channel' : 'agent', message: `插件“${plugin.name}”不可用`, fix: '在 Agent 高级设置中查看诊断信息。' });
     if (supervisorAgent.settings().canResume) problems.push({ area: 'agent', message: '自动跟进已暂停', fix: '核对模型配置后，在自动跟进卡片中恢复。' });
+    let mainAssistant: Snapshot['mainAssistant'];
+    try { mainAssistant = await currentMainAssistant(); }
+    catch { problems.push({ area: 'agent', message: '主助手资料读取失败', fix: '请检查主助手资料插件的状态后重试。' }); }
     const publicReason = (reason: string) => reason.replace(/WebSocket|Herdr|SSH|hook/gi, '连接服务').replace(/\bID\b/g, '标识');
     if (!connected) problems.push({ area: 'channel', message: `飞书尚未连接${channel.reason ? `：${publicReason(channel.reason)}` : ''}`, fix: '进入渠道，按向导连接机器人；暂时不用也可以先跳过。' });
     for(const bot of registeredBots.filter(bot => bot.enabled && !bot.connected)) problems.push({ area: 'channel', message: `机器人“${bot.name}”未连接${bot.reason ? `：${publicReason(bot.reason)}` : ''}`, fix: '在渠道高级设置中核对应用权限与连接状态。' });
-    return { attentionCount: attention().length, problems,
+    return { ...(mainAssistant && { mainAssistant }), attentionCount: attention().length, problems,
       setup: { agent: agentState.available && computers.some(item => item.online), project: projects.list().some(item => !item.archivedAt), memory: entries.length > 0, channel: connected ? 'done' : store.get<{ skipped: boolean }>('settings', 'setup.channel-skipped')?.skipped ? 'skipped' : 'todo' },
       agentTurns: store.list<Message>('messages').filter(message => message.role === 'user').map(({ id, todoId, conversationId, role, status, createdAt }) => ({ id, todoId, conversationId, role, status, createdAt })), background: background.summary(), webExtensions: contributions.list('web_extensions'), projects: projects.list(), version: '0.1.0', mode: config.demo ? 'demo' : 'live', agent: agent.status(), plugins: plugins.list(), executors: executorInfo(), machines: machines?.list() ?? store.list('machines'), inbox: inbox.list(), inboxHandling:inboxHandling.states(), inboxConversations:inboxAssistant.list(), inboxAssistant:inboxAssistant.status(), approvals: approvals.list(), signals: supervision.signals(), todos: todos(), knowledge: entries, messages: store.list<Message>('messages').filter(message => message.conversationId === 'main'), runs: store.list<Run>('runs').sort((a, b) => b.createdAt.localeCompare(a.createdAt)) };
   }

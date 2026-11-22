@@ -2,6 +2,7 @@
 import { h, replace } from '../lib/dom.js';
 import { Button, Card, Dot, Pill, Empty, Banner } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
+import { createAssistantProfile } from '../features/assistant-profile.js';
 import { openModelDrawer } from '../features/model-drawer.js';
 import { openAddComputer, openComputer } from '../features/computers.js';
 import { createPolicyCard } from '../features/policy.js';
@@ -14,6 +15,7 @@ import { createScheduledWorkCard } from '../features/scheduled-work.js';
 const MODE_NAMES = { api: '模型 API', 'codex-cli': 'Codex 命令行' };
 
 export function createAgentPage({ api, store, router, consoleDrawer, scope, shell }) {
+  const profile = createAssistantProfile({ api, store });
   let model = null;
   let modelError = '';
   let modelSeq = 0;
@@ -51,7 +53,14 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
     body: botStatus,
   });
   const commandGroup = createCommandGroupCard({ api, store });
-  let botRequest = 0, botCredential;
+  let botRequest = 0, botCredential, botSnapshot;
+  store.subscribe?.(view => {
+    if (botCredential !== api.token() || view.unauthorized) {
+      botRequest++;
+      botCredential = undefined;
+      botSnapshot = undefined;
+    }
+  });
   function loadFeishu() {
     botCredential = api.token();
     commandGroup.load();
@@ -59,9 +68,11 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
   }
   async function loadBots() {
     const stamp = ++botRequest, credential = api.token();
+    botSnapshot = store.view.snapshot;
     try {
       const bots = (await api.get('/feishu/bots')).filter(bot => bot.scope?.kind === 'global');
       if (stamp !== botRequest || credential !== api.token()) return;
+      profile.setBots(bots, credential);
       commandGroup.setMainBots(bots);
       replace(botStatus, bots.length ? bots.map(bot => h('div', { class: 'row row--wrap' },
         Dot(bot.enabled && bot.paired && bot.connected ? 'ok' : 'warn'), h('strong', null, bot.name),
@@ -70,6 +81,7 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
         : h('p', { class: 'muted small' }, '尚未绑定全局机器人。配置后，主 Agent 可用它在飞书中跟进各项目。'));
     } catch (cause) {
       if (stamp !== botRequest || credential !== api.token()) return;
+      profile.setBots(undefined, credential, '读取失败：' + cause.message);
       commandGroup.setMainBots(undefined);
       replace(botStatus, Banner({ tone: 'warn', children: '读取飞书机器人失败：' + cause.message,
         action: Button({ label: '重试', size: 'sm', onClick: loadBots }) }));
@@ -109,7 +121,7 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, 'Agent'), h('p', { class: 'page__sub' }, hintCopy('nav.agent').tag)),
         h('div', { class: 'page__actions' }, Hint('nav.agent'))),
-      h('div', { class: 'stack stack--lg' }, modelCard, botCard, commandGroup.el, computersCard, cliSessions.el, policy.el, followUp.el, scheduledWork.el, advanced.el)));
+      h('div', { class: 'stack stack--lg' }, profile.el, modelCard, botCard, commandGroup.el, computersCard, cliSessions.el, policy.el, followUp.el, scheduledWork.el, advanced.el)));
 
   let pendingSection;
   function showSection() {
@@ -131,7 +143,10 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
       if (route.parts[0] === 'advanced') advanced.el.open = true;
     },
     onState({ snapshot }) {
-      if (router.current.page === 'agent' && botCredential !== api.token()) loadFeishu();
+      if (router.current.page === 'agent' && !store.view.unauthorized) {
+        if (botCredential !== api.token()) loadFeishu();
+        else if (botSnapshot !== snapshot && snapshot.plugins?.some(p => p.id === 'assistant-profile' && p.status === 'active')) loadBots();
+      }
       showSection();
       scheduledWork.onState(); cliSessions.onState(); paintModel(); paintComputers(snapshot); policy.setProjects(snapshot.projects ?? []); advanced.update(snapshot);
     },

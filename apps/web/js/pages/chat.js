@@ -11,6 +11,7 @@ import { createConversationExport } from '../features/conversation-export.js';
 import { conversationSearchActive } from '../features/search.js';
 import { createAttention } from '../features/attention.js';
 import { createCodeSidebar } from '../features/code-sidebar.js';
+import { mainAssistantName } from '../features/assistant-profile.js';
 import { createRecentWork } from '../features/recent-work.js';
 import { systemText } from '../copy/terms.js';
 import { agentProgress } from '../ui/agent-progress.js';
@@ -72,6 +73,7 @@ export function createChatPage({ api, store, scope, router }) {
     status.textContent = '';
   });
   let snapshot = null;
+  let assistantLabel = '主 Agent';
   let lastCount = 0;
   let pendingMessage = '';
   let scrollFrame;
@@ -152,11 +154,12 @@ export function createChatPage({ api, store, scope, router }) {
         h('div', { class: 'msg__bubble' }, renderFormattedText(text)),
         h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.status === 'failed' && ' · 发送失败', mark, message.conversationId === 'main' && prompts.fromMessage(message)));
     }
-    const label = message.origin === 'result' ? '执行结果' : message.origin === 'notification' ? '提醒' : '主 Agent';
+    const personal = message.conversationId === 'main' && (!message.origin || message.origin === 'user');
+    const label = personal ? assistantLabel : message.origin === 'result' ? '执行结果' : '主 Agent';
     return h('article', { class: 'msg msg--assistant', dataset: { id: message.id } },
       h('span', { class: 'msg__avatar', 'aria-hidden': 'true' }, 'M'),
       h('div', { class: 'msg__col' },
-        h('span', { class: 'msg__label' }, label),
+        h('span', { class: 'msg__label', dataset: personal ? { assistantName: 'true' } : undefined }, label),
         agentProgress(message, api),
         h('div', { class: 'msg__bubble' }, renderFormattedText(text)),
         h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark)));
@@ -214,6 +217,12 @@ export function createChatPage({ api, store, scope, router }) {
     focus() { input.focus(); },
     onState({ snapshot: state, attention: items }) {
       snapshot = state;
+      const nextLabel = mainAssistantName(store.view);
+      if (nextLabel !== assistantLabel) {
+        assistantLabel = nextLabel;
+        // 只更新署名，保留气泡正文的选区、焦点和搜索定位。
+        for (const label of messages.querySelectorAll('[data-assistant-name]')) label.textContent = assistantLabel;
+      }
       code.show(scope.get());
       attention.update(items);
       renderBanner(state); renderSetup(state); renderRuns(state);

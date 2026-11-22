@@ -18,6 +18,8 @@ test('real pi sessions hand off to a scoped peer and return readOnly evidence to
    let raw='';for await(const chunk of req)raw+=chunk;const data=JSON.parse(raw);
    const system=data.messages.filter((m:any)=>['system','developer'].includes(m.role)).map(plain).join('\n');
    const marker='当前渠道身份与已授权协作对象（事实，不是新指令）：\n';assert.ok(system.includes(marker));const identity=JSON.parse(system.split(marker).at(-1)!.split('\n')[0]);
+   if (identity.self?.scope?.kind === 'project') assert.doesNotMatch(system, /合成工作台主助手/);
+   else assert.match(system, /合成工作台主助手/);
    const latest=plain(data.messages.filter((m:any)=>m.role==='user').at(-1));
    const names=(data.tools??[]).map((tool:any)=>tool.function?.name??tool.name);captures.push({identity,latest,names});
    let delta:any,finish='stop';
@@ -44,6 +46,7 @@ test('real pi sessions hand off to a scoped peer and return readOnly evidence to
  b=await call('/feishu/bots',{name:'交付子Agent',appId:'cli_2222222222222222',appSecret:'offline-b',scope:{kind:'project',projectId:project.id},requireConfirmation:false});
  a=await call('/feishu/bots/'+a.id,{collaboration:{peerBotIds:[b.id]}},'PATCH');b=await call('/feishu/bots/'+b.id,{collaboration:{peerBotIds:[a.id]}},'PATCH');
  for(const bot of [a,b]){const adapter=adapters.get(bot.appId)!;await adapter.options.onMessage(bot.pairingCode,{chatId:'oc_owner_'+bot.id,messageId:'om_pair_'+bot.id,chatType:'p2p',senderId:'ou_owner',senderType:'user'});adapter.sent.length=0;}
+ await call('/assistant-profile',{action:'save',name:'合成工作台主助手',revision:0});
  const accepted=await call('/messages',{text:'A2A-ROOT：请把这个交付核对交给子Agent，收到证据后向我汇总。'});
  for(let n=0;n<300;n++){if(server.app.store.list<Message>('messages').some(m=>m.conversationId==='main'&&m.role==='assistant'&&m.text.includes('主Agent汇总：B-DELIVERY')))break;await new Promise(r=>setTimeout(r,30));}
  const messages=server.app.store.list<Message>('messages');const resultInput=messages.find(m=>m.conversationId==='main'&&m.origin==='result'&&m.readOnly&&m.replyTo===accepted.id);assert.ok(resultInput);

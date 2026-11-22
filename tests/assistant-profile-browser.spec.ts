@@ -1,0 +1,84 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test from 'node:test';
+import { chromium, expect, type Page } from '@playwright/test';
+import { startServer } from '../apps/server/src/index.ts';
+import type { Message } from '../packages/protocol/src/index.ts';
+
+test('Agent 页修改主助手名称后同步到已有气泡，并发冲突保留草稿，插件停用恢复默认署名', { timeout: 45000 }, async t => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'mario-assistant-profile-'));
+  const token = 'assistant-profile-browser-fixture';
+  const server = await startServer({ host: '127.0.0.1', port: 0, dataDir, token, demo: true });
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  t.after(async () => {
+    await browser?.close();
+    await server.close();
+    await rm(dataDir, { recursive: true, force: true });
+  });
+  const project = server.app.projects.create({ name: '合成署名项目' });
+  const put = (message: Pick<Message, 'id' | 'text'> & Partial<Message>) => server.app.store.put('messages', message.id, {
+    role: 'assistant', status: 'done', createdAt: '2026-03-01T10:00:00.000Z', conversationId: 'main', ...message,
+  });
+  put({ id: 'fixture-reply', text: '需要核对署名的既有回复。' });
+  put({ id: 'fixture-result', text: '执行结果样例。', origin: 'result' });
+  put({ id: 'fixture-project', text: '项目助手的既有回复。', conversationId: `project:${project.id}:work`, projectId: project.id });
+
+  browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  const chat = await browser.newPage(), first = await browser.newPage(), second = await browser.newPage();
+  for (const [page, route] of [[chat, 'chat'], [first, 'agent'], [second, 'agent']] as const) {
+    await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+    await page.goto(server.url + '/#' + route + '?token=' + token);
+  }
+  const label = chat.locator('[data-id="fixture-reply"] .msg__label');
+  const resultLabel = chat.locator('[data-id="fixture-result"] .msg__label');
+  await expect(label).toHaveText('主 Agent');
+  await expect(resultLabel).toHaveText('执行结果');
+  const card = (page: Page) => page.locator('#assistant-profile');
+  const editor = (page: Page) => page.getByRole('dialog', { name: '修改主助手名称', exact: true });
+  const name = (page: Page) => editor(page).getByLabel('主助手名称', { exact: true });
+  const action = (page: Page, text: string) => editor(page).getByRole('button', { name: text, exact: true });
+  await expect(card(first)).toContainText('演示模式 · 可用');
+  await expect(card(first)).toContainText('0 台');
+  await expect(card(first)).toContainText('0 个');
+  for (const page of [first, second]) {
+    await expect(card(page)).toContainText('主 Agent');
+    await card(page).getByRole('button', { name: '修改名称', exact: true }).click();
+    await expect(name(page)).toHaveValue('主 Agent');
+  }
+  const draft = '合成甲助手', remote = '合成乙助手';
+  await name(first).fill(draft);
+  await name(second).fill(remote);
+  await action(second, '保存').click();
+  await expect(label).toHaveText(remote);
+  await expect(resultLabel).toHaveText('执行结果');
+  await expect(name(first)).toHaveValue(draft);
+  const rejected = first.waitForResponse(r => r.url().endsWith('/api/v1/assistant-profile')
+    && r.request().postDataJSON()?.action === 'save');
+  await action(first, '保存').click();
+  assert.equal((await rejected).status(), 409);
+  await expect(editor(first)).toContainText(remote);
+  await expect(name(first)).toHaveValue(draft);
+  await action(first, '保存我的名称').click();
+  await expect(label).toHaveText(draft);
+  await expect(card(second)).toContainText(draft);
+
+  await second.goto(server.url + `/#projects/${project.id}/workspace`);
+  await expect(second.getByRole('log', { name: '项目对话' }).locator('.msg__label')).toHaveText('项目助手');
+  const toggle = async (enabled: boolean) => {
+    const response = await first.request.post(server.url + '/api/v1/plugins/assistant-profile', {
+      headers: { Authorization: 'Bearer ' + token }, data: { enabled },
+    });
+    assert.ok(response.ok());
+  };
+  await toggle(false);
+  await expect(label).toHaveText('主 Agent');
+  await expect(card(first)).toBeHidden();
+  await expect(editor(first)).toBeHidden();
+  await expect(resultLabel).toHaveText('执行结果');
+  await toggle(true);
+  await expect(card(first)).toContainText(draft);
+  await expect(label).toHaveText(draft);
+  assert.equal(server.app.store.list('runs').length, 0);
+});

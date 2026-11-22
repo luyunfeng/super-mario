@@ -9,6 +9,7 @@ import { systemText } from '../copy/terms.js';
 
 const descriptions = {
   'todo-calendar':'按日、周或月查看项目待办的截止时间。',
+  'assistant-profile':'设置主助手显示名称，查看模型、执行机和飞书连接状态。',
   'project-instructions':'为项目工作对话和新的项目派发保存工作方法、术语和验收要求。',
   'saved-prompts':'管理可在对话输入框中用斜杠插入的常用提示词。',
   'message-favorites':'收藏工作台消息，查看快照或从备份恢复。',
