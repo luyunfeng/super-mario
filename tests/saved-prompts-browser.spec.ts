@@ -99,6 +99,28 @@ test('本人消息可保存为常用提示词，主对话和项目斜杠菜单�
   await expect.poll(() => userTexts(projectConversation)).toEqual([projectFinal]);
   assert.deepEqual(sent, [sourceText, mainFinal, projectFinal]);
 
+  await expect(projectInput).toHaveValue('');
+  await page.reload();
+  await expect(projectInput).toBeEnabled();
+  await projectInput.press('ArrowUp');
+  await expect(projectInput).toHaveValue(projectFinal);
+  await projectInput.press('ArrowDown');
+  await expect(projectInput).toHaveValue('');
+  await projectInput.fill('正在编辑的草稿');
+  await projectInput.press('ArrowUp');
+  await expect(projectInput).toHaveValue('正在编辑的草稿');
+  await projectInput.press('Control+r');
+  const search = page.getByRole('dialog', { name: '已发送内容' });
+  await search.getByLabel('搜索已发送内容').fill('补充 进展');
+  await expect(search.getByRole('button', { name: /补充主对话结论/ })).toBeVisible();
+  await search.getByLabel('搜索已发送内容').press('Escape');
+  await expect(projectInput).toHaveValue('正在编辑的草稿');
+  await projectInput.press('Control+r');
+  await search.getByLabel('搜索已发送内容').fill('补充 进展');
+  await search.getByLabel('搜索已发送内容').press('Enter');
+  await expect(projectInput).toHaveValue(mainFinal);
+  assert.deepEqual(sent, [sourceText, mainFinal, projectFinal]);
+
   await page.getByRole('button', { name: '常用提示词', exact: true }).click();
   await expect(editButtons.first()).toHaveAccessibleName('编辑 weekly');
   await expect(editButtons.last()).toHaveAccessibleName('编辑 review');

@@ -1,3 +1,4 @@
+import { attachSentHistory } from './sent-history.js';
 // 项目工作对话复用真实隔离会话。快照只更新消息区，草稿按身份和项目隔离。
 import { h, replace, keyedList } from '../lib/dom.js';
 import { createMessageSubmissions } from '../lib/message-submissions.js';
@@ -35,6 +36,7 @@ export function createProjectConversation({ api, store, router, bindFolder }) {
   const quote = createMessageQuote({ drafts, input: text });
   const edit = createMessageEdit({ input: text, quote, context: composerContext });
   const prompts = attachSavedPrompts({ api, store, input: text, getScope: () => projectId });
+  const history = attachSentHistory({ input: text, store, context: composerContext });
   text.addEventListener('input', () => {
     syncDraft();
     if (draftKey) drafts.write(draftKey, text.value);
@@ -60,7 +62,9 @@ export function createProjectConversation({ api, store, router, bindFolder }) {
     const body = (captured ? quote.compose(captured, draft.trim()) : draft).trim();
     return { key, owner, draft, captured, body, epoch, conversation: `project:${projectId}:work`, projectId, url: `/projects/${encodeURIComponent(projectId)}/messages` };
   }
-  function clearSubmittedDraft({ key, draft, captured }) {
+  function clearSubmittedDraft(ctx) {
+    history.record(ctx);
+    const { key, draft, captured } = ctx;
     drafts.clearIf(key, draft);
     if (captured) quote.accepted(key, captured);
     if (draftKey === key && text.value === draft) { text.value = drafts.read(key); }

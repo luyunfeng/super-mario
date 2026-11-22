@@ -1,3 +1,4 @@
+import { attachSentHistory } from '../features/sent-history.js';
 // 对话：主页。顶部是“等你处理”，中间是消息流，输入框固定在底部。
 import { h, keyedList, replace } from '../lib/dom.js';
 import { createMessageSubmissions } from '../lib/message-submissions.js';
@@ -61,6 +62,7 @@ export function createChatPage({ api, store, scope, router }) {
   const quote = createMessageQuote({ drafts, input });
   const edit = createMessageEdit({ input, quote, context: composerContext });
   const prompts = attachSavedPrompts({ api, store, input, getScope: scope.get });
+  const history = attachSentHistory({ input, store, context: composerContext });
   const scopeSelect = h('select', { class: 'composer__scope', 'aria-label': '项目范围' }, h('option', { value: '' }, '全部项目'));
   const send = h('button', { class: 'btn btn--primary btn--sm composer__send', type: 'submit', 'aria-label': '发送' }, icon('send'), '发送');
   const status = h('p', { class: 'small composer__status', role: 'status' });
@@ -81,7 +83,9 @@ export function createChatPage({ api, store, scope, router }) {
     const body = (captured ? quote.compose(captured, draft.trim()) : draft).trim();
     return { key, owner, draft, captured, body, epoch, conversation: 'main', projectId: scope.get() || undefined, url: '/messages' };
   }
-  function clearSubmittedDraft({ key, draft, captured }) {
+  function clearSubmittedDraft(ctx) {
+    history.record(ctx);
+    const { key, draft, captured } = ctx;
     drafts.clearIf(key, draft);
     if (captured) quote.accepted(key, captured);
     if (draftKey === key && input.value === draft) { input.value = drafts.read(key); autosize(); }
