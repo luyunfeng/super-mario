@@ -668,6 +668,8 @@ export async function createWorkbench(config: AppConfig) {
   function dispatch(input: Record<string, unknown>, key?: string, nativeApproved = false, executionGuard?:()=>void): Run {
     if (closing) throw new InputError('服务正在关闭', 503);
     const prompt = requiredText(input.prompt, '工作内容');
+    if (input.isolatedWorktree !== undefined && typeof input.isolatedWorktree !== 'boolean') throw new InputError('独立工作树选项无效');
+    const isolated = input.isolatedWorktree === true;
     let requestedExecutor = optionalText(input.executorId, '执行者');
     const todoId = optionalText(input.todoId, '待办');
     const todo = todoId ? store.get<Todo>('todos', todoId) : undefined;
@@ -689,7 +691,7 @@ export async function createWorkbench(config: AppConfig) {
         const samePrompt = requestHash ? createHash('sha256').update(prompt).digest('hex') === requestHash : run.prompt === prompt;
         if (!samePrompt || (requestedExecutor !== undefined && run.executorId !== requestedExecutor)
           || run.projectId !== projectId || run.conversationId !== conversationId
-          || (input.cwd !== undefined && run.cwd !== input.cwd)
+          || Boolean(run.worktree) !== isolated || (input.cwd !== undefined && (run.worktree?.source ?? run.cwd) !== input.cwd)
           || run.todoId !== todoId || run.sourceMessageId !== optionalText(input.sourceMessageId, '来源消息')
           || (input.executionMode !== undefined && run.executionMode !== input.executionMode)
           || (input.doneWhen !== undefined && run.doneWhen !== input.doneWhen)
@@ -724,6 +726,13 @@ export async function createWorkbench(config: AppConfig) {
     // Explicit approved parameters retain priority over project defaults.
     const cwd = optionalText(input.cwd, '工作目录') ?? workspace?.cwd ?? executor?.defaultCwd;
     const executionMode = input.executionMode ?? 'task';
+    if (isolated) {
+      if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
+      if (!workspace || cwd !== workspace.cwd || !requestedExecutor || executionMode !== 'task' || nativeResume)
+        throw new InputError('独立工作树需要绑定项目根目录、指定执行者和新任务模式');
+      if (!machines?.list().some(m => m.id === workspace.machineId && m.capabilities.includes('workspace.prepareRunWorktree')))
+        throw new InputError('请升级执行机代理以创建独立工作树', 409);
+    }
     if (executor?.taskOnly && executionMode !== 'task') throw new InputError('此执行器仅支持任务模式');
     if (!['task', 'interactive'].includes(String(executionMode))) throw new InputError('executionMode必须为task或interactive');
     const doneWhen = optionalText(input.doneWhen, '验收标准');
@@ -741,7 +750,9 @@ export async function createWorkbench(config: AppConfig) {
     if (!executor?.available) throw new InputError(executor?.reason ?? '执行者不可用', 503);
     const now = new Date().toISOString();
     const proofSources = nativeResultSources(executor);
-    const run: Run = { id: randomUUID(), ...(nativeResume ? { nativeResume } : {}), ...(proofSources.length ? { nativeResultSources: proofSources } : {}), executorId, conversationId, prompt, ...(executor.mode === 'real' ? { machineId: executor.machineId } : {}), cwd, executionMode: executionMode as 'task' | 'interactive', projectId, todoId, sourceMessageId: optionalText(input.sourceMessageId, '来源消息'), doneWhen, expectMinutes: expectMinutes as number | undefined, status: 'queued', output: '', createdAt: now, updatedAt: now };
+    const id = randomUUID();
+    const destination = isolated && workspace ? join(workspace.cwd + '-worktrees', id) : cwd;
+    const run: Run = { id, ...(isolated && workspace ? { worktree: { source: workspace.cwd } } : {}), ...(nativeResume ? { nativeResume } : {}), ...(proofSources.length ? { nativeResultSources: proofSources } : {}), executorId, conversationId, prompt, ...(executor.mode === 'real' ? { machineId: executor.machineId } : {}), cwd: destination, executionMode: executionMode as 'task' | 'interactive', projectId, todoId, sourceMessageId: optionalText(input.sourceMessageId, '来源消息'), doneWhen, expectMinutes: expectMinutes as number | undefined, status: 'queued', output: '', createdAt: now, updatedAt: now };
     store.transaction(() => {
       store.put('runs', run.id, run); if (key) store.put('dispatch-keys', key, run.id);
       if (taskPolicy) policies.write({ runId: run.id, ...(run.projectId ? { projectId: run.projectId } : {}) }, taskPolicy, { notify: false });
@@ -782,15 +793,37 @@ export async function createWorkbench(config: AppConfig) {
         const includeOfficeGuide = executor.mode === 'real' && executionMode === 'task' && !nativeApproved && !executionGuard
           && plugins.list().some(plugin => plugin.id === 'office-documents' && plugin.status === 'active')
           && machines?.list().some(machine => machine.id === executor.machineId && machine.online && machine.capabilities.includes('office.guide'));
-        const finalPrompt = [effectivePrompt, decisions, guidance, includeOfficeGuide ? officeWorkerGuide : ''].filter(Boolean).join('\n\n');
+        const checkWorktreeBinding = () => {
+          if (!isolated || !workspace) return;
+          const currentProject = store.get<Project>('projects', projectId!);
+          if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active') || currentProject?.archivedAt
+            || currentProject?.workspace?.cwd !== workspace.cwd || currentProject.workspace.machineId !== workspace.machineId)
+            throw Object.assign(new InputError('项目绑定或执行对比插件已变更，请重新核对', 409), { delivery: 'no' });
+        };
+        if (isolated && workspace) {
+          executionGuard?.();
+          assertBotInput(inputMessage);
+          controller.signal.throwIfAborted();
+          checkWorktreeBinding();
+          const receipt = await effects.perform({ key: `run:${run.id}:worktree`, kind: 'workspace.prepareRunWorktree',
+            target: workspace.machineId, summary: '为本次任务创建独立工作树', content: { cwd: workspace.cwd, id: run.id },
+            run: () => machines!.call(workspace.machineId, 'workspace.prepareRunWorktree', { cwd: workspace.cwd, id: run.id }, { timeoutMs: 90000 }) });
+          if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) || receipt.cwd !== destination
+            || receipt.branch !== 'super-mario/' + run.id || typeof receipt.base !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(receipt.base))
+            throw Object.assign(new Error('工作树回执无效，请核对执行机'), { delivery: 'unknown' });
+          update({ worktree: { source: workspace.cwd, branch: receipt.branch, base: receipt.base } });
+        }
+        const isolationGuide = isolated ? '本次使用独立 Git 工作树。所有项目改动在当前工作目录中完成，记录改动文件、提交和测试证据；合并和清理工作树由用户决定。' : '';
+        const finalPrompt = [effectivePrompt, decisions, guidance, isolationGuide, includeOfficeGuide ? officeWorkerGuide : ''].filter(Boolean).join('\n\n');
         const execute = async () => {
           controller.signal.throwIfAborted();
+          checkWorktreeBinding();
           executionGuard?.();
           assertBotInput(inputMessage);
           if (currentDecisions() !== decisions) {
             throw Object.assign(new InputError('待办决定已变更，请核对后重新派单', 409), { delivery: 'no' });
           }
-          const result = await executor.execute({ prompt: finalPrompt, cwd, executionMode: run.executionMode, ...(nativeResume ? { nativeResume } : {}), signal: controller.signal, onOutput: text => update({ output: (store.get<Run>('runs', run.id)?.output ?? '') + text }) });
+          const result = await executor.execute({ prompt: finalPrompt, cwd: destination, executionMode: run.executionMode, ...(nativeResume ? { nativeResume } : {}), signal: controller.signal, onOutput: text => update({ output: (store.get<Run>('runs', run.id)?.output ?? '') + text }) });
           if (result.sessionId) update({ sessionId: result.sessionId });
           const metadata = JSON.parse(JSON.stringify(result)) as JsonObject;
           const evidenceSnapshot = JSON.stringify(metadata.nativeResult);
@@ -800,7 +833,7 @@ export async function createWorkbench(config: AppConfig) {
           return { ...display, text: decorated.text, ...(evidenceSnapshot === undefined ? {} : { nativeResult: JSON.parse(evidenceSnapshot) as ExecutionResult }) };
         };
         const result = executor.mode === 'real'
-          ? await effects.perform({ key: `run:${run.id}:start`, kind: nativeResume ? 'executor.resume' : 'executor.start', target: executor.machineId, summary: prompt, content: { executorId, prompt: finalPrompt, ...(nativeResume ? { nativeResume: { ...nativeResume } } : {}), ...(cwd === undefined ? {} : { cwd }), executionMode: String(executionMode) }, run: execute })
+          ? await effects.perform({ key: `run:${run.id}:start`, kind: nativeResume ? 'executor.resume' : 'executor.start', target: executor.machineId, summary: prompt, content: { executorId, prompt: finalPrompt, ...(nativeResume ? { nativeResume: { ...nativeResume } } : {}), ...(destination === undefined ? {} : { cwd: destination }), executionMode: String(executionMode) }, run: execute })
           : await execute();
         if (nativeResume && !result.pending && !controller.signal.aborted) {
           const proof = result.nativeResult;

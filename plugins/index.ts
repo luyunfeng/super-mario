@@ -179,7 +179,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
 
           context.contribute('tools', 'work_dispatch', tool('work_dispatch', '异步派活，立即返回执行记录，不能把已派发当作完成。', async (args, signal) => {
             signal.throwIfAborted(); return actions.dispatch(args);
-          }, { executorId: { type: 'string' }, prompt: { type: 'string' }, cwd: { type: 'string', description: '真实执行机上已存在的绝对工作目录，不填使用执行机默认目录' }, doneWhen: { type: 'string' }, expectMinutes: { type: 'number' }, projectId: { type: 'string' }, todoId: { type: 'string' }, executionMode: { type: 'string', enum: ['task', 'interactive'] } }));
+          }, { isolatedWorktree: { type: 'boolean', description: '仅在用户明确要求独立 Git 工作树时设为 true；指定执行者和已绑定的项目，使用 task 模式。' }, executorId: { type: 'string' }, prompt: { type: 'string' }, cwd: { type: 'string', description: '真实执行机上已存在的绝对工作目录，不填使用执行机默认目录' }, doneWhen: { type: 'string' }, expectMinutes: { type: 'number' }, projectId: { type: 'string' }, todoId: { type: 'string' }, executionMode: { type: 'string', enum: ['task', 'interactive'] } }));
           for (const [name, description, action, properties] of [
             ['work_read', '读取外部执行会话当前屏幕。屏幕不代表业务完成。', (args: JsonObject) => actions.readRun!(String(args.id ?? '')), { id: { type: 'string' } }],
             ['work_input', '向已派发会话发送一条消息并提交，不自动重复发送。', (args: JsonObject) => actions.inputRun!(String(args.id ?? ''), String(args.text ?? '')), { id: { type: 'string' }, text: { type: 'string' } }],

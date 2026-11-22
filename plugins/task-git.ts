@@ -1,4 +1,4 @@
-import { realpath } from 'node:fs/promises';
+import { mkdir, realpath } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { sensitiveWorkspacePath } from './workspace-code.ts';
@@ -66,4 +66,34 @@ export async function readCommitDiff(params: JsonObject): Promise<Json> {
   const text = await diff(['--patch'], path);
   if (/^Binary files /m.test(text) || /[\x00-\x08\x0b\x0c\x0e-\x1f\ufffd]/.test(text)) throw new Error('仅支持 UTF-8 文本差异');
   return { path, text };
+}
+
+// Only the saved project binding and a server-generated run ID determine the destination.
+export async function prepareRunWorktree(params: JsonObject): Promise<Json> {
+  const { cwd, id } = params;
+  if (typeof cwd !== 'string' || !isAbsolute(cwd) || cwd === '/' || sensitiveWorkspacePath(cwd)
+    || await realpath(cwd) !== cwd || typeof id !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id)) {
+    throw new Error('工作树来源或执行标识无效');
+  }
+  const runGit = async (dir: string, args: string[]) => (await execute('git', [...gitArgs, ...args], {
+    ...gitOptions(dir), timeout: 30000,
+  })).stdout;
+  if ((await runGit(cwd, ['rev-parse', '--show-toplevel'])).trimEnd() !== cwd) throw new Error('请将项目绑定到 Git 仓库根目录');
+  const base = (await runGit(cwd, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
+  const parent = cwd + '-worktrees';
+  await mkdir(parent, { recursive: true, mode: 0o700 });
+  if (await realpath(parent) !== parent) throw new Error('工作树父目录已重定向');
+  const target = resolve(parent, id), branch = 'super-mario/' + id;
+  await mkdir(target, { mode: 0o700 }); // Exclusive claim, including against an existing empty directory.
+  await runGit(cwd, ['worktree', 'add', '--no-checkout', '-b', branch, target, base]);
+  // Checkout must not invoke repository-supplied filter processes. Resolve conditional
+  // config in the new worktree before populating it. Preserve the branch on partial failure.
+  let keys = '';
+  try { keys = await runGit(target, ['config', '--name-only', '--get-regexp', '^filter\\..*\\.(smudge|clean|process|required)$']); }
+  catch (error) { if ((error as {code?:number}).code !== 1) throw error; }
+  const filters = [...new Set(keys.trim().split('\n').filter(Boolean).map(key => key.replace(/\.(smudge|clean|process|required)$/, '')))];
+  const overrides = filters.flatMap(key => ['-c', key + '.smudge=', '-c', key + '.clean=', '-c', key + '.process=', '-c', key + '.required=false']);
+  await runGit(target, [...overrides, '-c', 'core.fsmonitor=false', '-c', 'submodule.recurse=false',
+    '--work-tree=' + target, 'read-tree', '--reset', '-u', base]);
+  return { cwd: target, branch, base };
 }
