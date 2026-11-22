@@ -584,7 +584,8 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
       assert.match(req.system, /优先参考当前确认文本/);
       assert.match(req.system, /contentLocked=true 表示正文仅由用户手工编辑/);
       assert.match(req.system, /比较两版返回的 tags/);
-      return call('knowledge_list', { tag: '样本核对', importance: 'P1', minRelevance: 80 }, 'tagged');
+      assert.match(req.system, /共用别名时不要据此合并知识页/);
+      return call('knowledge_list', { query: '旧样本库', tag: '样本核对', importance: 'P1', minRelevance: 80 }, 'tagged');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[]).map(p => p.text).join('');
     if (req.callId === 'tagged') {
@@ -601,6 +602,7 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
     if (req.callId === 'current') {
       assert.equal(result.text, '样本乙');
       assert.equal(result.contentLocked, true);
+      assert.deepEqual(result.aliases, ['旧样本库']);
       assert.deepEqual(result.tags, ['样本核对']);
       assert.ok(result.previous && result.savedAt);
       assert.equal(result.webCitation, `[查看修订](#memory?entry=${pageId}&revision=${result.commit})`);
@@ -627,7 +629,7 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
   try {
     const project = await api('/projects', { name: '修订项目' });
     const other = await api('/projects', { name: '独立项目' });
-    const input = { layer: 'project', projectId: project.id, importance: 'P1', relevance: 80, contentLocked: true, confirmedFacts: '核对时采用样本丙', tags: ['样本核对'], title: '验收样本' };
+    const input = { layer: 'project', projectId: project.id, importance: 'P1', relevance: 80, contentLocked: true, confirmedFacts: '核对时采用样本丙', aliases: ['旧样本库'], tags: ['样本核对'], title: '验收样本' };
     pageId = (await api('/knowledge', { ...input, tags: ['待复核'], content: '测'.repeat(4000) + '样本甲' })).id;
     await api('/knowledge', { ...input, id: pageId, tags: ['待复核'], content: '样本乙' });
     await api('/knowledge', { ...input, id: pageId, content: '样本乙' });
@@ -635,7 +637,7 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
     await api('/knowledge', { layer: 'project', projectId: project.id, title: '相关说明', content: '正文提到样本核对' });
     await api('/knowledge', { ...input, importance: 'P2', title: '次要记录', content: '次要样本' });
     await api('/knowledge', { ...input, relevance: 79, title: '低相关样本', content: '候选' });
-    const question = '相关度至少 80 分、带「样本核对」标签的 P1 验收样本最近两次分别改了什么？';
+    const question = '相关度至少 80 分、带「样本核对」标签的 P1 页面「旧样本库」最近两次分别改了什么？';
     assert.equal(await ask(question, '/projects/' + project.id + '/messages'), answer);
     const bot = await api('/feishu/bots', { name: '修订查询', appId: 'cli_4444444444444444', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });

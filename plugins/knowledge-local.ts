@@ -24,9 +24,9 @@ function validateScope(layer: KnowledgeLayer | undefined, projectId: string | un
   }
 }
 
-function normalizedTags(tags: unknown): string[] {
+function normalizedNames(tags: unknown, label: string): string[] {
   if (!Array.isArray(tags) || tags.length > 64 || tags.some(tag => typeof tag !== 'string' || !tag.trim() || tag.length > 100 || /[\r\n]/.test(tag)))
-    throw Object.assign(new Error('最多可填写 64 个标签，每个标签须为 1 至 100 字的单行文本'), { status: 400 });
+    throw Object.assign(new Error(`最多可填写 64 个${label}，每个${label}须为 1 至 100 字的单行文本`), { status: 400 });
   return [...new Set(tags.map(tag => tag.trim()))];
 }
 
@@ -79,7 +79,8 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
     }
     const entry = { ...metadata, content: match[2]! } as KnowledgeEntry;
     validateEntry(entry);
-    if (entry.tags !== undefined) entry.tags = normalizedTags(entry.tags);
+    if (entry.aliases !== undefined) entry.aliases = normalizedNames(entry.aliases, '别名');
+    if (entry.tags !== undefined) entry.tags = normalizedNames(entry.tags, '标签');
     if (entry.id !== id) throw new Error(`Knowledge filename and metadata id differ: ${id}`);
     return entry;
   }
@@ -133,6 +134,7 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         for (const entry of entries) context.store.put(collection, entry.id, entry);
       });
       const keywords = (query.query ?? '').trim().normalize('NFC').toLowerCase().split(/\s+/).filter(Boolean);
+      const aliasHits = new Set<string>();
       const titleHits = new Set<string>();
       const hitCounts = new Map<string, number>();
       return entries.filter(entry => (!query.layer || entry.layer === query.layer)
@@ -143,8 +145,12 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         if (!keywords.length) return true;
         const title = entry.title.normalize('NFC').toLowerCase();
         if (keywords.every(keyword => title.includes(keyword))) titleHits.add(entry.id);
+        else if (entry.aliases?.some(alias => {
+          const name = alias.normalize('NFC').toLowerCase();
+          return keywords.every(word => name.includes(word));
+        })) aliasHits.add(entry.id);
         const body = [entry.confirmedFacts, entry.content].filter(Boolean).join('\n').normalize('NFC').toLowerCase();
-        if (!titleHits.has(entry.id) && !keywords.every(word => title.includes(word) || body.includes(word))) return false;
+        if (!titleHits.has(entry.id) && !aliasHits.has(entry.id) && !keywords.every(word => title.includes(word) || body.includes(word))) return false;
         let count = 0;
         for (const line of body.split('\n')) {
           if (keywords.every(word => line.includes(word)) && ++count === 99) break;
@@ -152,6 +158,7 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         hitCounts.set(entry.id, count);
         return true;
       }).sort((a, b) => Number(titleHits.has(b.id)) - Number(titleHits.has(a.id))
+        || Number(aliasHits.has(b.id)) - Number(aliasHits.has(a.id))
         || (a.importance ?? 'P4').localeCompare(b.importance ?? 'P4')
         || (b.relevance ?? -1) - (a.relevance ?? -1)
         || (hitCounts.get(b.id) ?? 0) - (hitCounts.get(a.id) ?? 0)
@@ -193,7 +200,9 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
       const importance = input.importance === undefined ? prior?.importance : input.importance;
       if (importance != null) entry.importance = importance;
       validateEntry(entry);
-      const tags = input.tags === undefined ? prior?.tags : normalizedTags(input.tags);
+      const aliases = input.aliases === undefined ? prior?.aliases : normalizedNames(input.aliases, '别名');
+      if (aliases?.length) entry.aliases = aliases;
+      const tags = input.tags === undefined ? prior?.tags : normalizedNames(input.tags, '标签');
       if (tags?.length) entry.tags = tags;
       const { content, ...metadata } = entry;
       const temporary = join(directory, `.${randomUUID()}.tmp`);

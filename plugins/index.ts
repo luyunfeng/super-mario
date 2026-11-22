@@ -266,7 +266,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             return info as unknown as Json;
           });
         }));
-        context.contribute('tools', 'knowledge_list', tool('knowledge_list', '查询本地知识，可按层、项目和关键词筛选。tag 精确匹配页标签，可与关键词、importance（P0–P3）组合；minRelevance 按已记录相关度下限筛选。分析会议决定、背景或待跟进事项时，按会议主题检索当前作用域可见的知识，并核对来源。', async (args, signal) => {
+        context.contribute('tools', 'knowledge_list', tool('knowledge_list', '查询本地知识，可按层、项目和关键词筛选。query 也可检索知识页别名。tag 精确匹配页标签，可与关键词、importance（P0–P3）组合；minRelevance 按已记录相关度下限筛选。分析会议决定、背景或待跟进事项时，按会议主题检索当前作用域可见的知识，并核对来源。', async (args, signal) => {
           signal.throwIfAborted();
           const backend = context.contributions.list('knowledge_backends').find(item => item.id === 'local');
           if (!backend) throw new Error('Local knowledge backend is unavailable');
@@ -319,7 +319,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             if (!revision) return { available: false } as Json;
             const { title, content, updatedAt } = revision.entry;
             const chars = Array.from(content), end = offset + 4000;
-            return { available: true, title, contentLocked: Boolean(revision.entry.contentLocked), confirmedFacts: revision.entry.confirmedFacts ?? '', factsEdit: revision.entry.factsEdit ?? null, relevance: revision.entry.relevance ?? null, importance: revision.entry.importance ?? null, tags: revision.entry.tags ?? [], savedAt: updatedAt, commit: revision.commit, previous: revision.previous ?? null,
+            return { available: true, title, contentLocked: Boolean(revision.entry.contentLocked), confirmedFacts: revision.entry.confirmedFacts ?? '', factsEdit: revision.entry.factsEdit ?? null, relevance: revision.entry.relevance ?? null, importance: revision.entry.importance ?? null, aliases: revision.entry.aliases ?? [], tags: revision.entry.tags ?? [], savedAt: updatedAt, commit: revision.commit, previous: revision.previous ?? null,
               webCitation: `[查看修订](#memory?entry=${encodeURIComponent(pageId)}&revision=${revision.commit})`,
               text: chars.slice(offset, end).join(''), nextOffset: end < chars.length ? end : null } as Json;
           }, { pageId: { type: 'string' }, commit: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));

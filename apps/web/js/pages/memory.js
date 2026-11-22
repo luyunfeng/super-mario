@@ -106,6 +106,7 @@ export function createMemoryPage({ api, store, router, scope }) {
     tagFilter.hidden = !tags.length;
     importanceFilter.hidden = !scoped.some(item => item.importance);
     if (importanceFilter.hidden) importanceFilter.value = '';
+    const aliasHits = new Set();
     const titleHits = new Set();
     const hitCounts = new Map();
     const rows = scoped.filter(item => !importanceFilter.value || item.importance === importanceFilter.value)
@@ -113,14 +114,16 @@ export function createMemoryPage({ api, store, router, scope }) {
       .filter(item => {
         if (!words.length) return true;
         if (matches(item.title)) titleHits.add(item.id);
+        else if (item.aliases?.some(matches)) aliasHits.add(item.id);
         let count = 0;
         for (const line of [item.confirmedFacts, item.content].filter(Boolean).join('\n').split(/\r\n|[\n\r]/)) {
           if (matches(line) && ++count === 99) break;
         }
         hitCounts.set(item.id, count);
-        return titleHits.has(item.id) || count > 0;
+        return titleHits.has(item.id) || aliasHits.has(item.id) || count > 0;
       })
       .sort((a, b) => Number(titleHits.has(b.id)) - Number(titleHits.has(a.id))
+        || Number(aliasHits.has(b.id)) - Number(aliasHits.has(a.id))
         || (a.importance ?? 'P4').localeCompare(b.importance ?? 'P4')
         || (b.relevance ?? -1) - (a.relevance ?? -1)
         || (hitCounts.get(b.id) ?? 0) - (hitCounts.get(a.id) ?? 0)
