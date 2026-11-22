@@ -2,7 +2,7 @@
 import { h, replace } from '../lib/dom.js';
 import { openDrawer } from '../ui/overlay.js';
 import { Button } from '../ui/kit.js';
-import { searchRuns } from './run-search.js';
+import { searchRunHits } from './run-search.js';
 import { openSavedSearches } from './saved-searches.js';
 
 export function conversationSearchActive(snapshot) {
@@ -88,10 +88,18 @@ export function createSearch({ shell, store, router, api }) {
     });
   }
 
+  function runLinks(query, snapshot) {
+    return searchRunHits(query, snapshot).map(({ run, excerpt }) => ({
+      text: excerpt ? [run.prompt, ' · ', excerpt] : run.prompt,
+      href: router.href('projects', run.projectId || 'all', 'runs', run.id),
+    }));
+  }
+
   function openResults(query, kind) {
     results.hidden = true;
     const isMeeting = kind === '会议';
-    const isMain = kind === '主对话消息';
+    const isRun = kind === '执行记录';
+    const fromSnapshot = isRun || kind === '主对话消息';
     let visibleLimit = 25;
     const moreLabel = '查看更多' + kind;
     const owner = api.draftOwner();
@@ -107,11 +115,11 @@ export function createSearch({ shell, store, router, api }) {
       if (!current()) { drawer.close(); return; }
       const snapshot = store.view.snapshot;
       let links;
-      if (isMain) {
-        links = chatHits(query, snapshot.messages ?? [], visibleLimit + 1);
+      if (fromSnapshot) {
+        links = isRun ? runLinks(query, snapshot) : chatHits(query, snapshot.messages ?? [], visibleLimit + 1);
         more.hidden = links.length <= visibleLimit;
         links = links.slice(0, visibleLimit);
-        status.textContent = '已显示 ' + links.length + ' 条消息';
+        status.textContent = '已显示 ' + links.length + (isRun ? ' 条执行记录' : ' 条消息');
       } else {
         links = (isMeeting ? meetingLinks : messageLinks)([...rows.values()], snapshot);
       }
@@ -128,7 +136,7 @@ export function createSearch({ shell, store, router, api }) {
     }
     async function load() {
       if (!current() || more.disabled || cursor === null) return;
-      if (isMain) {
+      if (fromSnapshot) {
         visibleLimit += 25;
         render();
         return;
@@ -154,7 +162,7 @@ export function createSearch({ shell, store, router, api }) {
     }
     const drawer = openDrawer({ title: kind + '搜索结果', subtitle: query, body: [status, list, more], onClose: () => unsubscribe() });
     const unsubscribe = store.subscribe(render);
-    if (isMain) render();
+    if (fromSnapshot) render();
     else void load();
   }
 
@@ -163,13 +171,13 @@ export function createSearch({ shell, store, router, api }) {
     const match = (...values) => values.some(value => String(value ?? '').toLowerCase().includes(folded));
     const projectKey = item => item.projectId || 'all';
     const pluginActive = conversationSearchActive(snapshot);
-    const runs = pluginActive ? searchRuns(query, snapshot)
-      : (snapshot.runs ?? []).filter(item => match(item.prompt, item.output));
+    const runs = pluginActive ? runLinks(query, snapshot)
+      : (snapshot.runs ?? []).filter(item => match(item.prompt, item.output)).map(item => ({ text: item.prompt, href: router.href('projects', projectKey(item), 'runs', item.id) }));
     return [
       ['主对话', pluginActive ? chatHits(query, snapshot.messages ?? []) : []],
       ['项目工作对话', messageLinks(conversations.state.hits, snapshot)],
       ['待办', (snapshot.todos ?? []).filter(item => match(item.title, item.notes)).map(item => ({ text: item.title, href: router.href('projects', projectKey(item), 'todos', 'detail', item.id) }))],
-      ['执行', runs.map(item => ({ text: item.prompt, href: router.href('projects', projectKey(item), 'runs', item.id) }))],
+      ['执行', runs],
       ['会议', meetingLinks(meetings.state.hits, snapshot)],
       ['记忆', (snapshot.knowledge ?? []).filter(item => match(item.title, item.content)).map(item => ({ text: item.title, href: `${router.href('memory')}?entry=${encodeURIComponent(item.id)}` }))],
       ['项目', (snapshot.projects ?? []).filter(item => !item.archivedAt && match(item.name, item.description)).map(item => ({ text: item.name, href: router.href('projects', item.id, 'todos') }))],
@@ -206,6 +214,7 @@ export function createSearch({ shell, store, router, api }) {
           event.preventDefault(); router.go(hit.href);
         }
       } }, hit.text)),
+      name === '执行' && savedEnabled && hits.length > 5 && Button({ label: '查看全部匹配执行', size: 'sm', onClick: () => openResults(query, '执行记录') }),
       name === '主对话' && hits.length > 5 && Button({ label: '查看全部主对话消息', size: 'sm', onClick: () => openResults(query, '主对话消息') }),
       name === '项目工作对话' && hits.length > 5 && Button({ label: '查看全部匹配消息', size: 'sm', onClick: () => openResults(query, '消息') }),
       name === '会议' && hits.length > 5 && Button({ label: '查看全部匹配会议', size: 'sm', onClick: () => openResults(query, '会议') }),

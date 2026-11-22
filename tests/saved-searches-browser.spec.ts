@@ -24,6 +24,11 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
       id: 'synthetic-report', conversationId: 'main', executorId: 'fixture', projectId,
       status: 'completed', prompt: '生成账单', output: '月报准备就绪', createdAt: now, updatedAt: now,
     });
+    for (let i = 0; i < 26; i++) {
+      const id = 'search-run-' + i;
+      server.app.store.put('runs', id, { id, projectId, conversationId: 'main', executorId: 'fixture', status: 'completed',
+        prompt: i === 0 ? '复核凭证明细' : '核对合成事项 ' + i, output: '已核对复核凭证', createdAt: now, updatedAt: now });
+    }
     const archived = await server.app.createProject({ name: '归档测试' });
     server.app.projects.archive(archived.id);
     const keyword = '合成[定位]';
@@ -61,6 +66,17 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await expect(cited).toContainText(keyword);
     await page.goBack();
     await expect(sourceLink).toBeVisible();
+    await search.fill('复核凭证');
+    const runHits = results.getByRole('link');
+    await expect(runHits.first()).toHaveText('复核凭证明细');
+    await results.getByRole('button', { name: '查看全部匹配执行' }).click();
+    const runResults = page.getByRole('dialog', { name: '执行记录搜索结果' });
+    await expect(runResults.getByRole('link')).toHaveCount(25);
+    await runResults.getByRole('button', { name: '查看更多执行记录' }).click();
+    await expect(runResults.getByRole('link')).toHaveCount(26);
+    await runResults.getByRole('link', { name: '核对合成事项 25 · 输出 · 已核对复核凭证' }).click();
+    await expect(page).toHaveURL(/\/runs\/search-run-25$/);
+    await expect(page.getByRole('heading', { name: '核对合成事项 25' })).toBeVisible();
     let finishSearch!: () => void;
     const pendingSearch = new Promise<void>(resolve => { finishSearch = resolve; });
     await page.route('**/api/v1/project-message-search', async route => {

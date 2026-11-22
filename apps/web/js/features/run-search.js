@@ -9,7 +9,7 @@ const windows = new Map([['24h', 1], ['7d', 7], ['30d', 30]]);
 const states = new Set(['queued', 'running', 'completed', 'failed', 'unknown', 'cancelled']);
 const lower = (...parts) => parts.filter(Boolean).join('\n').toLowerCase();
 
-export function searchRuns(query, snapshot, now = Date.now()) {
+export function searchRunHits(query, snapshot, now = Date.now()) {
   const terms = [];
   const filters = new Map();
   let since;
@@ -29,19 +29,47 @@ export function searchRuns(query, snapshot, now = Date.now()) {
   const machines = names(snapshot.machines);
   const projects = names(snapshot.projects);
   const executors = names(snapshot.executors);
-  return (snapshot.runs ?? []).filter(run => {
-    if (since !== undefined && !(Date.parse(run.updatedAt) >= since)) return false;
+  const phrase = terms.join(' ');
+  const conditions = [...filters];
+  const patterns = terms.map(term => new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'));
+  const hits = [];
+  for (const run of snapshot.runs ?? []) {
+    if (since !== undefined && !(Date.parse(run.updatedAt) >= since)) continue;
     const fields = {
       machine: lower(run.machineId, machines.get(run.machineId)),
       project: lower(run.projectId, projects.get(run.projectId), run.cwd),
       agent: lower(run.executorId, executors.get(run.executorId)),
       state: run.status,
     };
-    for (const [field, values] of filters) {
-      if (!values.some(value => field === 'state' ? fields.state === value : fields[field].includes(value))) return false;
+    const accepts = ([field, values]) => values.some(value => field === 'state' ? fields.state === value : fields[field].includes(value));
+    if (!conditions.every(accepts)) continue;
+    let score = 0, excerpt = '';
+    if (terms.length) {
+      const title = lower(run.prompt);
+      const place = lower(title, fields.machine, fields.project);
+      if (title.startsWith(phrase)) score = 4;
+      else if (title.includes(phrase)) score = 3;
+      else if (terms.every(term => place.includes(term))) score = 2;
+      else {
+        const sources = [['分支', run.worktree?.branch], ['错误', run.error], ['输出', run.output],
+          ['执行 ID', run.id], ['原生会话', run.nativeSessionId], ['会话', run.sessionId], ['执行器', fields.agent], ['状态', fields.state]];
+        const missing = patterns.filter((_pattern, i) => !place.includes(terms[i]));
+        let matched = true;
+        for (const pattern of missing) {
+          const source = sources.find(([, value]) => value && pattern.test(value));
+          if (!source) { matched = false; break; }
+          if (excerpt) continue;
+          const [label, value] = source;
+          const match = pattern.exec(value);
+          const start = match.index, end = start + match[0].length;
+          excerpt = label + ' · ' + (start > 18 ? '…' : '') + value.slice(Math.max(0, start - 18), end + 32) + (end + 32 < value.length ? '…' : '');
+        }
+        if (!matched) continue;
+        score = 1;
+      }
     }
-    if (!terms.length) return true;
-    const text = lower(run.prompt, run.output, run.error, run.nativeSessionId, run.sessionId, ...Object.values(fields));
-    return terms.every(term => text.includes(term));
-  });
+    hits.push({ run, score, excerpt });
+  }
+  // Snapshot order is newest first. Preserve it within each relevance tier.
+  return hits.sort((a, b) => b.score - a.score);
 }
