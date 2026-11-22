@@ -32,6 +32,7 @@ function revisionHistory(api, entry, loadDraft, selectedCommit) {
       status.replaceWith(h('article', { class: 'stack' },
         h('strong', null, revision.entry.title),
         h('small', null, revision.entry.updatedAt, ' · ', revision.commit.slice(0, 8)),
+        revision.entry.contentLocked && h('small', null, '正文维护方式：仅手工编辑'),
         factsEditNote(revision.entry) && h('small', null, factsEditNote(revision.entry)),
         revision.entry.confirmedFacts && h('div', { class: 'small', style: { whiteSpace: 'pre-wrap' } }, '已确认事实：' + revision.entry.confirmedFacts),
         h('small', null, '重要级：' + (revision.entry.importance ?? '未设置') + ' · 相关度：' + (revision.entry.relevance ?? '未评分')),
@@ -101,6 +102,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   const project = Select({ options: [['', '请选择项目'], ...projects.map(item => [item.id, item.name])], value: entry?.projectId ?? defaults.projectId ?? '', name: 'projectId' });
   const title = Input({ name: 'title', value: entry?.title ?? '', required: true, placeholder: '一句话概括，例如“发布流程”' });
   const content = TextArea({ name: 'content', value: entry?.content ?? '', rows: 10, required: true, placeholder: '写下 Agent 工作时需要知道的内容' });
+  const protection = Select({ name: 'contentLocked', value: entry?.contentLocked ? 'locked' : 'open', options: [['open', '允许自动整理'], ['locked', '仅手工编辑']] });
   const facts = TextArea({ name: 'confirmedFacts', value: entry?.confirmedFacts ?? '', rows: 3, maxLength: 16000 });
   const relevance = Input({ name: 'relevance', type: 'number', min: 0, max: 100, step: 1, value: entry?.relevance ?? '', placeholder: '未评分' });
   const importance = Select({ name: 'importance', value: entry?.importance ?? '', options: [['', '未设置'], ...['P0', 'P1', 'P2', 'P3'].map(level => [level, level])] });
@@ -136,7 +138,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   }
   function ask(source, original) {
     if (!mayQuote()) { note.textContent = '当前无法引用，请检查插件和知识页状态。'; return; }
-    if (fields.some((field, i) => field.value !== baseline[i]) || changedScope()) {
+    if (fields.some((field, i) => field.value !== baseline[i]) || changedScope() || (protection.value === 'locked') !== Boolean(reviewed.contentLocked)) {
       note.textContent = '请先保存记忆修改，再引用原文。'; return;
     }
     const drafts = createConversationDrafts({ api, store });
@@ -183,12 +185,13 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
       if (!title.value.trim() || !content.value.trim()) { note.textContent = '请填写标题和内容。'; return; }
       if (layer.value === 'project' && !project.value) { note.textContent = '请选择所属项目。'; return; }
       if (!relevance.validity.valid) { note.textContent = '相关度须为 0 至 100 的整数。'; return; }
-      const body = { confirmedFacts: facts.value, relevance: relevance.value === '' ? null : relevance.valueAsNumber, ...(entry ? { expectedUpdatedAt: reviewed.updatedAt } : {}), importance: importance.value || null, tags: tags.value.split('\n').map(tag => tag.trim()).filter(Boolean), layer: layer.value, title: title.value.trim(), content: content.value.trim(), ...(layer.value === 'project' ? { projectId: project.value } : {}) };
+      const body = { contentLocked: protection.value === 'locked', confirmedFacts: facts.value, relevance: relevance.value === '' ? null : relevance.valueAsNumber, ...(entry ? { expectedUpdatedAt: reviewed.updatedAt } : {}), importance: importance.value || null, tags: tags.value.split('\n').map(tag => tag.trim()).filter(Boolean), layer: layer.value, title: title.value.trim(), content: content.value.trim(), ...(layer.value === 'project' ? { projectId: project.value } : {}) };
       if (entry) {
         // A facts-only edit must also preserve the original bytes of untouched Markdown.
         for (const [i, field] of fields.entries()) {
           if (field.value === baseline[i]) delete body[field.name];
         }
+        if (body.contentLocked === Boolean(reviewed.contentLocked)) delete body.contentLocked;
         if (!changedScope()) { delete body.layer; delete body.projectId; }
         if (Object.keys(body).length === 1) { drawer.close(); return; }
       }
@@ -203,6 +206,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
           if (!latest) { conflict.textContent = '该知识页已删除。'; return; }
           replace(conflict, h('strong', null, '当前已保存版本'),
             h('span', null, [layerNames[latest.layer], latest.projectId, latest.title].filter(Boolean).join(' · ')),
+            h('span', { class: 'small' }, '正文维护方式：' + (latest.contentLocked ? '仅手工编辑' : '允许自动整理')),
             h('span', { class: 'small' }, '重要级：' + (latest.importance ?? '未设置') + ' · 相关度：' + (latest.relevance ?? '未评分')),
             h('span', { class: 'small', style: { whiteSpace: 'pre-wrap' } }, '已确认事实：' + (latest.confirmedFacts || '无')),
             h('span', { class: 'small' }, '标签：' + (latest.tags?.join('、') || '无')),
@@ -216,6 +220,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
                 sync();
               }
               factsNote.textContent = factsEditNote(latest);
+              if ((protection.value === 'locked') === Boolean(reviewed.contentLocked)) protection.value = latest.contentLocked ? 'locked' : 'open';
               reviewed = latest;
               baseline = next;
               replace(conflict); note.textContent = '已核对版本，编辑草稿后可再次保存。';
@@ -237,7 +242,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   });
   const drawer = openDrawer({
     title: entry ? '编辑记忆' : '添加记忆', subtitle: entry ? `更新于 ${timeAgo(entry.updatedAt)}` : undefined,
-    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), Field({ label: '已确认事实', control: facts }), factsNote, Field({ label: '标签', control: tags }), Field({ label: '重要级', control: importance }), Field({ label: '相关度（0–100）', control: relevance }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
+    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), Field({ label: '正文维护方式', control: protection }), Field({ label: '已确认事实', control: facts }), factsNote, Field({ label: '标签', control: tags }), Field({ label: '重要级', control: importance }), Field({ label: '相关度（0–100）', control: relevance }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();

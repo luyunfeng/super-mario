@@ -265,6 +265,7 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   const drawer = page.getByRole('dialog', { name: '编辑记忆' });
   await expect(drawer.locator('textarea[name=content]')).toHaveValue(content);
   await drawer.locator('[name=confirmedFacts]').fill('第一项\n最终验收日为周五');
+  await drawer.locator('[name=contentLocked]').selectOption('locked');
   await drawer.locator('[name=relevance]').fill('80');
   await drawer.locator('[name=importance]').selectOption('P0');
   await drawer.locator('[name=tags]').fill('待评审\n接口\n待评审');
@@ -290,6 +291,8 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   await expect(page.locator('.knowledge-item')).toHaveCount(1);
   const [saved] = await server.app.knowledge().list({ tag: '待评审' });
   expect(saved!.factsEdit).toEqual({ source: 'workbench', at: saved!.updatedAt });
+  expect(saved!.contentLocked).toBe(true);
+  await expect(server.app.knowledge().put({ ...saved!, content: '整理器改写', contentLocked: false })).rejects.toThrow('保护');
   expect(saved!.importance).toBe('P0');
   expect(saved!.relevance).toBe(80);
   const scored = await server.app.knowledge().list({ minRelevance: 0 });
@@ -314,6 +317,8 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   await drawer.locator('[name=relevance]').fill('101');
   await drawer.getByRole('button', { name: '保存', exact: true }).click();
   await expect(drawer.getByRole('alert')).toContainText('0 至 100');
+  await expect(drawer.locator('[name=contentLocked]')).toHaveValue('locked');
+  await drawer.locator('[name=contentLocked]').selectOption('open');
   await drawer.locator('[name=relevance]').fill('');
   await expect(drawer.locator('[name=importance]')).toHaveValue('P0');
   await drawer.locator('[name=importance]').selectOption('');
@@ -324,4 +329,7 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   expect((await server.app.knowledge().list({ importance: 'P0' })).some(p => p.id === saved!.id)).toBe(false);
   expect(await server.app.knowledge().list({ minRelevance: 80 })).toEqual([]);
   expect(await server.app.knowledge().list({ query: '最终验收日' })).toEqual([]);
+  const [unlocked] = await server.app.knowledge().list({ query: title });
+  expect(unlocked!.contentLocked).toBeUndefined();
+  expect((await server.app.knowledge().put({ ...unlocked!, content: '自动整理新稿' }, unlocked!.updatedAt)).content).toBe('自动整理新稿');
 });

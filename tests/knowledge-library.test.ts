@@ -30,11 +30,12 @@ test('curation defaults to personal, recovers uncertain delivery without resubmi
   const app=await createWorkbench({host:'127.0.0.1',port:0,dataDir,demo:true});
   t.after(async()=>{await app.close();await rm(dataDir,{recursive:true,force:true});});
   const originalPage = await app.knowledge().put({layer:'personal', title:'知识炼化',content:'旧摘要', confirmedFacts:'原始来源必须可核对'});
+  await app.knowledge().put({ layer:'personal', title:'受保护的定稿', content:'手工确认版本', contentLocked:true }, undefined, 'workbench');
   const remoteJobs=new Map<string,Json>();let submissions=0;let uncertain=true;
   const client:MachineClient={list:()=>[{id:'machine',name:'Knowledge node',online:true,platform:'linux',connectedAt:new Date().toISOString(),capabilities:['executor.knowledge.start']}],async call(_machine,method,params){
     if(method==='executor.knowledge.start')return {workerId:'resident',provider:'codex',scope:params.scope,state:'idle',pid:123};
     if(method==='executor.knowledge.stop')return {stopped:true};
-    if(method==='executor.knowledge.submit'){assert.match(String(params.prompt), /原始来源必须可核对/);submissions++;remoteJobs.set(String(params.jobId),{id:params.jobId,scope:params.scope,status:'completed',text:JSON.stringify({pages:[{id:originalPage.id,title:'知识炼化',confirmedFacts:'来自整理器的猜测',content:'按知识点组织，保留来源并维护索引。'}],summary:'已整理'})});if(uncertain){uncertain=false;throw new Error('connection closed after accepting job');}return {accepted:true};}
+    if(method==='executor.knowledge.submit'){assert.match(String(params.prompt), /原始来源必须可核对/);assert.match(String(params.prompt), /受保护的定稿[^}]+"readOnly":true/);submissions++;remoteJobs.set(String(params.jobId),{id:params.jobId,scope:params.scope,status:'completed',text:JSON.stringify({pages:[{id:originalPage.id,title:'知识炼化',confirmedFacts:'来自整理器的猜测',content:'按知识点组织，保留来源并维护索引。'}],summary:'已整理'})});if(uncertain){uncertain=false;throw new Error('connection closed after accepting job');}return {accepted:true};}
     return {workerId:'resident',provider:'codex',scope:params.scope,state:'idle',pid:123,...(params.jobId?{job:remoteJobs.get(String(params.jobId))}: {})} as any;
   }};
   app.setMachineClient(client);
@@ -43,7 +44,7 @@ test('curation defaults to personal, recovers uncertain delivery without resubmi
   assert.equal(job.layer,'personal');
   const deadline=Date.now()+12000;while(Date.now()<deadline&&app.knowledgeCurator.status().jobs[0]?.status!=='completed')await delay(30);
   const saved=app.knowledgeCurator.status().jobs[0];assert.equal(saved.status,'completed');assert.equal(submissions,1);
-  const pages=await app.knowledge().list();assert.equal(pages.length,1);assert.equal(pages[0].layer,'personal');assert.equal(pages[0].confirmedFacts,'原始来源必须可核对');assert.match(pages[0].content,/本次整理来源/);
+  const pages=await app.knowledge().list({ query: '知识炼化' });assert.equal(pages.length,1);assert.equal(pages[0].layer,'personal');assert.equal(pages[0].confirmedFacts,'原始来源必须可核对');assert.match(pages[0].content,/本次整理来源/);
   const raw=await readFile(join(dataDir,'plugins','knowledge-local','raw',job.id+'.md'),'utf8');assert.match(raw,/知识整理原始材料/);assert.match(raw,/按知识点整理资料/);
   assert.equal(app.knowledgeCurator.status().versioning.available,true);
   assert.match((await app.knowledgeCurator.index()).content,/知识炼化/);

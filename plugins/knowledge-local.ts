@@ -176,6 +176,12 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         throw Object.assign(new Error('知识页已有新版本或已删除，请先核对最新内容'), { status: 409 });
       if (prior && Date.parse(prior.updatedAt) >= Date.parse(entry.updatedAt))
         entry.updatedAt = new Date(Date.parse(prior.updatedAt) + 1).toISOString();
+      if (input.contentLocked !== undefined && typeof input.contentLocked !== 'boolean')
+        throw Object.assign(new Error('正文保护设置无效'), { status: 400 });
+      const locked = input.contentLocked ?? prior?.contentLocked ?? false;
+      if (editSource !== 'workbench' && (locked !== Boolean(prior?.contentLocked) || (prior?.contentLocked && entry.content !== prior.content)))
+        throw Object.assign(new Error('正文已由用户保护，自动整理不能修改正文或更改保护设置'), { status: 409 });
+      if (locked) entry.contentLocked = true;
       const facts = input.confirmedFacts === undefined ? prior?.confirmedFacts : input.confirmedFacts;
       if (facts !== undefined && facts !== '') entry.confirmedFacts = facts;
       // Record the entry point only when the facts themselves change, including a clear.

@@ -582,6 +582,7 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
       assert.match(req.system, /按 importance 筛选/);
       assert.match(req.system, /未评分与 0 分分开/);
       assert.match(req.system, /优先参考当前确认文本/);
+      assert.match(req.system, /contentLocked=true 表示正文仅由用户手工编辑/);
       assert.match(req.system, /比较两版返回的 tags/);
       return call('knowledge_list', { tag: '样本核对', importance: 'P1', minRelevance: 80 }, 'tagged');
     }
@@ -599,6 +600,7 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
     const result = JSON.parse(raw);
     if (req.callId === 'current') {
       assert.equal(result.text, '样本乙');
+      assert.equal(result.contentLocked, true);
       assert.deepEqual(result.tags, ['样本核对']);
       assert.ok(result.previous && result.savedAt);
       assert.equal(result.webCitation, `[查看修订](#memory?entry=${pageId}&revision=${result.commit})`);
@@ -606,6 +608,7 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
     }
     if (req.callId === 'before-retag') {
       assert.equal(result.text, '样本乙');
+      assert.equal(result.contentLocked, true);
       assert.deepEqual(result.tags, ['待复核']);
       return call('knowledge_revision', { pageId, commit: result.previous }, 'prior');
     }
@@ -624,7 +627,7 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
   try {
     const project = await api('/projects', { name: '修订项目' });
     const other = await api('/projects', { name: '独立项目' });
-    const input = { layer: 'project', projectId: project.id, importance: 'P1', relevance: 80, confirmedFacts: '核对时采用样本丙', tags: ['样本核对'], title: '验收样本' };
+    const input = { layer: 'project', projectId: project.id, importance: 'P1', relevance: 80, contentLocked: true, confirmedFacts: '核对时采用样本丙', tags: ['样本核对'], title: '验收样本' };
     pageId = (await api('/knowledge', { ...input, tags: ['待复核'], content: '测'.repeat(4000) + '样本甲' })).id;
     await api('/knowledge', { ...input, id: pageId, tags: ['待复核'], content: '样本乙' });
     await api('/knowledge', { ...input, id: pageId, content: '样本乙' });

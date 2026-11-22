@@ -250,6 +250,7 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
       if ((page.id && !ids.has(page.id)) || seen.has(id)) throw new Error('知识 Agent 试图修改当前归属以外的知识页或重复写入');
       if (page.id) {
         const original = existing.find(entry => entry.id === page.id)!;
+        if (original.contentLocked) throw new Error('知识页正文已由用户保护，请将新材料整理为独立知识页');
         if (original.content.length > existingPageLimit || (job.knowledgeVersions && !Object.hasOwn(job.knowledgeVersions, page.id)))
           throw new Error('本轮未提供完整知识页，已保留原文，请将新材料整理为独立知识页');
         if (job.knowledgeVersions && original.updatedAt !== job.knowledgeVersions[page.id])
@@ -355,13 +356,13 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
           '行动项仅记录已明确的负责人和期限，缺失写待确认。没有说话人标识时不要把“我”归为用户。若同一议题的后文明确改定，标出改定前后的依据；只有意见分歧时保留分歧。',
         ] : []),
         'confirmedFacts 为用户手工确认且只读，来源与其冲突时在正文中注明分歧及依据，不能把推断写成用户已确认。',
-        'existingPages 中 readOnly=true 的条目仅展示节选。遇到相关新材料时另建知识页并注明关联，完整页才能更新。',
+        'existingPages 中 readOnly=true 表示用户已保护正文或本轮只提供节选。遇到相关新材料时另建知识页并注明关联，只能更新完整且未保护的页。',
         'globalGuidance 仅用于指导工作方式，不是炼化来源或可修改知识页。只能更新 existingPages 或在 destination 新建页，不能修改全局知识。',
         '返回 {"pages":[{"id":"仅更新已有页时填写","title":"中文标题","content":"Markdown知识正文"}],"summary":"本次整理说明"}。',
-        JSON.stringify({ destination: { layer: next.layer, projectId: next.projectId }, source, globalGuidance: globalGuidance.slice(0, 60).map(page => ({ title: page.title, ...(page.confirmedFacts ? { confirmedFacts: page.confirmedFacts.slice(0, 8000) } : {}), content: page.content.slice(0, 8000) })), existingPages: presentedPages.map(page => ({ id: page.id, title: page.title, ...(page.confirmedFacts ? { confirmedFacts: page.confirmedFacts.slice(0, 8000) } : {}), content: page.content.slice(0, existingPageLimit), readOnly: page.content.length > existingPageLimit })) })].join('\n');
+        JSON.stringify({ destination: { layer: next.layer, projectId: next.projectId }, source, globalGuidance: globalGuidance.slice(0, 60).map(page => ({ title: page.title, ...(page.confirmedFacts ? { confirmedFacts: page.confirmedFacts.slice(0, 8000) } : {}), content: page.content.slice(0, 8000) })), existingPages: presentedPages.map(page => ({ id: page.id, title: page.title, ...(page.confirmedFacts ? { confirmedFacts: page.confirmedFacts.slice(0, 8000) } : {}), content: page.content.slice(0, existingPageLimit), readOnly: Boolean(page.contentLocked) || page.content.length > existingPageLimit })) })].join('\n');
       if (closed) return;
       try { checkDestination(next); } catch (error) { save(next, { status: 'failed', error: error instanceof Error ? error.message : String(error) }); return; }
-      save(next, { status: 'running', error: undefined, knowledgeVersions: Object.fromEntries(presentedPages.filter(page => page.content.length <= existingPageLimit).map(page => [page.id, page.updatedAt])) });
+      save(next, { status: 'running', error: undefined, knowledgeVersions: Object.fromEntries(presentedPages.filter(page => !page.contentLocked && page.content.length <= existingPageLimit).map(page => [page.id, page.updatedAt])) });
       try { await machineClient.call(binding.machineId, 'executor.knowledge.submit', { workerId: binding.workerId, scope, jobId: next.id, prompt }, { timeoutMs: 30000 }); worker = { ...worker, state: 'running' }; }
       catch (error) { save(next, { status: 'unknown', recoveryPending: true, error: `提交结果未确认，不会自动重发：${error instanceof Error ? error.message : String(error)}` }); }
     } catch (error) {
