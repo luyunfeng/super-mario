@@ -1107,12 +1107,18 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
   let adapter!: FeishuOptions;
   const sent: string[] = [];
   const day = { updatedFrom: '2026-03-08T00:00:00-05:00', updatedBefore: '2026-03-09T00:00:00-04:00' };
+  const machineQuestion = '只查 Build-A 上 worker/1 执行器的“账期”记录。';
+  const machineAnswer = 'Build-A 上 worker/1 登记了账期核验。';
   const dayQuestion = '纽约当地 3 月 8 日更新过哪些执行？按 2026 年查询。';
   const dayAnswer = '纽约当地 2026-03-08 更新了两条执行。';
   const answer = '最近更新的记录为 recovered，日志记有 E[503]，登记状态为 completed。';
   const { server, api, ask, requests } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.match(req.system, /日志出现“失败”不能证明执行状态为 failed/);
+      if (JSON.stringify(req.content).includes(machineQuestion)) {
+        assert.match(req.system, /旧执行未登记机器就说明未知/);
+        return call('runs_list', { machineId: 'Build-A', executorId: 'worker/1', query: '账期' }, 'machine');
+      }
       if (JSON.stringify(req.content).includes('纽约当地')) {
         assert.match(req.system, /昨天按当地两次午夜取界/);
         assert.match(req.system, /不能当作报错发生时间/);
@@ -1123,6 +1129,13 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
     const rows = JSON.parse(raw);
+    if (req.callId === 'machine') {
+      assert.deepEqual(rows.map((r: {id: string}) => r.id), ['target']);
+      assert.equal(rows[0].machineId, 'Build-A');
+      assert.equal(rows[0].executorId, 'worker/1');
+      assert.equal(rows[0].evidence[0].excerpt, '账期核验');
+      return { role: 'assistant', content: machineAnswer };
+    }
     if (req.callId === 'day') {
       assert.deepEqual(rows.map((row: {id: string}) => row.id), ['near-end', 'at-start']);
       return { role: 'assistant', content: dayAnswer };
@@ -1165,8 +1178,21 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
         createdAt: '2026-03-07T00:00:00Z', updatedAt, conversationId: 'main', status: 'completed', output: '' };
       server.app.store.put('runs', id, run);
     }
+    for (const [id, machineId, executorId] of [['target', 'Build-A', 'worker/1'], ['same-name', 'build-a', 'worker/1'],
+      ['other-executor', 'Build-A', 'worker/10'], ['legacy', undefined, 'worker/1'], ['other-project', 'Build-A', 'worker/1']] as const) {
+      const run: Run = { id, machineId, executorId, projectId: id === 'other-project' ? other.id : project.id, prompt: '账期核验',
+        createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', conversationId: 'main', status: 'completed', output: '' };
+      server.app.store.put('runs', id, run);
+    }
+    assert.equal(await ask(machineQuestion, '/projects/' + project.id + '/messages'), machineAnswer);
     const listRuns = server.app.contributions.list('tools').find(item => item.value.name === 'runs_list')!.value;
     const signal = new AbortController().signal;
+    const byExecutor = await listRuns.execute({ executorId: 'worker/1', projectId: project.id, query: '账期' }, signal) as {id:string; machineId?:string}[];
+    assert.deepEqual(byExecutor.map(hit => hit.id).sort(), ['legacy', 'same-name', 'target']);
+    assert.equal(byExecutor.find(hit => hit.id === 'legacy')?.machineId, undefined);
+    const byMachine = await listRuns.execute({ machineId: 'Build-A', projectId: project.id, query: '账期' }, signal) as {id:string}[];
+    assert.deepEqual(byMachine.map(hit => hit.id).sort(), ['other-executor', 'target']);
+    await assert.rejects(async () => listRuns.execute({ machineId: '' }, signal), /非空文本/);
     await assert.rejects(async () => listRuns.execute({ updatedFrom: '2026-03-08T00:00' }, signal), /带时区/);
     await assert.rejects(async () => listRuns.execute({ updatedFrom: day.updatedBefore, updatedBefore: day.updatedFrom }, signal), /起点必须早于终点/);
     assert.equal(await ask(dayQuestion, '/projects/' + project.id + '/messages'), dayAnswer);
@@ -1182,6 +1208,8 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
     await adapter.onMessage(dayQuestion, { ...source, messageId: 'day-question' });
     await t.waitFor(() => assert.ok(sent.includes(dayAnswer)));
     assert.equal(requests.filter(req => req.callId === 'detail').length, 2);
-    assert.equal(server.app.store.list('runs').length, 9);
+    await adapter.onMessage(machineQuestion, { ...source, messageId: 'machine-question' });
+    await t.waitFor(() => assert.ok(sent.includes(machineAnswer)));
+    assert.equal(server.app.store.list('runs').length, 14);
   } finally { await server.close(); }
 });

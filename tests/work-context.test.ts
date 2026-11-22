@@ -79,6 +79,7 @@ test('executor facts are scoped before association and counts, including shared 
   const project = buildWorkContext(store, { kind: 'project', projectId: 'A' }, undefined, live);
   assert.deepEqual(project.externalAgents!.items.map(e => e.id), ['eA']);
   assert.equal(project.runs!.items[0].machineId, 'shared');
+  assert.equal(project.runs!.items[0].machineIdSource, 'currentExecutor');
   assert.equal(project.runs!.items[0].sessionId, 'session-A');
   assert.equal(project.runs!.items[0].error.length, 400);
   assert.equal(project.runs!.items[0].resultSource, 'native');

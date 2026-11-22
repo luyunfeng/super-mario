@@ -97,6 +97,7 @@ export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: Bot
     todos: take(recent(open).map(t => ({ id: t.id, projectId: t.projectId, title: clip(t.title), dueAt: t.dueAt, waitingOn: clip(t.waitingOn), reminderAt: t.reminderAt, ...(waiting.has(t.id) ? { replyTracking: { status: waiting.get(t.id)!.status, cycle: waiting.get(t.id)!.cycle, matchedAt: waiting.get(t.id)!.hit?.processedAt } } : {}) }))),
     runs: { ...recentRuns, items: recentRuns.items.map(r => ({ review: live?.reviewEvidence?.(r), id: r.id, projectId: r.projectId, todoId: r.todoId, status: r.status,
       executorId: r.executorId, sessionId: r.sessionId, nativeSessionId: r.nativeSessionId, nativeResume: r.nativeResume, machineId: r.machineId ?? executors.get(r.executorId)?.machineId,
+      machineIdSource: r.machineId ? 'run' : executors.get(r.executorId)?.machineId ? 'currentExecutor' : 'unknown',
       error: clip(r.error, 400), prompt: clip(r.prompt), output: clip(r.output, 400), doneWhen: clip(r.doneWhen), resultSource: r.resultSource, progress: executionProgress(r.progress),
       blockedBy: decisions.filter(decision => decision.runId === r.id).map(({ collection, id, title, version }) => ({ collection, id, title, version })), updatedAt: r.updatedAt ?? r.createdAt })),
       counts: Object.fromEntries(['queued', 'running', 'completed', 'failed', 'cancelled', 'unknown'].map(status => [status, runs.filter(r => r.status === status).length])) },

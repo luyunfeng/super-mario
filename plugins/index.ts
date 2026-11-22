@@ -293,11 +293,12 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           }).sort((a, b) => Date.parse(a.dueAt!) - Date.parse(b.dueAt!)) as unknown as Json;
         }, { query: { type: 'string', description: '标题或备注中的关键词，多词用空格分隔' }, dueFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, dueBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' } }));
         const runStates = ['queued', 'running', 'completed', 'failed', 'cancelled', 'unknown'];
-        context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。query 按关键词检索目标、输出、错误、分支和执行 ID，返回含出处的摘录，最近更新在前。updatedFrom 含起点，updatedBefore 不含终点，按记录更新时间筛选。用 id 读取一条完整执行记录。status 可限定登记状态。worktreeRunId 仅列出在指定工作树中另起的执行。', async ({ worktreeRunId, query, status, id, projectId, todoId, updatedFrom, updatedBefore }, signal) => {
+        context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。query 按关键词检索目标、输出、错误、分支和执行 ID，返回含出处的摘录，最近更新在前。updatedFrom 含起点，updatedBefore 不含终点，按记录更新时间筛选。用 id 读取一条完整执行记录。machineId、executorId 精确匹配执行记录登记的 ID。status 可限定登记状态。worktreeRunId 仅列出在指定工作树中另起的执行。', async ({ worktreeRunId, query, status, id, projectId, todoId, machineId, executorId, updatedFrom, updatedBefore }, signal) => {
           signal.throwIfAborted();
           if (worktreeRunId !== undefined && (typeof worktreeRunId !== 'string' || !worktreeRunId.trim())) throw new Error('缺少工作树所属执行 ID');
           if (query !== undefined && (typeof query !== 'string' || !query.trim() || query.length > 500)) throw new Error('检索词须为 1 至 500 个字符');
           if (status !== undefined && (typeof status !== 'string' || !runStates.includes(status))) throw new Error('执行状态无效');
+          if ([machineId, executorId].some(value => value !== undefined && (typeof value !== 'string' || !value.trim()))) throw new Error('机器或执行器 ID 须为非空文本');
           const from = timeBoundary(updatedFrom, -Infinity, '执行查询起点');
           const before = timeBoundary(updatedBefore, Infinity, '执行查询终点');
           if (from >= before) throw new Error('执行查询起点必须早于终点');
@@ -308,6 +309,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
               if (!(updated >= from && updated < before)) return false;
             }
             return (worktreeRunId === undefined || run.worktreeRunId === worktreeRunId) && (status === undefined || run.status === status) &&
+              (machineId === undefined || run.machineId === machineId) && (executorId === undefined || run.executorId === executorId) &&
               (id === undefined || run.id === id) && (projectId === undefined || run.projectId === projectId) && (todoId === undefined || run.todoId === todoId);
           });
           if (bounded || query !== undefined) runs.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || a.id.localeCompare(b.id));
@@ -320,9 +322,11 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           return runs.flatMap(run => {
             const evidence = runEvidence(run, patterns);
             if (!evidence) return [];
-            return [{ id: run.id, projectId: run.projectId, todoId: run.todoId, status: run.status, updatedAt: run.updatedAt, evidence, webCitation: runCitation(run) }];
+            return [{ id: run.id, projectId: run.projectId, todoId: run.todoId, machineId: run.machineId, executorId: run.executorId, status: run.status, updatedAt: run.updatedAt, evidence, webCitation: runCitation(run) }];
           }) as unknown as Json;
         }, { worktreeRunId: { type: 'string' }, id: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' },
+          machineId: { type: 'string', description: '执行记录中登记的机器完整 ID，区分大小写。' },
+          executorId: { type: 'string', description: '执行器完整 ID，保留远端执行器 ID 中的机器前缀。' },
           updatedFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, updatedBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' },
           query: { type: 'string', description: '多个关键词用空格分隔，须全部出现在同一条执行记录中。' }, status: { type: 'string', enum: runStates } }));
         context.contribute('tools', 'executors_list', tool('executors_list', '列出执行器及真实可用状态。', async (_args, signal) => {
