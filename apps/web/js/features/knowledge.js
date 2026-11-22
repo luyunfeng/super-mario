@@ -25,6 +25,7 @@ function revisionHistory(api, entry, loadDraft, selectedCommit) {
       status.replaceWith(h('article', { class: 'stack' },
         h('strong', null, revision.entry.title),
         h('small', null, revision.entry.updatedAt, ' · ', revision.commit.slice(0, 8)),
+        h('span', { class: 'small' }, '标签：' + (revision.entry.tags?.join('、') || '无')),
         h('pre', { class: 'small', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, revision.entry.content),
         Button({ label: '将此版载入草稿', size: 'sm', onClick: () => loadDraft(revision.entry) })));
       if (revision.previous) {
@@ -140,13 +141,15 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   }
 
   async function loadDraft(revision) {
-    if (title.value === revision.title && content.value === revision.content) return;
-    if (title.value !== entry.title || content.value !== entry.content) {
-      const replaceDraft = await confirmDialog({ title: '替换当前草稿？', message: '载入这次修订会替换编辑框中的标题和内容。', confirmLabel: '载入修订' });
+    const revisionTags = (revision.tags ?? []).join('\n');
+    if (title.value === revision.title && content.value === revision.content && tags.value === revisionTags) return;
+    if (title.value !== entry.title || content.value !== entry.content || tags.value !== (entry.tags ?? []).join('\n')) {
+      const replaceDraft = await confirmDialog({ title: '替换当前草稿？', message: '载入这次修订会替换编辑框中的标题、正文和标签。', confirmLabel: '载入修订' });
       if (!replaceDraft) return;
     }
     title.value = revision.title;
     content.value = revision.content;
+    tags.value = revisionTags;
     content.focus();
   }
 

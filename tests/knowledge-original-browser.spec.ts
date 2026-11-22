@@ -91,7 +91,7 @@ test('从记忆详情对照两次已保存修订，变更归属后不展示旧�
   const created = await page.request.post(url, { headers, data: { layer: 'personal', title: '修订核对', content: '会议初步决定甲' } });
   expect(created.ok()).toBe(true);
   const { id } = await created.json();
-  const saved = await page.request.patch(url + '/' + id, { headers, data: { title: '最终决定', content: '会议改定乙' } });
+  const saved = await page.request.patch(url + '/' + id, { headers, data: { title: '最终决定', content: '会议改定乙', tags: ['已复核'] } });
   expect(saved.ok()).toBe(true);
   await page.goto(server.url + '/#memory?token=fixture&entry=' + id);
   const dialog = page.getByRole('dialog', { name: '编辑记忆' });
@@ -100,15 +100,19 @@ test('从记忆详情对照两次已保存修订，变更归属后不展示旧�
   await dialog.getByRole('button', { name: '查看上一版' }).click();
   await expect(dialog.locator('pre')).toHaveText(['会议改定乙', '会议初步决定甲']);
   const editor = dialog.locator('textarea[name=content]');
-  await editor.fill('尚未保存的说明');
+  const tags = dialog.locator('[name=tags]');
+  await expect(dialog.locator('article').first()).toContainText('标签：已复核');
+  await expect(dialog.locator('article').last()).toContainText('标签：无');
+  await tags.fill('尚未保存的标签');
   const restore = dialog.locator('article').filter({ hasText: '会议初步决定甲' }).getByRole('button', { name: '将此版载入草稿' });
   await restore.click();
   const confirm = page.getByRole('dialog', { name: '替换当前草稿？' });
   await confirm.getByRole('button', { name: '取消' }).click();
-  await expect(editor).toHaveValue('尚未保存的说明');
+  await expect(tags).toHaveValue('尚未保存的标签');
   await restore.click();
   await confirm.getByRole('button', { name: '载入修订' }).click();
   await expect(editor).toHaveValue('会议初步决定甲');
+  await expect(tags).toHaveValue('');
   await expect(dialog.locator('input[name=title]')).toHaveValue('修订核对');
   const persisted = async () => (await server.app.knowledge().list()).find(item => item.id === id);
   expect((await persisted())?.content).toBe('会议改定乙');
@@ -124,6 +128,8 @@ test('从记忆详情对照两次已保存修订，变更归属后不展示旧�
   const latest = await (await page.request.get(url + '/' + id + '/revision', { headers })).json();
   const previous = await (await page.request.get(url + '/' + id + '/revision?commit=' + latest.revision.previous, { headers })).json();
   expect(previous.revision.entry.content).toBe('他人补充丙');
+  expect(previous.revision.entry.tags).toEqual(['已复核']);
+  expect(latest.revision.entry.tags ?? []).toEqual([]);
   const route = '#memory?entry=' + id + '&revision=' + previous.revision.commit;
   server.app.store.put('messages', 'revision-citation', { id: 'revision-citation', conversationId: 'main', role: 'assistant', status: 'done',
     createdAt: new Date().toISOString(), text: '见[查看修订](' + route + ')' });
