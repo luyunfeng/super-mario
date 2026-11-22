@@ -329,7 +329,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         const source = (entry: KnowledgeEntry) => JSON.stringify({
           id: entry.id, layer: entry.layer, projectId: entry.projectId ?? null,
         });
-        const render = (entry: KnowledgeEntry) => `### ${entry.title}\n来源：${source(entry)}\n${entry.content}`;
+        const render = (entry: KnowledgeEntry) => `### ${entry.title}\n来源：${source(entry)}\n${entry.confirmedFacts ? '用户确认的事实：\n' + entry.confirmedFacts + '\n正文：\n' : ''}${entry.content}`;
         const workContext = buildWorkContext(store, scope, currentProjectId, { reviewEvidence: options.reviewEvidence, executors: options.executors?.(), inboxConversations:options.inboxConversations?.() });
         const workDecisionsData = options.workDecisions ? options.workDecisions(scope, currentProjectId) : undefined;
         const projectContextData = currentProjectId && options.projectContext ? options.projectContext(currentProjectId) : undefined;

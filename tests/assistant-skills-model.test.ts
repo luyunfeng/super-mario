@@ -581,12 +581,14 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
       assert.match(req.system, /tag 匹配完整标签/);
       assert.match(req.system, /按 importance 筛选/);
       assert.match(req.system, /未评分与 0 分分开/);
+      assert.match(req.system, /优先参考当前确认文本/);
       assert.match(req.system, /比较两版返回的 tags/);
       return call('knowledge_list', { tag: '样本核对', importance: 'P1', minRelevance: 80 }, 'tagged');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[]).map(p => p.text).join('');
     if (req.callId === 'tagged') {
       assert.deepEqual(JSON.parse(raw).map((page: {id:string}) => page.id), [pageId]);
+      assert.equal(JSON.parse(raw)[0].confirmedFacts, '核对时采用样本丙');
       return call('knowledge_revision', { pageId: foreignId }, 'foreign');
     }
     if (req.callId === 'foreign') {
@@ -622,7 +624,7 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
   try {
     const project = await api('/projects', { name: '修订项目' });
     const other = await api('/projects', { name: '独立项目' });
-    const input = { layer: 'project', projectId: project.id, importance: 'P1', relevance: 80, tags: ['样本核对'], title: '验收样本' };
+    const input = { layer: 'project', projectId: project.id, importance: 'P1', relevance: 80, confirmedFacts: '核对时采用样本丙', tags: ['样本核对'], title: '验收样本' };
     pageId = (await api('/knowledge', { ...input, tags: ['待复核'], content: '测'.repeat(4000) + '样本甲' })).id;
     await api('/knowledge', { ...input, id: pageId, tags: ['待复核'], content: '样本乙' });
     await api('/knowledge', { ...input, id: pageId, content: '样本乙' });

@@ -354,10 +354,11 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
           '整理会议材料时，按议题区分已决定事项、提议、行动项和未决问题。保留支撑决定的原文时间戳、行号或段落名（仅在来源提供时引用）。',
           '行动项仅记录已明确的负责人和期限，缺失写待确认。没有说话人标识时不要把“我”归为用户。若同一议题的后文明确改定，标出改定前后的依据；只有意见分歧时保留分歧。',
         ] : []),
+        'confirmedFacts 为用户手工确认且只读，来源与其冲突时在正文中注明分歧及依据，不能把推断写成用户已确认。',
         'existingPages 中 readOnly=true 的条目仅展示节选。遇到相关新材料时另建知识页并注明关联，完整页才能更新。',
         'globalGuidance 仅用于指导工作方式，不是炼化来源或可修改知识页。只能更新 existingPages 或在 destination 新建页，不能修改全局知识。',
         '返回 {"pages":[{"id":"仅更新已有页时填写","title":"中文标题","content":"Markdown知识正文"}],"summary":"本次整理说明"}。',
-        JSON.stringify({ destination: { layer: next.layer, projectId: next.projectId }, source, globalGuidance: globalGuidance.slice(0, 60).map(page => ({ title: page.title, content: page.content.slice(0, 8000) })), existingPages: presentedPages.map(page => ({ id: page.id, title: page.title, content: page.content.slice(0, existingPageLimit), readOnly: page.content.length > existingPageLimit })) })].join('\n');
+        JSON.stringify({ destination: { layer: next.layer, projectId: next.projectId }, source, globalGuidance: globalGuidance.slice(0, 60).map(page => ({ title: page.title, ...(page.confirmedFacts ? { confirmedFacts: page.confirmedFacts.slice(0, 8000) } : {}), content: page.content.slice(0, 8000) })), existingPages: presentedPages.map(page => ({ id: page.id, title: page.title, ...(page.confirmedFacts ? { confirmedFacts: page.confirmedFacts.slice(0, 8000) } : {}), content: page.content.slice(0, existingPageLimit), readOnly: page.content.length > existingPageLimit })) })].join('\n');
       if (closed) return;
       try { checkDestination(next); } catch (error) { save(next, { status: 'failed', error: error instanceof Error ? error.message : String(error) }); return; }
       save(next, { status: 'running', error: undefined, knowledgeVersions: Object.fromEntries(presentedPages.filter(page => page.content.length <= existingPageLimit).map(page => [page.id, page.updatedAt])) });

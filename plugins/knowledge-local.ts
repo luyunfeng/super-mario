@@ -36,6 +36,8 @@ function validateRelevance(value: number | undefined): void {
 }
 
 function validateEntry(entry: KnowledgeEntry): void {
+  if (entry.confirmedFacts !== undefined && (typeof entry.confirmedFacts !== 'string' || entry.confirmedFacts.length > 16000))
+    throw Object.assign(new Error('已确认事实须为不超过 16000 字的文本'), { status: 400 });
   validateRelevance(entry.relevance);
   if (entry.importance !== undefined && !['P0', 'P1', 'P2', 'P3'].includes(entry.importance))
     throw Object.assign(new Error('重要级必须是 P0、P1、P2 或 P3'), { status: 400 });
@@ -141,7 +143,7 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         if (!keywords.length) return true;
         const title = entry.title.normalize('NFC').toLowerCase();
         if (keywords.every(keyword => title.includes(keyword))) titleHits.add(entry.id);
-        const body = entry.content.normalize('NFC').toLowerCase();
+        const body = [entry.confirmedFacts, entry.content].filter(Boolean).join('\n').normalize('NFC').toLowerCase();
         if (!titleHits.has(entry.id) && !keywords.every(word => title.includes(word) || body.includes(word))) return false;
         let count = 0;
         for (const line of body.split('\n')) {
@@ -174,6 +176,8 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         throw Object.assign(new Error('知识页已有新版本或已删除，请先核对最新内容'), { status: 409 });
       if (prior && Date.parse(prior.updatedAt) >= Date.parse(entry.updatedAt))
         entry.updatedAt = new Date(Date.parse(prior.updatedAt) + 1).toISOString();
+      const facts = input.confirmedFacts === undefined ? prior?.confirmedFacts : input.confirmedFacts;
+      if (facts !== undefined && facts !== '') entry.confirmedFacts = facts;
       const relevance = input.relevance === undefined ? prior?.relevance : input.relevance;
       if (relevance != null) entry.relevance = relevance;
       const importance = input.importance === undefined ? prior?.importance : input.importance;

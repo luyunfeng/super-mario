@@ -114,7 +114,7 @@ export function createMemoryPage({ api, store, router, scope }) {
         if (!words.length) return true;
         if (matches(item.title)) titleHits.add(item.id);
         let count = 0;
-        for (const line of item.content.split(/\r\n|[\n\r]/)) {
+        for (const line of [item.confirmedFacts, item.content].filter(Boolean).join('\n').split(/\r\n|[\n\r]/)) {
           if (matches(line) && ++count === 99) break;
         }
         hitCounts.set(item.id, count);
@@ -130,7 +130,7 @@ export function createMemoryPage({ api, store, router, scope }) {
       list._keyed = undefined;
     } else {
       if (!list._keyed) list.replaceChildren();
-      keyedList(list, rows, item => item.id, item => knowledgeRow(item, { pattern, matches, projectName: names.get(item.projectId), onOpen: (entry, contentLine) => openKnowledgeDrawer({ api, store, router, scope, entry, contentLine }) }),
+      keyedList(list, rows, item => item.id, item => knowledgeRow(item, { pattern, matches, projectName: names.get(item.projectId), onOpen: (entry, contentLine, field) => openKnowledgeDrawer({ api, store, router, scope, entry, contentLine, field }) }),
         item => `${item.id}:${item.updatedAt}:${names.get(item.projectId)}:${query}`);
     }
     const pending = pendingJobs(curator).length;

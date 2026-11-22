@@ -235,12 +235,20 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   await row.click();
   const drawer = page.getByRole('dialog', { name: '编辑记忆' });
   await expect(drawer.locator('textarea[name=content]')).toHaveValue(content);
+  await drawer.locator('[name=confirmedFacts]').fill('第一项\n最终验收日为周五');
   await drawer.locator('[name=relevance]').fill('80');
   await drawer.locator('[name=importance]').selectOption('P0');
   await drawer.locator('[name=tags]').fill('待评审\n接口\n待评审');
   await drawer.getByRole('button', { name: '保存', exact: true }).click();
   await expect(drawer).toHaveCount(0);
   await page.reload();
+  await search.fill('最终验收日');
+  await row.getByRole('button', { name: '已确认事实 · 第 2 行 · 最终验收日为周五' }).click();
+  const facts = drawer.locator('[name=confirmedFacts]');
+  await expect(facts).toBeFocused();
+  expect(await facts.evaluate((el: HTMLTextAreaElement) => el.value.slice(el.selectionStart, el.selectionEnd))).toBe('最终验收日为周五');
+  await drawer.getByRole('button', { name: '关闭' }).click();
+  await search.fill('');
   const filter = page.getByRole('combobox', { name: '按标签筛选' });
   await expect(page.locator('.knowledge-item .item__title').filter({ hasText: /接口 \[V2\] 约定|相关参考|次要参考|待分类参考/ })).toHaveText([title, '相关参考', '次要参考', '待分类参考']);
   const levels = page.getByRole('combobox', { name: '按重要级筛选' });
@@ -267,6 +275,8 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   await page.reload();
   await expect(row).toContainText('修正正文');
   await row.click();
+  await expect(facts).toHaveValue('第一项\n最终验收日为周五');
+  await facts.fill('');
   await expect(drawer.locator('[name=relevance]')).toHaveValue('80');
   await drawer.locator('[name=relevance]').fill('101');
   await drawer.getByRole('button', { name: '保存', exact: true }).click();
@@ -280,4 +290,5 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   expect(await server.app.knowledge().list({ tag: '待评审' })).toEqual([]);
   expect((await server.app.knowledge().list({ importance: 'P0' })).some(p => p.id === saved!.id)).toBe(false);
   expect(await server.app.knowledge().list({ minRelevance: 80 })).toEqual([]);
+  expect(await server.app.knowledge().list({ query: '最终验收日' })).toEqual([]);
 });

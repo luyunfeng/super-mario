@@ -314,7 +314,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             if (!revision) return { available: false } as Json;
             const { title, content, updatedAt } = revision.entry;
             const chars = Array.from(content), end = offset + 4000;
-            return { available: true, title, relevance: revision.entry.relevance ?? null, importance: revision.entry.importance ?? null, tags: revision.entry.tags ?? [], savedAt: updatedAt, commit: revision.commit, previous: revision.previous ?? null,
+            return { available: true, title, confirmedFacts: revision.entry.confirmedFacts ?? '', relevance: revision.entry.relevance ?? null, importance: revision.entry.importance ?? null, tags: revision.entry.tags ?? [], savedAt: updatedAt, commit: revision.commit, previous: revision.previous ?? null,
               webCitation: `[查看修订](#memory?entry=${encodeURIComponent(pageId)}&revision=${revision.commit})`,
               text: chars.slice(offset, end).join(''), nextOffset: end < chars.length ? end : null } as Json;
           }, { pageId: { type: 'string' }, commit: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
