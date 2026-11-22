@@ -1274,3 +1274,50 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
     assert.equal(server.app.todos().find(todo => todo.id === pending.id)?.completedAt, undefined);
   } finally { await server.close(); }
 });
+
+test('Web 和飞书读取指定待办详情及决定，不混入同名或跨项目事项', async t => {
+  let adapter!: FeishuOptions;
+  let id = '', foreign = '';
+  const sent: string[] = [];
+  const { server, api, ask, requests } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /同名时结合项目和期限请用户选定/);
+      return call('todo_detail', { todoId: JSON.stringify(req.content).includes('越界') ? foreign : id }, 'detail');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    if (raw.includes('不属于当前作用域')) return { role: 'assistant', content: '当前项目无法读取该事项。' };
+    const detail = JSON.parse(raw);
+    assert.equal(detail.todo.id, id);
+    assert.match(detail.webCitation, /todos\/detail\//);
+    assert.deepEqual(detail.decisions.map((d: {active:boolean}) => d.active).sort(), [false, true]);
+    const active = detail.decisions.find((d: {active:boolean}) => d.active);
+    return { role: 'assistant', content: detail.todo.notes + '，等待' + detail.todo.waitingOn + '，当前决定为' + active.text };
+  }, options => {
+    adapter = options;
+    return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    const project = await api('/projects', { name: '汇总' });
+    id = (await api('/todos', { title: '复核', projectId: project.id, notes: '核对明细', waitingOn: '复核员' })).id;
+    await api('/todos', { title: '复核', projectId: project.id, notes: '核对批次' });
+    foreign = (await api('/todos', { title: '复核', notes: '独立范围备注' })).id;
+    const previous = server.app.todoDecisions.add(id, '先核对甲列');
+    server.app.todoDecisions.withdraw(id, previous.id);
+    server.app.todoDecisions.add(id, '先核对乙列');
+    const question = '读取待办 ' + id + ' 的备注、等待对象和当前决定';
+    const answer = '核对明细，等待复核员，当前决定为先核对乙列';
+    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), answer);
+    const bot = await api('/feishu/bots', { name: '详情查询', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(question, { ...source, messageId: 'question' });
+    await t.waitFor(() => assert.ok(sent.includes(answer)));
+    await adapter.onMessage('越界查询 ' + foreign, { ...source, messageId: 'foreign' });
+    await t.waitFor(() => assert.ok(sent.includes('当前项目无法读取该事项。')));
+    const results = requests.filter(r => r.callId === 'detail');
+    assert.equal(results.length, 3);
+    assert.doesNotMatch(JSON.stringify(results.map(r => r.content)), /独立范围备注|核对批次/);
+  } finally { await server.close(); }
+});

@@ -185,6 +185,7 @@ export interface SystemActions {
   listExecutors?(): Json;
   status?(id: string): Json;
   readRun?(id: string): Promise<Json>;
+  todoDetail?(input: Record<string, unknown>): Json;
   todoHistory?(input: Record<string, unknown>): Json;
   inputRun?(id: string, text: string): Promise<Json>;
   cancelRun?(id: string): Promise<{ accepted: boolean }>;
@@ -207,6 +208,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         // Business mutations stay in core services; tools only adapt model arguments.
         if (actions) {
           for (const [name, action, description, properties] of [
+            ['todo_detail', actions.todoDetail, '按唯一待办 ID 读取当前备注、期限、提醒、等待对象和已记录决定。active=false 的决定已撤回。', { todoId: { type: 'string' } }],
             ['todo_history', actions.todoHistory, '按待办读取最近20轮执行及用户验收或返工决定，decisions 是历史决定，review 是该轮当前验收状态，含返工派发回执。读取更早记录时将 nextBefore 作为 before。', { todoId: { type: 'string' }, before: { type: 'string' } }],
             ['work_decisions_list', actions.workDecisionsList, '读取当前范围的工作决定及版本；不是原始聊天，纠正后旧版本不可沿用。', { projectId: { type: 'string' }, todoId: { type: 'string' } }],
             ['work_decision_record', actions.workDecisionRecord, '按当前真实用户明确要求记录一个工作决定摘要；必须提供稳定key和内容，不自动推断私聊决定。', { key: { type: 'string' }, text: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' } }],
