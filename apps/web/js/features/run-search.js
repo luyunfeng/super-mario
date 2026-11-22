@@ -12,7 +12,7 @@ const lower = (...parts) => parts.filter(Boolean).join('\n').toLowerCase();
 export function searchRunHits(query, snapshot, now = Date.now()) {
   const terms = [];
   const filters = new Map();
-  let since;
+  let since, before;
   for (const word of query.trim().toLowerCase().split(/\s+/)) {
     const colon = word.indexOf(':');
     const key = word.slice(0, colon);
@@ -20,6 +20,20 @@ export function searchRunHits(query, snapshot, now = Date.now()) {
     const field = dimensions.get(key);
     if (colon > 0 && ['since', 'after', 'updated'].includes(key) && windows.has(value)) {
       since = now - windows.get(value) * 86400000;
+      before = now + 1;
+    } else if (word === '最近七天') {
+      since = now - 7 * 86400000;
+      before = now + 1;
+    } else if (word === '昨天' || word === '今天' || word === '本周') {
+      // Use local date arithmetic: consecutive midnights may be 23 or 25 hours apart.
+      const start = new Date(now);
+      start.setHours(0, 0, 0, 0);
+      if (word === '昨天') start.setDate(start.getDate() - 1);
+      if (word === '本周') start.setDate(start.getDate() - (start.getDay() + 6) % 7);
+      const end = new Date(start);
+      end.setDate(end.getDate() + (word === '本周' ? 7 : 1));
+      since = start.getTime();
+      before = end.getTime();
     } else if (colon > 0 && field && value && (field !== 'state' || states.has(value) || value === 'working')) {
       if (!filters.has(field)) filters.set(field, []);
       filters.get(field).push(field === 'state' && value === 'working' ? 'running' : value);
@@ -34,7 +48,10 @@ export function searchRunHits(query, snapshot, now = Date.now()) {
   const patterns = terms.map(term => new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'));
   const hits = [];
   for (const run of snapshot.runs ?? []) {
-    if (since !== undefined && !(Date.parse(run.updatedAt) >= since)) continue;
+    if (since !== undefined) {
+      const updated = Date.parse(run.updatedAt);
+      if (!(updated >= since && updated < before)) continue;
+    }
     const fields = {
       machine: lower(run.machineId, machines.get(run.machineId)),
       project: lower(run.projectId, projects.get(run.projectId), run.cwd),

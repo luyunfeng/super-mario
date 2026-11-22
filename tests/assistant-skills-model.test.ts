@@ -1106,15 +1106,27 @@ test('Web 与飞书项目助手检索项目原话，范围固定且排除当前�
 test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登记状态', async t => {
   let adapter!: FeishuOptions;
   const sent: string[] = [];
+  const day = { updatedFrom: '2026-03-08T00:00:00-05:00', updatedBefore: '2026-03-09T00:00:00-04:00' };
+  const dayQuestion = '纽约当地 3 月 8 日更新过哪些执行？按 2026 年查询。';
+  const dayAnswer = '纽约当地 2026-03-08 更新了两条执行。';
   const answer = '最近更新的记录为 recovered，日志记有 E[503]，登记状态为 completed。';
   const { server, api, ask, requests } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.match(req.system, /日志出现“失败”不能证明执行状态为 failed/);
+      if (JSON.stringify(req.content).includes('纽约当地')) {
+        assert.match(req.system, /昨天按当地两次午夜取界/);
+        assert.match(req.system, /不能当作报错发生时间/);
+        return call('runs_list', day, 'day');
+      }
       if (JSON.stringify(req.content).includes('只查失败状态')) return call('runs_list', { query: 'E[503]', status: 'failed' }, 'failed-only');
       return call('runs_list', { query: 'E[503] 汇总' }, 'find');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
     const rows = JSON.parse(raw);
+    if (req.callId === 'day') {
+      assert.deepEqual(rows.map((row: {id: string}) => row.id), ['near-end', 'at-start']);
+      return { role: 'assistant', content: dayAnswer };
+    }
     if (req.callId === 'find') {
       assert.deepEqual(rows.map((r: {id: string}) => r.id), ['recovered', 'failed']);
       assert.equal(rows[0].webCitation, '[查看执行](#projects/' + rows[0].projectId + '/runs/recovered)');
@@ -1147,6 +1159,17 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
         output: id === 'recovered' ? 'E[503] 失败后已恢复' : '', error: id === 'failed' ? 'E[503] 无响应' : id === 'foreign' ? 'E[503] 其他项目私有内容' : undefined };
       server.app.store.put('runs', id, run);
     }
+    for (const [id, updatedAt] of [['prior', '2026-03-08T04:59:59.999Z'], ['at-start', day.updatedFrom],
+      ['near-end', '2026-03-09T03:59:59.999Z'], ['at-end', day.updatedBefore], ['other-day-project', day.updatedFrom]]) {
+      const run: Run = { id, projectId: id === 'other-day-project' ? other.id : project.id, executorId: 'fixture', prompt: '时间范围样例',
+        createdAt: '2026-03-07T00:00:00Z', updatedAt, conversationId: 'main', status: 'completed', output: '' };
+      server.app.store.put('runs', id, run);
+    }
+    const listRuns = server.app.contributions.list('tools').find(item => item.value.name === 'runs_list')!.value;
+    const signal = new AbortController().signal;
+    await assert.rejects(async () => listRuns.execute({ updatedFrom: '2026-03-08T00:00' }, signal), /带时区/);
+    await assert.rejects(async () => listRuns.execute({ updatedFrom: day.updatedBefore, updatedBefore: day.updatedFrom }, signal), /起点必须早于终点/);
+    assert.equal(await ask(dayQuestion, '/projects/' + project.id + '/messages'), dayAnswer);
     const question = '上次哪条汇总执行遇到了 E[503]，后来怎样？';
     assert.equal(await ask(question, '/projects/' + project.id + '/messages'), answer + '[查看执行](#projects/' + project.id + '/runs/recovered)');
     assert.equal(await ask('只查失败状态的 E[503] 记录。', '/projects/' + project.id + '/messages'), '登记失败的记录为 failed。');
@@ -1156,7 +1179,9 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
     await adapter.onMessage(question, { ...source, messageId: 'question' });
     await t.waitFor(() => assert.ok(sent.includes(answer + new Date(2000).toISOString())));
+    await adapter.onMessage(dayQuestion, { ...source, messageId: 'day-question' });
+    await t.waitFor(() => assert.ok(sent.includes(dayAnswer)));
     assert.equal(requests.filter(req => req.callId === 'detail').length, 2);
-    assert.equal(server.app.store.list('runs').length, 4);
+    assert.equal(server.app.store.list('runs').length, 9);
   } finally { await server.close(); }
 });

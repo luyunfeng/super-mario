@@ -81,7 +81,7 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await expect(cited).toContainText(keyword);
     await page.goBack();
     await expect(sourceLink).toBeVisible();
-    await search.fill('复核凭证');
+    await search.fill('最近七天 复核凭证');
     const runHits = results.getByRole('link');
     await expect(runHits.first()).toHaveText('复核凭证明细');
     await results.getByRole('button', { name: '查看全部匹配执行' }).click();

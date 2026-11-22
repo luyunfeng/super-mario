@@ -37,3 +37,15 @@ test('title, project and evidence hits rank in order and keep literal branch and
   assert.equal(combined.length, 1);
   assert.equal(combined[0].excerpt, '错误 · 需要复核');
 });
+
+test('local calendar tokens select half-open date intervals and a rolling week excludes future updates', () => {
+  const now = new Date(2026, 2, 9, 12).getTime(); // Monday after the US spring DST change.
+  const runs = [['prior', new Date(2026, 2, 7, 23, 59)], ['midnight', new Date(2026, 2, 8)],
+    ['late', new Date(2026, 2, 8, 23, 59)], ['today', new Date(2026, 2, 9)], ['next', new Date(2026, 2, 16)]]
+    .map(([id, time]) => ({ id, prompt: '核对', updatedAt: (time as Date).toISOString() }));
+  const ids = (query: string) => searchRunHits(query, { runs }, now).map((hit: {run: {id: string}}) => hit.run.id);
+  assert.deepEqual(ids('昨天 核对'), ['midnight', 'late']);
+  assert.deepEqual(ids('今天'), ['today']);
+  assert.deepEqual(ids('本周'), ['today']);
+  assert.deepEqual(ids('最近七天'), ['prior', 'midnight', 'late', 'today']);
+});

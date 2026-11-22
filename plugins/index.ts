@@ -116,7 +116,7 @@ function demoExecutor(): Executor {
   };
 }
 
-function dueBoundary(value: Json | undefined, fallback: number, label = '待办查询边界'): number {
+function timeBoundary(value: Json | undefined, fallback: number, label = '待办查询边界'): number {
   if (value === undefined) return fallback;
   if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
     const time = Date.parse(value);
@@ -284,8 +284,8 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             return words.every(word => text.includes(word));
           });
           if (args.dueFrom === undefined && args.dueBefore === undefined) return todos as unknown as Json;
-          const from = dueBoundary(args.dueFrom, -Infinity);
-          const before = dueBoundary(args.dueBefore, Infinity);
+          const from = timeBoundary(args.dueFrom, -Infinity);
+          const before = timeBoundary(args.dueBefore, Infinity);
           if (from >= before) throw new Error('待办查询起点必须早于终点');
           return todos.filter(todo => {
             const due = Date.parse(todo.dueAt ?? '');
@@ -293,26 +293,37 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           }).sort((a, b) => Date.parse(a.dueAt!) - Date.parse(b.dueAt!)) as unknown as Json;
         }, { query: { type: 'string', description: '标题或备注中的关键词，多词用空格分隔' }, dueFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, dueBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' } }));
         const runStates = ['queued', 'running', 'completed', 'failed', 'cancelled', 'unknown'];
-        context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。query 按关键词检索目标、输出、错误、分支和执行 ID，返回含出处的摘录，最近更新在前。用 id 读取一条完整执行记录。status 可限定登记状态。worktreeRunId 仅列出在指定工作树中另起的执行。', async ({ worktreeRunId, query, status, id, projectId, todoId }, signal) => {
+        context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。query 按关键词检索目标、输出、错误、分支和执行 ID，返回含出处的摘录，最近更新在前。updatedFrom 含起点，updatedBefore 不含终点，按记录更新时间筛选。用 id 读取一条完整执行记录。status 可限定登记状态。worktreeRunId 仅列出在指定工作树中另起的执行。', async ({ worktreeRunId, query, status, id, projectId, todoId, updatedFrom, updatedBefore }, signal) => {
           signal.throwIfAborted();
           if (worktreeRunId !== undefined && (typeof worktreeRunId !== 'string' || !worktreeRunId.trim())) throw new Error('缺少工作树所属执行 ID');
           if (query !== undefined && (typeof query !== 'string' || !query.trim() || query.length > 500)) throw new Error('检索词须为 1 至 500 个字符');
           if (status !== undefined && (typeof status !== 'string' || !runStates.includes(status))) throw new Error('执行状态无效');
-          const runs = context.store.list<Run>('runs').filter(run =>
-            (worktreeRunId === undefined || run.worktreeRunId === worktreeRunId) && (status === undefined || run.status === status) &&
-            (id === undefined || run.id === id) && (projectId === undefined || run.projectId === projectId) && (todoId === undefined || run.todoId === todoId));
+          const from = timeBoundary(updatedFrom, -Infinity, '执行查询起点');
+          const before = timeBoundary(updatedBefore, Infinity, '执行查询终点');
+          if (from >= before) throw new Error('执行查询起点必须早于终点');
+          const bounded = updatedFrom !== undefined || updatedBefore !== undefined;
+          const runs = context.store.list<Run>('runs').filter(run => {
+            if (bounded) {
+              const updated = Date.parse(run.updatedAt);
+              if (!(updated >= from && updated < before)) return false;
+            }
+            return (worktreeRunId === undefined || run.worktreeRunId === worktreeRunId) && (status === undefined || run.status === status) &&
+              (id === undefined || run.id === id) && (projectId === undefined || run.projectId === projectId) && (todoId === undefined || run.todoId === todoId);
+          });
+          if (bounded || query !== undefined) runs.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || a.id.localeCompare(b.id));
           if (typeof query !== 'string') {
-            if (worktreeRunId !== undefined) runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+            if (!bounded && worktreeRunId !== undefined) runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
             if (id !== undefined) return runs.map(run => ({ ...run, webCitation: runCitation(run) })) as unknown as Json;
             return runs as unknown as Json;
           }
           const patterns = [...new Set(query.trim().split(/\s+/u))].map(term => new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'));
-          return runs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id)).flatMap(run => {
+          return runs.flatMap(run => {
             const evidence = runEvidence(run, patterns);
             if (!evidence) return [];
             return [{ id: run.id, projectId: run.projectId, todoId: run.todoId, status: run.status, updatedAt: run.updatedAt, evidence, webCitation: runCitation(run) }];
           }) as unknown as Json;
         }, { worktreeRunId: { type: 'string' }, id: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' },
+          updatedFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, updatedBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' },
           query: { type: 'string', description: '多个关键词用空格分隔，须全部出现在同一条执行记录中。' }, status: { type: 'string', enum: runStates } }));
         context.contribute('tools', 'executors_list', tool('executors_list', '列出执行器及真实可用状态。', async (_args, signal) => {
           signal.throwIfAborted();
