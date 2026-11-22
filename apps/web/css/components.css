@@ -98,6 +98,8 @@
 .item--click { cursor: pointer; border-radius: var(--radius-sm); padding-left: 8px; padding-right: 8px; margin: 2px -8px; transition: background .1s; }
 .item--click:hover { background: var(--surface-hover); }
 .item__main { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.knowledge-hit { text-align: start; font: inherit; color: inherit; background: transparent; border: 0; padding: 0; cursor: pointer; }
+.knowledge-hit:hover { text-decoration: underline; }
 .item__title { font-weight: 600; overflow-wrap: anywhere; }
 .item__meta { font-size: 13px; color: var(--text-3); overflow-wrap: anywhere; }
 .item__end { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: none; max-width: 100%; }

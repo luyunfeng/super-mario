@@ -86,7 +86,7 @@ function originalSources(api, entry, selected, line, ask) {
   return section;
 }
 
-export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId, line, selectedCommit, defaults = {}, onSaved }) {
+export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId, line, selectedCommit, contentLine, defaults = {}, onSaved }) {
   const projects = (store.view.snapshot?.projects ?? []).filter(item => !item.archivedAt);
   const layer = Select({ options: Object.entries(layerNames), value: entry?.layer ?? defaults.layer ?? 'personal', name: 'layer' });
   const project = Select({ options: [['', '请选择项目'], ...projects.map(item => [item.id, item.name])], value: entry?.projectId ?? defaults.projectId ?? '', name: 'projectId' });
@@ -205,6 +205,15 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();
+  if (Number.isInteger(contentLine)) {
+    // The textarea normalizes line endings. Compute offsets in its own value.
+    const lines = content.value.split('\n');
+    if (contentLine >= 1 && contentLine <= lines.length) {
+      const start = lines.slice(0, contentLine - 1).reduce((offset, text) => offset + text.length + 1, 0);
+      content.focus();
+      content.setSelectionRange(start, start + lines[contentLine - 1].length);
+    }
+  }
   return drawer;
 }
 
@@ -223,23 +232,46 @@ export function knowledgeRow(entry, { projectName, onOpen, pattern, matches }) {
       return [...parts, text.slice(end)];
     }
     title = highlight(title.normalize('NFC'));
-    for (const raw of entry.content.split('\n')) {
-      const line = raw.normalize('NFC');
-      if (!matches(line)) continue;
-      const first = line.matchAll(pattern).next().value;
-      if (!first) continue;
-      const start = Math.max(0, first.index - 30);
-      const end = Math.min(line.length, first.index + first[0].length + 60);
-      excerpts.push([start ? '…' : '', highlight(line.slice(start, end)), end < line.length ? '…' : '']);
-      if (excerpts.length === 2) break;
+    function* matchingLines() {
+      for (const [index, raw] of entry.content.split(/\r\n|[\n\r]/).entries()) {
+        const line = raw.normalize('NFC');
+        if (!matches(line)) continue;
+        const first = line.matchAll(pattern).next().value;
+        if (!first) continue;
+        const start = Math.max(0, first.index - 30);
+        const end = Math.min(line.length, first.index + first[0].length + 60);
+        yield h('button', { type: 'button', class: 'knowledge-hit item__meta truncate', onclick: () => onOpen(entry, index + 1) },
+          h('span', { class: 'muted' }, `第 ${index + 1} 行 · `), start ? '…' : '', highlight(line.slice(start, end)), end < line.length ? '…' : '');
+      }
+    }
+    const hits = matchingLines();
+    for (let i = 0; i < 2; i++) {
+      const hit = hits.next();
+      if (hit.done) break;
+      excerpts.push(hit.value);
+    }
+    let next = hits.next();
+    if (!next.done) {
+      const more = Button({ label: '查看更多命中行', size: 'sm', onClick() {
+        const first = next.value;
+        for (let i = 0; i < 20 && !next.done; i++) {
+          more.before(next.value);
+          next = hits.next();
+        }
+        if (next.done) more.remove();
+        first?.focus();
+      } });
+      excerpts.push(more);
     }
   }
-  return h('div', { class: `item item--click knowledge-item knowledge-item--${entry.layer}`, tabindex: 0, role: 'button', dataset: { id: entry.id },
-    onclick: () => onOpen(entry), onkeydown: (event) => { if (event.key === 'Enter') onOpen(entry); } },
+  return h('div', { class: `item item--click knowledge-item knowledge-item--${entry.layer}`, dataset: { id: entry.id },
+    onclick: event => { if (!event.target.closest('button')) onOpen(entry); },
+    ...(excerpts.length ? {} : { tabindex: 0, role: 'button',
+      onkeydown: event => { if (event.key === 'Enter') onOpen(entry); } }) },
   h('div', { class: 'item__main' },
-    h('span', { class: 'item__title' }, title),
+    excerpts.length ? h('button', { type: 'button', class: 'knowledge-hit item__title', onclick: () => onOpen(entry) }, title) : h('span', { class: 'item__title' }, title),
     Boolean(entry.tags?.length) && h('span', { class: 'item__meta' }, entry.tags.map(tag => '#' + tag).join(' · ')),
-    (excerpts.length ? excerpts : [summary]).map(text => h('span', { class: 'item__meta truncate' }, text))),
+    excerpts.length ? excerpts : h('span', { class: 'item__meta truncate' }, summary)),
   h('div', { class: 'item__end' },
     entry.relevance !== undefined && h('span', { class: 'muted small' }, '相关度 ' + entry.relevance),
     entry.importance && Pill(entry.importance),
