@@ -239,8 +239,8 @@ test('knowledge refuses symlink reads and symlink directories', async t => {
   const link = join(host.dataDir, 'knowledge/link.md');
   symlinkSync(outside, link);
   await assert.rejects(host.knowledge.list(), /regular file/);
-  // Atomic replacement may replace the link, but must never modify its target.
-  await host.knowledge.put({ id: 'link', layer: 'personal', title: 'safe', content: 'new' });
+  // Updating an existing entry must verify its prior version without following links.
+  await assert.rejects(host.knowledge.put({ id: 'link', layer: 'personal', title: 'safe', content: 'new' }), { code: 'ELOOP' });
   assert.equal(readFileSync(outside, 'utf8'), 'private');
   rmSync(join(host.dataDir, 'knowledge'), { recursive: true });
   symlinkSync(tmpdir(), join(host.dataDir, 'knowledge'));
