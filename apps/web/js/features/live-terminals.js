@@ -10,13 +10,72 @@ const encode = text => btoa(Array.from(new TextEncoder().encode(text), value => 
 export function createLiveTerminals({ api, store, router }) {
   let projectId = 'all', rows = [], loading = false, error = '', revision = 0, timer, drawer;
   let closeTerminal = () => {}, signature = '', openedItem;
+  let historyRows = [], historyLoading = false, historyError = '';
   const body = h('div', { class: 'stack' });
-  const el = Card({ title: '项目现场终端', sub: '同目录下的现场会话，打开后可实时观察并接管输入', id: 'project-live-terminals', body });
+  const historyBody = h('div', { class: 'stack' });
+  const liveCard = Card({ title: '项目现场终端', sub: '项目目录及子目录下的现场会话，打开后可实时观察、分析完整对话并接管输入', id: 'project-live-terminals', body });
+  const historyCard = Card({ title: '扫描到的历史 CLI 会话（含子目录）', sub: '先扫描本机全部原生会话，再按项目根目录及子目录归属展示', id: 'project-history-sessions', body: historyBody });
+  const el = h('div', { class: 'stack' }, liveCard, historyCard);
   const visible = () => router.current.page === 'projects' && router.current.parts?.[1] === 'runs' && !router.current.parts?.[2];
   const context = () => JSON.stringify([api.token?.(), projectId, store.view.snapshot?.projects?.find(p => p.id === projectId)?.workspace,
     store.view.snapshot?.projects?.find(p => p.id === projectId)?.archivedAt,
     (store.view.snapshot?.machines ?? []).map(m => [m.id, m.online, m.connectedAt, m.agentInstanceId, m.capabilities])]);
   const call = (machineId, method, params) => api.post(`/machines/${encodeURIComponent(machineId)}/call`, { method, params });
+  function paintHistory() {
+    const project = store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
+    const rootCwd = project?.workspace?.cwd || '';
+    const relOf = dir => !rootCwd || dir === rootCwd ? dir : dir.startsWith(rootCwd + '/') ? './' + dir.slice(rootCwd.length + 1) : dir;
+    replace(historyBody, historyError && Banner({ tone: 'warn', children: historyError }),
+      historyLoading && !historyRows.length ? h('p', { class: 'small muted' }, '正在扫描历史 CLI 会话…') : historyRows.length
+        ? historyRows.slice(0, 30).map(s => h('article', { class: 'item', style: { minWidth: 0 } },
+          h('div', { class: 'item__main', style: { overflowWrap: 'anywhere' } },
+            h('strong', null, `${s.executorId} · ${relOf(s.cwd)}`),
+            h('p', { class: 'small muted' }, `${s.metadataTimestamp || s.fileModifiedAt || '时间未知'} · ${s.nativeSessionId}`)),
+          Button({ label: '分析对话', size: 'sm', onClick: () => openHistoryAnalysis(s) })))
+        : !historyLoading && Empty({ title: '未扫描到归属当前目录及子目录的历史会话', text: '会先扫描执行机上 Codex / Claude 的原生会话日志，再按目录包含关系归到这里。' }),
+      Button({ label: '重新扫描会话', size: 'sm', onClick: loadHistory }));
+  }
+  async function loadHistory() {
+    if (!visible()) return;
+    historyLoading = true; historyError = ''; paintHistory();
+    try {
+      const qs = projectId !== 'all' ? `?projectId=${encodeURIComponent(projectId)}` : '';
+      const data = await api.get(`/agents/sessions${qs}`);
+      const list = (data.machines ?? []).flatMap(m => (m.sessions ?? []).map(s => ({ ...s, machineId: m.machineId, machineName: m.machineName })));
+      list.sort((a, b) => String(b.fileModifiedAt || b.metadataTimestamp || '').localeCompare(String(a.fileModifiedAt || a.metadataTimestamp || '')));
+      historyRows = list;
+    } catch (cause) { historyError = cause.message; }
+    historyLoading = false; paintHistory();
+  }
+  function openHistoryAnalysis(session) {
+    const box = h('div', { class: 'stack' }, h('p', { role: 'status' }, '正在读取并分析完整对话…'));
+    let timerId, closed = false;
+    openDrawer({
+      title: `会话分析 · ${session.executorId}`,
+      sub: `${session.machineName || session.machineId} · ${session.cwd}`,
+      body: box,
+      onClose() { closed = true; clearTimeout(timerId); },
+    });
+    const poll = async job => {
+      if (closed) return;
+      if (job.status === 'done') {
+        replace(box, h('div', { class: 'msg__bubble' }, renderFormattedText(job.result?.summary || '分析已完成。')));
+        return;
+      }
+      if (job.status === 'failed' || job.status === 'cancelled') {
+        replace(box, Banner({ tone: 'danger', children: job.error || '分析未完成。' }));
+        return;
+      }
+      replace(box, h('p', { role: 'status' }, `${job.progress || '正在分析完整对话…'}`));
+      timerId = setTimeout(async () => {
+        try { await poll(await api.get(`/agents/sessions/analysis/${encodeURIComponent(job.id)}`)); }
+        catch (cause) { if (!closed) replace(box, Banner({ tone: 'danger', children: cause.message })); }
+      }, 1500);
+    };
+    api.post('/agents/sessions/analyze', { machineId: session.machineId, executorId: session.executorId, nativeSessionId: session.nativeSessionId, cwd: session.cwd })
+      .then(poll)
+      .catch(cause => { if (!closed) replace(box, Banner({ tone: 'danger', children: cause.message })); });
+  }
   function paint() {
     replace(body, error && Banner({ tone: 'warn', children: error }),
       loading && !rows.length ? h('p', { class: 'small muted' }, '正在读取现场终端…') : rows.length ? rows.map(item => h('article', { class: 'item', dataset: { livePane: item.paneId }, style: { minWidth: 0 } },
@@ -66,22 +125,30 @@ export function createLiveTerminals({ api, store, router }) {
         const executorId = item.agent === 'claude' || item.agent === 'claude-code' ? 'claude-code' : item.agent;
         let nativeSessionId = item.nativeSessionId;
         if (!nativeSessionId) {
-          const data = await api.get(`/agents/sessions/analysis-sources?machineId=${encodeURIComponent(item.machineId)}&cwd=${encodeURIComponent(item.cwd)}`);
+          const project = store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
+          const rootCwd = project?.workspace?.cwd || item.cwd;
+          const data = await api.get(`/agents/sessions/analysis-sources?machineId=${encodeURIComponent(item.machineId)}&cwd=${encodeURIComponent(rootCwd)}`);
           if (!analysisCurrent()) return;
-          const sessions = data.sessions?.filter(session => session.cwd === item.cwd && session.executorId === executorId) ?? [];
-          if (!sessions.length) throw new Error('未找到这个目录的完整会话记录。不会用最近输出代替。');
-          replace(analysis, data.truncated && Banner({ tone: 'warn', children: '会话列表未完全读取；请选择已核验的会话，分析时仍会核验其完整日志。' }), h('p', null, '终端未提供可核验的会话 ID。请选择要分析的完整会话：'), ...sessions.map(session => Button({ label: `${session.metadataTimestamp || session.fileModifiedAt || '时间未知'} · ${session.nativeSessionId}`, onClick: () => begin(executorId, session.nativeSessionId) })));
+          const inDir = (base, target) => target === base || target.startsWith(base.endsWith('/') ? base : base + '/');
+          const sessions = (data.sessions ?? []).filter(session => inDir(rootCwd, session.cwd) && (!executorId || executorId === 'terminal' || session.executorId === executorId));
+          if (!sessions.length) throw new Error('未找到这个目录及子目录的完整会话记录。不会用最近输出代替。');
+          replace(analysis, data.truncated && Banner({ tone: 'warn', children: '会话列表未完全读取；请选择已核验的会话，分析时仍会核验其完整日志。' }),
+            h('p', null, '终端未提供可核验的会话 ID。请选择要分析的完整会话（含子目录）：'),
+            ...sessions.map(session => {
+              const rel = session.cwd === rootCwd ? '.' : session.cwd.slice(rootCwd.length).replace(/^\/+/, '');
+              return Button({ label: `${session.metadataTimestamp || session.fileModifiedAt || '时间未知'} · ${rel} · ${session.nativeSessionId}`, onClick: () => begin(session.executorId, session.nativeSessionId, session.cwd) });
+            }));
           analysing = false; analyse.disabled = false; return;
         }
-        await begin(executorId, nativeSessionId);
+        await begin(executorId, nativeSessionId, item.cwd);
       } catch (cause) { if (analysisCurrent()) { replace(analysis, Banner({ tone: 'danger', children: cause.message })); analysing = false; analyse.disabled = false; } }
     } });
-    async function begin(executorId, nativeSessionId) {
+    async function begin(executorId, nativeSessionId, targetCwd = item.cwd) {
       if (!analysisCurrent()) return;
       analysing = true; analyse.disabled = true;
       replace(analysis, h('p', { role: 'status' }, '正在读取整个会话…'));
       try {
-        const job = await api.post('/agents/sessions/analyze', { machineId: item.machineId, executorId, nativeSessionId, cwd: item.cwd });
+        const job = await api.post('/agents/sessions/analyze', { machineId: item.machineId, executorId, nativeSessionId, cwd: targetCwd });
         if (!analysisCurrent()) return;
         await watchAnalysis(job);
       } catch (cause) { if (analysisCurrent()) { replace(analysis, Banner({ tone: 'danger', children: cause.message })); analysing = false; analyse.disabled = false; } }
@@ -160,7 +227,7 @@ export function createLiveTerminals({ api, store, router }) {
     void connect('observe');
   }
   router.subscribe(() => { if (!visible()) { clearTimeout(timer); revision++; closeTerminal(); } });
-  return { el, show(id) { if (id !== projectId) { projectId = id; revision++; rows = []; closeTerminal(); signature = context(); } if (visible()) load(); }, update() {
-    const key = context(); if (key !== signature) { signature = key; revision++; rows = []; closeTerminal(); if (visible()) load(); }
+  return { el, show(id) { if (id !== projectId) { projectId = id; revision++; rows = []; historyRows = []; closeTerminal(); signature = context(); } if (visible()) { void load(); void loadHistory(); } }, update() {
+    const key = context(); if (key !== signature) { signature = key; revision++; rows = []; historyRows = []; closeTerminal(); if (visible()) { void load(); void loadHistory(); } }
   } };
 }

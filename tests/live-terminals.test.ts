@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLiveTerminalServices } from '../plugins/live-terminals.ts';
@@ -93,4 +93,21 @@ test('单帧超过RPC预算时关闭观察，不交付超限响应', async t => 
   const f = await fixture(t, { FAKE_LIVE_OVERSIZED: '1' });
   await assert.rejects(f.call('open', { ...f.target, mode: 'observe' }), /中断/);
   assert.deepEqual(await f.inputs(), []);
+});
+
+test('项目现场列表包含子文件夹中启动的终端，但排除项目外同级目录', async t => {
+  const f = await fixture(t);
+  const subDir = join(f.dir, 'sub-a');
+  await mkdir(subDir, { recursive: true });
+  f.pane.foreground_cwd = subDir;
+  await f.state();
+  const listed = await f.call('list', { cwd: f.dir });
+  assert.equal(listed.panes.length, 1);
+  assert.equal(listed.panes[0].cwd, subDir);
+  const sibling = await mkdtemp(join(tmpdir(), 'mario-live-sibling-'));
+  t.after(() => rm(sibling, { recursive: true, force: true }));
+  f.pane.foreground_cwd = sibling;
+  await f.state();
+  const outside = await f.call('list', { cwd: f.dir });
+  assert.equal(outside.panes.length, 0);
 });

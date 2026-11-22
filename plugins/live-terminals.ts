@@ -1,7 +1,7 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+import { isAbsolute, relative } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { NodeHandler } from '../packages/plugin-sdk/src/index.ts';
 import type { Json } from '../packages/protocol/src/index.ts';
@@ -29,7 +29,11 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
     allowed();
     return new Promise<string>((resolve, reject) => execFile(command, args, { env, timeout: 15_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => error ? reject(new Error('现场终端读取失败，请检查执行机上的 Herdr')) : resolve(stdout)));
   }
-  async function list(cwd?: string): Promise<LivePane[]> {
+  const within = (root: string, dir: string) => {
+    const rest = relative(root, dir);
+    return rest === '' || (!isAbsolute(rest) && rest !== '..' && !rest.startsWith('../'));
+  };
+  async function list(cwd?: string, exact = false): Promise<LivePane[]> {
     const expected = cwd ? await realpath(text(cwd)) : undefined;
     const data = row(row(JSON.parse(await run(['pane', 'list']))).result);
     if (!Array.isArray(data.panes)) throw new Error('现场终端列表格式无效');
@@ -39,7 +43,7 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
       if (typeof pane.pane_id !== 'string' || typeof pane.terminal_id !== 'string') continue;
       let directory: string;
       try { directory = await realpath(text(pane.foreground_cwd || pane.cwd)); } catch { continue; }
-      if (expected && expected !== directory) continue;
+      if (expected && (exact ? expected !== directory : !within(expected, directory))) continue;
       const native = row(pane.agent_session);
       result.push({ paneId: pane.pane_id, terminalId: pane.terminal_id, cwd: directory,
         title: typeof pane.terminal_title_stripped === 'string' ? pane.terminal_title_stripped : typeof pane.label === 'string' ? pane.label : '现场终端',
@@ -50,7 +54,7 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
   }
   async function check(target: Target) {
     if (!isAbsolute(text(target.cwd))) throw new Error('终端目录必须为绝对路径');
-    if (!(await list(target.cwd)).some(pane => pane.paneId === target.paneId && pane.terminalId === target.terminalId)) throw new Error('现场终端已退出、替换或切换目录，请重新读取列表');
+    if (!(await list(target.cwd, true)).some(pane => pane.paneId === target.paneId && pane.terminalId === target.terminalId)) throw new Error('现场终端已退出、替换或切换目录，请重新读取列表');
   }
   async function release(id: string) {
     const lease = leases.get(id); if (!lease) return;
