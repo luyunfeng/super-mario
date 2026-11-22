@@ -599,6 +599,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 202, await app.agent.post(input.text, 'main', { requestId: messageRequestId(req), ...(typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : {}), ...(input.readOnly === true ? { readOnly: true } : {}) }));
         }
         if (path === '/api/v1/runs' && method === 'POST') return json(res, 202, app.dispatch(await body(req), typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : undefined));
+        const cleanupWorktree = path.match(/^\/api\/v1\/runs\/([^/]+)\/worktree-cleanup$/);
+        if (cleanupWorktree && method === 'POST')
+          return json(res, 200, await app.cleanupRunWorktree(decodeURIComponent(cleanupWorktree[1]!), await body(req)));
         const worktreeStatus = path.match(/^\/api\/v1\/runs\/([^/]+)\/worktree-status$/);
         if (worktreeStatus && method === 'GET') {
           if (url.searchParams.size) throw new InputError('工作树状态只接受执行 ID');

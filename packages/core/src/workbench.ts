@@ -136,7 +136,41 @@ export async function createWorkbench(config: AppConfig) {
     const machine = machines?.list().find(item => item.id === run.machineId);
     if (!machines || !machine?.online) throw new InputError('执行机离线', 503);
     if (!machine.capabilities.includes('workspace.inspectRunWorktree')) throw new InputError('请升级执行机代理以查看工作树状态', 409);
+    if (run.worktree.removedAt) throw new InputError('工作树目录已清理，分支已保留', 410);
     return machines.call(machine.id, 'workspace.inspectRunWorktree', { id, source: run.worktree.source });
+  }
+  const cleaningWorktrees = new Map<string, { machineId: string; cwd: string }>();
+  async function cleanupRunWorktree(id: string, input: Record<string, unknown>): Promise<Json> {
+    if (input.confirmed !== true || typeof input.head !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(input.head)
+      || typeof input.requestId !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(input.requestId)
+      || Object.keys(input).some(field => !['confirmed', 'head', 'requestId'].includes(field))) throw new InputError('请确认当前提交和待清理的执行目录');
+    if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
+    const run = store.get<Run>('runs', id);
+    if (!run?.worktree?.branch || !run.machineId || !run.cwd) throw new InputError('执行缺少工作树创建回执', 404);
+    if (run.worktree.removedAt) return { removed: true, branch: run.worktree.branch };
+    const directory = run.cwd, client = machines, machineId = run.machineId;
+    if (!['completed', 'failed'].includes(run.status) || store.list<Run>('runs').some(other =>
+      other.machineId === machineId && other.cwd && (join(other.cwd) === directory || join(other.cwd).startsWith(directory + '/'))
+      && ['queued', 'running', 'unknown'].includes(other.status))) throw new InputError('工作树仍有关联执行未结束或结果未知', 409);
+    const machine = client?.list().find(m => m.id === machineId);
+    if (!client || !machine?.online) throw new InputError('执行机离线', 503);
+    if (!machine.capabilities.includes('workspace.removeRunWorktree')) throw new InputError('请升级执行机代理以清理工作树', 409);
+    const params = { id, source: run.worktree.source, head: input.head };
+    if (cleaningWorktrees.has(id)) throw new InputError('工作树清理正在进行', 409);
+    cleaningWorktrees.set(id, { machineId, cwd: directory });
+    try {
+      const result = await effects.perform({ key: 'worktree-cleanup:' + id + ':' + input.requestId, kind: 'workspace.removeRunWorktree',
+        target: machineId, summary: '清理已确认的工作树目录，保留分支', content: params,
+        run: () => client.call(machineId, 'workspace.removeRunWorktree', params) });
+      if (!result || typeof result !== 'object' || Array.isArray(result)) throw new InputError('清理结果未知，请核对执行机', 502);
+      if (result.removed === false) throw new InputError(String(result.reason), 409);
+      if (result.removed !== true || result.head !== input.head || result.branch !== run.worktree.branch)
+        throw new InputError('清理回执不匹配，请核对执行机', 502);
+      const latest = store.get<Run>('runs', id)!;
+      store.put('runs', id, { ...latest, worktree: { ...run.worktree, removedAt: new Date().toISOString() } });
+      changed('runs.changed', { id });
+      return result;
+    } finally { cleaningWorktrees.delete(id); }
   }
   async function readRunCommitDiff(id: string, path?: string): Promise<Json> {
     if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
@@ -146,7 +180,7 @@ export async function createWorkbench(config: AppConfig) {
     if (!machines || !machine?.online) throw new InputError('执行机离线', 503);
     if (!machine.capabilities.includes('workspace.commitDiff')) throw new InputError('请升级执行机代理以查看历史差异', 409);
     return machines.call(machine.id, 'workspace.commitDiff', {
-      cwd: run.cwd, range: run.commitChanges, ...(path !== undefined && { path }),
+      cwd: run.worktree?.source ?? run.cwd, range: run.commitChanges, ...(path !== undefined && { path }),
     });
   }
   async function readWorkspaceCode(input: { projectId?: string; kind: 'tree' | 'file' | 'diff'; path?: string }): Promise<Json> {
@@ -737,6 +771,8 @@ export async function createWorkbench(config: AppConfig) {
     if (workspace && executor && (executor.machineId !== workspace.machineId || executor.mode !== 'real')) throw new InputError('执行者不在项目绑定的电脑上或不支持真实执行', 409);
     // Explicit approved parameters retain priority over project defaults.
     const cwd = optionalText(input.cwd, '工作目录') ?? workspace?.cwd ?? executor?.defaultCwd;
+    if (cwd && [...cleaningWorktrees.values()].some(tree => tree.machineId === executor?.machineId &&
+      (join(cwd) === tree.cwd || join(cwd).startsWith(tree.cwd + '/')))) throw new InputError('执行目录正在清理', 409);
     const executionMode = input.executionMode ?? 'task';
     if (isolated) {
       if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
@@ -1156,7 +1192,7 @@ export async function createWorkbench(config: AppConfig) {
     return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
   }
   return {
-    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, agentSessions, readRunCommitDiff, runWorktreeStatus, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, agentSessions, readRunCommitDiff, cleanupRunWorktree, runWorktreeStatus, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {

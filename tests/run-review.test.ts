@@ -81,6 +81,16 @@ test('accept atomically records explicit acceptance and completes Todo exactly o
   assert.throws(() => f.review.decide({ ...input, action: '模型说通过' } as never));
 });
 
+test('cleanup leaves the pinned acceptance evidence intact', t => {
+  const f = fixture(t);
+  const worktree = { source: '/tmp/source', branch: 'fixture', base: 'a'.repeat(40) };
+  f.patch({ worktree });
+  const request = decision(f.review.attach({ todoId: 'todo', runId: 'original' }));
+  f.patch({ worktree: { ...worktree, removedAt: new Date().toISOString() } });
+  assert.equal(f.review.decide(request).status, 'accepted');
+  f.review.assertCanComplete('todo');
+});
+
 test('completion guard failure rolls back both acceptance and Todo writes', t => {
   const f = fixture(t);
   const before = f.review.attach({ todoId: 'todo', runId: 'original' });

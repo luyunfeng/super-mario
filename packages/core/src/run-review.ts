@@ -55,6 +55,13 @@ function hash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 }
 
+// Removing a checkout retains its branch and the recorded delivery evidence.
+function evidenceVersion(run: Run): string {
+  if (!run.worktree?.removedAt) return hash(run);
+  const { removedAt, ...worktree } = run.worktree;
+  return hash({ ...run, worktree });
+}
+
 /** One service per Store. The host must inject a synchronous completion guard
  * using this Store, and dispatch must recheck source scope without approval bypass.
  * Events are notifications after commit; they do not authorize external actions.
@@ -81,7 +88,7 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
     text(todoId, 'todoId');
     const value = store.get<RunReview>(reviews, todoId);
     if (!value) throw new RunReviewError('验收记录不存在', 404);
-    return { ...value, evidenceVersion: hash(run(value.runId)) };
+    return { ...value, evidenceVersion: evidenceVersion(run(value.runId)) };
   }
   function binding(todoId: string, value: Run, expectedDoneWhen?: string, allowCompleted = false) {
     const todo = store.get<Todo>('todos', todoId);
@@ -126,7 +133,7 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
     const item = store.get<RunReview>(reviews, todoId);
     if (!item) return;
     const value = run(item.runId);
-    if (item.status !== 'accepted' || !item.runIds.includes(item.runId) || item.evidenceVersion !== hash(value)) {
+    if (item.status !== 'accepted' || !item.runIds.includes(item.runId) || item.evidenceVersion !== evidenceVersion(value)) {
       throw new RunReviewError('需要当前Run证据的有效验收', 409);
     }
     // The host may invoke the guard before or after writing completedAt in its
@@ -179,7 +186,7 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
         if (previous && (!['pending', 'reopened'].includes(previous.status) || previous.runIds.includes(input.runId))) throw new RunReviewError('不能覆盖已提交或历史轮次', 409);
         const now = new Date().toISOString();
         const item: RunReview = { todoId: input.todoId, version: version + 1, round: previous?.status === 'reopened' ? 0 : previous?.round ?? 0,
-          runId: value.id, evidenceVersion: hash(value), doneWhen: value.doneWhen!, status: 'pending',
+          runId: value.id, evidenceVersion: evidenceVersion(value), doneWhen: value.doneWhen!, status: 'pending',
           runIds: [...(previous?.runIds ?? []), value.id], createdAt: previous?.createdAt ?? now, updatedAt: now };
         store.put(reviews, item.todoId, item);
         return item;
@@ -260,7 +267,7 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
           if (actual[field] !== params[field]) throw new Error(`派发回执${field}不匹配`);
         }
         if (actual.nativeResume) throw new Error('返工不能使用nativeResume');
-        result = { ...result, runId: actual.id, runIds: [...result.runIds, actual.id], evidenceVersion: hash(actual), status: 'pending', updatedAt: new Date().toISOString() };
+        result = { ...result, runId: actual.id, runIds: [...result.runIds, actual.id], evidenceVersion: evidenceVersion(actual), status: 'pending', updatedAt: new Date().toISOString() };
       } catch (error) {
         result = { ...result, status: 'unknown', error: `派发结果未知，不自动重试：${error instanceof Error ? error.message : String(error)}`, updatedAt: new Date().toISOString() };
       }

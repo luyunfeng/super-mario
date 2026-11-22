@@ -115,6 +115,41 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   assert.match(JSON.stringify(evidence), /stage\.txt/);
   assert.doesNotMatch(JSON.stringify(evidence), /\.env/);
   await status.getByRole('button', { name: '关闭' }).click();
+  const cleanup = (head: string, confirmed = true) => fetch(server.url + '/api/v1/runs/' + first.id + '/worktree-cleanup',
+    { method: 'POST', headers: { authorization: 'Bearer worktree-fixture', 'content-type': 'application/json' },
+      body: JSON.stringify({ head, confirmed, requestId: crypto.randomUUID() }) });
+  assert.equal((await cleanup(extra)).status, 409, 'active execution keeps its directory');
+  assert.equal((await cleanup(extra, false)).status, 400);
+  server.app.store.put('runs', first.id, { ...server.app.store.get<Run>('runs', first.id)!, status: 'completed' });
+  assert.equal((await cleanup(extra)).status, 409, 'uncommitted files must survive');
+  assert.equal(await readFile(join(path, '.env'), 'utf8'), 'synthetic');
+  await rm(join(path, '.env'));
+  await writeFile(join(path, '.gitignore'), 'local-cache\n');
+  git(path, '-c', 'filter.fixture.required=false', 'add', '.');
+  git(path, '-c', 'filter.fixture.required=false', 'commit', '-qm', 'keep this branch');
+  const kept = git(path, 'rev-parse', 'HEAD');
+  assert.equal((await cleanup(extra)).status, 409, 'confirmation is bound to the viewed HEAD');
+  await writeFile(join(path, 'local-cache'), 'ignored work');
+  assert.equal((await cleanup(kept)).status, 409, 'ignored files survive cleanup');
+  assert.equal(await readFile(join(path, 'local-cache'), 'utf8'), 'ignored work');
+  await rm(join(path, 'local-cache'));
+  server.app.store.put('runs', first.id, { ...server.app.store.get<Run>('runs', first.id)!,
+    commitChanges: { base, head: kept, files: 3, added: 4, deleted: 1 } });
+  await page.reload();
+  await page.getByRole('button', { name: '查看工作树状态' }).click();
+  await status.getByRole('button', { name: '清理工作树目录' }).click();
+  const confirm = page.getByRole('dialog', { name: '清理工作树目录？' });
+  await confirm.getByRole('button', { name: '取消' }).click();
+  assert.equal(git(path, 'rev-parse', 'HEAD'), kept);
+  await status.getByRole('button', { name: '清理工作树目录' }).click();
+  await confirm.getByRole('button', { name: '确认清理目录' }).click();
+  await expect(status).toContainText('工作树目录已清理，分支已保留');
+  assert.equal(git(cwd, 'rev-parse', first.worktree!.branch!), kept);
+  await assert.rejects(readFile(join(path, '.git')), { code: 'ENOENT' });
+  assert.equal((await cleanup(kept)).status, 200);
+  assert.match(JSON.stringify(await server.app.readRunCommitDiff(first.id, 'stage.txt')), /staged file/);
+  await page.reload();
+  await expect(page.getByText('工作树目录已清理 · 保留分支', { exact: false })).toBeVisible();
   // A failed checkout must never fall back to running in the bound directory.
   const plain = join(root, 'ordinary');
   await mkdir(plain);

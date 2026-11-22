@@ -111,7 +111,7 @@ async function filterOverrides(target: string) {
   return filters.flatMap(key => ['-c', key + '.smudge=', '-c', key + '.clean=', '-c', key + '.process=', '-c', key + '.required=false']);
 }
 
-export async function inspectRunWorktree({ source, id }: JsonObject): Promise<Json> {
+export async function inspectRunWorktree({ source, id }: JsonObject) {
   if (typeof source !== 'string' || typeof id !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id))
     throw new Error('工作树来源或执行标识无效');
   const sourceHead = await worktreeBase({ cwd: source });
@@ -138,4 +138,23 @@ export async function inspectRunWorktree({ source, id }: JsonObject): Promise<Js
   }
   return { cwd: target, branch: record.find(field => field.startsWith('branch refs/heads/'))?.slice('branch refs/heads/'.length) ?? null,
     head, sourceHead, unmerged, files, total, hidden, truncated: total > hidden + files.length };
+}
+
+export async function removeRunWorktree(params: JsonObject): Promise<Json> {
+  const snapshot = await inspectRunWorktree(params);
+  const source = String(params.source);
+  if (snapshot.branch !== 'super-mario/' + params.id || snapshot.head !== params.head)
+    return { removed: false, reason: '分支或提交已经变化，请刷新后再核对。' };
+  if (snapshot.total) return { removed: false, reason: '仍有未提交文件，工作树已保留。' };
+  const overrides = [...await filterOverrides(snapshot.cwd), '-c', 'core.fsmonitor=false'];
+  // Git can consider a directory clean even when ignored files or hidden index flags exist.
+  const dirty = await runGit(snapshot.cwd, [...overrides, 'status', '--porcelain=v1', '-z',
+    '--ignored=matching', '--no-renames', '--untracked-files=all', '--ignore-submodules=none']);
+  if (dirty) return { removed: false, reason: '存在本地修改、未跟踪或忽略文件，工作树已保留。' };
+  const index = await runGit(snapshot.cwd, [...overrides, 'ls-files', '-v', '-z']);
+  if (index.split('\0').some(row => /^[a-zS] /.test(row)))
+    return { removed: false, reason: '索引中有跳过检查的文件，工作树已保留。' };
+  // Keep the branch (including unmerged commits). Git performs its own final clean/lock check.
+  await runGit(source, [...overrides, 'worktree', 'remove', '--', snapshot.cwd]);
+  return { removed: true, head: snapshot.head, branch: snapshot.branch };
 }

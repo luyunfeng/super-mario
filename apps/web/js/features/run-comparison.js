@@ -1,6 +1,6 @@
 import { h, replace } from '../lib/dom.js';
-import { formatDate, runStatus } from '../lib/format.js';
-import { openDrawer } from '../ui/overlay.js';
+import { formatDate, runStatus, uuid } from '../lib/format.js';
+import { confirmDialog, openDrawer } from '../ui/overlay.js';
 import { renderDiffLines } from './code-sidebar.js';
 import { Button, Pill, Select } from '../ui/kit.js';
 
@@ -67,6 +67,24 @@ export function openWorktreeStatus(options) {
           h('small', { class: 'muted' }, fileState(file)))),
         value.hidden > 0 && h('small', null, `已隐藏 ${value.hidden} 个受限文件。`),
         value.truncated && h('small', null, '仅显示前 250 个可见文件。'),
+        ['completed', 'failed'].includes(item.status) && value.total > 0 && h('small', { class: 'muted' }, '清理前请先提交或移走本地改动。'),
+        ['completed', 'failed'].includes(item.status) && options.store.view.snapshot?.machines?.some(m =>
+          m.id === item.machineId && m.capabilities.includes('workspace.removeRunWorktree')) &&
+          Button({ label: '清理工作树目录', kind: 'danger', disabled: value.total > 0 || value.branch !== item.worktree.branch,
+            onClick: async () => {
+              const ok = await confirmDialog({ title: '清理工作树目录？',
+                message: `将移除 ${value.cwd}。分支 ${value.branch} 和提交 ${value.head.slice(0, 10)} 会保留。`,
+                confirmLabel: '确认清理目录', danger: true });
+              if (!ok || !active()) return;
+              replace(area, h('p', { role: 'status' }, '正在核对并清理目录…'));
+              try {
+                await api.post('/runs/' + encodeURIComponent(item.id) + '/worktree-cleanup', { confirmed: true, head: value.head, requestId: uuid() });
+                if (active()) replace(area, h('p', null, '工作树目录已清理，分支已保留。'));
+                options.store.refresh();
+              } catch (error) {
+                if (active()) replace(area, h('p', null, error.message), Button({ label: '重新核对状态', onClick: load }));
+              }
+            } }),
         Button({ label: '刷新状态', size: 'sm', onClick: load }));
     } catch (error) { if (active()) replace(area, h('p', null, error.message), Button({ label: '重试', onClick: load })); }
   }
