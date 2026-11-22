@@ -681,7 +681,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
       let assetURL: URL;
       let contentType: string;
-      if (path === '/vendor/xterm.js' || path === '/vendor/xterm.css') {
+      if (path === '/vendor/sha256.js') {
+        assetURL = new URL(import.meta.resolve('fast-sha256'));
+        contentType = 'text/javascript';
+      } else if (path === '/vendor/xterm.js' || path === '/vendor/xterm.css') {
         assetURL = new URL(path.endsWith('.css') ? '../css/xterm.css' : './xterm.js', import.meta.resolve('@xterm/xterm'));
         contentType = path.endsWith('.css') ? 'text/css' : 'text/javascript';
       } else {

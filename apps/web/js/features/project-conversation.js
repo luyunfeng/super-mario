@@ -1,5 +1,6 @@
 // 项目工作对话复用真实隔离会话。快照只更新消息区，草稿按身份和项目隔离。
 import { h, replace, keyedList } from '../lib/dom.js';
+import { createMessageSubmissions } from '../lib/message-submissions.js';
 import { createConversationDrafts } from '../lib/conversation-drafts.js';
 import { createMessageQuote } from '../lib/message-quote.js';
 import { createMessageEdit } from '../lib/message-edit.js';
@@ -24,7 +25,6 @@ export function createProjectConversation({ api, store, bindFolder }) {
   let request = 0;
   const drafts = createConversationDrafts({ api, store });
   const pending = new Map();
-  const unknown = new Set();
   const notices = new Map();
   let workspace;
   const status = h('div', { 'aria-live': 'polite' });
@@ -50,6 +50,20 @@ export function createProjectConversation({ api, store, bindFolder }) {
   const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, favorites.button, transcript.button, code.toggle)), status, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
   let draftKey, owner, enabled, quotesEnabled, editEnabled, epoch = 0;
+  const submissions = createMessageSubmissions({ api, context: submissionContext, onConfirmed: clearSubmittedDraft, captureEdit: edit.onAccepted,
+    onStatus: message => { notices.set(projectId, message); paint(); } });
+  send.before(submissions.button);
+  function submissionContext() {
+    const { key, owner } = composerContext();
+    const draft = text.value, captured = quotesEnabled ? quote.capture() : '';
+    const body = (captured ? quote.compose(captured, draft.trim()) : draft).trim();
+    return { key, owner, draft, captured, body, epoch, conversation: `project:${projectId}:work`, projectId, url: `/projects/${encodeURIComponent(projectId)}/messages` };
+  }
+  function clearSubmittedDraft({ key, draft, captured }) {
+    drafts.clearIf(key, draft);
+    if (captured) quote.accepted(key, captured);
+    if (draftKey === key && text.value === draft) { text.value = drafts.read(key); }
+  }
   function composerContext() {
     const { snapshot, snapshotOwner, unauthorized } = store.view;
     const currentOwner = drafts.owner();
@@ -71,11 +85,12 @@ export function createProjectConversation({ api, store, bindFolder }) {
     quote.restore(nextQuotes ? key : null);
     if (owner !== nextOwner) {
       generation++; request++; workspace = undefined;
-      pending.clear(); unknown.clear(); notices.clear();
+      pending.clear(); notices.clear();
     }
     if (owner !== nextOwner || enabled !== nextEnabled || quotesEnabled !== nextQuotes) epoch++;
     quotesEnabled = nextQuotes;
     owner = nextOwner; enabled = nextEnabled; draftKey = key;
+    submissions.update();
     text.value = key ? drafts.read(key) : '';
     text.disabled = !key;
   }
@@ -92,7 +107,7 @@ export function createProjectConversation({ api, store, bindFolder }) {
       : !machine?.online ? Banner({ tone: 'warn', children: '绑定电脑离线。对话记录保留，文件夹是否存在尚未验证。' })
         : work?.available === false ? Banner({ tone: 'warn', children: work.reason || '项目工作会话暂不可用，请检查模型配置。' }) : null);
     progress.textContent = workspace?.progress ? `待办 ${workspace.progress.open ?? 0} · 正在执行 ${workspace.progress.running ?? 0} · 待核对 ${workspace.progress.review ?? 0}` : '';
-    send.disabled = !draftKey || !p?.workspace || pending.has(projectId) || unknown.has(projectId) || !workspace || work?.available === false;
+    send.disabled = !draftKey || !p?.workspace || pending.has(projectId) || submissions.blocked() || !workspace || work?.available === false;
     replace(notice, notices.get(projectId) ? Banner({ tone: 'warn', children: notices.get(projectId) }) : null);
     const rows = workspace?.messages ?? [];
     const translationEpoch = translation.update(rows);
@@ -129,36 +144,38 @@ export function createProjectConversation({ api, store, bindFolder }) {
   }
   async function submit() {
     syncDraft();
-    const id = projectId, key = draftKey, sender = epoch, draft = text.value;
-    const captured = quotesEnabled ? quote.capture() : '';
-    const body = captured ? quote.compose(captured, draft.trim()) : draft.trim();
+    const ctx = submissionContext(), { key, projectId: id, body } = ctx, sender = epoch;
     if (!key || send.disabled || !body) return;
+    const ticket = submissions.begin(ctx);
+    if (!ticket) return;
+    if (ticket.record.blocked) { notices.set(id, '发送结果未知，请先核对发送回执。'); paint(); return; }
     const submission = Symbol();
     const finishEdit = edit.onAccepted();
     pending.set(id, submission); notices.delete(id); paint();
     try {
-      const answer = await api.post(`/projects/${encodeURIComponent(id)}/messages`, { text: body });
+      const answer = await api.post(ctx.url, { text: body }, { 'Idempotency-Key': ticket.record.id });
       syncDraft();
       if (sender !== epoch) return;
-      if (answer?.status === 'failed') notices.set(id, '发送失败，内容已保留。');
-      else if (!answer?.id || answer.role !== 'user' || !['pending', 'done'].includes(answer.status)) {
-        unknown.add(id); notices.set(id, '处理结果未知，请先核对项目对话和执行记录，勿重复发送。');
+      const confirmed = submissions.accepted(ticket, answer, ctx, true);
+      if (!confirmed && answer?.status === 'failed' && answer.requestId === undefined) notices.set(id, '发送失败，内容已保留。');
+      else if (!confirmed) {
+        submissions.block(ticket); notices.set(id, '处理结果未知，请先核对发送回执。');
       } else {
         finishEdit();
-        drafts.clearIf(key, draft);
-        if (captured) quote.accepted(key, captured);
-        if (draftKey === key && text.value === draft) text.value = drafts.read(key);
+        clearSubmittedDraft(ctx);
+        if (answer.status === 'failed') notices.set(id, '消息已受理，处理失败。');
       }
       if (draftKey === key) await load();
       void store.refresh().catch(() => {});
     } catch (error) {
       syncDraft();
       if (sender !== epoch) return;
-      if (!error.status || error.status >= 500 || /unknown/i.test(error.message)) {
-        unknown.add(id);
-        notices.set(id, '发送结果未知，请先核对项目对话和执行记录；本页不会重复发送。');
+      if (!error.status || error.status >= 500 || /unknown|结果未知/i.test(error.message)) {
+        if (error.status && /unknown|结果未知/i.test(error.message)) submissions.block(ticket);
+        notices.set(id, '发送结果未知，可核对发送回执。网络中断时手动重试将使用原请求号。');
       } else notices.set(id, `发送被拒绝：${error.message}`);
     } finally {
+      submissions.finish(ticket);
       if (pending.get(id) === submission) pending.delete(id);
       if (draftKey === key) paint();
     }

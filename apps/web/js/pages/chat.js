@@ -1,5 +1,6 @@
 // 对话：主页。顶部是“等你处理”，中间是消息流，输入框固定在底部。
 import { h, keyedList, replace } from '../lib/dom.js';
+import { createMessageSubmissions } from '../lib/message-submissions.js';
 import { createConversationDrafts } from '../lib/conversation-drafts.js';
 import { createMessageQuote } from '../lib/message-quote.js';
 import { createMessageEdit } from '../lib/message-edit.js';
@@ -71,6 +72,20 @@ export function createChatPage({ api, store, scope, router }) {
 
   const pending = new Map();
   let draftKey, owner, enabled, quotesEnabled, editEnabled, epoch = 0;
+  const submissions = createMessageSubmissions({ api, context: submissionContext, onConfirmed: clearSubmittedDraft, captureEdit: edit.onAccepted,
+    onStatus: message => { status.className = 'small composer__status'; status.textContent = message; } });
+  send.before(submissions.button);
+  function submissionContext() {
+    const { key, owner } = composerContext();
+    const draft = input.value, captured = quotesEnabled ? quote.capture() : '';
+    const body = (captured ? quote.compose(captured, draft.trim()) : draft).trim();
+    return { key, owner, draft, captured, body, epoch, conversation: 'main', projectId: scope.get() || undefined, url: '/messages' };
+  }
+  function clearSubmittedDraft({ key, draft, captured }) {
+    drafts.clearIf(key, draft);
+    if (captured) quote.accepted(key, captured);
+    if (draftKey === key && input.value === draft) { input.value = drafts.read(key); autosize(); }
+  }
   function composerContext() {
     const { snapshot, snapshotOwner, unauthorized } = store.view;
     const currentOwner = drafts.owner();
@@ -95,6 +110,7 @@ export function createChatPage({ api, store, scope, router }) {
     if (owner !== nextOwner || enabled !== nextEnabled || quotesEnabled !== nextQuotes) epoch++;
     quotesEnabled = nextQuotes;
     owner = nextOwner; enabled = nextEnabled; draftKey = key;
+    submissions.update();
     input.value = key ? drafts.read(key) : '';
     autosize();
     input.disabled = !key;
@@ -150,37 +166,43 @@ export function createChatPage({ api, store, scope, router }) {
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     syncDraft();
-    const key = draftKey, draft = input.value, projectId = scope.get();
-    const captured = quotesEnabled ? quote.capture() : '';
-    const text = captured ? quote.compose(captured, draft.trim()) : draft.trim();
+    const ctx = submissionContext(), { key, body: text, projectId } = ctx;
     if (!key || !text || pending.has(key) || !store.view.snapshot?.agent.available) return;
+    const ticket = submissions.begin(ctx);
+    if (!ticket) return;
+    if (ticket.record.blocked) { status.textContent = '发送结果未知，请先核对发送回执。'; return; }
     const stamp = epoch, submission = Symbol();
     const finishEdit = edit.onAccepted();
     pending.set(key, submission); send.disabled = true; status.textContent = ''; status.className = 'small composer__status muted';
     try {
-      const answer = await api.post('/messages', { text, ...(projectId ? { projectId } : {}) });
+      const answer = await api.post(ctx.url, { text, ...(projectId ? { projectId } : {}) }, { 'Idempotency-Key': ticket.record.id });
       syncDraft();
       if (stamp !== epoch) return;
-      if (!answer?.id || answer.role !== 'user' || !['pending', 'done'].includes(answer.status)) {
+      const confirmed = submissions.accepted(ticket, answer, ctx, true);
+      if (!confirmed) {
+        const rejected = answer?.status === 'failed' && answer.requestId === undefined;
+        if (!rejected) submissions.block(ticket);
         if (draftKey === key) {
           status.className = 'small composer__status text-danger';
-          status.textContent = answer?.status === 'failed' ? '发送失败，内容已保留。' : '发送结果未知，内容已保留。请先核对对话。';
+          status.textContent = rejected ? '发送失败，内容已保留。' : '发送结果未知，内容已保留。请先核对对话。';
         }
       } else {
         finishEdit();
-        drafts.clearIf(key, draft);
-        if (captured) quote.accepted(key, captured);
+        clearSubmittedDraft(ctx);
         if (draftKey === key) {
-          if (input.value === draft) { input.value = drafts.read(key); autosize(); }
+          if (answer.status === 'failed') status.textContent = '消息已受理，处理失败。';
           scrollToEnd(true);
         }
       }
     } catch (error) {
       syncDraft();
-      if (stamp !== epoch || draftKey !== key) return;
+      if (stamp !== epoch) return;
+      if (error.status && /unknown|结果未知/i.test(error.message)) submissions.block(ticket);
+      if (draftKey !== key) return;
       status.className = 'small composer__status text-danger';
       status.textContent = `发送未确认：${error.message}。内容已保留，请核对后重试。`;
     } finally {
+      submissions.finish(ticket);
       if (pending.get(key) === submission) pending.delete(key);
       send.disabled = !draftKey || pending.has(draftKey) || !store.view.snapshot?.agent.available;
     }
@@ -213,7 +235,7 @@ export function createChatPage({ api, store, scope, router }) {
       const canEdit = editEnabled && message.conversationId === 'main' && (!scope.get() || scope.get() === message.projectId);
       return h('article', { class: 'msg msg--user', dataset: { id: message.id } },
         h('div', { class: 'msg__bubble' }, renderFormattedText(text)),
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.status === 'failed' && ' · 发送失败', mark, canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.status === 'failed' && ' · 处理失败', mark, canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
     }
     const personal = message.conversationId === 'main' && (!message.origin || message.origin === 'user');
     const label = personal ? assistantLabel : message.origin === 'result' ? '执行结果' : '主 Agent';
