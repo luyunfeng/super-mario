@@ -10,34 +10,18 @@ const encode = text => btoa(Array.from(new TextEncoder().encode(text), value => 
 export function createLiveTerminals({ api, store, router }) {
   let projectId = 'all', rows = [], loading = false, error = '', revision = 0, timer, drawer;
   let closeTerminal = () => {}, signature = '', openedItem;
-  let historyRows = [], historyLoading = false, historyError = '';
+  let historyRows = [], historyLoading = false, historyError = '', historyLimit = 15;
   const body = h('div', { class: 'stack' });
-  const historyBody = h('div', { class: 'stack' });
-  const liveCard = Card({ title: '项目现场终端', sub: '项目目录及子目录下的现场会话，打开后可实时观察、分析完整对话并接管输入', id: 'project-live-terminals', body });
-  const historyCard = Card({ title: '扫描到的历史 CLI 会话（含子目录）', sub: '先扫描本机全部原生会话，再按项目根目录及子目录归属展示', id: 'project-history-sessions', body: historyBody });
-  const el = h('div', { class: 'stack' }, liveCard, historyCard);
+  const el = Card({ title: '项目会话（现场 + 历史）', sub: '合并展示项目目录及子目录下的活终端与历史 CLI 对话，按会话去重', id: 'project-live-terminals', body });
   const visible = () => router.current.page === 'projects' && router.current.parts?.[1] === 'runs' && !router.current.parts?.[2];
   const context = () => JSON.stringify([api.token?.(), projectId, store.view.snapshot?.projects?.find(p => p.id === projectId)?.workspace,
     store.view.snapshot?.projects?.find(p => p.id === projectId)?.archivedAt,
     (store.view.snapshot?.machines ?? []).map(m => [m.id, m.online, m.connectedAt, m.agentInstanceId, m.capabilities])]);
   const call = (machineId, method, params) => api.post(`/machines/${encodeURIComponent(machineId)}/call`, { method, params });
-  function paintHistory() {
-    const project = store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
-    const rootCwd = project?.workspace?.cwd || '';
-    const relOf = dir => !rootCwd || dir === rootCwd ? dir : dir.startsWith(rootCwd + '/') ? './' + dir.slice(rootCwd.length + 1) : dir;
-    replace(historyBody, historyError && Banner({ tone: 'warn', children: historyError }),
-      historyLoading && !historyRows.length ? h('p', { class: 'small muted' }, '正在扫描历史 CLI 会话…') : historyRows.length
-        ? historyRows.slice(0, 30).map(s => h('article', { class: 'item', style: { minWidth: 0 } },
-          h('div', { class: 'item__main', style: { overflowWrap: 'anywhere' } },
-            h('strong', null, `${s.executorId} · ${relOf(s.cwd)}`),
-            h('p', { class: 'small muted' }, `${s.metadataTimestamp || s.fileModifiedAt || '时间未知'} · ${s.nativeSessionId}`)),
-          Button({ label: '分析对话', size: 'sm', onClick: () => openHistoryAnalysis(s) })))
-        : !historyLoading && Empty({ title: '未扫描到归属当前目录及子目录的历史会话', text: '会先扫描执行机上 Codex / Claude 的原生会话日志，再按目录包含关系归到这里。' }),
-      Button({ label: '重新扫描会话', size: 'sm', onClick: loadHistory }));
-  }
+  function paintHistory() { paint(); }
   async function loadHistory() {
     if (!visible()) return;
-    historyLoading = true; historyError = ''; paintHistory();
+    historyLoading = true; historyError = ''; paint();
     try {
       const qs = projectId !== 'all' ? `?projectId=${encodeURIComponent(projectId)}` : '';
       const data = await api.get(`/agents/sessions${qs}`);
@@ -45,7 +29,7 @@ export function createLiveTerminals({ api, store, router }) {
       list.sort((a, b) => String(b.fileModifiedAt || b.metadataTimestamp || '').localeCompare(String(a.fileModifiedAt || a.metadataTimestamp || '')));
       historyRows = list;
     } catch (cause) { historyError = cause.message; }
-    historyLoading = false; paintHistory();
+    historyLoading = false; paint();
   }
   function openHistoryAnalysis(session) {
     const box = h('div', { class: 'stack' }, h('p', { role: 'status' }, '正在读取并分析完整对话…'));
@@ -77,14 +61,38 @@ export function createLiveTerminals({ api, store, router }) {
       .catch(cause => { if (!closed) replace(box, Banner({ tone: 'danger', children: cause.message })); });
   }
   function paint() {
-    replace(body, error && Banner({ tone: 'warn', children: error }),
-      loading && !rows.length ? h('p', { class: 'small muted' }, '正在读取现场终端…') : rows.length ? rows.map(item => h('article', { class: 'item', dataset: { livePane: item.paneId }, style: { minWidth: 0 } },
+    const project = store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
+    const rootCwd = project?.workspace?.cwd || '';
+    const relOf = dir => !rootCwd || dir === rootCwd ? dir : dir.startsWith(rootCwd + '/') ? './' + dir.slice(rootCwd.length + 1) : dir;
+    const liveIds = new Set(rows.map(r => r.nativeSessionId).filter(Boolean));
+    const dedupHistory = historyRows.filter(s => !liveIds.has(s.nativeSessionId));
+    const liveItems = rows.map(item => {
+      const execId = item.agent === 'claude' || item.agent === 'claude-code' ? 'claude-code' : item.agent;
+      return h('article', { class: 'item', dataset: { livePane: item.paneId }, style: { minWidth: 0 } },
         h('div', { class: 'item__main', style: { overflowWrap: 'anywhere' } },
-          h('strong', null, item.title), h('p', { class: 'small muted' }, `${item.agent} · ${item.machineName} · ${item.cwd}`),
-          h('div', { class: 'row row--wrap' }, Pill(STATES[item.state] ?? '状态待确认', item.state === 'working' ? 'info' : ''), Pill('现场会话'))),
-        Button({ label: '打开现场', size: 'sm', onClick: () => open(item) })))
-        : !loading && Empty({ title: error ? '现场终端暂不可用' : '当前目录没有可见的现场终端', text: '独立启动的 CLI 会显示在这里；工作台派发的任务显示在下方。' }),
-      Button({ label: '重新读取现场', size: 'sm', onClick: load }));
+          h('strong', null, item.title), h('p', { class: 'small muted' }, `${item.agent} · ${item.machineName} · ${relOf(item.cwd)}`),
+          h('div', { class: 'row row--wrap' }, Pill(STATES[item.state] ?? '状态待确认', item.state === 'working' ? 'info' : ''), Pill('现场运行中', 'ok'))),
+        h('div', { class: 'row' },
+          item.nativeSessionId && Button({ label: '分析对话', size: 'sm', onClick: () => openHistoryAnalysis({ machineId: item.machineId, machineName: item.machineName, executorId: execId, nativeSessionId: item.nativeSessionId, cwd: item.cwd }) }),
+          Button({ label: '打开现场', size: 'sm', onClick: () => open(item) })));
+    });
+    const histItems = dedupHistory.slice(0, historyLimit).map(s => h('article', { class: 'item', style: { minWidth: 0 } },
+      h('div', { class: 'item__main', style: { overflowWrap: 'anywhere' } },
+        h('strong', null, `${s.executorId} · ${relOf(s.cwd)}`),
+        h('p', { class: 'small muted' }, `${s.metadataTimestamp || s.fileModifiedAt || '时间未知'} · ${s.nativeSessionId}`),
+        h('div', { class: 'row row--wrap' }, Pill('历史会话'))),
+      Button({ label: '分析对话', size: 'sm', onClick: () => openHistoryAnalysis(s) })));
+    replace(body,
+      error && Banner({ tone: 'warn', children: error }),
+      historyError && Banner({ tone: 'warn', children: historyError }),
+      (loading || historyLoading) && !liveItems.length && !histItems.length ? h('p', { class: 'small muted' }, '正在扫描现场终端与历史会话…')
+        : (liveItems.length || histItems.length) ? [
+          ...liveItems,
+          ...histItems,
+          dedupHistory.length > historyLimit && Button({ label: `显示其余 ${dedupHistory.length - historyLimit} 条历史会话`, size: 'sm', onClick: () => { historyLimit += 30; paint(); } }),
+        ]
+        : !loading && !historyLoading && Empty({ title: error ? '现场终端暂不可用' : '当前目录及子目录暂无可见会话', text: '正在运行的终端与历史 CLI 会话都会合并显示在这里；工作台派发记录显示在下方。' }),
+      h('div', { class: 'row' }, Button({ label: '重新读取现场', size: 'sm', onClick: () => { void load(); void loadHistory(); } })));
   }
   async function load() {
     clearTimeout(timer);

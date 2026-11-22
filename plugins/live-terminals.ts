@@ -1,7 +1,7 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { realpath } from 'node:fs/promises';
-import { isAbsolute, relative } from 'node:path';
+import { readdir, readlink, realpath } from 'node:fs/promises';
+import { basename, isAbsolute, relative } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { NodeHandler } from '../packages/plugin-sdk/src/index.ts';
 import type { Json } from '../packages/protocol/src/index.ts';
@@ -33,6 +33,41 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
     const rest = relative(root, dir);
     return rest === '' || (!isAbsolute(rest) && rest !== '..' && !rest.startsWith('../'));
   };
+  const UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+  async function resolveNativeSessionFromPane(paneId: string, agent: string): Promise<string | undefined> {
+    if (!['codex', 'claude', 'claude-code'].includes(agent)) return undefined;
+    try {
+      const raw = row(row(JSON.parse(await run(['pane', 'process-info', '--pane', paneId]))).result);
+      const info = row(raw.process_info);
+      const procs = Array.isArray(info.foreground_processes) ? info.foreground_processes : [];
+      for (const proc of procs) {
+        const p = row(proc);
+        const argv = Array.isArray(p.argv) ? p.argv.map(String) : [];
+        for (let i = 0; i < argv.length - 1; i++) {
+          if (['--resume', '-r', '--session-id'].includes(argv[i]!)) {
+            const candidate = argv[i + 1]!.trim();
+            if (candidate && !candidate.startsWith('-')) return candidate;
+          }
+        }
+        const pid = typeof p.pid === 'number' && Number.isSafeInteger(p.pid) ? p.pid : undefined;
+        if (pid && process.platform === 'linux') {
+          try {
+            const fds = await readdir(`/proc/${pid}/fd`);
+            for (const fd of fds.slice(0, 128)) {
+              try {
+                const target = await readlink(`/proc/${pid}/fd/${fd}`);
+                if (!target.endsWith('.jsonl')) continue;
+                if (!target.includes('/.codex/') && !target.includes('/.claude/')) continue;
+                const match = basename(target, '.jsonl').match(UUID_RE);
+                if (match) return match[1];
+              } catch { /* fd closed */ }
+            }
+          } catch { /* permission or exited */ }
+        }
+      }
+    } catch { /* older herdr or fake test binary without process-info */ }
+    return undefined;
+  }
   async function list(cwd?: string, exact = false): Promise<LivePane[]> {
     const expected = cwd ? await realpath(text(cwd)) : undefined;
     const data = row(row(JSON.parse(await run(['pane', 'list']))).result);
@@ -44,11 +79,19 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
       let directory: string;
       try { directory = await realpath(text(pane.foreground_cwd || pane.cwd)); } catch { continue; }
       if (expected && (exact ? expected !== directory : !within(expected, directory))) continue;
+      const agent = typeof pane.agent === 'string' ? pane.agent : 'terminal';
       const native = row(pane.agent_session);
+      let nativeSessionId = native.kind === 'id' && typeof native.value === 'string' ? native.value
+        : typeof pane.agent_session === 'string' && pane.agent_session.trim() ? pane.agent_session.trim()
+        : typeof native.id === 'string' && native.id.trim() ? native.id.trim()
+        : undefined;
+      if (!nativeSessionId && !exact) {
+        nativeSessionId = await resolveNativeSessionFromPane(pane.pane_id, agent);
+      }
       result.push({ paneId: pane.pane_id, terminalId: pane.terminal_id, cwd: directory,
         title: typeof pane.terminal_title_stripped === 'string' ? pane.terminal_title_stripped : typeof pane.label === 'string' ? pane.label : '现场终端',
-        agent: typeof pane.agent === 'string' ? pane.agent : 'terminal', state: typeof pane.agent_status === 'string' ? pane.agent_status : 'unknown',
-        ...(native.kind === 'id' && typeof native.value === 'string' ? { nativeSessionId: native.value } : {}) });
+        agent, state: typeof pane.agent_status === 'string' ? pane.agent_status : 'unknown',
+        ...(nativeSessionId ? { nativeSessionId } : {}) });
     }
     return result;
   }

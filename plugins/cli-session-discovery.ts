@@ -8,7 +8,7 @@ import type { AgentSessionDiscovery, NativeExecutorId, ObservedAgentSession } fr
 import type { NodeHandler } from '../packages/plugin-sdk/src/index.ts';
 import { createProjectDiscovery, parseSessionHeader } from './project-discovery.ts';
 
-const limits = { roots: 32, directories: 512, entries: 8192, perDirectory: 512, files: 512, results: 512, head: 16 * 1024, index: 1024 * 1024, warnings: 12 };
+const limits = { roots: 32, directories: 2048, entries: 16384, perDirectory: 2048, files: 4096, results: 2048, head: 16 * 1024, index: 1024 * 1024, warnings: 12 };
 type Options = { home?: string; codexHome?: string; claudeHome?: string; cwd?: string; roots?: string[]; temporaryRoots?: string[] };
 type Selection = { executorId: NativeExecutorId; nativeSessionId: string; cwd: string };
 function object(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value); }
