@@ -300,5 +300,15 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   const stale = await (await startAgain(params, 'stale-branch')).json();
   await expect.poll(() => server.app.store.get<Run>('runs', stale.id)?.status).toBe('failed');
   assert.deepEqual(continuedIn, [peer.cwd]);
+  await page.reload();
+  const related = page.getByRole('region', { name: '工作树关联执行' });
+  await expect(related.getByRole('link')).toHaveCount(2);
+  const followups = await runsList.execute({ worktreeRunId: peer.id }, new AbortController().signal) as unknown as Run[];
+  assert.deepEqual(followups.map(run => run.id), [stale.id, child.id]);
+  assert.deepEqual(await runsList.execute({ worktreeRunId: first.id }, new AbortController().signal), []);
+  await expect(related.getByRole('link').first()).toHaveAttribute('href', new RegExp(stale.id + '$'));
+  await related.getByRole('link').first().click();
+  await expect(page).toHaveURL(new RegExp(stale.id + '$'));
+  await expect(page.getByText('工作树目录或分支已变化，执行未启动', { exact: false }).first()).toBeVisible();
 
 });

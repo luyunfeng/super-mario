@@ -237,9 +237,14 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             return due >= from && due < before;
           }).sort((a, b) => Date.parse(a.dueAt!) - Date.parse(b.dueAt!)) as unknown as Json;
         }, { dueFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, dueBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' } }));
-        context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。', async (_args, signal) => {
-          signal.throwIfAborted(); return context.store.list<Run>('runs') as unknown as Json;
-        }));
+        context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。指定 worktreeRunId 时只列出在该工作树中另起的执行。', async ({ worktreeRunId }, signal) => {
+          signal.throwIfAborted();
+          const runs = context.store.list<Run>('runs');
+          if (worktreeRunId === undefined) return runs as unknown as Json;
+          if (typeof worktreeRunId !== 'string' || !worktreeRunId.trim()) throw new Error('缺少工作树所属执行 ID');
+          return runs.filter(run => run.worktreeRunId === worktreeRunId)
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id)) as unknown as Json;
+        }, { worktreeRunId: { type: 'string', description: '创建工作树的执行 ID。省略时列出当前范围的执行记录。' } }));
         context.contribute('tools', 'executors_list', tool('executors_list', '列出执行器及真实可用状态。', async (_args, signal) => {
           signal.throwIfAborted();
           if (actions?.listExecutors) return actions.listExecutors();

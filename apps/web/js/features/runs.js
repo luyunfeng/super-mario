@@ -138,6 +138,10 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     const todo = run.todoId && snapshot.todos.find(item => item.id === run.todoId);
     const comparisonEnabled = !store.view.unauthorized && snapshot.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active');
     const comparison = comparisonEnabled && compareRuns({ run, runs: snapshot.runs, projectId, router, executorName, api, store });
+    const worktreeRuns = comparisonEnabled && run.worktree?.branch
+      ? snapshot.runs.filter(item => item.worktreeRunId === run.id && item.projectId === run.projectId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
+      : [];
     const tabs = Tabs({ items: [{ id: 'timeline', label: '时间线' }, { id: 'result', label: '结果' }, { id: 'terminal', label: '终端' }], active: detailTab, label: '执行详情', onSelect: (id) => { detailTab = id; paintDetail(); } });
 
     const timeline = [
@@ -168,6 +172,11 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
         ? `独立工作树：${run.cwd} · ${run.worktree.branch} · 起点 ${run.worktree.base.slice(0, 10)}`
         : `独立工作树尚无创建回执 · 来源 ${run.worktree.source}`),
       comparisonEnabled && run.worktree?.branch && !run.worktree.removedAt && Button({ label: '在此工作树发起执行', size: 'sm', onClick: () => openLaunch(run) }),
+      worktreeRuns.length > 0 && h('section', { class: 'stack', 'aria-label': '工作树关联执行' },
+        h('h3', null, '工作树关联执行'), h('ul', { class: 'stack' }, worktreeRuns.map(item =>
+          h('li', { class: 'row row--wrap' }, h('a', { href: router.href('projects', run.projectId, 'runs', item.id) }, item.prompt),
+            Pill(runStatus[item.status]?.text ?? item.status, runStatus[item.status]?.tone ?? ''),
+            h('small', { class: 'muted' }, executorName(item.executorId), ' · ', formatDate(item.createdAt, true)))))),
       run.worktreeRunId && h('a', { href: router.href('projects', run.projectId, 'runs', run.worktreeRunId) }, '查看原工作树'),
       comparisonEnabled && run.worktree?.removedAt && !run.worktree.branchDeletedAt && Button({ label: '查看保留分支', size: 'sm', onClick: () => openRetainedBranch({ item: run, api, store, router }) }),
       comparisonEnabled && run.worktree?.branch && !run.worktree.removedAt && Button({ label: '查看工作树状态', size: 'sm', onClick: () => openWorktreeStatus({ item: run, api, store, router }) }),
