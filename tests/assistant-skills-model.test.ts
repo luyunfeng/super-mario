@@ -1321,3 +1321,59 @@ test('Web 和飞书读取指定待办详情及决定，不混入同名或跨项�
     assert.doesNotMatch(JSON.stringify(results.map(r => r.content)), /独立范围备注|核对批次/);
   } finally { await server.close(); }
 });
+
+test('Web 与飞书仅更新选定待办的期限，保留提醒并拒绝并发覆盖与越界', async t => {
+  let adapter!: FeishuOptions;
+  let id = '', other = '', mode = 'set';
+  const due = '2099-02-01T15:00:00+08:00', newer = '2099-02-02T15:00:00+08:00';
+  const reminderAt = '2099-01-30T12:00:00+08:00';
+  const sent: string[] = [];
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /只改截止时间时保留原提醒/);
+      if (mode === 'foreign') return call('todo_update', { id: other, dueAt: due, expectedDueAt: '' }, 'foreign');
+      return call('todo_detail', { todoId: id }, 'detail');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    if (req.callId === 'detail') {
+      const old = JSON.parse(raw).todo.dueAt ?? '';
+      if (mode === 'race') server.app.updateTodo(id, { dueAt: newer });
+      return call('todo_update', { id, dueAt: mode === 'set' ? due : '', expectedDueAt: old }, 'edit');
+    }
+    if (mode === 'race' || mode === 'foreign') {
+      assert.match(raw, mode === 'race' ? /截止时间已被修改/ : /待办不属于当前作用域/);
+      return { role: 'assistant', content: mode === 'race' ? '期限已改变，请核对。' : '当前范围无法修改。' };
+    }
+    assert.equal(JSON.parse(raw).reminderAt, reminderAt);
+    return { role: 'assistant', content: JSON.parse(raw).dueAt ?? '已取消期限。' };
+  }, options => {
+    adapter = options;
+    return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    const project = await api('/projects', { name: '排期' });
+    id = (await api('/todos', { projectId: project.id, title: '核对截止时间', reminderAt })).id;
+    other = (await api('/todos', { projectId: project.id, title: '同项目另一项' })).id;
+    const path = '/projects/' + project.id + '/messages';
+    assert.equal(await ask('把待办 ' + id + ' 的期限改到北京时间2099年2月1日15点', path), due);
+    mode = 'race';
+    assert.equal(await ask('取消期限', path), '期限已改变，请核对。');
+    assert.equal(server.app.todos().find(row => row.id === id)?.dueAt, newer);
+    const bot = await api('/feishu/bots', { name: '事项改期', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
+      scope: { kind: 'task', todoId: id, projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    mode = 'clear';
+    await adapter.onMessage('取消本事项期限', { ...source, messageId: 'clear' });
+    await t.waitFor(() => assert.ok(sent.includes('已取消期限。')));
+    mode = 'foreign';
+    await adapter.onMessage('更新另一事项', { ...source, messageId: 'foreign' });
+    await t.waitFor(() => assert.ok(sent.includes('当前范围无法修改。')));
+    const todo = server.app.todos().find(row => row.id === id)!;
+    assert.equal(todo.dueAt, undefined);
+    assert.equal(todo.reminderAt, reminderAt);
+    assert.equal(todo.reminderVersion, 1);
+    assert.equal(server.app.todos().find(row => row.id === other)?.dueAt, undefined);
+  } finally { await server.close(); }
+});
