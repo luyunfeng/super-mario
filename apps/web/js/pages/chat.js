@@ -240,7 +240,7 @@ export function createChatPage({ api, store, scope, router }) {
       const canEdit = editEnabled && message.conversationId === 'main' && (!scope.get() || scope.get() === message.projectId);
       return h('article', { class: 'msg msg--user', dataset: { id: message.id } },
         h('div', { class: 'msg__bubble' }, renderFormattedText(text)),
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.status === 'failed' && ' · 处理失败', mark, canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.status === 'failed' && ' · 处理失败', mark, transcript.copyMessage(message, translation.displayedText), canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
     }
     const personal = message.conversationId === 'main' && (!message.origin || message.origin === 'user');
     const label = personal ? assistantLabel : message.origin === 'result' ? '执行结果' : '主 Agent';
@@ -251,13 +251,13 @@ export function createChatPage({ api, store, scope, router }) {
         h('span', { class: 'msg__label', dataset: personal ? { assistantName: 'true' } : undefined }, label),
         agentProgress(message, api),
         bubble,
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, translation.action(message, bubble), canQuote && message.role === 'assistant' && quote.action(message, label))));
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, transcript.copyMessage(message, translation.displayedText), translation.action(message, bubble), canQuote && message.role === 'assistant' && quote.action(message, label))));
   }
 
   function paintMessages(list) {
     const translationEpoch = translation.update(list);
     keyedList(messages, list, item => item.id, renderMessage, item => JSON.stringify([
-      prompts.epoch, favorites.epoch, translationEpoch, quotesEnabled, editEnabled, owner, draftKey, item,
+      prompts.epoch, favorites.epoch, transcript.active, translationEpoch, quotesEnabled, editEnabled, owner, draftKey, item,
     ]));
   }
 

@@ -108,5 +108,9 @@ export function createReplyTranslation({ api, store, getScope, getConversationId
     }
     return controls;
   }
-  return { update, action };
+  function displayedText(message) {
+    const entry = entries.get(message.id);
+    return entry?.show && entry.source === message.text ? entry.text : message.text;
+  }
+  return { update, action, displayedText };
 }

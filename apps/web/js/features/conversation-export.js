@@ -1,7 +1,7 @@
 // 预览、复制和下载共享同一次导出结果。每次切换选项时立即丢弃旧结果。
 import { h, replace } from '../lib/dom.js';
 import { Button, Banner } from '../ui/kit.js';
-import { openDrawer } from '../ui/overlay.js';
+import { openDrawer, toast } from '../ui/overlay.js';
 
 export function conversationExportActive(store) {
   return !store.view.unauthorized && store.view.snapshot?.plugins?.some(
@@ -20,7 +20,25 @@ export function createConversationExport({ api, store, getProjectId = () => unde
   const update = () => { button.hidden = !conversationExportActive(store); };
   store.subscribe(update);
   update();
-  return { button, close: () => drawer?.close() };
+  function copyMessage(message, getText) {
+    const projectId = getProjectId(), owner = api.draftOwner();
+    const conversation = projectId ? `project:${projectId}:work` : 'main';
+    if (!conversationExportActive(store) || message.conversationId !== conversation ||
+        (projectId && message.projectId && message.projectId !== projectId) || message.origin === 'notification' ||
+        !['user', 'assistant'].includes(message.role) || !message.text?.trim()) return null;
+    return Button({ label: '复制正文', kind: 'ghost', size: 'sm', onClick: async (_, control) => {
+      const current = () => control.isConnected && owner === api.draftOwner() && owner === store.view.snapshotOwner &&
+        projectId === getProjectId() && conversationExportActive(store);
+      if (!current()) return;
+      try {
+        await navigator.clipboard.writeText(getText(message));
+        if (current()) toast('已复制正文。');
+      } catch {
+        if (current()) toast('无法写入剪贴板，请选中消息正文复制。', 'danger');
+      }
+    } });
+  }
+  return { button, copyMessage, get active() { return conversationExportActive(store); }, close: () => drawer?.close() };
 }
 
 export function openConversationExport({ api, store, source, subtitle, isCurrent }) {

@@ -76,7 +76,7 @@ test('主对话和项目回复使用隔离的模型请求翻译，切换原文�
   ];
   for (const source of sources) server.app.store.put('messages', source.id, source);
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
-  const page = await browser.newPage();
+  const page = await browser.newPage({ permissions: ['clipboard-read', 'clipboard-write'] });
   const url = server.url + '/api/v1/reply-translation';
   const post = (messageId: string, conversationId: string, target = 'zh-Hans', credential = token) => page.request.post(url, {
     headers: { authorization: 'Bearer ' + credential }, data: { messageId, conversationId, target },
@@ -100,8 +100,12 @@ test('主对话和项目回复使用隔离的模型请求翻译，切换原文�
   assert.deepEqual(await (await mainResult).json(), { text: mainTranslation });
   await expect(main.locator('.msg__bubble')).toContainText('离线报告已就绪。');
   await expect(main.locator('.msg__bubble')).not.toContainText('The offline report');
+  await main.getByRole('button', { name: '复制正文', exact: true }).click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), mainTranslation);
   await main.getByRole('button', { name: '查看原文', exact: true }).click();
   await expect(main.locator('.msg__bubble')).toContainText('The offline report is ready.');
+  await main.getByRole('button', { name: '复制正文', exact: true }).click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), mainText);
   await translate.click();
   await expect(main.locator('.msg__bubble')).toContainText('离线报告已就绪。');
   assert.equal(requests.length, 1);

@@ -77,6 +77,9 @@ test('从主对话和项目工作区导出完整 Markdown，并通过插件配�
   const log = page.getByRole('log', { name: '项目对话' });
   await expect(log).toContainText(projectTexts.at(-1)!);
   await expect(log).not.toContainText(projectTexts[0]);
+  const projectCopy = log.locator('[data-id="project-63"]').getByRole('button', { name: '复制正文', exact: true });
+  await projectCopy.click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), projectTexts.at(-1));
   await open.click();
   const projectMarkdown = await downloadMarkdown(page, drawer);
   assert.deepEqual(projectMarkdown.match(/项目甲历史消息-\d+/g), projectTexts);
@@ -93,6 +96,7 @@ test('从主对话和项目工作区导出完整 Markdown，并通过插件配�
     await settings.getByRole('button', { name: '关闭', exact: true }).click();
   }
   await togglePlugin('停用');
+  await expect(projectCopy).toHaveCount(0);
   await expect(open).toHaveCount(0);
   await page.goto(server.url + '/#chat');
   await expect(page.locator('#message-text')).toBeVisible();
