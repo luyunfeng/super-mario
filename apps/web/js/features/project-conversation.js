@@ -35,8 +35,8 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const progress = h('p', { class: 'muted small' });
   const messages = h('div', { class: 'project-conversation__messages', role: 'log', 'aria-label': '项目对话' });
   const text = TextArea({ rows: 3, placeholder: '告诉我这个文件夹里要做什么，我们持续推进。', 'aria-label': '项目目标' });
-  const readAloud = createReplyReadAloud(router);
-  const voice = createVoiceInput(text);
+  const readAloud = createReplyReadAloud(router, () => voice.reset());
+  const voice = createVoiceInput(text, readAloud.stop);
   let visible = false;
   const quote = createMessageQuote({ drafts, input: text, store, router, scope });
   const edit = createMessageEdit({ input: text, quote, context: composerContext });

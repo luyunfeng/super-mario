@@ -20,8 +20,18 @@ test('主对话与项目朗读指定正文，退出或停用插件后忽略迟�
   await page.addInitScript(() => {
     localStorage.setItem('sm.splash.seen', 'true');
     const chunks: SpeechSynthesisUtterance[] = [];
-    Object.assign(window, { chunks });
-    Object.defineProperty(window, 'speechSynthesis', { value: { speak: (u: SpeechSynthesisUtterance) => chunks.push(u), cancel() {} } });
+    class Recognition {
+      start() {
+        Object.assign(window, { listening: this });
+        document.body.dataset.speakerAtStart = document.body.dataset.speaker;
+      }
+      abort() { document.body.dataset.microphone = 'closed'; }
+    }
+    Object.assign(window, { chunks, SpeechRecognition: Recognition });
+    Object.defineProperty(window, 'speechSynthesis', { value: {
+      speak(u: SpeechSynthesisUtterance) { chunks.push(u); document.body.dataset.speaker = 'playing'; },
+      cancel() { document.body.dataset.speaker = 'stopped'; },
+    } });
   });
   const chunks = () => page.evaluate(() => (window as unknown as { chunks: SpeechSynthesisUtterance[] }).chunks.map(u => u.text));
   const ended = () => page.evaluate(() => (window as unknown as { chunks: SpeechSynthesisUtterance[] }).chunks.at(-1)?.dispatchEvent(new Event('end')));
@@ -33,6 +43,23 @@ test('主对话与项目朗读指定正文，退出或停用插件后忽略迟�
   await ended();
   await expect(play).toBeVisible();
   await play.click();
+  const dictation = page.getByRole('button', { name: '语音输入', exact: true });
+  await dictation.click();
+  await expect(page.locator('body')).toHaveAttribute('data-speaker-at-start', 'stopped');
+  await expect(play).toBeVisible();
+  const interrupted = await chunks();
+  await ended();
+  expect(await chunks()).toEqual(interrupted);
+  const result = (text: string) => page.evaluate(transcript => {
+    const recognition = (window as unknown as { listening: { onresult(e: unknown): void } }).listening;
+    recognition.onresult({ resultIndex: 0, results: [{ isFinal: true, 0: { transcript } }] });
+  }, text);
+  await result('草稿');
+  await play.click();
+  await expect(dictation).toBeVisible();
+  await expect(page.locator('body')).toHaveAttribute('data-microphone', 'closed');
+  await result('迟到字幕');
+  await expect(page.getByLabel('给 Agent 的消息')).toHaveValue('草稿');
   await page.evaluate(id => { location.hash = '#projects/' + id + '/workspace'; }, project.id);
   await expect(page.getByLabel('项目目标')).toBeVisible();
   const before = await chunks();

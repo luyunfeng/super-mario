@@ -1,6 +1,6 @@
 import { h } from '../lib/dom.js';
 
-export function createReplyReadAloud(router) {
+export function createReplyReadAloud(router, beforeSpeak) {
   let binding, playback;
   function stop() {
     if (!playback) return;
@@ -11,6 +11,7 @@ export function createReplyReadAloud(router) {
   }
   router.subscribe(stop);
   return {
+    stop,
     update(key, owner, snapshot) {
       const active = key && snapshot?.plugins?.some(p => p.id === 'reply-read-aloud' && p.status === 'active');
       const next = active ? JSON.stringify([owner, key]) : '';
@@ -37,6 +38,7 @@ export function createReplyReadAloud(router) {
         }
         // Feed only the selected response to speech synthesis. Short chunks avoid
         // engine length limits without altering the words or splitting a code point.
+        beforeSpeak();
         const chunks = displayedText(message).match(/[\s\S]{1,180}(?:[。！？.!?\n]|\s)|[\s\S]{1,180}/gu) || [];
         const current = playback = { id: message.id, button, feedback };
         button.textContent = '停止朗读';

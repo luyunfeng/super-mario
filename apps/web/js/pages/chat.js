@@ -60,8 +60,8 @@ export function createChatPage({ api, store, scope, router }) {
 
   // —— 输入框 ——
   const input = h('textarea', { class: 'composer__input', id: 'message-text', rows: 1, placeholder: '说出目标，Enter 发送，Shift + Enter 换行', 'aria-label': '给 Agent 的消息', maxLength: 20000 });
-  const readAloud = createReplyReadAloud(router);
-  const voice = createVoiceInput(input);
+  const readAloud = createReplyReadAloud(router, () => voice.reset());
+  const voice = createVoiceInput(input, readAloud.stop);
   const drafts = createConversationDrafts({ api, store });
   const quote = createMessageQuote({ drafts, input, store, router, scope });
   const edit = createMessageEdit({ input, quote, context: composerContext });

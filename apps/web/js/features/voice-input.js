@@ -1,6 +1,6 @@
 import { h } from '../lib/dom.js';
 
-export function createVoiceInput(input) {
+export function createVoiceInput(input, beforeListen) {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const button = h('button', { type: 'button', class: 'btn btn--sm' }, '语音输入');
   const caption = h('p', { role: 'status', class: 'small muted', hidden: true });
@@ -55,6 +55,7 @@ export function createVoiceInput(input) {
         if (session !== current) return;
         session = undefined; reset(); input.focus();
       };
+      beforeListen();
       current.start();
       button.textContent = '结束听写'; show('正在听写…');
     } catch { reset(); show('语音识别无法启动，可继续输入文字。'); }
