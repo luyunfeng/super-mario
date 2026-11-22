@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import type { ExecutionProgress, ExecutionResult } from '../packages/protocol/src/index.ts';
+import { executionUsage, type ExecutionUsage, type ExecutionProgress, type ExecutionResult } from '../packages/protocol/src/index.ts';
 
 export interface TaskConfig {
   prompt: string;
@@ -42,6 +42,19 @@ export function readTaskResult(path: string): ExecutionResult {
   return result;
 }
 
+// Codex includes cached tokens in input. Claude and pi report cache counts separately.
+function taskUsage(raw: unknown, executor: TaskConfig['executorId']): ExecutionUsage | undefined {
+  if (!raw || typeof raw !== 'object') return;
+  const fields = raw as Record<string, unknown>;
+  const pi = executor === 'pi';
+  const usage = executionUsage(fields[pi ? 'input' : 'input_tokens'], fields[pi ? 'output' : 'output_tokens']);
+  if (!usage || executor === 'codex') return usage;
+  const read = pi ? 'cacheRead' : 'cache_read_input_tokens';
+  const write = pi ? 'cacheWrite' : 'cache_creation_input_tokens';
+  const cache = executionUsage(read in fields ? fields[read] : 0, write in fields ? fields[write] : 0);
+  return cache && executionUsage(usage.input + cache.input + cache.output, usage.output);
+}
+
 /** Only documented terminal events count as task outcome evidence; screen text does not. */
 export function createNativeCollector(executorId: TaskConfig['executorId'], expectedNativeSessionId?: string) {
   let text = '';
@@ -59,6 +72,8 @@ export function createNativeCollector(executorId: TaskConfig['executorId'], expe
   };
   let outcome: 'completed' | 'failed' | undefined;
   let piTurn: typeof outcome;
+  let usage: ExecutionUsage | undefined;
+  let piUsageIncomplete = false;
   return {
     event(value: unknown) {
       if (!value || typeof value !== 'object') return;
@@ -86,7 +101,10 @@ export function createNativeCollector(executorId: TaskConfig['executorId'], expe
           const item = event.item as Record<string, unknown>;
           if (item.type === 'agent_message' && typeof item.text === 'string') text = item.text;
         }
-        if (event.type === 'turn.completed') outcome = 'completed';
+        if (event.type === 'turn.completed') {
+          outcome = 'completed';
+          usage = taskUsage(event.usage, executorId);
+        }
         if (event.type === 'turn.failed') { outcome = 'failed'; text ||= JSON.stringify(event.error ?? 'Codex turn failed'); }
       } else if (executorId === 'pi') {
         if (event.type === 'session' && typeof event.id === 'string') {
@@ -104,6 +122,10 @@ export function createNativeCollector(executorId: TaskConfig['executorId'], expe
         } else if (event.type === 'message_end' && event.message && typeof event.message === 'object') {
           const message = event.message as Record<string, unknown>;
           if (message.role !== 'assistant') return;
+          // Each message_end accounts for one model call, including intermediate tool turns.
+          const part = taskUsage(message.usage, executorId);
+          usage = part && executionUsage((usage?.input ?? 0) + part.input, (usage?.output ?? 0) + part.output);
+          if (!usage) piUsageIncomplete = true;
           text = Array.isArray(message.content) ? message.content
             .filter(block => block?.type === 'text' && typeof block.text === 'string')
             .map(block => block.text).join('') : '';
@@ -143,6 +165,7 @@ export function createNativeCollector(executorId: TaskConfig['executorId'], expe
         // No permission/wait event is assumed for either non-interactive CLI. Text and
         // tool failures cannot establish waiting, completion, or business acceptance.
         if (event.type === 'result') {
+          usage = taskUsage(event.usage, executorId);
           outcome = event.subtype === 'success' && event.is_error === false ? 'completed' : 'failed';
           if (typeof event.result === 'string') text = event.result;
           else if (Array.isArray(event.errors)) text = event.errors.join('\n');
@@ -159,6 +182,7 @@ export function createNativeCollector(executorId: TaskConfig['executorId'], expe
       // Conflicting identity is a permanent failure, even before exit or after a signal.
       if (sessionMismatch) state = 'failed';
       return { state, text: sessionMismatch ? `原生恢复返回了不同的线程；未自动重试。\n${text}` : missingIdentity ? `原生恢复缺少匹配的线程证据，结果未知。\n${text}` : text, source: executorId === 'pi' ? 'pi-json' : executorId === 'codex' ? 'codex-json' : 'claude-stream-json',
+        ...(usage && !piUsageIncomplete && !sessionMismatch && !missingIdentity && exitCode !== undefined ? { usage } : {}),
         ...(exitCode !== undefined ? { exitCode } : {}), ...(nativeSessionId ? { nativeSessionId } : {}), ...(progress ? { progress: { ...progress } } : {}) };
     },
   };

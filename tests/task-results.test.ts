@@ -339,13 +339,14 @@ test('pi runner keeps damaged JSONL unknown even with native success and exit ze
   for (const badRecord of ['{bad json}\n', '{"type":']) {
     const f = await fixture(t, `
       require('node:fs').readFileSync(0);
-      console.log(JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'text',text:'done'}]}}));
+      console.log(JSON.stringify({type:'message_end',message:{role:'assistant',usage:{input:2,output:3},stopReason:'stop',content:[{type:'text',text:'done'}]}}));
       console.log(JSON.stringify({type:'agent_settled',aborted:false}));
       process.stdout.write(${JSON.stringify(badRecord)});
     `, 'pi');
     assert.equal(await f.done, 0);
     const result = readTaskResult(f.config.resultsPath);
     assert.equal(result.state, 'unknown');
+    assert.equal(result.usage, undefined);
     assert.equal(result.source, 'pi-json');
   }
 });

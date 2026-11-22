@@ -20,6 +20,9 @@ export function compareRuns({ run, runs, projectId, router, executorName }) {
     return h('article', { class: 'card card__body stack' },
       h('h3', null, item.prompt), Pill(status.text, status.tone),
       h('span', { class: 'small' }, executorName(item.executorId), ' · ', formatDate(item.createdAt, true)),
+      h('div', null, item.usage
+        ? `本次 Token：输入 ${item.usage.input.toLocaleString()} · 输出 ${item.usage.output.toLocaleString()}`
+        : '本次 Token：未上报'),
       item.cwd && h('div', null, '工作目录：', item.cwd),
       item.doneWhen && h('div', null, '完成标准：', item.doneWhen),
       h('pre', { class: 'output' }, item.output || '暂无输出'),

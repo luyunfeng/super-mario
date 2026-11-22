@@ -102,7 +102,7 @@ test('execution comparison keeps project boundaries, opens either record and sur
     status: 'completed', output: '第一轮交付', createdAt: now, updatedAt: now,
   };
   server.app.store.put('runs', first.id, first);
-  server.app.store.put('runs', 'second', { ...first, id: 'second', output: '', error: '校验失败', status: 'failed' });
+  server.app.store.put('runs', 'second', { ...first, id: 'second', output: '', error: '校验失败', status: 'failed', usage: { input: 10, output: 0 } });
   server.app.store.put('runs', 'outside', { ...first, id: 'outside', projectId: other.id, output: '其他项目交付' });
   await open();
   const base = server.url + '/#projects/all/runs/first';
@@ -114,6 +114,8 @@ test('execution comparison keeps project boundaries, opens either record and sur
   await expect(comparison.getByRole('article')).toHaveCount(2);
   await expect(comparison.getByRole('article').first()).toContainText('第一轮交付');
   await expect(comparison.getByRole('article').last()).toContainText('校验失败');
+  await expect(comparison.getByRole('article').first()).toContainText('本次 Token：未上报');
+  await expect(comparison.getByRole('article').last()).toContainText('本次 Token：输入 10 · 输出 0');
   await comparison.getByRole('link', { name: '查看执行详情' }).last().click();
   await expect(page).toHaveURL(/runs\/second$/);
   await page.goto(base + '?compare=outside');

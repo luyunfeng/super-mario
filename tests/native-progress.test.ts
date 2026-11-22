@@ -179,3 +179,29 @@ test('stored progress survives reload; disappeared runner remains unknown with i
   assert.equal(readTaskResult(path).state, 'unknown');
   assert.deepEqual(readTaskResult(path).progress, collector.result().progress);
 });
+
+test('task usage comes from the invocation, includes cache once and preserves unavailable counts', () => {
+  const claude = createNativeCollector('claude-code');
+  const result = { type: 'result', subtype: 'success', is_error: false,
+    usage: { input_tokens: 3, cache_read_input_tokens: 5, cache_creation_input_tokens: 7, output_tokens: 11 } };
+  claude.event(result);
+  claude.event(result);
+  assert.deepEqual(claude.result(0).usage, { input: 15, output: 11 });
+  assert.equal(claude.result().usage, undefined);
+  const pi = createNativeCollector('pi');
+  const message = { role: 'assistant', usage: { input: 0, cacheRead: 1, cacheWrite: 2, output: 3 } };
+  pi.event({ type: 'message_end', message });
+  pi.event({ type: 'message_end', message: { ...message, stopReason: 'stop', content: [] } });
+  pi.event({ type: 'agent_settled', aborted: false });
+  assert.deepEqual(pi.result(0).usage, { input: 6, output: 6 });
+  pi.event({ type: 'message_end', message: { role: 'assistant' } });
+  pi.event({ type: 'message_end', message });
+  assert.equal(pi.result(0).usage, undefined);
+  const codex = createNativeCollector('codex');
+  for (const input_tokens of [-1, null, '4', 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+    codex.event({ type: 'turn.completed', usage: { input_tokens, output_tokens: 1 } });
+    assert.equal(codex.result(0).usage, undefined);
+  }
+  codex.event({ type: 'turn.completed', usage: { input_tokens: 0, output_tokens: 0 } });
+  assert.deepEqual(codex.result(0).usage, { input: 0, output: 0 });
+});

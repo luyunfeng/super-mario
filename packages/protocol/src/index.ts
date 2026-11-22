@@ -1,3 +1,5 @@
+import type { ExecutionUsage } from './execution-usage.ts';
+export { executionUsage, type ExecutionUsage } from './execution-usage.ts';
 export type { PersonalAiMessage } from "./personal-ai.ts";
 export type { InboxConversation } from './inbox-conversations.ts';
 export type { TodoHistory, TodoExecutionRound } from './todo-history.ts';
@@ -24,7 +26,7 @@ export type KnowledgeLayer = 'personal' | 'global' | 'project';
 export interface KnowledgeEntry { id: string; layer: KnowledgeLayer; title: string; content: string; projectId?: string; updatedAt: string }
 export interface Todo { id: string; title: string; notes: string; projectId?: string; dueAt?: string; waitingOn?: string; reminderAt?: string; /** Host-owned waiting/reminder generation; legacy records default to 1. */ reminderVersion?: number; remindedAt?: string; completedAt?: string; createdAt: string; updatedAt: string }
 export interface Message { requestId?: string; progress?: ExecutionProgress; id: string; conversationId: string; role: 'user' | 'assistant'; replyTo?: string; projectId?: string; todoId?: string; readOnly?: boolean; origin?: 'user' | 'result' | 'notification'; text: string; createdAt: string; status?: 'pending' | 'done' | 'failed' }
-export interface Run { progress?: ExecutionProgress; nativeResume?: NativeResumeSpec; nativeResultSources?: string[]; nativeSessionId?: string; id: string; executorId: string; conversationId: string; prompt: string; cwd?: string; projectId?: string; todoId?: string; sourceMessageId?: string; doneWhen?: string; expectMinutes?: number; executionMode?: 'task' | 'interactive'; resultSource?: string; status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'unknown'; output: string; error?: string; machineId?: string; sessionId?: string; createdAt: string; updatedAt: string }
+export interface Run { usage?: ExecutionUsage; progress?: ExecutionProgress; nativeResume?: NativeResumeSpec; nativeResultSources?: string[]; nativeSessionId?: string; id: string; executorId: string; conversationId: string; prompt: string; cwd?: string; projectId?: string; todoId?: string; sourceMessageId?: string; doneWhen?: string; expectMinutes?: number; executionMode?: 'task' | 'interactive'; resultSource?: string; status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'unknown'; output: string; error?: string; machineId?: string; sessionId?: string; createdAt: string; updatedAt: string }
 export interface ExecutorInfo { taskOnly?: boolean; nativeResultSources?: string[]; id: string; name: string; kind: string; machineId: string; available: boolean; mode: 'demo' | 'real'; description: string; reason?: string; defaultCwd?: string }
 export interface PluginNavigationItem { id: string; label: string; route: string }
 export interface PluginInfo { navigation?: PluginNavigationItem[]; id: string; name: string; enabled: boolean; status: 'active' | 'disabled' | 'waiting' | 'failed'; error?: string; capabilities: string[] }
@@ -63,7 +65,7 @@ export interface TerminalFrame { epoch: string; seq: number; full: boolean; widt
 export interface SessionBinding { machineId?: string; agentInstanceId?: string; hostKind?: string; hostInstanceId?: string; terminalId?: string; nativeResume?: NativeResumeSpec; nativeSessionId?: string; sessionId: string; paneId: string; executorId: string; cwd: string; createdAt: string }
 
 /** A finished CLI turn is distinct from completion of its associated todo. */
-export interface ExecutionResult { progress?: ExecutionProgress; state: 'running' | 'completed' | 'failed' | 'unknown'; text: string; source: string; exitCode?: number; nativeSessionId?: string }
+export interface ExecutionResult { usage?: ExecutionUsage; progress?: ExecutionProgress; state: 'running' | 'completed' | 'failed' | 'unknown'; text: string; source: string; exitCode?: number; nativeSessionId?: string }
 export interface Approval { id: string; version: number; title: string; details: string; kind: 'dispatch' | 'input' | 'channel-reply' | 'feishu-reply' | `plugin:${string}.${string}`; params: JsonObject; todoId?: string; status: 'pending' | 'running' | 'completed' | 'rejected' | 'failed' | 'unknown'; result?: Json; error?: string; createdAt: string; updatedAt: string }
 export interface AutomationSettings { tickSeconds: number; stalledMinutes: number; stalledFactorOfEstimate?: number; needsYouMinutes: number; remindersEnabled: boolean }
 export interface SupervisionSignal { id: string; kind: 'review' | 'stalled' | 'orphaned' | 'reminder' | 'waiting' | 'needs_you'; text: string; runId?: string; todoId?: string; createdAt: string; resolvedAt?: string }

@@ -35,6 +35,7 @@ export async function runTask(config: TaskConfig): Promise<number> {
   let malformed = false;
   const persist = (code?: number, signal?: string | null, error?: string) => {
     const result = collector.result(code, signal);
+    if (pi && malformed) delete result.usage;
     if (pi && result.state === 'completed' && malformed) {
       result.state = 'unknown';
       result.text = 'Incomplete or malformed pi JSONL stream';
