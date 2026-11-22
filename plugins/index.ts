@@ -147,6 +147,7 @@ export interface SystemActions {
   projectCreate?(input: Record<string, unknown>): Json | Promise<Json>;
   projectsDiscover?(input: Record<string, unknown>): Promise<Json>;
   knowledgeSource?(input: Record<string, unknown>): Json;
+  setKnowledgeImportance?(args: Record<string, unknown>): Promise<Json>;
   changeKnowledgeTag?(args: Record<string, unknown>): Promise<Json>;
   knowledgeRevision?(id: string, commit?: string, projectId?: string): ReturnType<NonNullable<KnowledgeBackend['revision']>>;
   knowledgeOriginal?(pageId: string, sourceId?: string, projectId?: string): Promise<{
@@ -289,6 +290,10 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           return { protected: classifyProtected(String(url ?? ''), Array.isArray(trustedHosts) ? trustedHosts : []) };
         });
         if (actions?.knowledgeSource) context.contribute('tools', 'knowledge_ingest', tool('knowledge_ingest', '将用户明确提供的资料加入独立知识 Agent 整理队列，默认个人知识；受保护来源先生成主人读取审批，不自动申请权限。入队或批准都不代表整理完成。', async (args, signal) => { signal.throwIfAborted(); return actions.knowledgeSource!(args); }, { url: { type: 'string' }, text: { type: 'string' }, title: { type: 'string' }, layer: { type: 'string', enum: ['personal', 'project'] }, projectId: { type: 'string' } }));
+        if (actions?.setKnowledgeImportance) context.contribute('tools', 'knowledge_set_importance', tool('knowledge_set_importance',
+          '按用户要求调整指定知识页的重要级。先读取该页 id 和 updatedAt，传 P0–P3，清除分级时传 null。',
+          async (args, signal) => { signal.throwIfAborted(); return actions.setKnowledgeImportance!(args); },
+          { id: { type: 'string' }, updatedAt: { type: 'string' }, importance: { type: ['string', 'null'], enum: ['P0', 'P1', 'P2', 'P3', null] } }));
         if (actions?.changeKnowledgeTag) context.contribute('tools', 'knowledge_change_tag', tool('knowledge_change_tag',
           '按用户明确要求给指定知识页添加或移除一个标签。传入 knowledge_list 返回的 id 和 updatedAt；版本过期时重新核对。',
           async (args, signal) => { signal.throwIfAborted(); return actions.changeKnowledgeTag!(args); },

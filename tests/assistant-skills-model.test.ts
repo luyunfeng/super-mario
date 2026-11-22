@@ -640,16 +640,20 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
   } finally { await server.close(); }
 });
 
-test('Web 和飞书按已读版本增删项目知识标签', { timeout: 30000 }, async t => {
+test('Web 和飞书按已读版本调整知识重要级和标签', { timeout: 30000 }, async t => {
   let adapter!: FeishuOptions, action: 'add' | 'remove' = 'add';
   let id = '', foreignId = '', updatedAt = '';
   const sent: string[] = [];
   const change = (target: string, version: string, step: string) =>
     call('knowledge_change_tag', { id: target, updatedAt: version, action, tag: '待核对' }, step);
+  const rank = (target: string, version: string, step: string) =>
+    call('knowledge_set_importance', { id: target, updatedAt: version, importance: action === 'add' ? 'P1' : null }, step);
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.ok(req.tools.includes('knowledge_change_tag'));
       assert.match(req.system, /仅改用户指定的标签/);
+      assert.ok(req.tools.includes('knowledge_set_importance'));
+      assert.match(req.system, /明确要求清除分级时传 null/);
       return call('knowledge_list', { query: '验收记录' }, 'lookup');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[]).map(p => p.text).join('');
@@ -657,7 +661,22 @@ test('Web 和飞书按已读版本增删项目知识标签', { timeout: 30000 },
       const pages = JSON.parse(raw);
       assert.deepEqual(pages.map((p: {id:string}) => p.id), [id]);
       updatedAt = pages[0].updatedAt;
-      return change(foreignId, updatedAt, 'foreign');
+      return rank(foreignId, updatedAt, 'rank-foreign');
+    }
+    if (req.callId === 'rank-foreign') {
+      assert.match(raw, /作用域|知识页不可用/);
+      return rank(id, '旧版本', 'rank-stale');
+    }
+    if (req.callId === 'rank-stale') {
+      assert.match(raw, /新版本/);
+      return rank(id, updatedAt, 'rank');
+    }
+    if (req.callId === 'rank' || req.callId === 'rank-repeat') {
+      const result = JSON.parse(raw);
+      assert.equal(result.importance, action === 'add' ? 'P1' : null);
+      assert.equal(result.changed, req.callId === 'rank');
+      updatedAt = result.updatedAt;
+      return req.callId === 'rank' ? rank(id, updatedAt, 'rank-repeat') : change(foreignId, updatedAt, 'foreign');
     }
     if (req.callId === 'foreign') {
       assert.match(raw, /作用域|知识页不可用/);
@@ -674,7 +693,7 @@ test('Web 和飞书按已读版本增删项目知识标签', { timeout: 30000 },
       return change(id, result.updatedAt, 'repeat');
     }
     assert.equal(result.changed, false);
-    return { role: 'assistant', content: '已核对保存的标签。' };
+    return { role: 'assistant', content: '已核对保存的重要级和标签。' };
   }, options => {
     adapter = options;
     return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
@@ -686,17 +705,19 @@ test('Web 和飞书按已读版本增删项目知识标签', { timeout: 30000 },
     const page = { layer: 'project', title: '验收记录', content: '原有正文', tags: ['原有标签'] };
     id = (await api('/knowledge', { ...page, projectId: project.id })).id;
     foreignId = (await api('/knowledge', { ...page, projectId: other.id })).id;
-    assert.equal(await ask('给验收记录加上待核对标签', '/projects/' + project.id + '/messages'), '已核对保存的标签。');
+    assert.equal(await ask('把验收记录设为 P1，加上待核对标签', '/projects/' + project.id + '/messages'), '已核对保存的重要级和标签。');
     assert.deepEqual((await server.app.knowledge().list({ tag: '待核对' })).map(p => p.id), [id]);
+    assert.deepEqual((await server.app.knowledge().list({ importance: 'P1' })).map(p => p.id), [id]);
     action = 'remove';
     const bot = await api('/feishu/bots', { name: '知识助手', appId: 'cli_4444444444444444', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
     const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
-    await adapter.onMessage('移除验收记录上的待核对标签', { ...source, messageId: 'remove-tag' });
-    await t.waitFor(() => assert.ok(sent.includes('已核对保存的标签。')));
+    await adapter.onMessage('清除验收记录的重要级并移除待核对标签', { ...source, messageId: 'remove-tag' });
+    await t.waitFor(() => assert.ok(sent.includes('已核对保存的重要级和标签。')));
     const result = await server.app.knowledge().list({ query: '验收记录' });
     for (const item of result) {
+      assert.equal(item.importance, undefined);
       assert.equal(item.content, '原有正文');
       assert.deepEqual(item.tags, ['原有标签']);
     }
