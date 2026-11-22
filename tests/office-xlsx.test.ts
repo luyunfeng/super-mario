@@ -123,3 +123,14 @@ test('单个区域、全簿累计和嵌套深度均有上限，超限内容保�
   assert.deepEqual(formulas.map((_, i) => sheet.getCell(i + 1, 1).result), [7, undefined, undefined, undefined, 0, 0, 0, 0, undefined, 6]);
   formulas.forEach((formula, i) => assert.equal(sheet.getCell(i + 1, 1).formula, formula));
 });
+
+test('空单元格和返回空字符串的公式在 COUNTA 中有区别', async () => {
+  const { workbook } = await read(JSON.stringify({ sheets: [
+    { rows: [[null, '=IF(TRUE,"",8)', '=COUNTA(A1:B1)', '=COUNT(A1:B1)', '=B1&"后缀"']] },
+  ] }));
+  const sheet = workbook.worksheets[0];
+  assert.equal(sheet.getCell('B1').formula, 'IF(TRUE,"",8)');
+  assert.equal(sheet.getCell('C1').result, 1);
+  assert.equal(sheet.getCell('D1').result, 0);
+  assert.equal(sheet.getCell('E1').result, '后缀');
+});

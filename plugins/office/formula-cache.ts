@@ -55,6 +55,7 @@ function parse(source: string): Expr {
       left = expression(0, depth + 1);
       if (!eat(')')) throw uncached;
     } else if (eat('!')) {
+      if (!word.startsWith("'") && !/^[\p{L}\p{N}_.]+$/u.test(word)) throw uncached;
       const sheet = word.startsWith("'") ? word.slice(1, -1).replaceAll("''", "'") : word;
       left = { kind: 'ref', sheet, start: point(take()), end: eat(':') ? point(take()) : undefined };
     } else if (/^[A-Za-z_][A-Za-z_0-9.]*$/.test(word) && eat('(')) {
@@ -157,23 +158,27 @@ export function cacheFormulas(book: Workbook) {
   const sheets = new Map(book.worksheets.map(sheet => [sheet.name.toLowerCase(), sheet]));
   const memo = new Map<Cell, Scalar | FormulaError | typeof uncached>();
   let rangeBudget = 262144, expressionBudget = 500000, textBudget = 2 * 1024 * 1024;
+  function chargeText(value: Scalar): Scalar {
+    if (typeof value === 'string' && (textBudget -= value.length) < 0) throw uncached;
+    return value;
+  }
   function read(cell: Cell | undefined, depth: number): Scalar {
     if (!cell) return null;
     if (!cell.formula) {
       const value = cell.value;
-      if (value == null || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string') return value ?? null;
+      if (value == null || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string') return chargeText(value ?? null);
       throw uncached;
     }
     if (memo.has(cell)) {
       const result = memo.get(cell)!;
       if (result === uncached || result instanceof FormulaError) throw result;
-      return result;
+      return chargeText(result);
     }
     if (depth > 64 || expressionBudget < 1) throw uncached;
     memo.set(cell, uncached); // A reference back to this in-progress expression is a cycle.
     try {
       const result = evaluate(parse(cell.formula), cell.worksheet, depth) ?? 0;
-      if (typeof result === 'string' && (textBudget -= result.length) < 0) throw uncached;
+      chargeText(result);
       cell.value = { formula: cell.formula, result };
       memo.set(cell, result);
       return result;
@@ -194,7 +199,7 @@ export function cacheFormulas(book: Workbook) {
     switch (expr.kind) {
       case 'literal': return expr.value;
       case 'fault': return fail(expr.error);
-      case 'binary': return binary(expr.op, evalArg(expr.left), evalArg(expr.right));
+      case 'binary': return chargeText(binary(expr.op, evalArg(expr.left), evalArg(expr.right)));
       case 'unary': {
         const n = number(evalArg(expr.arg));
         return expr.op === '-' ? -n : expr.op === '%' ? n / 100 : n;
@@ -227,7 +232,8 @@ export function cacheFormulas(book: Workbook) {
     function consume(value: Scalar, ref: boolean) {
       if (name === 'COUNTA') { if (value !== null) count++; return; }
       if (name === 'COUNT') {
-        if (typeof value === 'number' || (!ref && value !== null && (typeof value !== 'string' || (numericText.test(value.trim()) && Number.isFinite(Number(value)))))) count++;
+        const typedNumber = !ref && typeof value === 'string' && numericText.test(value.trim()) && Number.isFinite(Number(value));
+        if (typeof value === 'number' || (!ref && typeof value === 'boolean') || typedNumber) count++;
         return;
       }
       if (name === 'AND' || name === 'OR') {
@@ -253,7 +259,11 @@ export function cacheFormulas(book: Workbook) {
         sample(() => evalArg(arg), arg.kind === 'ref');
         continue;
       }
-      const source = target(arg, sheet);
+      const source = arg.sheet === undefined ? sheet : sheets.get(arg.sheet.toLowerCase());
+      if (!source) {
+        sample(() => fail('#REF!'), true);
+        continue;
+      }
       const rows = Math.abs(arg.start.row - arg.end.row) + 1, cols = Math.abs(arg.start.col - arg.end.col) + 1;
       const size = rows * cols;
       if (size > 65536 || size > rangeBudget) throw uncached;
