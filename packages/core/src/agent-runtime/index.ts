@@ -5,7 +5,7 @@ import { setImmediate } from 'node:timers/promises';
 import { runWithAgentInput } from '../agent-input.ts';
 import { buildWorkContext, formatWorkContextMarkdown } from '../work-context.ts';
 import { MAIN_AGENT_SYSTEM_PROMPT } from '../prompts.ts';
-import { estimateTokens, redactTraceText, saveTurnTrace, summarizeTrace, type AgentTraceContextItem, type AgentTurnTrace } from '../agent-traces.ts';
+import { estimateTokens, boundTraceText, saveTurnTrace, summarizeTrace, type AgentTraceContextItem, type AgentTraceRuntimeMeta, type AgentTurnTrace } from '../agent-traces.ts';
 import type { BotScope } from '../../../protocol/src/bots.ts';
 import type { AppConfig, ExecutorInfo, JsonObject, KnowledgeEntry, Message, Json } from '../../../protocol/src/index.ts';
 import type { Contributions, EventBus, Store } from '../../../plugin-sdk/src/index.ts';
@@ -28,6 +28,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   let stopping = false;
   let session: AgentSession | undefined;
   let activeModelInfo = { provider: config.model?.provider ?? 'pi', model: config.model?.model ?? 'default', contextWindow: 128000 };
+  let activeRuntimeMeta: AgentTraceRuntimeMeta = { transport: 'sdk' };
   let activeToolsSchemaText = '';
   let activeToolsCount = 0;
   let activeTrace: AgentTurnTrace | undefined;
@@ -191,6 +192,38 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       model: model.id || config.model?.model || 'default',
       contextWindow: typeof model.contextWindow === 'number' && model.contextWindow > 0 ? model.contextWindow : 128000,
     };
+    const isCodexCli = activeModelInfo.provider === 'codex-cli';
+    const rawBase = config.model?.baseUrl || (model as unknown as { baseUrl?: string }).baseUrl || '';
+    const cleanBase = rawBase.replace(/\/+$/, '');
+    const apiFormat = isCodexCli ? 'codex-cli-jsonl'
+      : activeModelInfo.provider === 'anthropic' ? 'anthropic-messages'
+      : 'openai-completions';
+    const endpoint = isCodexCli ? undefined
+      : cleanBase
+        ? (apiFormat === 'anthropic-messages'
+          ? (cleanBase.endsWith('/v1/messages') ? cleanBase : cleanBase.endsWith('/v1') ? `${cleanBase}/messages` : `${cleanBase}/v1/messages`)
+          : (cleanBase.endsWith('/chat/completions') ? cleanBase : `${cleanBase}/chat/completions`))
+        : undefined;
+    const resolvedToken = config.model?.apiKey
+      || (activeModelInfo.provider === 'openai-compatible' ? process.env.OPENAI_API_KEY : undefined)
+      || (activeModelInfo.provider === 'anthropic' ? process.env.ANTHROPIC_API_KEY : undefined);
+    const tokenSource = config.model?.apiKey ? 'config.model.apiKey'
+      : activeModelInfo.provider === 'openai-compatible' && process.env.OPENAI_API_KEY ? 'env:OPENAI_API_KEY'
+      : activeModelInfo.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY ? 'env:ANTHROPIC_API_KEY'
+      : isCodexCli ? 'local-cli-auth' : 'pi-auth-store';
+    activeRuntimeMeta = {
+      transport: isCodexCli ? 'codex-cli' : endpoint ? 'http' : 'sdk',
+      ...(isCodexCli ? {} : { method: 'POST' }),
+      ...(cleanBase ? { baseUrl: cleanBase } : {}),
+      ...(endpoint ? { endpoint } : {}),
+      apiFormat,
+      account: process.env.USER || process.env.LOGNAME || 'local-user',
+      ...(resolvedToken ? { token: resolvedToken } : {}),
+      tokenSource,
+      ...(config.model?.cliCommand ? { cliCommand: config.model.cliCommand } : {}),
+      ...(config.model?.cliConfigDir ? { cliConfigDir: config.model.cliConfigDir } : {}),
+      cwd,
+    };
 
     const bridge: ExtensionFactory = pi => {
       // Refresh registration before every turn so newly enabled plugins are visible.
@@ -283,9 +316,22 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           const items: AgentTraceContextItem[] = [];
           const pushItem = (id: string, category: AgentTraceContextItem['category'], label: string, raw: string, extra?: { tag?: string; count?: number }) => {
             if (!raw) return;
-            const { text, truncated } = redactTraceText(raw, config.model?.apiKey);
+            const { text, truncated } = boundTraceText(raw);
             items.push({ id, category, label, tokens: estimateTokens(raw), chars: raw.length, content: text, ...(truncated ? { truncated } : {}), ...extra });
           };
+          const reqSummary = [
+            `Transport: ${activeRuntimeMeta.transport}`,
+            ...(activeRuntimeMeta.endpoint ? [`Request: ${activeRuntimeMeta.method ?? 'POST'} ${activeRuntimeMeta.endpoint}`] : []),
+            ...(activeRuntimeMeta.baseUrl ? [`Base URL: ${activeRuntimeMeta.baseUrl}`] : []),
+            `Model: ${activeModelInfo.provider}/${activeModelInfo.model} (${activeRuntimeMeta.apiFormat ?? 'sdk'})`,
+            `Account: ${activeRuntimeMeta.account ?? 'local'}`,
+            `Token Source: ${activeRuntimeMeta.tokenSource ?? 'unknown'}`,
+            ...(activeRuntimeMeta.token ? [`Token: ${activeRuntimeMeta.token}`] : []),
+            ...(activeRuntimeMeta.cliCommand ? [`CLI Command: ${activeRuntimeMeta.cliCommand}`] : []),
+            ...(activeRuntimeMeta.cliConfigDir ? [`CLI Config Dir: ${activeRuntimeMeta.cliConfigDir}`] : []),
+            ...(activeRuntimeMeta.cwd ? [`Workspace CWD: ${activeRuntimeMeta.cwd}`] : []),
+          ].join('\n');
+          pushItem('req-meta', 'system', '本次调用 · 账号 / HTTP 请求 / Token', reqSummary, { tag: 'request' });
           pushItem('sys-base', 'system', '基础系统提示词', event.systemPrompt, { tag: 'system' });
           if (activeToolsSchemaText) {
             pushItem('tools-schema', 'tools', `已注册工具定义 (${activeToolsCount} 项)`, activeToolsSchemaText, { tag: 'tools', count: activeToolsCount });
@@ -390,7 +436,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           model: activeModelInfo.model,
           contextWindow: activeModelInfo.contextWindow,
           startedAt: assistant.createdAt,
-          userText: redactTraceText(user.text, config.model?.apiKey).text,
+          runtime: structuredClone(activeRuntimeMeta),
+          userText: boundTraceText(user.text).text,
           assistantText: '',
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, estimated: true },
           summary: { system: 0, tools: 0, memory: 0, snapshot: 0, history: 0, tool_result: 0, thinking: 0, response: 0 },
@@ -447,12 +494,12 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
               const callId = typeof ev.toolCallId === 'string' ? ev.toolCallId : `${name}-${activeTrace.toolCalls.length}`;
               if (event.type === 'tool_execution_start') {
                 const rawArgs = typeof ev.args === 'string' ? ev.args : JSON.stringify(ev.args ?? {}, null, 2);
-                const argsText = redactTraceText(rawArgs, config.model?.apiKey, 16384).text;
+                const argsText = boundTraceText(rawArgs, 32768).text;
                 activeTrace.toolCalls.push({ id: callId, name, args: argsText, startedAt: new Date().toISOString(), tokens: estimateTokens(argsText) });
               } else {
                 const existing = [...activeTrace.toolCalls].reverse().find(c => c.id === callId || (c.name === name && c.result === undefined));
                 const rawResult = typeof ev.result === 'string' ? ev.result : JSON.stringify(ev.result ?? '', null, 2);
-                const resultText = redactTraceText(rawResult, config.model?.apiKey, 32768).text;
+                const resultText = boundTraceText(rawResult, 65536).text;
                 if (existing) {
                   existing.result = resultText;
                   existing.isError = Boolean(event.isError);
@@ -473,7 +520,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
               // thinking blocks, tool arguments/results, or system context.
               const current = event.message.content.filter(block => block.type === 'text').map(block => block.text).join('');
               assistant.text = [...replies, current].filter(Boolean).join('\n\n');
-              if (activeTrace) { activeTrace.assistantText = redactTraceText(assistant.text, config.model?.apiKey).text; flushTrace(); }
+              if (activeTrace) { activeTrace.assistantText = boundTraceText(assistant.text).text; flushTrace(); }
               progress('responding', '正在生成回复');
             } else if (stream.type === 'thinking_start') {
               streamThinking = '';
@@ -482,7 +529,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
               const delta = typeof stream.delta === 'string' ? stream.delta : '';
               if (delta && activeTrace) {
                 streamThinking += delta;
-                const clean = redactTraceText(streamThinking, config.model?.apiKey).text;
+                const clean = boundTraceText(streamThinking).text;
                 const idx = activeTrace.thinkingBlocks.length ? activeTrace.thinkingBlocks.length - 1 : 0;
                 const block = { index: idx, text: clean, tokens: estimateTokens(clean) };
                 if (activeTrace.thinkingBlocks[idx]?.index === idx && activeTrace.thinkingBlocks.length > replies.length) {
@@ -502,7 +549,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           if (activeTrace) {
             const finalizedThinking = message.content
               .filter((b): b is { type: 'thinking'; thinking: string } => b.type === 'thinking' && typeof (b as { thinking?: unknown }).thinking === 'string')
-              .map(b => redactTraceText(b.thinking, config.model?.apiKey).text)
+              .map(b => boundTraceText(b.thinking).text)
               .filter(Boolean);
             if (finalizedThinking.length) {
               const base = Math.max(0, activeTrace.thinkingBlocks.length - (streamThinking ? 1 : 0));
@@ -530,7 +577,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
                 };
               }
             }
-            activeTrace.assistantText = redactTraceText(replies.filter(Boolean).join('\n\n'), config.model?.apiKey).text;
+            activeTrace.assistantText = boundTraceText(replies.filter(Boolean).join('\n\n')).text;
             flushTrace(true);
           }
           if (message.stopReason === 'error' || message.stopReason === 'aborted') {
@@ -562,7 +609,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       if (activeTrace && activeTrace.status === 'pending') {
         activeTrace.status = assistant.status === 'failed' ? 'failed' : 'done';
         activeTrace.finishedAt = new Date().toISOString();
-        activeTrace.assistantText = redactTraceText(assistant.text, config.model?.apiKey).text;
+        activeTrace.assistantText = boundTraceText(assistant.text).text;
         saveTurnTrace(store, structuredClone(activeTrace));
         events.publish('agent.trace.changed', { conversationId: ownConversation, turnId: activeTrace.id });
       }

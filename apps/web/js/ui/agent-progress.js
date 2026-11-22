@@ -32,21 +32,31 @@ export function agentProgress(message, api) {
         const pct = win ? Math.min(100, Math.round((used / win) * 100)) : 0;
         body.append(h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '8px', justifyContent: 'space-between', marginBottom: '6px', fontFamily: 'ui-monospace, monospace', fontSize: '11px' } },
           h('span', null, `Pi · ${trace.provider}/${trace.model} · ${used} / ${win} tok (${pct}%)`),
-          h('a', { href: inspectorHref, target: '_blank', rel: 'noopener', style: { color: 'var(--accent, #C75B39)', textDecoration: 'none', fontWeight: '600' } }, '在上下文透视中查看全文 ↗')));
+          h('a', { href: inspectorHref, target: '_blank', rel: 'noopener', style: { color: 'var(--accent, #C75B39)', textDecoration: 'none', fontWeight: '600' } }, '打开上下文透视 ↗')));
+        if (trace.runtime) {
+          const rt = trace.runtime;
+          const metaLines = [
+            rt.endpoint ? `请求：${rt.method || 'POST'} ${rt.endpoint}` : `方式：${rt.transport}${rt.cliCommand ? ' · ' + rt.cliCommand : ''}`,
+            `账号：${rt.account || 'local'}${rt.cliConfigDir ? ' · ' + rt.cliConfigDir : ''}`,
+            `Token：${rt.token ? rt.token : `(${rt.tokenSource || '本地已登录凭证'})`}`,
+          ];
+          body.append(h('pre', { style: { margin: '0 0 6px', padding: '6px 8px', background: 'var(--surface, #fff)', border: '1px solid var(--line, #D8D5CC)', borderRadius: '6px', fontFamily: 'ui-monospace, monospace', fontSize: '11px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' } }, metaLines.join('\n')));
+        }
         if (trace.thinkingBlocks?.length) {
           for (const [idx, block] of trace.thinkingBlocks.entries()) {
             body.append(h('div', { style: { marginBottom: '6px' } },
               h('div', { style: { fontWeight: '600', marginBottom: '2px' } }, `思考过程 #${idx + 1} (${block.tokens} tok)`),
-              h('pre', { style: { margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '220px', overflowY: 'auto', fontSize: '12px', fontFamily: 'inherit' } }, block.text)));
+              h('pre', { style: { margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '260px', overflowY: 'auto', fontSize: '12px', fontFamily: 'inherit' } }, block.text)));
           }
         } else {
-          body.append(h('p', { class: 'small muted', style: { margin: '0 0 6px' } }, '本轮未产生独立 thinking 块（可点右上角查看完整提示词与工具分布）。'));
+          body.append(h('p', { class: 'small muted', style: { margin: '0 0 6px' } }, '这一轮模型没输出独立 thinking 块，点右上角可以看完整系统提示词和工具分布。'));
         }
         if (trace.toolCalls?.length) {
           body.append(h('div', { style: { marginTop: '4px' } },
             h('div', { style: { fontWeight: '600', marginBottom: '2px' } }, `工具调用 (${trace.toolCalls.length})`),
-            ...trace.toolCalls.map(c => h('div', { style: { fontFamily: 'ui-monospace, monospace', fontSize: '11.5px', padding: '2px 0' } },
-              `${c.isError ? '✖' : '✔'} ${c.name} (${c.tokens} tok)`))));
+            ...trace.toolCalls.map(c => h('details', { style: { fontFamily: 'ui-monospace, monospace', fontSize: '11.5px', padding: '2px 0' } },
+              h('summary', { style: { cursor: 'pointer' } }, `${c.isError ? '✖' : '✔'} ${c.name} (${c.tokens} tok)`),
+              h('pre', { style: { margin: '4px 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '200px', overflowY: 'auto', background: 'var(--surface, #fff)', padding: '6px', borderRadius: '6px' } }, `入参：\n${c.args}\n\n返回：\n${c.result ?? '（执行中…）'}`)))));
         }
       } catch {
         body.textContent = '本条消息暂无上下文追踪记录（历史旧消息或演示回复）。';

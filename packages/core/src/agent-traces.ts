@@ -2,7 +2,7 @@ import type { Store } from '../../plugin-sdk/src/index.ts';
 import type { Message, Project } from '../../protocol/src/index.ts';
 
 export const TRACE_COLLECTION = 'agent.traces';
-const MAX_CONTENT_CHARS = 65536;
+const MAX_CONTENT_CHARS = 131072;
 const MAX_TURNS_PER_SESSION = 150;
 
 export type TraceCategory =
@@ -14,6 +14,20 @@ export type TraceCategory =
   | 'tool_result'
   | 'thinking'
   | 'response';
+
+export interface AgentTraceRuntimeMeta {
+  transport: 'http' | 'codex-cli' | 'sdk';
+  method?: string;
+  baseUrl?: string;
+  endpoint?: string;
+  apiFormat?: string;
+  account?: string;
+  token?: string;
+  tokenSource?: string;
+  cliCommand?: string;
+  cliConfigDir?: string;
+  cwd?: string;
+}
 
 export interface AgentTraceContextItem {
   id: string;
@@ -58,6 +72,7 @@ export interface AgentTurnTrace {
   durationMs?: number;
   userText: string;
   assistantText: string;
+  runtime?: AgentTraceRuntimeMeta;
   usage: {
     input: number;
     output: number;
@@ -87,15 +102,11 @@ export function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(cjk / 1.4 + other / 3.8));
 }
 
-export function redactTraceText(raw: string, apiKey?: string, limit = MAX_CONTENT_CHARS): { text: string; truncated: boolean } {
-  let clean = (raw ?? '')
-    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '[PRIVATE KEY REDACTED]')
-    .replace(/\bBearer\s+[^\s"'<>]+/gi, 'Bearer [REDACTED]')
-    .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, '[REDACTED]')
-    .replace(/\bgh[pousr]_[A-Za-z0-9_]{16,}\b/g, '[REDACTED]');
-  if (apiKey && apiKey.length >= 6) clean = clean.replaceAll(apiKey, '[REDACTED]');
-  if (clean.length > limit) return { text: clean.slice(0, limit) + '\n…（已截断）', truncated: true };
-  return { text: clean, truncated: false };
+/** Local personal inspector keeps full raw text intact; only caps extreme blobs. */
+export function boundTraceText(raw: string, limit = MAX_CONTENT_CHARS): { text: string; truncated: boolean } {
+  const value = raw ?? '';
+  if (value.length > limit) return { text: value.slice(0, limit) + '\n…（超出单块上限已截断）', truncated: true };
+  return { text: value, truncated: false };
 }
 
 export function summarizeTrace(items: readonly AgentTraceContextItem[]): Record<TraceCategory, number> {

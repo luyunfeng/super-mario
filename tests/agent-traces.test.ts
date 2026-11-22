@@ -4,16 +4,19 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStore } from '../packages/core/src/store.ts';
-import { estimateTokens, listTraceSessions, readTraceSession, readTurnTrace, redactTraceText, saveTurnTrace, summarizeTrace, type AgentTurnTrace } from '../packages/core/src/agent-traces.ts';
+import { boundTraceText, estimateTokens, listTraceSessions, readTraceSession, readTurnTrace, saveTurnTrace, summarizeTrace, type AgentTurnTrace } from '../packages/core/src/agent-traces.ts';
 
-test('estimateTokens and redactTraceText handle CJK/ASCII and scrub secrets', () => {
+test('estimateTokens and boundTraceText preserve raw local trace text within cap', () => {
   assert.ok(estimateTokens('你好世界 hello world') > 3);
-  const { text } = redactTraceText('Bearer secret-token-value and sk-1234567890abcdef1234', 'my-custom-key');
-  assert.doesNotMatch(text, /secret-token-value|sk-1234567890abcdef1234/);
-  assert.match(text, /\[REDACTED\]/);
+  const full = boundTraceText('POST https://api.example.com/v1/messages');
+  assert.equal(full.truncated, false);
+  assert.equal(full.text, 'POST https://api.example.com/v1/messages');
+  const capped = boundTraceText('a'.repeat(200), 50);
+  assert.equal(capped.truncated, true);
+  assert.ok(capped.text.length > 50);
 });
 
-test('saveTurnTrace persists session history, summary breakdown and reads back turns', async t => {
+test('saveTurnTrace persists runtime meta, session history, summary breakdown and reads back turns', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'mario-traces-'));
   const store = createStore(join(dir, 'test.sqlite'));
   t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
@@ -32,7 +35,7 @@ test('saveTurnTrace persists session history, summary breakdown and reads back t
     conversationId: 'main',
     userMessageId: 'u1',
     status: 'done',
-    provider: 'pi',
+    provider: 'anthropic',
     model: 'demo-model',
     contextWindow: 128000,
     startedAt: '2026-11-22T01:00:00Z',
@@ -40,6 +43,14 @@ test('saveTurnTrace persists session history, summary breakdown and reads back t
     durationMs: 2000,
     userText: '帮我查今天日程',
     assistantText: '今天有 2 个会',
+    runtime: {
+      transport: 'http',
+      method: 'POST',
+      endpoint: 'https://api.example.com/v1/messages',
+      account: 'demo-user',
+      token: 'demo-synthetic-token',
+      tokenSource: 'config.model.apiKey',
+    },
     usage: { input: 1200, output: 350, cacheRead: 800, cacheWrite: 0, totalTokens: 1550, estimated: false },
     summary: summarizeTrace(items),
     contextItems: items,
@@ -60,6 +71,8 @@ test('saveTurnTrace persists session history, summary breakdown and reads back t
   assert.equal(sessionDetail.messages[1]!.hasTrace, true);
 
   const turnDetail = readTurnTrace(store, 'a1');
+  assert.equal(turnDetail?.runtime?.endpoint, 'https://api.example.com/v1/messages');
+  assert.equal(turnDetail?.runtime?.token, 'demo-synthetic-token');
   assert.equal(turnDetail?.thinkingBlocks[0]!.text, '先调用 calendar_agenda 核对今日日程');
   assert.equal(turnDetail?.summary.system, 1200);
 });

@@ -201,6 +201,14 @@
       background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
       color: var(--text); padding: 6px 10px; font-family: var(--mono); font-size: 12px; min-width: 240px;
     }
+    .runtime-strip {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+      padding: 10px 14px; margin-bottom: 16px; font-family: var(--mono); font-size: 11.5px;
+    }
+    .rt-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .rt-k { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .rt-v { color: var(--text); word-break: break-all; }
   </style>
 </head>
 <body>
@@ -242,6 +250,9 @@
         <div class="kpi-sub" id="kpi-cache-sub">—</div>
       </div>
     </section>
+
+    <!-- Runtime: Account / HTTP Request / Token -->
+    <section class="runtime-strip" id="runtime-strip" hidden></section>
 
     <!-- Treemap -->
     <section class="treemap-card">
@@ -397,10 +408,12 @@
 
     function renderTrace() {
       const trace = currentTrace;
+      const rtStrip = document.getElementById('runtime-strip');
       if (!trace) {
+        rtStrip.hidden = true;
         document.getElementById('model-badge').textContent = 'Pi › 暂无追踪轮次';
         document.getElementById('kpi-tokens').innerHTML = '0 <span>/ 128K token</span>';
-        document.getElementById('kpi-sub').textContent = '在工作台向主 Agent 发一条消息后，此处会实时展示思考过程与提示词分布。';
+        document.getElementById('kpi-sub').textContent = '发一条新消息给主 Agent，这里就会实时显示思考过程、HTTP 请求和提示词分布。';
         document.getElementById('kpi-cache').textContent = '—';
         document.getElementById('cache-fill').style.width = '0%';
         document.getElementById('kpi-cache-sub').textContent = '—';
@@ -409,6 +422,21 @@
         document.getElementById('item-list').innerHTML = '<div class="empty">暂无明细</div>';
         document.getElementById('thinking-list').innerHTML = '<div class="empty">暂无思考过程与工具调用记录</div>';
         return;
+      }
+
+      const rt = trace.runtime;
+      if (rt) {
+        rtStrip.hidden = false;
+        const cells = [
+          ['调用方式 / 协议', `${rt.transport}${rt.apiFormat ? ' · ' + rt.apiFormat : ''}`],
+          ['HTTP 请求 / 命令', rt.endpoint ? `${rt.method || 'POST'} ${rt.endpoint}` : (rt.cliCommand || rt.baseUrl || 'SDK 默认通道')],
+          ['账号 / 配置目录', `${rt.account || 'local'}${rt.cliConfigDir ? ' · ' + rt.cliConfigDir : ''}`],
+          ['Token / 凭据', rt.token ? `${rt.token} (${rt.tokenSource || 'config'})` : `(${rt.tokenSource || '本地已登录凭证'})`],
+          ...(rt.cwd ? [['工作目录 CWD', rt.cwd]] : []),
+        ];
+        rtStrip.innerHTML = cells.map(([k, v]) => `<div class="rt-cell"><span class="rt-k">${escapeHtml(k)}</span><span class="rt-v">${escapeHtml(v)}</span></div>`).join('');
+      } else {
+        rtStrip.hidden = true;
       }
 
       const win = trace.contextWindow || 128000;
