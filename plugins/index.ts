@@ -285,7 +285,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
               return actions.confirmKnowledgeTodo!(args);
             },
             { id: { type: 'string' }, updatedAt: { type: 'string' }, actions: { type: 'array', minItems: 1, items: { type: 'object', properties: { actionLine: { type: 'string' }, dueAt: { type: 'string' } }, required: ['actionLine'], additionalProperties: false } }, actionLine: { type: 'string' }, dueAt: { type: 'string', description: '仅在期限明确时传带时区的 ISO 时间' } }));
-          context.contribute('tools', 'todo_create', tool('todo_create', '创建一个待处理事项。', async (args, signal) => {
+          context.contribute('tools', 'todo_create', tool('todo_create', '登记待办。同项目中同标题、同截止时间的未完成事项会返回原记录，created 表明是否新建。', async (args, signal) => {
             signal.throwIfAborted();
             validateAssistantReminder(args.reminderAt);
             return actions.createTodo(args);

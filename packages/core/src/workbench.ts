@@ -307,7 +307,7 @@ export async function createWorkbench(config: AppConfig) {
     validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
     return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
   }, confirmKnowledgeTodo, knowledgeActionStatus: (args) => knowledgeActionStatus(args, currentAgentInput()?.projectId ?? optionalText(args.projectId, '项目')), editConfirmedFacts: args => changeKnowledgeMetadata('facts', args), changeKnowledgeAlias: args => changeKnowledgeMetadata('alias', args), changeKnowledgeTag: args => changeKnowledgeMetadata('tag', args), setKnowledgeRelevance: args => changeKnowledgeMetadata('relevance', args), setKnowledgeImportance: args => changeKnowledgeMetadata('importance', args), knowledgeRevision: (id, commit, projectId) => knowledgeRevision(id, commit, projectId ?? currentAgentInput()?.projectId), knowledgeOriginal: (pageId, sourceId, projectId, handoffExcerpt) => knowledgeCurator.pageSources(pageId, sourceId, projectId ?? currentAgentInput()?.projectId, handoffExcerpt), searchMeetings: (query, projectId, offset) => knowledgeCurator.searchMeetings(query, currentAgentInput()?.projectId ?? projectId, offset), meetingDay: (date, timezone, projectId, offset) => knowledgeCurator.meetingDay(date, timezone ?? briefing.settings().timezone, currentAgentInput()?.projectId ?? projectId, offset),
-    knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoDetail, todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0], currentAgentInput() ?? agent.currentInput()) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
+    knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: registerChatTodo, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoDetail, todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0], currentAgentInput() ?? agent.currentInput()) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
   function makeWebSource() {
     const options = webConfig.read();
     return createFeishuWebSource({
@@ -888,9 +888,28 @@ export async function createWorkbench(config: AppConfig) {
     if (source.conversationId !== 'main' && botForConversation(configuredBots(), source.conversationId)?.scope.kind !== 'global') throw new InputError('只有主对话或全局机器人能调整收件箱项目归属', 403);
     return inbox.assignProject(requiredText(input.id, '收件消息'), input.version as number, optionalText(input.projectId, '项目')) as unknown as Json;
   }
-  function createTodo(input: Record<string, unknown>, notify = true): Todo {
+  function newTodo(input: Record<string, unknown>): Todo {
     const now = new Date().toISOString();
-    const todo: Todo = { id: randomUUID(), title: requiredText(input.title, '标题'), notes: optionalText(input.notes, '备注') ?? '', projectId: optionalText(input.projectId, '项目'), dueAt: dueDate(input.dueAt), reminderAt: dueDate(input.reminderAt), reminderVersion: 1, waitingOn: optionalText(input.waitingOn, '等待对象'), createdAt: now, updatedAt: now };
+    return { id: randomUUID(), title: requiredText(input.title, '标题'), notes: optionalText(input.notes, '备注') ?? '', projectId: optionalText(input.projectId, '项目'), dueAt: dueDate(input.dueAt), reminderAt: dueDate(input.reminderAt), reminderVersion: 1, waitingOn: optionalText(input.waitingOn, '等待对象'), createdAt: now, updatedAt: now };
+  }
+  function registerChatTodo(input: Record<string, unknown>): Json {
+    const requested = newTodo(input);
+    const title = requested.title.normalize('NFC');
+    const due = requested.dueAt ? Date.parse(requested.dueAt) : undefined;
+    return store.transaction(() => {
+      const matches = store.list<Todo>('todos').filter(todo =>
+        !todo.completedAt && todo.projectId === requested.projectId && todo.title.normalize('NFC') === title &&
+        (todo.dueAt ? Date.parse(todo.dueAt) : undefined) === due);
+      if (matches.length > 1) throw new InputError('已有多个同名同期限待办，请查询并选定具体事项', 409);
+      const existing = matches[0];
+      if (existing) return { ...existing, created: false } as unknown as Json;
+      store.put('todos', requested.id, requested);
+      changed('todos.changed', { id: requested.id });
+      return { ...requested, created: true } as unknown as Json;
+    });
+  }
+  function createTodo(input: Record<string, unknown>, notify = true): Todo {
+    const todo = newTodo(input);
     store.put('todos', todo.id, todo); if (notify) changed('todos.changed', { id: todo.id });
     return todo;
   }
