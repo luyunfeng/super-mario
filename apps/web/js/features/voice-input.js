@@ -2,7 +2,8 @@ import { h } from '../lib/dom.js';
 
 export function createVoiceInput(input, beforeListen, api) {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const button = h('button', { type: 'button', class: 'btn btn--sm' }, '语音输入');
+  const idleLabel = Recognition ? '语音输入' : '录音后转写';
+  const button = h('button', { type: 'button', class: 'btn btn--sm' }, idleLabel);
   const caption = h('p', { role: 'status', class: 'small muted', hidden: true });
   const extensions = ['wav', 'mp3', 'webm', 'm4a', 'mp4', 'ogg', 'flac'];
   const file = h('input', { type: 'file', hidden: true, accept: extensions.map(ext => '.' + ext).join(',') });
@@ -20,7 +21,7 @@ export function createVoiceInput(input, beforeListen, api) {
     choose.disabled = false;
     const old = session;
     session = undefined;
-    button.textContent = '语音输入';
+    button.textContent = idleLabel;
     button.disabled = false;
     show('');
     old?.abort();
@@ -30,7 +31,9 @@ export function createVoiceInput(input, beforeListen, api) {
     file.value = '';
     if (!audio || !binding || pickerBinding !== binding) return;
     reset();
-    const format = audio.name.split('.').at(-1).toLowerCase();
+    await transcribe(audio, audio.name.split('.').at(-1).toLowerCase());
+  });
+  async function transcribe(audio, format) {
     if (!extensions.includes(format) || !audio.size || audio.size > 8 * 1024 * 1024) {
       show('请选择不超过 8 MiB 的受支持录音。'); return;
     }
@@ -57,14 +60,65 @@ export function createVoiceInput(input, beforeListen, api) {
     } finally {
       if (pending === job) { pending = undefined; choose.disabled = false; }
     }
-  });
+  }
+  async function recordForTranscription() {
+    const mime = ['audio/webm', 'audio/mp4', 'audio/ogg'].find(type => window.MediaRecorder?.isTypeSupported(type));
+    if (!mime || !navigator.mediaDevices?.getUserMedia) {
+      show('当前浏览器不支持麦克风录音，可选择已有录音文件。'); return;
+    }
+    reset();
+    let stream, recorder, confirmed = false;
+    const current = session = {
+      abort() {
+        if (recorder && recorder.state !== 'inactive') recorder.stop();
+        stream?.getTracks().forEach(track => track.stop());
+      },
+      stop() {
+        if (!recorder) { reset(); return; }
+        confirmed = true;
+        recorder.stop();
+      },
+    };
+    beforeListen();
+    button.textContent = '取消录音';
+    show('正在请求麦克风权限…');
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (session !== current) { current.abort(); return; }
+      recorder = new MediaRecorder(stream, { mimeType: mime });
+      const chunks = [];
+      let size = 0;
+      recorder.ondataavailable = event => {
+        if (session !== current || !event.data.size) return;
+        size += event.data.size;
+        if (size > 8 * 1024 * 1024) { reset(); show('录音超过 8 MiB，已停止。'); return; }
+        chunks.push(event.data);
+      };
+      recorder.onerror = () => {
+        if (session === current) { reset(); show('录音中断，请检查麦克风。'); }
+      };
+      recorder.onstop = () => {
+        if (session !== current) return;
+        reset();
+        if (confirmed) void transcribe(new Blob(chunks, { type: mime }), mime.slice(6));
+        else show('录音中断，请检查麦克风。');
+      };
+      recorder.start(500);
+      button.textContent = '结束并转写';
+      show('正在录音，结束后会发送到服务端转写。');
+    } catch (error) {
+      if (session !== current) return;
+      reset();
+      show(error.name === 'NotAllowedError' ? '麦克风权限被拒绝，可选择录音文件。' : '麦克风录音无法启动。');
+    }
+  }
   button.addEventListener('click', () => {
     if (session) {
       button.disabled = true;
       try { session.stop(); } catch { reset(); }
       return;
     }
-    if (!Recognition) { show('当前浏览器不支持语音识别，可继续输入文字。'); return; }
+    if (!Recognition) { void recordForTranscription(); return; }
     try {
       const current = session = new Recognition();
       current.lang = document.documentElement.lang || 'zh-CN';

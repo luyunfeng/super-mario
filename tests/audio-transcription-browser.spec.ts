@@ -35,7 +35,27 @@ test('录音经认证服务转写后追加到当前草稿，失败和切换项�
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
   t.after(() => browser.close());
   const page = await browser.newPage();
-  await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+  await page.addInitScript(() => {
+    localStorage.setItem('sm.splash.seen', 'true');
+    Object.assign(window, { SpeechRecognition: undefined, webkitSpeechRecognition: undefined });
+    navigator.mediaDevices.getUserMedia = async () => {
+      const context = new AudioContext();
+      const tone = context.createOscillator(), output = context.createMediaStreamDestination();
+      tone.connect(output); tone.start();
+      await context.resume();
+      Object.assign(window, { capturedTrack: output.stream.getAudioTracks()[0] });
+      if (document.body.dataset.delayGrant)
+        await new Promise<void>(resolve => window.addEventListener('grant-microphone', () => resolve(), { once: true }));
+      return output.stream;
+    };
+    const NativeRecorder = MediaRecorder;
+    window.MediaRecorder = class extends NativeRecorder {
+      constructor(stream: MediaStream, options?: MediaRecorderOptions) {
+        super(stream, options);
+        this.addEventListener('dataavailable', e => { if (e.data.size) document.body.dataset.audioReady = 'yes'; });
+      }
+    };
+  });
   await page.goto(server.url + '/#chat?token=fixture');
   const upload = async () => {
     const chooser = page.waitForEvent('filechooser');
@@ -59,6 +79,24 @@ test('录音经认证服务转写后追加到当前草稿，失败和切换项�
   finish!();
   await upload();
   await expect(work).toHaveValue('合成转写');
+  const record = page.getByRole('button', { name: '录音后转写' });
+  await record.click();
+  await expect(page.locator('body')).toHaveAttribute('data-audio-ready', 'yes');
+  await page.getByRole('button', { name: '结束并转写' }).click();
+  await expect(work).toHaveValue('合成转写合成转写');
+  expect(calls.at(-1)?.file).toBe('audio.webm');
+  const trackState = () => page.evaluate(() => (window as unknown as { capturedTrack: MediaStreamTrack }).capturedTrack.readyState);
+  expect(await trackState()).toBe('ended');
+  await record.click();
+  await expect(page.getByRole('button', { name: '结束并转写' })).toBeVisible();
+  await page.evaluate(() => { location.hash = '#home'; });
+  await expect.poll(trackState).toBe('ended');
+  await page.evaluate(() => { location.hash = '#chat'; document.body.dataset.delayGrant = 'yes'; });
+  await record.click();
+  await expect.poll(trackState).toBe('live');
+  await page.getByRole('button', { name: '取消录音' }).click();
+  await page.evaluate(() => window.dispatchEvent(new Event('grant-microphone')));
+  await expect.poll(trackState).toBe('ended');
   const path = server.url + '/api/v1/audio-transcription';
   const headers = { authorization: 'Bearer fixture' };
   expect((await page.request.post(path, { data: {} })).status()).toBe(401);
@@ -67,5 +105,5 @@ test('录音经认证服务转写后追加到当前草稿，失败和切换项�
   expect(disabled.ok()).toBe(true);
   await expect(page.getByRole('button', { name: '录音转文字' })).toHaveCount(0);
   expect((await page.request.post(path, { headers, data: {} })).status()).toBe(503);
-  expect(calls).toHaveLength(3);
+  expect(calls).toHaveLength(4);
 });
