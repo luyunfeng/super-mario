@@ -1,3 +1,4 @@
+import { createReplyReadAloud } from '../features/reply-read-aloud.js';
 import { createVoiceInput } from '../features/voice-input.js';
 import { attachSentHistory } from '../features/sent-history.js';
 // 对话：主页。顶部是“等你处理”，中间是消息流，输入框固定在底部。
@@ -59,6 +60,7 @@ export function createChatPage({ api, store, scope, router }) {
 
   // —— 输入框 ——
   const input = h('textarea', { class: 'composer__input', id: 'message-text', rows: 1, placeholder: '说出目标，Enter 发送，Shift + Enter 换行', 'aria-label': '给 Agent 的消息', maxLength: 20000 });
+  const readAloud = createReplyReadAloud(router);
   const voice = createVoiceInput(input);
   const drafts = createConversationDrafts({ api, store });
   const quote = createMessageQuote({ drafts, input, store, router, scope });
@@ -106,6 +108,7 @@ export function createChatPage({ api, store, scope, router }) {
   }
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
+    readAloud.update(key, nextOwner, store.view.snapshot);
     voice.update(router.current.page === 'chat' && key, nextOwner, store.view.snapshot);
     const sameDraft = owner === nextOwner && enabled === nextEnabled && quotesEnabled === nextQuotes && draftKey === key;
     if (sameDraft && editEnabled === allowEdit) return;
@@ -256,13 +259,13 @@ export function createChatPage({ api, store, scope, router }) {
         h('span', { class: 'msg__label', dataset: personal ? { assistantName: 'true' } : undefined }, label),
         agentProgress(message, api),
         bubble,
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, transcript.copyMessage(message, translation.displayedText), translation.action(message, bubble), canQuote && message.role === 'assistant' && quote.action(message, label))));
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, transcript.copyMessage(message, translation.displayedText), translation.action(message, bubble), personal && readAloud.action(message, translation.displayedText), canQuote && message.role === 'assistant' && quote.action(message, label))));
   }
 
   function paintMessages(list) {
     const translationEpoch = translation.update(list);
     keyedList(messages, list, item => item.id, renderMessage, item => JSON.stringify([
-      prompts.epoch, favorites.epoch, transcript.active, translationEpoch, quotesEnabled, editEnabled, owner, draftKey, item,
+      prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, draftKey, item,
     ]));
   }
 

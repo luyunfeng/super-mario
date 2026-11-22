@@ -1,3 +1,4 @@
+import { createReplyReadAloud } from './reply-read-aloud.js';
 import { createVoiceInput } from './voice-input.js';
 import { attachSentHistory } from './sent-history.js';
 // 项目工作对话复用真实隔离会话。快照只更新消息区，草稿按身份和项目隔离。
@@ -34,6 +35,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const progress = h('p', { class: 'muted small' });
   const messages = h('div', { class: 'project-conversation__messages', role: 'log', 'aria-label': '项目对话' });
   const text = TextArea({ rows: 3, placeholder: '告诉我这个文件夹里要做什么，我们持续推进。', 'aria-label': '项目目标' });
+  const readAloud = createReplyReadAloud(router);
   const voice = createVoiceInput(text);
   let visible = false;
   const quote = createMessageQuote({ drafts, input: text, store, router, scope });
@@ -85,6 +87,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   }
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
+    readAloud.update(key, nextOwner, store.view.snapshot);
     voice.update(visible && router.current.page === 'projects' && key, nextOwner, store.view.snapshot);
     const sameDraft = owner === nextOwner && enabled === nextEnabled && quotesEnabled === nextQuotes && draftKey === key;
     if (sameDraft && editEnabled === allowEdit) return;
@@ -155,8 +158,8 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
           agentProgress(m),
           bubble,
           statusText && h('span', { class: 'msg__meta' }, statusText),
-          h('span', null, favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
-    }, m => JSON.stringify([prompts.epoch, favorites.epoch, transcript.active, translationEpoch, quotesEnabled, editEnabled, owner, projectId, anchor, m]));
+          h('span', null, favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble), m.conversationId === `project:${projectId}:work` && readAloud.action(m, translation.displayedText), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
+    }, m => JSON.stringify([prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, projectId, anchor, m]));
     if (historyQuery && !focused && el.isConnected && router.current.page === 'projects' && router.current.parts[1] === 'workspace') {
       const row = anchor ? messages.querySelector('[data-id="' + CSS.escape(anchor) + '"]') : messages.firstElementChild;
       if (row) { focused = true; row.tabIndex = -1; row.focus({ preventScroll: true }); row.scrollIntoView({ block: 'center' }); }
