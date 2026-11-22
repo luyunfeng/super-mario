@@ -98,7 +98,24 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
   const jobs = () => store.list<Job>(jobsCollection);
   const changed = () => events.publish('knowledge.curator.changed', {});
   function save(job: Job, patch: Partial<Job>) { const next = { ...job, ...patch, updatedAt: new Date().toISOString() }; store.put(jobsCollection, next.id, next); changed(); return next; }
-  function status() { return { settings: settings(), worker: { ...worker }, versioning: { ...gitState }, jobs: jobs().map(({ text: _text, ...job }) => job) }; }
+  // Queue insertion order puts each original before its retries. A title belongs to the original recording.
+  function meetingRoots(all: Job[]) {
+    const roots = new Map<string, string>();
+    for (const job of all) {
+      if (job.materialKind === 'meeting-transcript' || job.requestOrigin === 'meeting')
+        roots.set(job.id, (job.retryOf && roots.get(job.retryOf)) || job.id);
+    }
+    return roots;
+  }
+  const titlesCollection = 'knowledge.meeting-titles';
+  function meetingTitles() {
+    return new Map(store.list<{ id: string; title: string }>(titlesCollection).map(row => [row.id, row.title]));
+  }
+  function status() {
+    const all = jobs(), titles = meetingTitles(), roots = titles.size ? meetingRoots(all) : new Map<string, string>();
+    return { settings: settings(), worker: { ...worker }, versioning: { ...gitState },
+      jobs: all.map(({ text: _text, ...job }) => ({ ...job, title: titles.get(roots.get(job.id) ?? job.id) ?? job.title })) };
+  }
   async function git(...args: string[]) { return (await exec('git', ['-C', directory, ...args], { timeout: 15000, maxBuffer: 1024 * 1024 })).stdout.trim(); }
   /** The canonical knowledge files, immutable sources and generated map share a private local repository. */
   function rebuildIndex(message = 'knowledge: update knowledge map'): Promise<void> {
@@ -427,6 +444,21 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
   const timer = setInterval(() => { void tick(); }, 2000); timer.unref();
   return {
     status, addSource, rebuildIndex,
+    renameMeeting(id: string, input: Record<string, unknown>) {
+      if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
+      if (typeof input.title !== 'string' || typeof input.expectedTitle !== 'string' || /[\r\n]/.test(input.title) ||
+          Array.from(input.title.trim()).length > 200) throw new CuratorError('请提供单行标题，最多 200 字符');
+      const job = store.get<Job>(jobsCollection, id);
+      const root = meetingRoots(jobs()).get(id);
+      if (!job || !root || (job.projectId && !options.validProject(job.projectId))) throw new CuratorError('会议来源不可用', 404);
+      const previous = store.get<{title:string}>(titlesCollection, root)?.title ?? job.title;
+      if (previous !== input.expectedTitle) throw new CuratorError('会议标题已变化，请重新查询后核对', 409);
+      const title = input.title.trim();
+      if (title) store.put(titlesCollection, root, { id: root, title });
+      else store.remove(titlesCollection, root);
+      changed();
+      return { title: title || job.title };
+    },
     async meetingDay(date: string, timezone: string, projectId?: string, offset = 0) {
       if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
       if (projectId && !options.validProject(projectId)) throw new CuratorError('项目不可用', 404);
@@ -439,18 +471,17 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
       catch { throw new CuratorError('回顾时区无效'); }
 
       // The queue preserves insertion order. Follow retries to their original source and report its latest attempt.
-      const roots = new Map<string, string>();
+      const all = jobs(), roots = meetingRoots(all), titles = meetingTitles();
       const latest = new Map<string, Job>();
       const visibility = new Map<string, boolean>(projectId ? [[projectId, true]] : []);
-      for (const job of jobs()) {
-        if (job.materialKind !== 'meeting-transcript' && job.requestOrigin !== 'meeting') continue;
+      for (const job of all) {
+        const root = roots.get(job.id);
+        if (!root) continue;
         if (projectId && (job.layer !== 'project' || job.projectId !== projectId)) continue;
         if (job.projectId) {
           if (!visibility.has(job.projectId)) visibility.set(job.projectId, options.validProject(job.projectId));
           if (!visibility.get(job.projectId)) continue;
         }
-        const root = (job.retryOf && roots.get(job.retryOf)) || job.id;
-        roots.set(job.id, root);
         latest.set(root, job);
       }
       const undated = [...latest.values()].filter(job => !job.meetingStartedAt).length;
@@ -463,7 +494,7 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
         const localTime = clock.format(new Date(job.meetingStartedAt!));
         const dayPart = localTime < '12:00' ? 'morning' : localTime < '18:00' ? 'afternoon' : 'evening';
         return {
-          sourceId: job.id, title: job.title, startedAt: job.meetingStartedAt!, localTime, dayPart, status: job.status,
+          sourceId: job.id, title: titles.get(roots.get(job.id) ?? job.id) ?? job.title, startedAt: job.meetingStartedAt!, localTime, dayPart, status: job.status,
           pages: job.knowledgeIds.flatMap(id => {
             const page = pages.get(id);
             return page && page.layer === job.layer && page.projectId === job.projectId ? [{ id, title: page.title }] : [];
@@ -477,16 +508,18 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
       const page = (await options.knowledge().list()).find(entry => entry.id === pageId);
       if (!page || (projectId !== undefined && (page.layer !== 'project' || page.projectId !== projectId)) || (page.projectId && !options.validProject(page.projectId))) throw new CuratorError('知识页不可用', 404);
       // Use persisted import receipts. Markdown references in editable pages cannot grant file access.
-      const matches = jobs().filter(job => job.layer === page.layer && job.projectId === page.projectId &&
+      const all = jobs(), roots = meetingRoots(all), titles = meetingTitles();
+      const matches = all.filter(job => job.layer === page.layer && job.projectId === page.projectId &&
         job.knowledgeIds.includes(pageId));
       if (handoffExcerpt && !sourceId) throw new CuratorError('请指定会议转写来源');
-      if (sourceId === undefined) return { sources: matches.map(({ id, title, createdAt, meetingStartedAt, materialKind, requestOrigin, speakerNames }) => ({ id, title, createdAt,
+      if (sourceId === undefined) return { sources: matches.map(({ id, title, createdAt, meetingStartedAt, materialKind, requestOrigin, speakerNames }) => ({ id, title: titles.get(roots.get(id) ?? id) ?? title, createdAt,
         ...(speakerNames ? { speakerNames } : {}),
         ...(materialKind === 'meeting-transcript' || requestOrigin === 'meeting' ? { meeting: true } : {}),
         ...(materialKind ? { materialKind } : {}), ...(meetingStartedAt ? { meetingStartedAt } : {}) })) };
       const job = matches.find(item => item.id === sourceId);
       if (!job || !/^(?:[0-9a-f-]{36}|(?:meeting|transcript)-[0-9a-f]{64})$/.test(job.id)) throw new CuratorError('该知识页没有这份来源', 404);
       if (handoffExcerpt && job.materialKind !== 'meeting-transcript') throw new CuratorError('所选来源不是已核对的会议转写');
+      const title = titles.get(roots.get(job.id) ?? job.id) ?? job.title;
       const rawDir = join(directory, 'raw');
       try {
         if (!(await lstat(rawDir)).isDirectory()) throw new Error();
@@ -495,12 +528,12 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
           const stat = await file.stat();
           if (!stat.isFile()) throw new Error();
           const content = await file.readFile('utf8');
-          if (!handoffExcerpt) return { title: job.title, content };
+          if (!handoffExcerpt) return { title, content };
           const header = sourceHeader(job);
           const transcript = content.startsWith(header) ? content.slice(header.length) : content;
           const chars = Array.from(transcript);
           const truncated = chars.length > 5000;
-          return { title: job.title, truncated, content: truncated
+          return { title, truncated, content: truncated
             ? chars.slice(0, 2500).join('') + '\n〔中段已省略〕\n' + chars.slice(-2500).join('') : transcript };
         } finally { await file.close(); }
       } catch { throw new CuratorError('原始资料文件不可读取', 404); }

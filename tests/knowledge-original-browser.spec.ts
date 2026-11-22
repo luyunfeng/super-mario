@@ -475,8 +475,21 @@ test('会议日回顾按时区和项目分页，空结果区分未注日期，�
   await recap.getByLabel('回顾日期').fill('2032-02-29');
   await recap.getByLabel('回顾时区').fill('Asia/Kathmandu');
   await query.click();
+  await recap.getByRole('listitem').filter({ hasText: '跨日评审' }).getByRole('button', { name: '修改标题' }).click();
+  const editor = page.getByRole('dialog', { name: '修改会议标题' });
+  await editor.getByRole('textbox', { name: '会议标题' }).fill('季度样本评审');
+  await editor.getByRole('button', { name: '保存标题' }).click();
+  await expect(editor).toHaveCount(0);
+  await query.click();
+  await expect(recap.getByRole('listitem').filter({ hasText: '季度样本评审' })).toHaveCount(1);
   await recap.getByRole('list', { name: '上午' }).getByRole('link', { name: '查看原文 · 项目评审记录' }).click();
   await expect(page.getByRole('dialog', { name: '编辑记忆' }).locator('pre')).toHaveText(base.text);
+  await page.goto(server.url + '/#memory?curator=1');
+  const queue = page.getByRole('region', { name: '整理队列' });
+  await queue.locator('[data-job-id]').filter({ hasText: '未填写日期' }).getByRole('button', { name: '修改标题' }).click();
+  await editor.getByRole('textbox', { name: '会议标题' }).fill('未定日期的复核');
+  await editor.getByRole('button', { name: '保存标题' }).click();
+  await expect(queue).toContainText('未定日期的复核');
 });
 
 test('会议回顾问题带入所选对话，保留已有草稿并等待发送', async t => {

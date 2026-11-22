@@ -524,7 +524,8 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
       assert.equal(result.undated, 1);
       assert.equal(result.total, 2);
       assert.equal(result.nextOffset, null);
-      assert.deepEqual(result.meetings.map((row: {title:string}) => row.title), [title, '稍晚的评审']);
+      assert.deepEqual(result.meetings.map((row: {title:string}) => row.title), ['核对后的评审标题', '稍晚的评审']);
+      assert.match(req.system, /用来源 ID 核对同一份记录/);
       assert.equal(result.meetings[0].sourceId, sourceId);
       assert.deepEqual(result.meetings[0].pages, [{ id: pageId, title }]);
       assert.equal(result.meetings[1].status, 'queued');
@@ -535,6 +536,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     if (req.callId === 'handoff-sources') {
       const result = JSON.parse(typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text);
       assert.equal(result.sources[0].meeting, true);
+      assert.equal(result.sources[0].title, '核对后的评审标题');
       assert.deepEqual(result.sources[0].speakerNames, { A: '样本发言人' });
       assert.match(req.system, /不跨会议沿用/);
       assert.equal(result.sources[0].id, sourceId);
@@ -610,6 +612,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     const job = server.app.knowledgeCurator.addSource({ materialKind: 'meeting-transcript', speakerNames: { A: '样本发言人' }, meetingStartedAt: '2032-02-29T00:10+05:45', title, text: excerpt, layer: 'project', projectId });
     sourceId = job.id;
     server.app.store.put('knowledge.sources', job.id, { ...job, status: 'completed', knowledgeIds: [pageId] });
+    server.app.knowledgeCurator.renameMeeting(sourceId, { expectedTitle: title, title: '核对后的评审标题' });
     const meeting = { materialKind: 'meeting-transcript', layer: 'project', projectId, text: '合成来源' };
     server.app.knowledgeCurator.addSource({ ...meeting, title: '无日期来源' });
     server.app.knowledgeCurator.addSource({ ...meeting, title: '稍晚的评审', meetingStartedAt: '2032-02-28T23:59Z' });

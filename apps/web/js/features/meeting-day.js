@@ -6,6 +6,24 @@ import { openDrawer } from '../ui/overlay.js';
 const partNames = { morning: '上午', afternoon: '下午', evening: '晚间' };
 const statusNames = { queued: '等待整理', running: '整理中', awaiting_approval: '等待审批', completed: '已整理', failed: '整理失败', unknown: '结果未确认' };
 
+export function editMeetingTitle(api, id, title, current, saved) {
+  const input = Input({ value: title });
+  const status = h('p', { role: 'status' });
+  const save = Button({ label: '保存标题', kind: 'primary', onClick: async () => {
+    if (!current()) { editor.close(); return; }
+    save.disabled = true;
+    try {
+      const result = await api.put('/knowledge/sources/' + encodeURIComponent(id) + '/title',
+        { title: input.value, expectedTitle: title });
+      if (current()) saved(result.title);
+      editor.close();
+    } catch (error) { status.textContent = error.message; }
+    finally { save.disabled = false; }
+  } });
+  const editor = openDrawer({ title: '修改会议标题', body: [Field({ label: '会议标题', control: input, hint: '留空恢复登记时的标题。' }), status], footer: save });
+  return editor;
+}
+
 export function openMeetingDay({ api, store, scope, router }) {
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const date = Input({ type: 'date', value: new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()) });
@@ -14,7 +32,7 @@ export function openMeetingDay({ api, store, scope, router }) {
   const project = Select({ options: [['', '全部可见来源'], ...projects.map(row => [row.id, row.name])], value: scope.get() || '' });
   const summary = h('p', { role: 'status' });
   const timeline = h('div', { class: 'stack' });
-  let group, lastPart, displayed;
+  let group, lastPart, displayed, titleEditor;
   let request = 0, nextOffset = null;
   const owner = api.draftOwner();
   const current = () => drawer.el.open && owner === api.draftOwner() && owner === store.view.snapshotOwner &&
@@ -50,8 +68,12 @@ export function openMeetingDay({ api, store, scope, router }) {
           timeline.append(h('section', null, h('h3', null, label), group));
         }
         displayed++;
+        const heading = h('strong', null, source.title);
         group.append(h('li', { class: 'item' }, h('div', { class: 'item__main' },
-          h('strong', null, source.title),
+          h('div', { class: 'row row--wrap' }, heading, Button({ label: '修改标题', size: 'sm', onClick: () => {
+            titleEditor = editMeetingTitle(api, source.sourceId, source.title, () => current() && heading.isConnected,
+              title => { source.title = title; heading.textContent = title; });
+          } })),
           h('span', { class: 'item__meta' }, clock.format(new Date(source.startedAt)) + ' · ' + (statusNames[source.status] ?? '状态未知')),
           source.pages.map(page => h('a', { href: '#memory?' + new URLSearchParams({ entry: page.id, source: source.sourceId }) }, '查看原文 · ' + page.title)))));
       }
@@ -72,7 +94,7 @@ export function openMeetingDay({ api, store, scope, router }) {
     Field({ label: '回顾日期', control: date }), Field({ label: '回顾时区', control: zone }), Field({ label: '项目', control: project }),
     h('button', { type: 'submit', class: 'btn btn--primary' }, '查询'));
   form.addEventListener('input', reset);
-  const drawer = openDrawer({ title: '会议日回顾', body: [form, summary, ask, timeline, more], onClose: () => { request++; unsubscribe(); } });
+  const drawer = openDrawer({ title: '会议日回顾', body: [form, summary, ask, timeline, more], onClose: () => { request++; titleEditor?.close(); unsubscribe(); } });
   const unsubscribe = store.subscribe(() => { if (!current()) drawer.close(); });
   void load();
 }

@@ -3,6 +3,7 @@ import { h, replace } from '../lib/dom.js';
 import { timeAgo } from '../lib/format.js';
 import { Button, Banner, Check, Field, Select, Pill } from '../ui/kit.js';
 import { openDrawer, confirmDialog } from '../ui/overlay.js';
+import { editMeetingTitle } from './meeting-day.js';
 import { createKnowledgeReaderCard } from './knowledge-reader.js';
 
 const WORKER = { disabled: '已暂停', idle: '空闲', running: '整理中', failed: '出错', unavailable: '不可用' };
@@ -25,7 +26,7 @@ export function openCuratorDrawer({ api, store, onChanged }) {
   const checked = new Set();
   let closed = false;
   let invalidated = false;
-  let reader;
+  let reader, titleEditor;
   let readerListener;
   let unsubscribe;
   let timer;
@@ -41,7 +42,7 @@ export function openCuratorDrawer({ api, store, onChanged }) {
   const jobsRegion = h('section', { class: 'stack', 'aria-label': '整理队列', style: wrap });
   const body = h('div', { class: 'stack stack--lg' }, status, settings, jobsRegion);
   function dispose() {
-    clearTimeout(timer); ++generation; unsubscribe?.(); reader?.destroy();
+    clearTimeout(timer); ++generation; unsubscribe?.(); reader?.destroy(); titleEditor?.close();
   }
   const isCurrent = () => {
     if (api.token?.() !== token && !invalidated) { invalidated = true; dispose(); }
@@ -111,6 +112,9 @@ export function openCuratorDrawer({ api, store, onChanged }) {
             attempt && h('p', { class: 'small' }, `${attempt.reason ?? '重试请求'} · 请求 key：${attempt.key}`)),
           Pill(STATUS[job.status] ?? (DONE.has(job.status) ? '已整理' : '结果未确认'), DONE.has(job.status) ? 'ok' : job.status === 'failed' ? 'danger' : ''),
           job.status === 'awaiting_approval' && h('a', { href: '#chat', class: 'small', onclick: () => drawer.close() }, '去确认来源读取'),
+          (meeting || job.materialKind === 'meeting-transcript') && Button({ label: '修改标题', size: 'sm', disabled: !verified, onClick: () => {
+            titleEditor = editMeetingTitle(api, job.id, job.title, () => isCurrent() && verified, load);
+          } }),
           canRetry && !next && !attempt?.accepted && Button({
             label: job.status === 'unknown' ? '核对后重新整理' : '重试', size: 'sm',
             disabled: !verified || !!attempt?.busy || (!!attempt && !checked.has(job.id)), onClick: () => retry(job),

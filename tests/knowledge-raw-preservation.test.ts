@@ -218,6 +218,14 @@ test('会议日回顾按用户时区跨夏令时分页，重试只列一次并�
   assert.equal(first.undated, 1);
   assert.equal(first.nextOffset, 25);
   assert.equal(first.meetings[0].sourceId, 'retry');
+  assert.deepEqual(f.curator.renameMeeting('retry', { expectedTitle: base.title, title: '已核对的评审名称' }), { title: '已核对的评审名称' });
+  assert.equal((await read()).meetings[0].title, '已核对的评审名称');
+  assert.throws(() => f.curator.renameMeeting(base.id, { expectedTitle: base.title, title: '并发修改' }), /标题已变化/);
+  assert.equal((await f.curator.pageSources(same.id)).sources?.[0].title, '已核对的评审名称');
+  await f.restart();
+  assert.equal((await read()).meetings[0].title, '已核对的评审名称');
+  assert.equal(f.curator.renameMeeting(base.id, { expectedTitle: '已核对的评审名称', title: '' }).title, base.title);
+  assert.equal((await read()).meetings[0].title, base.title);
   assert.deepEqual(first.meetings[0].pages, [{ id: same.id, title: same.title }]);
   const last = await read(first.nextOffset!);
   assert.equal(last.meetings.length, 2);

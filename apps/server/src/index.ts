@@ -558,6 +558,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         const pageSources = path.match(/^\/api\/v1\/knowledge\/([^/]+)\/sources(?:\/([^/]+))?$/);
         if (pageSources && method === 'GET') return json(res, 200, await app.knowledgeCurator.pageSources(
           decodeURIComponent(pageSources[1]!), pageSources[2] && decodeURIComponent(pageSources[2]), undefined, url.searchParams.get('view') === 'handoff'));
+        const meetingTitle = path.match(/^\/api\/v1\/knowledge\/sources\/([^/]+)\/title$/);
+        if (meetingTitle && method === 'PUT') return json(res, 200, app.knowledgeCurator.renameMeeting(
+          decodeURIComponent(meetingTitle[1]!), await body(req)));
         const retrySource = path.match(/^\/api\/v1\/knowledge\/sources\/([^/]+)\/retry$/);
         if (retrySource && method === 'POST') {
           const input = await body(req);
