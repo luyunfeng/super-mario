@@ -196,12 +196,28 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   return drawer;
 }
 
-export function knowledgeRow(entry, { projectName, onOpen }) {
+export function knowledgeRow(entry, { projectName, onOpen, pattern }) {
+  const summary = entry.content.replace(/\s+/g, ' ').slice(0, 100);
+  const excerpts = [];
+  let title = entry.title;
+  if (pattern) {
+    const hit = pattern.exec(title);
+    if (hit) title = [title.slice(0, hit.index), h('mark', null, hit[0]), title.slice(hit.index + hit[0].length)];
+    for (const line of entry.content.split('\n')) {
+      const match = pattern.exec(line);
+      if (!match) continue;
+      const start = Math.max(0, match.index - 30);
+      const after = match.index + match[0].length;
+      excerpts.push([start ? '…' : '', line.slice(start, match.index), h('mark', null, match[0]),
+        line.slice(after, after + 60), after + 60 < line.length ? '…' : '']);
+      if (excerpts.length === 2) break;
+    }
+  }
   return h('div', { class: `item item--click knowledge-item knowledge-item--${entry.layer}`, tabindex: 0, role: 'button', dataset: { id: entry.id },
     onclick: () => onOpen(entry), onkeydown: (event) => { if (event.key === 'Enter') onOpen(entry); } },
   h('div', { class: 'item__main' },
-    h('span', { class: 'item__title' }, entry.title),
-    h('span', { class: 'item__meta truncate' }, entry.content.replace(/\s+/g, ' ').slice(0, 100))),
+    h('span', { class: 'item__title' }, title),
+    (excerpts.length ? excerpts : [summary]).map(text => h('span', { class: 'item__meta truncate' }, text))),
   h('div', { class: 'item__end' },
     Pill(layerNames[entry.layer] + (entry.layer === 'project' && projectName ? ` · ${projectName}` : ''), entry.layer === 'global' ? 'info' : entry.layer === 'project' ? 'warn' : ''),
     h('span', { class: 'muted small' }, timeAgo(entry.updatedAt))));

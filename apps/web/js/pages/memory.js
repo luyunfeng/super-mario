@@ -71,7 +71,8 @@ export function createMemoryPage({ api, store, router, scope }) {
   function paint() {
     const snapshot = store.view.snapshot;
     if (!snapshot) return;
-    const query = search.value.trim().toLowerCase();
+    const query = search.value.trim();
+    const pattern = query ? new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu') : null;
     const projects = (snapshot.projects ?? []).filter(item => !item.archivedAt);
     const names = new Map(projects.map(item => [item.id, item.name]));
     const signature = JSON.stringify(projects.map(item => [item.id, item.name]));
@@ -84,15 +85,15 @@ export function createMemoryPage({ api, store, router, scope }) {
       .filter(item => layer === 'all' || item.layer === layer)
       // 选了项目范围时，别的项目的资料不显示；个人和全局记忆始终显示。
       .filter(item => !scope.get() || item.layer !== 'project' || item.projectId === scope.get())
-      .filter(item => !query || `${item.title} ${item.content}`.toLowerCase().includes(query))
+      .filter(item => !pattern || pattern.test(item.title) || pattern.test(item.content))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     if (!rows.length) {
       replace(list, Empty({ title: query ? '没有找到匹配的记忆' : '还没有记忆', text: query ? undefined : '在上面写一句话，Agent 之后工作时会参考它。' }));
       list._keyed = undefined;
     } else {
       if (!list._keyed) list.replaceChildren();
-      keyedList(list, rows, item => item.id, item => knowledgeRow(item, { projectName: names.get(item.projectId), onOpen: entry => openKnowledgeDrawer({ api, store, router, scope, entry }) }),
-        item => `${item.id}:${item.updatedAt}:${names.get(item.projectId)}`);
+      keyedList(list, rows, item => item.id, item => knowledgeRow(item, { pattern, projectName: names.get(item.projectId), onOpen: entry => openKnowledgeDrawer({ api, store, router, scope, entry }) }),
+        item => `${item.id}:${item.updatedAt}:${names.get(item.projectId)}:${query}`);
     }
     const pending = pendingJobs(curator).length;
     const enabled = curator?.settings?.enabled;

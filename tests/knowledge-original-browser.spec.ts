@@ -181,3 +181,31 @@ test('旧知识草稿保存冲突后可核对新版再提交，同版并发写�
   await expect(dialog).toHaveCount(0);
   expect((await server.app.knowledge().list()).find(item => item.id === id)?.content).toBe(winner.content + '，我的补充');
 });
+
+test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-knowledge-search-'));
+  const server = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1', token: 'fixture', demo: true });
+  t.after(async () => { await server.close(); await rm(dir, { recursive: true, force: true }); });
+  const title = '接口 [V2] 约定';
+  const content = '上下文'.repeat(60) + '更新为 [v2] 方案\n第二处 [V2] <示例>\n第三处 [v2]\n最后一行待复核';
+  await server.app.knowledge().put({ layer: 'personal', title, content });
+  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+  await page.goto(server.url + '/#memory?token=fixture');
+  const search = page.getByRole('searchbox', { name: '搜索记忆' });
+  const row = page.locator('.knowledge-item').filter({ hasText: title });
+  await search.fill('[v2]');
+  await expect(row.locator('mark')).toHaveText(['[V2]', '[v2]', '[V2]']);
+  await expect(row).toContainText('第二处 [V2] <示例>');
+  await search.fill('待复核');
+  await expect(row.locator('mark')).toHaveText('待复核');
+  await expect(row).toContainText('最后一行');
+  await search.fill('缺失词');
+  await expect(page.getByText('没有找到匹配的记忆')).toBeVisible();
+  await search.fill('');
+  await expect(row.locator('mark')).toHaveCount(0);
+  await row.click();
+  await expect(page.getByRole('dialog', { name: '编辑记忆' }).locator('textarea')).toHaveValue(content);
+});
