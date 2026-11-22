@@ -143,7 +143,7 @@ export function installShortcuts({ shell, store, router, onQuickTodo }) {
   document.addEventListener('keydown', event => {
     const p = prefs();
     if (!p.on || event.defaultPrevented || event.isComposing || event.repeat || event.target.isContentEditable ||
-      event.target.closest?.('input, textarea, select') || document.querySelector('dialog[open]')) { goUntil = 0; return; }
+      event.target.closest?.('input, textarea, select, #search-results') || document.querySelector('dialog[open]')) { goUntil = 0; return; }
     const key = eventChord(event);
     const sequence = Date.now() < goUntil ? 'g ' + key : '';
     goUntil = 0;

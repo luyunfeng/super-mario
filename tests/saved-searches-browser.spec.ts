@@ -30,7 +30,7 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     const putMessage = (id: string, conversationId: string, text: string, scope = projectId) =>
       server.app.store.put('messages', id, { id, projectId: scope, conversationId, role: 'user', text, createdAt: now, status: 'done' });
     const work = 'project:' + projectId + ':work';
-    putMessage('historic', work, '旧记录 ' + keyword);
+    putMessage('historic', work, '季度复核旧记录 ' + keyword);
     for (let i = 0; i < 75; i++) putMessage('later-' + i, work, '后续记录 ' + i);
     putMessage('archived', 'project:' + archived.id + ':work', keyword, archived.id);
     putMessage('wrong-scope', work, keyword, archived.id);
@@ -49,11 +49,35 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     const manage = results.getByRole('button', { name: '管理保存的检索', exact: true });
     const saveQuery = results.getByRole('button', { name: '保存当前检索', exact: true });
     await expect(search).toHaveAccessibleName(/搜索对话/);
+    let finishSearch!: () => void;
+    const pendingSearch = new Promise<void>(resolve => { finishSearch = resolve; });
+    await page.route('**/api/v1/project-message-search', async route => {
+      await pendingSearch;
+      await route.continue();
+    }, { times: 1 });
+    await search.fill('季度复核');
+    const projectLink = results.getByRole('link', { name: '季度复核项目', exact: true });
+    await search.press('ArrowUp');
+    await expect(projectLink).toBeFocused();
+    await page.keyboard.press('c');
+    await expect(page.locator('#quick-todo')).not.toBeVisible();
+    finishSearch();
+    const workLink = results.getByRole('link', { name: /季度复核旧记录/ });
+    await expect(workLink).toBeVisible();
+    await expect(projectLink).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    await expect(workLink).toBeFocused();
+    await page.keyboard.press('ArrowUp');
+    await expect(projectLink).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(results).toBeHidden();
     await search.fill(keyword);
     const hit = results.getByRole('link', { name: /季度复核项目.*旧记录/ });
     await expect(hit).toBeVisible();
     assert.deepEqual((await (await api('/project-message-search', { query: keyword })).json()).hits.map((h: { id: string }) => h.id), ['historic']);
-    await hit.click();
+    await search.press('ArrowDown');
+    await expect(hit).toBeFocused();
+    await page.keyboard.press('Enter');
     const original = page.locator('#panel-workspace .msg.is-search-hit');
     await expect(original).toBeFocused();
     await expect(original).toContainText(keyword);

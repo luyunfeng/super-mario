@@ -86,6 +86,10 @@ export function createSearch({ shell, store, router, api }) {
     updateProjectSearch(query, savedEnabled && !store.view.unauthorized);
     results.hidden = !snapshot || store.view.unauthorized || (!query && !savedEnabled);
     if (results.hidden) { results.replaceChildren(); return; }
+    // A delayed project search or snapshot refresh can insert a group above the focused link.
+    const focused = results.contains(document.activeElement) ? document.activeElement : null;
+    const href = focused?.getAttribute('href');
+    const action = focused?.tagName === 'BUTTON' ? focused.textContent : null;
     const found = query ? groups(query, snapshot) : [];
     const open = initialQuery => {
       results.hidden = true;
@@ -106,6 +110,11 @@ export function createSearch({ shell, store, router, api }) {
     ]), savedEnabled && h('div', { class: 'saved-search-actions' },
       query && h('button', { class: 'btn btn--sm', type: 'button', onclick: () => open(query) }, '保存当前检索'),
       h('button', { class: 'btn btn--sm', type: 'button', onclick: () => open() }, '管理保存的检索')));
+    if (focused) {
+      const replacement = href ? [...results.querySelectorAll('a')].find(link => link.getAttribute('href') === href)
+        : [...results.querySelectorAll('button')].find(button => button.textContent === action);
+      (replacement ?? input).focus({ preventScroll: true });
+    }
   }
 
   store.subscribe(({ snapshot, unauthorized }) => {
@@ -120,9 +129,29 @@ export function createSearch({ shell, store, router, api }) {
   });
   input.addEventListener('input', paint);
   input.addEventListener('focus', () => { searchKey = undefined; paint(); });
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') { results.hidden = true; input.blur(); }
-    if (event.key === 'Enter') { results.querySelector('.search__hit')?.click(); }
-  });
+  function navigate(event) {
+    if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.target.blur();
+      results.hidden = true;
+      return;
+    }
+    if (results.hidden) return;
+    if (event.key === 'Enter' && event.target === input) {
+      event.preventDefault();
+      results.querySelector('.search__hit')?.click();
+      return;
+    }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    const hits = [...results.querySelectorAll('.search__hit')];
+    if (!hits.length || (event.target !== input && !hits.includes(event.target))) return;
+    event.preventDefault();
+    const index = hits.indexOf(event.target);
+    const next = event.key === 'ArrowDown' ? index + 1 : (index < 0 ? hits.length : index) - 1;
+    hits[(next + hits.length) % hits.length].focus();
+  }
+  input.addEventListener('keydown', navigate);
+  results.addEventListener('keydown', navigate);
   document.addEventListener('click', (event) => { if (!event.target.closest('.search')) results.hidden = true; });
 }
