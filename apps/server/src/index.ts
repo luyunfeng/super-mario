@@ -610,7 +610,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 200, await app.cleanupRunWorktree(decodeURIComponent(cleanupWorktree[1]!), await body(req)));
         const history = path.match(/^\/api\/v1\/runs\/([^/]+)\/worktree-history$/);
         if (history && method === 'GET') return json(res, 200, await app.runWorktreeHistory(decodeURIComponent(history[1]!),
-          url.searchParams.get('mode') ?? 'all', Number(url.searchParams.get('offset') ?? 0), url.searchParams.get('version') ?? undefined));
+          url.searchParams.get('mode') ?? 'all', Number(url.searchParams.get('offset') ?? 0), url.searchParams.get('version') ?? undefined, url.searchParams.get('commit') ?? undefined, url.searchParams.get('path') ?? undefined));
         const worktreeChange = path.match(/^\/api\/v1\/runs\/([^/]+)\/worktree-change$/);
         if (worktreeChange && method === 'GET')
           return json(res, 200, await app.readRunWorktreeChange(decodeURIComponent(worktreeChange[1]!), url.searchParams.get('path') ?? '', url.searchParams.get('area') ?? ''));

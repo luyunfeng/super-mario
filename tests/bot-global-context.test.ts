@@ -54,6 +54,7 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
       assert.match(system, /将实时状态与历史交付分开/);
       assert.ok(input.tools.some((tool: any) => tool.function.name === 'run_worktree_history'));
       assert.match(system, /全部历史也包含任务开始前的提交/);
+      assert.match(system, /合并提交按第一父提交比较/);
       assert.match(system, /从可见列表取 path，再传 area=index/);
       assert.match(system, /查询状态不授权删除/);
       assert.match(system, /即使列表为空也不要声称可以清理/);

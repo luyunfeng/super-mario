@@ -16,15 +16,19 @@ function openRunDrawer({ item, api, store, router }, title, wide = false) {
   return { area, close: drawer.close, active: () => drawer.el.open && api.token() === token };
 }
 
-function openCommitDiff(options) {
+function openCommitDiff(options, commit, mode) {
   const { item, api } = options;
-  const { area, active } = openRunDrawer(options, '已提交文件差异', true);
+  const { area, active } = openRunDrawer(options, commit ? '提交详情' : '已提交文件差异', true);
   area.textContent = '正在读取历史提交…';
-  const endpoint = '/runs/' + encodeURIComponent(item.id) + '/commit-diff';
+  const endpoint = '/runs/' + encodeURIComponent(item.id) + (commit ? '/worktree-history' : '/commit-diff');
+  function url(path) {
+    const query = new URLSearchParams({ ...(commit && { commit, mode }), ...(path !== undefined && { path }) });
+    return endpoint + '?' + query;
+  }
   let sequence = 0;
   async function load() {
     try {
-      const { files, hidden } = await api.get(endpoint);
+      const { files, hidden, message, merge } = await api.get(url());
       if (!active()) return;
       const output = h('pre', { class: 'code-sidebar__text', tabindex: 0 });
       const picker = Select({ 'aria-label': '已提交文件', options: files.map(path => [path, path]), onChange: readFile });
@@ -32,11 +36,12 @@ function openCommitDiff(options) {
         const stamp = ++sequence;
         output.textContent = '正在读取文件差异…';
         try {
-          const reply = await api.get(endpoint + '?' + new URLSearchParams({ path: picker.value }));
+          const reply = await api.get(url(picker.value));
           if (active() && stamp === sequence) replace(output, renderDiffLines(reply.text));
         } catch (error) { if (active() && stamp === sequence) output.textContent = error.message; }
       }
-      replace(area, hidden > 0 && h('p', { class: 'muted small' }, `已隐藏 ${hidden} 个受限文件。`),
+      replace(area, commit && h('code', null, commit), message && h('pre', { class: 'output' }, message),
+        merge && h('p', null, '以下差异相对第一父提交。'), hidden > 0 && h('p', { class: 'muted small' }, `已隐藏 ${hidden} 个受限文件。`),
         files.length ? [picker, output] : h('p', null, '没有可查看的文件差异。'));
       if (files.length) await readFile();
     } catch (error) { if (active()) replace(area, h('p', null, error.message), Button({ label: '重试', onClick: load })); }
@@ -58,7 +63,7 @@ export function openWorktreeHistory(options) {
     try {
       const page = await options.api.get('/runs/' + encodeURIComponent(options.item.id) + '/worktree-history?' + query);
       if (!active() || stamp !== sequence) return;
-      for (const commit of page.commits) rows.append(h('li', { class: 'stack' }, h('strong', null, commit.subject || '无标题'),
+      for (const commit of page.commits) rows.append(h('li', { class: 'stack' }, Button({ label: commit.subject || '无标题', onClick: () => openCommitDiff(options, commit.hash, picker.value) }),
         h('small', { class: 'muted' }, h('code', { title: commit.hash }, commit.hash.slice(0, 10)), ' · ', formatDate(commit.date, true))));
       replace(footer, !rows.childElementCount && h('p', null, '此范围没有提交。'),
         page.nextOffset !== null && Button({ label: '加载更早提交', onClick: () => load(page.nextOffset, page.version) }));

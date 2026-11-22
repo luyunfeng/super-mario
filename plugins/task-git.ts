@@ -49,13 +49,17 @@ export async function readCommitDiff(params: JsonObject): Promise<Json> {
   const range = commitChanges(params.range);
   if (!range || typeof cwd !== 'string' || !isAbsolute(cwd) || cwd === '/' || sensitiveWorkspacePath(cwd)
     || await realpath(cwd) !== resolve(cwd)) throw new Error('执行目录或历史提交不可用');
+  return readObjectDiff(cwd, ['diff'], [range.base, range.head], path);
+}
+
+async function readObjectDiff(cwd: string, command: string[], objects: string[], path: Json | undefined): Promise<Json> {
   const safePath = (name: string) => !!name && !isAbsolute(name) && !/[\x00-\x1f\x7f]/.test(name)
     && !name.split('/').some(part => !part || part === '..' || part === '.') && !sensitiveWorkspacePath(name);
   if (path !== undefined && (typeof path !== 'string' || !safePath(path))) throw new Error('文件不可浏览');
   const diff = async (mode: string[], file: string) => {
     try {
-      const result = await execute('git', [...gitArgs, 'diff', '--relative', '--no-ext-diff', '--no-textconv',
-        '--no-color', '--no-renames', '--submodule=short', '--ignore-submodules=none', ...mode, range.base, range.head, '--', file], gitOptions(cwd));
+      const result = await execute('git', [...gitArgs, ...command, '--relative', '--no-ext-diff', '--no-textconv',
+        '--no-color', '--no-renames', '--submodule=short', '--ignore-submodules=none', ...mode, ...objects, '--', file], gitOptions(cwd));
       return result.stdout;
     } catch { throw new Error('历史提交不可读或差异超过读取上限'); }
   };
@@ -217,6 +221,26 @@ export async function readWorktreeHistory(params: JsonObject): Promise<Json> {
     commits.push({ hash: fields[i]!, date: fields[i + 1]!, subject: subject.length > 512 ? subject.slice(0, 511) + '…' : subject });
   }
   return { head, sourceHead, version: current, commits: commits.slice(0, 20), nextOffset: commits.length > 20 ? offset + 20 : null };
+}
+
+export async function readWorktreeCommit(params: JsonObject): Promise<Json> {
+  const { commit, mode, path } = params;
+  if (typeof commit !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit) || !['unmerged', 'all'].includes(String(mode)))
+    throw new Error('请选择提交历史中的完整提交标识');
+  const { head, sourceHead } = params.retained ? await retainedBranchStatus(params) : await resolveRunWorktree(params);
+  const cwd = String(params.source);
+  const ancestor = async (tip: string) => {
+    try { await runGit(cwd, ['merge-base', '--is-ancestor', commit, tip]); return true; }
+    catch (error) { if ((error as { code?: number }).code === 1) return false; throw new Error('无法核实提交所属历史'); }
+  };
+  if (!await ancestor(head) || (mode === 'unmerged' && await ancestor(sourceHead))) throw new Error('提交不在当前工作树所选历史范围');
+  const info = await runGit(cwd, ['log', '-1', '--no-notes', '--no-show-signature', '--format=%H%x00%P%x00%B', commit, '--']);
+  const [hash, parents, message] = info.split('\0');
+  if (hash !== commit || parents === undefined || message === undefined) throw new Error('提交信息不完整');
+  const parent = parents.split(' ')[0] || null;
+  const result = await readObjectDiff(cwd, ['diff-tree', '--root', '--no-commit-id', '-r'], parent ? [parent, commit] : [commit], path);
+  if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('提交差异回执无效');
+  return { ...result, commit, parent, ...(path === undefined && { message: message.trimEnd(), merge: parents.includes(' ') }) };
 }
 
 export async function deleteRetainedBranch(params: JsonObject): Promise<Json> {

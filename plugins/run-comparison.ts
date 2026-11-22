@@ -3,7 +3,7 @@ import type { Extension } from '../packages/plugin-sdk/src/index.ts';
 import type { Json } from '../packages/protocol/src/index.ts';
 
 export function createRunComparison(read: (id: string, path?: string) => Promise<Json>, status: (id: string) => Promise<Json>,
-  change: (id: string, path: string, area: string) => Promise<Json>, history: (id: string, mode: string, offset: number, version?: string) => Promise<Json>): Extension {
+  change: (id: string, path: string, area: string) => Promise<Json>, history: (id: string, mode: string, offset: number, version?: string, commit?: string, path?: string) => Promise<Json>): Extension {
   return {
     id: 'run-comparison', name: '执行对比', capabilities: ['web.runComparison', 'runs.diff.read'],
     activate(context) {
@@ -35,13 +35,19 @@ export function createRunComparison(read: (id: string, path?: string) => Promise
       context.contribute('tools', 'run_worktree_history', {
         name: 'run_worktree_history', description: '读取工作树的 Git 提交历史，支持全部提交或尚未进入来源目录 HEAD 的提交。',
         parameters: { type: 'object', required: ['id', 'mode'], additionalProperties: false, properties: {
-          id: { type: 'string' }, mode: { type: 'string', enum: ['all', 'unmerged'] }, offset: { type: 'integer', minimum: 0 }, version: { type: 'string' },
+          id: { type: 'string' }, mode: { type: 'string', enum: ['all', 'unmerged'] }, commit: { type: 'string' }, path: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, version: { type: 'string' },
         } },
-        async execute({ id, mode, offset = 0, version }, signal) {
+        async execute({ id, mode, offset = 0, version, commit, path }, signal) {
           signal.throwIfAborted();
           if (typeof id !== 'string' || typeof mode !== 'string' || typeof offset !== 'number' || (version !== undefined && typeof version !== 'string')) throw new Error('提交历史参数无效');
-          const page = await history(id, mode, offset, version);
+          if (commit !== undefined && typeof commit !== 'string' || path !== undefined && typeof path !== 'string' || !Number.isSafeInteger(offset) || offset < 0) throw new Error('提交详情参数无效');
+          const page = await history(id, mode, commit ? 0 : offset, version, commit, path);
           signal.throwIfAborted();
+          if (commit && page && typeof page === 'object' && !Array.isArray(page)) {
+            if (typeof page.text === 'string') return { ...page, text: page.text.slice(offset, offset + 16000), nextOffset: offset + 16000 < page.text.length ? offset + 16000 : null };
+            if (Array.isArray(page.files) && typeof page.message === 'string') return { ...page, message: page.message.slice(0, 4000), messageTruncated: page.message.length > 4000,
+              files: page.files.slice(offset, offset + 64), nextOffset: offset + 64 < page.files.length ? offset + 64 : null };
+          }
           return page;
         },
       });

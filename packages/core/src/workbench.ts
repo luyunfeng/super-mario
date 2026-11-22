@@ -184,7 +184,7 @@ export async function createWorkbench(config: AppConfig) {
     if (!machine.capabilities.includes('workspace.readWorktreeChange')) throw new InputError('请升级执行机代理以查看工作树文件差异', 409);
     return machines.call(machine.id, 'workspace.readWorktreeChange', { id, source: run.worktree.source, path, area });
   }
-  async function runWorktreeHistory(id: string, mode: string, offset: number, version?: string): Promise<Json> {
+  async function runWorktreeHistory(id: string, mode: string, offset: number, version?: string, commit?: string, path?: string): Promise<Json> {
     if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
     if (!['all', 'unmerged'].includes(mode) || !Number.isSafeInteger(offset) || offset < 0 || (offset > 0 && !version)) throw new InputError('提交历史范围或分页参数无效');
     const run = store.get<Run>('runs', id);
@@ -192,9 +192,11 @@ export async function createWorkbench(config: AppConfig) {
     if (run.worktree.branchDeletedAt) throw new InputError('执行分支已删除', 410);
     const machine = machines?.list().find(m => m.id === run.machineId);
     if (!machines || !machine?.online) throw new InputError('执行机离线', 503);
-    if (!machine.capabilities.includes('workspace.worktreeHistory')) throw new InputError('请升级执行机代理以查看提交历史', 409);
-    return machines.call(machine.id, 'workspace.worktreeHistory', { id, source: run.worktree.source, retained: Boolean(run.worktree.removedAt),
-      mode, offset, ...(version !== undefined && { version }) });
+    if (commit !== undefined && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit) || path !== undefined && !commit) throw new InputError('请从历史中选择提交');
+    const method = commit ? 'workspace.worktreeCommit' : 'workspace.worktreeHistory';
+    if (!machine.capabilities.includes(method)) throw new InputError('请升级执行机代理以查看提交历史', 409);
+    return machines.call(machine.id, method, { id, source: run.worktree.source, retained: Boolean(run.worktree.removedAt),
+      mode, offset, ...(commit && { commit }), ...(path !== undefined && { path }), ...(version !== undefined && { version }) });
   }
   const cleaningWorktrees = new Map<string, { machineId: string; cwd: string }>();
   async function cleanupRunWorktree(id: string, input: Record<string, unknown>): Promise<Json> {

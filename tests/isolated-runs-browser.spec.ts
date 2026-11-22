@@ -148,7 +148,26 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   await history.getByLabel('提交范围').selectOption('all');
   await history.getByRole('button', { name: '加载更早提交' }).click();
   await expect(history.getByRole('listitem')).toHaveCount(23);
-  git(path, 'update-ref', 'HEAD', extra, tip);
+  await history.getByRole('listitem').last().getByRole('button').click();
+  const detail = page.getByRole('dialog', { name: '提交详情' });
+  await expect(detail).toContainText(base);
+  await detail.getByLabel('已提交文件').selectOption('shared.txt');
+  await expect(detail.locator('pre.code-sidebar__text')).toContainText('+baseline');
+  await detail.getByRole('button', { name: '关闭' }).click();
+  const detailTool = async (commit: string, mode: string, file?: string) => JSON.parse(JSON.stringify(await historyTool.execute(
+    { id: first.id, mode, commit, ...(file && { path: file }) }, new AbortController().signal)));
+  await assert.rejects(detailTool(base, 'unmerged'), /不在当前工作树/);
+  assert.equal((await detailTool(base, 'all')).parent, null);
+  const stagedTree = git(path, 'write-tree');
+  const side = git(path, 'commit-tree', stagedTree, '-p', base, '-m', 'side commit');
+  const merge = git(path, 'commit-tree', stagedTree, '-p', tip, '-p', side, '-m', 'merge fixture');
+  git(path, 'update-ref', 'HEAD', merge, tip);
+  const merged = await detailTool(merge, 'all');
+  assert.equal(merged.merge, true);
+  assert.equal(merged.parent, tip);
+  assert.deepEqual(merged.files, ['stage.txt']);
+  git(path, 'update-ref', 'HEAD', extra, merge);
+  await assert.rejects(detailTool(tip, 'all'), /不在当前工作树/);
   await assert.rejects(getHistory('unmerged', firstPage.nextOffset, firstPage.version), /历史已变化/);
   await history.getByRole('button', { name: '关闭' }).click();
   await page.getByRole('button', { name: '查看工作树状态' }).click();
@@ -260,6 +279,8 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   const afterCleanup = await readStatus();
   assert.ok(afterCleanup.removedAt);
   assert.equal((await getHistory('unmerged')).commits[0].hash, kept);
+  assert.match((await detailTool(kept, 'unmerged', 'stage.txt')).text, /staged file/);
+  await assert.rejects(detailTool(kept, 'unmerged', '.env'), /不可浏览/);
   assert.equal(afterCleanup.retainedBranch.head, kept);
   assert.equal(afterCleanup.retainedBranch.unmerged, Number(git(cwd, 'rev-list', '--count', 'HEAD..' + kept)));
   incompleteBranchStatus = true;
