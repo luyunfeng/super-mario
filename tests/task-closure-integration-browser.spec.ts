@@ -209,5 +209,14 @@ test('Chromium 用户返工只创建一个新 Run，重复 HTTP 决定不双发'
   assert.equal(f.stored<Todo>('todos', f.todo.id)!.completedAt, undefined);
   assert.equal(f.stored<RunReview>('run-reviews', f.todo.id)!.round, 1);
   assert.deepEqual(f.errors, []);
+  await d.getByRole('button', { name: '关闭', exact: true }).click();
+  await f.row.getByRole('button', { name: '执行历史', exact: true }).click();
+  const history = f.page.getByRole('dialog', { name: '执行历史', exact: true });
+  const link = history.locator('[data-round="1"]').getByRole('link', { name: '打开本次返工执行' });
+  await expect(link).toHaveAttribute('href', '#projects/' + f.project.id + '/runs/' + next.runId);
+  await link.click();
+  await expect(history).toHaveCount(0);
+  await expect(f.page).toHaveURL(new RegExp('/runs/' + next.runId + '$'));
+  assert.equal(f.calls.length, 2);
   t.diagnostic(`SQLite: 首轮 ${run.id} → 返工 ${next.runId}；重复决定返回同一 Run，上限后 409；本地替身总执行 2 次`);
 });

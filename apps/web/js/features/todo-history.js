@@ -15,6 +15,10 @@ export function openTodoHistory({ api, store, router, todo }) {
     body: [h('p', { class: 'small muted' }, '每轮对应一次实际执行。执行结束不代表待办完成；本页只读取记录。'), notice, error, list, more],
     footer: [refresh], onClose() { alive = false; sequence++; },
   });
+  function runLink(label, id, projectId) {
+    return h('a', { class: 'btn btn--sm', href: router.href('projects', projectId || 'all', 'runs', id),
+      onclick: event => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) drawer.close(); } }, label);
+  }
   function row(round, projectId) {
     const run = round.run, status = runStatus[run.status] ?? { text: '未知状态', tone: '' };
     const executor = (store.view.snapshot?.executors ?? []).find(item => item.id === run.executorId)?.name ?? '历史执行者';
@@ -28,9 +32,12 @@ export function openTodoHistory({ api, store, router, todo }) {
           : h('p', { class: 'small muted' }, '尚无结果记录。'),
         round.outputTruncated && h('p', { class: 'small muted' }, '摘要仅显示前 4000 字符，完整结果请打开执行记录。'),
         run.resultSource && h('p', { class: 'small muted' }, `结果来源：${run.resultSource}`),
-        round.decisions.map(decision => h('p', { class: 'small' },
-          `${decision.action === 'accept' ? '用户已验收' : '用户要求返工'} · ${formatDate(decision.at, true)}${decision.defects ? ' · ' + decision.defects : ''}`)),
-        h('a', { class: 'btn btn--sm', href: router.href('projects', projectId || 'all', 'runs', run.id), onclick: () => drawer.close() }, '打开执行记录')));
+        round.decisions.map(decision => h('div', { class: 'row row--wrap small' },
+          `${decision.action === 'accept' ? '用户已验收' : '用户要求返工'} · ${formatDate(decision.at, true)}${decision.defects ? ' · ' + decision.defects : ''}`,
+          decision.dispatchStatus === 'unknown' && h('span', null, '返工派发结果未知'),
+          decision.dispatchStatus === 'dispatching' && h('span', null, '正在派发返工'),
+          decision.reworkRunId && runLink('打开本次返工执行', decision.reworkRunId, projectId))),
+        runLink('打开执行记录', run.id, projectId)));
   }
   async function load(reset) {
     const stamp = ++sequence, token = api.token?.();

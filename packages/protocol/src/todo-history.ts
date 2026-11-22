@@ -5,7 +5,7 @@ export interface TodoExecutionRound {
   number: number;
   run: Pick<Run, 'id' | 'executorId' | 'prompt' | 'status' | 'createdAt' | 'updatedAt' | 'doneWhen' | 'output' | 'error' | 'resultSource'>;
   outputTruncated: boolean;
-  decisions: Array<{ action: 'accept' | 'rework'; defects?: string; at: string }>;
+  decisions: Array<{ action: 'accept' | 'rework'; defects?: string; at: string; reworkRunId?: string; dispatchStatus?: 'dispatching' | 'unknown' }>;
 }
 export interface TodoHistory {
   todo: { id: string; title: string; projectId?: string; completedAt?: string };
