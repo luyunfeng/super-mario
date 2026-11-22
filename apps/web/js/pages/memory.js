@@ -5,6 +5,7 @@ import { Button, Empty, Input, Select, Segmented, TextArea } from '../ui/kit.js'
 import { Hint, hintCopy } from '../ui/hint.js';
 import { toast } from '../ui/overlay.js';
 import { knowledgeRow, openKnowledgeDrawer } from '../features/knowledge.js';
+import { openMeetingDay } from '../features/meeting-day.js';
 import { openCuratorDrawer, pendingJobs } from '../features/curator.js';
 import { createWorkDecisions } from '../features/work-decisions.js';
 
@@ -63,17 +64,20 @@ export function createMemoryPage({ api, store, router, scope }) {
   const list = h('div', { class: 'list' });
   const curatorLine = h('div', { class: 'row row--between curator', id: 'curator-line' });
 
+  const recap = Button({ label: '会议日回顾', size: 'sm', onClick: () => openMeetingDay({ api, store, scope }) });
+  recap.hidden = true;
   const el = h('section', { class: 'page', id: 'memory' },
     h('div', { class: 'page__inner' },
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '记忆'), h('p', { class: 'page__sub' }, hintCopy('nav.memory').tag)),
-        h('div', { class: 'page__actions' }, Hint('nav.memory'))),
+        h('div', { class: 'page__actions' }, recap, Hint('nav.memory'))),
       h('div', { class: 'stack stack--lg' }, quick,
         h('div', { class: 'stack' }, h('div', { class: 'row row--between row--wrap' }, seg.el, importanceFilter, tagFilter, search), layerNote),
         list, curatorLine, decisions.el)));
 
   function paint() {
     const snapshot = store.view.snapshot;
+    recap.hidden = store.view.unauthorized || !snapshot?.plugins?.some(p => p.id === 'knowledge-local' && p.status === 'active');
     if (!snapshot) return;
     const query = search.value.trim();
     const words = query.normalize('NFC').toLowerCase().split(/\s+/).filter(Boolean);

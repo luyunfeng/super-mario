@@ -544,6 +544,11 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (path === '/api/v1/knowledge/source-reader' && method === 'PUT') { app.knowledgeSources.configure(await body(req)); return json(res, 200, app.knowledgeSources.status()); }
         if (path === '/api/v1/knowledge/curator' && method === 'GET') return json(res, 200, app.knowledgeCurator.status());
         if (path === '/api/v1/knowledge/curator' && method === 'PUT') return json(res, 200, await app.knowledgeCurator.configure(await body(req)));
+        if (path === '/api/v1/knowledge/meeting-day' && method === 'GET') {
+          return json(res, 200, await app.knowledgeCurator.meetingDay(url.searchParams.get('date') ?? '',
+            url.searchParams.get('timezone') ?? app.briefing.settings().timezone, url.searchParams.get('projectId') || undefined,
+            Number(url.searchParams.get('offset') ?? 0)));
+        }
         if (path === '/api/v1/knowledge/index' && method === 'GET') return json(res, 200, await app.knowledgeCurator.index());
         if (path === '/api/v1/knowledge/sources' && method === 'POST') return json(res, 201, app.knowledgeCurator.addSource(await body(req)));
         const knowledgeRevision = path.match(/^\/api\/v1\/knowledge\/([^/]+)\/revision$/);
