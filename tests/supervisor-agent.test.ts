@@ -252,9 +252,13 @@ test('needs_you signals include actual runs associated with their todo', async t
     conversationId: 'external', prompt: '执行', doneWhen: '人工验收', output: '等待批准',
     status: 'running', createdAt: '2026-01-01', updatedAt: '2026-01-01' };
   f.store.put('runs', run.id, run);
+  f.store.put('todos', 'todo', { id: 'todo', title: '核验交付', notes: '保留审批回执', waitingOn: '验收人' });
   f.store.put('runs', 'unrelated', { ...run, id: 'unrelated', todoId: 'other' });
   const review = await f.service.flush();
   assert.deepEqual(review?.runIds, ['related']);
+  const evidence = JSON.parse(f.calls[0].text.split('\n').at(-1)!);
+  assert.deepEqual(evidence.todos, [{ id: 'todo', title: '核验交付', notes: '保留审批回执', waitingOn: '验收人' }]);
+  assert.match(f.calls[0].text, /不同执行的产物不可相互代证/);
   assert.deepEqual(JSON.parse(f.calls[0].text.split('\n').at(-1)!).runs, [run]);
   assert.deepEqual(f.calls[0].context, { projectId: 'project' });
 });
@@ -270,4 +274,13 @@ test('SILENT supervisor reply marks signal processed without emitting review eve
   assert.equal(emitted.length, 0);
   // Second flush should not re-process the silently absorbed signal.
   assert.equal(await f.service.flush(), undefined);
+});
+
+test('a similar word or a missing reason cannot silently close a review', async t => {
+  for (const text of ['SILENTLY waiting', 'SILENT:   ']) {
+    const f = fixture(t);
+    f.respondWith(async () => ({ ...answer(), text }));
+    f.add(signal('needs-review'));
+    assert.equal((await f.service.flush())?.status, 'suggestion');
+  }
 });
