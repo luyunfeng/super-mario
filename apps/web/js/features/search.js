@@ -1,5 +1,7 @@
 // 全局搜索按类型展示；项目工作消息通过插件查询，不进入全局快照。
 import { h, replace } from '../lib/dom.js';
+import { openDrawer } from '../ui/overlay.js';
+import { Button } from '../ui/kit.js';
 import { searchRuns } from './run-search.js';
 import { openSavedSearches } from './saved-searches.js';
 
@@ -66,6 +68,62 @@ export function createSearch({ shell, store, router, api }) {
     return hits;
   }
 
+  function meetingLinks(rows, snapshot) {
+    return rows.flatMap(row => {
+      const project = row.projectId && snapshot.projects?.find(p => p.id === row.projectId && !p.archivedAt);
+      if (row.projectId && !project) return [];
+      const page = row.pages.find(p => snapshot.knowledge?.some(entry => entry.id === p.id && entry.projectId === row.projectId));
+      const params = page ? { entry: page.id, source: row.sourceId } : { curator: '1', job: row.sourceId };
+      return [{ text: [row.title, ' · ', project?.name || '个人记忆', ' · ', row.startedAt || '日期未注明'],
+        href: router.href('memory') + '?' + new URLSearchParams(params) }];
+    });
+  }
+
+  function openMeetingResults(query) {
+    results.hidden = true;
+    const owner = api.draftOwner();
+    const current = () => drawer.el.open && api.draftOwner() === owner && store.view.snapshotOwner === owner &&
+      !store.view.unauthorized && store.view.snapshot?.plugins?.some(p => p.id === 'knowledge-local' && p.status === 'active');
+    const status = h('p', { role: 'status' });
+    const list = h('div', { class: 'stack' });
+    const rows = new Map();
+    let offset = 0;
+    const more = Button({ label: '查看更多会议', size: 'sm', onClick: load });
+    let signature;
+    function render() {
+      if (!current()) { drawer.close(); return; }
+      const links = meetingLinks([...rows.values()], store.view.snapshot);
+      const next = JSON.stringify(links);
+      if (next === signature) return;
+      signature = next;
+      replace(list, links.map(hit =>
+        h('a', { href: hit.href, onclick: event => {
+          if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+          event.preventDefault(); drawer.close(); input.value = ''; router.go(hit.href);
+        } }, hit.text)));
+    }
+    async function load() {
+      if (!current() || more.disabled || offset === null) return;
+      more.disabled = true;
+      status.textContent = '正在读取会议…';
+      try {
+        const reply = await api.get('/knowledge/meeting-search?' + new URLSearchParams({ query, offset: String(offset) }));
+        if (!current()) return;
+        for (const row of reply.meetings) rows.set(row.sourceId, row);
+        render();
+        more.textContent = '查看更多会议';
+        offset = reply.nextOffset;
+        more.hidden = offset === null;
+        status.textContent = reply.total ? '已显示 ' + list.childElementCount + ' / ' + reply.total + ' 场会议' : '没有匹配的会议';
+      } catch (error) {
+        if (current()) { status.textContent = '会议检索失败：' + error.message; more.textContent = '重试'; }
+      } finally { more.disabled = false; }
+    }
+    const drawer = openDrawer({ title: '会议搜索结果', subtitle: query, body: [status, list, more], onClose: () => unsubscribe() });
+    const unsubscribe = store.subscribe(render);
+    void load();
+  }
+
   function groups(query, snapshot) {
     const folded = query.toLowerCase();
     const match = (...values) => values.some(value => String(value ?? '').toLowerCase().includes(folded));
@@ -83,14 +141,7 @@ export function createSearch({ shell, store, router, api }) {
       })],
       ['待办', (snapshot.todos ?? []).filter(item => match(item.title, item.notes)).map(item => ({ text: item.title, href: router.href('projects', projectKey(item), 'todos', 'detail', item.id) }))],
       ['执行', runs.map(item => ({ text: item.prompt, href: router.href('projects', projectKey(item), 'runs', item.id) }))],
-      ['会议', meetings.state.hits.flatMap(row => {
-        const project = row.projectId && snapshot.projects?.find(p => p.id === row.projectId && !p.archivedAt);
-        if (row.projectId && !project) return [];
-        const page = row.pages.find(p => snapshot.knowledge?.some(entry => entry.id === p.id && entry.projectId === row.projectId));
-        const query = page ? { entry: page.id, source: row.sourceId } : { curator: '1', job: row.sourceId };
-        return [{ text: [row.title, ' · ', project?.name || '个人记忆', ' · ', row.startedAt || '日期未注明'],
-          href: router.href('memory') + '?' + new URLSearchParams(query) }];
-      })],
+      ['会议', meetingLinks(meetings.state.hits, snapshot)],
       ['记忆', (snapshot.knowledge ?? []).filter(item => match(item.title, item.content)).map(item => ({ text: item.title, href: `${router.href('memory')}?entry=${encodeURIComponent(item.id)}` }))],
       ['项目', (snapshot.projects ?? []).filter(item => !item.archivedAt && match(item.name, item.description)).map(item => ({ text: item.name, href: router.href('projects', item.id, 'todos') }))],
     ].filter(([, hits]) => hits.length);
@@ -126,6 +177,7 @@ export function createSearch({ shell, store, router, api }) {
           event.preventDefault(); router.go(hit.href);
         }
       } }, hit.text)),
+      name === '会议' && hits.length > 5 && Button({ label: '查看全部匹配会议', size: 'sm', onClick: () => openMeetingResults(query) }),
     ]), savedEnabled && h('div', { class: 'saved-search-actions' },
       query && h('button', { class: 'btn btn--sm', type: 'button', onclick: () => open(query) }, '保存当前检索'),
       h('button', { class: 'btn btn--sm', type: 'button', onclick: () => open() }, '管理保存的检索')));

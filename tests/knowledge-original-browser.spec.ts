@@ -439,7 +439,7 @@ test('会议日回顾按时区和项目分页，空结果区分未注日期，�
   const raw = join(dir, 'plugins', 'knowledge-local', 'raw');
   await mkdir(raw, { recursive: true });
   await writeFile(join(raw, first.id + '.md'), base.text);
-  for (let i = 0; i < 25; i++) server.app.knowledgeCurator.addSource({ ...base, title: '同日来源 ' + i, meetingStartedAt: ['2032-02-28T11:59Z', '2032-02-28T12:00Z', '2032-02-28T17:59Z', '2032-02-28T18:00Z'][i] ?? '2032-02-28T23:59Z' });
+  for (let i = 0; i < 25; i++) server.app.knowledgeCurator.addSource({ ...base, title: '跨日评审同日来源 ' + i, meetingStartedAt: ['2032-02-28T11:59Z', '2032-02-28T12:00Z', '2032-02-28T17:59Z', '2032-02-28T18:00Z'][i] ?? '2032-02-28T23:59Z' });
   server.app.knowledgeCurator.addSource({ ...base, title: '未填写日期' });
   server.app.knowledgeCurator.addSource({ title: '个人范围来源', text: '另一个话题', materialKind: 'meeting-transcript', meetingStartedAt: '2032-02-28T21:00Z' });
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
@@ -465,8 +465,8 @@ test('会议日回顾按时区和项目分页，空结果区分未注日期，�
   await expect(recap.getByRole('list', { name: '下午' }).getByRole('listitem')).toHaveCount(2);
   const evening = recap.getByRole('list', { name: '晚间' });
   await expect(evening.getByRole('listitem')).toHaveCount(23);
-  await expect(evening.getByRole('listitem').filter({ hasText: '跨日评审' })).toContainText('18:25');
-  await expect(evening.getByRole('listitem').filter({ hasText: '跨日评审' })).toContainText('已整理');
+  await expect(evening.getByRole('listitem').filter({ hasText: '项目评审记录' })).toContainText('18:25');
+  await expect(evening.getByRole('listitem').filter({ hasText: '项目评审记录' })).toContainText('已整理');
   await expect(recap.getByRole('listitem').last()).toContainText('等待整理');
   await recap.getByLabel('回顾日期').fill('2032-03-01');
   await query.click();
@@ -475,7 +475,7 @@ test('会议日回顾按时区和项目分页，空结果区分未注日期，�
   await recap.getByLabel('回顾日期').fill('2032-02-29');
   await recap.getByLabel('回顾时区').fill('Asia/Kathmandu');
   await query.click();
-  await recap.getByRole('listitem').filter({ hasText: '跨日评审' }).getByRole('button', { name: '修改标题' }).click();
+  await recap.getByRole('listitem').filter({ hasText: '项目评审记录' }).getByRole('button', { name: '修改标题' }).click();
   const editor = page.getByRole('dialog', { name: '修改会议标题' });
   await editor.getByRole('textbox', { name: '会议标题' }).fill('季度样本评审');
   await editor.getByRole('button', { name: '保存标题' }).click();
@@ -497,8 +497,18 @@ test('会议日回顾按时区和项目分页，空结果区分未注日期，�
   await results.getByRole('link', { name: /未定日期的复核/ }).click();
   await expect(queue.locator('.is-search-hit')).toContainText('未定日期的复核');
   await page.goto(server.url + '/#home');
-  await search.fill('季度样本评审');
-  await results.getByRole('link', { name: /季度样本评审/ }).click();
+  await search.fill('跨日评审');
+  await results.getByRole('button', { name: '查看全部匹配会议' }).click();
+  const allMeetings = page.getByRole('dialog', { name: '会议搜索结果' });
+  await expect(allMeetings.getByRole('status')).toHaveText('已显示 25 / 26 场会议');
+  await page.route('**/knowledge/meeting-search?*offset=25', route =>
+    route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '暂时不可用' }) }), { times: 1 });
+  await allMeetings.getByRole('button', { name: '查看更多会议' }).click();
+  await expect(allMeetings.getByRole('status')).toContainText('会议检索失败');
+  await expect(allMeetings.getByRole('link')).toHaveCount(25);
+  await allMeetings.getByRole('button', { name: '重试' }).click();
+  await expect(allMeetings.getByRole('status')).toHaveText('已显示 26 / 26 场会议');
+  await allMeetings.getByRole('link', { name: /季度样本评审/ }).click();
   await expect(page.getByRole('dialog', { name: '编辑记忆' }).locator('pre')).toHaveText(base.text);
 });
 
