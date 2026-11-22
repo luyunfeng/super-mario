@@ -85,7 +85,11 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
     const label = [time, todo.title, status, todo.reminderAt && '有提醒'].filter(Boolean).join(' · ');
     return h('button', { class: 'cal-entry', type: 'button', title: label, 'aria-label': label,
       dataset: { status }, draggable: true, onclick: () => open(todo),
-      ondragstart: event => { event.dataTransfer.setData(dragType, todo.id); event.dataTransfer.effectAllowed = 'move'; } },
+      ondragstart: event => {
+        event.dataTransfer.setData(dragType, todo.id);
+        event.dataTransfer.setData(dragType + '-due', todo.dueAt);
+        event.dataTransfer.effectAllowed = 'move';
+      } },
       h('span', null, time), ' ', todo.title, todo.reminderAt && ' ⏰');
   }
   function dropTime(cell, hour, y) {
@@ -120,9 +124,10 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
         clearPreview();
         const id = event.dataTransfer.getData(dragType);
         const todo = todos.find(item => item.id === id);
-        if (!todo) return;
+        const originalDueAt = event.dataTransfer.getData(dragType + '-due');
+        if (!todo || !originalDueAt) return;
         event.preventDefault();
-        move(todo, key, dropTime(event.currentTarget, hour, event.clientY));
+        move(todo, key, dropTime(event.currentTarget, hour, event.clientY), originalDueAt);
       } }, children);
   }
   function dayButton(day, label) {

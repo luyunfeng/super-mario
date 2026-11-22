@@ -579,6 +579,9 @@ export async function createWorkbench(config: AppConfig) {
   function updateTodo(id: string, patch: Record<string, unknown>): Todo {
     const todo = store.get<Todo>('todos', id);
     if (!todo) throw new InputError('待办不存在', 404);
+    if (patch.expectedDueAt !== undefined && dueDate(patch.expectedDueAt) !== todo.dueAt) {
+      throw new InputError('截止时间已被修改，请核对最新时间后重新改期', 409);
+    }
     if (patch.completed !== undefined && typeof patch.completed !== 'boolean') throw new InputError('completed必须为布尔值');
     const next = { ...todo, updatedAt: new Date().toISOString() };
     if (patch.title !== undefined) next.title = requiredText(patch.title, '标题');

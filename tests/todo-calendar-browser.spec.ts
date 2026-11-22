@@ -68,6 +68,36 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await page.reload();
   await expect(dropSlot.getByRole('button', { name: /10:30.*本地三月末/ })).toBeVisible();
   assert.equal(read().reminderAt, reminderAt);
+  // Another client wins after this page has already started dragging.
+  const newer = '2030-03-27T18:15:00.000Z';
+  await page.route(`**/todos/${todo.id}`, async route => {
+    assert.equal(route.request().postDataJSON().expectedDueAt, read().dueAt);
+    server.app.updateTodo(todo.id, { dueAt: newer });
+    await route.continue();
+  }, { times: 1 });
+  const dragData = await page.evaluateHandle(() => new DataTransfer());
+  await entry.dispatchEvent('dragstart', { dataTransfer: dragData });
+  await root.locator('[data-day="2030-03-27"][data-hour="12"]').dispatchEvent('drop', { dataTransfer: dragData });
+  await dragData.dispose();
+  await expect(page.getByText(/没有改期成功：截止时间已被修改/)).toBeVisible();
+  await expect(entry).toHaveAccessibleName(/11:15/);
+  assert.equal(read().dueAt, newer);
+  // An open editor must neither replace a concurrent due date nor revert unrelated notes.
+  await entry.click();
+  server.app.updateTodo(todo.id, { dueAt: '2030-03-27T19:00:00.000Z', notes: '合成的新备注' });
+  await editor.getByLabel('截止时间', { exact: true }).fill('13:00');
+  await editor.getByRole('button', { name: '保存' }).click();
+  await expect(editor).toBeVisible();
+  await expect(page.getByText('截止时间已被修改，请核对最新时间后重新改期', { exact: true })).toBeVisible();
+  assert.equal(read().dueAt, '2030-03-27T19:00:00.000Z');
+  await editor.getByRole('button', { name: '取消' }).click();
+  await expect(entry).toHaveAccessibleName(/12:00/);
+  await entry.click();
+  server.app.updateTodo(todo.id, { notes: '同时保存的备注' });
+  await editor.getByLabel('截止时间', { exact: true }).fill('13:00');
+  await editor.getByRole('button', { name: '保存' }).click();
+  await expect.poll(() => read().dueAt).toBe('2030-03-27T20:00:00.000Z');
+  assert.equal(read().notes, '同时保存的备注');
   await root.getByRole('button', { name: '添加待办 2030-03-27 11:00' }).click();
   const panel = page.locator('#panel-todos');
   await panel.getByRole('textbox', { name: '添加待办' }).fill('日历时段新建');

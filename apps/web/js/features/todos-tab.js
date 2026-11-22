@@ -87,20 +87,27 @@ export function createTodosTab({ api, store, router }) {
           if (!dueInput.reportValidity() || (clock && !clock.reportValidity()) || !reminder.reportValidity()) return;
           // Omit unchanged values: re-sending reminderAt clears its claim in the API.
           // It also preserves seconds/precision that these minute/date controls cannot show.
-          const dates = {};
+          const patch = {};
           if (dueInput.value !== originalDue || (clock && clock.value !== originalClock)) {
             if (!dueInput.value && clock?.value && !originalDue) throw new Error('请填写截止日期');
-            dates.dueAt = dueInput.value ? dueInstant(dueInput.value, clock?.value || '23:59') : '';
+            patch.expectedDueAt = todo.dueAt ?? '';
+            patch.dueAt = dueInput.value ? dueInstant(dueInput.value, clock?.value || '23:59') : '';
           }
           if (reminder.value !== originalReminder) {
             const at = reminder.value ? new Date(reminder.value) : undefined;
             if (at && (!Number.isFinite(at.getTime()) || localDate(at.toISOString(), true) !== reminder.value)) throw new Error('提醒时间无效，请检查本机时区和夏令时');
-            dates.reminderAt = at ? at.toISOString() : '';
+            patch.reminderAt = at ? at.toISOString() : '';
           }
-          await api.patch(`/todos/${encodeURIComponent(todo.id)}`, {
-            title: name.value.trim(), notes: notes.value, projectId: project.value, waitingOn: waiting.value.trim(),
-            ...dates,
-          });
+          if (name.value.trim() !== todo.title) patch.title = name.value.trim();
+          if (notes.value !== (todo.notes ?? '')) patch.notes = notes.value;
+          if (project.value !== (todo.projectId ?? '')) patch.projectId = project.value;
+          if (waiting.value.trim() !== (todo.waitingOn ?? '')) patch.waitingOn = waiting.value.trim();
+          try {
+            if (Object.keys(patch).length) await api.patch(`/todos/${encodeURIComponent(todo.id)}`, patch);
+          } catch (error) {
+            if (error.status === 409) await store.refresh();
+            throw error;
+          }
           drawer.close(); store.refresh();
         },
       })],
@@ -141,16 +148,19 @@ export function createTodosTab({ api, store, router }) {
       replace(list, todoCalendar({ ...calendar, todos: [...groups.flatMap(([, items]) => items), ...finished], showDone, navigate,
         onShowDone: value => { showDone = value; paint(); }, open: openEdit, showList: () => navigate('list'),
         add: (day, clock) => { due.value = day; time.value = clock; title.focus(); },
-        move: async (todo, day, clock) => {
+        move: async (todo, day, clock, originalDueAt) => {
           try {
-            const original = new Date(todo.dueAt);
+            const original = new Date(originalDueAt);
             if (!clock && localDate(original) === day) return;
             const target = new Date(dueInstant(day, clock || localDate(original, true).slice(11)));
             if (!clock) target.setSeconds(original.getSeconds(), original.getMilliseconds());
             if (+target === +original) return;
-            await api.patch(`/todos/${encodeURIComponent(todo.id)}`, { dueAt: target.toISOString() });
+            await api.patch(`/todos/${encodeURIComponent(todo.id)}`, { dueAt: target.toISOString(), expectedDueAt: originalDueAt });
             await store.refresh();
-          } catch (error) { toast(`没有改期成功：${error.message}`, 'danger'); }
+          } catch (error) {
+            toast(`没有改期成功：${error.message}`, 'danger');
+            if (error.status === 409) await store.refresh();
+          }
         } }));
       return;
     }
