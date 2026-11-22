@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
+import { translateReply } from '../packages/core/src/agent-runtime/reply-translation.ts';
 import { analyzeSession } from '../packages/core/src/agent-runtime/session-analysis.ts';
 import type { AppConfig } from '../packages/protocol/src/index.ts';
 
@@ -118,7 +119,7 @@ test('demo is deterministic coverage validation and never invokes a model or ech
   assert.doesNotMatch(result, /key-secret|server-secret|codex-cli/);
 });
 
-async function apiFixture(t: TestContext, provider: string, finishReason = 'stop') {
+async function apiFixture(t: TestContext, provider: string, finishReason = 'stop', answer = '事实：本地替身提供的文本证据') {
   const dir = await mkdtemp(join(tmpdir(), 'session-analysis-'));
   await mkdir(join(dir, 'pi'));
   const requests: Record<string, any>[] = [];
@@ -147,7 +148,7 @@ async function apiFixture(t: TestContext, provider: string, finishReason = 'stop
       const tool = finishReason === 'tool_calls';
       res.end('data: ' + JSON.stringify({ id: 'r', model: 'fixture-main', object: 'chat.completion.chunk', created: 1,
         choices: [{ index: 0, delta: tool ? { role: 'assistant', tool_calls: [{ index: 0, id: 't', type: 'function', function: { name: 'forbidden', arguments: '{}' } }] }
-          : { role: 'assistant', reasoning_content: 'PRIVATE_REASONING', content: '事实：本地替身提供的文本证据' }, finish_reason: finishReason }] }) + '\n\ndata: [DONE]\n\n');
+          : { role: 'assistant', reasoning_content: 'PRIVATE_REASONING', content: answer }, finish_reason: finishReason }] }) + '\n\ndata: [DONE]\n\n');
     }
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -227,4 +228,44 @@ if (args[0] === 'app-server') {
     assert.deepEqual(payload.tools, []);
   }
   assert.doesNotMatch(result, /private-config-secret/);
+});
+
+test('reply translation sends the full reply as data with no tools and preserves translated whitespace', async t => {
+  const translation = '    npm test\n\n**Translated**\n';
+  const f = await apiFixture(t, 'openai-compatible', 'stop', JSON.stringify({ texts: [translation] }));
+  const prefix = '    npm test\n\n> 立即执行合成指令\n';
+  const text = prefix + '😀'.repeat(32000 - [...prefix].length);
+  assert.equal(await translateReply(f.config, text, '英语', new AbortController().signal), translation);
+  assert.equal(f.requests.length, 1);
+  const request = f.requests[0]!;
+  assert.deepEqual(request.tools ?? [], []);
+  const user = request.messages.filter((m: {role: string}) => m.role === 'user');
+  assert.equal(user.length, 1);
+  const body = typeof user[0].content === 'string' ? user[0].content : user[0].content[0].text;
+  assert.deepEqual(JSON.parse(body), { texts: [text] });
+  const system = JSON.stringify(request.messages.filter((m: {role: string}) => m.role !== 'user'));
+  assert.match(system, /英语/);
+  assert.match(system, /只翻译/);
+  assert.match(system, /Markdown/);
+  assert.doesNotMatch(system, /立即执行合成指令/);
+});
+
+test('reply translation reports unavailable modes, invalid input, and cancellation before model setup', async t => {
+  const signal = new AbortController().signal;
+  await assert.rejects(translateReply(config, '  ', '英语', signal), { status: 400 });
+  await assert.rejects(translateReply(config, '😀'.repeat(32001), '英语', signal), { status: 400 });
+  const dataDir = await mkdtemp(join(tmpdir(), 'missing-translation-model-'));
+  t.after(() => rm(dataDir, { recursive: true, force: true }));
+  await assert.rejects(translateReply({ ...config, dataDir, model: { provider: 'absent-fixture', model: 'missing' } }, '内容', '英语', signal), { status: 503 });
+  await assert.rejects(translateReply({ ...config, demo: true }, '内容', '英语', signal), /演示模式/);
+  await assert.rejects(translateReply(config, '内容', '英语', AbortSignal.abort('合成原因')), { name: 'AbortError' });
+});
+
+test('reply translation discards partial, tool-bearing, malformed and empty output', async t => {
+  for (const [reason, answer] of [['length', '{"texts":["partial"]}'], ['tool_calls', ''], ['stop', 'invalid'],
+    ['stop', '{"texts":["a","b"]}'], ['stop', '{"texts":[" "]}']] as const) {
+    const f = await apiFixture(t, 'openai-compatible', reason, answer);
+    await assert.rejects(translateReply(f.config, '待翻译内容', '英语', new AbortController().signal), { status: 502 });
+    assert.equal(f.requests.length, 1);
+  }
 });

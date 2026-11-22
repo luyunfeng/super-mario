@@ -10,6 +10,7 @@ import { Button, Banner, Card, Pill } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
 import { attachSavedPrompts } from '../features/saved-prompts.js';
 import { officeDocumentsButton } from '../features/office-documents.js';
+import { createReplyTranslation } from '../features/reply-translation.js';
 import { createMessageFavorites } from '../features/message-favorites.js';
 import { createConversationExport } from '../features/conversation-export.js';
 import { conversationSearchActive } from '../features/search.js';
@@ -30,6 +31,7 @@ const SETUP_STEPS = [
 ];
 
 export function createChatPage({ api, store, scope, router }) {
+  const translation = createReplyTranslation({ api, store, getScope: scope.get, getConversationId: () => 'main' });
   const favorites = createMessageFavorites({ api, store });
   const transcript = createConversationExport({ api, store });
   const attention = createAttention({ api, store });
@@ -215,18 +217,20 @@ export function createChatPage({ api, store, scope, router }) {
     }
     const personal = message.conversationId === 'main' && (!message.origin || message.origin === 'user');
     const label = personal ? assistantLabel : message.origin === 'result' ? '执行结果' : '主 Agent';
+    const bubble = h('div', { class: 'msg__bubble' }, renderFormattedText(text));
     return h('article', { class: 'msg msg--assistant', dataset: { id: message.id } },
       h('span', { class: 'msg__avatar', 'aria-hidden': 'true' }, 'M'),
       h('div', { class: 'msg__col' },
         h('span', { class: 'msg__label', dataset: personal ? { assistantName: 'true' } : undefined }, label),
         agentProgress(message, api),
-        h('div', { class: 'msg__bubble' }, renderFormattedText(text)),
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, canQuote && message.role === 'assistant' && quote.action(message, label))));
+        bubble,
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, translation.action(message, bubble), canQuote && message.role === 'assistant' && quote.action(message, label))));
   }
 
   function paintMessages(list) {
+    const translationEpoch = translation.update(list);
     keyedList(messages, list, item => item.id, renderMessage, item => JSON.stringify([
-      prompts.epoch, favorites.epoch, quotesEnabled, editEnabled, owner, draftKey, item,
+      prompts.epoch, favorites.epoch, translationEpoch, quotesEnabled, editEnabled, owner, draftKey, item,
     ]));
   }
 

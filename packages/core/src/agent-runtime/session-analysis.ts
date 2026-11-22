@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { abortable, modelCompletion } from './model-completion.ts';
 import type { AppConfig } from '../../../protocol/src/index.ts';
 
 const CHUNK_SIZE = 12_000;
@@ -26,60 +26,6 @@ function split(text: string): string[] {
 }
 
 function cancelled(): Error { return new DOMException('会话分析已取消', 'AbortError'); }
-
-/** Also stop promptly when a provider ignores AbortSignal; late answers cannot become results. */
-async function abortable<T>(work: () => Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) throw cancelled();
-  let abort!: () => void;
-  const stopped = new Promise<never>((_resolve, reject) => {
-    abort = () => reject(cancelled());
-    signal.addEventListener('abort', abort, { once: true });
-  });
-  try {
-    const result = await Promise.race([Promise.resolve().then(() => {
-      if (signal.aborted) throw cancelled();
-      return work();
-    }), stopped]);
-    if (signal.aborted) throw cancelled();
-    return result;
-  } finally { signal.removeEventListener('abort', abort); }
-}
-
-async function modelCompletion(config: Pick<AppConfig, 'dataDir' | 'model'>, signal: AbortSignal): Promise<Complete> {
-  const { ModelRuntime } = await import('@earendil-works/pi-coding-agent');
-  signal.throwIfAborted();
-  const dir = join(config.dataDir, 'pi');
-  const runtime = await ModelRuntime.create({ authPath: join(dir, 'auth.json'), modelsPath: join(dir, 'models.json'),
-    modelsStorePath: join(dir, 'model-cache.json'), allowModelNetwork: false, signal });
-  const setting = config.model;
-  let apiKey = setting?.apiKey;
-  if (setting?.provider === 'codex-cli') {
-    const { registerCodexProvider } = await import('./codex-provider.ts');
-    registerCodexProvider(runtime, setting.model, { command: setting.cliCommand, configDir: setting.cliConfigDir });
-  } else if (setting) {
-    const { provider, model: id, baseUrl } = setting;
-    const endpoint = provider === 'anthropic' ? baseUrl?.replace(/\/v1(?:\/messages)?\/?$/, '') : baseUrl;
-    const customAnthropic = provider === 'anthropic' && endpoint && !runtime.getModel(provider, id);
-    if (provider === 'openai-compatible' || customAnthropic) {
-      runtime.registerProvider(provider, { baseUrl: endpoint, api: customAnthropic ? 'anthropic-messages' : 'openai-completions',
-        ...(customAnthropic ? {} : { authHeader: true }), models: [{ id, name: id, reasoning: false, input: ['text'],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32768, maxTokens: 8192 }] });
-    } else if (endpoint) runtime.registerProvider(provider, { baseUrl: endpoint });
-    if (provider === 'openai-compatible') apiKey ||= process.env.OPENAI_API_KEY;
-  }
-  const model = setting ? runtime.getModel(setting.provider, setting.model) : (await runtime.getAvailable(undefined, { signal }))[0];
-  if (!model) throw new Error('主模型不可用');
-  return async (text, requestSignal) => {
-    requestSignal.throwIfAborted();
-    // Direct completion: no agent session, workspace context, tool loop, or configuration echo.
-    const reply = await runtime.completeSimple(model, { systemPrompt: instructions,
-      messages: [{ role: 'user', content: text, timestamp: Date.now() }], tools: [] },
-    { apiKey, maxTokens: Math.min(8192, model.maxTokens), reasoning: 'medium', maxRetries: 0, cacheRetention: 'none', signal: requestSignal });
-    // A length-limited or tool-bearing reply is a failure, even when it includes some usable text.
-    if (reply.stopReason !== 'stop' || reply.content.some(part => part.type === 'toolCall')) throw new Error('主模型未完整返回');
-    return reply.content.filter(part => part.type === 'text').map(part => part.text).join('');
-  };
-}
 
 /** Keep provenance on every reduction piece, including unusually long upstream summaries. */
 function groups(summaries: Summary[]): Summary[][] {
@@ -117,7 +63,7 @@ export async function analyzeSession(
   let complete = options.complete;
   if (!complete) {
     try {
-      complete = await abortable(() => modelCompletion({ dataDir: config.dataDir, model: structuredClone(config.model) }, signal), signal);
+      complete = await abortable(() => modelCompletion({ dataDir: config.dataDir, model: structuredClone(config.model) }, signal, instructions), signal);
     } catch {
       if (signal.aborted) throw cancelled();
       // Provider errors can embed credentials, URLs or prompts. Never echo them to the caller.

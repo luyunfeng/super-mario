@@ -20,6 +20,7 @@ export function createFeishuWebExtension(source: { start(): void; stop(): Promis
 }
 
 export { todoCalendar } from './todo-calendar.ts';
+export { createReplyTranslation } from './reply-translation.ts';
 export { createConversationExport } from './conversation-export.ts';
 export { createMessageFavorites, messageFavorites } from './message-favorites.ts';
 export { createAssistantSkills } from './assistant-skills.ts';

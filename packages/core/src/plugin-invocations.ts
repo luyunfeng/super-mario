@@ -6,14 +6,14 @@ export class PluginCallError extends Error {
   constructor(message: string, completed = false) { super(message); this.delivery = completed ? 'unknown' : 'no'; }
 }
 const names = new Set<HookName>(['work.dispatch', 'channel.send', 'knowledge.put']);
-export function validateInvocationOptions(options: InvocationOptions) {
+export function validateInvocationOptions(options: InvocationOptions, maxTimeout = 30000) {
   if (options.order !== undefined && (!Number.isSafeInteger(options.order) || Math.abs(options.order) > 10000)) throw new TypeError('Hook order must be an integer between -10000 and 10000');
-  if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > 30000)) throw new TypeError('Hook timeoutMs must be 1–30000');
+  if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > maxTimeout)) throw new TypeError(`timeoutMs must be 1–${maxTimeout}`);
 }
 /** One sequential, bounded pipeline. Before failures deny execution; after failures report unknown, never replay. */
 export function createPluginInvocations(contributions: Contributions) {
-  async function bounded<T>(call: (signal: AbortSignal) => Promise<T> | T, options: InvocationOptions, label: string, parent?: AbortSignal): Promise<T> {
-    validateInvocationOptions(options);
+  async function bounded<T>(call: (signal: AbortSignal) => Promise<T> | T, options: InvocationOptions, label: string, parent?: AbortSignal, maxTimeout = 30000): Promise<T> {
+    validateInvocationOptions(options, maxTimeout);
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const cancelled = Object.assign(new Error(`${label} cancelled`), { code: 'CANCELLED' });
@@ -58,7 +58,7 @@ export function createPluginInvocations(contributions: Contributions) {
     let invoke: (input: Json) => Promise<Json> = async value => {
       assertJson(value);
       if (!contributions.list('services').some(item => item.value === service.value)) throw new Error(`Service stopped: ${name}`);
-      const result = await bounded(signal => service.value.handler(structuredClone(value), signal), { timeoutMs: request.timeoutMs }, `Service ${name}`, request.signal);
+      const result = await bounded(signal => service.value.handler(structuredClone(value), signal), { timeoutMs: request.timeoutMs }, `Service ${name}`, request.signal, 120000);
       assertJson(result); return structuredClone(result);
     };
     for (const item of wrappers.reverse()) {

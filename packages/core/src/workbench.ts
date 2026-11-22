@@ -40,6 +40,7 @@ import { PluginCallError } from './plugin-invocations.ts';
 import { createProjectWorkspace } from './project-workspace.ts';
 import { createProjects } from './projects.ts';
 import { createKnowledgeCurator } from './knowledge-curator.ts';
+import { translateReply } from './agent-runtime/reply-translation.ts';
 import { createModelConfig } from './model-config.ts';
 import { createPlans } from './plans.ts';
 import { createPolicies, validatePolicyPatch, type PolicyConfig } from './policies.ts';
@@ -63,7 +64,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
-import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, conversationEdit, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import type { AppConfig, Approval, BotScope, ExecutionResult, InboxItem, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
@@ -91,6 +92,7 @@ export async function createWorkbench(config: AppConfig) {
   const webConfig = createFeishuWebConfig(config.dataDir, config.feishuWeb);
   let closing = false;
   const modelConfig = createModelConfig(config);
+  let modelRevision = randomUUID();
   const store = createStore(join(config.dataDir, 'workbench.sqlite'));
   const events = createEventBus(store);
   const mailboxes = createEventMailboxes({ store, events });
@@ -184,6 +186,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(conversationDrafts);
   plugins.register(conversationQuotes);
   plugins.register(conversationEdit);
+  plugins.register(createReplyTranslation((text, language, signal) => translateReply(config, text, language, signal), () => modelRevision));
   plugins.register(savedPrompts);
   plugins.register(projectInstructions);
   plugins.register(assistantProfile);
@@ -967,7 +970,7 @@ export async function createWorkbench(config: AppConfig) {
     for(const bot of registeredBots.filter(bot => bot.enabled && !bot.connected)) problems.push({ area: 'channel', message: `机器人“${bot.name}”未连接${bot.reason ? `：${publicReason(bot.reason)}` : ''}`, fix: '在渠道高级设置中核对应用权限与连接状态。' });
     return { ...(mainAssistant && { mainAssistant }), attentionCount: attention().length, problems,
       setup: { agent: agentState.available && computers.some(item => item.online), project: projects.list().some(item => !item.archivedAt), memory: entries.length > 0, channel: connected ? 'done' : store.get<{ skipped: boolean }>('settings', 'setup.channel-skipped')?.skipped ? 'skipped' : 'todo' },
-      agentTurns: store.list<Message>('messages').filter(message => message.role === 'user').map(({ id, todoId, conversationId, role, status, createdAt }) => ({ id, todoId, conversationId, role, status, createdAt })), background: background.summary(), webExtensions: contributions.list('web_extensions'), projects: projects.list(), version: '0.1.0', mode: config.demo ? 'demo' : 'live', agent: agent.status(), plugins: plugins.list(), executors: executorInfo(), machines: machines?.list() ?? store.list('machines'), inbox: inbox.list(), inboxHandling:inboxHandling.states(), inboxConversations:inboxAssistant.list(), inboxAssistant:inboxAssistant.status(), approvals: approvals.list(), signals: supervision.signals(), todos: todos(), knowledge: entries, messages: store.list<Message>('messages').filter(message => message.conversationId === 'main'), runs: store.list<Run>('runs').sort((a, b) => b.createdAt.localeCompare(a.createdAt)) };
+      agentTurns: store.list<Message>('messages').filter(message => message.role === 'user').map(({ id, todoId, conversationId, role, status, createdAt }) => ({ id, todoId, conversationId, role, status, createdAt })), background: background.summary(), webExtensions: contributions.list('web_extensions'), projects: projects.list(), version: '0.1.0', mode: config.demo ? 'demo' : 'live', agent: agent.status(), modelRevision, plugins: plugins.list(), executors: executorInfo(), machines: machines?.list() ?? store.list('machines'), inbox: inbox.list(), inboxHandling:inboxHandling.states(), inboxConversations:inboxAssistant.list(), inboxAssistant:inboxAssistant.status(), approvals: approvals.list(), signals: supervision.signals(), todos: todos(), knowledge: entries, messages: store.list<Message>('messages').filter(message => message.conversationId === 'main'), runs: store.list<Run>('runs').sort((a, b) => b.createdAt.localeCompare(a.createdAt)) };
   }
   async function createProject(input: Record<string, unknown>) {
     const prepared = await projectFolders.prepare(input);
@@ -1105,6 +1108,7 @@ export async function createWorkbench(config: AppConfig) {
         commandRouter.cancel();
         await Promise.all([inboxClassifier.abortCurrent(),inboxAssistantRuntime.abortCurrent(),inboxHandlingRuntime.abortCurrent()]);
         modelConfig.write(input);
+        modelRevision = randomUUID();
         await Promise.all([agent.reloadConfiguration(), supervisorRuntime.reloadConfiguration(), scopedAgents.reloadConfiguration()]);
         changed('model.changed', {});
         return modelStatus();

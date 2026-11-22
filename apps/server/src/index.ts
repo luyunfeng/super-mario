@@ -40,6 +40,12 @@ function json(res: ServerResponse, status: number, value: unknown) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   res.end(JSON.stringify(value));
 }
+const conversationReaders = new Map<string, { id: string; disabled: string; service: string; limit?: number; timeoutMs?: number }>([
+  ['/api/v1/conversation-export', { id: 'conversation-export', disabled: '对话导出插件已停用', service: 'conversation-export.markdown' }],
+  ['/api/v1/message-favorites', { id: 'message-favorites', disabled: '消息收藏插件已停用', service: 'message-favorites.manage', limit: 8 * 1024 * 1024 + 1024 }],
+  ['/api/v1/reply-translation', { id: 'reply-translation', disabled: '回复翻译插件已停用', service: 'reply-translation.translate', timeoutMs: 120000 }],
+]);
+
 /** One HTTP server serves both the product and its API; no second frontend process is needed. */
 export async function startServer(config: AppConfig, dependencies: FeishuGatewayDependencies = {}) {
   const app = await createWorkbench(config);
@@ -572,21 +578,18 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (observations && method === 'GET') return json(res, 200, app.runObservations(decodeURIComponent(observations[1]!)));
         const cancel = path.match(/^\/api\/v1\/runs\/([^/]+)\/cancel$/);
         if (cancel && method === 'POST') return json(res, 202, await app.cancel(cancel[1]));
-        if ((path === '/api/v1/conversation-export' || path === '/api/v1/message-favorites') && method === 'POST') {
-          const favorites = path === '/api/v1/message-favorites';
-          const id = favorites ? 'message-favorites' : 'conversation-export';
-          if (!app.plugins.list().some(plugin => plugin.id === id && plugin.status === 'active')) {
-            throw new InputError(favorites ? '消息收藏插件已停用' : '对话导出插件已停用', 503);
-          }
-          // Only the portable favorites backup needs more than the normal 1 MiB.
-          const input = await body(req, favorites ? 8 * 1024 * 1024 + 1024 : undefined) as JsonObject;
+        // These services read conversation content and cancel work when the browser disconnects.
+        const reader = conversationReaders.get(path);
+        if (reader && method === 'POST') {
+          if (!app.plugins.list().some(plugin => plugin.id === reader.id && plugin.status === 'active'))
+            throw new InputError(reader.disabled, 503);
+          const input = await body(req, reader.limit) as JsonObject;
           const controller = new AbortController();
           const abort = () => controller.abort();
           res.once('close', abort);
+          if (res.destroyed) abort();
           try {
-            const service = favorites ? 'message-favorites.manage' : 'conversation-export.markdown';
-            const result = await app.plugins.invocations.use(service, input, { signal: controller.signal, timeoutMs: 30000 });
-            return json(res, 200, result);
+            return json(res, 200, await app.plugins.invocations.use(reader.service, input, { signal: controller.signal, timeoutMs: reader.timeoutMs ?? 30000 }));
           } finally { res.off('close', abort); }
         }
         if (path === '/api/v1/office-documents' && method === 'POST') {

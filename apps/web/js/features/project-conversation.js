@@ -9,12 +9,14 @@ import { Button, Banner, Empty, TextArea } from '../ui/kit.js';
 import { createCodeSidebar } from './code-sidebar.js';
 import { attachSavedPrompts } from './saved-prompts.js';
 import { createProjectInstructions } from './project-instructions.js';
+import { createReplyTranslation } from './reply-translation.js';
 import { createMessageFavorites } from './message-favorites.js';
 import { createConversationExport } from './conversation-export.js';
 
 export function createProjectConversation({ api, store, bindFolder }) {
   const code = createCodeSidebar({ api, store });
   let projectId = '';
+  const translation = createReplyTranslation({ api, store, getScope: () => projectId, getConversationId: () => `project:${projectId}:work` });
   const instructions = createProjectInstructions({ api, store, getProjectId: () => projectId });
   const favorites = createMessageFavorites({ api, store });
   const transcript = createConversationExport({ api, store, getProjectId: () => projectId });
@@ -93,6 +95,7 @@ export function createProjectConversation({ api, store, bindFolder }) {
     send.disabled = !draftKey || !p?.workspace || pending.has(projectId) || unknown.has(projectId) || !workspace || work?.available === false;
     replace(notice, notices.get(projectId) ? Banner({ tone: 'warn', children: notices.get(projectId) }) : null);
     const rows = workspace?.messages ?? [];
+    const translationEpoch = translation.update(rows);
     if (!rows.length) { replace(messages, Empty({ title: workspace ? '在这个文件夹里持续工作' : '正在读取项目对话…', text: workspace ? '直接输入目标，项目工作会话负责拆解并跟进。' : undefined })); messages._keyed = undefined; return; }
     if (!messages._keyed) messages.replaceChildren();
     keyedList(messages, rows, m => m.id, m => {
@@ -101,14 +104,15 @@ export function createProjectConversation({ api, store, bindFolder }) {
         && m.origin !== 'notification' && typeof m.text === 'string' && m.text.trim();
       const canEdit = editEnabled && user && m.conversationId === `project:${projectId}:work` && (!m.projectId || m.projectId === projectId);
       const statusText = { failed: '处理失败，请查看原因', unknown: '结果未知，请核对，勿重复发送', pending: '处理中' }[m.status];
+      const bubble = h('div', { class: 'msg__bubble' }, user && !/^> /m.test(m.text) ? m.text : renderFormattedText(m.text));
       return h('div', { class: 'msg msg--' + (user ? 'user' : 'assistant') },
         h('div', { class: 'msg__col' },
           h('span', { class: 'msg__label' }, user ? '我' : '项目助手'),
           agentProgress(m),
-          h('div', { class: 'msg__bubble' }, user && !/^> /m.test(m.text) ? m.text : renderFormattedText(m.text)),
+          bubble,
           statusText && h('span', { class: 'msg__meta' }, statusText),
-          h('span', null, favorites.mark(m, projectId), prompts.fromMessage(m), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
-    }, m => JSON.stringify([prompts.epoch, favorites.epoch, quotesEnabled, editEnabled, owner, projectId, m]));
+          h('span', null, favorites.mark(m, projectId), prompts.fromMessage(m), translation.action(m, bubble), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
+    }, m => JSON.stringify([prompts.epoch, favorites.epoch, translationEpoch, quotesEnabled, editEnabled, owner, projectId, m]));
   }
   async function load() {
     if (!draftKey) return;
