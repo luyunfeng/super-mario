@@ -199,9 +199,9 @@ test('exact lookup rejects missing/wrong provider or cwd and strict RPC params',
 
 test('file, directory fan-out and index head limits report honest truncation and refuse exact validation', async t => {
   const f = await fixture(t);
-  for (let i = 0; i < 520; i++) await f.codex(`session-${i}`);
+  for (let i = 0; i < 2049; i++) await f.codex(`session-${i}`);
   let result = await f.discovery().handlers['agents.sessions']({});
-  assert.equal(result.truncated, true); assert.ok(result.sessions.length <= 512); assert.ok(result.warnings.length <= 12);
+  assert.equal(result.truncated, true); assert.ok(result.sessions.length <= 2048); assert.ok(result.warnings.length <= 12);
   await assert.rejects(f.discovery().validateResume({ executorId: 'codex', nativeSessionId: 'session-9', cwd: f.cwd }), /读取不足/);
   await rm(join(f.home, '.codex'), { recursive: true });
   await f.file(join(f.home, '.claude/projects/encoded/sessions-index.json'), JSON.stringify({ entries: [{ sessionId: 'oversize', projectPath: f.cwd }], padding: 'x'.repeat(1024 * 1024) }));
@@ -233,7 +233,7 @@ test('metadata root ancestors cannot be symlinks and excessive nesting reports t
 
 test('exact indexed lookup does not fail just because unrelated transcripts exceed the discovery file budget',async t=>{
  const f=await fixture(t);
- for(let day=1;day<=3;day++)for(let i=0;i<200;i++)await f.file(join(f.home,'.codex/sessions/2026/11',String(day),`native-${day}-${i}.jsonl`),{type:'session_meta',payload:{id:`native-${day}-${i}`,cwd:f.cwd}});
+ for(let day=1;day<=3;day++)for(let i=0;i<1366;i++)await f.file(join(f.home,'.codex/sessions/2026/11',String(day),`native-${day}-${i}.jsonl`),{type:'session_meta',payload:{id:`native-${day}-${i}`,cwd:f.cwd}});
  const inventory=await f.discovery().handlers['agents.sessions']({});assert.equal(inventory.truncated,true);
  const found=await f.discovery().validateResume({executorId:'codex',nativeSessionId:'native-3-199',cwd:f.cwd});assert.equal(found.nativeSessionId,'native-3-199');assert.equal(found.cwd,f.cwd);assert.equal(found.writable,false);
 });
