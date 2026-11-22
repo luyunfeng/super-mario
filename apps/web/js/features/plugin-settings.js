@@ -22,7 +22,7 @@ const descriptions = {
   'conversation-export':'下载或复制主对话和项目工作对话的 Markdown 记录。',
   'reply-translation':'翻译助手回复和飞书收件，可按会话选择自动翻译。',
   'conversation-edit':'把自己发过的文字放回输入框，修改后可作为新消息发送。',
-  'voice-input':'使用浏览器语音识别，将听写结果加入主对话草稿。',
+  'voice-input':'使用浏览器语音识别，将听写结果加入主对话或当前项目工作对话的草稿。',
   'conversation-quotes':'在主对话和项目工作对话中引用一条消息，可附上自己的问题。',
   'conversation-drafts':'在当前浏览器保留未发送的对话文字，按会话和访问凭据恢复。',
   'conversation-search':'在顶栏搜索主对话和执行记录，保存常用检索条件。',

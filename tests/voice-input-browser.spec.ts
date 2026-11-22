@@ -26,6 +26,8 @@ test('听写仅追加确认的文字，退出对话丢弃迟到字幕，拒绝�
     const recognition = (window as unknown as { dictation: { onresult(event: unknown): void } }).dictation;
     recognition.onresult({ resultIndex: 0, results: [{ isFinal: final, 0: { transcript: '测试字幕' } }] });
   }, final);
+  const first = await server.app.createProject({ name: '听写项目甲' });
+  const second = await server.app.createProject({ name: '听写项目乙' });
   await page.goto(server.url + '/#chat?token=fixture');
   const input = page.getByLabel('给 Agent 的消息'), start = page.getByRole('button', { name: '语音输入', exact: true });
   await input.fill('已有草稿');
@@ -46,6 +48,29 @@ test('听写仅追加确认的文字，退出对话丢弃迟到字幕，拒绝�
   await start.click();
   await page.getByRole('button', { name: '结束听写' }).click();
   await expect(start).toBeEnabled();
+  await start.click();
+  const openProject = (id: string, tab = 'workspace') =>
+    page.evaluate(hash => { location.hash = hash; }, '#projects/' + id + '/' + tab);
+  const projectInput = page.getByLabel('项目目标');
+  await openProject(first.id);
+  await expect(projectInput).toBeEditable();
+  await start.click(); await result(true);
+  await expect(projectInput).toHaveValue('测试字幕');
+  await openProject(second.id);
+  await expect(projectInput).toHaveValue('');
+  await result(true);
+  await expect(projectInput).toHaveValue('');
+  await start.click(); await result(true);
+  await openProject(second.id, 'todos');
+  await expect(projectInput).toBeHidden();
+  await result(true);
+  await openProject(second.id);
+  await expect(projectInput).toHaveValue('测试字幕');
+  await openProject(first.id);
+  await expect(projectInput).toHaveValue('测试字幕');
+  await page.evaluate(() => { location.hash = '#chat'; });
+  await page.locator('#chat').getByLabel('项目范围').selectOption('');
+  await expect(input).toHaveValue('已有草稿测试字幕');
   await start.click();
   const disabled = await page.request.post(server.url + '/api/v1/plugins/voice-input', {
     headers: { authorization: 'Bearer fixture' }, data: { enabled: false },

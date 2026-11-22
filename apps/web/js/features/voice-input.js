@@ -38,7 +38,7 @@ export function createVoiceInput(input) {
           else partial += result[0].transcript;
         }
         if (confirmed) {
-          if (input.value.length + confirmed.length > input.maxLength) {
+          if (input.maxLength >= 0 && input.value.length + confirmed.length > input.maxLength) {
             reset(); show('识别文字超出消息长度限制，已停止语音输入。'); return;
           }
           input.value += confirmed;
@@ -59,7 +59,9 @@ export function createVoiceInput(input) {
       button.textContent = '结束听写'; show('正在听写…');
     } catch { reset(); show('语音识别无法启动，可继续输入文字。'); }
   });
-  return { button, caption, reset, update(key) {
+  return { button, caption, reset, update(key, owner, snapshot) {
+    const active = key && snapshot?.plugins?.some(p => p.id === 'voice-input' && p.status === 'active');
+    key = active ? JSON.stringify([owner, key]) : null;
     if (key !== binding) reset();
     binding = key; button.hidden = !key;
   } };

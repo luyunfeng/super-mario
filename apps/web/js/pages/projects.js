@@ -168,6 +168,7 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
       runs.show(projectId, runId);
       if (tab === 'settings') settings.show(projectId);
       if (tab === 'workspace') conversation.show(projectId, route.query);
+      else conversation.hide();
       render(); void discovered.show();
     },
     onState({ snapshot }) {

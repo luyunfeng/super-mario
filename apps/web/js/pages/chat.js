@@ -106,8 +106,7 @@ export function createChatPage({ api, store, scope, router }) {
   }
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
-    voice.update(key && router.current.page === 'chat' && store.view.snapshot?.plugins?.some(p => p.id === 'voice-input' && p.status === 'active')
-      ? JSON.stringify([nextOwner, key]) : null);
+    voice.update(router.current.page === 'chat' && key, nextOwner, store.view.snapshot);
     const sameDraft = owner === nextOwner && enabled === nextEnabled && quotesEnabled === nextQuotes && draftKey === key;
     if (sameDraft && editEnabled === allowEdit) return;
     editEnabled = allowEdit;
