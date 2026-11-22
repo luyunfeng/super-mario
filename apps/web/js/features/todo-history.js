@@ -59,7 +59,15 @@ export function openTodoHistory({ api, store, router, todo }) {
       if (!alive || stamp !== sequence || token !== api.token?.()) return;
       if (result.todo.id !== todo.id) throw new Error('历史记录与当前待办不匹配');
       if (result.todo.projectId !== todo.projectId) { replace(list); throw new Error('待办所属项目已改变，请关闭后重新打开'); }
-      if (reset) replace(list);
+      if (reset) {
+        replace(list);
+        if (result.conversationReceipts?.length) list.append(h('section', { class: 'stack' },
+          h('h3', null, '对话答复回执'), result.conversationReceipts.map(receipt => {
+            const status = receipt.continuationAccepted ? '原对话已接收后续输入' :
+              { confirmed: '已记录，未查到后续输入', failed: '已记录，后续处理失败', unknown: '已记录，后续处理结果未知' }[receipt.delivery];
+            return h('p', null, receipt.title + ' · ' + status, receipt.answeredAt && ' · ' + formatDate(receipt.answeredAt, true));
+          })));
+      }
       for (const round of result.rounds) list.append(row(round, result.todo.projectId));
       before = result.nextBefore; more.hidden = !before;
       notice.textContent = `共 ${result.total} 轮 · ${result.todo.completedAt ? '待办已确认完成' : '待办尚未确认完成'}`;

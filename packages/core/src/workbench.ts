@@ -563,7 +563,10 @@ export async function createWorkbench(config: AppConfig) {
         assertBotInput(original);
         accepted = await scopedAgents.post(followUp,validateBotScope(store,route.scope),route.botId);
       } else throw new InputError('无法核对原问题所属的 Agent',409);
-      if (route) store.put('message.routes', accepted.id, { ...route, resumed: true });
+      store.transaction(() => {
+        if (route) store.put('message.routes', accepted.id, { ...route, resumed: true });
+        store.put('interaction-origins', card.id, { ...origin, continuationId: accepted.id });
+      });
     } else {
       if (answeredInCurrentTurn.has(card.id)) return;
       const id = `interaction-answer:${card.id}`;

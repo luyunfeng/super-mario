@@ -1,7 +1,7 @@
 import type { Card } from './interactions.ts';
 import type { ReviewEvidenceReader, RunReview, RunReviewDecision } from './run-review.ts';
 import type { Store } from '../../plugin-sdk/src/index.ts';
-import type { Run, Todo } from '../../protocol/src/index.ts';
+import type { Message, Run, Todo } from '../../protocol/src/index.ts';
 import type { TodoExecutionRound, TodoHistory } from '../../protocol/src/todo-history.ts';
 
 /** Derive history from existing facts; do not copy task state into a second ledger. */
@@ -16,11 +16,23 @@ export function readTodoHistory(store: Pick<Store, 'get' | 'list'>, id: string, 
   const start = Math.max(0, end - 20);
   const scopedIds = new Set(runs.map(run => run.id));
   const answered = store.list<Card>('interactions').filter(card =>
-    card.status === 'answered' && card.projectId === todo.projectId && card.runId && scopedIds.has(card.runId))
+    card.status === 'answered' && card.projectId === todo.projectId && (!card.runId || scopedIds.has(card.runId)))
     .sort((a, b) => (a.answeredAt ?? '').localeCompare(b.answeredAt ?? '') || a.id.localeCompare(b.id));
+  // These cards belong to a conversation, so show them once even when there are no execution rounds.
+  const conversationReceipts = before === undefined ? answered.flatMap(card => {
+    if (card.runId) return [];
+    const origin = store.get<{ inputId?: string; continuationId?: string }>('interaction-origins', card.id);
+    const source = origin?.inputId && store.get<Message>('messages', origin.inputId);
+    if (!source || source.role !== 'user' || source.todoId !== id || source.projectId !== todo.projectId) return [];
+    const continuation = origin?.continuationId && store.get<Message>('messages', origin.continuationId);
+    return [{ cardId: card.id, title: card.title, answeredAt: card.answeredAt, delivery: card.delivery ?? 'unknown',
+      continuationAccepted: !!continuation && continuation.conversationId === source.conversationId &&
+        continuation.projectId === source.projectId && (!continuation.todoId || continuation.todoId === id) && continuation.role === 'user' }];
+  }) : undefined;
   const decisions = store.list<{ request: RunReviewDecision; result: RunReview }>('run-review.intents');
   return {
     todo: { id, title: todo.title, projectId: todo.projectId, completedAt: todo.completedAt }, total: runs.length,
+    ...(conversationReceipts && { conversationReceipts }),
     rounds: runs.slice(start, end).map((run, index): TodoExecutionRound => ({
       number: start + index + 1,
       review: reviewEvidence?.(run),

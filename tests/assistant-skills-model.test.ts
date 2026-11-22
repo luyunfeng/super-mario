@@ -421,7 +421,9 @@ test('Web 和飞书项目助手查返工依据，可翻页，跨项目读取被�
       const rework = result.rounds.find((round: { run: { id: string } }) => round.run.id === 'review-1');
       assert.equal(rework.run.status, 'completed');
       assert.equal(rework.review.status, 'pending');
-      assert.match(req.system, /只核对时不重新发送/);
+      assert.match(req.system, /只有 continuationAccepted=true 才能报告原对话已接收后续输入/);
+      assert.deepEqual(result.conversationReceipts.map((r: { title: string; continuationAccepted: boolean }) =>
+        [r.title, r.continuationAccepted]), [['确认范围', false]]);
       assert.ok(rework.answerReceipts.some((r: { target: string; delivery: string }) => r.target === 'executor' && r.delivery === 'failed'));
       return call('todo_history', { todoId, before: result.nextBefore }, 'older');
     }
@@ -446,6 +448,11 @@ test('Web 和飞书项目助手查返工依据，可翻页，跨项目读取被�
     server.app.store.put('run-reviews', todoId, { todoId, runId: 'review-1', status: 'pending', version: 2, updatedAt: new Date(1000).toISOString() });
     server.app.store.put('interactions', 'failed-answer', { id: 'failed-answer', projectId: project.id, runId: 'review-1',
       kind: 'question', title: '选择清单', status: 'answered', delivery: 'failed' });
+    server.app.store.put('interactions', 'chat-answer', { id: 'chat-answer', projectId: project.id, kind: 'question',
+      title: '确认范围', status: 'answered', delivery: 'confirmed' });
+    server.app.store.put('interaction-origins', 'chat-answer', { inputId: 'older-question' });
+    server.app.store.put('messages', 'older-question', { id: 'older-question', projectId: project.id, todoId,
+      conversationId: 'main', text: '确认范围', role: 'user', status: 'done', createdAt: new Date(0).toISOString() });
     const question = '复核汇总第一次为什么返工？';
     assert.equal(await ask(question), '记录的返工原因是合计缺一行');
     projectOnly = true;

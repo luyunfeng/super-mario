@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test, type TestContext } from 'node:test';
 import { startServer } from '../apps/server/src/index.ts';
-import type { Message, Run, Snapshot, Todo } from '../packages/protocol/src/index.ts';
+import type { Message, Run, Snapshot, Todo, TodoHistory } from '../packages/protocol/src/index.ts';
 import type { Plan } from '../packages/core/src/plans.ts';
 import type { Card } from '../packages/core/src/interactions.ts';
 import type { PolicyConfig } from '../packages/core/src/policies.ts';
@@ -206,7 +206,8 @@ test('HTTP independent demo supervisor suggests without answering, rejects stale
 
 test('answering an Agent question resumes the original goal and keeps its channel route', async t => {
   const f=await fixture(t);
-  const original=await f.app.agent.post('处理验收目标','main',{projectId:'resume-project'});
+  const todo = f.app.createTodo({ title: '核对任务', projectId: 'resume-project' });
+  const original=await f.app.agent.post('处理验收目标','main',{projectId:'resume-project', todoId: todo.id});
   f.app.store.put('message.routes',original.id,{channel:'feishu',accountId:'offline-test',target:'owner'});
   const card=await f.json<Card>('/interactions','POST',{kind:'question',title:'用哪个项目',body:'请确认项目',projectId:'resume-project'},201);
   f.app.store.put('interaction-origins',card.id,{inputId:original.id});
@@ -215,6 +216,11 @@ test('answering an Agent question resumes the original goal and keeps its channe
   await f.json(`/interactions/${card.id}/answer`,'POST',{version:current.version,text:'resume-project'});
   const state=await eventually(f.state,s=>s.messages.some(message=>message.role==='user'&&message.text.includes('用户已回答交互卡片')));
   const resumed=state.messages.find(message=>message.role==='user'&&message.text.includes('用户已回答交互卡片'))!;
+  const history = await f.json<TodoHistory>('/todos/' + todo.id + '/history');
+  assert.equal(history.total, 0);
+  assert.equal(history.conversationReceipts?.[0]?.cardId, card.id);
+  assert.equal(history.conversationReceipts?.[0]?.continuationAccepted, true);
+  assert.equal(history.conversationReceipts?.[0]?.delivery, 'confirmed');
   assert.match(resumed.text,/处理验收目标/);assert.equal(resumed.projectId,'resume-project');
   assert.deepEqual(f.app.store.get('message.routes',resumed.id),{channel:'feishu',accountId:'offline-test',target:'owner',resumed:true});
 });
