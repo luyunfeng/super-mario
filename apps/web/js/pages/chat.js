@@ -109,7 +109,7 @@ export function createChatPage({ api, store, scope, router }) {
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
     readAloud.update(key, nextOwner, store.view.snapshot);
-    voice.update(router.current.page === 'chat' && key, nextOwner, store.view.snapshot);
+    voice.update(router.current.page === 'chat' && key, nextOwner, store.view.snapshot, scope.get());
     const sameDraft = owner === nextOwner && enabled === nextEnabled && quotesEnabled === nextQuotes && draftKey === key;
     if (sameDraft && editEnabled === allowEdit) return;
     editEnabled = allowEdit;

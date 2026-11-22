@@ -1,3 +1,5 @@
+import { openDrawer } from '../ui/overlay.js';
+import { Button, Field, Input, TextArea } from '../ui/kit.js';
 import { h } from '../lib/dom.js';
 
 export function createVoiceInput(input, beforeListen, api) {
@@ -8,13 +10,43 @@ export function createVoiceInput(input, beforeListen, api) {
   const extensions = ['wav', 'mp3', 'webm', 'm4a', 'mp4', 'ogg', 'flac'];
   const file = h('input', { type: 'file', hidden: true, accept: extensions.map(ext => '.' + ext).join(',') });
   const choose = h('button', { type: 'button', class: 'btn btn--sm', onclick: () => { pickerBinding = binding; file.click(); } }, '录音转文字');
-  const upload = h('span', null, file, choose);
+  const meeting = Button({ label: '整理会议转写', size: 'sm', onClick: reviewMeeting });
+  meeting.hidden = true;
+  const upload = h('span', null, file, choose, meeting);
+  let transcript, destination, review;
+  function reviewMeeting() {
+    if (!transcript || !destination) return;
+    const captured = binding;
+    const title = Input({ value: transcript.title, maxLength: 500 });
+    const body = TextArea({ value: transcript.text, rows: 12, maxLength: 200000 });
+    const status = h('p', { role: 'status' });
+    const save = Button({ label: '提交会议整理', onClick: async () => {
+      if (binding !== captured || !destination || !review?.el.open) return;
+      if (!title.value.trim() || !body.value.trim()) { status.textContent = '请填写会议标题并核对转写正文。'; return; }
+      save.disabled = true;
+      const dialog = review;
+      try {
+        const job = await api.post('/knowledge/sources', { materialKind: 'meeting-transcript', title: title.value.trim(),
+          text: body.value.trim(), layer: destination.projectId ? 'project' : 'personal', ...(destination.projectId ? { projectId: destination.projectId } : {}) });
+        if (binding !== captured || review !== dialog) return;
+        dialog.close(); transcript = null; meeting.hidden = true;
+        show('已登记「' + job.title + '」。');
+        caption.append(h('a', { href: '#memory?curator=1' }, '查看整理队列'));
+      } catch (error) { status.textContent = error.message; }
+      finally { save.disabled = false; }
+    } });
+    const dialog = openDrawer({ title: '核对会议转写', subtitle: '保存到' + destination.label,
+      body: [Field({ label: '会议标题', control: title }), Field({ label: '转写正文', control: body }), status],
+      footer: save, onClose: () => { if (review === dialog) review = null; } });
+    review = dialog;
+  }
   let session, binding, pending, pickerBinding;
   function show(text) {
     caption.textContent = text;
     caption.hidden = !text;
   }
   function reset() {
+    review?.close(); review = null; transcript = null; meeting.hidden = true;
     pickerBinding = undefined;
     pending?.abort();
     pending = undefined;
@@ -31,9 +63,9 @@ export function createVoiceInput(input, beforeListen, api) {
     file.value = '';
     if (!audio || !binding || pickerBinding !== binding) return;
     reset();
-    await transcribe(audio, audio.name.split('.').at(-1).toLowerCase());
+    await transcribe(audio, audio.name.split('.').at(-1).toLowerCase(), audio.name.replace(/\.[^.]+$/, ''));
   });
-  async function transcribe(audio, format) {
+  async function transcribe(audio, format, title = '会议转写') {
     if (!extensions.includes(format) || !audio.size || audio.size > 8 * 1024 * 1024) {
       show('请选择不超过 8 MiB 的受支持录音。'); return;
     }
@@ -50,8 +82,11 @@ export function createVoiceInput(input, beforeListen, api) {
       job.signal.throwIfAborted();
       const { text } = await api('/audio-transcription', { method: 'POST', body: { format, audio: data }, signal: job.signal });
       if (pending !== job) return;
-      if (input.maxLength >= 0 && input.value.length + text.length > input.maxLength)
-        throw new Error('转写文字超出消息长度限制');
+      transcript = { title, text };
+      meeting.hidden = !destination;
+      if (input.maxLength >= 0 && input.value.length + text.length > input.maxLength) {
+        show(destination ? '转写超过消息长度限制，可核对后提交会议整理。' : '转写文字超出消息长度限制。'); return;
+      }
       input.value += text;
       input.dispatchEvent(new Event('input', { bubbles: true }));
       show('转写已加入草稿，可编辑后发送。');
@@ -156,10 +191,15 @@ export function createVoiceInput(input, beforeListen, api) {
       button.textContent = '结束听写'; show('正在听写…');
     } catch { reset(); show('语音识别无法启动，可继续输入文字。'); }
   });
-  return { button, upload, caption, reset, update(key, owner, snapshot) {
+  return { button, upload, caption, reset, update(key, owner, snapshot, projectId) {
     const active = key && snapshot?.plugins?.some(p => p.id === 'voice-input' && p.status === 'active');
     key = active ? JSON.stringify([owner, key]) : null;
     if (key !== binding) reset();
+    const project = projectId && snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
+    destination = key && snapshot.plugins.some(p => p.id === 'knowledge-local' && p.status === 'active') && (!projectId || project)
+      ? { projectId, label: project ? '项目记忆 · ' + project.name : '个人记忆' } : null;
+    if (!destination) review?.close();
+    meeting.hidden = !destination || !transcript;
     binding = key; button.hidden = !key; upload.hidden = !key;
   } };
 }

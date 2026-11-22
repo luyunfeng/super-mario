@@ -102,6 +102,7 @@ export function openCuratorDrawer({ api, store, onChanged }) {
           h('div', { class: 'item__main', style: wrap },
             h('span', { class: 'item__title' }, (meeting && job.title) || job.url || job.title || job.text || job.id),
             meeting && h('span', { class: 'item__meta' }, '会议资料 · 个人记忆'),
+            job.materialKind === 'meeting-transcript' && h('span', { class: 'item__meta' }, '会议转写 · ' + (job.layer === 'project' ? '项目记忆' : '个人记忆')),
             meeting && job.url?.startsWith('https://') && h('a', { class: 'small', href: job.url, target: '_blank', rel: 'noopener noreferrer' }, '查看原文档'),
             h('span', { class: 'item__meta' }, `${timeAgo(job.updatedAt ?? job.createdAt)}${job.error ? ` · ${job.error}` : ''}`),
             next && h('p', { class: 'small' }, `新整理任务：${next.id}（${STATUS[next.status] ?? (DONE.has(next.status) ? '已整理' : '结果未确认')}）`),

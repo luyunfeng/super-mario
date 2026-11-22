@@ -157,3 +157,21 @@ test('会议文档未被受保护读取器接管时，初次整理与显式重�
   assert.equal(network.mock.callCount(), 0);
   assert.equal(f.submissions.length, 0);
 });
+
+test('核对后的项目会议转写按会议提示词整理，重复提交复用任务', async t => {
+  const f = await fixture(t);
+  const input = { materialKind: 'meeting-transcript', title: '样本评审', text: '提议周五复核，负责人未定。', layer: 'project', projectId: 'sample' };
+  const job = f.curator.addSource(input);
+  await f.until(() => f.job(job.id).status === 'completed');
+  assert.match(f.submissions[0]!, /识别有歧义的人名、数字和术语保留原话/);
+  assert.match(f.submissions[0]!, /按议题区分已决定事项、提议、行动项和未决问题/);
+  const [page] = await f.knowledge.list({ projectId: 'sample' });
+  assert.match(page!.content, /用户核对的会议转写/);
+  assert.ok((await readFile(f.raw(job.id), 'utf8')).endsWith(input.text));
+  await f.restart();
+  assert.equal(f.curator.addSource(input).id, job.id);
+  assert.equal(f.submissions.length, 1);
+  assert.throws(() => f.curator.addSource({ ...input, url }), /须提供正文/);
+  f.archive();
+  assert.throws(() => f.curator.addSource(input), /有效的未归档项目/);
+});
