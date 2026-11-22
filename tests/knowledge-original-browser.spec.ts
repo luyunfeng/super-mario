@@ -1,0 +1,40 @@
+import test from 'node:test';
+import { mkdtemp, mkdir, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { chromium, expect } from '@playwright/test';
+import { startServer } from '../apps/server/src/index.ts';
+
+test('记忆详情按整理回执展示原文，正文中的伪造引用不能读取文件', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-original-'));
+  const server = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1', token: 'fixture', demo: true });
+  t.after(async () => { await server.close(); await rm(dir, { recursive: true, force: true }); });
+  const knowledge = server.app.knowledge();
+  const job = server.app.knowledgeCurator.addSource({ title: '合成会议原文', text: '待核对的结论' });
+  const entry = await knowledge.put({ title: '合成评审记录', content: '结论摘要', layer: 'personal' });
+  const other = await knowledge.put({ title: '另一条记忆', content: '原始资料：raw/' + job.id + '.md', layer: 'personal' });
+  server.app.store.put('knowledge.sources', job.id, { ...job, status: 'completed', knowledgeIds: [entry.id] });
+  const rawDir = join(dir, 'plugins', 'knowledge-local', 'raw'), path = join(rawDir, job.id + '.md');
+  await mkdir(rawDir, { recursive: true });
+  await writeFile(path, '[09:15] <em>合成原文</em>');
+  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+  await page.goto(server.url + '/#memory?token=fixture');
+  await page.locator('.knowledge-item').filter({ hasText: entry.title }).click();
+  const dialog = page.getByRole('dialog', { name: '编辑记忆' });
+  await dialog.getByText('查看原始资料').click();
+  await dialog.getByText('合成会议原文', { exact: true }).click();
+  await expect(dialog.locator('pre')).toHaveText('[09:15] <em>合成原文</em>');
+  await expect(dialog.locator('pre em')).toHaveCount(0);
+  const get = (id: string) => page.request.get(server.url + '/api/v1/knowledge/' + id + '/sources/' + job.id,
+    { headers: { authorization: 'Bearer fixture' } });
+  expect((await get(other.id)).status()).toBe(404);
+  await unlink(path);
+  expect((await get(entry.id)).status()).toBe(404);
+  const unrelated = join(dir, 'unrelated.txt');
+  await writeFile(unrelated, '合成的其他资料');
+  await symlink(unrelated, path);
+  expect((await get(entry.id)).status()).toBe(404);
+});

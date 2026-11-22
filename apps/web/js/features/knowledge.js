@@ -1,11 +1,36 @@
 // 记忆条目：新增/编辑抽屉和列表行。记忆页和项目的“资料”标签共用。
-import { h } from '../lib/dom.js';
+import { h, replace } from '../lib/dom.js';
 import { layerNames, timeAgo } from '../lib/format.js';
 import { Button, Field, Input, TextArea, Select, Pill } from '../ui/kit.js';
 import { hintCopy } from '../ui/hint.js';
 import { openDrawer, confirmDialog } from '../ui/overlay.js';
 
 const LAYER_HINT = { personal: 'memory.personal', global: 'memory.global', project: 'memory.project' };
+
+function originalSources(api, entry) {
+  const path = '/knowledge/' + encodeURIComponent(entry.id) + '/sources';
+  const body = h('div', { class: 'stack' });
+  const section = h('details', null, h('summary', null, '查看原始资料'), body);
+  section.addEventListener('toggle', async () => {
+    if (!section.open) return;
+    body.textContent = '正在读取来源…';
+    try {
+      const { sources } = await api.get(path);
+      replace(body, sources.length ? sources.map(source => {
+        const text = h('pre', { class: 'small', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } });
+        const detail = h('details', null, h('summary', null, source.title), text);
+        detail.addEventListener('toggle', async () => {
+          if (!detail.open) return;
+          text.textContent = '正在读取原文…';
+          try { text.textContent = (await api.get(path + '/' + encodeURIComponent(source.id))).content; }
+          catch (error) { text.textContent = error.message; }
+        });
+        return detail;
+      }) : '这条记忆没有关联的整理来源。');
+    } catch (error) { body.textContent = error.message; }
+  });
+  return section;
+}
 
 export function openKnowledgeDrawer({ api, store, entry, defaults = {}, onSaved }) {
   const projects = (store.view.snapshot?.projects ?? []).filter(item => !item.archivedAt);
@@ -41,7 +66,7 @@ export function openKnowledgeDrawer({ api, store, entry, defaults = {}, onSaved 
   });
   const drawer = openDrawer({
     title: entry ? '编辑记忆' : '添加记忆', subtitle: entry ? `更新于 ${timeAgo(entry.updatedAt)}` : undefined,
-    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), note],
+    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), entry && originalSources(api, entry), note],
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();

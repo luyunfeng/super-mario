@@ -129,6 +129,10 @@ test('重复采集会议文档在重启后仍只整理一份，个人知识保�
   assert.match(f.submissions[0]!, /会议决定：以合成数据验收/);
   assert.match(await readFile(f.raw(job.id), 'utf8'), /以合成数据验收/);
   await f.restart();
+  const evidence = await f.curator.pageSources(page.id);
+  assert.deepEqual(evidence.sources?.map(row => row.id), [job.id]);
+  const original = await f.curator.pageSources(page.id, job.id);
+  assert.equal(original.content, await readFile(f.raw(job.id), 'utf8'));
   assert.equal(f.curator.addSource(input, provenance).status, 'completed');
   assert.equal(f.curator.status().jobs.length, 1);
   assert.equal(reads, 1);

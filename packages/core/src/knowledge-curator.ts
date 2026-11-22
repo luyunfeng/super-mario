@@ -1,6 +1,7 @@
 import { hasKnowledgeSourceHTML } from '../../protocol/src/index.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile, rename, lstat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open, mkdir, readFile, writeFile, rename, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -376,6 +377,27 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
   const timer = setInterval(() => { void tick(); }, 2000); timer.unref();
   return {
     status, addSource, rebuildIndex,
+    async pageSources(pageId: string, sourceId?: string) {
+      if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
+      const page = (await options.knowledge().list()).find(entry => entry.id === pageId);
+      if (!page || (page.projectId && !options.validProject(page.projectId))) throw new CuratorError('知识页不可用', 404);
+      // Use persisted import receipts. Markdown references in editable pages cannot grant file access.
+      const matches = jobs().filter(job => job.layer === page.layer && job.projectId === page.projectId &&
+        job.knowledgeIds.includes(pageId));
+      if (sourceId === undefined) return { sources: matches.map(({ id, title, createdAt }) => ({ id, title, createdAt })) };
+      const job = matches.find(item => item.id === sourceId);
+      if (!job || !/^(?:[0-9a-f-]{36}|meeting-[0-9a-f]{64})$/.test(job.id)) throw new CuratorError('该知识页没有这份来源', 404);
+      const rawDir = join(directory, 'raw');
+      try {
+        if (!(await lstat(rawDir)).isDirectory()) throw new Error();
+        const file = await open(join(rawDir, job.id + '.md'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        try {
+          const stat = await file.stat();
+          if (!stat.isFile()) throw new Error();
+          return { title: job.title, content: await file.readFile('utf8') };
+        } finally { await file.close(); }
+      } catch { throw new CuratorError('原始资料文件不可读取', 404); }
+    },
     sourceApproved(id:string) { const job=store.get<Job>(jobsCollection,id);if(!job||job.status!=='awaiting_approval')throw new CuratorError('来源未在等待读取确认',409);save(job,{status:'queued',error:undefined}); },
     sourceRejected(id:string,reason:string) { const job=store.get<Job>(jobsCollection,id);if(job?.status==='awaiting_approval')save(job,{status:'failed',error:`来源读取确认已失效：${reason}`}); },
     async configure(input: Record<string, unknown>) {

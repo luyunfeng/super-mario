@@ -546,6 +546,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (path === '/api/v1/knowledge/curator' && method === 'PUT') return json(res, 200, await app.knowledgeCurator.configure(await body(req)));
         if (path === '/api/v1/knowledge/index' && method === 'GET') return json(res, 200, await app.knowledgeCurator.index());
         if (path === '/api/v1/knowledge/sources' && method === 'POST') return json(res, 201, app.knowledgeCurator.addSource(await body(req)));
+        const pageSources = path.match(/^\/api\/v1\/knowledge\/([^/]+)\/sources(?:\/([^/]+))?$/);
+        if (pageSources && method === 'GET') return json(res, 200, await app.knowledgeCurator.pageSources(
+          decodeURIComponent(pageSources[1]!), pageSources[2] && decodeURIComponent(pageSources[2])));
         const retrySource = path.match(/^\/api\/v1\/knowledge\/sources\/([^/]+)\/retry$/);
         if (retrySource && method === 'POST') {
           const input = await body(req);
