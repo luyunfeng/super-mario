@@ -33,7 +33,7 @@ test('local product: authenticated Web/API, knowledge, todos, asynchronous work 
     assert.equal((await fetch(`${running.url}/missing.js`)).status, 404);
     const initial = await state();
     assert.equal(initial.mode, 'demo');
-    const webFeatureIds = new Set(['workspace-splash', 'token-statistics', 'feishu-web', 'todo-calendar', 'conversation-search', 'conversation-export', 'message-favorites']);
+    const webFeatureIds = new Set(['workspace-splash', 'token-statistics', 'feishu-web', 'todo-calendar', 'conversation-search', 'conversation-export', 'message-favorites', 'saved-prompts']);
     const coreIds = initial.plugins.map(plugin => plugin.id).filter(id => !webFeatureIds.has(id)).sort();
     assert.deepEqual(coreIds, [
       'builtin-tools', 'daily-brief', 'executor-claude-code', 'executor-codex', 'executor-pi',
@@ -50,6 +50,11 @@ test('local product: authenticated Web/API, knowledge, todos, asynchronous work 
     assert.ok(initial.executors.find(executor => executor.id === 'demo' && executor.mode === 'demo'));
     assert.equal((await request('/todos', 'POST', { title: ' ' })).status, 400);
     assert.equal((await request('/knowledge', 'POST', { layer: 'project', title: '项目', content: '资料' })).status, 400);
+    const promptsPath = '/saved-prompts';
+    assert.equal((await request(promptsPath, 'POST', { action: 'list' }, { authorization: '' })).status, 401);
+    const prompt = await request(promptsPath, 'POST', { action: 'create', revision: 0, name: '复核', text: '合成跨重启草稿' });
+    assert.equal(prompt.status, 200);
+    const promptBook = await prompt.json();
     const saved = await request('/knowledge', 'POST', { layer: 'global', title: '工作方式', content: '尽量简单，先本地验证。' });
     assert.equal(saved.status, 201);
     const knowledge = await saved.json() as { id: string };
@@ -68,6 +73,10 @@ test('local product: authenticated Web/API, knowledge, todos, asynchronous work 
     await running.close();
     running = await startServer(config);
     const restored = await state();
+    assert.equal((await request('/plugins/saved-prompts', 'POST', { enabled: false })).status, 200);
+    assert.equal((await request(promptsPath, 'POST', { action: 'list' })).status, 503);
+    assert.equal((await request('/plugins/saved-prompts', 'POST', { enabled: true })).status, 200);
+    assert.deepEqual(await (await request(promptsPath, 'POST', { action: 'list' })).json(), promptBook);
     assert.equal(restored.messages[0].role, 'user');
     assert.equal(restored.messages[1].role, 'assistant');
     assert.ok(restored.knowledge.some(item => item.id === knowledge.id));

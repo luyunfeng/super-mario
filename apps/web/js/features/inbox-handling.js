@@ -1,5 +1,6 @@
 import { h, replace, debounce } from '../lib/dom.js';
 import { Banner, Button, Card, Field, Input, Select, TextArea } from '../ui/kit.js';
+import { attachSavedPrompts } from './saved-prompts.js';
 import { openDrawer, confirmDialog } from '../ui/overlay.js';
 
 const TYPES = [['todo', '待办'], ['dispatch', '派发执行'], ['reply', '回复草稿'], ['conclusion', '处理结论']];
@@ -66,6 +67,7 @@ export function openInboxHandlingDrawer({ api, store, source }) {
   const editorHost = h('div'), confirmation = h('div'), result = h('div', { role: 'status' });
   const message = TextArea({ rows: 3, 'aria-label': '处理指令', placeholder: '输入这条消息的处理要求', value: local.message });
   message.addEventListener('input', () => { local.message = message.value; });
+  const prompts = attachSavedPrompts({ api, store, input: message, getScope: () => sourceKey });
   const send = Button({ label: '发送处理指令', onClick: sendMessage, disabled: true });
   const create = Button({ label: '手工新建建议', onClick: () => startEditor(), disabled: true });
   const fresh = Button({label:'核对后发起新分析',onClick:async()=>{
@@ -78,7 +80,7 @@ export function openInboxHandlingDrawer({ api, store, source }) {
   }});
   fresh.hidden=true;
   const body = h('div', { class: 'stack', style: { fontSize: '14px', minWidth: '0', overflowWrap: 'anywhere' } },
-    origin, notice, model, conversation, requests, fresh, Field({ label: '普通用户指令', control: message }), send,
+    origin, notice, model, conversation, requests, fresh, Field({ label: '普通用户指令', control: message }), prompts.menu, h('div', { class: 'row row--wrap' }, send, prompts.manage),
     h('p', { class: 'small muted' }, '发送只请求模型分析。保存建议不会执行；提交建议只创建审批。执行结束不等于待办完成。'),
     create, suggestions, editorHost, confirmation, result);
   const drawer = openDrawer({ title: '处理与建议', body, footer: Button({ label: '关闭', onClick: () => drawer.close() }), onClose: cleanup });
@@ -92,7 +94,7 @@ export function openInboxHandlingDrawer({ api, store, source }) {
     if (!alive) return;
     alive = false; readRevision++; writeRevision++;
     if (local.messageAttempt?.status === 'submitting') local.messageAttempt.status = 'unknown';
-    schedule.cancel(); unsubscribe?.(); unwatch();
+    prompts.dispose(); schedule.cancel(); unsubscribe?.(); unwatch();
   }
   function current() { return alive && drawer.el.open && api.token?.() === token; }
   function say(text) { replace(notice, text && Banner({ tone: 'warn', children: text })); }
@@ -134,7 +136,7 @@ export function openInboxHandlingDrawer({ api, store, source }) {
   function paint() {
     replace(origin, h('strong', null, view.source.title), h('p', { class: 'small muted' }, sourceText()), h('pre', { class: 'mailbox-content' }, view.source.text));
     replace(model, !view.source.active && Banner({ tone: 'warn', children: view.source.reason || '来源不可处理' }), Banner({ children: view.available ? '主模型可用；只有显式发送指令才请求模型。' : `主模型不可用：${view.reason || '缺少模型配置'}。仍可手工写建议。` }));
-    replace(conversation, view.messages.map(m => h('section', null, h('strong', null, m.role === 'user' ? '你' : '助手'), m.conversationId!==view.conversationId&&h('p',{class:'small muted'},'较早来源版本，仅作记录'), h('p', { style: { whiteSpace: 'pre-wrap' } }, assistantText(m)), m.status && h('span', { class: 'small muted' }, m.status === 'pending' ? '等待模型回复' : m.status === 'failed' ? '回复失败' : '对话已记录'))));
+    replace(conversation, view.messages.map(m => h('section', null, h('strong', null, m.role === 'user' ? '你' : '助手'), m.conversationId!==view.conversationId&&h('p',{class:'small muted'},'较早来源版本，仅作记录'), h('p', { style: { whiteSpace: 'pre-wrap' } }, assistantText(m)), prompts.fromMessage(m), m.status && h('span', { class: 'small muted' }, m.status === 'pending' ? '等待模型回复' : m.status === 'failed' ? '回复失败' : '对话已记录'))));
     replace(requests, view.requests.map(r => h('p', { class: 'small' }, `${r.id} · ${STATUS[r.status] || r.status}${r.error ? `：${r.error}` : ''}`)),
       local.messageAttempt && !view.requests.some(r => r.key === local.messageAttempt.key) && h('p', null, `本次请求 ${local.messageAttempt.key} · ${local.messageAttempt.status === 'unknown' ? '结果未知，禁止自动重放；等待读取持久记录核对。' : STATUS[local.messageAttempt.status] || '正在提交'}`));
     const unknown = view.requests.some(r=>r.status==='unknown'&&!local.acknowledgedUnknown.has(r.id))||local.messageAttempt?.status==='unknown';

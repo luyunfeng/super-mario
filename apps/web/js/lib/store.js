@@ -3,7 +3,7 @@
 
 export function createStore(api) {
   const listeners = new Set();
-  const view = { snapshot: null, attention: [], connection: 'connecting', unauthorized: false, loadError: '' };
+  const view = { snapshot: null, attention: [], savedPromptsRevision: null, connection: 'connecting', unauthorized: false, loadError: '' };
   let request = 0;
   let socket;
   let reconnectTimer;
@@ -43,7 +43,17 @@ export function createStore(api) {
     const ws = new WebSocket(url);
     socket = ws;
     ws.onopen = () => { if (current === generation) { set({ connection: 'online' }); refresh(); } };
-    ws.onmessage = () => { if (current === generation) scheduleRefresh(); };
+    ws.onmessage = ({ data }) => {
+      if (current !== generation) return;
+      // An open slash menu can refresh independently from the workspace snapshot.
+      let event;
+      try { event = JSON.parse(data); } catch { /* Refresh state after an unrecognized frame. */ }
+      if (event?.type === 'saved-prompts.changed' && Number.isSafeInteger(event.data?.revision)) {
+        set({ savedPromptsRevision: event.data.revision });
+        return;
+      }
+      scheduleRefresh();
+    };
     ws.onerror = () => { if (current === generation) set({ connection: 'offline' }); };
     ws.onclose = () => {
       if (current !== generation) return;
@@ -61,7 +71,7 @@ export function createStore(api) {
     refresh,
     connect,
     reconnect: connect,
-    reset() { request += 1; set({ snapshot: null, attention: [], unauthorized: false, loadError: '' }); connect(); },
+    reset() { request += 1; set({ snapshot: null, attention: [], savedPromptsRevision: null, unauthorized: false, loadError: '' }); connect(); },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
   };
 }

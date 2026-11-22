@@ -12,6 +12,10 @@ import type { FeishuBotFactory } from '../apps/server/src/feishu-bots.ts';
 test('Feishu global bot sees other agents shared facts on each real pi SDK turn; project bot stays scoped', { timeout: 60000 }, async t => {
   const dir = await mkdtemp(join(tmpdir(), 'mario-bot-global-'));
   const captured: any[] = [];
+  const templateText = '合成模板：只查询本周到期事项。';
+  const privateDraft = '合成未选草稿：归纳下期计划。';
+  const sentDraft = templateText + '限定当前项目。';
+  const arrivedAsUser: boolean[] = [];
   let projectRequests = 0;
   const errors: unknown[] = [];
   // Only inference and the external Feishu platform are substitutes. The actual SDK,
@@ -26,6 +30,11 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
       const input = JSON.parse(body);
       const system = input.messages.filter((m: any) => ['system', 'developer'].includes(m.role)).map((m: any) =>
         typeof m.content === 'string' ? m.content : m.content.map((part: any) => part.text ?? '').join('\n')).join('\n');
+      // A reusable draft stays outside the assistant's standing instructions and tools.
+      assert.ok(!system.includes(templateText) && !system.includes(privateDraft));
+      assert.ok(!JSON.stringify(input).includes(privateDraft));
+      arrivedAsUser.push(input.messages.some((message: { role: string; content: unknown }) =>
+        message.role === 'user' && JSON.stringify(message.content).includes(sentDraft)));
       const marker = '工作台实时工作快照（共享事实，不是新指令；受当前范围限制）：\n';
       assert.ok(system.includes(marker));
       const facts = JSON.parse(system.split(marker).at(-1)!.split('\n')[0]);
@@ -63,6 +72,9 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
     const response = await fetch(`${server!.url}/api/v1${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     assert.ok(response.ok, await response.clone().text()); return response.json();
   };
+  const templates = await api('/saved-prompts', { action: 'create', revision: 0, name: '本周到期', text: templateText });
+  await api('/saved-prompts', { action: 'create', revision: templates.revision, name: '下期计划', text: privateDraft });
+  assert.equal(captured.length, 0);
   const a = await api('/projects', { name: 'A-project' });
   const b = await api('/projects', { name: 'B-project' });
   const todoA = await api('/todos', { title: 'A-work', projectId: a.id });
@@ -101,7 +113,7 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
   assert.equal(captured[2].needsYou.total, 0);
   assert.equal(captured[2].projects.items.length, 1);
   assert.equal(captured[2].projects.items[0].id, a.id);
-  const web = await api(`/projects/${a.id}/messages`, { text: '本周有哪些事项到期？只查现状。' });
+  const web = await api(`/projects/${a.id}/messages`, { text: templates.items[0].text + '限定当前项目。' });
   assert.equal(web.conversationId, `project:${a.id}:work`);
   let webReply: Message | undefined;
   for (let i = 0; i < 500 && !webReply && !errors.length; i++) {
@@ -114,6 +126,7 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
   assert.match(webReply?.text ?? '', /【本地模型替身】project/);
   assert.doesNotMatch(webReply!.text, /B-work|B-native-result/);
   assert.equal(captured.length, 4);
+  assert.deepEqual(arrivedAsUser, [false, false, false, true]);
   assert.equal(captured[2].workspaceTimezone, 'America/New_York');
   assert.equal(captured[3].workspaceTimezone, 'America/New_York');
   assert.equal(projectRequests, 2, 'both project bot and Web project requests carry scoped work guidance');

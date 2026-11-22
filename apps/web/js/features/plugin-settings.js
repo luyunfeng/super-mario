@@ -1,4 +1,5 @@
 import { preferenceEditor } from './plugin-preferences.js';
+import { openSavedPrompts } from './saved-prompts.js';
 import { openTokenStatistics } from './token-statistics.js';
 import { h, replace, keyedList, readLocal, writeLocal } from '../lib/dom.js';
 import { PAGES } from '../lib/router.js';
@@ -8,6 +9,7 @@ import { systemText } from '../copy/terms.js';
 
 const descriptions = {
   'todo-calendar':'按日、周或月查看项目待办的截止时间。',
+  'saved-prompts':'管理可在对话输入框中用斜杠插入的常用提示词。',
   'message-favorites':'收藏工作台消息，查看快照或从备份恢复。',
   'conversation-export':'下载或复制主对话和项目工作对话的 Markdown 记录。',
   'conversation-search':'在顶栏搜索主对话和执行记录，保存常用检索条件。',
@@ -95,6 +97,8 @@ export function createPluginSettings({ api, store, router }) {
         h('p',{},descriptions[plugin.id] ?? (entries.length ? '提供以下工作台功能：'+entries.map(e=>e.label).join('、') : '此插件由执行环境提供，已声明的能力见下方。')),
         h('code',{class:'small muted'},plugin.id),
         preferenceEditor(plugin.id),
+        plugin.id === 'saved-prompts' && Button({ label: '管理常用提示词', size: 'sm', disabled: plugin.status !== 'active',
+          onClick: () => openSavedPrompts({ api, store }) }),
         plugin.capabilities?.length > 0 && h('details', null, h('summary', { class: 'small' }, '查看插件声明的能力'), h('ul', null, plugin.capabilities.map(name => h('li', null, name)))),
         plugin.error && h('p', { class: 'small' }, plugin.error),
         entries.map(item => h('div', { class: 'row' },

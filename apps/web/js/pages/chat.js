@@ -5,6 +5,7 @@ import { renderFormattedText } from '../lib/markdown.js';
 import { icon } from '../ui/icons.js';
 import { Button, Banner, Card, Pill } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
+import { attachSavedPrompts } from '../features/saved-prompts.js';
 import { createMessageFavorites } from '../features/message-favorites.js';
 import { createConversationExport } from '../features/conversation-export.js';
 import { conversationSearchActive } from '../features/search.js';
@@ -48,16 +49,28 @@ export function createChatPage({ api, store, scope, router }) {
 
   // —— 输入框 ——
   const input = h('textarea', { class: 'composer__input', id: 'message-text', rows: 1, placeholder: '说出目标，Enter 发送，Shift + Enter 换行', 'aria-label': '给 Agent 的消息', maxLength: 20000 });
+  const prompts = attachSavedPrompts({ api, store, input, getScope: scope.get });
   const scopeSelect = h('select', { class: 'composer__scope', 'aria-label': '项目范围' }, h('option', { value: '' }, '全部项目'));
   const send = h('button', { class: 'btn btn--primary btn--sm composer__send', type: 'submit', 'aria-label': '发送' }, icon('send'), '发送');
   const status = h('p', { class: 'small composer__status', role: 'status' });
   const form = h('form', { class: 'composer', id: 'message-form' },
     recent.el,
-    h('div', { class: 'composer__box' }, input, h('div', { class: 'composer__bar' }, scopeSelect, h('span', { class: 'grow' }), send)), status);
+    h('div', { class: 'composer__box' }, prompts.menu, input, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, h('span', { class: 'grow' }), send)), status);
 
   const el = h('section', { class: 'page page--chat', id: 'chat' }, h('div', { class: 'chat-code-main' }, top, scroller, form), code.el);
 
   let sending = false;
+  let credential = api.token(), identity = 0;
+  // 已插入的提示词与手写草稿都属于当前凭据。
+  store.subscribe(() => {
+    if (credential === api.token()) return;
+    credential = api.token();
+    identity++;
+    sending = false;
+    input.value = '';
+    autosize();
+    status.textContent = '';
+  });
   let snapshot = null;
   let lastCount = 0;
   let pendingMessage = '';
@@ -89,24 +102,27 @@ export function createChatPage({ api, store, scope, router }) {
   function autosize() { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 200)}px`; }
   input.addEventListener('input', autosize);
   input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); }
+    if (!event.defaultPrevented && event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); }
   });
   scopeSelect.addEventListener('change', () => scope.set(scopeSelect.value));
-  scope.subscribe((value) => { transcript.close(); scopeSelect.value = value; code.show(value); });
+  scope.subscribe((value) => { prompts.changeScope(); transcript.close(); scopeSelect.value = value; code.show(value); });
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const text = input.value.trim();
     if (!text || sending || !snapshot?.agent.available) return;
+    const sender = identity;
     sending = true; send.disabled = true; status.textContent = ''; status.className = 'small composer__status muted';
     try {
       await api.post('/messages', { text, ...(scope.get() ? { projectId: scope.get() } : {}) });
+      if (sender !== identity) return;
       if (input.value.trim() === text) { input.value = ''; autosize(); }
       scrollToEnd(true);
     } catch (error) {
+      if (sender !== identity) return;
       status.className = 'small composer__status text-danger';
       status.textContent = `发送没有成功：${error.message}。内容已保留，请核对后重试。`;
-    } finally { sending = false; send.disabled = !snapshot?.agent.available; }
+    } finally { if (sender === identity) { sending = false; send.disabled = !snapshot?.agent.available; } }
     store.refresh();
   });
 
@@ -134,7 +150,7 @@ export function createChatPage({ api, store, scope, router }) {
     if (message.role === 'user') {
       return h('article', { class: 'msg msg--user', dataset: { id: message.id } },
         h('div', { class: 'msg__bubble' }, renderFormattedText(text)),
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.status === 'failed' && ' · 发送失败', mark));
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.status === 'failed' && ' · 发送失败', mark, message.conversationId === 'main' && prompts.fromMessage(message)));
     }
     const label = message.origin === 'result' ? '执行结果' : message.origin === 'notification' ? '提醒' : '主 Agent';
     return h('article', { class: 'msg msg--assistant', dataset: { id: message.id } },
@@ -188,6 +204,7 @@ export function createChatPage({ api, store, scope, router }) {
   return {
     el,
     onShow(route) {
+      prompts.reset();
       recent.refresh();
       pendingMessage = route.query.get('at') || '';
       markedMessage?.classList.remove('is-search-hit');
@@ -203,7 +220,7 @@ export function createChatPage({ api, store, scope, router }) {
       recent.update(state);
       const list = state.messages ?? [];
       const follow = nearBottom();
-      keyedList(messages, list, item => item.id, renderMessage, item => `${favorites.epoch}:${item.id}:${item.status}:${item.text}:${JSON.stringify(item.progress)}`);
+      keyedList(messages, list, item => item.id, renderMessage, item => `${prompts.epoch}:${favorites.epoch}:${item.id}:${item.status}:${item.text}:${JSON.stringify(item.progress)}`);
       hero.hidden = list.length > 0 || !setup.hidden;
       if (list.length !== lastCount) { lastCount = list.length; if (follow) scrollToEnd(true); }
       else if (follow && list.at(-1)?.status === 'pending') scrollToEnd(true);
