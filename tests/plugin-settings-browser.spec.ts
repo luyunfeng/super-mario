@@ -47,3 +47,42 @@ test('从插件配置固定入口，刷新、停用与恢复，并从窄屏打�
   await expect(dialog).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
+
+test('阅读字体独立保存、刷新恢复，停用后还原工作台字体', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-reading-fonts-'));
+  const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: dir, demo: true });
+  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  t.after(async () => { await browser.close(); await server.close(); await rm(dir, { recursive: true, force: true }); });
+  const page = await browser.newPage();
+  await page.goto(server.url);
+  const dialog = page.getByRole('dialog', { name: '插件配置' });
+  async function openFonts() {
+    await page.getByRole('button', { name: '插件配置', exact: true }).click();
+    await dialog.getByLabel('搜索插件').fill('阅读字体');
+  }
+  const bodyFont = () => page.evaluate(() => getComputedStyle(document.body).fontFamily);
+  const codeFont = () => dialog.locator('code').evaluate(el => getComputedStyle(el).fontFamily);
+  await openFonts();
+  const originalBody = await bodyFont(), originalCode = await codeFont();
+  await dialog.getByLabel('正文字体').fill('Georgia');
+  await dialog.getByLabel('代码字体').fill('fixture, invalid');
+  await dialog.getByRole('button', { name: '保存字体' }).click();
+  await expect(dialog.getByRole('status')).toContainText('单个字体名称');
+  await expect.poll(bodyFont).toBe(originalBody);
+  await dialog.getByLabel('代码字体').fill('Fixture Mono');
+  await dialog.getByRole('button', { name: '保存字体' }).click();
+  await expect.poll(bodyFont).toMatch(/^Georgia,/);
+  await expect.poll(codeFont).toMatch(/^"Fixture Mono",/);
+  await page.reload();
+  await openFonts();
+  await expect(dialog.getByLabel('代码字体')).toHaveValue('Fixture Mono');
+  await dialog.getByRole('button', { name: '停用' }).click();
+  await expect.poll(bodyFont).toBe(originalBody);
+  await expect.poll(codeFont).toBe(originalCode);
+  await dialog.getByRole('button', { name: '启用' }).click();
+  await expect.poll(bodyFont).toMatch(/^Georgia,/);
+  await dialog.getByLabel('正文字体').fill('');
+  await dialog.getByRole('button', { name: '保存字体' }).click();
+  await expect.poll(bodyFont).toBe(originalBody);
+  await expect.poll(codeFont).toMatch(/^"Fixture Mono",/);
+});

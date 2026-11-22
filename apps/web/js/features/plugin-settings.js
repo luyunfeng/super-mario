@@ -1,3 +1,4 @@
+import { readingFontEditor } from './reading-fonts.js';
 import { browserVoices, readAloudVoiceEditor } from './reply-read-aloud.js';
 import { openShortcutSettings } from './shortcuts.js';
 import { preferenceEditor } from './plugin-preferences.js';
@@ -11,6 +12,7 @@ import { systemText } from '../copy/terms.js';
 
 const descriptions = {
   'run-comparison':'并排查看同一项目的两次执行。',
+  'reading-fonts':'选择或输入本机安装的字体。留空使用工作台默认字体，选择保存在当前浏览器。',
   'shortcut-settings':'调整本浏览器的全局快捷键。',
   'start-page':'选择直接打开工作台时显示的页面，设置在同一服务的浏览器之间共享。',
   'todo-calendar':'按日、周或月查看项目待办的截止时间。',
@@ -137,6 +139,7 @@ export function createPluginSettings({ api, store, router }) {
         h('code',{class:'small muted'},plugin.id),
         preferenceEditor(plugin.id),
         plugin.id === 'reply-read-aloud' && plugin.status === 'active' && readAloudVoiceEditor(voices),
+        plugin.id === 'reading-fonts' && plugin.status === 'active' && readingFontEditor(),
         plugin.id === 'shortcut-settings' && Button({ label: '快捷键设置', disabled: plugin.status !== 'active', onClick: () => openShortcutSettings(store) }),
         plugin.id === 'start-page' && startPageEditor({ api, store }, snapshot.startPage, startPages(plugins)),
         plugin.id === 'saved-prompts' && Button({ label: '管理常用提示词', size: 'sm', disabled: plugin.status !== 'active',

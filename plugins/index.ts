@@ -36,6 +36,9 @@ export const conversationEdit: Extension = {
 
 export { createRunComparison } from './run-comparison.ts';
 
+export const readingFonts: Extension = {
+  id: 'reading-fonts', name: '阅读字体', capabilities: ['web.appearance.fonts'], activate() {},
+};
 export const shortcutSettings: Extension = {
   id: 'shortcut-settings', name: '快捷键设置', capabilities: ['web.shortcuts'], activate() {},
 };

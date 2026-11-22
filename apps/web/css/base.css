@@ -37,8 +37,8 @@
   --shadow-pop: 4px 4px 0 var(--text);
   --focus: 0 0 0 3px rgb(199 53 42 / 20%);
 
-  --font: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font: var(--reading-body, system-ui), system-ui, -apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  --mono: var(--reading-code, ui-monospace), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   --sidebar-w: 236px;
   --topbar-h: 54px;

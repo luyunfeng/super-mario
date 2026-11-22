@@ -1,6 +1,7 @@
 // 启动：创建接口、数据仓库、路由和各页面，把它们接到外壳上。
 import { h, readLocal, writeLocal } from './lib/dom.js';
 import { createApi } from './lib/api.js';
+import { installReadingFonts } from './features/reading-fonts.js';
 import { installPresence } from './features/presence.js';
 import { createStore } from './lib/store.js';
 import { createRouter, PAGE_NAMES } from './lib/router.js';
@@ -31,6 +32,7 @@ const api = createApi();
 const initialHash = location.hash;
 installPresence(api);
 const store = createStore(api);
+installReadingFonts(store);
 const router = createRouter();
 const scope = createScope();
 const shell = createShell({ api, store, router, scope });
