@@ -955,6 +955,12 @@ export async function createWorkbench(config: AppConfig) {
   function updateTodo(id: string, patch: Record<string, unknown>): Todo {
     const todo = store.get<Todo>('todos', id);
     if (!todo) throw new InputError('待办不存在', 404);
+    if (patch.expectedTitle !== undefined && patch.expectedTitle !== todo.title) {
+      throw new InputError('标题已被修改，请核对最新标题', 409);
+    }
+    if (patch.expectedNotes !== undefined && patch.expectedNotes !== (todo.notes ?? '')) {
+      throw new InputError('备注已被修改，请核对最新备注', 409);
+    }
     if (patch.expectedDueAt !== undefined && dueDate(patch.expectedDueAt) !== todo.dueAt) {
       throw new InputError('截止时间已被修改，请核对最新时间后重新改期', 409);
     }

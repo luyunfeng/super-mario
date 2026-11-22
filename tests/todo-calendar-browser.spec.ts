@@ -105,6 +105,17 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await editor.getByRole('button', { name: '保存' }).click();
   await expect.poll(() => read().dueAt).toBe('2030-03-27T20:00:00.000Z');
   assert.equal(read().notes, '同时保存的备注');
+  await entry.click();
+  const notes = editor.getByLabel('备注', { exact: true });
+  await notes.fill('本地草稿');
+  server.app.updateTodo(todo.id, { notes: '另一入口追加' });
+  await editor.getByRole('button', { name: '保存' }).click();
+  await expect(editor.getByRole('alert')).toContainText('最新备注：另一入口追加');
+  await expect(notes).toHaveValue('本地草稿');
+  assert.equal(read().notes, '另一入口追加');
+  await notes.fill('另一入口追加，加上本地草稿');
+  await editor.getByRole('button', { name: '保存' }).click();
+  await expect.poll(() => read().notes).toBe('另一入口追加，加上本地草稿');
   await root.getByRole('button', { name: '添加待办 2030-03-27 11:00' }).click();
   const panel = page.locator('#panel-todos');
   await panel.getByLabel('新待办优先级').selectOption('high');

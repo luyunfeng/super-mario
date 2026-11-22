@@ -106,6 +106,9 @@ export function createTodosTab({ api, store, router }) {
   const projectName = (id) => (store.view.snapshot?.projects ?? []).find(item => item.id === id)?.name;
 
   function openEdit(todo) {
+    let originalTitle = todo.title;
+    let originalNotes = todo.notes ?? '';
+    const conflict = h('div', { role: 'alert', hidden: true });
     const name = Input({ value: todo.title, required: true });
     const notes = TextArea({ value: todo.notes ?? '', rows: 4 });
     const editPriority = Select({ options: Object.entries(todoPriorityLabels), value: todo.priority ?? 'normal' });
@@ -148,7 +151,7 @@ export function createTodosTab({ api, store, router }) {
     });
     const drawer = openDrawer({
       title: '编辑待办',
-      body: [Field({ label: '标题', control: name, required: true }), Field({ label: '备注', control: notes }),
+      body: [conflict, Field({ label: '标题', control: name, required: true }), Field({ label: '备注', control: notes }),
         h('div', { class: 'form-row' }, Field({ label: '截止日期', control: dueInput, hint: '留空取消截止日期。' }), clock && Field({ label: '截止时间', control: clock }), Field({ label: '在等谁', control: waiting, hint: '填写后会进入“等待中”。' })),
         Field({ label: '提醒时间', control: reminder, hint: '按本机时区填写；留空取消。到点检查需在 Agent 中开启提醒，外发仍需渠道与发送授权。' }),
         Field({ label: '优先级', control: editPriority }), Field({ label: '负责人', control: responsible }), Field({ label: '负责会话', control: session }), Field({ label: '所属项目', control: project }), Field({ label: '上级待办', control: parent }),
@@ -171,8 +174,14 @@ export function createTodosTab({ api, store, router }) {
             patch.reminderAt = at ? at.toISOString() : '';
           }
           if (editPriority.value !== (todo.priority ?? 'normal')) patch.priority = editPriority.value;
-          if (name.value.trim() !== todo.title) patch.title = name.value.trim();
-          if (notes.value !== (todo.notes ?? '')) patch.notes = notes.value;
+          if (name.value.trim() !== originalTitle) {
+            patch.title = name.value.trim();
+            patch.expectedTitle = originalTitle;
+          }
+          if (notes.value !== originalNotes) {
+            patch.notes = notes.value;
+            patch.expectedNotes = originalNotes;
+          }
           if (project.value !== (todo.projectId ?? '')) patch.projectId = project.value;
           if (parent.value !== (todo.parentTodoId ?? '')) patch.parentTodoId = parent.value;
           const after = Array.from(dependencies.selectedOptions, option => option.value);
@@ -184,7 +193,26 @@ export function createTodosTab({ api, store, router }) {
           try {
             if (Object.keys(patch).length) await api.patch(`/todos/${encodeURIComponent(todo.id)}`, patch);
           } catch (error) {
-            if (error.status === 409) await store.refresh();
+            if (error.status === 409) {
+              await store.refresh();
+              const latest = store.view.snapshot?.todos.find(item => item.id === todo.id && inScope(item));
+              if (latest) {
+                const differences = [];
+                if (patch.title !== undefined && latest.title !== originalTitle) {
+                  originalTitle = latest.title;
+                  differences.push('最新标题：' + originalTitle);
+                }
+                if (patch.notes !== undefined && (latest.notes ?? '') !== originalNotes) {
+                  originalNotes = latest.notes ?? '';
+                  differences.push('最新备注：' + (originalNotes || '（空）'));
+                }
+                if (differences.length) {
+                  replace(conflict, ...differences.map(text => h('pre', {}, text)),
+                    h('p', {}, '你的草稿已保留。请核对内容，按需修改后再保存。'));
+                  conflict.hidden = false;
+                }
+              }
+            }
             throw error;
           }
           drawer.close(); store.refresh();

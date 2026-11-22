@@ -1391,9 +1391,26 @@ test('Web 与飞书仅更新选定待办的期限，保留提醒并拒绝并发�
       return { role: 'assistant', content: '已登记负责会话。' };
     }
     if (req.callId === 'detail') {
+      if (mode === 'notes' || mode === 'notesRace') {
+        assert.match(req.system, /遇到冲突时重新读取/);
+        const expectedNotes = JSON.parse(raw).todo.notes ?? '';
+        if (mode === 'notesRace') server.app.updateTodo(id, { notes: '来自另一入口' });
+        return call('todo_update', { id, notes: '补充事项', expectedNotes }, 'notes');
+      }
       const old = JSON.parse(raw).todo.dueAt ?? '';
       if (mode === 'race') server.app.updateTodo(id, { dueAt: newer });
       return call('todo_update', { id, dueAt: mode === 'set' ? due : '', expectedDueAt: old }, 'edit');
+    }
+    if (req.callId === 'notes') {
+      if (mode === 'notesRace') {
+        assert.match(raw, /备注已被修改/);
+        return call('todo_detail', { todoId: id }, 'latest-notes');
+      }
+      assert.equal(JSON.parse(raw).notes, '补充事项');
+      return { role: 'assistant', content: '已保存备注。' };
+    }
+    if (req.callId === 'latest-notes') {
+      return { role: 'assistant', content: '当前备注：' + JSON.parse(raw).todo.notes + '。请确认是否改为补充事项。' };
     }
     if (mode === 'race' || mode === 'foreign') {
       assert.match(raw, mode === 'race' ? /截止时间已被修改/ : /待办不属于当前作用域/);
@@ -1419,6 +1436,12 @@ test('Web 与飞书仅更新选定待办的期限，保留提醒并拒绝并发�
       scope: { kind: 'task', todoId: id, projectId: project.id }, requireConfirmation: false });
     const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    mode = 'notes';
+    assert.equal(await ask('将备注改为补充事项', path), '已保存备注。');
+    mode = 'notesRace';
+    await adapter.onMessage('修改本事项备注', { ...source, messageId: 'notes-race' });
+    await t.waitFor(() => assert.ok(sent.includes('当前备注：来自另一入口。请确认是否改为补充事项。')));
+    assert.equal(server.app.todos().find(row => row.id === id)?.notes, '来自另一入口');
     mode = 'clear';
     await adapter.onMessage('取消本事项期限', { ...source, messageId: 'clear' });
     await t.waitFor(() => assert.ok(sent.includes('已取消期限。')));
