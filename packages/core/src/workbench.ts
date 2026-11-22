@@ -129,10 +129,21 @@ export async function createWorkbench(config: AppConfig) {
     assertBotInput(input);
   } });
   const todoDecisions = createTodoDecisions(store, workDecisions);
-  async function runWorktreeStatus(id: string): Promise<Json> {
+  async function runWorktreeStatus(id: string, includeCleanup = false): Promise<Json> {
     if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
     const run = store.get<Run>('runs', id);
     if (!run?.worktree?.branch || !run.machineId) throw new InputError('执行缺少工作树创建回执', 404);
+    if (includeCleanup && run.worktree.removedAt) {
+      const { branch, removedAt, branchDeletedAt } = run.worktree;
+      // A deletion receipt is historical evidence even if the machine is now offline.
+      if (branchDeletedAt) return { branch, removedAt, branchDeletedAt };
+      try {
+        const retainedBranch = await retainedRunBranch(id);
+        return { branch, removedAt, retainedBranch };
+      } catch (error) {
+        return { branch, removedAt, branchStatusUnavailable: error instanceof Error ? error.message : '执行机未返回分支状态' };
+      }
+    }
     const machine = machines?.list().find(item => item.id === run.machineId);
     if (!machines || !machine?.online) throw new InputError('执行机离线', 503);
     if (!machine.capabilities.includes('workspace.inspectRunWorktree')) throw new InputError('请升级执行机代理以查看工作树状态', 409);
@@ -190,8 +201,12 @@ export async function createWorkbench(config: AppConfig) {
     const params = { id, source: run.worktree.source };
     if (!confirmation) {
       const state = await client.call(machine.id, method, params);
-      if (!state || typeof state !== 'object' || Array.isArray(state)) throw new InputError('分支状态未知', 502);
-      return { ...state, moved: state.head !== receipt.head };
+      if (!state || typeof state !== 'object' || Array.isArray(state) || state.branch !== run.worktree.branch
+        || typeof state.head !== 'string' || typeof state.sourceHead !== 'string' || typeof state.checkedOut !== 'boolean'
+        || typeof state.unmerged !== 'number' || !Number.isSafeInteger(state.unmerged) || state.unmerged < 0)
+        throw new InputError('分支状态回执不完整', 502);
+      return { branch: state.branch, head: state.head, sourceHead: state.sourceHead, checkedOut: state.checkedOut,
+        unmerged: state.unmerged, moved: state.head !== receipt.head };
     }
     const { confirmed, head, sourceHead, unmerged, requestId } = confirmation;
     if (typeof requestId !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(requestId) || confirmed !== true || head !== receipt.head || typeof sourceHead !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sourceHead)
@@ -278,7 +293,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(todoCalendar);
   plugins.register(conversationSearch);
   plugins.register(conversationDrafts);
-  plugins.register(createRunComparison(readRunCommitDiff, runWorktreeStatus));
+  plugins.register(createRunComparison(readRunCommitDiff, id => runWorktreeStatus(id, true)));
   plugins.register(shortcutSettings);
   plugins.register(conversationQuotes);
   plugins.register(conversationEdit);

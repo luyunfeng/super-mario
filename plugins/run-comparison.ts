@@ -6,7 +6,7 @@ export function createRunComparison(read: (id: string, path?: string) => Promise
     id: 'run-comparison', name: '执行对比', capabilities: ['web.runComparison', 'runs.diff.read'],
     activate(context) {
       context.contribute('tools', 'run_worktree_status', {
-        name: 'run_worktree_status', description: '读取本次执行独立工作树的当前分支、未提交文件和未进入来源目录当前 HEAD 的提交数。文件列表可能截断。',
+        name: 'run_worktree_status', description: '读取本次执行独立工作树的当前分支、未提交文件和未进入来源目录当前 HEAD 的提交数。文件列表可能截断。目录已清理时返回 removedAt，以及保留分支的实时状态或分支删除回执时间 branchDeletedAt。',
         parameters: { type: 'object', required: ['id'], additionalProperties: false, properties: { id: { type: 'string' } } },
         async execute({ id }, signal) {
           signal.throwIfAborted();

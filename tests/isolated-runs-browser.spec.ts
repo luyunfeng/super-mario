@@ -29,11 +29,13 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   const server = await startServer({ dataDir: join(root, 'server'), host: '127.0.0.1', port: 0, demo: true, token: 'worktree-fixture' });
   const discovery = createProjectDiscovery({ home: root, cwd, roots: [], temporaryRoots: [] });
   const starts = new Map<string, string>();
+  let incompleteBranchStatus = false;
   let baseReads = 0, groupedCheckouts = 0;
 
   const node = startAgentNode({ url: server.url, token: 'worktree-fixture', machineId: 'fixture', name: 'fixture', dataDir: join(root, 'node'),
     executors: [{ id: 'codex', machineId: 'fixture', name: '协议替身', kind: 'cli', available: true, mode: 'real', description: 'fixture' }],
     handlers: { ...discovery.handlers,
+      'workspace.retainedBranchStatus': async args => incompleteBranchStatus ? {} : discovery.handlers['workspace.retainedBranchStatus'](args),
       'workspace.worktreeBase': async args => {
         const pinned = await discovery.handlers['workspace.worktreeBase'](args);
         baseReads++;
@@ -153,16 +155,29 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   await page.getByRole('button', { name: '查看保留分支' }).click();
   const retained = page.getByRole('dialog', { name: '保留分支', exact: true });
   await expect(retained).toContainText(kept);
+  const readStatus = async () => JSON.parse(JSON.stringify(await statusTool.execute({ id: first.id }, new AbortController().signal)));
+  const afterCleanup = await readStatus();
+  assert.ok(afterCleanup.removedAt);
+  assert.equal(afterCleanup.retainedBranch.head, kept);
+  assert.equal(afterCleanup.retainedBranch.unmerged, Number(git(cwd, 'rev-list', '--count', 'HEAD..' + kept)));
+  incompleteBranchStatus = true;
+  const incomplete = await readStatus();
+  assert.equal(incomplete.removedAt, afterCleanup.removedAt);
+  assert.equal(incomplete.retainedBranch, undefined);
+  assert.match(incomplete.branchStatusUnavailable, /回执不完整/);
+  incompleteBranchStatus = false;
   const retainedRef = 'refs/heads/' + first.worktree!.branch!;
   git(cwd, 'update-ref', retainedRef, base, kept);
   await retained.getByRole('button', { name: '刷新状态' }).click();
   await expect(retained.getByRole('button', { name: '删除执行分支' })).toBeDisabled();
   await expect(retained).toContainText('分支已偏离目录清理时的提交');
+  assert.equal((await readStatus()).retainedBranch.moved, true);
   git(cwd, 'update-ref', retainedRef, kept, base);
   const occupied = join(root, 'occupied');
   git(cwd, 'worktree', 'add', '--no-checkout', occupied, first.worktree!.branch!);
   await retained.getByRole('button', { name: '刷新状态' }).click();
   await expect(retained).toContainText('分支仍在工作树中使用');
+  assert.equal((await readStatus()).retainedBranch.checkedOut, true);
   await expect(retained.getByRole('button', { name: '删除执行分支' })).toBeDisabled();
   git(cwd, 'worktree', 'remove', '--force', occupied);
   await retained.getByRole('button', { name: '刷新状态' }).click();
@@ -173,6 +188,9 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   await retained.getByRole('button', { name: '删除执行分支' }).click();
   await deletion.getByRole('button', { name: '确认删除分支' }).click();
   await expect(retained).toContainText('执行分支已删除');
+  const afterDeletion = await readStatus();
+  assert.ok(afterDeletion.branchDeletedAt);
+  assert.equal(afterDeletion.retainedBranch, undefined);
   assert.equal(git(cwd, 'branch', '--list', first.worktree!.branch!), '');
   assert.equal(git(cwd, 'rev-parse', 'refs/super-mario/runs/' + first.id + '/head'), kept);
   assert.match(JSON.stringify(await server.app.readRunCommitDiff(first.id, 'stage.txt')), /staged file/);
