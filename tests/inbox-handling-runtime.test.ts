@@ -140,6 +140,7 @@ test('lazy independent conversations, fixed schema, zero tools and filtered know
     const record = f.sdk.sessions.find(record => JSON.parse(record.history[0]).userRequest === `DISCUSS_${s.id}`)!;
     const input = JSON.parse(record.history[0]);
     assert.equal(input.untrustedSource.text, s.text);
+    assert.equal(input.replyAvailable, s.replyAvailable);
     assert.equal(input.userRequest, `DISCUSS_${s.id}`);
     assert.deepEqual(input.discussion, []);
     assert.deepEqual(input.knowledge.map((k: any) => k.content), [s.projectId ? `PROJECT_${s.projectId}` : 'PERSONAL']);
@@ -147,6 +148,8 @@ test('lazy independent conversations, fixed schema, zero tools and filtered know
     assert.match(record.contexts[0], /InboxHandlingAction/);
     assert.match(record.contexts[0], /本轮工具数量为零/);
     assert.match(record.contexts[0], /reply.text 只写给对方看的正文/);
+    assert.match(record.contexts[0], /内部笔记.*不能照抄或改写进回复/);
+    assert.match(record.contexts[0], /为 false 时仍可拟稿.*为 true 也须等用户确认/);
     assert.doesNotMatch(record.contexts[0], /SDK_MACHINE_PRIVATE_CWD|PRIVATE_WORK_SNAPSHOT|FORGED_HISTORY|PROJECT_A|PROJECT_B|PERSONAL/);
     assert.deepEqual(record.activeTools, []);
     assert.equal(record.tools.size, 0);
@@ -197,6 +200,7 @@ test('temporary reply connectivity changes reuse a discussion; a host grant gene
   const f=await fixture(t),s={...source('connectivity'),binding:'grant-one'};const id=conversation(s.id);
   await f.runtime.ask(s,id,'first');await f.runtime.ask({...s,replyAvailable:true},id,'continue');
   assert.equal(f.sdk.sessions.length,1);
+  assert.deepEqual(f.sdk.sessions[0].history.map(turn => JSON.parse(turn).replyAvailable), [false, true]);
   await assert.rejects(f.runtime.ask({...s,binding:'grant-two'},id,'old authority'));
   await f.runtime.ask({...s,binding:'grant-two'},conversation('new-grant'),'new authority');assert.equal(f.sdk.sessions.length,2);
 });
