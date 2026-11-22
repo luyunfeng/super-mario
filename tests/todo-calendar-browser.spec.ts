@@ -180,6 +180,9 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await editor.getByRole('button', { name: '保存' }).click();
   await expect.poll(() => read().responsiblePerson).toBeUndefined();
   assert.deepEqual(read().responsibleSession, { runId: 'test-run', machineId: 'test-machine', sessionId: 'test-session' });
+  await panel.getByRole('searchbox').fill('test-machine / test-session');
+  await expect(panel.locator('.todo')).toHaveCount(1);
+  await expect(panel.locator('.todo')).toContainText('本地三月末');
   assert.equal(server.app.store.list('runs').length, 1);
   assert.throws(() => server.app.updateTodo(done.id, { projectId: '', responsibleRunId: recordedRun.id }), /当前项目/);
   server.app.updateTodo(todo.id, { projectId: '' });

@@ -303,6 +303,10 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if (args.priority !== undefined && !priorityParameter.enum.some(value => value === args.priority)) throw new Error('待办优先级无效');
           if (args.waitingOn !== undefined && (typeof args.waitingOn !== 'string' || !args.waitingOn.trim())) throw new Error('等待对象须为非空文本');
           if (args.responsiblePerson !== undefined && (typeof args.responsiblePerson !== 'string' || !args.responsiblePerson.trim())) throw new Error('负责人须为非空文本');
+          for (const key of ['responsibleMachineId', 'responsibleSessionId']) {
+            const value = args[key];
+            if (value !== undefined && (typeof value !== 'string' || !value.trim())) throw new Error('负责电脑和会话标识须为非空文本');
+          }
           const responsiblePerson = args.responsiblePerson?.trim().normalize('NFC').toLowerCase();
           const waitingOn = args.waitingOn?.trim().normalize('NFC').toLowerCase();
           const candidates = context.store.list<Todo>('todos');
@@ -321,6 +325,8 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if (args.hasDueDate === false && (bounded || args.overdue === true)) throw new Error('无截止日期不能与截止时段或逾期条件组合');
           const now = Date.now();
           const todos = candidates.filter(todo => {
+            if (args.responsibleMachineId !== undefined && todo.responsibleSession?.machineId !== args.responsibleMachineId) return false;
+            if (args.responsibleSessionId !== undefined && todo.responsibleSession?.sessionId !== args.responsibleSessionId) return false;
             if (responsiblePerson && todo.responsiblePerson?.normalize('NFC').toLowerCase() !== responsiblePerson) return false;
             if (waitingOn && !todo.waitingOn?.normalize('NFC').toLowerCase().includes(waitingOn)) return false;
             if (args.priority !== undefined && (todo.priority ?? 'normal') !== args.priority) return false;
@@ -350,6 +356,8 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           }
           return todos as unknown as Json;
         }, { query: { type: 'string', description: '标题或备注中的关键词，多词用空格分隔' }, projectId: { type: 'string' },
+          responsibleMachineId: { type: 'string', description: '完整匹配登记负责会话的电脑 ID' },
+          responsibleSessionId: { type: 'string', description: '完整匹配登记的负责会话 ID，可同时限定电脑' },
           responsiblePerson: { type: 'string', description: '按登记负责人姓名完整匹配' },
           waitingOn: { type: 'string', description: '只在登记的等待对象中查找这段文字，可与其他条件组合' },
           hasDueDate: { type: 'boolean', description: 'false 仅查未定截止日期的待办，true 仅查已定期限' },

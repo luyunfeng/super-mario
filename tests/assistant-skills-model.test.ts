@@ -1364,6 +1364,11 @@ test('Web 与飞书仅更新选定待办的期限，保留提醒并拒绝并发�
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.match(req.system, /只改截止时间时保留原提醒/);
+      if (mode === 'listSessions') {
+        assert.match(req.system, /按电脑分别列出匹配/);
+        const args = JSON.stringify(req.content).includes('test-machine') ? { responsibleMachineId: 'test-machine' } : {};
+        return call('todos_list', { ...args, responsibleSessionId: 'own-session', status: 'open' }, 'list-sessions');
+      }
       if (mode === 'session' || mode === 'foreignSession') {
         assert.match(req.system, /会话登记仅表示负责方/);
         return call('todo_update', { id, responsibleRunId: mode === 'session' ? 'own-run' : 'other-run' }, 'session');
@@ -1372,6 +1377,11 @@ test('Web 与飞书仅更新选定待办的期限，保留提醒并拒绝并发�
       return call('todo_detail', { todoId: id }, 'detail');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    if (req.callId === 'list-sessions') {
+      const titles = JSON.parse(raw).map((todo: { title: string; responsibleSession: { machineId: string } }) =>
+        todo.responsibleSession.machineId + '：' + todo.title);
+      return { role: 'assistant', content: titles.sort().join('、') };
+    }
     if (req.callId === 'session') {
       if (mode === 'foreignSession') {
         assert.match(raw, /负责会话不属于当前作用域/);
@@ -1415,8 +1425,8 @@ test('Web 与飞书仅更新选定待办的期限，保留提醒并拒绝并发�
     mode = 'foreign';
     await adapter.onMessage('更新另一事项', { ...source, messageId: 'foreign' });
     await t.waitFor(() => assert.ok(sent.includes('当前范围无法修改。')));
-    for (const [runId, todoId, sessionId] of [['own-run', id, 'own-session'], ['other-run', other, 'other-session']]) {
-      server.app.store.put('runs', runId!, { id: runId, todoId, sessionId, machineId: 'test-machine', projectId: project.id,
+    for (const [runId, todoId, sessionId] of [['own-run', id, 'own-session'], ['other-run', other, 'own-session']]) {
+      server.app.store.put('runs', runId!, { id: runId, todoId, sessionId, machineId: runId === 'own-run' ? 'test-machine' : 'other-machine', projectId: project.id,
         executorId: 'fixture', conversationId: 'main', createdAt: due, updatedAt: due, status: 'completed', prompt: '合成会话', output: '' });
     }
     mode = 'session';
@@ -1425,6 +1435,13 @@ test('Web 与飞书仅更新选定待办的期限，保留提醒并拒绝并发�
     await adapter.onMessage('改为 other-run 对应的会话负责', { ...source, messageId: 'foreign-session' });
     await t.waitFor(() => assert.ok(sent.includes('无法登记其他事项的会话。')));
     assert.equal(server.app.todos().find(row => row.id === id)?.responsibleSession?.runId, 'own-run');
+    server.app.updateTodo(other, { responsibleRunId: 'other-run' });
+    mode = 'listSessions';
+    const own = 'test-machine：核对截止时间';
+    assert.equal(await ask('own-session 负责哪些待办？', path), 'other-machine：同项目另一项、' + own);
+    assert.equal(await ask('test-machine 上的 own-session 负责哪些待办？', path), own);
+    await adapter.onMessage('own-session 负责哪些待办？', { ...source, messageId: 'session-query' });
+    await t.waitFor(() => assert.ok(sent.includes(own)));
     assert.equal(server.app.store.list('runs').length, 2);
     const todo = server.app.todos().find(row => row.id === id)!;
     assert.equal(todo.dueAt, undefined);
