@@ -1377,6 +1377,11 @@ test('Web 与飞书仅更新选定待办的期限，保留提醒并拒绝并发�
       return call('todo_detail', { todoId: id }, 'detail');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    if (mode === 'requests') {
+      assert.match(req.system, /查询时不替用户回答、授权或验收/);
+      assert.deepEqual(JSON.parse(raw).pendingRequests, [{ kind: 'review', title: '确认清单', body: '确认哪份清单？' }]);
+      return { role: 'assistant', content: '本事项需要你确认哪份清单。' };
+    }
     if (req.callId === 'list-sessions') {
       const titles = JSON.parse(raw).map((todo: { title: string; responsibleSession: { machineId: string } }) =>
         todo.responsibleSession.machineId + '：' + todo.title);
@@ -1452,6 +1457,15 @@ test('Web 与飞书仅更新选定待办的期限，保留提醒并拒绝并发�
       server.app.store.put('runs', runId!, { id: runId, todoId, sessionId, machineId: runId === 'own-run' ? 'test-machine' : 'other-machine', projectId: project.id,
         executorId: 'fixture', conversationId: 'main', createdAt: due, updatedAt: due, status: 'completed', prompt: '合成会话', output: '' });
     }
+    const origin = { id: 'question-source', role: 'user' as const, status: 'done' as const, text: '核对范围',
+      projectId: project.id, todoId: id, conversationId: 'main', createdAt: due };
+    server.app.store.put('messages', origin.id, origin);
+    server.app.interactions.open({ kind: 'review', title: '确认清单', body: '确认哪份清单？' }, origin);
+    server.app.interactions.open({ kind: 'review', title: '其他事项的问题', body: '确认哪份清单？', runId: 'other-run' });
+    mode = 'requests';
+    assert.equal(await ask('这件事等我决定什么？', path), '本事项需要你确认哪份清单。');
+    await adapter.onMessage('本事项等我决定什么？', { ...source, messageId: 'requests' });
+    await t.waitFor(() => assert.ok(sent.includes('本事项需要你确认哪份清单。')));
     mode = 'session';
     assert.equal(await ask('把 own-run 对应的会话登记为这项的负责方', path), '已登记负责会话。');
     mode = 'foreignSession';

@@ -741,12 +741,23 @@ export async function createWorkbench(config: AppConfig) {
     });
     return { page, items };
   }
+  // A run or its originating message identifies the task. Titles and project membership alone are ambiguous.
+  function pendingUserCards() {
+    return interactions.list().filter(card => card.status === 'open' && card.handler === 'user').map(card => {
+      const inputId = !card.runId && store.get<{ inputId?: string }>('interaction-origins', card.id)?.inputId;
+      const source = card.runId ? store.get<Run>('runs', card.runId) : inputId ? store.get<Message>('messages', inputId) : undefined;
+      const todoId = source?.projectId === card.projectId ? source?.todoId : undefined;
+      return { ...card, todoId };
+    });
+  }
   function todoDetail(args: Record<string, unknown>): Json {
     const id = requiredText(args.todoId, '待办标识');
     const todo = store.get<Todo>('todos', id);
     if (!todo) throw new InputError('待办不存在', 404);
     const replyTracking = waitingReplies.summary(id);
-    return { todo, replyTracking, decisions: todoDecisions.list(id), ...actionTodoLink(todo) } as unknown as Json;
+    const pendingRequests = pendingUserCards().filter(card => card.todoId === id && card.projectId === todo.projectId)
+      .map(({ kind, title, body, suggestion }) => ({ kind, title, body, suggestion }));
+    return { todo, pendingRequests, replyTracking, decisions: todoDecisions.list(id), ...actionTodoLink(todo) } as unknown as Json;
   }
   function actionTodoLink(todo: Todo) {
     const webPath = '#projects/' + encodeURIComponent(todo.projectId ?? 'all') + '/todos/detail/' + encodeURIComponent(todo.id);
@@ -1468,7 +1479,7 @@ export async function createWorkbench(config: AppConfig) {
     if(job)knowledgeSourceApproval.check(job);
     return result as unknown as import('../../protocol/src/index.ts').KnowledgeSourceResult;
   }
-  function attention() { return collectAttention({ inboxConversations: inboxAssistant.list(), plans: plans.list(), approvals: approvals.list(), interactions: interactions.list(), inbox: inbox.list(), mailboxes: mailboxes.list(), projects: projects.list(), bots: botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[], channels: contributions.list('channels').map(entry => entry.value) }); }
+  function attention() { return collectAttention({ inboxConversations: inboxAssistant.list(), plans: plans.list(), approvals: approvals.list(), interactions: pendingUserCards(), inbox: inbox.list(), mailboxes: mailboxes.list(), projects: projects.list(), bots: botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[], channels: contributions.list('channels').map(entry => entry.value) }); }
   function skipChannel() {
     store.put('settings', 'setup.channel-skipped', { skipped: true });
     events.publish('setup.changed', {});

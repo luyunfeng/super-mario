@@ -2,6 +2,7 @@ import { h, replace } from '../lib/dom.js';
 import { formatDate, todoPriorityLabels, isRunActive, runStatus } from '../lib/format.js';
 import { Button, Field, Input, Select, TextArea } from '../ui/kit.js';
 import { openDrawer, toast } from '../ui/overlay.js';
+import { createAttention } from './attention.js';
 import { openTaskClosure } from './task-closure.js';
 import { openTodoHistory } from './todo-history.js';
 import { openWaitingReply } from './waiting-reply.js';
@@ -90,12 +91,14 @@ export function openTodoDetail({ api, store, router, todo, openEdit }) {
 export function createTodoDetail({ api, store, router, todo, openEdit, close }) {
   const summary = h('div', { class: 'stack' });
   const next = h('div', { class: 'stack' });
-  const el = h('div', { class: 'stack' }, summary, replyRecord(api, store, todo),
+  const attention = createAttention({ api, store, task: true });
+  const el = h('div', { class: 'stack' }, summary, attention.el, replyRecord(api, store, todo),
     decisionSection(api, todo, () => el.isConnected && el.closest('dialog')?.open !== false && matchesScope(store, todo)), next);
   function paint() {
     const snapshot = store.view.snapshot;
     const current = snapshot?.todos.find(item => item.id === todo.id);
     if (!current || !matchesScope(store, todo)) return;
+    attention.update((store.view.attention ?? []).filter(item => item.type === 'interaction' && item.todoId === current.id && item.projectId === current.projectId));
     const project = snapshot.projects?.find(item => item.id === current.projectId);
     const sources = (snapshot.inbox ?? []).filter(item => item.todoId === current.id && (item.projectId ?? null) === (current.projectId ?? null));
     const runs = (snapshot.runs ?? []).filter(item => item.todoId === current.id && item.projectId === current.projectId)

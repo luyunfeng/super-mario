@@ -24,6 +24,7 @@ export interface AttentionItem {
   createdAt: string;
   projectId?: string;
   projectName?: string;
+  todoId?: string;
   highRisk?: boolean;
   route?: { href: string; label: string };
   actions: AttentionAction[];
@@ -32,7 +33,7 @@ export interface AttentionItem {
 interface InteractionInput {
   id: string; version: number; title: string; body: string; status: string;
   handler?: string; kind?: string; createdAt: string; projectId?: string;
-  suggestion?: string; userNotifiedAt?: string;
+  suggestion?: string; userNotifiedAt?: string; todoId?: string;
 }
 interface AttentionInput {
   inboxConversations?: readonly InboxConversation[];
@@ -78,7 +79,7 @@ export function collectAttention({ inboxConversations = [], approvals = [], inte
     if (item.status !== 'open' || (item.handler !== undefined && item.handler !== 'user')) continue;
     const highRisk = item.kind === 'permission';
     rows.push({ id: `interaction:${item.id}`, type: 'interaction', version: item.version,
-      title: item.title, context: '等待你的回答', detail: [item.body, item.suggestion ? `建议回答：${item.suggestion}` : ''].filter(Boolean).join('\n\n'),
+      ...(item.todoId ? { todoId: item.todoId } : {}), title: item.title, context: '等待你的回答', detail: [item.body, item.suggestion ? `建议回答：${item.suggestion}` : ''].filter(Boolean).join('\n\n'),
       source: 'Agent', createdAt: item.createdAt, ...project(item.projectId), highRisk,
       actions: [{ ...action('interactions', item.id, 'answer', item.version, '回答'), requiresText: true, highRisk }] });
   }

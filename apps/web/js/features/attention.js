@@ -13,14 +13,14 @@ const TYPES = {
   inbox: { text: '消息', tone: '' },
 };
 
-export function createAttention({ api, store }) {
+export function createAttention({ api, store, task = false }) {
   const list = h('div', { class: 'attn__list' });
   const more = h('button', { class: 'btn btn--ghost btn--sm', type: 'button' });
   const foldBtn = h('button', { class: 'btn btn--ghost btn--sm', type: 'button' }, '最小化');
   const nextBtn = h('button', { class: 'btn btn--ghost btn--sm', type: 'button' }, '下一件');
-  const title = h('h2', { id: 'attention-title' }, '等你处理');
-  const count = h('span', { class: 'pill pill--danger', id: 'attention-count' });
-  const root = h('section', { class: 'attn card', id: 'attention', 'aria-labelledby': 'attention-title', 'aria-live': 'polite', hidden: true },
+  const title = h('h2', { id: task ? undefined : 'attention-title' }, task ? '本事项等你处理' : '等你处理');
+  const count = h('span', { class: 'pill pill--danger', id: task ? undefined : 'attention-count' });
+  const root = h('section', { class: 'attn card', id: task ? undefined : 'attention', 'aria-labelledby': task ? undefined : 'attention-title', 'aria-label': task ? '本事项等你处理' : undefined, 'aria-live': 'polite', hidden: true },
     h('header', { class: 'attn__head' }, title, count, h('span', { class: 'grow' }), nextBtn, more, foldBtn),
     list);
   let expanded = false;

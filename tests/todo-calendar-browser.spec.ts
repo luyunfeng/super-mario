@@ -276,6 +276,18 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await expect(page).toHaveURL(base + '/detail/' + spring.id);
   await expect(panel.getByRole('link', { name: created.title })).toBeVisible();
   await expect(panel.getByRole('link', { name: prerequisite.title })).toBeVisible();
+  const taskRun = { ...recordedRun, id: 'review-origin', todoId: spring.id };
+  server.app.store.put('runs', taskRun.id, taskRun);
+  const card = server.app.interactions.open({ kind: 'review', title: '核对归档范围', body: '本次归档哪份清单？', runId: taskRun.id });
+  server.app.interactions.open({ kind: 'review', title: '项目级问题', body: '其他事项', projectId: project.id });
+  await page.reload();
+  const taskAttention = panel.getByRole('region', { name: '本事项等你处理' });
+  await expect(taskAttention).toContainText('核对归档范围');
+  await expect(taskAttention).not.toContainText('项目级问题');
+  await taskAttention.getByRole('textbox', { name: '回答：核对归档范围' }).fill('只归档附件清单');
+  await taskAttention.getByRole('button', { name: '回答', exact: true }).click();
+  await expect(taskAttention).toBeHidden();
+  assert.equal(server.app.interactions.list().find(item => item.id === card.id)?.answer, '只归档附件清单');
   assert.equal(server.app.store.get<Todo>('todos', spring.id)?.completedAt, undefined);
   server.app.updateTodo(spring.id, { completed: true });
   await page.goto(base + '/detail/' + created.id);
