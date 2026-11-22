@@ -131,6 +131,26 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   const runsList = server.app.contributions.list('tools').find(entry => entry.value.name === 'runs_list')!.value;
   const listed = await runsList.execute({}, new AbortController().signal) as unknown as Run[];
   assert.equal(listed.find(run => run.id === first.id)?.worktree?.name, '接口修订');
+  const historyTool = server.app.contributions.list('tools').find(entry => entry.value.name === 'run_worktree_history')!.value;
+  const getHistory = async (mode: string, offset = 0, version?: string) => JSON.parse(JSON.stringify(await historyTool.execute(
+    { id: first.id, mode, offset, ...(version && { version }) }, new AbortController().signal)));
+  let tip = extra;
+  for (let i = 1; i <= 21; i++) tip = git(path, 'commit-tree', 'HEAD^{tree}', '-p', tip, '-m', '历史提交 ' + i);
+  git(path, 'update-ref', 'HEAD', tip, extra);
+  await page.getByRole('button', { name: '查看提交历史' }).click();
+  const history = page.getByRole('dialog', { name: '工作树提交历史' });
+  await expect(history.getByRole('listitem')).toHaveCount(20);
+  const firstPage = await getHistory('unmerged');
+  assert.equal(firstPage.commits[0].hash, tip);
+  await history.getByRole('button', { name: '加载更早提交' }).click();
+  await expect(history.getByRole('listitem')).toHaveCount(22);
+  await expect(history.getByRole('listitem').last()).toContainText('worktree only');
+  await history.getByLabel('提交范围').selectOption('all');
+  await history.getByRole('button', { name: '加载更早提交' }).click();
+  await expect(history.getByRole('listitem')).toHaveCount(23);
+  git(path, 'update-ref', 'HEAD', extra, tip);
+  await assert.rejects(getHistory('unmerged', firstPage.nextOffset, firstPage.version), /历史已变化/);
+  await history.getByRole('button', { name: '关闭' }).click();
   await page.getByRole('button', { name: '查看工作树状态' }).click();
   const status = page.getByRole('dialog', { name: '工作树状态' });
   await expect(status).toContainText(first.worktree!.branch!);
@@ -239,6 +259,7 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   const readStatus = async () => JSON.parse(JSON.stringify(await statusTool.execute({ id: first.id }, new AbortController().signal)));
   const afterCleanup = await readStatus();
   assert.ok(afterCleanup.removedAt);
+  assert.equal((await getHistory('unmerged')).commits[0].hash, kept);
   assert.equal(afterCleanup.retainedBranch.head, kept);
   assert.equal(afterCleanup.retainedBranch.unmerged, Number(git(cwd, 'rev-list', '--count', 'HEAD..' + kept)));
   incompleteBranchStatus = true;

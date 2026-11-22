@@ -44,6 +44,32 @@ function openCommitDiff(options) {
   void load();
 }
 
+export function openWorktreeHistory(options) {
+  const { area, active } = openRunDrawer(options, '工作树提交历史');
+  const rows = h('ol', { class: 'stack' });
+  const footer = h('div');
+  const picker = Select({ 'aria-label': '提交范围', options: [['unmerged', '尚未进入来源目录'], ['all', '全部历史']], onChange: () => load() });
+  let sequence = 0;
+  async function load(offset = 0, version) {
+    const stamp = ++sequence;
+    if (!offset) rows.replaceChildren();
+    footer.textContent = '正在读取提交…';
+    const query = new URLSearchParams({ mode: picker.value, offset: String(offset), ...(version && { version }) });
+    try {
+      const page = await options.api.get('/runs/' + encodeURIComponent(options.item.id) + '/worktree-history?' + query);
+      if (!active() || stamp !== sequence) return;
+      for (const commit of page.commits) rows.append(h('li', { class: 'stack' }, h('strong', null, commit.subject || '无标题'),
+        h('small', { class: 'muted' }, h('code', { title: commit.hash }, commit.hash.slice(0, 10)), ' · ', formatDate(commit.date, true))));
+      replace(footer, !rows.childElementCount && h('p', null, '此范围没有提交。'),
+        page.nextOffset !== null && Button({ label: '加载更早提交', onClick: () => load(page.nextOffset, page.version) }));
+    } catch (error) {
+      if (active() && stamp === sequence) replace(footer, h('p', null, error.message), Button({ label: '重新读取历史', onClick: () => load() }));
+    }
+  }
+  replace(area, picker, rows, footer);
+  void load();
+}
+
 export function renameWorktree(options) {
   const { item, api, store } = options;
   const { area, active, close } = openRunDrawer(options, '重命名工作树');

@@ -8,7 +8,7 @@ import { confirmDialog, openDrawer, toast } from '../ui/overlay.js';
 import { systemText } from '../copy/terms.js';
 
 import { openTaskClosure, refreshTaskClosure } from './task-closure.js';
-import { compareRuns, renameWorktree, openRetainedBranch, openWorktreeStatus } from './run-comparison.js';
+import { compareRuns, openWorktreeHistory, renameWorktree, openRetainedBranch, openWorktreeStatus } from './run-comparison.js';
 import { createLiveTerminals } from './live-terminals.js';
 
 const PLAN_STATUS = { pending: ['待确认', 'warn'], running: ['启动中', 'info'], started: ['已启动', 'ok'], rejected: ['已拒绝', ''], partial: ['部分启动', 'warn'], unknown: ['结果未知', 'danger'] };
@@ -178,6 +178,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
             Pill(runStatus[item.status]?.text ?? item.status, runStatus[item.status]?.tone ?? ''),
             h('small', { class: 'muted' }, executorName(item.executorId), ' · ', formatDate(item.createdAt, true)))))),
       run.worktreeRunId && h('a', { href: router.href('projects', run.projectId, 'runs', run.worktreeRunId) }, '查看原工作树'),
+      comparisonEnabled && run.worktree?.branch && !run.worktree.branchDeletedAt && Button({ label: '查看提交历史', size: 'sm', onClick: () => openWorktreeHistory({ item: run, api, store, router }) }),
       comparisonEnabled && run.worktree?.removedAt && !run.worktree.branchDeletedAt && Button({ label: '查看保留分支', size: 'sm', onClick: () => openRetainedBranch({ item: run, api, store, router }) }),
       comparisonEnabled && run.worktree?.branch && !run.worktree.removedAt && Button({ label: '查看工作树状态', size: 'sm', onClick: () => openWorktreeStatus({ item: run, api, store, router }) }),
       run.status === 'unknown' && Banner({ tone: 'danger', children: '动作已发出，但没有收到确认。请先到电脑上核对，不要重复发起。' }),

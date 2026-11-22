@@ -3,7 +3,7 @@ import type { Extension } from '../packages/plugin-sdk/src/index.ts';
 import type { Json } from '../packages/protocol/src/index.ts';
 
 export function createRunComparison(read: (id: string, path?: string) => Promise<Json>, status: (id: string) => Promise<Json>,
-  change: (id: string, path: string, area: string) => Promise<Json>): Extension {
+  change: (id: string, path: string, area: string) => Promise<Json>, history: (id: string, mode: string, offset: number, version?: string) => Promise<Json>): Extension {
   return {
     id: 'run-comparison', name: '执行对比', capabilities: ['web.runComparison', 'runs.diff.read'],
     activate(context) {
@@ -30,6 +30,19 @@ export function createRunComparison(read: (id: string, path?: string) => Promise
           const result = await status(id);
           signal.throwIfAborted();
           return result;
+        },
+      });
+      context.contribute('tools', 'run_worktree_history', {
+        name: 'run_worktree_history', description: '读取工作树的 Git 提交历史，支持全部提交或尚未进入来源目录 HEAD 的提交。',
+        parameters: { type: 'object', required: ['id', 'mode'], additionalProperties: false, properties: {
+          id: { type: 'string' }, mode: { type: 'string', enum: ['all', 'unmerged'] }, offset: { type: 'integer', minimum: 0 }, version: { type: 'string' },
+        } },
+        async execute({ id, mode, offset = 0, version }, signal) {
+          signal.throwIfAborted();
+          if (typeof id !== 'string' || typeof mode !== 'string' || typeof offset !== 'number' || (version !== undefined && typeof version !== 'string')) throw new Error('提交历史参数无效');
+          const page = await history(id, mode, offset, version);
+          signal.throwIfAborted();
+          return page;
         },
       });
       context.contribute('tools', 'run_commit_diff', {

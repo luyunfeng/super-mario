@@ -279,7 +279,7 @@ test('project bridge pins writes, filters reads and rejects nested or referenced
   addTool(f, 'todos_list', async () => f.store.list('todos'));
   addTool(f, 'runs_list', async () => f.store.list('runs'));
   addTool(f, 'projects_list', async () => f.store.list('projects'));
-  for (const name of ['run_commit_diff', 'run_worktree_status']) addTool(f, name, async args => ({ id: args.id }));
+  for (const name of ['run_commit_diff', 'run_worktree_status', 'run_worktree_history']) addTool(f, name, async args => ({ id: args.id }));
   addTool(f, 'work_read', async args => ({ screen: String(args.id) }));
   for (const name of ['project_create', 'interaction_answer', 'interactions_list', 'brief_read', 'policy_set', 'unknown']) {
     addTool(f, name, async () => { throw new Error('must not execute'); });
@@ -315,6 +315,7 @@ test('project bridge pins writes, filters reads and rejects nested or referenced
   assert.deepEqual(await invoke('run_commit_diff', { id: 'ra' }), { id: 'ra' });
   await assert.rejects(invoke('run_commit_diff', { id: 'rb' }), /作用域/);
   await assert.rejects(invoke('run_worktree_status', { id: 'rb' }), /作用域/);
+  await assert.rejects(invoke('run_worktree_history', { id: 'rb' }), /作用域/);
   assert.equal(writes.length, count);
   await assert.rejects(runtime.post('wrong project', undefined, { projectId: 'B' }), /作用域不符/);
   await runtime.close();

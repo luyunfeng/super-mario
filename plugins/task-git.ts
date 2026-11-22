@@ -111,7 +111,7 @@ async function filterOverrides(target: string) {
   return filters.flatMap(key => ['-c', key + '.smudge=', '-c', key + '.clean=', '-c', key + '.process=', '-c', key + '.required=false']);
 }
 
-export async function inspectRunWorktree({ source, id }: JsonObject) {
+async function resolveRunWorktree({ source, id }: JsonObject) {
   if (typeof source !== 'string' || typeof id !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id))
     throw new Error('工作树来源或执行标识无效');
   const sourceHead = await worktreeBase({ cwd: source });
@@ -123,6 +123,11 @@ export async function inspectRunWorktree({ source, id }: JsonObject) {
   const commonDir = async (cwd: string) => realpath((await runGit(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trimEnd());
   if (await commonDir(target) !== await commonDir(source)) throw new Error('执行目录已不属于原仓库');
   const head = await worktreeBase({ cwd: target });
+  return { target, record, head, sourceHead };
+}
+
+export async function inspectRunWorktree(params: JsonObject) {
+  const { target, record, head, sourceHead } = await resolveRunWorktree(params);
   const unmerged = Number((await runGit(target, ['rev-list', '--count', sourceHead + '..' + head])).trim());
   const overrides = await filterOverrides(target);
   const raw = await runGit(target, [...overrides, '-c', 'core.fsmonitor=false', 'status', '--porcelain=v1', '-z',
@@ -193,6 +198,25 @@ export async function retainedBranchStatus({ source, id }: JsonObject) {
   const head = fields[1]!;
   const unmerged = Number((await runGit(source, ['rev-list', '--count', sourceHead + '..' + head])).trim());
   return { branch, head, sourceHead, unmerged, checkedOut: Boolean(fields[3]) };
+}
+
+export async function readWorktreeHistory(params: JsonObject): Promise<Json> {
+  const { mode, offset, version } = params;
+  if ((mode !== 'all' && mode !== 'unmerged') || typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0
+    || (offset > 0 && typeof version !== 'string')) throw new Error('提交历史范围或分页参数无效');
+  const { head, sourceHead } = params.retained ? await retainedBranchStatus(params) : await resolveRunWorktree(params);
+  const current = [mode, head, ...(mode === 'unmerged' ? [sourceHead] : [])].join('/');
+  if (version !== undefined && version !== current) throw new Error('提交历史已变化，请重新读取');
+  const range = mode === 'all' ? head : sourceHead + '..' + head;
+  const raw = await runGit(String(params.source), ['log', '--topo-order', '--no-decorate', '--no-notes', '--no-show-signature',
+    '--format=%H%x00%cI%x00%s', '-z', '--skip=' + offset, '-21', range, '--']);
+  const fields = raw.split('\0');
+  const commits = [];
+  for (let i = 0; i + 2 < fields.length; i += 3) {
+    const subject = fields[i + 2]!;
+    commits.push({ hash: fields[i]!, date: fields[i + 1]!, subject: subject.length > 512 ? subject.slice(0, 511) + '…' : subject });
+  }
+  return { head, sourceHead, version: current, commits: commits.slice(0, 20), nextOffset: commits.length > 20 ? offset + 20 : null };
 }
 
 export async function deleteRetainedBranch(params: JsonObject): Promise<Json> {
