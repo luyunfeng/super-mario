@@ -7,7 +7,7 @@ export * from './agent-artifacts.ts';
 export type { Json, JsonObject } from '../../protocol/src/index.ts';
 export type { InboxThing, InboxOrigin, NormalizedReplyEvidence, CollectedReplyEvidence } from '../../protocol/src/index.ts';
 export { assertJson } from './json.ts';
-import type { AppEvent, ExecutionResult, ExecutorInfo, Json, JsonObject, KnowledgeEntry, KnowledgeLayer, PaneInfo, TerminalFrame, WebExtension } from '../../protocol/src/index.ts';
+import type { AppEvent, ExecutionResult, ExecutorInfo, Json, JsonObject, KnowledgeEntry, KnowledgeImportance, KnowledgeLayer, PaneInfo, TerminalFrame, WebExtension } from '../../protocol/src/index.ts';
 export type Dispose = () => void | Promise<void>;
 /** SQLite and the event bus are intentionally small, synchronous local interfaces. */
 export interface Store {
@@ -36,11 +36,11 @@ export interface Executor extends ExecutorInfo {
   knowledgeWorker?: boolean;
   execute(request: { prompt: string; cwd?: string; executionMode?: 'task' | 'interactive'; nativeResume?: NativeResumeSpec; signal: AbortSignal; onOutput?: (text: string) => void }): Promise<{ text: string; pending?: boolean; sessionId?: string; nativeResult?: ExecutionResult }>;
 }
-export interface KnowledgeQuery { tag?: string; layer?: KnowledgeLayer; projectId?: string; query?: string }
+export interface KnowledgeQuery { importance?: KnowledgeImportance; tag?: string; layer?: KnowledgeLayer; projectId?: string; query?: string }
 export interface KnowledgeBackend {
   revision?(id: string, commit?: string): Promise<{ entry: KnowledgeEntry; commit: string; previous?: string } | null>;
   list(query?: KnowledgeQuery): Promise<KnowledgeEntry[]>;
-  put(entry: Omit<KnowledgeEntry, 'id' | 'updatedAt'> & { id?: string }, expectedUpdatedAt?: string): Promise<KnowledgeEntry>;
+  put(entry: Omit<KnowledgeEntry, 'id' | 'updatedAt' | 'importance'> & { id?: string; importance?: KnowledgeImportance | null }, expectedUpdatedAt?: string): Promise<KnowledgeEntry>;
   remove(id: string): Promise<boolean>;
 }
 export interface Routine { name: string; run(): Promise<Json> }

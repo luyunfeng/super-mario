@@ -579,8 +579,9 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
       assert.match(req.system, /不能据此断言该页从未修改/);
       assert.ok(req.tools.includes('knowledge_revision'));
       assert.match(req.system, /tag 匹配完整标签/);
+      assert.match(req.system, /按 importance 筛选/);
       assert.match(req.system, /比较两版返回的 tags/);
-      return call('knowledge_list', { tag: '样本核对' }, 'tagged');
+      return call('knowledge_list', { tag: '样本核对', importance: 'P1' }, 'tagged');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[]).map(p => p.text).join('');
     if (req.callId === 'tagged') {
@@ -620,13 +621,14 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
   try {
     const project = await api('/projects', { name: '修订项目' });
     const other = await api('/projects', { name: '独立项目' });
-    const input = { layer: 'project', projectId: project.id, tags: ['样本核对'], title: '验收样本' };
+    const input = { layer: 'project', projectId: project.id, importance: 'P1', tags: ['样本核对'], title: '验收样本' };
     pageId = (await api('/knowledge', { ...input, tags: ['待复核'], content: '测'.repeat(4000) + '样本甲' })).id;
     await api('/knowledge', { ...input, id: pageId, tags: ['待复核'], content: '样本乙' });
     await api('/knowledge', { ...input, id: pageId, content: '样本乙' });
     foreignId = (await api('/knowledge', { ...input, projectId: other.id, content: '其他项目样本' })).id;
     await api('/knowledge', { layer: 'project', projectId: project.id, title: '相关说明', content: '正文提到样本核对' });
-    const question = '带「样本核对」标签的验收样本最近两次分别改了什么？';
+    await api('/knowledge', { ...input, importance: 'P2', title: '次要记录', content: '次要样本' });
+    const question = '带「样本核对」标签的 P1 验收样本最近两次分别改了什么？';
     assert.equal(await ask(question, '/projects/' + project.id + '/messages'), answer);
     const bot = await api('/feishu/bots', { name: '修订查询', appId: 'cli_4444444444444444', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });

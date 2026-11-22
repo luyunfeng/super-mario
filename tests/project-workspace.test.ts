@@ -25,6 +25,7 @@ function fixture() {
     async put(input) {
       const entry = {
         ...input,
+        importance: input.importance === undefined ? pages.get(input.id || "new")?.importance : input.importance ?? undefined,
         id: input.id || "new",
         updatedAt: new Date().toISOString(),
       };

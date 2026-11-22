@@ -31,6 +31,8 @@ function normalizedTags(tags: unknown): string[] {
 }
 
 function validateEntry(entry: KnowledgeEntry): void {
+  if (entry.importance !== undefined && !['P0', 'P1', 'P2', 'P3'].includes(entry.importance))
+    throw Object.assign(new Error('重要级必须是 P0、P1、P2 或 P3'), { status: 400 });
   safeId(entry.id);
   validateScope(entry.layer, entry.projectId);
   if (!layers.includes(entry.layer)) throw new Error('Knowledge layer is required');
@@ -126,9 +128,10 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         const text = `${entry.title}\n${entry.content}`.toLocaleLowerCase();
         return (!query.layer || entry.layer === query.layer)
           && (!query.projectId || entry.projectId === query.projectId)
+          && (query.importance === undefined || entry.importance === query.importance)
           && (query.tag === undefined || entry.tags?.includes(query.tag))
           && keywords.every(keyword => text.includes(keyword));
-      }).sort((a, b) => a.id.localeCompare(b.id));
+      }).sort((a, b) => (a.importance ?? 'P4').localeCompare(b.importance ?? 'P4') || a.id.localeCompare(b.id));
     },
     async put(input, expectedUpdatedAt) {
       const entry: KnowledgeEntry = {
@@ -136,7 +139,6 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         content: input.content, updatedAt: new Date().toISOString(),
         ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
       };
-      validateEntry(entry);
       ensureDirectory();
       // All writers in this service share the file backend. Keep the version check
       // and rename synchronous, after any asynchronous plugin hooks have finished.
@@ -149,6 +151,9 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         throw Object.assign(new Error('知识页已有新版本或已删除，请先核对最新内容'), { status: 409 });
       if (prior && Date.parse(prior.updatedAt) >= Date.parse(entry.updatedAt))
         entry.updatedAt = new Date(Date.parse(prior.updatedAt) + 1).toISOString();
+      const importance = input.importance === undefined ? prior?.importance : input.importance;
+      if (importance != null) entry.importance = importance;
+      validateEntry(entry);
       const tags = input.tags === undefined ? prior?.tags : normalizedTags(input.tags);
       if (tags?.length) entry.tags = tags;
       const { content, ...metadata } = entry;

@@ -25,6 +25,7 @@ function revisionHistory(api, entry, loadDraft, selectedCommit) {
       status.replaceWith(h('article', { class: 'stack' },
         h('strong', null, revision.entry.title),
         h('small', null, revision.entry.updatedAt, ' · ', revision.commit.slice(0, 8)),
+        h('small', null, '重要级：' + (revision.entry.importance ?? '未设置')),
         h('span', { class: 'small' }, '标签：' + (revision.entry.tags?.join('、') || '无')),
         h('pre', { class: 'small', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, revision.entry.content),
         Button({ label: '将此版载入草稿', size: 'sm', onClick: () => loadDraft(revision.entry) })));
@@ -91,6 +92,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   const project = Select({ options: [['', '请选择项目'], ...projects.map(item => [item.id, item.name])], value: entry?.projectId ?? defaults.projectId ?? '', name: 'projectId' });
   const title = Input({ name: 'title', value: entry?.title ?? '', required: true, placeholder: '一句话概括，例如“发布流程”' });
   const content = TextArea({ name: 'content', value: entry?.content ?? '', rows: 10, required: true, placeholder: '写下 Agent 工作时需要知道的内容' });
+  const importance = Select({ name: 'importance', value: entry?.importance ?? '', options: [['', '未设置'], ...['P0', 'P1', 'P2', 'P3'].map(level => [level, level])] });
   const tags = TextArea({ name: 'tags', value: (entry?.tags ?? []).join('\n'), rows: 2, placeholder: '每行一个标签' });
   let expectedUpdatedAt = entry?.updatedAt;
   const conflict = h('div', { class: 'stack' });
@@ -142,14 +144,15 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
 
   async function loadDraft(revision) {
     const revisionTags = (revision.tags ?? []).join('\n');
-    if (title.value === revision.title && content.value === revision.content && tags.value === revisionTags) return;
-    if (title.value !== entry.title || content.value !== entry.content || tags.value !== (entry.tags ?? []).join('\n')) {
-      const replaceDraft = await confirmDialog({ title: '替换当前草稿？', message: '载入这次修订会替换编辑框中的标题、正文和标签。', confirmLabel: '载入修订' });
+    if (title.value === revision.title && content.value === revision.content && tags.value === revisionTags && importance.value === (revision.importance ?? '')) return;
+    if (title.value !== entry.title || content.value !== entry.content || tags.value !== (entry.tags ?? []).join('\n') || importance.value !== (entry.importance ?? '')) {
+      const replaceDraft = await confirmDialog({ title: '替换当前草稿？', message: '载入这次修订会替换编辑框中的标题、正文、标签和重要级。', confirmLabel: '载入修订' });
       if (!replaceDraft) return;
     }
     title.value = revision.title;
     content.value = revision.content;
     tags.value = revisionTags;
+    importance.value = revision.importance ?? '';
     content.focus();
   }
 
@@ -159,7 +162,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
       note.textContent = '';
       if (!title.value.trim() || !content.value.trim()) { note.textContent = '请填写标题和内容。'; return; }
       if (layer.value === 'project' && !project.value) { note.textContent = '请选择所属项目。'; return; }
-      const body = { ...(entry ? { expectedUpdatedAt } : {}), tags: tags.value.split('\n').map(tag => tag.trim()).filter(Boolean), layer: layer.value, title: title.value.trim(), content: content.value.trim(), ...(layer.value === 'project' ? { projectId: project.value } : {}) };
+      const body = { ...(entry ? { expectedUpdatedAt } : {}), importance: importance.value || null, tags: tags.value.split('\n').map(tag => tag.trim()).filter(Boolean), layer: layer.value, title: title.value.trim(), content: content.value.trim(), ...(layer.value === 'project' ? { projectId: project.value } : {}) };
       try { await (entry ? api.patch(`/knowledge/${encodeURIComponent(entry.id)}`, body) : api.post('/knowledge', body)); }
       catch (error) {
         note.textContent = `没有保存成功：${error.message}。草稿已保留。`;
@@ -171,6 +174,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
           if (!latest) { conflict.textContent = '该知识页已删除。'; return; }
           replace(conflict, h('strong', null, '当前已保存版本'),
             h('span', null, [layerNames[latest.layer], latest.projectId, latest.title].filter(Boolean).join(' · ')),
+            h('span', { class: 'small' }, '重要级：' + (latest.importance ?? '未设置')),
             h('span', { class: 'small' }, '标签：' + (latest.tags?.join('、') || '无')),
             h('pre', { class: 'small', style: { whiteSpace: 'pre-wrap' } }, latest.content),
             Button({ label: '已核对新版，继续编辑草稿', onClick() {
@@ -194,7 +198,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   });
   const drawer = openDrawer({
     title: entry ? '编辑记忆' : '添加记忆', subtitle: entry ? `更新于 ${timeAgo(entry.updatedAt)}` : undefined,
-    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), Field({ label: '标签', control: tags }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
+    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), Field({ label: '标签', control: tags }), Field({ label: '重要级', control: importance }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();
@@ -225,6 +229,7 @@ export function knowledgeRow(entry, { projectName, onOpen, pattern }) {
     Boolean(entry.tags?.length) && h('span', { class: 'item__meta' }, entry.tags.map(tag => '#' + tag).join(' · ')),
     (excerpts.length ? excerpts : [summary]).map(text => h('span', { class: 'item__meta truncate' }, text))),
   h('div', { class: 'item__end' },
+    entry.importance && Pill(entry.importance),
     Pill(layerNames[entry.layer] + (entry.layer === 'project' && projectName ? ` · ${projectName}` : ''), entry.layer === 'global' ? 'info' : entry.layer === 'project' ? 'warn' : ''),
     h('span', { class: 'muted small' }, timeAgo(entry.updatedAt))));
 }

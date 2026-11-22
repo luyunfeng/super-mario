@@ -15,7 +15,7 @@ import { createMachineHub } from '../../../packages/core/src/machines.ts';
 import type { FeishuRegistrationInput } from './feishu-registration.ts';
 import { createFeishuGateway, type FeishuGatewayDependencies } from './feishu-gateway.ts';
 import { validateBotScope } from '../../../packages/core/src/bot-scopes.ts';
-import type { AppConfig, FeishuBotInput, JsonObject, NodeMessage, Todo } from '../../../packages/protocol/src/index.ts';
+import type { AppConfig, FeishuBotInput, JsonObject, KnowledgeImportance, NodeMessage, Todo } from '../../../packages/protocol/src/index.ts';
 
 async function body(req: IncomingMessage, maxBytes = 1024 * 1024): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []; let size = 0;
@@ -568,7 +568,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (input.id !== undefined && typeof input.id !== 'string') throw new InputError('知识标识必须是文本');
           const layer = input.layer as 'personal' | 'global' | 'project';
           const projectId = layer === 'project' ? requiredText(input.projectId, '项目') : undefined;
-          const entry = await app.knowledge().put({ tags: input.tags as string[] | undefined, id: input.id as string | undefined, layer, title: requiredText(input.title, '标题'), content: requiredText(input.content, '内容'), projectId });
+          const entry = await app.knowledge().put({ importance: input.importance as KnowledgeImportance | null | undefined, tags: input.tags as string[] | undefined, id: input.id as string | undefined, layer, title: requiredText(input.title, '标题'), content: requiredText(input.content, '内容'), projectId });
           await app.knowledgeCurator.rebuildIndex();
           app.events.publish('knowledge.changed', { id: entry.id }); return json(res, 201, entry);
         }
@@ -584,7 +584,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           const projectId = layer === 'project' ? requiredText(input.projectId ?? previous.projectId, '项目') : undefined;
           if (input.title !== undefined && typeof input.title !== 'string') throw new InputError('标题必须为文本');
           if (input.content !== undefined && typeof input.content !== 'string') throw new InputError('内容必须为文本');
-          const entry = await app.knowledge().put({ tags: input.tags as string[] | undefined, id, layer: layer as 'personal' | 'global' | 'project', title: input.title === undefined ? previous.title : requiredText(input.title, '标题'), content: input.content === undefined ? previous.content : requiredText(input.content, '内容'), ...(projectId ? { projectId } : {}) }, input.expectedUpdatedAt ?? previous.updatedAt);
+          const entry = await app.knowledge().put({ importance: input.importance as KnowledgeImportance | null | undefined, tags: input.tags as string[] | undefined, id, layer: layer as 'personal' | 'global' | 'project', title: input.title === undefined ? previous.title : requiredText(input.title, '标题'), content: input.content === undefined ? previous.content : requiredText(input.content, '内容'), ...(projectId ? { projectId } : {}) }, input.expectedUpdatedAt ?? previous.updatedAt);
           await app.knowledgeCurator.rebuildIndex(); app.events.publish('knowledge.changed', { id }); return json(res, 200, entry);
         }
         if (knowledge && method === 'DELETE') {

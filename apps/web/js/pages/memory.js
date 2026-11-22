@@ -56,6 +56,8 @@ export function createMemoryPage({ api, store, router, scope }) {
   const layerNote = h('p', { class: 'muted small', id: 'layer-note' });
   const search = Input({ type: 'search', placeholder: '搜索记忆', 'aria-label': '搜索记忆', style: { maxWidth: '220px' } });
   search.addEventListener('input', () => paint());
+  const importanceFilter = Select({ options: [['', '全部重要级'], ...['P0', 'P1', 'P2', 'P3'].map(level => [level, level])], 'aria-label': '按重要级筛选' });
+  importanceFilter.addEventListener('change', () => paint());
   const tagFilter = Select({ options: [['', '全部标签']], 'aria-label': '按标签筛选' });
   tagFilter.addEventListener('change', () => paint());
   const list = h('div', { class: 'list' });
@@ -67,7 +69,7 @@ export function createMemoryPage({ api, store, router, scope }) {
         h('div', { class: 'page__title' }, h('h1', null, '记忆'), h('p', { class: 'page__sub' }, hintCopy('nav.memory').tag)),
         h('div', { class: 'page__actions' }, Hint('nav.memory'))),
       h('div', { class: 'stack stack--lg' }, quick,
-        h('div', { class: 'stack' }, h('div', { class: 'row row--between row--wrap' }, seg.el, tagFilter, search), layerNote),
+        h('div', { class: 'stack' }, h('div', { class: 'row row--between row--wrap' }, seg.el, importanceFilter, tagFilter, search), layerNote),
         list, curatorLine, decisions.el)));
 
   function paint() {
@@ -96,11 +98,14 @@ export function createMemoryPage({ api, store, router, scope }) {
       tagFilter.dataset.sig = tagSignature;
     }
     tagFilter.hidden = !tags.length;
-    const rows = scoped.filter(item => !tagFilter.value || item.tags?.includes(tagFilter.value))
+    importanceFilter.hidden = !scoped.some(item => item.importance);
+    if (importanceFilter.hidden) importanceFilter.value = '';
+    const rows = scoped.filter(item => !importanceFilter.value || item.importance === importanceFilter.value)
+      .filter(item => !tagFilter.value || item.tags?.includes(tagFilter.value))
       .filter(item => !pattern || pattern.test(item.title) || pattern.test(item.content))
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      .sort((a, b) => (a.importance ?? 'P4').localeCompare(b.importance ?? 'P4') || b.updatedAt.localeCompare(a.updatedAt));
     if (!rows.length) {
-      replace(list, Empty({ title: query ? '没有找到匹配的记忆' : '还没有记忆', text: query ? undefined : '在上面写一句话，Agent 之后工作时会参考它。' }));
+      replace(list, Empty({ title: query || importanceFilter.value ? '没有找到匹配的记忆' : '还没有记忆', text: query || importanceFilter.value ? undefined : '在上面写一句话，Agent 之后工作时会参考它。' }));
       list._keyed = undefined;
     } else {
       if (!list._keyed) list.replaceChildren();
