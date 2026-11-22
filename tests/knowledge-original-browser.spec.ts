@@ -124,12 +124,23 @@ test('从记忆详情对照两次已保存修订，变更归属后不展示旧�
   const latest = await (await page.request.get(url + '/' + id + '/revision', { headers })).json();
   const previous = await (await page.request.get(url + '/' + id + '/revision?commit=' + latest.revision.previous, { headers })).json();
   expect(previous.revision.entry.content).toBe('他人补充丙');
+  const route = '#memory?entry=' + id + '&revision=' + previous.revision.commit;
+  server.app.store.put('messages', 'revision-citation', { id: 'revision-citation', conversationId: 'main', role: 'assistant', status: 'done',
+    createdAt: new Date().toISOString(), text: '见[查看修订](' + route + ')' });
+  await page.goto(server.url + '/#chat?token=fixture');
+  await page.reload();
+  await page.getByRole('link', { name: '查看修订' }).click();
+  await expect(dialog.locator('pre')).toHaveText('他人补充丙');
+  await page.reload();
+  await expect(dialog.locator('pre')).toHaveText('他人补充丙');
   const project = await server.app.createProject({ name: '新归属' });
   const moved = await page.request.patch(url + '/' + id, { headers, data: { layer: 'project', projectId: project.id, content: '项目记录' } });
   expect(moved.ok()).toBe(true);
   const current = await (await page.request.get(url + '/' + id + '/revision', { headers })).json();
   const older = await page.request.get(url + '/' + id + '/revision?commit=' + current.revision.previous, { headers });
   expect(await older.json()).toEqual({ revision: null });
+  await page.reload();
+  await expect(dialog.getByText('没有可查看的修订。')).toBeVisible();
 });
 
 test('旧知识草稿保存冲突后可核对新版再提交，同版并发写入仅一份生效', async t => {

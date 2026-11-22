@@ -9,7 +9,7 @@ import { openDrawer, confirmDialog } from '../ui/overlay.js';
 
 const LAYER_HINT = { personal: 'memory.personal', global: 'memory.global', project: 'memory.project' };
 
-function revisionHistory(api, entry, loadDraft) {
+function revisionHistory(api, entry, loadDraft, selectedCommit) {
   const body = h('div', { class: 'stack' });
   const section = h('details', null, h('summary', null, '查看历史修订'), body);
   let request = 0;
@@ -36,8 +36,9 @@ function revisionHistory(api, entry, loadDraft) {
   section.addEventListener('toggle', () => {
     request++;
     replace(body);
-    if (section.open) void load();
+    if (section.open) void load(selectedCommit);
   });
+  if (selectedCommit) section.open = true;
   return section;
 }
 
@@ -83,7 +84,7 @@ function originalSources(api, entry, selected, line, ask) {
   return section;
 }
 
-export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId, line, defaults = {}, onSaved }) {
+export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId, line, selectedCommit, defaults = {}, onSaved }) {
   const projects = (store.view.snapshot?.projects ?? []).filter(item => !item.archivedAt);
   const layer = Select({ options: Object.entries(layerNames), value: entry?.layer ?? defaults.layer ?? 'personal', name: 'layer' });
   const project = Select({ options: [['', '请选择项目'], ...projects.map(item => [item.id, item.name])], value: entry?.projectId ?? defaults.projectId ?? '', name: 'projectId' });
@@ -188,7 +189,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   });
   const drawer = openDrawer({
     title: entry ? '编辑记忆' : '添加记忆', subtitle: entry ? `更新于 ${timeAgo(entry.updatedAt)}` : undefined,
-    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), entry && revisionHistory(api, entry, loadDraft), note, conflict],
+    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();

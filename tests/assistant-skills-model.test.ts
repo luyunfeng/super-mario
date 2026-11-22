@@ -575,6 +575,7 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
   const { server, api, ask, requests } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.match(req.system, /savedAt 是知识页保存时间/);
+      assert.match(req.system, /读取修订不能作为已恢复的证据/);
       assert.ok(req.tools.includes('knowledge_revision'));
       return call('knowledge_revision', { pageId: foreignId }, 'foreign');
     }
@@ -588,6 +589,7 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
     if (req.callId === 'current') {
       assert.equal(result.text, '样本乙');
       assert.ok(result.previous && result.savedAt);
+      assert.equal(result.webCitation, `[查看修订](#memory?entry=${pageId}&revision=${result.commit})`);
       return call('knowledge_revision', { pageId, commit: result.previous }, 'prior');
     }
     if (req.callId === 'prior') {
