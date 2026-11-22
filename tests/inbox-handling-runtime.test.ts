@@ -221,6 +221,30 @@ test('eight cached sessions evict only idle; evicted and restarted conversations
   } finally { await restarted.close(); }
 });
 
+test('restored discussion reports omitted turns and clipped evidence while leaving stored messages intact', async t => {
+  const f = await fixture(t);
+  const s = source('history'), id = conversation('history');
+  for (let i = 0; i < 14; i++) await f.runtime.ask(s, id, i + ':开始' + '字'.repeat(3200) + '结束' + i);
+  await f.runtime.close();
+  const restarted = createInboxHandlingRuntime({ ...f, ready: () => true }, f.sdk.load);
+  try {
+    await restarted.ask(s, id, '核对旧答复是否真的发送');
+    const session = f.sdk.sessions.at(-1)!;
+    const { discussion, discussionCoverage } = JSON.parse(session.history[0]);
+    assert.equal(discussionCoverage.omittedPairs, 7);
+    assert.equal(discussion.length, 14);
+    for (let i = 0; i < 7; i++) {
+      const [user, reply] = discussion.slice(i * 2, i * 2 + 2);
+      assert.equal(user.role, 'user');
+      assert.equal(user.truncated, true);
+      assert.ok(user.text.startsWith((7 + i) + ':开始') && user.text.endsWith('结束' + (7 + i)));
+      assert.equal(reply.role, 'assistant');
+    }
+    assert.match(session.contexts[0], /不能作为已经批准、执行或送达的证据/);
+    assert.ok(f.store.list<Message>('messages').some(row => row.text.startsWith('0:开始') && row.text.length > 3200));
+  } finally { await restarted.close(); }
+});
+
 for (const stop of ['abortCurrent', 'close'] as const) test(`${stop} cancels concurrent and queued turns without SDK prompt/abort deadlock`, { timeout: 4000 }, async t => {
   const f = await fixture(t);
   f.sdk.control.hold = true;
