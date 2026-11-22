@@ -103,7 +103,7 @@ export function createMemoryPage({ api, store, router, scope }) {
     const rows = scoped.filter(item => !importanceFilter.value || item.importance === importanceFilter.value)
       .filter(item => !tagFilter.value || item.tags?.includes(tagFilter.value))
       .filter(item => !pattern || pattern.test(item.title) || pattern.test(item.content))
-      .sort((a, b) => (a.importance ?? 'P4').localeCompare(b.importance ?? 'P4') || b.updatedAt.localeCompare(a.updatedAt));
+      .sort((a, b) => (a.importance ?? 'P4').localeCompare(b.importance ?? 'P4') || (b.relevance ?? -1) - (a.relevance ?? -1) || b.updatedAt.localeCompare(a.updatedAt));
     if (!rows.length) {
       replace(list, Empty({ title: query || importanceFilter.value ? '没有找到匹配的记忆' : '还没有记忆', text: query || importanceFilter.value ? undefined : '在上面写一句话，Agent 之后工作时会参考它。' }));
       list._keyed = undefined;

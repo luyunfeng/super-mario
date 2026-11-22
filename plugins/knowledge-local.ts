@@ -30,7 +30,13 @@ function normalizedTags(tags: unknown): string[] {
   return [...new Set(tags.map(tag => tag.trim()))];
 }
 
+function validateRelevance(value: number | undefined): void {
+  if (value !== undefined && (!Number.isInteger(value) || value < 0 || value > 100))
+    throw Object.assign(new Error('相关度须为 0 至 100 的整数'), { status: 400 });
+}
+
 function validateEntry(entry: KnowledgeEntry): void {
+  validateRelevance(entry.relevance);
   if (entry.importance !== undefined && !['P0', 'P1', 'P2', 'P3'].includes(entry.importance))
     throw Object.assign(new Error('重要级必须是 P0、P1、P2 或 P3'), { status: 400 });
   safeId(entry.id);
@@ -106,6 +112,7 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
       }
     },
     async list(query: KnowledgeQuery = {}) {
+      validateRelevance(query.minRelevance);
       validateScope(query.layer, query.projectId);
       if (query.query !== undefined && typeof query.query !== 'string') throw new Error('query must be a string');
       ensureDirectory();
@@ -128,10 +135,11 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         const text = `${entry.title}\n${entry.content}`.toLocaleLowerCase();
         return (!query.layer || entry.layer === query.layer)
           && (!query.projectId || entry.projectId === query.projectId)
+          && (query.minRelevance === undefined || (entry.relevance ?? -1) >= query.minRelevance)
           && (query.importance === undefined || entry.importance === query.importance)
           && (query.tag === undefined || entry.tags?.includes(query.tag))
           && keywords.every(keyword => text.includes(keyword));
-      }).sort((a, b) => (a.importance ?? 'P4').localeCompare(b.importance ?? 'P4') || a.id.localeCompare(b.id));
+      }).sort((a, b) => (a.importance ?? 'P4').localeCompare(b.importance ?? 'P4') || (b.relevance ?? -1) - (a.relevance ?? -1) || a.id.localeCompare(b.id));
     },
     async put(input, expectedUpdatedAt) {
       const entry: KnowledgeEntry = {
@@ -151,6 +159,8 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         throw Object.assign(new Error('知识页已有新版本或已删除，请先核对最新内容'), { status: 409 });
       if (prior && Date.parse(prior.updatedAt) >= Date.parse(entry.updatedAt))
         entry.updatedAt = new Date(Date.parse(prior.updatedAt) + 1).toISOString();
+      const relevance = input.relevance === undefined ? prior?.relevance : input.relevance;
+      if (relevance != null) entry.relevance = relevance;
       const importance = input.importance === undefined ? prior?.importance : input.importance;
       if (importance != null) entry.importance = importance;
       validateEntry(entry);

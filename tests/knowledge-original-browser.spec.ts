@@ -195,7 +195,8 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   const title = '接口 [V2] 约定';
   const content = '上下文'.repeat(60) + '更新为 [v2] 方案\n第二处 [V2] <示例>\n第三处 [v2]\n最后一行待复核';
   await server.app.knowledge().put({ layer: 'personal', title, content });
-  await server.app.knowledge().put({ layer: 'personal', title: '次要参考', content: '附录', importance: 'P3' });
+  await server.app.knowledge().put({ layer: 'personal', title: '相关参考', content: '附录', importance: 'P3', relevance: 60 });
+  await server.app.knowledge().put({ layer: 'personal', title: '次要参考', content: '附录', importance: 'P3', relevance: 0 });
   await server.app.knowledge().put({ layer: 'personal', title: '待分类参考', content: '附录' });
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
   t.after(() => browser.close());
@@ -217,13 +218,14 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   await row.click();
   const drawer = page.getByRole('dialog', { name: '编辑记忆' });
   await expect(drawer.locator('textarea[name=content]')).toHaveValue(content);
+  await drawer.locator('[name=relevance]').fill('80');
   await drawer.locator('[name=importance]').selectOption('P0');
   await drawer.locator('[name=tags]').fill('待评审\n接口\n待评审');
   await drawer.getByRole('button', { name: '保存', exact: true }).click();
   await expect(drawer).toHaveCount(0);
   await page.reload();
   const filter = page.getByRole('combobox', { name: '按标签筛选' });
-  await expect(page.locator('.knowledge-item .item__title').filter({ hasText: /接口 \[V2\] 约定|次要参考|待分类参考/ })).toHaveText([title, '次要参考', '待分类参考']);
+  await expect(page.locator('.knowledge-item .item__title').filter({ hasText: /接口 \[V2\] 约定|相关参考|次要参考|待分类参考/ })).toHaveText([title, '相关参考', '次要参考', '待分类参考']);
   const levels = page.getByRole('combobox', { name: '按重要级筛选' });
   await levels.selectOption('P2');
   await expect(row).toHaveCount(0);
@@ -234,6 +236,9 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   await expect(page.locator('.knowledge-item')).toHaveCount(1);
   const [saved] = await server.app.knowledge().list({ tag: '待评审' });
   expect(saved!.importance).toBe('P0');
+  expect(saved!.relevance).toBe(80);
+  const scored = await server.app.knowledge().list({ minRelevance: 0 });
+  expect(scored.map(p => p.title)).toEqual([title, '相关参考', '次要参考']);
   expect(saved!.tags).toEqual(['待评审', '接口']);
   const headers = { authorization: 'Bearer fixture' };
   const url = server.url + '/api/v1/knowledge/' + saved!.id;
@@ -241,9 +246,15 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   expect((await server.app.knowledge().list({ tag: '接口' }))[0]?.content).toBe('修正正文');
   expect((await page.request.patch(url, { headers, data: { tags: '接口' } })).status()).toBe(400);
   expect((await page.request.patch(url, { headers, data: { importance: 'P9' } })).status()).toBe(400);
+  expect((await page.request.patch(url, { headers, data: { relevance: 4.5 } })).status()).toBe(400);
   await page.reload();
   await expect(row).toContainText('修正正文');
   await row.click();
+  await expect(drawer.locator('[name=relevance]')).toHaveValue('80');
+  await drawer.locator('[name=relevance]').fill('101');
+  await drawer.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(drawer.getByRole('alert')).toContainText('0 至 100');
+  await drawer.locator('[name=relevance]').fill('');
   await expect(drawer.locator('[name=importance]')).toHaveValue('P0');
   await drawer.locator('[name=importance]').selectOption('');
   await drawer.locator('[name=tags]').fill('');
@@ -251,4 +262,5 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   await expect(drawer).toHaveCount(0);
   expect(await server.app.knowledge().list({ tag: '待评审' })).toEqual([]);
   expect(await server.app.knowledge().list({ importance: 'P0' })).toEqual([]);
+  expect(await server.app.knowledge().list({ minRelevance: 80 })).toEqual([]);
 });

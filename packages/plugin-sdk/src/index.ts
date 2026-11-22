@@ -36,11 +36,11 @@ export interface Executor extends ExecutorInfo {
   knowledgeWorker?: boolean;
   execute(request: { prompt: string; cwd?: string; executionMode?: 'task' | 'interactive'; nativeResume?: NativeResumeSpec; signal: AbortSignal; onOutput?: (text: string) => void }): Promise<{ text: string; pending?: boolean; sessionId?: string; nativeResult?: ExecutionResult }>;
 }
-export interface KnowledgeQuery { importance?: KnowledgeImportance; tag?: string; layer?: KnowledgeLayer; projectId?: string; query?: string }
+export interface KnowledgeQuery { minRelevance?: number; importance?: KnowledgeImportance; tag?: string; layer?: KnowledgeLayer; projectId?: string; query?: string }
 export interface KnowledgeBackend {
   revision?(id: string, commit?: string): Promise<{ entry: KnowledgeEntry; commit: string; previous?: string } | null>;
   list(query?: KnowledgeQuery): Promise<KnowledgeEntry[]>;
-  put(entry: Omit<KnowledgeEntry, 'id' | 'updatedAt' | 'importance'> & { id?: string; importance?: KnowledgeImportance | null }, expectedUpdatedAt?: string): Promise<KnowledgeEntry>;
+  put(entry: Omit<KnowledgeEntry, 'id' | 'updatedAt' | 'importance' | 'relevance'> & { id?: string; relevance?: number | null; importance?: KnowledgeImportance | null }, expectedUpdatedAt?: string): Promise<KnowledgeEntry>;
   remove(id: string): Promise<boolean>;
 }
 export interface Routine { name: string; run(): Promise<Json> }

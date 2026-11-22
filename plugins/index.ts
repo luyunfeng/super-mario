@@ -147,6 +147,7 @@ export interface SystemActions {
   projectCreate?(input: Record<string, unknown>): Json | Promise<Json>;
   projectsDiscover?(input: Record<string, unknown>): Promise<Json>;
   knowledgeSource?(input: Record<string, unknown>): Json;
+  setKnowledgeRelevance?(args: Record<string, unknown>): Promise<Json>;
   setKnowledgeImportance?(args: Record<string, unknown>): Promise<Json>;
   changeKnowledgeTag?(args: Record<string, unknown>): Promise<Json>;
   knowledgeRevision?(id: string, commit?: string, projectId?: string): ReturnType<NonNullable<KnowledgeBackend['revision']>>;
@@ -264,12 +265,12 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             return info as unknown as Json;
           });
         }));
-        context.contribute('tools', 'knowledge_list', tool('knowledge_list', '查询本地知识，可按层、项目和关键词筛选。tag 精确匹配页标签，可与关键词、importance（P0–P3）组合。分析会议决定、背景或待跟进事项时，按会议主题检索当前作用域可见的知识，并核对来源。', async (args, signal) => {
+        context.contribute('tools', 'knowledge_list', tool('knowledge_list', '查询本地知识，可按层、项目和关键词筛选。tag 精确匹配页标签，可与关键词、importance（P0–P3）组合；minRelevance 按已记录相关度下限筛选。分析会议决定、背景或待跟进事项时，按会议主题检索当前作用域可见的知识，并核对来源。', async (args, signal) => {
           signal.throwIfAborted();
           const backend = context.contributions.list('knowledge_backends').find(item => item.id === 'local');
           if (!backend) throw new Error('Local knowledge backend is unavailable');
           return await backend.value.list(args as KnowledgeQuery) as unknown as Json;
-        }, { layer: { type: 'string', enum: ['personal', 'global', 'project'] }, projectId: { type: 'string' }, query: { type: 'string' }, tag: { type: 'string' }, importance: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] } }));
+        }, { layer: { type: 'string', enum: ['personal', 'global', 'project'] }, projectId: { type: 'string' }, query: { type: 'string' }, tag: { type: 'string' }, minRelevance: { type: 'integer', minimum: 0, maximum: 100 }, importance: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] } }));
       },
     },
     {
@@ -290,6 +291,10 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           return { protected: classifyProtected(String(url ?? ''), Array.isArray(trustedHosts) ? trustedHosts : []) };
         });
         if (actions?.knowledgeSource) context.contribute('tools', 'knowledge_ingest', tool('knowledge_ingest', '将用户明确提供的资料加入独立知识 Agent 整理队列，默认个人知识；受保护来源先生成主人读取审批，不自动申请权限。入队或批准都不代表整理完成。', async (args, signal) => { signal.throwIfAborted(); return actions.knowledgeSource!(args); }, { url: { type: 'string' }, text: { type: 'string' }, title: { type: 'string' }, layer: { type: 'string', enum: ['personal', 'project'] }, projectId: { type: 'string' } }));
+        if (actions?.setKnowledgeRelevance) context.contribute('tools', 'knowledge_set_relevance', tool('knowledge_set_relevance',
+          '按用户要求给知识页记录相关度。传 id、已读 updatedAt 和指定的整数分数；清除评分传 null。',
+          async (args, signal) => { signal.throwIfAborted(); return actions.setKnowledgeRelevance!(args); },
+          { id: { type: 'string' }, updatedAt: { type: 'string' }, relevance: { type: ['integer', 'null'], minimum: 0, maximum: 100 } }));
         if (actions?.setKnowledgeImportance) context.contribute('tools', 'knowledge_set_importance', tool('knowledge_set_importance',
           '按用户要求调整指定知识页的重要级。先读取该页 id 和 updatedAt，传 P0–P3，清除分级时传 null。',
           async (args, signal) => { signal.throwIfAborted(); return actions.setKnowledgeImportance!(args); },
@@ -309,7 +314,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             if (!revision) return { available: false } as Json;
             const { title, content, updatedAt } = revision.entry;
             const chars = Array.from(content), end = offset + 4000;
-            return { available: true, title, importance: revision.entry.importance ?? null, tags: revision.entry.tags ?? [], savedAt: updatedAt, commit: revision.commit, previous: revision.previous ?? null,
+            return { available: true, title, relevance: revision.entry.relevance ?? null, importance: revision.entry.importance ?? null, tags: revision.entry.tags ?? [], savedAt: updatedAt, commit: revision.commit, previous: revision.previous ?? null,
               webCitation: `[查看修订](#memory?entry=${encodeURIComponent(pageId)}&revision=${revision.commit})`,
               text: chars.slice(offset, end).join(''), nextOffset: end < chars.length ? end : null } as Json;
           }, { pageId: { type: 'string' }, commit: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
