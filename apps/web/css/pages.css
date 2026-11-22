@@ -302,6 +302,7 @@ body:has(.splash-background) #root { position: relative; }
   padding: 14px 16px; background: var(--surface); border: 1px solid var(--line);
   border-radius: var(--radius); box-shadow: var(--shadow-card); gap: 10px;
 }
+.mailbox-thread-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.58; }
 .mailbox-preview { white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; color: var(--text-2); line-height: 1.58; }
 .mailbox-meta, .mailbox-content, .mailbox-card h2 { overflow-wrap: anywhere; }
 .mailbox-content { white-space: pre-wrap; padding: 14px; border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--line); }

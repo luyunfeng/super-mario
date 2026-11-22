@@ -16,7 +16,7 @@ const descriptions = {
   'saved-prompts':'管理可在对话输入框中用斜杠插入的常用提示词。',
   'message-favorites':'收藏工作台消息，查看快照或从备份恢复。',
   'conversation-export':'下载或复制主对话和项目工作对话的 Markdown 记录。',
-  'reply-translation':'按需翻译当前助手回复，可切回原文。',
+  'reply-translation':'翻译助手回复和飞书收件，可按会话选择自动翻译。',
   'conversation-edit':'把自己发过的文字放回输入框，修改后可作为新消息发送。',
   'conversation-quotes':'在主对话和项目工作对话中引用一条消息，可附上自己的问题。',
   'conversation-drafts':'在当前浏览器保留未发送的对话文字，按会话和访问凭据恢复。',

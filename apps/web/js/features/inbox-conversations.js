@@ -1,4 +1,5 @@
 import { h } from "../lib/dom.js";
+import { createThreadTranslations } from "./inbox-thread-translation.js";
 import { timeAgo } from "../lib/format.js";
 import { Button, Card, Banner, TextArea, Pill } from "../ui/kit.js";
 
@@ -18,6 +19,7 @@ export function createInboxConversationsUI({
   redraw,
   openSource,
 }) {
+  const translations = createThreadTranslations({ api, store, router });
   const drafts = new Map(),
     errors = new Map(),
     pending = new Set();
@@ -49,6 +51,8 @@ export function createInboxConversationsUI({
   }
   return {
     signature: (group) => [
+      translations.currentGroup() === group.id,
+      store.view.snapshotOwner,
       pending.has(key(group.id)),
       errors.get(key(group.id)),
     ],
@@ -111,13 +115,24 @@ export function createInboxConversationsUI({
           })
         : undefined;
       answer?.addEventListener("input", () => drafts.set(id, answer.value));
+      const focused = translations.currentGroup() === group.id;
+      const originalMessages = h("details", { open: focused },
+        h("summary", null, `查看原始消息（${items.length} 条）`),
+        items.map(item => h("article", { class: "stack card__body" },
+          h("p", { class: "small muted" },
+            `${item.raw.origin?.senderName || item.raw.sender || group.person} · ${timeAgo(item.time)}`),
+          h("p", { class: focused ? "mailbox-thread-body" : "mailbox-preview", dataset: { threadMessage: item.id } }, item.text),
+          Button({ label: "查看此消息来源", size: "sm", onClick: () => openSource(item.id) }),
+        )),
+      );
+      if (focused) translations.mount(group.id, originalMessages, items);
       return Card({
         title: group.title,
         className: "mailbox-group",
         sub: `${group.messageIds.length} 条消息已合并 · ${group.kind === "direct" ? "私聊" : group.chatName || "群聊"}`,
-        tools: Pill(
-          LABEL[group.status] || "后台处理中",
-          question ? "warn" : group.status === "failed" ? "danger" : "",
+        tools: h("div", { class: "row row--wrap" },
+          !focused && h("a", { class: "btn btn--sm", href: router.href("inbox") + "?conversation=" + encodeURIComponent(group.id) }, "打开会话"),
+          Pill(LABEL[group.status] || "后台处理中", question ? "warn" : group.status === "failed" ? "danger" : ""),
         ),
         body: h(
           "div",
@@ -172,28 +187,7 @@ export function createInboxConversationsUI({
           group.error && h("p", { class: "small muted" }, group.error),
           errors.has(id) &&
             Banner({ tone: "danger", children: errors.get(id) }),
-          h(
-            "details",
-            null,
-            h("summary", null, `查看原始消息（${items.length} 条）`),
-            items.map((item) =>
-              h(
-                "article",
-                { class: "stack card__body" },
-                h(
-                  "p",
-                  { class: "small muted" },
-                  `${item.raw.origin?.senderName || item.raw.sender || group.person} · ${timeAgo(item.time)}`,
-                ),
-                h("p", { class: "mailbox-preview" }, item.text),
-                Button({
-                  label: "查看此消息来源",
-                  size: "sm",
-                  onClick: () => openSource(item.id),
-                }),
-              ),
-            ),
-          ),
+          originalMessages,
           h(
             "div",
             { class: "row row--wrap" },

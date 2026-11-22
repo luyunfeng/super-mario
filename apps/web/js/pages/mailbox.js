@@ -1,3 +1,4 @@
+import { createInboxTranslation } from '../features/inbox-translation.js';
 import { createInboxConversationsUI } from '../features/inbox-conversations.js';
 import { h, replace, keyedList } from '../lib/dom.js';
 import { personalGroupSize } from '../lib/group-size.js';
@@ -22,7 +23,9 @@ export function createMailboxPage({ api, store, router, direction }) {
   let snapshot = store.view.snapshot;
   let mailbox = [], deliveries = [];
   let error = '', loadError = '', loaded = false, loading = false, revision = 0, lastSnapshot;
-  let drawer, selected, detailKey;
+  let drawer, selected, detailKey, detailTranslation, mailboxOwner;
+  const translation = incoming ? createInboxTranslation({ api, store,
+    isSelected: id => drawer?.el.open && router.current.page === direction && selected === id }) : null;
   let sourceFilter = 'all', stageFilter = 'all';
   let displayLimit = PAGE_SIZE, dirty = true;
   const drafts = new Map(), pending = new Set(), uncertain = new Set(), updated = new Map();
@@ -192,10 +195,14 @@ export function createMailboxPage({ api, store, router, direction }) {
   function detail() {
     if (!drawer) return;
     const item = records().find(item => item.id === selected);
-    if (!item) { detailKey = undefined; replace(drawer.body, h('p', null, '这条记录已更新，请关闭后查看列表。')); replace(drawer.foot, Button({ label: '关闭', onClick: () => drawer.close() })); return; }
+    if (!item) { translation?.clear(); detailTranslation = undefined; detailKey = undefined; replace(drawer.body, h('p', null, '这条记录已更新，请关闭后查看列表。')); replace(drawer.foot, Button({ label: '关闭', onClick: () => drawer.close() })); return; }
     const raw = item.raw;
     const key = JSON.stringify([item, error, snapshot?.projects, drafts.get(item.id), pending.has(item.id), uncertain.has(item.id)]);
-    if (detailKey === key) return;
+    // Keep the translation controls and any in-flight request across unrelated detail updates.
+    const translated = translation && (item.kind !== 'mailbox' || mailboxOwner === api.draftOwner()) ? translation.view(item) : null;
+    if (!translated && translation) translation.clear();
+    if (detailKey === key && detailTranslation === translated) return;
+    detailTranslation = translated;
     detailKey = key;
     replace(drawer.body, h('h3', null, item.title),
       h('div', { class: 'row row--wrap' }, Pill(item.status, tone(item)), h('span', { class: 'small muted' }, item.source, ' · ', formatDate(item.time, true))),
@@ -205,7 +212,7 @@ export function createMailboxPage({ api, store, router, direction }) {
       raw.reason && h('p', { class: 'small muted' }, `分拣建议：${raw.reason.replace(/^注入分拣器：/, '')}`),
       raw.error && Banner({ tone: 'danger', children: raw.error }),
       raw.status === 'unknown' && Banner({ tone: 'warn', children: '发送结果未知。请先核对实际送达情况，工作台不会自动重复发送。' }),
-      h('pre', { class: 'mailbox-content' }, item.text || '没有文本正文。'),
+      translated || h('pre', { class: 'mailbox-content' }, item.text || '没有文本正文。'),
       ['pending', 'needs_approval'].includes(raw.status) && !incoming && h('p', { class: 'small muted' }, '内容仍待确认，尚未发送。可在对话页处理审批，或在渠道高级设置中处理机器人发件。'),
       incoming && projectEditor(item),
       error && Banner({ tone: 'danger', children: error }));
@@ -235,11 +242,13 @@ export function createMailboxPage({ api, store, router, direction }) {
     if (pending.has(item.id) || uncertain.has(item.id)) return;
     // A newer snapshot can win the refresh started by a conflict response.
     // On this explicit retry, use the latest known version and keep the choice.
+    const owner = api.draftOwner();
     const current = records().find(record => record.id === item.id);
     if (current?.kind === 'personal' && current.raw.version > draft.version) draft.version = current.raw.version;
     drafts.set(item.id, draft); pending.add(item.id); error = ''; paint();
     try {
       const saved = await api.patch(`/inbox/${encodeURIComponent(item.raw.id)}/project`, { version: draft.version, projectId: draft.projectId });
+      if (owner !== api.draftOwner()) return;
       updated.set(saved.id, saved);
       // Do not discard another drawer's draft when a late response arrives.
       if (drafts.get(item.id) === draft) drafts.delete(item.id);
@@ -257,9 +266,20 @@ export function createMailboxPage({ api, store, router, direction }) {
   }
   function open(id) {
     selected = id; detailKey = undefined;
-    if (!drawer) drawer = openDrawer({ title: `${name}消息详情`, body: [], footer: [], wide: true, onClose: () => { drawer = undefined; selected = undefined; detailKey = undefined; } });
+    if (!drawer) drawer = openDrawer({ title: `${name}消息详情`, body: [], footer: [], wide: true, onClose: () => { translation?.clear(); drawer = undefined; selected = undefined; detailKey = undefined; detailTranslation = undefined; } });
     detail();
   }
+  let detailOwner = api.draftOwner();
+  store.subscribe(view => {
+    const owner = api.draftOwner();
+    if (detailOwner !== owner || view.unauthorized || !view.snapshot || view.snapshotOwner !== owner) {
+      detailOwner = owner;
+      drawer?.close();
+      translation?.clear();
+      mailbox = []; deliveries = []; updated.clear(); drafts.clear(); mailboxOwner = undefined;
+      revision++; lastSnapshot = undefined;
+    }
+  });
   const expandedGroups = new Map();
   function chatKey(item) {
     const origin = item.raw.origin;
@@ -369,10 +389,10 @@ export function createMailboxPage({ api, store, router, direction }) {
     detail();
   }
   async function load() {
-    const stamp = ++revision; loading = true; paint();
+    const stamp = ++revision, owner = api.draftOwner(); loading = true; paint();
     const results = await Promise.allSettled([api.get(`/mailboxes?direction=${direction}`), ...(!incoming ? [api.get('/outbox')] : [])]);
-    if (stamp !== revision) return;
-    if (results[0].status === 'fulfilled') mailbox = results[0].value;
+    if (stamp !== revision || owner !== api.draftOwner()) return;
+    if (results[0].status === 'fulfilled') { mailbox = results[0].value; mailboxOwner = owner; }
     if (results[1]?.status === 'fulfilled') deliveries = results[1].value;
     loadError = results.some(item => item.status === 'rejected') ? '部分消息记录读取失败，已保留当前可见内容。请重试读取。' : '';
     loaded = true; loading = false; paint();

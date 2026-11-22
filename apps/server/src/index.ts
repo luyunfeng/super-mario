@@ -43,6 +43,7 @@ function json(res: ServerResponse, status: number, value: unknown) {
 const conversationReaders = new Map<string, { id: string; disabled: string; service: string; limit?: number; timeoutMs?: number }>([
   ['/api/v1/conversation-export', { id: 'conversation-export', disabled: '对话导出插件已停用', service: 'conversation-export.markdown' }],
   ['/api/v1/message-favorites', { id: 'message-favorites', disabled: '消息收藏插件已停用', service: 'message-favorites.manage', limit: 8 * 1024 * 1024 + 1024 }],
+  ['/api/v1/inbox-translation', { id: 'reply-translation', disabled: '回复翻译插件已停用', service: 'reply-translation.inbox', timeoutMs: 120000 }],
   ['/api/v1/reply-translation', { id: 'reply-translation', disabled: '回复翻译插件已停用', service: 'reply-translation.translate', timeoutMs: 120000 }],
 ]);
 
