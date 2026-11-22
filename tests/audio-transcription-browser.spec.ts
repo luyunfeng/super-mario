@@ -34,7 +34,7 @@ test('录音经认证服务转写后追加到当前草稿，失败和切换项�
   const project = await server.app.createProject({ name: '转写项目' });
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
   t.after(() => browser.close());
-  const page = await browser.newPage();
+  const page = await browser.newPage({ timezoneId: 'Asia/Kathmandu' });
   await page.addInitScript(() => {
     localStorage.setItem('sm.splash.seen', 'true');
     Object.assign(window, { SpeechRecognition: undefined, webkitSpeechRecognition: undefined });
@@ -52,6 +52,8 @@ test('录音经认证服务转写后追加到当前草稿，失败和切换项�
     window.MediaRecorder = class extends NativeRecorder {
       constructor(stream: MediaStream, options?: MediaRecorderOptions) {
         super(stream, options);
+        const now = new Date();
+        document.body.dataset.captureTime = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
         this.addEventListener('dataavailable', e => { if (e.data.size) document.body.dataset.audioReady = 'yes'; });
       }
     };
@@ -68,7 +70,7 @@ test('录音经认证服务转写后追加到当前草稿，失败和切换项�
   await expect(page.getByText(/转写失败：.*SUPER_MARIO_TRANSCRIPTION_URL/)).toBeVisible();
   await expect(input).toHaveValue('原文');
   process.env.SUPER_MARIO_TRANSCRIPTION_URL = 'http://127.0.0.1:' + address.port + '/transcriptions';
-  await upload();
+  await page.getByRole('button', { name: '重试转写' }).click();
   await expect(input).toHaveValue('原文合成转写');
   const organize = page.getByRole('button', { name: '整理会议转写' });
   const review = page.getByRole('dialog', { name: '核对会议转写' });
@@ -108,9 +110,22 @@ test('录音经认证服务转写后追加到当前草稿，失败和切换项�
   const record = page.getByRole('button', { name: '录音后转写' });
   await record.click();
   await expect(page.locator('body')).toHaveAttribute('data-audio-ready', 'yes');
+  const paused = page.getByRole('button', { name: '继续录音' });
+  const pause = page.getByRole('button', { name: '暂停录音' });
+  const micEnabled = () => page.evaluate(() => (window as unknown as { capturedTrack: MediaStreamTrack }).capturedTrack.enabled);
+  await pause.click();
+  expect(await micEnabled()).toBe(false);
+  await paused.click();
+  expect(await micEnabled()).toBe(true);
+  await pause.click();
+  expect(calls).toHaveLength(3);
   await page.getByRole('button', { name: '结束并转写' }).click();
   await expect(work).toHaveValue('合成转写合成转写');
   expect(calls.at(-1)?.file).toBe('audio.webm');
+  await organize.click();
+  await expect(review.getByLabel('会议开始时间（可选）')).toHaveValue((await page.locator('body').getAttribute('data-capture-time'))!);
+  await expect(review.getByLabel('会议时区（UTC 偏移）')).toHaveValue('+05:45');
+  await review.getByRole('button', { name: '关闭' }).click();
   const trackState = () => page.evaluate(() => (window as unknown as { capturedTrack: MediaStreamTrack }).capturedTrack.readyState);
   expect(await trackState()).toBe('ended');
   await record.click();

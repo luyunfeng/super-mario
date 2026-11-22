@@ -12,24 +12,33 @@ export function createVoiceInput(input, beforeListen, api) {
   const choose = h('button', { type: 'button', class: 'btn btn--sm', onclick: () => { pickerBinding = binding; file.click(); } }, '录音转文字');
   const meeting = Button({ label: '整理会议转写', size: 'sm', onClick: reviewMeeting });
   meeting.hidden = true;
-  const upload = h('span', null, file, choose, meeting);
+  const record = Recognition && Button({ label: '录音后转写', size: 'sm', onClick: recordForTranscription });
+  const pause = Button({ label: '暂停录音', size: 'sm', onClick: () => session?.togglePause?.() });
+  const retry = Button({ label: '重试转写', size: 'sm', onClick: () => {
+    if (failedAudio && binding) void transcribe(failedAudio.audio, failedAudio.format, failedAudio.title, failedAudio.startedAt);
+  } });
+  pause.hidden = retry.hidden = true;
+  const upload = h('span', null, file, choose, record, pause, retry, meeting);
   let transcript, destination, review;
   function reviewMeeting() {
     if (!transcript || !destination) return;
     const captured = binding;
     const title = Input({ value: transcript.title, maxLength: 500 });
-    const started = Input({ type: 'datetime-local' });
-    const offset = Input({ placeholder: '+08:00', disabled: true });
+    const recorded = transcript.startedAt;
+    const localStart = recorded && new Date(recorded.getTime() - recorded.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    const started = Input({ type: 'datetime-local', value: localStart || '' });
+    const offset = Input({ placeholder: '+08:00', disabled: !recorded });
     let customOffset = false;
     offset.addEventListener('input', () => { customOffset = Boolean(offset.value); });
     started.addEventListener('input', () => {
       offset.disabled = !started.value;
       if (!started.value) { offset.value = ''; customOffset = false; return; }
       if (customOffset) return;
-      const minutes = -new Date(started.value).getTimezoneOffset();
+      const minutes = -(started.value === localStart ? recorded : new Date(started.value)).getTimezoneOffset();
       if (Number.isFinite(minutes)) offset.value = (minutes < 0 ? '-' : '+') +
         String(Math.floor(Math.abs(minutes) / 60)).padStart(2, '0') + ':' + String(Math.abs(minutes) % 60).padStart(2, '0');
     });
+    if (recorded) started.dispatchEvent(new Event('input'));
     const body = TextArea({ value: transcript.text, rows: 12, maxLength: 200000 });
     const status = h('p', { role: 'status' });
     const save = Button({ label: '提交会议整理', onClick: async () => {
@@ -52,12 +61,12 @@ export function createVoiceInput(input, beforeListen, api) {
       finally { save.disabled = false; }
     } });
     const dialog = openDrawer({ title: '核对会议转写', subtitle: '保存到' + destination.label,
-      body: [Field({ label: '会议标题', control: title }), Field({ label: '会议开始时间（可选）', control: started }),
+      body: [Field({ label: '会议标题', control: title }), Field({ label: '会议开始时间（可选）', control: started, hint: recorded ? '已填入开始录音的时间，可按实际开会时间修改。' : undefined }),
         Field({ label: '会议时区（UTC 偏移）', control: offset, hint: '默认使用本机在所选日期的偏移，可按会议所在地修改。' }), Field({ label: '转写正文', control: body }), status],
       footer: save, onClose: () => { if (review === dialog) review = null; } });
     review = dialog;
   }
-  let session, binding, pending, pickerBinding;
+  let session, binding, pending, pickerBinding, failedAudio;
   function show(text) {
     caption.textContent = text;
     caption.hidden = !text;
@@ -65,6 +74,9 @@ export function createVoiceInput(input, beforeListen, api) {
   function reset() {
     review?.close(); review = null; transcript = null; meeting.hidden = true;
     pickerBinding = undefined;
+    failedAudio = undefined;
+    pause.hidden = retry.hidden = true;
+    if (record) record.hidden = false;
     pending?.abort();
     pending = undefined;
     choose.disabled = false;
@@ -82,10 +94,11 @@ export function createVoiceInput(input, beforeListen, api) {
     reset();
     await transcribe(audio, audio.name.split('.').at(-1).toLowerCase(), audio.name.replace(/\.[^.]+$/, ''));
   });
-  async function transcribe(audio, format, title = '会议转写') {
+  async function transcribe(audio, format, title = '会议转写', startedAt) {
     if (!extensions.includes(format) || !audio.size || audio.size > 8 * 1024 * 1024) {
       show('请选择不超过 8 MiB 的受支持录音。'); return;
     }
+    failedAudio = undefined; retry.hidden = true;
     const job = pending = new AbortController();
     choose.disabled = true;
     show('正在转写录音…');
@@ -99,7 +112,7 @@ export function createVoiceInput(input, beforeListen, api) {
       job.signal.throwIfAborted();
       const { text } = await api('/audio-transcription', { method: 'POST', body: { format, audio: data }, signal: job.signal });
       if (pending !== job) return;
-      transcript = { title, text };
+      transcript = { title, text, startedAt };
       meeting.hidden = !destination;
       if (input.maxLength >= 0 && input.value.length + text.length > input.maxLength) {
         show(destination ? '转写超过消息长度限制，可核对后提交会议整理。' : '转写文字超出消息长度限制。'); return;
@@ -108,7 +121,10 @@ export function createVoiceInput(input, beforeListen, api) {
       input.dispatchEvent(new Event('input', { bubbles: true }));
       show('转写已加入草稿，可编辑后发送。');
     } catch (error) {
-      if (pending === job) show('转写失败：' + error.message);
+      if (pending === job) {
+        failedAudio = { audio, format, title, startedAt }; retry.hidden = false;
+        show('转写失败：' + error.message);
+      }
     } finally {
       if (pending === job) { pending = undefined; choose.disabled = false; }
     }
@@ -119,11 +135,20 @@ export function createVoiceInput(input, beforeListen, api) {
       show('当前浏览器不支持麦克风录音，可选择已有录音文件。'); return;
     }
     reset();
-    let stream, recorder, confirmed = false;
+    let stream, recorder, startedAt, confirmed = false;
     const current = session = {
       abort() {
         if (recorder && recorder.state !== 'inactive') recorder.stop();
         stream?.getTracks().forEach(track => track.stop());
+      },
+      togglePause() {
+        if (confirmed || !recorder || recorder.state === 'inactive') return;
+        const pausing = recorder.state === 'recording';
+        if (pausing) recorder.pause();
+        else recorder.resume();
+        for (const track of stream.getAudioTracks()) track.enabled = !pausing;
+        pause.textContent = pausing ? '继续录音' : '暂停录音';
+        show(pausing ? '录音已暂停，可继续录音或结束并转写。' : '正在录音，结束后会发送到服务端转写。');
       },
       stop() {
         if (!recorder) { reset(); return; }
@@ -132,6 +157,7 @@ export function createVoiceInput(input, beforeListen, api) {
       },
     };
     beforeListen();
+    if (record) record.hidden = true;
     button.textContent = '取消录音';
     show('正在请求麦克风权限…');
     try {
@@ -152,10 +178,12 @@ export function createVoiceInput(input, beforeListen, api) {
       recorder.onstop = () => {
         if (session !== current) return;
         reset();
-        if (confirmed) void transcribe(new Blob(chunks, { type: mime }), mime.slice(6));
+        if (confirmed) void transcribe(new Blob(chunks, { type: mime }), mime.slice(6), '会议转写', startedAt);
         else show('录音中断，请检查麦克风。');
       };
       recorder.start(500);
+      startedAt = new Date();
+      pause.textContent = '暂停录音'; pause.hidden = false;
       button.textContent = '结束并转写';
       show('正在录音，结束后会发送到服务端转写。');
     } catch (error) {
@@ -172,6 +200,8 @@ export function createVoiceInput(input, beforeListen, api) {
     }
     if (!Recognition) { void recordForTranscription(); return; }
     try {
+      reset();
+      record.hidden = true;
       const current = session = new Recognition();
       current.lang = document.documentElement.lang || 'zh-CN';
       current.interimResults = true;
@@ -202,7 +232,6 @@ export function createVoiceInput(input, beforeListen, api) {
         if (session !== current) return;
         session = undefined; reset(); input.focus();
       };
-      if (pending) { pending.abort(); pending = undefined; choose.disabled = false; }
       beforeListen();
       current.start();
       button.textContent = '结束听写'; show('正在听写…');
