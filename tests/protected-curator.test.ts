@@ -237,6 +237,24 @@ test('受保护来源不能覆盖整理期间的人工编辑或其他归属的�
   assert.match(f.job(scoped.id).error!, /归属以外/); assert.equal((await f.knowledge.list())[0].content, '人工最新修订');
 });
 
+test('整理器拒绝用节选覆盖完整知识页，允许另建页保留会议来源', async t => {
+  const f = await fixture(t, async () => source());
+  const content = '文'.repeat(8000) + '上一轮决定与来源';
+  const original = await f.knowledge.put({ layer: 'personal', title: '长记录', content });
+  await f.response({ pages: [{ id: original.id, title: original.title, content: '只保留摘要' }] });
+  const provenance = { requestOrigin: 'meeting' as const, sourceKey: 'fixture-meeting', sourceMessageId: 'fixture-inbox' };
+  const job = f.curator.addSource({ url }, provenance);
+  await until(() => f.job(job.id).status === 'failed');
+  assert.match(f.job(job.id).error!, /未提供完整知识页/);
+  assert.equal((await f.knowledge.list())[0].content, content);
+  await f.response({ pages: [{ title: '新增议题', content: '尚待确认' }] });
+  const retry = f.curator.retry(job.id);
+  await until(() => f.job(retry.id).status === 'completed');
+  const pages = await f.knowledge.list();
+  assert.equal(pages.find(p => p.id === original.id)?.content, content);
+  assert.match(pages.find(p => p.title === '新增议题')!.content, /来源收件记录：fixture-inbox/);
+});
+
 test('worker 结果 unknown 不自动重跑受保护来源', async t => {
   let reads = 0;
   const f = await fixture(t, async () => { reads++; return source(); });

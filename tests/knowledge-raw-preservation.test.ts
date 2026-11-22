@@ -124,6 +124,9 @@ test('重复采集会议文档在重启后仍只整理一份，个人知识保�
   const [page] = await f.knowledge.list({ layer: 'personal' });
   assert.ok(page?.content.includes(url));
   assert.ok(page.content.includes('来源收件记录：inbox-1'));
+  assert.match(f.submissions[0]!, /保留支撑决定的原文时间戳/);
+  assert.match(f.submissions[0]!, /只有意见分歧时保留分歧/);
+  assert.match(f.submissions[0]!, /会议决定：以合成数据验收/);
   assert.match(await readFile(f.raw(job.id), 'utf8'), /以合成数据验收/);
   await f.restart();
   assert.equal(f.curator.addSource(input, provenance).status, 'completed');
