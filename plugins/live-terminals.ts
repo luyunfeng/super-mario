@@ -11,7 +11,75 @@ import type { Json } from '../packages/protocol/src/index.ts';
 interface Target { paneId: string; terminalId: string; cwd: string }
 interface LivePane extends Target { title: string; agent: string; state: string; nativeSessionId?: string }
 interface Frame { seq: number; full: boolean; width: number; height: number; data: string }
-interface Lease { target: Target; mode: 'observe' | 'control'; child: ChildProcessWithoutNullStreams; frames: Frame[]; bytes: number; lastSeq: number; touched: number; ready: boolean; error?: string }
+interface Lease { target: Target; mode: 'observe' | 'control' | 'full'; child: ChildProcessWithoutNullStreams; frames: Frame[]; bytes: number; lastSeq: number; touched: number; ready: boolean; error?: string; width?: number; height?: number }
+// Lightweight Linux PTY bridge for `herdr session attach <session>` so the web
+// browser can connect as a genuine full Herdr TUI client alongside local clients.
+const PTY_BRIDGE_PY = `
+import base64, fcntl, json, os, pty, select, signal, struct, subprocess, sys, termios
+cols, rows = int(sys.argv[1]), int(sys.argv[2])
+cmd = sys.argv[3:]
+master, slave = pty.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+env = os.environ.copy()
+env['TERM'] = 'xterm-256color'
+env['COLORTERM'] = 'truecolor'
+proc = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave, close_fds=True, env=env, preexec_fn=os.setsid)
+os.close(slave)
+stdin_fd = sys.stdin.fileno()
+buf = b''
+def emit(raw):
+  sys.stdout.write(json.dumps({'type':'frame','bytes':base64.b64encode(raw).decode('ascii')}) + '\\n')
+  sys.stdout.flush()
+try:
+  while True:
+    r, _, _ = select.select([master, stdin_fd], [], [], 0.2)
+    if master in r:
+      try:
+        chunk = os.read(master, 32768)
+      except OSError:
+        break
+      if not chunk:
+        break
+      emit(chunk)
+    if stdin_fd in r:
+      data = os.read(stdin_fd, 65536)
+      if not data:
+        break
+      buf += data
+      while b'\\n' in buf:
+        line, buf = buf.split(b'\\n', 1)
+        if not line.strip():
+          continue
+        try:
+          msg = json.loads(line.decode('utf-8'))
+          t = msg.get('type')
+          if t == 'terminal.input':
+            os.write(master, base64.b64decode(msg.get('bytes', '')))
+          elif t == 'terminal.resize':
+            c, rr = int(msg.get('cols', cols)), int(msg.get('rows', rows))
+            fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rr, c, 0, 0))
+            try:
+              os.killpg(os.getpgid(proc.pid), signal.SIGWINCH)
+            except Exception:
+              pass
+          elif t == 'terminal.release':
+            raise SystemExit(0)
+        except SystemExit:
+          raise
+        except Exception:
+          pass
+    if proc.poll() is not None:
+      break
+finally:
+  try:
+    os.killpg(os.getpgid(proc.pid), signal.SIGHUP)
+  except Exception:
+    pass
+  try:
+    os.close(master)
+  except Exception:
+    pass
+`.trim();
 // Leave room for the RPC envelope under MachineHub's 1 MiB message limit.
 const FRAME_RESPONSE_BYTES = 768 * 1024;
 const row = (value: unknown): Record<string, any> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
@@ -110,7 +178,7 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
     const lease = leases.get(id); if (!lease) return;
     leases.delete(id);
     if (lease.child.exitCode !== null || lease.child.signalCode !== null) return;
-    if (lease.mode === 'control') lease.child.stdin.end(JSON.stringify({ type: 'terminal.release' }) + '\n');
+    if (lease.mode === 'control' || lease.mode === 'full') lease.child.stdin.end(JSON.stringify({ type: 'terminal.release' }) + '\n');
     else lease.child.kill('SIGTERM');
     await new Promise<void>(resolve => {
       const timeout = setTimeout(() => { lease.child.kill('SIGKILL'); resolve(); }, 1000); timeout.unref();
@@ -165,10 +233,67 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
         return { connectionId: id, mode };
       } catch (error) { await release(id); throw error; }
     },
+    'terminal.live.full.open': async params => {
+      allowed();
+      const input = row(params);
+      const cols = Number.isInteger(input.cols) && input.cols >= 20 && input.cols <= 400 ? input.cols : 120;
+      const rows = Number.isInteger(input.rows) && input.rows >= 8 && input.rows <= 160 ? input.rows : 36;
+      let sessionName = typeof input.session === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(input.session) ? input.session : '';
+      if (!sessionName) {
+        try {
+          const out = await run(['session', 'list']);
+          const line = out.split('\n').slice(1).find(l => /\brunning\b/.test(l)) || out.split('\n').slice(1).find(l => l.trim());
+          sessionName = line ? line.trim().split(/\s+/)[0] || 'default' : 'default';
+        } catch { sessionName = 'default'; }
+      }
+      const child = spawn('python3', ['-u', '-c', PTY_BRIDGE_PY, String(cols), String(rows), command, 'session', 'attach', sessionName], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+      const id = randomUUID();
+      const lease: Lease = {
+        target: { paneId: 'full', terminalId: `full:${sessionName}`, cwd: '/' },
+        mode: 'full', child, frames: [], bytes: 0, lastSeq: -1, touched: Date.now(), ready: false, width: cols, height: rows,
+      };
+      leases.set(id, lease);
+      child.stdin.on('error', () => { lease.error = '完整界面连接已断开'; void release(id); });
+      child.stderr.resume();
+      const lines = createInterface({ input: child.stdout });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const fail = () => { lease.error = 'Herdr 完整界面连接已中断'; if (!lease.ready) reject(new Error(lease.error)); };
+          const timeout = setTimeout(() => { fail(); }, 10_000); timeout.unref();
+          child.once('error', fail);
+          child.once('close', () => { clearTimeout(timeout); lines.close(); fail(); });
+          lines.on('line', line => {
+            if (!leases.has(id) || lease.error) return;
+            try {
+              const value = row(JSON.parse(line));
+              if (value.type !== 'frame' || typeof value.bytes !== 'string') return;
+              const seq = lease.lastSeq + 1;
+              const frame: Frame = { seq, full: seq === 0, width: lease.width ?? cols, height: lease.height ?? rows, data: value.bytes };
+              lease.frames.push(frame); lease.bytes += frame.data.length; lease.lastSeq = seq;
+              while (lease.frames.length > 512 || lease.bytes > 3 * 1024 * 1024) lease.bytes -= lease.frames.shift()!.data.length;
+              if (!lease.ready) { lease.ready = true; clearTimeout(timeout); resolve(); }
+            } catch { /* ignore non-json */ }
+          });
+        });
+        return { connectionId: id, mode: 'full', session: sessionName, cols, rows };
+      } catch (error) { await release(id); throw error; }
+    },
+    'terminal.live.resize': async params => {
+      const { lease } = leaseOf(params);
+      if (lease.mode !== 'full') return json({ resized: false });
+      const input = row(params);
+      const cols = Number.isInteger(input.cols) && input.cols >= 20 && input.cols <= 400 ? input.cols : 120;
+      const rows = Number.isInteger(input.rows) && input.rows >= 8 && input.rows <= 160 ? input.rows : 36;
+      lease.width = cols; lease.height = rows;
+      lease.child.stdin.write(JSON.stringify({ type: 'terminal.resize', cols, rows }) + '\n');
+      return json({ resized: true, cols, rows });
+    },
     'terminal.live.frames': async params => {
       const { id, lease } = leaseOf(params), after = row(params).after;
       if (!Number.isSafeInteger(after) || after < -1) throw new Error('终端序号无效');
-      try { await check(lease.target); } catch (error) { await release(id); throw error; }
+      if (lease.mode !== 'full') {
+        try { await check(lease.target); } catch (error) { await release(id); throw error; }
+      }
       if (leases.get(id) !== lease || lease.error) throw new Error('终端观察已断开，请重新打开');
       const frames: Frame[] = [];
       let size = 0;
@@ -178,15 +303,17 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
         if (size + bytes > FRAME_RESPONSE_BYTES) break;
         frames.push(frame); size += bytes;
       }
-      if (frames.length && !(after === -1 ? frames[0]!.full : frames[0]!.full || frames[0]!.seq === after + 1)) throw new Error('终端画面已过期，请重新打开以获取完整画面');
+      if (lease.mode !== 'full' && frames.length && !(after === -1 ? frames[0]!.full : frames[0]!.full || frames[0]!.seq === after + 1)) throw new Error('终端画面已过期，请重新打开以获取完整画面');
       return json({ frames, mode: lease.mode });
     },
     'terminal.live.input': async params => {
       const { id, lease } = leaseOf(params);
-      if (lease.mode !== 'control' || !lease.ready) throw new Error('请先明确接管终端输入');
+      if ((lease.mode !== 'control' && lease.mode !== 'full') || !lease.ready) throw new Error('请先明确接管终端输入');
       const bytes = row(params).data;
       if (typeof bytes !== 'string' || !bytes || bytes.length > 65536 || Buffer.from(bytes, 'base64').toString('base64') !== bytes) throw new Error('终端输入格式无效');
-      try { await check(lease.target); } catch (error) { await release(id); throw error; }
+      if (lease.mode !== 'full') {
+        try { await check(lease.target); } catch (error) { await release(id); throw error; }
+      }
       if (leases.get(id) !== lease || lease.error) throw new Error('终端输入连接已断开，未自动重试');
       // One write to the already-bound controller stream; never retry uncertain input.
       try {

@@ -371,6 +371,16 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           const sessionId = url.searchParams.get('sessionId');
           return json(res, 200, await machines.call(decodeURIComponent(recovery[1]!), 'executor.recovery', sessionId ? { sessionId } : {}));
         }
+        const machineCode = path.match(/^\/api\/v1\/machines\/([^/]+)\/code$/);
+        if (machineCode && method === 'GET') {
+          const m = machines.list().find(item => item.id === decodeURIComponent(machineCode[1]!));
+          if (!m?.online) throw new InputError('电脑已离线', 503);
+          if (!m.capabilities.includes('workspace.code')) throw new InputError('请升级电脑代理以浏览代码', 409);
+          const cwd = requiredText(url.searchParams.get('cwd'), '目录');
+          const kind = url.searchParams.get('kind') ?? 'tree';
+          if (!['tree', 'file', 'diff'].includes(kind)) throw new InputError('浏览类型无效');
+          return json(res, 200, await machines.call(m.id, 'workspace.code', { cwd, kind, path: url.searchParams.get('path') ?? '' }));
+        }
         const machine = path.match(/^\/api\/v1\/machines\/([^/]+)\/(sessions|call)$/);
         if (machine && method === 'GET' && machine[2] === 'sessions') return json(res, 200, await machines.call(decodeURIComponent(machine[1]), 'executor.sessions', {}));
         if (machine && method === 'POST' && machine[2] === 'call') {
