@@ -110,22 +110,24 @@ export function createTodosTab({ api, store, router }) {
     const sameOwner = () => !store.view.unauthorized && store.view.snapshotOwner === owner && api.draftOwner() === owner;
     let originalTitle = todo.title;
     let originalNotes = todo.notes ?? '';
+    let pendingEdits;
     const conflict = h('div', { role: 'alert', hidden: true });
     const name = Input({ value: todo.title, required: true });
     const notes = TextArea({ value: todo.notes ?? '', rows: 4 });
+    for (const field of [name, notes]) field.addEventListener('input', () => pendingEdits?.add(field));
     // A textarea presents CRLF as LF. Keep the exact stored text for the API comparison.
     const notesChanged = () => notes.value !== originalNotes.replace(/\r\n?/g, '\n');
     const editPriority = Select({ options: Object.entries(todoPriorityLabels), value: todo.priority ?? 'normal' });
-    const originalDue = localDate(todo.dueAt);
-    const originalReminder = localDate(todo.reminderAt, true);
+    let originalDue = localDate(todo.dueAt);
+    let originalReminder = localDate(todo.reminderAt, true);
     const dueInput = Input({ type: 'date', value: originalDue });
-    const originalClock = localDate(todo.dueAt, true).slice(11);
+    let originalClock = localDate(todo.dueAt, true).slice(11);
     const clock = calendar ? Input({ type: 'time', value: originalClock }) : null;
     const reminder = Input({ type: 'datetime-local', value: originalReminder });
     const responsible = Input({ value: todo.responsiblePerson ?? '' });
     const sessionOptions = (store.view.snapshot?.runs ?? []).filter(run => run.projectId === todo.projectId && run.machineId && run.sessionId)
       .map(run => [run.id, run.machineId + ' / ' + run.sessionId + ' · ' + run.id]);
-    const assigned = todo.responsibleSession;
+    let assigned = todo.responsibleSession;
     if (assigned && !sessionOptions.some(([id]) => id === assigned.runId))
       sessionOptions.push([assigned.runId, assigned.machineId + ' / ' + assigned.sessionId]);
     const session = Select({ options: [['', '未选择会话'], ...sessionOptions], value: assigned?.runId ?? '',
@@ -153,13 +155,14 @@ export function createTodosTab({ api, store, router }) {
       parent.value = selectedProject === todo.projectId ? todo.parentTodoId ?? '' : '';
       fillDependencies();
     });
+    const metadata = h('div', { class: 'stack' },
+      h('div', { class: 'form-row' }, Field({ label: '截止日期', control: dueInput, hint: '留空取消截止日期。' }), clock && Field({ label: '截止时间', control: clock }), Field({ label: '在等谁', control: waiting, hint: '填写后会进入“等待中”。' })),
+      Field({ label: '提醒时间', control: reminder, hint: '按本机时区填写；留空取消。到点检查需在 Agent 中开启提醒，外发仍需渠道与发送授权。' }),
+      Field({ label: '优先级', control: editPriority }), Field({ label: '负责人', control: responsible }), Field({ label: '负责会话', control: session }), Field({ label: '所属项目', control: project }), Field({ label: '上级待办', control: parent }),
+      Field({ label: '前置子项', control: dependencies, hint: '可选择多个同级子项。' }));
     const drawer = openDrawer({
       title: '编辑待办', onClose: () => unsubscribe(),
-      body: [conflict, Field({ label: '标题', control: name, required: true }), Field({ label: '备注', control: notes }),
-        h('div', { class: 'form-row' }, Field({ label: '截止日期', control: dueInput, hint: '留空取消截止日期。' }), clock && Field({ label: '截止时间', control: clock }), Field({ label: '在等谁', control: waiting, hint: '填写后会进入“等待中”。' })),
-        Field({ label: '提醒时间', control: reminder, hint: '按本机时区填写；留空取消。到点检查需在 Agent 中开启提醒，外发仍需渠道与发送授权。' }),
-        Field({ label: '优先级', control: editPriority }), Field({ label: '负责人', control: responsible }), Field({ label: '负责会话', control: session }), Field({ label: '所属项目', control: project }), Field({ label: '上级待办', control: parent }),
-        Field({ label: '前置子项', control: dependencies, hint: '可选择多个同级子项。' })],
+      body: [conflict, Field({ label: '标题', control: name, required: true }), Field({ label: '备注', control: notes }), metadata],
       footer: [Button({ label: '取消', onClick: () => drawer.close() }), Button({
         label: '保存', kind: 'primary', onClick: async () => {
           if (!sameOwner()) { drawer.close(); return; }
@@ -195,8 +198,39 @@ export function createTodosTab({ api, store, router }) {
           if (responsible.value.trim() !== (todo.responsiblePerson ?? '')) patch.responsiblePerson = responsible.value.trim();
           if (session.value !== (assigned?.runId ?? '')) patch.responsibleRunId = session.value;
           if (waiting.value.trim() !== (todo.waitingOn ?? '')) patch.waitingOn = waiting.value.trim();
+          if (!Object.keys(patch).length) { drawer.close(); return; }
+          pendingEdits = new Set();
+          metadata.inert = true;
+          // A move can retire this editor's scope as soon as the server publishes it.
+          name.readOnly = notes.readOnly = 'projectId' in patch;
           try {
-            if (Object.keys(patch).length) await api.patch(`/todos/${encodeURIComponent(todo.id)}`, patch);
+            const saved = await api.patch(`/todos/${encodeURIComponent(todo.id)}`, patch);
+            if (!drawer.el.open || !sameOwner()) return;
+            if (pendingEdits.size && inScope(saved)) {
+              // Advance only the submitted baselines. Unrelated remote fields may have changed since opening.
+              if (patch.title !== undefined) {
+                originalTitle = saved.title;
+                if (!pendingEdits.has(name)) name.value = originalTitle;
+              }
+              if (patch.notes !== undefined) {
+                originalNotes = saved.notes ?? '';
+                if (!pendingEdits.has(notes)) notes.value = originalNotes;
+              }
+              if (patch.dueAt !== undefined) {
+                originalDue = dueInput.value;
+                originalClock = clock?.value ?? '';
+              }
+              if (patch.reminderAt !== undefined) originalReminder = reminder.value;
+              todo = { ...todo };
+              for (const key of ['dueAt', 'priority', 'waitingOn', 'parentTodoId', 'responsiblePerson']) {
+                if (key in patch) todo[key] = saved[key];
+              }
+              if ('parentTodoId' in patch || 'afterTodoIds' in patch) todo.afterTodoIds = saved.afterTodoIds;
+              if ('responsibleRunId' in patch) assigned = saved.responsibleSession;
+              conflict.hidden = true;
+              store.refresh();
+              return;
+            }
           } catch (error) {
             if (error.status === 409) {
               await store.refresh();
@@ -219,6 +253,10 @@ export function createTodosTab({ api, store, router }) {
               }
             }
             throw error;
+          } finally {
+            pendingEdits = undefined;
+            metadata.inert = false;
+            name.readOnly = notes.readOnly = false;
           }
           drawer.close(); store.refresh();
         },
@@ -229,6 +267,7 @@ export function createTodosTab({ api, store, router }) {
       if (!sameOwner()) { drawer.close(); return; }
       const latest = store.view.snapshot?.todos.find(item => item.id === todo.id && inScope(item));
       if (!latest) { drawer.close(); return; }
+      if (pendingEdits) return;
       // Update untouched fields in place so a refresh preserves the other field's draft and focus.
       if (name.value === originalTitle && latest.title !== originalTitle) {
         originalTitle = latest.title;

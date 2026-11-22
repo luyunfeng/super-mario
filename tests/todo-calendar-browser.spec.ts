@@ -128,6 +128,37 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await editor.getByRole('button', { name: '保存' }).click();
   await expect.poll(() => read().title).toBe('本地三月末新标题');
   assert.equal(read().notes, '新增第一行\r\n新增第二行');
+  await entry.click();
+  const save = editor.getByRole('button', { name: '保存' });
+  let release!: () => void;
+  const holdResponse = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`**/todos/${todo.id}`, async route => {
+    const response = await route.fetch();
+    await holdResponse;
+    await route.fulfill({ response });
+  }, { times: 1 });
+  await notes.fill('第一版');
+  await editor.getByLabel('在等谁').fill('审核组');
+  await save.click();
+  try {
+    await expect.poll(() => read().notes).toBe('第一版');
+    await notes.fill('等待响应时的第二版');
+    await titleInput.fill('本地三月末补充');
+    await save.evaluate(button => (button as HTMLButtonElement).click());
+    assert.equal(read().notes, '第一版');
+  } finally { release(); }
+  await expect(save).not.toHaveAttribute('aria-busy', 'true');
+  await expect(notes).toHaveValue('等待响应时的第二版');
+  await expect(titleInput).toBeFocused();
+  await page.route(`**/todos/${todo.id}`, async route => {
+    assert.deepEqual(route.request().postDataJSON(), { expectedNotes: '第一版', notes: '等待响应时的第二版',
+      expectedTitle: '本地三月末新标题', title: '本地三月末补充' });
+    await route.continue();
+  }, { times: 1 });
+  await save.click();
+  await expect(editor).not.toBeVisible();
+  assert.equal(read().notes, '等待响应时的第二版');
+  assert.equal(read().waitingOn, '审核组');
   await root.getByRole('button', { name: '添加待办 2030-03-27 11:00' }).click();
   const panel = page.locator('#panel-todos');
   await panel.getByLabel('新待办优先级').selectOption('high');
