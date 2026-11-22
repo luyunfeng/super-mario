@@ -1117,6 +1117,7 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
     const rows = JSON.parse(raw);
     if (req.callId === 'find') {
       assert.deepEqual(rows.map((r: {id: string}) => r.id), ['recovered', 'failed']);
+      assert.equal(rows[0].webCitation, '[查看执行](#projects/' + rows[0].projectId + '/runs/recovered)');
       assert.equal(rows[0].evidence[0].field, 'output');
       assert.equal(rows[1].evidence[0].field, 'error');
       assert.doesNotMatch(raw, /其他项目私有内容/);
@@ -1129,7 +1130,8 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
     assert.equal(rows.length, 1);
     assert.equal(rows[0].status, 'completed');
     assert.equal(rows[0].output, 'E[503] 失败后已恢复');
-    return { role: 'assistant', content: answer };
+    assert.match(req.system, /飞书回复写明执行 ID 和最近更新时间/);
+    return { role: 'assistant', content: answer + (req.system.includes('本轮回复渠道是飞书') ? rows[0].updatedAt : rows[0].webCitation) };
   }, options => {
     adapter = options;
     return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
@@ -1146,14 +1148,14 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
       server.app.store.put('runs', id, run);
     }
     const question = '上次哪条汇总执行遇到了 E[503]，后来怎样？';
-    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), answer);
+    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), answer + '[查看执行](#projects/' + project.id + '/runs/recovered)');
     assert.equal(await ask('只查失败状态的 E[503] 记录。', '/projects/' + project.id + '/messages'), '登记失败的记录为 failed。');
     const bot = await api('/feishu/bots', { name: '查执行', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
     const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
     await adapter.onMessage(question, { ...source, messageId: 'question' });
-    await t.waitFor(() => assert.ok(sent.includes(answer)));
+    await t.waitFor(() => assert.ok(sent.includes(answer + new Date(2000).toISOString())));
     assert.equal(requests.filter(req => req.callId === 'detail').length, 2);
     assert.equal(server.app.store.list('runs').length, 4);
   } finally { await server.close(); }

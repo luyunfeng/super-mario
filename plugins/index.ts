@@ -66,6 +66,10 @@ function tool(name: string, description: string, execute: Tool['execute'], prope
   return { name, description, parameters: { type: 'object', properties, additionalProperties: false }, execute };
 }
 
+function runCitation(run: Run) {
+  return '[查看执行](#projects/' + encodeURIComponent(run.projectId ?? 'all') + '/runs/' + encodeURIComponent(run.id) + ')';
+}
+
 function runEvidence(run: Run, patterns: RegExp[]) {
   const fields = Object.entries({ error: run.error ?? '', output: run.output, prompt: run.prompt, branch: run.worktree?.branch ?? '', id: run.id });
   const evidence = [];
@@ -299,13 +303,14 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             (id === undefined || run.id === id) && (projectId === undefined || run.projectId === projectId) && (todoId === undefined || run.todoId === todoId));
           if (typeof query !== 'string') {
             if (worktreeRunId !== undefined) runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+            if (id !== undefined) return runs.map(run => ({ ...run, webCitation: runCitation(run) })) as unknown as Json;
             return runs as unknown as Json;
           }
           const patterns = [...new Set(query.trim().split(/\s+/u))].map(term => new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'));
           return runs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id)).flatMap(run => {
             const evidence = runEvidence(run, patterns);
             if (!evidence) return [];
-            return [{ id: run.id, projectId: run.projectId, todoId: run.todoId, status: run.status, updatedAt: run.updatedAt, evidence }];
+            return [{ id: run.id, projectId: run.projectId, todoId: run.todoId, status: run.status, updatedAt: run.updatedAt, evidence, webCitation: runCitation(run) }];
           }) as unknown as Json;
         }, { worktreeRunId: { type: 'string' }, id: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' },
           query: { type: 'string', description: '多个关键词用空格分隔，须全部出现在同一条执行记录中。' }, status: { type: 'string', enum: runStates } }));

@@ -1,11 +1,20 @@
 // 安全轻量富文本消息渲染器：纯 DOM 节点构建。
 import { h } from './dom.js';
 
+// Only known workbench destinations become links in assistant replies.
+const inlineTokens = new RegExp([
+  /\[查看执行\]\(#projects\/[A-Za-z0-9_-]{1,128}\/runs\/[A-Za-z0-9_-]{1,128}\)/.source,
+  /\[查看待办\]\(#projects\/[A-Za-z0-9_-]{1,128}\/todos\/detail\/[A-Za-z0-9_-]{1,128}\)/.source,
+  /\[查看原文\]\(#projects\/[A-Za-z0-9_-]{1,128}\/workspace\?at=(?:[A-Za-z0-9_.*+\-]|%[0-9A-Fa-f]{2})+\)/.source,
+  /\[查看原文\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&source=[A-Za-z0-9_-]{1,128}(?:&line=[1-9][0-9]{0,8})?\)/.source,
+  /\[查看修订\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&revision=(?:[a-f0-9]{40}|[a-f0-9]{64})\)/.source,
+  /`[^`\n]+`|\*\*(?:[^*]|\*(?!\*))+?\*\*/.source,
+].join('|'), 'g');
+
 function renderInline(line) {
   const parts = [];
-  const pattern = /(\[查看待办\]\(#projects\/[A-Za-z0-9_-]{1,128}\/todos\/detail\/[A-Za-z0-9_-]{1,128}\)|\[查看原文\]\(#projects\/[A-Za-z0-9_-]{1,128}\/workspace\?at=(?:[A-Za-z0-9_.*+\-]|%[0-9A-Fa-f]{2})+\)|\[查看原文\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&source=[A-Za-z0-9_-]{1,128}(?:&line=[1-9][0-9]{0,8})?\)|\[查看修订\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&revision=(?:[a-f0-9]{40}|[a-f0-9]{64})\)|`[^`\n]+`|\*\*(?:[^*]|\*(?!\*))+?\*\*)/g;
   let last = 0;
-  for (const match of line.matchAll(pattern)) {
+  for (const match of line.matchAll(inlineTokens)) {
     if (match.index > last) parts.push(line.slice(last, match.index));
     const token = match[0];
     if (token.startsWith('[')) parts.push(h('a', { href: token.slice(token.indexOf('(') + 1, -1) }, token.slice(1, token.indexOf(']'))));
@@ -59,7 +68,7 @@ export function renderFormattedText(raw) {
       h('p', { class: 'md-p' }, reference.passage));
     text = reference.body;
   }
-  const hasMarkdown = text.includes('\n') || text.includes('`') || text.includes('**') || /\[查看(?:原文|修订|待办)\]\(/.test(text) || /^\s*(?:[-*]\s|\d+\.\s)/.test(text);
+  const hasMarkdown = text.includes('\n') || text.includes('`') || text.includes('**') || /\[查看(?:原文|修订|待办|执行)\]\(/.test(text) || /^\s*(?:[-*]\s|\d+\.\s)/.test(text);
   if (!hasMarkdown) return quoted ? h('div', { class: 'md' }, quoted, text) : text;
 
   const blocks = quoted ? [quoted] : [];

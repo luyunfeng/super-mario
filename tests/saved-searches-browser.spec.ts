@@ -44,6 +44,13 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     const citation = historical.hits[0].webCitation;
     server.app.store.put('messages', 'historical-answer', { id: 'historical-answer', conversationId: 'main', role: 'assistant',
       text: '依据见' + citation + '。另见[查看原文](https://example.invalid)。', createdAt: now, status: 'done' });
+    const listRuns = server.app.contributions.list('tools').find(item => item.value.name === 'runs_list')!.value;
+    server.app.store.put('runs', 'personal-review', { id: 'personal-review', conversationId: 'main', executorId: 'fixture',
+      status: 'completed', prompt: '独立核验', output: '', createdAt: now, updatedAt: now });
+    const [personal] = await listRuns.execute({ id: 'personal-review' }, new AbortController().signal) as {webCitation: string}[];
+    const [run] = await listRuns.execute({ id: 'synthetic-report' }, new AbortController().signal) as {webCitation: string}[];
+    server.app.store.put('messages', 'run-answer', { id: 'run-answer', conversationId: 'main', role: 'assistant',
+      text: run.webCitation + ' ' + personal.webCitation + ' [查看执行](https://example.invalid)', createdAt: now, status: 'done' });
     browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors: string[] = [];
@@ -58,6 +65,14 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     const manage = results.getByRole('button', { name: '管理保存的检索', exact: true });
     const saveQuery = results.getByRole('button', { name: '保存当前检索', exact: true });
     await expect(search).toHaveAccessibleName(/搜索对话/);
+    const runLink = page.getByRole('link', { name: '查看执行', exact: true });
+    await expect(runLink).toHaveCount(2);
+    await runLink.last().click();
+    await expect(page.getByRole('heading', { name: '独立核验', exact: true })).toBeVisible();
+    await page.goBack();
+    await runLink.first().click();
+    await expect(page.getByRole('heading', { name: '生成账单', exact: true })).toBeVisible();
+    await page.goBack();
     const sourceLink = page.getByRole('link', { name: '查看原文', exact: true });
     await expect(sourceLink).toHaveCount(1);
     await sourceLink.click();
