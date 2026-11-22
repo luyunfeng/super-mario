@@ -65,6 +65,7 @@ test("memory model sees one project, persists traceable knowledge and never comp
     available: () => true,
     agentStatus: () => ({ conversationId: "work", available: true }),
     post: async () => answer("work"),
+    projectDecisions: id => ({ items: [{ text: "当前版本的决定 " + id }] }),
     summarize: async (_id, text) => {
       prompt = text;
       return answer(
@@ -97,8 +98,11 @@ test("memory model sees one project, persists traceable knowledge and never comp
         createdAt: "now",
       });
     }
+    await f.knowledge.put({ id: "project-memory-a", projectId: "a", layer: "project", title: "旧记忆", content: "人工确认的决定" });
     await service.run("a", true);
     assert.match(prompt, /A context/);
+    assert.match(prompt, /人工确认的决定/);
+    assert.match(prompt, /当前版本的决定 a/);
     assert.doesNotMatch(prompt, /SECRET/);
     assert.equal(service.memory("a").status, "completed");
     assert.ok(f.pages.get("project-memory-a")?.content.includes("a"));

@@ -62,7 +62,7 @@ export function createScopedAgents(options: Options) {
     if(!entry){
       const scope:BotScope={kind:'project',projectId};
       const runtime=createAgentRuntime({...options,scope,conversationId,canUseScope:()=>{const project=options.store.get<Project>('projects',projectId);return Boolean(project&&!project.archivedAt);},
-        ...(role==='memory'?{projectInstructions:undefined,allowedTools:[],systemPrompt:'你是此项目的独立记忆 Agent。只根据提供的证据提炼项目记忆，不执行工具，不将建议当成已完成事实。'}:{systemPrompt:SCOPED_WORK_SYSTEM_PROMPT})});
+        ...(role==='memory'?{contextMode:'project-memory' as const,allowedTools:[]}:{systemPrompt:SCOPED_WORK_SYSTEM_PROMPT})});
       entry={botId:`workspace:${projectId}:${role}`,scope,conversationId,runtime};agents.set(conversationId,entry);
     }
     return entry.runtime;

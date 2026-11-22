@@ -5,7 +5,7 @@ import { setImmediate } from 'node:timers/promises';
 import { acceptMessage } from '../message-receipts.ts';
 import { runWithAgentInput } from '../agent-input.ts';
 import { buildWorkContext, formatWorkContextMarkdown } from '../work-context.ts';
-import { MAIN_AGENT_SYSTEM_PROMPT } from '../prompts.ts';
+import { MAIN_AGENT_SYSTEM_PROMPT, PROJECT_MEMORY_SYSTEM_PROMPT } from '../prompts.ts';
 import { estimateTokens, boundTraceText, formatTraceRequest, saveTurnTrace, summarizeTrace, type AgentTraceContextItem, type AgentTraceRuntimeMeta, type AgentTurnTrace } from '../agent-traces.ts';
 import type { BotScope } from '../../../protocol/src/bots.ts';
 import type { AppConfig, MainAssistantProfile, ExecutorInfo, JsonObject, KnowledgeEntry, Message, Json } from '../../../protocol/src/index.ts';
@@ -13,7 +13,7 @@ import type { Contributions, EventBus, Store } from '../../../plugin-sdk/src/ind
 import type { AgentSession, ExtensionFactory, ToolDefinition } from '@earendil-works/pi-coding-agent';
 
 type SDK = typeof import('@earendil-works/pi-coding-agent');
-interface Options { mainSkillCatalog?: () => Promise<string>; mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>; projectInstructions?: (projectId: string) => Promise<string>; inboxConversations?: () => import("../../../protocol/src/inbox-conversations.ts").InboxConversation[]; workspaceDir?: string; contextMode?: 'full' | 'principles'; workDecisions?: (scope?:BotScope, projectId?:string)=>unknown; config: AppConfig; store: Store; events: EventBus; contributions: Contributions; conversationId?: string; scope?: BotScope; canUseScope?: (input?: Message) => boolean; allowedTools?: string[]; systemPrompt?: string; projectContext?: (projectId:string)=>Json; executors?: () => ExecutorInfo[]; botContext?: (conversationId:string, scope?:BotScope)=>Json }
+interface Options { mainSkillCatalog?: () => Promise<string>; mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>; projectInstructions?: (projectId: string) => Promise<string>; inboxConversations?: () => import("../../../protocol/src/inbox-conversations.ts").InboxConversation[]; workspaceDir?: string; contextMode?: 'full' | 'principles' | 'project-memory'; workDecisions?: (scope?:BotScope, projectId?:string)=>unknown; config: AppConfig; store: Store; events: EventBus; contributions: Contributions; conversationId?: string; scope?: BotScope; canUseScope?: (input?: Message) => boolean; allowedTools?: string[]; systemPrompt?: string; projectContext?: (projectId:string)=>Json; executors?: () => ExecutorInfo[]; botContext?: (conversationId:string, scope?:BotScope)=>Json }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 type ReadOnlyAction = 'schedule_followup' | 'notify_user';
@@ -21,6 +21,7 @@ type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' 
 
 /** The second argument is a narrow test seam; all pi imports stay in this directory. */
 export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK> = () => import('@earendil-works/pi-coding-agent')) {
+  const basePrompt = options.contextMode === 'project-memory' ? PROJECT_MEMORY_SYSTEM_PROMPT : options.systemPrompt ?? MAIN_AGENT_SYSTEM_PROMPT;
   const { config, store, events, contributions } = options;
   const ownConversation = options.conversationId ?? 'main';
   const scope = options.scope && structuredClone(options.scope);
@@ -272,6 +273,17 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         activeToolsSchemaText = tools.map(({ value: t }) => `${t.name}: ${t.description}\n${JSON.stringify(t.parameters)}`).join('\n\n');
       };
       pi.on('before_agent_start', async event => {
+        // The memory job supplies the project's evidence in its input. Ambient workbench
+        // context would give unrelated records the same apparent authority as that evidence.
+        if (options.contextMode === 'project-memory') {
+          if (options.canUseScope?.(activeInput) === false) throw new Error('项目已归档，本轮记忆整理已终止');
+          const systemPrompt = basePrompt;
+          if (activeTrace) activeTrace.contextItems.push({
+            id: 'sys-base', category: 'system', label: '项目记忆整理指令', content: systemPrompt,
+            chars: systemPrompt.length, tokens: estimateTokens(systemPrompt),
+          });
+          return { systemPrompt };
+        }
         // Classification gets only bounded global principles. Return before reading
         // work snapshots, private knowledge, machine state, or conversation facts.
         if (options.contextMode === 'principles') {
@@ -401,7 +413,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     const resourceLoader = new sdk.DefaultResourceLoader({
       cwd, agentDir, settingsManager, noExtensions: true, noSkills: true,
       noContextFiles: true, noPromptTemplates: true, noThemes: true,
-      systemPrompt: options.systemPrompt ?? MAIN_AGENT_SYSTEM_PROMPT,
+      systemPrompt: basePrompt,
       appendSystemPrompt: [], extensionFactories: [bridge],
     });
     await resourceLoader.reload();

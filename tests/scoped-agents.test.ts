@@ -394,3 +394,25 @@ test('configuration lock blocks posts/new identities and reloads all lazy runtim
   assert.equal(manager.tryLockConfiguration(), false);
   await assert.rejects(manager.post('closed', { kind: 'global' }, 'new'), /关闭/);
 });
+
+test('memory turn sends evidence instructions without ambient project knowledge or tools', async t => {
+  const f = await fixture(t, false);
+  seed(f);
+  const sdk = fakeSDK();
+  addTool(f, 'knowledge_list', async () => []);
+  const runtime = createAgentRuntime({
+    ...f, scope: { kind: 'project', projectId: 'A' }, conversationId: 'project:A:memory',
+    contextMode: 'project-memory', allowedTools: [],
+    projectContext: () => { throw new Error('ambient context was read'); },
+  }, sdk.load);
+  try {
+    const reply = await runtime.ask('本轮项目材料', { readOnly: true });
+    assert.equal(reply.status, 'done');
+    assert.match(sdk.calls.context.systemPrompt, /只有明确的验收记录/);
+    assert.match(sdk.calls.context.systemPrompt, /缺少回执/);
+    assert.deepEqual(sdk.calls.activeTools, []);
+    assert.deepEqual(sdk.prompts, ['本轮项目材料']);
+  } finally {
+    await runtime.close();
+  }
+});
