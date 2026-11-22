@@ -54,7 +54,7 @@ kbd { padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 4px
 
 .msgs { display: grid; gap: 16px; align-content: start; }
 .msg { display: flex; gap: 10px; max-width: 100%; }
-.msg.is-search-hit .msg__bubble { outline: 2px solid var(--brand); outline-offset: 2px; }
+.item.is-search-hit, .msg.is-search-hit .msg__bubble { outline: 2px solid var(--brand); outline-offset: 2px; }
 .msg--user { flex-direction: column; align-items: flex-end; }
 .msg__bubble {
   min-width: 0; padding: 9px 14px; border-radius: var(--radius);

@@ -170,7 +170,7 @@ export function createMemoryPage({ api, store, router, scope }) {
     onShow(route) {
       decisions.show();
       loadCurator();
-      if (route.query.get('curator')) openCuratorDrawer({ api, store, onChanged: loadCurator });
+      if (route.query.get('curator')) openCuratorDrawer({ api, store, onChanged: loadCurator, jobId: route.query.get('job') });
       const entry = route.query.get('entry');
       linkedEntry = entry && { id: entry, sourceId: route.query.get('source'), selectedCommit: route.query.get('revision'), line: Number(route.query.get('line')) };
       openLinkedEntry();

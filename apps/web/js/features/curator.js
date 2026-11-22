@@ -17,13 +17,14 @@ const retries = new WeakMap();
 const wrap = { overflowWrap: 'anywhere', minWidth: '0' };
 const failure = error => `${error.status ? `HTTP ${error.status}` : '网络或响应异常'}，请求结果未确认`;
 
-export function openCuratorDrawer({ api, store, onChanged }) {
+export function openCuratorDrawer({ api, store, onChanged, jobId }) {
   const token = api.token?.();
   if (!retries.has(api)) retries.set(api, new Map());
   const identities = retries.get(api);
   if (!identities.has(token)) identities.set(token, new Map());
   const attempts = identities.get(token);
   const checked = new Set();
+  let focusedJob = false;
   let closed = false;
   let invalidated = false;
   let reader, titleEditor;
@@ -99,7 +100,7 @@ export function openCuratorDrawer({ api, store, onChanged }) {
         const next = successor(job);
         const meeting = job.requestOrigin === 'meeting';
         const canRetry = job.status === 'failed' || job.status === 'unknown';
-        return h('div', { class: 'item', dataset: { jobId: job.id }, style: wrap },
+        return h('div', { class: job.id === jobId ? 'item is-search-hit' : 'item', tabindex: job.id === jobId ? -1 : undefined, dataset: { jobId: job.id }, style: wrap },
           h('div', { class: 'item__main', style: wrap },
             h('span', { class: 'item__title' }, (meeting && job.title) || job.url || job.title || job.text || job.id),
             meeting && h('span', { class: 'item__meta' }, '会议资料 · 个人记忆'),
@@ -169,6 +170,12 @@ export function openCuratorDrawer({ api, store, onChanged }) {
         ? `${WORKER[curator.worker.state] ?? '状态未确认'}${curator.worker.reason ? `：${curator.worker.reason}` : ''}`
         : '整理状态未确认：旧 API 缺少 worker 状态，请升级服务端。' }));
       paintJobs();
+      if (jobId && !focusedJob) {
+        const row = jobsRegion.querySelector('[data-job-id="' + CSS.escape(jobId) + '"]');
+        if (row) { row.focus(); row.scrollIntoView({ block: 'center' }); }
+        else status.append(h('p', { role: 'status' }, '搜索命中的会议来源已不可用。'));
+        focusedJob = true;
+      }
     } catch (error) {
       if (isCurrent() && stamp === generation) uncertain(error.status === 404 ? '旧 API 不支持状态读取，请升级服务端' : failure(error));
     }

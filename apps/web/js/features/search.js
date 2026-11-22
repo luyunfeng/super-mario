@@ -10,30 +10,39 @@ export function conversationSearchActive(snapshot) {
 export function createSearch({ shell, store, router, api }) {
   const { searchInput: input, results } = shell;
 
-  let searchKey, generation = 0, timer, projectHits = [], projectError = '', pending = false;
-  function updateProjectSearch(query, enabled) {
-    const key = enabled && query ? JSON.stringify([api.token(), query]) : '';
-    if (searchKey === key) return;
-    searchKey = key;
-    const stamp = ++generation;
-    clearTimeout(timer);
-    projectHits = []; projectError = ''; pending = Boolean(key);
-    if (!key) return;
-    const current = () => stamp === generation && key === JSON.stringify([api.token(), query]) && conversationSearchActive(store.view.snapshot) && !store.view.unauthorized;
-    timer = setTimeout(async () => {
-      if (!current()) return;
-      try {
-        const reply = await api.post('/project-message-search', { query });
+  function remoteGroup(enabled, fetchHits, errorLabel) {
+    let key, generation = 0, timer;
+    const state = { hits: [], pending: false, error: '' };
+    function update(query, refresh = false) {
+      const next = query && enabled(store.view.snapshot) && !store.view.unauthorized ? JSON.stringify([api.token(), query]) : '';
+      if (next === key && !refresh) return;
+      key = next;
+      const stamp = ++generation;
+      clearTimeout(timer);
+      Object.assign(state, { hits: [], pending: Boolean(key), error: '' });
+      if (!key) return;
+      const current = () => stamp === generation && enabled(store.view.snapshot) && !store.view.unauthorized &&
+        next === JSON.stringify([api.token(), input.value.trim()]);
+      timer = setTimeout(async () => {
         if (!current()) return;
-        projectHits = reply.hits;
-      } catch (error) {
-        if (!current()) return;
-        projectError = '项目对话检索失败：' + error.message;
-      }
-      pending = false;
-      if (!results.hidden) paint();
-    }, 180);
+        try {
+          const hits = await fetchHits(query);
+          if (!current()) return;
+          state.hits = hits;
+        } catch (error) {
+          if (!current()) return;
+          state.error = errorLabel + error.message;
+        }
+        state.pending = false;
+        if (!results.hidden) paint();
+      }, 180);
+    }
+    return { state, update };
   }
+  const conversations = remoteGroup(conversationSearchActive,
+    async query => (await api.post('/project-message-search', { query })).hits, '项目对话检索失败：');
+  const meetings = remoteGroup(snapshot => snapshot?.plugins?.some(p => p.id === 'knowledge-local' && p.status === 'active'),
+    async query => (await api.get('/knowledge/meeting-search?' + new URLSearchParams({ query }))).meetings, '会议检索失败：');
 
   function chatHits(query, messages) {
     const hits = [];
@@ -66,7 +75,7 @@ export function createSearch({ shell, store, router, api }) {
       : (snapshot.runs ?? []).filter(item => match(item.prompt, item.output));
     return [
       ['主对话', pluginActive ? chatHits(query, snapshot.messages ?? []) : []],
-      ['项目工作对话', projectHits.flatMap(hit => {
+      ['项目工作对话', conversations.state.hits.flatMap(hit => {
         const project = snapshot.projects?.find(p => !p.archivedAt && p.id === hit.projectId);
         if (!project) return [];
         return [{ text: [project.name + ' · ' + (hit.role === 'user' ? '你' : '项目助手') + ' · ', hit.before,
@@ -74,16 +83,26 @@ export function createSearch({ shell, store, router, api }) {
       })],
       ['待办', (snapshot.todos ?? []).filter(item => match(item.title, item.notes)).map(item => ({ text: item.title, href: router.href('projects', projectKey(item), 'todos', 'detail', item.id) }))],
       ['执行', runs.map(item => ({ text: item.prompt, href: router.href('projects', projectKey(item), 'runs', item.id) }))],
+      ['会议', meetings.state.hits.flatMap(row => {
+        const project = row.projectId && snapshot.projects?.find(p => p.id === row.projectId && !p.archivedAt);
+        if (row.projectId && !project) return [];
+        const page = row.pages.find(p => snapshot.knowledge?.some(entry => entry.id === p.id && entry.projectId === row.projectId));
+        const query = page ? { entry: page.id, source: row.sourceId } : { curator: '1', job: row.sourceId };
+        return [{ text: [row.title, ' · ', project?.name || '个人记忆', ' · ', row.startedAt || '日期未注明'],
+          href: router.href('memory') + '?' + new URLSearchParams(query) }];
+      })],
       ['记忆', (snapshot.knowledge ?? []).filter(item => match(item.title, item.content)).map(item => ({ text: item.title, href: `${router.href('memory')}?entry=${encodeURIComponent(item.id)}` }))],
       ['项目', (snapshot.projects ?? []).filter(item => !item.archivedAt && match(item.name, item.description)).map(item => ({ text: item.name, href: router.href('projects', item.id, 'todos') }))],
     ].filter(([, hits]) => hits.length);
   }
 
-  function paint() {
+  function paint(refresh = false) {
     const query = input.value.trim();
     const snapshot = store.view.snapshot;
     const savedEnabled = conversationSearchActive(snapshot);
-    updateProjectSearch(query, savedEnabled && !store.view.unauthorized);
+    conversations.update(query, refresh === true);
+    meetings.update(query, refresh === true);
+    const searches = [conversations.state, meetings.state];
     results.hidden = !snapshot || store.view.unauthorized || (!query && !savedEnabled);
     if (results.hidden) { results.replaceChildren(); return; }
     // A delayed project search or snapshot refresh can insert a group above the focused link.
@@ -99,7 +118,7 @@ export function createSearch({ shell, store, router, api }) {
         onApply(value) { input.value = value; input.focus(); paint(); },
       });
     };
-    replace(results, query && !found.length && !pending && !projectError && h('p', { class: 'search__group' }, '没有找到匹配的内容'), projectError && h('p', { class: 'search__group' }, projectError), found.map(([name, hits]) => [
+    replace(results, query && !found.length && !searches.some(group => group.pending || group.error) && h('p', { class: 'search__group' }, '没有找到匹配的内容'), searches.map(group => group.error && h('p', { class: 'search__group' }, group.error)), found.map(([name, hits]) => [
       h('div', { class: 'search__group' }, name),
       hits.slice(0, 5).map(hit => h('a', { class: 'search__hit truncate', href: hit.href, onclick: event => {
         input.value = ''; results.hidden = true;
@@ -118,17 +137,20 @@ export function createSearch({ shell, store, router, api }) {
   }
 
   store.subscribe(({ snapshot, unauthorized }) => {
-    const label = conversationSearchActive(snapshot) && !unauthorized ? '搜索对话、待办、执行、记忆与项目' : '搜索待办、执行、记忆与项目';
+    const types = ['待办', '执行', '记忆'];
+    if (!unauthorized && snapshot?.plugins?.some(p => p.id === 'knowledge-local' && p.status === 'active')) types.push('会议');
+    if (!unauthorized && conversationSearchActive(snapshot)) types.unshift('对话');
+    const label = '搜索' + types.join('、') + '与项目';
     input.placeholder = label;
     input.setAttribute('aria-label', label);
     if (!snapshot || unauthorized) {
-      updateProjectSearch('', false);
+      conversations.update(''); meetings.update('');
       results.hidden = true;
       results.replaceChildren();
     } else if (document.activeElement === input || !results.hidden) paint();
   });
   input.addEventListener('input', paint);
-  input.addEventListener('focus', () => { searchKey = undefined; paint(); });
+  input.addEventListener('focus', () => paint(true));
   function navigate(event) {
     if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     if (event.key === 'Escape') {

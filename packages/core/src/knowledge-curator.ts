@@ -133,7 +133,7 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
   async function meetingRecords(batch: Job[], projectId: string | undefined, titleOf: (job: Job) => string) {
     const pages = new Map((batch.some(job => job.knowledgeIds.length) ? await options.knowledge().list({ projectId }) : []).map(p => [p.id, p]));
     return batch.map(job => ({
-      sourceId: job.id, title: titleOf(job), startedAt: job.meetingStartedAt ?? null, status: job.status,
+      sourceId: job.id, ...(job.projectId ? { projectId: job.projectId } : {}), title: titleOf(job), startedAt: job.meetingStartedAt ?? null, status: job.status,
       pages: job.knowledgeIds.flatMap(id => {
         const page = pages.get(id);
         return page && page.layer === job.layer && page.projectId === job.projectId ? [{ id, title: page.title }] : [];

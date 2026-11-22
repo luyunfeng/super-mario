@@ -490,6 +490,16 @@ test('会议日回顾按时区和项目分页，空结果区分未注日期，�
   await editor.getByRole('textbox', { name: '会议标题' }).fill('未定日期的复核');
   await editor.getByRole('button', { name: '保存标题' }).click();
   await expect(queue).toContainText('未定日期的复核');
+  await page.goto(server.url + '/#home');
+  const search = page.locator('#workspace-search');
+  const results = page.locator('#search-results');
+  await search.fill('未填写日期');
+  await results.getByRole('link', { name: /未定日期的复核/ }).click();
+  await expect(queue.locator('.is-search-hit')).toContainText('未定日期的复核');
+  await page.goto(server.url + '/#home');
+  await search.fill('季度样本评审');
+  await results.getByRole('link', { name: /季度样本评审/ }).click();
+  await expect(page.getByRole('dialog', { name: '编辑记忆' }).locator('pre')).toHaveText(base.text);
 });
 
 test('会议回顾问题带入所选对话，保留已有草稿并等待发送', async t => {
