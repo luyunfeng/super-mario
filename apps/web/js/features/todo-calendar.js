@@ -82,7 +82,8 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
     const time = localDate(todo.dueAt, true).slice(11);
     const overdue = !todo.completedAt && Date.parse(todo.dueAt) < Date.now();
     const status = todo.completedAt ? '已完成' : overdue ? '已逾期' : todo.waitingOn ? '等待中' : '待完成';
-    const label = [time, todo.title, status, todo.reminderAt && '有提醒'].filter(Boolean).join(' · ');
+    const high = todo.priority === 'high';
+    const label = [time, todo.title, status, high && '高优先级', todo.reminderAt && '有提醒'].filter(Boolean).join(' · ');
     return h('button', { class: 'cal-entry', type: 'button', title: label, 'aria-label': label,
       dataset: { status }, draggable: true, onclick: () => open(todo),
       ondragstart: event => {
@@ -90,9 +91,9 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
         event.dataTransfer.setData(dragType + '-due', todo.dueAt);
         event.dataTransfer.effectAllowed = 'move';
       } },
-      h('span', null, time), ' ', todo.title, todo.reminderAt && ' ⏰');
+      high && h('span', { 'aria-hidden': 'true' }, '⚑ '), h('span', null, time), ' ', todo.title, todo.reminderAt && ' ⏰');
   }
-  function dropTime(cell, hour, y) {
+  function slotTime(cell, hour, y) {
     if (hour === undefined) return undefined;
     if (hour === 'end') return '23:59';
     const box = cell.getBoundingClientRect();
@@ -115,7 +116,7 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
         const cell = event.currentTarget;
         if (previewCell !== cell) clearPreview();
         previewCell = cell;
-        cell.dataset.dropLabel = dropTime(cell, hour, event.clientY) ?? key;
+        cell.dataset.dropLabel = slotTime(cell, hour, event.clientY) ?? key;
       },
       ondragleave: event => {
         if (event.currentTarget === previewCell && !previewCell.contains(event.relatedTarget)) clearPreview();
@@ -127,7 +128,7 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
         const originalDueAt = event.dataTransfer.getData(dragType + '-due');
         if (!todo || !originalDueAt) return;
         event.preventDefault();
-        move(todo, key, dropTime(event.currentTarget, hour, event.clientY), originalDueAt);
+        move(todo, key, slotTime(event.currentTarget, hour, event.clientY), originalDueAt);
       } }, children);
   }
   function dayButton(day, label) {
@@ -153,7 +154,11 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
           const clock = localDate(todo.dueAt, true).slice(11);
           return clock === '23:59' ? hour === 'end' : Number(clock.slice(0, 2)) === hour;
         });
-        const slot = h('button', { type: 'button', class: 'cal-slot', 'aria-label': `添加待办 ${key} ${time}`, onclick: () => add(key, time) }, '+');
+        const slot = h('button', { type: 'button', class: 'cal-slot', 'aria-label': `添加待办 ${key} ${time}`, onclick: event => {
+          // Keyboard and assistive activation have no pointer coordinates.
+          const selected = event.detail ? slotTime(event.currentTarget.parentElement, hour, event.clientY) : time;
+          add(key, selected);
+        } }, '+');
         return cell(day, hour, slot, entries.map(entry));
       })]));
   }
