@@ -96,7 +96,10 @@ test('bound dispatch inherits folder, isolates computers, allows advanced cwd an
   assert.equal(run.machineId, binding.machineId);
   assert.equal(run.cwd, binding.cwd);
   await settled(f.app, run.id);
-  assert.deepEqual(f.calls[0], { machineId: binding.machineId, params: { executorId: 'codex', prompt: task.prompt, cwd: binding.cwd, mode: 'task' } });
+  assert.equal(f.calls[0].machineId, binding.machineId);
+  const { prompt, ...target } = f.calls[0].params;
+  assert.deepEqual(target, { executorId: 'codex', cwd: binding.cwd, mode: 'task' });
+  assert.ok(typeof prompt === 'string' && prompt.startsWith(task.prompt) && prompt.includes(task.doneWhen));
   const count = f.app.store.list('runs').length;
   assert.throws(() => f.app.dispatch({ ...input, executorId: 'computer-b/codex', cwd: '/override' }), status(409));
   assert.throws(() => f.app.dispatch({ projectId: project.id, prompt: '仍需真实任务校验' }), /验收标准/);

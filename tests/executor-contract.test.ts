@@ -165,7 +165,14 @@ for (const [executionMode, nativeState] of [['task', 'completed'], ['task', 'fai
     const pending = await waitRun(f.app, run.id, value => Boolean(value.sessionId));
     assert.equal(pending.status, 'running');
     assert.equal(pending.machineId, 'remote');
-    assert.deepEqual(launches, [{ executorId: 'codex', prompt: task.prompt, cwd: '/fake/work', mode: executionMode }]);
+    assert.equal(launches.length, 1);
+    const { prompt, ...target } = launches[0]!;
+    assert.deepEqual(target, { executorId: 'codex', cwd: '/fake/work', mode: executionMode });
+    if (executionMode === 'interactive') assert.equal(prompt, task.prompt);
+    else {
+      assert.ok(typeof prompt === 'string' && prompt.startsWith(task.prompt));
+      assert.ok(prompt.includes('本次任务的验收标准：' + JSON.stringify(task.doneWhen)));
+    }
     assert.deepEqual(f.app.store.list('messages'), []);
     await f.app.monitor.poll();
     const current = f.app.store.get<Run>('runs', run.id)!;

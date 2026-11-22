@@ -104,5 +104,7 @@ test('executor receives current task ledger decisions and drops withdrawn ones o
   app.todoDecisions.withdraw(todo.id, fact.id);
   app.dispatch(input);
   await t.waitFor(() => assert.equal(prompts.length, 2));
-  assert.equal(prompts[1], input.prompt);
+  assert.ok(prompts[1]!.startsWith(input.prompt));
+  assert.ok(prompts[1]!.includes(JSON.stringify(input.doneWhen)));
+  assert.ok(!prompts[1]!.includes(fact.text) && !prompts[1]!.includes(notes.notes));
 });

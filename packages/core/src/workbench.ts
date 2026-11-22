@@ -1297,7 +1297,10 @@ export async function createWorkbench(config: AppConfig) {
             update({ worktree: { source: workspace.cwd, branch: receipt.branch, base: receipt.base } });
           }
           const isolationGuide = worktreeRunId ? '本次在原执行工作树中开始新任务。先核对现有文件和未提交修改，保留已有工作。仅报告本次产生的结果和验证证据。' : isolated ? '本次使用独立 Git 工作树。所有项目改动在当前工作目录中完成，记录改动文件、提交和测试证据；合并和清理工作树由用户决定。' : '';
-          const finalPrompt = [effectivePrompt, decisions, guidance, isolationGuide, includeOfficeGuide ? officeWorkerGuide : ''].filter(Boolean).join('\n\n');
+          const acceptance = executionMode === 'task' && doneWhen && !nativeApproved && !executionGuard
+            ? '本次任务的验收标准：' + JSON.stringify(doneWhen) + '\n交付时逐项给出实际核验结果和证据。未能验证的条件请说明原因。'
+            : '';
+          const finalPrompt = [effectivePrompt, acceptance, decisions, guidance, isolationGuide, includeOfficeGuide ? officeWorkerGuide : ''].filter(Boolean).join('\n\n');
           const execute = async () => {
             controller.signal.throwIfAborted();
             if (worktreeRunId) {
