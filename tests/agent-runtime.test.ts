@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { TRACE_COLLECTION, type AgentTurnTrace } from '../packages/core/src/agent-traces.ts';
 import { createAgentRuntime } from '../packages/core/src/agent-runtime/index.ts';
 import type { AppConfig, AppEvent, Json, Message } from '../packages/protocol/src/index.ts';
 import type { ContributionMap, Contributions, EventBus, Store, Tool } from '../packages/plugin-sdk/src/index.ts';
@@ -86,6 +87,7 @@ function fakeSDK() {
     ModelRuntime: { async create(options: unknown) {
       calls.auth = options;
       return { getAvailable: async () => calls.unavailable ? [] : [model],
+        setRuntimeApiKey: async (_provider: string, key: string) => { calls.runtimeKey = key; },
         getModel: () => calls.missingModel ? undefined : model,
         settleCredentialWrites: async () => { calls.settled = true; } };
     } },
@@ -184,11 +186,18 @@ test('live turns are serial; stream and thrown failures are visible and do not b
 
 test('SDK resources, credentials, and resumed sessions stay inside the data directory', async t => {
   const options = await fixture(t, false);
-  options.config.model = { provider: 'test', model: 'fake' };
+  const apiKey = 'synthetic-runtime-credential';
+  options.config.model = { provider: 'test', model: 'fake', apiKey };
   const sdk = fakeSDK();
   const runtime = createAgentRuntime(options, sdk.load);
   await runtime.post('hello');
   await runtime.close();
+  assert.equal(sdk.calls.runtimeKey, apiKey);
+  const [trace] = options.store.list<AgentTurnTrace>(TRACE_COLLECTION);
+  assert.ok(trace);
+  assert.equal(trace.runtime?.tokenSource, 'config.model.apiKey');
+  assert.match(trace.contextItems.find(item => item.id === 'req-meta')!.content, /Token Source: config\.model\.apiKey/);
+  assert.equal(JSON.stringify(trace).includes(apiKey), false);
   const { loader, session, auth, settings, sessions } = sdk.calls;
   for (const flag of ['noExtensions', 'noSkills', 'noContextFiles', 'noPromptTemplates', 'noThemes']) assert.equal(loader[flag], true);
   assert.equal(loader.extensionFactories.length, 1);

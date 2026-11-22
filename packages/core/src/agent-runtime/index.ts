@@ -5,7 +5,7 @@ import { setImmediate } from 'node:timers/promises';
 import { runWithAgentInput } from '../agent-input.ts';
 import { buildWorkContext, formatWorkContextMarkdown } from '../work-context.ts';
 import { MAIN_AGENT_SYSTEM_PROMPT } from '../prompts.ts';
-import { estimateTokens, boundTraceText, saveTurnTrace, summarizeTrace, type AgentTraceContextItem, type AgentTraceRuntimeMeta, type AgentTurnTrace } from '../agent-traces.ts';
+import { estimateTokens, boundTraceText, formatTraceRequest, saveTurnTrace, summarizeTrace, type AgentTraceContextItem, type AgentTraceRuntimeMeta, type AgentTurnTrace } from '../agent-traces.ts';
 import type { BotScope } from '../../../protocol/src/bots.ts';
 import type { AppConfig, ExecutorInfo, JsonObject, KnowledgeEntry, Message, Json } from '../../../protocol/src/index.ts';
 import type { Contributions, EventBus, Store } from '../../../plugin-sdk/src/index.ts';
@@ -204,9 +204,6 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           ? (cleanBase.endsWith('/v1/messages') ? cleanBase : cleanBase.endsWith('/v1') ? `${cleanBase}/messages` : `${cleanBase}/v1/messages`)
           : (cleanBase.endsWith('/chat/completions') ? cleanBase : `${cleanBase}/chat/completions`))
         : undefined;
-    const resolvedToken = config.model?.apiKey
-      || (activeModelInfo.provider === 'openai-compatible' ? process.env.OPENAI_API_KEY : undefined)
-      || (activeModelInfo.provider === 'anthropic' ? process.env.ANTHROPIC_API_KEY : undefined);
     const tokenSource = config.model?.apiKey ? 'config.model.apiKey'
       : activeModelInfo.provider === 'openai-compatible' && process.env.OPENAI_API_KEY ? 'env:OPENAI_API_KEY'
       : activeModelInfo.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY ? 'env:ANTHROPIC_API_KEY'
@@ -218,7 +215,6 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       ...(endpoint ? { endpoint } : {}),
       apiFormat,
       account: process.env.USER || process.env.LOGNAME || 'local-user',
-      ...(resolvedToken ? { token: resolvedToken } : {}),
       tokenSource,
       ...(config.model?.cliCommand ? { cliCommand: config.model.cliCommand } : {}),
       ...(config.model?.cliConfigDir ? { cliConfigDir: config.model.cliConfigDir } : {}),
@@ -319,19 +315,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
             const { text, truncated } = boundTraceText(raw);
             items.push({ id, category, label, tokens: estimateTokens(raw), chars: raw.length, content: text, ...(truncated ? { truncated } : {}), ...extra });
           };
-          const reqSummary = [
-            `Transport: ${activeRuntimeMeta.transport}`,
-            ...(activeRuntimeMeta.endpoint ? [`Request: ${activeRuntimeMeta.method ?? 'POST'} ${activeRuntimeMeta.endpoint}`] : []),
-            ...(activeRuntimeMeta.baseUrl ? [`Base URL: ${activeRuntimeMeta.baseUrl}`] : []),
-            `Model: ${activeModelInfo.provider}/${activeModelInfo.model} (${activeRuntimeMeta.apiFormat ?? 'sdk'})`,
-            `Account: ${activeRuntimeMeta.account ?? 'local'}`,
-            `Token Source: ${activeRuntimeMeta.tokenSource ?? 'unknown'}`,
-            ...(activeRuntimeMeta.token ? [`Token: ${activeRuntimeMeta.token}`] : []),
-            ...(activeRuntimeMeta.cliCommand ? [`CLI Command: ${activeRuntimeMeta.cliCommand}`] : []),
-            ...(activeRuntimeMeta.cliConfigDir ? [`CLI Config Dir: ${activeRuntimeMeta.cliConfigDir}`] : []),
-            ...(activeRuntimeMeta.cwd ? [`Workspace CWD: ${activeRuntimeMeta.cwd}`] : []),
-          ].join('\n');
-          pushItem('req-meta', 'system', '本次调用 · 账号 / HTTP 请求 / Token', reqSummary, { tag: 'request' });
+          pushItem('req-meta', 'system', '本次调用 · 账号 / HTTP 请求 / 凭据来源', formatTraceRequest(activeRuntimeMeta, activeModelInfo), { tag: 'request' });
           pushItem('sys-base', 'system', '基础系统提示词', event.systemPrompt, { tag: 'system' });
           if (activeToolsSchemaText) {
             pushItem('tools-schema', 'tools', `已注册工具定义 (${activeToolsCount} 项)`, activeToolsSchemaText, { tag: 'tools', count: activeToolsCount });

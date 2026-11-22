@@ -22,7 +22,6 @@ export interface AgentTraceRuntimeMeta {
   endpoint?: string;
   apiFormat?: string;
   account?: string;
-  token?: string;
   tokenSource?: string;
   cliCommand?: string;
   cliConfigDir?: string;
@@ -117,9 +116,55 @@ export function summarizeTrace(items: readonly AgentTraceContextItem[]): Record<
   return summary;
 }
 
+// Request URLs can carry credentials in userinfo, query parameters, or fragments.
+function traceUrl(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    if (!['http:', 'https:'].includes(url.protocol)) return undefined;
+    return url.origin + url.pathname;
+  } catch {
+    return undefined;
+  }
+}
+
+export function formatTraceRequest(runtime: AgentTraceRuntimeMeta, model: Pick<AgentTurnTrace, 'provider' | 'model'>): string {
+  const endpoint = traceUrl(runtime.endpoint);
+  const baseUrl = traceUrl(runtime.baseUrl);
+  return [
+    `Transport: ${runtime.transport}`,
+    ...(endpoint ? [`Request: ${runtime.method ?? 'POST'} ${endpoint}`] : []),
+    ...(baseUrl ? [`Base URL: ${baseUrl}`] : []),
+    `Model: ${model.provider}/${model.model} (${runtime.apiFormat ?? 'sdk'})`,
+    `Account: ${runtime.account ?? 'local'}`,
+    `Token Source: ${runtime.tokenSource ?? 'unknown'}`,
+    ...(runtime.cliCommand ? [`CLI Command: ${runtime.cliCommand}`] : []),
+    ...(runtime.cliConfigDir ? [`CLI Config Dir: ${runtime.cliConfigDir}`] : []),
+    ...(runtime.cwd ? [`Workspace CWD: ${runtime.cwd}`] : []),
+  ].join('\n');
+}
+
+// Older traces stored the model key in both runtime.token and the rendered request block.
+// Rebuild that block from allowlisted metadata even when only the old text survives.
+function publicTurnTrace(trace: AgentTurnTrace): AgentTurnTrace {
+  const rt = trace.runtime;
+  const runtime: AgentTraceRuntimeMeta | undefined = rt && {
+    transport: rt.transport, method: rt.method, baseUrl: traceUrl(rt.baseUrl), endpoint: traceUrl(rt.endpoint),
+    apiFormat: rt.apiFormat, account: rt.account, tokenSource: rt.tokenSource,
+    cliCommand: rt.cliCommand, cliConfigDir: rt.cliConfigDir, cwd: rt.cwd,
+  };
+  const contextItems = trace.contextItems.map(item => {
+    if (item.id !== 'req-meta') return item;
+    const raw = runtime ? formatTraceRequest(runtime, trace) : '调用元数据未记录';
+    const { text, truncated } = boundTraceText(raw);
+    return { ...item, label: '本次调用 · 账号 / HTTP 请求 / 凭据来源', content: text, chars: raw.length, tokens: estimateTokens(raw), truncated };
+  });
+  return { ...trace, runtime, contextItems, summary: summarizeTrace(contextItems) };
+}
+
 export function saveTurnTrace(store: Pick<Store, 'put' | 'list' | 'remove'>, trace: AgentTurnTrace) {
   try {
-    store.put(TRACE_COLLECTION, trace.id, trace);
+    store.put(TRACE_COLLECTION, trace.id, publicTurnTrace(trace));
     const sameSession = store.list<AgentTurnTrace>(TRACE_COLLECTION)
       .filter(item => item.conversationId === trace.conversationId)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
@@ -236,5 +281,6 @@ export function readTraceSession(store: Pick<Store, 'list' | 'get'>, conversatio
 }
 
 export function readTurnTrace(store: Pick<Store, 'get'>, turnId: string): AgentTurnTrace | undefined {
-  return store.get<AgentTurnTrace>(TRACE_COLLECTION, turnId);
+  const trace = store.get<AgentTurnTrace>(TRACE_COLLECTION, turnId);
+  return trace && publicTurnTrace(trace);
 }

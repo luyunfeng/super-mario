@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStore } from '../packages/core/src/store.ts';
-import { boundTraceText, estimateTokens, listTraceSessions, readTraceSession, readTurnTrace, saveTurnTrace, summarizeTrace, type AgentTurnTrace } from '../packages/core/src/agent-traces.ts';
+import { TRACE_COLLECTION, boundTraceText, estimateTokens, listTraceSessions, readTraceSession, readTurnTrace, saveTurnTrace, summarizeTrace, type AgentTurnTrace } from '../packages/core/src/agent-traces.ts';
 
 test('estimateTokens and boundTraceText preserve raw local trace text within cap', () => {
   assert.ok(estimateTokens('你好世界 hello world') > 3);
@@ -48,7 +48,6 @@ test('saveTurnTrace persists runtime meta, session history, summary breakdown an
       method: 'POST',
       endpoint: 'https://api.example.com/v1/messages',
       account: 'demo-user',
-      token: 'demo-synthetic-token',
       tokenSource: 'config.model.apiKey',
     },
     usage: { input: 1200, output: 350, cacheRead: 800, cacheWrite: 0, totalTokens: 1550, estimated: false },
@@ -72,7 +71,49 @@ test('saveTurnTrace persists runtime meta, session history, summary breakdown an
 
   const turnDetail = readTurnTrace(store, 'a1');
   assert.equal(turnDetail?.runtime?.endpoint, 'https://api.example.com/v1/messages');
-  assert.equal(turnDetail?.runtime?.token, 'demo-synthetic-token');
+  assert.equal(turnDetail?.runtime?.tokenSource, 'config.model.apiKey');
   assert.equal(turnDetail?.thinkingBlocks[0]!.text, '先调用 calendar_agenda 核对今日日程');
   assert.equal(turnDetail?.summary.system, 1200);
+});
+
+test('trace persistence and legacy turn reads expose only credential source and safe request metadata', t => {
+  const store = createStore(':memory:');
+  t.after(() => store.close());
+  const secret = 'synthetic-trace-credential';
+  const contextItems = [{
+    id: 'req-meta', category: 'system' as const, tag: 'request', label: '旧版请求信息',
+    content: `Token Source: config.model.apiKey\nToken: ${secret}`, tokens: 25, chars: 80,
+  }];
+  const legacy = {
+    id: 'turn', conversationId: 'main', userMessageId: 'user', status: 'done' as const,
+    provider: 'local', model: 'demo', contextWindow: 1024, startedAt: '2026-01-02T03:04:05Z',
+    userText: 'hello', assistantText: 'ok',
+    runtime: {
+      transport: 'http' as const, token: secret, tokenSource: 'config.model.apiKey',
+      endpoint: `https://user:${secret}@api.example.com/v1/messages?key=${secret}#${secret}`,
+      baseUrl: `https://api.example.com/v1?key=${secret}`,
+    },
+    usage: { input: 10, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 11, estimated: false },
+    contextItems, summary: summarizeTrace(contextItems), thinkingBlocks: [], toolCalls: [],
+  };
+
+  function assertSafe(trace: AgentTurnTrace | undefined) {
+    assert.ok(trace);
+    assert.equal(JSON.stringify(trace).includes(secret), false);
+    assert.equal(Object.hasOwn(trace.runtime!, 'token'), false);
+    assert.equal(trace.runtime?.tokenSource, 'config.model.apiKey');
+    assert.equal(trace.runtime?.endpoint, 'https://api.example.com/v1/messages');
+    assert.match(trace.contextItems[0]!.content, /Token Source: config\.model\.apiKey/);
+  }
+
+  saveTurnTrace(store, legacy);
+  assertSafe(store.get<AgentTurnTrace>(TRACE_COLLECTION, legacy.id));
+
+  store.put(TRACE_COLLECTION, legacy.id, legacy);
+  assertSafe(readTurnTrace(store, legacy.id));
+  assert.equal(JSON.stringify(readTraceSession(store, 'main')).includes(secret), false);
+  assert.equal(JSON.stringify(listTraceSessions(store)).includes(secret), false);
+
+  store.put(TRACE_COLLECTION, legacy.id, { ...legacy, runtime: undefined });
+  assert.equal(JSON.stringify(readTurnTrace(store, legacy.id)).includes(secret), false);
 });

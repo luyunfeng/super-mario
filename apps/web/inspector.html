@@ -251,7 +251,7 @@
       </div>
     </section>
 
-    <!-- Runtime: Account / HTTP Request / Token -->
+    <!-- Runtime: Account / HTTP Request / Credential Source -->
     <section class="runtime-strip" id="runtime-strip" hidden></section>
 
     <!-- Treemap -->
@@ -431,7 +431,7 @@
           ['调用方式 / 协议', `${rt.transport}${rt.apiFormat ? ' · ' + rt.apiFormat : ''}`],
           ['HTTP 请求 / 命令', rt.endpoint ? `${rt.method || 'POST'} ${rt.endpoint}` : (rt.cliCommand || rt.baseUrl || 'SDK 默认通道')],
           ['账号 / 配置目录', `${rt.account || 'local'}${rt.cliConfigDir ? ' · ' + rt.cliConfigDir : ''}`],
-          ['Token / 凭据', rt.token ? `${rt.token} (${rt.tokenSource || 'config'})` : `(${rt.tokenSource || '本地已登录凭证'})`],
+          ['凭据来源', rt.tokenSource || '未记录'],
           ...(rt.cwd ? [['工作目录 CWD', rt.cwd]] : []),
         ];
         rtStrip.innerHTML = cells.map(([k, v]) => `<div class="rt-cell"><span class="rt-k">${escapeHtml(k)}</span><span class="rt-v">${escapeHtml(v)}</span></div>`).join('');

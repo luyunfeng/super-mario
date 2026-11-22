@@ -38,7 +38,7 @@ export function agentProgress(message, api) {
           const metaLines = [
             rt.endpoint ? `请求：${rt.method || 'POST'} ${rt.endpoint}` : `方式：${rt.transport}${rt.cliCommand ? ' · ' + rt.cliCommand : ''}`,
             `账号：${rt.account || 'local'}${rt.cliConfigDir ? ' · ' + rt.cliConfigDir : ''}`,
-            `Token：${rt.token ? rt.token : `(${rt.tokenSource || '本地已登录凭证'})`}`,
+            `凭据来源：${rt.tokenSource || '未记录'}`,
           ];
           body.append(h('pre', { style: { margin: '0 0 6px', padding: '6px 8px', background: 'var(--surface, #fff)', border: '1px solid var(--line, #D8D5CC)', borderRadius: '6px', fontFamily: 'ui-monospace, monospace', fontSize: '11px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' } }, metaLines.join('\n')));
         }
