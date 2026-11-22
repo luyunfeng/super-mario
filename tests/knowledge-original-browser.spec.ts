@@ -137,10 +137,19 @@ test('从记忆详情对照两次已保存修订，变更归属后不展示旧�
   const moved = await page.request.patch(url + '/' + id, { headers, data: { layer: 'project', projectId: project.id, content: '项目记录' } });
   expect(moved.ok()).toBe(true);
   const current = await (await page.request.get(url + '/' + id + '/revision', { headers })).json();
-  const older = await page.request.get(url + '/' + id + '/revision?commit=' + current.revision.previous, { headers });
+  expect(current.revision.previous).toBeUndefined();
+  const older = await page.request.get(url + '/' + id + '/revision?commit=' + latest.revision.commit, { headers });
   expect(await older.json()).toEqual({ revision: null });
   await page.reload();
   await expect(dialog.getByText('没有可查看的修订。')).toBeVisible();
+  const returned = await page.request.patch(url + '/' + id, { headers, data: { layer: 'personal', content: '回到个人范围' } });
+  expect(returned.ok()).toBe(true);
+  const history = url + '/' + id + '/revision';
+  const personal = await (await page.request.get(history, { headers })).json();
+  expect(personal.revision.entry.content).toBe('回到个人范围');
+  expect(personal.revision.previous).toBeUndefined();
+  const projectRevision = await page.request.get(history + '?commit=' + current.revision.commit, { headers });
+  expect(await projectRevision.json()).toEqual({ revision: null });
 });
 
 test('旧知识草稿保存冲突后可核对新版再提交，同版并发写入仅一份生效', async t => {

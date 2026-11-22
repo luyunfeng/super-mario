@@ -83,9 +83,15 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         const [hash, change, previous, priorChange] = log.split(/\n+/);
         if (!hash || (commit && hash !== commit) || !/^[AM]\t/.test(change ?? '')) return null;
         const entry = parseEntry(id, await git('show', hash + ':' + path));
+        // A predecessor in another scope cannot be opened by this reader.
+        let visiblePrevious: string | undefined;
+        if (change?.startsWith('M') && previous && /^[AM]\t/.test(priorChange ?? '')) {
+          const prior = parseEntry(id, await git('show', previous + ':' + path));
+          if (prior.layer === entry.layer && prior.projectId === entry.projectId) visiblePrevious = previous;
+        }
         const current = readEntry(id);
         if (entry.layer !== current.layer || entry.projectId !== current.projectId) return null;
-        return { entry, commit: hash, ...(change?.startsWith('M') && previous && /^[AM]\t/.test(priorChange ?? '') ? { previous } : {}) };
+        return { entry, commit: hash, ...(visiblePrevious ? { previous: visiblePrevious } : {}) };
       } catch {
         throw Object.assign(new Error('无法读取该知识页的本地版本记录'), { status: 409 });
       }

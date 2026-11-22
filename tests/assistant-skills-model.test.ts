@@ -576,6 +576,7 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
     if (req.lastRole === 'user') {
       assert.match(req.system, /savedAt 是知识页保存时间/);
       assert.match(req.system, /读取修订不能作为已恢复的证据/);
+      assert.match(req.system, /不能据此断言该页从未修改/);
       assert.ok(req.tools.includes('knowledge_revision'));
       return call('knowledge_revision', { pageId: foreignId }, 'foreign');
     }
