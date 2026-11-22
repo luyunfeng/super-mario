@@ -303,7 +303,7 @@ test('重复发送与查询回执只触发一轮实际 SDK 请求，主对话和
   } finally { await server.close(); }
 });
 
-test('早报把各执行状态和计划时间传给模型，日历未开放时保留核实边界', { timeout: 30000 }, async t => {
+test('早晚简报向模型说明计划时间、日历证据和只读边界', { timeout: 30000 }, async t => {
   const summary = '合成回复：核对原执行记录，日程未核实。';
   const { server, api, ask, requests } = await fixture(t, () => ({ role: 'assistant', content: summary }));
   try {
@@ -337,5 +337,18 @@ test('早报把各执行状态和计划时间传给模型，日历未开放时�
     const notices = server.app.background.outbox.list().filter(row => row.owner === 'daily-brief');
     assert.equal(notices.length, 1);
     assert.ok(JSON.stringify(notices[0].content).includes(summary));
+
+    const eveningTime = new Date(Date.parse(scheduledFor) + 9 * 3600000).toISOString();
+    server.app.background.publish({ type: 'schedule.due', typeVersion: 1, sourceId: 'fixture-evening', data: {
+      owner: 'daily-brief', name: 'evening', scheduleId: 'fixture-evening', scheduledFor: eveningTime,
+    } });
+    await server.app.background.eventbox.drain();
+    const evening = requests.find(r => JSON.stringify(r.content).includes('工作台晚间简报'));
+    assert.ok(evening);
+    assert.ok(!evening.tools.includes('calendar_agenda'));
+    assert.ok(!evening.tools.includes('work_dispatch'));
+    for (const expected of [eveningTime, 'Asia/Shanghai', '仍记录为运行中，本期无更新 1：合成任务-running', '明天最早的安排', '不能证明实际参会', '日程未核实', '本轮只读']) {
+      assert.ok(JSON.stringify(evening.content).includes(expected), expected);
+    }
   } finally { await server.close(); }
 });

@@ -170,7 +170,7 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
       const hours = data.name === 'interval' ? briefing.settings().intervalHours : data.name === 'morning' ? 15 : 9;
       const from = previous || new Date(Date.parse(to) - hours * 3600000).toISOString();
       const tz = briefing.settings().timezone;
-      const facts = buildWindowBrief(store, from, to, undefined, deps.conversations?.(), data.name === 'morning' ? tz : undefined);
+      const facts = buildWindowBrief(store, from, to, undefined, deps.conversations?.(), data.name === 'morning' ? tz : undefined, data.name === 'evening');
       const pendingNotices = deps.consumePendingBriefNotices?.() ?? [];
       const baseText = formatWindowBrief(facts, data.name, tz);
       const fallbackText = pendingNotices.length

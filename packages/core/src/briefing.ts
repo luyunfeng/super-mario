@@ -4,7 +4,7 @@ import type { createSchedules } from './schedules.ts';
 
 const defaults: BriefingSettings = { timezone:'Asia/Shanghai', morning:'09:00', evening:'18:00', intervalHours:4, intervalEnabled:false, activeStart:'09:00', activeEnd:'21:00', awayNotifications:true };
 const clock = (s: unknown): s is string => typeof s === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(s);
-export function buildWindowBrief(store: Store, from: string, to: string, projectId?: string, conversations: readonly import('../../protocol/src/inbox-conversations.ts').InboxConversation[] = [], morningTimezone?: string) {
+export function buildWindowBrief(store: Store, from: string, to: string, projectId?: string, conversations: readonly import('../../protocol/src/inbox-conversations.ts').InboxConversation[] = [], morningTimezone?: string, includeContinuingRuns = false) {
   if (!Number.isFinite(Date.parse(from)) || !Number.isFinite(Date.parse(to)) || Date.parse(from) >= Date.parse(to)) throw new Error('摘要时间窗无效');
   const changed = (date: string) => Date.parse(date) > Date.parse(from) && Date.parse(date) <= Date.parse(to);
   const beforeEnd = (date: string) => Date.parse(date) <= Date.parse(to);
@@ -42,6 +42,9 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
       .map(r => ({ id: r.id, title: r.prompt, status: r.status }));
     return { projectId:project.id, name:project.name,
       ...(localDate ? { overdue, dueToday } : {}),
+      ...(includeContinuingRuns ? { continuing: scopedRuns
+        .filter(r => r.status === 'running' && Date.parse(r.updatedAt) <= Date.parse(from))
+        .map(r => ({ id: r.id, title: r.prompt, updatedAt: r.updatedAt })) } : {}),
       progress: updates('running'), queued: updates('queued'), unknown: updates('unknown'), cancelled: updates('cancelled'),
       todoUpdates: scopedTodos.filter(t => changed(t.updatedAt) && !t.completedAt).map(t => ({id:t.id,title:t.title})),
       completed: scopedTodos.filter(t => t.completedAt && changed(t.completedAt)).map(t => ({id:t.id,title:t.title})),
@@ -62,11 +65,12 @@ export function formatWindowBrief(brief: ReturnType<typeof buildWindowBrief> & {
   const rows=[`工作台${({morning:'早间',evening:'晚间',interval:'间隔',project:'项目'} as Record<string,string>)[name]||''}简报`,`${date.format(new Date(brief.from))} — ${date.format(new Date(brief.to))}（${timezone}）`];
   let changed=false;
   for(const p of brief.projects){
-    const sections=[['待你决定',p.decisions],['逾期待办',p.overdue ?? []],['今日到期',p.dueToday ?? []],['执行失败',p.failed],['执行结果未知',p.unknown],['执行已取消',p.cancelled],['等待执行',p.queued],['已完成待办',p.completed],['执行结束，待验收',p.ended],['进行中',p.progress],['事项更新',p.todoUpdates]] as const;
+    const sections=[['待你决定',p.decisions],['逾期待办',p.overdue ?? []],['今日到期',p.dueToday ?? []],['执行失败',p.failed],['执行结果未知',p.unknown],['执行已取消',p.cancelled],['等待执行',p.queued],['已完成待办',p.completed],['执行结束，待验收',p.ended],['进行中',p.progress],['仍记录为运行中，本期无更新',p.continuing ?? []],['事项更新',p.todoUpdates]] as const;
     const nonempty=sections.filter(([,items])=>items.length);if(!nonempty.length)continue;changed=true;rows.push(`\n${p.name}`);
     for (const [label, items] of nonempty) {
       const titles = items.slice(0, 20).map(item => {
         const title = item.title.slice(0, 200);
+        if ('updatedAt' in item && typeof item.updatedAt === 'string') return title + '（最后更新 ' + date.format(new Date(item.updatedAt)) + '）';
         if ('dueAt' in item && typeof item.dueAt === 'string') return title + '（' + date.format(new Date(item.dueAt)) + '）';
         if ('error' in item && typeof item.error === 'string') return title + '：' + item.error.slice(0, 200);
         if ('result' in item && typeof item.result === 'string') return title + '：' + item.result.slice(0, 200);
