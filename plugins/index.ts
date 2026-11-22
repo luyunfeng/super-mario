@@ -279,13 +279,23 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if (args.query !== undefined && typeof args.query !== 'string') throw new Error('待办关键词须为文本');
           if (args.status !== undefined && (typeof args.status !== 'string' || !['open', 'done', 'all'].includes(args.status))) throw new Error('待办状态无效');
           if (args.overdue !== undefined && typeof args.overdue !== 'boolean') throw new Error('逾期筛选须为布尔值');
+          if (args.hasExecution !== undefined && typeof args.hasExecution !== 'boolean') throw new Error('执行记录筛选须为布尔值');
+          const candidates = context.store.list<Todo>('todos');
+          const dispatched = new Set<string>();
+          if (args.hasExecution !== undefined) {
+            const projects = new Map(candidates.map(todo => [todo.id, todo.projectId]));
+            for (const run of context.store.list<Run>('runs')) {
+              if (run.todoId && projects.get(run.todoId) === run.projectId) dispatched.add(run.todoId);
+            }
+          }
           const words = (args.query ?? '').trim().normalize('NFC').toLowerCase().split(/\s+/).filter(Boolean);
           const from = timeBoundary(args.dueFrom, -Infinity);
           const before = timeBoundary(args.dueBefore, Infinity);
           if (from >= before) throw new Error('待办查询起点必须早于终点');
           const bounded = args.dueFrom !== undefined || args.dueBefore !== undefined;
           const now = Date.now();
-          const todos = context.store.list<Todo>('todos').filter(todo => {
+          const todos = candidates.filter(todo => {
+            if (args.hasExecution !== undefined && dispatched.has(todo.id) !== args.hasExecution) return false;
             if (args.projectId !== undefined && args.projectId !== todo.projectId) return false;
             if (args.todoId !== undefined && args.todoId !== todo.id) return false;
             if ((args.status === 'open' && todo.completedAt) || (args.status === 'done' && !todo.completedAt)) return false;
@@ -302,6 +312,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           }
           return todos as unknown as Json;
         }, { query: { type: 'string', description: '标题或备注中的关键词，多词用空格分隔' }, projectId: { type: 'string' },
+          hasExecution: { type: 'boolean', description: '是否存在同项目下关联该待办的执行记录，包含已结束的执行' },
           status: { type: 'string', enum: ['open', 'done', 'all'] }, overdue: { type: 'boolean' },
           dueFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, dueBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' } }));
         const runStates = ['queued', 'running', 'completed', 'failed', 'cancelled', 'unknown'];
