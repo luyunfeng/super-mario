@@ -10,12 +10,13 @@ const builtinMethods: Record<string, string[]> = {
   event_subscriptions: ['handler'], hooks: ['handler'], services: ['handler'], service_wrappers: ['handler'],
 };
 const builtinPointNames = ['event_subscriptions', 'tools', 'skills', 'context_providers', 'model_providers', 'channels', 'connectors', 'inbox_triage', 'executors', 'terminal_hosts', 'screen_parsers', 'knowledge_backends', 'interaction_policies', 'routines', 'api', 'events', 'web_extensions', 'hooks', 'services', 'service_wrappers'];
-function registrationValue(value: unknown, methods: string[]) {
+function registrationValue(value: unknown, methods: string[], optional: string[] = []) {
   if (!value || typeof value !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new TypeError('Contribution must be a plain object');
   for (const key of Reflect.ownKeys(value)) {
     const field = Object.getOwnPropertyDescriptor(value, key)!;
     if (typeof key !== 'string' || !('value' in field)) throw new TypeError('Contribution cannot contain accessors or symbols');
-    if (methods.includes(key) && typeof field.value === 'function') continue;
+    if (optional.includes(key) && field.value !== undefined && typeof field.value !== 'function') throw new TypeError('Optional callback must be a function');
+    if ((methods.includes(key) || optional.includes(key)) && typeof field.value === 'function') continue;
     // Existing local contracts have optional fields; absent values are not sent over JSON services.
     if (field.value !== undefined) assertJson(field.value, `contribution.${key}`);
   }
@@ -39,7 +40,7 @@ export function createContributions(): Contributions {
       if (!point) throw new Error(`Undeclared extension point: ${String(kind)}`);
       if (typeof id !== 'string' || !id.trim()) throw new TypeError('Contribution id is required');
       if (point.transport === 'json') assertJson(value);
-      else registrationValue(value, builtinMethods[String(kind)] ?? []);
+      else registrationValue(value, builtinMethods[String(kind)] ?? [], kind === 'knowledge_backends' ? ['revision'] : []);
       let collection = entries.get(kind);
       if (!collection) { collection = new Map(); entries.set(kind, collection); }
       if (collection.has(id)) throw new Error(`Contribution already registered: ${String(kind)}/${id}`);

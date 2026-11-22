@@ -1,9 +1,12 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { constants, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ExtensionContext, KnowledgeBackend, KnowledgeQuery } from '../packages/plugin-sdk/src/index.ts';
 import type { KnowledgeEntry, KnowledgeLayer } from '../packages/protocol/src/index.ts';
 
+const run = promisify(execFile);
 const layers: KnowledgeLayer[] = ['personal', 'global', 'project'];
 const collection = 'knowledge';
 
@@ -49,6 +52,9 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
     const fd = openSync(filePath(id), constants.O_RDONLY | constants.O_NOFOLLOW);
     let markdown: string;
     try { markdown = readFileSync(fd, 'utf8'); } finally { closeSync(fd); }
+    return parseEntry(id, markdown);
+  }
+  function parseEntry(id: string, markdown: string): KnowledgeEntry {
     const match = /^---\n([^\n]+)\n---\n([\s\S]*)$/.exec(markdown);
     if (!match) throw new Error(`Invalid knowledge Markdown: ${id}`);
     const metadata: unknown = JSON.parse(match[1]!);
@@ -62,6 +68,28 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
   }
 
   return {
+    async revision(id, commit) {
+      const path = 'knowledge/' + safeId(id) + '.md';
+      const repo = join(context.dataDir, '.git');
+      if (commit !== undefined && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit)) throw Object.assign(new Error('修订标识无效'), { status: 400 });
+      async function git(...args: string[]) {
+        return (await run('git', ['--git-dir=' + repo, ...args], { timeout: 15000, maxBuffer: 4 * 1024 * 1024 })).stdout;
+      }
+      try {
+        if (!lstatSync(repo).isDirectory()) throw new Error();
+        if (commit) await git('merge-base', '--is-ancestor', commit, 'HEAD');
+        const log = (await git('log', '-2', '--no-renames', '--format=%H', '--name-status', commit ?? 'HEAD', '--', path)).trim();
+        if (!log) return null;
+        const [hash, change, previous, priorChange] = log.split(/\n+/);
+        if (!hash || (commit && hash !== commit) || !/^[AM]\t/.test(change ?? '')) return null;
+        const entry = parseEntry(id, await git('show', hash + ':' + path));
+        const current = readEntry(id);
+        if (entry.layer !== current.layer || entry.projectId !== current.projectId) return null;
+        return { entry, commit: hash, ...(change?.startsWith('M') && previous && /^[AM]\t/.test(priorChange ?? '') ? { previous } : {}) };
+      } catch {
+        throw Object.assign(new Error('无法读取该知识页的本地版本记录'), { status: 409 });
+      }
+    },
     async list(query: KnowledgeQuery = {}) {
       validateScope(query.layer, query.projectId);
       if (query.query !== undefined && typeof query.query !== 'string') throw new Error('query must be a string');

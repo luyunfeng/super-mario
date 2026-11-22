@@ -9,6 +9,37 @@ import { openDrawer, confirmDialog } from '../ui/overlay.js';
 
 const LAYER_HINT = { personal: 'memory.personal', global: 'memory.global', project: 'memory.project' };
 
+function revisionHistory(api, entry) {
+  const body = h('div', { class: 'stack' });
+  const section = h('details', null, h('summary', null, '查看历史修订'), body);
+  let request = 0;
+  async function load(commit) {
+    const stamp = ++request;
+    const status = h('p', { role: 'status' }, '正在读取修订…');
+    body.append(status);
+    try {
+      const { revision } = await api.get('/knowledge/' + encodeURIComponent(entry.id) + '/revision' +
+        (commit ? '?commit=' + encodeURIComponent(commit) : ''));
+      if (stamp !== request) return;
+      if (!revision) { status.textContent = '没有可查看的修订。'; return; }
+      status.replaceWith(h('article', { class: 'stack' },
+        h('strong', null, revision.entry.title),
+        h('small', null, revision.entry.updatedAt, ' · ', revision.commit.slice(0, 8)),
+        h('pre', { class: 'small', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, revision.entry.content)));
+      if (revision.previous) {
+        const earlier = Button({ label: '查看上一版', size: 'sm', onClick: () => { earlier.remove(); return load(revision.previous); } });
+        body.append(earlier);
+      }
+    } catch (error) { if (stamp === request) status.textContent = error.message; }
+  }
+  section.addEventListener('toggle', () => {
+    request++;
+    replace(body);
+    if (section.open) void load();
+  });
+  return section;
+}
+
 function originalSources(api, entry, selected, line, ask) {
   const path = '/knowledge/' + encodeURIComponent(entry.id) + '/sources';
   const body = h('div', { class: 'stack' });
@@ -125,7 +156,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   });
   const drawer = openDrawer({
     title: entry ? '编辑记忆' : '添加记忆', subtitle: entry ? `更新于 ${timeAgo(entry.updatedAt)}` : undefined,
-    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), note],
+    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), entry && revisionHistory(api, entry), note],
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();

@@ -38,6 +38,7 @@ export interface Executor extends ExecutorInfo {
 }
 export interface KnowledgeQuery { layer?: KnowledgeLayer; projectId?: string; query?: string }
 export interface KnowledgeBackend {
+  revision?(id: string, commit?: string): Promise<{ entry: KnowledgeEntry; commit: string; previous?: string } | null>;
   list(query?: KnowledgeQuery): Promise<KnowledgeEntry[]>;
   put(entry: Omit<KnowledgeEntry, 'id' | 'updatedAt'> & { id?: string }): Promise<KnowledgeEntry>;
   remove(id: string): Promise<boolean>;

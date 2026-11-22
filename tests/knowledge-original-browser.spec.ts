@@ -78,3 +78,31 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   await symlink(unrelated, path);
   expect((await get(entry.id)).status()).toBe(404);
 });
+
+test('从记忆详情对照两次已保存修订，变更归属后不展示旧范围正文', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-knowledge-history-'));
+  const server = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1', token: 'fixture', demo: true });
+  t.after(async () => { await server.close(); await rm(dir, { recursive: true, force: true }); });
+  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+  const headers = { authorization: 'Bearer fixture' }, url = server.url + '/api/v1/knowledge';
+  const created = await page.request.post(url, { headers, data: { layer: 'personal', title: '修订核对', content: '会议初步决定甲' } });
+  expect(created.ok()).toBe(true);
+  const { id } = await created.json();
+  const saved = await page.request.patch(url + '/' + id, { headers, data: { content: '会议改定乙' } });
+  expect(saved.ok()).toBe(true);
+  await page.goto(server.url + '/#memory?token=fixture&entry=' + id);
+  const dialog = page.getByRole('dialog', { name: '编辑记忆' });
+  await dialog.getByText('查看历史修订', { exact: true }).click();
+  await expect(dialog.locator('pre')).toHaveText('会议改定乙');
+  await dialog.getByRole('button', { name: '查看上一版' }).click();
+  await expect(dialog.locator('pre')).toHaveText(['会议改定乙', '会议初步决定甲']);
+  const project = await server.app.createProject({ name: '新归属' });
+  const moved = await page.request.patch(url + '/' + id, { headers, data: { layer: 'project', projectId: project.id, content: '项目记录' } });
+  expect(moved.ok()).toBe(true);
+  const current = await (await page.request.get(url + '/' + id + '/revision', { headers })).json();
+  const older = await page.request.get(url + '/' + id + '/revision?commit=' + current.revision.previous, { headers });
+  expect(await older.json()).toEqual({ revision: null });
+});

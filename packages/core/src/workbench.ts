@@ -687,6 +687,7 @@ export async function createWorkbench(config: AppConfig) {
     const backend = contributions.list('knowledge_backends')[0]?.value;
     if (!backend) throw new InputError('请启用本地知识库插件', 503);
     return {
+      ...(backend.revision ? { revision: backend.revision.bind(backend) } : {}),
       list: query => backend.list(query), remove: id => backend.remove(id),
       async put(input) {
         const payload = { layer: input.layer, title: input.title, content: input.content, ...(input.id === undefined ? {} : { id: input.id }), ...(input.projectId === undefined ? {} : { projectId: input.projectId }) };
