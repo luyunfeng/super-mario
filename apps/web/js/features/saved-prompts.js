@@ -43,7 +43,7 @@ function watchChanges(store, onChange) {
 export function openSavedPrompts({ api, store, initialText, isCurrent = () => true }) {
   if (!active(store) || !isCurrent()) return;
   const token = api.token();
-  let doc, draft, busy = false, stale = false, error = '';
+  let doc, draft, deleting, busy = false, stale = false, error = '';
   const drawer = openDrawer({ title: '常用提示词', onClose() { unsubscribe(); unwatch(); } });
   const current = () => drawer.el.open && token === api.token() && active(store) && isCurrent();
   const unsubscribe = store.subscribe(() => { if (!current()) drawer.close(); });
@@ -61,6 +61,7 @@ export function openSavedPrompts({ api, store, initialText, isCurrent = () => tr
 
   async function request(change) {
     if (busy || !current() || (change && stale)) return;
+    deleting = undefined;
     busy = true;
     conflict.replaceChildren();
     error = '';
@@ -90,6 +91,7 @@ export function openSavedPrompts({ api, store, initialText, isCurrent = () => tr
     }
   }
   function edit(item) {
+    deleting = undefined;
     draft = item ? { ...item } : { name: '', text: '' };
     error = '';
     draw();
@@ -127,10 +129,13 @@ export function openSavedPrompts({ api, store, initialText, isCurrent = () => tr
           ariaLabel: label + ' ' + item.name, disabled: busy || stale || atEnd, onClick });
         return h('article', { class: 'card' }, h('div', { class: 'card__body stack' },
           h('strong', null, '/' + item.name), h('pre', { class: 'mailbox-content' }, item.text),
+          deleting === item.id ? h('div', { class: 'row row--wrap' },
+            action('确认删除', () => request({ action: 'remove', id: item.id })),
+            action('取消', () => { deleting = undefined; draw(); })) :
           h('div', { class: 'row row--wrap' },
             action('编辑', () => edit(item)), action('上移', () => move(index, -1), index === 0),
             action('下移', () => move(index, 1), index === doc.items.length - 1),
-            action('删除', () => request({ action: 'remove', id: item.id })))));
+            action('删除', () => { deleting = item.id; draw(); }))));
       }));
   }
   function draw() {

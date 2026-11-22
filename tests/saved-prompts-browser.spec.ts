@@ -125,6 +125,10 @@ test('本人消息可保存为常用提示词，主对话和项目斜杠菜单�
   await expect(editButtons.first()).toHaveAccessibleName('编辑 weekly');
   await expect(editButtons.last()).toHaveAccessibleName('编辑 review');
   await button('删除 weekly').click();
+  await button('取消 weekly').click();
+  await expect(editButtons).toHaveCount(2);
+  await button('删除 weekly').click();
+  await button('确认删除 weekly').click();
   await expect(editButtons).toHaveCount(1);
   await expect(editButtons).toHaveAccessibleName('编辑 review');
   await button('关闭').click();
@@ -190,6 +194,13 @@ test('插件设置可管理提示词；并发编辑保留草稿，已打开的�
   await expect(leftBody).toHaveValue('第一窗口的未保存草稿。');
   await left.getByRole('button', { name: '取消', exact: true }).click();
   await expect(left).toContainText('第二窗口提交的版本。');
+  await left.getByRole('button', { name: '删除 draft', exact: true }).click();
+  await expect(left.getByRole('button', { name: '确认删除 draft' })).toBeVisible();
+  await right.getByRole('button', { name: '编辑 draft' }).click();
+  await rightBody.fill('删除确认期间由第二窗口更新。');
+  await right.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(left).toContainText('删除确认期间由第二窗口更新。');
+  await expect(left.getByRole('button', { name: '确认删除 draft' })).toHaveCount(0);
   await left.getByRole('button', { name: '关闭', exact: true }).click();
   await settings.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(first.locator('dialog.drawer')).toHaveCount(0);
