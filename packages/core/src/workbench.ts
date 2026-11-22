@@ -932,7 +932,23 @@ export async function createWorkbench(config: AppConfig) {
     if (patch.notes !== undefined) next.notes = optionalText(patch.notes, '备注') ?? '';
     if (patch.projectId !== undefined) next.projectId = optionalText(patch.projectId, '项目');
     if (patch.dueAt !== undefined) next.dueAt = dueDate(patch.dueAt);
-    if (patch.responsiblePerson !== undefined) next.responsiblePerson = optionalText(patch.responsiblePerson, '负责人');
+    if (next.projectId !== todo.projectId) delete next.responsibleSession;
+    if (patch.responsiblePerson !== undefined) {
+      next.responsiblePerson = optionalText(patch.responsiblePerson, '负责人');
+      if (next.responsiblePerson) delete next.responsibleSession;
+    }
+    if (patch.responsibleRunId !== undefined) {
+      const runId = optionalText(patch.responsibleRunId, '负责会话的执行记录');
+      if (!runId) delete next.responsibleSession;
+      else {
+        if (patch.responsiblePerson && next.responsiblePerson) throw new InputError('请选择一种负责方');
+        const run = store.get<Run>('runs', runId);
+        if (!run || run.projectId !== next.projectId || !run.machineId || !run.sessionId)
+          throw new InputError('执行记录没有当前项目可登记的会话', 409);
+        next.responsibleSession = { runId, machineId: run.machineId, sessionId: run.sessionId };
+        delete next.responsiblePerson;
+      }
+    }
     if (patch.waitingOn !== undefined) next.waitingOn = optionalText(patch.waitingOn, '等待对象');
     if (patch.reminderAt !== undefined) next.reminderAt = dueDate(patch.reminderAt);
     if (patch.completed !== undefined) next.completedAt = patch.completed ? new Date().toISOString() : undefined;

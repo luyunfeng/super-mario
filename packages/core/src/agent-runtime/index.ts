@@ -136,6 +136,10 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         if (old && (old.layer !== 'project' || old.projectId !== scopedProject)) throw new Error('知识不属于当前作用域');
       }
     } else if (name === 'todo_update') {
+      if (args.responsibleRunId) {
+        const run = store.get<{ projectId?: string; todoId?: string }>('runs', String(args.responsibleRunId));
+        if (!run || !inScope(run)) throw new Error('负责会话不属于当前作用域');
+      }
       const todo = store.get<{ id: string; projectId?: string }>('todos', String(args.id));
       if (!todo || !inScope(todo, true)) throw new Error('待办不属于当前作用域');
     } else if (name === 'task_plan') {

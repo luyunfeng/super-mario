@@ -267,14 +267,14 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if (actions.updateTodo) context.contribute('tools', 'todo_update', tool('todo_update', '修改指定待办的标题、备注、优先级、等待对象、提醒或截止时间，仅传用户要求修改的字段。改期须传 todo_detail 所见的 expectedDueAt，原无期限用空字符串，清除期限用 dueAt 空字符串。', async (args, signal) => {
             signal.throwIfAborted(); const { id, ...patch } = args;
             if (patch.completed !== undefined) throw new Error('请由用户在 Web 验收并完成待办');
-            const editable = ['title', 'notes', 'responsiblePerson', 'waitingOn', 'reminderAt', 'dueAt', 'priority'];
+            const editable = ['title', 'notes', 'responsiblePerson', 'responsibleRunId', 'waitingOn', 'reminderAt', 'dueAt', 'priority'];
             if (Object.keys(patch).some(key => !editable.includes(key) && key !== 'expectedDueAt')) throw new Error('不支持的待办修改字段');
             if (!editable.some(key => patch[key] !== undefined)) throw new Error('请指定需要修改的字段');
             if (patch.dueAt !== undefined && typeof patch.expectedDueAt !== 'string') throw new Error('改期前请核对当前截止时间');
             if (patch.dueAt !== undefined && patch.dueAt !== '') timeBoundary(patch.dueAt, 0, '待办截止时间');
             validateAssistantReminder(patch.reminderAt);
             return actions.updateTodo!(String(id ?? ''), patch);
-          }, { id: { type: 'string' }, dueAt: { type: 'string', description: '带时区的 ISO 时间，空字符串清除期限' }, expectedDueAt: { type: 'string' }, title: { type: 'string' }, notes: { type: 'string' }, responsiblePerson: { type: 'string', description: '登记负责人姓名，清除时传空字符串' }, waitingOn: { type: 'string' }, priority: priorityParameter, reminderAt: reminderParameter }));
+          }, { id: { type: 'string' }, dueAt: { type: 'string', description: '带时区的 ISO 时间，空字符串清除期限' }, expectedDueAt: { type: 'string' }, title: { type: 'string' }, notes: { type: 'string' }, responsibleRunId: { type: 'string', description: '使用已有执行记录的电脑和会话登记负责方，空字符串清除负责会话' }, responsiblePerson: { type: 'string', description: '登记负责人姓名，清除时传空字符串' }, waitingOn: { type: 'string' }, priority: priorityParameter, reminderAt: reminderParameter }));
           if (actions.knowledgeActionStatus) context.contribute('tools', 'knowledge_action_status', tool('knowledge_action_status',
             '只读查询已读知识页某一行动项原文所关联待办的当前状态与登记期限。', async (args, signal) => {
               signal.throwIfAborted(); return await actions.knowledgeActionStatus!(args) as Json;

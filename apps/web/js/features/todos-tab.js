@@ -116,6 +116,14 @@ export function createTodosTab({ api, store, router }) {
     const clock = calendar ? Input({ type: 'time', value: originalClock }) : null;
     const reminder = Input({ type: 'datetime-local', value: originalReminder });
     const responsible = Input({ value: todo.responsiblePerson ?? '' });
+    const sessionOptions = (store.view.snapshot?.runs ?? []).filter(run => run.projectId === todo.projectId && run.machineId && run.sessionId)
+      .map(run => [run.id, run.machineId + ' / ' + run.sessionId + ' · ' + run.id]);
+    const assigned = todo.responsibleSession;
+    if (assigned && !sessionOptions.some(([id]) => id === assigned.runId))
+      sessionOptions.push([assigned.runId, assigned.machineId + ' / ' + assigned.sessionId]);
+    const session = Select({ options: [['', '未选择会话'], ...sessionOptions], value: assigned?.runId ?? '',
+      onchange: () => { if (session.value) responsible.value = ''; } });
+    responsible.addEventListener('input', () => { if (responsible.value.trim()) session.value = ''; });
     const waiting = Input({ value: todo.waitingOn ?? '', placeholder: '例如：张三回复' });
     const projects = (store.view.snapshot?.projects ?? []).filter(item => !item.archivedAt);
     const project = Select({ options: [['', '不归类'], ...projects.map(item => [item.id, item.name])], value: todo.projectId ?? '' });
@@ -124,7 +132,7 @@ export function createTodosTab({ api, store, router }) {
       body: [Field({ label: '标题', control: name, required: true }), Field({ label: '备注', control: notes }),
         h('div', { class: 'form-row' }, Field({ label: '截止日期', control: dueInput, hint: '留空取消截止日期。' }), clock && Field({ label: '截止时间', control: clock }), Field({ label: '在等谁', control: waiting, hint: '填写后会进入“等待中”。' })),
         Field({ label: '提醒时间', control: reminder, hint: '按本机时区填写；留空取消。到点检查需在 Agent 中开启提醒，外发仍需渠道与发送授权。' }),
-        Field({ label: '优先级', control: editPriority }), Field({ label: '负责人', control: responsible }), Field({ label: '所属项目', control: project })],
+        Field({ label: '优先级', control: editPriority }), Field({ label: '负责人', control: responsible }), Field({ label: '负责会话', control: session }), Field({ label: '所属项目', control: project })],
       footer: [Button({ label: '取消', onClick: () => drawer.close() }), Button({
         label: '保存', kind: 'primary', onClick: async () => {
           if (!name.value.trim()) throw new Error('请填写标题');
@@ -147,6 +155,7 @@ export function createTodosTab({ api, store, router }) {
           if (notes.value !== (todo.notes ?? '')) patch.notes = notes.value;
           if (project.value !== (todo.projectId ?? '')) patch.projectId = project.value;
           if (responsible.value.trim() !== (todo.responsiblePerson ?? '')) patch.responsiblePerson = responsible.value.trim();
+          if (session.value !== (assigned?.runId ?? '')) patch.responsibleRunId = session.value;
           if (waiting.value.trim() !== (todo.waitingOn ?? '')) patch.waitingOn = waiting.value.trim();
           try {
             if (Object.keys(patch).length) await api.patch(`/todos/${encodeURIComponent(todo.id)}`, patch);
@@ -167,6 +176,7 @@ export function createTodosTab({ api, store, router }) {
     const meta = [
       todo.priority && todo.priority !== 'normal' && todoPriorityLabels[todo.priority],
       todo.dueAt && h('span', { class: overdue ? 'text-danger' : '' }, `${overdue ? '已逾期 · ' : '截止 '}${formatDate(todo.dueAt)}`),
+      todo.responsibleSession && `负责会话 ${todo.responsibleSession.machineId} / ${todo.responsibleSession.sessionId}`,
       todo.responsiblePerson && `负责人 ${todo.responsiblePerson}`,
       todo.waitingOn && `等 ${todo.waitingOn}`,
       todo.reminderAt && `提醒 ${formatDate(todo.reminderAt, true)}${todo.remindedAt ? '（已记录）' : ''}`,
@@ -189,7 +199,7 @@ export function createTodosTab({ api, store, router }) {
     if (!data) { replace(list, h('p', { class: 'muted' }, '正在读取…')); return; }
     const sections = data.sections ?? data;
     const query = search.value.trim().toLowerCase();
-    const matches = todo => inScope(todo) && (!query || [todo.title, todo.notes, todo.responsiblePerson, todo.waitingOn].some(value => value?.toLowerCase().includes(query)));
+    const matches = todo => inScope(todo) && (!query || [todo.title, todo.notes, todo.responsiblePerson, todo.responsibleSession?.sessionId, todo.waitingOn].some(value => value?.toLowerCase().includes(query)));
     const now = new Date();
     const ranges = dateRanges(now);
     const selected = todo => calendar || matchesPeriod(todo, period.value, ranges, now);

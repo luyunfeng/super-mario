@@ -1364,10 +1364,22 @@ test('Web 与飞书仅更新选定待办的期限，保留提醒并拒绝并发�
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.match(req.system, /只改截止时间时保留原提醒/);
+      if (mode === 'session' || mode === 'foreignSession') {
+        assert.match(req.system, /会话登记仅表示负责方/);
+        return call('todo_update', { id, responsibleRunId: mode === 'session' ? 'own-run' : 'other-run' }, 'session');
+      }
       if (mode === 'foreign') return call('todo_update', { id: other, dueAt: due, expectedDueAt: '' }, 'foreign');
       return call('todo_detail', { todoId: id }, 'detail');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    if (req.callId === 'session') {
+      if (mode === 'foreignSession') {
+        assert.match(raw, /负责会话不属于当前作用域/);
+        return { role: 'assistant', content: '无法登记其他事项的会话。' };
+      }
+      assert.equal(JSON.parse(raw).responsibleSession.sessionId, 'own-session');
+      return { role: 'assistant', content: '已登记负责会话。' };
+    }
     if (req.callId === 'detail') {
       const old = JSON.parse(raw).todo.dueAt ?? '';
       if (mode === 'race') server.app.updateTodo(id, { dueAt: newer });
@@ -1403,6 +1415,17 @@ test('Web 与飞书仅更新选定待办的期限，保留提醒并拒绝并发�
     mode = 'foreign';
     await adapter.onMessage('更新另一事项', { ...source, messageId: 'foreign' });
     await t.waitFor(() => assert.ok(sent.includes('当前范围无法修改。')));
+    for (const [runId, todoId, sessionId] of [['own-run', id, 'own-session'], ['other-run', other, 'other-session']]) {
+      server.app.store.put('runs', runId!, { id: runId, todoId, sessionId, machineId: 'test-machine', projectId: project.id,
+        executorId: 'fixture', conversationId: 'main', createdAt: due, updatedAt: due, status: 'completed', prompt: '合成会话', output: '' });
+    }
+    mode = 'session';
+    assert.equal(await ask('把 own-run 对应的会话登记为这项的负责方', path), '已登记负责会话。');
+    mode = 'foreignSession';
+    await adapter.onMessage('改为 other-run 对应的会话负责', { ...source, messageId: 'foreign-session' });
+    await t.waitFor(() => assert.ok(sent.includes('无法登记其他事项的会话。')));
+    assert.equal(server.app.todos().find(row => row.id === id)?.responsibleSession?.runId, 'own-run');
+    assert.equal(server.app.store.list('runs').length, 2);
     const todo = server.app.todos().find(row => row.id === id)!;
     assert.equal(todo.dueAt, undefined);
     assert.equal(todo.reminderAt, reminderAt);

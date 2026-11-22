@@ -27,6 +27,9 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   server.app.createTodo({ title: '其他范围', dueAt });
   const done = server.app.createTodo({ title: '完成的待办', projectId: project.id, dueAt });
   server.app.store.put('todos', done.id, { ...done, completedAt: dueAt });
+  const recordedRun = { id: 'test-run', projectId: project.id, machineId: 'test-machine', sessionId: 'test-session',
+    executorId: 'fixture', conversationId: 'fixture', createdAt: dueAt, updatedAt: dueAt, status: 'completed', output: '', prompt: '合成会话' };
+  server.app.store.put('runs', recordedRun.id, recordedRun);
   const read = () => server.app.store.get<Todo>('todos', todo.id)!;
   const root = page.getByRole('region', { name: '待办日历' });
   const base = `${server.url}/#projects/${project.id}/todos`;
@@ -173,8 +176,13 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await expect(panel.locator('.todo')).toHaveCount(1);
   await expect(panel.locator('.todo')).toContainText('负责人 预算协调员');
   await panel.locator('.todo').getByRole('button', { name: /本地三月末/ }).click();
-  await editor.getByLabel('负责人', { exact: true }).fill('');
+  await editor.getByLabel('负责会话').selectOption(recordedRun.id);
   await editor.getByRole('button', { name: '保存' }).click();
   await expect.poll(() => read().responsiblePerson).toBeUndefined();
+  assert.deepEqual(read().responsibleSession, { runId: 'test-run', machineId: 'test-machine', sessionId: 'test-session' });
+  assert.equal(server.app.store.list('runs').length, 1);
+  assert.throws(() => server.app.updateTodo(done.id, { projectId: '', responsibleRunId: recordedRun.id }), /当前项目/);
+  server.app.updateTodo(todo.id, { projectId: '' });
+  assert.equal(read().responsibleSession, undefined);
   await expect(panel.locator('.todo')).toHaveCount(0);
 });
