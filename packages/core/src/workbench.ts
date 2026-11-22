@@ -129,6 +129,20 @@ export async function createWorkbench(config: AppConfig) {
     assertBotInput(input);
   } });
   const todoDecisions = createTodoDecisions(store, workDecisions);
+  function renameRunWorktree(id: string, input: Record<string, unknown>) {
+    if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
+    const run = store.get<Run>('runs', id);
+    if (!run?.worktree?.branch) throw new InputError('执行缺少工作树创建回执', 404);
+    if (run.worktree.removedAt) throw new InputError('工作树目录已清理', 410);
+    if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 80 || /[\x00-\x1f\x7f]/.test(input.name))
+      throw new InputError('请输入 1 至 80 个字符的单行名称');
+    const name = input.name.trim();
+    if (run.worktree.name === name) return { name };
+    if (input.previousName !== (run.worktree.name ?? '')) throw new InputError('工作树名称已变化，请重新打开后核对', 409);
+    store.put('runs', id, { ...run, worktree: { ...run.worktree, name } });
+    changed('runs.changed', { id });
+    return { name };
+  }
   async function runWorktreeStatus(id: string, includeCleanup = false): Promise<Json> {
     if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
     const run = store.get<Run>('runs', id);
@@ -178,7 +192,7 @@ export async function createWorkbench(config: AppConfig) {
       if (result.removed !== true || result.head !== input.head || result.branch !== run.worktree.branch)
         throw new InputError('清理回执不匹配，请核对执行机', 502);
       const latest = store.get<Run>('runs', id)!;
-      store.put('runs', id, { ...latest, worktree: { ...run.worktree, removedAt: new Date().toISOString() } });
+      store.put('runs', id, { ...latest, worktree: { ...latest.worktree!, removedAt: new Date().toISOString() } });
       changed('runs.changed', { id });
       return result;
     } finally { cleaningWorktrees.delete(id); }
@@ -1245,7 +1259,7 @@ export async function createWorkbench(config: AppConfig) {
     return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
   }
   return {
-    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, runWorktreeStatus, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, renameRunWorktree, runWorktreeStatus, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {

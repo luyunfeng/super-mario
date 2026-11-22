@@ -86,7 +86,7 @@ test('cleanup leaves the pinned acceptance evidence intact', t => {
   const worktree = { source: '/tmp/source', branch: 'fixture', base: 'a'.repeat(40) };
   f.patch({ worktree });
   const request = decision(f.review.attach({ todoId: 'todo', runId: 'original' }));
-  f.patch({ worktree: { ...worktree, removedAt: new Date().toISOString() } });
+  f.patch({ worktree: { ...worktree, name: '交付核对', removedAt: new Date().toISOString() } });
   assert.equal(f.review.decide(request).status, 'accepted');
   f.review.assertCanComplete('todo');
 });

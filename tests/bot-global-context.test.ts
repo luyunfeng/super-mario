@@ -53,6 +53,7 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
       assert.ok(input.tools.some((tool: any) => tool.function.name === 'run_worktree_status'));
       assert.match(system, /将实时状态与历史交付分开/);
       assert.match(system, /查询状态不授权删除/);
+      assert.match(system, /同名时用项目和执行 ID 消歧/);
       assert.match(system, /branchDeletedAt 时只说明工作台何时确认过删除/);
       assert.match(system, /核对未合并提交数并单独确认/);
       assert.ok(!input.tools.some((tool: any) => /remove_worktree|worktree_cleanup/.test(tool.function.name)));

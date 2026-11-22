@@ -98,6 +98,32 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   await writeFile(join(path, 'new.txt'), 'untracked file');
   await writeFile(join(path, '.env'), 'synthetic');
   await page.goto(server.url + '/#projects/' + project.id + '/runs/' + first.id);
+  const rename = (name: string, previousName: string) => fetch(server.url + '/api/v1/runs/' + first.id + '/worktree-name', {
+    method: 'PATCH', headers: { authorization: 'Bearer worktree-fixture', 'content-type': 'application/json' },
+    body: JSON.stringify({ name, previousName }),
+  });
+  await page.getByRole('button', { name: '重命名工作树' }).click();
+  const editor = page.getByRole('dialog', { name: '重命名工作树' });
+  await editor.getByLabel('工作树名称').fill('接口修订');
+  await editor.getByLabel('工作树名称').press('Enter');
+  await expect(editor).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByText('工作树：接口修订', { exact: true }).last()).toBeVisible();
+  await page.goto(server.url + '/#projects/' + project.id + '/runs');
+  const renamedRow = page.locator('a.run').filter({ hasText: '工作树：接口修订' });
+  await expect(renamedRow).toContainText('第一项任务');
+  await renamedRow.click();
+  const peer = runs.find(run => run.id !== first.id)!;
+  await page.getByLabel('选择对比执行').selectOption(peer.id);
+  await expect(page.getByRole('region', { name: '执行对比' }).getByText('工作树：接口修订')).toBeVisible();
+  await page.getByRole('link', { name: '关闭对比' }).click();
+  assert.equal((await rename('陈旧请求', '')).status, 409);
+  assert.equal((await rename('   ', '接口修订')).status, 400);
+  assert.equal((await rename('接口修订', '')).status, 200);
+  assert.equal(git(path, 'branch', '--show-current'), first.worktree!.branch);
+  const runsList = server.app.contributions.list('tools').find(entry => entry.value.name === 'runs_list')!.value;
+  const listed = await runsList.execute({}, new AbortController().signal) as unknown as Run[];
+  assert.equal(listed.find(run => run.id === first.id)?.worktree?.name, '接口修订');
   await page.getByRole('button', { name: '查看工作树状态' }).click();
   const status = page.getByRole('dialog', { name: '工作树状态' });
   await expect(status).toContainText(first.worktree!.branch!);
@@ -149,6 +175,7 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   assert.equal(git(cwd, 'rev-parse', first.worktree!.branch!), kept);
   await assert.rejects(readFile(join(path, '.git')), { code: 'ENOENT' });
   assert.equal((await cleanup(kept)).status, 200);
+  assert.equal((await rename('清理后修改', '接口修订')).status, 410);
   assert.match(JSON.stringify(await server.app.readRunCommitDiff(first.id, 'stage.txt')), /staged file/);
   await page.reload();
   await expect(page.getByText('工作树目录已清理 · 保留分支', { exact: false })).toBeVisible();

@@ -8,7 +8,7 @@ import { confirmDialog, openDrawer, toast } from '../ui/overlay.js';
 import { systemText } from '../copy/terms.js';
 
 import { openTaskClosure, refreshTaskClosure } from './task-closure.js';
-import { compareRuns, openRetainedBranch, openWorktreeStatus } from './run-comparison.js';
+import { compareRuns, renameWorktree, openRetainedBranch, openWorktreeStatus } from './run-comparison.js';
 import { createLiveTerminals } from './live-terminals.js';
 
 const PLAN_STATUS = { pending: ['待确认', 'warn'], running: ['启动中', 'info'], started: ['已启动', 'ok'], rejected: ['已拒绝', ''], partial: ['部分启动', 'warn'], unknown: ['结果未知', 'danger'] };
@@ -101,6 +101,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     return h('a', { class: 'item item--click run', href: router.href('projects', projectId, 'runs', run.id), dataset: { id: run.id } },
       Pill(status.text, status.tone),
       h('div', { class: 'item__main' }, h('span', { class: 'item__title truncate' }, run.prompt),
+        run.worktree?.name && h('span', { class: 'item__meta' }, '工作树：', run.worktree.name),
         h('span', { class: 'item__meta' }, `${executorName(run.executorId)} · ${isRunActive(run) ? `已运行 ${duration(run.createdAt)}` : timeAgo(run.updatedAt)}`), progressView(run)),
       h('span', { class: 'muted' }, '›'));
   }
@@ -117,7 +118,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       return;
     }
     if (!list._keyed) list.replaceChildren();
-    keyedList(list, rows, run => run.id, runRow, run => JSON.stringify([run.id, run.status, run.updatedAt, run.progress]));
+    keyedList(list, rows, run => run.id, runRow, run => JSON.stringify([run.id, run.status, run.updatedAt, run.progress, run.worktree?.name]));
   }
 
   // —— 详情 ——
@@ -161,6 +162,8 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
           const ok = await confirmDialog({ title: '中断这次执行？', message: '会请求执行者停止；已经产生的修改不会自动撤销。', confirmLabel: '请求中断', danger: true });
           if (ok) { await api.post(`/runs/${encodeURIComponent(run.id)}/cancel`, {}); store.refresh(); }
         } })),
+      run.worktree?.name && h('strong', null, '工作树：', run.worktree.name),
+      comparisonEnabled && run.worktree?.branch && !run.worktree.removedAt && Button({ label: '重命名工作树', size: 'sm', onClick: () => renameWorktree({ item: run, api, store, router }) }),
       run.worktree && h('p', { class: 'muted small' }, run.worktree.branchDeletedAt ? '工作树目录已清理 · 执行分支已删除' : run.worktree.removedAt ? `工作树目录已清理 · 保留分支 ${run.worktree.branch}` : run.worktree.branch
         ? `独立工作树：${run.cwd} · ${run.worktree.branch} · 起点 ${run.worktree.base.slice(0, 10)}`
         : `独立工作树尚无创建回执 · 来源 ${run.worktree.source}`),

@@ -599,6 +599,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 202, await app.agent.post(input.text, 'main', { requestId: messageRequestId(req), ...(typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : {}), ...(input.readOnly === true ? { readOnly: true } : {}) }));
         }
         if (path === '/api/v1/runs' && method === 'POST') return json(res, 202, app.dispatch(await body(req), typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : undefined));
+        const worktreeName = path.match(/^\/api\/v1\/runs\/([^/]+)\/worktree-name$/);
+        if (worktreeName && method === 'PATCH')
+          return json(res, 200, app.renameRunWorktree(decodeURIComponent(worktreeName[1]!), await body(req)));
         const retainedBranch = path.match(/^\/api\/v1\/runs\/([^/]+)\/retained-branch$/);
         if (retainedBranch && (method === 'GET' || method === 'POST'))
           return json(res, 200, await app.retainedRunBranch(decodeURIComponent(retainedBranch[1]!), method === 'POST' ? await body(req) : undefined));

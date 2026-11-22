@@ -55,10 +55,10 @@ function hash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 }
 
-// Removing a checkout retains its branch and the recorded delivery evidence.
+// Display names and cleanup receipts may change after the delivery was accepted.
 function evidenceVersion(run: Run): string {
-  if (!run.worktree?.removedAt) return hash(run);
-  const { removedAt, branchDeletedAt, ...worktree } = run.worktree;
+  if (!run.worktree) return hash(run);
+  const { name, removedAt, branchDeletedAt, ...worktree } = run.worktree;
   return hash({ ...run, worktree });
 }
 

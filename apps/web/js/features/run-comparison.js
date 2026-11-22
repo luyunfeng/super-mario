@@ -2,7 +2,7 @@ import { h, replace } from '../lib/dom.js';
 import { formatDate, runStatus, uuid } from '../lib/format.js';
 import { confirmDialog, openDrawer } from '../ui/overlay.js';
 import { renderDiffLines } from './code-sidebar.js';
-import { Button, Pill, Select } from '../ui/kit.js';
+import { Button, Field, Input, Pill, Select } from '../ui/kit.js';
 
 function openRunDrawer({ item, api, store, router }, title, wide = false) {
   const token = api.token();
@@ -13,7 +13,7 @@ function openRunDrawer({ item, api, store, router }, title, wide = false) {
   const offStore = store.subscribe(({ snapshot, unauthorized }) => {
     if (api.token() !== token || unauthorized || !snapshot?.plugins.some(p => p.id === 'run-comparison' && p.status === 'active')) drawer.close();
   });
-  return { area, active: () => drawer.el.open && api.token() === token };
+  return { area, close: drawer.close, active: () => drawer.el.open && api.token() === token };
 }
 
 function openCommitDiff(options) {
@@ -42,6 +42,26 @@ function openCommitDiff(options) {
     } catch (error) { if (active()) replace(area, h('p', null, error.message), Button({ label: '重试', onClick: load })); }
   }
   void load();
+}
+
+export function renameWorktree(options) {
+  const { item, api, store } = options;
+  const { area, active, close } = openRunDrawer(options, '重命名工作树');
+  const field = Input({ value: item.worktree.name ?? '', maxlength: 80, required: true, placeholder: item.worktree.branch });
+  const error = h('p', { role: 'alert' });
+  const save = Button({ label: '保存名称', type: 'submit', kind: 'primary' });
+  const form = h('form', { class: 'stack', onSubmit: async event => {
+    event.preventDefault();
+    if (!active() || save.disabled) return;
+    save.disabled = true;
+    try {
+      await api.patch('/runs/' + encodeURIComponent(item.id) + '/worktree-name', { name: field.value, previousName: item.worktree.name ?? '' });
+      if (active()) close();
+      store.refresh();
+    } catch (reason) { if (active()) { error.textContent = reason.message; save.disabled = false; } }
+  } }, Field({ label: '工作树名称', control: field }), error, save);
+  replace(area, form);
+  field.focus();
 }
 
 export function openRetainedBranch(options) {
@@ -151,6 +171,7 @@ export function compareRuns({ run, runs, projectId, router, executorName, api, s
           item.commitChanges.base.slice(0, 10) + ' → ' + item.commitChanges.head.slice(0, 10)),
         item.commitChanges.files > 0 && Button({ label: '查看文件差异', size: 'sm', onClick: () => openCommitDiff({ item, api, store, router }) }))
         : h('span', { class: 'muted small' }, '目录内已提交差异：未上报'),
+      item.worktree?.name && h('div', null, '工作树：', item.worktree.name),
       item.worktree?.base && h('div', { class: 'small' }, '工作树起点：', h('code', { title: item.worktree.base }, item.worktree.base.slice(0, 10))),
       item.cwd && h('div', null, '工作目录：', item.cwd),
       item.doneWhen && h('div', null, '完成标准：', item.doneWhen),
