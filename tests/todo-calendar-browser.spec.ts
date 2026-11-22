@@ -108,7 +108,11 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await entry.click();
   const notes = editor.getByLabel('备注', { exact: true });
   await notes.fill('本地草稿');
-  server.app.updateTodo(todo.id, { notes: '另一入口追加' });
+  const titleInput = editor.getByRole('textbox', { name: '标题' });
+  server.app.updateTodo(todo.id, { title: '本地三月末更新', notes: '另一入口追加' });
+  await expect(titleInput).toHaveValue('本地三月末更新');
+  await expect(notes).toHaveValue('本地草稿');
+  await expect(notes).toBeFocused();
   await editor.getByRole('button', { name: '保存' }).click();
   await expect(editor.getByRole('alert')).toContainText('最新备注：另一入口追加');
   await expect(notes).toHaveValue('本地草稿');
@@ -116,6 +120,14 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await notes.fill('另一入口追加，加上本地草稿');
   await editor.getByRole('button', { name: '保存' }).click();
   await expect.poll(() => read().notes).toBe('另一入口追加，加上本地草稿');
+  await entry.click();
+  await titleInput.fill('本地三月末新标题');
+  server.app.updateTodo(todo.id, { notes: '新增第一行\r\n新增第二行' });
+  await expect(notes).toHaveValue('新增第一行\n新增第二行');
+  await expect(titleInput).toBeFocused();
+  await editor.getByRole('button', { name: '保存' }).click();
+  await expect.poll(() => read().title).toBe('本地三月末新标题');
+  assert.equal(read().notes, '新增第一行\r\n新增第二行');
   await root.getByRole('button', { name: '添加待办 2030-03-27 11:00' }).click();
   const panel = page.locator('#panel-todos');
   await panel.getByLabel('新待办优先级').selectOption('high');

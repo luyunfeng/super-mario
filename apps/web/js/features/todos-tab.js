@@ -106,11 +106,15 @@ export function createTodosTab({ api, store, router }) {
   const projectName = (id) => (store.view.snapshot?.projects ?? []).find(item => item.id === id)?.name;
 
   function openEdit(todo) {
+    const owner = store.view.snapshotOwner;
+    const sameOwner = () => !store.view.unauthorized && store.view.snapshotOwner === owner && api.draftOwner() === owner;
     let originalTitle = todo.title;
     let originalNotes = todo.notes ?? '';
     const conflict = h('div', { role: 'alert', hidden: true });
     const name = Input({ value: todo.title, required: true });
     const notes = TextArea({ value: todo.notes ?? '', rows: 4 });
+    // A textarea presents CRLF as LF. Keep the exact stored text for the API comparison.
+    const notesChanged = () => notes.value !== originalNotes.replace(/\r\n?/g, '\n');
     const editPriority = Select({ options: Object.entries(todoPriorityLabels), value: todo.priority ?? 'normal' });
     const originalDue = localDate(todo.dueAt);
     const originalReminder = localDate(todo.reminderAt, true);
@@ -150,7 +154,7 @@ export function createTodosTab({ api, store, router }) {
       fillDependencies();
     });
     const drawer = openDrawer({
-      title: '编辑待办',
+      title: '编辑待办', onClose: () => unsubscribe(),
       body: [conflict, Field({ label: '标题', control: name, required: true }), Field({ label: '备注', control: notes }),
         h('div', { class: 'form-row' }, Field({ label: '截止日期', control: dueInput, hint: '留空取消截止日期。' }), clock && Field({ label: '截止时间', control: clock }), Field({ label: '在等谁', control: waiting, hint: '填写后会进入“等待中”。' })),
         Field({ label: '提醒时间', control: reminder, hint: '按本机时区填写；留空取消。到点检查需在 Agent 中开启提醒，外发仍需渠道与发送授权。' }),
@@ -158,6 +162,7 @@ export function createTodosTab({ api, store, router }) {
         Field({ label: '前置子项', control: dependencies, hint: '可选择多个同级子项。' })],
       footer: [Button({ label: '取消', onClick: () => drawer.close() }), Button({
         label: '保存', kind: 'primary', onClick: async () => {
+          if (!sameOwner()) { drawer.close(); return; }
           if (!name.value.trim()) throw new Error('请填写标题');
           if (!dueInput.reportValidity() || (clock && !clock.reportValidity()) || !reminder.reportValidity()) return;
           // Omit unchanged values: re-sending reminderAt clears its claim in the API.
@@ -178,7 +183,7 @@ export function createTodosTab({ api, store, router }) {
             patch.title = name.value.trim();
             patch.expectedTitle = originalTitle;
           }
-          if (notes.value !== originalNotes) {
+          if (notesChanged()) {
             patch.notes = notes.value;
             patch.expectedNotes = originalNotes;
           }
@@ -196,7 +201,7 @@ export function createTodosTab({ api, store, router }) {
             if (error.status === 409) {
               await store.refresh();
               const latest = store.view.snapshot?.todos.find(item => item.id === todo.id && inScope(item));
-              if (latest) {
+              if (latest && drawer.el.open && sameOwner()) {
                 const differences = [];
                 if (patch.title !== undefined && latest.title !== originalTitle) {
                   originalTitle = latest.title;
@@ -219,6 +224,24 @@ export function createTodosTab({ api, store, router }) {
         },
       })],
     });
+    const syncText = () => {
+      if (!drawer.el.open) return;
+      if (!sameOwner()) { drawer.close(); return; }
+      const latest = store.view.snapshot?.todos.find(item => item.id === todo.id && inScope(item));
+      if (!latest) { drawer.close(); return; }
+      // Update untouched fields in place so a refresh preserves the other field's draft and focus.
+      if (name.value === originalTitle && latest.title !== originalTitle) {
+        originalTitle = latest.title;
+        name.value = originalTitle;
+      }
+      const latestNotes = latest.notes ?? '';
+      if (!notesChanged() && latestNotes !== originalNotes) {
+        originalNotes = latestNotes;
+        notes.value = latestNotes;
+      }
+    };
+    const unsubscribe = store.subscribe(syncText);
+    syncText();
   }
 
   function row(todo, done) {
