@@ -125,6 +125,13 @@ function timeBoundary(value: Json | undefined, fallback: number, label = '待办
   throw new Error(label + '需要带时区的 ISO 时间');
 }
 
+const reminderParameter = { type: 'string', description: '未来的提醒时间，使用带时区的 ISO 时间。修改时传空字符串可取消提醒。' };
+
+function validateAssistantReminder(value: Json | undefined) {
+  if (value === undefined || value === '') return;
+  if (timeBoundary(value, 0, '待办提醒') <= Date.now()) throw new Error('待办提醒必须晚于当前时间');
+}
+
 function dailyBrief(context: ExtensionContext): Json {
   const todos = context.store.list<Todo>('todos');
   const runs = context.store.list<Run>('runs');
@@ -264,8 +271,9 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             if (!editable.some(key => patch[key] !== undefined)) throw new Error('请指定需要修改的字段');
             if (patch.dueAt !== undefined && typeof patch.expectedDueAt !== 'string') throw new Error('改期前请核对当前截止时间');
             if (patch.dueAt !== undefined && patch.dueAt !== '') timeBoundary(patch.dueAt, 0, '待办截止时间');
+            validateAssistantReminder(patch.reminderAt);
             return actions.updateTodo!(String(id ?? ''), patch);
-          }, { id: { type: 'string' }, dueAt: { type: 'string', description: '带时区的 ISO 时间，空字符串清除期限' }, expectedDueAt: { type: 'string' }, title: { type: 'string' }, notes: { type: 'string' }, waitingOn: { type: 'string' }, reminderAt: { type: 'string' } }));
+          }, { id: { type: 'string' }, dueAt: { type: 'string', description: '带时区的 ISO 时间，空字符串清除期限' }, expectedDueAt: { type: 'string' }, title: { type: 'string' }, notes: { type: 'string' }, waitingOn: { type: 'string' }, reminderAt: reminderParameter }));
           if (actions.knowledgeActionStatus) context.contribute('tools', 'knowledge_action_status', tool('knowledge_action_status',
             '只读查询已读知识页某一行动项原文所关联待办的当前状态与登记期限。', async (args, signal) => {
               signal.throwIfAborted(); return await actions.knowledgeActionStatus!(args) as Json;
@@ -278,8 +286,10 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             },
             { id: { type: 'string' }, updatedAt: { type: 'string' }, actions: { type: 'array', minItems: 1, items: { type: 'object', properties: { actionLine: { type: 'string' }, dueAt: { type: 'string' } }, required: ['actionLine'], additionalProperties: false } }, actionLine: { type: 'string' }, dueAt: { type: 'string', description: '仅在期限明确时传带时区的 ISO 时间' } }));
           context.contribute('tools', 'todo_create', tool('todo_create', '创建一个待处理事项。', async (args, signal) => {
-            signal.throwIfAborted(); return actions.createTodo(args);
-          }, { title: { type: 'string' }, notes: { type: 'string' }, projectId: { type: 'string' }, dueAt: { type: 'string' }, reminderAt: { type: 'string' }, waitingOn: { type: 'string' } }));
+            signal.throwIfAborted();
+            validateAssistantReminder(args.reminderAt);
+            return actions.createTodo(args);
+          }, { title: { type: 'string' }, notes: { type: 'string' }, projectId: { type: 'string' }, dueAt: { type: 'string' }, reminderAt: reminderParameter, waitingOn: { type: 'string' } }));
         }
         context.contribute('tools', 'todos_list', tool('todos_list', '读取工作台待办。status=open 查未完成，done 查已完成，all 或省略可查全部。overdue=true 仅查已过截止时间的未完成事项。可按项目、标题和备注关键词及截止时段组合筛选。', async (args, signal) => {
           signal.throwIfAborted();

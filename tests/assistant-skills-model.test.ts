@@ -1377,3 +1377,50 @@ test('Web 与飞书仅更新选定待办的期限，保留提醒并拒绝并发�
     assert.equal(server.app.todos().find(row => row.id === other)?.dueAt, undefined);
   } finally { await server.close(); }
 });
+
+test('待办提醒拒绝过期创建，Web 登记未来提醒，飞书取消时保留截止时间', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const reminder = '2099-01-30T14:00:00+08:00';
+  const due = '2099-02-01T15:00:00+08:00';
+  let id = '';
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /是否送达飞书另看投递回执/);
+      const question = JSON.stringify(req.content);
+      if (question.includes('2000年')) return call('todo_create', { title: '跟进进度', reminderAt: '2000-01-01T08:00:00Z' }, 'past');
+      if (question.includes('取消')) return call('todo_update', { id, reminderAt: '' }, 'clear');
+      return call('todo_update', { id, reminderAt: reminder }, 'save');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    if (req.callId === 'past') {
+      assert.match(raw, /必须晚于当前时间/);
+      return { role: 'assistant', content: '请给出未来的提醒时间。' };
+    }
+    const todo = JSON.parse(raw);
+    assert.equal(todo.dueAt, due);
+    assert.equal(todo.remindedAt, undefined);
+    assert.equal(todo.reminderAt, req.callId === 'clear' ? undefined : reminder);
+    return { role: 'assistant', content: req.callId === 'clear' ? '已取消这项提醒。' : '已保存提醒。' };
+  }, options => {
+    adapter = options;
+    return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    assert.equal(await ask('创建待办，2000年1月1日提醒我跟进进度'), '请给出未来的提醒时间。');
+    assert.equal(server.app.todos().length, 0);
+    const project = await api('/projects', { name: '提醒验证' });
+    id = (await api('/todos', { title: '核对交付', projectId: project.id, dueAt: due })).id;
+    assert.equal(await ask('2099年1月30日北京时间下午两点提醒我核对交付', '/projects/' + project.id + '/messages'), '已保存提醒。');
+    const bot = await api('/feishu/bots', { name: '交付提醒', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
+      scope: { kind: 'task', todoId: id, projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage('取消这项提醒', { ...source, messageId: 'clear' });
+    await t.waitFor(() => assert.ok(sent.includes('已取消这项提醒。')));
+    const stored = server.app.todos()[0]!;
+    assert.equal(stored.reminderAt, undefined);
+    assert.equal(stored.dueAt, due);
+  } finally { await server.close(); }
+});
