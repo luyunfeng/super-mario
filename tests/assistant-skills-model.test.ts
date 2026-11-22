@@ -649,7 +649,7 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
   } finally { await server.close(); }
 });
 
-test('Web 和飞书按已读版本调整知识重要级和标签', { timeout: 30000 }, async t => {
+test('Web 和飞书按已读版本调整知识重要级、相关度、标签和别名', { timeout: 30000 }, async t => {
   let adapter!: FeishuOptions, action: 'add' | 'remove' = 'add';
   let id = '', foreignId = '', updatedAt = '';
   const sent: string[] = [];
@@ -659,6 +659,8 @@ test('Web 和飞书按已读版本调整知识重要级和标签', { timeout: 30
     call('knowledge_set_importance', { id: target, updatedAt: version, importance: action === 'add' ? 'P1' : null }, step);
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
+      assert.ok(req.tools.includes('knowledge_change_alias'));
+      assert.match(req.system, /仍有重名就请用户选定/);
       assert.ok(req.tools.includes('knowledge_change_tag'));
       assert.match(req.system, /仅改用户指定的标签/);
       assert.ok(req.tools.includes('knowledge_set_importance'));
@@ -671,6 +673,22 @@ test('Web 和飞书按已读版本调整知识重要级和标签', { timeout: 30
       const pages = JSON.parse(raw);
       assert.deepEqual(pages.map((p: {id:string}) => p.id), [id]);
       updatedAt = pages[0].updatedAt;
+      return call('knowledge_change_alias', { id: foreignId, updatedAt, action, alias: '旧名' }, 'alias-foreign');
+    }
+    if (req.callId === 'alias-foreign') {
+      assert.match(raw, /作用域|知识页不可用/);
+      return call('knowledge_change_alias', { id, updatedAt: '过期', action, alias: '旧名' }, 'alias-stale');
+    }
+    if (req.callId === 'alias-stale') {
+      assert.match(raw, /新版本/);
+      return call('knowledge_change_alias', { id, updatedAt, action, alias: '旧名' }, 'alias-apply');
+    }
+    if (req.callId === 'alias-apply' || req.callId === 'alias-repeat') {
+      const result = JSON.parse(raw);
+      assert.deepEqual(result.aliases, action === 'add' ? ['历史名称', '旧名'] : ['历史名称']);
+      assert.equal(result.changed, req.callId === 'alias-apply');
+      updatedAt = result.updatedAt;
+      if (result.changed) return call('knowledge_change_alias', { id, updatedAt, action, alias: '旧名' }, 'alias-repeat');
       return rank(foreignId, updatedAt, 'rank-foreign');
     }
     if (req.callId === 'rank-foreign') {
@@ -711,7 +729,7 @@ test('Web 和飞书按已读版本调整知识重要级和标签', { timeout: 30
       return change(id, result.updatedAt, 'repeat');
     }
     assert.equal(result.changed, false);
-    return { role: 'assistant', content: '已核对保存的重要级和标签。' };
+    return { role: 'assistant', content: '已核对保存的重要级、相关度、标签和别名。' };
   }, options => {
     adapter = options;
     return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
@@ -720,10 +738,10 @@ test('Web 和飞书按已读版本调整知识重要级和标签', { timeout: 30
   try {
     const project = await api('/projects', { name: '标签项目' });
     const other = await api('/projects', { name: '其他项目' });
-    const page = { layer: 'project', title: '验收记录', content: '原有正文', tags: ['原有标签'] };
+    const page = { layer: 'project', title: '验收记录', content: '原有正文', aliases: ['历史名称'], tags: ['原有标签'] };
     id = (await api('/knowledge', { ...page, projectId: project.id })).id;
     foreignId = (await api('/knowledge', { ...page, projectId: other.id })).id;
-    assert.equal(await ask('把验收记录设为 P1，相关度设为 0，加上待核对标签', '/projects/' + project.id + '/messages'), '已核对保存的重要级和标签。');
+    assert.equal(await ask('把验收记录设为 P1，相关度设为 0，加上待核对标签和别名「旧名」', '/projects/' + project.id + '/messages'), '已核对保存的重要级、相关度、标签和别名。');
     assert.deepEqual((await server.app.knowledge().list({ tag: '待核对' })).map(p => p.id), [id]);
     assert.deepEqual((await server.app.knowledge().list({ importance: 'P1' })).map(p => p.id), [id]);
     action = 'remove';
@@ -731,14 +749,15 @@ test('Web 和飞书按已读版本调整知识重要级和标签', { timeout: 30
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
     const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
-    await adapter.onMessage('清除验收记录的重要级和相关度并移除待核对标签', { ...source, messageId: 'remove-tag' });
-    await t.waitFor(() => assert.ok(sent.includes('已核对保存的重要级和标签。')));
+    await adapter.onMessage('清除验收记录的重要级和相关度并移除待核对标签和别名「旧名」', { ...source, messageId: 'remove-tag' });
+    await t.waitFor(() => assert.ok(sent.includes('已核对保存的重要级、相关度、标签和别名。')));
     const result = await server.app.knowledge().list({ query: '验收记录' });
     for (const item of result) {
       assert.equal(item.importance, undefined);
       assert.equal(item.relevance, undefined);
       assert.equal(item.content, '原有正文');
       assert.deepEqual(item.tags, ['原有标签']);
+      assert.deepEqual(item.aliases, ['历史名称']);
     }
     const history = await server.app.knowledgeRevision(id);
     const prior = await server.app.knowledgeRevision(id, history!.previous);

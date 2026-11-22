@@ -150,6 +150,7 @@ export interface SystemActions {
   editConfirmedFacts?(args: Record<string, unknown>): Promise<Json>;
   setKnowledgeRelevance?(args: Record<string, unknown>): Promise<Json>;
   setKnowledgeImportance?(args: Record<string, unknown>): Promise<Json>;
+  changeKnowledgeAlias?(args: Record<string, unknown>): Promise<Json>;
   changeKnowledgeTag?(args: Record<string, unknown>): Promise<Json>;
   knowledgeRevision?(id: string, commit?: string, projectId?: string): ReturnType<NonNullable<KnowledgeBackend['revision']>>;
   knowledgeOriginal?(pageId: string, sourceId?: string, projectId?: string): Promise<{
@@ -304,6 +305,10 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           '按用户要求调整指定知识页的重要级。先读取该页 id 和 updatedAt，传 P0–P3，清除分级时传 null。',
           async (args, signal) => { signal.throwIfAborted(); return actions.setKnowledgeImportance!(args); },
           { id: { type: 'string' }, updatedAt: { type: 'string' }, importance: { type: ['string', 'null'], enum: ['P0', 'P1', 'P2', 'P3', null] } }));
+        if (actions?.changeKnowledgeAlias) context.contribute('tools', 'knowledge_change_alias', tool('knowledge_change_alias',
+          '按用户明确要求给已定位的知识页添加或移除一个别名。传该页 id 和已读 updatedAt。',
+          async (args, signal) => { signal.throwIfAborted(); return actions.changeKnowledgeAlias!(args); },
+          { id: { type: 'string' }, updatedAt: { type: 'string' }, alias: { type: 'string' }, action: { type: 'string', enum: ['add', 'remove'] } }));
         if (actions?.changeKnowledgeTag) context.contribute('tools', 'knowledge_change_tag', tool('knowledge_change_tag',
           '按用户明确要求给指定知识页添加或移除一个标签。传入 knowledge_list 返回的 id 和 updatedAt；版本过期时重新核对。',
           async (args, signal) => { signal.throwIfAborted(); return actions.changeKnowledgeTag!(args); },
