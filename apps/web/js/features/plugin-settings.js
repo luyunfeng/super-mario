@@ -1,3 +1,4 @@
+import { browserVoices, readAloudVoiceEditor } from './reply-read-aloud.js';
 import { openShortcutSettings } from './shortcuts.js';
 import { preferenceEditor } from './plugin-preferences.js';
 import { openSavedPrompts } from './saved-prompts.js';
@@ -122,6 +123,7 @@ export function createPluginSettings({ api, store, router }) {
     keyedList(menu,matches,p=>p.id,p=>h('button',{type:'button','aria-pressed':String(selected===p.id),onclick:()=>{selected=p.id;paint();}},
       h('strong',{},systemText(p.name)),h('small',{},status[p.status]?.[0] ?? p.status)),p=>JSON.stringify([selected===p.id,p.name,p.status]));
     if (!matches.length) { replace(list,h('p',{},'没有匹配的插件')); return; }
+    const voices = selected === 'reply-read-aloud' ? browserVoices() : [];
     keyedList(list, matches.filter(p=>p.id===selected), p => p.id, plugin => {
       const entries = features(plugin);
       return h('section', { class: 'plugin-section', 'aria-label': systemText(plugin.name) },
@@ -134,6 +136,7 @@ export function createPluginSettings({ api, store, router }) {
         h('p',{},descriptions[plugin.id] ?? (entries.length ? '提供以下工作台功能：'+entries.map(e=>e.label).join('、') : '此插件由执行环境提供，已声明的能力见下方。')),
         h('code',{class:'small muted'},plugin.id),
         preferenceEditor(plugin.id),
+        plugin.id === 'reply-read-aloud' && plugin.status === 'active' && readAloudVoiceEditor(voices),
         plugin.id === 'shortcut-settings' && Button({ label: '快捷键设置', disabled: plugin.status !== 'active', onClick: () => openShortcutSettings(store) }),
         plugin.id === 'start-page' && startPageEditor({ api, store }, snapshot.startPage, startPages(plugins)),
         plugin.id === 'saved-prompts' && Button({ label: '管理常用提示词', size: 'sm', disabled: plugin.status !== 'active',
@@ -148,7 +151,7 @@ export function createPluginSettings({ api, store, router }) {
             if (e.target.checked) pins.add(item.key); else pins.delete(item.key);
             writeLocal(key, [...pins]); paint();
           } }), ' 固定到侧边栏'))));
-    }, plugin => JSON.stringify([plugin, features(plugin).map(item => pins.has(item.key)), plugin.id === 'start-page' && [snapshot.startPage, startPages(plugins)]]));
+    }, plugin => JSON.stringify([plugin, voices.map(v => [v.voiceURI, v.name, v.lang]), features(plugin).map(item => pins.has(item.key)), plugin.id === 'start-page' && [snapshot.startPage, startPages(plugins)]]));
   }
   function open(pluginId) {
     if (typeof pluginId === 'string') { selected = pluginId; search.value = ''; }
@@ -158,6 +161,7 @@ export function createPluginSettings({ api, store, router }) {
     paint();
   }
   const footer = h('footer', { class: 'plugin-footer' }, Button({ label: '插件配置', size: 'sm', onClick: open }));
+  window.speechSynthesis?.addEventListener?.('voiceschanged', () => { if (drawer && selected === 'reply-read-aloud') paint(); });
   store.subscribe(paint);
   paint();
   return { nav, footer, open, right };

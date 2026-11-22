@@ -28,17 +28,35 @@ test('主对话与项目朗读指定正文，退出或停用插件后忽略迟�
       abort() { document.body.dataset.microphone = 'closed'; }
     }
     Object.assign(window, { chunks, SpeechRecognition: Recognition });
-    Object.defineProperty(window, 'speechSynthesis', { value: {
+    const voices = [{ voiceURI: 'fixture-reader', name: '合成声音', lang: 'zh-CN' }];
+    Object.defineProperty(SpeechSynthesisUtterance.prototype, 'voice', { writable: true, value: null });
+    Object.defineProperty(window, 'speechSynthesis', { value: Object.assign(new EventTarget(), {
+      getVoices() { return sessionStorage.getItem('voicesReady') ? voices : []; },
       speak(u: SpeechSynthesisUtterance) { chunks.push(u); document.body.dataset.speaker = 'playing'; },
       cancel() { document.body.dataset.speaker = 'stopped'; },
-    } });
+    }) });
   });
   const chunks = () => page.evaluate(() => (window as unknown as { chunks: SpeechSynthesisUtterance[] }).chunks.map(u => u.text));
   const ended = () => page.evaluate(() => (window as unknown as { chunks: SpeechSynthesisUtterance[] }).chunks.at(-1)?.dispatchEvent(new Event('end')));
   await page.goto(server.url + '/#chat?token=fixture');
+  await page.getByRole('button', { name: '插件配置', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: '插件配置' });
+  await settings.getByLabel('搜索插件').fill('reply-read-aloud');
+  const select = settings.getByLabel('朗读声音');
+  await expect(select.locator('option')).toHaveCount(1);
+  await page.evaluate(() => {
+    sessionStorage.setItem('voicesReady', '1');
+    speechSynthesis.dispatchEvent(new Event('voiceschanged'));
+  });
+  await select.selectOption('fixture-reader');
+  await page.reload();
+  const lastVoice = () => page.evaluate(() =>
+    (window as unknown as { chunks: SpeechSynthesisUtterance[] }).chunks.at(-1)?.voice?.voiceURI ?? 'default');
   const play = page.getByRole('button', { name: '朗读回复', exact: true });
   await play.click();
+  expect(await lastVoice()).toBe('fixture-reader');
   await ended();
+  expect(await lastVoice()).toBe('fixture-reader');
   expect((await chunks()).join('')).toBe(text);
   await ended();
   await expect(play).toBeVisible();
@@ -66,6 +84,11 @@ test('主对话与项目朗读指定正文，退出或停用插件后忽略迟�
   await ended();
   expect(await chunks()).toEqual(before);
   await play.click();
+  expect(await lastVoice()).toBe('fixture-reader');
+  await page.getByRole('button', { name: '停止朗读' }).click();
+  await page.evaluate(() => sessionStorage.removeItem('voicesReady'));
+  await play.click();
+  expect(await lastVoice()).toBe('default');
   const disabled = await page.request.post(server.url + '/api/v1/plugins/reply-read-aloud', {
     headers: { authorization: 'Bearer fixture' }, data: { enabled: false },
   });

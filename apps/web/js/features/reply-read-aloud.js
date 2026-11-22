@@ -1,4 +1,24 @@
-import { h } from '../lib/dom.js';
+import { h, readLocal, writeLocal } from '../lib/dom.js';
+
+const voiceKey = 'sm.replyReadAloud.voice';
+
+export function browserVoices() {
+  return window.speechSynthesis?.getVoices?.() ?? [];
+}
+
+export function readAloudVoiceEditor(voices) {
+  if (!window.speechSynthesis || !window.SpeechSynthesisUtterance)
+    return h('p', { class: 'small muted' }, '当前浏览器不支持朗读。');
+  const saved = readLocal(voiceKey, '');
+  const missing = saved && !voices.some(voice => voice.voiceURI === saved);
+  const select = h('select', { class: 'select', 'aria-label': '朗读声音',
+    onchange: event => writeLocal(voiceKey, event.target.value) },
+    h('option', { value: '' }, '浏览器默认声音'),
+    voices.map(voice => h('option', { value: voice.voiceURI }, [voice.name, voice.lang].filter(Boolean).join(' · '))),
+    missing && h('option', { value: saved, disabled: true }, '已选声音暂不可用，使用默认声音'));
+  select.value = saved;
+  return h('label', { class: 'field' }, '朗读声音', select);
+}
 
 export function createReplyReadAloud(router, beforeSpeak) {
   let binding, playback;
@@ -40,6 +60,8 @@ export function createReplyReadAloud(router, beforeSpeak) {
         // engine length limits without altering the words or splitting a code point.
         beforeSpeak();
         const chunks = displayedText(message).match(/[\s\S]{1,180}(?:[。！？.!?\n]|\s)|[\s\S]{1,180}/gu) || [];
+        const preferred = readLocal(voiceKey, '');
+        const voice = preferred && browserVoices().find(item => item.voiceURI === preferred);
         const current = playback = { id: message.id, button, feedback };
         button.textContent = '停止朗读';
         function next(index) {
@@ -51,6 +73,7 @@ export function createReplyReadAloud(router, beforeSpeak) {
           };
           try {
             const utterance = new SpeechSynthesisUtterance(chunks[index]);
+            if (voice) { utterance.voice = voice; utterance.lang = voice.lang; }
             utterance.onend = () => next(index + 1);
             utterance.onerror = failed;
             window.speechSynthesis.speak(utterance);
