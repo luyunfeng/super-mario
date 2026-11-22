@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Super Mario · Herdr 多屏现场终端墙与 Web 接管</title>
+  <link rel="stylesheet" href="/vendor/xterm.css" />
+  <style>
+    :root {
+      --bg: #111317;
+      --panel: #181B22;
+      --panel-2: #20242E;
+      --border: #2C313E;
+      --border-hi: #444C60;
+      --text: #ECEFF4;
+      --text-2: #9AA3B5;
+      --muted: #6C7589;
+      --accent: #D97757;
+      --green: #4ADE80;
+      --green-bg: rgba(74, 222, 128, 0.14);
+      --blue: #60A5FA;
+      --blue-bg: rgba(96, 165, 250, 0.14);
+      --amber: #F59E0B;
+      --amber-bg: rgba(245, 158, 11, 0.16);
+      --red: #F87171;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      --sans: system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 13px; overflow: hidden; }
+    .app { display: grid; grid-template-rows: 48px minmax(0, 1fr); height: 100vh; }
+
+    /* Topbar */
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--border);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 14px; }
+    .brand-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+    .top-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px;
+      border-radius: 7px; border: 1px solid var(--border); background: var(--panel-2);
+      color: var(--text-2); font-size: 12px; cursor: pointer; text-decoration: none;
+      transition: all 0.14s ease; white-space: nowrap;
+    }
+    .btn:hover { border-color: var(--border-hi); color: var(--text); }
+    .btn.active { background: #2D3342; border-color: var(--border-hi); color: var(--text); font-weight: 600; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    .btn.primary:hover { filter: brightness(1.06); }
+    .btn.control-on { background: rgba(245, 158, 11, 0.2); border-color: var(--amber); color: #FCD34D; font-weight: 600; }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* Main Split */
+    .workspace { display: grid; grid-template-columns: 290px minmax(0, 1fr); min-height: 0; }
+    @media (max-width: 860px) { .workspace { grid-template-columns: 1fr; grid-template-rows: 220px minmax(0, 1fr); } }
+
+    /* Sidebar */
+    .sidebar {
+      background: var(--panel); border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; min-height: 0;
+    }
+    .side-head { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+    .side-input {
+      width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+      color: var(--text); padding: 6px 9px; font-size: 12px;
+    }
+    .side-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .machine-hdr {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 4px 6px; font-family: var(--mono); font-size: 11px; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .pane-item {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+      padding: 8px 10px; cursor: pointer; transition: all 0.14s ease;
+    }
+    .pane-item:hover { border-color: var(--border-hi); }
+    .pane-item.is-open { border-color: var(--accent); background: rgba(217, 119, 87, 0.1); }
+    .pane-item-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .pane-title { font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pane-meta { font-family: var(--mono); font-size: 11px; color: var(--text-2); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border-radius: 999px;
+      font-size: 10.5px; font-weight: 600; white-space: nowrap;
+    }
+    .pill-work { background: var(--blue-bg); color: var(--blue); }
+    .pill-idle { background: var(--green-bg); color: var(--green); }
+    .pill-ctrl { background: var(--amber-bg); color: #FCD34D; }
+
+    /* Stage Grid */
+    .stage {
+      padding: 10px; display: grid; gap: 10px; min-height: 0; overflow: hidden;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-auto-rows: minmax(0, 1fr);
+    }
+    .stage.layout-1 { grid-template-columns: 1fr; }
+    .stage.layout-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .stage.layout-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+    @media (max-width: 900px) { .stage.layout-2, .stage.layout-4 { grid-template-columns: 1fr; } }
+
+    .tile {
+      background: #0D1117; border: 1px solid var(--border); border-radius: 10px;
+      display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; overflow: hidden;
+    }
+    .tile.is-control { border-color: var(--amber); box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.25); }
+    .tile-hdr {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 7px 10px; background: var(--panel); border-bottom: 1px solid var(--border);
+    }
+    .tile-info { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .tile-name { font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tile-sub { font-family: var(--mono); font-size: 11px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tile-actions { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+    .tile-screen { position: relative; min-height: 0; overflow: auto; padding: 6px; background: #0D1117; }
+    .tile-status {
+      position: absolute; top: 8px; right: 10px; z-index: 4;
+      background: rgba(17, 19, 23, 0.85); border: 1px solid var(--border); border-radius: 999px;
+      padding: 2px 8px; font-size: 11px; color: var(--text-2); pointer-events: none;
+    }
+
+    /* Quick Command Bar */
+    .tile-cmd {
+      display: flex; align-items: center; gap: 6px; padding: 7px 8px;
+      background: var(--panel); border-top: 1px solid var(--border);
+    }
+    .tile-cmd input {
+      flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 6px; color: var(--text); padding: 6px 9px; font-size: 12.5px;
+    }
+    .tile-cmd input:focus { outline: none; border-color: var(--accent); }
+
+    .empty-stage {
+      grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      color: var(--muted); gap: 8px; text-align: center; padding: 24px;
+    }
+    .auth-bar {
+      position: fixed; inset: 0; background: rgba(10, 12, 16, 0.86); z-index: 20;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .auth-card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      padding: 20px; width: min(380px, 92vw); display: flex; flex-direction: column; gap: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <span>Herdr 多屏现场终端墙</span>
+        <span style="color:var(--muted);font-weight:400;font-size:12px;">独立客户端连接 · 本地电脑与 Web 多屏同看、随时接管发话</span>
+      </div>
+      <div class="top-tools">
+        <button class="btn" data-layout="1" type="button">单屏</button>
+        <button class="btn active" data-layout="2" type="button">双屏</button>
+        <button class="btn" data-layout="4" type="button">四屏</button>
+        <button class="btn" id="btn-refresh" type="button">↻ 刷新终端</button>
+        <a class="btn" href="/#projects/all/runs">← 返回工作台</a>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="sidebar">
+        <div class="side-head">
+          <input class="side-input" id="filter-input" type="search" placeholder="筛选终端标题 / 目录 / Agent…" />
+          <div style="display:flex;justify-content:space-between;align-items:center;font-size:11.5px;color:var(--muted);">
+            <span id="pane-count">正在扫描执行机…</span>
+            <button class="btn" id="btn-open-all" type="button" style="padding:2px 7px;font-size:11px;">铺满前 4 个</button>
+          </div>
+        </div>
+        <div class="side-list" id="side-list"></div>
+      </aside>
+      <main class="stage layout-2" id="stage"></main>
+    </div>
+  </div>
+
+  <div class="auth-bar" id="auth-bar" hidden>
+    <div class="auth-card">
+      <strong>需要工作台访问令牌</strong>
+      <input class="side-input" id="token-input" type="password" placeholder="输入 SUPER_MARIO_TOKEN" />
+      <button class="btn primary" id="token-save" type="button">连接现场终端</button>
+    </div>
+  </div>
+
+  <script src="/vendor/xterm.js"></script>
+  <script>
+    const STATES = { working: ['正在工作', 'pill-work'], idle: ['等待输入', 'pill-idle'], blocked: ['等你输入', 'pill-ctrl'], done: ['已停下', ''], unknown: ['待确认', ''] };
+    const encodeB64 = text => btoa(Array.from(new TextEncoder().encode(text), b => String.fromCharCode(b)).join(''));
+    const decodeB64 = b64 => new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0)));
+    const qs = new URLSearchParams(location.search);
+    const filterProjectId = qs.get('projectId') || '';
+
+    function getToken() {
+      const fromUrl = qs.get('token') || new URLSearchParams(location.hash.replace(/^#/, '')).get('token');
+      if (fromUrl) return fromUrl;
+      try {
+        const saved = JSON.parse(localStorage.getItem('super-mario-token') || 'null');
+        if (saved?.value && (!saved.expiresAt || saved.expiresAt > Date.now())) return saved.value;
+      } catch {}
+      return '';
+    }
+
+    async function api(method, path, body) {
+      const token = getToken();
+      const res = await fetch('/api/v1' + path, {
+        method,
+        headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(body ? { 'content-type': 'application/json' } : {}) },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      if (res.status === 401) { document.getElementById('auth-bar').hidden = false; throw new Error('unauthorized'); }
+      document.getElementById('auth-bar').hidden = true;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || '请求失败');
+      return data;
+    }
+
+    const callMachine = (machineId, method, params) => api('POST', `/machines/${encodeURIComponent(machineId)}/call`, { method, params });
+    const keyOf = p => `${p.machineId}::${p.terminalId}`;
+    const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    let allPanes = [];
+    let openTiles = new Map(); // key -> { pane, el, term, lease, mode, epoch, timer, disposed }
+    let layout = 2;
+
+    function setLayout(n) {
+      layout = n;
+      const stage = document.getElementById('stage');
+      stage.className = `stage layout-${n}`;
+      document.querySelectorAll('[data-layout]').forEach(b => b.classList.toggle('active', Number(b.dataset.layout) === n));
+    }
+
+    function renderSidebar() {
+      const q = (document.getElementById('filter-input').value || '').trim().toLowerCase();
+      const filtered = allPanes.filter(p => !q || `${p.title} ${p.cwd} ${p.agent} ${p.machineName}`.toLowerCase().includes(q));
+      document.getElementById('pane-count').textContent = `在线终端 ${filtered.length} / ${allPanes.length}`;
+      const list = document.getElementById('side-list');
+      if (!filtered.length) {
+        list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);">当前没有匹配的活终端</div>';
+        return;
+      }
+      const byMachine = new Map();
+      for (const p of filtered) {
+        const arr = byMachine.get(p.machineName) ?? [];
+        arr.push(p);
+        byMachine.set(p.machineName, arr);
+      }
+      const html = [];
+      for (const [mName, panes] of byMachine) {
+        html.push(`<div class="machine-hdr"><span>${esc(mName)}</span><span>${panes.length} 个会话</span></div>`);
+        for (const p of panes) {
+          const [stLabel, stCls] = STATES[p.state] || STATES.unknown;
+          const isOpen = openTiles.has(keyOf(p));
+          const shortDir = p.cwd.split('/').slice(-2).join('/');
+          html.push(`<div class="pane-item ${isOpen ? 'is-open' : ''}" data-key="${esc(keyOf(p))}">
+            <div class="pane-item-top">
+              <span class="pane-title">${esc(p.title)}</span>
+              <span class="pill ${stCls}">${stLabel}</span>
+            </div>
+            <div class="pane-meta">${esc(p.agent)} · ${esc(shortDir)}${isOpen ? ' · 已打开' : ''}</div>
+          </div>`);
+        }
+      }
+      list.innerHTML = html.join('');
+      list.querySelectorAll('.pane-item').forEach(el => {
+        el.addEventListener('click', () => {
+          const pane = allPanes.find(p => keyOf(p) === el.dataset.key);
+          if (!pane) return;
+          if (openTiles.has(keyOf(pane))) closeTile(keyOf(pane));
+          else openTile(pane);
+        });
+      });
+    }
+
+    function updateStageEmpty() {
+      const stage = document.getElementById('stage');
+      const empty = stage.querySelector('.empty-stage');
+      if (openTiles.size === 0 && !empty) {
+        const div = document.createElement('div');
+        div.className = 'empty-stage';
+        div.innerHTML = '<strong>点击左侧任意活终端即可多屏打开</strong><span>默认以独立只读客户端接入 Herdr，与你本地电脑互不干扰；随时可点「接管输入」或直接用底部输入框给 Agent 发话。</span>';
+        stage.append(div);
+      } else if (openTiles.size > 0 && empty) {
+        empty.remove();
+      }
+    }
+
+    async function releaseLease(machineId, connectionId) {
+      if (!connectionId) return;
+      try { await callMachine(machineId, 'terminal.live.release', { connectionId }); } catch {}
+    }
+
+    function closeTile(key) {
+      const t = openTiles.get(key);
+      if (!t) return;
+      t.disposed = true;
+      t.epoch++;
+      clearTimeout(t.timer);
+      const lease = t.lease;
+      t.lease = null;
+      void releaseLease(t.pane.machineId, lease);
+      t.term?.dispose();
+      t.el.remove();
+      openTiles.delete(key);
+      updateStageEmpty();
+      renderSidebar();
+    }
+
+    function openTile(pane) {
+      const key = keyOf(pane);
+      if (openTiles.has(key)) return;
+      if (openTiles.size >= 4) {
+        const firstKey = openTiles.keys().next().value;
+        closeTile(firstKey);
+      }
+      const tileEl = document.createElement('section');
+      tileEl.className = 'tile';
+      tileEl.innerHTML = `
+        <div class="tile-hdr">
+          <div class="tile-info">
+            <div class="tile-name">${esc(pane.title)}</div>
+            <div class="tile-sub">${esc(pane.agent)} · ${esc(pane.machineName)} · ${esc(pane.cwd)}</div>
+          </div>
+          <div class="tile-actions">
+            <button class="btn btn-ctrl" type="button">接管输入</button>
+            <button class="btn btn-ctrlc" type="button" title="发送 Ctrl+C" hidden>Ctrl+C</button>
+            <button class="btn btn-close" type="button">✕</button>
+          </div>
+        </div>
+        <div class="tile-screen"><div class="tile-status">连接 Herdr…</div></div>
+        <form class="tile-cmd">
+          <input type="text" placeholder="输入一句话直接发给这个 Agent（自动接管并回车发送）…" />
+          <button class="btn primary" type="submit">发送</button>
+        </form>
+      `;
+
+      const screen = tileEl.querySelector('.tile-screen');
+      const statusEl = tileEl.querySelector('.tile-status');
+      const ctrlBtn = tileEl.querySelector('.btn-ctrl');
+      const ctrlcBtn = tileEl.querySelector('.btn-ctrlc');
+      const closeBtn = tileEl.querySelector('.btn-close');
+      const cmdForm = tileEl.querySelector('.tile-cmd');
+      const cmdInput = cmdForm.querySelector('input');
+      const cmdSubmit = cmdForm.querySelector('button');
+
+      const term = new window.Terminal({
+        convertEol: false, cursorBlink: true, fontSize: 12.5, minimumContrastRatio: 7,
+        theme: { background: '#0D1117', foreground: '#E6EDF3', cursor: '#D97757' },
+      });
+      term.open(screen);
+
+      const tile = { pane, el: tileEl, term, lease: null, mode: 'observe', epoch: 0, timer: null, disposed: false, writes: Promise.resolve() };
+      openTiles.set(key, tile);
+      document.getElementById('stage').append(tileEl);
+      updateStageEmpty();
+      renderSidebar();
+
+      function sendBytes(text) {
+        if (!tile.lease || tile.mode !== 'control') return Promise.resolve();
+        tile.writes = tile.writes.then(() =>
+          callMachine(pane.machineId, 'terminal.live.input', { connectionId: tile.lease, data: encodeB64(text) })
+        ).catch(err => {
+          statusEl.textContent = '发送失败：' + err.message;
+        });
+        return tile.writes;
+      }
+
+      term.onData(data => { if (tile.mode === 'control' && tile.lease) void sendBytes(data); });
+
+      async function poll(stamp, after = -1) {
+        if (tile.disposed || stamp !== tile.epoch || !tile.lease) return;
+        try {
+          const data = await callMachine(pane.machineId, 'terminal.live.frames', { connectionId: tile.lease, after });
+          if (tile.disposed || stamp !== tile.epoch) return;
+          let seq = after;
+          for (const frame of data.frames || []) {
+            if (frame.width && frame.height && (term.cols !== frame.width || term.rows !== frame.height)) term.resize(frame.width, frame.height);
+            term.write(decodeB64(frame.data));
+            seq = frame.seq;
+          }
+          statusEl.textContent = tile.mode === 'control' ? '已接管 · 可直接输入' : '只读观察中';
+          tile.timer = setTimeout(() => poll(stamp, seq), 220);
+        } catch (err) {
+          if (tile.disposed || stamp !== tile.epoch) return;
+          statusEl.textContent = '连接断开：' + err.message;
+          const old = tile.lease; tile.lease = null;
+          void releaseLease(pane.machineId, old);
+        }
+      }
+
+      async function connect(mode) {
+        const stamp = ++tile.epoch;
+        clearTimeout(tile.timer);
+        const old = tile.lease; tile.lease = null;
+        await releaseLease(pane.machineId, old);
+        if (tile.disposed || stamp !== tile.epoch) return;
+        statusEl.textContent = mode === 'control' ? '正在接管输入…' : '正在接入只读观察…';
+        try {
+          const res = await callMachine(pane.machineId, 'terminal.live.open', {
+            paneId: pane.paneId, terminalId: pane.terminalId, cwd: pane.cwd, mode,
+          });
+          if (tile.disposed || stamp !== tile.epoch) { await releaseLease(pane.machineId, res.connectionId); return; }
+          tile.lease = res.connectionId;
+          tile.mode = mode;
+          tileEl.classList.toggle('is-control', mode === 'control');
+          ctrlBtn.textContent = mode === 'control' ? '停止接管' : '接管输入';
+          ctrlBtn.classList.toggle('control-on', mode === 'control');
+          ctrlcBtn.hidden = mode !== 'control';
+          if (mode === 'control') term.focus();
+          void poll(stamp, -1);
+          return true;
+        } catch (err) {
+          statusEl.textContent = '接入失败：' + err.message;
+          return false;
+        }
+      }
+
+      ctrlBtn.addEventListener('click', () => void connect(tile.mode === 'control' ? 'observe' : 'control'));
+      ctrlcBtn.addEventListener('click', () => void sendBytes('\x03'));
+      closeBtn.addEventListener('click', () => closeTile(key));
+
+      cmdForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const text = cmdInput.value.trim();
+        if (!text) return;
+        cmdSubmit.disabled = true;
+        try {
+          if (tile.mode !== 'control' || !tile.lease) {
+            const ok = await connect('control');
+            if (!ok) return;
+          }
+          await sendBytes(text + '\r');
+          cmdInput.value = '';
+        } finally {
+          cmdSubmit.disabled = false;
+        }
+      });
+
+      void connect('observe');
+    }
+
+    async function refreshPanes(autoOpen = false) {
+      try {
+        const snap = await api('GET', '/snapshot');
+        const project = filterProjectId ? (snap.projects || []).find(p => p.id === filterProjectId && !p.archivedAt) : null;
+        const machines = (snap.machines || []).filter(m => m.online && (!project?.workspace || project.workspace.machineId === m.id));
+        const results = await Promise.allSettled(machines.map(async m => {
+          const res = await callMachine(m.id, 'terminal.live.list', project?.workspace ? { cwd: project.workspace.cwd } : {});
+          return (res.panes || []).map(p => ({ ...p, machineId: m.id, machineName: m.name }));
+        }));
+        allPanes = results.flatMap(r => r.status === 'fulfilled' ? r.value : []);
+        renderSidebar();
+        updateStageEmpty();
+        if (autoOpen && openTiles.size === 0 && allPanes.length > 0) {
+          for (const p of allPanes.slice(0, Math.min(2, allPanes.length))) openTile(p);
+        }
+      } catch {}
+    }
+
+    document.querySelectorAll('[data-layout]').forEach(b => b.addEventListener('click', () => setLayout(Number(b.dataset.layout))));
+    document.getElementById('filter-input').addEventListener('input', renderSidebar);
+    document.getElementById('btn-refresh').addEventListener('click', () => void refreshPanes(false));
+    document.getElementById('btn-open-all').addEventListener('click', () => {
+      setLayout(allPanes.length > 2 ? 4 : 2);
+      for (const p of allPanes.slice(0, 4)) openTile(p);
+    });
+    document.getElementById('token-save').addEventListener('click', () => {
+      const val = document.getElementById('token-input').value.trim();
+      if (!val) return;
+      localStorage.setItem('super-mario-token', JSON.stringify({ value: val, expiresAt: Date.now() + 30 * 86400000 }));
+      void refreshPanes(true);
+    });
+    window.addEventListener('beforeunload', () => {
+      for (const key of [...openTiles.keys()]) closeTile(key);
+    });
+
+    void refreshPanes(true);
+    setInterval(() => void refreshPanes(false), 10000);
+  </script>
+</body>
+</html>

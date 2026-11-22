@@ -1,7 +1,9 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { readdir, readlink, realpath } from 'node:fs/promises';
-import { basename, isAbsolute, relative } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, isAbsolute, join, relative } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { NodeHandler } from '../packages/plugin-sdk/src/index.ts';
 import type { Json } from '../packages/protocol/src/index.ts';
@@ -24,7 +26,12 @@ export function createLiveTerminalServices(options: { command?: string; env?: No
   const command = options.command ?? 'herdr', env = { ...process.env, ...options.env };
   const leases = new Map<string, Lease>();
   let closed = false;
-  function allowed() { if (closed || env.HERDR_ENV !== '1') throw new Error('当前执行机没有接入 Herdr 现场终端'); }
+  function allowed() {
+    if (closed || env.HERDR_ENV === '0') throw new Error('当前执行机没有接入 Herdr 现场终端');
+    if (env.HERDR_ENV === '1') return;
+    const sock = join(env.HOME || homedir(), '.config', 'herdr', 'herdr.sock');
+    if (!existsSync(sock)) throw new Error('当前执行机没有接入 Herdr 现场终端');
+  }
   async function run(args: string[]) {
     allowed();
     return new Promise<string>((resolve, reject) => execFile(command, args, { env, timeout: 15_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => error ? reject(new Error('现场终端读取失败，请检查执行机上的 Herdr')) : resolve(stdout)));
