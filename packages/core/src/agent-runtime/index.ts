@@ -55,11 +55,11 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   const infrastructureErrors: unknown[] = [];
 
   const mainIdentity = scope ? scope.kind === 'global' : ownConversation === 'main';
-  const readTools = new Set(['meeting_search', 'meeting_day', 'knowledge_action_status', 'knowledge_revision', 'knowledge_original', 'machine_skills_list', 'assistant_skill_read', 'knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'todo_history', 'work_read', 'brief_read', 'interactions_list', 'projects_list', 'projects_discover', 'knowledge_jobs', 'agent_sessions', 'inbox_list', 'inbox_handling_read', 'scheduled_work_list', 'work_decisions_list', 'work_decision_reference', 'bots_list', 'mailboxes_list', 'supervisor_read', 'followups_list', 'calendar_agenda', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff', 'run_commit_diff', 'run_worktree_status', 'run_worktree_history']);
-  const scopeTools = new Set(['meeting_search', 'meeting_day', 'knowledge_action_status', 'knowledge_action_todo', 'knowledge_edit_facts', 'knowledge_set_relevance', 'knowledge_set_importance', 'knowledge_change_alias', 'knowledge_change_tag', 'knowledge_revision', 'knowledge_original', 'knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'todo_history', 'projects_list', 'work_read', 'work_dispatch', 'todo_create', 'knowledge_ingest', 'knowledge_source', 'knowledge_put', 'task_plan', 'bot_handoff', 'agent_sessions', 'session_resume', 'inbox_list', 'inbox_handling_read', 'scheduled_work_list', 'work_decisions_list', 'work_decision_record', 'work_decision_reference', 'work_decision_correct', 'work_decision_withdraw', 'scheduled_work_propose', 'scheduled_work_cancel', 'schedule_followup', 'followups_list', 'followup_cancel', 'notify_user', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff', 'run_commit_diff', 'run_worktree_status', 'run_worktree_history']);
+  const readTools = new Set(['project_message_search', 'meeting_search', 'meeting_day', 'knowledge_action_status', 'knowledge_revision', 'knowledge_original', 'machine_skills_list', 'assistant_skill_read', 'knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'todo_history', 'work_read', 'brief_read', 'interactions_list', 'projects_list', 'projects_discover', 'knowledge_jobs', 'agent_sessions', 'inbox_list', 'inbox_handling_read', 'scheduled_work_list', 'work_decisions_list', 'work_decision_reference', 'bots_list', 'mailboxes_list', 'supervisor_read', 'followups_list', 'calendar_agenda', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff', 'run_commit_diff', 'run_worktree_status', 'run_worktree_history']);
+  const scopeTools = new Set(['project_message_search', 'meeting_search', 'meeting_day', 'knowledge_action_status', 'knowledge_action_todo', 'knowledge_edit_facts', 'knowledge_set_relevance', 'knowledge_set_importance', 'knowledge_change_alias', 'knowledge_change_tag', 'knowledge_revision', 'knowledge_original', 'knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'todo_history', 'projects_list', 'work_read', 'work_dispatch', 'todo_create', 'knowledge_ingest', 'knowledge_source', 'knowledge_put', 'task_plan', 'bot_handoff', 'agent_sessions', 'session_resume', 'inbox_list', 'inbox_handling_read', 'scheduled_work_list', 'work_decisions_list', 'work_decision_record', 'work_decision_reference', 'work_decision_correct', 'work_decision_withdraw', 'scheduled_work_propose', 'scheduled_work_cancel', 'schedule_followup', 'followups_list', 'followup_cancel', 'notify_user', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff', 'run_commit_diff', 'run_worktree_status', 'run_worktree_history']);
   const scopeAllows = (name: string) => !scope || scope.kind === 'global' || (scope.kind === 'unmarked'
     ? ['knowledge_list', 'executors_list'].includes(name)
-    : scopeTools.has(name) && !(scope.kind === 'task' && ['todo_create', 'knowledge_action_todo', 'knowledge_action_status', 'meeting_search', 'meeting_day'].includes(name))
+    : scopeTools.has(name) && !(scope.kind === 'task' && ['todo_create', 'knowledge_action_todo', 'knowledge_action_status', 'project_message_search', 'meeting_search', 'meeting_day'].includes(name))
       && !(!scopedProject && ['knowledge_action_todo', 'knowledge_edit_facts', 'knowledge_set_relevance', 'knowledge_set_importance', 'knowledge_change_alias', 'knowledge_change_tag', 'knowledge_put', 'knowledge_source', 'knowledge_ingest'].includes(name)));
   function allowed(name: string) {
     if (options.canUseScope?.(activeInput) === false || !scopeAllows(name) ||
@@ -81,6 +81,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       (scope.kind !== 'unmarked' && scopedProject !== undefined && entry.layer === 'project' && entry.projectId === scopedProject);
   }
   function scopedArgs(name: string, input: JsonObject): JsonObject {
+    // A user's current question is not historical evidence for that same question.
+    if (name === 'project_message_search' && activeInput) input = { ...input, excludeId: activeInput.id };
     if (!scope || scope.kind === 'global') return input;
     const args = structuredClone(input);
     if (!scopeAllows(name)) throw new Error(`作用域禁止工具：${name}`);
@@ -100,7 +102,10 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       const run = store.get<{ projectId?: string; todoId?: string }>('runs', String(args.worktreeRunId));
       if (!run || !inScope(run)) throw new Error('原工作树不属于当前作用域');
     }
-    if (name === 'meeting_search' || name === 'meeting_day') {
+    if (name === 'project_message_search') {
+      if (!scopedProject) throw new Error('当前范围没有可读取的项目对话');
+      pin(args);
+    } else if (name === 'meeting_search' || name === 'meeting_day') {
       if (!scopedProject) throw new Error('当前范围没有可读取的项目会议');
       pin(args);
     } else if (name === 'knowledge_original' || name === 'knowledge_revision' || name === 'knowledge_action_status') {

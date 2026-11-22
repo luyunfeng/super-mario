@@ -91,19 +91,21 @@ function savedSearches(store: Store, input: Json): Json {
   });
 }
 
-function projectMessages(store: Store, input: Json) {
+function projectMessages(store: Store, input: Json, excludeId?: string) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, '检索参数无效');
   const { query, before, limit = 5 } = input;
   if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 25) fail(400, '每页须为 1 至 25 条');
   if (before !== undefined && (typeof before !== 'string' || !before)) fail(400, '消息游标无效');
   if (typeof query !== 'string' || !query.trim() || query.length > 500) fail(400, '检索词须为 1 至 500 个字符');
-  const projects = new Map(store.list<Project>('projects').filter(p => !p.archivedAt).map(p => ['project:' + p.id + ':work', p.id]));
+  const scope = input.projectId;
+  if (scope !== undefined && (typeof scope !== 'string' || !scope.trim())) fail(400, '项目 ID 无效');
+  const projects = new Map(store.list<Project>('projects').filter(p => !p.archivedAt && (scope === undefined || p.id === scope)).map(p => ['project:' + p.id + ':work', p]));
   const hits = [];
   const pattern = new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
   let pastCursor = before === undefined;
   for (const message of store.list<Message>('messages').reverse()) {
-    const projectId = projects.get(message.conversationId);
-    if (!projectId || (message.projectId && message.projectId !== projectId) ||
+    const project = projects.get(message.conversationId);
+    if (message.id === excludeId || !project || (message.projectId && message.projectId !== project.id) ||
       !['user', 'assistant'].includes(message.role) || (message.origin && message.origin !== 'user')) continue;
     const match = pattern.exec(message.text);
     if (!match) continue;
@@ -113,7 +115,7 @@ function projectMessages(store: Store, input: Json) {
     }
     if (hits.length === limit) return { hits, nextBefore: hits[hits.length - 1].id };
     const start = match.index, end = start + match[0].length;
-    hits.push({ projectId, id: message.id, role: message.role, before: message.text.slice(Math.max(0, start - 18), start),
+    hits.push({ projectId: project.id, projectName: project.name, createdAt: message.createdAt, id: message.id, role: message.role, before: message.text.slice(Math.max(0, start - 18), start),
       match: match[0], after: message.text.slice(end, end + 32) });
   }
   if (!pastCursor) fail(404, '未找到当前检索的消息游标');
@@ -122,8 +124,19 @@ function projectMessages(store: Store, input: Json) {
 
 export const conversationSearch: Extension = {
   id: 'conversation-search', name: '对话历史搜索', capabilities: ['conversation.search'],
-  permissions: ['service.provide:conversation-search.saved', 'service.provide:conversation-search.projects', 'store.read', 'store.write'],
+  permissions: ['contribute:tools', 'service.provide:conversation-search.saved', 'service.provide:conversation-search.projects', 'store.read', 'store.write'],
   activate(context) {
+    context.contribute('tools', 'project_message_search', {
+      name: 'project_message_search',
+      description: '按一段连续原文从新到旧查找项目工作对话，返回发言角色、消息 ID 和命中前后的摘录。可用 nextBefore 继续查更早的结果。',
+      parameters: { type: 'object', required: ['query'], additionalProperties: false, properties: {
+        query: { type: 'string' }, projectId: { type: 'string' }, before: { type: 'string' },
+      } },
+      async execute(args, signal) {
+        signal.throwIfAborted();
+        return projectMessages(context.store, args, typeof args.excludeId === 'string' ? args.excludeId : undefined);
+      },
+    });
     context.provide('conversation-search.projects', input => projectMessages(context.store, input));
     context.provide('conversation-search.saved', input => savedSearches(context.store, input));
   },
