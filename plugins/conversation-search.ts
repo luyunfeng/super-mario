@@ -97,6 +97,10 @@ function readableMessage(message: Message, project: Project, excludeId: unknown)
     ['user', 'assistant'].includes(message.role) && (!message.origin || message.origin === 'user');
 }
 
+function messageCitation(projectId: string, id: string) {
+  return '[查看原文](#projects/' + encodeURIComponent(projectId) + '/workspace?' + new URLSearchParams({ at: id }) + ')';
+}
+
 function projectMessages(store: Store, input: Json, excludeId?: string) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, '检索参数无效');
   const { query, before, limit = 5, mode = 'phrase' } = input;
@@ -133,7 +137,7 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
       return { before: message.text.slice(Math.max(0, start - 18), start), match: match[0], after: message.text.slice(end, end + 32) };
     });
     hits.push({ projectId: project.id, projectName: project.name, createdAt: message.createdAt, id: message.id,
-      role: message.role, ...excerpts[0], ...(excerpts.length > 1 ? { excerpts } : {}) });
+      role: message.role, webCitation: messageCitation(project.id, message.id), ...excerpts[0], ...(excerpts.length > 1 ? { excerpts } : {}) });
   }
   if (!pastCursor) fail(404, '未找到当前检索的消息游标');
   return { hits, nextBefore: null };
@@ -174,7 +178,7 @@ export const conversationSearch: Extension = {
         let end = Math.min(offset + 4000, message.text.length);
         if (end < message.text.length && /[\uD800-\uDBFF]/u.test(message.text[end - 1])) end--;
         return { id, projectId, projectName: project.name, role: message.role, createdAt: message.createdAt,
-          text: message.text.slice(offset, end), offset, nextOffset: end < message.text.length ? end : null, version: current };
+          webCitation: messageCitation(projectId, id), text: message.text.slice(offset, end), offset, nextOffset: end < message.text.length ? end : null, version: current };
       },
     });
     context.provide('conversation-search.projects', input => projectMessages(context.store, input));

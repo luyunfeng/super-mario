@@ -1052,12 +1052,16 @@ test('Web 与飞书项目助手检索项目原话，范围固定且排除当前�
       }
       assert.equal(part.text, sourceText.slice(3999));
       assert.equal(part.nextOffset, null);
-      return { role: 'assistant', content: answer };
+      assert.equal(part.webCitation, '[查看原文](#projects/' + currentProjectId + '/workspace?at=original)');
+      assert.match(req.system, /飞书回复写明项目、发言角色、消息时间和摘录/);
+      const source = part.projectName + ' · 用户 · ' + part.createdAt;
+      return { role: 'assistant', content: answer + (req.system.includes('本轮回复渠道是飞书') ? source : part.webCitation) };
     }
     const hits = JSON.parse(raw).hits;
     const original = hits.find((hit: {id: string}) => hit.id === 'original');
     assert.equal(original.projectName, '抽样项目');
     assert.equal(original.role, 'user');
+    assert.equal(original.webCitation, '[查看原文](#projects/' + currentProjectId + '/workspace?at=original)');
     assert.deepEqual(original.excerpts.map((e: {match: string}) => e.match), ['抽样批次', '[乙]']);
     assert.ok(original.excerpts.every((e: {before: string; match: string; after: string}) => sourceText.includes(e.before + e.match + e.after)));
     assert.ok(!hits.some((hit: {id: string}) => hit.id === 'partial'));
@@ -1075,18 +1079,19 @@ test('Web 与飞书项目助手检索项目原话，范围固定且排除当前�
     const project = await api('/projects', { name: '抽样项目' });
     currentProjectId = project.id;
     otherId = (await api('/projects', { name: '其他项目' })).id;
+    const createdAt = new Date().toISOString();
     for (const [id, projectId, text] of [['original', project.id, sourceText], ['partial', project.id, '仅有抽样批次'], ['foreign', otherId, query + '为保密批次']]) {
       server.app.store.put('messages', id, { id, projectId, conversationId: 'project:' + projectId + ':work',
-        role: 'user', text, status: 'done', createdAt: new Date().toISOString() });
+        role: 'user', text, status: 'done', createdAt });
     }
     const question = '请查一下上次说的' + query + '，原话有什么条件？';
-    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), answer);
+    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), answer + '[查看原文](#projects/' + project.id + '/workspace?at=original)');
     const bot = await api('/feishu/bots', { name: '历史检索', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
     const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
     await adapter.onMessage('抽样的项目过去说过什么？', { ...source, messageId: 'question' });
-    await t.waitFor(() => assert.ok(sent.includes(answer)));
+    await t.waitFor(() => assert.ok(sent.includes(answer + '抽样项目 · 用户 · ' + createdAt)));
     assert.equal(requests.filter(r => r.callId === 'history').length, 2);
     const response = requests.find(r => r.callId === 'first')!.content;
     const first = JSON.parse(typeof response === 'string' ? response : (response as {text:string}[])[0].text);

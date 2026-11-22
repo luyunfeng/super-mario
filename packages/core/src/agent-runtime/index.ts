@@ -341,7 +341,9 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         const workContext = buildWorkContext(store, scope, currentProjectId, { reviewEvidence: options.reviewEvidence, executors: options.executors?.(), inboxConversations:options.inboxConversations?.() });
         const workDecisionsData = options.workDecisions ? options.workDecisions(scope, currentProjectId) : undefined;
         const projectContextData = currentProjectId && options.projectContext ? options.projectContext(currentProjectId) : undefined;
+        const replyChannel = activeInput && store.get<{ channel: string }>('message.routes', activeInput.id)?.channel;
         const sections = [
+          ...(replyChannel === 'feishu' ? ['本轮回复渠道是飞书。引用工作台消息时使用可读出处。'] : []),
           ...(activeInput?.readOnly ? ['本轮只读，请查阅事实后回答。' + (
             activeReadOnlyAction === 'schedule_followup' ? '如有必要，可为重要会议安排会前跟进。' :
             activeReadOnlyAction === 'notify_user' ? '需要提醒主人时，可按本次跟进的推送策略调用 notify_user。' :

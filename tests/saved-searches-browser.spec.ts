@@ -35,6 +35,10 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     putMessage('archived', 'project:' + archived.id + ':work', keyword, archived.id);
     putMessage('wrong-scope', work, keyword, archived.id);
     putMessage('bot-private', 'bot:fixture', keyword);
+    const historical = await (await api('/project-message-search', { query: keyword })).json();
+    const citation = historical.hits[0].webCitation;
+    server.app.store.put('messages', 'historical-answer', { id: 'historical-answer', conversationId: 'main', role: 'assistant',
+      text: '依据见' + citation + '。另见[查看原文](https://example.invalid)。', createdAt: now, status: 'done' });
     browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors: string[] = [];
@@ -49,6 +53,14 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     const manage = results.getByRole('button', { name: '管理保存的检索', exact: true });
     const saveQuery = results.getByRole('button', { name: '保存当前检索', exact: true });
     await expect(search).toHaveAccessibleName(/搜索对话/);
+    const sourceLink = page.getByRole('link', { name: '查看原文', exact: true });
+    await expect(sourceLink).toHaveCount(1);
+    await sourceLink.click();
+    const cited = page.locator('#panel-workspace .msg.is-search-hit');
+    await expect(cited).toBeFocused();
+    await expect(cited).toContainText(keyword);
+    await page.goBack();
+    await expect(sourceLink).toBeVisible();
     let finishSearch!: () => void;
     const pendingSearch = new Promise<void>(resolve => { finishSearch = resolve; });
     await page.route('**/api/v1/project-message-search', async route => {
