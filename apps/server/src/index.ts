@@ -565,26 +565,22 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (observations && method === 'GET') return json(res, 200, app.runObservations(decodeURIComponent(observations[1]!)));
         const cancel = path.match(/^\/api\/v1\/runs\/([^/]+)\/cancel$/);
         if (cancel && method === 'POST') return json(res, 202, await app.cancel(cancel[1]));
-        if (path === '/api/v1/conversation-export' && method === 'POST') {
-          const input = await body(req) as JsonObject;
-          if (!app.plugins.list().some(plugin => plugin.id === 'conversation-export' && plugin.status === 'active')) {
-            throw new InputError('对话导出插件已停用', 503);
+        if ((path === '/api/v1/conversation-export' || path === '/api/v1/message-favorites') && method === 'POST') {
+          const favorites = path === '/api/v1/message-favorites';
+          const id = favorites ? 'message-favorites' : 'conversation-export';
+          if (!app.plugins.list().some(plugin => plugin.id === id && plugin.status === 'active')) {
+            throw new InputError(favorites ? '消息收藏插件已停用' : '对话导出插件已停用', 503);
           }
+          // Only the portable favorites backup needs more than the normal 1 MiB.
+          const input = await body(req, favorites ? 8 * 1024 * 1024 + 1024 : undefined) as JsonObject;
           const controller = new AbortController();
           const abort = () => controller.abort();
           res.once('close', abort);
           try {
-            const result = await app.plugins.invocations.use('conversation-export.markdown', input, { signal: controller.signal, timeoutMs: 30000 });
+            const service = favorites ? 'message-favorites.manage' : 'conversation-export.markdown';
+            const result = await app.plugins.invocations.use(service, input, { signal: controller.signal, timeoutMs: 30000 });
             return json(res, 200, result);
           } finally { res.off('close', abort); }
-        }
-        if (path === '/api/v1/message-favorites' && method === 'POST') {
-          if (!app.plugins.list().some(plugin => plugin.id === 'message-favorites' && plugin.status === 'active')) {
-            throw new InputError('消息收藏插件已停用', 503);
-          }
-          // A complete portable backup can exceed the normal 1 MiB mutation limit.
-          const input = await body(req, 8 * 1024 * 1024 + 1024) as JsonObject;
-          return json(res, 200, await app.plugins.invocations.use('message-favorites.manage', input));
         }
         if (path === '/api/v1/saved-searches' && (method === 'GET' || method === 'POST')) {
           const input = method === 'GET' ? { action: 'list' } : await body(req) as JsonObject;

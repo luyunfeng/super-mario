@@ -8,14 +8,14 @@ import { createEventBus } from '../packages/core/src/events.ts';
 import { createContributions, PluginHost } from '../packages/core/src/plugin-host.ts';
 import { createStore } from '../packages/core/src/store.ts';
 import type { JsonObject } from '../packages/plugin-sdk/src/index.ts';
-import { messageFavorites } from '../plugins/message-favorites.ts';
+import { createMessageFavorites, messageFavorites } from '../plugins/message-favorites.ts';
 
-async function fixture(t: test.TestContext) {
+async function fixture(t: test.TestContext, extension = messageFavorites) {
   const dir = await mkdtemp(join(tmpdir(), 'message-favorites-'));
   const store = createStore(join(dir, 'test.sqlite'));
   const host = new PluginHost({ store, dataDir: dir, events: createEventBus(store), contributions: createContributions() });
   t.after(async () => { await host.close(); store.close(); await rm(dir, { recursive: true, force: true }); });
-  host.register(messageFavorites);
+  host.register(extension);
   await host.start();
   const call = async (request: JsonObject) => await host.invocations.use('message-favorites.manage', request) as JsonObject;
   return { store, host, call };
@@ -94,4 +94,65 @@ test('portable backups merge by stable key, never convey source access, and reje
   assert.equal((await target.call({ ...restore, revision: 1, backup: batch })).toAdd, 299);
   target.store.put('messages', source.id, source);
   await assert.rejects(target.call({ action: 'add', messageId: source.id }), { status: 400 });
+});
+
+const native = { machineId: 'machine', executorId: 'codex', nativeSessionId: 'session', cwd: '/synthetic' };
+const fingerprint = '1'.repeat(64);
+const nativeMessage = { index: 26, fingerprint, role: 'user' as const, text: '字'.repeat(4100), createdAt: null };
+test('native favorites verify positional fingerprints, project public fields and back up without source locators', async t => {
+  let current = [{ ...nativeMessage, privateMetadata: 'private' }];
+  const { call } = await fixture(t, createMessageFavorites(async (source, offset) => {
+    assert.deepEqual(source, native);
+    return { items: current.filter(row => row.index >= offset && row.index < offset + 25), total: 27 };
+  }));
+  const page = { action: 'nativePage', native, offset: 25 };
+  assert.deepEqual(await call(page), { items: [nativeMessage], total: 27 });
+  await assert.rejects(call({ ...page, native: { ...native, executorId: 'external' } }), { status: 400 });
+  await assert.rejects(call({ ...page, offset: -1 }), { status: 400 });
+  const add = { action: 'addNative', native, index: 26, fingerprint };
+  await assert.rejects(call({ ...add, fingerprint: '2'.repeat(64) }), { status: 409 });
+  const [a, b] = await Promise.all([call(add), call(add)]);
+  assert.deepEqual(a, b);
+  const [item] = a.items as JsonObject[];
+  assert.equal(a.revision, 1);
+  assert.deepEqual(item.native, native);
+  assert.equal(item.createdAt, null);
+  assert.equal(item.omitted, 100);
+  assert.deepEqual(await call({ action: 'marks' }), { revision: 1, items: [{ id: item.id, native, index: 26, fingerprint }] });
+  const readSource = { action: 'source', id: item.id };
+  assert.deepEqual(await call(readSource), { native, ...nativeMessage });
+  current[0].fingerprint = '3'.repeat(64);
+  await assert.rejects(call(readSource), { status: 409 });
+  current = [];
+  await assert.rejects(call(readSource), { status: 409 });
+  const backup = await call({ action: 'backup' });
+  const [record] = backup.messages as JsonObject[];
+  assert.deepEqual(Object.keys(record).sort(), ['createdAt','key','omitted','role','starredAt','text','title']);
+  assert.equal(record.createdAt, null);
+  const restored = await fixture(t);
+  await restored.call({ action: 'restore', backup, revision: 0 });
+  const [archive] = (await restored.call({ action: 'list' })).items as JsonObject[];
+  assert.equal(archive.native, undefined);
+  assert.equal(archive.createdAt, null);
+  await assert.rejects(restored.call({ action: 'source', id: archive.id }), { status: 404 });
+  await assert.rejects(restored.call(page), { status: 503 });
+});
+
+test('a delayed native read cannot write after the plugin has been disabled and re-enabled', async t => {
+  let notifyStart!: () => void, resume!: () => void;
+  const started = new Promise<void>(resolve => { notifyStart = resolve; });
+  const finish = new Promise<void>(resolve => { resume = resolve; });
+  const { host, call } = await fixture(t, createMessageFavorites(async (_source, _offset, signal) => {
+    notifyStart();
+    await finish;
+    assert.ok(signal.aborted);
+    return { items: [nativeMessage], total: 27 };
+  }));
+  const pending = call({ action: 'addNative', native, index: 26, fingerprint });
+  await started;
+  await host.setEnabled('message-favorites', false);
+  await host.setEnabled('message-favorites', true);
+  resume();
+  await assert.rejects(pending, { status: 503 });
+  assert.deepEqual(await call({ action: 'list' }), { revision: 0, items: [] });
 });

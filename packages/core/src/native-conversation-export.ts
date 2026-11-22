@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import type { MachineClient } from '../../plugin-sdk/src/index.ts';
-import type { NativeExportSource } from '../../protocol/src/index.ts';
+import type { NativeExportSource, NativeFavoriteMessage } from '../../protocol/src/index.ts';
 import { readNativeRecords } from './native-transcript-reader.ts';
 
 function record(value: unknown): Record<string, unknown> {
@@ -7,17 +8,18 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 /** Read an already persisted session through the node's exact, read-only lookup. */
-export async function exportNativeConversation(
-  machines: MachineClient | undefined, source: NativeExportSource, includeWork: boolean, signal: AbortSignal,
+async function readConversation(
+  machines: MachineClient | undefined, source: NativeExportSource, signal: AbortSignal,
+  message: (index: number, role: 'user' | 'assistant', text: string, createdAt: string | null, raw: unknown) => void,
+  tool?: (name: string) => void,
 ) {
   const { machineId, executorId, nativeSessionId, cwd } = source;
   const machine = machines?.list().find(item => item.id === machineId && item.online);
   if (!machines || !machine) throw Object.assign(new Error('执行机离线'), { status: 503 });
   if (!machine.capabilities.includes('agents.transcript')) throw Object.assign(new Error('执行机尚不支持完整会话读取'), { status: 409 });
-  const lines: string[] = [];
   let count = 0;
   function step(name: unknown) {
-    if (includeWork && typeof name === 'string' && /^[\w.:-]{1,80}$/.test(name)) lines.push('> 工具调用：' + name, '');
+    if (tool && typeof name === 'string' && /^[\w.:-]{1,80}$/.test(name)) tool(name);
   }
   await readNativeRecords((offset, snapshot) => {
     const current = machines.list().find(item => item.id === machineId);
@@ -50,9 +52,35 @@ export async function exportNativeConversation(
     }
     if (!paragraphs.some(text => text.trim())) return;
     const at = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
-    lines.push('## ' + (role === 'user' ? '用户' : 'Agent 回复') + (Number.isFinite(at) ? ' · ' + new Date(at).toISOString() : ''), '', ...paragraphs, '');
-    count++;
+    message(count++, role, paragraphs.join('\n'), Number.isFinite(at) ? new Date(at).toISOString() : null, row);
   }, signal);
+  return count;
+}
+
+export async function readNativeFavoritePage(
+  machines: MachineClient | undefined, source: NativeExportSource, offset: number, signal: AbortSignal,
+) {
+  const items: NativeFavoriteMessage[] = [];
+  const total = await readConversation(machines, source, signal, (index, role, text, createdAt, raw) => {
+    if (index < offset || index - offset >= 25) return;
+    // Bind positional records to their source and content. A replacement at
+    // the same index must never inherit the original favorite's identity.
+    const fingerprint = createHash('sha256').update(JSON.stringify([
+      source.machineId, source.executorId, source.nativeSessionId, source.cwd, index, raw,
+    ])).digest('hex');
+    items.push({ index, fingerprint, role, text, createdAt });
+  });
+  return { items, total };
+}
+
+export async function exportNativeConversation(
+  machines: MachineClient | undefined, source: NativeExportSource, includeWork: boolean, signal: AbortSignal,
+) {
+  const { machineId, executorId, nativeSessionId, cwd } = source;
+  const lines: string[] = [];
+  const count = await readConversation(machines, source, signal, (_, role, text, at) => {
+    lines.push('## ' + (role === 'user' ? '用户' : 'Agent 回复') + (at ? ' · ' + at : ''), '', text, '');
+  }, includeWork ? name => lines.push('> 工具调用：' + name, '') : undefined);
   const stem = Array.from(nativeSessionId.replace(/[^\p{L}\p{N}_-]+/gu, '-')).slice(0, 48).join('');
   return { filename: `super-mario-${executorId}-${stem}.md`, count, markdown: [
     '# 原生会话 · ' + executorId, '', '会话：' + nativeSessionId, '电脑：' + machineId, '目录：' + cwd, '', `共 ${count} 条消息`, '', ...lines,

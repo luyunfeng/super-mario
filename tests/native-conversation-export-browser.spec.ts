@@ -108,3 +108,98 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
   assert.match(await offline.text(), /离线/);
   assert.equal(server.app.store.list('runs').length, 0);
 });
+
+test('只读 CLI 消息跨页收藏，返回原文时校验日志变更与执行机离线，备份仅含快照', { timeout: 45000 }, async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-native-favorite-'));
+  const home = join(dir, 'home'), cwd = join(home, 'code', 'fixture');
+  const machineId = 'fixture-favorite-machine', sessionId = 'fixture-favorite-thread';
+  const token = 'native-favorite-browser-fixture';
+  const log = join(home, '.codex/sessions', sessionId + '.jsonl');
+  await mkdir(cwd, { recursive: true });
+  const texts = Array.from({ length: 125 }, (_, i) => '合成分页消息 ' + String(i + 1).padStart(3, '0'));
+  const writeLog = () => writeJsonLines(log, [
+    { type: 'session_meta', payload: { id: sessionId, cwd } },
+    ...texts.map(text => ({
+      type: 'response_item', timestamp: '2026-03-01T09:00:00.000Z',
+      payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] },
+    })),
+  ]);
+  await writeLog();
+  const server = await startServer({ dataDir: join(dir, 'data'), host: '127.0.0.1', port: 0, demo: true, token });
+  const history = createCliSessionDiscovery({ home, cwd, temporaryRoots: [] });
+  const node = startAgentNode({ url: server.url, token, machineId, name: '合成收藏电脑', dataDir: join(dir, 'node'),
+    handlers: history.handlers, executors: [] });
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  t.after(async () => { await browser?.close(); await node.close(); await server.close(); await rm(dir, { recursive: true, force: true }); });
+  await expect.poll(() => server.machines.list().some(machine => machine.id === machineId && machine.online)).toBe(true);
+  browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  const page = await browser.newPage();
+  await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+  await page.goto(server.url + '/#agent?token=' + token);
+  const card = page.locator('#agent-cli-sessions [data-cli-session]').filter({ hasText: sessionId });
+  await card.getByRole('button', { name: '查看消息', exact: true }).click();
+  const transcript = page.getByRole('dialog', { name: 'CLI 会话消息', exact: true });
+  const rows = transcript.locator('article[data-native-index]');
+  await expect(rows.first()).toContainText(texts[0]);
+  const countOnFirstPage = await rows.count();
+  const targetText = texts[countOnFirstPage]!;
+  assert.ok(targetText, '合成会话应跨过第一页');
+  await transcript.getByRole('button', { name: '下一页', exact: true }).click();
+  const target = rows.filter({ hasText: targetText });
+  await expect(target).toBeVisible();
+  await target.getByRole('button', { name: '收藏消息', exact: true }).click();
+  await expect(target.getByRole('button', { name: '已收藏', exact: true })).toBeVisible();
+  await transcript.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.goto(server.url + '/#chat');
+  const openFavorites = page.getByRole('button', { name: '消息收藏', exact: true });
+  const favorites = page.getByRole('dialog', { name: '消息收藏', exact: true });
+  await openFavorites.click();
+  await expect(favorites).toContainText(targetText);
+
+  const pending = page.waitForEvent('download');
+  await favorites.getByRole('button', { name: '下载收藏备份', exact: true }).click();
+  const downloaded = await pending;
+  const path = await downloaded.path();
+  assert.ok(path);
+  const body = await readFile(path, 'utf8');
+  const { messages } = JSON.parse(body);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, targetText);
+  assert.deepEqual(Object.keys(messages[0]).sort(), ['createdAt', 'key', 'omitted', 'role', 'starredAt', 'text', 'title']);
+  for (const privateValue of [machineId, sessionId, cwd]) assert.ok(!body.includes(privateValue));
+
+  const api = (data: { action: string; id?: string }) => page.request.post(server.url + '/api/v1/message-favorites', {
+    headers: { Authorization: 'Bearer ' + token }, data,
+  });
+  const list = await api({ action: 'list' });
+  assert.equal(list.status(), 200);
+  const { items: [saved] } = await list.json();
+  assert.equal(saved.text, targetText);
+  const requestSource = () => api({ action: 'source', id: saved.id });
+  const source = favorites.getByRole('button', { name: '查看原文', exact: true });
+  await source.click();
+  await expect(transcript.locator('[aria-current="true"]')).toContainText(targetText);
+  await expect(transcript.locator('[aria-current="true"]')).toBeInViewport();
+  await transcript.getByRole('button', { name: '关闭', exact: true }).click();
+
+  texts[countOnFirstPage] = '改写后不可作为原文的正文';
+  await writeLog();
+  const changed = await requestSource();
+  assert.equal(changed.status(), 409);
+  assert.ok(!(await changed.text()).includes(texts[countOnFirstPage]));
+  await source.click();
+  await expect(transcript.getByRole('alert')).toContainText('原消息已变更');
+  await expect(rows).toHaveCount(0);
+  await transcript.getByRole('button', { name: '关闭', exact: true }).click();
+
+  await node.close();
+  await expect.poll(() => server.machines.list().some(machine => machine.id === machineId && machine.online)).toBe(false);
+  await expect(favorites).toContainText(targetText);
+  const offline = await requestSource();
+  assert.equal(offline.status(), 503);
+  assert.match(await offline.text(), /离线/);
+  await source.click();
+  await expect(transcript.getByRole('alert')).toContainText('离线');
+  await expect(rows).toHaveCount(0);
+  assert.equal(server.app.store.list('runs').length, 0);
+});

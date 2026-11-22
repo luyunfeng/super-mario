@@ -9,3 +9,11 @@ export interface ObservedAgentSession extends NativeResumeSpec {
 export interface AgentSessionDiscovery { sessions: ObservedAgentSession[]; roots: string[]; warnings: string[]; truncated: boolean }
 
 export interface NativeExportSource extends NativeResumeSpec { machineId: string; cwd: string; executorId: 'codex' | 'claude-code' }
+export interface NativeFavoriteMessage {
+  /** Zero-based position among public user and assistant messages. */
+  index: number;
+  fingerprint: string;
+  role: 'user' | 'assistant';
+  text: string;
+  createdAt: string | null;
+}

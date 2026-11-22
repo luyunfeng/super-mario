@@ -1,3 +1,4 @@
+import { nativeSource } from './native-conversation-source.ts';
 import type { Extension, Json, Store } from '../packages/plugin-sdk/src/index.ts';
 import type { ExecutionProgress, Message, NativeExportSource, Project } from '../packages/protocol/src/index.ts';
 
@@ -44,18 +45,6 @@ function workSteps(store: Store, message: Message, userIds: Set<string>): string
 
 type ReadNative = (source: NativeExportSource, includeWork: boolean, signal: AbortSignal) =>
   Promise<{ markdown: string; filename: string; count: number }>;
-
-function nativeSource(value: Json | undefined): NativeExportSource {
-  if (!value || typeof value !== 'object' || Array.isArray(value)
-    || Object.keys(value).some(key => !['machineId', 'executorId', 'nativeSessionId', 'cwd'].includes(key)))
-    fail(400, '原生会话来源无效');
-  const { machineId, executorId, nativeSessionId, cwd } = value;
-  if (typeof machineId !== 'string' || !machineId.trim() || typeof nativeSessionId !== 'string' || !nativeSessionId.trim()
-    || typeof cwd !== 'string' || !cwd.trim() || (executorId !== 'codex' && executorId !== 'claude-code')
-    || [machineId, nativeSessionId, cwd].some(field => /[\p{Cc}\p{Cs}]/u.test(field)))
-    fail(400, '原生会话来源无效');
-  return { machineId, executorId, nativeSessionId, cwd };
-}
 
 function markdown(store: Store, input: Json, signal: AbortSignal, readNative?: ReadNative) {
   if (!input || typeof input !== 'object' || Array.isArray(input)

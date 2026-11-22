@@ -2,6 +2,7 @@
 import { h, replace } from '../lib/dom.js';
 import { Button, Card, Banner, Empty, Field, Input, TextArea, Select, Check, Pill } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
+import { messageFavoritesActive, openNativeMessages } from './message-favorites.js';
 import { conversationExportActive, openConversationExport } from './conversation-export.js';
 
 const wrap = { minWidth: '0', maxWidth: '100%', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' };
@@ -47,7 +48,7 @@ export function createCliSessions({ api, store, router }) {
     });
   }
   function paint() {
-    const renderKey = JSON.stringify([ready(), conversationExportActive(store), error, loading, data, keyword.value.trim().toLowerCase(), machines.value, signature]);
+    const renderKey = JSON.stringify([ready(), conversationExportActive(store), messageFavoritesActive(store), error, loading, data, keyword.value.trim().toLowerCase(), machines.value, signature]);
     if (renderKey === painted) return;
     painted = renderKey;
     exportDrawer?.close();
@@ -72,6 +73,10 @@ export function createCliSessions({ api, store, router }) {
             text(`观测时间：${session.observedAt}\n元数据时间：${session.metadataTimestamp ?? '未知'}\n文件记录更新：${session.fileModifiedAt ?? '未知'}\n来源：session-metadata`),
             session.parentNativeSessionId && text(`父会话：${session.parentNativeSessionId}`),
             session.relatedRunIds.length > 0 && h('div', { class: 'row row--wrap' }, session.relatedRunIds.map(id => Button({ label: `查看关联执行 ${id}`, size: 'sm', onClick: () => router.go(router.href('projects', 'all', 'runs', id)) }))),
+            online && ready() && messageFavoritesActive(store) && current?.capabilities?.includes('agents.transcript') &&
+              Button({ label: '查看消息', size: 'sm', onClick: () => openNativeMessages({ api, store, native: {
+                machineId: machine.machineId, executorId: session.executorId, nativeSessionId: session.nativeSessionId, cwd: session.cwd,
+              } }) }),
             online && canExport(machine.machineId) && Button({ label: '导出对话', size: 'sm', onClick: (_, button) => exportHistory(machine.machineId, session, button) }),
             online && current?.capabilities.includes('agents.usage') && Button({ label: '上下文与 Token 用量', size: 'sm', onClick: () => openUsage(machine, session) }),
             session.resumable && online && machine.available
