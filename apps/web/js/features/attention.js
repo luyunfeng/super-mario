@@ -70,6 +70,11 @@ export function createAttention({ api, store, task = false }) {
   }
 
   function resultNote(result, action) {
+    if (result?.status === 'answered') {
+      if (result.delivery === 'failed') return { text: '回答已记录，后续处理失败。', tone: 'danger' };
+      if (result.delivery !== 'confirmed') return { text: '回答已记录，后续处理结果未知。请核对回执。', tone: 'danger' };
+      return { text: '回答已记录。' };
+    }
     if (result?.status === 'unknown' || result?.delivery === 'unknown') return { text: '结果未知，请先核对，不要重复提交。', tone: 'danger' };
     if (result?.status === 'failed' || result?.delivery === 'failed') return { text: '操作没有执行，内容已保留，可以重试。', tone: 'danger', retry: true };
     if (action.path.endsWith('/reject')) return { text: '已拒绝' };

@@ -38,6 +38,12 @@ export function openTodoHistory({ api, store, router, todo }) {
         round.outputTruncated && h('p', { class: 'small muted' }, '摘要仅显示前 4000 字符，完整结果请打开执行记录。'),
         run.resultSource && h('p', { class: 'small muted' }, `结果来源：${run.resultSource}`),
         round.review && h('p', { class: 'small' }, '当前验收状态：' + (reviewLabels[round.review.status] ?? '未知')),
+        (round.answerReceipts ?? []).map(receipt => {
+          const target = receipt.target === 'executor' ? '执行会话输入' : '工作台本地处理';
+          const status = { confirmed: '已确认', failed: '失败', unknown: '结果未知' };
+          return h('p', { class: 'small' }, '已记录答复 · ' + receipt.title + ' · ' + target + (status[receipt.delivery] ?? '结果未知'),
+            receipt.answeredAt && ' · ' + formatDate(receipt.answeredAt, true));
+        }),
         round.decisions.map(decision => h('div', { class: 'row row--wrap small' },
           `历史决定：${decision.action === 'accept' ? '用户已验收' : '用户要求返工'} · ${formatDate(decision.at, true)}${decision.defects ? ' · ' + decision.defects : ''}`,
           decision.dispatchStatus === 'unknown' && h('span', null, '返工派发结果未知'),

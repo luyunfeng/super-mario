@@ -29,10 +29,19 @@ test('todo history pages real stored attempts and review decisions without writi
       store.put('run-review.intents', requestRun, { request: { todoId: 'task', runId: requestRun, action: 'rework' },
         result: { todoId: 'task', updatedAt: stamp, status, runId: resultRun } });
     }
+    const card = { runId: 'r22', projectId: 'A', title: '核对答复', status: 'answered', answeredAt: stamp, kind: 'question' };
+    for (const delivery of ['confirmed', 'failed', 'unknown']) store.put('interactions', delivery, { ...card, id: delivery, delivery });
+    store.put('interactions', 'local', { ...card, id: 'local', kind: 'review', delivery: 'confirmed' });
+    store.put('interactions', 'legacy', { ...card, id: 'legacy' });
+    store.put('interactions', 'other', { ...card, id: 'other', projectId: 'B', title: 'SECRET' });
+    store.put('interactions', 'open', { ...card, id: 'open', status: 'open', title: 'SECRET' });
     const before = JSON.stringify([store.list('todos'), store.list('runs'), store.list('run-review.intents')]);
     const first = readTodoHistory(store, 'task');
     assert.equal(first.total, 23); assert.equal(first.rounds.length, 20);
     assert.deepEqual(first.rounds.map(r => r.number), Array.from({length:20}, (_,i)=>23-i));
+    assert.deepEqual(first.rounds[0]!.answerReceipts.map(r => [r.cardId, r.target, r.delivery]), [
+      ['confirmed','executor','confirmed'], ['failed','executor','failed'], ['legacy','executor','unknown'],
+      ['local','workbench','confirmed'], ['unknown','executor','unknown']]);
     assert.equal(first.rounds[0]!.run.output.length,4000); assert.equal(first.rounds[0]!.outputTruncated,true);
     assert.equal(first.rounds[1]!.decisions[0]!.defects,'补充失败依据');
     const decision = (runId: string) => first.rounds.find(round => round.run.id === runId)!.decisions[0]!;

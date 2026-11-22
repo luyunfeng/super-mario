@@ -288,6 +288,10 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await taskAttention.getByRole('button', { name: '回答', exact: true }).click();
   await expect(taskAttention).toBeHidden();
   assert.equal(server.app.interactions.list().find(item => item.id === card.id)?.answer, '只归档附件清单');
+  await panel.getByRole('button', { name: '执行历史', exact: true }).click();
+  const history = page.getByRole('dialog', { name: '执行历史' });
+  await expect(history).toContainText('核对归档范围 · 工作台本地处理已确认');
+  await history.getByRole('button', { name: '关闭' }).click();
   assert.equal(server.app.store.get<Todo>('todos', spring.id)?.completedAt, undefined);
   server.app.updateTodo(spring.id, { completed: true });
   await page.goto(base + '/detail/' + created.id);
