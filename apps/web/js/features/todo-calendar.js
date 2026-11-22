@@ -88,18 +88,41 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
       ondragstart: event => { event.dataTransfer.setData(dragType, todo.id); event.dataTransfer.effectAllowed = 'move'; } },
       h('span', null, time), ' ', todo.title, todo.reminderAt && ' ⏰');
   }
+  function dropTime(cell, hour, y) {
+    if (hour === undefined) return undefined;
+    if (hour === 'end') return '23:59';
+    const box = cell.getBoundingClientRect();
+    const fraction = Math.min(1, Math.max(0, (y - box.top) / box.height));
+    const minutes = Math.min(23 * 60 + 45, hour * 60 + Math.round(fraction * 4) * 15);
+    return pad(Math.floor(minutes / 60)) + ':' + pad(minutes % 60);
+  }
+  let previewCell;
+  function clearPreview() {
+    if (previewCell) delete previewCell.dataset.dropLabel;
+    previewCell = undefined;
+  }
   function cell(day, hour, ...children) {
     const key = localDate(day);
-    const time = hour === undefined ? undefined : hour === 'end' ? '23:59' : `${pad(hour)}:00`;
     return h('div', { class: 'cal-cell', dataset: { day: key, hour, today: key === today, outside: mode === 'month' && day.getMonth() !== anchor.getMonth() },
       onclick: event => { if (mode === 'month' && event.target === event.currentTarget) navigate('day', day); },
-      ondragover: event => { if (event.dataTransfer.types.includes(dragType)) event.preventDefault(); },
+      ondragover: event => {
+        if (!event.dataTransfer.types.includes(dragType)) return;
+        event.preventDefault();
+        const cell = event.currentTarget;
+        if (previewCell !== cell) clearPreview();
+        previewCell = cell;
+        cell.dataset.dropLabel = dropTime(cell, hour, event.clientY) ?? key;
+      },
+      ondragleave: event => {
+        if (event.currentTarget === previewCell && !previewCell.contains(event.relatedTarget)) clearPreview();
+      },
       ondrop: event => {
+        clearPreview();
         const id = event.dataTransfer.getData(dragType);
         const todo = todos.find(item => item.id === id);
         if (!todo) return;
         event.preventDefault();
-        move(todo, key, time);
+        move(todo, key, dropTime(event.currentTarget, hour, event.clientY));
       } }, children);
   }
   function dayButton(day, label) {
@@ -129,7 +152,7 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
         return cell(day, hour, slot, entries.map(entry));
       })]));
   }
-  return h('section', { class: 'stack todo-calendar', 'aria-label': '待办日历', onkeydown: event => {
+  return h('section', { class: 'stack todo-calendar', 'aria-label': '待办日历', ondragend: clearPreview, onkeydown: event => {
     if (event.metaKey || event.ctrlKey || event.altKey || event.target.matches('input, textarea, select')) return;
     if (event.key === 'ArrowLeft') step(-1);
     else if (event.key === 'ArrowRight') step(1);

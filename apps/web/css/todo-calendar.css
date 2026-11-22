@@ -20,3 +20,6 @@
 .cal-entry[data-status=已逾期] { border-color: var(--danger); color: var(--danger); }
 .cal-entry[data-status=已完成] { color: var(--text-3); text-decoration: line-through; }
 .cal-entry[data-status=等待中] { border-color: var(--warn); }
+
+.cal-cell[data-drop-label] { outline: 2px solid var(--brand); outline-offset: -2px; }
+.cal-cell[data-drop-label]::after { content: attr(data-drop-label); pointer-events: none; position: absolute; right: 2px; bottom: 2px; background: var(--surface); color: var(--text); padding: 0 3px; font-size: 12px; }

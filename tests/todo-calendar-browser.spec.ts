@@ -61,6 +61,13 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await editor.getByRole('button', { name: '保存' }).click();
   await expect.poll(() => read().dueAt).toBe('2030-03-27T15:40:00.000Z');
   await expect(editor).toHaveCount(0);
+  await expect(entry).toHaveAccessibleName(/08:40/);
+  const dropSlot = root.locator('[data-day="2030-03-27"][data-hour="10"]');
+  await entry.dragTo(dropSlot);
+  await expect.poll(() => read().dueAt).toBe('2030-03-27T17:30:00.000Z');
+  await page.reload();
+  await expect(dropSlot.getByRole('button', { name: /10:30.*本地三月末/ })).toBeVisible();
+  assert.equal(read().reminderAt, reminderAt);
   await root.getByRole('button', { name: '添加待办 2030-03-27 11:00' }).click();
   const panel = page.locator('#panel-todos');
   await panel.getByRole('textbox', { name: '添加待办' }).fill('日历时段新建');
@@ -73,6 +80,17 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await expect(page).toHaveURL(/\/day\/2030-03-28$/);
   await root.getByRole('button', { name: '1 项没有截止日期，查看列表' }).click();
   await expect(panel.locator('.todo', { hasText: '尚未安排' })).toBeVisible();
+  const springDue = '2030-03-10T09:30:00.000Z'; // 01:30 before the local clock jumps to 03:00.
+  const spring = server.app.createTodo({ title: '切换夏令时的待办', projectId: project.id, dueAt: springDue });
+  await page.goto(base + '/week/2030-03-10');
+  const skippedHour = root.locator('[data-day="2030-03-10"][data-hour="2"]');
+  const springEntry = root.getByRole('button', { name: /切换夏令时的待办/ });
+  await springEntry.dragTo(skippedHour);
+  await expect(page.getByText(/没有改期成功：截止时间无效/)).toBeVisible();
+  assert.equal(server.app.store.get<Todo>('todos', spring.id)?.dueAt, springDue);
+  const previousDay = root.locator('[data-day="2030-03-09"][data-hour="2"]');
+  await springEntry.dragTo(previousDay);
+  await expect.poll(() => server.app.store.get<Todo>('todos', spring.id)?.dueAt).toBe('2030-03-09T10:30:00.000Z');
   const disabled = await fetch(server.url + '/api/v1/plugins/todo-calendar', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: false }),
   });
