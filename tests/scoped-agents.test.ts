@@ -327,7 +327,8 @@ test('task bridge pins todoId including nested plans and denies creating unrelat
   addTool(f, 'runs_list', async () => [{ id: 'one', todoId: 'a', projectId: 'A' }, { id: 'two', todoId: 'a2', projectId: 'A' }]);
   f.store.put('runs', 'one', { projectId: 'A', todoId: 'a' });
   f.store.put('runs', 'two', { projectId: 'A', todoId: 'a2' });
-  for (const name of ['run_commit_diff', 'run_worktree_status']) addTool(f, name, async args => ({ id: args.id }));
+  addTool(f, 'run_commit_diff', async args => ({ id: args.id }));
+  addTool(f, 'run_worktree_status', async () => ({ blockedByRuns: true, blockingRunIds: ['two'] }));
   const runtime = createAgentRuntime({ ...f, conversationId: 'bot:task:a', scope: { kind: 'task', todoId: 'a', projectId: 'A' } }, sdk.load);
   await runtime.ask('task');
   const invoke = async (name: string, args = {}) => (await sdk.tools.get(name).execute('call', args, undefined)).details;
@@ -337,6 +338,7 @@ test('task bridge pins todoId including nested plans and denies creating unrelat
   assert.deepEqual((await invoke('runs_list')).map((entry: any) => entry.id), ['one']);
   assert.deepEqual(await invoke('run_commit_diff', { id: 'one' }), { id: 'one' });
   await assert.rejects(invoke('run_commit_diff', { id: 'two' }), /作用域/);
+  assert.deepEqual(await invoke('run_worktree_status', { id: 'one' }), { blockedByRuns: true, blockingRunIds: [] });
   await assert.rejects(invoke('run_worktree_status', { id: 'two' }), /作用域/);
   await assert.rejects(invoke('work_dispatch', { worktreeRunId: 'two' }), /作用域/);
   assert.deepEqual(await invoke('work_dispatch', { worktreeRunId: 'one' }), { worktreeRunId: 'one', todoId: 'a', projectId: 'A' });

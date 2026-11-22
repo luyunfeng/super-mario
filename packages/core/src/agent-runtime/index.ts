@@ -133,6 +133,13 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   }
   function scopedResult(name: string, result: import('../../../protocol/src/index.ts').Json) {
     if (!scope || scope.kind === 'global') return result;
+    if (name === 'run_worktree_status' && result && typeof result === 'object' && !Array.isArray(result) && Array.isArray(result.blockingRunIds)) {
+      // The physical checkout can also be occupied by a run outside this bot's scope.
+      return { ...result, blockingRunIds: result.blockingRunIds.filter(id => {
+        const run = typeof id === 'string' && store.get<{ projectId?: string; todoId?: string }>('runs', id);
+        return run && inScope(run);
+      }) };
+    }
     if (['knowledge_list', 'todos_list', 'runs_list', 'projects_list'].includes(name)) {
       if (!Array.isArray(result)) throw new Error(`作用域工具结果必须为数组：${name}`);
       return result.filter(value => {

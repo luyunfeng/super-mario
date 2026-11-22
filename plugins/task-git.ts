@@ -126,18 +126,19 @@ export async function inspectRunWorktree({ source, id }: JsonObject) {
   const unmerged = Number((await runGit(target, ['rev-list', '--count', sourceHead + '..' + head])).trim());
   const overrides = await filterOverrides(target);
   const raw = await runGit(target, [...overrides, '-c', 'core.fsmonitor=false', 'status', '--porcelain=v1', '-z',
-    '--no-renames', '--untracked-files=all', '--ignore-submodules=none']);
+    '--ignored=matching', '--no-renames', '--untracked-files=all', '--ignore-submodules=none']);
   const files: { path: string; index: string; worktree: string }[] = [];
-  let total = 0, hidden = 0;
+  let total = 0, hidden = 0, ignored = 0;
   for (const entry of raw.split('\0')) {
     if (!entry) continue;
+    if (entry.startsWith('!! ')) { ignored++; continue; }
     total++;
     const path = entry.slice(3);
     if (sensitiveWorkspacePath(path) || /[\x00-\x1f\x7f]/.test(path)) { hidden++; continue; }
     if (files.length < 250) files.push({ path, index: entry[0]!, worktree: entry[1]! });
   }
   return { cwd: target, branch: record.find(field => field.startsWith('branch refs/heads/'))?.slice('branch refs/heads/'.length) ?? null,
-    head, sourceHead, unmerged, files, total, hidden, truncated: total > hidden + files.length };
+    head, sourceHead, unmerged, files, total, hidden, ignored, locked: record.some(field => field === 'locked' || field.startsWith('locked ')), truncated: total > hidden + files.length };
 }
 
 export async function removeRunWorktree(params: JsonObject): Promise<Json> {
@@ -145,6 +146,8 @@ export async function removeRunWorktree(params: JsonObject): Promise<Json> {
   const source = String(params.source);
   if (snapshot.branch !== 'super-mario/' + params.id || snapshot.head !== params.head)
     return { removed: false, reason: '分支或提交已经变化，请刷新后再核对。' };
+  if (snapshot.locked) return { removed: false, reason: 'Git 工作树已锁定，目录已保留。' };
+  if (snapshot.ignored) return { removed: false, reason: '存在忽略文件，工作树已保留。' };
   if (snapshot.total) return { removed: false, reason: '仍有未提交文件，工作树已保留。' };
   const overrides = [...await filterOverrides(snapshot.cwd), '-c', 'core.fsmonitor=false'];
   // Git can consider a directory clean even when ignored files or hidden index flags exist.

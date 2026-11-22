@@ -143,6 +143,11 @@ export async function createWorkbench(config: AppConfig) {
     changed('runs.changed', { id });
     return { name };
   }
+  function worktreeBlockingRuns(machineId: string, directory: string) {
+    return store.list<Run>('runs').filter(other => other.machineId === machineId && other.cwd
+      && (join(other.cwd) === directory || join(other.cwd).startsWith(directory + '/'))
+      && ['queued', 'running', 'unknown'].includes(other.status));
+  }
   async function runWorktreeStatus(id: string, includeCleanup = false): Promise<Json> {
     if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
     const run = store.get<Run>('runs', id);
@@ -162,7 +167,11 @@ export async function createWorkbench(config: AppConfig) {
     if (!machines || !machine?.online) throw new InputError('执行机离线', 503);
     if (!machine.capabilities.includes('workspace.inspectRunWorktree')) throw new InputError('请升级执行机代理以查看工作树状态', 409);
     if (run.worktree.removedAt) throw new InputError(run.worktree.branchDeletedAt ? '工作树目录和执行分支已清理' : '工作树目录已清理，分支已保留', 410);
-    return machines.call(machine.id, 'workspace.inspectRunWorktree', { id, source: run.worktree.source });
+    const state = await machines.call(machine.id, 'workspace.inspectRunWorktree', { id, source: run.worktree.source });
+    if (!state || typeof state !== 'object' || Array.isArray(state) || !run.cwd || state.cwd !== run.cwd)
+      throw new InputError('工作树状态回执与执行目录不符', 502);
+    const blockingRunIds = worktreeBlockingRuns(machine.id, run.cwd).map(other => other.id);
+    return { ...state, blockingRunIds, blockedByRuns: blockingRunIds.length > 0 };
   }
   const cleaningWorktrees = new Map<string, { machineId: string; cwd: string }>();
   async function cleanupRunWorktree(id: string, input: Record<string, unknown>): Promise<Json> {
@@ -174,9 +183,7 @@ export async function createWorkbench(config: AppConfig) {
     if (!run?.worktree?.branch || !run.machineId || !run.cwd) throw new InputError('执行缺少工作树创建回执', 404);
     if (run.worktree.removedAt) return { removed: true, branch: run.worktree.branch };
     const directory = run.cwd, client = machines, machineId = run.machineId;
-    if (!['completed', 'failed'].includes(run.status) || store.list<Run>('runs').some(other =>
-      other.machineId === machineId && other.cwd && (join(other.cwd) === directory || join(other.cwd).startsWith(directory + '/'))
-      && ['queued', 'running', 'unknown'].includes(other.status))) throw new InputError('工作树仍有关联执行未结束或结果未知', 409);
+    if (!['completed', 'failed'].includes(run.status) || worktreeBlockingRuns(machineId, directory).length) throw new InputError('工作树仍有关联执行未结束或结果未知', 409);
     const machine = client?.list().find(m => m.id === machineId);
     if (!client || !machine?.online) throw new InputError('执行机离线', 503);
     if (!machine.capabilities.includes('workspace.removeRunWorktree')) throw new InputError('请升级执行机代理以清理工作树', 409);

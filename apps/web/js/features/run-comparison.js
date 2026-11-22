@@ -119,10 +119,19 @@ export function openWorktreeStatus(options) {
           h('small', { class: 'muted' }, fileState(file)))),
         value.hidden > 0 && h('small', null, `已隐藏 ${value.hidden} 个受限文件。`),
         value.truncated && h('small', null, '仅显示前 250 个可见文件。'),
+        value.locked && h('p', null, 'Git 工作树已锁定，暂时无法清理目录。'),
+        value.ignored > 0 && h('p', null, `有 ${value.ignored} 个 Git 忽略项，清理前请先移走需要保留的文件。`),
+        value.blockedByRuns && h('section', { class: 'stack', 'aria-label': '阻止清理的执行' },
+          h('strong', null, '以下执行尚未结束或结果未知，暂时无法清理目录。'),
+          value.blockingRunIds.map(id => {
+            const run = options.store.view.snapshot?.runs.find(candidate => candidate.id === id);
+            return run ? h('a', { href: options.router.href('projects', run.projectId ?? 'all', 'runs', id) },
+              run.prompt, ' · ', runStatus[run.status]?.text ?? run.status) : h('code', null, id);
+          })),
         ['completed', 'failed'].includes(item.status) && value.total > 0 && h('small', { class: 'muted' }, '清理前请先提交或移走本地改动。'),
         ['completed', 'failed'].includes(item.status) && options.store.view.snapshot?.machines?.some(m =>
           m.id === item.machineId && m.capabilities.includes('workspace.removeRunWorktree')) &&
-          Button({ label: '清理工作树目录', kind: 'danger', disabled: value.total > 0 || value.branch !== item.worktree.branch,
+          Button({ label: '清理工作树目录', kind: 'danger', disabled: value.locked || value.ignored > 0 || value.blockedByRuns || value.total > 0 || value.branch !== item.worktree.branch,
             onClick: async () => {
               const ok = await confirmDialog({ title: '清理工作树目录？',
                 message: `将移除 ${value.cwd}。分支 ${value.branch} 和提交 ${value.head.slice(0, 10)} 会保留。`,
