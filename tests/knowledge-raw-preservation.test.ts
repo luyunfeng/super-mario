@@ -170,6 +170,7 @@ test('核对后的项目会议转写按会议提示词整理，重复提交复�
   assert.ok(f.submissions[0]!.includes('用户填写的会议开始时间：2032-02-29T00:10:00+05:45'));
   assert.match(f.submissions[0]!, /不用上传时间推算相对期限/);
   assert.match(f.submissions[0]!, /识别有歧义的人名、数字和术语保留原话/);
+  assert.match(f.submissions[0]!, /不能由片段结尾推断会议已结束/);
   assert.match(f.submissions[0]!, /按议题区分已决定事项、提议、行动项和未决问题/);
   const [page] = await f.knowledge.list({ projectId: 'sample' });
   assert.match(page!.content, /用户核对的会议转写/);

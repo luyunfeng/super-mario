@@ -495,6 +495,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
       assert.match(req.system, /区分明确决定、建议、行动项和未决问题/);
       assert.match(req.system, /未明确的负责人或期限写待确认/);
       assert.match(req.system, /整理纪要不触发建待办、委派或外发/);
+      assert.match(req.system, /中断后的决定和会议结束时间待核实/);
       assert.match(req.system, /createdAt 仅为资料登记时间/);
       assert.match(req.system, /参会人名单不能证明任务归属/);
       assert.match(req.system, /待办后来改期不能改写会议原话/);

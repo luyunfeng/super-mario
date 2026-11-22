@@ -128,6 +128,27 @@ test('录音经认证服务转写后追加到当前草稿，失败和切换项�
   await review.getByRole('button', { name: '关闭' }).click();
   const trackState = () => page.evaluate(() => (window as unknown as { capturedTrack: MediaStreamTrack }).capturedTrack.readyState);
   expect(await trackState()).toBe('ended');
+  const fragment = page.getByRole('button', { name: '转写已录片段' });
+  async function interruptRecording() {
+    await page.evaluate(() => { delete document.body.dataset.audioReady; });
+    await record.click();
+    await expect(page.locator('body')).toHaveAttribute('data-audio-ready', 'yes');
+    await page.evaluate(() => (window as unknown as { capturedTrack: MediaStreamTrack }).capturedTrack.dispatchEvent(new Event('ended')));
+    await expect(fragment).toBeVisible();
+    expect(await trackState()).toBe('ended');
+  }
+  await interruptRecording();
+  expect(calls).toHaveLength(4);
+  await page.getByRole('button', { name: '丢弃录音片段' }).click();
+  await expect(fragment).toBeHidden();
+  await interruptRecording();
+  expect(calls).toHaveLength(4);
+  await fragment.click();
+  await expect(work).toHaveValue(/〔录音中断，仅含中断前的片段〕\n合成转写$/);
+  await organize.click();
+  await expect(review.getByLabel('会议标题')).toHaveValue('会议转写片段');
+  await expect(review.getByLabel('转写正文')).toHaveValue('〔录音中断，仅含中断前的片段〕\n合成转写');
+  await review.getByRole('button', { name: '关闭' }).click();
   await record.click();
   await expect(page.getByRole('button', { name: '结束并转写' })).toBeVisible();
   await page.evaluate(() => { location.hash = '#home'; });
@@ -146,5 +167,5 @@ test('录音经认证服务转写后追加到当前草稿，失败和切换项�
   expect(disabled.ok()).toBe(true);
   await expect(page.getByRole('button', { name: '录音转文字' })).toHaveCount(0);
   expect((await page.request.post(path, { headers, data: {} })).status()).toBe(503);
-  expect(calls).toHaveLength(4);
+  expect(calls).toHaveLength(5);
 });
