@@ -48,7 +48,7 @@ test('从插件配置固定入口，刷新、停用与恢复，并从窄屏打�
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test('阅读字体独立保存、刷新恢复，停用后还原工作台字体', async t => {
+test('阅读字体与字号独立保存，窄屏可用，停用后还原默认样式', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'mario-reading-fonts-'));
   const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: dir, demo: true });
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
@@ -64,6 +64,14 @@ test('阅读字体独立保存、刷新恢复，停用后还原工作台字体',
   const codeFont = () => dialog.locator('code').evaluate(el => getComputedStyle(el).fontFamily);
   await openFonts();
   const originalBody = await bodyFont(), originalCode = await codeFont();
+  const size = dialog.getByRole('combobox', { name: '阅读字号' });
+  const pixels = () => page.evaluate(() => [document.body, document.querySelector('#message-text')!, document.querySelector('dialog section code')!]
+    .map(el => Number.parseFloat(getComputedStyle(el).fontSize)));
+  const standard = await pixels();
+  expect(standard).toEqual([14, 14, 13]);
+  const expectedSize = (ratio: number) => standard.map(n => Math.round(n * ratio * 100) / 100);
+  const measured = async () => (await pixels()).map(n => Math.round(n * 100) / 100);
+  await size.selectOption('large');
   await dialog.getByLabel('正文字体').fill('Georgia');
   await dialog.getByLabel('代码字体').fill('fixture, invalid');
   await dialog.getByRole('button', { name: '保存字体' }).click();
@@ -72,17 +80,28 @@ test('阅读字体独立保存、刷新恢复，停用后还原工作台字体',
   await dialog.getByLabel('代码字体').fill('Fixture Mono');
   await dialog.getByRole('button', { name: '保存字体' }).click();
   await expect.poll(bodyFont).toMatch(/^Georgia,/);
+  await expect.poll(measured).toEqual(expectedSize(14 / 13));
   await expect.poll(codeFont).toMatch(/^"Fixture Mono",/);
   await page.reload();
   await openFonts();
   await expect(dialog.getByLabel('代码字体')).toHaveValue('Fixture Mono');
+  await expect(size).toHaveValue('large');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await dialog.getByRole('button', { name: '停用' }).click();
   await expect.poll(bodyFont).toBe(originalBody);
   await expect.poll(codeFont).toBe(originalCode);
+  await expect.poll(measured).toEqual(standard);
   await dialog.getByRole('button', { name: '启用' }).click();
   await expect.poll(bodyFont).toMatch(/^Georgia,/);
+  await expect.poll(measured).toEqual(expectedSize(14 / 13));
+  await size.selectOption('small');
   await dialog.getByLabel('正文字体').fill('');
   await dialog.getByRole('button', { name: '保存字体' }).click();
   await expect.poll(bodyFont).toBe(originalBody);
   await expect.poll(codeFont).toMatch(/^"Fixture Mono",/);
+  await expect.poll(measured).toEqual(expectedSize(12 / 13));
+  await size.selectOption('standard');
+  await dialog.getByRole('button', { name: '保存字体' }).click();
+  await expect.poll(measured).toEqual(standard);
 });

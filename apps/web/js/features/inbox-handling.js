@@ -87,7 +87,7 @@ export function openInboxHandlingDrawer({ api, store, source }) {
     paint();message.focus();
   }});
   fresh.hidden=true;
-  const body = h('div', { class: 'stack', style: { fontSize: '14px', minWidth: '0', overflowWrap: 'anywhere' } },
+  const body = h('div', { class: 'stack', style: { fontSize: 'calc(14px * var(--reading-scale, 1))', minWidth: '0', overflowWrap: 'anywhere' } },
     origin, notice, model, conversation, requests, fresh, Field({ label: '普通用户指令', control: message }), prompts.menu, h('div', { class: 'row row--wrap' }, send, prompts.manage),
     h('p', { class: 'small muted' }, '发送只请求模型分析。保存建议不会执行；提交建议只创建审批。执行结束不等于待办完成。'),
     create, suggestions, editorHost, confirmation, result);
