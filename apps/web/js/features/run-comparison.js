@@ -44,6 +44,38 @@ function openCommitDiff(options) {
   void load();
 }
 
+export function openRetainedBranch(options) {
+  const { item, api } = options;
+  const { area, active } = openRunDrawer(options, '保留分支');
+  const endpoint = '/runs/' + encodeURIComponent(item.id) + '/retained-branch';
+  async function load() {
+    area.textContent = '正在核对分支…';
+    try {
+      const state = await api.get(endpoint);
+      if (!active()) return;
+      if (state.deleted) { area.textContent = '执行分支已删除。'; return; }
+      replace(area, h('strong', null, state.branch), h('code', null, state.head),
+        h('p', null, `有 ${state.unmerged} 个提交尚未进入来源目录当前 HEAD。`),
+        state.checkedOut && h('p', null, '分支仍在工作树中使用。'),
+        state.moved && h('p', null, '分支已偏离目录清理时的提交。'),
+        Button({ label: '删除执行分支', kind: 'danger', disabled: state.checkedOut || state.moved,
+          onClick: async () => {
+            const ok = await confirmDialog({ title: '删除执行分支？', message:
+              `将删除分支 ${state.branch}。其中有 ${state.unmerged} 个提交尚未进入来源目录当前 HEAD。历史执行差异会保留。`,
+              confirmLabel: '确认删除分支', danger: true });
+            if (!ok || !active()) return;
+            area.textContent = '正在删除执行分支…';
+            try {
+              await api.post(endpoint, { confirmed: true, head: state.head, sourceHead: state.sourceHead, unmerged: state.unmerged, requestId: uuid() });
+              if (active()) area.textContent = '执行分支已删除。';
+              options.store.refresh();
+            } catch (error) { if (active()) replace(area, h('p', null, error.message), Button({ label: '刷新状态', onClick: load })); }
+          } }), Button({ label: '刷新状态', onClick: load }));
+    } catch (error) { if (active()) replace(area, h('p', null, error.message), Button({ label: '重试', onClick: load })); }
+  }
+  void load();
+}
+
 export function openWorktreeStatus(options) {
   const { item, api } = options;
   const { area, active } = openRunDrawer(options, '工作树状态');

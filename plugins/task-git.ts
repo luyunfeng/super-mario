@@ -158,3 +158,34 @@ export async function removeRunWorktree(params: JsonObject): Promise<Json> {
   await runGit(source, [...overrides, 'worktree', 'remove', '--', snapshot.cwd]);
   return { removed: true, head: snapshot.head, branch: snapshot.branch };
 }
+
+export async function retainedBranchStatus({ source, id }: JsonObject) {
+  if (typeof source !== 'string' || typeof id !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id))
+    throw new Error('工作树来源或执行标识无效');
+  const sourceHead = await worktreeBase({ cwd: source });
+  const branch = 'super-mario/' + id, ref = 'refs/heads/' + branch;
+  const fields = (await runGit(source, ['for-each-ref', '--format=%(refname)%00%(objectname)%00%(symref)%00%(worktreepath)', ref])).trimEnd().split('\0');
+  if (fields.length !== 4 || fields[0] !== ref || fields[2]) throw new Error('原执行分支不存在或已重定向');
+  const head = fields[1]!;
+  const unmerged = Number((await runGit(source, ['rev-list', '--count', sourceHead + '..' + head])).trim());
+  return { branch, head, sourceHead, unmerged, checkedOut: Boolean(fields[3]) };
+}
+
+export async function deleteRetainedBranch(params: JsonObject): Promise<Json> {
+  const value = await retainedBranchStatus(params);
+  if (value.head !== params.head || value.sourceHead !== params.sourceHead || value.unmerged !== params.unmerged || value.checkedOut)
+    return { deleted: false, reason: '分支状态已变化或仍在使用，请重新核对。' };
+  const source = String(params.source);
+  // Preserve the audited commit range even when its objects are no longer on a branch.
+  const range = commitChanges(params.range);
+  const commits = range ? { tip: value.head, base: range.base, head: range.head } : { tip: value.head };
+  const commands = Object.entries(commits).flatMap(([name, oid]) =>
+    ['option no-deref', 'update refs/super-mario/runs/' + params.id + '/' + name + ' ' + oid]);
+  commands.push('verify HEAD ' + value.sourceHead, 'option no-deref', 'delete refs/heads/' + value.branch + ' ' + value.head);
+  // All refs change in one Git transaction, conditioned on both observed commits.
+  const transaction = execute('git', [...gitArgs, 'update-ref', '--stdin'], gitOptions(source));
+  transaction.child.stdin!.on('error', () => { /* The command result reports a closed input pipe. */ });
+  transaction.child.stdin!.end(commands.join('\n') + '\n');
+  await transaction;
+  return { deleted: true, branch: value.branch, head: value.head };
+}

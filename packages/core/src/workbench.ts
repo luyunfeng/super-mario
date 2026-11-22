@@ -136,7 +136,7 @@ export async function createWorkbench(config: AppConfig) {
     const machine = machines?.list().find(item => item.id === run.machineId);
     if (!machines || !machine?.online) throw new InputError('执行机离线', 503);
     if (!machine.capabilities.includes('workspace.inspectRunWorktree')) throw new InputError('请升级执行机代理以查看工作树状态', 409);
-    if (run.worktree.removedAt) throw new InputError('工作树目录已清理，分支已保留', 410);
+    if (run.worktree.removedAt) throw new InputError(run.worktree.branchDeletedAt ? '工作树目录和执行分支已清理' : '工作树目录已清理，分支已保留', 410);
     return machines.call(machine.id, 'workspace.inspectRunWorktree', { id, source: run.worktree.source });
   }
   const cleaningWorktrees = new Map<string, { machineId: string; cwd: string }>();
@@ -171,6 +171,44 @@ export async function createWorkbench(config: AppConfig) {
       changed('runs.changed', { id });
       return result;
     } finally { cleaningWorktrees.delete(id); }
+  }
+  async function retainedRunBranch(id: string, confirmation?: Record<string, unknown>): Promise<Json> {
+    if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
+    const run = store.get<Run>('runs', id);
+    if (!run?.worktree?.removedAt || run.worktree.branch !== 'super-mario/' + id || !run.machineId)
+      throw new InputError('请先确认清理独立工作树目录', 409);
+    if (run.worktree.branchDeletedAt) return { deleted: true, branch: run.worktree.branch };
+    const machine = machines?.list().find(m => m.id === run.machineId), client = machines;
+    const method = confirmation ? 'workspace.deleteRetainedBranch' : 'workspace.retainedBranchStatus';
+    if (!client || !machine?.online) throw new InputError('执行机离线', 503);
+    if (!machine.capabilities.includes(method)) throw new InputError('请升级执行机代理以管理保留分支', 409);
+    const receipt = effects.list().filter(e => e.kind === 'workspace.removeRunWorktree' && e.target === machine.id
+      && e.status === 'confirmed' && e.key.startsWith('worktree-cleanup:' + id + ':')).map(e => e.result)
+      .find(r => r && typeof r === 'object' && !Array.isArray(r) && r.removed === true && r.branch === run.worktree!.branch);
+    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) || typeof receipt.head !== 'string')
+      throw new InputError('缺少原目录清理回执', 409);
+    const params = { id, source: run.worktree.source };
+    if (!confirmation) {
+      const state = await client.call(machine.id, method, params);
+      if (!state || typeof state !== 'object' || Array.isArray(state)) throw new InputError('分支状态未知', 502);
+      return { ...state, moved: state.head !== receipt.head };
+    }
+    const { confirmed, head, sourceHead, unmerged, requestId } = confirmation;
+    if (typeof requestId !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(requestId) || confirmed !== true || head !== receipt.head || typeof sourceHead !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sourceHead)
+      || typeof unmerged !== 'number' || !Number.isSafeInteger(unmerged) || unmerged < 0) throw new InputError('请确认清理时的分支提交和未合并数量', 409);
+    const content = { ...params, head, sourceHead, unmerged, range: run.commitChanges ? { ...run.commitChanges } : null };
+    const prefix = 'branch-delete:' + id + ':';
+    if (effects.list().some(effect => effect.key.startsWith(prefix) && effect.key !== prefix + requestId
+      && ['unknown', 'sent'].includes(effect.status))) throw new InputError('已有删除请求待核实，请核对执行机', 409);
+    const result = await effects.perform({ key: prefix + requestId, kind: method,
+      target: machine.id, summary: '删除单独确认的执行分支', content, run: () => client.call(machine.id, method, content) });
+    if (!result || typeof result !== 'object' || Array.isArray(result)) throw new InputError('分支删除结果未知', 502);
+    if (result.deleted === false) throw new InputError(String(result.reason), 409);
+    if (result.deleted !== true || result.branch !== run.worktree.branch || result.head !== head) throw new InputError('分支删除回执不匹配', 502);
+    const latest = store.get<Run>('runs', id)!;
+    store.put('runs', id, { ...latest, worktree: { ...run.worktree, branchDeletedAt: new Date().toISOString() } });
+    changed('runs.changed', { id });
+    return result;
   }
   async function readRunCommitDiff(id: string, path?: string): Promise<Json> {
     if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
@@ -1192,7 +1230,7 @@ export async function createWorkbench(config: AppConfig) {
     return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
   }
   return {
-    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, agentSessions, readRunCommitDiff, cleanupRunWorktree, runWorktreeStatus, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, runWorktreeStatus, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {

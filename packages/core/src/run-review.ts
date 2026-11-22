@@ -58,7 +58,7 @@ function hash(value: unknown): string {
 // Removing a checkout retains its branch and the recorded delivery evidence.
 function evidenceVersion(run: Run): string {
   if (!run.worktree?.removedAt) return hash(run);
-  const { removedAt, ...worktree } = run.worktree;
+  const { removedAt, branchDeletedAt, ...worktree } = run.worktree;
   return hash({ ...run, worktree });
 }
 

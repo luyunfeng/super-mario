@@ -8,7 +8,7 @@ import { confirmDialog, openDrawer, toast } from '../ui/overlay.js';
 import { systemText } from '../copy/terms.js';
 
 import { openTaskClosure, refreshTaskClosure } from './task-closure.js';
-import { compareRuns, openWorktreeStatus } from './run-comparison.js';
+import { compareRuns, openRetainedBranch, openWorktreeStatus } from './run-comparison.js';
 import { createLiveTerminals } from './live-terminals.js';
 
 const PLAN_STATUS = { pending: ['待确认', 'warn'], running: ['启动中', 'info'], started: ['已启动', 'ok'], rejected: ['已拒绝', ''], partial: ['部分启动', 'warn'], unknown: ['结果未知', 'danger'] };
@@ -161,9 +161,10 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
           const ok = await confirmDialog({ title: '中断这次执行？', message: '会请求执行者停止；已经产生的修改不会自动撤销。', confirmLabel: '请求中断', danger: true });
           if (ok) { await api.post(`/runs/${encodeURIComponent(run.id)}/cancel`, {}); store.refresh(); }
         } })),
-      run.worktree && h('p', { class: 'muted small' }, run.worktree.removedAt ? `工作树目录已清理 · 保留分支 ${run.worktree.branch}` : run.worktree.branch
+      run.worktree && h('p', { class: 'muted small' }, run.worktree.branchDeletedAt ? '工作树目录已清理 · 执行分支已删除' : run.worktree.removedAt ? `工作树目录已清理 · 保留分支 ${run.worktree.branch}` : run.worktree.branch
         ? `独立工作树：${run.cwd} · ${run.worktree.branch} · 起点 ${run.worktree.base.slice(0, 10)}`
         : `独立工作树尚无创建回执 · 来源 ${run.worktree.source}`),
+      comparisonEnabled && run.worktree?.removedAt && !run.worktree.branchDeletedAt && Button({ label: '查看保留分支', size: 'sm', onClick: () => openRetainedBranch({ item: run, api, store, router }) }),
       comparisonEnabled && run.worktree?.branch && !run.worktree.removedAt && Button({ label: '查看工作树状态', size: 'sm', onClick: () => openWorktreeStatus({ item: run, api, store, router }) }),
       run.status === 'unknown' && Banner({ tone: 'danger', children: '动作已发出，但没有收到确认。请先到电脑上核对，不要重复发起。' }),
       run.status === 'failed' && Banner({ tone: 'danger', children: run.error ? systemText(run.error) : '执行失败，请查看“结果”。' }),
