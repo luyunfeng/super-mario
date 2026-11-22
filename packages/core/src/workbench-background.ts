@@ -169,8 +169,8 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
       if (previous && Date.parse(previous) >= Date.parse(to)) return { status: 'skip', reason: 'window_already_covered' };
       const hours = data.name === 'interval' ? briefing.settings().intervalHours : data.name === 'morning' ? 15 : 9;
       const from = previous || new Date(Date.parse(to) - hours * 3600000).toISOString();
-      const facts = buildWindowBrief(store, from, to, undefined, deps.conversations?.());
       const tz = briefing.settings().timezone;
+      const facts = buildWindowBrief(store, from, to, undefined, deps.conversations?.(), data.name === 'morning' ? tz : undefined);
       const pendingNotices = deps.consumePendingBriefNotices?.() ?? [];
       const baseText = formatWindowBrief(facts, data.name, tz);
       const fallbackText = pendingNotices.length

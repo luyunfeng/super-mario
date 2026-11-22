@@ -42,3 +42,27 @@ test('window bounds and optional overdue formatting preserve existing behavior',
   assert.match(formatWindowBrief(brief, 'morning'), /^工作台早间简报/);
   assert.match(formatWindowBrief({ ...brief, overdue: [{ id: 'x', title: 'late' }] }, 'project'), /逾期待办 1：late/);
 });
+
+test('早报按计划时刻区分逾期和当地当天剩余期限，覆盖夏令时回拨与长期未更新事项', t => {
+  const store = facts(t);
+  const scheduled = '2026-11-01T06:30:00Z', zone = 'America/New_York';
+  const add = (id: string, dueAt: string, extra: Partial<Todo> = {}) =>
+    store.put<Todo>('todos', id, { id, projectId: 'a', title: id, notes: '', dueAt, createdAt: from, updatedAt: from, ...extra });
+  add('first-0130', '2026-11-01T05:30:00Z');
+  add('second-0130', scheduled);
+  add('late-today', '2026-11-02T04:59:59Z');
+  add('tomorrow', '2026-11-02T05:00:00Z');
+  add('done', scheduled, { completedAt: from });
+  add('future-created', scheduled, { createdAt: '2026-11-02T05:00:00Z' });
+  add('other-project', scheduled, { projectId: 'b' });
+  add('invalid-date', 'invalid');
+  const start = '2026-10-31T16:00:00Z';
+  const brief = buildWindowBrief(store, start, scheduled, 'a', [], zone);
+  assert.deepEqual(brief.projects[0].overdue?.map(item => item.id), ['first-0130']);
+  assert.deepEqual(brief.projects[0].dueToday?.map(item => item.id), ['second-0130', 'late-today']);
+  assert.deepEqual(brief.projects[0].todoUpdates, []);
+  const text = formatWindowBrief(brief, 'morning', zone);
+  assert.match(text, /今日到期 2：second-0130（11\/01 01:30）；late-today（11\/01 23:59）/);
+  assert.doesNotMatch(text, /tomorrow|other-project|future-created|invalid-date/);
+  assert.equal(buildWindowBrief(store, start, scheduled, 'a').projects[0].overdue, undefined);
+});

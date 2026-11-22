@@ -310,6 +310,9 @@ test('早报把各执行状态和计划时间传给模型，日历未开放时�
     await api('/plugins/feishu', { enabled: false });
     await ask('检查本地模型连接。');
     const scheduledFor = new Date().toISOString();
+    const old = new Date(Date.parse(scheduledFor) - 7 * 86400000).toISOString();
+    server.app.store.put('todos', 'old-due', { id: 'old-due', title: '合成积压事项', notes: '',
+      createdAt: old, updatedAt: old, dueAt: old });
     for (const status of ['queued', 'running', 'unknown', 'cancelled'] as const) {
       const run: Run = { id: status, executorId: 'fixture', conversationId: 'main', prompt: '合成任务-' + status,
         status, output: '', createdAt: scheduledFor, updatedAt: scheduledFor };
@@ -323,7 +326,7 @@ test('早报把各执行状态和计划时间传给模型，日历未开放时�
     assert.ok(request);
     assert.ok(!request.tools.includes('calendar_agenda'));
     const prompt = JSON.stringify(request.content);
-    for (const expected of [scheduledFor, '日程未核实', '等待执行 1：合成任务-queued', '进行中 1：合成任务-running',
+    for (const expected of [scheduledFor, '逾期待办 1：合成积压事项', '日程未核实', '等待执行 1：合成任务-queued', '进行中 1：合成任务-running',
       '执行结果未知 1：合成任务-unknown', '执行已取消 1：合成任务-cancelled']) assert.ok(prompt.includes(expected), expected);
     const response = await fetch(server.url + '/api/v1/brief/current');
     assert.ok(response.ok);
