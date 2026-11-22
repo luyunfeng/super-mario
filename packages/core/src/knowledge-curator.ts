@@ -412,6 +412,46 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
   const timer = setInterval(() => { void tick(); }, 2000); timer.unref();
   return {
     status, addSource, rebuildIndex,
+    async meetingDay(date: string, timezone: string, projectId?: string, offset = 0) {
+      if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
+      if (projectId && !options.validProject(projectId)) throw new CuratorError('项目不可用', 404);
+      const day = new Date(date + 'T00:00:00Z');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== date)
+        throw new CuratorError('请指定有效的回顾日期 YYYY-MM-DD');
+      if (!Number.isSafeInteger(offset) || offset < 0) throw new CuratorError('无效的分页位置');
+      let localDay: Intl.DateTimeFormat;
+      try { localDay = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }); }
+      catch { throw new CuratorError('回顾时区无效'); }
+
+      // The queue preserves insertion order. Follow retries to their original source and report its latest attempt.
+      const roots = new Map<string, string>();
+      const latest = new Map<string, Job>();
+      const visibility = new Map<string, boolean>(projectId ? [[projectId, true]] : []);
+      for (const job of jobs()) {
+        if (job.materialKind !== 'meeting-transcript' && job.requestOrigin !== 'meeting') continue;
+        if (projectId && (job.layer !== 'project' || job.projectId !== projectId)) continue;
+        if (job.projectId) {
+          if (!visibility.has(job.projectId)) visibility.set(job.projectId, options.validProject(job.projectId));
+          if (!visibility.get(job.projectId)) continue;
+        }
+        const root = (job.retryOf && roots.get(job.retryOf)) || job.id;
+        roots.set(job.id, root);
+        latest.set(root, job);
+      }
+      const undated = [...latest.values()].filter(job => !job.meetingStartedAt).length;
+      const dated = [...latest.values()].filter(job => job.meetingStartedAt && localDay.format(new Date(job.meetingStartedAt)) === date)
+        .sort((a, b) => Date.parse(a.meetingStartedAt!) - Date.parse(b.meetingStartedAt!) || a.id.localeCompare(b.id));
+      const batch = dated.slice(offset, offset + 25);
+      const pages = new Map((batch.some(job => job.knowledgeIds.length) ? await options.knowledge().list({ projectId }) : []).map(p => [p.id, p]));
+      const meetings = batch.map(job => ({
+        sourceId: job.id, title: job.title, startedAt: job.meetingStartedAt!, status: job.status,
+        pages: job.knowledgeIds.flatMap(id => {
+          const page = pages.get(id);
+          return page && page.layer === job.layer && page.projectId === job.projectId ? [{ id, title: page.title }] : [];
+        }),
+      }));
+      return { date, timezone, total: dated.length, undated, meetings, nextOffset: offset + batch.length < dated.length ? offset + batch.length : null };
+    },
     async pageSources(pageId: string, sourceId?: string, projectId?: string) {
       if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
       const page = (await options.knowledge().list()).find(entry => entry.id === pageId);

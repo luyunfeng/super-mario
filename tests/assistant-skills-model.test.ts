@@ -488,7 +488,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
   let pageVersion = '';
   const title = '合成样本评审会';
   const excerpt = '[09:12] 决定采用样本甲。[09:14] 建议周五前复核；负责人待定。';
-  const decision = '决定采用样本甲。周五是建议期限，负责人待确认。';
+  const decision = '样本评审决定采用样本甲。周五是建议期限，负责人待确认。稍晚的评审仍在等待整理。另有一份来源未注明会议日期。';
   let accepted = false;
   const { server, api, ask, requests, dir } = await fixture(t, req => {
     if (req.lastRole === 'user') {
@@ -501,7 +501,22 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
       assert.ok(req.tools.includes('knowledge_list'));
       const missing = JSON.stringify(req.content).includes('独立评审会');
       assert.match(req.system, /检索无结果时，说明缺少会议正文/);
-      return call('knowledge_list', { query: missing ? '独立评审会' : title }, missing ? 'missing' : 'minutes');
+      if (missing) return call('knowledge_list', { query: '独立评审会' }, 'missing');
+      assert.ok(req.tools.includes('meeting_day'));
+      assert.match(req.system, /undated 是当前范围内无法归到日期的来源数/);
+      return call('meeting_day', { date: '2032-02-28', timezone: 'UTC' }, 'recap');
+    }
+    if (req.callId === 'recap') {
+      const result = JSON.parse(typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text);
+      assert.equal(result.undated, 1);
+      assert.equal(result.total, 2);
+      assert.equal(result.nextOffset, null);
+      assert.deepEqual(result.meetings.map((row: {title:string}) => row.title), [title, '稍晚的评审']);
+      assert.equal(result.meetings[0].sourceId, sourceId);
+      assert.deepEqual(result.meetings[0].pages, [{ id: pageId, title }]);
+      assert.equal(result.meetings[1].status, 'queued');
+      assert.deepEqual(result.meetings[1].pages, []);
+      return call('knowledge_list', { query: title }, 'minutes');
     }
     const materials = JSON.stringify(req.content);
     if (req.callId === 'missing') {
@@ -567,6 +582,11 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     const job = server.app.knowledgeCurator.addSource({ materialKind: 'meeting-transcript', meetingStartedAt: '2032-02-29T00:10+05:45', title, text: excerpt, layer: 'project', projectId });
     sourceId = job.id;
     server.app.store.put('knowledge.sources', job.id, { ...job, status: 'completed', knowledgeIds: [pageId] });
+    const meeting = { materialKind: 'meeting-transcript', layer: 'project', projectId, text: '合成来源' };
+    server.app.knowledgeCurator.addSource({ ...meeting, title: '无日期来源' });
+    server.app.knowledgeCurator.addSource({ ...meeting, title: '稍晚的评审', meetingStartedAt: '2032-02-28T23:59Z' });
+    server.app.knowledgeCurator.addSource({ ...meeting, title: '次日会议', meetingStartedAt: '2032-02-29T00:00Z' });
+    server.app.knowledgeCurator.addSource({ ...meeting, projectId: other.id, title: '其他项目资料', meetingStartedAt: '2032-02-28T09:00Z' });
     const raw = join(dir, 'plugins', 'knowledge-local', 'raw');
     await mkdir(raw, { recursive: true });
     await writeFile(join(raw, job.id + '.md'), '字'.repeat(4000) + '\n原话依据甲'.repeat(11));
@@ -574,7 +594,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     const review = await api('/todos', { title: '复核样本', notes: '核对样本甲', projectId });
     await api('/todos', { title: '不相关事项', projectId });
     await api('/todos', { title: '另一个项目复核样本甲', projectId: other.id });
-    const question = title + '有哪些决定？样本复核现在完成了吗？';
+    const question = '按 UTC 回顾 2032-02-28 的会议：' + title + '有哪些决定？样本复核现在完成了吗？';
     assert.equal(await ask(question, '/projects/' + projectId + '/messages'), decision + '样本复核待办尚未验收。');
     assert.equal(await ask('独立评审会定了什么？', '/projects/' + projectId + '/messages'), '当前项目缺少该次会议正文。');
     const bot = await api('/feishu/bots', { name: '项目纪要', appId: 'cli_5555555555555555', appSecret: 'offline-fixture',

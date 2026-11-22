@@ -188,3 +188,34 @@ test('核对后的项目会议转写按会议提示词整理，重复提交复�
   f.archive();
   assert.throws(() => f.curator.addSource(input), /有效的未归档项目/);
 });
+
+test('会议日回顾按用户时区跨夏令时分页，重试只列一次并校验知识页现归属', async t => {
+  const f = await fixture(t);
+  const same = await f.knowledge.put({ title: '可见页', content: '意见待核对', layer: 'project', projectId: 'sample' });
+  const moved = await f.knowledge.put({ title: '其他范围', content: '独立资料', layer: 'personal' });
+  const base: Job = { id: 'first', title: '秋季评审', layer: 'project', projectId: 'sample', status: 'failed', knowledgeIds: [],
+    materialKind: 'meeting-transcript', meetingStartedAt: '2030-11-03T01:30:00-04:00', createdAt: '2030-11-04T12:00:00Z', updatedAt: '2030-11-04T12:00:00Z' };
+  const put = (id: string, patch: Partial<Job>) => f.store.put('knowledge.sources', id, { ...base, ...patch, id });
+  put(base.id, {});
+  put('retry', { retryOf: base.id, status: 'completed', knowledgeIds: [same.id, moved.id] });
+  for (let i = 0; i < 25; i++) put('later-' + i, { meetingStartedAt: '2030-11-03T01:30:00-05:00', status: 'queued' });
+  put('last', { meetingStartedAt: '2030-11-04T04:59:59Z' });
+  put('next-day', { meetingStartedAt: '2030-11-04T05:00:00Z' });
+  put('undated', { meetingStartedAt: undefined });
+  const read = (offset = 0) => f.curator.meetingDay('2030-11-03', 'America/New_York', 'sample', offset);
+  const first = await read();
+  assert.equal(first.total, 27);
+  assert.equal(first.undated, 1);
+  assert.equal(first.nextOffset, 25);
+  assert.equal(first.meetings[0].sourceId, 'retry');
+  assert.deepEqual(first.meetings[0].pages, [{ id: same.id, title: same.title }]);
+  const last = await read(first.nextOffset!);
+  assert.equal(last.meetings.length, 2);
+  assert.equal(last.meetings.at(-1)?.sourceId, 'last');
+  assert.equal(last.nextOffset, null);
+  await assert.rejects(f.curator.meetingDay('2030-02-31', 'UTC'), /日期/);
+  await assert.rejects(f.curator.meetingDay('2030-11-03', 'Invalid/Zone'), /时区/);
+  f.archive();
+  await assert.rejects(read(), /项目不可用/);
+  assert.equal((await f.curator.meetingDay('2030-11-03', 'UTC')).total, 0);
+});

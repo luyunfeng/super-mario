@@ -160,6 +160,7 @@ export interface SystemActions {
   knowledgeRevision?(id: string, commit?: string, projectId?: string): ReturnType<NonNullable<KnowledgeBackend['revision']>>;
   knowledgeOriginal?(pageId: string, sourceId?: string, projectId?: string): Promise<{
     sources?: { id: string; title: string; createdAt: string; meetingStartedAt?: string }[]; content?: string; title?: string }>;
+  meetingDay?(date: string, timezone?: string, projectId?: string, offset?: number): Promise<Json>;
   knowledgeJobs?(): Json;
   dispatch(input: Record<string, unknown>): Json;
   createTodo(input: Record<string, unknown>): Json;
@@ -385,6 +386,14 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             const end = offset + 4000;
             return { title: result.title, webCitation: `[查看原文](${route})`, text: chars.slice(offset, end).join(''), nextOffset: end < chars.length ? end : null } as Json;
           }, { pageId: { type: 'string' }, sourceId: { type: 'string' }, query: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
+        if (actions?.meetingDay) context.contribute('tools', 'meeting_day', tool('meeting_day',
+          '按指定日期和时区读取可见会议来源。默认使用工作台时区。返回整理状态、可读知识页以及范围内未注明会议日期的来源数。', async (args, signal) => {
+            signal.throwIfAborted();
+            if (typeof args.date !== 'string' || (args.timezone !== undefined && typeof args.timezone !== 'string') ||
+                (args.projectId !== undefined && typeof args.projectId !== 'string') || (args.offset !== undefined && typeof args.offset !== 'number'))
+              throw new Error('请核对日期、时区、项目和分页位置');
+            return actions.meetingDay!(args.date, args.timezone, args.projectId, args.offset);
+          }, { date: { type: 'string' }, timezone: { type: 'string', description: '可选 IANA 时区' }, projectId: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
         if (actions?.knowledgeJobs) context.contribute('tools', 'knowledge_jobs', tool('knowledge_jobs', '查看知识整理队列、真实 Agent 状态及生成的知识标识。', async (_args, signal) => { signal.throwIfAborted(); return actions.knowledgeJobs!(); }));
       },
     },
