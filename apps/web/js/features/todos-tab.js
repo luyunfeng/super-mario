@@ -345,7 +345,11 @@ export function createTodosTab({ api, store, router }) {
       const position = prior?.dataset.viewKey === viewKey && prior.dataset.positioned
         ? { top: prior.scrollTop, left: prior.scrollLeft } : null;
       replace(list, todoCalendar({ ...calendar, todos: [...groups.flatMap(([, items]) => items), ...finished], showDone, navigate,
-        onShowDone: value => { showDone = value; paint(); }, open: openEdit, showList: () => navigate('list'),
+        onShowDone: value => { showDone = value; paint(); }, open: openEdit, showList: () => {
+          period.value = 'none';
+          writeLocal('sm.todos.period', period.value);
+          navigate('list');
+        },
         add: (day, clock) => { due.value = day; time.value = clock; title.focus(); },
         move: async (todo, day, clock, originalDueAt) => {
           try {
@@ -381,7 +385,7 @@ export function createTodosTab({ api, store, router }) {
     const blocks = groups.map(([name, items]) => h('div', { class: 'group', dataset: { section: name } },
       h('h3', { class: 'group__title' }, name, h('span', { class: 'tab__count' }, items.length)),
       h('div', { class: 'list' }, items.map(todo => row(todo, false)))));
-    if (finished.length) blocks.push(Fold({ title: `已完成 ${finished.length}`, open: Boolean(query), body: h('div', { class: 'list' }, finished.map(todo => row(todo, true))) }));
+    if (finished.length) blocks.push(Fold({ title: `已完成 ${finished.length}`, open: Boolean(query) || (period.value === 'none' && showDone), body: h('div', { class: 'list' }, finished.map(todo => row(todo, true))) }));
     const hidden = (sections['需要你'] ?? []).filter(todo => matches(todo) && !selected(todo)).length;
     if (hidden) blocks.unshift(Button({ label: '另有 ' + hidden + ' 项需要你处理，查看全部期限', size: 'sm', onClick: () => {
       period.value = 'all'; writeLocal('sm.todos.period', 'all'); paint();

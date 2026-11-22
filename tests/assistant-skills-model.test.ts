@@ -1299,6 +1299,7 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
       }
       if (question.includes('还没定期限')) {
         assert.match(req.system, /提醒时间不能当作截止日期/);
+        assert.match(req.system, /都不加 dueFrom 或 dueBefore/);
         return call('todos_list', { status: 'open', hasDueDate: false, order: 'priority' }, 'undated');
       }
       if (question.includes('派过')) return call('todos_list', { status: 'open', hasExecution: !question.includes('没派过') }, question.includes('没派过') ? 'unassigned' : 'dispatched');

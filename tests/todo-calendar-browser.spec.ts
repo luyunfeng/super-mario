@@ -34,6 +34,7 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   const root = page.getByRole('region', { name: '待办日历' });
   const base = `${server.url}/#projects/${project.id}/todos`;
   await page.goto(base);
+  await page.getByLabel('按截止日期筛选').selectOption('today');
   await page.getByRole('button', { name: '日历', exact: true }).click();
   await expect(root).toBeVisible();
   await page.goto(base + '/month/2030-03-31');
@@ -185,6 +186,19 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await expect(page).toHaveURL(/\/day\/2030-03-28$/);
   await root.getByRole('button', { name: '1 项没有截止日期，查看列表' }).click();
   await expect(panel.locator('.todo', { hasText: '尚未安排' })).toBeVisible();
+  await expect(panel.getByLabel('按截止日期筛选')).toHaveValue('none');
+  await expect(panel.locator('.todo')).toHaveCount(1);
+  await page.reload();
+  await expect(panel.locator('.todo')).toHaveCount(1);
+  await expect(panel.locator('.todo')).toContainText('尚未安排');
+  // The calendar count includes finished items only when the user asks to see them.
+  server.app.store.put('todos', done.id, { ...done, dueAt: undefined, completedAt: dueAt, updatedAt: new Date().toISOString() });
+  await page.goto(base + '/week/2030-03-27');
+  await root.getByRole('checkbox', { name: '显示已完成' }).check();
+  await root.getByRole('button', { name: '2 项没有截止日期，查看列表' }).click();
+  await expect(panel.locator('.todo', { hasText: '完成的待办' })).toBeVisible();
+  await expect(panel.locator('.todo')).toHaveCount(2);
+  server.app.store.put('todos', done.id, { ...done, completedAt: dueAt, updatedAt: new Date().toISOString() });
   const springDue = '2030-03-10T09:30:00.000Z'; // 01:30 before the local clock jumps to 03:00.
   const spring = server.app.createTodo({ title: '切换夏令时的待办', projectId: project.id, dueAt: springDue });
   await page.goto(base + '/week/2030-03-10');
