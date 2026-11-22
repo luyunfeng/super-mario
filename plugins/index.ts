@@ -147,6 +147,7 @@ export interface SystemActions {
   projectCreate?(input: Record<string, unknown>): Json | Promise<Json>;
   projectsDiscover?(input: Record<string, unknown>): Promise<Json>;
   knowledgeSource?(input: Record<string, unknown>): Json;
+  editConfirmedFacts?(args: Record<string, unknown>): Promise<Json>;
   setKnowledgeRelevance?(args: Record<string, unknown>): Promise<Json>;
   setKnowledgeImportance?(args: Record<string, unknown>): Promise<Json>;
   changeKnowledgeTag?(args: Record<string, unknown>): Promise<Json>;
@@ -291,6 +292,10 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           return { protected: classifyProtected(String(url ?? ''), Array.isArray(trustedHosts) ? trustedHosts : []) };
         });
         if (actions?.knowledgeSource) context.contribute('tools', 'knowledge_ingest', tool('knowledge_ingest', '将用户明确提供的资料加入独立知识 Agent 整理队列，默认个人知识；受保护来源先生成主人读取审批，不自动申请权限。入队或批准都不代表整理完成。', async (args, signal) => { signal.throwIfAborted(); return actions.knowledgeSource!(args); }, { url: { type: 'string' }, text: { type: 'string' }, title: { type: 'string' }, layer: { type: 'string', enum: ['personal', 'project'] }, projectId: { type: 'string' } }));
+        if (actions?.editConfirmedFacts) context.contribute('tools', 'knowledge_edit_facts', tool('knowledge_edit_facts',
+          '按用户明确确认的内容修改知识页的已确认事实。新增时只传 text；更正时 previousText 必须唯一匹配原文，删除时 text 传空字符串。所有操作传 id 和已读 updatedAt。',
+          async (args, signal) => { signal.throwIfAborted(); return actions.editConfirmedFacts!(args); },
+          { id: { type: 'string' }, updatedAt: { type: 'string' }, previousText: { type: 'string' }, text: { type: 'string' } }));
         if (actions?.setKnowledgeRelevance) context.contribute('tools', 'knowledge_set_relevance', tool('knowledge_set_relevance',
           '按用户要求给知识页记录相关度。传 id、已读 updatedAt 和指定的整数分数；清除评分传 null。',
           async (args, signal) => { signal.throwIfAborted(); return actions.setKnowledgeRelevance!(args); },

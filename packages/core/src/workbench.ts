@@ -306,7 +306,7 @@ export async function createWorkbench(config: AppConfig) {
     const source=currentAgentInput()??agent.currentInput();if(!source||source.role!=='user'||source.readOnly||source.origin&&source.origin!=='user')throw new InputError('来源投放需要当前用户输入',403);
     validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
     return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
-  }, changeKnowledgeTag: args => changeKnowledgeMetadata('tag', args), setKnowledgeRelevance: args => changeKnowledgeMetadata('relevance', args), setKnowledgeImportance: args => changeKnowledgeMetadata('importance', args), knowledgeRevision: (id, commit, projectId) => knowledgeRevision(id, commit, projectId ?? currentAgentInput()?.projectId), knowledgeOriginal: (pageId, sourceId, projectId) => knowledgeCurator.pageSources(pageId, sourceId, projectId ?? currentAgentInput()?.projectId), knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0], currentAgentInput() ?? agent.currentInput()) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
+  }, editConfirmedFacts: args => changeKnowledgeMetadata('facts', args), changeKnowledgeTag: args => changeKnowledgeMetadata('tag', args), setKnowledgeRelevance: args => changeKnowledgeMetadata('relevance', args), setKnowledgeImportance: args => changeKnowledgeMetadata('importance', args), knowledgeRevision: (id, commit, projectId) => knowledgeRevision(id, commit, projectId ?? currentAgentInput()?.projectId), knowledgeOriginal: (pageId, sourceId, projectId) => knowledgeCurator.pageSources(pageId, sourceId, projectId ?? currentAgentInput()?.projectId), knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0], currentAgentInput() ?? agent.currentInput()) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
   function makeWebSource() {
     const options = webConfig.read();
     return createFeishuWebSource({
@@ -700,7 +700,7 @@ export async function createWorkbench(config: AppConfig) {
       },
     };
   }
-  async function changeKnowledgeMetadata(field: 'tag' | 'importance' | 'relevance', args: Record<string, unknown>): Promise<Json> {
+  async function changeKnowledgeMetadata(field: 'facts' | 'tag' | 'importance' | 'relevance', args: Record<string, unknown>): Promise<Json> {
     const id = requiredText(args.id, '知识页标识');
     const version = requiredText(args.updatedAt, '已读版本');
     const projectId = currentAgentInput()?.projectId ?? optionalText(args.projectId, '项目');
@@ -709,8 +709,25 @@ export async function createWorkbench(config: AppConfig) {
     if (!page || (projectId && (page.layer !== 'project' || page.projectId !== projectId)) ||
         (page.projectId && !projects.list().some(p => p.id === page.projectId && !p.archivedAt))) throw new InputError('知识页不可用', 404);
     if (page.updatedAt !== version) throw new InputError('知识页已有新版本，请重新核对', 409);
-    let update: Pick<Parameters<KnowledgeBackend['put']>[0], 'importance' | 'tags' | 'relevance'>;
-    if (field === 'relevance') {
+    let update: Pick<Parameters<KnowledgeBackend['put']>[0], 'importance' | 'tags' | 'relevance' | 'confirmedFacts'>;
+    if (field === 'facts') {
+      const before = args.previousText, after = args.text, current = page.confirmedFacts ?? '';
+      if (typeof after !== 'string' || (before !== undefined && (typeof before !== 'string' || !before)))
+        throw new InputError('请提供确认文本，更正时须提供原文片段');
+      let next;
+      if (before === undefined) {
+        if (!after.trim()) throw new InputError('新增确认事实不能为空');
+        if (('\n' + current + '\n').includes('\n' + after + '\n')) return { id, changed: false, updatedAt: version };
+        next = current ? current + '\n' + after : after;
+      } else {
+        const at = current.indexOf(before);
+        if (at < 0 || current.indexOf(before, at + 1) >= 0) throw new InputError('原文片段未唯一匹配，请核对已确认事实');
+        next = current.slice(0, at) + after + current.slice(at + before.length);
+      }
+      if (!next.trim()) next = '';
+      if (next === current) return { id, changed: false, updatedAt: version };
+      update = { confirmedFacts: next };
+    } else if (field === 'relevance') {
       const score = args.relevance;
       if (score !== null && (typeof score !== 'number' || !Number.isInteger(score) || score < 0 || score > 100)) throw new InputError('请指定 0 至 100 的整数，或传 null 清除相关度');
       if ((page.relevance ?? null) === score) return { changed: false, id, relevance: score, updatedAt: version };

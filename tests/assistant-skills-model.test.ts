@@ -740,3 +740,67 @@ test('Web 和飞书按已读版本调整知识重要级和标签', { timeout: 30
     assert.deepEqual(prior!.entry.tags, ['原有标签', '待核对']);
   } finally { await server.close(); }
 });
+
+test('Web 追加确认事实，飞书按唯一原文更正并保留其他事实', { timeout: 30000 }, async t => {
+  let adapter!: FeishuOptions, operation: 'append' | 'correct' | 'remove' = 'append', id = '', version = '', foreign = '';
+  const sent: string[] = [];
+  const edit = (step: string, text: string, previousText?: string, target = id, updatedAt = version) =>
+    call('knowledge_edit_facts', { id: target, updatedAt, text, previousText }, step);
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.ok(req.tools.includes('knowledge_edit_facts'));
+      assert.match(req.system, /推断、转述和整理摘要不能自行升级为已确认事实/);
+      return call('knowledge_list', { query: '送审约定' }, 'lookup');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[]).map(p => p.text).join('');
+    if (req.callId === 'lookup') {
+      const [page] = JSON.parse(raw);
+      assert.equal(page.id, id);
+      version = page.updatedAt;
+      return edit('foreign', '不应写入', undefined, foreign);
+    }
+    if (req.callId === 'foreign') {
+      assert.match(raw, /作用域|知识页不可用/);
+      return edit('stale', '不应写入', undefined, id, '过期版本');
+    }
+    if (req.callId === 'stale') {
+      assert.match(raw, /新版本/);
+      if (operation === 'remove') return edit('saved', '', '\n验收人在场');
+      return operation === 'correct' ? edit('ambiguous', '周四', '周三') : edit('saved', '验收人在场');
+    }
+    if (req.callId === 'ambiguous') {
+      assert.match(raw, /未唯一匹配/);
+      return edit('saved', '周四送审', '周三送审');
+    }
+    const result = JSON.parse(raw);
+    assert.equal(result.changed, req.callId === 'saved');
+    if (operation === 'append' && req.callId === 'saved') return edit('already', '验收人在场', undefined, id, result.updatedAt);
+    return { role: 'assistant', content: '已保存确认事实。' };
+  }, options => {
+    adapter = options;
+    return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    const project = await api('/projects', { name: '送审项目' });
+    const other = await api('/projects', { name: '独立项目' });
+    const input = { layer: 'project', title: '送审约定', content: '讨论摘要', confirmedFacts: '周三送审，周三开会' };
+    id = (await api('/knowledge', { ...input, projectId: project.id })).id;
+    foreign = (await api('/knowledge', { ...input, projectId: other.id })).id;
+    assert.equal(await ask('给送审约定追加已确认事实：验收人在场', '/projects/' + project.id + '/messages'), '已保存确认事实。');
+    operation = 'correct';
+    const bot = await api('/feishu/bots', { name: '事实核对', appId: 'cli_4444444444444444', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage('更正送审约定的已确认事实：将周三送审改为周四送审', { ...source, messageId: 'correct' });
+    await t.waitFor(() => assert.ok(sent.includes('已保存确认事实。')));
+    const pages = await server.app.knowledge().list({ query: '送审约定' });
+    assert.equal(pages.find(p => p.id === id)?.confirmedFacts, '周四送审，周三开会\n验收人在场');
+    assert.equal(pages.find(p => p.id === id)?.content, input.content);
+    assert.equal(pages.find(p => p.id === foreign)?.confirmedFacts, input.confirmedFacts);
+    operation = 'remove';
+    assert.equal(await ask('删除送审约定里“验收人在场”这一条确认事实', '/projects/' + project.id + '/messages'), '已保存确认事实。');
+    assert.equal((await server.app.knowledge().list({ projectId: project.id }))[0]?.confirmedFacts, '周四送审，周三开会');
+  } finally { await server.close(); }
+});
