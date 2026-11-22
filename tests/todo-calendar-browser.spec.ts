@@ -57,6 +57,14 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await root.getByRole('button', { name: '查看 2030-03-27', exact: true }).click();
   await expect(page).toHaveURL(/\/day\/2030-03-27$/);
   await page.reload();
+  const viewport = root.locator('.cal-scroll');
+  await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBeGreaterThan(100);
+  await expect(entry).toBeInViewport();
+  await viewport.evaluate(el => { el.scrollTop = 70; });
+  const redraw = server.app.createTodo({ projectId: project.id, title: '更新视图位置', dueAt: read().dueAt });
+  await expect(root.getByRole('button', { name: /更新视图位置/ })).toHaveCount(1);
+  await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBe(70);
+  server.app.updateTodo(redraw.id, { completed: true });
   await entry.click();
   const editor = page.getByRole('dialog', { name: '编辑待办' });
   await expect(editor.getByLabel('截止时间', { exact: true })).toHaveValue('18:05');

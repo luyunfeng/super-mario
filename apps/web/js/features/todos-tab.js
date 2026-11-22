@@ -340,6 +340,10 @@ export function createTodosTab({ api, store, router }) {
     const groups = ORDER.map(name => [name, rows(name)]).filter(([, items]) => items.length);
     const finished = DONE.flatMap(rows);
     if (calendar) {
+      const viewKey = JSON.stringify([projectId, calendar.mode, localDate(calendar.anchor)]);
+      const prior = list.querySelector('.cal-scroll');
+      const position = prior?.dataset.viewKey === viewKey && prior.dataset.positioned
+        ? { top: prior.scrollTop, left: prior.scrollLeft } : null;
       replace(list, todoCalendar({ ...calendar, todos: [...groups.flatMap(([, items]) => items), ...finished], showDone, navigate,
         onShowDone: value => { showDone = value; paint(); }, open: openEdit, showList: () => navigate('list'),
         add: (day, clock) => { due.value = day; time.value = clock; title.focus(); },
@@ -357,6 +361,21 @@ export function createTodosTab({ api, store, router }) {
             if (error.status === 409) await store.refresh();
           }
         } }));
+      const scroll = list.querySelector('.cal-scroll');
+      scroll.dataset.viewKey = viewKey;
+      if (position) {
+        scroll.scrollTop = position.top;
+        scroll.scrollLeft = position.left;
+        scroll.dataset.positioned = 'true';
+      } else requestAnimationFrame(() => {
+        if (!scroll.isConnected) return;
+        if (Number(scroll.dataset.firstHour) > 0) {
+          const row = scroll.querySelector('[data-hour="' + scroll.dataset.firstHour + '"]');
+          const header = scroll.querySelector('.cal-head');
+          scroll.scrollTop = row.getBoundingClientRect().top - header.getBoundingClientRect().bottom;
+        }
+        scroll.dataset.positioned = 'true';
+      });
       return;
     }
     const blocks = groups.map(([name, items]) => h('div', { class: 'group', dataset: { section: name } },

@@ -49,7 +49,8 @@ function daysFor(anchor, mode) {
 
 export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, navigate, open, add, move, showList }) {
   const days = daysFor(anchor, mode);
-  const today = localDate(new Date());
+  const now = new Date();
+  const today = localDate(now);
   const dated = new Map();
   let undated = 0;
   for (const todo of todos) {
@@ -162,6 +163,22 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
         return cell(day, hour, slot, entries.map(entry));
       })]));
   }
+  let firstHour;
+  if (mode !== 'month') {
+    const includeHour = hour => { firstHour = Math.min(firstHour ?? hour, hour); };
+    for (const day of days) {
+      const key = localDate(day);
+      if (key === today) {
+        const earlier = new Date(now.getTime() - 90 * 60_000);
+        includeHour(localDate(earlier) === today ? earlier.getHours() : 0);
+      }
+      for (const todo of dated.get(key) ?? []) {
+        const date = new Date(todo.dueAt);
+        // The day-end row sits above the time axis.
+        includeHour(date.getHours() === 23 && date.getMinutes() === 59 ? 0 : Math.max(0, date.getHours() - 1));
+      }
+    }
+  }
   return h('section', { class: 'stack todo-calendar', 'aria-label': '待办日历', ondragend: clearPreview, onkeydown: event => {
     if (event.metaKey || event.ctrlKey || event.altKey || event.target.matches('input, textarea, select')) return;
     if (event.key === 'ArrowLeft') step(-1);
@@ -170,6 +187,6 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
     else return;
     event.preventDefault();
   } }, controls,
-    h('div', { class: 'cal-scroll' }, content),
+    h('div', { class: 'cal-scroll', dataset: mode === 'month' ? {} : { firstHour: firstHour ?? 8 } }, content),
     undated > 0 && Button({ label: `${undated} 项没有截止日期，查看列表`, size: 'sm', onClick: showList }));
 }
