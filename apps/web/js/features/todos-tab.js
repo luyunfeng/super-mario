@@ -72,7 +72,7 @@ export function createTodosTab({ api, store, router }) {
       store.refresh();
     } catch (error) { toast(`没有添加成功：${error.message}`, 'danger'); }
   } }, h('div', { class: 'grow', style: { minWidth: '200px' } }, title), priority, due, time, h('button', { class: 'btn btn--primary', type: 'submit' }, '添加'));
-  const search = Input({ type: 'search', placeholder: '搜索标题或备注', 'aria-label': '搜索待办标题或备注', oninput: paint });
+  const search = Input({ type: 'search', placeholder: '搜索标题、备注或等待对象', 'aria-label': '搜索待办标题、备注或等待对象', oninput: paint });
   function preference(label, options, key) {
     const saved = readLocal(key, options[0][0]);
     const value = options.some(([id]) => id === saved) ? saved : options[0][0];
@@ -186,7 +186,7 @@ export function createTodosTab({ api, store, router }) {
     if (!data) { replace(list, h('p', { class: 'muted' }, '正在读取…')); return; }
     const sections = data.sections ?? data;
     const query = search.value.trim().toLowerCase();
-    const matches = todo => inScope(todo) && (!query || [todo.title, todo.notes].some(value => value?.toLowerCase().includes(query)));
+    const matches = todo => inScope(todo) && (!query || [todo.title, todo.notes, todo.waitingOn].some(value => value?.toLowerCase().includes(query)));
     const now = new Date();
     const ranges = dateRanges(now);
     const selected = todo => calendar || matchesPeriod(todo, period.value, ranges, now);

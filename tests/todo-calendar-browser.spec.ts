@@ -23,7 +23,7 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   const dueAt = '2030-04-01T01:05:12.345Z';
   const reminderAt = '2030-03-30T01:00:00Z';
   const todo = server.app.createTodo({ title: '本地三月末', projectId: project.id, dueAt, reminderAt });
-  server.app.createTodo({ title: '尚未安排', projectId: project.id });
+  server.app.createTodo({ title: '尚未安排', projectId: project.id, waitingOn: '资料复核员回复' });
   server.app.createTodo({ title: '其他范围', dueAt });
   const done = server.app.createTodo({ title: '完成的待办', projectId: project.id, dueAt });
   server.app.store.put('todos', done.id, { ...done, completedAt: dueAt });
@@ -162,6 +162,9 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await panel.getByRole('searchbox').fill('尚未安排');
   await expect(panel.getByText('没有匹配的待办')).toBeVisible();
   await period.selectOption('all');
+  await expect(panel.locator('.todo')).toHaveCount(1);
+  await expect(panel.locator('.todo')).toContainText('尚未安排');
+  await panel.getByRole('searchbox').fill('资料复核员');
   await expect(panel.locator('.todo')).toHaveCount(1);
   await expect(panel.locator('.todo')).toContainText('尚未安排');
 });
