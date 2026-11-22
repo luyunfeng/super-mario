@@ -6,9 +6,9 @@ import { hintCopy } from './ui/hint.js';
 import { alertLabel } from './lib/alerts.js';
 import { createPluginSettings } from './features/plugin-settings.js';
 import { openTerminalWall } from './features/terminal-wall.js';
-import { PAGES } from './lib/router.js';
+import { PAGES, PAGE_NAMES } from './lib/router.js';
 
-export const PAGE_NAMES = { home: '首页', chat: '对话', inbox: '收件箱', outbox: '发件箱', agent: 'Agent', projects: '项目', memory: '记忆', channels: '渠道' };
+
 const NAV_ICONS = { home: 'home', chat: 'chat', inbox: 'inbox', outbox: 'outbox', agent: 'agent', projects: 'projects', memory: 'memory', channels: 'channels' };
 
 export function createShell({ api, store, router, scope }) {

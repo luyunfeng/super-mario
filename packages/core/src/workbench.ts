@@ -64,7 +64,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
-import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import type { AppConfig, Approval, BotScope, ExecutionResult, InboxItem, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
@@ -180,6 +180,7 @@ export async function createWorkbench(config: AppConfig) {
   }
   plugins.register({ ...webExtension, activate: context => serializeWeb(() => webExtension.activate(context)) });
   plugins.register(workspaceSplash);
+  plugins.register(createStartPage(() => plugins.list()));
   plugins.register(tokenStatistics);
   plugins.register(todoCalendar);
   plugins.register(conversationSearch);
@@ -968,7 +969,8 @@ export async function createWorkbench(config: AppConfig) {
     const publicReason = (reason: string) => reason.replace(/WebSocket|Herdr|SSH|hook/gi, '连接服务').replace(/\bID\b/g, '标识');
     if (!connected) problems.push({ area: 'channel', message: `飞书尚未连接${channel.reason ? `：${publicReason(channel.reason)}` : ''}`, fix: '进入渠道，按向导连接机器人；暂时不用也可以先跳过。' });
     for(const bot of registeredBots.filter(bot => bot.enabled && !bot.connected)) problems.push({ area: 'channel', message: `机器人“${bot.name}”未连接${bot.reason ? `：${publicReason(bot.reason)}` : ''}`, fix: '在渠道高级设置中核对应用权限与连接状态。' });
-    return { ...(mainAssistant && { mainAssistant }), attentionCount: attention().length, problems,
+    return { ...(plugins.list().some(p => p.id === 'start-page' && p.status === 'active') && { startPage: readStartPage(store) }),
+      ...(mainAssistant && { mainAssistant }), attentionCount: attention().length, problems,
       setup: { agent: agentState.available && computers.some(item => item.online), project: projects.list().some(item => !item.archivedAt), memory: entries.length > 0, channel: connected ? 'done' : store.get<{ skipped: boolean }>('settings', 'setup.channel-skipped')?.skipped ? 'skipped' : 'todo' },
       agentTurns: store.list<Message>('messages').filter(message => message.role === 'user').map(({ id, todoId, conversationId, role, status, createdAt }) => ({ id, todoId, conversationId, role, status, createdAt })), background: background.summary(), webExtensions: contributions.list('web_extensions'), projects: projects.list(), version: '0.1.0', mode: config.demo ? 'demo' : 'live', agent: agent.status(), modelRevision, plugins: plugins.list(), executors: executorInfo(), machines: machines?.list() ?? store.list('machines'), inbox: inbox.list(), inboxHandling:inboxHandling.states(), inboxConversations:inboxAssistant.list(), inboxAssistant:inboxAssistant.status(), approvals: approvals.list(), signals: supervision.signals(), todos: todos(), knowledge: entries, messages: store.list<Message>('messages').filter(message => message.conversationId === 'main'), runs: store.list<Run>('runs').sort((a, b) => b.createdAt.localeCompare(a.createdAt)) };
   }

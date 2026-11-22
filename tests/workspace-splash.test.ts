@@ -30,3 +30,21 @@ test('presentation contribution follows plugin disable, restart and re-enable', 
     assert.equal((await state()).webExtensions?.[0]?.id, 'workspace-splash');
   } finally { await server.close(); await rm(dataDir, { recursive: true, force: true }); }
 });
+
+test('启动页设置在重启后保留，过期版本和未注册页面不会覆盖选择', async t => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'mario-start-page-'));
+  const config = { host: '127.0.0.1', port: 0, dataDir, demo: true, token: 'fixture-start-page' };
+  let server = await startServer(config);
+  t.after(async () => { await server.close(); await rm(dataDir, { recursive: true, force: true }); });
+  const save = (key: string, revision: number, authenticated = true) => fetch(server.url + '/api/v1/start-page', {
+    method: 'POST', headers: { 'content-type': 'application/json', ...(authenticated ? { authorization: 'Bearer ' + config.token } : {}) },
+    body: JSON.stringify({ key, revision }),
+  });
+  assert.equal((await save('inbox', 0, false)).status, 401);
+  assert.equal((await save('inbox', 0)).status, 200);
+  assert.equal((await save('chat', 0)).status, 409);
+  assert.equal((await save('https://invalid.example', 1)).status, 400);
+  await server.close(); server = await startServer(config);
+  const res = await fetch(server.url + '/api/v1/state', { headers: { authorization: 'Bearer ' + config.token } });
+  assert.deepEqual((await res.json()).startPage, { key: 'inbox', revision: 1 });
+});

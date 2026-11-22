@@ -3,13 +3,14 @@ import { h, readLocal, writeLocal } from './lib/dom.js';
 import { createApi } from './lib/api.js';
 import { installPresence } from './features/presence.js';
 import { createStore } from './lib/store.js';
-import { createRouter } from './lib/router.js';
+import { createRouter, PAGE_NAMES } from './lib/router.js';
 import { createScope } from './lib/scope.js';
 import { computeAlerts } from './lib/alerts.js';
-import { createShell, PAGE_NAMES } from './shell.js';
+import { createShell } from './shell.js';
 import { applyHintPreference } from './ui/hint.js';
 import { Banner, Button } from './ui/kit.js';
 import { closeOverlays } from './ui/overlay.js';
+import { startPages } from './features/plugin-settings.js';
 import { createSearch } from './features/search.js';
 import { installShortcuts } from './features/shortcuts.js';
 import { openQuickTodo } from './features/quick-todo.js';
@@ -25,7 +26,9 @@ import { createChannelsPage } from './pages/channels.js';
 
 applyHintPreference();
 
+let applyStartPage = !location.hash || /^#\??token=/.test(location.hash);
 const api = createApi();
+const initialHash = location.hash;
 installPresence(api);
 const store = createStore(api);
 const router = createRouter();
@@ -83,6 +86,11 @@ store.subscribe((view) => {
   }
   shell.showLoading('');
   shell.showFailure(null);
+  if (applyStartPage) {
+    applyStartPage = false;
+    const choice = startPages(snapshot.plugins ?? []).find(item => item.key === snapshot.startPage?.key);
+    if (location.hash === initialHash && choice && choice.route !== '#home') router.replace(choice.route);
+  }
   scope.validate(snapshot.projects ?? []);
   shell.setProjects(snapshot.projects ?? []);
   renderChrome(view);
@@ -92,6 +100,7 @@ store.subscribe((view) => {
 
 let shown = '';
 router.subscribe((route) => {
+  if (location.hash !== initialHash) applyStartPage = false;
   closeOverlays();
   for (const [key, page] of Object.entries(pages)) page.el.classList.toggle('is-active', key === route.page);
   shell.setActive(route.page);

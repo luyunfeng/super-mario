@@ -1,3 +1,4 @@
+import { openTokenStatistics } from '../features/token-statistics.js';
 // Agent：配置谁来干活。模型、执行者与电脑、CLI 会话、自动处理、自动跟进；其余收进“高级”。
 import { h, replace } from '../lib/dom.js';
 import { Button, Card, Dot, Pill, Empty, Banner } from '../ui/kit.js';
@@ -125,7 +126,12 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
         h('div', { class: 'page__actions' }, Hint('nav.agent'))),
       h('div', { class: 'stack stack--lg' }, profile.el, skills.el, modelCard, botCard, commandGroup.el, computersCard, cliSessions.el, policy.el, followUp.el, scheduledWork.el, advanced.el)));
 
-  let pendingSection;
+  let pendingSection, pendingStatistics;
+  function showStatistics() {
+    if (!pendingStatistics || !store.view.snapshot || router.current.page !== 'agent') return;
+    pendingStatistics = false;
+    if (store.view.snapshot.plugins?.some(p => p.id === 'token-statistics' && p.status === 'active')) openTokenStatistics({ api, store });
+  }
   function showSection() {
     if (!pendingSection || !store.view.snapshot || router.current.page !== 'agent') return;
     const { target, route } = pendingSection;
@@ -138,6 +144,8 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
   return {
     el,
     onShow(route) {
+      pendingStatistics = route.query.get('tokenStats') === '1';
+      showStatistics();
       scheduledWork.load(); loadModel(); loadFeishu(); policy.load(); followUp.load(); cliSessions.onShow();
       const target = { 'command-group': 'agent-command-group', rules: 'agent-rules', 'follow-up': 'agent-follow-up', advanced: 'agent-advanced' }[route.parts[0]];
       pendingSection = target && { target, route: route.canonical };
@@ -145,6 +153,7 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
       if (route.parts[0] === 'advanced') advanced.el.open = true;
     },
     onState({ snapshot }) {
+      showStatistics();
       if (router.current.page === 'agent' && !store.view.unauthorized) {
         if (botCredential !== api.token()) loadFeishu();
         else if (botSnapshot !== snapshot && snapshot.plugins?.some(p => p.id === 'assistant-profile' && p.status === 'active')) loadBots();

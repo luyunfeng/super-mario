@@ -2,6 +2,8 @@
 
 export const PAGES = ['home', 'chat', 'inbox', 'outbox', 'agent', 'projects', 'memory', 'channels'];
 
+export const PAGE_NAMES = { home: '首页', chat: '对话', inbox: '收件箱', outbox: '发件箱', agent: 'Agent', projects: '项目', memory: '记忆', channels: '渠道' };
+
 const ALIASES = {
   overview: 'home', interactions: 'chat', approvals: 'chat',
   todos: 'projects/all/todos', runs: 'projects/all/runs', plans: 'projects/all/runs', terminals: 'projects/all/runs',
@@ -38,6 +40,7 @@ export function createRouter() {
   return {
     get current() { return current; },
     start() { sync(); },
+    replace(path) { history.replaceState(history.state, '', path); sync(); },
     go(path) {
       const target = path.startsWith('#') ? path : `#${path}`;
       if (location.hash === target) sync();

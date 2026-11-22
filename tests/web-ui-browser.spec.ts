@@ -553,3 +553,37 @@ test('机器人卡片的发起执行入口只打开表单', async () => {
     assert.equal(server.app.store.list('runs').length, count);
   });
 });
+
+test('启动页跨浏览器保存，优先保留深链，并在插件页面恢复后重新启用', async () => {
+  await withApp(async ({ open, post, server }) => {
+    const { page } = await open('#home');
+    await page.getByRole('button', { name: '插件配置', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '插件配置' });
+    await dialog.getByLabel('搜索插件').fill('start-page');
+    const select = dialog.getByLabel('默认打开的页面');
+    await select.selectOption('inbox');
+    const saved = page.waitForResponse(r => r.url().endsWith('/api/v1/start-page'));
+    await dialog.getByRole('button', { name: '保存启动页' }).click();
+    assert.equal((await saved).status(), 200);
+    const second = (await open('')).page;
+    await expect(second).toHaveURL(/#inbox$/);
+    await second.goto(server.url + '/#chat?at=synthetic');
+    await second.reload();
+    await expect(second).toHaveURL(/#chat\?at=synthetic$/);
+    await post('/start-page', { key: JSON.stringify(['todo-calendar', 'calendar']), revision: 1 });
+    await second.goto(server.url);
+    await expect(second).toHaveURL(/#projects\/all\/todos\/month/);
+    await post('/plugins/todo-calendar', { enabled: false });
+    await second.goto(server.url);
+    await expect(second.locator('#home')).toBeVisible();
+    await post('/plugins/todo-calendar', { enabled: true });
+    await second.goto(server.url);
+    await expect(second).toHaveURL(/#projects\/all\/todos\/month/);
+    await post('/start-page', { key: JSON.stringify(['token-statistics', 'dashboard']), revision: 2 });
+    await second.goto(server.url);
+    await expect(second.getByRole('dialog', { name: 'Token 统计' })).toBeVisible();
+    await post('/plugins/start-page', { enabled: false });
+    await second.goto(server.url);
+    await expect(second.locator('#home')).toBeVisible();
+  });
+});

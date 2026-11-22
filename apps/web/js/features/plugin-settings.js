@@ -2,12 +2,13 @@ import { preferenceEditor } from './plugin-preferences.js';
 import { openSavedPrompts } from './saved-prompts.js';
 import { openTokenStatistics } from './token-statistics.js';
 import { h, replace, keyedList, readLocal, writeLocal } from '../lib/dom.js';
-import { PAGES } from '../lib/router.js';
+import { PAGES, PAGE_NAMES } from '../lib/router.js';
 import { Button, Pill } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 import { systemText } from '../copy/terms.js';
 
 const descriptions = {
+  'start-page':'选择直接打开工作台时显示的页面，设置在同一服务的浏览器之间共享。',
   'todo-calendar':'按日、周或月查看项目待办的截止时间。',
   'assistant-skills':'管理主助手技能包，供 Web 主对话和全局飞书机器人按需读取。',
   'office-documents':'从内容生成可下载的 Word、PowerPoint 和 Excel 文件。',
@@ -43,6 +44,29 @@ function features(plugin) {
     typeof item.route === 'string' && /^#[a-z]+(?:\/[\w-]+)*(?:\?[\w=&-]+)?$/.test(item.route) &&
     !new URLSearchParams(item.route.split('?')[1]).has('token') && PAGES.includes(item.route.slice(1).split(/[/?]/)[0]))
     .map(item => ({ ...item, key: JSON.stringify([plugin.id, item.id]) }));
+}
+
+export function startPages(plugins) {
+  return [...PAGES.map(page => ({ key: page, label: PAGE_NAMES[page], route: '#' + page })),
+    ...plugins.filter(p => p.status === 'active').flatMap(p => features(p).map(item => ({ ...item, label: item.label + ' · ' + p.name })))];
+}
+
+function startPageEditor({ api, store }, preference, choices) {
+  if (!preference) return null;
+  const listed = choices.some(item => item.key === preference.key);
+  const select = h('select', { class: 'select', 'aria-label': '默认打开的页面' },
+    choices.map(item => h('option', { value: item.key }, item.label)),
+    !listed && h('option', { value: preference.key, disabled: true }, '已选插件页面暂不可用'));
+  select.value = preference.key;
+  const status = h('span', { role: 'status' });
+  return h('div', { class: 'stack' }, h('label', { class: 'field' }, '默认打开的页面', select),
+    !listed && h('p', { class: 'small muted' }, '目前打开首页。插件恢复后会再次使用已选页面。'),
+    Button({ label: '保存启动页', onClick: async () => {
+      try {
+        await api.post('/start-page', { key: select.value, revision: preference.revision });
+        status.textContent = '已保存启动页';
+      } finally { await store.refresh(); }
+    } }), status);
 }
 
 export function createPluginSettings({ api, store, router }) {
@@ -105,6 +129,7 @@ export function createPluginSettings({ api, store, router }) {
         h('p',{},descriptions[plugin.id] ?? (entries.length ? '提供以下工作台功能：'+entries.map(e=>e.label).join('、') : '此插件由执行环境提供，已声明的能力见下方。')),
         h('code',{class:'small muted'},plugin.id),
         preferenceEditor(plugin.id),
+        plugin.id === 'start-page' && startPageEditor({ api, store }, snapshot.startPage, startPages(plugins)),
         plugin.id === 'saved-prompts' && Button({ label: '管理常用提示词', size: 'sm', disabled: plugin.status !== 'active',
           onClick: () => openSavedPrompts({ api, store }) }),
         plugin.capabilities?.length > 0 && h('details', null, h('summary', { class: 'small' }, '查看插件声明的能力'), h('ul', null, plugin.capabilities.map(name => h('li', null, name)))),
@@ -117,7 +142,7 @@ export function createPluginSettings({ api, store, router }) {
             if (e.target.checked) pins.add(item.key); else pins.delete(item.key);
             writeLocal(key, [...pins]); paint();
           } }), ' 固定到侧边栏'))));
-    }, plugin => JSON.stringify([plugin, features(plugin).map(item => pins.has(item.key))]));
+    }, plugin => JSON.stringify([plugin, features(plugin).map(item => pins.has(item.key)), plugin.id === 'start-page' && [snapshot.startPage, startPages(plugins)]]));
   }
   function open(pluginId) {
     if (typeof pluginId === 'string') { selected = pluginId; search.value = ''; }

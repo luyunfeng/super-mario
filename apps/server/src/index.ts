@@ -627,6 +627,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             throw new InputError('主助手技能插件已停用', 503);
           return json(res, 200, await app.plugins.invocations.use('assistant-skills.manage', await body(req, 6 * 1024 * 1024) as JsonObject));
         }
+        if (path === '/api/v1/start-page' && method === 'POST') {
+          if (!app.plugins.list().some(p => p.id === 'start-page' && p.status === 'active')) throw new InputError('启动页插件已停用', 503);
+          return json(res, 200, await app.plugins.invocations.use('start-page.save', await body(req, 4096) as JsonObject));
+        }
         if (path === '/api/v1/assistant-profile' && method === 'POST') {
           if (!app.plugins.list().some(plugin => plugin.id === 'assistant-profile' && plugin.status === 'active')) {
             throw new InputError('主助手资料插件已停用', 503);
