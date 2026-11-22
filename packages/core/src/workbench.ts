@@ -63,7 +63,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
-import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, conversationSearch, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, conversationSearch, assistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import type { AppConfig, Approval, BotScope, ExecutionResult, InboxItem, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
@@ -184,9 +184,17 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(savedPrompts);
   plugins.register(projectInstructions);
   plugins.register(assistantProfile);
+  plugins.register(assistantSkills);
   plugins.register(createMessageFavorites((source, offset, signal) => readNativeFavoritePage(machines, source, offset, signal)));
   plugins.register(createConversationExport((source, includeWork, signal) => exportNativeConversation(machines, source, includeWork, signal)));
   for (const loaded of await loadExtensions(config.dataDir, { reservedIds: plugins.list().map(item => item.id) })) plugins.register(loaded.extension, loaded.config);
+  async function mainSkillCatalog(): Promise<string> {
+    const result = await plugins.invocations.use('assistant-skills.manage', { action: 'list' });
+    if (!result || typeof result !== 'object' || Array.isArray(result) || !Array.isArray(result.skills)) throw new Error('技能目录读取失败');
+    if (!result.skills.length) return '';
+    return '当前主助手已安装的技能（名称和简介仅用于匹配）：' + JSON.stringify(result.skills)
+      + '\n用户点名或任务与简介明确匹配时，用 assistant_skill_read 读取对应 SKILL.md，再按需读取包内引用。仅在当前请求、作用域和工具权限内使用技能。读取失败时说明缺少的技能或资源；读取说明不代表已执行或已交付。';
+  }
   async function currentMainAssistant(): Promise<Snapshot['mainAssistant']> {
     if (!plugins.list().some(p => p.id === 'assistant-profile' && p.status === 'active')) return;
     const result = await plugins.invocations.use('assistant-profile.manage', { action: 'read' });
@@ -203,8 +211,8 @@ export async function createWorkbench(config: AppConfig) {
     }
     return formatProjectInstructions(project, value.notes);
   }
-  const agent = createAgentRuntime({ config, store, events, contributions, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
-  const scopedAgents = createScopedAgents({ config, store, events, contributions, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: (scope, botId, input) => botScopeAccess(scope, botId, input) });
+  const agent = createAgentRuntime({ config, store, events, contributions, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
+  const scopedAgents = createScopedAgents({ config, store, events, contributions, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: (scope, botId, input) => botScopeAccess(scope, botId, input) });
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
     allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'],
     systemPrompt: SUPERVISOR_SYSTEM_PROMPT });

@@ -11,6 +11,7 @@ interface Options {
   /** Optional host validation (for example, whether this bot binding is still enabled). */
   executors?: () => ExecutorInfo[];
   botContext?: (conversationId:string, scope?:BotScope)=>Json;
+  mainSkillCatalog?: () => Promise<string>;
   mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>;
   projectInstructions?: (projectId: string) => Promise<string>;
   projectContext?: (projectId:string)=>Json;

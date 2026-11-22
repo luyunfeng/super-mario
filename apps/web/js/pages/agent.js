@@ -2,6 +2,7 @@
 import { h, replace } from '../lib/dom.js';
 import { Button, Card, Dot, Pill, Empty, Banner } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
+import { createAssistantSkills } from '../features/assistant-skills.js';
 import { createAssistantProfile } from '../features/assistant-profile.js';
 import { openModelDrawer } from '../features/model-drawer.js';
 import { openAddComputer, openComputer } from '../features/computers.js';
@@ -15,6 +16,7 @@ import { createScheduledWorkCard } from '../features/scheduled-work.js';
 const MODE_NAMES = { api: '模型 API', 'codex-cli': 'Codex 命令行' };
 
 export function createAgentPage({ api, store, router, consoleDrawer, scope, shell }) {
+  const skills = createAssistantSkills({ api, store });
   const profile = createAssistantProfile({ api, store });
   let model = null;
   let modelError = '';
@@ -121,7 +123,7 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, 'Agent'), h('p', { class: 'page__sub' }, hintCopy('nav.agent').tag)),
         h('div', { class: 'page__actions' }, Hint('nav.agent'))),
-      h('div', { class: 'stack stack--lg' }, profile.el, modelCard, botCard, commandGroup.el, computersCard, cliSessions.el, policy.el, followUp.el, scheduledWork.el, advanced.el)));
+      h('div', { class: 'stack stack--lg' }, profile.el, skills.el, modelCard, botCard, commandGroup.el, computersCard, cliSessions.el, policy.el, followUp.el, scheduledWork.el, advanced.el)));
 
   let pendingSection;
   function showSection() {
