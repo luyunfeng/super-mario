@@ -3,12 +3,13 @@ import { h } from './dom.js';
 
 function renderInline(line) {
   const parts = [];
-  const pattern = /(`[^`\n]+`|\*\*(?:[^*]|\*(?!\*))+?\*\*)/g;
+  const pattern = /(\[查看原文\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&source=[A-Za-z0-9_-]{1,128}\)|`[^`\n]+`|\*\*(?:[^*]|\*(?!\*))+?\*\*)/g;
   let last = 0;
   for (const match of line.matchAll(pattern)) {
     if (match.index > last) parts.push(line.slice(last, match.index));
     const token = match[0];
-    if (token.startsWith('`')) parts.push(h('code', { class: 'md-inline-code' }, token.slice(1, -1)));
+    if (token.startsWith('[查看原文]')) parts.push(h('a', { href: token.slice(token.indexOf('(') + 1, -1) }, '查看原文'));
+    else if (token.startsWith('`')) parts.push(h('code', { class: 'md-inline-code' }, token.slice(1, -1)));
     else parts.push(h('strong', null, token.slice(2, -2)));
     last = match.index + token.length;
   }
@@ -58,7 +59,7 @@ export function renderFormattedText(raw) {
       h('p', { class: 'md-p' }, reference.passage));
     text = reference.body;
   }
-  const hasMarkdown = text.includes('\n') || text.includes('`') || text.includes('**') || /^\s*(?:[-*]\s|\d+\.\s)/.test(text);
+  const hasMarkdown = text.includes('\n') || text.includes('`') || text.includes('**') || text.includes('[查看原文](') || /^\s*(?:[-*]\s|\d+\.\s)/.test(text);
   if (!hasMarkdown) return quoted ? h('div', { class: 'md' }, quoted, text) : text;
 
   const blocks = quoted ? [quoted] : [];

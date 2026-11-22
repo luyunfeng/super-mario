@@ -523,6 +523,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
       return call('knowledge_original', { pageId, sourceId, offset: 4000 }, 'last-page');
     }
     assert.match(materials, /原话依据甲/);
+    assert.ok(materials.includes('[查看原文](#memory?entry=' + pageId + '&source=' + sourceId + ')'));
     assert.doesNotMatch(materials, /另一个项目的结论/);
     return { role: 'assistant', content: answer };
   }, options => {

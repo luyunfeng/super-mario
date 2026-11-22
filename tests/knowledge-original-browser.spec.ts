@@ -17,6 +17,9 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   const rawDir = join(dir, 'plugins', 'knowledge-local', 'raw'), path = join(rawDir, job.id + '.md');
   await mkdir(rawDir, { recursive: true });
   await writeFile(path, '[09:15] <em>合成原文</em>');
+  const route = '#memory?entry=' + entry.id + '&source=' + job.id;
+  server.app.store.put('messages', 'citation', { id: 'citation', conversationId: 'main', role: 'assistant', status: 'done',
+    createdAt: new Date().toISOString(), text: '依据见[查看原文](' + route + ')' });
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
   t.after(() => browser.close());
   const page = await browser.newPage();
@@ -28,6 +31,16 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   await dialog.getByText('合成会议原文', { exact: true }).click();
   await expect(dialog.locator('pre')).toHaveText('[09:15] <em>合成原文</em>');
   await expect(dialog.locator('pre em')).toHaveCount(0);
+  await dialog.getByRole('button', { name: '关闭' }).click();
+  await page.evaluate(() => { location.hash = '#chat'; });
+  await page.getByRole('link', { name: '查看原文' }).click();
+  await expect(dialog.locator('pre')).toBeVisible();
+  await page.reload();
+  await expect(dialog.locator('pre')).toBeVisible();
+  await expect(dialog.locator('pre')).toHaveText('[09:15] <em>合成原文</em>');
+  await page.evaluate(id => { location.hash = '#memory?entry=' + id + '&source=missing'; }, entry.id);
+  await expect(dialog.getByText('引用的来源已不可用。')).toBeVisible();
+  await expect(dialog.locator('pre')).toBeHidden();
   const get = (id: string) => page.request.get(server.url + '/api/v1/knowledge/' + id + '/sources/' + job.id,
     { headers: { authorization: 'Bearer fixture' } });
   expect((await get(other.id)).status()).toBe(404);

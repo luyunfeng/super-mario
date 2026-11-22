@@ -298,10 +298,10 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
               const end = offset + 25;
               return { sources: result.sources.slice(offset, end), nextOffset: end < result.sources.length ? end : null } as Json;
             }
-            if (typeof result.content !== 'string' || typeof result.title !== 'string') throw new Error('来源正文不可用');
+            if (typeof sourceId !== 'string' || typeof result.content !== 'string' || typeof result.title !== 'string') throw new Error('来源正文不可用');
             const chars = Array.from(result.content);
             const end = offset + 4000;
-            return { title: result.title, text: chars.slice(offset, end).join(''), nextOffset: end < chars.length ? end : null } as Json;
+            return { title: result.title, webCitation: `[查看原文](#memory?entry=${encodeURIComponent(pageId)}&source=${encodeURIComponent(sourceId)})`, text: chars.slice(offset, end).join(''), nextOffset: end < chars.length ? end : null } as Json;
           }, { pageId: { type: 'string' }, sourceId: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
         if (actions?.knowledgeJobs) context.contribute('tools', 'knowledge_jobs', tool('knowledge_jobs', '查看知识整理队列、真实 Agent 状态及生成的知识标识。', async (_args, signal) => { signal.throwIfAborted(); return actions.knowledgeJobs!(); }));
       },

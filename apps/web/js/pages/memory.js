@@ -110,6 +110,15 @@ export function createMemoryPage({ api, store, router, scope }) {
     paint();
   }
 
+  let linkedEntry;
+  function openLinkedEntry() {
+    if (!linkedEntry || router.current.page !== 'memory' || !store.view.snapshot || store.view.unauthorized) return;
+    const { id, sourceId } = linkedEntry;
+    linkedEntry = undefined;
+    const entry = store.view.snapshot.knowledge?.find(item => item.id === id);
+    if (entry) openKnowledgeDrawer({ api, store, entry, sourceId });
+    else toast('引用的知识页已不可用。');
+  }
   return {
     el,
     onShow(route) {
@@ -117,12 +126,12 @@ export function createMemoryPage({ api, store, router, scope }) {
       loadCurator();
       if (route.query.get('curator')) openCuratorDrawer({ api, store, onChanged: loadCurator });
       const entry = route.query.get('entry');
-      const found = entry && store.view.snapshot?.knowledge.find(item => item.id === entry);
-      if (found) openKnowledgeDrawer({ api, store, entry: found });
+      linkedEntry = entry && { id: entry, sourceId: route.query.get('source') };
+      openLinkedEntry();
       const part = route.parts[0];
       if (LAYERS.some(([key]) => key === part) && part !== layer) { layer = part; seg.set(part); }
       paint();
     },
-    onState() { paint(); },
+    onState() { paint(); openLinkedEntry(); },
   };
 }
