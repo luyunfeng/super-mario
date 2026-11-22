@@ -306,7 +306,7 @@ export async function createWorkbench(config: AppConfig) {
     const source=currentAgentInput()??agent.currentInput();if(!source||source.role!=='user'||source.readOnly||source.origin&&source.origin!=='user')throw new InputError('来源投放需要当前用户输入',403);
     validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
     return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
-  }, knowledgeRevision: (id, commit, projectId) => knowledgeRevision(id, commit, projectId ?? currentAgentInput()?.projectId), knowledgeOriginal: (pageId, sourceId, projectId) => knowledgeCurator.pageSources(pageId, sourceId, projectId ?? currentAgentInput()?.projectId), knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0], currentAgentInput() ?? agent.currentInput()) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
+  }, changeKnowledgeTag, knowledgeRevision: (id, commit, projectId) => knowledgeRevision(id, commit, projectId ?? currentAgentInput()?.projectId), knowledgeOriginal: (pageId, sourceId, projectId) => knowledgeCurator.pageSources(pageId, sourceId, projectId ?? currentAgentInput()?.projectId), knowledgeJobs: () => knowledgeCurator.status() as unknown as Json, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: input => createTodo(input) as unknown as Json, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRun: id => readRun(id), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => approvals.propose(input as Parameters<typeof approvals.propose>[0]) as unknown as Json, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0], currentAgentInput() ?? agent.currentInput()) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
   function makeWebSource() {
     const options = webConfig.read();
     return createFeishuWebSource({
@@ -699,6 +699,27 @@ export async function createWorkbench(config: AppConfig) {
         return value as unknown as KnowledgeEntry;
       },
     };
+  }
+  async function changeKnowledgeTag(args: Record<string, unknown>): Promise<Json> {
+    const id = requiredText(args.id, '知识页标识');
+    const version = requiredText(args.updatedAt, '已读版本');
+    const tag = requiredText(args.tag, '标签');
+    if (tag.length > 100 || /[\r\n]/.test(tag) || (args.action !== 'add' && args.action !== 'remove')) throw new InputError('标签或操作无效');
+    const projectId = currentAgentInput()?.projectId ?? optionalText(args.projectId, '项目');
+    const backend = knowledge();
+    const page = (await backend.list()).find(item => item.id === id);
+    if (!page || (projectId && (page.layer !== 'project' || page.projectId !== projectId)) ||
+        (page.projectId && !projects.list().some(p => p.id === page.projectId && !p.archivedAt))) throw new InputError('知识页不可用', 404);
+    if (page.updatedAt !== version) throw new InputError('知识页已有新版本，请重新核对', 409);
+    const tags = page.tags ?? [];
+    const add = args.action === 'add';
+    if (tags.includes(tag) === add) return { changed: false, id, tags, updatedAt: version };
+    const saved = await backend.put({ ...page, tags: add ? [...tags, tag] : tags.filter(value => value !== tag) }, version);
+    const receipt = { changed: true, id, tags: saved.tags ?? [], updatedAt: saved.updatedAt };
+    try { await knowledgeCurator.rebuildIndex(); }
+    catch { return { ...receipt, warning: '标签已保存，知识索引刷新失败' }; }
+    finally { changed('knowledge.changed', { id }); }
+    return receipt;
   }
   async function knowledgeRevision(id: string, commit?: string, projectId?: string) {
     const backend = knowledge();

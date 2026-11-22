@@ -147,6 +147,7 @@ export interface SystemActions {
   projectCreate?(input: Record<string, unknown>): Json | Promise<Json>;
   projectsDiscover?(input: Record<string, unknown>): Promise<Json>;
   knowledgeSource?(input: Record<string, unknown>): Json;
+  changeKnowledgeTag?(args: Record<string, unknown>): Promise<Json>;
   knowledgeRevision?(id: string, commit?: string, projectId?: string): ReturnType<NonNullable<KnowledgeBackend['revision']>>;
   knowledgeOriginal?(pageId: string, sourceId?: string, projectId?: string): Promise<{
     sources?: { id: string; title: string; createdAt: string }[]; content?: string; title?: string }>;
@@ -288,6 +289,10 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           return { protected: classifyProtected(String(url ?? ''), Array.isArray(trustedHosts) ? trustedHosts : []) };
         });
         if (actions?.knowledgeSource) context.contribute('tools', 'knowledge_ingest', tool('knowledge_ingest', '将用户明确提供的资料加入独立知识 Agent 整理队列，默认个人知识；受保护来源先生成主人读取审批，不自动申请权限。入队或批准都不代表整理完成。', async (args, signal) => { signal.throwIfAborted(); return actions.knowledgeSource!(args); }, { url: { type: 'string' }, text: { type: 'string' }, title: { type: 'string' }, layer: { type: 'string', enum: ['personal', 'project'] }, projectId: { type: 'string' } }));
+        if (actions?.changeKnowledgeTag) context.contribute('tools', 'knowledge_change_tag', tool('knowledge_change_tag',
+          '按用户明确要求给指定知识页添加或移除一个标签。传入 knowledge_list 返回的 id 和 updatedAt；版本过期时重新核对。',
+          async (args, signal) => { signal.throwIfAborted(); return actions.changeKnowledgeTag!(args); },
+          { id: { type: 'string' }, updatedAt: { type: 'string' }, tag: { type: 'string' }, action: { type: 'string', enum: ['add', 'remove'] } }));
         if (actions?.knowledgeRevision) context.contribute('tools', 'knowledge_revision', tool('knowledge_revision',
           '查知识页已保存的修订。首次仅传 pageId，按 previous 查上一版。用 commit 和 nextOffset 续读同一版正文。', async (args, signal) => {
             const { pageId, commit, offset = 0, projectId } = args;
