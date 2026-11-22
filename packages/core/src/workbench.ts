@@ -193,7 +193,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(officeDocuments);
   plugins.register(createAssistantSkills(() => machines));
   plugins.register(createMessageFavorites((source, offset, signal) => readNativeFavoritePage(machines, source, offset, signal)));
-  plugins.register(createConversationExport((source, includeWork, signal) => exportNativeConversation(machines, source, includeWork, signal)));
+  plugins.register(createConversationExport((source, includeWork, signal) => exportNativeConversation(machines, source, includeWork, signal), currentMainAssistant));
   for (const loaded of await loadExtensions(config.dataDir, { reservedIds: plugins.list().map(item => item.id) })) plugins.register(loaded.extension, loaded.config);
   async function mainSkillCatalog(): Promise<string> {
     const result = await plugins.invocations.use('assistant-skills.manage', { action: 'list' });

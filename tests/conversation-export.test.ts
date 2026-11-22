@@ -25,6 +25,8 @@ test('export is an authenticated plugin read of one owner-selected work conversa
   ]) {
     store.put('messages', id!, { id, projectId: project.id, conversationId, role: 'user', text, createdAt: '2026-11-17T02:04:00Z' });
   }
+  store.put('messages', 'mismatched', { id: 'mismatched', projectId: 'other', conversationId: scope,
+    role: 'user', text: '归属不一致的输入', createdAt: '2026-11-17T02:04:00Z' });
   const request = { projectId: project.id, includeWork: true };
   const path = '/conversation-export';
   assert.equal((await post(path, request, false)).status, 401);
@@ -36,7 +38,7 @@ test('export is an authenticated plugin read of one owner-selected work conversa
   const document = await response.json();
   assert.equal(document.count, 1);
   assert.match(document.markdown, /浏览器工作会话/);
-  assert.doesNotMatch(document.markdown, /独立记忆记录|机器人独立记录|主对话记录/);
+  assert.doesNotMatch(document.markdown, /独立记忆记录|机器人独立记录|主对话记录|归属不一致的输入/);
   for (const id of ['reply', 'wrong-scope']) {
     store.put('messages', id, { id, conversationId: scope, role: 'assistant', replyTo: 'work', text: '执行结束', createdAt: '2026-11-17T02:05:00Z' });
     store.put('agent.traces', id, { id, conversationId: id === 'reply' ? scope : 'main', userMessageId: 'work',
@@ -44,10 +46,18 @@ test('export is an authenticated plugin read of one owner-selected work conversa
         isError: false, finishedAt: '2026-11-17T02:04:59Z' }] });
   }
   const detailed = await (await post(path, request)).json();
+  assert.match(detailed.markdown, /## 项目助手 ·/);
   assert.match(detailed.markdown, /project\.read` · 成功/);
   assert.doesNotMatch(detailed.markdown, /private-input|private-output|foreign\.tool/);
   const plain = await (await post(path, { ...request, includeWork: false })).json();
   assert.doesNotMatch(plain.markdown, /project\.read|foreign\.tool/);
+  store.put('messages', 'main-reply', { ...store.get<object>('messages', 'main')!, id: 'main-reply', role: 'assistant' });
+  await post('/assistant-profile', { action: 'save', revision: 0, name: '[合成](地址)' });
+  const named = await (await post(path, { includeWork: false })).json();
+  assert.ok(named.markdown.includes(String.raw`## \[合成\](地址) ·`));
+  await post('/plugins/assistant-profile', { enabled: false });
+  const unnamed = await (await post(path, { includeWork: false })).json();
+  assert.match(unnamed.markdown, /## 主 Agent ·/);
   assert.equal((await post('/plugins/conversation-export', { enabled: false })).status, 200);
   assert.equal((await post(path, request)).status, 503);
 });

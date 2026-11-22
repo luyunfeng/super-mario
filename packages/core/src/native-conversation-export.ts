@@ -83,6 +83,6 @@ export async function exportNativeConversation(
   }, includeWork ? name => lines.push('> 工具调用：' + name, '') : undefined);
   const stem = Array.from(nativeSessionId.replace(/[^\p{L}\p{N}_-]+/gu, '-')).slice(0, 48).join('');
   return { filename: `super-mario-${executorId}-${stem}.md`, count, markdown: [
-    '# 原生会话 · ' + executorId, '', '会话：' + nativeSessionId, '电脑：' + machineId, '目录：' + cwd, '', `共 ${count} 条消息`, '', ...lines,
+    '# 原生会话 · ' + executorId, '', '会话：' + nativeSessionId, '电脑：' + machineId, '目录：' + cwd, '导出时间：' + new Date().toISOString(), '', `共 ${count} 条消息`, '', ...lines,
   ].join('\n') };
 }

@@ -47,6 +47,10 @@ test('从主对话和项目工作区导出完整 Markdown，并通过插件配�
   put({ id: 'other', conversationId: `project:${other.id}:work`, projectId: other.id, role: 'user', text: '其他项目隔离标记' });
   put({ id: 'memory', conversationId: `project:${project.id}:memory`, projectId: project.id, role: 'assistant', text: '项目记忆隔离标记' });
 
+  const profile = await page.request.post(server.url + '/api/v1/assistant-profile', {
+    headers: { authorization: 'Bearer export-browser-fixture' }, data: { action: 'save', revision: 0, name: '合成工作助手' },
+  });
+  assert.ok(profile.ok());
   await page.goto(server.url + '/#chat?token=export-browser-fixture');
   await page.locator('#message-form').getByLabel('项目范围', { exact: true }).selectOption(project.id);
   const open = page.getByRole('button', { name: '导出对话', exact: true });
@@ -56,6 +60,8 @@ test('从主对话和项目工作区导出完整 Markdown，并通过插件配�
   await expect(steps).not.toBeChecked();
   const plain = await downloadMarkdown(page, drawer);
   assert.ok(plain.includes(mainText));
+  assert.match(plain, /## 合成工作助手 ·/);
+  assert.match(plain, /导出时间：\d{4}-.*Z/);
   assert.doesNotMatch(plain, /项目甲历史消息|隔离标记|内部详情标记|正在输出/);
   await steps.check();
   await expect(drawer.getByLabel('Markdown 预览')).toContainText('正在输出');
