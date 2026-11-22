@@ -116,7 +116,7 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
           && keywords.every(keyword => text.includes(keyword));
       }).sort((a, b) => a.id.localeCompare(b.id));
     },
-    async put(input) {
+    async put(input, expectedUpdatedAt) {
       const entry: KnowledgeEntry = {
         id: input.id ?? randomUUID(), layer: input.layer, title: input.title,
         content: input.content, updatedAt: new Date().toISOString(),
@@ -124,6 +124,17 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
       };
       validateEntry(entry);
       ensureDirectory();
+      // All writers in this service share the file backend. Keep the version check
+      // and rename synchronous, after any asynchronous plugin hooks have finished.
+      let prior: KnowledgeEntry | undefined;
+      if (input.id) {
+        try { prior = readEntry(entry.id); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      }
+      if (expectedUpdatedAt !== undefined && prior?.updatedAt !== expectedUpdatedAt)
+        throw Object.assign(new Error('知识页已有新版本或已删除，请先核对最新内容'), { status: 409 });
+      if (prior && Date.parse(prior.updatedAt) >= Date.parse(entry.updatedAt))
+        entry.updatedAt = new Date(Date.parse(prior.updatedAt) + 1).toISOString();
       const { content, ...metadata } = entry;
       const temporary = join(directory, `.${randomUUID()}.tmp`);
       // Rename publishes a complete file. A failed index update is repaired by list().

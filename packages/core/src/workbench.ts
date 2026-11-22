@@ -689,12 +689,12 @@ export async function createWorkbench(config: AppConfig) {
     return {
       ...(backend.revision ? { revision: backend.revision.bind(backend) } : {}),
       list: query => backend.list(query), remove: id => backend.remove(id),
-      async put(input) {
+      async put(input, expectedUpdatedAt) {
         const payload = { layer: input.layer, title: input.title, content: input.content, ...(input.id === undefined ? {} : { id: input.id }), ...(input.projectId === undefined ? {} : { projectId: input.projectId }) };
         const value = await plugins.invocations.invoke('knowledge.put', payload, async changed => {
           if (!changed || typeof changed !== 'object' || Array.isArray(changed)) throw new PluginCallError('知识钩子必须返回对象');
           for (const field of ['id', 'layer', 'projectId'] as const) if (changed[field] !== payload[field]) throw new PluginCallError('知识钩子不能改变归属或标识');
-          return await backend.put(changed as unknown as Parameters<KnowledgeBackend['put']>[0]) as unknown as Json;
+          return await backend.put(changed as unknown as Parameters<KnowledgeBackend['put']>[0], expectedUpdatedAt) as unknown as Json;
         });
         return value as unknown as KnowledgeEntry;
       },

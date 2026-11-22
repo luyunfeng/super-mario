@@ -259,7 +259,7 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
       return { id, title: page.title.trim().slice(0, 500), content: `${page.content.trim()}\n\n## 本次整理来源\n- ${job.url || (job.requestOrigin === 'meeting' ? '飞书会议消息' : '用户粘贴资料')}\n${job.requestOrigin === 'meeting' ? `- 来源收件记录：${job.sourceMessageId}\n` : ''}- 原始资料：raw/${job.id}.md`, layer: job.layer, ...(job.projectId ? { projectId: job.projectId } : {}) };
     });
     const imported: string[] = [];
-    for (const page of pages) { checkDestination(job); await backend.put(page); imported.push(page.id); save(job, { knowledgeIds: [...imported] }); }
+    for (const page of pages) { checkDestination(job); await backend.put(page, job.knowledgeVersions?.[page.id]); imported.push(page.id); save(job, { knowledgeIds: [...imported] }); }
     events.publish('knowledge.changed', {});
     await rebuildIndex('knowledge: curate source ' + job.id);
     save(store.get<Job>(jobsCollection, job.id)!, { status: 'completed', recoveryPending: false, error: undefined, knowledgeIds: imported });

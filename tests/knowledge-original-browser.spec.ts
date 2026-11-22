@@ -106,3 +106,33 @@ test('从记忆详情对照两次已保存修订，变更归属后不展示旧�
   const older = await page.request.get(url + '/' + id + '/revision?commit=' + current.revision.previous, { headers });
   expect(await older.json()).toEqual({ revision: null });
 });
+
+test('旧知识草稿保存冲突后可核对新版再提交，同版并发写入仅一份生效', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-knowledge-conflict-'));
+  const server = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1', token: 'fixture', demo: true });
+  t.after(async () => { await server.close(); await rm(dir, { recursive: true, force: true }); });
+  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+  const headers = { authorization: 'Bearer fixture' }, root = server.url + '/api/v1/knowledge';
+  const created = await page.request.post(root, { headers, data: { layer: 'personal', title: '对照页', content: '初稿' } });
+  const { id, updatedAt } = await created.json();
+  const patch = (content: string) => page.request.patch(root + '/' + id, { headers, data: { expectedUpdatedAt: updatedAt, content } });
+  await page.goto(server.url + '/#memory?token=fixture&entry=' + id);
+  const dialog = page.getByRole('dialog', { name: '编辑记忆' });
+  const editor = dialog.locator('textarea[name=content]');
+  await editor.fill('我的补充');
+  const writes = await Promise.all([patch('并发修改甲'), patch('并发修改乙')]);
+  expect(writes.map(r => r.status()).sort()).toEqual([200, 409]);
+  const winner = await writes.find(r => r.ok())!.json();
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog.getByText('当前已保存版本')).toBeVisible();
+  await expect(dialog.locator('pre:visible')).toHaveText(winner.content);
+  await expect(editor).toHaveValue('我的补充');
+  await dialog.getByRole('button', { name: '已核对新版，继续编辑草稿' }).click();
+  await editor.fill(winner.content + '，我的补充');
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect((await server.app.knowledge().list()).find(item => item.id === id)?.content).toBe(winner.content + '，我的补充');
+});

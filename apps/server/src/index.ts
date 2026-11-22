@@ -578,12 +578,13 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           const previous = (await app.knowledge().list()).find(entry => entry.id === id);
           if (!previous) throw new InputError('知识不存在', 404);
           const input = await body(req);
+          if (input.expectedUpdatedAt !== undefined && typeof input.expectedUpdatedAt !== 'string') throw new InputError('知识页版本无效');
           const layer = input.layer ?? previous.layer;
           if (!['personal', 'global', 'project'].includes(String(layer))) throw new InputError('知识层级无效');
           const projectId = layer === 'project' ? requiredText(input.projectId ?? previous.projectId, '项目') : undefined;
           if (input.title !== undefined && typeof input.title !== 'string') throw new InputError('标题必须为文本');
           if (input.content !== undefined && typeof input.content !== 'string') throw new InputError('内容必须为文本');
-          const entry = await app.knowledge().put({ id, layer: layer as 'personal' | 'global' | 'project', title: input.title === undefined ? previous.title : requiredText(input.title, '标题'), content: input.content === undefined ? previous.content : requiredText(input.content, '内容'), ...(projectId ? { projectId } : {}) });
+          const entry = await app.knowledge().put({ id, layer: layer as 'personal' | 'global' | 'project', title: input.title === undefined ? previous.title : requiredText(input.title, '标题'), content: input.content === undefined ? previous.content : requiredText(input.content, '内容'), ...(projectId ? { projectId } : {}) }, input.expectedUpdatedAt ?? previous.updatedAt);
           await app.knowledgeCurator.rebuildIndex(); app.events.publish('knowledge.changed', { id }); return json(res, 200, entry);
         }
         if (knowledge && method === 'DELETE') {
