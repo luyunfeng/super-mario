@@ -103,6 +103,7 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
     const related = snapshot.todos.filter(item => item.projectId === current.projectId);
     const parent = related.find(item => item.id === current.parentTodoId);
     const children = related.filter(item => item.parentTodoId === current.id);
+    const completedChildren = children.filter(item => item.completedAt).length;
     const todoLink = item => h('a', { href: router.href('projects', current.projectId ?? 'all', 'todos', 'detail', item.id), onclick: () => close?.() }, item.title);
     const latest = runs[0];
     const context = { api, store, router, todo: current };
@@ -114,7 +115,8 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
         return item ? h('div', null, todoLink(item), item.completedAt ? ' · 已完成' : ' · 待完成') : '无法核对此子项';
       })),
       parent && section('上级待办', todoLink(parent)),
-      children.length > 0 && section('子待办', h('p', null, '已完成 ' + children.filter(item => item.completedAt).length + ' / ' + children.length),
+      children.length > 0 && section('子待办', h('p', null, '已完成 ' + completedChildren + ' / ' + children.length),
+        completedChildren === children.length && !current.completedAt && h('p', null, '上级待办仍未完成'),
         children.map(item => h('div', null, todoLink(item), item.completedAt ? ' · 已完成' : ' · 未完成'))),
       section('负责方', current.responsibleSession ? '会话 ' + current.responsibleSession.machineId + ' / ' + current.responsibleSession.sessionId : current.responsiblePerson || '未登记'),
       section('优先级', todoPriorityLabels[current.priority ?? 'normal']),

@@ -201,7 +201,12 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   assert.deepEqual(server.app.store.get<Todo>('todos', spring.id)?.afterTodoIds, [prerequisite.id]);
   assert.throws(() => server.app.updateTodo(prerequisite.id, { afterTodoIds: [spring.id] }), /循环/);
   assert.throws(() => server.app.updateTodo(spring.id, { afterTodoIds: [done.id] }), /同一上级/);
+  server.app.createTodo({ projectId: project.id, title: '下一级明细', parentTodoId: spring.id });
   server.app.updateTodo(prerequisite.id, { completed: true });
+  await expect(editor).toHaveCount(0);
+  await panel.getByRole('searchbox').fill(created.title);
+  const parentRow = panel.locator('.todo').filter({ hasText: created.title });
+  await expect(parentRow).toContainText('子项已完成 1 / 2');
   await page.goto(base + '/detail/' + created.id);
   await page.reload();
   await expect(panel.getByText('已完成 1 / 2')).toBeVisible();
@@ -210,6 +215,13 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await expect(panel.getByRole('link', { name: created.title })).toBeVisible();
   await expect(panel.getByRole('link', { name: prerequisite.title })).toBeVisible();
   assert.equal(server.app.store.get<Todo>('todos', spring.id)?.completedAt, undefined);
+  server.app.updateTodo(spring.id, { completed: true });
+  await page.goto(base + '/detail/' + created.id);
+  await expect(panel.getByText('已完成 2 / 2')).toBeVisible();
+  await expect(panel.getByText('上级待办仍未完成')).toBeVisible();
+  await page.goto(base);
+  await expect(parentRow).toContainText('子项已完成 2 / 2');
+  await expect(parentRow.getByRole('checkbox')).not.toBeChecked();
   server.app.updateTodo(prerequisite.id, { parentTodoId: '' });
   assert.deepEqual(server.app.store.get<Todo>('todos', spring.id)?.afterTodoIds ?? [], []);
   assert.equal(server.app.store.get<Todo>('todos', created.id)?.completedAt, undefined);

@@ -3,13 +3,27 @@ import type { Approval, Run, SupervisionSignal, Todo } from '../../protocol/src/
 
 export type TodoSection = '需要你' | '逾期' | '今天' | '等待中' | '之后' | '某天' | '刚完成' | '已完成';
 
+type TodoSectionRow = Todo & { childProgress?: { completed: number; total: number } };
+
 /** Server-owned projection. A failed run is not evidence that its todo needs a decision. */
-export function todoSections(todos: Todo[], now = new Date(), needsYouIds: readonly string[] = []): Record<TodoSection, Todo[]> {
+export function todoSections(todos: Todo[], now = new Date(), needsYouIds: readonly string[] = []): Record<TodoSection, TodoSectionRow[]> {
   if (!Number.isFinite(now.getTime())) throw new TypeError('分组时间无效');
   const start = new Date(now); start.setHours(0, 0, 0, 0);
   const end = new Date(start); end.setDate(end.getDate() + 1);
   const needsYou = new Set(needsYouIds);
-  const sections: Record<TodoSection, Todo[]> = { '需要你': [], '逾期': [], '今天': [], '等待中': [], '之后': [], '某天': [], '刚完成': [], '已完成': [] };
+  const sections: Record<TodoSection, TodoSectionRow[]> = { '需要你': [], '逾期': [], '今天': [], '等待中': [], '之后': [], '某天': [], '刚完成': [], '已完成': [] };
+  // Count the full set before the client narrows a section by date or search.
+  const byId = new Map(todos.map(todo => [todo.id, todo]));
+  const counts = new Map<string, { completed: number; total: number }>();
+  for (const child of todos) {
+    if (!child.parentTodoId) continue;
+    const parent = byId.get(child.parentTodoId);
+    if (!parent || parent.projectId !== child.projectId || parent.id === child.id) continue;
+    const progress = counts.get(parent.id) ?? { completed: 0, total: 0 };
+    progress.total++;
+    if (child.completedAt) progress.completed++;
+    counts.set(parent.id, progress);
+  }
   for (const todo of todos) {
     const due = todo.dueAt ? Date.parse(todo.dueAt) : NaN;
     let section: TodoSection;
@@ -20,7 +34,8 @@ export function todoSections(todos: Todo[], now = new Date(), needsYouIds: reado
     else if (Number.isFinite(due) && due < end.getTime()) section = '今天';
     else if (Number.isFinite(due)) section = '之后';
     else section = '某天';
-    sections[section].push(todo);
+    const childProgress = counts.get(todo.id);
+    sections[section].push(childProgress ? { ...todo, childProgress } : todo);
   }
   return sections;
 }

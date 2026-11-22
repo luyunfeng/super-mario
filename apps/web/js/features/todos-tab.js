@@ -197,7 +197,10 @@ export function createTodosTab({ api, store, router }) {
     const overdue = !done && todo.dueAt && new Date(todo.dueAt).getTime() < Date.now();
     const toggle = h('button', { class: `todo__check ${done ? 'is-done' : ''}`, type: 'button', role: 'checkbox', 'aria-checked': String(done), 'aria-label': `${done ? '重新打开' : '完成'}：${todo.title}`,
       onclick: async () => { await api.patch(`/todos/${encodeURIComponent(todo.id)}`, { completed: !done }).catch(error => toast(error.message, 'danger')); store.refresh(); } });
+    const progress = todo.childProgress;
     const meta = [
+      progress && `子项已完成 ${progress.completed} / ${progress.total}`,
+      progress && progress.completed === progress.total && !done && '上级待办仍未完成',
       todo.priority && todo.priority !== 'normal' && todoPriorityLabels[todo.priority],
       todo.dueAt && h('span', { class: overdue ? 'text-danger' : '' }, `${overdue ? '已逾期 · ' : '截止 '}${formatDate(todo.dueAt)}`),
       todo.responsibleSession && `负责会话 ${todo.responsibleSession.machineId} / ${todo.responsibleSession.sessionId}`,
