@@ -180,6 +180,36 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
     content.focus();
   }
 
+  const todoReceipt = h('p', { class: 'small', role: 'status', hidden: true });
+  const actionTodos = entry && store.view.snapshot?.plugins?.some(p => p.id === 'builtin-tools' && p.status === 'active') &&
+    Button({ label: '将正文选中行加入待办', onClick: async () => {
+      todoReceipt.hidden = true;
+      if (content.value !== baseline[1] || changedScope() || title.value !== baseline[0]) {
+        note.textContent = '请先保存正文、标题或归属修改，再确认行动项。'; return;
+      }
+      const from = content.selectionStart, to = content.selectionEnd;
+      if (!content.value.slice(from, to).trim()) { note.textContent = '请在正文中选中要加入待办的行动项。'; content.focus(); return; }
+      // Preview complete touched lines, even when the selection starts in the middle of a line.
+      const start = from ? content.value.lastIndexOf('\n', from - 1) + 1 : 0;
+      const end = content.value.indexOf('\n', to - 1);
+      const lines = content.value.slice(start, end < 0 ? undefined : end).split('\n').map(row => row.trim()).filter(Boolean);
+      if (!lines.length) { note.textContent = '选区中没有行动项。'; return; }
+      const updatedAt = reviewed.updatedAt;
+      const approved = await confirmDialog({ title: '确认加入待办？', message: h('ul', { style: { maxHeight: '50vh', overflow: 'auto', overflowWrap: 'anywhere' } }, lines.map(line => h('li', null, line))), confirmLabel: '确认所选行动项' });
+      if (!approved) return;
+      if (store.view.unauthorized || owner !== api.draftOwner() || owner !== store.view.snapshotOwner) {
+        note.textContent = '连接已变更，请重新打开知识页。'; return;
+      }
+      try {
+        const { results } = await api.post('/knowledge/' + encodeURIComponent(entry.id) + '/action-todos', {
+          updatedAt, actions: lines.map(actionLine => ({ actionLine })),
+        });
+        const created = results.filter(row => row.created).length;
+        note.textContent = '';
+        todoReceipt.hidden = false;
+        todoReceipt.textContent = '已新建 ' + created + ' 项待办，已有 ' + (results.length - created) + ' 项。';
+      } catch (error) { note.textContent = '未能确认行动项：' + error.message; }
+    } });
   const save = Button({
     label: entry ? '保存' : '记住', kind: 'primary',
     onClick: async () => {
@@ -245,7 +275,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   });
   const drawer = openDrawer({
     title: entry ? '编辑记忆' : '添加记忆', subtitle: entry ? `更新于 ${timeAgo(entry.updatedAt)}` : undefined,
-    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), Field({ label: '正文维护方式', control: protection }), Field({ label: '已确认事实', control: facts }), factsNote, Field({ label: '别名', control: aliases }), Field({ label: '标签', control: tags }), Field({ label: '重要级', control: importance }), Field({ label: '相关度（0–100）', control: relevance }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
+    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), actionTodos, actionTodos && todoReceipt, Field({ label: '正文维护方式', control: protection }), Field({ label: '已确认事实', control: facts }), factsNote, Field({ label: '别名', control: aliases }), Field({ label: '标签', control: tags }), Field({ label: '重要级', control: importance }), Field({ label: '相关度（0–100）', control: relevance }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();

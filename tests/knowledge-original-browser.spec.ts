@@ -342,3 +342,38 @@ test('搜索记忆可从匹配正文核对条目，换词后更新摘录', async
   expect(unlocked!.contentLocked).toBeUndefined();
   expect((await server.app.knowledge().put({ ...unlocked!, content: '自动整理新稿' }, unlocked!.updatedAt)).content).toBe('自动整理新稿');
 });
+
+test('正文多行行动项在确认后批量入待办，重试复用，失败整批回滚', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-action-todos-'));
+  const server = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1', token: 'fixture', demo: true });
+  t.after(async () => { await server.close(); await rm(dir, { recursive: true, force: true }); });
+  const lines = ['复核样本甲', '登记样本乙', '确认样本丙'];
+  const entry = await server.app.knowledge().put({ title: '合成行动项', layer: 'personal', content: lines.join('\n') });
+  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+  await page.goto(server.url + '/#memory?token=fixture');
+  await page.locator('.knowledge-item').filter({ hasText: entry.title }).click();
+  const dialog = page.getByRole('dialog', { name: '编辑记忆' });
+  const select = async () => {
+    await dialog.locator('[name=content]').evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(1, el.value.lastIndexOf('\n') + 1));
+    await dialog.getByRole('button', { name: '将正文选中行加入待办' }).click();
+    const confirmation = page.getByRole('dialog', { name: '确认加入待办？' });
+    await expect(confirmation.locator('li')).toHaveText(lines.slice(0, 2));
+    return confirmation;
+  };
+  await (await select()).getByRole('button', { name: '取消' }).click();
+  expect(server.app.todos().filter(todo => lines.includes(todo.title))).toHaveLength(0);
+  for (const created of [2, 0]) {
+    await (await select()).getByRole('button', { name: '确认所选行动项' }).click();
+    await expect(dialog).toContainText('已新建 ' + created + ' 项待办，已有 ' + (2 - created) + ' 项');
+  }
+  const existing = server.app.todos().find(todo => todo.title === lines[0])!;
+  server.app.store.remove('todos', existing.id);
+  const response = await page.request.post(server.url + '/api/v1/knowledge/' + entry.id + '/action-todos', {
+    headers: { authorization: 'Bearer fixture' }, data: { updatedAt: entry.updatedAt, actions: [lines[2], lines[0]].map(actionLine => ({ actionLine })) },
+  });
+  expect(response.status()).toBe(409);
+  expect(server.app.todos().filter(todo => lines.includes(todo.title)).map(todo => todo.title)).toEqual([lines[1]]);
+});

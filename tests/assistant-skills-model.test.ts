@@ -849,8 +849,9 @@ test('Web 追加确认事实，飞书按唯一原文更正并保留其他事实'
   } finally { await server.close(); }
 });
 
-test('Web 确认会议行动项，飞书重复确认取回同一待办', async t => {
+test('Web 确认会议行动项，飞书批量确认复用原待办并添加新项', async t => {
   const line = '复核合成样本，负责人待定';
+  const second = '提交验收摘要';
   let adapter!: FeishuOptions, pageId = '', otherId = '', version = '', repeat = false, todoId = '';
   const sent: string[] = [];
   const confirm = (step: string, id = pageId, updatedAt = version, actionLine = line) =>
@@ -858,6 +859,7 @@ test('Web 确认会议行动项，飞书重复确认取回同一待办', async t
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.ok(req.tools.includes('knowledge_action_todo'));
+      assert.match(req.system, /逐项按 results 报告新建或复用/);
       assert.match(req.system, /版本冲突须重新展示变化并让用户确认/);
       return call('knowledge_list', { query: '合成会议' }, 'page');
     }
@@ -878,9 +880,17 @@ test('Web 确认会议行动项，飞书重复确认取回同一待办', async t
     }
     if (req.callId === 'missing') {
       assert.match(text, /唯一匹配/);
+      if (repeat) return call('knowledge_action_todo', { id: pageId, updatedAt: version,
+        actions: [{ actionLine: line }, { actionLine: second, dueAt: '2030-06-02T12:00:00+08:00' }] }, 'batch');
       return confirm('confirmed');
     }
     const receipt = JSON.parse(text);
+    if (req.callId === 'batch') {
+      assert.deepEqual(receipt.results.map((row: {created:boolean}) => row.created), [false, true]);
+      assert.equal(receipt.results[0].todo.id, todoId);
+      assert.equal(receipt.results[1].todo.dueAt, '2030-06-02T12:00:00+08:00');
+      return { role: 'assistant', content: '已有复核待办，已新建摘要待办。' };
+    }
     assert.equal(receipt.created, !repeat);
     if (repeat) assert.equal(receipt.todo.id, todoId);
     todoId = receipt.todo.id;
@@ -893,7 +903,7 @@ test('Web 确认会议行动项，飞书重复确认取回同一待办', async t
   try {
     const project = await api('/projects', { name: '合成项目' });
     const other = await api('/projects', { name: '独立项目' });
-    const input = { title: '合成会议', content: '行动项\n' + line, layer: 'project' };
+    const input = { title: '合成会议', content: ['行动项', line, second].join('\n'), layer: 'project' };
     pageId = (await api('/knowledge', { ...input, projectId: project.id })).id;
     otherId = (await api('/knowledge', { ...input, projectId: other.id })).id;
     const question = '请把合成会议中的“' + line + '”建成待办';
@@ -908,8 +918,8 @@ test('Web 确认会议行动项，飞书重复确认取回同一待办', async t
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
     const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
-    await adapter.onMessage(question, { ...source, messageId: 'confirm-line' });
-    await t.waitFor(() => assert.ok(sent.includes('已找到原待办。')));
-    assert.deepEqual(server.app.todos().map(item => item.title), ['修订后的标题']);
+    await adapter.onMessage(question + '，同时加入“提交验收摘要”，截止 2030 年 6 月 2 日北京时间中午。', { ...source, messageId: 'confirm-line' });
+    await t.waitFor(() => assert.ok(sent.includes('已有复核待办，已新建摘要待办。')));
+    assert.deepEqual(server.app.todos().map(item => item.title).sort(), ['修订后的标题', second].sort());
   } finally { await server.close(); }
 });

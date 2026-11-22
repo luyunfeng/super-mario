@@ -707,31 +707,54 @@ export async function createWorkbench(config: AppConfig) {
       throw new InputError('确认行动项需要当前用户在工作台或项目对话中提出', 403);
     assertBotInput(actor);
     const projectId = actor.projectId ?? optionalText(args.projectId, '项目');
+    const results = await confirmKnowledgeActions(args, projectId);
+    return (args.actions === undefined ? results[0] : { results }) as unknown as Json;
+  }
+  async function confirmKnowledgeActions(args: Record<string, unknown>, projectId?: string) {
+    if (!plugins.list().some(p => p.id === 'builtin-tools' && p.status === 'active')) throw new InputError('请先启用基础工具插件', 409);
     const id = requiredText(args.id, '知识页标识');
     const page = (await knowledge().list()).find(item => item.id === id);
     if (!page || (projectId && (page.layer !== 'project' || page.projectId !== projectId)) ||
         (page.projectId && !projects.list().some(p => p.id === page.projectId && !p.archivedAt))) throw new InputError('知识页不可用', 404);
     if (page.updatedAt !== requiredText(args.updatedAt, '已读版本')) throw new InputError('会议资料已有新版本，请重新核对行动项', 409);
-    const line = requiredText(args.actionLine, '行动项原文');
-    const matches = page.content.split(/\r\n|[\r\n]/).filter(text => text.trim() === line);
-    if (matches.length !== 1) throw new InputError('行动项须唯一匹配已读正文中的完整一行');
-    const key = createHash('sha256').update(JSON.stringify([id, page.layer, page.projectId, line])).digest('hex');
-    // Keep the confirmation even after edits to the todo. A lost receipt must not create a second task.
-    const result = store.transaction(() => {
+    const batch = args.actions !== undefined;
+    if (batch && (args.actionLine !== undefined || args.dueAt !== undefined)) throw new InputError('批量确认须逐项填写原文和期限');
+    const selected = batch ? args.actions : [args];
+    if (!Array.isArray(selected) || !selected.length) throw new InputError('请选择行动项');
+    const counts = new Map<string, number>();
+    for (const raw of page.content.split(/\r\n|[\r\n]/)) {
+      const line = raw.trim();
+      counts.set(line, (counts.get(line) ?? 0) + 1);
+    }
+    const seen = new Set<string>();
+    const items = selected.map((item: unknown) => {
+      if (!item || typeof item !== 'object' || !('actionLine' in item)) throw new InputError('缺少行动项原文');
+      const line = requiredText(item.actionLine, '行动项原文');
+      if (counts.get(line) !== 1) throw new InputError('行动项须唯一匹配已读正文中的完整一行');
+      if (seen.has(line)) throw new InputError('同一批中行动项不能重复');
+      seen.add(line);
+      const dueAt = dueDate('dueAt' in item ? item.dueAt : undefined);
+      if (dueAt && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/.test(dueAt)) throw new InputError('行动项期限需要带时区的 ISO 时间');
+      return { line, dueAt };
+    });
+    // All selected actions share a transaction and source revision, including repeated confirmations.
+    const results = store.transaction(() => items.map(({ line, dueAt }) => {
+      const key = createHash('sha256').update(JSON.stringify([id, page.layer, page.projectId, line])).digest('hex');
       const existing = store.get<string>('knowledge.action-todos', key);
       if (existing) {
         const todo = store.get<Todo>('todos', existing);
         if (!todo || todo.projectId !== page.projectId) throw new InputError('先前确认的待办已删除或移动，请人工核对', 409);
         return { created: false, todo };
       }
-      const todo = createTodo({ title: line, projectId: page.projectId, dueAt: args.dueAt,
+      const todo = createTodo({ title: line, projectId: page.projectId, dueAt,
         notes: '来源：' + page.title + '\n知识页：' + id + '\n来源版本：' + page.updatedAt + '\n行动项原文：' + line }, false);
       store.put('knowledge.action-todos', key, todo.id);
       return { created: true, todo };
-    });
-    if (result.created) changed('todos.changed', { id: result.todo.id });
-    return result as unknown as Json;
+    }));
+    for (const result of results) if (result.created) changed('todos.changed', { id: result.todo.id });
+    return results;
   }
+
   async function changeKnowledgeMetadata(field: 'facts' | 'alias' | 'tag' | 'importance' | 'relevance', args: Record<string, unknown>): Promise<Json> {
     const id = requiredText(args.id, '知识页标识');
     const version = requiredText(args.updatedAt, '已读版本');
@@ -1522,7 +1545,7 @@ export async function createWorkbench(config: AppConfig) {
         });
       } : undefined;
     },
-    delegateTodo, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; }, listExecutors: executorInfo, snapshot, knowledgeRevision, todos, createTodo, updateTodo, dispatch, cancel, knowledge,
+    delegateTodo, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; }, listExecutors: executorInfo, snapshot, knowledgeRevision, confirmKnowledgeActions, todos, createTodo, updateTodo, dispatch, cancel, knowledge,
     async close() {
       if (closing) return;
       closing = true;

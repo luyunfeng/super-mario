@@ -240,13 +240,12 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             return actions.updateTodo!(String(id ?? ''), patch);
           }, { id: { type: 'string' }, title: { type: 'string' }, notes: { type: 'string' }, waitingOn: { type: 'string' }, reminderAt: { type: 'string' } }));
           if (actions.confirmKnowledgeTodo) context.contribute('tools', 'knowledge_action_todo', tool('knowledge_action_todo',
-            '将用户明确选定的已保存知识页行动项加入待办。传入页 id、已读 updatedAt 和正文中的完整行动项行。重复确认会返回已有待办。',
+            '将用户明确选定的已保存知识页行动项加入待办。传入页 id、已读 updatedAt 和正文中的完整行动项行。选多项用 actions 逐项填写 actionLine 和可选 dueAt，按输入顺序返回 results。重复确认会返回已有待办。',
             async (args, signal) => {
               signal.throwIfAborted();
-              if (args.dueAt !== undefined) dueBoundary(args.dueAt, NaN, '行动项期限');
               return actions.confirmKnowledgeTodo!(args);
             },
-            { id: { type: 'string' }, updatedAt: { type: 'string' }, actionLine: { type: 'string' }, dueAt: { type: 'string', description: '仅在期限明确时传带时区的 ISO 时间' } }));
+            { id: { type: 'string' }, updatedAt: { type: 'string' }, actions: { type: 'array', minItems: 1, items: { type: 'object', properties: { actionLine: { type: 'string' }, dueAt: { type: 'string' } }, required: ['actionLine'], additionalProperties: false } }, actionLine: { type: 'string' }, dueAt: { type: 'string', description: '仅在期限明确时传带时区的 ISO 时间' } }));
           context.contribute('tools', 'todo_create', tool('todo_create', '创建一个待处理事项。', async (args, signal) => {
             signal.throwIfAborted(); return actions.createTodo(args);
           }, { title: { type: 'string' }, notes: { type: 'string' }, projectId: { type: 'string' }, dueAt: { type: 'string' }, reminderAt: { type: 'string' }, waitingOn: { type: 'string' } }));
