@@ -7,3 +7,5 @@ export interface ObservedAgentSession extends NativeResumeSpec {
   parentNativeSessionId?: string; source: 'session-metadata'; state: 'historical'; writable: false;
 }
 export interface AgentSessionDiscovery { sessions: ObservedAgentSession[]; roots: string[]; warnings: string[]; truncated: boolean }
+
+export interface NativeExportSource extends NativeResumeSpec { machineId: string; cwd: string; executorId: 'codex' | 'claude-code' }

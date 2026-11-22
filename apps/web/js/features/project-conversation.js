@@ -4,10 +4,12 @@ import { agentProgress } from '../ui/agent-progress.js';
 import { renderFormattedText } from '../lib/markdown.js';
 import { Button, Banner, Empty, TextArea } from '../ui/kit.js';
 import { createCodeSidebar } from './code-sidebar.js';
+import { createConversationExport } from './conversation-export.js';
 
 export function createProjectConversation({ api, store, bindFolder }) {
   const code = createCodeSidebar({ api, store });
   let projectId = '';
+  const transcript = createConversationExport({ api, store, getProjectId: () => projectId });
   let generation = 0;
   let request = 0;
   const drafts = new Map();
@@ -29,7 +31,7 @@ export function createProjectConversation({ api, store, bindFolder }) {
   const send = Button({ label: '发送目标', kind: 'primary', onClick: submit });
   const notice = h('div', { 'aria-live': 'polite' });
   const composer = h('div', { class: 'project-conversation__composer stack' }, text, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), send), notice);
-  const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, code.toggle), status, messages, composer), code.el);
+  const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row' }, transcript.button, code.toggle)), status, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId);
 
   function paint() {
@@ -81,7 +83,11 @@ export function createProjectConversation({ api, store, bindFolder }) {
   return {
     el,
     show(id) {
-      if (projectId !== id) { if (projectId) drafts.set(projectId, text.value); generation++; request++; projectId = id; workspace = undefined; text.value = drafts.get(id) ?? ''; }
+      if (projectId !== id) {
+        transcript.close();
+        if (projectId) drafts.set(projectId, text.value);
+        generation++; request++; projectId = id; workspace = undefined; text.value = drafts.get(id) ?? '';
+      }
       paint(); void load();
     },
     update() { paint(); void load(); },

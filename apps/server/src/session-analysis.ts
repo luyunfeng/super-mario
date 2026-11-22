@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { StringDecoder } from 'node:string_decoder';
+import { readNativeRecords } from '../../../packages/core/src/native-transcript-reader.ts';
 import { analyzeSession } from '../../../packages/core/src/agent-runtime/session-analysis.ts';
 import type { AppConfig, Json } from '../../../packages/protocol/src/index.ts';
 import type { Store } from '../../../packages/plugin-sdk/src/index.ts';
@@ -52,27 +52,16 @@ export function createSessionAnalysis(options: {
     try {
       signal.throwIfAborted();
       await call(job, 'agents.session', { executorId: job.executorId, nativeSessionId: job.nativeSessionId, cwd: job.cwd }, signal);
-      const decoder = new StringDecoder('utf8'), records: string[] = []; let pending = '', offset = 0, snapshot: any;
-      const consume = (line: string) => {
-        if (!line.trim()) return;
-        let raw: unknown; try { raw = JSON.parse(line); } catch { throw new Error('会话日志含不完整或损坏记录，无法确认全量覆盖，请稍后重试。'); }
+      const records: string[] = [];
+      await readNativeRecords((offset, snapshot) => call(job, 'agents.transcript', {
+        executorId: job.executorId, nativeSessionId: job.nativeSessionId, cwd: job.cwd, offset, ...(snapshot && { snapshot }),
+      }, signal), raw => {
         const text = transcriptRecord(raw, job.executorId, job.nativeSessionId);
         if (text) { records.push(text); job.records++; }
-      };
-      while (true) {
-        signal.throwIfAborted();
-        const page = object(await call(job, 'agents.transcript', { executorId: job.executorId, nativeSessionId: job.nativeSessionId, cwd: job.cwd, offset, ...(snapshot ? { snapshot } : {}) }, signal));
-        const next = object(page.snapshot);
-        if (typeof page.data !== 'string' || Buffer.from(page.data, 'base64').toString('base64') !== page.data || !Number.isSafeInteger(next.size) || next.size < 0
-          || (snapshot && ['size', 'dev', 'ino'].some(key => snapshot[key] !== next[key]))) throw new Error('会话快照无效或读取期间已改变');
-        snapshot = next;
-        const bytes = Buffer.from(page.data, 'base64');
-        if (page.nextOffset !== offset + bytes.length || page.nextOffset > snapshot.size || (!page.eof && !bytes.length) || page.eof !== (page.nextOffset === snapshot.size)) throw new Error('会话分页不连续，无法确认全量覆盖');
-        pending += decoder.write(bytes); let newline;
-        while ((newline = pending.indexOf('\n')) >= 0) { consume(pending.slice(0, newline)); pending = pending.slice(newline + 1); }
-        offset = page.nextOffset; job.readBytes = offset; job.totalBytes = snapshot.size; job.detail = `正在读取完整会话：${offset} / ${snapshot.size} 字节`; save(job);
-        if (page.eof) { pending += decoder.end(); consume(pending); break; }
-      }
+      }, signal, (offset, total) => {
+        job.readBytes = offset; job.totalBytes = total;
+        job.detail = `正在读取完整会话：${offset} / ${total} 字节`; save(job);
+      });
       if (!records.length) throw new Error('完整会话没有可分析的公开对话或工具记录');
       signal.throwIfAborted(); job.status = 'analysing'; job.detail = `已完整读取 ${job.records} 条记录，正在分段分析`; save(job);
       const text = await (options.analyze ?? analyzeSession)(records.join('\n\n'), options.config, detail => { job.detail = detail; save(job); }, { signal });

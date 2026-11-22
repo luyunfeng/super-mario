@@ -5,6 +5,7 @@ import { renderFormattedText } from '../lib/markdown.js';
 import { icon } from '../ui/icons.js';
 import { Button, Banner, Card, Pill } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
+import { createConversationExport } from '../features/conversation-export.js';
 import { conversationSearchActive } from '../features/search.js';
 import { createAttention } from '../features/attention.js';
 import { createCodeSidebar } from '../features/code-sidebar.js';
@@ -22,6 +23,7 @@ const SETUP_STEPS = [
 ];
 
 export function createChatPage({ api, store, scope, router }) {
+  const transcript = createConversationExport({ api, store });
   const attention = createAttention({ api, store });
   const code = createCodeSidebar({ api, store });
   const recent = createRecentWork({ api, store, router, scope });
@@ -38,7 +40,7 @@ export function createChatPage({ api, store, scope, router }) {
     h('div', { class: 'chat__inner chat__inner--top' },
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '对话'), h('p', { class: 'page__sub' }, hintCopy('nav.chat').tag)),
-        h('div', { class: 'page__actions' }, code.toggle, Hint('nav.chat'))),
+        h('div', { class: 'page__actions' }, transcript.button, code.toggle, Hint('nav.chat'))),
       banner, attention.el, setup, runStrip));
   const scroller = h('div', { class: 'chat__scroll', id: 'chat-scroll' }, h('div', { class: 'chat__inner' }, messages, hero));
 
@@ -88,7 +90,7 @@ export function createChatPage({ api, store, scope, router }) {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); }
   });
   scopeSelect.addEventListener('change', () => scope.set(scopeSelect.value));
-  scope.subscribe((value) => { scopeSelect.value = value; code.show(value); });
+  scope.subscribe((value) => { transcript.close(); scopeSelect.value = value; code.show(value); });
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();

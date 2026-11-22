@@ -2,6 +2,7 @@
 import { h, replace } from '../lib/dom.js';
 import { Button, Card, Banner, Empty, Field, Input, TextArea, Select, Check, Pill } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
+import { conversationExportActive, openConversationExport } from './conversation-export.js';
 
 const wrap = { minWidth: '0', maxWidth: '100%', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' };
 const text = (value) => h('p', { class: 'small', style: wrap }, value);
@@ -32,10 +33,24 @@ export function createCliSessions({ api, store, router }) {
   const ready = () => store.view.connection === 'online' && !store.view.unauthorized;
   const selection = () => new URLSearchParams({ ...(machines.value ? { machineId: machines.value } : {}), ...(projects.value ? { projectId: projects.value } : {}) }).toString();
   function invalidate() { seq++; cache.clear(); data = null; loading = false; error = ''; }
+  let exportDrawer;
+  const canExport = machineId => ready() && conversationExportActive(store) && store.view.snapshot?.machines?.some(
+    machine => machine.id === machineId && machine.online && machine.capabilities?.includes('agents.transcript'),
+  );
+
+  function exportHistory(machineId, { executorId, nativeSessionId, cwd }, button) {
+    exportDrawer?.close();
+    exportDrawer = openConversationExport({
+      api, store, source: { native: { machineId, executorId, nativeSessionId, cwd } },
+      subtitle: `${executorId} · ${nativeSessionId}`,
+      isCurrent: () => visible() && button.isConnected && canExport(machineId),
+    });
+  }
   function paint() {
-    const renderKey = JSON.stringify([ready(), error, loading, data, keyword.value.trim().toLowerCase(), machines.value, signature]);
+    const renderKey = JSON.stringify([ready(), conversationExportActive(store), error, loading, data, keyword.value.trim().toLowerCase(), machines.value, signature]);
     if (renderKey === painted) return;
     painted = renderKey;
+    exportDrawer?.close();
     replace(notice, !ready() ? Banner({ tone: 'warn', children: '连接不可用，请连接服务后重新读取。' })
       : error ? Banner({ tone: 'danger', children: `读取失败：${error}` }) : loading ? text('正在读取 CLI 历史…') : data ? [text(`采集时间：${data.capturedAt}`), data.reason && Banner({ tone: 'warn', children: data.reason })] : null);
     const query = keyword.value.trim().toLowerCase();
@@ -57,6 +72,7 @@ export function createCliSessions({ api, store, router }) {
             text(`观测时间：${session.observedAt}\n元数据时间：${session.metadataTimestamp ?? '未知'}\n文件记录更新：${session.fileModifiedAt ?? '未知'}\n来源：session-metadata`),
             session.parentNativeSessionId && text(`父会话：${session.parentNativeSessionId}`),
             session.relatedRunIds.length > 0 && h('div', { class: 'row row--wrap' }, session.relatedRunIds.map(id => Button({ label: `查看关联执行 ${id}`, size: 'sm', onClick: () => router.go(router.href('projects', 'all', 'runs', id)) }))),
+            online && canExport(machine.machineId) && Button({ label: '导出对话', size: 'sm', onClick: (_, button) => exportHistory(machine.machineId, session, button) }),
             online && current?.capabilities.includes('agents.usage') && Button({ label: '上下文与 Token 用量', size: 'sm', onClick: () => openUsage(machine, session) }),
             session.resumable && online && machine.available
               ? Button({ label: '申请恢复', size: 'sm', onClick: () => openResume(machine, session) })

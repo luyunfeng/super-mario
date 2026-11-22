@@ -12,7 +12,7 @@ export type { NormalizedReplyEvidence, CollectedReplyEvidence, ArmWaitingReply, 
 export type { WorkDecision, WorkDecisionSource } from './work-decisions.ts';
 export type { ExecutionProgress } from './execution-progress.ts';
 import type { ExecutionProgress } from './execution-progress.ts';
-export type { NativeExecutorId, NativeResumeSpec, ObservedAgentSession, AgentSessionDiscovery } from './agent-sessions.ts';
+export type { NativeExportSource, NativeExecutorId, NativeResumeSpec, ObservedAgentSession, AgentSessionDiscovery } from './agent-sessions.ts';
 export type { InboxOrigin } from './inbox-origin.ts';
 import type { InboxOrigin } from './inbox-origin.ts';
 import type { NativeResumeSpec } from './agent-sessions.ts';
