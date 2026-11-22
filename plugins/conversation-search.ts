@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { Extension, Json, Store } from '../packages/plugin-sdk/src/index.ts';
 
 import type { Message, Project } from '../packages/protocol/src/index.ts';
@@ -91,6 +91,12 @@ function savedSearches(store: Store, input: Json): Json {
   });
 }
 
+function readableMessage(message: Message, project: Project, excludeId: unknown): boolean {
+  return !project.archivedAt && message.id !== excludeId &&
+    message.conversationId === 'project:' + project.id + ':work' && (!message.projectId || message.projectId === project.id) &&
+    ['user', 'assistant'].includes(message.role) && (!message.origin || message.origin === 'user');
+}
+
 function projectMessages(store: Store, input: Json, excludeId?: string) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, '检索参数无效');
   const { query, before, limit = 5, mode = 'phrase' } = input;
@@ -108,8 +114,7 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
   let pastCursor = before === undefined;
   for (const message of store.list<Message>('messages').reverse()) {
     const project = projects.get(message.conversationId);
-    if (message.id === excludeId || !project || (message.projectId && message.projectId !== project.id) ||
-      !['user', 'assistant'].includes(message.role) || (message.origin && message.origin !== 'user')) continue;
+    if (!project || !readableMessage(message, project, excludeId)) continue;
     const matches = [];
     for (const pattern of patterns) {
       const match = pattern.exec(message.text);
@@ -147,6 +152,29 @@ export const conversationSearch: Extension = {
       async execute(args, signal) {
         signal.throwIfAborted();
         return projectMessages(context.store, args, typeof args.excludeId === 'string' ? args.excludeId : undefined);
+      },
+    });
+    context.contribute('tools', 'project_message_read', {
+      name: 'project_message_read',
+      description: '按检索命中的项目 ID 和消息 ID 读取一条项目工作消息的正文。续读时传回 nextOffset 和 version。',
+      parameters: { type: 'object', required: ['projectId', 'id'], additionalProperties: false, properties: {
+        projectId: { type: 'string' }, id: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, version: { type: 'string' },
+      } },
+      async execute({ projectId, id, offset = 0, version, excludeId }, signal) {
+        signal.throwIfAborted();
+        if (typeof projectId !== 'string' || typeof id !== 'string') fail(400, '缺少项目或消息 ID');
+        const project = context.store.get<Project>('projects', projectId);
+        const message = context.store.get<Message>('messages', id);
+        if (!project || !message || !readableMessage(message, project, excludeId)) fail(404, '未找到当前项目的可读消息');
+        if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || (offset > 0 && typeof version !== 'string'))
+          fail(400, '续读需要有效位置和原版本');
+        const current = createHash('sha256').update(message.text).digest('hex');
+        if (version !== undefined && version !== current) fail(409, '消息正文已变化，请从头读取');
+        if (offset > message.text.length) fail(400, '位置超出消息正文');
+        let end = Math.min(offset + 4000, message.text.length);
+        if (end < message.text.length && /[\uD800-\uDBFF]/u.test(message.text[end - 1])) end--;
+        return { id, projectId, projectName: project.name, role: message.role, createdAt: message.createdAt,
+          text: message.text.slice(offset, end), offset, nextOffset: end < message.text.length ? end : null, version: current };
       },
     });
     context.provide('conversation-search.projects', input => projectMessages(context.store, input));
