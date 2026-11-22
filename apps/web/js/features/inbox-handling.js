@@ -1,5 +1,6 @@
 import { h, replace, debounce } from '../lib/dom.js';
 import { Banner, Button, Card, Field, Input, Select, TextArea } from '../ui/kit.js';
+import { createConversationDrafts } from '../lib/conversation-drafts.js';
 import { attachSavedPrompts } from './saved-prompts.js';
 import { openDrawer, confirmDialog } from '../ui/overlay.js';
 
@@ -51,13 +52,16 @@ function actionText(action) {
 export function openInboxHandlingDrawer({ api, store, source }) {
   if (!['personal', 'mailbox'].includes(source.kind) || !source.id) throw new Error('无效的收件来源');
   const token = api.token?.();
+  const drafts = createConversationDrafts({ api, store });
+  let draftKey;
+  const owner = drafts.owner();
   let credentials = sessions.get(api);
   if (!credentials) { credentials = new Map(); sessions.set(api, credentials); }
   let records = credentials.get(token);
   if (!records) { records = new Map(); credentials.set(token, records); }
   const sourceKey = JSON.stringify([source.kind, source.id]);
   let local = records.get(sourceKey);
-  if (!local) { local = { message: '', messageAttempt: null, writeLocks: new Set() }; records.set(sourceKey, local); }
+  if (!local) { local = { messageAttempt: null, writeLocks: new Set() }; records.set(sourceKey, local); }
   local.acknowledgedUnknown ??= new Set();
   const path = `/inbox-handling/${source.kind}/${encodeURIComponent(source.id)}`;
   let view, alive = true, readRevision = 0, writeRevision = 0, writing = false, editor, preview;
@@ -65,8 +69,8 @@ export function openInboxHandlingDrawer({ api, store, source }) {
   const origin = h('div'), notice = h('div', { role: 'status' }), model = h('div'), conversation = h('div', { class: 'stack', 'aria-label': '单条处理对话' });
   const requests = h('div', { class: 'stack', 'aria-label': '模型请求状态' }), suggestions = h('div', { class: 'stack', 'aria-label': '建议列表' });
   const editorHost = h('div'), confirmation = h('div'), result = h('div', { role: 'status' });
-  const message = TextArea({ rows: 3, 'aria-label': '处理指令', placeholder: '输入这条消息的处理要求', value: local.message });
-  message.addEventListener('input', () => { local.message = message.value; });
+  const message = TextArea({ rows: 3, 'aria-label': '处理指令', placeholder: '输入这条消息的处理要求', disabled: true });
+  message.addEventListener('input', () => { if (draftKey && current()) drafts.write(draftKey, message.value); });
   const prompts = attachSavedPrompts({ api, store, input: message, getScope: () => sourceKey });
   const send = Button({ label: '发送处理指令', onClick: sendMessage, disabled: true });
   const create = Button({ label: '手工新建建议', onClick: () => startEditor(), disabled: true });
@@ -87,6 +91,7 @@ export function openInboxHandlingDrawer({ api, store, source }) {
   const unwatch = watchToken(api, () => { cleanup(); drawer.close(); });
   const schedule = debounce(read, 100);
   const unsubscribe = store.subscribe(state => {
+    if (api.token?.() !== token || drafts.owner() !== owner || state.unauthorized) { drawer.close(); return; }
     if (!current()) return;
     if (state.snapshot !== lastSnapshot) { lastSnapshot = state.snapshot; schedule(); }
   });
@@ -96,7 +101,7 @@ export function openInboxHandlingDrawer({ api, store, source }) {
     if (local.messageAttempt?.status === 'submitting') local.messageAttempt.status = 'unknown';
     prompts.dispose(); schedule.cancel(); unsubscribe?.(); unwatch();
   }
-  function current() { return alive && drawer.el.open && api.token?.() === token; }
+  function current() { return alive && drawer.el.open && api.token?.() === token && drafts.owner() === owner && !store.view.unauthorized; }
   function say(text) { replace(notice, text && Banner({ tone: 'warn', children: text })); }
   function scopeText() {
     const id = view.source.projectId;
@@ -120,6 +125,13 @@ export function openInboxHandlingDrawer({ api, store, source }) {
       const next = await api.get(path);
       if (!current() || revision !== readRevision) return;
       if (next.source.kind !== source.kind || next.source.id !== source.id) { say('服务返回的来源不匹配，已忽略。'); return; }
+      // A changed source assignment can identify a different conversation. Restore only after resolving it.
+      const key = next.source.active && next.conversationId ? JSON.stringify(['inbox', source.kind, source.id, next.conversationId]) : undefined;
+      if (draftKey !== key) {
+        draftKey = key;
+        message.value = key ? drafts.read(key) : '';
+      }
+      message.disabled = !draftKey;
       view = next;
       const attempt = local.messageAttempt;
       const found = attempt && view.requests.find(r => r.key === attempt.key);
@@ -248,12 +260,15 @@ export function openInboxHandlingDrawer({ api, store, source }) {
   }
   async function sendMessage() {
     if (send.disabled || !message.value.trim()) return;
-    const text = message.value.trim();
+    const original = message.value, target = draftKey, text = original.trim();
     const key = crypto.randomUUID();
     local.messageAttempt = { key, status: 'submitting' };
     await post('/messages', { sourceVersion: view.source.version, text, key }, request => {
       local.messageAttempt.status = request.status;
-      if (message.value.trim() === text) { message.value = ''; local.message = ''; }
+      if (request.id && ['pending', 'completed'].includes(request.status)) {
+        drafts.clearIf(target, original);
+        if (target === draftKey && message.value === original) message.value = drafts.read(target);
+      }
       say(`${STATUS[request.status] || request.status} · 请求 ID：${request.id}。受理不代表模型已完成。`);
     });
   }

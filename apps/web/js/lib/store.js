@@ -3,7 +3,7 @@
 
 export function createStore(api) {
   const listeners = new Set();
-  const view = { snapshot: null, attention: [], savedPromptsRevision: null, connection: 'connecting', unauthorized: false, loadError: '' };
+  const view = { snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, connection: 'connecting', unauthorized: false, loadError: '' };
   let request = 0;
   let socket;
   let reconnectTimer;
@@ -15,12 +15,13 @@ export function createStore(api) {
 
   async function refresh() {
     const stamp = ++request;
+    const owner = api.draftOwner?.();
     try {
       const [snapshot, attention] = await Promise.all([api.get('/state'), api.get('/attention')]);
-      if (stamp !== request) return;
-      set({ snapshot, attention, unauthorized: false, loadError: '' });
+      if (stamp !== request || owner !== api.draftOwner?.()) return;
+      set({ snapshot, snapshotOwner: owner, attention, unauthorized: false, loadError: '' });
     } catch (error) {
-      if (stamp !== request) return;
+      if (stamp !== request || owner !== api.draftOwner?.()) return;
       if (error.status === 401) set({ unauthorized: true, loadError: error.message });
       else set({ loadError: error.message });
     }
@@ -71,7 +72,7 @@ export function createStore(api) {
     refresh,
     connect,
     reconnect: connect,
-    reset() { request += 1; set({ snapshot: null, attention: [], savedPromptsRevision: null, unauthorized: false, loadError: '' }); connect(); },
+    reset() { request += 1; set({ snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, unauthorized: false, loadError: '' }); connect(); },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
   };
 }

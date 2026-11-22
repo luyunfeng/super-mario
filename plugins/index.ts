@@ -28,6 +28,10 @@ export { officeDocuments } from './office/index.ts';
 export { assistantProfile } from './assistant-profile.ts';
 export { projectInstructions } from './project-instructions.ts';
 export { savedPrompts } from './saved-prompts.ts';
+// Draft text is owned by the browser. The host only advertises the user's plugin setting.
+export const conversationDrafts: Extension = {
+  id: 'conversation-drafts', name: '对话草稿', capabilities: ['web.conversation.drafts'], activate() {},
+};
 export { conversationSearch } from './conversation-search.ts';
 export { tokenStatistics } from './token-statistics.ts';
 export { workspaceSplash } from './workspace-splash.ts';

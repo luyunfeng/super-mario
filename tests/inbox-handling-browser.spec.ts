@@ -31,7 +31,11 @@ async function fixture(run: (f: { page: Page; calls: Call[]; setHandler: (fn: (c
       const { createApi } = await import(a); const { openInboxHandlingDrawer } = await import(m);
       const api = createApi(), listeners = new Set<any>();
       const store = { view: { snapshot: { projects: [{ id: 'p1', name: '项目一' }], executors: [{ id: 'offline', name: '真实离线执行者', available: false }] } }, subscribe(fn: any) { listeners.add(fn); return () => listeners.delete(fn); } };
-      (window as any).handling = { api, store, open: (source = { kind: 'personal', id: 'raw-a' }) => openInboxHandlingDrawer({ api, store, source }), emit: (changed = true) => { if (changed) store.view.snapshot = { ...store.view.snapshot }; for (const fn of listeners) fn(store.view); }, count: () => listeners.size };
+      // The normal shell already owns one draft store before opening a drawer.
+      const drafts = '/js/lib/conversation-drafts.js';
+      (await import(drafts)).createConversationDrafts({ api, store });
+      const baseline = listeners.size;
+      (window as any).handling = { api, store, open: (source = { kind: 'personal', id: 'raw-a' }) => openInboxHandlingDrawer({ api, store, source }), emit: (changed = true) => { if (changed) store.view.snapshot = { ...store.view.snapshot }; for (const fn of listeners) fn(store.view); }, count: () => listeners.size - baseline };
     });
     await run({ page, calls, setHandler(fn) { handler = fn; } }); assert.deepEqual(errors, []);
   } finally { await browser.close(); await server.close(); await rm(dir, { recursive: true, force: true }); }

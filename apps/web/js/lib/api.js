@@ -7,8 +7,30 @@ export class ApiError extends Error {
 }
 
 const TOKEN_LIFETIME = 30 * 24 * 60 * 60 * 1000;
-function remember(value) {
-  const record = { value, expiresAt: Date.now() + TOKEN_LIFETIME };
+const ANONYMOUS_OWNER = 'super-mario-anonymous-draft-owner';
+const validOwner = value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
+const newOwner = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+
+function anonymous() {
+  let owner;
+  try {
+    owner = localStorage.getItem(ANONYMOUS_OWNER);
+    if (!validOwner(owner)) { owner = newOwner(); localStorage.setItem(ANONYMOUS_OWNER, owner); }
+  } catch { /* A storage-restricted page retains its own anonymous identity. */ }
+  return { value: '', expiresAt: 0, owner: validOwner(owner) ? owner : newOwner() };
+}
+
+function remember(value, previous) {
+  let owner;
+  if (value) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(TOKEN_KEY));
+      if (saved?.value === value && saved.expiresAt > Date.now() && validOwner(saved.owner)) owner = saved.owner;
+    } catch { /* Reuse the current page's identity if storage is unavailable. */ }
+    if (!owner && previous?.value === value && previous.expiresAt > Date.now()) owner = previous.owner;
+  }
+  const record = value ? { value, expiresAt: Date.now() + TOKEN_LIFETIME, owner: owner ?? newOwner() }
+    : previous?.value === '' ? previous : anonymous();
   try {
     if (value) localStorage.setItem(TOKEN_KEY, JSON.stringify(record));
     else localStorage.removeItem(TOKEN_KEY);
@@ -21,13 +43,20 @@ function readToken() {
     const saved = localStorage.getItem(TOKEN_KEY);
     if (saved) {
       const record = JSON.parse(saved);
-      if (typeof record?.value === 'string' && record.expiresAt > Date.now()) return record;
+      if (typeof record?.value === 'string' && record.value && Number.isFinite(record.expiresAt) && record.expiresAt > Date.now()) {
+        // Upgrade existing credentials without extending their expiry.
+        if (!validOwner(record.owner)) {
+          record.owner = newOwner();
+          try { localStorage.setItem(TOKEN_KEY, JSON.stringify(record)); } catch { /* Keep the upgrade in memory. */ }
+        }
+        return record;
+      }
       return remember('');
     }
     const legacy = sessionStorage.getItem(TOKEN_KEY);
     if (legacy) return remember(legacy);
   } catch { /* 无有效的本地凭据。 */ }
-  return { value: '', expiresAt: 0 };
+  return anonymous();
 }
 
 /**
@@ -52,13 +81,17 @@ function consumeSharedToken() {
 
 export function createApi() {
   let credential = readToken();
-  const currentToken = () => credential.expiresAt > Date.now() ? credential.value : '';
+  const current = () => {
+    if (credential.value && credential.expiresAt <= Date.now()) credential = anonymous();
+    return credential;
+  };
+  const currentToken = () => current().value;
   const shared = consumeSharedToken();
-  if (shared !== null) credential = remember(shared);
+  if (shared !== null) credential = remember(shared, current());
   let onUnauthorized = () => {};
 
   async function api(path, { method = 'GET', body, headers, signal, keepalive = false } = {}) {
-    const token = currentToken();
+    const { value: token, owner } = current();
     const init = {
       method,
       keepalive,
@@ -75,7 +108,7 @@ export function createApi() {
     catch { throw new ApiError('无法连接到服务，请检查网络', 0); }
     const data = response.status === 204 ? null : await response.json().catch(() => null);
     if (!response.ok) {
-      if (response.status === 401) onUnauthorized();
+      if (response.status === 401 && current().owner === owner) onUnauthorized();
       throw new ApiError(data?.error || `请求失败（${response.status}）`, response.status);
     }
     return data;
@@ -87,7 +120,8 @@ export function createApi() {
   api.patch = (path, body) => api(path, { method: 'PATCH', body });
   api.del = (path) => api(path, { method: 'DELETE' });
   api.token = currentToken;
-  api.setToken = (value) => { credential = remember(value.trim()); };
+  api.draftOwner = () => current().owner;
+  api.setToken = (value) => { credential = remember(value.trim(), current()); };
   api.onUnauthorized = (fn) => { onUnauthorized = fn; };
   return api;
 }

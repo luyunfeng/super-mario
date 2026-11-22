@@ -1,5 +1,6 @@
 // 对话：主页。顶部是“等你处理”，中间是消息流，输入框固定在底部。
 import { h, keyedList, replace } from '../lib/dom.js';
+import { createConversationDrafts } from '../lib/conversation-drafts.js';
 import { timeAgo } from '../lib/format.js';
 import { renderFormattedText } from '../lib/markdown.js';
 import { icon } from '../ui/icons.js';
@@ -61,18 +62,29 @@ export function createChatPage({ api, store, scope, router }) {
 
   const el = h('section', { class: 'page page--chat', id: 'chat' }, h('div', { class: 'chat-code-main' }, top, scroller, form), code.el);
 
-  let sending = false;
-  let credential = api.token(), identity = 0;
-  // 已插入的提示词与手写草稿都属于当前凭据。
-  store.subscribe(() => {
-    if (credential === api.token()) return;
-    credential = api.token();
-    identity++;
-    sending = false;
-    input.value = '';
+  const drafts = createConversationDrafts({ api, store });
+  const pending = new Map();
+  let draftKey, owner, enabled, epoch = 0;
+  function syncDraft() {
+    const { snapshot, snapshotOwner, unauthorized } = store.view;
+    const currentOwner = drafts.owner();
+    const valid = snapshot && !unauthorized && snapshotOwner === currentOwner;
+    const nextOwner = valid ? currentOwner : null;
+    const nextEnabled = !!valid && snapshot.plugins?.some(p => p.id === 'conversation-drafts' && p.status === 'active');
+    const id = scope.get() || '';
+    const key = valid && (!id || snapshot.projects?.some(p => p.id === id && !p.archivedAt)) ? JSON.stringify(['main', id]) : null;
+    if (owner === nextOwner && enabled === nextEnabled && draftKey === key) return;
+    if (owner !== nextOwner) pending.clear();
+    if (owner !== nextOwner || enabled !== nextEnabled) epoch++;
+    owner = nextOwner; enabled = nextEnabled; draftKey = key;
+    input.value = key ? drafts.read(key) : '';
     autosize();
+    input.disabled = !key;
+    send.disabled = !key || pending.has(key) || !snapshot?.agent.available;
     status.textContent = '';
-  });
+  }
+  store.subscribe(syncDraft);
+  syncDraft();
   let snapshot = null;
   let assistantLabel = '主 Agent';
   let lastCount = 0;
@@ -103,34 +115,54 @@ export function createChatPage({ api, store, scope, router }) {
   }
 
   function autosize() { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 200)}px`; }
-  input.addEventListener('input', autosize);
+  input.addEventListener('input', () => {
+    syncDraft();
+    if (draftKey) drafts.write(draftKey, input.value);
+    autosize();
+  });
   input.addEventListener('keydown', (event) => {
     if (!event.defaultPrevented && event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); }
   });
   scopeSelect.addEventListener('change', () => scope.set(scopeSelect.value));
-  scope.subscribe((value) => { prompts.changeScope(); transcript.close(); scopeSelect.value = value; code.show(value); });
+  scope.subscribe((value) => { syncDraft(); prompts.changeScope(); transcript.close(); scopeSelect.value = value; code.show(value); });
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const text = input.value.trim();
-    if (!text || sending || !snapshot?.agent.available) return;
-    const sender = identity;
-    sending = true; send.disabled = true; status.textContent = ''; status.className = 'small composer__status muted';
+    syncDraft();
+    const key = draftKey, draft = input.value, text = draft.trim(), projectId = scope.get();
+    if (!key || !text || pending.has(key) || !store.view.snapshot?.agent.available) return;
+    const stamp = epoch, submission = Symbol();
+    pending.set(key, submission); send.disabled = true; status.textContent = ''; status.className = 'small composer__status muted';
     try {
-      await api.post('/messages', { text, ...(scope.get() ? { projectId: scope.get() } : {}) });
-      if (sender !== identity) return;
-      if (input.value.trim() === text) { input.value = ''; autosize(); }
-      scrollToEnd(true);
+      const answer = await api.post('/messages', { text, ...(projectId ? { projectId } : {}) });
+      syncDraft();
+      if (stamp !== epoch) return;
+      if (!answer?.id || answer.role !== 'user' || !['pending', 'done'].includes(answer.status)) {
+        if (draftKey === key) {
+          status.className = 'small composer__status text-danger';
+          status.textContent = answer?.status === 'failed' ? '发送失败，内容已保留。' : '发送结果未知，内容已保留。请先核对对话。';
+        }
+      } else {
+        drafts.clearIf(key, draft);
+        if (draftKey === key) {
+          if (input.value === draft) { input.value = drafts.read(key); autosize(); }
+          scrollToEnd(true);
+        }
+      }
     } catch (error) {
-      if (sender !== identity) return;
+      syncDraft();
+      if (stamp !== epoch || draftKey !== key) return;
       status.className = 'small composer__status text-danger';
-      status.textContent = `发送没有成功：${error.message}。内容已保留，请核对后重试。`;
-    } finally { if (sender === identity) { sending = false; send.disabled = !snapshot?.agent.available; } }
+      status.textContent = `发送未确认：${error.message}。内容已保留，请核对后重试。`;
+    } finally {
+      if (pending.get(key) === submission) pending.delete(key);
+      send.disabled = !draftKey || pending.has(draftKey) || !store.view.snapshot?.agent.available;
+    }
     store.refresh();
   });
 
   for (const text of EXAMPLES) {
-    hero.querySelector('.hero__chips').append(h('button', { class: 'chip', type: 'button', onclick: () => { input.value = text; autosize(); input.focus(); } }, text));
+    hero.querySelector('.hero__chips').append(h('button', { class: 'chip', type: 'button', onclick: () => { input.value = text; input.dispatchEvent(new Event('input', { bubbles: true })); input.focus(); } }, text));
   }
 
   function nearBottom() { return scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop < 80; }
@@ -235,7 +267,7 @@ export function createChatPage({ api, store, scope, router }) {
       if (list.length !== lastCount) { lastCount = list.length; if (follow) scrollToEnd(true); }
       else if (follow && list.at(-1)?.status === 'pending') scrollToEnd(true);
       revealMessage();
-      send.disabled = sending || !state.agent.available;
+      send.disabled = !draftKey || pending.has(draftKey) || !state.agent.available;
       input.placeholder = state.agent.available ? '说出目标，Enter 发送，Shift + Enter 换行' : '主 Agent 暂不可用，请先完成模型配置';
       const projects = (state.projects ?? []).filter(item => !item.archivedAt);
       const signature = JSON.stringify(projects.map(item => [item.id, item.name]));

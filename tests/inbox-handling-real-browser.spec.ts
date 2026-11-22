@@ -21,6 +21,10 @@ test('actual Web/HTTP/SQLite: source drawer → chat approval → edit current s
   await instruction.fill('/核');
   await handling.getByRole('button', { name: '/核验', exact: true }).click();
   await expect(instruction).toHaveValue('核对来源与证据。');
+  await page.reload();
+  await page.locator('#inbox .mailbox-card').getByRole('button',{name:'查看原文与详情',exact:true}).click();
+  await page.getByRole('dialog',{name:'收件箱消息详情',exact:true}).getByRole('button',{name:'处理与建议',exact:true}).click();
+  await expect(instruction).toHaveValue('核对来源与证据。');
   await expect(handling.getByLabel('模型请求状态')).toBeEmpty();
   await handling.getByRole('button',{name:'手工新建建议',exact:true}).click();
   await handling.getByLabel('待办标题',{exact:true}).fill('初稿');await handling.getByLabel('待办备注',{exact:true}).fill('仅限本地合成验收');

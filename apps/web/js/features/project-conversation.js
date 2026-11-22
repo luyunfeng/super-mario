@@ -1,5 +1,6 @@
-// 项目工作对话复用真实隔离会话。快照只更新消息区，草稿按项目留在内存。
+// 项目工作对话复用真实隔离会话。快照只更新消息区，草稿按身份和项目隔离。
 import { h, replace, keyedList } from '../lib/dom.js';
+import { createConversationDrafts } from '../lib/conversation-drafts.js';
 import { agentProgress } from '../ui/agent-progress.js';
 import { renderFormattedText } from '../lib/markdown.js';
 import { Button, Banner, Empty, TextArea } from '../ui/kit.js';
@@ -17,8 +18,8 @@ export function createProjectConversation({ api, store, bindFolder }) {
   const transcript = createConversationExport({ api, store, getProjectId: () => projectId });
   let generation = 0;
   let request = 0;
-  const drafts = new Map();
-  const pending = new Set();
+  const drafts = createConversationDrafts({ api, store });
+  const pending = new Map();
   const unknown = new Set();
   const notices = new Map();
   let workspace;
@@ -27,7 +28,10 @@ export function createProjectConversation({ api, store, bindFolder }) {
   const messages = h('div', { class: 'project-conversation__messages', role: 'log', 'aria-label': '项目对话' });
   const text = TextArea({ rows: 3, placeholder: '告诉我这个文件夹里要做什么，我们持续推进。', 'aria-label': '项目目标' });
   const prompts = attachSavedPrompts({ api, store, input: text, getScope: () => projectId });
-  text.addEventListener('input', () => drafts.set(projectId, text.value));
+  text.addEventListener('input', () => {
+    syncDraft();
+    if (draftKey) drafts.write(draftKey, text.value);
+  });
   text.addEventListener('keydown', (event) => {
     if (!event.defaultPrevented && event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) {
       event.preventDefault();
@@ -38,15 +42,27 @@ export function createProjectConversation({ api, store, bindFolder }) {
   const notice = h('div', { 'aria-live': 'polite' });
   const composer = h('div', { class: 'project-conversation__composer stack' }, prompts.menu, text, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, send), notice);
   const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, favorites.button, transcript.button, code.toggle)), status, messages, composer), code.el);
-  let credential = api.token(), identity = 0;
-  store.subscribe(() => {
-    if (credential === api.token()) return;
-    credential = api.token(); identity++; generation++; request++;
-    workspace = undefined;
-    drafts.clear(); pending.clear(); unknown.clear(); notices.clear();
-    text.value = '';
-  });
-  const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId);
+  const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
+  let draftKey, owner, enabled, epoch = 0;
+  function syncDraft() {
+    const { snapshot, snapshotOwner, unauthorized } = store.view;
+    const currentOwner = drafts.owner();
+    const valid = snapshot && !unauthorized && snapshotOwner === currentOwner;
+    const nextOwner = valid ? currentOwner : null;
+    const nextEnabled = !!valid && snapshot.plugins?.some(p => p.id === 'conversation-drafts' && p.status === 'active');
+    const key = valid && project() ? JSON.stringify(['project', projectId]) : null;
+    if (owner === nextOwner && enabled === nextEnabled && draftKey === key) return;
+    if (owner !== nextOwner) {
+      generation++; request++; workspace = undefined;
+      pending.clear(); unknown.clear(); notices.clear();
+    }
+    if (owner !== nextOwner || enabled !== nextEnabled) epoch++;
+    owner = nextOwner; enabled = nextEnabled; draftKey = key;
+    text.value = key ? drafts.read(key) : '';
+    text.disabled = !key;
+  }
+  store.subscribe(syncDraft);
+  syncDraft();
 
   function paint() {
     instructions.update();
@@ -58,7 +74,7 @@ export function createProjectConversation({ api, store, bindFolder }) {
       : !machine?.online ? Banner({ tone: 'warn', children: '绑定电脑离线。对话记录保留，文件夹是否存在尚未验证。' })
         : work?.available === false ? Banner({ tone: 'warn', children: work.reason || '项目工作会话暂不可用，请检查模型配置。' }) : null);
     progress.textContent = workspace?.progress ? `待办 ${workspace.progress.open ?? 0} · 正在执行 ${workspace.progress.running ?? 0} · 待核对 ${workspace.progress.review ?? 0}` : '';
-    send.disabled = !p?.workspace || pending.has(projectId) || unknown.has(projectId) || !workspace || work?.available === false;
+    send.disabled = !draftKey || !p?.workspace || pending.has(projectId) || unknown.has(projectId) || !workspace || work?.available === false;
     replace(notice, notices.get(projectId) ? Banner({ tone: 'warn', children: notices.get(projectId) }) : null);
     const rows = workspace?.messages ?? [];
     if (!rows.length) { replace(messages, Empty({ title: workspace ? '在这个文件夹里持续工作' : '正在读取项目对话…', text: workspace ? '直接输入目标，项目工作会话负责拆解并跟进。' : undefined })); messages._keyed = undefined; return; }
@@ -76,7 +92,7 @@ export function createProjectConversation({ api, store, bindFolder }) {
     }, m => JSON.stringify([prompts.epoch, favorites.epoch, projectId, m]));
   }
   async function load() {
-    if (!projectId || projectId === 'all') return;
+    if (!draftKey) return;
     const id = projectId, stamp = generation, order = ++request;
     try {
       const value = await api.get(`/projects/${encodeURIComponent(id)}/workspace`);
@@ -89,23 +105,35 @@ export function createProjectConversation({ api, store, bindFolder }) {
     }
   }
   async function submit() {
-    const id = projectId, stamp = generation, sender = identity, draft = text.value;
-    if (send.disabled || !draft.trim()) return;
-    pending.add(id); notices.delete(id); paint();
+    syncDraft();
+    const id = projectId, key = draftKey, sender = epoch, draft = text.value;
+    if (!key || send.disabled || !draft.trim()) return;
+    const submission = Symbol();
+    pending.set(id, submission); notices.delete(id); paint();
     try {
       const answer = await api.post(`/projects/${encodeURIComponent(id)}/messages`, { text: draft.trim() });
-      if (sender !== identity) return;
-      if (answer?.status === 'unknown') { unknown.add(id); notices.set(id, '处理结果未知，请先核对项目对话和执行记录，勿重复发送。'); }
-      if (drafts.get(id) === draft) drafts.delete(id);
-      if (stamp === generation) { if (text.value === draft) text.value = ''; await load(); }
+      syncDraft();
+      if (sender !== epoch) return;
+      if (answer?.status === 'failed') notices.set(id, '发送失败，内容已保留。');
+      else if (!answer?.id || answer.role !== 'user' || !['pending', 'done'].includes(answer.status)) {
+        unknown.add(id); notices.set(id, '处理结果未知，请先核对项目对话和执行记录，勿重复发送。');
+      } else {
+        drafts.clearIf(key, draft);
+        if (draftKey === key && text.value === draft) text.value = drafts.read(key);
+      }
+      if (draftKey === key) await load();
       void store.refresh().catch(() => {});
     } catch (error) {
-      if (sender !== identity) return;
+      syncDraft();
+      if (sender !== epoch) return;
       if (!error.status || error.status >= 500 || /unknown/i.test(error.message)) {
         unknown.add(id);
         notices.set(id, '发送结果未知，请先核对项目对话和执行记录；本页不会重复发送。');
       } else notices.set(id, `发送被拒绝：${error.message}`);
-    } finally { if (sender === identity) pending.delete(id); if (stamp === generation) paint(); }
+    } finally {
+      if (pending.get(id) === submission) pending.delete(id);
+      if (draftKey === key) paint();
+    }
   }
   return {
     el,
@@ -114,8 +142,8 @@ export function createProjectConversation({ api, store, bindFolder }) {
         instructions.close();
         prompts.changeScope();
         transcript.close();
-        if (projectId) drafts.set(projectId, text.value);
-        generation++; request++; projectId = id; workspace = undefined; text.value = drafts.get(id) ?? '';
+        generation++; request++; projectId = id; workspace = undefined;
+        syncDraft();
       }
       paint(); void load();
     },
