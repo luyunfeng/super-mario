@@ -383,3 +383,56 @@ test('Web 待办委派把期限和等待事项送入主模型，要求基于证�
     assert.equal(server.app.todos().find(row => row.id === todo.id)?.completedAt, undefined);
   } finally { await server.close(); }
 });
+
+test('Web 和飞书项目助手查返工依据，可翻页，跨项目读取被拒绝', { timeout: 30000 }, async t => {
+  let adapter: FeishuOptions | undefined;
+  const sent: string[] = [];
+  let todoId = '', otherId = '', projectOnly = false;
+  const { server, api, ask, requests } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.ok(req.tools.includes('todo_history'));
+      assert.match(req.system, /回执未知就说明未知/);
+      return projectOnly ? call('todo_history', { todoId: otherId }, 'foreign') : call('todo_history', { todoId }, 'latest');
+    }
+    if (req.callId === 'foreign') return call('todo_history', { todoId }, 'latest');
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[]).map(p => p.text).join('');
+    const result = JSON.parse(raw);
+    if (req.callId === 'latest') return call('todo_history', { todoId, before: result.nextBefore }, 'older');
+    return { role: 'assistant', content: '记录的返工原因是' + result.rounds[0].decisions[0].defects };
+  }, options => {
+    adapter = options;
+    return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    const project = await api('/projects', { name: '返工查询项目' });
+    todoId = (await api('/todos', { title: '复核汇总', projectId: project.id })).id;
+    otherId = (await api('/todos', { title: '其他项目资料' })).id;
+    for (let i = 0; i < 21; i++) {
+      const at = new Date(i * 1000).toISOString();
+      const run: Run = { id: 'review-' + i, executorId: 'fixture', projectId: project.id, todoId, conversationId: 'main',
+        prompt: '核对合成数据', status: 'completed', output: '合成结果', createdAt: at, updatedAt: at };
+      server.app.store.put('runs', run.id, run);
+    }
+    server.app.store.put('run-review.intents', 'review-history', { request: { todoId, runId: 'review-0', action: 'rework', defects: '合计缺一行' },
+      result: { todoId, runId: 'review-1', status: 'pending', updatedAt: new Date(1000).toISOString() } });
+    const question = '复核汇总第一次为什么返工？';
+    assert.equal(await ask(question), '记录的返工原因是合计缺一行');
+    projectOnly = true;
+    const bot = await api('/feishu/bots', { name: '返工查询', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter!.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter!.onMessage(question, { ...source, messageId: 'question' });
+    await t.waitFor(() => assert.ok(sent.some(text => text.includes('记录的返工原因是合计缺一行'))));
+    assert.equal(requests.filter(r => r.callId === 'older').length, 2);
+    const denied = requests.find(r => r.callId === 'foreign');
+    assert.match(JSON.stringify(denied?.content), /todoId 不属于当前作用域/);
+    assert.doesNotMatch(JSON.stringify(denied?.content), /其他项目资料/);
+    for (const response of requests.filter(r => r.callId === 'older')) {
+      assert.match(JSON.stringify(response.content), /合计缺一行/);
+      assert.match(JSON.stringify(response.content), /review-1/);
+    }
+    assert.equal(server.app.store.list('runs').length, 21);
+  } finally { await server.close(); }
+});

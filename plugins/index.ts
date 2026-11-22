@@ -145,6 +145,7 @@ export interface SystemActions {
   listExecutors?(): Json;
   status?(id: string): Json;
   readRun?(id: string): Promise<Json>;
+  todoHistory?(input: Record<string, unknown>): Json;
   inputRun?(id: string, text: string): Promise<Json>;
   cancelRun?(id: string): Promise<{ accepted: boolean }>;
   propose?(input: Record<string, unknown>): Json;
@@ -166,6 +167,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         // Business mutations stay in core services; tools only adapt model arguments.
         if (actions) {
           for (const [name, action, description, properties] of [
+            ['todo_history', actions.todoHistory, '按待办读取最近20轮执行及用户验收或返工决定，含返工派发回执。读取更早记录时将 nextBefore 作为 before。', { todoId: { type: 'string' }, before: { type: 'string' } }],
             ['work_decisions_list', actions.workDecisionsList, '读取当前范围的工作决定及版本；不是原始聊天，纠正后旧版本不可沿用。', { projectId: { type: 'string' }, todoId: { type: 'string' } }],
             ['work_decision_record', actions.workDecisionRecord, '按当前真实用户明确要求记录一个工作决定摘要；必须提供稳定key和内容，不自动推断私聊决定。', { key: { type: 'string' }, text: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' } }],
             ['work_decision_correct', actions.workDecisionCorrect, '按当前用户明确要求修正决定，必须核对当前version；旧引用随之失效。', { id: { type: 'string' }, version: { type: 'integer' }, text: { type: 'string' } }],
