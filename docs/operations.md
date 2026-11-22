@@ -199,7 +199,7 @@ SUPER_MARIO_TOKEN='同一访问令牌' super-mario-agent \
 
 转写成功后，可点「整理会议转写」核对标题、正文和归属，再提交到记忆整理队列。主对话未选项目时保存到个人记忆，已选项目或在项目对话中则保存到对应项目。核对框只预填本次转写。可补填会议的当地开始时间，核对 UTC 偏移后提交。留空时，整理器保留原文中的相对日期。整理结果和运行状态可在「记忆整理」查看。
 
-点击「录音转文字」选择 WAV、MP3、WebM、M4A、MP4、OGG 或 FLAC 文件（最多 8 MiB）。服务端会把录音发送到配置的转写服务，返回的文字追加到当前草稿。服务端环境变量 `SUPER_MARIO_TRANSCRIPTION_URL` 填写兼容 Audio Transcriptions 的完整端点，`SUPER_MARIO_TRANSCRIPTION_MODEL` 填写模型名。模型支持分段时，可设置 `SUPER_MARIO_TRANSCRIPTION_RESPONSE_FORMAT` 为 `verbose_json` 或 `diarized_json`。核对会议转写时会附上服务返回的分段秒数及说话人标签，保留完整正文。需要鉴权时填写 `SUPER_MARIO_TRANSCRIPTION_API_KEY`。
+点击「录音转文字」选择 WAV、MP3、WebM、M4A、MP4、OGG 或 FLAC 文件（最多 8 MiB）。服务端会把录音发送到配置的转写服务，返回的文字追加到当前草稿。服务端环境变量 `SUPER_MARIO_TRANSCRIPTION_URL` 填写兼容 Audio Transcriptions 的完整端点，`SUPER_MARIO_TRANSCRIPTION_MODEL` 填写模型名。模型支持分段时，可设置 `SUPER_MARIO_TRANSCRIPTION_RESPONSE_FORMAT` 为 `verbose_json` 或 `diarized_json`。核对会议转写时会附上服务返回的分段秒数及说话人标签，保留完整正文。已核实身份时，可在核对框填写标签对应的姓名；留空保留原标签。姓名对应关系仅用于当前录音。需要鉴权时填写 `SUPER_MARIO_TRANSCRIPTION_API_KEY`。
 
 在主对话点击「办公文件」，填写标题、格式和源内容，可生成并下载 Word、PowerPoint 或 Excel 文件。Word 和演示文稿接受 Markdown，Excel 接受 CSV 或含 sheets 的 JSON。Web 主助手和全局飞书机器人也可根据请求生成文件，回到工作台后可下载。执行机包含本地命令 `super-mario office docx 报告.md -o 报告.docx`，格式参数也支持 `pptx` 和 `xlsx`。CLI 可嵌入 Markdown 源文件目录内通过相对路径引用的 PNG、JPEG、GIF。Web 可嵌入源内容自带的图片数据。输出文件已存在时，选择新的文件名。已有文件可在「办公文件 → 查看已有文件内容摘要」上传检查，或在本机使用 `super-mario office check <文件>`。
 

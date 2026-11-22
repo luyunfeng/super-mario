@@ -162,7 +162,7 @@ test('会议文档未被受保护读取器接管时，初次整理与显式重�
 
 test('核对后的项目会议转写按会议提示词整理，重复提交复用任务', async t => {
   const f = await fixture(t);
-  const input = { materialKind: 'meeting-transcript', title: '样本评审', text: '提议周五复核，负责人未定。', meetingStartedAt: '2032-02-29T00:10+05:45', layer: 'project', projectId: 'sample' };
+  const input = { materialKind: 'meeting-transcript', speakerNames: { A: '样本发言人' }, title: '样本评审', text: '提议周五复核，负责人未定。', meetingStartedAt: '2032-02-29T00:10+05:45', layer: 'project', projectId: 'sample' };
   assert.throws(() => f.curator.addSource({ ...input, meetingStartedAt: '2031-02-29T00:10+05:45' }), /有效日期/);
   assert.throws(() => f.curator.addSource({ ...input, meetingStartedAt: '2032-02-29T00:10' }), /UTC 偏移/);
   const job = f.curator.addSource(input);
@@ -180,6 +180,8 @@ test('核对后的项目会议转写按会议提示词整理，重复提交复�
   assert.ok((await readFile(f.raw(job.id), 'utf8')).endsWith(input.text));
   await f.restart();
   const { sources } = await f.curator.pageSources(page!.id, undefined, 'sample');
+  assert.deepEqual(sources?.[0].speakerNames, { A: '样本发言人' });
+  assert.match(f.submissions[0]!, /本次录音由用户核对的说话人/);
   assert.equal(sources?.[0].meetingStartedAt, '2032-02-29T00:10:00+05:45');
   const original = await f.curator.pageSources(page!.id, job.id, 'sample');
   assert.ok(original.content?.endsWith(input.text));
@@ -188,8 +190,9 @@ test('核对后的项目会议转写按会议提示词整理，重复提交复�
   assert.equal(attachment.truncated, false);
   assert.equal(f.curator.addSource({ ...input, meetingStartedAt: '2032-02-29T00:10:00+05:45' }).id, job.id);
   assert.notEqual(f.curator.addSource({ ...input, meetingStartedAt: '2032-03-01T00:10+05:45' }).id, job.id);
+  assert.throws(() => f.curator.addSource({ ...input, speakerNames: { A: '甲\n乙' } }), /单行文本/);
   const legacy = createHash('sha256').update(JSON.stringify([input.layer, input.projectId, input.title, input.text])).digest('hex');
-  assert.equal(f.curator.addSource({ ...input, meetingStartedAt: undefined }).id, 'transcript-' + legacy);
+  assert.equal(f.curator.addSource({ ...input, meetingStartedAt: undefined, speakerNames: undefined }).id, 'transcript-' + legacy);
   assert.equal(f.submissions.length, 1);
   assert.throws(() => f.curator.addSource({ ...input, url }), /须提供正文/);
   f.archive();

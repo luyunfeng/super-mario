@@ -535,6 +535,8 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     if (req.callId === 'handoff-sources') {
       const result = JSON.parse(typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text);
       assert.equal(result.sources[0].meeting, true);
+      assert.deepEqual(result.sources[0].speakerNames, { A: '样本发言人' });
+      assert.match(req.system, /不跨会议沿用/);
       assert.equal(result.sources[0].id, sourceId);
       return call('knowledge_original', { pageId, sourceId, handoffExcerpt: true }, 'handoff-original');
     }
@@ -605,7 +607,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     const other = await api('/projects', { name: '独立项目' });
     pageId = (await api('/knowledge', { layer: 'project', projectId, title, content: excerpt })).id;
     otherPage = (await api('/knowledge', { layer: 'project', projectId: other.id, title, content: '独立评审会：另一个项目的结论' })).id;
-    const job = server.app.knowledgeCurator.addSource({ materialKind: 'meeting-transcript', meetingStartedAt: '2032-02-29T00:10+05:45', title, text: excerpt, layer: 'project', projectId });
+    const job = server.app.knowledgeCurator.addSource({ materialKind: 'meeting-transcript', speakerNames: { A: '样本发言人' }, meetingStartedAt: '2032-02-29T00:10+05:45', title, text: excerpt, layer: 'project', projectId });
     sourceId = job.id;
     server.app.store.put('knowledge.sources', job.id, { ...job, status: 'completed', knowledgeIds: [pageId] });
     const meeting = { materialKind: 'meeting-transcript', layer: 'project', projectId, text: '合成来源' };

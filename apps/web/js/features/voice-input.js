@@ -40,6 +40,7 @@ export function createVoiceInput(input, beforeListen, api) {
         String(Math.floor(Math.abs(minutes) / 60)).padStart(2, '0') + ':' + String(Math.abs(minutes) % 60).padStart(2, '0');
     });
     if (recorded) started.dispatchEvent(new Event('input'));
+    const speakers = transcript.speakers.map(label => ({ label, control: Input({ placeholder: '留空保留原标签' }) }));
     const body = TextArea({ value: transcript.text, rows: 12, maxLength: 200000 });
     const status = h('p', { role: 'status' });
     const save = Button({ label: '提交会议整理', onClick: async () => {
@@ -51,7 +52,9 @@ export function createVoiceInput(input, beforeListen, api) {
       save.disabled = true;
       const dialog = review;
       try {
+        const names = speakers.filter(row => row.control.value.trim()).map(row => [row.label, row.control.value.trim()]);
         const job = await api.post('/knowledge/sources', { materialKind: 'meeting-transcript', title: title.value.trim(),
+          ...(names.length ? { speakerNames: Object.fromEntries(names) } : {}),
           ...(started.value ? { meetingStartedAt: started.value + offset.value.trim() } : {}),
           text: body.value.trim(), layer: destination.projectId ? 'project' : 'personal', ...(destination.projectId ? { projectId: destination.projectId } : {}) });
         if (binding !== captured || review !== dialog) return;
@@ -63,7 +66,8 @@ export function createVoiceInput(input, beforeListen, api) {
     } });
     const dialog = openDrawer({ title: '核对会议转写', subtitle: '保存到' + destination.label,
       body: [Field({ label: '会议标题', control: title }), Field({ label: '会议开始时间（可选）', control: started, hint: recorded ? '已填入开始录音的时间，可按实际开会时间修改。' : undefined }),
-        Field({ label: '会议时区（UTC 偏移）', control: offset, hint: '默认使用本机在所选日期的偏移，可按会议所在地修改。' }), Field({ label: '转写正文', control: body }), status],
+        Field({ label: '会议时区（UTC 偏移）', control: offset, hint: '默认使用本机在所选日期的偏移，可按会议所在地修改。' }), ...speakers.map(row => Field({ label: '说话人 ' + row.label + ' 的姓名（可选）', control: row.control })),
+        Field({ label: '转写正文', control: body }), status],
       footer: save, onClose: () => { if (review === dialog) review = null; } });
     review = dialog;
   }
@@ -125,7 +129,8 @@ export function createVoiceInput(input, beforeListen, api) {
       const segments = result.segments?.map(row => '[' + row.start + '–' + row.end + ' 秒] ' +
         (row.speaker ? row.speaker + '：' : '') + row.text);
       const reviewedText = segments?.length ? text + '\n\n录音分段（音频内时间）：\n' + segments.join('\n') : text;
-      transcript = { title, text: reviewedText, startedAt };
+      const speakers = [...new Set(result.segments?.map(row => row.speaker).filter(Boolean))];
+      transcript = { title, text: reviewedText, startedAt, speakers };
       const addition = coverage.length && input.value && !input.value.endsWith('\n') ? '\n' + text : text;
       meeting.hidden = !destination;
       if (input.maxLength >= 0 && input.value.length + addition.length > input.maxLength) {

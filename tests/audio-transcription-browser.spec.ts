@@ -102,6 +102,7 @@ test('录音经认证服务转写后追加到当前草稿，失败和切换项�
   delete process.env.SUPER_MARIO_TRANSCRIPTION_RESPONSE_FORMAT;
   const annotated = '合成转写\n\n录音分段（音频内时间）：\n[0–1.25 秒] A：合成\n[1.25–2 秒] 转写';
   await expect(review.getByLabel('转写正文')).toHaveValue(annotated);
+  await review.getByLabel('说话人 A 的姓名（可选）').fill('样本发言人');
   await expect(review.getByLabel('会议开始时间（可选）')).toHaveValue('');
   await expect(review.getByLabel('会议时区（UTC 偏移）')).toBeDisabled();
   await review.getByLabel('会议开始时间（可选）').fill('2032-02-29T00:10');
@@ -117,6 +118,7 @@ test('录音经认证服务转写后追加到当前草稿，失败和切换项�
   const jobs = server.app.knowledgeCurator.status().jobs;
   expect(jobs).toHaveLength(1);
   expect(server.app.store.get<{ text: string }>('knowledge.sources', jobs[0].id)?.text).toBe(annotated + '\n负责人待确认。');
+  expect(server.app.store.get<{ speakerNames: Record<string, string> }>('knowledge.sources', jobs[0].id)?.speakerNames).toEqual({ A: '样本发言人' });
   expect(jobs[0]).toMatchObject({ title: '合成评审', meetingStartedAt: '2032-02-29T00:10:00+05:45', materialKind: 'meeting-transcript', projectId: project.id, layer: 'project', status: 'queued' });
   await expect(work).toHaveValue('合成转写');
   const record = page.getByRole('button', { name: '录音后转写' });
