@@ -311,6 +311,11 @@ export function createChatPage({ api, store, scope, router }) {
   return {
     el,
     onShow(route) {
+      const savedDraft = draftKey ? drafts.read(draftKey) : '';
+      if (input.value !== savedDraft) {
+        input.value = savedDraft;
+        autosize();
+      }
       quote.restore(quotesEnabled ? draftKey : null);
       prompts.reset();
       recent.refresh();

@@ -456,3 +456,41 @@ test('会议日回顾按时区和项目分页，空结果区分未注日期，�
   await recap.getByRole('list', { name: '上午' }).getByRole('link', { name: '查看原文 · 项目评审记录' }).click();
   await expect(page.getByRole('dialog', { name: '编辑记忆' }).locator('pre')).toHaveText(base.text);
 });
+
+test('会议回顾问题带入所选对话，保留已有草稿并等待发送', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-recap-draft-'));
+  const server = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1', token: 'fixture', demo: true });
+  t.after(async () => { await server.close(); await rm(dir, { recursive: true, force: true }); });
+  const project = await server.app.createProject({ name: '草稿样本' });
+  server.app.knowledgeCurator.addSource({ title: '评审记录', text: '复核数量', materialKind: 'meeting-transcript',
+    meetingStartedAt: '2032-02-28T11:00Z', layer: 'project', projectId: project.id });
+  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+  const sends: string[] = [];
+  page.on('request', request => {
+    if (request.method() === 'POST' && request.url().endsWith('/messages')) sends.push(request.url());
+  });
+  await page.goto(server.url + '/#chat?token=fixture');
+  const main = page.getByRole('textbox', { name: '给 Agent 的消息' });
+  await main.fill('主对话原有草稿');
+  const workspace = server.url + '/#projects/' + project.id + '/workspace';
+  await page.goto(workspace);
+  const work = page.getByRole('textbox', { name: '项目目标' });
+  await work.fill('项目原有草稿');
+  for (const id of [project.id, '']) {
+    await page.goto(server.url + '/#memory');
+    await page.getByRole('button', { name: '会议日回顾' }).click();
+    const drawer = page.getByRole('dialog', { name: '会议日回顾' });
+    await drawer.getByLabel('回顾日期').fill('2032-02-28');
+    await drawer.getByLabel('回顾时区').fill('Asia/Tokyo');
+    await drawer.getByRole('combobox', { name: '项目' }).selectOption(id);
+    await drawer.getByRole('button', { name: '查询', exact: true }).click();
+    await drawer.getByRole('button', { name: '将回顾问题加入对话草稿' }).click();
+    await expect(page).toHaveURL(id ? workspace : server.url + '/#chat');
+    await expect(id ? work : main).toHaveValue(id ? /^项目原有草稿\n\n请按 Asia\/Tokyo 时区回顾 2032-02-28 当前项目/ :
+      /^主对话原有草稿\n\n请按 Asia\/Tokyo 时区回顾 2032-02-28 全部可见范围/);
+  }
+  expect(sends).toEqual([]);
+});

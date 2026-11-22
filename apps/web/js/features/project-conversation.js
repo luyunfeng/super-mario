@@ -235,6 +235,8 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
         generation++; request++; projectId = id; workspace = undefined;
       }
       syncDraft();
+      const savedDraft = draftKey ? drafts.read(draftKey) : '';
+      if (text.value !== savedDraft) text.value = savedDraft;
       quote.restore(quotesEnabled ? draftKey : null);
       paint(); void load();
     },

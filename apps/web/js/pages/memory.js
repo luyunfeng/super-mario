@@ -64,7 +64,7 @@ export function createMemoryPage({ api, store, router, scope }) {
   const list = h('div', { class: 'list' });
   const curatorLine = h('div', { class: 'row row--between curator', id: 'curator-line' });
 
-  const recap = Button({ label: '会议日回顾', size: 'sm', onClick: () => openMeetingDay({ api, store, scope }) });
+  const recap = Button({ label: '会议日回顾', size: 'sm', onClick: () => openMeetingDay({ api, store, scope, router }) });
   recap.hidden = true;
   const el = h('section', { class: 'page', id: 'memory' },
     h('div', { class: 'page__inner' },

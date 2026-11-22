@@ -1,11 +1,12 @@
 import { h, replace } from '../lib/dom.js';
+import { createConversationDrafts } from '../lib/conversation-drafts.js';
 import { Button, Field, Input, Select } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 
 const partNames = { morning: '上午', afternoon: '下午', evening: '晚间' };
 const statusNames = { queued: '等待整理', running: '整理中', awaiting_approval: '等待审批', completed: '已整理', failed: '整理失败', unknown: '结果未确认' };
 
-export function openMeetingDay({ api, store, scope }) {
+export function openMeetingDay({ api, store, scope, router }) {
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const date = Input({ type: 'date', value: new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()) });
   const zone = Input({ value: timezone });
@@ -19,7 +20,22 @@ export function openMeetingDay({ api, store, scope }) {
   const current = () => drawer.el.open && owner === api.draftOwner() && owner === store.view.snapshotOwner &&
     !store.view.unauthorized && store.view.snapshot?.plugins.some(p => p.id === 'knowledge-local' && p.status === 'active') &&
     (!project.value || store.view.snapshot.projects.some(p => p.id === project.value && !p.archivedAt));
+  const drafts = createConversationDrafts({ api, store });
+  let question = '';
+  const ask = Button({ label: '将回顾问题加入对话草稿', size: 'sm', onClick() {
+    if (!question || !current()) return;
+    const id = project.value;
+    const key = JSON.stringify(id ? ['project', id] : ['main', '']);
+    const previous = drafts.read(key);
+    const text = previous ? previous + '\n\n' + question : question;
+    if (text.length > 20000) { summary.textContent = '对话草稿空间不足，请先缩短已有草稿。'; return; }
+    drafts.write(key, text);
+    drawer.close();
+    if (!id) scope.set('');
+    router.go(id ? router.href('projects', id, 'workspace') : router.href('chat'));
+  } });
   function reset() {
+    ask.hidden = true; question = '';
     request++; nextOffset = null; more.hidden = true; replace(timeline); lastPart = null; displayed = 0; summary.textContent = '';
   }
   async function load(offset = 0) {
@@ -49,6 +65,9 @@ export function openMeetingDay({ api, store, scope }) {
       }
       summary.textContent = (result.total ? '已显示 ' + displayed + ' / ' + result.total + ' 份来源。' : '当天没有已登记日期的会议来源。') +
         (result.undated ? '另有 ' + result.undated + ' 份来源未注明会议日期。' : '');
+      question = '请按 ' + result.timezone + ' 时区回顾 ' + result.date + (project.value ? ' 当前项目' : ' 全部可见范围') +
+        '的会议。按时间梳理决定、行动项和未决问题，附上原文依据，并标明哪些会议资料尚待核实。';
+      ask.hidden = !result.total;
       nextOffset = result.nextOffset;
       more.hidden = nextOffset === null;
     } catch (error) {
@@ -61,7 +80,7 @@ export function openMeetingDay({ api, store, scope }) {
     Field({ label: '回顾日期', control: date }), Field({ label: '回顾时区', control: zone }), Field({ label: '项目', control: project }),
     h('button', { type: 'submit', class: 'btn btn--primary' }, '查询'));
   form.addEventListener('input', reset);
-  const drawer = openDrawer({ title: '会议日回顾', body: [form, summary, timeline, more], onClose: () => { request++; unsubscribe(); } });
+  const drawer = openDrawer({ title: '会议日回顾', body: [form, summary, ask, timeline, more], onClose: () => { request++; unsubscribe(); } });
   const unsubscribe = store.subscribe(() => { if (!current()) drawer.close(); });
   void load();
 }
