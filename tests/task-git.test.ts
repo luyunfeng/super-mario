@@ -18,6 +18,7 @@ test('commit evidence covers only committed changes under the run directory', as
   });
   git('init', '-q');
   await writeFile(join(cwd, 'old.txt'), 'deleted line\n');
+  await writeFile(join(cwd, 'edited.txt'), 'before\n');
   git('add', '.');
   git('commit', '--allow-empty', '-qm', 'base');
   const base = taskHead(cwd)!;
@@ -26,6 +27,7 @@ test('commit evidence covers only committed changes under the run directory', as
   await writeFile(join(root, 'outside'), 'outside\n');
   assert.deepEqual(taskCommitChanges(cwd, base), { base, head: base, files: 0, added: 0, deleted: 0 });
   await rm(join(cwd, 'old.txt'));
+  await writeFile(join(cwd, 'edited.txt'), 'after\n');
   await writeFile(join(cwd, '.env'), 'synthetic\n');
   await writeFile(join(cwd, '[example]'), 'literal path\n');
   git('add', '.');
@@ -33,9 +35,14 @@ test('commit evidence covers only committed changes under the run directory', as
   const head = taskHead(cwd);
   await writeFile(join(cwd, 'two\tlines'), 'uncommitted\n');
   const range = taskCommitChanges(cwd, base)!;
-  assert.deepEqual(range, { base, head, files: 5, added: 4, deleted: 1 });
+  assert.deepEqual(range, { base, head, files: 6, added: 5, deleted: 2 });
   const params = { cwd, range };
-  assert.deepEqual(await readCommitDiff(params), { files: ['[example]', 'binary', 'old.txt'], hidden: 2 });
+  assert.deepEqual(await readCommitDiff(params), { files: ['[example]', 'binary', 'edited.txt', 'old.txt'], hidden: 2, changes: [
+    { path: '[example]', status: 'A', binary: false, added: 1, deleted: 0 },
+    { path: 'binary', status: 'A', binary: true, added: null, deleted: null },
+    { path: 'edited.txt', status: 'M', binary: false, added: 1, deleted: 1 },
+    { path: 'old.txt', status: 'D', binary: false, added: 0, deleted: 1 },
+  ] });
   assert.match(JSON.stringify(await readCommitDiff({ ...params, path: 'old.txt' })), /-deleted line/);
   assert.match(JSON.stringify(await readCommitDiff({ ...params, path: '[example]' })), /\+literal path/);
   await assert.rejects(readCommitDiff({ ...params, path: 'binary' }), /文本/);

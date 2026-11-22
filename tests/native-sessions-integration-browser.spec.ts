@@ -70,11 +70,12 @@ console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:21,cached_
  const run=server.app.store.list<Run>('runs')[0];assert.equal(run.nativeSessionId,nativeId);assert.equal(run.nativeResume?.nativeSessionId,nativeId);assert.notEqual(run.sessionId,nativeId);assert.equal(run.resultSource,'codex-json');assert.equal(run.output,'fixture native recovery evidence');assert.equal(creates,1);
  const diffUrl = '/runs/' + run.id + '/commit-diff';
  assert.equal((await api(diffUrl + '?base=other')).status, 400);
- assert.deepEqual((await api(diffUrl)).data, { files: ['result.txt'], hidden: 0 });
+ const changes = [{ path: 'result.txt', status: 'A', binary: false, added: 1, deleted: 0 }];
+ assert.deepEqual((await api(diffUrl)).data, { files: ['result.txt'], changes, hidden: 0 });
  await writeFile(join(cwd, 'result.txt'), 'later uncommitted content');
  const diffTool = server.app.contributions.list('tools').find(entry => entry.value.name === 'run_commit_diff')!.value;
  const signal = new AbortController().signal;
- assert.deepEqual(await diffTool.execute({ id: run.id }, signal), { id: run.id, files: ['result.txt'], hidden: 0, nextOffset: null });
+ assert.deepEqual(await diffTool.execute({ id: run.id }, signal), { id: run.id, files: ['result.txt'], changes, hidden: 0, nextOffset: null });
  const patch = (await api(diffUrl + '?path=result.txt')).data.text;
  const first = await diffTool.execute({ id: run.id, path: 'result.txt' }, signal);
  assert.deepEqual(first, { id: run.id, path: 'result.txt', text: patch.slice(0, 16000), nextOffset: 16000 });

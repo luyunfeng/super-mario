@@ -28,19 +28,25 @@ function openCommitDiff(options, commit, mode) {
   let sequence = 0;
   async function load() {
     try {
-      const { files, hidden, message, merge } = await api.get(url());
+      const { files, changes, hidden, author, authoredAt, message, merge } = await api.get(url());
       if (!active()) return;
       const output = h('pre', { class: 'code-sidebar__text', tabindex: 0 });
-      const picker = Select({ 'aria-label': '已提交文件', options: files.map(path => [path, path]), onChange: readFile });
+      const byPath = new Map((changes ?? []).map(change => [change.path, change]));
+      const labels = { A: '新增', M: '修改', D: '删除', T: '类型变化' };
+      const picker = Select({ 'aria-label': '已提交文件', options: files.map(path => {
+        const change = byPath.get(path);
+        return [path, change ? `${path} · ${labels[change.status] ?? change.status} · ${change.binary ? '二进制' : '+' + change.added + ' / −' + change.deleted}` : path];
+      }), onChange: readFile });
       async function readFile() {
         const stamp = ++sequence;
+        if (byPath.get(picker.value)?.binary) { output.textContent = '二进制文件没有文本补丁。'; return; }
         output.textContent = '正在读取文件差异…';
         try {
           const reply = await api.get(url(picker.value));
           if (active() && stamp === sequence) replace(output, renderDiffLines(reply.text));
         } catch (error) { if (active() && stamp === sequence) output.textContent = error.message; }
       }
-      replace(area, commit && h('code', null, commit), message && h('pre', { class: 'output' }, message),
+      replace(area, commit && h('code', null, commit), author && h('p', { class: 'small muted' }, '提交作者：', author, authoredAt && ' · ' + formatDate(authoredAt, true)), message && h('pre', { class: 'output' }, message),
         merge && h('p', null, '以下差异相对第一父提交。'), hidden > 0 && h('p', { class: 'muted small' }, `已隐藏 ${hidden} 个受限文件。`),
         files.length ? [picker, output] : h('p', null, '没有可查看的文件差异。'));
       if (files.length) await readFile();

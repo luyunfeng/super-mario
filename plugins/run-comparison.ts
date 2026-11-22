@@ -2,6 +2,12 @@ import { createHash } from 'node:crypto';
 import type { Extension } from '../packages/plugin-sdk/src/index.ts';
 import type { Json } from '../packages/protocol/src/index.ts';
 
+function visibleChanges(changes: Json | undefined, files: Json[]): Record<string, Json> {
+  if (!Array.isArray(changes)) return {};
+  const paths = new Set(files);
+  return { changes: changes.filter(change => change && typeof change === 'object' && !Array.isArray(change) && paths.has(change.path)) };
+}
+
 export function createRunComparison(read: (id: string, path?: string) => Promise<Json>, status: (id: string) => Promise<Json>,
   change: (id: string, path: string, area: string) => Promise<Json>, history: (id: string, mode: string, offset: number, version?: string, commit?: string, path?: string) => Promise<Json>): Extension {
   return {
@@ -45,8 +51,11 @@ export function createRunComparison(read: (id: string, path?: string) => Promise
           signal.throwIfAborted();
           if (commit && page && typeof page === 'object' && !Array.isArray(page)) {
             if (typeof page.text === 'string') return { ...page, text: page.text.slice(offset, offset + 16000), nextOffset: offset + 16000 < page.text.length ? offset + 16000 : null };
-            if (Array.isArray(page.files) && typeof page.message === 'string') return { ...page, message: page.message.slice(0, 4000), messageTruncated: page.message.length > 4000,
-              files: page.files.slice(offset, offset + 64), nextOffset: offset + 64 < page.files.length ? offset + 64 : null };
+            if (Array.isArray(page.files) && typeof page.message === 'string') {
+              const files = page.files.slice(offset, offset + 64);
+              return { ...page, ...visibleChanges(page.changes, files), files, message: page.message.slice(0, 4000),
+                messageTruncated: page.message.length > 4000, nextOffset: offset + files.length < page.files.length ? offset + files.length : null };
+            }
           }
           return page;
         },
@@ -74,7 +83,7 @@ export function createRunComparison(read: (id: string, path?: string) => Promise
               files.push(file);
               size += file.length;
             }
-            return { id, files, hidden: result.hidden ?? 0, nextOffset: offset + files.length < result.files.length ? offset + files.length : null };
+            return { id, files, ...visibleChanges(result.changes, files), hidden: result.hidden ?? 0, nextOffset: offset + files.length < result.files.length ? offset + files.length : null };
           }
           if (path !== undefined && result.path === path && typeof result.text === 'string') {
             const text = result.text.slice(offset, offset + 16000);

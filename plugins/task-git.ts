@@ -63,10 +63,28 @@ async function readObjectDiff(cwd: string, command: string[], objects: string[],
       return result.stdout;
     } catch { throw new Error('历史提交不可读或差异超过读取上限'); }
   };
-  const names = (await diff(['--name-only', '-z'], '.')).split('\0').filter(Boolean);
-  const files = names.filter(safePath);
-  if (path === undefined) return { files, hidden: names.length - files.length };
-  if (!files.includes(path)) throw new Error('文件不在此次执行的可查看差异中');
+  const entries = (await diff(['--name-status', '-z'], '.')).split('\0');
+  const visible = new Map<string, string>();
+  let hidden = 0;
+  for (let i = 0; i + 1 < entries.length; i += 2) {
+    const name = entries[i + 1]!;
+    if (safePath(name)) visible.set(name, entries[i]!);
+    else hidden++;
+  }
+  if (path === undefined) {
+    const changes = [];
+    for (const entry of (await diff(['--numstat', '-z'], '.')).split('\0')) {
+      if (!entry) continue;
+      const match = /^(\d+|-)\t(\d+|-)\t([\s\S]+)$/.exec(entry);
+      if (!match) throw new Error('历史提交的文件统计不完整');
+      const name = match[3]!, status = visible.get(name);
+      if (!status) continue;
+      const binary = match[1] === '-' || match[2] === '-';
+      changes.push({ path: name, status, binary, added: binary ? null : Number(match[1]), deleted: binary ? null : Number(match[2]) });
+    }
+    return { files: [...visible.keys()], hidden, changes };
+  }
+  if (!visible.has(path)) throw new Error('文件不在此次执行的可查看差异中');
   const text = await diff(['--patch'], path);
   if (/^Binary files /m.test(text) || /[\x00-\x08\x0b\x0c\x0e-\x1f\ufffd]/.test(text)) throw new Error('仅支持 UTF-8 文本差异');
   return { path, text };
@@ -234,13 +252,13 @@ export async function readWorktreeCommit(params: JsonObject): Promise<Json> {
     catch (error) { if ((error as { code?: number }).code === 1) return false; throw new Error('无法核实提交所属历史'); }
   };
   if (!await ancestor(head) || (mode === 'unmerged' && await ancestor(sourceHead))) throw new Error('提交不在当前工作树所选历史范围');
-  const info = await runGit(cwd, ['log', '-1', '--no-notes', '--no-show-signature', '--format=%H%x00%P%x00%B', commit, '--']);
-  const [hash, parents, message] = info.split('\0');
+  const info = await runGit(cwd, ['log', '-1', '--no-notes', '--no-show-signature', '--format=%H%x00%P%x00%an%x00%aI%x00%B', commit, '--']);
+  const [hash, parents, author, authoredAt, message] = info.split('\0');
   if (hash !== commit || parents === undefined || message === undefined) throw new Error('提交信息不完整');
   const parent = parents.split(' ')[0] || null;
   const result = await readObjectDiff(cwd, ['diff-tree', '--root', '--no-commit-id', '-r'], parent ? [parent, commit] : [commit], path);
   if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('提交差异回执无效');
-  return { ...result, commit, parent, ...(path === undefined && { message: message.trimEnd(), merge: parents.includes(' ') }) };
+  return { ...result, commit, parent, ...(path === undefined && { author: author ?? '', authoredAt: authoredAt ?? '', message: message.trimEnd(), merge: parents.includes(' ') }) };
 }
 
 export async function deleteRetainedBranch(params: JsonObject): Promise<Json> {

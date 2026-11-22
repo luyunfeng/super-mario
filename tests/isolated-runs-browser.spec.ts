@@ -151,6 +151,8 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   await history.getByRole('listitem').last().getByRole('button').click();
   const detail = page.getByRole('dialog', { name: '提交详情' });
   await expect(detail).toContainText(base);
+  await expect(detail).toContainText('提交作者：Fixture');
+  await expect(detail.getByRole('option', { name: 'shared.txt · 新增 · +1 / −0' })).toHaveCount(1);
   await detail.getByLabel('已提交文件').selectOption('shared.txt');
   await expect(detail.locator('pre.code-sidebar__text')).toContainText('+baseline');
   await detail.getByRole('button', { name: '关闭' }).click();
