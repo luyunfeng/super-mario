@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { chooseCommandTarget } from '../apps/server/src/feishu-command-routing.ts';
 import { startServer } from '../apps/server/src/index.ts';
 import type { FeishuOptions } from '../plugins/feishu.ts';
 import type { BotScope } from '../packages/protocol/src/bots.ts';
@@ -53,6 +54,21 @@ test('command handoff without a mention ID, actionable clarification, and revoca
   assert.deepEqual(hints.map(s => s.target), ['oc_private_' + target.appId]);
   assert.equal(app.mailboxes.list().some(e => e.direction === 'inbox' && e.sourceMessageId === projectSource.messageId), false);
 
+  let classifications = 0;
+  app.routeCommandProject = async () => { classifications++; return project.id; };
+  const named = async (id: string, message: string) => receivers.get(main.appId)!.onMessage(message, {
+    messageId: id, chatId, chatType: 'group', senderType: 'user', senderId,
+    mentionedSelf: true, mentions: [{ appId: main.appId, key: '@_user_1' }],
+  });
+  await named('om_named', '@_user_1 项目：海星\r\n检查进度');
+  assert.equal(app.mailboxes.list().find(e => e.direction === 'inbox' && e.sourceMessageId === 'om_named')?.status, 'pending');
+  await named('om_typo', '@_user_1 项目：海星星\n检查进度');
+  await named('om_empty', '@_user_1 项目：海星');
+  assert.ok(sent.some(s => s.target === chatId && s.text.includes('没有对应唯一的项目机器人')));
+  assert.ok(sent.some(s => s.target === chatId && s.text.includes('下一行写明要处理的任务')));
+  assert.ok(!app.mailboxes.list().some(e => e.direction === 'inbox' && ['om_typo', 'om_empty'].includes(e.sourceMessageId ?? '')));
+  assert.equal(classifications, 0);
+
   app.routeCommandProject = async () => project.id;
   await receive('om_pending');
   const inbox = app.mailboxes.list().find(e => e.direction === 'inbox' && e.sourceMessageId === 'om_pending');
@@ -65,4 +81,16 @@ test('command handoff without a mention ID, actionable clarification, and revoca
   assert.equal(bots.inboxHandlingStatus(inbox.id).active, false);
   await assert.rejects(app.mailboxes.confirm(inbox.id, inbox.version));
   await assert.rejects(bots.replyToInbox(inbox.id, inbox.version, '旧回复', 'revoked'), /项目/);
+});
+
+test('指定同名项目或一个项目对应多个机器人时，要求点名接收者', async () => {
+  const main = { botId: 'main', appId: 'main-app', status: 'joined' as const };
+  const first = { project: { id: 'one', name: '海星' }, target: { botId: 'first', appId: 'first-app',
+    revision: 1, ownerId: 'owner', projectId: 'one', name: '一号' } };
+  for (const projectId of ['one', 'two']) {
+    const second = { project: { id: projectId, name: '海星' }, target: { ...first.target, projectId, botId: 'second', appId: 'second-app' } };
+    const choice = await chooseCommandTarget('项目:海星\n检查进度', { chatId: 'group', messageId: 'task' }, main, [first, second]);
+    assert.equal(choice.target, undefined);
+    assert.match(choice.question ?? '', /没有对应唯一的项目机器人/);
+  }
 });

@@ -80,6 +80,7 @@ test('configured main API receives one isolated tool-free request and creates no
   assert.equal(request.max_tokens ?? request.max_completion_tokens, 128);
   assert.deepEqual(request.tools ?? [], []);
   assert.equal(request.messages.length, 2);
+  assert.match(request.messages[0].content, /转述、引用或否定/);
   assert.deepEqual(JSON.parse(request.messages[1].content), { text: '核对报销', candidates: projects });
   assert.ok(!(await readdir(dir, { recursive: true })).some(path => /session|jsonl|sqlite/.test(path)));
 });

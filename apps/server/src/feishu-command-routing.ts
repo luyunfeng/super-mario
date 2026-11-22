@@ -21,8 +21,9 @@ function refersTo(mention: FeishuMention, member: Pick<CommandGroupMember, 'open
 
 export async function chooseCommandTarget(text: string, source: FeishuMessageSource,
   main: CommandGroupMember, candidates: CommandCandidate[], classify?: CommandClassifier): Promise<Pick<CommandRoute, 'target' | 'question'>> {
-  const clarify = { question: '请把原任务再发一次，并只 @ 一个已加入的项目机器人。' };
+  const clarify = { question: '请把原任务再发一次，并只 @ 一个已加入的项目机器人。也可只 @ 总指挥，正文首行写「项目：项目全名」，下一行写原任务。' };
   const mentions = source.mentions ?? [];
+  let task = text.trim();
   if (mentions.length) {
     const selected = mentions.map(mention => candidates.filter(candidate => refersTo(mention, candidate.target)));
     const mainOnly = mentions.every(mention => refersTo(mention, main))
@@ -32,11 +33,24 @@ export async function chooseCommandTarget(text: string, source: FeishuMessageSou
       if (!target || !selected.every(matches => matches.length === 1 && matches[0]!.target.botId === target.botId)) return clarify;
       return { target: { ...target, openId: target.openId ?? mentions.find(m => m.appId === target.appId)?.openId } };
     }
+    // The authenticated main mention may precede the project header in plain-text events.
+    for (const mention of mentions) {
+      if (mention.key && task.startsWith(mention.key) && /^\s/.test(task.slice(mention.key.length))) {
+        task = task.slice(mention.key.length).trimStart();
+      }
+    }
   }
   if (!candidates.length) return { question: '当前群没有可接收任务的项目机器人，请先同步群成员。' };
+  const header = /^项目[：:]([^\r\n]*)(?:\r?\n|$)/.exec(task);
+  if (header) {
+    if (!task.slice(header[0].length).trim()) return { question: '请在项目全名下一行写明要处理的任务，再一起发送。' };
+    const matches = candidates.filter(candidate => candidate.project.name.trim() === header[1]!.trim());
+    return matches.length === 1 ? { target: matches[0]!.target }
+      : { question: '项目全名没有对应唯一的项目机器人。' + clarify.question };
+  }
   const projects = [...new Map(candidates.map(c => [c.project.id, c.project])).values()];
   let selected: string | undefined;
-  try { selected = await classify?.(text, projects); } catch { return clarify; }
+  try { selected = await classify?.(task, projects); } catch { return clarify; }
   const matches = candidates.filter(candidate => candidate.project.id === selected);
   return matches.length === 1 ? { target: matches[0]!.target } : clarify;
 }

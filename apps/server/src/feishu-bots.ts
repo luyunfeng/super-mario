@@ -594,7 +594,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       // The project app can authenticate its own paired user but cannot speak for the main app.
       // A private hint is safe even if only mentioned bots received the original group event.
       const entry = await put(bot, { direction: 'outbox', eventKey: 'command-help:' + key, title: '总指挥群路由提示',
-        text: '总指挥机器人尚未确认收到这条群消息。若群里没有分派反馈，请把原任务再发一次，只 @ 总指挥机器人，并在正文写明项目全名。',
+        text: '总指挥机器人尚未确认收到这条群消息。若群里没有分派反馈，请把原任务再发一次，只 @ 总指挥机器人，正文首行写「项目：项目全名」，下一行写原任务。',
         target: paired.chatId, sourceMessageId: source.messageId, requiresConfirmation: false });
       if (entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
     };
