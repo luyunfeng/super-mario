@@ -97,7 +97,18 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   const relevance = Input({ name: 'relevance', type: 'number', min: 0, max: 100, step: 1, value: entry?.relevance ?? '', placeholder: '未评分' });
   const importance = Select({ name: 'importance', value: entry?.importance ?? '', options: [['', '未设置'], ...['P0', 'P1', 'P2', 'P3'].map(level => [level, level])] });
   const tags = TextArea({ name: 'tags', value: (entry?.tags ?? []).join('\n'), rows: 2, placeholder: '每行一个标签' });
-  let expectedUpdatedAt = entry?.updatedAt;
+  // Keep each field's last reviewed value, so accepting a concurrent change
+  // cannot replace someone else's edits with untouched values from this form.
+  const fields = [title, content, facts, tags, importance, relevance];
+  function editValues(page) {
+    return [page.title, page.content, page.confirmedFacts ?? '', (page.tags ?? []).join('\n'),
+      page.importance ?? '', String(page.relevance ?? '')].map(value => value.replace(/\r\n?/g, '\n'));
+  }
+  let baseline = entry && editValues(entry);
+  let reviewed = entry;
+  function changedScope() {
+    return layer.value !== reviewed.layer || (layer.value === 'project' && project.value !== reviewed.projectId);
+  }
   const conflict = h('div', { class: 'stack' });
   const note = h('p', { class: 'small text-danger', role: 'alert' });
   const layerHint = h('span', { class: 'field__hint' });
@@ -116,7 +127,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   }
   function ask(source, original) {
     if (!mayQuote()) { note.textContent = '当前无法引用，请检查插件和知识页状态。'; return; }
-    if (facts.value !== (entry.confirmedFacts ?? '') || title.value !== entry.title || content.value !== entry.content || layer.value !== entry.layer || project.value !== (entry.projectId ?? '')) {
+    if (fields.some((field, i) => field.value !== baseline[i]) || changedScope()) {
       note.textContent = '请先保存记忆修改，再引用原文。'; return;
     }
     const drafts = createConversationDrafts({ api, store });
@@ -146,18 +157,13 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   }
 
   async function loadDraft(revision) {
-    const revisionTags = (revision.tags ?? []).join('\n');
-    if (facts.value === (revision.confirmedFacts ?? '') && title.value === revision.title && content.value === revision.content && tags.value === revisionTags && importance.value === (revision.importance ?? '') && relevance.value === String(revision.relevance ?? '')) return;
-    if (facts.value !== (entry.confirmedFacts ?? '') || title.value !== entry.title || content.value !== entry.content || tags.value !== (entry.tags ?? []).join('\n') || importance.value !== (entry.importance ?? '') || relevance.value !== String(entry.relevance ?? '')) {
+    const values = editValues(revision);
+    if (fields.every((field, i) => field.value === values[i])) return;
+    if (fields.some((field, i) => field.value !== baseline[i])) {
       const replaceDraft = await confirmDialog({ title: '替换当前草稿？', message: '载入这次修订会替换编辑框中的标题、正文、已确认事实、标签、重要级和相关度。', confirmLabel: '载入修订' });
       if (!replaceDraft) return;
     }
-    title.value = revision.title;
-    content.value = revision.content;
-    facts.value = revision.confirmedFacts ?? '';
-    tags.value = revisionTags;
-    relevance.value = revision.relevance ?? '';
-    importance.value = revision.importance ?? '';
+    fields.forEach((field, i) => { field.value = values[i]; });
     content.focus();
   }
 
@@ -168,7 +174,15 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
       if (!title.value.trim() || !content.value.trim()) { note.textContent = '请填写标题和内容。'; return; }
       if (layer.value === 'project' && !project.value) { note.textContent = '请选择所属项目。'; return; }
       if (!relevance.validity.valid) { note.textContent = '相关度须为 0 至 100 的整数。'; return; }
-      const body = { confirmedFacts: facts.value, relevance: relevance.value === '' ? null : relevance.valueAsNumber, ...(entry ? { expectedUpdatedAt } : {}), importance: importance.value || null, tags: tags.value.split('\n').map(tag => tag.trim()).filter(Boolean), layer: layer.value, title: title.value.trim(), content: content.value.trim(), ...(layer.value === 'project' ? { projectId: project.value } : {}) };
+      const body = { confirmedFacts: facts.value, relevance: relevance.value === '' ? null : relevance.valueAsNumber, ...(entry ? { expectedUpdatedAt: reviewed.updatedAt } : {}), importance: importance.value || null, tags: tags.value.split('\n').map(tag => tag.trim()).filter(Boolean), layer: layer.value, title: title.value.trim(), content: content.value.trim(), ...(layer.value === 'project' ? { projectId: project.value } : {}) };
+      if (entry) {
+        // A facts-only edit must also preserve the original bytes of untouched Markdown.
+        for (const [i, field] of fields.entries()) {
+          if (field.value === baseline[i]) delete body[field.name];
+        }
+        if (!changedScope()) { delete body.layer; delete body.projectId; }
+        if (Object.keys(body).length === 1) { drawer.close(); return; }
+      }
       try { await (entry ? api.patch(`/knowledge/${encodeURIComponent(entry.id)}`, body) : api.post('/knowledge', body)); }
       catch (error) {
         note.textContent = `没有保存成功：${error.message}。草稿已保留。`;
@@ -185,7 +199,15 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
             h('span', { class: 'small' }, '标签：' + (latest.tags?.join('、') || '无')),
             h('pre', { class: 'small', style: { whiteSpace: 'pre-wrap' } }, latest.content),
             Button({ label: '已核对新版，继续编辑草稿', onClick() {
-              expectedUpdatedAt = latest.updatedAt;
+              const next = editValues(latest);
+              fields.forEach((field, i) => { if (field.value === baseline[i]) field.value = next[i]; });
+              if (!changedScope()) {
+                layer.value = latest.layer;
+                project.value = latest.projectId ?? '';
+                sync();
+              }
+              reviewed = latest;
+              baseline = next;
               replace(conflict); note.textContent = '已核对版本，编辑草稿后可再次保存。';
               content.focus();
             } }));
