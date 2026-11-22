@@ -43,9 +43,7 @@ export const replyReadAloud: Extension = {
   id: 'reply-read-aloud', name: '回复朗读', capabilities: ['web.conversation.read-aloud'], activate() {},
 };
 
-export const voiceInput: Extension = {
-  id: 'voice-input', name: '语音输入', capabilities: ['web.conversation.dictation'], activate() {},
-};
+export { voiceInput } from './voice-input.ts';
 
 export const conversationQuotes: Extension = {
   id: 'conversation-quotes', name: '消息引用', capabilities: ['web.conversation.quotes'], activate() {},

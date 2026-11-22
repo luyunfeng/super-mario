@@ -171,6 +171,8 @@ SUPER_MARIO_TOKEN='同一访问令牌' super-mario-agent \
 
 主对话和项目工作对话的「语音输入」使用浏览器提供的识别服务，部分浏览器会将音频发给其服务商。允许麦克风后可查看临时字幕，已识别文字会追加到草稿。点击「结束听写」后可编辑并发送。切换范围或离开对话会停止听写。
 
+点击「录音转文字」选择 WAV、MP3、WebM、M4A、MP4、OGG 或 FLAC 文件（最多 8 MiB）。服务端会把录音发送到配置的转写服务，返回的文字追加到当前草稿。服务端环境变量 `SUPER_MARIO_TRANSCRIPTION_URL` 填写兼容 Audio Transcriptions 的完整端点，`SUPER_MARIO_TRANSCRIPTION_MODEL` 填写模型名；需要鉴权时填写 `SUPER_MARIO_TRANSCRIPTION_API_KEY`。
+
 在主对话点击「办公文件」，填写标题、格式和源内容，可生成并下载 Word、PowerPoint 或 Excel 文件。Word 和演示文稿接受 Markdown，Excel 接受 CSV 或含 sheets 的 JSON。Web 主助手和全局飞书机器人也可根据请求生成文件，回到工作台后可下载。执行机包含本地命令 `super-mario office docx 报告.md -o 报告.docx`，格式参数也支持 `pptx` 和 `xlsx`。CLI 可嵌入 Markdown 源文件目录内通过相对路径引用的 PNG、JPEG、GIF。Web 可嵌入源内容自带的图片数据。输出文件已存在时，选择新的文件名。已有文件可在「办公文件 → 查看已有文件内容摘要」上传检查，或在本机使用 `super-mario office check <文件>`。
 
 启用「回复翻译」后，在主对话或项目工作会话的助手回复下点「翻译回复」可查看简体中文译文，点「查看原文」可切回。译文在内存中缓存，更换模型后重新翻译。每条回复最多支持 32,000 个字符，演示模式会提示翻译不可用。

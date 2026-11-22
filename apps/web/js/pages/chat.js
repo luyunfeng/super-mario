@@ -61,7 +61,7 @@ export function createChatPage({ api, store, scope, router }) {
   // —— 输入框 ——
   const input = h('textarea', { class: 'composer__input', id: 'message-text', rows: 1, placeholder: '说出目标，Enter 发送，Shift + Enter 换行', 'aria-label': '给 Agent 的消息', maxLength: 20000 });
   const readAloud = createReplyReadAloud(router, () => voice.reset());
-  const voice = createVoiceInput(input, readAloud.stop);
+  const voice = createVoiceInput(input, readAloud.stop, api);
   const drafts = createConversationDrafts({ api, store });
   const quote = createMessageQuote({ drafts, input, store, router, scope });
   const edit = createMessageEdit({ input, quote, context: composerContext });
@@ -72,7 +72,7 @@ export function createChatPage({ api, store, scope, router }) {
   const status = h('p', { class: 'small composer__status', role: 'status' });
   const form = h('form', { class: 'composer', id: 'message-form' },
     recent.el,
-    h('div', { class: 'composer__box' }, edit.notice, quote.bar, prompts.menu, input, voice.caption, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, voice.button, h('span', { class: 'grow' }), send)), status);
+    h('div', { class: 'composer__box' }, edit.notice, quote.bar, prompts.menu, input, voice.caption, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, voice.button, voice.upload, h('span', { class: 'grow' }), send)), status);
 
   const el = h('section', { class: 'page page--chat', id: 'chat' }, h('div', { class: 'chat-code-main' }, top, scroller, form), code.el);
 

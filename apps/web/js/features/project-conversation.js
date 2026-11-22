@@ -36,7 +36,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const messages = h('div', { class: 'project-conversation__messages', role: 'log', 'aria-label': '项目对话' });
   const text = TextArea({ rows: 3, placeholder: '告诉我这个文件夹里要做什么，我们持续推进。', 'aria-label': '项目目标' });
   const readAloud = createReplyReadAloud(router, () => voice.reset());
-  const voice = createVoiceInput(text, readAloud.stop);
+  const voice = createVoiceInput(text, readAloud.stop, api);
   let visible = false;
   const quote = createMessageQuote({ drafts, input: text, store, router, scope });
   const edit = createMessageEdit({ input: text, quote, context: composerContext });
@@ -54,7 +54,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   });
   const send = Button({ label: '发送目标', kind: 'primary', onClick: submit });
   const notice = h('div', { 'aria-live': 'polite' });
-  const composer = h('div', { class: 'project-conversation__composer stack' }, edit.notice, quote.bar, prompts.menu, text, voice.caption, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, voice.button, send), notice);
+  const composer = h('div', { class: 'project-conversation__composer stack' }, edit.notice, quote.bar, prompts.menu, text, voice.caption, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, voice.button, voice.upload, send), notice);
   const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, favorites.button, transcript.button, code.toggle)), status, locationNote, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
   let draftKey, owner, enabled, quotesEnabled, editEnabled, epoch = 0;
