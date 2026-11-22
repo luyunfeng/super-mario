@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, writeFile, chmod, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, chmod, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { terminalCommand, terminalSocketPath } from '../plugins/terminal-endpoint.ts';
 import { createTerminalHost } from '../plugins/terminal-host.ts';
 import type { TerminalFrame } from '../packages/protocol/src/index.ts';
 
@@ -81,6 +82,67 @@ test('status probes version, observation capability and running protocol without
   const missing = createTerminalHost({ command: join(tmpdir(), 'super-mario-missing-' + Date.now()) });
   assert.equal((await missing.status()).available, false);
   await assert.rejects(missing.list(), /ENOENT/);
+});
+
+test('service environment discovers named sockets and an installation outside its PATH', async t => {
+  const { dir } = await fixture(t);
+  const env = { HOME: dir, PATH: '/missing', XDG_CONFIG_HOME: join(dir, 'config'), HERDR_SESSION: 'review-1' };
+  const userBin = join(dir, '.local', 'bin');
+  await mkdir(userBin, { recursive: true });
+  const installed = join(userBin, 'herdr');
+  await writeFile(installed, '#!/bin/sh\n', { mode: 0o700 });
+  assert.equal(terminalCommand(undefined, env), installed);
+  assert.equal(terminalCommand('/missing/custom-herdr', env), '/missing/custom-herdr');
+  assert.equal(terminalSocketPath(env), join(env.XDG_CONFIG_HOME, 'herdr/sessions/review-1/herdr.sock'));
+  assert.equal(terminalSocketPath({ ...env, HERDR_SOCKET_PATH: '/tmp/custom.sock' }), '/tmp/custom.sock');
+  assert.equal(terminalSocketPath({ HOME: dir }), join(dir, '.config/herdr/herdr.sock'));
+  assert.throws(() => terminalSocketPath({ ...env, HERDR_SESSION: '../escape' }));
+  assert.throws(() => terminalSocketPath({ ...env, HERDR_SESSION: 'x'.repeat(65) }));
+});
+
+test('explicit start is idempotent, coalesces concurrent callers and keeps agent credentials out of the host', async t => {
+  const { dir } = await fixture(t);
+  const command = join(dir, 'test-start.cjs');
+  const state = join(dir, 'state');
+  await writeFile(command, `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2).join(' ');
+const state = process.env.HERDR_SOCKET_PATH;
+if (args === 'status server --json') {
+  console.log(JSON.stringify({ running: fs.existsSync(state), compatible: true }));
+} else if (args === 'server') {
+  fs.appendFileSync(state, JSON.stringify({ leaked: !!process.env.SUPER_MARIO_TOKEN || !!process.env.ANTHROPIC_API_KEY, session: process.env.HERDR_SESSION }) + '\\n');
+} else process.exit(1);
+`, { mode: 0o700 });
+  const host = createTerminalHost({ command, env: { HOME: dir, INVOCATION_ID: '', HERDR_ENV: '', HERDR_SOCKET_PATH: state,
+    HERDR_SESSION: 'synthetic', SUPER_MARIO_TOKEN: 'fixture', ANTHROPIC_API_KEY: 'fixture' } });
+  assert.deepEqual(await Promise.all([host.startServer(), host.startServer()]), [{ running: true }, { running: true }]);
+  assert.deepEqual(await host.startServer(), { running: true });
+  assert.deepEqual((await readFile(state, 'utf8')).trim().split('\n').map(s => JSON.parse(s)), [{ leaked: false, session: 'synthetic' }]);
+  // Simulate a user manager and run its actual command vector locally; never contact systemd.
+  const runtime = join(dir, 'runtime');
+  await mkdir(join(runtime, 'systemd'), { recursive: true });
+  await writeFile(join(runtime, 'systemd/private'), '');
+  const managerLog = join(dir, 'unit-arguments');
+  await writeFile(join(dir, 'systemd-run'), `#!${process.execPath}
+const fs = require('node:fs'), cp = require('node:child_process');
+const args = process.argv.slice(2);
+const start = args.indexOf('/usr/bin/env');
+fs.writeFileSync(process.env.FAKE_MANAGER_LOG, JSON.stringify(args.slice(0, start)));
+process.exit(cp.spawnSync(args[start], args.slice(start + 1)).status);
+`, { mode: 0o700 });
+  const managedState = join(dir, 'managed');
+  const managed = createTerminalHost({ command, env: { HOME: dir, PATH: dir + ':/usr/bin:/bin',
+    INVOCATION_ID: 'fixture', HERDR_ENV: '', XDG_RUNTIME_DIR: runtime, HERDR_SOCKET_PATH: managedState,
+    HERDR_SESSION: 'managed', FAKE_MANAGER_LOG: managerLog, SUPER_MARIO_TOKEN: 'fixture' } });
+  assert.deepEqual(await managed.startServer(), { running: true });
+  const flags = JSON.parse(await readFile(managerLog, 'utf8'));
+  assert.deepEqual(flags.slice(0, -1), ['--user', '--quiet', '--collect', '--unit']);
+  assert.match(flags.at(-1), /^super-mario-herdr-[a-f0-9]{16}$/);
+  assert.deepEqual(JSON.parse(await readFile(managedState, 'utf8')), { leaked: false, session: 'managed' });
+  const incompatible = await fixture(t, 'incompatible');
+  await assert.rejects(incompatible.host.startServer(), /协议不兼容/);
+  assert.deepEqual(await incompatible.calls(), [['status', 'server', '--json']]);
 });
 
 test('real argv contract and response wrappers for list/read/input/keys/close', async t => {
