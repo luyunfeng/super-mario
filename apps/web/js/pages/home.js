@@ -137,6 +137,7 @@ export function createHomePage({ api, router, scope, store }) {
       const window = windows.get(p.id);
       const chats = chatsByProject.get(p.id) ?? [];
       const updates = window ? [['执行失败', window.failed], ['完成待办', window.completed], ['执行结束', window.ended],
+        ['执行结果未知', window.unknown ?? []], ['执行已取消', window.cancelled ?? []], ['等待执行', window.queued ?? []],
         ['执行进展', window.progress], ['待办更新', window.todoUpdates], ['待决定', window.decisions]] : [];
       return h('section', { class: 'home-project' },
         h('h3', null, link(router.href('projects', p.id || 'all', p.id ? 'workspace' : 'todos'), p.name)),

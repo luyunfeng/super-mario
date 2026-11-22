@@ -105,8 +105,15 @@ export function createFollowUpCard({ api, store }) {
       const blocks = Object.entries(groups).filter(([, items]) => items.length)
         .map(([name, items]) => h('div', { class: 'stack' }, h('h3', null, name), items.map(item => h('p', null, item.title))));
       if (brief.window) blocks.unshift(h('div',{class:'stack'},h('p',{class:'small muted'},`${brief.window.from} → ${brief.window.to}`),
-        brief.window.projects.map(p => h('section',{class:'stack'},h('h3',null,p.name),
-          [['进展',[...p.progress,...p.todoUpdates]],['待办完成',p.completed],['执行结束，待验收',p.ended],['失败',p.failed],['待决定',p.decisions]].map(([label,items]) => h('div',null,h('strong',null,`${label} ${items.length}`),items.map(i=>h('p',null,i.title))))))));
+        brief.window.projects.map(p => {
+          const sections = [['进展', [...p.progress, ...p.todoUpdates]], ['待办完成', p.completed],
+            ['执行结束，待验收', p.ended], ['失败', p.failed], ['待决定', p.decisions]];
+          for (const [label, items] of [['执行结果未知', p.unknown], ['执行已取消', p.cancelled], ['等待执行', p.queued]]) {
+            if (items?.length) sections.push([label, items]);
+          }
+          return h('section', { class: 'stack' }, h('h3', null, p.name), sections.map(([label, items]) =>
+            h('div', null, h('strong', null, `${label} ${items.length}`), items.map(i => h('p', null, i.title)))));
+        })));
       for (const signal of brief.signals || []) blocks.push(h('p', null, signal.text));
       replace(content, blocks.length ? blocks : h('p', { class: 'muted' }, '当前没有需要跟进的内容。'));
     } catch (cause) { replace(content, h('p', { class: 'text-danger' }, `简报暂时不可读：${cause.message}`)); }

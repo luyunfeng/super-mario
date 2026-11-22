@@ -302,3 +302,37 @@ test('重复发送与查询回执只触发一轮实际 SDK 请求，主对话和
     assert.equal((await receipt(projectPath, key)).status, 404);
   } finally { await server.close(); }
 });
+
+test('早报把各执行状态和计划时间传给模型，日历未开放时保留核实边界', { timeout: 30000 }, async t => {
+  const summary = '合成回复：核对原执行记录，日程未核实。';
+  const { server, api, ask, requests } = await fixture(t, () => ({ role: 'assistant', content: summary }));
+  try {
+    await api('/plugins/feishu', { enabled: false });
+    await ask('检查本地模型连接。');
+    const scheduledFor = new Date().toISOString();
+    for (const status of ['queued', 'running', 'unknown', 'cancelled'] as const) {
+      const run: Run = { id: status, executorId: 'fixture', conversationId: 'main', prompt: '合成任务-' + status,
+        status, output: '', createdAt: scheduledFor, updatedAt: scheduledFor };
+      server.app.store.put('runs', run.id, run);
+    }
+    server.app.background.publish({ type: 'schedule.due', typeVersion: 1, sourceId: 'fixture-morning', data: {
+      owner: 'daily-brief', name: 'morning', scheduleId: 'fixture', scheduledFor,
+    } });
+    await server.app.background.eventbox.drain();
+    const request = requests.find(r => JSON.stringify(r.content).includes('工作台早间简报'));
+    assert.ok(request);
+    assert.ok(!request.tools.includes('calendar_agenda'));
+    const prompt = JSON.stringify(request.content);
+    for (const expected of [scheduledFor, '日程未核实', '等待执行 1：合成任务-queued', '进行中 1：合成任务-running',
+      '执行结果未知 1：合成任务-unknown', '执行已取消 1：合成任务-cancelled']) assert.ok(prompt.includes(expected), expected);
+    const response = await fetch(server.url + '/api/v1/brief/current');
+    assert.ok(response.ok);
+    const project = (await response.json()).window.projects.find((p: {projectId: string}) => p.projectId === '');
+    for (const [field, status] of Object.entries({ progress: 'running', queued: 'queued', unknown: 'unknown', cancelled: 'cancelled' })) {
+      assert.deepEqual(project[field].map((row: {id: string}) => row.id), [status]);
+    }
+    const notices = server.app.background.outbox.list().filter(row => row.owner === 'daily-brief');
+    assert.equal(notices.length, 1);
+    assert.ok(JSON.stringify(notices[0].content).includes(summary));
+  } finally { await server.close(); }
+});

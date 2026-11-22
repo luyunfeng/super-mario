@@ -17,8 +17,10 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
   return { from, to, basis:'持久记录的最新状态；执行结束不代表待办验收完成。待决定包含此前积压。', projects:[...projects.map(p => ({id:p.id,name:p.name})),...(projectId === undefined ? [{id:'',name:'未归项目'}] : [])].map(project => {
     const scopedRuns = runs.filter(r => (r.projectId ?? '') === project.id);
     const scopedTodos = todos.filter(t => (t.projectId ?? '') === project.id);
+    const updates = (status: Run['status']) => scopedRuns.filter(r => changed(r.updatedAt) && r.status === status)
+      .map(r => ({ id: r.id, title: r.prompt, status: r.status }));
     return { projectId:project.id, name:project.name,
-      progress: scopedRuns.filter(r => changed(r.updatedAt) && !['completed','failed','cancelled'].includes(r.status)).map(r => ({id:r.id,title:r.prompt,status:r.status})),
+      progress: updates('running'), queued: updates('queued'), unknown: updates('unknown'), cancelled: updates('cancelled'),
       todoUpdates: scopedTodos.filter(t => changed(t.updatedAt) && !t.completedAt).map(t => ({id:t.id,title:t.title})),
       completed: scopedTodos.filter(t => t.completedAt && changed(t.completedAt)).map(t => ({id:t.id,title:t.title})),
       ended: scopedRuns.filter(r => r.status === 'completed' && changed(r.updatedAt)).map(r => ({id:r.id,title:r.prompt,result:r.output.slice(0,800)})),
@@ -38,7 +40,7 @@ export function formatWindowBrief(brief: ReturnType<typeof buildWindowBrief> & {
   const rows=[`工作台${({morning:'早间',evening:'晚间',interval:'间隔',project:'项目'} as Record<string,string>)[name]||''}简报`,`${date.format(new Date(brief.from))} — ${date.format(new Date(brief.to))}（${timezone}）`];
   let changed=false;
   for(const p of brief.projects){
-    const sections=[['待你决定',p.decisions],['执行失败',p.failed],['已完成待办',p.completed],['执行结束，待验收',p.ended],['进行中',p.progress],['事项更新',p.todoUpdates]] as const;
+    const sections=[['待你决定',p.decisions],['执行失败',p.failed],['执行结果未知',p.unknown],['执行已取消',p.cancelled],['等待执行',p.queued],['已完成待办',p.completed],['执行结束，待验收',p.ended],['进行中',p.progress],['事项更新',p.todoUpdates]] as const;
     const nonempty=sections.filter(([,items])=>items.length);if(!nonempty.length)continue;changed=true;rows.push(`\n${p.name}`);
     for(const [label,items] of nonempty)rows.push(`${label} ${items.length}：`+items.slice(0,20).map(i=>`${i.title.slice(0,200)}${'error' in i&&typeof i.error==='string'?'：'+i.error.slice(0,200):'result' in i&&typeof i.result==='string'?'：'+i.result.slice(0,200):''}`).join('；')+(items.length>20?'；其余请在工作台查看':''));
   }

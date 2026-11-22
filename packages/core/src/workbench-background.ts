@@ -179,7 +179,7 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
       let briefText = fallbackText;
       if (!deps.demo && agent.status().available) {
         try {
-          const prompt = buildBriefingPrompt(data.name, fallbackText, tz);
+          const prompt = buildBriefingPrompt(data.name, fallbackText, tz, to);
           const reply = await Promise.race([
             agent.ask(prompt, { readOnly: true }),
             new Promise<never>((_, reject) => {
