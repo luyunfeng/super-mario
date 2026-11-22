@@ -745,7 +745,16 @@ export async function createWorkbench(config: AppConfig) {
     const id = requiredText(args.todoId, '待办标识');
     const todo = store.get<Todo>('todos', id);
     if (!todo) throw new InputError('待办不存在', 404);
-    return { todo, decisions: todoDecisions.list(id), ...actionTodoLink(todo) } as unknown as Json;
+    const wait = waitingReplies.get(id);
+    // A matched reply clears the reminder and advances its generation exactly once.
+    // An older match may still describe a prior request, even to the same person.
+    const replyTracking = wait && wait.scope.projectId === todo.projectId ? {
+      status: wait.status, cycle: wait.cycle, waitingOn: wait.waitingOn, startedAt: wait.startedAt,
+      currentCycle: wait.reminderVersion === undefined ? null :
+        (todo.reminderVersion ?? 1) === wait.reminderVersion + (wait.status === 'matched' ? 1 : 0),
+      repliedAt: wait.hit?.evidence.createdAt,
+    } : null;
+    return { todo, replyTracking, decisions: todoDecisions.list(id), ...actionTodoLink(todo) } as unknown as Json;
   }
   function actionTodoLink(todo: Todo) {
     const webPath = '#projects/' + encodeURIComponent(todo.projectId ?? 'all') + '/todos/detail/' + encodeURIComponent(todo.id);

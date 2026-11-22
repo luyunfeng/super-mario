@@ -27,6 +27,8 @@ export interface ArmWaitingReply {
 /** Evidence about one Todo's waiting state, not a separate task. */
 export interface WaitingReplySnapshot extends ArmWaitingReply {
   cycle: number;
+  /** Todo reminder generation when armed. Older snapshots omit it. */
+  reminderVersion?: number;
   startedAt: string;
   /** Derived exclusively from the stored Todo. */
   scope: { projectId?: string };

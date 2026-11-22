@@ -91,7 +91,7 @@ export function createWaitingReplies({ store, events, now = () => new Date() }: 
         const wait: WaitingReplySnapshot = {
           todoId: todo.id, key: input.key, anchor, expectedSenderId: input.expectedSenderId,
           expectedSenderIdType: input.expectedSenderIdType, ...(input.note === undefined ? {} : { note: input.note }),
-          cycle: (history.at(-1)?.cycle ?? 0) + 1, startedAt,
+          cycle: (history.at(-1)?.cycle ?? 0) + 1, reminderVersion: todo.reminderVersion ?? 1, startedAt,
           scope: todo.projectId === undefined ? {} : { projectId: todo.projectId },
           waitingOn: todo.waitingOn, reminderAt: todo.reminderAt, status: 'waiting',
         };

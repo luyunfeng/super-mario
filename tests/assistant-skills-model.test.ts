@@ -1499,3 +1499,56 @@ test('Web 和飞书登记相同待办时复用原记录，多个历史匹配时�
     assert.equal(server.app.todos().length, 5);
   } finally { await server.close(); }
 });
+
+test('Web 与飞书助手读取已核实的回复时间，重新等待时旧匹配只作历史', async t => {
+  let adapter!: FeishuOptions;
+  let id = '';
+  const sent: string[] = [];
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /不把旧回复当成本轮答复/);
+      return call('todo_detail', { todoId: id }, 'reply-check');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as { text:string }[])[0].text;
+    const tracking = JSON.parse(raw).replyTracking;
+    assert.doesNotMatch(JSON.stringify(tracking), /anchor-message|synthetic-sender|synthetic-chat/);
+    const text = !tracking ? '没有可核对的跟踪记录。' : !tracking.currentCycle ? '这是上一轮的记录。'
+      : tracking.status === 'matched' ? '已匹配直接回复，时间 ' + tracking.repliedAt : '本轮尚未匹配直接回复。';
+    return { role: 'assistant', content: text };
+  }, options => {
+    adapter = options;
+    return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    const project = await api('/projects', { name: '回复核对' });
+    const reminderAt = '2099-02-01T08:00:00Z';
+    id = (await api('/todos', { title: '核对明细', projectId: project.id, waitingOn: '复核员', reminderAt })).id;
+    const path = '/projects/' + project.id + '/messages';
+    const question = '核对明细这项待办，复核员回复了吗？';
+    assert.equal(await ask(question, path), '没有可核对的跟踪记录。');
+    const tracker = server.app.waitingReplies;
+    const source = 'offline:fixture';
+    const anchor = { source, chatId: 'synthetic-chat', senderId: 'synthetic-owner', senderIdType: 'open_id',
+      messageId: 'anchor-message', createdAt: '2000-01-01T08:00:00Z' };
+    const senderId = 'synthetic-sender';
+    tracker.observeSource(source, [anchor, { ...anchor, senderId, messageId: 'earlier-message' }]);
+    const anchorId = tracker.sources(id).items.find(row => row.messageId === anchor.messageId)!.id;
+    tracker.arm(id, { key: 'wait-for-review', anchorId, expectedSenderId: senderId, expectedSenderIdType: 'open_id' });
+    assert.equal(await ask(question, path), '本轮尚未匹配直接回复。');
+    const repliedAt = new Date().toISOString();
+    const hit = tracker.observeSource(source, [{ ...anchor, messageId: 'direct-reply', parentId: anchor.messageId, senderId, createdAt: repliedAt }]);
+    assert.equal(hit.matched, 1);
+    const bot = await api('/feishu/bots', { name: '事项跟踪', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
+      scope: { kind: 'task', projectId: project.id, todoId: id }, requireConfirmation: false });
+    const chat = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...chat, messageId: 'pair' });
+    await adapter.onMessage(question, { ...chat, messageId: 'question' });
+    await t.waitFor(() => assert.ok(sent.includes('已匹配直接回复，时间 ' + repliedAt)));
+    server.app.updateTodo(id, { waitingOn: '复核员', reminderAt });
+    assert.equal(await ask(question, path), '这是上一轮的记录。');
+    const other = await api('/projects', { name: '新归属' });
+    server.app.updateTodo(id, { projectId: other.id });
+    assert.equal(await ask(question, '/projects/' + other.id + '/messages'), '没有可核对的跟踪记录。');
+  } finally { await server.close(); }
+});
