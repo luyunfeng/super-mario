@@ -33,7 +33,7 @@ const git = (...args) => require('node:child_process').execFileSync('git', args,
   env: { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
 });
 fs.writeFileSync(${JSON.stringify(capture)}, JSON.stringify(process.argv.slice(2)));
-fs.writeFileSync('result.txt', 'fixture');
+fs.writeFileSync('result.txt', 'fixture' + 'x'.repeat(16500));
 git('add', 'result.txt');
 git('commit', '-qm', 'result');
 console.log(JSON.stringify({type:'thread.started',thread_id:${JSON.stringify(nativeId)}}));
@@ -72,6 +72,15 @@ console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:21,cached_
  assert.equal((await api(diffUrl + '?base=other')).status, 400);
  assert.deepEqual((await api(diffUrl)).data, { files: ['result.txt'], hidden: 0 });
  await writeFile(join(cwd, 'result.txt'), 'later uncommitted content');
+ const diffTool = server.app.contributions.list('tools').find(entry => entry.value.name === 'run_commit_diff')!.value;
+ const signal = new AbortController().signal;
+ assert.deepEqual(await diffTool.execute({ id: run.id }, signal), { id: run.id, files: ['result.txt'], hidden: 0, nextOffset: null });
+ const patch = (await api(diffUrl + '?path=result.txt')).data.text;
+ const first = await diffTool.execute({ id: run.id, path: 'result.txt' }, signal);
+ assert.deepEqual(first, { id: run.id, path: 'result.txt', text: patch.slice(0, 16000), nextOffset: 16000 });
+ assert.deepEqual(await diffTool.execute({ id: run.id, path: 'result.txt', offset: 16000 }, signal),
+   { id: run.id, path: 'result.txt', text: patch.slice(16000), nextOffset: null });
+
  server.app.store.put('runs', 'comparison-peer', { ...run, id: 'comparison-peer', prompt: '对照任务' });
  await page.goto(server.url + '/#projects/' + project.id + '/runs/' + run.id + '?compare=comparison-peer');
  await page.getByRole('button', { name: '查看文件差异' }).first().click();
@@ -82,6 +91,7 @@ console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:21,cached_
  await api('/plugins/run-comparison', 'POST', { enabled: false });
  await expect(diffDrawer).toHaveCount(0);
  assert.equal((await api(diffUrl + '?path=result.txt')).status, 503);
+ await assert.rejects(diffTool.execute({ id: run.id }, signal), /插件已停用/);
  await api('/plugins/run-comparison', 'POST', { enabled: true });
  const argv=JSON.parse(await readFile(capture,'utf8'));assert.deepEqual(argv.slice(0,6),['--sandbox','workspace-write','exec','resume','--json','--skip-git-repo-check']);assert.equal(argv.at(-2),nativeId);assert.match(argv.at(-1),/\$\(not-a-command\)/);assert.ok(!argv.includes('--last'));assert.ok(!argv.some((a:string)=>a.includes('bypass')));
  assert.equal((await api('/approvals/'+approval.id+'/approve','POST',{version:approval.version})).status,409);assert.equal(creates,1);assert.deepEqual(errors,[]);

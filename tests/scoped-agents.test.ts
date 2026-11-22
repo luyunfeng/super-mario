@@ -279,6 +279,7 @@ test('project bridge pins writes, filters reads and rejects nested or referenced
   addTool(f, 'todos_list', async () => f.store.list('todos'));
   addTool(f, 'runs_list', async () => f.store.list('runs'));
   addTool(f, 'projects_list', async () => f.store.list('projects'));
+  addTool(f, 'run_commit_diff', async args => ({ id: args.id }));
   addTool(f, 'work_read', async args => ({ screen: String(args.id) }));
   for (const name of ['project_create', 'interaction_answer', 'interactions_list', 'brief_read', 'policy_set', 'unknown']) {
     addTool(f, name, async () => { throw new Error('must not execute'); });
@@ -311,6 +312,8 @@ test('project bridge pins writes, filters reads and rejects nested or referenced
   await assert.rejects(invoke('knowledge_list', { projectId: 'B' }), /跨作用域/);
   await assert.rejects(invoke('work_read', { id: 'rb' }), /作用域/);
   assert.equal((await invoke('work_read', { id: 'ra' })).screen, 'ra');
+  assert.deepEqual(await invoke('run_commit_diff', { id: 'ra' }), { id: 'ra' });
+  await assert.rejects(invoke('run_commit_diff', { id: 'rb' }), /作用域/);
   assert.equal(writes.length, count);
   await assert.rejects(runtime.post('wrong project', undefined, { projectId: 'B' }), /作用域不符/);
   await runtime.close();
@@ -321,6 +324,9 @@ test('task bridge pins todoId including nested plans and denies creating unrelat
   for (const name of ['work_dispatch', 'task_plan', 'todo_create']) addTool(f, name, async args => args);
   addTool(f, 'todos_list', async () => f.store.list('todos'));
   addTool(f, 'runs_list', async () => [{ id: 'one', todoId: 'a', projectId: 'A' }, { id: 'two', todoId: 'a2', projectId: 'A' }]);
+  f.store.put('runs', 'one', { projectId: 'A', todoId: 'a' });
+  f.store.put('runs', 'two', { projectId: 'A', todoId: 'a2' });
+  addTool(f, 'run_commit_diff', async args => ({ id: args.id }));
   const runtime = createAgentRuntime({ ...f, conversationId: 'bot:task:a', scope: { kind: 'task', todoId: 'a', projectId: 'A' } }, sdk.load);
   await runtime.ask('task');
   const invoke = async (name: string, args = {}) => (await sdk.tools.get(name).execute('call', args, undefined)).details;
@@ -328,6 +334,8 @@ test('task bridge pins todoId including nested plans and denies creating unrelat
   assert.equal(sdk.tools.has('todo_create'), false);
   assert.deepEqual((await invoke('todos_list')).map((entry: any) => entry.id), ['a']);
   assert.deepEqual((await invoke('runs_list')).map((entry: any) => entry.id), ['one']);
+  assert.deepEqual(await invoke('run_commit_diff', { id: 'one' }), { id: 'one' });
+  await assert.rejects(invoke('run_commit_diff', { id: 'two' }), /作用域/);
   assert.deepEqual((await invoke('task_plan', { tasks: [{}] })).tasks, [{ projectId: 'A', todoId: 'a' }]);
   await assert.rejects(invoke('task_plan', { tasks: [{ todoId: 'a2' }] }), /跨作用域/);
   await assert.rejects(invoke('work_dispatch', { todoId: 'a2' }), /跨作用域/);

@@ -64,7 +64,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
-import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, runComparison, shortcutSettings, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, createRunComparison, shortcutSettings, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { AppConfig, Approval, BotScope, ExecutionResult, InboxItem, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
@@ -129,6 +129,17 @@ export async function createWorkbench(config: AppConfig) {
     assertBotInput(input);
   } });
   const todoDecisions = createTodoDecisions(store, workDecisions);
+  async function readRunCommitDiff(id: string, path?: string): Promise<Json> {
+    if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
+    const run = store.get<Run>('runs', id);
+    if (!run?.commitChanges || !run.machineId || !run.cwd) throw new InputError('执行缺少历史提交记录', 404);
+    const machine = machines?.list().find(item => item.id === run.machineId);
+    if (!machines || !machine?.online) throw new InputError('执行机离线', 503);
+    if (!machine.capabilities.includes('workspace.commitDiff')) throw new InputError('请升级执行机代理以查看历史差异', 409);
+    return machines.call(machine.id, 'workspace.commitDiff', {
+      cwd: run.cwd, range: run.commitChanges, ...(path !== undefined && { path }),
+    });
+  }
   async function readWorkspaceCode(input: { projectId?: string; kind: 'tree' | 'file' | 'diff'; path?: string }): Promise<Json> {
     const projectId = requiredText(input.projectId, 'projectId');
     const project = projects.list().find(p => p.id === projectId);
@@ -186,7 +197,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(todoCalendar);
   plugins.register(conversationSearch);
   plugins.register(conversationDrafts);
-  plugins.register(runComparison);
+  plugins.register(createRunComparison(readRunCommitDiff));
   plugins.register(shortcutSettings);
   plugins.register(conversationQuotes);
   plugins.register(conversationEdit);
@@ -1066,7 +1077,7 @@ export async function createWorkbench(config: AppConfig) {
     return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
   }
   return {
-    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, agentSessions, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, agentSessions, readRunCommitDiff, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {
