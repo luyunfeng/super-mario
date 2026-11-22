@@ -626,8 +626,19 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
             failure = message.errorMessage || `模型执行终止：${message.stopReason}`;
           }
         });
-        try { await session.prompt(user.text, { expandPromptTemplates: false }); }
-        finally {
+        try {
+          // Keep the durable user input verbatim. Only its own platform route can supply a quote.
+          const route = store.get<{ channel: string; inputId: string; replyReference?: { text?: string; truncated?: boolean } }>('message.routes', user.id);
+          const reference = route?.channel === 'feishu' && route.inputId === user.id ? route.replyReference : undefined;
+          let promptText = user.text;
+          if (reference) {
+            const passage = reference.text === undefined ? '飞书引用原文不可用' :
+              reference.text + (reference.truncated ? '\n（原文仅显示前 4000 个字符）' : '');
+            promptText = passage.split(/\r\n|\r|\n/).map(line => '> ' + line).join('\n') + '\n\n' + user.text;
+            if (activeTrace) activeTrace.userText = boundTraceText(promptText).text;
+          }
+          await session.prompt(promptText, { expandPromptTemplates: false });
+        } finally {
           unsubscribe(); clearTimeout(progressTimer); progressTimer = undefined;
           if (activeTrace) {
             activeTrace.finishedAt = new Date().toISOString();

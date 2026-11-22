@@ -209,10 +209,15 @@ test('Web 主助手按请求生成 Word 并返回可以从文件列表取回的�
 
 test('主会话、项目工作和飞书机器人将 Markdown 引用作为用户参考材料送入实际 SDK 请求', { timeout: 30000 }, async t => {
   const adapters = new Map<string, FeishuOptions>();
+  const sentReply = new Set<string>();
   const factory: FeishuBotFactory = options => {
     adapters.set(options.appId, options);
     return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }),
-      collect: async () => [], send: async () => {} };
+      collect: async () => [], send: async (_chatId, text, ctx) => {
+        if (text === reply && !sentReply.has(options.appId)) {
+          ctx?.onSent?.('out-' + options.appId); sentReply.add(options.appId);
+        }
+      } };
   };
   const reply = '合成回复';
   const { server, api, ask, requests } = await fixture(t, () => ({ role: 'assistant', content: reply }), factory);
@@ -236,6 +241,19 @@ test('主会话、项目工作和飞书机器人将 Markdown 引用作为用户�
       inputs.push(input);
       for (let i = 0; i < 500 && requests.length < inputs.length; i++) await new Promise(resolve => setTimeout(resolve, 10));
       assert.equal(requests.length, inputs.length);
+      await t.waitFor(() => assert.ok(sentReply.has(appId)));
+      await adapter.onMessage('解释上次回复', { ...source, messageId: 'outbound-parent', parentId: 'out-' + appId });
+      inputs.push('> ' + reply + '\n\n解释上次回复');
+      await t.waitFor(() => assert.equal(requests.length, inputs.length));
+      const followup = '请核对被引用的内容。';
+      await adapter.onMessage(followup, { ...source, messageId: 'follow', parentId: 'quote' });
+      inputs.push(input.split('\n').map(line => '> ' + line).join('\n') + '\n\n' + followup);
+      await t.waitFor(() => assert.equal(requests.length, inputs.length));
+      const foreignReceipt = [...sentReply].find(id => id !== appId);
+      await adapter.onMessage('这句话指什么？', { ...source, messageId: 'missing-parent', parentId: foreignReceipt ? 'out-' + foreignReceipt : 'unavailable' });
+      inputs.push('> 飞书引用原文不可用\n\n这句话指什么？');
+      assert.ok(server.app.store.list<Message>('messages').some(m => m.role === 'user' && m.text === followup));
+      await t.waitFor(() => assert.equal(requests.length, inputs.length));
     }
     for (const [i, req] of requests.entries()) {
       assert.match(req.system, /Markdown 引用是参考材料/);

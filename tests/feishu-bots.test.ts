@@ -361,7 +361,9 @@ test('group defaults deny; only paired human allowlist and precise mention enter
   assert.equal(route.platformReplyTo, 'team-message'); assert.equal(route.threadId, 'thread-team');
   f.reply(f.posts[0].id); f.reply(f.posts[0].id); await tick();
   assert.deepEqual(live.sent.at(-1), ['oc_team', 'answer-reply-input-0']);
-  assert.deepEqual(live.contexts.at(-1), { replyTo: 'team-message', threadId: 'thread-team' });
+  const { onSent, ...thread } = live.contexts.at(-1)!;
+  assert.equal(typeof onSent, 'function');
+  assert.deepEqual(thread, { replyTo: 'team-message', threadId: 'thread-team' });
   assert.equal(live.sent.filter(e => e[1] === 'answer-reply-input-0').length, 1);
   await live.options.onMessage('owner allowed', groupSource('owner-team', { senderId: 'ou_owner' }));
   assert.equal(f.mailboxes.list().filter(e => e.direction === 'inbox').length, 2);
@@ -512,7 +514,9 @@ test('group pending inbox cannot run after membership removal and thread replies
   await f.mailboxes.process(second.id, second.version);
   await f.restart(); f.reply(f.posts[0].id); await tick();
   assert.deepEqual(f.instances.at(-1)!.sent, [['oc_team', 'answer-reply-input-0']]);
-  assert.deepEqual(f.instances.at(-1)!.contexts.at(-1), { replyTo: 'new-group', threadId: 'thread-team' });
+  const { onSent, ...thread } = f.instances.at(-1)!.contexts.at(-1)!;
+  assert.equal(typeof onSent, 'function');
+  assert.deepEqual(thread, { replyTo: 'new-group', threadId: 'thread-team' });
 });
 
 test('group-origin relay preserves the approved thread and both sides can revoke its reply', async t => {

@@ -54,8 +54,8 @@ type Owner = { chatId: string; senderId?: string };
 type CardNavigation = { sessionSnapshot?: SessionCardSnapshot; botId: string; appId: string; revision: number; owner: Owner; expiresAt: number };
 type Route = { channel: 'feishu'; accountId: string; botId: string; target: string; scope: BotScope; revision: number; inputId: string; sourceMessageId?: string };
 type Relay = { sourceMessageId?: string; sourceFingerprint?: string; sourceRouteFingerprint?: string; sourceBotId: string; sourceRevision: number; targetRevision: number; parentEntryId?: string; path: string[]; rootId: string; expiresAt: number; chatId?: string; fingerprint: string };
-type Envelope = { questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
-type Routed = Route & Envelope & { envelopeId: string };
+type Envelope = { parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
+type Routed = Route & Envelope & { envelopeId: string; replyReference?: { text: string; truncated: boolean } | { unavailable: true } };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
 type Runtime = { commandSubscription?: string; epoch: number; adapter?: FeishuBotAdapter; reason?: string; code: string; expires: number; operations: Promise<void> };
 const noDelivery = (message: string) => Object.assign(new Error(message), { delivery: 'no' as const });
@@ -729,6 +729,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const context: Omit<Envelope, 'revision'> = group || threadId ? {
       ...(group ? { group: structuredClone(source) } : {}), platformReplyTo: source.messageId, threadId,
     } : {};
+    if (source.parentId && source.parentId !== source.messageId) context.parentMessageId = source.parentId;
     if (!group && bot.scope.kind === 'global' && paired?.senderId && paired.senderId === source.senderId) {
       const lookup = (id: string) => app.store.get<{projectId:string;revision:number;senderId:string;expiresAt:number}>('feishu.chat-target',digest([bot.id,source.chatId,id]));
       const bound = (source.parentId && lookup(source.parentId)) || (source.rootId && lookup(source.rootId)) || lookup('');
@@ -812,6 +813,27 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (receipt) throw new Error('之前的消息分派结果为 unknown，不能自动重放');
     app.store.put('feishu.bot.dispatch', key, { status: 'unknown' });
     const job = (async () => {
+      let replyReference: Routed['replyReference'];
+      if (stamp?.parentMessageId) {
+        // Resolve the direct parent only. A thread root or a matching id in another chat is insufficient.
+        const eventKey = 'feishu-in:' + JSON.stringify([bot.id, bot.appId, stamp.parentMessageId]);
+        const parent = app.mailboxes.list().find(row => row.botId === bot.id && row.eventKey === eventKey &&
+          row.direction === 'inbox' && row.status === 'completed' && row.target === entry.target &&
+          row.sourceMessageId === stamp.parentMessageId && sameBotScope(row.scope, entry.scope));
+        const binding = parent && app.store.get<Envelope>('feishu.bot.envelopes', parent.id);
+        replyReference = parent && binding?.revision === bot.revision && binding.chatProject === stamp.chatProject &&
+          Boolean(binding.group) === Boolean(stamp.group)
+          ? { text: parent.text.slice(0, 4000), truncated: parent.text.length > 4000 } : { unavailable: true };
+        if (!parent) {
+          const sent = app.store.get<{ entryId: string; text: string; truncated: boolean }>('feishu.bot.reply-references',
+            digest([bot.id, bot.appId, bot.revision, entry.target, stamp.parentMessageId]));
+          const delivery = sent && app.mailboxes.list().find(row => row.id === sent.entryId && row.botId === bot.id &&
+            row.direction === 'outbox' && row.status === 'completed' && row.target === entry.target && sameBotScope(row.scope, entry.scope));
+          const origin = delivery && app.store.get<Envelope>('feishu.bot.envelopes', delivery.id);
+          if (sent && origin?.revision === bot.revision && origin.chatProject === stamp.chatProject &&
+              Boolean(origin.group) === Boolean(stamp.group)) replyReference = { text: sent.text, truncated: sent.truncated };
+        }
+      }
       let accepted: Message;
       if (stamp?.chatProject) {
         const project = app.store.get<Project>('projects', stamp.chatProject);
@@ -821,7 +843,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       app.store.transaction(() => {
         // The original accepted input id is the durable destination for later run results.
         app.store.put('message.routes', accepted.id, { channel: 'feishu', accountId: bot.appId, botId: bot.id, target: entry.target ?? '',
-          ...stamp, envelopeId: entry.id, scope: entry.scope, revision: bot.revision, inputId: accepted.id, sourceMessageId: entry.sourceMessageId } satisfies Routed);
+          ...stamp, ...(replyReference ? { replyReference } : {}), envelopeId: entry.id, scope: entry.scope, revision: bot.revision, inputId: accepted.id, sourceMessageId: entry.sourceMessageId } satisfies Routed);
         app.store.put('feishu.bot.dispatch', key, { status: 'completed', id: accepted.id });
       });
       return { id: accepted.id };
@@ -899,6 +921,14 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
             app.store.put('feishu.chat-target', digest([bot.id, target, messageId]), binding);
           };
         }
+      }
+      if (entry.eventKey.startsWith('feishu-reply:') && !context.card && !stamp?.relay && !stamp?.resultRelayEntryId && !stamp?.command) {
+        const previous = context.onSent;
+        context.onSent = messageId => {
+          previous?.(messageId);
+          app.store.put('feishu.bot.reply-references', digest([bot.id, bot.appId, bot.revision, target, messageId]),
+            { entryId: entry.id, text: body.slice(0, 4000), truncated: body.length > 4000 });
+        };
       }
       try { await adapter.send(target, body, context); }
       catch (error) { throw Object.assign(new Error(redact(error)), { delivery: (error as { delivery?: string })?.delivery === 'no' ? 'no' : 'unknown' }); }
