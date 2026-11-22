@@ -59,22 +59,27 @@ function decisionSection(api, todo, valid) {
 
 export function openTodoDetail({ api, store, router, todo, openEdit }) {
   if (!matchesScope(store, todo)) { toast('待办归属已变更，请重新打开'); return; }
+  const detail = createTodoDetail({ api, store, router, todo, openEdit, close: () => drawer.close() });
+  const drawer = openDrawer({ title: '待办详情', body: detail.el, onClose: () => unsubscribe?.() });
+  const unsubscribe = store.subscribe?.(() => matchesScope(store, todo) ? detail.update() : drawer.close());
+}
+
+export function createTodoDetail({ api, store, router, todo, openEdit, close }) {
   const summary = h('div', { class: 'stack' });
   const next = h('div', { class: 'stack' });
-  const drawer = openDrawer({ title: '待办详情', body: [summary, decisionSection(api, todo, () => drawer.el.open && matchesScope(store, todo)), next],
-    onClose: () => unsubscribe?.() });
-  const unsubscribe = store.subscribe?.(paint);
+  const el = h('div', { class: 'stack' }, summary,
+    decisionSection(api, todo, () => el.isConnected && el.closest('dialog')?.open !== false && matchesScope(store, todo)), next);
   function paint() {
-    const snapshot = store.view.snapshot ?? {};
-    if (!matchesScope(store, todo)) { drawer.close(); return; }
-    const current = snapshot.todos.find(item => item.id === todo.id);
+    const snapshot = store.view.snapshot;
+    const current = snapshot?.todos.find(item => item.id === todo.id);
+    if (!current || !matchesScope(store, todo)) return;
     const project = snapshot.projects?.find(item => item.id === current.projectId);
     const sources = (snapshot.inbox ?? []).filter(item => item.todoId === current.id && (item.projectId ?? null) === (current.projectId ?? null));
     const runs = (snapshot.runs ?? []).filter(item => item.todoId === current.id && item.projectId === current.projectId)
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     const latest = runs[0];
     const context = { api, store, router, todo: current };
-    const action = (label, fn) => Button({ label, size: 'sm', onClick: () => { drawer.close(); fn(); } });
+    const action = (label, fn) => Button({ label, size: 'sm', onClick: () => { close?.(); fn(); } });
     replace(summary, h('h2', null, current.title), current.notes && h('p', null, current.notes),
       sources.length > 0 && section('来源', sources.map(item => h('p', null, [item.source, item.title || item.id].filter(Boolean).join(' · ')))),
       section('归属', project?.name ?? current.projectId ?? '不归类', current.completedAt && ' · 已完成'),
@@ -92,6 +97,7 @@ export function openTodoDetail({ api, store, router, todo, openEdit }) {
         !current.completedAt && action('交给 Agent', () => openTodoDelegate(context)))));
   }
   paint();
+  return { el, update: paint, projectId: todo.projectId };
 }
 
 function dispatchOptions(snapshot, todo) {

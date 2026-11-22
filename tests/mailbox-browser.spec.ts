@@ -60,7 +60,12 @@ test('收件箱默认展示行动/知会/低优先级；查看原文、搜索、
 test('发件箱展示实际投递状态、内容与目标，合并重复记录；页面只读且空箱不伪造记录', { timeout: 40000 }, async () => {
   await withMailbox(async (server, page) => {
     const writes: string[] = [];
-    page.on('request', request => { if (request.method() !== 'GET' && !request.url().endsWith('/presence')) writes.push(request.url()); });
+    page.on('request', request => {
+      if (request.method() === 'GET' || request.url().endsWith('/presence')) return;
+      // The shared favorites plugin reads marks through its POST action endpoint.
+      if (request.method() === 'POST' && request.url().endsWith('/message-favorites') && request.postDataJSON()?.action === 'marks') return;
+      writes.push(request.url());
+    });
     await page.goto(server.url + '/#outbox');
     await expect(page.getByText('还没有发件记录', { exact: true })).toBeVisible();
     const createdAt = new Date().toISOString();

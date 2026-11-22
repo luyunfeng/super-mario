@@ -481,10 +481,11 @@ test('刷新主机器人入口保留已有机器人的配置进度', async () =>
 test('首页默认进入，按期限分待办并跟随所选项目', async () => {
   await withApp(async ({ open, post, server }) => {
     const project = await post('/projects', { name: '首页项目' });
+    const other = await post('/projects', { name: '其他范围' });
     const updatedAt = new Date().toISOString();
     server.app.store.put('runs', 'uncertain', { id: 'uncertain', conversationId: 'main', executorId: 'fixture',
       projectId: project.id, prompt: '核对发布回执', status: 'unknown', output: '', createdAt: updatedAt, updatedAt });
-    await post('/todos', { title: '今天核对账单', projectId: project.id, dueAt: new Date(Date.now() + 3600000).toISOString() });
+    const urgent = await post('/todos', { title: '今天核对账单', projectId: project.id, dueAt: new Date(Date.now() + 3600000).toISOString() });
     await post('/todos', { title: '准备下季度材料', projectId: project.id });
     await post('/todos', { title: '未归项目的事项' });
     const { page } = await open('', { width: 390, height: 844 });
@@ -499,6 +500,21 @@ test('首页默认进入，按期限分待办并跟随所选项目', async () =>
     await expect(home).toContainText('执行结果未知 1 项 · 核对发布回执');
     await expect(home).not.toContainText('执行进展 1 项 · 核对发布回执');
     assert.ok(await home.evaluate(el => el.scrollWidth <= el.clientWidth));
+    const projectSummary = home.locator('.home-project').filter({ hasText: '首页项目' });
+    await projectSummary.getByRole('link', { name: '核对发布回执' }).click();
+    await expect(page).toHaveURL(new RegExp('/runs/uncertain$'));
+    await page.goBack();
+    await home.getByRole('link', { name: /^今天核对账单 ·/ }).click();
+    await expect(page).toHaveURL(new RegExp('/todos/detail/' + urgent.id + '$'));
+    const panel = page.locator('#panel-todos');
+    await expect(panel.getByRole('heading', { name: urgent.title })).toBeVisible();
+    await page.reload();
+    await expect(panel.getByRole('heading', { name: urgent.title })).toBeVisible();
+    await page.goto(server.url + '/#projects/' + other.id + '/todos/detail/' + urgent.id);
+    await expect(panel.getByText('找不到这条待办')).toBeVisible();
+    await expect(panel).not.toContainText(urgent.title);
+    await page.goto(server.url + '/#projects/' + other.id + '/runs/uncertain');
+    await expect(page.locator('#panel-runs').getByText('找不到这条执行')).toBeVisible();
     await page.goto(server.url + '/#agent');
     await page.getByRole('button', { name: '查看简报', exact: true }).click();
     const brief = page.getByRole('dialog', { name: '简报与提醒' });

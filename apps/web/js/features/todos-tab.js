@@ -7,7 +7,7 @@ import { openDrawer, toast } from '../ui/overlay.js';
 
 import { todoCalendar, localDate, dueInstant, calendarRoute } from './todo-calendar.js';
 import { openTaskClosure, refreshTaskClosure } from './task-closure.js';
-import { openTodoDetail, openTodoDelegate } from './todo-detail.js';
+import { createTodoDetail, openTodoDetail, openTodoDelegate } from './todo-detail.js';
 import { openTodoHistory } from './todo-history.js';
 import { openWaitingReply, refreshWaitingReply } from './waiting-reply.js';
 
@@ -47,8 +47,19 @@ export function createTodosTab({ api, store, router }) {
   }
   const views = Segmented({ options: [['list', '列表'], ['calendar', '日历']], label: '待办视图', value: 'list',
     onChange: view => navigate(view === 'calendar' ? 'month' : 'list', new Date()) });
-  const el = h('div', { class: 'stack stack--lg', id: 'panel-todos', role: 'tabpanel' }, form, h('div', { class: 'row row--wrap' }, h('div', { class: 'grow' }, search), views.el), list);
-
+  const listPanel = h('div', { class: 'stack stack--lg' }, form,
+    h('div', { class: 'row row--wrap' }, h('div', { class: 'grow' }, search), views.el), list);
+  const detailPanel = h('div', { class: 'stack', hidden: true });
+  const el = h('div', { id: 'panel-todos', role: 'tabpanel' }, listPanel, detailPanel);
+  let detailId, detail;
+  function paintDetail(snapshot) {
+    if (!detailId) return;
+    const todo = snapshot?.todos.find(item => item.id === detailId && inScope(item));
+    if (todo && detail && todo.projectId === detail.projectId) { detail.update(); return; }
+    detail = todo ? createTodoDetail({ api, store, router, todo, openEdit }) : undefined;
+    replace(detailPanel, h('a', { href: router.href('projects', projectId, 'todos') }, '返回待办列表'),
+      detail?.el ?? (snapshot ? Empty({ title: '找不到这条待办', text: '请核对待办是否仍属于当前项目。' }) : '正在读取待办…'));
+  }
   const inScope = (todo) => projectId === 'all' || todo.projectId === projectId;
   const projectName = (id) => (store.view.snapshot?.projects ?? []).find(item => item.id === id)?.name;
 
@@ -175,17 +186,24 @@ export function createTodosTab({ api, store, router }) {
 
   return {
     el,
-    show(id) {
+    show(id, selectedTodo) {
+      detail = undefined; detailId = selectedTodo;
+      detailPanel.replaceChildren();
+      listPanel.hidden = Boolean(detailId);
+      detailPanel.hidden = !detailId;
       if (id !== projectId) { search.value = ''; title.value = ''; due.value = ''; time.value = ''; }
-      projectId = id; syncCalendar(store.view.snapshot); signature = todoSignature(store.view.snapshot); paint(); load();
+      projectId = id; syncCalendar(store.view.snapshot); signature = todoSignature(store.view.snapshot);
+      if (detailId) paintDetail(store.view.snapshot);
+      else { paint(); load(); }
     },
     /** 快照里的待办变了才重新读取分区。 */
     update(snapshot) {
+      paintDetail(snapshot);
       if (calendarActive(snapshot) !== calendarEnabled) { syncCalendar(snapshot); paint(); }
       refreshTaskClosure(api);
       refreshWaitingReply(api);
       const next = todoSignature(snapshot);
-      if (next !== signature) { signature = next; load(); }
+      if (next !== signature) { signature = next; if (!detailId) load(); }
     },
     count: (snapshot, id) => (snapshot.todos ?? []).filter(todo => !todo.completedAt && (id === 'all' || todo.projectId === id)).length,
     focus() { title.focus(); },

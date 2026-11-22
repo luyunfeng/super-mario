@@ -107,7 +107,7 @@ export function createHomePage({ api, router, scope, store }) {
     const digest = groupDigest(view.snapshot.inbox, inScope, now);
     const cutoff = now + day;
     const urgent = t => Number.isFinite(Date.parse(t.dueAt)) && Date.parse(t.dueAt) <= cutoff;
-    const todoLink = t => link(router.href('projects', t.projectId || 'all', 'todos'),
+    const todoLink = t => link(router.href('projects', t.projectId || 'all', 'todos', 'detail', t.id),
       t.title + (t.dueAt ? ' · ' + new Date(t.dueAt).toLocaleDateString() : ''));
     const briefing = (brief?.projects ?? []).filter(inScope);
     const windows = new Map(briefing.map(p => [p.projectId, p]));
@@ -120,8 +120,13 @@ export function createHomePage({ api, router, scope, store }) {
       chats.push(group);
       chatsByProject.set(group.projectId, chats);
     }
+    const sections = [
+      ['执行失败', 'failed', 'runs'], ['完成待办', 'completed', 'todos'], ['执行结束', 'ended', 'runs'],
+      ['执行结果未知', 'unknown', 'runs'], ['执行已取消', 'cancelled', 'runs'], ['等待执行', 'queued', 'runs'],
+      ['执行进展', 'progress', 'runs'], ['待办更新', 'todoUpdates', 'todos'], ['待决定', 'decisions'],
+    ];
     const loose = windows.get('');
-    if (!scope.get() && (counts.get('') || chatsByProject.has('') || loose && [loose.completed, loose.failed, loose.ended, loose.progress, loose.decisions].some(list => list.length)))
+    if (!scope.get() && (counts.get('') || chatsByProject.has('') || sections.some(([, key]) => loose?.[key]?.length)))
       groups.push({ id: '', name: '未归项目' });
     const total = key => briefing.reduce((n,p) => n + p[key].length, 0);
     replace(body, h('div', { class: 'home-priorities' },
@@ -136,13 +141,16 @@ export function createHomePage({ api, router, scope, store }) {
     Card({ title: '项目总结', body: groups.length ? groups.map(p => {
       const window = windows.get(p.id);
       const chats = chatsByProject.get(p.id) ?? [];
-      const updates = window ? [['执行失败', window.failed], ['完成待办', window.completed], ['执行结束', window.ended],
-        ['执行结果未知', window.unknown ?? []], ['执行已取消', window.cancelled ?? []], ['等待执行', window.queued ?? []],
-        ['执行进展', window.progress], ['待办更新', window.todoUpdates], ['待决定', window.decisions]] : [];
+      const updates = sections.map(([name, key, tab]) => [name, window?.[key] ?? [], tab]);
       return h('section', { class: 'home-project' },
         h('h3', null, link(router.href('projects', p.id || 'all', p.id ? 'workspace' : 'todos'), p.name)),
         muted((p.description ? p.description + ' · ' : '') + '未完成待办 ' + (counts.get(p.id) ?? 0) + ' 项'),
-        updates.filter(([,items]) => items.length).map(([name, items]) => h('p', null, name + ' ' + items.length + ' 项 · ' + items.slice(0, 2).map(i => i.title).join('、'))),
+        updates.filter(([,items]) => items.length).map(([name, items, tab]) => h('p', null, name + ' ' + items.length + ' 项 · ',
+          items.slice(0, 2).flatMap((item, index) => {
+            const path = tab === 'todos' ? ['todos', 'detail'] : ['runs'];
+            const title = tab ? h('a', { href: router.href('projects', p.id || 'all', ...path, item.id) }, item.title) : item.title;
+            return index ? ['、', title] : [title];
+          }))),
         chats.length > 0 && muted('有群聊动态：' + chats.map(g => g.name).join('、')),
         window && !chats.length && !updates.some(([,items]) => items.length) && muted('最近 24 小时没有更新。'));
     }) : muted('当前范围内没有项目。') }),

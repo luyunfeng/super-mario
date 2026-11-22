@@ -186,7 +186,7 @@ export function createMailboxPage({ api, store, router, direction }) {
     if (item.kind !== 'personal') return [];
     if (pending.has(item.id) || uncertain.has(item.id)) return [h('span', { class: 'small muted' }, pending.has(item.id) ? '正在保存…' : '操作结果未知，请刷新核对后再操作。')];
     const todo = (snapshot?.todos ?? []).find(todo => todo.id === item.raw.todoId);
-    const todoLink = item.raw.todoId && h('a', { class: 'btn btn--sm', href: router.href('projects', todo?.projectId ?? 'all', 'todos'), onclick: () => drawer?.close() }, '查看待办');
+    const todoLink = item.raw.todoId && h('a', { class: 'btn btn--sm', href: router.href('projects', todo?.projectId ?? 'all', 'todos', 'detail', item.raw.todoId), onclick: () => drawer?.close() }, '查看待办');
     // Confirming an inbox item also archives it. Keep its resulting todo accessible.
     if (item.raw.archivedAt) return [...(todoLink ? [todoLink] : []), Button({ label: '恢复到收件箱', size: 'sm', onClick: () => act(item, 'reopen') })];
     return [todoLink || Button({ label: '转为待办', kind: 'primary', size: 'sm', onClick: () => act(item, 'confirm') }),

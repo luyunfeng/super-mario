@@ -56,7 +56,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
   async function loadObservations() {
     if (!isDetailVisible()) return;
     const snapshot = store.view.snapshot;
-    const run = snapshot?.runs.find(item => item.id === runId);
+    const run = snapshot?.runs.find(item => item.id === runId && inScope(item));
     if (!run) return;
     // 只在相关状态变化时读取，不以无关消息或终端 idle 触发轮询。
     const signature = JSON.stringify([run, snapshot.approvals, snapshot.interactions, snapshot.plans,
@@ -126,7 +126,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
 
   function paintDetail() {
     const snapshot = store.view.snapshot;
-    const run = snapshot?.runs.find(item => item.id === runId);
+    const run = snapshot?.runs.find(item => item.id === runId && inScope(item));
     if (!run) {
       replace(detailBody, h('a', { class: 'btn btn--sm', href: router.href('projects', projectId, 'runs') }, '← 返回执行列表'), Empty({ title: '找不到这条执行', text: '它可能已被清理。' }));
       return;

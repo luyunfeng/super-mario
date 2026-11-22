@@ -164,7 +164,7 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
       runId = tab === 'runs' && !launchRequested ? nextRun ?? '' : '';
       if (!id) { router.go(router.href('projects', projectId, tab)); return; }
       lastProjects = '';
-      todos.show(projectId);
+      todos.show(projectId, tab === 'todos' && route.parts[2] === 'detail' ? route.parts[3] : undefined);
       runs.show(projectId, runId);
       if (tab === 'settings') settings.show(projectId);
       if (tab === 'workspace') conversation.show(projectId);
