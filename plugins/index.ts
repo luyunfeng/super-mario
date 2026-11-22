@@ -150,6 +150,7 @@ export interface SystemActions {
   projectCreate?(input: Record<string, unknown>): Json | Promise<Json>;
   projectsDiscover?(input: Record<string, unknown>): Promise<Json>;
   knowledgeSource?(input: Record<string, unknown>): Json;
+  knowledgeActionStatus?(args: Record<string, unknown>): Promise<unknown>;
   confirmKnowledgeTodo?(args: Record<string, unknown>): Promise<Json>;
   editConfirmedFacts?(args: Record<string, unknown>): Promise<Json>;
   setKnowledgeRelevance?(args: Record<string, unknown>): Promise<Json>;
@@ -239,6 +240,10 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             if (patch.completed !== undefined) throw new Error('请由用户在 Web 验收并完成待办');
             return actions.updateTodo!(String(id ?? ''), patch);
           }, { id: { type: 'string' }, title: { type: 'string' }, notes: { type: 'string' }, waitingOn: { type: 'string' }, reminderAt: { type: 'string' } }));
+          if (actions.knowledgeActionStatus) context.contribute('tools', 'knowledge_action_status', tool('knowledge_action_status',
+            '只读查询已读知识页某一行动项原文所关联待办的当前状态与登记期限。', async (args, signal) => {
+              signal.throwIfAborted(); return await actions.knowledgeActionStatus!(args) as Json;
+            }, { id: { type: 'string' }, updatedAt: { type: 'string' }, actionLine: { type: 'string' } }));
           if (actions.confirmKnowledgeTodo) context.contribute('tools', 'knowledge_action_todo', tool('knowledge_action_todo',
             '将用户明确选定的已保存知识页行动项加入待办。传入页 id、已读 updatedAt 和正文中的完整行动项行。选多项用 actions 逐项填写 actionLine 和可选 dueAt，按输入顺序返回 results。重复确认会返回已有待办。',
             async (args, signal) => {

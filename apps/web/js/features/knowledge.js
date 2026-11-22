@@ -181,19 +181,40 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   }
 
   const todoReceipt = h('p', { class: 'small', role: 'status', hidden: true });
-  const actionTodos = entry && store.view.snapshot?.plugins?.some(p => p.id === 'builtin-tools' && p.status === 'active') &&
-    Button({ label: '将正文选中行加入待办', onClick: async () => {
-      todoReceipt.hidden = true;
-      if (content.value !== baseline[1] || changedScope() || title.value !== baseline[0]) {
-        note.textContent = '请先保存正文、标题或归属修改，再确认行动项。'; return;
-      }
-      const from = content.selectionStart, to = content.selectionEnd;
-      if (!content.value.slice(from, to).trim()) { note.textContent = '请在正文中选中要加入待办的行动项。'; content.focus(); return; }
-      // Preview complete touched lines, even when the selection starts in the middle of a line.
-      const start = from ? content.value.lastIndexOf('\n', from - 1) + 1 : 0;
-      const end = content.value.indexOf('\n', to - 1);
-      const lines = content.value.slice(start, end < 0 ? undefined : end).split('\n').map(row => row.trim()).filter(Boolean);
-      if (!lines.length) { note.textContent = '选区中没有行动项。'; return; }
+  const canUseActions = entry && store.view.snapshot?.plugins?.some(p => p.id === 'builtin-tools' && p.status === 'active');
+  function selectedActionLines() {
+    todoReceipt.hidden = true;
+    if (content.value !== baseline[1] || changedScope() || title.value !== baseline[0]) {
+      note.textContent = '请先保存正文、标题或归属修改，再确认行动项。'; return;
+    }
+    const from = content.selectionStart, to = content.selectionEnd;
+    if (!content.value.slice(from, to).trim()) { note.textContent = '请在正文中选中要核对的行动项。'; content.focus(); return; }
+    // Preview complete touched lines, even when the selection starts in the middle of a line.
+    const start = from ? content.value.lastIndexOf('\n', from - 1) + 1 : 0;
+    const end = content.value.indexOf('\n', to - 1);
+    const lines = content.value.slice(start, end < 0 ? undefined : end).split('\n').map(row => row.trim()).filter(Boolean);
+    if (!lines.length) { note.textContent = '选区中没有行动项。'; return; }
+    return lines;
+  }
+  const actionStatus = canUseActions && Button({ label: '查看选中行的待办进度', onClick: async () => {
+    const lines = selectedActionLines();
+    if (!lines) return;
+    try {
+      const { results } = await api.post('/knowledge/' + encodeURIComponent(entry.id) + '/action-todos/status', {
+        updatedAt: reviewed.updatedAt, actions: lines.map(actionLine => ({ actionLine })),
+      });
+      if (store.view.unauthorized || owner !== api.draftOwner() || owner !== store.view.snapshotOwner) return;
+      const labels = { open: '待验收', completed: '已验收', unlinked: '此行未关联待办', unavailable: '原待办不可读取' };
+      replace(todoReceipt, results.map(row => h('span', { style: { display: 'block' } },
+        row.actionLine + ' · ' + labels[row.status] + (row.title && row.title !== row.actionLine ? ' · ' + row.title : '') +
+        (row.dueAt ? ' · 登记期限 ' + row.dueAt : ''))));
+      note.textContent = '';
+      todoReceipt.hidden = false;
+    } catch (error) { note.textContent = '未能读取待办进度：' + error.message; }
+  } });
+  const actionTodos = canUseActions && Button({ label: '将正文选中行加入待办', onClick: async () => {
+      const lines = selectedActionLines();
+      if (!lines) return;
       const updatedAt = reviewed.updatedAt;
       const approved = await confirmDialog({ title: '确认加入待办？', message: h('ul', { style: { maxHeight: '50vh', overflow: 'auto', overflowWrap: 'anywhere' } }, lines.map(line => h('li', null, line))), confirmLabel: '确认所选行动项' });
       if (!approved) return;
@@ -275,7 +296,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   });
   const drawer = openDrawer({
     title: entry ? '编辑记忆' : '添加记忆', subtitle: entry ? `更新于 ${timeAgo(entry.updatedAt)}` : undefined,
-    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), actionTodos, actionTodos && todoReceipt, Field({ label: '正文维护方式', control: protection }), Field({ label: '已确认事实', control: facts }), factsNote, Field({ label: '别名', control: aliases }), Field({ label: '标签', control: tags }), Field({ label: '重要级', control: importance }), Field({ label: '相关度（0–100）', control: relevance }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
+    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), actionTodos, actionStatus, actionTodos && todoReceipt, Field({ label: '正文维护方式', control: protection }), Field({ label: '已确认事实', control: facts }), factsNote, Field({ label: '别名', control: aliases }), Field({ label: '标签', control: tags }), Field({ label: '重要级', control: importance }), Field({ label: '相关度（0–100）', control: relevance }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();

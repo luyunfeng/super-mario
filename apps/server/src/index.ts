@@ -572,11 +572,13 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           await app.knowledgeCurator.rebuildIndex();
           app.events.publish('knowledge.changed', { id: entry.id }); return json(res, 201, entry);
         }
-        const actionTodos = path.match(/^\/api\/v1\/knowledge\/([^/]+)\/action-todos$/);
+        const actionTodos = path.match(/^\/api\/v1\/knowledge\/([^/]+)\/action-todos(\/status)?$/);
         if (actionTodos && method === 'POST') {
           const input = await body(req);
           if (!Array.isArray(input.actions)) throw new InputError('请选择行动项');
-          const results = await app.confirmKnowledgeActions({ id: decodeURIComponent(actionTodos[1]), updatedAt: input.updatedAt, actions: input.actions });
+          const selection = { id: decodeURIComponent(actionTodos[1]), updatedAt: input.updatedAt, actions: input.actions };
+          if (actionTodos[2]) return json(res, 200, await app.knowledgeActionStatus(selection));
+          const results = await app.confirmKnowledgeActions(selection);
           return json(res, 200, { results });
         }
         const knowledge = path.match(/^\/api\/v1\/knowledge\/([^/]+)$/);

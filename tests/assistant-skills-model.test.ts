@@ -485,6 +485,7 @@ test('主对话查日程与待办时收到日历不可用原因和独立的待�
 test('Web 与飞书项目会话可按会议主题核对决定、建议和未决事项', { timeout: 30000 }, async t => {
   let projectId = '', pageId = '', otherPage = '', sourceId = '', adapter!: FeishuOptions;
   const deliveries: string[] = [];
+  let pageVersion = '';
   const title = '合成样本评审会';
   const excerpt = '[09:12] 决定采用样本甲。[09:14] 建议周五前复核；负责人待定。';
   const decision = '决定采用样本甲。周五是建议期限，负责人待确认。';
@@ -508,6 +509,8 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     }
     if (req.callId === 'minutes') {
       assert.ok(materials.includes(excerpt));
+      const pages = JSON.parse(typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text);
+      pageVersion = pages.find((page: { id: string }) => page.id === pageId).updatedAt;
       assert.ok(req.tools.includes('knowledge_original'));
       assert.match(req.system, /只引用读到的文字/);
       return call('knowledge_original', { pageId: otherPage }, 'denied-source');
@@ -524,6 +527,10 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
       assert.match(materials, /4000/);
       assert.doesNotMatch(materials, /原话依据甲/);
       return call('knowledge_original', { pageId, sourceId, offset: 4000 }, 'last-page');
+    }
+    if (req.callId === 'action-link') {
+      assert.match(materials, /unlinked/);
+      return call('todos_list', { query: '样本甲 复核' }, 'action-status');
     }
     if (req.callId === 'action-status') {
       const rows = JSON.parse(typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text);
@@ -544,7 +551,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     assert.ok(materials.includes('&line=12)'));
     assert.ok(!materials.includes('&line=11)'));
     assert.doesNotMatch(materials, /另一个项目的结论/);
-    return call('todos_list', { query: '样本甲 复核' }, 'action-status');
+    return call('knowledge_action_status', { id: pageId, updatedAt: pageVersion, actionLine: excerpt }, 'action-link');
   }, options => {
     adapter = options;
     return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
@@ -858,6 +865,8 @@ test('Web 确认会议行动项，飞书批量确认复用原待办并添加新�
     call('knowledge_action_todo', { id, updatedAt, actionLine }, step);
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
+      assert.ok(req.tools.includes('knowledge_action_status'));
+      assert.match(req.system, /unlinked 只表示这行没有关联/);
       assert.ok(req.tools.includes('knowledge_action_todo'));
       assert.match(req.system, /逐项按 results 报告新建或复用/);
       assert.match(req.system, /版本冲突须重新展示变化并让用户确认/);
@@ -868,6 +877,20 @@ test('Web 确认会议行动项，飞书批量确认复用原待办并添加新�
       const pages = JSON.parse(text);
       assert.deepEqual(pages.map((p: { id: string }) => p.id), [pageId]);
       version = pages[0].updatedAt;
+      return call('knowledge_action_status', { id: otherId, updatedAt: version, actionLine: line }, 'read-foreign');
+    }
+    if (req.callId === 'read-foreign') {
+      assert.match(text, /知识页不可用/);
+      return call('knowledge_action_status', { id: pageId, updatedAt: version, actionLine: line }, 'read-current');
+    }
+    if (req.callId === 'read-current') {
+      const [row] = JSON.parse(text).results;
+      assert.equal(row.status, repeat ? 'completed' : 'unlinked');
+      if (repeat) {
+        assert.equal(row.todoId, todoId);
+        assert.equal(row.title, '修订后的标题');
+        assert.ok(row.completedAt);
+      }
       return confirm('foreign', otherId);
     }
     if (req.callId === 'foreign') {
@@ -912,7 +935,7 @@ test('Web 确认会议行动项，飞书批量确认复用原待办并添加新�
     assert.equal(todo.projectId, project.id);
     assert.equal(todo.dueAt, undefined);
     assert.ok(todo.notes.includes(version) && todo.notes.includes(pageId) && todo.notes.includes(line));
-    server.app.updateTodo(todoId, { title: '修订后的标题' });
+    server.app.updateTodo(todoId, { title: '修订后的标题', completed: true });
     repeat = true;
     const bot = await api('/feishu/bots', { name: '会议确认', appId: 'cli_4444444444444444', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });

@@ -370,7 +370,18 @@ test('正文多行行动项在确认后批量入待办，重试复用，失败�
     await expect(dialog).toContainText('已新建 ' + created + ' 项待办，已有 ' + (2 - created) + ' 项');
   }
   const existing = server.app.todos().find(todo => todo.title === lines[0])!;
+  const checkStatus = async () => {
+    await dialog.locator('[name=content]').evaluate((el: HTMLTextAreaElement) => el.select());
+    await dialog.getByRole('button', { name: '查看选中行的待办进度' }).click();
+  };
+  server.app.updateTodo(existing.id, { title: '已复核的样本', completed: true, dueAt: '2030-05-01T12:00:00Z' });
+  await checkStatus();
+  await expect(dialog).toContainText('复核样本甲 · 已验收 · 已复核的样本 · 登记期限 2030-05-01');
+  await expect(dialog).toContainText('登记样本乙 · 待验收');
+  await expect(dialog).toContainText('确认样本丙 · 此行未关联待办');
   server.app.store.remove('todos', existing.id);
+  await checkStatus();
+  await expect(dialog).toContainText('复核样本甲 · 原待办不可读取');
   const response = await page.request.post(server.url + '/api/v1/knowledge/' + entry.id + '/action-todos', {
     headers: { authorization: 'Bearer fixture' }, data: { updatedAt: entry.updatedAt, actions: [lines[2], lines[0]].map(actionLine => ({ actionLine })) },
   });
