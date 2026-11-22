@@ -123,6 +123,15 @@ test('todo agenda uses a half-open local date window and keeps undated todos in 
   assert.deepEqual((agenda as unknown as Todo[]).map(todo => todo.id), ['start', 'late']);
   assert.equal((await list.execute({}, signal()) as unknown[]).length, 4);
   assert.equal((await list.execute({ priority: 'normal' }, signal()) as unknown[]).length, 4);
+  assert.equal((await list.execute({ hasDueDate: true }, signal()) as unknown[]).length, 3);
+  await assert.rejects(list.execute({ hasDueDate: false, overdue: true }, signal()), /无截止日期/);
+  await assert.rejects(list.execute({ order: 'unknown' }, signal()), /排序/);
+  const early = { id: 'early', projectId: 'sorted', dueAt: '2026-03-08T06:00Z', updatedAt: '2026-03-07T20:00Z' };
+  host.store.put('todos', early.id, early);
+  host.store.put('todos', 'recent', { ...early, id: 'recent', dueAt: undefined, updatedAt: '2026-03-08T12:00Z' });
+  const sortedIds = async (order: string) => (await list.execute({ projectId: 'sorted', order }, signal()) as unknown as Todo[]).map(todo => todo.id);
+  assert.deepEqual(await sortedIds('recent'), ['recent', 'early']);
+  assert.deepEqual(await sortedIds('due'), ['early', 'recent']);
   await assert.rejects(list.execute({ priority: 'urgent' }, signal()), /优先级/);
   await assert.rejects(list.execute({ status: 'running' }, signal()), /待办状态/);
   await assert.rejects(list.execute({ overdue: 'true' }, signal()), /布尔值/);

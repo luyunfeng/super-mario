@@ -1223,6 +1223,10 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
       assert.match(req.system, /关联执行已结束仍可能待验收/);
       const question = JSON.stringify(req.content);
       assert.match(req.system, /没有执行记录只表示工作台未记录派发/);
+      if (question.includes('还没定期限')) {
+        assert.match(req.system, /提醒时间不能当作截止日期/);
+        return call('todos_list', { status: 'open', hasDueDate: false, order: 'priority' }, 'undated');
+      }
       if (question.includes('派过')) return call('todos_list', { status: 'open', hasExecution: !question.includes('没派过') }, question.includes('没派过') ? 'unassigned' : 'dispatched');
       if (question.includes('逾期')) return call('todos_list', { query: '月报', status: 'open', overdue: true }, 'overdue');
       if (question.includes('已经完成')) return call('todos_list', { query: '月报', status: 'done' }, 'done');
@@ -1234,7 +1238,8 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
       assert.deepEqual(titles, ['月报待验收']);
       return { role: 'assistant', content: answer };
     }
-    if (req.callId === 'dispatched') assert.deepEqual(titles, ['月报待验收']);
+    if (req.callId === 'undated') assert.deepEqual(titles, ['加急复核', '月报未定期限']);
+    else if (req.callId === 'dispatched') assert.deepEqual(titles, ['月报待验收']);
     else if (req.callId === 'unassigned') assert.deepEqual(titles, ['月报后续', '月报未定期限']);
     else if (req.callId === 'done') assert.deepEqual(titles, ['月报已验收']);
     else assert.deepEqual(titles, ['月报待验收', '月报后续', '月报未定期限']);
@@ -1271,6 +1276,14 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
     await t.waitFor(() => assert.ok(sent.includes(answer)));
     await adapter.onMessage('哪些待办派过执行？', { ...source, messageId: 'dispatch-question' });
     await t.waitFor(() => assert.ok(sent.includes('月报待验收')));
+    await api('/todos', { title: '加急复核', projectId: project.id, reminderAt: '2099-01-01T10:00:00Z', priority: 'high' });
+    await api('/todos', { title: '独立复核', projectId: other.id });
+    const completed = await api('/todos', { title: '已结束的复核', projectId: project.id });
+    server.app.updateTodo(completed.id, { completed: true });
+    const question = '哪些待办还没定期限？按优先级排列';
+    assert.equal(await ask(question, path), '加急复核、月报未定期限');
+    await adapter.onMessage(question, { ...source, messageId: 'undated-question' });
+    await t.waitFor(() => assert.ok(sent.includes('加急复核、月报未定期限')));
     assert.equal(server.app.todos().find(todo => todo.id === pending.id)?.completedAt, undefined);
   } finally { await server.close(); }
 });

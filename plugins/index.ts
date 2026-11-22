@@ -297,6 +297,8 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if (args.query !== undefined && typeof args.query !== 'string') throw new Error('待办关键词须为文本');
           if (args.status !== undefined && (typeof args.status !== 'string' || !['open', 'done', 'all'].includes(args.status))) throw new Error('待办状态无效');
           if (args.overdue !== undefined && typeof args.overdue !== 'boolean') throw new Error('逾期筛选须为布尔值');
+          if (args.hasDueDate !== undefined && typeof args.hasDueDate !== 'boolean') throw new Error('截止日期筛选须为布尔值');
+          if (args.order !== undefined && !['recent', 'due', 'priority'].some(order => order === args.order)) throw new Error('待办排序无效');
           if (args.hasExecution !== undefined && typeof args.hasExecution !== 'boolean') throw new Error('执行记录筛选须为布尔值');
           if (args.priority !== undefined && !priorityParameter.enum.some(value => value === args.priority)) throw new Error('待办优先级无效');
           const candidates = context.store.list<Todo>('todos');
@@ -312,6 +314,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           const before = timeBoundary(args.dueBefore, Infinity);
           if (from >= before) throw new Error('待办查询起点必须早于终点');
           const bounded = args.dueFrom !== undefined || args.dueBefore !== undefined;
+          if (args.hasDueDate === false && (bounded || args.overdue === true)) throw new Error('无截止日期不能与截止时段或逾期条件组合');
           const now = Date.now();
           const todos = candidates.filter(todo => {
             if (args.priority !== undefined && (todo.priority ?? 'normal') !== args.priority) return false;
@@ -320,18 +323,29 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             if (args.todoId !== undefined && args.todoId !== todo.id) return false;
             if ((args.status === 'open' && todo.completedAt) || (args.status === 'done' && !todo.completedAt)) return false;
             const due = Date.parse(todo.dueAt ?? '');
+            if (args.hasDueDate !== undefined && Number.isFinite(due) !== args.hasDueDate) return false;
             if (args.overdue && (todo.completedAt || !(due < now))) return false;
             if (bounded && !(due >= from && due < before)) return false;
             if (!words.length) return true;
             const text = [todo.title, todo.notes].join('\n').normalize('NFC').toLowerCase();
             return words.every(word => text.includes(word));
           });
-          if (bounded || args.overdue || args.status) {
+          if (args.order || bounded || args.overdue || args.status) {
             const due = (todo: Todo) => todo.dueAt ? Date.parse(todo.dueAt) : Infinity;
-            todos.sort((a, b) => due(a) - due(b));
+            const rank = { high: 0, normal: 1, low: 2 };
+            todos.sort((a, b) => {
+              if (args.order === 'priority') {
+                const difference = rank[a.priority ?? 'normal'] - rank[b.priority ?? 'normal'];
+                if (difference) return difference;
+              }
+              if (args.order !== 'recent' && due(a) !== due(b)) return due(a) - due(b);
+              return args.order ? Date.parse(b.updatedAt) - Date.parse(a.updatedAt) : 0;
+            });
           }
           return todos as unknown as Json;
         }, { query: { type: 'string', description: '标题或备注中的关键词，多词用空格分隔' }, projectId: { type: 'string' },
+          hasDueDate: { type: 'boolean', description: 'false 仅查未定截止日期的待办，true 仅查已定期限' },
+          order: { type: 'string', enum: ['recent', 'due', 'priority'], description: '最近更新、最早到期或最高优先级在前' },
           priority: priorityParameter, hasExecution: { type: 'boolean', description: '是否存在同项目下关联该待办的执行记录，包含已结束的执行' },
           status: { type: 'string', enum: ['open', 'done', 'all'] }, overdue: { type: 'boolean' },
           dueFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, dueBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' } }));
