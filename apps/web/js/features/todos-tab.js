@@ -125,14 +125,22 @@ export function createTodosTab({ api, store, router }) {
       onchange: () => { if (session.value) responsible.value = ''; } });
     responsible.addEventListener('input', () => { if (responsible.value.trim()) session.value = ''; });
     const waiting = Input({ value: todo.waitingOn ?? '', placeholder: '例如：张三回复' });
+    const parentOptions = (store.view.snapshot?.todos ?? []).filter(item => item.id !== todo.id && item.projectId === todo.projectId);
+    const parent = Select({ options: [['', '无上级'], ...parentOptions.map(item => [item.id, item.title])], value: todo.parentTodoId ?? '' });
     const projects = (store.view.snapshot?.projects ?? []).filter(item => !item.archivedAt);
     const project = Select({ options: [['', '不归类'], ...projects.map(item => [item.id, item.name])], value: todo.projectId ?? '' });
+    project.addEventListener('change', () => {
+      const selectedProject = project.value || undefined;
+      const options = (store.view.snapshot?.todos ?? []).filter(item => item.id !== todo.id && item.projectId === selectedProject);
+      replace(parent, h('option', { value: '' }, '无上级'), options.map(item => h('option', { value: item.id }, item.title)));
+      parent.value = selectedProject === todo.projectId ? todo.parentTodoId ?? '' : '';
+    });
     const drawer = openDrawer({
       title: '编辑待办',
       body: [Field({ label: '标题', control: name, required: true }), Field({ label: '备注', control: notes }),
         h('div', { class: 'form-row' }, Field({ label: '截止日期', control: dueInput, hint: '留空取消截止日期。' }), clock && Field({ label: '截止时间', control: clock }), Field({ label: '在等谁', control: waiting, hint: '填写后会进入“等待中”。' })),
         Field({ label: '提醒时间', control: reminder, hint: '按本机时区填写；留空取消。到点检查需在 Agent 中开启提醒，外发仍需渠道与发送授权。' }),
-        Field({ label: '优先级', control: editPriority }), Field({ label: '负责人', control: responsible }), Field({ label: '负责会话', control: session }), Field({ label: '所属项目', control: project })],
+        Field({ label: '优先级', control: editPriority }), Field({ label: '负责人', control: responsible }), Field({ label: '负责会话', control: session }), Field({ label: '所属项目', control: project }), Field({ label: '上级待办', control: parent })],
       footer: [Button({ label: '取消', onClick: () => drawer.close() }), Button({
         label: '保存', kind: 'primary', onClick: async () => {
           if (!name.value.trim()) throw new Error('请填写标题');
@@ -154,6 +162,7 @@ export function createTodosTab({ api, store, router }) {
           if (name.value.trim() !== todo.title) patch.title = name.value.trim();
           if (notes.value !== (todo.notes ?? '')) patch.notes = notes.value;
           if (project.value !== (todo.projectId ?? '')) patch.projectId = project.value;
+          if (parent.value !== (todo.parentTodoId ?? '')) patch.parentTodoId = parent.value;
           if (responsible.value.trim() !== (todo.responsiblePerson ?? '')) patch.responsiblePerson = responsible.value.trim();
           if (session.value !== (assigned?.runId ?? '')) patch.responsibleRunId = session.value;
           if (waiting.value.trim() !== (todo.waitingOn ?? '')) patch.waitingOn = waiting.value.trim();

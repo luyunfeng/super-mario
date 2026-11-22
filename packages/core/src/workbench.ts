@@ -894,9 +894,23 @@ export async function createWorkbench(config: AppConfig) {
     if (value === 'high' || value === 'normal' || value === 'low') return value;
     throw new InputError('待办优先级须为 high、normal 或 low');
   }
+  function parentFor(value: unknown, projectId: string | undefined, childId?: string) {
+    const parentId = optionalText(value, '上级待办');
+    const seen = new Set([childId]);
+    let id = parentId;
+    while (id) {
+      if (seen.has(id)) throw new InputError('待办层级不能形成循环', 409);
+      seen.add(id);
+      const parent = store.get<Todo>('todos', id);
+      if (!parent || parent.projectId !== projectId) throw new InputError('上级待办不属于当前项目', 409);
+      id = parent.parentTodoId;
+    }
+    return parentId;
+  }
   function newTodo(input: Record<string, unknown>): Todo {
     const now = new Date().toISOString();
-    return { id: randomUUID(), priority: todoPriority(input.priority), responsiblePerson: optionalText(input.responsiblePerson, '负责人'), title: requiredText(input.title, '标题'), notes: optionalText(input.notes, '备注') ?? '', projectId: optionalText(input.projectId, '项目'), dueAt: dueDate(input.dueAt), reminderAt: dueDate(input.reminderAt), reminderVersion: 1, waitingOn: optionalText(input.waitingOn, '等待对象'), createdAt: now, updatedAt: now };
+    const projectId = optionalText(input.projectId, '项目');
+    return { id: randomUUID(), parentTodoId: parentFor(input.parentTodoId, projectId), priority: todoPriority(input.priority), responsiblePerson: optionalText(input.responsiblePerson, '负责人'), title: requiredText(input.title, '标题'), notes: optionalText(input.notes, '备注') ?? '', projectId, dueAt: dueDate(input.dueAt), reminderAt: dueDate(input.reminderAt), reminderVersion: 1, waitingOn: optionalText(input.waitingOn, '等待对象'), createdAt: now, updatedAt: now };
   }
   function registerChatTodo(input: Record<string, unknown>): Json {
     const requested = newTodo(input);
@@ -904,7 +918,7 @@ export async function createWorkbench(config: AppConfig) {
     const due = requested.dueAt ? Date.parse(requested.dueAt) : undefined;
     return store.transaction(() => {
       const matches = store.list<Todo>('todos').filter(todo =>
-        !todo.completedAt && todo.projectId === requested.projectId && todo.title.normalize('NFC') === title &&
+        !todo.completedAt && todo.projectId === requested.projectId && todo.parentTodoId === requested.parentTodoId && todo.title.normalize('NFC') === title &&
         (todo.dueAt ? Date.parse(todo.dueAt) : undefined) === due);
       if (matches.length > 1) throw new InputError('已有多个同名同期限待办，请查询并选定具体事项', 409);
       const existing = matches[0];
@@ -932,7 +946,11 @@ export async function createWorkbench(config: AppConfig) {
     if (patch.notes !== undefined) next.notes = optionalText(patch.notes, '备注') ?? '';
     if (patch.projectId !== undefined) next.projectId = optionalText(patch.projectId, '项目');
     if (patch.dueAt !== undefined) next.dueAt = dueDate(patch.dueAt);
-    if (next.projectId !== todo.projectId) delete next.responsibleSession;
+    if (next.projectId !== todo.projectId) {
+      delete next.responsibleSession;
+      delete next.parentTodoId;
+    }
+    if (patch.parentTodoId !== undefined) next.parentTodoId = parentFor(patch.parentTodoId, next.projectId, id);
     if (patch.responsiblePerson !== undefined) {
       next.responsiblePerson = optionalText(patch.responsiblePerson, '负责人');
       if (next.responsiblePerson) delete next.responsibleSession;
@@ -956,6 +974,15 @@ export async function createWorkbench(config: AppConfig) {
       || next.projectId !== todo.projectId || !!next.completedAt !== !!todo.completedAt;
     if (cycleChanged) { next.reminderVersion = (todo.reminderVersion ?? 1) + 1; next.remindedAt = undefined; }
     store.transaction(() => {
+      if (next.projectId !== todo.projectId) {
+        for (const child of store.list<Todo>('todos')) {
+          if (child.parentTodoId !== id) continue;
+          const detached = { ...child, updatedAt: next.updatedAt };
+          delete detached.parentTodoId;
+          store.put('todos', child.id, detached);
+          changed('todos.changed', { id: child.id });
+        }
+      }
       store.put('todos', id, next);
       // Check the final ownership, including a combined project/completion PATCH.
       if (patch.completed === true) { reporting.assertCanComplete(id); runReview.assertCanComplete(id); }

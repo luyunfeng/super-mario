@@ -267,14 +267,14 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if (actions.updateTodo) context.contribute('tools', 'todo_update', tool('todo_update', '修改指定待办的标题、备注、优先级、等待对象、提醒或截止时间，仅传用户要求修改的字段。改期须传 todo_detail 所见的 expectedDueAt，原无期限用空字符串，清除期限用 dueAt 空字符串。', async (args, signal) => {
             signal.throwIfAborted(); const { id, ...patch } = args;
             if (patch.completed !== undefined) throw new Error('请由用户在 Web 验收并完成待办');
-            const editable = ['title', 'notes', 'responsiblePerson', 'responsibleRunId', 'waitingOn', 'reminderAt', 'dueAt', 'priority'];
+            const editable = ['title', 'notes', 'parentTodoId', 'responsiblePerson', 'responsibleRunId', 'waitingOn', 'reminderAt', 'dueAt', 'priority'];
             if (Object.keys(patch).some(key => !editable.includes(key) && key !== 'expectedDueAt')) throw new Error('不支持的待办修改字段');
             if (!editable.some(key => patch[key] !== undefined)) throw new Error('请指定需要修改的字段');
             if (patch.dueAt !== undefined && typeof patch.expectedDueAt !== 'string') throw new Error('改期前请核对当前截止时间');
             if (patch.dueAt !== undefined && patch.dueAt !== '') timeBoundary(patch.dueAt, 0, '待办截止时间');
             validateAssistantReminder(patch.reminderAt);
             return actions.updateTodo!(String(id ?? ''), patch);
-          }, { id: { type: 'string' }, dueAt: { type: 'string', description: '带时区的 ISO 时间，空字符串清除期限' }, expectedDueAt: { type: 'string' }, title: { type: 'string' }, notes: { type: 'string' }, responsibleRunId: { type: 'string', description: '使用已有执行记录的电脑和会话登记负责方，空字符串清除负责会话' }, responsiblePerson: { type: 'string', description: '登记负责人姓名，清除时传空字符串' }, waitingOn: { type: 'string' }, priority: priorityParameter, reminderAt: reminderParameter }));
+          }, { id: { type: 'string' }, dueAt: { type: 'string', description: '带时区的 ISO 时间，空字符串清除期限' }, expectedDueAt: { type: 'string' }, title: { type: 'string' }, notes: { type: 'string' }, parentTodoId: { type: 'string', description: '同项目上级待办 ID，空字符串解除' }, responsibleRunId: { type: 'string', description: '使用已有执行记录的电脑和会话登记负责方，空字符串清除负责会话' }, responsiblePerson: { type: 'string', description: '登记负责人姓名，清除时传空字符串' }, waitingOn: { type: 'string' }, priority: priorityParameter, reminderAt: reminderParameter }));
           if (actions.knowledgeActionStatus) context.contribute('tools', 'knowledge_action_status', tool('knowledge_action_status',
             '只读查询已读知识页某一行动项原文所关联待办的当前状态与登记期限。', async (args, signal) => {
               signal.throwIfAborted(); return await actions.knowledgeActionStatus!(args) as Json;
@@ -286,11 +286,11 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
               return actions.confirmKnowledgeTodo!(args);
             },
             { id: { type: 'string' }, updatedAt: { type: 'string' }, actions: { type: 'array', minItems: 1, items: { type: 'object', properties: { actionLine: { type: 'string' }, dueAt: { type: 'string' } }, required: ['actionLine'], additionalProperties: false } }, actionLine: { type: 'string' }, dueAt: { type: 'string', description: '仅在期限明确时传带时区的 ISO 时间' } }));
-          context.contribute('tools', 'todo_create', tool('todo_create', '登记待办。同项目中同标题、同截止时间的未完成事项会返回原记录，created 表明是否新建。', async (args, signal) => {
+          context.contribute('tools', 'todo_create', tool('todo_create', '登记待办。同项目和同上级中同标题、同截止时间的未完成事项会返回原记录，created 表明是否新建。', async (args, signal) => {
             signal.throwIfAborted();
             validateAssistantReminder(args.reminderAt);
             return actions.createTodo(args);
-          }, { title: { type: 'string' }, notes: { type: 'string' }, projectId: { type: 'string' }, dueAt: { type: 'string' }, priority: priorityParameter, reminderAt: reminderParameter, responsiblePerson: { type: 'string', description: '登记负责人姓名，清除时传空字符串' }, waitingOn: { type: 'string' } }));
+          }, { title: { type: 'string' }, parentTodoId: { type: 'string' }, notes: { type: 'string' }, projectId: { type: 'string' }, dueAt: { type: 'string' }, priority: priorityParameter, reminderAt: reminderParameter, responsiblePerson: { type: 'string', description: '登记负责人姓名，清除时传空字符串' }, waitingOn: { type: 'string' } }));
         }
         context.contribute('tools', 'todos_list', tool('todos_list', '读取工作台待办。status=open 查未完成，done 查已完成，all 或省略可查全部。overdue=true 仅查已过截止时间的未完成事项。可按项目、优先级、标题和备注关键词及截止时段组合筛选。', async (args, signal) => {
           signal.throwIfAborted();
@@ -325,6 +325,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if (args.hasDueDate === false && (bounded || args.overdue === true)) throw new Error('无截止日期不能与截止时段或逾期条件组合');
           const now = Date.now();
           const todos = candidates.filter(todo => {
+            if (args.parentTodoId !== undefined && todo.parentTodoId !== args.parentTodoId) return false;
             if (args.responsibleMachineId !== undefined && todo.responsibleSession?.machineId !== args.responsibleMachineId) return false;
             if (args.responsibleSessionId !== undefined && todo.responsibleSession?.sessionId !== args.responsibleSessionId) return false;
             if (responsiblePerson && todo.responsiblePerson?.normalize('NFC').toLowerCase() !== responsiblePerson) return false;
@@ -356,6 +357,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           }
           return todos as unknown as Json;
         }, { query: { type: 'string', description: '标题或备注中的关键词，多词用空格分隔' }, projectId: { type: 'string' },
+          parentTodoId: { type: 'string', description: '仅返回指定上级的直接子待办' },
           responsibleMachineId: { type: 'string', description: '完整匹配登记负责会话的电脑 ID' },
           responsibleSessionId: { type: 'string', description: '完整匹配登记的负责会话 ID，可同时限定电脑' },
           responsiblePerson: { type: 'string', description: '按登记负责人姓名完整匹配' },

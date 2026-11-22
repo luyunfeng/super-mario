@@ -100,11 +100,18 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
     const sources = (snapshot.inbox ?? []).filter(item => item.todoId === current.id && (item.projectId ?? null) === (current.projectId ?? null));
     const runs = (snapshot.runs ?? []).filter(item => item.todoId === current.id && item.projectId === current.projectId)
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    const related = snapshot.todos.filter(item => item.projectId === current.projectId);
+    const parent = related.find(item => item.id === current.parentTodoId);
+    const children = related.filter(item => item.parentTodoId === current.id);
+    const todoLink = item => h('a', { href: router.href('projects', current.projectId ?? 'all', 'todos', 'detail', item.id), onclick: () => close?.() }, item.title);
     const latest = runs[0];
     const context = { api, store, router, todo: current };
     const action = (label, fn) => Button({ label, size: 'sm', onClick: () => { close?.(); fn(); } });
     replace(summary, h('h2', null, current.title), current.notes && h('p', null, current.notes),
       sources.length > 0 && section('来源', sources.map(item => h('p', null, [item.source, item.title || item.id].filter(Boolean).join(' · ')))),
+      parent && section('上级待办', todoLink(parent)),
+      children.length > 0 && section('子待办', h('p', null, '已完成 ' + children.filter(item => item.completedAt).length + ' / ' + children.length),
+        children.map(item => h('div', null, todoLink(item), item.completedAt ? ' · 已完成' : ' · 未完成'))),
       section('负责方', current.responsibleSession ? '会话 ' + current.responsibleSession.machineId + ' / ' + current.responsibleSession.sessionId : current.responsiblePerson || '未登记'),
       section('优先级', todoPriorityLabels[current.priority ?? 'normal']),
       section('归属', project?.name ?? current.projectId ?? '不归类', current.completedAt && ' · 已完成'),
