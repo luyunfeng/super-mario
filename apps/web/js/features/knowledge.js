@@ -1,5 +1,7 @@
 // 记忆条目：新增/编辑抽屉和列表行。记忆页和项目的“资料”标签共用。
 import { h, replace } from '../lib/dom.js';
+import { createConversationDrafts } from '../lib/conversation-drafts.js';
+import { quoteDraftKey } from '../lib/message-quote.js';
 import { layerNames, timeAgo } from '../lib/format.js';
 import { Button, Field, Input, TextArea, Select, Pill } from '../ui/kit.js';
 import { hintCopy } from '../ui/hint.js';
@@ -7,7 +9,7 @@ import { openDrawer, confirmDialog } from '../ui/overlay.js';
 
 const LAYER_HINT = { personal: 'memory.personal', global: 'memory.global', project: 'memory.project' };
 
-function originalSources(api, entry, selected, line) {
+function originalSources(api, entry, selected, line, ask) {
   const path = '/knowledge/' + encodeURIComponent(entry.id) + '/sources';
   const body = h('div', { class: 'stack' });
   const section = h('details', { open: Boolean(selected) }, h('summary', null, '查看原始资料'), body);
@@ -18,14 +20,19 @@ function originalSources(api, entry, selected, line) {
       const { sources } = await api.get(path);
       replace(body, sources.length ? sources.map(source => {
         const text = h('pre', { class: 'small', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } });
+        let original;
+        const action = h('button', { type: 'button', class: 'btn btn--ghost btn--sm', hidden: true,
+          onclick: () => ask(source, original) }, '引用原文追问');
         const notice = h('span', { role: 'status', hidden: true }, '引用的行号超出原文范围。');
-        const detail = h('details', { open: source.id === selected }, h('summary', null, source.title), notice, text);
+        const detail = h('details', { open: source.id === selected }, h('summary', null, source.title), notice, text, action);
         detail.addEventListener('toggle', async () => {
           if (!detail.open) return;
+          action.hidden = true;
           text.textContent = '正在读取原文…';
           try {
             const { content } = await api.get(path + '/' + encodeURIComponent(source.id));
             text.textContent = content;
+            original = content; action.hidden = !ask;
             if (selected !== source.id || !Number.isSafeInteger(line) || line < 1) return;
             const lines = content.split('\n');
             if (line > lines.length) { notice.hidden = false; return; }
@@ -44,7 +51,7 @@ function originalSources(api, entry, selected, line) {
   return section;
 }
 
-export function openKnowledgeDrawer({ api, store, entry, sourceId, line, defaults = {}, onSaved }) {
+export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId, line, defaults = {}, onSaved }) {
   const projects = (store.view.snapshot?.projects ?? []).filter(item => !item.archivedAt);
   const layer = Select({ options: Object.entries(layerNames), value: entry?.layer ?? defaults.layer ?? 'personal', name: 'layer' });
   const project = Select({ options: [['', '请选择项目'], ...projects.map(item => [item.id, item.name])], value: entry?.projectId ?? defaults.projectId ?? '', name: 'projectId' });
@@ -55,6 +62,46 @@ export function openKnowledgeDrawer({ api, store, entry, sourceId, line, default
   const projectField = Field({ label: '所属项目', control: project, required: true });
   const sync = () => { projectField.hidden = layer.value !== 'project'; layerHint.textContent = hintCopy(LAYER_HINT[layer.value]).tag; };
   layer.addEventListener('change', sync);
+
+  const owner = store.view.snapshotOwner;
+  function mayQuote() {
+    const view = store.view;
+    return router && scope && !view.unauthorized && owner === api.draftOwner() && owner === view.snapshotOwner &&
+      view.snapshot?.plugins?.some(p => p.id === 'conversation-quotes' && p.status === 'active') &&
+      view.snapshot?.plugins?.some(p => p.id === 'knowledge-local' && p.status === 'active') &&
+      view.snapshot.knowledge?.some(p => p.id === entry.id && p.layer === entry.layer && p.projectId === entry.projectId) &&
+      (!entry.projectId || view.snapshot.projects?.some(p => p.id === entry.projectId && !p.archivedAt));
+  }
+  function ask(source, original) {
+    if (!mayQuote()) { note.textContent = '当前无法引用，请检查插件和知识页状态。'; return; }
+    if (title.value !== entry.title || content.value !== entry.content || layer.value !== entry.layer || project.value !== (entry.projectId ?? '')) {
+      note.textContent = '请先保存记忆修改，再引用原文。'; return;
+    }
+    const drafts = createConversationDrafts({ api, store });
+    const key = quoteDraftKey(JSON.stringify(entry.projectId ? ['project', entry.projectId] : ['main', '']));
+    const field = h('textarea', { class: 'textarea', rows: 10, readOnly: true, value: original, 'aria-label': '选择要追问的原文' });
+    const target = entry.projectId ? '项目工作对话' : '主对话';
+    let previous = drafts.read(key);
+    const apply = h('button', { class: 'btn btn--primary btn--sm', type: 'button', disabled: true, onclick() {
+      if (!mayQuote()) { selection.close(); return; }
+      if (drafts.read(key) !== previous) { previous = drafts.read(key); refresh(); return; }
+      const passage = field.value.slice(field.selectionStart, field.selectionEnd);
+      if (!passage.trim()) return;
+      const line = field.value.slice(0, field.selectionStart).split('\n').length;
+      const citation = `[查看原文](#memory?entry=${encodeURIComponent(entry.id)}&source=${encodeURIComponent(source.id)}&line=${line})`;
+      drafts.write(key, JSON.stringify({ label: source.title, text: source.title + ' · 第 ' + line + ' 行 ' + citation + '\n' + passage }));
+      selection.close();
+      if (!entry.projectId) scope.set('');
+      router.go(entry.projectId ? router.href('projects', entry.projectId, 'workspace') : router.href('chat'));
+    } });
+    function refresh() {
+      apply.textContent = '引用到' + target + (previous ? '（替换已有引用）' : '');
+      apply.disabled = !field.value.slice(field.selectionStart, field.selectionEnd).trim();
+    }
+    field.addEventListener('select', refresh);
+    const selection = openDrawer({ title: '选择原文追问', body: field, footer: apply });
+    refresh(); field.focus(); field.setSelectionRange(0, 0);
+  }
 
   const save = Button({
     label: entry ? '保存' : '记住', kind: 'primary',
@@ -78,7 +125,7 @@ export function openKnowledgeDrawer({ api, store, entry, sourceId, line, default
   });
   const drawer = openDrawer({
     title: entry ? '编辑记忆' : '添加记忆', subtitle: entry ? `更新于 ${timeAgo(entry.updatedAt)}` : undefined,
-    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), entry && originalSources(api, entry, sourceId, line), note],
+    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), note],
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();

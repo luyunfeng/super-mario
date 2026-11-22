@@ -92,7 +92,7 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
     const rows = (snapshot.knowledge ?? []).filter(item => item.layer === 'project' && item.projectId === projectId);
     if (!rows.length) { replace(memoryList, Empty({ title: '这个项目还没有资料', text: '写下项目背景、约定或链接，Agent 工作时会参考。' })); memoryList._keyed = undefined; return; }
     if (!memoryList._keyed) memoryList.replaceChildren();
-    keyedList(memoryList, rows, item => item.id, item => knowledgeRow(item, { onOpen: entry => openKnowledgeDrawer({ api, store, entry }) }), item => `${item.id}:${item.updatedAt}`);
+    keyedList(memoryList, rows, item => item.id, item => knowledgeRow(item, { onOpen: entry => openKnowledgeDrawer({ api, store, router, scope, entry }) }), item => `${item.id}:${item.updatedAt}`);
   }
 
   function paintDetail(snapshot) {

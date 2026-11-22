@@ -21,6 +21,11 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   const route = '#memory?entry=' + entry.id + '&source=' + job.id + '&line=2';
   server.app.store.put('messages', 'citation', { id: 'citation', conversationId: 'main', role: 'assistant', status: 'done',
     createdAt: new Date().toISOString(), text: '依据见[查看原文](' + route + ')' });
+  const project = await server.app.createProject({ name: '原文追问项目' });
+  const projectEntry = await knowledge.put({ title: '项目记录', content: '项目摘要', layer: 'project', projectId: project.id });
+  const projectJob = server.app.knowledgeCurator.addSource({ title: '项目来源', text: original, layer: 'project', projectId: project.id });
+  server.app.store.put('knowledge.sources', projectJob.id, { ...projectJob, status: 'completed', knowledgeIds: [projectEntry.id] });
+  await writeFile(join(rawDir, projectJob.id + '.md'), original);
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
   t.after(() => browser.close());
   const page = await browser.newPage();
@@ -34,15 +39,35 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   await expect(dialog.locator('pre em')).toHaveCount(0);
   await dialog.getByRole('button', { name: '关闭' }).click();
   await page.evaluate(() => { location.hash = '#chat'; });
+  await page.getByLabel('给 Agent 的消息').fill('请解释这段话');
   await page.getByRole('link', { name: '查看原文' }).click();
   await expect(dialog.locator('pre')).toBeVisible();
   await page.reload();
   await expect(dialog.locator('pre')).toBeVisible();
   await expect(dialog.locator('pre')).toHaveText(original);
   await expect(dialog.locator('pre mark')).toHaveText('[09:15] <em>合成原文</em>');
+  await dialog.getByRole('button', { name: '引用原文追问' }).click();
+  const picker = page.getByRole('dialog', { name: '选择原文追问' });
+  await picker.getByLabel('选择要追问的原文').evaluate((el: HTMLTextAreaElement) => {
+    const start = el.value.indexOf('合成原文');
+    el.setSelectionRange(start, start + 4);
+  });
+  await picker.getByRole('button', { name: '引用到主对话' }).click();
+  await expect(page.getByLabel('给 Agent 的消息')).toHaveValue('请解释这段话');
+  const quote = page.locator('#chat [data-message-quote]');
+  await expect(quote).toContainText('第 2 行');
+  await expect(quote).toContainText(route);
+  await expect(quote).not.toContainText('散会');
+  expect(server.app.store.list<{role:string}>('messages').filter(row => row.role === 'user')).toHaveLength(0);
   await page.evaluate(id => { location.hash = '#memory?entry=' + id + '&source=missing'; }, entry.id);
   await expect(dialog.getByText('引用的来源已不可用。')).toBeVisible();
   await expect(dialog.locator('pre')).toBeHidden();
+  await page.evaluate(route => { location.hash = route; }, '#memory?entry=' + projectEntry.id + '&source=' + projectJob.id);
+  await dialog.getByRole('button', { name: '引用原文追问' }).click();
+  await picker.getByLabel('选择要追问的原文').evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(0, 2));
+  await picker.getByRole('button', { name: '引用到项目工作对话' }).click();
+  await expect(page).toHaveURL(new RegExp('#projects/' + project.id + '/workspace$'));
+  await expect(page.locator('#panel-workspace [data-message-quote]')).toContainText('开场');
   const get = (id: string) => page.request.get(server.url + '/api/v1/knowledge/' + id + '/sources/' + job.id,
     { headers: { authorization: 'Bearer fixture' } });
   expect((await get(other.id)).status()).toBe(404);

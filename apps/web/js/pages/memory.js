@@ -91,7 +91,7 @@ export function createMemoryPage({ api, store, router, scope }) {
       list._keyed = undefined;
     } else {
       if (!list._keyed) list.replaceChildren();
-      keyedList(list, rows, item => item.id, item => knowledgeRow(item, { projectName: names.get(item.projectId), onOpen: entry => openKnowledgeDrawer({ api, store, entry }) }),
+      keyedList(list, rows, item => item.id, item => knowledgeRow(item, { projectName: names.get(item.projectId), onOpen: entry => openKnowledgeDrawer({ api, store, router, scope, entry }) }),
         item => `${item.id}:${item.updatedAt}:${names.get(item.projectId)}`);
     }
     const pending = pendingJobs(curator).length;
@@ -116,7 +116,7 @@ export function createMemoryPage({ api, store, router, scope }) {
     const { id, sourceId, line } = linkedEntry;
     linkedEntry = undefined;
     const entry = store.view.snapshot.knowledge?.find(item => item.id === id);
-    if (entry) openKnowledgeDrawer({ api, store, entry, sourceId, line });
+    if (entry) openKnowledgeDrawer({ api, store, router, scope, entry, sourceId, line });
     else toast('引用的知识页已不可用。');
   }
   return {

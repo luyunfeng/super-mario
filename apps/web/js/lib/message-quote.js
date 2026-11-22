@@ -2,11 +2,12 @@ import { splitLeadingQuote } from './markdown.js';
 import { openDrawer } from '../ui/overlay.js';
 import { h, replace } from './dom.js';
 
+export const quoteDraftKey = key => JSON.stringify(['quote', key]);
+
 // Store the selection separately so replacing a quote never overwrites typed words.
 export function createMessageQuote({ drafts, input, store, router, scope }) {
   const bar = h('div', { class: 'message-quote message-quote--draft', dataset: { messageQuote: '' }, hidden: true });
   let currentKey = null, currentOwner, selected = '', passageDrawer;
-  const storageKey = key => JSON.stringify(['quote', key]);
 
   function decode(raw) {
     try {
@@ -21,7 +22,7 @@ export function createMessageQuote({ drafts, input, store, router, scope }) {
     if (!key || owner !== drafts.owner()) return;
     const field = h('textarea', { class: 'textarea', rows: 5, readOnly: true, 'aria-label': '选择要引用的原文', value: value.text });
     const current = () => currentKey === key && owner === drafts.owner() && selected === original &&
-      drawer.el.open && drafts.read(storageKey(key)) === original;
+      drawer.el.open && drafts.read(quoteDraftKey(key)) === original;
     const apply = h('button', { type: 'button', class: 'btn btn--primary btn--sm', disabled: true,
       onclick() {
         if (!current()) { restore(currentKey); return; }
@@ -60,12 +61,12 @@ export function createMessageQuote({ drafts, input, store, router, scope }) {
     let lastChoices;
     function draw() {
       if (!current()) { drawer.close(); return; }
-      const choices = destinations().map(item => ({ ...item, existing: drafts.read(storageKey(item.key)) }));
+      const choices = destinations().map(item => ({ ...item, existing: drafts.read(quoteDraftKey(item.key)) }));
       const signature = JSON.stringify(choices);
       if (signature === lastChoices) return;
       lastChoices = signature;
       replace(targets, choices.length ? choices.map(target => {
-        const path = storageKey(target.key);
+        const path = quoteDraftKey(target.key);
         const existing = target.existing;
         return h('button', { class: 'btn btn--secondary', type: 'button', onclick() {
           if (!current() || !destinations().some(item => item.key === target.key)) { drawer.close(); return; }
@@ -96,7 +97,7 @@ export function createMessageQuote({ drafts, input, store, router, scope }) {
       h('button', { type: 'button', class: 'btn btn--ghost btn--sm', onclick: forward }, '引用到其他对话'),
       h('button', { type: 'button', class: 'btn btn--ghost btn--sm', 'aria-label': '移除引用', onclick: () => {
         if (!currentKey || currentOwner !== drafts.owner()) return;
-        drafts.clearIf(storageKey(currentKey), selected);
+        drafts.clearIf(quoteDraftKey(currentKey), selected);
         restore(currentKey);
         input.focus();
       } }, '移除引用'),
@@ -105,18 +106,18 @@ export function createMessageQuote({ drafts, input, store, router, scope }) {
   function restore(key) {
     currentKey = key;
     currentOwner = drafts.owner();
-    paint(key ? drafts.read(storageKey(key)) : '');
+    paint(key ? drafts.read(quoteDraftKey(key)) : '');
   }
   function setSelection(raw) {
     if (!currentKey || currentOwner !== drafts.owner()) return;
-    drafts.write(storageKey(currentKey), raw);
+    drafts.write(quoteDraftKey(currentKey), raw);
     paint(raw);
   }
   // With quote controls off, editing a sent message still replaces the whole
   // draft. An older hidden quote must not reappear beside its replacement.
   function swapHidden(key, raw) {
     if (currentKey || !key || currentOwner !== drafts.owner()) return '';
-    const path = storageKey(key);
+    const path = quoteDraftKey(key);
     const before = drafts.read(path);
     if (before !== raw) drafts.write(path, raw);
     return before;
@@ -145,7 +146,7 @@ export function createMessageQuote({ drafts, input, store, router, scope }) {
   }
   function accepted(key, raw) {
     if (!raw) return;
-    drafts.clearIf(storageKey(key), raw);
+    drafts.clearIf(quoteDraftKey(key), raw);
     if (key === currentKey) restore(key);
   }
   return { bar, restore, restoreMessage, setSelection, swapHidden, select, action, capture: () => selected, compose, accepted };
