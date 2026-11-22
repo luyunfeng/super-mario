@@ -3,6 +3,7 @@ import type { Store } from '../../plugin-sdk/src/index.ts';
 import type { WaitingReplySnapshot } from '../../protocol/src/index.ts';
 import type { Card } from './interactions.ts';
 import type { Plan } from './plans.ts';
+import { readBriefingSettings } from './briefing.ts';
 import { executionProgress } from './execution-progress.ts';
 import type { InboxSuggestion, InboxHandlingRequest } from '../../protocol/src/inbox-handling.ts';
 
@@ -81,7 +82,8 @@ export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: Bot
     };
   }), 8);
   return {
-    capturedAt: new Date().toISOString(), scope: task ? { kind: 'task', todoId: task, projectId: project } : project ? { kind: 'project', projectId: project } : { kind: 'global' },
+    capturedAt: new Date().toISOString(), workspaceTimezone: readBriefingSettings(store).timezone,
+    scope: task ? { kind: 'task', todoId: task, projectId: project } : project ? { kind: 'project', projectId: project } : { kind: 'global' },
     projects: take(projects.map(p => {
       const memory = store.get<{ summary?: string; updatedAt?: string }>('project.memory', p.id);
       const ownTodos = todos.filter(t => t.projectId === p.id);

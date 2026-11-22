@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { BotScope } from '../../protocol/src/bots.ts';
 import type { AppConfig, ExecutorInfo, Message, Project, Todo, Json } from '../../protocol/src/index.ts';
 import type { Contributions, EventBus, Store } from '../../plugin-sdk/src/index.ts';
+import { SCOPED_WORK_SYSTEM_PROMPT } from './prompts.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 
 type Runtime = ReturnType<typeof createAgentRuntime>;
@@ -58,7 +59,7 @@ export function createScopedAgents(options: Options) {
     if(!entry){
       const scope:BotScope={kind:'project',projectId};
       const runtime=createAgentRuntime({...options,scope,conversationId,canUseScope:()=>{const project=options.store.get<Project>('projects',projectId);return Boolean(project&&!project.archivedAt);},
-        ...(role==='memory'?{allowedTools:[],systemPrompt:'你是此项目的独立记忆 Agent。只根据提供的证据提炼项目记忆，不执行工具，不将建议当成已完成事实。'}:{systemPrompt:'你是此项目的工作 Agent。先阅读项目背景、记忆与真实工作状态，再推进当前目标。执行结束不代表业务完成。'})});
+        ...(role==='memory'?{allowedTools:[],systemPrompt:'你是此项目的独立记忆 Agent。只根据提供的证据提炼项目记忆，不执行工具，不将建议当成已完成事实。'}:{systemPrompt:SCOPED_WORK_SYSTEM_PROMPT})});
       entry={botId:`workspace:${projectId}:${role}`,scope,conversationId,runtime};agents.set(conversationId,entry);
     }
     return entry.runtime;
@@ -74,7 +75,8 @@ export function createScopedAgents(options: Options) {
       const binding = identity(scope, botId);
       let agent = agents.get(binding.conversationId);
       if (!agent) {
-        const runtime = createAgentRuntime({ ...options, ...binding, canUseScope: input => options.validScope?.(structuredClone(binding.scope), botId, input) !== false });
+        const systemPrompt = ['project', 'task'].includes(binding.scope.kind) ? SCOPED_WORK_SYSTEM_PROMPT : undefined;
+        const runtime = createAgentRuntime({ ...options, ...binding, systemPrompt, canUseScope: input => options.validScope?.(structuredClone(binding.scope), botId, input) !== false });
         agent = { botId, ...binding, runtime };
         agents.set(binding.conversationId, agent);
       }

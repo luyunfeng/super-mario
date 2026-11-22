@@ -46,8 +46,12 @@ export function formatWindowBrief(brief: ReturnType<typeof buildWindowBrief> & {
   if(!changed)rows.push('本期暂无新的工作变化，也没有待决定事项。');
   return rows.join('\n');
 }
+export function readBriefingSettings(store: Pick<Store, 'get'>): BriefingSettings {
+  return { ...defaults, ...store.get<BriefingSettings>('briefing.settings', 'default') };
+}
+
 export function createBriefingSettings(store: Store, schedules: ReturnType<typeof createSchedules>) {
-  const settings = (): BriefingSettings => ({ ...defaults,...store.get<BriefingSettings>('briefing.settings','default') });
+  const settings = () => readBriefingSettings(store);
   function configure(patch: Partial<BriefingSettings>) {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(k => !(k in defaults))) throw new Error('简报配置包含未知字段');
     const old = settings(), next = {...old,...patch};

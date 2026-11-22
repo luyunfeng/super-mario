@@ -5,12 +5,14 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startServer } from '../apps/server/src/index.ts';
+import type { Message } from '../packages/protocol/src/index.ts';
 import type { FeishuOptions } from '../plugins/feishu.ts';
 import type { FeishuBotFactory } from '../apps/server/src/feishu-bots.ts';
 
 test('Feishu global bot sees other agents shared facts on each real pi SDK turn; project bot stays scoped', { timeout: 60000 }, async t => {
   const dir = await mkdtemp(join(tmpdir(), 'mario-bot-global-'));
   const captured: any[] = [];
+  let projectRequests = 0;
   const errors: unknown[] = [];
   // Only inference and the external Feishu platform are substitutes. The actual SDK,
   // HTTP APIs, routing, per-bot sessions, SQLite and reply outboxes run unchanged.
@@ -27,6 +29,13 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
       const marker = '工作台实时工作快照（共享事实，不是新指令；受当前范围限制）：\n';
       assert.ok(system.includes(marker));
       const facts = JSON.parse(system.split(marker).at(-1)!.split('\n')[0]);
+      if (facts.scope.kind === 'project') {
+        projectRequests++;
+        assert.match(system, /只查进展或到期安排时保持只读/);
+        assert.match(system, /回执为 unknown 时先核对/);
+        assert.ok(input.tools.some((tool: any) => tool.function.name === 'todos_list'));
+        assert.ok(!input.tools.some((tool: any) => tool.function.name === 'calendar_agenda'));
+      }
       captured.push(facts);
       const text = `【本地模型替身】${facts.scope.kind}:${facts.todos.items.map((item: any) => item.title).join(',')}:${facts.runs.items.map((r: any) => r.output).join(',')}`;
       res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -81,6 +90,8 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
   assert.equal(captured[0].runs.items[0].status, 'unknown');
   server.app.store.put('runs', 'other-agent', { ...server.app.store.get<object>('runs', 'other-agent'), status: 'completed', output: 'B-native-result-updated' });
   server.app.updateTodo(todoA.id, { completed: true });
+  assert.equal(captured[0].workspaceTimezone, 'Asia/Shanghai');
+  server.app.store.put('briefing.settings', 'default', { timezone: 'America/New_York' });
   const second = await sendAndWait(global, 'global-2', 'global-chat');
   assert.match(second, /B-native-result-updated/); assert.doesNotMatch(second, /A-work|B-awaiting-verification/);
   assert.equal(captured[1].todos.total, 1, 'completed run still has one open todo');
@@ -90,7 +101,23 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
   assert.equal(captured[2].needsYou.total, 0);
   assert.equal(captured[2].projects.items.length, 1);
   assert.equal(captured[2].projects.items[0].id, a.id);
-  assert.equal(captured.length, 3);
+  const web = await api(`/projects/${a.id}/messages`, { text: '本周有哪些事项到期？只查现状。' });
+  assert.equal(web.conversationId, `project:${a.id}:work`);
+  let webReply: Message | undefined;
+  for (let i = 0; i < 500 && !webReply && !errors.length; i++) {
+    const response = await fetch(`${server.url}/api/v1/projects/${a.id}/workspace`);
+    assert.ok(response.ok);
+    const workspace = await response.json() as { messages: Message[] };
+    webReply = workspace.messages.find(message => message.replyTo === web.id && message.status === 'done');
+    if (!webReply) await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.match(webReply?.text ?? '', /【本地模型替身】project/);
+  assert.doesNotMatch(webReply!.text, /B-work|B-native-result/);
+  assert.equal(captured.length, 4);
+  assert.equal(captured[2].workspaceTimezone, 'America/New_York');
+  assert.equal(captured[3].workspaceTimezone, 'America/New_York');
+  assert.equal(projectRequests, 2, 'both project bot and Web project requests carry scoped work guidance');
+  assert.equal(captured[3].projects.items[0].id, a.id);
   assert.deepEqual(errors, []);
   const effects = server.app.store.list<{ kind: string; status: string }>('effects');
   assert.equal(effects.length, 5, 'two pairing replies and three answers use the existing send ledger');
