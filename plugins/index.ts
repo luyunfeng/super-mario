@@ -66,6 +66,19 @@ function tool(name: string, description: string, execute: Tool['execute'], prope
   return { name, description, parameters: { type: 'object', properties, additionalProperties: false }, execute };
 }
 
+function runEvidence(run: Run, patterns: RegExp[]) {
+  const fields = Object.entries({ error: run.error ?? '', output: run.output, prompt: run.prompt, branch: run.worktree?.branch ?? '', id: run.id });
+  const evidence = [];
+  for (const pattern of patterns) {
+    const source = fields.find(([, text]) => text && pattern.test(text));
+    if (!source) return;
+    const [field, text] = source;
+    const match = pattern.exec(text)!;
+    evidence.push({ field, excerpt: text.slice(Math.max(0, match.index - 30), match.index + match[0].length + 60) });
+  }
+  return evidence;
+}
+
 function statusTool(id: string, reason: string, status?: () => Json): Tool {
   const name = `${id.replaceAll('-', '_')}_status`;
   return tool(name, reason, async (_args, signal) => {
@@ -275,14 +288,27 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             return due >= from && due < before;
           }).sort((a, b) => Date.parse(a.dueAt!) - Date.parse(b.dueAt!)) as unknown as Json;
         }, { query: { type: 'string', description: '标题或备注中的关键词，多词用空格分隔' }, dueFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, dueBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' } }));
-        context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。指定 worktreeRunId 时只列出在该工作树中另起的执行。', async ({ worktreeRunId }, signal) => {
+        const runStates = ['queued', 'running', 'completed', 'failed', 'cancelled', 'unknown'];
+        context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。query 按关键词检索目标、输出、错误、分支和执行 ID，返回含出处的摘录，最近更新在前。用 id 读取一条完整执行记录。status 可限定登记状态。worktreeRunId 仅列出在指定工作树中另起的执行。', async ({ worktreeRunId, query, status, id, projectId, todoId }, signal) => {
           signal.throwIfAborted();
-          const runs = context.store.list<Run>('runs');
-          if (worktreeRunId === undefined) return runs as unknown as Json;
-          if (typeof worktreeRunId !== 'string' || !worktreeRunId.trim()) throw new Error('缺少工作树所属执行 ID');
-          return runs.filter(run => run.worktreeRunId === worktreeRunId)
-            .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id)) as unknown as Json;
-        }, { worktreeRunId: { type: 'string', description: '创建工作树的执行 ID。省略时列出当前范围的执行记录。' } }));
+          if (worktreeRunId !== undefined && (typeof worktreeRunId !== 'string' || !worktreeRunId.trim())) throw new Error('缺少工作树所属执行 ID');
+          if (query !== undefined && (typeof query !== 'string' || !query.trim() || query.length > 500)) throw new Error('检索词须为 1 至 500 个字符');
+          if (status !== undefined && (typeof status !== 'string' || !runStates.includes(status))) throw new Error('执行状态无效');
+          const runs = context.store.list<Run>('runs').filter(run =>
+            (worktreeRunId === undefined || run.worktreeRunId === worktreeRunId) && (status === undefined || run.status === status) &&
+            (id === undefined || run.id === id) && (projectId === undefined || run.projectId === projectId) && (todoId === undefined || run.todoId === todoId));
+          if (typeof query !== 'string') {
+            if (worktreeRunId !== undefined) runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+            return runs as unknown as Json;
+          }
+          const patterns = [...new Set(query.trim().split(/\s+/u))].map(term => new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'));
+          return runs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id)).flatMap(run => {
+            const evidence = runEvidence(run, patterns);
+            if (!evidence) return [];
+            return [{ id: run.id, projectId: run.projectId, todoId: run.todoId, status: run.status, updatedAt: run.updatedAt, evidence }];
+          }) as unknown as Json;
+        }, { worktreeRunId: { type: 'string' }, id: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' },
+          query: { type: 'string', description: '多个关键词用空格分隔，须全部出现在同一条执行记录中。' }, status: { type: 'string', enum: runStates } }));
         context.contribute('tools', 'executors_list', tool('executors_list', '列出执行器及真实可用状态。', async (_args, signal) => {
           signal.throwIfAborted();
           if (actions?.listExecutors) return actions.listExecutors();

@@ -1102,3 +1102,59 @@ test('Web 与飞书项目助手检索项目原话，范围固定且排除当前�
       new AbortController().signal), /消息正文已变化/);
   } finally { await server.close(); }
 });
+
+test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登记状态', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const answer = '最近更新的记录为 recovered，日志记有 E[503]，登记状态为 completed。';
+  const { server, api, ask, requests } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /日志出现“失败”不能证明执行状态为 failed/);
+      if (JSON.stringify(req.content).includes('只查失败状态')) return call('runs_list', { query: 'E[503]', status: 'failed' }, 'failed-only');
+      return call('runs_list', { query: 'E[503] 汇总' }, 'find');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    const rows = JSON.parse(raw);
+    if (req.callId === 'find') {
+      assert.deepEqual(rows.map((r: {id: string}) => r.id), ['recovered', 'failed']);
+      assert.equal(rows[0].evidence[0].field, 'output');
+      assert.equal(rows[1].evidence[0].field, 'error');
+      assert.doesNotMatch(raw, /其他项目私有内容/);
+      return call('runs_list', { id: rows[0].id }, 'detail');
+    }
+    if (req.callId === 'failed-only') {
+      assert.deepEqual(rows.map((row: {id: string}) => row.id), ['failed']);
+      return { role: 'assistant', content: '登记失败的记录为 failed。' };
+    }
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].status, 'completed');
+    assert.equal(rows[0].output, 'E[503] 失败后已恢复');
+    return { role: 'assistant', content: answer };
+  }, options => {
+    adapter = options;
+    return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    const project = await api('/projects', { name: '汇总项目' });
+    const other = await api('/projects', { name: '其他项目' });
+    for (const [i, id] of ['failed', 'partial', 'recovered', 'foreign'].entries()) {
+      const at = new Date(i * 1000).toISOString();
+      const run: Run = { id, executorId: 'fixture', prompt: '汇总', projectId: id === 'foreign' ? other.id : project.id,
+        createdAt: at, updatedAt: at, conversationId: 'main', status: id === 'failed' ? 'failed' : 'completed',
+        output: id === 'recovered' ? 'E[503] 失败后已恢复' : '', error: id === 'failed' ? 'E[503] 无响应' : id === 'foreign' ? 'E[503] 其他项目私有内容' : undefined };
+      server.app.store.put('runs', id, run);
+    }
+    const question = '上次哪条汇总执行遇到了 E[503]，后来怎样？';
+    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), answer);
+    assert.equal(await ask('只查失败状态的 E[503] 记录。', '/projects/' + project.id + '/messages'), '登记失败的记录为 failed。');
+    const bot = await api('/feishu/bots', { name: '查执行', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(question, { ...source, messageId: 'question' });
+    await t.waitFor(() => assert.ok(sent.includes(answer)));
+    assert.equal(requests.filter(req => req.callId === 'detail').length, 2);
+    assert.equal(server.app.store.list('runs').length, 4);
+  } finally { await server.close(); }
+});
