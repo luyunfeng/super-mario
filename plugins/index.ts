@@ -29,6 +29,10 @@ export { assistantProfile } from './assistant-profile.ts';
 export { projectInstructions } from './project-instructions.ts';
 export { savedPrompts } from './saved-prompts.ts';
 // Draft text is owned by the browser. The host only advertises the user's plugin setting.
+export const conversationQuotes: Extension = {
+  id: 'conversation-quotes', name: '消息引用', capabilities: ['web.conversation.quotes'], activate() {},
+};
+
 export const conversationDrafts: Extension = {
   id: 'conversation-drafts', name: '对话草稿', capabilities: ['web.conversation.drafts'], activate() {},
 };

@@ -37,11 +37,25 @@ function makeCodeBlock(lang, codeText) {
 
 /** 将纯文本安全渲染为紧凑纯文本或轻量富文本节点。 */
 export function renderFormattedText(raw) {
-  const text = String(raw ?? '');
+  let text = String(raw ?? '');
+  // Only the leading block is a referenced passage. Fenced code and the rest of
+  // the message keep their usual rendering, even when they contain > lines.
+  const lead = text.match(/^(?: {0,3}>[^\n]*(?:\n|$))+/);
+  let quoted;
+  if (lead) {
+    const passage = lead[0].trimEnd().split('\n').map(line => line.replace(/^ {0,3}> ?/, '')).join('\n');
+    if (passage.trim()) {
+      const summary = passage.replace(/\s+/g, ' ').trim();
+      quoted = h('details', { class: 'message-quote' },
+        h('summary', { class: 'message-quote__preview' }, '引用 · ', summary.slice(0, 100), summary.length > 100 && '…'),
+        h('p', { class: 'md-p' }, passage));
+      text = text.slice(lead[0].length).trimStart();
+    }
+  }
   const hasMarkdown = text.includes('\n') || text.includes('`') || text.includes('**') || /^\s*(?:[-*]\s|\d+\.\s)/.test(text);
-  if (!hasMarkdown) return text;
+  if (!hasMarkdown) return quoted ? h('div', { class: 'md' }, quoted, text) : text;
 
-  const blocks = [];
+  const blocks = quoted ? [quoted] : [];
   let paraLines = [];
   let ulItems = [];
   let olItems = [];

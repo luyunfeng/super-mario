@@ -1,6 +1,7 @@
 // 项目工作对话复用真实隔离会话。快照只更新消息区，草稿按身份和项目隔离。
 import { h, replace, keyedList } from '../lib/dom.js';
 import { createConversationDrafts } from '../lib/conversation-drafts.js';
+import { createMessageQuote } from '../lib/message-quote.js';
 import { agentProgress } from '../ui/agent-progress.js';
 import { renderFormattedText } from '../lib/markdown.js';
 import { Button, Banner, Empty, TextArea } from '../ui/kit.js';
@@ -27,6 +28,7 @@ export function createProjectConversation({ api, store, bindFolder }) {
   const progress = h('p', { class: 'muted small' });
   const messages = h('div', { class: 'project-conversation__messages', role: 'log', 'aria-label': '项目对话' });
   const text = TextArea({ rows: 3, placeholder: '告诉我这个文件夹里要做什么，我们持续推进。', 'aria-label': '项目目标' });
+  const quote = createMessageQuote({ drafts, input: text });
   const prompts = attachSavedPrompts({ api, store, input: text, getScope: () => projectId });
   text.addEventListener('input', () => {
     syncDraft();
@@ -40,10 +42,10 @@ export function createProjectConversation({ api, store, bindFolder }) {
   });
   const send = Button({ label: '发送目标', kind: 'primary', onClick: submit });
   const notice = h('div', { 'aria-live': 'polite' });
-  const composer = h('div', { class: 'project-conversation__composer stack' }, prompts.menu, text, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, send), notice);
+  const composer = h('div', { class: 'project-conversation__composer stack' }, quote.bar, prompts.menu, text, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, send), notice);
   const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, favorites.button, transcript.button, code.toggle)), status, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
-  let draftKey, owner, enabled, epoch = 0;
+  let draftKey, owner, enabled, quotesEnabled, epoch = 0;
   function syncDraft() {
     const { snapshot, snapshotOwner, unauthorized } = store.view;
     const currentOwner = drafts.owner();
@@ -51,12 +53,15 @@ export function createProjectConversation({ api, store, bindFolder }) {
     const nextOwner = valid ? currentOwner : null;
     const nextEnabled = !!valid && snapshot.plugins?.some(p => p.id === 'conversation-drafts' && p.status === 'active');
     const key = valid && project() ? JSON.stringify(['project', projectId]) : null;
-    if (owner === nextOwner && enabled === nextEnabled && draftKey === key) return;
+    const nextQuotes = !!key && snapshot.plugins?.some(p => p.id === 'conversation-quotes' && p.status === 'active');
+    if (owner === nextOwner && enabled === nextEnabled && quotesEnabled === nextQuotes && draftKey === key) return;
+    quote.restore(nextQuotes ? key : null);
     if (owner !== nextOwner) {
       generation++; request++; workspace = undefined;
       pending.clear(); unknown.clear(); notices.clear();
     }
-    if (owner !== nextOwner || enabled !== nextEnabled) epoch++;
+    if (owner !== nextOwner || enabled !== nextEnabled || quotesEnabled !== nextQuotes) epoch++;
+    quotesEnabled = nextQuotes;
     owner = nextOwner; enabled = nextEnabled; draftKey = key;
     text.value = key ? drafts.read(key) : '';
     text.disabled = !key;
@@ -81,15 +86,17 @@ export function createProjectConversation({ api, store, bindFolder }) {
     if (!messages._keyed) messages.replaceChildren();
     keyedList(messages, rows, m => m.id, m => {
       const user = m.role === 'user';
+      const canQuote = quotesEnabled && m.conversationId === `project:${projectId}:work` && (user || m.role === 'assistant')
+        && m.origin !== 'notification' && typeof m.text === 'string' && m.text.trim();
       const statusText = { failed: '处理失败，请查看原因', unknown: '结果未知，请核对，勿重复发送', pending: '处理中' }[m.status];
       return h('div', { class: 'msg msg--' + (user ? 'user' : 'assistant') },
         h('div', { class: 'msg__col' },
           h('span', { class: 'msg__label' }, user ? '我' : '项目助手'),
           agentProgress(m),
-          h('div', { class: 'msg__bubble' }, user ? m.text : renderFormattedText(m.text)),
+          h('div', { class: 'msg__bubble' }, user && !/^> /m.test(m.text) ? m.text : renderFormattedText(m.text)),
           statusText && h('span', { class: 'msg__meta' }, statusText),
-          h('span', null, favorites.mark(m, projectId), prompts.fromMessage(m))));
-    }, m => JSON.stringify([prompts.epoch, favorites.epoch, projectId, m]));
+          h('span', null, favorites.mark(m, projectId), prompts.fromMessage(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
+    }, m => JSON.stringify([prompts.epoch, favorites.epoch, quotesEnabled, projectId, m]));
   }
   async function load() {
     if (!draftKey) return;
@@ -107,11 +114,13 @@ export function createProjectConversation({ api, store, bindFolder }) {
   async function submit() {
     syncDraft();
     const id = projectId, key = draftKey, sender = epoch, draft = text.value;
-    if (!key || send.disabled || !draft.trim()) return;
+    const captured = quotesEnabled ? quote.capture() : '';
+    const body = captured ? quote.compose(captured, draft.trim()) : draft.trim();
+    if (!key || send.disabled || !body) return;
     const submission = Symbol();
     pending.set(id, submission); notices.delete(id); paint();
     try {
-      const answer = await api.post(`/projects/${encodeURIComponent(id)}/messages`, { text: draft.trim() });
+      const answer = await api.post(`/projects/${encodeURIComponent(id)}/messages`, { text: body });
       syncDraft();
       if (sender !== epoch) return;
       if (answer?.status === 'failed') notices.set(id, '发送失败，内容已保留。');
@@ -119,6 +128,7 @@ export function createProjectConversation({ api, store, bindFolder }) {
         unknown.add(id); notices.set(id, '处理结果未知，请先核对项目对话和执行记录，勿重复发送。');
       } else {
         drafts.clearIf(key, draft);
+        if (captured) quote.accepted(key, captured);
         if (draftKey === key && text.value === draft) text.value = drafts.read(key);
       }
       if (draftKey === key) await load();
