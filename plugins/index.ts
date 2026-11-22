@@ -39,6 +39,10 @@ export { createRunComparison } from './run-comparison.ts';
 export const shortcutSettings: Extension = {
   id: 'shortcut-settings', name: '快捷键设置', capabilities: ['web.shortcuts'], activate() {},
 };
+export const voiceInput: Extension = {
+  id: 'voice-input', name: '语音输入', capabilities: ['web.conversation.dictation'], activate() {},
+};
+
 export const conversationQuotes: Extension = {
   id: 'conversation-quotes', name: '消息引用', capabilities: ['web.conversation.quotes'], activate() {},
 };

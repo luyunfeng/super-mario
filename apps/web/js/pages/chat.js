@@ -1,3 +1,4 @@
+import { createVoiceInput } from '../features/voice-input.js';
 import { attachSentHistory } from '../features/sent-history.js';
 // 对话：主页。顶部是“等你处理”，中间是消息流，输入框固定在底部。
 import { h, keyedList, replace } from '../lib/dom.js';
@@ -58,6 +59,7 @@ export function createChatPage({ api, store, scope, router }) {
 
   // —— 输入框 ——
   const input = h('textarea', { class: 'composer__input', id: 'message-text', rows: 1, placeholder: '说出目标，Enter 发送，Shift + Enter 换行', 'aria-label': '给 Agent 的消息', maxLength: 20000 });
+  const voice = createVoiceInput(input);
   const drafts = createConversationDrafts({ api, store });
   const quote = createMessageQuote({ drafts, input, store, router, scope });
   const edit = createMessageEdit({ input, quote, context: composerContext });
@@ -68,7 +70,7 @@ export function createChatPage({ api, store, scope, router }) {
   const status = h('p', { class: 'small composer__status', role: 'status' });
   const form = h('form', { class: 'composer', id: 'message-form' },
     recent.el,
-    h('div', { class: 'composer__box' }, edit.notice, quote.bar, prompts.menu, input, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, h('span', { class: 'grow' }), send)), status);
+    h('div', { class: 'composer__box' }, edit.notice, quote.bar, prompts.menu, input, voice.caption, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, voice.button, h('span', { class: 'grow' }), send)), status);
 
   const el = h('section', { class: 'page page--chat', id: 'chat' }, h('div', { class: 'chat-code-main' }, top, scroller, form), code.el);
 
@@ -104,6 +106,8 @@ export function createChatPage({ api, store, scope, router }) {
   }
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
+    voice.update(key && router.current.page === 'chat' && store.view.snapshot?.plugins?.some(p => p.id === 'voice-input' && p.status === 'active')
+      ? JSON.stringify([nextOwner, key]) : null);
     const sameDraft = owner === nextOwner && enabled === nextEnabled && quotesEnabled === nextQuotes && draftKey === key;
     if (sameDraft && editEnabled === allowEdit) return;
     editEnabled = allowEdit;
@@ -121,6 +125,7 @@ export function createChatPage({ api, store, scope, router }) {
     send.disabled = !key || pending.has(key) || !store.view.snapshot?.agent.available;
     status.textContent = '';
   }
+  router.subscribe(syncDraft);
   store.subscribe(syncDraft);
   syncDraft();
   let snapshot = null;
@@ -173,6 +178,7 @@ export function createChatPage({ api, store, scope, router }) {
     syncDraft();
     const ctx = submissionContext(), { key, body: text, projectId } = ctx;
     if (!key || !text || pending.has(key) || !store.view.snapshot?.agent.available) return;
+    voice.reset();
     const ticket = submissions.begin(ctx);
     if (!ticket) return;
     if (ticket.record.blocked) { status.textContent = '发送结果未知，请先核对发送回执。'; return; }
