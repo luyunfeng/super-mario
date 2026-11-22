@@ -1,0 +1,120 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test from 'node:test';
+import { chromium, expect, type Browser } from '@playwright/test';
+import { startServer } from '../apps/server/src/index.ts';
+
+test('顶部搜索可保存、套用和管理检索，关闭插件后收回入口与 API', { timeout: 60000 }, async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'mario-saved-searches-'));
+  const token = 'saved-search-fixture';
+  const server = await startServer({ dataDir, port: 0, host: '127.0.0.1', demo: true, token });
+  const headers = { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' };
+  const api = (path: string, body?: unknown) => fetch(server.url + '/api/v1' + path, {
+    headers, method: body === undefined ? 'GET' : 'POST', body: JSON.stringify(body),
+  });
+  let browser: Browser | undefined;
+  try {
+    const project = await api('/projects', { name: '季度复核项目' });
+    assert.ok(project.ok);
+    const projectId = (await project.json()).id;
+    const now = new Date().toISOString();
+    server.app.store.put('runs', 'synthetic-report', {
+      id: 'synthetic-report', conversationId: 'main', executorId: 'fixture', projectId,
+      status: 'completed', prompt: '生成账单', output: '月报准备就绪', createdAt: now, updatedAt: now,
+    });
+    browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+    await page.goto(server.url + '/#chat?token=' + token);
+
+    const search = page.locator('#workspace-search');
+    const results = page.locator('#search-results');
+    const drawer = page.getByRole('dialog', { name: '保存的检索', exact: true });
+    const button = (name: string) => drawer.getByRole('button', { name, exact: true });
+    const manage = results.getByRole('button', { name: '管理保存的检索', exact: true });
+    const saveQuery = results.getByRole('button', { name: '保存当前检索', exact: true });
+    await expect(search).toHaveAccessibleName(/搜索对话/);
+    await search.fill('季度复核');
+    await saveQuery.click();
+    await expect(drawer.getByLabel('检索词', { exact: true })).toHaveValue('季度复核');
+    await drawer.getByLabel('名称', { exact: true }).fill('本季复核');
+    await button('保存').click();
+    await expect(button('套用 本季复核')).toBeVisible();
+
+    await page.reload();
+    await expect(search).toHaveAccessibleName(/搜索对话/);
+    await search.click();
+    await manage.click();
+    await button('套用 本季复核').click();
+    await expect(search).toHaveValue('季度复核');
+    await expect(results.getByRole('link', { name: '季度复核项目' })).toBeVisible();
+
+    await manage.click();
+    await button('编辑 本季复核').click();
+    await drawer.getByLabel('名称', { exact: true }).fill('复核项目');
+    await drawer.getByLabel('检索词', { exact: true }).fill('project:季度复核 state:completed since:7d');
+    await button('保存').click();
+    await expect(button('套用 复核项目')).toBeVisible();
+    await button('新增检索').click();
+    await drawer.getByLabel('名称', { exact: true }).fill('下季计划');
+    await drawer.getByLabel('检索词', { exact: true }).fill('计划');
+    await button('保存').click();
+
+    const saved = drawer.getByRole('button', { name: /^套用 / });
+    await expect(saved).toHaveCount(2);
+    const list = async () => {
+      const response = await api('/saved-searches');
+      assert.equal(response.status, 200);
+      const state: { searches: { name: string; query: string }[] } = await response.json();
+      return state.searches;
+    };
+    const entries = await list();
+    assert.equal(entries.find(entry => entry.name === '复核项目')?.query, 'project:季度复核 state:completed since:7d');
+    const before = entries.map(entry => '套用 ' + entry.name);
+    await button('下移 ' + entries[0]!.name).click();
+    await expect(saved.first()).toHaveAccessibleName(before[1]!);
+    await expect(saved.last()).toHaveAccessibleName(before[0]!);
+
+    await button('删除 复核项目').click();
+    await expect(button('套用 复核项目')).toHaveCount(0);
+    await button('撤销删除').click();
+    await expect(saved.first()).toHaveAccessibleName(before[1]!);
+    await expect(saved.last()).toHaveAccessibleName(before[0]!);
+
+    await button('套用 复核项目').click();
+    await expect(results.getByRole('link', { name: '生成账单' })).toBeVisible();
+    await manage.click();
+    await expect(button('套用 复核项目')).toBeVisible();
+
+    await button('编辑 复核项目').click();
+    const current = await (await api('/saved-searches')).json();
+    assert.ok((await api('/saved-searches', {
+      action: 'add', revision: current.revision, name: '另一窗口的检索', query: '机器',
+    })).ok);
+    await drawer.getByLabel('名称', { exact: true }).fill('保留的草稿');
+    await button('保存').click();
+    await expect(button('刷新列表')).toBeVisible();
+    await button('刷新列表').click();
+    await expect(drawer.getByLabel('名称', { exact: true })).toHaveValue('保留的草稿');
+    await button('保存').click();
+    await expect(button('套用 保留的草稿')).toBeVisible();
+    await expect(button('套用 另一窗口的检索')).toBeVisible();
+
+    assert.ok((await api('/plugins/conversation-search', { enabled: false })).ok);
+    await expect(drawer).toBeHidden();
+    await search.fill('季度复核');
+    await expect(results.getByRole('link', { name: '季度复核项目' })).toBeVisible();
+    await expect(manage).toHaveCount(0);
+    await expect(saveQuery).toHaveCount(0);
+    assert.equal((await api('/saved-searches')).status, 503);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser?.close();
+    await server.close();
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});

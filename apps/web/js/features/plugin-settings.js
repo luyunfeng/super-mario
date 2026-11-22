@@ -8,7 +8,7 @@ import { systemText } from '../copy/terms.js';
 
 const descriptions = {
   'todo-calendar':'按日、周或月查看项目待办的截止时间。',
-  'conversation-search':'在全局搜索中查找主对话历史消息并定位原文。',
+  'conversation-search':'在顶栏搜索主对话和执行记录，保存常用检索条件。',
   'token-statistics':'从 Codex 和 Claude Code 的本地会话日志统计 Token，按日期、模型和 Agent 查看分布。',
   'workspace-splash':'进入工作台时播放开屏动画。',
   'builtin-tools':'让工作台 Agent 查询可用执行器、项目和知识。',

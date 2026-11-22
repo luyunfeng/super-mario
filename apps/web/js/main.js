@@ -59,7 +59,7 @@ const pages = {
 };
 for (const page of Object.values(pages)) shell.view.append(page.el);
 
-createSearch({ shell, store, router });
+createSearch({ shell, store, router, api });
 installShortcuts({ shell, router, onQuickTodo: ctx.quickTodo });
 
 function renderChrome(view) {

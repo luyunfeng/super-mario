@@ -565,6 +565,13 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (observations && method === 'GET') return json(res, 200, app.runObservations(decodeURIComponent(observations[1]!)));
         const cancel = path.match(/^\/api\/v1\/runs\/([^/]+)\/cancel$/);
         if (cancel && method === 'POST') return json(res, 202, await app.cancel(cancel[1]));
+        if (path === '/api/v1/saved-searches' && (method === 'GET' || method === 'POST')) {
+          const input = method === 'GET' ? { action: 'list' } : await body(req) as JsonObject;
+          if (!app.plugins.list().some(plugin => plugin.id === 'conversation-search' && plugin.status === 'active')) {
+            throw new InputError('对话历史搜索插件已停用', 503);
+          }
+          return json(res, 200, await app.plugins.invocations.use('conversation-search.saved', input));
+        }
         const plugin = path.match(/^\/api\/v1\/plugins\/([^/]+)$/);
         if (plugin && method === 'POST') {
           const input = await body(req);

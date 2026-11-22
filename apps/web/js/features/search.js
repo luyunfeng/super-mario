@@ -1,11 +1,13 @@
 // 全局搜索：只在当前工作台快照里查找，结果按类型分组。
 import { h, replace } from '../lib/dom.js';
+import { searchRuns } from './run-search.js';
+import { openSavedSearches } from './saved-searches.js';
 
 export function conversationSearchActive(snapshot) {
   return snapshot?.plugins?.some(plugin => plugin.id === 'conversation-search' && plugin.status === 'active') ?? false;
 }
 
-export function createSearch({ shell, store, router }) {
+export function createSearch({ shell, store, router, api }) {
   const { searchInput: input, results } = shell;
 
   function chatHits(query, messages) {
@@ -34,10 +36,13 @@ export function createSearch({ shell, store, router }) {
     const folded = query.toLowerCase();
     const match = (...values) => values.some(value => String(value ?? '').toLowerCase().includes(folded));
     const projectKey = item => item.projectId || 'all';
+    const pluginActive = conversationSearchActive(snapshot);
+    const runs = pluginActive ? searchRuns(query, snapshot)
+      : (snapshot.runs ?? []).filter(item => match(item.prompt, item.output));
     return [
-      ['主对话', conversationSearchActive(snapshot) ? chatHits(query, snapshot.messages ?? []) : []],
+      ['主对话', pluginActive ? chatHits(query, snapshot.messages ?? []) : []],
       ['待办', (snapshot.todos ?? []).filter(item => match(item.title, item.notes)).map(item => ({ text: item.title, href: router.href('projects', projectKey(item), 'todos') }))],
-      ['执行', (snapshot.runs ?? []).filter(item => match(item.prompt, item.output)).map(item => ({ text: item.prompt, href: router.href('projects', projectKey(item), 'runs', item.id) }))],
+      ['执行', runs.map(item => ({ text: item.prompt, href: router.href('projects', projectKey(item), 'runs', item.id) }))],
       ['记忆', (snapshot.knowledge ?? []).filter(item => match(item.title, item.content)).map(item => ({ text: item.title, href: `${router.href('memory')}?entry=${encodeURIComponent(item.id)}` }))],
       ['项目', (snapshot.projects ?? []).filter(item => !item.archivedAt && match(item.name, item.description)).map(item => ({ text: item.name, href: router.href('projects', item.id, 'todos') }))],
     ].filter(([, hits]) => hits.length);
@@ -46,11 +51,19 @@ export function createSearch({ shell, store, router }) {
   function paint() {
     const query = input.value.trim();
     const snapshot = store.view.snapshot;
-    results.hidden = !query || !snapshot || store.view.unauthorized;
+    const savedEnabled = conversationSearchActive(snapshot);
+    results.hidden = !snapshot || store.view.unauthorized || (!query && !savedEnabled);
     if (results.hidden) { results.replaceChildren(); return; }
-    const found = groups(query, snapshot);
-    if (!found.length) { replace(results, h('p', { class: 'search__group' }, '没有找到匹配的内容')); return; }
-    replace(results, found.map(([name, hits]) => [
+    const found = query ? groups(query, snapshot) : [];
+    const open = initialQuery => {
+      results.hidden = true;
+      results.replaceChildren();
+      openSavedSearches({
+        api, store, initialQuery, isEnabled: () => conversationSearchActive(store.view.snapshot) && !store.view.unauthorized,
+        onApply(value) { input.value = value; input.focus(); paint(); },
+      });
+    };
+    replace(results, query && !found.length && h('p', { class: 'search__group' }, '没有找到匹配的内容'), found.map(([name, hits]) => [
       h('div', { class: 'search__group' }, name),
       hits.slice(0, 5).map(hit => h('a', { class: 'search__hit truncate', href: hit.href, onclick: event => {
         input.value = ''; results.hidden = true;
@@ -58,7 +71,9 @@ export function createSearch({ shell, store, router }) {
           event.preventDefault(); router.go(hit.href);
         }
       } }, hit.text)),
-    ]));
+    ]), savedEnabled && h('div', { class: 'saved-search-actions' },
+      query && h('button', { class: 'btn btn--sm', type: 'button', onclick: () => open(query) }, '保存当前检索'),
+      h('button', { class: 'btn btn--sm', type: 'button', onclick: () => open() }, '管理保存的检索')));
   }
 
   store.subscribe(({ snapshot, unauthorized }) => {

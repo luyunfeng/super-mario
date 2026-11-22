@@ -222,3 +222,9 @@ dialog { color: var(--text); }
 .console-drawer .muted { color: var(--text-3); }
 .console-drawer label { display: grid; gap: 4px; }
 .console-drawer textarea { width: 100%; min-width: 0; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); padding: 8px; }
+
+.saved-search-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.search__results .saved-search-actions { padding: 8px 10px; }
+.saved-search-row { min-width: 0; border-top: 1px solid var(--line); padding-top: 8px; }
+.saved-search-apply { display: grid; gap: 3px; width: 100%; padding: 8px; text-align: left; overflow-wrap: anywhere; background: transparent; border: 0; border-radius: var(--radius-sm); }
+.saved-search-apply:hover, .saved-search-apply:focus-visible { background: var(--surface-2); }
