@@ -57,12 +57,14 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await entry.click();
   const editor = page.getByRole('dialog', { name: '编辑待办' });
   await expect(editor.getByLabel('截止时间', { exact: true })).toHaveValue('18:05');
+  await editor.getByLabel('负责人', { exact: true }).fill('预算协调员');
   await editor.getByLabel('优先级', { exact: true }).selectOption('low');
   await editor.getByLabel('截止时间', { exact: true }).fill('08:40');
   await editor.getByRole('button', { name: '保存' }).click();
   await expect.poll(() => read().dueAt).toBe('2030-03-27T15:40:00.000Z');
   await expect(editor).toHaveCount(0);
   assert.equal(read().priority, 'low');
+  assert.equal(read().responsiblePerson, '预算协调员');
   await expect(entry).toHaveAccessibleName(/08:40/);
   const dropSlot = root.locator('[data-day="2030-03-27"][data-hour="10"]');
   await entry.dragTo(dropSlot);
@@ -167,4 +169,12 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await panel.getByRole('searchbox').fill('资料复核员');
   await expect(panel.locator('.todo')).toHaveCount(1);
   await expect(panel.locator('.todo')).toContainText('尚未安排');
+  await panel.getByRole('searchbox').fill('预算协调员');
+  await expect(panel.locator('.todo')).toHaveCount(1);
+  await expect(panel.locator('.todo')).toContainText('负责人 预算协调员');
+  await panel.locator('.todo').getByRole('button', { name: /本地三月末/ }).click();
+  await editor.getByLabel('负责人', { exact: true }).fill('');
+  await editor.getByRole('button', { name: '保存' }).click();
+  await expect.poll(() => read().responsiblePerson).toBeUndefined();
+  await expect(panel.locator('.todo')).toHaveCount(0);
 });

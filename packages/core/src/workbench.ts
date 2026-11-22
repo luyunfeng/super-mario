@@ -896,7 +896,7 @@ export async function createWorkbench(config: AppConfig) {
   }
   function newTodo(input: Record<string, unknown>): Todo {
     const now = new Date().toISOString();
-    return { id: randomUUID(), priority: todoPriority(input.priority), title: requiredText(input.title, '标题'), notes: optionalText(input.notes, '备注') ?? '', projectId: optionalText(input.projectId, '项目'), dueAt: dueDate(input.dueAt), reminderAt: dueDate(input.reminderAt), reminderVersion: 1, waitingOn: optionalText(input.waitingOn, '等待对象'), createdAt: now, updatedAt: now };
+    return { id: randomUUID(), priority: todoPriority(input.priority), responsiblePerson: optionalText(input.responsiblePerson, '负责人'), title: requiredText(input.title, '标题'), notes: optionalText(input.notes, '备注') ?? '', projectId: optionalText(input.projectId, '项目'), dueAt: dueDate(input.dueAt), reminderAt: dueDate(input.reminderAt), reminderVersion: 1, waitingOn: optionalText(input.waitingOn, '等待对象'), createdAt: now, updatedAt: now };
   }
   function registerChatTodo(input: Record<string, unknown>): Json {
     const requested = newTodo(input);
@@ -932,6 +932,7 @@ export async function createWorkbench(config: AppConfig) {
     if (patch.notes !== undefined) next.notes = optionalText(patch.notes, '备注') ?? '';
     if (patch.projectId !== undefined) next.projectId = optionalText(patch.projectId, '项目');
     if (patch.dueAt !== undefined) next.dueAt = dueDate(patch.dueAt);
+    if (patch.responsiblePerson !== undefined) next.responsiblePerson = optionalText(patch.responsiblePerson, '负责人');
     if (patch.waitingOn !== undefined) next.waitingOn = optionalText(patch.waitingOn, '等待对象');
     if (patch.reminderAt !== undefined) next.reminderAt = dueDate(patch.reminderAt);
     if (patch.completed !== undefined) next.completedAt = patch.completed ? new Date().toISOString() : undefined;

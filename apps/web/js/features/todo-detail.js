@@ -105,6 +105,7 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
     const action = (label, fn) => Button({ label, size: 'sm', onClick: () => { close?.(); fn(); } });
     replace(summary, h('h2', null, current.title), current.notes && h('p', null, current.notes),
       sources.length > 0 && section('来源', sources.map(item => h('p', null, [item.source, item.title || item.id].filter(Boolean).join(' · ')))),
+      section('负责人', current.responsiblePerson || '未登记'),
       section('优先级', todoPriorityLabels[current.priority ?? 'normal']),
       section('归属', project?.name ?? current.projectId ?? '不归类', current.completedAt && ' · 已完成'),
       section('等待', current.waitingOn || '未设置等待对象', current.reminderAt && h('p', null, '提醒 ' + formatDate(current.reminderAt, true)),
