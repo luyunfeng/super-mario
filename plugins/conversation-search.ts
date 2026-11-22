@@ -93,30 +93,42 @@ function savedSearches(store: Store, input: Json): Json {
 
 function projectMessages(store: Store, input: Json, excludeId?: string) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, '检索参数无效');
-  const { query, before, limit = 5 } = input;
+  const { query, before, limit = 5, mode = 'phrase' } = input;
   if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 25) fail(400, '每页须为 1 至 25 条');
   if (before !== undefined && (typeof before !== 'string' || !before)) fail(400, '消息游标无效');
   if (typeof query !== 'string' || !query.trim() || query.length > 500) fail(400, '检索词须为 1 至 500 个字符');
+  if (mode !== 'phrase' && mode !== 'keywords') fail(400, '检索方式无效');
+  const terms = mode === 'keywords' ? [...new Set(query.trim().split(/\s+/u))] : [query.trim()];
+  if (terms.length > 8) fail(400, '最多可组合 8 个关键词');
   const scope = input.projectId;
   if (scope !== undefined && (typeof scope !== 'string' || !scope.trim())) fail(400, '项目 ID 无效');
   const projects = new Map(store.list<Project>('projects').filter(p => !p.archivedAt && (scope === undefined || p.id === scope)).map(p => ['project:' + p.id + ':work', p]));
   const hits = [];
-  const pattern = new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
+  const patterns = terms.map(term => new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'));
   let pastCursor = before === undefined;
   for (const message of store.list<Message>('messages').reverse()) {
     const project = projects.get(message.conversationId);
     if (message.id === excludeId || !project || (message.projectId && message.projectId !== project.id) ||
       !['user', 'assistant'].includes(message.role) || (message.origin && message.origin !== 'user')) continue;
-    const match = pattern.exec(message.text);
-    if (!match) continue;
+    const matches = [];
+    for (const pattern of patterns) {
+      const match = pattern.exec(message.text);
+      if (!match) break;
+      matches.push(match);
+    }
+    if (matches.length !== patterns.length) continue;
     if (!pastCursor) {
       pastCursor = message.id === before;
       continue;
     }
     if (hits.length === limit) return { hits, nextBefore: hits[hits.length - 1].id };
-    const start = match.index, end = start + match[0].length;
-    hits.push({ projectId: project.id, projectName: project.name, createdAt: message.createdAt, id: message.id, role: message.role, before: message.text.slice(Math.max(0, start - 18), start),
-      match: match[0], after: message.text.slice(end, end + 32) });
+    // Keep disjoint excerpts separate so a quotation cannot bridge omitted text.
+    const excerpts = matches.sort((a, b) => a.index - b.index).map(match => {
+      const start = match.index, end = start + match[0].length;
+      return { before: message.text.slice(Math.max(0, start - 18), start), match: match[0], after: message.text.slice(end, end + 32) };
+    });
+    hits.push({ projectId: project.id, projectName: project.name, createdAt: message.createdAt, id: message.id,
+      role: message.role, ...excerpts[0], ...(excerpts.length > 1 ? { excerpts } : {}) });
   }
   if (!pastCursor) fail(404, '未找到当前检索的消息游标');
   return { hits, nextBefore: null };
@@ -128,9 +140,9 @@ export const conversationSearch: Extension = {
   activate(context) {
     context.contribute('tools', 'project_message_search', {
       name: 'project_message_search',
-      description: '按一段连续原文从新到旧查找项目工作对话，返回发言角色、消息 ID 和命中前后的摘录。可用 nextBefore 继续查更早的结果。',
+      description: '从新到旧查找项目工作对话。默认按连续原文匹配；mode=keywords 要求同一条消息含全部关键词（空格分隔，最多 8 个，顺序不限）。返回发言角色、消息 ID 和命中前后的摘录。可用 nextBefore 继续查更早的结果。',
       parameters: { type: 'object', required: ['query'], additionalProperties: false, properties: {
-        query: { type: 'string' }, projectId: { type: 'string' }, before: { type: 'string' },
+        query: { type: 'string' }, mode: { type: 'string', enum: ['phrase', 'keywords'] }, projectId: { type: 'string' }, before: { type: 'string' },
       } },
       async execute(args, signal) {
         signal.throwIfAborted();
