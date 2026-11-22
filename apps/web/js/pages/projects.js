@@ -167,7 +167,7 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
       todos.show(projectId, tab === 'todos' && route.parts[2] === 'detail' ? route.parts[3] : undefined);
       runs.show(projectId, runId);
       if (tab === 'settings') settings.show(projectId);
-      if (tab === 'workspace') conversation.show(projectId, route.query.get('at'));
+      if (tab === 'workspace') conversation.show(projectId, route.query);
       render(); void discovered.show();
     },
     onState({ snapshot }) {

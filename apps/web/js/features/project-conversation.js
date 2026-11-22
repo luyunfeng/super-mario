@@ -26,8 +26,8 @@ export function createProjectConversation({ api, store, router, bindFolder }) {
   const drafts = createConversationDrafts({ api, store });
   const pending = new Map();
   const notices = new Map();
-  let workspace, anchor = '', focused = false;
-  const locationNote = h('div', { class: 'small', hidden: true });
+  let workspace, historyQuery = '', anchor = '', focused = false, navigationState;
+  const locationNote = h('div', { class: 'row row--wrap small', hidden: true });
   const status = h('div', { 'aria-live': 'polite' });
   const progress = h('p', { class: 'muted small' });
   const messages = h('div', { class: 'project-conversation__messages', role: 'log', 'aria-label': '项目对话' });
@@ -112,10 +112,26 @@ export function createProjectConversation({ api, store, router, bindFolder }) {
     replace(notice, notices.get(projectId) ? Banner({ tone: 'warn', children: notices.get(projectId) }) : null);
     const rows = workspace?.messages ?? [];
     const translationEpoch = translation.update(rows);
-    locationNote.hidden = !anchor;
-    if (anchor) replace(locationNote, workspace && !rows.some(row => row.id === anchor) && '当前项目中找不到这条消息。 ',
-      h('a', { href: router.href('projects', projectId, 'workspace') }, '返回最新消息'));
-    if (!rows.length) { replace(messages, Empty({ title: workspace ? '在这个文件夹里持续工作' : '正在读取项目对话…', text: workspace ? '直接输入目标，项目工作会话负责拆解并跟进。' : undefined })); messages._keyed = undefined; return; }
+    const path = router.href('projects', projectId, 'workspace');
+    const page = workspace?.historyPage;
+    locationNote.hidden = !historyQuery && !page?.hasEarlier;
+    const before = page?.hasEarlier && rows[0]?.id;
+    const after = page?.hasLater && rows.at(-1)?.id;
+    const missing = anchor && workspace && !rows.some(row => row.id === anchor);
+    const navState = JSON.stringify([path, historyQuery, before, after, Boolean(missing)]);
+    if (navState !== navigationState) {
+      navigationState = navState;
+      replace(locationNote, missing && '当前项目中找不到这条消息。',
+        before && h('a', { href: path + '?before=' + encodeURIComponent(before) }, '较早消息'),
+        after && h('a', { href: path + '?after=' + encodeURIComponent(after) }, '较新消息'),
+        historyQuery && h('a', { href: path }, '返回最新消息'));
+    }
+    if (!rows.length) {
+      const title = !workspace ? '正在读取项目对话…' : historyQuery ? '这个位置没有更多消息' : '在这个文件夹里持续工作';
+      replace(messages, Empty({ title, text: workspace && !historyQuery ? '直接输入目标，项目工作会话负责拆解并跟进。' : undefined }));
+      messages._keyed = undefined;
+      return;
+    }
     if (!messages._keyed) messages.replaceChildren();
     keyedList(messages, rows, m => m.id, m => {
       const user = m.role === 'user';
@@ -132,8 +148,8 @@ export function createProjectConversation({ api, store, router, bindFolder }) {
           statusText && h('span', { class: 'msg__meta' }, statusText),
           h('span', null, favorites.mark(m, projectId), prompts.fromMessage(m), translation.action(m, bubble), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
     }, m => JSON.stringify([prompts.epoch, favorites.epoch, translationEpoch, quotesEnabled, editEnabled, owner, projectId, anchor, m]));
-    if (anchor && !focused && el.isConnected && router.current.page === 'projects' && router.current.parts[1] === 'workspace') {
-      const row = messages.querySelector('[data-id="' + CSS.escape(anchor) + '"]');
+    if (historyQuery && !focused && el.isConnected && router.current.page === 'projects' && router.current.parts[1] === 'workspace') {
+      const row = anchor ? messages.querySelector('[data-id="' + CSS.escape(anchor) + '"]') : messages.firstElementChild;
       if (row) { focused = true; row.tabIndex = -1; row.focus({ preventScroll: true }); row.scrollIntoView({ block: 'center' }); }
     }
   }
@@ -141,7 +157,7 @@ export function createProjectConversation({ api, store, router, bindFolder }) {
     if (!draftKey) return;
     const id = projectId, stamp = generation, order = ++request;
     try {
-      const value = await api.get(`/projects/${encodeURIComponent(id)}/workspace` + (anchor ? '?at=' + encodeURIComponent(anchor) : ''));
+      const value = await api.get(`/projects/${encodeURIComponent(id)}/workspace` + historyQuery);
       if (stamp !== generation || order !== request) return;
       workspace = value;
       paint();
@@ -173,7 +189,7 @@ export function createProjectConversation({ api, store, router, bindFolder }) {
         clearSubmittedDraft(ctx);
         if (answer.status === 'failed') notices.set(id, '消息已受理，处理失败。');
       }
-      if (confirmed && draftKey === key && anchor && router.current.page === 'projects' && router.current.parts[1] === 'workspace') {
+      if (confirmed && draftKey === key && historyQuery && router.current.page === 'projects' && router.current.parts[1] === 'workspace') {
         router.go(router.href('projects', id, 'workspace'));
       } else if (draftKey === key) await load();
       void store.refresh().catch(() => {});
@@ -192,9 +208,11 @@ export function createProjectConversation({ api, store, router, bindFolder }) {
   }
   return {
     el,
-    show(id, at) {
-      if (anchor !== (at || '') || projectId !== id) workspace = undefined;
-      anchor = at || ''; focused = false;
+    show(id, query) {
+      const kind = ['at', 'before', 'after'].find(key => query?.has(key));
+      const next = kind ? '?' + kind + '=' + encodeURIComponent(query.get(kind)) : '';
+      if (historyQuery !== next || projectId !== id) workspace = undefined;
+      historyQuery = next; anchor = query?.get('at') || ''; focused = false;
       if (projectId !== id) {
         instructions.close();
         prompts.changeScope();

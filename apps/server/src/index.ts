@@ -523,7 +523,11 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 200, await machines.call(machine.id, 'workspace.code', { cwd: project.workspace.cwd, kind, path: url.searchParams.get('path') ?? '' }));
         }
         if(projectWorkspace){const id=decodeURIComponent(projectWorkspace[1]);
-          if(projectWorkspace[2]==='workspace'&&method==='GET')return json(res,200,await app.projectWorkspace.view(id, url.searchParams.get('at') ?? undefined));
+          if (projectWorkspace[2] === 'workspace' && method === 'GET') {
+            const cursors = (['at', 'before', 'after'] as const).flatMap(kind => url.searchParams.getAll(kind).map(value => ({ kind, id: value })));
+            if (cursors.length > 1 || cursors.some(cursor => !cursor.id.trim())) throw new InputError('请指定一个有效的消息位置');
+            return json(res, 200, await app.projectWorkspace.view(id, cursors[0]));
+          }
           if (projectWorkspace[2] === 'messages' && method === 'POST') {
             const text = requiredText((await body(req)).text, '目标');
             return json(res, 202, await app.projectWorkspace.post(id, text, messageRequestId(req)));

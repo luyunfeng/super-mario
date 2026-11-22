@@ -320,12 +320,19 @@ export function createProjectWorkspace(options: {
         }),
       );
     },
-    async view(id: string, at?: string) {
+    async view(id: string, position?: string | { kind: 'at' | 'before' | 'after'; id: string }) {
+      const cursor = typeof position === 'string' ? { kind: 'at', id: position } : position;
       const p = project(id),
         m = visibleMemory(id);
       const history = store.list<Message>('messages').filter(m => m.conversationId === `project:${id}:work` && (!m.projectId || m.projectId === id));
-      const anchor = at ? history.findIndex(m => m.id === at) : -1;
-      const end = anchor < 0 ? history.length : Math.min(history.length, Math.max(60, anchor + 30));
+      const pageSize = 60;
+      const index = cursor ? history.findIndex(message => message.id === cursor.id) : -1;
+      if (cursor && cursor.kind !== 'at' && index < 0) throw Object.assign(Error('当前项目中找不到翻页位置'), { status: 404 });
+      let end = history.length;
+      if (cursor?.kind === 'before') end = index;
+      if (cursor?.kind === 'at' && index >= 0) end = Math.min(history.length, Math.max(pageSize, index + pageSize / 2));
+      const start = cursor?.kind === 'after' ? index + 1 : Math.max(0, end - pageSize);
+      end = Math.min(end, start + pageSize);
       return {
         project: p,
         progress: progress(id),
@@ -369,7 +376,8 @@ export function createProjectWorkspace(options: {
               (b.scope.kind === "project" || b.scope.kind === "task") &&
               b.scope.projectId === id,
           ),
-        messages: history.slice(Math.max(0, end - 60), end),
+        messages: history.slice(start, end),
+        historyPage: { hasEarlier: start > 0, hasLater: end < history.length },
         knowledge: (
           await options.knowledge().list({ layer: "project", projectId: id })
         ).map(({ content, ...k }) => k),
