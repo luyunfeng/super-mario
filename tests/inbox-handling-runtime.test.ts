@@ -145,6 +145,8 @@ test('lazy independent conversations, fixed schema, zero tools and filtered know
     assert.deepEqual(input.knowledge.map((k: any) => k.content), [s.projectId ? `PROJECT_${s.projectId}` : 'PERSONAL']);
     assert.match(record.contexts[0], /GLOBAL/);
     assert.match(record.contexts[0], /InboxHandlingAction/);
+    assert.match(record.contexts[0], /本轮工具数量为零/);
+    assert.match(record.contexts[0], /reply.text 只写给对方看的正文/);
     assert.doesNotMatch(record.contexts[0], /SDK_MACHINE_PRIVATE_CWD|PRIVATE_WORK_SNAPSHOT|FORGED_HISTORY|PROJECT_A|PROJECT_B|PERSONAL/);
     assert.deepEqual(record.activeTools, []);
     assert.equal(record.tools.size, 0);
@@ -157,6 +159,22 @@ test('lazy independent conversations, fixed schema, zero tools and filtered know
   const follow = JSON.parse(f.sdk.sessions.find(s => s.history.length === 2)!.history[1]);
   assert.deepEqual(follow.discussion, [], 'Live SDK already owns this conversation history');
   assert.equal(f.sdk.loads(), 3);
+});
+
+test('configured read tools match the instructions actually delivered to the inbox model', async t => {
+  const f = await fixture(t);
+  for (const name of ['todos_list', 'todo_create']) f.contributions.add('tools', name, {
+    name, description: name, parameters: {}, execute: async () => [],
+  });
+  const runtime = createInboxHandlingRuntime({ ...f, allowedTools: ['todos_list'], ready: () => true }, f.sdk.load);
+  try {
+    await runtime.ask(source('scoped'), conversation('scoped'), '核实后起草回复。');
+    const record = f.sdk.sessions[0];
+    assert.deepEqual(record.activeTools, ['todos_list']);
+    assert.match(record.contexts[0], /本轮实际开放的只读工具/);
+    assert.doesNotMatch(record.contexts[0], /工具数量为零/);
+    assert.equal(JSON.parse(record.history[0]).userRequest, '核实后起草回复。');
+  } finally { await runtime.close(); }
 });
 
 test('invalid ids, fake/inactive source and source rebinding cannot enter a conversation', async t => {
