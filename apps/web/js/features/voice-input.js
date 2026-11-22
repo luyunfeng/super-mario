@@ -15,7 +15,7 @@ export function createVoiceInput(input, beforeListen, api) {
   const record = Recognition && Button({ label: '录音后转写', size: 'sm', onClick: recordForTranscription });
   const pause = Button({ label: '暂停录音', size: 'sm', onClick: () => session?.togglePause?.() });
   const retry = Button({ label: '重试转写', size: 'sm', onClick: () => {
-    if (retainedAudio && binding) void transcribe(retainedAudio.audio, retainedAudio.format, retainedAudio.title, retainedAudio.startedAt, retainedAudio.partial);
+    if (retainedAudio && binding) void transcribe(retainedAudio);
   } });
   const discard = Button({ label: '丢弃录音片段', size: 'sm', onClick: () => { reset(); show('已丢弃录音片段。'); } });
   pause.hidden = retry.hidden = discard.hidden = true;
@@ -93,9 +93,10 @@ export function createVoiceInput(input, beforeListen, api) {
     file.value = '';
     if (!audio || !binding || pickerBinding !== binding) return;
     reset();
-    await transcribe(audio, audio.name.split('.').at(-1).toLowerCase(), audio.name.replace(/\.[^.]+$/, ''));
+    await transcribe({ audio, format: audio.name.split('.').at(-1).toLowerCase(), title: audio.name.replace(/\.[^.]+$/, '') });
   });
-  async function transcribe(audio, format, title = '会议转写', startedAt, partial = false) {
+  async function transcribe(recording) {
+    const { audio, format, title, startedAt, partial, pauses = [] } = recording;
     if (!extensions.includes(format) || !audio.size || audio.size > 8 * 1024 * 1024) {
       show('请选择不超过 8 MiB 的受支持录音。'); return;
     }
@@ -113,9 +114,15 @@ export function createVoiceInput(input, beforeListen, api) {
       job.signal.throwIfAborted();
       const result = await api('/audio-transcription', { method: 'POST', body: { format, audio: data }, signal: job.signal });
       if (pending !== job) return;
-      const text = partial ? '〔录音中断，仅含中断前的片段〕\n' + result.text : result.text;
+      const coverage = [];
+      if (partial) coverage.push('〔录音中断，仅含中断前的片段〕');
+      if (pauses.length) {
+        const ranges = pauses.map(({ from, to }) => (from / 1000).toFixed(3) + '–' + (to / 1000).toFixed(3));
+        coverage.push('〔手动暂停，距开始录音的秒数：' + ranges.join('、') + '〕');
+      }
+      const text = [...coverage, result.text].join('\n');
       transcript = { title, text, startedAt };
-      const addition = partial && input.value && !input.value.endsWith('\n') ? '\n' + text : text;
+      const addition = coverage.length && input.value && !input.value.endsWith('\n') ? '\n' + text : text;
       meeting.hidden = !destination;
       if (input.maxLength >= 0 && input.value.length + addition.length > input.maxLength) {
         show(destination ? '转写超过消息长度限制，可核对后提交会议整理。' : '转写文字超出消息长度限制。'); return;
@@ -125,7 +132,7 @@ export function createVoiceInput(input, beforeListen, api) {
       show('转写已加入草稿，可编辑后发送。');
     } catch (error) {
       if (pending === job) {
-        retainedAudio = { audio, format, title, startedAt, partial };
+        retainedAudio = recording;
         retry.textContent = '重试转写'; retry.hidden = false; discard.hidden = !partial;
         show('转写失败：' + error.message);
       }
@@ -140,6 +147,13 @@ export function createVoiceInput(input, beforeListen, api) {
     }
     reset();
     let stream, recorder, startedAt, confirmed = false;
+    const pauses = [];
+    let clockStart, pauseStart;
+    function endPause() {
+      if (pauseStart === undefined) return;
+      pauses.push({ from: pauseStart, to: performance.now() - clockStart });
+      pauseStart = undefined;
+    }
     const current = session = {
       abort() {
         if (recorder && recorder.state !== 'inactive') recorder.stop();
@@ -148,8 +162,13 @@ export function createVoiceInput(input, beforeListen, api) {
       togglePause() {
         if (confirmed || !recorder || recorder.state === 'inactive') return;
         const pausing = recorder.state === 'recording';
-        if (pausing) recorder.pause();
-        else recorder.resume();
+        if (pausing) {
+          recorder.pause();
+          pauseStart = performance.now() - clockStart;
+        } else {
+          recorder.resume();
+          endPause();
+        }
         for (const track of stream.getAudioTracks()) track.enabled = !pausing;
         pause.textContent = pausing ? '继续录音' : '暂停录音';
         show(pausing ? '录音已暂停，可继续录音或结束并转写。' : '正在录音，结束后会发送到服务端转写。');
@@ -157,6 +176,7 @@ export function createVoiceInput(input, beforeListen, api) {
       stop() {
         if (!recorder) { reset(); return; }
         confirmed = true;
+        endPause();
         recorder.stop();
       },
     };
@@ -179,6 +199,7 @@ export function createVoiceInput(input, beforeListen, api) {
       function interrupted() {
         if (session !== current) return;
         confirmed = false;
+        endPause();
         button.disabled = pause.disabled = true;
         if (recorder.state !== 'inactive') recorder.stop();
       }
@@ -186,16 +207,19 @@ export function createVoiceInput(input, beforeListen, api) {
       for (const track of stream.getAudioTracks()) track.addEventListener('ended', interrupted, { once: true });
       recorder.onstop = () => {
         if (session !== current) return;
+        endPause();
         reset();
         const audio = new Blob(chunks, { type: mime });
-        if (confirmed) void transcribe(audio, mime.slice(6), '会议转写', startedAt);
+        const recording = { audio, format: mime.slice(6), title: confirmed ? '会议转写' : '会议转写片段', startedAt, pauses, partial: !confirmed };
+        if (confirmed) void transcribe(recording);
         else if (audio.size) {
-          retainedAudio = { audio, format: mime.slice(6), title: '会议转写片段', startedAt, partial: true };
+          retainedAudio = recording;
           retry.textContent = '转写已录片段'; retry.hidden = discard.hidden = false;
           show('录音中断。已录片段保留在当前对话，尚未上传。');
         } else show('录音中断，未取得音频。');
       };
       recorder.start(500);
+      clockStart = performance.now();
       startedAt = new Date();
       pause.textContent = '暂停录音'; pause.disabled = false; pause.hidden = false;
       button.textContent = '结束并转写';
