@@ -9,7 +9,7 @@ import { openDrawer, confirmDialog } from '../ui/overlay.js';
 
 const LAYER_HINT = { personal: 'memory.personal', global: 'memory.global', project: 'memory.project' };
 
-function revisionHistory(api, entry) {
+function revisionHistory(api, entry, loadDraft) {
   const body = h('div', { class: 'stack' });
   const section = h('details', null, h('summary', null, '查看历史修订'), body);
   let request = 0;
@@ -25,7 +25,8 @@ function revisionHistory(api, entry) {
       status.replaceWith(h('article', { class: 'stack' },
         h('strong', null, revision.entry.title),
         h('small', null, revision.entry.updatedAt, ' · ', revision.commit.slice(0, 8)),
-        h('pre', { class: 'small', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, revision.entry.content)));
+        h('pre', { class: 'small', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, revision.entry.content),
+        Button({ label: '将此版载入草稿', size: 'sm', onClick: () => loadDraft(revision.entry) })));
       if (revision.previous) {
         const earlier = Button({ label: '查看上一版', size: 'sm', onClick: () => { earlier.remove(); return load(revision.previous); } });
         body.append(earlier);
@@ -136,6 +137,17 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
     refresh(); field.focus(); field.setSelectionRange(0, 0);
   }
 
+  async function loadDraft(revision) {
+    if (title.value === revision.title && content.value === revision.content) return;
+    if (title.value !== entry.title || content.value !== entry.content) {
+      const replaceDraft = await confirmDialog({ title: '替换当前草稿？', message: '载入这次修订会替换编辑框中的标题和内容。', confirmLabel: '载入修订' });
+      if (!replaceDraft) return;
+    }
+    title.value = revision.title;
+    content.value = revision.content;
+    content.focus();
+  }
+
   const save = Button({
     label: entry ? '保存' : '记住', kind: 'primary',
     onClick: async () => {
@@ -176,7 +188,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   });
   const drawer = openDrawer({
     title: entry ? '编辑记忆' : '添加记忆', subtitle: entry ? `更新于 ${timeAgo(entry.updatedAt)}` : undefined,
-    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), entry && revisionHistory(api, entry), note, conflict],
+    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), entry && revisionHistory(api, entry, loadDraft), note, conflict],
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();
