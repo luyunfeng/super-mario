@@ -33,7 +33,8 @@ export function createShell({ api, store, router, scope }) {
   // —— 搜索 ——
   const searchInput = h('input', { class: 'search__input', type: 'search', id: 'workspace-search', placeholder: '搜索待办、执行、记忆与项目', autocomplete: 'off', 'aria-label': '搜索待办、执行、记忆与项目', 'aria-controls': 'search-results' });
   const results = h('div', { class: 'search__results', id: 'search-results', hidden: true });
-  const search = h('div', { class: 'search' }, icon('search', 'search__icon'), searchInput, h('kbd', { class: 'search__kbd' }, '/'), results);
+  const searchHint = h('kbd', { class: 'search__kbd' }, '/');
+  const search = h('div', { class: 'search' }, icon('search', 'search__icon'), searchInput, searchHint, results);
 
   // —— 项目范围 ——
   const scopeSelect = h('select', { class: 'select topbar__scope', 'aria-label': '项目范围', id: 'scope-select' }, h('option', { value: '' }, '全部项目'));
@@ -76,7 +77,7 @@ export function createShell({ api, store, router, scope }) {
   const root = h('div', { class: 'app', id: 'workspace' }, sidebar, mainCol);
 
   return {
-    root, view, searchInput, results, openPluginSettings: pluginSettings.open,
+    root, view, searchInput, searchHint, results, openPluginSettings: pluginSettings.open,
     setActive(page) {
       for (const [key, { el }] of Object.entries(navItems)) {
         if (key === page) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current');

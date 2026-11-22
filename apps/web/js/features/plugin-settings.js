@@ -1,3 +1,4 @@
+import { openShortcutSettings } from './shortcuts.js';
 import { preferenceEditor } from './plugin-preferences.js';
 import { openSavedPrompts } from './saved-prompts.js';
 import { openTokenStatistics } from './token-statistics.js';
@@ -8,6 +9,7 @@ import { openDrawer } from '../ui/overlay.js';
 import { systemText } from '../copy/terms.js';
 
 const descriptions = {
+  'shortcut-settings':'调整本浏览器的全局快捷键。',
   'start-page':'选择直接打开工作台时显示的页面，设置在同一服务的浏览器之间共享。',
   'todo-calendar':'按日、周或月查看项目待办的截止时间。',
   'assistant-skills':'管理主助手技能包，供 Web 主对话和全局飞书机器人按需读取。',
@@ -129,6 +131,7 @@ export function createPluginSettings({ api, store, router }) {
         h('p',{},descriptions[plugin.id] ?? (entries.length ? '提供以下工作台功能：'+entries.map(e=>e.label).join('、') : '此插件由执行环境提供，已声明的能力见下方。')),
         h('code',{class:'small muted'},plugin.id),
         preferenceEditor(plugin.id),
+        plugin.id === 'shortcut-settings' && Button({ label: '快捷键设置', disabled: plugin.status !== 'active', onClick: () => openShortcutSettings(store) }),
         plugin.id === 'start-page' && startPageEditor({ api, store }, snapshot.startPage, startPages(plugins)),
         plugin.id === 'saved-prompts' && Button({ label: '管理常用提示词', size: 'sm', disabled: plugin.status !== 'active',
           onClick: () => openSavedPrompts({ api, store }) }),

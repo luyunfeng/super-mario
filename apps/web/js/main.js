@@ -63,7 +63,7 @@ const pages = {
 for (const page of Object.values(pages)) shell.view.append(page.el);
 
 createSearch({ shell, store, router, api });
-installShortcuts({ shell, router, onQuickTodo: ctx.quickTodo });
+installShortcuts({ shell, store, router, onQuickTodo: ctx.quickTodo });
 
 function renderChrome(view) {
   const alerts = computeAlerts(view.snapshot, view.attention, { seenRunIds: readLocal('sm.seenRuns', []) });
