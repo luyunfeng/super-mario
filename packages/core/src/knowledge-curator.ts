@@ -464,7 +464,8 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
       // Use persisted import receipts. Markdown references in editable pages cannot grant file access.
       const matches = jobs().filter(job => job.layer === page.layer && job.projectId === page.projectId &&
         job.knowledgeIds.includes(pageId));
-      if (sourceId === undefined) return { sources: matches.map(({ id, title, createdAt, meetingStartedAt }) => ({ id, title, createdAt, ...(meetingStartedAt ? { meetingStartedAt } : {}) })) };
+      if (sourceId === undefined) return { sources: matches.map(({ id, title, createdAt, meetingStartedAt, materialKind, requestOrigin }) => ({ id, title, createdAt,
+        ...(materialKind === 'meeting-transcript' || requestOrigin === 'meeting' ? { meeting: true } : {}), ...(meetingStartedAt ? { meetingStartedAt } : {}) })) };
       const job = matches.find(item => item.id === sourceId);
       if (!job || !/^(?:[0-9a-f-]{36}|(?:meeting|transcript)-[0-9a-f]{64})$/.test(job.id)) throw new CuratorError('该知识页没有这份来源', 404);
       const rawDir = join(directory, 'raw');

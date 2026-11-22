@@ -1,5 +1,5 @@
 import { h, replace } from '../lib/dom.js';
-import { createConversationDrafts } from '../lib/conversation-drafts.js';
+import { appendConversationQuestion } from '../lib/conversation-drafts.js';
 import { Button, Field, Input, Select } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 
@@ -20,19 +20,11 @@ export function openMeetingDay({ api, store, scope, router }) {
   const current = () => drawer.el.open && owner === api.draftOwner() && owner === store.view.snapshotOwner &&
     !store.view.unauthorized && store.view.snapshot?.plugins.some(p => p.id === 'knowledge-local' && p.status === 'active') &&
     (!project.value || store.view.snapshot.projects.some(p => p.id === project.value && !p.archivedAt));
-  const drafts = createConversationDrafts({ api, store });
   let question = '';
   const ask = Button({ label: '将回顾问题加入对话草稿', size: 'sm', onClick() {
     if (!question || !current()) return;
-    const id = project.value;
-    const key = JSON.stringify(id ? ['project', id] : ['main', '']);
-    const previous = drafts.read(key);
-    const text = previous ? previous + '\n\n' + question : question;
-    if (text.length > 20000) { summary.textContent = '对话草稿空间不足，请先缩短已有草稿。'; return; }
-    drafts.write(key, text);
-    drawer.close();
-    if (!id) scope.set('');
-    router.go(id ? router.href('projects', id, 'workspace') : router.href('chat'));
+    try { appendConversationQuestion({ api, store, scope, router }, project.value, question); drawer.close(); }
+    catch (error) { summary.textContent = error.message; }
   } });
   function reset() {
     ask.hidden = true; question = '';

@@ -159,7 +159,7 @@ export interface SystemActions {
   changeKnowledgeTag?(args: Record<string, unknown>): Promise<Json>;
   knowledgeRevision?(id: string, commit?: string, projectId?: string): ReturnType<NonNullable<KnowledgeBackend['revision']>>;
   knowledgeOriginal?(pageId: string, sourceId?: string, projectId?: string): Promise<{
-    sources?: { id: string; title: string; createdAt: string; meetingStartedAt?: string }[]; content?: string; title?: string }>;
+    sources?: { id: string; title: string; createdAt: string; meeting?: boolean; meetingStartedAt?: string }[]; content?: string; title?: string }>;
   meetingDay?(date: string, timezone?: string, projectId?: string, offset?: number): Promise<Json>;
   knowledgeJobs?(): Json;
   dispatch(input: Record<string, unknown>): Json;

@@ -37,8 +37,10 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   await dialog.getByText('合成会议原文 · 2032-02-29T00:10:00+05:45', { exact: true }).click();
   await expect(dialog.locator('pre')).toHaveText(original);
   await expect(dialog.locator('pre em')).toHaveCount(0);
-  await dialog.getByRole('button', { name: '关闭' }).click();
-  await page.evaluate(() => { location.hash = '#chat'; });
+  await dialog.getByRole('button', { name: '准备会议交接稿' }).click();
+  const draft = page.getByLabel('给 Agent 的消息');
+  await expect(draft).toHaveValue(new RegExp(entry.id + '.*' + job.id));
+  await expect(draft).not.toHaveValue(/散会/);
   await page.getByLabel('给 Agent 的消息').fill('请解释这段话');
   await page.getByRole('link', { name: '查看原文' }).click();
   await expect(dialog.locator('pre')).toBeVisible();

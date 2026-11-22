@@ -499,6 +499,11 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
       assert.match(req.system, /参会人名单不能证明任务归属/);
       assert.match(req.system, /待办后来改期不能改写会议原话/);
       assert.ok(req.tools.includes('knowledge_list'));
+      if (JSON.stringify(req.content).includes('起草交接')) {
+        assert.match(req.system, /默认只给交接摘要/);
+        assert.match(req.system, /准备交接稿只在当前对话回复/);
+        return call('knowledge_original', { pageId }, 'handoff-sources');
+      }
       const missing = JSON.stringify(req.content).includes('独立评审会');
       assert.match(req.system, /检索无结果时，说明缺少会议正文/);
       if (missing) return call('knowledge_list', { query: '独立评审会' }, 'missing');
@@ -522,6 +527,16 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
       return call('knowledge_list', { query: title }, 'minutes');
     }
     const materials = JSON.stringify(req.content);
+    if (req.callId === 'handoff-sources') {
+      const result = JSON.parse(typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text);
+      assert.equal(result.sources[0].meeting, true);
+      assert.equal(result.sources[0].id, sourceId);
+      return call('knowledge_original', { pageId, sourceId, query: '原话依据甲' }, 'handoff-original');
+    }
+    if (req.callId === 'handoff-original') {
+      assert.match(materials, /原话依据甲/);
+      return { role: 'assistant', content: '交接草稿：已定位评审原文。请接手方核对样本。' };
+    }
     if (req.callId === 'missing') {
       assert.doesNotMatch(materials, /另一个项目的结论|样本甲/);
       return { role: 'assistant', content: '当前项目缺少该次会议正文。' };
@@ -600,6 +615,9 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     const question = '按 UTC 回顾 2032-02-28 的会议：' + title + '有哪些决定？样本复核现在完成了吗？';
     assert.equal(await ask(question, '/projects/' + projectId + '/messages'), decision + '样本复核待办尚未验收。');
     assert.equal(await ask('独立评审会定了什么？', '/projects/' + projectId + '/messages'), '当前项目缺少该次会议正文。');
+    const handoff = '请为样本评审起草交接，不发送。';
+    const handoffText = await ask(handoff, '/projects/' + projectId + '/messages');
+    assert.match(handoffText, /交接草稿/);
     const bot = await api('/feishu/bots', { name: '项目纪要', appId: 'cli_5555555555555555', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId }, requireConfirmation: false });
     const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
@@ -611,6 +629,9 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
     await t.waitFor(() => assert.ok(deliveries.includes(decision + '样本复核待办已验收。')));
     assert.equal(requests.filter(req => req.callId === 'minutes').length, 2);
     assert.equal(requests.filter(req => req.callId === 'action-status').length, 2);
+    await adapter.onMessage(handoff, { ...source, messageId: 'draft-handoff' });
+    await t.waitFor(() => assert.ok(deliveries.includes(handoffText)));
+    assert.equal(requests.filter(req => req.callId === 'handoff-original').length, 2);
     assert.deepEqual(server.app.todos(), before);
   } finally { await server.close(); }
 });

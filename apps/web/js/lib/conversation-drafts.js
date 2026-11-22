@@ -72,3 +72,15 @@ export function createConversationDrafts({ api, store }) {
   clients.set(api, drafts);
   return drafts;
 }
+
+/** 从资料页进入对应会话，保留用户已写的内容，让用户决定何时发送。 */
+export function appendConversationQuestion({ api, store, scope, router }, projectId, question) {
+  const drafts = createConversationDrafts({ api, store });
+  const key = JSON.stringify(projectId ? ['project', projectId] : ['main', '']);
+  const previous = drafts.read(key);
+  const text = previous ? previous + '\n\n' + question : question;
+  if (text.length > 20000) throw new Error('对话草稿空间不足，请先缩短已有草稿。');
+  drafts.write(key, text);
+  if (!projectId) scope.set('');
+  router.go(projectId ? router.href('projects', projectId, 'workspace') : router.href('chat'));
+}

@@ -1,6 +1,6 @@
 // 记忆条目：新增/编辑抽屉和列表行。记忆页和项目的“资料”标签共用。
 import { h, replace } from '../lib/dom.js';
-import { createConversationDrafts } from '../lib/conversation-drafts.js';
+import { appendConversationQuestion, createConversationDrafts } from '../lib/conversation-drafts.js';
 import { quoteDraftKey } from '../lib/message-quote.js';
 import { layerNames, timeAgo } from '../lib/format.js';
 import { Button, Field, Input, TextArea, Select, Pill } from '../ui/kit.js';
@@ -55,7 +55,7 @@ function revisionHistory(api, entry, loadDraft, selectedCommit) {
   return section;
 }
 
-function originalSources(api, entry, selected, line, ask) {
+function originalSources(api, entry, selected, line, ask, handoff) {
   const path = '/knowledge/' + encodeURIComponent(entry.id) + '/sources';
   const body = h('div', { class: 'stack' });
   const section = h('details', { open: Boolean(selected) }, h('summary', null, '查看原始资料'), body);
@@ -71,6 +71,7 @@ function originalSources(api, entry, selected, line, ask) {
           onclick: () => ask(source, original) }, '引用原文追问');
         const notice = h('span', { role: 'status', hidden: true }, '引用的行号超出原文范围。');
         const detail = h('details', { open: source.id === selected }, h('summary', null, source.title, source.meetingStartedAt && ' · ' + source.meetingStartedAt), notice, text, action);
+        if (source.meeting && handoff) detail.append(Button({ label: '准备会议交接稿', size: 'sm', onClick: () => handoff(source) }));
         detail.addEventListener('toggle', async () => {
           if (!detail.open) return;
           action.hidden = true;
@@ -130,17 +131,30 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   layer.addEventListener('change', sync);
 
   const owner = store.view.snapshotOwner;
-  function mayQuote() {
+  function canReadEntry() {
     const view = store.view;
     return router && scope && !view.unauthorized && owner === api.draftOwner() && owner === view.snapshotOwner &&
-      view.snapshot?.plugins?.some(p => p.id === 'conversation-quotes' && p.status === 'active') &&
       view.snapshot?.plugins?.some(p => p.id === 'knowledge-local' && p.status === 'active') &&
       view.snapshot.knowledge?.some(p => p.id === entry.id && p.layer === entry.layer && p.projectId === entry.projectId) &&
       (!entry.projectId || view.snapshot.projects?.some(p => p.id === entry.projectId && !p.archivedAt));
   }
+  function mayQuote() {
+    return canReadEntry() && store.view.snapshot.plugins.some(p => p.id === 'conversation-quotes' && p.status === 'active');
+  }
+  function handoff(source) {
+    if (!canReadEntry()) { note.textContent = '当前无法读取这份会议资料。'; return; }
+    if (hasUnsavedChanges()) { note.textContent = '请先保存记忆修改，再准备交接稿。'; return; }
+    const question = '请准备会议交接稿。知识页 ID 为 ' + entry.id + '，选中的会议来源 ID 为 ' + source.id +
+      '。请核对原文，整理接手方需要了解的决定、行动项当前进度和未决问题。只起草，供我核对。';
+    try { appendConversationQuestion({ api, store, router, scope }, entry.projectId, question); }
+    catch (error) { note.textContent = error.message; }
+  }
+  function hasUnsavedChanges() {
+    return fields.some((field, i) => field.value !== baseline[i]) || changedScope() || (protection.value === 'locked') !== Boolean(reviewed.contentLocked);
+  }
   function ask(source, original) {
     if (!mayQuote()) { note.textContent = '当前无法引用，请检查插件和知识页状态。'; return; }
-    if (fields.some((field, i) => field.value !== baseline[i]) || changedScope() || (protection.value === 'locked') !== Boolean(reviewed.contentLocked)) {
+    if (hasUnsavedChanges()) {
       note.textContent = '请先保存记忆修改，再引用原文。'; return;
     }
     const drafts = createConversationDrafts({ api, store });
@@ -297,7 +311,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   });
   const drawer = openDrawer({
     title: entry ? '编辑记忆' : '添加记忆', subtitle: entry ? `更新于 ${timeAgo(entry.updatedAt)}` : undefined,
-    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), actionTodos, actionStatus, actionTodos && todoReceipt, Field({ label: '正文维护方式', control: protection }), Field({ label: '已确认事实', control: facts }), factsNote, Field({ label: '别名', control: aliases }), Field({ label: '标签', control: tags }), Field({ label: '重要级', control: importance }), Field({ label: '相关度（0–100）', control: relevance }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
+    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), actionTodos, actionStatus, actionTodos && todoReceipt, Field({ label: '正文维护方式', control: protection }), Field({ label: '已确认事实', control: facts }), factsNote, Field({ label: '别名', control: aliases }), Field({ label: '标签', control: tags }), Field({ label: '重要级', control: importance }), Field({ label: '相关度（0–100）', control: relevance }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null, canReadEntry() ? handoff : null), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();
