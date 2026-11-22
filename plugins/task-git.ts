@@ -23,21 +23,39 @@ export function taskHead(cwd: string) {
   return git(cwd, ['rev-parse', '--verify', 'HEAD^{commit}'])?.trim();
 }
 
+// With -z Git encodes renames as an empty path followed by separate old/new paths.
+function parseNumstat(raw: string) {
+  const fields = raw.split('\0');
+  const rows = [];
+  for (let i = 0; i < fields.length - 1; i++) {
+    const match = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(fields[i]!);
+    if (!match) return;
+    let path = match[3]!;
+    if (!path) {
+      const previous = fields[++i];
+      path = fields[++i]!;
+      if (!previous || !path) return;
+    }
+    const binary = match[1] === '-' || match[2] === '-';
+    rows.push({ path, binary, added: binary ? null : Number(match[1]), deleted: binary ? null : Number(match[2]) });
+  }
+  return rows;
+}
+
 export function taskCommitChanges(cwd: string, base: string) {
   const head = taskHead(cwd);
   if (!head) return;
   let files = 0, added = 0, deleted = 0;
   if (base !== head) {
-    const stats = git(cwd, ['diff', '--numstat', '-z', '--no-ext-diff', '--no-textconv', '--no-renames',
+    const stats = git(cwd, ['diff', '--numstat', '-z', '--no-ext-diff', '--no-textconv', '--find-renames',
       '--ignore-submodules=none', base, head, '--', '.']);
     if (stats === undefined) return;
-    for (const entry of stats.split('\0')) {
-      if (!entry) continue;
-      const match = /^(\d+|-)\t(\d+|-)\t/.exec(entry);
-      if (!match) return;
-      files++;
-      if (match[1] !== '-') added += Number(match[1]);
-      if (match[2] !== '-') deleted += Number(match[2]);
+    const rows = parseNumstat(stats);
+    if (!rows) return;
+    files = rows.length;
+    for (const row of rows) {
+      added += row.added ?? 0;
+      deleted += row.deleted ?? 0;
     }
   }
   return commitChanges({ base, head, files, added, deleted });
@@ -56,36 +74,40 @@ async function readObjectDiff(cwd: string, command: string[], objects: string[],
   const safePath = (name: string) => !!name && !isAbsolute(name) && !/[\x00-\x1f\x7f]/.test(name)
     && !name.split('/').some(part => !part || part === '..' || part === '.') && !sensitiveWorkspacePath(name);
   if (path !== undefined && (typeof path !== 'string' || !safePath(path))) throw new Error('文件不可浏览');
-  const diff = async (mode: string[], file: string) => {
+  const diff = async (mode: string[], paths = ['.'], excluded: string[] = []) => {
+    const pathspecs = [...paths.map(name => ':(literal)' + name), ...excluded.map(name => ':(exclude,literal)' + name)];
     try {
-      const result = await execute('git', [...gitArgs, ...command, '--relative', '--no-ext-diff', '--no-textconv',
-        '--no-color', '--no-renames', '--submodule=short', '--ignore-submodules=none', ...mode, ...objects, '--', file], gitOptions(cwd));
+      const result = await execute('git', [...gitArgs.filter(arg => arg !== '--literal-pathspecs'), ...command, '--relative', '--no-ext-diff', '--no-textconv',
+        '--no-color', '--find-renames', '--submodule=short', '--ignore-submodules=none', ...mode, ...objects, '--', ...pathspecs], gitOptions(cwd));
       return result.stdout;
     } catch { throw new Error('历史提交不可读或差异超过读取上限'); }
   };
-  const entries = (await diff(['--name-status', '-z'], '.')).split('\0');
-  const visible = new Map<string, string>();
+  const entries = (await diff(['--name-status', '-z'])).split('\0');
+  const visible = new Map<string, { status: string; previousPath?: string }>();
+  const touchedPaths: string[] = [];
   let hidden = 0;
-  for (let i = 0; i + 1 < entries.length; i += 2) {
-    const name = entries[i + 1]!;
-    if (safePath(name)) visible.set(name, entries[i]!);
-    else hidden++;
+  for (let i = 0; i < entries.length - 1;) {
+    const status = entries[i++]!;
+    const previousPath = status.startsWith('R') ? entries[i++] : undefined;
+    const name = entries[i++];
+    if (!name) throw new Error('历史提交的路径信息不完整');
+    touchedPaths.push(name);
+    if (previousPath) touchedPaths.push(previousPath);
+    if (!safePath(name) || previousPath !== undefined && !safePath(previousPath)) { hidden++; continue; }
+    visible.set(name, previousPath === undefined ? { status } : { status: 'R', previousPath });
   }
   if (path === undefined) {
-    const changes = [];
-    for (const entry of (await diff(['--numstat', '-z'], '.')).split('\0')) {
-      if (!entry) continue;
-      const match = /^(\d+|-)\t(\d+|-)\t([\s\S]+)$/.exec(entry);
-      if (!match) throw new Error('历史提交的文件统计不完整');
-      const name = match[3]!, status = visible.get(name);
-      if (!status) continue;
-      const binary = match[1] === '-' || match[2] === '-';
-      changes.push({ path: name, status, binary, added: binary ? null : Number(match[1]), deleted: binary ? null : Number(match[2]) });
-    }
+    const rows = parseNumstat(await diff(['--numstat', '-z']));
+    if (!rows) throw new Error('历史提交的文件统计不完整');
+    const changes = rows.filter(row => visible.has(row.path)).map(row => ({ ...row, ...visible.get(row.path)! }));
     return { files: [...visible.keys()], hidden, changes };
   }
-  if (!visible.has(path)) throw new Error('文件不在此次执行的可查看差异中');
-  const text = await diff(['--patch'], path);
+  const change = visible.get(path);
+  if (!change) throw new Error('文件不在此次执行的可查看差异中');
+  const selected = change.previousPath ? [change.previousPath, path] : [path];
+  // A literal Git pathspec also matches descendants if a file became a directory.
+  const excluded = touchedPaths.filter(name => !selected.includes(name) && selected.some(parent => name.startsWith(parent + '/')));
+  const text = await diff(['--patch'], selected, excluded);
   if (/^Binary files /m.test(text) || /[\x00-\x08\x0b\x0c\x0e-\x1f\ufffd]/.test(text)) throw new Error('仅支持 UTF-8 文本差异');
   return { path, text };
 }

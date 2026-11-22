@@ -48,4 +48,29 @@ test('commit evidence covers only committed changes under the run directory', as
   await assert.rejects(readCommitDiff({ ...params, path: 'binary' }), /文本/);
   for (const path of ['.env', '../outside', 'outside']) await assert.rejects(readCommitDiff({ ...params, path }));
 
+  const beforeMove = taskHead(cwd)!;
+  git('mv', 'sub/edited.txt', 'sub/moved.txt');
+  git('mv', 'sub/.env', 'sub/public.txt');
+  git('mv', 'sub/[example]', 'sub/secrets.json');
+  git('commit', '-qm', 'move paths');
+  const moved = taskCommitChanges(cwd, beforeMove)!;
+  assert.equal(moved.files, 3);
+  assert.equal(moved.added + moved.deleted, 0);
+  const renameParams = { cwd, range: moved };
+  assert.deepEqual(await readCommitDiff(renameParams), { files: ['moved.txt'], hidden: 2, changes: [
+    { path: 'moved.txt', previousPath: 'edited.txt', status: 'R', binary: false, added: 0, deleted: 0 },
+  ] });
+  assert.match(JSON.stringify(await readCommitDiff({ ...renameParams, path: 'moved.txt' })), /rename from edited.txt/);
+  for (const path of ['public.txt', 'secrets.json', '[example]', '.env']) await assert.rejects(readCommitDiff({ ...renameParams, path }));
+
+  const beforeDirectory = taskHead(cwd)!;
+  await rm(join(cwd, 'moved.txt'));
+  await mkdir(join(cwd, 'moved.txt'));
+  await writeFile(join(cwd, 'moved.txt', '.env'), 'fixture directory content');
+  git('add', 'sub/moved.txt');
+  git('commit', '-qm', 'replace file with directory');
+  const removedPatch = JSON.stringify(await readCommitDiff({ cwd, range: taskCommitChanges(cwd, beforeDirectory)!, path: 'moved.txt' }));
+  assert.match(removedPatch, /deleted file mode/);
+  assert.doesNotMatch(removedPatch, /fixture directory content|\.env/);
+
 });

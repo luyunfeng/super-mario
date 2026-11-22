@@ -32,10 +32,11 @@ function openCommitDiff(options, commit, mode) {
       if (!active()) return;
       const output = h('pre', { class: 'code-sidebar__text', tabindex: 0 });
       const byPath = new Map((changes ?? []).map(change => [change.path, change]));
-      const labels = { A: '新增', M: '修改', D: '删除', T: '类型变化' };
+      const labels = { A: '新增', M: '修改', D: '删除', T: '类型变化', R: '重命名' };
       const picker = Select({ 'aria-label': '已提交文件', options: files.map(path => {
         const change = byPath.get(path);
-        return [path, change ? `${path} · ${labels[change.status] ?? change.status} · ${change.binary ? '二进制' : '+' + change.added + ' / −' + change.deleted}` : path];
+        const displayPath = change?.previousPath ? change.previousPath + ' → ' + path : path;
+        return [path, change ? `${displayPath} · ${labels[change.status] ?? change.status} · ${change.binary ? '二进制' : '+' + change.added + ' / −' + change.deleted}` : path];
       }), onChange: readFile });
       async function readFile() {
         const stamp = ++sequence;

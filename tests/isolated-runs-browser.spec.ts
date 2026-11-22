@@ -403,4 +403,12 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   await expect(page).toHaveURL(new RegExp(stale.id + '$'));
   await expect(page.getByText('工作树目录或分支已变化，执行未启动', { exact: false }).first()).toBeVisible();
 
+  git(peer.cwd!, 'mv', '.gitattributes', 'attributes.txt');
+  git(peer.cwd!, 'commit', '-qm', '改名示例');
+  await page.goto(server.url + '/#projects/' + project.id + '/runs/' + peer.id);
+  await page.getByRole('button', { name: '查看提交历史' }).click();
+  await history.getByRole('button', { name: '改名示例' }).click();
+  await expect(detail.getByRole('option', { name: '.gitattributes → attributes.txt · 重命名 · +0 / −0' })).toHaveCount(1);
+  await expect(detail.locator('pre.code-sidebar__text')).toContainText('rename to attributes.txt');
+
 });
