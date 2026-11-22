@@ -207,7 +207,7 @@ test('agent CLI loads compiled modules, including guarded artifacts, and passes 
     return output.includes('执行机代理已启动') || undefined;
   });
   const options = JSON.parse(await readFile(join(dir, 'options.json'), 'utf8'));
-  assert.deepEqual(options.handlers, ['terminal.live.list', 'executor.sessions', 'executor.diagnostics', 'extension.load', 'extension.status', 'extension.call', 'workspace.projects', 'workspace.directory', 'agents.sessions', 'agents.session']);
+  assert.deepEqual(options.handlers, ['terminal.live.list', 'terminal.host.start', 'executor.sessions', 'executor.diagnostics', 'extension.load', 'extension.status', 'extension.call', 'workspace.projects', 'workspace.directory', 'agents.sessions', 'agents.session']);
   assert.deepEqual(options.executors, [{ id: 'compiled-test', machineId: options.machineId }]);
   assert.equal(options.onDisconnect, 'function');
   assert.equal(options.dataDir, dir);

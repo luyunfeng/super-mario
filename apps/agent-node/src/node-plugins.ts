@@ -95,7 +95,7 @@ export async function loadDefaultNodePlugins(options: DefaultNodePluginOptions):
   const executors = await services.describe(machineId);
 
   return composeNodePlugins([
-    { id: 'live-terminals', handlers: live.handlers, onDisconnect: live.disconnect, close: live.close },
+    { id: 'live-terminals', handlers: { ...live.handlers, 'terminal.host.start': async () => host.startServer() }, onDisconnect: live.disconnect, close: live.close },
     {
       id: 'executors',
       handlers: services.handlers,

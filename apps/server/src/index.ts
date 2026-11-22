@@ -402,7 +402,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           const rpc = requiredText(input.method, '执行机方法');
           if (!rpc.startsWith('executor.') && !rpc.startsWith('terminal.')) throw new InputError('不支持的执行机方法');
           if (!input.params || typeof input.params !== 'object' || Array.isArray(input.params)) throw new InputError('params必须是对象');
-          return json(res, 200, await machines.call(decodeURIComponent(machine[1]), rpc, input.params as JsonObject));
+          return json(res, 200, await machines.call(decodeURIComponent(machine[1]), rpc, input.params as JsonObject, rpc === 'terminal.host.start' ? { timeoutMs: 50_000 } : undefined));
         }
         const waitingReply = path.match(/^\/api\/v1\/todos\/([^/]+)\/waiting-reply(\/sources)?$/);
         if (waitingReply && method === 'GET') return json(res, 200, waitingReply[2] ? app.waitingReplies.sources(decodeURIComponent(waitingReply[1]!), url.searchParams.get('query') ?? '') : app.waitingReplies.get(decodeURIComponent(waitingReply[1]!)));
@@ -626,6 +626,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       if (url.pathname === '/api/v1/live-terminal') {
         const machineId = url.searchParams.get('machineId') || '';
         const mode = url.searchParams.get('mode') || 'full';
+        if (!app.plugins.list().some(plugin => plugin.id === 'terminal-host' && plugin.status === 'active')) { ws.close(1008, '终端宿主插件已停用'); return; }
+        if (!machineId || !['full', 'observe', 'control'].includes(mode)) { ws.close(1008, '执行机或终端模式无效'); return; }
+        const sessionName = url.searchParams.get('session');
+        const selection: JsonObject = sessionName === null ? {} : { session: sessionName };
         let connectionId = '';
         let seq = -1;
         let closed = false;
@@ -640,60 +644,67 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             void machines.call(machineId, 'terminal.live.release', { connectionId: id }).catch(() => {});
           }
         };
+        function fail(error: unknown) {
+          if (closed) return;
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'error', message: error instanceof Error ? error.message : '终端连接中断' }));
+            ws.close();
+          }
+          cleanup();
+        }
+        let pendingWrites = 0;
         ws.on('close', cleanup);
         ws.on('message', raw => {
-          if (closed || !connectionId) return;
+          if (closed) return;
           try {
+            if (!connectionId) throw new Error('请等待终端连接就绪');
             const msg = JSON.parse(String(raw)) as Record<string, unknown>;
-            if (msg.type === 'input' && typeof msg.data === 'string') {
-              writeChain = writeChain.then(async () => { await machines.call(machineId, 'terminal.live.input', { connectionId, data: msg.data as string }); }).catch(() => {});
-            } else if (msg.type === 'resize' && Number.isInteger(msg.cols) && Number.isInteger(msg.rows)) {
-              void machines.call(machineId, 'terminal.live.resize', { connectionId, cols: msg.cols as number, rows: msg.rows as number }).catch(() => {});
-            }
-          } catch {}
+            const id = connectionId;
+            let method: string, params: JsonObject;
+            if (mode !== 'observe' && msg.type === 'input' && typeof msg.data === 'string' && msg.data.length <= 65536) {
+              method = 'terminal.live.input';
+              params = { connectionId: id, data: msg.data };
+            } else if (mode === 'full' && msg.type === 'resize' && Number.isInteger(msg.cols) && Number.isInteger(msg.rows)) {
+              method = 'terminal.live.resize';
+              params = { connectionId: id, cols: msg.cols as number, rows: msg.rows as number };
+            } else throw new Error('当前终端模式不支持此操作');
+            if (++pendingWrites > 256) throw new Error('终端输入积压，请重新连接');
+            writeChain = writeChain.then(async () => {
+              if (!closed) await machines.call(machineId, method, params);
+            }).catch(fail).finally(() => { pendingWrites--; });
+          } catch (error) { fail(error); }
         });
         void (async () => {
           try {
             const openRes = mode === 'full'
               ? await machines.call(machineId, 'terminal.live.full.open', {
-                  cols: Number(url.searchParams.get('cols')) || 120,
+                  ...selection, cols: Number(url.searchParams.get('cols')) || 120,
                   rows: Number(url.searchParams.get('rows')) || 36,
-                }) as { connectionId: string }
+                }, { timeoutMs: 45_000 }) as { connectionId: string; session?: string }
               : await machines.call(machineId, 'terminal.live.open', {
-                  paneId: url.searchParams.get('paneId') || '',
+                  ...selection, paneId: url.searchParams.get('paneId') || '',
                   terminalId: url.searchParams.get('terminalId') || '',
                   cwd: url.searchParams.get('cwd') || '',
                   mode: mode === 'control' ? 'control' : 'observe',
-                }) as { connectionId: string };
+                }, { timeoutMs: 45_000 }) as { connectionId: string; session?: string };
             if (closed) { void machines.call(machineId, 'terminal.live.release', { connectionId: openRes.connectionId }).catch(() => {}); return; }
             connectionId = openRes.connectionId;
-            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ready', connectionId, mode }));
+            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ready', connectionId, mode, session: openRes.session ?? sessionName ?? undefined }));
             const pump = async () => {
               if (closed || !connectionId || ws.readyState !== WebSocket.OPEN) return;
               try {
                 const res = await machines.call(machineId, 'terminal.live.frames', { connectionId, after: seq }) as { frames?: Array<{ seq: number; width?: number; height?: number; data: string }> };
                 if (closed || ws.readyState !== WebSocket.OPEN) return;
                 for (const frame of res.frames ?? []) {
+                  if (ws.bufferedAmount > 2 * 1024 * 1024) throw new Error('浏览器接收画面过慢，请重新连接');
                   ws.send(JSON.stringify({ type: 'frame', ...frame }));
                   seq = frame.seq;
                 }
                 pollTimer = setTimeout(() => { void pump(); }, 60);
-              } catch (err) {
-                if (!closed && ws.readyState === WebSocket.OPEN) {
-                  ws.send(JSON.stringify({ type: 'error', message: err instanceof Error ? err.message : '连接中断' }));
-                  ws.close();
-                }
-                cleanup();
-              }
+              } catch (err) { fail(err); }
             };
             void pump();
-          } catch (err) {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: 'error', message: err instanceof Error ? err.message : '打开终端失败' }));
-              ws.close();
-            }
-            cleanup();
-          }
+          } catch (err) { fail(err); }
         })();
         return;
       }
