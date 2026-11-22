@@ -481,3 +481,51 @@ test('主对话查日程与待办时收到日历不可用原因和独立的待�
     assert.match(JSON.stringify(requests.find(r => r.callId === 'todos')?.content), /核对月报/);
   } finally { await server.close(); }
 });
+
+test('Web 与飞书项目会话可按会议主题核对决定、建议和未决事项', { timeout: 30000 }, async t => {
+  let projectId = '', adapter!: FeishuOptions;
+  const deliveries: string[] = [];
+  const title = '合成样本评审会';
+  const excerpt = '[09:12] 决定采用样本甲。[09:14] 建议周五前复核；负责人待定。';
+  const answer = '决定采用样本甲。周五是建议期限，负责人待确认。';
+  const { server, api, ask, requests } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /区分明确决定、建议、行动项和未决问题/);
+      assert.match(req.system, /未明确的负责人或期限写待确认/);
+      assert.match(req.system, /整理纪要不触发建待办、委派或外发/);
+      assert.ok(req.tools.includes('knowledge_list'));
+      const missing = JSON.stringify(req.content).includes('独立评审会');
+      assert.match(req.system, /检索无结果时，说明缺少会议正文/);
+      return call('knowledge_list', { query: missing ? '独立评审会' : title }, missing ? 'missing' : 'minutes');
+    }
+    const materials = JSON.stringify(req.content);
+    if (req.callId === 'missing') {
+      assert.doesNotMatch(materials, /另一个项目的结论|样本甲/);
+      return { role: 'assistant', content: '当前项目缺少该次会议正文。' };
+    }
+    assert.ok(materials.includes(excerpt));
+    assert.doesNotMatch(materials, /另一个项目的结论/);
+    return { role: 'assistant', content: answer };
+  }, options => {
+    adapter = options;
+    return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
+      send: async (_target, text) => { deliveries.push(text); } };
+  });
+  try {
+    projectId = (await api('/projects', { name: '样本项目' })).id;
+    const other = await api('/projects', { name: '独立项目' });
+    await api('/knowledge', { layer: 'project', projectId, title, content: excerpt });
+    await api('/knowledge', { layer: 'project', projectId: other.id, title, content: '独立评审会：另一个项目的结论' });
+    const question = title + '有哪些决定？还有哪些事要确认？';
+    assert.equal(await ask(question, '/projects/' + projectId + '/messages'), answer);
+    assert.equal(await ask('独立评审会定了什么？', '/projects/' + projectId + '/messages'), '当前项目缺少该次会议正文。');
+    const bot = await api('/feishu/bots', { name: '项目纪要', appId: 'cli_5555555555555555', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(question, { ...source, messageId: 'minutes-question' });
+    await t.waitFor(() => assert.ok(deliveries.includes(answer)));
+    assert.equal(requests.filter(req => req.callId === 'minutes').length, 2);
+    assert.equal(server.app.todos().length, 0);
+  } finally { await server.close(); }
+});

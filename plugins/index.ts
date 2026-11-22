@@ -259,7 +259,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             return info as unknown as Json;
           });
         }));
-        context.contribute('tools', 'knowledge_list', tool('knowledge_list', '查询本地知识，可按层、项目和关键词筛选。分析会议决定、背景或待跟进事项时，可按会议主题检索已整理的个人记忆，并核对来源。', async (args, signal) => {
+        context.contribute('tools', 'knowledge_list', tool('knowledge_list', '查询本地知识，可按层、项目和关键词筛选。分析会议决定、背景或待跟进事项时，按会议主题检索当前作用域可见的知识，并核对来源。', async (args, signal) => {
           signal.throwIfAborted();
           const backend = context.contributions.list('knowledge_backends').find(item => item.id === 'local');
           if (!backend) throw new Error('Local knowledge backend is unavailable');
