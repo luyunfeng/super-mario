@@ -436,3 +436,22 @@ test('Web 和飞书项目助手查返工依据，可翻页，跨项目读取被�
     assert.equal(server.app.store.list('runs').length, 21);
   } finally { await server.close(); }
 });
+
+test('主对话查日程与待办时收到日历不可用原因和独立的待办结果', async t => {
+  const { server, api, ask, requests } = await fixture(t, req => {
+    if (req.lastRole === 'user') return call('calendar_agenda', {}, 'agenda');
+    if (req.callId === 'agenda') return call('todos_list', {}, 'todos');
+    return { role: 'assistant', content: '合成回复：日程未核实，待办为核对月报。' };
+  });
+  try {
+    await api('/todos', { title: '核对月报' });
+    await ask('我有哪些会议和待办？');
+    assert.match(requests[0]!.system, /partial=true 时只报告已读到的安排和冲突/);
+    const agenda = requests.find(r => r.callId === 'agenda')!;
+    const content = typeof agenda.content === 'string' ? agenda.content : (agenda.content as {text:string}[]).map(p => p.text).join('');
+    const result = JSON.parse(content);
+    assert.equal(result.available, false);
+    assert.match(result.reason, /尚未授权/);
+    assert.match(JSON.stringify(requests.find(r => r.callId === 'todos')?.content), /核对月报/);
+  } finally { await server.close(); }
+});

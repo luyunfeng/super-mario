@@ -27,7 +27,8 @@ function parseTime(raw: unknown): string {
     return raw.trim();
   }
   if (typeof raw === 'number' && Number.isFinite(raw)) {
-    return new Date(raw > 1e12 ? raw : raw * 1000).toISOString();
+    const date = new Date(raw > 1e12 ? raw : raw * 1000);
+    return Number.isFinite(date.getTime()) ? date.toISOString() : '';
   }
   if (raw && typeof raw === 'object') {
     const obj = raw as Row;
@@ -36,12 +37,13 @@ function parseTime(raw: unknown): string {
   return '';
 }
 
-function extractItems(raw: Row): CalendarEventItem[] {
+function extractItems(raw: Row) {
   const data = (raw.data && typeof raw.data === 'object' ? raw.data : raw) as Row;
   const list = Array.isArray(data.items) ? data.items
     : Array.isArray(data.events) ? data.events
       : Array.isArray(raw.items) ? raw.items
-        : [];
+        : undefined;
+  if (!list) throw new Error('invalid agenda response');
   const events: CalendarEventItem[] = [];
   for (const entry of list) {
     if (!entry || typeof entry !== 'object') continue;
@@ -49,10 +51,11 @@ function extractItems(raw: Row): CalendarEventItem[] {
     const summary = str(item.summary ?? item.title) || '（无标题日程）';
     const startTime = parseTime(item.start_time ?? item.startTime ?? item.start);
     const endTime = parseTime(item.end_time ?? item.endTime ?? item.end);
-    if (!startTime || !endTime) continue;
+    if (!(Date.parse(endTime) > Date.parse(startTime))) continue;
     const vchat = (item.vchat && typeof item.vchat === 'object' ? item.vchat : undefined) as Row | undefined;
     const meetingUrl = str(item.meeting_url ?? item.meetingUrl ?? vchat?.meeting_url ?? vchat?.url);
-    const status = str(item.self_status ?? item.rsvp_status ?? item.status);
+    const eventStatus = str(item.status).toLowerCase();
+    const status = ['cancelled', 'canceled'].includes(eventStatus) ? eventStatus : str(item.self_status ?? item.rsvp_status ?? item.status);
     const organizer = str(item.organizer_name ?? (item.organizer && typeof item.organizer === 'object' ? (item.organizer as Row).display_name : ''));
     const eventId = str(item.event_id ?? item.eventId ?? item.id);
     events.push({
@@ -65,12 +68,13 @@ function extractItems(raw: Row): CalendarEventItem[] {
       ...(organizer ? { organizer } : {}),
     });
   }
-  return events.sort((a, b) => Date.parse(a.startTime) - Date.parse(b.startTime));
+  events.sort((a, b) => Date.parse(a.startTime) - Date.parse(b.startTime));
+  return { events, unreadable: list.length - events.length, hasMore: data.has_more === true || raw.has_more === true };
 }
 
 export function detectCalendarConflicts(events: readonly CalendarEventItem[]): CalendarConflict[] {
   const active = events
-    .filter(e => !['declined', 'cancelled', 'canceled'].includes((e.status ?? '').toLowerCase()))
+    .filter(e => !['decline', 'declined', 'cancelled', 'canceled'].includes((e.status ?? '').toLowerCase()))
     .map(e => ({ summary: e.summary, start: Date.parse(e.startTime), end: Date.parse(e.endTime) }))
     .filter(e => Number.isFinite(e.start) && Number.isFinite(e.end) && e.end > e.start)
     .sort((a, b) => a.start - b.start);
@@ -109,11 +113,16 @@ export async function fetchCalendarAgenda(options: {
   args.push('--format', 'json');
   try {
     const raw = await cli(args, { signal: options.signal, timeout: 20_000 });
-    const events = extractItems(raw as Row);
+    const { events, unreadable, hasMore } = extractItems(raw as Row);
+    if (!events.length && unreadable) {
+      return { available: false, reason: '日程记录的起止时间无法核实，请稍后重查。', events: [], conflicts: [] };
+    }
     const conflicts = detectCalendarConflicts(events);
     return {
       available: true,
       count: events.length,
+      partial: hasMore || unreadable > 0 || events.length > 50,
+      unreadable, hasMore,
       events: events.slice(0, 50) as unknown as Json,
       conflicts: conflicts as unknown as Json,
     };
@@ -121,7 +130,9 @@ export async function fetchCalendarAgenda(options: {
     const problem = personalProblem(error);
     return {
       available: false,
-      reason: problem?.message ?? (error instanceof Error ? error.message : '读取飞书日历失败'),
+      reason: problem?.kind === 'permissions' ? '个人飞书账号缺少日历读取权限，请核对应用权限及用户授权。'
+        : problem && ['unavailable', 'expired', 'needs_application'].includes(problem.kind) ? problem.message
+          : '读取飞书日历失败，日程尚未核实。',
       events: [],
       conflicts: [],
     };

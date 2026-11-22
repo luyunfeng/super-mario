@@ -57,6 +57,7 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
       if (facts.scope.kind === 'project') {
         projectRequests++;
         assert.match(system, /只查进展或到期安排时保持只读/);
+        assert.match(system, /只汇报已查实的待办或执行事实/);
         assert.match(system, /回执为 unknown 时先核对/);
         assert.ok(input.tools.some((tool: any) => tool.function.name === 'todos_list'));
         assert.ok(!input.tools.some((tool: any) => tool.function.name === 'calendar_agenda'));
