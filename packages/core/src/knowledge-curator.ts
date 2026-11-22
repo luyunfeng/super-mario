@@ -443,13 +443,18 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
         .sort((a, b) => Date.parse(a.meetingStartedAt!) - Date.parse(b.meetingStartedAt!) || a.id.localeCompare(b.id));
       const batch = dated.slice(offset, offset + 25);
       const pages = new Map((batch.some(job => job.knowledgeIds.length) ? await options.knowledge().list({ projectId }) : []).map(p => [p.id, p]));
-      const meetings = batch.map(job => ({
-        sourceId: job.id, title: job.title, startedAt: job.meetingStartedAt!, status: job.status,
-        pages: job.knowledgeIds.flatMap(id => {
-          const page = pages.get(id);
-          return page && page.layer === job.layer && page.projectId === job.projectId ? [{ id, title: page.title }] : [];
-        }),
-      }));
+      const clock = new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+      const meetings = batch.map(job => {
+        const localTime = clock.format(new Date(job.meetingStartedAt!));
+        const dayPart = localTime < '12:00' ? 'morning' : localTime < '18:00' ? 'afternoon' : 'evening';
+        return {
+          sourceId: job.id, title: job.title, startedAt: job.meetingStartedAt!, localTime, dayPart, status: job.status,
+          pages: job.knowledgeIds.flatMap(id => {
+            const page = pages.get(id);
+            return page && page.layer === job.layer && page.projectId === job.projectId ? [{ id, title: page.title }] : [];
+          }),
+        };
+      });
       return { date, timezone, total: dated.length, undated, meetings, nextOffset: offset + batch.length < dated.length ? offset + batch.length : null };
     },
     async pageSources(pageId: string, sourceId?: string, projectId?: string) {

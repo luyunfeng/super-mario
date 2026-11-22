@@ -417,7 +417,7 @@ test('会议日回顾按时区和项目分页，空结果区分未注日期，�
   const raw = join(dir, 'plugins', 'knowledge-local', 'raw');
   await mkdir(raw, { recursive: true });
   await writeFile(join(raw, first.id + '.md'), base.text);
-  for (let i = 0; i < 25; i++) server.app.knowledgeCurator.addSource({ ...base, title: '同日来源 ' + i, meetingStartedAt: '2032-02-28T23:59Z' });
+  for (let i = 0; i < 25; i++) server.app.knowledgeCurator.addSource({ ...base, title: '同日来源 ' + i, meetingStartedAt: ['2032-02-28T11:59Z', '2032-02-28T12:00Z', '2032-02-28T17:59Z', '2032-02-28T18:00Z'][i] ?? '2032-02-28T23:59Z' });
   server.app.knowledgeCurator.addSource({ ...base, title: '未填写日期' });
   server.app.knowledgeCurator.addSource({ title: '个人范围来源', text: '另一个话题', materialKind: 'meeting-transcript', meetingStartedAt: '2032-02-28T21:00Z' });
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
@@ -439,8 +439,12 @@ test('会议日回顾按时区和项目分页，空结果区分未注日期，�
   await expect(recap.getByRole('status')).toContainText('另有 1 份来源未注明会议日期');
   await recap.getByRole('button', { name: '查看更多来源' }).click();
   await expect(recap.getByRole('listitem')).toHaveCount(26);
-  await expect(recap.getByRole('listitem').first()).toContainText('18:25');
-  await expect(recap.getByRole('listitem').first()).toContainText('已整理');
+  await expect(recap.getByRole('list', { name: '上午' }).getByRole('listitem')).toHaveCount(1);
+  await expect(recap.getByRole('list', { name: '下午' }).getByRole('listitem')).toHaveCount(2);
+  const evening = recap.getByRole('list', { name: '晚间' });
+  await expect(evening.getByRole('listitem')).toHaveCount(23);
+  await expect(evening.getByRole('listitem').filter({ hasText: '跨日评审' })).toContainText('18:25');
+  await expect(evening.getByRole('listitem').filter({ hasText: '跨日评审' })).toContainText('已整理');
   await expect(recap.getByRole('listitem').last()).toContainText('等待整理');
   await recap.getByLabel('回顾日期').fill('2032-03-01');
   await query.click();
@@ -449,6 +453,6 @@ test('会议日回顾按时区和项目分页，空结果区分未注日期，�
   await recap.getByLabel('回顾日期').fill('2032-02-29');
   await recap.getByLabel('回顾时区').fill('Asia/Kathmandu');
   await query.click();
-  await recap.getByRole('link', { name: '查看原文 · 项目评审记录' }).click();
+  await recap.getByRole('list', { name: '上午' }).getByRole('link', { name: '查看原文 · 项目评审记录' }).click();
   await expect(page.getByRole('dialog', { name: '编辑记忆' }).locator('pre')).toHaveText(base.text);
 });
