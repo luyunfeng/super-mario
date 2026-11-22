@@ -534,8 +534,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             return json(res, 200, await app.projectWorkspace.view(id, cursors[0]));
           }
           if (projectWorkspace[2] === 'messages' && method === 'POST') {
-            const text = requiredText((await body(req)).text, '目标');
-            return json(res, 202, await app.projectWorkspace.post(id, text, messageRequestId(req)));
+            const input = await body(req);
+            const todoId = input.todoId === undefined ? undefined : requiredText(input.todoId, '待办标识');
+            return json(res, 202, await app.projectWorkspace.post(id, requiredText(input.text, '目标'), messageRequestId(req), todoId));
           }
           if(projectWorkspace[2]==='memory'&&method==='GET')return json(res,200,app.projectWorkspace.memoryConversation(id));
           if(projectWorkspace[2]==='memory'&&method==='POST')return json(res,202,app.projectWorkspace.request(id));

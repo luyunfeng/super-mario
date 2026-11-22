@@ -240,7 +240,12 @@ test('task policy overrides wait for explicit plan start and are applied before 
 
 test('回答项目工作 Agent 的问题后在原项目续聊并沿用原渠道', async t => {
   const f = await fixture(t), project = await f.app.createProject({name:'原会话'});
-  const source = await f.app.projectWorkspace.post(project.id,'继续这个项目');
+  const todo = f.app.createTodo({ title: '项目复核', projectId: project.id });
+  const path = '/projects/' + project.id + '/messages';
+  const foreign = f.app.createTodo({ title: '未归类待办' });
+  await f.json(path, 'POST', { text: '不能带入其他事项', todoId: foreign.id }, 409);
+  const source = await f.json<Message>(path, 'POST', { text: '继续这个项目', todoId: todo.id }, 202);
+  assert.equal(source.todoId, todo.id);
   const route = {channel:'feishu',accountId:'test',target:'original-thread'};
   f.app.store.put('message.routes',source.id,route);
   const q = f.app.interactions.open({kind:'question',title:'选哪一项',body:'请选 A 或 B'},source);
@@ -249,5 +254,13 @@ test('回答项目工作 Agent 的问题后在原项目续聊并沿用原渠道'
   assert.equal(answered.delivery,'confirmed');
   const resumed = f.app.store.list<Message>('messages').find(m=>m.role==='user' && m.text.includes('用户已回答交互卡片'));
   assert.equal(resumed?.conversationId,source.conversationId);
+  assert.equal(resumed?.todoId, todo.id);
+  assert.match(resumed!.text, /用户回答只用于解决这次提问/);
+  const nextQuestion = f.app.interactions.open({kind:'question',title:'范围变更',body:'继续吗？'},source);
+  f.app.updateTodo(todo.id, { projectId: '' });
+  const attempted = await f.app.interactions.answer(nextQuestion.id, nextQuestion.version, '继续', 'user_feishu');
+  assert.equal(attempted.delivery, 'failed');
+  assert.match(attempted.error!, /变更项目/);
+  assert.equal(f.app.store.list<Message>('messages').filter(m => m.role === 'user' && m.text.includes('用户已回答交互卡片')).length, 1);
   assert.deepEqual(f.app.store.get('message.routes',resumed!.id),{...route,resumed:true});
 });
