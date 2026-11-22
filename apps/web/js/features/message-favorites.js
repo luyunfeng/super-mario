@@ -166,7 +166,7 @@ function download(name, content, type) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function createMessageFavorites({ api, store }) {
+export function createMessageFavorites({ api, store, router }) {
   const model = sharedModel(api, store);
   const post = body => api.post('/message-favorites', body);
   const button = Button({ label: '消息收藏', size: 'sm', onClick: open });
@@ -258,6 +258,13 @@ export function createMessageFavorites({ api, store }) {
             item.messageId && Button({ label: '查看原文', size: 'sm', onClick: () => run(async () => {
               const source = await post({ action: 'source', id: item.id });
               if (current()) replace(original, h('strong', null, '消息原文'), h('pre', { class: 'mailbox-content' }, source.text));
+            }) }),
+            item.messageId && Button({ label: '定位到原会话', size: 'sm', onClick: () => run(async () => {
+              const source = await post({ action: 'locate', id: item.id });
+              if (!current()) return;
+              const route = source.projectId ? router.href('projects', source.projectId, 'workspace') + '?at=' : router.href('chat') + '?favorite=';
+              drawer.close();
+              router.go(route + encodeURIComponent(source.messageId));
             }) }),
             Button({ label: '复制正文', size: 'sm', onClick: () => run(async () => {
               if (!navigator.clipboard?.writeText) throw new Error('当前浏览器无法写入剪贴板，请选中收藏正文复制。');

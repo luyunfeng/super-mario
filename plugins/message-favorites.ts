@@ -118,7 +118,7 @@ function parseBackup(raw: Json | undefined) {
 }
 
 const fields = {
-  list: [], marks: [], backup: [], source: ['id'], add: ['messageId', 'projectId'], remove: ['id', 'revision'],
+  list: [], marks: [], backup: [], source: ['id'], locate: ['id'], add: ['messageId', 'projectId'], remove: ['id', 'revision'],
   nativePage: ['native', 'offset'], addNative: ['native', 'index', 'fingerprint'],
   preview: ['backup', 'revision'], restore: ['backup', 'revision'],
 } as const;
@@ -181,10 +181,10 @@ async function manage(store: Store, raw: Json, reader: ReadPage | undefined, sig
     return { revision: book.revision, items };
   }
   if (action === 'backup') return backup(read(store));
-  if (action === 'source') {
+  if (action === 'source' || action === 'locate') {
     const favoriteId = id(input.id);
     const item = read(store).items.find(item => item.id === favoriteId);
-    if (item?.native && item.index !== undefined && item.fingerprint) {
+    if (action === 'source' && item?.native && item.index !== undefined && item.fingerprint) {
       const message = await verified(reader, item.native, item.index, item.fingerprint, signal);
       signal.throwIfAborted();
       if (!read(store).items.some(saved => saved.id === favoriteId)) fail(404, '收藏已删除');
@@ -192,6 +192,13 @@ async function manage(store: Store, raw: Json, reader: ReadPage | undefined, sig
     }
     if (!item?.messageId) fail(404, '此收藏没有可查看的本地原文');
     const source = sourceMessage(store, item.messageId, item.projectId);
+    if (action === 'locate') {
+      if (item.projectId) {
+        const project = store.get<Project>('projects', item.projectId);
+        if (!project || project.archivedAt) fail(404, '原项目不存在或已归档，仍可查看收藏快照');
+      }
+      return { messageId: source.id, ...(item.projectId && { projectId: item.projectId }) };
+    }
     return { messageId: source.id, ...(item.projectId && { projectId: item.projectId }),
       text: source.text, role: source.role, createdAt: source.createdAt };
   }

@@ -57,6 +57,20 @@ test('主对话与项目消息可收藏，下载的备份可预览并恢复，�
   await button('查看原文').click();
   await expect(drawer.getByText('消息原文', { exact: true })).toBeVisible();
   await expect(drawer.getByText(projectText, { exact: true })).toHaveCount(2);
+  await button('定位到原会话').click();
+  await expect(projectLog.locator('.is-search-hit')).toContainText(projectText);
+  await open.click();
+  await search.fill(mainText);
+  const switchedOff = await fetch(server.url + '/api/v1/plugins/conversation-search', {
+    method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: false }),
+  });
+  assert.ok(switchedOff.ok);
+  await button('定位到原会话').click();
+  await expect(main).toHaveClass(/is-search-hit/);
+  await page.reload();
+  await expect(main).toBeFocused();
+  await open.click();
   await search.fill('');
   await expect(remove).toHaveCount(2);
 
@@ -73,6 +87,12 @@ test('主对话与项目消息可收藏，下载的备份可预览并恢复，�
   assert.deepEqual(payload.messages.map((message: { text: string }) => message.text).sort(), [mainText, projectText].sort());
   assert.doesNotMatch(backup, /项目记忆隔离样例|outside-fixture|messageId|projectId/);
 
+  server.app.store.remove('messages', 'project-favorite');
+  await search.fill(projectText);
+  await button('定位到原会话').click();
+  await expect(drawer.getByRole('status')).toContainText('没有这条消息');
+  await expect(drawer.locator('pre')).toHaveText(projectText);
+  await search.fill('');
   await remove.first().click();
   await expect(remove).toHaveCount(1);
   await remove.click();
@@ -92,6 +112,7 @@ test('主对话与项目消息可收藏，下载的备份可预览并恢复，�
   assert.ok(disabled.ok);
   await expect(drawer).toBeHidden();
   await expect(open).toHaveCount(0);
+  await page.goto(server.url + '/#projects/' + project.id + '/workspace');
   await expect(projectLog.getByRole('button', { name: /收藏/ })).toHaveCount(0);
   await page.goto(server.url + '/#chat');
   await expect(main).toContainText(mainText);
@@ -107,6 +128,7 @@ test('主对话与项目消息可收藏，下载的备份可预览并恢复，�
   await open.click();
   await expect(remove).toHaveCount(2);
   await expect(button('查看原文')).toHaveCount(0);
+  await expect(button('定位到原会话')).toHaveCount(0);
   await button('关闭').click();
   await main.getByRole('button', { name: '收藏消息', exact: true }).click();
   await expect(main.getByRole('button', { name: '已收藏', exact: true })).toBeVisible();

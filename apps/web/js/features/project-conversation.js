@@ -19,7 +19,7 @@ export function createProjectConversation({ api, store, router, bindFolder }) {
   let projectId = '';
   const translation = createReplyTranslation({ api, store, getScope: () => projectId, getConversationId: () => `project:${projectId}:work` });
   const instructions = createProjectInstructions({ api, store, getProjectId: () => projectId });
-  const favorites = createMessageFavorites({ api, store });
+  const favorites = createMessageFavorites({ api, store, router });
   const transcript = createConversationExport({ api, store, getProjectId: () => projectId });
   let generation = 0;
   let request = 0;

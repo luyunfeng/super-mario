@@ -12,7 +12,7 @@ import { Hint, hintCopy } from '../ui/hint.js';
 import { attachSavedPrompts } from '../features/saved-prompts.js';
 import { officeDocumentsButton } from '../features/office-documents.js';
 import { createReplyTranslation } from '../features/reply-translation.js';
-import { createMessageFavorites } from '../features/message-favorites.js';
+import { createMessageFavorites, messageFavoritesActive } from '../features/message-favorites.js';
 import { createConversationExport } from '../features/conversation-export.js';
 import { conversationSearchActive } from '../features/search.js';
 import { createAttention } from '../features/attention.js';
@@ -33,7 +33,7 @@ const SETUP_STEPS = [
 
 export function createChatPage({ api, store, scope, router }) {
   const translation = createReplyTranslation({ api, store, getScope: scope.get, getConversationId: () => 'main' });
-  const favorites = createMessageFavorites({ api, store });
+  const favorites = createMessageFavorites({ api, store, router });
   const transcript = createConversationExport({ api, store });
   const attention = createAttention({ api, store });
   const code = createCodeSidebar({ api, store });
@@ -128,7 +128,8 @@ export function createChatPage({ api, store, scope, router }) {
 
   function revealMessage() {
     if (!snapshot || router.current.page !== 'chat') return;
-    if (!conversationSearchActive(snapshot)) {
+    const canLocate = router.current.query.has('favorite') ? messageFavoritesActive(store) : conversationSearchActive(snapshot);
+    if (!canLocate) {
       markedMessage?.classList.remove('is-search-hit');
       markedMessage = undefined;
       if (pendingMessage) scrollToEnd(true);
@@ -300,7 +301,7 @@ export function createChatPage({ api, store, scope, router }) {
     onShow(route) {
       prompts.reset();
       recent.refresh();
-      pendingMessage = route.query.get('at') || '';
+      pendingMessage = route.query.get('favorite') || route.query.get('at') || '';
       markedMessage?.classList.remove('is-search-hit');
       if (pendingMessage) revealMessage();
       else scrollToEnd(true);

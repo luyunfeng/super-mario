@@ -50,7 +50,12 @@ test('favorites snapshot actual work messages, cap by Unicode character and rech
   const [projectItem] = project.items as JsonObject[];
   assert.equal(projectItem.projectId, 'proj');
   assert.equal((await call({ action: 'source', id: projectItem.id })).projectId, 'proj');
+  const locate = { action: 'locate', id: projectItem.id };
+  assert.deepEqual(await call(locate), { messageId: source.id, projectId: 'proj' });
+  store.put('projects', 'proj', { id: 'proj', name: '项目一', archivedAt: source.createdAt });
+  await assert.rejects(call(locate), { status: 404 });
   store.remove('messages', source.id);
+  await assert.rejects(call(locate), { status: 404 });
   await assert.rejects(call({ action: 'source', id: projectItem.id }), { status: 404 });
   await assert.rejects(call({ action: 'remove', id: item.id, revision: 1 }), { status: 409 });
   assert.equal((await call({ action: 'remove', id: item.id, revision: 2 })).revision, 3);
