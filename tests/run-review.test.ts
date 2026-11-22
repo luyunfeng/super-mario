@@ -479,6 +479,8 @@ test('project memory gets only a matching review and detects changed acceptance 
   assert.equal(f.review.evidenceForRun({ ...f.original, id: 'other' }), undefined);
   f.patch({ output: '更新后的执行结果' });
   assert.equal(read()?.status, 'invalidated');
+  assert.equal(f.review.get('todo').status, 'accepted');
+  assert.equal(f.review.get('todo').evidenceInvalidated, true);
   f.review.onReopen(f.todo.id);
   assert.equal(read()?.status, 'reopened');
 });

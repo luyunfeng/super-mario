@@ -32,6 +32,12 @@ test('HTTP report and acceptance share the completion guard; reopen invalidates 
  await f.api(base+'/review/decide','POST',decision);
  assert.ok(f.server.app.todos()[0].completedAt);
  await f.api(base+'/review/decide','POST',decision);assert.equal(f.calls(),1);
+ assert.equal((await f.api(base+'/closure')).review.evidenceInvalidated, undefined);
+ f.server.app.store.put('runs', run.id, { ...run, output: '合成的更新后证据' });
+ const changed = (await f.api(base+'/closure')).review;
+ assert.equal(changed.status, 'accepted');
+ assert.equal(changed.evidenceInvalidated, true);
+ assert.equal((await f.api(base+'/history')).rounds[0].review.status, 'invalidated');
  await f.api(base,'PATCH',{completed:false});
  const reopened=await f.api(base+'/closure');assert.equal(reopened.reporting.cycle,2);assert.equal(reopened.reporting.report,undefined);assert.equal(reopened.review.status,'reopened');
  await f.api(base,'PATCH',{completed:true},409);

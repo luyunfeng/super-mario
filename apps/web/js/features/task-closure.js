@@ -98,7 +98,7 @@ export function openTaskClosure({ api, store, router, todo, runId, title = '答�
     sync();
   }
   function paintState() {
-    state.textContent = `答复版本 ${reporting.version} · 周期 ${reporting.cycle} · ${reporting.report ? '已记录答复' : '未记录答复'}${review ? ` · 验收 ${review.status} · ${review.round ? `返工第 ${review.round} 轮` : '首次交付'} · 版本 ${review.version}` : ' · 尚未关联交付'}`;
+    state.textContent = `答复版本 ${reporting.version} · 周期 ${reporting.cycle} · ${reporting.report ? '已记录答复' : '未记录答复'}${review ? ` · 验收 ${review.evidenceInvalidated ? '证据已失效（历史决定为通过）' : review.status} · ${review.round ? `返工第 ${review.round} 轮` : '首次交付'} · 版本 ${review.version}` : ' · 尚未关联交付'}`;
     const run = (store.view.snapshot?.runs ?? []).find(item => item.id === review?.runId && item.todoId === todo.id && item.projectId === todo.projectId);
     const mismatch = run?.status === 'completed' && resumeMismatch(run);
     replace(evidence, review ? [h('p', null, `完成标准：${review.doneWhen}`), h('p', null, `关联交付：${run?.prompt ?? review.runId}`), run && h('p', null, `执行状态：${run.status} · 证据来源：${run.resultSource ?? '无'}`), run?.nativeResume && h('dl', { class: 'kv' },

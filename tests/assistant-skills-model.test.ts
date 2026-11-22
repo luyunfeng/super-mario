@@ -412,6 +412,7 @@ test('Web 和飞书项目助手查返工依据，可翻页，跨项目读取被�
     if (req.lastRole === 'user') {
       assert.ok(req.tools.includes('todo_history'));
       assert.match(req.system, /回执未知就说明未知/);
+      assert.match(req.system, /不能据此判断某轮交付已验收/);
       return projectOnly ? call('todo_history', { todoId: otherId }, 'foreign') : call('todo_history', { todoId }, 'latest');
     }
     if (req.callId === 'foreign') return call('todo_history', { todoId }, 'latest');

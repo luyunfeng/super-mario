@@ -86,11 +86,12 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
     if (!value) throw new RunReviewError('执行记录不存在', 404);
     return value;
   }
-  function get(todoId: string): RunReview {
+  function get(todoId: string): RunReview & { evidenceInvalidated?: true } {
     text(todoId, 'todoId');
     const value = store.get<RunReview>(reviews, todoId);
     if (!value) throw new RunReviewError('验收记录不存在', 404);
-    return { ...value, evidenceVersion: evidenceVersion(run(value.runId)) };
+    return { ...value, evidenceVersion: evidenceVersion(run(value.runId)),
+      ...(currentStatus(value) === 'invalidated' && { evidenceInvalidated: true as const }) };
   }
   function binding(todoId: string, value: Run, expectedDoneWhen?: string, allowCompleted = false) {
     const todo = store.get<Todo>('todos', todoId);
@@ -143,6 +144,15 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
     binding(todoId, value, item.doneWhen, true);
     completionEvidence(value);
   }
+  function currentStatus(item: RunReview): ExecutionReviewEvidence['status'] {
+    if (item.status !== 'accepted') return item.status;
+    try { assertCanComplete(item.todoId); }
+    catch (error) {
+      if (!(error instanceof RunReviewError)) throw error;
+      return 'invalidated';
+    }
+    return 'accepted';
+  }
   function changed(todoId: string) { events.publish('run-review.changed', { todoId }); }
   // Recovery changes only the ledger. It never invokes dispatch, even if a key
   // could resolve to an already-created Run; the host can investigate that key.
@@ -166,15 +176,7 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
       const todo = store.get<Todo>('todos', value.todoId);
       const item = store.get<RunReview>(reviews, value.todoId);
       if (!item || item.runId !== value.id || !todo || todo.projectId !== value.projectId) return undefined;
-      let status: RunReview['status'] | 'invalidated' = item.status;
-      if (status === 'accepted') {
-        try { assertCanComplete(value.todoId); }
-        catch (error) {
-          if (!(error instanceof RunReviewError)) throw error;
-          status = 'invalidated';
-        }
-      }
-      return { status, version: item.version, updatedAt: item.updatedAt };
+      return { status: currentStatus(item), version: item.version, updatedAt: item.updatedAt };
     },
     /** Call only for completed -> reopened, inside the host's Todo transaction.
      * No event is published here: the outer transaction has not committed yet.

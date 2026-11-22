@@ -192,6 +192,11 @@ test('验收成功显示服务端确认；unknown交付禁止通过与返工', {
   await expect(drawer.getByRole('button', { name: '验收通过并完成待办' })).toBeDisabled();
   await expect(drawer.getByRole('button', { name: '要求返工' })).toBeDisabled();
   assert.equal(writes(requests).length, 1);
+  setHandler(req => req.path.endsWith('/closure') ? { body: { reporting: initialReporting,
+    review: { ...initialReview, status: 'accepted', evidenceInvalidated: true } } } : undefined);
+  await drawer.getByRole('button', { name: '只读刷新' }).click();
+  await expect(drawer).toContainText('证据已失效（历史决定为通过）');
+  await expect(drawer.getByRole('button', { name: '验收通过并完成待办' })).toBeDisabled();
   setHandler(req => req.path.endsWith('/closure') ? { body: { reporting: initialReporting, review: { ...initialReview, status: 'unknown', error: '派发结果未知，不自动重试' } } } : undefined);
   await drawer.getByRole('button', { name: '只读刷新' }).click();
   await expect(drawer).toContainText('派发结果未知，不自动重试');
