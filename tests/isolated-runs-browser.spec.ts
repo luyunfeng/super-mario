@@ -87,6 +87,34 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
     assert.equal(await readFile(join(run.cwd!, 'shared.txt'), 'utf8'), starts.get(run.cwd!));
   }
   assert.equal(await readFile(join(cwd, 'shared.txt'), 'utf8'), 'original pending change');
+  const first = runs.find(run => run.prompt === '第一项任务')!;
+  const path = first.cwd!;
+  const extra = git(path, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'worktree only');
+  git(path, 'update-ref', 'HEAD', extra);
+  await writeFile(join(path, 'stage.txt'), 'staged file');
+  git(path, 'add', 'stage.txt');
+  await writeFile(join(path, 'new.txt'), 'untracked file');
+  await writeFile(join(path, '.env'), 'synthetic');
+  await page.goto(server.url + '/#projects/' + project.id + '/runs/' + first.id);
+  await page.getByRole('button', { name: '查看工作树状态' }).click();
+  const status = page.getByRole('dialog', { name: '工作树状态' });
+  await expect(status).toContainText(first.worktree!.branch!);
+  await expect(status).toContainText('1 个提交尚未进入');
+  await expect(status).toContainText('未提交文件（含未跟踪）：4');
+  await expect(status).toContainText('暂存区：新增');
+  await expect(status).toContainText('工作区：修改');
+  await expect(status).toContainText('new.txt');
+  await expect(status).toContainText('已隐藏 1 个受限文件');
+  await expect(status).not.toContainText('.env');
+  await rm(join(path, 'new.txt'));
+  await status.getByRole('button', { name: '刷新状态' }).click();
+  await expect(status).toContainText('未提交文件（含未跟踪）：3');
+  await expect(status).not.toContainText('new.txt');
+  const statusTool = server.app.contributions.list('tools').find(entry => entry.value.name === 'run_worktree_status')!.value;
+  const evidence = await statusTool.execute({ id: first.id }, new AbortController().signal);
+  assert.match(JSON.stringify(evidence), /stage\.txt/);
+  assert.doesNotMatch(JSON.stringify(evidence), /\.env/);
+  await status.getByRole('button', { name: '关闭' }).click();
   // A failed checkout must never fall back to running in the bound directory.
   const plain = join(root, 'ordinary');
   await mkdir(plain);

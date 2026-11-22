@@ -599,6 +599,11 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 202, await app.agent.post(input.text, 'main', { requestId: messageRequestId(req), ...(typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : {}), ...(input.readOnly === true ? { readOnly: true } : {}) }));
         }
         if (path === '/api/v1/runs' && method === 'POST') return json(res, 202, app.dispatch(await body(req), typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : undefined));
+        const worktreeStatus = path.match(/^\/api\/v1\/runs\/([^/]+)\/worktree-status$/);
+        if (worktreeStatus && method === 'GET') {
+          if (url.searchParams.size) throw new InputError('工作树状态只接受执行 ID');
+          return json(res, 200, await app.runWorktreeStatus(decodeURIComponent(worktreeStatus[1]!)));
+        }
         const commitDiff = path.match(/^\/api\/v1\/runs\/([^/]+)\/commit-diff$/);
         if (commitDiff && method === 'GET') {
           if ([...url.searchParams.keys()].some(key => key !== 'path')) throw new InputError('仅接受文件路径');

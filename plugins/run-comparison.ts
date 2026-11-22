@@ -1,10 +1,21 @@
 import type { Extension } from '../packages/plugin-sdk/src/index.ts';
 import type { Json } from '../packages/protocol/src/index.ts';
 
-export function createRunComparison(read: (id: string, path?: string) => Promise<Json>): Extension {
+export function createRunComparison(read: (id: string, path?: string) => Promise<Json>, status: (id: string) => Promise<Json>): Extension {
   return {
     id: 'run-comparison', name: '执行对比', capabilities: ['web.runComparison', 'runs.diff.read'],
     activate(context) {
+      context.contribute('tools', 'run_worktree_status', {
+        name: 'run_worktree_status', description: '读取本次执行独立工作树的当前分支、未提交文件和未进入来源目录当前 HEAD 的提交数。文件列表可能截断。',
+        parameters: { type: 'object', required: ['id'], additionalProperties: false, properties: { id: { type: 'string' } } },
+        async execute({ id }, signal) {
+          signal.throwIfAborted();
+          if (typeof id !== 'string' || !id) throw new Error('缺少执行 ID');
+          const result = await status(id);
+          signal.throwIfAborted();
+          return result;
+        },
+      });
       context.contribute('tools', 'run_commit_diff', {
         name: 'run_commit_diff', description: '读取一次执行的两个已记录提交之间的差异。省略 path 列出文件，传入返回的路径读取补丁。nextOffset 非空时可继续读取。',
         parameters: { type: 'object', required: ['id'], additionalProperties: false, properties: {

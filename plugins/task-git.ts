@@ -97,12 +97,45 @@ export async function prepareRunWorktree(params: JsonObject): Promise<Json> {
   await runGit(cwd, ['worktree', 'add', '--no-checkout', '-b', branch, target, base]);
   // Checkout must not invoke repository-supplied filter processes. Resolve conditional
   // config in the new worktree before populating it. Preserve the branch on partial failure.
+  const overrides = await filterOverrides(target);
+  await runGit(target, [...overrides, '-c', 'core.fsmonitor=false', '-c', 'submodule.recurse=false',
+    '--work-tree=' + target, 'read-tree', '--reset', '-u', base]);
+  return { cwd: target, branch, base };
+}
+
+async function filterOverrides(target: string) {
   let keys = '';
   try { keys = await runGit(target, ['config', '--name-only', '--get-regexp', '^filter\\..*\\.(smudge|clean|process|required)$']); }
   catch (error) { if ((error as {code?:number}).code !== 1) throw error; }
   const filters = [...new Set(keys.trim().split('\n').filter(Boolean).map(key => key.replace(/\.(smudge|clean|process|required)$/, '')))];
-  const overrides = filters.flatMap(key => ['-c', key + '.smudge=', '-c', key + '.clean=', '-c', key + '.process=', '-c', key + '.required=false']);
-  await runGit(target, [...overrides, '-c', 'core.fsmonitor=false', '-c', 'submodule.recurse=false',
-    '--work-tree=' + target, 'read-tree', '--reset', '-u', base]);
-  return { cwd: target, branch, base };
+  return filters.flatMap(key => ['-c', key + '.smudge=', '-c', key + '.clean=', '-c', key + '.process=', '-c', key + '.required=false']);
+}
+
+export async function inspectRunWorktree({ source, id }: JsonObject): Promise<Json> {
+  if (typeof source !== 'string' || typeof id !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id))
+    throw new Error('工作树来源或执行标识无效');
+  const sourceHead = await worktreeBase({ cwd: source });
+  const target = resolve(source + '-worktrees', id);
+  const records = await runGit(source, ['worktree', 'list', '--porcelain', '-z']);
+  const record = records.split('\0\0').map(row => row.split('\0')).find(row => row[0] === 'worktree ' + target);
+  if (!record || await realpath(target) !== target || (await runGit(target, ['rev-parse', '--show-toplevel'])).trimEnd() !== target)
+    throw new Error('执行目录已移动或工作树登记失效');
+  const commonDir = async (cwd: string) => realpath((await runGit(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trimEnd());
+  if (await commonDir(target) !== await commonDir(source)) throw new Error('执行目录已不属于原仓库');
+  const head = await worktreeBase({ cwd: target });
+  const unmerged = Number((await runGit(target, ['rev-list', '--count', sourceHead + '..' + head])).trim());
+  const overrides = await filterOverrides(target);
+  const raw = await runGit(target, [...overrides, '-c', 'core.fsmonitor=false', 'status', '--porcelain=v1', '-z',
+    '--no-renames', '--untracked-files=all', '--ignore-submodules=none']);
+  const files: { path: string; index: string; worktree: string }[] = [];
+  let total = 0, hidden = 0;
+  for (const entry of raw.split('\0')) {
+    if (!entry) continue;
+    total++;
+    const path = entry.slice(3);
+    if (sensitiveWorkspacePath(path) || /[\x00-\x1f\x7f]/.test(path)) { hidden++; continue; }
+    if (files.length < 250) files.push({ path, index: entry[0]!, worktree: entry[1]! });
+  }
+  return { cwd: target, branch: record.find(field => field.startsWith('branch refs/heads/'))?.slice('branch refs/heads/'.length) ?? null,
+    head, sourceHead, unmerged, files, total, hidden, truncated: total > hidden + files.length };
 }

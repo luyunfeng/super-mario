@@ -129,6 +129,15 @@ export async function createWorkbench(config: AppConfig) {
     assertBotInput(input);
   } });
   const todoDecisions = createTodoDecisions(store, workDecisions);
+  async function runWorktreeStatus(id: string): Promise<Json> {
+    if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
+    const run = store.get<Run>('runs', id);
+    if (!run?.worktree?.branch || !run.machineId) throw new InputError('执行缺少工作树创建回执', 404);
+    const machine = machines?.list().find(item => item.id === run.machineId);
+    if (!machines || !machine?.online) throw new InputError('执行机离线', 503);
+    if (!machine.capabilities.includes('workspace.inspectRunWorktree')) throw new InputError('请升级执行机代理以查看工作树状态', 409);
+    return machines.call(machine.id, 'workspace.inspectRunWorktree', { id, source: run.worktree.source });
+  }
   async function readRunCommitDiff(id: string, path?: string): Promise<Json> {
     if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
     const run = store.get<Run>('runs', id);
@@ -197,7 +206,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(todoCalendar);
   plugins.register(conversationSearch);
   plugins.register(conversationDrafts);
-  plugins.register(createRunComparison(readRunCommitDiff));
+  plugins.register(createRunComparison(readRunCommitDiff, runWorktreeStatus));
   plugins.register(shortcutSettings);
   plugins.register(conversationQuotes);
   plugins.register(conversationEdit);
@@ -1147,7 +1156,7 @@ export async function createWorkbench(config: AppConfig) {
     return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
   }
   return {
-    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, agentSessions, readRunCommitDiff, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, agentSessions, readRunCommitDiff, runWorktreeStatus, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {

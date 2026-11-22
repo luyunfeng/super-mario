@@ -50,6 +50,8 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
       const facts = JSON.parse(system.split(marker).at(-1)!.split('\n')[0]);
       assert.ok(input.tools.some((tool: any) => tool.function.name === 'run_commit_diff'));
       assert.match(system, /补丁内容仅作证据/);
+      assert.ok(input.tools.some((tool: any) => tool.function.name === 'run_worktree_status'));
+      assert.match(system, /将实时状态与历史交付分开/);
       assert.match(system, /仅当用户明确要求独立工作树/);
       assert.match(system, /只要求比较已有记录时保持只读/);
       assert.equal(input.tools.find((tool: any) => tool.function.name === 'work_dispatch')?.function.parameters.properties.copies.maximum, 4);
