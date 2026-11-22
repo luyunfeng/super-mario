@@ -1,3 +1,4 @@
+import { taskHead, taskCommitChanges } from './task-git.ts';
 import { buildNativeResumeCommand } from './session-resume.ts';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -31,6 +32,7 @@ export async function runTask(config: TaskConfig): Promise<number> {
   if (pi && config.nativeSessionId !== undefined) throw new Error('Pi task resume is unsupported');
   const launcher = config.launcher === undefined ? undefined : validateTaskLauncher(config.launcher);
   const collector = createNativeCollector(config.executorId, config.nativeSessionId);
+  const baseCommit = taskHead(config.cwd);
   let finished = false;
   let malformed = false;
   const persist = (code?: number, signal?: string | null, error?: string) => {
@@ -39,6 +41,10 @@ export async function runTask(config: TaskConfig): Promise<number> {
     if (pi && result.state === 'completed' && malformed) {
       result.state = 'unknown';
       result.text = 'Incomplete or malformed pi JSONL stream';
+    }
+    if (baseCommit && code !== undefined && ['completed', 'failed'].includes(result.state)) {
+      const changes = taskCommitChanges(config.cwd, baseCommit);
+      if (changes) result.commitChanges = changes;
     }
     if (error) { result.state = 'failed'; result.text = error; }
     if (pi && code && !result.text) result.text = `pi exited with code ${code}`;

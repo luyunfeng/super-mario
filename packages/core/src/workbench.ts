@@ -65,7 +65,7 @@ import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
 import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, runComparison, shortcutSettings, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
-import { executionUsage } from '../../protocol/src/index.ts';
+import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { AppConfig, Approval, BotScope, ExecutionResult, InboxItem, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
@@ -508,7 +508,8 @@ export async function createWorkbench(config: AppConfig) {
     const now = new Date().toISOString();
     const progress = run.nativeResultSources?.includes(result.source) ? executionProgress(result.progress) : undefined;
     const usage = run.nativeResultSources?.includes(result.source) && executionUsage(result.usage?.input, result.usage?.output);
-    const next: Run = { ...run, ...(usage ? { usage } : {}), ...(progress ? { progress } : {}), ...(typeof result.nativeSessionId === 'string' ? { nativeSessionId: result.nativeSessionId } : {}), status: result.state === 'completed' ? 'completed' : 'failed', output: result.text, resultSource: result.source, updatedAt: now };
+    const changes = run.nativeResultSources?.includes(result.source) && commitChanges(result.commitChanges);
+    const next: Run = { ...run, ...(changes ? { commitChanges: changes } : {}), ...(usage ? { usage } : {}), ...(progress ? { progress } : {}), ...(typeof result.nativeSessionId === 'string' ? { nativeSessionId: result.nativeSessionId } : {}), status: result.state === 'completed' ? 'completed' : 'failed', output: result.text, resultSource: result.source, updatedAt: now };
     const message: Message = { id: messageId, conversationId: run.conversationId, role: 'assistant', origin: 'result', replyTo: run.sourceMessageId, projectId: run.projectId, todoId: run.todoId,
       text: `执行${next.status === 'completed' ? '完成' : '失败'}：${run.prompt}\n${result.text || '执行端没有返回文字结果'}\n结果来源：${result.source}；关联待办需你验收后再完成。`, status: 'done', createdAt: now };
     store.transaction(() => { store.put('runs', run.id, next); store.put('messages', messageId, message); store.put('notifications.source-presence',`run:${run.id}`,{present:presence.status().present}); background.publish({type:'run.finished',typeVersion:1,sourceId:`run:${run.id}:finished`,data:{runId:run.id,messageId,status:next.status},subject:{kind:'run',id:run.id}}); });

@@ -23,6 +23,11 @@ export function compareRuns({ run, runs, projectId, router, executorName }) {
       h('div', null, item.usage
         ? `本次 Token：输入 ${item.usage.input.toLocaleString()} · 输出 ${item.usage.output.toLocaleString()}`
         : '本次 Token：未上报'),
+      item.commitChanges ? h('div', { class: 'stack' },
+        h('span', null, `目录内已提交差异：${item.commitChanges.files} 个文件 · +${item.commitChanges.added} / −${item.commitChanges.deleted} 行`),
+        h('code', { class: 'small', title: item.commitChanges.base + ' → ' + item.commitChanges.head },
+          item.commitChanges.base.slice(0, 10) + ' → ' + item.commitChanges.head.slice(0, 10)))
+        : h('span', { class: 'muted small' }, '目录内已提交差异：未上报'),
       item.cwd && h('div', null, '工作目录：', item.cwd),
       item.doneWhen && h('div', null, '完成标准：', item.doneWhen),
       h('pre', { class: 'output' }, item.output || '暂无输出'),

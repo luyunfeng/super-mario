@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,chmod,readFile,access,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,delimiter} from 'node:path';
-import {spawn,type ChildProcess} from 'node:child_process';
+import {execFileSync,spawn,type ChildProcess} from 'node:child_process';
 import {chromium,expect} from '@playwright/test';
 import {startServer} from '../apps/server/src/index.ts';
 import {startAgentNode} from '../apps/agent-node/src/index.ts';
@@ -17,8 +17,30 @@ const wait=async(check:()=>boolean)=>{for(let i=0;i<300;i++){if(check())return;a
 test('Web and real HTTP/node RPC resume an exact fixture thread only after approval; native result and restart remain idempotent',{timeout:60000},async t=>{
  const dir=await mkdtemp(join(tmpdir(),'mario-native-e2e-')),home=join(dir,'home'),cwd=join(dir,'code'),fakebin=join(dir,'bin'),capture=join(dir,'argv.json');
  for(const path of [home,cwd,fakebin,join(home,'.codex/sessions')])await mkdir(path,{recursive:true});
+ const gitEnv = { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+ const git = (...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', env: gitEnv });
+ git('init', '-q');
+ git('config', 'core.hooksPath', '/dev/null');
+ git('config', 'user.email', 'test@example.invalid');
+ git('config', 'user.name', 'Fixture');
+ git('commit', '--allow-empty', '-qm', 'base');
+ const base = git('rev-parse', 'HEAD').trim();
  const nativeId='native-e2e-thread';await writeFile(join(home,'.codex/sessions',nativeId+'.jsonl'),JSON.stringify({type:'session_meta',timestamp:new Date().toISOString(),payload:{id:nativeId,cwd}})+'\n');
- const fake=join(fakebin,'codex');await writeFile(fake,`#!/usr/bin/env node\nconst fs=require('node:fs');fs.writeFileSync(${JSON.stringify(capture)},JSON.stringify(process.argv.slice(2)));console.log(JSON.stringify({type:'thread.started',thread_id:${JSON.stringify(nativeId)}}));console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'fixture native recovery evidence'}}));console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:21,cached_input_tokens:7,output_tokens:3}}));`);await chmod(fake,0o755);
+ const fake = join(fakebin, 'codex');
+ await writeFile(fake, `#!/usr/bin/env node
+const fs = require('node:fs');
+const git = (...args) => require('node:child_process').execFileSync('git', args, {
+  env: { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
+});
+fs.writeFileSync(${JSON.stringify(capture)}, JSON.stringify(process.argv.slice(2)));
+fs.writeFileSync('result.txt', 'fixture');
+git('add', 'result.txt');
+git('commit', '-qm', 'result');
+console.log(JSON.stringify({type:'thread.started',thread_id:${JSON.stringify(nativeId)}}));
+console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'fixture native recovery evidence'}}));
+console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:21,cached_input_tokens:7,output_tokens:3}}));
+`);
+ await chmod(fake, 0o755);
  const originalPath=process.env.PATH;process.env.PATH=fakebin+delimiter+(originalPath??'');
  const panes:Array<{id:string;title:string;cwd:string}>=[],children:ChildProcess[]=[];let creates=0;
  const host:TerminalHost={status:async()=>({available:true}),list:async()=>panes,create:async spec=>{creates++;assert.equal(spec.argv[0],process.execPath);const pane={id:'fixture-pane-'+creates,title:spec.name,cwd:spec.cwd};panes.push(pane);const child=spawn(spec.argv[0],spec.argv.slice(1),{cwd:spec.cwd,stdio:'ignore'});children.push(child);return pane;},read:async()=>({text:'fixture screen',ansi:''}),input:async()=>{assert.fail('unexpected input');},keys:async()=>{},close:async()=>{},watch:async()=>()=>{}};
@@ -49,6 +71,7 @@ test('Web and real HTTP/node RPC resume an exact fixture thread only after appro
  const argv=JSON.parse(await readFile(capture,'utf8'));assert.deepEqual(argv.slice(0,6),['--sandbox','workspace-write','exec','resume','--json','--skip-git-repo-check']);assert.equal(argv.at(-2),nativeId);assert.match(argv.at(-1),/\$\(not-a-command\)/);assert.ok(!argv.includes('--last'));assert.ok(!argv.some((a:string)=>a.includes('bypass')));
  assert.equal((await api('/approvals/'+approval.id+'/approve','POST',{version:approval.version})).status,409);assert.equal(creates,1);assert.deepEqual(errors,[]);
  await browser.close();await server.close();server=await startServer({dataDir:join(dir,'server'),host:'127.0.0.1',port:Number(firstPort),demo:true,token:'offline-native-e2e'});await wait(()=>server.machines.list().some(m=>m.online));
+ assert.deepEqual(server.app.store.get<Run>('runs',run.id)!.commitChanges,{base,head:git('rev-parse','HEAD').trim(),files:1,added:1,deleted:0});
  assert.deepEqual(server.app.store.get<Run>('runs',run.id)!.usage,{input:21,output:3});
  assert.equal(server.app.store.get<Run>('runs',run.id)!.status,'completed');assert.equal(creates,1,'Reconnection/restart restores records; it must not resume a second process');
  const stored=server.app.approvals.list().find(a=>a.id===approval.id)!;assert.equal(stored.status,'completed');

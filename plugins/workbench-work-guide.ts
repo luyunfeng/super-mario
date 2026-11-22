@@ -11,7 +11,7 @@ export const workGuide = {
       '“记一下”或“提醒我” → references/record.md',
       '“交给执行机做”或“拆成几步” → references/delegate.md',
       '“做到哪一步了”或“谁在等我” → references/progress.md',
-      '“帮我验一下”或“看这次改动” → references/review.md',
+      '“帮我验一下”“看这次改动”或“对比两次执行” → references/review.md',
       '“哪台机器能做”“这台机器有哪些技能”或“接着上次的会话” → references/agents-and-machines.md',
       '“找到那段对话”或“转给项目助手” → references/conversations.md',
       '“这个项目的代码在哪”或“看一下差异” → references/repositories.md',
@@ -38,6 +38,7 @@ export const workGuide = {
     ['references/review.md', [
       '# 核对交付',
       '从 runs_list 取这次执行的 doneWhen 和输出，逐项对照用户要求。涉及绑定的代码仓库时，通过 workspace_code_read 或 workspace_git_diff 核对实际文件和差异。',
+      '对比两次执行时，先核对项目、任务和完成标准，再分别引用输出、错误、本次 Token 与 commitChanges。commitChanges 是执行目录内起止提交的净差异；共享目录可能含他人提交，未提交修改不在计数中。缺少记录时写未上报，不能拿当前工作树差异补作历史证据。',
       '给出每项已核实的结果、依据和待验部分。执行者说测试通过但没有测试记录时，明确证据来自执行者报告。需要返工时说明复现条件和可核验的预期。',
       '待办完成与权限审批由用户确认。若需要用户验收，用现有验收卡；创建新卡前用 interactions_list 核对已有卡片。',
     ].join('\n')],
