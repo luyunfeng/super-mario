@@ -61,6 +61,16 @@ test('Agent 页修改主助手名称后同步到已有气泡，并发冲突保�
   await expect(upcoming).not.toContainText('待批准简报');
   await upcoming.getByRole('button', { name: '查看定时工作' }).click();
   await expect(first.locator('#agent-scheduled-work').getByRole('button', { name: '创建定时工作' })).toBeFocused();
+  const plans = first.locator('#agent-scheduled-work');
+  const frequency = plans.getByLabel('筛选计划频率');
+  await frequency.selectOption('once');
+  await expect(plans.locator('article')).toHaveCount(3);
+  await expect(plans.locator('article .item__title')).toHaveText(['已生成简报', '待批准简报', '下午复核']);
+  await frequency.selectOption('repeating');
+  await expect(plans.locator('article .item__title')).toHaveText(['上午简报']);
+  await expect(upcoming).toContainText(/上午简报.*下午复核/s);
+  await frequency.selectOption('');
+  await expect(plans.locator('article')).toHaveCount(4);
   const early = first.locator('#agent-scheduled-work article').filter({ hasText: '上午简报' });
   await early.getByRole('button', { name: '跳过下一次' }).click();
   await expect(early).toContainText('将跳过');

@@ -50,7 +50,9 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
   const notice = h('div', { role: 'status' });
   const list = h('div', { class: 'stack' });
   const add = Button({ label: '创建定时工作', size: 'sm', onClick: () => openCreate() });
-  const el = Card({ title: '定时工作', id: 'agent-scheduled-work', sub: '按时间生成事实简报，或提交派发审批。', tools: [add, Button({ label: '从模板创建', size: 'sm', onClick: openTemplates })], body: [notice, list] });
+  const repeat = Select({ 'aria-label': '筛选计划频率', options: [['', '全部频率'], ['repeating', '重复计划'], ['once', '一次性安排']] });
+  repeat.addEventListener('change', () => turnPage(0));
+  const el = Card({ title: '定时工作', id: 'agent-scheduled-work', sub: '按时间生成事实简报，或提交派发审批。', tools: [add, Button({ label: '从模板创建', size: 'sm', onClick: openTemplates })], body: [repeat, notice, list] });
 
   // 身份或顶栏范围改变即失效，旧读写响应不能回填新范围。
   function syncIdentity() {
@@ -73,6 +75,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     try {
       const query = new URLSearchParams();
       if (projectId) query.set('projectId', projectId);
+      if (repeat.value) query.set('repeat', repeat.value);
       if (offset) query.set('offset', String(offset));
       const data = await api.get('/scheduled-work' + (query.size ? '?' + query : ''));
       if (!valid(stamp)) { queued = true; return; }
@@ -102,7 +105,13 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       offset > 0 && Button({ label: '上一页定时工作', size: 'sm', onClick: () => turnPage(Math.max(0, offset - (result?.limit ?? 100))) }),
       Number.isSafeInteger(result?.nextOffset) && result.nextOffset > offset && Button({ label: '下一页定时工作', size: 'sm', onClick: () => turnPage(result.nextOffset) }),
       error && Button({ label: '重试读取定时工作', size: 'sm', onClick: requestRead }));
-    replace(list, items.map(renderItem), !offset && !items.length && loaded && !error ? Empty({ title: '当前范围没有定时工作' }) : null);
+    const sections = [];
+    for (const [once, heading] of [[false, '重复计划'], [true, '一次性安排']]) {
+      const rows = items.filter(item => (item.schedule.kind === 'once') === once);
+      if (rows.length) sections.push(h('section', { class: 'stack', 'aria-label': heading }, h('h3', null, heading), rows.map(renderItem)));
+    }
+    replace(list, sections, !offset && !items.length && loaded && !error
+      ? Empty({ title: repeat.value ? '当前范围没有符合频率的计划' : '当前范围没有定时工作' }) : null);
   }
   function renderItem(item) {
     const project = snapshot().projects?.find(p => p.id === item.projectId);

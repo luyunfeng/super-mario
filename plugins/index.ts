@@ -639,7 +639,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         if (actions?.scheduledWorkBrief) context.contribute('tools', 'scheduled_work_brief', tool('scheduled_work_brief',
           '读取某次定时工作已经生成的简报原文。先核对计划和触发记录。', async args => actions.scheduledWorkBrief!(args),
           { workId: { type: 'string' }, occurrenceKey: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' } }));
-        if (actions?.scheduledWorkList) context.contribute('tools', 'scheduled_work_list', tool('scheduled_work_list', '读取当前范围的周期工作及实际审批/结果；创建确认、到期派发和执行完成分别计算。', async args => actions.scheduledWorkList!(args), { offset: { type: 'integer', minimum: 0, description: '续读时传上一页 nextOffset' }, projectId: { type: 'string' }, todoId: { type: 'string' } }));
+        if (actions?.scheduledWorkList) context.contribute('tools', 'scheduled_work_list', tool('scheduled_work_list', '读取当前范围的周期工作及实际审批/结果；创建确认、到期派发和执行完成分别计算。', async args => actions.scheduledWorkList!(args), { repeat: { type: 'string', enum: ['once', 'repeating'], description: '一次性安排或重复计划，省略时查询全部' }, offset: { type: 'integer', minimum: 0, description: '续读时传上一页 nextOffset' }, projectId: { type: 'string' }, todoId: { type: 'string' } }));
         if (actions?.followupCreate) {
           context.contribute('tools', 'schedule_followup', tool('schedule_followup',
             '为自己（主 Agent）预约一次性跟进或周期只读巡检（无需审批，到期在只读上下文自动唤醒，例如会前 10 分钟准备简报、2 小时后复核进展）。push="asked" 表示默认静默，仅发现值得通知的变化时调用 notify_user；push="always" 表示到期整理结果后直接推给主人。',

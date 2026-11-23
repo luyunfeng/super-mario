@@ -95,6 +95,8 @@ export function createScheduledWorkService(options: {
   function publicRows(input:Record<string,unknown>={}) {
     const offset = input.offset === undefined ? 0 : input.offset;
     if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) fail('分页起点须为非负整数', 400);
+    const repeat = input.repeat;
+    if (repeat !== undefined && repeat !== 'once' && repeat !== 'repeating') fail('无效的计划频率筛选', 400);
     const limit = 100;
     const scope=scopeOf(input as any), rows=manager.list(); cleanup(rows);
     const selected=rows.filter(row=>scope.kind==='global' || row.input.projectId===('projectId' in scope?scope.projectId:undefined) && (scope.kind!=='task'||row.input.todoId===scope.todoId));
@@ -111,8 +113,12 @@ export function createScheduledWorkService(options: {
       if (schedule.until && Date.parse(nextAt) >= Date.parse(schedule.until)) return [];
       return [{ id: row.id, title: row.input.title, nextAt }];
     }).sort((a, b) => Date.parse(a.nextAt) - Date.parse(b.nextAt) || a.id.localeCompare(b.id)).slice(0, 3);
-    const page = selected.slice(offset, offset + limit);
-    const nextOffset = offset + page.length < selected.length ? offset + page.length : null;
+    const repeating = repeat === 'once' ? [] : selected.filter(row => row.input.schedule.kind !== 'once');
+    const once = repeat === 'repeating' ? [] : selected.flatMap(row => row.input.schedule.kind === 'once'
+      ? [{ row, at: Date.parse(row.input.schedule.at) }] : []).sort((a, b) => a.at - b.at);
+    const ordered = repeating.concat(once.map(item => item.row));
+    const page = ordered.slice(offset, offset + limit);
+    const nextOffset = offset + page.length < ordered.length ? offset + page.length : null;
     return { items:page.map(row=>{
       const schedule=row.scheduleId ? schedules.get(row.scheduleId) : undefined;
       return {id:row.id,version:row.version,title:row.input.title,status:row.status,projectId:row.input.projectId,todoId:row.input.todoId,schedule:row.input.schedule,action:row.input.action,
@@ -120,7 +126,7 @@ export function createScheduledWorkService(options: {
         source:{messageId:row.sourceMessage.id,createdAt:row.sourceMessage.createdAt},
         nextAt:schedule && (!schedule.until || Date.parse(schedule.nextAt) < Date.parse(schedule.until)) ? schedule.nextAt : undefined,skipToken:pendingSkip(row, schedule)?.ownerSkipToken,scheduleStatus:schedule?.status,scheduleVersion:schedule?.version,
         ...historyPage(row, row.occurrences, schedule)};
-    }),upcoming,total:selected.length,offset,nextOffset,truncated:nextOffset !== null,limit };
+    }),upcoming,total:ordered.length,offset,nextOffset,truncated:nextOffset !== null,limit };
   }
   function scopedWork(input: Record<string, unknown>) {
     const scope = scopeOf(input as { projectId?: string; todoId?: string });

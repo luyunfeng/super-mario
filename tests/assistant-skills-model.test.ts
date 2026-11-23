@@ -74,6 +74,10 @@ test('Web 和飞书查询接下来三项定时工作，并在同一项目内翻�
     if (req.lastRole === 'user') {
       assert.match(req.system, /scheduled_work_list 的 upcoming/);
       const question = JSON.stringify(req.content);
+      if (question.includes('只查一次性安排')) {
+        assert.match(req.system, /翻页保留相同筛选/);
+        return call('scheduled_work_list', { repeat: 'once' }, 'once-only');
+      }
       if (question.includes('核对全部计划')) {
         assert.match(req.system, /按 nextOffset 续读当前范围/);
         return call('scheduled_work_list', {}, 'first-page');
@@ -85,6 +89,11 @@ test('Web 和飞书查询接下来三项定时工作，并在同一项目内翻�
       return call('scheduled_work_list', {}, question.includes('暂停安排1') ? 'before-pause' : question.includes('恢复安排1') ? 'before-resume' : 'upcoming');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    if (req.callId === 'once-only') {
+      const result = JSON.parse(raw);
+      assert.ok(result.items.every((item: { schedule: { kind: string } }) => item.schedule.kind === 'once'));
+      return { role: 'assistant', content: result.items.map((item: { title: string }) => item.title).join('、') };
+    }
     if (req.callId === 'first-page' || req.callId === 'second-page') {
       const page = JSON.parse(raw);
       assert.ok(page.items.every((row: { title: string }) => row.title !== '其他范围'));
@@ -135,6 +144,8 @@ test('Web 和飞书查询接下来三项定时工作，并在同一项目内翻�
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
     await adapter.onMessage(question, { ...source, messageId: 'upcoming' });
     await t.waitFor(() => assert.ok(sent.includes('安排1、安排2、安排3')));
+    await adapter.onMessage('只查一次性安排', { ...source, messageId: 'once-only' });
+    await t.waitFor(() => assert.ok(sent.includes('尚待确认、安排2、安排3、安排4')));
     await adapter.onMessage('请暂停安排1', { ...source, messageId: 'pause' });
     await t.waitFor(() => assert.ok(sent.includes('调度状态 paused')));
     assert.equal(await ask('请恢复安排1', '/projects/' + project.id + '/messages'), '调度状态 active');
@@ -149,6 +160,11 @@ test('Web 和飞书查询接下来三项定时工作，并在同一项目内翻�
         projectId: project.id, schedule: { kind: 'once', at: '2099-03-01T00:00:00Z' }, action: { kind: 'brief' } });
     }
     const listUrl = server.url + '/api/v1/scheduled-work?projectId=' + encodeURIComponent(project.id);
+    const filtered = await (await fetch(listUrl + '&repeat=once')).json();
+    assert.equal(filtered.total, 100);
+    assert.equal(filtered.nextOffset, null);
+    assert.equal(filtered.items.at(-1).title, '末页计划');
+    assert.equal((await fetch(listUrl + '&repeat=unknown')).status, 400);
     const lastPage = await (await fetch(listUrl + '&offset=100')).json();
     assert.equal(lastPage.items.length, 1);
     assert.equal(lastPage.items[0].title, '末页计划');
