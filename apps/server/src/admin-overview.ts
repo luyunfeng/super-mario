@@ -1,19 +1,21 @@
 import {randomUUID} from 'node:crypto';
 import {hostname} from 'node:os';
 import type {AddressInfo} from 'node:net';
+import type {MachineInfo} from '../../../packages/protocol/src/index.ts';
 import type {Store} from '../../../packages/plugin-sdk/src/index.ts';
 import {adminEndpoints} from './admin-endpoints.ts';
 
 type Options={
   store:Store; version:string; startedAt:string; demo:boolean;
   address:()=>AddressInfo|string|null;
-  machines:()=>{online:boolean}[];
+  machines:()=>MachineInfo[];
   plugins:()=>{id:string;status:string}[];
   devices:()=>{id:string}[];
 };
 type Status='ok'|'warning'|'error';
 type Check={label:string;status:Status;detail:string};
 const collection='core.admin-auth.instance';
+const machineNames='core.admin-auth.machine-names';
 
 export function createAdminOverview(options:Options) {
   const {store}=options;
@@ -45,6 +47,22 @@ export function createAdminOverview(options:Options) {
     else store.remove(collection,'name');
     return read();
   }
+  function machineList(){
+    return {machines:options.machines().map(({id,name:reportedName,online,platform,connectedAt,capabilities})=>({
+      id, name:store.get<string>(machineNames,id)??reportedName, reportedName, online, platform, connectedAt,
+      capabilities:[...capabilities],
+    }))};
+  }
+  function renameMachine(id:unknown,value:unknown){
+    if(typeof id!=='string'||!options.machines().some(machine=>machine.id===id))
+      throw Object.assign(new Error('未找到执行机'),{status:404});
+    if(typeof value!=='string'||/[\p{Cc}\p{Cs}\p{Zl}\p{Zp}]/u.test(value)||Array.from(value.trim()).length>64)
+      throw Object.assign(new Error('执行机显示名最多 64 个字符，请使用单行文字'),{status:400});
+    const name=value.trim();
+    if(name)store.put(machineNames,id,name);
+    else store.remove(machineNames,id);
+    return machineList();
+  }
   function doctor(){
     const checkedAt=new Date().toISOString(),checks:Check[]=[];
     function check(label:string,run:()=>Omit<Check,'label'>){
@@ -67,5 +85,5 @@ export function createAdminOverview(options:Options) {
     });
     return {checkedAt,checks};
   }
-  return {read,rename,doctor};
+  return {read,rename,doctor,machineList,renameMachine};
 }
