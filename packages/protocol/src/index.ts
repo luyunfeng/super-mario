@@ -44,7 +44,7 @@ export interface Todo {
   deferredQuestion?: { cardId: string; askedAt: string; title?: string; body?: string; questions?: QuestionItem[] };
   /** Explicit predecessor of this work phase, independent of hierarchy and dependencies. */
   continuesTodoId?: string; continuationReason?: string; continuationRootId?: string;
- groupTask?: true; groupTaskOutcome?: string; afterTodoIds?: string[]; parentTodoId?: string; responsibleSession?: { runId: string; machineId: string; sessionId: string }; responsiblePerson?: string; priority?: 'high' | 'normal' | 'low'; id: string; title: string; notes: string; projectId?: string; dueAt?: string; waitingOn?: string; reminderAt?: string; /** Host-owned waiting/reminder generation; legacy records default to 1. */ reminderVersion?: number; remindedAt?: string; completedAt?: string; createdAt: string; updatedAt: string }
+ groupTask?: true; groupTaskOutcome?: string; afterTodoIds?: string[]; parentTodoId?: string; responsibleSession?: { runId: string; machineId: string; sessionId: string }; responsiblePerson?: string; priority?: 'high' | 'normal' | 'low'; id: string; title: string; notes: string; projectId?: string; dueAt?: string; /** Calendar date for an all-day deadline. dueAt retains the original local end of day as an instant. */ dueDay?: string; waitingOn?: string; reminderAt?: string; /** Host-owned waiting/reminder generation; legacy records default to 1. */ reminderVersion?: number; remindedAt?: string; completedAt?: string; createdAt: string; updatedAt: string }
 /** Transport carries image bytes once. Message lists and receipts carry only references. */
 export interface ChatFilePreview {
   thumbnail?: {mime:'image/png'|'image/jpeg';data:string};

@@ -80,7 +80,7 @@ export function createInboxService({ store, events, createTodo, triage }: {
   retryPending(): Promise<void>;
   confirm(id: string, version: number, details?: { title: string; notes: string }): { todoId: string };
   archive(id: string, version: number): void;
-  bulk(input: Record<string,unknown>): {updated:number};
+  bulk(input: Record<string,unknown>): {updated:number;created?:{id:string;todoId:string}[]};
   assignProject(id: string, version: number, projectId?: string): InboxItem;
   reopen(id: string): void;
   close(): Promise<void>;
@@ -145,6 +145,20 @@ export function createInboxService({ store, events, createTodo, triage }: {
     const item = get(id);
     if (item.version !== version || item.archivedAt) throw new InboxError('收件箱卡片已更新或已归档，请刷新', 409);
     return item;
+  }
+  function createLinkedTodo(item:InboxItem,details?:{title:string;notes:string},deadline?:{dueAt?:string;dueDay?:string}) {
+    if (item.todoId) throw new InboxError('该线程已创建待办', 409);
+    // The supplied callback must write to this same store synchronously.
+    if (details) { required(details.title, '待办标题'); if (typeof details.notes !== 'string') throw new InboxError('待办说明必须为文本'); }
+    const todo = createTodo({ title: details?.title ?? item.title, notes: `${details?.notes ?? item.text}\n\n来源：${item.source}\n线程：${item.thread}`,
+      ...(item.projectId ? { projectId: item.projectId } : {}), ...deadline });
+    if (!todo || typeof todo.id !== 'string' || !todo.id.trim()) throw new InboxError('待办创建未返回有效标识', 500);
+    const now = new Date().toISOString();
+    store.put(collection, item.id, { ...item, version:item.version+1, todoId: todo.id, archivedAt: now, updatedAt: now,
+      ...(item.tier==='pending' ? {tier:'action',reason:withTodo('用户已确认创建待办并归档',todo.id)} :
+        {reason:withTodo(`${item.reason}；用户已确认创建待办并归档`, todo.id)}) });
+    if(item.tier==='pending') store.remove(pendingPolicies,item.id);
+    return { todoId: todo.id };
   }
   function writeArchiveState(item:InboxItem,action:'archive'|'reopen',now:string) {
     const {archivedAt,...rest}=item;
@@ -344,18 +358,7 @@ export function createInboxService({ store, events, createTodo, triage }: {
     confirm(id, version, details) {
       const result = store.transaction(() => {
         const item = current(id, version);
-        if (item.todoId) throw new InboxError('该线程已创建待办', 409);
-        // The supplied callback must write to this same store synchronously.
-        if (details) { required(details.title, '待办标题'); if (typeof details.notes !== 'string') throw new InboxError('待办说明必须为文本'); }
-        const todo = createTodo({ title: details?.title ?? item.title, notes: `${details?.notes ?? item.text}\n\n来源：${item.source}\n线程：${item.thread}`,
-          ...(item.projectId ? { projectId: item.projectId } : {}) });
-        if (!todo || typeof todo.id !== 'string' || !todo.id.trim()) throw new InboxError('待办创建未返回有效标识', 500);
-        const now = new Date().toISOString();
-        store.put(collection, id, { ...item, version:item.version+1, todoId: todo.id, archivedAt: now, updatedAt: now,
-          ...(item.tier==='pending' ? {tier:'action',reason:withTodo('用户已确认创建待办并归档',todo.id)} :
-            {reason:withTodo(`${item.reason}；用户已确认创建待办并归档`, todo.id)}) });
-        if(item.tier==='pending') store.remove(pendingPolicies,id);
-        return { todoId: todo.id };
+        return createLinkedTodo(item,details);
       });
       changed(id);
       return result;
@@ -389,10 +392,18 @@ export function createInboxService({ store, events, createTodo, triage }: {
     },
     bulk(input) {
       const {action,items}=input;
-      if (Object.keys(input).some(k=>k!=='action' && k!=='items') || (action!=='archive' && action!=='reopen') ||
-          !Array.isArray(items) || items.length<1 || items.length>100) throw new InboxError('请选择 1 至 100 条个人收件进行归档或恢复');
+      const fields=action==='todo' ? ['action','items','dueAt','dueDay'] : ['action','items'];
+      if (Object.keys(input).some(key=>!fields.includes(key)) || (action!=='archive' && action!=='reopen' && action!=='todo') ||
+          !Array.isArray(items) || items.length<1 || items.length>100) throw new InboxError('请选择 1 至 100 条个人收件进行批量操作');
+      const {dueAt,dueDay}=input;
+      if (dueAt!==undefined) {
+        const instant=typeof dueAt==='string' && /^(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,3})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.exec(dueAt);
+        if (!instant || !Number.isFinite(Date.parse(dueAt as string)) ||
+            new Date(instant[1]+'T00:00:00Z').toISOString().slice(0,10)!==instant[1]) throw new InboxError('截止时间需要包含有效日期、时间和时区');
+      }
+      if (dueDay!==undefined && (typeof dueDay!=='string' || typeof dueAt!=='string')) throw new InboxError('全天截止需要同时提供日期和截止时间');
       const ids=new Set<string>();
-      store.transaction(()=>{
+      const created=store.transaction(()=>{
         const rows=items.map(target=>{
           if (!target || typeof target!=='object' || Array.isArray(target) || Object.keys(target).some(k=>k!=='id' && k!=='version') ||
               typeof target.id!=='string' || !target.id.trim() || !Number.isSafeInteger(target.version) || target.version<1)
@@ -402,13 +413,17 @@ export function createInboxService({ store, events, createTodo, triage }: {
           const row=get(target.id);
           if (row.version!==target.version || !!row.archivedAt!==(action==='reopen'))
             throw new InboxError('收件箱卡片状态已变化，请刷新后重试',409);
+          if (action==='todo' && row.todoId) throw new InboxError('该线程已创建待办',409);
           return row;
         });
+        if (action==='todo') return rows.map(row=>({id:row.id,...createLinkedTodo(row,undefined,{
+          ...(typeof dueAt==='string' && {dueAt}),...(typeof dueDay==='string' && {dueDay}),
+        })}));
         const now=new Date().toISOString();
         for (const row of rows) writeArchiveState(row,action,now);
       });
       for (const id of ids) changed(id);
-      return {updated:ids.size};
+      return {updated:ids.size,...(created && {created})};
     },
     async close() { closed = true; await queue; },
     reopen(id) {

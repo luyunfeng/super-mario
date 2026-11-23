@@ -1,3 +1,4 @@
+import { localDate, todoDueFields } from '../features/todo-calendar.js';
 import { createInboxRelations } from '../features/inbox-relations.js';
 import { createInboxTranslation } from '../features/inbox-translation.js';
 import { createInboxConversationsUI } from '../features/inbox-conversations.js';
@@ -58,11 +59,15 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
   }});
   const archiveSelected=Button({label:'归档待处理',onClick:()=>bulk('archive'),size:'sm'});
   const reopenSelected=Button({label:'恢复已归档',onClick:()=>bulk('reopen'),size:'sm'});
+  let dueDrawer;
+  const eligibleForTodo=row=>!row.archivedAt && !row.todoId;
+  const todoSelected=Button({label:'转为待办',size:'sm',onClick:chooseDue});
   const selectedCount=h('span',{class:'small',role:'status'});
   const bulkStatus=h('p',{class:'small',role:'status',hidden:true});
   const bulkFeedback=h('div',{class:'row row--wrap',hidden:true},bulkStatus,undoArchive);
-  const bulkBar=h('div',{class:'row row--wrap',hidden:true},selectedCount,selectAll,archiveSelected,reopenSelected);
+  const bulkBar=h('div',{class:'row row--wrap',hidden:true},selectedCount,selectAll,todoSelected,archiveSelected,reopenSelected);
   function clearSelection(mode=false) {
+    dueDrawer?.close();
     multiEpoch++;multi=mode;bulkBusy=false;picked.clear();choices=[];bulkMessage='';
   }
   const bulkOwner=()=>Boolean(store.view.snapshot && store.view.snapshotOwner) && api.draftOwner()===store.view.snapshotOwner && !store.view.unauthorized;
@@ -80,6 +85,8 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     selectAll.textContent=full?'取消全选':choices.length>100?'选满 100 条':'全选当前页';
     selectAll.disabled=bulkBusy || !choices.length;
     archiveSelected.textContent='归档待处理（'+open+'）';archiveSelected.disabled=bulkBusy || !open;
+    const canCreate=[...picked.values()].filter(eligibleForTodo).length;
+    todoSelected.textContent='转为待办（'+canCreate+'）';todoSelected.disabled=bulkBusy || !canCreate;
     reopenSelected.textContent='恢复已归档（'+archived+'）';reopenSelected.disabled=bulkBusy || !archived;
     undoArchive.hidden=!lastArchive || !bulkOwner() || lastArchive.owner!==api.draftOwner();
     undoArchive.disabled=bulkBusy;
@@ -87,26 +94,69 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     bulkStatus.textContent=statusText;bulkStatus.hidden=!statusText;
     bulkFeedback.hidden=!statusText && undoArchive.hidden;
   }
-  async function bulk(action,undo) {
+  function chooseDue() {
+    if(!multi || bulkBusy || dueDrawer?.el.open || !bulkOwner()) return;
+    const epoch=multiEpoch,owner=api.draftOwner();
+    const items=[...picked.values()].filter(eligibleForTodo).map(({id,version})=>({id,version}));
+    if(!items.length) return;
+    const mode=Select({'aria-label':'共用期限',value:'today',options:[
+      ['today','今天全天'],['hour','一小时后'],['custom','指定时间'],['none','无期限']]});
+    const time=Input({type:'datetime-local','aria-label':'截止时间',hidden:true});
+    mode.onchange=()=>{time.hidden=mode.value!=='custom';};
+    const error=h('p',{class:'small',role:'alert',hidden:true});
+    const submit=Button({label:'创建待办',kind:'primary',onClick:()=>{
+      if(!view.el.open || epoch!==multiEpoch || owner!==api.draftOwner() || !bulkOwner() || bulkBusy) return;
+      if(items.some(({id,version})=>picked.get('personal:'+id)?.version!==version)) {
+        error.textContent='已选收件已变化，请关闭后重新选择。';error.hidden=false;return;
+      }
+      const due={};
+      const now=new Date();
+      try {
+        if(mode.value==='today') Object.assign(due,todoDueFields(localDate(now)));
+        else if(mode.value==='hour') due.dueAt=new Date(now.getTime()+3600000).toISOString();
+        else if(mode.value==='custom') {
+          const [day,clock]=time.value.split('T');
+          if(!day || !clock || !time.validity.valid) throw Error('请选择有效的截止时间。');
+          Object.assign(due,todoDueFields(day,clock));
+        }
+      } catch(cause) {
+        error.textContent=cause.message;error.hidden=false;time.focus();return;
+      }
+      view.close();
+      return bulk('todo',undefined,{items,due});
+    }});
+    const view=openDrawer({title:'批量转为待办',body:h('div',{class:'stack'},
+      h('p',null,'将 '+items.length+' 条收件分别转为待办，共用以下期限。'),mode,time,error),
+      footer:[Button({label:'取消',onClick:()=>view.close()}),submit],
+      onClose:()=>{if(dueDrawer===view) dueDrawer=undefined;}});
+    dueDrawer=view;
+  }
+  async function bulk(action,undo,todo) {
     if((!multi && !undo) || bulkBusy || !bulkOwner()) return;
     if(undo && (undo!==lastArchive || undo.owner!==api.draftOwner())) return;
     const owner=api.draftOwner(),epoch=multiEpoch;
     const current=()=>epoch===multiEpoch && owner===api.draftOwner() && bulkOwner() && router.current.page===direction;
     const selected=[...picked.entries()].filter(([,row])=>!!row.archivedAt===(action==='reopen'));
-    const items=undo ? undo.items : selected.map(([,row])=>({id:row.id,version:row.version}));
+    const items=todo?.items ?? undo?.items ?? selected.map(([,row])=>({id:row.id,version:row.version}));
     if(!items.length || items.length>100) return;
     // A new write supersedes the previous undo, including when its outcome is unknown.
     lastArchive=undefined;
     bulkBusy=true;bulkMessage='正在保存…';paint();
     try {
-      const result=await api.post('/inbox/bulk',{action,items});
+      const result=await api.post('/inbox/bulk',{action,items,...todo?.due});
       if(current()) {
         if(result.updated!==items.length) throw Error('回执数量与请求不符');
+        if(action==='todo') {
+          const created=Array.isArray(result.created)?result.created:[];
+          const ids=new Set(created.filter(row=>typeof row?.todoId==='string' && row.todoId).map(row=>row.id));
+          if(created.length!==items.length || items.some(row=>!ids.has(row.id))) throw Error('待办创建回执与请求不符');
+        }
         for(const row of items) picked.delete('personal:'+row.id);
         if(action==='archive') {
           lastArchive={owner,items:items.map(({id,version})=>({id,version:version+1}))};
         }
-        bulkMessage=(undo?'已撤销归档，恢复 ':action==='archive'?'已归档 ':'已恢复 ')+result.updated+' 条收件。';
+        bulkMessage=action==='todo'?'已创建 '+result.updated+' 条待办。':
+          (undo?'已撤销归档，恢复 ':action==='archive'?'已归档 ':'已恢复 ')+result.updated+' 条收件。';
       }
     } catch(cause) {
       if(current()) {

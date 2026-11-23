@@ -5,7 +5,7 @@ import { formatDate, todoPriorityLabels } from '../lib/format.js';
 import { Button, Empty, Fold, Field, Input, TextArea, Select, Segmented } from '../ui/kit.js';
 import { openDrawer, toast } from '../ui/overlay.js';
 
-import { todoCalendar, localDate, dueInstant, weekOffset, calendarRoute } from './todo-calendar.js';
+import { todoCalendar, localDate, dueInstant, todoDueFields, todoDueLabel, weekOffset, calendarRoute } from './todo-calendar.js';
 import { openTaskClosure, refreshTaskClosure } from './task-closure.js';
 import { createTodoDetail, openTodoDetail, openTodoDelegate } from './todo-detail.js';
 import { openTodoHistory } from './todo-history.js';
@@ -67,7 +67,7 @@ export function createTodosTab({ api, store, router }) {
     try {
       if (calendar && time.value && !due.value) throw new Error('请填写截止日期');
       await api.post('/todos', { title: text, priority: priority.value, ...(projectId !== 'all' ? { projectId } : {}),
-        ...(due.value ? { dueAt: dueInstant(due.value, time.value || '23:59') } : {}) });
+        ...(due.value ? todoDueFields(due.value,time.value) : {}) });
       priority.value = 'normal'; title.value = ''; due.value = ''; time.value = '';
       store.refresh();
     } catch (error) { toast(`没有添加成功：${error.message}`, 'danger'); }
@@ -118,11 +118,11 @@ export function createTodosTab({ api, store, router }) {
     // A textarea presents CRLF as LF. Keep the exact stored text for the API comparison.
     const notesChanged = () => notes.value !== originalNotes.replace(/\r\n?/g, '\n');
     const editPriority = Select({ options: Object.entries(todoPriorityLabels), value: todo.priority ?? 'normal' });
-    let originalDue = localDate(todo.dueAt);
+    let originalDue = todo.dueDay || localDate(todo.dueAt);
     let originalReminder = localDate(todo.reminderAt, true);
     const dueInput = Input({ type: 'date', value: originalDue });
-    let originalClock = localDate(todo.dueAt, true).slice(11);
-    const clock = calendar ? Input({ type: 'time', value: originalClock }) : null;
+    let originalClock = todo.dueDay ? '' : localDate(todo.dueAt, true).slice(11);
+    const clock = Input({ type: 'time', value: originalClock });
     let reminderVersion = todo.reminderVersion ?? 1;
     const reminder = Input({ type: 'datetime-local', value: originalReminder });
     const responsible = Input({ value: todo.responsiblePerson ?? '' });
@@ -157,7 +157,7 @@ export function createTodosTab({ api, store, router }) {
       fillDependencies();
     });
     const metadata = h('div', { class: 'stack' },
-      h('div', { class: 'form-row' }, Field({ label: '截止日期', control: dueInput, hint: '留空取消截止日期。' }), clock && Field({ label: '截止时间', control: clock }), Field({ label: '在等谁', control: waiting, hint: '填写后会进入“等待中”。' })),
+      h('div', { class: 'form-row' }, Field({ label: '截止日期', control: dueInput, hint: '留空取消截止日期。' }), Field({ label: '截止时间', control: clock, hint:'留空表示全天。' }), Field({ label: '在等谁', control: waiting, hint: '填写后会进入“等待中”。' })),
       Field({ label: '提醒时间', control: reminder, hint: '按本机时区填写；留空取消。到点检查需在 Agent 中开启提醒，外发仍需渠道与发送授权。' }),
       Field({ label: '优先级', control: editPriority }), Field({ label: '负责人', control: responsible }), Field({ label: '负责会话', control: session }), Field({ label: '所属项目', control: project }), Field({ label: '上级待办', control: parent }),
       Field({ label: '前置子项', control: dependencies, hint: '可选择多个同级子项。' }));
@@ -168,14 +168,15 @@ export function createTodosTab({ api, store, router }) {
         label: '保存', kind: 'primary', onClick: async () => {
           if (!sameOwner()) { drawer.close(); return; }
           if (!name.value.trim()) throw new Error('请填写标题');
-          if (!dueInput.reportValidity() || (clock && !clock.reportValidity()) || !reminder.reportValidity()) return;
+          if (!dueInput.reportValidity() || !clock.reportValidity() || !reminder.reportValidity()) return;
           // Omit unchanged values: re-sending reminderAt clears its claim in the API.
           // It also preserves seconds/precision that these minute/date controls cannot show.
           const patch = {};
-          if (dueInput.value !== originalDue || (clock && clock.value !== originalClock)) {
-            if (!dueInput.value && clock?.value && !originalDue) throw new Error('请填写截止日期');
+          if (dueInput.value !== originalDue || clock.value !== originalClock) {
+            if (!dueInput.value && clock.value && !originalDue) throw new Error('请填写截止日期');
             patch.expectedDueAt = todo.dueAt ?? '';
-            patch.dueAt = dueInput.value ? dueInstant(dueInput.value, clock?.value || '23:59') : '';
+            patch.expectedDueDay = todo.dueDay ?? '';
+            Object.assign(patch,todoDueFields(dueInput.value,clock.value));
           }
           if (reminder.value !== originalReminder) {
             const at = reminder.value ? new Date(reminder.value) : undefined;
@@ -221,7 +222,7 @@ export function createTodosTab({ api, store, router }) {
               }
               if (patch.dueAt !== undefined) {
                 originalDue = dueInput.value;
-                originalClock = clock?.value ?? '';
+                originalClock = clock.value;
               }
               if (patch.reminderAt !== undefined) {
                 originalReminder = reminder.value;
@@ -231,6 +232,7 @@ export function createTodosTab({ api, store, router }) {
               for (const key of ['dueAt', 'priority', 'waitingOn', 'parentTodoId', 'responsiblePerson']) {
                 if (key in patch) todo[key] = saved[key];
               }
+              if ('dueAt' in patch) todo.dueDay = saved.dueDay;
               if ('parentTodoId' in patch || 'afterTodoIds' in patch) todo.afterTodoIds = saved.afterTodoIds;
               if ('responsibleRunId' in patch) assigned = saved.responsibleSession;
               conflict.hidden = true;
@@ -303,7 +305,7 @@ export function createTodosTab({ api, store, router }) {
       progress && `子项已完成 ${progress.completed} / ${progress.total}`,
       progress && progress.completed === progress.total && !done && '上级待办仍未完成',
       todo.priority && todo.priority !== 'normal' && todoPriorityLabels[todo.priority],
-      todo.dueAt && h('span', { class: overdue ? 'text-danger' : '' }, `${overdue ? '已逾期 · ' : '截止 '}${formatDate(todo.dueAt)}`),
+      todo.dueAt && h('span', { class: overdue ? 'text-danger' : '' }, `${overdue ? '已逾期 · ' : '截止 '}${todoDueLabel(todo)}`),
       todo.responsibleSession && `负责会话 ${todo.responsibleSession.machineId} / ${todo.responsibleSession.sessionId}`,
       todo.responsiblePerson && `负责人 ${todo.responsiblePerson}`,
       todo.waitingOn && `等 ${todo.waitingOn}`,
@@ -361,14 +363,21 @@ export function createTodosTab({ api, store, router }) {
           navigate('list');
         },
         add: (day, clock) => { due.value = day; time.value = clock; title.focus(); },
-        move: async (todo, day, clock, originalDueAt) => {
+        move: async (todo, day, clock, originalDueAt, originalDay, allDaySlot) => {
           try {
             const original = new Date(originalDueAt);
-            if (!clock && localDate(original) === day) return;
-            const target = new Date(dueInstant(day, clock || localDate(original, true).slice(11)));
-            if (!clock) target.setSeconds(original.getSeconds(), original.getMilliseconds());
-            if (+target === +original) return;
-            await api.patch(`/todos/${encodeURIComponent(todo.id)}`, { dueAt: target.toISOString(), expectedDueAt: originalDueAt });
+            let target;
+            if (originalDay || allDaySlot) {
+              if (day === originalDay) return;
+              target = todoDueFields(day);
+            } else {
+              if (!clock && localDate(original) === day) return;
+              const instant = new Date(dueInstant(day, clock || localDate(original, true).slice(11)));
+              if (!clock) instant.setSeconds(original.getSeconds(), original.getMilliseconds());
+              if (+instant === +original) return;
+              target = {dueAt:instant.toISOString()};
+            }
+            await api.patch(`/todos/${encodeURIComponent(todo.id)}`, {...target,expectedDueAt:originalDueAt,expectedDueDay:originalDay});
             await store.refresh();
           } catch (error) {
             toast(`没有改期成功：${error.message}`, 'danger');

@@ -439,7 +439,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             if ((args.status === 'open' && todo.completedAt) || (args.status === 'done' && !todo.completedAt)) return false;
             const due = Date.parse(todo.dueAt ?? '');
             if (args.hasDueDate !== undefined && Number.isFinite(due) !== args.hasDueDate) return false;
-            if (dayFormat && (!Number.isFinite(due) || dayFormat.format(due).padStart(10, '0') !== args.dueDay)) return false;
+            if (dayFormat && (!Number.isFinite(due) || (todo.dueDay ?? dayFormat.format(due).padStart(10, '0')) !== args.dueDay)) return false;
             if (args.overdue && (todo.completedAt || !(due < now))) return false;
             if (bounded && !(due >= from && due < before)) return false;
             if (pageSearch) {

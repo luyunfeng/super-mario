@@ -1621,7 +1621,7 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
         return call('todos_list', { query: '换季', dueFrom: '2026-11-01T00:00:00-04:00', dueBefore: '2026-11-08T00:00:00-05:00' }, 'local-week');
       }
       if (question.includes('纽约换季核验')) {
-        assert.match(req.system, /同传 dueDay 和 timeZone/);
+        assert.match(req.system, /同传 dueDay 和 timeZone.*全天待办按记录的 dueDay/);
         assert.match(req.system, /按当天查询全部匹配项/);
         assert.match(req.system, /搜索框文字原样传 pageSearch/);
         return call('todos_list', { pageSearch: '换季', dueDay: '2026-11-01', timeZone: 'America/New_York', status: 'open' }, 'local-day');
@@ -1728,6 +1728,11 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
     await assert.rejects(async () => lookup.execute({ dueDay: '2026-02-30', timeZone: 'UTC' }, signal), /日期不存在/);
     await assert.rejects(async () => lookup.execute({ dueDay: '2026-11-01' }, signal), /须提供时区/);
     await assert.rejects(async () => lookup.execute({ dueDay: '2026-11-01', timeZone: 'Invalid/City' }, signal), /时区无效/);
+    // A West Coast calendar day ends on the next UTC date.
+    const allDay = await api('/todos', {title:'跨区全天', dueDay:'2026-11-01', dueAt:'2026-11-02T07:59:59.999Z', projectId:project.id});
+    const byDay = (dueDay: string) => lookup.execute({ query:'跨区全天', dueDay, timeZone:'UTC' }, signal);
+    assert.deepEqual((await byDay('2026-11-01') as {id:string}[]).map(todo=>todo.id),[allDay.id]);
+    assert.deepEqual(await byDay('2026-11-02'),[]);
     assert.equal(await ask(dayQuestion, path), dayAnswer);
     await adapter.onMessage(dayQuestion, { ...source, messageId: 'local-day-question' });
     await t.waitFor(() => assert.ok(sent.includes(dayAnswer)));
@@ -2395,7 +2400,7 @@ test('Web 主对话绑定项目及飞书项目助手只查看该项目的整理�
       assert.match(req.system, /附工具返回的 approvalCitation/);
       assert.match(req.system, /用 inbox_handling_read 核对对应回复建议版本的 delivery.status/);
       assert.match(req.system, /用 inbox_handling_read 查 linkedTodo/);
-      assert.match(req.system, /批量归档或恢复.*撤销本次归档.*版本冲突.*归档只表示收件已整理/);
+      assert.match(req.system, /批量归档或恢复.*每条收件分别关联一个新待办.*撤销本次归档.*版本冲突.*归档只表示收件已整理/);
       assert.match(req.system, /飞书回复说明哪份资料待确认/);
       return call('knowledge_jobs', { projectId: otherId }, 'outside');
     }

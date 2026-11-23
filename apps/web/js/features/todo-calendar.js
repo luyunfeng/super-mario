@@ -1,5 +1,6 @@
 // Calendar dates are local civil dates. Walk them with setDate so DST transitions
-// do not shift the calendar by an hour. Only send ISO instants to the API.
+// do not shift the calendar by an hour. All-day tasks retain their civil date across time zones.
+import { formatDate } from '../lib/format.js';
 import { h } from '../lib/dom.js';
 import { Button, Check, Segmented } from '../ui/kit.js';
 
@@ -20,6 +21,20 @@ export function dueInstant(day, time = '23:59') {
   const date = new Date(value);
   if (localDate(date, true) !== value) throw new Error('截止时间无效，请检查本机时区和夏令时');
   return date.toISOString();
+}
+
+export function todoDueFields(day, time) {
+  if (!day) return {dueAt:''};
+  if (time) return {dueAt:dueInstant(day,time)};
+  const next = new Date(day + 'T12:00');
+  if (localDate(next) !== day) throw new Error('截止日期无效');
+  next.setDate(next.getDate() + 1);
+  next.setHours(0,0,0,0);
+  return {dueDay:day,dueAt:new Date(next.getTime()-1).toISOString()};
+}
+
+export function todoDueLabel(todo, withTime=false) {
+  return todo.dueDay ? todo.dueDay + ' · 全天' : formatDate(todo.dueAt,withTime);
 }
 
 export function calendarRoute(parts) {
@@ -72,7 +87,7 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
   let undated = 0;
   for (const todo of todos) {
     if (!showDone && todo.completedAt) continue;
-    const day = localDate(todo.dueAt);
+    const day = todo.dueDay || localDate(todo.dueAt);
     if (!day) { undated++; continue; }
     if (!dated.has(day)) dated.set(day, []);
     dated.get(day).push(todo);
@@ -97,8 +112,9 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
     Segmented({ label: '日历范围', value: mode, options: modeLabels, onChange: value => navigate(value, anchor) }).el,
     Check({ label: '显示已完成', checked: showDone, onChange: onShowDone }));
 
+  let draggedAllDay = false;
   function entry(todo) {
-    const time = localDate(todo.dueAt, true).slice(11);
+    const time = todo.dueDay ? '全天' : localDate(todo.dueAt, true).slice(11);
     const overdue = !todo.completedAt && Date.parse(todo.dueAt) < Date.now();
     const status = todo.completedAt ? '已完成' : overdue ? '已逾期' : todo.waitingOn ? '等待中' : '待完成';
     const reminding = todo.reminderAt && !todo.remindedAt && !todo.completedAt;
@@ -107,14 +123,16 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
     return h('button', { class: 'cal-entry', type: 'button', title: label, 'aria-label': label,
       dataset: { status }, draggable: true, onclick: () => open(todo),
       ondragstart: event => {
+        draggedAllDay = Boolean(todo.dueDay);
         event.dataTransfer.setData(dragType, todo.id);
         event.dataTransfer.setData(dragType + '-due', todo.dueAt);
+        event.dataTransfer.setData(dragType + '-day', todo.dueDay || '');
         event.dataTransfer.effectAllowed = 'move';
       } },
       high && h('span', { 'aria-hidden': 'true' }, '⚑ '), h('span', null, time), ' ', todo.title, reminding && ' ⏰');
   }
   function slotTime(cell, hour, y) {
-    if (hour === undefined) return undefined;
+    if (hour === undefined || hour === 'all') return undefined;
     if (hour === 'end') return '23:59';
     const box = cell.getBoundingClientRect();
     const fraction = Math.min(1, Math.max(0, (y - box.top) / box.height));
@@ -136,7 +154,7 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
         const cell = event.currentTarget;
         if (previewCell !== cell) clearPreview();
         previewCell = cell;
-        cell.dataset.dropLabel = slotTime(cell, hour, event.clientY) ?? key;
+        cell.dataset.dropLabel = draggedAllDay || hour === 'all' ? key + ' · 全天' : slotTime(cell, hour, event.clientY) ?? key;
       },
       ondragleave: event => {
         if (event.currentTarget === previewCell && !previewCell.contains(event.relatedTarget)) clearPreview();
@@ -148,7 +166,8 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
         const originalDueAt = event.dataTransfer.getData(dragType + '-due');
         if (!todo || !originalDueAt) return;
         event.preventDefault();
-        move(todo, key, slotTime(event.currentTarget, hour, event.clientY), originalDueAt);
+        move(todo, key, slotTime(event.currentTarget, hour, event.clientY), originalDueAt,
+          event.dataTransfer.getData(dragType + '-day'), hour === 'all');
       } }, children);
   }
   function dayButton(day, label, accessibleLabel = `查看 ${localDate(day)}`) {
@@ -167,20 +186,21 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
       }));
   } else {
     const headers = days.map(day => dayButton(day, `${weekdays[day.getDay()]} ${day.getMonth() + 1}/${day.getDate()}`));
-    const hours = ['end', ...Array.from({ length: 24 }, (_, i) => i)];
+    const hours = ['all', 'end', ...Array.from({ length: 24 }, (_, i) => i)];
     content = h('div', { class: 'cal-grid cal-axis', style: { gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(5rem, 1fr))` } },
       h('span', { class: 'cal-head' }, '时间'), headers,
-      hours.map(hour => [h('span', { class: 'cal-hour' }, hour === 'end' ? '日末' : `${pad(hour)}:00`), ...days.map(day => {
+      hours.map(hour => [h('span', { class: 'cal-hour' }, hour === 'all' ? '全天' : hour === 'end' ? '日末' : `${pad(hour)}:00`), ...days.map(day => {
         const key = localDate(day);
-        const time = hour === 'end' ? '23:59' : `${pad(hour)}:00`;
+        const time = hour === 'all' ? '' : hour === 'end' ? '23:59' : `${pad(hour)}:00`;
         const entries = (dated.get(key) ?? []).filter(todo => {
+          if (todo.dueDay) return hour === 'all';
           const clock = localDate(todo.dueAt, true).slice(11);
           return clock === '23:59' ? hour === 'end' : Number(clock.slice(0, 2)) === hour;
         });
-        const slot = h('button', { type: 'button', class: 'cal-slot', 'aria-label': `添加待办 ${key} ${time}`, onclick: event => {
+        const slot = h('button', { type: 'button', class: 'cal-slot', 'aria-label': `添加待办 ${key} ${time || '全天'}`, onclick: event => {
           // Keyboard and assistive activation have no pointer coordinates.
           const selected = event.detail ? slotTime(event.currentTarget.parentElement, hour, event.clientY) : time;
-          add(key, selected);
+          add(key, selected || '');
         } }, '+');
         return cell(day, hour, slot, entries.map(entry));
       })]));
@@ -195,13 +215,14 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
         includeHour(localDate(earlier) === today ? earlier.getHours() : 0);
       }
       for (const todo of dated.get(key) ?? []) {
+        if (todo.dueDay) {includeHour(0);continue;}
         const date = new Date(todo.dueAt);
         // The day-end row sits above the time axis.
         includeHour(date.getHours() === 23 && date.getMinutes() === 59 ? 0 : Math.max(0, date.getHours() - 1));
       }
     }
   }
-  return h('section', { class: 'stack todo-calendar', 'aria-label': '待办日历', ondragend: clearPreview, onkeydown: event => {
+  return h('section', { class: 'stack todo-calendar', 'aria-label': '待办日历', ondragend: () => { draggedAllDay=false; clearPreview(); }, onkeydown: event => {
     if (event.metaKey || event.ctrlKey || event.altKey || event.target.matches('input, textarea, select')) return;
     if (event.key === 'ArrowLeft') step(-1);
     else if (event.key === 'ArrowRight') step(1);

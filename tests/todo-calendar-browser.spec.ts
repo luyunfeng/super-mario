@@ -403,3 +403,45 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await expect(receipts).not.toContainText('待确认');
 
 });
+
+test('全天待办按创建日期跨时区显示，改期保留全天，填入时刻后转为定时',{timeout:40000},async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'mario-all-day-'));
+  const server=await startServer({dataDir,demo:true,host:'127.0.0.1',port:0});
+  t.after(async()=>{await server.close();await rm(dataDir,{recursive:true,force:true});});
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(()=>browser.close());
+  const base=server.url+'/#projects/all/todos',name='跨时区全天合成记录';
+  const west=await browser.newPage({timezoneId:'America/Los_Angeles'});
+  await west.goto(base);
+  const panel=west.locator('#panel-todos');
+  await panel.getByLabel('添加待办',{exact:true}).fill(name);
+  await panel.getByLabel('截止日期',{exact:true}).fill('2030-04-01');
+  const sent=west.waitForResponse(r=>r.url().endsWith('/api/v1/todos') && r.request().method()==='POST');
+  await panel.getByRole('button',{name:'添加',exact:true}).click();
+  const response=await sent;assert.equal(response.status(),201,await response.text());
+  const created=await response.json() as Todo;
+  assert.equal(created.dueDay,'2030-04-01');assert.equal(created.dueAt,'2030-04-02T06:59:59.999Z');
+  const east=await browser.newPage({timezoneId:'Asia/Shanghai'});
+  await east.goto(base);
+  await expect(east.locator('#panel-todos .todo').filter({hasText:name})).toContainText('2030-04-01 · 全天');
+  await east.goto(base+'/day/2030-04-01');
+  const cal=east.getByRole('region',{name:'待办日历'}),entry=cal.getByRole('button',{name:new RegExp('全天.*'+name)});
+  await expect(cal.locator('[data-hour="all"]')).toContainText(name);
+  await east.goto(base+'/month/2030-04-01');
+  const moved=east.waitForResponse(r=>r.url().endsWith('/todos/'+created.id) && r.request().method()==='PATCH');
+  await entry.dragTo(cal.locator('[data-day="2030-04-03"]'));
+  const move=await moved;assert.equal(move.status(),200,await move.text());
+  assert.deepEqual(move.request().postDataJSON(),{expectedDueAt:created.dueAt,expectedDueDay:created.dueDay,
+    dueDay:'2030-04-03',dueAt:'2030-04-03T15:59:59.999Z'});
+  await expect(cal.locator('[data-day="2030-04-03"]')).toContainText(name);
+  await east.goto(base+'/detail/'+created.id);
+  await expect(east.locator('#panel-todos')).toContainText('截止 2030-04-03 · 全天');
+  await east.getByRole('button',{name:'编辑待办',exact:true}).click();
+  const edit=east.getByRole('dialog',{name:'编辑待办'}),clock=edit.getByLabel('截止时间',{exact:true});
+  await expect(edit.getByLabel('截止日期',{exact:true})).toHaveValue('2030-04-03');
+  await expect(clock).toHaveValue('');
+  await clock.fill('09:30');await edit.getByRole('button',{name:'保存',exact:true}).click();
+  await expect.poll(()=>server.app.store.get<Todo>('todos',created.id)?.dueAt).toBe('2030-04-03T01:30:00.000Z');
+  assert.equal(server.app.store.get<Todo>('todos',created.id)?.dueDay,undefined);
+  await east.goto(base+'/day/2030-04-03');await expect(cal.locator('[data-hour="9"]')).toContainText(name);
+});

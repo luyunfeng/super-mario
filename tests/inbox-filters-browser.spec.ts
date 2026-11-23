@@ -352,3 +352,36 @@ test('撤销本次归档只恢复本批两条；另一窗口改过其中一条�
   assert.deepEqual(stored(untouched.id),untouched);assert.deepEqual(stored(changed.id),changed);
   assert.deepEqual(stored(earlier.id),earlier);
 });
+
+test('收件多选共用全天期限，各自生成关联待办并归档', {timeout:40000}, async t => {
+  const f = await fixture(t);
+  const rows = [f.item('group-me'), f.item('group-other')];
+  await f.api('/inbox/'+rows[0].id+'/project', 'PATCH', {version:rows[0].version, projectId:f.project.id});
+  const page = await f.open();
+  const inbox = page.locator('#inbox');
+  await inbox.getByLabel('搜索收件箱',{exact:true}).fill('核对离线报告');
+  await inbox.getByRole('button',{name:'多选',exact:true}).click();
+  await inbox.getByRole('button',{name:'全选当前页',exact:true}).click();
+  await inbox.getByRole('button',{name:'转为待办（2）',exact:true}).click();
+  await expect(page.getByLabel('共用期限')).toHaveValue('today');
+  const result = await write(page,page.getByRole('button',{name:'创建待办',exact:true}),'/inbox/bulk','POST');
+  assert.equal(result.request.action,'todo');
+  const end = await page.evaluate(when => {
+    const d = new Date(when);
+    return [d.getFullYear(), d.getMonth()+1, d.getDate()].map(n=>String(n).padStart(2,'0')).join('-')+' '+d.toTimeString().slice(0,8);
+  }, result.request.dueAt);
+  assert.equal(end, result.request.dueDay+' 23:59:59');
+  assert.equal(result.body.updated,2);
+  const ids = new Set<string>();
+  for (const row of rows) {
+    const archived = f.stored<InboxItem>('inbox',row.id)!;
+    assert.ok(archived.archivedAt && archived.todoId);
+    const todo = f.stored<Todo>('todos',archived.todoId)!;
+    assert.equal(todo.title,row.title);
+    assert.equal(todo.dueDay,result.request.dueDay);
+    assert.equal(todo.dueAt,result.request.dueAt);
+    assert.equal(todo.projectId,archived.projectId);
+    ids.add(todo.id);
+  }
+  assert.equal(ids.size,2);
+});

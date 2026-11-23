@@ -111,6 +111,19 @@ function dueDate(value: unknown): string | undefined {
   if (text && Number.isNaN(Date.parse(text))) throw new InputError('截止日期格式无效');
   return text;
 }
+function todoDeadline(input: Record<string, unknown>): Pick<Todo, 'dueAt' | 'dueDay'> {
+  const dueAt = dueDate(input.dueAt);
+  if (input.dueDay === undefined) return { dueAt };
+  const day = input.dueDay;
+  if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day) || !dueAt || !/(?:Z|[+-]\d{2}:\d{2})$/.test(dueAt))
+    throw new InputError('全天待办需要日期和带时区的日末时间');
+  const end = Date.parse(day + 'T23:59:59.999Z');
+  // The date stays fixed across viewers. The instant must be local day-end in a possible UTC offset.
+  const offsetMinutes = (end - Date.parse(dueAt)) / 60000;
+  if (!Number.isInteger(offsetMinutes) || offsetMinutes < -720 || offsetMinutes > 840 ||
+      new Date(end).toISOString().slice(0, 10) !== day) throw new InputError('全天日期与截止时间不匹配');
+  return { dueAt, dueDay: day };
+}
 /** Owns application services. HTTP and future channels call the same methods. */
 export async function createWorkbench(config: AppConfig) {
   config = { ...config };
@@ -1786,7 +1799,7 @@ export async function createWorkbench(config: AppConfig) {
     const now = new Date().toISOString();
     const projectId = optionalText(input.projectId, '项目');
     const parentTodoId = parentFor(input.parentTodoId, projectId);
-    return { id: randomUUID(), ...continuationFields(input, projectId), afterTodoIds: dependenciesFor(input.afterTodoIds, parentTodoId, projectId), parentTodoId, priority: todoPriority(input.priority), responsiblePerson: optionalText(input.responsiblePerson, '负责人'), title: requiredText(input.title, '标题'), notes: optionalText(input.notes, '备注') ?? '', projectId, dueAt: dueDate(input.dueAt), reminderAt: dueDate(input.reminderAt), reminderVersion: 1, waitingOn: optionalText(input.waitingOn, '等待对象'), createdAt: now, updatedAt: now };
+    return { id: randomUUID(), ...continuationFields(input, projectId), afterTodoIds: dependenciesFor(input.afterTodoIds, parentTodoId, projectId), parentTodoId, priority: todoPriority(input.priority), responsiblePerson: optionalText(input.responsiblePerson, '负责人'), title: requiredText(input.title, '标题'), notes: optionalText(input.notes, '备注') ?? '', projectId, ...todoDeadline(input), reminderAt: dueDate(input.reminderAt), reminderVersion: 1, waitingOn: optionalText(input.waitingOn, '等待对象'), createdAt: now, updatedAt: now };
   }
   function registerChatTodo(input: Record<string, unknown>): Json {
     const requested = newTodo(input);
@@ -1796,7 +1809,7 @@ export async function createWorkbench(config: AppConfig) {
       const matches = store.list<Todo>('todos').filter(todo =>
         !todo.completedAt && todo.projectId === requested.projectId && todo.parentTodoId === requested.parentTodoId &&
         todo.continuesTodoId === requested.continuesTodoId && todo.title.normalize('NFC') === title &&
-        (todo.dueAt ? Date.parse(todo.dueAt) : undefined) === due);
+        todo.dueDay === requested.dueDay && (todo.dueAt ? Date.parse(todo.dueAt) : undefined) === due);
       if (matches.length > 1) throw new InputError('已有多个同名同期限待办，请查询并选定具体事项', 409);
       const existing = matches[0];
       if (existing && existing.continuationReason !== requested.continuationReason) throw new InputError('已有同名续办的交接说明不同，请核对现有待办', 409);
@@ -1901,7 +1914,8 @@ export async function createWorkbench(config: AppConfig) {
         throw new InputError('提醒版本必须为正整数');
       if (version !== (todo.reminderVersion ?? 1)) throw new InputError('提醒已变更，请核对当前提醒后再保存', 409);
     }
-    if (patch.expectedDueAt !== undefined && dueDate(patch.expectedDueAt) !== todo.dueAt) {
+    if ((patch.expectedDueAt !== undefined && dueDate(patch.expectedDueAt) !== todo.dueAt) ||
+        (patch.expectedDueDay !== undefined && patch.expectedDueDay !== (todo.dueDay ?? ''))) {
       throw new InputError('截止时间已被修改，请核对最新时间后重新改期', 409);
     }
     if (todo.deferredQuestion && todo.completedAt && patch.completed === false)
@@ -1920,7 +1934,10 @@ export async function createWorkbench(config: AppConfig) {
     if (patch.title !== undefined) next.title = requiredText(patch.title, '标题');
     if (patch.notes !== undefined) next.notes = optionalText(patch.notes, '备注') ?? '';
     if (patch.projectId !== undefined) next.projectId = optionalText(patch.projectId, '项目');
-    if (patch.dueAt !== undefined) next.dueAt = dueDate(patch.dueAt);
+    if (patch.dueAt !== undefined || patch.dueDay !== undefined) {
+      delete next.dueDay;
+      Object.assign(next, todoDeadline(patch));
+    }
     if (next.projectId !== todo.projectId) {
       if (todo.deferredQuestion) throw new InputError('提问待办属于原对话项目，无法移动',409);
       // A published draft belongs to its original audience. A later move back must not publish a project's draft.

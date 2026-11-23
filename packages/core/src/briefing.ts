@@ -28,16 +28,16 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
       && beforeEnd(todo.createdAt) && cutoff - Date.parse(todo.createdAt) < 7 * 86400000)
       .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id))
       .map(todo => ({ id: todo.id, title: todo.title }));
-    const overdue: { id: string; title: string; dueAt: string }[] = [];
+    const overdue: { id: string; title: string; dueAt: string; dueDay?: string }[] = [];
     const dueToday: typeof overdue = [];
     if (localDate) {
       for (const todo of scopedTodos) {
         if (!todo.dueAt || todo.completedAt || !beforeEnd(todo.createdAt)) continue;
         const time = Date.parse(todo.dueAt);
         if (!Number.isFinite(time)) continue;
-        const item = { id: todo.id, title: todo.title, dueAt: todo.dueAt };
+        const item = { id: todo.id, title: todo.title, dueAt: todo.dueAt, ...(todo.dueDay && { dueDay: todo.dueDay }) };
         if (time < cutoff) overdue.push(item);
-        else if (localDate.format(time) === morningDate) dueToday.push(item);
+        else if ((todo.dueDay ?? localDate.format(time)) === morningDate) dueToday.push(item);
       }
       for (const group of [overdue, dueToday]) {
         group.sort((a, b) => Date.parse(a.dueAt) - Date.parse(b.dueAt) || a.id.localeCompare(b.id));
@@ -89,6 +89,7 @@ export function formatWindowBrief(brief: ReturnType<typeof buildWindowBrief> & {
       const titles = items.slice(0, 20).map(item => {
         const title = item.title.slice(0, 200);
         if ('updatedAt' in item && typeof item.updatedAt === 'string') return title + '（最后更新 ' + date.format(new Date(item.updatedAt)) + '）';
+        if ('dueDay' in item && typeof item.dueDay === 'string') return title + '（' + item.dueDay + ' 全天）';
         if ('dueAt' in item && typeof item.dueAt === 'string') return title + '（' + date.format(new Date(item.dueAt)) + '）';
         if ('error' in item && typeof item.error === 'string') return title + '：' + item.error.slice(0, 200);
         if ('result' in item && typeof item.result === 'string') return title + '：' + item.result.slice(0, 200);

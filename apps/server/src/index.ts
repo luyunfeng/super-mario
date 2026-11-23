@@ -550,8 +550,11 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 200, app.workDecisions.changeFromWeb({ ...input, id: decodeURIComponent(decisionChange[1]!) }, !!decisionChange[2]));
         }
         if (path === '/api/v1/inbox' && method === 'GET') return json(res, 200, app.inbox.list());
-        if (path === '/api/v1/inbox/bulk' && method === 'POST')
-          return json(res,200,app.inbox.bulk(await body(req,64*1024)));
+        if (path === '/api/v1/inbox/bulk' && method === 'POST') {
+          const result=app.inbox.bulk(await body(req,64*1024));
+          for (const todo of result.created ?? []) app.events.publish('todos.changed',{id:todo.todoId});
+          return json(res,200,result);
+        }
         const handling = path.match(/^\/api\/v1\/inbox-handling\/(personal|mailbox)\/([^/]+)(?:\/(messages|suggestions)(?:\/([^/]+)\/(confirm|discard))?)?$/);
         if(handling){
           const ref={kind:handling[1] as 'personal'|'mailbox',id:decodeURIComponent(handling[2]!)};

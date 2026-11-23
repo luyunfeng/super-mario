@@ -108,7 +108,7 @@ export function createHomePage({ api, router, scope, store }) {
     const cutoff = now + day;
     const urgent = t => Number.isFinite(Date.parse(t.dueAt)) && Date.parse(t.dueAt) <= cutoff;
     const todoLink = t => link(router.href('projects', t.projectId || 'all', 'todos', 'detail', t.id),
-      t.title + (t.dueAt ? ' · ' + new Date(t.dueAt).toLocaleDateString() : ''));
+      t.title + (t.dueAt ? ' · ' + (t.dueDay ? t.dueDay + ' 全天' : new Date(t.dueAt).toLocaleDateString()) : ''));
     const briefing = (brief?.projects ?? []).filter(inScope);
     const windows = new Map(briefing.map(p => [p.projectId, p]));
     const counts = new Map();
