@@ -14,12 +14,17 @@ export function createAssistantSwitcher({api,store,router,scope,target}){
     return view.snapshotOwner===api.draftOwner() && !view.unauthorized &&
       ['assistant-profile','web-conversations'].every(id=>view.snapshot?.plugins?.some(p=>p.id===id && p.status==='active'));
   }
+  function mainLabel(){
+    const profile=store.view.snapshot?.mainAssistant;
+    return profile?.revision && profile.name !== '主助手' ? '主助手 · '+profile.name : '主助手';
+  }
   function update(){
     const here=target(),enabled=allowed() && !!here;
     mainButton.hidden=!enabled;threadButton.hidden=!enabled;
     if(drawer)for(const control of drawer.body.querySelectorAll('[data-roster-skills]'))control.hidden=!assistantSkillsEnabled(store);
     if(drawer)for(const control of drawer.body.querySelectorAll('[data-roster-prompts]'))control.hidden=!savedPromptsActive(store);
     if(drawer && (!enabled || opened.owner!==api.draftOwner() || opened.projectId!==here.projectId || opened.threadId!==here.threadId))drawer.close();
+    else if(drawer && opened.mainLabel!==mainLabel())opened.paint();
   }
   function open(){
     const here=target();if(!here || !allowed() || drawer)return;
@@ -70,9 +75,11 @@ export function createAssistantSwitcher({api,store,router,scope,target}){
       items=result.items;paint();
     }
     function paint(){
-      const counts=new Map([['主助手',1]]);
+      const primary=mainLabel();
+      opened.mainLabel=primary;
+      const counts=new Map([[primary,1]]);
       for(const row of items)counts.set(row.name,(counts.get(row.name) || 0)+1);
-      replace(choices,Button({label:'主助手',onClick:()=>{
+      replace(choices,Button({label:primary,onClick:()=>{
         if(busy || !current())return;
         view.close();scope.set(here.projectId || '');router.go('#chat');
       }}),items.map(row=>{
@@ -118,7 +125,7 @@ export function createAssistantSwitcher({api,store,router,scope,target}){
     choices.classList.add('roster-choices');
     const view=openDrawer({title:'切换助理',body:[choices,status,editor],
       onClose:()=>{if(drawer===view){drawer=null;opened=null;}}});
-    drawer=view;opened={...here,owner};
+    drawer=view;opened={...here,owner,paint,mainLabel:mainLabel()};
     void run(list);
   }
   update();return {mainButton,threadButton,update};

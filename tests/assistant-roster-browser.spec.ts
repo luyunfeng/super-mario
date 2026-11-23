@@ -32,7 +32,11 @@ test('Web 切换助理按项目恢复独立历史与草稿，主对话仍保留�
   await open();await list.getByRole('button',{name:'审阅助理',exact:true}).click();
   await expect(page).toHaveURL(projectThread);await expect(thread).toHaveValue('项目助理草稿');
   await expect(page.locator('.msg--user:visible .msg__bubble')).toHaveText('项目线的合成记录');
-  await open();await list.getByRole('button',{name:'主助手',exact:true}).click();
+  await open();
+  const renamed=await page.request.post(server.url+'/api/v1/assistant-profile',{headers:{authorization:'Bearer '+token},
+    data:{action:'save',name:'工作伙伴',revision:0}});
+  assert.equal(renamed.status(),200);
+  await list.getByRole('button',{name:'主助手 · 工作伙伴',exact:true}).click();
   await scope.selectOption('');await open();await list.getByRole('button',{name:'审阅助理',exact:true}).click();
   await expect(thread).toBeVisible();assert.notEqual(page.url(),projectThread);
   await expect(thread).toHaveValue('');await expect(page.locator('.msg--user:visible')).toHaveCount(0);
