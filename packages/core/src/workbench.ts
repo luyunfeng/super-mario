@@ -1075,7 +1075,7 @@ export async function createWorkbench(config: AppConfig) {
     store.put('todos', todo.id, todo); if (notify) changed('todos.changed', { id: todo.id });
     return todo;
   }
-  function updateTodo(id: string, patch: Record<string, unknown>): Todo {
+  function updateTodo(id: string, patch: Record<string, unknown>, fromWeb = false): Todo {
     const todo = store.get<Todo>('todos', id);
     if (!todo) throw new InputError('待办不存在', 404);
     if (patch.expectedAfterTodoIds !== undefined) {
@@ -1103,6 +1103,14 @@ export async function createWorkbench(config: AppConfig) {
     }
     if (patch.completed !== undefined && typeof patch.completed !== 'boolean') throw new InputError('completed必须为布尔值');
     const next = { ...todo, updatedAt: new Date().toISOString() };
+    if (patch.groupTaskOutcome !== undefined) {
+      if (!fromWeb || !todo.groupTask) throw new InputError('只有主人可在 Web 中为群任务填写公开回报。', 403);
+      if (patch.expectedGroupTaskOutcome !== (todo.groupTaskOutcome ?? '')) throw new InputError('群内回报结论已变更，请重新打开待办。', 409);
+      if (typeof patch.groupTaskOutcome !== 'string' || /[\r\n\u2028\u2029]/u.test(patch.groupTaskOutcome)
+        || Array.from(patch.groupTaskOutcome).length > 600) throw new InputError('群内回报结论须为不超过 600 字的单行文本。');
+      next.groupTaskOutcome = patch.groupTaskOutcome.trim();
+    }
+    if (todo.completedAt && patch.completed === false) delete next.groupTaskOutcome;
     if (patch.priority !== undefined) next.priority = todoPriority(patch.priority);
     if (patch.title !== undefined) next.title = requiredText(patch.title, '标题');
     if (patch.notes !== undefined) next.notes = optionalText(patch.notes, '备注') ?? '';

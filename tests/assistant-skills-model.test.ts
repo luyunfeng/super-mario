@@ -3048,6 +3048,9 @@ test('Web 和飞书询问怎样开工时提供表单说明并保留当前执行�
   const { server, api, ask, requests } = await fixture(t, req => {
     assert.equal(req.lastRole, 'user');
     assert.match(req.system, /全局机器人私聊发送 \/start 目标 或 \/开工/);
+    assert.match(req.system, /普通群实际 @ 已配对的全局机器人并发送 \/ai/);
+    assert.match(req.system, /10 分钟后才回原群原消息/);
+    assert.match(req.system, /引用任务承接消息或预览发送 \/noreply 取消/);
     assert.match(req.system, /只询问操作方法时不要派发/);
     assert.match(req.system, /收到编号只说明已登记/);
     assert.match(req.system, /结果未知时按原编号查询/);

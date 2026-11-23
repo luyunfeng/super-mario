@@ -15,6 +15,76 @@ function matchesScope(store, todo) {
   return !!current && (current.projectId ?? null) === (todo.projectId ?? null);
 }
 
+function groupTaskOutcome(api, store, todo) {
+  const owner = api.draftOwner();
+  const input = Input({});
+  const status = h('p', { class: 'small', role: 'status' });
+  const savedText = h('p', { class: 'small muted', hidden: true });
+  let base = '', latest = '', busy = false, review = false;
+  const valid = () => panel.isConnected && panel.closest('dialog')?.open !== false && !store.view.unauthorized &&
+    owner === api.draftOwner() && matchesScope(store, todo) && store.view.snapshot.todos.some(t => t.id === todo.id && t.groupTask === true);
+  const save = Button({ label: '保存群内回报结论', size: 'sm', onClick: async () => {
+    if (!valid() || busy || review) return;
+    const text = input.value.trim();
+    if (Array.from(text).length > 600 || /[\r\n\u2028\u2029]/u.test(text)) {
+      status.textContent = '请输入不超过 600 个字符的单行结论。'; return;
+    }
+    busy = true; sync();
+    try {
+      const result = await api.patch(todoPath(todo), { groupTaskOutcome: text, expectedGroupTaskOutcome: base });
+      if (!valid()) return;
+      base = latest = result.groupTaskOutcome ?? '';
+      input.value = base;
+      status.textContent = base ? '已保存群内回报结论。' : '已清空结论，完成时仅回报已完成。';
+      await store.refresh();
+    } catch (error) {
+      if (!valid()) return;
+      if (error.status === 409 || !error.status || error.status >= 500) {
+        review = true;
+        status.textContent = error.status === 409 ? '群内回报结论已在别处修改，输入内容已保留。' : '保存结果未知，输入内容已保留。';
+        await store.refresh();
+      } else status.textContent = error.message;
+    } finally {
+      busy = false;
+      if (valid()) update(store.view.snapshot.todos.find(t => t.id === todo.id));
+    }
+  } });
+  const acknowledge = Button({ label: '核对后保留草稿', size: 'sm', onClick: async () => {
+    if (!valid() || !review || busy) return;
+    const previouslyShown = latest;
+    busy = true; sync();
+    try {
+      await store.refresh();
+      if (!valid() || store.view.loadError) return;
+      latest = store.view.snapshot.todos.find(t => t.id === todo.id).groupTaskOutcome ?? '';
+      if (latest === previouslyShown) { base = latest; review = false; status.textContent = '已保留草稿，可编辑后保存。'; }
+    } finally { busy = false; if (valid()) sync(); }
+  } });
+  const panel = h('div', { class: 'stack' }, Field({ label: '群内回报结论', control: input,
+    hint: '完成待办前保存可向原群公开的一句结论。留空时仅回报已完成。' }), savedText, save, acknowledge, status);
+  function sync() {
+    input.disabled = busy;
+    save.disabled = busy || review || input.value.trim() === base;
+    acknowledge.hidden = !review; acknowledge.disabled = busy;
+    savedText.hidden = !review;
+    savedText.textContent = review ? '当前已保存结论：' + (latest || '（空）') : '';
+  }
+  function update(current) {
+    panel.hidden = !current?.groupTask || owner !== api.draftOwner() || store.view.unauthorized;
+    if (panel.hidden) { input.value = base = latest = ''; review = false; status.textContent = ''; }
+    else {
+      latest = current.groupTaskOutcome ?? '';
+      if (!busy && !review && base !== latest) {
+        if (input.value === base) input.value = base = latest;
+        else { review = true; status.textContent = '群内回报结论已在别处修改，输入内容已保留。'; }
+      }
+    }
+    sync();
+  }
+  input.addEventListener('input', sync);
+  return { panel, update };
+}
+
 function decisionSection(api, todo, valid) {
   const path = todoPath(todo) + '/decisions';
   const list = h('div', { class: 'stack', 'aria-live': 'polite' }, '正在读取决策…');
@@ -180,12 +250,14 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
   const attention = createAttention({ api, store, task: true });
   const reminder = reminderRecord(api, store, todo);
   const history = conversationHistory({ api, store, router, todo, close });
-  const el = h('div', { class: 'stack' }, summary, attention.el, history.panel, reminder.panel, replyRecord(api, store, todo),
+  const outcome = groupTaskOutcome(api, store, todo);
+  const el = h('div', { class: 'stack' }, summary, outcome.panel, attention.el, history.panel, reminder.panel, replyRecord(api, store, todo),
     decisionSection(api, todo, () => el.isConnected && el.closest('dialog')?.open !== false && matchesScope(store, todo)), next);
   function paint() {
     const snapshot = store.view.snapshot;
     const current = snapshot?.todos.find(item => item.id === todo.id);
     if (!current || !matchesScope(store, todo)) return;
+    outcome.update(current);
     reminder.update(current);
     history.update();
     attention.update((store.view.attention ?? []).filter(item => item.type === 'interaction' && item.todoId === current.id && item.projectId === current.projectId));

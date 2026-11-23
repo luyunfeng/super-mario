@@ -59,7 +59,7 @@ export function validateBotGroupConfig(input: { groupChats?: unknown; collaborat
 /** Private configuration only. Never publish these records into events or snapshots. */
 export interface FeishuBotSettings {
   id: string; name: string; appId: string; appSecret: string; enabled: boolean;
-  scope: BotScope; ownerDirectReply?: boolean; readGroup?: boolean; requireConfirmation: boolean; profile?: string;
+  scope: BotScope; ownerDirectReply?: boolean; readGroup?: boolean; groupTaskReportDelayMinutes?: number; requireConfirmation: boolean; profile?: string;
   executorId?: string; groupChats?: BotGroupAccess[]; collaboration?: BotCollaboration;
   revision: number; createdAt: string; updatedAt: string; archivedAt?: string;
 }
@@ -93,7 +93,8 @@ export function createFeishuBotConfig(dataDir: string, legacyAppId?: string) {
         || !Number.isSafeInteger(row.revision) || row.revision < 1 || typeof row.appSecret !== 'string'
         || typeof row.enabled !== 'boolean' || typeof row.requireConfirmation !== 'boolean') throw new Error('机器人配置文件格式无效');
       if (row.collaboration?.peerBotIds.includes(row.id)) throw new Error('peerBotIds 不能包含机器人自身');
-      return { ...row, scope: validateBotScope(row.scope) };
+      const scope = validateBotScope(row.scope);
+      return { ...row, scope, ...(scope.kind === 'global' && { groupTaskReportDelayMinutes: row.groupTaskReportDelayMinutes ?? 10 }) };
     });
     if (new Set(rows.map(row => row.id)).size !== rows.length || new Set(rows.map(row => row.appId)).size !== rows.length) throw new Error('机器人配置包含重复标识');
     chmodSync(file, 0o600);
@@ -105,6 +106,9 @@ export function createFeishuBotConfig(dataDir: string, legacyAppId?: string) {
     for (const key of ['enabled', 'requireConfirmation', 'ownerDirectReply', 'readGroup'] as const) if (input[key] !== undefined && typeof input[key] !== 'boolean') throw new Error(`${key} 必须为布尔值`);
     for (const key of ['appSecret', 'profile'] as const) if (input[key] !== undefined && typeof input[key] !== 'string') throw new Error(`${key} 必须为文本`);
     if (input.scope !== undefined) validateBotScope(input.scope);
+    const delay = input.groupTaskReportDelayMinutes;
+    if (delay !== undefined && (!Number.isInteger(delay) || delay < 0 || delay > 60))
+      throw new Error('群任务回报预览时长须为 0 至 60 的整数分钟');
     validateBotGroupConfig({ executorId: input.executorId, groupChats: input.groupChats, collaboration: input.collaboration });
     if (input.collaboration && new Set(input.collaboration.peerBotIds).size !== input.collaboration.peerBotIds.length) throw new Error('peerBotIds 包含重复机器人');
   }
@@ -134,6 +138,7 @@ export function createFeishuBotConfig(dataDir: string, legacyAppId?: string) {
       const scope = input.scope === undefined ? previous?.scope : validateBotScope(input.scope);
       if (!appId || !name || !scope) throw new Error('需要机器人名称、appId 和 scope');
       if (input.readGroup === true && scope.kind !== 'global') throw new Error('只有全局机器人可启用主人读群');
+      if (input.groupTaskReportDelayMinutes !== undefined && scope.kind !== 'global') throw new Error('只有全局机器人可设置群任务回报预览时长');
       assertUnique(appId, id);
       const now = new Date().toISOString();
       const row: FeishuBotSettings = {
@@ -142,6 +147,8 @@ export function createFeishuBotConfig(dataDir: string, legacyAppId?: string) {
         enabled: input.enabled ?? previous?.enabled ?? true,
         ownerDirectReply: input.ownerDirectReply ?? previous?.ownerDirectReply ?? false,
         readGroup: scope.kind === 'global' && (input.readGroup ?? (previous?.appId === appId && previous.readGroup === true)),
+        ...(scope.kind === 'global' && { groupTaskReportDelayMinutes: input.groupTaskReportDelayMinutes ??
+          (previous?.appId === appId ? previous.groupTaskReportDelayMinutes ?? 10 : 10) }),
         requireConfirmation: input.requireConfirmation ?? previous?.requireConfirmation ?? true,
         ...(input.profile === undefined ? (previous?.profile ? { profile: previous.profile } : {}) : { profile: input.profile.trim() }),
         revision: (previous?.revision ?? 0) + 1, createdAt: previous?.createdAt ?? now, updatedAt: now,

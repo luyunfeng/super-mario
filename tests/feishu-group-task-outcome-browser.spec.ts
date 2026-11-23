@@ -1,0 +1,54 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test from 'node:test';
+import { chromium, expect } from '@playwright/test';
+import { startServer } from '../apps/server/src/index.ts';
+import type { Todo } from '../packages/protocol/src/index.ts';
+
+test('主人仅在群任务详情编辑公开结论，冲突保留草稿，清空后仅回报完成', { timeout: 45000 }, async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-public-conclusion-')), token = 'offline-test';
+  const server = await startServer({ dataDir: dir, token, demo: true, host: '127.0.0.1', port: 0 });
+  t.after(async () => { await server.close(); await rm(dir, { recursive: true, force: true }); });
+  const app = server.app;
+  const project = app.projects.create({ name: '合成验收' });
+  const normal = app.createTodo({ projectId: project.id, title: '普通待办' });
+  const todo = app.createTodo({ projectId: project.id, title: '群任务', notes: '私有执行备注不能预填' });
+  app.store.put('todos', todo.id, { ...todo, groupTask: true });
+  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.goto(server.url + '/#projects/' + project.id + '/todos?token=' + token);
+  const dialog = page.getByRole('dialog', { name: '待办详情', exact: true });
+  const field = dialog.getByRole('textbox', { name: '群内回报结论', exact: true });
+  const save = dialog.getByRole('button', { name: '保存群内回报结论', exact: true });
+  const open = (id: string) => page.locator('#panel-todos [data-id="' + id + '"]').getByRole('button', { name: '详情' }).click();
+  await open(normal.id);
+  await expect(field).toHaveCount(0);
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await open(todo.id);
+  await expect(field).toHaveValue('');
+  await field.fill('确认交付清单');
+  await save.click();
+  const persisted = () => app.store.get<Todo>('todos', todo.id)!;
+  await expect.poll(() => persisted().groupTaskOutcome).toBe('确认交付清单');
+  await field.fill('本页保留的结论');
+  // Another writer wins without notifying the browser ahead of its optimistic PATCH.
+  await page.route('**/api/v1/todos/' + todo.id, async route => {
+    app.store.put('todos', todo.id, { ...persisted(), groupTaskOutcome: '并发保存的结论' });
+    await route.continue();
+  }, { times: 1 });
+  await save.click();
+  await expect(dialog).toContainText('当前已保存结论：并发保存的结论');
+  await expect(field).toHaveValue('本页保留的结论');
+  await dialog.getByRole('button', { name: '核对后保留草稿' }).click();
+  await save.click();
+  await expect.poll(() => persisted().groupTaskOutcome).toBe('本页保留的结论');
+  await field.fill('😀'.repeat(601)); await save.click();
+  await expect(dialog).toContainText('不超过 600');
+  assert.equal(persisted().groupTaskOutcome, '本页保留的结论');
+  await field.fill(''); await save.click();
+  await expect.poll(() => persisted().groupTaskOutcome ?? '').toBe('');
+  assert.equal(persisted().notes, todo.notes);
+});

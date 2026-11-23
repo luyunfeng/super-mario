@@ -627,7 +627,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (path === '/api/v1/todos' && method === 'GET') return json(res, 200, url.searchParams.get('view') === 'sections' ? todoSections(app.todos(), new Date(), todoDecisionIds(app.store)) : app.todos());
         if (path === '/api/v1/todos' && method === 'POST') return json(res, 201, app.createTodo(await body(req)));
         const todo = path.match(/^\/api\/v1\/todos\/([^/]+)$/);
-        if (todo && method === 'PATCH') return json(res, 200, app.updateTodo(todo[1], await body(req)));
+        if (todo && method === 'PATCH') return json(res, 200, app.updateTodo(todo[1], await body(req), true));
         if (path === '/api/v1/projects' && method === 'GET') return json(res, 200, app.projects.list());
         if (path === '/api/v1/projects' && method === 'POST') return json(res, 201, await app.createProject(await body(req)));
         const restoreProject = path.match(/^\/api\/v1\/projects\/([^/]+)\/restore$/);

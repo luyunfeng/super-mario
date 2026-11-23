@@ -118,6 +118,34 @@ test('读群开关只在全局范围显示，默认关闭，可保存并再次�
   });
 });
 
+test('群任务回报预览时长随机器人回显，零分钟可保存，非法时长不提交', async () => {
+  await withBots(async (page, writes) => {
+    const form = formOf(page);
+    const field = form.getByLabel('群任务回报预览时长（分钟）');
+    const editB = page.locator('[data-bot-id=b]').getByRole('button', { name: '编辑', exact: true });
+    await editB.click();
+    await expect(field).toHaveValue('10');
+    for (const invalid of ['61', '-1', '0.5', '']) {
+      await field.fill(invalid);
+      await form.getByRole('button', { name: '保存手动接入' }).click();
+      assert.equal(writes.length, 0);
+    }
+    await field.fill('0');
+    await form.getByRole('button', { name: '保存手动接入' }).click();
+    await expect(form.locator('[name=name]')).toHaveValue('');
+    assert.equal(writes[0].body.groupTaskReportDelayMinutes, 0);
+    await editA(page);
+    await expect(field).not.toBeVisible();
+    await form.locator('[name=scope]').selectOption('global');
+    await expect(field).toHaveValue('10');
+    await editB.click();
+    await expect(field).toHaveValue('0');
+    await form.getByRole('button', { name: '取消编辑 / 新建' }).click();
+    await form.locator('[name=scope]').selectOption('global');
+    await expect(field).toHaveValue('10');
+  });
+});
+
 test('手动新建 POST 保存高级字段；扫码只提交基础契约并提示后续编辑', { timeout: 30000 }, async () => {
   await withBots(async (page, writes) => {
     const form = formOf(page);

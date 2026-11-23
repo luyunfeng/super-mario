@@ -1,4 +1,5 @@
 import { groupReadDelivery, type GroupReadService } from './feishu-group-read-delivery.ts';
+import { createGroupTaskReports } from './feishu-group-task-reports.ts';
 import { createGroupTasks } from './feishu-group-tasks.ts';
 import { groupTaskPrompt } from '../../../packages/core/src/prompts.ts';
 import { groupTaskCommand, readGroupCommand } from '../../../plugins/feishu-read-command.ts';
@@ -112,8 +113,15 @@ export function dashboardWebBase(config: Pick<AppConfig, 'host' | 'port'>, confi
 export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig, options: { factory?: FeishuBotFactory; webBase?: string; readGroup?: GroupReadService } = {}) {
   const groupTasks = createGroupTasks(app.store, input => {
     if (!app.createTodo) throw noDelivery('当前服务未提供待办创建能力。');
-    return app.createTodo(input);
+    const todo = { ...app.createTodo(input), groupTask: true as const };
+    app.store.put('todos', todo.id, todo);
+    return todo;
   });
+  // Older task sources already have durable todo IDs but predate the Web outcome editor.
+  for (const source of app.store.list<{ todoId?: string }>('feishu.group-tasks')) {
+    const todo = source.todoId && app.store.get<Todo>('todos', source.todoId);
+    if (todo && !todo.groupTask) app.store.put('todos', todo.id, { ...todo, groupTask: true });
+  }
   const groupReads = groupReadDelivery(app, options.readGroup);
   const settings = createFeishuBotConfig(config.dataDir, config.feishu?.appId);
   const webBase = dashboardWebBase(config, options.webBase);
@@ -1339,6 +1347,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       ...(bot.groupChats ? { groupChats: structuredClone(bot.groupChats) } : {}),
       ...(bot.collaboration ? { collaboration: structuredClone(bot.collaboration) } : {}),
       ...(bot.readGroup && { readGroup: true }),
+      ...(bot.scope.kind === 'global' && { groupTaskReportDelayMinutes: bot.groupTaskReportDelayMinutes ?? 10 }),
       ownerDirectReply: bot.ownerDirectReply === true, requireConfirmation: bot.requireConfirmation, ...(bot.profile ? { profile: bot.profile } : {}),
       connected: !closed && bot.enabled && pluginEnabled() && status.connected, paired,
       ...(!closed && !paired && !ownerCandidate(bot) && bot.enabled && pluginEnabled() ? { pairingCode: state.code } : {}),
@@ -1793,10 +1802,51 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (!platformId) throw new Error('群任务通知缺少飞书回执，送达结果未知。');
     return platformId;
   }
+  const taskReports = createGroupTaskReports(app.store, {
+    // Completion is confirmed in the workbench. Private discussion, notes and execution logs stay with the owner.
+    getOutcome(todoId) {
+      const todo = app.store.get<Todo>('todos', todoId);
+      return todo?.completedAt ? todo.groupTaskOutcome?.trim() || '这项待办已完成。' : undefined;
+    },
+    lookup(source) {
+      let bot;
+      try { bot = current(source.botId); } catch { return; }
+      const paired = owner(bot), state = runtime(bot.id), adapter = state.adapter, epoch = state.epoch;
+      if (!adapter || bot.appId !== source.appId || bot.scope.kind !== 'global' || !paired?.senderId
+        || paired.senderId !== source.senderId || groupReadBinding(bot, paired) !== source.binding) return;
+      const checked = (guard: () => void) => () => {
+        guard();
+        const now = owner(bot);
+        if (!active(bot.id, epoch, bot.revision) || state.adapter !== adapter || !now?.senderId
+          || groupReadBinding(bot, now) !== source.binding || groupTasks.recalled(bot.id, bot.appId, source.chatId, source.messageId))
+          throw noDelivery('群任务回报的原消息或配对已变化。');
+      };
+      const key = (kind: string, text: string) => digest([bot.id, source.todoId, kind, text,
+        app.store.get<Todo>('todos', source.todoId)?.completedAt]).slice(0, 32);
+      return { delayMinutes: bot.groupTaskReportDelayMinutes ?? 10,
+        preview: (text, guard) => sendTaskMessage(bot, adapter, paired.chatId, text, source.privateMessageId, key('preview', text), checked(guard)),
+        send: (text, guard) => sendTaskMessage(bot, adapter, source.chatId, text, source.messageId, key('result', text), checked(guard)) };
+    },
+  });
+  let reportTimer: ReturnType<typeof setInterval> | undefined;
+  const sweepReports = () => { if (!closed) void taskReports.sweep().catch(error => { if (!closed) app.events.publish('feishu.changed', { reason: redact(error) }); }); };
   async function receive(bot: FeishuBotSettings, epoch: number, text: string, source: Parameters<FeishuOptions['onMessage']>[1]) {
     if (!active(bot.id, epoch, bot.revision) || !['p2p', 'group'].includes(source.chatType ?? '') || !source.chatId || !source.messageId || !text.trim()) return;
     let paired = owner(bot);
     const group = source.chatType === 'group';
+    if (/^[／/]noreply$/iu.test(text.trim()) && !group && bot.scope.kind === 'global') {
+      if (source.senderType !== 'user' || !paired?.senderId || paired.senderId !== source.senderId || source.chatId !== paired.chatId) return;
+      const binding = groupReadBinding(bot, paired);
+      const result = taskReports.cancel(bot.id, binding, [source.rootId, source.parentId].filter((id): id is string => !!id));
+      const notices = { cancelled: '已取消这项待办向原群回报。', already: '这项待办已取消向原群回报。',
+        sent: '这项待办的群回报已经送达。', unknown: '群回报可能已经发出，送达结果未知。',
+        missing: '请在待办的私聊承接消息或回报预览下回复 /noreply。' };
+      const entry = await put(bot, { direction: 'outbox', eventKey: 'feishu-group-task-cancel:' + digest([binding, source.messageId]),
+        title: '群任务回报', text: notices[result], target: paired.chatId, requiresConfirmation: false },
+        bot.scope, { platformReplyTo: source.messageId, privateSenderId: paired.senderId });
+      if (entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
+      return;
+    }
     const task = group && groupTaskCommand(text, source.mentions);
     if (task && bot.scope.kind === 'global' && source.chatId !== commandGroup()?.chatId) {
       const initialOwner = paired, adapter = runtime(bot.id).adapter;
@@ -2402,6 +2452,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   }
   const off = app.events.subscribe(event => {
     if (closed || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) return;
+    if (event.type === 'todos.changed') sweepReports();
     if (event.type === 'runs.changed' && typeof event.data.id === 'string') {
       const run = app.store.get<Run>('runs', event.data.id);
       if (run?.sourceMessageId?.startsWith('feishu-start:')) startStateChanged(run);
@@ -2500,15 +2551,19 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     async start() {
       if (closed) throw noDelivery('控制器已关闭');
       await Promise.all([deletionCleanup.recover(), ...settings.list().filter(bot => !bot.archivedAt).map(bot => restart(bot.id))]);
+      if (!reportTimer && !closed) { reportTimer = setInterval(sweepReports, 60_000); reportTimer.unref(); }
+      sweepReports();
     },
     async close() {
       if (closed) return; closed = true;
+      if (reportTimer) clearInterval(reportTimer);
+      const reportDrain = taskReports.close();
       const pinDrain = pins.close(), deletionDrain = deletionCleanup.close();
       await progressStreams.close();
       for (const state of runtimes.values()) state.epoch++;
       await off(); await Promise.all([...runtimes.values()].map(state => state.operations));
       await Promise.allSettled([...runtimes.values()].map(state => state.adapter?.close()));
-      await Promise.allSettled([pinDrain, deletionDrain, ...tasks, ...inboxJobs.values(), ...[...relayJobs.values()].map(item => item.job)]);
+      await Promise.allSettled([pinDrain, deletionDrain, reportDrain, ...tasks, ...inboxJobs.values(), ...[...relayJobs.values()].map(item => item.job)]);
     },
     send, dispatchInbox, relay,
     async collect(id: string) {

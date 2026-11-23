@@ -46,6 +46,10 @@ export function createBotMailboxesUI({ api, element, getState, onChanged, showRe
   const readGroup = field(readSettings, 'readGroup', '允许已配对主人在群内读群');
   readGroup.type = 'checkbox'; readGroup.parentElement.classList.add('checkbox');
   readSettings.append(node('p', '在机器人所在群明确 @ 本机器人，发送「/读群 总结本群的待办」或「/read」。结果回复在原消息下，群成员可见。此开关适用于机器人所在的所有群。', 'muted'));
+  const reportDelay = field(readSettings, 'groupTaskReportDelayMinutes', '群任务回报预览时长（分钟）');
+  reportDelay.type = 'number'; reportDelay.min = '0'; reportDelay.max = '60'; reportDelay.step = '1';
+  reportDelay.defaultValue = '10'; reportDelay.required = true;
+  readSettings.append(node('p', '群内 /ai 任务有结果后，预览期结束才向原群回报。默认 10 分钟，可设为 0 至 60 分钟。设为 0 将立即回报。', 'muted'));
   form.append(readSettings);
   const enabled = field(form, 'enabled', '启用连接'); enabled.type = 'checkbox';
   confirmation.parentElement.classList.add('checkbox'); enabled.parentElement.classList.add('checkbox');
@@ -134,6 +138,8 @@ export function createBotMailboxesUI({ api, element, getState, onChanged, showRe
   }
   function scopeFields() {
     readSettings.hidden = scope.value !== 'global';
+    reportDelay.dataset.blocked = String(readSettings.hidden);
+    reportDelay.disabled = readSettings.hidden || busy || !!registration;
     project.parentElement.hidden = !['project', 'task'].includes(scope.value);
     project.required = scope.value === 'project';
     todo.parentElement.hidden = scope.value !== 'task'; todo.required = scope.value === 'task';
@@ -209,7 +215,7 @@ export function createBotMailboxesUI({ api, element, getState, onChanged, showRe
     executor.value = ''; options(executor, [[bot.executorId || '', '原绑定执行者已不可用']], '不绑定执行者'); executor.value = bot.executorId || '';
     name.value = bot.name; scope.value = bot.scope.kind;
     project.value = bot.scope.projectId || ''; render(); todo.value = bot.scope.todoId || '';
-    appId.value = bot.appId; secret.value = ''; confirmation.checked = bot.requireConfirmation; direct.checked = !!bot.ownerDirectReply; readGroup.checked = bot.readGroup === true; enabled.checked = bot.enabled;
+    appId.value = bot.appId; secret.value = ''; confirmation.checked = bot.requireConfirmation; direct.checked = !!bot.ownerDirectReply; readGroup.checked = bot.readGroup === true; reportDelay.value = String(bot.groupTaskReportDelayMinutes ?? 10); enabled.checked = bot.enabled;
     formTitle.textContent = `编辑机器人：${bot.name}`; form.scrollIntoView({ block: 'nearest' }); sync();
   }
   const human = value => String(value || '').replace(/WebSocket/gi, '实时连接').replace(/Herdr|SSH|hook/gi, '连接服务').replace(/\bID\b|appId|botId|projectId/gi, '标识').replace(/cli_[\w]+|ou_[\w]+|oc_[\w]+/g, '（已隐藏）').replace(/知识/g, '记忆').replace(/执行机/g, '电脑').replace(/事项/g, '待办');
@@ -297,6 +303,11 @@ export function createBotMailboxesUI({ api, element, getState, onChanged, showRe
       void write('/feishu/registrations', 'POST', { name: body.name, scope: body.scope, requireConfirmation: body.requireConfirmation }, '已创建扫码接入，请完成页面提示。', result => {
         registration = result; polls = 0; showRegistration(); schedulePoll();
       }); return;
+    }
+    if (value.kind === 'global') {
+      const minutes = reportDelay.valueAsNumber;
+      if (!Number.isInteger(minutes) || minutes < 0 || minutes > 60) { error.textContent = '群任务回报预览时长须为 0 至 60 的整数分钟。'; return; }
+      body.groupTaskReportDelayMinutes = minutes;
     }
     if (!appId.value.trim() || (!editingId && !secret.value.trim())) { error.textContent = '手动接入需要应用标识和应用密钥。'; return; }
     body.executorId = executor.value;
