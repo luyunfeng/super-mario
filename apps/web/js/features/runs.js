@@ -445,6 +445,14 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
           if (uncertain || api.token() !== launchToken || !drawer.el.open) return;
           if (binding && !executors.some(item => item.id === executor.value)) { replace(message, Banner({ tone: 'warn', children: '绑定电脑没有可用执行者，不能改用其他电脑。' })); return; }
           if (!prompt.value.trim()) { replace(message, Banner({ tone: 'danger', children: '请写下要做什么。' })); return; }
+          if (criteria.required && !criteria.value.trim()) {
+            replace(message, Banner({ tone: 'warn', children: '请填写验收标准，说明怎样算完成。' }));
+            criteria.focus(); return;
+          }
+          if ((minutes.required && !minutes.value) || minutes.validity.badInput || (minutes.value && !(Number(minutes.value) > 0 && Number(minutes.value) <= 10080))) {
+            replace(message, Banner({ tone: 'warn', children: '预计用时须大于 0 分钟且不超过一周。' }));
+            minutes.focus(); return;
+          }
           const body = { prompt: prompt.value.trim(), ...(parentRun && { worktreeRunId: parentRun.id }), ...(isolated && { isolatedWorktree: true, ...(canCompare && { copies: Number(copies.value) }) }), ...(executor.value ? { executorId: executor.value } : {}), ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}),
             ...(launchProjectId !== 'all' ? { projectId: launchProjectId } : {}), ...(todo.value ? { todoId: todo.value } : {}), ...(criteria.value.trim() ? { doneWhen: criteria.value.trim() } : {}),
             ...(minutes.value ? { expectMinutes: Number(minutes.value) } : {}), executionMode: mode.value };

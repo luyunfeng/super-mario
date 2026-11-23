@@ -227,6 +227,14 @@ test('直接执行继承文件夹、限定电脑，真实任务保留验收和�
     await page.route('**/api/v1/runs', async route => { body = route.request().postDataJSON(); await json(route, { error: '缺少验收要求' }, 400); });
     await page.getByLabel('要做什么').fill('真实任务');
     await page.getByRole('button', { name: '开始执行' }).click();
+    await expect(page.getByLabel('怎样算完成')).toBeFocused();
+    assert.equal(body, undefined);
+    await page.getByLabel('怎样算完成').fill('全部验证通过');
+    await page.getByRole('button', { name: '开始执行' }).click();
+    await expect(page.getByLabel('预计用时（分钟）')).toBeFocused();
+    assert.equal(body, undefined);
+    await page.getByLabel('预计用时（分钟）').fill('5');
+    await page.getByRole('button', { name: '开始执行' }).click();
     await expect(page.locator('dialog.drawer')).toContainText('缺少验收要求');
     assert.equal(body.executorId, 'exec-a'); assert.equal(body.cwd, '/work/alpha'); assert.equal(body.projectId, first.id);
   });
