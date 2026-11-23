@@ -10,7 +10,16 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   const server = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1', token: 'fixture', demo: true });
   t.after(async () => { await server.close(); await rm(dir, { recursive: true, force: true }); });
   const knowledge = server.app.knowledge();
-  const job = server.app.knowledgeCurator.addSource({ materialKind: 'meeting-transcript', meetingStartedAt: '2032-02-29T00:10+05:45', title: '合成会议原文', text: '待核对的结论' });
+  const submitted = await fetch(server.url + '/api/v1/knowledge/sources', {
+    method: 'POST', headers: { authorization: 'Bearer fixture', 'content-type': 'application/json' },
+    body: JSON.stringify({ materialKind: 'meeting-transcript', meetingStartedAt: '2032-02-29T00:10+05:45',
+      title: '合成会议原文', text: '待核对的结论', speakerNames: { A: '样本发言人' } }),
+  });
+  expect(submitted.status).toBe(201);
+  const job = await submitted.json();
+  expect(server.app.store.get('knowledge.sources', job.id)).toMatchObject({
+    text: '待核对的结论', speakerNames: { A: '样本发言人' }, meetingStartedAt: '2032-02-29T00:10:00+05:45',
+  });
   const entry = await knowledge.put({ title: '合成评审记录', content: '结论摘要', layer: 'personal' });
   const other = await knowledge.put({ title: '另一条记忆', content: '原始资料：raw/' + job.id + '.md', layer: 'personal' });
   server.app.store.put('knowledge.sources', job.id, { ...job, status: 'completed', knowledgeIds: [entry.id] });

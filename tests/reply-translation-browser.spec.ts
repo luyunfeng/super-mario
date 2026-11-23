@@ -87,12 +87,7 @@ test('主对话和项目回复使用隔离的模型请求翻译，切换原文�
   assert.equal((await post('translate-main', 'main', 'invalid-fixture-language')).status(), 400);
   assert.equal(requests.length, 0);
 
-  await page.addInitScript(() => {
-    localStorage.setItem('sm.splash.seen', 'true');
-    Object.defineProperty(window, 'speechSynthesis', { value: {
-      speak: (utterance: SpeechSynthesisUtterance) => { document.body.dataset.spoken = utterance.text; }, cancel() {},
-    } });
-  });
+  await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
   const submissions: unknown[] = [];
   page.on('request', r => { if (r.method() === 'POST' && r.url() === url) submissions.push(r.postDataJSON()); });
   await page.goto(server.url + '/#chat?token=' + token);
@@ -107,9 +102,7 @@ test('主对话和项目回复使用隔离的模型请求翻译，切换原文�
   await expect(main.locator('.msg__bubble')).not.toContainText('The offline report');
   await main.getByRole('button', { name: '复制正文', exact: true }).click();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), mainTranslation);
-  await main.getByRole('button', { name: '朗读回复', exact: true }).click();
-  assert.equal(await page.locator('body').getAttribute('data-spoken'), mainTranslation);
-  await main.getByRole('button', { name: '停止朗读', exact: true }).click();
+  await expect(page.getByRole('button', { name: /^(朗读回复|语音输入|录音转文字|录音后转写)$/ })).toHaveCount(0);
   await main.getByRole('button', { name: '查看原文', exact: true }).click();
   await expect(main.locator('.msg__bubble')).toContainText('The offline report is ready.');
   await main.getByRole('button', { name: '复制正文', exact: true }).click();
@@ -121,6 +114,8 @@ test('主对话和项目回复使用隔离的模型请求翻译，切换原文�
 
   await page.goto(server.url + '/#projects/' + project.id + '/workspace');
   const row = page.locator('#panel-workspace .msg--assistant');
+  await expect(row).toContainText(workText);
+  await expect(page.getByRole('button', { name: /^(朗读回复|语音输入|录音转文字|录音后转写)$/ })).toHaveCount(0);
   const workTranslate = row.getByRole('button', { name: '翻译回复', exact: true });
   rejectModel = true;
   const rejected = page.waitForResponse(r => r.url() === url);

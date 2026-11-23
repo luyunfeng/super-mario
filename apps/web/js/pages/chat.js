@@ -5,8 +5,6 @@ import { conversationImagesActive, createMessageImages, messageImages } from '..
 import { createTurnRetry, turnRetryActive } from '../features/retry-turn.js';
 import { createMessageQueue } from '../features/message-queue.js';
 import { stopTurnButton, queueLabel, turnQueueActive } from '../features/stop-turn.js';
-import { createReplyReadAloud } from '../features/reply-read-aloud.js';
-import { createVoiceInput } from '../features/voice-input.js';
 import { attachSentHistory } from '../features/sent-history.js';
 // 对话：主页。顶部是“等你处理”，中间是消息流，输入框固定在底部。
 import { h, keyedList, replace } from '../lib/dom.js';
@@ -101,8 +99,6 @@ export function createChatPage({ api, store, scope, router }) {
   const retryTurn = createTurnRetry(api,store);
   const files = createMessageFiles(api,store,input);
   const pictures = createMessageImages(input);
-  const readAloud = createReplyReadAloud(router, () => voice.reset());
-  const voice = createVoiceInput(input, readAloud.stop, api);
   const drafts = createConversationDrafts({ api, store });
   const quote = createMessageQuote({ drafts, input, store, router, scope });
   const edit = createMessageEdit({ input, quote, context: composerContext });
@@ -114,7 +110,7 @@ export function createChatPage({ api, store, scope, router }) {
   const status = h('p', { class: 'small composer__status', role: 'status' });
   const form = h('form', { class: 'composer', id: 'message-form' },
     recent.el, queue.el,
-    h('div', { class: 'composer__box' }, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, files.el, input, voice.caption, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, mentions.button, pictures.button, files.button, voice.button, voice.upload, h('span', { class: 'grow' }), send)), status);
+    h('div', { class: 'composer__box' }, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, files.el, input, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, mentions.button, pictures.button, files.button, h('span', { class: 'grow' }), send)), status);
 
   const el = h('section', { class: 'page page--chat', id: 'chat' }, h('div', { class: 'chat-code-main' }, top, scroller, form), code.el);
 
@@ -164,8 +160,6 @@ export function createChatPage({ api, store, scope, router }) {
     if (router.current.page !== 'chat') pictures.closeEditor();
     files.update(key,nextOwner,nextEnabled,{conversationId:'main',...(scope.get() && {projectId:scope.get()})});
     pictures.update(key,nextOwner,nextEnabled,conversationImagesActive(store));
-    readAloud.update(key, nextOwner, store.view.snapshot);
-    voice.update(router.current.page === 'chat' && key, nextOwner, store.view.snapshot, scope.get());
     const sameDraft = owner === nextOwner && enabled === nextEnabled && quotesEnabled === nextQuotes && draftKey === key;
     const recovery = store.view.snapshot?.plugins?.some(p=>p.id==='conversation-outbox' && p.status==='active');
     if (outboxEnabled !== recovery) { outboxEnabled = recovery; submissions.update(); }
@@ -247,7 +241,6 @@ export function createChatPage({ api, store, scope, router }) {
     let payload;
     try { payload=messagePayload(ctx,{text,...(projectId && {projectId})}); }
     catch(error) { status.textContent=error.message;return; }
-    voice.reset();
     const ticket = submissions.begin(ctx);
     if (!ticket) return;
     if (ticket.record.blocked) { status.textContent = '发送结果未知，请先核对发送回执。'; return; }
@@ -336,7 +329,7 @@ export function createChatPage({ api, store, scope, router }) {
         agentProgress(message, api),
         bubble, messageFiles(api,store,message,store.view.snapshot?.messages,messages),
         (!scope.get() || message.projectId === scope.get()) && retryTurn(message,store.view.snapshot?.messages,'main',id=>router.href('chat')+'?at='+encodeURIComponent(id)),
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, transcript.copyMessage(message, translation.displayedText), translation.action(message, bubble, transcript.renderMessage), personal && readAloud.action(message, translation.displayedText), canQuote && message.role === 'assistant' && quote.action(message, label))));
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, transcript.copyMessage(message, translation.displayedText), translation.action(message, bubble, transcript.renderMessage), canQuote && message.role === 'assistant' && quote.action(message, label))));
   }
 
   function paintMessages(list) {
@@ -345,7 +338,7 @@ export function createChatPage({ api, store, scope, router }) {
     const retryEnabled = turnRetryActive(store);
     const retried = new Set(list.filter(m=>m.retryOf).map(m=>m.retryOf));
     keyedList(messages, list, item => item.id, renderMessage, item => JSON.stringify([
-      prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, draftKey, queueEnabled, retryEnabled, retried.has(item.id), item,
+      prompts.epoch, favorites.epoch, transcript.active, translationEpoch, quotesEnabled, editEnabled, owner, draftKey, queueEnabled, retryEnabled, retried.has(item.id), item,
     ]));
   }
 

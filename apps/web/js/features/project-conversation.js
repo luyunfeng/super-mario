@@ -6,8 +6,6 @@ import { conversationImagesActive, createMessageImages, messageImages } from './
 import { createTurnRetry, turnRetryActive } from './retry-turn.js';
 import { createMessageQueue } from './message-queue.js';
 import { stopTurnButton, queueLabel, turnQueueActive } from './stop-turn.js';
-import { createReplyReadAloud } from './reply-read-aloud.js';
-import { createVoiceInput } from './voice-input.js';
 import { attachSentHistory } from './sent-history.js';
 // 项目工作对话复用真实隔离会话。快照只更新消息区，草稿按身份和项目隔离。
 import { h, replace, keyedList } from '../lib/dom.js';
@@ -53,8 +51,6 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const retryTurn = createTurnRetry(api,store);
   const files = createMessageFiles(api,store,text);
   const pictures = createMessageImages(text);
-  const readAloud = createReplyReadAloud(router, () => voice.reset());
-  const voice = createVoiceInput(text, readAloud.stop, api);
   let visible = false;
   const quote = createMessageQuote({ drafts, input: text, store, router, scope });
   const edit = createMessageEdit({ input: text, quote, context: composerContext });
@@ -75,7 +71,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const notice = h('div', { 'aria-live': 'polite' });
   const topic = h('p', { class: 'small', hidden: true });
   const selectedTodo = () => store.view.snapshot?.todos?.find(t => t.id === todoId && t.projectId === projectId);
-  const composer = h('div', { class: 'project-conversation__composer stack' }, topic, queue.el, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, files.el, text, voice.caption, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, mentions.button, pictures.button, files.button, voice.button, voice.upload, send), notice);
+  const composer = h('div', { class: 'project-conversation__composer stack' }, topic, queue.el, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, files.el, text, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, mentions.button, pictures.button, files.button, send), notice);
   const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, statusButton, messageSearch.button, favorites.button, transcript.button, code.toggle)), status, locationNote, readNotice, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
   let draftKey, owner, enabled, quotesEnabled, editEnabled, outboxEnabled, epoch = 0;
@@ -121,8 +117,6 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     if (!visible || router.current.page !== 'projects') pictures.closeEditor();
     files.update(key,nextOwner,nextEnabled,{conversationId:`project:${projectId}:work`,projectId,...(todoId && {todoId})});
     pictures.update(key,nextOwner,nextEnabled,conversationImagesActive(store));
-    readAloud.update(key, nextOwner, store.view.snapshot);
-    voice.update(visible && router.current.page === 'projects' && key, nextOwner, store.view.snapshot, projectId);
     const sameDraft = owner === nextOwner && enabled === nextEnabled && quotesEnabled === nextQuotes && draftKey === key;
     const recovery = store.view.snapshot?.plugins?.some(p=>p.id==='conversation-outbox' && p.status==='active');
     if (outboxEnabled !== recovery) { outboxEnabled = recovery; submissions.update(); }
@@ -240,8 +234,8 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
           statusText && h('span', { class: 'msg__meta' }, statusText),
           (!todoId || todoId === m.todoId) && retryTurn(m,rows,`project:${projectId}:work`,
             id=>router.href('projects',m.projectId,'workspace')+'?at='+encodeURIComponent(id)+(m.todoId?'&todo='+encodeURIComponent(m.todoId):'')),
-          h('span', null, stopTurnButton(api,m,projectId,queueEnabled), queuedEdit.action(m), favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble, transcript.renderMessage), m.conversationId === `project:${projectId}:work` && readAloud.action(m, translation.displayedText), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
-    }, m => JSON.stringify([prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, projectId, todoId, anchor, !!toolRecordAllowed(m), queueEnabled, retryEnabled, retried.has(m.id), m]));
+          h('span', null, stopTurnButton(api,m,projectId,queueEnabled), queuedEdit.action(m), favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble, transcript.renderMessage), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
+    }, m => JSON.stringify([prompts.epoch, favorites.epoch, transcript.active, translationEpoch, quotesEnabled, editEnabled, owner, projectId, todoId, anchor, !!toolRecordAllowed(m), queueEnabled, retryEnabled, retried.has(m.id), m]));
     if (historyQuery && !focused && el.isConnected && router.current.page === 'projects' && router.current.parts[1] === 'workspace') {
       const row = anchor ? messages.querySelector('[data-id="' + CSS.escape(anchor) + '"]') : messages.firstElementChild;
       if (row) { focused = true; row.tabIndex = -1; row.focus({ preventScroll: true }); row.scrollIntoView({ block: 'center' }); }
@@ -271,7 +265,6 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     let payload;
     try { payload=messagePayload(ctx,{text:body,todoId:ctx.todoId}); }
     catch(error) { notices.set(key,error.message);paint();return; }
-    voice.reset();
     const ticket = submissions.begin(ctx);
     if (!ticket) return;
     if (ticket.record.blocked) { notices.set(key, '发送结果未知，请先核对发送回执。'); paint(); return; }

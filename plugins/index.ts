@@ -61,11 +61,6 @@ export const readingFonts: Extension = {
 export const shortcutSettings: Extension = {
   id: 'shortcut-settings', name: '快捷键设置', capabilities: ['web.shortcuts'], activate() {},
 };
-export const replyReadAloud: Extension = {
-  id: 'reply-read-aloud', name: '回复朗读', capabilities: ['web.conversation.read-aloud'], activate() {},
-};
-
-export { voiceInput } from './voice-input.ts';
 
 export { readChatFilePreview } from './chat-file-preview.ts';
 export { readChatFileText } from './chat-file-text.ts';

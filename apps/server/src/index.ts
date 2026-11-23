@@ -81,7 +81,6 @@ const conversationReaders = new Map<string, { id: string; disabled: string; serv
   ['/api/v1/project-message-search', { id: 'conversation-search', disabled: '对话搜索插件已停用', service: 'conversation-search.projects', limit: 4096 }],
   ['/api/v1/conversation-export', { id: 'conversation-export', disabled: '对话导出插件已停用', service: 'conversation-export.markdown' }],
   ['/api/v1/message-favorites', { id: 'message-favorites', disabled: '消息收藏插件已停用', service: 'message-favorites.manage', limit: 8 * 1024 * 1024 + 1024 }],
-  ['/api/v1/audio-transcription', { id: 'voice-input', disabled: '语音输入插件已停用', service: 'voice-input.transcribe', limit: 12 * 1024 * 1024, timeoutMs: 120000 }],
   ['/api/v1/inbox-translation', { id: 'reply-translation', disabled: '回复翻译插件已停用', service: 'reply-translation.inbox', timeoutMs: 120000 }],
   ['/api/v1/reply-translation', { id: 'reply-translation', disabled: '回复翻译插件已停用', service: 'reply-translation.translate', timeoutMs: 120000 }],
 ]);
