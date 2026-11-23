@@ -112,19 +112,22 @@ export function searchPrivateThreadHits(store: Pick<Store, 'get' | 'list'>, row:
   if ((row.archived === true) !== archived || (tag && !row.tags?.includes(tag)))
     throw Object.assign(new Error('对话归档状态或标签已变化，请重新搜索'), { status: 409 });
   const list = threadMessages(store, [row]).get(row.threadId) ?? [];
-  let end = list.length;
-  if (before !== null) {
-    end = list.findIndex(message => message.id === before && pattern.test(message.text));
-    if (end < 0) throw Object.assign(new Error('检索位置已失效，请重新搜索'), { status: 409 });
-  }
   const hits = [];
-  for (let i = end - 1; i >= 0; i--) {
-    const match = pattern.exec(list[i].text);
+  let hitCount = 0, more = false, pastCursor = before === null;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const message = list[i];
+    const match = pattern.exec(message.text);
     if (!match) continue;
-    if (hits.length === 20) return { hits, nextBefore: hits[19].id };
-    hits.push(privateSearchHit(list[i], match));
+    hitCount++;
+    if (!pastCursor) {
+      pastCursor = message.id === before;
+      continue;
+    }
+    if (hits.length < 20) hits.push(privateSearchHit(message, match));
+    else more = true;
   }
-  return { hits, nextBefore: null };
+  if (!pastCursor) throw Object.assign(new Error('检索位置已失效，请重新搜索'), { status: 409 });
+  return { hits, hitCount, nextBefore: more ? hits.at(-1)!.id : null };
 }
 
 function* matchingThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived: boolean, tag?: string) {

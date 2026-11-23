@@ -50,6 +50,7 @@ test('独立对话记录按可见发言分页，排除其他配对、群组、�
   assert.equal(secondHits.nextBefore, '8');
   const finalHits = searchPrivateThreadHits(store, row, '发言', false, secondHits.nextBefore);
   assert.equal(finalHits.nextBefore, null);
+  assert.deepEqual([firstHits.hitCount, secondHits.hitCount, finalHits.hitCount], [44, 44, 44]);
   assert.deepEqual([...firstHits.hits, ...secondHits.hits, ...finalHits.hits].map(hit => hit.id),
     Array.from({ length: 44 }, (_, index) => String(47 - index)));
   for (const invisible of ['0', '1', '2', '3', 'withdrawn', 'cancelled']) {

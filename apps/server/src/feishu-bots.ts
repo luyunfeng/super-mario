@@ -3818,7 +3818,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       }
       if (threadId !== undefined) {
         const result = searchPrivateThreadHits(app.store, requireThread(id, threadId), query, archived, before, tag);
-        return { nextBefore: result.nextBefore, items: [{ ...privateThreadMetadata(id, threadId), hits: result.hits.map(hit => ({
+        return { nextBefore: result.nextBefore, items: [{ ...privateThreadMetadata(id, threadId), hitCount: result.hitCount, hits: result.hits.map(hit => ({
           ...hit, ...(!sourceId && { webCitation: '[查看原文](#agent/private-thread/' + [id, threadId, hit.id].map(encodeURIComponent).join('/') + ')' }),
         })) }] };
       }
