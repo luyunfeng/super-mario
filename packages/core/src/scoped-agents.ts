@@ -4,6 +4,7 @@ import type { BotScope } from '../../protocol/src/bots.ts';
 import type { AppConfig, MainAssistantProfile, ExecutorInfo, Message, Project, Todo, Json } from '../../protocol/src/index.ts';
 import type { Contributions, EventBus, Store } from '../../plugin-sdk/src/index.ts';
 import { SCOPED_WORK_SYSTEM_PROMPT } from './prompts.ts';
+import { readModelCatalog } from './agent-runtime/model-catalog.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 
 type Runtime = ReturnType<typeof createAgentRuntime>;
@@ -87,6 +88,11 @@ export function createScopedAgents(options: Options) {
         agents.set(binding.conversationId, agent);
       }
       return agent.runtime.post(text, binding.conversationId, context);
+    },
+    modelCatalog(botId: string) {
+      const binding = identity({ kind: 'global' }, botId);
+      return agents.get(binding.conversationId)?.runtime.modelCatalog()
+        ?? readModelCatalog(options.config.model, undefined, options.config.demo);
     },
     status(scope?: BotScope, botId?: string) {
       if (closed) return { available: false, reason: 'Bot 运行时已关闭' };

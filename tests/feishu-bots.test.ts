@@ -1571,3 +1571,86 @@ test('主人私聊只提示可用命令的拼写，双斜杠原文和普通 CLI 
   await scoped.instance.options.onMessage('/lits', human('scoped-list'));
   assert.equal(f.posts.at(-1)?.text, '/lits');
 });
+
+test('飞书模型目录只在主对话读取，重复投递只读一次，项目和引用保持隔离', async t => {
+  const f = fixture(t), bot = await f.add('ModelCatalog');
+  const receive = bot.instance.options.onMessage;
+  const human = (id: string) => ({ ...source(id), senderType: 'user' as const });
+  const catalog = { provider: 'fixture-provider', current: 'fixture-current', models: ['fixture-option', 'token=private-catalog-embedded'],
+    source: 'builtin' as const, demo: false, apiKey: 'private-catalog-key', baseUrl: 'https://private-catalog.example' };
+  let reads = 0;
+  f.app.modelCatalog = botId => { assert.equal(botId, bot.bot.id); reads++; return catalog; };
+  const projectPosts: string[] = [];
+  f.app.projectWorkspace = { async post(projectId, text) {
+    projectPosts.push(text);
+    return { id: 'project-message-' + projectPosts.length, projectId, text, role: 'user', createdAt: '',
+      conversationId: 'project:' + projectId + ':work' };
+  } };
+  f.store.put('projects', 'catalog-project', { id: 'catalog-project', name: '模型目录验收项目' });
+  await receive('/modellist', human('unpaired'));
+  await bot.pair();
+  await receive('/modellist', { ...human('other-user'), senderId: 'stranger' });
+  await receive('/modellist', { ...human('group-event'), chatType: 'group' });
+  assert.equal(reads, 0);
+  assert.equal(bot.instance.sent.length, 0);
+
+  await Promise.all([receive('/modellist', human('same-event')), receive('/modellist', human('same-event'))]);
+  assert.equal(reads, 1);
+  assert.equal(bot.instance.sent.length, 1);
+  const [, text] = bot.instance.sent[0];
+  for (const value of [catalog.provider, catalog.current, catalog.models[0]]) assert.ok(text.includes(value));
+  assert.match(text, /内置/);
+  assert.match(text, /账号权限/);
+  assert.doesNotMatch(JSON.stringify([text, bot.instance.contexts.at(-1)?.card]), /private-catalog/);
+
+  const acknowledge = bot.instance.contexts.at(-1)?.onSent;
+  assert.ok(acknowledge);
+  acknowledge('original-main');
+  const fallback = bot.instance.contexts.at(-1)?.beforeTextFallback;
+  assert.ok(fallback);
+  await receive('/list', human('list'));
+  const card = bot.instance.contexts.at(-1)?.card as { elements: Array<{ actions?: Array<{ value: Record<string, unknown> }> }> };
+  const choose = card.elements.flatMap(row => row.actions ?? []).find(action =>
+    action.value.kind === 'workbench.chat' && action.value.projectId === 'catalog-project');
+  assert.ok(choose);
+  await bot.instance.options.onCardAction!({ value: choose.value, messageId: 'project-choice', chatId: 'owner', operatorId: 'human' });
+  assert.throws(fallback, /模型目录回执/);
+  await receive('/modellist', human('selected-project'));
+  assert.match(bot.instance.sent.at(-1)![1], /\/main/);
+  assert.doesNotMatch(bot.instance.sent.at(-1)![1], /fixture-current|fixture-option/);
+  await receive('/modellist', { ...human('quoted-main'), parentId: 'original-main', rootId: 'project-choice' });
+  assert.match(bot.instance.sent.at(-1)![1], /fixture-current/);
+  await receive('/main', human('switch-main'));
+  for (const ref of [{ parentId: 'project-choice' }, { rootId: 'project-choice' }]) {
+    await receive('/modellist', { ...human('quoted-project-' + Object.keys(ref)[0]), ...ref });
+    assert.match(bot.instance.sent.at(-1)![1], /\/main/);
+  }
+  assert.equal(reads, 2);
+  assert.equal(projectPosts.length, 0);
+  assert.equal(f.posts.length, 0);
+  assert.equal(f.mailboxes.list().filter(row => row.direction === 'inbox').length, 0);
+
+  await receive('//modellist', { ...human('literal-project'), parentId: 'project-choice' });
+  assert.deepEqual(projectPosts, ['/modellist']);
+  await receive('//modellist', human('literal-main'));
+  assert.deepEqual(f.posts.map(post => post.text), ['/modellist']);
+  await f.restart();
+  await f.instances.at(-1)!.options.onMessage('/modellist', human('same-event'));
+  assert.equal(f.instances.at(-1)!.sent.length, 0);
+  assert.equal(reads, 2);
+});
+
+test('飞书模型目录按中文名单的 UTF-8 字节限制回执，并保留账号权限说明', async t => {
+  const f = fixture(t), bot = await f.add('ModelCatalogSize');
+  await bot.pair();
+  const models = Array.from({ length: 120 }, (_, index) => '目录项-' + index + '-' + '模'.repeat(80));
+  f.app.modelCatalog = () => ({ provider: 'fixture', current: 'chosen-model', models, source: 'configured', demo: true });
+  await bot.instance.options.onMessage('/modellist', { ...source('long-catalog'), senderType: 'user' });
+  const text = bot.instance.sent.at(-1)![1];
+  assert.match(text, /当前配置/);
+  assert.match(text, /演示模式/);
+  assert.ok(text.includes(models[0]) && text.includes(models[20]) && !text.includes(models.at(-1)!));
+  assert.ok(Buffer.byteLength(text, 'utf8') <= 16000);
+  assert.match(text, /Web.*完整目录/);
+  assert.match(text, /账号权限/);
+});

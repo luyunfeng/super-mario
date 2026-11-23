@@ -22,7 +22,10 @@ test('model drawer submits only active mode and preserves CLI drafts after switc
     const { openModelDrawer } = await import(path);
     const state:any = (window as any).launcherTest = { calls: [], fail: true, saved: 0 };
     state.open = (config = { mode: 'codex-cli', model: 'default' }) => openModelDrawer({ config,
-      api: { put: async (path: string, body: unknown) => { state.calls.push({ path, body }); if (state.fail) throw Object.assign(new Error('fixture rejected'), { status: 400 }); } },
+      api: { get: async (path: string) => {
+        if (path !== '/model/catalog') throw new Error('unexpected path');
+        return { source: 'configured', provider: 'codex-cli', current: 'default', models: ['default'], demo: true };
+      }, put: async (path: string, body: unknown) => { state.calls.push({ path, body }); if (state.fail) throw Object.assign(new Error('fixture rejected'), { status: 400 }); } },
       onSaved: () => { state.saved++; },
     });
     state.open();
@@ -30,6 +33,9 @@ test('model drawer submits only active mode and preserves CLI drafts after switc
   const command = page.getByLabel('启动命令（可选）', { exact: true });
   const directory = page.getByLabel('命令行配置目录（可选）', { exact: true });
   const mode = page.getByLabel('接入方式');
+  await page.getByRole('button', { name: '查看当前配置的模型清单' }).click();
+  await expect(page.getByLabel('模型清单（1）', { exact: true })).toHaveValue('default');
+  await expect(page.getByText(/演示模式。当前配置为 codex-cli/)).toBeVisible();
   await expect(command).toHaveValue('');
   await expect(directory).toHaveValue('');
   await command.fill('/tmp/test launcher/codex');
@@ -58,4 +64,21 @@ test('model drawer submits only active mode and preserves CLI drafts after switc
   ]);
   assert.equal(state.saved, 1);
   assert.deepEqual(errors, []);
+});
+
+test('Agent 页读取已保存的模型清单，保留未提交的模型名称', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-catalog-page-'));
+  const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: dir, demo: true, token: 'catalog-page-fixture',
+    model: { provider: 'openai', model: 'fixture-current', baseUrl: 'http://127.0.0.1:1' } });
+  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  t.after(async () => { await browser.close(); await server.close(); await rm(dir, { recursive: true, force: true }); });
+  const page = await browser.newPage();
+  await page.goto(server.url + '/#agent?token=catalog-page-fixture');
+  await page.getByRole('button', { name: '更改模型' }).click();
+  const input = page.getByRole('textbox', { name: '模型', exact: true });
+  await input.fill('fixture-draft');
+  await page.getByRole('button', { name: '查看当前配置的模型清单' }).click();
+  await expect(page.getByLabel('模型清单（1）')).toHaveValue('fixture-current');
+  await expect(input).toHaveValue('fixture-draft');
+  assert.equal(server.app.modelStatus().model, 'fixture-current');
 });

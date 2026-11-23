@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
+import { readModelCatalog } from './model-catalog.ts';
 import { acceptMessage } from '../message-receipts.ts';
 import { runWithAgentInput } from '../agent-input.ts';
 import { buildWorkContext, formatWorkContextMarkdown } from '../work-context.ts';
@@ -731,6 +732,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       if (config.demo) state = { available: true, reason: '本地演示模式：固定回复，不调用模型或外部 CLI。' };
       events.publish('agent.status', { conversationId: ownConversation, ...state });
     },
+    modelCatalog() { return readModelCatalog(config.model, closed ? undefined : session?.model, config.demo); },
     status() { return closed ? { available: false, reason: '运行时已关闭。' } : { ...state }; },
     async post(text: string, conversationId: string = ownConversation, context?: PostContext): Promise<Message> {
       if (closed) throw new Error('运行时已关闭。');

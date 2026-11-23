@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
+import { readModelCatalog } from '../packages/core/src/agent-runtime/model-catalog.ts';
 import { createModelConfig } from '../packages/core/src/model-config.ts';
 import { startServer } from '../apps/server/src/index.ts';
 
@@ -169,4 +170,40 @@ test('custom Anthropic gateway accepts a full messages URL and a model outside t
     assert.equal((await server.app.agent.ask('test gateway')).text, 'gateway OK');
     assert.deepEqual(requests.at(-1), ['/v1/messages', 'fixture-key', model]);
   }
+});
+
+test('authenticated model catalog reflects configuration changes without opening an upstream connection', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-model-catalog-'));
+  const runtime = await startServer({ host: '127.0.0.1', port: 0, dataDir: dir, demo: true, token: 'catalog-test' });
+  t.after(async () => { await runtime.close(); await rm(dir, { recursive: true, force: true }); });
+  const url = runtime.url + '/api/v1/model/catalog';
+  assert.equal((await fetch(url)).status, 401);
+  async function catalog() {
+    const response = await fetch(url, { headers: { Authorization: 'Bearer catalog-test' } });
+    assert.equal(response.status, 200);
+    return response.json();
+  }
+  assert.deepEqual(await catalog(), { provider: '', current: '', models: [], source: 'automatic', demo: true });
+  await runtime.app.configureModel({ mode: 'api', provider: 'openai', model: 'gpt-4o', apiKey: 'fixture-key' });
+  const builtin = await catalog();
+  assert.equal(builtin.provider, 'openai');
+  assert.equal(builtin.current, 'gpt-4o');
+  assert.equal(builtin.source, 'builtin');
+  assert.ok(builtin.models.includes(builtin.current));
+  assert.ok(builtin.models.length > 1);
+  await runtime.app.configureModel({ mode: 'api', provider: 'openai', model: 'fixture-outside-catalog' });
+  assert.ok((await catalog()).models.includes('fixture-outside-catalog'));
+  for (const config of [
+    { mode: 'api', provider: 'openai', model: 'fixture-gateway', baseUrl: 'http://127.0.0.1:1/private', apiKey: 'fixture-key' },
+    { mode: 'codex-cli', provider: 'codex-cli', model: 'default', cliCommand: join(dir, 'missing'), cliConfigDir: dir },
+  ]) {
+    await runtime.app.configureModel(config);
+    assert.deepEqual(await catalog(), { provider: config.provider, current: config.model, models: [config.model], source: 'configured', demo: true });
+  }
+});
+
+test('automatic model catalog uses only the model selected by the session', () => {
+  assert.deepEqual(readModelCatalog(undefined, { provider: 'openai', id: 'fixture-selected' }, false), {
+    provider: 'openai', current: 'fixture-selected', models: ['fixture-selected'], source: 'automatic', demo: false,
+  });
 });

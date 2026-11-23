@@ -11,6 +11,21 @@ export function openModelDrawer({ api, config, onSaved }) {
   const apiKey = Input({ name: 'apiKey', type: 'password', autocomplete: 'new-password', placeholder: config.apiKeyConfigured ? '已保存，留空保持不变' : '粘贴密钥' });
   const clearKey = Check({ label: '清除已保存的密钥', name: 'clearApiKey' });
   const model = Input({ name: 'model', value: config.model ?? '', placeholder: '模型名称', required: true });
+  const catalog = h('div', { class: 'stack', 'aria-live': 'polite' });
+  const showCatalog = Button({ label: '查看当前配置的模型清单', size: 'sm', onClick: async () => {
+    catalog.textContent = '正在读取模型清单…';
+    try {
+      const result = await api.get('/model/catalog');
+      const description = result.source === 'builtin' ? '内置目录，账号权限需另行核实。'
+        : result.source === 'configured' ? '仅列出配置中记录的模型。' : result.current ? '此会话自动选择了该模型。' : '自动选择，尚无已选模型记录。';
+      catalog.replaceChildren(h('p', null, result.demo ? '演示模式。' : '',
+        result.current ? `当前配置为 ${result.provider} / ${result.current}。` : '', description));
+      if (result.models.length) {
+        const list = Select({ name: 'catalogModels', options: result.models.map(name => [name, name]), value: result.current });
+        catalog.append(Field({ label: `模型清单（${result.models.length}）`, control: list, hint: '这里只供查阅。要修改配置，请填写模型名称并保存。' }));
+      }
+    } catch { catalog.textContent = '模型清单读取失败，可重新查看。'; }
+  } });
   const cliCommand = Input({ name: 'cliCommand', value: config.cliCommand ?? '', maxlength: 4096, placeholder: 'codex' });
   const cliConfigDir = Input({ name: 'cliConfigDir', value: config.cliConfigDir ?? '', maxlength: 4096, placeholder: '绝对路径（可选）' });
   const cliFields = h('div', { class: 'stack' },
@@ -63,7 +78,7 @@ export function openModelDrawer({ api, config, onSaved }) {
   });
   const drawer = openDrawer({
     title: '主 Agent 模型', subtitle: '主 Agent 和自动跟进共用这份配置，但对话各自独立。',
-    body: [Field({ label: '接入方式', control: mode }), apiFields, cliFields, Field({ label: '模型', control: model }), error],
+    body: [Field({ label: '接入方式', control: mode }), apiFields, cliFields, Field({ label: '模型', control: model }), showCatalog, catalog, error],
     footer: [Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();

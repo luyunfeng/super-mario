@@ -15,7 +15,7 @@ const dashboardAliases = new Map(Object.entries({
   dashboard: 'home', home: 'home', 工作台: 'home', 主页: 'home',
   tasks: 'tasks', 进展: 'tasks', 总览: 'tasks', inbox: 'inbox', 收件箱: 'inbox',
   main: 'main', 主对话: 'main', list: 'conversations', 对话: 'conversations',
-  status: 'status', 状态: 'status', today: 'today', 今日: 'today', 今天: 'today', help: 'help', 帮助: 'help',
+  modellist: 'modellist', status: 'status', 状态: 'status', today: 'today', 今日: 'today', 今天: 'today', help: 'help', 帮助: 'help',
 } as const));
 
 // Match the whole message so commands embedded in a question stay in the conversation.
@@ -56,7 +56,7 @@ export function privateCommandText(text: string, options: { global: boolean; ses
 export function dashboardHelp(sessions: boolean, scoped = false) {
   const status = '/status 或 /状态：查看当前会话状态';
   const text = scoped ? status : ['/home 或「工作台」：打开工作台', '/tasks 或 /进展：查看任务进展', '/inbox 或 /收件箱：查看收件',
-    '/agents [关键词] 或 /agent：查找执行会话', '/list 或 /对话：列出可切换的对话', '/main 或 /主对话：切回主 Agent', status, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
+    '/agents [关键词] 或 /agent：查找执行会话', '/list 或 /对话：列出可切换的对话', '/main 或 /主对话：切回主 Agent', '/modellist：查看主对话的模型目录', status, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
   const help = text + '\n在工作台对话中发送命令原文可再加一个斜杠，例如 //status。';
   return { text: help, card: cardDocument('工作台命令', cardSection('在此私聊中发送', help)) };
 }
@@ -104,6 +104,34 @@ export function conversationListDashboard(app: DashboardApp, bot: { conversation
     ...(page + 1 < pages ? [pageButton('下一页', page + 1)] : []), pageButton('刷新当前页', page),
   ]));
   return { text: lines.join('\n'), card: cardDocument('最近对话', elements), projectIds: visible.map(row => row.projectId).filter(Boolean) };
+}
+
+export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp['modelCatalog']>> | undefined, main: boolean) {
+  const lines: string[] = [];
+  const safe = (value: string) => publicText(value, 100).replace(/\s+/g, ' ');
+  if (!main) lines.push('请发送 /main 切回主对话，再直接发送 /modellist。');
+  else if (!catalog) lines.push('模型目录服务不可用。');
+  else {
+    if (catalog.demo) lines.push('当前处于演示模式。');
+    const sources: Record<string, string> = { builtin: '内置模型目录', configured: '当前配置', automatic: '运行时自动选择' };
+    lines.push('提供方 · ' + (safe(catalog.provider) || '未配置'), '当前模型 · ' + (safe(catalog.current) || '未配置'),
+      '目录来源 · ' + (Object.hasOwn(sources, catalog.source) ? sources[catalog.source] : '未知'), '候选模型');
+    const models = [...new Set(catalog.models.map(safe).filter(Boolean))];
+    const hint = '账号权限以提供方实际授权为准。';
+    const truncated = '目录较长，请在 Web 的模型设置中查看完整目录。';
+    // Reserve space for both footers so a Chinese catalog and the text fallback share one byte limit.
+    let bytes = Buffer.byteLength(['主对话模型目录', ...lines, truncated, hint].join('\n'));
+    for (const model of models) {
+      const line = '• ' + model;
+      bytes += Buffer.byteLength('\n' + line);
+      if (bytes > 16000) { lines.push(truncated); break; }
+      lines.push(line);
+    }
+    if (!models.length) lines.push('暂无候选模型。');
+    lines.push(hint);
+  }
+  const text = lines.join('\n');
+  return { text: '主对话模型目录\n' + text, card: cardDocument('主对话模型目录', [{ tag: 'div', text: cardPlain(text) }]) };
 }
 
 export function statusDashboard(target: string, status: ConversationStatus | string) {
