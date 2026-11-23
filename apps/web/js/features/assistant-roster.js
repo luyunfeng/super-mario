@@ -23,7 +23,21 @@ export function createAssistantSwitcher({api,store,router,scope,target}){
     const instructions=h('textarea',{class:'textarea',rows:4,maxLength:4000,'aria-label':'助理指令'});
     const choices=h('div',{class:'stack'}),status=h('p',{role:'status',class:'small muted'});
     const create=h('button',{type:'submit',class:'btn btn--primary'},'创建并打开助理');
-    let busy=false,candidate;
+    const caption=h('summary',{},'新建助理'),latest=h('div',{class:'stack'});
+    const cancel=Button({label:'取消编辑',onClick:()=>finishEdit()});cancel.hidden=true;
+    let busy=false,candidate,editing,items=[],creation;
+    function edit(row){
+      if(!editing)creation={name:title.value,text:instructions.value,open:editor.open};
+      editing=row;title.value=row.name;instructions.value=row.instructions;
+      caption.textContent='编辑助理';create.textContent='保存助理资料';cancel.hidden=false;
+      status.textContent='';replace(latest);editor.open=true;title.focus();
+    }
+    function finishEdit(){
+      if(!editing)return;
+      editing=null;title.value=creation.name;instructions.value=creation.text;
+      caption.textContent='新建助理';create.textContent='创建并打开助理';cancel.hidden=true;
+      replace(latest);editor.open=creation.open;creation=null;
+    }
     function current(){
       const now=target();
       return drawer===view && view.el.open && allowed() && api.draftOwner()===owner && !!now && here.projectId===now.projectId && here.threadId===now.threadId;
@@ -49,25 +63,52 @@ export function createAssistantSwitcher({api,store,router,scope,target}){
     async function list(){
       const result=await api.post('/assistant-roster',{action:'list'});
       if(!current())return;
+      items=result.items;paint();
+    }
+    function paint(){
       const counts=new Map([['主助手',1]]);
-      for(const row of result.items)counts.set(row.name,(counts.get(row.name) || 0)+1);
+      for(const row of items)counts.set(row.name,(counts.get(row.name) || 0)+1);
       replace(choices,Button({label:'主助手',onClick:()=>{
         if(busy || !current())return;
         view.close();scope.set(here.projectId || '');router.go('#chat');
-      }}),result.items.map(row=>Button({label:counts.get(row.name)>1?row.name+' · '+row.id:row.name,onClick:()=>run(()=>activate(row.id))})));
+      }}),items.map(row=>{
+        const label=counts.get(row.name)>1?row.name+' · '+row.id:row.name;
+        return h('div',{class:'row'},Button({label,onClick:()=>run(()=>activate(row.id))}),
+          h('button',{type:'button',class:'btn btn--sm','aria-label':'编辑 '+label,onclick:()=>edit(row)},'编辑'));
+      }));
+    }
+    async function saveEdit(name,instructions){
+      const {id,revision=0}=editing;
+      try{
+        const saved=await api.post('/assistant-roster',{action:'update',id,revision,name,instructions});
+        if(!current())return;
+        if(saved?.id!==id || !Number.isSafeInteger(saved.revision))throw Error('未取得助理资料更新回执。');
+        items=items.map(row=>row.id===id?saved:row);paint();finishEdit();status.textContent='已保存助理资料。';
+      }catch(error){
+        if(error.status!==409)throw error;
+        await list();
+        if(!current())return;
+        const saved=items.find(row=>row.id===id);
+        if(!saved){finishEdit();throw Error('当前助理已不可用。');}
+        editing=saved;
+        replace(latest,h('strong',{},'当前已保存的资料'),h('p',{},saved.name),h('pre',{},saved.instructions || '未设置助理指令'));
+        status.textContent='助理资料已变化。请核对已保存的资料和你的草稿后，再决定是否保存。';
+      }
     }
     const form=h('form',{class:'stack',onsubmit:event=>{event.preventDefault();void run(async()=>{
       const name=title.value.trim(),text=instructions.value.trim();
       if(!name || [...name].length>40)throw Error('请输入 1 至 40 个字符的助理名称。');
       if([...text].length>2000)throw Error('助理指令最多 2000 个字符。');
+      if(editing){await saveEdit(name,text);return;}
       if(candidate?.name!==name || candidate.instructions!==text)candidate={id:uuid(),name,instructions:text};
       await api.post('/assistant-roster',{action:'create',...candidate});
       if(!current())return;
       await activate(candidate.id);
     });}},h('label',{class:'field'},'助理名称',title),
-    h('label',{class:'field'},'助理指令',instructions),create);
+    h('label',{class:'field'},'助理指令',instructions),latest,h('div',{class:'row'},create,cancel));
+    const editor=h('details',{},caption,form);
     choices.classList.add('roster-choices');
-    const view=openDrawer({title:'切换助理',body:[choices,status,h('details',{},h('summary',{},'新建助理'),form)],
+    const view=openDrawer({title:'切换助理',body:[choices,status,editor],
       onClose:()=>{if(drawer===view){drawer=null;opened=null;}}});
     drawer=view;opened={...here,owner};
     void run(list);

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Extension, ExtensionContext, Json, JsonObject, Store } from '../packages/plugin-sdk/src/index.ts';
 import type { MainAssistantProfile } from '../packages/protocol/src/index.ts';
 
@@ -7,20 +7,23 @@ function fail(status: number, message: string): never {
 }
 
 type Assistant = {id:string;name:string;instructions:string};
+type StoredAssistant = Assistant & {revision?:number;creationHash?:string};
+const assistantView = ({id,name,instructions,revision=0}:StoredAssistant) => ({id,name,instructions,revision});
+const creationHash = (name:string,instructions:string) => createHash('sha256').update(JSON.stringify([name,instructions])).digest('hex');
 type Thread = {id:string;projectId?:string};
-type Binding = {assistantId:string;threadId:string;projectId?:string};
+type Binding = {assistantId:string;threadId:string;projectId?:string;title?:string};
 const roster='assistant-profile.roster';
 const bindings='assistant-profile.thread-bindings', owners='assistant-profile.thread-owners';
 const uuid4=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const bindingKey=(assistantId:string,projectId?:string)=>JSON.stringify([assistantId,projectId??null]);
 
-export function readWebThreadAssistant(store: Pick<Store,'get'>, threadId:string):Assistant|undefined {
+export function readWebThreadAssistant(store: Pick<Store,'get'>, threadId:string):ReturnType<typeof assistantView>|undefined {
   const owner=store.get<Binding>(owners,threadId);
   if(!owner || owner.threadId!==threadId || store.get<Binding>(bindings,bindingKey(owner.assistantId,owner.projectId))?.threadId!==threadId) return;
   const thread=store.get<Thread>('web-conversations',threadId);
   if(thread?.id!==threadId || thread.projectId!==owner.projectId || store.get('web-conversations.deleted',threadId)) return;
-  const assistant=store.get<Assistant>(roster,owner.assistantId);
-  return assistant?.id===owner.assistantId ? assistant : undefined;
+  const assistant=store.get<StoredAssistant>(roster,owner.assistantId);
+  return assistant?.id===owner.assistantId ? assistantView(assistant) : undefined;
 }
 
 type UseWebConversations=(input:JsonObject)=>Promise<Json>;
@@ -30,13 +33,14 @@ function provideRoster({ store, events, provide, defer, contributions }: Extensi
   provide(roster,async input=>{
     if(!input || typeof input!=='object' || Array.isArray(input)) fail(400,'助理名册参数无效');
     const {action}=input;
-    if(action!=='list' && action!=='create' && action!=='open') fail(400,'助理名册操作无效');
-    const allowed=action==='list'?['action']:action==='create'?['action','id','name','instructions']:['action','id','projectId'];
+    if(action!=='list' && action!=='create' && action!=='update' && action!=='open') fail(400,'助理名册操作无效');
+    const allowed=action==='list'?['action']:action==='open'?['action','id','projectId']:
+      ['action','id','name','instructions',...(action==='update'?['revision']:[])];
     if(Object.keys(input).some(key=>!allowed.includes(key))) fail(400,'助理名册包含未知字段');
-    if(action==='list')return {items:store.list<Assistant>(roster)};
+    if(action==='list')return {items:store.list<StoredAssistant>(roster).map(assistantView)};
     if(typeof input.id!=='string'||!uuid4.test(input.id)) fail(400,'助理 ID 须为 UUID v4');
     const id=input.id.toLowerCase();
-    if(action==='create'){
+    if(action==='create'||action==='update'){
       if(typeof input.name!=='string'||/[\p{Cc}\p{Cs}\p{Bidi_Control}\p{Zl}\p{Zp}]/u.test(input.name)) fail(400,'助理名称须为单行文字');
       const name=input.name.trim();
       if(!name || [...name].length>40) fail(400,'助理名称须为 1 至 40 个字符');
@@ -44,12 +48,24 @@ function provideRoster({ store, events, provide, defer, contributions }: Extensi
       const instructions=input.instructions.replace(/\r\n?/g,'\n').trim();
       if([...instructions].length>2000)fail(400,'助理说明最多 2000 个字符');
       return store.transaction(()=>{
-        const prior=store.get<Assistant>(roster,id);
-        if(prior){
-          if(prior.name!==name||prior.instructions!==instructions)fail(409,'同一助理 ID 不能重复用于不同资料');
-          return prior;
+        const prior=store.get<StoredAssistant>(roster,id);
+        if(action==='update'){
+          const {revision}=input;
+          if(typeof revision!=='number'||!Number.isSafeInteger(revision)||revision<0||revision>=Number.MAX_SAFE_INTEGER)
+            fail(400,'助理资料版本无效');
+          if(!prior)fail(404,'未找到助理');
+          if((prior.revision??0)!==revision)fail(409,'助理资料已更新，请重新读取');
+          if(prior.name===name && prior.instructions===instructions)return assistantView(prior);
+          const next={id,name,instructions,revision:revision+1,creationHash:prior.creationHash??creationHash(prior.name,prior.instructions)};
+          store.put(roster,id,next);
+          events.publish('assistant-profile.roster-changed',{id});
+          return assistantView(next);
         }
-        const assistant={id,name,instructions};
+        if(prior){
+          if((prior.creationHash??creationHash(prior.name,prior.instructions))!==creationHash(name,instructions))fail(409,'同一助理 ID 不能重复用于不同资料');
+          return assistantView(prior);
+        }
+        const assistant={id,name,instructions,revision:0};
         store.put(roster,id,assistant);
         events.publish('assistant-profile.roster-changed',{id});
         return assistant;
@@ -72,7 +88,7 @@ function provideRoster({ store, events, provide, defer, contributions }: Extensi
       const saved=store.get<Binding>(bindings,key);
       if(saved && !store.get('web-conversations.deleted',saved.threadId))return saved;
       if(saved)store.remove(owners,saved.threadId);
-      const next={assistantId:id,threadId:randomUUID(),...scope};
+      const next={assistantId:id,threadId:randomUUID(),title:assistant.name,...scope};
       store.put(bindings,key,next);
       store.put(owners,next.threadId,next);
       return next;
@@ -80,7 +96,7 @@ function provideRoster({ store, events, provide, defer, contributions }: Extensi
     const threadId=binding.threadId;
     const registered=readWebThreadAssistant(store,threadId);
     const result=await useWebConversations(registered?{action:'get',id:threadId,...(projectId && {projectId})}:
-      {action:'create',id:threadId,title:assistant.name,...(projectId && {projectId})});
+      {action:'create',id:threadId,title:binding.title??assistant.name,...(projectId && {projectId})});
     if(!active)fail(503,'助理名册已停用');
     if(!result || typeof result!=='object'||Array.isArray(result)||result.id!==threadId||result.projectId!==projectId)
       fail(409,'独立对话登记与助理不符');

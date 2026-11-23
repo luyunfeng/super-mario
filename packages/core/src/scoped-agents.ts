@@ -121,11 +121,14 @@ export function createScopedAgents(options: Options) {
       let entry=agents.get(conversationId);
       if(!entry){
         const scope:BotScope=projectId?{kind:'project',projectId}:{kind:'global'};
-        const assistant = options.webThreadAssistant?.(id);
-        const guidance = assistant ? '\n' + webThreadAssistantGuidance(assistant) : '';
+        const assistantId = options.webThreadAssistant?.(id)?.id;
         const runtime=createAgentRuntime({...options,scope,conversationId,canUseScope:current,botContext:undefined,
-          ...(assistant && {mainAssistantProfile:undefined}),
-          systemPrompt:(projectId?SCOPED_WORK_SYSTEM_PROMPT:MAIN_AGENT_SYSTEM_PROMPT)+'\n'+WEB_THREAD_GUIDANCE+guidance});
+          ...(assistantId && {mainAssistantProfile:undefined, threadAssistantGuidance:() => {
+            const current = options.webThreadAssistant?.(id);
+            if (current?.id !== assistantId) throw new Error('助理与当前对话的绑定已变化，请重新打开');
+            return webThreadAssistantGuidance(current);
+          }}),
+          systemPrompt:(projectId?SCOPED_WORK_SYSTEM_PROMPT:MAIN_AGENT_SYSTEM_PROMPT)+'\n'+WEB_THREAD_GUIDANCE});
         entry={botId:conversationId,scope,conversationId,runtime};agents.set(conversationId,entry);
       }
       return entry.runtime.post(text,conversationId,{requestId:context.requestId,directWebInput:true,projectId});

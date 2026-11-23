@@ -116,6 +116,18 @@ test('SDK requests preserve the correct Web thread history within a shared proje
     assert.ok(!JSON.stringify(nextA).includes('fixture-answer-2'));
     assert.ok(!JSON.stringify(main).includes(aOnly) && !JSON.stringify(main).includes(bOnly));
     assert.doesNotMatch(system(main),/当前输入来自一段独立的 Web 对话/);
+    const updated=await post('/assistant-roster',{action:'update',id:profiles[0].id,revision:0,
+      name:'已改名助理',instructions:'更新工作规范-'+randomUUID()});
+    assert.equal(updated.revision,1);
+    const refreshed=system(await askA('继续原项目工作'));
+    const personalRefreshed=system(await ask('/web-conversations/'+personal.threadId+'/messages','web:'+personal.threadId,'继续个人工作',null));
+    for(const text of [refreshed,personalRefreshed]) {
+      assert.ok(text.includes(updated.name));
+      assert.equal(text.split(updated.instructions).length,2);
+      assert.ok(!text.includes(profiles[0].instructions) && !text.includes(mainName));
+    }
+    const untouched=system(await askB('保持原分工'));
+    assert.ok(untouched.includes(profiles[1].instructions) && !untouched.includes(updated.instructions));
     const question='请检索样本标识，排除当前问题的标识 '+randomUUID();
     const result=await post('/web-conversations/'+a.id+'/messages',{text:question});
     await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.replyTo===result.id && m.status==='done')));
