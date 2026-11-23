@@ -18,7 +18,7 @@ const inlineTokens = new RegExp([
   /\[查看文件\]\(#projects\/[A-Za-z0-9_-]{1,128}\/workspace\?file=(?:[A-Za-z0-9_.*+\-]|%[0-9A-Fa-f]{2})+\)/.source,
   /\[查看原文\]\(#projects\/[A-Za-z0-9_-]{1,128}\/workspace\?at=(?:[A-Za-z0-9_.*+\-]|%[0-9A-Fa-f]{2})+(?:&version=[a-f0-9]{64})?\)/.source,
   /\[查看对话\]\(#agent\/private-thread\/[A-Za-z0-9_-]{1,128}\/[A-Za-z0-9_-]{1,128}\)/.source,
-  /\[查看原文\]\(#chat\?thread=[a-f0-9-]{36}&at=(?:[A-Za-z0-9_.*+\-]|%[0-9A-Fa-f]{2}){1,512}\)/.source,
+  /\[查看原文\]\(#chat\?(?:thread=[a-f0-9-]{36}&)?at=(?:[A-Za-z0-9_.*+\-]|%[0-9A-Fa-f]{2}){1,512}\)/.source,
   /\[查看原文\]\(#agent\/private-thread\/[A-Za-z0-9_-]{1,128}\/[A-Za-z0-9_-]{1,128}\/(?:[A-Za-z0-9_.~-]|%[0-9A-Fa-f]{2}){1,512}\)/.source,
   /\[查看原文\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&source=[A-Za-z0-9_-]{1,128}(?:&line=[1-9][0-9]{0,8})?\)/.source,
   /\[查看修订\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&revision=(?:[a-f0-9]{40}|[a-f0-9]{64})\)/.source,

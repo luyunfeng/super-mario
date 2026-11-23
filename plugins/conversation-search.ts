@@ -400,8 +400,12 @@ function webMessages(context: ExtensionContext, input: Json, canReadFiles?:CanRe
     if (!matches.length) continue;
     if (!pastCursor) {pastCursor=row.id===before;continue;}
     if (hits.length===25) return {hits,nextBefore:hits[hits.length-1]!.id};
+    const location = new URLSearchParams();
+    if (thread) location.set('thread', conversationId.slice(4));
+    location.set('at', row.id);
+    const page = thread || conversationId === 'main' ? '#chat' : '#projects/' + encodeURIComponent(projectId!) + '/workspace';
     hits.push({id:row.id,role:row.role,createdAt:row.createdAt,text:matches[0]!.text,matches,
-      ...(thread && {webCitation:'[查看原文](#chat?'+new URLSearchParams({thread:conversationId.slice(4),at:row.id})+')'}),
+      webCitation: '[查看原文](' + page + '?' + location + ')',
       ...(row.status && {status:row.status}), ...(row.queueState && {queueState:row.queueState}),
       ...(rowProject && {projectId:rowProject}),...(row.todoId && {todoId:row.todoId})});
   }

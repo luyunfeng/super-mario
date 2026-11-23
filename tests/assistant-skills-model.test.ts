@@ -4725,6 +4725,7 @@ test('模型从注册工具发出限时提问，到期回合只读且不能冒�
 
 test('搜索本对话工具固定 Web 发言范围并排除当前检索提问', async t => {
   const query = '交接清单', oldText = '交接清单里有三份合成样张';
+  let citationPage = '#chat';
   let category:'quoted'|'tool_name'|'tool_input'|'tool_output'='quoted';
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
@@ -4736,6 +4737,7 @@ test('搜索本对话工具固定 Web 发言范围并排除当前检索提问', 
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
     const {hits} = JSON.parse(raw);
+    for (const hit of hits) assert.equal(hit.webCitation, '[查看原文](' + citationPage + '?' + new URLSearchParams({at:hit.id}) + ')');
     if (category==='tool_input' || category==='tool_output') {
       assert.equal(hits.length,1);
       const [match]=hits[0].matches;
@@ -4762,6 +4764,8 @@ test('搜索本对话工具固定 Web 发言范围并排除当前检索提问', 
       acceptMessage(server.app.store, {id, conversationId, requestId:randomUUID(),
         role:'user', text:'> '+oldText+'\n\n交接清单的数量待确认。', status:'done', createdAt:'2026-03-01T10:00:00.000Z'} satisfies Message);
     }
+    assert.equal(await ask('找一下我在主对话里引用过的交接清单原话。'),oldText);
+    citationPage = '#projects/' + project.id + '/workspace';
     const path='/projects/'+project.id+'/messages';
     assert.equal(await ask('找一下本对话中我引用过的交接清单原话。',path),oldText);
     category='tool_name';
