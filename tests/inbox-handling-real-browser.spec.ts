@@ -66,24 +66,36 @@ test('actual Web/HTTP/SQLite: source drawer → chat approval → edit current s
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);
 });
 
-test('待决定清单的计划链接打开卡片，已拒绝的计划显示失效提示', async t => {
+test('待决定清单打开计划与待发信件卡片，已拒绝的记录显示失效提示', async t => {
   const dataDir = await mkdtemp(join(tmpdir(), 'mario-plan-link-'));
   const server = await startServer({ dataDir, host: '127.0.0.1', port: 0, demo: true, token: 'fixture' });
   t.after(async () => { await server.close(); await rm(dataDir, { recursive: true, force: true }); });
   const plan = server.app.plans.propose({ title: '核对样本', tasks: [{ prompt: '核对样本', doneWhen: '记录结果', expectMinutes: 1 }] });
   const { pendingDecisionPage } = await import('../packages/core/src/work-context.ts');
-  const citation = pendingDecisionPage(server.app.store, { kind: 'global' }, 0).items.find(row => row.id === plan.id)!.webCitation;
+  const mail = server.app.mailboxes.put({ direction: 'outbox', botId: 'fixture', eventKey: 'draft', title: '确认草稿',
+    scope: { kind: 'global' }, target: 'fixture', text: '草稿正文', requiresConfirmation: true });
+  const items = pendingDecisionPage(server.app.store, { kind: 'global' }, 0).items;
+  const citations = [plan, mail].map(record => items.find(row => row.id === record.id)!.webCitation);
   server.app.store.put('messages', 'decision-link', { id: 'decision-link', conversationId: 'main', role: 'assistant',
-    status: 'done', createdAt: new Date().toISOString(), text: citation + ' [查看待决定事项](https://synthetic.example/plan)' });
+    status: 'done', createdAt: new Date().toISOString(), text: citations.join(' ') + ' [查看待决定事项](https://synthetic.example/plan)' });
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
   t.after(() => browser.close());
   const page = await browser.newPage();
   await page.goto(server.url + '/#chat?token=fixture');
   const link = page.getByRole('link', { name: '查看待决定事项', exact: true });
-  await expect(link).toHaveCount(1);
-  await link.click();
+  await expect(link).toHaveCount(2);
+  await link.first().click();
   await expect(page.locator(`#attention [data-id="plan:${plan.id}"]`)).toBeFocused();
   server.app.plans.reject(plan.id, plan.version);
   await page.reload();
   await expect(page.getByText('当前待处理列表中没有这条计划。')).toBeVisible();
+  await link.last().click();
+  const card = page.locator(`#attention [data-id="mailbox:${mail.id}"]`);
+  await expect(card).toBeFocused();
+  await expect(card.getByRole('button', { name: '确认发送' })).toBeVisible();
+  assert.equal(server.app.mailboxes.get(mail.id).status, 'pending');
+  await card.getByRole('button', { name: '拒绝' }).click();
+  await expect.poll(() => server.app.mailboxes.get(mail.id).status).toBe('rejected');
+  await page.reload();
+  await expect(page.getByText('当前待处理列表中没有这条信件。')).toBeVisible();
 });

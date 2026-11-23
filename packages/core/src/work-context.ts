@@ -1,5 +1,5 @@
 import type { ReviewEvidenceReader } from './run-review.ts';
-import type { Approval, BotScope, ExecutorInfo, MachineInfo, Project, Run, Todo } from '../../protocol/src/index.ts';
+import type { Approval, BotScope, ExecutorInfo, MachineInfo, MailboxEntry, Project, Run, Todo } from '../../protocol/src/index.ts';
 import type { Store } from '../../plugin-sdk/src/index.ts';
 import type { WaitingReplySnapshot } from '../../protocol/src/index.ts';
 import type { Card } from './interactions.ts';
@@ -34,6 +34,15 @@ function pendingDecisions(store: WorkStore, visible: (relation: Relation) => boo
     }),
     ...store.list<Card>('interactions').filter(c => c.status === 'open' && c.handler === 'user').map(c =>
       ({ collection: 'interactions' as const, id: c.id, title: (c.title ?? '').slice(0, 180), version: c.version, createdAt: c.createdAt, ...ownership(c) })),
+    ...store.list<MailboxEntry>('event.mailboxes').filter(entry => entry.status === 'pending' && entry.requiresConfirmation
+      && entry.scope.kind !== 'unmarked'
+      // A task may move after a letter was queued. Respect its recorded scope as well as its current owner.
+      && (entry.scope.kind !== 'task' || !entry.scope.projectId || visible(entry.scope))
+      && !(entry.resultId && store.get('inbox', entry.resultId))).map(entry => ({
+      collection: 'mailboxes' as const, id: entry.id, direction: entry.direction, title: entry.title.slice(0, 180),
+      version: entry.version, createdAt: entry.createdAt,
+      ...ownership(entry.scope.kind === 'task' || entry.scope.kind === 'project' ? entry.scope : {}),
+    })),
     // Mixed-project plans must not leak their title into a restricted context.
     ...store.list<Plan>('plans').filter(p => p.status === 'pending' && p.tasks.length > 0 && p.tasks.every(t => visible(ownership(t)))).map(p =>
       ({ collection: 'plans' as const, id: p.id, title: (p.title ?? '').slice(0, 180), version: p.version, createdAt: p.createdAt, ...ownership(p.tasks[0]) })),
@@ -45,7 +54,7 @@ export function pendingDecisionPage(store: WorkStore, scope: BotScope, offset: n
     (scope.kind !== 'unmarked' && row.projectId === scope.projectId && (scope.kind !== 'task' || row.todoId === scope.todoId)))
     .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.collection.localeCompare(b.collection) || a.id.localeCompare(b.id));
   const end = offset + 25;
-  const routes = { approvals: 'approval', interactions: 'interaction', plans: 'plan' };
+  const routes = { approvals: 'approval', interactions: 'interaction', plans: 'plan', mailboxes: 'mailbox' };
   const items = decisions.slice(offset, end).map(row => ({
     ...row, webCitation: `[查看待决定事项](#chat?${routes[row.collection]}=${encodeURIComponent(row.id)})`,
   }));

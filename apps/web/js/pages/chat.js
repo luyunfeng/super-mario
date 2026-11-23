@@ -42,7 +42,7 @@ export function createChatPage({ api, store, scope, router }) {
   const recent = createRecentWork({ api, store, router, scope });
   const banner = h('div', { id: 'chat-banner' });
   const decisionNotice = h('div', { role: 'status', hidden: true });
-  const decisionLabels = { approval: '审批', interaction: '交互请求', plan: '计划' };
+  const decisionLabels = { approval: '审批', interaction: '交互请求', plan: '计划', mailbox: '信件' };
   let pendingDecision = '';
   function revealDecision() {
     if (!pendingDecision || router.current.page !== 'chat' || !store.view.snapshot) return;
