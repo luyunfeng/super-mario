@@ -31,15 +31,17 @@ export function createDeferredQuestions(store: Store, host: {
         store.put('todos',todo.id,{...todo,deferredQuestion:{...link,title:card.title,body:card.body,...(card.questions && {questions:card.questions})}});
         host.changed(todo.id);
       }
+      if (todo && link?.cardId === card.id && link.askedAt === card.createdAt && todo.projectId === card.projectId) return todo.id;
       return;
     }
     const source = host.source(card);
     if (!source) return;
-    store.transaction(()=>{
+    return store.transaction(()=>{
       if (store.get(collection,card.id)) return;
       const todo = host.create(card,source.input);
       store.put(collection,card.id,{cardId:card.id,todoId:todo.id,inputId:source.input.id,audience:source.audience,requestId:randomUUID()} satisfies Row);
       host.changed(todo.id);
+      return todo.id;
     });
   }
   const jobs = new Map<string,Promise<string>>();

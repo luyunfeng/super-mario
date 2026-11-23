@@ -52,6 +52,11 @@ export function forgetPrivateConversation(store: Store, conversationId: string) 
   if (store.list<FollowupRecord>('agent.followups').some(r => r.status === 'active' && r.sourceConversationId === conversationId))
     busy('对话仍有主动跟进安排');
 
+  // An open question blocks deletion above. A terminal relay waiting to retry
+  // loses its destination with this thread and must not retain quoted answers.
+  for (const row of store.list<{id:string;inputId:string}>('interaction.later-questions')) {
+    if (belongs(row.inputId)) store.remove('interaction.later-questions',row.id);
+  }
   for (const m of messages) {
     store.remove('messages', m.id);
     store.remove('input-paused', m.id);

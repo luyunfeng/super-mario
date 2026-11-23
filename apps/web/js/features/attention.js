@@ -78,6 +78,7 @@ export function createAttention({ api, store, task = false }) {
     }
     if (result?.status === 'unknown' || result?.delivery === 'unknown') return { text: '结果未知，请先核对，不要重复提交。', tone: 'danger' };
     if (result?.status === 'failed' || result?.delivery === 'failed') return { text: '操作没有执行，内容已保留，可以重试。', tone: 'danger', retry: true };
+    if (result?.status === 'withdrawn') return { text: '提问已关闭。' };
     if (action.path.endsWith('/reject')) return { text: '已拒绝' };
     if (action.path.endsWith('/archive')) return { text: '已忽略' };
     return { text: '已接收，等待结果' };
@@ -126,7 +127,7 @@ export function createAttention({ api, store, task = false }) {
 
     // 需要文字的动作（回答）放在输入框旁；其余动作是按钮，第一个为主操作。
     for (const [index, action] of item.actions.filter(entry => !entry.requiresText).entries()) {
-      actions.append(Button({ label: action.label, kind: index === 0 ? 'primary' : 'secondary', size: 'sm', onClick: () => submit(action), dataset: { action: action.label } }));
+      actions.append(Button({ label: action.label, kind: item.wait === false ? 'ghost' : index === 0 ? 'primary' : 'secondary', size: 'sm', onClick: () => submit(action), dataset: { action: action.label } }));
     }
     if (item.type === 'approval' && item.editable !== false && item.id.startsWith('approval:')) actions.append(Button({ label: '改一下', kind: 'ghost', size: 'sm', onClick: () => openEdit(item), dataset: { action: '改一下' } }));
     input?.addEventListener('keydown', (event) => {

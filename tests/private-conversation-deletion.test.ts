@@ -38,7 +38,15 @@ test('删除独立对话逐一核对真实工作关联，保留独立业务记�
   store.put('conversation.question-continuations', m.id, 'earlier-input');
   store.put('conversation.last-direct-input', 'audience', m.id);
   store.put('conversation.last-direct-input', 'other-audience', 'other-input');
+  store.put('interaction.later-questions','question',{id:'question',inputId:m.id,text:'待回报的合成答案'});
+  store.put('interaction.later-questions','other',{id:'other',inputId:'other-input',text:'其他对话'});
+  store.put('interactions','question',{id:'question',status:'open',wait:false});
+  assert.throws(remove,{status:409});
+  assert.ok(store.get('interaction.later-questions','question'));
+  store.put('interactions','question',{id:'question',status:'answered',wait:false});
   remove();
+  assert.equal(store.get('interaction.later-questions','question'),undefined);
+  assert.ok(store.get('interaction.later-questions','other'));
   assert.equal(store.get('conversation.question-continuations', m.id), undefined);
   assert.equal(store.get('conversation.last-direct-input', 'audience'), undefined);
   assert.equal(store.get('conversation.last-direct-input', 'other-audience'), 'other-input');

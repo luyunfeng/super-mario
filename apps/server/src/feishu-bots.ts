@@ -62,7 +62,7 @@ export interface FeishuBotsApp {
   dispatch?(input: Record<string, unknown>, key?: string, nativeApproved?: boolean, executionGuard?: () => void): Run;
   agentSessions?: { discover(input: Record<string, never>): Promise<SessionList>; proposeResume?(input: Record<string, unknown>): Promise<{id: string; status: string}> };
   approvals?: { propose(input: Pick<Approval, 'kind' | 'title' | 'details' | 'params' | 'todoId'>): Pick<Approval, 'id' | 'status'> };
-  interactions?: { answer(id: string, version: number, text: string | QuestionResponse[], by: string): Promise<Card> };
+  interactions?: { withdraw(id:string,version:number):Card; answer(id: string, version: number, text: string | QuestionResponse[], by: string): Promise<Card> };
   projectWorkspace?: { post(id: string, text: string): Promise<Message> };
   postScoped(text: string, scope: BotScope, botId: string, threadId?: string, todoId?: string): Promise<Message>;
   /** Host injects readOnly result context; it must never dispatch a new request. */
@@ -102,7 +102,7 @@ type Owner = { chatId: string; senderId?: string };
 type StartForm = { snapshot: StartCardSnapshot; key: string; sourceId: string; threadId?: string; conversationThreadId?: string; computers: Record<string, string> };
 type StartReceipt = { signature: string; runId?: string; reason?: string; sessionId?: string; demo?: boolean;
   selection?: { messageId: string; previous: string; binding: ChatBinding } };
-type CardNavigation = { questionList?: {messageId:string;rows:{id:string;version:number}[]}; questionForm?: {id:string;version:number;messageId:string}; start?: StartForm; threadIds?: string[]; homeMessageId?: string; agentSnapshot?: AgentCardSnapshot; sessionSnapshot?: SessionCardSnapshot; botId: string; appId: string; revision: number; owner: Owner; expiresAt: number };
+type CardNavigation = { questionList?: {messageId:string;rows:{id:string;version:number}[]}; questionForm?: {id:string;version:number;messageId:string;webOnly?:true}; start?: StartForm; threadIds?: string[]; homeMessageId?: string; agentSnapshot?: AgentCardSnapshot; sessionSnapshot?: SessionCardSnapshot; botId: string; appId: string; revision: number; owner: Owner; expiresAt: number };
 type Route = { audienceGeneration?: string; channel: 'feishu'; accountId: string; botId: string; target: string; scope: BotScope; revision: number; inputId: string; sourceMessageId?: string };
 type Relay = { sourceMessageId?: string; sourceFingerprint?: string; sourceRouteFingerprint?: string; sourceBotId: string; sourceRevision: number; targetRevision: number; parentEntryId?: string; path: string[]; rootId: string; expiresAt: number; chatId?: string; fingerprint: string };
 type AgentTarget = { startedBy?: string; cwd?: string; runId: string; executorId: string; machineId: string; sessionId: string; nativeSessionId?: string; projectId?: string; todoId?: string };
@@ -192,6 +192,33 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       || input.conversationId !== botConversationId(bot, route.conversationThreadId)) return;
     return input;
   }
+  function canViewQuestion(bot: FeishuBotSettings, paired: Owner, card: Card) {
+    if (card.wait !== false) return true;
+    const origin = app.store.get<{inputId?:string}>('interaction-origins',card.id)?.inputId;
+    if (!origin) return false;
+    const rootId = app.store.get<string>('conversation.question-continuations',origin) ?? origin;
+    const root = app.store.get<Message>('messages',rootId);
+    if (!root || root.role !== 'user' || root.readOnly || root.projectId !== card.projectId) return false;
+    if (rootId !== origin) {
+      const input = app.store.get<Message>('messages',origin);
+      if (!input || input.conversationId !== root.conversationId || input.todoId !== root.todoId || input.projectId !== root.projectId) return false;
+    }
+    if (root.projectId) {
+      const project = app.store.get<Project>('projects',root.projectId);
+      if (!project || project.archivedAt) return false;
+    }
+    if (root.todoId) {
+      const todo = app.store.get<Todo>('todos',root.todoId);
+      if (!todo || todo.projectId !== root.projectId) return false;
+    }
+    if (root.directWebInput && !app.store.get('message.routes',rootId))
+      return root.conversationId === 'main' || (!!root.projectId && root.conversationId === 'project:'+root.projectId+':work');
+    return Boolean(privateTurn(bot,paired,rootId));
+  }
+  function visibleQuestionId(bot: FeishuBotSettings, paired: Owner, id: string) {
+    const card = app.store.get<Card>('interactions',id);
+    return !!card && canViewQuestion(bot,paired,card);
+  }
   function progressInput(bot: FeishuBotSettings, paired: Owner, message: Message) {
     if (message.role !== 'assistant' || message.readOnly || (message.origin && message.origin !== 'user') || !message.replyTo) return;
     const input = privateTurn(bot, paired, message.replyTo);
@@ -258,8 +285,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       { id, botId: bot.id, appId: bot.appId, revision: bot.revision, owner: paired, expiresAt: Date.now() + 86400000 });
     return id;
   }
-  function dashboardPage(view: DashboardView, page: number, grant: string, messageId: string) {
-    const dashboard = buildFeishuDashboard(app,webBase,{view,page,navigation:grant});
+  function dashboardPage(bot: FeishuBotSettings, paired: Owner, view: DashboardView, page: number, grant: string, messageId: string) {
+    const dashboard = buildFeishuDashboard(app,webBase,{view,page,navigation:grant,canViewQuestion:card=>canViewQuestion(bot,paired,card)});
     const cap = app.store.get<CardNavigation>('feishu.card.navigation',grant);
     if (cap && (dashboard.questionRows || cap.questionList || cap.questionForm)) {
       app.store.put('feishu.card.navigation',grant,{...cap,questionForm:undefined,
@@ -305,7 +332,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         build(key, view, page) {
           const cap = navigation(bot, paired, key)!;
           return view === 'conversations' ? chatList(bot, paired, cap, page).card
-            : dashboardPage(view, page, cap, app.store.get<CardNavigation>('feishu.card.navigation',cap)?.homeMessageId ?? '').card;
+            : dashboardPage(bot, paired, view, page, cap, app.store.get<CardNavigation>('feishu.card.navigation',cap)?.homeMessageId ?? '').card;
         } };
     } catch { return; }
   });
@@ -608,6 +635,12 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         } catch (error) { result = '今日简报读取失败 · ' + redact(error); }
       }
       if (!valid()) return;
+      if (typeof result !== 'string') {
+        const decisions = result.decisions;
+        const items = decisions.items.filter(item => item.kind !== 'interaction' ||
+          visibleQuestionId(bot,paired,item.id.slice('interaction:'.length)));
+        if (items.length !== decisions.items.length) result = {...result,decisions:{...decisions,items,total:items.length}};
+      }
       const dashboard = todayDashboard(enabled() ? result : disabled, grant);
       const entry = await put(bot, { direction: 'outbox', eventKey, title: '今日简报', text: dashboard.text,
         target: paired.chatId, sourceMessageId: messageId, requiresConfirmation: false }, bot.scope,
@@ -1187,7 +1220,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       void track(bot.id, stopCommand(bot, epoch, paired, { chatId: paired.chatId, parentId: input.messageId }, input.messageId, true));
       return { toast: { type: 'info', content: '正在核对本轮中断请求。' } };
     }
-    if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || !['workbench.startForm','workbench.startSubmit','workbench.agents','workbench.agentSelect','workbench.today','workbench.navigate','workbench.chat','workbench.sessions','workbench.readSessions','workbench.resumeForm','workbench.resumeSubmit','workbench.questionForm','workbench.answerQuestion'].includes(String(value.kind))
+    if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || !['workbench.startForm','workbench.startSubmit','workbench.agents','workbench.agentSelect','workbench.today','workbench.navigate','workbench.chat','workbench.sessions','workbench.readSessions','workbench.resumeForm','workbench.resumeSubmit','workbench.questionForm','workbench.answerQuestion','workbench.closeQuestion'].includes(String(value.kind))
       || typeof value.navigation !== 'string'
       || !input.messageId) return fail;
     const paired = owner(bot);
@@ -1238,23 +1271,35 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       });
       return { toast: { type: 'success', content: '已选择执行会话。后续消息将为该会话申请输入审批，发送 /main 切回主对话。' } };
     }
-    if (value.kind === 'workbench.questionForm' || value.kind === 'workbench.answerQuestion') {
+    if (value.kind === 'workbench.questionForm' || value.kind === 'workbench.answerQuestion' || value.kind === 'workbench.closeQuestion') {
       const service = app.interactions;
       const question = typeof value.id === 'string' && app.store.get<Card>('interactions',value.id);
-      if (!service || !question || question.kind !== 'question' || question.handler !== 'user' || question.version !== value.version ||
+      if (!service || !question || !canViewQuestion(bot,paired,question) || question.kind !== 'question' || question.handler !== 'user' || question.version !== value.version ||
           question.status !== 'open' || !(Date.parse(question.expiresAt) > Date.now()))
         return {toast:{type:'info',content:'问题已变化，请返回工作台重新查看。'}};
       if (value.kind === 'workbench.questionForm') {
-        if ((question.questions || cap.questionList) && (cap.questionList?.messageId !== input.messageId ||
+        if ((question.wait === false || question.questions || cap.questionList) && (cap.questionList?.messageId !== input.messageId ||
             !cap.questionList.rows.some(row => row.id === question.id && row.version === question.version))) return fail;
         const {card, acceptsAnswer} = questionForm(question, value.navigation, webBase);
-        app.store.put('feishu.card.navigation',value.navigation,{...cap, questionForm:acceptsAnswer
-          ? { id:question.id, version:question.version, messageId:input.messageId } : undefined});
+        app.store.put('feishu.card.navigation',value.navigation,{...cap, questionForm:(acceptsAnswer || question.wait === false)
+          ? { id:question.id, version:question.version, messageId:input.messageId,...(!acceptsAnswer && {webOnly:true}) } : undefined});
         pins.displayed(bot.id, input.messageId, 'form', 0, card);
         return {card:{type:'raw',data:card}};
       }
       const grant = cap.questionForm;
-      if ((question.questions || grant) && (grant?.id !== question.id || grant.version !== question.version || grant.messageId !== input.messageId)) return fail;
+      if ((question.wait === false || question.questions || grant) && (grant?.id !== question.id || grant.version !== question.version || grant.messageId !== input.messageId)) return fail;
+      if (value.kind === 'workbench.closeQuestion') {
+        if (question.wait !== false || !grant) return fail;
+        try {
+          const closed = service.withdraw(question.id,question.version);
+          if (closed.status !== 'withdrawn') return fail;
+          const text = '提问已关闭，未提交答案。';
+          const card = cardDocument('提问已关闭',[{tag:'div',text:cardPlain(text)}],'grey');
+          pins.displayed(bot.id,input.messageId,'form',0,card);
+          return {toast:{type:'success',content:text},card:{type:'raw',data:card}};
+        } catch (error) { return {toast:{type:'error',content:redact(error)}}; }
+      }
+      if (grant?.webOnly) return {toast:{type:'info',content:'请打开 Web 工作台回答完整问题。'}};
       let answer: string | QuestionResponse[];
       try { answer = parseQuestionForm(question, input.formValue ?? {}, value.pick); }
       catch (error) { return {toast:{type:'error',content:redact(error)}}; }
@@ -1339,7 +1384,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     }
     if (!['home','tasks','inbox','projects','questions','conversations'].includes(String(value.view)) || !Number.isSafeInteger(value.page) || (value.page as number) < 0 || (value.page as number) > 100000) return fail;
     const dashboard = value.view === 'conversations' ? chatList(bot, paired, value.navigation, value.page as number)
-      : dashboardPage(value.view as DashboardView, value.page as number, value.navigation, input.messageId);
+      : dashboardPage(bot, paired, value.view as DashboardView, value.page as number, value.navigation, input.messageId);
     pins.displayed(bot.id, input.messageId, value.view as DashboardView | 'conversations', value.page as number, dashboard.card);
     return { toast: { type: 'success', content: '已读取最新状态' }, card: { type: 'raw', data: dashboard.card } };
   }
@@ -2552,7 +2597,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (view && paired) {
       const eventKey = `feishu-dashboard:${JSON.stringify([bot.id, bot.appId, source.messageId])}`;
       const dashboard = view === 'help' ? dashboardHelp(Boolean(app.agentSessions && paired.senderId))
-        : buildFeishuDashboard(app, webBase, { view, navigation: navigation(bot, paired, eventKey) });
+        : buildFeishuDashboard(app, webBase, { view, navigation: navigation(bot, paired, eventKey), canViewQuestion:card=>canViewQuestion(bot,paired,card) });
       const entry = await put(bot, { direction: 'outbox', eventKey, title: '工作台', text: dashboard.text,
         target: paired.chatId, sourceMessageId: source.messageId, requiresConfirmation: false }, bot.scope,
       { dashboard: { card: dashboard.card, owner: paired }, ...(view === 'home' && paired.senderId &&
@@ -2865,7 +2910,13 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         const prior=context.beforeSend;
         context.beforeSend=()=>{
           prior?.();
-          if(app.store.get<Card>('interactions',stamp.questionId!)?.withdrawnReason==='user_spoke')
+          const question = app.store.get<Card>('interactions',stamp.questionId!);
+          if (question?.wait === false) {
+            const paired = owner(bot);
+            if (!paired || target !== paired.chatId || !canViewQuestion(bot,paired,question))
+              throw noDelivery('稍后回答的提问已失去原私聊绑定。');
+          }
+          if(question?.withdrawnReason==='user_spoke')
             throw noDelivery('主人已在原对话发言，提问已撤回。');
         };
         context.beforeSend();
@@ -2884,18 +2935,18 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (stamp?.questionId && app.interactions && !stamp.group && !stamp.relay && bot.scope.kind === 'global' &&
           paired?.senderId && paired.chatId === target) {
         const q = app.store.get<Card>('interactions',stamp.questionId);
-        if (q?.kind === 'question' && q.handler === 'user' && q.status === 'open' && Date.parse(q.expiresAt) > Date.now()) {
+        if (q?.kind === 'question' && canViewQuestion(bot,paired,q) && q.handler === 'user' && q.status === 'open' && Date.parse(q.expiresAt) > Date.now()) {
           const navigationId=navigation(bot,paired,entry.id)!;
           const {card, acceptsAnswer} = questionForm(q, navigationId, webBase);
           context.card = card;
-          if (acceptsAnswer) {
+          if (acceptsAnswer || q.wait === false) {
             const previous = context.onSent;
             const inputId = entry.replyTo, binding = groupReadBinding(bot,paired);
             context.onSent = (messageId, type) => {
               previous?.(messageId,type);
               if (!messageId?.trim() || type !== 'interactive') return;
               const cap = app.store.get<CardNavigation>('feishu.card.navigation',navigationId);
-              if (cap) app.store.put('feishu.card.navigation',navigationId,{...cap,questionForm:{id:q.id,version:q.version,messageId}});
+              if (cap) app.store.put('feishu.card.navigation',navigationId,{...cap,questionForm:{id:q.id,version:q.version,messageId,...(!acceptsAnswer && {webOnly:true})}});
               if (!inputId || !privateTurn(bot,paired,inputId)) return;
               const key = digest([bot.id,binding,messageId]);
               if (!app.store.get(sentQuestions,key)) app.store.put(sentQuestions,key,{

@@ -207,7 +207,7 @@ export function todayDashboard(brief: TodayBrief | string, navigation: string) {
 
 /** Owner-only, read-only views. Callback buttons refresh this card; URL buttons navigate to Web. */
 export function buildFeishuDashboard(app: DashboardApp, webBase?: string, options: {
-  view?: DashboardView; page?: number; navigation?: string; now?: Date;
+  view?: DashboardView; page?: number; navigation?: string; now?: Date; canViewQuestion?: (card: Card) => boolean;
 } = {}) {
   const elements: Record<string, unknown>[] = [], lines: string[] = [];
   const base = cardWebBase(webBase), view = options.view ?? 'home';
@@ -217,7 +217,12 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
   const tasks = new Map(app.store.list<Todo>('todos').map(t => [t.id, t]));
   const machines = app.store.list<MachineInfo>('machines');
   const runs = app.store.list<Run>('runs').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  const waiting = (app.attention?.() ?? []).filter(item => item.type !== 'inbox');
+  const waiting = (app.attention?.() ?? []).filter(item => {
+    if (item.type === 'inbox') return false;
+    if (item.type !== 'interaction' || !options.canViewQuestion) return true;
+    const card = app.store.get<Card>('interactions',item.id.slice('interaction:'.length));
+    return !!card && options.canViewQuestion(card);
+  });
   const working = runs.filter(r => r.status === 'running' || r.status === 'queued');
   const review = runs.filter(r => r.status === 'completed' && r.todoId && tasks.has(r.todoId) && !tasks.get(r.todoId)?.completedAt);
   const issues = runs.filter(r => r.status === 'failed' || r.status === 'unknown');
@@ -245,7 +250,7 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
   let total = 0, page = 0;
   const pageSize = 5;
   const questions = app.interactions && options.navigation ? app.store.list<Card>('interactions').filter(card =>
-    card.kind === 'question' && card.status === 'open' && card.handler === 'user' &&
+    card.kind === 'question' && card.status === 'open' && card.handler === 'user' && (!options.canViewQuestion || options.canViewQuestion(card)) &&
     Date.parse(card.expiresAt) > (options.now?.getTime() ?? Date.now())).sort((a,b) => a.createdAt.localeCompare(b.createdAt)) : [];
   if (view === 'home') {
     section('等你处理', waiting.length ? '等你拍板 · ' + waiting.length + ' 项\n' + waiting.slice(0, 3).map(a => '• ' + label(a.title)).join('\n') : '当前没有等你拍板的事。');
@@ -273,7 +278,7 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
     page = Math.min(Math.max(0, options.page ?? 0), Math.max(0, Math.ceil(total / pageSize) - 1));
     if (!total) section('待回答的问题','目前没有需要你回答的问题。');
     for (const question of questions.slice(page * pageSize, (page + 1) * pageSize)) {
-      section('待回答',label(question.title) + '\n' + label(question.body,200));
+      section(question.wait === false ? '可稍后回答' : '待回答',label(question.title) + '\n' + label(question.body,200));
       elements.push(...cardButtons([{label:'回答这个问题',value:{kind:'workbench.questionForm',navigation:options.navigation,id:question.id,version:question.version}}]));
     }
   } else if (view === 'inbox') {
@@ -348,10 +353,12 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
 const compactQuestion = (question: Card) => question.questions?.length === 1 && !question.questions[0].multiSelect && question.questions[0].options.length <= 4
   && question.questions[0].options.every(option => [...option.label].length <= 30);
 export function questionForm(question: Card, navigation: string, webBase?: string) {
+  const later = '这道题可稍后回答。你可以继续在原对话聊天；要回答这张卡时，请通过表单提交。';
   const submit = {kind:'workbench.answerQuestion',navigation,id:question.id,version:question.version};
   const callback = (value: Record<string, unknown>) => [{type:'callback',value}];
   const back = {tag:'button',text:cardPlain('返回问题列表'),behaviors:callback({kind:'workbench.navigate',navigation,view:'questions',page:0})};
-  const build = (elements: Record<string, unknown>[]) => ({schema:'2.0',header:{template:'orange',title:cardPlain('回答 Agent 的问题')},body:{elements:[...elements, back]}});
+  const close = {tag:'button',text:cardPlain('关闭提问'),behaviors:callback({...submit,kind:'workbench.closeQuestion'})};
+  const build = (elements: Record<string, unknown>[]) => ({schema:'2.0',header:{template:'orange',title:cardPlain(question.wait === false ? '可稍后回答的问题' : '回答 Agent 的问题')},body:{elements:[...elements, ...(question.wait === false ? [close] : []), back]}});
   const web = () => {
     const base = cardWebBase(webBase);
     const tip = '问题内容超过飞书表单容量。请打开 Web 工作台，在主对话的「等你处理」找到这道题并回答。';
@@ -359,6 +366,7 @@ export function questionForm(question: Card, navigation: string, webBase?: strin
   };
   if ((question.questions?.length ?? 0) > 6 || question.questions?.some(q => q.options.length > 20)) return web();
   const elements: Record<string, unknown>[] = [question.title, question.body].filter(Boolean).map(text => ({tag:'div',text:cardPlain(text)}));
+  if (question.wait === false) elements.push({tag:'div',text:cardPlain(later)});
   const fields: Record<string, unknown>[] = [];
   const input = (name: string, hint: string) => ({tag:'input',name,width:'fill',input_type:'multiline_text',rows:2,max_length:1000,placeholder:cardPlain(hint)});
   if (!question.questions) fields.push({...input('answer','输入你的回答'),required:true});

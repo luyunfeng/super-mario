@@ -31,6 +31,7 @@ export interface Card {
   status: 'open' | 'answered' | 'expired' | 'withdrawn';
   answer?: string;
   questions?: QuestionItem[];
+  wait?: boolean;
   answers?: QuestionResponse[];
   withdrawnReason?: 'user_spoke';
   answeredBy?: string;
@@ -52,7 +53,7 @@ export interface Card {
   userNotifiedAt?: string;
   routingHistory?: { handler: Decision['handler']; outcome: string; at: string }[];
 }
-type Input = Pick<Card, 'kind' | 'title' | 'body' | 'runId' | 'projectId' | 'executorId' | 'cwd' | 'questions'>;
+type Input = Pick<Card, 'kind' | 'title' | 'body' | 'runId' | 'projectId' | 'executorId' | 'cwd' | 'questions' | 'wait'>;
 const collection = 'interactions';
 export class InteractionError extends Error {
   readonly status: 400 | 404 | 409 | 503;
@@ -119,7 +120,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
     const response = current.questions ? readQuestionResponses(current.questions, input) : undefined;
     const value = response?.text ?? input;
     text(value, 'answer');
-    if (response && !['user','user_feishu'].includes(by)) throw new InteractionError('逐题回答须由主人提交');
+    if ((response || current.wait === false) && !['user','user_feishu'].includes(by)) throw new InteractionError('这张提问卡须由主人直接回答');
     text(by, 'by');
     // Claim before any I/O. Unknown also covers a crash between delivery and confirmation.
     const card = claim(id, version, { status: 'answered', answer: value, ...(response && {answers:response.answers}), answeredBy: by,
@@ -139,9 +140,13 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
         patch = { delivery: uncertain ? 'unknown' : 'failed', error: error instanceof Error ? error.message : String(error) };
       }
       // close() waits for already claimed deliveries, so the store is still available here.
-      const result = store.transaction(() => save(store.get<Card>(collection, card.id) ?? card, patch));
+      const result = store.transaction(() => {
+        const current = store.get<Card>(collection, card.id) ?? card;
+        if (current.wait === false && current.delivery === 'confirmed') return current;
+        return save(current, patch);
+      });
       changed(id);
-      if (patch.delivery !== 'confirmed') events.publish('interactions.user_required', { id });
+      if (result.delivery !== 'confirmed') events.publish('interactions.user_required', { id });
       return result;
     }));
     changed(id);
@@ -231,6 +236,11 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       text(input.title, 'title');
       text(input.body, 'body', true);
       const fields: Input = { kind: input.kind, title: input.title, body: input.body };
+      if (input.wait !== undefined) {
+        if (typeof input.wait !== 'boolean' || input.kind !== 'question' || (input.wait === false && input.runId))
+          throw new InteractionError('wait 仅适用于对话中的普通提问');
+        fields.wait = input.wait;
+      }
       if (input.questions !== undefined) {
         if (input.kind !== 'question') throw new InteractionError('只有普通问题卡支持逐题选项');
         fields.questions = questionItems(input.questions);
@@ -241,7 +251,9 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       const now = new Date().toISOString();
       const card: Card = { ...fields, id: randomUUID(), version: 1, status: 'open', handler: 'user', layer: 'default',
         expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(), createdAt: now, updatedAt: now };
-      const decision = decide(structuredClone(card), conversationQuestion);
+      const policy = decide(structuredClone(card), conversationQuestion);
+      const decision: Decision = card.wait === false ? {...policy,handler:'user',mode:'suggest',answer:undefined,ruleId:undefined,
+        ...(policy.stages && {stages:[{handler:'user',mode:'suggest'}]})} : policy;
       if (!decision || !['rules', 'user', 'main_agent', 'supervisor'].includes(decision.handler) ||
         !['global', 'project', 'task', 'default'].includes(decision.layer) ||
         (decision.mode !== undefined && !['auto', 'suggest'].includes(decision.mode))) throw new InteractionError('无效的策略决定');

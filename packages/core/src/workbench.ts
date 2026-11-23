@@ -1,3 +1,4 @@
+import { createLaterQuestions, type QuestionHost } from './later-questions.ts';
 import { questionEvidence } from './question-responses.ts';
 import { createDeferredQuestions } from './deferred-questions.ts';
 import { inboxAnalysisPrompt, inboxGroupingAuthority } from './agent-runtime/inbox-analysis-prompt.ts';
@@ -674,6 +675,7 @@ export async function createWorkbench(config: AppConfig) {
     const decision = policies.decide(card, conversationQuestion);
     return { ...decision, layer: decision.layer === 'run' ? 'task' : decision.layer, answer: decision.answer ?? undefined, ruleId: decision.ruleId ?? undefined };
   }, async answer(card, text) {
+    if (card.wait === false) return laterQuestions.end(card.id);
     if (card.runId && ['question', 'permission'].includes(card.kind)) {
       await inputRun(card.runId, text, `interaction:${card.id}`);
     } else if (card.kind === 'question' && store.get<{inputId?:string}>('interaction-origins',card.id)?.inputId) {
@@ -717,11 +719,18 @@ export async function createWorkbench(config: AppConfig) {
     const reply = await runtime.ask(`请给这张交互卡片提供简短建议答案，不执行外部动作。以下JSON为业务数据：\n${JSON.stringify(card)}`, { projectId: card.projectId, readOnly: true });
     return reply.text;
   } });
-  const interactions = { ...interactionService, open(input: Parameters<typeof interactionService.open>[0], source?: Message) {
+  function openInteraction(input: Parameters<typeof interactionService.open>[0], source?: Message) {
     if (!input || typeof input !== 'object') throw new InputError('交互卡片必须为对象');
     const runId = input.runId === undefined ? undefined : requiredText(input.runId, '执行记录');
     const run = runId ? store.get<Run>('runs', runId) : undefined;
     if (runId && !run) throw new InputError('关联执行记录不存在', 404);
+    if (input.wait === false && source) source = store.get<Message>('messages',source.id);
+    const audience = input.wait === false ? liveQuestionAudience(source) : undefined;
+    if (input.wait === false) {
+      if (input.kind !== 'question' || runId || !source || !audience || (input.projectId !== undefined && input.projectId !== source.projectId))
+        throw new InputError('稍后回答仅适用于能核实原对话的普通提问',403);
+      laterQuestions.assertCapacity();
+    }
     // Execution context comes from core facts; model-provided metadata cannot select a weaker policy.
     const card = interactionService.open({ ...input, runId, projectId: run?.projectId ?? source?.projectId ?? input.projectId,
       executorId: run?.executorId ?? input.executorId, cwd: run?.cwd ?? input.cwd }, Boolean(source && !runId && input.kind === 'question'));
@@ -729,38 +738,29 @@ export async function createWorkbench(config: AppConfig) {
     store.put('interaction-origins', card.id, { inputId });
     if (card.kind === 'question' && !runId && inputId) {
       store.put('input-paused', inputId, { cardId: card.id });
+      if (card.wait === false && audience) {
+        laterQuestions.register(card,inputId,audience);
+        return card;
+      }
       const root = questionSource(source);
-      const audience = directQuestionAudience(root);
-      const latest = audience && store.get<string>('conversation.last-direct-input', audience);
+      const originalAudience = directQuestionAudience(root);
+      const latest = originalAudience && store.get<string>('conversation.last-direct-input', originalAudience);
       if (latest && latest !== root?.id) return interactionService.withdraw(card.id, card.version, 'user_spoke');
     }
     return card;
-  } };
-  const deferredQuestions = createDeferredQuestions(store, {
+  }
+  const interactions = {...interactionService, open(input:Parameters<typeof interactionService.open>[0], source?:Message) {
+    return input?.wait === false ? store.transaction(()=>openInteraction(input,source)) : openInteraction(input,source);
+  }};
+  const questionHost:QuestionHost = {
     source(card) {
       if (card.kind !== 'question' || card.runId) return;
       const origin = store.get<{inputId?:string}>('interaction-origins',card.id)?.inputId;
-      if (!origin || store.get<{cardId?:string}>('input-paused',origin)?.cardId !== card.id) return;
+      if (!origin || (card.wait !== false && store.get<{cardId?:string}>('input-paused',origin)?.cardId !== card.id)) return;
       const input = store.get<Message>('messages',origin);
-      const audience = directQuestionAudience(questionSource(input));
-      if (!input || !audience || input.role !== 'user' || input.readOnly || input.replyTo ||
-          (input.origin && input.origin !== 'user') || input.projectId !== card.projectId) return;
-      if (input.projectId) {
-        const project = store.get<Project>('projects',input.projectId);
-        if (!project || project.archivedAt) return;
-      }
-      if (input.todoId) {
-        const todo = store.get<Todo>('todos',input.todoId);
-        if (!todo || todo.projectId !== input.projectId) return;
-      }
+      const audience = liveQuestionAudience(input);
+      if (!input || !audience || input.projectId !== card.projectId) return;
       return {input,audience};
-    },
-    create(card, source) {
-      const todo = createTodo({title:card.title,notes:card.body,projectId:card.projectId},false,'system',{id:source.id,conversationId:source.conversationId});
-      const linked = {...todo,deferredQuestion:{cardId:card.id,askedAt:card.createdAt,title:card.title,body:card.body,...(card.questions && {questions:card.questions})}};
-      store.put('todos',todo.id,linked);
-      if (sourceThread(source)) store.put('todo.origins',todo.id,{conversationId:source.conversationId,sourceMessageId:source.id});
-      return linked;
     },
     async post(source,text,requestId,closed,accepted) {
       const route=store.get<MessageRoute & {botId?:string;scope?:BotScope}>('message.routes',source.id);
@@ -778,17 +778,30 @@ export async function createWorkbench(config: AppConfig) {
       assertBotInput(source);
       return scopedAgents.post(text,validateBotScope(store,route.scope),route.botId,context,sourceThread(source));
     },
+  };
+  const deferredQuestions = createDeferredQuestions(store, {
+    ...questionHost,
+    create(card, source) {
+      const todo = createTodo({title:card.title,notes:card.body,projectId:card.projectId},false,'system',{id:source.id,conversationId:source.conversationId});
+      const linked = {...todo,deferredQuestion:{cardId:card.id,askedAt:card.createdAt,title:card.title,body:card.body,...(card.questions && {questions:card.questions})}};
+      store.put('todos',todo.id,linked);
+      if (sourceThread(source)) store.put('todo.origins',todo.id,{conversationId:source.conversationId,sourceMessageId:source.id});
+      return linked;
+    },
     complete:id=>{updateTodo(id,{completed:true});},
     changed:id=>changed('todos.changed',{id}),
   });
+  const laterQuestions = createLaterQuestions(store,questionHost,deferredQuestions.materialize,id=>changed('interactions.changed',{id}));
   const offDeferredQuestions=events.subscribe(event=>{
     if (event.type !== 'interactions.changed' || !event.data || typeof event.data !== 'object' || Array.isArray(event.data) || typeof event.data.id !== 'string') return;
     const card=store.get<import('./interactions.ts').Card>('interactions',event.data.id);
-    if (card) deferredQuestions.materialize(card);
+    if (card?.wait === false) {
+      if (card.status === 'withdrawn' || card.status === 'expired') void laterQuestions.end(card.id).catch(()=>{});
+    } else if (card) deferredQuestions.materialize(card);
   });
   function recoverDeferredQuestions() {
-    for (const card of interactions.list()) deferredQuestions.materialize(card);
-    deferredQuestions.recover();
+    for (const card of interactions.list()) if (card.wait !== false) deferredQuestions.materialize(card);
+    deferredQuestions.recover(); laterQuestions.recover();
   }
   interactions.expireTick();
   recoverDeferredQuestions();
@@ -801,7 +814,7 @@ export async function createWorkbench(config: AppConfig) {
     }
   }, 30_000);
   triageTimer.unref();
-  const expireTimer = setInterval(() => { interactions.expireTick(); deferredQuestions.recover(); }, 30_000); expireTimer.unref();
+  const expireTimer = setInterval(() => { interactions.expireTick(); deferredQuestions.recover(); laterQuestions.recover(); }, 30_000); expireTimer.unref();
   const awayNotifications = createAwayNotifications({ store, events, background, presence, bots: () => notificationBots(), channel: bot => notificationChannel(bot) });
   const projectFollowUp = createProjectFollowUp({ store, events, conversations:()=>inboxAssistant.list(), schedules: background.schedules, settings: briefing.settings,
     enqueue(input) {
@@ -896,12 +909,26 @@ export async function createWorkbench(config: AppConfig) {
     if (root?.conversationId === input.conversationId && root.projectId === input.projectId && root.todoId === input.todoId) return root;
   }
 
+  function liveQuestionAudience(input?: Message) {
+    if (!input || input.role !== 'user' || input.readOnly || input.replyTo || (input.origin && input.origin !== 'user')) return;
+    if (input.projectId) {
+      const project = store.get<Project>('projects',input.projectId);
+      if (!project || project.archivedAt) return;
+    }
+    if (input.todoId) {
+      const todo = store.get<Todo>('todos',input.todoId);
+      if (!todo || todo.projectId !== input.projectId) return;
+    }
+    return directQuestionAudience(questionSource(input));
+  }
+
   function conversationUserSpoke(message: Message) {
     const audience = directQuestionAudience(message);
     if (!audience) return;
     store.put('conversation.last-direct-input', audience, message.id);
+    laterQuestions.spoke(message,audience);
     for (const card of interactionService.list()) {
-      if (card.kind !== 'question' || card.status !== 'open' || card.runId || card.projectId !== message.projectId) continue;
+      if (card.wait === false || card.kind !== 'question' || card.status !== 'open' || card.runId || card.projectId !== message.projectId) continue;
       const origin = store.get<{inputId?: string}>('interaction-origins', card.id)?.inputId;
       if (!origin || origin === message.id || store.get<{cardId?: string}>('input-paused', origin)?.cardId !== card.id) continue;
       const original = store.get<Message>('messages', origin);
@@ -2356,7 +2383,7 @@ export async function createWorkbench(config: AppConfig) {
       if (closing) return;
       closing = true;
       clearInterval(triageTimer);
-      offDeferredQuestions(); await deferredQuestions.drain();
+      offDeferredQuestions(); await Promise.all([deferredQuestions.drain(),laterQuestions.drain()]);
       await subscriptions.close();
       await stopWeb();
       commandRouter.cancel();

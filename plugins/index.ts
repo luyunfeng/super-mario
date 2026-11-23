@@ -277,8 +277,15 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if (actions.taskPlan) context.contribute('tools', 'task_plan', tool('task_plan', '把目标拆成1–8个任务，每项须给出验收标准；省略 expectMinutes 时由工作台估算，回执的 estimateSource 标明默认 default、历史 learned 或显式指定 override。start=true立即按当前用户请求派发，否则等待用户开始。', async (args, signal) => { signal.throwIfAborted(); return actions.taskPlan!(args); }, {
             title: { type: 'string' }, start: { type: 'boolean' }, tasks: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object', required: ['prompt', 'doneWhen'], additionalProperties: false, properties: { prompt: { type: 'string' }, doneWhen: { type: 'string' }, expectMinutes: { type: 'number', exclusiveMinimum: 0, maximum: 10080, description: '仅显式指定时填正数分钟，否则省略以自动估算' }, executionMode: { type: 'string', enum: ['task','interactive'] }, executorId: { type: 'string' }, cwd: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' }, policy: taskPolicyParameters } } },
           }));
-          if (actions.interactionOpen) context.contribute('tools', 'interaction_open', tool('interaction_open', '需要主人作决定时建立交互卡片。普通问题在 title 写明决定事项，在 body 交代背景。有可选做法时用 questions 给出 1–4 题，每题 2–4 个选项。主人可以另填答案。发出后等待明确答复，权限、计划和验收各用对应 kind。', async (args, signal) => { signal.throwIfAborted(); return actions.interactionOpen!(args); }, {
+          if (actions.interactionOpen) context.contribute('tools', 'interaction_open', tool('interaction_open', '需要主人作决定时建立交互卡片。普通问题在 title 写明决定事项，在 body 交代背景。有可选做法时用 questions 给出 1–4 题，每题 2–4 个选项。主人可以另填答案。发出后等待明确答复，权限、计划和验收各用对应 kind。', async (args, signal) => { signal.throwIfAborted();
+            const card = actions.interactionOpen!(args);
+            if (card && typeof card === 'object' && !Array.isArray(card) && card.wait === false && card.status === 'open') {
+              return { ...card, nextStep: '卡片已保留，可以继续聊天。告知主人可稍后回答，结束本轮。原会话将在答卡、关闭或到期后收到结果。' };
+            }
+            return card;
+          }, {
             kind: { type: 'string', enum: ['question', 'permission', 'plan', 'review'] }, title: { type: 'string' }, body: { type: 'string' },
+            wait: { type: 'boolean', description: '默认 true。仅在主人或当前工作指令明确允许稍后回答的普通提问中设为 false。卡片保留，本轮结束，答案稍后回到原会话。' },
             questions: { type: 'array', minItems: 1, maxItems: 4, description: '仅用于普通问题。题目不能重复。', items: {
               type: 'object', additionalProperties: false, required: ['question','options'], properties: {
                 question: { type: 'string', minLength: 1, maxLength: 500 }, header: { type: 'string', minLength: 1, maxLength: 12 },

@@ -1,0 +1,128 @@
+import assert from 'node:assert/strict';
+import { mkdtemp,rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import test from 'node:test';
+import { startServer } from '../apps/server/src/index.ts';
+import type { Message } from '../packages/protocol/src/index.ts';
+import type { Card } from '../packages/core/src/interactions.ts';
+
+test('稍后回答的问题跨发言/重启保留，回答、撤卡、到期分别回原会话且不重投',async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'later-questions-'));
+  const config={dataDir,token:'fixture',host:'127.0.0.1',port:0,demo:true};
+  let server=await startServer(config);
+  t.after(async()=>{await server.close();await rm(dataDir,{recursive:true,force:true});});
+  const req=(path:string,body:unknown)=>fetch(server.url+'/api/v1'+path,{method:'POST',headers:{authorization:'Bearer fixture','content-type':'application/json'},body:JSON.stringify(body)});
+  const speak=async(text:string,extra={})=>await (await req('/messages',{text,...extra})).json() as Message;
+  const ask=(source:Message,title:string)=>server.app.interactions.open({kind:'question',wait:false,title,body:'合成甲或乙'},source);
+  const status=(id:string)=>server.app.store.get<Card>('interactions',id)!;
+  const returned=(id:string)=>server.app.store.list<Message>('messages').filter(m=>m.role==='user' && m.text.includes('"卡片":"'+id+'"'));
+  const waitResult=async(id:string)=>{await t.waitFor(()=>assert.equal(returned(id).length,1));return returned(id)[0]!;};
+  const todo=(id:string)=>server.app.todos().find(row=>row.deferredQuestion?.cardId===id);
+  const expire=(card:Card)=>server.app.interactions.expireTick(Date.parse(card.expiresAt)+1);
+  const source=await speak('原始目标');
+  server.app.policies.write({},{ladder:['rules','user'],rules:[{id:'fixture-rule',kind:'question',mode:'auto',handler:'rules',answer:'自动建议'}]});
+  const card=ask(source,'选哪个方案');
+  assert.equal(card.handler,'user'); assert.deepEqual(server.app.store.get('input-paused',source.id),{cardId:card.id});
+  await speak('同一对话另一个目标');
+  assert.equal(status(card.id).status,'open');
+  await server.close();server=await startServer(config);
+  assert.equal(status(card.id).status,'open');
+  assert.equal((await req('/interactions/'+card.id+'/answer',{version:card.version,text:'采用乙'})).status,200);
+  const answered=await waitResult(card.id);
+  assert.equal(answered.conversationId,source.conversationId);assert.match(answered.text,/采用乙/);
+  assert.ok(!answered.directWebInput);
+  assert.equal((await req('/interactions/'+card.id+'/answer',{version:card.version,text:'采用乙'})).status,409);
+  const withdrawal=ask(await speak('等待复核'),'复核范围');
+  server.app.interactions.withdraw(withdrawal.id,withdrawal.version);
+  const closed=await waitResult(withdrawal.id);
+  assert.match(closed.text,/已撤回，未提供答案/);assert.equal(closed.origin,'notification');assert.equal(closed.readOnly,true);
+  const spoken=ask(await speak('问题仍保留'),'哪个值');
+  await speak('同会话的后续说明');
+  await server.close();server=await startServer(config);
+  expire(spoken);
+  const skipped=await waitResult(spoken.id);
+  assert.equal(skipped.readOnly,true);assert.match(skipped.text,/没有创建待办/);assert.equal(todo(spoken.id),undefined);
+  const quiet=ask(await speak('只在此对话询问'),'是否需要核对');
+  await server.app.agent.post('合成内部消息','main');
+  await speak('只读观察',{readOnly:true});
+  const project=server.app.projects.create({name:'其他项目'});
+  await speak('另一个项目',{projectId:project.id});
+  expire(quiet);
+  const converted=await waitResult(quiet.id);
+  assert.equal(converted.readOnly,true);assert.ok(converted.text.includes(todo(quiet.id)!.id));
+  assert.equal((await req('/todos/'+todo(quiet.id)!.id+'/question-answer',{text:'补答一次'})).status,200);
+  await server.close();server=await startServer(config);
+  for(const q of [card,withdrawal,spoken,quiet])assert.equal(returned(q.id).length,1);
+  assert.equal(server.app.todos().filter(row=>row.deferredQuestion?.cardId===quiet.id).length,1);
+  assert.equal(todo(spoken.id),undefined);
+  assert.equal((await req('/interactions',{kind:'question',title:'来源不明',body:'?',wait:false})).status,403);
+  assert.equal((await req('/interactions',{kind:'question',title:'格式无效',body:'?',wait:'false'})).status,400);
+});
+
+test('稍后问题的已受理答案在临时故障和重启后恢复，占用上限释放且拒绝无来源转投',async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'later-recovery-'));
+  const config={dataDir,token:'fixture',host:'127.0.0.1',port:0,demo:true};
+  let server=await startServer(config);
+  t.after(async()=>{await server.close();await rm(dataDir,{recursive:true,force:true});});
+  const source=await server.app.agent.post('主人测试意愿','main',{directWebInput:true});
+  const ask=(n:number)=>server.app.interactions.open({kind:'question',title:'合成问题 '+n,body:'?',wait:false},source);
+  const cards=Array.from({length:20},(_,i)=>ask(i));
+  assert.throws(()=>ask(21),{status:409});
+  assert.equal(server.app.interactions.list().length,20);
+  const card=cards[0]!;
+  const send=server.app.agent.post;
+  server.app.agent.post=async()=>{throw new Error('合成本地故障');};
+  let failed;
+  try {failed=await server.app.interactions.answer(card.id,card.version,'核准选项乙');}
+  finally {server.app.agent.post=send;}
+  assert.equal(failed.delivery,'failed');
+  await server.close();server=await startServer(config);
+  await t.waitFor(()=>assert.equal(server.app.store.get<Card>('interactions',card.id)?.delivery,'confirmed'));
+  const accepted=server.app.store.list<Message>('messages').filter(m=>m.role==='user' && m.text.includes('"卡片":"'+card.id+'"'));
+  assert.equal(accepted.length,1);
+  const afterCommit=ask(21);
+  const submit=server.app.agent.post;
+  server.app.agent.post=async(...args)=>{await submit(...args);throw new Error('模拟提交后回执丢失');};
+  try {
+    assert.equal((await server.app.interactions.answer(afterCommit.id,afterCommit.version,'已受理')).delivery,'confirmed');
+    assert.equal(server.app.store.list<Message>('messages').filter(m=>m.role==='user' && m.text.includes('"卡片":"'+afterCommit.id+'"')).length,1);
+  } finally {server.app.agent.post=submit;}
+  const revoked=cards[1]!;
+  server.app.store.remove('messages',source.id);
+  const bad=await server.app.interactions.answer(revoked.id,revoked.version,'不许转投');
+  assert.equal(bad.delivery,'failed');
+  assert.ok(!server.app.store.list<Message>('messages').some(m=>m.role==='user' && m.text.includes('不许转投')));
+});
+
+test('独立飞书对话只采信自己配对和线程内的发言，保留回报渠道',async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'later-private-'));
+  let client!:import('../plugins/feishu.ts').FeishuOptions;
+  const server=await startServer({dataDir,token:'fixture',host:'127.0.0.1',port:0,demo:true},{botFactory:options=>{
+    client=options;
+    return {async start(){},async close(){},async collect(){return [];},async send(){},status:()=>({connected:true})};
+  }});
+  t.after(async()=>{await server.close();await rm(dataDir,{recursive:true,force:true});});
+  const {app}=server;
+  const bot=await server.bots.create({name:'合成机器人',appId:'cli_1111111111111111',appSecret:'fixture',scope:{kind:'global'},requireConfirmation:false});
+  let seq=0;
+  const speak=(text:string)=>client.onMessage(text,{messageId:'om-'+ ++seq,senderType:'user',chatType:'p2p',chatId:'fixture-chat',senderId:'fixture-owner'});
+  await speak(bot.pairingCode!);
+  await speak('/new 合成独立对话');
+  await speak('话题内原目标');
+  const source=app.store.list<Message>('messages').find(m=>m.text==='话题内原目标' && m.role==='user')!;
+  const question=()=>app.interactions.open({kind:'question',wait:false,title:'选择一个值',body:'甲或乙'},source);
+  const q=question();
+  await speak('/main');
+  await speak('主机器人私聊中的其他目标');
+  app.interactions.expireTick(Date.parse(q.expiresAt)+1);
+  const result=()=>app.store.list<Message>('messages').find(m=>m.role==='user' && m.text.includes('"卡片":"'+q.id+'"'));
+  await t.waitFor(()=>assert.ok(result()?.readOnly));
+  assert.equal(result()!.conversationId,source.conversationId);
+  assert.deepEqual(app.store.get('message.routes',result()!.id),{...app.store.get<object>('message.routes',source.id),resumed:true});
+  assert.ok(app.todos().some(todo=>todo.deferredQuestion?.cardId===q.id));
+  const unpaired=question();
+  await server.bots.update(bot.id,{enabled:false});
+  await app.interactions.answer(unpaired.id,unpaired.version,'私人选项');
+  assert.ok(!app.store.list<Message>('messages').some(m=>m.role==='user' && m.text.includes('"卡片":"'+unpaired.id+'"')));
+});

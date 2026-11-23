@@ -4389,3 +4389,36 @@ test('主助手通过注册工具发出结构化问题，逐题回答后按主�
       m.conversationId==='main' && m.role==='assistant' && m.status==='done' && m.text==='已收到逐题答复。')));
   } finally { await server.close(); }
 });
+
+test('模型按主人的稍后回答指令留下原卡，本轮不能提前执行，答卡后在原对话继续', async t => {
+  const {server,ask,api}=await fixture(t, req=>{
+    if (req.callId==='later-card') {
+      assert.match(JSON.stringify(req.content),/结束本轮/);
+      return call('todo_create',{title:'尚未授权的执行'},'early-write');
+    }
+    if (req.callId==='early-write') {
+      assert.match(JSON.stringify(req.content),/只读|等待交互卡|不允许|不可用/);
+      return {role:'assistant',content:'卡片保留，等你选好再排期。'};
+    }
+    const content=JSON.stringify(req.content);
+    if (content.includes('已回答') && content.includes('周三下午')) return {role:'assistant',content:'已收到周三下午的决定。'};
+    if (content.includes('先记住另一件事')) return {role:'assistant',content:'收到新消息。'};
+    assert.match(req.system,/明确允许稍后回答.+wait:false/);
+    return call('interaction_open',{kind:'question',title:'选哪天排期？',body:'周三或周四均有空。',wait:false},'later-card');
+  });
+  try {
+    server.app.policies.write({}, {ladder:['user']});
+    await ask('排期先问我，这个我稍后再选。');
+    await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.text==='卡片保留，等你选好再排期。')));
+    const [card]=server.app.interactions.list();
+    assert.ok(card);
+    assert.equal(card.wait,false);
+    assert.equal(server.app.todos().length,0);
+    assert.equal(await ask('先记住另一件事，排期我等会儿选。'),'收到新消息。');
+    const pending=server.app.interactions.list().find(c=>c.id===card.id);
+    assert.equal(pending?.status,'open');
+    assert.equal(pending.answer,undefined);
+    await api('/interactions/'+card.id+'/answer',{version:pending.version,text:'周三下午'});
+    await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.text==='已收到周三下午的决定。' && m.conversationId==='main')));
+  } finally {await server.close();}
+});
