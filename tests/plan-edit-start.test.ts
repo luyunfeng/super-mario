@@ -29,6 +29,15 @@ test('主人修改后开始计划：整批检查先于派发，执行者接收�
   const post=(path:string,body:object)=>fetch(server.url+'/api/v1/'+path,{method:'POST',
     headers:{authorization:'Bearer offline-plan','content-type':'application/json'},body:JSON.stringify(body)});
   const first={prompt:'保留第一项',doneWhen:'原标准',executorId:'first/codex',cwd:dataDir};
+  const incompatible=await post('plans',{title:'第二步模型不可用',tasks:[first,{...first,model:'fixture-model'}]});
+  assert.equal(incompatible.status,201);
+  const pending=await incompatible.json();
+  const rejected=await post('plans/'+pending.id+'/start',{version:pending.version});
+  assert.equal(rejected.status,400);
+  assert.match(await rejected.text(),/模型/);
+  assert.deepEqual(server.app.plans.get(pending.id),pending);
+  assert.equal(server.app.store.list('runs').length,0);
+  assert.equal(starts.length,0);
   const proposal=await post('plans',{title:'分项检查',tasks:[first,{...first,prompt:'第二项旧原文'}]});
   assert.equal(proposal.status,201);
   const plan=await proposal.json();

@@ -154,10 +154,9 @@ export function createPlans({ store, events, dispatch, preflight }: {
     start(id: string, version: number, edits?:unknown): Plan {
       const plan = store.transaction(() => {
         const plan = current(id, version);
-        if (edits !== undefined) {
-          applyStartEdits(plan, edits);
-          for (const task of plan.tasks) preflight?.(task, id);
-        }
+        if (edits !== undefined) applyStartEdits(plan, edits);
+        // Executor capabilities can change while an unedited plan waits for confirmation.
+        for (const task of plan.tasks) preflight?.(task, id);
         // Claim commits before invoking any external code, including event observers.
         plan.status = 'running';
         plan.updatedAt = new Date().toISOString();
