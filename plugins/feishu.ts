@@ -1,4 +1,5 @@
 import { groupTaskCommand, readGroupCommand, readGroupPost, topicGroupCommand } from './feishu-read-command.ts';
+import { renderFeishuPost } from './feishu-post.ts';
 import { imageSize } from 'image-size';
 import type { ChatImageInput, PersonalAiMessage } from '../packages/protocol/src/index.ts';
 import { allowedPersonalChats, scopedLanes, searchFilter, unmutedIds, validChatId, type SearchLane } from './feishu-personal-scope.ts';
@@ -10,7 +11,7 @@ import type { CollectedReplyEvidence } from '../packages/protocol/src/index.ts';
 /** Factory injection keeps tests offline while exercising the real SDK dispatcher. */
 export type FeishuWSFactory = (options: ConstructorParameters<typeof WSClient>[0]) => Pick<WSClient, 'start' | 'close' | 'getConnectionStatus'>;
 export interface FeishuMention { self?: true; key?: string; openId?: string; appId?: string; name?: string }
-export interface FeishuMessageSource { privateForward?:true; privateFile?:true; privateImage?:true; mentions?: FeishuMention[]; chatId: string; messageId: string; chatType?: string; chatName?: string; senderName?: string; senderId?: string; senderType?: 'user' | 'bot'; mentionedSelf?: boolean; parentId?: string; threadId?: string; rootId?: string }
+export interface FeishuMessageSource { privatePost?:true; privateForward?:true; privateFile?:true; privateImage?:true; mentions?: FeishuMention[]; chatId: string; messageId: string; chatType?: string; chatName?: string; senderName?: string; senderId?: string; senderType?: 'user' | 'bot'; mentionedSelf?: boolean; parentId?: string; threadId?: string; rootId?: string }
 /** Private resume data. The host commits it only after durable inbox ingestion. */
 export interface PersonalCheckpoint {
   version: 1;
@@ -76,6 +77,7 @@ export interface FeishuOptions {
   privateImages?: boolean;
   privateFiles?: boolean;
   privateForwards?: boolean;
+  privatePosts?: boolean;
   groupChatIds?: string[];
   readGroup?: boolean;
   /** Forward explicitly addressed /ai requests. The host validates the paired owner. */
@@ -149,26 +151,13 @@ function forwardBody(message: Row): string {
   if (type !== 'text' && type !== 'post') return type ? forwardMedia.get(type) ?? '[其他消息]' : '';
   let raw: Row;
   try { raw = object(JSON.parse(string(object(message.body).content))); } catch { return ''; }
+  if (type === 'post') return renderFeishuPost(raw, message.mentions);
   const mentions = new Map<string,string>();
   for (const value of Array.isArray(message.mentions) ? message.mentions : []) {
     const mention = object(value), name = string(mention.name);
     if (name) mentions.set(string(mention.key), name);
   }
-  let text = string(raw.text);
-  if (type === 'post') {
-    const post = Array.isArray(raw.content) ? raw : object(raw.zh_cn ?? raw.en_us ?? raw.ja_jp);
-    const lines = [string(post.title)];
-    for (const line of Array.isArray(post.content) ? post.content : []) {
-      if (!Array.isArray(line)) continue;
-      lines.push(line.map(value => {
-        const node = object(value), tag = string(node.tag);
-        if (tag === 'a' || tag === 'text') return string(node.text);
-        if (tag === 'at') return '@' + (string(node.user_name) || mentions.get(string(node.user_id)) || '成员');
-        return forwardMedia.get(tag) ?? '';
-      }).join(''));
-    }
-    text = lines.join('\n');
-  }
+  const text = string(raw.text);
   return text.replace(/@_user_\d+/g, key => mentions.has(key) ? '@' + mentions.get(key) : key).trim();
 }
 /** Platform timestamps use milliseconds; CLI output may use seconds or ISO dates. */
@@ -612,8 +601,9 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const post = group && message.message_type === 'post' && (options.readGroup || options.groupTasks || topics);
     const image = options.privateImages && message.chat_type === 'p2p' && message.message_type === 'image';
     const file = options.privateFiles && message.chat_type === 'p2p' && message.message_type === 'file';
+    const privatePost = options.privatePosts && message.chat_type === 'p2p' && message.message_type === 'post' && !!string(object(sender.sender_id).open_id);
     const forward = options.privateForwards && message.chat_type === 'p2p' && message.message_type === 'merge_forward' && !!string(object(sender.sender_id).open_id);
-    if (sender.sender_type !== 'user' || (message.message_type !== 'text' && !post && !image && !file && !forward)) return;
+    if (sender.sender_type !== 'user' || (message.message_type !== 'text' && !post && !image && !file && !forward && !privatePost)) return;
     if (group && !commandGroup && !topics && options.groupMessages && !botOpenId) return;
     if (group && !commandGroup && options.commandGroupChatId && !options.groupMessages && !groupCommands) return;
     // Preserve unknown entries too: an unresolved @ must not look like a message with no addressee.
@@ -628,7 +618,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     if (forward) text = '[转发的聊天记录]';
     else try {
       const raw = object(JSON.parse(string(message.content)));
-      text = file ? (/^file_[\w-]{1,240}$/.test(string(raw.file_key)) ? '[文件]' : undefined) : image ? (/^img_[\w-]{1,240}$/.test(string(raw.image_key)) ? '[图片]' : undefined) : post ? readGroupPost(raw, mentions ?? [], { readGroup: options.readGroup, groupTasks: options.groupTasks,
+      text = privatePost ? renderFeishuPost(raw, message.mentions, true) : file ? (/^file_[\w-]{1,240}$/.test(string(raw.file_key)) ? '[文件]' : undefined) : image ? (/^img_[\w-]{1,240}$/.test(string(raw.image_key)) ? '[图片]' : undefined) : post ? readGroupPost(raw, mentions ?? [], { readGroup: options.readGroup, groupTasks: options.groupTasks,
         topicCommands: topics, topicBody: topics && !!threadId && (!!options.topicPolicy?.(chatId) || pendingSetting) }) : string(raw.text);
     } catch { operationReason = '收到无法解析的飞书消息'; return; }
     if (!text?.trim()) return;
@@ -650,7 +640,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     if (queue.length >= 100) { operationReason = '飞书消息队列已满，消息未处理'; return; }
     remember(messageId);
     const source: FeishuMessageSource = {
-      ...(forward && {privateForward:true}), ...(file && {privateFile:true}), ...(image && {privateImage:true}), chatId, messageId, chatType: string(message.chat_type) || undefined,
+      ...(privatePost && {privatePost:true}), ...(forward && {privateForward:true}), ...(file && {privateFile:true}), ...(image && {privateImage:true}), chatId, messageId, chatType: string(message.chat_type) || undefined,
       senderId: string(object(sender.sender_id).open_id) || undefined, senderType: 'user',
       // EventDispatcher preserves the SDK's nested id; CLI-normalized mentions differ.
       mentionedSelf: !!botOpenId && !!mentions?.some(mention => mention.openId === botOpenId),

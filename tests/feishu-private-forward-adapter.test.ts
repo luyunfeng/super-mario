@@ -49,12 +49,12 @@ test('合并转发仅发私聊占位，忽略事件内命令和群转发',async 
 test('读取原私聊中直接子消息，按时间排序并限制 Unicode 记录总长',async t=>{
   const f=fixture();await f.app.start(); t.after(()=>f.app.close());
   const first={...child('om_a','text',{text:'@_user_1 阅读材料'},'1700000000000'),mentions:[{key:'@_user_1',name:'合成成员'}]};
-  const second=child('om_b','post',{zh_cn:{title:'第二条',content:[[{tag:'a',text:'链接标题',href:'shadow-url'},{tag:'img',image_key:'shadow-key'}]]}},'1700000000100');
+  const second=child('om_b','post',{zh_cn:{title:'第二条',content:[[{tag:'a',text:'链接标题',href:'https://example.invalid/report'},{tag:'img',image_key:'shadow-key'}]]}},'1700000000100');
   f.rows([second,root,first,child('om_img','image',{text:'shadow-body'},'1700000000200'),
     {...child('om_nested','text',{text:'shadow-nested'},'1700000000000'),upper_message_id:'om_b'},
     {...child('om_deleted','text',{text:'shadow-deleted'},'1700000000000'),deleted:true},first]);
   const text=await f.read();
-  assert.match(text,/@合成成员 阅读材料[\s\S]+第二条\n链接标题\[图片\][\s\S]+\[图片\]/);
+  assert.match(text,/@合成成员 阅读材料[\s\S]+第二条[^\n]*\n+\[链接标题\]\(https:\/\/example\.invalid\/report\)\[图片\][\s\S]+\[图片\]/);
   assert.equal((text.match(/阅读材料/g)??[]).length,1);assert.doesNotMatch(text,/shadow/);
   f.rows([root,child('om_long','text',{text:'🐢'.repeat(40200)},'1700000000000')]);
   const clipped=await f.read();assert.equal(Array.from(clipped).length,30000);

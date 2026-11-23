@@ -576,7 +576,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         const workContext = buildWorkContext(store, scope, currentProjectId, { reviewEvidence: options.reviewEvidence, executors: options.executors?.(), inboxConversations:options.inboxConversations?.(), channels:options.inboxConversations ? contributions.list('channels').map(entry => entry.value) : undefined });
         const workDecisionsData = options.workDecisions ? options.workDecisions(scope, currentProjectId) : undefined;
         const projectContextData = currentProjectId && options.projectContext ? options.projectContext(currentProjectId) : undefined;
-        const replyChannel = activeInput && store.get<{ channel: string }>('message.routes', activeInput.id)?.channel;
+        const replyRoute = activeInput && store.get<{channel:string; privatePost?:true}>('message.routes', activeInput.id);
         const subscriptionGuide=allowed('source_subscriptions_read') && contributions.list('tools').some(tool=>tool.value.name==='source_subscriptions_read')
           ? subscriptionReadGuidance : '';
         const inboxGuide=allowed('inbox_tree') && contributions.list('tools').some(tool=>tool.value.name==='inbox_tree')
@@ -587,7 +587,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           ...(inboxGuide ? [inboxGuide] : []),
           ...(subscriptionGuide ? [subscriptionGuide] : []),
           ...(activeInput?.todoId ? ['本轮消息关联的待办 ID 是 ' + JSON.stringify(activeInput.todoId) + '。用户说“这项”时用 todo_detail 核对该事项的最新事实。关联待办本身不授权修改、派发或验收。'] : []),
-          ...(replyChannel === 'feishu' ? ['本轮回复渠道是飞书。引用工作台消息时使用可读出处。'] : []),
+          ...(replyRoute?.channel === 'feishu' && replyRoute.privatePost ? ['本轮输入来自主人在飞书私聊发送的富文本。按正文回答，保留链接文字和地址的对应关系；只看到链接不表示已读取目标页面。[图片]、[视频]等占位只表示原消息含有媒体，未取得原件时不要描述画面。代码块用于展示原文，提及成员不表示要求通知对方。'] : []),
+          ...(replyRoute?.channel === 'feishu' ? ['本轮回复渠道是飞书。引用工作台消息时使用可读出处。'] : []),
           ...(activeInput?.readOnly ? ['本轮只读，请查阅事实后回答。' + (
             activeReadOnlyAction === 'schedule_followup' ? '如有必要，可为重要会议安排会前跟进。' :
             activeReadOnlyAction === 'notify_user' ? '需要提醒主人时，可按本次跟进的推送策略调用 notify_user。' :

@@ -119,7 +119,7 @@ type StatusSource = Pick<FeishuMessageSource, 'chatId' | 'parentId' | 'rootId'>;
 type StatusGrant = { source: StatusSource; fingerprint: string; binding?: ChatBinding };
 type GroupTaskOrigin = { chatId: string; messageId: string; binding: string; todoId: string };
 type TopicStamp = { todoId: string; grant: string; opening: boolean; sourceOpening?: true; authorityVersion?: string; externalSource?: { chatId: string; messageId: string } };
-type Envelope = { privateForward?:true; threadSearchGrant?:string; privateFileBinding?:string; privateImageBinding?:string; topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
+type Envelope = { privatePost?:true; privateForward?:true; threadSearchGrant?:string; privateFileBinding?:string; privateImageBinding?:string; topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
 type Routed = Route & Envelope & { envelopeId: string; replyReference?: { text: string; truncated: boolean } | { unavailable: true } };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
 type SentQuestion = DecisionNudgeCard & { questionId:string; version:number; inputId:string; navigation:string; closeAttempted?:true; webOnly?:true; contextFingerprint?:string };
@@ -2572,10 +2572,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const group = source.chatType === 'group';
     const fileAttachment=!!(source.privateFile || source.privateForward);
     const privateAttachment=fileAttachment || source.privateImage;
-    if (privateAttachment) {
+    if (privateAttachment || source.privatePost) {
       if (group || !paired?.senderId || paired.senderId!==source.senderId || paired.chatId!==source.chatId || source.senderType!=='user') return;
       // Native attachments have no user-authored instruction. Keys and filenames must never become commands.
-      text=fileAttachment ? '[文件]' : '[图片]';
+      if (privateAttachment) text=fileAttachment ? '[文件]' : '[图片]';
     }
     // Consume keyword commands even in a registered group topic, before its
     // ordinary messages can reach a model. Escaped //list remains literal.
@@ -2925,6 +2925,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       ...(group ? { group: structuredClone(source) } : {}), platformReplyTo: source.messageId, threadId,
     } : {};
     if (!group && source.senderType === 'user' && paired?.senderId && source.senderId === paired.senderId) context.privateSenderId = paired.senderId;
+    if (source.privatePost) context.privatePost=true;
     if (paired && privateAttachment) {
       context[fileAttachment?'privateFileBinding':'privateImageBinding']=groupReadBinding(bot,paired);
       if (source.privateForward) context.privateForward=true;
@@ -3003,7 +3004,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!active(id, epoch, bot.revision)) return;
       const chatId = subscription(bot);
       state.commandSubscription = chatId;
-      const adapter = factory({ appId: bot.appId, appSecret: bot.appSecret,privateImages:true,privateFiles:true,privateForwards:true,
+      const adapter = factory({ appId: bot.appId, appSecret: bot.appSecret,privateImages:true,privateFiles:true,privateForwards:true,privatePosts:true,
         ...(bot.scope.kind === 'global' && { groupTasks: true,
           topicPolicy: (id: string) => {
             const paired = owner(bot);
