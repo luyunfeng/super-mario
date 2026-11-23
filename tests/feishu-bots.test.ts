@@ -987,10 +987,11 @@ test('飞书主人私聊 /today 和主页按钮读取今日简报，去重并报
   assert.doesNotMatch(refreshed, /08:00/);
   assert.equal(reads, 2);
 
-  click(refresh,'human','second-click');
-  click(refresh,'human','second-click');
+  const directRefresh = button(bot.instance.contexts.at(-1)?.card, '刷新简报');
+  click(directRefresh,'human','second-click');
+  click(directRefresh,'human','second-click');
   await t.waitFor(() => assert.equal(bot.instance.sent.length, 3));
-  click(refresh,'human','second-click');
+  click(directRefresh,'human','second-click');
   assert.equal(reads, 3);
   await receive('/帮助', human('brief-help-active'));
   assert.match(bot.instance.sent.at(-1)![1], /查看今日简报/);
@@ -1004,6 +1005,7 @@ test('飞书主人私聊 /today 和主页按钮读取今日简报，去重并报
   assert.doesNotMatch(JSON.stringify(bot.instance.contexts.at(-1)?.card), /workbench\.today/);
   await receive('/今天', human('disabled'));
   assert.match(bot.instance.sent.at(-1)![1], /每日简报插件已停用/);
+  assert.doesNotMatch(JSON.stringify(bot.instance.contexts.at(-1)?.card), /刷新简报/);
   assert.equal(reads, 3);
   assert.equal(f.posts.length, 0);
 });

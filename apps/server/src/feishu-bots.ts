@@ -699,7 +699,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           visibleQuestionId(bot,paired,item.id.slice('interaction:'.length)));
         if (items.length !== decisions.items.length) result = {...result,decisions:{...decisions,items,total:items.length}};
       }
-      const dashboard = todayDashboard(enabled() ? result : disabled, grant);
+      const canRefresh = enabled();
+      const dashboard = todayDashboard(canRefresh ? result : disabled, grant, canRefresh);
       const entry = await put(bot, { direction: 'outbox', eventKey, title: '今日简报', text: dashboard.text,
         target: paired.chatId, sourceMessageId: messageId, requiresConfirmation: false }, bot.scope,
         { dashboard: { card: dashboard.card, owner: paired } });

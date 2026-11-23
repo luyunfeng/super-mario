@@ -190,7 +190,7 @@ export function statusDashboard(target: string, status: ConversationStatus | str
   return { text: '当前会话状态\n' + text, card: cardDocument('当前会话状态', [{ tag: 'div', text: cardPlain(text) }]) };
 }
 
-export function todayDashboard(brief: TodayBrief | string, navigation: string) {
+export function todayDashboard(brief: TodayBrief | string, navigation: string, canRefresh: boolean) {
   const elements: Record<string, unknown>[] = [], lines: string[] = [];
   function section(title: string, text: string) {
     elements.push(...cardSection(title, text));
@@ -228,8 +228,8 @@ export function todayDashboard(brief: TodayBrief | string, navigation: string) {
     if (brief.calendar.available) facts('日历 · 已读取', brief.calendar);
     else section('日历', '来源不可用 · ' + label(brief.calendar.reason || '当前未接入日历'));
   }
-  lines.push('发送 /home 返回工作台。');
-  elements.push(...cardButtons([{ label: '返回工作台', value: { kind: 'workbench.navigate', navigation, view: 'home', page: 0 } }]));
+  lines.push(canRefresh ? '发送 /today 刷新简报，或发送 /home 返回工作台。' : '发送 /home 返回工作台。');
+  elements.push(...cardButtons([...(canRefresh ? [{ label: '刷新简报', value: { kind: 'workbench.today', navigation } }] : []), { label: '返回工作台', value: { kind: 'workbench.navigate', navigation, view: 'home', page: 0 } }]));
   return { text: lines.join('\n\n'), card: cardDocument('今日简报', elements) };
 }
 
