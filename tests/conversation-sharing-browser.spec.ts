@@ -135,3 +135,63 @@ test('工作台预览并更新摘录，原匿名链接只显示已确认的版�
   await expect(reader.locator('body')).not.toContainText('合成公开结论');
   await expect(reader.locator('body')).not.toContainText(replacement);
 });
+
+test('主人开启自动追加后匿名链接收到后续 Web 对话，关闭后保留已分享的摘录', {timeout:35000},async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'mario-share-follow-'));
+  const token='synthetic-follow-owner';
+  const server=await startServer({host:'127.0.0.1',port:0,dataDir,token,demo:true});
+  t.after(async()=>{try{await server.close();}finally{await rm(dataDir,{recursive:true,force:true});}});
+  async function send(text:string){
+    const response=await fetch(server.url+'/api/v1/messages',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({text})});
+    assert.equal(response.status,202);
+    const {id}=await response.json();
+    const reply=()=>server.app.store.list<Message>('messages').find(m=>m.replyTo===id && m.role==='assistant' && m.status==='done');
+    await t.waitFor(()=>assert.ok(reply()),{timeout:6000});
+    return reply()!.text;
+  }
+  const original='合成已选开篇',prior='合成未选旧条目',later='合成新一轮发言',after='合成已关闭后发言';
+  await send(prior);await send(original);
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(()=>browser.close());
+  const owner=await browser.newPage();
+  await owner.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  await owner.goto(server.url+'/#chat?token='+token);
+  const open=owner.getByRole('button',{name:'分享对话摘录',exact:true});
+  await open.click();
+  const drawer=owner.getByRole('dialog',{name:'分享对话摘录'});
+  await drawer.getByRole('checkbox',{name:new RegExp('选择消息.*：'+original+'$')}).check();
+  const follow=drawer.getByRole('checkbox',{name:'自动追加后续消息',exact:true});
+  await expect(follow).not.toBeChecked();
+  await follow.check();
+  const preview=drawer.getByRole('button',{name:'预览公开内容'});
+  await preview.click();
+  await drawer.getByRole('button',{name:'确认创建分享'}).click();
+  const link=await drawer.getByRole('textbox',{name:'分享链接'}).inputValue();
+  const reader=await browser.newPage();
+  await reader.clock.install();
+  await reader.goto(link);
+  const messages=reader.getByRole('list',{name:'分享的消息'}).locator('li > p');
+  await expect(messages).toHaveText([original]);
+  await expect(reader.getByRole('status')).toContainText('自动追加后续消息');
+  async function poll(delay=30000){
+    const response=reader.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/public/conversation-share' && r.request().postDataJSON().knownRevision);
+    await reader.clock.fastForward(delay);
+    return (await response).json();
+  }
+  const answer=await send(later);
+  await poll(15000);
+  await expect(messages).toHaveText([original,later,answer]);
+  await expect(reader.locator('body')).not.toContainText(prior);
+  await drawer.getByRole('button',{name:'关闭',exact:true}).click();await open.click();
+  await drawer.getByRole('button',{name:'修改分享'}).click();
+  await expect(follow).toBeChecked();await follow.uncheck();
+  await preview.click();
+  const update=owner.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/conversation-shares' && r.request().postDataJSON().action==='update' && r.ok());
+  await drawer.getByRole('button',{name:'确认更新分享'}).click();await update;
+  await poll();
+  await expect(messages).toHaveText([original,later,answer]);
+  await send(after);
+  assert.equal((await poll()).unchanged,true);
+  await expect(messages).toHaveText([original,later,answer]);
+  await expect(reader).toHaveURL(link);
+});

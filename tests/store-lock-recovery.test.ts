@@ -214,3 +214,30 @@ for (const nested of [false, true]) {
     } finally { reopened.close(); }
   });
 }
+
+test('消息序位迁移沿用旧顺序，删除和重启后不复用，更新与回滚不推进游标', t => {
+  const dir=mkdtempSync(join(tmpdir(),'super-mario-message-position-'));
+  t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const path=join(dir,'synthetic.sqlite');
+  const legacy=new DatabaseSync(path);
+  legacy.exec('CREATE TABLE documents(collection TEXT NOT NULL,id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(collection,id))');
+  const insert=legacy.prepare('INSERT INTO documents VALUES (?,?,?)');
+  for (const [key,value] of [['old-z','旧甲'],['old-a','旧乙']]) insert.run('messages',key!,JSON.stringify(value));
+  legacy.close();
+  let db=createStore(path);
+  try {
+    assert.deepEqual(db.messagesAfterPosition!(0,2).map(r=>r.id),['old-z','old-a']);
+    const start=db.lastMessagePosition!();
+    db.put('messages','old-z','编辑甲');
+    db.remove('messages','old-a');
+    assert.throws(()=>db.transaction(()=>{ db.put('messages','rollback','回滚'); throw Error('abort'); }));
+    assert.equal(db.lastMessagePosition!(),start);
+    db.close();
+    const maintenance=new DatabaseSync(path);
+    maintenance.exec('VACUUM');
+    maintenance.close();
+    db=createStore(path);
+    db.put('messages','new','新正文');
+    assert.deepEqual(db.messagesAfterPosition!(start,1),[{position:start+1,id:'new',value:'新正文'}]);
+  } finally {db.close();}
+});

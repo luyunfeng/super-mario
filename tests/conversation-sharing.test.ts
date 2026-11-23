@@ -81,7 +81,7 @@ test('同一链接编辑保留既有快照，以版本和预览签名原子替�
   const read=(knownRevision?:number)=>host.invocations.use('conversation-sharing.read',{token:created.token!,...(knownRevision && {knownRevision})});
   message('one','改写的原消息');
   const edit={id,revision:1,messageIds:['two','one']};
-  assert.deepEqual((await manage('detail',{id})),{id,revision:1,showTools:false,messageIds:initial.messageIds,expiresAt:created.expiresAt,messages:[{role:'user',text:'原有摘录'},{role:'user',text:'移除的消息'}]});
+  assert.deepEqual((await manage('detail',{id})),{id,revision:1,showTools:false,includeFuture:false,messageIds:initial.messageIds,expiresAt:created.expiresAt,messages:[{role:'user',text:'原有摘录'},{role:'user',text:'移除的消息'}]});
   const preview=await manage('preview',edit);
   const update=()=>manage('update',{...edit,previewHash:preview.previewHash!});
   await assert.rejects(manage('update',{...edit,expireHours:48,previewHash:preview.previewHash!}),{status:409});
@@ -170,4 +170,77 @@ test('分享工具按原回合投影并冻结，修改开关即更新同一链�
   await edit({revision:3,showTools:true});
   assert.ok(JSON.stringify(await read()).includes('new_tool'));
   assert.ok(!JSON.stringify(await read()).includes('office_create'));
+});
+
+test('后续分享核对插入顺序和范围，重启处理未完输入，恢复发布跳过停用空档',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'share-follow-')),db=join(dir,'store.sqlite');
+  const open=()=>{
+    const store=createStore(db),events=createEventBus(store);
+    const host=new PluginHost({store,events,contributions:createContributions(),dataDir:dir});
+    host.register(createConversationSharing());return {store,events,host};
+  };
+  let {store,events,host}=open();
+  t.after(async()=>{await host.close();store.close();await rm(dir,{recursive:true,force:true});});
+  await host.start();
+  function put(id:string,props:JsonObject={}) {
+    store.put('messages',id,{id,conversationId:'main',status:'done',role:'user',text:id,directWebInput:true,
+      createdAt:'2001-01-01T00:00:00Z',...props});
+    events.publish('messages.changed',{conversationId:'main',messageId:id});
+  }
+  const answer=(id:string,replyTo:string)=>put(id,{role:'assistant',replyTo});
+  put('opening');put('old-pending',{status:'pending'});
+  const manage=(action:string,input:JsonObject)=>host.invocations.use('conversation-sharing.manage',{action,conversationId:'main',...input}) as Promise<JsonObject>;
+  const publish=async(props:JsonObject,create=false)=>manage(create?'create':'update',{...props,previewHash:(await manage('preview',props)).previewHash!});
+  const created=await publish({messageIds:['opening'],includeFuture:true,futureScope:{}},true),id=String(created.id);
+  const read=(revision?:number)=>host.invocations.use('conversation-sharing.read',{token:created.token!,...(revision && {knownRevision:revision})}) as Promise<JsonObject>;
+  const detail=()=>manage('detail',{id});
+  store.put('projects','private-project',{id:'private-project'});
+  store.put('todos','todo-private',{id:'todo-private'});put('todo-only',{todoId:'todo-private'});
+  store.put('message.routes','routed',{channel:'feishu'});put('routed');answer('routed-answer','routed');
+  store.remove('message.routes','routed');
+  put('project-only',{projectId:'private-project'});put('bot-only',{conversationId:'bot:test'});
+  put('old-pending');answer('old-answer','old-pending');
+  put('untrusted',{directWebInput:false});answer('internal-answer','untrusted');
+  assert.deepEqual(await read(1),{unchanged:true,expiresAt:created.expiresAt,revision:1,publicationStatus:'live'});
+  store.put('message.routes','opening',{channel:'feishu'});put('during-source-loss');
+  await assert.rejects(read(),{status:404});store.remove('message.routes','opening');
+  assert.deepEqual((await detail()).messageIds,['opening']);
+  put('new-pending',{status:'pending',queueState:'queued'});
+  put('new-pending',{status:'pending',queueState:'running'});
+  assert.equal((await read(1)).unchanged,true);
+  await host.close();store.close();({store,events,host}=open());await host.start();
+  put('new-pending');answer('first-answer','new-pending');
+  assert.deepEqual((await detail()).messageIds,['opening','new-pending','first-answer']);
+  put('new-pending',{text:'此后改写的文字'});
+  assert.deepEqual((await read(1)).messages,[{role:'user',text:'opening'},{role:'user',text:'new-pending'},{role:'assistant',text:'first-answer'}]);
+  const first=await detail();
+  await assert.rejects(manage('preview',{id,revision:first.revision!,messageIds:first.messageIds!,futureScope:{projectId:'private-project'}}),{status:409});
+  await publish({id,revision:first.revision!,messageIds:first.messageIds!,includeFuture:false});
+  put('paused');assert.equal((await read()).publicationStatus,'frozen');
+  const frozen=await detail();
+  await publish({id,revision:frozen.revision!,messageIds:frozen.messageIds!,includeFuture:true});
+  answer('paused-answer','paused');put('before-plugin-off',{status:'pending'});
+  await host.setEnabled('conversation-sharing',false);
+  put('plugin-off');await host.setEnabled('conversation-sharing',true);
+  answer('plugin-off-answer','plugin-off');put('before-plugin-off');
+  put('after-plugin-on');answer('new-answer','after-plugin-on');
+  const final=await detail();
+  assert.deepEqual(final.messageIds,['opening','new-pending','first-answer','after-plugin-on','new-answer']);
+  const scoped=await publish({messageIds:['todo-only'],includeFuture:true,futureScope:{todoId:'todo-private'}},true);
+  put('todo-append',{todoId:'todo-private'});
+  assert.deepEqual((await manage('detail',{id:scoped.id!})).messageIds,['todo-only','todo-append']);
+  assert.deepEqual((await detail()).messageIds,final.messageIds);
+  put('too-large',{text:'大'.repeat(90000)});
+  assert.equal((await read()).publicationStatus,'paused');
+  const paused=await detail();
+  assert.equal(paused.includeFuture,false);assert.match(String(paused.pauseReason),/256 KiB/);
+  assert.deepEqual(paused.messageIds,final.messageIds);
+  const ids=['opening'];
+  for(let i=1;i<99;i++){const key='s'+i;put(key);ids.push(key);}
+  const large=await publish({messageIds:ids,includeFuture:true,futureScope:{}},true);
+  put('hundred');put('over-one-hundred');
+  const capped=await manage('detail',{id:large.id!});
+  assert.equal((capped.messageIds as string[]).length,100);
+  assert.equal((capped.messageIds as string[]).at(-1),'hundred');
+  assert.match(String(capped.pauseReason),/100/);
 });

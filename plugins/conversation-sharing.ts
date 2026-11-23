@@ -1,3 +1,4 @@
+import {collectFuture,futureScopeFor,startFollowing,stopFollowing,type FutureScope} from './conversation-sharing-future.ts';
 import {checkedResult,phaseLabels,record,traceObject} from './tool-trace-public-fields.ts';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import type {Extension,Json,JsonObject,Store} from '../packages/plugin-sdk/src/index.ts';
@@ -7,7 +8,7 @@ import {publicText} from './agent-progress-card.ts';
 const shares='conversation-sharing.shares', snapshots='conversation-sharing.snapshots', tokens='conversation-sharing.tokens';
 type ToolRecord={name:string;status:'succeeded'|'failed'|'unknown';args?:string;result?:string};
 type Excerpt={role:'user'|'assistant';text:string;tools?:ToolRecord[]};
-type Share={showTools?:boolean;revision?:number;id:string;conversationId:string;createdAt:string;expiresAt:string;revokedAt?:string;messageCount:number;tokenHash:string};
+type Share={includeFuture?:boolean;futureScope?:FutureScope;pauseReason?:string;showTools?:boolean;revision?:number;id:string;conversationId:string;createdAt:string;expiresAt:string;revokedAt?:string;messageCount:number;tokenHash:string};
 type Snapshot={ids:string[];messages:Excerpt[];scopeHash:string};
 
 function fail(status:number,message:string):never {throw Object.assign(Error(message),{status});}
@@ -105,21 +106,93 @@ function currentSnapshot(store:Store,share:Share) {
   if (!snapshot || scopeFingerprint(selected(store,scope(store,share.conversationId),snapshot.ids))!==snapshot.scopeHash) return missing();
   return snapshot;
 }
+function futureInfo(share:Share) {
+  return {includeFuture:share.includeFuture===true,...(share.futureScope && {futureScope:share.futureScope}),...(share.pauseReason && {pauseReason:share.pauseReason})};
+}
+function synchronize(store:Store,share:Share,token:string):Share {
+  if (!share.includeFuture || !share.futureScope || share.revokedAt || Date.parse(share.expiresAt)<=Date.now()) return share;
+  const saved=store.get<Snapshot>(snapshots,share.id);
+  if (!saved) return share;
+  const ids=[...saved.ids],messages=[...saved.messages],seen=new Set(ids);
+  let pauseReason:string|undefined;
+  collectFuture(store,share.id,share.conversationId,share.futureScope,seen,candidate=>{
+    let row:Message;
+    try {
+      scope(store,share.conversationId);
+      row=selected(store,share.conversationId,[candidate.id])[0]!;
+    } catch(error) {
+      if ((error as {status?:number}).status===404) return 'skip';
+      throw error;
+    }
+    const text=visibleText(row.text,token),message:Excerpt={role:row.role,text};
+    if (share.showTools && row.role==='assistant') {
+      const sourceIndex=ids.indexOf(row.replyTo!);
+      const tools=toolRecords(store,row,messages[sourceIndex]?.text);
+      if (tools.length) message.tools=tools;
+    }
+    const bytes=Buffer.byteLength(JSON.stringify([...messages,message]));
+    if (ids.length>=100 || bytes>262144) {
+      pauseReason=ids.length>=100 ? '已达到 100 条消息上限' : '后续消息将超过 256 KiB 上限';
+      return 'full';
+    }
+    ids.push(row.id);messages.push(message);
+    if (ids.length===100 || bytes===262144) {
+      pauseReason=ids.length===100 ? '已达到 100 条消息上限' : '已达到 256 KiB 上限';
+      return 'full';
+    }
+    return 'added';
+  });
+  if (ids.length===saved.ids.length && !pauseReason) return share;
+  // A previously frozen source can lose its authorization. Do not catch up
+  // this interval later if the original source becomes visible again.
+  try {currentSnapshot(store,share);}
+  catch (error) {
+    if ((error as {status?:number}).status!==404) throw error;
+    startFollowing(store,share.id);
+    return share;
+  }
+  const scopeHash=scopeFingerprint(selected(store,share.conversationId,ids));
+  const next={...share,revision:(share.revision??1)+1,messageCount:ids.length,...(pauseReason && {includeFuture:false,pauseReason})};
+  store.put(snapshots,share.id,{ids,messages,scopeHash});
+  store.put(shares,share.id,next);
+  return next;
+}
 function checkRevision(value:Json|undefined,share:Share) {
   if (typeof value!=='number' || !Number.isSafeInteger(value) || value<1) fail(400,'需要有效的分享版本');
   if (value!==(share.revision??1)) fail(409,'分享已经修改，请刷新后重试');
 }
 export function createConversationSharing(workspaceToken=''):Extension {
   return {id:'conversation-sharing',name:'对话摘录分享',capabilities:['conversation.sharing'],
-    permissions:['store.read','store.write','service.provide:conversation-sharing.manage','service.provide:conversation-sharing.read'],
-    activate({store,provide}) {
+    permissions:['store.read','store.write','events.subscribe','service.provide:conversation-sharing.manage','service.provide:conversation-sharing.read'],
+    activate({store,provide,onEvent}) {
+      const generation=store.get<{revision?:number}>('core.plugin-settings','conversation-sharing')?.revision??1;
+      store.transaction(()=>{
+        if (store.get<number>('conversation-sharing.settings','generation')!==generation) {
+          for (const share of store.list<Share>(shares)) if (share.includeFuture && !share.revokedAt) startFollowing(store,share.id);
+          store.put('conversation-sharing.settings','generation',generation);
+        }
+      });
+      onEvent(event=>{
+        if (event.type!=='messages.changed' || !record(event.data)) return;
+        const conversationId=event.data.conversationId;
+        for (const row of store.list<Share>(shares)) if (row.includeFuture && !row.revokedAt && row.conversationId===conversationId) {
+          try {store.transaction(()=>{const live=store.get<Share>(shares,row.id);if (live) synchronize(store,live,workspaceToken);});}
+          catch(error) {if ((error as {status?:number}).status!==404) console.warn('后续分享消息同步暂未完成');}
+        }
+      });
       provide('conversation-sharing.manage',(raw,signal)=>store.transaction(():Json=>{
         signal.throwIfAborted();
         const input=args(raw), action=input.action;
         const conversationId=scope(store,input.conversationId,action==='list' || action==='revoke');
         if (action==='list') {
           return {shares:store.list<Share>(shares).filter(s=>s.conversationId===conversationId).reverse()
-            .map(({id,createdAt,expiresAt,revokedAt,messageCount,revision=1,showTools=false})=>({id,revision,showTools,createdAt,expiresAt,...(revokedAt && {revokedAt}),messageCount}))};
+            .map(row=>{
+              let current=row;
+              try {current=store.transaction(()=>synchronize(store,row,workspaceToken));}
+              catch(error) {if ((error as {status?:number}).status!==404) throw error;}
+              const {id,createdAt,expiresAt,revokedAt,messageCount,revision=1,showTools=false}=current;
+              return {id,revision,showTools,createdAt,expiresAt,...(revokedAt && {revokedAt}),messageCount,...futureInfo(current)};
+            })};
         }
         const editing=action==='detail' || action==='update' || (action==='preview' && input.id!==undefined);
         let share:Share|undefined, original:Snapshot|undefined;
@@ -131,12 +204,13 @@ export function createConversationSharing(workspaceToken=''):Extension {
             if (input.revision!==undefined) checkRevision(input.revision,share);
             if (!share.revokedAt) {
               store.put(shares,share.id,{...share,revokedAt:new Date().toISOString()});
-              store.remove(tokens,share.tokenHash);store.remove(snapshots,share.id);
+              store.remove(tokens,share.tokenHash);store.remove(snapshots,share.id);stopFollowing(store,share.id);
             }
             return {revoked:true};
           }
+          share=synchronize(store,share,workspaceToken);
           original=currentSnapshot(store,share);
-          if (action==='detail') return {id:share.id,revision:share.revision??1,showTools:share.showTools??false,messageIds:original.ids,expiresAt:share.expiresAt,messages:original.messages};
+          if (action==='detail') return {...futureInfo(share),id:share.id,revision:share.revision??1,showTools:share.showTools??false,messageIds:original.ids,expiresAt:share.expiresAt,messages:original.messages};
           checkRevision(input.revision,share);
         } else if (input.id!==undefined || input.revision!==undefined) fail(400,'分享标识与操作不匹配');
         if (action!=='preview' && action!=='create' && action!=='update') fail(400,'分享操作无效');
@@ -145,6 +219,9 @@ export function createConversationSharing(workspaceToken=''):Extension {
         if (hours!==null && (typeof hours!=='number' || !Number.isInteger(hours) || hours<1 || hours>720) || input.expireHours===null)
           fail(400,'分享期限须为 1 至 720 小时');
         const ids=selectionIds(input.messageIds), rows=selected(store,conversationId,ids);
+        const includeFuture=input.includeFuture===undefined ? share?.includeFuture??false : input.includeFuture;
+        if (typeof includeFuture!=='boolean') fail(400,'请选择是否追加后续消息');
+        const futureScope=futureScopeFor(input.futureScope,share?.futureScope,includeFuture,rows);
         const retained=new Map(original?.ids.map((id,i)=>[id,original.messages[i]!]));
         const texts=rows.map(row=>retained.get(row.id)?.text??row.text);
         if (texts.reduce((n,text)=>n+Buffer.byteLength(text),0)>262144) fail(400,'选择的正文超过 256 KiB');
@@ -169,20 +246,25 @@ export function createConversationSharing(workspaceToken=''):Extension {
         if (Buffer.byteLength(JSON.stringify(messages))>262144)
           fail(400,'分享摘录超过 256 KiB，请减少所选消息或关闭工具记录');
         const scopeHash=scopeFingerprint(rows);
-        const previewHash=hash(JSON.stringify([conversationId,share?.id,share?.revision??1,hours??share?.expiresAt,showTools,scopeHash,texts,messages]));
+        const previewHash=hash(JSON.stringify([conversationId,share?.id,share?.revision??1,hours??share?.expiresAt,showTools,includeFuture,futureScope,scopeHash,texts,messages]));
         if (action==='preview') return {messages,previewHash};
         if (input.previewHash!==previewHash) fail(409,'消息已变化，请重新预览');
+        const full=includeFuture && (ids.length>=100 || Buffer.byteLength(JSON.stringify(messages))>=262144);
+        const policy={includeFuture:includeFuture && !full,...(futureScope && {futureScope}),...(full && {pauseReason:ids.length>=100?'已达到 100 条消息上限':'已达到 256 KiB 上限'})};
         if (share) {
+          if (policy.includeFuture && !share.includeFuture) startFollowing(store,share.id);
+          if (!policy.includeFuture && share.includeFuture) stopFollowing(store,share.id);
           const expiresAt=hours===null ? share.expiresAt : new Date(Date.now()+hours*3600000).toISOString();
           const revision=(share.revision??1)+1;
           store.put(snapshots,share.id,{ids,messages,scopeHash});
-          store.put(shares,share.id,{...share,expiresAt,revision,showTools,messageCount:ids.length});
+          const {pauseReason:priorPause,...existing}=share;
+          store.put(shares,share.id,{...existing,...policy,expiresAt,revision,showTools,messageCount:ids.length});
           return {id:share.id,expiresAt,revision};
         }
         const now=Date.now(), existing=store.list<Share>(shares);
         // Drop expired snapshots before admitting another; keep recent metadata for the owner's list.
         for (const share of existing) if (Date.parse(share.expiresAt)<=now) {
-          store.remove(snapshots,share.id);store.remove(tokens,share.tokenHash);
+          store.remove(snapshots,share.id);store.remove(tokens,share.tokenHash);stopFollowing(store,share.id);
           if (Date.parse(share.expiresAt)<now-30*86400000) store.remove(shares,share.id);
         }
         const inactive=existing.filter(s=>s.revokedAt || Date.parse(s.expiresAt)<=now);
@@ -191,7 +273,8 @@ export function createConversationSharing(workspaceToken=''):Extension {
         if (active.length>=256 || active.filter(s=>s.conversationId===conversationId).length>=64) fail(409,'有效分享已达上限，请先撤销旧分享');
         const id=randomUUID(),token=randomBytes(32).toString('base64url'),tokenHash=hash(token);
         const createdAt=new Date(now).toISOString(),expiresAt=new Date(now+(hours??24)*3600000).toISOString();
-        store.put(shares,id,{id,revision:1,showTools,conversationId,createdAt,expiresAt,messageCount:ids.length,tokenHash});
+        if (policy.includeFuture) startFollowing(store,id);
+        store.put(shares,id,{...policy,id,revision:1,showTools,conversationId,createdAt,expiresAt,messageCount:ids.length,tokenHash});
         store.put(snapshots,id,{ids,messages,scopeHash});store.put(tokens,tokenHash,id);
         return {id,token,expiresAt};
       }));
@@ -201,9 +284,14 @@ export function createConversationSharing(workspaceToken=''):Extension {
         if (typeof token!=='string' || !/^[A-Za-z0-9_-]{43}$/.test(token)) return missing();
         const digest=hash(token),id=store.get<string>(tokens,digest),share=id && store.get<Share>(shares,id);
         if (!share || share.id!==id || share.tokenHash!==digest) return missing();
-        const snapshot=currentSnapshot(store,share);
-        const revision=share.revision??1;
-        return knownRevision===revision ? {unchanged:true,expiresAt:share.expiresAt,revision} : {messages:snapshot.messages,expiresAt:share.expiresAt,revision};
+        const current=synchronize(store,share,workspaceToken);
+        const snapshot=currentSnapshot(store,current);
+        const revision=current.revision??1;
+        const response:JsonObject={expiresAt:share.expiresAt,revision};
+        if (current.futureScope) response.publicationStatus=current.includeFuture?'live':current.pauseReason?'paused':'frozen';
+        if (knownRevision===revision) response.unchanged=true;
+        else response.messages=snapshot.messages;
+        return response;
       }));
     }};
 }

@@ -5,7 +5,6 @@ import {renderSharedTools} from './lib/shared-excerpt-tools.js';
   const status = document.querySelector('[role="status"]');
   const list = document.querySelector('ol');
   const expiry = document.querySelector('time');
-  const refreshInterval = 30_000;
   let pending, polling, deadline, revision;
 
   function clear(message) {
@@ -45,6 +44,7 @@ import {renderSharedTools} from './lib/shared-excerpt-tools.js';
     pending = request;
     const timeout = setTimeout(()=>request.abort(),15_000);
     let retry = true;
+    let refreshInterval = 30_000;
     try {
       const response = await fetch('/api/v1/public/conversation-share', {
         method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({token,knownRevision:revision}),
@@ -68,7 +68,14 @@ import {renderSharedTools} from './lib/shared-excerpt-tools.js';
       expiry.dateTime = page.expiresAt;
       expiry.textContent = '有效期至 ' + new Date(until).toLocaleString();
       expiry.hidden = false;
-      status.textContent = '';
+      if (page.publicationStatus==='live') {
+        status.textContent = '此摘录会自动追加后续消息。';
+        refreshInterval = 15_000;
+      } else if (page.publicationStatus==='paused') {
+        status.textContent = '自动追加已暂停，以下是已发布的摘录。';
+      } else {
+        status.textContent = '';
+      }
       clearTimeout(deadline);
       function expire() {
         const remaining = until - Date.now();

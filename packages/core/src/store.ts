@@ -13,6 +13,32 @@ export function createStore(dbPath: string): Store {
     PRIMARY KEY (collection, id)
   )`);
   db.exec("CREATE INDEX IF NOT EXISTS documents_numeric_cursor ON documents(collection, CAST(id AS INTEGER))");
+  // Public live excerpts start at a durable boundary. SQLite may renumber implicit
+  // rowids during VACUUM or reuse them after deletes, so keep explicit message positions.
+  const hasPositions = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_positions'");
+  if (!hasPositions.get()) {
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      if (!hasPositions.get()) db.exec(`
+        CREATE TABLE message_positions (position INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE);
+        INSERT INTO message_positions(id) SELECT id FROM documents WHERE collection='messages' ORDER BY rowid;
+        CREATE TRIGGER record_message_position AFTER INSERT ON documents WHEN NEW.collection='messages'
+        BEGIN INSERT INTO message_positions(id) VALUES (NEW.id); END;
+        CREATE TRIGGER forget_message_position AFTER DELETE ON documents WHEN OLD.collection='messages'
+        BEGIN DELETE FROM message_positions WHERE id=OLD.id; END;
+      `);
+      db.exec('COMMIT');
+    } catch (error) {
+      if (db.isTransaction) db.exec('ROLLBACK');
+      db.close();
+      throw error;
+    }
+  }
+  const lastMessage = db.prepare("SELECT seq FROM sqlite_sequence WHERE name='message_positions'");
+  // Read the bounded position range first, even before SQLite has table statistics.
+  const messagePage = db.prepare(`SELECT p.position,p.id,d.value FROM message_positions p
+    CROSS JOIN documents d ON d.collection='messages' AND d.id=p.id
+    WHERE p.position>? ORDER BY p.position LIMIT ?`);
   const after = db.prepare('SELECT value FROM documents WHERE collection = ? AND CAST(id AS INTEGER) > ? ORDER BY CAST(id AS INTEGER) LIMIT ?');
   const get = db.prepare('SELECT value FROM documents WHERE collection = ? AND id = ?');
   // Stable insertion order keeps conversations chronological; editing a row does not move it.
@@ -34,6 +60,12 @@ export function createStore(dbPath: string): Store {
     }
   }
   return {
+    lastMessagePosition() { return Number(lastMessage.get()?.seq ?? 0); },
+    messagesAfterPosition<T>(after: number, limit: number) {
+      if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(limit) || limit < 1)
+        throw new RangeError('Invalid message cursor or page size');
+      return messagePage.all(after, limit).map(row => ({position:Number(row.position), id:String(row.id), value:JSON.parse(String(row.value)) as T}));
+    },
     listAfter<T>(collection: string, id: number, limit = 1000): T[] { return after.all(collection, id, limit).map(row => JSON.parse(row.value as string) as T); },
     get<T>(collection: string, id: string): T | undefined {
       const row = get.get(collection, id);

@@ -238,7 +238,12 @@ export class PluginHost {
       since: id => { permission('events.read'); return this.options.events.since(id); },
       subscribe: listener => { assertLive(); permission('events.subscribe'); return own(this.options.events.subscribe(listener)); },
     };
+    const backing = this.options.store;
     const store: Store = {
+      ...(backing.lastMessagePosition && {lastMessagePosition:() => { permission('store.read'); return backing.lastMessagePosition!(); }}),
+      ...(backing.messagesAfterPosition && {messagesAfterPosition:<T>(after:number,limit:number) => {
+        permission('store.read'); return backing.messagesAfterPosition!<T>(after,limit);
+      }}),
       get: (collection, id) => { permission('store.read'); return this.options.store.get(collection, id); },
       list: collection => { permission('store.read'); return this.options.store.list(collection); },
       put: (collection, id, value) => { permission('store.write'); assertJson(value); this.options.store.put(collection, id, value); },

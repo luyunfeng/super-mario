@@ -51,12 +51,14 @@ export function createConversationSharing({api,store,getRows}) {
     const historyStatus=h('p',{class:'small muted',role:'status'});
     const expiry=Select({options:[['1','1 小时'],['24','1 天'],['72','3 天'],['168','7 天'],['720','30 天']],value:'24',onchange:invalidate});
     const showTools=h('input',{type:'checkbox',onchange:invalidate});
+    const includeFuture=h('input',{type:'checkbox',onchange:invalidate});
+    const futureHint=h('p',{class:'small',hidden:true});
     const inspect=Button({label:'预览公开内容',size:'sm',onClick:showPreview});
     const editLabel=h('strong',{});
     const editBar=h('div',{class:'row row--between',hidden:true},editLabel,Button({label:'取消编辑',size:'sm',onClick:()=>{if (!writing) resetMode();}}));
     const inputs=h('fieldset',{class:'stack',style:{border:'0',padding:'0',margin:'0',minWidth:'0'}},
       h('div',{class:'row row--wrap'},Button({label:'全选当前消息',size:'sm',onClick:()=>chooseFrom(0)}),
-        Button({label:'全不选',size:'sm',onClick:()=>chooseFrom(rows.length)})),candidates,status,h('label',{class:'check'},showTools,'包含工具记录'),Field({label:'分享有效期',control:expiry}),inspect);
+        Button({label:'全不选',size:'sm',onClick:()=>chooseFrom(rows.length)})),candidates,status,h('label',{class:'check'},showTools,'包含工具记录'),h('label',{class:'check'},includeFuture,'自动追加后续消息'),futureHint,Field({label:'分享有效期',control:expiry}),inspect);
     const drawer=openDrawer({title:'分享对话摘录',wide:true,body:[
       editBar,inputs,previewBox,feedback,result,h('section',{class:'stack','aria-label':'已有分享'},
         h('div',{class:'row row--between'},h('h3',{},'本对话已有分享'),Button({label:'刷新分享列表',size:'sm',onClick:loadList})),historyStatus,history)
@@ -72,7 +74,31 @@ export function createConversationSharing({api,store,getRows}) {
       if (selected.size>100) status.textContent='已选 '+selected.size+' 条，超过 100 条上限，请减少选取后预览。';
       inspect.disabled=writing || reading || !selected.size || selected.size>100;
     }
+    function futureScope() {
+      return editing?.futureScope ?? { ...(range.projectId && {projectId:range.projectId}), ...(range.todoId && {todoId:range.todoId}) };
+    }
+    function scopeLabel(scope) {
+      const snapshot=store.view.snapshot;
+      const project=snapshot.projects?.find(p=>p.id===scope.projectId);
+      const todo=snapshot.todos?.find(t=>t.id===scope.todoId);
+      return [conversationId==='main'?'主对话':'项目工作对话',scope.projectId?'项目「'+(project?.name || scope.projectId)+'」':'无项目归属',
+        scope.todoId?'待办「'+(todo?.title || scope.todoId)+'」':'无待办归属'].join(' · ');
+    }
+    function describeFuture(scope,tools) {
+      return '自动追加范围：'+scopeLabel(scope)+'。勾选的摘录须属于此范围。此范围内后续从 Web 直接发送的正文和对应的助手答复完成后，持有链接的人无需登录即可查看。'+
+        (tools?'答复中的工具名称、状态、参数和结果也会公开。':'');
+    }
+    function futureState(item) {
+      if(item.pauseReason) return '自动追加已暂停：'+item.pauseReason;
+      return item.includeFuture?'自动追加后续消息':'';
+    }
+    function updateHint() {
+      futureHint.hidden=!includeFuture.checked && !editing?.includeFuture;
+      futureHint.textContent=includeFuture.checked?describeFuture(futureScope(),showTools.checked):
+        editing?.includeFuture?'关闭后，原链接保留本次预览中的摘录。':'';
+    }
     function invalidate() {
+      updateHint();
       generation++; preview=undefined; reading=false; previewBox.hidden=true; previewBox.replaceChildren(); feedback.textContent=''; counts();
     }
     function refreshRows() {
@@ -108,7 +134,7 @@ export function createConversationSharing({api,store,getRows}) {
     }
     function resetMode() {
       editStamp++; editing=undefined;loadingEdit=false; selected.clear(); rendered=false;
-      editBar.hidden=true; inputs.disabled=writing; expiry.querySelector('option[value="keep"]')?.remove();expiry.value='24';showTools.checked=false;
+      editBar.hidden=true; inputs.disabled=writing; expiry.querySelector('option[value="keep"]')?.remove();expiry.value='24';showTools.checked=false;includeFuture.checked=false;
       invalidate();refreshRows();
     }
     async function edit(item) {
@@ -120,18 +146,21 @@ export function createConversationSharing({api,store,getRows}) {
         const detail=await api.post('/conversation-shares',{action:'detail',conversationId,id:item.id});
         if (!current() || stamp!==editStamp) return;
         if (detail.id!==item.id || !detail.revision || detail.messageIds.length!==detail.messages.length) throw new Error('分享详情不完整，请刷新后再试。');
-        editing={id:detail.id,revision:detail.revision,expiresAt:detail.expiresAt,rows:detail.messages.map((m,i)=>({...m,id:detail.messageIds[i]}))};
-        showTools.checked=detail.showTools===true;
+        if (detail.includeFuture && (!detail.futureScope || typeof detail.futureScope!=='object' || Array.isArray(detail.futureScope))) {
+          throw new Error('无法核对原分享的自动追加范围。');
+        }
+        editing={id:detail.id,revision:detail.revision,expiresAt:detail.expiresAt,futureScope:detail.futureScope,includeFuture:detail.includeFuture===true,rows:detail.messages.map((m,i)=>({...m,id:detail.messageIds[i]}))};
+        showTools.checked=detail.showTools===true;includeFuture.checked=editing.includeFuture;updateHint();
         for (const m of editing.rows) selected.add(m.id);
         expiry.prepend(h('option',{value:'keep'},'保留原到期时间'));expiry.value='keep';
-        editLabel.textContent='修改分享 · 原到期时间 '+dateLabel(detail.expiresAt);
+        editLabel.textContent='修改分享 · 原到期时间 '+dateLabel(detail.expiresAt)+(futureState(detail)?' · '+futureState(detail):'');
         rendered=false;refreshRows();editBar.scrollIntoView({block:'nearest'});
       } catch(error) {
         if(current() && stamp===editStamp){resetMode();feedback.textContent=error.message+'。请刷新分享列表核对。';}
       } finally {if(current() && stamp===editStamp){loadingEdit=false;inputs.disabled=false;counts();}}
     }
     function parameters() {
-      return {conversationId,showTools:showTools.checked,messageIds:rows.filter(m=>selected.has(m.id)).map(m=>m.id),...(editing?{id:editing.id,revision:editing.revision}:{}),...(expiry.value==='keep'?{}:{expireHours:Number(expiry.value)})};
+      return {conversationId,showTools:showTools.checked,includeFuture:includeFuture.checked,...(includeFuture.checked && {futureScope:futureScope()}),messageIds:rows.filter(m=>selected.has(m.id)).map(m=>m.id),...(editing?{id:editing.id,revision:editing.revision}:{}),...(expiry.value==='keep'?{}:{expireHours:Number(expiry.value)})};
     }
     async function showPreview() {
       if (!current() || !selected.size || selected.size>100 || writing || loadingEdit) return;
@@ -144,11 +173,13 @@ export function createConversationSharing({api,store,getRows}) {
         previewBox.hidden=false;
         replace(previewBox,h('header',{class:'card__head'},h('h3',{},'公开内容预览')),
           h('div',{class:'card__body stack'},value.messages.map(m=>h('div',{},h('strong',{},roleLabel(m.role)),h('pre',{class:'mailbox-content'},m.text),args.showTools && renderSharedTools(m.tools))),
+            args.includeFuture && h('p',{},h('strong',{},describeFuture(args.futureScope,args.showTools))),
+            !args.includeFuture && editing?.includeFuture && h('p',{},'确认后停止自动追加，原链接将保留以上摘录。'),
             args.showTools && h('p',{class:'small'},'持有链接的人也能查看预览中的工具名称、状态、参数和结果。请展开工具记录，核对后再确认。'),
             h('p',{class:'small'},args.expireHours ? '持有链接的人可在 '+args.expireHours+' 小时内查看以上正文。' : '原链接到期时间为 '+dateLabel(editing.expiresAt)+'。'),
             Button({label:editing?'确认更新分享':'确认创建分享',kind:'primary',onClick:create})));
         feedback.textContent='';
-      } catch(error) {if(current() && stamp===generation) feedback.textContent=error.message;}
+      } catch(error) {if(current() && stamp===generation) feedback.textContent=error.message+(editing && error.status===409?'。请重新打开「修改分享」核对最新消息。':'');}
       finally {if(current() && stamp===generation) {reading=false;counts();}}
     }
     async function create() {
@@ -209,7 +240,7 @@ export function createConversationSharing({api,store,getRows}) {
             }}),Button({label:'取消',size:'sm',onClick:revert}))}));
           if (!item.revokedAt && !expired) revert();
           return h('div',{class:'item'},h('div',{class:'item__main'},h('strong',{},item.messageCount+' 条消息 · '+(item.revokedAt?'已撤销':expired?'已到期':'分享中')),
-            h('span',{class:'item__meta'},(item.showTools?'包含工具记录 · ':'')+'创建于 '+dateLabel(item.createdAt)+'，到期于 '+dateLabel(item.expiresAt))),actions);
+            h('span',{class:'item__meta'},(futureState(item)?futureState(item)+' · ':'')+(item.showTools?'包含工具记录 · ':'')+'创建于 '+dateLabel(item.createdAt)+'，到期于 '+dateLabel(item.expiresAt))),actions);
         }));
       } catch(error){if(current() && stamp===listStamp){history.replaceChildren();historyStatus.textContent=error.message;}}
     }
