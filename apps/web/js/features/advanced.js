@@ -1,11 +1,30 @@
 // 高级：插件、插件文件、后台事件、界面、诊断。通常不用动，默认全部折叠。
 import {openAssistantCardExamples} from './assistant-card-examples.js';
-import { h, replace } from '../lib/dom.js';
+import { h, replace, svg } from '../lib/dom.js';
 import { Button, Fold, Pill, Check } from '../ui/kit.js';
 import { hintsEnabled, setHintsEnabled } from '../ui/hint.js';
 import { createAgentArtifactsUI } from '../legacy/agent-artifacts.js';
 import { createBackgroundPage } from '../legacy/background-page.js';
 const node = (tag, text, className) => { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; if (className) value.className = className; return value; };
+
+function barChart(card) {
+  const points = card.points;
+  if (card.kind !== 'bar' || !Array.isArray(points) || !points.length ||
+      !points.every(point => typeof point?.label === 'string' && Number.isFinite(point.value))) return;
+  const scale = points.reduce((max, point) => Math.max(max, Math.abs(point.value)), 0) || 1;
+  const low = points.reduce((min, point) => Math.min(min, point.value / scale), 0);
+  const high = points.reduce((max, point) => Math.max(max, point.value / scale), 0);
+  const y = value => 96 - 92 * (value / scale - low) / (high - low || 1);
+  const width = 300 / points.length;
+  const marks = points.map((point, index) => ['rect', {x:(index + 0.15) * width, width:width * 0.7,
+    y:Math.min(y(0), y(point.value)), height:Math.abs(y(0) - y(point.value)), fill:'currentColor'}]);
+  const graph = svg([['line',{x1:0,x2:300,y1:y(0),y2:y(0),stroke:'currentColor'}], ...marks]);
+  graph.setAttribute('viewBox','0 0 300 100');
+  graph.setAttribute('height','120');
+  return h('div',{class:'stack'}, graph, h('table',{class:'table','aria-label':card.title},
+    h('thead',{},h('tr',{},h('th',{scope:'col'},'项目'),h('th',{scope:'col'},'数值'))),
+    h('tbody',{},points.map(point => h('tr',{},h('th',{scope:'row'},point.label),h('td',{},point.value))))));
+}
 
 export function createAdvanced({ api, store, router, openPluginSettings }) {
   const plugins = openPluginSettings && Button({ label: '打开插件配置', size: 'sm', onClick: openPluginSettings });
@@ -45,9 +64,11 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
       if (value?.slot !== 'advanced-interface' || value.renderer === 'assistant-card-examples') continue;
       const patch = value.renderer === 'diff' && typeof value.patch === 'string' && value.patch;
       const fallback = typeof value.fallback === 'string' && value.fallback;
-      if (typeof value.title !== 'string' || !(patch || fallback)) continue;
+      if (typeof value.title !== 'string') continue;
+      const content = patch ? h('pre', {}, h('code', {}, patch)) : value.renderer === 'chart' && barChart(value);
+      if (!content && !fallback) continue;
       cards.push(h('section', {class:'card card__body stack', 'aria-label':value.title},
-        h('h3', {}, value.title), patch ? h('pre', {}, h('code', {}, patch)) : h('p', {}, fallback)));
+        h('h3', {}, value.title), content || h('p', {}, fallback)));
     }
     replace(extensionCards, cards);
     extensionCards.hidden = !cards.length;
