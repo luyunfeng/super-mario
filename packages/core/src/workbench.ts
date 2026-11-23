@@ -582,11 +582,20 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(conversationDrafts);
   plugins.register(conversationImages);
   plugins.register(conversationFiles);
-  plugins.register(createRunComparison(readRunCommitDiff, (id, offset, version) => runWorktreeStatus(id, true, offset, version), readRunWorktreeChange, runWorktreeHistory, () => {
+  plugins.register(createRunComparison(readRunCommitDiff, (id, offset, version) => runWorktreeStatus(id, true, offset, version), readRunWorktreeChange, runWorktreeHistory, name => {
     const source = currentAgentInput();
     if (!source?.projectId || source.todoId || source.readOnly || source.role !== 'user' || source.origin && source.origin !== 'user')
       throw new InputError('请在项目对话中查询工作树', 403);
-    return listProjectWorktrees(source.projectId);
+    const trees = listProjectWorktrees(source.projectId);
+    if (name === undefined) return trees;
+    const tree = trees.find(item => item.name === name);
+    if (!tree) throw new InputError('当前项目没有登记该名称的工作树', 404);
+    const machineId = projectWorktreeBinding(source.projectId).machineId;
+    const runs = store.list<Run>('runs').filter(run => run.projectId === source.projectId && run.machineId === machineId && run.cwd === tree.cwd)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return { ...tree, total: runs.length, runs: runs.slice(0, 20).map(run => ({
+      id: run.id, status: run.status, createdAt: run.createdAt, promptExcerpt: run.prompt.slice(0, 240),
+    })) };
   }));
   plugins.register(shortcutSettings);
   plugins.register(readingFonts);

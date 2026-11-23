@@ -10,17 +10,19 @@ function visibleChanges(changes: Json | undefined, files: Json[]): Record<string
 
 export function createRunComparison(read: (id: string, path?: string) => Promise<Json>, status: (id: string, offset?: number, version?: string) => Promise<Json>,
   change: (id: string, path: string, area: string) => Promise<Json>, history: (id: string, mode: string, offset: number, version?: string, commit?: string, path?: string) => Promise<Json>,
-  projectTrees: () => Json): Extension {
+  projectTrees: (name?: string) => Json): Extension {
   return {
     id: 'run-comparison', name: '执行对比', capabilities: ['web.runComparison', 'runs.diff.read'],
     activate(context) {
       context.contribute('tools', 'project_worktrees_list', {
-        name: 'project_worktrees_list', description: '列出本项目单独创建的 Git 工作树名称和登记目录。',
-        parameters: { type: 'object', properties: {}, additionalProperties: false },
+        name: 'project_worktrees_list', description: '列出本项目单独创建的 Git 工作树名称和登记目录。传入准确名称可查该工作树最近的执行记录。',
+        parameters: { type: 'object', properties: { name: { type: 'string', minLength: 1, maxLength: 80 } }, additionalProperties: false },
         async execute(args, signal) {
           signal.throwIfAborted();
-          if (Object.keys(args).length) throw new Error('查询只使用本轮项目，无需参数');
-          return projectTrees();
+          if (Object.keys(args).some(key => key !== 'name')) throw new Error('只接受工作树名称');
+          const name = args.name;
+          if (name !== undefined && (typeof name !== 'string' || !name.trim() || name.length > 80)) throw new Error('工作树名称无效');
+          return projectTrees(name?.trim());
         },
       });
       context.contribute('tools', 'run_worktree_status', {

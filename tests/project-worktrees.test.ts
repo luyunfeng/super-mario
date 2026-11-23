@@ -57,7 +57,7 @@ test('项目只创建工作树时返回独立目录，不生成或派发执行',
     role: 'user' as const, directWebInput: true as const, text: '已准备哪些目录？', createdAt: new Date().toISOString() };
   const signal = new AbortController().signal;
   assert.deepEqual(await runWithAgentInput(message, () => query.execute({}, signal)), [result]);
-  await assert.rejects(runWithAgentInput(message, () => query.execute({ projectId: 'another' }, signal)), /无需参数/);
+  await assert.rejects(runWithAgentInput(message, () => query.execute({ projectId: 'another' }, signal)), /只接受工作树名称/);
   await assert.rejects(runWithAgentInput({ ...message, todoId: 'task' }, () => query.execute({}, signal)), /项目对话/);
   assert.deepEqual(starts, []);
   assert.equal(server.app.store.list('runs').length, 0);
@@ -68,4 +68,12 @@ test('项目只创建工作树时返回独立目录，不生成或派发执行',
   assert.equal(launch.status, 202, await launch.text());
   await t.waitFor(() => assert.deepEqual(starts, [result.cwd]));
   assert.equal(server.app.store.list('runs').length, 1);
+  const history = await runWithAgentInput(message, () => query.execute({ name: result.name }, signal));
+  assert.ok(history && typeof history === 'object' && !Array.isArray(history));
+  assert.equal(history.total, 1);
+  assert.ok(Array.isArray(history.runs));
+  const first = history.runs[0];
+  assert.ok(first && typeof first === 'object' && !Array.isArray(first));
+  assert.equal(first.promptExcerpt, '检查独立目录');
+  await assert.rejects(runWithAgentInput(message, () => query.execute({ name: '不存在' }, signal)), /没有登记/);
 });
