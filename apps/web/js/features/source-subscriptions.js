@@ -110,6 +110,7 @@ export function openSourceSubscriptions({api,store,router,draftId,runsId}) {
         h('div',{class:'small'},row.mode==='snapshot' && '状态快照 · ',(sourceName ?? row.sourceId + '（连接器不可用）') + ' · ' + row.resource),
         h('div',{class:'small muted'},row.destinations.map(id => destinations[id]).join('、') + ' · ' + subscriptionScheduleLabel(row,timezone)),
         row.nextPageNumber && h('div',{class:'small'},'本轮尚有后续页，下次读取第 '+row.nextPageNumber+' 页。'),
+        Number.isInteger(row.inboxCatchupPending) && h('div',{class:'small'},'首轮收件等待最后一页 · 已暂存 '+row.inboxCatchupPending+' 项'),
         inspectedSnapshot?.id===row.id && h('div',{class:'stack',role:'status'},
           ...previewItems(inspectedSnapshot.preview,true)),
         recentSnapshots?.id===row.id && h('section',{class:'stack','aria-label':'最近 24 小时的状态记录'},

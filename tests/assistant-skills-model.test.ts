@@ -3824,7 +3824,7 @@ test('订阅读取仅供 Web 主对话与飞书主人私聊，预览不投递也
   const sent:string[]=[];
   let fetches=0;
   let proposed='',snapshotId='',branch='main',releaseUnavailable=false;
-  let healthId='';
+  let healthId='',waitingSubId='';
   const realFetch=fetch;
   t.mock.method(globalThis,'fetch',async(input:RequestInfo|URL,init?:RequestInit)=>{
     const req=new Request(input,init);
@@ -3839,6 +3839,10 @@ test('订阅读取仅供 Web 主对话与飞书主人私聊，预览不投递也
   });
   const {server,api,ask}=await fixture(t,req=>{
     if(req.lastRole==='user'){
+      if(JSON.stringify(req.content).includes('为什么首轮收件还没到')){
+        assert.match(req.system,/逐页读取成功不能当成收件回执/);
+        return call('source_subscriptions_read',{action:'list'},'pending-pages');
+      }
       if(JSON.stringify(req.content).includes('核对来源故障卡')){
         assert.match(req.system,/成功读取不代表积压已补投/);
         assert.match(req.system,/retryKind=failures 表示连接器连续调用失败后的共享等待/);
@@ -3871,6 +3875,12 @@ test('订阅读取仅供 Web 主对话与飞书主人私聊，预览不投递也
     }
     const raw=typeof req.content==='string'?req.content:(req.content as {text:string}[])[0].text;
     const result=JSON.parse(raw);
+    if(req.callId==='pending-pages'){
+      const waiting=result.subscriptions.find((sub:{id:string})=>sub.id===waitingSubId);
+      assert.equal(waiting.inboxCatchupPending,1);
+      assert.equal(waiting.nextPageNumber,2);
+      return {role:'assistant',content:'首轮已暂存一项，下一次会读第 2 页，收件箱仍在等待最后一页。'};
+    }
     if(req.callId==='health'){
       assert.equal(result.subscriptionId,healthId);
       assert.equal(result.subscriptionExists,true);
@@ -4008,6 +4018,15 @@ test('订阅读取仅供 Web 主对话与飞书主人私聊，预览不投递也
     try {await service.pull(healthId,healthSub.version);}
     finally {t.mock.timers.reset();}
     assert.equal(await ask('核对来源故障卡是否恢复'),'已核实来源成功读取，该轮提醒已关闭。');
+
+    waitingSubId=sub.id;
+    await service.pull(sub.id,sub.version);
+    const expected='首轮已暂存一项，下一次会读第 2 页，收件箱仍在等待最后一页。';
+    const readsAfterPage=fetches;
+    assert.equal(await ask('为什么首轮收件还没到'),expected);
+    await adapter.onMessage('为什么首轮收件还没到',{...owner,messageId:'initial-pages'});
+    await t.waitFor(()=>assert.ok(sent.includes(expected)));
+    assert.equal(fetches,readsAfterPage);
 
   }finally{await server.close();}
 });

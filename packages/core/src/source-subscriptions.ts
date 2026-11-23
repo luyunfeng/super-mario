@@ -12,7 +12,7 @@ type SubscriptionTriagePolicy = Omit<InboxSubscriptionPolicy,'due'>;
 export type SourceItem = {id:string; title:string; text:string; url?:string; dueAt?:string; thread?:string; occurredAt?:string};
 type SubscriptionInput = {sourceId:string; resource:string; name:string; destinations:Destination[]; intervalMinutes:number};
 export interface SourceSubscription extends SubscriptionInput, SubscriptionTriagePolicy {
-  failingSince?:string; failureReason?:string; failureCount?:number; retryKind?:'rate_limit'|'failures';
+  inboxCatchupPending?:number; failingSince?:string; failureReason?:string; failureCount?:number; retryKind?:'rate_limit'|'failures';
   inboxGroup?:'thread'|'source'; mode?:'snapshot'; dailyAt?:string; id:string; version:number; enabled:boolean; nextRunAt:string; lastRunAt?:string; nextPageNumber?:number; retryAt?:string; error?:string;
 }
 type Options = {
@@ -353,7 +353,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
           const waiting=held.filter(h=>!store.get(receipts+'.'+id,deliveryKey(id,h.item.id,'inbox')));
           if(waiting.length) store.put(catchupItems,id,waiting);
         }
-        if(!next.destinations.includes('inbox')) {store.remove(catchupItems,id);delete priorBoundary.awaitingFirst;}
+        if(!next.destinations.includes('inbox')) {store.remove(catchupItems,id);delete priorBoundary.awaitingFirst;delete next.inboxCatchupPending;}
         store.put(inboxBoundary,id,priorBoundary);
       }
       if(!config.triageRules) delete next.triageRules;
@@ -419,6 +419,11 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
     onChange?.(id);
     return {deleted:true};
   }
+  function hasLocalDeliveries(row:SourceSubscription) {
+    const {id}=row;
+    return Boolean(store.get(pending,id) || store.get(snapshotCatchups,id) || store.get(inboxJobs,id) ||
+      (row.inboxCatchupPending===undefined && store.get(catchupItems,id)));
+  }
   async function runPull(id:string,version:unknown,trigger:SubscriptionRun['trigger']) {
     const row=current(id,version);
     if(!row.enabled) failure('订阅已暂停。',409);
@@ -426,7 +431,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
     const sourceRules=requireSource(row.sourceId).triageRules;
     const rules=row.triageRules || sourceRules;
     const gate=retry.get(row.sourceId);
-    if(gate && !store.get(pending,id) && !store.get(snapshotCatchups,id) && !store.get(catchupItems,id) && !store.get(inboxJobs,id)) limited(gate);
+    if(gate && !hasLocalDeliveries(row)) limited(gate);
     const audit=records.begin(id,trigger,row.nextPageNumber ?? 1);
     const controller=new AbortController();running.set(id,controller);
     const ownedReceipts=receipts+'.'+id;
@@ -458,9 +463,10 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
       audit.save();
     }
     const boundary=store.get<Boundary>(inboxBoundary,id) ?? {};
-    function observe(items:SourceItem[]) {
+    function observe(items:SourceItem[],frozen:HeldInboxItem[]) {
       const held=observed(id), known=new Set(held.map(h=>h.item.id));
-      let sequence=held.at(-1)?.sequence ?? 0;
+      for(const h of frozen) known.add(h.item.id);
+      let sequence=Math.max(held.at(-1)?.sequence ?? 0,frozen.at(-1)?.sequence ?? 0);
       const time=Math.max(Date.now(),Date.parse(boundary.catchupAt ?? '')+1 || 0,Date.parse(boundary.groupFrom ?? '') || 0);
       for(const item of items) {
         if(known.has(item.id) || delivered(deliveryKey(id,item.id,'inbox')) || delivered(deliveryKey(id,item.id,'knowledge'))) continue;
@@ -596,7 +602,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
       const backlog=store.get<SourceItem[]>(pending,id) ?? [];
       const staged=store.get<Advance>(stagedPages,id);
       if(backlog.length || staged) {
-        const targets=row.mode ? store.get<Destination[]>(snapshotTargets,id) : undefined;
+        const targets=row.mode ? store.get<Destination[]>(snapshotTargets,id) : row.inboxCatchupPending!==undefined ? row.destinations.filter(d=>d!=='inbox') : undefined;
         planDeliveries(backlog,targets);await deliverQueue(backlog,targets);
         guard();
         if(staged) {
@@ -619,7 +625,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
           store.put(rows,id,active);
         }
         const catchup=store.get<HeldInboxItem[]>(catchupItems,id)?.map(h=>h.item);
-        if(boundary.awaitingFirst && catchup?.length && !closed && !controller.signal.aborted) {
+        if(boundary.awaitingFirst && row.inboxCatchupPending===undefined && catchup?.length && !closed && !controller.signal.aborted) {
           guard();
           boundary.catchupAt=new Date(Date.now()).toISOString();
           store.put(inboxBoundary,id,boundary);
@@ -669,31 +675,45 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
         guard();
         const updated=commitPage({});onChange?.(id);return updated;
       }
-      const caught=store.get<HeldInboxItem[]>(catchupItems,id)?.map(h=>h.item) ?? [];
+      const frozen=store.get<HeldInboxItem[]>(catchupItems,id) ?? [];
+      const caught=frozen.map(h=>h.item);
+      const frozenIds=new Set(caught.map(item=>item.id));
+      const deferInbox=Boolean(deliverInbox && boundary.awaitingFirst && advance.position);
+      const finishingInitialPages=row.inboxCatchupPending!==undefined && !deferInbox;
       const queue=store.transaction(()=>{
-        observe(page.items);
+        observe(page.items,frozen);
         const retained=new Set(recent(id).map(h=>h.item.id));
         const queue=page.items.filter(item=>row.destinations.some(d=>!delivered(deliveryKey(id,item.id,d)) &&
           !(d==='inbox' && !retained.has(item.id) && delivered(deliveryKey(id,item.id,'knowledge')))));
-        if(boundary.awaitingFirst) {
+        if(deferInbox) {
+          // Persist the original observation, even when another page or a restart evicts it from the live cache.
+          const ids=new Set(queue.filter(item=>!delivered(deliveryKey(id,item.id,'inbox')) && !frozenIds.has(item.id)).map(item=>item.id));
+          const additions=observed(id).filter(h=>ids.has(h.item.id));
+          store.put(catchupItems,id,[...frozen,...additions]);
+          store.put(rows,id,{...get(id),inboxCatchupPending:frozen.length+additions.length});
+        } else if(boundary.awaitingFirst) {
           const newest=recent(id).at(-1)?.storedAt;
           boundary.catchupAt=new Date(Math.max(Date.now(),Date.parse(newest ?? '') || 0)).toISOString();
           delete boundary.awaitingFirst;store.put(inboxBoundary,id,boundary);
+          if(finishingInitialPages) {
+            const active=get(id);delete active.inboxCatchupPending;store.put(rows,id,active);
+          }
         }
         if(queue.length || caught.length) {
           store.put(pending,id,queue);
-          audit.item.newCount+=queue.filter(item=>!delivered(deliveryKey(id,item.id,'inbox')) && !delivered(deliveryKey(id,item.id,'knowledge'))).length;
+          audit.item.newCount+=queue.filter(item=>!frozenIds.has(item.id) && !delivered(deliveryKey(id,item.id,'inbox')) && !delivered(deliveryKey(id,item.id,'knowledge'))).length;
           planDeliveries(queue);
           if(page.paged || position) store.put(stagedPages,id,advance);
         }
         return queue;
       });
       if(queue.length || caught.length) {
-        if(caught.length) {
+        if(deferInbox || finishingInitialPages) await deliverQueue(queue,row.destinations.filter(d=>d!=='inbox'));
+        if(!deferInbox && caught.length) {
           const combined=[...new Map([...caught,...queue].map(item=>[item.id,item])).values()];
           planDeliveries(combined,['inbox']);await deliverQueue(combined,['inbox']);store.remove(catchupItems,id);
         }
-        await deliverQueue(queue);
+        if(!deferInbox) await deliverQueue(queue);
       }
       guard();
       const updated=commitPage(advance);
@@ -732,7 +752,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
     }
     await Promise.allSettled(subscriptions.filter(row=>
       row.enabled && !running.has(row.id) && Date.parse(row.nextRunAt)<=now &&
-      (!retry.get(row.sourceId) || Boolean(store.get(pending,row.id) || store.get(snapshotCatchups,row.id) || store.get(catchupItems,row.id) || store.get(inboxJobs,row.id)))).map(row=>runPull(row.id,row.version,row.failureCount ? 'retry' : 'schedule')));
+      (!retry.get(row.sourceId) || hasLocalDeliveries(row))).map(row=>runPull(row.id,row.version,row.failureCount ? 'retry' : 'schedule')));
   }
   async function close() {
     if(!closed) {
