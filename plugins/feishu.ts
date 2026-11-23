@@ -1,4 +1,4 @@
-import { groupTaskCommand, readGroupCommand, readGroupPost } from './feishu-read-command.ts';
+import { groupTaskCommand, readGroupCommand, readGroupPost, topicGroupCommand } from './feishu-read-command.ts';
 import type { PersonalAiMessage } from '../packages/protocol/src/index.ts';
 import { allowedPersonalChats, scopedLanes, searchFilter, unmutedIds, validChatId, type SearchLane } from './feishu-personal-scope.ts';
 import { execFile } from 'node:child_process';
@@ -49,6 +49,7 @@ export interface FeishuSendContext {
   beforeTextFallback?: () => void;
   /** Plain reply to an exact source. Guard again after token acquisition and before transport. */
   groupReadReply?: () => void;
+  plainText?: boolean;
   beforeSend?: () => void;
   replyKey?: string;
   mention?: { openId: string; name: string };
@@ -75,6 +76,8 @@ export interface FeishuOptions {
   readGroup?: boolean;
   /** Forward explicitly addressed /ai requests. The host validates the paired owner. */
   groupTasks?: boolean;
+  /** Current topic enrollment, read again when a queued message reaches the host. */
+  topicPolicy?: (chatId: string) => { requireOwnerMention: boolean } | undefined;
   onRecall?: (chatId: string, messageId: string) => void;
   /** Exact command group selected by the main bot controller. */
   commandGroupChatId?: string;
@@ -157,9 +160,10 @@ export function createFeishuIntegration(options: FeishuOptions) {
   let identityReason: string | undefined;
   let token: { value: string; expiresAt: number } | undefined;
   let tokenRequest: Promise<string> | undefined;
-  const groupCommands = !!(options.readGroup || options.groupTasks);
+  const groupCommands = !!(options.readGroup || options.groupTasks || options.topicPolicy);
   const seen = new Set<string>();
-  const queue: Array<{ text: string; source: FeishuMessageSource; generation: number }> = [];
+  const queue: Array<{ text: string; source: FeishuMessageSource; generation: number; admit?: () => boolean; transition?: {chatId: string} }> = [];
+  const topicTransitions = new Set<{chatId: string}>();
   let drainingGeneration: number | undefined;
   let collecting: Promise<InboxThing[]> | undefined;
   const pollMs = options.pollMs ?? 120_000;
@@ -289,7 +293,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
       return;
     }
     if (context?.groupReadReply && !context.replyTo) throw new Error('读群结果必须回复触发消息');
-    const card = context?.groupReadReply ? undefined : context?.card ?? options.renderMessage?.(text, context);
+    const card = context?.groupReadReply || context?.plainText ? undefined : context?.card ?? options.renderMessage?.(text, context);
     const payload = card ? { msg_type: 'interactive' as const, content: JSON.stringify(card) }
       : { msg_type: 'text' as const, content: JSON.stringify({ text }) };
     const fallback = card && context?.beforeTextFallback ? { text, validate: context.beforeTextFallback } : undefined;
@@ -304,9 +308,8 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const { id, type } = await postMessage('/open-apis/im/v1/messages?receive_id_type=chat_id', { receive_id: chatId, ...payload, ...(context?.replyKey && { uuid: context.replyKey }) }, fallback, context?.beforeSend);
     if (id) context?.onSent?.(id, type);
   }
-  /** Read exactly the quoted parent with this bot's token. Absence never widens the read to chat history. */
-  async function readTaskQuote(chatId: string, parentId: string, guard: () => void): Promise<string | undefined> {
-    if (!chatId || !parentId || parentId.length > 200 || /[^\w-]/.test(parentId)) return;
+  async function readVerifiedMessage(chatId: string, messageId: string, guard: () => void): Promise<Row | undefined> {
+    if (!chatId || !messageId || messageId.length > 200 || /[^\w-]/.test(messageId)) return;
     const epoch = generation, signal = controller.signal;
     const check = () => {
       guard();
@@ -316,12 +319,25 @@ export function createFeishuIntegration(options: FeishuOptions) {
     try {
       const bearer = await getToken();
       check();
-      const data = await request('/open-apis/im/v1/messages/' + encodeURIComponent(parentId), {}, bearer, signal, 'GET', 'error');
+      const data = await request('/open-apis/im/v1/messages/' + encodeURIComponent(messageId), {}, bearer, signal, 'GET', 'error');
       check();
       const items = object(data.data).items;
       if (!Array.isArray(items) || items.length !== 1) return;
       const message = object(items[0]);
-      if (message.message_id !== parentId || message.chat_id !== chatId || message.deleted === true) return;
+      if (message.message_id === messageId && message.chat_id === chatId && message.deleted !== true) return message;
+    } catch { check(); }
+  }
+  async function topicOfMessage(chatId: string, messageId: string, guard: () => void) {
+    const message = await readVerifiedMessage(chatId, messageId, guard);
+    guard();
+    return string(message?.thread_id).trim() || undefined;
+  }
+  /** Read exactly the quoted parent with this bot's token. Absence never widens the read to chat history. */
+  async function readTaskQuote(chatId: string, parentId: string, guard: () => void): Promise<string | undefined> {
+    const message = await readVerifiedMessage(chatId, parentId, guard);
+    guard();
+    if (!message) return;
+    try {
       if (message.msg_type !== 'text' && message.msg_type !== 'post') return;
       const raw = object(JSON.parse(string(object(message.body).content)));
       let text = string(raw.text);
@@ -343,10 +359,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
         text = lines.join('\n');
       }
       return Array.from(text.trim()).slice(0, 300).join('') || undefined;
-    } catch {
-      check();
-      return;
-    }
+    } catch { return; }
   }
   async function readReaction(messageId: string, emoji: 'OnIt' | 'DONE', guard: () => void, removeId?: string) {
     const epoch = generation, signal = controller.signal;
@@ -404,12 +417,14 @@ export function createFeishuIntegration(options: FeishuOptions) {
         const item = queue.shift()!;
         if (item.generation !== epoch) continue;
         try {
+          if (item.admit && !item.admit()) continue;
           const answer = await options.onMessage(item.text, item.source);
           // A void result means the host owns its asynchronous reply lifecycle.
           if (running && item.generation === generation && typeof answer === 'string' && answer.trim()) {
             await send(item.source.chatId, answer, { replyTo: item.source.messageId, threadId: item.source.threadId });
           }
         } catch (error) { if (running && item.generation === generation) operationReason = `消息处理失败：${reason(error)}`; }
+        finally { if (item.transition) topicTransitions.delete(item.transition); }
       }
     } finally { if (drainingGeneration === epoch) drainingGeneration = undefined; }
   }
@@ -419,15 +434,16 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const sender = object(data.sender);
     const message = object(data.message);
     // Never feed bot messages (including our own replies) back into the model.
-    const commandPost = groupCommands && message.chat_type === 'group' && message.message_type === 'post';
-    if (sender.sender_type !== 'user' || (message.message_type !== 'text' && !commandPost)) return;
-    const commandGroup = !!options.commandGroupChatId && message.chat_id === options.commandGroupChatId;
-    if (message.chat_type === 'group' && !commandGroup) {
-      if (options.groupMessages && !botOpenId) return;
-      if (options.commandGroupChatId && !options.groupMessages && !groupCommands) return;
-    }
     const messageId = string(message.message_id), chatId = string(message.chat_id);
     if (!messageId || !chatId || seen.has(messageId)) return;
+    const group = message.chat_type === 'group';
+    const commandGroup = chatId === options.commandGroupChatId;
+    const topics = !!options.topicPolicy && group && !commandGroup;
+    const threadId = string(message.thread_id);
+    const post = group && message.message_type === 'post' && (options.readGroup || options.groupTasks || topics);
+    if (sender.sender_type !== 'user' || (message.message_type !== 'text' && !post)) return;
+    if (group && !commandGroup && !topics && options.groupMessages && !botOpenId) return;
+    if (group && !commandGroup && options.commandGroupChatId && !options.groupMessages && !groupCommands) return;
     // Preserve unknown entries too: an unresolved @ must not look like a message with no addressee.
     const mentions = Array.isArray(message.mentions) ? message.mentions.map(raw => {
       const mention = object(raw), id = object(mention.id);
@@ -435,19 +451,29 @@ export function createFeishuIntegration(options: FeishuOptions) {
       return { ...(groupCommands && botOpenId && openId === botOpenId && { self: true as const }), ...(string(mention.key) && { key: string(mention.key) }), ...(openId && { openId }),
         ...(appId && { appId }), ...(string(mention.name) && { name: string(mention.name) }) };
     }) : undefined;
+    const pendingSetting = topics && [...topicTransitions].some(change => change.chatId === chatId);
     let text: string | undefined;
     try {
       const raw = object(JSON.parse(string(message.content)));
-      text = commandPost ? readGroupPost(raw, mentions ?? [], options) : string(raw.text);
+      text = post ? readGroupPost(raw, mentions ?? [], { readGroup: options.readGroup, groupTasks: options.groupTasks,
+        topicCommands: topics, topicBody: topics && !!threadId && (!!options.topicPolicy?.(chatId) || pendingSetting) }) : string(raw.text);
     } catch { operationReason = '收到无法解析的飞书消息'; return; }
     if (!text?.trim()) return;
-    if (groupCommands && message.chat_type === 'group' && !commandGroup
-      && !(options.groupChatIds?.includes(chatId) ?? options.groupMessages)) {
-      if (!botOpenId || !mentions?.some(m => m.self)) return;
-      const addressed = (options.readGroup && readGroupCommand(text, mentions)?.addressed)
-        || (options.groupTasks && groupTaskCommand(text, mentions)?.addressed);
-      if (!addressed) return;
+    const command = topics && topicGroupCommand(text, mentions);
+    const self = !!mentions?.some(m => m.self);
+    const read = options.readGroup && readGroupCommand(text, mentions);
+    const task = options.groupTasks && groupTaskCommand(text, mentions);
+    const listed = options.groupChatIds?.includes(chatId) ?? options.groupMessages;
+    function admit() {
+      if (!group || commandGroup || !groupCommands) return true;
+      const policy = topics ? options.topicPolicy?.(chatId) : undefined;
+      if (policy?.requireOwnerMention && !self) return false;
+      if (command || (policy && threadId)) return true;
+      if (listed && (!options.groupMessages || botOpenId) && (!post || read || task)) return true;
+      return self && (!!read && read.addressed || !policy && !!task && task.addressed);
     }
+    // A preceding setting change may be waiting on the host. Its result governs this message.
+    if (!(pendingSetting && (command || threadId)) && !admit()) return;
     if (queue.length >= 100) { operationReason = '飞书消息队列已满，消息未处理'; return; }
     remember(messageId);
     const source: FeishuMessageSource = {
@@ -456,11 +482,15 @@ export function createFeishuIntegration(options: FeishuOptions) {
       // EventDispatcher preserves the SDK's nested id; CLI-normalized mentions differ.
       mentionedSelf: !!botOpenId && !!mentions?.some(mention => mention.openId === botOpenId),
       ...(mentions && { mentions }),
+      ...(string(message.chat_name) && { chatName: string(message.chat_name) }),
+      ...(string(sender.name) && { senderName: string(sender.name) }),
       ...(string(message.thread_id) ? { threadId: string(message.thread_id) } : {}),
       ...(string(message.parent_id) ? { parentId: string(message.parent_id) } : {}),
       ...(string(message.root_id) ? { rootId: string(message.root_id) } : {}),
     };
-    queue.push({ text, source, generation: epoch });
+    const transition = command ? { chatId } : undefined;
+    if (transition) topicTransitions.add(transition);
+    queue.push({ text, source, generation: epoch, ...(topics && { admit }), transition });
     // Return immediately so SDK acknowledgement never waits for a model round.
     queueMicrotask(() => { void drain(epoch); });
   }
@@ -927,7 +957,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
   async function close(): Promise<void> {
     running = false; closed = true; generation++;
     clearTimeout(pollTimer); clearTimeout(startupTimer); clearTimeout(reconnectTimer); reconnectTimer = undefined;
-    queue.length = 0;
+    queue.length = 0; topicTransitions.clear();
     controller.abort();
     ws?.close({ force: true }); ws = undefined;
     token = undefined;
@@ -943,7 +973,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const detail = [channelReason, identityReason, operationReason].filter(Boolean).join('；');
     return { connected, ...(detail ? { reason: detail } : {}) };
   }
-  return { start, close, send, readTaskQuote, readReaction, updateCard, collect, collectBatch, status,
+  return { start, close, send, readTaskQuote, topicOfMessage, readReaction, updateCard, collect, collectBatch, status,
     pinMessage: (id: string) => changePlatformMessage('pin', id),
     unpinMessage: (id: string) => changePlatformMessage('unpin', id),
     recallMessage: (id: string) => changePlatformMessage('recall', id),
