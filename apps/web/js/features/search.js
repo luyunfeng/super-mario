@@ -315,7 +315,8 @@ export function createSearch({ shell, store, router, api, scope }) {
       name === '项目工作对话' && hits.length > 5 && Button({ label: '查看全部匹配消息', size: 'sm', onClick: () => openResults(query, '消息') }),
       name === '会议' && hits.length > 5 && Button({ label: '查看全部匹配会议', size: 'sm', onClick: () => openResults(query, '会议') }),
     ]), files.state.pending && h('p', { class: 'search__group', role: 'status' }, '正在检索项目文件…'),
-    files.state.error && Button({ label: '重试文件检索', size: 'sm', onClick: () => { files.update(query, true); paint(); } }),
+    [[conversations, '重试项目对话检索'], [meetings, '重试会议检索'], [files, '重试文件检索']].map(([group, label]) =>
+      group.state.error && Button({ label, size: 'sm', onClick: () => { group.update(query, true); paint(); } })),
     files.state.truncated && h('p', { class: 'search__group' }, '文件检索达到上限，可能还有其他匹配。'),
     !query && shortcuts.state.hits.length > 0 && h('div', { class: 'search__group' }, '保存的检索'),
     !query && shortcuts.state.hits.map(item => h('button', { class: 'search__hit saved-search-apply', type: 'button',

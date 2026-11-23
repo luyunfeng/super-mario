@@ -205,7 +205,12 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await expect(projectLog).toContainText('这个位置没有更多消息');
     await expect(composer).toHaveValue('翻页期间的合成草稿');
 
+    await page.route('**/api/v1/project-message-search', route => route.fulfill({
+      status: 503, contentType: 'application/json', body: JSON.stringify({error: '项目对话暂不可用'}),
+    }), {times: 1});
     await search.fill('后续记录');
+    await expect(results).toContainText('项目对话暂不可用');
+    await results.getByRole('button', { name: '重试项目对话检索' }).click();
     await results.getByRole('button', { name: '查看全部匹配消息' }).click();
     const messageDrawer = page.getByRole('dialog', { name: '消息搜索结果' });
     const dateFilter = messageDrawer.getByLabel(/发言日期/);
