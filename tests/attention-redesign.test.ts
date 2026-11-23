@@ -29,11 +29,12 @@ test('action descriptions use existing versioned endpoints and never add undo or
 });
 
 test('projection enriches project names without adding mailbox duplicates, flags destructive operations', () => {
-  const items = collectAttention({ approvals: [approval({ params: { projectId: 'p', command: 'rm -rf /tmp/example' } })],
+  const items = collectAttention({ approvals: [approval({ params: { projectId: 'p', model: 'fixture-a', command: 'rm -rf /tmp/example' } })],
     projects: [{ id: 'p', name: '测试项目', description: '', createdAt: stamp, updatedAt: stamp }],
     interactions: [question({ id: 'permission', kind: 'permission' })] });
   assert.equal(items[0]?.projectName, '测试项目');
   assert.match(items[0]!.detail, /执行命令：rm -rf \/tmp\/example/);
+  assert.match(items[0]!.detail, /指定模型：fixture-a/);
   assert.doesNotMatch(items[0]!.detail, /projectId/);
   assert.ok(items.every(item => item.highRisk));
   assert.equal(collectAttention({ approvals: [approval({ kind: 'plugin:example.write' })] })[0]?.highRisk, true);
@@ -53,11 +54,12 @@ test('robot inbox/outbox use the same attention flow without implicit scope or d
 
 test('待启动的任务计划进入待处理，启动与拒绝都带版本；已处理的计划不再出现', () => {
   const plan = (status: string) => ({ id: 'p/1', title: '发布 v0.2', version: 3, status, createdAt: '2026-11-16T00:00:00.000Z',
-    tasks: [{ prompt: '跑测试', doneWhen: '全部通过', expectMinutes: 10, projectId: 'proj' }, { prompt: '打包', doneWhen: '产物存在', expectMinutes: 5 }] });
+    tasks: [{ prompt: '跑测试', doneWhen: '全部通过', expectMinutes: 10, model: 'fixture-first', projectId: 'proj' }, { prompt: '打包', doneWhen: '产物存在', expectMinutes: 5 }] });
   const [item] = collectAttention({ plans: [plan('pending') as never], projects: [{ id: 'proj', name: '官网', description: '', createdAt: '', updatedAt: '' }] });
   assert.equal(item?.type, 'plan');
   assert.equal(item?.projectName, '官网');
   assert.match(item?.context ?? '', /2 项任务/);
+  assert.match(item?.detail ?? '', /指定模型：fixture-first[^]*2\. 打包/);
   assert.match(item?.detail ?? '', /完成标准：全部通过/);
   assert.deepEqual(item?.actions.map(action => [action.label, action.path, action.body]), [['开始执行', '/plans/p%2F1/start', { version: 3 }], ['拒绝', '/plans/p%2F1/reject', { version: 3 }]]);
   for (const status of ['running', 'started', 'rejected', 'partial', 'unknown']) assert.deepEqual(collectAttention({ plans: [plan(status) as never] }), [], status);

@@ -108,7 +108,7 @@ export function collectAttention({ reviews = [], inboxConversations = [], approv
       ...(item.kind === 'input' && item.params.fixedInput === true && { editable: false }),
       // Show the actual user-facing payload, not just a proposal's description.
       // Internal relation keys are intentionally not copied into visible details.
-      detail: [item.details, ...(['prompt', 'text', 'command', 'cwd', 'doneWhen'] as const).flatMap(key => {
+      detail: [item.details, item.kind === 'dispatch' && typeof item.params.model === 'string' && item.params.model && '指定模型：' + item.params.model, ...(['prompt', 'text', 'command', 'cwd', 'doneWhen'] as const).flatMap(key => {
         const value = item.params[key];
         const labels = { prompt: '执行目标', text: '发送内容', command: '执行命令', cwd: '工作目录', doneWhen: '完成标准' };
         return typeof value === 'string' && value ? [`${labels[key]}：${value}`] : [];
@@ -149,7 +149,7 @@ export function collectAttention({ reviews = [], inboxConversations = [], approv
     const taskProject = item.tasks.find(task => task.projectId)?.projectId;
     rows.push({ id: `plan:${item.id}`, type: 'plan', version: item.version, title: item.title,
       context: `等待你确认开始，共 ${item.tasks.length} 项任务`,
-      detail: item.tasks.map((task, index) => `${index + 1}. ${task.prompt}\n   完成标准：${task.doneWhen}；预计 ${task.expectMinutes} 分钟${task.estimateSource ? '（'+estimateLabels[task.estimateSource]+'）' : ''}${task.estimateSource === 'learned' && task.estimateEvidence ? '，依据 '+task.estimateEvidence.sampleCount+' 个已验收样本' : ''}${task.cwd ? `；目录：${task.cwd}` : ''}`).join('\n'),
+      detail: item.tasks.map((task, index) => `${index + 1}. ${task.prompt}\n   完成标准：${task.doneWhen}；预计 ${task.expectMinutes} 分钟${task.estimateSource ? '（'+estimateLabels[task.estimateSource]+'）' : ''}${task.estimateSource === 'learned' && task.estimateEvidence ? '，依据 '+task.estimateEvidence.sampleCount+' 个已验收样本' : ''}${task.model ? `；指定模型：${task.model}` : ''}${task.cwd ? `；目录：${task.cwd}` : ''}`).join('\n'),
       source: 'Agent', createdAt: item.createdAt, ...project(taskProject),
       actions: [action('plans', item.id, 'start', item.version, '开始执行'), action('plans', item.id, 'reject', item.version, '拒绝')] });
   }

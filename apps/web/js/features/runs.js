@@ -482,7 +482,8 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       const executor = run?.executorId ?? task.executorId;
       const status = run ? runStatus[run.status]?.text ?? run.status : task.runId ? '已取得执行编号'
         : task.error ? '派发待核对' : plan.status === 'pending' ? '待确认' : plan.status === 'rejected' ? '未派发' : '待核对派发记录';
-      return ' · 执行者：' + (executor ? executorName(executor) : '默认执行者') + ' · ' + status;
+      const model = run?.model ?? task.model;
+      return ' · 执行者：' + (executor ? executorName(executor) : '默认执行者') + (model ? ' · 指定模型：' + model : '') + ' · ' + status;
     }
     const rows = plans.filter(plan => projectId === 'all' || plan.tasks.some(task => task.projectId === projectId));
     if (!rows.length) { plansBox.replaceChildren(); return; }
