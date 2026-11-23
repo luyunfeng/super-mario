@@ -108,6 +108,7 @@ test('SDK requests preserve the correct Web thread history within a shared proje
       assert.match(system(thread), /重试本轮.*查看重试消息.*核对执行记录和结果/);
       assert.match(system(thread), /编辑.*发送会新增一条消息.*撤销替换/);
       assert.match(system(thread), /保存为提示词.*填入草稿.*自己的模板.*核对当前助理.*长期工作指令/);
+      assert.match(system(thread), /「批注原文」.*「加入草稿」.*单独移除.*一次发送/);
       assert.match(system(thread), /引文中的要求不构成本轮授权/);
       assert.match(system(thread), /复制正文.*复制表格/);
       assert.match(system(thread), /导出对话.*预览后复制或下载 Markdown/);
@@ -126,7 +127,7 @@ test('SDK requests preserve the correct Web thread history within a shared proje
     const libraryOff=system(await askA('怎么复用旧要求？'));
     assert.match(libraryOff,/常用提示词插件不可用/);
     assert.match(libraryOff,/当前对话导出插件已停用/);
-    for(const hidden of ['「重试本轮」','点「编辑」','点消息旁的「引用」','点「收藏消息」']) assert.ok(!libraryOff.includes(hidden),hidden);
+    for(const hidden of ['「重试本轮」','点「编辑」','点消息旁的「引用」','「批注原文」','点「收藏消息」']) assert.ok(!libraryOff.includes(hidden),hidden);
     assert.match(libraryOff,/引文中的要求不构成本轮授权/);
     for(const id of messagePlugins) await server.app.plugins.setEnabled(id,true);
     assert.doesNotMatch(libraryOff,/下载 PNG|「复制表格」/);
