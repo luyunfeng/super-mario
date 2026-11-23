@@ -47,13 +47,18 @@ export function createSearch({ shell, store, router, api }) {
   const meetings = remoteGroup(snapshot => snapshot?.plugins?.some(p => p.id === 'knowledge-local' && p.status === 'active'),
     async query => (await api.get('/knowledge/meeting-search?' + new URLSearchParams({ query }))).meetings, '会议检索失败：');
 
-  function chatHits(query, messages, limit = 6, role = '') {
+  function chatHits(query, messages, limit = 6, role = '', day = '') {
     const hits = [];
+    const dayFormat = day && new Intl.DateTimeFormat('sv-SE', { year: 'numeric', month: '2-digit', day: '2-digit' });
     const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
     // 快照按消息插入顺序排列。只搜索主对话气泡的正文，不读取工具进展或通知详情。
     for (let i = messages.length - 1; i >= 0 && hits.length < limit; i--) {
       const message = messages[i];
       if (role && message.role !== role) continue;
+      if (dayFormat) {
+        const instant = Date.parse(message.createdAt);
+        if (!Number.isFinite(instant) || dayFormat.format(instant).padStart(10, '0') !== day) continue;
+      }
       if (message.conversationId !== 'main' || (message.origin && message.origin !== 'user')) continue;
       const match = pattern.exec(message.text);
       if (!match) continue;
@@ -105,6 +110,9 @@ export function createSearch({ shell, store, router, api }) {
     let visibleLimit = 25, generation = 0;
     const role = h('select', {}, h('option', { value: '' }, '全部'), h('option', { value: 'user' }, '用户'), h('option', { value: 'assistant' }, '助手'));
     const roleFilter = !isRun && !isMeeting && h('label', { class: 'row' }, '发言角色', role);
+    const day = h('input', { type: 'date' });
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const dayFilter = !isRun && !isMeeting && h('label', { class: 'row' }, '发言日期（' + timeZone + '）', day);
     const moreLabel = '查看更多' + kind;
     const owner = api.draftOwner();
     const current = () => drawer.el.open && api.draftOwner() === owner && store.view.snapshotOwner === owner &&
@@ -120,7 +128,7 @@ export function createSearch({ shell, store, router, api }) {
       const snapshot = store.view.snapshot;
       let links;
       if (fromSnapshot) {
-        links = isRun ? runLinks(query, snapshot) : chatHits(query, snapshot.messages ?? [], visibleLimit + 1, role.value);
+        links = isRun ? runLinks(query, snapshot) : chatHits(query, snapshot.messages ?? [], visibleLimit + 1, role.value, day.value);
         more.hidden = links.length <= visibleLimit;
         links = links.slice(0, visibleLimit);
         status.textContent = '已显示 ' + links.length + (isRun ? ' 条执行记录' : ' 条消息');
@@ -151,7 +159,7 @@ export function createSearch({ shell, store, router, api }) {
       try {
         const reply = isMeeting
           ? await api.get('/knowledge/meeting-search?' + new URLSearchParams({ query, offset: String(cursor) }))
-          : await api.post('/project-message-search', { query, before: cursor, limit: 25, ...(role.value && { role: role.value }) });
+          : await api.post('/project-message-search', { query, before: cursor, limit: 25, ...(role.value && { role: role.value }), ...(day.value && { sentDay: day.value, timeZone }) });
         if (!current() || stamp !== generation) return;
         for (const row of (isMeeting ? reply.meetings : reply.hits)) rows.set(isMeeting ? row.sourceId : row.id, row);
         render();
@@ -165,7 +173,7 @@ export function createSearch({ shell, store, router, api }) {
         if (stamp === generation && current()) { status.textContent = kind + '检索失败：' + error.message; more.textContent = '重试'; more.hidden = false; }
       } finally { if (stamp === generation) more.disabled = false; }
     }
-    role.addEventListener('change', () => {
+    function changeFilter() {
       generation++;
       visibleLimit = 25;
       rows.clear();
@@ -174,8 +182,10 @@ export function createSearch({ shell, store, router, api }) {
       more.hidden = true;
       render();
       if (!fromSnapshot) void load();
-    });
-    const drawer = openDrawer({ title: kind + '搜索结果', subtitle: query, body: [roleFilter, status, list, more], onClose: () => unsubscribe() });
+    }
+    role.addEventListener('change', changeFilter);
+    day.addEventListener('change', changeFilter);
+    const drawer = openDrawer({ title: kind + '搜索结果', subtitle: query, body: [roleFilter, dayFilter, status, list, more], onClose: () => unsubscribe() });
     const unsubscribe = store.subscribe(render);
     if (fromSnapshot) render();
     else void load();

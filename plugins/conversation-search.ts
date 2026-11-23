@@ -1,3 +1,4 @@
+import { localDayFormatter } from './local-day.ts';
 import { messageVersion } from '../packages/plugin-sdk/src/index.ts';
 import { randomBytes } from 'node:crypto';
 import type { Extension, Json, Store } from '../packages/plugin-sdk/src/index.ts';
@@ -104,7 +105,7 @@ function messageCitation(projectId: string, id: string, version: string) {
 
 function projectMessages(store: Store, input: Json, excludeId?: string) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, '检索参数无效');
-  const { query, role, todoId, replyTo, before, limit = 5, mode = 'phrase' } = input;
+  const { query, role, sentDay, timeZone, todoId, replyTo, before, limit = 5, mode = 'phrase' } = input;
   if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 25) fail(400, '每页须为 1 至 25 条');
   if (before !== undefined && (typeof before !== 'string' || !before)) fail(400, '消息游标无效');
   if (todoId !== undefined) {
@@ -120,7 +121,8 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
     if (!project || !question || question.role !== 'user' || !readableMessage(question, project, excludeId) ||
         (todoId !== undefined && question.todoId !== todoId)) fail(404, '未找到当前范围的原提问');
   }
-  const listMessages = (todoId !== undefined || question !== undefined || (role !== undefined && typeof input.projectId === 'string')) && query === undefined;
+  const dayFormat = localDayFormatter(sentDay, timeZone, '发言日期');
+  const listMessages = (todoId !== undefined || question !== undefined || ((role !== undefined || dayFormat !== undefined) && typeof input.projectId === 'string')) && query === undefined;
   if (!listMessages && (typeof query !== 'string' || !query.trim() || query.length > 500)) fail(400, '检索词须为 1 至 500 个字符');
   if (mode !== 'phrase' && mode !== 'keywords') fail(400, '检索方式无效');
   let terms: string[] = [];
@@ -136,6 +138,10 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
     const project = projects.get(message.conversationId);
     if (!project || (todoId !== undefined && message.todoId !== todoId) || !readableMessage(message, project, excludeId)) continue;
     if (role !== undefined && message.role !== role) continue;
+    if (dayFormat) {
+      const instant = Date.parse(message.createdAt);
+      if (!Number.isFinite(instant) || dayFormat.format(instant).padStart(10, '0') !== sentDay) continue;
+    }
     if (question && (message.role !== 'assistant' || message.replyTo !== question.id || message.todoId !== question.todoId)) continue;
     const matches = [];
     for (const pattern of patterns) {
@@ -169,9 +175,9 @@ export const conversationSearch: Extension = {
   activate(context) {
     context.contribute('tools', 'project_message_search', {
       name: 'project_message_search',
-      description: '从新到旧查找项目工作对话。默认按连续原文匹配；mode=keywords 要求同一条消息含全部关键词（空格分隔，最多 8 个，顺序不限）。可传 role=user 或 assistant 限定发言角色；指定项目和角色后省略 query 可浏览该角色的最近发言。返回发言角色、消息状态、ID、正文版本和命中前后的摘录。传 projectId 和 todoId 可限定一项待办，省略 query 则列出该项最近消息。查询某个提问的回答时传 projectId 和 replyTo（原提问 ID），按 status 核对结果。可用 nextBefore 继续查更早的结果。',
+      description: '从新到旧查找项目工作对话。默认按连续原文匹配；mode=keywords 要求同一条消息含全部关键词（空格分隔，最多 8 个，顺序不限）。按当地发言日期查时同传 sentDay（YYYY-MM-DD）和 timeZone，已限定项目可省略检索词。可传 role=user 或 assistant 限定发言角色；指定项目和角色后省略 query 可浏览该角色的最近发言。返回发言角色、消息状态、ID、正文版本和命中前后的摘录。传 projectId 和 todoId 可限定一项待办，省略 query 则列出该项最近消息。查询某个提问的回答时传 projectId 和 replyTo（原提问 ID），按 status 核对结果。可用 nextBefore 继续查更早的结果。',
       parameters: { type: 'object', additionalProperties: false, properties: {
-        query: { type: 'string' }, role: { type: 'string', enum: ['user', 'assistant'] }, replyTo: { type: 'string' }, todoId: { type: 'string' }, mode: { type: 'string', enum: ['phrase', 'keywords'] }, projectId: { type: 'string' }, before: { type: 'string' },
+        sentDay: { type: 'string' }, timeZone: { type: 'string' }, query: { type: 'string' }, role: { type: 'string', enum: ['user', 'assistant'] }, replyTo: { type: 'string' }, todoId: { type: 'string' }, mode: { type: 'string', enum: ['phrase', 'keywords'] }, projectId: { type: 'string' }, before: { type: 'string' },
       } },
       async execute(args, signal) {
         signal.throwIfAborted();

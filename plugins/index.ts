@@ -1,3 +1,4 @@
+import { localDayFormatter } from './local-day.ts';
 import { scheduledWorkTemplates } from './scheduled-work-templates.ts';
 import { setTimeout } from 'node:timers/promises';
 import type { Executor, Extension, ExtensionContext, KnowledgeBackend, KnowledgeQuery, Tool } from '../packages/plugin-sdk/src/index.ts';
@@ -342,15 +343,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           const before = timeBoundary(args.dueBefore, Infinity);
           if (from >= before) throw new Error('待办查询起点必须早于终点');
           const bounded = args.dueFrom !== undefined || args.dueBefore !== undefined;
-          let dayFormat: Intl.DateTimeFormat | undefined;
-          if (args.dueDay !== undefined || args.timeZone !== undefined) {
-            if (typeof args.dueDay !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(args.dueDay)) throw new Error('截止日期须为 YYYY-MM-DD');
-            const day = new Date(args.dueDay + 'T00:00:00Z');
-            if (!Number.isFinite(+day) || day.toISOString().slice(0, 10) !== args.dueDay) throw new Error('截止日期不存在');
-            if (typeof args.timeZone !== 'string' || !args.timeZone.trim()) throw new Error('按当地日期查询须提供时区');
-            try { dayFormat = new Intl.DateTimeFormat('sv-SE', { timeZone: args.timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }); }
-            catch { throw new Error('截止日期查询时区无效'); }
-          }
+          const dayFormat = localDayFormatter(args.dueDay, args.timeZone, '截止日期');
           if (args.hasDueDate === false && (bounded || dayFormat || args.overdue === true)) throw new Error('无截止日期不能与截止时段或逾期条件组合');
           const now = Date.now();
           const todos = candidates.filter(todo => {

@@ -202,6 +202,11 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await search.fill('后续记录');
     await results.getByRole('button', { name: '查看全部匹配消息' }).click();
     const messageDrawer = page.getByRole('dialog', { name: '消息搜索结果' });
+    const dateFilter = messageDrawer.getByLabel(/发言日期/);
+    await dateFilter.fill('2019-07-01');
+    await expect(messageDrawer.getByRole('status')).toHaveText('已显示 0 条消息');
+    await dateFilter.fill('');
+    await expect(messageDrawer.getByRole('link')).toHaveCount(25);
     const roleFilter = messageDrawer.getByLabel('发言角色');
     await page.route('**/api/v1/project-message-search', async route => {
       if (route.request().postDataJSON().role !== 'assistant') return route.fallback();

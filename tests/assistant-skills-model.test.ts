@@ -2621,3 +2621,41 @@ test('Web 和飞书按发言角色查项目原话，翻页只计入匹配角色'
     await t.waitFor(() => assert.ok(sent.includes('交付标准 assistant 0')));
   } finally { await server.close(); }
 });
+
+test('Web 与飞书按指定当地日期回顾项目讨论，覆盖夏令时回拨的两次一点半', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /优先按用户指定时区，否则按 workspaceTimezone/);
+      return call('project_message_search', { sentDay: '2026-11-01', timeZone: 'America/New_York' }, 'day');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    const result = JSON.parse(raw);
+    assert.equal(result.nextBefore, null);
+    assert.deepEqual(result.hits.map((row: {id:string}) => row.id), ['last', 'second', 'first', 'start']);
+    return { role: 'assistant', content: result.hits.map((row: {preview:string}) => row.preview).join('、') };
+  }, options => {
+    adapter = options;
+    return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    const project = await api('/projects', { name: '当地日期样本' });
+    for (const [id, createdAt] of [['prior', '2026-11-01T03:59:59Z'], ['start', '2026-11-01T04:00:00Z'],
+      ['first', '2026-11-01T05:30:00Z'], ['second', '2026-11-01T06:30:00Z'], ['last', '2026-11-02T04:59:59Z'],
+      ['next', '2026-11-02T05:00:00Z']]) {
+      server.app.store.put('messages', id, { id, text: id, createdAt, projectId: project.id, conversationId: 'project:' + project.id + ':work',
+        role: 'user', status: 'done' });
+    }
+    const question = '按纽约时间查 2026 年 11 月 1 日的项目讨论。';
+    const answer = 'last、second、first、start';
+    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), answer);
+    const bot = await api('/feishu/bots', { name: '讨论回顾', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(question, { ...source, messageId: 'day' });
+    await t.waitFor(() => assert.ok(sent.includes(answer)));
+  } finally { await server.close(); }
+});
