@@ -109,6 +109,12 @@ function messageCitation(projectId: string, id: string, version: string, todoId?
   return '[查看原文](#projects/' + encodeURIComponent(projectId) + '/workspace?' + new URLSearchParams({ at: id, version, ...(todoId && {todo:todoId}) }) + ')';
 }
 
+function newestMessages(store: Store, inScope: (message: Message) => boolean) {
+  // Imports can arrive out of order. Keep reverse storage order for equal timestamps.
+  const timestamp = (message: Message) => Date.parse(message.createdAt) || 0;
+  return store.list<Message>('messages').reverse().filter(inScope).sort((a, b) => timestamp(b) - timestamp(a));
+}
+
 function projectMessages(store: Store, input: Json, excludeId?: string) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, '检索参数无效');
   const { query, role, sentDay, timeZone, todoId, replyTo, before, limit = 5, mode = 'phrase' } = input;
@@ -140,10 +146,7 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
   const hits = [];
   const patterns = terms.map(term => new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'));
   let pastCursor = before === undefined;
-  // Imported history can arrive after newer messages. Keep reverse storage order for ties.
-  const messages = store.list<Message>('messages').reverse().filter(message => projects.has(message.conversationId));
-  const timestamp = (message: Message) => Date.parse(message.createdAt) || 0;
-  messages.sort((a, b) => timestamp(b) - timestamp(a));
+  const messages = newestMessages(store, message => projects.has(message.conversationId));
   for (const message of messages) {
     const project = projects.get(message.conversationId);
     if (!project || (todoId !== undefined && message.todoId !== todoId) || !readableMessage(message, project, excludeId)) continue;
@@ -381,9 +384,9 @@ function webMessages(context: ExtensionContext, input: Json, canReadFiles?:CanRe
   const pattern = new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'iu');
   let pastCursor = before===undefined;
   const hits=[];
-  for (const row of store.list<Message>('messages').reverse()) {
+  for (const row of newestMessages(store, message => message.conversationId === conversationId)) {
     const rowProject:string|undefined=row.projectId ?? (conversationId==='main' ? undefined : projectId);
-    if (row.id===excludeId || (excludeId && row.replyTo===excludeId) || row.conversationId!==conversationId || (projectId && rowProject!==projectId) || (todoId && row.todoId!==todoId) ||
+    if (row.id===excludeId || (excludeId && row.replyTo===excludeId) || (projectId && rowProject!==projectId) || (todoId && row.todoId!==todoId) ||
         (rowProject && !activeProjects.has(rowProject)) || (row.origin && row.origin!=='user' && row.origin!=='result')) continue;
     const matches=matchedPassages(row,pattern,category);
     const checkFiles=row.origin!=='result' && (!category || category==='file') && !!row.files?.length && canReadFiles;

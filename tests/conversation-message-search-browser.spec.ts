@@ -28,6 +28,8 @@ test('搜索本对话按当前项目和待办返回原话，翻页后能定位�
       put('original-main-'+i,query+' 主对话-'+i+'。','main',project.id,undefined,i%2?'original-main-'+(i-1):undefined);
       put('original-task-'+i,query+' 任务-'+i+'。',conversationId,project.id,task.id,i%2?'original-task-'+(i-1):undefined);
     }
+    const imported = server.app.store.get<Message>('messages', 'original-main-29')!;
+    server.app.store.put('messages', imported.id, { ...imported, createdAt: '2020-01-01T00:00:00Z' });
     put('main-other',query+' 其他项目主对话','main',other.id);
     put('main-all',query+' 全局主对话','main');
     put('project-other-task',query+' 同项目其他待办',conversationId,project.id,otherTask.id);
@@ -103,7 +105,7 @@ test('搜索本对话按当前项目和待办返回原话，翻页后能定位�
     } while(before);
     return result;
   };
-  const mainIds=Array.from({length:30},(_,i)=>'original-main-'+(29-i));
+  const mainIds=[...Array.from({length:29},(_,i)=>'original-main-'+(28-i)), 'original-main-29'];
   const taskIds=Array.from({length:30},(_,i)=>'original-task-'+(29-i));
   assert.deepEqual(await ids({conversationId:'main'}),['main-all','main-other',...mainIds]);
   assert.deepEqual(await ids({conversationId,projectId:project.id}),['project-all','project-other-task',...taskIds]);
