@@ -128,3 +128,63 @@ test('等你处理按待办名称打开原详情，回答后两处同步移除',
   await expect(globalCard).toHaveCount(0);
   assert.equal(app.interactions.list().find(item => item.id === card.id)?.status, 'answered');
 });
+
+test('待办详情确认后解除指定版本的话题，冲突时显示当前绑定', { timeout: 30000 }, async t => {
+  const { page, app } = await fixture(t);
+  const todo = app.createTodo({ title: '核对合成话题' });
+  const path = '/api/v1/todos/' + todo.id + '/thread';
+  const first = { channel: 'feishu', botName: '合成机器人', chatName: '合成交付群', chatId: 'oc_team', threadId: 'omt_first', title: '季度合成验收', version: 'v1' };
+  let thread: typeof first | null = first;
+  const writes: unknown[] = [];
+  await page.route('**' + path, async route => {
+    if (route.request().method() === 'DELETE') {
+      const body = route.request().postDataJSON();
+      writes.push(body);
+      if (body.expectedVersion !== thread?.version) {
+        await route.fulfill({ status: 409, json: { error: '版本冲突' } });
+        return;
+      }
+      thread = null;
+    }
+    await route.fulfill({ json: { thread } });
+  });
+  await page.goto(new URL('/#projects/all/todos/detail/' + todo.id, page.url()).toString());
+  const panel = page.getByRole('region', { name: '飞书话题', exact: true });
+  await expect(panel).toContainText(first.botName);
+  await expect(panel).toContainText(first.chatName);
+  await expect(panel).toContainText(first.chatId);
+  await expect(panel).toContainText(first.threadId);
+  await expect(panel).toContainText(first.title);
+  const unbind = panel.getByRole('button', { name: '解除话题绑定', exact: true });
+  const confirm = page.getByRole('dialog', { name: '解除飞书话题绑定？', exact: true });
+  await unbind.click();
+  await expect(confirm).toContainText(first.threadId);
+  await expect(confirm).toContainText(first.title);
+  await confirm.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(confirm).toHaveCount(0);
+  assert.deepEqual(writes, []);
+  thread = { ...first, threadId: 'omt_new', version: 'v2' };
+  await unbind.click();
+  await confirm.getByRole('button', { name: '确认解除', exact: true }).click();
+  await expect(panel).toContainText('绑定已变化，请核对最新话题。');
+  await expect(panel).toContainText('omt_new');
+  await expect(panel).not.toContainText(first.threadId);
+  assert.deepEqual(writes, [{ expectedVersion: 'v1' }]);
+  await unbind.click();
+  await expect(confirm).toContainText('omt_new');
+  await confirm.getByRole('button', { name: '确认解除', exact: true }).click();
+  await expect(panel).toContainText('未绑定飞书话题');
+  await expect(unbind).toHaveCount(0);
+  assert.deepEqual(writes, [{ expectedVersion: 'v1' }, { expectedVersion: 'v2' }]);
+  // A second window binds another thread while this detail remains open.
+  thread = { ...first, threadId: 'omt_live', version: 'v3' };
+  app.events.publish('todo-thread.changed', { todoId: todo.id });
+  await expect(panel).toContainText('omt_live');
+  await unbind.click();
+  thread = { ...first, threadId: 'omt_recent', version: 'v4' };
+  app.events.publish('todo-thread.changed', { todoId: todo.id });
+  await expect(panel).toContainText('omt_recent');
+  await confirm.getByRole('button', { name: '确认解除', exact: true }).click();
+  await expect(confirm).toHaveCount(0);
+  assert.deepEqual(writes, [{ expectedVersion: 'v1' }, { expectedVersion: 'v2' }]);
+});

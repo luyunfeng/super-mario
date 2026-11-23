@@ -4,6 +4,7 @@ import { Button, Field, Input, Select, TextArea } from '../ui/kit.js';
 import { openDrawer, toast } from '../ui/overlay.js';
 import { createAttention } from './attention.js';
 import { openTaskClosure } from './task-closure.js';
+import { createTodoThread } from './todo-thread.js';
 import { openTodoHistory } from './todo-history.js';
 import { openWaitingReply } from './waiting-reply.js';
 
@@ -251,13 +252,15 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
   const reminder = reminderRecord(api, store, todo);
   const history = conversationHistory({ api, store, router, todo, close });
   const outcome = groupTaskOutcome(api, store, todo);
-  const el = h('div', { class: 'stack' }, summary, outcome.panel, attention.el, history.panel, reminder.panel, replyRecord(api, store, todo),
+  const thread = createTodoThread({ api, store, todo, sameScope: () => matchesScope(store, todo) });
+  const el = h('div', { class: 'stack' }, summary, outcome.panel, thread.panel, attention.el, history.panel, reminder.panel, replyRecord(api, store, todo),
     decisionSection(api, todo, () => el.isConnected && el.closest('dialog')?.open !== false && matchesScope(store, todo)), next);
   function paint() {
     const snapshot = store.view.snapshot;
     const current = snapshot?.todos.find(item => item.id === todo.id);
     if (!current || !matchesScope(store, todo)) return;
     outcome.update(current);
+    thread.update();
     reminder.update(current);
     history.update();
     attention.update((store.view.attention ?? []).filter(item => item.type === 'interaction' && item.todoId === current.id && item.projectId === current.projectId));

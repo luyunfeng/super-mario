@@ -3053,6 +3053,8 @@ test('Web 和飞书询问怎样开工时提供表单说明并保留当前执行�
     assert.match(req.system, /设为即时回报或完成前已取消原群回报时看单独的完成提醒/);
     assert.match(req.system, /设有主话题群时在该群的新话题承接/);
     assert.match(req.system, /同话题补充归入原待办决定/);
+    assert.match(req.system, /待办详情 → 飞书话题/);
+    assert.match(req.system, /手工绑定本身不会发群消息/);
     assert.match(req.system, /Web「等你处理」请求输入审批/);
     assert.match(req.system, /只向原负责会话发送该条原文/);
     assert.match(req.system, /报告工作完成还需要对应的执行结果/);
