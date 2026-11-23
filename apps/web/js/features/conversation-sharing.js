@@ -183,6 +183,10 @@ export function createConversationSharing({api,store,getRows}) {
       try {
         const {shares}=await api.post('/conversation-shares',{action:'list',conversationId});
         if (!current() || stamp!==listStamp) return;
+        const edited=editing && shares.find(s=>s.id===editing.id);
+        if (edited && (edited.revision>editing.revision || edited.revokedAt || Date.parse(edited.expiresAt)<=Date.now()) && !writing) {
+          resetMode();feedback.textContent='这份分享已变化，请从列表重新核对。';
+        }
         historyStatus.textContent=shares.length?'':'还没有分享。';
         replace(history,shares.map(item=>{
           const expired=Date.parse(item.expiresAt)<=Date.now();
@@ -190,11 +194,14 @@ export function createConversationSharing({api,store,getRows}) {
           const actions=h('div',{class:'row'});
           const revert=()=>replace(actions,Button({label:'修改分享',size:'sm',onClick:()=>edit(item)}),Button({label:'撤销分享',size:'sm',onClick:()=>replace(actions,
             Button({label:'确认撤销',size:'sm',kind:'danger',onClick:async()=>{
-              if (!current() || stamp!==listStamp) return;
+              if (!current() || writing || stamp!==listStamp) return;
+              const revokeStamp=++editStamp;
+              if(loadingEdit) resetMode();
+              replace(actions,h('span',{class:'small muted'},'正在撤销…'));
               try {
                 await api.post('/conversation-shares',{action:'revoke',conversationId,id:item.id,revision:item.revision});
-                if(current()){removeIssued(item.id);if(editing?.id===item.id) resetMode();void loadList();}
-              } catch(error) {if(current()) historyStatus.textContent=error.message+'。请刷新分享列表核对。';}
+                if(current()){removeIssued(item.id);if(editing?.id===item.id && revokeStamp===editStamp) resetMode();void loadList();}
+              } catch(error) {if(current() && stamp===listStamp){actions.replaceChildren();historyStatus.textContent=error.message+'。请刷新分享列表核对。';}}
             }}),Button({label:'取消',size:'sm',onClick:revert}))}));
           if (!item.revokedAt && !expired) revert();
           return h('div',{class:'item'},h('div',{class:'item__main'},h('strong',{},item.messageCount+' 条消息 · '+(item.revokedAt?'已撤销':expired?'已到期':'分享中')),
