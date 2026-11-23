@@ -671,8 +671,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (entry.status === 'ready' && active(bot.id, epoch, bot.revision)) await app.mailboxes.process(entry.id, entry.version);
   }
   const briefReads = new Map<string, Promise<void>>();
-  function showToday(bot: FeishuBotSettings, epoch: number, paired: Owner, messageId: string) {
-    const eventKey = 'feishu-dashboard:today:' + JSON.stringify([bot.id, bot.appId, messageId]);
+  function showToday(bot: FeishuBotSettings, epoch: number, paired: Owner, messageId: string, cardEventId?: string) {
+    const eventKey = 'feishu-dashboard:today:' + JSON.stringify([bot.id, bot.appId, messageId, ...(cardEventId ? [cardEventId] : [])]);
     const running = briefReads.get(eventKey);
     if (running) return running;
     const valid = () => active(bot.id, epoch, bot.revision) && owner(bot)?.chatId === paired.chatId && owner(bot)?.senderId === paired.senderId;
@@ -1585,7 +1585,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     }
     if (value.kind === 'workbench.today') {
       if (!dailyBriefEnabled(app)) return { toast: { type: 'info', content: '每日简报插件已停用。' } };
-      void track(bot.id, showToday(bot, epoch, paired, input.messageId)).catch(error => report(bot.id, error));
+      void track(bot.id, showToday(bot, epoch, paired, input.messageId, input.eventId)).catch(error => report(bot.id, error));
       return { toast: { type: 'info', content: '正在读取今日简报，结果会发到当前私聊' } };
     }
     if (value.kind === 'workbench.readSessions') {
