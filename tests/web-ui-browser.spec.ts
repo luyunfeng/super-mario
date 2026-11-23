@@ -103,6 +103,7 @@ test('全局搜索从历史正文定位主对话消息，并隔离其他会话�
     const more = matches.getByRole('button', { name: '查看更多主对话消息' });
     await more.click();
     await expect(matches.getByRole('link')).toHaveCount(37);
+    await expect(matches.getByRole('link').last()).toHaveText('主 Agent · 历史批次 1');
     await expect(more).toBeHidden();
     const oldest = matches.getByRole('link', { name: /历史批次 0$/ });
     await oldest.focus();

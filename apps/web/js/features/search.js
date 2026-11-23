@@ -109,11 +109,11 @@ export function createSearch({ shell, store, router, api, scope }) {
   });
 
   function chatHits(query, messages, limit = 6, role = '', day = '') {
-    const hits = [];
+    const matches = [];
     const dayFormat = day && new Intl.DateTimeFormat('sv-SE', { year: 'numeric', month: '2-digit', day: '2-digit' });
     const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
     // 快照按消息插入顺序排列。只搜索主对话气泡的正文，不读取工具进展或通知详情。
-    for (let i = messages.length - 1; i >= 0 && hits.length < limit; i--) {
+    for (let i = messages.length - 1; i >= 0; i--) {
       const message = messages[i];
       if (role && message.role !== role) continue;
       if (dayFormat) {
@@ -123,17 +123,20 @@ export function createSearch({ shell, store, router, api, scope }) {
       if (message.conversationId !== 'main' || (message.origin && message.origin !== 'user')) continue;
       const match = pattern.exec(message.text);
       if (!match) continue;
+      matches.push({ message, match, time: Date.parse(message.createdAt) || 0 });
+    }
+    matches.sort((a, b) => b.time - a.time);
+    return matches.slice(0, limit).map(({ message, match }) => {
       const index = match.index;
       const after = index + match[0].length;
       const start = Math.max(0, index - 18);
       const end = Math.min(message.text.length, after + 32);
-      hits.push({
+      return {
         text: [message.role === 'user' ? '你 · ' : '主 Agent · ', start ? '…' : '', message.text.slice(start, index),
           h('mark', null, match[0]), message.text.slice(after, end), end < message.text.length ? '…' : ''],
         href: `${router.href('chat')}?at=${encodeURIComponent(message.id)}`,
-      });
-    }
-    return hits;
+      };
+    });
   }
 
   function meetingLinks(rows, snapshot) {
