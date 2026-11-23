@@ -98,7 +98,7 @@ function tool(name: string, description: string, execute: Tool['execute'], prope
   return { name, description, parameters: { type: 'object', properties, ...(required && {required}), additionalProperties: false }, execute };
 }
 
-function runCitation(run: Run, group = false) {
+export function runCitation(run: Run, group = false) {
   const path = '#projects/' + encodeURIComponent(run.projectId ?? 'all') + '/runs/' + encodeURIComponent(run.id);
   return group ? '[查看执行对比](' + path + '?compare=group)' : '[查看执行](' + path + ')';
 }

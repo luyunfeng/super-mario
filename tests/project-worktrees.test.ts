@@ -75,6 +75,7 @@ test('项目只创建工作树时返回独立目录，不生成或派发执行',
   const first = history.runs[0];
   assert.ok(first && typeof first === 'object' && !Array.isArray(first));
   assert.equal(first.promptExcerpt, '检查独立目录');
+  assert.equal(first.webCitation, '[查看执行](#projects/' + project.id + '/runs/' + first.id + ')');
   await assert.rejects(runWithAgentInput(message, () => query.execute({ name: '不存在' }, signal)), /没有登记/);
   const original = server.app.store.list<import('../packages/protocol/src/index.ts').Run>('runs')[0]!;
   for (let index = 0; index < 21; index++) {
