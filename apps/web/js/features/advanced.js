@@ -79,7 +79,7 @@ function candleChart(card) {
     h('thead',{},h('tr',{},['项目','开盘','最高','最低','收盘','成交量'].map(v=>h('th',{scope:'col'},v)))),h('tbody',{},rows)));
 }
 
-function extensionChart(card) {
+function chartBody(card) {
   if (card.kind === 'candlestick') return candleChart(card);
   const points = card.points;
   if (!['bar','line','area','pie','donut'].includes(card.kind) || !Array.isArray(points) || !points.length ||
@@ -109,6 +109,26 @@ function extensionChart(card) {
   return h('div',{class:'stack'}, graph, h('table',{class:'table','aria-label':card.title},
     h('thead',{},h('tr',{},h('th',{scope:'col'},'项目'),h('th',{scope:'col'},'数值'))),
     h('tbody',{},points.map(point => h('tr',{},h('th',{scope:'row'},point.label),h('td',{},point.value))))));
+}
+
+function extensionChart(card) {
+  const body = chartBody(card);
+  if (!body || card.points.length < 2) return body;
+  const table = body.querySelector('table');
+  const columns = Array.from(table.tHead.rows[0].cells, cell => cell.textContent);
+  const picker = h('input',{type:'range', min:1, max:card.points.length, value:1});
+  const readout = h('span');
+  function readPoint() {
+    const cells = table.tBodies[0].rows[picker.valueAsNumber - 1].cells;
+    const values = [card.points[picker.valueAsNumber - 1].label];
+    for (let i = 1; i < cells.length; i++) values.push(columns[i] + ' ' + cells[i].textContent);
+    readout.textContent = values.join('，');
+    picker.setAttribute('aria-valuetext',readout.textContent);
+  }
+  picker.addEventListener('input',readPoint);
+  readPoint();
+  table.before(h('label',{class:'field'},'查看数据点',picker), readout);
+  return body;
 }
 
 export function createAdvanced({ api, store, router, openPluginSettings }) {

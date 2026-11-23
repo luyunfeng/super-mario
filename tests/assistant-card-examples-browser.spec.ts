@@ -47,6 +47,10 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await expect(chart.getByRole('cell')).toHaveText(['-3','5']);
   await expect(chart.locator('svg rect')).toHaveCount(2);
   await expect(page.getByRole('region',{name:'单点趋势'}).locator('circle')).toHaveAttribute('cx','150');
+  const point=chart.getByRole('slider',{name:'查看数据点'});
+  await expect(point).toHaveAttribute('aria-valuetext','昨日，数值 -3');
+  await point.press('ArrowRight');
+  await expect(point).toHaveAttribute('aria-valuetext','今日，数值 5');
   const area=page.getByRole('region',{name:'跨零走势'});
   await expect(area.locator('polygon')).toHaveAttribute('points','75,50 75,96 225,4 225,50');
   await expect(area.locator('polyline')).toHaveAttribute('points','75,96 225,4');
