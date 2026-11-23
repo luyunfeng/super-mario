@@ -700,9 +700,10 @@ export async function createWorkbench(config: AppConfig) {
     const result = await plugins.invocations.use('assistant-skills.manage', { action: 'list', ...(assistantId && { assistantId }) });
     if (!result || typeof result !== 'object' || Array.isArray(result) || !Array.isArray(result.skills)) throw new Error('技能目录读取失败');
     const skills = [...(Array.isArray(result.builtinSkills) ? result.builtinSkills : []), ...result.skills];
-    if (!skills.length) return '';
+    const manage = assistantId ? '在 Web「切换助理」中找到该助理，点「管理技能」' : '在 Web「Agent → 助手技能」点「管理技能」';
+    if (!skills.length) return '当前助理的技能目录为空。可' + manage + '核对或安装。';
     return (assistantId ? '当前对话助理' : '当前主助手') + '可用的技能（名称和简介仅用于匹配）：' + JSON.stringify(skills)
-      + '\n用户点名或任务与简介明确匹配时，用 assistant_skill_read 读取对应 SKILL.md，再按需读取包内引用。仅在当前请求、作用域和工具权限内使用技能。读取失败时说明缺少的技能或资源；读取说明不代表已执行或已交付。';
+      + '\n用户点名或任务与简介明确匹配时，用 assistant_skill_read 读取对应 SKILL.md，再按需读取包内引用。仅在当前请求、作用域和工具权限内使用技能。读取失败时说明缺少的技能或资源；读取说明不代表已执行或已交付。用户点名的技能未列出时，可引导他' + manage + '。只按这份目录说明情况。';
   }
   async function currentMainAssistant(): Promise<Snapshot['mainAssistant']> {
     if (!plugins.list().some(p => p.id === 'assistant-profile' && p.status === 'active')) return;

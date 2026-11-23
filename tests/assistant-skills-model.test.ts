@@ -289,6 +289,7 @@ test('独立助理与主助手分别读取自己安装的同名技能，项目�
       const before = requests.length;
       assert.equal(await ask(question, thread ? '/web-conversations/' + thread.threadId + '/messages' : '/messages'), '合成材料' + labels[index]);
       assert.ok(requests[before].tools.includes('assistant_skill_read'));
+      assert.ok(requests[before].system.includes(index ? '在 Web「切换助理」中找到该助理' : '在 Web「Agent → 助手技能」'));
       for (const label of labels) assert.equal(requests[before].system.includes('目录标记' + label), label === labels[index]);
     }
     await api('/assistant-profile',{action:'save',revision:0,name:'主线资料审阅员'});
@@ -343,6 +344,7 @@ test('Web 主助手按目录读取技能及引用文件，停用后下一轮撤�
     await api('/plugins/assistant-skills', { enabled: false });
     await ask('现在有哪些技能可用？');
     assert.equal(requests.length, 4);
+    assert.match(requests[3].system,/本轮无法读取助手技能/);
     assert.ok(!requests[3].tools.includes('assistant_skill_read') && !requests[3].system.includes(name));
     assert.equal(server.app.store.list('runs').length, 0);
   } finally { await server.close(); }
