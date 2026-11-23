@@ -20,6 +20,7 @@ export interface FollowupLink {
 }
 
 export interface FollowupRecord {
+  sourceConversationId?: string;
   id: string;
   title: string;
   prompt: string;
@@ -94,7 +95,7 @@ export function createAgentFollowups(options: {
   let closed = false;
   let notifiedInCurrentTurn = false;
 
-  function create(input: Record<string, unknown>): FollowupRecord {
+  function create(input: Record<string, unknown>, sourceConversationId?: string): FollowupRecord {
     if (closed || !enabled()) fail('主动跟进调度当前未启用', 409);
     const title = requiredText(input.title, '标题').slice(0, 120);
     const prompt = requiredText(input.prompt, '跟进指令').slice(0, 4000);
@@ -127,6 +128,7 @@ export function createAgentFollowups(options: {
       });
       const record: FollowupRecord = {
         id, title, prompt,
+        ...(sourceConversationId && { sourceConversationId }),
         schedule: scheduleSpec.kind === 'interval' ? { ...scheduleSpec, anchorAt: created.anchorAt } : scheduleSpec,
         push,
         ...(projectId ? { projectId } : {}),

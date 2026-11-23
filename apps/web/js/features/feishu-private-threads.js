@@ -25,6 +25,11 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
   let searchEnabled = hasSearch();
   let lastSnapshot = store.view.snapshot;
   let showingList = false;
+  let openThreadId;
+  let pendingDelete;
+  let listNotice = '';
+  let lastDeletion = store.view.deletedFeishuThread;
+  let connection = store.view.connection;
   function setSearchEnabled(enabled) {
     if (enabled === searchEnabled) return;
     searchEnabled = enabled;
@@ -35,6 +40,23 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
   }
   const unsubscribe = store.subscribe(() => {
     if (!valid()) return drawer.close();
+    const nextConnection = store.view.connection;
+    const reconnected = nextConnection === 'online' && connection !== 'online';
+    connection = nextConnection;
+    const change = store.view.deletedFeishuThread;
+    if (change !== lastDeletion) {
+      lastDeletion = change;
+      if (change?.botId === bot.id) {
+        searchPage = undefined;
+        if (openThreadId === change.threadId && pendingDelete !== change.threadId) void deleted();
+        else if (showingList) void list(listNotice);
+      }
+    }
+    if (reconnected) {
+      searchPage = undefined;
+      if (showingList) void list(listNotice);
+      else if (openThreadId && openThreadId !== pendingDelete) void verifyOpenThread(openThreadId);
+    }
     if (lastSnapshot !== store.view.snapshot) {
       lastSnapshot = store.view.snapshot;
       setSearchEnabled(hasSearch());
@@ -47,6 +69,25 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
     drawer.close();
     return true;
   }
+  function deleted(notice = '该独立对话此前已被删除。') {
+    searchPage = undefined;
+    knownTags = [];
+    childEditor?.close();
+    return list(notice);
+  }
+  async function verifyOpenThread(threadId) {
+    const id = loadId;
+    try {
+      await api.get(base + '/' + encodeURIComponent(threadId));
+      if (current(id)) body.querySelector('[data-recheck]')?.remove();
+    }
+    catch (error) {
+      if (!current(id) || threadId === pendingDelete || inaccessible(error)) return;
+      if (error.status === 410) void deleted();
+      else if (!body.querySelector('[data-recheck]')) body.prepend(h('p', { role: 'alert', dataset: { recheck: '1' } },
+        '重连后暂时无法核对这段对话。', Button({ label: '重新核对', onClick: () => verifyOpenThread(threadId) })));
+    }
+  }
   async function load(path, show, retry) {
     const id = ++loadId;
     replace(body, h('p', { role: 'status' }, '正在读取…'));
@@ -55,13 +96,16 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
       if (current(id)) show(result, id);
     } catch (error) {
       if (!current(id) || inaccessible(error)) return;
+      if (error.status === 410) return deleted();
       if (error.status === 409) searchPage = undefined;
       replace(body, h('p', { role: 'alert' }, error.message),
         Button({ label: '重试', onClick: retry }), back());
     }
   }
-  function list() {
+  function list(notice = '') {
     showingList = true;
+    openThreadId = undefined;
+    listNotice = notice;
     const id = ++loadId;
     const input = Input({ value: query, type: 'text', maxLength: 500 });
     const results = h('div', { class: 'stack', 'aria-live': 'polite' });
@@ -87,7 +131,7 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
       if (selectedTag && !available.includes(selectedTag)) {
         selectedTag = '';
         searchPage = undefined;
-        void list();
+        void list(notice);
         return;
       }
       replace(select, h('option', { value: '' }, '全部标签'), available.map(tag => h('option', { value: tag }, tag)));
@@ -120,7 +164,7 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
         onSaved() { searchPage = undefined; if (showingList) void list(); }, onInvalid: () => drawer.close() });
     } });
     void loadTags();
-    replace(body, h('div', { class: 'row' }, filter(false), filter(true), sort), tagFilter, manage,
+    replace(body, notice && h('p', { role: 'status' }, notice), h('div', { class: 'row' }, filter(false), filter(true), sort), tagFilter, manage,
       searchEnabled ? h('form', { class: 'stack', onsubmit: event => { event.preventDefault(); void search(input.value, archived); } },
         Field({ label: '搜索独立对话', control: input }),
         h('div', { class: 'row' }, Button({ label: '搜索', type: 'submit' }),
@@ -172,6 +216,7 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
   }
   function detail(row, notice = '', draft, around) {
     showingList = false;
+    openThreadId = row.threadId;
     const path = base + '/' + encodeURIComponent(row.threadId);
     return load(path + (around ? '?around=' + encodeURIComponent(around) : ''), (page, id) => {
       renderDetail(path, { ...row, ...page }, page.messages, page.nextBefore, page.nextAfter, notice, id, draft, around);
@@ -214,6 +259,7 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
           change.archived === false ? '已恢复对话。' : change.tags ? '已保存标签。' : '已保存标题。', ++loadId, pending, around);
       } catch (error) {
         if (!current(id) || inaccessible(error)) return;
+        if (error.status === 410) return deleted();
         if (error.status === 409 || !error.status || error.status >= 500) {
           searchPage = undefined;
           const conflict = error.status === 409;
@@ -226,10 +272,47 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
         }
       }
     }
+    function confirmDelete() {
+      if (!current(id) || edit.disabled) return;
+      const cancel = Button({ label: '取消', onClick: () => confirm.close() });
+      const confirm = openDrawer({ title: '删除独立对话', body: [
+        h('p', null, '删除「' + row.title + '」后，当前机器人的独立对话历史和搜索结果将移除这段对话。删除后无法恢复。'),
+        h('div', { class: 'row' }, cancel, Button({ label: '确认删除', kind: 'danger', onClick: async () => {
+          if (!confirm.el.open) return;
+          confirm.close();
+          if (!current(id)) { if (!valid()) drawer.close(); return; }
+          const request = ++loadId;
+          pendingDelete = row.threadId;
+          searchPage = undefined;
+          replace(body, h('p', { role: 'status' }, '正在删除独立对话…'));
+          try {
+            const result = await api.del(path, { version: row.version });
+            if (!current(request)) return;
+            if (result?.ok !== true || result.deleted !== true) throw new Error('服务端未确认删除');
+            return deleted('已删除独立对话。');
+          } catch (error) {
+            if (!current(request)) return;
+            if (error.status === 410) return deleted();
+            if (error.status === 404) {
+              replace(body, h('p', { role: 'alert' }, '未找到当前配对下的独立对话，无法确认删除。'), back());
+              return;
+            }
+            if (inaccessible(error)) return;
+            const message = error.status === 409 ? error.message + '。请重新核对对话后再操作。'
+              : !error.status || error.status >= 500 ? '删除结果未知，请重新读取对话核对。'
+              : '删除失败：' + error.message;
+            replace(body, h('p', { role: 'alert' }, message),
+              Button({ label: '重新读取对话', onClick: () => detail(row) }), back());
+          } finally { pendingDelete = undefined; }
+        } }))] });
+      childEditor = confirm;
+      cancel.focus();
+    }
     edit.append(Field({ label: '对话标题', control: title }),
-      h('div', { class: 'row' }, Button({ label: '保存标题', size: 'sm', onClick: () => save({ title: title.value.trim() }) }),
+      h('div', { class: 'row row--wrap' }, Button({ label: '保存标题', size: 'sm', onClick: () => save({ title: title.value.trim() }) }),
         Button({ label: '还原默认标题', size: 'sm', onClick: () => save({ title: '' }) }),
-        Button({ label: row.archived ? '恢复对话' : '归档对话', size: 'sm', onClick: () => save({ archived: !row.archived }) })));
+        Button({ label: row.archived ? '恢复对话' : '归档对话', size: 'sm', onClick: () => save({ archived: !row.archived }) }),
+        Button({ label: '删除对话', kind: 'danger', size: 'sm', onClick: confirmDelete })));
     const tagDraft = h('div', { class: 'row', style: { flexWrap: 'wrap' }, 'aria-label': '待保存标签' });
     const syncTags = () => replace(tagDraft, tags.map((tag, index) =>
       Button({ label: '移除 ' + tag, size: 'sm', onClick: () => { tags.splice(index, 1); syncTags(); } })));
@@ -277,6 +360,7 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
         button.hidden = !(older ? nextBefore : nextAfter);
       } catch (error) {
         if (!current(id) || inaccessible(error)) return;
+        if (error.status === 410) return deleted();
         if (error.status === 409) await detail(row, '消息位置已变化，已重新读取最新消息。');
         else feedback.textContent = error.message;
       }

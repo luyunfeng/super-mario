@@ -1,6 +1,6 @@
 import type { ReviewEvidenceReader } from '../run-review.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, realpath, rm } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 import { conversationModels } from './model-catalog.ts';
@@ -13,6 +13,20 @@ import type { BotScope } from '../../../protocol/src/bots.ts';
 import type { AppConfig, MainAssistantProfile, ExecutorInfo, JsonObject, KnowledgeEntry, Message, Json } from '../../../protocol/src/index.ts';
 import type { Contributions, EventBus, Store } from '../../../plugin-sdk/src/index.ts';
 import type { AgentSession, ExtensionFactory, ToolDefinition } from '@earendil-works/pi-coding-agent';
+
+function scopedAgentDirectory(dataDir: string, conversationId: string) {
+  return resolve(dataDir, 'pi', 'agents', createHash('sha256').update(conversationId).digest('hex'));
+}
+
+/** Only the server-managed SDK transcript belongs to this deletion. Keep workspace files. */
+export async function removeScopedTranscript(dataDir: string, conversationId: string) {
+  const directory = join(scopedAgentDirectory(await realpath(dataDir), conversationId), 'sessions');
+  let resolved;
+  try { resolved = await realpath(directory); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
+  if (resolved !== directory) throw new Error('会话记录目录含符号链接，请核对数据目录');
+  await rm(join(directory, 'conversation'), { recursive: true, force: true });
+}
 
 type SDK = typeof import('@earendil-works/pi-coding-agent');
 interface Options {
@@ -234,7 +248,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     const sdk = await loadSDK();
     // Never use the user's cwd, ~/.pi, project settings, or resource packages.
     const legacy = !scope && ['main', 'supervisor'].includes(ownConversation);
-    const agentDir = legacy ? resolve(config.dataDir, 'pi') : resolve(config.dataDir, 'pi', 'agents', createHash('sha256').update(ownConversation).digest('hex'));
+    const agentDir = legacy ? resolve(config.dataDir, 'pi') : scopedAgentDirectory(config.dataDir, ownConversation);
     const cwd = options.workspaceDir ? resolve(options.workspaceDir) : ownConversation === 'main' ? join(agentDir, 'workspace') : join(agentDir, legacy ? 'workspace-supervisor' : 'workspace');
     const sessionDir = join(agentDir, 'sessions', legacy ? ownConversation : 'conversation');
     await mkdir(cwd, { recursive: true });

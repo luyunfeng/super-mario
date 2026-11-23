@@ -3,7 +3,7 @@
 
 export function createStore(api) {
   const listeners = new Set();
-  const view = { snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, connection: 'connecting', unauthorized: false, loadError: '' };
+  const view = { snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, deletedFeishuThread: null, connection: 'connecting', unauthorized: false, loadError: '' };
   let request = 0;
   let socket;
   let reconnectTimer;
@@ -41,11 +41,12 @@ export function createStore(api) {
     const url = new URL('/api/v1/events', location.href);
     url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     if (api.token()) url.searchParams.set('token', api.token());
+    const owner = api.draftOwner?.();
     const ws = new WebSocket(url);
     socket = ws;
     ws.onopen = () => { if (current === generation) { set({ connection: 'online' }); refresh(); } };
     ws.onmessage = ({ data }) => {
-      if (current !== generation) return;
+      if (current !== generation || owner !== api.draftOwner?.()) return;
       // Plugin views refresh their private data independently of the workspace snapshot.
       let event;
       try { event = JSON.parse(data); } catch { /* Refresh state after an unrecognized frame. */ }
@@ -60,6 +61,10 @@ export function createStore(api) {
       if (event?.type === 'project-instructions.changed' && typeof event.data?.projectId === 'string' && Number.isSafeInteger(event.data.revision)) {
         set({ projectInstructionsChange: event.data });
         return;
+      }
+      if (event?.type === 'feishu.changed' && event.data?.threadsChanged === true &&
+          typeof event.data.botId === 'string' && typeof event.data.deletedThreadId === 'string' && /^[0-9a-f]{64}$/.test(event.data.deletedThreadId)) {
+        set({ deletedFeishuThread: { botId: event.data.botId, threadId: event.data.deletedThreadId } });
       }
       scheduleRefresh();
     };
@@ -80,7 +85,7 @@ export function createStore(api) {
     refresh,
     connect,
     reconnect: connect,
-    reset() { request += 1; set({ snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, unauthorized: false, loadError: '' }); connect(); },
+    reset() { request += 1; set({ snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, deletedFeishuThread: null, unauthorized: false, loadError: '' }); connect(); },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
   };
 }

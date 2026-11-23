@@ -1,0 +1,72 @@
+import type { Store, ScheduleInfo } from '../../plugin-sdk/src/index.ts';
+import type { AppEvent, Approval, Message, Run, Todo } from '../../protocol/src/index.ts';
+import type { ScheduledWorkRecord } from '../../protocol/src/scheduled-work.ts';
+import type { AgentTurnTrace } from './agent-traces.ts';
+import { TRACE_COLLECTION } from './agent-traces.ts';
+import type { Card } from './interactions.ts';
+import type { Plan } from './plans.ts';
+import type { Job } from './knowledge-curator.ts';
+import type { FollowupRecord } from './followups.ts';
+
+/** Called in the same transaction as the channel tombstone. Business records retain their own history. */
+export function forgetPrivateConversation(store: Store, conversationId: string) {
+  if (!/^bot:.+:[a-f0-9]{64}:thread:[a-f0-9]{64}$/.test(conversationId))
+    throw Object.assign(new Error('只允许删除独立对话'), { status: 400 });
+  const busy = (reason: string): never => { throw Object.assign(new Error(reason), { status: 409 }); };
+  const messages = store.list<Message>('messages').filter(m => m.conversationId === conversationId);
+  const ids = new Set(messages.map(m => m.id));
+  const belongs = (id: unknown) => typeof id === 'string' && ids.has(id);
+  if (messages.some(m => m.status === 'pending')) busy('对话中还有未结束的消息');
+  const runs = store.list<Run>('runs').filter(r => r.conversationId === conversationId || belongs(r.sourceMessageId));
+  if (runs.some(r => ['queued', 'running', 'unknown'].includes(r.status))) busy('对话仍有进行中或待核实的执行');
+  const runIds = new Set(runs.map(r => r.id));
+  if (store.list<Job>('knowledge.sources').some(j => belongs(j.sourceMessageId) &&
+    ['queued', 'running', 'unknown', 'awaiting_approval'].includes(j.status))) busy('对话仍有进行中或待核实的知识整理');
+  const traces = store.list<AgentTurnTrace>(TRACE_COLLECTION).filter(trace => trace.conversationId === conversationId);
+  const ownedTodos = new Set(runs.flatMap(r => r.todoId ? [r.todoId] : []));
+  // Older tools recorded a creation receipt in the turn trace before todo.origins existed.
+  for (const trace of traces) {
+    for (const call of trace.toolCalls ?? []) {
+      if (call.name !== 'todo_create' || !call.result || call.isError) continue;
+      let result;
+      try { result = JSON.parse(call.result)?.details; } catch { continue; }
+      if (result?.created === true && typeof result.id === 'string') ownedTodos.add(result.id);
+    }
+  }
+  if (store.list<Todo>('todos').some(t => !t.completedAt && (store.get<{conversationId: string}>('todo.origins', t.id)?.conversationId === conversationId
+    || ownedTodos.has(t.id)))) busy('对话仍关联未完成的待办');
+  if (store.list<Card>('interactions').some(c => c.status === 'open' && (runIds.has(c.runId ?? '')
+    || belongs(store.get<{inputId?: string}>('interaction-origins', c.id)?.inputId)))) busy('对话还有待处理的交互');
+  if (store.list<Approval>('approvals').some(a => ['pending', 'running', 'unknown'].includes(a.status) &&
+    (a.params.conversationId === conversationId || belongs(a.params.sourceMessageId) || runIds.has(String(a.params.id)) ||
+      store.get<{conversationId: string}>('approval.origins', a.id)?.conversationId === conversationId))) busy('对话还有待处理的审批');
+  if (store.list<Plan>('plans').some(p => ['pending', 'running', 'unknown'].includes(p.status) &&
+    store.get<{conversationId?: string}>('plan-origins', p.id)?.conversationId === conversationId)) busy('对话还有待处理的计划');
+  const scheduled = store.list<ScheduledWorkRecord>('scheduled-work.requests').filter(r => r.sourceMessage.conversationId === conversationId);
+  if (scheduled.some(r => {
+    if (r.status === 'cancelled') return false;
+    if (r.status === 'pending') return store.get<Approval>('approvals', r.approvalId)?.status !== 'rejected';
+    const schedule = r.scheduleId && store.get<ScheduleInfo>('eventbox.schedules', r.scheduleId);
+    return !schedule || !['cancelled', 'done'].includes(schedule.status);
+  })) busy('对话仍有定时工作');
+  if (store.list<FollowupRecord>('agent.followups').some(r => r.status === 'active' && r.sourceConversationId === conversationId))
+    busy('对话仍有主动跟进安排');
+
+  for (const m of messages) {
+    store.remove('messages', m.id);
+    store.remove('input-paused', m.id);
+  }
+  for (const trace of traces) store.remove(TRACE_COLLECTION, trace.id);
+  for (const record of scheduled) {
+    // The schedule is independently visible. Discard the cached copy of the source message.
+    const m = record.sourceMessage;
+    store.put('scheduled-work.requests', record.id, { ...record, sourceMessage: {
+      id: m.id, conversationId, role: m.role, text: '', status: m.status, createdAt: m.createdAt,
+    } });
+  }
+  for (const event of store.list<AppEvent>('core.events')) {
+    if (event.type !== 'agent.error' || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) continue;
+    if (event.data.conversationId === conversationId) store.remove('core.events', String(event.id));
+  }
+  store.remove('conversation.model-picks', conversationId);
+}

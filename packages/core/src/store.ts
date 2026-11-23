@@ -17,6 +17,7 @@ export function createStore(dbPath: string): Store {
   const get = db.prepare('SELECT value FROM documents WHERE collection = ? AND id = ?');
   // Stable insertion order keeps conversations chronological; editing a row does not move it.
   const list = db.prepare('SELECT value FROM documents WHERE collection = ? ORDER BY rowid');
+  const entries = db.prepare('SELECT id, value FROM documents WHERE collection = ? ORDER BY rowid');
   const put = db.prepare('INSERT INTO documents VALUES (?, ?, ?) ON CONFLICT(collection, id) DO UPDATE SET value = excluded.value');
   const remove = db.prepare('DELETE FROM documents WHERE collection = ? AND id = ?');
   let sequence = 0;
@@ -40,6 +41,9 @@ export function createStore(dbPath: string): Store {
     },
     list<T>(collection: string): T[] {
       return list.all(collection).map(row => JSON.parse(row.value as string) as T);
+    },
+    entries<T>(collection: string) {
+      return entries.all(collection).map(row => ({ id: String(row.id), value: JSON.parse(row.value as string) as T }));
     },
     put(collection, id, value) {
       assertWritable();

@@ -5,7 +5,7 @@ import type { AppConfig, MainAssistantProfile, ExecutorInfo, Message, Project, T
 import type { Contributions, EventBus, Store } from '../../plugin-sdk/src/index.ts';
 import { SCOPED_WORK_SYSTEM_PROMPT } from './prompts.ts';
 import { conversationModels } from './agent-runtime/model-catalog.ts';
-import { createAgentRuntime } from './agent-runtime/index.ts';
+import { createAgentRuntime, removeScopedTranscript } from './agent-runtime/index.ts';
 
 type Runtime = ReturnType<typeof createAgentRuntime>;
 interface Options {
@@ -29,6 +29,7 @@ interface Options {
  */
 export function createScopedAgents(options: Options) {
   const agents = new Map<string, { botId: string; scope: BotScope; conversationId: string; runtime: Runtime }>();
+  const deleting = new Map<string, Promise<void>>();
   let closed = false;
   let configuring = false;
 
@@ -88,6 +89,26 @@ export function createScopedAgents(options: Options) {
         agents.set(binding.conversationId, agent);
       }
       return agent.runtime.post(text, binding.conversationId, context);
+    },
+    assertThreadIdle(botId: string, threadId: string) {
+      const id = botConversationId({ id: botId, scope: { kind: 'global' } }, threadId);
+      if (configuring || agents.get(id)?.runtime.configurationBusy())
+        throw Object.assign(new Error('独立对话仍有进行中的操作，请稍后再删除'), { status: 409 });
+    },
+    async forgetDeletedThread(botId: string, threadId: string) {
+      const id = botConversationId({ id: botId, scope: { kind: 'global' } }, threadId);
+      const pending = deleting.get(id);
+      if (pending) return pending;
+      const cleanup = (async () => {
+        const entry = agents.get(id);
+        if (entry) {
+          try { await entry.runtime.close(); }
+          finally { agents.delete(id); }
+        }
+        await removeScopedTranscript(options.config.dataDir, id);
+      })().finally(() => deleting.delete(id));
+      deleting.set(id, cleanup);
+      return cleanup;
     },
     interruptTurn(conversationId: string, inputId: string) {
       const entry = agents.get(conversationId);

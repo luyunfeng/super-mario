@@ -140,7 +140,7 @@ export function createApi() {
   api.post = (path, body = {}, headers) => api(path, { method: 'POST', body, headers });
   api.put = (path, body) => api(path, { method: 'PUT', body });
   api.patch = (path, body) => api(path, { method: 'PATCH', body });
-  api.del = (path) => api(path, { method: 'DELETE' });
+  api.del = (path, body) => api(path, { method: 'DELETE', body });
   api.token = currentToken;
   api.draftOwner = () => current().owner;
   api.setToken = (value) => { credential = remember(value.trim(), current()); };

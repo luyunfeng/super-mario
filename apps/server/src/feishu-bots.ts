@@ -1,3 +1,4 @@
+import { createThreadDeletionCleanup, deletedThreads, eraseThreadChannel, type DeletedThread } from './feishu-thread-delete.ts';
 import { parseStartForm, startCard, startCardSnapshot, type StartCardSnapshot } from './feishu-start-card.ts';
 import { trimUnicodeSpace, privateThreadTags, normalizeThreadTags, searchPrivateThreads, readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
 import { createPinnedWorkbench } from './feishu-pinned-workbench.ts';
@@ -27,7 +28,9 @@ import type { BotScope, FeishuAgentInputTarget, FeishuBot, FeishuBotInput, Mailb
 export type FeishuMailboxInput = Pick<MailboxEntry, 'direction' | 'scope' | 'botId' | 'eventKey' | 'title' | 'text' | 'requiresConfirmation'>
   & Partial<Pick<MailboxEntry, 'target' | 'sourceMessageId' | 'replyTo' | 'origin'>>;
 export interface FeishuBotsApp {
-  store: Pick<Store, 'get' | 'put' | 'list' | 'transaction'> & Partial<Pick<Store, 'remove'>>;
+  store: Pick<Store, 'get' | 'put' | 'list' | 'transaction'> & Partial<Pick<Store, 'remove' | 'entries'>>;
+  forgetPrivateConversation?(conversationId: string): void;
+  scopedAgents?: { assertThreadIdle(botId: string, threadId: string): void; forgetDeletedThread(botId: string, threadId: string): Promise<void> };
   events: Pick<EventBus, 'publish' | 'subscribe'>;
   mailboxes: {
     put(input: FeishuMailboxInput): MailboxEntry | Promise<MailboxEntry>;
@@ -152,7 +155,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     digest([bot.id, bot.appId, bot.revision, chatId, platformId]);
   function rememberProgressReply(bot: FeishuBotSettings, target: string, platformId: string, entryId: string,
     message: Message, card: ReturnType<typeof buildAgentProgressCard>, route: Routed) {
-    if (message.status !== 'done' || route.command || route.relay) return;
+    if (message.status !== 'done' || route.command || route.relay || (route.conversationThreadId && app.store.get(deletedThreads, route.conversationThreadId))) return;
     // Quote the delivered public block, including its redaction and display limit.
     const text = card.body.elements.find(element => element.element_id === 'progress_text')?.text.content;
     if (text) app.store.put('feishu.bot.reply-references', digest([bot.id, bot.appId, bot.revision, target, platformId]),
@@ -574,14 +577,57 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   }
   function requireThread(botId: string, threadId: string) {
     const row = ownedThread(botId, threadId);
-    if (!row) throw Object.assign(new Error('飞书独立对话不存在或绑定已变化'), { status: 404 });
+    if (!row) {
+      const tombstone = app.store.get<DeletedThread>(deletedThreads, threadId);
+      if (tombstone && tombstone.binding === threadPreferenceKey(botId))
+        throw Object.assign(new Error('飞书独立对话已删除'), { status: 410 });
+      throw Object.assign(new Error('飞书独立对话不存在或绑定已变化'), { status: 404 });
+    }
     return row;
+  }
+  const threadWrites = new Map<string, number>();
+  const deletionCleanup = createThreadDeletionCleanup(app.store, async (botId, threadId) => {
+    if (!app.scopedAgents) throw Object.assign(new Error('独立对话清理服务不可用'), { status: 503 });
+    await app.scopedAgents.forgetDeletedThread(botId, threadId);
+  });
+  async function deletePrivateThread(botId: string, threadId: string, input: Record<string, unknown>) {
+    if (closed) throw Object.assign(new Error('控制器已关闭'), { status: 503 });
+    const { scopedAgents, forgetPrivateConversation } = app;
+    const receipt = app.store.transaction(() => {
+      const binding = threadPreferenceKey(botId);
+      if (!pluginEnabled()) throw Object.assign(new Error('飞书插件已停用'), { status: 503 });
+      const bot = current(botId);
+      if (!bot.enabled || bot.archivedAt) throw Object.assign(new Error('已配对的全局机器人不存在或已停用'), { status: 404 });
+      const old = app.store.get<DeletedThread>(deletedThreads, threadId);
+      const row = old?.binding === binding ? undefined : requireThread(botId, threadId);
+      if (!input || Object.keys(input).length !== 1 || !Number.isSafeInteger(input.version) || (input.version as number) < 0)
+        throw Object.assign(new Error('请提供当前对话版本号'), { status: 400 });
+      if (input.version !== (row ? row.version ?? 0 : old!.version))
+        throw Object.assign(new Error('对话版本已变化，请刷新后再操作'), { status: 409 });
+      if (!scopedAgents || !forgetPrivateConversation)
+        throw Object.assign(new Error('独立对话清理服务不可用'), { status: 503 });
+      if (!row) return { binding, changed: false };
+      if (threadWrites.has(threadId)) throw Object.assign(new Error('对话正在接收信件'), { status: 409 });
+      scopedAgents.assertThreadIdle(botId, threadId);
+      const conversationId = botConversationId(bot, threadId);
+      eraseThreadChannel(app.store, row, conversationId, app.mailboxes.list());
+      forgetPrivateConversation(conversationId);
+      const order = threadOrder(botId);
+      if (order.order.includes(threadId)) app.store.put('feishu.private-thread-order', binding,
+        { version: order.version + 1, order: order.order.filter(id => id !== threadId) });
+      app.store.put(deletedThreads, threadId, { botId, binding, version: input.version, deletedAt: new Date().toISOString(), cleanupPending: true });
+      app.store.remove!('feishu.private-threads', threadId);
+      return { binding, changed: true };
+    });
+    if (receipt.changed) threadChanged(botId, threadId);
+    await deletionCleanup.clean(threadId, botId, receipt.binding);
+    return { ok: true, deleted: true };
   }
   function privateThreadMetadata(botId: string, threadId: string) {
     return readPrivateThreadMetadata(app.store, requireThread(botId, threadId));
   }
-  function threadChanged(botId: string) {
-    app.events.publish('feishu.changed', { botId, threadsChanged: true });
+  function threadChanged(botId: string, deletedThreadId?: string) {
+    app.events.publish('feishu.changed', { botId, threadsChanged: true, ...(deletedThreadId && { deletedThreadId }) });
     pins.scheduleRefresh();
   }
   function threadPreferenceKey(botId: string) {
@@ -729,11 +775,18 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       || user?.role !== 'user' || user.conversationId !== botConversationId(bot) || user.readOnly || (user.origin && user.origin !== 'user')) return;
     return { projectId: '', revision: bot.revision, senderId: paired.senderId, expiresAt: Number.MAX_SAFE_INTEGER };
   }
+  function deletedAnchor(bot: FeishuBotSettings, chatId: string, platformId: string) {
+    const thread = app.store.get<ChatBinding>('feishu.chat-target', digest([bot.id, chatId, platformId]))?.conversationThreadId;
+    if (thread && app.store.get(deletedThreads, thread)) return thread;
+    return app.store.get<string>('feishu.deleted-reply-anchors', stopReference(bot, chatId, platformId));
+  }
   function selectedChat(bot: FeishuBotSettings, source: StatusSource) {
     const lookup = (id: string) => app.store.get<ChatBinding>('feishu.chat-target', digest([bot.id, source.chatId, id]));
     const paired = owner(bot);
     for (const id of [source.parentId, source.rootId]) {
       if (!id) continue;
+      const deleted = deletedAnchor(bot, source.chatId, id);
+      if (deleted) return { conversationThreadId: deleted, projectId: '', senderId: paired?.senderId ?? '', revision: bot.revision, expiresAt: 0 };
       const bound = lookup(id) ?? (paired?.chatId === source.chatId ? legacyMainAnchor(bot, paired, id) : undefined);
       if (bound) return bound;
     }
@@ -782,6 +835,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   }
   function newChat(bot: FeishuBotSettings, epoch: number, paired: Owner & { senderId: string }, source: FeishuMessageSource, firstText: string) {
     const threadId = digest(['private-thread', bot.id, bot.appId, source.messageId]);
+    if (app.store.get(deletedThreads, threadId)) return;
     const eventKey = 'feishu-dashboard:new:' + threadId;
     const pending = chatCommands.get(eventKey);
     if (pending) return pending;
@@ -1260,17 +1314,28 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         || previous.target !== input.target || previous.sourceMessageId !== input.sourceMessageId || !sameBotScope(previous.scope, scope)
         || (input.direction === 'inbox' && previous.text !== input.text))) throw noDelivery('总指挥群邮箱标识冲突');
     }
-    const entry = await app.mailboxes.put({ ...input, scope: structuredClone(scope), botId: bot.id });
-    // Keep revisions outside the fixed public envelope. Scope equality alone cannot detect A→B→A.
-    const stamp = app.store.get<{ revision: number }>('feishu.bot.envelopes', entry.id);
-    if (!stamp) app.store.transaction(() => {
-      if (extra.homeOrder !== undefined) {
-        extra.homeOrder = (app.store.get<number>('feishu.home-sequence', bot.id) ?? 0) + 1;
-        app.store.put('feishu.home-sequence', bot.id, extra.homeOrder);
+    const affected = new Set([extra.conversationThreadId, extra.chatBinding?.conversationThreadId, extra.statusGrant?.binding?.conversationThreadId,
+      ...(extra.listThreadIds ?? [])].filter((id): id is string => !!id));
+    for (const id of affected) if (app.store.get(deletedThreads, id)) throw noDelivery('独立对话已删除');
+    for (const id of affected) threadWrites.set(id, (threadWrites.get(id) ?? 0) + 1);
+    try {
+      const entry = await app.mailboxes.put({ ...input, scope: structuredClone(scope), botId: bot.id });
+      // Revisions stay outside the public envelope to distinguish a rebind back to the same scope.
+      const stamp = app.store.get<{ revision: number }>('feishu.bot.envelopes', entry.id);
+      if (!stamp) app.store.transaction(() => {
+        if (extra.homeOrder !== undefined) {
+          extra.homeOrder = (app.store.get<number>('feishu.home-sequence', bot.id) ?? 0) + 1;
+          app.store.put('feishu.home-sequence', bot.id, extra.homeOrder);
+        }
+        app.store.put('feishu.bot.envelopes', entry.id, { revision: bot.revision, ...extra });
+      });
+      return entry;
+    } finally {
+      for (const id of affected) {
+        const left = threadWrites.get(id)! - 1;
+        if (left) threadWrites.set(id, left); else threadWrites.delete(id);
       }
-      app.store.put('feishu.bot.envelopes', entry.id, { revision: bot.revision, ...extra });
-    });
-    return entry;
+    }
   }
   function stampExisting(bot: FeishuBotSettings) {
     // API-created drafts also predate a rebind, even when scope changes A→B→A.
@@ -1665,6 +1730,17 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (!active(bot.id, epoch, bot.revision) || !['p2p', 'group'].includes(source.chatType ?? '') || !source.chatId || !source.messageId || !text.trim()) return;
     let paired = owner(bot);
     const group = source.chatType === 'group';
+    if (!group && paired?.senderId === source.senderId && paired?.chatId === source.chatId) {
+      // Old inbox events and quoted cards must expire before command parsing can choose a fresh target.
+      if (deletedAnchor(bot, source.chatId, source.messageId)) return;
+      if ([source.parentId, source.rootId].some(id => id && deletedAnchor(bot, source.chatId, id))) {
+        const notice = await put(bot, { direction: 'outbox', eventKey: 'feishu-chat-expired:' + source.messageId,
+          title: '原对话已删除', text: '引用的独立对话已删除。请直接发送消息开始新的交流。',
+          target: source.chatId, requiresConfirmation: false });
+        if (notice.status === 'ready') await app.mailboxes.process(notice.id, notice.version);
+        return;
+      }
+    }
     const start = /^[／/](?:start|开工)(?:\s+([\s\S]*))?$/iu.exec(text.trim());
     if (start) {
       if (!group && bot.scope.kind === 'global' && source.senderType === 'user' && paired?.senderId
@@ -1944,6 +2020,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (stamp?.conversationThreadId && accepted.conversationId !== botConversationId(bot, stamp.conversationThreadId))
         throw new Error('独立对话接收结果未确认。');
       const restored = app.store.transaction(() => {
+        if (replyReference && stamp?.parentMessageId && entry.target && deletedAnchor(bot, entry.target, stamp.parentMessageId))
+          replyReference = { unavailable: true };
         // The original accepted input id is the durable destination for later run results.
         app.store.put('message.routes', accepted.id, { channel: 'feishu', accountId: bot.appId, botId: bot.id, target: entry.target ?? '',
           ...stamp, ...(replyReference ? { replyReference } : {}), envelopeId: entry.id, scope: entry.scope, revision: bot.revision, inputId: accepted.id, sourceMessageId: entry.sourceMessageId } satisfies Routed);
@@ -2065,6 +2143,17 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
             app.store.put('feishu.stop-references', stopReference(bot, target, messageId), entry.replyTo);
           app.store.put('feishu.bot.reply-references', digest([bot.id, bot.appId, bot.revision, target, messageId]),
             { entryId: entry.id, text: body.slice(0, 4000), truncated: body.length > 4000 });
+        };
+      }
+      const replyThread = stamp?.conversationThreadId ?? stamp?.chatBinding?.conversationThreadId ?? stamp?.statusGrant?.binding?.conversationThreadId;
+      if (replyThread && context.onSent) {
+        const recordDelivery = context.onSent;
+        context.onSent = (platformId, type) => {
+          if (app.store.get(deletedThreads, replyThread)) {
+            app.store.put('feishu.deleted-reply-anchors', stopReference(bot, target, platformId), replyThread);
+            return;
+          }
+          recordDelivery(platformId, type);
         };
       }
       if (stamp?.homeOrder && dashboard?.owner.senderId) {
@@ -2214,7 +2303,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           && paired.chatId === target.owner.chatId && paired.senderId === target.owner.senderId;
       } catch { return false; }
     },
-    canUseScope, privateThreads, privateThreadMetadata, updatePrivateThread, threadPreferenceKey, threadTagPreferences, threadOrder, listPrivateHistory,
+    canUseScope, privateThreads, requireThread, deletePrivateThread, privateThreadMetadata, updatePrivateThread, threadPreferenceKey, threadTagPreferences, threadOrder, listPrivateHistory,
     searchPrivateHistory(id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string) {
       const bot = current(id), paired = owner(bot);
       if (!paired?.senderId || bot.scope.kind !== 'global' || (sourceId && !privateTurn(bot, paired, sourceId)))
@@ -2280,15 +2369,18 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       await restart(id); return publicBot(bot);
     },
     async archive(id: string) { stampExisting(settings.read(id)); const bot = settings.archive(id); await restart(id); return publicBot(bot); },
-    async start() { if (closed) throw noDelivery('控制器已关闭'); await Promise.all(settings.list().filter(bot => !bot.archivedAt).map(bot => restart(bot.id))); },
+    async start() {
+      if (closed) throw noDelivery('控制器已关闭');
+      await Promise.all([deletionCleanup.recover(), ...settings.list().filter(bot => !bot.archivedAt).map(bot => restart(bot.id))]);
+    },
     async close() {
       if (closed) return; closed = true;
-      const pinDrain = pins.close();
+      const pinDrain = pins.close(), deletionDrain = deletionCleanup.close();
       await progressStreams.close();
       for (const state of runtimes.values()) state.epoch++;
       await off(); await Promise.all([...runtimes.values()].map(state => state.operations));
       await Promise.allSettled([...runtimes.values()].map(state => state.adapter?.close()));
-      await Promise.allSettled([pinDrain, ...tasks, ...inboxJobs.values(), ...[...relayJobs.values()].map(item => item.job)]);
+      await Promise.allSettled([pinDrain, deletionDrain, ...tasks, ...inboxJobs.values(), ...[...relayJobs.values()].map(item => item.job)]);
     },
     send, dispatchInbox, relay,
     async collect(id: string) {

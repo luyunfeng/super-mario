@@ -14,6 +14,7 @@ export type Dispose = () => void | Promise<void>;
 export interface Store {
   /** Numeric document-id cursor; optional for in-memory third-party stores. */
   listAfter?<T>(collection: string, id: number, limit?: number): T[];
+  entries?<T>(collection: string): Array<{ id: string; value: T }>;
   get<T>(collection: string, id: string): T | undefined;
   list<T>(collection: string): T[];
   put<T>(collection: string, id: string, value: T): void;

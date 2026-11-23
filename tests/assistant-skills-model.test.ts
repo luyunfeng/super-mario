@@ -3011,6 +3011,33 @@ test('Web 和飞书按执行 ID 核对目标、最近观察与仍需用户决定
   } finally { await server.close(); }
 });
 
+test('Web 与飞书主人询问永久删除时收到同一确认入口和保留范围', async t => {
+  let adapter!: FeishuOptions;
+  const replies: string[] = [];
+  const reply = '在 Web 打开对应机器人的独立对话记录，进入详情后点击删除对话并确认。已送达飞书的消息仍会保留。';
+  const { server, api, ask } = await fixture(t, req => {
+    assert.match(req.system, /Web 对应会话详情点「删除对话」并确认/);
+    assert.match(req.system, /只有服务端确认删除才能报告成功/);
+    assert.match(req.system, /已发送到飞书的消息和独立业务记录仍然保留/);
+    assert.ok(!req.tools.includes('private_conversation_delete'));
+    return { role: 'assistant', content: reply };
+  }, options => {
+    adapter = options;
+    return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
+      async send(_target, text) { replies.push(text); } };
+  });
+  try {
+    const question = '怎样永久删除我的独立对话？';
+    assert.equal(await ask(question), reply);
+    const bot = await api('/feishu/bots', { name: '对话助手', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
+      scope: { kind: 'global' }, requireConfirmation: false });
+    const source = { chatId: 'owner-chat', senderId: 'owner', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(question, { ...source, messageId: 'how-to-delete' });
+    await t.waitFor(() => assert.ok(replies.includes(reply)));
+  } finally { await server.close(); }
+});
+
 test('Web 和飞书询问怎样开工时提供表单说明并保留当前执行状态', async t => {
   let adapter!: FeishuOptions;
   const sent: string[] = [];
