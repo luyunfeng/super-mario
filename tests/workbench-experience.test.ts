@@ -200,12 +200,16 @@ test('主对话结果与审批/计划：离场积压、重复事件、已处理�
   const server=await startServer({host:'127.0.0.1',port:0,dataDir:dir,demo:true});
   try {
     const now=new Date().toISOString();
+    server.app.briefing.configure({lowDistraction:true});
     server.app.store.put('messages','answer',{id:'answer',conversationId:'main',role:'assistant',status:'done',replyTo:'input',text:'离场后的对话回答',createdAt:now});
     server.app.events.publish('messages.changed',{messageId:'answer'});server.app.events.publish('messages.changed',{messageId:'answer'});
     const approval=server.app.approvals.propose({kind:'input',title:'需要批准',details:'隔离审批',params:{runId:'fake-run',text:'fake'}});
     const plan=await server.app.proposePlan({title:'待确认计划',tasks:[{prompt:'隔离检查',doneWhen:'本地通过',expectMinutes:1}]});
     await server.app.background.eventbox.drain();
     const notices=server.app.awayNotifications.list();assert.equal(notices.length,3);assert.ok(notices.every(n=>n.status==='pending'));assert.equal(notices.filter(n=>n.text==='离场后的对话回答').length,1);
+    server.app.background.publish({type:'run.finished',typeVersion:1,sourceId:'graded-run',data:{}});
+    await server.app.background.eventbox.drain();
+    assert.equal(server.app.awayNotifications.list().filter(n=>n.status==='held' && !n.outboxId).length,1);
     server.app.approvals.reject(approval.id,approval.version);server.app.plans.reject(plan.id,plan.version);server.app.awayNotifications.flush();
     assert.equal(server.app.awayNotifications.list().filter(n=>n.status==='skipped').length,2);
     const preview=server.app.supervision.brief() as {window:{projects:{decisions:{id:string}[]}[]}};

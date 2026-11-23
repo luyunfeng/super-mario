@@ -1,3 +1,4 @@
+import {readBriefingSettings} from './briefing.ts';
 import type { Store, EventBus } from '../../plugin-sdk/src/index.ts';
 import type { FeishuBot, Project, Run, Message, Approval, Todo, AwayNotification as PendingNotice } from '../../protocol/src/index.ts';
 import type { createBackground } from './background.ts';
@@ -67,11 +68,13 @@ export function createAwayNotifications({ store, background, presence, bots, cha
     const isRunFinish = event.type === 'run.finished';
     const present = data.webPresent ?? atSource ?? presence.status().present;
     const skip = (present && !(isRunFinish && awaySettings?.alwaysNotifyRuns === true)) || awaySettings?.enabled === false || Boolean(originalRoute?.channel);
+    const held = !skip && readBriefingSettings(store).lowDistraction &&
+      (isRunFinish || (message && message.conversationId !== 'main' && !data.decisionKind && !data.id));
     const project = projectId ? store.get<Project>('projects', projectId) : undefined;
     const runHeader = originRun ? `后台 Agent · ${originRun.machineId || originRun.executorId}${project ? ` · ${project.name}` : ''}` : '';
     const fallbackText = message?.text
       ?? (approval ? `等待审批：${approval.title}\n${approval.details}` : plan ? `等待确认计划：${plan.title}` : originRun ? `${runHeader}\n${originRun.error || originRun.output || '执行已结束'}` : '有工作结果或决定需要你查看');
-    store.put('notifications.away',id,{ id,text:fallbackText,projectId,todoId,cardId:data.id,...(data.decisionKind?{decision:{kind:data.decisionKind,id:data.decisionId!,version:data.version!}}:{}),status:skip?'skipped':'pending',...(skip?{reason:Boolean(originalRoute?.channel)?'沿用原路回复，避免重复通知':'用户在场或已关闭离场通知'}:{}) });
+    store.put('notifications.away',id,{ id,text:fallbackText,projectId,todoId,cardId:data.id,...(data.decisionKind?{decision:{kind:data.decisionKind,id:data.decisionId!,version:data.version!}}:{}),status:skip?'skipped':held?'held':'pending',...(held?{reason:'按低干扰设置保留'}:{}),...(skip?{reason:Boolean(originalRoute?.channel)?'沿用原路回复，避免重复通知':'用户在场或已关闭离场通知'}:{}) });
     flush(); return {status:'done'};
   } });
   // Normalize user-visible replies and decisions into the existing durable eventbox.
