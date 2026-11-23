@@ -387,7 +387,8 @@ export function createTodosTab({ api, store, router }) {
               if (day === originalDay) return;
               target = todoDueFields(day);
             } else {
-              if (!clock && localDate(original) === day) return;
+              // A repeated DST hour has two instants for the same displayed slot.
+              if (localDate(original) === day && (!clock || localDate(original, true) === day + 'T' + clock)) return;
               const instant = new Date(dueInstant(day, clock || localDate(original, true).slice(11)));
               if (!clock) instant.setSeconds(original.getSeconds(), original.getMilliseconds());
               if (+instant === +original) return;

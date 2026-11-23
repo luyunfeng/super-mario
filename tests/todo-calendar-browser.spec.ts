@@ -240,6 +240,17 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   const previousDay = root.locator('[data-day="2030-03-09"][data-hour="2"]');
   await springEntry.dragTo(previousDay);
   await expect.poll(() => server.app.store.get<Todo>('todos', spring.id)?.dueAt).toBe('2030-03-09T10:30:00.000Z');
+  const repeatedDue = '2030-11-03T09:30:00.000Z';
+  const repeated = server.app.createTodo({ title: '回拨后的一点半', projectId: project.id, dueAt: repeatedDue });
+  await page.goto(base + '/day/2030-11-03');
+  let repeatedWrites = 0;
+  page.on('request', request => {
+    if (request.method() === 'PATCH' && request.url().endsWith('/todos/' + repeated.id)) repeatedWrites++;
+  });
+  await root.getByRole('button', { name: /回拨后的一点半/ }).dragTo(root.locator('[data-hour="1"]'));
+  assert.equal(repeatedWrites, 0);
+  assert.equal(server.app.store.get<Todo>('todos', repeated.id)?.dueAt, repeatedDue);
+  await page.goto(base + '/week/2030-03-10');
   // Locale controls week boundaries independently of the browser timezone.
   const usPage = await browser.newPage({ locale: 'en-US', timezoneId: 'America/Los_Angeles' });
   await usPage.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
