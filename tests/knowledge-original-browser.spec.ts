@@ -152,6 +152,9 @@ test('从记忆详情对照两次已保存修订，变更归属后不展示旧�
   expect(previous.revision.entry.content).toBe('他人补充丙');
   expect(previous.revision.entry.tags).toEqual(['已复核']);
   expect(latest.revision.entry.tags ?? []).toEqual([]);
+  const absent = await page.request.get(url + '/' + id + '/revision?commit=' + '0'.repeat(40), { headers });
+  expect(absent.ok()).toBe(true);
+  expect(await absent.json()).toEqual({ revision: null });
   const route = '#memory?entry=' + id + '&revision=' + previous.revision.commit;
   server.app.store.put('messages', 'revision-citation', { id: 'revision-citation', conversationId: 'main', role: 'assistant', status: 'done',
     createdAt: new Date().toISOString(), text: '见[查看修订](' + route + ')' });
@@ -169,7 +172,7 @@ test('从记忆详情对照两次已保存修订，变更归属后不展示旧�
   const older = await page.request.get(url + '/' + id + '/revision?commit=' + latest.revision.commit, { headers });
   expect(await older.json()).toEqual({ revision: null });
   await page.reload();
-  await expect(dialog.getByText('没有可查看的修订。')).toBeVisible();
+  await expect(dialog.getByText('当前知识页无法读取指定修订，请核对版本号和页面归属。')).toBeVisible();
   const returned = await page.request.patch(url + '/' + id, { headers, data: { layer: 'personal', content: '回到个人范围' } });
   expect(returned.ok()).toBe(true);
   const history = url + '/' + id + '/revision';

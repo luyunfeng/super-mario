@@ -89,13 +89,20 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
     async revision(id, commit) {
       const path = 'knowledge/' + safeId(id) + '.md';
       const repo = join(context.dataDir, '.git');
-      if (commit !== undefined && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit)) throw Object.assign(new Error('修订标识无效'), { status: 400 });
+      if (commit !== undefined && !/^(?:[a-f0-9]{8}|[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit)) throw Object.assign(new Error('修订标识无效'), { status: 400 });
       async function git(...args: string[]) {
         return (await run('git', ['--git-dir=' + repo, ...args], { timeout: 15000, maxBuffer: 4 * 1024 * 1024 })).stdout;
       }
       try {
         if (!lstatSync(repo).isDirectory()) throw new Error();
-        if (commit) await git('merge-base', '--is-ancestor', commit, 'HEAD');
+        if (commit) {
+          // Resolve the displayed short ID without choosing between colliding objects.
+          const matches = (await git('rev-parse', '--disambiguate=' + commit)).trim().split(/\s+/);
+          if (matches.length !== 1 || !matches[0]) return null;
+          if (commit.length !== 8 && matches[0] !== commit) return null;
+          commit = matches[0];
+          await git('merge-base', '--is-ancestor', commit, 'HEAD');
+        }
         const log = (await git('log', '-2', '--no-renames', '--format=%H', '--name-status', commit ?? 'HEAD', '--', path)).trim();
         if (!log) return null;
         const [hash, change, previous, priorChange] = log.split(/\n+/);

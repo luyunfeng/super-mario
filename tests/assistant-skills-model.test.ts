@@ -850,6 +850,7 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
 
 test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目的旧版', { timeout: 30000 }, async t => {
   let pageId = '', foreignId = '', adapter!: FeishuOptions;
+  let shortCommit = '';
   const sent: string[] = [];
   const answer = '最近一次保存把标签从待复核改为样本核对，正文仍是样本乙。更早的记录写的是样本甲。';
   const unavailable = '当前项目无法读取指定知识页，请提供可读取的版本或原文。';
@@ -866,6 +867,10 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
       assert.match(req.system, /contentLocked=true 表示正文仅由用户手工编辑/);
       assert.match(req.system, /比较两版返回的 tags/);
       assert.match(req.system, /共用别名时不要据此合并知识页/);
+      if (JSON.stringify(req.content).includes('指定修订短号')) {
+        assert.match(req.system, /八位短号可原样查询/);
+        return call('knowledge_revision', { pageId, commit: shortCommit }, 'specified-revision');
+      }
       if (JSON.stringify(req.content).includes(foreignId)) {
         assert.match(req.system, /不能拿同名页面或最新版代答/);
         return call('knowledge_revision', { pageId: foreignId }, 'foreign');
@@ -884,6 +889,13 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
       return { role: 'assistant', content: unavailable };
     }
     const result = JSON.parse(raw);
+    if (req.callId === 'specified-revision') {
+      assert.equal(result.commit.slice(0, 8), shortCommit);
+      assert.match(result.commit, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
+      assert.equal(result.text, '样本乙');
+      assert.deepEqual(result.tags, ['待复核']);
+      return { role: 'assistant', content: '该版标签为待复核。' };
+    }
     if (req.callId === 'current') {
       assert.equal(result.text, '样本乙');
       assert.equal(result.contentLocked, true);
@@ -894,6 +906,7 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
       return call('knowledge_revision', { pageId, commit: result.previous }, 'before-retag');
     }
     if (req.callId === 'before-retag') {
+      shortCommit = result.commit.slice(0, 8);
       assert.equal(result.text, '样本乙');
       assert.equal(result.contentLocked, true);
       assert.deepEqual(result.tags, ['待复核']);
@@ -931,6 +944,10 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
     await adapter.onMessage(question, { ...source, messageId: 'revision-question' });
     await t.waitFor(() => assert.ok(sent.includes(answer)));
     assert.equal(requests.filter(req => req.callId === 'tail').length, 2);
+    const specified = '查知识页 ' + pageId + ' 的指定修订短号 ' + shortCommit + '，当时是什么标签？';
+    assert.equal(await ask(specified, '/projects/' + project.id + '/messages'), '该版标签为待复核。');
+    await adapter.onMessage(specified, { ...source, messageId: 'short-revision' });
+    await t.waitFor(() => assert.ok(sent.includes('该版标签为待复核。')));
     const exact = '请核对「验收样本」的已保存正文，我指定的知识页 ID 是 ' + foreignId;
     assert.equal(await ask(exact, '/projects/' + project.id + '/messages'), unavailable);
     await adapter.onMessage(exact, { ...source, messageId: 'specified-page' });

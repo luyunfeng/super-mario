@@ -28,7 +28,10 @@ function revisionHistory(api, entry, loadDraft, selectedCommit) {
       const { revision } = await api.get('/knowledge/' + encodeURIComponent(entry.id) + '/revision' +
         (commit ? '?commit=' + encodeURIComponent(commit) : ''));
       if (stamp !== request) return;
-      if (!revision) { status.textContent = '没有可查看的修订。'; return; }
+      if (!revision) {
+        status.textContent = commit ? '当前知识页无法读取指定修订，请核对版本号和页面归属。' : '没有可查看的修订。';
+        return;
+      }
       status.replaceWith(h('article', { class: 'stack' },
         h('strong', null, revision.entry.title),
         h('small', null, revision.entry.updatedAt, ' · ', revision.commit.slice(0, 8)),

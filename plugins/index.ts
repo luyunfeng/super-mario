@@ -499,7 +499,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           async (args, signal) => { signal.throwIfAborted(); return actions.changeKnowledgeTag!(args); },
           { id: { type: 'string' }, updatedAt: { type: 'string' }, tag: { type: 'string' }, action: { type: 'string', enum: ['add', 'remove'] } }));
         if (actions?.knowledgeRevision) context.contribute('tools', 'knowledge_revision', tool('knowledge_revision',
-          '查知识页已保存的修订。首次仅传 pageId，按 previous 查上一版。用 commit 和 nextOffset 续读同一版正文。', async (args, signal) => {
+          '查知识页已保存的修订。查最新版仅传 pageId；指定版本同时传 commit，可用页面显示的八位短号或完整版本号。按 previous 查上一版。用 commit 和 nextOffset 续读同一版正文。', async (args, signal) => {
             const { pageId, commit, offset = 0, projectId } = args;
             if (typeof pageId !== 'string' || !pageId || (commit !== undefined && typeof commit !== 'string') ||
                 typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || (offset > 0 && !commit))
