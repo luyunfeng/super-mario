@@ -1,7 +1,7 @@
 // 启动：创建接口、数据仓库、路由和各页面，把它们接到外壳上。
 import { h, readLocal, writeLocal } from './lib/dom.js';
 import {acceptBrowserPair,takeBrowserPair} from './features/browser-devices.js';
-import { createApi } from './lib/api.js';
+import { createApi, consumeSharedToken } from './lib/api.js';
 import { installReadingFonts } from './features/reading-fonts.js';
 import { installPresence } from './features/presence.js';
 import { createStore } from './lib/store.js';
@@ -35,6 +35,18 @@ const initialHash = location.hash;
 installPresence(api);
 const store = createStore(api);
 installReadingFonts(store);
+// A credential link may target a tab that is already open. Consume its fragment
+// before the router can retain the credential in its query or dispatch the old login.
+window.addEventListener('hashchange',()=>{
+  const pair=takeBrowserPair();
+  if(pair!==undefined){pendingBrowserPair=pair;return;}
+  const token=consumeSharedToken();
+  if(token!==null && token!==api.token()){
+    closeOverlays();
+    api.setToken(token);
+    store.reset();
+  }
+});
 const router = createRouter();
 const scope = createScope();
 const shell = createShell({ api, store, router, scope });

@@ -1,7 +1,7 @@
 import QRCode from 'qrcode';
 import type {IncomingMessage} from 'node:http';
 
-export type BrowserAccess={kind:'root'|'local'}|{kind:'device';id:string};
+export type BrowserAccess={kind:'root'|'local'}|{kind:'device';id:string;token:string};
 export function createBrowserAccess(rootToken:string|undefined,authenticate:(token:string)=>string|undefined) {
   const live=new Map<string,Set<()=>void>>();
   function access(req:IncomingMessage,url:URL):BrowserAccess|undefined {
@@ -13,7 +13,7 @@ export function createBrowserAccess(rootToken:string|undefined,authenticate:(tok
     const token=header??query;
     if(!token?.startsWith('smbd_'))return;
     const id=authenticate(token);
-    if(id)return {kind:'device',id};
+    if(id)return {kind:'device',id,token};
   }
   function track(id:string,disconnect:()=>void) {
     const set=live.get(id)??new Set<()=>void>();

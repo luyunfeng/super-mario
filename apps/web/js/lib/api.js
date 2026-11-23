@@ -68,7 +68,7 @@ function readToken() {
  * 分享链接带令牌：优先放在 # 片段里（不会发给服务端），也兼容 ?token=。
  * 读取后立即从地址里抹掉，只保留页面路由。
  */
-function consumeSharedToken() {
+export function consumeSharedToken() {
   const url = new URL(location.href);
   const fragment = url.hash.slice(1);
   const tokenOnly = fragment.startsWith('token=');
@@ -151,6 +151,28 @@ export function createApi() {
   api.del = (path, body) => api(path, { method: 'DELETE', body });
   api.token = currentToken;
   api.draftOwner = () => current().owner;
+  // A response for a prior login must never erase a credential installed by another tab.
+  api.loginGuard = () => {
+    const expected=current();
+    let persisted=false;
+    try{persisted=!!localStorage.getItem(TOKEN_KEY);}catch{}
+    return () => {
+      if(current().owner!==expected.owner || !expected.value)return false;
+      try {
+        const raw=localStorage.getItem(TOKEN_KEY);
+        if(raw)return JSON.parse(raw)?.value===expected.value;
+        return !persisted;
+      } catch { return !persisted; }
+    };
+  };
+  // Other tabs in this browser share this login. Never leave their old private DOM or sockets alive.
+  globalThis.window?.addEventListener('storage',event=>{
+    if(event.storageArea!==localStorage || event.key!==TOKEN_KEY || event.newValue!==null)return;
+    try{
+      const previous=JSON.parse(event.oldValue);
+      if(previous?.value && previous.value===current().value)location.reload();
+    }catch{/* Ignore unrelated or malformed storage events. */}
+  });
   api.setToken = (value) => { credential = remember(value.trim(), current()); };
   api.onUnauthorized = (fn) => { onUnauthorized = fn; };
   return api;

@@ -1,3 +1,4 @@
+import {proofForBrowserToken} from '../../../plugins/browser-devices.ts';
 import {createBrowserAccess,pairingQR} from './browser-access.ts';
 import { privateThreadPage, searchPrivateThreads } from './feishu-thread-history.ts';
 import { createSessionAnalysis } from './session-analysis.ts';
@@ -110,16 +111,25 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       const url = new URL(req.url ?? '/', 'http://localhost');
       const path = url.pathname;
       if (path === '/api/health' || path === '/api/v1/health') return json(res, 200, { ok: true, version: '0.1.0' });
-      // A share token grants access to this single snapshot, independently of the owner's session.
       if(path==='/api/v1/public/browser-pair'){
         if(req.method!=='POST')throw new InputError('设备配对需要 POST',405);
         res.setHeader('cache-control','no-store');res.setHeader('referrer-policy','no-referrer');
         devicePlugin();if(!config.token)throw new InputError('请先配置工作台访问令牌',403);
         requireDeviceJSON(req);
         const input=await body(req,1024);devicePlugin();
-        if(Object.keys(input).length!==1 || typeof input.code!=='string')throw new InputError('请提供配对码');
-        return json(res,201,app.browserDevices.redeem(input.code));
+        if(Object.keys(input).some(k=>k!=='code'&&k!=='replaces') || typeof input.code!=='string')throw new InputError('请提供配对码');
+        let replaces:{id:string;proof:string}|undefined;
+        if(input.replaces!==undefined){
+          const value=input.replaces;
+          if(!value || typeof value!=='object' || Array.isArray(value) || Object.keys(value).some(k=>k!=='id'&&k!=='proof') ||
+            !('id' in value) || typeof value.id!=='string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value.id) ||
+            !('proof' in value) || typeof value.proof!=='string' || !/^[a-f0-9]{64}$/.test(value.proof))
+            throw new InputError('请提供有效的设备替换证明');
+          replaces={id:value.id,proof:value.proof};
+        }
+        return json(res,201,app.browserDevices.redeem(input.code,replaces));
       }
+      // A share token grants access to this single snapshot, independently of the owner's session.
       if (path === '/api/v1/public/conversation-share') {
         if (req.method !== 'POST') throw new InputError('请使用 POST 读取分享',405);
         res.setHeader('referrer-policy','no-referrer');
@@ -164,6 +174,14 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       if (path.startsWith('/api/')) {
         const access=browserAccess.access(req,url);
         if(!access) throw new InputError('访问令牌无效',401);
+        // This synchronous response is the sole exception to disconnecting a revoked device.
+        if(req.method==='DELETE' && path==='/api/v1/browser/devices/current'){
+          res.setHeader('cache-control','no-store');
+          if(access.kind!=='device')throw new InputError('当前连接没有可自行撤销的配对设备',409);
+          devicePlugin();
+          if(!app.browserDevices.revoke(access.id))throw new InputError('当前设备凭证已失效',401);
+          return json(res,200,{revoked:true});
+        }
         if(access.kind==='device'){
           const release=browserAccess.track(access.id,()=>res.destroy());
           res.once('close',release);
@@ -173,7 +191,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           devicePlugin();res.setHeader('cache-control','no-store');res.setHeader('referrer-policy','no-referrer');
           if(method==='GET' && path==='/api/v1/browser/devices'){
             const devices=access.kind==='local'?[]:app.browserDevices.list().filter(d=>access.kind==='root'||(access.kind==='device' && d.id===access.id));
-            return json(res,200,{devices,canManage:access.kind==='root',...(access.kind==='device' && {currentDeviceId:access.id})});
+            return json(res,200,{devices,canManage:access.kind==='root',...(access.kind==='device' && {currentDeviceId:access.id,replacementProof:proofForBrowserToken(access.token)})});
           }
           if(access.kind!=='root')throw new InputError('管理配对设备需要工作台主令牌',403);
           if(method==='POST' && path==='/api/v1/browser/devices/pairings'){

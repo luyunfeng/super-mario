@@ -1,7 +1,8 @@
-import {createHash, randomBytes, randomUUID} from 'node:crypto';
+import {createHash, randomBytes, randomUUID, timingSafeEqual} from 'node:crypto';
 import type {Extension, Store} from '../packages/plugin-sdk/src/index.ts';
 
 export interface BrowserDevice {id:string; name:string; createdAt:string; lastSeenAt?:string}
+export type BrowserReplacement = {id:string; proof:string};
 type StoredDevice = BrowserDevice & {digest:string};
 type Pairing = {digest:string; name:string; expires:number};
 
@@ -10,6 +11,11 @@ const credentials = 'browser-devices.credentials';
 const pairings = 'browser-devices.pairings';
 const lifetime = 5 * 60_000;
 const digestOf = (value:string) => createHash('sha256').update(value).digest('hex');
+
+const proofForDigest=(digest:string) => createHash('sha256').update('super-mario.browser-replace.v1:'+digest).digest();
+export function proofForBrowserToken(token:string):string {
+  return proofForDigest(digestOf(token)).toString('hex');
+}
 
 function fail(status:number,message:string):never {
   throw Object.assign(new Error(message), {status});
@@ -44,7 +50,20 @@ export function createBrowserDevices(store:Store,onInvalidate:(id?:string)=>void
       return {code,expiresAt:new Date(expires).toISOString()};
     });
   }
-  function redeem(code:string) {
+  // Call only inside the transaction which owns the credential mutation.
+  function removeDevice(device:StoredDevice) {
+    store.remove(credentials,device.digest);
+    return store.remove(devices,device.id);
+  }
+  function replaceDevice(replaces:BrowserReplacement|undefined) {
+    if (!replaces || typeof replaces.id!=='string' || replaces.id.length!==36 ||
+        typeof replaces.proof!=='string' || !/^[a-f0-9]{64}$/.test(replaces.proof)) return;
+    const old=store.get<StoredDevice>(devices,replaces.id);
+    if (!old || old.id!==replaces.id || !/^[a-f0-9]{64}$/.test(old.digest)) return;
+    const expected=proofForDigest(old.digest);
+    if (timingSafeEqual(expected,Buffer.from(replaces.proof,'hex')) && removeDevice(old)) return old.id;
+  }
+  function redeem(code:string,replaces?:BrowserReplacement) {
     requireActive();
     if(typeof code!=='string' || !/^[A-Za-z0-9_-]{32}$/.test(code)) fail(401,'配对码无效或已过期');
     const digest=digestOf(code);
@@ -55,11 +74,14 @@ export function createBrowserDevices(store:Store,onInvalidate:(id?:string)=>void
       if(!store.remove(pairings,digest) || pairing.expires<=Date.now()) return;
       const token='smbd_'+randomBytes(32).toString('base64url');
       const device:StoredDevice={id:randomUUID(),name:pairing.name,createdAt:new Date(Date.now()).toISOString(),digest:digestOf(token)};
+      const replaced=replaceDevice(replaces);
       store.put(devices,device.id,device);
       store.put(credentials,device.digest,device.id);
-      return {token,device:metadata(device)};
+      return {replaced,token,device:metadata(device)};
     });
-    return receipt ?? fail(401,'配对码无效或已过期');
+    if (!receipt) fail(401,'配对码无效或已过期');
+    if (receipt.replaced) onInvalidate(receipt.replaced);
+    return {token:receipt.token,device:receipt.device,replacementProof:proofForBrowserToken(receipt.token)};
   }
   function authenticate(token:string):string|undefined {
     if(!active || typeof token!=='string' || !/^smbd_[A-Za-z0-9_-]{43}$/.test(token)) return;
@@ -81,8 +103,7 @@ export function createBrowserDevices(store:Store,onInvalidate:(id?:string)=>void
     const removed=store.transaction(()=>{
       const device=store.get<StoredDevice>(devices,id);
       if(!device)return false;
-      store.remove(credentials,device.digest);
-      return store.remove(devices,id);
+      return removeDevice(device);
     });
     if(removed)onInvalidate(id);
     return removed;

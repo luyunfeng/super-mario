@@ -4,6 +4,7 @@ import { icon } from './ui/icons.js';
 import { Button, Input } from './ui/kit.js';
 import { hintCopy } from './ui/hint.js';
 import { alertLabel } from './lib/alerts.js';
+import {disconnectBrowser} from './features/disconnect-browser.js';
 import { createPluginSettings } from './features/plugin-settings.js';
 import { openTerminalWall } from './features/terminal-wall.js';
 import { PAGES, PAGE_NAMES } from './lib/router.js';
@@ -55,7 +56,9 @@ export function createShell({ api, store, router, scope }) {
   const devicesLink=h('a',{class:'btn btn--sm',href:'#agent?browserDevices=1',hidden:true,onclick:event=>{
     event.preventDefault();toggleConn(false);router.go('#agent?browserDevices=1');
   }},'浏览器设备');
-  const connPop = h('div', { class: 'conn__pop', hidden: true }, connMessage, tokenForm, devicesLink);
+  const disconnect=Button({label:'断开此浏览器',size:'sm',onClick:()=>{toggleConn(false);disconnectBrowser(api,store);}});
+  disconnect.hidden=!api.token();
+  const connPop = h('div', { class: 'conn__pop', hidden: true }, connMessage, tokenForm, devicesLink, disconnect);
   const conn = h('div', { class: 'conn' }, connButton, connPop);
   const toggleConn = (open) => { connPop.hidden = !open; connButton.setAttribute('aria-expanded', String(open)); if (open) tokenInput.focus(); };
   connButton.addEventListener('click', () => toggleConn(connPop.hidden));
@@ -107,6 +110,7 @@ export function createShell({ api, store, router, scope }) {
       syncScopeClass();
     },
     setConnection({ connection, unauthorized, loadError, snapshot }) {
+      disconnect.hidden=!api.token();
       devicesLink.hidden=unauthorized || !snapshot?.plugins.some(plugin=>plugin.id==='browser-devices' && plugin.status==='active');
       if(shownCredential!==api.draftOwner()){shownCredential=api.draftOwner();tokenInput.value='';}
       const tone = connection === 'online' ? 'ok' : connection === 'connecting' ? 'warn' : 'danger';

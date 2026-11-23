@@ -1,4 +1,5 @@
 import {h,replace} from '../lib/dom.js';
+import {clearReplacement,disconnectBrowser,pendingReplacement,rememberDevice} from './disconnect-browser.js';
 import {copyText} from '../lib/clipboard.js';
 import {Button} from '../ui/kit.js';
 import {confirmDialog,openDrawer} from '../ui/overlay.js';
@@ -42,10 +43,10 @@ export function openBrowserDevices({api,store}){
     try{
       const result=await api(path,{signal:life.signal});
       if(!active() || seq!==request)return;
-      view=result;
+      view=result;rememberDevice(api,view.currentDeviceId,view.replacementProof);
       status.textContent=view.canManage?'使用主访问令牌管理设备。':view.currentDeviceId?'此浏览器已通过设备配对连接。':'请使用主访问令牌管理设备。';
       replace(actions,view.canManage && [h('label',{class:'field'},'设备名称',name),Button({label:'生成配对链接',onClick:issue})],
-        Button({label:'刷新设备',onClick:load}));
+        Button({label:'刷新设备',onClick:load}),api.token() && Button({label:'断开此浏览器',onClick:()=>disconnectBrowser(api,store)}));
       replace(list,view.devices.length?view.devices.map(device=>h('article',{class:'card card__body stack','aria-label':device.name},
         h('strong',{},device.name),device.id===view.currentDeviceId && h('span',{},'当前设备'),
         h('small',{},'创建于 '+fmt(device.createdAt)),h('small',{},device.lastSeenAt?'最近活跃 '+fmt(device.lastSeenAt):'暂无活跃记录'),
@@ -77,12 +78,13 @@ export function acceptBrowserPair(code,api,store){
     if(owner!==api.draftOwner() || !drawer.el.open)return;
     button.disabled=true;status.textContent='正在兑换一次性配对链接…';
     try{
+      const replaces=pendingReplacement();
       const response=await fetch('/api/v1/public/browser-pair',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({code}),cache:'no-store',credentials:'omit',referrerPolicy:'no-referrer',signal:life.signal});
+        body:JSON.stringify({code,...(replaces?{replaces}:{})}),cache:'no-store',credentials:'omit',referrerPolicy:'no-referrer',signal:life.signal});
       const result=await response.json();
       if(!response.ok || typeof result.token!=='string' || !result.token)throw Error(result.error || '未取得有效的设备凭据。');
       if(owner!==api.draftOwner() || !drawer.el.open)return;
-      api.setToken(result.token);drawer.close();store.reset();
+      api.setToken(result.token);rememberDevice(api,result.device?.id,result.replacementProof);clearReplacement(replaces);drawer.close();store.reset();
     }catch(error){if(!life.signal.aborted)status.textContent=error.message+' 请向主人获取新的配对链接。';}
   }});
   const drawer=openDrawer({title:'配对这台浏览器',body:[

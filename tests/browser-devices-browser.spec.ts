@@ -46,3 +46,59 @@ test('两台浏览器主动配对、持久登录、单次兑换与撤销',{timeo
   await row.getByRole('button',{name:'撤销设备'}).click();await confirm.getByRole('button',{name:'确认撤销'}).click();
   await expect(row).toHaveCount(0);await device.reload();await expect(device.locator('#connection')).toContainText('需要令牌');
 });
+
+test('主动断开需确认，未确认撤销只在选择后退出并在下次配对替换原设备',{timeout:40000},async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'mario-disconnect-')),token='synthetic-disconnect-admin';
+  const server=await startServer({host:'127.0.0.1',port:0,dataDir,demo:true,token});
+  t.after(async()=>{await server.close();await rm(dataDir,{recursive:true,force:true});});
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});t.after(()=>browser.close());
+  const ctx=await browser.newContext();await ctx.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  const device=await ctx.newPage(),headers={Authorization:'Bearer '+token,'Content-Type':'application/json'};
+  const devices=async()=>await (await fetch(server.url+'/api/v1/browser/devices',{headers})).json();
+  async function pair(name:string){
+    const issue=await fetch(server.url+'/api/v1/browser/devices/pairings',{method:'POST',headers,body:JSON.stringify({name})});
+    const {code}=await issue.json();await device.goto(server.url+'/#home?browserPair='+code);
+    const dialog=device.getByRole('dialog',{name:'配对这台浏览器'});
+    await dialog.getByRole('button',{name:'确认连接这台浏览器'}).click();await expect(dialog).toHaveCount(0);
+    await expect.poll(()=>device.evaluate(()=>!!localStorage.getItem('super-mario-token'))).toBe(true);
+  }
+  const route=server.url+'/#agent?browserDevices=1';
+  await pair('合成旧设备');await device.goto(route);
+  const sibling=await ctx.newPage();await sibling.goto(route);
+  await expect(sibling.getByRole('dialog',{name:'浏览器设备'})).toContainText('合成旧设备');
+  const settings=device.getByRole('dialog',{name:'浏览器设备'}),flow=device.getByRole('dialog',{name:'断开此浏览器'});
+  const firstId=(await devices()).devices[0].id;
+  let deletes=0;
+  await device.route('**/api/v1/browser/devices/current',r=>{deletes++;return r.fulfill({status:502,json:{error:'合成回执未知'}});});
+  await settings.getByRole('button',{name:'断开此浏览器'}).click();await flow.getByRole('button',{name:'取消'}).click();assert.equal(deletes,0);
+  await settings.getByRole('button',{name:'断开此浏览器'}).click();await flow.getByRole('button',{name:'确认断开'}).click();
+  await expect(flow).toContainText('未确认');assert.ok(await device.evaluate(()=>localStorage.getItem('super-mario-token')));
+  await flow.getByRole('button',{name:'仅退出本机'}).click();await expect(device.locator('#connection')).toContainText('需要令牌');
+  assert.equal(await device.evaluate(()=>localStorage.getItem('super-mario-token')),null);
+  await expect(sibling.locator('#connection')).toContainText('需要令牌');await expect(sibling.locator('body')).not.toContainText('合成旧设备');
+  await sibling.close();
+  assert.ok(await device.evaluate(()=>/^[a-f0-9]{64}$/.test(JSON.parse(localStorage.getItem('sm.browser-devices.replaces')!).proof)));
+  assert.equal((await devices()).devices[0].id,firstId);assert.equal(deletes,1);
+  await pair('合成新设备');const updated=await devices();assert.equal(updated.devices.length,1);assert.notEqual(updated.devices[0].id,firstId);
+  assert.equal(await device.evaluate(()=>localStorage.getItem('sm.browser-devices.replaces')),null);
+  await device.unroute('**/api/v1/browser/devices/current');
+  await device.locator('#connection').click();await device.getByRole('button',{name:'断开此浏览器'}).click();await flow.getByRole('button',{name:'确认断开'}).click();
+  await expect(device.locator('#connection')).toContainText('需要令牌');assert.equal((await devices()).devices.length,0);
+  await device.goto(route+'&token='+token);await expect(settings).toBeVisible();assert.ok(!device.url().includes(token));await settings.getByRole('button',{name:'断开此浏览器'}).click();await flow.getByRole('button',{name:'确认断开'}).click();
+  await expect(flow).toContainText('主访问令牌');await flow.getByRole('button',{name:'取消'}).click();
+  await expect(settings.getByRole('button',{name:'生成配对链接'})).toBeEnabled();
+  // A confirmed response for the old tab cannot erase a different login saved while it was in flight.
+  let finish!:()=>void;
+  const waiting=new Promise<void>(resolve=>{finish=resolve;});
+  let started=false;
+  await device.route('**/api/v1/browser/devices/current',async r=>{started=true;await waiting;await r.fulfill({json:{revoked:true}});});
+  await settings.getByRole('button',{name:'断开此浏览器'}).click();await flow.getByRole('button',{name:'确认断开'}).click();
+  await expect.poll(()=>started).toBe(true);await expect(flow.getByRole('button',{name:'关闭'})).toBeDisabled();
+  await device.keyboard.press('Escape');await expect(flow).toBeVisible();
+  const next=await ctx.newPage();
+  const issued=await (await fetch(server.url+'/api/v1/browser/devices/pairings',{method:'POST',headers,body:JSON.stringify({name:'合成其他身份'})})).json();
+  await next.goto(server.url+'/#home?browserPair='+issued.code);await next.getByRole('button',{name:'确认连接这台浏览器'}).click();
+  await expect(flow).toHaveCount(0);finish();await next.goto(route);await next.reload();
+  await expect(next.getByRole('dialog',{name:'浏览器设备'})).toContainText('合成其他身份');
+
+});

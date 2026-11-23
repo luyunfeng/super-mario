@@ -4901,7 +4901,8 @@ test('Web 与配对飞书说明浏览器接入时不索取凭据',async t=>{
   const {server,api,ask}=await fixture(t,request=>{
     assert.match(request.system,/目标浏览器打开并确认/);
     assert.match(request.system,/不要在飞书、聊天、日志或笔记中索取或转发/);
-    return {role:'assistant',content:answer};
+    assert.match(request.system,/没有撤销回执时，要说明旧凭据可能仍然有效/);
+    return {role:'assistant',content:JSON.stringify(request.content).includes('仅本地退出')?'旧凭据可能仍然有效。':answer};
   },options=>{
     adapter=options;
     return {start:async()=>{},close:async()=>{},collect:async()=>[],status:()=>({connected:true}),send:async(_target,text)=>{sent.push(text);}};
@@ -4913,6 +4914,9 @@ test('Web 与配对飞书说明浏览器接入时不索取凭据',async t=>{
     await adapter.onMessage(bot.pairingCode,{...owner,messageId:'device-pair'});
     await adapter.onMessage('能在这里拿浏览器的登录凭据吗？',{...owner,messageId:'device-help'});
     await t.waitFor(()=>assert.ok(sent.includes(answer)));
+    assert.equal(await ask('仅本地退出后，设备的旧凭据一定失效了吗？'),'旧凭据可能仍然有效。');
+    await adapter.onMessage('仅本地退出能保证撤销成功吗？',{...owner,messageId:'device-local-exit'});
+    await t.waitFor(()=>assert.ok(sent.includes('旧凭据可能仍然有效。')));
     assert.deepEqual(server.app.browserDevices.list(),[]);
   }finally{await server.close();}
 });
