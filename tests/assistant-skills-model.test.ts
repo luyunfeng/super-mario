@@ -3120,7 +3120,7 @@ test('Web 的 conversation_status 只读取当前范围，排除本轮提问并�
   const { server, api, ask, requests } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.ok(req.tools.includes('conversation_status'));
-      assert.match(req.system, /conversation_status/);
+      assert.match(req.system, /lastMessage.role.*pending.*failed.*只有 done 才可作为已完成的助手答复引用/);
       assert.match(req.system, /用户只问状态时不要代为中断/);
       assert.match(req.system, /缺少置顶回执时说尚未确认/);
       assert.match(req.system, /裸命令只切换下一条未引用消息的目标/);
@@ -3148,16 +3148,17 @@ test('Web 的 conversation_status 只读取当前范围，排除本轮提问并�
     assert.equal(status.nextQueuedMessage,null);
     assert.equal(status.lastMessage.text, selected);
     assert.equal(status.lastMessage.role, 'assistant');
-    assert.equal(status.phase, 'idle');
+    assert.equal(status.lastMessage.status, selected === projectText ? 'failed' : 'done');
+    assert.equal(status.phase, selected === projectText ? 'failed' : 'idle');
     assert.deepEqual(status.pending, { total: 0, items: [], truncated: false });
-    return { role: 'assistant', content: '已读到上一条回复「' + status.lastMessage.text + '」。' };
+    return { role: 'assistant', content: (status.lastMessage.status === 'failed' ? '处理失败，摘录为「' : '已读到上一条回复「') + status.lastMessage.text + '」。' };
   });
   try {
     const project = await api('/projects', { name: '状态验收项目' });
     const outside = await api('/projects', { name: '另一合成项目' });
     forbiddenId = 'project:' + outside.id + ':work';
     const put = (id: string, text: string, conversationId: string, projectId?: string) => {
-      server.app.store.put('messages', id, { id, conversationId, ...(projectId && {projectId}), role: 'assistant', status: 'done',
+      server.app.store.put('messages', id, { id, conversationId, ...(projectId && {projectId}), role: 'assistant', status: text === projectText ? 'failed' : 'done',
         text, createdAt: '2026-03-01T10:00:00.000Z' } satisfies Message);
     };
     put('status-main-last', mainText, 'main');
@@ -3165,7 +3166,7 @@ test('Web 的 conversation_status 只读取当前范围，排除本轮提问并�
     put('status-outside', unrelated, forbiddenId, outside.id);
     for (const [expected, path] of [[mainText, '/messages'], [projectText, '/projects/' + project.id + '/messages']]) {
       selected = expected!;
-      assert.equal(await ask('当前会话是什么状态？请看上一条回复。', path), '已读到上一条回复「' + selected + '」。');
+      assert.equal(await ask('当前会话是什么状态？请看上一条回复。', path), (selected === projectText ? '处理失败，摘录为「' : '已读到上一条回复「') + selected + '」。');
     }
     assert.deepEqual(requests.map(req => req.lastRole), ['user', 'tool', 'tool', 'user', 'tool', 'tool']);
     assert.deepEqual(server.app.approvals.list(), []);
