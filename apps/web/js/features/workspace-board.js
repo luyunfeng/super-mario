@@ -67,16 +67,25 @@ export function openWorkspaceBoard({ api, store, router }) {
   const columns = () => board.columns.map(col => [col.id, col.title]);
   const btn = (label, onClick, disabled = false) => Button({ label, onClick, disabled, size: 'sm' });
   function history(card) {
-    historyDrawer = openWorkspaceBoardHistory({api,store,authorized,card});
+    historyDrawer = openWorkspaceBoardHistory({api,store,authorized,card,linkForCard:id=>{
+      const current=board?.cards.find(item=>item.id===id);
+      return current && projectLink(current);
+    }});
   }
   function projectLink(card) {
     const project = store.view.snapshot.projects?.find(p => p.id === card.projectId);
     if (!project || project.archivedAt) return h('span', {class:'muted small'}, project ? '项目已归档' : '项目已移除');
     const href = router.href('projects', card.projectId, 'workspace');
     return h('a', {href, onclick(event) {
+      const current=board?.cards.find(item=>item.id===card.id);
+      const project=store.view.snapshot.projects?.find(item=>item.id===card.projectId);
+      if (!authorized() || current?.projectId!==card.projectId || !project || project.archivedAt) {
+        event.preventDefault();
+        return;
+      }
       if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
       event.preventDefault();
-      if (authorized()) { drawer.close(); router.go(href); }
+      drawer.close(); router.go(href);
     }}, '打开项目 ' + card.title);
   }
   function visible() {

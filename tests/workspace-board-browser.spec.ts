@@ -80,7 +80,11 @@ test('主人从项目页添加项目，按可见范围批量置顶和归档，�
   await expect(activity).toContainText('变更后');
   await expect(activity).toContainText(projects[0].name);
   await expect(activity).toContainText(projects[1].name);
-  await activity.getByRole('button',{name:'关闭',exact:true}).click();
+  const projectLink=activity.getByRole('link',{name:'打开项目 '+projects[1].name,exact:true});
+  await projectLink.click();
+  await expect.poll(()=>new URL(page.url()).hash).toBe('#projects/'+projects[1].id+'/workspace');
+  await expect(activity).toBeHidden();await expect(board).toBeHidden();
+  await entry.click();
   const cardHistory=page.getByRole('dialog',{name:'卡片变更历史',exact:true});
   await board.getByRole('button',{name:'变更历史 '+projects[2].name,exact:true}).click();
   await expect(cardHistory.getByRole('button',{name:/^展开版本 /})).toHaveCount(1);

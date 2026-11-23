@@ -14,14 +14,15 @@ function historicalValue(label, value) {
   if (typeof value.archived === 'boolean') parts.push(value.archived ? '已归档' : '未归档');
   return h('p', {class:'small'}, h('strong', {}, label + '　'), parts.filter(Boolean).join(' · '));
 }
-function changeRow(change, card) {
+function changeRow(change, card, linkForCard) {
   return h('div', {class:'stack'}, h('strong', {}, [kinds[change.kind] ?? change.kind, change.title].filter(Boolean).join(' · ')),
+    change.kind.startsWith('card_') && change.id && linkForCard(change.id),
     !!change.fields?.length && h('span',{class:'muted small'},'变更字段　' + change.fields.map(f => fields[f] ?? f).join('、')),
     historicalValue('变更前',change.before), historicalValue('变更后',change.after),
     !!change.cardIds?.length && (card ? h('span', {class:'small muted'}, '这张卡片参与了顺序调整。') : h('details',{},h('summary',{},'本次调整涉及的卡片顺序'), h('ol',{},change.cardIds.map(id => h('li',{},id))))));
 }
 
-export function openWorkspaceBoardHistory({api, store, authorized, card}) {
+export function openWorkspaceBoardHistory({api, store, authorized, card, linkForCard}) {
   if (!authorized()) return;
   let generation = 0, busy = false, before = null, latest, connection = store.view.connection;
   const list = h('div', {class:'stack'});
@@ -50,7 +51,7 @@ export function openWorkspaceBoardHistory({api, store, authorized, card}) {
       try {
         const page = await api.post('/workspace-board',{action:'activity_detail',revision:entry.revision,cardId:card?.id,offset,limit:20});
         if (!alive(stamp) || turn !== detailGeneration || !expanded) return;
-        changes.append(...page.changes.map(change => changeRow(change,card)));
+        changes.append(...page.changes.map(change => changeRow(change,card,linkForCard)));
         offset = page.nextOffset;
         feedback.textContent = '已显示 ' + changes.childElementCount + ' / ' + page.total + ' 项变更';
         next.textContent = '查看更多变更'; next.hidden = offset === null;
