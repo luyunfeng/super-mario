@@ -1334,7 +1334,7 @@ test('/agent 搜索按已发现的会话和同台执行记录匹配，待决定�
     id, machineId, executorId: machineId + '/codex', nativeSessionId, sessionId: 'host-' + id, conversationId: 'project:p:work', cwd,
     createdAt: now, updatedAt: now, prompt, projectId: 'p', executionMode: 'interactive', status: 'running', output: '',
   });
-  for (const row of [run('working', 'alpha', 'one', '核对索引'),
+  for (const row of [{ ...run('working', 'alpha', 'one', '核对索引'), model: 'fixture-model' },
     run('waiting', 'alpha', 'two', '等待确认索引'), run('wrong', 'beta', 'one', '离线电脑同名会话')]) f.store.put('runs', row.id, row);
   f.store.put('interactions', 'question', { id: 'question', kind: 'question', title: '选哪个目录', runId: 'waiting',
     handler: 'user', status: 'open', expiresAt: new Date(Date.now() + 600000).toISOString(), version: 1, createdAt: now });
@@ -1347,6 +1347,13 @@ test('/agent 搜索按已发现的会话和同台执行记录匹配，待决定�
   assert.ok(text.includes('核对索引') && text.includes('等待确认索引'));
   assert.ok(text.indexOf('等待确认索引') < text.indexOf('核对索引'));
   assert.doesNotMatch(text, /离线电脑同名会话|history/);
+  for (const query of ['FIXTURE-MODEL', 'working']) {
+    await receive('/agents ' + query, human('filter-' + query));
+    const match = JSON.stringify(bot.instance.contexts.at(-1)?.card);
+    assert.match(match, /指定模型：fixture-model/);
+    assert.match(match, /核对索引/);
+    assert.doesNotMatch(match, /等待确认索引/);
+  }
   await receive('/agents 核对索引', human('title'));
   const single = JSON.stringify(bot.instance.contexts.at(-1)?.card);
   assert.match(single, /核对索引/);

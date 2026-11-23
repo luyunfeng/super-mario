@@ -18,7 +18,7 @@ type AgentState = keyof typeof states;
 const priority: Record<AgentState, number> = { waiting: 0, running: 1, queued: 2, review: 3 };
 type AgentRow = {
   machineId: string; machine: string; agent: string; id: string; cwd: string; time: string; resumable: boolean;
-  runId: string; sessionId?: string; projectId?: string; projectName?: string; todoId?: string; title: string; state: AgentState;
+  runId: string; model?: string; sessionId?: string; projectId?: string; projectName?: string; todoId?: string; title: string; state: AgentState;
 };
 const line = (value: string | undefined, limit = 100) => publicText(value, limit).replace(/\s+/g, ' ');
 
@@ -57,10 +57,10 @@ export function agentCardSnapshot(discovery: SessionList, store: Pick<Store, 'ge
         : run.status === 'completed' && todo && !todo.completedAt ? 'review' : undefined;
       if (!state) continue;
       const title = line(run.prompt || todo?.title || session.nativeSessionId, 100);
-      if (needle && ![run.prompt, todo?.title, project?.name, machine.machineName, machine.machineId, session.cwd,
+      if (needle && ![run.id, run.model, run.prompt, todo?.title, project?.name, machine.machineName, machine.machineId, session.cwd,
         session.nativeSessionId, session.executorId].some(value => value?.toLowerCase().includes(needle))) continue;
       rows.push({ machineId: machine.machineId, machine: line(machine.machineName, 60), agent: session.executorId, id: session.nativeSessionId,
-        cwd: session.cwd, time: run.updatedAt, state, title, runId: run.id, projectId: run.projectId, projectName: project && line(project.name, 60), todoId: run.todoId,
+        cwd: session.cwd, time: run.updatedAt, state, title, runId: run.id, ...(run.model && { model: line(run.model, 128) }), projectId: run.projectId, projectName: project && line(project.name, 60), todoId: run.todoId,
         sessionId: run.executionMode === 'interactive' && run.status === 'running' && !todo?.completedAt ? run.sessionId : undefined, resumable: session.resumable && state === 'review' });
     }
   }
@@ -81,7 +81,7 @@ export function agentCard(data: AgentCardSnapshot, navigation: string, webBase?:
   }
   if (data.query) section('筛选 · ' + data.query);
   for (const [offset, row] of data.rows.slice(page * 5, (page + 1) * 5).entries()) {
-    section([states[row.state] + ' · ' + row.title, [row.projectName, row.machine, line(row.agent, 60)].filter(Boolean).join(' · '), line(row.cwd, 220), '执行更新 ' + row.time].join('\n'));
+    section([states[row.state] + ' · ' + row.title, [row.projectName, row.machine, line(row.agent, 60), row.model && '指定模型：' + row.model].filter(Boolean).join(' · '), line(row.cwd, 220), '执行更新 ' + row.time].join('\n'));
     elements.push(...cardButtons([
       ...(row.sessionId || row.resumable ? [{ label: row.resumable ? '申请恢复' : '选择会话', value: {
         kind: 'workbench.agentSelect', navigation, index: page * 5 + offset,
