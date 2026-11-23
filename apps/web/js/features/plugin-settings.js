@@ -133,8 +133,8 @@ export function createPluginSettings({ api, store, router }) {
     keyedList(list, matches.filter(p=>p.id===selected), p => p.id, plugin => {
       const entries = features(plugin);
       const changeEnabled = async enabled => {
-        await api.post('/plugins/' + encodeURIComponent(plugin.id), { enabled });
-        await store.refresh();
+        try { await api.post('/plugins/' + encodeURIComponent(plugin.id), { enabled }); }
+        finally { await store.refresh(); }
         if (store.view.loadError) throw new Error(store.view.loadError);
       };
       return h('section', { class: 'plugin-section', 'aria-label': systemText(plugin.name) },

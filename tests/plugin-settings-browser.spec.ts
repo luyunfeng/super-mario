@@ -9,8 +9,9 @@ test('从插件配置固定入口，刷新、停用与恢复，并从窄屏打�
   const dir = await mkdtemp(join(tmpdir(), 'mario-plugin-settings-'));
   const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: dir, demo: true });
   let attempts = 0;
-  server.app.plugins.register({ id: 'fixture-retry', name: '合成重试插件', capabilities: [], activate() {
+  server.app.plugins.register({ id: 'fixture-retry', name: '合成重试插件', capabilities: [], activate(ctx) {
     if (++attempts <= 2) throw new Error('合成启动失败 ' + attempts);
+    ctx.defer(() => { throw new Error('合成释放资源失败'); });
   } });
   await server.app.plugins.setEnabled('fixture-retry', true);
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
@@ -40,6 +41,18 @@ test('从插件配置固定入口，刷新、停用与恢复，并从窄屏打�
   await expect(retryPlugin).toContainText('已启用');
   await expect(retryPlugin.getByRole('button', { name: '重试启动' })).toHaveCount(0);
   expect(attempts).toBe(3);
+  const observer = await browser.newPage();
+  await observer.goto(server.url);
+  await observer.getByRole('button', { name: '插件配置', exact: true }).click();
+  await observer.getByLabel('搜索插件').fill('fixture-retry');
+  const observingPlugin = observer.getByRole('region', { name: '合成重试插件' });
+  await expect(observingPlugin).toContainText('已启用');
+  await retryPlugin.getByRole('button', { name: '停用' }).click();
+  for (const section of [retryPlugin, observingPlugin]) {
+    await expect(section).toContainText('Cleanup failed: fixture-retry');
+    await expect(section.getByRole('button', { name: '启用', exact: true })).toBeVisible();
+  }
+  await observer.close();
   await dialog.getByLabel('搜索插件').fill('feishu');
   await expect(plugin.getByText(/直接依赖此插件/)).toContainText('飞书消息表情回应');
   await plugin.getByRole('checkbox').check();

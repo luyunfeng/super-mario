@@ -1425,8 +1425,12 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           const input = await body(req);
           if (typeof input.enabled !== 'boolean') throw new InputError('enabled必须为布尔值');
           if (!app.plugins.list().some(entry => entry.id === plugin[1])) throw new InputError('插件不存在', 404);
-          await app.plugins.setEnabled(plugin[1], input.enabled);
-          app.events.publish('plugins.changed', { id: plugin[1] }); return json(res, 200, app.plugins.list());
+          try { await app.plugins.setEnabled(plugin[1], input.enabled); }
+          finally {
+            // The switch is persisted before cleanup; every open client must re-read even if cleanup fails.
+            app.events.publish('plugins.changed', { id: plugin[1] });
+          }
+          return json(res, 200, app.plugins.list());
         }
         throw new InputError('接口不存在', 404);
       }
