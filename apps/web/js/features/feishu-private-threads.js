@@ -208,6 +208,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       replace(results, items.length ? items.map(row => h('div', { class: 'stack' }, openThread(row),
         row.matchedTags?.length && h('span', {class:'small muted'}, '匹配标签：' + row.matchedTags.join('、')),
         row.titleMatch && h('span', { class: 'small muted' }, '标题匹配'),
+        row.hitCount > row.hits.length && h('span', {class:'small muted'}, `共匹配 ${row.hitCount} 条发言，显示最近 ${row.hits.length} 条。`),
         row.hits.map(hit => h('button',{type:'button',class:'btn btn--secondary btn--sm',onclick:()=>detail(row,'',undefined,hit.id)},
           historyMessageLabel(hit),' · ',hit.omittedBefore?'…':'',hit.excerpt.slice(0,hit.matchStart),
           h('mark',{},hit.excerpt.slice(hit.matchStart,hit.matchEnd)),hit.excerpt.slice(hit.matchEnd),hit.omittedAfter?'…':''))))

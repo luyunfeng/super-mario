@@ -98,10 +98,13 @@ function* matchingThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThrea
   for (const { info, list } of historyEntries(store, rows, archived, tag)) {
     const titleMatch = pattern.test(info.title);
     const hits = [];
-    for (let i = list.length - 1; i >= 0 && hits.length < 3; i--) {
+    let hitCount = 0;
+    for (let i = list.length - 1; i >= 0; i--) {
       const { id, role, text, createdAt, status } = list[i];
       const match = pattern.exec(text);
       if (!match) continue;
+      hitCount++;
+      if (hits.length === 3) continue;
       let start = Math.max(0, match.index - 50);
       let end = Math.min(text.length, match.index + match[0].length + 70);
       // Keep quotes exact, including complete code points on either edge.
@@ -110,7 +113,7 @@ function* matchingThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThrea
       hits.push({ id, role, excerpt: text.slice(start, end), matchStart:match.index-start, matchEnd:match.index-start+match[0].length, truncated: start > 0 || end < text.length, omittedBefore:start>0, omittedAfter:end<text.length, status: status ?? null, createdAt });
     }
     const matchedTags = info.tags.filter(label => pattern.test(label));
-    if (hits.length || titleMatch || matchedTags.length) yield { ...info, titleMatch, ...(matchedTags.length && {matchedTags}), hits };
+    if (hits.length || titleMatch || matchedTags.length) yield { ...info, titleMatch, ...(matchedTags.length && {matchedTags}), hitCount, hits };
   }
 }
 
@@ -123,6 +126,7 @@ export function searchPrivateThreadList(store: Pick<Store, 'get' | 'list'>, rows
       const speaker=first.role==='assistant'?'助手':'你';
       const state=first.status==='pending'?'处理中':first.status==='failed'?'处理失败':'';
       snippets[thread.threadId] = [speaker,state,first.createdAt].filter(Boolean).join(' · ')+'\n'+(first.omittedBefore?'…':'')+first.excerpt+(first.omittedAfter?'…':'');
+      if (thread.hitCount > 1) snippets[thread.threadId] += '\n共匹配 ' + thread.hitCount + ' 条发言，此处显示最近一条。';
       messageIds[thread.threadId] = first.id;
     }
   }
