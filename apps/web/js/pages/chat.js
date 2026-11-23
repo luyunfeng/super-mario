@@ -95,7 +95,7 @@ export function createChatPage({ api, store, scope, router }) {
     h('div', { class: 'chat__inner chat__inner--top' },
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '对话'), h('p', { class: 'page__sub' }, hintCopy('nav.chat').tag)),
-        h('div', { class: 'page__actions' }, threads.entry, conversationStatusButton({ api, store, scope, target: 'main', project: scope.get }), messageSearch.button, favorites.button, transcript.button, sharing.button, officeDocumentsButton({ api, store }), code.toggle, Hint('nav.chat'))),
+        h('div', { class: 'page__actions' }, threads.entry, threads.switcher, conversationStatusButton({ api, store, scope, target: 'main', project: scope.get }), messageSearch.button, favorites.button, transcript.button, sharing.button, officeDocumentsButton({ api, store }), code.toggle, Hint('nav.chat'))),
       banner, decisionNotice, messageNotice, attention.el, setup, runStrip));
   const scroller = h('div', { class: 'chat__scroll', id: 'chat-scroll' }, h('div', { class: 'chat__inner' }, messages, hero));
 

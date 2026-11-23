@@ -1,3 +1,4 @@
+import {createAssistantSwitcher} from './assistant-roster.js';
 import {conversationMessageSearch} from './conversation-message-search.js';
 import {copyText} from '../lib/clipboard.js';
 import {icon} from '../ui/icons.js';
@@ -20,6 +21,13 @@ export function createWebConversations({api,store,scope,router}){
     store.view.snapshot?.plugins?.some(p=>p.id==='web-conversations' && p.status==='active');
   const listProject=()=>meta?.projectId || (current && meta?'':scope.get() || '');
   const routeId=()=>router.current.page==='chat'?router.current.query.get('thread'):null;
+  let selector,selectorScope,selectorOwner,current,meta,nextBefore,nextAfter,targetMessage,readVersion=0,rows=[],lastChanges,lastConnection;
+  const switcher=createAssistantSwitcher({api,store,router,scope,target:()=>{
+    if(router.current.page!=='chat')return;
+    const threadId=routeId();
+    if(threadId===null)return {projectId:scope.get() || undefined};
+    if(active() && meta && current?.owner===drafts.owner() && meta.id===threadId)return {threadId,projectId:meta.projectId};
+  }});
   const entry=button('独立对话',openList);
   const heading=h('h1',{},'独立对话'),notice=h('p',{role:'status',class:'small'});
   const messages=h('div',{class:'msgs','aria-live':'polite'});
@@ -38,9 +46,8 @@ export function createWebConversations({api,store,scope,router}){
   const stateLabel=h('span',{class:'small muted'});
   const controls=h('div',{class:'row row--wrap'},stateLabel,rename,archive,button('删除对话',openDelete));
   const el=h('div',{class:'chat-code-main',hidden:true,'aria-label':'独立对话内容'},
-    h('div',{class:'chat__top'},h('header',{class:'page__head'},heading,h('div',{class:'page__actions'},button('独立对话',openList),search.button,
+    h('div',{class:'chat__top'},h('header',{class:'page__head'},heading,h('div',{class:'page__actions'},button('独立对话',openList),switcher.threadButton,search.button,
       h('a',{class:'btn btn--sm',href:'#chat'},'返回主对话'))),controls,notice,latest,retry,cleanupRetry),scroller,form);
-  let selector,selectorScope,selectorOwner,current,meta,nextBefore,nextAfter,targetMessage,readVersion=0,rows=[],lastChanges,lastConnection;
   let pending=false,epoch=0,draftKey=null,renameDrawer,deleteDrawer,listRefresh,lastMetaEvent,changing=false;
   const valid=stamp=>current===stamp && stamp && stamp.owner===drafts.owner() && routeId()===stamp.id && active();
   function context(){
@@ -64,7 +71,7 @@ export function createWebConversations({api,store,scope,router}){
   function reset(){
     search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
     input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
-    submissions.update();
+    submissions.update();switcher.update();
   }
   function openList(){
     if(!active() || selector)return;
@@ -123,7 +130,7 @@ export function createWebConversations({api,store,scope,router}){
     form.hidden=!!row.archived;controls.hidden=false;
     stateLabel.textContent=row.archived?'已归档 · 只读':'';
     archive.textContent=row.archived?'恢复对话':'归档对话';
-    archive.disabled=changing;submissions.update();syncSearch();
+    archive.disabled=changing;submissions.update();syncSearch();switcher.update();
   }
   async function refreshMeta(stamp){
     try{
@@ -333,7 +340,7 @@ export function createWebConversations({api,store,scope,router}){
   function update(){
     const id=routeId(),owner=drafts.owner();
     if(unconfirmedDeletion && unconfirmedDeletion.owner!==owner)unconfirmedDeletion=undefined;
-    entry.hidden=!active();el.hidden=id===null;
+    entry.hidden=!active();el.hidden=id===null;switcher.update();
     const event=store.view.webConversationChange,changed=event && lastMetaEvent!==event;
     lastMetaEvent=event;
     if(changed && event.deleted && active() && uuid4.test(event.id))deleted(event.id,owner);
@@ -363,5 +370,5 @@ export function createWebConversations({api,store,scope,router}){
     syncSearch();lastChanges=store.view.messageQueueChanges;lastConnection=store.view.connection;
   }
   reset();store.subscribe(update);router.subscribe(update);scope.subscribe(update);
-  return {el,entry,update,focus:()=>{if(!form.hidden)input.focus();}};
+  return {el,entry,switcher:switcher.mainButton,update,focus:()=>{if(!form.hidden)input.focus();}};
 }

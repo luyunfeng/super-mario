@@ -3,13 +3,14 @@ import { botConversationId } from './bot-agent-routing.ts';
 import type { BotScope } from '../../protocol/src/bots.ts';
 import type { AppConfig, MainAssistantProfile, ExecutorInfo, Message, Project, Todo, Json } from '../../protocol/src/index.ts';
 import type { Contributions, EventBus, Store } from '../../plugin-sdk/src/index.ts';
-import { MAIN_AGENT_SYSTEM_PROMPT, SCOPED_WORK_SYSTEM_PROMPT, WEB_THREAD_GUIDANCE } from './prompts.ts';
+import { MAIN_AGENT_SYSTEM_PROMPT, SCOPED_WORK_SYSTEM_PROMPT, WEB_THREAD_GUIDANCE, webThreadAssistantGuidance } from './prompts.ts';
 import { conversationModels } from './agent-runtime/model-catalog.ts';
 import { createAgentRuntime, recoverInterruptedInputs, removeScopedTranscript } from './agent-runtime/index.ts';
 
 type Runtime = ReturnType<typeof createAgentRuntime>;
 type ScopedPostContext = Omit<NonNullable<Parameters<Runtime['post']>[2]>, 'readOnlyAction'>;
 interface Options {
+  webThreadAssistant?(threadId:string):{id:string;name:string;instructions:string}|undefined;
   webConversationAllowed?(id:string,projectId?:string):boolean;
   chatFilesEnabled?():boolean;
   canReadChatFiles?(message:Message):boolean;
@@ -120,8 +121,11 @@ export function createScopedAgents(options: Options) {
       let entry=agents.get(conversationId);
       if(!entry){
         const scope:BotScope=projectId?{kind:'project',projectId}:{kind:'global'};
+        const assistant = options.webThreadAssistant?.(id);
+        const guidance = assistant ? '\n' + webThreadAssistantGuidance(assistant) : '';
         const runtime=createAgentRuntime({...options,scope,conversationId,canUseScope:current,botContext:undefined,
-          systemPrompt:(projectId?SCOPED_WORK_SYSTEM_PROMPT:MAIN_AGENT_SYSTEM_PROMPT)+'\n'+WEB_THREAD_GUIDANCE});
+          ...(assistant && {mainAssistantProfile:undefined}),
+          systemPrompt:(projectId?SCOPED_WORK_SYSTEM_PROMPT:MAIN_AGENT_SYSTEM_PROMPT)+'\n'+WEB_THREAD_GUIDANCE+guidance});
         entry={botId:conversationId,scope,conversationId,runtime};agents.set(conversationId,entry);
       }
       return entry.runtime.post(text,conversationId,{requestId:context.requestId,directWebInput:true,projectId});

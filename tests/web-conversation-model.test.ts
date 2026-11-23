@@ -49,13 +49,21 @@ test('SDK requests preserve the correct Web thread history within a shared proje
       assert.ok(response.ok, await response.clone().text());
       return response.json();
     }
+    const mainName='合成主助手-'+randomUUID().slice(0,8);
+    await post('/assistant-profile',{action:'save',name:mainName,revision:0});
     const project = await post('/projects',{name:'合成并行项目'});
-    const [a,b] = await Promise.all([1,2].map(n => post('/web-conversations',{id:randomUUID(),title:'对话'+n,projectId:project.id})));
-    async function ask(path:string,conversationId:string,text:string) {
+    const profiles = await Promise.all(['甲','乙'].map(tag => post('/assistant-roster',{
+      action:'create', id:randomUUID(), name:tag+'号合成助理', instructions:'专用规范-'+tag+'-'+randomUUID(),
+    })));
+    const [a,b] = await Promise.all(profiles.map(async(profile) => {
+      const {threadId} = await post('/assistant-roster',{action:'open',id:profile.id,projectId:project.id});
+      return {id:threadId};
+    }));
+    async function ask(path:string,conversationId:string,text:string,expectedProjectId=project.id) {
       const before=requests.length;
       const input=await post(path,{text});
       assert.equal(input.conversationId,conversationId);
-      assert.equal(input.projectId,conversationId==='main'?undefined:project.id);
+      assert.equal(input.projectId,conversationId==='main'?undefined:expectedProjectId??undefined);
       for(let i=0;i<500;i++) {
         const reply=server.app.store.list<Message>('messages').find(row=>row.replyTo===input.id && (row.status==='done' || row.status==='failed'));
         if(reply){
@@ -76,6 +84,22 @@ test('SDK requests preserve the correct Web thread history within a shared proje
     const nextA=await askA('请回顾本对话的首条内容');
     const main=await ask('/messages','main','只看主对话上文');
     const system=(messages:typeof firstA)=>JSON.stringify(messages.filter(m=>m.role==='system'||m.role==='developer'));
+    for(const [index,messages] of [firstA,firstB].entries()) {
+      const prompt=system(messages);
+      for(const key of ['name','instructions']){
+        assert.ok(prompt.includes(profiles[index][key]));
+        assert.ok(!prompt.includes(profiles[1-index][key]));
+        assert.ok(!system(main).includes(profiles[index][key]));
+      }
+    }
+    const plain=await post('/web-conversations',{id:randomUUID(),title:'普通独立对话',projectId:project.id});
+    const plainMessages=await ask('/web-conversations/'+plain.id+'/messages','web:'+plain.id,'核对普通独立对话');
+    for(const profile of profiles) assert.ok(!system(plainMessages).includes(profile.instructions));
+    const personal=await post('/assistant-roster',{action:'open',id:profiles[0].id});
+    const personalMessages=await ask('/web-conversations/'+personal.threadId+'/messages','web:'+personal.threadId,'核对助理身份',null);
+    assert.ok(system(personalMessages).includes(profiles[0].instructions));
+    assert.ok(!system(personalMessages).includes(mainName));
+    assert.ok(system(main).includes(mainName));
     for(const thread of [firstA,firstB,nextA]){
       assert.match(system(thread), /当前输入来自一段独立的 Web 对话/);
       assert.match(system(thread), /复制消息链接.*打开时仍需工作台访问权限/);
@@ -103,6 +127,10 @@ test('SDK requests preserve the correct Web thread history within a shared proje
     assert.ok(!retrieved.includes(bOnly) && !retrieved.includes(result.id) && !retrieved.includes(question),retrieved);
     assert.equal((await fetch(server.url+'/api/v1/web-conversations/'+a.id+'/messages').then(r=>r.json())).messages
       .find((m:Message)=>m.id===result.id)?.queueState,undefined);
+    await server.app.plugins.setEnabled('assistant-profile',false);
+    const disabledRoster=await fetch(server.url+'/api/v1/assistant-roster',{method:'POST',
+      headers:{'content-type':'application/json'},body:JSON.stringify({action:'list'})});
+    assert.equal(disabledRoster.status,503);
   } finally {
     await server.close();
   }
