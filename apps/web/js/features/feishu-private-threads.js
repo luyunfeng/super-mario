@@ -3,7 +3,7 @@ import { copyMessageLinkButton } from '../lib/clipboard.js';
 import { messageFiles } from './message-files.js';
 import { messageImages } from './message-images.js';
 import { h, replace } from '../lib/dom.js';
-import { conversationExportActive, openConversationExport } from './conversation-export.js';
+import { conversationExportActive, openConversationExport, writeTable } from './conversation-export.js';
 import { editThreadOrder } from './feishu-thread-order.js';
 import { editThreadTagFilters } from './feishu-tag-filters.js';
 import { conversationModelPicker } from './model-drawer.js';
@@ -460,21 +460,24 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       if (!current(id) || edit.disabled) return;
       return detail(row, notice, readDraft(), messageId);
     }
+    function copyControl(label, write, success) {
+      return h('button', { type: 'button', class: 'btn btn--ghost btn--sm', dataset: { copyThreadMessage: '' },
+        hidden: !conversationExportActive(store), onclick: async () => {
+          if (!current(id) || !conversationExportActive(store)) return;
+          try { await write(); if (current(id)) feedback.textContent = success; }
+          catch { if (current(id)) feedback.textContent = '复制失败，请选中消息正文复制。'; }
+        } }, label);
+    }
     const entries = items => items.map(message => h('section', { class: 'stack' },
       around && message.id === around && h('mark', { tabIndex: -1, dataset: { threadPosition: '' } }, query && row.hits?.some(hit => hit.id === around) ? '命中消息' : '定位到的消息'),
       h('strong', null, historyMessageLabel(message)),
       copyMessageLinkButton('#agent/private-thread/' + [bot.id, row.threadId, message.id].map(encodeURIComponent).join('/')),
-      message.text?.trim() && h('button', { type:'button', class:'btn btn--ghost btn--sm',
-        dataset:{copyThreadMessage:''}, hidden:!conversationExportActive(store), onclick:async () => {
-          if (!current(id) || !conversationExportActive(store)) return;
-          try { await copyText(message.text); if (current(id)) feedback.textContent = '已复制正文。'; }
-          catch { if (current(id)) feedback.textContent = '复制失败，请选中消息正文复制。'; }
-        } }, '复制正文'),
+      message.text?.trim() && copyControl('复制正文', () => copyText(message.text), '已复制正文。'),
       message.quotedImageMessageId && Button({ label:'查看引用原图', size:'sm', onClick:()=>showMessagePosition(message.quotedImageMessageId) }),
       message.quotedFileMessageId && Button({ label:'查看引用文件', size:'sm', onClick:()=>showMessagePosition(message.quotedFileMessageId) }),
       message.quotedFilesUnavailable && h('span',{class:'small muted'},'引用文件不可用'),
       message.quotedImagesUnavailable && h('span',{class:'small muted'},'引用原图不可用'),
-      h('div', { style: 'white-space: pre-wrap' }, renderFormattedText(message.text, undefined, { reply: message.role === 'assistant', streaming: message.status === 'pending' })), messageImages(api,store,message),messageFiles(api,store,message,[])));
+      h('div', { style: 'white-space: pre-wrap' }, renderFormattedText(message.text, table => copyControl('复制表格', () => writeTable(table), '已复制表格。'), { reply: message.role === 'assistant', streaming: message.status === 'pending' })), messageImages(api,store,message),messageFiles(api,store,message,[])));
     history.append(...entries(messages));
     const more = older => Button({ label: older ? '加载更早消息' : '加载后续消息', onClick: async (_, button) => {
       try {

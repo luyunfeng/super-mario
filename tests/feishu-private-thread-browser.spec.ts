@@ -44,8 +44,9 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   const main=await input('原有主人私聊锚点');
   await first.send('/new 核对独立方案', 'first');
   const independent=await input('核对独立方案');
-  await first.send('[合成资料甲](https://one.example.test/a) 和 [合成资料乙](https://two.example.test/b)', 'two-source-links');
-  await input('[合成资料甲](https://one.example.test/a) 和 [合成资料乙](https://two.example.test/b)');
+  const sources = '[合成资料甲](https://one.example.test/a) 和 [合成资料乙](https://two.example.test/b)\n\n| 字段 | 值 |\n|---|---|\n| 合成 | =2+3 |';
+  await first.send(sources, 'two-source-links');
+  await input(sources);
   const base = '/api/v1/feishu/bots/';
   const get = (path: string) => fetch(server.url + path, { headers: { authorization: 'Bearer ' + token } });
   let thread = '';
@@ -82,6 +83,9 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await expect(drawer.locator('section').first()).toContainText('核对独立方案');
   await expect(drawer.getByRole('link',{name:'合成资料甲',exact:true}).first()).toHaveAttribute('href','https://one.example.test/a');
   await expect(drawer.getByRole('link',{name:'合成资料乙',exact:true}).first()).toHaveAttribute('rel','noopener noreferrer');
+  await drawer.getByRole('button', { name: '复制表格' }).first().click();
+  await expect(drawer).toContainText('已复制表格。');
+  assert.equal(clipboardWrites.pop(), "字段\t值\n合成\t'=2+3");
   await expect(drawer).not.toContainText('其他机器人的讨论');
   assert.deepEqual(await selection(),prior);
   await first.send('只浏览详情后发送','peek-main');

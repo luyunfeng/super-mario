@@ -4,7 +4,7 @@ import { renderFormattedText } from '../lib/markdown.js';
 import { Button, Banner, copyText } from '../ui/kit.js';
 import { openDrawer, toast } from '../ui/overlay.js';
 
-async function writeTable(table) {
+export async function writeTable(table) {
   // Build both formats from the visible cells. Clipboard HTML needs no workbench URLs.
   const copy = table.cloneNode(true);
   const rows = Array.from(copy.rows, row => Array.from(row.cells, cell => {
