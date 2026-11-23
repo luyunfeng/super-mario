@@ -9,7 +9,7 @@ import type {PersonalAccount} from '../../../plugins/feishu-personal.ts';
 export type InboxPersonalActor=()=>{account:PersonalAccount;key:string;generation:number}|undefined;
 
 export function createInboxMessageAccess(app:Awaited<ReturnType<typeof createWorkbench>>,account:InboxPersonalActor,
-  plugin:'feishu-chat-pins'|'feishu-message-reactions',label:string) {
+  plugin:'inbox-triage'|'feishu-chat-pins'|'feishu-message-reactions',label:string) {
   // A restarted service requires reopening the first page. No raw remote cursor is ever accepted.
   const secret=randomBytes(32);
   const messagePattern=/^om_[A-Za-z0-9_-]{1,256}$/;

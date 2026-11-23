@@ -72,7 +72,7 @@ export async function readArchiveText(bytes: Buffer, kind: 'xlsx'|'pptx'|'zip', 
 const textExtensions = new Set('txt md markdown csv tsv json jsonl jsonc ndjson yaml yml xml html htm css scss less svg ini conf cfg toml log diff patch js cjs mjs jsx ts tsx vue svelte py rb go rs c h cpp cc hpp cs java kt kts swift php sh bash zsh fish ps1 sql r lua dart scala properties env dockerfile makefile'.split(' '));
 
 /** Use only a host-resolved content path. Parser errors are rendered as controlled statuses by the caller. */
-export async function readChatFileText(path:string, ref:ChatFileRef, signal:AbortSignal, forwarded=false):Promise<{text:string;truncated?:boolean}> {
+export async function readChatFileText<T extends Pick<ChatFileRef,'name'|'mime'|'bytes'>>(path:string, ref:T, signal:AbortSignal, forwarded=false):Promise<{text:string;truncated?:boolean}> {
   signal.throwIfAborted();
   const ext = extname(ref.name).slice(1).toLowerCase();
   const document = ext === 'pdf' || ext === 'docx';

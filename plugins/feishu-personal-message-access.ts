@@ -36,7 +36,7 @@ export function createPersonalMessageAccess(runCLI:PersonalCLI=runPersonalCLI) {
     signal.throwIfAborted();
     return runCLI(['--profile',account.profile,...args,'--as','user','--format','json'],{signal});
   }
-  async function locate(account:PersonalAccount,chatId:string,messageId:string,signal:AbortSignal) {
+  async function locateRaw(account:PersonalAccount,chatId:string,messageId:string,signal:AbortSignal) {
     if (!messageID.test(messageId)) fail('飞书消息标识无效',400);
     await verify(account,chatId,signal);
     // Raw get avoids shortcut thread expansion: only the specifically requested message is projected.
@@ -44,7 +44,10 @@ export function createPersonalMessageAccess(runCLI:PersonalCLI=runPersonalCLI) {
     const matches=Array.isArray(response.items) ? response.items.filter(m=>row(m) && m.message_id===messageId) : [];
     if (matches.length!==1 || matches[0].chat_id!==chatId) fail('无法核实原消息所属会话',404);
     await verify(account,chatId,signal);
-    const m=matches[0];
+    return matches[0];
+  }
+  async function locate(account:PersonalAccount,chatId:string,messageId:string,signal:AbortSignal) {
+    const m=await locateRaw(account,chatId,messageId,signal);
     if (m.deleted===true) return {chatId,messageId,deleted:true};
     let text:string|undefined;
     if (typeof m.body?.content==='string' && (m.msg_type==='text' || m.msg_type==='post')) {
@@ -59,5 +62,5 @@ export function createPersonalMessageAccess(runCLI:PersonalCLI=runPersonalCLI) {
       ...(typeof m.root_id==='string' && messageID.test(m.root_id) && {rootId:m.root_id as string}),
       ...(typeof m.thread_id==='string' && threadID.test(m.thread_id) && {threadId:m.thread_id as string})};
   }
-  return {run,verify,locate};
+  return {run,verify,locate,locateRaw};
 }

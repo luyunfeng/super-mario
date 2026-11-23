@@ -1,6 +1,7 @@
 import {inboxReactions,reactionsActive} from '../features/feishu-message-reactions.js';
 import { localDate, todoDueFields } from '../features/todo-calendar.js';
 import {chatPinsActive,inboxChatPins} from '../features/feishu-chat-pins.js';
+import {inboxFileActive,inboxFilePreview} from '../features/feishu-inbox-file.js';
 import {editHistoryActive,inboxEditHistory} from '../features/feishu-edit-history.js';
 import { createInboxRelations } from '../features/inbox-relations.js';
 import { createInboxTranslation } from '../features/inbox-translation.js';
@@ -27,7 +28,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
   let snapshot = store.view.snapshot;
   let mailbox = [], deliveries = [];
   let error = '', loadError = '', loaded = false, loading = false, revision = 0, lastSnapshot;
-  let reactions,pins,editHistory,historyChange,historyScope,relations, drawer, selected, detailKey, detailTranslation, mailboxOwner;
+  let filePreview,reactions,pins,editHistory,historyChange,historyScope,relations, drawer, selected, detailKey, detailTranslation, mailboxOwner;
   const translation = incoming ? createInboxTranslation({ api, store,
     isSelected: id => drawer?.el.open && router.current.page === direction && selected === id }) : null;
   let sourceFilter = 'all', stageFilter = 'all';
@@ -394,19 +395,25 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
       : {openChatId:origin.chatId,position:location.position}).toString();
     return h('a',{class:'btn btn--sm',href:url.href,target:'_blank',rel:'noopener noreferrer'},'打开原消息');
   }
+  function closePersonalPanels() {
+    reactions?.close();
+    pins?.close();
+    editHistory?.close();
+    filePreview?.close();
+    reactions = pins = editHistory = filePreview = historyScope = undefined;
+  }
   function detail() {
     if (!drawer) return;
     const item = records().find(item => item.id === selected);
-    if (!item) { reactions?.close();reactions=undefined;pins?.close();pins=undefined;editHistory?.close();editHistory=undefined;historyScope=undefined;translation?.clear(); detailTranslation = undefined; detailKey = undefined; replace(drawer.body, h('p', null, '这条记录已更新，请关闭后查看列表。')); replace(drawer.foot, Button({ label: '关闭', onClick: () => drawer.close() })); return; }
+    if (!item) { closePersonalPanels();translation?.clear(); detailTranslation = undefined; detailKey = undefined; replace(drawer.body, h('p', null, '这条记录已更新，请关闭后查看列表。')); replace(drawer.foot, Button({ label: '关闭', onClick: () => drawer.close() })); return; }
     const raw = item.raw;
-    const view=store.view,historyKey=JSON.stringify([item.id,raw.source,raw.thread,raw.version,api.draftOwner(),editHistoryActive(store,api),chatPinsActive(store,api),reactionsActive(store,api)]);
+    const view=store.view,historyKey=JSON.stringify([item.id,raw.source,raw.thread,raw.version,api.draftOwner(),inboxFileActive(store,api),editHistoryActive(store,api),chatPinsActive(store,api),reactionsActive(store,api)]);
     if(historyScope!==historyKey || historyChange!==view.feishuEditHistoryChange){
-      reactions?.close();
+      closePersonalPanels();
       reactions=incoming && item.kind==='personal'?inboxReactions(api,store,raw):undefined;
-      pins?.close();
       pins=incoming && item.kind==='personal'?inboxChatPins(api,store,raw,id=>open('personal:'+id)):undefined;
-      editHistory?.close();
       editHistory=incoming && item.kind==='personal' ? inboxEditHistory(api,store,raw) : undefined;
+      filePreview=incoming && item.kind==='personal' ? inboxFilePreview(api,store,raw) : undefined;
       historyScope=historyKey;historyChange=view.feishuEditHistoryChange;detailKey=undefined;
     }
     const showRelations = incoming && item.kind === 'personal' && snapshot?.plugins?.some(plugin => plugin.id === 'inbox-triage' && plugin.status === 'active');
@@ -434,7 +441,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
       raw.status === 'unknown' && Banner({ tone: 'warn', children: '发送结果未知。请先核对实际送达情况，工作台不会自动重复发送。' }),
       translated || h('pre', { class: 'mailbox-content' }, item.text || '没有文本正文。'),
       ['pending', 'needs_approval'].includes(raw.status) && !incoming && h('p', { class: 'small muted' }, '内容仍待确认，尚未发送。可在对话页处理审批，或在渠道高级设置中处理机器人发件。'),
-      editHistory?.el,pins?.el,reactions?.el,relations?.el,
+      filePreview?.el,editHistory?.el,pins?.el,reactions?.el,relations?.el,
       incoming && projectEditor(item),
       detailFailure && Banner({ tone:'danger', children:detailFailure }),
       error && Banner({ tone: 'danger', children: error }));
@@ -488,12 +495,12 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
   }
   function open(id) {
     selected = id; relations = undefined; detailKey = undefined;
-    if (!drawer) drawer = openDrawer({ title: `${name}消息详情`, body: [], footer: [], wide: true, onClose: () => { reactions?.close();reactions=undefined;pins?.close();pins=undefined;editHistory?.close();editHistory=undefined;historyScope=undefined;translation?.clear(); relations = undefined; drawer = undefined; selected = undefined; detailKey = undefined; detailTranslation = undefined; } });
+    if (!drawer) drawer = openDrawer({ title: `${name}消息详情`, body: [], footer: [], wide: true, onClose: () => { closePersonalPanels();translation?.clear(); relations = undefined; drawer = undefined; selected = undefined; detailKey = undefined; detailTranslation = undefined; } });
     detail();
   }
   let detailOwner = api.draftOwner();
   store.subscribe(view => {
-    if(drawer && (view.feishuEditHistoryChange!==historyChange || (editHistory && !editHistoryActive(store,api)) || (reactions && !reactionsActive(store,api)) || (pins && !chatPinsActive(store,api)))) {reactions?.close();reactions=undefined;pins?.close();pins=undefined;editHistory?.close();editHistory=undefined;historyScope=undefined;detail();}
+    if(drawer && (view.feishuEditHistoryChange!==historyChange || (filePreview && !inboxFileActive(store,api)) || (editHistory && !editHistoryActive(store,api)) || (reactions && !reactionsActive(store,api)) || (pins && !chatPinsActive(store,api)))) {closePersonalPanels();detail();}
     const owner = api.draftOwner();
     if (detailOwner !== owner || view.unauthorized || !view.snapshot || view.snapshotOwner !== owner) {
       detailOwner = owner;

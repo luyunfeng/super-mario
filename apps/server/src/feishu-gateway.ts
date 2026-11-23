@@ -26,6 +26,9 @@ import { privateThreadExport } from './feishu-thread-history.ts';
 import { dashboardWebBase, createFeishuBotsController, type FeishuBotFactory } from './feishu-bots.ts';
 import { createFeishuRegistration, type FeishuRegistrationJob } from './feishu-registration.ts';
 
+import {createPersonalFileReader} from '../../../plugins/feishu-personal-file.ts';
+import {createInboxMessageAccess} from './feishu-inbox-message-access.ts';
+
 export type FeishuGatewayDependencies = {
   botFactory?: FeishuBotFactory;
   readGroup?: GroupReadService;
@@ -33,6 +36,7 @@ export type FeishuGatewayDependencies = {
   registrationProvider?: FeishuRegistrationProvider;
   personalProvider?: PersonalProvider;
   personalReactions?:ReturnType<typeof createPersonalReactions>;
+  personalFileReader?:ReturnType<typeof createPersonalFileReader>;
   personalPins?:ReturnType<typeof createPersonalPins>;
 };
 
@@ -123,6 +127,15 @@ export function createFeishuGateway(
   function currentPersonalActor() {
     const account=personal.sourceAccount();
     return account?{account:{...account,name:personal.status().account?.name??''},key:accountKey(account),generation:personalGeneration}:undefined;
+  }
+  const fileAccess=createInboxMessageAccess(app,currentPersonalActor,'inbox-triage','收件箱整理');
+  const fileReader=dependencies.personalFileReader??createPersonalFileReader();
+  async function readFileText(id:string,signal:AbortSignal) {
+    const target=fileAccess.binding(id);
+    const check=()=>fileAccess.verify(id,target.stamp,signal);
+    const result=await fileReader(target.account,target.chatId,target.messageId,signal,check);
+    check();
+    return result;
   }
   const pins=createInboxPins(app,dependencies.personalPins??createPersonalPins(),currentPersonalActor);
   const reactions=createInboxReactions(app,dependencies.personalReactions??createPersonalReactions(),currentPersonalActor);
@@ -265,5 +278,5 @@ export function createFeishuGateway(
   );
   app.setFeishuStatus(() => ({ ...feishu.status(), reason: feishu.status().reason ?? '' }));
 
-  return { feishu, personal, pins, reactions, currentHistory, configureHistory, readEditHistory, personalAi, personalAiView, configurePersonalAi, personalView, bots, registrations, registrationView, proposeMail, commandGroup };
+  return { feishu, personal, pins, reactions, readFileText, currentHistory, configureHistory, readEditHistory, personalAi, personalAiView, configurePersonalAi, personalView, bots, registrations, registrationView, proposeMail, commandGroup };
 }

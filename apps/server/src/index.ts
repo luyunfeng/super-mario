@@ -762,6 +762,13 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             throw error;
           }finally {res.off('close',abort);}
         }
+        const fileText=path.match(/^\/api\/v1\/inbox\/([^/]+)\/file-text$/);
+        if(fileText && method==='GET') {
+          const controller=new AbortController(),abort=()=>controller.abort();
+          res.once('close',abort);
+          try {return json(res,200,await gateway.readFileText(decodeURIComponent(fileText[1]!),controller.signal));}
+          finally {res.off('close',abort);}
+        }
         const editHistory=path.match(/^\/api\/v1\/inbox\/([^/]+)\/edit-history$/);
         if(editHistory && method==='GET') return json(res,200,gateway.readEditHistory(decodeURIComponent(editHistory[1]!)));
         const inboxRelation=path.match(/^\/api\/v1\/inbox\/([^/]+)\/(tree|parent)$/);
