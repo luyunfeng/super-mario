@@ -696,3 +696,89 @@ test('会话清单只有在卡片明确被拒且主人仍有权读取时，才�
   assert.deepEqual(requests.slice(2).map(r => r.body.msg_type), ['interactive', 'interactive', 'interactive']);
   assert.deepEqual(receipts, ['om_text_receipt']);
 });
+
+test('机器人在同一租户令牌下置顶、取消置顶和撤回准确的消息', async t => {
+  const { integration, http } = setup();
+  t.after(() => integration.close());
+  await assert.rejects(integration.pinMessage('om_card'), { delivery: 'no' });
+  await integration.start();
+  await assert.rejects(integration.recallMessage('../pins'), { delivery: 'no' });
+  assert.equal(http.calls.length, 0);
+  await integration.pinMessage('om_card');
+  await integration.unpinMessage('om_card');
+  await integration.recallMessage('om_command');
+  assert.equal(http.tokenCalls, 1);
+  assert.deepEqual(http.calls.slice(1).map(row => [row.method, new URL(row.url).pathname, row.body, row.bearer]), [
+    ['POST', '/open-apis/im/v1/pins', { message_id: 'om_card' }, 'Bearer fake-tenant-token-1'],
+    ['DELETE', '/open-apis/im/v1/pins/om_card', {}, 'Bearer fake-tenant-token-1'],
+    ['DELETE', '/open-apis/im/v1/messages/om_command', {}, 'Bearer fake-tenant-token-1'],
+  ]);
+  await integration.close();
+  await assert.rejects(integration.unpinMessage('om_card'), { delivery: 'no' });
+  assert.equal(http.calls.length, 4);
+});
+
+test('飞书明确拒绝与传输结果未知分别报告，变更请求只发一次', async t => {
+  const replies = [
+    { response: () => Response.json({ code: 99991672, msg: 'synthetic-private-detail' }, { status: 400 }), delivery: 'no' },
+    { response: () => Response.json({}, { status: 403 }), delivery: 'no' },
+    { response: () => Response.json({}, { status: 503 }), delivery: 'unknown' },
+    { response: () => Response.json({ code: 99991500 }), delivery: 'unknown' },
+    { response: () => Response.json({ code: 123456 }), delivery: 'unknown' },
+    { response: () => Response.json({}), delivery: 'unknown' },
+    { response: () => { throw new Error('synthetic-private-detail'); }, delivery: 'unknown' },
+  ];
+  let calls = 0;
+  const { integration } = setup({ fetch: async url => String(url).includes('tenant_access_token')
+    ? Response.json({ code: 0, tenant_access_token: 'fake-auth', expire: 7200 })
+    : replies[calls++].response() });
+  t.after(() => integration.close());
+  await integration.start();
+  for (const [index, expected] of replies.entries()) {
+    await assert.rejects(integration.recallMessage('om_command'), (error: Error & { delivery?: string }) => {
+      assert.equal(error.delivery, expected.delivery);
+      if (index < 2) assert.match(error.message, /im:message:recall/);
+      assert.doesNotMatch(error.message, /synthetic-private-detail|fake-auth/);
+      return true;
+    });
+    assert.equal(calls, index + 1);
+  }
+});
+
+test('适配器在鉴权等待期间关闭时保留消息，变更已发出后关闭时报告未知', async () => {
+  for (const phase of ['auth', 'send']) {
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let writes = 0;
+    const { integration } = setup({ fetch: async url => {
+      const auth = String(url).includes('tenant_access_token');
+      if (!auth) writes++;
+      if (auth === (phase === 'auth')) { entered(); await gate; }
+      return Response.json(auth ? { code: 0, tenant_access_token: 'fake-auth', expire: 7200 } : { code: 0 });
+    } });
+    await integration.start();
+    const pin = integration.pinMessage('om_card');
+    await started;
+    await integration.close();
+    release();
+    await assert.rejects(pin, { delivery: phase === 'auth' ? 'no' : 'unknown' });
+    assert.equal(writes, phase === 'auth' ? 0 : 1);
+  }
+});
+
+test('卡片被拒后只报告实际送达的文本类型', async t => {
+  const sent: unknown[] = [];
+  let rejectCard = false;
+  const { integration } = setup({ fetch: async (url, init) => {
+    if (String(url).includes('tenant_access_token')) return Response.json({ code: 0, tenant_access_token: 'fake-auth', expire: 7200 });
+    const type = JSON.parse(String(init?.body)).msg_type;
+    return Response.json(rejectCard && type === 'interactive' ? { code: 230099 } : { code: 0, data: { message_id: 'om_' + type } });
+  } });
+  t.after(() => integration.close());
+  const context = { card: {}, beforeTextFallback() {}, onSent(id: string, type?: string) { sent.push([id, type]); } };
+  await integration.send('oc_chat', '工作台', context);
+  rejectCard = true;
+  await integration.send('oc_chat', '工作台', { ...context, replyTo: 'om_command' });
+  assert.deepEqual(sent, [['om_interactive', 'interactive'], ['om_text', 'text']]);
+});

@@ -7,7 +7,7 @@ import type { createWorkbench } from '../../../packages/core/src/workbench.ts';
 
 // The legacy bot controller consumes only the original adapter surface.
 // Personal collection owns the optional paged provider independently.
-type Integration = Omit<ReturnType<typeof createFeishuIntegration>, 'collectBatch' | 'updateCard'> & Partial<Pick<ReturnType<typeof createFeishuIntegration>, 'updateCard'>>;
+type Integration = Pick<ReturnType<typeof createFeishuIntegration>, 'start' | 'close' | 'send' | 'collect' | 'status'> & Partial<Pick<ReturnType<typeof createFeishuIntegration>, 'updateCard'>>;
 type Factory = (options: Parameters<typeof createFeishuIntegration>[0]) => Integration;
 /** Composition only: platform I/O lives in the adapter, conversations and inbox in core. */
 export function createFeishuController(app: Awaited<ReturnType<typeof createWorkbench>>, config: AppConfig, factory: Factory = createFeishuIntegration) {

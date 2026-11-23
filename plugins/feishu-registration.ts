@@ -15,6 +15,7 @@ export interface RegistrationTrace {
   reason?: 'redirect-host' | 'transport' | 'missing-console-identity' | 'missing-qr' | 'invalid-response';
 }
 export interface RegistrationContext {
+  workbench?: boolean;
   trace?(info: RegistrationTrace): void;
   name: string; signal: AbortSignal; progress(info: RegistrationProgress): void;
 }
@@ -39,6 +40,7 @@ function isDefiniteCreateRejection(error: unknown) {
 const open = 'https://open.feishu.cn';
 const accounts = 'https://accounts.feishu.cn';
 export const FEISHU_BOT_SCOPES = ['im:message.p2p_msg:readonly', 'im:message.group_at_msg:readonly', 'im:message:send_as_bot', 'contact:user.id:readonly'] as const;
+const workbenchScopes = ['im:message.pins:write_only', 'im:message:recall'];
 const eventNames = ['im.message.receive_v1'];
 const callbackNames = ['card.action.trigger'];
 type Row = Record<string, unknown>;
@@ -47,10 +49,10 @@ const str = (value: unknown) => typeof value === 'string' ? value : '';
 const rows = (value: unknown): Row[] => Array.isArray(value) ? value.map(row) : [];
 const ids = (value: unknown): string[] => Array.isArray(value) ? value.map(v => typeof v === 'string' ? v : str(row(v).id)).filter(Boolean) : [];
 const appIdValid = (id: string) => /^cli_[a-fA-F0-9]{16}$/.test(id);
-export function feishuRegistrationSteps(appId?: string): RegistrationStep[] {
+export function feishuRegistrationSteps(appId?: string, workbench = false): RegistrationStep[] {
   const base = appIdValid(appId ?? '') ? `${open}/app/${appId}` : `${open}/app`;
   return [
-    { code: 'permissions', message: `开通并审批机器人权限：${FEISHU_BOT_SCOPES.join('、')}`, url: `${base}/auth` },
+    { code: 'permissions', message: `开通并审批机器人权限：${FEISHU_BOT_SCOPES.join('、')}${workbench ? '。工作台卡片另需：' + workbenchScopes.join('、') : ''}`, url: `${base}/auth` },
     { code: 'events', message: '启用机器人能力；事件和卡片回调使用长连接；订阅 im.message.receive_v1 和 card.action.trigger', url: `${base}/event` },
     { code: 'publish', message: '发布版本并等待审批通过，然后核验线上权限；机器人目前禁用', url: `${base}/version` },
   ];
@@ -114,11 +116,11 @@ export function createFeishuRegistrationProvider(options: {
           const credentials = await (options.registerApp ?? registerApp)({
             source: 'super-mario', createOnly: true, signal: context.signal,
             appPreset: { name: context.name, desc: 'AI workbench bot' },
-            addons: { scopes: { tenant: [...FEISHU_BOT_SCOPES] }, events: { items: { tenant: eventNames } }, callbacks: { items: callbackNames } },
+            addons: { scopes: { tenant: [...FEISHU_BOT_SCOPES, ...(context.workbench ? workbenchScopes : [])] }, events: { items: { tenant: eventNames } }, callbacks: { items: callbackNames } },
             onQRCodeReady(info) { context.progress({ stage: 'waiting_for_scan', url: info.url, expiresAt: new Date(Date.now() + info.expireIn * 1000).toISOString() }); },
           });
           context.signal.throwIfAborted();
-          return { appId: credentials.client_id, appSecret: credentials.client_secret, verified: false, missingSteps: feishuRegistrationSteps(credentials.client_id) };
+          return { appId: credentials.client_id, appSecret: credentials.client_secret, verified: false, missingSteps: feishuRegistrationSteps(credentials.client_id, context.workbench) };
         }
         mkdirSync(directory, { recursive: true, mode: 0o700 }); chmodSync(directory, 0o700);
         let cookies: Cookie[] = [];
@@ -284,7 +286,7 @@ export function createFeishuRegistrationProvider(options: {
         if (!appIdValid(appId)) throw new RegistrationError('unknown');
         const appSecret = str((await post(`secret/${appId}`).catch(() => { throw new RegistrationError('unknown'); })).secret);
         if (!appSecret) throw new RegistrationError('unknown');
-        const result: RegistrationResult = { appId, appSecret, verified: false, missingSteps: feishuRegistrationSteps(appId) };
+        const result: RegistrationResult = { appId, appSecret, verified: false, missingSteps: feishuRegistrationSteps(appId, context.workbench) };
         try {
           context.progress({ stage: 'configuring' });
           const catalog = await post(`scope/all/${appId}`);
@@ -296,8 +298,14 @@ export function createFeishuRegistrationProvider(options: {
             for (const [key, child] of Object.entries(r)) if (child && typeof child === 'object') collect(child, /user/i.test(key) ? 'user' : /app|client|tenant/i.test(key) ? 'tenant' : bucket);
           };
           collect(catalog);
-          const scopeIds = FEISHU_BOT_SCOPES.map(name => scopes.find(s => s.name === name && s.bucket === 'tenant') ?? scopes.find(s => s.name === name && !s.bucket));
+          const tenantScope = (name: string) => scopes.find(s => s.name === name && s.bucket === 'tenant') ?? scopes.find(s => s.name === name && !s.bucket);
+          const scopeIds = FEISHU_BOT_SCOPES.map(tenantScope);
           if (scopeIds.some(s => !s)) return result;
+          // A tenant without pin management can still use ordinary private chat.
+          if (context.workbench) for (const name of workbenchScopes) {
+            const scope = tenantScope(name);
+            if (scope) scopeIds.push(scope);
+          }
           await post(`scope/update/${appId}`, { clientId: appId, appScopeIDs: scopeIds.map(s => s!.id), userScopeIDs: [], scopeIds: [], operation: 'add', isDeveloperPanel: true });
           await post(`robot/switch/${appId}`, { clientId: appId, enable: true });
           await post(`event/switch/${appId}`, { clientId: appId, eventMode: 4 });

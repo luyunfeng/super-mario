@@ -80,6 +80,9 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
       replace(botStatus, bots.length ? bots.map(bot => h('div', { class: 'row row--wrap' },
         Dot(bot.enabled && bot.paired && bot.connected ? 'ok' : 'warn'), h('strong', null, bot.name),
         Pill(bot.enabled ? bot.connected ? '已连接' : '未连接' : '已停用'), Pill(bot.paired ? '已配对' : '未配对'),
+        bot.workbench && h('span', { class: 'muted small' },
+          ({ none: '暂无工作台置顶回执', pinned: '工作台置顶已确认', unconfirmed: '工作台置顶未确认' })[bot.workbench.state],
+          bot.workbench.detail && ' · ' + bot.workbench.detail),
         bot.enabled && bot.paired && Button({ label: '会话模型', size: 'sm', onClick: () => openBotModelDrawer({ api, bot }) }),
         h('a', { href: router.href('channels', 'bot', bot.id) }, '管理')))
         : h('p', { class: 'muted small' }, '尚未绑定全局机器人。配置后，主 Agent 可用它在飞书中跟进各项目。'));
@@ -157,7 +160,7 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
       showStatistics();
       if (router.current.page === 'agent' && !store.view.unauthorized) {
         if (botCredential !== api.token()) loadFeishu();
-        else if (botSnapshot !== snapshot && snapshot.plugins?.some(p => p.id === 'assistant-profile' && p.status === 'active')) loadBots();
+        else if (botSnapshot !== snapshot && snapshot.plugins?.some(p => ['assistant-profile', 'feishu'].includes(p.id) && p.status === 'active')) loadBots();
       }
       showSection();
       scheduledWork.onState(); cliSessions.onState(); paintModel(); paintComputers(snapshot); policy.setProjects(snapshot.projects ?? []); advanced.update(snapshot);

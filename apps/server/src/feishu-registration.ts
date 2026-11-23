@@ -77,7 +77,7 @@ export function createFeishuRegistration(options: FeishuRegistrationOptions) {
       const job: FeishuRegistrationJob = {
         id: previous.id, status: interrupted ? 'unknown' : previous.status,
         progress: interrupted ? '服务在注册期间退出；请先到飞书后台确认结果，系统不会自动重试' : previous.progress,
-        missingSteps: previous.botId && previous.status !== 'completed' ? feishuRegistrationSteps(priorAppId) : [],
+        missingSteps: previous.botId && previous.status !== 'completed' ? feishuRegistrationSteps(priorAppId, input.scope.kind === 'global') : [],
         ...(previous.diagnostic ? { diagnostic: previous.diagnostic } : {}),
         ...(previous.botId ? { botId: previous.botId } : {}),
       };
@@ -101,7 +101,7 @@ export function createFeishuRegistration(options: FeishuRegistrationOptions) {
     let createdBotId: string | undefined, enabling = false;
     let latest: RegistrationTrace | undefined;
     try {
-      const result = await provider.register({ name: input.name, signal: abort.signal, trace(info) { latest = info; }, progress(info) {
+      const result = await provider.register({ name: input.name, workbench: input.scope.kind === 'global', signal: abort.signal, trace(info) { latest = info; }, progress(info) {
         if (closed || abort.signal.aborted || !Object.hasOwn(progressText, info.stage)) return;
         job.status = info.stage; job.progress = progressText[info.stage];
         if (info.stage === 'waiting_for_scan') {
@@ -125,7 +125,7 @@ export function createFeishuRegistration(options: FeishuRegistrationOptions) {
         job.missingSteps = []; finish(job, 'completed', recognized ? '应用已发布并识别扫码用户；直接私聊机器人即可开始使用' : '应用已发布，权限及长连接已核验；未能识别扫码用户，请使用机器人配对码完成绑定');
       } else {
         if (latest) job.diagnostic = { ...latest, at: new Date().toISOString() };
-        job.missingSteps = feishuRegistrationSteps(result.appId);
+        job.missingSteps = feishuRegistrationSteps(result.appId, input.scope.kind === 'global');
         finish(job, result.outcome === 'unknown' ? 'unknown' : 'needs_configuration', result.outcome === 'unknown' ? '应用已创建；版本创建或发布结果未知，请到飞书后台确认，系统不会自动重试' : '应用凭证已保存；配置尚未核验，机器人保持禁用，请按链接完成配置');
       }
     } catch (error) {

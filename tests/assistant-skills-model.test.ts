@@ -2891,6 +2891,7 @@ test('Web 的 conversation_status 只读取当前范围，排除本轮提问并�
       assert.ok(req.tools.includes('conversation_status'));
       assert.match(req.system, /conversation_status/);
       assert.match(req.system, /用户只问状态时不要代为中断/);
+      assert.match(req.system, /缺少置顶回执时说尚未确认/);
       assert.match(req.system, /\/modellist/);
       assert.match(req.system, /账号实际可用模型/);
       assert.match(req.system, /\/modelchange 加完整型号/);
@@ -3034,6 +3035,7 @@ test('飞书拼写提示跳过模型，转义命令作为普通正文传给模�
     assert.match(requests[0].system, /作为正文送达的命令拼写不是机器人已执行操作的回执/);
     assert.match(requests[0].system, /私聊发送 \/stop/);
     assert.match(requests[0].system, /已请求停止只说明系统已受理/);
+    assert.match(requests[0].system, /文本回退和置顶成功是不同结果/);
     assert.match(requests[0].system, /\/modelchange 加完整型号/);
     assert.match(requests[0].system, /结果未知的提示时，先核对清单/);
     assert.deepEqual(server.app.store.list<Message>('messages').filter(message => message.role === 'user').map(message => message.text), ['/status']);

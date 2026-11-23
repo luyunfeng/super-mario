@@ -272,7 +272,16 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (method === 'GET') return json(res,200,gateway.commandGroup.get());
           if (method === 'POST') return json(res,200,await gateway.commandGroup.sync(await body(req)));
         }
-        if (path === '/api/v1/feishu/bots' && method === 'GET') return json(res, 200, bots.list());
+        if (path === '/api/v1/feishu/bots' && method === 'GET') {
+          return json(res, 200, bots.list().map(bot => bot.scope.kind === 'global' && bot.paired
+            ? { ...bot, workbench: bots.workbenchStatus(bot.id) } : bot));
+        }
+        const botWorkbench = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/workbench$/);
+        if (botWorkbench && method === 'GET') {
+          const id = decodeURIComponent(botWorkbench[1]!);
+          if (!bots.list().some(bot => bot.id === id && bot.scope.kind === 'global')) throw new InputError('全局机器人不存在', 404);
+          return json(res, 200, bots.workbenchStatus(id));
+        }
         if (path === '/api/v1/feishu/registrations' && method === 'GET') return json(res, 200, await Promise.all(registrations.list().map(registrationView)));
         if (path === '/api/v1/feishu/registrations' && method === 'POST') {
           const input = await body(req);

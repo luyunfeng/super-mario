@@ -41,6 +41,7 @@ export function preparePersonalCheckpoint(binding: PersonalCheckpoint['binding']
   };
   return checkpoint;
 }
+export type FeishuSentMessageType = 'interactive' | 'text' | 'post';
 export interface FeishuSendContext {
   /** A read-only card may deliver its text if the platform explicitly rejects card creation.
    * The host revalidates the recipient and scope immediately before the fallback. */
@@ -49,7 +50,7 @@ export interface FeishuSendContext {
   card?: Record<string, unknown>;
   replyTo?: string;
   threadId?: string;
-  onSent?: (messageId: string) => void;
+  onSent?: (messageId: string, type?: FeishuSentMessageType) => void;
   presentation?: { navigation?: string; title?: string; kind?: 'reply' | 'result' | 'brief' | 'notice'; route?: string };
 }
 export interface FeishuCardAction { formValue?: Record<string, unknown>; operatorId: string; chatId: string; messageId: string; value: Record<string, unknown> }
@@ -88,6 +89,21 @@ const string = (value: unknown): string => typeof value === 'string' ? value : '
 const origin = 'https://open.feishu.cn';
 class CardContentRejected extends Error {}
 class TextFallbackDenied extends Error {}
+// These Feishu business errors explicitly reject a message mutation (arguments, chat access,
+// credentials, permissions or rate limit). Unrecognized business errors leave the effect unknown.
+const messageMutationRejections = new Set([
+  230001, 230002, 230003, 230006, 230011, 230013, 230017, 230018, 230019, 230020, 230027, 230429,
+  99991400, 99991661, 99991663, 99991664, 99991668, 99991672, 99991679,
+]);
+class FeishuResponseError extends Error {
+  readonly httpStatus: number;
+  readonly apiCode?: number;
+  constructor(message: string, httpStatus: number, apiCode?: number) {
+    super(message);
+    this.httpStatus = httpStatus;
+    this.apiCode = apiCode;
+  }
+}
 
 // Match connector metadata only. Quoting the bot or naming a group after it is not provenance.
 function botSender(hit: Row) {
@@ -155,21 +171,21 @@ export function createFeishuIntegration(options: FeishuOptions) {
   function assertCredentials() {
     if (!/^cli_[0-9a-fA-F]{16}$/.test(options.appId) || !options.appSecret.trim()) throw new Error('飞书 appId 或 appSecret 未配置或格式错误');
   }
-  async function request(path: string, body: Row, bearer?: string, signal = controller.signal, method = 'POST'): Promise<Row> {
+  async function request(path: string, body: Row, bearer?: string, signal = controller.signal, method = 'POST', redirect: RequestRedirect = 'follow'): Promise<Row> {
     const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
     const response = await (options.fetch ?? fetch)(`${origin}${path}`, {
-      method, headers: { 'content-type': 'application/json', ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) },
-      ...(method === 'GET' ? {} : { body: JSON.stringify(body) }), signal: requestSignal,
+      method, redirect, headers: { 'content-type': 'application/json', ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) },
+      ...(method === 'GET' || method === 'DELETE' ? {} : { body: JSON.stringify(body) }), signal: requestSignal,
     });
     requestSignal.throwIfAborted();
     if (!response.ok) {
-      if (response.status === 400 && body.msg_type === 'interactive') {
-        const data = object(await response.json().catch(() => undefined));
-        requestSignal.throwIfAborted();
-        if (data.code === 230099) throw new CardContentRejected('飞书拒绝创建卡片内容');
-      }
+      const data = object(await response.json().catch(() => undefined));
+      requestSignal.throwIfAborted();
+      if (response.status === 400 && body.msg_type === 'interactive' && data.code === 230099)
+        throw new CardContentRejected('飞书拒绝创建卡片内容');
       if (response.status === 401 && bearer) token = undefined;
-      throw new Error(`飞书 HTTP ${response.status}`);
+      throw new FeishuResponseError(`飞书 HTTP ${response.status}`, response.status,
+        typeof data.code === 'number' ? data.code : undefined);
     }
     const data = object(await response.json());
     requestSignal.throwIfAborted();
@@ -177,7 +193,8 @@ export function createFeishuIntegration(options: FeishuOptions) {
       if (body.msg_type === 'interactive' && data.code === 230099) throw new CardContentRejected('飞书拒绝创建卡片内容');
       // Do not retry a send: the remote effect may already have happened.
       if (bearer && [99991661, 99991663, 99991664, 99991668].includes(Number(data.code))) token = undefined;
-      throw new Error(`飞书 API ${String(data.code)}: ${reason(string(data.msg) || '响应无效', bearer ? [bearer] : [])}`);
+      throw new FeishuResponseError(`飞书 API ${String(data.code)}: ${reason(string(data.msg) || '响应无效', bearer ? [bearer] : [])}`,
+        response.status, typeof data.code === 'number' ? data.code : undefined);
     }
     return data;
   }
@@ -214,9 +231,10 @@ export function createFeishuIntegration(options: FeishuOptions) {
       if (running && epoch === generation) identityReason = `群消息不可用，机器人身份读取失败：${reason(error, bearer ? [bearer] : [])}`;
     }
   }
-  async function postMessage(path: string, body: Row, fallback?: { text: string; validate: () => void }) {
+  async function postMessage(path: string, body: Row & { msg_type: FeishuSentMessageType }, fallback?: { text: string; validate: () => void }) {
     const epoch = generation;
     let bearer: string | undefined;
+    let type = body.msg_type;
     try {
       if (closed) throw new Error('飞书适配器已关闭');
       const signal = controller.signal;
@@ -227,12 +245,13 @@ export function createFeishuIntegration(options: FeishuOptions) {
         if (!(error instanceof CardContentRejected) || !fallback || closed || epoch !== generation) throw error;
         try { fallback.validate(); }
         catch (denied) { throw new TextFallbackDenied(reason(denied)); }
+        type = 'text';
         return request(path, { ...body, msg_type: 'text', content: JSON.stringify({ text: fallback.text }) }, bearer, signal);
       });
       if (closed || epoch !== generation) throw new Error('飞书发送请求已取消');
       const id = string(object(data.data).message_id);
       if (id) remember(id);
-      return id;
+      return { id, type };
     } catch (error) {
       const message = reason(error, bearer ? [bearer] : []);
       const detail = error instanceof TextFallbackDenied ? '卡片未创建，文本未发送：' + message
@@ -250,26 +269,26 @@ export function createFeishuIntegration(options: FeishuOptions) {
       if (!/^ou_[A-Za-z0-9_-]+$/.test(openId)) throw new Error('点名需要发送方可见的目标机器人 openId');
       // Separate structured nodes keep user text literal, including any embedded @ markup.
       const content = { zh_cn: { content: [[{ tag: 'at', user_id: openId }, { tag: 'text', text: ' ' + text }]] } };
-      const id = await postMessage('/open-apis/im/v1/messages?receive_id_type=chat_id', {
+      const { id, type } = await postMessage('/open-apis/im/v1/messages?receive_id_type=chat_id', {
         receive_id: chatId, msg_type: 'post', content: JSON.stringify(content),
       });
       if (!id) throw new Error('飞书点名消息缺少 message_id，发送结果未知');
-      context.onSent?.(id);
+      context.onSent?.(id, type);
       return;
     }
     const card = context?.card ?? options.renderMessage?.(text, context);
-    const payload = card ? { msg_type: 'interactive', content: JSON.stringify(card) }
-      : { msg_type: 'text', content: JSON.stringify({ text }) };
+    const payload = card ? { msg_type: 'interactive' as const, content: JSON.stringify(card) }
+      : { msg_type: 'text' as const, content: JSON.stringify({ text }) };
     const fallback = card && context?.beforeTextFallback ? { text, validate: context.beforeTextFallback } : undefined;
     if (context?.replyTo) {
-      const id = await postMessage(`/open-apis/im/v1/messages/${encodeURIComponent(context.replyTo)}/reply`, {
+      const { id, type } = await postMessage(`/open-apis/im/v1/messages/${encodeURIComponent(context.replyTo)}/reply`, {
         ...payload, ...(context.threadId ? { reply_in_thread: true } : {}),
       }, fallback);
-      if (id) context.onSent?.(id);
+      if (id) context.onSent?.(id, type);
       return;
     }
-    const id = await postMessage('/open-apis/im/v1/messages?receive_id_type=chat_id', { receive_id: chatId, ...payload }, fallback);
-    if (id) context?.onSent?.(id);
+    const { id, type } = await postMessage('/open-apis/im/v1/messages?receive_id_type=chat_id', { receive_id: chatId, ...payload }, fallback);
+    if (id) context?.onSent?.(id, type);
   }
   async function updateCard(messageId: string, card: Record<string, unknown>) {
     if (!messageId.trim()) throw new Error('卡片更新缺少消息标识');
@@ -277,6 +296,37 @@ export function createFeishuIntegration(options: FeishuOptions) {
     if (closed || epoch !== generation) throw new Error('飞书卡片更新已取消');
     await request(`/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, { content: JSON.stringify(card) }, bearer, signal, 'PATCH');
     if (closed || epoch !== generation) throw new Error('飞书卡片更新已取消');
+  }
+  async function changePlatformMessage(action: 'pin' | 'unpin' | 'recall', messageId: string): Promise<void> {
+    if (typeof messageId !== 'string' || !messageId || messageId.trim() !== messageId ||
+      /[\x00-\x1f\x7f/\\]/.test(messageId) || messageId === '.' || messageId === '..') {
+      throw Object.assign(new Error('飞书消息标识无效'), { delivery: 'no' });
+    }
+    const epoch = generation, signal = controller.signal;
+    const enabled = () => running && !closed && generation === epoch;
+    if (!enabled()) throw Object.assign(new Error('飞书适配器未启动或已关闭'), { delivery: 'no' });
+    let dispatched = false;
+    try {
+      const resource = action === 'recall' ? 'messages' : 'pins';
+      const path = action === 'pin' ? '/open-apis/im/v1/pins' : `/open-apis/im/v1/${resource}/${encodeURIComponent(messageId)}`;
+      const bearer = await getToken();
+      if (!enabled()) throw new Error('飞书适配器已关闭');
+      dispatched = true;
+      await request(path, action === 'pin' ? { message_id: messageId } : {}, bearer, signal,
+        action === 'pin' ? 'POST' : 'DELETE', 'error');
+    } catch (error) {
+      // Once submitted, a timeout, gateway failure or malformed reply cannot establish the effect.
+      const rejected = error instanceof FeishuResponseError && error.apiCode !== 99991500 && (
+        (error.httpStatus >= 400 && error.httpStatus < 500 && error.httpStatus !== 408) ||
+        (error.httpStatus < 300 && error.apiCode !== undefined && messageMutationRejections.has(error.apiCode)));
+      const delivery = !dispatched || rejected ? 'no' : 'unknown';
+      const detail = error instanceof FeishuResponseError
+        ? (error.apiCode === undefined ? ` (HTTP ${error.httpStatus})` : ` (API ${error.apiCode})`) : '';
+      const permission = dispatched && error instanceof FeishuResponseError &&
+        (error.httpStatus === 403 || [230027, 99991672, 99991679].includes(error.apiCode ?? 0))
+        ? '。请核对资源归属及权限 ' + (action === 'recall' ? 'im:message:recall' : 'im:message.pins:write_only') : '';
+      throw Object.assign(new Error((delivery === 'no' ? '飞书操作未执行' : '飞书操作结果未知') + detail + permission), { delivery });
+    }
   }
   async function drain(epoch: number) {
     if (!running || epoch !== generation || drainingGeneration === epoch) return;
@@ -812,5 +862,9 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const detail = [channelReason, identityReason, operationReason].filter(Boolean).join('；');
     return { connected, ...(detail ? { reason: detail } : {}) };
   }
-  return { start, close, send, updateCard, collect, collectBatch, status };
+  return { start, close, send, updateCard, collect, collectBatch, status,
+    pinMessage: (id: string) => changePlatformMessage('pin', id),
+    unpinMessage: (id: string) => changePlatformMessage('unpin', id),
+    recallMessage: (id: string) => changePlatformMessage('recall', id),
+  };
 }

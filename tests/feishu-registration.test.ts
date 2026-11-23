@@ -120,8 +120,8 @@ function webFetch(options: { missingScope?: boolean; publication?: 'review' | 'u
     if (path.endsWith('/app/upload/image')) { assert.ok(init.body instanceof FormData); const blob = init.body.get('file') as Blob; assert.equal(blob.type, 'image/png'); return json({ url: 'https://open.feishu.cn/icon.png' }); }
     if (path.endsWith('/manifest/upsert_by_template')) { creates++; return json({ ClientID: appId }); }
     if (path.includes('/secret/')) return json({ secret });
-    if (path.includes('/scope/all/')) return json({ appScopes: FEISHU_BOT_SCOPES.map((scope, n) => ({ scopeName: scope, id: `scope-${n}` })), userScopes: [{ name: 'other', id: 'user-id' }] });
-    if (path.includes('/scope/update/')) { assert.deepEqual(JSON.parse(String(init.body)).appScopeIDs, ['scope-0', 'scope-1', 'scope-2', 'scope-3']); return json(); }
+    if (path.includes('/scope/all/')) return json({ appScopes: [...FEISHU_BOT_SCOPES, 'im:message.pins:write_only', 'im:message:recall'].map((scope, n) => ({ scopeName: scope, id: `scope-${n}` })), userScopes: [{ name: 'other', id: 'user-id' }] });
+    if (path.includes('/scope/update/')) return json();
     if (path.includes('/app_version/create/')) { assert.deepEqual(JSON.parse(String(init.body)).visibleSuggest.members, ['creator-user']); return json({ versionId: 'version-1' }); }
     if (path.includes('/publish/commit/') && options.publication === 'unknown') throw new Error(`network failed ${secret}`);
     if (path.includes('/app_version/list/')) return json({ versions: [{ versionId: 'version-1', versionStatus: options.publication === 'review' ? 1 : 2 }] });
@@ -141,11 +141,14 @@ test('real Web provider performs QR login, configuration, publish/readback and r
   const progress: unknown[] = [];
   try {
     const provider = createFeishuRegistrationProvider({ dataDir: dir, fetch: fake.fetcher, pollMs: 0 });
-    const first = await provider.register({ name: 'One', signal: new AbortController().signal, progress: info => { progress.push(info); } });
+    const first = await provider.register({ name: 'One', workbench: true, signal: new AbortController().signal, progress: info => { progress.push(info); } });
     assert.equal(first.verified, true); assert.deepEqual(first.missingSteps, []);
     assert.ok(fake.calls.some(c => c.url.includes('/event/update/'))); assert.ok(fake.calls.some(c => c.url.includes('/callback/update/')));
     const second = await createFeishuRegistrationProvider({ dataDir: dir, fetch: fake.fetcher }).register({ name: 'Two', signal: new AbortController().signal, progress: () => {} });
     assert.equal(second.verified, true); assert.equal(fake.calls.filter(c => c.url.includes('/qrlogin/init')).length, 1); assert.equal(fake.creates(), 2);
+    const requestedScopes = fake.calls.filter(c => c.url.includes('/scope/update/')).map(c => JSON.parse(String(c.init.body)).appScopeIDs);
+    const chatScopes = ['scope-0', 'scope-1', 'scope-2', 'scope-3'];
+    assert.deepEqual(requestedScopes, [[...chatScopes, 'scope-4', 'scope-5'], chatScopes]);
     const file = join(dir, 'private/feishu-registration/session.json'), saved = readFileSync(file, 'utf8');
     assert.equal(statSync(file).mode & 0o777, 0o600); assert.ok(saved.includes('private-session-cookie')); assert.ok(!saved.includes(secret));
     assert.ok(!JSON.stringify(progress).includes('private-session-cookie')); assert.ok(!JSON.stringify(progress).includes(secret));
@@ -267,10 +270,12 @@ test('official SDK device registration preserves credentials but honestly requir
   try {
     const provider = createFeishuRegistrationProvider({ dataDir: dir, mode: 'device', registerApp: async options => {
       assert.equal(options.createOnly, true); assert.equal(options.appPreset?.name, 'Device');
+      assert.ok(options.addons?.scopes?.tenant?.includes('im:message.pins:write_only'));
+      assert.ok(options.addons?.scopes?.tenant?.includes('im:message:recall'));
       options.onQRCodeReady({ url: 'https://accounts.feishu.cn/device?user_code=123', expireIn: 600 });
       return { client_id: appId, client_secret: secret, user_info: { open_id: 'ou_untrusted' } };
     } });
-    const result = await provider.register({ name: 'Device', signal: new AbortController().signal, progress: () => {} });
+    const result = await provider.register({ name: 'Device', workbench: true, signal: new AbortController().signal, progress: () => {} });
     assert.equal(result.verified, false); assert.equal(result.missingSteps.length, 3); assert.ok(!('owner' in result));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
