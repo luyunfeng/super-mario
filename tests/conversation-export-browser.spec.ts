@@ -134,8 +134,10 @@ test('从主对话和项目工作区导出完整 Markdown，并通过插件配�
   assert.match(expanded, /<details><summary>公开工作步骤<\/summary>\s+> 工作进度：正在输出[^<]*<\/details>/u);
   assert.doesNotMatch(plain, /<summary>公开工作步骤/);
   assert.doesNotMatch(expanded, /项目甲历史消息|隔离标记|内部详情标记/);
+  await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined }); });
   await drawer.getByRole('button', { name: '复制 Markdown' }).click();
   await expect(drawer.getByRole('status')).toContainText('已复制');
+  await page.evaluate(() => Reflect.deleteProperty(navigator, 'clipboard'));
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), expanded);
   await drawer.getByRole('button', { name: '关闭', exact: true }).click();
 

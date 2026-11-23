@@ -122,7 +122,7 @@ export function openConversationExport({ api, store, source, subtitle, isCurrent
         Button({ label: '复制 Markdown', onClick: async () => {
           if (!valid()) return;
           try {
-            await navigator.clipboard.writeText(markdown);
+            await copyText(markdown);
             if (valid()) status.textContent = `已复制 ${count} 条消息`;
           } catch {
             if (valid()) status.textContent = '无法写入剪贴板，请选中预览文本复制或下载文件。';
