@@ -3,7 +3,7 @@
 
 export function createStore(api) {
   const listeners = new Set();
-  const view = { snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, connection: 'connecting', unauthorized: false, loadError: '' };
+  const view = { snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, projectInstructionsChange: null, connection: 'connecting', unauthorized: false, loadError: '' };
   let request = 0;
   let socket;
   let reconnectTimer;
@@ -53,6 +53,10 @@ export function createStore(api) {
         set({ savedPromptsRevision: event.data.revision });
         return;
       }
+      if (event?.type === 'project-instructions.changed' && typeof event.data?.projectId === 'string' && Number.isSafeInteger(event.data.revision)) {
+        set({ projectInstructionsChange: event.data });
+        return;
+      }
       scheduleRefresh();
     };
     ws.onerror = () => { if (current === generation) set({ connection: 'offline' }); };
@@ -72,7 +76,7 @@ export function createStore(api) {
     refresh,
     connect,
     reconnect: connect,
-    reset() { request += 1; set({ snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, unauthorized: false, loadError: '' }); connect(); },
+    reset() { request += 1; set({ snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, projectInstructionsChange: null, unauthorized: false, loadError: '' }); connect(); },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
   };
 }

@@ -18,7 +18,7 @@ export function createProjectInstructions({ api, store, getProjectId }) {
   function open() {
     if (drawer?.el.open || !enabled()) return;
     const project = selected(), token = api.token(), route = location.hash;
-    let base, latest, needsReview = false, busy = false;
+    let base, latest, needsReview = false, busy = false, refreshing = false;
     const notes = TextArea({ rows: 8, oninput: () => { status.textContent = ''; sync(); } });
     const count = h('span', { class: 'small muted' });
     const status = h('p', { role: 'status' });
@@ -48,7 +48,32 @@ export function createProjectInstructions({ api, store, getProjectId }) {
       } });
     drawer = opened;
     const current = () => opened.el.open && token === api.token() && route === location.hash && getProjectId() === project.id && enabled();
-    const unsubscribe = store.subscribe(() => { if (!current()) opened.close(); });
+    let observed = store.view.projectInstructionsChange, connection = store.view.connection;
+    let pendingRevision = 0, reconnected = false;
+    const unsubscribe = store.subscribe(view => {
+      if (!current()) { opened.close(); return; }
+      if (observed !== view.projectInstructionsChange) {
+        observed = view.projectInstructionsChange;
+        if (observed?.projectId === project.id) pendingRevision = Math.max(pendingRevision, observed.revision);
+      }
+      if (connection !== 'online' && view.connection === 'online') reconnected = true;
+      connection = view.connection;
+      checkUpdates();
+    });
+
+    function checkUpdates() {
+      if (busy || !current() || (!pendingRevision && !reconnected)) return;
+      const newer = pendingRevision > ((latest ?? base)?.revision ?? 0);
+      pendingRevision = 0;
+      const check = reconnected || newer;
+      reconnected = false;
+      if (!check || !base) return;
+      if (!needsReview && notes.value === base.notes) { void read(true); return; }
+      // Keep the draft and its selection until the user chooses to compare versions.
+      if (newer && latest) { latest = undefined; sync(); }
+      replace(review, Button({ label: '核对最新版本', onClick: () => { needsReview = true; void read(); } }));
+      status.textContent = newer ? '此项目的工作指令已有新版本。你的草稿已保留。' : '连接已恢复，可核对最新的工作指令。';
+    }
 
     function sync() {
       version.textContent = base ? (base.revision ? `草稿基于版本 ${base.revision}` : '尚无已保存的版本') : '';
@@ -57,10 +82,10 @@ export function createProjectInstructions({ api, store, getProjectId }) {
       const length = Array.from(notes.value).length;
       count.textContent = length + ' / ' + maxCharacters + ' 个字符' + (length > maxCharacters ? '，请缩短草稿后保存。' : '');
       notes.setAttribute('aria-invalid', String(length > maxCharacters));
-      notes.disabled = busy || !base;
+      notes.disabled = !base || (busy && !refreshing);
       clear.disabled = notes.disabled || !notes.value;
       save.hidden = needsReview;
-      save.disabled = notes.disabled || needsReview || length > maxCharacters || base?.notes === notes.value;
+      save.disabled = busy || notes.disabled || needsReview || length > maxCharacters || base?.notes === notes.value;
       const compare = review.querySelector('[data-save-draft]');
       if (compare) compare.disabled = busy || length > maxCharacters;
     }
@@ -78,19 +103,22 @@ export function createProjectInstructions({ api, store, getProjectId }) {
       }
       replace(review, Button({ label: '重新读取工作指令', onClick: () => read() }));
     }
-    async function read() {
+    async function read(background = false) {
       if (busy || !current()) return;
       busy = true;
+      refreshing = background;
       status.textContent = '正在读取工作指令…';
       review.replaceChildren();
       sync();
       try {
         const result = await readDocument();
         if (!current()) return;
+        if (base && notes.value !== base.notes && base.revision !== result.revision) needsReview = true;
         if (needsReview) showVersions(result);
+        else if (base && notes.value !== base.notes) status.textContent = '';
         else { base = result; notes.value = result.notes; status.textContent = ''; }
       } catch (cause) { failedRead(cause); }
-      finally { busy = false; if (current()) sync(); }
+      finally { refreshing = false; busy = false; if (current()) { sync(); checkUpdates(); } }
     }
     function showVersions(result, explanation = '请核对服务端当前版本。') {
       latest = result;
@@ -135,7 +163,7 @@ export function createProjectInstructions({ api, store, getProjectId }) {
           } catch (readError) { failedRead(readError); }
         } else if ([401, 403, 404].includes(cause.status)) failedRead(cause);
         else status.textContent = cause.message;
-      } finally { busy = false; if (current()) sync(); }
+      } finally { busy = false; if (current()) { sync(); checkUpdates(); } }
     }
     void read();
   }

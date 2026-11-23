@@ -56,6 +56,7 @@ test('项目工作指令独立保存，编辑冲突时保留草稿，清除和�
   await action(second, '保存').click();
   await expect(drawer(second)).toContainText('工作指令已保存');
   await expect(body(first)).toHaveValue(local);
+  await expect(action(first, '核对最新版本')).toBeVisible();
   const rejected = first.waitForResponse(r => r.url().endsWith('/api/v1/project-instructions') && r.request().postDataJSON()?.action === 'save');
   await action(first, '保存').click();
   assert.equal((await rejected).status(), 409);
@@ -65,9 +66,29 @@ test('项目工作指令独立保存，编辑冲突时保留草稿，清除和�
   await expect(drawer(first).getByRole('region', { name: '服务端当前版本' })).toContainText('版本 2');
   await action(first, '保存我的草稿').click();
   await expect(drawer(first)).toContainText('工作指令已保存');
+  await expect(body(second)).toHaveValue(local);
+  // The second window starts typing while the automatic read is still in flight.
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const started = second.waitForRequest(request => request.url().endsWith('/api/v1/project-instructions'));
+  await second.route('**/api/v1/project-instructions', async route => {
+    await gate;
+    await route.continue();
+  }, { times: 1 });
+  const revised = local + '已复核。';
+  await body(first).fill(revised);
+  await action(first, '保存').click();
+  await started;
+  try {
+    await body(second).fill('读取期间输入的草稿。');
+  } finally { release(); }
+  await expect(drawer(second).getByRole('region', { name: '服务端当前版本' })).toContainText(revised);
+  await expect(body(second)).toHaveValue('读取期间输入的草稿。');
+  await action(second, '采用服务端版本').click();
+  await expect(body(second)).toHaveValue(revised);
   await first.reload();
   await open(first).click();
-  await expect(body(first)).toHaveValue(local);
+  await expect(body(first)).toHaveValue(revised);
 
   await action(first, '清空草稿').click();
   await expect(body(first)).toHaveValue('');
