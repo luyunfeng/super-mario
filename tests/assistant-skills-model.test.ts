@@ -3119,6 +3119,48 @@ test('项目对话可按执行 ID 核对两次原生用量，保留零值与缺�
   } finally { await server.close(); }
 });
 
+test('飞书项目机器人按组内顺序核对已完成、失败和缺失的执行', async t => {
+  let adapter!: FeishuOptions;
+  let members: string[] = [];
+  const sent: string[] = [];
+  const {server, api} = await fixture(t, req => {
+    assert.match(req.system, /按指定执行的 id 取 comparisonRunIds/);
+    if (req.lastRole === 'user') return call('runs_list', {id:'group-a'}, 'first');
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    const rows = JSON.parse(raw);
+    if (req.callId === 'first') {
+      assert.equal(rows[0].status,'completed');
+      members = rows[0].comparisonRunIds;
+      return call('runs_list',{id:members[1]},'second');
+    }
+    if (req.callId === 'second') {
+      assert.equal(rows[0].status,'failed');
+      assert.equal(rows[0].error,'合成校验失败');
+      return call('runs_list',{id:members[2]},'third');
+    }
+    assert.deepEqual(rows,[]);
+    return {role:'assistant', content:'第一份执行完成，第二份校验失败，第三份记录不可用。'};
+  }, options => {
+    adapter = options;
+    return {start:async()=>{},close:async()=>{},status:()=>({connected:true}),collect:async()=>[],
+      send:async (_target,text)=>{sent.push(text);}};
+  });
+  try {
+    const project = await api('/projects',{name:'合成比较组'});
+    const now = new Date().toISOString();
+    const run: Run = {id:'group-a', projectId:project.id, comparisonRunIds:['group-a','group-b','group-c'],
+      executorId:'fixture', conversationId:'main', prompt:'复核清单', status:'completed', output:'清单已生成', createdAt:now, updatedAt:now};
+    server.app.store.put('runs',run.id,run);
+    server.app.store.put('runs','group-b',{...run,id:'group-b',status:'failed',output:'',error:'合成校验失败'});
+    const bot = await api('/feishu/bots',{name:'比较组查询',appId:'cli_3333333333333333',appSecret:'offline-fixture',
+      scope:{kind:'project',projectId:project.id},requireConfirmation:false});
+    const source = {chatId:'private',senderId:'owner',senderType:'user',chatType:'p2p'} as const;
+    await adapter.onMessage(bot.pairingCode,{...source,messageId:'pair'});
+    await adapter.onMessage('group-a 这批并行执行哪份完成了？',{...source,messageId:'group-status'});
+    await t.waitFor(()=>assert.ok(sent.includes('第一份执行完成，第二份校验失败，第三份记录不可用。')));
+  } finally { await server.close(); }
+});
+
 test('Web 和飞书按执行 ID 核对目标、最近观察与仍需用户决定的事项', async t => {
   let adapter!: FeishuOptions;
   const sent: string[] = [];
