@@ -3154,3 +3154,49 @@ test('独立对话助手使用当前版本改名和归档，Web 主助手仅指�
     assert.equal(archived[0].version, 2);
   } finally { await server.close(); }
 });
+
+test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离其他会话', async t => {
+  let adapter!: FeishuOptions, botId = '';
+  const sent: string[] = [];
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      if (JSON.stringify(req.content).includes('合成记要：')) {
+        assert.ok(!req.tools.includes('private_conversation_search'));
+        return { role: 'assistant', content: '首轮已收到。' };
+      }
+      assert.ok(req.tools.includes('private_conversation_search'));
+      assert.match(req.system, /引用正文须写明会话标题和发言角色/);
+      const web = JSON.stringify(req.content).includes('从网页查');
+      return web ? call('private_conversation_search', { query: '青瓷样本', botId }, 'find-source')
+        : call('private_conversation_search', { query: '青瓷样本', botId: 'other-bot' }, 'wrong-account');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    if (req.callId === 'wrong-account') {
+      assert.match(raw, /此会话不能检索该机器人的独立对话/);
+      return call('private_conversation_search', { query: '青瓷样本' }, 'find-source');
+    }
+    const page = JSON.parse(raw);
+    assert.equal(page.items.length, 1);
+    const hit = page.items[0].hits.find((item: {role:string}) => item.role === 'user');
+    assert.ok(hit.id);
+    assert.match(hit.excerpt, /青瓷样本/);
+    return { role: 'assistant', content: '已从用户发言核对青瓷样本。' };
+  }, options => {
+    adapter = options;
+    return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
+      async send(_target, text) { sent.push(text); } };
+  });
+  try {
+    const bot = await api('/feishu/bots', { name: '检索测试', appId: 'cli_1111111111111111', appSecret: 'fixture', scope: { kind: 'global' }, requireConfirmation: false });
+    botId = bot.id;
+    const send = (text: string, id: string) => adapter.onMessage(text, { chatId: 'search-chat', senderId: 'owner', senderType: 'user', chatType: 'p2p', messageId: id });
+    await send(bot.pairingCode, 'pair');
+    await send('/new 合成记要：周三交付青瓷样本', 'source');
+    await t.waitFor(() => assert.ok(sent.includes('首轮已收到。'), sent.at(-1)));
+    const answer = '已从用户发言核对青瓷样本。';
+    assert.equal(await ask('从网页查已指定机器人的青瓷样本记录'), answer);
+    await send('/main', 'back');
+    await send('请查本机器人独立对话里的青瓷样本记录', 'find');
+    await t.waitFor(() => assert.ok(sent.includes(answer), sent.at(-1)));
+  } finally { await server.close(); }
+});

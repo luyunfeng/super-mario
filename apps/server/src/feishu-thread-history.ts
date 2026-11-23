@@ -18,7 +18,7 @@ function threadMessages(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[
   if (!rows.length) return messages;
   for (const message of store.list<Message>('messages')) {
     const row = conversations.get(message.conversationId);
-    if (!row || message.readOnly || message.projectId || message.todoId || (message.origin && message.origin !== 'user')) continue;
+    if (!row || (message.role !== 'user' && message.role !== 'assistant') || message.readOnly || message.projectId || message.todoId || (message.origin && message.origin !== 'user')) continue;
     const inputId = message.role === 'user' ? message.id : message.replyTo;
     const route = inputId && store.get<Receipt>('message.routes', inputId);
     if (!route || route.channel !== 'feishu' || route.botId !== row.botId || route.accountId !== row.appId
@@ -38,24 +38,73 @@ function metadata(row: PrivateThread, list: Message[]) {
     latestAt: list.at(-1)?.createdAt ?? row.createdAt, count: list.length, archived: row.archived === true, version: row.version ?? 0 };
 }
 
-export function readPrivateThreadHistory(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], archived = false) {
+function historyEntries(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], archived = false) {
   const selected = rows.filter(row => (row.archived === true) === archived);
   const messages = threadMessages(store, selected);
   return selected.flatMap(row => {
     const list = messages.get(row.threadId);
-    return list?.length ? [metadata(row, list)] : [];
-  }).sort((a, b) => b.latestAt.localeCompare(a.latestAt) || a.threadId.localeCompare(b.threadId));
+    return list?.length ? [{ info: metadata(row, list), list }] : [];
+  }).sort((a, b) => b.info.latestAt.localeCompare(a.info.latestAt) || a.info.threadId.localeCompare(b.info.threadId));
+}
+
+export function readPrivateThreadHistory(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], archived = false) {
+  return historyEntries(store, rows, archived).map(entry => entry.info);
+}
+
+export function searchPrivateThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived = false, before: string | null = null) {
+  if (typeof query !== 'string' || !query.trim() || query.length > 500)
+    throw Object.assign(new Error('检索词须为 1 至 500 个字符'), { status: 400 });
+  const pattern = new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
+  const items = [];
+  let pastCursor = before === null;
+  for (const { info, list } of historyEntries(store, rows, archived)) {
+    const titleMatch = pattern.test(info.title);
+    const hits = [];
+    for (let i = list.length - 1; i >= 0 && hits.length < 3; i--) {
+      const { id, role, text, createdAt, status } = list[i];
+      const match = pattern.exec(text);
+      if (!match) continue;
+      let start = Math.max(0, match.index - 50);
+      let end = Math.min(text.length, match.index + match[0].length + 70);
+      // Keep quotes exact, including complete code points on either edge.
+      if (start && /[\uDC00-\uDFFF]/.test(text[start])) start--;
+      if (end < text.length && /[\uDC00-\uDFFF]/.test(text[end])) end++;
+      hits.push({ id, role, excerpt: text.slice(start, end), truncated: start > 0 || end < text.length, status: status ?? null, createdAt });
+    }
+    if (!hits.length && !titleMatch) continue;
+    if (!pastCursor) {
+      pastCursor = info.threadId === before;
+      continue;
+    }
+    if (items.length === 20) return { items, nextBefore: items[items.length - 1].threadId };
+    items.push({ ...info, titleMatch, hits });
+  }
+  if (!pastCursor) throw Object.assign(new Error('检索位置已失效，请重新搜索'), { status: 409 });
+  return { items, nextBefore: null };
 }
 
 export function readPrivateThreadMetadata(store: Pick<Store, 'get' | 'list'>, row: PrivateThread) {
   return metadata(row, threadMessages(store, [row]).get(row.threadId) ?? []);
 }
 
-export function privateThreadPage(store: Pick<Store, 'get' | 'list'>, row: PrivateThread, before: string | null) {
+export function privateThreadPage(store: Pick<Store, 'get' | 'list'>, row: PrivateThread, before: string | null,
+  after: string | null = null, around: string | null = null) {
+  const cursors = [before, after, around].filter(value => value !== null);
+  if (cursors.length > 1) throw Object.assign(new Error('每次只可采用一个消息位置'), { status: 400 });
   const list = threadMessages(store, [row]).get(row.threadId) ?? [];
-  const end = before === null ? list.length : list.findIndex(message => message.id === before);
-  if (end < 0) throw Object.assign(new Error('消息位置已失效，请重新打开对话'), { status: 409 });
-  const start = Math.max(0, end - 40);
-  return { ...metadata(row, list), messages: list.slice(start, end).map(({ role, text, createdAt, status }) => ({ role, text, createdAt, status })),
-    nextBefore: start ? list[start].id : null };
+  let end = list.length, start = Math.max(0, end - 40);
+  if (cursors.length) {
+    const index = list.findIndex(message => message.id === cursors[0]);
+    if (index < 0) throw Object.assign(new Error('消息位置已失效，请重新打开对话'), { status: 409 });
+    if (before !== null) {
+      end = index;
+      start = Math.max(0, end - 40);
+    } else {
+      start = after !== null ? index + 1 : Math.min(Math.max(0, index - 20), start);
+      end = Math.min(list.length, start + 40);
+    }
+  }
+  const page = list.slice(start, end);
+  return { ...metadata(row, list), messages: page.map(({ id, role, text, createdAt, status }) => ({ id, role, text, createdAt, status })),
+    nextBefore: start && page.length ? page[0].id : null, nextAfter: end < list.length && page.length ? page[page.length - 1].id : null };
 }

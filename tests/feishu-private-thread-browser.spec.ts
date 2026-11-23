@@ -7,7 +7,7 @@ import { chromium, expect } from '@playwright/test';
 import { startServer } from '../apps/server/src/index.ts';
 import type { FeishuOptions } from '../plugins/feishu.ts';
 
-test('Web 从当前机器人打开独立对话，核对其正文和机器人归属', { timeout: 45000 }, async t => {
+test('Web 从当前机器人打开独立对话，核对其正文和机器人归属', { timeout: 90000 }, async t => {
   const dir = await mkdtemp(join(tmpdir(), 'mario-private-browser-'));
   const clients = new Map<string, FeishuOptions>();
   const token = 'offline-browser';
@@ -94,6 +94,35 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await expect(drawer.getByRole('heading', { name: '另一个页面的新标题' })).toBeVisible();
   await drawer.getByRole('button', { name: '还原默认标题' }).click();
   await expect(drawer.getByRole('heading', { name: '核对独立方案' })).toBeVisible();
+  const keyword = '蓝色铅笔标记';
+  await first.send('很早的' + keyword, 'old-hit');
+  const detailPath = base + first.bot.id + '/threads/' + thread;
+  await t.waitFor(async () => {
+    const detail = await (await get(detailPath)).json();
+    assert.ok(detail.messages.some((message: { role: string; text: string }) =>
+      message.role === 'assistant' && message.text.includes(keyword)));
+  });
+  for (let i = 0; i < 22; i++) await first.send('较新的记录 ' + i, 'recent-' + i);
+  await t.waitFor(async () => {
+    const detail = await (await get(detailPath)).json();
+    assert.equal(detail.messages.length, 40);
+    assert.match(detail.messages.at(-1).text, /较新的记录 21/);
+    assert.ok(!detail.messages.some((message: { role: string; text: string }) => message.role === 'user' && message.text.includes(keyword)),
+      '指定的用户发言应在最近一页之前');
+  }, { timeout: 15000 });
+  await drawer.getByRole('button', { name: '返回列表' }).click();
+  await drawer.getByRole('textbox', { name: '搜索独立对话' }).fill(keyword);
+  await drawer.getByRole('button', { name: '搜索', exact: true }).click();
+  await drawer.getByRole('button', { name: new RegExp('用户.*' + keyword) }).first().click();
+  const marked = drawer.locator('section').filter({ hasText: '命中消息' });
+  await expect(marked).toHaveCount(1);
+  await expect(marked).toContainText(keyword);
+  await expect(drawer.getByRole('button', { name: '加载后续消息' })).toBeVisible();
+  await drawer.getByRole('button', { name: '加载后续消息' }).click();
+  await expect(drawer).toContainText('较新的记录 21');
+  await expect(marked).toHaveCount(1);
+  await drawer.getByRole('button', { name: '返回列表' }).click();
+  await expect(drawer.getByRole('textbox', { name: '搜索独立对话' })).toHaveValue(keyword);
   await server.bots.update(first.bot.id, { enabled: false });
   await expect(drawer).not.toBeVisible();
   assert.equal((await get(base + first.bot.id + '/threads/' + thread)).status, 404);

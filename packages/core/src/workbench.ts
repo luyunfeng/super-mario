@@ -125,6 +125,7 @@ export async function createWorkbench(config: AppConfig) {
   const presence = createWebPresence();
   let notificationChannel: (bot: import('../../protocol/src/index.ts').FeishuBot) => string = () => { throw new InputError('通知渠道尚未连接', 503); };
   let mailboxProposer: ((input: Record<string, unknown>) => Json) | undefined;
+  let privateSearch: ((id: string, query: string, archived: boolean, before: string | null, sourceId?: string) => Json) | undefined;
   let privateConversation: ((botId: string, threadId: string, action: 'read' | 'update', input: JsonObject) => Json) | undefined;
   let botRelay: ((input: { sourceBotId: string; targetBotId: string; text: string; key: string; parentEntryId?: string; chatId?: string; sourceMessageId?: string }) => Promise<import('../../protocol/src/bots.ts').MailboxEntry>) | undefined;
   const configuredBots = () => botsStatus() as unknown as import('../../protocol/src/bots.ts').FeishuBot[];
@@ -367,7 +368,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(createStartPage(() => plugins.list()));
   plugins.register(tokenStatistics);
   plugins.register(todoCalendar);
-  plugins.register(conversationSearch(readWorkspaceCode));
+  plugins.register(conversationSearch(readWorkspaceCode, searchPrivateConversations));
   plugins.register(conversationDrafts);
   plugins.register(createRunComparison(readRunCommitDiff, (id, offset, version) => runWorktreeStatus(id, true, offset, version), readRunWorktreeChange, runWorktreeHistory));
   plugins.register(shortcutSettings);
@@ -1722,6 +1723,25 @@ export async function createWorkbench(config: AppConfig) {
       && peer.collaboration?.peerBotIds.includes(own.id) && canRelayBotScope(own.scope, peer.scope));
     return { self: { ...summarize(own), scope: scope ?? own.scope }, peers: peers.map(summarize), instructions: '机器人是可选渠道身份。绑定执行者时直接派发须使用该执行者，其他协作使用 bot_handoff；范围和确认仍由服务端核验。' } as unknown as Json;
   }
+  function searchPrivateConversations(args: Json): Json {
+    if (!args || typeof args !== 'object' || Array.isArray(args) || typeof args.query !== 'string'
+      || Object.keys(args).some(key => !['query', 'botId', 'archived', 'before'].includes(key))
+      || (args.archived !== undefined && typeof args.archived !== 'boolean') || (args.before !== undefined && typeof args.before !== 'string')
+      || (args.botId !== undefined && typeof args.botId !== 'string')) throw new InputError('独立对话检索参数无效');
+    const input = currentAgentInput();
+    if (!privateSearch || !input || input.role !== 'user' || input.readOnly || input.projectId || input.todoId || (input.origin && input.origin !== 'user'))
+      throw new InputError('当前输入无法检索机器人独立对话', 403);
+    const route = store.get<{ botId?: string }>('message.routes', input.id);
+    if (input.conversationId === 'main' && !route) {
+      if (!args.botId) throw new InputError('请先选择已配对的全局机器人');
+      return privateSearch(args.botId, args.query, args.archived === true, args.before ?? null);
+    }
+    if (!route?.botId || (args.botId !== undefined && args.botId !== route.botId)
+      || input.conversationId !== botConversationId({ id: route.botId, scope: { kind: 'global' } }))
+      throw new InputError('此会话不能检索该机器人的独立对话', 403);
+    assertBotInput(input);
+    return privateSearch(route.botId, args.query, args.archived === true, args.before ?? null, input.id);
+  }
   function managePrivateConversation(action: 'read' | 'update', args: JsonObject): Json {
     const input = currentAgentInput(), threadId = sourceThread(input);
     if (!privateConversation || !input || input.role !== 'user' || input.readOnly || (input.origin && input.origin !== 'user') || !threadId)
@@ -1802,6 +1822,7 @@ export async function createWorkbench(config: AppConfig) {
     },
     setAgentInputOwnerValidator(validate: typeof validateAgentInputOwner) { validateAgentInputOwner = validate; },
     setBotsStatus(status: () => Json) { botsStatus = status; },
+    setPrivateSearch(handler: NonNullable<typeof privateSearch>) { privateSearch = handler; },
     setPrivateConversation(handler: NonNullable<typeof privateConversation>) { privateConversation = handler; },
     setBotRelay(relay: NonNullable<typeof botRelay>) { botRelay = relay; },
     setBotScopeAccess(validate: typeof botScopeAccess) { botScopeAccess = validate; channelBindingsReady = true; scheduledWork.sync(); },

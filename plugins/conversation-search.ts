@@ -172,7 +172,7 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
 }
 
 type ReadFiles = (input: { projectId: string; kind: 'search'; query: string }) => Promise<Json>;
-export const conversationSearch = (readFiles: ReadFiles): Extension => ({
+export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input: Json) => Json): Extension => ({
   id: 'conversation-search', name: '对话历史搜索', capabilities: ['conversation.search'],
   permissions: ['contribute:tools', 'service.provide:conversation-search.saved', 'service.provide:conversation-search.projects', 'service.provide:conversation-search.files', 'service.provide:conversation-search.status', 'store.read', 'store.write'],
   activate(context) {
@@ -204,6 +204,17 @@ export const conversationSearch = (readFiles: ReadFiles): Extension => ({
       return readConversationStatus(context.store, input);
     };
     context.provide('conversation-search.status', status);
+    if (searchPrivate) context.contribute('tools', 'private_conversation_search', {
+      name: 'private_conversation_search', description: '在指定全局机器人的主人独立对话中按标题或发言片段查找，返回会话名、命中角色及摘录。Web 主对话提供 botId，飞书主人主会话自动限定当前机器人。archived=true 单查归档，before 用上页 nextBefore。',
+      parameters: { type: 'object', additionalProperties: false, required: ['query'], properties: {
+        query: { type: 'string' }, botId: { type: 'string' }, archived: { type: 'boolean' }, before: { type: 'string' },
+      } },
+      async execute(input, signal) {
+        signal.throwIfAborted();
+        if (!active) fail(503, '对话搜索插件已停用');
+        return searchPrivate(input);
+      },
+    });
     context.contribute('tools', 'conversation_status', {
       name: 'conversation_status', description: '查看当前会话已记录的进度、最近发言、明确执行目标和待用户决定的卡片。仅记录事实，无记录或结果未知时如实说明。',
       parameters: { type: 'object', additionalProperties: false, properties: {} },

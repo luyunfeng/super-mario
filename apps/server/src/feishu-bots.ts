@@ -1,4 +1,4 @@
-import { readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
+import { searchPrivateThreads, readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
 import { createPinnedWorkbench } from './feishu-pinned-workbench.ts';
 import { selectedAgentStatus, agentCard, agentCardSnapshot, type AgentCardSnapshot } from './feishu-agent-card.ts';
 import type { ConversationStatus } from '../../../plugins/conversation-status.ts';
@@ -1933,6 +1933,12 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       } catch { return false; }
     },
     canUseScope, privateThreads, privateThreadMetadata, updatePrivateThread,
+    searchPrivateHistory(id: string, query: string, archived: boolean, before: string | null, sourceId?: string) {
+      const bot = current(id), paired = owner(bot);
+      if (!paired?.senderId || bot.scope.kind !== 'global' || (sourceId && !privateTurn(bot, paired, sourceId)))
+        throw Object.assign(new Error('需要已配对全局机器人的主人私聊'), { status: 403 });
+      return searchPrivateThreads(app.store, privateThreads(id), query, archived, before);
+    },
     workbenchStatus: pins.status,
     async refreshCommandGroup() {
       await Promise.all(settings.list().filter(bot => bot.enabled && !bot.archivedAt &&

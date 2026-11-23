@@ -159,6 +159,7 @@ export function createFeishuGateway(
     return channel;
   });
   app.setBotScopeAccess((scope, botId, input, threadId) => bots.canUseScope(scope, botId, input, threadId));
+  app.setPrivateSearch(bots.searchPrivateHistory);
   app.setPrivateConversation((id, threadId, action, input) => action === 'read'
     ? bots.privateThreadMetadata(id, threadId) : bots.updatePrivateThread(id, threadId, input));
   function proposeMail(input: Record<string, unknown>) {
