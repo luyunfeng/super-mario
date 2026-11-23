@@ -64,7 +64,7 @@ export function createScheduledWorkService(options: {
     const run = runId ? store.get<Run>('runs', runId) : undefined;
     const matches = run && run.projectId === work.input.projectId && run.todoId === work.input.todoId
       && run.sourceMessageId === work.sourceMessage.id;
-    return { approvalStatus: approval.status, ...(matches ? { run: { id: run.id, status: run.status } } : {}) };
+    return { approvalStatus: approval.status, ...(matches ? { run: { id: run.id, status: run.status, executorId: run.executorId, updatedAt: run.updatedAt } } : {}) };
   }
   function historicalKind(work: ScheduledWorkRecord, occurrence: ScheduledWorkOccurrence) {
     if (occurrence.actionKind) return occurrence.actionKind;

@@ -26,7 +26,7 @@ test('current periodic dispatch approval runs the ordinary executor exactly once
  const receipt=(await f.request('/scheduled-work/history','POST',{workId:row.id,todoId:todo.id})).data.occurrences[0];
  const run=f.server.app.store.list<Run>('runs')[0];
  assert.equal(receipt.approvalStatus,'completed');
- assert.deepEqual(receipt.run,{id:run.id,status:run.status});
+ assert.deepEqual(receipt.run,{id:run.id,status:run.status,executorId:run.executorId,updatedAt:run.updatedAt});
  f.server.app.store.put('runs',run.id,{...run,todoId:'another-todo'});
  assert.equal((await f.request('/scheduled-work')).data.items[0].occurrences[0].run,undefined);
 });

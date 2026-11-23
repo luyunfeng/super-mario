@@ -222,6 +222,8 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       o.result?.messageId && line(`结果消息：${o.result.messageId}`),
       o.status === 'completed' && o.result?.messageId && Button({ label: '查看简报原文', size: 'sm', onClick: () => openBrief(item, o) }), o.error && line(o.error),
       o.approvalStatus === 'pending' && approvalLink(o.approvalId, () => editor?.close()),
+      o.run?.executorId && line('本次执行者：' + o.run.executorId),
+      o.run?.updatedAt && line('执行记录更新时间：' + timeText(o.run.updatedAt, item.schedule.tz)),
       o.run && h('a', { href: `#projects/${encodeURIComponent(item.projectId || 'all')}/runs/${encodeURIComponent(o.run.id)}`, onClick: () => editor?.close() }, '查看实际执行记录'));
   }
   function openHistory(item) {
