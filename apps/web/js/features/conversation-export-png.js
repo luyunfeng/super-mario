@@ -20,7 +20,7 @@ function inline(node, style, out) {
 
 function paragraphs(text, user) {
   if (!text) return [];
-  const doc = user ? text : renderFormattedText(text, undefined, { reply: true, streaming: true });
+  const doc = user ? text.replace(/\r\n?/g, '\n') : renderFormattedText(text, undefined, { reply: true, streaming: true });
   if (typeof doc === 'string') return [{ spans: [[doc, normal]] }];
   const result = [];
   function add(node, style, prefix = '', background) {

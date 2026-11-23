@@ -156,7 +156,7 @@ function replyQuotation(lines, streaming) {
 
 /** 将纯文本安全渲染为紧凑纯文本或轻量富文本节点。 */
 export function renderFormattedText(raw, tableAction, { reply = false, streaming = false } = {}) {
-  let text = String(raw ?? '');
+  let text = String(raw ?? '').replace(/\r\n?/g, '\n');
   let quoted;
   const reference = !reply && splitLeadingQuote(text);
   if (reference) {
@@ -194,7 +194,7 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
     if (olItems.length) { blocks.push(h('ol', { class: 'md-list md-list--num', start: olStart }, olItems)); olItems = []; }
   }
 
-  const lines = text.split(/\r?\n/);
+  const lines = text.split('\n');
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
     if (codeFence) {
