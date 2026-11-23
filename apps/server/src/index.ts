@@ -1141,13 +1141,13 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           res.writeHead(200,{'content-type':image.mime,'cache-control':'private, no-store','x-content-type-options':'nosniff'});
           return res.end(Buffer.from(image.data,'base64'));
         }
-        const webConversation=/^\/api\/v1\/web-conversations(?:\/([^/]+)(?:\/(messages)(?:\/receipts\/([^/]+)|\/([^/]+)\/stop)?)?)?$/.exec(path);
+        const webConversation=/^\/api\/v1\/web-conversations(?:\/([^/]+)(?:\/(messages)(?:\/receipts\/([^/]+)|\/([^/]+)\/(stop|edit-queued))?)?)?$/.exec(path);
         if(webConversation){
           const enabled=()=>{if(!app.plugins.list().some(p=>p.id==='web-conversations'&&p.status==='active'))throw new InputError('独立 Web 对话插件已停用',503);};
           enabled();
           if((method==='POST'||method==='PATCH'||method==='DELETE') && req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json')
             throw new InputError('独立对话需要 JSON 请求',415);
-          const [,id,messages,receiptKey,stopId]=webConversation;
+          const [,id,messages,receiptKey,stopId,action]=webConversation;
           const invoke=async(args:JsonObject)=>{
             enabled();
             const result=await app.plugins.invocations.use('web-conversations.manage',args);
@@ -1182,7 +1182,13 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             const conversationId='web:'+row.id;
             if(!messages && method==='GET')return json(res,200,row);
             if(stopId){
-              if(method!=='POST') throw new InputError('停止回复需要 POST 请求',405);
+              if(method!=='POST') throw new InputError('消息操作需要 POST 请求',405);
+              if(action==='edit-queued'){
+                const args=await body(req,1024);
+                if(Object.keys(args).some(key=>key!=='projectId') || args.projectId!==row.projectId)
+                  throw new InputError('取回消息需要原对话的项目范围',409);
+                return json(res,200,app.editQueuedTurn(conversationId,decodeURIComponent(stopId),row.projectId));
+              }
               if(Object.keys(await body(req,1024)).length) throw new InputError('停止本轮回复不接受附加参数');
               enabled();
               return json(res,200,app.stopWebConversation(row.id,row.projectId,decodeURIComponent(stopId)));

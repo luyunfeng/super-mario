@@ -1279,6 +1279,14 @@ export async function createWorkbench(config: AppConfig) {
   function queuedWebSource(conversationId:string,inputId:string) {
     requireConversationQueue();
     const input=store.get<Message>('messages',inputId);
+    if (conversationId.startsWith('web:')) {
+      const id=conversationId.slice(4);
+      if (!input || input.role!=='user' || !independentWebSource(store,input,conversationId,input.projectId))
+        throw new InputError('当前独立对话中未找到这条输入',404);
+      if (requireWebConversationHistory(store,id,input.projectId).archived || !webConversationAllowed(id,input.projectId))
+        throw new InputError('对话已归档或作用域已变化',409);
+      return input;
+    }
     if (!input || !input.directWebInput || input.conversationId!==conversationId || input.role!=='user' || input.replyTo ||
         (input.origin && input.origin!=='user') || store.get('message.routes',inputId) ||
         !(conversationId==='main' || (input.projectId && conversationId===`project:${input.projectId}:work`)))

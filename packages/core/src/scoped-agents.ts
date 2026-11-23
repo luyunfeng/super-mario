@@ -181,6 +181,7 @@ export function createScopedAgents(options: Options) {
     },
     cancelQueuedTurn(conversationId:string,inputId:string,beforeWithdraw?:()=>void):{outcome:'cancelled'|'started'|'idle'} {
       const input = options.store.get<Message>('messages',inputId);
+      if (conversationId.startsWith('web:')) return agents.get(conversationId)?.runtime.cancelQueuedTurn(inputId,beforeWithdraw) ?? {outcome:'idle'};
       if (!input?.projectId || !input.directWebInput || input.role !== 'user' || input.replyTo || (input.origin && input.origin!=='user') ||
           input.conversationId!==conversationId || conversationId!=='project:'+input.projectId+':work' ||
           options.store.get('message.routes',input.id)) return {outcome:'idle'};

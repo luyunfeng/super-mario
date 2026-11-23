@@ -1,3 +1,5 @@
+import {createQueuedDraftEditor} from './edit-queued.js';
+import {turnQueueActive} from './stop-turn.js';
 import {createWebImageExport} from './web-conversation-image-export.js';
 import {createReplyTranslation} from './reply-translation.js';
 import {webThreadStopButton} from './stop-turn.js';
@@ -95,6 +97,9 @@ export function createWebConversations({api,store,scope,router}){
     return {key:meta && !meta.archived && valid(current)?draftKey:null,owner:current?.owner,epoch,draft:input.value,body:quote.compose(captured,input.value.trim()).trim(),
       captured,images:pictures.capture(),files:files.capture(),conversation:'web:'+current?.id,projectId:meta?.projectId || undefined,url:path+'/'+current?.id+'/messages'};
   }
+  let queueEnabled=false;
+  const queuedEdit=createQueuedDraftEditor({api,store,input,pictures,files,context,isEditing:()=>!edit.notice.hidden,
+    isSending:()=>pending,persist:()=>store.view.snapshot?.plugins.some(p=>p.id==='conversation-drafts' && p.status==='active')});
   function confirmed(ctx){
     pictures.accepted(ctx);files.accepted(ctx);drafts.clearIf(ctx.key,ctx.draft);
     if(ctx.captured)quote.accepted(ctx.key,ctx.captured);
@@ -119,6 +124,8 @@ export function createWebConversations({api,store,scope,router}){
     const hidden=!readable || !conversationExportActive(store);
     if(hidden)exportDrawer?.close();
     const nextQuoteKey=readable && !meta.archived && store.view.snapshot.plugins.some(p=>p.id==='conversation-quotes' && p.status==='active') ? draftKey : null;
+    queuedEdit.observe(writableKey,drafts.owner(),!!writableKey);
+    const nextQueue=!!writableKey && turnQueueActive(store);
     const nextRetry=!!writableKey && turnRetryActive(store);
     const nextEdit=!!readable && !meta.archived && store.view.snapshot.plugins.some(p=>p.id==='conversation-edit' && p.status==='active');
     const editChanged=editEnabled!==nextEdit;
@@ -126,14 +133,14 @@ export function createWebConversations({api,store,scope,router}){
     if(editChanged || quoteChanged){editEnabled=nextEdit;edit.reset();}
     if(quoteChanged){quoteKey=nextQuoteKey;quote.restore(quoteKey);epoch++;}
     const nextTranslation=translation.update(readable ? rows : []);
-    if(translationEpoch!==nextTranslation || canStop!==!!writableKey || retryEnabled!==nextRetry || exportButton.hidden!==hidden || editChanged || quoteChanged || favoriteEpoch!==favorites.epoch || promptEpoch!==prompts.epoch){
-      translationEpoch=nextTranslation;canStop=!!writableKey;retryEnabled=nextRetry;promptEpoch=prompts.epoch;favoriteEpoch=favorites.epoch;
+    if(queueEnabled!==nextQueue || translationEpoch!==nextTranslation || canStop!==!!writableKey || retryEnabled!==nextRetry || exportButton.hidden!==hidden || editChanged || quoteChanged || favoriteEpoch!==favorites.epoch || promptEpoch!==prompts.epoch){
+      queueEnabled=nextQueue;translationEpoch=nextTranslation;canStop=!!writableKey;retryEnabled=nextRetry;promptEpoch=prompts.epoch;favoriteEpoch=favorites.epoch;
       exportButton.hidden=hidden;
       if(readable && rows.length)display();
     }
   }
   function reset(){
-    imageExport.reset();pictures.update(null,drafts.owner(),false,false);files.update(null,drafts.owner(),false);
+    queuedEdit.observe(null,drafts.owner(),false);queueEnabled=false;imageExport.reset();pictures.update(null,drafts.owner(),false,false);files.update(null,drafts.owner(),false);
     canStop=false;retryEnabled=false;editEnabled=false;edit.reset();prompts.changeScope();quoteKey=null;quote.restore(null);
     exportButton.hidden=true;exportDrawer?.close();exportDrawer=null;search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
     translation.update([]);favorites.update();input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
@@ -339,14 +346,14 @@ export function createWebConversations({api,store,scope,router}){
             messageImages(api,store,row,meta.archived ? undefined : pictures.editCopy.bind(null,draftKey),messages),messageFiles(api,store,row,rows,messages)),
           h('div',{class:'msg__meta row row--wrap'},copies.copyMessage(row,translation.displayedText),translation.action(row,text,copies.renderMessage),
             canStop && webThreadStopButton(api,row,meta,()=>valid(stamp) && meta?.id===stamp.id && !meta.archived && rows.includes(row)),
-            imageExport.checkbox(row),
+            queueEnabled && queuedEdit.action(row),imageExport.checkbox(row),
             row.origin!=='notification' && favorites.mark(row,meta.projectId,stamp.id,()=>valid(stamp) && meta?.id===stamp.id && rows.includes(row)),
             retryEnabled && retryTurn(row,rows,'web:'+stamp.id,id=>href(stamp.id,id),
               ()=>valid(stamp) && meta?.id===stamp.id && !meta.archived && rows.includes(row)),
             row.directWebInput && prompts.fromMessage(row),
             row.directWebInput && edit.action(row),
             quoteKey && row.origin!=='notification' && quote.action(row,row.role==='user'?'我':'助手'),
-            row.status==='pending' && h('small',{},'处理中…'),row.status==='failed' && h('small',{},row.stoppedByUser?'已停止本轮':'处理失败'),
+            row.status==='pending' && h('small',{},'处理中…'),row.status==='failed' && h('small',{},row.queueState==='withdrawn'?'已取回编辑':row.stoppedByUser?'已停止本轮':'处理失败'),
             h('button',{type:'button',class:'btn btn--ghost btn--icon btn--sm','aria-label':'复制消息链接',title:'复制消息链接',
               onclick:()=>copyLink(stamp,row.id)},icon('copy')))));
     }));

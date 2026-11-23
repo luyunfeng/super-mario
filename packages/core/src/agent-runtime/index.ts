@@ -834,13 +834,18 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     }
   }
 
+  function queueSource(input:Message) {
+    return directWebSource(store,input) || (ownConversation.startsWith('web:') && input.conversationId===ownConversation &&
+      !input.todoId && directWebInput(store,input) && options.canUseScope?.(input)===true);
+  }
+
   function cancelQueuedTurn(inputId:string, beforeWithdraw?:()=>void):{outcome:'cancelled'|'started'|'idle'} {
     const turn = pendingTurns.get(inputId);
     let changed = false;
     const outcome = store.transaction(() => {
       const input = store.get<Message>('messages',inputId);
       if (!input || input.role !== 'user' || input.conversationId !== ownConversation ||
-          !directWebSource(store,input) || options.canUseScope?.(input) === false) return 'idle';
+          !queueSource(input) || options.canUseScope?.(input) === false) return 'idle';
       if (!beforeWithdraw && input.queueState === 'cancelled' && input.status === 'failed' && input.stoppedByUser) return 'cancelled';
       if (!turn || turn.stopped || input.status !== 'pending') return 'idle';
       if (input.queueState === 'running') return 'started';
@@ -1306,7 +1311,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         ...(context?.readOnly || attachmentsOnly || scope?.kind === 'unmarked' ? { readOnly: true } : {}),
         createdAt: new Date().toISOString(), status: 'pending',
       };
-      if (directWebSource(store,message)) message.queueState = 'queued';
+      if (queueSource(message)) message.queueState = 'queued';
       const notifyDirect = !retry && message.directWebInput && options.onDirectWebInput;
       const existing = context?.files !== undefined || prepared.images.length || notifyDirect || context?.onAccepted ? store.transaction(() => {
         if (context?.files !== undefined) {

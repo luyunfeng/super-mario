@@ -44,6 +44,13 @@ test('独立 Web 对话只可停止原线正在处理的直接输入，排队及
   const stop=(path:string,id:string)=>call(path+'/messages/'+id+'/stop',{});
   const first=await ask(a,'SAMPLE_FIRST'), sibling=await ask(b,'SAMPLE_SIBLING');
   await t.waitFor(()=>assert.ok(streams.has('SAMPLE_FIRST') && streams.has('SAMPLE_SIBLING')));
+  const taken=await ask(a,'SAMPLE_WITHDRAW');
+  const take=(path:string)=>call(path+'/messages/'+taken.id+'/edit-queued',{projectId:project.id});
+  assert.equal((await take(b)).status,404);
+  const receipt=await data(await take(a),200);
+  assert.equal(receipt.input.queueState,'withdrawn');
+  assert.equal(receipt.input.text,'SAMPLE_WITHDRAW');
+  assert.deepEqual(await data(await take(a),200),receipt);
   const queued=await ask(a,'SAMPLE_NEXT');
   assert.deepEqual(await data(await stop(a,queued.id),200),{outcome:'idle'});
   assert.equal((await stop(b,first.id)).status,404);
@@ -61,6 +68,7 @@ test('独立 Web 对话只可停止原线正在处理的直接输入，排队及
   assert.equal(host.app.store.get<Message>('messages',sibling.id)?.status,'pending');
   for(const tag of ['SAMPLE_NEXT','SAMPLE_SIBLING'])streams.get(tag)!.end(frame({},'stop')+'data: [DONE]\n\n');
   await t.waitFor(()=>assert.ok([sibling,queued].every(input=>host.app.store.get<Message>('messages',input.id)?.status==='done')));
+  assert.ok(!streams.has('SAMPLE_WITHDRAW'));
   assert.deepEqual(await data(await stop(b,sibling.id),200),{outcome:'idle'});
   await data(await call('/plugins/web-conversations',{enabled:false}),200);
   assert.equal((await stop(b,sibling.id)).status,503);
