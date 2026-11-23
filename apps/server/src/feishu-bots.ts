@@ -24,7 +24,7 @@ import { createTopicRegistry } from './feishu-topic-registry.ts';
 import { groupTaskCommand, readGroupCommand, topicGroupCommand, topicOwnerWords } from '../../../plugins/feishu-read-command.ts';
 import { createThreadDeletionCleanup, deletedThreads, eraseThreadChannel, type DeletedThread } from './feishu-thread-delete.ts';
 import { parseStartForm, startCard, startCardSnapshot, type StartCardSnapshot } from './feishu-start-card.ts';
-import { trimUnicodeSpace, privateThreadTags, normalizeThreadTags, searchPrivateThreadList, searchPrivateThreads, privateThreadExport, readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
+import { trimUnicodeSpace, privateThreadTags, normalizeThreadTags, searchPrivateThreadList, searchPrivateThreadHits, searchPrivateThreads, privateThreadExport, readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
 import { createPinnedWorkbench } from './feishu-pinned-workbench.ts';
 import { selectedAgentStatus, agentCard, agentCardSnapshot, type AgentCardSnapshot } from './feishu-agent-card.ts';
 import type { ConversationStatus } from '../../../plugins/conversation-status.ts';
@@ -3804,7 +3804,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       return stamp?.revision === bot.revision && stamp.privateSenderId === paired.senderId && receipt?.id === input.id && receipt.status === 'completed';
     },
     topicChats, todoThread, bindWorkerTopic, canUseScope, listGroupReads, privateThreads, requireThread, deletePrivateThread, privateThreadMetadata, privateThreadSelection, updatePrivateThread, threadPreferenceKey, threadTagPreferences, threadOrder, listPrivateHistory,
-    searchPrivateHistory(id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string) {
+    searchPrivateHistory(id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string, threadId?: string) {
       const bot = current(id), paired = owner(bot);
       if (!paired?.senderId || bot.scope.kind !== 'global' || (sourceId && !privateTurn(bot, paired, sourceId)))
         throw Object.assign(new Error('需要已配对全局机器人的主人私聊'), { status: 403 });
@@ -3815,6 +3815,12 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         if (before !== null && index < 0) throw Object.assign(new Error('清单位置已失效，请重新读取'), { status: 409 });
         const items = rows.slice(index + 1, index + 21);
         return { items:sourceId ? items : items.map(row=>({...row,webCitation:historyLink(row.threadId)})), nextBefore: index + 1 + items.length < rows.length ? items.at(-1)!.threadId : null };
+      }
+      if (threadId !== undefined) {
+        const result = searchPrivateThreadHits(app.store, requireThread(id, threadId), query, archived, before, tag);
+        return { nextBefore: result.nextBefore, items: [{ ...privateThreadMetadata(id, threadId), hits: result.hits.map(hit => ({
+          ...hit, ...(!sourceId && { webCitation: '[查看原文](#agent/private-thread/' + [id, threadId, hit.id].map(encodeURIComponent).join('/') + ')' }),
+        })) }] };
       }
       const page=searchPrivateThreads(app.store,privateThreads(id),query,archived,before,tag);
       if(sourceId)return page;

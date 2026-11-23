@@ -3624,6 +3624,12 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
       assert.match(raw, /此会话不能检索该机器人的独立对话/);
       return call('private_conversation_search', { query: '青瓷样本', tag: '验收' }, 'find-source');
     }
+    if (req.callId === 'thread-hits') {
+      const page = JSON.parse(raw);
+      assert.ok(page.items[0].hits.some((hit: {excerpt:string}) => hit.excerpt.includes('青瓷样本')));
+      assert.equal(page.nextBefore, null);
+      return { role: 'assistant', content: '已从用户发言核对青瓷样本。' };
+    }
     const page = JSON.parse(raw);
     assert.equal(page.items.length, 1);
     const hit = page.items[0].hits.find((item: {role:string}) => item.role === 'user');
@@ -3632,7 +3638,7 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
     const failed=page.items[0].hits.find((item:{role:string})=>item.role==='assistant');
     assert.equal(failed.status,'failed');assert.equal(failed.createdAt,'2099-01-01T00:00:00.000Z');
     assert.equal(failed.webCitation,webSearch ? '[查看原文](#agent/private-thread/'+botId+'/'+page.items[0].threadId+'/failed-excerpt)' : undefined);
-    return { role: 'assistant', content: '已从用户发言核对青瓷样本。' };
+    return call('private_conversation_search', {query:'青瓷样本',threadId:page.items[0].threadId,tag:'验收',...(webSearch && {botId})}, 'thread-hits');
   }, options => {
     adapter = options;
     return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),

@@ -471,7 +471,7 @@ export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input:
       });
       context.contribute('tools', 'private_conversation_search', {
         name: 'private_conversation_search', description: '在指定全局机器人的主人独立对话中按标题、标签或发言片段查找。matchedTags 是命中的标签，hits 是匹配的发言摘录。Web 主对话提供 botId，飞书主人主会话自动限定当前机器人。archived=true 单查归档，tag 可精确限定一个标签，before 用上页 nextBefore。',
-        parameters: { type: 'object', additionalProperties: false, required: ['query'], properties: { ...filters, query: { type: 'string' } } },
+        parameters: { type: 'object', additionalProperties: false, required: ['query'], properties: { ...filters, threadId: { type: 'string', description: '使用分组结果中的 threadId 查询该对话的匹配发言，每页20条；before 使用该对话返回的 nextBefore' }, query: { type: 'string' } } },
         async execute(input, signal) {
           if (!input || typeof input !== 'object' || Array.isArray(input) || typeof input.query !== 'string') fail(400, '请提供要检索的词句');
           return run(input, signal);
