@@ -38,7 +38,7 @@ test('从主对话和项目工作区导出完整 Markdown，并通过插件配�
     server.app.store.put('messages', message.id, { createdAt, ...message });
 
   const mainText = '主对话的独立正文\n\n- 保留 Markdown 换行';
-  const tableText = '| **字段** | 值 |\n| --- | ---: |\n| A\\|B | =3+4 |\n| `标记` | "原文" |';
+  const tableText = '| **字段** | 值 |\n| --- | ---: |\n| A\\|B | =3+4 |\n| `标记` | "原文" |\n| 只填首列 |';
   const passage = '> 第一行\n> 第二行\n> 第三行\n> 第四行\n> 第五行';
   put({ id: 'pending-quote', conversationId: 'main', role: 'assistant', status: 'pending', projectId: project.id, text: passage });
   const sourceUrl = 'https://docs.example.test/reviews/item_(v2)?view=summary#notes';
@@ -116,7 +116,7 @@ test('从主对话和项目工作区导出完整 Markdown，并通过插件配�
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(sampleCode);
   const copyTable = tableMessage.getByRole('button', { name: '复制表格' });
   await copyTable.click();
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('字段\t值\nA|B\t\'=3+4\n标记\t"""原文"""');
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('字段\t值\nA|B\t\'=3+4\n标记\t"""原文"""\n只填首列\t');
   const html = await page.evaluate(async () => (await (await navigator.clipboard.read())[0]!.getType('text/html')).text());
   assert.match(html, /<table/);
   assert.match(html, /'=3\+4/);

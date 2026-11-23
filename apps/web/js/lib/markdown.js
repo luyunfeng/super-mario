@@ -253,10 +253,9 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
       if (header && divider?.length === header.length && divider.every(cell => /^:?-+:?$/.test(cell))) {
         flushPara();
         flushLists();
-        const row = (cells, tag) => h('tr', null, cells.map((cell, i) => {
-          const marker = divider[i];
+        const row = (cells, tag) => h('tr', null, divider.map((marker, i) => {
           const align = marker.endsWith(':') ? (marker.startsWith(':') ? 'center' : 'right') : 'left';
-          return h(tag, { style: { textAlign: align } }, renderInline(cell));
+          return h(tag, { style: { textAlign: align } }, renderInline(cells[i] ?? ''));
         }));
         const body = h('tbody');
         index++;
@@ -265,7 +264,7 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
           if (/^ {0,3}(?:`{3,}|~{3,})/.test(next)) break;
           const cells = tableCells(next);
           if (!cells) break;
-          body.append(row(cells.slice(0, header.length), 'td'));
+          body.append(row(cells, 'td'));
           index++;
         }
         const table = h('table', null, h('thead', null, row(header, 'th')), body);
