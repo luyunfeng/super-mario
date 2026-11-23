@@ -3397,7 +3397,8 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
       assert.ok(req.tools.includes('private_conversation_list'));
       if (JSON.stringify(req.content).includes('列出独立对话')) {
         assert.match(req.system, /清单位置不代表任务优先级或完成状态/);
-        return call('private_conversation_list', JSON.stringify(req.content).includes('网页') ? { botId } : {}, 'list-ordered');
+        webSearch=JSON.stringify(req.content).includes('网页');
+        return call('private_conversation_list', webSearch ? { botId } : {}, 'list-ordered');
       }
       assert.ok(req.tools.includes('private_conversation_search'));
       assert.match(req.system, /引用正文须写明会话标题和发言角色/);
@@ -3412,6 +3413,7 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
       const page = JSON.parse(raw);
       assert.deepEqual(page.items.map((item: {title: string}) => item.title),
         ['合成记要：周三交付青瓷样本', '合成记要：另一段无标签的青瓷样本']);
+      for(const item of page.items)assert.equal(item.webCitation,webSearch ? '[查看对话](#agent/private-thread/'+botId+'/'+item.threadId+')' : undefined);
       assert.ok(page.items.every((item: object) => !('hits' in item) && !('messages' in item)));
       return { role: 'assistant', content: '已按保存的顺序列出两个对话。' };
     }

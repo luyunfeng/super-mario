@@ -3792,16 +3792,17 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const bot = current(id), paired = owner(bot);
       if (!paired?.senderId || bot.scope.kind !== 'global' || (sourceId && !privateTurn(bot, paired, sourceId)))
         throw Object.assign(new Error('需要已配对全局机器人的主人私聊'), { status: 403 });
+      const historyLink=(threadId:string)=>'[查看对话](#agent/private-thread/'+[id,threadId].map(encodeURIComponent).join('/')+')';
       if (query === undefined) {
         const rows = listPrivateHistory(id, archived, tag);
         const index = before === null ? -1 : rows.findIndex(row => row.threadId === before);
         if (before !== null && index < 0) throw Object.assign(new Error('清单位置已失效，请重新读取'), { status: 409 });
         const items = rows.slice(index + 1, index + 21);
-        return { items, nextBefore: index + 1 + items.length < rows.length ? items.at(-1)!.threadId : null };
+        return { items:sourceId ? items : items.map(row=>({...row,webCitation:historyLink(row.threadId)})), nextBefore: index + 1 + items.length < rows.length ? items.at(-1)!.threadId : null };
       }
       const page=searchPrivateThreads(app.store,privateThreads(id),query,archived,before,tag);
       if(sourceId)return page;
-      return {...page,items:page.items.map(thread=>({...thread,hits:thread.hits.map(hit=>({...hit,
+      return {...page,items:page.items.map(thread=>({...thread,webCitation:historyLink(thread.threadId),hits:thread.hits.map(hit=>({...hit,
         webCitation:'[查看原文](#agent/private-thread/'+[id,thread.threadId,hit.id].map(encodeURIComponent).join('/')+')'
       }))}))};
     },
