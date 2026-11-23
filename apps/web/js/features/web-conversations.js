@@ -188,24 +188,32 @@ export function createWebConversations({api,store,scope,router}){
     }},h('label',{class:'field'},'对话标题',name),submit);
     const filter=h('select',{class:'input','aria-label':'对话状态'},h('option',{value:'active'},'进行中'),h('option',{value:'archived'},'已归档'));
     const searchTitle=h('input',{type:'search',class:'input','aria-label':'按标题查找',placeholder:'输入标题中的文字'});
-    let unwatch;
-    const drawer=openDrawer({title:'独立对话',body:[draft,h('label',{class:'field'},'对话状态',filter),searchTitle,status,list],onClose:()=>{unwatch?.();if(selector===drawer){selector=null;listRefresh=null;}}});
+    const lookup=h('button',{type:'button',class:'btn btn--sm'},'按正文查找');
+    const canSearch=()=>store.view.snapshot?.plugins.some(p=>p.id==='conversation-search' && p.status==='active');
+    lookup.hidden=!canSearch();
+    let bodyQuery='',unwatch;
+    const drawer=openDrawer({title:'独立对话',body:[draft,h('label',{class:'field'},'对话状态',filter),searchTitle,lookup,status,list],onClose:()=>{unwatch?.();if(selector===drawer){selector=null;listRefresh=null;}}});
     selector=drawer;
     const ok=()=>selector===drawer && drawer.el.open && active() && drafts.owner()===owner && listProject()===projectId;
     let request=0,items;
     function drawList(){
       if(!items || !ok())return;
       const term=searchTitle.value.trim().toLowerCase();
-      const matches=items.filter(row=>row.title.toLowerCase().includes(term));
-      status.textContent=matches.length?'':items.length?'没有匹配的对话标题。':filter.value==='archived'?'当前范围没有已归档对话。':'当前范围还没有独立对话。';
+      const matches=bodyQuery ? items : items.filter(row=>row.title.toLowerCase().includes(term));
+      status.textContent=matches.length?'':bodyQuery?'没有匹配的对话正文。':items.length?'没有匹配的对话标题。':filter.value==='archived'?'当前范围没有已归档对话。':'当前范围还没有独立对话。';
       replace(list,matches.map(row=>h('div',{class:'stack'},
         h('a',{class:'btn btn--ghost',href:href(row.id),onclick:()=>drawer.close()},row.title),
         h('small',{class:'muted'},timeAgo(row.lastInputAt || row.createdAt),row.lastInputId && [' · ',
-          h('a',{href:href(row.id,row.lastInputId),onclick:()=>drawer.close()},row.lastInputText || '查看最近发言')]))));
+          h('a',{href:href(row.id,row.lastInputId),onclick:()=>drawer.close()},row.lastInputText || '查看最近发言')]),
+        row.match && h('a',{href:href(row.id,row.match.id),onclick:()=>drawer.close()},row.match.text))));
     }
-    searchTitle.oninput=drawList;
+    lookup.onclick=()=>{if(canSearch() && searchTitle.value.trim()){bodyQuery=searchTitle.value.trim();void listRefresh();}};
+    searchTitle.maxLength=200;
+    searchTitle.placeholder='输入标题或正文中的文字';
+    searchTitle.oninput=()=>{if(bodyQuery){bodyQuery='';void listRefresh();}else drawList();};
     listRefresh=async(quiet=false)=>{
       const seq=++request,query=new URLSearchParams({projectId});
+      if(bodyQuery)query.set('query',bodyQuery);
       if(filter.value==='archived')query.set('archived','true');
       if(!quiet){items=undefined;replace(list);status.textContent='正在读取对话…';}
       try{
@@ -216,6 +224,8 @@ export function createWebConversations({api,store,scope,router}){
     };
     let previousChanges=store.view.messageQueueChanges,previousConnection=store.view.connection;
     unwatch=store.subscribe(view=>{
+      lookup.hidden=!canSearch();
+      if(lookup.hidden && bodyQuery){bodyQuery='';void listRefresh?.();}
       const changed=view.messageQueueChanges!==previousChanges && items?.some(row=>view.messageQueueChanges?.includes('web:'+row.id));
       const reconnected=view.connection==='online' && previousConnection!=='online';
       previousChanges=view.messageQueueChanges;previousConnection=view.connection;
