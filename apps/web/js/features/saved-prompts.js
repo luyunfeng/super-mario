@@ -92,7 +92,7 @@ export function openSavedPrompts({ api, store, initialText, isCurrent = () => tr
   }
   function edit(item) {
     deleting = undefined;
-    draft = item ? { ...item } : { name: '', text: '' };
+    draft = item ? { ...item, originalName: item.name, originalText: item.text } : { name: '', text: '' };
     error = '';
     draw();
     drawer.body.querySelector('input')?.focus();
@@ -100,7 +100,8 @@ export function openSavedPrompts({ api, store, initialText, isCurrent = () => tr
   function editor() {
     const name = Input({ required: true, value: draft.name, disabled: busy });
     const body = TextArea({ required: true, rows: 6, value: draft.text, disabled: busy });
-    const exists = doc.items.some(item => item.id === draft.id);
+    const exists = doc.items.find(item => item.id === draft.id);
+    const changed = exists && (exists.name !== draft.originalName || exists.text !== draft.originalText);
     const gone = draft.id && !exists;
     const full = !exists && doc.items.length >= 100;
     const nameHint = h('span'), bodyHint = h('span');
@@ -115,6 +116,8 @@ export function openSavedPrompts({ api, store, initialText, isCurrent = () => tr
         form.requestSubmit();
       }
     } },
+    changed && h('section', { class: 'stack', 'aria-label': '当前保存的版本' },
+      h('strong', null, '当前保存的版本 · /' + exists.name), h('pre', { class: 'mailbox-content' }, exists.text)),
     Field({ label: '名称', control: name, hint: nameHint }),
     Field({ label: '提示词正文', control: body, hint: bodyHint }),
     full && h('p', { role: 'status' }, '已保存 100 条提示词。请先删除一条，再新增。'),
@@ -268,7 +271,13 @@ export function attachSavedPrompts({ api, store, input, getScope = () => '' }) {
       items = doc.items;
       draw();
     } catch (cause) {
-      if (order === read && current()) { items = []; replace(menu, h('p', { role: 'alert' }, cause.message)); }
+      if (order !== read || !current()) return;
+      replace(menu, h('p', { role: 'alert' }, cause.message), Button({ label: '重新读取提示词', size: 'sm', onClick() {
+        if (!validMenu?.()) return;
+        input.focus();
+        reset();
+        void suggest();
+      } }));
     }
   }
   const listeners = new AbortController();
@@ -282,14 +291,14 @@ export function attachSavedPrompts({ api, store, input, getScope = () => '' }) {
   menu.addEventListener('focusout', leave, options);
   input.addEventListener('keydown', event => {
     if (menu.hidden || !validMenu?.() || event.isComposing || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
-    if (event.key === 'Escape') { event.preventDefault(); reset(); }
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); reset(); }
     if (matches.length && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
       event.preventDefault();
       selected = (selected + (event.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length;
       draw();
       menu.children[selected]?.scrollIntoView({ block: 'nearest' });
     }
-    if (event.key === 'Enter' && (!items || matches.length)) {
+    if ((event.key === 'Enter' && (!items || matches.length)) || (event.key === 'Tab' && matches.length)) {
       event.preventDefault();
       if (matches.length) choose(matches[selected]);
     }

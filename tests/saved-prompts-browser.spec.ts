@@ -84,7 +84,16 @@ test('本人消息可保存为常用提示词，主对话和项目斜杠菜单�
   await expect(page.locator('#messages .msg--assistant').first()).toBeVisible();
   await expect(page.locator('#messages .msg--assistant').getByRole('button', { name: '保存为提示词' })).toHaveCount(0);
 
+  await page.route('**/api/v1/saved-prompts', route => route.fulfill({
+    status: 503, contentType: 'application/json', body: JSON.stringify({ error: '暂时无法读取提示词' }),
+  }), { times: 1 });
   await main.fill('/rev');
+  const menu = page.getByRole('group', { name: '提示词候选' });
+  await expect(menu.getByRole('alert')).toContainText('暂时无法读取提示词');
+  await main.press('Enter');
+  await expect(main).toHaveValue('/rev');
+  await menu.getByRole('button', { name: '重新读取提示词' }).click();
+
   await expect(page.getByRole('button', { name: '/review', exact: true })).toBeVisible();
   await main.press('Enter');
   await expect(main).toHaveValue(template);
@@ -201,6 +210,7 @@ test('插件设置可管理提示词；并发编辑保留草稿，已打开的�
   await expect(left.getByRole('alert')).toContainText('已更新');
   await expect(leftBody).toHaveValue('第一窗口的未保存草稿。');
   await left.getByRole('button', { name: '刷新列表' }).click();
+  await expect(left.getByRole('region', { name: '当前保存的版本' })).toContainText('第二窗口提交的版本。');
   await expect(leftBody).toHaveValue('第一窗口的未保存草稿。');
   await left.getByRole('button', { name: '取消', exact: true }).click();
   await expect(left).toContainText('第二窗口提交的版本。');
@@ -247,6 +257,8 @@ test('插件设置可管理提示词；并发编辑保留草稿，已打开的�
   await expect(rows).toHaveCount(25);
   await input.fill('/PLAN');
   await expect(rows).toHaveText(['/plan', '/plan-beta', '/plan-alpha', '/xplan']);
-  await input.press('Enter');
-  await expect(input).toHaveValue('正文 plan');
+  await input.press('ArrowDown');
+  await input.press('Tab');
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue('正文 plan-beta');
 });
