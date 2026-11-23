@@ -86,12 +86,14 @@ test('飞书对话列表按可公开的最近发言排序，并为项目工作�
     return { botId: bot.id, accountId: bot.appId, revision: bot.revision, target: bot.chatId, ...routes.get(id) };
   } } as FeishuBotsApp['store'];
   const app = { store, projectWorkspace: { post: async () => { throw Error('unexpected post'); } } };
-  const { text, card } = conversationListDashboard(app, bot, 'grant', 'https://work.example');
+  const history = [{threadId:'thread-one', title:'季度复核', latestAt:'2026-01-02'}];
+  const { text, card } = conversationListDashboard(app, bot, 'grant', 'https://work.example', 0, history);
+  assert.ok(JSON.stringify(card).includes('https://work.example/#agent/private-thread/' + bot.id + '/thread-one'));
   assert.ok(text.includes('本次私聊答复') && text.includes('最近的问题'));
   assert.ok(text.indexOf('近期项目') < text.indexOf('主对话'));
   assert.match(text, /2026-01-03/);
   assert.doesNotMatch(text, /fixture-secret|归档项目|group|relay|other-chat|unknown-route|old|task|another-project|internal|notice|partial-reply/);
   assert.match(JSON.stringify(card), /https:\/\/work\.example\/#projects\/a%2Fb\/workspace/);
-  const local = conversationListDashboard(app, bot, 'grant', 'https://work.example/?token=private');
+  const local = conversationListDashboard(app, bot, 'grant', 'https://work.example/?token=private', 0, history);
   assert.doesNotMatch(JSON.stringify(local.card), /"url"|token=private/);
 });
