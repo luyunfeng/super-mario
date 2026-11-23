@@ -1,4 +1,5 @@
 // 高级：插件、插件文件、后台事件、界面、诊断。通常不用动，默认全部折叠。
+import {openAssistantCardExamples} from './assistant-card-examples.js';
 import { h, replace } from '../lib/dom.js';
 import { Button, Fold, Pill, Check } from '../ui/kit.js';
 import { hintsEnabled, setHintsEnabled } from '../ui/hint.js';
@@ -19,7 +20,11 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
 
   const hintsToggle = Check({ label: '显示每个功能右上角的作用说明', checked: hintsEnabled(), onChange: setHintsEnabled });
   const setupList = h('div', { class: 'stack' });
+  let examplesDrawer;
+  const examplesButton=Button({label:'助理卡片示例',size:'sm',onClick:()=>{examplesDrawer=openAssistantCardExamples();}});
+  examplesButton.hidden=true;
   const ui = Fold({ title: '界面', body: [hintsToggle,
+    examplesButton,
     Button({ label: '预览开屏', size: 'sm', onClick: () => window.dispatchEvent(new CustomEvent('workspace:preview-splash')) }),
     Button({ label: '设置记忆整理 Agent', size: 'sm', onClick: () => router.go(`${router.href('memory')}?curator=1`) }),
     h('div', { class: 'stack' }, h('h3', null, '入门进度'), setupList)] });
@@ -32,6 +37,8 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
     h('div', { class: 'fold__body' }, plugins, files, events, ui, diagnostics));
 
   function paint(snapshot) {
+    examplesButton.hidden=!snapshot.plugins?.some(p=>p.id==='assistant-card-examples' && p.status==='active');
+    if(examplesButton.hidden){examplesDrawer?.close();examplesDrawer=undefined;}
     const setup = snapshot.setup ?? {};
     replace(setupList, [['配置 Agent', setup.agent], ['新建项目', setup.project], ['添加记忆', setup.memory], ['连接飞书', setup.channel]].map(([name, value]) =>
       h('div', { class: 'row row--between' }, h('span', null, name), value === true || value === 'done' ? Pill('已完成', 'ok') : value === 'skipped' ? Pill('已跳过') : Pill('未完成', 'warn'))));
