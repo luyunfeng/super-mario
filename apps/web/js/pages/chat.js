@@ -42,12 +42,13 @@ export function createChatPage({ api, store, scope, router }) {
   const recent = createRecentWork({ api, store, router, scope });
   const banner = h('div', { id: 'chat-banner' });
   const decisionNotice = h('div', { role: 'status', hidden: true });
+  const decisionLabels = { approval: '审批', interaction: '交互请求', plan: '计划' };
   let pendingDecision = '';
   function revealDecision() {
     if (!pendingDecision || router.current.page !== 'chat' || !store.view.snapshot) return;
     const found = attention.reveal(pendingDecision);
     decisionNotice.hidden = found;
-    decisionNotice.textContent = found ? '' : pendingDecision.startsWith('approval:') ? '当前待处理列表中没有这条审批。' : '当前待处理列表中没有这条交互请求。';
+    decisionNotice.textContent = found ? '' : `当前待处理列表中没有这条${decisionLabels[pendingDecision.split(':')[0]]}。`;
     if (found) pendingDecision = '';
   }
   const setup = h('div', { id: 'onboarding' });
@@ -327,8 +328,8 @@ export function createChatPage({ api, store, scope, router }) {
       quote.restore(quotesEnabled ? draftKey : null);
       prompts.reset();
       recent.refresh();
-      const decisionType = route.query.has('approval') ? 'approval' : 'interaction';
-      const decisionId = route.query.get(decisionType);
+      const decisionType = Object.keys(decisionLabels).find(key => route.query.has(key));
+      const decisionId = decisionType && route.query.get(decisionType);
       pendingDecision = decisionId ? decisionType + ':' + decisionId : '';
       decisionNotice.hidden = true;
       revealDecision();
