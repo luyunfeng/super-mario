@@ -126,7 +126,6 @@ export function searchPrivateThreadList(store: Pick<Store, 'get' | 'list'>, rows
       const speaker=first.role==='assistant'?'助手':'你';
       const state=first.status==='pending'?'处理中':first.status==='failed'?'处理失败':'';
       snippets[thread.threadId] = [speaker,state,first.createdAt].filter(Boolean).join(' · ')+'\n'+(first.omittedBefore?'…':'')+first.excerpt+(first.omittedAfter?'…':'');
-      if (thread.hitCount > 1) snippets[thread.threadId] += '\n共匹配 ' + thread.hitCount + ' 条发言，此处显示最近一条。';
       messageIds[thread.threadId] = first.id;
     }
   }

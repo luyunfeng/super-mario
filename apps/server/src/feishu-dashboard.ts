@@ -64,11 +64,11 @@ export function dashboardHelp(sessions: boolean, scoped = false) {
 }
 
 export function conversationListDashboard(app: DashboardApp, bot: { conversationId: string; id: string; appId: string; revision: number; chatId: string },
-  navigation: string, webBase?: string, requestedPage = 0, history: { threadId: string; title: string; latestAt: string; tags?: string[] }[] = [],
+  navigation: string, webBase?: string, requestedPage = 0, history: { threadId: string; title: string; latestAt: string; tags?: string[]; hitCount?: number }[] = [],
   search?: { query: string; snippets: Record<string, string>; messageIds?: Record<string,string> }) {
-  type Row = { projectId: string; name: string; tags?: string[]; latest?: Message; conversationThreadId?: string; latestAt?: string };
+  type Row = { projectId: string; name: string; tags?: string[]; hitCount?: number; latest?: Message; conversationThreadId?: string; latestAt?: string };
   const independent: Row[] = history.map(thread => ({ projectId: '', name: '独立对话 · ' + thread.title,
-    conversationThreadId: thread.threadId, latestAt: thread.latestAt, tags: thread.tags }));
+    conversationThreadId: thread.threadId, latestAt: thread.latestAt, tags: thread.tags, hitCount:thread.hitCount }));
   function recentEntries() {
     const main: Row = { projectId: '', name: '主对话' };
     const rows = new Map<string, Row>([[bot.conversationId, main]]);
@@ -114,7 +114,8 @@ export function conversationListDashboard(app: DashboardApp, bot: { conversation
     const labels = row.tags?.length ? '标签：' + row.tags.map(tag => publicText(tag, 32)).join('、') : '';
     const snippet = search && row.conversationThreadId && Object.hasOwn(search.snippets, row.conversationThreadId)
       ? publicText(search.snippets[row.conversationThreadId], 700) : '';
-    const detail = search ? [publicText(row.name, 60), labels, snippet].filter(Boolean).join('\n') : [publicText(row.name, 60), labels, latest?.createdAt ?? row.latestAt, latest && publicText(latest.text, 100).replace(/\s+/g, ' ')].filter(Boolean).join(' · ');
+    const count = row.hitCount && row.hitCount > 1 ? `共匹配 ${row.hitCount} 条发言，此处显示最近一条。` : '';
+    const detail = search ? [publicText(row.name, 60), labels, count, snippet].filter(Boolean).join('\n') : [publicText(row.name, 60), labels, latest?.createdAt ?? row.latestAt, latest && publicText(latest.text, 100).replace(/\s+/g, ' ')].filter(Boolean).join(' · ');
     const threadId=row.conversationThreadId;
     const messageId=threadId && search?.messageIds?.[threadId];
     const link=threadId ? {label:messageId ? '查看原文' : '查看对话',

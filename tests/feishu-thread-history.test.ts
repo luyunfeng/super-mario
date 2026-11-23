@@ -36,7 +36,7 @@ test('独立对话记录按可见发言分页，排除其他配对、群组、�
   const [allMatches] = searchPrivateThreads(store, [row], '发言').items;
   assert.equal(allMatches.hitCount,44);
   assert.deepEqual(allMatches.hits.map(hit=>hit.id),['47','46','45']);
-  assert.match(searchPrivateThreadList(store,[row],'发言').snippets[row.threadId], /共匹配 44 条发言/);
+  assert.equal(searchPrivateThreadList(store,[row],'发言').threads[0].hitCount,44);
   const recent = privateThreadPage(store, row, null);
   assert.equal(recent.messages.length, 40);
   assert.equal(recent.nextBefore, '8');
