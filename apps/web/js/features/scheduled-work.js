@@ -3,7 +3,7 @@ import { h, replace } from '../lib/dom.js';
 import { Button, Card, Field, Input, Select, TextArea, Banner, Empty } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 
-const approvalText = value => ({ pending: '待批准', approved: '已批准', running: '处理中', executing: '处理中', completed: '已处理', rejected: '已拒绝', unknown: '结果未知', failed: '失败' }[value] ?? '未确认');
+import { approvalText } from '../lib/format.js';
 const timeText = value => value ? (Number.isNaN(Date.parse(value)) ? value : new Date(value).toLocaleString('zh-CN')) : '未提供';
 const chatLink = () => h('a', { href: '#chat' }, '去对话核对与确认');
 const approvalLink = (id, close) => h('a', { href: '#chat?approval=' + encodeURIComponent(id), onClick: close }, '查看待处理审批');

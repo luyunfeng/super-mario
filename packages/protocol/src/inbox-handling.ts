@@ -1,4 +1,4 @@
-import type { Json, Message } from './index.ts';
+import type { Approval, Json, Message } from './index.ts';
 
 /** Draft/confirmation evidence for existing Inbox/Todo/Approval records, not another task model. */
 export interface InboxHandlingRef { kind: 'personal' | 'mailbox'; id: string }
@@ -18,12 +18,16 @@ export interface InboxSuggestion {
   action: InboxHandlingAction; status: 'draft' | 'discarded' | 'submitted' | 'executing' | 'applied' | 'stale' | 'unknown';
   approvalId?: string; result?: Json; error?: string; createdAt: string; updatedAt: string;
 }
+export interface InboxSuggestionProgress {
+  total: number;
+  recent: { id: string; version: number; kind: InboxHandlingAction['kind']; status: InboxSuggestion['status']; approvalStatus?: Approval['status'] }[];
+}
 export interface InboxHandlingRequest {
   id: string; key: string; conversationId: string; status: 'pending' | 'completed' | 'failed' | 'unknown';
   error?: string; createdAt: string; updatedAt: string;
 }
 export interface InboxHandlingView {
   source: InboxHandlingSource; conversationId: string; available: boolean; reason?: string;
-  messages: Message[]; suggestions: InboxSuggestion[]; requests: InboxHandlingRequest[];
+  messages: Message[]; suggestions: (InboxSuggestion & { approvalStatus?: Approval['status'] })[]; requests: InboxHandlingRequest[];
 }
 export interface InboxHandlingState { source:InboxHandlingRef;stage:'human'|'ai'|'processing';label:string;runId?:string }

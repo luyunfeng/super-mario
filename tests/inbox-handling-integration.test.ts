@@ -61,7 +61,7 @@ test('editing or tampering with a bound approval never reaches generic plugin ac
 });
 test('model request is acknowledged once, has one user row and isolated editable output',async t=>{
   const f=await fixture(t);let calls=0;f.server.app.inboxHandlingRuntime.status=()=>({available:true});
-  f.server.app.inboxHandlingRuntime.ask=async(source,cid,text)=>{calls++;const user:Message={id:randomUUID(),conversationId:cid,role:'user',text,status:'done',createdAt:new Date().toISOString(),readOnly:true};f.server.app.store.put('messages',user.id,user);return{id:randomUUID(),conversationId:cid,role:'assistant',replyTo:user.id,status:'done',createdAt:new Date().toISOString(),text:JSON.stringify({answer:'仅分析',suggestions:[{kind:'todo',title:source.title,notes:'来源核对'}]})};};
+  f.server.app.inboxHandlingRuntime.ask=async(source,cid,text,progress)=>{assert.deepEqual(progress,{total:0,recent:[]});calls++;const user:Message={id:randomUUID(),conversationId:cid,role:'user',text,status:'done',createdAt:new Date().toISOString(),readOnly:true};f.server.app.store.put('messages',user.id,user);return{id:randomUUID(),conversationId:cid,role:'assistant',replyTo:user.id,status:'done',createdAt:new Date().toISOString(),text:JSON.stringify({answer:'仅分析',suggestions:[{kind:'todo',title:source.title,notes:'来源核对'}]})};};
   const version=(await f.api(f.route)).data.source.version,body={sourceVersion:version,text:'给出建议',key:'one-click'};
   const accepted=await f.api(f.route+'/messages','POST',body);assert.equal(accepted.status,202);assert.equal(accepted.data.status,'pending');assert.equal((await f.api(f.route+'/messages','POST',body)).data.id,accepted.data.id);
   await until(()=>f.server.app.inboxHandling.read({kind:'personal',id:f.item.id}).requests[0]?.status==='completed');

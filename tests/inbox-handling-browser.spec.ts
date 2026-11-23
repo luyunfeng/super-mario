@@ -100,7 +100,11 @@ test('编辑旧版本显式action，409保留草稿且手动核对；submitted�
 
 test('完整确认当前内容，只建审批；reply不可用可存不可确认，stale与执行状态禁用', { timeout: 30000 }, async () => fixture(async ({ page, calls, setHandler }) => {
   const data = view({ source: { ...view().source, replyAvailable: false, replyReason: '没有回复通道' }, suggestions: [suggestion(), suggestion({ id: 'reply', action: { kind: 'reply', text: '回复草稿' } }), ...['stale', 'executing', 'unknown', 'applied'].map(status => suggestion({ id: status, status }))] });
-  setHandler(c => c.method === 'GET' ? { data } : { data: { id: 'actual-approval-id' }, status: 201 });
+  setHandler(c => {
+    if (c.method === 'GET') return { data };
+    Object.assign(data.suggestions[0], { status: 'submitted', approvalId: 'actual-approval-id', approvalStatus: 'pending' });
+    return { data: { id: 'actual-approval-id', status: 'pending' }, status: 201 };
+  });
   await open(page); await expect(drawer(page)).toContainText('没有回复通道');
   await expect(page.getByRole('button', { name: '检查并提交审批' }).nth(1)).toBeDisabled();
   await expect(page.getByRole('button', { name: '检查并提交审批' }).nth(2)).toBeDisabled();
@@ -111,7 +115,10 @@ test('完整确认当前内容，只建审批；reply不可用可存不可确认
   assert.equal(calls.filter(c => c.method === 'POST').length, 0);
   await confirm.getByRole('button', { name: '提交当前建议审批' }).click(); await expect(drawer(page)).toContainText('审批 ID：actual-approval-id');
   assert.deepEqual(calls.find(c => c.method === 'POST'), { path: '/inbox-handling/personal/raw-a/suggestions/s1/confirm', method: 'POST', body: { sourceVersion: 3, version: 2 } });
-  await expect(page.getByRole('link', { name: '去对话审批' }).last()).toHaveAttribute('href', '#chat');
+  await expect(page.getByRole('link', { name: '去对话审批' }).last()).toHaveAttribute('href', '#chat?approval=actual-approval-id');
+  Object.assign(data.suggestions[0], { approvalStatus: 'rejected' }); await emit(page);
+  await expect(drawer(page)).toContainText('已拒绝');
+  await expect(page.getByRole('link', { name: '去对话审批' })).toHaveCount(0);
 }));
 
 test('202只受理、unknown不重放，GET请求事实；仅快照变化debounce读取', { timeout: 30000 }, async () => fixture(async ({ page, calls, setHandler }) => {

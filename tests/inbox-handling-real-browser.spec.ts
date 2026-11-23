@@ -33,7 +33,7 @@ test('actual Web/HTTP/SQLite: source drawer → chat approval → edit current s
   await submitCurrent();const old=server.app.approvals.list().find(a=>a.kind==='plugin:inbox-triage.handle-suggestion')!;
   await handling.getByRole('link',{name:'去对话审批',exact:true}).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);await expect(page.locator('#chat')).toBeVisible();
-  const more=page.locator('#attention').getByRole('button',{name:/还有.*件/});if(await more.isVisible())await more.click();
+  await expect(page).toHaveURL(server.url + '/#chat?approval=' + old.id);
   const originalCard=page.locator(`#attention [data-id="approval:${old.id}"]`);
   await originalCard.getByRole('button',{name:'改一下',exact:true}).click();
   await expect(handling).toBeVisible();await handling.getByRole('button',{name:'编辑建议',exact:true}).click();
@@ -41,10 +41,8 @@ test('actual Web/HTTP/SQLite: source drawer → chat approval → edit current s
   await handling.getByRole('button',{name:'保存建议（不执行）',exact:true}).click();
   await expect.poll(()=>server.app.approvals.list().find(a=>a.id===old.id)?.status).toBe('rejected');
   await submitCurrent();const next=server.app.approvals.list().find(a=>a.id!==old.id&&a.kind==='plugin:inbox-triage.handle-suggestion'&&a.status==='pending')!;assert.ok(next);
-  // The link targets the current route too: closing its own drawer is required
-  // even when the router has no hashchange to emit.
   await handling.getByRole('link',{name:'去对话审批',exact:true}).click();await expect(handling).toHaveCount(0);
-  if(await more.isVisible())await more.click();
+  await expect(page).toHaveURL(server.url + '/#chat?approval=' + next.id);
   await page.locator(`#attention [data-id="approval:${next.id}"]`).getByRole('button',{name:'批准',exact:true}).click();
   const consent=page.getByRole('dialog',{name:/高风险/});if(await consent.isVisible())await consent.getByRole('button',{name:'确认批准',exact:true}).click();
   await expect.poll(()=>server.app.todos().length).toBe(1);

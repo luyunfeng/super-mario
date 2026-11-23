@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
 import type { Approval, Json, Message } from '../../protocol/src/index.ts';
-import type { InboxHandlingAction, InboxHandlingRef, InboxHandlingRequest, InboxHandlingSource, InboxHandlingView, InboxSuggestion } from '../../protocol/src/inbox-handling.ts';
+import type { InboxHandlingAction, InboxHandlingRef, InboxHandlingRequest, InboxHandlingSource, InboxHandlingView, InboxSuggestion, InboxSuggestionProgress } from '../../protocol/src/inbox-handling.ts';
 import type { InboxHandlingState } from '../../protocol/src/inbox-handling.ts';
 import type { Run } from '../../protocol/src/index.ts';
 import { digest, stableJson } from './eventbox.ts';
@@ -11,7 +11,7 @@ export interface InboxHandlingOptions {
   store: Store; events: EventBus;
   readSource(ref: InboxHandlingRef): InboxHandlingSource;
   available(): { available: boolean; reason?: string };
-  think(source: InboxHandlingSource, conversationId: string, text: string): Promise<Message>;
+  think(source: InboxHandlingSource, conversationId: string, text: string, progress: InboxSuggestionProgress): Promise<Message>;
   proposeApproval(input: Pick<Approval, 'kind' | 'title' | 'details' | 'params'>): Approval;
   rejectApproval?(id:string,version:number):void;
   execute(source: InboxHandlingSource, action: InboxHandlingAction, key: string): Promise<Json>;
@@ -90,8 +90,8 @@ export function createInboxHandling(options: InboxHandlingOptions) {
   function putRequest(item: RequestRow) { store.put(requests, item.id, item); changed(item.id, item.status); return item; }
   function rejectOldApproval(row:InboxSuggestion){
     if(!row.approvalId||!options.rejectApproval)return;
-    const bound=store.get<Binding>(bindings,row.approvalId),approval=store.get<Approval>('approvals',row.approvalId);
-    if(bound&&approval?.status==='pending'&&matching(approval,bound.approval))synchronous(()=>options.rejectApproval!(approval.id,approval.version));
+    const approval = boundApproval(row);
+    if(approval?.status==='pending')synchronous(()=>options.rejectApproval!(approval.id,approval.version));
   }
   // A crash cannot prove whether an external call happened. Never replay on startup.
   store.transaction(() => {
@@ -158,9 +158,21 @@ export function createInboxHandling(options: InboxHandlingOptions) {
     return approval.id === expected.id && approval.version === expected.version && approval.kind === inboxHandlingApprovalKind &&
       approval.title === expected.title && approval.details === expected.details && stableJson(approval.params) === stableJson(expected.params);
   }
+  function boundApproval(row: InboxSuggestion) {
+    if (!row.approvalId) return;
+    const binding = store.get<Binding>(bindings, row.approvalId);
+    if (binding?.suggestionId !== row.id || binding.suggestionVersion !== row.version) return;
+    const approval = store.get<Approval>('approvals', row.approvalId);
+    if (approval && matching(approval, binding.approval)) return approval;
+  }
   async function runThink(row: RequestRow, initial: ReturnType<typeof source>) {
     try {
-      const result = await options.think(structuredClone(initial.value), row.conversationId, row.text);
+      const own = store.list<InboxSuggestion>(suggestions).filter(item => item.conversationId === row.conversationId)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
+      const recent = own.slice(0, 20).map(item => ({
+        id: item.id, version: item.version, kind: item.action.kind, status: item.status, approvalStatus: boundApproval(item)?.status,
+      }));
+      const result = await options.think(structuredClone(initial.value), row.conversationId, row.text, { total: own.length, recent });
       if (!result || result.conversationId !== row.conversationId || result.role !== 'assistant' || result.status !== 'done' || typeof result.text !== 'string' || typeof result.id !== 'string' || !result.id.trim() || typeof result.createdAt !== 'string') fail('模型返回无效');
       // Validate the entire JSON envelope before writing any suggestions. Plain
       // prose and invalid JSON remain useful history, but never become actions.
@@ -207,7 +219,7 @@ export function createInboxHandling(options: InboxHandlingOptions) {
         if(conversation.invalid||!used.has(conversation.id))continue;
         let latest:InboxHandlingSource;try{latest=synchronous(()=>options.readSource(conversation.source));}catch{continue;}
         if(!latest.active||conversationIdentity(latest)!==conversation.id)continue;
-        const own=drafts.filter(row=>row.conversationId===conversation.id),pending=own.some(row=>row.status==='draft'||row.status==='submitted'&&store.get<Approval>('approvals',row.approvalId!)?.status==='pending');
+        const own=drafts.filter(row=>row.conversationId===conversation.id),pending=own.some(row=>row.status==='draft'||row.status==='submitted'&&boundApproval(row)?.status==='pending');
         const runs=own.flatMap(row=>row.result&&typeof row.result==='object'&&!Array.isArray(row.result)&&typeof row.result.runId==='string'?[store.get<Run>('runs',row.result.runId)].filter((run):run is Run=>!!run):[]);
         const active=runs.find(run=>['queued','running'].includes(run.status));
         const blocked=runs.some(run=>blockedRuns.has(run.id));
@@ -232,7 +244,10 @@ export function createInboxHandling(options: InboxHandlingOptions) {
         // Owner-facing audit history survives archive/reassignment. The model
         // runtime still sees only the current conversation and its own receipts.
         messages: store.list<Message>('messages').filter(row => history.has(row.conversationId)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)),
-        suggestions: store.list<InboxSuggestion>(suggestions).filter(row => row.source.kind===ref.kind&&row.source.id===ref.id),
+        suggestions: store.list<InboxSuggestion>(suggestions).filter(row => row.source.kind===ref.kind&&row.source.id===ref.id).map(row => {
+          const approval = boundApproval(row);
+          return approval ? { ...row, approvalStatus: approval.status } : row;
+        }),
         requests: store.list<RequestRow>(requests).filter(row => row.conversationId === current.conversationId).map(publicRequest) };
     },
     post(ref: InboxHandlingRef, input: { sourceVersion: number; text: string; key: string }): InboxHandlingRequest {
@@ -305,9 +320,8 @@ export function createInboxHandling(options: InboxHandlingOptions) {
         const row = suggestion(current, input.id, input.version);
         if (row.action.kind === 'reply' && !current.value.replyAvailable) fail('当前来源不能发送回复，草稿已保留', 409);
         if (row.status === 'submitted') {
-          const binding = row.approvalId && store.get<Binding>(bindings, row.approvalId);
-          const saved = row.approvalId && store.get<Approval>('approvals', row.approvalId);
-          if (binding && saved && matching(saved, binding.approval)) return saved;
+          const saved = boundApproval(row);
+          if (saved) return saved;
           fail('审批已变化，请编辑建议后重新确认', 409);
         }
         const label={todo:'创建待办',dispatch:'派发任务',reply:'回复原消息',conclusion:'记录处理结论'}[row.action.kind];

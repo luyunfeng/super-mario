@@ -56,3 +56,5 @@ export function uuid() {
 }
 
 export const deliveryLabels = { queued: '等待发送', needs_approval: '待确认', sending: '发送中', sent: '已发送', held: '暂缓发送', failed: '发送失败', unknown: '结果未知', expired: '已过期', cancelled: '已取消' };
+
+export const approvalText = value => ({ pending: '待批准', approved: '已批准', running: '处理中', executing: '处理中', completed: '已处理', rejected: '已拒绝', unknown: '结果未知', failed: '失败' }[value] ?? '未确认');

@@ -106,6 +106,7 @@ test('real approval lifecycle binds exact content, confirms once and executes on
   const f = fixture(t), draft = f.save(), approval = f.confirm(draft);
   assert.equal(approval.kind, inboxHandlingApprovalKind);
   assert.deepEqual(approval.params.action, action);
+  assert.equal(f.inbox.read(ref).suggestions[0]?.approvalStatus, 'pending');
   assert.equal(f.confirm(draft).id, approval.id); assert.equal(f.approvals.list().length, 1);
   assert.throws(() => f.inbox.executeApproved({ ...approval, status: 'running' }), status(409));
   f.execute = async (source, actual, key) => {
@@ -117,9 +118,23 @@ test('real approval lifecycle binds exact content, confirms once and executes on
   };
   assert.equal((await f.approvals.approve(approval.id, approval.version)).status, 'completed');
   assert.equal(f.inbox.read(ref).suggestions[0]?.status, 'applied'); assert.equal(f.executions, 1);
+  assert.equal(f.inbox.read(ref).suggestions[0]?.approvalStatus, 'completed');
   await assert.rejects(f.approvals.approve(approval.id, approval.version), status(409));
   assert.throws(() => f.confirm(draft), status(409));
   assert.equal(f.store.list('todos').length, 0);
+});
+
+test('收件讨论仅带入当前来源版本的建议及对应审批状态', async t => {
+  const f = fixture(t), old = f.save();
+  f.confirm(old);
+  f.source({ title: '新版本来源' });
+  const current = f.save(), approval = f.confirm(current);
+  f.approvals.reject(approval.id, approval.version);
+  let received: unknown;
+  f.think = async (_source, cid, _text, progress) => { received = progress; return answer(cid); };
+  f.inbox.post(ref, { sourceVersion: 1, key: 'progress', text: '当前建议审批了吗？' });
+  await settled();
+  assert.deepEqual(received, { total: 1, recent: [{ id: current.id, version: 1, kind: 'todo', status: 'submitted', approvalStatus: 'rejected' }] });
 });
 
 test('editing submitted content increments version, invalidates old approval and requires a new confirmation', async t => {

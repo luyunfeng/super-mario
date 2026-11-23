@@ -1,12 +1,13 @@
 import { h, replace, debounce } from '../lib/dom.js';
 import { Banner, Button, Card, Field, Input, Select, TextArea } from '../ui/kit.js';
+import { approvalText } from '../lib/format.js';
 import { attachSentHistory } from './sent-history.js';
 import { createConversationDrafts } from '../lib/conversation-drafts.js';
 import { attachSavedPrompts } from './saved-prompts.js';
 import { openDrawer, confirmDialog } from '../ui/overlay.js';
 
 const TYPES = [['todo', '待办'], ['dispatch', '派发执行'], ['reply', '回复草稿'], ['conclusion', '处理结论']];
-const STATUS = { draft: '草稿', discarded: '已丢弃', submitted: '已提交审批（未执行）', executing: '执行中', applied: '已应用（不代表待办完成）', stale: '来源已过期', unknown: '结果未知', pending: '已持久受理，等待模型处理', completed: '模型请求已完成', failed: '模型请求失败' };
+const STATUS = { draft: '草稿', discarded: '已丢弃', submitted: '已提交审批', executing: '执行中', applied: '已应用（不代表待办完成）', stale: '来源已过期', unknown: '结果未知', pending: '已持久受理，等待模型处理', completed: '模型请求已完成', failed: '模型请求失败' };
 const locked = suggestion => ['discarded', 'applied', 'unknown', 'executing', 'stale'].includes(suggestion.status);
 const sessions = new WeakMap();
 const tokenWatches = new WeakMap();
@@ -171,7 +172,8 @@ export function openInboxHandlingDrawer({ api, store, source }) {
       const reason = confirmReason(item);
       return Card({ title: `${TYPES.find(([k]) => k === item.action.kind)?.[1] || item.action.kind} · 版本 ${item.version}`, body: h('div', { class: 'stack' },
         h('p', null, STATUS[item.status] || item.status), h('pre', { class: 'mailbox-content' }, actionText(item.action)),
-        item.error && h('p', null, item.error), item.approvalId && h('p', null, `审批 ID：${item.approvalId}（不代表已执行、已发送或已完成）`, h('a', { href: '#chat',onClick:()=>drawer.close() }, '查看已提交审批')),
+        item.error && h('p', null, item.error), item.approvalId && h('p', null, `审批 ID：${item.approvalId} · ${approvalText(item.approvalStatus)}`,
+          item.status === 'submitted' && item.approvalStatus === 'pending' && h('a', { href: '#chat?approval=' + encodeURIComponent(item.approvalId), onClick: () => drawer.close() }, '去对话审批')),
         item.result?.runId&&h('a',{href:`#projects/${encodeURIComponent(view.source.projectId||'all')}/runs/${encodeURIComponent(item.result.runId)}`,onClick:()=>drawer.close()},'查看实际执行记录'),
         item.result?.todoId&&h('p',null,`已关联待办：${item.result.todoId}`),
         item.result?.outboxId&&h('a',{href:'#outbox',onClick:()=>drawer.close()},'查看实际发件记录'),
@@ -327,8 +329,8 @@ export function openInboxHandlingDrawer({ api, store, source }) {
     if (confirmReason(item)) return;
     await post(`/suggestions/${encodeURIComponent(item.id)}/confirm`, { sourceVersion: view.source.version, version: item.version }, approval => {
       preview = undefined; replace(confirmation);
-      item.status = 'submitted'; item.approvalId = approval.id;
-      replace(result, h('p', null, `已提交审批，审批 ID：${approval.id}。未执行、未发送，不代表已完成。`), h('a', { href: '#chat', onclick: () => drawer.close() }, '去对话审批'));
+      item.status = 'submitted'; item.approvalId = approval.id; item.approvalStatus = approval.status;
+      replace(result, h('p', null, `已提交审批，审批 ID：${approval.id}。提交时未执行、未发送。`));
     }, item.id);
   }
   schedule();

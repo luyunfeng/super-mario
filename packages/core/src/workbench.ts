@@ -485,7 +485,7 @@ export async function createWorkbench(config: AppConfig) {
       return contributions.list('inbox_triage').length ? source : {...source,active:false,reason:'请先启用收件箱整理插件'};
     },
     available:()=>inboxHandlingRuntime.status(),
-    think:(source,conversationId,text)=>inboxHandlingRuntime.ask(source,conversationId,text),
+    think: (...args) => inboxHandlingRuntime.ask(...args),
     proposeApproval:input=>approvals.propose(input),rejectApproval:(id,version)=>{approvals.reject(id,version);},execute:executeInboxHandling,
   });
   const scheduledWork = createScheduledWorkService({store,events,schedules:background.schedules,approvals,currentInput:()=>currentAgentInput()??agent.currentInput(),
