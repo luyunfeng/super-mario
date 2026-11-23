@@ -126,15 +126,20 @@ test('批量移动非连续卡后撤销还原原序，另一窗口调序立即�
   t.after(()=>browser.close());
   const context=await browser.newContext({viewport:{width:1280,height:900}});
   await context.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
-  const open=async()=>{
+  let disconnect:(()=>Promise<void>)|undefined,connections=0;
+  const open=async(track=false)=>{
     const page=await context.newPage();
+    if(track) await page.routeWebSocket('**/api/v1/events*',ws=>{
+      const upstream=ws.connectToServer();connections++;
+      disconnect=async()=>{await ws.close();await upstream.close();};
+    });
     await page.goto(server.url+'/#projects/'+projectId+'/workspace?token='+token);
     await page.getByRole('button',{name:'工作区看板',exact:true}).click();
     const board=page.getByRole('dialog',{name:'工作区看板'});
     await expect(board.getByRole('checkbox',{name:'选择 '+names[0]})).toBeVisible();
     return board;
   };
-  const board=await open(),peer=await open();
+  const board=await open(true),peer=await open();
   const undo=board.getByRole('button',{name:'撤销上次批量操作',exact:true});
   const original=board.getByRole('region',{name:'待办',exact:true}).getByRole('link',{name:/^打开项目 /});
   const doing=board.getByRole('region',{name:'进行中',exact:true}).getByRole('link',{name:/^打开项目 /});
@@ -153,7 +158,11 @@ test('批量移动非连续卡后撤销还原原序，另一窗口调序立即�
   await board.getByRole('button',{name:'置顶',exact:true}).click();
   await expect(undo).toBeVisible();
   await expect(peer.getByText('已置顶',{exact:true})).toBeVisible();
+  const previous=connections;
+  assert.ok(disconnect);
+  await disconnect();
   await peer.getByRole('button',{name:'上移 '+names[2],exact:true}).press('Enter');
+  await expect.poll(()=>connections).toBeGreaterThan(previous);
   await expect(undo).toHaveCount(0);
   await expect(original).toHaveText(links([names[3],names[0],names[2],names[1]]));
   const drag=board.locator('[data-board-card]').filter({has:board.page().getByRole('checkbox',{name:'选择 '+names[0],exact:true})});

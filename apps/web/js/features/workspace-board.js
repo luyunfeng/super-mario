@@ -32,6 +32,7 @@ export function openWorkspaceBoard({ api, store, router }) {
   const preferenceKey = 'sm.workspace-board.view.' + owner;
   const selected = new Set();
   let board, undo, drag, dropTarget, historyDrawer, removeConfirmation, busy = false, stale = false;
+  let refreshAfterReconnect = false;
   let seenRevision = store.view.workspaceBoardRevision;
   const message = h('p', { role: 'status', class: 'muted small' });
   const refresh = Button({ label: '刷新看板', size: 'sm', onClick: () => request() });
@@ -301,7 +302,10 @@ export function openWorkspaceBoard({ api, store, router }) {
         controls.disabled = stale;
         refresh.disabled = false;
         const revision = store.view.workspaceBoardRevision;
-        if (!stale && Number.isSafeInteger(revision) && revision > board.revision && revision !== seenRevision) {
+        if (refreshAfterReconnect) {
+          refreshAfterReconnect = false;
+          void request();
+        } else if (!stale && Number.isSafeInteger(revision) && revision > board.revision && revision !== seenRevision) {
           seenRevision = revision;
           void request();
         }
@@ -320,7 +324,11 @@ export function openWorkspaceBoard({ api, store, router }) {
     if (automatic) { flow.update(); return; }
     const reconnected = connection !== 'online' && store.view.connection === 'online';
     connection = store.view.connection;
-    if (reconnected && !busy) { void request(); return; }
+    if (reconnected) {
+      if (busy) refreshAfterReconnect = true;
+      else void request();
+      return;
+    }
     const revision = store.view.workspaceBoardRevision;
     if (!busy && !stale && Number.isSafeInteger(revision) && revision !== seenRevision) {
       seenRevision = revision;
