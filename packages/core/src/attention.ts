@@ -2,6 +2,7 @@ import type { ChannelContribution } from '../../plugin-sdk/src/index.ts';
 import type { InboxConversation } from '../../protocol/src/inbox-conversations.ts';
 import { excludesPersonalGroupFromBrief } from '../../protocol/src/inbox-origin.ts';
 import type { Approval, QuestionItem, InboxItem, InboxOrigin, JsonObject, MailboxEntry, Project, FeishuBot } from '../../protocol/src/index.ts';
+import type { PendingOwnerReview } from './run-review.ts';
 import type { Plan } from './plans.ts';
 
 /** Read-only projection; action bodies are versioned descriptions, never executed here. */
@@ -22,7 +23,8 @@ export interface AttentionItem {
   runId?: string; contextRequestedAt?: string; decisionExplanation?: string;
   decisionDeadlineAt?: string; reversible?: boolean; deadlineRemindedAt?: string;
   id: string;
-  type: 'approval' | 'interaction' | 'inbox' | 'plan';
+  type: 'approval' | 'interaction' | 'inbox' | 'plan' | 'review';
+  evidenceVersion?:string;
   version: number;
   title: string;
   context: string;
@@ -50,6 +52,7 @@ interface InteractionInput {
   route?: AttentionItem['route']; suggestion?: string; userNotifiedAt?: string; todoId?: string;
 }
 interface AttentionInput {
+  reviews?: readonly PendingOwnerReview[];
   inboxConversations?: readonly InboxConversation[];
   approvals?: readonly Approval[];
   interactions?: readonly InteractionInput[];
@@ -79,13 +82,21 @@ export function* actionableInbox({ inbox = [], inboxConversations = [], mailboxe
   }
 }
 
-export function collectAttention({ inboxConversations = [], approvals = [], interactions = [], inbox = [], mailboxes = [], projects = [], bots = [], plans = [], channels }: AttentionInput = {}): AttentionItem[] {
+export function collectAttention({ reviews = [], inboxConversations = [], approvals = [], interactions = [], inbox = [], mailboxes = [], projects = [], bots = [], plans = [], channels }: AttentionInput = {}): AttentionItem[] {
   const rows: AttentionItem[] = [];
   const projectNames = new Map(projects.map(project => [project.id, project.name]));
   const project = (projectId?: string) => projectId ? { projectId, projectName: projectNames.get(projectId) } : {};
   const action = (collection: string, id: string, operation: string, version: number, label: string): AttentionAction => ({
     label, path: `/${collection}/${encodeURIComponent(id)}/${operation}`, method: 'POST', body: { version },
   });
+  for (const item of reviews) {
+    const {todoId,runId,version,evidenceVersion}=item;
+    const query=new URLSearchParams({reviewRun:runId,reviewVersion:String(version),reviewEvidence:evidenceVersion});
+    rows.push({id:'review:'+todoId,type:'review',todoId,runId,version,evidenceVersion,title:item.title,context:'交付待你验收',
+      detail:'完成标准：'+item.doneWhen+'\n证据来源：'+item.resultSource,source:'执行交付',createdAt:item.createdAt,...project(item.projectId),
+      route:{href:'#projects/'+encodeURIComponent(item.projectId??'all')+'/todos/detail/'+encodeURIComponent(todoId)+'?'+query,
+        label:'查看待验收交付'},actions:[]});
+  }
   for (const item of approvals) {
     if (item.status !== 'pending') continue;
     // Plugin actions have unknown side effects. Explicit risk metadata and destructive

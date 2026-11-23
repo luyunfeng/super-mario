@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { runScopeEvidence } from './run-scope.ts';
 import { reworkPrompt } from './prompts.ts';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
-import type { Message, Run, Todo } from '../../protocol/src/index.ts';
+import type { Message, Project, Run, Todo } from '../../protocol/src/index.ts';
 
 export const reworkRestartError = '服务重启，派发结果未知，不自动重试';
 
@@ -29,6 +29,10 @@ export interface RunReview {
   error?: string;
   createdAt: string;
   updatedAt: string;
+}
+export interface PendingOwnerReview {
+  todoId:string; title:string; projectId?:string; runId:string; version:number; evidenceVersion:string;
+  doneWhen:string; resultSource:string; createdAt:string;
 }
 export type ReviewEvidenceReader = (run: Run) => ExecutionReviewEvidence | undefined;
 export interface RunReviewDecision {
@@ -139,6 +143,28 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
         || (source.todoId !== undefined && source.todoId !== todoId)) throw new RunReviewError('来源消息证据与执行范围不匹配', 409);
     }
   }
+  function pendingForOwner(todoId:string):PendingOwnerReview | undefined {
+    const item=store.get<RunReview>(reviews,todoId);
+    if (!item || item.todoId!==todoId || item.status!=='pending' || !item.runIds?.includes(item.runId)) return;
+    const todo=store.get<Todo>('todos',todoId);
+    const delivery=store.get<Run>('runs',item.runId);
+    if (!todo || todo.id!==todoId || !delivery || delivery.id!==item.runId) return;
+    if (todo.projectId) {
+      const project=store.get<Project>('projects',todo.projectId);
+      if (project?.id!==todo.projectId || project.archivedAt) return;
+    }
+    const doneWhen=runScopeEvidence(store,delivery)?.currentDoneWhen ?? item.doneWhen;
+    try {
+      binding(todoId,delivery,doneWhen);
+      completionEvidence(delivery);
+    } catch (error) {
+      if (error instanceof RunReviewError) return;
+      throw error;
+    }
+    return {todoId,title:todo.title,...(todo.projectId && {projectId:todo.projectId}),runId:delivery.id,
+      version:item.version,evidenceVersion:evidenceVersion(delivery),doneWhen,resultSource:delivery.resultSource!,
+      createdAt:delivery.updatedAt>item.updatedAt?delivery.updatedAt:item.updatedAt};
+  }
   function assertCanComplete(todoId: string): void {
     text(todoId, 'todoId');
     const item = store.get<RunReview>(reviews, todoId);
@@ -178,6 +204,11 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
   return {
     get,
     assertCanComplete,
+    pendingForOwner,
+    pendingForOwnerList() {
+      return store.list<RunReview>(reviews).filter(item=>item.status==='pending')
+        .flatMap(item=>pendingForOwner(item.todoId) ?? []);
+    },
     /** Evidence for one visible execution. A later round cannot accept an older Run. */
     evidenceForRun(value: Run) {
       if (!value.todoId) return undefined;

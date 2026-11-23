@@ -11,6 +11,7 @@ import { openInboxHandlingDrawer } from './inbox-handling.js';
 const TYPES = {
   approval: { text: '审批', tone: 'warn' },
   interaction: { text: '提问', tone: 'info' },
+  review: { text: '待验收', tone:'warn' },
   plan: { text: '计划', tone: 'info' },
   inbox: { text: '消息', tone: '' },
 };

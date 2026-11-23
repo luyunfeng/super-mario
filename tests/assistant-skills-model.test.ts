@@ -631,6 +631,7 @@ test('Web 和飞书项目助手查返工依据，可翻页，跨项目读取被�
       assert.ok(req.tools.includes('todo_history'));
       assert.match(req.system, /回执未知就说明未知/);
       assert.match(req.system, /不能据此判断某轮交付已验收/);
+      assert.match(req.system, /review 为 pending.*答复与验收.*打开提醒只进入核对流程/);
       return projectOnly ? call('todo_history', { todoId: otherId }, 'foreign') : call('todo_history', { todoId }, 'latest');
     }
     if (req.callId === 'foreign') return call('todo_history', { todoId }, 'latest');

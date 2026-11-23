@@ -93,14 +93,30 @@ export function createTodosTab({ api, store, router }) {
     h('div', { class: 'row row--wrap' }, h('div', { class: 'grow' }, search), listControls, views.el), list);
   const detailPanel = h('div', { class: 'stack', hidden: true });
   const el = h('div', { id: 'panel-todos', role: 'tabpanel' }, listPanel, detailPanel);
-  let detailId, detail;
+  let detailId, detail, openedReview;
+  const reviewNotice=h('p',{class:'small',role:'alert',hidden:true});
+  function checkReviewLink(todo){
+    const route=router.current,query=route.query,runId=query.get('reviewRun');
+    if(!runId || route.page!=='projects' || route.parts[1]!=='todos' || route.parts[3]!==detailId ||
+      !store.view.snapshot || store.view.unauthorized || store.view.snapshotOwner!==api.draftOwner())return;
+    const key=JSON.stringify([store.view.snapshotOwner,detailId,runId,query.get('reviewVersion'),query.get('reviewEvidence')]);
+    if(openedReview===key)return;
+    openedReview=key;
+    const item=store.view.attention?.find(item=>item.type==='review' && item.todoId===todo?.id && item.projectId===todo?.projectId &&
+      item.runId===runId && String(item.version)===query.get('reviewVersion') && item.evidenceVersion===query.get('reviewEvidence'));
+    if(!todo || (todo.projectId || 'all')!==projectId || !item){
+      reviewNotice.hidden=false;reviewNotice.textContent='原交付或验收证据已变化，请从当前待验收事项重新打开。';return;
+    }
+    openTaskClosure({api,store,router,todo,runId,title:'验收交付',expectedReview:item});
+  }
   function paintDetail(snapshot) {
     if (!detailId) return;
     const todo = snapshot?.todos.find(item => item.id === detailId && inScope(item));
-    if (todo && detail && todo.projectId === detail.projectId) { detail.update(); return; }
+    if (todo && detail && todo.projectId === detail.projectId) { detail.update();checkReviewLink(todo);return; }
     detail = todo ? createTodoDetail({ api, store, router, todo, openEdit }) : undefined;
-    replace(detailPanel, h('a', { href: router.href('projects', projectId, 'todos') }, '返回待办列表'),
+    replace(detailPanel,reviewNotice,h('a', { href: router.href('projects', projectId, 'todos') }, '返回待办列表'),
       detail?.el ?? (snapshot ? Empty({ title: '找不到这条待办', text: '请核对待办是否仍属于当前项目。' }) : '正在读取待办…'));
+    checkReviewLink(todo);
   }
   const inScope = (todo) => projectId === 'all' || todo.projectId === projectId;
   const projectName = (id) => (store.view.snapshot?.projects ?? []).find(item => item.id === id)?.name;
@@ -439,7 +455,7 @@ export function createTodosTab({ api, store, router }) {
   return {
     el,
     show(id, selectedTodo) {
-      detail = undefined; detailId = selectedTodo;
+      detail = undefined; detailId = selectedTodo;openedReview=undefined;reviewNotice.hidden=true;
       detailPanel.replaceChildren();
       listPanel.hidden = Boolean(detailId);
       detailPanel.hidden = !detailId;

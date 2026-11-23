@@ -101,3 +101,40 @@ test('project follow-up applies actual policy presets atomically and requires ex
  await f.api(url,'PUT',{followUp,expectedUpdatedAt:'stale-project-version'},409);
  assert.equal(f.calls(),0);assert.equal(f.server.app.todos().length,1);
 });
+
+test('需要我仅展示已关联的本轮真实交付，依据或范围失效时撤下入口',async t=>{
+  const f=await fixture(t);
+  const base='/todos/'+f.todo.id;
+  const items=async()=> (await f.api('/attention') as {id:string;type:string;todoId:string;runId:string;
+    version:number;evidenceVersion:string;route:{label:string;href:string};actions:unknown[];detail:string}[]).filter(item=>item.type==='review');
+  const run=await f.launch();
+  assert.deepEqual(await items(),[]);
+  const review=await f.api(base+'/review','POST',{runId:run.id});
+  const [row]=await items();
+  assert.ok(row);
+  assert.equal(row.id,'review:'+f.todo.id);
+  assert.equal(row.version,review.version);
+  assert.equal(row.evidenceVersion,review.evidenceVersion);
+  assert.equal(row.runId,run.id);
+  assert.deepEqual(row.actions,[]);
+  assert.match(row.detail,/Controlled fixture evidence returned/);
+  assert.doesNotMatch(JSON.stringify(row),/Controlled executor delivered evidence/);
+  const [dest,query]=row.route.href.split('?');
+  assert.equal(dest,'#projects/'+f.project.id+'/todos/detail/'+f.todo.id);
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(query)),{reviewRun:run.id,reviewVersion:String(review.version),reviewEvidence:review.evidenceVersion});
+  for(const change of [{resultSource:'demo'},{status:'unknown'},{output:''},{todoId:'other'},{sourceMessageId:'unverified-source'}]) {
+    f.server.app.store.put('runs',run.id,{...run,...change});
+    assert.deepEqual(await items(),[]);
+  }
+  f.server.app.store.put('runs',run.id,{...run,output:'另一版已核实的合成交付'});
+  const [fresh]=await items();
+  assert.ok(fresh && fresh.evidenceVersion!==row.evidenceVersion);
+  await f.api(base+'/review/decide','POST',{action:'accept',runId:run.id,version:row.version,evidenceVersion:row.evidenceVersion},409);
+  f.server.app.store.put('projects',f.project.id,{...f.project,archivedAt:new Date().toISOString()});
+  assert.deepEqual(await items(),[]);
+  f.server.app.store.put('projects',f.project.id,f.project);
+  await f.api(base+'/review/decide','POST',{action:'accept',runId:run.id,version:fresh.version,evidenceVersion:fresh.evidenceVersion});
+  assert.deepEqual(await items(),[]);
+  await f.api(base,'PATCH',{completed:false});
+  assert.deepEqual(await items(),[]);
+});

@@ -2782,7 +2782,7 @@ export async function createWorkbench(config: AppConfig) {
     if(job)knowledgeSourceApproval.check(job);
     return result as unknown as import('../../protocol/src/index.ts').KnowledgeSourceResult;
   }
-  function attention() { return collectAttention({ inboxConversations: inboxAssistant.list(), plans: plans.list(), approvals: approvals.list(), interactions: pendingUserCards(), inbox: inbox.list(), mailboxes: mailboxes.list(), projects: projects.list(), bots: botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[], channels: contributions.list('channels').map(entry => entry.value) }); }
+  function attention() { return collectAttention({ reviews: runReview.pendingForOwnerList(), inboxConversations: inboxAssistant.list(), plans: plans.list(), approvals: approvals.list(), interactions: pendingUserCards(), inbox: inbox.list(), mailboxes: mailboxes.list(), projects: projects.list(), bots: botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[], channels: contributions.list('channels').map(entry => entry.value) }); }
   function skipChannel() {
     store.put('settings', 'setup.channel-skipped', { skipped: true });
     events.publish('setup.changed', {});

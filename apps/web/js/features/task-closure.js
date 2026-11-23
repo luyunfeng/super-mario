@@ -10,7 +10,7 @@ export function refreshTaskClosure(api) {
   if (active?.api === api) active.refreshCandidates();
 }
 
-export function openTaskClosure({ api, store, router, todo, runId, title = '答复与验收' }) {
+export function openTaskClosure({ api, store, router, todo, runId, expectedReview, title = '答复与验收' }) {
   active?.close();
   let alive = true, sequence = 0, busy = false, loaded = false, stale = false;
   let reporting, review, sources, configVersion, dirty = false;
@@ -114,6 +114,10 @@ export function openTaskClosure({ api, store, router, todo, runId, title = '答�
     try {
       const result = await api.get(`${base}/closure`);
       if (!alive || stamp !== sequence) return;
+      if(expectedReview && (!result.review || result.review.status!=='pending' || result.review.todoId!==todo.id ||
+          result.review.runId!==expectedReview.runId || result.review.version!==expectedReview.version || result.review.evidenceVersion!==expectedReview.evidenceVersion)){
+        stale=true;loaded=false;notice.textContent='原交付或验收证据已变化，请关闭后重新核对。';replace(evidence);sync();return;
+      }
       reporting = result.reporting; review = result.review; sources = result.sources; loaded = true; stale = false;
       // 编辑中的开关和其基准版本一起保留，避免迟到的读取覆盖用户意图。
       if (!dirty) { required.checked = reporting.required; delivery.checked = reporting.requireDelivery; configVersion = reporting.version; }

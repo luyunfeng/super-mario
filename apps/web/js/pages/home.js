@@ -149,8 +149,8 @@ export function createHomePage({ api, router, scope, store }) {
       groups.push({ id: '', name: '未归项目' });
     const total = key => briefing.reduce((n,p) => n + p[key].length, 0);
     replace(body, h('div', { class: 'home-priorities' },
-      priorityCard('需要我', '等待你回答、确认或批准', attention,
-        item => link(attentionHref(item), item.title), '当前没有待确认事项。'),
+      priorityCard('需要我', '等待你回答、确认、批准或验收', attention,
+        item => link(attentionHref(item), item.type==='review'?'待验收 · '+item.title:item.title), '当前没有待确认事项。'),
       priorityCard('重要紧急', '已逾期或未来 24 小时到期的待办', open.filter(urgent), todoLink, '没有即将到期的待办。'),
       priorityCard('重要不急', '其余已进入待办的事项，按截止时间排列', open.filter(t => !urgent(t)), todoLink, '没有其他未完成待办。')),
     Card({ title: '简报', sub: '最近 24 小时', body: [briefError ? h('div', { class: 'stack' }, muted(briefError), h('button', { type:'button', class:'btn btn--sm', onclick:readBrief }, '重试读取简报')) : !brief ? muted('正在读取简报…') :
