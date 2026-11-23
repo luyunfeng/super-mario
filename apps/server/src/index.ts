@@ -4,6 +4,7 @@ import {createAdminAuth} from './admin-auth.ts';
 import {createBrowserPassword} from './browser-password.ts';
 import {createPublicPasswordRoutes} from './browser-password-routes.ts';
 import {createAdminRoutes} from './admin-routes.ts';
+import { readWebThreadAssistant } from '../../../plugins/assistant-profile.ts';
 import {proofForBrowserToken} from '../../../plugins/browser-devices.ts';
 import {createBrowserAccess,pairingQR} from './browser-access.ts';
 import { privateThreadPage, searchPrivateThreads } from './feishu-thread-history.ts';
@@ -45,6 +46,12 @@ async function body(req: IncomingMessage, maxBytes = 1024 * 1024): Promise<Recor
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new InputError('请求必须是JSON对象');
   return value as Record<string, unknown>;
 }
+function assistantScopedInput(url: URL, input: JsonObject): JsonObject {
+  const owners = url.searchParams.getAll('assistantId');
+  if (owners.length > 1 || Object.hasOwn(input, 'assistantId')) throw new InputError('请在查询参数中指定一个助理 ID');
+  return owners.length ? {...input, assistantId:owners[0]!} : input;
+}
+
 function answerInput(input: Record<string,unknown>, versioned = false): string | QuestionResponse[] {
   if (Object.keys(input).some(key => key !== 'text' && key !== 'answers' && !(key === 'version' && versioned)) ||
       Object.hasOwn(input,'text') === Object.hasOwn(input,'answers')) throw new InputError('请提交一种回答格式');
@@ -1183,7 +1190,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             const row=await invoke({action:'get',id}) as {id:string;projectId?:string;archived:boolean};
             if(row?.id!==id.toLowerCase())throw new InputError('独立对话登记与请求不一致',409);
             const conversationId='web:'+row.id;
-            if(!messages && method==='GET')return json(res,200,row);
+            if(!messages && method==='GET') {
+              const assistantId = readWebThreadAssistant(app.store, row.id)?.id;
+              return json(res, 200, {...row, ...(assistantId && {assistantId})});
+            }
             if(queue){
               if(method==='GET')return json(res,200,app.queuedMessages(conversationId,row.projectId));
               if(method==='POST')return json(res,200,app.reorderQueuedMessages(conversationId,row.projectId,undefined,await body(req)));
@@ -1362,12 +1372,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (!app.plugins.list().some(plugin => plugin.id === 'assistant-skills' && plugin.status === 'active'))
             throw new InputError('主助手技能插件已停用', 503);
           const input = await body(req, 6 * 1024 * 1024) as JsonObject;
-          const owners = url.searchParams.getAll('assistantId');
-          if (owners.length > 1 || Object.hasOwn(input, 'assistantId')) throw new InputError('请在查询参数中指定一个助理 ID');
           if (method === 'DELETE' && input.action !== undefined && input.action !== 'remove') throw new InputError('删除请求只支持移除技能');
-          return json(res, 200, await app.plugins.invocations.use('assistant-skills.manage', {
-            ...input, ...(method === 'DELETE' && {action:'remove'}), ...(owners.length && {assistantId:owners[0]!}),
-          }));
+          return json(res, 200, await app.plugins.invocations.use('assistant-skills.manage',
+            assistantScopedInput(url, method === 'DELETE' ? {...input, action:'remove'} : input)));
         }
         if (path === '/api/v1/start-page' && method === 'POST') {
           if (!app.plugins.list().some(p => p.id === 'start-page' && p.status === 'active')) throw new InputError('启动页插件已停用', 503);
@@ -1398,11 +1405,12 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             throw new InputError('工作区看板插件已停用', 503);
           return json(res, 200, await app.plugins.invocations.use('workspace-board.manage', await body(req) as JsonObject));
         }
-        if (path === '/api/v1/saved-prompts' && method === 'POST') {
+        if (path === '/api/v1/saved-prompts' && (method === 'POST' || method === 'GET')) {
           if (!app.plugins.list().some(plugin => plugin.id === 'saved-prompts' && plugin.status === 'active')) {
             throw new InputError('常用提示词插件已停用', 503);
           }
-          return json(res, 200, await app.plugins.invocations.use('saved-prompts.manage', await body(req) as JsonObject));
+          const input = method === 'GET' ? {action:'list'} : await body(req) as JsonObject;
+          return json(res, 200, await app.plugins.invocations.use('saved-prompts.manage', assistantScopedInput(url, input)));
         }
         if (path === '/api/v1/saved-searches' && (method === 'GET' || method === 'POST')) {
           const input = method === 'GET' ? { action: 'list' } : await body(req) as JsonObject;

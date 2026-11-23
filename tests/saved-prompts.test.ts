@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { startServer } from '../apps/server/src/index.ts';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -70,4 +72,52 @@ test('saved prompts bound Unicode code points, control characters and collection
   for (let i = 1; i < 100; i++) await call({ ...create, revision: i, name: 'prompt_' + i, text: '短句' });
   await assert.rejects(call({ ...create, revision: 100, name: 'extra' }), { status: 400 });
   assert.equal((await call({ action: 'list' })).items.length, 100);
+});
+
+test('常用提示词的 HTTP 读写、版本和通知按会话绑定的助理隔离', async t => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'sm-prompt-owners-'));
+  const server = await startServer({dataDir, host:'127.0.0.1', port:0, demo:true});
+  t.after(async () => { await server.close(); await rm(dataDir, {recursive:true, force:true}); });
+  const request = (path:string, data?:object) => fetch(server.url + '/api/v1' + path, data && {
+    method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(data),
+  });
+  const ok = async (path:string, data?:object) => {
+    const response = await request(path, data);
+    assert.ok(response.ok, await response.clone().text());
+    return response.json();
+  };
+  const ids = [randomUUID(), randomUUID()];
+  const paths = ['/saved-prompts', ...ids.map(id => '/saved-prompts?assistantId=' + id)];
+  const threads = [];
+  for (const id of ids) {
+    await ok('/assistant-roster', {action:'create', id, name:'合成助理', instructions:''});
+    const {threadId} = await ok('/assistant-roster', {action:'open', id});
+    threads.push('/web-conversations/' + threadId);
+    assert.equal((await ok(threads.at(-1)!)).assistantId, id);
+  }
+  const ordinary = await ok('/web-conversations', {id:randomUUID(), title:'普通对话'});
+  assert.equal((await ok('/web-conversations/' + ordinary.id)).assistantId, undefined);
+  const create = {action:'create', revision:0, name:'report', text:'合成默认模板'};
+  const books = await Promise.all(paths.map((path, i) => ok(path, {...create, text:create.text + i})));
+  for (const [i,path] of paths.entries()) assert.deepEqual(await ok(path), books[i]);
+  const changes = server.app.events.since(0).filter(event => event.type === 'saved-prompts.changed');
+  assert.equal(changes.length, paths.length);
+  for (const id of [undefined, ...ids]) {
+    const event = changes.find(row => (row.data as JsonObject).assistantId === id);
+    assert.deepEqual(event?.data, {revision:1, ...(id && {assistantId:id})});
+  }
+  const item = books[1].items[0];
+  assert.equal((await request(paths[2], {action:'update', revision:1, id:item.id, name:'other', text:'跨目录'})).status, 404);
+  assert.equal((await request(paths[1], {...create, name:'other'})).status, 409);
+  await ok(paths[1], {action:'remove', revision:1, id:item.id});
+  assert.deepEqual((await ok(paths[1])).items, []);
+  assert.deepEqual(await ok(paths[2]), books[2]);
+  assert.equal((await request('/saved-prompts?assistantId=' + randomUUID())).status, 404);
+  assert.equal((await request('/saved-prompts?assistantId=')).status, 400);
+  assert.equal((await request(paths[1] + '&assistantId=' + ids[1])).status, 400);
+  assert.equal((await request(paths[1], {action:'list', assistantId:ids[1]})).status, 400);
+  await ok('/plugins/assistant-profile', {enabled:false});
+  assert.equal((await ok(threads[0])).assistantId, ids[0]);
+  assert.equal((await request(paths[1])).status, 503);
+  assert.deepEqual(await ok(paths[0]), books[0]);
 });

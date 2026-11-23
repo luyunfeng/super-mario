@@ -88,7 +88,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput, currentAgentReplyId, type OfficeFileOrigin } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage, readNativeShareMessages } from './native-conversation-export.ts';
-import { eraseWebConversationRegistration, webConversationsExtension, webConversationMatches, independentWebSource, requireWebConversationHistory, readWebConversationExport, createBrowserDevices, createUsageSources, type UsageWindowCache, type UsageInventoryPage, type UsageInventoryReader, feishuMessageReactionsExtension, type FeishuReactionReader, feishuChatPinsExtension, type FeishuPinReader, type FeishuPinOriginalReader, type FeishuPinTopicReader, feishuEditHistoryExtension, type FeishuHistoryReader, createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, assistantCardExamples, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, createAssistantProfile, requireRosterAssistant, readWebThreadAssistant, projectInstructions, createConversationSharing, createWorkspaceBoard, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, searchKnowledgeCommentPeople, verifyKnowledgeCommentActor, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
+import { eraseWebConversationRegistration, webConversationsExtension, webConversationMatches, independentWebSource, requireWebConversationHistory, readWebConversationExport, createBrowserDevices, createUsageSources, type UsageWindowCache, type UsageInventoryPage, type UsageInventoryReader, feishuMessageReactionsExtension, type FeishuReactionReader, feishuChatPinsExtension, type FeishuPinReader, type FeishuPinOriginalReader, type FeishuPinTopicReader, feishuEditHistoryExtension, type FeishuHistoryReader, createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, assistantCardExamples, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, createAssistantProfile, requireRosterAssistant, readWebThreadAssistant, projectInstructions, createConversationSharing, createWorkspaceBoard, createSavedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, searchKnowledgeCommentPeople, verifyKnowledgeCommentActor, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
@@ -549,7 +549,12 @@ export async function createWorkbench(config: AppConfig) {
   }));
   plugins.register(createConversationSharing(config.token,(source,selection,signal)=>readNativeShareMessages(machines,source,selection,signal)));
   plugins.register(createWorkspaceBoard(() => todoDecisionIds(store), run => runReview.evidenceForRun(run), () => readRunBlockers(store, Date.now())));
-  plugins.register(savedPrompts);
+  function requireActiveAssistant(id: string) {
+    if (!plugins.list().some(plugin => plugin.id === 'assistant-profile' && plugin.status === 'active'))
+      throw new InputError('助理资料插件已停用', 503);
+    requireRosterAssistant(store, id);
+  }
+  plugins.register(createSavedPrompts(requireActiveAssistant));
   plugins.register(projectInstructions);
   plugins.register(createAssistantProfile(input => plugins.invocations.use('web-conversations.manage', input)));
   plugins.register(createOfficeDocuments({
@@ -578,11 +583,7 @@ export async function createWorkbench(config: AppConfig) {
       return !!source && canGenerateOffice(source);
     },
   }));
-  plugins.register(createAssistantSkills(() => machines, id => {
-    if (!plugins.list().some(plugin => plugin.id === 'assistant-profile' && plugin.status === 'active'))
-      throw new InputError('助理资料插件已停用', 503);
-    requireRosterAssistant(store, id);
-  }));
+  plugins.register(createAssistantSkills(() => machines, requireActiveAssistant));
   plugins.register(createMessageFavorites((source, offset, signal) => readNativeFavoritePage(machines, source, offset, signal)));
   plugins.register(createConversationExport((source, includeWork, signal) => exportNativeConversation(machines, source, includeWork, signal), currentMainAssistant, (botId, threadId) => {
     if (!privateExport) throw new InputError('飞书独立对话服务尚未连接', 503);

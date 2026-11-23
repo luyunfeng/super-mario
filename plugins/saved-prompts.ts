@@ -13,8 +13,8 @@ function fail(status: number, message: string): never {
   throw Object.assign(new Error(message), { status });
 }
 
-function read(store: Store): Book {
-  return store.get<Book>('saved-prompts', 'collection') ?? { revision: 0, items: [] };
+function read(store: Store, key: string): Book {
+  return store.get<Book>('saved-prompts', key) ?? { revision: 0, items: [] };
 }
 
 function normalize(name: Json | undefined, text: Json | undefined) {
@@ -35,18 +35,27 @@ function reordered(items: Prompt[], ids: Json | undefined): Prompt[] {
   return ids.map(id => byId.get(id as string) ?? fail(409, '排序包含未知提示词'));
 }
 
-function manage({ store, events }: ExtensionContext, input: Json): Json {
+function manage({ store, events }: ExtensionContext, input: Json, requireAssistant?: (id: string) => void): Json {
   if (!input || typeof input !== 'object' || Array.isArray(input)
     || typeof input.action !== 'string' || !Object.hasOwn(fields, input.action)) fail(400, '提示词操作无效');
   const action = input.action as keyof typeof fields;
   const allowed: readonly string[] = fields[action];
-  if (Object.keys(input).some(key => key !== 'action' && !allowed.includes(key))) fail(400, '提示词操作包含未知字段');
-  if (action === 'list') return read(store);
+  if (Object.keys(input).some(key => key !== 'action' && key !== 'assistantId' && !allowed.includes(key))) fail(400, '提示词操作包含未知字段');
+  let assistantId: string | undefined;
+  if (input.assistantId !== undefined) {
+    if (typeof input.assistantId !== 'string' || !input.assistantId) fail(400, '助理 ID 无效');
+    if (!requireAssistant) fail(503, '助理名册不可用');
+    assistantId = input.assistantId.toLowerCase();
+    requireAssistant(assistantId);
+  }
+  // The default owner's pre-existing SQLite record is kept in place.
+  const key = assistantId ?? 'collection';
+  if (action === 'list') return read(store, key);
   const revision = input.revision;
   if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0 || revision >= Number.MAX_SAFE_INTEGER)
     fail(400, '提示词版本无效');
   return store.transaction(() => {
-    const book = read(store);
+    const book = read(store, key);
     if (book.revision !== revision) fail(409, '提示词列表已更新，请重新加载');
     let items = [...book.items];
     if (action === 'reorder') {
@@ -77,16 +86,20 @@ function manage({ store, events }: ExtensionContext, input: Json): Json {
       }
     }
     const next = { revision: revision + 1, items };
-    store.put('saved-prompts', 'collection', next);
-    events.publish('saved-prompts.changed', { revision: next.revision });
+    store.put('saved-prompts', key, next);
+    events.publish('saved-prompts.changed', { revision: next.revision, ...(assistantId && {assistantId}) });
     return next;
   });
 }
 
-export const savedPrompts: Extension = {
-  id: 'saved-prompts', name: '常用提示词', capabilities: ['prompts.manage'],
-  permissions: ['service.provide:saved-prompts.manage', 'store.read', 'store.write', 'events.publish'],
-  activate(context) {
-    context.provide('saved-prompts.manage', input => manage(context, input));
-  },
-};
+export function createSavedPrompts(requireAssistant?: (id: string) => void): Extension {
+  return {
+    id: 'saved-prompts', name: '常用提示词', capabilities: ['prompts.manage'],
+    permissions: ['service.provide:saved-prompts.manage', 'store.read', 'store.write', 'events.publish'],
+    activate(context) {
+      context.provide('saved-prompts.manage', input => manage(context, input, requireAssistant));
+    },
+  };
+}
+
+export const savedPrompts = createSavedPrompts();

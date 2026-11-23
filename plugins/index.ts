@@ -38,7 +38,7 @@ export { assistantProfile, createAssistantProfile, requireRosterAssistant, readW
 export { projectInstructions } from './project-instructions.ts';
 export { createConversationSharing } from './conversation-sharing.ts';
 export { createWorkspaceBoard } from './workspace-board.ts';
-export { savedPrompts } from './saved-prompts.ts';
+export { createSavedPrompts, savedPrompts } from './saved-prompts.ts';
 // Draft text is owned by the browser. The host only advertises the user's plugin setting.
 export const conversationEdit: Extension = {
   id: 'conversation-edit', name: '编辑为新消息', capabilities: ['web.conversation.edit'], activate() {},
