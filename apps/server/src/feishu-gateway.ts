@@ -139,6 +139,7 @@ export function createFeishuGateway(
   }
   const pins=createInboxPins(app,dependencies.personalPins??createPersonalPins(),currentPersonalActor);
   const reactions=createInboxReactions(app,dependencies.personalReactions??createPersonalReactions(),currentPersonalActor);
+  app.setFeishuFileReader(readFileText);
   app.setFeishuReactionReader(reactions.list);
   app.setFeishuPinReader(pins.list);
   app.setFeishuPinOriginalReader(pins.readListedOriginal);
