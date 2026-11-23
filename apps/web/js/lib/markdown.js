@@ -5,6 +5,7 @@ import { toast } from '../ui/overlay.js';
 
 // Workbench citations use explicit routes. External references open outside the workbench.
 const inlineTokens = new RegExp([
+  /\[查看原文\]\(#inbox\?item=[a-f0-9]{64}\)/.source,
   /\[查看待决定事项\]\(#inbox\?conversation=[a-f0-9]{64}\)/.source,
   /\[查看待决定事项\]\(#chat\?(?:approval|interaction|plan|mailbox|inbox)=[A-Za-z0-9_-]{1,128}\)/.source,
   /\[查看订阅运行记录\]\(#memory\?subscriptionRuns=[A-Za-z0-9_-]{1,128}\)/.source,

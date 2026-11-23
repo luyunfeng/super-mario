@@ -777,7 +777,8 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if(typeof args.id!=='string' || !args.id || args.id.length>256) throw Error('请提供原始收件编号');
           signal.throwIfAborted();
           const file=await actions.inboxFileText!(args.id,signal);
-          return {...file,workspaceRoute:'#inbox?item='+encodeURIComponent(args.id)};
+          const workspaceRoute='#inbox?item='+encodeURIComponent(args.id);
+          return {...file,workspaceRoute,webCitation:'[查看原文]('+workspaceRoute+')'};
         },{id:{type:'string'}},['id']));
         if (actions?.inboxTree) context.contribute('tools', 'inbox_tree', tool('inbox_tree', '按真实收件编号查询本项、从近到远的可见父项以及直接子项，含真实来源和工作台入口；已归组时返回所属收件事项、可见前序和后续事项。只读。', async (args,signal) => {
           signal.throwIfAborted();

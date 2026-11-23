@@ -11,7 +11,10 @@ test('飞书个人文件按需读取、失败重试、换账号清空，普通�
   const token='test-only-file-preview';
   const server=await startServer({host:'127.0.0.1',port:0,dataDir,demo:true,token});
   t.after(async()=>{await server.close();await rm(dataDir,{recursive:true,force:true});});
-  for(const [id,file] of [['with-file',true],['fake-file',false]] as const){
+  const fileId='a'.repeat(64);
+  server.app.store.put('messages','attachment-answer',{id:'attachment-answer',conversationId:'main',role:'assistant',status:'done',
+    createdAt:new Date().toISOString(),text:'合成附件的出处 [查看原文](#inbox?item='+fileId+')'});
+  for(const [id,file] of [[fileId,true],['fake-file',false]] as const){
     const message='om_'+id;
     server.app.store.put('inbox',id,{id,source:'feishu:cli_fixture:ou_fixture',thread:'feishu:message:'+JSON.stringify(['oc_fixture',message]),
       last:message,title:'合成附件',text:'文件附件：样例.pdf',tier:'fyi',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),version:1,
@@ -22,13 +25,14 @@ test('飞书个人文件按需读取、失败重试、换账号清空，普通�
   await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
   const text='合成正文 <b>只作文字</b>';
   let reads=0;
-  await page.route('**/inbox/with-file/file-text',r=>++reads===1
+  await page.route('**/inbox/'+fileId+'/file-text',r=>++reads===1
     ? r.fulfill({status:403,json:{error:'权限不足'}})
     : r.fulfill({json:{name:'样例.pdf',text,truncated:true}}));
   await page.goto(server.url+'/#inbox?item=fake-file&token='+token);
   const drawer=page.getByRole('dialog',{name:'收件箱消息详情'}),toggle=drawer.getByText('读取附件正文',{exact:true});
   await expect(drawer).toBeVisible();await expect(toggle).toHaveCount(0);
-  await page.goto(server.url+'/#inbox?item=with-file');
+  await page.goto(server.url+'/#chat');
+  await page.getByRole('link',{name:'查看原文',exact:true}).click();
   await expect(toggle).toBeVisible();assert.equal(reads,0);
   await toggle.click();await expect(drawer.getByRole('alert')).toContainText('权限不足');
   await drawer.getByRole('button',{name:'重新读取附件'}).click();
