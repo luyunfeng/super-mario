@@ -235,6 +235,7 @@ export function compareRuns({ run, runs, projectId, router, executorName, api, s
       h('div', null, item.usage
         ? `本次 Token：输入 ${item.usage.input.toLocaleString()} · 输出 ${item.usage.output.toLocaleString()}`
         : '本次 Token：未上报'),
+      index !== undefined && h('p', {class:'small'}, item.id === run.id ? '当前执行（比较基准）' : usageDifference(item)),
       item.commitChanges ? h('div', { class: 'stack' },
         h('span', null, `目录内已提交差异：${item.commitChanges.files} 个文件 · +${item.commitChanges.added} / −${item.commitChanges.deleted} 行`),
         h('code', { class: 'small', title: item.commitChanges.base + ' → ' + item.commitChanges.head },

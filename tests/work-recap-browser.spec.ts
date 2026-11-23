@@ -98,7 +98,7 @@ test('execution comparison keeps project boundaries, opens either record and sur
   const other = server.app.projects.create({ name: '独立项目' });
   const now = new Date().toISOString();
   const first: Run = {
-    id: 'first', projectId: project.id, prompt: '第一轮任务', executorId: 'demo', conversationId: 'main',
+    id: 'first', comparisonRunIds:['first','second'], projectId: project.id, prompt: '第一轮任务', executorId: 'demo', conversationId: 'main',
     status: 'completed', output: '第一轮交付', createdAt: now, updatedAt: now,
   };
   server.app.store.put('runs', first.id, first);
@@ -125,6 +125,10 @@ test('execution comparison keeps project boundaries, opens either record and sur
   await expect(comparison).toContainText('所选执行相对当前执行的 Token 差额：输入 +2 · 输出 -4');
   await comparison.getByRole('link', { name: '查看执行详情' }).last().click();
   await expect(page).toHaveURL(/runs\/second$/);
+  await page.goto(server.url + '/#projects/all/runs/second?compare=group');
+  const grouped = comparison.getByRole('article');
+  await expect(grouped.last()).toContainText('当前执行（比较基准）');
+  await expect(grouped.first()).toContainText('Token 差额：输入 -2 · 输出 +4');
   await page.goto(base + '?compare=outside');
   await expect(comparison).toContainText('此记录无法与当前执行对比');
   await expect(comparison).not.toContainText('其他项目交付');
