@@ -6,45 +6,79 @@ import { openDrawer } from '../ui/overlay.js';
 // The same conversation can be selected from its bot in Feishu or its named row on the Web.
 function conversationModelPicker(api, path, name) {
   const catalog = h('div', { class: 'stack', 'aria-live': 'polite' });
-  const load = async () => {
+  const load = async (notice = '') => {
     refresh.disabled = true;
     catalog.textContent = '正在读取模型清单…';
     try {
       const result = await api.get(path + '/catalog');
       const description = result.source === 'builtin' ? '内置目录，账号权限需另行核实。'
-        : result.source === 'configured' ? '仅列出配置中记录的模型。' : '自动选择模型。';
-      const current = h('p');
-      const report = value => {
-        current.textContent = (result.demo ? '演示模式。' : '') +
-          (value ? `${name}当前配置为 ${result.provider} / ${value}。` : `${name}尚无已选模型记录。`) + description;
-      };
-      report(result.current);
+        : result.source === 'configured' ? '目录基于当前接入配置。' : '自动选择模型。';
+      const current = h('p', null, (result.demo ? '演示模式。' : '') +
+        (result.current ? `${name}当前配置为 ${result.provider} / ${result.current}。` : `${name}尚无已选模型记录。`) + description);
       catalog.replaceChildren(current);
-      if (!result.models.length) return;
-      const list = Select({ name: 'catalogModels', options: result.models.map(id => [id, id]), value: result.current });
-      const feedback = h('p', { role: 'status' });
-      const apply = Button({ label: '应用到此会话', size: 'sm', disabled: true, onClick: async () => {
-        list.disabled = true;
-        refresh.disabled = true;
+      const feedback = h('p', { role: 'status' }, notice);
+      if (!result.models.length && !result.typed) {
+        catalog.append(feedback);
+        return;
+      }
+      const custom = result.custom ?? [];
+      const options = result.models.map(id => [id, custom.includes(id) ? id + '（使用历史）' : id]);
+      const unlisted = result.current && !result.models.includes(result.current);
+      if (unlisted) options.unshift([result.current, result.current + '（当前型号，目录外）']);
+      if (result.typed) options.push(['', '手动输入型号…']);
+      const list = Select({ name: 'catalogModels', options, value: result.current });
+      if (unlisted) list.options[0].disabled = true;
+      const input = Input({ name: 'typedModel', placeholder: '输入完整型号' });
+      const typedField = Field({ label: '手动输入型号', control: input,
+        hint: '真实会话成功使用后，型号会加入此接入的使用历史。' });
+      function sync(busy = false) {
+        const typed = result.typed && list.value === '';
+        const model = typed ? input.value.trim() : list.value;
+        const invalid = typed && model && (model.length > 256 || !/^~?[a-z0-9][a-z0-9._/\-:@\[\]]*$/i.test(model));
+        typedField.hidden = !typed;
+        list.disabled = input.disabled = refresh.disabled = busy;
+        apply.disabled = busy || !model || invalid || model === result.current;
+        forget.hidden = typed || !custom.includes(list.value);
+        forget.disabled = busy;
+        if (invalid) feedback.textContent = '型号须以字母、数字或 ~ 加字母数字开头，最长 256 字节，可使用 . _ - / : @ [ ]。';
+      }
+      async function mutate(forgetHistory) {
+        const typed = result.typed && list.value === '';
+        const model = typed ? input.value.trim() : list.value;
+        sync(true);
+        let message;
         try {
-          const saved = await api.put(path + '/pick', { model: list.value });
-          result.current = saved.current;
-          report(saved.current);
-          feedback.textContent = '已保存，下条消息使用所选模型。';
+          if (forgetHistory) {
+            const query = new URLSearchParams({ model });
+            if (result.revision) query.set('revision', result.revision);
+            const saved = await api.del(path + '/custom?' + query);
+            message = saved.forgotten ? '已从使用历史移除，当前会话型号保持不变。' : '使用历史中已没有此型号。';
+          } else {
+            const body = { model };
+            if (result.revision) body.revision = result.revision;
+            if (typed && !result.models.includes(model)) body.typed = true;
+            await api.put(path + '/pick', body);
+            message = '已保存，下条消息使用所选模型。';
+          }
         } catch (cause) {
-          feedback.textContent = cause.status && cause.status < 500 ? `切换失败：${cause.message}` : '切换结果未知，请重新查看清单核对。';
-        } finally {
-          list.disabled = false;
-          refresh.disabled = false;
-          apply.disabled = list.value === result.current;
+          const action = forgetHistory ? '移除' : '切换';
+          feedback.textContent = cause.status && cause.status < 500 ? `${action}失败：${cause.message}` : `${action}结果未知，请重新查看清单核对。`;
+          sync();
+          return;
         }
-      } });
-      list.addEventListener('change', () => { apply.disabled = list.value === result.current; feedback.textContent = ''; });
-      catalog.append(Field({ label: `模型清单（${result.models.length}）`, control: list }), apply, feedback);
-    } catch { catalog.textContent = '模型清单读取失败，可重新查看。'; }
+        await load(message);
+      }
+      const apply = Button({ label: '应用到此会话', size: 'sm', onClick: () => mutate(false) });
+      const forget = Button({ label: '从使用历史移除', size: 'sm', onClick: () => mutate(true) });
+      const edit = () => { feedback.textContent = ''; sync(); };
+      list.addEventListener('change', edit);
+      input.addEventListener('input', edit);
+      catalog.append(Field({ label: `模型清单（${result.models.length}）`, control: list }), typedField, apply, forget, feedback);
+      sync();
+    } catch { catalog.textContent = notice + '模型清单读取失败，可重新查看。'; }
     finally { refresh.disabled = false; }
   };
-  const refresh = Button({ label: '查看当前配置的模型清单', size: 'sm', onClick: load });
+  const refresh = Button({ label: '查看当前配置的模型清单', size: 'sm', onClick: () => load() });
   return { controls: [refresh, catalog], load };
 }
 

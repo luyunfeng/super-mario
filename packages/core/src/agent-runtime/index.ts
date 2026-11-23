@@ -20,7 +20,7 @@ interface Options {
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 type ReadOnlyAction = 'schedule_followup' | 'notify_user';
-type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' | 'replyTo' | 'requestId'> & { readOnlyAction?: ReadOnlyAction };
+type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' | 'replyTo' | 'requestId'> & { readOnlyAction?: ReadOnlyAction; rememberModel?: false };
 
 /** The second argument is a narrow test seam; all pi imports stay in this directory. */
 export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK> = () => import('@earendil-works/pi-coding-agent')) {
@@ -217,12 +217,14 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       authPath: join(agentDir, 'auth.json'), modelsPath: join(agentDir, 'models.json'),
       modelsStorePath: join(agentDir, 'model-cache.json'), allowModelNetwork: false,
     });
+    const selectedId = config.model ? models.catalog().current : '';
     if (config.model?.provider === 'codex-cli') {
       const { registerCodexProvider } = await import('./codex-provider.ts');
-      registerCodexProvider(modelRuntime, config.model.model, { command: config.model.cliCommand, configDir: config.model.cliConfigDir });
+      registerCodexProvider(modelRuntime, selectedId, { command: config.model.cliCommand, configDir: config.model.cliConfigDir });
     }
     if (config.model && config.model.provider !== 'codex-cli') {
-      const { provider, model: id, baseUrl, apiKey } = config.model;
+      const { provider, baseUrl, apiKey } = config.model;
+      const id = selectedId;
       // The Anthropic client appends /v1/messages. Accept a gateway root,
       // a versioned base, or the full endpoint copied from a working curl command.
       const endpoint = provider === 'anthropic' && baseUrl
@@ -241,7 +243,6 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     }
     settleCredentials = () => modelRuntime.settleCredentialWrites();
     const available = await modelRuntime.getAvailable();
-    const selectedId = config.model ? models.catalog().current : '';
     const model = config.model
       ? modelRuntime.getModel(config.model.provider, selectedId)
       : available[0];
@@ -485,7 +486,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     events.publish('agent.status', { conversationId: ownConversation, ...state });
   }
 
-  async function reply(user: Message, readOnlyAction?: ReadOnlyAction) {
+  async function reply(user: Message, readOnlyAction?: ReadOnlyAction, rememberModel = true) {
+    let modelFinished = false;
     const assistant: Message = {
       id: randomUUID(), conversationId: ownConversation, role: 'assistant', replyTo: user.id, text: '',
       createdAt: new Date().toISOString(), status: 'pending',
@@ -640,6 +642,9 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           }
           if (event.type !== 'message_end' || event.message.role !== 'assistant') return;
           const message = event.message;
+          // Only the selected provider's final assistant message proves the request ran.
+          modelFinished = message.provider === activeModelInfo.provider && message.model === activeModelInfo.model
+            && (message.stopReason === 'stop' || message.stopReason === 'length');
           const textPart = message.content.filter(block => block.type === 'text').map(block => block.text).join('');
           replies.push(textPart);
           if (activeTrace) {
@@ -728,6 +733,9 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     // Persistence/event failures escape to close(), instead of becoming unhandled rejections.
     save(assistant);
     save({ ...user, status: assistant.status });
+    if (modelFinished && assistant.status === 'done' && rememberModel && mainIdentity && !user.readOnly && (!user.origin || user.origin === 'user')) {
+      models.rememberUsed(activeModelInfo.model);
+    }
   }
 
   return {
@@ -741,14 +749,19 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     unlockConfiguration() { configuring = false; },
     reloadConfiguration: () => reloadConfiguration(),
     modelCatalog() { return models.catalog(closed ? undefined : session?.model); },
-    pickConversationModel(model: string) {
+    pickConversationModel(model: string, typed = false) {
       if (!mainIdentity || options.canUseScope?.() === false) throw Object.assign(new Error('当前会话无权修改主会话型号'), { status: 403 });
       if (closed || configuring || queuedInputs > 0) throw Object.assign(new Error('会话正忙，请稍后修改型号'), { status: 409 });
       const catalog = models.catalog(session?.model);
-      const picked = models.pick(model, catalog);
+      const picked = models.pick(model, typed, catalog);
       // The command only saves a preference. Open the selected model on the next user turn.
       if (!config.demo && model !== catalog.current) modelPickChanged = true;
       return picked;
+    },
+    forgetConversationModel(model: string) {
+      if (!mainIdentity || options.canUseScope?.() === false) throw Object.assign(new Error('当前会话无权修改模型目录'), { status: 403 });
+      if (closed || configuring) throw Object.assign(new Error('正在应用模型配置'), { status: 409 });
+      return models.forget(model);
     },
     status() { return closed ? { available: false, reason: '运行时已关闭。' } : { ...state }; },
     async post(text: string, conversationId: string = ownConversation, context?: PostContext): Promise<Message> {
@@ -781,7 +794,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       // Yield before processing: posting acknowledges durable acceptance, not model completion.
       const readOnlyAction = context?.readOnlyAction;
       queuedInputs++;
-      queue = queue.then(async () => { try { await setImmediate(); await reply(message, readOnlyAction); } finally { queuedInputs--; } })
+      queue = queue.then(async () => { try { await setImmediate(); await reply(message, readOnlyAction, context?.rememberModel); } finally { queuedInputs--; } })
         .catch(error => { infrastructureErrors.push(error); });
       events.publish('messages.changed', { conversationId, messageId: message.id });
       return message;

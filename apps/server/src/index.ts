@@ -125,19 +125,33 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if(path==='/api/v1/eventbox/cleanup-plugin'&&method==='POST'){const input=await body(req);const owner=requiredText(input.owner,'插件');if(input.confirm!==true||owner==='core'||!app.plugins.list().some(p=>p.id===owner&&p.status==='disabled'))throw new InputError('请先停用插件，并显式确认清理',409);app.background.cleanupOwner(owner);return json(res,200,{ok:true});}
         if(path==='/api/v1/eventbox/model-grants'&&method==='PUT'){const input=await body(req);app.background.modelGrant(requiredText(input.owner,'插件'),input.enabled as boolean,input.dailyLimit as number);return json(res,200,app.background.modelGrants());}
         if(path==='/api/v1/supervisor/resume'&&method==='POST'){await app.supervisorAgent.resume();return json(res,200,app.supervisorAgent.settings());}
-        const botModel = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/model\/(catalog|pick)$/);
-        if (botModel || path === '/api/v1/model/catalog' || path === '/api/v1/model/pick') {
-          const botId = botModel ? decodeURIComponent(botModel[1]!) : undefined;
+        const conversationModel = path.match(/^\/api\/v1\/(?:feishu\/bots\/([^/]+)\/)?model\/(catalog|pick|custom)$/);
+        if (conversationModel) {
+          const botId = conversationModel[1] && decodeURIComponent(conversationModel[1]);
           if (botId !== undefined) {
             const bot = bots.list().find(row => row.id === botId);
             if (!bot) throw new InputError('机器人不存在', 404);
             if (bot.scope.kind !== 'global' || !bot.paired || !bot.enabled) throw new InputError('请选择已启用并配对的全局机器人', 409);
           }
-          if (path.endsWith('/catalog') && method === 'GET') return json(res, 200, app.modelCatalog(botId));
-          if (path.endsWith('/pick') && method === 'PUT') {
+          const action = conversationModel[2];
+          const checkRevision = (revision: unknown) => {
+            if (revision !== undefined && revision !== app.modelConfigurationRevision())
+              throw new InputError('模型接入已变化，请重新查看清单', 409);
+          };
+          if (action === 'custom' && method === 'DELETE') {
+            checkRevision(url.searchParams.get('revision') ?? undefined);
+            return json(res, 200, await app.forgetConversationModel(requiredText(url.searchParams.get('model'), '模型'), botId));
+          }
+          if (action === 'catalog' && method === 'GET') {
+            const catalog = app.modelCatalog(botId);
+            return json(res, 200, catalog.typed ? { ...catalog, revision: app.modelConfigurationRevision() } : catalog);
+          }
+          if (action === 'pick' && method === 'PUT') {
             const input = await body(req);
-            if (Object.keys(input).some(key => key !== 'model')) throw new InputError('会话模型选择只接受 model 字段');
-            return json(res, 200, await app.pickConversationModel(requiredText(input.model, '模型'), botId));
+            if (Object.keys(input).some(key => !['model', 'typed', 'revision'].includes(key))) throw new InputError('会话模型选择包含未知字段');
+            if (input.typed !== undefined && typeof input.typed !== 'boolean') throw new InputError('typed 必须为布尔值');
+            checkRevision(input.revision);
+            return json(res, 200, await app.pickConversationModel(requiredText(input.model, '模型'), botId, input.typed === true));
           }
         }
         if (path === '/api/v1/model' && method === 'GET') return json(res, 200, app.modelStatus());

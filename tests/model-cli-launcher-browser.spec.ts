@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -126,4 +127,102 @@ test('Web 和飞书可以相互核对同一机器人的选型，Web 主会话独
   assert.equal(server.app.modelCatalog().current, 'gpt-4o-mini');
   assert.equal(server.app.modelCatalog(bot.id).current, 'gpt-4o');
   assert.equal(server.app.modelStatus().model, 'gpt-4o');
+});
+
+test('Web 和机器人模型抽屉支持输入、成功使用后列入历史，以及保留当前型号的移除', { timeout: 60000 }, async t => {
+  const model = '~test/model-latest[1m]';
+  const gateway = createServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    const id = JSON.parse(body).model;
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    for (const delta of [{ role: 'assistant', content: '已收到' }, {}]) {
+      res.write('data: ' + JSON.stringify({ id: 'local', object: 'chat.completion.chunk', model: id,
+        choices: [{ index: 0, delta, finish_reason: 'content' in delta ? null : 'stop' }] }) + '\n\n');
+    }
+    res.end('data: [DONE]\n\n');
+  });
+  await new Promise<void>(resolve => gateway.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { gateway.closeAllConnections(); await new Promise<void>(resolve => gateway.close(() => resolve())); });
+  const address = gateway.address();
+  assert.ok(address && typeof address !== 'string');
+  const dir = await mkdtemp(join(tmpdir(), 'mario-typed-picker-'));
+  let receiver!: FeishuOptions;
+  const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: dir, demo: false, token: 'typed-fixture',
+    model: { provider: 'openai-compatible', model: 'fixture-default', apiKey: 'local-fixture',
+      baseUrl: 'http://127.0.0.1:' + address.port + '/v1' } }, { botFactory(options) {
+    receiver = options;
+    return { async start() {}, async close() {}, async collect() { return []; }, async send() {}, status: () => ({ connected: true }) };
+  } });
+  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  t.after(async () => { await browser.close(); await server.close(); await rm(dir, { recursive: true, force: true }); });
+  const bot = await server.bots.create({ name: '型号测试助手', appId: 'cli_5555555555555555', appSecret: 'local-fixture', scope: { kind: 'global' } });
+  await receiver.onMessage(bot.pairingCode!, { messageId: 'pair', chatId: 'private', senderId: 'owner', chatType: 'p2p', senderType: 'user' });
+  const page = await browser.newPage();
+  const writes: Array<{ path: string; body: unknown }> = [];
+  page.on('request', req => { if (req.method() === 'PUT' && req.url().endsWith('/pick'))
+    writes.push({ path: new URL(req.url()).pathname, body: req.postDataJSON() }); });
+  await page.goto(server.url + '/#agent?token=typed-fixture');
+  await page.getByRole('button', { name: '更改模型' }).click();
+  const refresh = page.getByRole('button', { name: '查看当前配置的模型清单' });
+  await refresh.click();
+  const list = page.getByRole('combobox', { name: /^模型清单/ });
+  const input = page.getByLabel('手动输入型号', { exact: true });
+  const apply = page.getByRole('button', { name: '应用到此会话' });
+  const forget = page.getByRole('button', { name: '从使用历史移除' });
+  const dialog = page.getByRole('dialog');
+  await list.selectOption({ label: '手动输入型号…' });
+  await input.fill('bad id');
+  await expect(apply).toBeDisabled();
+  await expect(dialog).toContainText('最长 256 字节');
+  await input.fill('m'.repeat(257));
+  await expect(apply).toBeDisabled();
+  await input.fill(model);
+  await apply.click();
+  await expect(dialog).toContainText('已保存，下条消息使用所选模型');
+  await expect(list).toHaveValue(model);
+  await expect(forget).toBeHidden();
+  await expect(apply).toBeDisabled();
+  assert.equal((await server.app.agent.ask('回复已收到')).text, '已收到');
+  await refresh.click();
+  await expect(forget).toBeVisible();
+  await page.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.getByRole('button', { name: '会话模型', exact: true }).click();
+  await expect(list).toHaveValue('fixture-default');
+
+  await list.selectOption({ label: '手动输入型号…' });
+  await input.fill('fixture-bot');
+  await apply.click();
+  await expect(list).toHaveValue('fixture-bot');
+  await list.selectOption(model);
+  await apply.click();
+  await expect(forget).toBeVisible();
+  const botPrefix = '/api/v1/feishu/bots/' + encodeURIComponent(bot.id) + '/model';
+  const revision = server.app.modelConfigurationRevision();
+  assert.deepEqual(writes, [
+    { path: '/api/v1/model/pick', body: { model, revision, typed: true } },
+    { path: botPrefix + '/pick', body: { model: 'fixture-bot', revision, typed: true } },
+    { path: botPrefix + '/pick', body: { model, revision } },
+  ]);
+  const endpoint = '**' + botPrefix + '/custom?*';
+  await page.route(endpoint, route => route.fulfill({ status: 409, json: { error: '接入已变化' } }), { times: 1 });
+  await forget.click();
+  await expect(dialog).toContainText('移除失败：接入已变化');
+  await expect(list).toHaveValue(model);
+  await page.route(endpoint, route => route.abort(), { times: 1 });
+  await forget.click();
+  await expect(dialog).toContainText('移除结果未知');
+  await refresh.click();
+  await expect(list).toHaveValue(model);
+  await forget.click();
+  await expect(dialog).toContainText('已从使用历史移除');
+  await expect(list).toHaveValue(model);
+  await expect(forget).toBeHidden();
+  assert.equal(server.app.modelCatalog().current, model);
+  assert.equal(server.app.modelCatalog(bot.id).current, model);
+  await page.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.getByRole('button', { name: '更改模型' }).click();
+  await refresh.click();
+  await expect(list).toHaveValue(model);
+  await expect(forget).toBeHidden();
 });

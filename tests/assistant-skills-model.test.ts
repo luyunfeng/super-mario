@@ -3036,3 +3036,56 @@ test('飞书拼写提示跳过模型，转义命令作为普通正文传给模�
     assert.deepEqual(server.app.store.list<Message>('messages').filter(message => message.role === 'user').map(message => message.text), ['/status']);
   } finally { await server.close(); }
 });
+
+test('Web 自填型号实际使用后进入飞书目录，移除后保留会话并拒绝目录外命令', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const { server, api, ask, requests } = await fixture(t, () => ({ role: 'assistant', content: '本地协议已回复。' }), options => {
+    adapter = options;
+    return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
+      async send(_target, text) { sent.push(text); } };
+  });
+  try {
+    const name = '~fixture/model-v2[1m]';
+    const base = server.url + '/api/v1';
+    const pick = (input: unknown) => fetch(base + '/model/pick', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) });
+    const bot = await api('/feishu/bots', { name: '样例模型助手', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
+      scope: { kind: 'global' }, requireConfirmation: false });
+    const chat = { chatId: 'owner-chat', senderId: 'owner', senderType: 'user', chatType: 'p2p' } as const;
+    const send = (text: string, messageId: string) => adapter.onMessage(text, { ...chat, messageId });
+    const forget = () => fetch(base + '/feishu/bots/' + bot.id + '/model/custom?model=' + encodeURIComponent(name), { method: 'DELETE' });
+    assert.equal((await forget()).status, 409);
+    await send(bot.pairingCode, 'pair');
+    assert.equal((await pick({ model: name, typed: 'true' })).status, 400);
+    assert.equal((await pick({ model: name })).status, 400);
+    assert.equal((await pick({ model: name, typed: true })).status, 200);
+    await send('/modellist', 'before');
+    assert.ok(!sent.at(-1)?.includes(name));
+    assert.equal(requests.length, 0);
+    assert.equal(await ask('用我选择的型号核对这份合成样例'), '本地协议已回复。');
+    assert.match(requests[0].system, /实际发送消息并成功调用/);
+    await send('/modellist', 'after');
+    assert.ok(sent.at(-1)?.includes(name + '（最近使用）'));
+    await send('/modelchange ' + name, 'pick-remembered');
+    assert.equal(server.app.modelCatalog(bot.id).current, name);
+    await send('用已选型号核对另一份合成样例', 'verify-bot-use');
+    await t.waitFor(() => assert.ok(sent.includes('本地协议已回复。')));
+    assert.match(requests.at(-1)!.system, /移除记录只影响目录/);
+    assert.deepEqual(await (await forget()).json(), { forgotten: true });
+    assert.deepEqual(await (await forget()).json(), { forgotten: false });
+    assert.equal(server.app.modelCatalog(bot.id).current, name);
+    assert.equal(server.app.modelCatalog().current, name);
+    await send('/modelchange fixture', 'return-default');
+    await send('/modelchange ' + name, 'try-forgotten');
+    assert.match(sent.at(-1) ?? '', /目录没有/);
+    assert.equal(server.app.modelCatalog(bot.id).current, 'fixture');
+    await send('用已选型号核对另一份合成样例', 'verify-bot-use');
+    assert.equal(requests.length, 2);
+    assert.deepEqual(server.app.modelCatalog().custom ?? [], []);
+    const old = await (await fetch(base + '/model/catalog')).json();
+    await server.app.configureModel({ mode: 'api', provider: 'openai-compatible', model: 'other', baseUrl: 'http://127.0.0.1:1/v1' });
+    assert.equal((await pick({ model: name, typed: true, revision: old.revision })).status, 409);
+    assert.equal((await fetch(base + '/model/custom?model=' + encodeURIComponent(name) + '&revision=' + old.revision, { method: 'DELETE' })).status, 409);
+    assert.equal(server.app.modelCatalog().current, 'other');
+  } finally { await server.close(); }
+});

@@ -170,6 +170,11 @@ test('custom Anthropic gateway accepts a full messages URL and a model outside t
     assert.equal((await server.app.agent.ask('test gateway')).text, 'gateway OK');
     assert.deepEqual(requests.at(-1), ['/v1/messages', 'fixture-key', model]);
   }
+  const custom = 'another/gateway-model';
+  assert.deepEqual(await server.app.pickConversationModel(custom, undefined, true), { current: custom });
+  assert.equal((await server.app.agent.ask('核对自选型号')).text, 'gateway OK');
+  assert.deepEqual(requests.at(-1), ['/v1/messages', 'fixture-key', custom]);
+  assert.deepEqual(server.app.modelCatalog().custom, [custom]);
 });
 
 test('authenticated model catalog reflects configuration changes without opening an upstream connection', async t => {
@@ -198,7 +203,7 @@ test('authenticated model catalog reflects configuration changes without opening
     { mode: 'codex-cli', provider: 'codex-cli', model: 'default', cliCommand: join(dir, 'missing'), cliConfigDir: dir },
   ]) {
     await runtime.app.configureModel(config);
-    assert.deepEqual(await catalog(), { provider: config.provider, current: config.model, models: [config.model], source: 'configured', demo: true });
+    assert.deepEqual(await catalog(), { provider: config.provider, current: config.model, models: [config.model], source: 'configured', demo: true, ...(config.mode === 'codex-cli' && { typed: true, revision: runtime.app.modelConfigurationRevision() }) });
   }
 });
 

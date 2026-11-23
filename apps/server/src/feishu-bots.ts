@@ -40,7 +40,7 @@ export interface FeishuBotsApp {
   postScopedResult?(input: { text: string; scope: BotScope; botId: string; sourceMessageId?: string }): Promise<Message>;
   routeCommandProject?: CommandClassifier;
   pickConversationModel?(model: string, botId?: string): Promise<{ current: string }>;
-  modelCatalog?(botId: string): { provider: string; current: string; models: string[]; source: string; demo: boolean };
+  modelCatalog?(botId: string): { provider: string; current: string; models: string[]; custom?: string[]; typed?: boolean; source: string; demo: boolean };
   attention?(): AttentionItem[];
   projects?: { list(): Project[] };
   todos?: () => Todo[];
@@ -384,7 +384,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
             if (status === 403 || status === 404) throw noDelivery('当前主会话不可用，请重新打开机器人主对话。');
             throw new Error(unknown);
           }
-          return '本次已选择模型 · ' + publicText(model, 100).replace(/\s+/g, ' ');
+          return '本次已选择模型 · ' + publicText(model, 256).replace(/\s+/g, ' ');
         } });
     } catch (error) {
       return error instanceof Error && 'delivery' in error && error.delivery === 'no' ? publicText(redact(error), 160) : unknown;

@@ -603,12 +603,12 @@ export async function createWorkbench(config: AppConfig) {
       const route = store.get<MessageRoute & { botId?: string; scope?: BotScope }>('message.routes',original.id);
       let accepted: Message;
       if (original.conversationId === 'main') {
-        accepted = await agent.post(followUp,'main',{projectId:original.projectId,todoId:original.todoId});
+        accepted = await agent.post(followUp,'main',{rememberModel:false,projectId:original.projectId,todoId:original.todoId});
       } else if (original.projectId && original.conversationId === `project:${original.projectId}:work`) {
         accepted = await projectWorkspace.post(original.projectId,followUp,undefined,original.todoId);
       } else if (route?.botId && route.scope && original.conversationId === botConversationId({id:route.botId,scope:route.scope})) {
         assertBotInput(original);
-        accepted = await scopedAgents.post(followUp,validateBotScope(store,route.scope),route.botId,{projectId:original.projectId,todoId:original.todoId});
+        accepted = await scopedAgents.post(followUp,validateBotScope(store,route.scope),route.botId,{rememberModel:false,projectId:original.projectId,todoId:original.todoId});
       } else throw new InputError('无法核对原问题所属的 Agent',409);
       store.transaction(() => {
         if (route) store.put('message.routes', accepted.id, { ...route, resumed: true });
@@ -1764,8 +1764,12 @@ export async function createWorkbench(config: AppConfig) {
     setBotRelay(relay: NonNullable<typeof botRelay>) { botRelay = relay; },
     setBotScopeAccess(validate: typeof botScopeAccess) { botScopeAccess = validate; channelBindingsReady = true; scheduledWork.sync(); },
     setMailboxProposer(propose: (input: Record<string, unknown>) => Json) { mailboxProposer = propose; },
-    async pickConversationModel(model: string, botId?: string) {
-      return botId === undefined ? agent.pickConversationModel(model) : scopedAgents.pickConversationModel(model, botId);
+    modelConfigurationRevision: () => modelRevision,
+    async pickConversationModel(model: string, botId?: string, typed = false) {
+      return botId === undefined ? agent.pickConversationModel(model, typed) : scopedAgents.pickConversationModel(model, botId, typed);
+    },
+    async forgetConversationModel(model: string, botId?: string) {
+      return botId === undefined ? agent.forgetConversationModel(model) : scopedAgents.forgetConversationModel(model, botId);
     },
     async configureModel(input: Record<string, unknown>) {
       if (agent.configurationBusy() || supervisorRuntime.configurationBusy()) throw new InputError('Agent 正在处理对话，请稍后保存模型配置', 409);

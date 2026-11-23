@@ -108,7 +108,7 @@ export function conversationListDashboard(app: DashboardApp, bot: { conversation
 
 export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp['modelCatalog']>> | undefined, main: boolean) {
   const lines: string[] = [];
-  const safe = (value: string) => publicText(value, 100).replace(/\s+/g, ' ');
+  const safe = (value: string) => publicText(value, 256).replace(/\s+/g, ' ');
   if (!main) lines.push('请发送 /main 切回主对话，再直接发送 /modellist。');
   else if (!catalog) lines.push('模型目录服务不可用。');
   else {
@@ -116,13 +116,14 @@ export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp
     const sources: Record<string, string> = { builtin: '内置模型目录', configured: '当前配置', automatic: '运行时自动选择' };
     lines.push('提供方 · ' + (safe(catalog.provider) || '未配置'), '当前模型 · ' + (safe(catalog.current) || '未配置'),
       '目录来源 · ' + (Object.hasOwn(sources, catalog.source) ? sources[catalog.source] : '未知'), '候选模型');
-    const models = [...new Set(catalog.models.map(safe).filter(Boolean))];
+    const custom = new Set(catalog.custom);
+    const models = [...new Set(catalog.models)].filter(Boolean);
     const hint = '账号权限以提供方实际授权为准。';
     const truncated = '目录较长，请在 Web 的模型设置中查看完整目录。';
     // Reserve space for both footers so a Chinese catalog and the text fallback share one byte limit.
     let bytes = Buffer.byteLength(['主对话模型目录', ...lines, truncated, hint].join('\n'));
     for (const model of models) {
-      const line = '• ' + model;
+      const line = '• ' + safe(model) + (custom.has(model) ? '（最近使用）' : '');
       bytes += Buffer.byteLength('\n' + line);
       if (bytes > 16000) { lines.push(truncated); break; }
       lines.push(line);

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test, type TestContext } from 'node:test';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
+import { createWorkbench } from '../packages/core/src/workbench.ts';
 import { readCodexModelConfig } from '../packages/core/src/agent-runtime/codex-model-config.ts';
 import { registerCodexProvider } from '../packages/core/src/agent-runtime/codex-provider.ts';
 
@@ -53,6 +54,7 @@ if (behavior === 'bad-arguments') answer.toolCalls[0].arguments = '{secret-conte
 if (behavior === 'array-arguments') answer.toolCalls[0].arguments = '[]';
 if (behavior === 'null-arguments') answer.toolCalls[0].arguments = 'null';
 if (behavior === 'extra') answer.extra = 'secret-context';
+if (behavior === 'text-only') answer = { text: '合成回复', toolCalls: [] };
 if (behavior === 'empty') answer = { text: '', toolCalls: [] };
 if (behavior === 'sleep') { process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); }
 else if (behavior === 'exit') { process.stderr.write('secret-context API_KEY=secret-value'); process.exitCode = 7; }
@@ -280,4 +282,23 @@ for (const action of ['abort', 'timeout', 'exit']) test(`config-only preflight $
   await rejected;
   assert.throws(() => process.kill(record.pid, 0), {code:'ESRCH'});
   assert.equal((await f.records()).length,1);
+});
+
+test('命令行会话把自填型号作为单个参数交给本地协议替身，成功后计入目录', async t => {
+  const f = await fixture(t, 'text-only');
+  const dataDir = await mkdtemp(join(tmpdir(), 'mario-cli-model-'));
+  const app = await createWorkbench({ dataDir, host: '127.0.0.1', port: 0, demo: false,
+    model: { provider: 'codex-cli', model: 'default', cliCommand: f.command, cliConfigDir: dataDir } });
+  try {
+    const model = '~fixture/model-v3[1m]';
+    await app.pickConversationModel(model, undefined, true);
+    assert.deepEqual(await f.records(), []);
+    assert.equal((await app.agent.ask('核对型号')).text, '合成回复');
+    const calls = await f.records();
+    assert.equal(calls.length, 1);
+    const flag = calls[0].args.indexOf('--model');
+    assert.ok(flag >= 0);
+    assert.equal(calls[0].args[flag + 1], model);
+    assert.deepEqual(app.modelCatalog().custom, [model]);
+  } finally { await app.close(); await rm(dataDir, { recursive: true, force: true }); }
 });
