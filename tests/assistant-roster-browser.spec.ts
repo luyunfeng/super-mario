@@ -48,7 +48,7 @@ test('Web 切换助理按项目恢复独立历史与草稿，主对话仍保留�
 
 test('双标签页编辑助理名称和指令，遇到旧版本保留草稿并显示当前资料', {timeout:30000},async t=>{
   const dir=await mkdtemp(join(tmpdir(),'assistant-edit-')),token='synthetic-assistant-edit';
-  const server=await startServer({dataDir:dir,port:0,host:'127.0.0.1',demo:true,token});
+  const server=await startServer({dataDir:dir,port:0,host:'127.0.0.1',demo:false,token});
   const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
   t.after(async()=>{await browser.close();await server.close();await rm(dir,{recursive:true,force:true});});
   const context=await browser.newContext(),a=await context.newPage(),b=await context.newPage();
@@ -60,6 +60,7 @@ test('双标签页编辑助理名称和指令，遇到旧版本保留草稿并�
   for(const page of [a,b]){
     await page.goto(server.url+'/#chat?token='+token);
     await page.getByRole('button',{name:'切换助理',exact:true}).click();
+    await expect(page.getByRole('dialog',{name:'切换助理'})).toContainText('工作台模型暂不可用');
     await page.getByRole('button',{name:'编辑 初始助理',exact:true}).click();
     await expect(page.getByLabel('助理指令')).toHaveValue('先读需求');
   }

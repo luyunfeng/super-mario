@@ -24,13 +24,25 @@ export function createAssistantSwitcher({api,store,router,scope,target}){
     if(drawer)for(const control of drawer.body.querySelectorAll('[data-roster-skills]'))control.hidden=!assistantSkillsEnabled(store);
     if(drawer)for(const control of drawer.body.querySelectorAll('[data-roster-prompts]'))control.hidden=!savedPromptsActive(store);
     if(drawer && (!enabled || opened.owner!==api.draftOwner() || opened.projectId!==here.projectId || opened.threadId!==here.threadId))drawer.close();
-    else if(drawer && opened.mainLabel!==mainLabel())opened.paint();
+    else if(drawer){
+      opened.updateModel();
+      if(opened.mainLabel!==mainLabel())opened.paint();
+    }
   }
   function open(){
     const here=target();if(!here || !allowed() || drawer)return;
     const owner=api.draftOwner(),title=h('input',{class:'input',required:true,maxLength:80,'aria-label':'助理名称'});
     const instructions=h('textarea',{class:'textarea',rows:4,maxLength:4000,'aria-label':'助理指令'});
     const choices=h('div',{class:'stack'}),status=h('p',{role:'status',class:'small muted'});
+    const modelNotice=h('p',{class:'small muted'});
+    function updateModel(){
+      const {connection,snapshot}=store.view;
+      const reason=connection!=='online' ? '连接中断，模型状态待核对。'
+        : snapshot?.agent?.available===false ? '工作台模型暂不可用：'+(snapshot.agent.reason || '请在 Agent 页核对模型配置。') : '';
+      modelNotice.hidden=!reason;
+      if(modelNotice.textContent!==reason)modelNotice.textContent=reason;
+    }
+    updateModel();
     const create=h('button',{type:'submit',class:'btn btn--primary'},'创建并打开助理');
     const caption=h('summary',{},'新建助理'),latest=h('div',{class:'stack'});
     const cancel=Button({label:'取消编辑',onClick:()=>finishEdit()});cancel.hidden=true;
@@ -123,9 +135,9 @@ export function createAssistantSwitcher({api,store,router,scope,target}){
     h('label',{class:'field'},'助理指令',instructions),latest,h('div',{class:'row'},create,cancel));
     const editor=h('details',{},caption,form);
     choices.classList.add('roster-choices');
-    const view=openDrawer({title:'切换助理',body:[choices,status,editor],
+    const view=openDrawer({title:'切换助理',body:[modelNotice,choices,status,editor],
       onClose:()=>{if(drawer===view){drawer=null;opened=null;}}});
-    drawer=view;opened={...here,owner,paint,mainLabel:mainLabel()};
+    drawer=view;opened={...here,owner,paint,updateModel,mainLabel:mainLabel()};
     void run(list);
   }
   update();return {mainButton,threadButton,update};
