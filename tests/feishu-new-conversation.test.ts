@@ -309,6 +309,9 @@ test('新会话实际使用独立 SDK 历史，切回原会话后可继续原来
 
 
 test('飞书为独立会话改选模型，固定主会话和其他独立会话保留各自的选型', async t => {
+  const previousUrl = process.env.SUPER_MARIO_WEB_URL;
+  process.env.SUPER_MARIO_WEB_URL = 'https://workbench.example';
+  t.after(() => { if (previousUrl === undefined) delete process.env.SUPER_MARIO_WEB_URL; else process.env.SUPER_MARIO_WEB_URL = previousUrl; });
   const initial = 'llama-3.1-8b-instant', selected = 'llama-3.3-70b-versatile';
   const f = await fixture(t, { provider: 'groq', model: initial }, true);
   const a = await f.bot('cli_5555555555555555', 'alpha');
@@ -328,7 +331,10 @@ test('飞书为独立会话改选模型，固定主会话和其他独立会话�
   await a.receive('/modellist', 'inspect', { parentId: 'one' });
   assert.ok(f.sent.at(-1)?.text.includes('当前模型 · ' + selected));
   assert.match(f.sent.at(-1)!.text, /独立对话模型目录 · 选型甲/);
+  const threadUrl = (id:string) => 'https://workbench.example/#' + ['agent','private-thread',a.row.id,id].map(encodeURIComponent).join('/');
+  assert.ok(JSON.stringify(f.sent.at(-1)?.context?.card).includes(JSON.stringify(threadUrl(one.threadId))));
   await a.receive('/modellist', 'inspect-active');
+  assert.ok(JSON.stringify(f.sent.at(-1)?.context?.card).includes(JSON.stringify(threadUrl(two.threadId))));
   assert.match(f.sent.at(-1)!.text, /独立对话模型目录 · 选型乙/);
   assert.ok(f.sent.at(-1)?.text.includes('当前模型 · ' + initial));
   const secondChoice = 'openai/gpt-oss-20b';

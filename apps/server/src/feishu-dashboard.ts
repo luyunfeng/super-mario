@@ -141,7 +141,7 @@ export function conversationListDashboard(app: DashboardApp, bot: { conversation
   return { text: lines.join('\n'), card: cardDocument(title, elements), projectIds: visible.map(row => row.projectId).filter(Boolean), threadIds: visible.flatMap(row => row.conversationThreadId ? [row.conversationThreadId] : []) };
 }
 
-export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp['modelCatalog']>> | undefined, allowed: boolean, title = '主对话模型目录') {
+export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp['modelCatalog']>> | undefined, allowed: boolean, title = '主对话模型目录', thread?: {botId:string; threadId:string; webBase?:string}) {
   const lines: string[] = [];
   const safe = (value: string) => publicText(value, 256).replace(/\s+/g, ' ');
   if (!allowed) lines.push('要操作主对话，请发送 /main；要操作独立对话，请发送 /list 并选择目标。切换后新发一条 /modellist，请勿引用旧消息。');
@@ -154,7 +154,7 @@ export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp
     const custom = new Set(catalog.custom);
     const models = [...new Set(catalog.models)].filter(Boolean);
     const hint = (models.length ? '要为这段对话切换模型，请回复本条目录消息，发送 /modelchange 加完整模型 ID。\n' : '') + '账号权限以提供方实际授权为准。';
-    const truncated = '目录较长，请在 Web 的模型设置中查看完整目录。';
+    const truncated = thread ? '目录较长，请在 Web 对应独立对话的模型清单中查看完整目录。' : '目录较长，请在 Web 对应机器人的模型设置中查看完整目录。';
     // Reserve space for both footers so a Chinese catalog and the text fallback share one byte limit.
     let bytes = Buffer.byteLength([title, ...lines, truncated, hint].join('\n'));
     for (const model of models) {
@@ -167,7 +167,9 @@ export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp
     lines.push(hint);
   }
   const text = lines.join('\n');
-  return { text: title + '\n' + text, card: cardDocument(title, [{ tag: 'div', text: cardPlain(text) }]) };
+  const buttons = allowed && thread ? cardButtons([{label:'在 Web 查看此对话',route:
+    ['agent','private-thread',thread.botId,thread.threadId].map(encodeURIComponent).join('/')}],cardWebBase(thread.webBase)) : [];
+  return { text: title + '\n' + text, card: cardDocument(title, [{ tag: 'div', text: cardPlain(text) }, ...buttons]) };
 }
 
 export function statusDashboard(target: string, status: ConversationStatus | string, source?: { botId: string; threadId: string; messageId: string; webBase: string }) {

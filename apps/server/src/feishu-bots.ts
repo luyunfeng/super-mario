@@ -1170,7 +1170,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         let catalog: ReturnType<NonNullable<FeishuBotsApp['modelCatalog']>> | undefined;
         try { if (target.allowed) catalog = app.modelCatalog?.(bot.id, target.binding?.conversationThreadId); }
         catch { /* An unavailable catalog must not leak raw provider errors. */ }
-        dashboard = modelListDashboard(catalog, target.allowed, title);
+        dashboard = modelListDashboard(catalog, target.allowed, title, threadId ? {botId:bot.id,threadId,webBase} : undefined);
       } else {
         const text = await changeModel(bot, model, eventKey, target, valid);
         if (!valid()) return;
