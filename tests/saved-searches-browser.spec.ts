@@ -99,7 +99,7 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], {origin:server.url});
     await cited.getByRole('button', {name:'复制消息链接'}).click();
     const messageUrl = new URL(await page.evaluate(() => navigator.clipboard.readText()));
-    assert.equal(messageUrl.hash, '#projects/' + projectId + '/workspace?at=historic&todo=' + task.id);
+    assert.equal(messageUrl.hash, citation.slice(citation.indexOf('(#') + 1, -1));
     assert.equal(messageUrl.search, '');
     const changed = page.getByText('原消息在引用后已修改，当前显示最新正文。');
     await expect(changed).toBeHidden();

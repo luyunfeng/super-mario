@@ -396,7 +396,7 @@ export function createProjectWorkspace(options: {
               (b.scope.kind === "project" || b.scope.kind === "task") &&
               b.scope.projectId === id,
           ),
-        messages: history.slice(start, end),
+        messages: history.slice(start, end).map(message => ({ ...message, bodyVersion: messageVersion(message.text) })),
         historyPage: { hasEarlier: start > 0, hasLater: end < history.length,
           ...(cursor?.kind === 'at' && index >= 0 && { anchorVersion: messageVersion(history[index]!.text) }) },
         knowledge: (

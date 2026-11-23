@@ -228,9 +228,10 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
       const canQuote = quotesEnabled && m.conversationId === `project:${projectId}:work` && (user || m.role === 'assistant')
         && m.origin !== 'notification' && typeof m.text === 'string' && m.text.trim();
       const canEdit = (m.todoId || '') === todoId && editEnabled && user && m.conversationId === `project:${projectId}:work` && (!m.projectId || m.projectId === projectId);
-      const messageHref = id => router.href('projects', projectId, 'workspace') + '?at=' + encodeURIComponent(id)
+      const messageHref = (id, version) => router.href('projects', projectId, 'workspace') + '?at=' + encodeURIComponent(id)
+        + (version ? '&version=' + encodeURIComponent(version) : '')
         + (m.todoId ? '&todo=' + encodeURIComponent(m.todoId) : '');
-      const copyLink = copyMessageLinkButton(messageHref(m.id));
+      const copyLink = copyMessageLinkButton(messageHref(m.id, m.bodyVersion));
       const statusText = queueLabel(m,queueEnabled) || (m.stoppedByUser ? '已停止本轮' : { failed: '处理失败，请查看原因', unknown: '结果未知，请核对，勿重复发送', pending: '处理中' }[m.status]);
       const bubble = h('div', { class: 'msg__bubble' }, user && !/^> /m.test(m.text) ? m.text : transcript.renderMessage(m, m.text));
       return h('div', { class: 'msg msg--' + (user ? 'user' : 'assistant') + (m.id === anchor ? ' is-search-hit' : ''), dataset: { id: m.id } },
