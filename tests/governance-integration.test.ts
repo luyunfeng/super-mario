@@ -47,7 +47,7 @@ test('HTTP plans validate all 1–8 tasks before writes; concurrent start dispat
   const initial = await f.state();
   const invalid = [[], Array(9).fill(task), [task, { ...task, doneWhen: '' }],
     [task, { ...task, expectMinutes: 0 }], [task, { ...task, expectMinutes: -1 }],
-    [task, { ...task, expectMinutes: undefined }], [task, { ...task, doneWhen: undefined }],
+    [task, { ...task, expectMinutes: null }], [task, { ...task, doneWhen: undefined }],
     [task, { ...task, expectMinutes: '1' }], [task, { ...task, executionMode: 'wrong' }]];
   for (const tasks of invalid) await f.json('/plans', 'POST', { title: '无效计划', tasks }, 400);
   assert.deepEqual(await f.json('/plans'), []);
