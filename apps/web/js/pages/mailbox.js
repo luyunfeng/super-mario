@@ -55,8 +55,15 @@ export function createMailboxPage({ api, store, router, direction }) {
   const conversationsUI=createInboxConversationsUI({api,store,router,redraw:()=>paint(),openSource:id=>open(id)});
   function records() {
     const conversationByMessage=new Map((snapshot?.inboxConversations??[]).flatMap(group=>group.messageIds.map(id=>[id,group])));
+    const matterSearch = new Map();
+    for (const group of incoming ? snapshot?.inboxConversations ?? [] : []) {
+      for (const matter of group.matters ?? []) {
+        if (!matter.messageIds.every(id => conversationByMessage.get(id) === group)) continue;
+        for (const id of matter.messageIds) matterSearch.set(id, matter.title + ' ' + matter.summary);
+      }
+    }
     const personal = incoming ? (snapshot?.inbox ?? []).map(item => updated.get(item.id)?.version > item.version ? updated.get(item.id) : item).map(item => ({
-      id: `personal:${item.id}`, kind: 'personal', raw: item, conversation:conversationByMessage.get(item.id),
+      id: `personal:${item.id}`, kind: 'personal', raw: item, conversation:conversationByMessage.get(item.id), matterSearch: matterSearch.get(item.id),
       title: /^oc_/.test(item.title) ? item.origin?.chatName || '会话消息' : item.title,
       text: readable(item.text), source: item.origin?.connector || (item.source?.startsWith('feishu:') ? '飞书采集' : item.source?.startsWith('subscription:') ? '来源订阅' : '收件消息'),
       status: item.todoId ? '已转待办' : item.archivedAt ? '已归档' : TIER[item.tier] ?? '待查看',
@@ -105,7 +112,7 @@ export function createMailboxPage({ api, store, router, direction }) {
   }
   function matches(item, omit) {
     const search = query.value.trim().toLowerCase(), raw = item.raw;
-    if (search && ![item.title, item.text, item.source, raw.sender, raw.target, raw.origin?.chatName, raw.origin?.senderName, incoming && originLabel(item), incoming && projectName(item)].some(value => String(value ?? '').toLowerCase().includes(search))) return false;
+    if (search && ![item.title, item.text, item.matterSearch, item.source, raw.sender, raw.target, raw.origin?.chatName, raw.origin?.senderName, incoming && originLabel(item), incoming && projectName(item)].some(value => String(value ?? '').toLowerCase().includes(search))) return false;
     if (incoming) {
       if (omit !== 'source' && sourceFilter !== 'all' && !(sourceFilter === 'mentioned' ? originKind(item) === 'group' && raw.origin?.mentionedMe === true : originKind(item) === sourceFilter)) return false;
       if (omit !== 'stage' && stageFilter !== 'all' && stage(item) !== stageFilter) return false;

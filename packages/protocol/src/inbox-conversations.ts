@@ -1,4 +1,18 @@
+export interface InboxMatter {
+  id: string;
+  title: string;
+  summary: string;
+  tier: "action" | "fyi" | "noise";
+  messageIds: string[];
+  reason?: string;
+  urgent?: boolean;
+  doneAt?: string;
+  /** A distinct new matter may continue a previously handled matter in this conversation. */
+  continues?: string;
+}
+
 export interface InboxConversation {
+  matters?: InboxMatter[];
   id: string;
   version: number;
   projectId?: string;

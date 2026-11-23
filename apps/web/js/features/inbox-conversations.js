@@ -24,7 +24,7 @@ export function createInboxConversationsUI({
     errors = new Map(),
     pending = new Set();
   const key = (id) => `${api.token?.() || ""}:${id}`;
-  async function action(group, operation, text) {
+  async function action(group, operation, text, matter) {
     const id = key(group.id);
     if (pending.has(id)) return;
     pending.add(id);
@@ -33,17 +33,20 @@ export function createInboxConversationsUI({
     try {
       await api.post(
         `/inbox/conversations/${encodeURIComponent(group.id)}/${operation}`,
-        { version: group.version, ...(text ? { text } : {}) },
+        { version: group.version, ...(text ? { text } : {}), ...(matter && {done:!matter.doneAt}) },
       );
-      if (key(group.id) === id && drafts.get(id) === text) drafts.delete(id);
+      if (key(group.id) !== id) return;
+      if (!matter && drafts.get(id) === text) drafts.delete(id);
       await store.refresh();
     } catch (error) {
+      if(key(group.id)!==id) return;
       errors.set(
         id,
         error.status === 409
-          ? "会话已有更新，请核对最新问题；回复草稿已保留。"
+          ? (matter ? "事项已有更新，请核对当前状态后再操作。" : "会话已有更新，请核对最新问题；回复草稿已保留。")
           : `未能完成：${error.message}`,
       );
+      if(matter) { try {await store.refresh();} catch { /* Keep the original write failure visible. */ } }
     } finally {
       pending.delete(id);
       redraw();
@@ -116,6 +119,37 @@ export function createInboxConversationsUI({
         : undefined;
       answer?.addEventListener("input", () => drafts.set(id, answer.value));
       const focused = translations.currentGroup() === group.id;
+      const visible = new Map(items
+        .filter(item => item.raw.projectId === group.projectId)
+        .map(item => [item.raw.id, item]));
+      const whole = group.messageIds.every(id => visible.has(id));
+      // A matter summary may quote any of its messages. Only show it when all its sources are visible.
+      const matters = (group.matters ?? []).filter(matter =>
+        matter.messageIds.length && matter.messageIds.every(id => visible.has(id)));
+      function matterCard(matter) {
+        const earlier = matters.find(row => row.id === matter.continues);
+        const tier = {action: "需要处理", fyi: "知会", noise: "低优先级"}[matter.tier];
+        return h("article", {class: "stack card__body", "aria-label": matter.title},
+          h("div", {class: "row row--between row--wrap"}, h("strong", null, matter.title),
+            h("div", {class: "row row--wrap"},
+              !matter.doneAt && matter.urgent === true && matter.tier === "action" && Pill("紧急", "danger"),
+              Pill(matter.doneAt ? "已完成" : tier))),
+          matter.summary && h("p", {class: "mailbox-preview"}, matter.summary),
+          matter.reason && h("p", {class: "small muted"}, "分级依据："+matter.reason),
+          earlier && h("p", {class: "small muted"},
+            `接续事项：${earlier.title}（${earlier.doneAt ? "已完成" : "未完成"}）`),
+          h("details", null, h("summary", null, `事项原文（${matter.messageIds.length} 条）`),
+            matter.messageIds.map(id => {
+              const item = visible.get(id);
+              return h("div", {class: "stack card__body"},
+                h("p", {class: "small muted"},
+                  `${item.raw.origin?.senderName || item.raw.sender || group.person} · ${timeAgo(item.time)}`),
+                h("p", {class: "mailbox-preview"}, item.text),
+                Button({label: "打开原始收件", size: "sm", onClick: () => openSource(item.id)}));
+            })),
+          Button({label: matter.doneAt ? "重新打开事项" : "标记事项完成", size: "sm", disabled: busy,
+            onClick: () => action(group, "matters/" + encodeURIComponent(matter.id), undefined, matter)}));
+      }
       const originalMessages = h("details", { open: focused },
         h("summary", null, `查看原始消息（${items.length} 条）`),
         items.map(item => h("article", { class: "stack card__body" },
@@ -129,7 +163,7 @@ export function createInboxConversationsUI({
       return Card({
         title: group.title,
         className: "mailbox-group",
-        sub: `${group.messageIds.length} 条消息已合并 · ${group.kind === "direct" ? "私聊" : group.chatName || "群聊"}`,
+        sub: `${items.length} 条消息已合并 · ${group.kind === "direct" ? "私聊" : group.chatName || "群聊"}`,
         tools: h("div", { class: "row row--wrap" },
           !focused && h("a", { class: "btn btn--sm", href: router.href("inbox") + "?conversation=" + encodeURIComponent(group.id) }, "打开会话"),
           Pill(LABEL[group.status] || "后台处理中", question ? "warn" : group.status === "failed" ? "danger" : ""),
@@ -137,7 +171,7 @@ export function createInboxConversationsUI({
         body: h(
           "div",
           { class: "stack" },
-          h(
+          whole && h(
             "p",
             { class: "mailbox-preview" },
             group.reason ||
@@ -148,7 +182,8 @@ export function createInboxConversationsUI({
                   ? "已收到消息，主 Agent 将结合上下文统一整理。"
                   : "正在结合上下文整理，原消息已保留。"),
           ),
-          group.todoIds?.length > 0 &&
+          matters.length>0 && h("section",{class:"stack","aria-label":"归组事项"},h("h3",null,"归组事项"),matters.map(matterCard)),
+          whole && group.todoIds?.length > 0 &&
             h(
               "div",
               { class: "stack" },
@@ -171,7 +206,7 @@ export function createInboxConversationsUI({
                 );
               }),
             ),
-          question &&
+          whole && question &&
             h(
               "div",
               { class: "stack" },
@@ -184,21 +219,21 @@ export function createInboxConversationsUI({
                 onClick: () => action(group, "answer", answer.value.trim()),
               }),
             ),
-          group.error && h("p", { class: "small muted" }, group.error),
+          whole && group.error && h("p", { class: "small muted" }, group.error),
           errors.has(id) &&
             Banner({ tone: "danger", children: errors.get(id) }),
           originalMessages,
           h(
             "div",
             { class: "row row--wrap" },
-            group.status === "failed" &&
+            whole && group.status === "failed" &&
               Button({
                 label: "重试后台整理",
                 size: "sm",
                 disabled: busy,
                 onClick: () => action(group, "retry"),
               }),
-            group.pendingCount > 0 &&
+            whole && group.pendingCount > 0 &&
               Button({
                 label: "归档此会话",
                 size: "sm",

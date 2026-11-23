@@ -687,6 +687,14 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         }
         if(path==='/api/v1/inbox/assistant'&&method==='GET')return json(res,200,{...app.inboxAssistant.status(),conversations:app.inboxAssistant.list()});
         if(path==='/api/v1/inbox/assistant'&&method==='PUT')return json(res,200,app.inboxAssistant.configure((await body(req)).enabled));
+        const matterAction = path.match(/^\/api\/v1\/inbox\/conversations\/([^/]+)\/matters\/([^/]+)$/);
+        if (matterAction && method === 'POST') {
+          const input = await body(req);
+          if (typeof input.done !== 'boolean' || !Number.isSafeInteger(input.version) || Number(input.version) < 1 ||
+            Object.keys(input).some(key => key !== 'version' && key !== 'done')) throw new InputError('请提供会话版本和事项处理状态');
+          return json(res, 200, app.inboxAssistant.setMatterDone(
+            decodeURIComponent(matterAction[1]!), decodeURIComponent(matterAction[2]!), input.version as number, input.done));
+        }
         const conversationAction=path.match(/^\/api\/v1\/inbox\/conversations\/([^/]+)\/(answer|archive|retry)$/);
         if(conversationAction&&method==='POST'){const input=await body(req),id=decodeURIComponent(conversationAction[1]!);
           return json(res,200,conversationAction[2]==='answer'?app.inboxAssistant.answer(id,input.version as number,input.text as string):conversationAction[2]==='archive'?app.inboxAssistant.archive(id,input.version as number):app.inboxAssistant.retry(id,input.version as number));}

@@ -674,7 +674,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           context.provide('inbox-triage.classify', async input => await classifier(input as unknown as InboxTriageInput));
         }
         context.contribute('tools', 'inbox_triage_status', statusTool('inbox-triage', '收件箱默认使用本地规则分类，确认后才创建待办。', actions?.status ? () => actions.status!('inbox-triage') : undefined));
-        if (actions?.inboxTree) context.contribute('tools', 'inbox_tree', tool('inbox_tree', '按真实收件编号查询本项、从近到远的可见父项以及直接子项，含真实来源和工作台入口。只读。', async (args,signal) => {
+        if (actions?.inboxTree) context.contribute('tools', 'inbox_tree', tool('inbox_tree', '按真实收件编号查询本项、从近到远的可见父项以及直接子项，含真实来源和工作台入口；已归组时返回所属收件事项、可见前序和后续事项。只读。', async (args,signal) => {
           signal.throwIfAborted();
           return actions.inboxTree!(args);
         }, {id:{type:'string'}}, ['id']));

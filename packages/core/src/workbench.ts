@@ -1,3 +1,4 @@
+import { inboxAnalysisPrompt, inboxGroupingAuthority } from './agent-runtime/inbox-analysis-prompt.ts';
 import { createSubscriptionHost } from './subscription-host.ts';
 import { forgetPrivateConversation } from './private-conversation-deletion.ts';
 import { discardObsoleteModelPicks } from './agent-runtime/model-catalog.ts';
@@ -76,7 +77,7 @@ import { exportNativeConversation, readNativeFavoritePage } from './native-conve
 import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
-import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxItem, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
+import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
 export class InputError extends Error {
@@ -513,7 +514,7 @@ export async function createWorkbench(config: AppConfig) {
   const inboxClassifier = createInboxClassifier({config,store,events,contributions,ready:()=>agent.status().available});
   const inboxAssistantWorkspace = join(config.dataDir, 'pi', 'workspace');
   const inboxAssistantRuntime = createInboxClassifier({config,store,events,contributions,ready:()=>agent.status().available,
-    workspaceDir:inboxAssistantWorkspace, systemPrompt: INBOX_ASSISTANT_SYSTEM_PROMPT});
+    workspaceDir:inboxAssistantWorkspace, systemPrompt: INBOX_ASSISTANT_SYSTEM_PROMPT+'\n'+inboxGroupingAuthority});
   const inboxHandlingRuntime = createInboxHandlingRuntime({config,store,events,contributions,ready:()=>agent.status().available,
     allowedTools: ['knowledge_list', 'todos_list', 'runs_list', 'work_read', 'projects_list', 'inbox_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff', 'calendar_agenda']});
   const inbox = createInboxService({ store, events, createTodo: input => createTodo(input, false),
@@ -545,21 +546,14 @@ export async function createWorkbench(config: AppConfig) {
     available:()=>{const status=inboxAssistantRuntime.status();return status.available?status:{available:false,reason:'主模型尚未就绪，原消息已保存，等待后台整理。'};},createTodo:input=>createTodo(input,false),updateTodo:(id,input)=>updateTodo(id,input),archive:(id,version)=>inbox.archive(id,version),
     async analyze(input){
       if(config.demo)return {summary:'【演示】已合并本会话消息，未调用真实模型。',disposition:'watching',tasks:[]};
-      const payload={...input,contextTruncated:false};
-      if(JSON.stringify(payload).length>26000){payload.context={omitted:true,note:'上下文较长，原始记录仍保留'};payload.previousSummary=input.previousSummary?.slice(0,1000);payload.messages=input.messages.slice(-10);payload.todos=input.todos.map(t=>({...t,notes:t.notes.slice(-100)}));payload.contextTruncated=true;}
-      if(JSON.stringify(payload).length>30000){payload.messages=payload.messages.slice(-3).map(m=>({...m,text:m.text.slice(0,200),truncated:true}));payload.todos=[];}
-      if(JSON.stringify(payload).length>31000)throw Error('收件上下文超出本轮容量，原消息已保留');
+      const prompt=inboxAnalysisPrompt(input);
       const timeout=setTimeout(()=>{void inboxAssistantRuntime.abortCurrent();},120000);timeout.unref();
       try {
-      const answer=await inboxAssistantRuntime.ask([
-        ...(input.meetingMinutes ? ['这是特别关注的会议资料。结合本轮提供的项目、已有待办、执行记录和历次会议摘要，分析已确认决定、进展变化、负责人、期限与未决问题。只归纳有原文依据的事项，区分讨论建议与承诺；仅有纪要链接时保留链接并说明内容待核实。'] : []),
-        '默认在后台处理，不要因为私聊、@或一句感叹就要求主人决策。根据提供的会话上下文判断实际事项；存在省略时保留不确定，零散发言合并为一件工作，延续已有事项时引用existingTodoId。不要虚构完成。',
-        '只有缺少关键事实且必须由主人回答时使用waiting_user并提出具体question；知会用watching，无意义闲聊用quiet，有明确工作才用work并给tasks。任务最多20项，按实际目标合并，不能每条消息都建事项；已明确回复解决的讨论不要再建待办。任务key跨轮保持稳定，保持已有事项的标题和人工备注。',
-        '只返回JSON：{"summary":"简明会话结论","disposition":"watching|quiet|waiting_user|work","question":"仅需要主人回答时填写","tasks":[{"key":"稳定事项标识","title":"实际工作标题","notes":"目标与现有证据","existingTodoId":"延续已有事项才填写"}]}。没有工作时tasks为空。注意truncated=true表示原文有省略，不据此编造事实。',
-        JSON.stringify(payload)
-      ].join('\n'),{readOnly:true});
+      const answer=await inboxAssistantRuntime.ask(prompt,{readOnly:true});
       if(answer.status!=='done')throw Error('后台整理未完成');
-      return JSON.parse(answer.text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'')) as InboxAnalysis;
+      const result=JSON.parse(answer.text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'')) as InboxAnalysis;
+      if(input.matterBatch && !result?.grouping) throw Error('后台整理未返回本批事项分组');
+      return result;
       } finally {clearTimeout(timeout);}
     }});
   const knowledgeCurator = createKnowledgeCurator({ store, events, dataDir: config.dataDir, knowledge, machines: () => machines, enabled: () => contributions.list('knowledge_backends').length > 0, validProject: id => projects.list().some(p => p.id === id && !p.archivedAt), readSource: readProtectedKnowledgeSource, allowedProviders: () => [...new Set(['codex', 'claude-code', ...contributions.list('executors').filter(e => e.value.mode === 'real' && e.value.knowledgeWorker !== false).map(e => e.value.kind || e.id)])] });
@@ -1096,7 +1090,20 @@ export async function createWorkbench(config: AppConfig) {
     const present=(row:InboxItem)=>({...withoutParent(row),
       ...(row.parentInboxId && visibleIds.has(row.parentInboxId) && {parentInboxId:row.parentInboxId,parentInboxBy:row.parentInboxBy ?? 'user'}),
       workspaceRoute:'#inbox?item='+encodeURIComponent(row.id)});
-    return {item:present(item),ancestors:visibleAncestors.map(present),children:visibleChildren.map(present)} as unknown as Json;
+    const group=inboxAssistant.list().find(g=>g.matters?.some(m=>m.messageIds.includes(id)));
+    const matter=group?.matters?.find(m=>m.messageIds.includes(id));
+    // A model-written summary combines all member texts. Withhold it even if just one source became inaccessible.
+    const sameGroup=new Set(group?.messageIds);
+    const readable=(m:InboxMatter)=>!group?.reason && m.messageIds.length>0 && m.messageIds.every(messageId=>{
+      const source=store.get<InboxItem>('inbox',messageId);
+      return source && sameGroup.has(messageId) && !excludesPersonalGroupFromBrief(source);
+    });
+    const describe=(m:InboxMatter)=>({id:m.id,title:m.title,summary:m.summary,tier:m.tier,reason:m.reason,urgent:m.urgent,doneAt:m.doneAt,
+      members:m.messageIds.map(messageId=>({id:messageId,workspaceRoute:'#inbox?item='+encodeURIComponent(messageId)}))});
+    const previous=matter?.continues && group?.matters?.find(m=>m.id===matter.continues);
+    return {item:present(item),ancestors:visibleAncestors.map(present),children:visibleChildren.map(present),
+      ...(matter && readable(matter) && {matter:{...describe(matter),...(previous && readable(previous) && {previous:describe(previous)}),
+        continuations:group!.matters!.filter(m=>m.continues===matter.id && readable(m)).map(describe)}})} as unknown as Json;
   }
   function readInbox(input: Record<string, unknown>): Json {
     const offset = input.offset ?? 0, limit = input.limit ?? 50;

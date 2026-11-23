@@ -1,7 +1,9 @@
+import {applyMatterGrouping,nextMatterBatch,visibleMatters,type MatterBatch,type MatterGrouping} from './inbox-matters.ts';
 import { createHash } from "node:crypto";
 import type { EventBus, Store } from "../../plugin-sdk/src/index.ts";
 import type {
   InboxItem,
+  InboxMatter,
   InboxConversation,
   NormalizedReplyEvidence,
   Todo,
@@ -19,6 +21,8 @@ interface Row {
   processedHash?: string;
   status: InboxConversation["status"];
   summary?: string;
+  summarySourceIds?:string[];
+  matterSourceIds?:Record<string,string[]>;
   question?: string;
   error?: string;
   updatedAt: string;
@@ -26,14 +30,17 @@ interface Row {
   attempts?: number;
   tasks: Record<string, string>;
   answers?: string[];
+  matters?: InboxMatter[];
 }
 interface Group {
   view: InboxConversation;
   items: InboxItem[];
   signature: string;
+  analysisItems:InboxItem[];
   row?: Row;
 }
 export interface InboxAnalysis {
+  grouping?:MatterGrouping;
   summary: string;
   disposition: "watching" | "quiet" | "waiting_user" | "work";
   question?: string;
@@ -57,6 +64,7 @@ export function createInboxAssistant(options: {
   available(): { available: boolean; reason?: string };
   enabled(): boolean;
   analyze(input: {
+    matterBatch?:MatterBatch;
     title: string;
     meetingMinutes?: true;
     messages: Array<{
@@ -64,6 +72,8 @@ export function createInboxAssistant(options: {
       at: string;
       text: string;
       truncated: boolean;
+      replyToMessageId?:string;
+      replyToMatterId?:string;
     }>;
     todos: Todo[];
     taskKeys: Record<string, string>;
@@ -124,10 +134,12 @@ export function createInboxAssistant(options: {
       items.map((item) => [
         item.id,
         item.last,
+        item.source,item.projectId,item.origin,item.receivedAt,item.parentInboxId,item.parentInboxBy,
         item.text,
         item.archivedAt ?? null,
         item.todoId ?? null,
       ]),
+      row?.matters ?? [],
       row?.answers ?? [],
       dependencies(row),
     ]);
@@ -158,6 +170,12 @@ export function createInboxAssistant(options: {
         }
       }
       return sender;
+    }
+    function admitted(item:InboxItem) {
+      if(item.origin?.kind!=='group') return true;
+      const size=item.origin.personalGroupUserCount;
+      return Boolean(senderFor(item)) && item.origin.personalGroupObserved===true &&
+        typeof size==='number' && Number.isInteger(size) && size>0 && size<=50;
     }
     const buckets = new Map<string, InboxItem[]>();
     for (const item of store.list<InboxItem>("inbox")) {
@@ -206,18 +224,21 @@ export function createInboxAssistant(options: {
             store.get<Project>("projects", latest.projectId) &&
               !store.get<Project>("projects", latest.projectId)!.archivedAt,
           );
-        const allowed =
-          latest.origin?.kind !== "group" ||
-          (Boolean(senderFor(latest)) &&
-            latest.origin.personalGroupObserved === true &&
-            typeof latest.origin.personalGroupUserCount === "number" &&
-            latest.origin.personalGroupUserCount <= 50);
+        const allowed=admitted(latest);
+        const analysisItems=activeProject && allowed ? items.filter(admitted) : [];
+        const admissible=new Set(analysisItems.map(i=>i.id));
+        const matters=visibleMatters((row?.matters ?? []).filter(m=>
+          row?.matterSourceIds?.[m.id]?.every(id=>admissible.has(id)) ?? true),analysisItems);
         const pendingCount =
           activeProject && allowed
-            ? items.filter((item) => !item.archivedAt && !item.todoId).length
+            ? analysisItems.filter((item) => !item.archivedAt && !item.todoId).length
             : 0;
         const signature = signatureFor(items, row);
         const fresh = row?.processedHash === signature;
+        // Legacy summaries have no dependency record. Only the exact previously analysed scope is verifiable.
+        const summaryVisible=Boolean(analysisItems.length && (row?.summarySourceIds?.length
+          ? row.summarySourceIds.every(id=>admissible.has(id))
+          : fresh && analysisItems.length===items.length && matters.length===(row?.matters?.length ?? 0)));
         const active = row?.inputHash === signature;
         const status: InboxConversation["status"] = !pendingCount
           ? "quiet"
@@ -230,6 +251,7 @@ export function createInboxAssistant(options: {
                 : "queued";
         return {
           items,
+          analysisItems,
           row,
           signature,
           view: {
@@ -248,6 +270,7 @@ export function createInboxAssistant(options: {
             kind: latest.origin!.kind as "direct" | "group",
             messageIds: items.map((item) => item.id),
             pendingCount,
+            ...(matters.length ? {matters} : {}),
             ...(!activeProject
               ? { reason: "项目已归档或不存在，原消息保留，不自动处理" }
               : !allowed
@@ -259,7 +282,7 @@ export function createInboxAssistant(options: {
             latestAt: latest.receivedAt ?? latest.updatedAt,
             preview: latest.text,
             status,
-            ...(row?.summary ? { summary: row.summary } : {}),
+            ...(row?.summary && summaryVisible ? { summary: row.summary } : {}),
             ...(fresh && row?.question ? { question: row.question } : {}),
             ...(row?.error ? { error: row.error } : {}),
             todoIds: [
@@ -366,14 +389,36 @@ export function createInboxAssistant(options: {
         }));
       // Spend the extra meeting budget on the newest minutes while keeping older messages in context.
       let extra = 12000;
-      const messages = group.items.slice(-20).reverse().map(item => {
+      const matters=group.view.matters ?? [];
+      const grouping=nextMatterBatch(group.analysisItems,matters,row.matters ?? [],now(),group.view.kind);
+      const freshIds=new Set(grouping?.batch.newMessageIds);
+      const chosen=grouping ? group.analysisItems.filter(item=>freshIds.has(item.id)) : group.analysisItems.slice(-20);
+      if(grouping && chosen.length<20) {
+        const earlier=group.analysisItems.slice(0,group.analysisItems.indexOf(chosen[0]!));
+        chosen.unshift(...earlier.slice(-(20-chosen.length)));
+      }
+      const candidateIds=new Set(grouping?.batch.existing.map(m=>m.id));
+      const byMessage=new Map<string,string>();
+      for(const matter of matters) if(candidateIds.has(matter.id))
+        for(const id of matter.messageIds) byMessage.set(id,matter.id);
+      const messages = chosen.slice().reverse().map(item => {
         const allowance = isMeetingMaterial(item) ? Math.min(extra, Math.max(0, item.text.length - 400)) : 0;
         extra -= allowance;
         const text = item.text.slice(0, 400 + allowance);
-        return { id: item.id, at: item.receivedAt ?? item.updatedAt, text, truncated: text.length < item.text.length };
+        const parent=freshIds.has(item.id) && item.parentInboxBy==='connector' && item.parentInboxId;
+        const replyToMatterId=parent && byMessage.get(parent);
+        return { id: item.id, at: item.receivedAt ?? item.updatedAt, text, truncated: text.length < item.text.length,
+          ...(parent && freshIds.has(parent) ? {replyToMessageId:parent} : replyToMatterId ? {replyToMatterId} : {}) };
       }).reverse();
+      // A model may quote earlier summaries or another candidate. Carry their original sources transitively.
+      const sources=new Set(chosen.map(item=>item.id));
+      if(group.view.summary) for(const id of row.summarySourceIds ?? group.analysisItems.map(item=>item.id)) sources.add(id);
+      for(const matter of matters) if(candidateIds.has(matter.id))
+        for(const id of row.matterSourceIds?.[matter.id] ?? matter.messageIds) sources.add(id);
+      const sourceIds=[...sources];
       const result = await options.analyze({
         title: group.view.title,
+        ...(grouping && {matterBatch:grouping.batch}),
         ...(group.view.meetingMinutes ? { meetingMinutes: true } : {}),
         messages,
         todos: todos.map((t) => ({ ...t, notes: t.notes.slice(-400) })),
@@ -385,7 +430,7 @@ export function createInboxAssistant(options: {
         runs,
         context: options.context?.(group.view.projectId),
         answers: (row.answers ?? []).slice(-2),
-        previousSummary: row.summary,
+        previousSummary: group.view.summary,
       });
       // Optional references are often emitted as JSON null or an empty string.
       // Canonicalize absence; a nonempty reference must still match a supplied Todo.
@@ -431,15 +476,23 @@ export function createInboxAssistant(options: {
         throw Error("后台整理未返回有效结论");
       if (closed || !enabled()) return;
       const current = get(group.view.id);
+      if(current.row?.version!==row.version) return;
       if (!current.view.pendingCount || current.signature !== group.signature) {
         save({ ...row, status: "queued", version: row.version + 1 });
         return;
       }
       store.transaction(() => {
+        const updated={...row,tasks:{...row.tasks}};
+        if(result.grouping!==undefined) {
+          const previous=new Set(row.matters);
+          updated.matters=applyMatterGrouping(row.matters ?? [],grouping?.batch,result.grouping,new Date(now()).toISOString());
+          updated.matterSourceIds={...row.matterSourceIds};
+          for(const matter of updated.matters) if(!previous.has(matter)) updated.matterSourceIds[matter.id]=sourceIds;
+        }
         // Local, reversible organization only. Incoming messages never grant CLI execution, approval or external sends.
         if (result.disposition === "work")
           for (const task of result.tasks) {
-            const id = row.tasks[task.key] ?? task.existingTodoId;
+            const id = updated.tasks[task.key] ?? task.existingTodoId;
             if (id) {
               const existing = store.get<Todo>("todos", id);
               if (
@@ -452,7 +505,7 @@ export function createInboxAssistant(options: {
                 options.updateTodo(id, {
                   notes: `${existing.notes}\n\n收件整理补充：${task.notes}`,
                 });
-              row.tasks[task.key] = id;
+              updated.tasks[task.key] = id;
             } else {
               const created = options.createTodo({
                 title: task.title,
@@ -461,17 +514,19 @@ export function createInboxAssistant(options: {
                   ? { projectId: group.view.projectId }
                   : {}),
               });
-              row.tasks[task.key] = created.id;
+              updated.tasks[task.key] = created.id;
             }
           }
         save({
-          ...row,
+          ...updated,
           version: row.version + 1,
-          inputHash: signatureFor(group.items, row),
-          processedHash: signatureFor(group.items, row),
+          inputHash: signatureFor(group.items, updated),
+          processedHash: result.grouping && grouping?.more ? undefined : signatureFor(group.items, updated),
+          attempts:0,
           status:
-            result.disposition === "work" ? "watching" : result.disposition,
+            result.grouping && grouping?.more ? "queued" : result.disposition === "work" ? "watching" : result.disposition,
           summary: result.summary,
+          summarySourceIds:sourceIds,
           question:
             result.disposition === "waiting_user" ? result.question : undefined,
           error: undefined,
@@ -479,7 +534,7 @@ export function createInboxAssistant(options: {
         });
       });
     } catch {
-      if (!closed && enabled())
+      if (!closed && enabled() && store.get<Row>(collection,row.id)?.version===row.version)
         save({
           ...row,
           status: "failed",
@@ -548,9 +603,28 @@ export function createInboxAssistant(options: {
       });
       return this.list().find((item) => item.id === id);
     },
+    setMatterDone(id:string,matterId:string,version:number,done:boolean) {
+      if(typeof done!=='boolean') throw Object.assign(Error('请选择事项处理状态'),{status:400});
+      return store.transaction(()=>{
+        const group=current(id,version);
+        const matter=group.view.matters?.find(m=>m.id===matterId);
+        if(!group.row || !matter) throw Object.assign(Error('事项不存在'),{status:404});
+        if(Boolean(matter.doneAt)===done) return group.view;
+        const row=group.row;
+        const updated:Row={...row,version:row.version+1,updatedAt:new Date(now()).toISOString(),
+          matters:row.matters!.map(m=>m.id===matterId ? {...m,doneAt:done?new Date(now()).toISOString():undefined,
+            ...(done && {urgent:undefined})} : m)};
+        if(row.processedHash===group.signature) updated.inputHash=updated.processedHash=signatureFor(group.items,updated);
+        else if(row.status==='processing') {updated.status='queued';updated.processedHash=undefined;}
+        save(updated);
+        return get(id).view;
+      });
+    },
     archive(id: string, version: number) {
       const group = current(id, version);
       store.transaction(() => {
+        if(group.row)save({...group.row,version:group.row.version+1,status:'quiet',
+          matters:group.row.matters?.map(m=>m.doneAt ? m : {...m,doneAt:new Date(now()).toISOString(),urgent:undefined})});
         for (const item of group.items)
           if (!item.archivedAt) options.archive(item.id, item.version);
       });
