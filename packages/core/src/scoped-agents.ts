@@ -5,7 +5,7 @@ import type { AppConfig, MainAssistantProfile, ExecutorInfo, Message, Project, T
 import type { Contributions, EventBus, Store } from '../../plugin-sdk/src/index.ts';
 import { SCOPED_WORK_SYSTEM_PROMPT } from './prompts.ts';
 import { conversationModels } from './agent-runtime/model-catalog.ts';
-import { createAgentRuntime, removeScopedTranscript } from './agent-runtime/index.ts';
+import { createAgentRuntime, recoverInterruptedInputs, removeScopedTranscript } from './agent-runtime/index.ts';
 
 type Runtime = ReturnType<typeof createAgentRuntime>;
 type ScopedPostContext = Omit<NonNullable<Parameters<Runtime['post']>[2]>, 'readOnlyAction'>;
@@ -17,6 +17,7 @@ interface Options {
   canReadChatImages?(message:Message):boolean;
   canGenerateOffice?(message:Message):boolean;
   canOpenQuestion?(message:Message):boolean;
+  validateQueuedWebInput?(input:Message):void;
   onDirectWebInput?(message:Message):void;
   onInternalQueued?(message:Message,sourceId:string):()=>void;
   inboxConversations?: () => import('../../protocol/src/inbox-conversations.ts').InboxConversation[];
@@ -38,6 +39,9 @@ interface Options {
  * reload all three while locked, and unlock in finally. No pi dependency escapes the bridge.
  */
 export function createScopedAgents(options: Options) {
+  // Project conversations stay lazy, but their durable queue must be recovered
+  // before a workspace view can display its terminal state or manual retry.
+  recoverInterruptedInputs(options.store,options.events,id=>id.startsWith('project:') && id.endsWith(':work'));
   const agents = new Map<string, { botId: string; scope: BotScope; conversationId: string; runtime: Runtime }>();
   const deleting = new Map<string, Promise<void>>();
   let closed = false;
@@ -128,6 +132,22 @@ export function createScopedAgents(options: Options) {
       })().finally(() => deleting.delete(id));
       deleting.set(id, cleanup);
       return cleanup;
+    },
+    queuedWebInputs(conversationId:string):Message[] {
+      const entry=agents.get(conversationId);
+      if (entry?.scope.kind!=='project' || conversationId !== 'project:'+entry.scope.projectId+':work') return [];
+      return entry.runtime.queuedWebInputs();
+    },
+    cancelQueuedTurn(conversationId:string,inputId:string):{outcome:'cancelled'|'started'|'idle'} {
+      const input = options.store.get<Message>('messages',inputId);
+      if (!input?.projectId || !input.directWebInput || input.role !== 'user' || input.replyTo || (input.origin && input.origin!=='user') ||
+          input.conversationId!==conversationId || conversationId!=='project:'+input.projectId+':work' ||
+          options.store.get('message.routes',input.id)) return {outcome:'idle'};
+      const project=options.store.get<Project>('projects',input.projectId);
+      if (!project || project.archivedAt) return {outcome:'idle'};
+      const runtime=agents.get(conversationId)?.runtime;
+      if (runtime) return runtime.cancelQueuedTurn(inputId);
+      return {outcome:input.queueState==='cancelled' && input.status==='failed' && input.stoppedByUser ? 'cancelled' : 'idle'};
     },
     interruptTurn(conversationId: string, inputId: string) {
       const entry = agents.get(conversationId);

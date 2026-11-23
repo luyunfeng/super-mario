@@ -386,3 +386,7 @@ body:has(.splash-background) #root { position: relative; }
 .message-file-detail { display:grid; align-content:start; gap:.75rem; min-width:0; }
 .message-file-detail img { max-width:100%; max-height:65vh; object-fit:contain; border:1px solid var(--line); }
 .message-file-detail pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; font-family:var(--font-mono,monospace); }
+.message-queue { margin-block:.25rem; color:var(--text-2); }
+.message-queue summary { cursor:pointer; }
+.message-queue ol { max-height:10rem; overflow:auto; margin:.35rem 0; padding-inline-start:1.7rem; }
+.message-queue li { padding-block:.15rem; overflow-wrap:anywhere; }

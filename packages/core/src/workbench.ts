@@ -87,7 +87,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput, currentAgentReplyId, type OfficeFileOrigin } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
-import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationRetry, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
@@ -460,7 +460,12 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(createStartPage(() => plugins.list()));
   plugins.register(tokenStatistics);
   plugins.register(todoCalendar);
-  plugins.register(conversationSearch(readWorkspaceCode, searchPrivateConversations));
+  plugins.register(conversationSearch(readWorkspaceCode, searchPrivateConversations, () => {
+    const input=currentAgentInput();
+    if (!input?.directWebInput || input.role!=='user' || input.replyTo || (input.origin && input.origin!=='user') ||
+        store.get('message.routes',input.id) || !plugins.list().some(p=>p.id==='conversation-queue' && p.status==='active')) return;
+    return queuedMessages(input.conversationId,input.projectId,input.todoId).items.length;
+  }));
   plugins.register(conversationDrafts);
   plugins.register(conversationImages);
   plugins.register(conversationFiles);
@@ -473,6 +478,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(conversationEdit);
   plugins.register(conversationRetry);
   plugins.register(conversationOutbox);
+  plugins.register(conversationQueue);
   plugins.register(createReplyTranslation((text, language, signal) => translateReply(config, text, language, signal), () => modelRevision));
   plugins.register(savedPrompts);
   plugins.register(projectInstructions);
@@ -556,8 +562,8 @@ export async function createWorkbench(config: AppConfig) {
   function todoHistory(id: string, before?: string) {
     return readTodoHistory(store, id, before, reviewEvidence);
   }
-  const agent = createAgentRuntime({ config, store, events, contributions, canGenerateOffice, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
-  const scopedAgents = createScopedAgents({ canGenerateOffice, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, canOpenQuestion:source=>Boolean(questionFormAudience(source)), onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
+  const agent = createAgentRuntime({ config, store, events, contributions, validateQueuedWebInput, canGenerateOffice, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
+  const scopedAgents = createScopedAgents({ validateQueuedWebInput, canGenerateOffice, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, canOpenQuestion:source=>Boolean(questionFormAudience(source)), onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
     allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'],
     systemPrompt: SUPERVISOR_SYSTEM_PROMPT });
@@ -1151,6 +1157,37 @@ export async function createWorkbench(config: AppConfig) {
     if (source.images?.length && !canReadChatImages(source)) throw new InputError('原图片读取权限已失效',403);
     if (source.files?.length && !canReadChatFiles(source)) throw new InputError('原文件读取权限已失效',403);
     return conversationId==='main' ? agent.retryFailedInput(source,failed) : scopedAgents.retryFailedInput(source,failed);
+  }
+  function requireConversationQueue() {
+    if (!plugins.list().some(p=>p.id==='conversation-queue' && p.status==='active'))
+      throw new InputError('对话排队插件已停用',503);
+  }
+  function queuedMessages(conversationId:string,projectId?:string,todoId?:string) {
+    requireConversationQueue();
+    requireQueueScope(projectId,todoId);
+    const queue=conversationId==='main' ? agent.queuedWebInputs() : scopedAgents.queuedWebInputs(conversationId);
+    // Project and todo membership can change while the preceding turn runs.
+    const items=queue.filter(input=>{
+      if (projectId && input.projectId!==projectId || todoId && input.todoId!==todoId) return false;
+      if (input.projectId) {
+        const project=store.get<Project>('projects',input.projectId);
+        if (!project || project.archivedAt) return false;
+      }
+      if (input.todoId && store.get<Todo>('todos',input.todoId)?.projectId!==input.projectId) return false;
+      return true;
+    }).map(input=>({id:input.id,text:input.text.slice(0,240),images:input.images?.length??0,files:input.files?.length??0}));
+    return {items};
+  }
+  function validateQueuedWebInput(input:Message) { requireQueueScope(input.projectId,input.todoId); }
+  function requireQueueScope(projectId?:string,todoId?:string) {
+    if (projectId) {
+      const project=store.get<Project>('projects',projectId);
+      if (!project || project.archivedAt) throw new InputError('原项目已不可用',404);
+    }
+    if (todoId) {
+      const todo=store.get<Todo>('todos',todoId);
+      if (!todo || !projectId || todo.projectId!==projectId) throw new InputError('原待办归属已变化',409);
+    }
   }
   function canGenerateOffice(source:Message) {
     if (source.readOnly || !plugins.list().some(p=>p.id==='office-documents' && p.status==='active')) return false;
@@ -2705,6 +2742,17 @@ export async function createWorkbench(config: AppConfig) {
     setBotScopeAccess(validate: typeof botScopeAccess) { botScopeAccess = validate; channelBindingsReady = true; scheduledWork.sync(); },
     setMailboxProposer(propose: (input: Record<string, unknown>) => Json) { mailboxProposer = propose; },
     modelConfigurationRevision: () => modelRevision,
+    queuedMessages,
+    cancelQueuedTurn(conversationId:string,inputId:string) {
+      requireConversationQueue();
+      const input=store.get<Message>('messages',inputId);
+      if (!input || !input.directWebInput || input.conversationId!==conversationId || input.role!=='user' || input.replyTo ||
+          (input.origin && input.origin!=='user') || store.get('message.routes',inputId) ||
+          !(conversationId==='main' || (input.projectId && conversationId===`project:${input.projectId}:work`)))
+        throw new InputError('当前 Web 对话中未找到这条输入',404);
+      requireQueueScope(input.projectId,input.todoId);
+      return conversationId==='main' ? agent.cancelQueuedTurn(inputId) : scopedAgents.cancelQueuedTurn(conversationId,inputId);
+    },
     async interruptTurn(conversationId: string, inputId: string) {
       return conversationId === 'main' ? agent.interruptTurn(inputId) : scopedAgents.interruptTurn(conversationId, inputId);
     },

@@ -649,3 +649,74 @@ test('stop during SDK preflight is applied again after the run acquires an abort
   await runtime.close();
   assert.equal(options.store.get<Message>('messages', first.id)?.status, 'failed');
 });
+
+test('Web 排队取消仅作用于未开始的消息，顺序、迟到点击和取消重放可核对', async t=>{
+  const f=await fixture(t,false),sdk=fakeSDK();
+  let loaded!:()=>void;
+  const gate=new Promise<void>(ok=>{loaded=ok;});
+  const runtime=createAgentRuntime({...f,validateQueuedWebInput(input){if(input.text==='已移动')throw Error('原待办归属变化');}},async()=>{await gate;return sdk.load();});
+  const send=(text:string)=>runtime.post(text,'main',{directWebInput:true});
+  const first=await send('第一条'), second=await send('取消这条'), internal=await runtime.post('内部回投','main',{origin:'result'}), third=await send('第三条');
+  assert.equal(first.queueState,'queued');assert.equal(internal.queueState,undefined);
+  assert.deepEqual(runtime.queuedWebInputs().map(m=>m.id),[first.id,second.id,third.id]);
+  await t.waitFor(()=>assert.equal(f.store.get<Message>('messages',first.id)?.queueState,'running'));
+  assert.deepEqual(runtime.queuedWebInputs().map(m=>m.id),[second.id,third.id]);
+  assert.deepEqual(runtime.cancelQueuedTurn(first.id),{outcome:'started'});
+  assert.deepEqual(runtime.cancelQueuedTurn(internal.id),{outcome:'idle'});
+  assert.deepEqual(runtime.cancelQueuedTurn(second.id),{outcome:'cancelled'});
+  assert.deepEqual(runtime.cancelQueuedTurn(second.id),{outcome:'cancelled'});
+  assert.deepEqual(runtime.queuedWebInputs().map(m=>m.id),[third.id]);
+  const moved=await send('已移动');
+  loaded();await runtime.close();
+  assert.deepEqual(sdk.prompts,['第一条','内部回投','第三条']);
+  const failed=f.store.list<Message>('messages').find(m=>m.replyTo===moved.id)!;
+  assert.match(failed.text,/原待办归属变化/);assert.equal(failed.retryable,undefined);
+  assert.equal(f.store.get<Message>('messages',first.id)?.queueState,undefined);
+  assert.equal(f.store.get<Message>('messages',second.id)?.queueState,'cancelled');
+  assert.equal(f.store.list<Message>('messages').some(m=>m.replyTo===second.id),false);
+  const reopened=createAgentRuntime(f,sdk.load);
+  assert.deepEqual(reopened.cancelQueuedTurn(second.id),{outcome:'cancelled'});
+  await reopened.close();
+});
+
+test('重启只为明确尚未开始的 Web 队列项登记手动重试',async t=>{
+  const f=await fixture(t,true);
+  for(const state of ['queued','running','legacy'] as const){
+    const msg:Message={id:state,role:'user',text:'保留原文',status:'pending',conversationId:'main',directWebInput:true,todoId:'todo',createdAt:new Date().toISOString(),
+      ...(state==='legacy'?{}:{queueState:state})};
+    f.store.put('messages',msg.id,msg);
+  }
+  const runtime=createAgentRuntime(f);
+  const replies=f.store.list<Message>('messages').filter(m=>m.role==='assistant');
+  assert.equal(replies.length,3);
+  for(const reply of replies){
+    assert.equal(f.store.get<Message>('messages',reply.replyTo!)?.queueState,undefined);
+    assert.equal(!!reply.retryable,reply.replyTo==='queued');
+    assert.equal(!!f.store.get('retryableFailures',reply.id),reply.replyTo==='queued');
+  }
+  const notice=replies.find(m=>m.retryable)!;
+  assert.match(notice.text,/尚未开始/);assert.equal(notice.origin,undefined);
+  const retried=await runtime.retryFailedInput(f.store.get<Message>('messages','queued')!,notice);
+  assert.equal(retried.queueState,'queued');assert.equal(retried.todoId,'todo');
+  await runtime.close();
+});
+
+test('工作台重启时恢复项目队列，只打开工作区即可看到可重试的原消息',async t=>{
+  const {createStore}=await import('../packages/core/src/store.ts');
+  const {createWorkbench}=await import('../packages/core/src/workbench.ts');
+  const dir=await mkdtemp(join(tmpdir(),'mario-queued-project-'));
+  const seed=createStore(join(dir,'workbench.sqlite'));
+  const now=new Date().toISOString(), id='queue-project', conversationId='project:'+id+':work';
+  seed.put('projects',id,{id,name:'项目样本',description:'',createdAt:now,updatedAt:now});
+  seed.put('messages','waiting',{id:'waiting',role:'user',conversationId,projectId:id,text:'未开始的请求',directWebInput:true,status:'pending',queueState:'queued',createdAt:now} satisfies Message);
+  seed.close();
+  const app=await createWorkbench({host:'127.0.0.1',port:0,dataDir:dir,demo:true});
+  t.after(async()=>{await app.close();await rm(dir,{recursive:true,force:true});});
+  const view=await app.projectWorkspace.view(id);
+  assert.match(view.agents.work.reason??'',/按需初始化/);
+  assert.equal(view.messages.find(m=>m.id==='waiting')?.status,'failed');
+  const notice=view.messages.find(m=>m.retryable && m.replyTo==='waiting')!;
+  assert.ok(notice);
+  const resent=await app.retryFailedReply(notice.id,conversationId);
+  assert.equal(resent.retryOf,notice.id); assert.equal(resent.text,'未开始的请求');
+});

@@ -44,6 +44,7 @@ interface Options {
   chatImagesEnabled?():boolean;
   canReadChatImages?(message:Message):boolean;
   canGenerateOffice?(message:Message):boolean;
+  validateQueuedWebInput?(input:Message):void;
   onDirectWebInput?(message:Message):void;
   onInternalQueued?(message:Message, sourceId:string):()=>void;
   reviewEvidence?: ReviewEvidenceReader; mainSkillCatalog?: () => Promise<string>; mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>; projectInstructions?: (projectId: string) => Promise<string>; inboxConversations?: () => import("../../../protocol/src/inbox-conversations.ts").InboxConversation[]; workspaceDir?: string; contextMode?: 'full' | 'principles' | 'project-memory'; workDecisions?: (scope?:BotScope, projectId?:string)=>unknown; config: AppConfig; store: Store; events: EventBus; contributions: Contributions; conversationId?: string; scope?: BotScope; canUseScope?: (input?: Message) => boolean; allowedTools?: string[]; systemPrompt?: string; projectContext?: (projectId:string)=>Json; executors?: () => ExecutorInfo[]; conversationThreadId?: string; botContext?: (conversationId:string, scope?:BotScope, threadId?:string)=>Json }
@@ -69,6 +70,50 @@ function retryRequestId(replyId:string) {
   return [hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-');
 }
 type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' | 'replyTo' | 'requestId' | 'directWebInput'> & { [originalRetryInput]?:{source:Message;replyId:string}; files?: ChatFileInput[]; images?: ChatImageInput[]; readOnlyAction?: ReadOnlyAction; rememberModel?: false; onAccepted?: (input:Message)=>void; internalSourceId?:string };
+
+function directWebSource(store:Store,user:Message) {
+  return user.directWebInput && !user.replyTo && (!user.origin || user.origin === 'user')
+    && (user.conversationId === 'main' || (user.projectId && user.conversationId === 'project:'+user.projectId+':work'))
+    && !store.get('message.routes',user.id);
+}
+
+function terminalInput(user:Message,status:Message['status']) {
+  const {queueState: _previous, ...input} = user;
+  return {...input,status};
+}
+
+export function recoverInterruptedInputs(store:Store,events:EventBus,includes:(conversationId:string)=>boolean) {
+  // Only an explicit Web queue marker proves that the input never started.
+  // Surface interrupted turns after restart without silently replaying their mutations.
+  for (const input of store.list<Message>('messages')) {
+    if (input.status !== 'pending' || !includes(input.conversationId)) continue;
+    const ownConversation = input.conversationId;
+    if (input.role === 'assistant') {
+      // Older versions could leave the last progress snapshot pending beside a restart notice.
+      const original = input.replyTo && store.get<Message>('messages', input.replyTo);
+      if (original && original.role === 'user' && original.conversationId === ownConversation &&
+        (original.status === 'pending' || store.get('messages', `interrupted:${original.id}`))) {
+        store.transaction(() => {
+          store.put('messages',input.id,{...input,status:'failed'});
+          store.remove('message.tool-starts',input.id);
+        });
+        events.publish('messages.changed',{conversationId:ownConversation,messageId:input.id});
+      }
+      continue;
+    }
+    const queued = input.queueState === 'queued' && directWebSource(store,input);
+    const notice: Message = { id: queued ? randomUUID() : `interrupted:${input.id}`, conversationId: input.conversationId,
+      role: 'assistant', ...(queued ? {retryable:true} : {origin:'notification'}), replyTo: input.id, projectId: input.projectId, todoId:input.todoId,
+      text: queued ? '服务重启，这条排队消息尚未开始处理。可手动重试。' : '服务重启，上轮处理结果未确认。请核对执行记录；系统不会自动重复派发或发送。',
+      status: 'failed', createdAt: new Date().toISOString() };
+    store.transaction(() => {
+      store.put('messages',input.id,terminalInput(input,'failed'));
+      store.put('messages',notice.id,notice);
+      if (queued) store.put('retryableFailures',notice.id,{inputId:input.id});
+    });
+    events.publish('messages.changed', { messageId: notice.id, conversationId: input.conversationId });
+  }
+}
 
 /** The second argument is a narrow test seam; all pi imports stay in this directory. */
 export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK> = () => import('@earendil-works/pi-coding-agent')) {
@@ -298,30 +343,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     events.publish('messages.changed', { conversationId: message.conversationId, messageId: message.id });
   }
 
-  // A persisted pending input is not proof that its model/tools never ran.
-  // Surface interrupted turns after restart without silently replaying their mutations.
-  for (const input of store.list<Message>('messages')) {
-    if (input.conversationId !== ownConversation || input.status !== 'pending') continue;
-    if (input.role === 'assistant') {
-      // Older versions could leave the last progress snapshot pending beside a restart notice.
-      const original = input.replyTo && store.get<Message>('messages', input.replyTo);
-      if (original && original.role === 'user' && original.conversationId === ownConversation &&
-        (original.status === 'pending' || store.get('messages', `interrupted:${original.id}`))) {
-        store.transaction(() => {
-          store.put('messages',input.id,{...input,status:'failed'});
-          store.remove('message.tool-starts',input.id);
-        });
-        events.publish('messages.changed',{conversationId:ownConversation,messageId:input.id});
-      }
-      continue;
-    }
-    const notice: Message = { id: `interrupted:${input.id}`, conversationId: input.conversationId,
-      role: 'assistant', origin: 'notification', replyTo: input.id, projectId: input.projectId,
-      text: '服务重启，上轮处理结果未确认。请核对执行记录；系统不会自动重复派发或发送。',
-      status: 'failed', createdAt: new Date().toISOString() };
-    store.transaction(() => { store.put('messages', input.id, { ...input, status: 'failed' }); store.put('messages', notice.id, notice); });
-    events.publish('messages.changed', { messageId: notice.id, conversationId: input.conversationId });
-  }
+  recoverInterruptedInputs(store,events,id=>id===ownConversation);
 
   async function initialize() {
     // No root SDK history may be opened before the accepted input has acquired its Feishu route.
@@ -699,15 +721,49 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     };
   }
 
-  function directRetrySource(user:Message) {
-    return user.directWebInput && !user.replyTo && (!user.origin || user.origin === 'user')
-      && (ownConversation === 'main' || (user.projectId && ownConversation === 'project:'+user.projectId+':work'))
-      && !store.get('message.routes',user.id);
+  function beginQueuedTurn(turn:PendingTurn) {
+    if (turn.stopped) return false;
+    if (turn.user.queueState !== 'queued') return true;
+    const running = store.transaction(() => {
+      const input = store.get<Message>('messages',turn.user.id);
+      if (input?.queueState !== 'queued' || input.status !== 'pending') return;
+      const started:Message = {...input,queueState:'running'};
+      store.put('messages',input.id,started);
+      return started;
+    });
+    if (!running) return false;
+    turn.user = running;
+    events.publish('messages.changed',{conversationId:ownConversation,messageId:running.id});
+    return true;
+  }
+
+  function cancelQueuedTurn(inputId:string):{outcome:'cancelled'|'started'|'idle'} {
+    const turn = pendingTurns.get(inputId);
+    let changed = false;
+    const outcome = store.transaction(() => {
+      const input = store.get<Message>('messages',inputId);
+      if (!input || input.role !== 'user' || input.conversationId !== ownConversation ||
+          !directWebSource(store,input) || options.canUseScope?.(input) === false) return 'idle';
+      if (input.queueState === 'cancelled' && input.status === 'failed' && input.stoppedByUser) return 'cancelled';
+      if (!turn || turn.stopped || input.status !== 'pending') return 'idle';
+      if (input.queueState === 'running') return 'started';
+      if (input.queueState !== 'queued') return 'idle';
+      store.put('messages',inputId,{...input,status:'failed',queueState:'cancelled',stoppedByUser:true} satisfies Message);
+      changed = true;
+      return 'cancelled';
+    });
+    if (changed && turn) {
+      turn.stopped = true;
+      leaveQueue(turn);
+      pendingTurns.delete(inputId);
+      events.publish('messages.changed',{conversationId:ownConversation,messageId:inputId});
+    }
+    return {outcome};
   }
 
   function markToolStart(turn:PendingTurn) {
     if (!turn.assistant || turn.toolStarted) return;
-    if (directRetrySource(turn.user)) store.put('message.tool-starts',turn.assistant.id,{inputId:turn.user.id});
+    if (directWebSource(store,turn.user)) store.put('message.tool-starts',turn.assistant.id,{inputId:turn.user.id});
     turn.toolStarted = true;
   }
 
@@ -728,7 +784,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     store.transaction(() => {
       store.put('messages', assistant.id, stopped);
       if (turn.toolStarted && turn.user.directWebInput) store.remove('message.tool-starts',assistant.id);
-      store.put('messages', inputId, { ...turn.user, status: 'failed', stoppedByUser: true });
+      store.put('messages', inputId, { ...terminalInput(turn.user,'failed'), stoppedByUser: true });
     });
     Object.assign(assistant, stopped);
     turn.stopped = true;
@@ -772,6 +828,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       if (turn.stopped) return;
       if (!config.demo && stopping) throw new Error('运行时已关闭，本条输入未执行。');
       if (options.canUseScope?.(user) === false) throw new Error('机器人已停用或绑定范围已改变，本条输入未执行');
+      if (directWebSource(store,user)) options.validateQueuedWebInput?.(user);
       checkAttachmentAccess(user);
       if (!state.available) { confirmedFailure = true; throw new Error(state.reason); }
       if (config.demo) {
@@ -1036,13 +1093,13 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     }
     // Persistence/event failures escape to close(), instead of becoming unhandled rejections.
     store.transaction(() => {
-      if (confirmedFailure && assistant.status === 'failed' && !turn.stopped && !turn.toolStarted && !stopping && directRetrySource(user) &&
+      if (confirmedFailure && assistant.status === 'failed' && !turn.stopped && !turn.toolStarted && !stopping && directWebSource(store,user) &&
           !store.get('message.tool-starts',assistant.id)) {
         assistant.retryable = true;
         store.put('retryableFailures',assistant.id,{inputId:user.id});
       }
       store.put('messages',assistant.id,assistant);
-      store.put('messages',user.id,{...user,status:assistant.status});
+      store.put('messages',user.id,terminalInput(user,assistant.status));
       if (turn.toolStarted && user.directWebInput) store.remove('message.tool-starts',assistant.id);
     });
     events.publish('messages.changed', { conversationId:ownConversation, messageId:assistant.id });
@@ -1055,7 +1112,18 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   return {
     // Tool actions must use the executing input, not the latest persisted/queued user.
     currentInput(): Message | undefined { return activeInput; },
-    interruptTurn,
+    interruptTurn, cancelQueuedTurn,
+    queuedWebInputs():Message[] {
+      const queued:Message[] = [];
+      for (const turn of pendingTurns.values()) {
+        if (turn.stopped || turn.user.queueState !== 'queued') continue;
+        const saved = store.get<Message>('messages',turn.user.id);
+        if (saved?.queueState === 'queued' && saved.status === 'pending' && saved.role === 'user' &&
+            saved.conversationId === ownConversation && directWebSource(store,saved) && options.canUseScope?.(saved) !== false)
+          queued.push(structuredClone(saved));
+      }
+      return queued;
+    },
     configurationBusy() { return closed || configuring || pendingTurns.size > 0; },
     lockConfiguration() {
       if (closed || configuring || pendingTurns.size > 0) throw new Error('Agent 正在处理对话，请稍后保存模型配置');
@@ -1129,6 +1197,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         ...(context?.readOnly || attachmentsOnly || scope?.kind === 'unmarked' ? { readOnly: true } : {}),
         createdAt: new Date().toISOString(), status: 'pending',
       };
+      if (directWebSource(store,message)) message.queueState = 'queued';
       const notifyDirect = !retry && message.directWebInput && options.onDirectWebInput;
       const existing = context?.files !== undefined || prepared.images.length || notifyDirect || context?.onAccepted ? store.transaction(() => {
         if (context?.files !== undefined) {
@@ -1160,7 +1229,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         try {
           await setImmediate();
           leaveQueue(turn);
-          await reply(turn, readOnlyAction, rememberModel);
+          if (beginQueuedTurn(turn)) await reply(turn, readOnlyAction, rememberModel);
         }
         finally {
           try { await turn.aborting; } finally { pendingTurns.delete(message.id); }

@@ -2924,6 +2924,7 @@ test('Web 的 conversation_status 只读取当前范围，排除本轮提问并�
     }
     assert.equal(req.callId, 'this-status');
     const status = JSON.parse(raw);
+    assert.equal(status.queuedMessages,0);
     assert.equal(status.lastMessage.text, selected);
     assert.equal(status.lastMessage.role, 'assistant');
     assert.equal(status.phase, 'idle');

@@ -1,7 +1,8 @@
 import { createMessageFiles, messageFiles } from './message-files.js';
 import { conversationImagesActive, createMessageImages, messageImages } from './message-images.js';
 import { createTurnRetry, turnRetryActive } from './retry-turn.js';
-import { stopTurnButton } from './stop-turn.js';
+import { createMessageQueue } from './message-queue.js';
+import { stopTurnButton, queueLabel, turnQueueActive } from './stop-turn.js';
 import { createReplyReadAloud } from './reply-read-aloud.js';
 import { createVoiceInput } from './voice-input.js';
 import { attachSentHistory } from './sent-history.js';
@@ -43,6 +44,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     Button({ label: '重试读取对话', size: 'sm', onClick: load }));
   const progress = h('p', { class: 'muted small' });
   const messages = h('div', { class: 'project-conversation__messages', role: 'log', 'aria-label': '项目对话' });
+  const queue = createMessageQueue(api,store,messages,id=>router.href('projects',projectId,'workspace')+'?at='+encodeURIComponent(id)+(todoId?'&todo='+encodeURIComponent(todoId):''));
   const text = TextArea({ rows: 3, placeholder: '告诉我这个文件夹里要做什么，我们持续推进。', 'aria-label': '项目目标' });
   const retryTurn = createTurnRetry(api,store);
   const files = createMessageFiles(api,store,text);
@@ -69,7 +71,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const notice = h('div', { 'aria-live': 'polite' });
   const topic = h('p', { class: 'small', hidden: true });
   const selectedTodo = () => store.view.snapshot?.todos?.find(t => t.id === todoId && t.projectId === projectId);
-  const composer = h('div', { class: 'project-conversation__composer stack' }, topic, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, files.el, text, voice.caption, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, mentions.button, pictures.button, files.button, voice.button, voice.upload, send), notice);
+  const composer = h('div', { class: 'project-conversation__composer stack' }, topic, queue.el, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, files.el, text, voice.caption, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, mentions.button, pictures.button, files.button, voice.button, voice.upload, send), notice);
   const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, statusButton, favorites.button, transcript.button, code.toggle)), status, locationNote, readNotice, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
   let draftKey, owner, enabled, quotesEnabled, editEnabled, outboxEnabled, epoch = 0;
@@ -107,6 +109,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   }
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
+    queue.update(visible && router.current.page==='projects' && key && '/projects/'+encodeURIComponent(projectId)+'/messages/queue'+(todoId?'?todoId='+encodeURIComponent(todoId):''),`project:${projectId}:work`);
     if (!visible || router.current.page !== 'projects') pictures.closeEditor();
     files.update(key,nextOwner,nextEnabled,{conversationId:`project:${projectId}:work`,projectId,...(todoId && {todoId})});
     pictures.update(key,nextOwner,nextEnabled,conversationImagesActive(store));
@@ -181,6 +184,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
       return;
     }
     if (!messages._keyed) messages.replaceChildren();
+    const queueEnabled = turnQueueActive(store);
     const retryEnabled = turnRetryActive(store);
     const retried = new Set(rows.filter(m=>m.retryOf).map(m=>m.retryOf));
     keyedList(messages, rows, m => m.id, m => {
@@ -188,7 +192,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
       const canQuote = quotesEnabled && m.conversationId === `project:${projectId}:work` && (user || m.role === 'assistant')
         && m.origin !== 'notification' && typeof m.text === 'string' && m.text.trim();
       const canEdit = (m.todoId || '') === todoId && editEnabled && user && m.conversationId === `project:${projectId}:work` && (!m.projectId || m.projectId === projectId);
-      const statusText = m.stoppedByUser ? '已停止本轮' : { failed: '处理失败，请查看原因', unknown: '结果未知，请核对，勿重复发送', pending: '处理中' }[m.status];
+      const statusText = queueLabel(m,queueEnabled) || (m.stoppedByUser ? '已停止本轮' : { failed: '处理失败，请查看原因', unknown: '结果未知，请核对，勿重复发送', pending: '处理中' }[m.status]);
       const bubble = h('div', { class: 'msg__bubble' }, user && !/^> /m.test(m.text) ? m.text : transcript.renderMessage(m, m.text));
       return h('div', { class: 'msg msg--' + (user ? 'user' : 'assistant') + (m.id === anchor ? ' is-search-hit' : ''), dataset: { id: m.id } },
         h('div', { class: 'msg__col' },
@@ -199,8 +203,8 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
           statusText && h('span', { class: 'msg__meta' }, statusText),
           (!todoId || todoId === m.todoId) && retryTurn(m,rows,`project:${projectId}:work`,
             id=>router.href('projects',m.projectId,'workspace')+'?at='+encodeURIComponent(id)+(m.todoId?'&todo='+encodeURIComponent(m.todoId):'')),
-          h('span', null, stopTurnButton(api, m, projectId), favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble, transcript.renderMessage), m.conversationId === `project:${projectId}:work` && readAloud.action(m, translation.displayedText), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
-    }, m => JSON.stringify([prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, projectId, todoId, anchor, retryEnabled, retried.has(m.id), m]));
+          h('span', null, stopTurnButton(api,m,projectId,queueEnabled), favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble, transcript.renderMessage), m.conversationId === `project:${projectId}:work` && readAloud.action(m, translation.displayedText), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
+    }, m => JSON.stringify([prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, projectId, todoId, anchor, queueEnabled, retryEnabled, retried.has(m.id), m]));
     if (historyQuery && !focused && el.isConnected && router.current.page === 'projects' && router.current.parts[1] === 'workspace') {
       const row = anchor ? messages.querySelector('[data-id="' + CSS.escape(anchor) + '"]') : messages.firstElementChild;
       if (row) { focused = true; row.tabIndex = -1; row.focus({ preventScroll: true }); row.scrollIntoView({ block: 'center' }); }

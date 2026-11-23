@@ -41,6 +41,10 @@ export const conversationEdit: Extension = {
   id: 'conversation-edit', name: '编辑为新消息', capabilities: ['web.conversation.edit'], activate() {},
 };
 
+export const conversationQueue: Extension = {
+  id: 'conversation-queue', name: '对话排队', capabilities: ['web.conversation.queue'], activate() {},
+};
+
 export const conversationOutbox: Extension = {
   id: 'conversation-outbox', name: '待确认发件', capabilities: ['web.conversation.outbox'], activate() {},
 };

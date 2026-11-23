@@ -861,13 +861,24 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           const conversationId=requiredText(input.conversationId,'原会话');
           return json(res,202,await app.retryFailedReply(decodeURIComponent(retryReply[1]!),conversationId));
         }
-        const stopMessage = path.match(/^\/api\/v1(?:\/projects\/([^/]+))?\/messages\/([^/]+)\/stop$/);
+        const queueView = path.match(/^\/api\/v1(?:\/projects\/([^/]+))?\/messages\/queue$/);
+        if (queueView && method==='GET') {
+          const project = queueView[1] && decodeURIComponent(queueView[1]);
+          const filter = url.searchParams.get('projectId') || undefined;
+          const todoId = url.searchParams.get('todoId') || undefined;
+          if (project && filter && filter!==project || !project && todoId)
+            throw new InputError('队列筛选范围与当前会话不符');
+          return json(res,200,app.queuedMessages(project ? `project:${project}:work` : 'main',project || filter,todoId));
+        }
+        const stopMessage = path.match(/^\/api\/v1(?:\/projects\/([^/]+))?\/messages\/([^/]+)\/(stop|cancel-queued)$/);
         if (stopMessage && method === 'POST') {
           const projectId = stopMessage[1] && decodeURIComponent(stopMessage[1]);
           if (projectId && !app.projects.list().some(p => p.id === projectId && !p.archivedAt))
             throw new InputError('项目不存在或已归档', 404);
           const conversationId = projectId ? `project:${projectId}:work` : 'main';
-          const message = app.store.get<Message>('messages', decodeURIComponent(stopMessage[2]!));
+          const inputId = decodeURIComponent(stopMessage[2]!);
+          if (stopMessage[3]==='cancel-queued') return json(res,200,app.cancelQueuedTurn(conversationId,inputId));
+          const message = app.store.get<Message>('messages',inputId);
           if (!message || message.role !== 'user' || message.conversationId !== conversationId)
             throw new InputError('当前会话中未找到这条输入', 404);
           return json(res, 200, await app.interruptTurn(conversationId, message.id));

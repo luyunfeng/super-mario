@@ -1,7 +1,8 @@
 import { createMessageFiles, messageFiles } from '../features/message-files.js';
 import { conversationImagesActive, createMessageImages, messageImages } from '../features/message-images.js';
 import { createTurnRetry, turnRetryActive } from '../features/retry-turn.js';
-import { stopTurnButton } from '../features/stop-turn.js';
+import { createMessageQueue } from '../features/message-queue.js';
+import { stopTurnButton, queueLabel, turnQueueActive } from '../features/stop-turn.js';
 import { createReplyReadAloud } from '../features/reply-read-aloud.js';
 import { createVoiceInput } from '../features/voice-input.js';
 import { attachSentHistory } from '../features/sent-history.js';
@@ -78,6 +79,7 @@ export function createChatPage({ api, store, scope, router }) {
   const setup = h('div', { id: 'onboarding' });
   const runStrip = h('div', { id: 'run-strip', hidden: true });
   const messages = h('div', { class: 'msgs', id: 'messages', 'aria-live': 'polite' });
+  const queue = createMessageQueue(api,store,messages,id=>router.href('chat')+'?at='+encodeURIComponent(id));
   const hero = h('div', { class: 'hero', hidden: true },
     h('h2', { class: 'hero__title' }, '今天想推进什么？'),
     h('p', { class: 'muted' }, '说出目标，Agent 会结合记忆安排下一步。'),
@@ -108,7 +110,7 @@ export function createChatPage({ api, store, scope, router }) {
   const send = h('button', { class: 'btn btn--primary btn--sm composer__send', type: 'submit', 'aria-label': '发送' }, icon('send'), '发送');
   const status = h('p', { class: 'small composer__status', role: 'status' });
   const form = h('form', { class: 'composer', id: 'message-form' },
-    recent.el,
+    recent.el, queue.el,
     h('div', { class: 'composer__box' }, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, files.el, input, voice.caption, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, mentions.button, pictures.button, files.button, voice.button, voice.upload, h('span', { class: 'grow' }), send)), status);
 
   const el = h('section', { class: 'page page--chat', id: 'chat' }, h('div', { class: 'chat-code-main' }, top, scroller, form), code.el);
@@ -150,6 +152,8 @@ export function createChatPage({ api, store, scope, router }) {
   }
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
+    const queueProject = scope.get();
+    queue.update(router.current.page==='chat' && key && '/messages/queue'+(queueProject?'?projectId='+encodeURIComponent(queueProject):''),'main');
     if (router.current.page !== 'chat') pictures.closeEditor();
     files.update(key,nextOwner,nextEnabled,{conversationId:'main',...(scope.get() && {projectId:scope.get()})});
     pictures.update(key,nextOwner,nextEnabled,conversationImagesActive(store));
@@ -306,12 +310,14 @@ export function createChatPage({ api, store, scope, router }) {
     }
     const canQuote = quotesEnabled && message.conversationId === 'main' && typeof message.text === 'string' && message.text.trim();
     if (message.role === 'user') {
+      const queueEnabled = turnQueueActive(store) && message.conversationId==='main';
+      const stateLabel = queueLabel(message,queueEnabled) || (message.stoppedByUser ? '已停止本轮' : message.status==='failed' ? '处理失败' : '');
       const canEdit = editEnabled && message.conversationId === 'main' && (!scope.get() || scope.get() === message.projectId);
       const imageDraft = (!message.todoId && (message.projectId || '') === (scope.get() || ''))
         ? pictures.editCopy.bind(null,composerContext().key) : undefined;
       return h('article', { class: 'msg msg--user', dataset: { id: message.id } },
         h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text), messageImages(api,store,message,imageDraft),messageFiles(api,store,message,store.view.snapshot?.messages,messages)),
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.stoppedByUser ? ' · 已停止本轮' : message.status === 'failed' && ' · 处理失败', stopTurnButton(api, message), mark, transcript.copyMessage(message, translation.displayedText), canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), stateLabel && ' · '+stateLabel, stopTurnButton(api,message,undefined,queueEnabled), mark, transcript.copyMessage(message, translation.displayedText), canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
     }
     const personal = message.conversationId === 'main' && (!message.origin || message.origin === 'user');
     const label = personal ? assistantLabel : message.origin === 'result' ? '执行结果' : '主 Agent';
@@ -328,10 +334,11 @@ export function createChatPage({ api, store, scope, router }) {
 
   function paintMessages(list) {
     const translationEpoch = translation.update(list);
+    const queueEnabled = turnQueueActive(store);
     const retryEnabled = turnRetryActive(store);
     const retried = new Set(list.filter(m=>m.retryOf).map(m=>m.retryOf));
     keyedList(messages, list, item => item.id, renderMessage, item => JSON.stringify([
-      prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, draftKey, retryEnabled, retried.has(item.id), item,
+      prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, draftKey, queueEnabled, retryEnabled, retried.has(item.id), item,
     ]));
   }
 
