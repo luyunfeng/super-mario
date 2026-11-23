@@ -89,10 +89,14 @@ test('任务引用按机器人身份只读取原群的单条父消息，撤权�
     { body: { content: 'broken' } }]) {
     answer = { ...plain, ...change }; assert.equal(await quote(), undefined);
   }
-  answer = { ...plain, msg_type: 'post', body: { content: JSON.stringify({ zh_cn: { title: '标题', content: [[
+  const mentions = [{key:'@_user_1', id:{open_id:'ou_example'}, name:'复核员'}];
+  answer = { ...plain, mentions, body:{content:JSON.stringify({text:'请 @_user_1 复核'})} };
+  assert.equal(await quote(), '请 @复核员 复核');
+  answer = { ...plain, mentions, msg_type: 'post', body: { content: JSON.stringify({ zh_cn: { title: '标题', content: [[
     { tag: 'text', text: '附件见' }, { tag: 'a', text: '此处', href: 'https://fixture.invalid/' }, { tag: 'img', image_key: 'private-key' },
+    { tag: 'at', user_id: 'ou_example' }, {tag:'code_block', language:'text', text:'样例数据'},
   ]] } }) } };
-  assert.equal(await quote(), '标题\n附件见此处');
+  assert.equal(await quote(), '**标题**\n附件见[此处](https://fixture.invalid/)[图片]@复核员\n```text\n样例数据\n```');
   invalidateDuringRead = true;
   await assert.rejects(quote(), /来源已撤销/);
   assert.ok(paths.length > 0 && paths.every(path => path === '/open-apis/im/v1/messages/om_parent'));

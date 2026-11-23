@@ -549,30 +549,9 @@ export function createFeishuIntegration(options: FeishuOptions) {
   async function readTaskQuote(chatId: string, parentId: string, guard: () => void): Promise<string | undefined> {
     const message = await readVerifiedMessage(chatId, parentId, guard);
     guard();
-    if (!message) return;
-    try {
-      if (message.msg_type !== 'text' && message.msg_type !== 'post') return;
-      const raw = object(JSON.parse(string(object(message.body).content)));
-      let text = string(raw.text);
-      if (message.msg_type === 'post') {
-        const post = Array.isArray(raw.content) ? raw : object(raw.zh_cn ?? raw.en_us ?? raw.ja_jp);
-        if (!Array.isArray(post.content)) return;
-        const lines = [string(post.title)];
-        for (const row of post.content) {
-          if (!Array.isArray(row)) return;
-          let line = '';
-          for (const item of row) {
-            const node = object(item);
-            if (node.tag === 'text' || node.tag === 'a') line += string(node.text);
-            else if (node.tag === 'at') line += '@成员';
-            else if (!['img', 'file', 'media', 'audio', 'emotion'].includes(string(node.tag))) return;
-          }
-          lines.push(line);
-        }
-        text = lines.join('\n');
-      }
-      return Array.from(text.trim()).slice(0, 300).join('') || undefined;
-    } catch { return; }
+    if (!message || (message.msg_type !== 'text' && message.msg_type !== 'post')) return;
+    // Use the parent's own mentions. Media stays a placeholder; this read grants no attachment access.
+    return Array.from(forwardBody(message)).slice(0, 300).join('') || undefined;
   }
   async function readReaction(messageId: string, emoji: 'OnIt' | 'DONE', guard: () => void, removeId?: string) {
     const epoch = generation, signal = controller.signal;
