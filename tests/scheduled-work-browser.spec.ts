@@ -101,6 +101,7 @@ test('现有创建审批生效、单次已触发与到期派发审批 pending/co
     await emit(page);
     await expect(panel(page)).toContainText('已生效（仅配置生效）');
     await expect(panel(page)).toContainText('单次计划已触发');
+    await expect(panel(page)).not.toContainText('下次触发');
     await expect(panel(page)).toContainText('已生成派发审批');
     await expect(panel(page)).toContainText('任务最终完成情况未确认');
     const details = panel(page).locator('details');

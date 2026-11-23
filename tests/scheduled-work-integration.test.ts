@@ -8,6 +8,8 @@ test('real HTTP creation approval activates one schedule and program fact brief 
  const before=await f.request('/scheduled-work');assert.equal(before.data.items[0].status,'pending');assert.equal('sourceMessage' in before.data.items[0],false);
  const approved=await f.request('/approvals/'+created.data.id+'/approve','POST',{version:created.data.version});assert.equal(approved.data.status,'completed');assert.ok(approved.data.result.scheduleId);
  await f.due();let list=(await f.request('/scheduled-work')).data;assert.equal(list.items[0].occurrences.length,1);assert.equal(list.items[0].occurrences[0].status,'completed');const messageId=list.items[0].occurrences[0].result.messageId;const message=f.server.app.store.get<Message>('messages',messageId)!;assert.match(message.text,/开放待办/);assert.equal(message.replyTo,undefined);assert.equal(message.origin,'notification');assert.equal(f.server.app.store.list<Run>('runs').length,0);
+ assert.equal(list.items[0].scheduleStatus,'done');
+ assert.equal(list.items[0].nextAt,undefined);
  await f.due();assert.equal(f.server.app.store.list<Message>('messages').filter(m=>m.id===messageId).length,1);await f.restart();await f.due();list=(await f.request('/scheduled-work')).data;assert.equal(list.items[0].occurrences.length,1);assert.ok(f.server.app.store.get('messages',messageId));
 });
 test('due dispatch creates a second explicit approval; cancel closes its pending receipt without executing',async t=>{
