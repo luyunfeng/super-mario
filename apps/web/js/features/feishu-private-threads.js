@@ -256,6 +256,72 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
   function renderDetail(path, row, messages, nextBefore, nextAfter, notice, id, draft, around) {
     if (!query) archived = !!row.archived;
     const feedback = h('p', { role: 'status', class: 'small muted' }, notice);
+    const selectionPanel = h('div', { class: 'stack', 'aria-label': '飞书私聊去向' });
+    const selectionStatus = h('p', { role: 'status', class: 'small muted' });
+    let selection = row.selection, selectionArchived = row.archived, selectionBusy = false;
+    const selectionCurrent = () => current(id) && openThreadId === row.threadId;
+    const selectButton = Button({ label: '在飞书继续聊', size: 'sm', onClick: selectThread });
+    const refreshSelection = Button({ label: '核对当前去向', size: 'sm', kind: 'ghost', onClick: () => checkSelection() });
+    function updateSelectionButtons() {
+      selectButton.disabled = selectionBusy || selectionArchived || typeof selection?.version !== 'string' ||
+        !selection.version || selection.selected !== false;
+      refreshSelection.disabled = selectionBusy;
+    }
+    function paintSelection(note = '') {
+      updateSelectionButtons();
+      const verified = typeof selection?.version === 'string' && !!selection.version && typeof selection.selected === 'boolean';
+      selectionStatus.textContent = [note, selectionArchived ? '对话已归档。' : !verified ? '当前去向待核对。'
+        : selection.selected ? '当前已选为飞书私聊去向。' : '当前未选为飞书私聊去向。'].filter(Boolean).join(' ');
+    }
+    async function checkSelection(note = '') {
+      if (!selectionCurrent() || selectionBusy) return;
+      selectionBusy = true;
+      paintSelection('正在核对…');
+      try {
+        const latest = await api.get(path);
+        if (!selectionCurrent()) return;
+        if (latest.threadId !== row.threadId) throw Error('对话身份已变化。');
+        selection = row.selection = latest.selection;
+        selectionArchived = latest.archived;
+        paintSelection(note);
+      } catch (error) {
+        if (!selectionCurrent() || inaccessible(error)) return;
+        if (error.status === 410) return deleted();
+        selection = undefined;
+        paintSelection('核对失败：' + error.message);
+      } finally {
+        selectionBusy = false;
+        if (selectionCurrent()) updateSelectionButtons();
+      }
+    }
+    async function selectThread() {
+      if (!selectionCurrent() || selectButton.disabled || selectionBusy || selectionArchived || !selection?.version) return;
+      selectionBusy = true;
+      paintSelection('正在切换…');
+      try {
+        const next = await api.post(path + '/select', { version: selection.version });
+        if (!selectionCurrent()) return;
+        if (next?.selected !== true || !next.version || typeof next.version !== 'string') throw Error('未收到有效回执。');
+        selection = row.selection = next;
+        paintSelection();
+      } catch (error) {
+        if (!selectionCurrent() || inaccessible(error)) return;
+        if (error.status === 410) return deleted();
+        selection = undefined;
+        if (error.status === 409) {
+          selectionBusy = false;
+          await checkSelection('去向已变化，已重新核对。');
+        } else paintSelection('切换未确认，请核对当前去向。' + error.message);
+      } finally {
+        selectionBusy = false;
+        if (selectionCurrent()) updateSelectionButtons();
+      }
+    }
+    if (row.selection) {
+      selectionPanel.append(h('p', { class: 'small' }, '切换后，你在飞书私聊中下一条未引用消息会进入这段对话。'),
+        selectionStatus, h('div', { class: 'row row--wrap' }, selectButton, refreshSelection));
+      paintSelection();
+    }
     const title = Input({ value: draft?.title ?? row.title });
     const savedTags = row.tags ?? [];
     const tags = [...(draft?.tags ?? savedTags)];
@@ -415,7 +481,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       });
     } });
     exportButton.hidden = !conversationExportActive(store);
-    replace(body, back(), h('h3', null, row.title), exportButton, edit,
+    replace(body, back(), h('h3', null, row.title), row.selection && selectionPanel, exportButton, edit,
       Button({ label: '复制对话 ID', size: 'sm', onClick: async () => {
         try { await copyText(row.threadId); if (current(id)) feedback.textContent = '已复制对话 ID。'; }
         catch { if (current(id)) feedback.textContent = '复制失败，请检查剪贴板权限。'; }

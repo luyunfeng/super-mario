@@ -771,6 +771,39 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   function privateThreadMetadata(botId: string, threadId: string) {
     return readPrivateThreadMetadata(app.store, requireThread(botId, threadId));
   }
+  function privateThreadSelection(botId:string,threadId:string,input?:Record<string,unknown>) {
+    let changed=false;
+    const result=app.store.transaction(()=>{
+      if (!pluginEnabled()) throw Object.assign(new Error('飞书插件已停用'),{status:503});
+      const row=requireThread(botId,threadId), bot=current(botId), paired=owner(bot);
+      if (bot.archivedAt || !paired?.senderId || !ownsThread(bot,paired,row))
+        throw Object.assign(new Error('飞书独立对话不存在或绑定已变化'),{status:404});
+      const key=digest([bot.id,paired.chatId,'']);
+      const binding=app.store.get<ChatBinding>('feishu.chat-target',key);
+      const audience=digest([groupReadBinding(bot,paired),bot.revision,threadId]);
+      const now=Date.now();
+      const versionOf=(slot:ChatBinding|undefined)=>audience+'.'+digest([slot??null,!!slot && slot.expiresAt<=now]);
+      const version=versionOf(binding);
+      const selected=!!binding && !row.archived && binding.conversationThreadId===threadId && !binding.agentTarget &&
+        !binding.projectId && binding.senderId===paired.senderId && binding.revision===bot.revision && binding.expiresAt>now;
+      if (!input) return {selected,version};
+      if (Object.keys(input).length!==1 || typeof input.version!=='string' || !input.version)
+        throw Object.assign(new Error('请提供当前私聊会话选择版本'),{status:400});
+      if (row.archived) throw Object.assign(new Error('已归档的对话需要先恢复'),{status:409});
+      // A stale click can acknowledge the same live target, but can never
+      // write over a newer choice or cross a pairing generation.
+      if (input.version!==version && !(selected && /^[a-f0-9]{64}\.[a-f0-9]{64}$/.test(input.version) && input.version.startsWith(audience+'.')))
+        throw Object.assign(new Error('私聊会话选择已变化，请刷新后重新选择'),{status:409});
+      if (selected) return {selected,version};
+      const next:ChatBinding={conversationThreadId:threadId,projectId:'',revision:bot.revision,senderId:paired.senderId,
+        selectionId:randomUUID(),expiresAt:Number.MAX_SAFE_INTEGER};
+      app.store.put('feishu.chat-target',key,next);
+      changed=true;
+      return {selected:true,version:versionOf(next)};
+    });
+    if (changed) app.events.publish('feishu.changed',{botId,threadSelectionChanged:true});
+    return result;
+  }
   function threadChanged(botId: string, deletedThreadId?: string) {
     app.events.publish('feishu.changed', { botId, threadsChanged: true, ...(deletedThreadId && { deletedThreadId }) });
     pins.scheduleRefresh();
@@ -3534,7 +3567,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const receipt = app.store.get<{id?:string;status:string}>('feishu.bot.dispatch',bot.id+':'+bot.appId+':'+entry.id);
       return stamp?.revision === bot.revision && stamp.privateSenderId === paired.senderId && receipt?.id === input.id && receipt.status === 'completed';
     },
-    topicChats, todoThread, bindWorkerTopic, canUseScope, listGroupReads, privateThreads, requireThread, deletePrivateThread, privateThreadMetadata, updatePrivateThread, threadPreferenceKey, threadTagPreferences, threadOrder, listPrivateHistory,
+    topicChats, todoThread, bindWorkerTopic, canUseScope, listGroupReads, privateThreads, requireThread, deletePrivateThread, privateThreadMetadata, privateThreadSelection, updatePrivateThread, threadPreferenceKey, threadTagPreferences, threadOrder, listPrivateHistory,
     searchPrivateHistory(id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string) {
       const bot = current(id), paired = owner(bot);
       if (!paired?.senderId || bot.scope.kind !== 'global' || (sourceId && !privateTurn(bot, paired, sourceId)))

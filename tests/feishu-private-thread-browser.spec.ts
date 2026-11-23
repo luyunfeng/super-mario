@@ -25,15 +25,22 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   t.after(() => browser.close());
   const create = async (name: string, appId: string) => {
     const bot = await server.bots.create({ name, appId, appSecret: 'fixture', scope: { kind: 'global' }, requireConfirmation: false });
-    const send = (text: string, messageId: string) => clients.get(appId)!.onMessage(text,
-      { messageId, senderType: 'user', senderId: name, chatId: 'chat-' + name, chatType: 'p2p' });
+    const send = (text: string, messageId: string, parentId?:string) => clients.get(appId)!.onMessage(text,
+      { messageId, parentId, senderType: 'user', senderId: name, chatId: 'chat-' + name, chatType: 'p2p' });
     await send(bot.pairingCode!, 'pair');
     return { bot, send };
   };
   const first = await create('合成甲', 'cli_3333333333333333');
   const second = await create('合成乙', 'cli_4444444444444444');
   await second.send('/new 其他机器人的讨论', 'second');
+  const input=async(text:string)=>t.waitFor(()=>{
+    const m=server.app.store.list<Message>('messages').find(m=>m.role==='user' && m.text===text && m.status==='done');
+    assert.ok(m);return m;
+  });
+  await first.send('原有主人私聊锚点','original-main');
+  const main=await input('原有主人私聊锚点');
   await first.send('/new 核对独立方案', 'first');
+  const independent=await input('核对独立方案');
   const base = '/api/v1/feishu/bots/';
   const get = (path: string) => fetch(server.url + path, { headers: { authorization: 'Bearer ' + token } });
   let thread = '';
@@ -46,6 +53,14 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   });
   assert.equal((await get(base + second.bot.id + '/threads/' + thread)).status, 404);
   assert.equal((await fetch(server.url + base + first.bot.id + '/threads')).status, 401);
+  const detailPath=base+first.bot.id+'/threads/'+thread;
+  const selection=async()=>(await (await get(detailPath)).json()).selection as {version:string;selected:boolean};
+  const select=(version:string)=>fetch(server.url+detailPath+'/select',{method:'POST',
+    headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({version})});
+  const active=await selection();assert.equal(active.selected,true);
+  await first.send('/main','back-main-before-inspection');
+  const prior=await selection();assert.equal(prior.selected,false);assert.notEqual(prior.version,active.version);
+  assert.equal((await select(active.version)).status,409);
   const page = await browser.newPage();
   const clipboardWrites: string[] = [];
   await page.exposeFunction('captureThreadClipboard', (text: string) => { clipboardWrites.push(text); });
@@ -61,6 +76,22 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await drawer.getByRole('button', { name: /核对独立方案/ }).click();
   await expect(drawer.locator('section').first()).toContainText('核对独立方案');
   await expect(drawer).not.toContainText('其他机器人的讨论');
+  assert.deepEqual(await selection(),prior);
+  await first.send('只浏览详情后发送','peek-main');
+  assert.equal((await input('只浏览详情后发送')).conversationId,main.conversationId);
+  const selectedResult=page.waitForResponse(r=>r.url()===server.url+detailPath+'/select' && r.request().method()==='POST');
+  await drawer.getByRole('button',{name:'在飞书继续聊',exact:true}).click();
+  const selectedResponse=await selectedResult;assert.equal(selectedResponse.status(),200,await selectedResponse.text());
+  assert.deepEqual(selectedResponse.request().postDataJSON(),{version:prior.version});
+  const nowSelected=await selection();assert.equal(nowSelected.selected,true);assert.notEqual(nowSelected.version,prior.version);
+  assert.equal((await select(prior.version)).status,200);assert.equal((await select(nowSelected.version)).status,200);
+  assert.deepEqual(await selection(),nowSelected);
+  await first.send('显式选择后的普通发言','selected-from-web');
+  assert.equal((await input('显式选择后的普通发言')).conversationId,independent.conversationId);
+  await first.send('仍引用最初的私聊','quote-original','original-main');
+  assert.equal((await input('仍引用最初的私聊')).conversationId,main.conversationId);
+  await first.send('引用之后仍以网页选择为准','no-quote-again');
+  assert.equal((await input('引用之后仍以网页选择为准')).conversationId,independent.conversationId);
   await drawer.getByRole('button', { name: '复制对话 ID' }).click();
   await expect(drawer).toContainText('已复制对话 ID。');
   assert.deepEqual(clipboardWrites, [thread]);
@@ -74,6 +105,8 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await expect(drawer.getByRole('heading', { name: '归档核验方案' })).toBeVisible();
   await drawer.getByRole('button', { name: '归档对话' }).click();
   await expect(drawer.getByRole('button', { name: '恢复对话' })).toBeVisible();
+  const archivedSelect=await select((await selection()).version);
+  assert.equal(archivedSelect.status,409,await archivedSelect.text());
   await drawer.getByRole('button', { name: '返回列表' }).click();
   await expect(drawer.getByRole('button', { name: /归档核验方案/ })).toBeVisible();
   await drawer.getByRole('button', { name: '未归档', exact: true }).click();
@@ -109,7 +142,6 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await expect(drawer).toContainText('当前已保存标签：核对标签');
   const keyword = '蓝色铅笔标记';
   await first.send('很早的' + keyword, 'old-hit');
-  const detailPath = base + first.bot.id + '/threads/' + thread;
   await t.waitFor(async () => {
     const detail = await (await get(detailPath)).json();
     assert.ok(detail.messages.some((message: { role: string; text: string }) =>

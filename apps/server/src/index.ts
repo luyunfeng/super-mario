@@ -362,6 +362,11 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (url.searchParams.getAll('before').length > 1) throw new InputError('只能指定一个读群记录游标');
           return json(res, 200, bots.listGroupReads(decodeURIComponent(groupReads[1]!), url.searchParams.get('before') ?? undefined));
         }
+        const selectThread=path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/threads\/([0-9a-f]{64})\/select$/);
+        if (selectThread && method==='POST') {
+          const input=await body(req,1024);
+          return json(res,200,bots.privateThreadSelection(decodeURIComponent(selectThread[1]!),selectThread[2]!,input));
+        }
         const botThreads = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/threads(?:\/(order|search|tags|[0-9a-f]{64}))?$/);
         if (botThreads && (method === 'GET' || (method === 'DELETE' && /^[0-9a-f]{64}$/.test(botThreads[2] ?? '')) || (method === 'PATCH' && botThreads[2] && botThreads[2] !== 'search'))) {
           if (!app.plugins.list().some(p => p.id === 'feishu' && p.status === 'active')) throw new InputError('飞书插件已停用', 503);
@@ -389,7 +394,8 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           }
           const row = bots.requireThread(id, botThreads[2]);
           if (['before', 'after', 'around'].some(key => params.getAll(key).length > 1)) throw new InputError('消息位置不可重复');
-          return json(res, 200, privateThreadPage(app.store, row, params.get('before'), params.get('after'), params.get('around'), app.canReadMessageFiles));
+          return json(res, 200, {...privateThreadPage(app.store, row, params.get('before'), params.get('after'), params.get('around'), app.canReadMessageFiles),
+            selection:bots.privateThreadSelection(id,row.threadId)});
         }
         const botWorkbench = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/workbench$/);
         if (botWorkbench && method === 'GET') {

@@ -2942,6 +2942,7 @@ test('Web 的 conversation_status 只读取当前范围，排除本轮提问并�
       assert.match(req.system, /已配对的全局机器人私聊发送 \/list/);
       assert.match(req.system, /发送 \/list 关键词 或 \/对话 关键词/);
       assert.match(req.system, /「查看原文」.*回看命中发言和上下文/);
+      assert.match(req.system, /「在飞书继续聊」.*下一条未引用私聊消息/);
       assert.match(req.system, /发送 \/main 可让后续未引用消息回到该机器人的主会话/);
       return call('conversation_status', { conversationId: forbiddenId }, 'forged-status');
     }
