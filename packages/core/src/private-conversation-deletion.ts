@@ -100,38 +100,52 @@ export function forgetPrivateConversation(store: Store, conversationId: string) 
 }
 
 
-/** Filesystem cleanup follows the committed tombstone, including after an interrupted shutdown. */
-export function createWebThreadCleanup(store:Store,forget:(id:string)=>Promise<void>){
-  const jobs=new Map<string,Promise<void>>();
-  let closed=false, timer:ReturnType<typeof setTimeout>|undefined;
-  function retry(){
-    if(closed || timer)return;
-    timer=setTimeout(()=>{timer=undefined;void recover();},300_000);
+/** Retry only committed deletions. A restart may occur between SQLite commit and disk cleanup. */
+export function createWebThreadCleanup(store: Store, forget: (id: string) => Promise<void>) {
+  const jobs = new Map<string, Promise<void>>();
+  let closed = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  function scheduleRetry() {
+    if (closed || timer) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      void recover();
+    }, 300_000);
     timer.unref();
   }
-  function clean(id:string):Promise<void>{
-    const record=store.get<DeletedWebThread>(webTombstones,id);
-    if(!record?.cleanupPending)return Promise.resolve();
-    if(record.id!==id || !webThread.test('web:'+id) || store.get('web-conversations',id))
-      return Promise.reject(Object.assign(new Error('独立对话删除记录不匹配'),{status:409}));
-    const active=jobs.get(id);
-    if(active)return active;
-    const job=Promise.resolve().then(()=>forget(id)).then(()=>{
-      store.put(webTombstones,id,{...record,cleanupPending:false});
-    }).catch(()=>{
-      retry();
-      throw Object.assign(new Error('对话已删除，磁盘记录尚待清理；可用原版本再次核对'),{status:503});
-    }).finally(()=>jobs.delete(id));
-    jobs.set(id,job);
+
+  function clean(id: string): Promise<void> {
+    const record = store.get<DeletedWebThread>(webTombstones, id);
+    if (!record?.cleanupPending) return Promise.resolve();
+    if (record.id !== id || !webThread.test('web:' + id) || store.get('web-conversations', id))
+      return Promise.reject(Object.assign(new Error('独立对话删除记录不匹配'), { status: 409 }));
+
+    const active = jobs.get(id);
+    if (active) return active;
+    const job = Promise.resolve().then(() => forget(id)).then(() => {
+      store.put(webTombstones, id, { ...record, cleanupPending: false });
+    }).catch(() => {
+      scheduleRetry();
+      throw Object.assign(new Error('对话已删除，磁盘记录尚待清理。可用原版本再次核对'), { status: 503 });
+    }).finally(() => jobs.delete(id));
+    jobs.set(id, job);
     return job;
   }
-  async function recover(){
-    for(const row of store.list<DeletedWebThread>(webTombstones)){
-      if(closed)break;
-      if(row.cleanupPending)await clean(row.id).catch(retry);
+
+  async function recover() {
+    for (const row of store.list<DeletedWebThread>(webTombstones)) {
+      if (closed) break;
+      if (row.cleanupPending) await clean(row.id).catch(scheduleRetry);
     }
   }
-  return {clean,recover,async close(){
-    closed=true;clearTimeout(timer);await Promise.allSettled(jobs.values());
-  }};
+
+  return {
+    clean, recover,
+    async close() {
+      closed = true;
+      clearTimeout(timer);
+      await Promise.allSettled(jobs.values());
+    },
+  };
 }

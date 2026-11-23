@@ -631,22 +631,24 @@ export async function createWorkbench(config: AppConfig) {
   const webConversationAllowed = (id:string, projectId?:string) =>
     plugins.list().some(p=>p.id==='web-conversations' && p.status==='active') && webConversationMatches(store,id,projectId);
   const scopedAgents = createScopedAgents({ webConversationAllowed, validateQueuedWebInput, canGenerateOffice, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, canOpenQuestion:source=>Boolean(questionFormAudience(source)), onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
-  const webThreadCleanup=createWebThreadCleanup(store,id=>scopedAgents.forgetDeletedWebThread(id));
-  async function deleteWebConversation(id:string,version:number){
-    if(!plugins.list().some(p=>p.id==='web-conversations'&&p.status==='active'))throw new InputError('独立 Web 对话插件已停用',503);
-    const key=id.toLowerCase();
-    const changed=store.transaction(()=>{
-      const existed=!!store.get('web-conversations',key);
-      eraseWebConversationRegistration(store,key,version);
-      if(existed){
+  const webThreadCleanup = createWebThreadCleanup(store, id => scopedAgents.forgetDeletedWebThread(id));
+  async function deleteWebConversation(id: string, version: number) {
+    if (!plugins.list().some(p => p.id === 'web-conversations' && p.status === 'active'))
+      throw new InputError('独立 Web 对话插件已停用', 503);
+    if (typeof id !== 'string') throw new InputError('对话 ID 须为 UUID v4', 400);
+    const key = id.toLowerCase();
+    const changed = store.transaction(() => {
+      const existed = !!store.get('web-conversations', key);
+      eraseWebConversationRegistration(store, key, version);
+      if (existed) {
         scopedAgents.assertWebThreadIdle(key);
-        forgetPrivateConversation(store,'web:'+key);
+        forgetPrivateConversation(store, 'web:' + key);
       }
       return existed;
     });
-    if(changed)events.publish('web-conversations.changed',{id:key,deleted:true});
+    if (changed) events.publish('web-conversations.changed', { id: key, deleted: true });
     await webThreadCleanup.clean(key);
-    return {deleted:true};
+    return { deleted: true };
   }
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
     allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'],
