@@ -1455,8 +1455,9 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!threadSearchEnabled()) return {toast:{type:'info',content:'对话历史搜索插件已停用。发送 /list（不带关键词）可浏览当前机器人的对话清单。'}};
       if (value.kind==='workbench.chat') {
         const thread=value.conversationThreadId;
-        if (value.projectId!=='' || typeof thread!=='string' || !cap.threadIds?.includes(thread) ||
-            !buildChatList(bot,paired,value.navigation,cap.threadSearch.page,cap.threadSearch.query).threadIds.includes(thread)) return fail;
+        if (value.projectId!=='' || typeof thread!=='string' || !cap.threadIds?.includes(thread)) return fail;
+        if (!buildChatList(bot,paired,value.navigation,cap.threadSearch.page,cap.threadSearch.query).threadIds.includes(thread))
+          return {toast:{type:'info',content:'这条结果已不在当前搜索页。请重新发送 /list 加原关键词，核对后再选择。'}};
       } else if (value.kind!=='workbench.navigate' || value.view!=='conversations') return fail;
     }
     if (value.kind === 'workbench.startForm') {

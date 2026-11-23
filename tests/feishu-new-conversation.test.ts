@@ -216,9 +216,17 @@ test('配对主人按标题或正文搜索活动独立对话，点击结果后�
   assert.ok(forged);
   await a.receive('检验越界按钮未切换','after-forged');
   assert.equal((await f.input('检验越界按钮未切换')).conversationId,body.conversationId);
+  const staleChoice=choices.find(b=>b.value.conversationThreadId===find(query+' 标题甲').threadId)!;
+  const moved=find(query+' 标题甲');
+  const archiveResult=await fetch(f.url+'/api/v1/feishu/bots/'+a.row.id+'/threads/'+moved.threadId,{
+    method:'PATCH',headers,body:JSON.stringify({version:moved.version,archived:true})});
+  assert.equal(archiveResult.status,200);
+  const expiredHit=await a.click(chinese.id,staleChoice.value);
+  assert.match(JSON.stringify(expiredHit),/重新发送 \/list 加原关键词/);
+  await a.receive('旧结果消失后保持去向','after-result-moved');
+  assert.equal((await f.input('旧结果消失后保持去向')).conversationId,body.conversationId);
   const plugin=await fetch(f.url+'/api/v1/plugins/conversation-search',{method:'POST',headers,body:JSON.stringify({enabled:false})});
   assert.equal(plugin.status,200);
-  const staleChoice=choices.find(b=>b.value.conversationThreadId===find(query+' 标题甲').threadId)!;
   const stale=await a.click(chinese.id,staleChoice.value);
   assert.match(JSON.stringify(stale),/停用/);
   await a.receive('停用后旧搜索卡保持原会话','after-disabled-click');
@@ -227,7 +235,7 @@ test('配对主人按标题或正文搜索活动独立对话，点击结果后�
   assert.deepEqual(buttons(disabled.context?.card),[]);
   assert.match(disabled.text,/已停用.*\/list（不带关键词）/);
   const ordinary=await invoke('/list','unfiltered');
-  assert.equal(buttons(ordinary.context?.card).length,3);
+  assert.equal(buttons(ordinary.context?.card).length,2);
   assert.ok(!f.users().some(row=>/^\/(list|对话)/.test(row.text)));
 });
 
