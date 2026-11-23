@@ -1644,7 +1644,11 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const project = app.store.get<Project>('projects', value.projectId);
       if (value.projectId && (!project || project.archivedAt)) return fail;
       const thread = value.conversationThreadId;
-      if (thread !== undefined && (typeof thread !== 'string' || !cap.threadIds?.includes(thread) || !validThread(bot, paired, thread, true) || value.projectId)) return fail;
+      if (thread !== undefined) {
+        if (typeof thread !== 'string' || !cap.threadIds?.includes(thread) || value.projectId) return fail;
+        if (!validThread(bot, paired, thread, true))
+          return {toast:{type:'info',content:'该对话已不在当前清单中。请发送 /list 查看可选对话。'}};
+      }
       const binding = { ...(typeof thread === 'string' && { conversationThreadId: thread }), selectionId: randomUUID(), projectId: value.projectId, revision: bot.revision, senderId: paired.senderId, expiresAt: cap.expiresAt };
       app.store.transaction(() => {
         for (const messageId of ['', input.messageId]) app.store.put('feishu.chat-target', digest([bot.id, input.chatId, messageId]), binding);

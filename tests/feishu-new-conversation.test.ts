@@ -218,9 +218,13 @@ test('配对主人按标题或正文搜索活动独立对话，点击结果后�
   assert.equal((await f.input('检验越界按钮未切换')).conversationId,body.conversationId);
   const staleChoice=choices.find(b=>b.value.conversationThreadId===find(query+' 标题甲').threadId)!;
   const moved=find(query+' 标题甲');
+  const oldList=await invoke('/list','list-before-archiving');
+  const oldListButton=buttons(oldList.context?.card).find(item=>item.value.conversationThreadId===moved.threadId)!;
   const archiveResult=await fetch(f.url+'/api/v1/feishu/bots/'+a.row.id+'/threads/'+moved.threadId,{
     method:'PATCH',headers,body:JSON.stringify({version:moved.version,archived:true})});
   assert.equal(archiveResult.status,200);
+  const expiredListItem=await a.click(oldList.id,oldListButton.value);
+  assert.match(JSON.stringify(expiredListItem),/发送 \/list 查看可选对话/);
   const expiredHit=await a.click(chinese.id,staleChoice.value);
   assert.match(JSON.stringify(expiredHit),/重新发送 \/list 加原关键词/);
   await a.receive('旧结果消失后保持去向','after-result-moved');
