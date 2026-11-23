@@ -62,8 +62,9 @@ test('项目工作指令独立保存，编辑冲突时保留草稿，清除和�
   assert.equal((await rejected).status(), 409);
   await expect(body(first)).toHaveValue(local);
   await expect(drawer(first)).toContainText(remote);
-  await expect(drawer(first)).toContainText('草稿基于版本 1');
-  await expect(drawer(first).getByRole('region', { name: '服务端当前版本' })).toContainText('版本 2');
+  const stored = server.app.store.get<{ updatedAt: string }>('project-instructions', alpha.id)!;
+  await expect(drawer(first)).toContainText(/草稿基于版本 1 · 保存于 \d{4}-/);
+  await expect(drawer(first).getByRole('region', { name: '服务端当前版本' })).toContainText('版本 2 · 保存于 ' + stored.updatedAt);
   await action(first, '保存我的草稿').click();
   await expect(drawer(first)).toContainText('工作指令已保存');
   await expect(body(second)).toHaveValue(local);

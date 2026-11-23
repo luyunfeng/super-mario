@@ -400,11 +400,16 @@ export async function createWorkbench(config: AppConfig) {
       || typeof value.revision !== 'number' || !Number.isSafeInteger(value.revision) || value.revision < 0) {
       throw new InputError('项目工作指令来源不匹配', 409);
     }
-    if (!value.notes && audience === 'assistant') {
-      return value.revision === 0 ? '本项目尚未保存过工作指令。用户核对版本时，说明尚无已保存的版本。'
-        : `本项目工作指令已在第 ${value.revision} 版清空。用户询问版本时说明该版本正文为空，本轮不沿用旧版本的要求。`;
-    }
-    return formatProjectInstructions(project, value.notes, value.revision);
+    const instructions = formatProjectInstructions(project, value.notes, value.revision);
+    if (audience === 'executor') return instructions;
+    if (!value.revision && !value.notes) return '本项目尚未保存过工作指令。用户核对版本时，说明尚无已保存的版本。';
+    const time = typeof value.updatedAt === 'string' ? Date.parse(value.updatedAt) : NaN;
+    const savedAt = Number.isFinite(time) ? new Date(time).toISOString() : null;
+    return [
+      instructions || `本项目工作指令已在第 ${value.revision} 版清空。用户询问版本时说明该版本正文为空，本轮不沿用旧版本的要求。`,
+      '问这版何时保存或清空时，按 savedAt 回答，并写明时区。时间缺失时说明未记录。此时间属于该版本，不代表项目创建时间，也不能证明谁编辑过。',
+      JSON.stringify({ revision: value.revision, savedAt }),
+    ].join('\n');
   }
   const reviewSettings = () => ({ maxReworks: store.get<{ maxReworks: number }>('workbench.settings', 'run-review')?.maxReworks ?? 2 });
   const runReview = createRunReview({ store, events, dispatch, completeTodo: id => updateTodo(id, { completed: true }), maxReworks: () => reviewSettings().maxReworks });

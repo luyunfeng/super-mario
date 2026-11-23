@@ -19,7 +19,9 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
   const arrivedAsUser: boolean[] = [];
   const guidelines = ['合成甲项目第一版说明', '合成甲项目修订说明', '合成乙项目专属说明'];
   const observedGuidelines: string[][] = [];
+  const savedTimes = new Map<number, string>();
   const versionQuestion = '本轮用了第几版项目工作指令？';
+  const timeQuestion = '这一版项目指令是什么时候保存的？';
   const assistantNames = ['合成主助手甲', '合成主助手乙'];
   const observedNames: string[][] = [];
   const expectedSkills: boolean[] = [];
@@ -90,6 +92,13 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
       assert.equal(input.tools.some((tool: any) => tool.function.name === 'assistant_skill_read'), facts.scope.kind === 'global');
       if (facts.scope.kind === 'project') {
         projectRequests++;
+        const stampLine = system.split('\n').find((line: string) => line.startsWith('{"revision":') && line.includes('"savedAt":'));
+        if (instruction || system.includes('版清空。')) {
+          const stamp = JSON.parse(stampLine!);
+          assert.ok(savedTimes.has(stamp.revision));
+          assert.equal(stamp.savedAt, savedTimes.get(stamp.revision));
+          assert.match(system, /按 savedAt 回答，并写明时区/);
+        } else assert.equal(stampLine, undefined);
         if (observedGuidelines.at(-1)?.length) {
           const loaded = JSON.parse(instruction!);
           assert.equal(loaded.revision, loaded.notes === guidelines[0] ? 1 : 2);
@@ -109,6 +118,10 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
       if (JSON.stringify(input.messages.at(-1)?.content).includes(versionQuestion)) {
         const loaded = instruction && JSON.parse(instruction);
         text = loaded ? `本轮采用版本 ${loaded.revision}，要求为「${loaded.notes}」。` : system.match(/本项目工作指令已在第 \d+ 版清空。|项目工作指令插件已停用。|本项目尚未保存过工作指令/)![0];
+      }
+      if (JSON.stringify(input.messages.at(-1)?.content).includes(timeQuestion)) {
+        const stamp = JSON.parse(system.split('\n').find((line: string) => line.startsWith('{"revision":') && line.includes('"savedAt":'))!);
+        text = `第 ${stamp.revision} 版保存于 ${stamp.savedAt}（UTC）。`;
       }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       for (const [delta, finish_reason] of [[{ role: 'assistant', content: text }, null], [{}, 'stop']]) res.write(`data: ${JSON.stringify({ id: 'local-context', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
@@ -141,6 +154,7 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
   const a = await api('/projects', { name: 'A-project' });
   const b = await api('/projects', { name: 'B-project' });
   const savedNotes = await api('/project-instructions', { action: 'save', projectId: a.id, notes: guidelines[0], revision: 0 });
+  savedTimes.set(savedNotes.revision, savedNotes.updatedAt);
   await api('/project-instructions', { action: 'save', projectId: b.id, notes: guidelines[2], revision: 0 });
   const todoA = await api('/todos', { title: 'A-work', projectId: a.id });
   const todoB = await api('/todos', { title: 'B-work', projectId: b.id });
@@ -186,7 +200,8 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
   assert.equal(captured[2].needsYou.total, 0);
   assert.equal(captured[2].projects.items.length, 1);
   assert.equal(captured[2].projects.items[0].id, a.id);
-  await api('/project-instructions', { action: 'save', projectId: a.id, notes: guidelines[1], revision: savedNotes.revision });
+  const edited = await api('/project-instructions', { action: 'save', projectId: a.id, notes: guidelines[1], revision: savedNotes.revision });
+  savedTimes.set(edited.revision, edited.updatedAt);
   async function askProject(projectId: string, text: string) {
     const web = await api(`/projects/${projectId}/messages`, { text });
     assert.equal(web.conversationId, `project:${projectId}:work`);
@@ -210,19 +225,26 @@ test('Feishu global bot sees other agents shared facts on each real pi SDK turn;
   assert.equal(projectRequests, 2, 'both project bot and Web project requests carry scoped work guidance');
   assert.equal(captured[3].projects.items[0].id, a.id);
   assert.equal(await sendAndWait(project, 'project-version', 'project-chat', versionQuestion), '本轮采用版本 2，要求为「' + guidelines[1] + '」。');
-  await api('/project-instructions', { action: 'save', projectId: a.id, notes: '', revision: 2 });
+  const cleared = await api('/project-instructions', { action: 'save', projectId: a.id, notes: '', revision: 2 });
+  savedTimes.set(cleared.revision, cleared.updatedAt);
   assert.equal((await askProject(a.id, versionQuestion))?.text, '本项目工作指令已在第 3 版清空。');
   assert.equal(await sendAndWait(project, 'project-cleared', 'project-chat', versionQuestion), '本项目工作指令已在第 3 版清空。');
+  const when = `第 ${cleared.revision} 版保存于 ${cleared.updatedAt}（UTC）。`;
+  assert.equal((await askProject(a.id, timeQuestion))?.text, when);
+  assert.equal(await sendAndWait(project, 'project-save-time', 'project-chat', timeQuestion), when);
   const fresh = await api('/projects', { name: '尚无指令的项目' });
   assert.equal((await askProject(fresh.id, versionQuestion))?.text, '本项目尚未保存过工作指令');
   await api('/plugins/project-instructions', { enabled: false });
   assert.equal(await sendAndWait(project, 'project-disabled', 'project-chat', versionQuestion), '项目工作指令插件已停用。');
-  assert.deepEqual(expectedSkills, [true, false, false, false, false, false, false, false, false]);
-  assert.deepEqual(observedNames, [[assistantNames[0]], [assistantNames[1]], [], [], [], [], [], [], []]);
-  assert.deepEqual(observedGuidelines, [[], [], [guidelines[0]], [guidelines[1]], [guidelines[1]], [], [], [], []]);
+  assert.equal(expectedSkills.length, 11);
+  assert.deepEqual(expectedSkills.flatMap((included, i) => included ? [i] : []), [0]);
+  assert.deepEqual(observedNames.slice(0, 2), [[assistantNames[0]], [assistantNames[1]]]);
+  assert.ok(observedNames.slice(2).every(names => !names.length));
+  assert.deepEqual(observedGuidelines.slice(0, 5), [[], [], [guidelines[0]], [guidelines[1]], [guidelines[1]]]);
+  assert.ok(observedGuidelines.slice(5).every(notes => !notes.length));
   assert.deepEqual(errors, []);
   const effects = server.app.store.list<{ kind: string; status: string }>('effects');
-  assert.equal(effects.length, 8, 'two pairing replies and six answers use the existing send ledger');
+  assert.equal(effects.length, 9, 'two pairing replies and seven answers use the existing send ledger');
   assert.ok(effects.every(effect => effect.kind === 'feishu.send' && effect.status === 'confirmed'));
   assert.equal(server.app.store.list('runs').length, 1, 'the model never starts an executor');
 });

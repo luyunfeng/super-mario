@@ -75,8 +75,11 @@ export function createProjectInstructions({ api, store, getProjectId }) {
       status.textContent = newer ? '此项目的工作指令已有新版本。你的草稿已保留。' : '连接已恢复，可核对最新的工作指令。';
     }
 
+    function versionLabel(record) {
+      return '版本 ' + record.revision + (record.updatedAt ? ' · 保存于 ' + record.updatedAt : ' · 保存时间未记录');
+    }
     function sync() {
-      version.textContent = base ? (base.revision ? `草稿基于版本 ${base.revision}` : '尚无已保存的版本') : '';
+      version.textContent = base ? (base.revision ? '草稿基于' + versionLabel(base) : '尚无已保存的版本') : '';
       remote.hidden = !needsReview || !latest;
       if (remote.hidden) remote.replaceChildren();
       const length = Array.from(notes.value).length;
@@ -124,7 +127,7 @@ export function createProjectInstructions({ api, store, getProjectId }) {
       latest = result;
       status.textContent = explanation + '你的草稿已保留。';
       replace(remote, h('strong', null, '服务端当前版本'),
-        h('span', { class: 'small muted' }, '版本 ' + latest.revision + (latest.updatedAt ? ' · ' + latest.updatedAt : '')),
+        h('span', { class: 'small muted' }, versionLabel(latest)),
         h('pre', { class: 'mailbox-content' }, latest.notes || '（空）'));
       replace(review, h('div', { class: 'row row--wrap' },
           Button({ label: '采用服务端版本', onClick() {
