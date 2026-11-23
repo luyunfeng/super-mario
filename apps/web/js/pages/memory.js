@@ -65,17 +65,17 @@ export function createMemoryPage({ api, store, router, scope }) {
   const list = h('div', { class: 'list' });
   const curatorLine = h('div', { class: 'row row--between curator', id: 'curator-line' });
 
-  let subscriptionsDrawer, pendingDraft;
-  function showSubscriptions(draftId) {
+  let subscriptionsDrawer, pendingSubscription;
+  function showSubscriptions(target = {}) {
     subscriptionsDrawer?.close();
-    subscriptionsDrawer = openSourceSubscriptions({api,store,router,draftId});
+    subscriptionsDrawer = openSourceSubscriptions({api,store,router,...target});
   }
-  function openLinkedDraft() {
-    if (!pendingDraft || router.current.page !== 'memory' || !store.view.snapshot || store.view.unauthorized ||
+  function openLinkedSubscription() {
+    if (!pendingSubscription || router.current.page !== 'memory' || !store.view.snapshot || store.view.unauthorized ||
       store.view.connection !== 'online' || store.view.snapshotOwner !== api.draftOwner()) return;
-    const id=pendingDraft;pendingDraft=undefined;
+    const target=pendingSubscription;pendingSubscription=undefined;
     if (!store.view.snapshot.plugins.some(p=>p.id==='source-subscriptions' && p.status==='active')) {toast('请先启用来源订阅插件。');return;}
-    showSubscriptions(id);
+    showSubscriptions(target);
   }
   const subscriptions = Button({label:'来源订阅',size:'sm',onClick:() => showSubscriptions()});
   const recap = Button({ label: '会议日回顾', size: 'sm', onClick: () => openMeetingDay({ api, store, scope, router }) });
@@ -187,8 +187,9 @@ export function createMemoryPage({ api, store, router, scope }) {
       decisions.show();
       loadCurator();
       if (route.query.get('curator')) openCuratorDrawer({ api, store, projectId: scope.get(), onChanged: loadCurator, jobId: route.query.get('job') });
-      pendingDraft=route.query.get('subscriptionDraft');
-      openLinkedDraft();
+      const draftId=route.query.get('subscriptionDraft'), runsId=route.query.get('subscriptionRuns');
+      pendingSubscription=draftId ? {draftId} : runsId ? {runsId} : undefined;
+      openLinkedSubscription();
       const entry = route.query.get('entry');
       linkedEntry = entry && { id: entry, sourceId: route.query.get('source'), selectedCommit: route.query.get('revision'), line: Number(route.query.get('line')) };
       openLinkedEntry();
@@ -196,6 +197,6 @@ export function createMemoryPage({ api, store, router, scope }) {
       if (LAYERS.some(([key]) => key === part) && part !== layer) { layer = part; seg.set(part); }
       paint();
     },
-    onState() { paint(); openLinkedEntry(); openLinkedDraft(); },
+    onState() { paint(); openLinkedEntry(); openLinkedSubscription(); },
   };
 }

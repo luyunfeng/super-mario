@@ -1,5 +1,6 @@
 import { uuid } from '../lib/format.js';
 import { subscriptionSchedule, subscriptionScheduleLabel } from './subscription-schedule.js';
+import { openSubscriptionRuns } from './subscription-runs.js';
 import { subscriptionPaths } from './subscription-paths.js';
 import { h, replace } from '../lib/dom.js';
 import { externalSourceLink } from '../lib/markdown.js';
@@ -13,7 +14,7 @@ const destinations = {inbox:'收件箱', knowledge:'个人记忆'};
 const date = value => new Date(value).toLocaleString('zh-CN');
 const retryTime = value => h('time',{dateTime:value},new Date(value).toLocaleString('zh-CN',{timeZoneName:'short'}));
 
-export function openSourceSubscriptions({api,store,router,draftId}) {
+export function openSourceSubscriptions({api,store,router,draftId,runsId}) {
   const owner = api.draftOwner();
   const source = Select({options:[],required:true});
   const resource = Input({required:true});
@@ -44,8 +45,8 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
   });
   const body = h('div',{class:'stack stack--lg'},draftList,draftNotice,form,notice,paths.element,
     h('section',{class:'stack'},h('div',{class:'row row--between'},h('h3',null,'已登记订阅'),refresh),rows));
-  let settings;
-  const drawer = openDrawer({title:'来源订阅',body,onClose:() => {settings?.close();offStore();offRoute();}});
+  let settings, runHistory;
+  const drawer = openDrawer({title:'来源订阅',body,onClose:() => {settings?.close();runHistory?.close();offStore();offRoute();}});
   const active = () => drawer.el.open && router.current.page === 'memory' && !store.view.unauthorized &&
     owner === api.draftOwner() && owner === store.view.snapshotOwner && store.view.snapshot?.plugins?.some(p => p.id === 'source-subscriptions' && p.status === 'active');
   const offRoute = router.subscribe(() => {if (!active()) drawer.close();});
@@ -56,12 +57,13 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
     if (!active()) { drawer.close(); return; }
     const reconnect = connection !== view.connection && view.connection === 'online';
     connection = view.connection;
-    if (connection !== 'online') settings?.close();
+    if (connection !== 'online') {settings?.close();runHistory?.close();}
     const nextPlugins = pluginStates(view);
     if (revision !== view.sourceSubscriptionsChange || plugins !== nextPlugins || reconnect) {
       inspectedSnapshot=undefined;recentSnapshots=undefined;
       plugins = nextPlugins;
       revision = view.sourceSubscriptionsChange; pendingRead = true;
+      if (connection === 'online') runHistory?.refresh();
       if (draftList.open && connection === 'online') void loadDraftList();
     }
     sync(); refreshIfNeeded();
@@ -86,6 +88,11 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
   }
   source.addEventListener('change',setResourceLabel);
   resource.addEventListener('input',() => replace(results));
+  function showRuns(row) {
+    const anchor=Array.from(rows.children).find(el=>el.dataset.id===row.id);
+    anchor?.focus();anchor?.scrollIntoView({block:'nearest'});
+    runHistory=openSubscriptionRuns({api,path,row,active:() => active() && store.view.connection==='online'});
+  }
   function edit(row,remove=false) {
     settings=openSubscriptionSettings({row,remove,timezone,api,path,active:() => active() && store.view.connection === 'online',
       changed:message => {notice.textContent=message;pendingRead=true;refreshIfNeeded();}});
@@ -115,6 +122,7 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
         row.enabled && row.nextRunAt && h('div',{class:'small'},'下次拉取 · ' + date(row.nextRunAt)),
         row.error && h('p',{class:'text-danger'},row.error),
         h('div',{class:'row row--wrap'},pull,
+          Button({label:'运行记录',size:'sm',onClick:() => showRuns(row)}),
           row.mode==='snapshot' && Button({label:recentSnapshots?.id===row.id?'收起状态记录':'近期状态记录',size:'sm',onClick:() => history(row)}),
           row.mode==='snapshot' && Button({label:'查看当前状态',size:'sm',onClick:() => inspect(row)}),
           Button({label:'编辑订阅',size:'sm',onClick:() => edit(row)}),
@@ -250,7 +258,12 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
   }
   async function initialize() {
     await load();
-    if(active() && draftId && loaded) await openDraft(draftId);
+    if (!active() || !loaded) return;
+    if (runsId) {
+      const row=subscriptions.find(item=>item.id===runsId);
+      if(row) showRuns(row);
+      else notice.textContent='找不到这条订阅，无法查看运行记录。';
+    } else if (draftId) await openDraft(draftId);
   }
   void initialize();
   return drawer;

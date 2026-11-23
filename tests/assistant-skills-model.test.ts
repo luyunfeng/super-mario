@@ -3837,6 +3837,10 @@ test('订阅读取仅供 Web 主对话与飞书主人私聊，预览不投递也
   });
   const {server,api,ask}=await fixture(t,req=>{
     if(req.lastRole==='user'){
+      if(JSON.stringify(req.content).includes('检查运行记录')){
+        assert.match(req.system,/当时的待补数是历史记录，当前待确认的内容查同一回执的 currentPending/);
+        return call('source_subscriptions_read',{action:'runs',subscriptionId:snapshotId},'runs');
+      }
       if(JSON.stringify(req.content).includes('核对快照历史')){
         assert.match(req.system,/最近 24 小时/);
         return call('source_subscriptions_read',{action:'history',subscriptionId:snapshotId},'history');
@@ -3858,6 +3862,19 @@ test('订阅读取仅供 Web 主对话与飞书主人私聊，预览不投递也
     }
     const raw=typeof req.content==='string'?req.content:(req.content as {text:string}[])[0].text;
     const result=JSON.parse(raw);
+    if(req.callId==='runs'){
+      assert.equal(result.items.length,5);
+      assert.equal(result.hasMore,true);
+      assert.equal(result.webCitation,'[查看订阅运行记录](#memory?subscriptionRuns='+snapshotId+')');
+      assert.equal(result.publicUrl,undefined);
+      const [last,previous]=result.items;
+      assert.deepEqual([last.status,last.trigger,last.readCount,last.newCount],['completed','manual',1,1]);
+      assert.deepEqual(last.delivered,{inbox:0,knowledge:1});
+      assert.deepEqual(last.entries[0].delivered,['knowledge']);
+      assert.equal(previous.newCount,0);
+      assert.ok(last.startedAt>=previous.startedAt && last.finishedAt);
+      return {role:'assistant',content:'最近一次手动检查已完成，发现一条变化，有一条个人知识投递回执。'};
+    }
     if(req.callId==='history'){
       assert.equal(result.total,2);
       assert.deepEqual(result.items.map((item:{sequence:number})=>item.sequence),[2,1]);
@@ -3936,6 +3953,13 @@ test('订阅读取仅供 Web 主对话与飞书主人私聊，预览不投递也
     assert.equal(await ask('核对快照历史和当前状态'),checked);
     await adapter.onMessage('核对快照历史和当前状态',{...owner,messageId:'snapshot-history'});
     await t.waitFor(()=>assert.ok(sent.includes(checked)));
+    for(let i=0;i<3;i++) await api('/source-subscriptions/'+snapshotId+'/pull',{version:snapshot.version});
+    branch='release';
+    await api('/source-subscriptions/'+snapshotId+'/pull',{version:snapshot.version});
+    const runSummary='最近一次手动检查已完成，发现一条变化，有一条个人知识投递回执。';
+    assert.equal(await ask('检查运行记录并核实投递'),runSummary);
+    await adapter.onMessage('检查运行记录并核实投递',{...owner,messageId:'subscription-runs'});
+    await t.waitFor(()=>assert.ok(sent.includes(runSummary)));
 
   }finally{await server.close();}
 });

@@ -76,7 +76,7 @@ export function createSubscriptionHost(options: {
         },
         onChange:id=>options.changed('source-subscriptions.changed',id),
       });
-      context.contribute('tools','source_subscriptions_read',subscriptionReadTool(service,sources,options.authorizeRead,options.timezone));
+      context.contribute('tools','source_subscriptions_read',subscriptionReadTool(service,sources,options.authorizeRead,options.timezone,()=>publicBase));
       context.contribute('tools','source_subscription_draft',subscriptionDraftTool((input,signal)=>drafts.propose(input,options.authorizeRead,signal),()=>publicBase));
       active = service;
       service.syncTimezone();

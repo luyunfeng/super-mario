@@ -1,3 +1,5 @@
+import {runTitle,subscriptionRuns,type SubscriptionRun} from './subscription-runs.ts';
+export type {SubscriptionRun} from './subscription-runs.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { nextOccurrence } from './schedules.ts';
 import type { Store } from '../../plugin-sdk/src/index.ts';
@@ -70,6 +72,7 @@ function deliveryKey(id:string,item:string,destination:Destination) {
 
 export function createSourceSubscriptions({store,sources,read,deliver,onChange,timezone=()=>Intl.DateTimeFormat().resolvedOptions().timeZone}:Options) {
   let closed=false;
+  const records=subscriptionRuns(store);
   const deliveries=new Set<Promise<void>>();
   const previews=new Set<AbortController>();
   const running=new Map<string,AbortController>();
@@ -193,7 +196,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
     }
     const first=items.values().next().value;
     const digest=isSnapshot && first ? createHash('sha256').update(JSON.stringify([first.title,first.text,first.url ?? ''])).digest('hex') : undefined;
-    return {items:[...items.values()],digest,paged,nextCursor:paged ? token(raw.nextCursor) : undefined,checkpoint:paged ? token(raw.checkpoint) : undefined};
+    return {items:[...items.values()],readCount:result.length,digest,paged,nextCursor:paged ? token(raw.nextCursor) : undefined,checkpoint:paged ? token(raw.checkpoint) : undefined};
   }
   function list() {
     open();
@@ -326,18 +329,20 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
       store.remove(pending,id);
       store.remove(positions,id);store.remove(stagedPages,id);store.remove(checkpoints,id);
       for(const kind of [snapshots,snapshotChanges,snapshotCatchups,snapshotTargets]) store.remove(kind,id);
+      records.remove(id);
       store.remove(rows,id);
     });
     onChange?.(id);
     return {deleted:true};
   }
-  async function pull(id:string,version:unknown) {
+  async function runPull(id:string,version:unknown,trigger:SubscriptionRun['trigger']) {
     const row=current(id,version);
     if(!row.enabled) failure('订阅已暂停。',409);
     if(running.has(id)) failure('订阅正在拉取。',409);
     requireSource(row.sourceId);
     const until=retryTime(row.sourceId);
     if(until && !store.get(pending,id) && !store.get(snapshotCatchups,id)) limited(until);
+    const audit=records.begin(id,trigger,row.nextPageNumber ?? 1);
     const controller=new AbortController();running.set(id,controller);
     const ownedReceipts=receipts+'.'+id;
     function delivered(key:string) {
@@ -359,6 +364,12 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
       if(error) next.error=error;else delete next.error;
       store.put(rows,id,next);
       return next;
+    }
+    function planDeliveries(queue:SourceItem[],targets=row.destinations) {
+      for(const item of queue) for(const dest of targets) {
+        if(row.destinations.includes(dest) && !delivered(deliveryKey(id,item.id,dest))) audit.queue(item.id,item.title,dest);
+      }
+      audit.save();
     }
     async function deliverQueue(queue:SourceItem[],targets=row.destinations) {
       for(let index=0;index<queue.length;index++) {
@@ -382,7 +393,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
           }
           finally { deliveries.delete(delivery); }
           if(closed) failure('订阅服务关闭，投递回执待核对。',503);
-          store.put(ownedReceipts,key,key);
+          store.transaction(()=>{store.put(ownedReceipts,key,key);audit.confirm(item.id,destination);});
         }
       }
     }
@@ -394,14 +405,16 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
           store.remove(positions,id);
           if(advance.checkpoint!==undefined) store.put(checkpoints,id,advance.checkpoint);
         }
-        return finish();
+        const updated=finish();audit.finish('completed');return updated;
       });
     }
     let reading=false;
     try {
+      onChange?.(id);
       guard();
       if(row.mode==='snapshot') {
         const jobs=store.get<Catchup[]>(snapshotCatchups,id) ?? [];
+        for(const job of jobs) planDeliveries([job.item],[job.destination]);
         for(const job of jobs) await deliverQueue([job.item],[job.destination]);
         guard();
         if(jobs.length) store.remove(snapshotCatchups,id);
@@ -409,7 +422,8 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
       const backlog=store.get<SourceItem[]>(pending,id) ?? [];
       const staged=store.get<Advance>(stagedPages,id);
       if(backlog.length || staged) {
-        await deliverQueue(backlog,row.mode ? store.get<Destination[]>(snapshotTargets,id) : undefined);
+        const targets=row.mode ? store.get<Destination[]>(snapshotTargets,id) : undefined;
+        planDeliveries(backlog,targets);await deliverQueue(backlog,targets);
         guard();
         if(staged) {
           const updated=commitPage(staged);onChange?.(id);return updated;
@@ -422,6 +436,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
       const page=await load(row.sourceId,row.resource,controller,position?.cursor,checkpoint,row.mode);
       reading=false;
       guard();
+      audit.item.readCount=page.readCount;audit.save();
       if(row.mode==='snapshot') {
         const prior=store.get<SnapshotState>(snapshots,id);
         const digest=page.digest;
@@ -434,6 +449,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
             store.put(snapshotChanges,id,[...recentChanges(id),change]);
             store.put(pending,id,[item]);
             store.put(snapshotTargets,id,row.destinations);
+            audit.item.newCount++;planDeliveries([item]);
           });
           await deliverQueue([item]);
         }
@@ -456,6 +472,8 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
       if(queue.length) {
         store.transaction(()=>{
           store.put(pending,id,queue);
+          audit.item.newCount+=queue.filter(item=>!delivered(deliveryKey(id,item.id,'inbox')) && !delivered(deliveryKey(id,item.id,'knowledge'))).length;
+          planDeliveries(queue);
           if(page.paged || position) store.put(stagedPages,id,advance);
         });
         await deliverQueue(queue);
@@ -465,6 +483,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
       onChange?.(id);
       return updated;
     } catch(error) {
+      if(!closed) audit.finish(controller.signal.aborted ? 'interrupted' : 'failed',controller.signal.aborted ? '订阅拉取已停止。' : error instanceof Error && 'status' in error ? error.message : '来源订阅拉取失败。');
       if(!closed && !controller.signal.aborted && get(id).version===version) {
         store.transaction(()=>{
           const position=store.get<Position>(positions,id);
@@ -478,8 +497,8 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
             error instanceof Error && 'retryAt' in error && typeof error.retryAt==='string' ? error.retryAt : undefined);
           if(error instanceof PaginationError) store.put(rows,id,{...updated,enabled:false,version:updated.version+1});
         });
-        onChange?.(id);
       }
+      if(!closed) onChange?.(id);
       if(controller.signal.aborted) failure('订阅拉取已停止。',409);
       throw error;
     } finally { running.delete(id); }
@@ -489,12 +508,31 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
     const now=Date.now();
     await Promise.allSettled(store.list<SourceSubscription>(rows).filter(row=>
       row.enabled && !running.has(row.id) && Date.parse(row.nextRunAt)<=now &&
-      (!retryTime(row.sourceId) || Boolean(store.get(pending,row.id) || store.get(snapshotCatchups,row.id)))).map(row=>pull(row.id,row.version)));
+      (!retryTime(row.sourceId) || Boolean(store.get(pending,row.id) || store.get(snapshotCatchups,row.id)))).map(row=>runPull(row.id,row.version,'schedule')));
   }
   async function close() {
-    closed=true;
-    for(const controller of [...previews,...running.values()]) controller.abort();
+    if(!closed) {
+      closed=true;
+      if(running.size) records.interruptAll();
+      for(const controller of [...previews,...running.values()]) controller.abort();
+    }
     await Promise.allSettled([...deliveries]);
   }
-  return {list,preview,syncTimezone,snapshotHistory,configuration,create,update,remove,pull,tick,close};
+  function runHistory(id:string) {
+    open();
+    const row=get(id);
+    const counts={inbox:0,knowledge:0};
+    const entries=new Map<string,{title:string;destinations:Destination[]}>();
+    function add(item:SourceItem,dest:Destination) {
+      if(!row.destinations.includes(dest) || store.get(receipts+'.'+id,deliveryKey(id,item.id,dest))) return;
+      const entry=entries.get(item.id) ?? {title:runTitle(item.title),destinations:[]};
+      if(entry.destinations.includes(dest)) return;
+      entry.destinations.push(dest);entries.set(item.id,entry);counts[dest]++;
+    }
+    const targets=(row.mode && store.get<Destination[]>(snapshotTargets,id)) || row.destinations;
+    for(const item of store.get<SourceItem[]>(pending,id) ?? []) for(const dest of targets) add(item,dest);
+    for(const job of store.get<Catchup[]>(snapshotCatchups,id) ?? []) add(job.item,job.destination);
+    return {items:records.list(id),currentPending:{...counts,totalEntries:entries.size,entries:[...entries.values()].slice(0,10)}};
+  }
+  return {list,preview,syncTimezone,snapshotHistory,runHistory,configuration,create,update,remove,pull:(id:string,version:unknown)=>runPull(id,version,'manual'),tick,close};
 }

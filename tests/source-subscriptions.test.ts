@@ -88,11 +88,11 @@ test('限流等受控错误可诊断，通知回调读取的是已提交的状�
   },deliver:()=>{},onChange(id){const row=store.get<{error?:string}>('source.subscriptions',id);if(row)visible.push(row.error);}});
   const row=svc.create(request);
   await assert.rejects(svc.pull(row.id,1),{status:429});
-  assert.deepEqual(visible,[undefined,'来源服务已限流，请稍后再拉取。']);
+  assert.deepEqual(visible,[undefined,undefined,'来源服务已限流，请稍后再拉取。']);
   t.mock.timers.tick(60000);
   code='not_found';await assert.rejects(svc.preview(request),{status:404});
   code='invalid_resource';await assert.rejects(svc.preview(request),{status:400});
-  code='';await svc.pull(row.id,1);assert.equal(visible[2],undefined);
+  code='';await svc.pull(row.id,1);assert.equal(visible.at(-1),undefined);
   result=[{...item,title:'😀'.repeat(513)}];await assert.rejects(svc.preview(request),{status:502});
 });
 
