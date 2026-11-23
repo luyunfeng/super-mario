@@ -3,7 +3,7 @@
 import { h, replace, keyedList } from '../lib/dom.js';
 import { runStatus, isRunActive, isRunProblem, timeAgo, duration, formatDate, uuid } from '../lib/format.js';
 import { icon } from '../ui/icons.js';
-import { Button, Banner, Check, Empty, Field, Input, TextArea, Select, Pill, Segmented, Tabs, Fold } from '../ui/kit.js';
+import { copyText, Button, Banner, Check, Empty, Field, Input, TextArea, Select, Pill, Segmented, Tabs, Fold } from '../ui/kit.js';
 import { confirmDialog, openDrawer, toast } from '../ui/overlay.js';
 import { systemText } from '../copy/terms.js';
 
@@ -155,6 +155,11 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
         if (!current() || read !== revision) return;
         replace(rows, trees.length ? trees.map(tree => h('div', { class: 'item' },
           h('strong', null, tree.name), h('div', { class: 'folder-path' }, tree.cwd),
+          Button({ label: '复制目录', size: 'sm', icon: 'copy', onClick: async () => {
+            if (!current()) return;
+            await copyText(tree.cwd);
+            if (current()) message.textContent = '已复制工作树目录。';
+          } }),
           Button({ label: '在此工作树发起执行', size: 'sm', disabled: !store.view.snapshot.machines.some(m => m.id === binding.machineId && m.capabilities.includes('workspace.inspectRunWorktree')), onClick: () => {
             if (!current()) return;
             drawer.close();

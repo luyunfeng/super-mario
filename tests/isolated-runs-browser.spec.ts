@@ -486,6 +486,10 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   await page.getByRole('button', { name: '项目工作树' }).click();
   const preparedRow = trees.locator('.item').filter({ hasText: '待后续执行' });
   await expect(preparedRow).toContainText(prepared);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: server.url });
+  await preparedRow.getByRole('button', { name: '复制目录' }).click();
+  await expect(receipt).toContainText('已复制工作树目录');
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), prepared);
   await preparedRow.getByRole('button', { name: '在此工作树发起执行' }).click();
   await expect(drawer).toContainText(prepared);
   assert.equal(server.app.store.list('runs').length, beforePreparation);
