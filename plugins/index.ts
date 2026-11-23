@@ -192,6 +192,7 @@ export interface SystemActions {
   changeKnowledgeAlias?(args: Record<string, unknown>): Promise<Json>;
   changeKnowledgeTag?(args: Record<string, unknown>): Promise<Json>;
   knowledgeRevision?(id: string, commit?: string, projectId?: string): ReturnType<NonNullable<KnowledgeBackend['revision']>>;
+  pagesFromUrl?(url: unknown, projectId?: string, offset?: unknown): Promise<Json>;
   knowledgeOriginal?(pageId: string, sourceId?: string, projectId?: string, handoffExcerpt?: boolean): Promise<{
     sources?: { id: string; title: string; sourceUrl?: string; createdAt: string; meeting?: boolean; speakerNames?: Record<string, string>; materialKind?: 'meeting-transcript'; meetingStartedAt?: string }[]; truncated?: boolean; content?: string; title?: string }>;
   searchMeetings?(query: string, projectId?: string, offset?: number): Promise<Json>;
@@ -513,6 +514,12 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
               webCitation: `[查看修订](#memory?entry=${encodeURIComponent(pageId)}&revision=${revision.commit})`,
               text: chars.slice(offset, end).join(''), nextOffset: end < chars.length ? end : null } as Json;
           }, { pageId: { type: 'string' }, commit: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
+        if (actions?.pagesFromUrl) context.contribute('tools', 'knowledge_source_lookup', tool('knowledge_source_lookup',
+          '按完整网址查导入记录关联的当前知识页。保留查询参数与片段。用 nextOffset 续查，不访问外部网址。',
+          async (args, signal) => {
+            signal.throwIfAborted();
+            return actions.pagesFromUrl!(args.url, typeof args.projectId === 'string' ? args.projectId : undefined, args.offset);
+          }, { url: { type: 'string' }, projectId: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
         if (actions?.knowledgeOriginal) context.contribute('tools', 'knowledge_original', tool('knowledge_original',
           '用知识页 ID 列出已保存的来源。sourceUrl 是导入登记的外部地址，粘贴材料可能没有地址；加来源 ID 分段读取原文。提供 query 按原文字面搜索，每行返回一次，按 nextOffset 继续同一查询。', async (args, signal) => {
             const { pageId, sourceId, projectId, query, handoffExcerpt, offset = 0 } = args;

@@ -94,6 +94,9 @@ export function openCuratorDrawer({ api, store, onChanged, jobId }) {
   function paintJobs() {
     if (!curator) return;
     const jobs = curator.jobs;
+    const snapshot = store.view.snapshot;
+    const pages = new Map((snapshot?.knowledge ?? []).map(page => [page.id, page]));
+    const projects = new Set((snapshot?.projects ?? []).filter(project => !project.archivedAt).map(project => project.id));
     replace(jobsRegion, h('h3', null, `整理队列 ${jobs.length}`), !verified && h('p', { class: 'muted small' }, '以下为上次读取的数据，当前进度未确认。'),
       jobs.length ? h('div', { class: 'list' }, jobs.map(job => {
         const attempt = attempts.get(job.id);
@@ -108,6 +111,13 @@ export function openCuratorDrawer({ api, store, onChanged, jobId }) {
             job.meetingStartedAt && h('span', { class: 'item__meta' }, '会议开始时间 · ' + job.meetingStartedAt),
             meeting && job.url?.startsWith('https://') && h('a', { class: 'small', href: job.url, target: '_blank', rel: 'noopener noreferrer' }, '查看原文档'),
             h('span', { class: 'item__meta' }, `${timeAgo(job.updatedAt ?? job.createdAt)}${job.error ? ` · ${job.error}` : ''}`),
+            Array.from(new Set(job.knowledgeIds ?? []), id => {
+              const page = pages.get(id);
+              if (!page || page.layer !== job.layer || page.projectId !== job.projectId ||
+                  (page.projectId && !projects.has(page.projectId))) return null;
+              return h('a', { class: 'small', href: '#memory?entry=' + encodeURIComponent(id) + '&source=' + encodeURIComponent(job.id),
+                onclick: () => drawer.close() }, '查看整理结果 · ' + page.title);
+            }),
             next && h('p', { class: 'small' }, `新整理任务：${next.id}（${STATUS[next.status] ?? (DONE.has(next.status) ? '已整理' : '结果未确认')}）`),
             !next && attempt?.accepted && h('p', { class: 'small' }, `已提交新整理任务${attempt.newId ? `：${attempt.newId}` : '，旧服务未返回任务引用'}；进度以队列为准。`),
             attempt && h('p', { class: 'small' }, `${attempt.reason ?? '重试请求'} · 请求 key：${attempt.key}`)),

@@ -521,6 +521,31 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
       });
       return { date, timezone, total: dated.length, undated, meetings, nextOffset: offset + batch.length < dated.length ? offset + batch.length : null };
     },
+    async pagesFromUrl(value: unknown, projectId?: string, offset: unknown = 0) {
+      if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
+      if (projectId && !options.validProject(projectId)) throw new CuratorError('项目不可用', 404);
+      const url = typeof value === 'string' && value.length <= 4096 ? URL.parse(value) : null;
+      if (!url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password)
+        throw new CuratorError('请输入不含登录凭据的 HTTP(S) 来源网址');
+      if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0)
+        throw new CuratorError('来源查询位置无效');
+      const receipts = jobs().filter(job => job.url && job.knowledgeIds.length &&
+        (!projectId || job.projectId === projectId) && URL.parse(job.url)?.href === url.href);
+      const pages = new Map<string, { id: string; title: string; webCitation: string }>();
+      if (receipts.length) {
+        const entries = new Map((await options.knowledge().list({ projectId })).map(page => [page.id, page]));
+        for (const receipt of receipts) {
+          if (receipt.projectId && !options.validProject(receipt.projectId)) continue;
+          for (const id of receipt.knowledgeIds) {
+            const page = entries.get(id);
+            if (!page || page.layer !== receipt.layer || page.projectId !== receipt.projectId || pages.has(id)) continue;
+            pages.set(id, { id, title: page.title, webCitation: `[查看原文](#memory?entry=${encodeURIComponent(id)}&source=${encodeURIComponent(receipt.id)})` });
+          }
+        }
+      }
+      const end = offset + 25;
+      return { pages: [...pages.values()].slice(offset, end), total: pages.size, nextOffset: end < pages.size ? end : null };
+    },
     async pageSources(pageId: string, sourceId?: string, projectId?: string, handoffExcerpt = false) {
       if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
       const page = (await options.knowledge().list()).find(entry => entry.id === pageId);

@@ -496,6 +496,8 @@ test('会议日回顾按时区和项目分页，空结果区分未注日期，�
   await editor.getByRole('textbox', { name: '会议标题' }).fill('未定日期的复核');
   await editor.getByRole('button', { name: '保存标题' }).click();
   await expect(queue).toContainText('未定日期的复核');
+  await queue.getByRole('link', { name: '查看整理结果 · 项目评审记录' }).click();
+  await expect(page.getByRole('dialog', { name: '编辑记忆' }).locator('pre')).toHaveText(base.text);
   await page.goto(server.url + '/#home');
   const search = page.locator('#workspace-search');
   const results = page.locator('#search-results');

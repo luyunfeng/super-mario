@@ -248,3 +248,30 @@ test('会议日回顾按用户时区跨夏令时分页，重试只列一次并�
   await assert.rejects(read(), /项目不可用/);
   assert.equal((await f.curator.meetingDay('2030-11-03', 'UTC')).total, 0);
 });
+
+test('按网址反查实际整理结果，跨重启分页并排除失效的关联', async t => {
+  const f = await fixture(t);
+  const receipt: Job = { id: '72bae1b1-f40a-4b78-a582-f8313c593b95', url, layer: 'project', projectId: 'sample',
+    title: '归档的导入回执', status: 'completed', knowledgeIds: [], createdAt: '2030-01-01T00:00:00Z', updatedAt: '2030-01-01T00:00:00Z' };
+  const ids: string[] = [];
+  for (let i = 0; i < 26; i++) {
+    const page = await f.knowledge.put({ title: '关联页 ' + i, layer: 'project', projectId: 'sample', content: '合成材料' });
+    ids.push(page.id);
+  }
+  const moved = await f.knowledge.put({ title: '已更换归属', layer: 'personal', content: url });
+  f.store.put('knowledge.sources', receipt.id, { ...receipt, knowledgeIds: [...ids, ids[0], moved.id, 'missing'] });
+  await f.restart();
+  const first = await f.curator.pagesFromUrl(url, 'sample');
+  assert.equal(first.total, 26);
+  assert.equal(first.nextOffset, 25);
+  assert.deepEqual(first.pages.map(page => page.id), ids.slice(0, 25));
+  const last = await f.curator.pagesFromUrl(url, 'sample', first.nextOffset);
+  assert.deepEqual(last.pages.map(page => page.id), ids.slice(25));
+  assert.equal(last.nextOffset, null);
+  assert.equal((await f.curator.pagesFromUrl(url + '#other')).total, 0);
+  await assert.rejects(f.curator.pagesFromUrl('file:///missing'), /HTTP\(S\)/);
+  await assert.rejects(f.curator.pagesFromUrl(url, 'sample', -1), /查询位置/);
+  f.archive();
+  assert.equal((await f.curator.pagesFromUrl(url)).total, 0);
+  await assert.rejects(f.curator.pagesFromUrl(url, 'sample'), /项目不可用/);
+});
