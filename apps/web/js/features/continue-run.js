@@ -6,7 +6,7 @@ function targetFor(run, snapshot) {
   if (run?.status !== 'completed' || !run.id || !run.machineId || !run.cwd) return;
   const nativeSessionId=run.nativeSessionId ?? run.nativeResume?.nativeSessionId;
   if (!nativeSessionId || (run.nativeResume && run.nativeSessionId && run.nativeResume.nativeSessionId !== run.nativeSessionId)) return;
-  if (run.nativeResume && run.machineId+'/'+run.nativeResume.executorId!==run.executorId) return;
+  if (run.nativeResume?.executorId && run.machineId+'/'+run.nativeResume.executorId!==run.executorId) return;
   const machine = snapshot.machines?.find(row => row.id === run.machineId);
   const executor = snapshot.executors?.find(row => row.id === run.executorId && row.machineId === run.machineId);
   if (!machine?.online || !['agents.sessions', 'agents.session', 'executor.resume'].every(cap => machine.capabilities?.includes(cap)) ||
@@ -32,6 +32,7 @@ export function createContinueRun({api,store,router,scope}) {
     const key=JSON.stringify(frozen), actor=owner(), page=router.current.page, projectScope=scope.get();
     const notice=h('span',{role:'alert',class:'small',hidden:true});
     const control=Button({label:'继续交办',size:'sm',onClick:async()=>{
+      const container=control.closest('dialog, section.page');
       const seq=++attempt;
       const current=()=>seq===attempt && visible() && actor===owner() && page===router.current.page &&
         projectScope===scope.get() && JSON.stringify(target(frozen.runId))===key;
@@ -54,13 +55,14 @@ export function createContinueRun({api,store,router,scope}) {
         beforeOpen?.();
       } catch(error) {
         if(current()){
-          if(!notice.isConnected)throw error;
-          notice.textContent=error.message || '读取原执行会话失败，请重试。';
-          notice.hidden=false;
+          const alert=notice.isConnected?notice:container?.querySelector('[data-continue-run="'+CSS.escape(frozen.runId)+'"] [role="alert"]');
+          if(!alert)throw error;
+          alert.textContent=error.message || '读取原执行会话失败，请重试。';
+          alert.hidden=false;
         }
       } finally { for(const off of cleanups)off(); }
     }});
-    return h('span',{class:'row row--wrap'},control,notice);
+    return h('span',{class:'row row--wrap',dataset:{continueRun:frozen.runId}},control,notice);
   }
   return {target,button};
 }
