@@ -62,7 +62,7 @@ export function createConversationExport({ api, store, getProjectId = () => unde
   return { button, copyMessage, renderMessage, get active() { return conversationExportActive(store); }, close: () => drawer?.close() };
 }
 
-export function openConversationExport({ api, store, source, subtitle, isCurrent }) {
+export function openConversationExport({ api, store, source, subtitle, isCurrent, onSourceError }) {
   if (!conversationExportActive(store) || !isCurrent()) return;
   const token = api.token();
   const route = location.hash;
@@ -128,7 +128,7 @@ export function openConversationExport({ api, store, source, subtitle, isCurrent
           setTimeout(() => URL.revokeObjectURL(url), 1000);
         } }));
     } catch (error) {
-      if (!valid()) return;
+      if (!valid() || onSourceError?.(error)) return;
       replace(status, Banner({ tone: 'danger', children: `导出失败：${error.message}`, action: Button({ label: '重试', size: 'sm', onClick: load }) }));
     }
   }

@@ -51,13 +51,23 @@ function workSteps(store: Store, message: Message, userIds: Set<string>): string
 type ReadNative = (source: NativeExportSource, includeWork: boolean, signal: AbortSignal) =>
   Promise<{ markdown: string; filename: string; count: number; hasContent?: boolean }>;
 
+type ReadPrivate = (botId: string, threadId: string) => { title: string; messages: Message[] };
 type ReadAssistant = () => Promise<{ name: string } | undefined>;
 
-async function markdown(store: Store, input: Json, signal: AbortSignal, readNative?: ReadNative, readAssistant?: ReadAssistant) {
+async function markdown(store: Store, input: Json, signal: AbortSignal, readNative?: ReadNative, readAssistant?: ReadAssistant, readPrivate?: ReadPrivate) {
   if (!input || typeof input !== 'object' || Array.isArray(input)
     || typeof input.includeWork !== 'boolean'
-    || Object.keys(input).some(key => key !== 'projectId' && key !== 'includeWork' && key !== 'native'))
+    || Object.keys(input).some(key => key !== 'projectId' && key !== 'includeWork' && key !== 'native' && key !== 'botId' && key !== 'threadId'))
     fail(400, '对话导出参数无效');
+  let thread: ReturnType<ReadPrivate> | undefined;
+  if (Object.hasOwn(input, 'botId') || Object.hasOwn(input, 'threadId')) {
+    if (Object.hasOwn(input, 'projectId') || Object.hasOwn(input, 'native')
+      || typeof input.botId !== 'string' || !input.botId.trim()
+      || typeof input.threadId !== 'string' || !/^[a-f0-9]{64}$/.test(input.threadId))
+      fail(400, '独立对话导出参数无效');
+    if (!readPrivate) fail(503, '飞书独立对话服务尚未连接');
+    thread = readPrivate(input.botId, input.threadId);
+  }
   if (Object.hasOwn(input, 'native')) {
     if (Object.hasOwn(input, 'projectId')) fail(400, '原生会话不能同时指定项目');
     const source = nativeSource(input.native);
@@ -65,7 +75,7 @@ async function markdown(store: Store, input: Json, signal: AbortSignal, readNati
     return readNative(source, input.includeWork, signal);
   }
   let workspace: Project['workspace'];
-  let title = '主对话';
+  let title = thread?.title ?? '主对话';
   let conversationId = 'main';
   if (input.projectId !== undefined) {
     if (typeof input.projectId !== 'string' || !input.projectId.trim()) fail(400, '项目 ID 无效');
@@ -76,13 +86,13 @@ async function markdown(store: Store, input: Json, signal: AbortSignal, readNati
     title = `项目工作对话 · ${project.name.replace(/[\p{Cc}\p{Cf}\s]+/gu, ' ').trim()}`;
   }
 
-  const profile = conversationId === 'main' ? await readAssistant?.() : undefined;
+  const profile = !thread && conversationId === 'main' ? await readAssistant?.() : undefined;
   signal.throwIfAborted();
-  const speaker = conversationId === 'main' ? profile?.name ?? '主 Agent' : '项目助手';
+  const speaker = thread ? '助手' : conversationId === 'main' ? profile?.name ?? '主 Agent' : '项目助手';
 
   // Store.list reads the complete SQLite collection in insertion order. Updates
   // to pending messages keep their original position, including timestamp ties.
-  const messages = store.list<Message>('messages').filter(message =>
+  const messages = thread?.messages ?? store.list<Message>('messages').filter(message =>
     message.conversationId === conversationId && (input.projectId === undefined || message.projectId === undefined || message.projectId === input.projectId)
     && (message.role === 'user' || message.role === 'assistant'));
   const userIds = new Set(input.includeWork ? messages.filter(message => message.role === 'user').map(message => message.id) : []);
@@ -113,12 +123,12 @@ async function markdown(store: Store, input: Json, signal: AbortSignal, readNati
   return { filename: `super-mario-${stem}.md`, markdown: lines.join('\n'), count: messages.length };
 }
 
-export function createConversationExport(readNative?: ReadNative, readAssistant?: ReadAssistant): Extension {
+export function createConversationExport(readNative?: ReadNative, readAssistant?: ReadAssistant, readPrivate?: ReadPrivate): Extension {
   return {
     id: 'conversation-export', name: '对话导出', capabilities: ['conversation.export'],
     permissions: ['service.provide:conversation-export.markdown', 'store.read'],
     activate(context) {
-      context.provide('conversation-export.markdown', (input, signal) => markdown(context.store, input, signal, readNative, readAssistant));
+      context.provide('conversation-export.markdown', (input, signal) => markdown(context.store, input, signal, readNative, readAssistant, readPrivate));
     },
   };
 }

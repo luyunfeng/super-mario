@@ -13,6 +13,7 @@ import type { FeishuRegistrationProvider } from '../../../plugins/feishu-registr
 import type { AppConfig, Json } from '../../../packages/protocol/src/index.ts';
 import { createFeishuController } from './feishu.ts';
 import { createPersonalMessages } from './feishu-personal.ts';
+import { privateThreadExport } from './feishu-thread-history.ts';
 import { createFeishuBotsController, type FeishuBotFactory } from './feishu-bots.ts';
 import { createFeishuRegistration, type FeishuRegistrationJob } from './feishu-registration.ts';
 
@@ -159,6 +160,10 @@ export function createFeishuGateway(
     return channel;
   });
   app.setBotScopeAccess((scope, botId, input, threadId) => bots.canUseScope(scope, botId, input, threadId));
+  app.setPrivateExport((id, threadId) => {
+    if (!app.plugins.list().some(p => p.id === 'feishu' && p.status === 'active')) throw new InputError('飞书插件已停用', 503);
+    return privateThreadExport(app.store, bots.requireThread(id, threadId));
+  });
   app.setPrivateSearch(bots.searchPrivateHistory);
   app.setPrivateConversation((id, threadId, action, input) => action === 'read'
     ? bots.privateThreadMetadata(id, threadId) : bots.updatePrivateThread(id, threadId, input, 'assistant'));

@@ -3014,8 +3014,10 @@ test('Web 和飞书按执行 ID 核对目标、最近观察与仍需用户决定
 test('Web 与飞书主人询问永久删除时收到同一确认入口和保留范围', async t => {
   let adapter!: FeishuOptions;
   const replies: string[] = [];
-  const reply = '在 Web 打开对应机器人的独立对话记录，进入详情后点击删除对话并确认。已送达飞书的消息仍会保留。';
+  const reply = '在 Web 打开对应机器人的独立对话记录。进入详情后先点「导出对话」下载 Markdown，再点「删除对话」并确认。已送达飞书的消息仍会保留。';
   const { server, api, ask } = await fixture(t, req => {
+    assert.match(req.system, /「导出对话」预览、复制或下载 Markdown/);
+    assert.match(req.system, /不能声称已替用户下载或发送到飞书/);
     assert.match(req.system, /Web 对应会话详情点「删除对话」并确认/);
     assert.match(req.system, /只有服务端确认删除才能报告成功/);
     assert.match(req.system, /已发送到飞书的消息和独立业务记录仍然保留/);
@@ -3027,7 +3029,7 @@ test('Web 与飞书主人询问永久删除时收到同一确认入口和保留�
       async send(_target, text) { replies.push(text); } };
   });
   try {
-    const question = '怎样永久删除我的独立对话？';
+    const question = '怎样先备份再永久删除我的独立对话？';
     assert.equal(await ask(question), reply);
     const bot = await api('/feishu/bots', { name: '对话助手', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
       scope: { kind: 'global' }, requireConfirmation: false });

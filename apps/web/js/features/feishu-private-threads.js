@@ -1,4 +1,5 @@
 import { h, replace } from '../lib/dom.js';
+import { conversationExportActive, openConversationExport } from './conversation-export.js';
 import { editThreadOrder } from './feishu-thread-order.js';
 import { editThreadTagFilters } from './feishu-tag-filters.js';
 import { conversationModelPicker } from './model-drawer.js';
@@ -11,6 +12,7 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
   const body = h('div', { class: 'stack', 'aria-live': 'polite' });
   let loadId = 0;
   let childEditor;
+  let exportButton;
   let knownTags = [];
   const valid = () => api.draftOwner() === owner && location.hash === route && !store.view.unauthorized &&
     store.view.snapshot?.plugins?.some(plugin => plugin.id === 'feishu' && plugin.status === 'active');
@@ -59,6 +61,7 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
     }
     if (lastSnapshot !== store.view.snapshot) {
       lastSnapshot = store.view.snapshot;
+      if (exportButton) exportButton.hidden = !conversationExportActive(store);
       setSearchEnabled(hasSearch());
     }
   });
@@ -103,6 +106,7 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
     }
   }
   function list(notice = '') {
+    exportButton = undefined;
     showingList = true;
     openThreadId = undefined;
     listNotice = notice;
@@ -365,7 +369,26 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
         else feedback.textContent = error.message;
       }
     } });
-    replace(body, back(), h('h3', null, row.title), edit,
+    exportButton = Button({ label: '导出对话', size: 'sm', onClick: () => {
+      if (!current(id) || !conversationExportActive(store)) return;
+      childEditor = openConversationExport({
+        api, store, source: { botId: bot.id, threadId: row.threadId }, subtitle: row.title,
+        isCurrent: () => current(id),
+        onSourceError(error) {
+          if (error.status === 410) { void deleted(); return true; }
+          if (error.status === 503 && error.message.includes('对话导出插件已停用')) {
+            exportButton.hidden = true;
+            childEditor?.close();
+            feedback.textContent = '对话导出插件已停用。';
+            void store.refresh();
+            return true;
+          }
+          return inaccessible(error);
+        },
+      });
+    } });
+    exportButton.hidden = !conversationExportActive(store);
+    replace(body, back(), h('h3', null, row.title), exportButton, edit,
       Button({ label: '复制对话 ID', size: 'sm', onClick: async () => {
         try { await copyText(row.threadId); if (current(id)) feedback.textContent = '已复制对话 ID。'; }
         catch { if (current(id)) feedback.textContent = '复制失败，请检查剪贴板权限。'; }

@@ -127,6 +127,7 @@ export async function createWorkbench(config: AppConfig) {
   let notificationChannel: (bot: import('../../protocol/src/index.ts').FeishuBot) => string = () => { throw new InputError('通知渠道尚未连接', 503); };
   let mailboxProposer: ((input: Record<string, unknown>) => Json) | undefined;
   let privateSearch: ((id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string) => Json) | undefined;
+  let privateExport: ((botId: string, threadId: string) => { title: string; messages: Message[] }) | undefined;
   let privateConversation: ((botId: string, threadId: string, action: 'read' | 'update', input: JsonObject) => Json) | undefined;
   let botRelay: ((input: { sourceBotId: string; targetBotId: string; text: string; key: string; parentEntryId?: string; chatId?: string; sourceMessageId?: string }) => Promise<import('../../protocol/src/bots.ts').MailboxEntry>) | undefined;
   const configuredBots = () => botsStatus() as unknown as import('../../protocol/src/bots.ts').FeishuBot[];
@@ -390,7 +391,10 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(officeDocuments);
   plugins.register(createAssistantSkills(() => machines));
   plugins.register(createMessageFavorites((source, offset, signal) => readNativeFavoritePage(machines, source, offset, signal)));
-  plugins.register(createConversationExport((source, includeWork, signal) => exportNativeConversation(machines, source, includeWork, signal), currentMainAssistant));
+  plugins.register(createConversationExport((source, includeWork, signal) => exportNativeConversation(machines, source, includeWork, signal), currentMainAssistant, (botId, threadId) => {
+    if (!privateExport) throw new InputError('飞书独立对话服务尚未连接', 503);
+    return privateExport(botId, threadId);
+  }));
   for (const loaded of await loadExtensions(config.dataDir, { reservedIds: plugins.list().map(item => item.id) })) plugins.register(loaded.extension, loaded.config);
   async function mainSkillCatalog(): Promise<string> {
     const result = await plugins.invocations.use('assistant-skills.manage', { action: 'list' });
@@ -1832,6 +1836,7 @@ export async function createWorkbench(config: AppConfig) {
     setAgentInputOwnerValidator(validate: typeof validateAgentInputOwner) { validateAgentInputOwner = validate; },
     setBotsStatus(status: () => Json) { botsStatus = status; },
     setPrivateSearch(handler: NonNullable<typeof privateSearch>) { privateSearch = handler; },
+    setPrivateExport(handler: NonNullable<typeof privateExport>) { privateExport = handler; },
     setPrivateConversation(handler: NonNullable<typeof privateConversation>) { privateConversation = handler; },
     setBotRelay(relay: NonNullable<typeof botRelay>) { botRelay = relay; },
     setBotScopeAccess(validate: typeof botScopeAccess) { botScopeAccess = validate; channelBindingsReady = true; scheduledWork.sync(); },

@@ -117,6 +117,11 @@ export function searchPrivateThreads(store: Pick<Store, 'get' | 'list'>, rows: P
   return { items, nextBefore: null };
 }
 
+export function privateThreadExport(store: Pick<Store, 'get' | 'list'>, row: PrivateThread) {
+  const messages = threadMessages(store, [row]).get(row.threadId) ?? [];
+  return { title: metadata(row, messages).title, messages };
+}
+
 export function readPrivateThreadMetadata(store: Pick<Store, 'get' | 'list'>, row: PrivateThread) {
   return metadata(row, threadMessages(store, [row]).get(row.threadId) ?? []);
 }
