@@ -120,7 +120,7 @@ export const webConversationsExtension: Extension = {
         }
         const items=rows.map(row=>{
           const last=latest.get('web:'+row.id);
-          return {...view(row),...(last && {lastInputAt:last.createdAt,lastInputText:[...last.text.trim().replace(/\s+/gu,' ')].slice(0,100).join('')})};
+          return {...view(row),...(last && {lastInputId:last.id,lastInputAt:last.createdAt,lastInputText:[...last.text.trim().replace(/\s+/gu,' ')].slice(0,100).join('')})};
         }).sort((a,b)=>(b.lastInputAt || b.createdAt).localeCompare(a.lastInputAt || a.createdAt));
         return {items};
       }

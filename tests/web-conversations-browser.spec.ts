@@ -74,7 +74,9 @@ test('两个标签页并发改名与归档时核对版本，归档深链只读�
     headers:{authorization:'Bearer '+token},data:{text:'列表保持打开时的新发言'}});
   assert.equal(received.status(),202);
   await expect(drawer).toContainText('列表保持打开时的新发言');
-  await drawer.getByRole('link',{name:'原始名称'}).click();
+  const latest=await received.json();
+  await drawer.getByRole('link',{name:'列表保持打开时的新发言'}).click();
+  await expect(first.locator('[data-id="'+latest.id+'"][aria-current="true"]')).toBeVisible();
   await second.goto(first.url());await second.getByRole('button',{name:'修改对话标题'}).click();
   const editor=second.getByRole('dialog',{name:'修改对话标题'});
   await editor.getByLabel('新的对话标题').fill('第二份草稿');

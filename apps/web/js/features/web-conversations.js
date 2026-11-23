@@ -200,7 +200,8 @@ export function createWebConversations({api,store,scope,router}){
       status.textContent=matches.length?'':items.length?'没有匹配的对话标题。':filter.value==='archived'?'当前范围没有已归档对话。':'当前范围还没有独立对话。';
       replace(list,matches.map(row=>h('div',{class:'stack'},
         h('a',{class:'btn btn--ghost',href:href(row.id),onclick:()=>drawer.close()},row.title),
-        h('small',{class:'muted'},[timeAgo(row.lastInputAt || row.createdAt),row.lastInputText].filter(Boolean).join(' · ')))));
+        h('small',{class:'muted'},timeAgo(row.lastInputAt || row.createdAt),row.lastInputId && [' · ',
+          h('a',{href:href(row.id,row.lastInputId),onclick:()=>drawer.close()},row.lastInputText || '查看最近发言')]))));
     }
     searchTitle.oninput=drawList;
     listRefresh=async(quiet=false)=>{
