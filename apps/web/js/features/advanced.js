@@ -168,7 +168,7 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
     h('summary', null, '高级：插件与排查'),
     h('div', { class: 'fold__body' }, plugins, h('a',{class:'btn btn--sm',href:'/admin.html'},'管理员登录'), files, events, ui, diagnostics));
 
-  let cardSignature;
+  const cardNodes = new Map();
   function paint(snapshot) {
     examplesButton.hidden=!snapshot.webExtensions?.some(entry=>entry.value?.slot==='advanced-interface' && entry.value.renderer==='assistant-card-examples');
     if(examplesButton.hidden){examplesDrawer?.close();examplesDrawer=undefined;}
@@ -184,11 +184,14 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
 
   function paintCards(extensions) {
     const entries = extensions.filter(({value}) => value?.slot === 'advanced-interface' && value.renderer !== 'assistant-card-examples');
-    const signature = JSON.stringify(entries);
-    if (signature === cardSignature) return;
-    cardSignature = signature;
-    const cards = [];
-    for (const {value} of entries) {
+    const visible = new Set();
+    for (const {id,value} of entries) {
+      const signature = JSON.stringify(value);
+      const previous = cardNodes.get(id);
+      if (previous?.signature === signature) {
+        visible.add(id);
+        continue;
+      }
       const patch = value.renderer === 'diff' && typeof value.patch === 'string' && value.patch;
       const fallback = typeof value.fallback === 'string' && value.fallback;
       if (typeof value.title !== 'string') continue;
@@ -200,11 +203,24 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
         content = h('pre',{class:'code-sidebar__text',tabIndex:0},value.lines.join('\n'));
       }
       if (!content && !fallback) continue;
-      cards.push(h('section', {class:'card card__body stack', 'aria-label':value.title},
-        h('h3', {}, value.title), content || h('p', {}, fallback)));
+      const node = h('section', {class:'card card__body stack', 'aria-label':value.title},
+        h('h3', {}, value.title), content || h('p', {}, fallback));
+      previous?.node.replaceWith(node);
+      cardNodes.set(id,{signature,node});
+      visible.add(id);
     }
-    replace(extensionCards, cards);
-    extensionCards.hidden = !cards.length;
+    for (const [id, card] of cardNodes) {
+      if (visible.has(id)) continue;
+      card.node.remove();
+      cardNodes.delete(id);
+    }
+    let position = extensionCards.firstChild;
+    for (const id of visible) {
+      const {node} = cardNodes.get(id);
+      if (node !== position) extensionCards.insertBefore(node,position);
+      position = node.nextSibling;
+    }
+    extensionCards.hidden = !visible.size;
   }
 
   return { el, update: paint };

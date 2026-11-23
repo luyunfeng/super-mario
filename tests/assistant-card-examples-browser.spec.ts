@@ -78,6 +78,10 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await expect(point).toHaveAttribute('aria-valuetext','昨日，数值 -3');
   await point.press('ArrowRight');
   await expect(point).toHaveAttribute('aria-valuetext','今日，数值 5');
+  server.app.events.publish('review.progress',{text:'追加复核记录'});
+  await expect(stream).toContainText('追加复核记录');
+  await expect(point).toBeFocused();
+  await expect(point).toHaveAttribute('aria-valuetext','今日，数值 5');
   await chart.getByRole('button',{name:'复制数据点'}).click();
   await expect(chart.getByRole('status')).toHaveText('已复制数据点');
   assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'数量变化\n今日，数值 5');
