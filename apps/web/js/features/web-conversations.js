@@ -203,12 +203,14 @@ export function createWebConversations({api,store,scope,router}){
       status.textContent=matches.length?'':bodyQuery?'没有匹配的对话正文。':items.length?'没有匹配的对话标题。':filter.value==='archived'?'当前范围没有已归档对话。':'当前范围还没有独立对话。';
       replace(list,matches.map(row=>h('div',{class:'stack'},
         h('a',{class:'btn btn--ghost',href:href(row.id),onclick:()=>drawer.close()},row.title),
-        row.match ? h('small',{class:'muted'},row.match.role==='user'?'我':'助手',' · ',
-          h('time',{datetime:row.match.at,title:new Date(row.match.at).toLocaleString('zh-CN')},timeAgo(row.match.at)))
+        row.match ? [row.match,...(row.earlierMatches || [])].map(hit=>h('div',{class:'stack'},
+          h('small',{class:'muted'},hit.role==='user'?'我':'助手',' · ',
+            h('time',{datetime:hit.at,title:new Date(hit.at).toLocaleString('zh-CN')},timeAgo(hit.at))),
+          h('a',{'aria-label':hit.text,href:href(row.id,hit.id),onclick:()=>drawer.close()},hit.text.slice(0,hit.start),
+            h('mark',{},hit.text.slice(hit.start,hit.end)),hit.text.slice(hit.end))))
         : h('small',{class:'muted'},timeAgo(row.lastInputAt || row.createdAt),row.lastInputId && [' · ',
           h('a',{href:href(row.id,row.lastInputId),onclick:()=>drawer.close()},row.lastInputText || '查看最近发言')]),
-        row.match && h('a',{'aria-label':row.match.text,href:href(row.id,row.match.id),onclick:()=>drawer.close()},row.match.text.slice(0,row.match.start),
-          h('mark',{},row.match.text.slice(row.match.start,row.match.end)),row.match.text.slice(row.match.end)))));
+        row.matchCount>3 && h('small',{class:'muted'},'共 '+row.matchCount+' 条匹配，显示最近 3 条。'))));
     }
     lookup.onclick=()=>{if(canSearch() && searchTitle.value.trim()){bodyQuery=searchTitle.value.trim();void listRefresh();}};
     searchTitle.maxLength=200;

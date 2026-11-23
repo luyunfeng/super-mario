@@ -47,6 +47,10 @@ test('independent web conversations persist exact scopes and idempotent creation
   const results=await call({action:'list',query:'合成'}) as {items:{id:string;match:{id:string;role:string;at:string}}[]};
   assert.deepEqual(results.items.map(row=>[row.id,row.match.role,row.match.id]),[[id,'assistant','matched-answer'],[other,'user','other-input']]);
   f.store.put('messages','literal',{...message,id:'literal',text:'😀'+'甲'.repeat(31)+'A.B',createdAt:'2099-02-01T00:00:00.000Z'});
+  for(let i=0;i<4;i++)f.store.put('messages','same-'+i,{...message,id:'same-'+i,text:'多条命中',createdAt:'2099-03-01T00:00:00.000Z'});
+  const grouped=await call({action:'list',query:'多条命中'}) as {items:{match:{id:string};earlierMatches:{id:string}[];matchCount:number}[]};
+  assert.equal(grouped.items[0].matchCount,4);
+  assert.deepEqual([grouped.items[0].match,...grouped.items[0].earlierMatches].map(hit=>hit.id),['same-3','same-2','same-1']);
   const literal=await call({action:'list',query:'a.b'}) as {items:{match:{text:string;start:number;end:number}}[]};
   const snippet=literal.items[0].match;
   assert.equal(snippet.text.slice(snippet.start,snippet.end),'A.B');

@@ -76,10 +76,10 @@ test('两个标签页并发改名与归档时核对版本，归档深链只读�
   const received=await second.request.post(server.url+'/api/v1/web-conversations/'+id+'/messages',{
     headers:{authorization:'Bearer '+token},data:{text:'列表保持打开时的新发言'}});
   assert.equal(received.status(),202);
-  await expect(drawer.locator('a mark')).toHaveText('列表保持打开时的新发言');
+  await expect(drawer.locator('a mark').first()).toHaveText('列表保持打开时的新发言');
   await drawer.getByLabel('按标题查找').fill('归档后仍可读');
   await drawer.getByRole('button',{name:'按正文查找'}).click();
-  await expect(drawer.locator('a mark')).toHaveText('归档后仍可读');
+  await expect(drawer.locator('a mark').first()).toHaveText('归档后仍可读');
   await drawer.getByLabel('按标题查找').fill('');
   const latest=await received.json();
   await drawer.getByRole('link',{name:'列表保持打开时的新发言'}).click();

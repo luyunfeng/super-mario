@@ -116,25 +116,32 @@ export const webConversationsExtension: Extension = {
         const query=input.query;
         if(query!==undefined && (typeof query!=='string' || !query.trim() || query.length>200))fail(400,'搜索词须为 1 至 200 个字符');
         const literal=query && new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'iu');
-        const hits=new Map<string,{id:string;text:string;at:string;role:Message['role'];start:number;end:number}>();
+        type Hit={id:string;text:string;at:string;role:Message['role'];start:number;end:number};
+        const hits=new Map<string,{recent:Hit[];count:number}>();
         const latest=new Map<string,Message>();
         if(threads.size)for(const message of store.list<Message>('messages')){
           if(!threads.has(message.conversationId) || (message.role!=='user' && !(query && message.role==='assistant' && message.status==='done')) || (message.role==='user' && !message.directWebInput) || typeof message.id!=='string' || typeof message.text!=='string' || typeof message.createdAt!=='string' || !independentWebSource(store,message,message.conversationId,projectId))continue;
           if(literal){
             const found=literal.exec(message.text);
-            if(found && message.createdAt >= (hits.get(message.conversationId)?.at ?? '')){
+            if(found){
               let start=Math.max(0,found.index-32),end=found.index+found[0].length+64;
               if(start && /[\uDC00-\uDFFF]/.test(message.text.charAt(start)))start--;
               if(/[\uDC00-\uDFFF]/.test(message.text.charAt(end)))end++;
               const matchStart=found.index-start+(start ? 1 : 0);
-              hits.set(message.conversationId,{id:message.id,role:message.role,at:message.createdAt,start:matchStart,end:matchStart+found[0].length,text:(start?'…':'')+message.text.slice(start,end)+(end<message.text.length?'…':'')});
+              const group=hits.get(message.conversationId) ?? {recent:[],count:0};
+              group.count++;
+              group.recent.unshift({id:message.id,role:message.role,at:message.createdAt,start:matchStart,end:matchStart+found[0].length,text:(start?'…':'')+message.text.slice(start,end)+(end<message.text.length?'…':'')});
+              group.recent.sort((a,b)=>b.at.localeCompare(a.at));
+              if(group.recent.length>3)group.recent.pop();
+              hits.set(message.conversationId,group);
             }
           }
           if(message.role==='user' && message.createdAt >= (latest.get(message.conversationId)?.createdAt ?? ''))latest.set(message.conversationId,message);
         }
         const items=rows.filter(row=>!query || hits.has('web:'+row.id)).map(row=>{
           const last=latest.get('web:'+row.id);
-          return {...view(row),...(query && {match:hits.get('web:'+row.id)!}),...(last && {lastInputId:last.id,lastInputAt:last.createdAt,lastInputText:[...last.text.trim().replace(/\s+/gu,' ')].slice(0,100).join('')})};
+          const group=hits.get('web:'+row.id);
+          return {...view(row),...(group && {match:group.recent[0],earlierMatches:group.recent.slice(1),matchCount:group.count}),...(last && {lastInputId:last.id,lastInputAt:last.createdAt,lastInputText:[...last.text.trim().replace(/\s+/gu,' ')].slice(0,100).join('')})};
         }).sort((a,b)=>(b.match?.at || b.lastInputAt || b.createdAt).localeCompare(a.match?.at || a.lastInputAt || a.createdAt));
         return {items};
       }
