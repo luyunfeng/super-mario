@@ -49,10 +49,11 @@ export function createAgentSessions(options: {
     if (typeof s.id !== 'string' || s.id !== `${spec.executorId}:${spec.nativeSessionId}` || typeof s.cwd !== 'string' || !isAbsolute(s.cwd)
       || /[\0\r\n]/.test(s.cwd) || typeof s.observedAt !== 'string' || !Number.isFinite(Date.parse(s.observedAt))
       || s.source !== 'session-metadata' || s.state !== 'historical' || s.writable !== false
+      || (s.archived !== undefined && s.archived !== true)
       || (s.fileModifiedAt !== undefined && (typeof s.fileModifiedAt !== 'string' || !Number.isFinite(Date.parse(s.fileModifiedAt))))
       || (s.metadataTimestamp !== undefined && (typeof s.metadataTimestamp !== 'string' || !Number.isFinite(Date.parse(s.metadataTimestamp))))) return fail('电脑返回的会话元数据格式无效', 502);
     return { id: s.id, ...spec, cwd: s.cwd, observedAt: s.observedAt, source: 'session-metadata', state: 'historical', writable: false,
-      ...(s.metadataTimestamp ? { metadataTimestamp: s.metadataTimestamp } : {}), ...(s.fileModifiedAt ? { fileModifiedAt: s.fileModifiedAt } : {}), ...(typeof s.parentNativeSessionId === 'string' ? { parentNativeSessionId: s.parentNativeSessionId } : {}) };
+      ...(s.archived ? { archived: true } : {}), ...(s.metadataTimestamp ? { metadataTimestamp: s.metadataTimestamp } : {}), ...(s.fileModifiedAt ? { fileModifiedAt: s.fileModifiedAt } : {}), ...(typeof s.parentNativeSessionId === 'string' ? { parentNativeSessionId: s.parentNativeSessionId } : {}) };
   }
   function allowedProject(p: Project | undefined, machineId: string, cwd?: string) {
     if (p?.workspace && (p.workspace.machineId !== machineId || (cwd !== undefined && !within(p.workspace.cwd, cwd)))) return fail('会话不属于项目绑定的电脑或目录', 409);

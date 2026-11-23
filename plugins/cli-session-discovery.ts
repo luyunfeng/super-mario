@@ -61,6 +61,7 @@ export function createCliSessionDiscovery(options: Options = {}) {
 
   async function scan(target?: Selection) {
     const result: AgentSessionDiscovery = { sessions: [], roots: [], warnings: [], truncated: false };
+    const archiveDirectory = join(await codexHome, 'archived_sessions');
     const logs = new Map<string, { path: string; dev: number; ino: number }>();
     const found = new Map<string, ObservedAgentSession>();
     const conflicts = new Set<string>();
@@ -87,7 +88,7 @@ export function createCliSessionDiscovery(options: Options = {}) {
       } catch (error) { if (!missing(error)) { cut(); warn('部分会话元数据无法读取'); } }
       finally { await file?.close(); }
     }
-    async function add(executorId: NativeExecutorId, meta: Record<string, unknown>, observedAt: string, index = false, outerTime?: unknown, fileModifiedAt?: string) {
+    async function add(executorId: NativeExecutorId, meta: Record<string, unknown>, observedAt: string, index = false, outerTime?: unknown, fileModifiedAt?: string, archived = false) {
       const id = executorId === 'codex' ? meta.id : meta.sessionId ?? meta.session_id;
       if (!validId(id)) { warn('部分会话元数据缺少有效原生 ID，已跳过'); return false; }
       if (target && (executorId !== target.executorId || id !== target.nativeSessionId)) return true;
@@ -118,13 +119,14 @@ export function createCliSessionDiscovery(options: Options = {}) {
       const parent = meta.parent_thread_id ?? spawned?.parent_thread_id ?? meta.parent_session_id ?? meta.parentSessionId ?? meta.forked_from_id;
       if (previous) {
         previous.observedAt = observedAt;
+        if (!archived) delete previous.archived;
         if (fileModifiedAt && (!previous.fileModifiedAt || fileModifiedAt > previous.fileModifiedAt)) previous.fileModifiedAt = fileModifiedAt;
         if (metadataTimestamp && (!previous.metadataTimestamp || metadataTimestamp > previous.metadataTimestamp)) previous.metadataTimestamp = metadataTimestamp;
         if (validId(parent) && !previous.parentNativeSessionId) previous.parentNativeSessionId = parent;
         return true;
       }
       if (found.size >= limits.results) { cut(); return true; }
-      found.set(key, { id: key, executorId, nativeSessionId: id, cwd, observedAt,
+      found.set(key, { ...(archived ? { archived: true as const } : {}), id: key, executorId, nativeSessionId: id, cwd, observedAt,
         ...(metadataTimestamp ? { metadataTimestamp } : {}), ...(fileModifiedAt ? { fileModifiedAt } : {}), ...(validId(parent) ? { parentNativeSessionId: parent } : {}),
         source: 'session-metadata', state: 'historical', writable: false });
       return true;
@@ -159,7 +161,7 @@ export function createCliSessionDiscovery(options: Options = {}) {
         }
         if (!object(row)) continue;
         const meta = executorId === 'codex' ? row.type === 'session_meta' && object(row.payload) ? row.payload : undefined : row;
-        if (meta) matched = await add(executorId, meta, data.observedAt, false, row.timestamp, data.fileModifiedAt) || matched;
+        if (meta) matched = await add(executorId, meta, data.observedAt, false, row.timestamp, data.fileModifiedAt, executorId === 'codex' && dirname(path) === archiveDirectory) || matched;
         if (matched) {
           if (target && path.endsWith('.jsonl') && meta && (meta.id === target.nativeSessionId && executorId === 'codex' || executorId === 'claude-code' && (meta.sessionId ?? meta.session_id) === target.nativeSessionId)) {
             logs.set(path, { path, dev: data.dev, ino: data.ino });
@@ -204,7 +206,7 @@ export function createCliSessionDiscovery(options: Options = {}) {
     const codexRoot = await codexHome, claudeRoot = await claudeHome;
     if ((!target || target.executorId === 'codex') && await available(codexRoot, options.codexHome !== undefined, 'Codex')) {
       await walk(join(codexRoot, 'sessions'), 'codex', 3);
-      await walk(join(codexRoot, 'archived_sessions'), 'codex', 0);
+      await walk(archiveDirectory, 'codex', 0);
     }
     if ((!target || target.executorId === 'claude-code') && await available(claudeRoot, options.claudeHome !== undefined, 'Claude')) {
       await walk(join(claudeRoot, 'projects'), 'claude-code', 2);

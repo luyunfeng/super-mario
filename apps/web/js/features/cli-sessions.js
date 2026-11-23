@@ -92,7 +92,7 @@ export function createCliSessions({ api, store, router }) {
           h('ul', {}, machine.warnings.map(warning => h('li', {}, warning)), machine.truncated && h('li', {}, '这里只显示本次已返回的记录。'))),
         ...rows.map(session => h('article', { class: 'card card--tight', style: wrap, dataset: { cliSession: session.id } },
           h('div', { class: 'card__body stack', style: wrap },
-            h('div', { class: 'row row--wrap' }, Pill('历史'), Pill('只读'), text(session.executorId)),
+            h('div', { class: 'row row--wrap' }, Pill(session.archived ? '已归档' : '历史'), Pill('只读'), text(session.executorId)),
             text(`原生 ID：${session.nativeSessionId}`), text(`目录：${session.cwd}`),
             text(`观测时间：${session.observedAt}\n元数据时间：${session.metadataTimestamp ?? '未知'}\n文件记录更新：${session.fileModifiedAt ?? '未知'}\n来源：session-metadata`),
             session.parentNativeSessionId && text(`父会话：${session.parentNativeSessionId}`),

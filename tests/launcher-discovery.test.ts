@@ -198,6 +198,9 @@ test('Codex 归档历史沿用项目范围校验，跨目录重名时拒绝恢�
   const discovery = createCliSessionDiscovery(f.explicit);
   const list = (root: string) => discovery.handlers['agents.sessions']({ roots: [root] });
   assert.deepEqual((await list(cwd)).sessions.map(s => s.nativeSessionId), [nativeSessionId]);
+  assert.equal((await list(cwd)).sessions[0].archived, true);
+  await f.codex(f.codexHome, nativeSessionId, cwd);
+  assert.equal((await list(cwd)).sessions[0].archived, undefined);
   assert.deepEqual((await list(other)).sessions, []);
   await f.codex(f.codexHome, nativeSessionId, other);
   assert.deepEqual((await list(f.base)).sessions, []);

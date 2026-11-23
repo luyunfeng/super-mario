@@ -4,7 +4,7 @@ export type NativeExecutorId = string;
 export interface NativeResumeSpec { executorId: NativeExecutorId; nativeSessionId: string }
 export interface ObservedAgentSession extends NativeResumeSpec {
   id: string; cwd: string; observedAt: string; metadataTimestamp?: string; fileModifiedAt?: string;
-  parentNativeSessionId?: string; source: 'session-metadata'; state: 'historical'; writable: false;
+  archived?: true; parentNativeSessionId?: string; source: 'session-metadata'; state: 'historical'; writable: false;
 }
 export interface AgentSessionDiscovery { sessions: ObservedAgentSession[]; roots: string[]; warnings: string[]; truncated: boolean }
 
