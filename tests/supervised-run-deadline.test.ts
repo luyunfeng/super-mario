@@ -144,3 +144,25 @@ test('原执行的会话被替换，在截止前或裁决后实际投递前均�
     assert.equal(f.inputs.length,0);
   });
 });
+
+test('默认裁决中断重启时，已确认的输入恢复回执，未尝试且原执行无法核实则将问题交还主人',async t=>{
+  for(const attempted of [true,false]) await t.test(attempted?'有确认回执':'尚无发送记录',async t=>{
+    const f=await fixture(t);
+    const card=await f.ask(true);
+    f.tick(card);
+    await t.waitFor(()=>assert.equal(f.read(card).delivery,'confirmed'));
+    if(!attempted) f.app().store.remove('effects','interaction:'+card.id);
+    f.app().store.put('interactions',card.id,{...f.read(card),delivery:'unknown'});
+    const count=f.inputs.length;
+    await f.restart();
+    await t.waitFor(()=>{
+      const row=f.read(card);
+      if(attempted) assert.equal(row.delivery,'confirmed');
+      else {
+        assert.equal(row.status,'open'); assert.ok(row.deadlineRemindedAt);
+        assert.equal(row.byDefault,undefined); assert.equal(row.answers,undefined);
+      }
+    });
+    assert.equal(f.inputs.length,count);
+  });
+});

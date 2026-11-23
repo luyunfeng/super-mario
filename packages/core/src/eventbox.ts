@@ -112,11 +112,6 @@ export function referenceCurrent(
     runId?: string;
     params?: { todoId?: string };
   }>(collection, id);
-  if (kind === "interaction" && item?.decisionDeadlineAt) {
-    const card = store.get<Card>("interactions", id)!;
-    return card.id === id && card.version === stale.version && cardAcceptsAnswer(card, at) &&
-      (!card.runId || !!readRunDeadlineTarget(store, card));
-  }
   if (item && (kind === "approval" || kind === "interaction")) {
     const todoId = item.todoId || item.params?.todoId;
     if (
@@ -132,6 +127,11 @@ export function referenceCurrent(
       (!run || ["completed", "failed", "cancelled"].includes(run.status))
     )
       return false;
+  }
+  if (kind === "interaction" && item?.decisionDeadlineAt && item.status === "open") {
+    const card = store.get<Card>("interactions", id)!;
+    return card.id === id && card.version === stale.version && cardAcceptsAnswer(card, at) &&
+      (!card.runId || !!readRunDeadlineTarget(store, card));
   }
   return Boolean(
     item &&

@@ -8,6 +8,7 @@ import { startAgentNode } from '../apps/agent-node/src/index.ts';
 import { startServer } from '../apps/server/src/index.ts';
 import type { Message, Run } from '../packages/protocol/src/index.ts';
 import type { Card } from '../packages/core/src/interactions.ts';
+import { runWithAgentInput } from '../packages/core/src/agent-input.ts';
 import { waitingRunQuestion } from '../packages/core/src/supervision.ts';
 import type { FeishuOptions } from '../plugins/feishu.ts';
 
@@ -96,6 +97,15 @@ test('执行问题截止继续阻塞，Web 与已配对私聊各自提醒一次�
   assert.match(JSON.stringify(result),/正在提交/);
   await t.waitFor(()=>assert.equal(app.store.get<Card>('interactions',first.id)?.delivery,'confirmed'),{timeout:10000});
   assert.equal(inputs.length,2);
+  const chatCard=await ask(source,'原私聊文字回答');
+  await speak('乙');
+  const actor=app.store.list<Message>('messages').find(row=>row.role==='user' && row.text==='乙' && row.conversationId===source.conversationId);
+  assert.ok(actor);
+  const answer=app.contributions.list('tools').find(entry=>entry.value.name==='interaction_answer')!.value;
+  await runWithAgentInput(actor,()=>answer.execute({id:chatCard.id,version:chatCard.version},new AbortController().signal));
+  assert.equal(app.store.get<Card>('interactions',chatCard.id)?.answeredBy,'user_feishu');
+  assert.equal(app.store.get<Card>('interactions',chatCard.id)?.delivery,'confirmed');
+  assert.equal(inputs.length,3);
   const revoked=await ask(source,'旧绑定问题不得冒给新主人');
   await t.waitFor(()=>assert.ok(formFor(revoked)),{timeout:10000});
   await server.bots.update(bot.id,{appId:'cli_1313131313131313',appSecret:'fixture-next'});

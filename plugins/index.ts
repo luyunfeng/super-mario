@@ -303,9 +303,9 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             runId: { type: 'string' }, projectId: { type: 'string' }, executorId: { type: 'string' }, cwd: { type: 'string' },
           }, ['kind', 'title', 'body']));
           if (actions.interactionsList) context.contribute('tools', 'interactions_list', tool('interactions_list', '查看交互卡、当前版本和待回答问题。', async (_args, signal) => { signal.throwIfAborted(); return actions.interactionsList!(); }));
-          if (actions.answerQuestion) context.contribute('tools', 'interaction_answer', tool('interaction_answer', '仅将主人明确给出的答案写回当前对话中仍待答的纯文字问题。结构化问题请主人在卡片逐题提交。先从 interactions_list 核对 id、版本和状态。已撤回的卡按最新发言继续对话。权限和计划由主人直接确认。', async (args, signal) => {
+          if (actions.answerQuestion) context.contribute('tools', 'interaction_answer', tool('interaction_answer', '在原对话提交主人本轮明确给出的答案。执行中的结构化问题先用 runs_list 按执行 id 读取 blockedBy，核对原卡 id 和 version，从原卡核对题目与选项，只传 id/version；工作台从主人消息读取选择。同来源只有一张可答执行卡且只有一题时，主人可单独发送原选项。其他情况请主人发送「回答提问 <id> v<version>」，随后逐行填「1. 原选项」，多选同题分行。不得用建议、引述或否定当答案。按回执的 delivery 报告送达，unknown 不重试。纯文字问题另传 text。权限、计划和验收须主人直接确认。', async (args, signal) => {
             signal.throwIfAborted(); return actions.answerQuestion!(String(args.id ?? ''), Number(args.version), String(args.text ?? ''));
-          }, { id: { type: 'string' }, version: { type: 'integer' }, text: { type: 'string' } }, ['id', 'version', 'text']));
+          }, { id: { type: 'string' }, version: { type: 'integer' }, text: { type: 'string' } }, ['id', 'version']));
           if (actions.projectsList) context.contribute('tools', 'projects_list', tool('projects_list', '列出工作台项目及归档状态。', async (_args, signal) => { signal.throwIfAborted(); return actions.projectsList!(); }));
           if (actions.projectsDiscover) context.contribute('tools', 'projects_discover', tool('projects_discover', '只读发现已连接电脑上已有的项目文件夹。不会创建项目或执行工作；开发项目先发现目录，再绑定电脑和目录。', async (args, signal) => { signal.throwIfAborted(); return actions.projectsDiscover!(args); }, { machineId: { type: 'string' }, roots: { type: 'array', items: { type: 'string' } } }));
           if (actions.workspaceCode) {

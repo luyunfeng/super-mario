@@ -59,6 +59,8 @@ import { translateReply } from './agent-runtime/reply-translation.ts';
 import { createModelConfig } from './model-config.ts';
 import { createPlans } from './plans.ts';
 import { createPolicies, validatePolicyPatch, type PolicyConfig } from './policies.ts';
+import { readRunQuestionChoice } from './run-question-choice.ts';
+import { cardAcceptsAnswer } from './question-deadline.ts';
 import { readRunDeadlineTarget, runDeadlineTarget, runQuestionReply, type RunDeadlineTarget } from './run-question-deadline.ts';
 import { createInteractions, type Card } from './interactions.ts';
 import { createSupervisorAgent } from './supervisor-agent.ts';
@@ -1084,7 +1086,25 @@ export async function createWorkbench(config: AppConfig) {
     if (card.kind !== 'question') throw new InputError('权限、计划和验收卡需要用户直接确认，主 Agent 不能代批', 403);
     const origin = store.get<{ inputId?: string }>('interaction-origins', id);
     const audience = directQuestionAudience(source);
-    if (!audience || card.runId || card.projectId !== source.projectId || !origin?.inputId ||
+    if (card.runId) {
+      // Model text is a proposal. Only the persisted direct message can supply a worker choice.
+      const actor = store.get<Message>('messages', source.id);
+      const original = validRunQuestionSource(card);
+      if (!actor || !original || actor.id === original.id || !audience || directQuestionAudience(actor) !== audience ||
+          directQuestionAudience(original) !== audience || runQuestionState(card) !== 'eligible' ||
+          Date.parse(actor.createdAt) < Date.parse(card.createdAt) ||
+          store.get<string>('conversation.last-direct-input', audience) !== actor.id)
+        throw new InputError('请在原执行提问所在的对话中回答当前问题', 403);
+      const ambiguous = interactions.list().some(other => {
+        if (other.id === id || other.kind !== 'question' || !cardAcceptsAnswer(other)) return false;
+        const inputId = store.get<{inputId?:string}>('interaction-origins', other.id)?.inputId;
+        return !!inputId && directQuestionAudience(questionSource(store.get<Message>('messages', inputId))) === audience;
+      });
+      const choices = readRunQuestionChoice(card, actor.text, id, version, !ambiguous);
+      const channel = store.get<MessageRoute>('message.routes', actor.id)?.channel;
+      return await interactions.answer(id, version, choices, channel === 'feishu' ? 'user_feishu' : 'user') as unknown as Json;
+    }
+    if (!audience || card.projectId !== source.projectId || !origin?.inputId ||
         store.get<{cardId?: string}>('input-paused', origin.inputId)?.cardId !== id ||
         directQuestionAudience(questionSource(store.get<Message>('messages', origin.inputId))) !== audience)
       throw new InputError('这次输入不能回答其他来源的问题', 403);
