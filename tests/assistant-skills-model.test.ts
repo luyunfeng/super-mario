@@ -2438,3 +2438,64 @@ test('Web 与飞书项目对话读取原收件的失败派发，不重复执行'
     assert.equal(executorCalls, 1);
   } finally { await server.close(); }
 });
+
+test('Web 与飞书项目助手完整列出待主人决定的事项，仅查询且可续页', async t => {
+  let adapter!: FeishuOptions, projectId = '', otherId = '';
+  const sent: string[] = [];
+  const expectedTitles = Array.from({ length: 25 }, (_, i) => '派发 ' + i).concat('确认时间', '准备评审');
+  let titles: string[] = [];
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      titles = [];
+      assert.match(req.system, /按 nextOffset 续查完整清单/);
+      assert.ok(req.tools.includes('pending_decisions_list'));
+      return call('pending_decisions_list', { projectId: otherId }, 'outside');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    if (req.callId === 'outside') {
+      assert.match(raw, /跨作用域|范围与当前会话不符/);
+      return call('pending_decisions_list', {}, 'first');
+    }
+    const page = JSON.parse(raw);
+    assert.equal(page.total, 27);
+    assert.ok(page.items.every((item: { projectId: string }) => item.projectId === projectId));
+    titles.push(...page.items.map((item: {title: string}) => item.title));
+    if (req.callId === 'first') {
+      assert.equal(page.items.length, 25);
+      assert.equal(page.nextOffset, 25);
+      return call('pending_decisions_list', { offset: page.nextOffset }, 'second');
+    }
+    assert.deepEqual(page.items.map((item: {collection: string}) => item.collection), ['interactions', 'plans']);
+    assert.equal(page.nextOffset, null);
+    assert.deepEqual([...titles].sort(), [...expectedTitles].sort());
+    return { role: 'assistant', content: titles.join('、') };
+  }, options => {
+    adapter = options;
+    return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    projectId = (await api('/projects', { name: '待决定项目' })).id;
+    otherId = (await api('/projects', { name: '其他项目' })).id;
+    const base = { createdAt: '2032-01-01T00:00:00Z', updatedAt: '2032-01-01T00:00:00Z', version: 1 };
+    for (let i = 0; i < 25; i++) {
+      const id = 'approval-' + i;
+      server.app.store.put('approvals', id, { ...base, id, status: 'pending', kind: 'dispatch', title: '派发 ' + i, params: { projectId } });
+    }
+    server.app.store.put('interactions', 'question', { ...base, id: 'question', kind: 'question', title: '确认时间', projectId, status: 'open', handler: 'user' });
+    server.app.store.put('plans', 'plan', { ...base, id: 'plan', title: '准备评审', status: 'pending', tasks: [{ projectId }] });
+    server.app.store.put('plans', 'mixed', { ...base, id: 'mixed', title: '多项目计划', status: 'pending', tasks: [{ projectId }, { projectId: otherId }] });
+    const question = '本项目有哪些事等我决定？请列全。';
+    const web = await ask(question, '/projects/' + projectId + '/messages');
+    assert.deepEqual(web.split('、').sort(), [...expectedTitles].sort());
+    const bot = await api('/feishu/bots', { name: '待决定查询', appId: 'cli_4444444444444444', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId }, requireConfirmation: false });
+    const origin = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...origin, messageId: 'pair' });
+    await adapter.onMessage(question, { ...origin, messageId: 'list' });
+    await t.waitFor(() => assert.ok(sent.includes(web)));
+    assert.ok(server.app.approvals.list().every(item => item.status === 'pending'));
+    assert.equal(server.app.store.get<{status:string}>('plans', 'plan')?.status, 'pending');
+    assert.equal(server.app.store.get<{status:string}>('interactions', 'question')?.status, 'open');
+  } finally { await server.close(); }
+});

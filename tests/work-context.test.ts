@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStore } from '../packages/core/src/store.ts';
-import { buildWorkContext, formatWorkContextMarkdown } from '../packages/core/src/work-context.ts';
+import { buildWorkContext, formatWorkContextMarkdown, pendingDecisionPage } from '../packages/core/src/work-context.ts';
 
 async function fixture(t: test.TestContext) {
   const dir = await mkdtemp(join(tmpdir(), 'mario-work-context-'));
@@ -139,4 +139,19 @@ test('formatWorkContextMarkdown renders concise overview and respects unmarked s
   assert.match(md, /global-machine\(离线\)/);
   const unmarked = formatWorkContextMarkdown(buildWorkContext(store, { kind: 'unmarked' }));
   assert.match(unmarked, /当前范围不可用/);
+});
+
+test('待决定清单仅向正确的项目与待办展示可核实的执行关联', async t => {
+  const store = await fixture(t);
+  for (const [id, params] of Object.entries({
+    orphan: { runId: 'missing', projectId: 'A' },
+    conflict: { runId: 'B', projectId: 'A' },
+    inconsistent: { id: 'A', runId: 'B' },
+    own: { id: 'A' },
+  })) store.put('approvals', id, { id, kind: 'input', status: 'pending', title: id, params, version: 1, createdAt: '' });
+  for (const scope of [{ kind: 'project', projectId: 'A' }, { kind: 'task', projectId: 'A', todoId: 'A' }] as const) {
+    assert.deepEqual(pendingDecisionPage(store, scope, 0).items.map(item => item.id), ['A', 'own']);
+    assert.deepEqual(buildWorkContext(store, scope).needsYou?.items.map(item => item.id), ['A', 'own']);
+  }
+  assert.equal(pendingDecisionPage(store, { kind: 'unmarked' }, 0).total, 0);
 });

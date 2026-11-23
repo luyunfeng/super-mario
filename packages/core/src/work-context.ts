@@ -8,6 +8,46 @@ import { readBriefingSettings } from './briefing.ts';
 import { executionProgress } from './execution-progress.ts';
 import type { InboxSuggestion, InboxHandlingRequest } from '../../protocol/src/inbox-handling.ts';
 
+type WorkStore = Pick<Store, 'list' | 'get'>;
+type Relation = { projectId?: string; todoId?: string; runId?: string };
+
+function pendingDecisions(store: WorkStore, visible: (relation: Relation) => boolean) {
+  // Resolve ownership from linked facts, never just a model-provided project label.
+  const ownership = (value: Relation): Relation => {
+    const run = value.runId ? store.get<Run>('runs', value.runId) : undefined;
+    const todoId = run ? run.todoId : value.todoId;
+    const todo = todoId ? store.get<Todo>('todos', todoId) : undefined;
+    // A missing linked record cannot establish a restricted scope from a supplied label.
+    if ((value.runId && !run) || (todoId && !todo)) return {};
+    return { projectId: todo ? todo.projectId : run ? run.projectId : value.projectId, todoId, runId: value.runId };
+  };
+  return [
+    ...store.list<Approval>('approvals').filter(a => a.status === 'pending').map(a => {
+      const params = a.params ?? {};
+      const ambiguous = (a.todoId !== undefined && params.todoId !== undefined && a.todoId !== params.todoId) ||
+        (a.kind === 'input' && params.id !== undefined && params.runId !== undefined && params.id !== params.runId);
+      const relation = ambiguous ? {} : ownership({ todoId: a.todoId ?? (typeof params.todoId === 'string' ? params.todoId : undefined),
+        projectId: typeof params.projectId === 'string' ? params.projectId : undefined,
+        runId: a.kind === 'input' && typeof params.id === 'string' ? params.id
+          : typeof params.runId === 'string' ? params.runId : undefined });
+      return { collection: 'approvals', id: a.id, title: (a.title ?? '').slice(0, 180), version: a.version, createdAt: a.createdAt, ...relation };
+    }),
+    ...store.list<Card>('interactions').filter(c => c.status === 'open' && c.handler === 'user').map(c =>
+      ({ collection: 'interactions', id: c.id, title: (c.title ?? '').slice(0, 180), version: c.version, createdAt: c.createdAt, ...ownership(c) })),
+    // Mixed-project plans must not leak their title into a restricted context.
+    ...store.list<Plan>('plans').filter(p => p.status === 'pending' && p.tasks.length > 0 && p.tasks.every(t => visible(ownership(t)))).map(p =>
+      ({ collection: 'plans', id: p.id, title: (p.title ?? '').slice(0, 180), version: p.version, createdAt: p.createdAt, ...ownership(p.tasks[0]) })),
+  ].filter(visible);
+}
+
+export function pendingDecisionPage(store: WorkStore, scope: BotScope, offset: number) {
+  const decisions = pendingDecisions(store, row => scope.kind === 'global' ||
+    (scope.kind !== 'unmarked' && row.projectId === scope.projectId && (scope.kind !== 'task' || row.todoId === scope.todoId)))
+    .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.collection.localeCompare(b.collection) || a.id.localeCompare(b.id));
+  const end = offset + 25;
+  return { total: decisions.length, items: decisions.slice(offset, end), nextOffset: end < decisions.length ? end : null };
+}
+
 /** Read shared facts at execution time, across channel histories. Never read private settings
  * or copy raw chats. Scope filtering precedes counts, selection and rendering. */
 export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: BotScope, projectId?: string, live?: { reviewEvidence?: ReviewEvidenceReader; executors?: ExecutorInfo[]; inboxConversations?: import("../../protocol/src/inbox-conversations.ts").InboxConversation[] }) {
@@ -31,27 +71,7 @@ export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: Bot
   const handlingVisible=(row:{conversationId:string})=>visible(handlingScopes.get(row.conversationId)??{});
   const handlingSuggestions=recent(store.list<InboxSuggestion>('inbox-handling.suggestions').filter(handlingVisible));
   const handlingRequests=recent(store.list<InboxHandlingRequest>('inbox-handling.requests').filter(handlingVisible));
-  // Resolve ownership from linked facts, never just a model-provided project label.
-  const ownership = (value: { projectId?: string; todoId?: string; runId?: string }) => {
-    const run = value.runId ? store.get<Run>('runs', value.runId) : undefined;
-    const todoId = run ? run.todoId : value.todoId;
-    const todo = todoId ? store.get<Todo>('todos', todoId) : undefined;
-    return { projectId: todo ? todo.projectId : run ? run.projectId : value.projectId, todoId, runId: value.runId };
-  };
-  const decisions = [
-    ...store.list<Approval>('approvals').filter(a => a.status === 'pending').map(a => {
-      const relation = ownership({ todoId: a.todoId ?? (typeof a.params.todoId === 'string' ? a.params.todoId : undefined),
-        projectId: typeof a.params.projectId === 'string' ? a.params.projectId : undefined,
-        runId: a.kind === 'input' && typeof a.params.id === 'string' ? a.params.id
-          : typeof a.params.runId === 'string' ? a.params.runId : undefined });
-      return { collection: 'approvals', id: a.id, title: clip(a.title), version: a.version, createdAt: a.createdAt, ...relation };
-    }),
-    ...store.list<Card>('interactions').filter(c => c.status === 'open' && c.handler === 'user').map(c =>
-      ({ collection: 'interactions', id: c.id, title: clip(c.title), version: c.version, createdAt: c.createdAt, ...ownership(c) })),
-    // Mixed-project plans must not leak their title into a restricted context.
-    ...store.list<Plan>('plans').filter(p => p.status === 'pending' && p.tasks.length > 0 && p.tasks.every(t => visible(ownership(t)))).map(p =>
-      ({ collection: 'plans', id: p.id, title: clip(p.title), version: p.version, createdAt: p.createdAt, ...ownership(p.tasks[0]) })),
-  ].filter(visible);
+  const decisions = pendingDecisions(store, visible);
   // Only visible runs contribute relationships and counts, even when executors share a machine.
   const executors = new Map((live?.executors ?? []).map(e => [e.id, e]));
   const visibleExecutorIds = new Set(runs.map(r => r.executorId).filter(Boolean));
