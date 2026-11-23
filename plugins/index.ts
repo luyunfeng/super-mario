@@ -98,8 +98,9 @@ function tool(name: string, description: string, execute: Tool['execute'], prope
   return { name, description, parameters: { type: 'object', properties, ...(required && {required}), additionalProperties: false }, execute };
 }
 
-function runCitation(run: Run) {
-  return '[查看执行](#projects/' + encodeURIComponent(run.projectId ?? 'all') + '/runs/' + encodeURIComponent(run.id) + ')';
+function runCitation(run: Run, group = false) {
+  const path = '#projects/' + encodeURIComponent(run.projectId ?? 'all') + '/runs/' + encodeURIComponent(run.id);
+  return group ? '[查看执行对比](' + path + '?compare=group)' : '[查看执行](' + path + ')';
 }
 
 function runEvidence(run: Run, patterns: RegExp[], criterionOnly: boolean) {
@@ -528,7 +529,8 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             if (id !== undefined) return runs.map(run => {
               // Resolve observations only after the project and todo filters admit this run.
               const observed = actions?.runObservations?.(run.id);
-              return { ...run, ...(observed?.followupsHeld && {followupsHeld:true}), progress: observed?.progress ?? null, blockedBy: observed?.blockedBy ?? null, webCitation: runCitation(run) };
+              const groupAvailable = run.comparisonRunIds?.includes(run.id) && context.contributions.list('tools').some(item => item.id === 'run_commit_diff');
+              return { ...run, ...(groupAvailable && {groupWebCitation:runCitation(run, true)}), ...(observed?.followupsHeld && {followupsHeld:true}), progress: observed?.progress ?? null, blockedBy: observed?.blockedBy ?? null, webCitation: runCitation(run) };
             }) as unknown as Json;
             return runs as unknown as Json;
           }

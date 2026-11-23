@@ -3130,6 +3130,7 @@ test('飞书项目机器人按组内顺序核对已完成、失败和缺失的�
     const rows = JSON.parse(raw);
     if (req.callId === 'first') {
       assert.equal(rows[0].status,'completed');
+      assert.equal(rows[0].groupWebCitation, '[查看执行对比](#projects/'+rows[0].projectId+'/runs/group-a?compare=group)');
       members = rows[0].comparisonRunIds;
       return call('runs_list',{id:members[1]},'second');
     }

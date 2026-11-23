@@ -12,6 +12,7 @@ const inlineTokens = new RegExp([
   /\[确认来源读取\]\(#chat\?approval=[A-Za-z0-9_-]{1,128}\)/.source,
   /\[查看整理记录\]\(#memory\?curator=1&job=[A-Za-z0-9_-]{1,128}\)/.source,
   /\[查看项目\]\(#projects\/[A-Za-z0-9_-]{1,128}\/workspace\)/.source,
+  /\[查看执行对比\]\(#projects\/[A-Za-z0-9_-]{1,128}\/runs\/[A-Za-z0-9_-]{1,128}\?compare=group\)/.source,
   /\[查看执行\]\(#projects\/[A-Za-z0-9_-]{1,128}\/runs\/[A-Za-z0-9_-]{1,128}\)/.source,
   /\[查看待验收交付\]\(#projects\/[A-Za-z0-9_-]{1,128}\/todos\/detail\/[A-Za-z0-9_-]{1,128}\?reviewRun=[A-Za-z0-9_-]{1,128}&reviewVersion=[1-9][0-9]{0,15}&reviewEvidence=[a-f0-9]{64}\)/.source,
   /\[查看待办\]\(#projects\/[A-Za-z0-9_-]{1,128}\/todos\/detail\/[A-Za-z0-9_-]{1,128}\)/.source,
