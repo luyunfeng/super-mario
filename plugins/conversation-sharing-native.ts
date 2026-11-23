@@ -40,3 +40,43 @@ export async function readShareItems(reader:ReadNative|undefined,source:NativeEx
   });
   return {items,total:result.total};
 }
+
+export type NativeAnchor={index:number;id:string};
+export async function nativeTail(reader:ReadNative|undefined,source:NativeExportSource,signal:AbortSignal) {
+  let page=await readShareItems(reader,source,{offset:0},signal);
+  if (page.total>page.items.length) page=await readShareItems(reader,source,{offset:page.total-1},signal);
+  const last=page.items.at(-1);
+  if (!last || last.index!==page.total-1) throw Object.assign(Error('原生会话尾部已变化，请重新预览'),{status:409});
+  return {index:last.index,id:last.id};
+}
+
+// An offset page includes the last confirmed row. Fetching the contiguous
+// fingerprints again also binds tool summaries to the same transcript snapshot.
+export async function nextNativeRows(reader:ReadNative|undefined,source:NativeExportSource,anchor:NativeAnchor,showTools:boolean,signal:AbortSignal) {
+  const page=await readShareItems(reader,source,{offset:anchor.index},signal);
+  if (page.items[0]?.id!==anchor.id) return {pause:'原生会话历史已变化，请重新确认追加起点',items:[]};
+  const next=page.items.slice(1);
+  if (!next.length) return {items:[]};
+  if (!showTools) return {items:next};
+  const listed:Item[]=[];
+  let bytes=0;
+  for (const item of next) {
+    const size=Buffer.byteLength(item.text);
+    if (bytes+size>262144) {
+      if (!listed.length) return {items:[item]}; // The caller pauses before admitting an oversized row.
+      break;
+    }
+    bytes+=size;listed.push(item);
+  }
+  const loaded=await readShareItems(reader,source,{ids:listed.map(row=>row.id),showTools:true},signal);
+  const check=await readShareItems(reader,source,{offset:anchor.index},signal);
+  if (check.items[0]?.id!==anchor.id || listed.some((row,i)=>row.id!==check.items[i+1]?.id))
+    return {pause:'原生会话历史已变化，请重新确认追加起点',items:[]};
+  const byId=new Map(loaded.items.map(item=>[item.id,item]));
+  return {items:listed.map(row=>{
+    const item=byId.get(row.id);
+    if (!item || item.index!==row.index || item.role!==row.role || item.text!==row.text)
+      throw Object.assign(Error('原生会话内容已变化'),{status:409});
+    return item;
+  })};
+}

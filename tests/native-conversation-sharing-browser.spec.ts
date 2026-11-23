@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {appendFile,mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import test from 'node:test';
@@ -40,6 +40,8 @@ test('从 Agent 原生会话分享选中的正文，匿名端隐藏来源与其�
   const share=owner.getByRole('dialog',{name:'分享对话摘录',exact:true});
   await expect(share).toBeVisible();await expect(share).toContainText(selected);
   await share.getByRole('checkbox',{name:new RegExp(selected)}).check();
+  const follow=share.getByRole('checkbox',{name:'自动追加后续消息',exact:true});
+  await expect(follow).not.toBeChecked();
   const includeTools=share.getByRole('checkbox',{name:'包含工具记录',exact:true});
   await expect(includeTools).not.toBeChecked();
   const showPreview=share.getByRole('button',{name:'预览公开内容',exact:true});
@@ -48,33 +50,53 @@ test('从 Agent 原生会话分享选中的正文，匿名端隐藏来源与其�
   await expect(preview).toContainText(selected);await expect(preview).not.toContainText(other);
   const previewTools=preview.getByRole('region',{name:'工具记录'});
   await expect(previewTools).toHaveCount(0);
-  await includeTools.check();await showPreview.click();
+  await includeTools.check();await follow.check();await showPreview.click();
+  await expect(preview).toContainText('同一原生会话新增的用户和助手正文');
   const toolLabel=tool+' · 已返回结果';
   await expect(previewTools).toHaveText(toolLabel);
   const hidden=[other,cwd,machineId,sessionId,token,params,output,call,'fixture_other_turn','合成第二轮回复'];
   for(const value of hidden) assert.ok(!(await preview.textContent())?.includes(value));
   await share.getByRole('button',{name:'确认创建分享',exact:true}).click();
   const link=await share.getByRole('textbox',{name:'分享链接',exact:true}).inputValue();
+  async function appendTurn(question:string,answer:string){
+    await appendFile(log,[['user',question],['assistant',answer]].map(([role,text])=>JSON.stringify({
+      type:'response_item',payload:{type:'message',role,content:[{type:role==='user'?'input_text':'output_text',text}]},
+    })).join('\n')+'\n');
+  }
+  const later='合成新轮次问题',answer='合成新轮次回复';
+  const expectedText=[selected,later,answer];
+  await appendTurn(later,answer);
   const reader=await browser.newPage();
   const load=reader.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/public/conversation-share');
   await reader.goto(link);
   const response=await load;assert.equal(response.status(),200);
   const published=await response.json();
-  assert.deepEqual(published.messages,[{role:'assistant',text:selected,tools:[{name:tool,status:'returned'}]}]);
+  assert.equal(published.publicationStatus,'live');
+  assert.deepEqual(published.messages,[{role:'assistant',text:selected,tools:[{name:tool,status:'returned'}]},{role:'user',text:later},{role:'assistant',text:answer}]);
   for(const privateValue of hidden) assert.ok(!JSON.stringify(published).includes(privateValue));
   const messages=reader.getByRole('list',{name:'分享的消息'});
-  await expect(messages.locator('li > p')).toHaveText([selected]);
+  await expect(messages.locator('li > p')).toHaveText(expectedText);
   const publishedTools=messages.getByRole('region',{name:'工具记录'});
   await expect(publishedTools).toHaveText(toolLabel);
   const visible=await reader.locator('body').innerText();
   for(const privateValue of hidden) assert.ok(!visible.includes(privateValue));
+  await share.getByRole('button',{name:'修改分享',exact:true}).click();
+  await expect(follow).toBeChecked();await follow.uncheck();
+  await showPreview.click();await expect(preview).toContainText('确认后停止自动追加');
+  const saved=owner.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/conversation-shares' && r.request().postDataJSON().action==='update' && r.ok());
+  await share.getByRole('button',{name:'确认更新分享',exact:true}).click();await saved;
+  await appendTurn('合成停止后发言','合成停止后回复');
+  const frozen=reader.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/public/conversation-share');
+  await reader.reload();
+  assert.equal((await (await frozen).json()).publicationStatus,'frozen');
+  await expect(messages.locator('li > p')).toHaveText(expectedText);
   await node.close();
   await expect.poll(()=>server.machines.list().some(row=>row.id===machineId && row.online)).toBe(false);
   await owner.reload();
   await owner.getByRole('button',{name:'已分享的原生会话',exact:true}).click();
   await owner.getByRole('button',{name:'管理分享',exact:true}).click();
   await reader.reload();
-  await expect(messages.locator('li > p')).toHaveText([selected]);
+  await expect(messages.locator('li > p')).toHaveText(expectedText);
   await expect(publishedTools).toHaveText(toolLabel);
   await share.getByRole('button',{name:'修改分享',exact:true}).click();
   await expect(includeTools).toBeChecked();await includeTools.uncheck();
@@ -84,9 +106,9 @@ test('从 Agent 原生会话分享选中的正文，匿名端隐藏来源与其�
   await share.getByRole('button',{name:'确认更新分享',exact:true}).click();await update;
   const updated=reader.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/public/conversation-share');
   await reader.reload();
-  assert.deepEqual((await (await updated).json()).messages,[{role:'assistant',text:selected}]);
+  assert.deepEqual((await (await updated).json()).messages,[{role:'assistant',text:selected},{role:'user',text:later},{role:'assistant',text:answer}]);
   await expect(reader).toHaveURL(link);
-  await expect(messages.locator('li > p')).toHaveText([selected]);
+  await expect(messages.locator('li > p')).toHaveText(expectedText);
   await expect(publishedTools).toHaveCount(0);
   await share.getByRole('button',{name:'撤销分享',exact:true}).click();
   const revoke=owner.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/conversation-shares' && r.request().postDataJSON().action==='revoke' && r.ok());

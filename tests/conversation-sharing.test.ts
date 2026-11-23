@@ -284,7 +284,7 @@ test('原生分享独立核对选中指纹，离线仍可读、缩减、撤销�
   assert.deepEqual(await list(),{sources:[native]});
   assert.deepEqual(await manage('list',{native:{...native,cwd:'/other'}}),{shares:[]});
   await assert.rejects(manage('detail',{id,native:{...native,machineId:'other'}}),{status:404});
-  for (const invalid of [{showTools:'true'},{includeFuture:true},{futureScope:{}},{conversationId:'main'}] as JsonObject[])
+  for (const invalid of [{showTools:'true'},{includeFuture:'true'},{futureScope:{}},{conversationId:'main'}] as JsonObject[])
     await assert.rejects(manage('preview',{...selection,...invalid}),{status:400});
   await assert.rejects(manage('preview',{messageIds:['f'.repeat(64)]}),{status:409});
   online=false;
@@ -358,4 +358,78 @@ test('原生分享启用工具时在线复核，冻结公开名称与状态；�
   const direct=await publish({messageIds,showTools:true});
   const live=await host.invocations.use('conversation-sharing.read',{token:direct.token!});
   for (const forbidden of ['原始参数','内部回执','凭据','headers','/fixture/root']) assert.ok(!JSON.stringify(live).includes(forbidden));
+});
+
+test('原生追加以确认时尾部为界，读者共享刷新，可离线看旧摘录，撤销、停启和改写均阻断旧任务',async t=>{
+  let time=Date.now();t.mock.method(Date,'now',()=>time);
+  const store=createStore(':memory:'),host=new PluginHost({store,events:createEventBus(store),contributions:createContributions(),dataDir:':memory:'});
+  t.after(async()=>{await host.close();store.close();});
+  const native={machineId:'test-machine',executorId:'codex',nativeSessionId:'test-session',cwd:'/synthetic'};
+  const rows:{id:string;index:number;role:'user'|'assistant';text:string}[]=[];
+  function append(text:string) {const index=rows.length,id=(index+1).toString(16).padStart(64,'0');rows.push({id,index,role:index%2?'assistant':'user',text});return id;}
+  const first=append('原摘录');
+  let offline=false,reads=0,delay:(()=>Promise<void>)|undefined;
+  host.register(createConversationSharing('',async(_source,selection)=>{
+    reads++;if (delay) await delay();if (offline) throw Object.assign(Error('离线'),{status:503});
+    const items='ids' in selection ? rows.filter(r=>selection.ids.includes(r.id)).map(r=>({...r,...(selection.showTools && r.role==='assistant' && {tools:[{name:'reader',status:'returned' as const}]})})) :
+      rows.slice(selection.offset,selection.offset+25);
+    return {items,total:rows.length};
+  }));
+  await host.start();
+  const manage=(action:string,input:JsonObject)=>host.invocations.use('conversation-sharing.manage',{action,native,...input}) as Promise<JsonObject>;
+  const options={messageIds:[first],includeFuture:true,showTools:true},preview=await manage('preview',options);
+  append('确认前输入');
+  const share=await manage('create',{...options,previewHash:preview.previewHash!}),id=share.id!;
+  const read=()=>host.invocations.use('conversation-sharing.read',{token:share.token!}) as Promise<JsonObject>;
+  append('追加用户');append('追加助手');
+  const beforeRefresh=reads;
+  const got=await Promise.all([read(),read(),read()]);
+  assert.equal(reads-beforeRefresh,3); // One offset/IDs/anchor verification across all three viewers.
+  assert.ok(got.every(v=>v.revision===2 && v.publicationStatus==='live'));
+  const messages=got[0]!.messages as JsonObject[];
+  assert.deepEqual(messages.map(m=>m.text),['原摘录','追加用户','追加助手']);assert.deepEqual(messages[2]!.tools,[{name:'reader',status:'returned'}]);
+  append('节流后追加');const priorReads=reads;
+  assert.equal((await read()).revision,2);assert.equal(priorReads,reads);
+  time+=16000;offline=true;assert.equal((await read()).revision,2);offline=false;
+  let release!:()=>void,entered!:()=>void;
+  const startSlow=()=>{
+    const started=new Promise<void>(r=>{entered=r;});
+    const wait=new Promise<void>(r=>{release=r;});
+    delay=async()=>{entered();await wait;};
+    time+=16000;
+    return started;
+  };
+  const started=startSlow();const pending=read();await started;
+  assert.equal((await pending).revision,2); // The refresh is still blocked, but the viewer sees its snapshot.
+  delay=undefined;release();await new Promise(resolve=>setImmediate(resolve));
+  const latest=await read();assert.equal(latest.revision,3);
+  await host.setEnabled('conversation-sharing',false);append('停用期间');
+  await host.setEnabled('conversation-sharing',true);
+  const paused=await read();assert.equal(paused.publicationStatus,'paused');assert.deepEqual(paused.messages,latest.messages);
+  const detail=await manage('detail',{id});
+  const edit={...options,id,revision:detail.revision!,messageIds:detail.messageIds!};
+  await manage('update',{...edit,previewHash:(await manage('preview',edit)).previewHash!});
+  append('恢复后追加');const resumed=await read();assert.ok(!JSON.stringify(resumed).includes('停用期间'));
+  assert.ok(JSON.stringify(resumed).includes('恢复后追加'));
+  rows.at(-1)!.id='f'.repeat(64);append('改写后不公开');time+=16000;
+  const mismatch=await read();assert.equal(mismatch.publicationStatus,'paused');assert.deepEqual(mismatch.messages,resumed.messages);
+  const renew={...edit,revision:mismatch.revision!};
+  await manage('update',{...renew,previewHash:(await manage('preview',renew)).previewHash!});
+  append('撤销后不能发布');
+  const startedAgain=startSlow();const stale=read();await startedAgain;
+  await manage('revoke',{id});delay=undefined;release();
+  await assert.rejects(stale,{status:404});
+  assert.equal(store.get('conversation-sharing.snapshots',String(id)),undefined);
+
+  const create=async(opts:JsonObject)=>manage('create',{...opts,previewHash:(await manage('preview',opts)).previewHash!});
+  while(rows.length<99) append('历史消息'+rows.length);
+  const full=await create({messageIds:rows.slice(0,99).map(r=>r.id),includeFuture:true});
+  append('第一百条');append('第一百零一条');
+  const byToken=(token:JsonObject['token'])=>host.invocations.use('conversation-sharing.read',{token:token!}) as Promise<JsonObject>;
+  const capped=await byToken(full.token);assert.equal(capped.publicationStatus,'paused');
+  assert.equal((capped.messages as JsonObject[]).length,100);
+  assert.equal((capped.messages as JsonObject[]).at(-1)!.text,'第一百条');
+  const large=await create({messageIds:[first],includeFuture:true});append('巨'.repeat(90000));
+  const oversize=await byToken(large.token);assert.equal(oversize.publicationStatus,'paused');
+  assert.equal((oversize.messages as JsonObject[]).length,1);
 });

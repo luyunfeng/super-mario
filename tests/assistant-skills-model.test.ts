@@ -4703,6 +4703,8 @@ test('Web 和飞书解释摘录分享的确认步骤及撤销范围', async t =>
     assert.match(req.system,/同范围新发的 Web 提问及其完成的回复/);
     assert.match(req.system,/原生会话分享默认只含文字/);
     assert.match(req.system,/按“已返回结果”答复，不推断成功/);
+    assert.match(req.system,/同一台执行机、同一目录和同一会话在确认开启后新增/);
+    assert.match(req.system,/后续消息不再逐条确认/);
     assert.match(req.system,/读取历史不会启动执行者/);
     assert.match(req.system,/工具成功也不能证明整个任务完成/);
     assert.match(req.system,/已经读走的副本无法收回/);

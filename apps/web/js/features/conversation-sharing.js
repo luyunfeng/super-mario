@@ -65,7 +65,7 @@ export function createConversationSharing({api,store,getRows}) {
     const editBar=h('div',{class:'row row--between',hidden:true},editLabel,Button({label:'取消编辑',size:'sm',onClick:()=>{if (!writing) resetMode();}}));
     const inputs=h('fieldset',{class:'stack',style:{border:'0',padding:'0',margin:'0',minWidth:'0'}},
       h('div',{class:'row row--wrap'},Button({label:'全选当前消息',size:'sm',onClick:()=>chooseFrom(0)}),
-        Button({label:'全不选',size:'sm',onClick:()=>chooseFrom(rows.length)})),candidates,catalogControls,status,h('label',{class:'check'},showTools,'包含工具记录'),!native && h('label',{class:'check'},includeFuture,'自动追加后续消息'),futureHint,Field({label:'分享有效期',control:expiry}),inspect);
+        Button({label:'全不选',size:'sm',onClick:()=>chooseFrom(rows.length)})),candidates,catalogControls,status,h('label',{class:'check'},showTools,'包含工具记录'),h('label',{class:'check'},includeFuture,'自动追加后续消息'),futureHint,Field({label:'分享有效期',control:expiry}),inspect);
     const drawer=openDrawer({title:'分享对话摘录',subtitle:native && (native.executorId+' · '+native.nativeSessionId),wide:true,body:[
       editBar,inputs,previewBox,feedback,result,h('section',{class:'stack','aria-label':'已有分享'},
         h('div',{class:'row row--between'},h('h3',{},'本对话已有分享'),Button({label:'刷新分享列表',size:'sm',onClick:loadList})),historyStatus,history)
@@ -93,6 +93,8 @@ export function createConversationSharing({api,store,getRows}) {
         scope.todoId?'待办「'+(todo?.title || scope.todoId)+'」':'无待办归属'].join(' · ');
     }
     function describeFuture(scope,tools) {
+      if (native) return '开启后，持有链接的人再次查看时，可看到这台执行机上同一原生会话新增的用户和助手正文。未选择的历史消息保持私密。'+
+        (tools?'新增助手回复的工具名称和调用状态也会公开。':'');
       return '自动追加范围：'+scopeLabel(scope)+'。勾选的摘录须属于此范围。此范围内后续从 Web 直接发送的正文和对应的助手答复完成后，持有链接的人无需登录即可查看。'+
         (tools?'答复中的工具名称、状态、参数和结果也会公开。':'');
     }
@@ -171,7 +173,7 @@ export function createConversationSharing({api,store,getRows}) {
         const detail=await manage({action:'detail',...source,id:item.id});
         if (!current() || stamp!==editStamp) return;
         if (detail.id!==item.id || !detail.revision || detail.messageIds.length!==detail.messages.length) throw new Error('分享详情不完整，请刷新后再试。');
-        if (detail.includeFuture && (!detail.futureScope || typeof detail.futureScope!=='object' || Array.isArray(detail.futureScope))) {
+        if (!native && detail.includeFuture && (!detail.futureScope || typeof detail.futureScope!=='object' || Array.isArray(detail.futureScope))) {
           throw new Error('无法核对原分享的自动追加范围。');
         }
         editing={id:detail.id,revision:detail.revision,expiresAt:detail.expiresAt,futureScope:detail.futureScope,includeFuture:detail.includeFuture===true,rows:detail.messages.map((m,i)=>({...m,id:detail.messageIds[i]}))};
@@ -185,7 +187,7 @@ export function createConversationSharing({api,store,getRows}) {
       } finally {if(current() && stamp===editStamp){loadingEdit=false;inputs.disabled=false;counts();}}
     }
     function parameters() {
-      return {...source,showTools:showTools.checked,...(!native && {includeFuture:includeFuture.checked,...(includeFuture.checked && {futureScope:futureScope()})}),messageIds:rows.filter(m=>selected.has(m.id)).map(m=>m.id),...(editing?{id:editing.id,revision:editing.revision}:{}),...(expiry.value==='keep'?{}:{expireHours:Number(expiry.value)})};
+      return {...source,showTools:showTools.checked,includeFuture:includeFuture.checked,...(!native && includeFuture.checked && {futureScope:futureScope()}),messageIds:rows.filter(m=>selected.has(m.id)).map(m=>m.id),...(editing?{id:editing.id,revision:editing.revision}:{}),...(expiry.value==='keep'?{}:{expireHours:Number(expiry.value)})};
     }
     async function showPreview() {
       if (!current() || !selected.size || selected.size>100 || writing || loadingEdit) return;
