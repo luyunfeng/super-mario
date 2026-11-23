@@ -17,7 +17,7 @@ test('飞书个人文件按需读取、失败重试、换账号清空，普通�
   for(const [id,file] of [[fileId,true],['fake-file',false]] as const){
     const message='om_'+id;
     server.app.store.put('inbox',id,{id,source:'feishu:cli_fixture:ou_fixture',thread:'feishu:message:'+JSON.stringify(['oc_fixture',message]),
-      last:message,title:'合成附件',text:'文件附件：样例.pdf',tier:'fyi',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),version:1,
+      last:message,title:file?'合成附件':'同名文本记录',text:file?'文件附件：样例.pdf':'同名文本记录 样例.pdf',tier:'fyi',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),version:1,
       origin:{kind:'direct',connector:'飞书',chatId:'oc_fixture',...(file && {feishuFile:true})}});
   }
   const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});t.after(()=>browser.close());
@@ -28,7 +28,14 @@ test('飞书个人文件按需读取、失败重试、换账号清空，普通�
   await page.route('**/inbox/'+fileId+'/file-text',r=>++reads===1
     ? r.fulfill({status:403,json:{error:'权限不足'}})
     : r.fulfill({json:{name:'样例.pdf',text,truncated:true}}));
-  await page.goto(server.url+'/#inbox?item=fake-file&token='+token);
+  await page.goto(server.url+'/#inbox?token='+token);
+  const list=page.getByLabel('收件箱消息列表');
+  await page.getByRole('searchbox',{name:'搜索收件箱'}).fill('样例.pdf');
+  await expect(list).toContainText('同名文本记录');
+  await page.getByRole('checkbox',{name:'仅文件附件'}).check();
+  await expect(list).toContainText('文件附件：样例.pdf');await expect(list).not.toContainText('同名文本记录');
+  await page.getByRole('checkbox',{name:'仅文件附件'}).uncheck();
+  await page.goto(server.url+'/#inbox?item=fake-file');
   const drawer=page.getByRole('dialog',{name:'收件箱消息详情'}),toggle=drawer.getByText('读取附件正文',{exact:true});
   await expect(drawer).toBeVisible();await expect(toggle).toHaveCount(0);
   await page.goto(server.url+'/#chat');

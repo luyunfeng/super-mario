@@ -38,6 +38,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
   function handlingState(item){const rows=snapshot?.inboxHandling;if(rows!==handlingRows){handlingRows=rows;handlingIndex=new Map((rows??[]).map(row=>[`${row.source.kind}:${row.source.id}`,row]));}return handlingIndex.get(item.id);}
   const sourceChips = h('div', { class: 'mailbox-chips', role: 'group', 'aria-label': '消息来源' });
   const stageChips = h('div', { class: 'mailbox-chips', role: 'group', 'aria-label': '处理阶段' });
+  const filesOnly = h('input', {type:'checkbox'});
   const projectFilter = Select({ 'aria-label': '收件项目', value: 'all', options: [['all', '全部项目']] });
   const query = Input({ type: 'search', placeholder: '搜索消息内容、来源或发送目标', 'aria-label': `搜索${name}` });
   const filter = Select({ 'aria-label': `${name}状态`, value: 'all', options: incoming
@@ -204,7 +205,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
       incoming && h('p', { class: 'small muted' }, '主 Agent 按联系人合并上下文并在后台跟进。需要你补充信息时会明确提问，原消息仍可追溯。'),
       h('div', { class: 'mailbox-toolbar stack' },
         incoming && sourceChips, incoming && stageChips,
-        h('div', { class: 'row row--wrap mailbox-filters' }, h('div', { class: 'grow', style: { minWidth: '180px' } }, query), incoming && projectFilter, filter)), incoming && bulkBar, incoming && bulkFeedback, summary, notice, list, more)));
+        h('div', { class: 'row row--wrap mailbox-filters' }, h('div', { class: 'grow', style: { minWidth: '180px' } }, query), incoming && projectFilter, filter, incoming && h('label',{class:'check'},filesOnly,'仅文件附件'))), incoming && bulkBar, incoming && bulkFeedback, summary, notice, list, more)));
 
   const conversationsUI=createInboxConversationsUI({api,store,router,redraw:()=>paint(),openSource:id=>open(id)});
   function records() {
@@ -268,6 +269,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     const search = query.value.trim().toLowerCase(), raw = item.raw;
     if (search && ![item.title, item.text, item.matterSearch, item.source, raw.sender, raw.target, raw.origin?.chatName, raw.origin?.senderName, incoming && originLabel(item), incoming && projectName(item)].some(value => String(value ?? '').toLowerCase().includes(search))) return false;
     if (incoming) {
+      if (filesOnly.checked && (item.kind !== 'personal' || raw.origin?.feishuFile !== true)) return false;
       if (omit !== 'source' && sourceFilter !== 'all' && !(sourceFilter === 'mentioned' ? originKind(item) === 'group' && raw.origin?.mentionedMe === true : originKind(item) === sourceFilter)) return false;
       if (omit !== 'stage' && stageFilter !== 'all' && stage(item) !== stageFilter) return false;
       if (omit !== 'project' && projectFilter.value !== 'all' && (projectId(item) || 'none') !== projectFilter.value) return false;
@@ -289,7 +291,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
   }
   function clearFilters() {
     if(incoming&&router.current.query?.get('conversation'))location.hash=router.href('inbox');
-    query.value = ''; filter.value = 'all'; projectFilter.value = 'all'; sourceFilter = 'all'; stageFilter = 'all'; resetWindow();
+    filesOnly.checked = false; query.value = ''; filter.value = 'all'; projectFilter.value = 'all'; sourceFilter = 'all'; stageFilter = 'all'; resetWindow();
   }
   function resetWindow() { lastArchive=undefined;clearSelection(multi); displayLimit = PAGE_SIZE; paint(); }
   function paintFilters(all) {
@@ -647,6 +649,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     loadError = results.some(item => item.status === 'rejected') ? '部分消息记录读取失败，已保留当前可见内容。请重试读取。' : '';
     loaded = true; loading = false; paint();
   }
+  filesOnly.addEventListener('change', resetWindow);
   query.addEventListener('input', resetWindow); filter.addEventListener('change', resetWindow); projectFilter.addEventListener('change', resetWindow);
   let pendingLink;
   function openLinkedItem() {
