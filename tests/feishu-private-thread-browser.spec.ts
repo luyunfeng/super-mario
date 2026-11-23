@@ -161,7 +161,7 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await drawer.getByRole('button', { name: '保存标签', exact: true }).click();
   await expect(drawer).toContainText('当前已保存标签：核对标签');
   const keyword = '蓝色铅笔标记';
-  await first.send('很早的' + keyword, 'old-hit');
+  await first.send('很早的'.repeat(25) + keyword + '后文'.repeat(40), 'old-hit');
   await t.waitFor(async () => {
     const detail = await (await get(detailPath)).json();
     assert.ok(detail.messages.some((message: { role: string; text: string }) =>
@@ -182,7 +182,10 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await expect(drawer).not.toContainText('另一条没有标签的资料');
   await drawer.getByRole('textbox', { name: '搜索独立对话' }).fill(keyword);
   await drawer.getByRole('button', { name: '搜索', exact: true }).click();
-  await drawer.getByRole('button', { name: new RegExp('用户.*' + keyword) }).first().click();
+  const hitButton=drawer.getByRole('button',{name:new RegExp('用户.*'+keyword)}).first();
+  await expect(hitButton.locator('mark')).toHaveText(keyword);
+  await expect(hitButton).toContainText('…');
+  await hitButton.click();
   const marked = drawer.locator('section').filter({ hasText: '命中消息' });
   await expect(marked).toHaveCount(1);
   await expect(marked).toContainText(keyword);

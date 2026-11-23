@@ -107,7 +107,7 @@ function* matchingThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThrea
       // Keep quotes exact, including complete code points on either edge.
       if (start && /[\uDC00-\uDFFF]/.test(text[start])) start--;
       if (end < text.length && /[\uDC00-\uDFFF]/.test(text[end])) end++;
-      hits.push({ id, role, excerpt: text.slice(start, end), truncated: start > 0 || end < text.length, omittedBefore:start>0, omittedAfter:end<text.length, status: status ?? null, createdAt });
+      hits.push({ id, role, excerpt: text.slice(start, end), matchStart:match.index-start, matchEnd:match.index-start+match[0].length, truncated: start > 0 || end < text.length, omittedBefore:start>0, omittedAfter:end<text.length, status: status ?? null, createdAt });
     }
     if (hits.length || titleMatch) yield { ...info, titleMatch, hits };
   }

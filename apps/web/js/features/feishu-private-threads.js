@@ -202,8 +202,9 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       const items = searchPage.items;
       replace(results, items.length ? items.map(row => h('div', { class: 'stack' }, openThread(row),
         row.titleMatch && h('span', { class: 'small muted' }, '标题匹配'),
-        row.hits.map(hit => Button({ label: (hit.role === 'user' ? '用户' : '助手') + ' · ' + hit.excerpt,
-          size: 'sm', onClick: () => detail(row, '', undefined, hit.id) }))))
+        row.hits.map(hit => h('button',{type:'button',class:'btn btn--secondary btn--sm',onclick:()=>detail(row,'',undefined,hit.id)},
+          hit.role==='user'?'用户':'助手',' · ',hit.omittedBefore?'…':'',hit.excerpt.slice(0,hit.matchStart),
+          h('mark',{},hit.excerpt.slice(hit.matchStart,hit.matchEnd)),hit.excerpt.slice(hit.matchEnd),hit.omittedAfter?'…':''))))
         : h('p', { class: 'muted' }, '没有找到匹配的独立对话。'),
         searchPage.nextBefore && Button({ label: '加载更多结果', onClick: () => read(searchPage.nextBefore) }));
     }
