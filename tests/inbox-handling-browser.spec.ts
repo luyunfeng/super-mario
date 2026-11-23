@@ -78,6 +78,20 @@ test('只读打开、JSON answer、安全渲染、桌面与390px；missing模型
   assert.ok(calls.filter(c => c.method === 'POST').every(c => c.path.endsWith('/suggestions')));
 }));
 
+test('未知的投递回执能打开对应个人或机器人发件记录', async () => fixture(async ({ page, calls, setHandler }) => {
+  for (const kind of ['personal', 'mailbox']) {
+    setHandler(() => ({ data: view({ source: { ...view().source, kind }, suggestions: [
+      suggestion({ status: 'unknown', action: { kind: 'reply', text: '合成回复' }, delivery: { id: 'receipt-1', status: 'unknown' } }),
+    ] }) }));
+    await open(page, kind);
+    await expect(drawer(page)).toContainText('回复投递 · 结果未知');
+    await expect(drawer(page).getByRole('link', { name: '查看实际发件记录' })).toHaveAttribute('href',
+      '#outbox?receipt=' + encodeURIComponent((kind === 'personal' ? 'delivery:' : 'mailbox:') + 'receipt-1'));
+    await close(page);
+  }
+  assert.ok(calls.every(call => call.method === 'GET'));
+}));
+
 test('编辑旧版本显式action，409保留草稿且手动核对；submitted新版旧审批失效', { timeout: 30000 }, async () => fixture(async ({ page, calls, setHandler }) => {
   let data = view({ suggestions: [suggestion({ status: 'submitted', approvalId: 'old-approval' })] }), conflict = true;
   setHandler(c => {

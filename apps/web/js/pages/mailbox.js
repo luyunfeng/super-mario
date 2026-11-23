@@ -342,19 +342,23 @@ export function createMailboxPage({ api, store, router, direction }) {
     dirty = true;
     if (router.current.page !== direction) return;
     dirty = false;
-    const target=router.current.query?.get('conversation');
+    const target=incoming && router.current.query?.get('conversation');
+    const receipt=!incoming && router.current.query?.get('receipt');
     if(incoming)replace(assistantHeader,conversationsUI.header(snapshot?.inboxAssistant),target&&h('a',{href:router.href('inbox'),onclick:clearFilters},'查看全部会话'));
     const all = records();
     if (incoming) paintFilters(all);
-    const visible = all.filter(item => target ? item.conversation?.id===target : matches(item));
+    const visible = all.filter(item => receipt ? item.id === receipt : target ? item.conversation?.id===target : matches(item));
     if (incoming) visible.sort((a, b) => (stage(a) === 'human' ? 0 : 1) - (stage(b) === 'human' ? 0 : 1));
     const rows = incoming ? groupedRows(all, visible) : visible;
     const window = rows.slice(0, displayLimit);
     const grouped = rows.some(row => row.items);
     summary.textContent = `共 ${all.length} 条${incoming ? '收件' : '发件'}记录，显示 ${window.length} / 匹配 ${visible.length} 条`;
+    if (receipt) summary.textContent = '匹配发件回执 ' + visible.length + ' 条';
     if (grouped) summary.textContent = `匹配 ${visible.length} 条消息，按联系人与会话合并后显示 ${window.length} / ${rows.length} 项`;
     more.hidden = window.length >= rows.length;
-    replace(notice, error && Banner({ tone: 'danger', children: error }), loadError && Banner({ tone: 'danger', children: loadError, action: Button({ label: '重试读取', size: 'sm', onClick: () => load() }) }),
+    replace(notice, receipt && h('div', { class: 'row row--wrap' },
+      loaded && !loading && !visible.length && !loadError && h('span', null, '当前可见发件记录中没有这条回执。'),
+      h('a', { href: router.href('outbox') }, '查看全部发件记录')), error && Banner({ tone: 'danger', children: error }), loadError && Banner({ tone: 'danger', children: loadError, action: Button({ label: '重试读取', size: 'sm', onClick: () => load() }) }),
       !incoming && deliveries.length >= 200 && h('p', { class: 'small muted' }, '自动发送记录当前展示最近 200 条。'));
     // Cache only the displayed window. Unchanged snapshots and read completions
     // preserve cards (and focus); signatures also cover action state and labels.
@@ -380,7 +384,7 @@ export function createMailboxPage({ api, store, router, direction }) {
     ]));
     else {
       list._keyed = undefined;
-      replace(list, loading && !loaded ? h('p', { role: 'status' }, '正在读取消息…') : loadError && !all.length ? null
+      replace(list, loading && (!loaded || receipt) ? h('p', { role: 'status' }, '正在读取消息…') : receipt || (loadError && !all.length) ? null
       : Empty({ title: all.length ? '没有匹配的消息' : incoming ? '还没有收到消息' : '还没有发件记录',
         action: incoming && all.length ? Button({ label: '清除筛选', size: 'sm', onClick: clearFilters }) : undefined,
         text: all.length ? '试试其他关键词、来源、处理阶段或项目。' : incoming ? '开启飞书采集后，消息原文和分拣建议会出现在这里。' : '待确认的发送内容与实际发送结果会显示在这里。' }));
@@ -389,7 +393,9 @@ export function createMailboxPage({ api, store, router, direction }) {
   }
   async function load() {
     const stamp = ++revision, owner = api.draftOwner(); loading = true; paint();
-    const results = await Promise.allSettled([api.get(`/mailboxes?direction=${direction}`), ...(!incoming ? [api.get('/outbox')] : [])]);
+    const receipt = router.current.query?.get('receipt');
+    const deliveryPath = receipt?.startsWith('delivery:') ? '/outbox?id=' + encodeURIComponent(receipt.slice('delivery:'.length)) : '/outbox';
+    const results = await Promise.allSettled([api.get(`/mailboxes?direction=${direction}`), ...(!incoming ? [api.get(deliveryPath)] : [])]);
     if (stamp !== revision || owner !== api.draftOwner()) return;
     if (results[0].status === 'fulfilled') { mailbox = results[0].value; mailboxOwner = owner; }
     if (results[1]?.status === 'fulfilled') deliveries = results[1].value;

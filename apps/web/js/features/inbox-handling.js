@@ -176,7 +176,11 @@ export function openInboxHandlingDrawer({ api, store, source }) {
           item.status === 'submitted' && item.approvalStatus === 'pending' && h('a', { href: '#chat?approval=' + encodeURIComponent(item.approvalId), onClick: () => drawer.close() }, '去对话审批')),
         item.result?.runId&&h('a',{href:`#projects/${encodeURIComponent(view.source.projectId||'all')}/runs/${encodeURIComponent(item.result.runId)}`,onClick:()=>drawer.close()},'查看实际执行记录'),
         item.result?.todoId&&h('p',null,`已关联待办：${item.result.todoId}`),
-        item.result?.outboxId&&h('a',{href:'#outbox',onClick:()=>drawer.close()},'查看实际发件记录'),
+        item.delivery && h('p', null, '回复投递 · ' + ({ sent: '已发送', pending: '等待确认', failed: '发送失败', unknown: '结果未知' }[item.delivery.status] || '未确认')),
+        (item.delivery || item.result?.outboxId) && h('a', {
+          href: '#outbox?receipt=' + encodeURIComponent((source.kind === 'personal' ? 'delivery:' : 'mailbox:') + (item.delivery?.id || item.result.outboxId)),
+          onClick: () => drawer.close(),
+        }, '查看实际发件记录'),
         item.status === 'submitted' && h('p', { class: 'small muted' }, '可编辑并保存新版，旧审批将失效。'), reason && h('p', { class: 'small muted' }, reason),
         h('div', { class: 'row row--wrap' }, Button({ label: '编辑建议', disabled: writing || locked(item) || local.writeLocks.has(item.id), onClick: () => startEditor(item) }),
           item.status === 'draft' && !item.approvalId && Button({ label: '丢弃草稿', disabled: writing || local.writeLocks.has(item.id) || !view.source.active || item.sourceVersion !== view.source.version, onClick: () => discard(item) }),

@@ -163,6 +163,7 @@ test('lazy independent conversations, fixed schema, zero tools and filtered know
   const session = f.sdk.sessions.find(record => JSON.parse(record.history[0]).userRequest === 'DISCUSS_A')!;
   assert.deepEqual(JSON.parse(session.history.at(-1)!).suggestionProgress, progress);
   assert.match(session.contexts[0], /仅查询进度时 suggestions 返回空数组/);
+  assert.match(session.contexts[0], /不能据此说对方已读/);
   const follow = JSON.parse(f.sdk.sessions.find(s => s.history.length === 2)!.history[1]);
   assert.deepEqual(follow.discussion, [], 'Live SDK already owns this conversation history');
   assert.equal(f.sdk.loads(), 3);

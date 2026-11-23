@@ -77,6 +77,22 @@ test('发件箱展示实际投递状态、内容与目标，合并重复记录�
     await page.reload();
     await expect(page.locator('#outbox .mailbox-card')).toHaveCount(4);
     await expect(page.locator('#outbox')).not.toContainText('同一投递的重复记录');
+    // A historical receipt must survive the ordinary outbox's 200-row window.
+    const sample = server.app.store.get<any>('outbox.items', 'out-0')!;
+    for (let i = 0; i < 200; i++) {
+      const id = 'later-' + i;
+      server.app.store.put('outbox.items', id, { ...sample, id, dedupKey: id, createdAt: '2099-01-01T00:00:00Z' });
+    }
+    const historical = page.waitForResponse(response => response.url().endsWith('/api/v1/outbox?id=out-2'));
+    await page.goto(server.url + '/#outbox?receipt=delivery%3Aout-2');
+    assert.deepEqual((await (await historical).json()).map((item: { id: string }) => item.id), ['out-2']);
+    await expect(page.locator('#outbox .mailbox-card')).toHaveCount(1);
+    await expect(page.locator('#outbox .mailbox-card')).toContainText('测试通知2');
+    await page.goto(server.url + '/#outbox?receipt=delivery%3Amissing');
+    await expect(page.getByText('当前可见发件记录中没有这条回执。')).toBeVisible();
+    for (let i = 0; i < 200; i++) server.app.store.remove('outbox.items', 'later-' + i);
+    await page.getByRole('link', { name: '查看全部发件记录' }).click();
+    await expect(page.locator('#outbox .mailbox-card')).toHaveCount(4);
     await page.getByLabel('发件箱状态').selectOption('failed');
     await expect(page.locator('#outbox .mailbox-card')).toHaveCount(1);
     await page.getByRole('button', { name: '查看原文与详情' }).click();

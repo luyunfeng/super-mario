@@ -72,13 +72,23 @@ test('personal reply sends exact approved text through Outbox; repeats/restart n
   assert.equal((await f.reads()).length,0);const result=await f.approve(approval);assert.equal(result.data.status,'completed',JSON.stringify(result.data));
   const sends=await f.reads();assert.equal(sends.length,1);const argv=sends[0]!;assert.equal(argv[argv.indexOf('--profile')+1],'fixture-personal');assert.equal(argv[argv.indexOf('--as')+1],'user');assert.equal(argv[argv.indexOf('--message-id')+1],'om_original');assert.equal(argv[argv.indexOf('--text')+1],suggestion.action.kind==='reply'?suggestion.action.text:'');
   const outbox=f.server.app.background.outbox.list()[0]!;assert.equal(outbox.status,'sent');assert.match(outbox.channel,/^feishu\.personal:/);
+  assert.deepEqual((await f.api(f.route)).data.suggestions[0].delivery, { id: outbox.id, status: 'sent', updatedAt: outbox.updatedAt });
   assert.ok(f.server.app.inbox.list()[0]?.archivedAt,'Only confirmed delivery marks the source handled');
   assert.equal((await f.approve(approval)).status,409);await f.restart();await f.server.app.background.tick();assert.equal((await f.reads()).length,1);assert.equal(f.server.app.background.outbox.list()[0]?.status,'sent');
 });
 test('uncertain personal CLI response stays unknown in suggestion and Outbox without retry',async t=>{
   const f=await fixture(t);await f.unknown();const suggestion=await f.save({kind:'reply',text:'合成未知回复'}),approval=await f.confirm(suggestion);
   assert.equal((await f.approve(approval)).data.status,'unknown');assert.equal(f.server.app.background.outbox.list()[0]?.status,'unknown');assert.equal(f.server.app.store.get<InboxSuggestion>('inbox-handling.suggestions',suggestion.id)?.status,'unknown');
+  assert.equal((await f.api(f.route)).data.suggestions[0].delivery.status, 'unknown');
   await f.server.app.background.tick();assert.equal((await f.reads()).length,1);await f.restart();await f.server.app.background.tick();assert.equal((await f.reads()).length,1);
+  const item = f.server.app.background.outbox.list()[0]!;
+  f.server.app.background.outbox.verify(item.id, true, item.version);
+  const checked = (await f.api(f.route)).data.suggestions[0];
+  assert.equal(checked.status, 'unknown');
+  assert.equal(checked.delivery.status, 'sent');
+  f.server.app.store.put('outbox.items', item.id, { ...item, relatedTo: { kind: 'inbox', id: 'other' } });
+  assert.equal((await f.api(f.route)).data.suggestions[0].delivery, undefined);
+  assert.equal((await f.reads()).length, 1);
 });
 test('archive/reopen invalidates old confirmation within the same source thread',async t=>{
   const f=await fixture(t),suggestion=await f.save({kind:'reply',text:'旧回复'}),approval=await f.confirm(suggestion);
@@ -124,6 +134,8 @@ test('bot reply preserves original message; channel hook cannot replace the appr
   assert.equal(view.source.active,true);assert.equal(view.source.replyAvailable,true);
   const save=await f.api(route+'/suggestions','POST',{sourceVersion:incoming.version,action:{kind:'reply',text:'已确认机器人回复'}}),approval=await f.confirm(save.data,route),initial=adapter.sent.length;
   const sent=await f.approve(approval);assert.equal(sent.data.status,'completed',JSON.stringify(sent.data));assert.equal(adapter.sent.length,initial+1);assert.equal(adapter.sent.at(-1)?.text,'已确认机器人回复');assert.deepEqual(adapter.sent.at(-1)?.context,{replyTo:'original-bot-input'});
+  assert.equal((await f.api(route)).data.suggestions[0].delivery.id, sent.data.result.outboxId);
+  assert.equal((await f.api(route)).data.suggestions[0].delivery.status, 'sent');
   f.server.app.plugins.register({id:'alter-reply',name:'Synthetic policy',capabilities:[],activate(c){c.hook('channel.send','before',value=>({action:'continue',value:{...(value as JsonObject),text:'未确认的替换正文'}}));}});await f.server.app.plugins.start();
   await adapter.options.onMessage('第二条机器人来源',origin('next-bot-input'));
   const second=f.server.app.mailboxes.list({direction:'inbox',botId:bot.id}).find(item=>item.id!==incoming.id)!,secondRoute='/inbox-handling/mailbox/'+second.id;

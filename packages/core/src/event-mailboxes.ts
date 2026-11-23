@@ -7,6 +7,8 @@ import { normalizeInboxOrigin } from './inbox-origin.ts';
 type Input = Pick<MailboxEntry, 'direction' | 'scope' | 'botId' | 'eventKey' | 'title' | 'text'> & Partial<Pick<MailboxEntry, 'origin' | 'target' | 'sourceMessageId' | 'replyTo' | 'requiresConfirmation'>>;
 type Handler = (entry: MailboxEntry) => Promise<{ id?: string } | void>;
 const collection = 'event.mailboxes';
+export const mailboxEntryId = (botId: string, direction: MailboxEntry['direction'], eventKey: string) =>
+  createHash('sha256').update(JSON.stringify([botId, direction, eventKey])).digest('hex');
 const now = () => new Date().toISOString();
 function required(value: unknown, label: string): asserts value is string {
   if (typeof value !== 'string' || !value.trim()) scopeError(`${label}不能为空`);
@@ -55,7 +57,7 @@ export function createEventMailboxes({ store, events }: { store: Store; events: 
       const origin = normalizeInboxOrigin(input.origin);
       const scope = validateBotScope(store, input.scope);
       if (input.direction === 'outbox') required(input.target, '发送目标');
-      const id = createHash('sha256').update(JSON.stringify([input.botId, input.direction, input.eventKey])).digest('hex');
+      const id = mailboxEntryId(input.botId, input.direction, input.eventKey);
       const existing = store.get<MailboxEntry>(collection, id);
       if (existing) {
         if ((!existing.origin || existing.origin.kind === 'unknown') && origin && origin.kind !== 'unknown') {

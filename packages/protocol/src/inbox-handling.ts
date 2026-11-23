@@ -18,9 +18,10 @@ export interface InboxSuggestion {
   action: InboxHandlingAction; status: 'draft' | 'discarded' | 'submitted' | 'executing' | 'applied' | 'stale' | 'unknown';
   approvalId?: string; result?: Json; error?: string; createdAt: string; updatedAt: string;
 }
+export interface InboxReplyDelivery { id: string; status: 'sent' | 'failed' | 'unknown' | 'pending'; updatedAt: string }
 export interface InboxSuggestionProgress {
   total: number;
-  recent: { id: string; version: number; kind: InboxHandlingAction['kind']; status: InboxSuggestion['status']; approvalStatus?: Approval['status'] }[];
+  recent: { id: string; version: number; kind: InboxHandlingAction['kind']; status: InboxSuggestion['status']; approvalStatus?: Approval['status']; delivery?: InboxReplyDelivery }[];
 }
 export interface InboxHandlingRequest {
   id: string; key: string; conversationId: string; status: 'pending' | 'completed' | 'failed' | 'unknown';
@@ -28,6 +29,6 @@ export interface InboxHandlingRequest {
 }
 export interface InboxHandlingView {
   source: InboxHandlingSource; conversationId: string; available: boolean; reason?: string;
-  messages: Message[]; suggestions: (InboxSuggestion & { approvalStatus?: Approval['status'] })[]; requests: InboxHandlingRequest[];
+  messages: Message[]; suggestions: (InboxSuggestion & { approvalStatus?: Approval['status']; delivery?: InboxReplyDelivery })[]; requests: InboxHandlingRequest[];
 }
 export interface InboxHandlingState { source:InboxHandlingRef;stage:'human'|'ai'|'processing';label:string;runId?:string }

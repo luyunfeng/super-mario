@@ -2328,6 +2328,7 @@ test('Web 主对话绑定项目及飞书项目助手只查看该项目的整理�
       assert.ok(req.tools.includes('knowledge_jobs'));
       assert.match(req.system, /按 total 报告符合条件的提交次数/);
       assert.match(req.system, /附工具返回的 approvalCitation/);
+      assert.match(req.system, /用 inbox_handling_read 核对对应回复建议版本的 delivery.status/);
       assert.match(req.system, /飞书回复说明哪份资料待确认/);
       return call('knowledge_jobs', { projectId: otherId }, 'outside');
     }

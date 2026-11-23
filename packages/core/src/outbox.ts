@@ -16,6 +16,7 @@ import {
 import type { createEffects } from "./effects.ts";
 
 const collection = "outbox.items";
+export const outboxItemId = (owner: string, dedupKey: string) => digest([owner, dedupKey]);
 type Sender = (target: string, text: string, key: string) => Promise<void>;
 /** Intent and authority are separate. Unknown delivery is never retried without a human decision. */
 export function createOutbox({
@@ -173,6 +174,7 @@ export function createOutbox({
         return result;
       });
     },
+    find: (id: string) => store.get<OutboxItem>(collection, id),
     list: () =>
       store
         .list<OutboxItem>(collection)
@@ -221,7 +223,7 @@ export function createOutbox({
             ))
       )
         backgroundError("不支持此发件渠道");
-      const id = digest([owner, input.dedupKey]),
+      const id = outboxItemId(owner, input.dedupKey),
         hash = digest(input);
       for (const at of [input.window?.notBefore, input.window?.expiresAt])
         if (

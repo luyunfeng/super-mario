@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
-import type { Approval, Json, Message } from '../../protocol/src/index.ts';
-import type { InboxHandlingAction, InboxHandlingRef, InboxHandlingRequest, InboxHandlingSource, InboxHandlingView, InboxSuggestion, InboxSuggestionProgress } from '../../protocol/src/inbox-handling.ts';
+import { outboxItemId } from './outbox.ts';
+import { mailboxEntryId } from './event-mailboxes.ts';
+import type { EventBus, OutboxItem, Store } from '../../plugin-sdk/src/index.ts';
+import type { Approval, Json, MailboxEntry, Message } from '../../protocol/src/index.ts';
+import type { InboxHandlingAction, InboxHandlingRef, InboxHandlingRequest, InboxHandlingSource, InboxHandlingView, InboxSuggestion, InboxSuggestionProgress, InboxReplyDelivery } from '../../protocol/src/inbox-handling.ts';
 import type { InboxHandlingState } from '../../protocol/src/inbox-handling.ts';
 import type { Run } from '../../protocol/src/index.ts';
 import { digest, stableJson } from './eventbox.ts';
@@ -165,12 +167,34 @@ export function createInboxHandling(options: InboxHandlingOptions) {
     const approval = store.get<Approval>('approvals', row.approvalId);
     if (approval && matching(approval, binding.approval)) return approval;
   }
+  const executionKey = (row: InboxSuggestion) => `inbox-handling:${row.id}:${row.version}`;
+  function replyDelivery(row: InboxSuggestion): InboxReplyDelivery | undefined {
+    if (row.action.kind !== 'reply' || !row.approvalId) return;
+    const key = executionKey(row);
+    if (row.source.kind === 'personal') {
+      const item = store.get<OutboxItem>('outbox.items', outboxItemId('core', key));
+      if (!item || item.owner !== 'core' || item.dedupKey !== key || item.relatedTo?.kind !== 'inbox' ||
+          item.relatedTo.id !== row.source.id || item.content.text !== row.action.text || !item.channel.startsWith('feishu.personal:')) return;
+      const status = ['failed', 'expired', 'cancelled'].includes(item.status) ? 'failed'
+        : item.status === 'sent' || item.status === 'unknown' ? item.status : 'pending';
+      return { id: item.id, status, updatedAt: item.updatedAt };
+    }
+    const source = store.get<MailboxEntry>('event.mailboxes', row.source.id);
+    if (source?.direction !== 'inbox') return;
+    const eventKey = 'inbox-suggestion:' + key;
+    const item = store.get<MailboxEntry>('event.mailboxes', mailboxEntryId(source.botId, 'outbox', eventKey));
+    if (!item || item.direction !== 'outbox' || item.botId !== source.botId || item.eventKey !== eventKey ||
+        item.sourceMessageId !== source.sourceMessageId || item.target !== source.target || item.text !== row.action.text) return;
+    const status = item.status === 'completed' ? 'sent' : item.status === 'unknown' ? 'unknown'
+      : item.status === 'failed' || item.status === 'rejected' ? 'failed' : 'pending';
+    return { id: item.id, status, updatedAt: item.updatedAt };
+  }
   async function runThink(row: RequestRow, initial: ReturnType<typeof source>) {
     try {
       const own = store.list<InboxSuggestion>(suggestions).filter(item => item.conversationId === row.conversationId)
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
       const recent = own.slice(0, 20).map(item => ({
-        id: item.id, version: item.version, kind: item.action.kind, status: item.status, approvalStatus: boundApproval(item)?.status,
+        id: item.id, version: item.version, kind: item.action.kind, status: item.status, approvalStatus: boundApproval(item)?.status, ...(item.action.kind === 'reply' ? { delivery: replyDelivery(item) } : {}),
       }));
       const result = await options.think(structuredClone(initial.value), row.conversationId, row.text, { total: own.length, recent });
       if (!result || result.conversationId !== row.conversationId || result.role !== 'assistant' || result.status !== 'done' || typeof result.text !== 'string' || typeof result.id !== 'string' || !result.id.trim() || typeof result.createdAt !== 'string') fail('模型返回无效');
@@ -246,7 +270,8 @@ export function createInboxHandling(options: InboxHandlingOptions) {
         messages: store.list<Message>('messages').filter(row => history.has(row.conversationId)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)),
         suggestions: store.list<InboxSuggestion>(suggestions).filter(row => row.source.kind===ref.kind&&row.source.id===ref.id).map(row => {
           const approval = boundApproval(row);
-          return approval ? { ...row, approvalStatus: approval.status } : row;
+          const delivery = replyDelivery(row);
+          return { ...row, ...(approval && { approvalStatus: approval.status }), ...(delivery && { delivery }) };
         }),
         requests: store.list<RequestRow>(requests).filter(row => row.conversationId === current.conversationId).map(publicRequest) };
     },
@@ -354,7 +379,7 @@ export function createInboxHandling(options: InboxHandlingOptions) {
       });
       return track((async () => {
         try {
-          const result = await options.execute(structuredClone(current.value), structuredClone(claimed.action), `inbox-handling:${claimed.id}:${claimed.version}`);
+          const result = await options.execute(structuredClone(current.value), structuredClone(claimed.action), executionKey(claimed));
           // Reject lossy/non-JSON receipts. Remote effects may already have happened.
           stableJson(result);
           store.transaction(() => putSuggestion({ ...claimed, status: 'applied', result, updatedAt: new Date().toISOString() }));

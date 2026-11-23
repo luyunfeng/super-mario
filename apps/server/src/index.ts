@@ -96,7 +96,12 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if(path==='/api/v1/eventbox/schedules'&&method==='POST')return json(res,201,app.background.schedules.forOwner('core').create(await body(req) as unknown as import('../../../packages/plugin-sdk/src/index.ts').ScheduleInput));
         const schedule=path.match(/^\/api\/v1\/eventbox\/schedules\/([^/]+)$/);
         if(schedule&&method==='PATCH'){const input=await body(req);if(!Number.isSafeInteger(input.version))throw new InputError('请提供调度版本');const{version,...patch}=input;return json(res,200,app.background.schedules.update(schedule[1],patch as Parameters<typeof app.background.schedules.update>[1],version as number));}
-        if(path==='/api/v1/outbox'&&method==='GET')return json(res,200,app.background.outbox.list().slice(0,200));
+        if (path === '/api/v1/outbox' && method === 'GET') {
+          const id = url.searchParams.get('id');
+          if (id === null) return json(res, 200, app.background.outbox.list().slice(0, 200));
+          const item = app.background.outbox.find(id);
+          return json(res, 200, item ? [item] : []);
+        }
         if(path==='/api/v1/outbox'&&method==='POST'){const{owner,...input}=await body(req);return json(res,201,app.background.outbox.enqueue(typeof owner==='string'?owner:'user',input as unknown as import('../../../packages/plugin-sdk/src/index.ts').OutboxInput));}
         if(path==='/api/v1/outbox/grants'&&method==='PUT'){const input=await body(req);app.background.outbox.grant(requiredText(input.owner,'发布者'),requiredText(input.channel,'渠道'),input.enabled as boolean);return json(res,200,app.background.outbox.grants());}
         const outgoing=path.match(/^\/api\/v1\/outbox\/([^/]+)\/(cancel|verify)$/);
