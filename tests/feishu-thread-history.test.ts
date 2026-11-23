@@ -100,6 +100,8 @@ test('独立对话改名和归档可跨重启，旧事件不恢复归档，引�
   assert.equal(afterRename.title, '蓝色调查');
   assert.ok(afterRename.version > initial.version);
   assert.equal((await api(a.id, path, { version: initial.version, title: '过期修改' })).status, 409);
+  await a.receive('/帮助', 'search-help');
+  assert.match(sent.at(-1)!.text,/按标题、标签或发言原话搜索未归档的独立对话/);
   await a.receive('/list', 'listed-active');
   assert.match(sent.at(-1)!.text, /蓝色调查/);
   const titleSearch = await search(a.id, '蓝色调查', false);

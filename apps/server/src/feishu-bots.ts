@@ -2984,7 +2984,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const view = !group && paired && bot.scope.kind === 'global' ? requested : undefined;
     if (view && paired) {
       const eventKey = `feishu-dashboard:${JSON.stringify([bot.id, bot.appId, source.messageId])}`;
-      const dashboard = view === 'help' ? dashboardHelp(Boolean(app.agentSessions && paired.senderId))
+      const dashboard = view === 'help' ? dashboardHelp(Boolean(app.agentSessions && paired.senderId), false, threadSearchEnabled())
         : buildFeishuDashboard(app, webBase, { view, navigation: navigation(bot, paired, eventKey), canViewQuestion:card=>canViewQuestion(bot,paired,card) });
       const entry = await put(bot, { direction: 'outbox', eventKey, title: '工作台', text: dashboard.text,
         target: paired.chatId, sourceMessageId: source.messageId, requiresConfirmation: false }, bot.scope,

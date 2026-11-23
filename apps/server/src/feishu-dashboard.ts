@@ -54,11 +54,11 @@ export function privateCommandText(text: string, options: { global: boolean; ses
   return { text };
 }
 
-export function dashboardHelp(sessions: boolean, scoped = false) {
+export function dashboardHelp(sessions: boolean, scoped = false, searchEnabled = true) {
   const status = '/status 或 /状态：查看当前会话状态';
   const stop = '/stop 或 /停止、/停：请求中断当前轮次';
   const text = scoped ? [status, stop].join('\n') : ['/home 或「工作台」：打开工作台', '/tasks 或 /进展：查看任务进展', '/inbox 或 /收件箱：查看收件',
-    '/agents [关键词] 或 /agent：查找执行会话', '/start [目标] 或 /开工：填写并提交执行表单', '群内 @ 本机器人发送 /ai 任务：建立待办，在主话题群或主人私聊承接', '在群里发送 /topics 登记话题群，/topics home 设主群，/topics off 退出', '引用任务回报预览发送 /noreply：取消向原群回报', '/list 或 /对话：列出可切换的对话', '/list 关键词 或 /对话 关键词：搜索独立对话', '/new 或 /新对话：开启独立对话，可在命令后直接写第一条消息', '/main 或 /主对话：切回主 Agent', '/modellist：查看当前对话的模型目录', '/modelchange <模型 ID>：切换当前对话模型', status, stop, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
+    '/agents [关键词] 或 /agent：查找执行会话', '/start [目标] 或 /开工：填写并提交执行表单', '群内 @ 本机器人发送 /ai 任务：建立待办，在主话题群或主人私聊承接', '在群里发送 /topics 登记话题群，/topics home 设主群，/topics off 退出', '引用任务回报预览发送 /noreply：取消向原群回报', '/list 或 /对话：列出可切换的对话', ...(searchEnabled ? ['/list 关键词 或 /对话 关键词：按标题、标签或发言原话搜索未归档的独立对话，例如 /对话 季度复核。点「在这里聊」切换续聊目标。'] : []), '/new 或 /新对话：开启独立对话，可在命令后直接写第一条消息', '/main 或 /主对话：切回主 Agent', '/modellist：查看当前对话的模型目录', '/modelchange <模型 ID>：切换当前对话模型', status, stop, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
   const help = text + '\n在工作台对话中发送命令原文可再加一个斜杠，例如 //status。';
   return { text: help, card: cardDocument('工作台命令', cardSection('在此私聊中发送', help)) };
 }
