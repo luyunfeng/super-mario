@@ -3401,6 +3401,7 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
       }
       assert.ok(req.tools.includes('private_conversation_search'));
       assert.match(req.system, /引用正文须写明会话标题和发言角色/);
+      assert.match(req.system, /createdAt.*pending.*处理中.*failed.*处理失败.*对应执行记录/);
       const web = JSON.stringify(req.content).includes('从网页查');
       return web ? call('private_conversation_search', { query: '青瓷样本', botId, tag: '验收' }, 'find-source')
         : call('private_conversation_search', { query: '青瓷样本', botId: 'other-bot' }, 'wrong-account');
@@ -3422,6 +3423,8 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
     const hit = page.items[0].hits.find((item: {role:string}) => item.role === 'user');
     assert.ok(hit.id);
     assert.match(hit.excerpt, /青瓷样本/);
+    const failed=page.items[0].hits.find((item:{role:string})=>item.role==='assistant');
+    assert.equal(failed.status,'failed');assert.equal(failed.createdAt,'2099-01-01T00:00:00.000Z');
     return { role: 'assistant', content: '已从用户发言核对青瓷样本。' };
   }, options => {
     adapter = options;
@@ -3446,6 +3449,9 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
     const ordering = await fetch(threads + '/order', { method: 'PATCH', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ binding: pref.binding, version: pref.version, order: [row.threadId] }) });
     assert.equal(ordering.status, 200);
+    const original=server.app.store.list<Message>('messages').find(m=>m.role==='user' && m.text==='合成记要：周三交付青瓷样本')!;
+    server.app.store.put('messages','failed-excerpt',{...original,id:'failed-excerpt',role:'assistant',replyTo:original.id,
+      text:'青瓷样本已交付',status:'failed',createdAt:'2099-01-01T00:00:00.000Z'});
     const ordered = '已按保存的顺序列出两个对话。';
     assert.equal(await ask('在网页按保存的顺序列出独立对话'), ordered);
     const answer = '已从用户发言核对青瓷样本。';
