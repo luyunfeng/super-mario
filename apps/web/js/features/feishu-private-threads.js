@@ -1,3 +1,4 @@
+import { copyMessageLinkButton } from '../lib/clipboard.js';
 import { messageFiles } from './message-files.js';
 import { messageImages } from './message-images.js';
 import { h, replace } from '../lib/dom.js';
@@ -455,6 +456,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     const entries = items => items.map(message => h('section', { class: 'stack' },
       around && message.id === around && h('mark', { tabIndex: -1 }, query || target ? '命中消息' : '定位到的消息'),
       h('strong', null, historyMessageLabel(message)),
+      copyMessageLinkButton('#agent/private-thread/' + [bot.id, row.threadId, message.id].map(encodeURIComponent).join('/')),
       message.text?.trim() && h('button', { type:'button', class:'btn btn--ghost btn--sm',
         dataset:{copyThreadMessage:''}, hidden:!conversationExportActive(store), onclick:async () => {
           if (!current(id) || !conversationExportActive(store)) return;

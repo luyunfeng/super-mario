@@ -50,6 +50,10 @@ test('Web 将飞书独立对话的完整历史复制并下载，临时错误可�
   await drawer.getByRole('button', { name: /独立导出甲/ }).click();
   await expect(drawer.getByText(history[0], { exact: true })).toHaveCount(0);
   const lastMessage = drawer.locator('section').filter({has:page.getByText(history.at(-1)!, {exact:true})}).last();
+  await lastMessage.getByRole('button', {name:'复制消息链接'}).click();
+  const messageLink = await page.evaluate(() => navigator.clipboard.readText());
+  assert.ok(messageLink.startsWith(server.url + '/#agent/private-thread/'));
+  assert.ok(messageLink.endsWith('/long-history-44'));
   await lastMessage.getByRole('button', {name:'复制正文'}).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(history.at(-1));
   await page.route('**/api/v1/conversation-export', route => route.fulfill({ status: 503,
@@ -79,4 +83,7 @@ test('Web 将飞书独立对话的完整历史复制并下载，临时错误可�
   assert.equal(disabled.status(), 200);
   await expect(result).not.toBeVisible();
   await expect(drawer.getByRole('button', { name: '导出对话' })).toHaveCount(0);
+  await page.goto(messageLink);
+  await page.reload();
+  await expect(drawer.locator('section').filter({has:page.locator('mark')}).last()).toContainText(history.at(-1)!);
 });
