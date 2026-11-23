@@ -22,6 +22,7 @@ export function createProjectInstructions({ api, store, getProjectId }) {
     const notes = TextArea({ rows: 8, oninput: () => { status.textContent = ''; sync(); } });
     const count = h('span', { class: 'small muted' });
     const status = h('p', { role: 'status' });
+    const version = h('span', { class: 'small muted' });
     const remote = h('section', { hidden: true, class: 'stack', 'aria-label': '服务端当前版本' });
     const review = h('div', { class: 'stack' });
     const clear = Button({ label: '清空草稿', onClick: () => {
@@ -36,7 +37,7 @@ export function createProjectInstructions({ api, store, getProjectId }) {
     const opened = openDrawer({ title: '工作指令', subtitle: project.name, wide: true,
       body: [h('p', { class: 'small muted' }, '这里记录项目所有者对本项目的要求。下轮项目对话和新派发的普通项目任务会读取当前版本。已确认的审批任务与原生会话恢复沿用原文。'),
         h('div', { class: 'stack', style: { gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))' } },
-          h('div', { class: 'stack' }, editor, count), remote),
+          h('div', { class: 'stack' }, editor, count, version), remote),
         status, review, h('div', { class: 'row row--wrap' }, clear, save)],
       onClose() {
         unsubscribe();
@@ -50,6 +51,7 @@ export function createProjectInstructions({ api, store, getProjectId }) {
     const unsubscribe = store.subscribe(() => { if (!current()) opened.close(); });
 
     function sync() {
+      version.textContent = base ? (base.revision ? `草稿基于版本 ${base.revision}` : '尚无已保存的版本') : '';
       remote.hidden = !needsReview || !latest;
       if (remote.hidden) remote.replaceChildren();
       const length = Array.from(notes.value).length;

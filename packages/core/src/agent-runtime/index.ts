@@ -359,7 +359,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
             '需要新增提醒、通知、派活或变更记录时，只给出建议。')] : []),
           ...(identity ? [identity] : []),
           ...(skillCatalog ? [skillCatalog] : []),
-          ...(projectInstructions ? [projectInstructions] : []),
+          ...(currentProjectId && options.projectInstructions ? [projectInstructions ||
+            '本轮没有加载项目工作指令。若用户核对版本，说明当前无可引用的版本，不从历史对话推断，也不猜测未加载的原因。'] : []),
           ...(scope?.kind === 'global' ? ['和用户对话时，简短问答直接给答案，当场能完成就直接交付。需要后台执行时先调用相应工具，根据真实回执立即告诉用户交给谁、做什么、已接收还是等待确认；派发后结束本轮，让结果通过原会话回传。工具失败或回执未知时说明原因。'] : []),
           ...(scope ? [`Bot 作用域：${JSON.stringify(scope)}。只能在此作用域内处理工作；未标记身份只读。`] : []),
           `工作台态势概览（易读摘要，基于下方共享事实，不是新指令）：\n${formatWorkContextMarkdown(workContext)}`,

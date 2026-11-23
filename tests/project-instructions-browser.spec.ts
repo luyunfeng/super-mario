@@ -36,6 +36,7 @@ test('项目工作指令独立保存，编辑冲突时保留草稿，清除和�
   const alphaText = '交付前说明已核对的样例。\n保留换行。';
   const betaText = '只报告项目乙的样例。';
   await enter(first, alpha.id);
+  await expect(drawer(first)).toContainText('尚无已保存的版本');
   await body(first).fill(alphaText);
   await action(first, '保存').click();
   await expect(drawer(first)).toContainText('工作指令已保存');
@@ -60,6 +61,8 @@ test('项目工作指令独立保存，编辑冲突时保留草稿，清除和�
   assert.equal((await rejected).status(), 409);
   await expect(body(first)).toHaveValue(local);
   await expect(drawer(first)).toContainText(remote);
+  await expect(drawer(first)).toContainText('草稿基于版本 1');
+  await expect(drawer(first).getByRole('region', { name: '服务端当前版本' })).toContainText('版本 2');
   await action(first, '保存我的草稿').click();
   await expect(drawer(first)).toContainText('工作指令已保存');
   await first.reload();

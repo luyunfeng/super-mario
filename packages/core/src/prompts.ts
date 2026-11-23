@@ -85,11 +85,11 @@ export function reworkPrompt(run: Run, defects: string, round: number, maxRounds
   ].join('\n\n');
 }
 
-export function formatProjectInstructions(project: Pick<Project, 'id' | 'name' | 'description'>, notes: string): string {
+export function formatProjectInstructions(project: Pick<Project, 'id' | 'name' | 'description'>, notes: string, revision: number): string {
   if (!notes) return '';
   return [
-    '以下是用户为当前项目保存的工作指令，适用于本项目的工作方法、术语和验收要求。与本轮用户要求冲突时以本轮要求为准。该说明不发起新任务，也不改变工具、审批和执行权限。',
-    JSON.stringify({ projectId: project.id, projectName: project.name, projectDescription: project.description, notes }),
+    '以下是用户为当前项目保存的工作指令，适用于本项目的工作方法、术语和验收要求。用户问本轮采用哪版工作指令时，按 revision 报告版本，并按需引用 notes 中的具体要求。与本轮用户要求冲突时以本轮要求为准。该说明不发起新任务，也不改变工具、审批和执行权限。',
+    JSON.stringify({ projectId: project.id, projectName: project.name, projectDescription: project.description, revision, notes }),
   ].join('\n');
 }
 

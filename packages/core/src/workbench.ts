@@ -377,10 +377,11 @@ export async function createWorkbench(config: AppConfig) {
     const project = store.get<Project>('projects', projectId);
     if (!project || project.archivedAt || !plugins.list().some(p => p.id === 'project-instructions' && p.status === 'active')) return '';
     const value = await plugins.invocations.use('project-instructions.manage', { action: 'read', projectId });
-    if (!value || typeof value !== 'object' || Array.isArray(value) || value.projectId !== projectId || typeof value.notes !== 'string') {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || value.projectId !== projectId || typeof value.notes !== 'string'
+      || typeof value.revision !== 'number' || !Number.isSafeInteger(value.revision) || value.revision < 0) {
       throw new InputError('项目工作指令来源不匹配', 409);
     }
-    return formatProjectInstructions(project, value.notes);
+    return formatProjectInstructions(project, value.notes, value.revision);
   }
   const reviewSettings = () => ({ maxReworks: store.get<{ maxReworks: number }>('workbench.settings', 'run-review')?.maxReworks ?? 2 });
   const runReview = createRunReview({ store, events, dispatch, completeTodo: id => updateTodo(id, { completed: true }), maxReworks: () => reviewSettings().maxReworks });
