@@ -132,8 +132,8 @@ export function openSavedPrompts({ api, store, initialText, assistantId, assista
     drawer.body.querySelector('input')?.focus();
   }
   function editor() {
-    const name = Input({ required: true, value: draft.name, disabled: busy });
-    const body = TextArea({ required: true, rows: 6, value: draft.text, disabled: busy });
+    const name = Input({ required: true, value: draft.name, disabled: busy, autocomplete: 'off', autocapitalize: 'none', spellcheck: false, placeholder: '例如：审查改动' });
+    const body = TextArea({ required: true, rows: 6, value: draft.text, disabled: busy, placeholder: '例如：审查本次改动，列出需要修正的位置和原因。' });
     const exists = doc.items.find(item => item.id === draft.id);
     const changed = exists && (exists.name !== draft.originalName || exists.text !== draft.originalText);
     const gone = draft.id && !exists;
@@ -183,7 +183,7 @@ export function openSavedPrompts({ api, store, initialText, assistantId, assista
       name.setAttribute('aria-invalid', String(Boolean(name.value && nameError)));
       body.setAttribute('aria-invalid', String(Boolean(body.value && bodyError)));
       nameHint.textContent = nameError || '在输入框键入 /' + label + ' 可选择此模板。';
-      bodyHint.textContent = (bodyError || '最多 8000 个字符。') + (count > 6400 ? ' 当前 ' + count + ' / 8000' : '');
+      bodyHint.textContent = (bodyError || '选取后会填入对话草稿，可编辑后发送。最多 8000 个字符。') + (count > 6400 ? ' 当前 ' + count + ' / 8000' : '');
     }
     validate();
     return form;

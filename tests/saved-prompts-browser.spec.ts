@@ -55,6 +55,7 @@ test('本人消息可保存为常用提示词，主对话和项目斜杠菜单�
   const body = drawer.getByLabel('提示词正文', { exact: true });
   await expect(body).toHaveValue(sourceText);
   await expect(body).toBeFocused();
+  await expect(body).toHaveAccessibleDescription(/填入对话草稿，可编辑后发送/);
   await page.keyboard.type(" +");
   await expect(body).toHaveValue(sourceText + " +");
   await body.fill(sourceText);
