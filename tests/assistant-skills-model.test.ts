@@ -1,3 +1,4 @@
+import { acceptMessage } from '../packages/core/src/message-receipts.ts';
 import {inboxAnalysisPrompt} from '../packages/core/src/agent-runtime/inbox-analysis-prompt.ts';
 import { createInboxAssistant } from '../packages/core/src/inbox-assistant.ts';
 import { todoDelegationPrompt } from '../packages/core/src/prompts.ts';
@@ -4531,21 +4532,26 @@ test('模型从注册工具发出限时提问，到期回合只读且不能冒�
 
 test('搜索本对话工具固定 Web 发言范围并排除当前检索提问', async t => {
   const query = '交接清单', oldText = '交接清单里有三份合成样张';
-  let findTool = false;
+  let category:'quoted'|'tool_name'|'tool_input'|'tool_output'='quoted';
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.ok(req.tools.includes('current_web_message_search'));
       assert.match(req.system, /current_web_message_search/);
-      if (findTool) {
-        assert.match(req.system, /category=tool_name/);
-        return call('current_web_message_search', {query:'current_web_message_search',category:'tool_name'}, 'find-prior-call');
-      }
-      assert.match(req.system, /category=quoted/);
-      return call('current_web_message_search', {query,category:'quoted'}, 'search-current');
+      assert.ok(req.system.includes('category='+category));
+      const term=category==='tool_name' ? 'current_web_message_search' : category==='tool_output' ? '三份合成样张' : query;
+      return call('current_web_message_search', {query:term,category}, 'search-'+category);
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
     const {hits} = JSON.parse(raw);
-    if (findTool) {
+    if (category==='tool_input' || category==='tool_output') {
+      assert.equal(hits.length,1);
+      const [match]=hits[0].matches;
+      assert.equal(match.toolName,'current_web_message_search');
+      assert.equal(match.category,category);
+      assert.ok(match.text.includes(category==='tool_input' ? query : oldText));
+      return {role:'assistant', content:match.text};
+    }
+    if (category==='tool_name') {
       assert.equal(hits.length,1);
       assert.equal(hits[0].role,'assistant');
       assert.deepEqual(hits[0].matches,[{category:'tool_name',text:'current_web_message_search'}]);
@@ -4559,12 +4565,17 @@ test('搜索本对话工具固定 Web 发言范围并排除当前检索提问', 
     const project = await api('/projects', {name:'合成清单'});
     for (const conversationId of ['main', 'project:' + project.id + ':work']) {
       const id = 'search-fixture-' + conversationId;
-      server.app.store.put('messages', id, {id, conversationId, ...(conversationId === 'main' ? {} : {projectId:project.id}),
-        directWebInput:true, role:'user', text:'> '+oldText+'\n\n交接清单的数量待确认。', status:'done', createdAt:'2026-03-01T10:00:00.000Z'} satisfies Message);
+      // Older Web turns already had an acceptance receipt, before projectId and directWebInput were persisted.
+      acceptMessage(server.app.store, {id, conversationId, requestId:randomUUID(),
+        role:'user', text:'> '+oldText+'\n\n交接清单的数量待确认。', status:'done', createdAt:'2026-03-01T10:00:00.000Z'} satisfies Message);
     }
     const path='/projects/'+project.id+'/messages';
     assert.equal(await ask('找一下本对话中我引用过的交接清单原话。',path),oldText);
-    findTool=true;
+    category='tool_name';
     assert.equal(await ask('上一轮有调用 current_web_message_search 吗？',path),'前一轮记录了检索工具调用。');
+    category='tool_input';
+    assert.match(await ask('以前有用交接清单当检索词吗？',path),/交接清单/);
+    category='tool_output';
+    assert.match(await ask('找出工具曾返回的三份合成样张原话。',path),/交接清单里有三份合成样张/);
   } finally { await server.close(); }
 });

@@ -57,6 +57,21 @@ test('搜索本对话按当前项目和待办返回原话，翻页后能定位�
       putReply(id);
       store.put('agent.traces',id,{id,conversationId:cid,userMessageId:source,status:'done',toolCalls});
     }
+    put('cited-turn','试验检索词命中的原话与合成输出摘录',conversationId,project.id,task.id);
+    put('other-citation','外部待办合成摘录',conversationId,project.id,otherTask.id);
+    const wrap=(result:object)=>JSON.stringify({content:[{type:'text',text:JSON.stringify(result)}],details:result});
+    const searchResult={hits:[
+      {id:'cited-turn',role:'user',createdAt:store.get<Message>('messages','cited-turn')!.createdAt,status:'done',text:'试验检索词命中的原话与合成输出摘录',projectId:project.id,todoId:task.id,
+        matches:[{category:'text',text:'试验检索词命中的原话与合成输出摘录'}]},
+      {id:'other-citation',role:'user',createdAt:store.get<Message>('messages','other-citation')!.createdAt,status:'done',text:'外部待办合成摘录',projectId:project.id,todoId:otherTask.id,
+        matches:[{category:'text',text:'外部待办合成摘录'}]},
+    ]};
+    putReply('trace-public');
+    store.put('agent.traces','trace-public',{id:'trace-public',conversationId,userMessageId:'just-text',status:'done',toolCalls:[
+      {id:'read',name:'current_web_message_search',args:JSON.stringify({query:'试验检索词',category:'text'}),result:wrap(searchResult),isError:false},
+      {id:'status',name:'conversation_status',args:'{}',result:wrap({phase:'waiting',goal:hidden,pending:{items:[{title:hidden}]}}),isError:false},
+      {id:'other',name:'unrelated_tool',args:JSON.stringify({query:hidden}),result:wrap({text:hidden}),isError:false},
+    ].map(call=>({...call,startedAt:observedAt,finishedAt:observedAt,tokens:25}))});
     const progress={phase:'tool' as const,toolName:'fixture_active_lookup',observedAt,detail:'合成工作轨迹',recentSteps:['不应展示的合成旧步骤']};
     putReply('progress-active',{status:'pending',progress});
     putReply('progress-done',{status:'done',progress});
@@ -170,11 +185,16 @@ test('搜索本对话按当前项目和待办返回原话，翻页后能定位�
     assert.ok(!JSON.stringify(hits).includes('仅内部可见的合成标记'));
   }
   assert.deepEqual(await searchRun('不应展示的合成旧步骤','event'),[]);
-  for(const category of ['tool_name','event',undefined]) assert.deepEqual(await searchRun('仅内部可见的合成标记',category),[]);
-  for(const [category,query,id] of [['tool_name','fixture_history_lookup','trace-good'],['event','合成工作轨迹','progress-active']]){
+  for(const category of ['tool_name','event','tool_input','tool_output',undefined]) assert.deepEqual(await searchRun('仅内部可见的合成标记',category),[]);
+  for(const [category,query,id] of [['tool_name','fixture_history_lookup','trace-good'],['event','合成工作轨迹','progress-active'],
+    ['tool_input','试验检索词','trace-public'],['tool_output','合成输出摘录','trace-public']]){
     await filter.selectOption(category!);
     await keyword.fill(query!);await keyword.press('Enter');
     await expect(rows).toHaveCount(1);
+    if(category==='tool_input' || category==='tool_output') {
+      await expect(rows).toContainText('current_web_message_search');
+      await expect(rows).toContainText(category==='tool_input'?'工具入参':'工具返回');
+    }
     await drawer.getByRole('link',{name:new RegExp(query!)}).click();
     const located=page.getByRole('log',{name:'项目对话'}).locator('[data-id="'+id+'"]');
     await expect(located).toHaveClass(/is-search-hit/);
@@ -187,6 +207,13 @@ test('搜索本对话按当前项目和待办返回原话，翻页后能定位�
     }
     await open.click();
   }
+  const statusHits=await searchRun('waiting','tool_output');
+  assert.deepEqual(statusHits.map((h:Message)=>h.id),['trace-public']);
+  assert.deepEqual(statusHits[0].matches,[{category:'tool_output',toolName:'conversation_status',text:'waiting'}]);
+  assert.equal((await searchRun('等待决定','tool_output'))[0].matches[0].text,'等待决定 (waiting)');
+  assert.deepEqual(await searchRun('外部待办合成摘录','tool_output'),[]);
+  server.app.store.put('message.routes','cited-turn',{channel:'feishu'});
+  assert.deepEqual(await searchRun('合成输出摘录','tool_output'),[]);
   const name='合成归档附件.txt', bytes=Buffer.from('仅存在于文件内的标记');
   const upload=await page.request.put(server.url+'/api/v1/chat-files/uploads?'+new URLSearchParams({conversationId:'main',name}),{
     headers:{...headers,'content-type':'text/plain'},data:bytes});

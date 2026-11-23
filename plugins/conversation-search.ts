@@ -171,34 +171,118 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
   return { hits, nextBefore: null };
 }
 
-const messageCategories = ['text','quoted','file','tool_name','event'] as const;
+const messageCategories = ['text','quoted','file','tool_name','event','tool_input','tool_output'] as const;
 type MessageCategory = typeof messageCategories[number];
-type SearchMatch = {category:MessageCategory;text:string};
+type SearchMatch = {category:MessageCategory;text:string;toolName?:string};
 type CanReadMessageFiles = (message:Message)=>boolean;
 
-function addMatch(matches:SearchMatch[],category:MessageCategory,text:string,pattern:RegExp) {
+function addMatch(matches:SearchMatch[],category:MessageCategory,text:string,pattern:RegExp,toolName?:string) {
   const match=pattern.exec(text);
   if (!match) return;
   let start=Math.max(0,match.index-48),end=Math.min(text.length,match.index+match[0].length+80);
   if (start && /[\uDC00-\uDFFF]/.test(text[start]!)) start--;
   if (end<text.length && /[\uDC00-\uDFFF]/.test(text[end]!)) end++;
-  matches.push({category,text:text.slice(start,end)});
+  matches.push({category,text:text.slice(start,end),...(toolName && {toolName})});
 }
 
-function messageToolNames(store:Store,row:Message,source:Message) {
-  type ToolNames = {id:string;conversationId:string;userMessageId:string;projectId?:string;toolCalls?:{name:string}[]};
-  const trace=store.get<ToolNames>('agent.traces',row.id);
+type RecordedCall = {name:string;args?:string;result?:string;isError?:boolean};
+function verifiedCalls(store:Store,row:Message,source:Message): RecordedCall[]|undefined {
+  const trace=store.get<{id:string;conversationId:string;userMessageId:string;projectId?:string;toolCalls?:RecordedCall[]}>('agent.traces',row.id);
+  if (!trace) return;
+  if (trace.id!==row.id || trace.conversationId!==row.conversationId || trace.userMessageId!==source.id ||
+      (trace.projectId!==undefined && trace.projectId!==row.projectId) || !Array.isArray(trace.toolCalls)) return [];
+  return trace.toolCalls;
+}
+
+function messageToolNames(row:Message,calls:RecordedCall[]|undefined) {
   const names=new Set<string>();
-  if (trace?.id===row.id && trace.conversationId===row.conversationId && trace.userMessageId===source.id &&
-      (!trace.projectId || trace.projectId===row.projectId) && Array.isArray(trace.toolCalls)) {
-    for (const call of trace.toolCalls) if (typeof call?.name==='string') names.add(call.name);
-  } else if (!trace && row.status==='pending' && row.progress?.phase==='tool' && row.progress.toolName) {
+  if (calls) {
+    for (const call of calls) if (typeof call?.name==='string') names.add(call.name);
+  } else if (row.status==='pending' && row.progress?.phase==='tool' && row.progress.toolName) {
     names.add(row.progress.toolName);
   }
   return [...names].filter(name=>/^[a-zA-Z0-9_.:-]{1,80}$/.test(name));
 }
 
-function addRuntimeMatches(store:Store,row:Message,source:Message,pattern:RegExp,category:MessageCategory|undefined,matches:SearchMatch[]) {
+function record(value:unknown):value is Record<string,unknown> {
+  return !!value && typeof value==='object' && !Array.isArray(value);
+}
+function traceObject(raw:unknown,max:number) {
+  if (typeof raw!=='string' || raw.length>max) return;
+  try { const value:unknown=JSON.parse(raw); if (record(value)) return value; } catch { /* partial trace */ }
+}
+
+function checkedResult(call:RecordedCall) {
+  if (call.isError!==false) return;
+  const wrapper=traceObject(call.result,65536);
+  if (!wrapper || !record(wrapper.details) || !Array.isArray(wrapper.content) || wrapper.content.length!==1) return;
+  const block=wrapper.content[0];
+  // The tool bridge emits the same structured value as details and as one
+  // JSON text block. Ignore error text, other block types and partial traces.
+  if (record(block) && block.type==='text' && block.text===JSON.stringify(wrapper.details)) return wrapper.details;
+}
+
+function addPublicToolMatches(store:Store,source:Message,calls:RecordedCall[],pattern:RegExp,category:MessageCategory|undefined,
+    matches:SearchMatch[],canReadFiles?:CanReadMessageFiles) {
+  const phaseLabels:Record<string,string>={no_records:'暂无会话记录',idle:'当前无待处理回合',working:'正在处理',waiting:'等待决定',failed:'处理失败',unknown:'状态尚未核实'};
+  for (const call of calls) {
+    if (!call || (call.name!=='current_web_message_search' && call.name!=='conversation_status')) continue;
+    if (call.name==='conversation_status') {
+      if (category==='tool_input') continue;
+      const phase=checkedResult(call)?.phase;
+      if (typeof phase==='string' && Object.hasOwn(phaseLabels,phase)) {
+        const text=pattern.test(phase) ? phase : phaseLabels[phase]+' ('+phase+')';
+        addMatch(matches,'tool_output',text,pattern,call.name);
+      }
+      continue;
+    }
+    const args=traceObject(call.args,32768);
+    if (!args || typeof args.query!=='string' || !args.query.trim() || [...args.query].length>500 ||
+        (args.category!==undefined && !messageCategories.some(v=>v===args.category)) ||
+        Object.keys(args).some(key=>!['query','category','before'].includes(key))) continue;
+    if (!category || category==='tool_input') {
+      addMatch(matches,'tool_input',args.query,pattern,call.name);
+      if (typeof args.category==='string') addMatch(matches,'tool_input',args.category,pattern,call.name);
+    }
+    if (category==='tool_input') continue;
+    const hits=checkedResult(call)?.hits;
+    if (!Array.isArray(hits) || hits.length>25) continue;
+    for (const hit of hits) {
+      if (!record(hit) || typeof hit.id!=='string' || !Array.isArray(hit.matches)) continue;
+      const original=store.get<Message>('messages',hit.id);
+      const workProject=/^project:(.+):work$/.exec(source.conversationId)?.[1];
+      const projectId=original?.projectId ?? workProject;
+      if (!original || original.id!==hit.id || original.conversationId!==source.conversationId ||
+          (original.origin && original.origin!=='user') || (source.projectId && projectId!==source.projectId) ||
+          (workProject && projectId!==workProject) || (source.todoId && original.todoId!==source.todoId) ||
+          hit.role!==original.role || hit.projectId!==projectId || hit.todoId!==original.todoId ||
+          original.id===source.id || original.replyTo===source.id) continue;
+      if (projectId) {
+        const project=store.get<Project>('projects',projectId);
+        if (!project || project.archivedAt) continue;
+      }
+      if (original.todoId) {
+        const todo=store.get<Todo>('todos',original.todoId);
+        if (!todo || todo.projectId!==projectId) continue;
+      }
+      const origin=searchableWebSource(store,original,workProject);
+      if (!origin) continue;
+      const parts=webPassages(original);
+      for (const entry of hit.matches) {
+        if (!record(entry) || typeof entry.text!=='string' || !entry.text || (args.category && args.category!==entry.category)) continue;
+        if (entry.category==='text' || entry.category==='quoted') {
+          if (!parts[entry.category]?.includes(entry.text)) continue;
+        } else if (entry.category==='file') {
+          if (!origin.directWebInput || /[/\\\p{Cc}]/u.test(entry.text) || !original.files?.some(f=>f.name===entry.text) ||
+              !canReadFiles?.(original)) continue;
+        } else continue;
+        addMatch(matches,'tool_output',entry.text,pattern,call.name);
+      }
+    }
+  }
+}
+
+function addRuntimeMatches(store:Store,row:Message,source:Message,pattern:RegExp,category:MessageCategory|undefined,matches:SearchMatch[],canReadFiles?:CanReadMessageFiles) {
   if (row.origin==='result') {
     const result=row.runResult;
     if (!result || row.id!=='run-result:'+result.runId || row.status!=='done' || !result.source ||
@@ -209,8 +293,12 @@ function addRuntimeMatches(store:Store,row:Message,source:Message,pattern:RegExp
         run.projectId===row.projectId && run.todoId===row.todoId) addMatch(matches,'event',row.text,pattern);
     return;
   }
-  if (!category || category==='tool_name') {
-    for (const name of messageToolNames(store,row,source)) if (pattern.test(name)) matches.push({category:'tool_name',text:name});
+  if (!category || category.startsWith('tool_')) {
+    const calls=verifiedCalls(store,row,source);
+    if (!category || category==='tool_name')
+      for (const name of messageToolNames(row,calls)) if (pattern.test(name)) matches.push({category:'tool_name',text:name});
+    if (category!=='tool_name')
+      addPublicToolMatches(store,source,calls??[],pattern,category,matches,canReadFiles);
   }
   if ((!category || category==='event') && row.status==='pending' && row.progress) {
     const labels={starting:'正在启动',thinking:'正在分析',tool:'正在调用工具',responding:'正在输出',waiting:'等待后续事件'};
@@ -227,18 +315,23 @@ function matchedPassages(row:Message,pattern:RegExp,category?:MessageCategory) {
   }
   // Match the Web renderer's splitLeadingQuote, including its whitespace
   // and newline handling. Quoted Markdown in assistant replies stays body text.
-  let body=row.text;
+  const parts=webPassages(row);
+  if (parts.quoted) add('quoted',parts.quoted);
+  add('text',parts.text);
+  return matches;
+}
+
+function webPassages(row:Message) {
+  const body=row.text;
   const lead=row.role==='user' && body.match(/^(?: {0,3}>[^\r\n]*(?:\r\n|\r|\n|$))+/);
   if (lead) {
     const passage=lead[0].replace(/(?:\r\n|\r|\n)$/,'').split(/\r\n|\r|\n/)
       .map(line=>line.replace(/^ {0,3}> ?/,'')).join('\n');
     if (passage.trim()) {
-      add('quoted',passage);
-      body=body.slice(lead[0].length).replace(/^[ \t]*(?:\r\n|\r|\n)/,'');
+      return {quoted:passage,text:body.slice(lead[0].length).replace(/^[ \t]*(?:\r\n|\r|\n)/,'')};
     }
   }
-  add('text',body);
-  return matches;
+  return {text:body};
 }
 
 function webInputFor(store:Store,row:Message,workProject:string|undefined) {
@@ -247,6 +340,15 @@ function webInputFor(store:Store,row:Message,workProject:string|undefined) {
       (row.role==='user' || source.id===row.replyTo) && source.conversationId===row.conversationId &&
       (source.projectId ?? workProject)===(row.projectId ?? workProject) && source.todoId===row.todoId &&
       !store.get('message.routes',source.id) && (source.id===row.id || !store.get('message.routes',row.id))) return source;
+}
+
+// Legacy browser sends predate directWebInput but have durable send receipts.
+// Internal card continuations can also have receipts and are excluded.
+function searchableWebSource(store:Store,row:Message,workProject:string|undefined) {
+  const source=webInputFor(store,row,workProject);
+  if (source?.directWebInput) return source;
+  if (source?.requestId && !store.get('conversation.question-continuations',source.id) &&
+      store.get<{messageId:string}>('message.requests',JSON.stringify([source.conversationId,source.requestId]))?.messageId===source.id) return source;
 }
 
 function projectToolRecords(store:Store,input:Json) {
@@ -262,7 +364,7 @@ function projectToolRecords(store:Store,input:Json) {
       (row.todoId && store.get<Todo>('todos',row.todoId)?.projectId!==projectId)) fail(404,'未找到当前项目的工具记录');
   const source=webInputFor(store,row,projectId);
   if (!source?.directWebInput || source.projectId!==projectId) fail(404,'未找到当前项目的工具记录');
-  return {names:messageToolNames(store,row,source)};
+  return {names:messageToolNames(row,verifiedCalls(store,row,source))};
 }
 
 // Main and project conversations may also receive Feishu turns and internal
@@ -297,15 +399,10 @@ function webMessages(store: Store, input: Json, canReadFiles?:CanReadMessageFile
         (rowProject && !activeProjects.has(rowProject)) || (row.origin && row.origin!=='user' && row.origin!=='result')) continue;
     const matches=matchedPassages(row,pattern,category);
     const checkFiles=row.origin!=='result' && (!category || category==='file') && !!row.files?.length && canReadFiles;
-    const checkRuntime=row.role==='assistant' && (!category || category==='event' || (row.origin!=='result' && category==='tool_name'));
+    const checkRuntime=row.role==='assistant' && (!category || category==='event' || (row.origin!=='result' && category.startsWith('tool_')));
     if (!matches.length && !checkFiles && !checkRuntime) continue;
-    const source = webInputFor(store,row,conversationId==='main' ? undefined : projectId);
+    const source = searchableWebSource(store,row,conversationId==='main' ? undefined : projectId);
     if (!source || (row.todoId && !matchesTodo(row.todoId,rowProject))) continue;
-    // Before directWebInput existed, the browser already used a durable send
-    // receipt. Feishu dispatch never supplied that key. Card continuations
-    // now use receipts too, but carry their own atomic source record.
-    if (!source.directWebInput && (!source.requestId || store.get('conversation.question-continuations',source.id) ||
-        store.get<{messageId:string}>('message.requests',JSON.stringify([conversationId,source.requestId]))?.messageId!==source.id)) continue;
     // Legacy Web receipts can authenticate old text without granting access
     // to files. Office replies also need their still-live document binding.
     if (checkFiles && source.directWebInput && checkFiles(row)) {
@@ -315,7 +412,7 @@ function webMessages(store: Store, input: Json, canReadFiles?:CanReadMessageFile
           matches.push({category:'file',text:name});
       }
     }
-    if (checkRuntime && source.directWebInput) addRuntimeMatches(store,row,source,pattern,category,matches);
+    if (checkRuntime && source.directWebInput) addRuntimeMatches(store,row,source,pattern,category,matches,canReadFiles);
     if (!matches.length) continue;
     if (!pastCursor) {pastCursor=row.id===before;continue;}
     if (hits.length===25) return {hits,nextBefore:hits[hits.length-1]!.id};
@@ -385,7 +482,7 @@ export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input:
       });
     }
     context.contribute('tools','current_web_message_search',{
-      name:'current_web_message_search', description:'按连续词句检索当前 Web 对话的原发言与回复，按消息返回分类摘录。category=text 查正文，quoted 查用户开头引用，file 只查可读附件名，tool_name 查已记录的工具名称，event 查公开进度及有执行回执的结果。工具名或进行中状态不能证明执行成功。省略类别查全部。引用只代表当时引用的材料。用返回的 nextBefore 续查更早的结果。',
+      name:'current_web_message_search', description:'按连续词句检索当前 Web 对话的原发言与回复，按消息返回分类摘录。category=text 查正文，quoted 查用户开头引用，file 只查可读附件名，tool_name 查已记录的工具名称，event 查公开进度及有执行回执的结果。tool_input 查受支持工具的公开检索参数，tool_output 查已复核的公开摘录或历史状态。工具名或进行中状态不能证明执行成功。省略类别查全部。引用只代表当时引用的材料。用返回的 nextBefore 续查更早的结果。',
       parameters:{type:'object',additionalProperties:false,required:['query'],properties:{
         query:{type:'string',minLength:1,maxLength:500},before:{type:'string'},category:{type:'string',enum:[...messageCategories]},
       }},
