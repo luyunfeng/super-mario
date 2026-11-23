@@ -53,7 +53,7 @@ async function fixture(body: (f: any) => Promise<void>, noScope = false) {
       const p = '/js/pages/agent.js', a = '/js/lib/api.js', s = '/js/lib/scope.js';
       const { createAgentPage } = await import(p), { createApi } = await import(a), { createScope } = await import(s);
       const api = createApi(), scope = createScope(); scope.set('a');
-      const snapshot = { workspaceTimezone: 'Asia/Shanghai', agent: { available: true }, projects: [{ id: 'a', name: '项目甲' }, { id: 'b', name: '项目乙' }], todos: [{ id: 'todo-a', title: '甲待办', projectId: 'a' }, { id: 'todo-b', title: '乙待办', projectId: 'b' }], machines: [], executors: [{ id: 'real-cli', name: '实际 CLI', available: true }, { id: 'offline-cli', name: '离线 CLI', available: false, reason: '电脑离线' }], plugins: [], runs: [], knowledge: [] };
+      const snapshot = { workspaceTimezone: 'Asia/Shanghai', agent: { available: true }, projects: [{ id: 'a', name: '项目甲' }, { id: 'b', name: '项目乙' }], todos: [{ id: 'todo-a', title: '甲待办', projectId: 'a' }, { id: 'todo-b', title: '乙待办', projectId: 'b' }], machines: [], executors: [{ id: 'real-cli', name: '实际 CLI', available: true }, { id: 'offline-cli', name: '离线 CLI', available: false, reason: '电脑离线' }], plugins: [{id:'daily-brief', status:'active'}], runs: [], knowledge: [] };
       const store = { view: { snapshot, connection: 'online', unauthorized: false }, refresh() {} };
       const component = createAgentPage({ api, store, ...(noScope ? {} : { scope }), router: { href: (...parts: string[]) => '#' + parts.map(encodeURIComponent).join('/'), current: { page: 'agent' }, subscribe() {} }, consoleDrawer: {} });
       document.body.replaceChildren(component.el); component.el.classList.add('is-active');
@@ -90,6 +90,24 @@ test('创建每天事实简报：预览与真实 body 一致，只提交审批�
   await expect(drawer(page).getByRole('link', { name: '查看待处理审批' })).toHaveAttribute('href', '#chat?approval=new-approval');
   assert.deepEqual(f.writes, [{ path: '/scheduled-work', body: expected }]);
   await expect(drawer(page).getByRole('button', { name: '提交创建审批' })).toBeDisabled();
+}));
+
+test('插件停用关闭定时工作草稿，重新启用后恢复创建入口', async () => fixture(async f => {
+  const page: Page = f.page;
+  await open(page);
+  const toggle = (status: string) => page.evaluate(value => {
+    const state = (window as any).scheduledTest;
+    state.store.view.snapshot.plugins[0].status = value;
+    state.emit();
+  }, status);
+  await toggle('disabled');
+  await expect(drawer(page)).toBeHidden();
+  await expect(panel(page).getByRole('button', {name:'创建定时工作'})).toBeDisabled();
+  await expect(panel(page).getByRole('button', {name:'从模板创建'})).toBeDisabled();
+  await toggle('active');
+  await open(page);
+  await expect(drawer(page)).toBeVisible();
+  assert.equal(f.writes.length, 0);
 }));
 
 test('现有创建审批生效、单次已触发与到期派发审批 pending/completed/unknown 分开显示', { timeout: 30000 }, async () => fixture(async f => {

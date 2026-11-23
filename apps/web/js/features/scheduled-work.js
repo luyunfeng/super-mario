@@ -69,20 +69,23 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
   const currentScope = () => scope?.get?.() ?? '';
   const currentToken = () => api.token?.() ?? '';
   const snapshot = () => store.view.snapshot ?? {};
-  let identity = JSON.stringify([currentScope(), currentToken()]);
+  const enabled = () => snapshot().plugins?.some(plugin => plugin.id === 'daily-brief' && plugin.status === 'active') ?? false;
+  const identityKey = () => JSON.stringify([currentScope(), currentToken(), enabled()]);
+  let identity = identityKey();
   let offset = 0;
   let generation = 0, items = [], result = null, error = '', loaded = false;
   let inFlight = null, queued = false, timer, editor = null, previousSnapshot;
   const notice = h('div', { role: 'status' });
   const list = h('div', { class: 'stack' });
   const add = Button({ label: '创建定时工作', size: 'sm', onClick: () => openCreate() });
+  const templates = Button({ label: '从模板创建', size: 'sm', onClick: openTemplates });
   const repeat = Select({ 'aria-label': '筛选计划频率', options: [['', '全部频率'], ['repeating', '重复计划'], ['once', '一次性安排']] });
   repeat.addEventListener('change', () => turnPage(0));
-  const el = Card({ title: '定时工作', id: 'agent-scheduled-work', sub: '按时间生成事实简报，或提交派发审批。', tools: [add, Button({ label: '从模板创建', size: 'sm', onClick: openTemplates })], body: [repeat, notice, list] });
+  const el = Card({ title: '定时工作', id: 'agent-scheduled-work', sub: '按时间生成事实简报，或提交派发审批。', tools: [add, templates], body: [repeat, notice, list] });
 
   // 身份或顶栏范围改变即失效，旧读写响应不能回填新范围。
   function syncIdentity() {
-    const next = JSON.stringify([currentScope(), currentToken()]);
+    const next = identityKey();
     if (next === identity) return false;
     identity = next; generation += 1; offset = 0; items = []; result = null; loaded = false; error = '';
     editor?.close(); paint();
@@ -130,8 +133,9 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     void load();
   }
   function paint() {
+    add.disabled = templates.disabled = !enabled();
     onUpcoming?.(loaded && !error ? result?.upcoming : undefined, error);
-    replace(notice, error ? Banner({ tone: 'warn', children: `${error} 列表状态未确认${loaded ? '，以下保留上次数据' : ''}。` }) : !loaded ? '正在读取定时工作…' : null,
+    replace(notice, !enabled() && line('每日简报插件已停用，无法创建定时工作。'), error ? Banner({ tone: 'warn', children: `${error} 列表状态未确认${loaded ? '，以下保留上次数据' : ''}。` }) : !loaded ? '正在读取定时工作…' : null,
       result && (offset || result.truncated) ? line(items.length ? `显示第 ${offset + 1} 至 ${offset + items.length} 项，共 ${result.total} 项。` : `本页没有记录，共 ${result.total} 项。`) : null,
       offset > 0 && Button({ label: '上一页定时工作', size: 'sm', onClick: () => turnPage(Math.max(0, offset - (result?.limit ?? 100))) }),
       Number.isSafeInteger(result?.nextOffset) && result.nextOffset > offset && Button({ label: '下一页定时工作', size: 'sm', onClick: () => turnPage(result.nextOffset) }),
@@ -288,6 +292,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       } }) });
   }
   function openTemplates() {
+    if (!enabled()) return;
     if (syncIdentity()) requestRead();
     const content = h('div', { class: 'stack' });
     const drawer = managedDrawer({ title: '定时工作模板', body: content });
@@ -312,6 +317,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     void loadTemplates();
   }
   function openCreate(template) {
+    if (!enabled()) return;
     if (syncIdentity()) requestRead();
     const key = crypto.randomUUID();
     const title = Input({ name: 'title', required: true });
