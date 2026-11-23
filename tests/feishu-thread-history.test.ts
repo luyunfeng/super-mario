@@ -8,7 +8,7 @@ import type { FeishuBotFactory } from '../apps/server/src/feishu-bots.ts';
 import type { FeishuMessageSource, FeishuOptions } from '../plugins/feishu.ts';
 import { botConversationId } from '../packages/core/src/bot-agent-routing.ts';
 import type { Message } from '../packages/protocol/src/index.ts';
-import { privateThreadPage, readPrivateThreadHistory, searchPrivateThreads } from '../apps/server/src/feishu-thread-history.ts';
+import { privateThreadPage, readPrivateThreadHistory, searchPrivateThreadList, searchPrivateThreads } from '../apps/server/src/feishu-thread-history.ts';
 
 test('独立对话记录按可见发言分页，排除其他配对、群组、协作回流和未知游标', () => {
   const row = { threadId: 'a'.repeat(64), botId: 'a', appId: 'app', revision: 3, chatId: 'chat', senderId: 'owner', createdAt: '2026-01-01' };
@@ -27,6 +27,12 @@ test('独立对话记录按可见发言分页，排除其他配对、群组、�
   for (const id of ['0', '1', '2', '3']) {
     assert.throws(() => privateThreadPage(store, row, null, null, id), { status: 409 });
   }
+  const tagged = {...row, tags:['FY[26]']};
+  const byTag = searchPrivateThreadList(store, [tagged, {...tagged, threadId:'b'.repeat(64)}], 'fy[26]');
+  assert.deepEqual(byTag.threads.map(item => item.threadId), [row.threadId]);
+  assert.deepEqual(Object.keys(byTag.messageIds), []);
+  assert.deepEqual(Object.keys(byTag.snippets), []);
+  assert.deepEqual(searchPrivateThreadList(store, [{...tagged, archived:true}], 'fy[26]').threads, []);
   const recent = privateThreadPage(store, row, null);
   assert.equal(recent.messages.length, 40);
   assert.equal(recent.nextBefore, '8');
