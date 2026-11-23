@@ -199,7 +199,6 @@ export function todayDashboard(brief: TodayBrief | string, navigation: string, c
   if (typeof brief === 'string') section('今日简报', brief);
   else {
     const today = brief.date;
-    section('今日简报', today + ' · ' + brief.timezone);
     const clock = new Intl.DateTimeFormat('zh-CN', { timeZone: brief.timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
     const day = new Intl.DateTimeFormat('en-CA', { timeZone: brief.timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
     function time(iso?: string) {
@@ -207,6 +206,8 @@ export function todayDashboard(brief: TodayBrief | string, navigation: string, c
       const date = new Date(iso), local = day.format(date);
       return (local === today ? '' : local + ' ') + clock.format(date);
     }
+    const generated = time(brief.generatedAt);
+    section('今日简报', [today, brief.timezone, generated && '生成于 ' + generated].filter(Boolean).join(' · '));
     const activity: Record<string, string> = { todo: '待办完成', completed: '执行结束', running: '正在执行', queued: '排队中' };
     function facts(title: string, source: TodaySection) {
       const count = (source.truncated ? '至少 ' : '') + source.total + ' 项';
