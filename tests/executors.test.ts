@@ -328,3 +328,48 @@ test('pi advertises native task results and accepts only a new task', async t =>
   assert.equal(config.executorId, 'pi');
   assert.deepEqual(config.launcher, launcher);
 });
+
+test('executor.input.once verifies exact input across concurrent calls and reopens receipts without writing again', async t => {
+  const { call, options, host, start } = await fixture(t);
+  const b = await start();
+  let release!: () => void;
+  host.inputGate = new Promise(resolve => { release = resolve; });
+  const params = { sessionId: b.sessionId, clientMessageId: 'feishu:decision-once', text: '  一条合成输入\n' };
+  const first = call('executor.input.once', params);
+  const second = call('executor.input.once', params);
+  await t.waitFor(() => assert.equal(host.writes.length, 1));
+  const restored = createExecutionServices(options);
+  const replay = (input: JsonObject) => restored.handlers['executor.input.once']!(input, () => {});
+  try {
+    assert.deepEqual(await replay(params), { state: 'unknown', clientMessageId: params.clientMessageId });
+    await assert.rejects(call('executor.input.once', { ...params, text: params.text.trim() }), /different input/);
+  } finally { release(); }
+  const receipt = { requested: true, clientMessageId: params.clientMessageId };
+  assert.deepEqual(await first, receipt);
+  assert.deepEqual(await second, receipt);
+  assert.deepEqual(await replay(params), receipt);
+  await assert.rejects(replay({ ...params, text: '不同的正文' }), /different input/);
+  await assert.rejects(replay({ ...params, clientMessageId: 'new' }), /Historical session ownership/);
+  assert.deepEqual(host.writes, [{ paneId: b.paneId, text: params.text }, { paneId: b.paneId, keys: ['Enter'] }]);
+  await restored.close();
+});
+
+test('a lost Enter receipt stays unknown after restart and reused IDs are scoped to one session', async t => {
+  const { call, options, host, start } = await fixture(t);
+  const b = await start();
+  const params = { sessionId: b.sessionId, clientMessageId: 'source-1', text: 'synthetic follow-up' };
+  host.keysError = new Error('fixture Enter acknowledgement lost');
+  const unknown = { state: 'unknown', clientMessageId: params.clientMessageId };
+  assert.deepEqual(await call('executor.input.once', params), unknown);
+  host.keysError = undefined;
+  assert.deepEqual(await call('executor.input.once', params), unknown);
+  const restored = createExecutionServices(options);
+  assert.deepEqual(await restored.handlers['executor.input.once']!(params, () => {}), unknown);
+  assert.equal(host.writes.length, 2);
+  await restored.close();
+  const other = await start();
+  assert.deepEqual(await call('executor.input.once', { ...params, sessionId: other.sessionId, text: 'separate scope' }),
+    { requested: true, clientMessageId: params.clientMessageId });
+  assert.equal(host.writes.length, 4);
+  await assert.rejects(call('executor.input.once', { ...params, clientMessageId: 'has space' }), /Invalid clientMessageId/);
+});

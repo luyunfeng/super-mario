@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { submitInputOnce } from './executor-input-receipts.ts';
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { delimiter, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -133,6 +134,11 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
       return { requested: true };
     } finally { writing.delete(paneId); }
   }
+  async function submitText(paneId: string, text: string) {
+    await host.input(paneId, text);
+    await host.keys(paneId, ['Enter']);
+  }
+  const pendingInput = new Map<string, { text: string; job: Promise<Json> }>();
   async function unwatch(watchId: string) {
     const watch = watches.get(watchId);
     if (!watch) return;
@@ -238,11 +244,25 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
       assertCurrentPane(b.paneId);
       if (isTaskSession(b)) throw new Error('Task sessions do not accept interactive input');
       const text = inputText(params);
-      return write(b.paneId, async () => {
-        // A CLI prompt is submitted as text followed by Enter, under one writer lock.
-        await host.input(b.paneId, text);
-        await host.keys(b.paneId, ['Enter']);
-      });
+      return write(b.paneId, () => submitText(b.paneId, text));
+    },
+    'executor.input.once': async params => {
+      if (Object.keys(params).some(key => !['sessionId', 'clientMessageId', 'text'].includes(key))) throw new Error('Invalid input parameters');
+      const b = binding(params), text = inputText(params), id = string(params, 'clientMessageId');
+      if (Array.from(id).length > 200 || /[\s\p{Cc}]/u.test(id)) throw new Error('Invalid clientMessageId');
+      const key = JSON.stringify([b.sessionId, id]);
+      const pending = pendingInput.get(key);
+      if (pending) {
+        if (pending.text !== text) throw new Error('clientMessageId was already used with different input');
+        return pending.job;
+      }
+      const job = submitInputOnce(options.dataDir, machineId, b.sessionId, id, text, action => {
+        assertCurrentPane(b.paneId);
+        if (isTaskSession(b)) throw new Error('Task sessions do not accept interactive input');
+        return write(b.paneId, action);
+      }, () => submitText(b.paneId, text)).finally(() => pendingInput.delete(key));
+      pendingInput.set(key, { text, job });
+      return job;
     },
     'executor.interrupt': async params => { const b = binding(params); return write(b.paneId, () => host.keys(b.paneId, ['C-c'])); },
     'terminal.list': async () => (await host.list()).map(p => ({ ...p })),

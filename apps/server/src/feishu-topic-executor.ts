@@ -37,7 +37,7 @@ export function createTopicExecutor(app: Pick<FeishuBotsApp, 'store' | 'approval
     const machine = store.get<MachineInfo>('machines', worker.machineId);
     const ready = app.listExecutors?.().some(e => e.id === worker.executorId && e.machineId === worker.machineId &&
       e.mode === 'real' && !e.taskOnly && e.available);
-    if (!machine?.online || !machine.capabilities?.includes('executor.input') || !ready)
+    if (!machine?.online || !machine.capabilities?.some(method => method === 'executor.input' || method === 'executor.input.once') || !ready)
       return { reason: '负责会话所在电脑或执行者当前不可用。' };
     if (store.list<Run>('runs').some(other => other.id !== worker.id && other.machineId === worker.machineId &&
       other.executorId === worker.executorId && other.createdAt >= worker.createdAt &&

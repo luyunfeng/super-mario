@@ -46,7 +46,24 @@ test('飞书话题决定经 Web 批准后仅送当前负责会话，重放、换
       'executor.result': async () => ({text:'',state:'running',source:'fixture'}),
     },
   });
-  t.after(async () => { try { await agent.close(); await server.close(); } finally { await rm(dataDir,{recursive:true,force:true}); } });
+  const correlatedId = 'fixture-correlated';
+  const correlated: JsonObject[] = [], fallback: JsonObject[] = [];
+  let answer: 'ack' | 'missing' | 'different' | 'unknown' = 'ack';
+  const newAgent = startAgentNode({ machineId: correlatedId, name: '带输入标识的执行机', dataDir: join(dataDir, 'new-node'), url: server.url, token,
+    executors: [{ id: 'codex', name: '合成协议替身', machineId: correlatedId, kind: 'cli', mode: 'real', available: true, description: '', defaultCwd: dataDir }],
+    handlers: {
+      'executor.start': async () => ({sessionId:'new-session'}),
+      'executor.input': async params => { fallback.push(params); return {requested:true}; },
+      'executor.input.once': async (params): Promise<JsonObject> => {
+        correlated.push(params);
+        if (answer === 'missing') return {requested:true};
+        if (answer === 'different') return {requested:true, clientMessageId:'unrelated-input'};
+        if (answer === 'unknown') return {requested:true, clientMessageId:params.clientMessageId, state:'unknown'};
+        return {requested:true, clientMessageId:params.clientMessageId};
+      },
+    },
+  });
+  t.after(async () => { try { await newAgent.close(); await agent.close(); await server.close(); } finally { await rm(dataDir,{recursive:true,force:true}); } });
   const api = async <T,>(path:string, method = 'GET', body?:object) => {
     const response = await fetch(server.url + '/api/v1/' + path,{method,headers:{authorization:'Bearer ' + token,'content-type':'application/json'},
       ...(body && {body:JSON.stringify(body)})});
@@ -63,8 +80,8 @@ test('飞书话题决定经 Web 批准后仅送当前负责会话，重放、换
   const todo = (await api<Todo[]>('todos')).find(row => row.title === '合成验收任务')!;
   assert.ok(todo); assert.equal(modelCalls,1);
   await t.waitFor(() => assert.ok(server.machines.list().some(row => row.id === machineId && row.online)));
-  async function createRun() {
-    const created = await api<Run>('runs','POST',{executorId:machineId + '/codex',prompt:'本地执行机协议占位任务',
+  async function createRun(target = machineId) {
+    const created = await api<Run>('runs','POST',{executorId:target + '/codex',prompt:'本地执行机协议占位任务',
       todoId:todo.id, executionMode:'interactive',cwd:dataDir});
     return t.waitFor(async () => {
       const run = (await api<{runs:Run[]}>('state')).runs.find(r => r.id === created.id);
@@ -74,7 +91,7 @@ test('飞书话题决定经 Web 批准后仅送当前负责会话，重放、换
   const one = await createRun(), two = await createRun();
   const assign = async (run:Run) => {
     const saved = await api<Todo>('todos/' + todo.id,'PATCH',{responsibleRunId:run.id});
-    assert.deepEqual(saved.responsibleSession,{runId:run.id,machineId,sessionId:run.sessionId});
+    assert.deepEqual(saved.responsibleSession,{runId:run.id,machineId:run.machineId,sessionId:run.sessionId});
   };
   await assign(one);
   const decisions = async () => (await api<{decisions:Array<{text:string;active:boolean}>}>('todos/' + todo.id + '/decisions')).decisions;
@@ -115,6 +132,35 @@ test('飞书话题决定经 Web 批准后仅送当前负责会话，重放、换
     && !/已完成/.test(row.text))), {timeout:5000});
   assert.deepEqual(inputs,[{sessionId:one.sessionId,text:first}]);
   await follow('om_decision',first);
+  await t.waitFor(() => assert.ok(server.machines.list().some(m => m.id === correlatedId && m.capabilities.includes('executor.input.once'))));
+  const modern = await createRun(correlatedId);
+  await assign(modern);
+  for (const scenario of ['ack', 'missing', 'different', 'unknown'] as const) {
+    answer = scenario;
+    const messageId = 'om_once_' + scenario, text = '逐轮核对合成回执 ' + scenario;
+    const proposal = await propose(messageId, text);
+    const bound = server.app.store.get<{topic:{inputId:string}}>('feishu.agent-input-targets', proposal.id);
+    assert.ok(bound?.topic.inputId);
+    assert.notEqual(bound.topic.inputId, messageId);
+    const before = correlated.length, beforeSend = sent.length;
+    const result = await approve(proposal);
+    const confirmed = scenario === 'ack';
+    assert.equal(result.status, confirmed ? 'completed' : 'unknown');
+    assert.deepEqual(correlated.slice(before), [{sessionId:modern.sessionId, text, clientMessageId:bound.topic.inputId}]);
+    await t.waitFor(() => {
+      const notices = sent.slice(beforeSend).filter(row => row.chat === topic.chatId && row.context?.replyTo === messageId);
+      assert.equal(notices.length,1);
+      assert.equal(notices[0].context?.threadId,topic.threadId);
+      assert.match(notices[0].text, confirmed ? /已收到/ : /未知/);
+    }, {timeout:5000});
+    const stored = server.app.store.get<{status:string}>('feishu.topic-input-receipts', proposal.id);
+    assert.equal(stored?.status, confirmed ? 'sent' : 'unknown');
+    await follow(messageId, text);
+    assert.equal(correlated.length,before + 1);
+    assert.equal(fallback.length,0);
+  }
+  assert.equal(new Set(correlated.map(p => p.clientMessageId)).size,4);
+  await assign(one);
   const stale = await propose('om_change','负责人已变化的合成决定');
   await assign(two);
   assert.notEqual((await approve(stale)).status,'completed');
@@ -122,7 +168,7 @@ test('飞书话题决定经 Web 批准后仅送当前负责会话，重放、换
   assert.equal(removed.params.id,two.id);
   await emit('om_off','/topics off',{threadId:undefined});
   assert.notEqual((await approve(removed)).status,'completed');
-  assert.equal((await approvals()).length,3);
+  assert.equal((await approvals()).length,7);
   assert.equal((await decisions()).filter(row => row.text === first).length,1);
   assert.ok(!(await decisions()).some(row => row.text.includes('重放试图修改')));
   assert.equal(modelCalls,1);

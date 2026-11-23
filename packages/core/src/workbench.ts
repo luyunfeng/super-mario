@@ -1522,7 +1522,7 @@ export async function createWorkbench(config: AppConfig) {
     if (closing) throw new InputError('服务正在关闭', 503);
     const run = remoteRun(id);
     if (run.executionMode === 'task') throw new InputError('任务模式不接受交互输入；请新建任务或选择交互模式', 409);
-    return effects.perform({ key, kind: 'executor.input', target: run.id, summary: '发送会话输入', content: { text }, run: () => {
+    return effects.perform({ key, kind: 'executor.input', target: run.id, summary: '发送会话输入', content: { text }, run: async () => {
       if (pinned) {
         // effects.perform schedules I/O after claiming the key. Check live state at that boundary.
         const current = store.get<Run>('runs', id);
@@ -1540,7 +1540,16 @@ export async function createWorkbench(config: AppConfig) {
           || !machines?.list().some(machine => machine.id === pinned.machineId && machine.online))
           throw Object.assign(new InputError('执行会话或机器人授权已变化，请重新选择会话', 409), { delivery: 'no' });
       }
-      return machines!.call(pinned?.machineId ?? run.machineId, 'executor.input', { sessionId: pinned?.sessionId ?? run.sessionId, text: requiredText(text, '输入') });
+      const params = { sessionId: run.sessionId, text: requiredText(text, '输入') };
+      const clientMessageId = pinned?.topic?.inputId;
+      if (clientMessageId && machines!.list().some(item => item.id === run.machineId && item.capabilities.includes('executor.input.once'))) {
+        const ack = await machines!.call(run.machineId, 'executor.input.once', { ...params, clientMessageId });
+        if (!ack || typeof ack !== 'object' || Array.isArray(ack) || ack.clientMessageId !== clientMessageId ||
+          ack.requested !== true || ack.accepted === false || ack.state !== undefined)
+          throw new Error('执行机未确认这条话题输入的编号，送达结果未知。');
+        return ack;
+      }
+      return machines!.call(run.machineId, 'executor.input', params);
     } });
   }
   async function cancel(id: string) {
