@@ -2936,6 +2936,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           if (active(bot.id, epoch, bot.revision) && (bot.scope.kind === 'global' || chatId===owner(bot)?.chatId)) {
             if (bot.scope.kind==='global') groupReads.recall(bot, chatId, messageId);
             groupTasks.recall(bot.id, bot.appId, chatId, messageId);
+            const sourceId=app.store.get<string>('feishu.stop-references',stopReference(bot,chatId,messageId));
+            const input=sourceId && app.store.get<Message>('messages',sourceId);
+            if (input && (input.files?.length || input.images?.length))
+              app.events.publish('message-attachment.revoked',{messageId:input.id});
           }
         },
         onMessage: (text, source) => track(id, receive(bot, epoch, text, source)),

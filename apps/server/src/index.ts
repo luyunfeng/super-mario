@@ -875,9 +875,19 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           const uploaded=await app.uploadChatFile({conversationId,projectId,todoId},name,req.headers['content-type'] || 'application/octet-stream',req);
           return json(res,201,uploaded);
         }
-        const fileRoute=path.match(/^\/api\/v1\/messages\/([^/]+)\/files\/(0|[1-9]\d*)$/);
+        const fileRoute=path.match(/^\/api\/v1\/messages\/([^/]+)\/files\/(0|[1-9]\d*)(\/preview)?$/);
         if (fileRoute && method === 'GET') {
           const messageId=decodeURIComponent(fileRoute[1]!), conversationId=requiredText(url.searchParams.get('conversationId'),'原会话');
+          if (fileRoute[3]) {
+            const controller=new AbortController();
+            const disconnected=()=>controller.abort();
+            res.once('close',disconnected);
+            try {
+              const preview=await app.previewMessageFile(messageId,conversationId,Number(fileRoute[2]),controller.signal);
+              if (!res.destroyed) return json(res,200,preview);
+            } finally { res.off('close',disconnected); }
+            return;
+          }
           const {path:diskPath,ref}=app.messageFile(messageId,conversationId,Number(fileRoute[2]));
           res.writeHead(200,{'content-type':'application/octet-stream','content-length':ref.bytes,'cache-control':'private, no-store',
             'content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(ref.name).replace(/['()*]/g,c=>'%'+c.charCodeAt(0).toString(16)),

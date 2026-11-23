@@ -1,6 +1,7 @@
 import { h } from '../lib/dom.js';
 import { attachmentDraftStore } from '../lib/attachment-drafts.js';
 import { Button } from '../ui/kit.js';
+import { openDrawer } from '../ui/overlay.js';
 
 const drafts = attachmentDraftStore('sm-message-file-drafts','files');
 const sizeLimit = 200 * 1024 * 1024;
@@ -94,23 +95,179 @@ export function createMessageFiles(api, store, input) {
   }};
 }
 
+const documentKinds = new Map(Object.entries({
+  doc:'Word 文档', docx:'Word 文档', xls:'Excel 表格', xlsx:'Excel 表格',
+  ppt:'PowerPoint 演示文稿', pptx:'PowerPoint 演示文稿', pages:'Pages 文稿',
+  numbers:'Numbers 表格', key:'Keynote 演示文稿', rtf:'RTF 文档', pdf:'PDF 文档',
+}));
+
+function extension(name) {
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+}
+
+function filePath(message, index, preview = false) {
+  return '/messages/' + encodeURIComponent(message.id) + '/files/' + index +
+    (preview ? '/preview' : '') + '?conversationId=' + encodeURIComponent(message.conversationId);
+}
+
+async function firstPage(thumbnail, label) {
+  if (!['image/png','image/jpeg'].includes(thumbnail?.mime) || !thumbnail.data) return;
+  const img = h('img', {alt:label, src:'data:' + thumbnail.mime + ';base64,' + thumbnail.data});
+  try {
+    await img.decode();
+    return img;
+  } catch { return; }
+}
+
+// Some thumbnail providers render white text on a black page. Average a small
+// sample composited on white before deciding whether to use the type glyph.
+function darkThumbnail(image) {
+  const canvas = h('canvas', {width:8,height:8});
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return false;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0,0,8,8);
+  ctx.drawImage(image,0,0,8,8);
+  const {data} = ctx.getImageData(0,0,8,8);
+  let light = 0;
+  for (let i=0;i<data.length;i+=4) light += .299*data[i] + .587*data[i+1] + .114*data[i+2];
+  return light / (64*255) < .35;
+}
+
 class MessageFiles extends HTMLElement {
+  thumbs = new Map();
   connectedCallback() {
     this.unsubscribe ??= this.source.store.subscribe(()=>this.refresh());
     this.refresh();
   }
   disconnectedCallback() {queueMicrotask(()=>{if(!this.isConnected){this.unsubscribe?.();this.unsubscribe=undefined;this.stop();}});}
-  stop() {this.job?.abort();this.job=undefined;this.replaceChildren();this.visible=false;}
-  valid() {const {api,owner,store}=this.source;return this.isConnected && active(store) && store.view.snapshotOwner===owner && api.draftOwner()===owner;}
+  stop() {
+    this.job?.abort(); this.job=undefined;
+    this.drawer?.close(); this.drawer=undefined;
+    this.observer?.disconnect(); this.observer=undefined;
+    for (const thumb of this.thumbs.values()) thumb.job?.abort();
+    this.thumbs.clear();
+    this.replaceChildren(); this.visible=false;
+  }
+  valid() {
+    const {api,owner,store,message}=this.source;
+    const currentAudience=message.directWebInput || store.view.connection==='online';
+    return currentAudience && this.isConnected && !this.revoked && active(store) && store.view.snapshotOwner===owner && api.draftOwner()===owner;
+  }
   refresh() {
+    const {store,message}=this.source;
+    if (store.view.revokedAttachment?.messageId === message.id) this.revoked=true;
+    const change=store.view.feishuBotChange;
+    if (change && this.lastBotChange!==change && !message.directWebInput) {
+      this.stop();
+      // After a binding change, require an explicit fresh preview request.
+      this.suppressAuto=true;
+    }
+    this.lastBotChange=change;
     this.hidden=!this.valid();
     if(this.hidden) {this.stop();return;}
     if(this.visible) return;
     this.visible=true;
-    const {message}=this.source;
-    const rows=message.files.map((f,i)=>Button({label:f.name+' · '+size(f.bytes),ariaLabel:'下载文件 '+f.name,kind:'ghost',size:'sm',onClick:()=>this.download(i)}));
+    this.observer = new IntersectionObserver(entries=>{
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const thumb = this.thumbs.get(entry.target);
+        if (thumb && !thumb.done && !thumb.job && this.shown(entry.target)) void this.loadThumb(entry.target,thumb);
+      }
+    });
+    let documentCount = 0;
+    const rows = message.files.map((file,index)=>{
+      const ext = extension(file.name);
+      const kind = documentKinds.get(ext);
+      const badge = h('span',{class:'message-file-glyph','aria-hidden':'true'},ext.slice(0,7).toUpperCase() || '文件');
+      const preview = h('button',{type:'button',class:'message-file-preview','aria-label':'预览文件 '+file.name,onClick:()=>this.preview(index)},
+        badge,h('span',{class:'message-file-caption'},h('strong',null,file.name),
+          h('small',{class:'muted'},[kind || ext.toUpperCase() || '文件',size(file.bytes)].join(' · '))));
+      if (!this.suppressAuto && kind && ++documentCount <= 6) this.thumbs.set(preview,{index,badge});
+      return h('div',{class:'message-file-card'},preview,Button({label:'下载',ariaLabel:'下载文件 '+file.name,kind:'ghost',size:'sm',onClick:()=>this.download(index)}));
+    });
     this.note=h('span',{class:'small',role:'status'});
-    this.append(...(rows.length>4 ? [...rows.slice(0,3),h('details',null,h('summary',null,'其余 '+(rows.length-3)+' 个文件'),rows.slice(3))] : rows),this.note);
+    const more = rows.length>4 && h('details',null,h('summary',null,'其余 '+(rows.length-3)+' 个文件'),rows.slice(3));
+    this.append(...(more ? [...rows.slice(0,3),more] : rows),this.note);
+    const watch = () => {
+      for (const [card,thumb] of this.thumbs) {
+        if (thumb.done) continue;
+        if (this.shown(card)) this.observer?.observe(card);
+        else {
+          this.observer?.unobserve(card);
+          thumb.job?.abort(); thumb.job=undefined;
+        }
+      }
+    };
+    if (more) more.addEventListener('toggle',watch);
+    watch();
+  }
+  shown(card) {
+    const fold = card.closest('details');
+    return !fold || fold.open;
+  }
+  clearThumbnails() {
+    this.suppressAuto=true;
+    this.observer?.disconnect();
+    for (const [card,thumb] of this.thumbs) {
+      thumb.job?.abort();
+      const image=card.querySelector('img');
+      if (image) image.replaceWith(thumb.badge);
+    }
+    this.thumbs.clear();
+  }
+  async loadThumb(card,thumb) {
+    const {api,message}=this.source;
+    const job = thumb.job = new AbortController();
+    const valid = () => this.valid() && !job.signal.aborted && this.shown(card) && this.thumbs.get(card)===thumb;
+    try {
+      if (!valid()) return;
+      const result = await api(filePath(message,thumb.index,true),{signal:job.signal});
+      if (!valid()) return;
+      const image = await firstPage(result.thumbnail,'首页缩略图 '+message.files[thumb.index].name);
+      if (valid() && image && !darkThumbnail(image)) thumb.badge.replaceWith(image);
+    } catch(e) {
+      if (valid() && [403,404].includes(e.status)) this.clearThumbnails();
+    }
+    finally {
+      if (thumb.job===job) {
+        thumb.job=undefined;
+        if (valid()) { thumb.done=true; this.observer?.unobserve(card); }
+      }
+    }
+  }
+  async preview(index) {
+    if (!this.valid()) return;
+    this.drawer?.close();
+    const {api,message}=this.source, file=message.files[index];
+    const job = new AbortController();
+    const status=h('p',{role:'status',class:'small muted'},'正在读取文件预览…');
+    const content=h('div',{class:'message-file-detail'},status);
+    const drawer=openDrawer({title:'文件预览',subtitle:file.name+' · '+size(file.bytes),body:content,wide:true,
+      footer:Button({label:'下载原文件',onClick:()=>this.download(index)}),
+      onClose:()=>{job.abort();content.replaceChildren();if (this.drawer===drawer) this.drawer=undefined;}});
+    this.drawer=drawer;
+    const valid = () => this.valid() && drawer.el.open && this.drawer===drawer && !job.signal.aborted;
+    try {
+      // Opening the drawer rechecks the source even if this card already has a thumbnail.
+      const result=await api(filePath(message,index,true),{signal:job.signal});
+      if(!valid()) return;
+      const image=await firstPage(result.thumbnail,'文件首页 '+file.name);
+      if(!valid()) return;
+      const text=typeof result.text==='string' ? result.text : '';
+      content.replaceChildren();
+      if (image) content.append(image);
+      if (text) content.append(h('pre',null,text));
+      if (result.truncated) content.append(h('p',{class:'small muted'},'仅显示部分内容，下载原文件可查看全文。'));
+      if (result.note) content.append(h('p',{class:'small muted'},result.note));
+      if (!image && !text && !result.note) content.append(h('p',{class:'muted'},'暂无可显示的预览，请下载原文件。'));
+    } catch(e) {
+      if (valid()) {
+        if ([403,404].includes(e.status)) this.clearThumbnails();
+        content.replaceChildren(h('p',{role:'alert',class:'text-danger'},'预览失败：'+e.message));
+      }
+    }
   }
   async download(index) {
     if(!this.valid()) return;
@@ -118,7 +275,7 @@ class MessageFiles extends HTMLElement {
     this.job?.abort();const job=this.job=new AbortController();
     this.note.textContent='正在下载…';
     try {
-      const blob=await api.blob('/messages/'+encodeURIComponent(message.id)+'/files/'+index+'?conversationId='+encodeURIComponent(message.conversationId),job.signal);
+      const blob=await api.blob(filePath(message,index),job.signal);
       if(job!==this.job || !this.valid()) return;
       const url=URL.createObjectURL(blob);
       const link=h('a',{href:url,download:message.files[index].name});link.click();
@@ -131,6 +288,7 @@ export function messageFiles(api,store,message) {
   if(!message.files?.length) return null;
   const node=document.createElement('sm-message-files');
   node.className='message-file-list';
+  node.lastBotChange=store.view.feishuBotChange;
   node.source={api,store,message,owner:api.draftOwner()};
   return node;
 }

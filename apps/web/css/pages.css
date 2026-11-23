@@ -369,6 +369,19 @@ body:has(.splash-background) #root { position: relative; }
 .chat-image-stage { display: grid; place-items: center; min-height: 12rem; padding: .5rem; border-radius: .5rem; background: #302e2a; }
 .chat-image-stage canvas { display: block; max-width: 100%; max-height: 58vh; width: auto; height: auto; touch-action: none; cursor: crosshair; }
 .chat-image-editor [role=alert] { color: var(--danger); }
-.message-file-list:not([hidden]) { display:flex; flex-wrap:wrap; gap:.4rem; align-items:center; }
+.message-file-list:not([hidden]) { display:grid; gap:.4rem; min-width:0; max-width:100%; }
 .message-file-list summary { cursor:pointer; font-size:.85rem; }
 .message-file-list button, .message-file-draft { max-width:100%; overflow-wrap:anywhere; white-space:normal; }
+
+.message-file-card { display:flex; align-items:center; gap:.35rem; width:min(24rem,100%); min-width:0; padding:.25rem; border:1px solid var(--line); border-radius:.5rem; background:var(--surface); color:var(--text); }
+.message-file-preview { flex:1; min-width:0; display:flex; align-items:center; gap:.65rem; padding:.3rem; border:0; border-radius:.35rem; background:none; color:inherit; font:inherit; text-align:start; cursor:pointer; }
+.message-file-preview:hover { background:var(--surface-hover); }
+.message-file-preview img, .message-file-glyph { flex:none; width:2.65rem; height:3rem; border-radius:.25rem; }
+.message-file-preview img { object-fit:contain; background:#fff; border:1px solid var(--line); }
+.message-file-glyph { display:grid; place-items:center; font-size:.66rem; font-weight:700; background:var(--surface-2); color:var(--text-2); }
+.message-file-caption { min-width:0; display:grid; gap:.12rem; }
+.message-file-caption strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.message-file-list details[open] > .message-file-card { margin-top:.4rem; }
+.message-file-detail { display:grid; align-content:start; gap:.75rem; min-width:0; }
+.message-file-detail img { max-width:100%; max-height:65vh; object-fit:contain; border:1px solid var(--line); }
+.message-file-detail pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; font-family:var(--font-mono,monospace); }

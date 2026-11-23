@@ -55,6 +55,7 @@ export const replyReadAloud: Extension = {
 
 export { voiceInput } from './voice-input.ts';
 
+export { readChatFilePreview } from './chat-file-preview.ts';
 export { readChatFileText } from './chat-file-text.ts';
 export const conversationFiles: Extension = {
   id:'conversation-files', name:'对话文件', capabilities:['conversation.files'], activate() {},

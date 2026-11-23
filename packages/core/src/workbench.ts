@@ -87,7 +87,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
-import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationFiles, readChatFileText, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
@@ -1096,6 +1096,16 @@ export async function createWorkbench(config: AppConfig) {
   }
   function chatImagesEnabled() {
     return plugins.list().some(p => p.id === 'conversation-images' && p.status === 'active');
+  }
+  // A page can display several document cards at once. PDF rendering runs
+  // in workers, so limit simultaneous parses across the whole workbench.
+  const previewJobs=new Set<Promise<void>>();
+  function messageFile(id:string,conversationId:string,index:number) {
+    if (!chatFilesEnabled()) throw new InputError('对话文件插件已停用',503);
+    const message=store.get<Message>('messages',id);
+    if (!message || message.conversationId!==conversationId || !canReadChatFiles(message))
+      throw new InputError('当前会话中未找到该文件',404);
+    return readChatFile(store,config.dataDir,message,index);
   }
   function chatFilesEnabled() {
     return plugins.list().some(p => p.id === 'conversation-files' && p.status === 'active');
@@ -2557,12 +2567,26 @@ export async function createWorkbench(config: AppConfig) {
       };
       return uploadChatFile(store,config.dataDir,scope,name,mime,source,validate);
     },
-    messageFile(id:string,conversationId:string,index:number) {
-      if (!chatFilesEnabled()) throw new InputError('对话文件插件已停用',503);
-      const message=store.get<Message>('messages',id);
-      if (!message || message.conversationId!==conversationId || !canReadChatFiles(message))
-        throw new InputError('当前会话中未找到该文件',404);
-      return readChatFile(store,config.dataDir,message,index);
+    messageFile,
+    async previewMessageFile(id:string,conversationId:string,index:number,signal:AbortSignal) {
+      // Authorize before waiting and again before publishing parsed private data.
+      const resolveFile=()=>messageFile(id,conversationId,index);
+      resolveFile();
+      while (previewJobs.size>=2) {
+        signal.throwIfAborted();
+        await Promise.race(previewJobs);
+      }
+      signal.throwIfAborted();
+      const {path,ref}=resolveFile();
+      const parse=readChatFilePreview(path,ref,signal);
+      const settled=parse.then(()=>{},()=>{});
+      previewJobs.add(settled);
+      try {
+        const result=await parse;
+        signal.throwIfAborted();
+        if (resolveFile().ref.sha256!==ref.sha256) throw new InputError('消息附件已变化',409);
+        return result;
+      } finally { previewJobs.delete(settled); }
     },
     messageImage(id:string, conversationId:string, index:number) {
       if (!chatImagesEnabled()) throw new InputError('对话图片插件已停用',503);

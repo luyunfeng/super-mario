@@ -77,6 +77,17 @@ test('私聊普通文件从已核实的原消息分块接收，撤回和重新�
   await recall('om_cancel');resume();
   await t.waitFor(()=>assert.ok(host.app.mailboxes.list().some(e=>e.sourceMessageId==='om_cancel' && e.status==='failed')));
   assert.equal(docs().length,1);
+  await event('om_preview');
+  const previewRow=await t.waitFor(()=>{const found=docs().find(m=>m.id!==row.id);assert.ok(found);return found;});
+  const previewUrl=host.url+'/api/v1/messages/'+previewRow.id+'/files/0/preview?conversationId='+encodeURIComponent(previewRow.conversationId);
+  const preview=await fetch(previewUrl,{headers});
+  assert.equal(preview.status,200);
+  assert.match((await preview.json()).text,/合成文件第一段/);
+  const revoked:unknown[]=[];
+  const off=host.app.events.subscribe(e=>{if(e.type==='message-attachment.revoked') revoked.push(e.data);});
+  try { await recall('om_preview'); } finally { off(); }
+  assert.deepEqual(revoked,[{messageId:previewRow.id}]);
+  assert.equal((await fetch(previewUrl,{headers})).status,404);
   const key=createHash('sha256').update(JSON.stringify([bot.id,'oc_owner',''])).digest('hex');
   const binding=host.app.store.get<Record<string,unknown>>('feishu.chat-target',key)!;
   host.app.store.put('feishu.chat-target',key,{...binding,conversationThreadId:undefined,agentTarget:{sessionId:'fixture'}});
