@@ -99,6 +99,9 @@ export function openConversationExport({ api, store, source, subtitle, isCurrent
     try {
       const { markdown, filename, count, hasContent } = await api('/conversation-export', {
         method: 'POST', body: { ...source, includeWork: includeWork.checked }, signal,
+        onProgress: source.native ? ({ bytes, total, messages }) => {
+          if (valid()) status.textContent = `已读取 ${messages} 条消息 · ${bytes.toLocaleString()} / ${total.toLocaleString()} 字节`;
+        } : undefined,
       });
       if (!valid()) return;
       if (!count && !hasContent) { status.textContent = '暂无可导出的消息'; return; }

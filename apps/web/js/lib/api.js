@@ -79,6 +79,25 @@ function consumeSharedToken() {
   return shared.trim();
 }
 
+async function readProgress(response, onProgress) {
+  // Keep fragments of the final Markdown record without repeatedly copying its entire prefix.
+  const fragments = [];
+  for await (const chunk of response.body.pipeThrough(new TextDecoderStream())) {
+    const lines = chunk.split('\n');
+    for (let index = 0; index < lines.length - 1; index++) {
+      fragments.push(lines[index]);
+      const entry = JSON.parse(fragments.join(''));
+      fragments.length = 0;
+      if (entry.error) throw new Error(entry.error);
+      if ('result' in entry) return entry.result;
+      if (!entry.progress) throw new Error('导出进度格式无效');
+      onProgress(entry.progress);
+    }
+    fragments.push(lines.at(-1));
+  }
+  throw new Error('导出连接提前结束，请重试');
+}
+
 export function createApi() {
   let credential = readToken();
   const current = () => {
@@ -90,7 +109,7 @@ export function createApi() {
   if (shared !== null) credential = remember(shared, current());
   let onUnauthorized = () => {};
 
-  async function api(path, { method = 'GET', body, headers, signal, keepalive = false } = {}) {
+  async function api(path, { method = 'GET', body, headers, signal, onProgress, keepalive = false } = {}) {
     const { value: token, owner } = current();
     const init = {
       method,
@@ -99,6 +118,7 @@ export function createApi() {
       headers: {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...(onProgress ? { Accept: 'application/x-ndjson' } : {}),
         ...headers,
       },
     };
@@ -106,6 +126,8 @@ export function createApi() {
     let response;
     try { response = await fetch(`/api/v1${path}`, init); }
     catch { throw new ApiError('无法连接到服务，请检查网络', 0); }
+    if (response.ok && onProgress && response.headers.get('content-type')?.split(';')[0] === 'application/x-ndjson')
+      return readProgress(response, onProgress);
     const data = response.status === 204 ? null : await response.json().catch(() => null);
     if (!response.ok) {
       if (response.status === 401 && current().owner === owner) onUnauthorized();

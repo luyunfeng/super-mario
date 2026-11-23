@@ -1,7 +1,12 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import type { MachineClient } from '../../plugin-sdk/src/index.ts';
 import type { NativeExportSource, NativeFavoriteMessage } from '../../protocol/src/index.ts';
 import { readNativeRecords } from './native-transcript-reader.ts';
+
+// Progress belongs to the requesting export, including overlapping reads of the same session.
+type ExportProgress = (bytes: number, total: number, messages: number) => void;
+export const nativeExportProgress = new AsyncLocalStorage<ExportProgress>();
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -20,6 +25,7 @@ async function readConversation(
   machines: MachineClient | undefined, source: NativeExportSource, signal: AbortSignal,
   message: (index: number, role: 'user' | 'assistant', parts: Part[], createdAt: string | null, raw: unknown) => void,
   tool?: (step: ToolStep) => void,
+  progress?: ExportProgress,
 ) {
   const { machineId, executorId, nativeSessionId, cwd } = source;
   const machine = machines?.list().find(item => item.id === machineId && item.online);
@@ -95,7 +101,7 @@ async function readConversation(
     }
     const at = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
     message(count++, role, paragraphs, Number.isFinite(at) ? new Date(at).toISOString() : null, row);
-  }, signal);
+  }, signal, (bytes, total) => { if (bytes < total) progress?.(bytes, total, count); });
   return count;
 }
 
@@ -124,7 +130,7 @@ export async function exportNativeConversation(
     lines.push('## ' + (role === 'user' ? '用户' : 'Agent 回复') + (at ? ' · ' + at : ''), '');
     for (const part of parts) lines.push(part);
     lines.push('');
-  }, includeWork ? step => lines.push(step, '') : undefined);
+  }, includeWork ? step => lines.push(step, '') : undefined, nativeExportProgress.getStore());
   const stem = Array.from(nativeSessionId.replace(/[^\p{L}\p{N}_-]+/gu, '-')).slice(0, 48).join('');
   return { filename: `super-mario-${executorId}-${stem}.md`, count, hasContent: lines.length > 0, markdown: [
     '# 原生会话 · ' + executorId, '', '会话：' + nativeSessionId, '电脑：' + machineId, '目录：' + cwd, '导出时间：' + new Date().toISOString(), '', `共 ${count} 条消息`, '', lines.map(part => typeof part === 'string' ? part : '\n' + toolBlock(part) + '\n').join('\n'),

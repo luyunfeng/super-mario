@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
@@ -25,6 +25,7 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
   const image = Buffer.from('synthetic image bytes '.repeat(11000)).toString('base64');
   await writeJsonLines(join(home, '.codex/sessions', codexId + '.jsonl'), [
     { type: 'session_meta', payload: { id: codexId, cwd: codexCwd } },
+    { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '先核对附件' }] } },
     { type: 'response_item', payload: { type: 'message', role: 'user', content: [
       { type: 'input_text', text: '合成 Codex 请求' }, { type: 'input_image', image_url: 'data:image/png;base64,' + image },
     ] } },
@@ -55,7 +56,7 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
   const server = await startServer({ dataDir: join(dir, 'data'), host: '127.0.0.1', port: 0, demo: true, token });
   const history = createCliSessionDiscovery({ home, cwd: codexCwd, temporaryRoots: [] });
   const projects = createProjectDiscovery({ home, cwd: codexCwd, roots: [], temporaryRoots: [], ignoreEnvironmentRoots: true });
-  let holdNext = false;
+  let holdNext = false, holdContinuation = false, failContinuation = false;
   const held: (() => void)[] = [];
   const offsets: number[] = [];
   let releasedPages = 0, disconnected = 0;
@@ -65,8 +66,11 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
     });
   });
   const transcript = async (params: unknown) => {
-    offsets.push((params as { offset: number }).offset);
-    if (holdNext) {
+    const { offset } = params as { offset: number };
+    offsets.push(offset);
+    if (offset && failContinuation) { failContinuation = false; throw new Error('合成分页读取失败'); }
+    if (holdNext || (offset && holdContinuation)) {
+      holdContinuation = false;
       holdNext = false;
       await new Promise<void>(resolve => held.push(resolve));
       releasedPages++;
@@ -109,7 +113,16 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
     [codexId, 'Codex', 'Claude', 'fixture_lookup'],
     [claudeId, 'Claude', 'Codex', 'fixture_read'],
   ]) {
+    holdContinuation = id === codexId;
     await rows.filter({ hasText: id }).getByRole('button', { name: '导出对话', exact: true }).click();
+    if (id === codexId) {
+      await expect.poll(() => held.length).toBe(3);
+      const size = (await stat(join(home, '.codex/sessions', codexId + '.jsonl'))).size;
+      const bytes = await page.evaluate(([done, total]) => done!.toLocaleString() + ' / ' + total!.toLocaleString(), [offsets.at(-1)!, size]);
+      await expect(drawer.getByRole('status')).toHaveText('已读取 1 条消息 · ' + bytes + ' 字节');
+      await expect(drawer.getByRole('button', { name: '下载 .md' })).toHaveCount(0);
+      held[2]!();
+    }
     await expect(preview).toContainText('合成 ' + source + ' 最终回复');
     await expect(preview).not.toContainText(tool);
     // The two abandoned reads stopped after their first page. Only this fresh export read the full file.
@@ -118,7 +131,14 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
       const laterPages = offsets.slice(3);
       assert.ok(laterPages.length && laterPages.every((offset, i) => offset > (laterPages[i - 1] ?? 0)));
     }
+    failContinuation = id === codexId;
     await drawer.getByRole('checkbox', { name: '包含公开工作步骤' }).check();
+    if (id === codexId) {
+      await expect(drawer.getByRole('status')).toContainText('合成分页读取失败');
+      await expect(preview).toBeHidden();
+      await expect(drawer.getByRole('button', { name: '下载 .md' })).toHaveCount(0);
+      await drawer.getByRole('button', { name: '重试' }).click();
+    }
     await expect(preview).toContainText(tool);
     const pending = page.waitForEvent('download');
     await drawer.getByRole('button', { name: '下载 .md' }).click();

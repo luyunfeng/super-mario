@@ -1,4 +1,5 @@
 import { createSessionAnalysis } from './session-analysis.ts';
+import { nativeExportProgress } from '../../../packages/core/src/native-conversation-export.ts';
 import { readMessageReceipt } from '../../../packages/core/src/message-receipts.ts';
 import { createProjectFolders } from '../../../packages/core/src/project-folders.ts';
 import { policyPresets, applyPolicyPreset, policyRuleHits } from '../../../packages/core/src/policy-presets.ts';
@@ -702,7 +703,23 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           res.once('close', abort);
           if (res.destroyed) abort();
           try {
-            return json(res, 200, await app.plugins.invocations.use(reader.service, input, { signal: controller.signal, timeoutMs: reader.timeoutMs ?? 30000 }));
+            const read = () => app.plugins.invocations.use(reader.service, input, { signal: controller.signal, timeoutMs: reader.timeoutMs ?? 30000 });
+            if (reader.id !== 'conversation-export' || !input?.native || req.headers.accept !== 'application/x-ndjson')
+              return json(res, 200, await read());
+            const result = await nativeExportProgress.run((bytes, total, messages) => {
+              if (res.destroyed || res.writableEnded) return;
+              if (!res.headersSent) res.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-store' });
+              res.write(JSON.stringify({ progress: { bytes, total, messages } }) + '\n');
+            }, read);
+            if (res.destroyed) return;
+            if (!res.headersSent) return json(res, 200, result);
+            res.end(JSON.stringify({ result }) + '\n');
+            return;
+          } catch (error) {
+            if (res.destroyed) return;
+            if (!res.headersSent) throw error;
+            res.end(JSON.stringify({ error: error instanceof Error ? error.message : '导出失败' }) + '\n');
+            return;
           } finally { res.off('close', abort); }
         }
         if (path === '/api/v1/office-documents' && method === 'POST') {
