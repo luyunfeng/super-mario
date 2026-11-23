@@ -2032,9 +2032,13 @@ test('Web 和飞书按同一触发记录区分待批准、派发和执行失败'
   const sent: string[] = [];
   const { server, api, ask } = await fixture(t, req => {
     assert.match(req.system, /分别报告当次记录的 approvalStatus 和 run.status/);
-    if (req.lastRole === 'user') return call('scheduled_work_list', {}, 'status');
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /提示词是供核对的计划数据/);
+      return call('scheduled_work_list', {}, JSON.stringify(req.content).includes('执行要求') ? 'requirements' : 'status');
+    }
     const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
     const [work] = JSON.parse(raw).items;
+    if (req.callId === 'requirements') return { role: 'assistant', content: work.action.prompt + '\n完成标准：' + work.action.doneWhen };
     const [trigger] = work.occurrences;
     if (trigger.approvalStatus === 'pending') {
       assert.equal(trigger.run, undefined);
@@ -2054,10 +2058,14 @@ test('Web 和飞书按同一触发记录区分待批准、派发和执行失败'
     const project = await api('/projects', { name: '定时派发进度' });
     const approval = await api('/scheduled-work', { key: 'progress', title: '项目巡检', projectId: project.id,
       schedule: { kind: 'once', at: '2001-01-01T00:00:00Z' },
-      action: { kind: 'dispatch', executorId: 'fixture', prompt: '合成巡检', doneWhen: '生成报告', expectMinutes: 1 } });
+      action: { kind: 'dispatch', executorId: 'fixture', prompt: '合成巡检\n核对已交付的文件', doneWhen: '生成报告', expectMinutes: 1 } });
     await api('/approvals/' + approval.id + '/approve', { version: approval.version });
     await server.app.background.tick();
     await server.app.background.eventbox.drain();
+    const requirement = '项目巡检的执行要求原文是什么？';
+    const expected = '合成巡检\n核对已交付的文件\n完成标准：生成报告';
+    assert.equal(await ask(requirement, '/projects/' + project.id + '/messages'), expected);
+    assert.equal(server.app.store.list('runs').length, 0);
     const question = '上次项目巡检执行成功了吗？';
     assert.equal(await ask(question, '/projects/' + project.id + '/messages'), '派发仍待批准。');
     const [work] = server.app.scheduledWork.list({ projectId: project.id }).items;
@@ -2067,6 +2075,8 @@ test('Web 和飞书按同一触发记录区分待批准、派发和执行失败'
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
     const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(requirement, { ...source, messageId: 'requirements' });
+    await t.waitFor(() => assert.ok(sent.includes(expected)));
     await adapter.onMessage(question, { ...source, messageId: 'status' });
     await t.waitFor(() => assert.ok(sent.includes('派发审批已处理，执行失败。')));
   } finally { await server.close(); }

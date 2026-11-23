@@ -121,6 +121,15 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       item.action.kind === 'brief' && line('事实简报仅程序汇总已接入事实，不自动调用模型或外发。'),
       line('上次动作结果未知或派发审批待批准时，暂停生成新动作。取消计划不会终止已派发的任务。'),
       h('div', { class: 'row row--wrap' }, chatLink(),
+        item.action.kind === 'dispatch' && Button({ label: '查看执行要求', size: 'sm', onClick: () => {
+          if (syncIdentity()) { requestRead(); return; }
+          const action = item.action;
+          managedDrawer({ title: '执行要求', subtitle: item.title, body: h('div', { class: 'stack' },
+            line(`执行者：${action.executorId} · 工作目录：${action.cwd ?? '默认'}`),
+            line('预计时长：' + (Number.isFinite(action.expectMinutes) ? action.expectMinutes + ' 分钟' : '未记录')),
+            h('strong', null, '执行提示词'), h('pre', { class: 'mailbox-content' }, action.prompt ?? '未记录'),
+            h('strong', null, '完成标准'), h('pre', { class: 'mailbox-content' }, action.doneWhen ?? '未记录')) });
+        } }),
         item.status === 'active' && item.scheduleStatus === 'active' && item.schedule.kind !== 'once' && Date.parse(item.nextAt) > Date.now() && Button({
           label: item.skipToken ? '撤销跳过' : '跳过下一次', size: 'sm', onClick: async () => {
             if (syncIdentity()) { requestRead(); return; }

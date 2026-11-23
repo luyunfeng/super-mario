@@ -348,3 +348,17 @@ test('从周报模板创建可编辑派发草稿，独立选择执行者', async
   assert.equal(f.writes[0].body.action.prompt, '只核对本周交付');
   assert.equal(f.writes[0].body.schedule.cron, '0 17 * * 5');
 }));
+
+test('查看已保存的执行提示词和验收标准原文', async () => fixture(async f => {
+  const page: Page = f.page;
+  const action = { kind: 'dispatch', executorId: 'real-cli', cwd: '/example', expectMinutes: 15,
+    prompt: '核对本周记录\n保留 <来源> 标记', doneWhen: '列出已交付文件\n注明待核对事项' };
+  f.items = [work({ action })];
+  await emit(page);
+  await panel(page).getByRole('button', { name: '查看执行要求' }).click();
+  const view = page.getByRole('dialog', { name: '执行要求' });
+  assert.deepEqual(await view.locator('pre').allTextContents(), [action.prompt, action.doneWhen]);
+  await expect(view).toContainText('real-cli · 工作目录：/example');
+  await expect(view).toContainText('15 分钟');
+  assert.equal(f.writes.length, 0);
+}));
