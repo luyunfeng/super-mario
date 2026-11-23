@@ -49,6 +49,7 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   await expect(dialog.locator('pre')).toHaveText(original);
   await expect(dialog.locator('pre em')).toHaveCount(0);
   await expect(dialog.getByRole('link', { name: '打开原始网址' })).toHaveCount(0);
+  await expect(dialog.getByText('查看飞书文档评论',{exact:true})).toHaveCount(0);
   await dialog.getByRole('button', { name: '准备会议交接稿' }).click();
   const handoff = page.getByRole('dialog', { name: '准备会议交接稿' });
   await expect(handoff.getByRole('checkbox')).not.toBeChecked();
@@ -96,9 +97,43 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   await page.evaluate(id => { location.hash = '#memory?entry=' + id + '&source=missing'; }, entry.id);
   await expect(dialog.getByText('引用的来源已不可用。')).toBeVisible();
   await expect(dialog.locator('pre')).toBeHidden();
+  let commentReads=0;
+  const external:string[]=[];
+  await page.route('https://synthetic.feishu.cn/**',route=>{external.push(route.request().url());return route.abort();});
+  await page.route(server.url+'/api/v1/knowledge/'+projectEntry.id+'/sources/'+projectJob.id+'/comments',route=>{
+    commentReads++;
+    if(commentReads===2) return route.fulfill({status:503,json:{error:'合成连接器暂不可用'}});
+    return route.fulfill({json:commentReads===1?{truncated:true,threads:[
+      {id:'one',quote:'引用的原文',resolved:false,replies:[{author:'合成作者',text:'<em>有待核实</em>'}]},
+      {id:'two',quote:'',resolved:true,replies:[{author:'合成审阅人',text:'已核对'}]},
+    ]}:{threads:[],truncated:false}});
+  });
   await page.evaluate(route => { location.hash = route; }, '#memory?entry=' + projectEntry.id + '&source=' + projectJob.id);
   await expect(dialog.getByRole('link', { name: '打开原始网址' })).toHaveAttribute('href', projectUrl);
   await expect(dialog.locator('pre')).toHaveText(document);
+  const comments=dialog.getByText('查看飞书文档评论',{exact:true}).locator('..');
+  expect(commentReads).toBe(0);
+  await dialog.getByText('查看飞书文档评论',{exact:true}).click();
+  await expect(comments.locator('article').first()).toContainText('未解决');
+  await expect(comments.locator('blockquote')).toHaveText('引用的原文');
+  await expect(comments.locator('article').first()).toContainText('合成作者：<em>有待核实</em>');
+  await expect(comments.locator('em')).toHaveCount(0);
+  await expect(comments.locator('article').last()).toContainText('已解决');
+  await expect(comments.getByRole('status')).toContainText('仅显示部分');
+  const filter=comments.getByRole('combobox',{name:'评论状态'});
+  await filter.selectOption('open');
+  await expect(comments.locator('article')).toHaveCount(1);
+  await expect(comments.locator('article')).toContainText('有待核实');
+  await filter.selectOption('resolved');
+  await expect(comments.locator('article')).toHaveCount(1);
+  await expect(comments.locator('article')).toContainText('合成审阅人');
+  expect(commentReads).toBe(1);
+  await comments.getByRole('button',{name:'刷新评论'}).click();
+  await expect(comments.getByRole('status')).toContainText('读取评论失败');
+  await expect(comments.locator('article')).toHaveCount(0);
+  await comments.getByRole('button',{name:'刷新评论'}).click();
+  await expect(comments.getByRole('status')).toHaveText('暂无评论。');
+  expect(commentReads).toBe(3);expect(external).toEqual([]);
   await dialog.getByText('文档大纲',{exact:true}).click();
   const outline=dialog.getByRole('navigation',{name:'文档大纲'});
   await expect(outline.getByRole('button')).toHaveText(['计划','核对','核对']);

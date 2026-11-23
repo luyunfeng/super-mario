@@ -1,4 +1,5 @@
 // 记忆条目：新增/编辑抽屉和列表行。记忆页和项目的“资料”标签共用。
+import { sourceComments } from './source-comments.js';
 import { displaySourceText } from './source-outline.js';
 import { externalSourceLink } from '../lib/markdown.js';
 import { h, replace } from '../lib/dom.js';
@@ -60,7 +61,7 @@ function revisionHistory(api, entry, loadDraft, selectedCommit) {
   return section;
 }
 
-function originalSources(api, entry, selected, line, ask, handoff) {
+function originalSources(api, entry, selected, line, ask, handoff, canRead) {
   const path = '/knowledge/' + encodeURIComponent(entry.id) + '/sources';
   const body = h('div', { class: 'stack' });
   const section = h('details', { open: Boolean(selected) }, h('summary', null, '查看原始资料'), body);
@@ -79,11 +80,13 @@ function originalSources(api, entry, selected, line, ask, handoff) {
         const detail = h('details', { open: source.id === selected }, h('summary', null, source.title, source.meetingStartedAt && ' · ' + source.meetingStartedAt), notice, outline, text, action);
         const sourceLink = source.sourceUrl && externalSourceLink(source.sourceUrl, '打开原始网址');
         if (sourceLink) detail.append(sourceLink);
+        const comments=source.supportsComments && sourceComments(api,path+'/'+encodeURIComponent(source.id)+'/comments',canRead);
+        if (comments) detail.append(comments);
         if (source.meeting && handoff) detail.append(Button({ label: '准备会议交接稿', size: 'sm', onClick: () => handoff(source) }));
         detail.addEventListener('toggle', async () => {
           const stamp=++read;
           outline.replaceChildren();notice.hidden=true;original=undefined;action.hidden=true;
-          if (!detail.open) {text.replaceChildren();return;}
+          if (!detail.open) {text.replaceChildren();if(comments) comments.open=false;return;}
           text.textContent = '正在读取原文…';
           try {
             const { content } = await api.get(path + '/' + encodeURIComponent(source.id));
@@ -347,7 +350,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   });
   const drawer = openDrawer({
     title: entry ? '编辑记忆' : '添加记忆', subtitle: entry ? `更新于 ${timeAgo(entry.updatedAt)}` : undefined,
-    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), actionTodos, actionStatus, actionTodos && todoReceipt, Field({ label: '正文维护方式', control: protection }), Field({ label: '已确认事实', control: facts }), factsNote, Field({ label: '别名', control: aliases }), Field({ label: '标签', control: tags }), Field({ label: '重要级', control: importance }), Field({ label: '相关度（0–100）', control: relevance }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null, canReadEntry() ? handoff : null), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
+    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), actionTodos, actionStatus, actionTodos && todoReceipt, Field({ label: '正文维护方式', control: protection }), Field({ label: '已确认事实', control: facts }), factsNote, Field({ label: '别名', control: aliases }), Field({ label: '标签', control: tags }), Field({ label: '重要级', control: importance }), Field({ label: '相关度（0–100）', control: relevance }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null, canReadEntry() ? handoff : null, canReadEntry), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();

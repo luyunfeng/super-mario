@@ -84,7 +84,7 @@ export { conversationSearch } from './conversation-search.ts';
 export { tokenStatistics } from './token-statistics.ts';
 export { createStartPage, readStartPage } from './start-page.ts';
 export { workspaceSplash } from './workspace-splash.ts';
-export { createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from './knowledge-source-reader.ts';
+export { isKnowledgeDocumentCommentsURL, readKnowledgeDocumentComments, KnowledgeSourceReaderError, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from './knowledge-source-reader.ts';
 export { fetchCalendarAgenda } from './feishu-calendar.ts';
 
 function tool(name: string, description: string, execute: Tool['execute'], properties: JsonObject = {}, required?: string[]): Tool {
@@ -196,6 +196,7 @@ export interface SystemActions {
   notifyUser?(input: Record<string, unknown>): Json;
   calendarAgenda?(input: { start?: string; end?: string }, signal: AbortSignal): Promise<Json>;
   workspaceCode?(input: { projectId?: string; kind: 'tree' | 'file' | 'diff'; path?: string }): Promise<Json>;
+  knowledgeCommentsService?(): import('../packages/plugin-sdk/src/index.ts').PluginService;
   knowledgeReaderService?(): import('../packages/plugin-sdk/src/index.ts').PluginService;
   inboxTree?(input: Record<string, unknown>): Json;
   inboxList?(input: Record<string, unknown>): Json;
@@ -559,6 +560,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         const backend = createLocalKnowledge(context);
         await backend.list();
         context.contribute('knowledge_backends', 'local', backend);
+        if (actions?.knowledgeCommentsService) context.contribute('services','document-comments',actions.knowledgeCommentsService());
         if (actions?.knowledgeReaderService) context.contribute('services', 'protected-source', actions.knowledgeReaderService());
         else if (actions?.readProtectedSource) context.provide('knowledge-local.source.read', (input, signal) => {
           const { url } = (input ?? {}) as { url?: string };

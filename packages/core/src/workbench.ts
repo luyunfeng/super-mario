@@ -88,7 +88,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput, currentAgentReplyId, type OfficeFileOrigin } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage, readNativeShareMessages } from './native-conversation-export.ts';
-import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, createConversationSharing, createWorkspaceBoard, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, createConversationSharing, createWorkspaceBoard, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, readKnowledgeDocumentComments, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
@@ -141,6 +141,9 @@ export async function createWorkbench(config: AppConfig) {
   const effects = createEffects({ store, events });
   const contributions = createContributions();
   const knowledgeReaderSettings = createKnowledgeSourceSettings(store, events);
+  // Only the authenticated page/source route grants a short-lived document read.
+  // Service wrappers cannot substitute an arbitrary URL or choose a different identity.
+  const commentsContext = new AsyncLocalStorage<(signal:AbortSignal)=>Promise<Json>>();
   const protectedReaderContext = new AsyncLocalStorage<{ source: string; current: () => boolean; credentialAuthorized?:boolean }>();
   let knowledgeAccount: () => {profile:string;appId:string;openId:string} | undefined = () => undefined;
   let knowledgeAccountReady = () => false;
@@ -405,7 +408,13 @@ export async function createWorkbench(config: AppConfig) {
     }
     return raw as unknown as Json;
   }
-  for (const extension of createSystemExtensions({ demo: config.demo, actions: { todayBriefSources, triageAgent: { status: () => inboxClassifier.status(), ask: (text, context) => inboxClassifier.ask(text, context) }, ruleTriage, scheduledWorkCronPreview: input => scheduledWork.previewCron(input), scheduledWorkHistory: input => scheduledWork.readHistory(input) as unknown as Json, scheduledWorkBrief: input => scheduledWork.readBrief(input), scheduledWorkList: input => scheduledWork.list(input) as unknown as Json, scheduledWorkPropose: input => scheduledWork.propose(input,true) as unknown as Json, scheduledWorkSkipNext: input => scheduledWork.skipNext(input,true), scheduledWorkSetPaused: input => scheduledWork.changeTiming(input,true) as unknown as Json, scheduledWorkCancel: input => scheduledWork.cancel(input,true) as unknown as Json, followupCreate: input => followups.create(input, currentAgentInput()?.conversationId) as unknown as Json, followupList: input => followups.list(input) as unknown as Json, followupCancel: id => followups.cancel(id) as unknown as Json, notifyUser: input => followups.notifyUser(input), calendarAgenda: (input, signal) => fetchCalendarAgenda({ profile: knowledgeAccount()?.profile, ...input, signal }), workspaceCode: readWorkspaceCode, knowledgeReaderService: () => protectedReaderService(), pendingDecisionsList: readPendingDecisions, workDecisionsList: input => workDecisions.list(input) as unknown as Json, workDecisionRecord: input => workDecisions.recordFromAgent(input) as unknown as Json, workDecisionCorrect: input => workDecisions.changeFromAgent(input) as unknown as Json, workDecisionWithdraw: input => workDecisions.changeFromAgent(input, true) as unknown as Json, workDecisionReference: input => workDecisions.referenceFromAgent(input) as unknown as Json, inboxList: readInbox, inboxTree: readInboxTree, inboxHandlingRead: readInboxHandlingFromAgent, inboxAssignProject: assignInboxProject, agentSessions: async input => await agentSessions.discover(input) as unknown as Json, resumeSession: async input => { const source = currentAgentInput() ?? agent.currentInput(); return await agentSessions.proposeResume({ ...input, key: source ? `${source.id}:${requiredText(input.key, '恢复请求标识')}` : input.key }, source) as unknown as Json; }, botsList: () => botsStatus(), privateConversation: managePrivateConversation, groupReadRecords: readGroupRecordsFromChat, botRelay: relayFromAgent, mailboxesList: input => mailboxes.list(input as Parameters<typeof mailboxes.list>[0]) as unknown as Json, mailboxPropose: input => { if (!mailboxProposer) throw new InputError('机器人信箱尚未连接', 503); return mailboxProposer(input); }, projectsList: () => projects.list() as unknown as Json, projectCreate: async input => await createProject(input) as unknown as Json, projectsDiscover: discoverProjects, knowledgeSource: input => {
+  for (const extension of createSystemExtensions({ demo: config.demo, actions: { todayBriefSources, triageAgent: { status: () => inboxClassifier.status(), ask: (text, context) => inboxClassifier.ask(text, context) }, ruleTriage, scheduledWorkCronPreview: input => scheduledWork.previewCron(input), scheduledWorkHistory: input => scheduledWork.readHistory(input) as unknown as Json, scheduledWorkBrief: input => scheduledWork.readBrief(input), scheduledWorkList: input => scheduledWork.list(input) as unknown as Json, scheduledWorkPropose: input => scheduledWork.propose(input,true) as unknown as Json, scheduledWorkSkipNext: input => scheduledWork.skipNext(input,true), scheduledWorkSetPaused: input => scheduledWork.changeTiming(input,true) as unknown as Json, scheduledWorkCancel: input => scheduledWork.cancel(input,true) as unknown as Json, followupCreate: input => followups.create(input, currentAgentInput()?.conversationId) as unknown as Json, followupList: input => followups.list(input) as unknown as Json, followupCancel: id => followups.cancel(id) as unknown as Json, notifyUser: input => followups.notifyUser(input), calendarAgenda: (input, signal) => fetchCalendarAgenda({ profile: knowledgeAccount()?.profile, ...input, signal }), workspaceCode: readWorkspaceCode, knowledgeReaderService: () => protectedReaderService(), knowledgeCommentsService:()=>({
+      name:'knowledge-local.document.comments',version:1,readOnly:true,async handler(_input,signal) {
+        const read=commentsContext.getStore();
+        if(!read) throw new InputError('请从已关联的知识来源读取评论',403);
+        return read(signal);
+      },
+    }), pendingDecisionsList: readPendingDecisions, workDecisionsList: input => workDecisions.list(input) as unknown as Json, workDecisionRecord: input => workDecisions.recordFromAgent(input) as unknown as Json, workDecisionCorrect: input => workDecisions.changeFromAgent(input) as unknown as Json, workDecisionWithdraw: input => workDecisions.changeFromAgent(input, true) as unknown as Json, workDecisionReference: input => workDecisions.referenceFromAgent(input) as unknown as Json, inboxList: readInbox, inboxTree: readInboxTree, inboxHandlingRead: readInboxHandlingFromAgent, inboxAssignProject: assignInboxProject, agentSessions: async input => await agentSessions.discover(input) as unknown as Json, resumeSession: async input => { const source = currentAgentInput() ?? agent.currentInput(); return await agentSessions.proposeResume({ ...input, key: source ? `${source.id}:${requiredText(input.key, '恢复请求标识')}` : input.key }, source) as unknown as Json; }, botsList: () => botsStatus(), privateConversation: managePrivateConversation, groupReadRecords: readGroupRecordsFromChat, botRelay: relayFromAgent, mailboxesList: input => mailboxes.list(input as Parameters<typeof mailboxes.list>[0]) as unknown as Json, mailboxPropose: input => { if (!mailboxProposer) throw new InputError('机器人信箱尚未连接', 503); return mailboxProposer(input); }, projectsList: () => projects.list() as unknown as Json, projectCreate: async input => await createProject(input) as unknown as Json, projectsDiscover: discoverProjects, knowledgeSource: input => {
     const source=currentAgentInput()??agent.currentInput();if(!source||source.role!=='user'||source.readOnly||source.origin&&source.origin!=='user')throw new InputError('来源投放需要当前用户输入',403);
     validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
     return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
@@ -643,7 +652,7 @@ export async function createWorkbench(config: AppConfig) {
       return result;
       } finally {clearTimeout(timeout);}
     }});
-  const knowledgeCurator = createKnowledgeCurator({ store, events, dataDir: config.dataDir, knowledge, machines: () => machines, enabled: () => contributions.list('knowledge_backends').length > 0, validProject: id => projects.list().some(p => p.id === id && !p.archivedAt), readSource: readProtectedKnowledgeSource, allowedProviders: () => [...new Set(['codex', 'claude-code', ...contributions.list('executors').filter(e => e.value.mode === 'real' && e.value.knowledgeWorker !== false).map(e => e.value.kind || e.id)])] });
+  const knowledgeCurator = createKnowledgeCurator({ store, events, dataDir: config.dataDir, knowledge, machines: () => machines, enabled: () => contributions.list('knowledge_backends').length > 0, validProject: id => projects.list().some(p => p.id === id && !p.archivedAt), supportsComments:url=>isKnowledgeDocumentCommentsURL(url,knowledgeReaderSettings.read().trustedHosts), readSource: readProtectedKnowledgeSource, allowedProviders: () => [...new Set(['codex', 'claude-code', ...contributions.list('executors').filter(e => e.value.mode === 'real' && e.value.knowledgeWorker !== false).map(e => e.value.kind || e.id)])] });
   // Reconcile already collected minutes once per account on its first successful batch.
   // Later batches also inspect replayed items so a crash before checkpoint commit loses no source.
   const reconciledMeetingAccounts = new Set<string>();
@@ -2466,6 +2475,45 @@ export async function createWorkbench(config: AppConfig) {
       return result;
     } };
   }
+  async function readSourceComments(pageId:string,sourceId:string,signal:AbortSignal) {
+    const serviceName='knowledge-local.document.comments';
+    const active=()=>contributions.list('services').find(entry=>entry.value.name===serviceName)?.value;
+    const service=active();
+    if(!service) throw new InputError('本地知识插件的评论读取服务不可用',503);
+    const settings=knowledgeReaderSettings.read(), account=knowledgeAccount();
+    const identity=digestReaderIdentity(settings,account);
+    const profile=settings.profile || account?.profile;
+    const binding=await knowledgeCurator.commentSource(pageId,sourceId);
+    if(!settings.enabled) throw new InputError('请在记忆的来源读取设置中启用受保护来源读取',409);
+    if(!settings.profile && (!knowledgeAccountReady() || !profile)) throw new InputError('请先连接并核验个人飞书账号',409);
+    // A wrapper may delay before or after calling the service. Check on both sides
+    // of that boundary so neither the wrapper nor the caller gets a revoked result.
+    async function verify() {
+      signal.throwIfAborted();
+      const live=await knowledgeCurator.commentSource(pageId,sourceId);
+      if(live.url!==binding.url || live.layer!==binding.layer || live.projectId!==binding.projectId)
+        throw new InputError('知识来源关联已变化，请重新读取评论',409);
+      signal.throwIfAborted();
+      if(active()!==service || (!settings.profile && !knowledgeAccountReady()) ||
+        identity!==digestReaderIdentity(knowledgeReaderSettings.read(),knowledgeAccount()))
+        throw new InputError('读取期间账号、设置或插件已变化，请重新读取评论',409);
+    }
+    const result=await commentsContext.run(async callSignal=>{
+      await verify();
+      try {
+        const value=await readKnowledgeDocumentComments(binding.url,{profile,trustedHosts:settings.trustedHosts},callSignal);
+        await verify();
+        return value as unknown as Json;
+      } catch(error) {
+        if(!(error instanceof KnowledgeSourceReaderError)) throw error;
+        const status=error.code==='UNAUTHORIZED'?403:error.code==='CLI_UNAVAILABLE'?503:error.code==='TIMEOUT'?504:
+          ['INVALID_RESPONSE','CLI_FAILED'].includes(error.code)?502:400;
+        throw new InputError(error.message,status);
+      }
+    },()=>plugins.invocations.use(serviceName,{}, {signal,timeoutMs:35000}));
+    await verify();
+    return result;
+  }
   async function readProtectedKnowledgeSource(url: string, signal?: AbortSignal, job?: import('./knowledge-curator.ts').Job) {
     const settings = knowledgeReaderSettings.read();
     if (!isProtectedKnowledgeURL(url, settings.trustedHosts)) return undefined;
@@ -2678,7 +2726,7 @@ export async function createWorkbench(config: AppConfig) {
     return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
   }
   return {
-    subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:readSourceComments, status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {

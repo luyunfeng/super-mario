@@ -45,7 +45,7 @@ const defaults: Settings = { enabled: false, provider: 'codex' };
 /** A durable queue delegates each source to one persistent CLI worker on an execution node.
  * Only the server imports validated pages into the knowledge backend. It never retries an uncertain turn.
  */
-export function createKnowledgeCurator(options: { store: Store; events: EventBus; dataDir: string; knowledge: () => KnowledgeBackend; machines: () => MachineClient | undefined; enabled: () => boolean; validProject: (id: string) => boolean; readSource?: (url: string, signal?: AbortSignal, job?: Job) => Promise<KnowledgeSourceResult | undefined>; allowedProviders?: () => readonly string[] }) {
+export function createKnowledgeCurator(options: { store: Store; events: EventBus; dataDir: string; knowledge: () => KnowledgeBackend; machines: () => MachineClient | undefined; enabled: () => boolean; validProject: (id: string) => boolean; supportsComments?: (url:string)=>boolean; readSource?: (url: string, signal?: AbortSignal, job?: Job) => Promise<KnowledgeSourceResult | undefined>; allowedProviders?: () => readonly string[] }) {
   const { store, events } = options;
   const lifecycle = new AbortController();
   const directory = join(options.dataDir, 'plugins', 'knowledge-local');
@@ -498,6 +498,16 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
     inflight = cycle().catch(error => { worker = { state: 'failed', reason: error instanceof Error ? error.message : String(error) }; }).finally(() => { inflight = undefined; });
     return inflight;
   }
+  async function sourcePage(pageId:string,projectId?:string) {
+    if (!options.enabled()) throw new CuratorError('知识插件已停用',503);
+    const page=(await options.knowledge().list()).find(entry=>entry.id===pageId);
+    if (!page || (projectId!==undefined && (page.layer!=='project' || page.projectId!==projectId)) ||
+      (page.projectId && !options.validProject(page.projectId))) throw new CuratorError('知识页不可用',404);
+    return page;
+  }
+  function linked(job:Job,page:KnowledgeEntry) {
+    return job.layer===page.layer && job.projectId===page.projectId && job.knowledgeIds.includes(page.id);
+  }
   void rebuildIndex('knowledge: initialize local knowledge history').then(changed).catch(error => { gitState = { available: false, reason: error instanceof Error ? error.message : String(error) }; });
   const timer = setInterval(() => { void tick(); }, 2000); timer.unref();
   return {
@@ -588,16 +598,20 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
       return { jobs: matches.slice(offset, end).map(job => attemptSummary(job, titles.get(roots.get(job.id) ?? job.id))),
         total: matches.length, nextOffset: end < matches.length ? end : null };
     },
+    async commentSource(pageId:string,sourceId:string) {
+      const page=await sourcePage(pageId);
+      const job=store.get<Job>(jobsCollection,sourceId);
+      if (!job || job.id!==sourceId || !linked(job,page)) throw new CuratorError('该知识页没有这份来源',404);
+      if (!job.url || !options.supportsComments?.(job.url)) throw new CuratorError('此来源不支持飞书文档评论');
+      return {url:job.url,layer:page.layer,projectId:page.projectId};
+    },
     async pageSources(pageId: string, sourceId?: string, projectId?: string, handoffExcerpt = false) {
-      if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
-      const page = (await options.knowledge().list()).find(entry => entry.id === pageId);
-      if (!page || (projectId !== undefined && (page.layer !== 'project' || page.projectId !== projectId)) || (page.projectId && !options.validProject(page.projectId))) throw new CuratorError('知识页不可用', 404);
+      const page=await sourcePage(pageId,projectId);
       // Use persisted import receipts. Markdown references in editable pages cannot grant file access.
-      const all = jobs(), roots = meetingRoots(all), titles = meetingTitles();
-      const matches = all.filter(job => job.layer === page.layer && job.projectId === page.projectId &&
-        job.knowledgeIds.includes(pageId));
+      const all=jobs(), roots=meetingRoots(all), titles=meetingTitles();
+      const matches=all.filter(job=>linked(job,page));
       if (handoffExcerpt && !sourceId) throw new CuratorError('请指定会议转写来源');
-      if (sourceId === undefined) return { sources: matches.map(({ id, title, url, createdAt, meetingStartedAt, materialKind, requestOrigin, speakerNames }) => ({ id, ...(url ? { sourceUrl: url } : {}), title: titles.get(roots.get(id) ?? id) ?? title, createdAt,
+      if (sourceId === undefined) return { sources: matches.map(({ id, title, url, createdAt, meetingStartedAt, materialKind, requestOrigin, speakerNames }) => ({ id, ...(url ? { sourceUrl: url, ...(options.supportsComments?.(url) && {supportsComments:true}) } : {}), title: titles.get(roots.get(id) ?? id) ?? title, createdAt,
         ...(speakerNames ? { speakerNames } : {}),
         ...(materialKind === 'meeting-transcript' || requestOrigin === 'meeting' ? { meeting: true } : {}),
         ...(materialKind ? { materialKind } : {}), ...(meetingStartedAt ? { meetingStartedAt } : {}) })) };

@@ -846,6 +846,18 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (knowledgeRevision && method === 'GET') {
           return json(res, 200, { revision: await app.knowledgeRevision(decodeURIComponent(knowledgeRevision[1]!), url.searchParams.get('commit') ?? undefined) });
         }
+        const comments=path.match(/^\/api\/v1\/knowledge\/([^/]+)\/sources\/([^/]+)\/comments$/);
+        if(comments && method==='GET') {
+          if([...url.searchParams.keys()].some(key=>key!=='token')) throw new InputError('来源评论不接受额外的地址或读取参数',400);
+          const controller=new AbortController(),abort=()=>controller.abort();
+          res.once('close',abort);
+          if(res.destroyed) abort();
+          try {
+            const value=await app.knowledgeSources.readComments(decodeURIComponent(comments[1]!),decodeURIComponent(comments[2]!),controller.signal);
+            if(!res.destroyed) return json(res,200,value);
+          } catch(error) {if(!res.destroyed) throw error;} finally {res.off('close',abort);}
+          return;
+        }
         const pageSources = path.match(/^\/api\/v1\/knowledge\/([^/]+)\/sources(?:\/([^/]+))?$/);
         if (pageSources && method === 'GET') return json(res, 200, await app.knowledgeCurator.pageSources(
           decodeURIComponent(pageSources[1]!), pageSources[2] && decodeURIComponent(pageSources[2]), undefined, url.searchParams.get('view') === 'handoff'));

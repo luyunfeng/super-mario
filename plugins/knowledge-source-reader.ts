@@ -41,7 +41,7 @@ function token(value: unknown): string {
 /** Only classification fields are inspected. Never retain stderr, argv, profile or an error cause. */
 function cliFailure(stderr = ''): never {
   let error: Record<string, unknown> = {};
-  try { error = object(json(stderr).error); } catch { /* Non-JSON diagnostics remain private. */ }
+  try { const envelope=json(stderr); error = object(envelope.error ?? envelope); } catch { /* Non-JSON diagnostics remain private. */ }
   if (['authentication', 'authorization'].includes(String(error.type)) ||
       ['missing_scope', 'permission_denied', 'not_logged_in', 'token_expired', 'unauthorized'].includes(String(error.subtype)) ||
       [99991661, 99991663, 99991668, 99991671, 99991672, 99991677, 99991679, 99991680, 970003].includes(Number(error.code))) fail('UNAUTHORIZED');
@@ -95,11 +95,31 @@ export function isProtectedKnowledgeURL(input: string, trustedHosts: readonly st
   return protectedHost(host, match[2]!);
 }
 
+function parseProtectedURL(input: string, handles:(input:string)=>boolean) {
+  if (typeof input !== 'string' || input.length > 4096 || /[\s\\\u0000-\u001f\u007f]/.test(input)) fail('INVALID_URL');
+  let url: URL;
+  try { url = new URL(input); } catch { return fail('INVALID_URL'); }
+  if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hostname.endsWith('.') || !input.startsWith('https://')) fail('INVALID_URL');
+  if (!handles(input)) fail('UNTRUSTED_HOST');
+  const path = /^\/(docx|wiki|file|drive\/file)\/([A-Za-z0-9_-]{1,256})\/?$/.exec(url.pathname);
+  // Disallow URL normalization tricks as well as encoded separators and dot segments.
+  const rawPath = input.slice(input.indexOf('/', 8)).split(/[?#]/, 1)[0];
+  if (!path || rawPath !== url.pathname) fail('INVALID_URL');
+  return { url, type: path[1] === 'drive/file' ? 'file' : path[1], token: path[2], source: `${url.origin}${url.pathname}` };
+}
+
+export function isKnowledgeDocumentCommentsURL(input:string,trustedHosts:readonly string[]=[]):boolean {
+  try {
+    const {type}=parseProtectedURL(input,url=>isProtectedKnowledgeURL(url,trustedHosts));
+    return type==='docx' || type==='wiki';
+  } catch {return false;}
+}
+
 /** Fixed CLI recipes verified with local lark-cli help and embedded read-only skills.
  * URL input never reaches CLI: +inspect accepts a bare token with --type; +fetch
  * and +download also accept tokens. No URL fetching, login, auth, scope grants or retries.
  */
-export function createKnowledgeSourceReader(options: KnowledgeSourceReaderOptions = {}): KnowledgeSourceReader {
+function protectedReader(options: KnowledgeSourceReaderOptions) {
   const profile = options.profile;
   const hosts = new Set<string>();
   for (const host of options.trustedHosts ?? []) {
@@ -110,21 +130,12 @@ export function createKnowledgeSourceReader(options: KnowledgeSourceReaderOption
   const runCLI = options.runCLI ?? executeCLI;
   const handles = (url: string) => isProtectedKnowledgeURL(url, [...hosts]);
 
-  function parseURL(input: string) {
-    if (typeof input !== 'string' || input.length > 4096 || /[\s\\\u0000-\u001f\u007f]/.test(input)) fail('INVALID_URL');
-    let url: URL;
-    try { url = new URL(input); } catch { return fail('INVALID_URL'); }
-    if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hostname.endsWith('.') || !input.startsWith('https://')) fail('INVALID_URL');
-    if (!handles(input)) fail('UNTRUSTED_HOST');
-    const path = /^\/(docx|wiki|file|drive\/file)\/([A-Za-z0-9_-]{1,256})\/?$/.exec(url.pathname);
-    // Disallow URL normalization tricks as well as encoded separators and dot segments.
-    const rawPath = input.slice(input.indexOf('/', 8)).split(/[?#]/, 1)[0];
-    if (!path || rawPath !== url.pathname) fail('INVALID_URL');
-    return { url, type: path[1] === 'drive/file' ? 'file' : path[1], token: path[2], source: `${url.origin}${url.pathname}` };
-  }
-
-  async function read(input: string, request: { signal?: AbortSignal } = {}): Promise<KnowledgeSourceResult> {
+  const parseURL=(input:string)=>parseProtectedURL(input,handles);
+  function read(input:string,request?:{signal?:AbortSignal}):Promise<KnowledgeSourceResult>;
+  function read(input:string,request:{signal:AbortSignal},mode:'comments'):Promise<DocumentComments>;
+  async function read(input:string,request:{signal?:AbortSignal}={},mode?:'comments'):Promise<KnowledgeSourceResult|DocumentComments> {
     const source = parseURL(input);
+    if (mode==='comments' && source.type!=='wiki' && source.type!=='docx') fail('UNSUPPORTED');
     if (!profile) fail('MISSING_PROFILE');
     if (request.signal?.aborted) fail('CANCELLED');
     const controller = new AbortController();
@@ -144,8 +155,13 @@ export function createKnowledgeSourceReader(options: KnowledgeSourceReaderOption
       if (Buffer.byteLength(result.stdout) > MAX_BYTES || Buffer.byteLength(result.stderr ?? '') > MAX_BYTES) fail('LIMIT_EXCEEDED');
       if (result.exitCode !== 0) cliFailure(result.stderr);
       const envelope = json(result.stdout);
-      if (envelope.ok !== true) cliFailure(result.stdout);
-      if (envelope.identity !== 'user') fail('INVALID_RESPONSE');
+      // Generated Drive API commands can return the OpenAPI code/data envelope.
+      // Shortcut responses, including the initial document lookup, use ok/data.
+      const rawReply = mode === 'comments' && args[1] === 'file.comment.replys' && envelope.ok === undefined;
+      if (rawReply ? envelope.code !== 0 : envelope.ok !== true) cliFailure(result.stdout);
+      // Comment list envelopes may omit the identity echo. The fixed command
+      // still requires --as user and the configured profile on every page.
+      if (envelope.identity !== 'user' && !(mode==='comments' && envelope.identity===undefined)) fail('INVALID_RESPONSE');
       return object(envelope.data);
     }
     try {
@@ -166,6 +182,10 @@ export function createKnowledgeSourceReader(options: KnowledgeSourceReaderOption
         try { resolved = parseURL(metadata.url); } catch { return fail('CROSS_ORIGIN'); }
         if (resolved.url.origin !== source.url.origin || resolved.type !== type || resolved.token !== id) fail('CROSS_ORIGIN');
         canonical = resolved.source;
+      }
+      if (mode==='comments') {
+        if (type!=='docx') fail('UNSUPPORTED');
+        return await readCommentPages(id,invoke);
       }
       if (typeof metadata.title !== 'string' || metadata.title.length > 4096) fail('INVALID_RESPONSE');
       const title = metadata.title.trim() || id;
@@ -236,7 +256,97 @@ export function createKnowledgeSourceReader(options: KnowledgeSourceReaderOption
       }
     }
   }
-  return { status: () => ({ state: profile ? 'configured' : 'missing_config', authorization: 'unchecked' }), handles, read };
+  return { status: ():ReturnType<KnowledgeSourceReader['status']> => ({ state: profile ? 'configured' : 'missing_config', authorization: 'unchecked' }), handles, read };
+}
+
+type DocumentComments={threads:{id:string;quote:string;resolved:boolean;replies:{author:string;text:string}[]}[];truncated:boolean};
+
+async function readCommentPages(id:string,invoke:(args:string[])=>Promise<Record<string,unknown>>):Promise<DocumentComments> {
+  const out:DocumentComments={threads:[],truncated:false};
+  const cursors=new Set<string>(),ids=new Set<string>();
+  let cursor='',remaining=50000,replyRequests=0;
+  function nextCursor(value:unknown,seen:Set<string>) {
+    if (typeof value!=='string' || !value || value.length>2048 || /[\s\p{Cc}]/u.test(value) || value.startsWith('-') || seen.has(value)) fail('INVALID_RESPONSE');
+    seen.add(value);return value;
+  }
+  function bounded(value:unknown,limit:number) {
+    if (value!==undefined && typeof value!=='string') fail('INVALID_RESPONSE');
+    const points=Array.from(value??'');
+    const length=Math.min(limit,remaining,points.length);
+    if (length<points.length) out.truncated=true;
+    remaining-=length;
+    return points.slice(0,length).join('');
+  }
+  for (let page=0;page<4;page++) {
+    const data=await invoke(['drive','+list-comments','--token',id,'--type','docx','--solved-status','all','--page-size','25',
+      ...(cursor?['--page-token',cursor]:[])]);
+    const comments=data.items??data.comments;
+    if ((data.file_token!==undefined && data.file_token!==id) || (data.file_type!==undefined && data.file_type!=='docx') || !Array.isArray(comments) || typeof data.has_more!=='boolean') fail('INVALID_RESPONSE');
+    for (const entry of comments) {
+      if (out.threads.length>=100 || remaining===0) {out.truncated=true;return out;}
+      const item=object(entry),commentId=item.comment_id;
+      if (typeof commentId!=='string' || !TOKEN.test(commentId) || typeof item.is_solved!=='boolean') fail('INVALID_RESPONSE');
+      if (ids.has(commentId)) continue;
+      ids.add(commentId);
+      const list=item.reply_list==null?{}:object(item.reply_list);
+      const embedded=list.replies??[];
+      if (!Array.isArray(embedded)) fail('INVALID_RESPONSE');
+      let rows=embedded;
+      if ([item.has_more,list.has_more].some(value=>value!==undefined && typeof value!=='boolean')) fail('INVALID_RESPONSE');
+      let more=item.has_more===true || list.has_more===true || !rows.length ||
+        (typeof item.reply_count==='number' && item.reply_count>rows.length);
+      // The shortcut sometimes embeds only the root/recent replies. Read
+      // from the beginning so a missing intermediate reply is not skipped.
+      if (more && rows.length<20 && replyRequests<8) {
+        rows=[];
+        let after='';
+        const seen=new Set<string>();
+        do {
+          replyRequests++;
+          const response=await invoke(['drive','file.comment.replys','list','--file-token',id,'--file-type','docx',
+            '--comment-id',commentId,'--page-size',String(20-rows.length),...(after?['--page-token',after]:[])]);
+          if (!Array.isArray(response.items) || typeof response.has_more!=='boolean') fail('INVALID_RESPONSE');
+          const room=20-rows.length;
+          rows.push(...response.items.slice(0,room));more=response.has_more || response.items.length>room;
+          if (more && rows.length<20 && replyRequests<8) after=nextCursor(response.page_token,seen);
+        } while(more && rows.length<20 && replyRequests<8);
+      }
+      if (more || rows.length>20) out.truncated=true;
+      const quote=bounded(item.quote,1000);
+      const replies=rows.slice(0,20).map(value=>{
+        const reply=object(value), content=object(reply.content);
+        if (!Array.isArray(content.elements)) fail('INVALID_RESPONSE');
+        const author=bounded(reply.user_name??reply.user_id,128);
+        const parts=content.elements.map(value=>{
+          const element=object(value);
+          if (element.type==='text_run' || element.type==='text') {
+            const text=element.text??object(element.text_run).text;
+            if (typeof text!=='string') fail('INVALID_RESPONSE');
+            return text;
+          }
+          if (element.type==='docs_link' && typeof element.docs_link==='object' && element.docs_link) {
+            const link=object(element.docs_link);
+            return typeof link.url==='string'?link.url:'[文档链接]';
+          }
+          if (element.type==='person' || element.type==='mention') return '[提及]';
+          out.truncated=true;return '[未展示的评论元素]';
+        });
+        return {author,text:bounded(parts.join(''),4000)};
+      });
+      out.threads.push({id:commentId,quote,resolved:item.is_solved,replies});
+    }
+    if (!data.has_more) return out;
+    if (page===3 || remaining===0 || out.threads.length===100) {out.truncated=true;return out;}
+    cursor=nextCursor(data.page_token,cursors);
+  }
+  return out;
+}
+
+export function createKnowledgeSourceReader(options:KnowledgeSourceReaderOptions={}):KnowledgeSourceReader {
+  return protectedReader(options);
+}
+export function readKnowledgeDocumentComments(url:string,options:KnowledgeSourceReaderOptions,signal:AbortSignal):Promise<DocumentComments> {
+  return protectedReader(options).read(url,{signal},'comments');
 }
 
 /** Host contributes this service through the existing SDK. Config stays outside JSON input. */
