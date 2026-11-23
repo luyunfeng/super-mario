@@ -9,6 +9,7 @@ const prefix = 'core.plugin-metrics.';
 const inventory = prefix + 'buckets';
 type Counts = { calls: number; errors: number; hist: number[]; maxMs: number };
 type Bucket = { at: number; operations: Record<string, Counts> };
+type RecentCall = { at: string; name: string; elapsedMs: number; status: 'ok' | 'error' };
 type Index = { at: number; plugins: string[] };
 
 function fresh(): Counts { return { calls: 0, errors: 0, hist: Array(bounds.length + 1).fill(0), maxMs: 0 }; }
@@ -32,19 +33,26 @@ function operation(bucket: Bucket, name: string) {
 /** Only aggregate counters leave memory. The time index lets us purge removed plugins as well. */
 export function createPluginMetrics(store: Store, now: () => number = Date.now) {
   const pending = new Map<string, Map<number, Bucket>>();
+  const recent = new Map<string, RecentCall[]>();
   let closed = false;
   let lastCleanup: number | undefined;
   const current = () => Math.floor(now() / bucketMs) * bucketMs;
   const collection = (id: string) => prefix + 'plugin.' + id;
   function record(id: string, name: string, elapsed: number, error: boolean) {
     if (closed) return;
-    const at = current();
+    const completedAt = now();
+    const at = Math.floor(completedAt / bucketMs) * bucketMs;
     let buckets = pending.get(id);
     if (!buckets) { buckets = new Map(); pending.set(id, buckets); }
     let bucket = buckets.get(at);
     if (!bucket) { bucket = { at, operations: {} }; buckets.set(at, bucket); }
     // Never retain arbitrary names or request material in metrics.
-    const counts = operation(bucket, /^(service|wrapper|hook):[\w.:-]{1,192}$/.test(name) ? name : 'other');
+    const operationName = /^(service|wrapper|hook):[\w.:-]{1,192}$/.test(name) ? name : 'other';
+    let calls = recent.get(id);
+    if (!calls) { calls = []; recent.set(id, calls); }
+    if (calls.length === 200) calls.shift();
+    calls.push({ at: new Date(completedAt).toISOString(), name: operationName, elapsedMs: Math.ceil(elapsed), status: error ? 'error' : 'ok' });
+    const counts = operation(bucket, operationName);
     counts.calls++;
     if (error) counts.errors++;
     let i = bounds.findIndex(limit => elapsed <= limit);
@@ -116,7 +124,11 @@ export function createPluginMetrics(store: Store, now: () => number = Date.now) 
   function close() {
     clearInterval(timer);
     closed = true;
+    recent.clear();
     flush();
   }
-  return { record, read, close };
+  function recentCalls(id: string) {
+    return { items: (recent.get(id) ?? []).map(call => ({ ...call })).reverse() };
+  }
+  return { record, read, recentCalls, close };
 }

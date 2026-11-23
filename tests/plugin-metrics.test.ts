@@ -31,6 +31,13 @@ test('real callbacks attribute service, wrapper and hook outcomes to their regis
   const provider = host.metrics('origin', '1h');
   assert.deepEqual([provider.calls, provider.errors,provider.operations[0]?.name], [3, 2,'service:origin.read']);
   assert.ok(provider.p95Ms !== null && provider.p95Ms > 0);
+  const providerCalls = host.recentCalls('origin').items;
+  assert.deepEqual(providerCalls.map(call => [call.name,call.status]), [
+    ['service:origin.read','error'], ['service:origin.read','error'], ['service:origin.read','ok'],
+  ]);
+  assert.doesNotMatch(JSON.stringify(providerCalls), /private/);
+  assert.equal(host.recentCalls('observer').items[0].name,'hook:knowledge.put:before');
+  assert.throws(() => host.recentCalls('missing'), {status:404});
   const observer = host.metrics('observer','24h');
   assert.deepEqual(observer.operations.map(row => [row.name,row.calls,row.errors]), [
     ['wrapper:origin.read',3,2], ['hook:knowledge.put:before',1,1],
@@ -70,5 +77,25 @@ test('SQLite buckets survive restart, expire in each window and bound operation 
   assert.deepEqual(metrics.read('sample','7d'), {window:'7d',calls:0,errors:0,p95Ms:null,operations:[]});
   metrics.close();
   assert.deepEqual(store.list('core.plugin-metrics.plugin.sample'),[]);
+  store.close();
+});
+
+
+test('recent calls keep only the newest 200 completions per plugin until the process stops', () => {
+  const store = createStore(':memory:');
+  let now = 0;
+  const metrics = createPluginMetrics(store, () => now);
+  for (now = 0; now < 205; now++) metrics.record('sample', 'service:sample.echo', now, false);
+  metrics.record('other-plugin', 'service:other./private/path', 3.2, true);
+  const {items} = metrics.recentCalls('sample');
+  assert.deepEqual(items.map(item => item.elapsedMs), Array.from({length:200}, (_,i) => 204-i));
+  assert.equal(items[0].at, new Date(204).toISOString());
+  assert.deepEqual(metrics.recentCalls('other-plugin').items, [
+    { at:new Date(205).toISOString(), name:'other', elapsedMs:4, status:'error' },
+  ]);
+  metrics.close();
+  const restarted = createPluginMetrics(store);
+  assert.deepEqual(restarted.recentCalls('sample'), {items:[]});
+  restarted.close();
   store.close();
 });

@@ -82,6 +82,10 @@ export class PluginHost {
       if (owner) return (elapsed, failed) => this.measure.record(owner, name, elapsed, failed);
     });
   }
+  recentCalls(id: string) {
+    if (!this.entries.has(id)) throw Object.assign(new Error('未找到插件'), { status: 404 });
+    return this.measure.recentCalls(id);
+  }
   metrics(id: string, window: PluginMetricWindow) {
     if (!this.entries.has(id)) throw Object.assign(new Error('未找到插件'), { status: 404 });
     return this.measure.read(id, window);

@@ -52,7 +52,7 @@ export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootTo
   readBody:(req:IncomingMessage,limit:number)=>Promise<Record<string,unknown>>,
   json:(res:ServerResponse,status:number,value:unknown)=>void,overview:ReturnType<typeof createAdminOverview>,
   devices:Pick<ReturnType<typeof createBrowserDevices>,'list'|'issue'|'revoke'>,deviceRevision:()=>number,passwordLogin:ReturnType<typeof createBrowserPassword>,
-  inspectPlugins:()=>ReturnType<PluginHost['inspections']>,pluginMetrics:PluginHost['metrics']) {
+  plugins:Pick<PluginHost,'metrics'|'recentCalls'>,inspectPlugins:()=>ReturnType<PluginHost['inspections']>) {
   // Reserve a slot before the password hash starts, so concurrent guesses count as well.
   const attempts=new Map<string,{count:number;until:number}>();
   async function limited<T>(req:IncomingMessage,res:ServerResponse,operation:()=>Promise<T>):Promise<T> {
@@ -112,16 +112,17 @@ export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootTo
     }
     if(req.method==='GET'){
       if(action==='state')return json(res,200,{configured:auth.configured(),authenticated:!!session,...(session && {csrf:session.csrf,expiresAt:session.expiresAt})});
-      const metrics=/^plugins\/([^/]*)\/metrics$/.exec(action);
-      if(action==='overview'||action==='doctor'||action==='devices'||action==='plugins'||metrics){
+      const pluginData=/^plugins\/([^/]*)\/(metrics|calls)$/.exec(action);
+      if(action==='overview'||action==='doctor'||action==='devices'||action==='plugins'||pluginData){
         if(!session)fail(401,'请先登录管理界面');
-        if(metrics){
-          const id=metrics[1]!;
+        if(pluginData){
+          const id=pluginData[1]!;
           if(!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id))fail(400,'插件 ID 无效');
+          if(pluginData[2]==='calls')return json(res,200,plugins.recentCalls(id));
           const windows=new URL(req.url??'/','http://localhost').searchParams.getAll('window');
           const window=windows[0]??'24h';
           if(windows.length>1 || (window!=='1h' && window!=='24h' && window!=='7d'))fail(400,'请选择有效的指标时间范围');
-          return json(res,200,pluginMetrics(id,window));
+          return json(res,200,plugins.metrics(id,window));
         }
         if(action==='plugins')return json(res,200,{plugins:inspectPlugins()});
         if(action==='devices')return json(res,200,{devices:devices.list()});

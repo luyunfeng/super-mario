@@ -1,3 +1,4 @@
+import {attachPluginCalls} from './admin-plugin-calls.js';
 import {h,replace} from './lib/dom.js';
 
 const statuses={active:'运行中',disabled:'已停用',waiting:'等待依赖',failed:'加载失败',missing:'未安装'};
@@ -13,10 +14,12 @@ export function createAdminPlugins({request,current,checkSession}){
   const read=button('查看插件',load);
   const panel=h('section',{'aria-label':'插件诊断',class:'stack'},h('h2',{},'插件诊断'),read,filters,message,list);
   filters.append(h('label',{class:'field'},'搜索插件',search),h('label',{class:'field'},'插件状态',status));
-  const expanded=new Set(),metricReads=new Map();
+  const expanded=new Set(),metricReads=new Map(),callViews=new Set();
   let rows=[],ready=false,loading=false;
   const active=()=>current() && panel.isConnected && !life.signal.aborted;
-  function stopMetrics(){
+  function stopReports(){
+    for(const close of callViews)close();
+    callViews.clear();
     for(const reader of metricReads.values())reader.abort();
     metricReads.clear();
   }
@@ -61,7 +64,7 @@ export function createAdminPlugins({request,current,checkSession}){
   }
   function paint(){
     if(!ready)return;
-    stopMetrics();
+    stopReports();
     const query=search.value.trim().toLowerCase();
     const results=rows.filter(p=>(!status.value || p.status===status.value) &&
       [p.id,p.name,...p.capabilities].some(value=>value.toLowerCase().includes(query)));
@@ -77,15 +80,17 @@ export function createAdminPlugins({request,current,checkSession}){
           ...(p.reason?[['原因',p.reason]]:[]),
         ].map(([label,text])=>[h('dt',{},label),h('dd',{},text)])));
       const resetMetrics=attachMetrics(detail,p.id);
+      const closeCalls=attachPluginCalls(detail,p.id,{request,active,checkSession});
+      callViews.add(closeCalls);
       detail.ontoggle=()=>{if(detail.isConnected){
-        if(detail.open)expanded.add(p.id);else{expanded.delete(p.id);resetMetrics();}
+        if(detail.open)expanded.add(p.id);else{expanded.delete(p.id);resetMetrics();closeCalls();}
       }};
       return detail;
     }));
   }
   async function load(){
     if(!active() || loading)return;
-    stopMetrics();loading=true;read.disabled=true;ready=false;replace(list);message.textContent='正在读取插件清单…';
+    stopReports();loading=true;read.disabled=true;ready=false;replace(list);message.textContent='正在读取插件清单…';
     try{
       const result=await request('plugins',undefined,{},life.signal);
       if(!active())return;
@@ -97,5 +102,5 @@ export function createAdminPlugins({request,current,checkSession}){
     }finally{if(active()){loading=false;read.disabled=false;read.textContent='刷新插件';}}
   }
   search.oninput=paint;status.onchange=paint;
-  return {el:panel,close(){life.abort();stopMetrics();rows=[];expanded.clear();replace(list);search.value='';}};
+  return {el:panel,close(){life.abort();stopReports();rows=[];expanded.clear();replace(list);search.value='';}};
 }

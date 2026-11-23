@@ -18,7 +18,7 @@ test('管理员按名称和状态诊断本地插件，普通凭据不可查清�
     }));
     await writeFile(join(directory,'index.mjs'),
       'export default { id:'+JSON.stringify(id)+',name:'+JSON.stringify(name)+',capabilities:[],activate(ctx){'+
-      (id==='fixture-ready'?"ctx.provide('fixture-ready.count',()=>true);":'')+
+      (id==='fixture-ready'?"ctx.provide('fixture-ready.count',input=>{if(input.fail)throw new Error('synthetic-private-service-error');return 'synthetic-private-service-result';});":'')+
       (fail?'throw new Error('+JSON.stringify(errorMarker)+');':'')+'} };');
   }
   await install('fixture-provider','合成资料来源',[]);
@@ -33,7 +33,7 @@ test('管理员按名称和状态诊断本地插件，普通凭据不可查清�
   const admin=await browser.newContext(),base=server.url+'/api/v1',rootHeaders={authorization:'Bearer '+root};
   const paired=server.app.browserDevices.redeem(server.app.browserDevices.issue('合成设备').code);
   for(const token of [undefined,root,paired.token]){
-    for(const route of ['/admin/plugins','/admin/plugins/fixture-ready/metrics']){
+    for(const route of ['/admin/plugins','/admin/plugins/fixture-ready/metrics','/admin/plugins/fixture-ready/calls']){
       const denied=await fetch(base+route,{headers:token?{authorization:'Bearer '+token}:{}});
       assert.equal(denied.status,401);
       assert.doesNotMatch(await denied.text(),/fixture-ready|synthetic-private-/);
@@ -49,6 +49,9 @@ test('管理员按名称和状态诊断本地插件，普通凭据不可查清�
   }
   assert.equal((await admin.request.get(base+'/admin/plugins/fixture-absent/metrics')).status(),404);
   assert.equal((await admin.request.get(base+'/admin/plugins/foo%2Fbar/metrics')).status(),400);
+  const callsURL=base+'/admin/plugins/fixture-ready/calls';
+  assert.deepEqual(await (await admin.request.get(callsURL)).json(),{items:[]});
+  assert.equal((await admin.request.get(base+'/admin/plugins/fixture-absent/calls')).status(),404);
   const defaultMetrics=await admin.request.get(metricsURL);
   assert.equal(defaultMetrics.status(),200);
   assert.equal((await defaultMetrics.json()).window,'24h');
@@ -74,12 +77,31 @@ test('管理员按名称和状态诊断本地插件，普通凭据不可查清�
     assert.equal((await (await refreshed).json()).window,window);
     await expect(metrics).toContainText('此时间范围没有调用记录');
   }
-  await server.app.plugins.invocations.use('fixture-ready.count',{});
+  await server.app.plugins.invocations.use('fixture-ready.count',{text:'synthetic-private-service-input'});
   await metrics.getByRole('button',{name:'刷新指标'}).click();
   await expect(metrics).toContainText('service:fixture-ready.count');
   const sample=await (await admin.request.get(metricsURL)).json();
   assert.equal(sample.calls,1);assert.equal(sample.errors,0);
   assert.deepEqual(sample.operations.map((op:{name:string})=>op.name),['service:fixture-ready.count']);
+  await assert.rejects(server.app.plugins.invocations.use('fixture-ready.count',{fail:true,text:'synthetic-private-service-input'}));
+  const callsReply=page.waitForResponse(r=>r.url()===callsURL);
+  await ready.getByRole('button',{name:'查看最近调用'}).click();
+  const returned=await callsReply;assert.equal(returned.status(),200);
+  assert.doesNotMatch(await returned.text(),/synthetic-private-/);
+  const {items}=await returned.json();
+  assert.deepEqual(items.map((entry:{status:string})=>entry.status),['error','ok']);
+  for(const entry of items){
+    assert.deepEqual(Object.keys(entry).sort(),['at','elapsedMs','name','status']);
+    assert.equal(entry.name,'service:fixture-ready.count');
+    assert.ok(entry.elapsedMs>=0);assert.ok(Number.isFinite(Date.parse(entry.at)));
+  }
+  const recent=ready.getByRole('region',{name:'最近调用'});
+  await expect(recent).toContainText('成功');await expect(recent).toContainText('失败');
+  await expect(recent).not.toContainText('synthetic-private-');
+  await recent.getByRole('checkbox',{name:'仅失败'}).check();
+  const callTable=recent.getByRole('table',{name:'调用记录'});
+  await expect(callTable.getByRole('row')).toHaveCount(2);
+  await expect(callTable).toContainText('失败');await expect(callTable).not.toContainText('成功');
   await expect(panel.locator('summary',{hasText:'合成资料等待'})).toHaveCount(0);
   await status.selectOption('waiting');
   const waiting=panel.locator('details').filter({has:page.locator('summary',{hasText:'合成资料等待'})});
