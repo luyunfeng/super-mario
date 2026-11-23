@@ -762,6 +762,18 @@ test('浏览器快捷键可改绑、处理冲突和恢复，输入与弹窗保�
     const help=page.getByRole('dialog',{name:'快捷键',exact:true});
     await expect(help).toContainText('关闭弹窗');
     await expect(help).not.toContainText('添加待办');
+    const other=await page.context().newPage();
+    await other.goto(page.url());
+    const toggleGlobal=(on:boolean)=>other.evaluate(on=>{
+      const key='sm.shortcuts.v1';
+      const settings=JSON.parse(localStorage.getItem(key)!);
+      localStorage.setItem(key,JSON.stringify({...settings,on}));
+    },on);
+    await toggleGlobal(true);
+    await expect(help).toContainText('添加待办');
+    await toggleGlobal(false);
+    await expect(help).not.toContainText('添加待办');
+    await other.close();
     await help.getByRole('button',{name:'关闭',exact:true}).click();
     await close();
     await page.keyboard.press('c');
