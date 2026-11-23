@@ -104,9 +104,10 @@ test('时间窗摘要：项目进展、待办完成、执行结束、失败、�
   store.put('projects','p',{id:'p',name:'项目 A'} satisfies Partial<Project>);
   const run={id:'progress',projectId:'p',prompt:'推进工作',status:'running',updatedAt:'2026-11-17T01:00:00Z',output:''} satisfies Partial<Run>;
   for(const [id,status,date] of [['progress','running','01'],['done','completed','02'],['bad','failed','03'],['old','failed','00']] as const)store.put('runs',id,{...run,id,status,updatedAt:`2026-11-17T${date}:00:00Z`});
+  store.put('runs','reviewed',{...run,id:'reviewed',todoId:'done',status:'completed',updatedAt:to});
   store.put('todos','done',{id:'done',projectId:'p',title:'已验收',completedAt:to,updatedAt:to} satisfies Partial<Todo>);
   store.put('interactions','decision',{id:'decision',projectId:'p',status:'open',title:'待批准',createdAt:'2026-11-16T00:00:00Z'});
-  const brief=buildWindowBrief(store,from,to),p=brief.projects[0];assert.equal(p.progress.length,1);assert.equal(p.completed.length,1);assert.equal(p.ended.length,1);assert.equal(p.failed.length,1);assert.equal(p.decisions.length,1);
+  const brief=buildWindowBrief(store,from,to),p=brief.projects[0];assert.equal(p.progress.length,1);assert.equal(p.completed.length,1);assert.deepEqual(p.ended.map(item=>item.id),['done']);assert.equal(p.failed.length,1);assert.equal(p.decisions.length,1);
   assert.equal(buildWindowBrief(store,to,'2026-11-17T08:00:00Z').projects[0].completed.length,0);
 });
 test('简报配置：保留已有任务和暂停状态，间隔启停复用、不重复，时区时段校验',t=>{

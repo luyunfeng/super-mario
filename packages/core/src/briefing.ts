@@ -18,6 +18,7 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
   const projects = store.list<Project>('projects').filter(p => !p.archivedAt && (projectId === undefined || p.id === projectId));
   const runs = store.list<Run>('runs');
   const todos = store.list<Todo>('todos');
+  const completedTodoIds = new Set(todos.filter(t => t.completedAt && beforeEnd(t.completedAt)).map(t => t.id));
   const approvals = store.list<Approval>('approvals').filter(a => a.status === 'pending' && beforeEnd(a.createdAt));
   const cards = store.list<{id:string;title:string;projectId?:string;status:string;createdAt:string}>('interactions').filter(c => c.status === 'open' && beforeEnd(c.createdAt));
   const plans = store.list<{id:string;title:string;status:string;createdAt:string;tasks:{projectId?:string}[]}>('plans').filter(p => p.status === 'pending' && beforeEnd(p.createdAt));
@@ -54,7 +55,7 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
       progress: updates('running'), queued: updates('queued'), unknown: updates('unknown'), cancelled: updates('cancelled'),
       todoUpdates: scopedTodos.filter(t => changed(t.updatedAt) && !t.completedAt).map(t => ({id:t.id,title:t.title})),
       completed: scopedTodos.filter(t => t.completedAt && changed(t.completedAt)).map(t => ({id:t.id,title:t.title})),
-      ended: scopedRuns.filter(r => r.status === 'completed' && changed(r.updatedAt)).map(r => ({id:r.id,title:r.prompt,result:r.output.slice(0,800)})),
+      ended: scopedRuns.filter(r => r.status === 'completed' && changed(r.updatedAt) && !(r.todoId && completedTodoIds.has(r.todoId))).map(r => ({id:r.id,title:r.prompt,result:r.output.slice(0,800)})),
       failed: scopedRuns.filter(r => r.status === 'failed' && changed(r.updatedAt)).map(r => ({id:r.id,title:r.prompt,error:(r.error || r.output).slice(0,800)})),
       decisions: [...conversations.filter(c=>c.status==='waiting_user'&&(c.projectId??'')===project.id).map(c=>({id:c.id,href:pendingDecisionHref('conversations',c.id),title:`${c.title}：${c.question}`})),...cards.filter(c => (c.projectId ?? '') === project.id).map(c => ({id:c.id,href:pendingDecisionHref('interactions',c.id),title:c.title})),...approvals.filter(a => {
         const todo = a.todoId ? todos.find(t => t.id === a.todoId) : undefined;
