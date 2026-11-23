@@ -64,7 +64,9 @@ export interface ExecutorInfo { taskOnly?: boolean; nativeResultSources?: string
 export interface PluginNavigationItem { id: string; label: string; route: string }
 export interface PluginInfo { dependencies?: string[]; navigation?: PluginNavigationItem[]; id: string; name: string; enabled: boolean; status: 'active' | 'disabled' | 'waiting' | 'failed'; error?: string; capabilities: string[] }
 /** Declarative browser contribution. The browser owns rendering and cleanup; no server-supplied script executes. */
-export interface WebExtension { slot: 'startup'; renderer: 'brand-splash'; title: string; subtitle: string; durationMs?: number }
+export type WebExtension =
+  | { slot: 'startup'; renderer: 'brand-splash'; title: string; subtitle: string; durationMs?: number }
+  | { slot: 'advanced-interface'; renderer: 'assistant-card-examples' };
 export interface AppEvent { id: number; type: string; data: Json; createdAt: string }
 export interface MachineInfo { agentInstanceId?: string; id: string; name: string; online: boolean; platform: string; connectedAt: string; capabilities: string[]; executors?: ExecutorInfo[] }
 export interface ModelConfig { provider: string; model: string; baseUrl?: string; apiKey?: string; cliCommand?: string; cliConfigDir?: string }

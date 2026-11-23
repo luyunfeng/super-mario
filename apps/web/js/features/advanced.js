@@ -37,7 +37,7 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
     h('div', { class: 'fold__body' }, plugins, h('a',{class:'btn btn--sm',href:'/admin.html'},'管理员登录'), files, events, ui, diagnostics));
 
   function paint(snapshot) {
-    examplesButton.hidden=!snapshot.plugins?.some(p=>p.id==='assistant-card-examples' && p.status==='active');
+    examplesButton.hidden=!snapshot.webExtensions?.some(entry=>entry.value?.slot==='advanced-interface' && entry.value.renderer==='assistant-card-examples');
     if(examplesButton.hidden){examplesDrawer?.close();examplesDrawer=undefined;}
     const setup = snapshot.setup ?? {};
     replace(setupList, [['配置 Agent', setup.agent], ['新建项目', setup.project], ['添加记忆', setup.memory], ['连接飞书', setup.channel]].map(([name, value]) =>

@@ -59,7 +59,10 @@ export const conversationRetry: Extension = {
 export { createRunComparison } from './run-comparison.ts';
 
 export const assistantCardExamples: Extension = {
-  id: 'assistant-card-examples', name: '助理卡片示例', capabilities: ['web.cards.preview'], activate() {},
+  id: 'assistant-card-examples', name: '助理卡片示例', capabilities: ['web.cards.preview'],
+  activate(context) {
+    context.contribute('web_extensions', context.id, {slot:'advanced-interface', renderer:'assistant-card-examples'});
+  },
 };
 export const readingFonts: Extension = {
   id: 'reading-fonts', name: '阅读字体', capabilities: ['web.appearance.fonts'], activate() {},
