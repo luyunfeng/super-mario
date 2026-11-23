@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium, expect } from '@playwright/test';
+import type { AgentArtifactRecord } from '../apps/server/src/agent-artifacts.ts';
 import { startServer } from '../apps/server/src/index.ts';
 
 test('从插件配置固定入口，刷新、停用与恢复，并从窄屏打开功能', async t => {
@@ -142,4 +143,35 @@ test('阅读字体与字号独立保存，窄屏可用，停用后还原默认�
   await size.selectOption('standard');
   await dialog.getByRole('button', { name: '保存字体' }).click();
   await expect.poll(measured).toEqual(standard);
+});
+
+test('从旧插件文件重新暂存时只创建待确认记录', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-restage-'));
+  const server = await startServer({host:'127.0.0.1', port:0, dataDir:dir, demo:true});
+  t.after(async () => { await server.close(); await rm(dir, {recursive:true, force:true}); });
+  const source = 'export default { id:"sample", version:"1.0.0", activate() {} };';
+  const response = await fetch(server.url + '/api/v1/agent-artifacts', {
+    method:'POST', headers:{'content-type':'application/json'},
+    body:JSON.stringify({machineId:'fixture-node', manifest:{id:'sample',version:'1.0.0',apiVersion:1}, source}),
+  });
+  expect(response.status).toBe(201);
+  const old: AgentArtifactRecord = await response.json();
+  server.app.store.put('agent-artifacts', old.id, {...old, status:'unloaded'});
+  const browser = await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.goto(server.url + '/#agent');
+  await page.locator('#agent-advanced > summary').click();
+  await page.locator('summary').filter({hasText:/^插件文件$/}).click();
+  const files = page.locator('.agent-artifacts');
+  await files.getByRole('button', {name:'重新暂存此版本'}).click();
+  const pending = files.locator('article').filter({hasText:'状态：待确认'});
+  await expect(pending).toHaveCount(1);
+  await expect(pending).toContainText(old.manifest.sha256);
+  await expect(pending.getByRole('button', {name:'加载到电脑'})).toBeDisabled();
+  const records = server.app.store.list<AgentArtifactRecord>('agent-artifacts');
+  expect(records).toHaveLength(2);
+  const staged = records.find(record => record.id !== old.id);
+  expect(staged).toMatchObject({status:'pending', machineId:old.machineId, source, manifest:old.manifest});
+  expect(staged?.approval).toBeUndefined();
 });
