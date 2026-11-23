@@ -32,15 +32,17 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     const archived = await server.app.createProject({ name: '归档测试' });
     server.app.projects.archive(archived.id);
     const keyword = '合成[定位]';
+    const task = await (await api('/todos', {projectId, title:'合成核对事项'})).json();
     const putMessage = (id: string, conversationId: string, text: string, scope = projectId) =>
-      server.app.store.put('messages', id, { id, projectId: scope, conversationId, role: 'user', text, createdAt: now, status: 'done' });
+      server.app.store.put('messages', id, { id, projectId: scope, conversationId, role: 'user', text, createdAt: now, status: 'done',
+        ...(id === 'historic' && {todoId:task.id}) });
     const work = 'project:' + projectId + ':work';
     putMessage('historic', work, '季度复核旧记录 ' + keyword);
     for (let i = 0; i < 75; i++) putMessage('later-' + i, work, '后续记录 ' + i);
     putMessage('archived', 'project:' + archived.id + ':work', keyword, archived.id);
     putMessage('wrong-scope', work, keyword, archived.id);
     putMessage('bot-private', 'bot:fixture', keyword);
-    const historical = await (await api('/project-message-search', { query: keyword })).json();
+    const historical = await (await api('/project-message-search', { projectId, todoId:task.id, query: keyword })).json();
     const citation = historical.hits[0].webCitation;
     server.app.store.put('messages', 'historical-answer', { id: 'historical-answer', conversationId: 'main', role: 'assistant',
       text: '依据见' + citation + '。另见[查看原文](https://example.invalid)。', createdAt: now, status: 'done' });
@@ -77,6 +79,8 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await expect(sourceLink).toHaveCount(1);
     await sourceLink.click();
     const cited = page.locator('#panel-workspace .msg.is-search-hit');
+    const topic = page.locator('#panel-workspace p').filter({hasText:'当前待办：合成核对事项'});
+    await expect(topic).toBeVisible();
     await expect(cited).toBeFocused();
     await expect(cited).toContainText(keyword);
     const changed = page.getByText('原消息在引用后已修改，当前显示最新正文。');
@@ -86,6 +90,8 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await expect(changed).toBeVisible();
     await expect(cited).toContainText('已调整期限');
     await page.reload();
+    await expect(topic).toBeVisible();
+    await expect(cited).toContainText(keyword);
     await expect(changed).toBeVisible();
     await page.goBack();
     await expect(sourceLink).toBeVisible();
