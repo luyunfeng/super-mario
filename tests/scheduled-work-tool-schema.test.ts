@@ -94,8 +94,8 @@ test('registered proposal schema describes every strict timing/action branch and
   const [once, interval, cron] = branches(props.schedule);
   assert.equal(branches(props.schedule).length, 3);
   assertBranch(once!, 'once', ['at', 'tz'], ['at']);
-  assertBranch(interval!, 'interval', ['everySec', 'anchorAt', 'tz'], ['everySec']);
-  assertBranch(cron!, 'cron', ['cron', 'tz'], ['cron', 'tz']);
+  assertBranch(interval!, 'interval', ['everySec', 'anchorAt', 'tz', 'until'], ['everySec']);
+  assertBranch(cron!, 'cron', ['cron', 'tz', 'until'], ['cron', 'tz']);
   for (const branch of [once!, interval!, cron!]) {
     assert.equal(object(object(branch.properties).tz).type, 'string');
     assert.match(String(object(object(branch.properties).tz).description), /IANA.*Asia\/Shanghai/);

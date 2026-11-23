@@ -1,4 +1,4 @@
-import type { Store, EventBus } from '../../plugin-sdk/src/index.ts';
+import type { Store, EventBus, ScheduleInfo } from '../../plugin-sdk/src/index.ts';
 import type { Approval, BotScope, Json, Message, Run, ScheduledWorkInput, ScheduledWorkOccurrence, ScheduledWorkRecord, ScheduledWorkScope } from '../../protocol/src/index.ts';
 import { createScheduledWork } from './scheduled-work.ts';
 import { nextOccurrence, previewCron, type createSchedules } from './schedules.ts';
@@ -66,14 +66,20 @@ export function createScheduledWorkService(options: {
       && run.sourceMessageId === work.sourceMessage.id;
     return { approvalStatus: approval.status, ...(matches ? { run: { id: run.id, status: run.status } } : {}) };
   }
-  function historyPage(work: ScheduledWorkRecord, occurrences: ScheduledWorkOccurrence[], after?: string) {
-    const history = occurrences.filter(o => !o.ownerSkipToken || Date.parse(o.scheduledFor) <= Date.now()).sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor) || b.key.localeCompare(a.key));
+  function historyPage(work: ScheduledWorkRecord, occurrences: ScheduledWorkOccurrence[], schedule?: ScheduleInfo, after?: string) {
+    // The scheduler persists cutoff separately from delivered work. Include it in the same cursor order.
+    const history: (ScheduledWorkOccurrence & { endedAt?: string })[] = occurrences.filter(o => !o.ownerSkipToken || Date.parse(o.scheduledFor) <= Date.now());
+    if (schedule?.endedAt && schedule.until) history.push({
+      key: 'ended:' + schedule.id, workId: work.id, workVersion: work.version, scheduleId: schedule.id, scheduleVersion: schedule.version,
+      scheduledFor: new Date(schedule.until).toISOString(), status: 'skipped', endedAt: schedule.endedAt,
+    });
+    history.sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor) || b.key.localeCompare(a.key));
     const start = after === undefined ? 0 : history.findIndex(o => o.key === after) + 1;
     if (after !== undefined && !start) fail('当前计划找不到所选触发记录', 404);
     const page = history.slice(start, start + 20);
     const more = start + page.length < history.length;
     return {
-      occurrences: page.map(o => ({ key: o.key, scheduledFor: o.scheduledFor, status: o.status, approvalId: o.approvalId,
+      occurrences: page.map(o => ({ endedAt: o.endedAt, key: o.key, scheduledFor: o.scheduledFor, status: o.status, approvalId: o.approvalId,
         ...dispatchReceipt(work, o),
         result: o.result, ...(o.ownerSkipToken ? { ownerSkipped: true } : {}), kind: work.input.action.kind, ...(o.error ? { error: '结果未知，请核对原记录' } : {}) })),
       occurrenceTotal: history.length, occurrencesTruncated: more, nextOccurrenceKey: more ? page[page.length - 1].key : null,
@@ -83,7 +89,8 @@ export function createScheduledWorkService(options: {
     const work = scopedWork(input);
     if (input.after !== undefined && typeof input.after !== 'string') fail('触发记录标识无效', 400);
     const occurrences = store.list<ScheduledWorkOccurrence>('scheduled-work.occurrences').filter(o => o.workId === work.id);
-    return historyPage(work, occurrences, input.after);
+    const schedule = work.scheduleId ? options.schedules.forOwner('daily-brief').list().find(item => item.id === work.scheduleId) : undefined;
+    return historyPage(work, occurrences, schedule, input.after);
   }
   function publicRows(input:Record<string,unknown>={}) {
     const offset = input.offset === undefined ? 0 : input.offset;
@@ -101,6 +108,7 @@ export function createScheduledWorkService(options: {
       const schedule = row.scheduleId ? schedules.get(row.scheduleId) : undefined;
       if (row.status !== 'active' || schedule?.status !== 'active' || !schedule.nextAt || !(Date.parse(schedule.nextAt) >= now)) return [];
       const nextAt = pendingSkip(row, schedule) ? nextOccurrence(schedule, Date.parse(schedule.nextAt)) : schedule.nextAt;
+      if (schedule.until && Date.parse(nextAt) >= Date.parse(schedule.until)) return [];
       return [{ id: row.id, title: row.input.title, nextAt }];
     }).sort((a, b) => Date.parse(a.nextAt) - Date.parse(b.nextAt) || a.id.localeCompare(b.id)).slice(0, 3);
     const page = selected.slice(offset, offset + limit);
@@ -110,8 +118,8 @@ export function createScheduledWorkService(options: {
       return {id:row.id,version:row.version,title:row.input.title,status:row.status,projectId:row.input.projectId,todoId:row.input.todoId,schedule:row.input.schedule,action:row.input.action,
         approvalId:row.approvalId,approvalStatus:store.get<Approval>('approvals',row.approvalId)?.status,
         source:{messageId:row.sourceMessage.id,createdAt:row.sourceMessage.createdAt},
-        nextAt:schedule?.nextAt,skipToken:pendingSkip(row, schedule)?.ownerSkipToken,scheduleStatus:schedule?.status,scheduleVersion:schedule?.version,
-        ...historyPage(row, row.occurrences)};
+        nextAt:schedule && (!schedule.until || Date.parse(schedule.nextAt) < Date.parse(schedule.until)) ? schedule.nextAt : undefined,skipToken:pendingSkip(row, schedule)?.ownerSkipToken,scheduleStatus:schedule?.status,scheduleVersion:schedule?.version,
+        ...historyPage(row, row.occurrences, schedule)};
     }),upcoming,total:selected.length,offset,nextOffset,truncated:nextOffset !== null,limit };
   }
   function scopedWork(input: Record<string, unknown>) {

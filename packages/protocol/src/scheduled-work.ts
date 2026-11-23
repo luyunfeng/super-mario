@@ -2,8 +2,8 @@ import type { Json, Message } from './index.ts';
 
 export type ScheduledWorkTiming =
   | { kind: 'once'; at: string; tz?: string }
-  | { kind: 'interval'; everySec: number; anchorAt?: string; tz?: string }
-  | { kind: 'cron'; cron: string; tz: string };
+  | { kind: 'interval'; everySec: number; anchorAt?: string; until?: string; tz?: string }
+  | { kind: 'cron'; cron: string; tz: string; until?: string };
 export type ScheduledWorkAction = { kind: 'brief' } | {
   kind: 'dispatch'; executorId: string; prompt: string; doneWhen: string; expectMinutes: number; cwd?: string;
 };

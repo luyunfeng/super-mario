@@ -2086,6 +2086,7 @@ test('飞书创建每周简报审批，Web 核对同一排期，跨夏令时保�
   let adapter!: FeishuOptions;
   const sent: string[] = [];
   const { server, api, ask } = await fixture(t, req => {
+    assert.match(req.system, /取次日零点作为截止/);
     assert.match(req.system, /星期日用 0/);
     assert.match(req.system, /法定工作日或调休/);
     if (req.lastRole === 'user') {
@@ -2099,7 +2100,7 @@ test('飞书创建每周简报审批，Web 核对同一排期，跨夏令时保�
       }
       if (JSON.stringify(req.content).includes('查看排期')) return call('scheduled_work_list', {}, 'read');
       return call('scheduled_work_propose', { key: 'weekly-summary', title: '每周简报', schedule: {
-        kind: 'cron', cron: '35 8 * * 2,0', tz: 'America/New_York' }, action: { kind: 'brief' } }, 'proposal');
+        kind: 'cron', cron: '35 8 * * 2,0', tz: 'America/New_York', until: '2099-05-02T00:00:00-04:00' }, action: { kind: 'brief' } }, 'proposal');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
     const receipt = JSON.parse(raw);
@@ -2123,6 +2124,7 @@ test('飞书创建每周简报审批，Web 核对同一排期，跨夏令时保�
     const [row] = receipt.items;
     assert.equal(row.schedule.cron, '35 8 * * 2,0');
     assert.equal(row.schedule.tz, 'America/New_York');
+    assert.equal(row.schedule.until, '2099-05-02T00:00:00-04:00');
     assert.equal(row.scheduleStatus, 'active');
     return { role: 'assistant', content: '已生效，每周二和周日纽约当地时间 08:35。' };
   }, options => {
@@ -2141,7 +2143,7 @@ test('飞书创建每周简报审批，Web 核对同一排期，跨夏令时保�
     await adapter.onMessage('只试算纽约每周二和周日 08:35 的下三次触发', { ...source, messageId: 'preview' });
     await t.waitFor(() => assert.ok(sent.some(reply => reply.startsWith('试算：') && (reply.match(/星期[二日].*?08:35/g) ?? []).length === 3)));
     assert.equal(server.app.scheduledWork.list({ projectId: project.id }).total, 0);
-    await adapter.onMessage('纽约每周二和周日早上 8:35 生成项目简报', { ...source, messageId: 'weekly' });
+    await adapter.onMessage('纽约每周二和周日早上 8:35 生成项目简报，直到 2099 年 5 月 1 日含当天', { ...source, messageId: 'weekly' });
     await t.waitFor(() => assert.ok(sent.includes('每周二和周日 08:35（纽约时间），创建审批待确认。')));
     const [row] = server.app.scheduledWork.list({ projectId: project.id }).items;
     await api('/approvals/' + row.approvalId + '/approve', { version: 1 });

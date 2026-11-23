@@ -40,6 +40,7 @@ function validate(input: ScheduleInput, now: number): ScheduleInput {
           "anchorAt",
           "cron",
           "tz",
+          "until",
           "missed",
           "catchUpMax",
           "payload",
@@ -49,6 +50,7 @@ function validate(input: ScheduleInput, now: number): ScheduleInput {
           "status",
           "nextAt",
           "lastFiredFor",
+          "endedAt",
           "createdAt",
           "updatedAt",
         ].includes(key),
@@ -65,6 +67,8 @@ function validate(input: ScheduleInput, now: number): ScheduleInput {
     typeof value === "string" &&
     /(?:Z|[+-]\d{2}:\d{2})$/i.test(value) &&
     Number.isFinite(Date.parse(value));
+  if (input.until !== undefined && (input.kind === 'once' || !zoned(input.until)))
+    backgroundError('周期结束时间必须带时区，且仅适用于重复计划');
   if (input.kind === "once" && !zoned(input.at))
     backgroundError("一次调度时间必须带时区");
   if (input.kind === "interval") {
@@ -107,12 +111,13 @@ function validate(input: ScheduleInput, now: number): ScheduleInput {
 export function previewCron(input: Record<string, unknown>, now = Date.now()) {
   if (typeof input.cron !== 'string' || typeof input.tz !== 'string')
     backgroundError('需要五段 cron 表达式和 IANA 时区');
-  const spec = validate({ name: '排期预览', kind: 'cron', cron: input.cron.trim(), tz: input.tz.trim() }, now);
+  const spec = validate({ name: '排期预览', kind: 'cron', cron: input.cron.trim(), tz: input.tz.trim(), ...(input.until !== undefined ? { until: input.until as string } : {}) }, now);
   const nextRuns: string[] = [];
   let cursor = now - 1;
   while (nextRuns.length < 3) {
     const at = nextOccurrence(spec, cursor);
     cursor = Date.parse(at);
+    if (spec.until && cursor >= Date.parse(spec.until)) break;
     const previous = nextRuns.at(-1);
     if (!previous || wall(previous, spec.tz!) !== wall(at, spec.tz!)) nextRuns.push(at);
   }
@@ -155,6 +160,7 @@ export function createSchedules({
                   "anchorAt",
                   "cron",
                   "tz",
+                  "until",
                   "missed",
                   "catchUpMax",
                   "payload",
@@ -164,6 +170,7 @@ export function createSchedules({
             backgroundError("调度包含未知字段，来源与事件类型由宿主固定");
           const spec = validate(input, now()),
             id = digest([owner, spec.name]);
+          if (spec.until && Date.parse(spec.until) <= now()) backgroundError('结束时间必须晚于当前时间');
           if (store.get(collection, id)) backgroundError("调度名称已存在", 409);
           const item: ScheduleInfo = {
             ...spec,
@@ -214,6 +221,7 @@ export function createSchedules({
                 "anchorAt",
                 "cron",
                 "tz",
+                "until",
                 "missed",
                 "catchUpMax",
                 "payload",
@@ -284,20 +292,26 @@ export function createSchedules({
     },
     tick() {
       if (closed) return;
+      const tickAt = now();
       for (const original of service.list()) {
-        if (original.status !== "active" || Date.parse(original.nextAt) > now())
-          continue;
+        const expired = original.until !== undefined && Date.parse(original.until) <= tickAt;
+        if (expired ? !['active', 'paused', 'owner_disabled'].includes(original.status)
+          : original.status !== 'active' || Date.parse(original.nextAt) > tickAt) continue;
         store.transaction(() => {
           const item = read(original.id);
-          if (item.version !== original.version || item.status !== "active")
+          if (item.version !== original.version || item.status !== original.status) return;
+          if (expired) {
+            const endedAt = new Date(tickAt).toISOString();
+            store.put(collection, item.id, { ...item, status: 'done', endedAt, updatedAt: endedAt });
             return;
+          }
           let next = Date.parse(item.nextAt),
             missed = 0;
           const due: number[] = [];
           if (item.kind === "interval") {
             missed = Math.max(
               0,
-              Math.floor((now() - next) / (item.everySec! * 1000)),
+              Math.floor((tickAt - next) / (item.everySec! * 1000)),
             );
             const count =
               item.missed === "catch_up"
@@ -318,7 +332,7 @@ export function createSchedules({
             let previousWall = item.lastFiredFor
               ? wall(item.lastFiredFor, item.tz!)
               : "";
-            while (next <= now()) {
+            while (next <= tickAt) {
               if (
                 wall(new Date(next).toISOString(), item.tz!) !== previousWall
               ) {
@@ -337,7 +351,7 @@ export function createSchedules({
           }
           const skip =
             item.missed === "skip" &&
-            (missed > 0 || now() - Date.parse(item.nextAt) > 5000);
+            (missed > 0 || tickAt - Date.parse(item.nextAt) > 5000);
           if (!skip)
             for (const at of due) {
               const scheduledFor = new Date(at).toISOString();

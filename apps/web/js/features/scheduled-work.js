@@ -12,6 +12,13 @@ const line = text => h('p', { class: 'item__meta' }, text);
 const weekdayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 const weekOrder = [1, 2, 3, 4, 5, 6, 0];
 
+function localInstant(value) {
+  const date = new Date(value);
+  const local = !Number.isNaN(date.getTime()) && `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}T${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  if (!value || local !== value) throw new Error('本地触发时间无效，请检查本机时区和夏令时。');
+  return date.toISOString();
+}
+
 function timingText(s) {
   if (s.kind === 'once') return `一次 · ${timeText(s.at)}`;
   if (s.kind === 'interval') return `每 ${s.everySec / 60} 分钟${s.anchorAt ? ` · 起点 ${timeText(s.anchorAt)}` : ''}`;
@@ -24,6 +31,7 @@ function timingText(s) {
 function occurrenceText(o) {
   if (o.status === 'unknown') return '动作结果未知，停止堆积；请核对原记录';
   if (o.status === 'claimed') return '已认领，动作结果尚未确认';
+  if (o.endedAt) return '已到计划结束时间，停止触发';
   if (o.ownerSkipped) return '已按你的设置跳过';
   if (o.status === 'skipped') return '本次已跳过';
   if (o.run) return `派发审批 · ${approvalText(o.approvalStatus)} · ${runStatus(o.run.status)}`;
@@ -113,6 +121,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       h('strong', { class: 'item__title' }, item.title),
       line(`范围：${item.projectId ? project?.name ?? item.projectId : '全局'}${item.todoId ? ` · 待办 ${item.todoId}` : ''}`),
       line(timingText(item.schedule)),
+      item.schedule.until && line('结束时间：' + timeText(item.schedule.until)),
       line(`配置状态：${({ pending: '待创建确认', active: '已生效（仅配置生效）', cancelled: '已取消计划' })[item.status] ?? '未确认'} · 创建审批 ${approvalText(item.approvalStatus)}`),
       line(item.scheduleStatus === 'done' && item.schedule.kind === 'once' ? '单次计划已触发' : `调度状态：${({ active: '等待触发', paused: '已暂停', done: '已结束', cancelled: '已取消' })[item.scheduleStatus] ?? '未确认'}`),
       item.skipToken && line('将跳过：' + timeText(item.nextAt)),
@@ -254,6 +263,8 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     const todo = Select({ name: 'todoId', options: [['', '不关联待办']] });
     const frequency = Select({ name: 'frequency', options: [['once', '一次'], ['daily', '每天'], ['weekly', '每周'], ['interval', '间隔'], ['cron', '高级 cron']] });
     const once = Input({ type: 'datetime-local', name: 'at' });
+    const until = Input({ type: 'datetime-local', name: 'until' });
+    const untilField = Field({ label: '结束时间（可选）', control: until, hint: '使用浏览器时区 ' + Intl.DateTimeFormat().resolvedOptions().timeZone + '。该时刻起停止触发。' });
     const daily = Input({ type: 'time', value: '09:00', name: 'dailyTime' });
     const minutes = Input({ type: 'number', min: 1 / 6, step: 'any', value: 60, name: 'minutes' });
     const cron = Input({ name: 'cron', placeholder: '0 9 * * *' });
@@ -311,10 +322,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     function scheduleInput() {
       let schedule;
       if (frequency.value === 'once') {
-        const date = new Date(once.value);
-        const local = !Number.isNaN(date.getTime()) && `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}T${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-        if (!once.value || local !== once.value) throw new Error('本地触发时间无效，请检查本机时区和夏令时。');
-        schedule = { kind: 'once', at: date.toISOString() };
+        schedule = { kind: 'once', at: localInstant(once.value) };
       } else if (frequency.value === 'interval') {
         const everySec = Number(minutes.value) * 60;
         if (!Number.isFinite(everySec) || everySec < 10) throw new Error('间隔至少为 10 秒。');
@@ -334,6 +342,10 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
         if (!expression) throw new Error('请填写 cron 表达式。');
         schedule = { kind: 'cron', cron: expression, tz: zone.value.trim() };
       }
+      if (schedule.kind !== 'once' && until.value) {
+        schedule.until = localInstant(until.value);
+        if (Date.parse(schedule.until) <= Date.now()) throw new Error('结束时间必须晚于当前时间。');
+      }
       return schedule;
     }
     const nextTimes = h('div', { role: 'status', 'aria-label': '排期试算' });
@@ -351,14 +363,16 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       replace(nextTimes, problem && line(problem));
       if (!schedule) return;
       const { cron, tz } = schedule;
+      const query = new URLSearchParams({ cron, tz });
+      if (schedule.until) query.set('until', schedule.until);
       nextTimes.textContent = '正在试算排期…';
       previewTimer = setTimeout(async () => {
         if (!drawer.active()) return;
         try {
-          const result = await api.get('/scheduled-work/cron-preview?' + new URLSearchParams({ cron, tz }));
+          const result = await api.get('/scheduled-work/cron-preview?' + query);
           if (revision !== previewRevision || !drawer.active()) return;
           const format = new Intl.DateTimeFormat('zh-CN', { timeZone: tz, dateStyle: 'full', timeStyle: 'short' });
-          replace(nextTimes, line('接下来三次 · ' + tz), h('ul', null, result.nextRuns.map(at =>
+          replace(nextTimes, line((result.nextRuns.length ? `接下来${result.nextRuns.length}次` : '结束前没有触发') + ' · ' + tz), h('ul', null, result.nextRuns.map(at =>
             h('li', null, h('time', { datetime: at }, format.format(new Date(at)))))));
         } catch (cause) {
           if (revision === previewRevision && drawer.active()) replace(nextTimes, line('排期试算失败：' + cause.message),
@@ -368,6 +382,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     }
     function sync() {
       refreshTimes();
+      untilField.hidden = frequency.value === 'once';
       onceField.hidden = frequency.value !== 'once'; dailyField.hidden = frequency.value !== 'daily'; weeklyFields.hidden = frequency.value !== 'weekly';
       intervalField.hidden = frequency.value !== 'interval'; cronField.hidden = frequency.value !== 'cron';
       zoneField.hidden = !['daily', 'weekly', 'cron'].includes(frequency.value); dispatchFields.hidden = action.value !== 'dispatch';
@@ -379,7 +394,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     let busy = false, submitted = false;
     const form = h('div', { class: 'stack' },
       Field({ label: '标题', control: title, required: true }), Field({ label: '项目', control: project, hint: '默认继承顶栏。切换顶栏范围会关闭此抽屉，避免误提交。' }),
-      Field({ label: '关联待办', control: todo }), Field({ label: '频率', control: frequency }), onceField, dailyField, weeklyFields, intervalField, cronField, zoneField, nextTimes,
+      Field({ label: '关联待办', control: todo }), Field({ label: '频率', control: frequency }), onceField, dailyField, weeklyFields, intervalField, cronField, zoneField, untilField, nextTimes,
       Field({ label: '动作', control: action }), line('事实简报只程序汇总已接入事实，不自动调用模型或外发。派发每次到期仍会生成审批，审批生成不代表任务完成。'), dispatchFields, preview, message);
     form.addEventListener('input', sync); form.addEventListener('change', sync);
     const save = Button({ label: '提交创建审批', kind: 'primary', onClick: async () => {

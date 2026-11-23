@@ -303,6 +303,7 @@ test('每周计划按所选星期和当地时间预览并提交审批', async ()
   assert.equal(f.writes.length, 0);
   await form.getByLabel('频率').selectOption('weekly');
   await form.getByLabel('每周触发时间').fill('08:35');
+  await form.locator('[name=until]').fill('2099-05-01T10:00');
   await form.getByLabel('IANA 时区').fill('America/New_York');
   await form.getByRole('button', { name: '周末', exact: true }).click();
   await form.getByLabel('周六', { exact: true }).uncheck();
@@ -319,7 +320,7 @@ test('每周计划按所选星期和当地时间预览并提交审批', async ()
   assert.equal(f.writes.length, 0);
   await submit(page);
   await expect(form).toContainText('已提交创建审批');
-  assert.deepEqual(f.writes[0].body.schedule, { kind: 'cron', cron: '35 8 * * 2,0', tz: 'America/New_York' });
+  assert.deepEqual(f.writes[0].body.schedule, { kind: 'cron', cron: '35 8 * * 2,0', tz: 'America/New_York', until: '2099-05-01T17:00:00.000Z' });
   await form.getByRole('button', { name: '关闭', exact: true }).click();
   f.items = [work({ schedule: f.writes[0].body.schedule })];
   await emit(page);

@@ -632,7 +632,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         if (actions?.brief) context.contribute('tools', 'brief_read', tool('brief_read', '读取待办、执行和督办事实简报。', async (_args, signal) => { signal.throwIfAborted(); return actions.brief!(); }));
         if (actions?.scheduledWorkCronPreview) context.contribute('tools', 'scheduled_work_cron_preview', tool('scheduled_work_cron_preview',
           '只读试算拟定规则的下三次排期，返回 UTC 时刻和规则时区。', async args => actions.scheduledWorkCronPreview!(args),
-          { cron: { type: 'string' }, tz: { type: 'string' } }));
+          { cron: { type: 'string' }, tz: { type: 'string' }, until: { type: 'string', description: '可选，带时区的结束时刻，不含该时刻' } }));
         if (actions?.scheduledWorkHistory) context.contribute('tools', 'scheduled_work_history', tool('scheduled_work_history',
           '分页读取指定计划的触发记录。续读时传入上一页的 nextOccurrenceKey。', async args => actions.scheduledWorkHistory!(args),
           { workId: { type: 'string' }, after: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' } }));
@@ -704,12 +704,12 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
                     kind: { type: 'string', enum: ['interval'] },
                     everySec: { type: 'integer', minimum: 10, maximum: Number.MAX_SAFE_INTEGER, description: '间隔秒数，至少 10 秒，必须为安全整数。' },
                     anchorAt: { ...instant, description: `${instant.description} 可选，省略时以首次预览时间为基准，重放沿用原基准。` },
-                    tz: timezone,
+                    tz: timezone, until: instant,
                   } },
                   { type: 'object', additionalProperties: false, required: ['kind', 'cron', 'tz'], properties: {
                     kind: { type: 'string', enum: ['cron'] },
                     cron: { ...nonempty, description: '五段 cron 表达式：分 时 日 月 星期，例如 0 9 * * *；必须有后续触发时间。' },
-                    tz: timezone,
+                    tz: timezone, until: instant,
                   } },
                 ],
               },

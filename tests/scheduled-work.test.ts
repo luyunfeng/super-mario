@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createStore } from '../packages/core/src/store.ts';
 import { createEventBus } from '../packages/core/src/events.ts';
 import { createEventbox } from '../packages/core/src/eventbox.ts';
-import { createSchedules } from '../packages/core/src/schedules.ts';
+import { createSchedules, previewCron } from '../packages/core/src/schedules.ts';
 import { createApprovalService } from '../packages/core/src/approvals.ts';
 import { createScheduledWork, scheduledWorkApprovalKind } from '../packages/core/src/scheduled-work.ts';
 import type { Approval, Json, Message, Project, Run, Todo } from '../packages/protocol/src/index.ts';
@@ -368,4 +368,25 @@ test('只跳过指定周期，撤销校验原标记，重启和错过多期仍�
   skip(next);
   f.work.setPaused(row.id, row.version, row.scheduleVersion!, true);
   assert.equal(f.work.list()[0].occurrences.some(o => o.scheduledFor === next), false);
+});
+
+test('周期截止时停止补跑，已提交的派发审批仍可处理', async t => {
+  const f = fixture(t);
+  await f.activate({ action: dispatch, schedule: { kind: 'interval', everySec: 60,
+    anchorAt: '2026-01-01T00:01:00Z', until: '2026-01-01T00:03:00Z' } });
+  await f.work.handle(f.due('2026-01-01T00:01:00Z'));
+  f.due('2026-01-01T00:02:00Z');
+  const before = f.eventbox.events().filter(e => e.type === 'schedule.due');
+  await f.restart();
+  f.due('2026-01-01T00:03:00Z');
+  assert.equal(f.schedules.list()[0].status, 'done');
+  assert.equal(f.schedules.list()[0].endedAt, '2026-01-01T00:03:00.000Z');
+  assert.deepEqual(previewCron({ cron: '* * * * *', tz: 'UTC', until: '2026-01-01T00:03:00Z' },
+    Date.parse('2026-01-01T00:00:01Z')).nextRuns, ['2026-01-01T00:01:00.000Z', '2026-01-01T00:02:00.000Z']);
+  assert.equal(f.eventbox.events().filter(e => e.type === 'schedule.due').length, before.length);
+  for (const event of before) assert.equal((await f.work.handle(event)).status, 'skip');
+  const pending = f.approvals.list().filter(a => a.kind === 'dispatch');
+  assert.equal(pending.length, 1);
+  assert.equal((await f.approvals.approve(pending[0].id, pending[0].version)).status, 'completed');
+  assert.equal(f.dispatchCount, 1);
 });

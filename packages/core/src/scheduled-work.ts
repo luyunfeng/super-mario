@@ -83,7 +83,7 @@ export function createScheduledWork({ store, events, schedules, proposeApproval,
     text(value.key, 'key'); text(value.title, 'title');
     for (const id of [value.projectId, value.todoId]) if (id !== undefined) text(id, '范围');
     const s = value.schedule;
-    const keys = s?.kind === 'once' ? ['kind', 'at', 'tz'] : s?.kind === 'interval' ? ['kind', 'everySec', 'anchorAt', 'tz'] : ['kind', 'cron', 'tz'];
+    const keys = s?.kind === 'once' ? ['kind', 'at', 'tz'] : s?.kind === 'interval' ? ['kind', 'everySec', 'anchorAt', 'tz', 'until'] : ['kind', 'cron', 'tz', 'until'];
     fields(s, keys);
     if (s.tz !== undefined) {
       text(s.tz, 'tz');
@@ -192,7 +192,8 @@ export function createScheduledWork({ store, events, schedules, proposeApproval,
       const work = store.get<ScheduledWorkRecord>(records, id);
       if (!work || work.version !== version || work.scheduleVersion !== scheduleVersion) return fail('计划版本已变化，请重新核对');
       const schedule = current(work);
-      if (schedule.kind === 'once' || schedule.status !== 'active' || schedule.nextAt !== at || Date.parse(at) <= now())
+      if (schedule.kind === 'once' || schedule.status !== 'active' || schedule.nextAt !== at || Date.parse(at) <= now()
+        || (schedule.until && Date.parse(at) >= Date.parse(schedule.until)))
         return fail('该次触发时间已改变或不支持跳过');
       // Reserve the same key that due delivery claims. Catch-up and replay cannot execute this slot.
       const key = digest([schedule.id, schedule.version, at]);
@@ -243,6 +244,7 @@ export function createScheduledWork({ store, events, schedules, proposeApproval,
         const r = typeof p.workId === 'string' ? store.get<ScheduledWorkRecord>(records, p.workId) : undefined;
         if (!r || p.workVersion !== r.version) return undefined;
         const s = current(r);
+        if (s.until && now() >= Date.parse(s.until)) return undefined;
         if (s.id !== d.scheduleId || s.version !== d.scheduleVersion || !same(p, s.payload) || d.name !== s.name
           || event.subject?.kind !== 'schedule' || event.subject.id !== s.id || event.staleIf?.ref !== `schedule:${s.id}` || event.staleIf.version !== s.version
           || typeof d.scheduledFor !== 'string' || !Number.isFinite(Date.parse(d.scheduledFor)) || !s.lastFiredFor || Date.parse(d.scheduledFor) > Date.parse(s.lastFiredFor)

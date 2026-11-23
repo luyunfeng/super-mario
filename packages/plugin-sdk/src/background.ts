@@ -84,6 +84,7 @@ export interface ScheduleInput {
   at?: string;
   everySec?: number;
   anchorAt?: string;
+  until?: string;
   cron?: string;
   tz?: string;
   missed?: "coalesce" | "skip" | "catch_up";
@@ -97,6 +98,7 @@ export interface ScheduleInfo extends ScheduleInput {
   status: "active" | "paused" | "done" | "cancelled" | "owner_disabled";
   nextAt: string;
   lastFiredFor?: string;
+  endedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
