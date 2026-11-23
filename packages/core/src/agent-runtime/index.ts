@@ -44,7 +44,7 @@ interface PendingTurn {
 }
 
 type ReadOnlyAction = 'schedule_followup' | 'notify_user';
-type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' | 'replyTo' | 'requestId'> & { readOnlyAction?: ReadOnlyAction; rememberModel?: false };
+type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' | 'replyTo' | 'requestId' | 'directWebInput'> & { readOnlyAction?: ReadOnlyAction; rememberModel?: false };
 
 /** The second argument is a narrow test seam; all pi imports stay in this directory. */
 export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK> = () => import('@earendil-works/pi-coding-agent')) {
@@ -911,7 +911,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       if (todoId !== undefined && (typeof todoId !== 'string' || !todoId.trim())) throw new Error('todoId 必须是非空字符串');
       const requestId = context?.requestId;
       const message: Message = {
-        ...(requestId !== undefined ? { requestId } : {}), id: randomUUID(), conversationId, ...(context?.origin ? { origin: context.origin } : {}), ...(context?.replyTo ? { replyTo: context.replyTo } : {}), role: 'user', text: text.trim(),
+        ...(context?.directWebInput && {directWebInput:true}), ...(requestId !== undefined ? { requestId } : {}), id: randomUUID(), conversationId, ...(context?.origin ? { origin: context.origin } : {}), ...(context?.replyTo ? { replyTo: context.replyTo } : {}), role: 'user', text: text.trim(),
         ...(projectId === undefined ? {} : { projectId }),
         ...(todoId === undefined ? {} : { todoId }),
         ...(context?.readOnly || scope?.kind === 'unmarked' ? { readOnly: true } : {}),

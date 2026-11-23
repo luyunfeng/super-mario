@@ -6,6 +6,7 @@ import { createAttention } from './attention.js';
 import { openTaskClosure } from './task-closure.js';
 import { createTodoThread } from './todo-thread.js';
 import { createTodoLineage, openTodoContinuation } from './todo-continuation.js';
+import { createTodoBrief } from './todo-brief.js';
 import { openTodoHistory } from './todo-history.js';
 import { openWaitingReply } from './waiting-reply.js';
 
@@ -283,14 +284,15 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
   const outcome = groupTaskOutcome(api, store, todo);
   const thread = createTodoThread({ api, store, todo, sameScope: () => matchesScope(store, todo) });
   const decisions = decisionSection(api, store, todo);
+  const brief = createTodoBrief({ api, store, router, todo, close });
   const lineage = createTodoLineage({ api, store, router, todo, close });
-  const el = h('div', { class: 'stack' }, summary, lineage.panel, outcome.panel, thread.panel, attention.el, history.panel, reminder.panel, replyRecord(api, store, todo),
+  const el = h('div', { class: 'stack' }, summary, brief.panel, lineage.panel, outcome.panel, thread.panel, attention.el, history.panel, reminder.panel, replyRecord(api, store, todo),
     decisions.panel, next);
   function paint() {
     const snapshot = store.view.snapshot;
     const current = snapshot?.todos.find(item => item.id === todo.id);
     decisions.update();
-    if (!current || !matchesScope(store, todo)) { lineage.update([]); return; }
+    if (!current || !matchesScope(store, todo)) { lineage.update([]); brief.update(); return; }
     outcome.update(current);
     thread.update();
     reminder.update(current);
@@ -300,6 +302,7 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
     const sources = (snapshot.inbox ?? []).filter(item => item.todoId === current.id && (item.projectId ?? null) === (current.projectId ?? null));
     const runs = (snapshot.runs ?? []).filter(item => item.todoId === current.id && item.projectId === current.projectId)
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    brief.update(current);
     const related = snapshot.todos.filter(item => item.projectId === current.projectId);
     const rootId = item => item.continuesTodoId ? item.continuationRootId : item.id;
     const root = rootId(current);

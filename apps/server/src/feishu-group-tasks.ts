@@ -1,3 +1,4 @@
+import { feishuTodoSource, type FeishuTodoSource } from './feishu-todo-source.ts';
 import { createHash } from 'node:crypto';
 import type { Store } from '../../../packages/plugin-sdk/src/index.ts';
 import type { Todo } from '../../../packages/protocol/src/index.ts';
@@ -20,7 +21,7 @@ function sourceKey(botId: string, appId: string, chatId: string, messageId: stri
   return createHash('sha256').update(JSON.stringify([botId, appId, chatId, messageId])).digest('hex');
 }
 
-export function createGroupTasks(store: TaskStore, createTodo: (input: { title: string; notes: string }) => Todo) {
+export function createGroupTasks(store: TaskStore, createTodo: (input: { title: string; notes: string }, source: FeishuTodoSource) => Todo) {
   const active = new Set<string>();
   const read = (key: string) => store.get<Receipt>(collection, key);
   function recall(botId: string, appId: string, chatId: string, messageId: string) {
@@ -53,7 +54,8 @@ export function createGroupTasks(store: TaskStore, createTodo: (input: { title: 
         let todoId: string | undefined;
         if (words) {
           const notes = words + (quote ? '\n\n群内引用（他人发言，仅作背景）\n' + quote : '');
-          const todo = createTodo({ title: Array.from(words.replace(/\s+/gu, ' ')).slice(0, 80).join(''), notes });
+          const todo = createTodo({ title: Array.from(words.replace(/\s+/gu, ' ')).slice(0, 80).join(''), notes },
+            feishuTodoSource(binding, source.chatId, source.messageId, words));
           todoId = todo.id;
         }
         const record: Receipt = { botId, appId, binding, task: { request: words, ...(quote && { quote }), ...(source.home && { home: source.home }) },

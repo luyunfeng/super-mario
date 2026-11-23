@@ -106,6 +106,14 @@ test('外群主人点名创建待办，在 Web 持久可查并由配对私聊承
     return rows[0];
   }
   const created = await t.waitFor(onlyTodo, { timeout: 8000 });
+  const response = await fetch(host.url + '/api/v1/todos/' + created.id + '/brief', {headers:{authorization:'Bearer fixture'}});
+  assert.equal(response.status,200);
+  const brief = await response.json();
+  assert.equal(brief.reconstructed,false);
+  assert.equal(brief.origin.kind,'feishu');
+  assert.equal(brief.origin.sourceMessageId,'om_task');
+  assert.equal(brief.origin.requestText,Array.from(task).slice(0,2000).join(''));
+  assert.ok(!JSON.stringify(brief.origin).includes(quote));
   const privateHandoffs = () => sends.filter(send => send.target === 'oc_private' && send.body.includes(created.id));
   await t.waitFor(() => assert.equal(privateHandoffs().length, 1));
   assert.ok(privateHandoffs()[0].body.includes('核对合成告警来源'));
@@ -128,6 +136,10 @@ test('外群主人点名创建待办，在 Web 持久可查并由配对私聊承
   assert.ok(facts.some(f => f.quotedMessage === quote));
   const toolResult = modelRequests[1].messages.at(-1)!;
   assert.equal(toolResult.role, 'tool');
+  const detail = JSON.parse(typeof toolResult.content === 'string' ? toolResult.content : toolResult.content[0].text!);
+  assert.equal(detail.brief.origin.kind,'feishu');
+  assert.equal(detail.brief.origin.sourceMessageId,undefined);
+  assert.equal(detail.brief.origin.requestText,undefined);
   assert.ok(JSON.stringify(toolResult.content).includes('末尾验收条件必须保留'));
   assert.ok(host.app.store.list<Message>('messages').some(m => m.role === 'user' && m.todoId === created.id));
   assert.ok(!sends.some(send => (send.target === 'oc_external' || send.path.endsWith('/om_task/reply')) && send.body.includes('已私聊承接合成待办')));

@@ -88,6 +88,11 @@ test('主人登记话题群后在原话题开待办、记决定并收到答复�
   const [todo] = await todos();
   assert.equal((await todos()).length, 1);
   assert.equal(todo.notes, '整理本周合成需求');
+  const brief = async (id: string) => (await api<{origin:{kind:string;requestText?:string;sourceMessageId?:string}}>('todos/' + id + '/brief')).origin;
+  const audienceOf = (id: string) => host.app.store.get<{conversationId:string}>('todo.brief-origins',id)!.conversationId;
+  assert.match(audienceOf(todo.id),/^feishu-group:[a-f0-9]{64}$/);
+  const opening = await brief(todo.id);
+  assert.deepEqual([opening.kind,opening.sourceMessageId,opening.requestText],['feishu',root,'整理本周合成需求']);
   const decision = '优先处理合成方案乙';
   await event('om_follow', decision, threadReply);
   await answer('om_follow', 2);
@@ -137,6 +142,9 @@ test('主人登记话题群后在原话题开待办、记决定并收到答复�
   assert.equal((await todos()).length, 2);
   const fresh = (await todos()).find(row => row.id !== todo.id)!;
   assert.ok(fresh.notes.includes('全新配对后另立任务'));
+  assert.notEqual(audienceOf(fresh.id),audienceOf(todo.id));
+  const newOpening = await brief(fresh.id);
+  assert.deepEqual([newOpening.kind,newOpening.sourceMessageId,newOpening.requestText],['feishu','om_new_task','全新配对后另立任务']);
   assert.ok(!JSON.stringify(model.at(-1)).includes(decision));
   assert.ok(!(await decisions(todo.id)).some(row => row.text.includes('重新配对后')));
   await event('om_second_root', '其他话题独有的合成任务', { thread: 'omt_second' });

@@ -3546,3 +3546,80 @@ test('项目助手列出同项直接续办的全部分支与完成状态，并�
     await t.waitFor(() => assert.ok(sent.some(reply => reply === '无可见续办链' || reply === JSON.stringify([['分支甲',true,false,rootId]]))));
   } finally { await server.close(); }
 });
+
+test('Web 与飞书核实最初登记及逐次验收标准，任务机器人只读取自身交办', async t => {
+  let selectedId = '';
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const {server, api, ask} = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /不能把重建资料或助手摘要当作主人原话/);
+      assert.match(req.system, /只有实际验收结果才能报告通过/);
+      assert.match(req.system, /只有 origin.requestText 有值时才可引用/);
+      if (JSON.stringify(req.content).includes('请登记')) return call('todo_create',{title:'整理附录',notes:'助手摘要'},'register');
+      return call('todo_detail', {todoId:selectedId}, JSON.stringify(req.content).includes('交办原话') ? 'quote' : 'brief');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    if (req.callId === 'register') return {role:'assistant',content:JSON.parse(raw).id};
+    const brief = JSON.parse(raw).brief;
+    if (req.callId === 'quote' && brief.reconstructed) {
+      assert.equal(brief.origin.kind,'reconstructed');
+      assert.equal(brief.origin.requestText,undefined);
+      return {role:'assistant',content:'仅有重建的登记内容，无法核实主人原话'};
+    }
+    if (req.callId === 'quote') return {role:'assistant',content:JSON.stringify([brief.origin.kind,brief.origin.notes,brief.origin.requestText])};
+    assert.equal(brief.origin.requestText,undefined);
+    assert.equal(brief.reconstructed,false);
+    return {role:'assistant',content:JSON.stringify([brief.origin.todoId,brief.origin.kind,brief.origin.title,brief.origin.notes,
+      brief.criteria.map((row:{todoId:string,runId:string,doneWhen:string,createdAt:string}) => {
+        assert.ok(Number.isFinite(Date.parse(row.createdAt)));
+        return [row.todoId,row.runId,row.doneWhen];
+      })])};
+  }, options => {
+    adapter = options;
+    return {start:async () => {}, close:async () => {}, status:() => ({connected:true}), collect:async () => [],
+      send:async (_target,text) => { sent.push(text); }};
+  });
+  try {
+    const project = await api('/projects', {name:'阶段来源核实'});
+    const root = await api('/todos', {projectId:project.id,title:'整理清单',notes:'最初要求整理三项'});
+    const next = await api('/todos', {projectId:project.id,title:'清单复核',notes:'本阶段检查重复项',continuesTodoId:root.id,continuationReason:'对照原清单复核'});
+    selectedId = next.id;
+    server.app.updateTodo(root.id,{title:'后来改过的标题',notes:'后来改过的说明'});
+    const sibling = await api('/todos', {projectId:project.id,title:'旁支',continuesTodoId:root.id,continuationReason:'另行汇总'});
+    const rounds = [[root.id,'round-one','列出三项'],[next.id,'round-two','逐项去重'],[sibling.id,'round-sibling','旁支专用标准']];
+    for (const [i,[todoId,id,doneWhen]] of rounds.entries()) {
+      const at = new Date(Date.now()+i).toISOString();
+      server.app.store.put('runs',id,{id,todoId,projectId:project.id,executorId:'fixture',conversationId:'main',status:'completed',
+        prompt:'合成执行',doneWhen,createdAt:at,updatedAt:at,output:'待验收'});
+    }
+    const text = '最初交办了什么，验收标准怎么变？';
+    const expected = JSON.stringify([root.id,'web','整理清单','最初要求整理三项',rounds.slice(0,2)]);
+    assert.equal(await ask(text,'/projects/' + project.id + '/messages'),expected);
+    assert.equal(await ask(text),expected);
+    const requestText = '请登记整理附录，逐条标记出处';
+    const assistantTodoId = await ask(requestText,'/projects/' + project.id + '/messages');
+    selectedId = assistantTodoId;
+    assert.deepEqual(JSON.parse(await ask('核实刚登记事项的交办原话','/projects/' + project.id + '/messages')),
+      ['assistant','助手摘要',requestText]);
+    server.app.store.put('todos','legacy-brief',{...root,id:'legacy-brief',notes:'旧待办保存的备注'});
+    selectedId = 'legacy-brief';
+    assert.equal(await ask('核对旧待办的交办原话','/projects/' + project.id + '/messages'),'仅有重建的登记内容，无法核实主人原话');
+    selectedId = next.id;
+    const peer = {chatId:'oc_fixture',senderId:'ou_fixture',senderType:'user',chatType:'p2p'} as const;
+    for (const [i,kind] of (['project','task'] as const).entries()) {
+      const bot = await api('/feishu/bots',{name:'标准核对'+kind,appId:'cli_'+String(i+1).repeat(16),appSecret:'offline-fixture',
+        scope:{kind,projectId:project.id,...(kind === 'task' && {todoId:next.id})},requireConfirmation:false});
+      await adapter.onMessage(bot.pairingCode,{...peer,messageId:'pair-'+kind});
+      await adapter.onMessage(text,{...peer,messageId:'brief-'+kind});
+      const reply = kind === 'project' ? expected : JSON.stringify([next.id,'continuation',next.title,next.notes,[rounds[1]]]);
+      await t.waitFor(() => assert.ok(sent.includes(reply),sent.join(' / ')));
+      if (kind === 'project') {
+        selectedId = assistantTodoId;
+        await adapter.onMessage('核对登记的交办原话',{...peer,messageId:'cross-channel-quote'});
+        await t.waitFor(() => assert.ok(sent.includes(JSON.stringify(['assistant','助手摘要',null])),sent.join(' / ')));
+        selectedId = next.id;
+      }
+    }
+  } finally { await server.close(); }
+});

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { chromium, expect } from '@playwright/test';
+import { recordTodoOrigin } from '../packages/core/src/todo-brief.ts';
 import { startServer } from '../apps/server/src/index.ts';
 import type { Run, Todo } from '../packages/protocol/src/index.ts';
 
@@ -405,4 +406,75 @@ test('从分支末端查看全链、切到兄弟分支并刷新历程', {timeout
   await expect(rows).toHaveCount(5);
   await panel.getByRole('link',{name:root.title}).click();
   await expect(page.getByRole('heading',{name:root.title,exact:true}).first()).toBeVisible();
+});
+
+test('交办依据显示原始登记与各轮标准，分支隔离并在重连时核对来源', {timeout:30000}, async t => {
+  const { page, app, todo } = await fixture(t);
+  const response = await page.request.post(new URL('/api/v1/todos',page.url()).href, {
+    headers:{Authorization:'Bearer offline-todo-detail'},data:{projectId:todo.projectId,title:'原登记标题',notes:'起初登记的交接备注'}
+  });
+  assert.equal(response.status(),201);
+  const root = await response.json() as Todo;
+  app.updateTodo(root.id,{title:'后来修改标题',notes:'后来改的备注'});
+  const child = app.continueTodo(root.id,{title:'子阶段',continuationReason:'接手原登记任务',expectedProjectId:todo.projectId,requestId:'child'});
+  const other = app.continueTodo(root.id,{title:'旁支阶段',continuationReason:'另行验收',expectedProjectId:todo.projectId,requestId:'peer'});
+  const dispatch = (id:string, requirement:string) => app.dispatch({executorId:'demo',projectId:todo.projectId,todoId:id,
+    prompt:'离线测试派单',doneWhen:requirement,expectMinutes:3});
+  const first = dispatch(root.id,'核对原始列名');
+  dispatch(other.id,'仅旁支的验收条件');
+  await page.goto(new URL('/#projects/'+todo.projectId+'/todos/detail/'+child.id,page.url()).toString());
+  const panel = page.locator('details[aria-label="交办依据"]');
+  const [loaded] = await Promise.all([
+    page.waitForResponse(r => new URL(r.url()).pathname === '/api/v1/todos/'+child.id+'/brief'),
+    panel.locator('summary').click()
+  ]);
+  assert.equal(new URL(loaded.url()).searchParams.get('expectedProjectId'),todo.projectId);
+  await expect(panel).toContainText('主人在 Web 填写');
+  await expect(panel).toContainText('原登记标题');
+  await expect(panel).toContainText('起初登记的交接备注');
+  await expect(panel).not.toContainText('后来改的备注');
+  await expect(panel).toContainText('核对原始列名');
+  await expect(panel).toContainText('预计 3 分钟');
+  await expect(panel).not.toContainText('仅旁支的验收条件');
+  await expect(panel.getByRole('link',{name:'来源执行 · '+first.id})).toHaveAttribute('href','#projects/'+todo.projectId+'/runs/'+first.id);
+  dispatch(child.id,'核对续办阶段总数');
+  await expect(panel).toContainText('核对续办阶段总数');
+  // A legacy installation can have no original registration. Reconnection must replace the cached attribution.
+  app.store.remove('todo.brief-origins',root.id);
+  await page.evaluate(() => { window.dispatchEvent(new Event('offline')); });
+  await page.evaluate(() => { window.dispatchEvent(new Event('online')); });
+  await expect(panel).toContainText('根据现有待办记录重建');
+  await expect(panel).toContainText('后来修改标题');
+  await expect(panel).not.toContainText('主人在 Web 填写');
+  recordTodoOrigin(app.store,root,'assistant',{id:'source-fixture',conversationId:'main',text:'按合成批次核对。'});
+  await panel.locator('summary').click();
+  await panel.locator('summary').click();
+  await expect(panel).toContainText('助手登记');
+  await expect(panel).toContainText('交办时的原话');
+  await expect(panel).toContainText('按合成批次核对。');
+  await expect(panel).toContainText('起初登记的交接备注');
+  await expect(panel).toContainText('来源消息 · source-fixture');
+});
+
+test('飞书交办标明正文已去除命令和机器人点名，仅展示服务端提供的摘录', {timeout:30000}, async t => {
+  const { page, todo } = await fixture(t);
+  const requestText = '核对样例中的 /ai 用法。';
+  const origin = {todoId:todo.id,title:todo.title,notes:'独立登记备注',kind:'feishu',createdAt:todo.createdAt,sourceMessageId:'fixture-source'};
+  let showExcerpt = true;
+  await page.route('**/api/v1/todos/'+todo.id+'/brief?*', route => route.fulfill({json:{
+    origin:{...origin,...(showExcerpt && {requestText})}, criteria:[],reconstructed:false
+  }}));
+  await page.goto(new URL('/#projects/'+todo.projectId+'/todos/detail/'+todo.id,page.url()).toString());
+  const panel = page.locator('details[aria-label="交办依据"]');
+  await panel.locator('summary').click();
+  await expect(panel).toContainText('主人在飞书交办');
+  await expect(panel).toContainText('交办正文摘录（已去除命令和机器人点名）');
+  await expect(panel.getByText(requestText,{exact:true})).toBeVisible();
+  await expect(panel).not.toContainText('交办时的原话');
+  showExcerpt = false;
+  await panel.locator('summary').click();
+  await panel.locator('summary').click();
+  await expect(panel).toContainText('独立登记备注');
+  await expect(panel).not.toContainText('交办正文摘录');
+  await expect(panel).not.toContainText(requestText);
 });

@@ -21,6 +21,7 @@ import { createReplyTracking } from './reply-tracking.ts';
 import { createWorkDecisionService } from './work-decision-service.ts';
 import { createAgentSessions, nativeResumeSpec, nativeResultSources } from './agent-sessions.ts';
 import { executionProgress } from './execution-progress.ts';
+import { recordTodoOrigin, todoBrief, type TodoOriginSource } from './todo-brief.ts';
 import { todoLineage } from './todo-lineage.ts';
 import { createTodoDecisions } from './todo-decisions.ts';
 import { createTodoReporting } from './todo-reporting.ts';
@@ -522,7 +523,7 @@ export async function createWorkbench(config: AppConfig) {
     enqueueMeetingMemory(items, knowledgeCurator.addSource, knowledgeReaderSettings.read().trustedHosts);
     reconciledMeetingAccounts.add(source);
   }
-  const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,reviewEvidence,projectDecisions:id=>workDecisions.context({kind:"project",projectId:id}),onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text,requestId,todoId)=>scopedAgents.postProject(id,text,requestId,todoId),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
+  const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,reviewEvidence,projectDecisions:id=>workDecisions.context({kind:"project",projectId:id}),onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text,requestId,todoId,directWebInput)=>scopedAgents.postProject(id,text,requestId,todoId,directWebInput),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
   const controllers = new Map<string, AbortController>();
   const jobs = new Set<Promise<void>>();
   const commandRouter = createCommandProjectRouter(config, () => !closing && inboxClassifier.status().available);
@@ -882,7 +883,7 @@ export async function createWorkbench(config: AppConfig) {
     const pendingRequests = pendingUserCards().filter(card => card.todoId === id && card.projectId === todo.projectId)
       .map(({ kind, title, body, suggestion }) => ({ kind, title, body, suggestion }));
     const reminderDeliveries = readReminderDeliveries(todo);
-    return { todo, pendingRequests, replyTracking, reminderDeliveries, decisions: todoDecisions.list(id), ...(args.includeLineage !== false && {lineage:todoLineage(store,id)}), ...actionTodoLink(todo) } as unknown as Json;
+    return { todo, pendingRequests, replyTracking, reminderDeliveries, decisions: todoDecisions.list(id), brief:todoBrief(store,id,args.includeLineage !== false,currentAgentInput()?.conversationId ?? ''), ...(args.includeLineage !== false && {lineage:todoLineage(store,id)}), ...actionTodoLink(todo) } as unknown as Json;
   }
   async function knowledgeActionStatus(args: Record<string, unknown>, projectId?: string) {
     const { page, items } = await prepareKnowledgeActions(args, projectId);
@@ -1125,15 +1126,27 @@ export async function createWorkbench(config: AppConfig) {
       if (existing) return { ...existing, created: false } as unknown as Json;
       store.put('todos', requested.id, requested);
       const source = currentAgentInput();
+      // A dispatch, follow-up, or inbox relay may also have role=user. Only the Web
+      // message admission path marks words actually typed by the authenticated owner.
+      const direct = source?.directWebInput && !source.readOnly && !source.replyTo && source.role === 'user' &&
+        (!source.origin || source.origin === 'user') && !source.todoId && source.projectId === requested.projectId &&
+        (source.conversationId === 'main' || (requested.projectId && source.conversationId === 'project:' + requested.projectId + ':work'));
+      recordTodoOrigin(store,requested,requested.continuesTodoId ? 'continuation' : 'assistant', source ? {
+        id:source.id,conversationId:source.conversationId,...(direct && {text:source.text})
+      } : undefined);
       if (source && sourceThread(source)) store.put('todo.origins', requested.id, { conversationId: source.conversationId, sourceMessageId: source.id });
       changed('todos.changed', { id: requested.id });
       return { ...requested, created: true } as unknown as Json;
     });
   }
-  function createTodo(input: Record<string, unknown>, notify = true): Todo {
+  function createTodo(input: Record<string, unknown>, notify = true, kind: 'system' | 'web' | 'feishu' = 'system', source?: TodoOriginSource): Todo {
     const todo = newTodo(input);
-    store.put('todos', todo.id, todo); if (notify) changed('todos.changed', { id: todo.id });
-    return todo;
+    return store.transaction(() => {
+      store.put('todos',todo.id,todo);
+      recordTodoOrigin(store,todo,todo.continuesTodoId ? 'continuation' : kind,source);
+      if (notify) changed('todos.changed',{id:todo.id});
+      return todo;
+    });
   }
   function continueTodo(previousId: string, input: Record<string, unknown>): Todo {
     const requestId = requiredText(input.requestId, '续办请求号');
@@ -1155,6 +1168,7 @@ export async function createWorkbench(config: AppConfig) {
         return existing;
       }
       store.put('todos',todo.id,todo);
+      recordTodoOrigin(store,todo,'continuation');
       store.put('todo.continuations',key,{todoId:todo.id,fingerprint});
       changed('todos.changed',{id:todo.id});
       return todo;
@@ -2091,7 +2105,7 @@ export async function createWorkbench(config: AppConfig) {
       } : undefined;
     },
     forgetPrivateConversation: (id: string) => forgetPrivateConversation(store, id),
-    delegateTodo, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; }, listExecutors: executorInfo, snapshot, knowledgeRevision, confirmKnowledgeActions, knowledgeActionStatus, todos, createTodo, continueTodo, updateTodo, dispatch, cancel, knowledge,
+    delegateTodo, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; }, listExecutors: executorInfo, snapshot, createFeishuTodo: (input: Record<string,unknown>, source: TodoOriginSource) => createTodo(input,true,'feishu',source), knowledgeRevision, confirmKnowledgeActions, knowledgeActionStatus, todos, createTodo, continueTodo, updateTodo, dispatch, cancel, knowledge,
     async close() {
       if (closing) return;
       closing = true;

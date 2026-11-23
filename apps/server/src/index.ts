@@ -7,6 +7,7 @@ import { policyPresets, applyPolicyPreset, policyRuleHits } from '../../../packa
 import { todoSections, todoDecisionIds } from '../../../packages/core/src/todo-sections.ts';
 import { createAgentArtifacts } from './agent-artifacts.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { todoBrief } from '../../../packages/core/src/todo-brief.ts';
 import { todoLineage } from '../../../packages/core/src/todo-lineage.ts';
 import { currentWorkerTodo } from './worker-session.ts';
 import { createReadStream } from 'node:fs';
@@ -657,12 +658,12 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (closure[2] === 'review' && method === 'POST') return json(res, 200, app.taskClosure.review.attach({ ...input, todoId } as Parameters<typeof app.taskClosure.review.attach>[0]));
           if (closure[2] === 'review/decide' && method === 'POST') return json(res, 200, app.taskClosure.review.decide({ ...input, todoId } as Parameters<typeof app.taskClosure.review.decide>[0]));
         }
-        const lineage = path.match(/^\/api\/v1\/todos\/([^/]+)\/lineage$/);
+        const lineage = path.match(/^\/api\/v1\/todos\/([^/]+)\/(lineage|brief)$/);
         if (lineage && method === 'GET') {
           const id = decodeURIComponent(lineage[1]!);
           if (!app.store.get<Todo>('todos',id)) throw new InputError('待办不存在',404);
           if (url.searchParams.has('expectedProjectId')) checkTodoScope(app,id,{expectedProjectId:url.searchParams.get('expectedProjectId') || null});
-          return json(res,200,{steps:todoLineage(app.store,id)});
+          return json(res,200,lineage[2] === 'brief' ? todoBrief(app.store,id) : {steps:todoLineage(app.store,id)});
         }
         const continuation = path.match(/^\/api\/v1\/todos\/([^/]+)\/continue$/);
         if (continuation && method === 'POST') return json(res, 201, app.continueTodo(decodeURIComponent(continuation[1]!), await body(req)));
@@ -679,7 +680,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if(conversationAction&&method==='POST'){const input=await body(req),id=decodeURIComponent(conversationAction[1]!);
           return json(res,200,conversationAction[2]==='answer'?app.inboxAssistant.answer(id,input.version as number,input.text as string):conversationAction[2]==='archive'?app.inboxAssistant.archive(id,input.version as number):app.inboxAssistant.retry(id,input.version as number));}
         if (path === '/api/v1/todos' && method === 'GET') return json(res, 200, url.searchParams.get('view') === 'sections' ? todoSections(app.todos(), new Date(), todoDecisionIds(app.store)) : app.todos());
-        if (path === '/api/v1/todos' && method === 'POST') return json(res, 201, app.createTodo(await body(req)));
+        if (path === '/api/v1/todos' && method === 'POST') return json(res, 201, app.createTodo(await body(req),true,'web'));
         const todo = path.match(/^\/api\/v1\/todos\/([^/]+)$/);
         if (todo && method === 'PATCH') return json(res, 200, app.updateTodo(todo[1], await body(req), true));
         if (path === '/api/v1/projects' && method === 'GET') return json(res, 200, app.projects.list());
@@ -721,7 +722,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (projectWorkspace[2] === 'messages' && method === 'POST') {
             const input = await body(req);
             const todoId = input.todoId === undefined ? undefined : requiredText(input.todoId, '待办标识');
-            return json(res, 202, await app.projectWorkspace.post(id, requiredText(input.text, '目标'), messageRequestId(req), todoId));
+            return json(res, 202, await app.projectWorkspace.post(id, requiredText(input.text, '目标'), messageRequestId(req), todoId, true));
           }
           if(projectWorkspace[2]==='memory'&&method==='GET')return json(res,200,app.projectWorkspace.memoryConversation(id));
           if(projectWorkspace[2]==='memory'&&method==='POST')return json(res,202,app.projectWorkspace.request(id));
@@ -827,7 +828,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (path === '/api/v1/messages' && method === 'POST') {
           const input = await body(req);
           if (typeof input.text !== 'string' || !input.text.trim()) throw new InputError('消息不能为空');
-          return json(res, 202, await app.agent.post(input.text, 'main', { requestId: messageRequestId(req), ...(typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : {}), ...(input.readOnly === true ? { readOnly: true } : {}) }));
+          return json(res, 202, await app.agent.post(input.text, 'main', { directWebInput:true, requestId: messageRequestId(req), ...(typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : {}), ...(input.readOnly === true ? { readOnly: true } : {}) }));
         }
         if (path === '/api/v1/runs' && method === 'POST') return json(res, 202, app.dispatch(await body(req), typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : undefined));
         const worktreeName = path.match(/^\/api\/v1\/runs\/([^/]+)\/worktree-name$/);

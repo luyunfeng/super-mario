@@ -52,7 +52,7 @@ export function createProjectWorkspace(options: {
     available: boolean;
     reason?: string;
   };
-  post: (id: string, text: string, requestId?: string, todoId?: string) => Promise<Message>;
+  post: (id: string, text: string, requestId?: string, todoId?: string, directWebInput?: true) => Promise<Message>;
   reviewEvidence?: ReviewEvidenceReader;
   projectDecisions?: (id: string) => unknown;
   summarize: (id: string, text: string) => Promise<Message>;
@@ -402,12 +402,12 @@ export function createProjectWorkspace(options: {
         ).map(({ content, ...k }) => k),
       };
     },
-    post(id: string, text: string, requestId?: string, todoId?: string) {
+    post(id: string, text: string, requestId?: string, todoId?: string, directWebInput?: true) {
       if (project(id).archivedAt)
         throw Object.assign(Error("项目已归档"), { status: 409 });
       if (todoId !== undefined && store.get<Todo>("todos", todoId)?.projectId !== id)
         throw Object.assign(Error("待办不属于当前项目"), { status: 409 });
-      return options.post(id, text, requestId, todoId);
+      return options.post(id, text, requestId, todoId, directWebInput);
     },
     request(id: string) {
       if (project(id).archivedAt)

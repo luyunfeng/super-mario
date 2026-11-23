@@ -13,6 +13,7 @@ import { createTopicTurnResults } from './feishu-topic-turn-results.ts';
 import { createTopicExecutor } from './feishu-topic-executor.ts';
 import { createTopicInputReceipts, TopicInputReceiptNotReady } from './feishu-topic-input-receipts.ts';
 import { createTopicAnchors } from './feishu-topic-anchors.ts';
+import type { FeishuTodoSource } from './feishu-todo-source.ts';
 import { createTopicTurns } from './feishu-topic-turns.ts';
 import { createTopicRegistry } from './feishu-topic-registry.ts';
 import { groupTaskCommand, readGroupCommand, topicGroupCommand, topicOwnerWords } from '../../../plugins/feishu-read-command.ts';
@@ -75,7 +76,7 @@ export interface FeishuBotsApp {
   readTopicTurnResult?(target: FeishuAgentInputTarget, turnId: string): Promise<Json>;
   workDecisions?: { ledger: { get(id: string): WorkDecision | undefined } };
   recordTopicDecision?(inputId: string): void;
-  createTodo?(input: Record<string, unknown>): Todo;
+  createFeishuTodo?(input: Record<string, unknown>, source: FeishuTodoSource): Todo;
   plugins?: {
     list(): Array<{ id: string; enabled: boolean; status: string }>;
     invocations?: { use?(name: string, input: Json, options?: { timeoutMs?: number }): Promise<Json>; invoke(name: 'channel.send', input: Json, action: (input: Json) => Promise<Json>): Promise<Json> };
@@ -132,13 +133,13 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   const topics = createTopicRegistry(app.store);
   const topicExecutor = createTopicExecutor(app);
   const topicAnchors = createTopicAnchors(app.store);
-  const topicTurns = createTopicTurns(app.store, input => {
-    if (!app.createTodo) throw noDelivery('当前服务缺少待办创建能力。');
-    return app.createTodo(input);
+  const topicTurns = createTopicTurns(app.store, (input, source) => {
+    if (!app.createFeishuTodo) throw noDelivery('当前服务缺少待办创建能力。');
+    return app.createFeishuTodo(input, source);
   });
-  const groupTasks = createGroupTasks(app.store, input => {
-    if (!app.createTodo) throw noDelivery('当前服务未提供待办创建能力。');
-    const todo = { ...app.createTodo(input), groupTask: true as const };
+  const groupTasks = createGroupTasks(app.store, (input, source) => {
+    if (!app.createFeishuTodo) throw noDelivery('当前服务未提供待办创建能力。');
+    const todo = { ...app.createFeishuTodo(input, source), groupTask: true as const };
     app.store.put('todos', todo.id, todo);
     return todo;
   });

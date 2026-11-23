@@ -1,3 +1,4 @@
+import { feishuTodoSource, type FeishuTodoSource } from './feishu-todo-source.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Store } from '../../../packages/plugin-sdk/src/index.ts';
 import type { Todo } from '../../../packages/protocol/src/index.ts';
@@ -20,7 +21,7 @@ function topic(a: TopicAudience) {
 }
 
 export function createTopicTurns(store: Pick<Store, 'get' | 'put' | 'list' | 'transaction'>,
-  createTodo: (input: { title: string; notes: string }) => Pick<Todo, 'id'>) {
+  createTodo: (input: { title: string; notes: string }, source: FeishuTodoSource) => Pick<Todo, 'id'>) {
   function writeReverse(todoId: string, input: TopicAudience, ownerManaged = false, title?: string): Binding {
     const { binding, grant, chatId, threadId } = input;
     const row: Binding = { audience: { binding, grant, chatId, threadId }, version: randomUUID(), ...(ownerManaged && { ownerManaged: true }), ...(title && { title }) };
@@ -154,7 +155,7 @@ export function createTopicTurns(store: Pick<Store, 'get' | 'put' | 'list' | 'tr
       if (!todoId) {
         const chars = Array.from(words);
         const todo = createTodo({ title: Array.from(words.replace(/\s+/gu, ' ')).slice(0, 80).join(''),
-          notes: chars.slice(0, 4000).join('') });
+          notes: chars.slice(0, 4000).join('') }, feishuTodoSource(input.binding, input.chatId, input.messageId, words));
         if (!todo.id) throw new Error('创建话题待办时未取得待办 ID');
         todoId = todo.id;
         if (!insertBinding(todoId, id, input)) throw new Error('话题或待办已绑定，无法开题');

@@ -19,13 +19,13 @@ test('Web 建立续办，执行者只接收真实前序决定，重试和项目�
   }
   const project = await request('projects','POST',{name:'资料整理'},201);
   const other = await request('projects','POST',{name:'其他工作'},201);
-  const first:Todo = await request('todos','POST',{title:'盘点',projectId:project.id},201);
+  const first:Todo = await request('todos','POST',{title:'盘点',notes:'最初登记的范围',projectId:project.id},201);
   const path = (todo:Todo) => 'todos/'+todo.id;
   const phase = (todo:Todo,title:string,requestId:string,status=201) => request(path(todo)+'/continue','POST',
     {expectedProjectId:project.id,title,continuationReason:'确认上一步产物后续办',requestId},status) as Promise<Todo>;
   const note = (todo:Todo,text:string) => request(path(todo)+'/decisions','POST',{expectedProjectId:project.id,text},201);
   await note(first,'原阶段核对甲列');
-  await request(path(first),'PATCH',{completed:true});
+  await request(path(first),'PATCH',{completed:true,notes:'更新后的范围'});
   const [second, retry] = await Promise.all([phase(first,'复核','second'),phase(first,'复核','second')]);
   assert.equal(second.id,retry.id);
   await phase(first,'替换重试内容','second',409);
@@ -52,13 +52,20 @@ test('Web 建立续办，执行者只接收真实前序决定，重试和项目�
       description:'记录本地输入',async execute({prompt}){prompts.push(prompt);return {text:'已验收'};}});
   }});
   await server.app.plugins.setEnabled('capture-continuation',true);
-  async function dispatch(todo:Todo) {
+  async function dispatch(todo:Todo,doneWhen='有明细') {
     const count=prompts.length;
-    await request('runs','POST',{todoId:todo.id,projectId:project.id,executorId:'continuation-fixture',prompt:'处理本阶段',doneWhen:'有明细',expectMinutes:1},202);
+    await request('runs','POST',{todoId:todo.id,projectId:project.id,executorId:'continuation-fixture',prompt:'处理本阶段',doneWhen,expectMinutes:1},202);
     await t.waitFor(()=>assert.equal(prompts.length,count+1));
     return prompts[count]!;
   }
+  await dispatch(second,'附上复核清单');
+  await dispatch(sibling,'旁支单独核实');
   const handoff=await dispatch(third);
+  await request(path(third)+'/brief?expectedProjectId='+other.id,'GET',undefined,409);
+  const brief = await request(path(third)+'/brief?expectedProjectId='+project.id);
+  assert.equal(brief.origin.kind,'web');
+  assert.equal(brief.origin.notes,'最初登记的范围');
+  assert.deepEqual(brief.criteria.map((row:{doneWhen:string})=>row.doneWhen),['附上复核清单','有明细']);
   assert.match(handoff,/原阶段核对甲列/); assert.match(handoff,/中间阶段保留表头/); assert.doesNotMatch(handoff,/旁支决定不可见/);
   await request(path(second)+'/decisions/'+fact.id+'/withdraw','POST',{expectedProjectId:project.id});
   assert.doesNotMatch(await dispatch(third),/中间阶段保留表头/);
