@@ -79,7 +79,8 @@ test('独立 Web 对话导出只含本线真实输入和对应回复，归档可
     assert.equal(res.status,200,await res.clone().text());
     assert.deepEqual(await res.json(),{title:'合成导出对话',messages:expectedMessages.map(expected)});
   }
-  for(const invalid of [routed,sibling.input.id]) assert.equal((await preview([local.reply.id,invalid])).status,404);
+  const unavailable=fakeInput('已撤回',{queueState:'withdrawn'});
+  for(const invalid of [routed,sibling.input.id,unavailable]) assert.equal((await preview([local.reply.id,invalid])).status,404);
   for(const invalid of [[],[local.reply.id,local.reply.id]]) assert.equal((await preview(invalid)).status,400);
   assert.equal((await preview([local.input.id],{projectId:otherProject})).status,404);
   assert.equal((await preview([local.input.id],{includeWork:true})).status,400);

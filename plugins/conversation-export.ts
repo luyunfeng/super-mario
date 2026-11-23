@@ -2,6 +2,8 @@ import { nativeSource } from './native-conversation-source.ts';
 import type { Extension, Json, Store } from '../packages/plugin-sdk/src/index.ts';
 import type { ExecutionProgress, Message, NativeExportSource, Project } from '../packages/protocol/src/index.ts';
 
+const webThreadIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const phases: Record<ExecutionProgress['phase'], string> = {
   starting: '正在启动', thinking: '正在分析', tool: '正在调用工具', responding: '正在输出', waiting: '等待后续事件',
 };
@@ -58,7 +60,7 @@ type ReadAssistant = () => Promise<{ name: string } | undefined>;
 function imagePreview(input: Record<string, Json>, readWeb?: ReadWeb) {
   const {webThreadId, projectId, messageIds, includeQuestions = false} = input;
   if (Object.keys(input).some(k=>!['action','webThreadId','projectId','messageIds','includeQuestions'].includes(k))
-      || typeof webThreadId!=='string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(webThreadId)
+      || typeof webThreadId!=='string' || !webThreadIdPattern.test(webThreadId)
       || (projectId!==undefined && (typeof projectId!=='string' || !projectId.trim())) || typeof includeQuestions!=='boolean'
       || !Array.isArray(messageIds) || !messageIds.length || messageIds.length>100
       || messageIds.some(id=>typeof id!=='string' || !id.trim() || id.length>256)
@@ -89,7 +91,7 @@ async function markdown(store: Store, input: Json, signal: AbortSignal, readNati
   const web = Object.hasOwn(input, 'webThreadId');
   if (web) {
     if (Object.hasOwn(input, 'native') || Object.hasOwn(input, 'botId') || Object.hasOwn(input, 'threadId')
-        || typeof input.webThreadId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.webThreadId)
+        || typeof input.webThreadId !== 'string' || !webThreadIdPattern.test(input.webThreadId)
         || (input.projectId !== undefined && (typeof input.projectId !== 'string' || !input.projectId.trim())))
       fail(400, '独立 Web 对话导出参数无效');
     if (!readWeb) fail(503, '独立 Web 对话服务尚未连接');
