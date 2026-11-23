@@ -224,7 +224,7 @@ export function todayDashboard(brief: TodayBrief | string, navigation: string, c
     facts('收件箱', brief.inbox);
     facts('提及', brief.mentions);
     facts('今日完成与执行结束', brief.completed);
-    facts('失败', brief.failed);
+    facts('今日更新的失败执行', brief.failed);
     facts('当前执行', brief.running);
     if (brief.calendar.available) facts('日历 · 已读取', brief.calendar);
     else section('日历', '来源不可用 · ' + label(brief.calendar.reason || '当前未接入日历'));

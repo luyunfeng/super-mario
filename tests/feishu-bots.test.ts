@@ -960,6 +960,7 @@ test('飞书主人私聊 /today 和主页按钮读取今日简报，去重并报
     assert.match(detail, /今日简报/);
     assert.match(detail, /2026-03-01/);
     assert.match(detail, /Asia\/Shanghai · 生成于 20:30/);
+    assert.match(detail, /今日更新的失败执行/);
     assert.ok(detail.includes(completed.title));
     assert.match(detail, /来源不可用/);
   }

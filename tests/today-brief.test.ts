@@ -25,6 +25,7 @@ test('today uses the workbench civil day across DST, bounded facts and exact men
   store.put('todos', 'at-start', { id: 'at-start', title: 'done', completedAt: start });
   for (let i = 0; i < 15; i++) store.put('runs', String(i), { id: String(i), status: 'running', prompt: 'backlog run', updatedAt: '2026-03-06T09:00:00Z' });
   for (const status of ['failed', 'completed']) store.put('runs', status, { id: status, status, error: 'exit code 1', prompt: 'task', updatedAt: start });
+  store.put('runs', 'earlier-failure', {id:'earlier-failure', status:'failed', prompt:'前一日失败', updatedAt:'2026-03-08T04:59:59Z'});
   const receipt = await readTodayBrief(store, { todayBriefSources: () => sources, calendarAgenda: async input => {
     assert.deepEqual(input, { start, end: '2026-03-09T04:00:00.000Z' });
     return { available: true, partial: true, events: [
@@ -40,6 +41,7 @@ test('today uses the workbench civil day across DST, bounded facts and exact men
   assert.deepEqual(receipt.inbox.items.map(row => row.id), ['not-mentioned', 'pending', 'backlog']);
   assert.deepEqual(receipt.mentions.items.map(row => row.id), ['pending']);
   assert.deepEqual(receipt.completed.items.map(row => row.kind), ['todo', 'completed']);
+  assert.deepEqual(receipt.failed.items.map(row=>row.id),['failed']);
   assert.equal(receipt.failed.items[0].reason, 'exit code 1');
   assert.deepEqual([receipt.running.total, receipt.running.items.length, receipt.running.truncated], [15, 12, true]);
   assert.ok(!JSON.stringify(receipt).includes('private raw text'));
