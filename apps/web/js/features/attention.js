@@ -4,7 +4,7 @@ import { h, keyedList } from '../lib/dom.js';
 import { timeAgo } from '../lib/format.js';
 import { Button, Pill, Field, Input, TextArea, Banner } from '../ui/kit.js';
 import { confirmDialog, openDrawer } from '../ui/overlay.js';
-import { createQuestionAnswers } from './question-answers.js';
+import { createQuestionAnswers, questionDeadlineText } from './question-answers.js';
 import { openInboxHandlingDrawer } from './inbox-handling.js';
 
 const TYPES = {
@@ -142,11 +142,12 @@ export function createAttention({ api, store, task = false }) {
     const detail = item.detail && h('details', { class: 'attn__detail' }, h('summary', null, '详情'), h('pre', null, item.detail));
     const contextText = item => [item.context, item.projectName && `项目：${item.projectName}`, item.source && `来自：${item.source}`].filter(Boolean).join(' · ');
     const context = h('p', { class: 'muted small' }, contextText(item));
+    const deadline = item.decisionDeadlineAt && h('p', { class:'small', role:'status' }, questionDeadlineText(item));
     const node = h('article', { class: `attn__card ${item.highRisk ? 'is-risk' : ''}`, tabindex: -1, dataset: { type: item.type, id: item.id } },
       h('header', { class: 'attn__top' },
         Pill(type.text, type.tone), item.highRisk && Pill('高风险', 'danger'),
         h('h3', { class: 'attn__title' }, item.title), h('span', { class: 'attn__time muted small' }, timeAgo(item.createdAt))),
-      context,
+      context, deadline,
       detail,
       questions?.el,
       textAction && h('div', { class: 'attn__reply' }, input, Button({ label: textAction.label, kind: 'primary', size: 'sm', onClick: () => submit(textAction), dataset: { action: textAction.label } })),
@@ -157,6 +158,7 @@ export function createAttention({ api, store, task = false }) {
       item = next;
       textAction = item.actions.find(action => action.requiresText);
       context.textContent = contextText(item);
+      if (deadline) deadline.textContent = questionDeadlineText(item);
       paintActions();
     } };
   }
@@ -166,14 +168,14 @@ export function createAttention({ api, store, task = false }) {
     if (previous?.signature === signature) return previous.node;
     // Title, questions and scope are immutable during automatic release. Rebuild for
     // other changes so an old selection cannot become an answer to a different question.
-    const { wait, actions, version, context, ...content } = item;
+    const { wait, actions, version, context, deadlineRemindedAt, ...content } = item;
     const questionKey = item.type === 'interaction' && JSON.stringify(content);
-    if (previous && questionKey && questionKey === previous.questionKey && wait === false && previous.wait !== false) {
+    if (previous && questionKey && questionKey === previous.questionKey && ((wait === false && previous.wait !== false) || deadlineRemindedAt !== previous.deadlineRemindedAt)) {
       previous.release(item);
-      Object.assign(previous, { signature, wait });
+      Object.assign(previous, { signature, wait, deadlineRemindedAt });
       return previous.node;
     }
-    const card = { ...createCard(item), signature, wait, questionKey };
+    const card = { ...createCard(item), signature, wait, questionKey, deadlineRemindedAt };
     cards.set(item.id, card);
     return card.node;
   }

@@ -65,7 +65,7 @@ export function createAwayNotifications({ store, background, presence, bots, cha
     const atSource = store.get<{present:boolean}>('notifications.source-presence',data.runId ? `run:${data.runId}` : `interaction:${data.id}`)?.present;
     const awaySettings = store.get<{enabled?:boolean; alwaysNotifyRuns?:boolean}>('notifications.settings','away');
     const isRunFinish = event.type === 'run.finished';
-    const present = atSource ?? data.webPresent ?? presence.status().present;
+    const present = data.webPresent ?? atSource ?? presence.status().present;
     const skip = (present && !(isRunFinish && awaySettings?.alwaysNotifyRuns === true)) || awaySettings?.enabled === false || Boolean(originalRoute?.channel);
     const project = projectId ? store.get<Project>('projects', projectId) : undefined;
     const runHeader = originRun ? `后台 Agent · ${originRun.machineId || originRun.executorId}${project ? ` · ${project.name}` : ''}` : '';

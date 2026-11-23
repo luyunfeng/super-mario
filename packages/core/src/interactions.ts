@@ -1,3 +1,4 @@
+import { cardAcceptsAnswer, questionDeadline } from './question-deadline.ts';
 import { questionItems, readQuestionResponses } from './question-responses.ts';
 import type { QuestionItem, QuestionResponse } from '../../protocol/src/index.ts';
 import type { PolicyStage } from './policies.ts';
@@ -32,6 +33,10 @@ export interface Card {
   answer?: string;
   questions?: QuestionItem[];
   wait?: boolean;
+  decisionDeadlineAt?: string;
+  reversible?: boolean;
+  deadlineRemindedAt?: string;
+  byDefault?: true;
   answers?: QuestionResponse[];
   withdrawnReason?: 'user_spoke';
   answeredBy?: string;
@@ -53,7 +58,7 @@ export interface Card {
   userNotifiedAt?: string;
   routingHistory?: { handler: Decision['handler']; outcome: string; at: string }[];
 }
-type Input = Pick<Card, 'kind' | 'title' | 'body' | 'runId' | 'projectId' | 'executorId' | 'cwd' | 'questions' | 'wait'>;
+type Input = Pick<Card, 'kind' | 'title' | 'body' | 'runId' | 'projectId' | 'executorId' | 'cwd' | 'questions' | 'wait'> & {deadline?:string; reversible?:boolean};
 const collection = 'interactions';
 export class InteractionError extends Error {
   readonly status: 400 | 404 | 409 | 503;
@@ -68,9 +73,10 @@ function text(value: unknown, name: string, empty = false): asserts value is str
 }
 
 /** Parent owns expireTick and must await close() before closing the store. No automatic replay. */
-export function createInteractions({ store, events, decide, answer: deliver, askAgent, publish }: {
+export function createInteractions({ store, events, decide, answer: deliver, askAgent, publish, deadlineOutcome }: {
   store: Store;
   events: EventBus;
+  deadlineOutcome?: (card:Card) => 'eligible'|'spoke'|'unverified'|'initializing';
   publish?: (input: import('../../plugin-sdk/src/index.ts').EventInput) => unknown;
   decide: (card: Card, conversationQuestion: boolean) => Decision;
   answer: (card: Card, text: string) => Promise<void>;
@@ -100,19 +106,53 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
     return card;
   }
   // Expiration is committed even when the attempted answer is rejected.
-  function claim(id: string, version: number, patch: Partial<Card>): Card {
+  function claim(id: string, version: number, patch: Partial<Card>, now=Date.now()): Card {
     const card = store.transaction(() => {
       const previous = get(id, version);
-      const next = save(previous, Date.parse(previous.expiresAt) <= Date.now() ? { status: 'expired' } : { ...patch, ...(patch.status === 'answered' ? { decisionVersion: previous.version + 1 } : {}) });
+      const next = save(previous, !cardAcceptsAnswer(previous,now) ? { status: 'expired' } : { ...patch, ...(patch.status === 'answered' ? { decisionVersion: previous.version + 1 } : {}) });
       if (next.status === 'answered') publish?.({type:'interaction.answered',typeVersion:1,sourceId:`interaction:${id}:v${next.version}`,data:{id,version:next.version,answer:next.answer||'',by:next.answeredBy||'user'},subject:{kind:'interaction',id},staleIf:{ref:`interaction:${id}`,version:next.version}});
       return next;
     });
     return card;
   }
+  function settleDeadline(id:string, now:number):Card|undefined {
+    const result=store.transaction(() => {
+      const card=store.get<Card>(collection,id);
+      if (!card || card.status!=='open' || !card.decisionDeadlineAt || !(Date.parse(card.decisionDeadlineAt)<=now) || card.deadlineRemindedAt) return;
+      const outcome=deadlineOutcome?.(card);
+      if (outcome === 'initializing') return;
+      if (card.wait===false && outcome==='spoke') return save(card,{status:'expired'});
+      if (outcome==='eligible' && card.reversible===true && card.questions?.length &&
+          card.questions.every(q=>q.recommend && q.options.some(o=>o.label===q.recommend))) {
+        const response=readQuestionResponses(card.questions,card.questions.map(q=>({selected:[q.recommend]})));
+        const next=save(card,{status:'answered',byDefault:true,answeredBy:'deadline_default',answers:response.answers,
+          answer:response.text,answeredAt:new Date(now).toISOString(),decisionVersion:card.version+1,delivery:'unknown'});
+        publish?.({type:'interaction.answered',typeVersion:1,sourceId:`interaction:${id}:v${next.version}`,
+          data:{id,version:next.version,answer:response.text,by:'deadline_default',byDefault:true},subject:{kind:'interaction',id},
+          staleIf:{ref:`interaction:${id}`,version:next.version}});
+        return next;
+      }
+      // Preserve the form version: its owner can still submit the originally issued card.
+      const stamp=new Date(now).toISOString();
+      const reminded={...card,deadlineRemindedAt:stamp,updatedAt:stamp};
+      store.put(collection,id,reminded);
+      events.publish('interactions.deadline_overdue',{id});
+      return reminded;
+    });
+    if (!result) return;
+    if (result.byDefault) void deliverAnswer(result,result.answer!);
+    else changed(id);
+    return result;
+  }
   function answer(id: string, version: number, input: string | QuestionResponse[], by = 'user'): Promise<Card> {
     active();
-    const current = get(id, version);
-    if (Date.parse(current.expiresAt) <= Date.now()) {
+    const now=Date.now();
+    let current = get(id, version);
+    if (current.decisionDeadlineAt && Date.parse(current.decisionDeadlineAt)<=now) {
+      settleDeadline(id,now);
+      current=get(id,version);
+    }
+    if (!cardAcceptsAnswer(current,now)) {
       claim(id, version, {status:'expired'});
       changed(id);
       throw new InteractionError('交互卡片已过期', 409);
@@ -124,11 +164,15 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
     text(by, 'by');
     // Claim before any I/O. Unknown also covers a crash between delivery and confirmation.
     const card = claim(id, version, { status: 'answered', answer: value, ...(response && {answers:response.answers}), answeredBy: by,
-      answeredAt: new Date().toISOString(), delivery: 'unknown' });
+      answeredAt: new Date(now).toISOString(), delivery: 'unknown' },now);
     if (card.status === 'expired') {
       changed(id);
       throw new InteractionError('交互卡片已过期', 409);
     }
+    return deliverAnswer(card,value);
+  }
+  function deliverAnswer(card:Card,value:string) {
+    const id=card.id;
     const job = track(Promise.resolve().then(async () => {
       let patch: Partial<Card>;
       try {
@@ -142,7 +186,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       // close() waits for already claimed deliveries, so the store is still available here.
       const result = store.transaction(() => {
         const current = store.get<Card>(collection, card.id) ?? card;
-        if (current.wait === false && current.delivery === 'confirmed') return current;
+        if ((current.wait === false || current.byDefault) && current.delivery === 'confirmed') return current;
         return save(current, patch);
       });
       changed(id);
@@ -251,8 +295,9 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       const now = new Date().toISOString();
       const card: Card = { ...fields, id: randomUUID(), version: 1, status: 'open', handler: 'user', layer: 'default',
         expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(), createdAt: now, updatedAt: now };
+      Object.assign(card,questionDeadline({...fields,deadline:input.deadline,reversible:input.reversible},Date.parse(now)));
       const policy = decide(structuredClone(card), conversationQuestion);
-      const decision: Decision = card.wait === false ? {...policy,handler:'user',mode:'suggest',answer:undefined,ruleId:undefined,
+      const decision: Decision = card.wait === false || card.decisionDeadlineAt ? {...policy,handler:'user',mode:'suggest',answer:undefined,ruleId:undefined,
         ...(policy.stages && {stages:[{handler:'user',mode:'suggest'}]})} : policy;
       if (!decision || !['rules', 'user', 'main_agent', 'supervisor'].includes(decision.handler) ||
         !['global', 'project', 'task', 'default'].includes(decision.layer) ||
@@ -274,6 +319,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
         card.expiresAt = decision.userDeadlineAt;
         if (decision.handler !== 'user') card.stageDueAt = decision.deadlineAt;
       }
+      if (card.decisionDeadlineAt) card.expiresAt=card.decisionDeadlineAt;
       card.handler = decision.handler;
       card.layer = decision.layer;
       if (decision.mode !== undefined) card.mode = decision.mode;
@@ -288,7 +334,14 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
     answer,
     withdraw(id: string, version: number, reason?:'user_spoke'): Card {
       active();
-      const card = claim(id, version, { status: 'withdrawn', ...(reason && {withdrawnReason:reason}) });
+      const now=Date.now();
+      if (get(id,version).decisionDeadlineAt) {
+        const settled=settleDeadline(id,now);
+        // A new human message can arrive between the cutoff and the next sweep.
+        // Its host must still accept it when the old question has already settled.
+        if (reason==='user_spoke' && settled && settled.status!=='open') return settled;
+      }
+      const card = claim(id, version, { status: 'withdrawn', ...(reason && {withdrawnReason:reason}) },now);
       changed(id);
       return card;
     },
@@ -296,12 +349,14 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       active();
       if (!Number.isFinite(now)) throw new InteractionError('无效的过期时间');
       const expired = store.transaction(() => store.list<Card>(collection)
-        .filter(card => card.status === 'open' && Date.parse(card.expiresAt) <= now)
+        .filter(card => card.status === 'open' && !card.decisionDeadlineAt && Date.parse(card.expiresAt) <= now)
         .map(card => save(card, { status: 'expired' })));
       for (const card of expired) changed(card.id);
       const escalated: Card[] = [];
       for (const card of store.list<Card>(collection)) {
-        if (card.status === 'open' && card.stages && card.handler !== 'user' && card.stageDueAt && Date.parse(card.stageDueAt) <= now) {
+        if (card.status === 'open' && card.decisionDeadlineAt && !card.deadlineRemindedAt && Date.parse(card.decisionDeadlineAt)<=now) {
+          const next=settleDeadline(card.id,now); if (next) escalated.push(next);
+        } else if (card.status === 'open' && card.stages && card.handler !== 'user' && card.stageDueAt && Date.parse(card.stageDueAt) <= now) {
           const next = advance(card, 'timeout', now); if (next) escalated.push(next);
         }
       }

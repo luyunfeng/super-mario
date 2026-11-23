@@ -28,6 +28,7 @@ export function reminderSourceId(todo: Todo) {
 
 export interface WorkbenchBackgroundDeps {
   demo?: boolean;
+  deadlineWebSource: (card: Card) => Message | undefined;
   consumePendingBriefNotices?: () => { title: string; text: string; createdAt: string }[];
   conversations?:()=>import('../../protocol/src/inbox-conversations.ts').InboxConversation[];
   store: ReturnType<typeof createStore>;
@@ -310,7 +311,36 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
   for (const plugin of plugins.list()) background.host.ownerEnabled(plugin.id, plugin.status === 'active');
   background.start();
 
+  function remindWebQuestion(id: string) {
+    const messageId = 'question-deadline:' + id;
+    const inserted = store.transaction(() => {
+      const card = store.get<Card>('interactions', id);
+      if (!card || card.status !== 'open' || !card.deadlineRemindedAt || store.get('messages', messageId)) return false;
+      const source = deps.deadlineWebSource(card);
+      if (!source) return false;
+      const message: Message = { id: messageId, role: 'assistant', origin: 'notification', status: 'done',
+        conversationId: source.conversationId, projectId: source.projectId, todoId: source.todoId, replyTo: source.id,
+        text: '提问已到截止时间：' + card.title + '。仍在等你选择，请在原问题卡上回答。', createdAt: card.deadlineRemindedAt };
+      store.put('messages', messageId, message);
+      background.publish({type:'web.notice',typeVersion:1,sourceId:messageId,data:{id,messageId,webPresent:presence.status().present},
+        subject:{kind:'interaction',id}});
+      return true;
+    });
+    if (inserted) {
+      changed('messages.changed', { messageId });
+      changed('notifications.message', { messageId });
+    }
+  }
+  // Recover the local notice if the process stopped after the deadline marker committed.
+  for (const card of store.list<Card>('interactions')) {
+    if (card.status === 'open' && card.deadlineRemindedAt) remindWebQuestion(card.id);
+  }
   const offInteractionNotice = events.subscribe(event => {
+    if (event.type === 'interactions.deadline_overdue' && event.data && typeof event.data === 'object' &&
+        !Array.isArray(event.data) && typeof event.data.id === 'string') {
+      remindWebQuestion(event.data.id);
+      return;
+    }
     if (event.type !== 'interactions.user_required' || !event.data || typeof event.data !== 'object' || Array.isArray(event.data) || typeof event.data.id !== 'string') return;
     const id = event.data.id;
     // The origin is persisted immediately after open(). Defer observation until that write completes.
@@ -319,13 +349,15 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
       const card = store.get<Card>('interactions', id);
       if (!card || card.status === 'expired' || card.withdrawnReason === 'user_spoke' || card.userNotifiedAt) return;
       const origin = store.get<{ inputId?: string }>('interaction-origins', id);
+      const source = card.kind === 'question' && !card.runId && origin?.inputId ? store.get<Message>('messages',origin.inputId) : undefined;
       const now = new Date().toISOString();
       const messageId = `interaction-notice:${id}`;
       store.transaction(() => {
         store.put('interactions', id, { ...card, userNotifiedAt: now });
         const message: Message = {
           id: messageId,
-          conversationId: 'main',
+          conversationId: source?.conversationId ?? 'main',
+          ...(source?.todoId && {todoId:source.todoId}),
           role: 'assistant',
           origin: 'notification',
           replyTo: origin?.inputId,

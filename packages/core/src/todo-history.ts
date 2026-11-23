@@ -25,7 +25,7 @@ export function readTodoHistory(store: Pick<Store, 'get' | 'list'>, id: string, 
     const source = origin?.inputId && store.get<Message>('messages', origin.inputId);
     if (!source || source.role !== 'user' || source.todoId !== id || source.projectId !== todo.projectId) return [];
     const continuation = origin?.continuationId && store.get<Message>('messages', origin.continuationId);
-    return [{ cardId: card.id, title: card.title, answeredAt: card.answeredAt, delivery: card.delivery ?? 'unknown',
+    return [{ cardId: card.id, title: card.title, answeredAt: card.answeredAt, ...(card.byDefault && {defaultAnswer: card.answer}), delivery: card.delivery ?? 'unknown',
       continuationAccepted: !!continuation && continuation.conversationId === source.conversationId &&
         continuation.projectId === source.projectId && (!continuation.todoId || continuation.todoId === id) && continuation.role === 'user' }];
   }) : undefined;

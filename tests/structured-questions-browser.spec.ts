@@ -8,7 +8,7 @@ import { startServer } from '../apps/server/src/index.ts';
 import type { Message, Todo } from '../packages/protocol/src/index.ts';
 
 const questions = [
-  { header: '格式', question: '采用哪种导出格式？', options: [{ label: 'CSV', description: '便于读取表格。' }, { label: 'JSON', description: '保留对象结构。' }] },
+  { header: '格式', recommend: 'CSV', question: '采用哪种导出格式？', options: [{ label: 'CSV', description: '便于读取表格。' }, { label: 'JSON', description: '保留对象结构。' }] },
   { header: '列名', question: '保留哪些列？', multiSelect: true, options: [{ label: '名称' }, { label: '日期' }] },
   { header: '排序', question: '如何排列数据？', options: [{ label: '正序' }, { label: '倒序' }] },
 ];
@@ -39,9 +39,10 @@ test('主对话及超时待办逐题回答，提交完整有序答案，空题�
     const order = panel.getByRole('group', { name: questions[2].question });
     const button = panel.getByRole('button', { name: label, exact: true });
     await expect(format).toContainText('保留对象结构。');
-    await format.getByLabel('CSV', { exact: true }).check();
+    await expect(format.getByLabel('CSV（推荐）', { exact: true })).not.toBeChecked();
+    await format.getByLabel('CSV（推荐）', { exact: true }).check();
     await format.getByLabel('JSON', { exact: true }).check();
-    await expect(format.getByLabel('CSV', { exact: true })).not.toBeChecked();
+    await expect(format.getByLabel('CSV（推荐）', { exact: true })).not.toBeChecked();
     await columns.getByLabel('名称', { exact: true }).check();
     await columns.getByLabel('日期', { exact: true }).check();
     await columns.getByLabel('文字回答').fill('日期用本地时区');
@@ -67,6 +68,21 @@ test('主对话及超时待办逐题回答，提交完整有序答案，空题�
   assert.deepEqual(live, { version, answers });
   await expect(card).toHaveCount(0);
 
+  const source = server.app.store.list<Message>('messages').find(m => m.directWebInput && m.projectId === project.id)!;
+  const critical = server.app.interactions.open({kind:'question',title:'不可逆操作的决定',body:'请明确选择格式。',
+    wait:false,deadline:'2m',reversible:false,questions:[questions[0]]},source);
+  const pending = page.locator('[data-id="interaction:' + critical.id + '"]');
+  await expect(pending.getByRole('status').filter({hasText:'截止时间'})).toContainText('只提醒一次');
+  await expect(pending).toContainText('若期间在原对话另发消息，到期将关闭提问');
+  await expect(pending.getByLabel('CSV（推荐）',{exact:true})).not.toBeChecked();
+  const alternative = pending.getByLabel('JSON',{exact:true});
+  await alternative.check();
+  server.app.interactions.expireTick(Date.parse(critical.decisionDeadlineAt!) + 1);
+  await expect(pending.getByRole('status').filter({hasText:'截止时间'})).toContainText('仍需你亲自回答');
+  await expect(alternative).toBeChecked();
+  await pending.getByRole('button',{name:'回答',exact:true}).click();
+  await expect(pending).toHaveCount(0);
+  assert.deepEqual(server.app.interactions.list().find(row=>row.id===critical.id)?.answers,[{selected:['JSON']}]);
   const second = await open('下次导出的三项设置');
   server.app.interactions.expireTick(Date.parse(second.expiresAt) + 1);
   const deferred = () => server.app.store.list<Todo>('todos').find(row => row.deferredQuestion?.cardId === second.id);

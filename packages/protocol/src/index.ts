@@ -33,6 +33,8 @@ export interface QuestionItem {
   question: string;
   header?: string;
   multiSelect?: boolean;
+  /** Exact option label suggested by the asker. A suggestion is not a selection. */
+  recommend?: string;
   options: { label: string; description?: string }[];
 }
 /** Responses follow the question order. Selected values are stored option labels. */

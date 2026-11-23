@@ -67,7 +67,7 @@ export function openTodoHistory({ api, store, router, todo }) {
           h('h3', null, '对话答复回执'), result.conversationReceipts.map(receipt => {
             const status = receipt.continuationAccepted ? '原对话已接收后续输入' :
               { confirmed: '已记录，未查到后续输入', failed: '已记录，后续处理失败', unknown: '已记录，后续处理结果未知' }[receipt.delivery];
-            return h('p', null, receipt.title + ' · ' + status, receipt.answeredAt && ' · ' + formatDate(receipt.answeredAt, true));
+            return h('p', null, receipt.title + ' · ' + status, receipt.defaultAnswer && ' · 系统到期采用推荐：' + receipt.defaultAnswer, receipt.answeredAt && ' · ' + formatDate(receipt.answeredAt, true));
           })));
       }
       for (const round of result.rounds) list.append(row(round, result.todo.projectId));

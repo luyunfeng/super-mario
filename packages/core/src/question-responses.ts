@@ -19,7 +19,7 @@ function unique(values: string[], name: string) {
 export function questionItems(value: unknown): QuestionItem[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > 4) invalid('一张问题卡须包含 1 到 4 题');
   const items = value.map(raw => {
-    const row = fields(raw, ['question','header','multiSelect','options'], '问题');
+    const row = fields(raw, ['question','header','multiSelect','options','recommend'], '问题');
     const question = bounded(row.question, 500, '题目');
     if (row.multiSelect !== undefined && typeof row.multiSelect !== 'boolean') invalid('multiSelect 须为布尔值');
     if (!Array.isArray(row.options) || row.options.length < 2 || row.options.length > 4) invalid('每题须提供 2 到 4 个选项');
@@ -29,7 +29,10 @@ export function questionItems(value: unknown): QuestionItem[] {
         ...(option.description !== undefined && {description: bounded(option.description, 120, '选项说明')}) };
     });
     unique(options.map(option => option.label), '同题选项');
-    return { question, options, ...(row.header !== undefined && {header: bounded(row.header, 12, '题目短标题')}),
+    const recommendation = typeof row.recommend === 'string' ? row.recommend.trim() : undefined;
+    if (row.recommend !== undefined && typeof row.recommend !== 'string') invalid('recommend 须为选项名称');
+    const recommend = options.find(option => option.label === recommendation)?.label;
+    return { question, options, ...(recommend && {recommend}), ...(row.header !== undefined && {header: bounded(row.header, 12, '题目短标题')}),
       ...(typeof row.multiSelect === 'boolean' && {multiSelect: row.multiSelect}) };
   });
   unique(items.map(item => item.question), '题目');

@@ -3,6 +3,7 @@ import type { TodayBrief, TodaySection } from '../../../plugins/today-brief.ts';
 import type { FeishuBotsApp } from './feishu-bots.ts';
 import type { InboxItem, MachineInfo, Message, Project, QuestionResponse, Run, Todo } from '../../../packages/protocol/src/index.ts';
 import { publicText } from '../../../plugins/agent-progress-card.ts';
+import { cardAcceptsAnswer } from '../../../packages/core/src/question-deadline.ts';
 import type { Card } from '../../../packages/core/src/interactions.ts';
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
 import { cardButtons, cardDocument, cardPlain, cardSection, cardWebBase } from './feishu-cards.ts';
@@ -251,7 +252,7 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
   const pageSize = 5;
   const questions = app.interactions && options.navigation ? app.store.list<Card>('interactions').filter(card =>
     card.kind === 'question' && card.status === 'open' && card.handler === 'user' && (!options.canViewQuestion || options.canViewQuestion(card)) &&
-    Date.parse(card.expiresAt) > (options.now?.getTime() ?? Date.now())).sort((a,b) => a.createdAt.localeCompare(b.createdAt)) : [];
+    cardAcceptsAnswer(card,options.now?.getTime() ?? Date.now())).sort((a,b) => a.createdAt.localeCompare(b.createdAt)) : [];
   if (view === 'home') {
     section('等你处理', waiting.length ? '等你拍板 · ' + waiting.length + ' 项\n' + waiting.slice(0, 3).map(a => '• ' + label(a.title)).join('\n') : '当前没有等你拍板的事。');
     if (options.navigation) elements.push(...cardButtons([{ label: '今日简报', value: { kind: 'workbench.today', navigation: options.navigation } }]));
@@ -350,15 +351,24 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
     ...(view === 'questions' && { questionRows:questions.slice(page * pageSize, (page + 1) * pageSize).map(q => ({id:q.id,version:q.version})) }) };
 }
 
+function deadlineInfo(question: Card) {
+  const deadline = new Date(question.decisionDeadlineAt!);
+  if (!Number.isFinite(deadline.getTime())) return '';
+  const time = deadline.toLocaleString('zh-CN', {timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}) + '（北京时间）';
+  if (question.deadlineRemindedAt) return '已过决定截止时间 ' + time + '，仍需你亲自回答。';
+  if (question.wait === false) return '决定截止时间 ' + time + '。若期间在原对话另发消息，到期将关闭提问。' + (question.reversible ? '若未另发消息或答卡，到期将采用每题的推荐选项。' : '若未另发消息或答卡，到期只提醒一次，仍需你亲自决定。');
+  return '决定截止时间 ' + time + (question.reversible ? '，届时未回答将采用每题的推荐选项。' : '，届时未回答只提醒一次，仍需你亲自决定。');
+}
 const compactQuestion = (question: Card) => question.questions?.length === 1 && !question.questions[0].multiSelect && question.questions[0].options.length <= 4
   && question.questions[0].options.every(option => [...option.label].length <= 30);
 export function questionForm(question: Card, navigation: string, webBase?: string) {
   const later = '这道题可稍后回答。你可以继续在原对话聊天；要回答这张卡时，请通过表单提交。';
+  const deadline = question.decisionDeadlineAt && deadlineInfo(question);
   const submit = {kind:'workbench.answerQuestion',navigation,id:question.id,version:question.version};
   const callback = (value: Record<string, unknown>) => [{type:'callback',value}];
   const back = {tag:'button',text:cardPlain('返回问题列表'),behaviors:callback({kind:'workbench.navigate',navigation,view:'questions',page:0})};
   const close = {tag:'button',text:cardPlain('关闭提问'),behaviors:callback({...submit,kind:'workbench.closeQuestion'})};
-  const build = (elements: Record<string, unknown>[]) => ({schema:'2.0',header:{template:'orange',title:cardPlain(question.wait === false ? '可稍后回答的问题' : '回答 Agent 的问题')},body:{elements:[...elements, ...(question.wait === false ? [close] : []), back]}});
+  const build = (elements: Record<string, unknown>[]) => ({schema:'2.0',header:{template:'orange',title:cardPlain(question.wait === false ? '可稍后回答的问题' : '回答 Agent 的问题')},body:{elements:[...(deadline ? [{tag:'div',text:cardPlain(deadline)}] : []), ...elements, ...(question.wait === false ? [close] : []), back]}});
   const web = () => {
     const base = cardWebBase(webBase);
     const tip = '问题内容超过飞书表单容量。请打开 Web 工作台，在主对话的「等你处理」找到这道题并回答。';
@@ -369,16 +379,20 @@ export function questionForm(question: Card, navigation: string, webBase?: strin
   if (question.wait === false) elements.push({tag:'div',text:cardPlain(later)});
   const fields: Record<string, unknown>[] = [];
   const input = (name: string, hint: string) => ({tag:'input',name,width:'fill',input_type:'multiline_text',rows:2,max_length:1000,placeholder:cardPlain(hint)});
+  const compact = compactQuestion(question);
   if (!question.questions) fields.push({...input('answer','输入你的回答'),required:true});
   else for (const [i,q] of question.questions.entries()) {
-    const heading = [q.header, q.question, ...q.options.filter(o=>o.description).map(o => o.label + '：' + o.description)].filter(Boolean).join('\n');
+    const shortLabel = (label:string) => [...label].length + 4 <= (compact ? 30 : 60);
+    const recommendation = q.recommend && (!compact || !shortLabel(q.recommend)) && '推荐选项：' + q.recommend;
+    const heading = [q.header, q.question, recommendation, ...q.options.filter(o=>o.description).map(o => o.label + '：' + o.description)].filter(Boolean).join('\n');
     const prompt = {tag:'div',text:cardPlain(heading)};
-    if (compactQuestion(question)) {
-      elements.push(prompt, ...q.options.map((o,j) => ({tag:'button',text:cardPlain(o.label),behaviors:callback({...submit,pick:String(j)})})));
+    const optionLabel = (label: string) => label === q.recommend && shortLabel(label) ? label + '（推荐）' : label;
+    if (compact) {
+      elements.push(prompt, ...q.options.map((o,j) => ({tag:'button',text:cardPlain(optionLabel(o.label)),behaviors:callback({...submit,pick:String(j)})})));
     } else {
       fields.push(prompt);
       if (q.options.length) fields.push({tag:q.multiSelect?'multi_select_static':'select_static',name:'q'+i,width:'fill',
-        placeholder:cardPlain(q.multiSelect?'可选择多项':'选择一项'),options:q.options.map((o,j)=>({text:cardPlain(o.label),value:String(j)}))});
+        placeholder:cardPlain(q.multiSelect?'可选择多项':'选择一项'),options:q.options.map((o,j)=>({text:cardPlain(optionLabel(o.label)),value:String(j)}))});
     }
     fields.push(input('t'+i, q.options.length?'也可填写自己的回答':'填写回答'));
   }

@@ -1,3 +1,4 @@
+import { cardAcceptsAnswer } from '../../../packages/core/src/question-deadline.ts';
 import { createDecisionNudges, type DecisionNudgeCard } from './feishu-decision-nudges.ts';
 import { decisionQuietNow } from '../../../packages/core/src/decision-quiet-hours.ts';
 import { groupReadDelivery, type GroupReadService } from './feishu-group-read-delivery.ts';
@@ -114,7 +115,7 @@ type TopicStamp = { todoId: string; grant: string; opening: boolean; sourceOpeni
 type Envelope = { topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
 type Routed = Route & Envelope & { envelopeId: string; replyReference?: { text: string; truncated: boolean } | { unavailable: true } };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
-type SentQuestion = DecisionNudgeCard & { questionId:string; version:number; inputId:string; navigation:string; closeAttempted?:true };
+type SentQuestion = DecisionNudgeCard & { questionId:string; version:number; inputId:string; navigation:string; closeAttempted?:true; webOnly?:true };
 const sentQuestions='feishu.sent-question-cards';
 type Runtime = { readyEpoch?: number; commandSubscription?: string; epoch: number; adapter?: FeishuBotAdapter; reason?: string; code: string; expires: number; operations: Promise<void> };
 const noDelivery = (message: string) => Object.assign(new Error(message), { delivery: 'no' as const });
@@ -193,12 +194,16 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     return input;
   }
   function canViewQuestion(bot: FeishuBotSettings, paired: Owner, card: Card) {
-    if (card.wait !== false) return true;
+    const requiresOrigin = card.wait === false || !!card.decisionDeadlineAt;
     const origin = app.store.get<{inputId?:string}>('interaction-origins',card.id)?.inputId;
-    if (!origin) return false;
+    if (!origin || card.runId) return !requiresOrigin;
     const rootId = app.store.get<string>('conversation.question-continuations',origin) ?? origin;
     const root = app.store.get<Message>('messages',rootId);
-    if (!root || root.role !== 'user' || root.readOnly || root.projectId !== card.projectId) return false;
+    const route = app.store.get<Routed>('message.routes',rootId);
+    if (!root) return false;
+    // Older Web main-chat questions have no channel route or direct-input flag.
+    if (!requiresOrigin && !route && !root.directWebInput && root.conversationId === 'main' && !root.projectId) return true;
+    if (root.role !== 'user' || root.readOnly || root.projectId !== card.projectId) return false;
     if (rootId !== origin) {
       const input = app.store.get<Message>('messages',origin);
       if (!input || input.conversationId !== root.conversationId || input.todoId !== root.todoId || input.projectId !== root.projectId) return false;
@@ -211,8 +216,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const todo = app.store.get<Todo>('todos',root.todoId);
       if (!todo || todo.projectId !== root.projectId) return false;
     }
-    if (root.directWebInput && !app.store.get('message.routes',rootId))
-      return root.conversationId === 'main' || (!!root.projectId && root.conversationId === 'project:'+root.projectId+':work');
+    if (root.directWebInput && !route)
+      return bot.scope.kind === 'global' && (root.conversationId === 'main' || (!!root.projectId && root.conversationId === 'project:'+root.projectId+':work'));
     return Boolean(privateTurn(bot,paired,rootId));
   }
   function visibleQuestionId(bot: FeishuBotSettings, paired: Owner, id: string) {
@@ -1231,7 +1236,16 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (createHash('sha256').update(boardKey).digest('hex') !== value.navigation) return fail;
       authorizeHome(bot, paired, boardKey, input.messageId);
     }
-    const cap = app.store.get<CardNavigation>('feishu.card.navigation', value.navigation);
+    let cap = app.store.get<CardNavigation>('feishu.card.navigation', value.navigation);
+    // A deadline may be much later than dashboard navigation expires. Only the original
+    // confirmed platform message can still submit this specific question.
+    if ((!cap || cap.expiresAt <= Date.now()) && ['workbench.answerQuestion','workbench.closeQuestion'].includes(String(value.kind))) {
+      const receipt = app.store.get<SentQuestion>(sentQuestions,digest([bot.id,groupReadBinding(bot,paired),input.messageId]));
+      const question = receipt && receipt.navigation === value.navigation && receipt.messageId === input.messageId &&
+        receipt.questionId === value.id && receipt.version === value.version && liveQuestion(receipt,bot,paired);
+      if (question && question.decisionDeadlineAt) cap = { botId:bot.id,appId:bot.appId,revision:bot.revision,owner:paired,expiresAt:Infinity,
+        questionForm:{id:question.id,version:question.version,messageId:input.messageId,...(receipt!.webOnly && {webOnly:true})} };
+    }
     if ((cap?.questionForm && cap.questionForm.messageId !== input.messageId) ||
         (cap?.questionList && cap.questionList.messageId !== input.messageId)) return fail;
     if (cap?.homeMessageId && (cap.homeMessageId !== input.messageId || !boardKey)) return fail;
@@ -1275,7 +1289,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const service = app.interactions;
       const question = typeof value.id === 'string' && app.store.get<Card>('interactions',value.id);
       if (!service || !question || !canViewQuestion(bot,paired,question) || question.kind !== 'question' || question.handler !== 'user' || question.version !== value.version ||
-          question.status !== 'open' || !(Date.parse(question.expiresAt) > Date.now()))
+          question.status !== 'open' || !cardAcceptsAnswer(question))
         return {toast:{type:'info',content:'问题已变化，请返回工作台重新查看。'}};
       if (value.kind === 'workbench.questionForm') {
         if ((question.wait === false || question.questions || cap.questionList) && (cap.questionList?.messageId !== input.messageId ||
@@ -2223,12 +2237,14 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   function liveQuestion(card:SentQuestion,bot:FeishuBotSettings,paired:Owner) {
     if(!paired.senderId || groupReadBinding(bot,paired)!==card.binding ||
       groupTasks.recalled(bot.id,bot.appId,paired.chatId,card.messageId) || !privateTurn(bot,paired,card.inputId)) return;
-    const cap=app.store.get<CardNavigation>('feishu.card.navigation',card.navigation);
-    if(!cap || cap.botId!==bot.id || cap.appId!==bot.appId || cap.revision!==bot.revision ||
-      cap.owner.chatId!==paired.chatId || cap.owner.senderId!==paired.senderId || cap.expiresAt<=Date.now())return;
     const q=app.store.get<Card>('interactions',card.questionId);
     if(q?.kind!=='question' || q.status!=='open' || q.handler!=='user' || q.version!==card.version ||
-      !(Date.parse(q.expiresAt)>Date.now()) || app.store.get<{inputId:string}>('interaction-origins',q.id)?.inputId!==card.inputId) return;
+      !cardAcceptsAnswer(q) || app.store.get<{inputId:string}>('interaction-origins',q.id)?.inputId!==card.inputId) return;
+    if (!q.decisionDeadlineAt) {
+      const cap=app.store.get<CardNavigation>('feishu.card.navigation',card.navigation);
+      if(!cap || cap.botId!==bot.id || cap.appId!==bot.appId || cap.revision!==bot.revision ||
+        cap.owner.chatId!==paired.chatId || cap.owner.senderId!==paired.senderId || cap.expiresAt<=Date.now())return;
+    }
     if(q.runId && app.store.get<Run>('runs',q.runId)?.status!=='running')return;
     if(q.projectId && (!app.store.get<Project>('projects',q.projectId) || app.store.get<Project>('projects',q.projectId)?.archivedAt))return;
     return q;
@@ -2266,12 +2282,31 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       }));
     }
   }
+  async function remindDeadline(bot:FeishuBotSettings,paired:Owner,card:SentQuestion,question:Card) {
+    const state=runtime(bot.id), adapter=state.adapter, epoch=state.epoch;
+    if (!adapter || state.readyEpoch!==epoch || !active(bot.id,epoch,bot.revision) || !adapter.status().connected || !app.effects) return;
+    const replyKey=digest(['question-deadline',question.id,question.decisionDeadlineAt]).slice(0,32);
+    const key='deadline-'+replyKey;
+    if (app.store.get('effects',key)) return;
+    const guard=()=>{
+      if (!active(bot.id,epoch,bot.revision) || state.adapter!==adapter || owner(bot)?.senderId!==paired.senderId ||
+          owner(bot)?.chatId!==paired.chatId || liveQuestion(card,bot,paired)?.deadlineRemindedAt!==question.deadlineRemindedAt)
+        throw noDelivery('提问或原私聊绑定已变化。');
+    };
+    const text='提问已到截止时间：'+Array.from(question.title).slice(0,120).join('')+'。仍需你在原卡回答，未采用推荐选项。';
+    try {
+      await app.effects.perform({key,kind:'feishu.question.deadline',target:paired.chatId,summary:'不可逆提问到期提醒',
+        content:{botId:bot.id,messageId:card.messageId},run:()=>sendTaskMessage(bot,adapter,paired.chatId,text,card.messageId,replyKey,guard,undefined,true)});
+    } catch (error) {report(bot.id,error);}
+  }
   async function sweepDecisionNudges(onlyBot?:string) {
     if(closed || !pluginEnabled())return;
     // Six days is the largest delay. The ledger drops nudges a day past due.
     const oldest=Date.now()-7*86400000;
     const cards=app.store.list<SentQuestion>(sentQuestions).filter(card=>{
       if(Date.parse(card.sentAt)>=oldest)return true;
+      const question=app.store.get<Card>('interactions',card.questionId);
+      if (question?.decisionDeadlineAt && question.status==='open') return true;
       app.store.remove?.(sentQuestions,digest([card.botId,card.binding,card.messageId]));
       return false;
     });
@@ -2283,8 +2318,14 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const bound=cards.filter(card=>card.botId===bot.id && card.binding===binding);
       // After a restart, finish a withdrawal that committed before any platform edit was attempted.
       for(const card of bound) if(!card.closeAttempted)closeWithdrawnForms(card.questionId,[card]);
-      const due=nudges.scan({botId:bot.id,binding,afterMinutes:after,quiet:decisionQuietNow(app.store,new Date()),
-        cards:bound.filter(card=>liveQuestion(card,bot,paired))});
+      const waiting:SentQuestion[]=[];
+      for (const card of bound) {
+        const question=liveQuestion(card,bot,paired);
+        if (!question) continue;
+        if (question.deadlineRemindedAt && question.reversible === false) await remindDeadline(bot,paired,card,question);
+        else if (!question.decisionDeadlineAt || Date.parse(question.decisionDeadlineAt)>Date.now()) waiting.push(card);
+      }
+      const due=nudges.scan({botId:bot.id,binding,afterMinutes:after,quiet:decisionQuietNow(app.store,new Date()),cards:waiting});
       for(const card of due){
         const state=runtime(bot.id),epoch=state.epoch,adapter=state.adapter;
         if(!adapter || state.readyEpoch!==epoch || !active(bot.id,epoch,bot.revision) || !adapter.status().connected)continue;
@@ -2922,10 +2963,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         context.beforeSend=()=>{
           prior?.();
           const question = app.store.get<Card>('interactions',stamp.questionId!);
-          if (question?.wait === false) {
+          if (question && (question.wait === false || question.decisionDeadlineAt || (!question.runId && stamp.privateSenderId))) {
             const paired = owner(bot);
             if (!paired || target !== paired.chatId || !canViewQuestion(bot,paired,question))
-              throw noDelivery('稍后回答的提问已失去原私聊绑定。');
+              throw noDelivery('这道提问已失去原私聊绑定。');
           }
           if(question?.withdrawnReason==='user_spoke')
             throw noDelivery('主人已在原对话发言，提问已撤回。');
@@ -2946,11 +2987,11 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (stamp?.questionId && app.interactions && !stamp.group && !stamp.relay && bot.scope.kind === 'global' &&
           paired?.senderId && paired.chatId === target) {
         const q = app.store.get<Card>('interactions',stamp.questionId);
-        if (q?.kind === 'question' && canViewQuestion(bot,paired,q) && q.handler === 'user' && q.status === 'open' && Date.parse(q.expiresAt) > Date.now()) {
+        if (q?.kind === 'question' && canViewQuestion(bot,paired,q) && q.handler === 'user' && q.status === 'open' && cardAcceptsAnswer(q)) {
           const navigationId=navigation(bot,paired,entry.id)!;
           const {card, acceptsAnswer} = questionForm(q, navigationId, webBase);
           context.card = card;
-          if (acceptsAnswer || q.wait === false) {
+          if (acceptsAnswer || q.wait === false || q.decisionDeadlineAt) {
             const previous = context.onSent;
             const inputId = entry.replyTo, binding = groupReadBinding(bot,paired);
             context.onSent = (messageId, type) => {
@@ -2962,7 +3003,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
               const key = digest([bot.id,binding,messageId]);
               if (!app.store.get(sentQuestions,key)) app.store.put(sentQuestions,key,{
                 botId:bot.id,binding,decisionKey:'question:'+q.id+':'+q.version,messageId,sentAt:new Date().toISOString(),
-                questionId:q.id,version:q.version,inputId,navigation:navigationId
+                questionId:q.id,version:q.version,inputId,navigation:navigationId,...(!acceptsAnswer && {webOnly:true})
               } satisfies SentQuestion);
               // The owner may have spoken while the original send awaited its receipt.
               closeWithdrawnForms(q.id);
@@ -3172,6 +3213,18 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (event.type === 'work.decision.recorded' && app.workDecisions) {
       const decision = webTopicDecision(app.store, app.workDecisions.ledger.get, event);
       if (decision) topicPosts.changed(decision.todoId, decision.decisionId);
+    }
+    if(event.type==='interactions.deadline_overdue' && typeof event.data.id==='string') {
+      const id = event.data.id;
+      for (const card of app.store.list<SentQuestion>(sentQuestions)) if (card.questionId === id) {
+        void track(card.botId,Promise.resolve().then(async()=>{
+          const bot=settings.list().find(item=>item.id===card.botId);
+          const paired=bot && owner(bot);
+          if (!bot || !paired) return;
+          const q=liveQuestion(card,bot,paired);
+          if (q?.deadlineRemindedAt && q.reversible === false) await remindDeadline(bot,paired,card,q);
+        }));
+      }
     }
     if(event.type==='interactions.changed' && typeof event.data.id==='string')closeWithdrawnForms(event.data.id);
     if (event.type === 'approvals.changed' && typeof event.data.id === 'string') {

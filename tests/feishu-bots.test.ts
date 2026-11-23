@@ -900,7 +900,7 @@ test('主人在工作台回答真实问题，保留版本检查和执行机送�
   assert.equal(click({...open,id:perm.id}).card,undefined);
   const form = click(open).card.data.body.elements;
   assert.match(JSON.stringify(form),/要验收哪个版本/);
-  await bot.instance.options.onMessage('开始验收',source('origin'));
+  await bot.instance.options.onMessage('开始验收',{...source('origin'),senderType:'user'});
   const input = f.posts.at(-1)!;
   f.store.put('interaction-origins',q.id,{inputId:input.id});
   f.reply(input.id,'interaction-notice:'+q.id,'notification');
@@ -1942,7 +1942,7 @@ test('结构化问题只接受主人在已展示原卡上按题提交，校验�
   assert.equal(service.list().find(x=>x.id===other.id)?.status,'open');
 
   const current = f.instances.at(-1)!;
-  await current.options.onMessage('发起另一项讨论',source('original-question-input'));
+  await current.options.onMessage('发起另一项讨论',{...source('original-question-input'),senderType:'user'});
   const input = f.posts.at(-1)!;
   f.store.put('interaction-origins',other.id,{inputId:input.id});
   f.reply(input.id,'interaction-notice:'+other.id,'notification');

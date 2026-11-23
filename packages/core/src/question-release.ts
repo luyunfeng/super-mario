@@ -2,6 +2,8 @@ import type { Message } from '../../protocol/src/index.ts';
 import type { Store } from '../../plugin-sdk/src/index.ts';
 import type { Card } from './interactions.ts';
 
+import { cardAcceptsAnswer } from './question-deadline.ts';
+
 const holdMs = 2 * 60_000;
 interface Queued { message: Message; sourceId: string }
 
@@ -23,7 +25,7 @@ export function createQuestionRelease(store: Store, host: {
   function candidate(id:string) {
     const card = store.get<Card>('interactions',id);
     if (!card || card.kind !== 'question' || card.runId || card.status !== 'open' || card.wait === false ||
-        card.handler !== 'user' || !(Date.parse(card.expiresAt) > Date.now())) return;
+        card.handler !== 'user' || !cardAcceptsAnswer(card)) return;
     const source = host.source(card);
     if (source && hasQueued(source)) return {card,source};
   }

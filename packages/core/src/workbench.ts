@@ -150,6 +150,7 @@ export async function createWorkbench(config: AppConfig) {
     assertBotInput(input);
   } });
   const runScopes = createRunScopes(store);
+  let ownerScopeReady = false;
   let ownerScopeRequest: (input:Message)=>boolean = () => false;
   function reviseScope(id:string, args: Record<string,unknown>, source:RunScopeSource) {
     const scope = store.transaction(() => {
@@ -511,7 +512,7 @@ export async function createWorkbench(config: AppConfig) {
     return readTodoHistory(store, id, before, reviewEvidence);
   }
   const agent = createAgentRuntime({ config, store, events, contributions, onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
-  const scopedAgents = createScopedAgents({ onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
+  const scopedAgents = createScopedAgents({ canOpenQuestion:source=>Boolean(questionFormAudience(source)), onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
     allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'],
     systemPrompt: SUPERVISOR_SYSTEM_PROMPT });
@@ -672,18 +673,29 @@ export async function createWorkbench(config: AppConfig) {
     return dispatch({ ...input, sourceMessageId: origin?.sourceMessageId, conversationId: origin?.conversationId, projectId: input.projectId ?? origin?.projectId, todoId: input.todoId ?? origin?.todoId }, key,false,undefined,estimate);
   } });
   const answeredInCurrentTurn = new Set<string>();
-  const interactionService = createInteractions({ store, events, publish: background.publish, decide: (card, conversationQuestion) => {
+  const interactionService = createInteractions({ store, events, publish: background.publish,
+    deadlineOutcome(card) {
+      if (!ownerScopeReady) {
+        const origin = store.get<{inputId?:string}>('interaction-origins',card.id);
+        const source = origin?.inputId && questionSource(store.get<Message>('messages',origin.inputId));
+        if (source && store.get<MessageRoute>('message.routes',source.id)?.channel === 'feishu') return 'initializing';
+      }
+      if (!deadlineSource(card)) return 'unverified';
+      return card.wait === false && laterQuestions.hasSpoken(card.id) ? 'spoke' : 'eligible';
+    }, decide: (card, conversationQuestion) => {
     const decision = policies.decide(card, conversationQuestion);
     return { ...decision, layer: decision.layer === 'run' ? 'task' : decision.layer, answer: decision.answer ?? undefined, ruleId: decision.ruleId ?? undefined };
   }, async answer(card, text) {
-    if (card.wait === false) return laterQuestions.end(card.id);
+    if (card.wait === false || card.byDefault) return laterQuestions.end(card.id);
     if (card.runId && ['question', 'permission'].includes(card.kind)) {
       await inputRun(card.runId, text, `interaction:${card.id}`);
     } else if (card.kind === 'question' && store.get<{inputId?:string}>('interaction-origins',card.id)?.inputId) {
       if (answeredInCurrentTurn.has(card.id)) return;
-      const origin = store.get<{ inputId?: string }>('interaction-origins', card.id);
+      const origin = store.get<{ inputId?: string; formAudience?:string }>('interaction-origins', card.id);
       const original = origin?.inputId ? store.get<Message>('messages', origin.inputId) : undefined;
       if (!original || original.role !== 'user' || original.readOnly) throw new InputError('原问题所属的对话已失效',409);
+      if (origin?.formAudience && liveQuestionAudience(original) !== origin.formAudience)
+        throw new InputError('原提问所属的对话或配对已失效',409);
       if (original.todoId) {
         const todo = store.get<Todo>('todos', original.todoId);
         if (!todo || todo.projectId !== original.projectId) throw new InputError('原待办已移除或变更项目，请重新确认', 409);
@@ -726,18 +738,20 @@ export async function createWorkbench(config: AppConfig) {
     const runId = input.runId === undefined ? undefined : requiredText(input.runId, '执行记录');
     const run = runId ? store.get<Run>('runs', runId) : undefined;
     if (runId && !run) throw new InputError('关联执行记录不存在', 404);
-    if (input.wait === false && source) source = store.get<Message>('messages',source.id);
-    const audience = input.wait === false ? liveQuestionAudience(source) : undefined;
-    if (input.wait === false) {
+    const needsAudience = input.wait === false || input.deadline !== undefined;
+    if (needsAudience && source) source = store.get<Message>('messages',source.id);
+    const audience = needsAudience ? liveQuestionAudience(source) : undefined;
+    if (needsAudience) {
       if (input.kind !== 'question' || runId || !source || !audience || (input.projectId !== undefined && input.projectId !== source.projectId))
-        throw new InputError('稍后回答仅适用于能核实原对话的普通提问',403);
-      laterQuestions.assertCapacity();
+        throw new InputError('稍后回答或带期限的提问仅适用于能核实原对话的普通提问',403);
+      if (input.wait === false) laterQuestions.assertCapacity();
     }
     // Execution context comes from core facts; model-provided metadata cannot select a weaker policy.
     const card = interactionService.open({ ...input, runId, projectId: run?.projectId ?? source?.projectId ?? input.projectId,
       executorId: run?.executorId ?? input.executorId, cwd: run?.cwd ?? input.cwd }, Boolean(source && !runId && input.kind === 'question'));
     const inputId = run?.sourceMessageId ?? source?.id;
-    store.put('interaction-origins', card.id, { inputId });
+    const formAudience = card.kind === 'question' && !runId && source ? questionFormAudience(source) : undefined;
+    store.put('interaction-origins', card.id, { inputId, ...(formAudience && {formAudience}), ...(input.deadline !== undefined && {deadlineAudience:audience}) });
     if (card.kind === 'question' && !runId && inputId) {
       store.put('input-paused', inputId, { cardId: card.id });
       if (card.wait === false && audience) {
@@ -754,7 +768,7 @@ export async function createWorkbench(config: AppConfig) {
     return card;
   }
   const interactions = {...interactionService, open(input:Parameters<typeof interactionService.open>[0], source?:Message) {
-    return input?.wait === false ? store.transaction(()=>openInteraction(input,source)) : openInteraction(input,source);
+    return input?.wait === false || input?.deadline !== undefined ? store.transaction(()=>openInteraction(input,source)) : openInteraction(input,source);
   }};
   const questionHost:QuestionHost = {
     source(card) {
@@ -771,7 +785,7 @@ export async function createWorkbench(config: AppConfig) {
       const onAccepted=(message:Message)=>{
         if (route) store.put('message.routes',message.id,{...route,resumed:true});
         const root=questionSource(source);
-        if (root) store.put('conversation.question-continuations',message.id,root.id);
+        if (root && !closed) store.put('conversation.question-continuations',message.id,root.id);
         accepted(message);
       };
       const context={projectId:source.projectId,todoId:source.todoId,requestId,onAccepted,internalSourceId:source.id,rememberModel:false as const,...(closed && {readOnly:true,origin:'notification' as const})};
@@ -783,6 +797,11 @@ export async function createWorkbench(config: AppConfig) {
       return scopedAgents.post(text,validateBotScope(store,route.scope),route.botId,context,sourceThread(source));
     },
   };
+  function deadlineSource(card: Parameters<QuestionHost['source']>[0]) {
+    const source = questionHost.source(card);
+    const origin = store.get<{deadlineAudience?:string}>('interaction-origins',card.id);
+    return source && source.audience === origin?.deadlineAudience ? source.input : undefined;
+  }
   const deferredQuestions = createDeferredQuestions(store, {
     ...questionHost,
     create(card, source) {
@@ -819,7 +838,10 @@ export async function createWorkbench(config: AppConfig) {
     else if (card) deferredQuestions.materialize(card);
   });
   function recoverDeferredQuestions() {
-    for (const card of interactions.list()) if (card.wait !== false) deferredQuestions.materialize(card);
+    for (const card of interactions.list()) {
+      if (card.byDefault && card.delivery !== 'confirmed') void laterQuestions.end(card.id).catch(()=>{});
+      else if (card.wait !== false) deferredQuestions.materialize(card);
+    }
     deferredQuestions.recover(); laterQuestions.recover();
   }
   interactions.expireTick();
@@ -849,6 +871,10 @@ export async function createWorkbench(config: AppConfig) {
   });
   const wiredBackground = wireWorkbenchBackground({
     demo: config.demo,
+    deadlineWebSource(card) {
+      const input = deadlineSource(card);
+      return input && questionSource(input)?.directWebInput ? input : undefined;
+    },
     consumePendingBriefNotices: () => followups.consumePendingBriefNotices(),
     store, events, background, plugins, contributions, briefing, supervision, supervisorAgent, supervisorRuntime, conversations:()=>inboxAssistant.list(),
     agent, inbox, waitingReplies, approvals, interactions, presence, projectFollowUp, proposePlan,
@@ -939,6 +965,16 @@ export async function createWorkbench(config: AppConfig) {
       if (!todo || todo.projectId !== input.projectId) return;
     }
     return directQuestionAudience(questionSource(input));
+  }
+
+  function questionFormAudience(source:Message) {
+    const root = questionSource(source);
+    if (!root) return;
+    const route = store.get<MessageRoute & {scope?:BotScope}>('message.routes',root.id);
+    // Only a paired global bot renders answer forms. Dedicated, group and relay
+    // conversations can ask in prose without creating a card in another audience.
+    if (route ? route.channel !== 'feishu' || route.scope?.kind !== 'global' : !root.directWebInput) return;
+    return liveQuestionAudience(source);
   }
 
   function conversationUserSpoke(message: Message) {
@@ -2310,7 +2346,7 @@ export async function createWorkbench(config: AppConfig) {
     },
     readTopicTurnResult,
     runScopes: {read:runScopes.read,reviseWeb:(id:string,args:Record<string,unknown>)=>reviseScope(id,args,{kind:'web'})},
-    setScopeRequestValidator(check: typeof ownerScopeRequest) { ownerScopeRequest = check; recoverDeferredQuestions(); },
+    setScopeRequestValidator(check: typeof ownerScopeRequest) { ownerScopeRequest = check; ownerScopeReady = true; interactions.expireTick(); recoverDeferredQuestions(); },
     setAgentInputOwnerValidator(validate: typeof validateAgentInputOwner) { validateAgentInputOwner = validate; },
     setBotsStatus(status: () => Json) { botsStatus = status; },
     setGroupReadRecords(handler: NonNullable<typeof groupReadRecords>) { groupReadRecords = handler; },

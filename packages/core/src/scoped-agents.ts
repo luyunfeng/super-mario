@@ -10,6 +10,7 @@ import { createAgentRuntime, removeScopedTranscript } from './agent-runtime/inde
 type Runtime = ReturnType<typeof createAgentRuntime>;
 type ScopedPostContext = Omit<NonNullable<Parameters<Runtime['post']>[2]>, 'readOnlyAction'>;
 interface Options {
+  canOpenQuestion?(message:Message):boolean;
   onDirectWebInput?(message:Message):void;
   onInternalQueued?(message:Message,sourceId:string):()=>void;
   inboxConversations?: () => import('../../protocol/src/inbox-conversations.ts').InboxConversation[];

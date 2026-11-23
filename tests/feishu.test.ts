@@ -818,7 +818,8 @@ test('SDK 原生结构化表单发送与回调保留单选、多选数组和自�
   const q:import('../packages/core/src/interactions.ts').Card = {
     id:'test / 问题',version:1,kind:'question',title:'合成卡',body:'选择检查项',status:'open',handler:'user',layer:'default',
     expiresAt:'2099-01-01T00:00:00Z',createdAt:'2026-01-01T00:00:00Z',updatedAt:'2026-01-01T00:00:00Z',
-    questions:[{question:'环境',options:[{label:'合成'},{label:'本地'}]},{question:'检查',multiSelect:true,options:[{label:'读'},{label:'写'}]}],
+    decisionDeadlineAt:'2099-01-01T00:00:00Z',reversible:true,
+    questions:[{question:'环境',recommend:'本地',options:[{label:'合成'},{label:'本地'}]},{question:'检查',multiSelect:true,options:[{label:'读'},{label:'写'}]}],
   };
   const {card} = questionForm(q,'nav');
   let answer:unknown;
@@ -833,6 +834,10 @@ test('SDK 原生结构化表单发送与回调保留单选、多选数组和自�
   const fields = sent.body.elements.find((row:any)=>row.tag==='form').elements;
   const selects = fields.filter((row:any)=>row.tag.endsWith('select_static'));
   assert.deepEqual(selects.map((row:any)=>row.tag),['select_static','multi_select_static']);
+  assert.match(JSON.stringify(sent),/届时未回答将采用每题的推荐选项/);
+  assert.equal(selects[0].options[1].text.content,'本地（推荐）');
+  assert.match(JSON.stringify(fields),/推荐选项：本地/);
+  assert.doesNotMatch(JSON.stringify(selects),/initial_option|selected_values/);
   const value = fields.find((row:any)=>row.form_action_type==='submit').behaviors[0].value;
   const ack = await socket.dispatcher.invoke({schema:'2.0',header:{event_type:'card.action.trigger',event_id:'questions-test'},
     event:{operator:{open_id:'ou_owner'},context:{open_chat_id:'oc_owner',open_message_id:'om_card'},action:{
@@ -843,6 +848,7 @@ test('SDK 原生结构化表单发送与回调保留单选、多选数组和自�
   const single = {...q,questions:[q.questions![0]!]};
   const quick = questionForm(single,'nav').card.body.elements.find((e:any)=>e.behaviors?.[0].value?.pick==='0') as any;
   assert.deepEqual(parseQuestionForm(single,{},quick.behaviors[0].value.pick),[{selected:['合成']}]);
+  assert.match(JSON.stringify(questionForm({...q,wait:false},'nav').card),/若期间在原对话另发消息，到期将关闭提问/);
   const large = questionForm({...q,body:'超'.repeat(8500)},'nav','https://work.example/');
   assert.equal(large.acceptsAnswer,false);
   assert.match(JSON.stringify(large.card),/可|主对话/);

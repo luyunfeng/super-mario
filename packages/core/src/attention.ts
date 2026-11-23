@@ -17,6 +17,7 @@ export interface AttentionItem {
   origin?: InboxOrigin;
   questions?: QuestionItem[];
   wait?: boolean;
+  decisionDeadlineAt?: string; reversible?: boolean; deadlineRemindedAt?: string;
   id: string;
   type: 'approval' | 'interaction' | 'inbox' | 'plan';
   version: number;
@@ -37,6 +38,7 @@ export interface AttentionItem {
 interface InteractionInput {
   questions?: QuestionItem[];
   wait?: boolean;
+  decisionDeadlineAt?: string; reversible?: boolean; deadlineRemindedAt?: string;
   id: string; version: number; title: string; body: string; status: string;
   handler?: string; kind?: string; createdAt: string; projectId?: string;
   route?: AttentionItem['route']; suggestion?: string; userNotifiedAt?: string; todoId?: string;
@@ -105,6 +107,8 @@ export function collectAttention({ inboxConversations = [], approvals = [], inte
     const highRisk = item.kind === 'permission';
     const canAnswerLater = item.kind === 'question' && item.wait === false;
     rows.push({ id: `interaction:${item.id}`, type: 'interaction', version: item.version, ...(item.questions && { questions: item.questions }), ...(canAnswerLater && { wait: false }),
+      ...(item.decisionDeadlineAt && {decisionDeadlineAt:item.decisionDeadlineAt,reversible:item.reversible,
+        ...(item.deadlineRemindedAt && {deadlineRemindedAt:item.deadlineRemindedAt})}),
       ...(item.todoId && { todoId: item.todoId }), ...(item.route && { route: item.route }), title: item.title, context: canAnswerLater ? '可继续聊天，稍后回到这张卡回答。' : '等待你的回答', detail: [item.body, item.suggestion ? `建议回答：${item.suggestion}` : ''].filter(Boolean).join('\n\n'),
       source: 'Agent', createdAt: item.createdAt, ...project(item.projectId), highRisk,
       actions: [{ ...action('interactions', item.id, 'answer', item.version, '回答'), requiresText: true, highRisk },

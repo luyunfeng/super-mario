@@ -2,11 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { Store } from '../../plugin-sdk/src/index.ts';
 import type { Message } from '../../protocol/src/index.ts';
 import type { Card } from './interactions.ts';
+import { cardAcceptsAnswer } from './question-deadline.ts';
 import { questionEvidence } from './question-responses.ts';
 
 interface Later {
   id: string; inputId: string; audience: string; requestId: string;
-  spokeAt?: string; text?: string;
+  spokeAt?: string; text?: string; defaultResult?: true;
 }
 export interface QuestionHost {
   source(card: Card): { input: Message; audience: string } | undefined;
@@ -22,9 +23,19 @@ export function createLaterQuestions(store: Store, host: QuestionHost, materiali
     const existing = jobs.get(id);
     if (existing) return existing;
     const job = Promise.resolve().then(async () => {
-      const row = store.get<Later>(collection, id);
       const card = store.get<Card>('interactions', id);
-      if (!row || !card || card.wait !== false || card.status === 'open') return;
+      if (!card || (card.wait !== false && !card.byDefault) || card.status === 'open') return;
+      let row = store.get<Later>(collection, id);
+      if (!row && card.byDefault) {
+        // A blocking card joins this durable queue only if its deadline supplies the result.
+        // Freeze the audience at creation and never infer one from a later pairing.
+        const origin = store.get<{inputId:string;deadlineAudience?:string;continuationId?:string}>('interaction-origins',id);
+        if (origin?.continuationId) return;
+        if (!origin?.deadlineAudience || !origin.inputId) conflict('缺少截止提问的原会话凭据');
+        row = {id,inputId:origin.inputId,audience:origin.deadlineAudience,requestId:randomUUID(),defaultResult:true};
+        store.put(collection,id,row);
+      }
+      if (!row) return;
       try {
         const source = host.source(card);
         if (!source || source.input.id !== row.inputId || source.audience !== row.audience) conflict('原提问会话或配对已变化');
@@ -32,18 +43,20 @@ export function createLaterQuestions(store: Store, host: QuestionHost, materiali
         const text = row.text ?? store.transaction(() => {
           const todoId = card.status === 'expired' && !row.spokeAt ? materialize(card) : undefined;
           let notice: string;
-          if (answered) notice = '主人已回答稍后处理的提问。请在原目标范围内处理回答。';
+          if (card.byDefault) notice = '提问到期，系统已采用可撤销的推荐选项，主人未作答。请按原目标和推荐选择在本对话内继续，例如按所选顺序给出草稿。此默认结果仅供只读处理，不授权外发、派工或修改数据。';
+          else if (answered) notice = '主人已回答稍后处理的提问。请在原目标范围内处理回答。';
           else if (card.status === 'withdrawn') notice = '稍后处理的提问已撤回，未提供答案。';
           else if (row.spokeAt) notice = '提问已过期。主人期间在原对话发过消息，本卡未收到答复，本次没有创建待办。';
           else if (todoId) notice = '提问已过期，尚未收到答复。已转为待办，主人可稍后回答。';
           else conflict('过期提问的待办尚未登记');
           const text = notice + '\n' + JSON.stringify({卡片:id,提问时间:card.createdAt,标题:card.title,问题说明:card.body,
             ...(card.questions && {题目:card.questions.map(question=>question.question)}), ...(todoId && {待办:todoId}),
-            ...(answered && {主人回答:card.answer, ...(card.questions && card.answers && {逐题回答:questionEvidence(card.questions,card.answers)})})});
+            ...(answered && (card.byDefault ? {系统默认选择:card.answer} : {主人回答:card.answer})),
+            ...(answered && card.questions && card.answers && {逐题回答:questionEvidence(card.questions,card.answers)})});
           store.put(collection,id,{...row,text});
           return text;
         });
-        await host.post(source.input, text, row.requestId, !answered, message => {
+        await host.post(source.input, text, row.requestId, !answered || card.byDefault === true, message => {
           // The original route, acceptance receipt and terminal acknowledgement commit together.
           store.remove(collection,id);
           const origin=store.get<{inputId:string}>('interaction-origins',id);
@@ -71,9 +84,10 @@ export function createLaterQuestions(store: Store, host: QuestionHost, materiali
     void job.then(()=>jobs.delete(id),()=>jobs.delete(id));
     return job;
   }
-  const hasCapacity = () => store.list<Later>(collection).length < 20;
+  const hasCapacity = () => store.list<Later>(collection).filter(row=>!row.defaultResult).length < 20;
   return {
     hasCapacity,
+    hasSpoken(id:string) { return !!store.get<Later>(collection,id)?.spokeAt; },
     assertCapacity() {
       if (!hasCapacity()) conflict('最多同时保留 20 张稍后回答的问题卡');
     },
@@ -84,7 +98,7 @@ export function createLaterQuestions(store: Store, host: QuestionHost, materiali
       for (const row of store.list<Later>(collection)) {
         if (row.audience !== audience || row.inputId === message.id || row.spokeAt) continue;
         const card=store.get<Card>('interactions',row.id);
-        if (card?.status === 'open' && Date.parse(card.expiresAt) > Date.now()) store.put(collection,row.id,{...row,spokeAt:message.createdAt});
+        if (card?.status === 'open' && cardAcceptsAnswer(card)) store.put(collection,row.id,{...row,spokeAt:message.createdAt});
       }
     },
     end,

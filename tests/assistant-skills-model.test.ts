@@ -4362,7 +4362,7 @@ test('待办回答回到最初发问的主对话，模型收到原目标、实�
 
 test('主助手通过注册工具发出结构化问题，逐题回答后按主人的实际选择续聊', async t => {
   const questions = [
-    {header:'时间',question:'哪天演示？',options:[{label:'周一'},{label:'周二',description:'多一天准备'}]},
+    {header:'时间',question:'哪天演示？',recommend:'周一',options:[{label:'周一',description:'可提前收集反馈'},{label:'周二',description:'多一天准备'}]},
     {header:'材料',question:'需要哪些材料？',multiSelect:true,options:[{label:'讲稿'},{label:'样例'}]},
   ];
   const {server,ask,api} = await fixture(t, request => {
@@ -4373,6 +4373,7 @@ test('主助手通过注册工具发出结构化问题，逐题回答后按主�
       return {role:'assistant',content:'已收到逐题答复。'};
     }
     assert.match(request.system,/可同时采用多个时才设 multiSelect/);
+    assert.match(request.system,/到期默认值须注明来自系统规则/);
     return call('interaction_open',{kind:'question',title:'确认演示安排',body:'请核对时间和材料。',questions},'demo-plan');
   });
   try {
@@ -4380,7 +4381,7 @@ test('主助手通过注册工具发出结构化问题，逐题回答后按主�
     await ask('请我选演示日期与材料。');
     const [card] = server.app.interactions.list();
     assert.ok(card);
-    assert.deepEqual(card.questions?.map(item=>item.question),questions.map(item=>item.question));
+    assert.deepEqual(card.questions,questions);
     const answers = [{selected:['周二']},{selected:['讲稿','样例'],text:'另带打印版'}];
     await api('/interactions/'+card.id+'/answer',{version:card.version,answers});
     const after=server.app.interactions.list().find(item=>item.id===card.id);
@@ -4460,4 +4461,39 @@ test('主助手的等答卡遇到实际排队的协作回报，原卡继续收�
     await api('/interactions/'+card.id+'/answer',{version:card.version,text:'下午场'});
     await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.text==='已收到下午场的选择。')));
   } finally { release(); await server.close(); }
+});
+
+test('模型从注册工具发出限时提问，到期回合只读且不能冒充主人写入', async t => {
+  const questions = [{question:'草稿采用哪种排序？',recommend:'日期',options:[{label:'日期',description:'便于按时间阅读'},{label:'标题'}]}];
+  const {server,api} = await fixture(t, req => {
+    if (req.callId === 'deadline-card') return {role:'assistant',content:'已发出草稿排序问题。'};
+    if (req.callId === 'unauthorized-default') {
+      assert.match(JSON.stringify(req.content),/不可用|不允许|只读|not found|not available/i);
+      return {role:'assistant',content:'已记录系统到期选择，本轮没有创建待办。'};
+    }
+    if (JSON.stringify(req.content).includes('草稿采用哪种排序？')) {
+      assert.match(req.system,/只读/);
+      assert.ok(!req.tools.includes('todo_create'));
+      return call('todo_create',{title:'错误地把默认值当成主人授权'},'unauthorized-default');
+    }
+    assert.ok(req.tools.includes('interaction_open'));
+    assert.match(req.system,/删除、外发、付款、变更生产/);
+    return call('interaction_open',{kind:'question',title:'草稿排序',body:'两个排序方式均可撤回。',deadline:'2h',reversible:true,questions},'deadline-card');
+  });
+  try {
+    const project = await api('/projects',{name:'草稿编排'});
+    const todo = await api('/todos',{projectId:project.id,title:'整理草稿排序'});
+    await api('/projects/'+project.id+'/messages',{text:'请我选择草稿排序，两小时后可按建议处理。',todoId:todo.id});
+    await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.text==='已发出草稿排序问题。')));
+    const [card]=server.app.interactions.list();
+    assert.equal(card?.reversible,true);
+    assert.deepEqual(card.questions,questions);
+    server.app.interactions.expireTick(Date.parse(card.decisionDeadlineAt!));
+    await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.text==='已记录系统到期选择，本轮没有创建待办。')));
+    assert.deepEqual(server.app.todos().map(row=>row.id),[todo.id]);
+    assert.equal(server.app.interactions.list()[0].byDefault,true);
+    const history = server.app.taskClosure.history(todo.id);
+    assert.match(history.conversationReceipts?.[0]?.defaultAnswer ?? '', /日期/);
+    assert.equal(history.conversationReceipts?.[0]?.continuationAccepted,true);
+  } finally {await server.close();}
 });

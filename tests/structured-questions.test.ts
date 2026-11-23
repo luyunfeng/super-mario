@@ -8,7 +8,7 @@ import type { Message, QuestionItem } from '../packages/protocol/src/index.ts';
 import type { Card } from '../packages/core/src/interactions.ts';
 
 const questions:QuestionItem[] = [
-  {question:'部署到哪个环境？',header:'环境',options:[{label:'预发',description:'先验证'},{label:'生产'}]},
+  {question:'部署到哪个环境？',header:'环境',recommend:'预发',options:[{label:'预发',description:'先验证'},{label:'生产'}]},
   {question:'做哪些检查？',multiSelect:true,options:[{label:'连接'},{label:'日志'}]},
 ];
 const responses = [{selected:[],text:'独立环境'}, {selected:['日志','连接'],text:'再记录结果'}];

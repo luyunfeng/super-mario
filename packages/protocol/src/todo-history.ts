@@ -19,7 +19,7 @@ export interface TodoExecutionRound {
 export interface TodoHistory {
   todo: { id: string; title: string; projectId?: string; completedAt?: string };
   total: number;
-  conversationReceipts?: Array<{ cardId: string; title: string; answeredAt?: string;
+  conversationReceipts?: Array<{ cardId: string; title: string; answeredAt?: string; defaultAnswer?: string;
     delivery: 'confirmed' | 'failed' | 'unknown'; continuationAccepted: boolean }>;
   rounds: TodoExecutionRound[];
   nextBefore?: string;
