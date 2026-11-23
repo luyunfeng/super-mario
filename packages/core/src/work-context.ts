@@ -1,7 +1,8 @@
 import type { InboxConversation } from '../../protocol/src/inbox-conversations.ts';
+import { actionableInbox } from './attention.ts';
 import type { ReviewEvidenceReader } from './run-review.ts';
-import type { Approval, BotScope, ExecutorInfo, MachineInfo, MailboxEntry, Project, Run, Todo } from '../../protocol/src/index.ts';
-import type { Store } from '../../plugin-sdk/src/index.ts';
+import type { Approval, BotScope, ExecutorInfo, InboxItem, MachineInfo, MailboxEntry, Project, Run, Todo } from '../../protocol/src/index.ts';
+import type { ChannelContribution, Store } from '../../plugin-sdk/src/index.ts';
 import type { WaitingReplySnapshot } from '../../protocol/src/index.ts';
 import type { Card } from './interactions.ts';
 import type { Plan } from './plans.ts';
@@ -17,7 +18,7 @@ function conversationRelation(group: InboxConversation): Relation {
   return { projectId: group.projectId, todoId: group.todoIds.length === 1 ? group.todoIds[0] : undefined };
 }
 
-function pendingDecisions(store: WorkStore, visible: (relation: Relation) => boolean, conversations: InboxConversation[] = []) {
+function pendingDecisions(store: WorkStore, visible: (relation: Relation) => boolean, conversations: InboxConversation[] = [], channels?: readonly ChannelContribution[]) {
   // Resolve ownership from linked facts, never just a model-provided project label.
   const ownership = (value: Relation): Relation => {
     const run = value.runId ? store.get<Run>('runs', value.runId) : undefined;
@@ -27,6 +28,8 @@ function pendingDecisions(store: WorkStore, visible: (relation: Relation) => boo
     if ((value.runId && !run) || (todoId && !todo)) return {};
     return { projectId: todo ? todo.projectId : run ? run.projectId : value.projectId, todoId, runId: value.runId };
   };
+  const mailboxes = store.list<MailboxEntry>('event.mailboxes');
+  const standalone = channels ? actionableInbox({ inbox: store.list<InboxItem>('inbox'), mailboxes, channels, inboxConversations: conversations }) : [];
   return [
     ...store.list<Approval>('approvals').filter(a => a.status === 'pending').map(a => {
       const params = a.params ?? {};
@@ -40,7 +43,7 @@ function pendingDecisions(store: WorkStore, visible: (relation: Relation) => boo
     }),
     ...store.list<Card>('interactions').filter(c => c.status === 'open' && c.handler === 'user').map(c =>
       ({ collection: 'interactions' as const, id: c.id, title: (c.title ?? '').slice(0, 180), version: c.version, createdAt: c.createdAt, ...ownership(c) })),
-    ...store.list<MailboxEntry>('event.mailboxes').filter(entry => entry.status === 'pending' && entry.requiresConfirmation
+    ...mailboxes.filter(entry => entry.status === 'pending' && entry.requiresConfirmation
       && entry.scope.kind !== 'unmarked'
       // A task may move after a letter was queued. Respect its recorded scope as well as its current owner.
       && (entry.scope.kind !== 'task' || !entry.scope.projectId || visible(entry.scope))
@@ -48,6 +51,10 @@ function pendingDecisions(store: WorkStore, visible: (relation: Relation) => boo
       collection: 'mailboxes' as const, id: entry.id, direction: entry.direction, title: entry.title.slice(0, 180),
       version: entry.version, createdAt: entry.createdAt,
       ...ownership(entry.scope.kind === 'task' || entry.scope.kind === 'project' ? entry.scope : {}),
+    })),
+    ...Array.from(standalone).filter(({ item, projectId }) => !projectId || visible({ projectId, todoId: item.todoId })).map(({ item, projectId }) => ({
+      collection: 'inbox' as const, linkedTodo: Boolean(item.todoId), id: item.id, title: item.title.slice(0, 180), version: item.version,
+      createdAt: item.receivedAt || item.updatedAt, ...ownership({ projectId, todoId: item.todoId }),
     })),
     ...conversations.filter(group => group.status === 'waiting_user' && group.question?.trim()).map(group => ({
       collection: 'conversations' as const, id: group.id, title: group.title.slice(0, 180), question: group.question!.slice(0, 400),
@@ -59,12 +66,12 @@ function pendingDecisions(store: WorkStore, visible: (relation: Relation) => boo
   ].filter(visible);
 }
 
-export function pendingDecisionPage(store: WorkStore, scope: BotScope, offset: number, conversations: InboxConversation[] = []) {
+export function pendingDecisionPage(store: WorkStore, scope: BotScope, offset: number, conversations: InboxConversation[] = [], channels?: readonly ChannelContribution[]) {
   const decisions = pendingDecisions(store, row => scope.kind === 'global' ||
-    (scope.kind !== 'unmarked' && row.projectId === scope.projectId && (scope.kind !== 'task' || row.todoId === scope.todoId)), conversations)
+    (scope.kind !== 'unmarked' && row.projectId === scope.projectId && (scope.kind !== 'task' || row.todoId === scope.todoId)), conversations, channels)
     .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.collection.localeCompare(b.collection) || a.id.localeCompare(b.id));
   const end = offset + 25;
-  const routes = { approvals: '#chat?approval=', interactions: '#chat?interaction=', plans: '#chat?plan=', mailboxes: '#chat?mailbox=', conversations: '#inbox?conversation=' };
+  const routes = { inbox: '#chat?inbox=', approvals: '#chat?approval=', interactions: '#chat?interaction=', plans: '#chat?plan=', mailboxes: '#chat?mailbox=', conversations: '#inbox?conversation=' };
   const items = decisions.slice(offset, end).map(row => ({
     ...row, webCitation: `[查看待决定事项](${routes[row.collection]}${encodeURIComponent(row.id)})`,
   }));
@@ -73,7 +80,7 @@ export function pendingDecisionPage(store: WorkStore, scope: BotScope, offset: n
 
 /** Read shared facts at execution time, across channel histories. Never read private settings
  * or copy raw chats. Scope filtering precedes counts, selection and rendering. */
-export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: BotScope, projectId?: string, live?: { reviewEvidence?: ReviewEvidenceReader; executors?: ExecutorInfo[]; inboxConversations?: InboxConversation[] }) {
+export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: BotScope, projectId?: string, live?: { reviewEvidence?: ReviewEvidenceReader; executors?: ExecutorInfo[]; inboxConversations?: InboxConversation[]; channels?: readonly ChannelContribution[] }) {
   if (scope?.kind === 'unmarked') return { scope: { kind: 'unmarked' }, unavailable: '未标记身份不提供工作事实，请先归类' };
   const project = scope?.kind === 'project' || scope?.kind === 'task' ? scope.projectId : projectId;
   const task = scope?.kind === 'task' ? scope.todoId : undefined;
@@ -94,7 +101,7 @@ export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: Bot
   const handlingVisible=(row:{conversationId:string})=>visible(handlingScopes.get(row.conversationId)??{});
   const handlingSuggestions=recent(store.list<InboxSuggestion>('inbox-handling.suggestions').filter(handlingVisible));
   const handlingRequests=recent(store.list<InboxHandlingRequest>('inbox-handling.requests').filter(handlingVisible));
-  const decisions = pendingDecisions(store, visible, live?.inboxConversations);
+  const decisions = pendingDecisions(store, visible, live?.inboxConversations, live?.channels);
   // Only visible runs contribute relationships and counts, even when executors share a machine.
   const executors = new Map((live?.executors ?? []).map(e => [e.id, e]));
   const visibleExecutorIds = new Set(runs.map(r => r.executorId).filter(Boolean));

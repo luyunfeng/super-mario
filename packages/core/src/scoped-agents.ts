@@ -8,6 +8,7 @@ import { createAgentRuntime } from './agent-runtime/index.ts';
 
 type Runtime = ReturnType<typeof createAgentRuntime>;
 interface Options {
+  inboxConversations?: () => import('../../protocol/src/inbox-conversations.ts').InboxConversation[];
   reviewEvidence?: ReviewEvidenceReader;
   config: AppConfig; store: Store; events: EventBus; contributions: Contributions;
   /** Optional host validation (for example, whether this bot binding is still enabled). */

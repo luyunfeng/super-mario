@@ -403,7 +403,7 @@ export async function createWorkbench(config: AppConfig) {
     return readTodoHistory(store, id, before, reviewEvidence);
   }
   const agent = createAgentRuntime({ config, store, events, contributions, reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
-  const scopedAgents = createScopedAgents({ config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: (scope, botId, input) => botScopeAccess(scope, botId, input) });
+  const scopedAgents = createScopedAgents({ inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: (scope, botId, input) => botScopeAccess(scope, botId, input) });
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
     allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'],
     systemPrompt: SUPERVISOR_SYSTEM_PROMPT });
@@ -492,7 +492,7 @@ export async function createWorkbench(config: AppConfig) {
   });
   const scheduledWork = createScheduledWorkService({store,events,schedules:background.schedules,approvals,currentInput:()=>currentAgentInput()??agent.currentInput(),
     ready:()=>channelBindingsReady,enabled:()=>plugins.list().some(p=>p.id==='daily-brief'&&p.status==='active'),
-    facts:scope=>buildWorkContext(store,scope,undefined,{reviewEvidence,executors:executorInfo(),inboxConversations:inboxAssistant.list()}) as unknown as Json,
+    facts:scope=>buildWorkContext(store,scope,undefined,{reviewEvidence,executors:executorInfo(),inboxConversations:inboxAssistant.list(),channels:contributions.list('channels').map(entry => entry.value)}) as unknown as Json,
     authorize(scope,source){
       const target=validateBotScope(store,scope.todoId?{kind:'task',todoId:scope.todoId,...(scope.projectId?{projectId:scope.projectId}:{})}:scope.projectId?{kind:'project',projectId:scope.projectId}:{kind:'global'});
       authorizeWorkDecisionSource(store,target,source);
@@ -916,7 +916,7 @@ export async function createWorkbench(config: AppConfig) {
     if (todoId && (!todo || todo.projectId !== projectId)) throw new InputError('当前范围的待办不可用', 404);
     const offset = input.offset === undefined ? 0 : input.offset;
     if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) throw new InputError('查询位置无效');
-    return pendingDecisionPage(store, todoId ? { kind: 'task', todoId, projectId } : projectId ? { kind: 'project', projectId } : { kind: 'global' }, offset, inboxAssistant.list());
+    return pendingDecisionPage(store, todoId ? { kind: 'task', todoId, projectId } : projectId ? { kind: 'project', projectId } : { kind: 'global' }, offset, inboxAssistant.list(), contributions.list('channels').map(entry => entry.value));
   }
   function readInboxHandlingFromAgent(input: Record<string,unknown>):Json {
     if(!['personal','mailbox'].includes(String(input.kind)))throw new InputError('请选择收件来源');

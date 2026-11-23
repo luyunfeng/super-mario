@@ -171,3 +171,22 @@ test('合并收件追问按项目与待办范围列出，排除已答问题和�
   assert.equal(taskRows[0]?.webCitation, '[查看待决定事项](#inbox?conversation=' + group.id + ')');
   assert.doesNotMatch(JSON.stringify(taskRows), /PRIVATE_|private-message/);
 });
+
+test('独立收件仅计入当前渠道与归属范围，已合并和已归档的收件不重复列出', async t => {
+  const store = await fixture(t);
+  const source = { projectId: 'A', todoId: 'A', source: 'adapter:account', tier: 'action', title: '待确认资料',
+    text: 'private-body', version: 2, updatedAt: '2030-01-01', reason: 'private-reason' };
+  for (const [id, patch] of Object.entries({ current: {}, grouped: {}, archived: { archivedAt: '2030-01-02' },
+    noise: { tier: 'noise' }, moved: { projectId: 'B' }, unavailable: { source: 'offline:one' } })) {
+    store.put('inbox', id, { ...source, id, ...patch });
+  }
+  const groups = [{ id: 'g', version: 1, title: '合并会话', latestAt: source.updatedAt, preview: '', person: '',
+    kind: 'direct' as const, status: 'watching' as const, todoIds: [], messageIds: ['grouped'], pendingCount: 1 }];
+  const channels = [{ id: 'channel', name: '合成通道', sourcePrefix: 'adapter:' }];
+  const scope = { kind: 'task' as const, projectId: 'A', todoId: 'A' };
+  const inbox = pendingDecisionPage(store, scope, 0, groups, channels).items.filter(row => row.collection === 'inbox');
+  assert.deepEqual(inbox.map(row => row.id), ['current']);
+  assert.equal(inbox[0]?.linkedTodo, true);
+  assert.doesNotMatch(JSON.stringify(inbox), /private-/);
+  assert.equal(pendingDecisionPage(store, scope, 0, groups, []).items.some(row => row.collection === 'inbox'), false);
+});

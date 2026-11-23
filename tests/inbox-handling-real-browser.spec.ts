@@ -74,8 +74,10 @@ test('待决定清单打开计划与待发信件卡片，已拒绝的记录显�
   const { pendingDecisionPage } = await import('../packages/core/src/work-context.ts');
   const mail = server.app.mailboxes.put({ direction: 'outbox', botId: 'fixture', eventKey: 'draft', title: '确认草稿',
     scope: { kind: 'global' }, target: 'fixture', text: '草稿正文', requiresConfirmation: true });
-  const items = pendingDecisionPage(server.app.store, { kind: 'global' }, 0).items;
-  const citations = [plan, mail].map(record => items.find(row => row.id === record.id)!.webCitation);
+  server.app.store.put('inbox', 'check', { id: 'check', source: 'plugin:fixture', tier: 'action', title: '待核对的收件',
+    text: '合成正文', thread: 'fixture', last: '1', version: 1, updatedAt: new Date().toISOString() });
+  const items = pendingDecisionPage(server.app.store, { kind: 'global' }, 0, [], []).items;
+  const citations = [plan, mail, { id: 'check' }].map(record => items.find(row => row.id === record.id)!.webCitation);
   server.app.store.put('messages', 'decision-link', { id: 'decision-link', conversationId: 'main', role: 'assistant',
     status: 'done', createdAt: new Date().toISOString(), text: citations.join(' ') + ' [查看待决定事项](https://synthetic.example/plan)' });
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
@@ -83,13 +85,13 @@ test('待决定清单打开计划与待发信件卡片，已拒绝的记录显�
   const page = await browser.newPage();
   await page.goto(server.url + '/#chat?token=fixture');
   const link = page.getByRole('link', { name: '查看待决定事项', exact: true });
-  await expect(link).toHaveCount(2);
+  await expect(link).toHaveCount(3);
   await link.first().click();
   await expect(page.locator(`#attention [data-id="plan:${plan.id}"]`)).toBeFocused();
   server.app.plans.reject(plan.id, plan.version);
   await page.reload();
   await expect(page.getByText('当前待处理列表中没有这条计划。')).toBeVisible();
-  await link.last().click();
+  await link.nth(1).click();
   const card = page.locator(`#attention [data-id="mailbox:${mail.id}"]`);
   await expect(card).toBeFocused();
   await expect(card.getByRole('button', { name: '确认发送' })).toBeVisible();
@@ -98,4 +100,11 @@ test('待决定清单打开计划与待发信件卡片，已拒绝的记录显�
   await expect.poll(() => server.app.mailboxes.get(mail.id).status).toBe('rejected');
   await page.reload();
   await expect(page.getByText('当前待处理列表中没有这条信件。')).toBeVisible();
+  await link.last().click();
+  const inboxCard = page.locator('#attention [data-id="inbox:check"]');
+  await expect(inboxCard).toBeFocused();
+  await inboxCard.getByRole('button', { name: '忽略', exact: true }).click();
+  await expect.poll(() => server.app.inbox.list().find(row => row.id === 'check')?.archivedAt).toBeTruthy();
+  await page.reload();
+  await expect(page.getByText('当前待处理列表中没有这条收件。')).toBeVisible();
 });

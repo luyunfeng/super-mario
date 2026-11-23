@@ -1,3 +1,4 @@
+import type { ChannelContribution } from '../../plugin-sdk/src/index.ts';
 import type { InboxConversation } from '../../protocol/src/inbox-conversations.ts';
 import { excludesPersonalGroupFromBrief } from '../../protocol/src/inbox-origin.ts';
 import type { Approval, InboxItem, InboxOrigin, JsonObject, MailboxEntry, Project, FeishuBot } from '../../protocol/src/index.ts';
@@ -44,7 +45,25 @@ interface AttentionInput {
   mailboxes?: readonly MailboxEntry[];
   projects?: readonly Project[];
   bots?: readonly Pick<FeishuBot, 'id' | 'name'>[];
-  channels?: ReadonlyArray<{ id: string; name: string; sourcePrefix?: string }>;
+  channels?: readonly ChannelContribution[];
+}
+
+export function* actionableInbox({ inbox = [], inboxConversations = [], mailboxes = [], channels }: AttentionInput) {
+  const covered = new Set(inboxConversations.flatMap(group => group.messageIds));
+  for (const item of inbox) {
+    if (covered.has(item.id) || item.tier !== 'action' || item.archivedAt || excludesPersonalGroupFromBrief(item)) continue;
+    const matchedChannel = channels?.find(channel => item.source.startsWith(channel.sourcePrefix ?? `${channel.id}:`));
+    const allowedSource = item.source.startsWith('plugin:')
+      || (channels !== undefined
+        ? Boolean(matchedChannel)
+        : /^[a-z0-9][a-z0-9_-]*:/i.test(item.source) && !/^demo:/i.test(item.source));
+    if (!allowedSource) continue;
+    // Mailbox records only enrich source context. They are not another copy of the
+    // same message and do not create unsupported mailbox-to-todo actions.
+    const linked = mailboxes.find(entry => entry.direction === 'inbox' && entry.resultId === item.id);
+    const projectId = item.projectId ?? (linked && 'projectId' in linked.scope ? linked.scope.projectId : undefined);
+    yield { item, matchedChannel, projectId };
+  }
 }
 
 export function collectAttention({ inboxConversations = [], approvals = [], interactions = [], inbox = [], mailboxes = [], projects = [], bots = [], plans = [], channels }: AttentionInput = {}): AttentionItem[] {
@@ -93,26 +112,12 @@ export function collectAttention({ inboxConversations = [], approvals = [], inte
       source: 'Agent', createdAt: item.createdAt, ...project(taskProject),
       actions: [action('plans', item.id, 'start', item.version, '开始执行'), action('plans', item.id, 'reject', item.version, '拒绝')] });
   }
-  const covered = new Set((inboxConversations).flatMap(group=>group.messageIds));
   for (const group of inboxConversations) if(group.status==='waiting_user'&&group.question)rows.push({
     id:`conversation:${group.id}`,type:'inbox',version:group.version,title:group.title,context:'主 Agent 已合并上下文，需要你回复',
     detail:[group.summary,group.question].filter(Boolean).join('\n\n'),source:'主 Agent · 收件整理',createdAt:group.latestAt,...project(group.projectId),
     actions:[],route:{href:`#inbox?conversation=${encodeURIComponent(group.id)}`,label:'查看合并会话并回复'},
   });
-  for (const item of inbox) {
-    if(covered.has(item.id))continue;
-    if (excludesPersonalGroupFromBrief(item)) continue;
-    const matchedChannel = channels?.find(channel => item.source.startsWith(channel.sourcePrefix ?? `${channel.id}:`));
-    const allowedSource = item.source.startsWith('plugin:')
-      || (channels !== undefined
-        ? Boolean(matchedChannel)
-        : /^[a-z0-9][a-z0-9_-]*:/i.test(item.source) && !/^demo:/i.test(item.source));
-    if (item.tier === 'noise') continue;
-    if ((item.tier !== 'action') || item.archivedAt || !allowedSource) continue;
-    // Mailbox records only enrich source context. They are not another copy of the
-    // same message and do not create unsupported mailbox-to-todo actions.
-    const linked = mailboxes.find(entry => entry.direction === 'inbox' && entry.resultId === item.id);
-    const projectId = item.projectId ?? (linked && 'projectId' in linked.scope ? linked.scope.projectId : undefined);
+  for (const { item, matchedChannel, projectId } of actionableInbox({ inbox, inboxConversations, mailboxes, channels })) {
     rows.push({ id: `inbox:${item.id}`, type: 'inbox', version: item.version, title: item.title,
       context: item.todoId ? '这条消息已关联待办，可忽略更新' : '把这条消息转成待办，或忽略',
       detail: [item.text, item.reason].filter(Boolean).join('\n\n'), source: item.origin?.connector || matchedChannel?.name || (item.source.startsWith('plugin:') ? '插件消息' : '外部渠道'), origin: item.origin, createdAt: item.receivedAt || item.updatedAt,

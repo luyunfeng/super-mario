@@ -2443,7 +2443,7 @@ test('Web 与飞书项目对话读取原收件的失败派发，不重复执行'
 test('Web 与飞书项目助手完整列出待主人决定的事项，仅查询且可续页', async t => {
   let adapter!: FeishuOptions, projectId = '', otherId = '';
   const sent: string[] = [];
-  const expectedTitles = Array.from({ length: 25 }, (_, i) => '派发 ' + i).concat('确认时间', '准备评审', '确认收件', '确认发件', '合成联系人');
+  const expectedTitles = Array.from({ length: 25 }, (_, i) => '派发 ' + i).concat('确认时间', '准备评审', '确认收件', '确认发件', '合成联系人', '核对交付件');
   let groupId = '';
   let titles: string[] = [], lines: string[] = [];
   const { server, api, ask, dir } = await fixture(t, req => {
@@ -2453,6 +2453,7 @@ test('Web 与飞书项目助手完整列出待主人决定的事项，仅查询�
       assert.match(req.system, /按 nextOffset 续查完整清单/);
       assert.match(req.system, /Web 附每条记录返回的 webCitation，飞书列类型和标题，省略站内链接/);
       assert.match(req.system, /附上本轮返回的 question，让用户在收件箱回复主助手/);
+      assert.match(req.system, /linkedTodo 为真时提示已有待办/);
       assert.ok(req.tools.includes('pending_decisions_list'));
       return call('pending_decisions_list', { projectId: otherId }, 'outside');
     }
@@ -2463,7 +2464,7 @@ test('Web 与飞书项目助手完整列出待主人决定的事项，仅查询�
     }
     assert.doesNotMatch(raw, /私有正文|private-target|其他项目发件/);
     const page = JSON.parse(raw);
-    assert.equal(page.total, 30);
+    assert.equal(page.total, 31);
     assert.ok(page.items.every((item: { projectId: string }) => item.projectId === projectId));
     for (const item of page.items) {
       if (item.collection === 'conversations') {
@@ -2473,8 +2474,8 @@ test('Web 与飞书项目助手完整列出待主人决定的事项，仅查询�
         lines.push(req.system.includes('本轮回复渠道是飞书') ? line : line + ' ' + item.webCitation);
         continue;
       }
-      const routes = { approvals: 'approval', plans: 'plan', interactions: 'interaction', mailboxes: 'mailbox' } as const;
-      const types = { approvals: '待批申请', interactions: '待答问题', plans: '待启动计划', mailboxes: item.direction === 'outbox' ? '待确认发送' : '待交给助手' };
+      const routes = { inbox: 'inbox', approvals: 'approval', plans: 'plan', interactions: 'interaction', mailboxes: 'mailbox' } as const;
+      const types = { inbox: '待处理收件', approvals: '待批申请', interactions: '待答问题', plans: '待启动计划', mailboxes: item.direction === 'outbox' ? '待确认发送' : '待交给助手' };
       const label = types[item.collection as keyof typeof types] + ' · ' + item.title;
       lines.push(req.system.includes('本轮回复渠道是飞书') ? label : label + ' ' + item.webCitation);
       assert.equal(item.webCitation, `[查看待决定事项](#chat?${routes[item.collection as keyof typeof routes]}=${item.id})`);
@@ -2485,7 +2486,7 @@ test('Web 与飞书项目助手完整列出待主人决定的事项，仅查询�
       assert.equal(page.nextOffset, 25);
       return call('pending_decisions_list', { offset: page.nextOffset }, 'second');
     }
-    assert.deepEqual(page.items.map((item: {collection: string}) => item.collection), ['interactions', 'mailboxes', 'mailboxes', 'plans', 'conversations']);
+    assert.deepEqual(page.items.map((item: {collection: string}) => item.collection), ['inbox', 'interactions', 'mailboxes', 'mailboxes', 'plans', 'conversations']);
     assert.equal(page.nextOffset, null);
     assert.deepEqual([...titles].sort(), [...expectedTitles].sort());
     return { role: 'assistant', content: lines.join('\n') };
@@ -2529,10 +2530,13 @@ test('Web 与飞书项目助手完整列出待主人决定的事项，仅查询�
     assert.equal(assistant.list()[0]?.status, 'waiting_user', JSON.stringify(assistant.list()));
     assert.equal(server.app.inboxAssistant.list()[0]?.status, 'waiting_user', JSON.stringify(server.app.inboxAssistant.status()));
     groupId = assistant.list()[0]!.id;
+    server.app.store.put('inbox', 'attachment', { ...base, id: 'attachment', source: 'plugin:fixture', projectId, tier: 'action',
+      title: '核对交付件', text: '私有正文', reason: '需要确认', thread: 'delivery', last: '1' });
     const question = '本项目有哪些事等我决定？请列全。';
     const web = await ask(question, '/projects/' + projectId + '/messages');
-    assert.equal(web.match(/\[查看待决定事项\]/g)?.length, 30, web);
+    assert.equal(web.match(/\[查看待决定事项\]/g)?.length, 31, web);
     assert.ok(web.includes('合成联系人 · 需要哪个环境？ [查看待决定事项](#inbox?conversation=' + groupId + ')'));
+    assert.ok(web.includes('待处理收件 · 核对交付件 [查看待决定事项](#chat?inbox=attachment)'));
     assert.ok(web.includes('待确认发送 · 确认发件 [查看待决定事项](#chat?mailbox=out)'));
     assert.ok(web.includes('待启动计划 · 准备评审 [查看待决定事项](#chat?plan=plan)'));
     const bot = await api('/feishu/bots', { name: '待决定查询', appId: 'cli_4444444444444444', appSecret: 'offline-fixture',
@@ -2541,6 +2545,7 @@ test('Web 与飞书项目助手完整列出待主人决定的事项，仅查询�
     await adapter.onMessage(bot.pairingCode, { ...origin, messageId: 'pair' });
     await adapter.onMessage(question, { ...origin, messageId: 'list' });
     await t.waitFor(() => assert.ok(sent.includes(web.replace(/ \[查看待决定事项\]\([^)]+\)/g, ''))));
+    assert.equal(server.app.inbox.list().find(item => item.id === 'attachment')?.archivedAt, undefined);
     assert.equal(server.app.mailboxes.get('out').status, 'pending');
     assert.ok(server.app.approvals.list().every(item => item.status === 'pending'));
     assert.equal(server.app.store.get<{status:string}>('plans', 'plan')?.status, 'pending');
