@@ -34,7 +34,7 @@ test('主人设置个人采集编辑历史，按需查看旧正文，权限变�
     oldReads++;
     if(oldReads===2) return r.fulfill({json:{versions:[],truncated:false}});
     if(oldReads===3) return r.fulfill({status:403,json:{error:'读取旧版本的权限已失效'}});
-    return r.fulfill({json:{versions:[{text:old,replacedAt:'2026-10-01T01:02:03Z'}],truncated:true}});
+    return r.fulfill({json:{versions:[{text:'更早的合成正文',replacedAt:'2026-09-30T00:00:00Z'},{text:old,replacedAt:'2026-10-01T01:02:03Z'}],truncated:true}});
   });
   await page.goto(server.url+'/#channels?token='+token);
   await page.locator('#channel-collect').getByRole('button',{name:'个人消息编辑历史'}).click();
@@ -49,6 +49,7 @@ test('主人设置个人采集编辑历史，按需查看旧正文，权限变�
   const drawer=page.getByRole('dialog',{name:'收件箱消息详情'}),toggle=drawer.getByText('查看消息编辑历史',{exact:true});
   await expect(toggle).toBeVisible();assert.equal(oldReads,0);
   await toggle.click();await expect(drawer).toContainText(old);
+  await expect(drawer.locator('details article .mailbox-content')).toHaveText([old,'更早的合成正文']);
   await expect(drawer).toContainText('仅显示部分');await expect(drawer.locator('b')).toHaveCount(0);
   await toggle.click();await expect(drawer).not.toContainText(old);
   await toggle.click();await expect(drawer).toContainText('没有保存的旧版本');

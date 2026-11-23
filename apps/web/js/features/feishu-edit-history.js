@@ -76,7 +76,7 @@ export function inboxEditHistory(api,store,row){
     try{
       const result=await api('/inbox/'+encodeURIComponent(row.id)+'/edit-history',{signal});
       if(!current() || !panel.open || signal.aborted) return;
-      replace(content,result.versions.length ? result.versions.map(version=>h('article',{},
+      replace(content,result.versions.length ? result.versions.slice().reverse().map(version=>h('article',{},
         h('time',{dateTime:version.replacedAt},new Date(version.replacedAt).toLocaleString('zh-CN')+' 被替换'),
         h('p',{class:'mailbox-content'},version.text))) : h('p',{role:'status'},'没有保存的旧版本。'),
         result.truncated && h('p',{class:'small muted'},'仅显示部分旧版本。'));
