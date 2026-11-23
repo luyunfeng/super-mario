@@ -5205,6 +5205,8 @@ test('Web 与配对飞书说明浏览器接入和管理诊断时不索取凭据'
     assert.match(request.system,/没有撤销回执时，要说明旧凭据可能仍然有效/);
     assert.match(request.system,/没有管理页面回执时只说明步骤，不代报诊断结果/);
     assert.match(request.system,/「插件诊断」，按状态筛选并核对该插件的版本、权限和依赖状态/);
+    assert.match(request.system,/服务端插件放入当前数据目录.*super-mario\.extension\.json.*重启服务后到「插件诊断」/u);
+    assert.match(request.system,/单文件 ESM 在「Agent → 高级 → 插件文件」暂存.*SHA256.*确认加载/u);
     assert.match(request.system,/输入权限名，再展开结果核对权限列表/);
     assert.match(request.system,/直接依赖此插件.*间接依赖.*按依赖 ID 搜索/);
     assert.match(request.system,/先核对插件 ID、统计窗口和调用数/);
