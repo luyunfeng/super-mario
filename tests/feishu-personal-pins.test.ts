@@ -7,7 +7,7 @@ const account={appId:'cli_fixture',profile:'test_pins',openId:'ou_owner',name:'�
 const signal=new AbortController().signal;
 function fixture() {
   const calls:string[][]=[];
-  const state={actor:'ou_owner',messageChat:'oc_chat',pinnedChat:'oc_chat',deleted:false,breakReceipt:false,throwWrite:false,wrongActor:false};
+  const state={actor:'ou_owner',messageChat:'oc_chat',pinnedChat:'oc_chat',deleted:false,breakReceipt:false,throwWrite:false,wrongActor:false,threadChat:'oc_chat',threadId:'omt_thread',afterThreadActor:'ou_owner',rootThread:'omt_thread'};
   const run:PersonalCLI=async args=>{
     calls.push(args);
     assert.deepEqual(args.slice(0,2),['--profile',account.profile]);
@@ -16,10 +16,20 @@ function fixture() {
     assert.equal(args[args.indexOf('--as')+1],'user');
     if (args.includes('list')) return {code:0,data:{items:[{message_id:'om_pin',...(state.pinnedChat && {chat_id:state.pinnedChat}),create_time:'1853000000000'}],
       has_more:!args.includes('--page-token'),page_token:'next'}};
+    if (args.includes('+threads-messages-list')) {
+      assert.equal(args[args.indexOf('--thread')+1],'omt_thread');
+      state.actor=state.afterThreadActor;
+      return {ok:true,identity:'user',data:{messages:args.includes('--page-token')?
+        [{message_id:'om_erased',deleted:true,content:'已撤回的秘密',sender:{name:'某人'}}]:
+        [{message_id:'om_child',chat_id:state.threadChat,thread_id:state.threadId,root_id:'om_root',content:'可读回复',sender:{name:'成员甲'},create_time:'2030-01-01T00:00:00Z'}],
+        has_more:!args.includes('--page-token'),page_token:'t2'}};
+    }
+    if (args.includes('GET') && args.includes('/open-apis/im/v1/messages/om_root')) return {code:0,data:{items:[
+      {message_id:'om_root',chat_id:'oc_chat',thread_id:state.rootThread,msg_type:'text',body:{content:'{"text":"话题开场"}'}}]}};
     if (args.includes('GET')) {
       assert.ok(args.includes('/open-apis/im/v1/messages/om_pin'));
       return {code:0,data:{items:[{message_id:'om_pin',chat_id:state.messageChat,body:{content:'{"text":"测试原文"}'},msg_type:'text',
-        deleted:state.deleted,parent_id:'om_parent',thread_id:'omt_thread',create_time:'1853000000000'}]}};
+        deleted:state.deleted,root_id:'om_root',parent_id:'om_parent',thread_id:'omt_thread',create_time:'1853000000000'}]}};
     }
     if (state.throwWrite) throw new PersonalAuthError('timeout');
     if (state.breakReceipt) return {ok:true,identity:'bot',data:{}};
@@ -60,4 +70,19 @@ test('超时、矛盾的身份或目标回执均为未知，适配器不重试',
   state.throwWrite=false;state.breakReceipt=true;await assert.rejects(write(),{delivery:'unknown'});
   state.breakReceipt=false;state.wrongActor=true;await assert.rejects(write(),{delivery:'unknown'});
   assert.equal(calls.filter(a=>a.includes('create')).length,3);
+});
+test('置顶原消息仅展开同账号同话题，含已核实话题头、真实发言人与后一页撤回占位',async()=>{
+  const {adapter,state,calls}=fixture(),read=(cursor?:string,thread?:string)=>adapter.topic(account,'oc_chat','om_pin',signal,cursor,thread);
+  const page=await read();
+  assert.equal(page.threadId,'omt_thread');assert.equal(page.root?.text,'话题开场');assert.equal(page.nextCursor,'t2');
+  assert.deepEqual(page.messages,[{messageId:'om_child',text:'可读回复',senderName:'成员甲',createdAt:'2030-01-01T00:00:00.000Z',deleted:false}]);
+  const next=await read(page.nextCursor,page.threadId);
+  assert.deepEqual(next.messages,[{messageId:'om_erased',deleted:true}]); assert.equal(next.nextCursor,undefined);
+  await assert.rejects(read('t2','omt_else'),{status:409});
+  assert.equal(calls.filter(args=>args.includes('+threads-messages-list')).length,2);
+  state.threadId='omt_other';await assert.rejects(read(),/范围/);state.threadId='omt_thread';
+  state.threadChat='oc_other';await assert.rejects(read(),/范围/);state.threadChat='oc_chat';
+  state.rootThread='omt_else';await assert.rejects(read(),/根消息/);state.rootThread='omt_thread';
+  state.afterThreadActor='ou_other';await assert.rejects(read(),/账号已变化/);state.actor='ou_owner';
+  state.deleted=true;await assert.rejects(read(),{status:410});
 });

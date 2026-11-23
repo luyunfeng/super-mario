@@ -88,7 +88,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput, currentAgentReplyId, type OfficeFileOrigin } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage, readNativeShareMessages } from './native-conversation-export.ts';
-import { feishuChatPinsExtension, type FeishuPinReader, type FeishuPinOriginalReader, feishuEditHistoryExtension, type FeishuHistoryReader, createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, createConversationSharing, createWorkspaceBoard, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, searchKnowledgeCommentPeople, verifyKnowledgeCommentActor, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
+import { feishuChatPinsExtension, type FeishuPinReader, type FeishuPinOriginalReader, type FeishuPinTopicReader, feishuEditHistoryExtension, type FeishuHistoryReader, createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, createConversationSharing, createWorkspaceBoard, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, searchKnowledgeCommentPeople, verifyKnowledgeCommentActor, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
@@ -163,6 +163,7 @@ export async function createWorkbench(config: AppConfig) {
   const presence = createWebPresence();
   let notificationChannel: (bot: import('../../protocol/src/index.ts').FeishuBot) => string = () => { throw new InputError('通知渠道尚未连接', 503); };
   let mailboxProposer: ((input: Record<string, unknown>) => Json) | undefined;
+  let feishuPinTopicReader: FeishuPinTopicReader | undefined;
   let feishuPinOriginalReader: FeishuPinOriginalReader | undefined;
   let feishuPinReader: FeishuPinReader | undefined;
   let feishuHistoryReader: FeishuHistoryReader | undefined;
@@ -483,19 +484,19 @@ export async function createWorkbench(config: AppConfig) {
     const item=store.get<InboxItem>('inbox',id);
     if(!item || excludesPersonalGroupFromBrief(item)) throw new InputError('没有可读取的飞书收件',404);
   }
-  plugins.register(feishuChatPinsExtension(async(id,cursor,signal)=>{
+  async function ownerPinRead<T>(id:string,read:()=>Promise<T>|undefined) {
     assertOwnerFeishuInbox(id);
-    if(!feishuPinReader) throw new InputError('个人飞书服务未连接',503);
-    const page=await feishuPinReader(id,cursor,signal);
-    assertOwnerFeishuInbox(id);
-    return page;
-  },async(id,messageId,originalRef,signal)=>{
-    assertOwnerFeishuInbox(id);
-    if(!feishuPinOriginalReader) throw new InputError('个人飞书服务未连接',503);
-    const result=await feishuPinOriginalReader(id,messageId,originalRef,signal);
+    const pending=read();
+    if(!pending) throw new InputError('个人飞书服务未连接',503);
+    const result=await pending;
     assertOwnerFeishuInbox(id);
     return result;
-  }));
+  }
+  plugins.register(feishuChatPinsExtension(
+    (id,cursor,signal)=>ownerPinRead(id,()=>feishuPinReader?.(id,cursor,signal)),
+    (id,messageId,ref,signal)=>ownerPinRead(id,()=>feishuPinOriginalReader?.(id,messageId,ref,signal)),
+    (id,messageId,ref,cursor,signal)=>ownerPinRead(id,()=>feishuPinTopicReader?.(id,messageId,ref,cursor,signal)),
+  ));
   plugins.register(feishuEditHistoryExtension(id=>{
     assertOwnerFeishuInbox(id);
     if(!feishuHistoryReader) throw new InputError('个人飞书采集服务未连接',503);
@@ -2990,6 +2991,7 @@ export async function createWorkbench(config: AppConfig) {
     setScopeRequestValidator(check: typeof ownerScopeRequest) { ownerScopeRequest = check; ownerScopeReady = true; interactions.expireTick(); recoverDeferredQuestions(); },
     setAgentInputOwnerValidator(validate: typeof validateAgentInputOwner) { validateAgentInputOwner = validate; },
     setBotsStatus(status: () => Json) { botsStatus = status; },
+    setFeishuPinTopicReader(handler:FeishuPinTopicReader) { feishuPinTopicReader=handler; },
     setFeishuPinOriginalReader(handler:FeishuPinOriginalReader) { feishuPinOriginalReader=handler; },
     setFeishuPinReader(handler:FeishuPinReader) { feishuPinReader=handler; },
     setFeishuEditHistoryReader(handler:FeishuHistoryReader) { feishuHistoryReader=handler; },

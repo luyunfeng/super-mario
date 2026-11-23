@@ -879,4 +879,4 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
   ];
 }
 
-export {feishuChatPinsExtension,type FeishuPinReader,type FeishuPinOriginalReader} from './feishu-chat-pins.ts';
+export {feishuChatPinsExtension,type FeishuPinReader,type FeishuPinOriginalReader,type FeishuPinTopicReader} from './feishu-chat-pins.ts';

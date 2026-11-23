@@ -21,12 +21,25 @@ test('个人收件按需读取同会话置顶，核对原文、写回执和当�
   await page.route('**/api/v1/feishu/personal',r=>r.fulfill({json:{source:accountSource,accountKey,status:'connected'}}));
   let pinned=false,reads=0;const writes:{accountKey:string;action:string;messageId:string;requestId:string}[]=[];
   const access='/api/v1/inbox/first/pins';
-  await page.route(server.url+access+'**',r=>{
+  let delayTopic:Promise<void>|undefined, topicReads=0;
+  await page.route(server.url+access+'**',async r=>{
     const req=r.request(),url=new URL(req.url());
     if(url.pathname.endsWith('/original')){
       assert.equal(url.searchParams.get('accountKey'),accountKey);
+      if(url.pathname.includes('om_hit'))return r.fulfill({json:{chatId,deleted:false,messageId:'om_hit',text:'定位的合成回复',threadId:'omt_topic',inboxId:'second'}});
       return r.fulfill({json:url.pathname.includes('om_local')?{chatId,deleted:false,messageId:'om_local',inboxId:'second'}:
-        {chatId,deleted:false,messageId:'om_remote',text:'合成远端置顶原文',threadId:'omt_topic'}});
+        {chatId,deleted:false,messageId:'om_remote',text:'合成远端置顶原文'}});
+    }
+    if(url.pathname.endsWith('/topic')){
+      topicReads++;
+      assert.equal(url.searchParams.get('accountKey'),accountKey);
+      if(delayTopic) await delayTopic;
+      if(url.searchParams.has('cursor')){
+        assert.equal(url.searchParams.get('cursor'),'opaque+page/2');
+        return r.fulfill({json:{threadId:'omt_topic',messages:[{messageId:'om_hit',text:'定位的合成回复',deleted:false},{messageId:'om_old',text:'禁止显示的已撤回正文',deleted:true}]}});
+      }
+      return r.fulfill({json:{threadId:'omt_topic',root:{messageId:'om_root',text:'合成话题发起',deleted:false},
+        messages:[{messageId:'om_one',text:'第一页回复',senderName:'合成发言人',createdAt:'2026-10-12T08:00:00Z',deleted:false}],nextCursor:'opaque+page/2'}});
     }
     if(req.method()==='POST'){
       const payload=req.postDataJSON();writes.push(payload);
@@ -37,7 +50,7 @@ test('个人收件按需读取同会话置顶，核对原文、写回执和当�
     reads++;
     if(url.searchParams.has('cursor')){
       assert.equal(url.searchParams.get('cursor'),'second-page');
-      return r.fulfill({json:{accountKey,pins:[{messageId:'om_remote',text:'远端摘要'}]}});
+      return r.fulfill({json:{accountKey,pins:[{messageId:'om_remote',text:'远端摘要'},{messageId:'om_hit',text:'话题内置顶摘要',inboxId:'second'}]}});
     }
     return r.fulfill({json:{accountKey,pins:[
       ...(pinned?[{messageId:'om_first',text:'原始合成收件'}]:[]),
@@ -51,6 +64,15 @@ test('个人收件按需读取同会话置顶，核对原文、写回执和当�
   await more.click();
   await pins.locator('article').filter({hasText:'远端摘要'}).getByRole('button',{name:'查看原文'}).click();
   await expect(pins.getByRole('region',{name:'置顶消息原文'})).toContainText('合成远端置顶原文');
+  const locateTopic=pins.locator('article').filter({hasText:'话题内置顶摘要'}).getByRole('button',{name:'查看原文'});
+  await locateTopic.click();
+  const topic=pins.getByRole('region',{name:'置顶消息话题'});
+  await expect(topic).toContainText('合成话题发起');await expect(topic).toContainText('第一页回复');
+  await expect(topic).toContainText('合成发言人');await expect(topic.locator('time')).toHaveAttribute('datetime','2026-10-12T08:00:00Z');
+  await expect(topic.locator('mark')).toBeFocused();assert.equal(topicReads,1);
+  await topic.getByRole('button',{name:'加载更多回复'}).click();
+  await expect(topic).toContainText('原消息已撤回。');await expect(topic).not.toContainText('禁止显示的已撤回正文');
+  await expect(topic.getByText('定位的合成回复',{exact:true})).toHaveCount(1);
   const pin=pins.getByRole('button',{name:'置顶这条消息'});
   await pin.click();
   const confirm=page.getByRole('dialog',{name:'确认置顶这条消息'});
@@ -71,6 +93,13 @@ test('个人收件按需读取同会话置顶，核对原文、写回执和当�
   accountSource='feishu:cli_fixture:ou_other';server.app.events.publish('feishu.edit-history.changed',{accountChanged:true});
   await expect(page.getByRole('dialog',{name:'确认取消置顶'})).toHaveCount(0);
   await expect(summary).toBeHidden();await expect(drawer).not.toContainText('合成本地摘要');
+  accountSource=source;server.app.events.publish('feishu.edit-history.changed',{accountChanged:true});
+  await summary.click();
+  await more.click();
+  let release!:()=>void;delayTopic=new Promise(resolve=>{release=resolve;});
+  await locateTopic.click();await expect.poll(()=>topicReads).toBe(3);
+  accountSource='feishu:cli_fixture:ou_other';server.app.events.publish('feishu.edit-history.changed',{accountChanged:true});
+  await expect(summary).toBeHidden();release();await expect(drawer).not.toContainText('合成话题发起');
   accountSource=source;server.app.events.publish('feishu.edit-history.changed',{accountChanged:true});
   await summary.click();
   await pins.locator('article').filter({hasText:'合成本地摘要'}).getByRole('button',{name:'查看原文'}).click();

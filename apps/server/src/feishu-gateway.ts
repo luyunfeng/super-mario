@@ -123,6 +123,7 @@ export function createFeishuGateway(
   });
   app.setFeishuPinReader(pins.list);
   app.setFeishuPinOriginalReader(pins.readListedOriginal);
+  app.setFeishuPinTopicReader(pins.readListedTopic);
   function configurePersonalAi(input: Record<string, unknown>) {
     const { expectedAccountKey, ...settings } = input;
     if (expectedAccountKey !== undefined && personalAiView().accountKey !== expectedAccountKey) throw new InputError('个人账号已变更，请重新打开设置', 409);

@@ -3,9 +3,16 @@ import {renderFeishuPost} from './feishu-post.ts';
 
 const chatID = /^oc_[a-zA-Z0-9_-]{1,200}$/;
 const messageID = /^om_[a-zA-Z0-9_-]{1,200}$/;
+const threadID = /^(?:omt|om)_[a-zA-Z0-9_-]{1,200}$/;
+type TopicMessage = {messageId:string;text?:string;createdAt?:string;senderName?:string;deleted:boolean};
 const cursorOK = (v:unknown):v is string => typeof v==='string' && v.length>0 && v.length<=4096 && !/[\s\p{Cc}]/u.test(v);
 const row = (v:unknown):v is Record<string,unknown> => v!==null && typeof v==='object' && !Array.isArray(v);
 function fail(message:string,status=502):never { throw Object.assign(new Error(message),{status}); }
+function senderNameOf(message:Record<string,unknown>) {
+  const value=typeof message.sender_name==='string'?message.sender_name:
+    row(message.sender) && typeof message.sender.name==='string'?message.sender.name:undefined;
+  return value?.trim() || undefined;
+}
 function timestamp(value:unknown) {
   if (typeof value!=='string' || !/^\d{13}$/.test(value)) return undefined;
   return new Date(Number(value)).toISOString();
@@ -65,10 +72,60 @@ export function createPersonalPins(runCLI:PersonalCLI=runPersonalCLI) {
         if (row(content)) text=m.msg_type==='post'?renderFeishuPost(content,m.mentions):typeof content.text==='string'?content.text:undefined;
       } catch { /* A malformed body is not a readable text receipt. */ }
     }
-    const createdAt=timestamp(m.create_time);
-    return {chatId,messageId,deleted:false,...(text && {text}),...(createdAt && {createdAt}),
+    const createdAt=timestamp(m.create_time),senderName=senderNameOf(m);
+    return {chatId,messageId,deleted:false,...(senderName && {senderName}),...(text && {text}),...(createdAt && {createdAt}),
       ...(typeof m.parent_id==='string' && messageID.test(m.parent_id) && {parentId:m.parent_id as string}),
-      ...(typeof m.thread_id==='string' && /^omt_[A-Za-z0-9_-]{1,200}$/.test(m.thread_id) && {threadId:m.thread_id as string})};
+      ...(typeof m.root_id==='string' && messageID.test(m.root_id) && {rootId:m.root_id as string}),
+      ...(typeof m.thread_id==='string' && threadID.test(m.thread_id) && {threadId:m.thread_id as string})};
+  }
+  async function topic(account:PersonalAccount,chatId:string,messageId:string,signal:AbortSignal,cursor?:string,expectedThreadId?:string) {
+    if (cursor!==undefined && !cursorOK(cursor)) fail('话题分页游标无效',400);
+    const original=await locate(account,chatId,messageId,signal);
+    if (original.deleted) fail('原消息已撤回',410);
+    const threadId=original.threadId;
+    if (!threadId) fail('原消息没有可核实的话题',404);
+    if (expectedThreadId!==undefined && expectedThreadId!==threadId) fail('原消息所属话题已变化，请重新打开',409);
+    const raw=await run(account,['im','+threads-messages-list','--thread',threadId,'--order','asc',
+      '--page-size','50','--no-reactions',...(cursor?['--page-token',cursor]:[])],signal);
+    const page=data(raw);
+    if (raw.identity!=='user' || !Array.isArray(page.messages) || page.messages.length>50 ||
+        page.thread_id!==undefined && page.thread_id!==threadId || page.chat_id!==undefined && page.chat_id!==chatId)
+      fail('飞书话题页无法核实');
+    const complete=raw.meta?.pagination?.complete;
+    if (typeof page.has_more!=='boolean' && typeof complete!=='boolean' ||
+        typeof page.has_more==='boolean' && page.has_more===complete) fail('飞书话题分页状态无法核实');
+    const more=page.has_more===true || complete===false,next=page.page_token;
+    if (more && (!cursorOK(next) || next===cursor || !page.messages.length)) fail('飞书话题分页游标无效');
+    const rootIds=new Set<string>(original.rootId?[original.rootId]:[]),seen=new Set<string>();
+    const messages:TopicMessage[]=[];
+    for (const m of page.messages) {
+      if (!row(m) || typeof m.message_id!=='string' || !messageID.test(m.message_id) ||
+          m.chat_id!==undefined && m.chat_id!==chatId || m.thread_id!==undefined && m.thread_id!==threadId ||
+          seen.has(m.message_id)) fail('话题消息范围无法核实');
+      seen.add(m.message_id);
+      if (typeof m.root_id==='string' && messageID.test(m.root_id)) rootIds.add(m.root_id);
+      if (m.deleted===true) { messages.push({messageId:m.message_id,deleted:true}); continue; }
+      let createdAt=timestamp(m.create_time);
+      if (!createdAt && typeof m.create_time==='string' && /^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(m.create_time)) {
+        const ms=Date.parse(m.create_time);
+        if (Number.isFinite(ms)) createdAt=new Date(ms).toISOString();
+      }
+      const senderName=senderNameOf(m);
+      messages.push({messageId:m.message_id,deleted:false,...(senderName && {senderName}),...(createdAt && {createdAt}),
+        ...(typeof m.content==='string' && {text:m.content})});
+    }
+    if (rootIds.size>1) fail('话题根消息回执不一致');
+    // The raw GET supplies root_id for replies. An original post without a parent or
+    // root is the head when it carries the confirmed thread ID.
+    const rootId=[...rootIds][0] ?? (!original.parentId ? original.messageId : undefined);
+    let root:TopicMessage|undefined;
+    if (rootId) {
+      const found=rootId===messageId ? original : await locate(account,chatId,rootId,signal);
+      if (found.threadId && found.threadId!==threadId) fail('话题根消息不属于当前话题');
+      root={messageId:found.messageId,deleted:found.deleted,...(found.senderName && {senderName:found.senderName}),...(found.text && {text:found.text}),...(found.createdAt && {createdAt:found.createdAt})};
+    }
+    await verify(account,chatId,signal);
+    return {threadId,...(root && {root}),messages:messages.filter(m=>m.messageId!==rootId),...(more && typeof next==='string' && {nextCursor:next})};
   }
   async function write(account:PersonalAccount,chatId:string,messageId:string,pinned:boolean,signal:AbortSignal,beforeWrite:()=>Promise<void>) {
     if (typeof pinned!=='boolean') fail('置顶操作无效',400);
@@ -94,5 +151,5 @@ export function createPersonalPins(runCLI:PersonalCLI=runPersonalCLI) {
       throw Object.assign(new Error(refused?'飞书置顶请求未执行':'飞书置顶操作结果不确定，请重新读取置顶列表核实'),{delivery:refused?'no':'unknown'});
     }
   }
-  return {list,locate,write};
+  return {list,locate,topic,write};
 }

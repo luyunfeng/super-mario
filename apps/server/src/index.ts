@@ -611,7 +611,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             }
           }
         }
-        const pinRoute=path.match(/^\/api\/v1\/inbox\/([^/]+)\/pins(?:\/([^/]+)\/original)?$/);
+        const pinRoute=path.match(/^\/api\/v1\/inbox\/([^/]+)\/pins(?:\/([^/]+)\/(original|topic))?$/);
         if(pinRoute && (method==='GET' || method==='POST')) {
           const id=decodeURIComponent(pinRoute[1]!);
           const controller=new AbortController(),abort=()=>controller.abort();
@@ -619,6 +619,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           try {
             if(pinRoute[2]){
               if(method!=='GET') throw new InputError('原消息仅支持读取',405);
+              if(pinRoute[3]==='topic') return json(res,200,await gateway.pins.topic(id,decodeURIComponent(pinRoute[2]),url.searchParams.get('accountKey'),url.searchParams.get('cursor')??undefined,controller.signal));
               return json(res,200,await gateway.pins.locate(id,decodeURIComponent(pinRoute[2]),url.searchParams.get('accountKey'),controller.signal));
             }
             if(method==='GET') return json(res,200,await gateway.pins.list(id,url.searchParams.get('cursor')??undefined,controller.signal));

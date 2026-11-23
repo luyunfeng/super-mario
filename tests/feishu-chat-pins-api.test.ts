@@ -19,9 +19,16 @@ test('个人原消息置顶按同一聊天和账号分页、查看原件，写�
   let writes=0,uncertain=false,revoked=false,entered:(()=>void)|undefined,gate:Promise<void>|undefined;
   const source='feishu:'+account.appId+':'+account.openId;
   const chat='oc_group',otherChat='oc_away',message='om_source',remote='om_remote';
+  let thread='omt_fixture',topicCalls=0;
   const pins=createPersonalPins(async args=>{
     if(args.includes('--verify'))return {appId:account.appId,identity:'user',verified:true,identities:{user:{available:true,openId:account.openId,scope:PERSONAL_MESSAGE_SCOPES.join(' ')}}};
     const envelope=(data:object)=>({code:0,data});
+    if(args.includes('+threads-messages-list')){
+      topicCalls++;
+      const next=args.includes('--page-token');
+      return {ok:true,identity:'user',data:{messages:[{message_id:next?'om_later':'om_first',chat_id:chat,thread_id:thread,
+        root_id:'om_root',content:next?'后续发言':'第一条',msg_type:'text',create_time:'1700000000000'}],has_more:!next,...(!next && {page_token:'thread-next'})}};
+    }
     if(args.includes('list')){
       entered?.();await gate;
       return envelope({items:[{message_id:args.includes('--page-token')?remote:message,chat_id:args[args.indexOf('--chat-id')+1]}],
@@ -30,7 +37,7 @@ test('个人原消息置顶按同一聊天和账号分页、查看原件，写�
     if(args.includes('GET')){
       const id=args[args.indexOf('GET')+1]!.split('/').at(-1);
       return envelope({items:[{message_id:id,chat_id:id==='om_foreign'?otherChat:chat,deleted:revoked,
-        thread_id:'omt_fixture',msg_type:'text',body:{content:JSON.stringify({text:'原消息正文'})}}]});
+        thread_id:thread,msg_type:'text',body:{content:JSON.stringify({text:'原消息正文'})}}]});
     }
     if(args.includes('create')||args.includes('delete')){
       writes++;if(uncertain)throw Error('synthetic lost receipt');
@@ -60,6 +67,21 @@ test('个人原消息置顶按同一聊天和账号分页、查看原件，写�
   assert.deepEqual(await(await get(original)).json(),{messageId:remote,chatId:chat,deleted:false,text:'原消息正文',threadId:'omt_fixture'});
   revoked=true;assert.deepEqual(await(await get(original)).json(),{messageId:remote,chatId:chat,deleted:true});revoked=false;
   assert.equal((await get(path+'/om_foreign/original?accountKey='+accountKey)).status,404);
+  const topic=path+'/'+remote+'/topic?accountKey='+accountKey;
+  const firstPage=await(await get(topic)).json();
+  assert.equal(firstPage.root.messageId,'om_root');assert.equal(firstPage.root.text,'原消息正文');
+  assert.equal(firstPage.threadId,thread);assert.equal(firstPage.messages[0].messageId,'om_first');
+  assert.equal(firstPage.messages[0].text,'第一条');assert.equal(typeof firstPage.nextCursor,'string');
+  const secondPage=await(await get(topic+'&cursor='+firstPage.nextCursor)).json();
+  assert.equal(secondPage.messages[0].messageId,'om_later');assert.equal(secondPage.nextCursor,undefined);
+  server.app.waitingReplies.observeSource(source,[{source,chatId:chat,messageId:'om_root',createdAt:new Date().toISOString(),senderId:'ou_peer',senderIdType:'open_id',deleted:true}]);
+  const redacted=await(await get(topic)).json();
+  assert.deepEqual(redacted.root,{messageId:'om_root',deleted:true});
+  const calls=topicCalls;
+  assert.equal((await get(topic+'&cursor='+first.nextCursor)).status,400);
+  assert.equal((await get(topic.replace('/'+remote+'/','/'+message+'/')+'&cursor='+firstPage.nextCursor)).status,400);
+  thread='omt_other';assert.equal((await get(topic+'&cursor='+firstPage.nextCursor)).status,409);thread='omt_fixture';
+  assert.equal(topicCalls,calls);
   const body={action:'pin',messageId:message,accountKey,requestId:'choice-1'};
   for(const response of await Promise.all([post(body),post(body)])){
     assert.deepEqual(await response.json(),{action:'pin',confirmed:true,messageId:message});

@@ -26,12 +26,50 @@ export function inboxChatPins(api,store,row,openSource){
       if(!current() || signal.aborted || !panel.open) return;
       if(result.messageId!==pin.messageId || result.chatId!==row.origin.chatId) throw Error('原消息与本会话不符');
       if(result.deleted){replace(full,h('p',{role:'status'},'原消息已撤回。'));return;}
+      if(result.threadId){await openTopic(result,signal);return;}
       if(result.inboxId){openSource(result.inboxId);return;}
       replace(full,h('strong',{},'置顶消息原文'),result.text && h('p',{class:'mailbox-content'},result.text),
         result.parentId && h('p',{class:'small muted'},'引用消息：'+result.parentId),
-        result.threadId && h('p',{class:'small muted'},'话题：'+result.threadId),
         !result.text && h('p',{role:'status'},'没有可显示的原文。'));
     }catch(error){if(current() && !signal.aborted)replace(full,h('p',{role:'alert'},'无法定位原文：'+error.message));}
+  }
+  async function openTopic(target,signal){
+    const replies=new Map(), controls=h('div',{class:'row row--wrap'}),list=h('div',{class:'stack'});
+    const section=h('section',{class:'stack','aria-label':'置顶消息话题'},h('h3',{},'置顶消息所在话题'),list,controls);
+    let root,nextCursor;
+    function message(entry){
+      const hit=entry.messageId===target.messageId;
+      return h('div',{class:'stack'},hit && h('mark',{tabIndex:-1},'当前置顶消息'),
+        h('p',{class:'mailbox-content'},entry.deleted?'原消息已撤回。':entry.text || '没有可显示的原文。'),
+        !entry.deleted && entry.senderName && h('span',{class:'small muted'},entry.senderName),
+        entry.createdAt && h('time',{dateTime:entry.createdAt,class:'small muted'},new Date(entry.createdAt).toLocaleString('zh-CN')));
+    }
+    async function loadPage(more){
+      replace(controls,h('p',{role:'status'},'正在读取话题…'));
+      try{
+        const query=new URLSearchParams({accountKey});
+        if(more) query.set('cursor',nextCursor);
+        const page=await api(path+'/'+encodeURIComponent(target.messageId)+'/topic?'+query,{signal});
+        if(signal.aborted || !current() || !panel.open) return;
+        if(page.threadId!==target.threadId){replace(full,h('p',{role:'alert'},'原消息与话题不符。'));return;}
+        root=page.root ?? root;
+        for(const entry of page.messages) replies.set(entry.messageId,entry);
+        if(root) replies.delete(root.messageId);
+        nextCursor=page.nextCursor;
+        replace(list,root && h('div',{class:'stack'},h('strong',{},'话题首条消息'),message(root)),
+          root?.messageId!==target.messageId && !replies.has(target.messageId) && message(target),
+          h('strong',{},'话题回复'),[...replies.values()].map(message));
+        replace(controls,nextCursor && Button({label:'加载更多回复',size:'sm',onClick:()=>loadPage(true)}));
+        if(!more) list.querySelector('mark')?.focus();
+      }catch(error){
+        if(signal.aborted || !current() || !panel.open) return;
+        if([401,403,404,409,410,503].includes(error.status)){replace(full,h('p',{role:'alert'},'无法读取话题：'+error.message));return;}
+        replace(controls,h('p',{role:'alert'},'无法读取话题：'+error.message),
+          Button({label:'重试读取话题',size:'sm',onClick:()=>loadPage(more)}));
+      }
+    }
+    replace(full,section);
+    await loadPage(false);
   }
   function render(){
     replace(body,rows.map(pin=>h('article',{class:'stack card__body'},
@@ -53,7 +91,7 @@ export function inboxChatPins(api,store,row,openSource){
     try{
       const page=await api(path+(more?'?cursor='+encodeURIComponent(cursor):''),{signal});
       if(!current() || signal.aborted || !panel.open) return;
-      if(!page.accountKey || page.accountKey!==accountKey){panel.hidden=true;rows=[];replace(body);replace(buttons);return;}
+      if(!page.accountKey || page.accountKey!==accountKey){clearOriginal();panel.hidden=true;rows=[];replace(body);replace(buttons);return;}
       const seen=new Set(rows.map(p=>p.messageId));
       rows.push(...page.pins.filter(p=>!seen.has(p.messageId)));cursor=page.nextCursor;
       verified=true;
@@ -61,7 +99,7 @@ export function inboxChatPins(api,store,row,openSource){
       status.textContent=unknown?'请继续加载置顶消息，核对上次操作。':rows.length?'已读取 '+rows.length+' 条置顶消息。':'当前会话没有置顶消息。';
     }catch(error){
       if(!current() || signal.aborted) return;
-      if([401,403,404,409,503].includes(error.status)){rows=[];cursor=undefined;verified=false;}
+      if([401,403,404,409,503].includes(error.status)){clearOriginal();rows=[];cursor=undefined;verified=false;}
       status.textContent='无法读取置顶列表：'+error.message;
     }
     render();

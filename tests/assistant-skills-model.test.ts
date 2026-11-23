@@ -4114,11 +4114,13 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
         assert.ok(!req.tools.includes('inbox_edit_history'));
         assert.ok(!req.tools.includes('inbox_chat_pins'));
         assert.ok(!req.tools.includes('inbox_pin_original'));
+        assert.ok(!req.tools.includes('inbox_pin_topic'));
         assert.doesNotMatch(req.system,/优先用 inbox_tree/);
         return call('inbox_list',{query:'合成中心'},'restricted-list');
       }
       if(JSON.stringify(req.content).includes('置顶消息')){
         assert.match(req.system,/读取可能在飞书侧标记已读/);
+        assert.match(req.system,/分清话题头、命中的置顶消息和其他回复/);
         assert.ok(req.tools.includes('inbox_chat_pins'));
         return call('inbox_chat_pins',{id:center},'pins');
       }
@@ -4141,8 +4143,15 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
       return call('inbox_pin_original',{id:center,messageId:result.pins[0].messageId,originalRef:result.pins[0].originalRef},'pin-source');
     }
     if(req.callId==='pin-source'){
-      assert.deepEqual(result,{messageId:'om_pinned',deleted:false,text:'合成置顶正文',textTruncated:false});
-      return {role:'assistant',content:'会话置顶了合成置顶正文。'};
+      assert.deepEqual(result,{messageId:'om_pinned',deleted:false,text:'合成置顶正文',threadId:'omt_fixture',textTruncated:false});
+      return call('inbox_pin_topic',{id:center,messageId:'om_pinned',originalRef:'synthetic-ref'},'pin-topic');
+    }
+    if(req.callId==='pin-topic'){
+      assert.equal(result.threadId,'omt_fixture');
+      assert.equal(result.root.text,'合成议题');
+      assert.deepEqual(result.messages,[{messageId:'om_removed',deleted:true}]);
+      assert.equal(result.nextCursor,null);
+      return {role:'assistant',content:'置顶正文属于合成议题，另有一条回复已撤回。'};
     }
     if(req.callId==='edits'){
       assert.equal(result.versions[0].text,'合成旧正文');
@@ -4209,12 +4218,17 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
     });
     server.app.setFeishuPinOriginalReader(async(id,messageId,ref,signal)=>{
       assert.deepEqual([id,messageId,ref],[center,'om_pinned','synthetic-ref']);signal.throwIfAborted();
-      return {messageId,deleted:false,text:'合成置顶正文'};
+      return {messageId,deleted:false,text:'合成置顶正文',threadId:'omt_fixture'};
     });
-    const pinQuestion='请查看这条收件所在会话的置顶消息 '+center;
-    assert.equal(await ask(pinQuestion),'会话置顶了合成置顶正文。');
+    server.app.setFeishuPinTopicReader(async(id,messageId,ref,cursor,signal)=>{
+      assert.deepEqual([id,messageId,ref,cursor],[center,'om_pinned','synthetic-ref',undefined]);signal.throwIfAborted();
+      return {threadId:'omt_fixture',root:{messageId:'om_root',text:'合成议题',deleted:false},
+        messages:[{messageId:'om_removed',deleted:true,text:'撤回后不应透传'}]};
+    });
+    const pinQuestion='请查看这条收件所在会话的置顶消息和它所在话题的讨论 '+center;
+    assert.equal(await ask(pinQuestion),'置顶正文属于合成议题，另有一条回复已撤回。');
     await adapter.onMessage(pinQuestion,{...owner,messageId:'pins-read'});
-    await t.waitFor(()=>assert.ok(sent.includes('会话置顶了合成置顶正文。')));
+    await t.waitFor(()=>assert.ok(sent.includes('置顶正文属于合成议题，另有一条回复已撤回。')));
     const editQuestion='请核对合成中心收件的编辑历史，编号 '+center;
     assert.equal(await ask(editQuestion),'采集到的上一版是合成旧正文。');
     await adapter.onMessage(editQuestion,{...owner,messageId:'edit-history'});
