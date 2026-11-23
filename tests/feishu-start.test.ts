@@ -26,7 +26,7 @@ async function fixture(t: test.TestContext) {
   const machine: MachineInfo = { id: 'fixture-host', name: '合成主机', online: true, platform: 'linux', connectedAt: '',
     capabilities: ['executor.start', 'executor.input', 'executor.read', 'executor.result'],
     executors: [{ id: 'codex', name: '合成交互执行者', kind: 'cli', available: true, mode: 'real', machineId: 'fixture-host',
-      defaultCwd: '/fixture', description: '', nativeResultSources: ['fixture-native'] }] };
+      supportsModel: true, defaultCwd: '/fixture', description: '', nativeResultSources: ['fixture-native'] }] };
   const starts: JsonObject[] = [], inputs: JsonObject[] = [];
   let delivery: 'accepted' | 'unknown' = 'accepted';
   let taskCompleted = false;
@@ -100,11 +100,15 @@ test('飞书 /开工 预填目标，主人提交后只派发一次，同一执�
   assert.equal(f.starts.length, 0);
   f.click(form.submit, f.values, 'stranger');
   assert.equal((await f.webRuns()).length, 0);
-  f.click(form.submit, f.values);
-  f.click(form.submit, f.values);
+  assert.ok(form.elements.some(item => item.name === 'model'));
+  const selected = { ...f.values, model: 'fixture-model' };
+  f.click(form.submit, selected);
+  f.click(form.submit, selected);
   await t.waitFor(async () => assert.ok((await f.webRuns()).some(run => run.sessionId === 'fixture-session-1')));
   const matches = (await f.webRuns()).filter(run => run.prompt === f.values.prompt);
   assert.equal(matches.length, 1);
+  assert.equal(matches[0].model, 'fixture-model');
+  assert.equal(f.starts[0].model, 'fixture-model');
   assert.equal(matches[0].status, 'running');
   assert.equal(matches[0].executionMode, 'interactive');
   assert.equal(matches[0].machineId, f.machine.id);

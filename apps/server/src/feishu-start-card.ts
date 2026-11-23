@@ -8,8 +8,8 @@ export function startCardSnapshot(machines: MachineInfo[], executors: ExecutorIn
     && (computers.has(executor.machineId) || executor.mode === 'demo'));
   const active = projects.filter(project => !project.archivedAt);
   return {
-    executors: available.slice(0, 40).map(({ id, name, machineId, mode, taskOnly, defaultCwd }) => ({
-      id, name, machineId, machineName: computers.get(machineId) ?? machineId, mode, taskOnly: Boolean(taskOnly), defaultCwd,
+    executors: available.slice(0, 40).map(({ id, name, machineId, mode, taskOnly, supportsModel, defaultCwd }) => ({
+      id, name, machineId, machineName: computers.get(machineId) ?? machineId, mode, taskOnly: Boolean(taskOnly), ...(supportsModel === true && { supportsModel: true }), defaultCwd,
     })),
     projects: active.slice(0, 40).map(({ id, name, workspace }) => ({ id, name, workspace })),
     truncated: available.length > 40 || active.length > 40,
@@ -45,6 +45,7 @@ export function startCard(snapshot: StartCardSnapshot, navigation: string, promp
     select('executorId', '选择电脑和执行者', snapshot.executors.map(e => ({ id: e.id,
       label: [shortName(e.machineName), shortName(e.name), e.mode === 'demo' ? '演示' : '真实执行'].join(' · ') }))),
     select('executionMode', '执行方式', [{ id: 'task', label: '任务' }, { id: 'interactive', label: '交互会话' }], snapshot.executors.some(executor => !executor.taskOnly) ? 'interactive' : 'task'),
+    ...(snapshot.executors.some(executor => executor.supportsModel) ? [input('model', '本次执行模型（选填，留空使用默认模型）')] : []),
     input('cwd', '工作目录（绝对路径；留空使用项目或执行者默认目录）'),
     input('prompt', '执行目标', prompt, true),
     input('doneWhen', '验收标准（真实任务必填）', undefined, true),
@@ -73,6 +74,8 @@ export function parseStartForm(snapshot: StartCardSnapshot, form: Record<string,
   if (projectId && !project) throw new Error('所选项目已不可用，请重新打开发起执行表单');
   const workspace = project?.workspace;
   if (workspace && (workspace.machineId !== executor.machineId || executor.mode !== 'real')) throw new Error('请选择项目绑定电脑上的真实执行者');
+  const model = read('model');
+  if (model && (!executor.supportsModel || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(model))) throw new Error('模型标识无效或所选执行者不支持指定模型');
   const requestedCwd = read('cwd');
   if (requestedCwd && (!posix.isAbsolute(requestedCwd) || /[\p{Cc}]/u.test(requestedCwd) || requestedCwd.split('/').includes('..'))) throw new Error('工作目录需要有效的绝对路径');
   if (workspace && requestedCwd && requestedCwd !== workspace.cwd) throw new Error('项目已绑定工作目录，请使用项目目录');
@@ -88,6 +91,6 @@ export function parseStartForm(snapshot: StartCardSnapshot, form: Record<string,
   if (expectMinutes !== undefined && (!/^\d+(\.\d+)?$/.test(minutes) || !Number.isFinite(expectMinutes) || expectMinutes <= 0 || expectMinutes > 10080))
     throw new Error('预计用时必须为不超过 10080 的正数分钟');
   if (executor.mode === 'real' && executionMode === 'task' && (!doneWhen || !expectMinutes)) throw new Error('真实任务需要验收标准和预计用时');
-  return { executorId: executor.id, machineId: executor.machineId, ...(projectId && { projectId }), ...(cwd && { cwd }), prompt,
+  return { executorId: executor.id, ...(model && { model }), machineId: executor.machineId, ...(projectId && { projectId }), ...(cwd && { cwd }), prompt,
     executionMode: executionMode as 'task' | 'interactive', ...(doneWhen && { doneWhen }), ...(expectMinutes && { expectMinutes }) };
 }
