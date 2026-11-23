@@ -170,7 +170,7 @@ export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp
   return { text: title + '\n' + text, card: cardDocument(title, [{ tag: 'div', text: cardPlain(text) }]) };
 }
 
-export function statusDashboard(target: string, status: ConversationStatus | string) {
+export function statusDashboard(target: string, status: ConversationStatus | string, source?: { botId: string; threadId: string; messageId: string; webBase: string }) {
   const lines = [target];
   if (typeof status === 'string') lines.push(status);
   else {
@@ -187,7 +187,10 @@ export function statusDashboard(target: string, status: ConversationStatus | str
       ...pending.items.map(item => '• ' + kinds[item.kind] + ' · ' + label(item.title, 200)));
   }
   const text = lines.join('\n');
-  return { text: '当前会话状态\n' + text, card: cardDocument('当前会话状态', [{ tag: 'div', text: cardPlain(text) }]) };
+  const buttons = source ? cardButtons([{ label: '查看原文',
+    route: ['agent', 'private-thread', source.botId, source.threadId, source.messageId].map(encodeURIComponent).join('/'),
+  }], cardWebBase(source.webBase)) : [];
+  return { text: '当前会话状态\n' + text, card: cardDocument('当前会话状态', [{ tag: 'div', text: cardPlain(text) }, ...buttons]) };
 }
 
 export function todayDashboard(brief: TodayBrief | string, navigation: string, canRefresh: boolean) {

@@ -24,7 +24,7 @@ import { createTopicRegistry } from './feishu-topic-registry.ts';
 import { groupTaskCommand, readGroupCommand, topicGroupCommand, topicOwnerWords } from '../../../plugins/feishu-read-command.ts';
 import { createThreadDeletionCleanup, deletedThreads, eraseThreadChannel, type DeletedThread } from './feishu-thread-delete.ts';
 import { parseStartForm, startCard, startCardSnapshot, type StartCardSnapshot } from './feishu-start-card.ts';
-import { trimUnicodeSpace, privateThreadTags, normalizeThreadTags, searchPrivateThreadList, searchPrivateThreads, readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
+import { trimUnicodeSpace, privateThreadTags, normalizeThreadTags, searchPrivateThreadList, searchPrivateThreads, privateThreadExport, readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
 import { createPinnedWorkbench } from './feishu-pinned-workbench.ts';
 import { selectedAgentStatus, agentCard, agentCardSnapshot, type AgentCardSnapshot } from './feishu-agent-card.ts';
 import type { ConversationStatus } from '../../../plugins/conversation-status.ts';
@@ -1306,7 +1306,12 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         catch (error) { result = '读取会话状态失败 · ' + redact(error); }
       }
       if (!valid()) return;
-      const dashboard = help ? dashboardHelp(false, true) : target.agentStatus ?? statusDashboard(target.name, result);
+      const threadId = target.binding?.conversationThreadId;
+      const messageId = typeof result === 'object' && result.lastMessage?.id;
+      const original = webBase && threadId && messageId && !target.error && !target.binding?.projectId
+        && privateThreadExport(app.store, requireThread(bot.id, threadId)).messages.some(message => message.id === messageId)
+        ? { botId: bot.id, threadId, messageId, webBase } : undefined;
+      const dashboard = help ? dashboardHelp(false, true) : target.agentStatus ?? statusDashboard(target.name, result, original);
       // Pin a returned card even when the owner had never selected a project.
       const binding = !help && (!target.error || target.binding?.agentTarget) && bot.scope.kind === 'global' ? target.binding ?? {
         projectId: '', senderId: paired.senderId!, revision: bot.revision, expiresAt: Date.now() + 7 * 86400000,

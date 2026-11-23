@@ -104,6 +104,12 @@ test('主人裸 /new 延迟开会话，带正文的命令原样保留段落，�
 });
 
 test('连续输入跟随新会话，状态与清单只展示本主人的会话，清单按钮可重新选中', async t => {
+  const previousUrl = process.env.SUPER_MARIO_WEB_URL;
+  process.env.SUPER_MARIO_WEB_URL = 'https://workbench.example';
+  t.after(() => {
+    if (previousUrl === undefined) delete process.env.SUPER_MARIO_WEB_URL;
+    else process.env.SUPER_MARIO_WEB_URL = previousUrl;
+  });
   const f = await fixture(t), a = await f.bot('cli_2222222222222222', 'alpha'), b = await f.bot('cli_3333333333333333', 'beta');
   await a.pair(); await b.pair();
   await Promise.all([a.receive('/新对话 会话甲的目标', 'new-a'), a.receive('紧接命令的输入', 'during-new')]);
@@ -120,11 +126,14 @@ test('连续输入跟随新会话，状态与清单只展示本主人的会话�
   assert.match(rows[0].title, /会话甲的目标/);
   const detail = await f.threads(a.row.id, rows[0].threadId);
   assert.equal(detail.status, 200);
-  assert.deepEqual((await detail.json()).messages.filter((message: Message) => message.role === 'user')
+  const history: Message[] = (await detail.json()).messages;
+  assert.deepEqual(history.filter((message: Message) => message.role === 'user')
     .map((message: Message) => message.text), ['会话甲的目标', '紧接命令的输入']);
   assert.equal((await f.threads(b.row.id, rows[0].threadId)).status, 404);
   const status = f.sent.findLast(item => item.appId === a.row.appId && item.context?.card && item.text.includes('最近消息'));
   assert.ok(status && status.text.includes('紧接命令的输入'));
+  const originalUrl = 'https://workbench.example/#' + ['agent', 'private-thread', a.row.id, rows[0].threadId, history.at(-1)!.id].map(encodeURIComponent).join('/');
+  assert.ok(JSON.stringify(status.context?.card).includes(JSON.stringify(originalUrl)));
   assert.doesNotMatch(status.text, /乙机器人的私聊目标/);
 
   const oldReply = f.sent.find(item => item.appId === a.row.appId && item.text.includes('紧接命令的输入') && item.text.includes('本地演示'));
@@ -137,7 +146,7 @@ test('连续输入跟随新会话，状态与清单只展示本主人的会话�
   assert.ok(list && !list.text.includes('乙机器人的私聊目标'));
   const elements = list.context?.card?.elements as Array<{ actions?: Array<{ value: Record<string, unknown> }> }>;
   const buttons = elements.flatMap(el => el.actions ?? []).filter(button =>
-    button.value.kind === 'workbench.chat' && button.value.conversationThreadId);
+    button.value?.kind === 'workbench.chat' && button.value.conversationThreadId);
   assert.equal(buttons.length, 1);
   const renamed = await fetch(f.url+'/api/v1/feishu/bots/'+a.row.id+'/threads/'+rows[0].threadId, {
     method:'PATCH',headers:{authorization:'Bearer synthetic-thread-test','content-type':'application/json'},
