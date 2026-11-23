@@ -256,6 +256,7 @@ test('旧项目 workspace GET 迟到不覆盖新项目；绑定电脑离线仍�
     await expect(page.locator('.project-binding')).toContainText('电脑乙 · 离线');
     await expect(page.locator('.project-binding')).toContainText('/work/beta');
     await page.getByRole('button', { name: '发起执行', exact: true }).click();
+    await expect(page.locator('dialog.drawer')).toContainText('绑定电脑“电脑乙”已离线');
     await expect(page.getByLabel('谁来做').locator('option')).toHaveCount(0);
     await page.getByRole('button', { name: '开始执行' }).click();
     await expect(page.locator('dialog.drawer')).toContainText('不能改用其他电脑');

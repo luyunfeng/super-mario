@@ -386,7 +386,12 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     const snapshot = store.view.snapshot;
     const launchProjectId = parentRun?.projectId ?? projectId;
     const binding = snapshot.projects?.find(item => item.id === launchProjectId)?.workspace;
-    const executors = (snapshot.executors ?? []).filter(item => item.available && (!binding || item.machineId === binding.machineId));
+    const candidates = (snapshot.executors ?? []).filter(item => !binding || item.machineId === binding.machineId);
+    const executors = candidates.filter(item => item.available);
+    const machine = binding && snapshot.machines?.find(item => item.id === binding.machineId);
+    const unavailable = machine?.online === false ? '绑定电脑“'+(machine.name || machine.id)+'”已离线。'
+      : candidates.filter(item => item.reason).map(item => item.name+'：'+item.reason).join('；')
+        || (binding ? '绑定电脑尚无可用执行者。' : '现在没有可用的执行者。请先在 Agent 里核对电脑和执行者。');
     const launchToken = api.token();
     const key = uuid();
     let uncertain = false;
@@ -426,7 +431,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     const drawer = openDrawer({
       onClose: () => { offRoute(); offStore(); },
       title: '发起执行', subtitle: launchProjectId === 'all' ? '不归属于某个项目' : `归属项目：${(snapshot.projects ?? []).find(item => item.id === launchProjectId)?.name ?? ''}`,
-      body: [!executors.length && Banner({ tone: 'warn', children: '现在没有可用的执行者。请先在 Agent 里连接一台电脑。', action: h('a', { class: 'btn btn--sm', href: router.href('agent') }, '去连接') }),
+      body: [!executors.length && Banner({ tone: 'warn', children: unavailable, action: h('a', { class: 'btn btn--sm', href: router.href('agent') }, '查看电脑') }),
         Field({ label: '要做什么', control: prompt, required: true }), Field({ label: '谁来做', control: executor }),
         binding && h('p', { class: 'muted folder-path' }, parentRun ? `复用工作树：${parentRun.worktree.name ?? parentRun.worktree.branch} · ${parentRun.cwd}` : projectTree ? `工作树：${projectTree.name} · ${projectTree.cwd}` : `继承项目文件夹：${binding.cwd}`), Field({ label: '关联待办', control: todo }), criteriaField, minutesField, isolation, copiesField,
         Fold({ title: '更多选项', body: [Field({ label: parentRun || projectTree ? '工作树目录' : binding ? '目录（继承项目）' : '目录', control: cwd }), Field({ label: '执行方式', control: mode })] }), message],
