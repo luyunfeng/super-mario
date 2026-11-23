@@ -353,6 +353,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (method === 'PUT') return json(res, 200, await app.configureFeishuWeb(await body(req)));
         }
         if (path === '/api/v1/feishu/web' && method === 'GET') return json(res, 200, app.feishuWebStatus());
+        if(path==='/api/v1/feishu/personal/edit-history') {
+          if(method==='GET') return json(res,200,gateway.currentHistory());
+          if(method==='PUT') return json(res,200,gateway.configureHistory(await body(req)));
+        }
         if (path === '/api/v1/feishu/personal/ai') {
           if (method === 'GET') return json(res, 200, personalAiView());
           if (method === 'PUT') return json(res, 200, configurePersonalAi(await body(req)));
@@ -607,6 +611,8 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             }
           }
         }
+        const editHistory=path.match(/^\/api\/v1\/inbox\/([^/]+)\/edit-history$/);
+        if(editHistory && method==='GET') return json(res,200,gateway.readEditHistory(decodeURIComponent(editHistory[1]!)));
         const inboxRelation=path.match(/^\/api\/v1\/inbox\/([^/]+)\/(tree|parent)$/);
         if(inboxRelation && (inboxRelation[2]==='tree' && method==='GET' || inboxRelation[2]==='parent' && method==='PUT')) {
           if(!app.plugins.list().some(p=>p.id==='inbox-triage' && p.status==='active')) throw new InputError('收件箱整理插件已停用',503);

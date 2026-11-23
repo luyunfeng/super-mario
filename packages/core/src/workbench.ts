@@ -88,7 +88,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput, currentAgentReplyId, type OfficeFileOrigin } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage, readNativeShareMessages } from './native-conversation-export.ts';
-import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, createConversationSharing, createWorkspaceBoard, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, searchKnowledgeCommentPeople, verifyKnowledgeCommentActor, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
+import { feishuEditHistoryExtension, type FeishuHistoryReader, createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, createConversationSharing, createWorkspaceBoard, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, searchKnowledgeCommentPeople, verifyKnowledgeCommentActor, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
@@ -163,6 +163,7 @@ export async function createWorkbench(config: AppConfig) {
   const presence = createWebPresence();
   let notificationChannel: (bot: import('../../protocol/src/index.ts').FeishuBot) => string = () => { throw new InputError('通知渠道尚未连接', 503); };
   let mailboxProposer: ((input: Record<string, unknown>) => Json) | undefined;
+  let feishuHistoryReader: FeishuHistoryReader | undefined;
   let groupReadRecords: ((id: string, before?: string, sourceId?: string, recordId?: string) => GroupReadPage) | undefined;
   let privateSearch: ((id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string) => Json) | undefined;
   let privateExport: ((botId: string, threadId: string) => { title: string; messages: Message[] }) | undefined;
@@ -475,6 +476,13 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(subscriptions.extension);
   plugins.register(createReleaseSourceExtension());
   plugins.register(workspaceSplash);
+  plugins.register(feishuEditHistoryExtension(id=>{
+    ownerReadInput();
+    const item=store.get<InboxItem>('inbox',id);
+    if(!item || excludesPersonalGroupFromBrief(item)) throw new InputError('没有可读取的飞书收件',404);
+    if(!feishuHistoryReader) throw new InputError('个人飞书采集服务未连接',503);
+    return feishuHistoryReader(id);
+  }));
   plugins.register(createStartPage(() => plugins.list()));
   plugins.register(tokenStatistics);
   plugins.register(todoCalendar);
@@ -2964,6 +2972,7 @@ export async function createWorkbench(config: AppConfig) {
     setScopeRequestValidator(check: typeof ownerScopeRequest) { ownerScopeRequest = check; ownerScopeReady = true; interactions.expireTick(); recoverDeferredQuestions(); },
     setAgentInputOwnerValidator(validate: typeof validateAgentInputOwner) { validateAgentInputOwner = validate; },
     setBotsStatus(status: () => Json) { botsStatus = status; },
+    setFeishuEditHistoryReader(handler:FeishuHistoryReader) { feishuHistoryReader=handler; },
     setGroupReadRecords(handler: NonNullable<typeof groupReadRecords>) { groupReadRecords = handler; },
     setPrivateSearch(handler: NonNullable<typeof privateSearch>) { privateSearch = handler; },
     setPrivateExport(handler: NonNullable<typeof privateExport>) { privateExport = handler; },

@@ -83,6 +83,7 @@ export const conversationDrafts: Extension = {
 export { conversationSearch } from './conversation-search.ts';
 export { tokenStatistics } from './token-statistics.ts';
 export { createStartPage, readStartPage } from './start-page.ts';
+export {feishuEditHistoryExtension,type FeishuHistoryReader} from './feishu-edit-history-extension.ts';
 export { workspaceSplash } from './workspace-splash.ts';
 export { searchKnowledgeCommentPeople } from './knowledge-comment-people.ts';
 export { verifyKnowledgeCommentActor } from './feishu-personal.ts';

@@ -62,6 +62,11 @@ export function createStore(api) {
         set({ revokedAttachment: { messageId:event.data.messageId } });
         return;
       }
+      if (event?.type === 'feishu.edit-history.changed') {
+        set({feishuEditHistoryChange:{accountChanged:event.data?.accountChanged===true}});
+        scheduleRefresh();
+        return;
+      }
       if (event?.type === 'source-subscriptions.changed') {
         set({ sourceSubscriptionsChange: {} });
         scheduleRefresh();

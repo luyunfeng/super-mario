@@ -6,6 +6,7 @@ import { createIntegrationConfig } from '../../../packages/core/src/integration-
 import { createFeishuBotConfig } from '../../../plugins/feishu-bot-config.ts';
 import { createPersonalProvider, PersonalAuthError, personalProblem } from '../../../plugins/feishu-personal.ts';
 import { PERSONAL_COLLECTION_BOUNDARY, preparePersonalCheckpoint } from '../../../plugins/feishu.ts';
+import type { FeishuEditObservation } from '../../../plugins/feishu-edit-history.ts';
 import type { PersonalCheckpoint } from '../../../plugins/feishu-personal.ts';
 import type { PersonalAccount, PersonalProvider } from '../../../plugins/feishu-personal.ts';
 import type { AppConfig, InboxThing } from '../../../packages/protocol/src/index.ts';
@@ -28,6 +29,9 @@ export function createPersonalMessages(options: {
   canCollect(): boolean; ingest(source: string, things: InboxThing[]): Promise<unknown>;
   /** Detached observer work must recheck this collection generation immediately before writing. */
   observeAi?(source: string, messages: PersonalAiMessage[], assertCurrent: () => void): void | Promise<void>;
+  // Freeze the edit-history consent generation before the provider starts reading a page.
+  accountChanged?():void;
+  captureEdits?(account:PersonalAccount):((rows:FeishuEditObservation[])=>void)|undefined;
   collectRelations?(source:string,ownerId:string,things:InboxThing[],evidence:CollectedReplyEvidence[],assertCurrent:()=>void):void;
   observeReplies?(source: string, evidence: CollectedReplyEvidence[]): Promise<unknown> | unknown;
 }) {
@@ -107,6 +111,7 @@ export function createPersonalMessages(options: {
     view = { status: problem.kind === 'expired' ? 'expired' : 'failed', enabled: false, error: problem.message,
       recovery: problem.kind === 'needs_application' ? 'connect_application' : problem.kind === 'permissions' ? 'permissions' : 'retry',
       ...(view.permissionUrl ? { permissionUrl: view.permissionUrl } : {}) };
+    options.accountChanged?.();
   }
   function schedule() {
     clearTimeout(timer);
@@ -137,6 +142,7 @@ export function createPersonalMessages(options: {
           saved.checkpoint = preparePersonalCheckpoint({ appId: account.appId, openId: account.openId, profile: account.profile }, saved.checkpoint); persist();
         }
         // Own the result before yielding to callbacks, including the checkpoint.
+        const captureEdits=provider.collectBatch && options.captureEdits?.(account);
         const batch = provider.collectBatch ? structuredClone(await provider.collectBatch(account, signal, structuredClone(saved.checkpoint))) : undefined;
         const things = batch ? batch.items : await provider.collect(account, signal);
         assertCurrent();
@@ -155,6 +161,7 @@ export function createPersonalMessages(options: {
         await options.ingest(source, things);
         // Ingest may yield while stop, cancel or new authorization changes the owner.
         assertCurrent();
+        if(batch?.editObservations?.length) captureEdits?.(batch.editObservations);
         if(batch) options.collectRelations?.(source,account.openId,things,batch.evidence ?? [],assertCurrent);
         assertCurrent();
         options.collectMeetingMemory?.(source, things);
@@ -197,7 +204,7 @@ export function createPersonalMessages(options: {
       pending = provider.verify(account, signal).then(verified => {
         if (closed || epoch !== generation) return;
         if (verified.openId !== account.openId || verified.appId !== account.appId || verified.profile !== account.profile) throw new PersonalAuthError('failed');
-        view = { status: 'connected', enabled: saved.enabled, account: { name: verified.name } };
+        view = { status: 'connected', enabled: saved.enabled, account: { name: verified.name } };options.accountChanged?.();
         if (view.enabled) { void collect().catch(() => {}); }
       }).catch(error => { if (!closed && epoch === generation) fail(error); });
     },
@@ -205,7 +212,7 @@ export function createPersonalMessages(options: {
       if (closed) throw new Error('飞书授权服务已关闭');
       if (demo) throw new Error('演示模式不会授权或读取真实飞书账号。请在正式运行的工作台使用此功能。');
       if (['preparing', 'waiting_for_scan', 'verifying'].includes(view.status)) return status();
-      reset(); saved.enabled = false; delete saved.checkpoint; persist(); view = { status: 'preparing', enabled: false };
+      reset(); saved.enabled = false; delete saved.checkpoint; persist(); view = { status: 'preparing', enabled: false };options.accountChanged?.();
       const epoch = generation, signal = abort.signal;
       pending = (async () => {
         try {
@@ -223,13 +230,13 @@ export function createPersonalMessages(options: {
           if (closed || epoch !== generation) return;
           clearTimeout(expiration);
           saved = { account, enabled: false }; persist();
-          view = { status: 'connected', enabled: false, account: { name: account.name } };
+          view = { status: 'connected', enabled: false, account: { name: account.name } };options.accountChanged?.();
         } catch (error) { if (!closed && epoch === generation) { clearTimeout(expiration); fail(error); } }
       })();
       return status();
     },
     cancel() {
-      reset(); saved.enabled = false; persist(); view = { status: 'cancelled', enabled: false }; return status();
+      reset(); saved.enabled = false; persist(); view = { status: 'cancelled', enabled: false };options.accountChanged?.(); return status();
     },
     async enable(value: unknown) {
       if (typeof value !== 'boolean') throw new Error('enabled 必须为布尔值');

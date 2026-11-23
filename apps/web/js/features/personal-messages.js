@@ -2,6 +2,7 @@ import { h, replace } from '../lib/dom.js';
 import { Banner, Button, Card, Dot } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 
+import {editHistoryActive,showEditHistorySettings} from './feishu-edit-history.js';
 import { createPersonalAI } from './personal-ai.js';
 
 const waiting = new Set(['preparing', 'waiting_for_scan', 'verifying']);
@@ -22,6 +23,7 @@ export function createPersonalMessagesUI({ api, store, router, onConnectApplicat
   const accountState = () => loaded && !working && !state.demo && state.status === 'connected' ? state : undefined;
   const personalAI = createPersonalAI({ api, store, accountState });
   const aiButton = () => accountState() && Button({ label: '个人消息 /ai 设置', size: 'sm', onClick: personalAI.open });
+  const historyButton=()=>accountState() && editHistoryActive(store,api) && Button({label:'个人消息编辑历史',size:'sm',onClick:()=>showEditHistorySettings(api,store,accountState)});
   const body = h('div', { class: 'stack' });
   const el = Card({ title: '飞书 CLI 个人消息采集（可选）', hint: 'channel.collect', id: 'channel-collect', body });
   const summary = () => !loaded ? (loadError ? '账号状态无法核实' : '正在读取账号状态…') : state.enabled ? state.collecting ? '正在读取一批消息…' : '自动采集已开启' : state.status === 'connected' ? '已停止采集（账号已授权）' : labels[state.status] ?? '未授权';
@@ -71,7 +73,7 @@ export function createPersonalMessagesUI({ api, store, router, onConnectApplicat
       h('div', { class: 'row row--between' }, h('div', { class: 'row' }, Dot(state.enabled ? 'ok' : waiting.has(state.status) ? 'warn' : ''),
         h('span', null, `${state.account?.name ? `${state.account.name} · ` : ''}${summary()}`)),
       Button({ label: state.status === 'connected' ? '管理采集' : waiting.has(state.status) ? '查看授权进度' : '授权飞书账号', kind: 'primary', size: 'sm', onClick: open })),
-      aiButton(),
+      aiButton(),historyButton(),
       loaded && !accountState() && h('p', { class: 'small muted' }, state.demo ? '演示模式无法配置个人消息 /ai。' : '账号授权状态确认后可配置个人消息 /ai。'),
       loaded && completeness(),
       h('p', { class: 'small muted' }, '智能纪要助手发来的会议内容和纪要文档会进入整理队列，整理后可在「记忆 → 个人」查看。'),
@@ -97,7 +99,7 @@ export function createPersonalMessagesUI({ api, store, router, onConnectApplicat
       state.recovery === 'permissions' && permissionUrl && h('a', { href: permissionUrl, target: '_blank', rel: 'noopener noreferrer' }, '打开此应用的飞书权限设置（应用管理员操作）'),
       state.lastCollectedAt && h('p', { class: 'small muted' }, `最近一批：${new Date(state.lastCollectedAt).toLocaleString('zh-CN')}，读取并提交 ${state.collected ?? 0} 条消息记录。`),
       state.lastCollectedAt && state.collected === 0 && h('p', { class: 'small muted' }, state.hasMore ? '本批没有可入箱消息；其余读取仍在继续，不能据此判断所有来源都没有新消息。' : '本批没有可入箱消息。起点以前的历史消息不会自动回填。'),
-      aiButton(),
+      aiButton(),historyButton(),
       loaded && completeness());
     const disabled = working || !loaded || state.demo;
     replace(drawer.foot,
@@ -121,6 +123,15 @@ export function createPersonalMessagesUI({ api, store, router, onConnectApplicat
     catch (error) { if (stamp !== revision) return; loaded = false; loadError = '无法读取飞书授权状态，请检查连接后重试。'; paint(); schedule(); throw error; }
     paint(); schedule();
   }
+  let active=editHistoryActive(store,api),accountChange=store.view.feishuEditHistoryChange;
+  store.subscribe?.(view=>{
+    const next=editHistoryActive(store,api);
+    if(next!==active){active=next;paint();}
+    if(accountChange!==view.feishuEditHistoryChange){
+      accountChange=view.feishuEditHistoryChange;
+      if(accountChange?.accountChanged && router.current.page==='channels') {loaded=false;paint();void refresh().catch(()=>{});}
+    }
+  });
   paint();
   return { el, refresh };
 }

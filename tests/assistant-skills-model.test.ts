@@ -4111,8 +4111,14 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
     if(req.lastRole==='user'){
       if(JSON.stringify(req.content).includes('核对隔离')){
         assert.ok(!req.tools.includes('inbox_tree'));
+        assert.ok(!req.tools.includes('inbox_edit_history'));
         assert.doesNotMatch(req.system,/优先用 inbox_tree/);
         return call('inbox_list',{query:'合成中心'},'restricted-list');
+      }
+      if(JSON.stringify(req.content).includes('编辑历史')){
+        assert.ok(req.tools.includes('inbox_edit_history'));
+        assert.match(req.system,/不能据此断定从未编辑/);
+        return call('inbox_edit_history',{id:center},'edits');
       }
       assert.ok(req.tools.includes('inbox_tree'));
       assert.match(req.system,/优先用 inbox_tree/);
@@ -4123,6 +4129,12 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
     }
     const raw=typeof req.content==='string'?req.content:(req.content as {text:string}[])[0].text;
     const result=JSON.parse(raw);
+    if(req.callId==='edits'){
+      assert.equal(result.versions[0].text,'合成旧正文');
+      assert.equal(result.versions[0].replacedAt,'2026-01-01T08:00:00Z');
+      assert.equal(result.truncated,false);
+      return {role:'assistant',content:'采集到的上一版是合成旧正文。'};
+    }
     if(req.callId==='lookup' || req.callId==='after-unlink' || req.callId==='restricted-list'){
       assert.equal(result.items.length,1);
       assert.equal(result.items[0].id,center);
@@ -4172,6 +4184,14 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
     await adapter.onMessage(bot.pairingCode,{...owner,messageId:'pair'});
     await adapter.onMessage('核对同一事项的收件关系',{...owner,messageId:'tree'});
     await t.waitFor(()=>assert.ok(sent.includes(expected),sent.join(' / ')));
+    server.app.setFeishuEditHistoryReader(id=>{
+      assert.equal(id,center);
+      return {versions:[{text:'合成旧正文',replacedAt:'2026-01-01T08:00:00Z'}],truncated:false};
+    });
+    const editQuestion='请核对合成中心收件的编辑历史，编号 '+center;
+    assert.equal(await ask(editQuestion),'采集到的上一版是合成旧正文。');
+    await adapter.onMessage(editQuestion,{...owner,messageId:'edit-history'});
+    await t.waitFor(()=>assert.ok(sent.includes('采集到的上一版是合成旧正文。')));
     const restricted='收件列表没有披露关系。';
     assert.equal(await ask('核对隔离','/projects/'+project.id+'/messages'),restricted);
     await adapter.onMessage('核对隔离',{...owner,chatType:'group',chatId:'oc_group',mentionedSelf:true,messageId:'tree-group'});

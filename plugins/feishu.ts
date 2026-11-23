@@ -1,4 +1,6 @@
 import { groupTaskCommand, readGroupCommand, readGroupPost, topicGroupCommand } from './feishu-read-command.ts';
+import type { FeishuEditObservation } from './feishu-edit-history.ts';
+export type { FeishuEditObservation } from './feishu-edit-history.ts';
 import { renderFeishuPost } from './feishu-post.ts';
 import { imageSize } from 'image-size';
 import { chatImageLimits, type ChatImageInput, type PersonalAiMessage } from '../packages/protocol/src/index.ts';
@@ -29,7 +31,7 @@ export interface PersonalCheckpoint {
     privateRange?: { start: string; end: string };
   };
 }
-export interface PersonalBatch { aiMessages?: PersonalAiMessage[]; items: InboxThing[]; checkpoint: PersonalCheckpoint; hasMore: boolean; evidence?: CollectedReplyEvidence[] }
+export interface PersonalBatch { editObservations?: FeishuEditObservation[]; aiMessages?: PersonalAiMessage[]; items: InboxThing[]; checkpoint: PersonalCheckpoint; hasMore: boolean; evidence?: CollectedReplyEvidence[] }
 export const PERSONAL_COLLECTION_BOUNDARY = '首次读取最近24小时；后续从已完成水位重叠5分钟读取。私聊优先；群聊只选按最近活跃时间排序的前100个会话中，未解散且明确未免打扰的群，最低优先级分批读取。未完成的群读取保留原时间范围，私聊可独立推进。默认分页采集按命中消息独立入箱。不保证全部群、永久历史或任意旧编辑的全量同步。';
 /** Pin the window before the first read as well as after each successful ingestion. */
 export function preparePersonalCheckpoint(binding: PersonalCheckpoint['binding'], previous?: PersonalCheckpoint): PersonalCheckpoint {
@@ -813,7 +815,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
       }
       delete checkpoint.window;
     }
-    return { items, checkpoint, hasMore, evidence, aiMessages };
+    return { items, checkpoint, hasMore, evidence, aiMessages, editObservations: editObservations(messages) };
   }
   /** Large group directories must not hold private messages or durable progress behind a full scan. */
   async function collectIncremental(previous: PersonalCheckpoint | undefined, limit: number): Promise<PersonalBatch> {
@@ -885,7 +887,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
       else { delete checkpoint.directThrough; delete checkpoint.groupRetryFrom; }
       delete checkpoint.window;
     }
-    return { items, checkpoint, hasMore, evidence, aiMessages };
+    return { items, checkpoint, hasMore, evidence, aiMessages, editObservations: editObservations(messages) };
   }
   async function readIncrementalLane(lane: SearchLane, start: string, end: string): Promise<Row[]> {
     const read = () => cliPage(['+messages-search', '--start', start, '--end', end,
@@ -903,6 +905,35 @@ export function createFeishuIntegration(options: FeishuOptions) {
     if (more) { if (lane.token) lane.seen.push(lane.token); lane.token = next; }
     else { lane.seen = []; delete lane.token; }
     return scopedHits(page.messages, lane);
+  }
+  function editObservations(messages: Row[]): FeishuEditObservation[] {
+    const observations: FeishuEditObservation[] = [];
+    for (const hit of messages) {
+      const chatId = string(hit.chat_id), messageId = string(hit.message_id);
+      const sender = object(hit.sender), senderId = string(sender.id);
+      const senderType = string(sender.sender_type) || string(hit.sender_type) || string(sender.type);
+      if (!validChatId(chatId) || !/^om_[A-Za-z0-9_-]+$/.test(messageId)
+        || !/^ou_[A-Za-z0-9_-]+$/.test(senderId) || senderId === options.personalOpenId
+        || (sender.id_type !== undefined && sender.id_type !== 'open_id') || (senderType && senderType !== 'user')) continue;
+      const edited = hit.updated === true || hit.edited === true;
+      if (hit.deleted === true) {
+        // A confirmed recall is terminal, including receipts which omit the timestamp and body.
+        observations.push({chatId,messageId,senderId,edited:false,deleted:true,timestamp:''});
+        continue;
+      }
+      if ((hit.msg_type ?? hit.message_type) !== 'text' || typeof hit.content !== 'string') continue;
+      // The CLI search shortcut returns converted text. Do not parse author-written JSON as a second envelope.
+      let timestamp: string | undefined;
+      const rawTime = edited ? hit.update_time : hit.update_time ?? hit.create_time;
+      // Locale-dependent dates have no reliable ordering across collector restarts.
+      if (typeof rawTime === 'string' && !/^\d+(?:\.\d+)?$/.test(rawTime)
+        && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(rawTime)) continue;
+      try { timestamp = isoTime(rawTime); }
+      catch { continue; }
+      if (!timestamp) continue;
+      observations.push({chatId,messageId,senderId,text:hit.content,timestamp,edited,deleted:false});
+    }
+    return observations;
   }
   function messageEvidence(messages: Row[]): CollectedReplyEvidence[] {
     const matches = new Map<string, CollectedReplyEvidence>();

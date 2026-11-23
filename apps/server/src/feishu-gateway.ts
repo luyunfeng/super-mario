@@ -12,6 +12,8 @@ import type { PersonalProvider } from '../../../plugins/feishu-personal.ts';
 import type { FeishuRegistrationProvider } from '../../../plugins/feishu-registration.ts';
 import type { AppConfig, Json } from '../../../packages/protocol/src/index.ts';
 import { createFeishuController } from './feishu.ts';
+import {inboxItemId} from '../../../packages/core/src/inbox.ts';
+import {createFeishuEditHistory} from '../../../plugins/feishu-edit-history.ts';
 import {collectInboxRelations} from './feishu-inbox-relations.ts';
 import { createPersonalMessages } from './feishu-personal.ts';
 import type { GroupReadService } from './feishu-group-read-delivery.ts';
@@ -35,6 +37,11 @@ export function createFeishuGateway(
   dependencies: FeishuGatewayDependencies = {},
 ) {
   const feishu = createFeishuController(app, config);
+  const history=createFeishuEditHistory(app.store);
+  const historyPlugins=['feishu','feishu-edit-history'];
+  const historyActive=()=>historyPlugins.every(id=>app.plugins.list().some(plugin=>plugin.id===id && plugin.status==='active'));
+  const generation=()=>historyPlugins.map(id=>app.store.get<{revision:number}>('core.plugin-settings',id)?.revision??1).join(':');
+  const accountKey=(account:{profile:string;appId:string;openId:string})=>createHash('sha256').update(JSON.stringify([account.profile,account.appId,account.openId])).digest('hex');
   const personal: ReturnType<typeof createPersonalMessages> = createPersonalMessages({
     aiEnabled: () => personalAi.status().enabled,
     observeAi: (source, messages, assertCurrent) => personalAi.observe(source, messages, assertCurrent),
@@ -44,6 +51,15 @@ export function createFeishuGateway(
     canCollect: () => ['feishu', 'inbox-triage'].every(id => app.plugins.list().some(plugin => plugin.id === id && plugin.status === 'active')),
     ingest: (source, things) => app.inbox.ingest(source, things),
     collectMeetingMemory: app.collectMeetingMemory,
+    accountChanged:()=>app.events.publish('feishu.edit-history.changed',{accountChanged:true}),
+    captureEdits(account) {
+      if(!historyActive()) return;
+      const key=accountKey(account),settings=history.settings(key),epoch=generation();
+      if(!settings.enabled) return;
+      return observations=>{
+        if(historyActive() && generation()===epoch) history.observe(key,settings.revision,observations);
+      };
+    },
     collectRelations:(...args)=>collectInboxRelations(app.store,app.inbox.offerConnectorParent,app.waitingReplies.observedSource,...args),
     observeReplies: (source, evidence) => app.waitingReplies.observeSource(source, evidence),
   });
@@ -65,9 +81,38 @@ export function createFeishuGateway(
   });
   function personalAiView() {
     const account = personal.sourceAccount();
-    const accountKey = account ? createHash('sha256').update(JSON.stringify([account.profile, account.appId, account.openId])).digest('hex') : '';
-    return { ...personalAi.status(), accountKey };
+    return { ...personalAi.status(), accountKey:account?accountKey(account):'' };
   }
+  function currentHistory() {
+    if(!historyActive()) throw new InputError('飞书或消息编辑历史插件未启用',503);
+    const account=personal.sourceAccount();
+    if(!account) throw new InputError('请先连接并核验个人飞书账号',409);
+    const key=accountKey(account);
+    return {...history.settings(key),accountKey:key,source:'feishu:'+account.appId+':'+account.openId};
+  }
+  function configureHistory(input:Record<string,unknown>) {
+    const current=currentHistory();
+    if(Object.keys(input).some(key=>!['accountKey','revision','enabled'].includes(key)) ||
+      typeof input.enabled!=='boolean' || typeof input.revision!=='number' || !Number.isSafeInteger(input.revision) || input.revision<0)
+      throw new InputError('编辑历史设置或版本无效',400);
+    if(input.accountKey!==current.accountKey) throw new InputError('个人飞书账号已变化，请重新读取设置',409);
+    const updated=history.configure(current.accountKey,input.enabled,input.revision);
+    if(updated.revision!==current.revision) app.events.publish('feishu.edit-history.changed',{accountKey:current.accountKey,revision:updated.revision});
+    return {...current,...updated};
+  }
+  function readEditHistory(id:string) {
+    const state=currentHistory(),item=app.store.get<import('../../../packages/protocol/src/index.ts').InboxItem>('inbox',id);
+    if(!item || item.id!==id || item.source!==state.source || !item.thread.startsWith('feishu:message:'))
+      throw new InputError('当前账号没有这条原始飞书收件',404);
+    if(!state.enabled) throw new InputError('个人消息编辑历史已关闭',403);
+    const chatId=item.origin?.chatId,messageId=item.last.split(':')[0];
+    if(!chatId || !/^oc_[a-zA-Z0-9_-]+$/.test(chatId) || !messageId || !/^om_[a-zA-Z0-9_-]+$/.test(messageId) ||
+      item.thread!=='feishu:message:'+JSON.stringify([chatId,messageId]) || inboxItemId(item.source,item.thread)!==id ||
+      app.waitingReplies.observedSource(item.source,chatId,messageId)?.deleted)
+      throw new InputError('无法核对原始飞书消息',404);
+    return history.read(state.accountKey,chatId,messageId);
+  }
+  app.setFeishuEditHistoryReader(readEditHistory);
   function configurePersonalAi(input: Record<string, unknown>) {
     const { expectedAccountKey, ...settings } = input;
     if (expectedAccountKey !== undefined && personalAiView().accountKey !== expectedAccountKey) throw new InputError('个人账号已变更，请重新打开设置', 409);
@@ -202,5 +247,5 @@ export function createFeishuGateway(
   );
   app.setFeishuStatus(() => ({ ...feishu.status(), reason: feishu.status().reason ?? '' }));
 
-  return { feishu, personal, personalAi, personalAiView, configurePersonalAi, personalView, bots, registrations, registrationView, proposeMail, commandGroup };
+  return { feishu, personal, currentHistory, configureHistory, readEditHistory, personalAi, personalAiView, configurePersonalAi, personalView, bots, registrations, registrationView, proposeMail, commandGroup };
 }
