@@ -174,6 +174,9 @@ export function createSearch({ shell, store, router, api, scope }) {
     const day = h('input', { type: 'date' });
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const dayFilter = !isRun && !isMeeting && h('label', { class: 'row' }, '发言日期（' + timeZone + '）', day);
+    const meetingProject = isMeeting && h('select', {}, h('option', { value: '' }, '全部项目及个人'),
+      store.view.snapshot.projects.filter(project => !project.archivedAt).map(project => h('option', { value: project.id }, project.name)));
+    const projectFilter = isMeeting && h('label', { class: 'row' }, '会议所属项目', meetingProject);
     const moreLabel = '查看更多' + kind;
     const owner = api.draftOwner();
     const current = () => drawer.el.open && api.draftOwner() === owner && store.view.snapshotOwner === owner &&
@@ -219,7 +222,7 @@ export function createSearch({ shell, store, router, api, scope }) {
       status.textContent = '正在读取' + kind + '…';
       try {
         const reply = isMeeting
-          ? await api.get('/knowledge/meeting-search?' + new URLSearchParams({ query, offset: String(cursor) }))
+          ? await api.get('/knowledge/meeting-search?' + new URLSearchParams({ query, offset: String(cursor), ...(meetingProject.value && { projectId: meetingProject.value }) }))
           : await api.post('/project-message-search', { query, before: cursor, limit: 25, ...(role.value && { role: role.value }), ...(day.value && { sentDay: day.value, timeZone }) });
         if (!current() || stamp !== generation) return;
         for (const row of (isMeeting ? reply.meetings : reply.hits)) rows.set(isMeeting ? row.sourceId : row.id, row);
@@ -238,15 +241,16 @@ export function createSearch({ shell, store, router, api, scope }) {
       generation++;
       visibleLimit = 25;
       rows.clear();
-      cursor = undefined;
+      cursor = isMeeting ? 0 : undefined;
       more.disabled = false;
       more.hidden = true;
       render();
       if (!fromSnapshot) void load();
     }
+    if (isMeeting) meetingProject.addEventListener('change', changeFilter);
     role.addEventListener('change', changeFilter);
     day.addEventListener('change', changeFilter);
-    const drawer = openDrawer({ title: kind + '搜索结果', subtitle: query, body: [roleFilter, dayFilter, status, list, more], onClose: () => unsubscribe() });
+    const drawer = openDrawer({ title: kind + '搜索结果', subtitle: query, body: [projectFilter, roleFilter, dayFilter, status, list, more], onClose: () => unsubscribe() });
     const unsubscribe = store.subscribe(render);
     if (fromSnapshot) render();
     else void load();

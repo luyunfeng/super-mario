@@ -716,7 +716,11 @@ test('会议日回顾按时区和项目分页，空结果区分未注日期，�
   await results.getByRole('button', { name: '查看全部匹配会议' }).click();
   const allMeetings = page.getByRole('dialog', { name: '会议搜索结果' });
   await expect(allMeetings.getByRole('status')).toHaveText('已显示 25 / 26 场会议');
-  await page.route('**/knowledge/meeting-search?*offset=25', route =>
+  const filtered = page.waitForRequest(request => new URL(request.url()).searchParams.get('projectId') === project.id && request.url().includes('/meeting-search?'));
+  await allMeetings.getByLabel('会议所属项目').selectOption(project.id);
+  expect(new URL((await filtered).url()).searchParams.get('offset')).toBe('0');
+  await expect(allMeetings.getByRole('status')).toHaveText('已显示 25 / 26 场会议');
+  await page.route('**/knowledge/meeting-search?*offset=25*', route =>
     route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '暂时不可用' }) }), { times: 1 });
   await allMeetings.getByRole('button', { name: '查看更多会议' }).click();
   await expect(allMeetings.getByRole('status')).toContainText('会议检索失败');
