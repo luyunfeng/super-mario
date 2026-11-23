@@ -73,9 +73,15 @@ test('Web 和飞书从同一项目范围查询接下来三项已生效的定时�
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.match(req.system, /scheduled_work_list 的 upcoming/);
-      return call('scheduled_work_list', {}, 'upcoming');
+      const question = JSON.stringify(req.content);
+      return call('scheduled_work_list', {}, question.includes('暂停安排1') ? 'before-pause' : question.includes('恢复安排1') ? 'before-resume' : 'upcoming');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    if (req.callId?.startsWith('before-')) {
+      const row = JSON.parse(raw).items.find((item: { title: string }) => item.title === '安排1');
+      return call('scheduled_work_set_paused', { id: row.id, version: row.version, scheduleVersion: row.scheduleVersion, paused: req.callId === 'before-pause' }, 'changed');
+    }
+    if (req.callId === 'changed') return { role: 'assistant', content: '调度状态 ' + JSON.parse(raw).scheduleStatus };
     const titles = JSON.parse(raw).upcoming.map((item: { title: string }) => item.title);
     assert.deepEqual(titles, ['安排1', '安排2', '安排3']);
     return { role: 'assistant', content: titles.join('、') };
@@ -99,6 +105,9 @@ test('Web 和飞书从同一项目范围查询接下来三项已生效的定时�
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
     await adapter.onMessage(question, { ...source, messageId: 'upcoming' });
     await t.waitFor(() => assert.ok(sent.includes('安排1、安排2、安排3')));
+    await adapter.onMessage('请暂停安排1', { ...source, messageId: 'pause' });
+    await t.waitFor(() => assert.ok(sent.includes('调度状态 paused')));
+    assert.equal(await ask('请恢复安排1', '/projects/' + project.id + '/messages'), '调度状态 active');
     assert.equal(server.app.store.list('runs').length, 0);
   } finally { await server.close(); }
 });

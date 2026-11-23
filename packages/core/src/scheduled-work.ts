@@ -143,24 +143,41 @@ export function createScheduledWork({ store, events, schedules, proposeApproval,
       if (!r || a.kind !== scheduledWorkApprovalKind || a.version !== r.approvalVersion || !same(a.params, r.approvalParams) || a.todoId !== r.input.todoId || r.status === 'cancelled') return fail('创建预览版本或内容已改变');
       check(r);
       if (r.scheduleId) {
-        current(r);
-        return { scheduleId: r.scheduleId, version: r.scheduleVersion! };
+        current(r, true);
+        return { scheduleId: r.scheduleId, version: r.initialScheduleVersion ?? r.scheduleVersion! };
       }
       const s = api.create({ ...r.input.schedule, name: `scheduled-work:${r.id}:v${r.version}`, missed: 'coalesce', payload: { scheduledWork: true, workId: r.id, workVersion: r.version } });
       store.put(records, r.id, { ...r, status: 'active', scheduleId: s.id, scheduleVersion: s.version });
       return { scheduleId: s.id, version: s.version };
     });
   }
-  function current(r: ScheduledWorkRecord) {
+  function current(r: ScheduledWorkRecord, allowPaused = false) {
     check(r);
     const creation = store.get<Approval>('approvals', r.approvalId);
     if (!creation || creation.kind !== scheduledWorkApprovalKind || creation.version !== r.approvalVersion
       || !['running', 'completed', 'unknown'].includes(creation.status) || !same(creation.params, r.approvalParams)
       || creation.todoId !== r.input.todoId) return fail('原创建审批证据已改变');
     const s = api.list().find(s => s.id === r.scheduleId);
-    if (r.status !== 'active' || !s || s.version !== r.scheduleVersion || !['active', 'done'].includes(s.status)
+    if (r.status !== 'active' || !s || s.version !== r.scheduleVersion || !(s.status === 'active' || s.status === 'done' || (allowPaused && s.status === 'paused'))
       || !same(s.payload, { scheduledWork: true, workId: r.id, workVersion: r.version })) return fail('周期工作版本已失效');
     return s;
+  }
+  // Pausing changes delivery generations, but an already claimed occurrence retains its approval.
+  function samePlan(r: ScheduledWorkRecord, o: ScheduledWorkOccurrence) {
+    return r.version === o.workVersion && r.scheduleId === o.scheduleId && r.scheduleVersion !== undefined
+      && o.scheduleVersion >= (r.initialScheduleVersion ?? r.scheduleVersion) && o.scheduleVersion <= r.scheduleVersion;
+  }
+  function setPaused(id: string, version: number, scheduleVersion: number, paused: boolean) {
+    return store.transaction(() => {
+      const r = store.get<ScheduledWorkRecord>(records, id);
+      if (!r || r.version !== version || r.scheduleVersion !== scheduleVersion) return fail('计划版本已变化，请核对当前计划');
+      const s = current(r, true);
+      if (s.status !== (paused ? 'active' : 'paused')) return fail('此计划当前不能' + (paused ? '暂停' : '恢复'));
+      const next = api.update(s.id, { status: paused ? 'paused' : 'active' }, s.version);
+      store.put(records, id, { ...r, initialScheduleVersion: r.initialScheduleVersion ?? s.version, scheduleVersion: next.version });
+      events.publish('scheduled.work.changed', { id });
+      return { id, scheduleVersion: next.version, scheduleStatus: next.status };
+    });
   }
   function blocked(r: ScheduledWorkRecord): boolean {
     return store.list<ScheduledWorkOccurrence>(occurrences).filter(o => o.workId === r.id).some(o => {
@@ -170,7 +187,7 @@ export function createScheduledWork({ store, events, schedules, proposeApproval,
       if (!a || ['running', 'unknown'].includes(a.status)) return true;
       // Invalidated pending approvals can no longer execute. Unknown/running
       // actions and active Runs remain blockers even across plan revisions.
-      if (a.status === 'pending') return o.workVersion === r.version && o.scheduleVersion === r.scheduleVersion;
+      if (a.status === 'pending') return samePlan(r, o);
       const runId = store.get<string>('dispatch-keys', `approval:${a.id}:${a.version}`) ?? (a.result as JsonObject | undefined)?.runId;
       const run = typeof runId === 'string' ? store.get<Run>('runs', runId) : undefined;
       // A completed receipt without a traceable Run is uncertain, never evidence to repeat.
@@ -228,8 +245,8 @@ export function createScheduledWork({ store, events, schedules, proposeApproval,
       // Check closed before reading the store: close may precede database shutdown.
       if (closed) fail('周期工作已关闭');
       const live = store.get<ScheduledWorkRecord>(records, r.id);
-      if (!live || live.version !== r.version || live.scheduleId !== o.scheduleId || live.scheduleVersion !== o.scheduleVersion) fail('周期工作版本已失效');
-      current(live!);
+      if (!live || !samePlan(live, o)) fail('周期工作版本已失效');
+      current(live!, true);
       if (store.get<ScheduledWorkOccurrence>(occurrences, o.key)?.status !== 'claimed') fail('周期工作执行范围已失效');
     };
     try {
@@ -256,13 +273,13 @@ export function createScheduledWork({ store, events, schedules, proposeApproval,
       || a.version !== o.approvalVersion || !same(a.params, o.dispatchParams)) return fail('周期派发审批证据已失效');
     const r = store.get<ScheduledWorkRecord>(records, o.workId);
     if (!r || r.version !== o.workVersion || a.todoId !== r.input.todoId) return fail('周期派发范围已失效');
-    const s = current(r);
-    if (s.id !== o.scheduleId || s.version !== o.scheduleVersion) return fail('周期派发调度已改变');
+    current(r, true);
+    if (!samePlan(r, o)) return fail('周期派发调度已改变');
     return o;
   }
   const off = events.subscribe(e => { if (['projects.changed', 'todos.changed', 'plugins.changed'].includes(e.type)) sync(); });
   sync();
-  return { propose, approveCreation, handle, assertDispatchCurrent, sync,
+  return { propose, setPaused, approveCreation, handle, assertDispatchCurrent, sync,
     list() {
       sync();
       const history = store.list<ScheduledWorkOccurrence>(occurrences);

@@ -134,6 +134,29 @@ test('cron timezone uses real coalesce: only latest missed occurrence is consume
   assert.equal((await f.work.handle(e)).status, 'done'); assert.equal(f.briefCount, 1);
 });
 
+test('暂停阻断未来触发，恢复核对版本，暂停前的派发审批仍可单独处理', async t => {
+  const f = fixture(t);
+  const creation = await f.activate({ action: dispatch });
+  const due = f.due('2026-01-01T00:01:00Z');
+  await f.work.handle(due);
+  const row = f.work.list()[0];
+  const paused = f.work.setPaused(row.id, row.version, row.scheduleVersion!, true);
+  assert.deepEqual(f.work.approveCreation(creation), creation.result);
+  await f.restart();
+  f.due('2026-01-01T00:05:00Z');
+  assert.equal(f.eventbox.events().filter(e => e.type === 'schedule.due').length, 1);
+  assert.throws(() => f.work.setPaused(row.id, row.version, row.scheduleVersion!, false), /版本/);
+  const original = f.approvals.list().find(a => a.kind === 'dispatch')!;
+  assert.equal((await f.approvals.approve(original.id, original.version)).status, 'completed');
+  assert.equal(f.dispatchCount, 1);
+  const resumed = f.work.setPaused(row.id, row.version, paused.scheduleVersion, false);
+  assert.equal(resumed.scheduleStatus, 'active');
+  assert.equal((await f.work.handle(due)).status, 'skip');
+  f.due('2026-01-01T00:06:00Z');
+  assert.equal(f.eventbox.events().filter(e => e.type === 'schedule.due').length, 2);
+  assert.equal(f.dispatchCount, 1);
+});
+
 test('pending and unknown dispatch approvals do not accumulate, including after restart', async t => {
   const f = fixture(t); await f.activate({ action: dispatch });
   const e = f.due('2026-01-01T00:01:00Z');

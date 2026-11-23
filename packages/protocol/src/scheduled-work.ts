@@ -18,7 +18,7 @@ export interface ScheduledWorkScope {
 export interface ScheduledWorkRecord {
   id: string; version: number; input: ScheduledWorkInput; sourceMessage: Message;
   approvalId: string; approvalVersion: number; approvalParams: { [key: string]: Json };
-  status: 'pending' | 'active' | 'cancelled'; scheduleId?: string; scheduleVersion?: number;
+  status: 'pending' | 'active' | 'cancelled'; scheduleId?: string; scheduleVersion?: number; initialScheduleVersion?: number;
 }
 export interface ScheduledWorkOccurrence {
   key: string; workId: string; workVersion: number; scheduleId: string; scheduleVersion: number; scheduledFor: string;

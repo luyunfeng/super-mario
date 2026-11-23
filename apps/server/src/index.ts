@@ -292,6 +292,12 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res,200,app.scheduledWork.list(Object.fromEntries(url.searchParams)));
         }
         if (path === '/api/v1/scheduled-work' && method === 'POST') return json(res,201,app.scheduledWork.propose(await body(req)));
+        const pauseScheduled = path.match(/^\/api\/v1\/scheduled-work\/([^/]+)\/(pause|resume)$/);
+        if (pauseScheduled && method === 'POST') {
+          const input = await body(req);
+          if (Object.keys(input).some(key => !['version', 'scheduleVersion'].includes(key))) throw new InputError('周期工作参数无效');
+          return json(res, 200, app.scheduledWork.changeTiming({ ...input, id: decodeURIComponent(pauseScheduled[1]!), paused: pauseScheduled[2] === 'pause' }));
+        }
         const cancelScheduled=path.match(/^\/api\/v1\/scheduled-work\/([^/]+)\/cancel$/);
         if(cancelScheduled&&method==='POST') {
           const input=await body(req);if(Object.keys(input).some(key=>key!=='version'))throw new InputError('周期工作取消参数无效');

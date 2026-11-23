@@ -25,7 +25,7 @@ test('plugin-owned tools mount and unmount strictly with their owning system ext
     ['inbox-triage', ['inbox_triage_status', 'inbox_list', 'inbox_assign_project', 'inbox_handling_read']],
     ['terminal-host', ['terminal_host_status', 'agent_sessions', 'session_resume']],
     ['knowledge-local', ['knowledge_ingest', 'knowledge_jobs']],
-    ['daily-brief', ['brief_read', 'scheduled_work_list', 'scheduled_work_propose', 'scheduled_work_cancel']],
+    ['daily-brief', ['brief_read', 'scheduled_work_list', 'scheduled_work_propose', 'scheduled_work_cancel', 'scheduled_work_set_paused']],
   ];
 
   for (const [pluginId, expectedTools] of groups) {

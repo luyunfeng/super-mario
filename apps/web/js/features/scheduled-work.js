@@ -85,11 +85,18 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       line(timingText(item.schedule)),
       line(`配置状态：${({ pending: '待创建确认', active: '已生效（仅配置生效）', cancelled: '已取消计划' })[item.status] ?? '未确认'} · 创建审批 ${approvalText(item.approvalStatus)}`),
       line(item.scheduleStatus === 'done' && item.schedule.kind === 'once' ? '单次计划已触发' : `调度状态：${({ active: '等待触发', paused: '已暂停', done: '已结束', cancelled: '已取消' })[item.scheduleStatus] ?? '未确认'}`),
-      line(`下次触发：${item.nextAt ? timeText(item.nextAt) : '未提供'}`),
+      line(item.scheduleStatus === 'paused' ? '恢复前不会触发' : `下次触发：${item.nextAt ? timeText(item.nextAt) : '未提供'}`),
       line(`最新实际结果：${latest ? occurrenceText(latest) : '尚无到期动作记录'}`),
       item.action.kind === 'brief' && line('事实简报仅程序汇总已接入事实，不自动调用模型或外发。'),
       line('上次动作结果未知或派发审批待批准时，暂停生成新动作。取消计划不会终止已派发的任务。'),
-      h('div', { class: 'row row--wrap' }, chatLink(), item.status !== 'cancelled' && Button({ label: '取消计划', size: 'sm', onClick: () => openCancel(item) })), details);
+      h('div', { class: 'row row--wrap' }, chatLink(), item.status === 'active' && ['active', 'paused'].includes(item.scheduleStatus) && Number.isSafeInteger(item.scheduleVersion) && Button({
+        label: item.scheduleStatus === 'paused' ? '恢复计划' : '暂停计划', size: 'sm', onClick: async () => {
+          if (syncIdentity()) { requestRead(); return; }
+          try {
+            const operation = item.scheduleStatus === 'paused' ? 'resume' : 'pause';
+            await api.post(`/scheduled-work/${encodeURIComponent(item.id)}/${operation}`, { version: item.version, scheduleVersion: item.scheduleVersion });
+          } finally { requestRead(); }
+        } }), item.status !== 'cancelled' && Button({ label: '取消计划', size: 'sm', onClick: () => openCancel(item) })), details);
   }
 
   function managedDrawer(options) {

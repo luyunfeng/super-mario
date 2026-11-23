@@ -71,7 +71,7 @@ export function createScheduledWorkService(options: {
       return {id:row.id,version:row.version,title:row.input.title,status:row.status,projectId:row.input.projectId,todoId:row.input.todoId,schedule:row.input.schedule,action:row.input.action,
         approvalId:row.approvalId,approvalStatus:store.get<Approval>('approvals',row.approvalId)?.status,
         source:{messageId:row.sourceMessage.id,createdAt:row.sourceMessage.createdAt},
-        nextAt:schedule?.nextAt,scheduleStatus:schedule?.status,
+        nextAt:schedule?.nextAt,scheduleStatus:schedule?.status,scheduleVersion:schedule?.version,
         occurrences:history.slice(0,20).map(o=>({key:o.key,scheduledFor:o.scheduledFor,status:o.status,approvalId:o.approvalId,
           approvalStatus:o.approvalId?store.get<Approval>('approvals',o.approvalId)?.status:undefined,result:o.result,
           kind:row.input.action.kind,...(o.error?{error:'结果未知，请核对原记录'}:{})})),occurrenceTotal:history.length,occurrencesTruncated:history.length>20};
@@ -94,6 +94,17 @@ export function createScheduledWorkService(options: {
       const approval=manager.propose(value,actual.id); events.publish('scheduled.work.changed',{approvalId:approval.id}); return approval;
     });
   }
+  function changeTiming(input: Record<string, unknown>, fromAgent = false) {
+    const { id, version, scheduleVersion, paused } = input;
+    if (typeof id !== 'string' || typeof version !== 'number' || !Number.isSafeInteger(version)
+      || typeof scheduleVersion !== 'number' || !Number.isSafeInteger(scheduleVersion) || typeof paused !== 'boolean') fail('需要当前工作版本、调度版本和暂停状态', 400);
+    if (fromAgent) {
+      const row = manager.list().find(row => row.id === id);
+      if (!row) fail('周期工作不存在', 404);
+      options.authorize({ action: row.input.action, projectId: row.input.projectId, todoId: row.input.todoId }, actor());
+    }
+    return manager.setPaused(id, version, scheduleVersion, paused);
+  }
   function cancel(input:Record<string,unknown>,fromAgent=false) {
     return store.transaction(()=>{
       const row=manager.list().find(r=>r.id===input.id);if(!row)fail('周期工作不存在',404);
@@ -103,7 +114,7 @@ export function createScheduledWorkService(options: {
     });
   }
   const off=events.subscribe(event=>{if(['projects.changed','todos.changed','plugins.changed','feishu.bots.changed','bots.changed'].includes(event.type)){manager.sync();cleanup();}});
-  return { list:publicRows,propose,cancel,approveCreation:manager.approveCreation,assertDispatchCurrent:manager.assertDispatchCurrent,
+  return { list:publicRows,propose,cancel,changeTiming,approveCreation:manager.approveCreation,assertDispatchCurrent:manager.assertDispatchCurrent,
     sync(){manager.sync();cleanup();},async handle(event:Parameters<typeof manager.handle>[0]){
       if(!options.ready())return {status:'retry' as const,reason:'channel_bindings_initializing',afterSec:1,deferred:true};
       const result=await manager.handle(event);cleanup();return result;

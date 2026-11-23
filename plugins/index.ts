@@ -157,6 +157,7 @@ export interface SystemActions {
   workDecisionReference?(input: Record<string, unknown>): Json;
   scheduledWorkList?(input: Record<string, unknown>): Json;
   scheduledWorkPropose?(input: Record<string, unknown>): Json;
+  scheduledWorkSetPaused?(input: Record<string, unknown>): Json;
   scheduledWorkCancel?(input: Record<string, unknown>): Json;
   followupCreate?(input: Record<string, unknown>): Json;
   followupList?(input: Record<string, unknown>): Json;
@@ -715,6 +716,9 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           propose.parameters.required = ['key', 'title', 'schedule', 'action'];
           context.contribute('tools', 'scheduled_work_propose', propose);
         }
+        if (actions?.scheduledWorkSetPaused) context.contribute('tools', 'scheduled_work_set_paused', tool('scheduled_work_set_paused',
+          '按用户要求暂停或恢复指定定时计划。先核对当前工作和调度版本。', async args => actions.scheduledWorkSetPaused!(args),
+          { id: { type: 'string' }, version: { type: 'integer' }, scheduleVersion: { type: 'integer' }, paused: { type: 'boolean' } }));
         if (actions?.scheduledWorkCancel) context.contribute('tools', 'scheduled_work_cancel', tool('scheduled_work_cancel', '按当前用户要求取消指定版本周期工作；停止未来安排，已经执行或结果未知的任务不自动撤销/重派。', async args => actions.scheduledWorkCancel!(args), { id: { type: 'string' }, version: { type: 'integer' } }));
       },
     },

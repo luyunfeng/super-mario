@@ -58,6 +58,12 @@ test('Agent 页修改主助手名称后同步到已有气泡，并发冲突保�
   await expect(upcoming).not.toContainText('待批准简报');
   await upcoming.getByRole('button', { name: '查看定时工作' }).click();
   await expect(first.locator('#agent-scheduled-work').getByRole('button', { name: '创建定时工作' })).toBeFocused();
+  const early = first.locator('#agent-scheduled-work article').filter({ hasText: '上午简报' });
+  await early.getByRole('button', { name: '暂停计划' }).click();
+  await expect(early).toContainText('恢复前不会触发');
+  await expect(upcoming).not.toContainText('上午简报');
+  await early.getByRole('button', { name: '恢复计划' }).click();
+  await expect(upcoming).toContainText(/上午简报.*下午复核/s);
   await expect(card(first)).toContainText('0 台');
   await expect(card(first)).toContainText('0 个');
   for (const page of [first, second]) {
