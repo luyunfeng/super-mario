@@ -4,6 +4,8 @@ import { existsSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { isAbsolute, join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { terminalSocketRequest } from './terminal-focus.ts';
+import { hasWorkerToolEnv, workerToolEnvNames } from './task-runner.ts';
 import { terminalCommand, terminalSocketPath } from './terminal-endpoint.ts';
 import { describeTerminalHostInstance } from './terminal-recovery.ts';
 import type { TerminalHost } from '../packages/plugin-sdk/src/index.ts';
@@ -133,8 +135,10 @@ export function createTerminalHost(options: { command?: string; env?: NodeJS.Pro
       string(spec.name, 'name');
       if (!Array.isArray(spec.argv) || spec.argv.length === 0) throw new Error('Terminal argv must contain an executable');
       spec.argv.forEach((arg, index) => string(arg, `argv[${index}]`, index !== 0));
-      const profileEnv = Object.entries(spec.env ?? {});
-      for (const [key, value] of profileEnv) {
+      const paneEnv = Object.entries(spec.env ?? {});
+      const workerEnv = hasWorkerToolEnv(spec.env ?? {});
+      for (const [key, value] of paneEnv) {
+        if (workerEnv && workerToolEnvNames.some(name => name === key)) continue;
         if (!['CODEX_HOME', 'CLAUDE_CONFIG_DIR'].includes(key)) throw new Error('Unsupported terminal environment key');
         string(value, key);
         if (!isAbsolute(value) || /[\r\n]/.test(value)) throw new Error('Profile directory must be an absolute path');
@@ -145,10 +149,20 @@ export function createTerminalHost(options: { command?: string; env?: NodeJS.Pro
       const args = ['tab', 'create', '--cwd', spec.cwd, '--label', spec.name, '--no-focus'];
       // Pin background work to the caller/configured workspace, never another client's focus.
       const workspace = env.SUPER_MARIO_TERMINAL_WORKSPACE || env.HERDR_WORKSPACE_ID;
-      if (workspace) args.push('--workspace', workspace);
-      profileEnv.forEach(([key, value]) => args.push('--env', `${key}=${value}`));
-      vars.forEach((key, index) => args.push('--env', `${key}=${spec.argv[index]}`));
-      const created = pane((await json(args)).root_pane);
+      let created: PaneInfo;
+      if (workerEnv) {
+        // tab.create accepts an env object over the local socket. Its CLI --env form would expose the key in ps.
+        const launchEnv = { ...spec.env, ...Object.fromEntries(vars.map((key, index) => [key, spec.argv[index]])) };
+        const result = record(await terminalSocketRequest(terminalSocketPath(env), 'tab.create', {
+          ...(workspace ? { workspace_id: workspace } : {}), cwd: spec.cwd, label: spec.name, focus: false, env: launchEnv,
+        }));
+        created = pane(result.root_pane);
+      } else {
+        if (workspace) args.push('--workspace', workspace);
+        paneEnv.forEach(([key, value]) => args.push('--env', `${key}=${value}`));
+        vars.forEach((key, index) => args.push('--env', `${key}=${spec.argv[index]}`));
+        created = pane((await json(args)).root_pane);
+      }
       // Task panes retain their shell and screen after the CLI exits. Interactive CLI
       // panes still replace the shell, so a stale agent input cannot become a shell command.
       const launch = `${spec.keepOpen ? '' : 'exec '}/bin/sh -c 'exec "$@"' super-mario ${vars.map(key => `"$${key}"`).join(' ')}`;

@@ -7,6 +7,7 @@ import { policyPresets, applyPolicyPreset, policyRuleHits } from '../../../packa
 import { todoSections, todoDecisionIds } from '../../../packages/core/src/todo-sections.ts';
 import { createAgentArtifacts } from './agent-artifacts.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { currentWorkerTodo } from './worker-session.ts';
 import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { readFile, stat } from 'node:fs/promises';
@@ -76,6 +77,24 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       const url = new URL(req.url ?? '/', 'http://localhost');
       const path = url.pathname;
       if (path === '/api/health' || path === '/api/v1/health') return json(res, 200, { ok: true, version: '0.1.0' });
+      if (path === '/api/v1/worker-tools/todo-bind-thread' || path === '/api/v1/worker-tools/todo-decisions') {
+        if (req.method !== 'POST') throw new InputError('此工具需要 POST', 405);
+        const key = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.headers.authorization ?? '')?.[1];
+        if (!key || req.headersDistinct.authorization?.length !== 1) throw new InputError('执行会话凭证无效', 401);
+        const input = await body(req, 8192);
+        if (Object.keys(input).some(k => !['sessionId','arguments'].includes(k)) || typeof input.sessionId !== 'string' ||
+          !input.arguments || typeof input.arguments !== 'object' || Array.isArray(input.arguments)) throw new InputError('执行会话请求无效');
+        const {todo, prompt, executorId} = currentWorkerTodo(app.store, machines.list(), input.sessionId, key);
+        if (!app.listExecutors().some(item => item.id === executorId && item.available)) throw new InputError('执行者已停用或不可用', 403);
+        if (path.endsWith('/todo-decisions')) {
+          if (Object.keys(input.arguments).length) throw new InputError('读取负责待办的决定无需参数');
+          const decisions = app.todoDecisions.list(todo.id).filter(item => item.active).map(({id, text, source, sourceId}) =>
+            ({id, text, by:'user', source, sourceId}));
+          return json(res, 200, {message:decisions.length ? '当前负责待办的有效决定。' : '当前负责待办没有有效决定。', decisions});
+        }
+        if (todo.projectId) throw new InputError('会话没有可绑定的负责待办', 403);
+        return json(res, 200, bots.bindWorkerTopic(todo.id, prompt, input.arguments as Record<string,unknown>));
+      }
       if (path.startsWith('/api/')) {
         if (!authorized(req, url)) throw new InputError('访问令牌无效', 401);
         const method = req.method;
@@ -287,7 +306,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (todoThread && (method === 'GET' || method === 'DELETE' || method === 'PUT')) {
           if (method === 'PUT' && !app.plugins.list().some(p => p.id === 'feishu' && p.status === 'active')) throw new InputError('飞书插件已停用', 503);
           const id = decodeURIComponent(todoThread[1]!);
-          return json(res, 200, bots.todoThread(id, method, method === 'GET' ? undefined : await body(req)));
+          const change = method === 'GET' ? {} : await body(req);
+          checkTodoScope(app, id, change);
+          return json(res, 200, bots.todoThread(id, method, change));
         }
         const topicChats = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/topic-chats$/);
         if (topicChats && (method === 'GET' || method === 'PUT')) {

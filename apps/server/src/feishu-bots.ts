@@ -1968,8 +1968,14 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const selected = settings.list().find(bot => bot.id === botId && bot.enabled && !bot.archivedAt);
       if (!selected) throw Object.assign(new Error('机器人不存在或已停用。'), {status:404});
       const binding = topicBinding(botId), grant = topics.grant(binding, chatId);
+      if ((change.expectedBotBinding !== undefined && change.expectedBotBinding !== binding) ||
+        (change.expectedRegistryVersion !== undefined && change.expectedRegistryVersion !== topics.read(binding).version))
+        throw Object.assign(new Error('机器人的配对或话题群登记已变化，请刷新后确认。'), {status:409});
       if (!grant || chatId === commandGroup()?.chatId)
         throw Object.assign(new Error('目标群必须是当前主人已登记的话题群。'), {status:409});
+      if (change.titleOnly === true && (!saved || saved.audience.binding !== binding || saved.audience.grant !== grant ||
+        saved.audience.chatId !== chatId || saved.audience.threadId !== threadId || change.expectedTitle !== (saved.title ?? '')))
+        throw Object.assign(new Error('原绑定或标题已经变化，请刷新后再编辑。'), {status:409});
       const next = topicTurns.bindOwner(todoId, {binding, grant, chatId, threadId}, expectedVersion, title);
       if (next.version !== saved?.version) openingInputs.delete(todoId);
       if (next.version !== saved?.version || next.title !== saved?.title) app.events.publish('todo-thread.changed', {todoId});
@@ -1994,7 +2000,38 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       return paired?.senderId && groupReadBinding(candidate, paired) === binding;
     });
     const name = topics.grant(binding, chatId) === grant && topics.read(binding).items.find(item => item.chatId === chatId)?.name;
-    return {thread:{channel:'feishu', chatId, threadId, version:saved.version, ...(saved.title && {title:saved.title}), ...(bot && {botName:bot.name}), ...(name && {chatName:name})}};
+    return {thread:{channel:'feishu', chatId, threadId, version:saved.version, ...(saved.title && {title:saved.title}), ...(bot && {botId:bot.id,botName:bot.name}), ...(name && {chatName:name})}};
+  }
+  function bindWorkerTopic(todoId: string, prompt: string, args: Record<string, unknown>) {
+    const {channel, chatId, threadId, title} = args;
+    if (Object.keys(args).some(k => !['channel','chatId','threadId','title','todoId'].includes(k)) ||
+      channel !== 'feishu' || typeof chatId !== 'string' || !/^oc_[\w-]{1,253}$/.test(chatId) ||
+      typeof threadId !== 'string' || !/^omt_[\w-]{1,252}$/.test(threadId) ||
+      (title !== undefined && (typeof title !== 'string' || /\p{Cc}/u.test(title) || Array.from(title).length > 200)))
+      throw Object.assign(new Error('飞书话题参数无效。'), {status:400});
+    if (args.todoId !== undefined && args.todoId !== todoId) throw Object.assign(new Error('只能绑定当前负责的待办。'), {status:403});
+    const pairs = prompt.matchAll(/(?<![\w-])(oc_[\w-]+)\s*\/\s*(omt_[\w-]+)(?![\w-])/g);
+    if (!Array.from(pairs).some(pair => pair[1] === chatId && pair[2] === threadId)) throw Object.assign(new Error('派发任务中缺少指定的群或话题标识。'), {status:403});
+    const candidates = settings.list().flatMap(bot => {
+      const paired = owner(bot);
+      if (!bot.enabled || bot.archivedAt || bot.scope.kind !== 'global' || !paired?.senderId) return [];
+      const binding = groupReadBinding(bot, paired), grant = topics.grant(binding, chatId);
+      if (!grant) return [];
+      const anchor = topicAnchors.lookup({binding,grant,chatId,threadId}, true);
+      if (!anchor || groupTasks.recalled(bot.id, bot.appId, chatId, anchor.messageId) ||
+        (topics.read(binding).items.find(item => item.chatId === chatId)?.requireOwnerMention && !anchor.mentionedSelf)) return [];
+      return [{botId:bot.id, binding, grant}];
+    });
+    const selected = candidates.length === 1 && candidates[0];
+    if (!selected) throw Object.assign(new Error('无法确认该话题的机器人和主人发言。'), {status:409});
+    // All checks and the versioned write run synchronously on the same server connection.
+    todoThread(todoId, 'GET');
+    const saved = topicTurns.bindingFor(todoId);
+    if (saved && (saved.audience.binding !== selected.binding || saved.audience.grant !== selected.grant ||
+      saved.audience.chatId !== chatId || saved.audience.threadId !== threadId))
+      throw Object.assign(new Error('待办已绑定其他话题，请主人在 Web 核对。'), {status:409});
+    todoThread(todoId, 'PUT', {channel, chatId, threadId, title, botId:selected.botId, expectedVersion:saved?.version ?? null});
+    return {message:'已登记待办与飞书话题的关联。'};
   }
   function openingSource(todoId: string, inputId: string) {
     const route = app.store.get<Routed>('message.routes', inputId);
@@ -2256,7 +2293,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (app.store.get('feishu.topic-project-refusals', refused)) return;
       const boundTodo = topicTurns.todoFor(audience);
       const inProject = boundTodo && app.store.get<Todo>('todos', boundTodo)?.projectId;
-      if (!inProject) topicAnchors.remember(audience, source.messageId, !!source.mentionedSelf);
+      if (!inProject) topicAnchors.remember(audience, source.messageId, !!source.mentionedSelf, true);
       const words = topicOwnerWords(text, source.mentions);
       if (/^[／/]noreply$/iu.test(words)) {
         const result = !boundTodo || topicTurns.bindingFor(boundTodo)?.ownerManaged ? 'missing' : taskReports.cancel(bot.id, topicBindingKey, [], { chatId: source.chatId, threadId: source.threadId, grant, todoId: boundTodo });
@@ -2970,7 +3007,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   });
   return {
     validateAgentInputOwner,
-    topicChats, todoThread, canUseScope, listGroupReads, privateThreads, requireThread, deletePrivateThread, privateThreadMetadata, updatePrivateThread, threadPreferenceKey, threadTagPreferences, threadOrder, listPrivateHistory,
+    topicChats, todoThread, bindWorkerTopic, canUseScope, listGroupReads, privateThreads, requireThread, deletePrivateThread, privateThreadMetadata, updatePrivateThread, threadPreferenceKey, threadTagPreferences, threadOrder, listPrivateHistory,
     searchPrivateHistory(id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string) {
       const bot = current(id), paired = owner(bot);
       if (!paired?.senderId || bot.scope.kind !== 'global' || (sourceId && !privateTurn(bot, paired, sourceId)))

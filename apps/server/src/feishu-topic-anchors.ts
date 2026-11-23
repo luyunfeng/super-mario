@@ -3,7 +3,7 @@ import type { Store } from '../../../packages/plugin-sdk/src/index.ts';
 import type { TopicAudience } from './feishu-topic-turns.ts';
 
 type Anchor = { messageId: string; mentionedSelf: boolean };
-type Entry = Anchor & { audience: string; at: number };
+type Entry = Anchor & { audience: string; at: number; ownerMessage?: boolean };
 const active = 'feishu.topic-anchors', tracked = 'feishu.topic-anchor-audiences', seen = 'feishu.topic-anchor-events';
 const lifetime = 30 * 24 * 60 * 60 * 1000, capacity = 200;
 const hash = (parts: string[]) => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
@@ -25,7 +25,7 @@ export function createTopicAnchors(store: Pick<Store, 'get' | 'put' | 'transacti
   const eventKey = (a: TopicAudience, messageId: string) => hash([a.binding, a.chatId, messageId]);
 
   return {
-    remember(a: TopicAudience, messageId: string, mentionedSelf: boolean): void {
+    remember(a: TopicAudience, messageId: string, mentionedSelf: boolean, ownerMessage = false): void {
       const key = audienceKey(a);
       if (!key || !identifier(messageId) || typeof mentionedSelf !== 'boolean') return;
       store.transaction(() => {
@@ -36,16 +36,17 @@ export function createTopicAnchors(store: Pick<Store, 'get' | 'put' | 'transacti
         const now = Date.now(), rows = entries(a.binding, now).filter(row => row.audience !== key);
         store.put(seen, event, true);
         store.put(tracked, key, true);
-        rows.push({ audience: key, messageId, mentionedSelf, at: now });
+        rows.push({ audience: key, messageId, mentionedSelf, ownerMessage, at: now });
         // Arrival order breaks millisecond ties and remains stable across SQLite reopen.
         store.put(active, a.binding, rows.slice(-capacity));
       });
     },
-    lookup(a: TopicAudience): Anchor | null | undefined {
+    lookup(a: TopicAudience, requireOwnerMessage = false): Anchor | null | undefined {
       const key = audienceKey(a);
       if (!key) return null;
       return store.transaction(() => {
         const row = entries(a.binding, Date.now()).find(item => item.audience === key);
+        if (row && requireOwnerMessage && row.ownerMessage !== true) return null;
         if (row) return { messageId: row.messageId, mentionedSelf: row.mentionedSelf };
         return store.get(tracked, key) ? null : undefined;
       });

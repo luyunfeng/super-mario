@@ -83,6 +83,7 @@ test('私有 Unix socket 的交互恢复只把明确 start 回执关联到单轮
     status: async () => ({ available: true }),
     list: async () => [{ id: 'pane', title: 'fixture', cwd }],
     create: async (spec) => {
+      assert.equal(spec.env?.SUPER_MARIO_WORKER_KEY, undefined);
       created = spec.argv;
       return { id: 'pane', title: 'fixture', cwd };
     },
@@ -96,7 +97,7 @@ test('私有 Unix socket 的交互恢复只把明确 start 回执关联到单轮
     close: async () => {},
     watch: async () => () => {},
   };
-  const options = { host, dataDir: cwd, machineId: 'node', hasCommand: () => true, validateResume: async () => ({}) };
+  const options = { host, dataDir: cwd, workerToolUrl: 'https://workbench.example.test/api/v1/worker-tools/todo-bind-thread', machineId: 'node', hasCommand: () => true, validateResume: async () => ({}) };
   delete process.env.SUPER_MARIO_CODEX_SOCKET;
   const localPty = createExecutionServices(options);
   assert.equal(localPty.handlers['executor.turnResult'], undefined);
@@ -105,13 +106,15 @@ test('私有 Unix socket 的交互恢复只把明确 start 回执关联到单轮
   const node = createExecutionServices(options);
   delete process.env.SUPER_MARIO_CODEX_SOCKET;
   const call = (name: string, params: JsonObject) => node.handlers[name](params, () => {});
-  const { sessionId } = (await call('executor.resume', {
+  const launch = (await call('executor.resume', {
     executorId: 'codex',
     mode: 'interactive',
     nativeSessionId,
     prompt: '合成启动',
     cwd,
   })) as unknown as SessionBinding;
+  const { sessionId } = launch;
+  assert.equal(Object.hasOwn(launch, 'workerToolKeyHash'), false);
   assert.deepEqual(created, ['codex', '--remote', 'unix://' + path, 'resume', '--', nativeSessionId, '合成启动']);
   const input = { sessionId, text: words, clientMessageId: 'source' },
     query = { sessionId, clientMessageId: 'source', nativeSessionId, turnId };

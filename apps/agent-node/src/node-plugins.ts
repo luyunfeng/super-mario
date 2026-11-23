@@ -77,6 +77,7 @@ export interface DefaultNodePluginOptions {
   agentInstanceId: string;
   launchers: NonNullable<Parameters<typeof createExecutionServices>[0]['launchers']>;
   terminalCommand?: string;
+  workerToolUrl?: string;
 }
 
 /** Loads and composes the built-in agent-node plugins in their standard capability order. */
@@ -92,7 +93,7 @@ export async function loadDefaultNodePlugins(options: DefaultNodePluginOptions):
   const discovery = createProjectDiscovery(historyRoots);
   const artifacts = createAgentArtifactLoader({ dataDir });
   const host = createTerminalHost({ command: terminalCommand });
-  const services = createExecutionServices({ host, dataDir, machineId, agentInstanceId, launchers, validateResume: cliSessions.validateResume });
+  const services = createExecutionServices({ host, dataDir, machineId, agentInstanceId, launchers, workerToolUrl: options.workerToolUrl, validateResume: cliSessions.validateResume });
   const live = createLiveTerminalServices({ command: terminalCommand });
   const executors = await services.describe(machineId);
 

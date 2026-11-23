@@ -1,11 +1,11 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { codexTurnEndpoint, startCodexTopicTurn, codexTopicAnswer, type CodexTurnEndpoint } from './codex-topic-turns.ts';
 import { nativeInputFingerprint, submitInputOnce } from './executor-input-receipts.ts';
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { delimiter, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildNativeResumeCommand, validateNativeSessionId } from './session-resume.ts';
-import { validateTaskLauncher } from './task-runner.ts';
+import { codexWorkerToolArgs, validateTaskLauncher, validateWorkerToolUrl } from './task-runner.ts';
 import type { AgentDiagnosticsOptions } from './agent-diagnostics.ts';
 import type { TerminalHostInstance } from '../packages/protocol/src/index.ts';
 import { readTaskResult } from './task-results.ts';
@@ -40,13 +40,14 @@ function directory(value: string): string {
 }
 
 /** The host owns PTYs. Disconnecting RPC observers must never terminate their processes. */
-export function createExecutionServices(options: { host: TerminalHost; dataDir: string; machineId?: string; agentInstanceId?: string; launchers?: AgentDiagnosticsOptions['launchers']; hasCommand?: (name: string) => boolean; validateResume?: (input: NativeResumeSpec & { cwd: string }) => Promise<unknown> }): {
+export function createExecutionServices(options: { host: TerminalHost; dataDir: string; workerToolUrl?: string; machineId?: string; agentInstanceId?: string; launchers?: AgentDiagnosticsOptions['launchers']; hasCommand?: (name: string) => boolean; validateResume?: (input: NativeResumeSpec & { cwd: string }) => Promise<unknown> }): {
   describe(machineId: string): Promise<ExecutorInfo[]>;
   handlers: Record<string, NodeHandler>;
   disconnect(): Promise<void>;
   close(): Promise<void>;
 } {
   const { host } = options;
+  const workerToolUrl = options.workerToolUrl === undefined ? undefined : validateWorkerToolUrl(options.workerToolUrl);
   const machineId = options.machineId ?? 'unknown';
   const agentInstanceId = options.agentInstanceId;
   const scope = { machineId, ...(agentInstanceId ? { agentInstanceId } : {}) };
@@ -155,7 +156,7 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
     return { ...fields, ...(nativeResume ? { nativeResume: { ...nativeResume } } : {}) };
   }
   async function launch(params: JsonObject, resume = false) {
-    if (['command', 'argv', 'env', 'profile', 'launcher', 'launchers'].some(key => Object.hasOwn(params, key))) throw new Error('Launcher configuration is local only');
+    if (['command', 'argv', 'env', 'profile', 'launcher', 'launchers', 'workerToolUrl', 'workerToolKey', 'workerToolKeyHash'].some(key => Object.hasOwn(params, key))) throw new Error('Launcher configuration is local only');
     if (!resume && ['resume', 'nativeResume', 'nativeSessionId'].some(key => Object.hasOwn(params, key))) throw new Error('Use executor.resume for native resume');
     if (resume && Object.keys(params).some(key => !['executorId', 'nativeSessionId', 'prompt', 'cwd', 'mode'].includes(key))) throw new Error('Invalid resume parameter');
     const executorId = string(params, 'executorId');
@@ -163,7 +164,7 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
     if (executorId === 'pi' && (resume || params.mode !== 'task')) throw new Error('Pi supports new tasks only');
     const launcher = launchers[executorId];
     const command = launcher?.command ?? commands[executorId];
-    const env = launcher?.profile ? { [executorId === 'pi' ? 'PI_CODING_AGENT_DIR' : executorId === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR']: launcher.profile.configDir } : undefined;
+    const profileEnv = launcher?.profile ? { [executorId === 'pi' ? 'PI_CODING_AGENT_DIR' : executorId === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR']: launcher.profile.configDir } : undefined;
     const prompt = string(params, 'prompt');
     const cwd = directory(string(params, 'cwd'));
     const checkAvailable = async () => {
@@ -189,6 +190,11 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
     const endpoint = nativeResume?.executorId === 'codex' && params.mode !== 'task' && codexSocket !== undefined
       ? codexTurnEndpoint(codexSocket, cwd, nativeResume.nativeSessionId) : undefined;
     if (resumeCommand) args = [command, ...(endpoint ? ['--remote', 'unix://' + endpoint.path] : []), ...resumeCommand.args];
+    // A shared app-server owns its own MCP configuration. Local CLI overrides cannot grant it this credential.
+    const workerKey = executorId === 'codex' && workerToolUrl && !endpoint ? randomBytes(32).toString('base64url') : undefined;
+    const env = workerKey && workerToolUrl ? { ...profileEnv, SUPER_MARIO_WORKER_KEY: workerKey,
+      SUPER_MARIO_WORKER_URL: workerToolUrl, SUPER_MARIO_WORKER_SESSION: sessionId } : profileEnv;
+    if (workerKey && params.mode !== 'task') args.splice(1, 0, ...codexWorkerToolArgs());
     if (params.mode === 'task') {
       const tasksDir = join(resolve(options.dataDir), 'task-results');
       mkdirSync(tasksDir, { recursive: true, mode: 0o700 });
@@ -215,7 +221,7 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
     }
     currentSessions.add(sessionId);
     if (endpoint) codexEndpoints.set(sessionId, endpoint);
-    return copyBinding(result);
+    return { ...copyBinding(result), ...(workerKey ? { workerToolKeyHash: createHash('sha256').update(workerKey).digest('hex') } : {}) };
   }
   const handlers: Record<string, NodeHandler> = {
     ...knowledgeWorker.handlers,

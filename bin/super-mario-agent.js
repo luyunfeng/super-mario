@@ -31,11 +31,17 @@ async function main() {
     if (command || configDir) launchers[id] = { command: command || fallback, ...(configDir ? { profile: { configDir: resolve(configDir) } } : {}) };
   }
   const agentInstanceId = randomUUID();
+  const workerToolUrl = new URL('/api/v1/worker-tools/todo-bind-thread', url);
+  workerToolUrl.username = '';
+  workerToolUrl.password = '';
+  if (workerToolUrl.protocol === 'ws:') workerToolUrl.protocol = 'http:';
+  if (workerToolUrl.protocol === 'wss:') workerToolUrl.protocol = 'https:';
   const nodePlugins = await loadDefaultNodePlugins({
     dataDir,
     machineId,
     agentInstanceId,
     launchers,
+    workerToolUrl: workerToolUrl.href,
     terminalCommand: process.env.SUPER_MARIO_TERMINAL_COMMAND,
   });
   const agent = await startAgentNode({

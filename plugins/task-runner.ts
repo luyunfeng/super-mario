@@ -8,6 +8,31 @@ import { fileURLToPath } from 'node:url';
 import { createNativeCollector, saveTaskResult } from './task-results.ts';
 import type { TaskConfig } from './task-results.ts';
 
+export const workerToolEnvNames = ['SUPER_MARIO_WORKER_KEY', 'SUPER_MARIO_WORKER_URL', 'SUPER_MARIO_WORKER_SESSION'] as const;
+
+export function validateWorkerToolUrl(value: string): string {
+  const url = URL.parse(value);
+  if (!url || !['http:', 'https:'].includes(url.protocol) || value !== url.origin + '/api/v1/worker-tools/todo-bind-thread') throw new Error('Invalid worker tool endpoint');
+  return url.href;
+}
+
+export function hasWorkerToolEnv(env: NodeJS.ProcessEnv): boolean {
+  if (!workerToolEnvNames.some(name => env[name] !== undefined)) return false;
+  if (!/^[A-Za-z0-9_-]{43}$/.test(env.SUPER_MARIO_WORKER_KEY ?? '') ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(env.SUPER_MARIO_WORKER_SESSION ?? ''))
+    throw new Error('Invalid worker tool session environment');
+  validateWorkerToolUrl(env.SUPER_MARIO_WORKER_URL ?? '');
+  return true;
+}
+
+// CLI overrides identify the local bridge and the names of its inherited variables only.
+export function codexWorkerToolArgs(): string[] {
+  const bridge = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './worker-topic-mcp.ts' : './worker-topic-mcp.js', import.meta.url));
+  const mcp = 'mcp_servers.super_mario.';
+  return ['-c', mcp + 'command=' + JSON.stringify(process.execPath), '-c', mcp + 'args=' + JSON.stringify([bridge]),
+    '-c', mcp + 'env_vars=' + JSON.stringify(workerToolEnvNames)];
+}
+
 // Validate local persisted configuration before spawning or recording a result.
 // Deliberately accepts only a command and a config directory, never arbitrary argv/env.
 export function validateTaskLauncher(value: unknown): NonNullable<TaskConfig['launcher']> {
@@ -59,7 +84,10 @@ export async function runTask(config: TaskConfig): Promise<number> {
   // No shell, approval bypass, or automatic retry. All CLI output remains visible in the PTY.
   const env = { ...process.env };
   if (launcher?.profile) env[pi ? 'PI_CODING_AGENT_DIR' : config.executorId === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'] = launcher.profile.configDir;
-  const child = spawn(command, args, { cwd: config.cwd, env, stdio: [pi ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+  const workerArgs = config.executorId === 'codex' && hasWorkerToolEnv(env)
+    ? codexWorkerToolArgs() : [];
+  if (!workerArgs.length) for (const key of workerToolEnvNames) delete env[key];
+  const child = spawn(command, [...workerArgs, ...args], { cwd: config.cwd, env, stdio: [pi ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
   child.stdout!.pipe(process.stdout, { end: false });
   child.stderr!.pipe(process.stderr, { end: false });
   let inputError: Error | undefined;

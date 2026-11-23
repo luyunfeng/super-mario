@@ -161,6 +161,10 @@ test('Web 绑定既有待办后首条主人发言成为决定，换绑及重复�
   assert.deepEqual(await decisions(),['甲话题第一项决定']);
   await add('排队中换绑的私有决定');
   await bind('omt_web_b','obsolete',409);
+  const staleTarget = {channel:'feishu', botId:bot.id, chatId:'oc_direct', threadId:'omt_web_b', expectedVersion:a.version};
+  for (const stale of [{titleOnly:true,expectedTitle:a.title}, {threadId:a.threadId,titleOnly:true,expectedTitle:'过期标题'}, {expectedBotBinding:'previous-owner'}, {expectedRegistryVersion:-1}, {expectedProjectId:'previous-project'}])
+    await api(path,'PUT',{...staleTarget,...stale},409);
+  assert.deepEqual(await read(), a);
   const beforeSwitch = sent.length;
   await bind('omt_web_b',a.version);
   const b = await read(); assert.equal(b.threadId,'omt_web_b'); assert.notEqual(a.version,b.version);

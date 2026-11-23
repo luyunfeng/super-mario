@@ -1248,7 +1248,9 @@ export async function createWorkbench(config: AppConfig) {
             if (nativeResume && (nativeResume.executorId !== info.id || !machine.capabilities.includes('executor.resume'))) throw Object.assign(new InputError('执行机不支持此原生线程恢复，请升级代理', 409), { delivery: 'no' });
             const session = await machines!.call(machine.id, nativeResume ? 'executor.resume' : 'executor.start', { executorId: info.id, prompt, cwd: cwd.trim(), mode: executionMode, ...(nativeResume ? { nativeSessionId: nativeResume.nativeSessionId } : {}) });
             if (!session || typeof session !== 'object' || Array.isArray(session) || typeof session.sessionId !== 'string') throw new Error('执行机未返回有效会话');
-            return { text: '已启动外部 CLI，会自动采集原生结果。', pending: true, sessionId: session.sessionId };
+            return { text: '已启动外部 CLI，会自动采集原生结果。', pending: true, sessionId: session.sessionId,
+              ...(info.id === 'codex' && typeof session.workerToolKeyHash === 'string' && /^[a-f0-9]{64}$/.test(session.workerToolKeyHash) &&
+                machine.agentInstanceId && machine.agentInstanceId === session.agentInstanceId && {workerToolKeyHash:session.workerToolKeyHash, agentInstanceId:machine.agentInstanceId}) };
           },
         });
       }
@@ -1464,7 +1466,10 @@ export async function createWorkbench(config: AppConfig) {
           const acceptance = executionMode === 'task' && doneWhen && !nativeApproved
             ? '本次任务的验收标准：' + JSON.stringify(doneWhen) + '\n交付时逐项给出实际核验结果和证据。未能验证的条件请说明原因。'
             : '';
-          const finalPrompt = [effectivePrompt, acceptance, decisions, guidance, isolationGuide, includeOfficeGuide ? officeWorkerGuide : ''].filter(Boolean).join('\n\n');
+          const workerDecisionGuide = todoId && executorId.endsWith('/codex') && !nativeApproved
+            ? '若当前会话提供 todo_decisions，在作选择前或上下文压缩后读取当前负责待办的有效决定。只按仍然生效的决定推进。读取失败时先核对负责会话。'
+            : '';
+          const finalPrompt = [effectivePrompt, acceptance, decisions, workerDecisionGuide, guidance, isolationGuide, includeOfficeGuide ? officeWorkerGuide : ''].filter(Boolean).join('\n\n');
           const execute = async () => {
             controller.signal.throwIfAborted();
             if (worktreeRunId) {
@@ -1485,6 +1490,8 @@ export async function createWorkbench(config: AppConfig) {
             const result = await executor.execute({ prompt: finalPrompt, cwd: destination, executionMode: run.executionMode, ...(nativeResume ? { nativeResume } : {}), signal: controller.signal, onOutput: text => update({ output: (store.get<Run>('runs', run.id)?.output ?? '') + text }) });
             if (result.sessionId) update({ sessionId: result.sessionId });
             const metadata = JSON.parse(JSON.stringify(result)) as JsonObject;
+            delete metadata.workerToolKeyHash;
+            delete metadata.agentInstanceId;
             const evidenceSnapshot = JSON.stringify(metadata.nativeResult);
             const decorated = await plugins.invocations.hooks('work.dispatch', 'after', metadata);
             if (!decorated || typeof decorated !== 'object' || Array.isArray(decorated) || typeof decorated.text !== 'string' || decorated.sessionId !== metadata.sessionId || decorated.pending !== metadata.pending || JSON.stringify(decorated.nativeResult) !== evidenceSnapshot) throw new PluginCallError('结果钩子只能改写展示正文，不能伪造原生会话或完成状态', true);
