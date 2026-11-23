@@ -1,3 +1,4 @@
+import { createInboxRelations } from '../features/inbox-relations.js';
 import { createInboxTranslation } from '../features/inbox-translation.js';
 import { createInboxConversationsUI } from '../features/inbox-conversations.js';
 import { h, replace, keyedList } from '../lib/dom.js';
@@ -22,7 +23,7 @@ export function createMailboxPage({ api, store, router, direction }) {
   let snapshot = store.view.snapshot;
   let mailbox = [], deliveries = [];
   let error = '', loadError = '', loaded = false, loading = false, revision = 0, lastSnapshot;
-  let drawer, selected, detailKey, detailTranslation, mailboxOwner;
+  let relations, drawer, selected, detailKey, detailTranslation, mailboxOwner;
   const translation = incoming ? createInboxTranslation({ api, store,
     isSelected: id => drawer?.el.open && router.current.page === direction && selected === id }) : null;
   let sourceFilter = 'all', stageFilter = 'all';
@@ -219,7 +220,13 @@ export function createMailboxPage({ api, store, router, direction }) {
     const item = records().find(item => item.id === selected);
     if (!item) { translation?.clear(); detailTranslation = undefined; detailKey = undefined; replace(drawer.body, h('p', null, '这条记录已更新，请关闭后查看列表。')); replace(drawer.foot, Button({ label: '关闭', onClick: () => drawer.close() })); return; }
     const raw = item.raw;
-    const key = JSON.stringify([item, error, snapshot?.projects, Boolean(scopedTodo(raw)), drafts.get(item.id), pending.has(item.id), uncertain.has(item.id)]);
+    const showRelations = incoming && item.kind === 'personal' && snapshot?.plugins?.some(plugin => plugin.id === 'inbox-triage' && plugin.status === 'active');
+    if (showRelations) {
+      relations ??= createInboxRelations({api,store,id:raw.id,openSource:id=>open('personal:'+id),
+        active:()=>Boolean(drawer?.el.open && selected===item.id && router.current.page===direction)});
+      relations.update(snapshot?.inbox ?? []);
+    } else relations = undefined;
+    const key = JSON.stringify([item, showRelations, error, snapshot?.projects, Boolean(scopedTodo(raw)), drafts.get(item.id), pending.has(item.id), uncertain.has(item.id)]);
     // Keep the translation controls and any in-flight request across unrelated detail updates.
     const translated = translation && (item.kind !== 'mailbox' || mailboxOwner === api.draftOwner()) ? translation.view(item) : null;
     if (!translated && translation) translation.clear();
@@ -236,6 +243,7 @@ export function createMailboxPage({ api, store, router, direction }) {
       raw.status === 'unknown' && Banner({ tone: 'warn', children: '发送结果未知。请先核对实际送达情况，工作台不会自动重复发送。' }),
       translated || h('pre', { class: 'mailbox-content' }, item.text || '没有文本正文。'),
       ['pending', 'needs_approval'].includes(raw.status) && !incoming && h('p', { class: 'small muted' }, '内容仍待确认，尚未发送。可在对话页处理审批，或在渠道高级设置中处理机器人发件。'),
+      relations?.el,
       incoming && projectEditor(item),
       error && Banner({ tone: 'danger', children: error }));
     replace(drawer.foot, Button({ label: '关闭', onClick: () => drawer.close() }), ...actions(item),
@@ -287,8 +295,8 @@ export function createMailboxPage({ api, store, router, direction }) {
     } finally { pending.delete(item.id); paint(); }
   }
   function open(id) {
-    selected = id; detailKey = undefined;
-    if (!drawer) drawer = openDrawer({ title: `${name}消息详情`, body: [], footer: [], wide: true, onClose: () => { translation?.clear(); drawer = undefined; selected = undefined; detailKey = undefined; detailTranslation = undefined; } });
+    selected = id; relations = undefined; detailKey = undefined;
+    if (!drawer) drawer = openDrawer({ title: `${name}消息详情`, body: [], footer: [], wide: true, onClose: () => { translation?.clear(); relations = undefined; drawer = undefined; selected = undefined; detailKey = undefined; detailTranslation = undefined; } });
     detail();
   }
   let detailOwner = api.draftOwner();
@@ -379,7 +387,9 @@ export function createMailboxPage({ api, store, router, direction }) {
     if (receipt) summary.textContent = '匹配发件回执 ' + visible.length + ' 条';
     if (grouped) summary.textContent = `匹配 ${visible.length} 条消息，按联系人与会话合并后显示 ${window.length} / ${rows.length} 项`;
     more.hidden = window.length >= rows.length;
-    replace(notice, receipt && h('div', { class: 'row row--wrap' },
+    const linkedItem = incoming && router.current.query?.get('item');
+    const missingLink = linkedItem && snapshot?.inbox && !all.some(record => record.kind === 'personal' && record.raw.id === linkedItem);
+    replace(notice, missingLink && Banner({ tone: 'warn', children: '当前工作台找不到这条收件。' }), receipt && h('div', { class: 'row row--wrap' },
       loaded && !loading && !visible.length && !loadError && h('span', null, '当前可见发件记录中没有这条回执。'),
       h('a', { href: router.href('outbox') }, '查看全部发件记录')), error && Banner({ tone: 'danger', children: error }), loadError && Banner({ tone: 'danger', children: loadError, action: Button({ label: '重试读取', size: 'sm', onClick: () => load() }) }),
       !incoming && deliveries.length >= 200 && h('p', { class: 'small muted' }, '自动发送记录当前展示最近 200 条。'));
@@ -426,11 +436,33 @@ export function createMailboxPage({ api, store, router, direction }) {
     loaded = true; loading = false; paint();
   }
   query.addEventListener('input', resetWindow); filter.addEventListener('change', resetWindow); projectFilter.addEventListener('change', resetWindow);
-  return { el, onShow() { snapshot = store.view.snapshot; if (dirty) paint(); lastSnapshot = snapshot; load(); }, onState({ snapshot: next }) {
+  let pendingLink;
+  function openLinkedItem() {
+    if (!pendingLink || !snapshot || store.view.snapshotOwner !== api.draftOwner()) return;
+    if (router.current.page !== direction || router.current.query?.get('item') !== pendingLink) return;
+    if (!snapshot.inbox?.some(item => item.id === pendingLink)) return;
+    // A same-page navigation closes the old drawer. Its native close event clears the selection.
+    if (drawer && !drawer.el.open) {
+      drawer.el.addEventListener('close', openLinkedItem, { once: true });
+      return;
+    }
+    const id = pendingLink;
+    pendingLink = undefined;
+    open('personal:' + id);
+  }
+  return { el, onShow() {
+    pendingLink = incoming && router.current.query?.get('item');
+    snapshot = store.view.snapshot;
+    if (dirty) paint();
+    lastSnapshot = snapshot;
+    load();
+    openLinkedItem();
+  }, onState({ snapshot: next }) {
     snapshot = next;
     dirty = true;
     if (router.current.page !== direction) return;
     paint();
     if (next !== lastSnapshot) { lastSnapshot = next; load(); }
+    openLinkedItem();
   } };
 }

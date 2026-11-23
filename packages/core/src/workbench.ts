@@ -373,7 +373,7 @@ export async function createWorkbench(config: AppConfig) {
     }
     return raw as unknown as Json;
   }
-  for (const extension of createSystemExtensions({ demo: config.demo, actions: { todayBriefSources, triageAgent: { status: () => inboxClassifier.status(), ask: (text, context) => inboxClassifier.ask(text, context) }, ruleTriage, scheduledWorkCronPreview: input => scheduledWork.previewCron(input), scheduledWorkHistory: input => scheduledWork.readHistory(input) as unknown as Json, scheduledWorkBrief: input => scheduledWork.readBrief(input), scheduledWorkList: input => scheduledWork.list(input) as unknown as Json, scheduledWorkPropose: input => scheduledWork.propose(input,true) as unknown as Json, scheduledWorkSkipNext: input => scheduledWork.skipNext(input,true), scheduledWorkSetPaused: input => scheduledWork.changeTiming(input,true) as unknown as Json, scheduledWorkCancel: input => scheduledWork.cancel(input,true) as unknown as Json, followupCreate: input => followups.create(input, currentAgentInput()?.conversationId) as unknown as Json, followupList: input => followups.list(input) as unknown as Json, followupCancel: id => followups.cancel(id) as unknown as Json, notifyUser: input => followups.notifyUser(input), calendarAgenda: (input, signal) => fetchCalendarAgenda({ profile: knowledgeAccount()?.profile, ...input, signal }), workspaceCode: readWorkspaceCode, knowledgeReaderService: () => protectedReaderService(), pendingDecisionsList: readPendingDecisions, workDecisionsList: input => workDecisions.list(input) as unknown as Json, workDecisionRecord: input => workDecisions.recordFromAgent(input) as unknown as Json, workDecisionCorrect: input => workDecisions.changeFromAgent(input) as unknown as Json, workDecisionWithdraw: input => workDecisions.changeFromAgent(input, true) as unknown as Json, workDecisionReference: input => workDecisions.referenceFromAgent(input) as unknown as Json, inboxList: readInbox, inboxHandlingRead: readInboxHandlingFromAgent, inboxAssignProject: assignInboxProject, agentSessions: async input => await agentSessions.discover(input) as unknown as Json, resumeSession: async input => { const source = currentAgentInput() ?? agent.currentInput(); return await agentSessions.proposeResume({ ...input, key: source ? `${source.id}:${requiredText(input.key, '恢复请求标识')}` : input.key }, source) as unknown as Json; }, botsList: () => botsStatus(), privateConversation: managePrivateConversation, groupReadRecords: readGroupRecordsFromChat, botRelay: relayFromAgent, mailboxesList: input => mailboxes.list(input as Parameters<typeof mailboxes.list>[0]) as unknown as Json, mailboxPropose: input => { if (!mailboxProposer) throw new InputError('机器人信箱尚未连接', 503); return mailboxProposer(input); }, projectsList: () => projects.list() as unknown as Json, projectCreate: async input => await createProject(input) as unknown as Json, projectsDiscover: discoverProjects, knowledgeSource: input => {
+  for (const extension of createSystemExtensions({ demo: config.demo, actions: { todayBriefSources, triageAgent: { status: () => inboxClassifier.status(), ask: (text, context) => inboxClassifier.ask(text, context) }, ruleTriage, scheduledWorkCronPreview: input => scheduledWork.previewCron(input), scheduledWorkHistory: input => scheduledWork.readHistory(input) as unknown as Json, scheduledWorkBrief: input => scheduledWork.readBrief(input), scheduledWorkList: input => scheduledWork.list(input) as unknown as Json, scheduledWorkPropose: input => scheduledWork.propose(input,true) as unknown as Json, scheduledWorkSkipNext: input => scheduledWork.skipNext(input,true), scheduledWorkSetPaused: input => scheduledWork.changeTiming(input,true) as unknown as Json, scheduledWorkCancel: input => scheduledWork.cancel(input,true) as unknown as Json, followupCreate: input => followups.create(input, currentAgentInput()?.conversationId) as unknown as Json, followupList: input => followups.list(input) as unknown as Json, followupCancel: id => followups.cancel(id) as unknown as Json, notifyUser: input => followups.notifyUser(input), calendarAgenda: (input, signal) => fetchCalendarAgenda({ profile: knowledgeAccount()?.profile, ...input, signal }), workspaceCode: readWorkspaceCode, knowledgeReaderService: () => protectedReaderService(), pendingDecisionsList: readPendingDecisions, workDecisionsList: input => workDecisions.list(input) as unknown as Json, workDecisionRecord: input => workDecisions.recordFromAgent(input) as unknown as Json, workDecisionCorrect: input => workDecisions.changeFromAgent(input) as unknown as Json, workDecisionWithdraw: input => workDecisions.changeFromAgent(input, true) as unknown as Json, workDecisionReference: input => workDecisions.referenceFromAgent(input) as unknown as Json, inboxList: readInbox, inboxTree: readInboxTree, inboxHandlingRead: readInboxHandlingFromAgent, inboxAssignProject: assignInboxProject, agentSessions: async input => await agentSessions.discover(input) as unknown as Json, resumeSession: async input => { const source = currentAgentInput() ?? agent.currentInput(); return await agentSessions.proposeResume({ ...input, key: source ? `${source.id}:${requiredText(input.key, '恢复请求标识')}` : input.key }, source) as unknown as Json; }, botsList: () => botsStatus(), privateConversation: managePrivateConversation, groupReadRecords: readGroupRecordsFromChat, botRelay: relayFromAgent, mailboxesList: input => mailboxes.list(input as Parameters<typeof mailboxes.list>[0]) as unknown as Json, mailboxPropose: input => { if (!mailboxProposer) throw new InputError('机器人信箱尚未连接', 503); return mailboxProposer(input); }, projectsList: () => projects.list() as unknown as Json, projectCreate: async input => await createProject(input) as unknown as Json, projectsDiscover: discoverProjects, knowledgeSource: input => {
     const source=currentAgentInput()??agent.currentInput();if(!source||source.role!=='user'||source.readOnly||source.origin&&source.origin!=='user')throw new InputError('来源投放需要当前用户输入',403);
     validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
     return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
@@ -429,18 +429,7 @@ export async function createWorkbench(config: AppConfig) {
   }
   plugins.register({ ...webExtension, activate: context => serializeWeb(() => webExtension.activate(context)) });
   const subscriptions = createSubscriptionHost({store,contributions,use:plugins.invocations.use,timezone:()=>briefing.settings().timezone,
-    authorizeRead() {
-      const input=currentAgentInput();
-      if (!input || input.role!=='user' || input.readOnly || input.replyTo || input.projectId || input.todoId || (input.origin && input.origin!=='user'))
-        throw new InputError('需要主人主对话查询订阅',403);
-      const route=store.get<MessageRoute & {botId?:string}>('message.routes',input.id);
-      if (!route && input.conversationId==='main' && input.directWebInput) return input;
-      if (route?.botId && input.conversationId===botConversationId({id:route.botId,scope:{kind:'global'}}) && ownerScopeRequest(input)) {
-        assertBotInput(input);
-        return input;
-      }
-      throw new InputError('需要当前配对主人的直接私聊或 Web 主对话',403);
-    },
+    authorizeRead:ownerReadInput,
     syncFailureNotice:notice=>inbox.syncSubscriptionFailure(notice),failureCard:id=>inbox.subscriptionFailureCard(id),
     ingest:(source,items,policy)=>inbox.ingest(source,items,policy),knowledge,changed:(type,id)=>changed(type,{id})});
   plugins.register(subscriptions.extension);
@@ -1080,6 +1069,32 @@ export async function createWorkbench(config: AppConfig) {
       calendarUnavailableReason: activePlugins.has('feishu') ? '个人飞书账号未连接或尚未就绪' : '飞书插件已停用', decisions, inbox: visibleInbox };
   }
 
+  function ownerReadInput() {
+    const input=currentAgentInput();
+    if (!input || input.role!=='user' || input.readOnly || input.replyTo || input.projectId || input.todoId || (input.origin && input.origin!=='user'))
+      throw new InputError('需要主人主对话查询',403);
+    const route=store.get<MessageRoute & {botId?:string}>('message.routes',input.id);
+    if (!route && input.conversationId==='main' && input.directWebInput) return input;
+    if (route?.botId && input.conversationId===botConversationId({id:route.botId,scope:{kind:'global'}}) && ownerScopeRequest(input)) {
+      assertBotInput(input);
+      return input;
+    }
+    throw new InputError('需要当前配对主人的直接私聊或 Web 主对话',403);
+  }
+
+  // Only the private relationship tool exposes links between inbox records.
+  function withoutParent({parentInboxId: _parent, ...item}:InboxItem) { return item; }
+  function readInboxTree(input: Record<string,unknown>):Json {
+    ownerReadInput();
+    const id=requiredText(input.id,'收件编号');
+    const {item,ancestors,children}=inbox.tree(id);
+    if(excludesPersonalGroupFromBrief(item)) throw new InputError('收件箱条目不存在',404);
+    const hiddenAt=ancestors.findIndex(excludesPersonalGroupFromBrief);
+    const visibleAncestors=hiddenAt<0?ancestors:ancestors.slice(0,hiddenAt);
+    const visibleChildren=children.filter(child=>!excludesPersonalGroupFromBrief(child));
+    const present=(row:InboxItem)=>({...withoutParent(row),workspaceRoute:'#inbox?item='+encodeURIComponent(row.id)});
+    return {item:present(item),ancestors:visibleAncestors.map(present),children:visibleChildren.map(present)} as unknown as Json;
+  }
   function readInbox(input: Record<string, unknown>): Json {
     const offset = input.offset ?? 0, limit = input.limit ?? 50;
     if (!Number.isSafeInteger(offset) || (offset as number) < 0 || !Number.isSafeInteger(limit) || (limit as number) < 1 || (limit as number) > 100) throw new InputError('收件箱分页参数无效');
@@ -1088,7 +1103,7 @@ export async function createWorkbench(config: AppConfig) {
       && (!input.kind || (item.origin?.kind ?? 'unknown') === input.kind) && (input.mentionedMe !== true || (item.origin?.kind === 'group' && item.origin.mentionedMe === true))
       && (input.meetingMinutes !== true || item.origin?.meetingMinutes === true)
       && (!query || [item.title, item.text, item.origin?.chatName, item.origin?.senderName].some(text => text?.toLowerCase().includes(query))));
-    return { items: items.slice(offset as number, (offset as number) + (limit as number)), total: items.length, offset, hasMore: (offset as number) + (limit as number) < items.length } as unknown as Json;
+    return { items: items.slice(offset as number, (offset as number) + (limit as number)).map(withoutParent), total: items.length, offset, hasMore: (offset as number) + (limit as number) < items.length } as unknown as Json;
   }
   function readPendingDecisions(input: Record<string, unknown>) {
     const actor = currentAgentInput() ?? agent.currentInput();
@@ -1126,7 +1141,7 @@ export async function createWorkbench(config: AppConfig) {
     if (!source || source.role !== 'user' || source.readOnly) throw new InputError('归入项目需要当前用户输入，不能依据只读回报执行', 403);
     assertBotInput(source);
     if (source.conversationId !== 'main' && botForConversation(configuredBots(), source.conversationId, undefined, sourceThread(source))?.scope.kind !== 'global') throw new InputError('只有主对话或全局机器人能调整收件箱项目归属', 403);
-    return inbox.assignProject(requiredText(input.id, '收件消息'), input.version as number, optionalText(input.projectId, '项目')) as unknown as Json;
+    return withoutParent(inbox.assignProject(requiredText(input.id, '收件消息'), input.version as number, optionalText(input.projectId, '项目'))) as unknown as Json;
   }
   function todoPriority(value: unknown): NonNullable<Todo['priority']> {
     if (value === undefined) return 'normal';

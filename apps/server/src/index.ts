@@ -535,6 +535,16 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             }
           }
         }
+        const inboxRelation=path.match(/^\/api\/v1\/inbox\/([^/]+)\/(tree|parent)$/);
+        if(inboxRelation && (inboxRelation[2]==='tree' && method==='GET' || inboxRelation[2]==='parent' && method==='PUT')) {
+          if(!app.plugins.list().some(p=>p.id==='inbox-triage' && p.status==='active')) throw new InputError('收件箱整理插件已停用',503);
+          const id=decodeURIComponent(inboxRelation[1]!);
+          if(method==='GET') return json(res,200,app.inbox.tree(id));
+          const input=await body(req);
+          if(Object.keys(input).some(key=>!['parentId','version'].includes(key)) || (input.parentId!==null && typeof input.parentId!=='string'))
+            throw new InputError('收件关联参数无效');
+          return json(res,200,app.inbox.setParent(id,input.parentId,input.version as number));
+        }
         const inboxProject = path.match(/^\/api\/v1\/inbox\/([^/]+)\/project$/);
         if (inboxProject && method === 'PATCH') {
           const input = await body(req);

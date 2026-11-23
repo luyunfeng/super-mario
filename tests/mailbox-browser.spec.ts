@@ -104,3 +104,25 @@ test('发件箱展示实际投递状态、内容与目标，合并重复记录�
     assert.ok(await drawer.evaluate(el => el.scrollWidth <= el.clientWidth));
   });
 });
+
+test('收件详情链接可冷启动、同页切换和重载，关闭后刷新数据不会重新弹出', async () => {
+  await withMailbox(async (server, page) => {
+    await server.app.inbox.ingest('offline-links', ['甲', '乙'].map(title => ({
+      thread:title, last:title, title, text:'原始正文' + title,
+    })));
+    const links = new Map(server.app.inbox.list().map(item => [item.title, server.url + '/#inbox?item=' + encodeURIComponent(item.id)]));
+    const drawer = page.getByRole('dialog', {name:'收件箱消息详情'});
+    await page.goto(links.get('甲')!);
+    await expect(drawer.locator('pre')).toHaveText('原始正文甲');
+    await page.goto(links.get('乙')!);
+    await expect(drawer.locator('pre')).toHaveText('原始正文乙');
+    await page.reload();
+    await expect(drawer.locator('pre')).toHaveText('原始正文乙');
+    await drawer.locator('.drawer__foot').getByRole('button', {name:'关闭',exact:true}).click();
+    await server.app.inbox.ingest('offline-links', [{thread:'别处',last:'1',title:'另一个事项',text:'更新记录'}]);
+    await expect(page.locator('#inbox')).toContainText('另一个事项');
+    await expect(drawer).toHaveCount(0);
+    await page.goto(server.url + '/#inbox?item=missing');
+    await expect(page.getByText('当前工作台找不到这条收件。')).toBeVisible();
+  });
+});
