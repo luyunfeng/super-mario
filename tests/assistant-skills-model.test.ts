@@ -2071,3 +2071,49 @@ test('Web 和飞书按同一触发记录区分待批准、派发和执行失败'
     await t.waitFor(() => assert.ok(sent.includes('派发审批已处理，执行失败。')));
   } finally { await server.close(); }
 });
+
+test('飞书创建每周简报审批，Web 核对同一排期，跨夏令时保留当地钟点', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const { server, api, ask } = await fixture(t, req => {
+    assert.match(req.system, /星期日用 0/);
+    assert.match(req.system, /法定工作日或调休/);
+    if (req.lastRole === 'user') {
+      if (JSON.stringify(req.content).includes('查看排期')) return call('scheduled_work_list', {}, 'read');
+      return call('scheduled_work_propose', { key: 'weekly-summary', title: '每周简报', schedule: {
+        kind: 'cron', cron: '35 8 * * 2,0', tz: 'America/New_York' }, action: { kind: 'brief' } }, 'proposal');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    const receipt = JSON.parse(raw);
+    if (req.callId === 'proposal') {
+      assert.equal(receipt.status, 'pending');
+      return { role: 'assistant', content: '每周二和周日 08:35（纽约时间），创建审批待确认。' };
+    }
+    const [row] = receipt.items;
+    assert.equal(row.schedule.cron, '35 8 * * 2,0');
+    assert.equal(row.schedule.tz, 'America/New_York');
+    assert.equal(row.scheduleStatus, 'active');
+    return { role: 'assistant', content: '已生效，每周二和周日纽约当地时间 08:35。' };
+  }, options => {
+    adapter = options;
+    return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    const project = await api('/projects', { name: '每周计划' });
+    const bot = await api('/feishu/bots', { name: '周报', appId: 'cli_5555555555555555', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'oc_weekly', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage('纽约每周二和周日早上 8:35 生成项目简报', { ...source, messageId: 'weekly' });
+    await t.waitFor(() => assert.ok(sent.includes('每周二和周日 08:35（纽约时间），创建审批待确认。')));
+    const [row] = server.app.scheduledWork.list({ projectId: project.id }).items;
+    await api('/approvals/' + row.approvalId + '/approve', { version: 1 });
+    assert.equal(await ask('查看排期', '/projects/' + project.id + '/messages'), '已生效，每周二和周日纽约当地时间 08:35。');
+    const { nextOccurrence } = await import('../packages/core/src/schedules.ts');
+    const schedule = { ...row.schedule, name: row.title };
+    const before = nextOccurrence(schedule, Date.parse('2026-03-02T00:00:00Z'));
+    assert.equal(before, '2026-03-03T13:35:00.000Z');
+    assert.equal(nextOccurrence(schedule, Date.parse(before)), '2026-03-08T12:35:00.000Z');
+  } finally { await server.close(); }
+});

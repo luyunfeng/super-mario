@@ -9,7 +9,18 @@ const chatLink = () => h('a', { href: '#chat' }, '去对话核对与确认');
 const approvalLink = (id, close) => h('a', { href: '#chat?approval=' + encodeURIComponent(id), onClick: close }, '查看待处理审批');
 const runStatus = status => ({ queued: '排队中', running: '执行中', completed: '执行已完成', failed: '执行失败', cancelled: '已取消', unknown: '执行结果未知' }[status] ?? '执行状态未知');
 const line = text => h('p', { class: 'item__meta' }, text);
-const timingText = s => s.kind === 'once' ? `一次 · ${timeText(s.at)}` : s.kind === 'interval' ? `每 ${s.everySec / 60} 分钟${s.anchorAt ? ` · 起点 ${timeText(s.anchorAt)}` : ''}` : `cron ${s.cron} · ${s.tz}`;
+const weekdayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+const weekOrder = [1, 2, 3, 4, 5, 6, 0];
+
+function timingText(s) {
+  if (s.kind === 'once') return `一次 · ${timeText(s.at)}`;
+  if (s.kind === 'interval') return `每 ${s.everySec / 60} 分钟${s.anchorAt ? ` · 起点 ${timeText(s.anchorAt)}` : ''}`;
+  const fixed = /^(\d{1,2}) (\d{1,2}) \* \* (\*|1-5|[0-6](?:,[0-6])*)$/.exec(s.cron);
+  if (!fixed) return `cron ${s.cron} · ${s.tz}`;
+  const days = fixed[3] === '*' ? weekOrder : fixed[3] === '1-5' ? weekOrder.slice(0, 5) : fixed[3].split(',').map(Number);
+  const names = weekOrder.filter(day => days.includes(day)).map(day => weekdayNames[day]);
+  return `${names.length === 7 ? '每天' : names.join('、')} ${fixed[2].padStart(2, '0')}:${fixed[1].padStart(2, '0')} · ${s.tz}`;
+}
 function occurrenceText(o) {
   if (o.status === 'unknown') return '动作结果未知，停止堆积；请核对原记录';
   if (o.status === 'claimed') return '已认领，动作结果尚未确认';
@@ -214,7 +225,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     const projects = () => (snapshot().projects ?? []).filter(p => !p.archivedAt);
     const project = Select({ name: 'projectId', options: [['', '全局（不绑定项目）'], ...projects().map(p => [p.id, p.name])], value: currentScope() });
     const todo = Select({ name: 'todoId', options: [['', '不关联待办']] });
-    const frequency = Select({ name: 'frequency', options: [['once', '一次'], ['daily', '每天'], ['interval', '间隔'], ['cron', '高级 cron']] });
+    const frequency = Select({ name: 'frequency', options: [['once', '一次'], ['daily', '每天'], ['weekly', '每周'], ['interval', '间隔'], ['cron', '高级 cron']] });
     const once = Input({ type: 'datetime-local', name: 'at' });
     const daily = Input({ type: 'time', value: '09:00', name: 'dailyTime' });
     const minutes = Input({ type: 'number', min: 1 / 6, step: 'any', value: 60, name: 'minutes' });
@@ -232,6 +243,18 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     const preview = h('div', { class: 'item__meta', 'aria-label': '创建预览', style: { whiteSpace: 'pre-wrap' } });
     const onceField = Field({ label: '本地触发时间', control: once, hint: '使用浏览器当地时区；无效的夏令时时间会拒绝提交。' });
     const dailyField = Field({ label: '每天时间', control: daily });
+    const weeklyTime = Input({ type: 'time', value: '09:00', name: 'weeklyTime' });
+    const dayInputs = weekOrder.map(day => h('input', { type: 'checkbox', value: day, checked: day >= 1 && day <= 5 }));
+    function pickDays(days) {
+      for (const box of dayInputs) box.checked = days.includes(Number(box.value));
+      sync();
+    }
+    const weeklyFields = h('div', { class: 'stack' }, Field({ label: '每周触发时间', control: weeklyTime }),
+      h('fieldset', null, h('legend', null, '重复日期'), h('div', { class: 'row row--wrap' },
+        dayInputs.map(box => h('label', null, box, weekdayNames[Number(box.value)]))),
+      h('div', { class: 'row row--wrap' },
+        Button({ label: '周一至周五', size: 'sm', onClick: () => pickDays([1, 2, 3, 4, 5]) }),
+        Button({ label: '周末', size: 'sm', onClick: () => pickDays([6, 0]) }))));
     const intervalField = Field({ label: '间隔分钟', control: minutes, hint: '最少 10 秒（1/6 分钟）。' });
     const cronField = Field({ label: 'cron 表达式', control: cron, hint: '表达式交由服务端校验。' });
     const zoneField = Field({ label: 'IANA 时区', control: zone });
@@ -259,9 +282,15 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       } else {
         if (!zone.value.trim()) throw new Error('请填写 IANA 时区。');
         try { new Intl.DateTimeFormat('en', { timeZone: zone.value.trim() }); } catch { throw new Error('IANA 时区无效。'); }
-        if (frequency.value === 'daily' && !/^\d{2}:\d{2}$/.test(daily.value)) throw new Error('请填写每天时间。');
-        const [hour, minute] = daily.value.split(':').map(Number);
-        const expression = frequency.value === 'daily' ? `${minute} ${hour} * * *` : cron.value.trim();
+        let expression = cron.value.trim();
+        if (frequency.value !== 'cron') {
+          const time = frequency.value === 'weekly' ? weeklyTime.value : daily.value;
+          if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('请填写触发时间。');
+          const days = dayInputs.filter(box => box.checked).map(box => box.value);
+          if (frequency.value === 'weekly' && !days.length) throw new Error('请至少选择一个重复日期。');
+          const [hour, minute] = time.split(':').map(Number);
+          expression = `${minute} ${hour} * * ${frequency.value === 'daily' || days.length === 7 ? '*' : days.join(',')}`;
+        }
         if (!expression) throw new Error('请填写 cron 表达式。');
         schedule = { kind: 'cron', cron: expression, tz: zone.value.trim() };
       }
@@ -277,9 +306,9 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       return { key, title: title.value.trim(), schedule, action: workAction, ...(project.value ? { projectId: project.value } : {}), ...(todo.value ? { todoId: todo.value } : {}) };
     }
     function sync() {
-      onceField.hidden = frequency.value !== 'once'; dailyField.hidden = frequency.value !== 'daily';
+      onceField.hidden = frequency.value !== 'once'; dailyField.hidden = frequency.value !== 'daily'; weeklyFields.hidden = frequency.value !== 'weekly';
       intervalField.hidden = frequency.value !== 'interval'; cronField.hidden = frequency.value !== 'cron';
-      zoneField.hidden = !['daily', 'cron'].includes(frequency.value); dispatchFields.hidden = action.value !== 'dispatch';
+      zoneField.hidden = !['daily', 'weekly', 'cron'].includes(frequency.value); dispatchFields.hidden = action.value !== 'dispatch';
       const selected = (snapshot().executors ?? []).find(e => e.id === executor.value);
       availability.textContent = selected ? `${selected.name}：${selected.available ? '当前可用；到期仍需派发审批' : selected.reason ?? '离线或不可用'}` : '没有选择执行者；不会创建虚拟执行者。';
       try { preview.textContent = `提交预览（不会执行）：\n${JSON.stringify(body(), null, 2)}`; }
@@ -288,7 +317,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     let busy = false, submitted = false;
     const form = h('div', { class: 'stack' },
       Field({ label: '标题', control: title, required: true }), Field({ label: '项目', control: project, hint: '默认继承顶栏。切换顶栏范围会关闭此抽屉，避免误提交。' }),
-      Field({ label: '关联待办', control: todo }), Field({ label: '频率', control: frequency }), onceField, dailyField, intervalField, cronField, zoneField,
+      Field({ label: '关联待办', control: todo }), Field({ label: '频率', control: frequency }), onceField, dailyField, weeklyFields, intervalField, cronField, zoneField,
       Field({ label: '动作', control: action }), line('事实简报只程序汇总已接入事实，不自动调用模型或外发。派发每次到期仍会生成审批，审批生成不代表任务完成。'), dispatchFields, preview, message);
     form.addEventListener('input', sync); form.addEventListener('change', sync);
     const save = Button({ label: '提交创建审批', kind: 'primary', onClick: async () => {
@@ -301,7 +330,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
         if (!drawer.active()) return;
         submitted = true;
         replace(message, Banner({ children: h('div', null, `已提交创建审批 · ${approvalText(approval.status)} · ${approval.id}。请到对话确认后才生效。`, chatLink()) }));
-        for (const input of form.querySelectorAll('input, select, textarea')) input.disabled = true;
+        for (const input of form.querySelectorAll('input, select, textarea, fieldset button')) input.disabled = true;
         requestRead();
       } catch (cause) {
         if (!drawer.active()) return;
