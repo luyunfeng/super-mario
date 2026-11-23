@@ -610,7 +610,7 @@ export async function createWorkbench(config: AppConfig) {
     if (card.kind === 'question' && !runId && inputId) store.put('input-paused', inputId, { cardId: card.id });
     return card;
   } };
-  const supervisorAgent = createSupervisorAgent({ store, events, agent: supervisorRuntime, signals: supervision.signals, durable: true, publish: background.publish,
+  const supervisorAgent = createSupervisorAgent({ store, events, agent: supervisorRuntime, signals: supervision.signals, reviewEvidence, durable: true, publish: background.publish,
     enabled: () => plugins.list().some(plugin => plugin.id === 'daily-brief' && plugin.status === 'active') });
   supervisorAgent.start();
   const expireTimer = setInterval(() => interactions.expireTick(), 30_000); expireTimer.unref();

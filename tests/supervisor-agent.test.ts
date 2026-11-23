@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { createStore } from '../packages/core/src/store.ts';
 import { createEventBus } from '../packages/core/src/events.ts';
+import { createRunReview } from '../packages/core/src/run-review.ts';
 import { createSupervisorAgent } from '../packages/core/src/supervisor-agent.ts';
 import type { Message, Run, SupervisionSignal } from '../packages/protocol/src/index.ts';
 
@@ -31,13 +32,14 @@ function fixture(t: TestContext) {
     async ask(text: string, context?: { projectId?: string }) { calls.push({ text, context }); return respond(); },
   };
   const signals = () => store.list<SupervisionSignal>('supervision.signals');
-  const service = createSupervisorAgent({ store, events, agent, signals, enabled: () => enabled });
+  const ledger = createRunReview({ store, events, dispatch: () => assert.fail(), completeTodo: () => {} });
+  const service = createSupervisorAgent({ store, events, agent, signals, reviewEvidence: ledger.evidenceForRun, enabled: () => enabled });
   t.after(async () => { await service.close(); store.close(); rmSync(dir, { recursive: true, force: true }); });
   function add(value: SupervisionSignal, notify = true) {
     store.put('supervision.signals', value.id, value);
     if (notify) events.publish('notifications.created', { ...value });
   }
-  return { store, path, events, service, agent, signals, calls, add,
+  return { store, path, events, ledger, service, agent, signals, calls, add,
     setAvailable(value: boolean) { available = value; }, setEnabled(value: boolean) { enabled = value; },
     respondWith(fn: () => Promise<Message>) { respond = fn; } };
 }
@@ -67,6 +69,27 @@ test('batches notification and open signals with actual Run evidence; only sugge
   assert.deepEqual(f.store.get('runs', 'run'), run);
   assert.deepEqual(f.store.get('todos', 'todo'), { id: 'todo', title: '待验收' });
   assert.deepEqual(f.store.get('approvals', 'approval'), { id: 'approval', status: 'pending' });
+});
+
+test('督办按当前执行核对验收依据，同待办的旧轮次不能借用新轮次的验收', async t => {
+  const f = fixture(t);
+  const run: Run = { id: 'run', todoId: 'todo', conversationId: 'external', executorId: 'fixture',
+    prompt: '核对合成报表', doneWhen: '合计与明细一致', output: '合计匹配', resultSource: 'real',
+    status: 'completed', createdAt: '2026-01-01', updatedAt: '2026-01-01' };
+  f.store.put('todos', 'todo', { id: 'todo', title: '合成报表' });
+  f.store.put('runs', 'older', { ...run, id: 'older' });
+  f.store.put('runs', run.id, run);
+  const attached = f.ledger.attach({ todoId: 'todo', runId: run.id });
+  const accepted = f.ledger.decide({ ...attached, action: 'accept' });
+  f.store.put('runs', run.id, { ...run, output: '明细已更正' });
+  f.add({ ...signal('updated'), todoId: 'todo' });
+  await f.service.flush();
+  const prompt = f.calls[0].text;
+  const { runs } = JSON.parse(prompt.split('\n').at(-1)!);
+  assert.deepEqual(runs.find((r: Run) => r.id === run.id).review,
+    { status: 'invalidated', version: accepted.version, updatedAt: accepted.updatedAt });
+  assert.equal(runs.find((r: Run) => r.id === 'older').review, undefined);
+  assert.match(prompt, /invalidated 表示原验收依据已变化/);
 });
 
 test('deduplication, settings, reviews and minGap persist across a real SQLite reopen', async t => {
