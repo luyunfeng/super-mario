@@ -11,6 +11,8 @@ import { openTaskClosure, refreshTaskClosure } from './task-closure.js';
 import { compareRuns, openWorktreeHistory, renameWorktree, openRetainedBranch, openWorktreeStatus } from './run-comparison.js';
 import { createLiveTerminals } from './live-terminals.js';
 
+import { completionTimingView } from './run-completion.js';
+
 const PLAN_STATUS = { pending: ['待确认', 'warn'], running: ['启动中', 'info'], started: ['已启动', 'ok'], rejected: ['已拒绝', ''], partial: ['部分启动', 'warn'], unknown: ['结果未知', 'danger'] };
 const ESTIMATE_SOURCES = { default: '默认估时', learned: '历史估时', override: '显式指定' };
 const PHASE_LABELS = { starting: '启动', thinking: '思考', tool: '调用工具', responding: '生成回复', waiting: '等待' };
@@ -25,6 +27,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
   let observations = null;
   let observationsError = '';
   let observationsSignature = '';
+  let completion = null;
   let observationsSeq = 0;
   const isDetailVisible = () => router.current.page === 'projects'
     && router.current.parts?.[1] === 'runs' && router.current.parts?.[2] === runId && Boolean(runId);
@@ -32,6 +35,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
   // 路由离开后立即作废在途读取；不能让同一执行重新打开时接收旧响应。
   router.subscribe(() => {
     if (!isDetailVisible()) {
+      completion = null;
       observationsSeq++; observationsSignature = ''; observations = null; observationsError = '';
     }
   });
@@ -130,10 +134,43 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
   const detailView = h('div', { class: 'stack stack--lg', hidden: true }, detailBody);
   const el = h('div', { id: 'panel-runs', role: 'tabpanel' }, listView, detailView);
 
+  function completionView(run) {
+    const owner = api.draftOwner();
+    const allowed = () => {
+      const snapshot = store.view.snapshot;
+      const current = snapshot?.runs.find(item => item.id === run.id);
+      return isDetailVisible() && runId === run.id && api.draftOwner() === owner &&
+        store.view.snapshotOwner === owner && !store.view.unauthorized && store.view.connection === 'online' &&
+        current?.status === 'completed' && current.projectId === run.projectId && current.todoId === run.todoId &&
+        (!run.todoId || snapshot.todos.some(todo => todo.id === run.todoId && todo.projectId === run.projectId));
+    };
+    if (!run.planEstimate || run.status !== 'completed' || !allowed()) { completion = null; return null; }
+    const key = JSON.stringify([owner, run.id, run.projectId, run.todoId, run.updatedAt]);
+    if (completion?.key === key) return completion.el;
+    const el = h('div', {class:'stack'});
+    const entry = completion = {key, el};
+    const query = new URLSearchParams({expectedProjectId:run.projectId ?? ''});
+    async function read() {
+      if (completion !== entry || !allowed()) return;
+      replace(el);
+      try {
+        const result = await api.get('/runs/' + encodeURIComponent(run.id) + '/completion?' + query);
+        if (completion === entry && allowed() && result.runId === run.id)
+          replace(el, completionTimingView(result.completionTiming) ?? h('p',{class:'small muted'},'尚无可核实的计划完成计时。'));
+      } catch (error) {
+        if (completion === entry && allowed()) replace(el, h('p',{role:'status'},error.message),
+          Button({label:'重新读取完成回执',size:'sm',onClick:read}));
+      }
+    }
+    read();
+    return el;
+  }
+
   function paintDetail() {
     const snapshot = store.view.snapshot;
     const run = snapshot?.runs.find(item => item.id === runId && inScope(item));
     if (!run) {
+      completion = null;
       replace(detailBody, h('a', { class: 'btn btn--sm', href: router.href('projects', projectId, 'runs') }, '← 返回执行列表'), Empty({ title: '找不到这条执行', text: '它可能已被清理。' }));
       return;
     }
@@ -150,7 +187,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
 
     const timeline = [
       [run.createdAt, '已派发', `执行者：${executorName(run.executorId)}${run.cwd ? ` · 目录：${run.cwd}` : ''}`],
-      isRunActive(run) ? [new Date().toISOString(), '正在执行', `已运行 ${duration(run.createdAt)}`] : [run.updatedAt, `${status.text}`, run.resultSource ? `来源：${run.resultSource}` : undefined],
+      isRunActive(run) ? [new Date().toISOString(), '正在执行', `已运行 ${duration(run.createdAt)}`] : [run.updatedAt, `状态更新 · ${status.text}`, run.resultSource ? `来源：${run.resultSource}` : undefined],
     ];
     const panels = {
       timeline: h('div', { class: 'stack stack--lg' }, waitingView(), h('ol', { class: 'timeline' }, timeline.map(([time, title, text]) => h('li', null, h('div', { class: 'timeline__title' }, title, h('span', { class: 'muted small' }, ` ${formatDate(time, true)}`)), text && h('div', { class: 'muted small' }, text))))),
@@ -188,7 +225,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       run.status === 'unknown' && Banner({ tone: 'danger', children: '动作已发出，但没有收到确认。请先到电脑上核对，不要重复发起。' }),
       run.status === 'failed' && Banner({ tone: 'danger', children: run.error ? systemText(run.error) : '执行失败，请查看“结果”。' }),
       progressView(run, observations ? observations.progress : run.progress, true),
-      comparison, tabs.el, panels[detailTab],
+      completionView(run), comparison, tabs.el, panels[detailTab],
       h('div', { class: 'card card--tight accept' }, h('div', { class: 'card__body' },
         h('div', { class: 'stack' },
           h('strong', null, '验收'),

@@ -1,6 +1,8 @@
 import { h, replace } from '../lib/dom.js';
 import { Button, Field, Input, TextArea } from '../ui/kit.js';
 
+import { completionTimingView } from './run-completion.js';
+
 const labels = { web: '主人在 Web 修改', assistant: '助手修改' };
 
 export function createRunScope({ api, runId, projectId, valid, canEdit, saved }) {
@@ -69,6 +71,7 @@ export function createRunScope({ api, runId, projectId, valid, canEdit, saved })
     const estimate = state.planEstimateTiming;
     const sources = {default:'默认估时',learned:'历史估时',override:'显式指定'};
     replace(history, h('p',null,'当前标准 · ' + state.doneWhen),
+      completionTimingView(state.completionTiming),
       estimate && h('p',null,'计划预计复核时间 · ' + new Date(estimate.dueAt).toLocaleString('zh-CN') +
         '（' + sources[estimate.source] + '，' + estimate.minutes + ' 分钟）'),
       Array.isArray(dropped) && dropped.length > 0 && h('section', {class:'stack','aria-label':'已移出当前验收范围的标准'},

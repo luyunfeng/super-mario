@@ -7,6 +7,7 @@ import { policyPresets, applyPolicyPreset, policyRuleHits } from '../../../packa
 import { todoSections, todoDecisionIds } from '../../../packages/core/src/todo-sections.ts';
 import { createAgentArtifacts } from './agent-artifacts.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { runCompletionTiming } from '../../../packages/core/src/run-completion-timing.ts';
 import { todoBrief } from '../../../packages/core/src/todo-brief.ts';
 import { todoLineage } from '../../../packages/core/src/todo-lineage.ts';
 import { currentWorkerTodo } from './worker-session.ts';
@@ -20,7 +21,7 @@ import { createMachineHub } from '../../../packages/core/src/machines.ts';
 import type { FeishuRegistrationInput } from './feishu-registration.ts';
 import { createFeishuGateway, type FeishuGatewayDependencies } from './feishu-gateway.ts';
 import { validateBotScope } from '../../../packages/core/src/bot-scopes.ts';
-import type { AppConfig, FeishuBotInput, JsonObject, KnowledgeImportance, Message, NodeMessage, Todo } from '../../../packages/protocol/src/index.ts';
+import type { AppConfig, FeishuBotInput, JsonObject, KnowledgeImportance, Message, NodeMessage, Run, Todo } from '../../../packages/protocol/src/index.ts';
 
 async function body(req: IncomingMessage, maxBytes = 1024 * 1024): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []; let size = 0;
@@ -831,6 +832,15 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 202, await app.agent.post(input.text, 'main', { directWebInput:true, requestId: messageRequestId(req), ...(typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : {}), ...(input.readOnly === true ? { readOnly: true } : {}) }));
         }
         if (path === '/api/v1/runs' && method === 'POST') return json(res, 202, app.dispatch(await body(req), typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : undefined));
+        const completion = path.match(/^\/api\/v1\/runs\/([^/]+)\/completion$/);
+        if (completion && method === 'GET') {
+          const id = decodeURIComponent(completion[1]!);
+          const run = app.store.get<Run>('runs',id);
+          if (!run || run.id !== id) throw new InputError('执行不存在',404);
+          if (!url.searchParams.has('expectedProjectId')) throw new InputError('请指定预期项目');
+          if (url.searchParams.get('expectedProjectId') !== (run.projectId ?? '')) throw new InputError('执行所在项目已变化',409);
+          return json(res,200,{runId:id,completionTiming:runCompletionTiming(app.store,run) ?? null});
+        }
         const runScope = path.match(/^\/api\/v1\/runs\/([^/]+)\/scope$/);
         if (runScope && (method === 'GET' || method === 'POST')) {
           const id = decodeURIComponent(runScope[1]!);

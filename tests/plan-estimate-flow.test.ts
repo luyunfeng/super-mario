@@ -41,6 +41,11 @@ test('计划启动到预计复核使用宿主派发来源，改时长重设到�
     const data = await response.json();
     assert.equal(response.status,expected,JSON.stringify(data)); return data;
   }
+  async function getCompletion(runId:string,query='?expectedProjectId=',status=200) {
+    const res=await fetch(server.url+'/api/v1/runs/'+runId+'/completion'+query,{headers:{Authorization:'Bearer '+options.token}});
+    assert.equal(res.status,status);
+    return (await res.json()).completionTiming;
+  }
   async function waitSession(id:string) {
     for (let i=0;i<100 && !run(id).sessionId;i++) await delay(10);
     assert.ok(run(id).sessionId); assert.equal(run(id).status,'running');
@@ -104,11 +109,23 @@ test('计划启动到预计复核使用宿主派发来源，改时长重设到�
   sessions.set(run(id).sessionId!,'completed');
   await server.app.monitor.poll();
   assert.equal(run(id).status,'completed');
+  const timing=await getCompletion(id);
+  assert.equal(timing.initialEstimateMinutes,2);
+  assert.equal(timing.actualMinutes,9);
+  assert.equal(timing.deltaMinutes,7);
+  assert.equal(timing.receiptId,'run-result:'+id);
+  assert.equal(await getCompletion(direct.id),null);
+  await getCompletion(id,'',400);
+  await getCompletion(id,'?expectedProjectId=other',409);
   atMinute(100); tick(); tick();
   assert.equal(all(id,'estimate_due').length,2);
   assert.equal(active(id,'estimate_due').length,0);
   assert.equal(active(id,'stalled').length,0);
   assert.equal(active(id,'review').length,1);
+  assert.deepEqual(await getCompletion(id),timing);
+  await server.close();
+  server=await startServer(options);
+  assert.deepEqual(await getCompletion(id),timing);
   assert.equal(all(direct.id,'estimate_due').length,0);
   assert.equal(sessions.size,2);
 });

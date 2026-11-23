@@ -1,7 +1,8 @@
 import type { Store } from '../../plugin-sdk/src/index.ts';
-import type { Message, PlanEstimateDispatch, Run, Todo } from '../../protocol/src/index.ts';
-import type { Plan, PlanTaskInput } from './plans.ts';
-import { completionEvidence, evidenceVersion, type RunReview } from './run-review.ts';
+import type { PlanEstimateDispatch, Run, Todo } from '../../protocol/src/index.ts';
+import type { PlanTaskInput } from './plans.ts';
+import { planCompletionFacts } from './run-completion-timing.ts';
+import { evidenceVersion, type RunReview } from './run-review.ts';
 
 export type { PlanEstimateDispatch };
 export type PlanEstimateSource = PlanEstimateDispatch['source'];
@@ -39,25 +40,16 @@ function completionSample(store:Store, runId:string, projectId:string|undefined,
   const run=store.get<Run>('runs',runId);
   if (!run || run.id!==runId || run.projectId!==projectId || !run.todoId ||
       run.executionMode!=='task' || run.status!=='completed' || !run.planEstimate) return;
-  const {planId,taskIndex,source}=run.planEstimate;
-  const plan=store.get<Plan>('plans',planId);
-  const task=plan?.tasks[taskIndex];
-  if (!plan || plan.id!==planId || !task || workKind(task)!==kind || task.runId!==runId || task.estimateSource!==source ||
-      store.get('dispatch-keys',`plan:${planId}:${plan.version}:${taskIndex}`)!==runId) return;
+  const facts=planCompletionFacts(store,run);
+  if (!facts || workKind(facts.task)!==kind) return;
   const todo=store.get<Todo>('todos',run.todoId);
   const review=store.get<RunReview>('run-reviews',run.todoId);
   if (!todo?.completedAt || todo.id!==run.todoId || todo.projectId!==projectId || review?.status!=='accepted' ||
       review.todoId!==todo.id || review.runId!==runId || !review.runIds?.includes(runId) || review.doneWhen!==run.doneWhen ||
       review.evidenceVersion!==evidenceVersion(run)) return;
-  try { completionEvidence(run); } catch { return; }
-  const resultId='run-result:'+runId;
-  const receipt=store.get<Message>('messages',resultId);
-  if (!receipt || receipt.id!==resultId || receipt.todoId!==todo.id || receipt.projectId!==projectId ||
-      receipt.conversationId!==run.conversationId || receipt.role!=='assistant' || receipt.origin!=='result' || receipt.status!=='done') return;
-  const finished=Date.parse(receipt.createdAt), started=Date.parse(run.createdAt), accepted=Date.parse(review.updatedAt);
-  if (![finished,started,accepted].every(Number.isFinite) || started>finished || finished>accepted || accepted>now ||
-      accepted<now-90*86400000) return;
-  return {executorId:run.executorId,accepted,minutes:Math.max(1,Math.ceil((finished-started)/60000)),cwd:run.cwd};
+  const accepted=Date.parse(review.updatedAt);
+  if (!Number.isFinite(accepted) || Date.parse(facts.timing.reportedAt)>accepted || accepted>now || accepted<now-90*86400000) return;
+  return {executorId:run.executorId,accepted,minutes:facts.timing.actualMinutes,cwd:run.cwd};
 }
 
 /** Freeze estimates at proposal time and disclose only aggregated evidence from the same scope. */

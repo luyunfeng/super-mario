@@ -1,3 +1,4 @@
+import { runCompletionTiming } from './run-completion-timing.ts';
 import type { Store } from '../../plugin-sdk/src/index.ts';
 import type { Project, Run, Todo } from '../../protocol/src/index.ts';
 
@@ -97,19 +98,19 @@ function fail(message: string, status: number): never {
 }
 
 export function createRunScopes(store: Store) {
-  function facts(runId: string) {
-    const run = store.get<Run>('runs', runId);
+  function facts(runId: string, run = store.get<Run>('runs',runId)) {
     if (!run || run.id !== runId || !run.todoId) fail('找不到关联待办的执行记录。', 404);
     const todo = store.get<Todo>('todos', run.todoId);
     if (!todo || todo.id !== run.todoId || todo.projectId !== run.projectId) fail('执行与待办不属于同一范围。', 404);
     return {run, todo};
   }
 
-  function snapshot(run: Run, todo: Todo, history: RunScopeEvent[]) {
+  function snapshot(run: Run, todo: Todo | undefined, history: RunScopeEvent[]) {
     const initial = originalCriteria(run, history[0]);
     const timing = estimateTiming(run,history);
+    const completion = runCompletionTiming(store,run);
     return {
-      runId: run.id, todoId: todo.id, status: run.status, projectId: run.projectId, version: history.length,
+      runId: run.id, todoId: todo?.id, ...(completion && {completionTiming:completion}), status: run.status, projectId: run.projectId, version: history.length,
       ...(timing && {planEstimateTiming:timing}), initialDoneWhen: initial.doneWhen ?? '',
       initialExpectMinutes: initial.expectMinutes,
       doneWhen: run.doneWhen ?? '', expectMinutes: run.expectMinutes,
@@ -122,7 +123,9 @@ export function createRunScopes(store: Store) {
   }
   function read(runId: string) {
     return store.transaction(() => {
-      const {run, todo} = facts(runId);
+      const value = store.get<Run>('runs',runId);
+      if (value?.id === runId && value.planEstimate && !value.todoId) return snapshot(value,undefined,[]);
+      const {run, todo} = facts(runId,value);
       return snapshot(run, todo, store.get<RunScopeEvent[]>(collection, run.id) ?? []);
     });
   }
