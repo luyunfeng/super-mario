@@ -3,8 +3,9 @@
 const TOKEN_KEY = 'super-mario-token';
 
 export class ApiError extends Error {
-  constructor(message, status, retryAt) {
+  constructor(message, status, retryAt, code) {
     super(message); this.name = 'ApiError'; this.status = status;
+    if (typeof code === 'string') this.code = code;
     if (status === 429 && typeof retryAt === 'string' && Number.isFinite(Date.parse(retryAt)))
       this.retryAt = new Date(retryAt).toISOString();
   }
@@ -137,7 +138,7 @@ export function createApi() {
     const data = response.status === 204 ? null : await response.json().catch(() => null);
     if (!response.ok) {
       if (response.status === 401 && current().owner === owner) onUnauthorized();
-      throw new ApiError(data?.error || `请求失败（${response.status}）`, response.status, data?.retryAt);
+      throw new ApiError(data?.error || `请求失败（${response.status}）`, response.status, data?.retryAt, data?.code);
     }
     return data;
   }

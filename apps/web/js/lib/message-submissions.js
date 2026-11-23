@@ -1,3 +1,4 @@
+import { createMessageOutbox } from './message-outbox.js';
 import { Button } from '../ui/kit.js';
 
 export const messageRequestLimit = 32 * 1024 * 1024;
@@ -26,9 +27,10 @@ function newId() {
 }
 
 // Only unresolved submissions live in this tab. Body/quote fingerprints do not retain the text.
-export function createMessageSubmissions({ api, context, onConfirmed, onStatus, captureEdit }) {
-  const memory = new Map(), posting = new Set();
-  let visibleKey = '', generation = 0;
+export function createMessageSubmissions({ api, context, onConfirmed, onStatus, captureEdit, isRecoveryEnabled = () => false, canPersistDraft = () => false }) {
+  const memory = new Map(), posting = new Set(), recovering = new Set();
+  const outbox=createMessageOutbox({enabled:isRecoveryEnabled,persist:canPersistDraft,act:recover,render:update});
+  let visibleKey = '', lastEnabled, generation = 0;
   const button = Button({ label: '核对发送回执', size: 'sm', onClick: check });
   button.hidden = true;
   const path = ctx => ctx.key && ctx.owner ? 'sm.message-submissions.' + JSON.stringify([ctx.owner, ctx.key]) : '';
@@ -56,15 +58,17 @@ export function createMessageSubmissions({ api, context, onConfirmed, onStatus, 
   function save(key, rows) {
     memory.set(key, rows);
     try {
-      if (rows.length) sessionStorage.setItem(key, JSON.stringify(rows));
+      if (rows.length) sessionStorage.setItem(key, JSON.stringify(rows.map(({reason,...row})=>row)));
       else sessionStorage.removeItem(key);
     } catch { /* Keep outstanding receipts in this page when storage is unavailable. */ }
   }
   function update() {
-    const key = path(context());
-    if (key !== visibleKey) { visibleKey = key; generation++; }
+    const ctx=context(), key = path(ctx);
+    const enabled = !!isRecoveryEnabled();
+    if (key !== visibleKey || lastEnabled !== enabled) { visibleKey = key; lastEnabled = enabled; generation++; }
     const rows = entries(key);
     button.hidden = !rows.some(row => !posting.has(row.id));
+    outbox.paint(ctx,rows.filter(row=>!posting.has(row.id)),id=>recovering.has(id));
   }
   function begin(ctx) {
     if (typeof globalThis.sha256 !== 'function') {
@@ -73,17 +77,25 @@ export function createMessageSubmissions({ api, context, onConfirmed, onStatus, 
     }
     const key = path(ctx), rows = entries(key), hash = messageHash(ctx.body,ctx.images,ctx.files);
     let record = rows.find(row => row.hash === hash);
+    const existing=!!record;
+    if(record && recovering.has(record.id)) {onStatus('正在核对这次发送，请稍候。');return null;}
     if (!record) {
       record = { id: newId(), hash, draft: '', blocked: false };
       rows.push(record);
     }
+    let saved;
+    if (record.blocked && isRecoveryEnabled()) {
+      // The composer will run the same authoritative receipt check as the row.
+      record.blocked=false;
+    }
     if (!record.blocked) {
+      saved=outbox.remember(ctx,record.id);
       record.draft = draftDigest(ctx);
       posting.add(record.id);
     }
     save(key, rows);
     update();
-    return { key, record };
+    return { key, record, existing, saved, generation };
   }
   function finish(ticket) {
     posting.delete(ticket.record.id);
@@ -91,9 +103,10 @@ export function createMessageSubmissions({ api, context, onConfirmed, onStatus, 
   }
   function block(ticket) {
     ticket.record.blocked = true;
+    ticket.record.state = 'unknown';
     save(ticket.key, entries(ticket.key));
   }
-  function accepted(ticket, reply, ctx, legacy = false) {
+  function matches(ticket, reply, ctx, legacy = false) {
     if (typeof reply?.id !== 'string' || !reply.id || reply.role !== 'user') return false;
     const keyed = reply.requestId !== undefined;
     if (keyed ? reply.requestId !== ticket.record.id : !legacy) return false;
@@ -102,6 +115,14 @@ export function createMessageSubmissions({ api, context, onConfirmed, onStatus, 
     if ((reply.todoId ?? null) !== (ctx.todoId ?? null)) return false;
     if ((keyed || reply.text !== undefined) && (typeof reply.text !== 'string' || ticket.record.hash !== messageHash(reply.text,reply.images,reply.files))) return false;
     if (!['done', 'pending'].includes(reply.status) && !(keyed && reply.status === 'failed')) return false;
+    return true;
+  }
+  function accepted(ticket,reply,ctx,legacy=false) {
+    if (!matches(ticket,reply,ctx,legacy)) {
+      if (reply?.status==='failed' && !reply.requestId && legacy) mark(ticket,'rejected');
+      return false;
+    }
+    outbox.forget(ctx,ticket.record.id);
     save(ticket.key, entries(ticket.key).filter(row => row.id !== ticket.record.id));
     update();
     return true;
@@ -116,7 +137,8 @@ export function createMessageSubmissions({ api, context, onConfirmed, onStatus, 
     const finishEdit = captureEdit();
     const result = [];
     for (const record of [...entries(key)]) {
-      if (posting.has(record.id) || !current()) continue;
+      if (posting.has(record.id) || recovering.has(record.id) || !current()) continue;
+      recovering.add(record.id); update();
       try {
         const reply = await api.get(ctx.url + '/receipts/' + record.id);
         if (!current()) return;
@@ -135,16 +157,92 @@ export function createMessageSubmissions({ api, context, onConfirmed, onStatus, 
       } catch (error) {
         if (!current()) return;
         if (posting.has(record.id) || !entries(key).includes(record)) continue;
-        if (error.status === 404) {
+        if (error.status === 404 && (error.code === 'MESSAGE_RECEIPT_NOT_FOUND' || !isRecoveryEnabled())) {
+          record.state = 'missing';
+          record.reason = '';
           record.blocked = false;
           save(key, entries(key));
           result.push('未找到发送回执。可手动重试，原文将沿用原请求号。');
-        } else result.push('无法核对发送回执：' + error.message);
-      }
+        } else {
+          if (isRecoveryEnabled()) mark({key,record},'unknown');
+          result.push('无法核对发送回执：' + error.message);
+        }
+      } finally { recovering.delete(record.id); }
     }
     if (current() && result.length) onStatus(result.join(' '));
     update();
   }
-  return { button, update, begin, finish, block, accepted,
-    blocked: () => entries(path(context())).some(row => row.blocked) };
+  function mark(ticket,state,reason='') {
+    if(!entries(ticket.key).includes(ticket.record)) return;
+    ticket.record.state=state;
+    // Keep server error text out of sessionStorage. It can contain a fragment of a draft.
+    ticket.record.reason=reason;
+    save(ticket.key,entries(ticket.key));
+  }
+  function failed(ticket,error) {
+    const rejected=!error.receiptCheck && error.status>=400 && error.status<500 && !/结果未知|unknown/i.test(error.message);
+    mark(ticket,rejected?'rejected':'unknown',rejected?error.message:'');
+  }
+  async function preflight(ticket,ctx) {
+    const current=()=>isRecoveryEnabled() && generation===ticket.generation && path(context())===ticket.key &&
+      context().epoch===ctx.epoch && entries(ticket.key).includes(ticket.record);
+    if(ticket.saved) {
+      const stored=await ticket.saved;
+      if(!current()) throw new Error('原发件范围已变化');
+      if(!stored) onStatus('原发件快照仅保留在当前页面。');
+    }
+    if(!ticket.existing || !isRecoveryEnabled()) return;
+    if(!current()) throw new Error('原发件范围已变化');
+    try {
+      const reply=await api.get(ctx.url+'/receipts/'+ticket.record.id);
+      if(!current()) throw new Error('原发件范围已变化');
+      if(!matches(ticket,reply,ctx)) throw new Error('返回的回执无法确认原发件。');
+      return reply;
+    } catch(error) {
+      if(error.status===404 && error.code==='MESSAGE_RECEIPT_NOT_FOUND' && current()) return;
+      error.receiptCheck=true;
+      throw error;
+    }
+  }
+  async function recover(operation,ctx,record,payload) {
+    const key=path(ctx), ticket={key,record,existing:true,generation};
+    const stamp=generation;
+    const current=()=>isRecoveryEnabled() && generation===stamp && path(context())===key && context().epoch===ctx.epoch && entries(key).includes(record);
+    if(!current() || posting.has(record.id) || recovering.has(record.id)) return;
+    if(operation==='remove') {
+      outbox.forget(ctx,record.id);save(key,entries(key).filter(row=>row!==record));
+      update();return;
+    }
+    recovering.add(record.id);update();
+    try {
+      let reply=await preflight(ticket,ctx);
+      if(!current()) return;
+      if(reply===undefined) {
+        record.blocked=false;mark(ticket,'missing');
+        if(operation!=='send') {onStatus('未找到发送回执。');return;}
+        if(!payload || payload.projectId!==ctx.projectId || payload.todoId!==ctx.todoId ||
+            messageHash(payload.text,payload.images,payload.files)!==record.hash)
+          throw new Error('原发件内容无法核对，请重新选择原件。');
+        const fields={text:payload.text,...(ctx.conversation==='main' && ctx.projectId && {projectId:ctx.projectId}),...(ctx.todoId && {todoId:ctx.todoId})};
+        try {
+          reply=await api.post(ctx.url,messagePayload(payload,fields),{'Idempotency-Key':record.id});
+        } catch(error) {
+          if(current()) {
+            failed(ticket,error);
+            onStatus(error.status===410?'原文件上传凭据已过期，请重新选择原件。':'重新发送未确认：'+error.message);
+          }
+          return;
+        }
+      }
+      if(!current()) return;
+      if(accepted(ticket,reply,ctx)) onStatus('原发件已受理。');
+      else {block(ticket);onStatus('回执与原发件不一致，请核对对话。');}
+    } catch(error) {
+      if(current()) {mark(ticket,'unknown');onStatus('无法核对原发件：'+error.message);}
+    } finally {
+      recovering.delete(record.id);update();
+    }
+  }
+  return { panel:outbox.panel, failed, preflight, button, update, begin, finish, block, accepted,
+    blocked: () => !isRecoveryEnabled() && entries(path(context())).some(row => row.blocked) };
 }

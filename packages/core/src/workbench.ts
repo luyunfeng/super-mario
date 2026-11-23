@@ -87,7 +87,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput, currentAgentReplyId, type OfficeFileOrigin } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
-import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationRetry, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationRetry, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
@@ -472,6 +472,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(conversationQuotes);
   plugins.register(conversationEdit);
   plugins.register(conversationRetry);
+  plugins.register(conversationOutbox);
   plugins.register(createReplyTranslation((text, language, signal) => translateReply(config, text, language, signal), () => modelRevision));
   plugins.register(savedPrompts);
   plugins.register(projectInstructions);

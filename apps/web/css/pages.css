@@ -119,6 +119,7 @@ sm-reply-quotation .is-folded { max-height: 4lh; overflow: hidden; }
 .strip { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border: 1px solid var(--info-line); background: var(--info-soft); color: var(--info); border-radius: var(--radius-sm); font-size: calc(13px * var(--reading-scale, 1)); }
 .strip:hover { text-decoration: none; border-color: var(--info); }
 
+.message-outbox { max-height: min(30vh, 18rem); overflow: auto; overflow-wrap: anywhere; }
 .composer { flex: none; max-width: 800px; width: 100%; margin: 0 auto; padding: 6px 24px 16px; }
 .composer__box {
   display: grid; gap: 6px; padding: 10px 12px 8px; background: var(--surface);

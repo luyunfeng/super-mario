@@ -80,8 +80,12 @@ test('主对话和项目工作会话在回执丢失后重用请求号，明确�
     const key = first[0].key;
     assert.ok(key?.trim(), '首次发送必须携带请求号');
     assert.equal(accepted.requestId, key);
-    const retry = await confirmedSend();
-    assert.deepEqual(submissions().map(r => r.key), [key, key]);
+    const recovered=page.waitForResponse(r=>r.request().method()==='GET' && r.url()===url+'/receipts/'+key);
+    await send.click();
+    const actual=await recovered;
+    assert.equal(actual.status(),200);
+    const retry=await actual.json() as Message;
+    assert.deepEqual(submissions().map(r => r.key), [key]);
     assert.equal(retry.id, firstId);
     assert.equal(retry.requestId, key);
     await expect(input).toHaveValue('');
@@ -92,16 +96,16 @@ test('主对话和项目工作会话在回执丢失后重用请求号，明确�
     const newMessage = await confirmedSend();
     assert.notEqual(newMessage.id, firstId);
     const all = submissions();
-    assert.equal(all.length, 3);
-    assert.ok(all[2].key?.trim());
-    assert.notEqual(all[2].key, key);
-    assert.equal(newMessage.requestId, all[2].key);
-    assert.deepEqual(all.map(r => r.text), [body, body, body]);
+    assert.equal(all.length, 2);
+    assert.ok(all[1].key?.trim());
+    assert.notEqual(all[1].key, key);
+    assert.equal(newMessage.requestId, all[1].key);
+    assert.deepEqual(all.map(r => r.text), [body, body]);
     await expect(input).toHaveValue('');
     await expect.poll(() => replies().filter(m => m.status === 'done').map(m => m.replyTo).sort())
       .toEqual([firstId, newMessage.id].sort());
     assert.equal(replies().length, 2);
-    assert.deepEqual(users().map(m => [m.id, m.text, m.requestId]), [[firstId, body, key], [newMessage.id, body, all[2].key]]);
+    assert.deepEqual(users().map(m => [m.id, m.text, m.requestId]), [[firstId, body, key], [newMessage.id, body, all[1].key]]);
 
     const check = page.getByRole('button', { name: '核对发送回执', exact: true });
     for (const editDuringSend of [false, true]) {

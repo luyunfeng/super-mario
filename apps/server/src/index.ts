@@ -915,12 +915,15 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (projectId && !app.projects.list().some(p => p.id === projectId && !p.archivedAt))
             throw new InputError('项目不存在或已归档', 404);
           const receipt = readMessageReceipt(app.store, projectId ? `project:${projectId}:work` : 'main', messageReceipt[2]!);
-          if (!receipt) throw new InputError('当前会话中未找到这次发送的回执', 404);
+          if (!receipt) return json(res,404,{error:'当前会话中未找到这次发送的回执',code:'MESSAGE_RECEIPT_NOT_FOUND'});
           return json(res, 200, receipt);
         }
         if (path === '/api/v1/messages' && method === 'POST') {
           const input = await chatMessageBody(req);
-          return json(res, 202, await app.agent.post(input.text, 'main', { directWebInput:true, images:input.images, files:input.files, requestId: messageRequestId(req), ...(typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : {}), ...(input.readOnly === true ? { readOnly: true } : {}) }));
+          const projectId = typeof input.projectId === 'string' ? input.projectId.trim() || undefined : undefined;
+          if (projectId && !app.projects.list().some(p=>p.id===projectId && !p.archivedAt))
+            throw new InputError('项目不存在或已归档',404);
+          return json(res, 202, await app.agent.post(input.text, 'main', { directWebInput:true, images:input.images, files:input.files, requestId: messageRequestId(req), projectId, ...(input.readOnly === true ? { readOnly: true } : {}) }));
         }
         if (path === '/api/v1/runs' && method === 'POST') return json(res, 202, app.dispatch(await body(req), typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : undefined));
         const completion = path.match(/^\/api\/v1\/runs\/([^/]+)\/completion$/);

@@ -72,10 +72,13 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const composer = h('div', { class: 'project-conversation__composer stack' }, topic, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, files.el, text, voice.caption, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, mentions.button, pictures.button, files.button, voice.button, voice.upload, send), notice);
   const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, statusButton, favorites.button, transcript.button, code.toggle)), status, locationNote, readNotice, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
-  let draftKey, owner, enabled, quotesEnabled, editEnabled, epoch = 0;
+  let draftKey, owner, enabled, quotesEnabled, editEnabled, outboxEnabled, epoch = 0;
   const submissions = createMessageSubmissions({ api, context: submissionContext, onConfirmed: clearSubmittedDraft, captureEdit: edit.onAccepted,
+    isRecoveryEnabled: () => store.view.snapshot?.plugins?.some(p=>p.id==='conversation-outbox' && p.status==='active'),
+    canPersistDraft: () => composerContext().draftsEnabled,
     onStatus: message => { notices.set(draftKey, message); paint(); } });
   send.before(submissions.button);
+  composer.prepend(submissions.panel);
   function submissionContext() {
     const { key, owner } = composerContext();
     const draft = text.value, captured = quotesEnabled ? quote.capture() : '';
@@ -110,6 +113,8 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     readAloud.update(key, nextOwner, store.view.snapshot);
     voice.update(visible && router.current.page === 'projects' && key, nextOwner, store.view.snapshot, projectId);
     const sameDraft = owner === nextOwner && enabled === nextEnabled && quotesEnabled === nextQuotes && draftKey === key;
+    const recovery = store.view.snapshot?.plugins?.some(p=>p.id==='conversation-outbox' && p.status==='active');
+    if (outboxEnabled !== recovery) { outboxEnabled = recovery; submissions.update(); }
     if (sameDraft && editEnabled === allowEdit) return;
     editEnabled = allowEdit;
     edit.reset();
@@ -233,7 +238,10 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     const finishEdit = edit.onAccepted();
     pending.set(key, submission); notices.delete(key); paint();
     try {
-      const answer = await api.post(ctx.url, payload, { 'Idempotency-Key': ticket.record.id });
+      const receipt = await submissions.preflight(ticket,ctx);
+      const current = submissionContext();
+      if (current.owner!==ctx.owner || current.key!==ctx.key || current.epoch!==ctx.epoch) return;
+      const answer = receipt ?? await api.post(ctx.url, payload, { 'Idempotency-Key': ticket.record.id });
       syncDraft();
       if (sender !== epoch) return;
       const confirmed = submissions.accepted(ticket, answer, ctx, true);
@@ -250,7 +258,8 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
       } else if (draftKey === key) await load();
       void store.refresh().catch(() => {});
     } catch (error) {
-      if(error.status===410) files.expired(ctx);
+      submissions.failed(ticket,error);
+      if(error.status===410 && !error.receiptCheck) files.expired(ctx);
       syncDraft();
       if (sender !== epoch) return;
       if (!error.status || error.status >= 500 || /unknown|结果未知/i.test(error.message)) {

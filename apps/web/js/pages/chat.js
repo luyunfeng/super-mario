@@ -114,10 +114,13 @@ export function createChatPage({ api, store, scope, router }) {
   const el = h('section', { class: 'page page--chat', id: 'chat' }, h('div', { class: 'chat-code-main' }, top, scroller, form), code.el);
 
   const pending = new Map();
-  let draftKey, owner, enabled, quotesEnabled, editEnabled, epoch = 0;
+  let draftKey, owner, enabled, quotesEnabled, editEnabled, outboxEnabled, epoch = 0;
   const submissions = createMessageSubmissions({ api, context: submissionContext, onConfirmed: clearSubmittedDraft, captureEdit: edit.onAccepted,
+    isRecoveryEnabled: () => store.view.snapshot?.plugins?.some(p=>p.id==='conversation-outbox' && p.status==='active'),
+    canPersistDraft: () => composerContext().draftsEnabled,
     onStatus: message => { status.className = 'small composer__status'; status.textContent = message; } });
   send.before(submissions.button);
+  form.prepend(submissions.panel);
   function submissionContext() {
     const { key, owner } = composerContext();
     const draft = input.value, captured = quotesEnabled ? quote.capture() : '';
@@ -153,6 +156,8 @@ export function createChatPage({ api, store, scope, router }) {
     readAloud.update(key, nextOwner, store.view.snapshot);
     voice.update(router.current.page === 'chat' && key, nextOwner, store.view.snapshot, scope.get());
     const sameDraft = owner === nextOwner && enabled === nextEnabled && quotesEnabled === nextQuotes && draftKey === key;
+    const recovery = store.view.snapshot?.plugins?.some(p=>p.id==='conversation-outbox' && p.status==='active');
+    if (outboxEnabled !== recovery) { outboxEnabled = recovery; submissions.update(); }
     if (sameDraft && editEnabled === allowEdit) return;
     editEnabled = allowEdit;
     edit.reset();
@@ -239,7 +244,10 @@ export function createChatPage({ api, store, scope, router }) {
     const finishEdit = edit.onAccepted();
     pending.set(key, submission); send.disabled = true; status.textContent = ''; status.className = 'small composer__status muted';
     try {
-      const answer = await api.post(ctx.url, payload, { 'Idempotency-Key': ticket.record.id });
+      const receipt = await submissions.preflight(ticket,ctx);
+      const current = submissionContext();
+      if (current.owner!==ctx.owner || current.key!==ctx.key || current.epoch!==ctx.epoch) return;
+      const answer = receipt ?? await api.post(ctx.url, payload, { 'Idempotency-Key': ticket.record.id });
       syncDraft();
       if (stamp !== epoch) return;
       const confirmed = submissions.accepted(ticket, answer, ctx, true);
@@ -259,7 +267,8 @@ export function createChatPage({ api, store, scope, router }) {
         }
       }
     } catch (error) {
-      if(error.status===410) files.expired(ctx);
+      submissions.failed(ticket,error);
+      if(error.status===410 && !error.receiptCheck) files.expired(ctx);
       syncDraft();
       if (stamp !== epoch) return;
       if (error.status && /unknown|结果未知/i.test(error.message)) submissions.block(ticket);
