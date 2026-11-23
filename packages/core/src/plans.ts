@@ -1,6 +1,7 @@
 import { estimatePlanTask, rememberEstimateRun, type PlanEstimateDispatch, type PlanEstimateSource, type PlanEstimateEvidence } from './plan-estimates.ts';
 import { validatePolicyPatch, type PolicyConfig } from './policies.ts';
 import { randomUUID } from 'node:crypto';
+import { isAbsolute } from 'node:path';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
 
 export class PlansError extends Error {
@@ -37,6 +38,40 @@ const collection = 'plans';
 function text(value: unknown, field: string): asserts value is string {
   if (typeof value !== 'string' || !value.trim()) throw new PlansError(`${field}必须为非空文本`);
 }
+function minutes(value: unknown): asserts value is number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 10080) {
+    throw new PlansError('expectMinutes必须为1周内的有限正数');
+  }
+}
+
+function applyStartEdits(plan: Plan, edits: unknown) {
+  if (!Array.isArray(edits) || !edits.length || edits.length > plan.tasks.length) throw new PlansError('请选择要修改的计划任务');
+  const changed = new Set<number>();
+  for (const edit of edits) {
+    if (!edit || typeof edit !== 'object' || Array.isArray(edit) || !Number.isSafeInteger(edit.index)
+        || edit.index < 0 || edit.index >= plan.tasks.length || changed.has(edit.index)) throw new PlansError('任务索引无效或重复');
+    changed.add(edit.index);
+    const fields = Object.keys(edit).filter(k => k !== 'index');
+    const task = plan.tasks[edit.index]!;
+    if (!fields.length) throw new PlansError('请提供要修改的任务字段');
+    for (const key of fields) {
+      const value:unknown = edit[key];
+      if (key === 'expectMinutes') {
+        minutes(value);
+        if (value !== task.expectMinutes) {
+          task.expectMinutes = value;
+          task.estimateSource = 'override';
+          delete task.estimateEvidence;
+        }
+      } else if (key === 'prompt' || key === 'doneWhen' || key === 'executorId' || key === 'cwd') {
+        text(value,key);
+        if (key === 'cwd' && (!isAbsolute(value.trim()) || /[\x00-\x1f\x7f]/.test(value))) throw new PlansError('工作目录必须为绝对路径');
+        task[key] = value.trim();
+      } else throw new PlansError('计划修改包含不支持的字段');
+    }
+  }
+}
+
 function validate(store: Store, input: { title: string; tasks: PlanTaskInput[] }) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new PlansError('计划必须为对象');
   text(input.title, 'title');
@@ -46,9 +81,7 @@ function validate(store: Store, input: { title: string; tasks: PlanTaskInput[] }
     if (!task || typeof task !== 'object' || Array.isArray(task)) throw new PlansError('任务必须为对象');
     text(task.prompt, 'prompt');
     text(task.doneWhen, 'doneWhen');
-    if (task.expectMinutes !== undefined && (typeof task.expectMinutes !== 'number' || !Number.isFinite(task.expectMinutes) || task.expectMinutes <= 0 || task.expectMinutes > 10080)) {
-      throw new PlansError('expectMinutes必须为1周内的有限正数');
-    }
+    if (task.expectMinutes !== undefined) minutes(task.expectMinutes);
     const result: PlanTaskInput = { prompt: task.prompt, doneWhen: task.doneWhen, expectMinutes: task.expectMinutes };
     for (const key of ['executorId', 'cwd', 'projectId', 'todoId'] as const) {
       if (task[key] !== undefined) { text(task[key], key); result[key] = task[key]; }
@@ -67,9 +100,10 @@ function validate(store: Store, input: { title: string; tasks: PlanTaskInput[] }
 }
 
 /** One service per store. started means dispatch accepted, never task completion. */
-export function createPlans({ store, events, dispatch }: {
+export function createPlans({ store, events, dispatch, preflight }: {
   store: Store;
   events: EventBus;
+  preflight?: (task:PlanTaskInput, planId:string) => void;
   dispatch: (input: Record<string, unknown>, key?: string, estimate?:PlanEstimateDispatch) => { id: string };
 }) {
   let closed = false;
@@ -108,9 +142,13 @@ export function createPlans({ store, events, dispatch }: {
       changed(plan.id);
       return structuredClone(plan);
     },
-    start(id: string, version: number): Plan {
+    start(id: string, version: number, edits?:unknown): Plan {
       const plan = store.transaction(() => {
         const plan = current(id, version);
+        if (edits !== undefined) {
+          applyStartEdits(plan, edits);
+          for (const task of plan.tasks) preflight?.(task, id);
+        }
         // Claim commits before invoking any external code, including event observers.
         plan.status = 'running';
         plan.updatedAt = new Date().toISOString();

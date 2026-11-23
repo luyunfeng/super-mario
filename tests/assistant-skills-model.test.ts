@@ -3826,6 +3826,7 @@ test('Web 与飞书项目助手按计划回执区分自动估时和主人指定�
   const {server,api,ask}=await fixture(t,req=>{
     if (req.lastRole === 'user') {
       assert.match(req.system,/未明确指定预计时长时省略 expectMinutes/);
+      assert.match(req.system,/pending_decisions_list 定位原计划.*改一下.*修改要求本身不授权派发/);
       assert.match(req.system,/learned 是基于已验收同类任务的历史估算/);
       assert.match(req.system,/到点先查执行证据，不能据此判定完成或验收通过/);
       assert.match(req.system,/dueAt 仅是预计核对时刻/);

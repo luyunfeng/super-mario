@@ -4,6 +4,7 @@ import { h, keyedList } from '../lib/dom.js';
 import { timeAgo } from '../lib/format.js';
 import { Button, Pill, Field, Input, TextArea, Banner } from '../ui/kit.js';
 import { confirmDialog, openDrawer, toast } from '../ui/overlay.js';
+import { createPlanEditor } from './plan-editor.js';
 import { createQuestionAnswers, questionDeadlineText } from './question-answers.js';
 import { openInboxHandlingDrawer } from './inbox-handling.js';
 
@@ -15,6 +16,7 @@ const TYPES = {
 };
 
 export function createAttention({ api, store, task = false }) {
+  const editPlan = createPlanEditor(api,store);
   const list = h('div', { class: 'attn__list' });
   const more = h('button', { class: 'btn btn--ghost btn--sm', type: 'button' });
   const foldBtn = h('button', { class: 'btn btn--ghost btn--sm', type: 'button' }, '最小化');
@@ -176,6 +178,8 @@ export function createAttention({ api, store, task = false }) {
         actions.append(Button({ label: action.label, title: mismatch ? '退回原督办核对要求，暂停该执行的自动跟进' : delegate ? '委托督办作出本次决定并记录依据' : undefined,
           kind: delegate || mismatch || requestsContext || item.wait === false ? 'ghost' : index === 0 ? 'primary' : 'secondary', size: 'sm', onClick: () => submit(action), dataset: { action: action.label } }));
       }
+      if (item.type === 'plan' && item.actions.some(action=>action.path.endsWith('/start')))
+        actions.append(Button({label:'改一下',kind:'ghost',size:'sm',onClick:()=>editPlan(item)}));
       if (item.type === 'approval' && item.editable !== false && item.id.startsWith('approval:')) actions.append(Button({ label: '改一下', kind: 'ghost', size: 'sm', onClick: () => openEdit(item), dataset: { action: '改一下' } }));
       actions.hidden = done || !actions.childElementCount;
     }

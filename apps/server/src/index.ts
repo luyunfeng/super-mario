@@ -373,7 +373,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         const plan = path.match(/^\/api\/v1\/plans\/([^/]+)\/(start|reject)$/);
         if (plan && method === 'POST') {
           const input = await body(req);
-          return json(res, 200, plan[2] === 'start' ? app.plans.start(plan[1], input.version as number) : app.plans.reject(plan[1], input.version as number));
+          if (input.edits !== undefined && req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json') throw new InputError('编辑并开始计划需要 JSON 请求',415);
+          if (Object.keys(input).some(key => key !== 'version' && !(key === 'edits' && plan[2] === 'start'))) throw new InputError('计划操作包含不支持的字段');
+          return json(res, 200, plan[2] === 'start' ? app.plans.start(plan[1], input.version as number, input.edits) : app.plans.reject(plan[1], input.version as number));
         }
         if (path === '/api/v1/interactions' && method === 'GET') return json(res, 200, app.interactions.list());
         if (path === '/api/v1/interactions' && method === 'POST') return json(res, 201, app.interactions.openFromWeb(await body(req) as unknown as Parameters<typeof app.interactions.open>[0]));

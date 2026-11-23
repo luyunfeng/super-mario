@@ -833,11 +833,19 @@ export async function createWorkbench(config: AppConfig) {
   }, enabled: () => plugins.list().some(plugin => plugin.id === 'daily-brief' && plugin.status === 'active') });
   supervision.start();
   const policies = createPolicies({ store, events });
-  const plans = createPlans({ store, events, dispatch: (input, key, estimate) => {
-    const planId = key?.match(/^plan:([^:]+):/)?.[1];
+  function planDispatchInput(input:Record<string,unknown>, planId?:string) {
     const origin = planId ? store.get<{ sourceMessageId?: string; projectId?: string; conversationId?: string; todoId?: string }>('plan-origins', planId) : undefined;
-    return dispatch({ ...input, sourceMessageId: origin?.sourceMessageId, conversationId: origin?.conversationId, projectId: input.projectId ?? origin?.projectId, todoId: input.todoId ?? origin?.todoId }, key,false,undefined,estimate);
-  } });
+    return { ...input, sourceMessageId:origin?.sourceMessageId, conversationId:origin?.conversationId,
+      projectId:input.projectId ?? origin?.projectId, todoId:input.todoId ?? origin?.todoId };
+  }
+  const plans = createPlans({ store, events,
+    preflight: (task,id) => {
+      const target = prepareDispatch(planDispatchInput({...task},id));
+      if (target.executor?.machineId && target.executor.id.startsWith(target.executor.machineId+'/') && !target.cwd?.trim())
+        throw new InputError('远端工作目录不能为空');
+    },
+    dispatch: (input,key,estimate) => dispatch(planDispatchInput(input,key?.match(/^plan:([^:]+):/)?.[1]),key,false,undefined,estimate),
+  });
   const answeredInCurrentTurn = new Set<string>();
   const interactionService = createInteractions({ store, events, publish: background.publish,
     holdMismatch:card=>holdRunQuestion(store,card),
@@ -2147,7 +2155,7 @@ export async function createWorkbench(config: AppConfig) {
     return { available: executors().some(entry => entry.mode === 'real' && entry.available), machines: machines?.list().map(machine => ({ id: machine.id, online: machine.online })) ?? [] };
   }
   function executorInfo() { return executors().map(({ execute: _, ...info }) => info); }
-  function dispatch(input: Record<string, unknown>, key?: string, nativeApproved = false, executionGuard?:()=>void, planEstimate?: Run['planEstimate']): Run {
+  function prepareDispatch(input:Record<string,unknown>, key?:string, nativeApproved=false, planEstimate?:Run['planEstimate']) {
     if (closing) throw new InputError('服务正在关闭', 503);
     const prompt = requiredText(input.prompt, '工作内容');
     if (input.isolatedWorktree !== undefined && typeof input.isolatedWorktree !== 'boolean') throw new InputError('独立工作树选项无效');
@@ -2184,7 +2192,7 @@ export async function createWorkbench(config: AppConfig) {
           || (input.executionMode !== undefined && run.executionMode !== input.executionMode)
           || (input.doneWhen !== undefined && firstCriteria.doneWhen !== input.doneWhen)
           || (input.expectMinutes !== undefined && firstCriteria.expectMinutes !== input.expectMinutes) || JSON.stringify(run.nativeResume) !== JSON.stringify(input.nativeResume)) throw new InputError('同一派发标识不能用于不同工作', 409);
-        return run;
+        return {previous:run};
       }
     }
     const nativeResume = input.nativeResume === undefined ? undefined : nativeResumeSpec(input.nativeResume);
@@ -2249,6 +2257,14 @@ export async function createWorkbench(config: AppConfig) {
     if (todo && ((inputMessage?.todoId && inputMessage.todoId !== todoId) ||
       (inputMessage?.projectId && inputMessage.projectId !== projectId))) throw new InputError('待办与来源消息的范围不匹配', 403);
     if (!executor?.available) throw new InputError(executor?.reason ?? '执行者不可用', 503);
+    return {prompt, executorId, executor, projectId, conversationId, todoId, doneWhen, expectMinutes, executionMode,
+      cwd, workspace, copies, isolated, worktreeRunId, parentRun, nativeResume, inputMessage, taskPolicy};
+  }
+  function dispatch(input: Record<string, unknown>, key?: string, nativeApproved = false, executionGuard?:()=>void, planEstimate?: Run['planEstimate']): Run {
+    const prepared = prepareDispatch(input,key,nativeApproved,planEstimate);
+    if (prepared.previous) return prepared.previous;
+    const {prompt, executorId, executor, projectId, conversationId, todoId, doneWhen, expectMinutes, executionMode,
+      cwd, workspace, copies, isolated, worktreeRunId, parentRun, nativeResume, inputMessage, taskPolicy} = prepared;
     const now = new Date().toISOString();
     const proofSources = nativeResultSources(executor);
     const ids = Array.from({ length: copies }, () => randomUUID());
