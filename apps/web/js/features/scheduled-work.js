@@ -461,7 +461,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
         requestRead();
       } catch (cause) {
         if (!drawer.active()) return;
-        replace(message, Banner({ tone: 'warn', children: `${cause.status === 404 ? '当前服务缺少定时工作 API 支持。' : cause.status === 409 ? '创建冲突（409）。' : `提交失败或结果未知：${cause.message}。`} 草稿和请求标识已保留，请先到对话核对；不会自动重试。` }), chatLink());
+        replace(message, Banner({ tone: 'warn', children: `${cause.status === 404 ? '当前服务缺少定时工作 API 支持。' : cause.status === 409 ? '创建冲突（409）。' : `提交失败或结果未知：${cause.message}。`} 草稿和请求标识已保留，请先到对话核对；不会自动重试。` }), h('a', { href: '#chat', target: '_blank', rel: 'noopener' }, '在新标签页核对对话'));
       } finally { busy = false; if (drawer.active()) save.disabled = submitted; }
     } });
     const drawer = managedDrawer({ title: '创建定时工作', subtitle: '提交只创建审批，需要你在现有对话中确认。', body: form, footer: save });

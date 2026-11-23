@@ -21,7 +21,7 @@ async function fixture(body: (f: any) => Promise<void>, noScope = false) {
     const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
     const f: any = { page, items: [work()], reads: [], writes: [], readStatus: 200, writeStatus: 201, cancelStatus: 200, held: [] };
-    await page.route('**/js/main.js', r => r.fulfill({ contentType: 'text/javascript', body: '' }));
+    await page.context().route('**/js/main.js', r => r.fulfill({ contentType: 'text/javascript', body: '' }));
     await page.route('**/api/v1/**', async r => {
       const req = r.request(), url = new URL(req.url()), path = url.pathname.replace('/api/v1', '');
       if (path === '/scheduled-work' && req.method() === 'GET') {
@@ -172,6 +172,12 @@ test('创建失败/409 保留输入及 key；重复点击只有一个在途写�
     await expect(drawer(page)).toContainText('草稿和请求标识已保留');
     await expect(drawer(page).getByRole('textbox', { name: '标题', exact: true })).toHaveValue('保留草稿');
   }
+  const popup = page.waitForEvent('popup');
+  await drawer(page).getByRole('link', { name: '在新标签页核对对话' }).click();
+  const chat = await popup;
+  await expect(chat).toHaveURL(/#chat$/);
+  await chat.close();
+  await expect(drawer(page).getByRole('textbox', { name: '标题', exact: true })).toHaveValue('保留草稿');
   assert.deepEqual(f.writes[0].body, f.writes[1].body);
   assert.equal(f.writes[0].body.schedule.everySec, 120);
   f.holdWrite = true;
