@@ -325,6 +325,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     const todo = run.todoId && snapshot.todos.find(item => item.id === run.todoId);
     const comparisonEnabled = !store.view.unauthorized && snapshot.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active');
     const comparison = comparisonEnabled && compareRuns({ run, runs: snapshot.runs, projectId, router, executorName, progressView, api, store });
+    const handoffs = comparisonEnabled ? snapshot.runs.filter(item => item.handoffRunId === run.id && item.projectId === run.projectId) : [];
     const worktreeRuns = comparisonEnabled && run.worktree?.branch
       ? snapshot.runs.filter(item => item.worktreeRunId === run.id && item.projectId === run.projectId)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
@@ -354,6 +355,10 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
           if (ok) { await api.post(`/runs/${encodeURIComponent(run.id)}/cancel`, {}); store.refresh(); }
         } })),
       comparisonEnabled && run.handoffRunId && h('a', { href: router.href('projects', run.projectId ?? 'all', 'runs', run.handoffRunId) }, '查看交接来源执行'),
+      handoffs.length > 0 && h('section', { class: 'stack', 'aria-label': '接手执行' },
+        h('h3', null, '接手执行'), h('ul', { class: 'stack' }, handoffs.map(item =>
+          h('li', { class: 'row row--wrap' }, h('a', { href: router.href('projects', run.projectId ?? 'all', 'runs', item.id) }, item.id),
+            h('span', { class: 'small' }, executorName(item.executorId), item.model && ' · 指定模型：' + item.model), Pill(runStatus[item.status]?.text ?? item.status, runStatus[item.status]?.tone ?? ''))))),
       comparisonEnabled && ['completed','failed','cancelled'].includes(run.status) && Button({
         label: '准备执行交接', size: 'sm', onClick: () => openLaunch(undefined, undefined, run),
       }),

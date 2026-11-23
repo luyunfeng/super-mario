@@ -92,7 +92,13 @@ console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:21,cached_
  assert.deepEqual(await diffTool.execute({ id: run.id, path: 'result.txt', offset: 16000 }, signal),
    { id: run.id, path: 'result.txt', text: patch.slice(16000), nextOffset: null });
 
- server.app.store.put('runs', 'comparison-peer', { ...run, id: 'comparison-peer', prompt: '对照任务' });
+ server.app.store.put('runs', 'comparison-peer', { ...run, id: 'comparison-peer', prompt: '对照任务', handoffRunId: run.id, model: 'fixture-successor' });
+ await page.goto(server.url + '/#projects/' + project.id + '/runs/' + run.id + '?compare=comparison-peer');
+ const successors = page.getByRole('region', { name: '接手执行' });
+ await expect(successors).toContainText('指定模型：fixture-successor');
+ await successors.getByRole('link', { name: 'comparison-peer' }).click();
+ await page.getByRole('link', { name: '查看交接来源执行' }).click();
+ await expect(successors).toBeVisible();
  await page.goto(server.url + '/#projects/' + project.id + '/runs/' + run.id + '?compare=comparison-peer');
  await page.getByRole('button', { name: '准备执行交接' }).click();
  const handoff = page.getByRole('dialog', { name: '准备执行交接' });
