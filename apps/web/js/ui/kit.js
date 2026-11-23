@@ -130,6 +130,4 @@ export function Fold({ title, body, onOpen, open = false }) {
   return Object.assign(el, { content });
 }
 
-export function copyText(text) {
-  return navigator.clipboard?.writeText(text);
-}
+export { copyText } from '../lib/clipboard.js';

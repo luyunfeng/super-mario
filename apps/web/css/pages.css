@@ -98,6 +98,7 @@ sm-reply-quotation .is-folded { max-height: 4lh; overflow: hidden; }
 .md-list--num { list-style: decimal; }
 .md-list li { white-space: pre-wrap; line-height: 1.58; }
 .md-inline-code {
+  cursor: copy; user-select: text;
   padding: 1px 5px; border-radius: 3px; background: var(--surface-2); border: 1px solid var(--line);
   font-family: var(--mono); font-size: calc(12.5px * var(--reading-scale, 1)); color: var(--brand-hover);
 }

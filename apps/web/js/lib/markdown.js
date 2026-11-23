@@ -1,5 +1,7 @@
 // 安全轻量富文本消息渲染器：纯 DOM 节点构建。
 import { h } from './dom.js';
+import { copyText } from './clipboard.js';
+import { toast } from '../ui/overlay.js';
 
 // Only known workbench destinations become links in assistant replies.
 const inlineTokens = new RegExp([
@@ -18,12 +20,26 @@ function renderInline(line) {
     if (match.index > last) parts.push(line.slice(last, match.index));
     const token = match[0];
     if (token.startsWith('[')) parts.push(h('a', { href: token.slice(token.indexOf('(') + 1, -1) }, token.slice(1, token.indexOf(']'))));
-    else if (token.startsWith('`')) parts.push(h('code', { class: 'md-inline-code' }, token.slice(1, -1)));
+    else if (token.startsWith('`')) parts.push(inlineCode(token.slice(1, -1)));
     else parts.push(h('strong', null, token.slice(2, -2)));
     last = match.index + token.length;
   }
   if (last < line.length) parts.push(line.slice(last));
   return parts.length ? parts : [line];
+}
+
+function inlineCode(text) {
+  return h('button', { type: 'button', class: 'md-inline-code', title: '复制行内代码',
+    'aria-label': '复制行内代码 ' + text, onclick: async event => {
+      // A drag to select part of the message must leave the clipboard alone.
+      if (event.detail && window.getSelection()?.toString()) return;
+      try {
+        await copyText(text);
+        toast('已复制代码。');
+      } catch {
+        toast('无法写入剪贴板，请选中代码复制。', 'danger');
+      }
+    } }, h('code', null, text));
 }
 
 function makeCodeBlock(lang, codeText) {
@@ -32,7 +48,7 @@ function makeCodeBlock(lang, codeText) {
     class: 'btn btn--ghost btn--sm md-code__copy',
     onclick: async () => {
       try {
-        await navigator.clipboard?.writeText(codeText);
+        await copyText(codeText);
         copyBtn.textContent = '已复制';
       } catch {
         copyBtn.textContent = '复制失败';
@@ -125,7 +141,7 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
   let paraLines = [];
   let ulItems = [];
   let olItems = [];
-  let inCode = false;
+  let codeFence = '';
   let codeLang = '';
   let codeLines = [];
 
@@ -148,10 +164,11 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
   const lines = text.split(/\r?\n/);
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
-    if (inCode) {
-      if (/^```\s*$/.test(line)) {
+    if (codeFence) {
+      const closing = line.match(/^ {0,3}(`+|~+)[ \t]*$/)?.[1];
+      if (closing && closing.startsWith(codeFence)) {
         blocks.push(makeCodeBlock(codeLang, codeLines.join('\n')));
-        inCode = false;
+        codeFence = '';
         codeLang = '';
         codeLines = [];
       } else {
@@ -160,12 +177,12 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
       continue;
     }
 
-    const fence = line.match(/^```([^\s`]*)\s*$/);
-    if (fence) {
+    const fence = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (fence && !(fence[1][0] === '`' && fence[2].includes('`'))) {
       flushPara();
       flushLists();
-      inCode = true;
-      codeLang = fence[1];
+      codeFence = fence[1];
+      codeLang = fence[2].trim().split(/\s+/)[0];
       codeLines = [];
       continue;
     }
@@ -208,7 +225,7 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
         index++;
         while (index + 1 < lines.length) {
           const next = lines[index + 1];
-          if (/^\s*```/.test(next)) break;
+          if (/^ {0,3}(?:`{3,}|~{3,})/.test(next)) break;
           const cells = tableCells(next);
           if (!cells) break;
           body.append(row(cells.slice(0, header.length), 'td'));
@@ -240,7 +257,7 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
     paraLines.push(line);
   }
 
-  if (inCode) blocks.push(makeCodeBlock(codeLang, codeLines.join('\n')));
+  if (codeFence) blocks.push(makeCodeBlock(codeLang, codeLines.join('\n')));
   flushPara();
   flushLists();
 

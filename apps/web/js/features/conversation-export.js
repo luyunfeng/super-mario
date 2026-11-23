@@ -1,7 +1,7 @@
 // 预览、复制和下载共享同一次导出结果。每次切换选项时立即丢弃旧结果。
 import { h, replace } from '../lib/dom.js';
 import { renderFormattedText } from '../lib/markdown.js';
-import { Button, Banner } from '../ui/kit.js';
+import { Button, Banner, copyText } from '../ui/kit.js';
 import { openDrawer, toast } from '../ui/overlay.js';
 
 async function writeTable(table) {
@@ -14,36 +14,7 @@ async function writeTable(table) {
     return /["\t\r\n]/.test(value) ? '"' + value.replaceAll('"', '""') + '"' : value;
   }).join('\t'));
   const text = rows.join('\n');
-  if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
-    try {
-      await navigator.clipboard.write([new ClipboardItem({
-        'text/plain': new Blob([text], { type: 'text/plain' }),
-        'text/html': new Blob([copy.outerHTML], { type: 'text/html' }),
-      })]);
-      return;
-    } catch { /* Try the text clipboard when rich content is unavailable. */ }
-  }
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // Plain HTTP workbenches may have only the synchronous copy event.
-    const selection = h('textarea', { value: text, readOnly: true, style: { position: 'fixed', opacity: '0' } });
-    const previous = document.activeElement;
-    document.body.append(selection);
-    selection.select();
-    selection.addEventListener('copy', event => {
-      if (!event.clipboardData) return;
-      event.clipboardData.setData('text/plain', text);
-      event.clipboardData.setData('text/html', copy.outerHTML);
-      event.preventDefault();
-    });
-    try {
-      if (!document.execCommand('copy')) throw new Error('剪贴板不可用');
-    } finally {
-      selection.remove();
-      previous?.focus?.({ preventScroll: true });
-    }
-  }
+  await copyText(text, copy.outerHTML);
 }
 
 export function conversationExportActive(store) {
