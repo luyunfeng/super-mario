@@ -53,7 +53,7 @@ const status = { active: ['已启用', 'ok'], waiting: ['等待就绪', 'warn'],
 function features(plugin) {
   if (!Array.isArray(plugin.navigation)) return [];
   return plugin.navigation.filter(item => item && typeof item.id === 'string' && item.id && typeof item.label === 'string' && item.label &&
-    typeof item.route === 'string' && /^#[a-z]+(?:\/[\w-]+)*(?:\?[\w=&-]+)?$/.test(item.route) &&
+    typeof item.route === 'string' && /^#[a-z]+(?:\/[\w-][\w.-]*)*(?:\?[\w=&-]+)?$/.test(item.route) &&
     !new URLSearchParams(item.route.split('?')[1]).has('token') && PAGES.includes(item.route.slice(1).split(/[/?]/)[0]))
     .map(item => ({ ...item, key: JSON.stringify([plugin.id, item.id]) }));
 }

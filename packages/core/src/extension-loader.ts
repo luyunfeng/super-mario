@@ -25,7 +25,7 @@ function readNavigation(value: unknown): Extension['navigation'] {
   return value.map(item => {
     if (!object(item) || !validId(item.id) || ids.has(item.id) ||
         typeof item.label !== 'string' || !item.label.trim() ||
-        typeof item.route !== 'string' || !/^#[a-z]+(?:\/[\w-]+)*(?:\?[\w=&-]+)?$/.test(item.route) ||
+        typeof item.route !== 'string' || !/^#[a-z]+(?:\/[\w-][\w.-]*)*(?:\?[\w=&-]+)?$/.test(item.route) ||
         new URLSearchParams(item.route.split('?')[1]).has('token')) throw new Error('Invalid plugin navigation entry');
     ids.add(item.id);
     return { id: item.id, label: item.label.trim(), route: item.route };
