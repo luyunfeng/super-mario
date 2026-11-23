@@ -3,9 +3,11 @@ import { h, replace } from '../lib/dom.js';
 import { Button, Field, Input, TextArea } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 
-const active = store => !store.view.unauthorized && !!store.view.snapshot?.plugins?.some(
-  plugin => plugin.id === 'saved-prompts' && plugin.status === 'active');
-const post = (api, body) => api.post('/saved-prompts', body);
+export const savedPromptsActive = (store, assistantId) => {
+  const enabled = id => store.view.snapshot?.plugins?.some(plugin => plugin.id === id && plugin.status === 'active');
+  return !store.view.unauthorized && enabled('saved-prompts') && (!assistantId || enabled('assistant-profile'));
+};
+const post = (api, body, assistantId) => api.post('/saved-prompts' + (assistantId ? '?' + new URLSearchParams({assistantId}) : ''), body);
 
 // Preserve the user's order within each match group, including the bare "/" list.
 function matchingPrompts(items, filter) {
@@ -30,29 +32,31 @@ function suggestedName(text, items) {
 }
 
 // 列表事件只含版本。断线重连后再读取当前版本，补上断线期间的变更。
-function watchChanges(store, onChange) {
-  let revision = store.view.savedPromptsRevision, connection = store.view.connection;
+function watchChanges(store, getAssistantId, onChange) {
+  let last = store.view.savedPromptsChange, connection = store.view.connection;
   return store.subscribe(view => {
-    const changed = revision !== view.savedPromptsRevision || (view.connection === 'online' && connection !== 'online');
-    revision = view.savedPromptsRevision;
+    const event = view.savedPromptsChange;
+    const changed = event && event !== last && event.assistantId === getAssistantId();
+    const reconnected = view.connection === 'online' && connection !== 'online';
+    last = event;
     connection = view.connection;
-    if (changed) onChange();
+    if (changed || reconnected) onChange(reconnected ? Infinity : event.revision);
   });
 }
 
-export function openSavedPrompts({ api, store, initialText, isCurrent = () => true }) {
-  if (!active(store) || !isCurrent()) return;
+export function openSavedPrompts({ api, store, initialText, assistantId, assistantName, isCurrent = () => true }) {
+  if (!savedPromptsActive(store, assistantId) || !isCurrent()) return;
   const token = api.token();
   let doc, draft, deleting, busy = false, stale = false, error = '';
-  const drawer = openDrawer({ title: '常用提示词', onClose() { unsubscribe(); unwatch(); } });
-  const current = () => drawer.el.open && token === api.token() && active(store) && isCurrent();
+  const drawer = openDrawer({ title: '常用提示词', subtitle: assistantName, onClose() { unsubscribe(); unwatch(); } });
+  const current = () => drawer.el.open && token === api.token() && savedPromptsActive(store, assistantId) && isCurrent();
   const unsubscribe = store.subscribe(() => { if (!current()) drawer.close(); });
 
-  let pendingRefresh = false;
+  let pendingRevision = -1;
   const conflict = h('div', { role: 'status', class: 'stack' });
-  const unwatch = watchChanges(store, () => {
+  const unwatch = watchChanges(store, () => assistantId, revision => {
     if (!current()) return;
-    if (busy) { pendingRefresh = true; return; }
+    if (busy) { pendingRevision = Math.max(pendingRevision, revision); return; }
     if (draft) {
       // 继续编辑原版本，保存时服务端会校验。这里不重绘表单，以保留焦点和选区。
       replace(conflict, '列表可能已更新。可保留草稿并读取最新版本。', Button({ label: '刷新列表', onClick: () => request() }));
@@ -67,7 +71,7 @@ export function openSavedPrompts({ api, store, initialText, isCurrent = () => tr
     error = '';
     draw();
     try {
-      const next = await post(api, change ? { ...change, revision: doc.revision } : { action: 'list' });
+      const next = await post(api, change ? { ...change, revision: doc.revision } : { action: 'list' }, assistantId);
       if (!current()) return;
       if (!doc && initialText !== undefined) draft = { name: suggestedName(initialText, next.items), text: initialText };
       if (change) draft = undefined;
@@ -75,6 +79,7 @@ export function openSavedPrompts({ api, store, initialText, isCurrent = () => tr
       stale = false;
     } catch (cause) {
       if (!current()) return;
+      if (cause.status === 401) { drawer.close(); return; }
       error = cause.message;
       const conflict = cause.status === 409 && !cause.message.includes('名称');
       if (change && (conflict || !cause.status || cause.status >= 500)) stale = true;
@@ -82,11 +87,11 @@ export function openSavedPrompts({ api, store, initialText, isCurrent = () => tr
       busy = false;
       if (current()) {
         draw();
-        if (pendingRefresh && !error && doc && store.view.savedPromptsRevision > doc.revision) {
+        if (!error && doc && pendingRevision > doc.revision) {
           if (draft) replace(conflict, '列表已更新。保存时会核对版本。');
-          else { pendingRefresh = false; void request(); }
+          else { pendingRevision = -1; void request(); }
         }
-        pendingRefresh = false;
+        pendingRevision = -1;
       }
     }
   }
@@ -188,7 +193,7 @@ export function openSavedPrompts({ api, store, initialText, isCurrent = () => tr
   return drawer;
 }
 
-export function attachSavedPrompts({ api, store, input, getScope = () => '' }) {
+export function attachSavedPrompts({ api, store, input, getScope = () => '', getAssistantId = () => undefined }) {
   let disposed = false;
   let token, enabled = false, epoch = 0, read = 0, items, matches = [], selected = 0, inserting = false, drawer;
   const menu = h('div', { hidden: true, role: 'group', 'aria-label': '提示词候选', class: 'stack',
@@ -209,7 +214,7 @@ export function attachSavedPrompts({ api, store, input, getScope = () => '' }) {
     drawer?.close();
   }
   function update() {
-    const next = active(store);
+    const next = savedPromptsActive(store, getAssistantId());
     if (token === api.token() && enabled === next) return;
     token = api.token();
     enabled = next;
@@ -219,19 +224,19 @@ export function attachSavedPrompts({ api, store, input, getScope = () => '' }) {
   const unsubscribe = store.subscribe(update);
   update();
   function owner() {
-    const stamp = epoch, scope = getScope(), hash = location.hash;
-    return () => !disposed && stamp === epoch && token === api.token() && active(store) && scope === getScope() && hash === location.hash;
+    const stamp = epoch, scope = getScope(), assistantId = getAssistantId(), hash = location.hash;
+    return () => !disposed && stamp === epoch && token === api.token() && savedPromptsActive(store, assistantId) && scope === getScope() && assistantId === getAssistantId() && hash === location.hash;
   }
   function open(initialText) {
     const current = owner();
     reset();
-    drawer = openSavedPrompts({ api, store, initialText, isCurrent: current });
+    drawer = openSavedPrompts({ api, store, initialText, assistantId: getAssistantId(), isCurrent: current });
   }
   function fromMessage(message) {
     if (!enabled || message.role !== 'user' || !message.text?.trim() || (message.origin && message.origin !== 'user')) return null;
-    const credential = api.token();
+    const current = owner();
     return Button({ label: '保存为提示词', kind: 'ghost', size: 'sm', onClick: (_, button) => {
-      if (!disposed && button.isConnected && api.token() === credential && active(store)) open(message.text);
+      if (button.isConnected && current()) open(message.text);
     } });
   }
 
@@ -266,12 +271,13 @@ export function attachSavedPrompts({ api, store, input, getScope = () => '' }) {
     menu.hidden = false;
     replace(menu, h('p', { class: 'small muted' }, '正在读取提示词…'));
     try {
-      const doc = await post(api, { action: 'list' });
+      const doc = await post(api, { action: 'list' }, getAssistantId());
       if (order !== read || !current()) return;
       items = doc.items;
       draw();
     } catch (cause) {
       if (order !== read || !current()) return;
+      if (cause.status === 401) { reset(); return; }
       replace(menu, h('p', { role: 'alert' }, cause.message), Button({ label: '重新读取提示词', size: 'sm', onClick() {
         if (!validMenu?.()) return;
         input.focus();
@@ -303,7 +309,7 @@ export function attachSavedPrompts({ api, store, input, getScope = () => '' }) {
       if (matches.length) choose(matches[selected]);
     }
   }, options);
-  const unwatch = watchChanges(store, () => {
+  const unwatch = watchChanges(store, getAssistantId, () => {
     if (menu.hidden) return;
     reset();
     if (document.activeElement === input) void suggest();
@@ -317,5 +323,5 @@ export function attachSavedPrompts({ api, store, input, getScope = () => '' }) {
     unwatch();
     window.removeEventListener('hashchange', reset);
   }
-  return { dispose, manage, menu, changeScope, reset, fromMessage, get epoch() { return epoch; } };
+  return { dispose, manage, menu, update, changeScope, reset, fromMessage, get epoch() { return epoch; } };
 }

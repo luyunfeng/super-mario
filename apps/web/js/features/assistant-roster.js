@@ -2,6 +2,7 @@ import {h,replace} from '../lib/dom.js';
 import {uuid} from '../lib/format.js';
 import {Button} from '../ui/kit.js';
 import {assistantSkillsEnabled,openAssistantSkills} from './assistant-skills.js';
+import {savedPromptsActive,openSavedPrompts} from './saved-prompts.js';
 import {openDrawer} from '../ui/overlay.js';
 
 export function createAssistantSwitcher({api,store,router,scope,target}){
@@ -17,6 +18,7 @@ export function createAssistantSwitcher({api,store,router,scope,target}){
     const here=target(),enabled=allowed() && !!here;
     mainButton.hidden=!enabled;threadButton.hidden=!enabled;
     if(drawer)for(const control of drawer.body.querySelectorAll('[data-roster-skills]'))control.hidden=!assistantSkillsEnabled(store);
+    if(drawer)for(const control of drawer.body.querySelectorAll('[data-roster-prompts]'))control.hidden=!savedPromptsActive(store);
     if(drawer && (!enabled || opened.owner!==api.draftOwner() || opened.projectId!==here.projectId || opened.threadId!==here.threadId))drawer.close();
   }
   function open(){
@@ -78,7 +80,9 @@ export function createAssistantSwitcher({api,store,router,scope,target}){
         return h('div',{class:'row'},Button({label,onClick:()=>run(()=>activate(row.id))}),
           h('button',{type:'button',class:'btn btn--sm','aria-label':'编辑 '+label,onclick:()=>edit(row)},'编辑'),
           h('button',{type:'button',class:'btn btn--sm','data-roster-skills':'',hidden:!assistantSkillsEnabled(store),
-            'aria-label':'管理 '+label+' 的技能',onclick:()=>{if(current() && !busy)openAssistantSkills({api,store,assistant:row,scopeCurrent:current,onUnauthorized:view.close});}},'管理技能'));
+            'aria-label':'管理 '+label+' 的技能',onclick:()=>{if(current() && !busy)openAssistantSkills({api,store,assistant:row,scopeCurrent:current,onUnauthorized:view.close});}},'管理技能'),
+          h('button',{type:'button',class:'btn btn--sm','data-roster-prompts':'',hidden:!savedPromptsActive(store),
+            'aria-label':'管理 '+label+' 的常用提示词',onclick:()=>{if(current() && !busy)openSavedPrompts({api,store,assistantId:row.id,assistantName:row.name,isCurrent:current});}},'常用提示词'));
       }));
     }
     async function saveEdit(name,instructions){

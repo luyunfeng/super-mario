@@ -71,7 +71,7 @@ export function createWebConversations({api,store,scope,router}){
   const pictures=createMessageImages(input);
   const files=createMessageFiles(api,store,input);
   const quote=createMessageQuote({drafts,input,store,router,scope});
-  const prompts=attachSavedPrompts({api,store,input,getScope:()=>meta && valid(current) ? meta.id : null});
+  const prompts=attachSavedPrompts({api,store,input,getAssistantId:()=>meta?.assistantId,getScope:()=>meta && valid(current) ? meta.id : null});
   let promptEpoch=prompts.epoch,quoteKey=null,editEnabled=false;
   const edit=createMessageEdit({input,quote,context:()=>({
     key:meta && !meta.archived && valid(current) ? draftKey : null,
@@ -126,6 +126,7 @@ export function createWebConversations({api,store,scope,router}){
   input.onkeydown=e=>{if(!e.defaultPrevented && e.key==='Enter' && !e.shiftKey && !e.isComposing){e.preventDefault();form.requestSubmit();}};
 
   function syncSearch(){
+    prompts.update();
     const readable=meta && valid(current);
     const writableKey=readable && !meta.archived ? draftKey : null;
     const persist=!!store.view.snapshot?.plugins.some(p=>p.id==='conversation-drafts' && p.status==='active');
@@ -275,7 +276,8 @@ export function createWebConversations({api,store,scope,router}){
     try{
       const row=await api.patch(path+'/'+stamp.id,{version,...fields});
       if(!valid(stamp))return;
-      applyMeta(stamp,row);return true;
+      // The mutation receipt describes the conversation. Its roster binding comes from the detail read.
+      applyMeta(stamp,{...row,assistantId:meta?.assistantId});return true;
     }catch(error){
       if(!valid(stamp))return;
       if(error.status===409)await refreshMeta(stamp);
