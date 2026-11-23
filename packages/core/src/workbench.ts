@@ -527,7 +527,7 @@ export async function createWorkbench(config: AppConfig) {
       const source = currentAgentInput();
       if (source && sourceThread(source)) store.put('approval.origins', approval.id, { conversationId: source.conversationId, sourceMessageId: source.id });
       return approval as unknown as Json;
-    }), brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => {
+    }), heldNotifications: readHeldNotifications, brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => {
       // A background tool call must never borrow a concurrent main conversation's authority.
       const source=input.runId && input.deadline!==undefined ? currentAgentInput() : currentAgentInput() ?? agent.currentInput();
       return interactions.open(input as Parameters<typeof interactions.open>[0],source) as unknown as Json;
@@ -1898,6 +1898,20 @@ export async function createWorkbench(config: AppConfig) {
       return input;
     }
     throw new InputError('需要当前配对主人的直接私聊或 Web 主对话',403);
+  }
+
+  function readHeldNotifications(input:Record<string,unknown>):Json {
+    ownerReadInput();
+    const offset=input.offset ?? 0;
+    if(typeof offset!=='number' || !Number.isSafeInteger(offset) || offset<0 || (input.query!==undefined && typeof input.query!=='string'))
+      throw new InputError('通知筛选参数无效');
+    const query=String(input.query ?? '').trim().toLowerCase();
+    const rows=store.list<import('../../protocol/src/index.ts').AwayNotification>('notifications.away')
+      .filter(row=>row.status==='held' && row.text.toLowerCase().includes(query))
+      .sort((a,b)=>(b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.id.localeCompare(b.id));
+    const items=rows.slice(offset,offset+20).map(row=>({text:row.text.slice(0,800),textTruncated:row.text.length>800,
+      ...(row.createdAt && {createdAt:row.createdAt}),...(row.projectId && {projectId:row.projectId})}));
+    return {items,total:rows.length,nextOffset:offset+20<rows.length?offset+20:null};
   }
 
   // Only the private relationship tool exposes links between inbox records.

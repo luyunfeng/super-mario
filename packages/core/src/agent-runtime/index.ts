@@ -210,7 +210,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     if (name === 'interaction_open' && scope && (!activeInput || !options.canOpenQuestion?.(activeInput))) return false;
     // The owner's cross-project agenda has a separate paired-private command on Feishu.
     const boardTool = name === 'workspace_board_read' || name === 'workspace_board_activity' || name === 'workspace_board_flow';
-    const directOwnerTool=boardTool || name==='inbox_file_text' || name==='usage_gateway_accounts' || name==='usage_source_windows' || name==='inbox_message_reactions' || name==='inbox_pin_topic' || name==='inbox_pin_original' || name==='inbox_chat_pins' || name==='inbox_edit_history' || name==='inbox_tree' || name==='source_subscriptions_read' || name==='source_subscription_draft';
+    const directOwnerTool=boardTool || name==='held_notifications_list' || name==='inbox_file_text' || name==='usage_gateway_accounts' || name==='usage_source_windows' || name==='inbox_message_reactions' || name==='inbox_pin_topic' || name==='inbox_pin_original' || name==='inbox_chat_pins' || name==='inbox_edit_history' || name==='inbox_tree' || name==='source_subscriptions_read' || name==='source_subscription_draft';
     if (directOwnerTool || name === 'private_conversation_search' || name === 'private_conversation_list' || name === 'group_read_records') {
       if (!mainIdentity || options.conversationThreadId || currentProjectId || !activeInput || activeInput.todoId || activeInput.readOnly ||
         (activeInput.origin && activeInput.origin !== 'user')) return false;
