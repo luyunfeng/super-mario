@@ -263,6 +263,12 @@ test('插件设置可管理提示词；并发编辑保留草稿，已打开的�
   await expect(rows).toHaveCount(29);
   await rows.last().click();
   await expect(input).toHaveValue('正文 plan');
+  await input.fill('/');
+  await expect(rows).toHaveCount(25);
+  await input.press('ArrowUp');
+  await expect(rows).toHaveCount(29);
+  await input.press('Tab');
+  await expect(input).toHaveValue('正文 plan');
   await input.fill('/PLAN');
   await expect(rows).toHaveText(['/plan', '/plan-beta', '/plan-alpha', '/xplan']);
   await input.press('ArrowDown');

@@ -251,12 +251,13 @@ export function attachSavedPrompts({ api, store, input, getScope = () => '', get
     inserting = false;
   }
   const query = () => /^\/[\p{L}\p{Nd}\p{Mn}_.-]*$/u.test(input.value) ? input.value.slice(1).toLowerCase() : null;
-  let validMenu, visibleLimit = 25;
+  let validMenu, visibleLimit = 25, matchCount = 0;
   function draw() {
     if (!validMenu?.()) { reset(); return; }
     const filter = query();
     if (filter === null) { reset(); return; }
     const results = matchingPrompts(items, filter);
+    matchCount = results.length;
     matches = results.slice(0, visibleLimit);
     selected = Math.min(selected, Math.max(0, matches.length - 1));
     replace(menu, matches.length ? matches.map((item, index) =>
@@ -313,7 +314,8 @@ export function attachSavedPrompts({ api, store, input, getScope = () => '', get
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); reset(); }
     if (matches.length && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
       event.preventDefault();
-      selected = (selected + (event.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length;
+      selected = (selected + (event.key === 'ArrowDown' ? 1 : -1) + matchCount) % matchCount;
+      if (selected >= visibleLimit) visibleLimit = Math.ceil((selected + 1) / 25) * 25;
       draw();
       menu.children[selected]?.scrollIntoView({ block: 'nearest' });
     }
