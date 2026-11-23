@@ -6,11 +6,16 @@ export type TodoSection = '需要你' | '逾期' | '今天' | '等待中' | '之
 type TodoSectionRow = Todo & { childProgress?: { completed: number; total: number } };
 
 /** Server-owned projection. A failed run is not evidence that its todo needs a decision. */
-export function todoSections(todos: Todo[], now = new Date(), needsYouIds: readonly string[] = []): Record<TodoSection, TodoSectionRow[]> {
+export function todoSections(todos: Todo[], now = new Date(), needsYouIds: readonly string[] = [], timeZone?: string): Record<TodoSection, TodoSectionRow[]> {
   if (!Number.isFinite(now.getTime())) throw new TypeError('分组时间无效');
-  const start = new Date(now); start.setHours(0, 0, 0, 0);
-  const end = new Date(start); end.setDate(end.getDate() + 1);
-  const today = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  let formatter: Intl.DateTimeFormat;
+  try { formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }); }
+  catch { throw Object.assign(new Error('待办分组时区无效'), {status: 400}); }
+  const today = formatter.format(now);
+  const civilDay = (value?: string) => {
+    const instant = Date.parse(value ?? '');
+    return Number.isFinite(instant) ? formatter.format(instant) : undefined;
+  };
   const needsYou = new Set(needsYouIds);
   const sections: Record<TodoSection, TodoSectionRow[]> = { '需要你': [], '逾期': [], '今天': [], '等待中': [], '之后': [], '某天': [], '刚完成': [], '已完成': [] };
   // Count the full set before the client narrows a section by date or search.
@@ -26,14 +31,14 @@ export function todoSections(todos: Todo[], now = new Date(), needsYouIds: reado
     counts.set(parent.id, progress);
   }
   for (const todo of todos) {
-    const due = todo.dueAt ? Date.parse(todo.dueAt) : NaN;
+    const dueDay = todo.dueDay ?? civilDay(todo.dueAt);
     let section: TodoSection;
-    if (todo.completedAt) section = Date.parse(todo.completedAt) >= start.getTime() ? '刚完成' : '已完成';
+    if (todo.completedAt) section = (civilDay(todo.completedAt) ?? '') >= today ? '刚完成' : '已完成';
     else if (needsYou.has(todo.id)) section = '需要你';
-    else if (todo.dueDay ? todo.dueDay < today : due < start.getTime()) section = '逾期';
+    else if (dueDay && dueDay < today) section = '逾期';
     else if (todo.waitingOn?.trim()) section = '等待中';
-    else if (todo.dueDay ? todo.dueDay === today : due < end.getTime()) section = '今天';
-    else if (Number.isFinite(due)) section = '之后';
+    else if (dueDay === today) section = '今天';
+    else if (dueDay) section = '之后';
     else section = '某天';
     const childProgress = counts.get(todo.id);
     sections[section].push(childProgress ? { ...todo, childProgress } : todo);

@@ -434,7 +434,7 @@ export function createTodosTab({ api, store, router }) {
 
   async function load() {
     const stamp = ++seq;
-    try { const value = await api.get('/todos?view=sections'); if (stamp !== seq) return; data = value; loadError = ''; }
+    try { const value = await api.get('/todos?' + new URLSearchParams({view: 'sections', timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone})); if (stamp !== seq) return; data = value; loadError = ''; }
     catch (error) { if (stamp !== seq) return; loadError = `读取待办失败：${error.message}`; }
     paint();
   }
