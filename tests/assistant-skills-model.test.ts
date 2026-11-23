@@ -4907,6 +4907,8 @@ test('Web 与配对飞书说明浏览器接入和管理诊断时不索取凭据'
     assert.match(request.system,/没有撤销回执时，要说明旧凭据可能仍然有效/);
     assert.match(request.system,/没有管理页面回执时只说明步骤，不代报诊断结果/);
     assert.match(request.system,/「插件诊断」，按状态筛选并核对该插件的版本、权限和依赖状态/);
+    assert.match(request.system,/先核对插件 ID、统计窗口和调用数/);
+    assert.match(request.system,/没有调用记录时，不推断插件已经故障/);
     if(JSON.stringify(request.content).includes('诊断结果'))return {role:'assistant',content:diagnosis};
     return {role:'assistant',content:JSON.stringify(request.content).includes('仅本地退出')?'旧凭据可能仍然有效。':answer};
   },options=>{

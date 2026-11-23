@@ -13,11 +13,55 @@ export function createAdminPlugins({request,current,checkSession}){
   const read=button('查看插件',load);
   const panel=h('section',{'aria-label':'插件诊断',class:'stack'},h('h2',{},'插件诊断'),read,filters,message,list);
   filters.append(h('label',{class:'field'},'搜索插件',search),h('label',{class:'field'},'插件状态',status));
-  const expanded=new Set();
+  const expanded=new Set(),metricReads=new Map();
   let rows=[],ready=false,loading=false;
   const active=()=>current() && panel.isConnected && !life.signal.aborted;
+  function stopMetrics(){
+    for(const reader of metricReads.values())reader.abort();
+    metricReads.clear();
+  }
+  function attachMetrics(detail,id){
+    const box=h('section',{class:'stack','aria-label':'调用指标',hidden:true});
+    const windowPicker=h('select',{class:'select','aria-label':'指标时间范围'},
+      [['1h','近 1 小时'],['24h','近 24 小时'],['7d','近 7 天']].map(([value,label])=>h('option',{value},label)));
+    windowPicker.value='24h';
+    const report=h('div',{class:'stack'}),refresh=button('刷新指标',loadMetrics);
+    const show=button('查看调用指标',()=>{show.hidden=true;box.hidden=false;void loadMetrics();});
+    box.append(windowPicker,refresh,report);detail.append(show,box);
+    windowPicker.onchange=loadMetrics;
+    const latency=value=>Number.isFinite(value)?value+' 毫秒':'暂无数据';
+    async function loadMetrics(){
+      if(!active() || !detail.open || !detail.isConnected)return;
+      metricReads.get(id)?.abort();
+      const reader=new AbortController();metricReads.set(id,reader);
+      const valid=()=>active() && detail.open && detail.isConnected && !reader.signal.aborted;
+      replace(report,h('p',{role:'status'},'正在读取指标…'));refresh.disabled=true;
+      try{
+        const data=await request('plugins/'+encodeURIComponent(id)+'/metrics?window='+windowPicker.value,undefined,{},reader.signal);
+        if(!valid())return;
+        if(!data.calls){replace(report,h('p',{role:'status'},'此时间范围没有调用记录。'));return;}
+        replace(report,h('dl',{class:'kv'},[['调用次数',data.calls],['错误次数',data.errors],['P95 耗时',latency(data.p95Ms)]]
+          .map(([label,value])=>[h('dt',{},label),h('dd',{},String(value))])),
+          data.operations.length>0 && h('table',{class:'table','aria-label':'按操作统计'},
+            h('thead',{},h('tr',{},['操作','调用次数','错误次数','P95 耗时'].map(text=>h('th',{scope:'col'},text)))),
+            h('tbody',{},data.operations.map(op=>h('tr',{},h('th',{scope:'row'},op.name),
+              h('td',{},op.calls),h('td',{},op.errors),h('td',{},latency(op.p95Ms)))))));
+      }catch(error){
+        if(!valid())return;
+        replace(report,h('p',{role:'alert'},'无法读取调用指标：'+error.message));
+        if(error.status===401 || error.status===403)await checkSession();
+      }finally{
+        if(metricReads.get(id)===reader){metricReads.delete(id);refresh.disabled=false;}
+      }
+    }
+    return ()=>{
+      metricReads.get(id)?.abort();metricReads.delete(id);
+      show.hidden=false;box.hidden=true;refresh.disabled=false;replace(report);
+    };
+  }
   function paint(){
     if(!ready)return;
+    stopMetrics();
     const query=search.value.trim().toLowerCase();
     const results=rows.filter(p=>(!status.value || p.status===status.value) &&
       [p.id,p.name,...p.capabilities].some(value=>value.toLowerCase().includes(query)));
@@ -32,13 +76,16 @@ export function createAdminPlugins({request,current,checkSession}){
           ['依赖',listText(p.dependencies.map(dep=>dep.id+'（'+(statuses[dep.status] ?? dep.status)+'）'))],
           ...(p.reason?[['原因',p.reason]]:[]),
         ].map(([label,text])=>[h('dt',{},label),h('dd',{},text)])));
-      detail.ontoggle=()=>{if(detail.isConnected){if(detail.open)expanded.add(p.id);else expanded.delete(p.id);}};
+      const resetMetrics=attachMetrics(detail,p.id);
+      detail.ontoggle=()=>{if(detail.isConnected){
+        if(detail.open)expanded.add(p.id);else{expanded.delete(p.id);resetMetrics();}
+      }};
       return detail;
     }));
   }
   async function load(){
     if(!active() || loading)return;
-    loading=true;read.disabled=true;ready=false;replace(list);message.textContent='正在读取插件清单…';
+    stopMetrics();loading=true;read.disabled=true;ready=false;replace(list);message.textContent='正在读取插件清单…';
     try{
       const result=await request('plugins',undefined,{},life.signal);
       if(!active())return;
@@ -50,5 +97,5 @@ export function createAdminPlugins({request,current,checkSession}){
     }finally{if(active()){loading=false;read.disabled=false;read.textContent='刷新插件';}}
   }
   search.oninput=paint;status.onchange=paint;
-  return {el:panel,close(){life.abort();rows=[];expanded.clear();replace(list);search.value='';}};
+  return {el:panel,close(){life.abort();stopMetrics();rows=[];expanded.clear();replace(list);search.value='';}};
 }

@@ -13,11 +13,12 @@ test('管理员按名称和状态诊断本地插件，普通凭据不可查清�
     const directory=join(dataDir,'extensions',id);
     await mkdir(directory,{recursive:true});
     await writeFile(join(directory,'super-mario.extension.json'),JSON.stringify({
-      id,name,version:'2.7.4',apiVersion:1,main:'index.mjs',permissions:['store.read'],dependencies,
+      id,name,version:'2.7.4',apiVersion:1,main:'index.mjs',permissions:['store.read',...(id==='fixture-ready'?['service.provide:fixture-ready.count']:[])],dependencies,
       config:{fixture:configMarker},
     }));
     await writeFile(join(directory,'index.mjs'),
-      'export default { id:'+JSON.stringify(id)+',name:'+JSON.stringify(name)+',capabilities:[],activate(){'+
+      'export default { id:'+JSON.stringify(id)+',name:'+JSON.stringify(name)+',capabilities:[],activate(ctx){'+
+      (id==='fixture-ready'?"ctx.provide('fixture-ready.count',()=>true);":'')+
       (fail?'throw new Error('+JSON.stringify(errorMarker)+');':'')+'} };');
   }
   await install('fixture-provider','合成资料来源',[]);
@@ -32,14 +33,25 @@ test('管理员按名称和状态诊断本地插件，普通凭据不可查清�
   const admin=await browser.newContext(),base=server.url+'/api/v1',rootHeaders={authorization:'Bearer '+root};
   const paired=server.app.browserDevices.redeem(server.app.browserDevices.issue('合成设备').code);
   for(const token of [undefined,root,paired.token]){
-    const denied=await fetch(base+'/admin/plugins',{headers:token?{authorization:'Bearer '+token}:{}});
-    assert.equal(denied.status,401);
-    assert.doesNotMatch(await denied.text(),/fixture-ready|synthetic-private-/);
+    for(const route of ['/admin/plugins','/admin/plugins/fixture-ready/metrics']){
+      const denied=await fetch(base+route,{headers:token?{authorization:'Bearer '+token}:{}});
+      assert.equal(denied.status,401);
+      assert.doesNotMatch(await denied.text(),/fixture-ready|synthetic-private-/);
+    }
   }
   const code=await admin.request.post(base+'/admin/setup-code',{data:{},headers:rootHeaders});
   assert.equal(code.status(),200);
   const setup=await admin.request.post(base+'/admin/setup',{data:{code:(await code.json()).code,password:'synthetic-fixture-admin-plugins'}});
   assert.equal(setup.status(),200);
+  const metricsURL=base+'/admin/plugins/fixture-ready/metrics';
+  for(const suffix of ['?window=2h','?window=','?window=1h&window=24h']){
+    assert.equal((await admin.request.get(metricsURL+suffix)).status(),400);
+  }
+  assert.equal((await admin.request.get(base+'/admin/plugins/fixture-absent/metrics')).status(),404);
+  assert.equal((await admin.request.get(base+'/admin/plugins/foo%2Fbar/metrics')).status(),400);
+  const defaultMetrics=await admin.request.get(metricsURL);
+  assert.equal(defaultMetrics.status(),200);
+  assert.equal((await defaultMetrics.json()).window,'24h');
   const page=await admin.newPage();
   await page.goto(server.url+'/admin.html');
   const panel=page.getByRole('region',{name:'插件诊断'});
@@ -53,6 +65,21 @@ test('管理员按名称和状态诊断本地插件，普通凭据不可查清�
   const ready=panel.locator('details').filter({has:page.locator('summary',{hasText:'合成资料整理'})});
   await ready.locator('summary').click();
   for(const evidence of ['fixture-ready','2.7.4','store.read','fixture-provider'])await expect(ready).toContainText(evidence);
+  await ready.getByRole('button',{name:'查看调用指标'}).click();
+  const metrics=ready.getByRole('region',{name:'调用指标'});
+  await expect(metrics).toContainText('此时间范围没有调用记录');
+  for(const window of ['7d','1h']){
+    const refreshed=page.waitForResponse(r=>r.url()===metricsURL+'?window='+window);
+    await metrics.getByRole('combobox',{name:'指标时间范围'}).selectOption(window);
+    assert.equal((await (await refreshed).json()).window,window);
+    await expect(metrics).toContainText('此时间范围没有调用记录');
+  }
+  await server.app.plugins.invocations.use('fixture-ready.count',{});
+  await metrics.getByRole('button',{name:'刷新指标'}).click();
+  await expect(metrics).toContainText('service:fixture-ready.count');
+  const sample=await (await admin.request.get(metricsURL)).json();
+  assert.equal(sample.calls,1);assert.equal(sample.errors,0);
+  assert.deepEqual(sample.operations.map((op:{name:string})=>op.name),['service:fixture-ready.count']);
   await expect(panel.locator('summary',{hasText:'合成资料等待'})).toHaveCount(0);
   await status.selectOption('waiting');
   const waiting=panel.locator('details').filter({has:page.locator('summary',{hasText:'合成资料等待'})});

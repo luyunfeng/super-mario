@@ -1,5 +1,6 @@
 import { assertBackgroundExecution } from './eventbox.ts';
 import { assertJson, assertPluginPermissions } from '../../plugin-sdk/src/index.ts';
+import { createPluginMetrics, type PluginMetricWindow } from './plugin-metrics.ts';
 import { createPluginInvocations, validateInvocationOptions } from './plugin-invocations.ts';
 import type { LocalPluginOrigin } from './extension-loader.ts';
 import { join } from 'node:path';
@@ -71,7 +72,20 @@ export class PluginHost {
   private sequence = 0;
   readonly invocations: ReturnType<typeof createPluginInvocations>;
 
-  constructor(options: HostOptions) { this.options = options; this.invocations = createPluginInvocations(options.contributions); }
+  private measure: ReturnType<typeof createPluginMetrics>;
+  private operationOwners = new Map<string, string>();
+  constructor(options: HostOptions) {
+    this.options = options;
+    this.measure = createPluginMetrics(options.store);
+    this.invocations = createPluginInvocations(options.contributions, (kind, id, name) => {
+      const owner = this.operationOwners.get(kind + ':' + id);
+      if (owner) return (elapsed, failed) => this.measure.record(owner, name, elapsed, failed);
+    });
+  }
+  metrics(id: string, window: PluginMetricWindow) {
+    if (!this.entries.has(id)) throw Object.assign(new Error('未找到插件'), { status: 404 });
+    return this.measure.read(id, window);
+  }
 
   register(extension: Extension, config: JsonObject = {}, origin?: LocalPluginOrigin): void {
     if (this.closed) throw new Error('Plugin host is closed');
@@ -137,6 +151,7 @@ export class PluginHost {
       this.closed = true;
       const errors: unknown[] = [];
       for (const entry of this.entries.values()) await this.stop(entry, errors);
+      this.measure.close();
       if (errors.length) throw new AggregateError(errors, 'Plugin cleanup failed');
     });
     this.queue = result.catch(() => {});
@@ -256,7 +271,11 @@ export class PluginHost {
           }
         }
         requireDependency(String(kind));
-        return own(this.options.contributions.add(kind, id, value));
+        const remove = this.options.contributions.add(kind, id, value);
+        if (kind !== 'services' && kind !== 'service_wrappers' && kind !== 'hooks') return own(remove);
+        const key = kind + ':' + id;
+        this.operationOwners.set(key, entry.info.id);
+        return own(() => { this.operationOwners.delete(key); return remove(); });
       },
     };
     const events: EventBus = {
@@ -266,7 +285,7 @@ export class PluginHost {
     };
     // Host authentication records live in the same SQLite file, outside the plugin store API.
     function pluginCollection(name:string) {
-      if (typeof name !== 'string' || name.startsWith('core.admin-auth.') || name.startsWith('browser-devices.')) throw new Error('Reserved host collection');
+      if (typeof name !== 'string' || name.startsWith('core.admin-auth.') || name.startsWith('core.plugin-metrics.') || name.startsWith('browser-devices.')) throw new Error('Reserved host collection');
       return name;
     }
     const backing = this.options.store;
