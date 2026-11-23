@@ -293,6 +293,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (offset !== null && !/^\d+$/.test(offset)) throw new InputError('分页起点须为非负整数');
           return json(res,200,app.scheduledWork.list({ ...Object.fromEntries(url.searchParams), offset: offset === null ? undefined : Number(offset) }));
         }
+        if (path === '/api/v1/scheduled-work/templates' && method === 'GET') {
+          if (!app.plugins.list().some(plugin => plugin.id === 'daily-brief' && plugin.status === 'active')) throw new InputError('定时工作插件已停用', 503);
+          return json(res, 200, await app.plugins.invocations.use('daily-brief.templates', {}));
+        }
         if (path === '/api/v1/scheduled-work/cron-preview' && method === 'GET') return json(res, 200, app.scheduledWork.previewCron(Object.fromEntries(url.searchParams)));
         if (path === '/api/v1/scheduled-work/history' && method === 'POST') return json(res, 200, app.scheduledWork.readHistory(await body(req)));
         if (path === '/api/v1/scheduled-work/brief' && method === 'POST') return json(res, 200, app.scheduledWork.readBrief(await body(req)));

@@ -1,3 +1,4 @@
+import { scheduledWorkTemplates } from './scheduled-work-templates.ts';
 import { setTimeout } from 'node:timers/promises';
 import type { Executor, Extension, ExtensionContext, KnowledgeBackend, KnowledgeQuery, Tool } from '../packages/plugin-sdk/src/index.ts';
 import type { InboxThing, Json, JsonObject, Run, Todo } from '../packages/protocol/src/index.ts';
@@ -622,6 +623,10 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
     {
       id: 'daily-brief', name: '每日简报', capabilities: ['routines.dailybrief'],
       activate(context) {
+        const templates = async () => ({ items: structuredClone(scheduledWorkTemplates) });
+        context.provide('daily-brief.templates', templates);
+        context.contribute('tools', 'scheduled_work_templates', tool('scheduled_work_templates',
+          '读取定时工作模板的排期、执行提示词和验收标准。选择模板仅准备草稿。', templates));
         // Counts are a snapshot of persisted records, never simulated task results.
         context.contribute('routines', 'dailybrief', { name: 'dailybrief', async run() { return actions?.brief?.() ?? dailyBrief(context); } });
         if (actions?.brief) context.contribute('tools', 'brief_read', tool('brief_read', '读取待办、执行和督办事实简报。', async (_args, signal) => { signal.throwIfAborted(); return actions.brief!(); }));

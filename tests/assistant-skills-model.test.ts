@@ -2079,6 +2079,10 @@ test('飞书创建每周简报审批，Web 核对同一排期，跨夏令时保�
     assert.match(req.system, /星期日用 0/);
     assert.match(req.system, /法定工作日或调休/);
     if (req.lastRole === 'user') {
+      if (JSON.stringify(req.content).includes('有哪些模板')) {
+        assert.match(req.system, /只询问就只展示/);
+        return call('scheduled_work_templates', {}, 'templates');
+      }
       if (JSON.stringify(req.content).includes('只试算')) {
         assert.match(req.system, /只预览不提创建审批/);
         return call('scheduled_work_cron_preview', { cron: '35 8 * * 2,0', tz: 'America/New_York' }, 'preview');
@@ -2089,6 +2093,14 @@ test('飞书创建每周简报审批，Web 核对同一排期，跨夏令时保�
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
     const receipt = JSON.parse(raw);
+    if (req.callId === 'templates') {
+      assert.equal(receipt.items.length, 4);
+      const weekly = receipt.items.find((item: { id: string }) => item.id === 'weekly');
+      assert.match(weekly.prompt, /来源/);
+      assert.match(weekly.doneWhen, /审阅|修改/);
+      assert.deepEqual(weekly.days, [5]);
+      return { role: 'assistant', content: '周报草稿：每周五 ' + weekly.time };
+    }
     if (req.callId === 'preview') {
       assert.equal(receipt.nextRuns.length, 3);
       const formatter = new Intl.DateTimeFormat('zh-CN', { timeZone: receipt.tz, dateStyle: 'full', timeStyle: 'short' });
@@ -2114,6 +2126,8 @@ test('飞书创建每周简报审批，Web 核对同一排期，跨夏令时保�
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
     const source = { chatId: 'oc_weekly', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage('有哪些模板？周报什么时候跑？', { ...source, messageId: 'templates' });
+    await t.waitFor(() => assert.ok(sent.includes('周报草稿：每周五 17:00')));
     await adapter.onMessage('只试算纽约每周二和周日 08:35 的下三次触发', { ...source, messageId: 'preview' });
     await t.waitFor(() => assert.ok(sent.some(reply => reply.startsWith('试算：') && (reply.match(/星期[二日].*?08:35/g) ?? []).length === 3)));
     assert.equal(server.app.scheduledWork.list({ projectId: project.id }).total, 0);

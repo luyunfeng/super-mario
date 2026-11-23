@@ -325,3 +325,26 @@ test('每周计划按所选星期和当地时间预览并提交审批', async ()
   await emit(page);
   await expect(panel(page)).toContainText('周二、周日 08:35 · America/New_York');
 }));
+
+test('从周报模板创建可编辑派发草稿，独立选择执行者', async () => fixture(async f => {
+  const page: Page = f.page;
+  await page.route('**/scheduled-work/templates', route => route.continue());
+  await panel(page).getByRole('button', { name: '从模板创建' }).click();
+  const catalog = page.getByRole('dialog', { name: '定时工作模板' });
+  await expect(catalog.getByRole('button', { name: '执行巡检' })).toBeVisible();
+  await catalog.getByRole('button', { name: '周报草稿' }).click();
+  const form = drawer(page);
+  await expect(form.getByLabel('目标', { exact: true })).toHaveValue(/本周.*来源/);
+  await expect(form.getByLabel('完成标准', { exact: true })).toHaveValue(/草稿/);
+  await expect(form.getByLabel('执行者', { exact: true })).toHaveValue('');
+  await expect(form.getByLabel('周五', { exact: true })).toBeChecked();
+  await expect(form.getByLabel('每周触发时间')).toHaveValue('17:00');
+  assert.equal(f.writes.length, 0);
+  await form.getByLabel('执行者', { exact: true }).selectOption('real-cli');
+  await form.getByLabel('目标', { exact: true }).fill('只核对本周交付');
+  await submit(page);
+  await expect(form).toContainText('待批准');
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.writes[0].body.action.prompt, '只核对本周交付');
+  assert.equal(f.writes[0].body.schedule.cron, '0 17 * * 5');
+}));

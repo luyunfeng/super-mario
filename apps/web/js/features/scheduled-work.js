@@ -41,8 +41,8 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
   let inFlight = null, queued = false, timer, editor = null, previousSnapshot;
   const notice = h('div', { role: 'status' });
   const list = h('div', { class: 'stack' });
-  const add = Button({ label: '创建定时工作', size: 'sm', onClick: openCreate });
-  const el = Card({ title: '定时工作', id: 'agent-scheduled-work', sub: '按时间生成事实简报，或提交派发审批。', tools: add, body: [notice, list] });
+  const add = Button({ label: '创建定时工作', size: 'sm', onClick: () => openCreate() });
+  const el = Card({ title: '定时工作', id: 'agent-scheduled-work', sub: '按时间生成事实简报，或提交派发审批。', tools: [add, Button({ label: '从模板创建', size: 'sm', onClick: openTemplates })], body: [notice, list] });
 
   // 身份或顶栏范围改变即失效，旧读写响应不能回填新范围。
   function syncIdentity() {
@@ -218,7 +218,25 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
         }
       } }) });
   }
-  function openCreate() {
+  function openTemplates() {
+    if (syncIdentity()) requestRead();
+    const content = h('div', { class: 'stack' });
+    const drawer = managedDrawer({ title: '定时工作模板', body: content });
+    async function loadTemplates() {
+      replace(content, line('正在读取模板…'));
+      try {
+        const { items } = await api.get('/scheduled-work/templates');
+        if (drawer.active()) replace(content, items.map(template => Button({
+          label: template.title, onClick: () => { if (drawer.active()) openCreate(template); },
+        })));
+      } catch (cause) {
+        if (drawer.active()) replace(content, line('读取模板失败：' + cause.message),
+          Button({ label: '重新读取模板', onClick: loadTemplates }));
+      }
+    }
+    void loadTemplates();
+  }
+  function openCreate(template) {
     if (syncIdentity()) requestRead();
     const key = crypto.randomUUID();
     const title = Input({ name: 'title', required: true });
@@ -373,6 +391,20 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       } finally { busy = false; if (drawer.active()) save.disabled = submitted; }
     } });
     const drawer = managedDrawer({ title: '创建定时工作', subtitle: '提交只创建审批，需要你在现有对话中确认。', body: form, footer: save });
+    if (template) {
+      title.value = template.title;
+      action.value = 'dispatch';
+      prompt.value = template.prompt;
+      doneWhen.value = template.doneWhen;
+      if (template.everyMinutes) {
+        frequency.value = 'interval';
+        minutes.value = String(template.everyMinutes);
+      } else {
+        frequency.value = 'weekly';
+        weeklyTime.value = template.time;
+        for (const box of dayInputs) box.checked = template.days.includes(Number(box.value));
+      }
+    }
     sync();
   }
   scope?.subscribe?.(() => { syncIdentity(); requestRead(); });
