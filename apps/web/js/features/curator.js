@@ -140,7 +140,7 @@ export function openCuratorDrawer({ api, store, onChanged, jobId, projectId }) {
             !next && attempt?.accepted && h('p', { class: 'small' }, `已提交新整理任务${attempt.newId ? `：${attempt.newId}` : '，旧服务未返回任务引用'}；进度以队列为准。`),
             attempt && h('p', { class: 'small' }, `${attempt.reason ?? '重试请求'} · 请求 key：${attempt.key}`)),
           Pill(STATUS[job.status] ?? (DONE.has(job.status) ? '已整理' : '结果未确认'), DONE.has(job.status) ? 'ok' : job.status === 'failed' ? 'danger' : ''),
-          job.status === 'awaiting_approval' && h('a', { href: '#chat', class: 'small', onclick: () => drawer.close() }, '去确认来源读取'),
+          verified && job.pendingApprovalHref && h('a', { href: job.pendingApprovalHref, class: 'small', onclick: () => drawer.close() }, '去确认来源读取'),
           (meeting || job.materialKind === 'meeting-transcript') && Button({ label: '修改标题', size: 'sm', disabled: !verified, onClick: () => {
             titleEditor = editMeetingTitle(api, job.id, job.title, () => isCurrent() && verified, load);
           } }),

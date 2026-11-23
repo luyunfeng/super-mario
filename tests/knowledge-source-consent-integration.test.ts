@@ -13,8 +13,14 @@ test('model request cannot forge Web intent; no private CLI or model runs before
  const f=await fixture(t),user=source(f),tool=f.server.app.contributions.list('tools').find(x=>x.value.name==='knowledge_ingest')!.value;
  const job=await runWithAgentInput(user,()=>tool.execute({url:'https://tenant.feishu.cn/docx/Doc123',requestOrigin:'web',sourceMessageId:'forged'} as JsonObject,new AbortController().signal)) as JsonObject;
  await until(()=>f.server.app.knowledgeCurator.status().jobs.find(x=>x.id===job.id)?.status==='awaiting_approval');const pending=f.server.app.knowledgeCurator.status().jobs.find(x=>x.id===job.id)!;assert.equal(pending.requestOrigin,'agent');assert.equal(pending.sourceMessageId,user.id);assert.ok(pending.approvalId);assert.equal(await f.reads(),0);assert.equal(f.submitted(),0);await assert.rejects(access(join(f.dir,'server','plugins','knowledge-local','raw',String(job.id)+'.md')),{code:'ENOENT'});
+ const curator = f.server.app.knowledgeCurator;
+ const href = '#chat?approval=' + encodeURIComponent(pending.approvalId);
+ assert.equal(pending.pendingApprovalHref, href);
+ assert.equal(curator.queueJobs(undefined, 'awaiting_approval').jobs[0]?.approvalCitation, `[确认来源读取](${href})`);
  const approved=await f.api('/approvals/'+pending.approvalId+'/approve','POST',{version:1});assert.equal(approved.data.status,'completed');assert.equal(approved.data.result.jobId,job.id);
  await until(()=>['completed','failed','unknown'].includes(f.server.app.knowledgeCurator.status().jobs.find(x=>x.id===job.id)!.status));const done=f.server.app.knowledgeCurator.status().jobs.find(x=>x.id===job.id)!;assert.equal(done.status,'completed',done.error);assert.equal(f.submitted(),1);assert.equal(await f.reads(),2);
+ assert.equal(done.pendingApprovalHref, null);
+ assert.equal(curator.queueJobs(undefined, 'completed').jobs[0]?.approvalCitation, undefined);
  const pages=await f.server.app.knowledge().list();assert.ok(pages.some(p=>p.layer==='personal'&&p.title==='Normalized page'));
 });
 test('direct authenticated Web source is an explicit read request and needs no redundant source approval',async t=>{

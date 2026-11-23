@@ -80,9 +80,9 @@ test('SSE 快照推进 queued → running → awaiting_approval → completed，
   await page.getByLabel('额外精确受信域名').fill('draft.example.com');
   await page.getByLabel('用哪个执行者').evaluate(el => (window as any).originalControl = el);
   for (const [status, label] of [['queued', '等待整理'], ['running', '整理中'], ['awaiting_approval', '待主人确认'], ['completed', '已整理']]) {
-    f.value.jobs = [{ ...job(status), ...(status === 'awaiting_approval' ? { approvalId: 'approval-1' } : {}) }]; f.event();
+    f.value.jobs = [{ ...job(status), ...(status === 'awaiting_approval' ? { approvalId: 'approval-1', pendingApprovalHref: '#chat?approval=approval-1' } : {}) }]; f.event();
     await expect(row(page).getByText(label, { exact: true })).toBeVisible();
-    if (status === 'awaiting_approval') await expect(row(page).getByRole('link', { name: '去确认来源读取' })).toHaveAttribute('href', '#chat');
+    if (status === 'awaiting_approval') await expect(row(page).getByRole('link', { name: '去确认来源读取' })).toHaveAttribute('href', '#chat?approval=approval-1');
     await expect(page.getByLabel('启用整理 Agent', { exact: true })).toBeChecked();
     await expect(page.getByLabel('用哪个执行者')).toHaveValue('pi');
     await expect(page.getByLabel('已有命令行连接名称')).toHaveValue('reader-draft');

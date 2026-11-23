@@ -1,3 +1,4 @@
+import { knowledgeSourceApprovalKind } from './knowledge-source-approval.ts';
 import { meetingActionEvidence } from './prompts.ts';
 import { hasKnowledgeSourceHTML } from '../../protocol/src/index.ts';
 import { createHash, randomUUID } from 'node:crypto';
@@ -123,11 +124,19 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
       URL.parse(job.url)?.href === url.href);
     return { matches, start: offset, end: offset + 25 };
   }
+  function pendingApprovalHref(job: Job) {
+    if (job.status !== 'awaiting_approval' || !job.approvalId) return null;
+    const approval = store.get<{ status: string; kind: string; params?: { jobId?: string } }>('approvals', job.approvalId);
+    return approval?.status === 'pending' && approval.kind === knowledgeSourceApprovalKind && approval.params?.jobId === job.id
+      ? '#chat?approval=' + encodeURIComponent(job.approvalId) : null;
+  }
   function attemptSummary(job: Job, title = job.title) {
+    const approvalHref = pendingApprovalHref(job);
     return {
       id: job.id, title, layer: job.layer, projectId: job.projectId ?? null,
       status: job.status, createdAt: job.createdAt, updatedAt: job.updatedAt,
       error: job.error ?? null, retryOf: job.retryOf ?? null,
+      ...(approvalHref ? { approvalCitation: `[确认来源读取](${approvalHref})` } : {}),
       webCitation: `[查看整理记录](#memory?curator=1&job=${encodeURIComponent(job.id)})`,
     };
   }
@@ -163,7 +172,7 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
   function status() {
     const all = jobs(), titles = meetingTitles(), roots = titles.size ? meetingRoots(all) : new Map<string, string>();
     return { settings: settings(), worker: { ...worker }, versioning: { ...gitState },
-      jobs: all.map(({ text: _text, ...job }) => ({ ...job, title: titles.get(roots.get(job.id) ?? job.id) ?? job.title })) };
+      jobs: all.map(({ text: _text, ...job }) => ({ ...job, pendingApprovalHref: pendingApprovalHref(job), title: titles.get(roots.get(job.id) ?? job.id) ?? job.title })) };
   }
   async function git(...args: string[]) { return (await exec('git', ['-C', directory, ...args], { timeout: 15000, maxBuffer: 1024 * 1024 })).stdout.trim(); }
   /** The canonical knowledge files, immutable sources and generated map share a private local repository. */
