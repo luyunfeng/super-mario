@@ -132,13 +132,15 @@ export function createPluginSettings({ api, store, router }) {
     const dependents = plugins.filter(p => p.dependencies?.includes(selected)).map(p => systemText(p.name));
     keyedList(list, matches.filter(p=>p.id===selected), p => p.id, plugin => {
       const entries = features(plugin);
+      const changeEnabled = async enabled => {
+        await api.post('/plugins/' + encodeURIComponent(plugin.id), { enabled });
+        await store.refresh();
+        if (store.view.loadError) throw new Error(store.view.loadError);
+      };
       return h('section', { class: 'plugin-section', 'aria-label': systemText(plugin.name) },
         h('div', { class: 'row' }, h('strong', null, systemText(plugin.name)), Pill(...(status[plugin.status] ?? ['未知', ''])),
-          Button({ size: 'sm', label: plugin.enabled ? '停用' : '启用', onClick: async () => {
-            await api.post('/plugins/' + encodeURIComponent(plugin.id), { enabled: !plugin.enabled });
-            await store.refresh();
-            if (store.view.loadError) throw new Error(store.view.loadError);
-          } })),
+          Button({ size: 'sm', label: plugin.enabled ? '停用' : '启用', onClick: () => changeEnabled(!plugin.enabled) }),
+          plugin.enabled && plugin.status === 'failed' && Button({ size: 'sm', label: '重试启动', onClick: () => changeEnabled(true) })),
         h('p',{},descriptions[plugin.id] ?? (entries.length ? '提供以下工作台功能：'+entries.map(e=>e.label).join('、') : '此插件由执行环境提供，已声明的能力见下方。')),
         h('code',{class:'small muted'},plugin.id),
         dependents.length > 0 && h('p', { class: 'small' }, '直接依赖此插件：' + dependents.join('、')),
