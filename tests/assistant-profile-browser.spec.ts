@@ -74,6 +74,7 @@ test('Agent 页修改主助手名称后同步到已有气泡，并发冲突保�
   const early = first.locator('#agent-scheduled-work article').filter({ hasText: '上午简报' });
   await early.getByRole('button', { name: '跳过下一次' }).click();
   await expect(early).toContainText('将跳过');
+  await expect(early).toContainText('跳过后预计触发：');
   await expect(upcoming).toContainText(/下午复核.*上午简报/s);
   await early.getByRole('button', { name: '撤销跳过' }).click();
   await expect(upcoming).toContainText(/上午简报.*下午复核/s);

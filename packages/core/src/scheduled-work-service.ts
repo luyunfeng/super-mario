@@ -117,13 +117,14 @@ export function createScheduledWorkService(options: {
       if (schedule?.status !== 'active' || !(Date.parse(schedule.nextAt) > now)) return undefined;
       return row.occurrences.find(o => o.ownerSkipToken && o.scheduleId === schedule.id && o.scheduledFor === schedule.nextAt && o.scheduleVersion === schedule.version);
     }
-    const upcoming = selected.flatMap(row => {
+    const upcomingByWork = new Map(selected.flatMap(row => {
       const schedule = row.scheduleId ? schedules.get(row.scheduleId) : undefined;
       if (row.status !== 'active' || schedule?.status !== 'active' || !schedule.nextAt || !(Date.parse(schedule.nextAt) >= now)) return [];
       const nextAt = pendingSkip(row, schedule) ? nextOccurrence(schedule, Date.parse(schedule.nextAt)) : schedule.nextAt;
       if (schedule.until && Date.parse(nextAt) >= Date.parse(schedule.until)) return [];
-      return [{ id: row.id, title: row.input.title, nextAt }];
-    }).sort((a, b) => Date.parse(a.nextAt) - Date.parse(b.nextAt) || a.id.localeCompare(b.id)).slice(0, 3);
+      return [[row.id, { id: row.id, title: row.input.title, nextAt }] as const];
+    }));
+    const upcoming = [...upcomingByWork.values()].sort((a, b) => Date.parse(a.nextAt) - Date.parse(b.nextAt) || a.id.localeCompare(b.id)).slice(0, 3);
     const repeating = repeat === 'once' ? [] : selected.filter(row => row.input.schedule.kind !== 'once');
     const once = repeat === 'repeating' ? [] : selected.flatMap(row => row.input.schedule.kind === 'once'
       ? [{ row, at: Date.parse(row.input.schedule.at) }] : []).sort((a, b) => a.at - b.at);
@@ -135,6 +136,7 @@ export function createScheduledWorkService(options: {
       return {id:row.id,version:row.version,title:row.input.title,status:row.status,projectId:row.input.projectId,todoId:row.input.todoId,schedule:row.input.schedule,action:row.input.action,
         approvalId:row.approvalId,approvalStatus:store.get<Approval>('approvals',row.approvalId)?.status,
         source:{messageId:row.sourceMessage.id,createdAt:row.sourceMessage.createdAt},
+        nextActionAt:upcomingByWork.get(row.id)?.nextAt,
         nextAt:row.status === 'active' && schedule?.status === 'active' && (!schedule.until || Date.parse(schedule.nextAt) < Date.parse(schedule.until)) ? schedule.nextAt : undefined,skipToken:pendingSkip(row, schedule)?.ownerSkipToken,scheduleStatus:schedule?.status,scheduleVersion:schedule?.version,
         ...historyPage(row, row.occurrences, schedule)};
     }),upcoming,total:ordered.length,offset,nextOffset,truncated:nextOffset !== null,limit };
