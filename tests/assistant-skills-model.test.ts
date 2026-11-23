@@ -67,16 +67,33 @@ function call(name: string, args: object, id: string): Reply {
   } }] };
 }
 
-test('Web 和飞书从同一项目范围查询接下来三项已生效的定时工作', async t => {
+test('Web 和飞书查询接下来三项定时工作，并在同一项目内翻页核对全部计划', async t => {
   let adapter!: FeishuOptions;
   const sent: string[] = [];
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.match(req.system, /scheduled_work_list 的 upcoming/);
       const question = JSON.stringify(req.content);
+      if (question.includes('核对全部计划')) {
+        assert.match(req.system, /按 nextOffset 续读当前范围/);
+        return call('scheduled_work_list', {}, 'first-page');
+      }
       return call('scheduled_work_list', {}, question.includes('暂停安排1') ? 'before-pause' : question.includes('恢复安排1') ? 'before-resume' : 'upcoming');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    if (req.callId === 'first-page' || req.callId === 'second-page') {
+      const page = JSON.parse(raw);
+      assert.ok(page.items.every((row: { title: string }) => row.title !== '其他范围'));
+      if (req.callId === 'first-page') {
+        assert.equal(page.items.length, 100);
+        assert.equal(page.nextOffset, 100);
+        return call('scheduled_work_list', { offset: page.nextOffset }, 'second-page');
+      }
+      assert.equal(page.offset, 100);
+      assert.equal(page.nextOffset, null);
+      assert.equal(page.items.at(-1).title, '末页计划');
+      return { role: 'assistant', content: `已核对 ${page.total} 项，末项是末页计划。` };
+    }
     if (req.callId?.startsWith('before-')) {
       const row = JSON.parse(raw).items.find((item: { title: string }) => item.title === '安排1');
       return call('scheduled_work_set_paused', { id: row.id, version: row.version, scheduleVersion: row.scheduleVersion, paused: req.callId === 'before-pause' }, 'changed');
@@ -108,6 +125,20 @@ test('Web 和飞书从同一项目范围查询接下来三项已生效的定时�
     await adapter.onMessage('请暂停安排1', { ...source, messageId: 'pause' });
     await t.waitFor(() => assert.ok(sent.includes('调度状态 paused')));
     assert.equal(await ask('请恢复安排1', '/projects/' + project.id + '/messages'), '调度状态 active');
+    for (let index = 0; index < 96; index++) {
+      server.app.scheduledWork.propose({ key: 'page-' + index, title: index === 95 ? '末页计划' : '分页样本 ' + index,
+        projectId: project.id, schedule: { kind: 'once', at: '2099-03-01T00:00:00Z' }, action: { kind: 'brief' } });
+    }
+    const listUrl = server.url + '/api/v1/scheduled-work?projectId=' + encodeURIComponent(project.id);
+    const lastPage = await (await fetch(listUrl + '&offset=100')).json();
+    assert.equal(lastPage.items.length, 1);
+    assert.equal(lastPage.items[0].title, '末页计划');
+    assert.deepEqual(lastPage.upcoming.map((item: { title: string }) => item.title), ['安排1', '安排2', '安排3']);
+    assert.equal((await fetch(listUrl + '&offset=-1')).status, 400);
+    const full = '请核对全部计划，最后一项是什么？';
+    assert.equal(await ask(full, '/projects/' + project.id + '/messages'), '已核对 101 项，末项是末页计划。');
+    await adapter.onMessage(full, { ...source, messageId: 'all-pages' });
+    await t.waitFor(() => assert.ok(sent.includes('已核对 101 项，末项是末页计划。')));
     assert.equal(server.app.store.list('runs').length, 0);
   } finally { await server.close(); }
 });

@@ -27,7 +27,9 @@ async function fixture(body: (f: any) => Promise<void>, noScope = false) {
       if (path === '/scheduled-work' && req.method() === 'GET') {
         f.reads.push(url.search);
         if (f.holdRead) { f.held.push(r); return; }
-        return json(r, f.readStatus === 200 ? { items: f.items, total: f.items.length, truncated: f.truncated ?? false, limit: 100 } : { error: 'test unavailable' }, f.readStatus);
+        const offset = Number(url.searchParams.get('offset') ?? 0);
+        const nextOffset = offset + 100 < f.items.length ? offset + 100 : null;
+        return json(r, f.readStatus === 200 ? { items: f.items.slice(offset, offset + 100), total: f.items.length, offset, nextOffset, truncated: nextOffset !== null, limit: 100 } : { error: 'test unavailable' }, f.readStatus);
       }
       if (path.startsWith('/scheduled-work') && req.method() === 'POST') {
         f.writes.push({ path, body: req.postDataJSON() });
@@ -236,3 +238,22 @@ test('旧 fixture 无 scope 兼容；GET 失败/404 保留旧数据、明确缺�
   await page.locator('#agent-model').getByRole('button', { name: '更改模型' }).click();
   await expect(page.getByRole('dialog', { name: '主 Agent 模型' })).toBeVisible();
 }, true));
+
+test('定时工作按当前范围翻页，失败后重试同一页', async () => fixture(async f => {
+  const { page } = f;
+  f.items = Array.from({ length: 101 }, (_, index) => work({ id: 'page-' + index, title: '分页任务 ' + index }));
+  await emit(page);
+  const card = panel(page);
+  await expect(card).toContainText('显示第 1 至 100 项');
+  f.readStatus = 503;
+  await card.getByRole('button', { name: '下一页定时工作' }).click();
+  await expect(card).toContainText('读取失败');
+  f.readStatus = 200;
+  await card.getByRole('button', { name: '重试读取定时工作' }).click();
+  await expect(card).toContainText('显示第 101 至 101 项');
+  await expect(card.locator('article')).toHaveCount(1);
+  await expect(card.locator('article')).toContainText('分页任务 100');
+  assert.equal(f.reads.at(-1), '?projectId=a&offset=100');
+  await card.getByRole('button', { name: '上一页定时工作' }).click();
+  await expect(card).toContainText('显示第 1 至 100 项');
+}));

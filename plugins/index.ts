@@ -621,7 +621,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         // Counts are a snapshot of persisted records, never simulated task results.
         context.contribute('routines', 'dailybrief', { name: 'dailybrief', async run() { return actions?.brief?.() ?? dailyBrief(context); } });
         if (actions?.brief) context.contribute('tools', 'brief_read', tool('brief_read', '读取待办、执行和督办事实简报。', async (_args, signal) => { signal.throwIfAborted(); return actions.brief!(); }));
-        if (actions?.scheduledWorkList) context.contribute('tools', 'scheduled_work_list', tool('scheduled_work_list', '读取当前范围的周期工作及实际审批/结果；创建确认、到期派发和执行完成分别计算。', async args => actions.scheduledWorkList!(args), { projectId: { type: 'string' }, todoId: { type: 'string' } }));
+        if (actions?.scheduledWorkList) context.contribute('tools', 'scheduled_work_list', tool('scheduled_work_list', '读取当前范围的周期工作及实际审批/结果；创建确认、到期派发和执行完成分别计算。', async args => actions.scheduledWorkList!(args), { offset: { type: 'integer', minimum: 0, description: '续读时传上一页 nextOffset' }, projectId: { type: 'string' }, todoId: { type: 'string' } }));
         if (actions?.followupCreate) {
           context.contribute('tools', 'schedule_followup', tool('schedule_followup',
             '为自己（主 Agent）预约一次性跟进或周期只读巡检（无需审批，到期在只读上下文自动唤醒，例如会前 10 分钟准备简报、2 小时后复核进展）。push="asked" 表示默认静默，仅发现值得通知的变化时调用 notify_user；push="always" 表示到期整理结果后直接推给主人。',

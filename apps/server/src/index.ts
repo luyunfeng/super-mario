@@ -288,8 +288,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         }
         if (path === '/api/v1/feishu/collect' && method === 'POST') return json(res, 200, await feishu.collect());
         if (path === '/api/v1/scheduled-work' && method === 'GET') {
-          if ([...url.searchParams.keys()].some(key=>!['projectId','todoId'].includes(key))) throw new InputError('周期工作查询参数无效');
-          return json(res,200,app.scheduledWork.list(Object.fromEntries(url.searchParams)));
+          if ([...url.searchParams.keys()].some(key=>!['projectId','todoId','offset'].includes(key))) throw new InputError('周期工作查询参数无效');
+          const offset = url.searchParams.get('offset');
+          if (offset !== null && !/^\d+$/.test(offset)) throw new InputError('分页起点须为非负整数');
+          return json(res,200,app.scheduledWork.list({ ...Object.fromEntries(url.searchParams), offset: offset === null ? undefined : Number(offset) }));
         }
         if (path === '/api/v1/scheduled-work' && method === 'POST') return json(res,201,app.scheduledWork.propose(await body(req)));
         const pauseScheduled = path.match(/^\/api\/v1\/scheduled-work\/([^/]+)\/(pause|resume)$/);

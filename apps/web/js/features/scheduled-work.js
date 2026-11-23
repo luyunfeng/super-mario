@@ -21,6 +21,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
   const currentToken = () => api.token?.() ?? '';
   const snapshot = () => store.view.snapshot ?? {};
   let identity = JSON.stringify([currentScope(), currentToken()]);
+  let offset = 0;
   let generation = 0, items = [], result = null, error = '', loaded = false;
   let inFlight = null, queued = false, timer, editor = null, previousSnapshot;
   const notice = h('div', { role: 'status' });
@@ -32,7 +33,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
   function syncIdentity() {
     const next = JSON.stringify([currentScope(), currentToken()]);
     if (next === identity) return false;
-    identity = next; generation += 1; items = []; result = null; loaded = false; error = '';
+    identity = next; generation += 1; offset = 0; items = []; result = null; loaded = false; error = '';
     editor?.close(); paint();
     return true;
   }
@@ -47,7 +48,10 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     const stamp = generation, projectId = currentScope();
     const flight = { stamp }; inFlight = flight;
     try {
-      const data = await api.get(`/scheduled-work${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`);
+      const query = new URLSearchParams();
+      if (projectId) query.set('projectId', projectId);
+      if (offset) query.set('offset', String(offset));
+      const data = await api.get('/scheduled-work' + (query.size ? '?' + query : ''));
       if (!valid(stamp)) { queued = true; return; }
       if (!Array.isArray(data?.items)) throw new Error('返回数据格式无效');
       items = data.items; result = data; error = ''; loaded = true;
@@ -60,11 +64,22 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       if (queued) { queued = false; requestRead(); }
     }
   }
+  function turnPage(next) {
+    if (syncIdentity()) { requestRead(); return; }
+    offset = next;
+    generation++;
+    items = []; result = null; loaded = false; error = '';
+    paint();
+    void load();
+  }
   function paint() {
     onUpcoming?.(loaded && !error ? result?.upcoming : undefined, error);
     replace(notice, error ? Banner({ tone: 'warn', children: `${error} 列表状态未确认${loaded ? '，以下保留上次数据' : ''}。` }) : !loaded ? '正在读取定时工作…' : null,
-      result?.truncated && line(`仅显示前 ${result.limit ?? 100} 项，共 ${result.total} 项。`));
-    replace(list, items.map(renderItem), !items.length && loaded && !error ? Empty({ title: '当前范围没有定时工作' }) : null);
+      result && (offset || result.truncated) ? line(items.length ? `显示第 ${offset + 1} 至 ${offset + items.length} 项，共 ${result.total} 项。` : `本页没有记录，共 ${result.total} 项。`) : null,
+      offset > 0 && Button({ label: '上一页定时工作', size: 'sm', onClick: () => turnPage(Math.max(0, offset - (result?.limit ?? 100))) }),
+      Number.isSafeInteger(result?.nextOffset) && result.nextOffset > offset && Button({ label: '下一页定时工作', size: 'sm', onClick: () => turnPage(result.nextOffset) }),
+      error && Button({ label: '重试读取定时工作', size: 'sm', onClick: requestRead }));
+    replace(list, items.map(renderItem), !offset && !items.length && loaded && !error ? Empty({ title: '当前范围没有定时工作' }) : null);
   }
   function renderItem(item) {
     const project = snapshot().projects?.find(p => p.id === item.projectId);
