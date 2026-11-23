@@ -1595,15 +1595,26 @@ test('待办提醒拒绝过期创建，Web 登记未来提醒，飞书取消时�
         return call('todos_list', { reminderStatus: status }, status);
       }
       if (question.includes('2000年')) return call('todo_create', { title: '跟进进度', reminderAt: '2000-01-01T08:00:00Z' }, 'past');
-      if (question.includes('取消')) return call('todo_update', { id, reminderAt: '' }, 'clear');
-      return call('todo_update', { id, reminderAt: reminder }, 'save');
+      assert.match(req.system, /等用户确认后再修改/);
+      return call('todo_detail', { todoId: id }, question.includes('取消') ? 'before-clear' : 'before-save');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
     if (req.callId === 'past') {
       assert.match(raw, /必须晚于当前时间/);
       return { role: 'assistant', content: '请给出未来的提醒时间。' };
     }
+    if (req.callId === 'clear' && raw.includes('提醒已变更')) {
+      return call('todo_detail', { todoId: id }, 'latest-reminder');
+    }
     const todo = JSON.parse(raw);
+    if (req.callId === 'latest-reminder') {
+      return { role: 'assistant', content: '当前提醒为 ' + todo.todo.reminderAt + '，仍要取消吗？' };
+    }
+    if (req.callId === 'before-clear' || req.callId === 'before-save') {
+      const clear = req.callId === 'before-clear';
+      if (clear && todo.todo.reminderAt === reminder) server.app.updateTodo(id, { reminderAt: due });
+      return call('todo_update', { id, reminderAt: clear ? '' : reminder, expectedReminderVersion: todo.todo.reminderVersion ?? 1 }, clear ? 'clear' : 'save');
+    }
     if (req.callId === 'delivery') {
       assert.deepEqual(todo.reminderDeliveries, [{ status: 'unknown', updatedAt: '2026-01-01T00:00:00Z' }]);
       return { role: 'assistant', content: '这次提醒的飞书发送结果未知。' };
@@ -1658,6 +1669,9 @@ test('待办提醒拒绝过期创建，Web 登记未来提醒，飞书取消时�
     await adapter.onMessage(question, { ...source, messageId: 'reminder-status' });
     await t.waitFor(() => assert.ok(sent.includes('核对交付的提醒尚无本地触发记录。')));
     await adapter.onMessage('取消这项提醒', { ...source, messageId: 'clear' });
+    await t.waitFor(() => assert.ok(sent.includes('当前提醒为 ' + due + '，仍要取消吗？')));
+    assert.equal(server.app.todos().find(row => row.id === id)?.reminderAt, due);
+    await adapter.onMessage('确认取消当前提醒', { ...source, messageId: 'confirmed-clear' });
     await t.waitFor(() => assert.ok(sent.includes('已取消这项提醒。')));
     const stored = server.app.todos().find(todo => todo.id === id)!;
     assert.equal(stored.reminderAt, undefined);

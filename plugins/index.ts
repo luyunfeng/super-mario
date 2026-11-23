@@ -271,7 +271,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             signal.throwIfAborted(); const { id, ...patch } = args;
             if (patch.completed !== undefined) throw new Error('请由用户在 Web 验收并完成待办');
             const editable = ['title', 'notes', 'parentTodoId', 'afterTodoIds', 'responsiblePerson', 'responsibleRunId', 'waitingOn', 'reminderAt', 'dueAt', 'priority'];
-            if (Object.keys(patch).some(key => !editable.includes(key) && !['expectedTitle', 'expectedNotes', 'expectedDueAt', 'expectedAfterTodoIds'].includes(key))) throw new Error('不支持的待办修改字段');
+            if (Object.keys(patch).some(key => !editable.includes(key) && !['expectedTitle', 'expectedNotes', 'expectedDueAt', 'expectedReminderVersion', 'expectedAfterTodoIds'].includes(key))) throw new Error('不支持的待办修改字段');
             if (!editable.some(key => patch[key] !== undefined)) throw new Error('请指定需要修改的字段');
             if ((patch.afterTodoIds !== undefined || patch.parentTodoId !== undefined) && !Array.isArray(patch.expectedAfterTodoIds))
               throw new Error('修改依赖或上级前，请用 todo_detail 核对当前前置依赖');
@@ -279,9 +279,10 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             if (patch.notes !== undefined && typeof patch.expectedNotes !== 'string') throw new Error('请先核对当前备注');
             if (patch.dueAt !== undefined && typeof patch.expectedDueAt !== 'string') throw new Error('改期前请核对当前截止时间');
             if (patch.dueAt !== undefined && patch.dueAt !== '') timeBoundary(patch.dueAt, 0, '待办截止时间');
+            if (patch.reminderAt !== undefined && patch.expectedReminderVersion === undefined) throw new Error('修改提醒前请用 todo_detail 核对当前提醒');
             validateAssistantReminder(patch.reminderAt);
             return actions.updateTodo!(String(id ?? ''), patch);
-          }, { id: { type: 'string' }, dueAt: { type: 'string', description: '带时区的 ISO 时间，空字符串清除期限' }, expectedDueAt: { type: 'string' }, expectedTitle: { type: 'string' }, expectedNotes: { type: 'string' }, expectedAfterTodoIds: { type: 'array', items: { type: 'string' }, description: '修改前置依赖或上级时传当前前置 ID 全集，原无依赖传 []' }, title: { type: 'string' }, notes: { type: 'string' }, afterTodoIds: afterTodoIdsParameter, parentTodoId: { type: 'string', description: '同项目上级待办 ID，空字符串解除' }, responsibleRunId: { type: 'string', description: '使用已有执行记录的电脑和会话登记负责方，空字符串清除负责会话' }, responsiblePerson: { type: 'string', description: '登记负责人姓名，清除时传空字符串' }, waitingOn: { type: 'string' }, priority: priorityParameter, reminderAt: reminderParameter }));
+          }, { id: { type: 'string' }, dueAt: { type: 'string', description: '带时区的 ISO 时间，空字符串清除期限' }, expectedReminderVersion: { type: 'integer', minimum: 1, description: '设置或取消提醒时传 todo_detail 中的 todo.reminderVersion，旧记录缺省为 1' }, expectedDueAt: { type: 'string' }, expectedTitle: { type: 'string' }, expectedNotes: { type: 'string' }, expectedAfterTodoIds: { type: 'array', items: { type: 'string' }, description: '修改前置依赖或上级时传当前前置 ID 全集，原无依赖传 []' }, title: { type: 'string' }, notes: { type: 'string' }, afterTodoIds: afterTodoIdsParameter, parentTodoId: { type: 'string', description: '同项目上级待办 ID，空字符串解除' }, responsibleRunId: { type: 'string', description: '使用已有执行记录的电脑和会话登记负责方，空字符串清除负责会话' }, responsiblePerson: { type: 'string', description: '登记负责人姓名，清除时传空字符串' }, waitingOn: { type: 'string' }, priority: priorityParameter, reminderAt: reminderParameter }));
           if (actions.knowledgeActionStatus) context.contribute('tools', 'knowledge_action_status', tool('knowledge_action_status',
             '只读查询已读知识页某一行动项原文所关联待办的当前状态与登记期限。', async (args, signal) => {
               signal.throwIfAborted(); return await actions.knowledgeActionStatus!(args) as Json;

@@ -123,6 +123,7 @@ export function createTodosTab({ api, store, router }) {
     const dueInput = Input({ type: 'date', value: originalDue });
     let originalClock = localDate(todo.dueAt, true).slice(11);
     const clock = calendar ? Input({ type: 'time', value: originalClock }) : null;
+    let reminderVersion = todo.reminderVersion ?? 1;
     const reminder = Input({ type: 'datetime-local', value: originalReminder });
     const responsible = Input({ value: todo.responsiblePerson ?? '' });
     const sessionOptions = (store.view.snapshot?.runs ?? []).filter(run => run.projectId === todo.projectId && run.machineId && run.sessionId)
@@ -179,6 +180,7 @@ export function createTodosTab({ api, store, router }) {
           if (reminder.value !== originalReminder) {
             const at = reminder.value ? new Date(reminder.value) : undefined;
             if (at && (!Number.isFinite(at.getTime()) || localDate(at.toISOString(), true) !== reminder.value)) throw new Error('提醒时间无效，请检查本机时区和夏令时');
+            patch.expectedReminderVersion = reminderVersion;
             patch.reminderAt = at ? at.toISOString() : '';
           }
           if (editPriority.value !== (todo.priority ?? 'normal')) patch.priority = editPriority.value;
@@ -221,7 +223,10 @@ export function createTodosTab({ api, store, router }) {
                 originalDue = dueInput.value;
                 originalClock = clock?.value ?? '';
               }
-              if (patch.reminderAt !== undefined) originalReminder = reminder.value;
+              if (patch.reminderAt !== undefined) {
+                originalReminder = reminder.value;
+                reminderVersion = saved.reminderVersion ?? 1;
+              }
               todo = { ...todo };
               for (const key of ['dueAt', 'priority', 'waitingOn', 'parentTodoId', 'responsiblePerson']) {
                 if (key in patch) todo[key] = saved[key];
@@ -245,6 +250,11 @@ export function createTodosTab({ api, store, router }) {
                 if (patch.notes !== undefined && (latest.notes ?? '') !== originalNotes) {
                   originalNotes = latest.notes ?? '';
                   differences.push('最新备注：' + (originalNotes || '（空）'));
+                }
+                if (patch.reminderAt !== undefined && (latest.reminderVersion ?? 1) !== reminderVersion) {
+                  reminderVersion = latest.reminderVersion ?? 1;
+                  originalReminder = localDate(latest.reminderAt, true);
+                  differences.push('最新提醒：' + (latest.reminderAt ? formatDate(latest.reminderAt, true) : '未设置'));
                 }
                 if (differences.length) {
                   replace(conflict, ...differences.map(text => h('pre', {}, text)),

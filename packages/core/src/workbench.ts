@@ -996,6 +996,12 @@ export async function createWorkbench(config: AppConfig) {
     if (patch.expectedNotes !== undefined && patch.expectedNotes !== (todo.notes ?? '')) {
       throw new InputError('备注已被修改，请核对最新备注', 409);
     }
+    if (patch.expectedReminderVersion !== undefined) {
+      const version = patch.expectedReminderVersion;
+      if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1)
+        throw new InputError('提醒版本必须为正整数');
+      if (version !== (todo.reminderVersion ?? 1)) throw new InputError('提醒已变更，请核对当前提醒后再保存', 409);
+    }
     if (patch.expectedDueAt !== undefined && dueDate(patch.expectedDueAt) !== todo.dueAt) {
       throw new InputError('截止时间已被修改，请核对最新时间后重新改期', 409);
     }

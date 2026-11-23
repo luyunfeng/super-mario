@@ -89,6 +89,18 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await page.reload();
   await expect(dropSlot.getByRole('button', { name: /10:30.*本地三月末/ })).toBeVisible();
   assert.equal(read().reminderAt, reminderAt);
+  await entry.click();
+  const reminderField = editor.getByLabel('提醒时间', { exact: true });
+  await reminderField.fill('');
+  const revisedReminder = '2030-03-31T09:00:00Z';
+  server.app.updateTodo(todo.id, { reminderAt: revisedReminder });
+  await editor.getByRole('button', { name: '保存' }).click();
+  await expect(editor.getByText(/最新提醒：/)).toBeVisible();
+  assert.equal(read().reminderAt, revisedReminder);
+  await expect(reminderField).toHaveValue('');
+  await editor.getByRole('button', { name: '保存' }).click();
+  await expect(editor).toHaveCount(0);
+  assert.equal(read().reminderAt, undefined);
   // Another client wins after this page has already started dragging.
   const newer = '2030-03-27T18:15:00.000Z';
   await page.route(`**/todos/${todo.id}`, async route => {
