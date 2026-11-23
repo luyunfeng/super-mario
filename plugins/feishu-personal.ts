@@ -28,10 +28,13 @@ export function personalProblem(error: unknown): PersonalAuthError | undefined {
   }
   return undefined;
 }
-export type PersonalCLI = (args: string[], options: { signal: AbortSignal; input?: string; timeout?: number }) => Promise<Row>;
+export type PersonalCLI = (args: string[], options: { signal: AbortSignal; input?: string; timeout?: number; cwd?: string; maxFileBytes?: number }) => Promise<Row>;
 /** CLI output may contain credentials; only typed, fixed messages cross this boundary. */
 export const runPersonalCLI: PersonalCLI = (args, options) => new Promise((resolve, reject) => {
-  const child = execFile('lark-cli', args, { signal: options.signal, timeout: options.timeout ?? 30_000, maxBuffer: 8 * 1024 * 1024,
+  // Linux applies the bound in the writer, before an untrusted attachment can fill the disk.
+  const command = options.maxFileBytes === undefined ? 'lark-cli' : 'prlimit';
+  const argv = options.maxFileBytes === undefined ? args : ['--fsize=' + options.maxFileBytes, '--', 'lark-cli', ...args];
+  const child = execFile(command, argv, { cwd: options.cwd, signal: options.signal, timeout: options.timeout ?? 30_000, maxBuffer: 8 * 1024 * 1024,
     env: { ...process.env, LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' },
   }, (error, stdout, stderr) => {
     if (error) {

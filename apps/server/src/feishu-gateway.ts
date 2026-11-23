@@ -13,12 +13,15 @@ import type { FeishuRegistrationProvider } from '../../../plugins/feishu-registr
 import type { AppConfig, Json } from '../../../packages/protocol/src/index.ts';
 import { createFeishuController } from './feishu.ts';
 import { createPersonalMessages } from './feishu-personal.ts';
+import type { GroupReadService } from './feishu-group-read-delivery.ts';
+import { createGroupReader } from './feishu-read-group.ts';
 import { privateThreadExport } from './feishu-thread-history.ts';
 import { createFeishuBotsController, type FeishuBotFactory } from './feishu-bots.ts';
 import { createFeishuRegistration, type FeishuRegistrationJob } from './feishu-registration.ts';
 
 export type FeishuGatewayDependencies = {
   botFactory?: FeishuBotFactory;
+  readGroup?: GroupReadService;
   commandGroupPlatform?: CommandGroupPlatform;
   registrationProvider?: FeishuRegistrationProvider;
   personalProvider?: PersonalProvider;
@@ -77,7 +80,8 @@ export function createFeishuGateway(
     const value = personal.status();
     return value.url ? { ...value, qrDataUrl: await QRCode.toDataURL(value.url, { width: 280, margin: 2, errorCorrectionLevel: 'M' }) } : value;
   }
-  const bots = createFeishuBotsController(app, config, { factory: dependencies.botFactory, webBase: process.env.SUPER_MARIO_WEB_URL });
+  const bots = createFeishuBotsController(app, config, { factory: dependencies.botFactory,
+    readGroup: dependencies.readGroup ?? createGroupReader(config, () => personal.sourceAccount()), webBase: process.env.SUPER_MARIO_WEB_URL });
   const commandGroup = createCommandGroup({
     store:app.store, bots:bots.list, projects:app.projects.list,
     enabled:()=>app.plugins.list().some(p=>p.id==='feishu' && p.status==='active'),

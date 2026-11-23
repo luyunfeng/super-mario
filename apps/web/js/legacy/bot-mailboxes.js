@@ -42,6 +42,11 @@ export function createBotMailboxesUI({ api, element, getState, onChanged, showRe
   const todo = field(form, 'todoId', '所属待办', 'select');
   const confirmation = field(form, 'requireConfirmation', '处理前需要人工确认'); confirmation.type = 'checkbox'; confirmation.checked = true;
   const direct = field(form, 'ownerDirectReply', '主机器人直接处理已配对主人的私聊'); direct.type = 'checkbox'; direct.parentElement.classList.add('checkbox');
+  const readSettings = node('div', undefined, 'stack');
+  const readGroup = field(readSettings, 'readGroup', '允许已配对主人在群内读群');
+  readGroup.type = 'checkbox'; readGroup.parentElement.classList.add('checkbox');
+  readSettings.append(node('p', '在机器人所在群明确 @ 本机器人，发送「/读群 总结本群的待办」或「/read」。结果回复在原消息下，群成员可见。此开关适用于机器人所在的所有群。', 'muted'));
+  form.append(readSettings);
   const enabled = field(form, 'enabled', '启用连接'); enabled.type = 'checkbox';
   confirmation.parentElement.classList.add('checkbox'); enabled.parentElement.classList.add('checkbox');
   const appId = field(form, 'appId', '应用标识（手动接入）'); appId.autocomplete = 'off';
@@ -128,6 +133,7 @@ export function createBotMailboxesUI({ api, element, getState, onChanged, showRe
     if (registration) for (const el of form.querySelectorAll('input, select, textarea, button')) el.disabled = true;
   }
   function scopeFields() {
+    readSettings.hidden = scope.value !== 'global';
     project.parentElement.hidden = !['project', 'task'].includes(scope.value);
     project.required = scope.value === 'project';
     todo.parentElement.hidden = scope.value !== 'task'; todo.required = scope.value === 'task';
@@ -203,7 +209,7 @@ export function createBotMailboxesUI({ api, element, getState, onChanged, showRe
     executor.value = ''; options(executor, [[bot.executorId || '', '原绑定执行者已不可用']], '不绑定执行者'); executor.value = bot.executorId || '';
     name.value = bot.name; scope.value = bot.scope.kind;
     project.value = bot.scope.projectId || ''; render(); todo.value = bot.scope.todoId || '';
-    appId.value = bot.appId; secret.value = ''; confirmation.checked = bot.requireConfirmation; direct.checked = !!bot.ownerDirectReply; enabled.checked = bot.enabled;
+    appId.value = bot.appId; secret.value = ''; confirmation.checked = bot.requireConfirmation; direct.checked = !!bot.ownerDirectReply; readGroup.checked = bot.readGroup === true; enabled.checked = bot.enabled;
     formTitle.textContent = `编辑机器人：${bot.name}`; form.scrollIntoView({ block: 'nearest' }); sync();
   }
   const human = value => String(value || '').replace(/WebSocket/gi, '实时连接').replace(/Herdr|SSH|hook/gi, '连接服务').replace(/\bID\b|appId|botId|projectId/gi, '标识').replace(/cli_[\w]+|ou_[\w]+|oc_[\w]+/g, '（已隐藏）').replace(/知识/g, '记忆').replace(/执行机/g, '电脑').replace(/事项/g, '待办');
@@ -284,6 +290,7 @@ export function createBotMailboxesUI({ api, element, getState, onChanged, showRe
     if (scope.value === 'project' || (scope.value === 'task' && project.value)) value.projectId = project.value;
     if (scope.value === 'task') value.todoId = todo.value;
     const body = { name: name.value.trim(), scope: value, requireConfirmation: confirmation.checked, ownerDirectReply: value.kind === 'global' && direct.checked, enabled: enabled.checked };
+    body.readGroup = value.kind === 'global' && readGroup.checked;
     if (!body.name) { error.textContent = '请填写机器人名称。'; return; }
     if (qr) {
       secret.value = '';

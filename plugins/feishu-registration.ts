@@ -41,7 +41,7 @@ const open = 'https://open.feishu.cn';
 const accounts = 'https://accounts.feishu.cn';
 export const FEISHU_BOT_SCOPES = ['im:message.p2p_msg:readonly', 'im:message.group_at_msg:readonly', 'im:message:send_as_bot', 'contact:user.id:readonly'] as const;
 const workbenchScopes = ['im:message.pins:write_only', 'im:message:recall'];
-const eventNames = ['im.message.receive_v1'];
+const botEvents = (workbench?: boolean) => workbench ? ['im.message.receive_v1', 'im.message.recalled_v1'] : ['im.message.receive_v1'];
 const callbackNames = ['card.action.trigger'];
 type Row = Record<string, unknown>;
 const row = (value: unknown): Row => value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
@@ -53,7 +53,7 @@ export function feishuRegistrationSteps(appId?: string, workbench = false): Regi
   const base = appIdValid(appId ?? '') ? `${open}/app/${appId}` : `${open}/app`;
   return [
     { code: 'permissions', message: `开通并审批机器人权限：${FEISHU_BOT_SCOPES.join('、')}${workbench ? '。工作台卡片另需：' + workbenchScopes.join('、') : ''}`, url: `${base}/auth` },
-    { code: 'events', message: '启用机器人能力；事件和卡片回调使用长连接；订阅 im.message.receive_v1 和 card.action.trigger', url: `${base}/event` },
+    { code: 'events', message: '启用机器人能力；事件和卡片回调使用长连接；订阅 im.message.receive_v1 和 card.action.trigger' + (workbench ? '，并订阅 im.message.recalled_v1 以停止已撤回的读群请求' : ''), url: `${base}/event` },
     { code: 'publish', message: '发布版本并等待审批通过，然后核验线上权限；机器人目前禁用', url: `${base}/version` },
   ];
 }
@@ -116,7 +116,7 @@ export function createFeishuRegistrationProvider(options: {
           const credentials = await (options.registerApp ?? registerApp)({
             source: 'super-mario', createOnly: true, signal: context.signal,
             appPreset: { name: context.name, desc: 'AI workbench bot' },
-            addons: { scopes: { tenant: [...FEISHU_BOT_SCOPES, ...(context.workbench ? workbenchScopes : [])] }, events: { items: { tenant: eventNames } }, callbacks: { items: callbackNames } },
+            addons: { scopes: { tenant: [...FEISHU_BOT_SCOPES, ...(context.workbench ? workbenchScopes : [])] }, events: { items: { tenant: botEvents(context.workbench) } }, callbacks: { items: callbackNames } },
             onQRCodeReady(info) { context.progress({ stage: 'waiting_for_scan', url: info.url, expiresAt: new Date(Date.now() + info.expireIn * 1000).toISOString() }); },
           });
           context.signal.throwIfAborted();
@@ -309,7 +309,7 @@ export function createFeishuRegistrationProvider(options: {
           await post(`scope/update/${appId}`, { clientId: appId, appScopeIDs: scopeIds.map(s => s!.id), userScopeIDs: [], scopeIds: [], operation: 'add', isDeveloperPanel: true });
           await post(`robot/switch/${appId}`, { clientId: appId, enable: true });
           await post(`event/switch/${appId}`, { clientId: appId, eventMode: 4 });
-          await post(`event/update/${appId}`, { clientId: appId, operation: 'add', events: [], appEvents: eventNames, userEvents: [], eventMode: 4 });
+          await post(`event/update/${appId}`, { clientId: appId, operation: 'add', events: [], appEvents: botEvents(context.workbench), userEvents: [], eventMode: 4 });
           await post(`callback/switch/${appId}`, { clientId: appId, callbackMode: 4 });
           await post(`callback/update/${appId}`, { clientId: appId, operation: 'add', callbacks: callbackNames, callbackMode: 4 });
           context.progress({ stage: 'publishing' });
@@ -334,7 +334,7 @@ export function createFeishuRegistrationProvider(options: {
           const events = await post(`event/${appId}`, { needEventDetail: true });
           const callbacks = await post(`callback/${appId}`);
           const subscribed = [...ids(events.events), ...ids(events.appEvents), ...rows(events.appEventDetails).flatMap(v => ids(v.items)), ...rows(events.eventDetails).flatMap(v => ids(v.items))];
-          if (events.eventMode !== 4 || !eventNames.every(e => subscribed.includes(e)) || callbacks.callbackMode !== 4 || !callbackNames.every(e => ids(callbacks.callbacks).includes(e))) return result;
+          if (events.eventMode !== 4 || !botEvents(context.workbench).every(e => subscribed.includes(e)) || callbacks.callbackMode !== 4 || !callbackNames.every(e => ids(callbacks.callbacks).includes(e))) return result;
           // Public API readback checks actually granted tenant scopes after publication, not the console catalog.
           begin('verify-permissions');
           const tokenRaw = await request(`${open}/open-apis/auth/v3/tenant_access_token/internal`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ app_id: appId, app_secret: appSecret }) });

@@ -96,6 +96,28 @@ test('机器人编辑保留高级字段；后台刷新不覆盖草稿；显式�
   });
 });
 
+test('读群开关只在全局范围显示，默认关闭，可保存并再次编辑', async () => {
+  await withBots(async (page, writes) => {
+    const form = formOf(page);
+    const edit = page.locator('[data-bot-id=b]').getByRole('button', { name: '编辑', exact: true });
+    const readGroup = form.getByLabel('允许已配对主人在群内读群');
+    await edit.click();
+    await expect(readGroup).not.toBeChecked();
+    await readGroup.check();
+    await form.getByRole('button', { name: '保存手动接入' }).click();
+    await expect(form.locator('[name=name]')).toHaveValue('');
+    assert.equal(writes[0].body.readGroup, true);
+    assert.equal(writes[0].body.groupChats.length, 1);
+    await edit.click();
+    await expect(readGroup).toBeChecked();
+    await form.locator('[name=scope]').selectOption('unmarked');
+    await expect(readGroup).not.toBeVisible();
+    await form.getByRole('button', { name: '保存手动接入' }).click();
+    await expect(form.locator('[name=name]')).toHaveValue('');
+    assert.equal(writes[1].body.readGroup, false);
+  });
+});
+
 test('手动新建 POST 保存高级字段；扫码只提交基础契约并提示后续编辑', { timeout: 30000 }, async () => {
   await withBots(async (page, writes) => {
     const form = formOf(page);

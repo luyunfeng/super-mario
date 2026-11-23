@@ -3296,3 +3296,30 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
     await t.waitFor(() => assert.ok(sent.includes(answer), sent.at(-1)));
   } finally { await server.close(); }
 });
+
+test('Web 与飞书私聊解释读群的身份、公开受众和触发方式', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const reply = '在 Web 为全局机器人启用读群并连接同一应用的个人账号。主人在目标群 @机器人 后输入 /读群 加问题，回答会公开回复原消息。';
+  const { server, api, ask } = await fixture(t, req => {
+    assert.match(req.system, /连接同一应用的个人飞书账号/);
+    assert.match(req.system, /目标群明确 @该机器人/);
+    assert.match(req.system, /最终回答公开回复原消息，全群可见/);
+    assert.match(req.system, /没有群读回执不能声称读过聊天记录/);
+    return { role: 'assistant', content: reply };
+  }, options => {
+    adapter = options;
+    return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
+      async send(_target, text) { sent.push(text); } };
+  });
+  try {
+    const question = '我怎么让机器人只读这个飞书群？谁会看到回答？';
+    assert.equal(await ask(question), reply);
+    const bot = await api('/feishu/bots', { name: '群读样例', appId: 'cli_1111111111111111', appSecret: 'fixture',
+      scope: { kind: 'global' }, requireConfirmation: false });
+    const source = { chatId: 'chat', senderId: 'owner', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(question, { ...source, messageId: 'how-to-read' });
+    await t.waitFor(() => assert.ok(sent.includes(reply)));
+  } finally { await server.close(); }
+});

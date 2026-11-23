@@ -1,3 +1,5 @@
+import { groupReadDelivery, type GroupReadService } from './feishu-group-read-delivery.ts';
+import { readGroupCommand } from '../../../plugins/feishu-read-command.ts';
 import { createThreadDeletionCleanup, deletedThreads, eraseThreadChannel, type DeletedThread } from './feishu-thread-delete.ts';
 import { parseStartForm, startCard, startCardSnapshot, type StartCardSnapshot } from './feishu-start-card.ts';
 import { trimUnicodeSpace, privateThreadTags, normalizeThreadTags, searchPrivateThreads, readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
@@ -62,6 +64,7 @@ export interface FeishuBotsApp {
 }
 export interface FeishuBotAdapter {
   start(): Promise<void>; close(): Promise<void>; send(target: string, text: string, context?: FeishuSendContext): Promise<void>;
+  readReaction?(messageId: string, emoji: 'OnIt' | 'DONE', guard: () => void, removeId?: string): Promise<string>;
   pinMessage?(messageId: string): Promise<void>;
   unpinMessage?(messageId: string): Promise<void>;
   recallMessage?(messageId: string): Promise<void>;
@@ -101,7 +104,8 @@ export function dashboardWebBase(config: Pick<AppConfig, 'host' | 'port'>, confi
 }
 
 /** Composition uses a narrow host interface so mailbox/workbench can install handlers without a cycle. */
-export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig, options: { factory?: FeishuBotFactory; webBase?: string } = {}) {
+export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig, options: { factory?: FeishuBotFactory; webBase?: string; readGroup?: GroupReadService } = {}) {
+  const groupReads = groupReadDelivery(app, options.readGroup);
   const settings = createFeishuBotConfig(config.dataDir, config.feishu?.appId);
   const webBase = dashboardWebBase(config, options.webBase);
   const factory = options.factory ?? createFeishuIntegration;
@@ -1252,10 +1256,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (!state) { state = { epoch: 0, code: String(randomInt(100000, 1000000)), expires: Date.now() + 600_000, operations: Promise.resolve() }; runtimes.set(id, state); }
     return state;
   }
-  function redact(error: unknown) {
+  function redact(error: unknown, limit = 1000) {
     let text = error instanceof Error ? error.message : String(error);
     for (const secret of secrets) text = text.split(secret).join('[redacted]');
-    return text.replace(/(Bearer\s+)[^\s,;]+/gi, '$1[redacted]').replace(/wss?:\/\/\S+/gi, '[redacted WS endpoint]').slice(0, 1000);
+    return text.replace(/(Bearer\s+)[^\s,;]+/gi, '$1[redacted]').replace(/wss?:\/\/\S+/gi, '[redacted WS endpoint]').slice(0, limit);
   }
   function report(id: string, error: unknown) {
     runtime(id).reason = redact(error);
@@ -1302,6 +1306,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       ...(bot.executorId ? { executorId: bot.executorId } : {}),
       ...(bot.groupChats ? { groupChats: structuredClone(bot.groupChats) } : {}),
       ...(bot.collaboration ? { collaboration: structuredClone(bot.collaboration) } : {}),
+      ...(bot.readGroup && { readGroup: true }),
       ownerDirectReply: bot.ownerDirectReply === true, requireConfirmation: bot.requireConfirmation, ...(bot.profile ? { profile: bot.profile } : {}),
       connected: !closed && bot.enabled && pluginEnabled() && status.connected, paired,
       ...(!closed && !paired && !ownerCandidate(bot) && bot.enabled && pluginEnabled() ? { pairingCode: state.code } : {}),
@@ -1730,6 +1735,19 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (!active(bot.id, epoch, bot.revision) || !['p2p', 'group'].includes(source.chatType ?? '') || !source.chatId || !source.messageId || !text.trim()) return;
     let paired = owner(bot);
     const group = source.chatType === 'group';
+    const read = readGroupCommand(text, source.mentions);
+    if (read && group && bot.scope.kind === 'global' && bot.readGroup) {
+      const state = runtime(bot.id), adapter = state.adapter, initialOwner = paired;
+      const checkOwner = () => {
+        if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || !current(bot.id).readGroup
+          || !adapter || state.adapter !== adapter || !initialOwner?.senderId || initialOwner.senderId !== source.senderId) return false;
+        const now = owner(bot);
+        return now?.senderId === initialOwner.senderId && now.chatId === initialOwner.chatId;
+      };
+      if (adapter && read.addressed && source.mentionedSelf === true && source.senderType === 'user' && checkOwner())
+        await groupReads.read(bot, adapter, source, read.task, checkOwner, value => redact(value, Number.MAX_SAFE_INTEGER));
+      return;
+    }
     if (!group && paired?.senderId === source.senderId && paired?.chatId === source.chatId) {
       // Old inbox events and quoted cards must expire before command parsing can choose a fresh target.
       if (deletedAnchor(bot, source.chatId, source.messageId)) return;
@@ -1938,11 +1956,16 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!active(id, epoch, bot.revision)) return;
       const chatId = subscription(bot);
       state.commandSubscription = chatId;
-      const adapter = factory({ appId: bot.appId, appSecret: bot.appSecret, groupMessages: Boolean(bot.groupChats?.length || (chatId && bot.scope.kind === 'project')),
+      const adapter = factory({ appId: bot.appId, appSecret: bot.appSecret,
+        ...(bot.scope.kind === 'global' && bot.readGroup && { readGroup: true, groupChatIds: bot.groupChats?.map(group => group.chatId) ?? [] }),
+        groupMessages: Boolean(bot.groupChats?.length || (chatId && bot.scope.kind === 'project')),
         ...(chatId && bot.scope.kind === 'global' ? { commandGroupChatId: chatId } : {}), ...(bot.profile ? { profile: bot.profile } : {}),
         renderMessage: (text, context) => buildFeishuMessageCard(text, { title: bot.name, webBase,
           route: 'projectId' in bot.scope && bot.scope.projectId ? `projects/${encodeURIComponent(bot.scope.projectId)}/workspace` : 'chat', ...context?.presentation }),
         onCardAction: input => cardAction(bot, epoch, input),
+        onRecall: (chatId, messageId) => {
+          if (active(bot.id, epoch, bot.revision) && bot.readGroup && bot.scope.kind === 'global') groupReads.recall(bot, chatId, messageId);
+        },
         onMessage: (text, source) => track(id, receive(bot, epoch, text, source)),
         onInbox: things => track(id, ingest(bot, epoch, things)),
       });

@@ -1,3 +1,4 @@
+import { readGroupCommand, readGroupPost } from './feishu-read-command.ts';
 import type { PersonalAiMessage } from '../packages/protocol/src/index.ts';
 import { allowedPersonalChats, scopedLanes, searchFilter, unmutedIds, validChatId, type SearchLane } from './feishu-personal-scope.ts';
 import { execFile } from 'node:child_process';
@@ -7,7 +8,7 @@ import type { CollectedReplyEvidence } from '../packages/protocol/src/index.ts';
 
 /** Factory injection keeps tests offline while exercising the real SDK dispatcher. */
 export type FeishuWSFactory = (options: ConstructorParameters<typeof WSClient>[0]) => Pick<WSClient, 'start' | 'close' | 'getConnectionStatus'>;
-export interface FeishuMention { key?: string; openId?: string; appId?: string; name?: string }
+export interface FeishuMention { self?: true; key?: string; openId?: string; appId?: string; name?: string }
 export interface FeishuMessageSource { mentions?: FeishuMention[]; chatId: string; messageId: string; chatType?: string; chatName?: string; senderName?: string; senderId?: string; senderType?: 'user' | 'bot'; mentionedSelf?: boolean; parentId?: string; threadId?: string; rootId?: string }
 /** Private resume data. The host commits it only after durable inbox ingestion. */
 export interface PersonalCheckpoint {
@@ -46,6 +47,9 @@ export interface FeishuSendContext {
   /** A read-only card may deliver its text if the platform explicitly rejects card creation.
    * The host revalidates the recipient and scope immediately before the fallback. */
   beforeTextFallback?: () => void;
+  /** Plain reply to an exact source. Guard again after token acquisition and before transport. */
+  groupReadReply?: () => void;
+  replyKey?: string;
   mention?: { openId: string; name: string };
   card?: Record<string, unknown>;
   replyTo?: string;
@@ -66,6 +70,9 @@ export interface FeishuOptions {
   personalCollectionPageLimit?: number;
   /** Enable self-identity resolution for precise group mentions; default off. */
   groupMessages?: boolean;
+  groupChatIds?: string[];
+  readGroup?: boolean;
+  onRecall?: (chatId: string, messageId: string) => void;
   /** Exact command group selected by the main bot controller. */
   commandGroupChatId?: string;
   /** A profile only identifies an account; it never grants background collection. */
@@ -231,7 +238,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
       if (running && epoch === generation) identityReason = `群消息不可用，机器人身份读取失败：${reason(error, bearer ? [bearer] : [])}`;
     }
   }
-  async function postMessage(path: string, body: Row & { msg_type: FeishuSentMessageType }, fallback?: { text: string; validate: () => void }) {
+  async function postMessage(path: string, body: Row & { msg_type: FeishuSentMessageType }, fallback?: { text: string; validate: () => void }, validate?: () => void) {
     const epoch = generation;
     let bearer: string | undefined;
     let type = body.msg_type;
@@ -241,7 +248,8 @@ export function createFeishuIntegration(options: FeishuOptions) {
       bearer = await getToken();
       if (epoch !== generation) throw new Error('飞书发送请求已取消');
       if (closed) throw new Error('飞书适配器已关闭');
-      const data = await request(path, body, bearer, signal).catch(error => {
+      validate?.();
+      const data = await request(path, body, bearer, signal, 'POST', validate ? 'error' : 'follow').catch(error => {
         if (!(error instanceof CardContentRejected) || !fallback || closed || epoch !== generation) throw error;
         try { fallback.validate(); }
         catch (denied) { throw new TextFallbackDenied(reason(denied)); }
@@ -276,19 +284,31 @@ export function createFeishuIntegration(options: FeishuOptions) {
       context.onSent?.(id, type);
       return;
     }
-    const card = context?.card ?? options.renderMessage?.(text, context);
+    if (context?.groupReadReply && !context.replyTo) throw new Error('读群结果必须回复触发消息');
+    const card = context?.groupReadReply ? undefined : context?.card ?? options.renderMessage?.(text, context);
     const payload = card ? { msg_type: 'interactive' as const, content: JSON.stringify(card) }
       : { msg_type: 'text' as const, content: JSON.stringify({ text }) };
     const fallback = card && context?.beforeTextFallback ? { text, validate: context.beforeTextFallback } : undefined;
     if (context?.replyTo) {
       const { id, type } = await postMessage(`/open-apis/im/v1/messages/${encodeURIComponent(context.replyTo)}/reply`, {
-        ...payload, ...(context.threadId ? { reply_in_thread: true } : {}),
-      }, fallback);
+        ...payload, ...(context.threadId ? { reply_in_thread: true } : {}), ...(context.replyKey && { uuid: context.replyKey }),
+      }, fallback, context.groupReadReply);
+      if (context.groupReadReply && !id) throw new Error('读群回复缺少消息回执，发送结果未知');
       if (id) context.onSent?.(id, type);
       return;
     }
     const { id, type } = await postMessage('/open-apis/im/v1/messages?receive_id_type=chat_id', { receive_id: chatId, ...payload }, fallback);
     if (id) context?.onSent?.(id, type);
+  }
+  async function readReaction(messageId: string, emoji: 'OnIt' | 'DONE', guard: () => void, removeId?: string) {
+    const epoch = generation, signal = controller.signal;
+    const bearer = await getToken();
+    if (!running || epoch !== generation) throw new Error('机器人连接已变化');
+    guard();
+    const path = '/open-apis/im/v1/messages/' + encodeURIComponent(messageId) + '/reactions';
+    const data = await request(removeId ? path + '/' + encodeURIComponent(removeId) : path,
+      removeId ? {} : { reaction_type: { emoji_type: emoji } }, bearer, signal, removeId ? 'DELETE' : 'POST', 'error');
+    return string(object(data.data).reaction_id);
   }
   async function updateCard(messageId: string, card: Record<string, unknown>) {
     if (!messageId.trim()) throw new Error('卡片更新缺少消息标识');
@@ -351,27 +371,34 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const sender = object(data.sender);
     const message = object(data.message);
     // Never feed bot messages (including our own replies) back into the model.
-    if (sender.sender_type !== 'user' || message.message_type !== 'text') return;
+    const readPost = options.readGroup && message.chat_type === 'group' && message.message_type === 'post';
+    if (sender.sender_type !== 'user' || (message.message_type !== 'text' && !readPost)) return;
     const commandGroup = !!options.commandGroupChatId && message.chat_id === options.commandGroupChatId;
     if (message.chat_type === 'group' && !commandGroup) {
       if (options.groupMessages && !botOpenId) return;
-      if (options.commandGroupChatId && !options.groupMessages) return;
+      if (options.commandGroupChatId && !options.groupMessages && !options.readGroup) return;
     }
     const messageId = string(message.message_id), chatId = string(message.chat_id);
     if (!messageId || !chatId || seen.has(messageId)) return;
-    let text: string;
-    try { text = string(object(JSON.parse(string(message.content))).text); }
-    catch { operationReason = '收到无法解析的飞书 text 消息'; return; }
-    if (!text.trim()) return;
-    if (queue.length >= 100) { operationReason = '飞书消息队列已满，消息未处理'; return; }
-    remember(messageId);
     // Preserve unknown entries too: an unresolved @ must not look like a message with no addressee.
     const mentions = Array.isArray(message.mentions) ? message.mentions.map(raw => {
       const mention = object(raw), id = object(mention.id);
       const openId = string(id.open_id), appId = string(id.app_id);
-      return { ...(string(mention.key) && { key: string(mention.key) }), ...(openId && { openId }),
+      return { ...(options.readGroup && botOpenId && openId === botOpenId && { self: true as const }), ...(string(mention.key) && { key: string(mention.key) }), ...(openId && { openId }),
         ...(appId && { appId }), ...(string(mention.name) && { name: string(mention.name) }) };
     }) : undefined;
+    let text: string | undefined;
+    try {
+      const raw = object(JSON.parse(string(message.content)));
+      text = readPost ? readGroupPost(raw, mentions ?? []) : string(raw.text);
+    } catch { operationReason = '收到无法解析的飞书消息'; return; }
+    if (!text?.trim()) return;
+    if (options.readGroup && message.chat_type === 'group' && !commandGroup
+      && !(options.groupChatIds?.includes(chatId) ?? options.groupMessages)) {
+      if (!botOpenId || !mentions?.some(m => m.self) || !readGroupCommand(text, mentions)?.addressed) return;
+    }
+    if (queue.length >= 100) { operationReason = '飞书消息队列已满，消息未处理'; return; }
+    remember(messageId);
     const source: FeishuMessageSource = {
       chatId, messageId, chatType: string(message.chat_type) || undefined,
       senderId: string(object(sender.sender_id).open_id) || undefined, senderType: 'user',
@@ -790,12 +817,15 @@ export function createFeishuIntegration(options: FeishuOptions) {
     controller = new AbortController();
     token = undefined; tokenRequest = undefined; collecting = undefined;
     botOpenId = undefined;
-    identityReason = options.groupMessages || options.commandGroupChatId ? '群消息不可用，正在读取机器人身份' : undefined;
+    identityReason = options.groupMessages || options.commandGroupChatId || options.readGroup ? '群消息不可用，正在读取机器人身份' : undefined;
     connectionReason = '正在连接飞书'; operationReason = undefined;
     try {
       const logger = createLogger(epoch);
       const dispatcher = new EventDispatcher({ logger }).register({
         'im.message.receive_v1': event => receive(event, epoch),
+        'im.message.recalled_v1': event => {
+          if (running && epoch === generation && event.chat_id && event.message_id) options.onRecall?.(event.chat_id, event.message_id);
+        },
         'card.action.trigger': (event: unknown) => {
           const data = object(event), context = object(data.context), operator = object(data.operator);
           if (!running || epoch !== generation || !options.onCardAction) return { toast: { type: 'info', content: '卡片入口已失效，请重新发送「工作台」' } };
@@ -840,7 +870,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
         if (running && epoch === generation) { connectionReason = reason(error); clearTimeout(startupTimer); client.close({ force: true }); }
       });
     } catch (error) { connectionReason = reason(error); clearTimeout(startupTimer); ws?.close({ force: true }); }
-    if (options.groupMessages || options.commandGroupChatId) void resolveBotIdentity(epoch);
+    if (options.groupMessages || options.commandGroupChatId || options.readGroup) void resolveBotIdentity(epoch);
     if (options.collectEnabled === true && options.profile?.trim()) void poll(epoch);
   }
   async function close(): Promise<void> {
@@ -862,7 +892,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const detail = [channelReason, identityReason, operationReason].filter(Boolean).join('；');
     return { connected, ...(detail ? { reason: detail } : {}) };
   }
-  return { start, close, send, updateCard, collect, collectBatch, status,
+  return { start, close, send, readReaction, updateCard, collect, collectBatch, status,
     pinMessage: (id: string) => changePlatformMessage('pin', id),
     unpinMessage: (id: string) => changePlatformMessage('unpin', id),
     recallMessage: (id: string) => changePlatformMessage('recall', id),

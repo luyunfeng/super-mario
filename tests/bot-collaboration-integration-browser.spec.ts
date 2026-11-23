@@ -45,10 +45,15 @@ test('actual Web module saves robot config and submits to the real collaboration
  await expect(page.locator('.bot-list article')).toHaveCount(2);
  const card=page.locator(`[data-bot-id="${a.id}"]`);await card.getByRole('button',{name:'编辑',exact:true}).click();
  const form=page.locator('.bot-form');await expect(form.locator('[name=executorId]')).toHaveValue('demo');
+ await expect(form.getByLabel('允许已配对主人在群内读群')).not.toBeChecked();
+ await form.getByLabel('允许已配对主人在群内读群').check();
  await form.locator('[name=name]').fill('主机器人已更新');
  await form.getByRole('button',{name:'保存手动接入',exact:true}).click();
  await expect(card.locator('h3')).toHaveText('主机器人已更新');
  assert.equal((await request('/feishu/bots')).data.find((bot:any)=>bot.id===a.id).executorId,'demo');
+ assert.equal((await request('/feishu/bots')).data.find((bot:any)=>bot.id===a.id).readGroup,true);
+ await card.getByRole('button',{name:'编辑',exact:true}).click();
+ await expect(form.getByLabel('允许已配对主人在群内读群')).toBeChecked();
  const relay=page.locator('.bot-relay');
  await relay.locator('[name=sourceBotId]').selectOption(a.id);await relay.locator('[name=targetBotId]').selectOption(b.id);await relay.locator('textarea').fill('来自真实Web与HTTP链路的协作请求');
  await relay.getByRole('button',{name:'提交协作请求',exact:true}).click();

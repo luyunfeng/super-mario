@@ -59,7 +59,7 @@ export function validateBotGroupConfig(input: { groupChats?: unknown; collaborat
 /** Private configuration only. Never publish these records into events or snapshots. */
 export interface FeishuBotSettings {
   id: string; name: string; appId: string; appSecret: string; enabled: boolean;
-  scope: BotScope; ownerDirectReply?: boolean; requireConfirmation: boolean; profile?: string;
+  scope: BotScope; ownerDirectReply?: boolean; readGroup?: boolean; requireConfirmation: boolean; profile?: string;
   executorId?: string; groupChats?: BotGroupAccess[]; collaboration?: BotCollaboration;
   revision: number; createdAt: string; updatedAt: string; archivedAt?: string;
 }
@@ -102,7 +102,7 @@ export function createFeishuBotConfig(dataDir: string, legacyAppId?: string) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('机器人配置必须为对象');
     if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim())) throw new Error('机器人名称不能为空');
     if (input.appId !== undefined && (typeof input.appId !== 'string' || !/^cli_[A-Za-z0-9]+$/.test(input.appId.trim()))) throw new Error('机器人 appId 无效');
-    for (const key of ['enabled', 'requireConfirmation', 'ownerDirectReply'] as const) if (input[key] !== undefined && typeof input[key] !== 'boolean') throw new Error(`${key} 必须为布尔值`);
+    for (const key of ['enabled', 'requireConfirmation', 'ownerDirectReply', 'readGroup'] as const) if (input[key] !== undefined && typeof input[key] !== 'boolean') throw new Error(`${key} 必须为布尔值`);
     for (const key of ['appSecret', 'profile'] as const) if (input[key] !== undefined && typeof input[key] !== 'string') throw new Error(`${key} 必须为文本`);
     if (input.scope !== undefined) validateBotScope(input.scope);
     validateBotGroupConfig({ executorId: input.executorId, groupChats: input.groupChats, collaboration: input.collaboration });
@@ -133,6 +133,7 @@ export function createFeishuBotConfig(dataDir: string, legacyAppId?: string) {
       const name = input.name?.trim() ?? previous?.name;
       const scope = input.scope === undefined ? previous?.scope : validateBotScope(input.scope);
       if (!appId || !name || !scope) throw new Error('需要机器人名称、appId 和 scope');
+      if (input.readGroup === true && scope.kind !== 'global') throw new Error('只有全局机器人可启用主人读群');
       assertUnique(appId, id);
       const now = new Date().toISOString();
       const row: FeishuBotSettings = {
@@ -140,6 +141,7 @@ export function createFeishuBotConfig(dataDir: string, legacyAppId?: string) {
         appSecret: input.appSecret?.trim() || (previous?.appId === appId ? previous.appSecret : ''),
         enabled: input.enabled ?? previous?.enabled ?? true,
         ownerDirectReply: input.ownerDirectReply ?? previous?.ownerDirectReply ?? false,
+        readGroup: scope.kind === 'global' && (input.readGroup ?? (previous?.appId === appId && previous.readGroup === true)),
         requireConfirmation: input.requireConfirmation ?? previous?.requireConfirmation ?? true,
         ...(input.profile === undefined ? (previous?.profile ? { profile: previous.profile } : {}) : { profile: input.profile.trim() }),
         revision: (previous?.revision ?? 0) + 1, createdAt: previous?.createdAt ?? now, updatedAt: now,

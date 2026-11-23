@@ -105,7 +105,7 @@ test('cancel before queued job starts prevents provider contact; interrupted met
 });
 
 // Every platform stage is exercised with a fetch replacement. This fixture never uses the network.
-function webFetch(options: { missingScope?: boolean; publication?: 'review' | 'unknown'; badEvent?: boolean; badCookie?: boolean; badRedirect?: boolean; recognizedOwner?: boolean } = {}) {
+function webFetch(options: { missingScope?: boolean; publication?: 'review' | 'unknown'; badEvent?: boolean; missingRecall?: boolean; badCookie?: boolean; badRedirect?: boolean; recognizedOwner?: boolean } = {}) {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   let creates = 0;
   const json = (data: unknown = {}, headers?: HeadersInit) => new Response(JSON.stringify({ code: 0, data }), { headers });
@@ -125,7 +125,7 @@ function webFetch(options: { missingScope?: boolean; publication?: 'review' | 'u
     if (path.includes('/app_version/create/')) { assert.deepEqual(JSON.parse(String(init.body)).visibleSuggest.members, ['creator-user']); return json({ versionId: 'version-1' }); }
     if (path.includes('/publish/commit/') && options.publication === 'unknown') throw new Error(`network failed ${secret}`);
     if (path.includes('/app_version/list/')) return json({ versions: [{ versionId: 'version-1', versionStatus: options.publication === 'review' ? 1 : 2 }] });
-    if (path === `/developers/v1/event/${appId}`) return json({ eventMode: options.badEvent ? 1 : 4, appEventDetails: [{ items: [{ id: 'im.message.receive_v1' }] }] });
+    if (path === `/developers/v1/event/${appId}`) return json({ eventMode: options.badEvent ? 1 : 4, appEventDetails: [{ items: [{ id: 'im.message.receive_v1' }, ...(options.missingRecall ? [] : [{ id: 'im.message.recalled_v1' }])] }] });
     if (path === `/developers/v1/callback/${appId}`) return json({ callbackMode: 4, callbacks: [{ id: 'card.action.trigger' }] });
     if (path.endsWith('/tenant_access_token/internal')) return new Response(JSON.stringify({ code: 0, tenant_access_token: 'private-tenant-token' }));
     if (path === '/open-apis/contact/v3/users/batch_get_id') return json({ user_list: options.recognizedOwner ? [{ email: 'scanner@example.invalid', user_id: 'ou_verifiedScanner' }] : [] });
@@ -241,10 +241,10 @@ test('scanner ownership is resolved with the newly created app token, not a cros
 });
 
 test('missing permissions, event mismatch, pending review and unknown publication never report configured', async () => {
-  for (const setting of [{ missingScope: true }, { badEvent: true }, { publication: 'review' as const }, { publication: 'unknown' as const }]) {
+  for (const setting of [{ missingScope: true }, { badEvent: true }, { missingRecall: true }, { publication: 'review' as const }, { publication: 'unknown' as const }]) {
     const dir = mkdtempSync(join(tmpdir(), 'mario-registration-fail-')), fake = webFetch(setting);
     try {
-      const result = await createFeishuRegistrationProvider({ dataDir: dir, fetch: fake.fetcher }).register({ name: 'Test', signal: new AbortController().signal, progress: () => {} });
+      const result = await createFeishuRegistrationProvider({ dataDir: dir, fetch: fake.fetcher }).register({ name: 'Test', workbench: true, signal: new AbortController().signal, progress: () => {} });
       assert.equal(result.verified, false); assert.equal(result.missingSteps.length, 3); assert.equal(fake.creates(), 1);
       if ('publication' in setting && setting.publication === 'unknown') assert.equal(result.outcome, 'unknown');
       assert.equal(fake.calls.filter(c => c.url.includes('/publish/commit/')).length, 1);
@@ -270,6 +270,7 @@ test('official SDK device registration preserves credentials but honestly requir
   try {
     const provider = createFeishuRegistrationProvider({ dataDir: dir, mode: 'device', registerApp: async options => {
       assert.equal(options.createOnly, true); assert.equal(options.appPreset?.name, 'Device');
+      assert.ok(options.addons?.events?.items?.tenant?.includes('im.message.recalled_v1'));
       assert.ok(options.addons?.scopes?.tenant?.includes('im:message.pins:write_only'));
       assert.ok(options.addons?.scopes?.tenant?.includes('im:message:recall'));
       options.onQRCodeReady({ url: 'https://accounts.feishu.cn/device?user_code=123', expireIn: 600 });
