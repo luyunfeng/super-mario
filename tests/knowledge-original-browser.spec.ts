@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtemp, mkdir, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -37,6 +38,9 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   const projectJob = server.app.knowledgeCurator.addSource({ title: '项目来源', url: projectUrl, text: documentText, layer: 'project', projectId: project.id });
   server.app.store.put('knowledge.sources', projectJob.id, { ...projectJob, status: 'completed', knowledgeIds: [projectEntry.id] });
   await writeFile(join(rawDir, projectJob.id + '.md'), documentText);
+  const originalTool = server.app.contributions.list('tools').find(entry => entry.value.name === 'knowledge_original')!.value;
+  const result = await originalTool.execute({pageId:projectEntry.id, sourceId:projectJob.id, projectId:project.id, outline:true}, new AbortController().signal) as { headings: { title:string; line:number }[] };
+  assert.deepEqual(result.headings.map(({title,line})=>[title,line]), [['计划',4],['核对',5],['核对',9]]);
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
   t.after(() => browser.close());
   const page = await browser.newPage();

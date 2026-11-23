@@ -1,4 +1,5 @@
 export {webConversationsExtension, webConversationMatches, independentWebSource, requireWebConversationHistory, readWebConversationExport, eraseWebConversationRegistration} from './web-conversations.ts';
+import MarkdownIt from 'markdown-it';
 import { readTodayBrief, type TodayBriefSources } from './today-brief.ts';
 import { calendarDayFormatter, localDayFormatter, validateLocalDay } from './local-day.ts';
 import { scheduledWorkTemplates } from './scheduled-work-templates.ts';
@@ -643,6 +644,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             signal.throwIfAborted();
             if (handoffExcerpt !== undefined && (typeof handoffExcerpt !== 'boolean' ||
                 (handoffExcerpt && (!sourceId || query !== undefined || args.offset !== undefined)))) throw new Error('交接节选须指定转写来源，不能同时搜索或分页');
+            if (args.outline !== undefined && (typeof args.outline !== 'boolean' || (args.outline && (!sourceId || query !== undefined || handoffExcerpt)))) throw new Error('文档大纲须指定来源并单独查询');
             const result = await actions.knowledgeOriginal!(pageId, sourceId, typeof projectId === 'string' ? projectId : undefined, handoffExcerpt);
             if (result.sources) {
               const end = offset + 25;
@@ -650,6 +652,17 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             }
             if (typeof sourceId !== 'string' || typeof result.content !== 'string' || typeof result.title !== 'string') throw new Error('来源正文不可用');
             const route = '#memory?entry=' + encodeURIComponent(pageId) + '&source=' + encodeURIComponent(sourceId);
+            if (args.outline) {
+              const tokens = new MarkdownIt().parse(result.content, {});
+              const headings = tokens.flatMap((token, index) => {
+                const title = tokens[index + 1]?.content.trim();
+                if (token.type !== 'heading_open' || !token.map || !title) return [];
+                const line = token.map[0] + 1;
+                return [{ title, level: Number(token.tag.slice(1)), line, webCitation: `[查看原文](${route}&line=${line})` }];
+              });
+              const end = offset + 25;
+              return { title: result.title, headings: headings.slice(offset, end), nextOffset: end < headings.length ? end : null } as Json;
+            }
             if (handoffExcerpt) return { title: result.title, text: result.content, truncated: result.truncated, webCitation: `[查看原文](${route})` } as Json;
             if (typeof query === 'string') {
               const lines = result.content.split('\n');
@@ -670,7 +683,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             const chars = Array.from(result.content);
             const end = offset + 4000;
             return { title: result.title, webCitation: `[查看原文](${route})`, text: chars.slice(offset, end).join(''), nextOffset: end < chars.length ? end : null } as Json;
-          }, { pageId: { type: 'string' }, sourceId: { type: 'string' }, handoffExcerpt: { type: 'boolean', description: '用户明确要求附转写时获取交接用正文；长文只保留首尾。' }, query: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
+          }, { pageId: { type: 'string' }, sourceId: { type: 'string' }, outline: { type: 'boolean', description: '列出已保存原文的 Markdown 标题、层级和行号。按 nextOffset 续读；同名标题按行号区分。' }, handoffExcerpt: { type: 'boolean', description: '用户明确要求附转写时获取交接用正文；长文只保留首尾。' }, query: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
         if (actions?.searchMeetings) context.contribute('tools', 'meeting_search', tool('meeting_search',
           '按会议当前标题或登记标题检索可见会议，包含未注明日期的来源。返回当前标题、开始时间、整理状态和可读知识页。', async (args, signal) => {
             signal.throwIfAborted();
