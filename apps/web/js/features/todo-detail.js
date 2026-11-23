@@ -5,6 +5,7 @@ import { openDrawer, toast } from '../ui/overlay.js';
 import { createAttention } from './attention.js';
 import { openTaskClosure } from './task-closure.js';
 import { createTodoThread } from './todo-thread.js';
+import { openTodoContinuation } from './todo-continuation.js';
 import { openTodoHistory } from './todo-history.js';
 import { openWaitingReply } from './waiting-reply.js';
 
@@ -299,6 +300,11 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
     const runs = (snapshot.runs ?? []).filter(item => item.todoId === current.id && item.projectId === current.projectId)
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     const related = snapshot.todos.filter(item => item.projectId === current.projectId);
+    const rootId = item => item.continuesTodoId ? item.continuationRootId : item.id;
+    const root = rootId(current);
+    const lineage = root ? related.filter(item => item.id !== current.id && rootId(item) === root) : [];
+    const predecessor = lineage.find(item => item.id === current.continuesTodoId);
+    const successors = lineage.filter(item => item.continuesTodoId === current.id);
     const parent = related.find(item => item.id === current.parentTodoId);
     const children = related.filter(item => item.parentTodoId === current.id);
     const completedChildren = children.filter(item => item.completedAt).length;
@@ -312,6 +318,9 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
         const item = related.find(candidate => candidate.id === id && candidate.parentTodoId === current.parentTodoId);
         return item ? h('div', null, todoLink(item), item.completedAt ? ' · 已完成' : ' · 待完成') : '无法核对此子项';
       })),
+      current.continuesTodoId && section('前序待办', predecessor ? todoLink(predecessor) : h('p', null, '当前范围内找不到前序待办。')),
+      successors.length > 0 && section('后续待办', successors.map(item => h('div', null, todoLink(item)))),
+      current.continuationReason && section('交接说明', h('p', { style: { whiteSpace: 'pre-wrap' } }, current.continuationReason)),
       parent && section('上级待办', todoLink(parent)),
       children.length > 0 && section('子待办', h('p', null, '已完成 ' + completedChildren + ' / ' + children.length),
         completedChildren === children.length && !current.completedAt && h('p', null, '上级待办仍未完成'),
@@ -328,6 +337,7 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
         current.waitingOn ? '等待' + current.waitingOn : runs.some(isRunActive) ? '查看执行进展。' :
         latest?.status === 'completed' ? '核对交付结果并验收。' : latest ? '查看执行历史，确认是否重新派单。' : '可补充决策或发起派单。'),
       h('div', { class: 'row row--wrap' }, action('编辑待办', () => openEdit(current)),
+        (!current.projectId || project && !project.archivedAt) && action('创建续办', () => openTodoContinuation(context)),
         project && !project.archivedAt && h('a', { class: 'btn btn--sm', onclick: () => close?.(),
           href: router.href('projects', project.id, 'workspace') + '?todo=' + encodeURIComponent(current.id) }, '就此待办提问'),
         current.waitingOn && current.reminderAt && !current.completedAt && action('跟踪回复', () => openWaitingReply(context)),

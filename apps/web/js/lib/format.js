@@ -52,7 +52,14 @@ export function friendlyError(error) {
 }
 
 export function uuid() {
-  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const crypto = globalThis.crypto;
+  if (crypto?.randomUUID) return crypto.randomUUID();
+  if (!crypto?.getRandomValues) return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64;
+  bytes[8] = (bytes[8] & 63) | 128;
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  return [hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-');
 }
 
 export const deliveryLabels = { queued: '等待发送', needs_approval: '待确认', sending: '发送中', sent: '已发送', held: '暂缓发送', failed: '发送失败', unknown: '结果未知', expired: '已过期', cancelled: '已取消' };
