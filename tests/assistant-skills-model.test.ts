@@ -2792,7 +2792,7 @@ test('Web 与飞书按指定当地日期回顾项目讨论，覆盖夏令时回�
   try {
     const project = await api('/projects', { name: '当地日期样本' });
     for (const [id, createdAt] of [['prior', '2026-11-01T03:59:59Z'], ['start', '2026-11-01T04:00:00Z'],
-      ['first', '2026-11-01T05:30:00Z'], ['second', '2026-11-01T06:30:00Z'], ['last', '2026-11-02T04:59:59Z'],
+      ['second', '2026-11-01T06:30:00Z'], ['first', '2026-11-01T05:30:00Z'], ['last', '2026-11-02T04:59:59Z'],
       ['next', '2026-11-02T05:00:00Z']]) {
       server.app.store.put('messages', id, { id, text: id, createdAt, projectId: project.id, conversationId: 'project:' + project.id + ':work',
         role: 'user', status: 'done' });

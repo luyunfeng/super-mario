@@ -140,7 +140,11 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
   const hits = [];
   const patterns = terms.map(term => new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'));
   let pastCursor = before === undefined;
-  for (const message of store.list<Message>('messages').reverse()) {
+  // Imported history can arrive after newer messages. Keep reverse storage order for ties.
+  const messages = store.list<Message>('messages').reverse().filter(message => projects.has(message.conversationId));
+  const timestamp = (message: Message) => Date.parse(message.createdAt) || 0;
+  messages.sort((a, b) => timestamp(b) - timestamp(a));
+  for (const message of messages) {
     const project = projects.get(message.conversationId);
     if (!project || (todoId !== undefined && message.todoId !== todoId) || !readableMessage(message, project, excludeId)) continue;
     if (role !== undefined && message.role !== role) continue;
