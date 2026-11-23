@@ -90,3 +90,42 @@ test('manifest declares plugin points before activation and consumer can contrib
   await writeFile(join(folder,'entry.mjs'),`export default {id:'manifest',name:'Manifest',capabilities:[],activate(ctx){ctx.contribute('manifest.labels','label',{title:'valid'});}};`);
   for(const item of await loadExtensions(f.dir))f.host.register(item.extension,item.config);await f.host.start();assert.deepEqual(f.contributions.list('manifest.labels')[0].value,{title:'valid'});
 });
+
+test('inspections retain local manifest evidence and report safe live dependency and lifecycle status', async t => {
+  const { dir, host } = await fixture(t);
+  const manifests = {
+    local: { version: '3.2.1-beta.1', dependencies: ['builtin'], permissions: [] },
+    broken: { version: '2.0.0', main: 'nonexistent.mjs' },
+    invalid: { version: 'not-semver' },
+  };
+  for (const [id, fields] of Object.entries(manifests)) {
+    const folder = join(dir, 'extensions', id);
+    await mkdir(folder, { recursive: true });
+    await writeFile(join(folder, 'super-mario.extension.json'), JSON.stringify({ id, main: 'entry.mjs', apiVersion: 1, ...fields }));
+  }
+  await writeFile(join(dir, 'extensions', 'local', 'entry.mjs'), "export default {id:'local',name:'Local',version:'untrusted',capabilities:['read'],activate(){}};");
+  for (const item of await loadExtensions(dir)) host.register(item.extension, item.config, item.origin);
+  host.register({ id: 'builtin', name: 'Builtin', capabilities: [], activate() {} });
+  host.register({ id: 'missing-dep', name: 'Missing', dependencies: ['uninstalled'], capabilities: [], activate() {} });
+  host.register({ id: 'exception', name: 'Exception', capabilities: [], activate() { throw Error('synthetic-private-error'); } });
+  await host.start();
+  const inspect = (id: string) => host.inspections('4.0.0').find(item => item.id === id)!;
+  assert.deepEqual(inspect('local'), {
+    id: 'local', name: 'Local', source: 'local', version: '3.2.1-beta.1', enabled: true, status: 'active',
+    capabilities: ['read'], permissions: [], dependencies: [{ id: 'builtin', status: 'active' }],
+  });
+  assert.equal(inspect('builtin').source, 'builtin');
+  assert.equal(inspect('builtin').version, '4.0.0');
+  assert.equal(inspect('builtin').permissions, null);
+  assert.equal(inspect('broken').version, '2.0.0');
+  assert.equal(inspect('broken').reason, '本地插件入口加载或校验失败');
+  assert.equal(inspect('invalid').version, null);
+  assert.equal(inspect('invalid').reason, '本地插件清单读取或校验失败');
+  assert.equal(inspect('exception').reason, '插件启动失败');
+  assert.deepEqual(inspect('missing-dep').dependencies, [{ id: 'uninstalled', status: 'missing' }]);
+  await host.setEnabled('builtin', false);
+  assert.equal(inspect('local').status, 'waiting');
+  assert.equal(inspect('local').reason, '等待依赖插件就绪');
+  assert.deepEqual(inspect('local').dependencies, [{ id: 'builtin', status: 'disabled' }]);
+  assert.doesNotMatch(JSON.stringify(host.inspections('4.0.0')), /synthetic-private-error|nonexistent\.mjs|mario-plugin-api/);
+});

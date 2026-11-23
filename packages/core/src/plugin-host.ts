@@ -1,6 +1,7 @@
 import { assertBackgroundExecution } from './eventbox.ts';
 import { assertJson, assertPluginPermissions } from '../../plugin-sdk/src/index.ts';
 import { createPluginInvocations, validateInvocationOptions } from './plugin-invocations.ts';
+import type { LocalPluginOrigin } from './extension-loader.ts';
 import { join } from 'node:path';
 import type { JsonObject, PluginInfo } from '../../protocol/src/index.ts';
 import type { ContributionMap, Contributions, Dispose, EventBus, Extension, ExtensionContext, Store, ExtensionPointDefinition, BackgroundHost } from '../../plugin-sdk/src/index.ts';
@@ -58,7 +59,7 @@ export function createContributions(): Contributions {
   return registry;
 }
 
-type Entry = { extension: Extension; config: JsonObject; info: PluginInfo; dispose?: () => Promise<void> };
+type Entry = { origin?: LocalPluginOrigin; failure?: 'activation' | 'cleanup'; extension: Extension; config: JsonObject; info: PluginInfo; dispose?: () => Promise<void> };
 type HostOptions = { store: Store; events: EventBus; contributions: Contributions; dataDir: string; usageGatewayAccounts?:(input:Record<string,unknown>)=>unknown; background?: BackgroundHost };
 const settingsCollection = 'core.plugin-settings';
 
@@ -72,7 +73,7 @@ export class PluginHost {
 
   constructor(options: HostOptions) { this.options = options; this.invocations = createPluginInvocations(options.contributions); }
 
-  register(extension: Extension, config: JsonObject = {}): void {
+  register(extension: Extension, config: JsonObject = {}, origin?: LocalPluginOrigin): void {
     if (this.closed) throw new Error('Plugin host is closed');
     assertJson(config);
     if (extension.permissions !== undefined) assertPluginPermissions(extension.permissions);
@@ -80,7 +81,7 @@ export class PluginHost {
     if (this.entries.has(extension.id)) throw new Error(`Plugin already registered: ${extension.id}`);
     const enabled = this.options.store.get<{ enabled: boolean }>(settingsCollection, extension.id)?.enabled !== false;
     this.entries.set(extension.id, {
-      extension, config, info: { ...(extension.navigation && { navigation: structuredClone(extension.navigation) }), id: extension.id, name: extension.name, capabilities: [...extension.capabilities], enabled, status: enabled ? 'waiting' : 'disabled' },
+      extension, config, origin, info: { ...(extension.navigation && { navigation: structuredClone(extension.navigation) }), id: extension.id, name: extension.name, capabilities: [...extension.capabilities], enabled, status: enabled ? 'waiting' : 'disabled' },
     });
     try { this.checkCycles(); }
     catch (error) { this.entries.delete(extension.id); throw error; }
@@ -107,6 +108,28 @@ export class PluginHost {
   }
 
   list(): PluginInfo[] { return [...this.entries.values()].map(entry => ({ ...entry.info, capabilities: [...entry.info.capabilities] })); }
+
+  inspections(builtinVersion: string) {
+    return [...this.entries.values()].map(({ extension, info, origin, failure }) => {
+      const declared = origin?.failure ? origin.declaredDependencies : extension.dependencies;
+      const dependencies = (declared ?? []).map(id => ({ id, status: this.entries.get(id)?.info.status ?? 'missing' }));
+      // Plugin errors can include configuration, file paths or remote messages. Only host-known causes are public.
+      let reason: string | undefined;
+      if (info.status === 'waiting') reason = dependencies.some(dep => dep.status !== 'active') ? '等待依赖插件就绪' : '等待插件启动';
+      if (info.status === 'failed') {
+        if (origin?.failure === 'manifest') reason = '本地插件清单读取或校验失败';
+        else if (origin?.failure === 'entry') reason = '本地插件入口加载或校验失败';
+        else if (origin?.failure === 'cycle') reason = '插件存在循环依赖';
+        else reason = failure === 'cleanup' ? '插件清理失败' : '插件启动失败';
+      }
+      return {
+        id: info.id, name: info.name, enabled: info.enabled, status: info.status,
+        source: origin?.source ?? 'builtin' as const, version: origin ? origin.version : builtinVersion,
+        capabilities: [...info.capabilities], permissions: extension.permissions ? [...extension.permissions] : null,
+        dependencies, ...(reason && { reason }),
+      };
+    });
+  }
 
   close(): Promise<void> {
     const result = this.queue.then(async () => {
@@ -297,7 +320,7 @@ export class PluginHost {
       let message = error instanceof Error ? error.message : String(error);
       try { await entry.dispose(); } catch (cleanup) { message += `; ${String(cleanup)}`; }
       entry.dispose = undefined;
-      entry.info.status = 'failed'; entry.info.error = message;
+      entry.failure = 'activation'; entry.info.status = 'failed'; entry.info.error = message;
     }
   }
 
@@ -311,6 +334,6 @@ export class PluginHost {
     this.options.background?.ownerEnabled(entry.info.id, false);
     entry.dispose = undefined;
     try { await dispose(); entry.info.status = entry.info.enabled ? 'waiting' : 'disabled'; delete entry.info.error; }
-    catch (error) { errors.push(error); entry.info.status = 'failed'; entry.info.error = String(error); }
+    catch (error) { errors.push(error); entry.failure = 'cleanup'; entry.info.status = 'failed'; entry.info.error = String(error); }
   }
 }

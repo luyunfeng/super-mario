@@ -579,7 +579,7 @@ export async function createWorkbench(config: AppConfig) {
     if (!privateExport) throw new InputError('飞书独立对话服务尚未连接', 503);
     return privateExport(botId, threadId);
   }));
-  for (const loaded of await loadExtensions(config.dataDir, { reservedIds: plugins.list().map(item => item.id) })) plugins.register(loaded.extension, loaded.config);
+  for (const loaded of await loadExtensions(config.dataDir, { reservedIds: plugins.list().map(item => item.id) })) plugins.register(loaded.extension, loaded.config, loaded.origin);
   async function mainSkillCatalog(): Promise<string> {
     const result = await plugins.invocations.use('assistant-skills.manage', { action: 'list' });
     if (!result || typeof result !== 'object' || Array.isArray(result) || !Array.isArray(result.skills)) throw new Error('技能目录读取失败');

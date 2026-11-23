@@ -1371,7 +1371,8 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
     machines:()=>machines.list(),plugins:()=>app.plugins.list(),devices:()=>app.browserDevices.list()});
   const browserPassword=createBrowserPassword(app.store,app.browserDevices,devicePlugin);
   const passwordRoutes=createPublicPasswordRoutes(browserPassword,config.token,devicePlugin,body,json);
-  const adminRoutes=createAdminRoutes(createAdminAuth(app.store),config.token,body,json,overview,app.browserDevices,devicePlugin,browserPassword);
+  const adminRoutes=createAdminRoutes(createAdminAuth(app.store),config.token,body,json,overview,app.browserDevices,devicePlugin,browserPassword,
+    ()=>app.plugins.inspections(version));
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const access=browserAccess.access(req,url);

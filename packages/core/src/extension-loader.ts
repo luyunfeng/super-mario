@@ -7,7 +7,12 @@ import { pathToFileURL } from 'node:url';
 import type { Extension } from '../../plugin-sdk/src/index.ts';
 import type { JsonObject } from '../../protocol/src/index.ts';
 
-type Loaded = { extension: Extension; config: JsonObject };
+export type LocalPluginOrigin = {
+  source: 'local'; version: string | null;
+  failure?: 'manifest' | 'entry' | 'cycle';
+  declaredDependencies?: string[];
+};
+type Loaded = { extension: Extension; config: JsonObject; origin: LocalPluginOrigin };
 const validId = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(value);
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const stringList = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string');
@@ -58,7 +63,7 @@ export async function loadExtensions(dataDir: string, options: { reservedIds?: s
     children = await readdir(root, { withFileTypes: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    return [{ extension: failed(uniqueErrorId('extensions', new Set(options.reservedIds)), error), config: {} }];
+    return [{ extension: failed(uniqueErrorId('extensions', new Set(options.reservedIds)), error), config: {}, origin: { source: 'local', version: null, failure: 'manifest' } }];
   }
   const directories = children
     .filter(entry => entry.isDirectory() || entry.isSymbolicLink()).sort((a, b) => a.name.localeCompare(b.name, 'en'));
@@ -78,24 +83,33 @@ export async function loadExtensions(dataDir: string, options: { reservedIds?: s
   for (const item of manifests) {
     let id = uniqueErrorId(item.directory, unavailable);
     let config: JsonObject = {};
+    const manifest = item.manifest;
+    const version = object(manifest) && typeof manifest.version === 'string' && versionPattern.test(manifest.version) ? manifest.version : null;
+    const origin: LocalPluginOrigin = { source: 'local', version };
+    let failure: LocalPluginOrigin['failure'] = 'manifest';
+    let name: string | undefined;
+    let permissions: string[] | undefined;
     try {
       if (item.error) throw item.error;
-      const manifest = item.manifest;
       if (!object(manifest) || !validId(manifest.id)) throw new Error('Invalid extension id');
       if (used.has(manifest.id)) throw new Error(`Duplicate or reserved extension id: ${manifest.id}`);
       id = manifest.id;
       used.add(id);
-      if (typeof manifest.version !== 'string' || !versionPattern.test(manifest.version)) throw new Error('Invalid extension version (expected semver)');
+      if (version === null) throw new Error('Invalid extension version (expected semver)');
       if (manifest.apiVersion !== 1) throw new Error('Unsupported extension apiVersion');
       if (manifest.name !== undefined && (typeof manifest.name !== 'string' || !manifest.name.trim())) throw new Error('Invalid extension name');
       if (manifest.dependencies !== undefined && (!stringList(manifest.dependencies) || !manifest.dependencies.every(validId))) throw new Error('Invalid extension dependencies');
+      name = manifest.name as string | undefined;
+      origin.declaredDependencies = manifest.dependencies as string[] | undefined;
       if (manifest.extensionPoints !== undefined && (!Array.isArray(manifest.extensionPoints) || !manifest.extensionPoints.every(point => object(point) && validId(point.id) && point.id.startsWith(id + '.') && point.version === 1 && (point.transport === undefined || point.transport === 'json')))) throw new Error('Invalid manifest extensionPoints');
       if (manifest.permissions !== undefined) assertPluginPermissions(manifest.permissions);
+      permissions = manifest.permissions as string[] | undefined;
       if (manifest.runtime !== undefined && manifest.runtime !== 'local') throw new Error('Only trusted local runtime is implemented');
       if (manifest.config !== undefined && !object(manifest.config)) throw new Error('Invalid extension config');
       assertJson(manifest.config ?? {});
       config = (manifest.config ?? {}) as JsonObject;
       if (typeof manifest.main !== 'string') throw new Error('Invalid extension main');
+      failure = 'entry';
       const path = await regularPath(join(root, item.directory), manifest.main);
       // No cache busting or hot reload: one module instance per installed entry URL.
       const module = await import(pathToFileURL(path).href);
@@ -109,8 +123,10 @@ export async function loadExtensions(dataDir: string, options: { reservedIds?: s
       if (sdk.permissions !== undefined) assertPluginPermissions(sdk.permissions);
       loaded.push({ extension: { ...sdk, navigation: readNavigation(manifest.navigation ?? sdk.navigation), extensionPoints: manifest.extensionPoints as Extension['extensionPoints'] ?? sdk.extensionPoints, permissions: manifest.permissions as string[] | undefined ?? sdk.permissions, name: manifest.name as string | undefined ?? sdk.name,
         dependencies: [...new Set([...(sdk.dependencies ?? []), ...(manifest.dependencies as string[] | undefined ?? [])])],
-        activate: context => sdk.activate(context) }, config });
-    } catch (error) { loaded.push({ extension: failed(id, error), config }); }
+        activate: context => sdk.activate(context) }, config, origin });
+    } catch (error) {
+      loaded.push({ extension: { ...failed(id, error), name: name ?? id, permissions }, config, origin: { ...origin, failure } });
+    }
   }
   // PluginHost rejects dependency cycles during registration. Turn cycle members into
   // dependency-free failures first so callers can register the whole batch safely.
@@ -127,7 +143,12 @@ export async function loadExtensions(dataDir: string, options: { reservedIds?: s
     visiting.pop(); visited.add(id);
   };
   for (const id of entries.keys()) visit(id);
-  for (const id of cyclic) entries.get(id)!.extension = failed(id, 'Extension dependency cycle');
+  for (const id of cyclic) {
+    const item = entries.get(id)!;
+    item.origin = { ...item.origin, failure: 'cycle', declaredDependencies: item.extension.dependencies };
+    const { name, capabilities, permissions } = item.extension;
+    item.extension = { ...failed(id, 'Extension dependency cycle'), name, capabilities, permissions };
+  }
   return loaded;
 }
 

@@ -1,6 +1,7 @@
 import {timingSafeEqual} from 'node:crypto';
 import type {IncomingMessage,ServerResponse} from 'node:http';
 import {isIP} from 'node:net';
+import type {PluginHost} from '../../../packages/core/src/plugin-host.ts';
 import type {createAdminOverview} from './admin-overview.ts';
 import {pairingQR} from './browser-access.ts';
 import type {createBrowserDevices} from '../../../plugins/browser-devices.ts';
@@ -50,7 +51,8 @@ function cookie(req:IncomingMessage,res:ServerResponse,token:string,expiresAt:nu
 export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootToken:string|undefined,
   readBody:(req:IncomingMessage,limit:number)=>Promise<Record<string,unknown>>,
   json:(res:ServerResponse,status:number,value:unknown)=>void,overview:ReturnType<typeof createAdminOverview>,
-  devices:Pick<ReturnType<typeof createBrowserDevices>,'list'|'issue'|'revoke'>,deviceRevision:()=>number,passwordLogin:ReturnType<typeof createBrowserPassword>) {
+  devices:Pick<ReturnType<typeof createBrowserDevices>,'list'|'issue'|'revoke'>,deviceRevision:()=>number,passwordLogin:ReturnType<typeof createBrowserPassword>,
+  inspectPlugins:()=>ReturnType<PluginHost['inspections']>) {
   // Reserve a slot before the password hash starts, so concurrent guesses count as well.
   const attempts=new Map<string,{count:number;until:number}>();
   async function limited<T>(req:IncomingMessage,res:ServerResponse,operation:()=>Promise<T>):Promise<T> {
@@ -110,8 +112,9 @@ export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootTo
     }
     if(req.method==='GET'){
       if(action==='state')return json(res,200,{configured:auth.configured(),authenticated:!!session,...(session && {csrf:session.csrf,expiresAt:session.expiresAt})});
-      if(action==='overview'||action==='doctor'||action==='devices'){
+      if(action==='overview'||action==='doctor'||action==='devices'||action==='plugins'){
         if(!session)fail(401,'请先登录管理界面');
+        if(action==='plugins')return json(res,200,{plugins:inspectPlugins()});
         if(action==='devices')return json(res,200,{devices:devices.list()});
         return json(res,200,action==='overview'?overview.read():overview.doctor());
       }
