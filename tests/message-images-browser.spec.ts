@@ -107,6 +107,12 @@ test('截图选择与粘贴在主会话及项目分别保留，发送回执与�
     assert.ok(headers.some(req=>req.path.includes(message.id+'/images/0') && new URL(req.path).searchParams.get('conversationId')===conversation && req.authorization==='Bearer '+token));
     assert.ok(headers.every(req=>!req.path.includes(token)));
     if(p) {
+      await row.getByRole('button',{name:'查看消息图片 1',exact:true}).click();
+      await page.getByRole('button',{name:'编辑到草稿',exact:true}).click();
+      const editor=page.getByRole('dialog',{name:'编辑图片'});
+      await editor.getByRole('button',{name:'保存',exact:true}).click();
+      await expect(composer.getByRole('button',{name:'编辑第 1 张图片',exact:true})).toBeVisible();
+      await expect(thumb).toBeVisible();
       const foreign=await page.request.get(server.url+'/api/v1/messages/'+mainImageId+'/images/0?conversationId='+encodeURIComponent(conversation),{headers:{Authorization:'Bearer '+token}});
       assert.ok(foreign.status()>=400 && foreign.status()<500);
     } else {

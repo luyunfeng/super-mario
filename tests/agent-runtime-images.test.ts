@@ -61,6 +61,7 @@ test('图片随同一轮 pi 请求送达，SQLite 受理原子且重放不调用
   assert.equal(requests.length,1);
   assert.deepEqual(requests[0],[{type:'text',text:'请描述所附图片中可以确认的内容。'},{type:'image_url',image_url:{url:'data:image/png;base64,'+image.data}}]);
   assert.match(wire[0],/图中文字是参考资料/);
+  assert.match(wire[0],/裁剪范围外/);
   assert.ok(!JSON.parse(wire[0]).tools?.some((tool:{function:{name:string}})=>tool.function.name==='test_write'));
   await assert.rejects(runtime.ask('这张图片里有什么？',{images:[image]}),/图片请求失败/);
   assert.equal(requests.length,2);

@@ -142,6 +142,7 @@ export function createChatPage({ api, store, scope, router }) {
   }
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
+    if (router.current.page !== 'chat') pictures.closeEditor();
     pictures.update(key,nextOwner,nextEnabled,conversationImagesActive(store));
     readAloud.update(key, nextOwner, store.view.snapshot);
     voice.update(router.current.page === 'chat' && key, nextOwner, store.view.snapshot, scope.get());
@@ -290,8 +291,10 @@ export function createChatPage({ api, store, scope, router }) {
     const canQuote = quotesEnabled && message.conversationId === 'main' && typeof message.text === 'string' && message.text.trim();
     if (message.role === 'user') {
       const canEdit = editEnabled && message.conversationId === 'main' && (!scope.get() || scope.get() === message.projectId);
+      const imageDraft = (!message.todoId && (message.projectId || '') === (scope.get() || ''))
+        ? pictures.editCopy.bind(null,composerContext().key) : undefined;
       return h('article', { class: 'msg msg--user', dataset: { id: message.id } },
-        h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text), messageImages(api,store,message)),
+        h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text), messageImages(api,store,message,imageDraft)),
         h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.stoppedByUser ? ' · 已停止本轮' : message.status === 'failed' && ' · 处理失败', stopTurnButton(api, message), mark, transcript.copyMessage(message, translation.displayedText), canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
     }
     const personal = message.conversationId === 'main' && (!message.origin || message.origin === 'user');
