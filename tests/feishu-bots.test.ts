@@ -122,6 +122,23 @@ test('dashboard is an owner-only private global command with durable delivery de
   assert.equal(b.instance.contexts.at(-1)?.card, undefined);
 });
 
+test('已配对主人可直接按命令查看飞书工作台分栏或帮助，重复投递不执行模型', async t => {
+  const f = fixture(t), bot = await f.add('CommandHelp', { kind: 'global' }, true);
+  await bot.pair();
+  for (const [command, title] of [['  ／HELP  ', '工作台命令'], ['/主页', '今日工作台'], ['/TASKS', '任务进展'], ['／收件箱', '收件箱']]) {
+    const message = source('command-' + title);
+    await bot.instance.options.onMessage(command, message);
+    await bot.instance.options.onMessage(command, message);
+    const header = bot.instance.contexts.at(-1)?.card?.header as { title: { content: string } };
+    assert.ok(header.title.content.endsWith(title));
+  }
+  assert.equal(bot.instance.sent.length, 4);
+  assert.ok(bot.instance.sent[0][1].includes('/inbox'));
+  assert.equal(f.posts.length, 0);
+  await bot.instance.options.onMessage('/inbox 里有什么', source('ordinary-question'));
+  assert.ok(f.mailboxes.list().some(row => row.direction === 'inbox' && row.text === '/inbox 里有什么'));
+});
+
 test('dashboard URL uses a configured remote HTTP origin with no credentials', () => {
   const config = { host: '0.0.0.0', port: 8080 };
   assert.equal(dashboardWebBase(config, 'https://work.example:8443/'), 'https://work.example:8443');

@@ -3,7 +3,7 @@ import { createHash, randomInt } from 'node:crypto';
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
 import { chooseCommandTarget, createCommandMentionEvidence, type CommandCandidate, type CommandClassifier, type CommandIdentity, type CommandRoute, type CommandTarget } from './feishu-command-routing.ts';
 import type { Card } from '../../../packages/core/src/interactions.ts';
-import { buildFeishuDashboard, questionForm, type DashboardView } from './feishu-dashboard.ts';
+import { buildFeishuDashboard, dashboardCommand, dashboardHelp, questionForm, type DashboardView } from './feishu-dashboard.ts';
 import { createAgentProgressStream } from './agent-progress-stream.ts';
 import { buildAgentProgressCard } from '../../../plugins/agent-progress-card.ts';
 import { buildFeishuMessageCard } from './feishu-cards.ts';
@@ -724,9 +724,11 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       await showSessionList(bot, epoch, paired, source.messageId);
       return;
     }
-    if (!group && paired && bot.scope.kind === 'global' && ['工作台', '/dashboard'].includes(text.trim())) {
+    const view = !group && paired && bot.scope.kind === 'global' ? dashboardCommand(text) : undefined;
+    if (view && paired) {
       const eventKey = `feishu-dashboard:${JSON.stringify([bot.id, bot.appId, source.messageId])}`;
-      const dashboard = buildFeishuDashboard(app, webBase, { navigation: navigation(bot, paired, eventKey) });
+      const dashboard = view === 'help' ? dashboardHelp(Boolean(app.agentSessions && paired.senderId))
+        : buildFeishuDashboard(app, webBase, { view, navigation: navigation(bot, paired, eventKey) });
       const entry = await put(bot, { direction: 'outbox', eventKey, title: '工作台', text: dashboard.text,
         target: paired.chatId, sourceMessageId: source.messageId, requiresConfirmation: false }, bot.scope,
       { dashboard: { card: dashboard.card, owner: paired } });

@@ -9,6 +9,22 @@ type DashboardApp = Pick<FeishuBotsApp, 'store' | 'projectWorkspace' | 'agentSes
 export type DashboardView = 'home' | 'tasks' | 'inbox' | 'projects' | 'questions';
 const label = (value: string, max = 100) => value.replace(/\s+/g, ' ').trim().slice(0, max);
 
+// Match the whole message so commands embedded in a question stay in the conversation.
+export function dashboardCommand(text: string) {
+  switch (text.trim().replace(/^／/u, '/').toLowerCase()) {
+    case '工作台': case '/dashboard': case '/home': case '/工作台': case '/主页': return 'home';
+    case '/tasks': case '/进展': case '/总览': return 'tasks';
+    case '/inbox': case '/收件箱': return 'inbox';
+    case '/help': case '/帮助': return 'help';
+  }
+}
+
+export function dashboardHelp(sessions: boolean) {
+  const text = ['/home 或「工作台」：打开工作台', '/tasks 或 /进展：查看任务进展', '/inbox 或 /收件箱：查看收件',
+    ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
+  return { text, card: cardDocument('工作台命令', cardSection('在此私聊中发送', text)) };
+}
+
 /** Owner-only, read-only views. Callback buttons refresh this card; URL buttons navigate to Web. */
 export function buildFeishuDashboard(app: DashboardApp, webBase?: string, options: {
   view?: DashboardView; page?: number; navigation?: string; now?: Date;
