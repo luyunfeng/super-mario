@@ -637,6 +637,11 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           ? webHistoryGuidance
           : activeInput?.conversationId.startsWith('web:') ? '当前对话历史搜索不可用。可根据本轮已提供的上文作答；需要更早的原话时，请主人提供摘录。' : '';
         const sections = [
+          ...(!webPlugins && (ownConversation === 'main' || scope?.kind === 'global') ? [
+            contributions.list('services').some(service => service.value.name === 'conversation-export.markdown')
+              ? '当前工作台对话导出服务可用。飞书独立对话的复制与导出入口位于对应机器人的 Web 记录详情。'
+              : '当前工作台对话导出服务不可用。可手动选取可见文字；需完整备份时，请先恢复对话导出插件并核对下载文件，再决定是否删除。'
+          ] : []),
           ...(historyGuide ? [historyGuide] : []),
           ...(webPlugins ? webComposerGuidance(webPlugins) : []),
           ...(activeInput?.retryOf ? ['主人手动重试了工具执行前失败的请求。按本轮原文和附件处理，先前的失败文字不能作为交付或额外授权。'] : []),
