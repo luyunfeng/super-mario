@@ -288,6 +288,11 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await page.reload();
   const period = panel.getByLabel('按截止日期筛选');
   const sort = panel.getByLabel('分组内排序');
+  await period.selectOption('overdue');
+  await expect(panel.locator('.todo', { hasText: '切换夏令时的待办' })).toBeVisible();
+  for (const title of ['尚未安排', '本周最后一刻', '完成的待办']) {
+    await expect(panel.locator('.todo', {hasText: title})).toHaveCount(0);
+  }
   await period.selectOption('none');
   await expect(panel.locator('.todo')).toHaveCount(1);
   await expect(panel.locator('.todo')).toContainText('尚未安排');

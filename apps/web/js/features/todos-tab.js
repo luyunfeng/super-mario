@@ -14,7 +14,7 @@ import { openWaitingReply, refreshWaitingReply } from './waiting-reply.js';
 const ORDER = ['需要你', '逾期', '今天', '等待中', '之后', '某天'];
 const DONE = ['刚完成', '已完成'];
 
-const periods = [['all', '全部期限'], ['none', '无截止日期'], ['today', '今天（含逾期）'], ['week', '本周（含逾期）'], ['month', '本月（含逾期）']];
+const periods = [['all', '全部期限'], ['overdue', '仅已逾期'], ['none', '无截止日期'], ['today', '今天（含逾期）'], ['week', '本周（含逾期）'], ['month', '本月（含逾期）']];
 const orders = [['recent', '最近更新'], ['due', '截止时间最早'], ['priority', '优先级最高']];
 
 function dateRanges(now) {
@@ -28,6 +28,7 @@ function dateRanges(now) {
 function matchesPeriod(todo, period, ranges, now) {
   if (period === 'all') return true;
   const due = Date.parse(todo.dueAt);
+  if (period === 'overdue') return !todo.completedAt && due < now;
   if (period === 'none') return !Number.isFinite(due);
   const [start, end] = ranges[period];
   return (!todo.completedAt && due < now) || (start <= due && due < end);
