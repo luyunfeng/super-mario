@@ -145,6 +145,11 @@ test('SDK requests preserve the correct Web thread history within a shared proje
     }
     const untouched=system(await askB('保持原分工'));
     assert.ok(untouched.includes(profiles[1].instructions) && !untouched.includes(updated.instructions));
+    await server.app.plugins.setEnabled('conversation-search',false);
+    const searchOff=system(await askA('能查更早的发言吗？'));
+    assert.match(searchOff,/当前对话历史搜索不可用/);
+    assert.doesNotMatch(searchOff,/打开「搜索本对话」/);
+    await server.app.plugins.setEnabled('conversation-search',true);
     const question='请检索样本标识，排除当前问题的标识 '+randomUUID();
     const result=await post('/web-conversations/'+a.id+'/messages',{text:question});
     await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.replyTo===result.id && m.status==='done')));

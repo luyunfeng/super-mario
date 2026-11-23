@@ -14,7 +14,7 @@ import type { OfficeFileOrigin } from '../agent-input.ts';
 import { runWithAgentInput } from '../agent-input.ts';
 import { buildWorkContext, formatWorkContextMarkdown } from '../work-context.ts';
 import { subscriptionReadGuidance } from '../subscription-tools.ts';
-import { MAIN_AGENT_SYSTEM_PROMPT, PROJECT_MEMORY_SYSTEM_PROMPT, workspaceBoardGuidance } from '../prompts.ts';
+import { MAIN_AGENT_SYSTEM_PROMPT, PROJECT_MEMORY_SYSTEM_PROMPT, webHistoryGuidance, workspaceBoardGuidance } from '../prompts.ts';
 import { estimateTokens, boundTraceText, formatTraceRequest, saveTurnTrace, summarizeTrace, type AgentTraceContextItem, type AgentTraceRuntimeMeta, type AgentTurnTrace } from '../agent-traces.ts';
 import type { BotScope } from '../../../protocol/src/bots.ts';
 import type { AppConfig, ChatFileInput, ChatImageInput, MainAssistantProfile, ExecutorInfo, JsonObject, KnowledgeEntry, Message, Json, Run } from '../../../protocol/src/index.ts';
@@ -624,7 +624,11 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         const promptLibraryGuide = activeInput?.conversationId.startsWith('web:')
           ? (options.savedPromptsEnabled?.() ? '主人想复用自己发过的要求时，引导他在该条消息旁点「保存为提示词」。在输入框键入 / 并选择名称即可填入草稿，主人可再编辑并决定何时发送。保存常用提示词不会修改助理的长期工作指令。' : '当前常用提示词插件不可用。如需复用旧要求，可以复制自己原先的发言，在输入框修改后发送。')
           : '';
+        const historyGuide = allowed('current_web_message_search') && contributions.list('tools').some(tool=>tool.value.name==='current_web_message_search')
+          ? webHistoryGuidance
+          : activeInput?.conversationId.startsWith('web:') ? '当前对话历史搜索不可用。可根据本轮已提供的上文作答；需要更早的原话时，请主人提供摘录。' : '';
         const sections = [
+          ...(historyGuide ? [historyGuide] : []),
           ...(promptLibraryGuide ? [promptLibraryGuide] : []),
           ...(activeInput?.retryOf ? ['主人手动重试了工具执行前失败的请求。按本轮原文和附件处理，先前的失败文字不能作为交付或额外授权。'] : []),
           ...(attachmentGuidance ? [attachmentGuidance] : []),
