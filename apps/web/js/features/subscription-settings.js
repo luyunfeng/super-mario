@@ -1,3 +1,4 @@
+import { subscriptionTriage, subscriptionTriageSummary } from './subscription-triage.js';
 import { subscriptionSchedule, subscriptionScheduleLabel } from './subscription-schedule.js';
 import { h, replace } from '../lib/dom.js';
 import { Button, Check, Field, Input } from '../ui/kit.js';
@@ -8,6 +9,7 @@ export function openSubscriptionSettings({row,api,path,remove,timezone,active,ch
   let busy = false, confirmed = true;
   const name = Input({required:true,value:row.name});
   const schedule=subscriptionSchedule();
+  const triage=subscriptionTriage(row);
   schedule.set(row);schedule.setTimezone(timezone);
   const checks = [['inbox','收件箱'],['knowledge','个人记忆']].map(([id,label]) =>
     Check({label,name:id,checked:row.destinations.includes(id)}));
@@ -17,7 +19,7 @@ export function openSubscriptionSettings({row,api,path,remove,timezone,active,ch
   const controls = h('fieldset',{class:'stack'},remove ?
     h('p',null,'删除「'+row.name+'」将停止后续拉取，并清除这条订阅尚未投递的内容。已经投递的收件箱记录和个人记忆会保留。') :
     [Field({label:'订阅名称',control:name}),schedule.element,
-      h('fieldset', {class:'row row--wrap'},h('legend',null,'投递位置'),checks)]);
+      h('fieldset', {class:'row row--wrap'},h('legend',null,'投递位置'),checks),triage.element]);
   const form = h('form',{class:'stack',onsubmit:event => {event.preventDefault();void save();}},controls,
     notice,reconcile,h('div',{class:'row'},Button({label:'取消',onClick:() => drawer.close()}),action));
   const drawer = openDrawer({title:remove ? '删除订阅' : '编辑订阅',body:form});
@@ -31,7 +33,7 @@ export function openSubscriptionSettings({row,api,path,remove,timezone,active,ch
       if (!latest) {notice.textContent='当前订阅已不存在。';return;}
       replace(reconcile,h('p',null,'当前设置 · '+latest.name+' · '+subscriptionScheduleLabel(latest,state.timezone)+' · '+
         latest.destinations.map(id=>id==='inbox'?'收件箱':'个人记忆').join('、')+' · '+(latest.enabled?'已启用':'已暂停')),
-        Button({label:'已核对当前版本',onClick:() => {
+        subscriptionTriageSummary(latest),Button({label:'已核对当前版本',onClick:() => {
           confirmed=true;version=latest.version;action.disabled=false;replace(reconcile);
           notice.textContent = remove ? '请再次确认是否删除。' : '草稿已保留，可以重新保存。';
         }}));
@@ -50,7 +52,7 @@ export function openSubscriptionSettings({row,api,path,remove,timezone,active,ch
         const result=await api.del(url,{version});
         if(result?.deleted!==true) throw new Error('删除回执未确认。');
       } else {
-        await api.patch(url,{version,name:name.value.trim(),...schedule.input(),destinations});
+        await api.patch(url,{version,name:name.value.trim(),...schedule.input(),...triage.input(),destinations});
       }
       if(valid()) {drawer.close();changed(remove?'已删除订阅。':'已保存订阅。');}
     } catch(error) {

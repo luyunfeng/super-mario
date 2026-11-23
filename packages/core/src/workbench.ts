@@ -441,7 +441,7 @@ export async function createWorkbench(config: AppConfig) {
       }
       throw new InputError('需要当前配对主人的直接私聊或 Web 主对话',403);
     },
-    ingest:(source,items)=>inbox.ingest(source,items),knowledge,changed:(type,id)=>changed(type,{id})});
+    ingest:(source,items,policy)=>inbox.ingest(source,items,policy),knowledge,changed:(type,id)=>changed(type,{id})});
   plugins.register(subscriptions.extension);
   plugins.register(createReleaseSourceExtension());
   plugins.register(workspaceSplash);
@@ -727,6 +727,12 @@ export async function createWorkbench(config: AppConfig) {
   const supervisorAgent = createSupervisorAgent({ store, events, agent: supervisorRuntime, signals: supervision.signals, reviewEvidence, durable: true, publish: background.publish,
     enabled: () => plugins.list().some(plugin => plugin.id === 'daily-brief' && plugin.status === 'active') });
   supervisorAgent.start();
+  const triageTimer = setInterval(() => {
+    if (!closing && !config.demo && contributions.list('inbox_triage').length && inboxClassifier.status().available) {
+      void inbox.retryPending().catch(() => console.error('等待模型分拣的收件重试未完成'));
+    }
+  }, 30_000);
+  triageTimer.unref();
   const expireTimer = setInterval(() => interactions.expireTick(), 30_000); expireTimer.unref();
   const awayNotifications = createAwayNotifications({ store, events, background, presence, bots: () => notificationBots(), channel: bot => notificationChannel(bot) });
   const projectFollowUp = createProjectFollowUp({ store, events, conversations:()=>inboxAssistant.list(), schedules: background.schedules, settings: briefing.settings,
@@ -2178,6 +2184,7 @@ export async function createWorkbench(config: AppConfig) {
     async close() {
       if (closing) return;
       closing = true;
+      clearInterval(triageTimer);
       await subscriptions.close();
       await stopWeb();
       commandRouter.cancel();

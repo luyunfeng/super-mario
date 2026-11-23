@@ -1,3 +1,4 @@
+import { subscriptionTriage } from './subscription-triage.js';
 import { uuid } from '../lib/format.js';
 import { subscriptionSchedule, subscriptionScheduleLabel } from './subscription-schedule.js';
 import { openSubscriptionRuns } from './subscription-runs.js';
@@ -21,6 +22,7 @@ export function openSourceSubscriptions({api,store,router,draftId,runsId}) {
   const resourceField = Field({label:'资源',control:resource});
   const name = Input({required:true});
   const schedule=subscriptionSchedule();
+  const triage=subscriptionTriage();
   let inspectedSnapshot, recentSnapshots;
   const checks = Object.entries(destinations).map(([id,label]) => Check({label,name:id,checked:id === 'inbox'}));
   const notice = h('p',{role:'status',class:'small'});
@@ -36,7 +38,7 @@ export function openSourceSubscriptions({api,store,router,draftId,runsId}) {
   const fields = h('fieldset',{class:'stack'},
     Field({label:'来源连接器',control:source}), resourceField, h('div',null,preview), results,
     Field({label:'订阅名称',control:name}),schedule.element,
-    h('fieldset', {class:'row row--wrap'}, h('legend',null,'新内容送往'), checks),h('div',null,create));
+    h('fieldset', {class:'row row--wrap'}, h('legend',null,'新内容送往'), checks),triage.element,h('div',null,create));
   const form = h('form',{onsubmit:event => {event.preventDefault(); void createSubscription();}},fields);
   const refresh = Button({label:'刷新订阅',size:'sm',onClick:load});
   const paths = subscriptionPaths(id => {
@@ -207,14 +209,14 @@ export function openSourceSubscriptions({api,store,router,draftId,runsId}) {
     if (!selected.length) {notice.textContent = '请选择新内容的去向。'; return;}
     return act(async () => {
       const input = {sourceId:source.value,resource:resource.value.trim(),name:name.value.trim(),
-        destinations:selected,...schedule.input(),...(selectedDraft && {draftId:selectedDraft})};
+        destinations:selected,...schedule.input(),...triage.input(),...(selectedDraft && {draftId:selectedDraft})};
       const signature=JSON.stringify(input);
       if(createAttempt?.signature!==signature) createAttempt={signature,id:uuid()};
       const row = await api.post(path,{...input,requestId:createAttempt.id});
       createAttempt=undefined;
       if (!active()) return;
       subscriptions = [row,...subscriptions.filter(item => item.id !== row.id)];
-      selectedDraft=null; draftNotice.hidden=true; if(draftList.open) void loadDraftList();
+      selectedDraft=null; draftNotice.hidden=true; triage.set(); if(draftList.open) void loadDraftList();
       name.value = ''; resource.value = ''; replace(results); paint(); notice.textContent = '已创建订阅。';
     },true);
   }
@@ -247,6 +249,7 @@ export function openSourceSubscriptions({api,store,router,draftId,runsId}) {
       if(!active() || draft.id!==id) return;
       if(!sources.some(item=>item.id===draft.sourceId)) throw new Error('草案的来源连接器已停用。');
       source.value=draft.sourceId;setResourceLabel();resource.value=draft.resource;name.value=draft.name;
+      triage.set(draft);
       schedule.set({...draft,mode:sources.find(item=>item.id===draft.sourceId)?.mode});
       for(const label of checks) {
         const box=label.querySelector('input');box.checked=draft.destinations.includes(box.name);

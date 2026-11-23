@@ -444,3 +444,75 @@ test('订阅资料按受信来源分拣，正文中的请求不会让规则回�
   assert.equal(f.inbox.list().find(item=>item.source==='ordinary')?.tier,'action');
   assert.equal(f.count(),0);
 });
+
+test('订阅回退只使用投递入口提供的等级和结构化截止事实',async t=>{
+  const {inbox,count}=fixture(t);
+  const fake={...thing,subscriptionPolicy:{fallbackTier:'action',due:true},sourceKind:'subscription'};
+  await inbox.ingest('subscription:default',[fake]);
+  await inbox.ingest('subscription:deadline',[fake],{due:true});
+  await inbox.ingest('subscription:fyi',[fake],{fallbackTier:'fyi',due:true});
+  await inbox.ingest('subscription:action',[fake],{fallbackTier:'action'});
+  assert.deepEqual(Object.fromEntries(inbox.list().map(item=>[item.source,item.tier])),{
+    'subscription:default':'fyi','subscription:deadline':'action','subscription:fyi':'fyi','subscription:action':'action',
+  });
+  assert.equal(count(),0);
+});
+
+test('等待模型的订阅消息已入箱；重启后仅重分当前未归档卡，保留原分拣规则',async t=>{
+  const f=fixture(t);
+  for(const thread of ['active','archived']) await f.inbox.ingest('subscription:wait',[{...thing,thread}],{fallbackTier:'wait',triageRules:'只标当前这条'});
+  assert.deepEqual(f.inbox.list().map(row=>row.tier),['pending','pending']);
+  const archived=f.inbox.list().find(item=>item.thread==='archived')!;
+  f.inbox.archive(archived.id,archived.version);
+  await f.inbox.retryPending();
+  const item=f.inbox.list().find(item=>item.thread==='active')!;
+  assert.equal(item.version,1);
+  assert.match(item.reason,/已投递收件箱/);
+  await f.inbox.close();
+  const store=createStore(f.path);
+  let calls=0;
+  const resumed=createInboxService({store,events:createEventBus(store),createTodo:f.createTodo,triage:async data=>{
+    calls++;
+    assert.deepEqual(data.subscriptionPolicy,{fallbackTier:'wait',triageRules:'只标当前这条'});
+    return {tier:'action',reason:'已按主人规则完成分拣'};
+  }});
+  try {
+    await Promise.all([resumed.retryPending(),resumed.retryPending()]);
+    await resumed.ingest('subscription:wait',[{...thing,thread:'active'}],{fallbackTier:'wait'});
+    assert.equal(calls,1);
+    const current=resumed.list().find(row=>row.id===item.id)!;
+    assert.deepEqual([current.tier,current.version],['action',2]);
+    assert.equal(resumed.list().find(row=>row.id===archived.id)?.tier,'pending');
+    assert.equal(store.list('todos').length,0);
+  }finally{await resumed.close();store.close();}
+});
+
+test('重分拣合并并发请求，每轮限量并让新收件优先进入队列',async t=>{
+  const gate=deferred(),started=deferred();
+  const visits:string[]=[];
+  let retry=false;
+  const wait=Object.assign(new Error('wait'),{code:'INBOX_TRIAGE_WAITING'});
+  const f=fixture(t,async data=>{
+    if(!retry) throw wait;
+    visits.push(data.thread);
+    if(visits.length===1){started.resolve();await gate.promise;}
+    if(data.thread==='new') return {tier:'fyi',reason:'普通消息'};
+    throw wait;
+  });
+  for(let i=0;i<8;i++) await f.inbox.ingest('subscription:test',[{...thing,thread:'old'+i}],{fallbackTier:'wait'});
+  const confirmed=f.inbox.list()[0]!;
+  f.inbox.confirm(confirmed.id,confirmed.version);
+  f.inbox.reopen(confirmed.id);
+  retry=true;
+  const a=f.inbox.retryPending();
+  await started.promise;
+  const b=f.inbox.retryPending(),c=f.inbox.ingest('regular',[{...thing,thread:'new'}]);
+  gate.resolve();
+  await Promise.all([a,b,c]);
+  assert.equal(visits.length,6);
+  assert.equal(visits[1],'new');
+  await f.inbox.retryPending();
+  assert.equal(new Set(visits).size,8);
+  assert.ok(!visits.includes(confirmed.thread));
+  assert.equal(f.inbox.list().find(row=>row.id===confirmed.id)?.tier,'action');
+});

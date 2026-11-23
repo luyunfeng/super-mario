@@ -44,12 +44,13 @@ export function createContributions(): Contributions {
       let collection = entries.get(kind);
       if (!collection) { collection = new Map(); entries.set(kind, collection); }
       if (collection.has(id)) throw new Error(`Contribution already registered: ${String(kind)}/${id}`);
-      collection.set(id, value);
+      // Connector declarations carry trusted routing and classification settings.
+      collection.set(id, kind === 'connectors' ? structuredClone(value) : value);
       let disposed = false;
       return () => { if (!disposed) { disposed = true; collection!.delete(id); } };
     },
     list<K extends keyof ContributionMap>(kind: K) {
-      return [...(entries.get(kind) ?? [])].map(([id, value]) => ({ id, value: value as ContributionMap[K] }));
+      return [...(entries.get(kind) ?? [])].map(([id, value]) => ({ id, value: (kind === 'connectors' ? structuredClone(value) : value) as ContributionMap[K] }));
     },
   };
   // Built-ins use the same declaration path as plugin-owned JSON points.

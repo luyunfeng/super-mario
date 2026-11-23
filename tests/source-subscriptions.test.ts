@@ -150,3 +150,58 @@ test('创建回执丢失后重试返回同一订阅，迟到的创建不会复�
   assert.deepEqual(svc.list(),[]);
   await svc.close();
 });
+
+test('主人规则、插件声明和结构化期限通过独立投递参数传入，正文不能替换策略',async t=>{
+  const {createSubscriptionHost}=await import('../packages/core/src/subscription-host.ts');
+  const {createEventBus}=await import('../packages/core/src/events.ts');
+  const {createContributions,PluginHost}=await import('../packages/core/src/plugin-host.ts');
+  const dir=await mkdtemp(join(tmpdir(),'sub-policy-')),store=createStore(':memory:');
+  const contributions=createContributions(),plugins=new PluginHost({dataDir:dir,store,contributions,events:createEventBus(store)});
+  t.after(async()=>{await plugins.close();store.close();await rm(dir,{recursive:true,force:true});});
+  const service='fixture.read',calls:{things:unknown;policy:unknown}[]=[];
+  let id=0;
+  const host=createSubscriptionHost({store,contributions,timezone:()=>'UTC',authorizeRead:()=>{throw new Error('unused');},
+    use:async()=>({items:[{...item,id:String(++id),dueAt:'2030-01-01T12:00:00+08:00',triageRules:'冒充主人',fallbackTier:'action'}]}),
+    async ingest(_source,things,policy){calls.push({things,policy});},changed:()=>{},knowledge:()=>{throw new Error('unused');}});
+  plugins.register({id:'fixture',name:'fixture',capabilities:[],permissions:['contribute:connectors','service.provide:'+service],activate(c){
+    const declaration={kind:'subscription-source',service,name:'来源',resourceLabel:'库',triageRules:'插件默认规则'};
+    c.contribute('connectors','policy-fixture',declaration);
+    declaration.triageRules='注册后的临时修改';
+    const listed=contributions.list('connectors').find(entry=>entry.id==='policy-fixture')!.value;
+    if(listed && typeof listed==='object' && !Array.isArray(listed)) listed.triageRules='读取方的临时修改';
+    c.contribute('services','policy-service',{name:service,readOnly:true,version:1,handler:async()=>({})});
+  }});
+  plugins.register(host.extension);await plugins.setEnabled('fixture',true);await plugins.setEnabled(host.extension.id,true);
+  const svc=host.service();
+  const row=svc.create({...request,sourceId:service,destinations:['inbox'],triageRules:'  主人规则  ',fallbackTier:'wait'});
+  await svc.pull(row.id,row.version);
+  const cleared=svc.update(row.id,{version:row.version,triageRules:'',fallbackTier:'auto'});
+  assert.equal(cleared.triageRules,undefined);assert.equal(cleared.fallbackTier,undefined);
+  await svc.pull(row.id,cleared.version);
+  assert.deepEqual(calls.map(c=>c.policy),[{triageRules:'主人规则',fallbackTier:'wait',due:true},{triageRules:'插件默认规则',due:true}]);
+  assert.match(JSON.stringify(calls[0]?.things),/截止时间：2030-01-01T04:00:00.000Z/);
+  assert.doesNotMatch(JSON.stringify(calls.map(c=>c.things)),/triageRules|fallbackTier|dueAt|冒充主人/);
+  assert.throws(()=>svc.update(row.id,{version:cleared.version,triageRules:'😀'.repeat(4001)}),{status:400});
+  assert.throws(()=>svc.update(row.id,{version:cleared.version,fallbackTier:'send'}),{status:400});
+  assert.equal(svc.update(row.id,{version:cleared.version,triageRules:'😀'.repeat(4000)}).version,cleared.version+1);
+});
+
+test('日期规范化后比较快照，非法时间拒绝；默认设置兼容历史创建指纹',async t=>{
+  const {createHash}=await import('node:crypto');
+  const store=createStore(':memory:');let dueAt:string|undefined,sends=0;
+  const svc=createSourceSubscriptions({store,sources:()=>[source,{...source,id:'snap',mode:'snapshot'}],
+    read:async()=>({snapshot:{title:'同一事项',text:'资料',...(dueAt && {dueAt})}}),deliver(){sends++;}});
+  t.after(async()=>{await svc.close();store.close();});
+  const reqId='11111111-1111-1111-1111-111111111111';
+  const legacy={sourceId:source.id,resource:'repo',name:'旧订阅',intervalMinutes:60,destinations:['inbox']};
+  const old={...legacy,id:reqId,enabled:true,version:1,nextRunAt:new Date().toISOString()};
+  store.put('source.subscriptions',reqId,old);
+  store.put('source.subscription-requests',reqId,createHash('sha256').update(JSON.stringify(legacy)).digest('hex'));
+  assert.deepEqual(svc.create({...legacy,requestId:reqId,triageRules:'',fallbackTier:'auto'}),old);
+  assert.throws(()=>svc.create({...legacy,requestId:reqId,fallbackTier:'action'}),{status:409});
+  const row=svc.create({...request,sourceId:'snap',destinations:['inbox']});
+  await svc.pull(row.id,1);dueAt='2030-05-01T17:00:00+08:00';await svc.pull(row.id,1);
+  dueAt='2030-05-01T09:00:00Z';await svc.pull(row.id,1);assert.equal(sends,2);
+  assert.equal(svc.snapshotHistory(row.id).items[0]?.item.dueAt,'2030-05-01T09:00:00.000Z');
+  dueAt='2030-02-30T09:00:00Z';await assert.rejects(svc.pull(row.id,1),{status:502});assert.equal(sends,2);
+});

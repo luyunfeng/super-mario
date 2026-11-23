@@ -68,7 +68,10 @@ export type ServerMessage =
   | { type: 'call'; id: string; method: string; params: JsonObject };
 
 export interface InboxThing { origin?: InboxOrigin; thread: string; last: string; title: string; text: string; sender?: string; receivedAt?: string }
-export interface InboxItem extends InboxThing { projectId?: string; id: string; source: string; version: number; tier: 'action' | 'fyi' | 'noise'; reason: string; archivedAt?: string; todoId?: string; updatedAt: string }
+// Set by the subscription delivery route. Incoming message data cannot set classification policy.
+export interface InboxSubscriptionPolicy { triageRules?:string; fallbackTier?:'auto'|'wait'|'action'|'fyi'; due?:boolean }
+export type InboxTriageInput = InboxThing & {sourceKind?:'subscription';subscriptionPolicy?:InboxSubscriptionPolicy};
+export interface InboxItem extends InboxThing { projectId?: string; id: string; source: string; version: number; tier: 'action' | 'fyi' | 'noise' | 'pending'; reason: string; archivedAt?: string; todoId?: string; updatedAt: string }
 export interface PaneInfo { id: string; title: string; cwd: string }
 export interface TerminalFrame { epoch: string; seq: number; full: boolean; width: number; height: number; data: string }
 export interface SessionBinding { machineId?: string; agentInstanceId?: string; hostKind?: string; hostInstanceId?: string; terminalId?: string; nativeResume?: NativeResumeSpec; nativeSessionId?: string; sessionId: string; paneId: string; executorId: string; cwd: string; createdAt: string }

@@ -11,7 +11,7 @@ import { openInboxHandlingDrawer } from '../features/inbox-handling.js';
 const MAIL = { pending: '待确认', ready: '等待处理', processing: '处理中', rejected: '已拒绝', failed: '处理失败', unknown: '结果未知' };
 const ORIGINS = [['all', '全部'], ['direct', '私聊'], ['mentioned', '群@我'], ['group', '群聊'], ['agent', 'Agent协作'], ['unknown', '未识别']];
 const STAGES = [['human', '待人决策'], ['ai', '待AI执行'], ['processing', '处理中'], ['done', '已处理'], ['all', '全部']];
-const TIER = { action: '需要处理', fyi: '知会', noise: '低优先级' };
+const TIER = { pending: '等待模型分拣', action: '需要处理', fyi: '知会', noise: '低优先级' };
 const PAGE_SIZE = 50;
 const readable = text => String(text ?? '').replace(/^\[(?:om_|omt_)[^\]]*\]\s*/gm, '');
 
@@ -35,7 +35,7 @@ export function createMailboxPage({ api, store, router, direction }) {
   const projectFilter = Select({ 'aria-label': '收件项目', value: 'all', options: [['all', '全部项目']] });
   const query = Input({ type: 'search', placeholder: '搜索消息内容、来源或发送目标', 'aria-label': `搜索${name}` });
   const filter = Select({ 'aria-label': `${name}状态`, value: 'all', options: incoming
-    ? [['all', '全部消息'], ['action', '需要处理'], ['fyi', '知会'], ['noise', '低优先级'], ['archived', '已归档'], ['todo', '已转待办'], ['large-group', '已忽略的大群']]
+    ? [['all', '全部消息'], ['pending', '等待模型分拣'], ['action', '需要处理'], ['fyi', '知会'], ['noise', '低优先级'], ['archived', '已归档'], ['todo', '已转待办'], ['large-group', '已忽略的大群']]
     : [['all', '全部状态'], ['pending', '待确认'], ['sending', '等待与发送中'], ['sent', '已发送'], ['failed', '失败或结果未知'], ['closed', '已取消、拒绝或过期']] });
   const summary = h('p', { class: 'small muted', role: 'status' });
   const notice = h('div');
@@ -92,6 +92,7 @@ export function createMailboxPage({ api, store, router, direction }) {
     if (item.kind === 'personal' && personalGroupSize(raw.origin) > 50) return 'info';
     if(handlingState(item))return handlingState(item).stage;
     if (item.kind === 'mailbox') return raw.status === 'pending' ? 'human' : raw.status === 'ready' ? 'ai' : raw.status === 'processing' ? 'processing' : 'human';
+    if (raw.tier === 'pending') return 'ai';
     if (raw.tier === 'action') return 'human';
     // FYI/noise does not itself mean an AI execution is waiting.
     return 'info';

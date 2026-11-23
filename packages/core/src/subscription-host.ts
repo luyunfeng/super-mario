@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Contributions, Extension, KnowledgeBackend, Store } from '../../plugin-sdk/src/index.ts';
-import type { InboxThing, Json } from '../../protocol/src/index.ts';
+import type { InboxSubscriptionPolicy, InboxThing, Json } from '../../protocol/src/index.ts';
 import { subscriptionDrafts } from './subscription-drafts.ts';
 import { subscriptionDraftTool, subscriptionReadTool } from './subscription-tools.ts';
 import { createSourceSubscriptions, type SourceItem } from './source-subscriptions.ts';
@@ -11,7 +11,7 @@ export function createSubscriptionHost(options: {
   store: Store;
   contributions: Contributions;
   use: (name:string,input:Json,options:{signal:AbortSignal; timeoutMs:number})=>Promise<Json>;
-  ingest: (source:string,things:InboxThing[])=>Promise<void>;
+  ingest: (source:string,things:InboxThing[],policy?:InboxSubscriptionPolicy)=>Promise<void>;
   knowledge: ()=>KnowledgeBackend;
   changed: (event:string,id:string)=>void;
 }) {
@@ -24,7 +24,8 @@ export function createSubscriptionHost(options: {
         typeof value.service !== 'string' || typeof value.name !== 'string' || typeof value.resourceLabel !== 'string' ||
         !services.some(entry => entry.value.name === value.service && entry.value.readOnly === true)) return [];
       return [{id:value.service,name:value.name,resourceLabel:value.resourceLabel,
-        ...(value.mode==='snapshot' && {mode:'snapshot' as const})}];
+        ...(value.mode==='snapshot' && {mode:'snapshot' as const}),
+        ...(typeof value.triageRules==='string' && value.triageRules.trim() && {triageRules:Array.from(value.triageRules.trim()).slice(0,4000).join('')})}];
     });
   }
   let publicBase:string|undefined;
@@ -57,10 +58,13 @@ export function createSubscriptionHost(options: {
         },
         async deliver(destination,key,item,subscription) {
           const id = 'subscription-'+createHash('sha256').update(key).digest('hex');
-          const content = [item.text,item.url].filter(Boolean).join('\n\n');
+          const content = [item.text,item.dueAt && '截止时间：'+item.dueAt,item.url].filter(Boolean).join('\n\n');
           if (destination === 'inbox') {
             const thread=subscription.mode==='snapshot' ? 'snapshot' : id;
-            await options.ingest('subscription:'+subscription.id,[{thread,last:id,title:item.title,text:content,sender:subscription.name}]);
+            await options.ingest('subscription:'+subscription.id,[{thread,last:id,title:item.title,text:content,sender:subscription.name}],{
+              ...(subscription.triageRules && {triageRules:subscription.triageRules}),
+              ...(subscription.fallbackTier && {fallbackTier:subscription.fallbackTier}),...(item.dueAt && {due:true}),
+            });
             return;
           }
           const backend = options.knowledge();

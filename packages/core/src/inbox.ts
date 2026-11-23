@@ -1,7 +1,7 @@
 import { excludesPersonalGroupFromAutomation } from '../../protocol/src/inbox-origin.ts';
 import { createHash } from 'node:crypto';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
-import type { InboxItem, InboxThing, Project, Todo } from '../../protocol/src/index.ts';
+import type { InboxItem, InboxSubscriptionPolicy, InboxThing, InboxTriageInput, Project, Todo } from '../../protocol/src/index.ts';
 import { normalizeInboxOrigin } from './inbox-origin.ts';
 
 export class InboxError extends Error {
@@ -13,8 +13,9 @@ export class InboxError extends Error {
   }
 }
 
-type Triage = { tier: InboxItem['tier']; reason: string };
+type Triage = { tier: Exclude<InboxItem['tier'],'pending'>; reason: string };
 const collection = 'inbox';
+const pendingPolicies = 'inbox.pending-subscription-triage';
 function required(value: unknown, name: string): asserts value is string {
   if (typeof value !== 'string' || !value.trim()) throw new InboxError(`${name}必须为非空文本`);
 }
@@ -39,9 +40,17 @@ function validateThing(value: unknown): InboxThing {
 export function inboxItemId(source: string, thread: string) {
   return createHash('sha256').update(JSON.stringify([source, thread])).digest('hex');
 }
-type TriageInput = InboxThing & {sourceKind?: 'subscription'};
-export function ruleTriage(thing: TriageInput): Triage {
-  if (thing.sourceKind === 'subscription') return {tier:'fyi', reason:'订阅动态，保留为知会，供主人查看'};
+export function ruleTriage(thing: InboxTriageInput): Triage {
+  if (thing.sourceKind === 'subscription') {
+    const policy=thing.subscriptionPolicy;
+    switch (policy?.fallbackTier) {
+      case 'wait': throw Object.assign(new InboxError('已投递收件箱，等待模型分拣。',503),{code:'INBOX_TRIAGE_WAITING'});
+      case 'action': return {tier:'action',reason:'按订阅的备用分拣设置标记为需处理'};
+      case 'fyi': return {tier:'fyi',reason:'按订阅的备用分拣设置标记为知会'};
+    }
+    if (policy?.due===true) return {tier:'action',reason:'来源提供了截止日期，标记为需处理'};
+    return {tier:'fyi',reason:'订阅动态，保留为知会，供主人查看'};
+  }
   const text = `${thing.title}\n${thing.text}`;
   const keyword = text.match(/请|帮|需要|待办|截止/)?.[0];
   if (keyword) return { tier: 'action', reason: `本地规则：命中“${keyword}”，建议确认后创建待办` };
@@ -59,10 +68,11 @@ export function createInboxService({ store, events, createTodo, triage }: {
   store: Store;
   events: EventBus;
   createTodo: (input: Record<string, unknown>) => Todo;
-  triage?: (thing: TriageInput) => Promise<Triage>;
+  triage?: (thing: InboxTriageInput) => Promise<Triage>;
 }): {
   list(): InboxItem[];
-  ingest(source: string, things: InboxThing[]): Promise<void>;
+  ingest(source: string, things: InboxThing[], policy?:InboxSubscriptionPolicy): Promise<void>;
+  retryPending(): Promise<void>;
   confirm(id: string, version: number, details?: { title: string; notes: string }): { todoId: string };
   archive(id: string, version: number): void;
   assignProject(id: string, version: number, projectId?: string): InboxItem;
@@ -71,6 +81,8 @@ export function createInboxService({ store, events, createTodo, triage }: {
 } {
   let queue = Promise.resolve();
   let closed = false;
+  let retrying:Promise<void>|undefined;
+  let lastRetryId:string|undefined;
   function get(id: string): InboxItem {
     required(id, 'id');
     const item = store.get<InboxItem>(collection, id);
@@ -84,19 +96,38 @@ export function createInboxService({ store, events, createTodo, triage }: {
     return item;
   }
   function changed(id: string) { events.publish('inbox.changed', { id }); }
+  async function classify(input:InboxTriageInput):Promise<{tier:InboxItem['tier'];reason:string}> {
+    try {
+      const result = triage ? await triage(structuredClone(input)) : ruleTriage(input);
+      if (!result || !['action','fyi','noise'].includes(result.tier) || typeof result.reason!=='string' || !result.reason.trim())
+        throw new InboxError('分拣器返回了无效结果',502);
+      return {...result,reason:triage ? '注入分拣器：'+result.reason : result.reason};
+    } catch (error) {
+      if(input.sourceKind==='subscription' && input.subscriptionPolicy?.fallbackTier==='wait' &&
+        error instanceof Error && 'code' in error && error.code==='INBOX_TRIAGE_WAITING')
+        return {tier:'pending',reason:'已投递收件箱，等待模型分拣。'};
+      throw error;
+    }
+  }
+  async function enqueue(work:()=>Promise<void>) {
+    const job=queue.then(work);
+    queue=job.catch(()=>{});
+    await job;
+  }
   return {
     list() { return store.list<InboxItem>(collection).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); },
-    async ingest(source, things) {
+    async ingest(source, things, policy) {
       if (closed) throw new InboxError('收件箱服务已关闭', 503);
       required(source, 'source');
       if (!Array.isArray(things)) throw new InboxError('things必须为数组');
       // Validate and snapshot the entire batch before queueing any writes or model calls.
+      const subscriptionPolicy = source.startsWith('subscription:') && policy ? structuredClone(policy) : undefined;
       const batch = things.map(value => {
         const thing = validateThing(value);
         if (thing.origin && !source.startsWith('feishu:')) delete thing.origin.personalGroupObserved;
         return thing;
       });
-      const job = queue.then(async () => {
+      await enqueue(async () => {
         for (const thing of batch) {
           const id = inboxItemId(source, thing.thread);
           const existing = store.get<InboxItem>(collection, id);
@@ -120,25 +151,60 @@ export function createInboxService({ store, events, createTodo, triage }: {
             continue;
           }
           // Only the ingestion route supplies this hint. Never accept it or other authority claims from an item.
-          const triageInput: TriageInput = source.startsWith('subscription:') ? {...thing,sourceKind:'subscription'} : thing;
-          const result = triage ? await triage(structuredClone(triageInput)) : ruleTriage(triageInput);
-          if (!result || !['action', 'fyi', 'noise'].includes(result.tier) || typeof result.reason !== 'string' || !result.reason.trim()) {
-            throw new InboxError('分拣器返回了无效结果', 502);
-          }
+          const triageInput: InboxTriageInput = source.startsWith('subscription:')
+            ? {...thing,sourceKind:'subscription',...(subscriptionPolicy && {subscriptionPolicy})} : thing;
+          const result=await classify(triageInput);
           // Confirmation may have happened while triage was awaiting a model.
           const previous = store.get<InboxItem>(collection, id);
-          const reason = triage ? `注入分拣器：${result.reason}` : result.reason;
           const item: InboxItem = { ...thing, id, source, version: (previous?.version ?? 0) + 1,
-            tier: result.tier, reason: withTodo(reason, previous?.todoId), updatedAt: new Date().toISOString(),
+            tier: result.tier, reason: withTodo(result.reason, previous?.todoId), updatedAt: new Date().toISOString(),
             ...(previous?.todoId ? { todoId: previous.todoId } : {}),
             ...(previous?.projectId ? { projectId: previous.projectId } : {}) };
-          store.put(collection, id, item);
+          if(item.todoId && item.tier==='pending') {
+            item.tier='action';
+            item.reason=withTodo('主人已确认此线程需要处理',item.todoId);
+          }
+          store.transaction(()=>{
+            store.put(collection,id,item);
+            if (item.tier==='pending') store.put(pendingPolicies,id,{id,last:thing.last,policy:subscriptionPolicy});
+            else if(previous?.tier==='pending') store.remove(pendingPolicies,id);
+          });
           changed(id);
         }
       });
-      // A failed batch rejects its own caller but does not poison subsequent ingestion.
-      queue = job.catch(() => {});
-      await job;
+    },
+    async retryPending() {
+      if(closed || retrying) return retrying;
+      const records=store.list<{id:string;last:string;policy:InboxSubscriptionPolicy}>(pendingPolicies)
+        .filter(record=>{
+          const item=store.get<InboxItem>(collection,record.id);
+          return item?.tier==='pending' && !item.archivedAt && !item.todoId && item.last===record.last;
+        }).sort((a,b)=>a.id.localeCompare(b.id));
+      const start=records.findIndex(record=>!lastRetryId || record.id.localeCompare(lastRetryId)>0);
+      const batch=start<1 ? records : [...records.slice(start),...records.slice(0,start)];
+      retrying=(async()=>{
+        for(const record of batch.slice(0,5)) {
+          if(closed) return;
+          lastRetryId=record.id;
+          // Release the queue between model calls so new arrivals can be processed.
+          await enqueue(async()=>{
+            const item=store.get<InboxItem>(collection,record.id);
+            if(!item || item.archivedAt || item.todoId || item.tier!=='pending' || item.last!==record.last) return;
+            const result=await classify({...validateThing(item),sourceKind:'subscription',subscriptionPolicy:record.policy});
+            if(result.tier==='pending') return;
+            // A user may archive or reassign the card while the classifier is running.
+            const current=store.get<InboxItem>(collection,item.id);
+            if(!current || current.archivedAt || current.todoId || current.last!==record.last || current.tier!=='pending') return;
+            store.transaction(()=>{
+              store.put(collection,item.id,{...current,tier:result.tier,reason:result.reason,
+                updatedAt:new Date().toISOString(),version:current.version+1});
+              store.remove(pendingPolicies,item.id);
+            });
+            changed(item.id);
+          });
+        }
+      })().finally(()=>{retrying=undefined;});
+      return retrying;
     },
     confirm(id, version, details) {
       const result = store.transaction(() => {
@@ -151,7 +217,9 @@ export function createInboxService({ store, events, createTodo, triage }: {
         if (!todo || typeof todo.id !== 'string' || !todo.id.trim()) throw new InboxError('待办创建未返回有效标识', 500);
         const now = new Date().toISOString();
         store.put(collection, id, { ...item, version:item.version+1, todoId: todo.id, archivedAt: now, updatedAt: now,
-          reason: withTodo(`${item.reason}；用户已确认创建待办并归档`, todo.id) });
+          ...(item.tier==='pending' ? {tier:'action',reason:withTodo('用户已确认创建待办并归档',todo.id)} :
+            {reason:withTodo(`${item.reason}；用户已确认创建待办并归档`, todo.id)}) });
+        if(item.tier==='pending') store.remove(pendingPolicies,id);
         return { todoId: todo.id };
       });
       changed(id);

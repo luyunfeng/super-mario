@@ -241,3 +241,29 @@ test('同群跨消息聚合，沿用已确认项目提出建议，确认后才�
   await expect(group).toContainText('1 条消息');
   await expect(groups.filter({hasText:'建议按此群集中跟进'})).toHaveCount(1);
 });
+
+test('订阅等待模型分拣的消息已入箱，可单独筛选且不增加需要处理数', {timeout:40000}, async t=>{
+  const f=await fixture(t);
+  const page=await f.open();
+  await expect(cards(page)).toHaveCount(things.length);
+  const status=page.getByLabel('收件箱状态',{exact:true});
+  await status.selectOption('action');
+  const actionBefore=await cards(page).count();
+  assert.ok(actionBefore>0);
+  const incoming={thread:'subscription-wait',last:'v1',title:'离线订阅等待分拣',text:'离线发布说明'};
+  await f.server.app.inbox.ingest('subscription:offline-releases',[incoming],{fallbackTier:'wait'});
+  const saved=f.item(incoming.thread);
+  assert.equal(f.stored<InboxItem>('inbox',saved.id)?.tier,'pending');
+  await status.selectOption('pending');
+  const row=card(page,incoming.title);
+  await expect(cards(page)).toHaveCount(1);
+  await expect(row).toContainText('等待模型分拣');
+  await expect(row).not.toContainText('待人决策');
+  await row.getByRole('button',{name:'查看原文与详情',exact:true}).click();
+  const drawer=page.getByRole('dialog',{name:'收件箱消息详情'});
+  await expect(drawer).toContainText('已投递收件箱，等待模型分拣');
+  await drawer.locator('.drawer__foot').getByRole('button',{name:'关闭',exact:true}).click();
+  await status.selectOption('action');
+  await expect(cards(page)).toHaveCount(actionBefore);
+  await expect(row).toHaveCount(0);
+});

@@ -15,7 +15,7 @@ test('来源订阅通过真实 HTTP 恢复分目的地投递，重启后保留�
   const endpoint='source-subscriptions',service='local-source.releases';
   let reads=0, sensitiveReads=0, throttled=false;
   const release={id:'synthetic-release-001',title:'本地版本一',text:'首个版本说明',url:'https://example.test/release/1'};
-  const input={sourceId:service,name:'合成发布订阅',resource:'local/testing',intervalMinutes:60,destinations:['inbox','knowledge']};
+  const input={sourceId:service,name:'合成发布订阅',resource:'local/testing',intervalMinutes:60,destinations:['inbox','knowledge'],fallbackTier:'wait'};
   async function api<T>(path:string,method='GET',body?:object,status=200,authorized=true){
     const res=await fetch(server.url+'/api/v1/'+path,{method,headers:{'content-type':'application/json',
       ...(authorized && {authorization:'Bearer '+config.token})},...(body && {body:JSON.stringify(body)})});
@@ -63,7 +63,7 @@ test('来源订阅通过真实 HTTP 恢复分目的地投递，重启后保留�
   assert.equal(partial.readCount,1);assert.equal(partial.newCount,1);
   assert.equal(partial.entries[0]?.title,release.title);
   assert.ok(!JSON.stringify(partial).includes(release.text));assert.ok(!JSON.stringify(partial).includes(release.url!));
-  const first=await inbox();assert.equal(first.length,1);assert.equal(first[0]?.title,release.title);
+  const first=await inbox();assert.equal(first.length,1);assert.equal(first[0]?.title,release.title);assert.equal(first[0]?.tier,'pending');
   assert.ok((await api<{subscriptions:SourceSubscription[]}>(endpoint)).subscriptions[0]?.error);
   let legacyWrites=0;
   server.app.plugins.register({id:'legacy-knowledge-fixture',name:'合成旧知识后端',capabilities:[],
@@ -90,6 +90,7 @@ test('来源订阅通过真实 HTTP 恢复分目的地投递，重启后保留�
   assert.deepEqual((await history()).items.find(run=>run.id===partial.id),partial);
   await pull();
   const finalInbox=await inbox(),finalPages=await pages();
+  assert.equal(finalInbox[0]?.tier,'pending');
   assert.deepEqual(finalInbox.map(x=>[x.id,x.version]),first.map(x=>[x.id,x.version]));
   assert.deepEqual(finalPages.map(x=>[x.id,x.content]),[[page.id,edit.content]]);
   assert.equal(server.app.store.entries!('source.subscription-receipts.'+row.id).length,2);

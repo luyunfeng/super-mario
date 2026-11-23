@@ -2,21 +2,23 @@ import {runTitle,subscriptionRuns,type SubscriptionRun} from './subscription-run
 export type {SubscriptionRun} from './subscription-runs.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { nextOccurrence } from './schedules.ts';
+import type { InboxSubscriptionPolicy } from '../../protocol/src/index.ts';
 import type { Store } from '../../plugin-sdk/src/index.ts';
 
 type Destination = 'inbox' | 'knowledge';
-export type SourceItem = {id:string; title:string; text:string; url?:string};
+type SubscriptionTriagePolicy = Omit<InboxSubscriptionPolicy,'due'>;
+export type SourceItem = {id:string; title:string; text:string; url?:string; dueAt?:string};
 type SubscriptionInput = {sourceId:string; resource:string; name:string; destinations:Destination[]; intervalMinutes:number};
-export interface SourceSubscription extends SubscriptionInput {
+export interface SourceSubscription extends SubscriptionInput, SubscriptionTriagePolicy {
   mode?:'snapshot'; dailyAt?:string; id:string; version:number; enabled:boolean; nextRunAt:string; lastRunAt?:string; nextPageNumber?:number; retryAt?:string; error?:string;
 }
 type Options = {
   store:Store;
   timezone?:()=>string;
   onChange?:(id:string)=>void;
-  sources:()=>{id:string;name:string;resourceLabel:string;mode?:'snapshot'}[];
+  sources:()=>{id:string;name:string;resourceLabel:string;mode?:'snapshot';triageRules?:string}[];
   read:(sourceId:string,resource:string,signal:AbortSignal,cursor?:string,checkpoint?:string)=>Promise<SourceItem[]|{items:SourceItem[];nextCursor?:string;checkpoint?:string}|{snapshot:Omit<SourceItem,'id'>}>;
-  deliver:(destination:Destination,key:string,item:SourceItem,subscription:{id:string;name:string;mode?:'snapshot'})=>Promise<void>|void;
+  deliver:(destination:Destination,key:string,item:SourceItem,subscription:{id:string;name:string;mode?:'snapshot'} & SubscriptionTriagePolicy)=>Promise<void>|void;
 };
 const rows = 'source.subscriptions';
 const pending = 'source.subscription-pending';
@@ -59,6 +61,15 @@ function readerFailure(error:unknown):never {
     default: return failure('读取订阅来源失败，请检查来源连接与权限。',502);
   }
 }
+function dueTime(value:unknown) {
+  if(value===undefined) return undefined;
+  if(typeof value!=='string' || !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-]\d{2}:[0-5]\d)$/i.test(value))
+    failure('来源条目的截止时间须为带时区的 ISO 时间。',502);
+  const datePart=value.slice(0,10), day=Date.parse(datePart+'T00:00:00Z'), time=Date.parse(value);
+  if(!Number.isFinite(time) || !Number.isFinite(day) || new Date(day).toISOString().slice(0,10)!==datePart)
+    failure('来源条目的截止时间无效。',502);
+  return new Date(time).toISOString();
+}
 function required(value:unknown,name:string) {
   if (typeof value!=='string' || !value.trim()) failure(name+'不能为空。',400);
   return value.trim();
@@ -80,7 +91,9 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
   function open() { if(closed) failure('来源订阅服务已关闭。',503); }
   function available(sourceId:string) { return sources().some(s=>s.id===sourceId); }
   function requireSource(sourceId:string) {
-    if(!available(sourceId)) failure('来源插件已停用或不可用。',503);
+    const source=sources().find(item=>item.id===sourceId);
+    if(!source) failure('来源插件已停用或不可用。',503);
+    return source;
   }
   function scheduled(row:{intervalMinutes:number; dailyAt?:string}, after=Date.now()) {
     if(!row.dailyAt) return new Date(after+row.intervalMinutes*60_000).toISOString();
@@ -192,10 +205,11 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
         typeof entry.text!=='string' || (entry.url!==undefined && typeof entry.url!=='string')) failure('来源条目缺少稳定编号或有效内容。',502);
       if(tooLong(entry.id,512) || tooLong(entry.title,512) || tooLong(entry.text,16000) || (entry.url && tooLong(entry.url,4096)))
         failure('来源条目超出支持的长度。',502);
-      if(!items.has(entry.id)) items.set(entry.id,{id:entry.id,title:entry.title,text:entry.text,...(entry.url && {url:entry.url})});
+      const dueAt=dueTime(entry.dueAt);
+      if(!items.has(entry.id)) items.set(entry.id,{id:entry.id,title:entry.title,text:entry.text,...(entry.url && {url:entry.url}),...(dueAt && {dueAt})});
     }
     const first=items.values().next().value;
-    const digest=isSnapshot && first ? createHash('sha256').update(JSON.stringify([first.title,first.text,first.url ?? ''])).digest('hex') : undefined;
+    const digest=isSnapshot && first ? createHash('sha256').update(JSON.stringify([first.title,first.text,first.url ?? '',...(first.dueAt ? [first.dueAt] : [])])).digest('hex') : undefined;
     return {items:[...items.values()],readCount:result.length,digest,paged,nextCursor:paged ? token(raw.nextCursor) : undefined,checkpoint:paged ? token(raw.checkpoint) : undefined};
   }
   function list() {
@@ -227,7 +241,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
     }
     finally { signal?.removeEventListener('abort',cancel); previews.delete(controller); }
   }
-  function settings(input:Record<string,unknown>,mode?:'snapshot') {
+  function settings(input:Record<string,unknown>,mode?:'snapshot'): Pick<SubscriptionInput,'name'|'destinations'|'intervalMinutes'> & SubscriptionTriagePolicy & {dailyAt?:string} {
     const name=required(input.name,'订阅名称');
     const {destinations}=input;
     const dailyAt=mode==='snapshot' ? input.dailyAt ?? (input.intervalMinutes===undefined ? '08:00' : '') : undefined;
@@ -239,13 +253,19 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
     if(typeof intervalMinutes!=='number' || !Number.isSafeInteger(intervalMinutes) || intervalMinutes<1 || intervalMinutes>10080)
       failure('拉取间隔必须为 1–10080 的整数分钟。',400);
     if(mode==='snapshot' && !dailyAt && intervalMinutes<60) failure('快照固定间隔至少为 60 分钟。',400);
-    return {name,intervalMinutes,...(typeof dailyAt==='string' && {dailyAt}),destinations:[...new Set<Destination>(destinations)]};
+    const {triageRules,fallbackTier}=input;
+    if(triageRules!==undefined && (typeof triageRules!=='string' || tooLong(triageRules,4000))) failure('分拣规则上限为 4000 个字符。',400);
+    if(fallbackTier!==undefined && fallbackTier!=='auto' && fallbackTier!=='wait' && fallbackTier!=='action' && fallbackTier!=='fyi')
+      failure('请选择有效的订阅分拣回退策略。',400);
+    // Default/empty settings remain absent, including in legacy idempotency fingerprints.
+    return {name,intervalMinutes,...(typeof dailyAt==='string' && {dailyAt}),destinations:[...new Set<Destination>(destinations)],
+      ...(triageRules?.trim() && {triageRules:triageRules.trim()}),
+      ...(fallbackTier && fallbackTier!=='auto' && {fallbackTier})};
   }
   function configuration(input:Record<string,unknown>) {
     open();
     const sourceId=required(input?.sourceId,'来源'),resource=required(input?.resource,'资源');
-    requireSource(sourceId);
-    const mode=sources().find(source=>source.id===sourceId)?.mode;
+    const {mode}=requireSource(sourceId);
     return {sourceId,resource,...(mode && {mode}),...settings(input,mode)};
   }
   function create(input:Record<string,unknown>) {
@@ -274,8 +294,8 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
   }
   function update(id:string,input:Record<string,unknown>) {
     const fields=Object.keys(input).filter(key=>key!=='version');
-    if(!fields.length || fields.some(key=>!['enabled','name','intervalMinutes','destinations','dailyAt'].includes(key)))
-      failure('只支持修改名称、拉取间隔、投递位置和开关。',400);
+    if(!fields.length || fields.some(key=>!['enabled','name','intervalMinutes','destinations','dailyAt','triageRules','fallbackTier'].includes(key)))
+      failure('修改项须为名称、调度、投递位置、分拣设置或开关。',400);
     const row=store.transaction(()=>{
       const previous=current(id,input.version);
       if(running.has(id) && !(fields.length===1 && input.enabled===false)) failure('订阅正在拉取，请稍后再修改。',409);
@@ -283,9 +303,11 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
       if(typeof enabled!=='boolean') failure('订阅开关无效。',400);
       const config=settings({...previous,...input},previous.mode);
       const reschedule=enabled!==previous.enabled || config.intervalMinutes!==previous.intervalMinutes || config.dailyAt!==previous.dailyAt;
-      if(!reschedule && previous.name===config.name && previous.destinations.length===config.destinations.length &&
+      if(!reschedule && previous.name===config.name && previous.triageRules===config.triageRules && previous.fallbackTier===config.fallbackTier && previous.destinations.length===config.destinations.length &&
         config.destinations.every(d=>previous.destinations.includes(d))) return previous;
       const next={...previous,...config,enabled,version:previous.version+1};
+      if(!config.triageRules) delete next.triageRules;
+      if(!config.fallbackTier) delete next.fallbackTier;
       // A newly enabled destination can use the next scheduler tick. Interval changes
       // count from the last pull, so editing the schedule does not postpone overdue work.
       const addedDestination=config.destinations.some(value=>!previous.destinations.includes(value));
@@ -339,7 +361,8 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
     const row=current(id,version);
     if(!row.enabled) failure('订阅已暂停。',409);
     if(running.has(id)) failure('订阅正在拉取。',409);
-    requireSource(row.sourceId);
+    const sourceRules=requireSource(row.sourceId).triageRules;
+    const rules=row.triageRules || sourceRules;
     const until=retryTime(row.sourceId);
     if(until && !store.get(pending,id) && !store.get(snapshotCatchups,id)) limited(until);
     const audit=records.begin(id,trigger,row.nextPageNumber ?? 1);
@@ -382,7 +405,8 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
           // The host's destination writer must commit this key with its content for crash-safe replay.
           const delivery = Promise.resolve().then(() => {
             guard();
-            return deliver(destination,key,{...item},{id,name:row.name,...(row.mode && {mode:row.mode})});
+            return deliver(destination,key,{...item},{id,name:row.name,...(row.mode && {mode:row.mode}),
+              ...(rules && {triageRules:rules}),...(row.fallbackTier && {fallbackTier:row.fallbackTier})});
           });
           deliveries.add(delivery);
           try { await delivery; }
