@@ -60,7 +60,7 @@ for (const executorId of ['codex', 'claude-code'] as const) {
     assert.equal((await service.describe('machine')).find(e => e.id === executorId)!.available, true);
     for (const resume of [false, true]) {
       const prompt = '--literal $(no-command)';
-      const params = { executorId, cwd: dir, prompt, ...(resume ? { nativeSessionId: 'native-test' } : {}) };
+      const params = { executorId, cwd: dir, prompt, ...(resume ? { nativeSessionId: 'native-test' } : { model: 'fixture-model' }) };
       const method = resume ? 'executor.resume' : 'executor.start';
       await call(method, params);
       const pane = creates.at(-1)!;
@@ -70,6 +70,7 @@ for (const executorId of ['codex', 'claude-code'] as const) {
       assert.equal(pane.cwd, dir);
       await exec(pane.argv[0]!, pane.argv.slice(1), { cwd: pane.cwd, env: { ...process.env, ...pane.env } });
       const interactive = JSON.parse(await readFile(join(dir, 'observed.json'), 'utf8'));
+      if (!resume) assert.deepEqual(interactive.args.slice(0, 2), ['--model', 'fixture-model']);
       assert.equal(interactive.command, command);
       assert.equal(interactive[executorId === 'codex' ? 'codex' : 'claude'], configDir);
       await call(method, { ...params, mode: 'task' });
@@ -78,6 +79,7 @@ for (const executorId of ['codex', 'claude-code'] as const) {
       assert.deepEqual(config.launcher, launcher);
       await exec(task.argv[0]!, task.argv.slice(1));
       const observed = JSON.parse(await readFile(join(dir, 'observed.json'), 'utf8'));
+      if (!resume) assert.deepEqual(observed.args.slice(0, 2), ['--model', 'fixture-model']);
       assert.equal(observed.command, command);
       assert.equal(observed[executorId === 'codex' ? 'codex' : 'claude'], configDir);
       assert.equal(observed.cwd, dir);

@@ -4,6 +4,7 @@ import { executionUsage, type ExecutionUsage, type ExecutionProgress, type Execu
 
 export interface TaskConfig {
   prompt: string;
+  model?: string;
   cwd: string;
   executorId: 'codex' | 'claude-code' | 'pi';
   resultsPath: string;

@@ -2259,12 +2259,12 @@ export async function createWorkbench(config: AppConfig) {
         remote.push({ ...info, machineId: machine.id, id: `${machine.id}/${info.id}`, name: `${info.name} · ${machine.name}`,
           available: machine.online && info.available,
           reason: machine.online ? info.reason : '执行机离线',
-          async execute({ prompt, cwd, executionMode = 'task', nativeResume, signal }) {
+          async execute({ prompt, model, cwd, executionMode = 'task', nativeResume, signal }) {
             signal.throwIfAborted();
             // Only this RPC adapter requires a remote working directory.
             if (!cwd?.trim()) throw Object.assign(new InputError('远端工作目录不能为空'), { delivery: 'no' });
             if (nativeResume && (nativeResume.executorId !== info.id || !machine.capabilities.includes('executor.resume'))) throw Object.assign(new InputError('执行机不支持此原生线程恢复，请升级代理', 409), { delivery: 'no' });
-            const session = await machines!.call(machine.id, nativeResume ? 'executor.resume' : 'executor.start', { executorId: info.id, prompt, cwd: cwd.trim(), mode: executionMode, ...(nativeResume ? { nativeSessionId: nativeResume.nativeSessionId } : {}) });
+            const session = await machines!.call(machine.id, nativeResume ? 'executor.resume' : 'executor.start', { executorId: info.id, prompt, ...(model && {model}), cwd: cwd.trim(), mode: executionMode, ...(nativeResume ? { nativeSessionId: nativeResume.nativeSessionId } : {}) });
             if (!session || typeof session !== 'object' || Array.isArray(session) || typeof session.sessionId !== 'string') throw new Error('执行机未返回有效会话');
             return { text: '已启动外部 CLI，会自动采集原生结果。', pending: true, sessionId: session.sessionId,
               ...(info.id === 'codex' && typeof session.workerToolKeyHash === 'string' && /^[a-f0-9]{64}$/.test(session.workerToolKeyHash) &&
@@ -2310,7 +2310,7 @@ export async function createWorkbench(config: AppConfig) {
         const requestHash = store.get<string>('dispatch-prompt-hashes', key);
         const firstCriteria = initialRunCriteria(store,run);
         const samePrompt = requestHash ? createHash('sha256').update(prompt).digest('hex') === requestHash : run.prompt === prompt;
-        if (!samePrompt || (planEstimate && (run.planEstimate?.planId !== planEstimate.planId ||
+        if (!samePrompt || run.model !== input.model || (planEstimate && (run.planEstimate?.planId !== planEstimate.planId ||
           run.planEstimate.taskIndex !== planEstimate.taskIndex || run.planEstimate.source !== planEstimate.source)) || (requestedExecutor !== undefined && run.executorId !== requestedExecutor)
           || run.projectId !== projectId || run.conversationId !== conversationId
           || run.worktreeRunId !== worktreeRunId || (run.comparisonRunIds?.length ?? 1) !== copies || Boolean(run.worktree) !== isolated || (input.cwd !== undefined && (run.worktree?.source ?? run.cwd) !== input.cwd)
@@ -2378,6 +2378,8 @@ export async function createWorkbench(config: AppConfig) {
       if (!machines?.list().some(m => m.id === workspace.machineId && m.capabilities.includes('workspace.prepareRunWorktree') && (copies === 1 || m.capabilities.includes('workspace.worktreeBase'))))
         throw new InputError('请升级执行机代理以创建独立工作树', 409);
     }
+    const model = input.model;
+    if (model !== undefined && (typeof model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(model) || executor?.supportsModel !== true || nativeResume)) throw new InputError('模型标识无效或执行者不支持按次指定模型');
     if (executor?.taskOnly && executionMode !== 'task') throw new InputError('此执行器仅支持任务模式');
     if (!['task', 'interactive'].includes(String(executionMode))) throw new InputError('executionMode必须为task或interactive');
     const doneWhen = optionalText(input.doneWhen, '验收标准');
@@ -2393,19 +2395,19 @@ export async function createWorkbench(config: AppConfig) {
     if (todo && ((inputMessage?.todoId && inputMessage.todoId !== todoId) ||
       (inputMessage?.projectId && inputMessage.projectId !== projectId))) throw new InputError('待办与来源消息的范围不匹配', 403);
     if (!executor?.available) throw new InputError(executor?.reason ?? '执行者不可用', 503);
-    return {prompt, executorId, executor, projectId, conversationId, todoId, doneWhen, expectMinutes, executionMode,
+    return {prompt, model, executorId, executor, projectId, conversationId, todoId, doneWhen, expectMinutes, executionMode,
       cwd, workspace, copies, isolated, worktreeRunId, projectTree, parentRun, nativeResume, inputMessage, taskPolicy};
   }
   function dispatch(input: Record<string, unknown>, key?: string, nativeApproved = false, executionGuard?:()=>void, planEstimate?: Run['planEstimate']): Run {
     const prepared = prepareDispatch(input,key,nativeApproved,planEstimate);
     if (prepared.previous) return prepared.previous;
-    const {prompt, executorId, executor, projectId, conversationId, todoId, doneWhen, expectMinutes, executionMode,
+    const {prompt, model, executorId, executor, projectId, conversationId, todoId, doneWhen, expectMinutes, executionMode,
       cwd, workspace, copies, isolated, worktreeRunId, projectTree, parentRun, nativeResume, inputMessage, taskPolicy} = prepared;
     const now = new Date().toISOString();
     const proofSources = nativeResultSources(executor);
     const ids = Array.from({ length: copies }, () => randomUUID());
     const runs = ids.map((id): Run => ({
-      id, executorId, conversationId, prompt, projectId, todoId, doneWhen, ...(planEstimate && {planEstimate}),
+      id, executorId, conversationId, prompt, ...(model && {model}), projectId, todoId, doneWhen, ...(planEstimate && {planEstimate}),
       ...(copies > 1 && { comparisonRunIds: ids }),
       ...(worktreeRunId && { worktreeRunId }),
       ...(isolated && workspace && { worktree: { source: workspace.cwd } }),
@@ -2533,7 +2535,7 @@ export async function createWorkbench(config: AppConfig) {
             if (currentDecisions() !== decisions) {
               throw Object.assign(new InputError('待办决定已变更，请核对后重新派单', 409), { delivery: 'no' });
             }
-            const result = await executor.execute({ prompt: finalPrompt, cwd: destination, executionMode: run.executionMode, ...(nativeResume ? { nativeResume } : {}), signal: controller.signal, onOutput: text => update({ output: (store.get<Run>('runs', run.id)?.output ?? '') + text }) });
+            const result = await executor.execute({ prompt: finalPrompt, ...(run.model && {model:run.model}), cwd: destination, executionMode: run.executionMode, ...(nativeResume ? { nativeResume } : {}), signal: controller.signal, onOutput: text => update({ output: (store.get<Run>('runs', run.id)?.output ?? '') + text }) });
             if (result.sessionId) update({ sessionId: result.sessionId });
             const metadata = JSON.parse(JSON.stringify(result)) as JsonObject;
             delete metadata.workerToolKeyHash;

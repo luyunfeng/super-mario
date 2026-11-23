@@ -39,7 +39,7 @@ export interface Tool {
 export interface Executor extends ExecutorInfo {
   /** False for task-only executors without a resident knowledge worker. */
   knowledgeWorker?: boolean;
-  execute(request: { prompt: string; cwd?: string; executionMode?: 'task' | 'interactive'; nativeResume?: NativeResumeSpec; signal: AbortSignal; onOutput?: (text: string) => void }): Promise<{ text: string; pending?: boolean; sessionId?: string; nativeResult?: ExecutionResult }>;
+  execute(request: { prompt: string; model?: string; cwd?: string; executionMode?: 'task' | 'interactive'; nativeResume?: NativeResumeSpec; signal: AbortSignal; onOutput?: (text: string) => void }): Promise<{ text: string; pending?: boolean; sessionId?: string; nativeResult?: ExecutionResult }>;
 }
 export interface KnowledgeQuery { minRelevance?: number; importance?: KnowledgeImportance; tag?: string; layer?: KnowledgeLayer; projectId?: string; query?: string }
 export interface KnowledgeBackend {

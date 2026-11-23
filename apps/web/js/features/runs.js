@@ -402,6 +402,8 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       return [item.id, label && !binding ? item.name+' · '+label : item.name];
     })] });
     if (parentRun) executor.value = parentRun.executorId;
+    const model = Input({ placeholder: '留空使用执行者默认模型', maxLength: 128 });
+    const modelField = Field({ label: '本次执行模型', control: model });
     const cwd = Input({ value: parentRun?.cwd ?? projectTree?.cwd ?? binding?.cwd ?? '', readOnly: Boolean(binding), placeholder: '留空使用这台电脑的默认目录' });
     const todos = (snapshot.todos ?? []).filter(todo => !todo.completedAt && (launchProjectId === 'all' || todo.projectId === launchProjectId));
     const todo = Select({ options: [['', '不关联'], ...todos.map(item => [item.id, item.title])] });
@@ -420,6 +422,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     const minutesField = Field({ label: '预计用时（分钟）', control: minutes });
     const sync = () => {
       const chosen = executors.find(item => item.id === executor.value);
+      modelField.hidden = chosen?.supportsModel !== true;
       mode.disabled = Boolean(chosen?.taskOnly);
       if (mode.disabled) mode.value = 'task';
       if (isolation) {
@@ -436,7 +439,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       onClose: () => { offRoute(); offStore(); },
       title: '发起执行', subtitle: launchProjectId === 'all' ? '不归属于某个项目' : `归属项目：${(snapshot.projects ?? []).find(item => item.id === launchProjectId)?.name ?? ''}`,
       body: [!executors.length && Banner({ tone: 'warn', children: unavailable, action: h('a', { class: 'btn btn--sm', href: router.href('agent') }, '查看电脑') }),
-        Field({ label: '要做什么', control: prompt, required: true }), Field({ label: '谁来做', control: executor }),
+        Field({ label: '要做什么', control: prompt, required: true }), Field({ label: '谁来做', control: executor }), modelField,
         binding && h('p', { class: 'muted folder-path' }, parentRun ? `复用工作树：${parentRun.worktree.name ?? parentRun.worktree.branch} · ${parentRun.cwd}` : projectTree ? `工作树：${projectTree.name} · ${projectTree.cwd}` : `继承项目文件夹：${binding.cwd}`), Field({ label: '关联待办', control: todo }), criteriaField, minutesField, isolation, copiesField,
         Fold({ title: '更多选项', body: [Field({ label: parentRun || projectTree ? '工作树目录' : binding ? '目录（继承项目）' : '目录', control: cwd }), Field({ label: '执行方式', control: mode })] }), message],
       footer: [Button({ label: '取消', onClick: () => drawer.close() }), Button({
@@ -453,7 +456,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
             replace(message, Banner({ tone: 'warn', children: '预计用时须大于 0 分钟且不超过一周。' }));
             minutes.focus(); return;
           }
-          const body = { prompt: prompt.value.trim(), ...(parentRun && { worktreeRunId: parentRun.id }), ...(isolated && { isolatedWorktree: true, ...(canCompare && { copies: Number(copies.value) }) }), ...(executor.value ? { executorId: executor.value } : {}), ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}),
+          const body = { prompt: prompt.value.trim(), ...(!modelField.hidden && model.value.trim() && { model: model.value.trim() }), ...(parentRun && { worktreeRunId: parentRun.id }), ...(isolated && { isolatedWorktree: true, ...(canCompare && { copies: Number(copies.value) }) }), ...(executor.value ? { executorId: executor.value } : {}), ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}),
             ...(launchProjectId !== 'all' ? { projectId: launchProjectId } : {}), ...(todo.value ? { todoId: todo.value } : {}), ...(criteria.value.trim() ? { doneWhen: criteria.value.trim() } : {}),
             ...(minutes.value ? { expectMinutes: Number(minutes.value) } : {}), executionMode: mode.value };
           try { const run = await api.post('/runs', body, { 'Idempotency-Key': key }); drawer.close(); store.refresh(); router.go(router.href('projects', launchProjectId, 'runs', run.id) + (run.comparisonRunIds ? '?compare=group' : '')); }

@@ -162,6 +162,8 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
     const executorId = string(params, 'executorId');
     if (executorId !== 'codex' && executorId !== 'claude-code' && executorId !== 'pi') throw new Error('Unsupported executor');
     if (executorId === 'pi' && (resume || params.mode !== 'task')) throw new Error('Pi supports new tasks only');
+    const model = params.model;
+    if (model !== undefined && (typeof model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(model))) throw new Error('Invalid model identifier');
     const launcher = launchers[executorId];
     const command = launcher?.command ?? commands[executorId];
     const profileEnv = launcher?.profile ? { [executorId === 'pi' ? 'PI_CODING_AGENT_DIR' : executorId === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR']: launcher.profile.configDir } : undefined;
@@ -194,12 +196,13 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
     const workerKey = executorId === 'codex' && workerToolUrl && !endpoint ? randomBytes(32).toString('base64url') : undefined;
     const env = workerKey && workerToolUrl ? { ...profileEnv, SUPER_MARIO_WORKER_KEY: workerKey,
       SUPER_MARIO_WORKER_URL: workerToolUrl, SUPER_MARIO_WORKER_SESSION: sessionId } : profileEnv;
+    if (model && params.mode !== 'task') args.splice(1, 0, '--model', model);
     if (workerKey && params.mode !== 'task') args.splice(1, 0, ...codexWorkerToolArgs());
     if (params.mode === 'task') {
       const tasksDir = join(resolve(options.dataDir), 'task-results');
       mkdirSync(tasksDir, { recursive: true, mode: 0o700 });
       const configPath = join(tasksDir, `${sessionId}.config.json`);
-      writeFileSync(configPath, JSON.stringify({ prompt, cwd, executorId, ...(launcher ? { launcher } : {}), ...(nativeResume ? { nativeSessionId: nativeResume.nativeSessionId } : {}), resultsPath: join(tasksDir, `${sessionId}.json`) }), { mode: 0o600 });
+      writeFileSync(configPath, JSON.stringify({ prompt, cwd, executorId, ...(model && { model }), ...(launcher ? { launcher } : {}), ...(nativeResume ? { nativeSessionId: nativeResume.nativeSessionId } : {}), resultsPath: join(tasksDir, `${sessionId}.json`) }), { mode: 0o600 });
       // The compiled plugin resolves its sibling .js; Node 24 can run source .ts directly.
       const runner = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './task-runner.ts' : './task-runner.js', import.meta.url));
       args = [process.execPath, runner, configPath];
@@ -325,6 +328,7 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
         const configuredCommand = launchers[id as keyof typeof commands]?.command ?? command;
         const present = hasCommand(configuredCommand);
         return { id, name: id === 'pi' ? 'Pi' : id === 'codex' ? 'Codex' : 'Claude Code', kind: 'cli', machineId, defaultCwd: process.cwd(), available: status.available && present, mode: 'real',
+          supportsModel: true,
           ...(id === 'pi' ? { taskOnly: true, nativeResultSources: ['pi-json'] } : options.validateResume ? { nativeResultSources: [id === 'codex' ? 'codex-json' : 'claude-stream-json'] } : {}),
           description: id === 'pi' ? 'pi CLI 单次任务，使用 JSONL 事件采集结果。可用性仅检查终端和命令。' : '交互式 PTY；可用性仅检查终端和 PATH，不证明已认证。屏幕状态为 unknown；未接入原生 hook 或审批。',
           ...(!status.available ? { reason: status.reason ?? 'Terminal host unavailable' } : !present ? { reason: `${command} is not on PATH` } : {}) };

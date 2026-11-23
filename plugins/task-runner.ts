@@ -57,6 +57,7 @@ export async function runTask(config: TaskConfig): Promise<number> {
   if (pi && config.nativeSessionId !== undefined) throw new Error('Pi task resume is unsupported');
   const launcher = config.launcher === undefined ? undefined : validateTaskLauncher(config.launcher);
   const collector = createNativeCollector(config.executorId, config.nativeSessionId);
+  if (config.model !== undefined && (typeof config.model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(config.model))) throw new Error('Invalid model identifier');
   const baseCommit = taskHead(config.cwd);
   let finished = false;
   let malformed = false;
@@ -87,7 +88,7 @@ export async function runTask(config: TaskConfig): Promise<number> {
   const workerArgs = config.executorId === 'codex' && hasWorkerToolEnv(env)
     ? codexWorkerToolArgs() : [];
   if (!workerArgs.length) for (const key of workerToolEnvNames) delete env[key];
-  const child = spawn(command, [...workerArgs, ...args], { cwd: config.cwd, env, stdio: [pi ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+  const child = spawn(command, [...workerArgs, ...(config.model ? ['--model', config.model] : []), ...args], { cwd: config.cwd, env, stdio: [pi ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
   child.stdout!.pipe(process.stdout, { end: false });
   child.stderr!.pipe(process.stderr, { end: false });
   let inputError: Error | undefined;
