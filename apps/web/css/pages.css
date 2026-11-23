@@ -83,6 +83,8 @@ kbd { padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 4px
 .message-quote { min-width: 0; padding: 6px 10px; border-left: 3px solid var(--brand); background: var(--surface-2); color: var(--text-2); }
 .message-quote--draft:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .message-quote__preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.message-quote__comment { flex: 1 0 100%; min-width: 0; overflow-wrap: anywhere; }
+.message-quote__comment blockquote, .message-quote__comment p { margin: 4px 0; white-space: pre-wrap; }
 .message-quote--draft .message-quote__preview { flex: 1 1 12em; }
 summary.message-quote__preview { cursor: pointer; }
 .md-heading { margin: 0; line-height: 1.35; font-size: 1em; }

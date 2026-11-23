@@ -44,6 +44,23 @@ test('独立对话在本线恢复引用片段并发送原始 Markdown，归档�
   const response=await posted;assert.equal(response.status(),202);assert.equal(response.request().postDataJSON().text,expected);await expect(preview).toBeHidden();
   const history=await (await page.request.get(path+'/'+first+'/messages',{headers})).json();
   assert.ok(history.messages.some((m:{role:string;text:string})=>m.role==='user' && m.text===expected));
+  for(const [text,note] of [['开头','核对口径'],['第二行','调整文字'],['结尾','改为周五']]){
+    await region.locator('[data-id="'+sourceId+'"]').getByRole('button',{name:'批注原文'}).click();
+    const editor=page.getByRole('dialog',{name:'批注原文'});
+    await editor.getByLabel('待批注的原文').evaluate((el:HTMLTextAreaElement,s:string)=>{
+      const start=el.value.indexOf(s);el.setSelectionRange(start,start+s.length);
+    },text);
+    await editor.getByLabel('批注意见').fill(note);
+    await editor.getByRole('button',{name:'加入草稿'}).click();
+  }
+  await region.getByRole('button',{name:'移除批注 2'}).click();
+  await page.goto(url(second));await expect(preview).toBeHidden();
+  await page.goto(url(first));await page.reload();
+  await expect(preview).toContainText('改为周五');await expect(preview).not.toContainText('调整文字');
+  await input.fill('逐项处理');const annotated=page.waitForRequest(req=>req.method()==='POST' && req.url()===path+'/'+first+'/messages');
+  await input.press('Enter');
+  assert.equal((await annotated).postDataJSON().text,'> 开头\n\n批注 1：核对口径\n\n> 结尾\n\n批注 2：改为周五\n\n逐项处理');
+  await expect(preview).toBeHidden();
   const patch=async(archived:boolean)=>{
     const meta=await (await page.request.get(path+'/'+first,{headers})).json();
     assert.equal((await page.request.patch(path+'/'+first,{headers,data:{version:meta.version,archived}})).status(),200);
