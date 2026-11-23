@@ -2,7 +2,7 @@ import { h, replace } from '../lib/dom.js';
 import { Button, Card, Field, Input } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 
-const enabled = store => !store.view.unauthorized && !!store.view.snapshot?.plugins?.some(
+export const assistantSkillsEnabled = store => !store.view.unauthorized && !!store.view.snapshot?.plugins?.some(
   plugin => plugin.id === 'assistant-skills' && plugin.status === 'active');
 
 function readArchive(file) {
@@ -16,15 +16,28 @@ function readArchive(file) {
 
 export function createAssistantSkills({ api, store }) {
   const el = Card({ id: 'assistant-skills', title: '助手技能',
-    sub: '供 Web 主助手和全局飞书机器人使用', body: Button({ label: '管理技能', onClick: open }) });
-  const visibility = () => { el.hidden = !enabled(store); };
+    sub: '供 Web 主助手和全局飞书机器人使用', body: Button({ label: '管理技能', onClick: () => openAssistantSkills({api, store}) }) });
+  const visibility = () => { el.hidden = !assistantSkillsEnabled(store); };
   store.subscribe?.(visibility);
   visibility();
 
-  function open() {
-    if (!enabled(store)) return;
+  return { el };
+}
+
+export function openAssistantSkills({api, store, assistant, scopeCurrent = () => true, onUnauthorized}) {
+    if (!assistantSkillsEnabled(store)) return;
     const token = api.token(), route = location.hash;
-    const post = body => api.post('/assistant-skills', body);
+    const url = '/assistant-skills' + (assistant ? '?' + new URLSearchParams({assistantId: assistant.id}) : '');
+    async function post(body) {
+      try { return await api.post(url, body); }
+      catch (error) {
+        if (error.status === 401 && current()) {
+          drawer.close();
+          onUnauthorized?.();
+        }
+        throw error;
+      }
+    }
     let book, busy = false, removing, selected;
     const status = h('div', { role: 'status', class: 'small' });
     const errors = h('div', { role: 'alert' });
@@ -34,10 +47,10 @@ export function createAssistantSkills({ api, store }) {
     const details = h('div', { class: 'stack', tabIndex: -1 });
     const controls = h('fieldset', { class: 'stack', 'aria-label': '技能管理' },
       Field({ label: '技能 ZIP 文件', control: upload, hint: '选择不超过 4 MiB 的 ZIP 包，核对内容后安装。' }), confirm, rows, details);
-    const drawer = openDrawer({ title: '助手技能', wide: true, body: [status, errors, controls], onClose() {
+    const drawer = openDrawer({ title: '助手技能', subtitle: assistant?.name, wide: true, body: [status, errors, controls], onClose() {
       unsubscribe(); book = undefined; upload.value = ''; drawer.body.replaceChildren();
     } });
-    const current = () => drawer.el.open && token === api.token() && route === location.hash && enabled(store);
+    const current = () => drawer.el.open && token === api.token() && route === location.hash && assistantSkillsEnabled(store) && scopeCurrent();
     const unsubscribe = store.subscribe(() => { if (!current()) drawer.close(); });
 
     function closeFile() {
@@ -160,6 +173,4 @@ export function createAssistantSkills({ api, store }) {
     }
     renderList();
     void run('读取列表', loadList);
-  }
-  return { el };
 }

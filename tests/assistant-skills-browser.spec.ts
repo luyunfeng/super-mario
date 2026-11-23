@@ -88,6 +88,45 @@ test('Agent 页可读取内置技能与引用，用户技能支持 ZIP 预览、
 
   await expect(builtin.getByRole('button', { name: '查看 ' + builtinName })).toBeVisible();
 
+  await button('关闭').click();
+  const headers = { Authorization: 'Bearer ' + token };
+  const assistantId = crypto.randomUUID();
+  const otherId = crypto.randomUUID();
+  for (const [id, name] of [[assistantId,'审阅助理'],[otherId,'整理助理']]) {
+    const result = await page.request.post(server.url + '/api/v1/assistant-roster', {headers, data:{action:'create',id,name,instructions:''}});
+    assert.ok(result.ok());
+  }
+  await page.goto(server.url + '/#chat');
+  await page.getByRole('button',{name:'切换助理',exact:true}).click();
+  const roster = page.getByRole('dialog',{name:'切换助理'});
+  const manageAssistant = (name:string) => roster.getByRole('button',{name:'管理 ' + name + ' 的技能'}).click();
+  const calls:string[] = [];
+  page.on('request', request => {
+    const url = new URL(request.url());
+    if (url.pathname.endsWith('/assistant-skills') && url.searchParams.get('assistantId') === assistantId)
+      calls.push(request.postDataJSON().action);
+  });
+  await manageAssistant('审阅助理');
+  await expect(drawer).toContainText('审阅助理');
+  await expect(drawer).toContainText('还没有安装助手技能。');
+  await file.setInputFiles({name:'guide.zip',mimeType:'application/zip',buffer:archive});
+  await button('确认安装').click();
+  await button('查看 ' + skillName).click();
+  await expect(content).toContainText(guide);
+  await button('关闭').click();
+  await manageAssistant('整理助理');
+  await expect(drawer).toContainText('还没有安装助手技能。');
+  await button('关闭').click();
+  await manageAssistant('审阅助理');
+  await button('删除 ' + skillName).click();
+  await button('确认删除').click();
+  await expect(drawer).toContainText('还没有安装助手技能。');
+  assert.deepEqual(calls,['list','preview','install','read','list','remove']);
+  await page.goto(server.url + '/#agent');
+  await expect(drawer).toHaveCount(0);
+  await manage.click();
+  await expect(drawer).toContainText('还没有安装助手技能。');
+
   // 旧服务只返回用户安装目录，空态和上传入口仍可用。
   await button('关闭').click();
   await expect(drawer).toHaveCount(0);
@@ -101,7 +140,6 @@ test('Agent 页可读取内置技能与引用，用户技能支持 ZIP 预览、
   await expect(builtin).toHaveCount(0);
   await expect(file).toBeEnabled();
 
-  const headers = { Authorization: 'Bearer ' + token };
   const disabled = await page.request.post(server.url + '/api/v1/plugins/assistant-skills', {
     headers, data: { enabled: false },
   });
@@ -110,4 +148,13 @@ test('Agent 页可读取内置技能与引用，用户技能支持 ZIP 预览、
   await expect(manage).toHaveCount(0);
   const unavailable = await page.request.post(server.url + '/api/v1/assistant-skills', { headers, data: { action: 'list' } });
   assert.equal(unavailable.status(), 503);
+
+  assert.ok((await page.request.post(server.url + '/api/v1/plugins/assistant-skills', {headers, data:{enabled:true}})).ok());
+  await page.goto(server.url + '/#chat');
+  await page.getByRole('button',{name:'切换助理',exact:true}).click();
+  await page.route('**/api/v1/assistant-skills?assistantId=' + assistantId, route =>
+    route.fulfill({status:401, json:{error:'访问凭据失效'}}), {times:1});
+  await manageAssistant('审阅助理');
+  await expect(drawer).toHaveCount(0);
+  await expect(roster).toHaveCount(0);
 });
