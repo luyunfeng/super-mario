@@ -128,7 +128,8 @@ export function createFollowUpCard({ api, store }) {
         }
         const groups = [['待你决定', brief.decisions], ['待处理收件', brief.inbox], ['今日提及', brief.mentions], ['今日完成', brief.completed],
           ['今日更新的失败执行', brief.failed], ['当前执行', brief.running], ['今日日程', brief.calendar]];
-        replace(content, h('p', { class: 'small muted' }, brief.date + ' · ' + brief.timezone + ' · 生成于 ' + clock.format(Date.parse(brief.generatedAt))), groups.map(([title, group]) =>
+        replace(content, h('p', { class: 'small muted' }, brief.date + ' · ' + brief.timezone + ' · 生成于 ' + clock.format(Date.parse(brief.generatedAt))),
+          Button({ label: '刷新今日简报', onClick: read }), groups.map(([title, group]) =>
           h('section', { class: 'stack' }, h('h3', null, title),
             group.available === false ? h('p', null, group.reason || '来源不可用') : [
               h('p', { class: 'small muted' }, (group.totalIsLowerBound ? '至少 ' : '') + group.total + ' 项' + (group.truncated ? ' · 当前仅显示部分记录' : '')),

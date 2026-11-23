@@ -27,6 +27,10 @@ test('Web 今日简报读取工作台日期、真实待办与日历授权状态�
   await expect(drawer).toContainText('Asia/Shanghai');
   await expect(drawer).toContainText('个人飞书账号未连接');
   await expect(drawer).not.toContainText('其他账号样例');
+  server.app.store.put('todos', 'done-later', { id: 'done-later', title: '刷新后可见', createdAt: now, updatedAt: now, completedAt: now });
+  await drawer.getByRole('button', { name: '刷新今日简报' }).click();
+  await expect(drawer).toContainText('待办已完成 · 刷新后可见');
+  await expect(drawer).toContainText('生成于');
   const disabled = await page.request.post(server.url + '/api/v1/plugins/daily-brief', { headers: { authorization: 'Bearer ' + token }, data: { enabled: false } });
   assert.ok(disabled.ok());
   await expect(drawer).toBeHidden();
