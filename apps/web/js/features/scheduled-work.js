@@ -351,7 +351,15 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
         Button({ label: '周一至周五', size: 'sm', onClick: () => pickDays([1, 2, 3, 4, 5]) }),
         Button({ label: '周末', size: 'sm', onClick: () => pickDays([6, 0]) }))));
     const intervalField = Field({ label: '间隔分钟', control: minutes, hint: '最少 10 秒（1/6 分钟）。' });
-    const cronField = Field({ label: 'cron 表达式', control: cron, hint: '表达式交由服务端校验。' });
+    const cronExamples = [
+      ['周一至周五 09:00', '0 9 * * 1-5'],
+      ['周一至周五 09:00 至 18:30，每半小时', '*/30 9-18 * * 1-5'],
+      ['每月 1 日 10:00', '0 10 1 * *'],
+    ];
+    const cronField = h('div', { class: 'stack' }, Field({ label: 'cron 表达式', control: cron, hint: '依次填写分钟、小时、日、月、星期。' }),
+      h('div', { class: 'row row--wrap', dataset: { cronExamples: '' } }, cronExamples.map(([label, expression]) => Button({
+        label, size: 'sm', onClick: () => { cron.value = expression; sync(); },
+      }))));
     const zoneField = Field({ label: 'IANA 时区', control: zone });
     const dispatchFields = h('div', { class: 'stack' }, Field({ label: '执行者', control: executor }), availability,
       Field({ label: '目标', control: prompt }), Field({ label: '完成标准', control: doneWhen }),
@@ -470,7 +478,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
         submitted = true;
         replace(message, Banner({ children: h('div', null, `已提交创建审批 · ${approvalText(approval.status)} · ${approval.id}。`,
           approval.status === 'pending' && approval.id ? approvalLink(approval.id, () => drawer.close()) : chatLink()) }));
-        for (const input of form.querySelectorAll('input, select, textarea, fieldset button')) input.disabled = true;
+        for (const input of form.querySelectorAll('input, select, textarea, fieldset button, [data-cron-examples] button')) input.disabled = true;
         requestRead();
       } catch (cause) {
         if (!drawer.active()) return;

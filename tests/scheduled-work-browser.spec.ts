@@ -362,6 +362,9 @@ test('每周计划按所选星期和当地时间预览并提交审批', async ()
   const form = drawer(page);
   await form.getByRole('textbox', { name: '标题', exact: true }).fill('周回顾');
   await form.getByLabel('频率').selectOption('cron');
+  await form.getByRole('button', {name:'每月 1 日 10:00'}).click();
+  await expect(form.getByLabel('cron 表达式', { exact: true })).toHaveValue('0 10 1 * *');
+  await expect(form.getByRole('status', {name:'排期试算'}).locator('time')).toHaveCount(3);
   await form.getByLabel('cron 表达式', { exact: true }).fill('invalid');
   await expect(form.getByRole('status', { name: '排期试算' })).toContainText('五段表达式');
   assert.equal(f.writes.length, 0);
