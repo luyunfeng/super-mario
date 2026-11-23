@@ -2114,6 +2114,10 @@ test('Web 和飞书登记相同待办时复用原记录，多个历史匹配时�
       assert.match(req.system, /created=false 表示找到了原有待办/);
       assert.match(req.system, /逾期、执行顺序和用户标记的优先级分别判断/);
       if (JSON.stringify(req.content).includes('列出高优先级')) return call('todos_list', { priority: 'high', status: 'open' }, 'high');
+      if (JSON.stringify(req.content).includes('全天复核')) {
+        assert.match(req.system, /只指定截止日期时，传 dueDay/);
+        return call('todo_create', {title:'全天复核', dueDay:'2099-01-30', dueAt:'2099-01-30T23:59:59.999+08:00'}, 'all-day');
+      }
       const repeat = JSON.stringify(req.content).includes('再次');
       return call('todo_create', { title, priority: repeat ? 'low' : 'high', dueAt: repeat ? '2099-01-30T14:00:00+08:00' : dueAt,
         notes: repeat ? '新的说明' : '初次说明' }, 'register');
@@ -2122,6 +2126,7 @@ test('Web 和飞书登记相同待办时复用原记录，多个历史匹配时�
     if (raw.includes('多个同名同期限待办')) return { role: 'assistant', content: '请选定具体待办。' };
     if (req.callId === 'high') return { role: 'assistant', content: JSON.parse(raw).map((todo: {id: string}) => todo.id).join('、') };
     const todo = JSON.parse(raw);
+    if (req.callId === 'all-day') return {role:'assistant', content:'截止日期 ' + todo.dueDay};
     assert.equal(todo.priority, 'high');
     assert.equal(todo.notes, '初次说明');
     return { role: 'assistant', content: (todo.created ? '已登记 ' : '已有待办 ') + todo.id };
@@ -2153,6 +2158,8 @@ test('Web 和飞书登记相同待办时复用原记录，多个历史匹配时�
     await api('/todos', { projectId: project.id, title, dueAt });
     assert.equal(await ask('再次登记同一事项', path), '请选定具体待办。');
     assert.equal(server.app.todos().length, 5);
+    assert.equal(await ask('登记全天复核，截止北京时间2099年1月30日', path), '截止日期 2099-01-30');
+    assert.equal(server.app.todos().find(todo => todo.title === '全天复核')?.dueDay, '2099-01-30');
   } finally { await server.close(); }
 });
 

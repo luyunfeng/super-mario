@@ -385,7 +385,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           }, { title: { type: 'string' },
             continuesTodoId: { type: 'string', description: '同项目的直接前序待办 ID，与 continuationReason 一起传' },
             continuationReason: { type: 'string', description: '据主人明确要求说明这次续办承接什么、下一阶段要做什么' },
-            afterTodoIds: afterTodoIdsParameter, parentTodoId: { type: 'string' }, notes: { type: 'string' }, projectId: { type: 'string' }, dueAt: { type: 'string' }, priority: priorityParameter, reminderAt: reminderParameter, responsiblePerson: { type: 'string', description: '登记负责人姓名，清除时传空字符串' }, waitingOn: { type: 'string' } }));
+            afterTodoIds: afterTodoIdsParameter, parentTodoId: { type: 'string' }, notes: { type: 'string' }, projectId: { type: 'string' }, dueAt: { type: 'string' }, dueDay: { type: 'string', description: '全天期限的登记日期 YYYY-MM-DD，同时传该日当地 23:59:59.999 带时区的 dueAt' }, priority: priorityParameter, reminderAt: reminderParameter, responsiblePerson: { type: 'string', description: '登记负责人姓名，清除时传空字符串' }, waitingOn: { type: 'string' } }));
         }
         context.contribute('tools', 'todos_list', tool('todos_list', '读取工作台待办。status=open 查未完成，done 查已完成，all 或省略可查全部。overdue=true 仅查已过截止时间的未完成事项。可按项目、优先级、标题和备注关键词及截止时段组合筛选。', async (args, signal) => {
           signal.throwIfAborted();
