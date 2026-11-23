@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { modelListDashboard } from '../apps/server/src/feishu-dashboard.ts';
 import { botConversationId } from '../packages/core/src/bot-agent-routing.ts';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1695,6 +1696,18 @@ test('飞书模型目录按中文名单的 UTF-8 字节限制回执，并保留�
   assert.match(text, /Web.*完整目录/);
   assert.match(text, /回复本条目录消息.*\/modelchange.*完整模型 ID/);
   assert.match(text, /账号权限/);
+});
+
+test('独立对话的纯文本目录按整条回执预算保留完整链接', () => {
+  const catalog = { provider:'合成',current:'当前',models:Array.from({length:500},(_,i)=>'候选模型'.repeat(8)+i),source:'configured' as const,demo:true };
+  for (const length of [3000,16000]) {
+    const webBase = 'https://workbench.example/' + 'a'.repeat(length) + '/';
+    const {text} = modelListDashboard(catalog,true,'独立对话模型目录',{botId:'demo',threadId:'local',webBase});
+    assert.ok(Buffer.byteLength(text) <= 16000);
+    assert.equal(text.includes(webBase+'#agent/private-thread/demo/local'),length === 3000);
+    assert.match(text,/查看完整目录/);
+    assert.match(text,/账号权限/);
+  }
 });
 
 test('主人在有效主会话精确切换模型，命令和参数保持独立，失败结果可核对', async t => {

@@ -145,7 +145,8 @@ export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp
   const lines: string[] = [];
   const web = allowed && thread && cardWebBase(thread.webBase);
   const url = web && thread ? web + '#' + ['agent','private-thread',thread.botId,thread.threadId].map(encodeURIComponent).join('/') : '';
-  const linkText = url && Buffer.byteLength(url) < 2048 ? '\n在 Web 查看此对话：' + url : '';
+  const textLimit = 16000;
+  let linkText = url ? '\n在 Web 查看此对话：' + url : '';
   const safe = (value: string) => publicText(value, 256).replace(/\s+/g, ' ');
   if (!allowed) lines.push('要操作主对话，请发送 /main；要操作独立对话，请发送 /list 并选择目标。切换后新发一条 /modellist，请勿引用旧消息。');
   else if (!catalog) lines.push('模型目录服务不可用。');
@@ -159,11 +160,13 @@ export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp
     const hint = (models.length ? '要为这段对话切换模型，请回复本条目录消息，发送 /modelchange 加完整模型 ID。\n' : '') + '账号权限以提供方实际授权为准。';
     const truncated = thread ? '目录较长，请在 Web 对应独立对话的模型清单中查看完整目录。' : '目录较长，请在 Web 对应机器人的模型设置中查看完整目录。';
     // Reserve space for both footers so a Chinese catalog and the text fallback share one byte limit.
-    let bytes = Buffer.byteLength([title, ...lines, truncated, hint].join('\n') + linkText);
+    let bytes = Buffer.byteLength([title, ...lines, models.length ? truncated : '暂无候选模型。', hint].join('\n'));
+    if (bytes + Buffer.byteLength(linkText) > textLimit) linkText = '';
+    bytes += Buffer.byteLength(linkText);
     for (const model of models) {
       const line = '• ' + safe(model) + (custom.has(model) ? '（最近使用）' : '');
       bytes += Buffer.byteLength('\n' + line);
-      if (bytes > 16000) { lines.push(truncated); break; }
+      if (bytes > textLimit) { lines.push(truncated); break; }
       lines.push(line);
     }
     if (!models.length) lines.push('暂无候选模型。');
@@ -171,7 +174,8 @@ export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp
   }
   const text = lines.join('\n');
   const buttons = url ? cardButtons([{label:'在 Web 查看此对话',url}]) : [];
-  return { text: title + '\n' + text + linkText, card: cardDocument(title, [{ tag: 'div', text: cardPlain(text) }, ...buttons]) };
+  const fallback = title + '\n' + text;
+  return { text: Buffer.byteLength(fallback + linkText) <= textLimit ? fallback + linkText : fallback, card: cardDocument(title, [{ tag: 'div', text: cardPlain(text) }, ...buttons]) };
 }
 
 export function statusDashboard(target: string, status: ConversationStatus | string, source?: { botId: string; threadId: string; messageId: string; webBase: string }) {
