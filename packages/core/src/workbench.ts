@@ -338,7 +338,12 @@ export async function createWorkbench(config: AppConfig) {
       if (project || input.status !== undefined || input.offset !== undefined)
         return knowledgeCurator.queueJobs(project, input.status, input.offset);
       return knowledgeCurator.status() as unknown as Json;
-    }, dispatch: input => { const source = currentAgentInput() ?? agent.currentInput(); return dispatch({ ...input, conversationId: source?.conversationId, sourceMessageId: source?.id, projectId: input.projectId ?? source?.projectId, todoId: input.todoId ?? source?.todoId }) as unknown as Json; }, createTodo: registerChatTodo, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoDetail, todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRun: id => readRun(id), runObservations, inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => store.transaction(() => {
+    }, dispatch: input => {
+      const source = currentAgentInput() ?? agent.currentInput();
+      const scoped = pinChannelTask(input, channelTaskScope(source));
+      return dispatch({ ...scoped, conversationId: source?.conversationId, sourceMessageId: source?.id,
+        projectId: scoped.projectId ?? source?.projectId, todoId: scoped.todoId ?? source?.todoId }) as unknown as Json;
+    }, createTodo: registerChatTodo, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoDetail, todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRun: id => readRun(id), runObservations, inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => store.transaction(() => {
       const approval = approvals.propose(input as Parameters<typeof approvals.propose>[0]);
       const source = currentAgentInput();
       if (source && sourceThread(source)) store.put('approval.origins', approval.id, { conversationId: source.conversationId, sourceMessageId: source.id });
@@ -682,13 +687,39 @@ export async function createWorkbench(config: AppConfig) {
     for (const item of executorInfo()) for (const src of item.nativeResultSources ?? []) sources.add(src);
     return sources;
   } });
+  // A topic and an outside-group handoff carry the todo selected by the channel, even on a global bot.
+  function channelTaskScope(source?: Message) {
+    if (!source || !source.conversationId.startsWith('bot:')) return;
+    const route = store.get<MessageRoute & { topic?: {todoId: string}; groupTaskOrigin?: {todoId: string} }>('message.routes', source.id);
+    if (route?.channel !== 'feishu' || (!route.topic && !route.groupTaskOrigin)) return;
+    assertBotInput(source);
+    const id = route.topic?.todoId ?? route.groupTaskOrigin?.todoId;
+    const todo = id && store.get<Todo>('todos', id);
+    if (!todo || todo.completedAt || todo.id !== source.todoId || todo.projectId !== source.projectId ||
+      (route.groupTaskOrigin && route.groupTaskOrigin.todoId !== todo.id))
+      throw new InputError('飞书待办或所属项目已变化，请重新核对', 409);
+    return todo;
+  }
+  function pinChannelTask(input: Record<string, unknown>, todo?: Todo) {
+    if (!todo) return input;
+    if ((input.todoId !== undefined && input.todoId !== todo.id) ||
+      (input.projectId !== undefined && input.projectId !== todo.projectId))
+      throw new InputError('不能跨出当前飞书待办或其项目派工', 403);
+    if (input.worktreeRunId !== undefined) {
+      const run = store.get<Run>('runs', requiredText(input.worktreeRunId, '工作树所属执行'));
+      if (!run || run.todoId !== todo.id || run.projectId !== todo.projectId)
+        throw new InputError('工作树执行不属于当前飞书待办', 403);
+    }
+    return { ...input, todoId: todo.id, ...(todo.projectId && { projectId: todo.projectId }) };
+  }
   function proposePlan(input: Record<string, unknown>, fromAgent = false) {
     const source = fromAgent ? currentAgentInput() ?? agent.currentInput() : undefined;
     if (Array.isArray(input.tasks) && input.tasks.some(task => task && typeof task === 'object' && 'nativeResume' in task)) throw new InputError('原生线程恢复须通过单独恢复审批，不能作为新任务静默派发', 403);
-    const normalized = source && Array.isArray(input.tasks) ? { ...input, tasks: input.tasks.map(task => {
+    const todo = channelTaskScope(source);
+    const normalized = source && Array.isArray(input.tasks) ? { ...pinChannelTask(input, todo), tasks: input.tasks.map(task => {
       if (!task || typeof task !== 'object' || Array.isArray(task)) return task;
       const args = task as Record<string, unknown>;
-      return { ...args, executorId: pinExecutor(source, args.executorId) };
+      return { ...pinChannelTask(args, todo), executorId: pinExecutor(source, args.executorId) };
     }) } : input;
     const plan = plans.propose(normalized as unknown as Parameters<typeof plans.propose>[0]);
     store.put('plan-origins', plan.id, { sourceMessageId: source?.id, projectId: source?.projectId, conversationId: source?.conversationId, todoId: source?.todoId });
