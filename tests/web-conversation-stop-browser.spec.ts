@@ -93,4 +93,18 @@ test('独立对话停止按钮只中断原线待处理的本人输入，归档�
   const historicId=randomUUID();server.app.store.put('messages',historicId,{...inputs[1],id:historicId,status:'pending',text:'历史待处理登记'});
   await page.reload();await expect(region).toContainText('历史待处理登记');await expect(region.getByRole('button',{name:'停止本轮'})).toHaveCount(0);
   await page.goto(url(a));await stop(inputs[0]!.id).click();await expect.poll(()=>closed).toBe(2);
+  await composer.press('Control+r');
+  await expect(page.getByRole('dialog').getByRole('button',{name:'取回后修改的消息'})).toBeVisible();
+  const current=await (await page.request.get(path+'/'+a,{headers})).json();
+  const archived=await page.request.patch(path+'/'+a,{headers,data:{version:current.version,archived:true}});
+  assert.equal(archived.status(),200);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(region).toContainText('已归档');
+  const historyKeys=()=>page.evaluate(thread=>Object.keys(localStorage).filter(k=>k.startsWith('sm.sent-history.') &&
+    k.endsWith(JSON.stringify(['web',thread]))),a);
+  assert.equal((await historyKeys()).length,1);
+  const removed=await page.request.delete(path+'/'+a,{headers,data:{version:(await archived.json()).version}});
+  assert.equal(removed.status(),200);
+  await expect.poll(historyKeys).toHaveLength(0);
+
 });

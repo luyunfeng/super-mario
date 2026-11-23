@@ -209,7 +209,7 @@ export function createWebConversations({api,store,scope,router}){
     if(meta && row.version<meta.version)return;
     if(!meta){draftKey=JSON.stringify(['web',stamp.id]);input.value=drafts.read(draftKey);}
     if(meta && row.version>meta.version)notice.textContent='';
-    if(row.archived && !meta?.archived)prompts.reset();
+    if(row.archived && !meta?.archived){prompts.reset();history.reset();}
     meta=row;heading.textContent=row.title;
     form.hidden=!!row.archived;controls.hidden=false;
     stateLabel.textContent=row.archived?'已归档 · 只读':'';
