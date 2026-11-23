@@ -84,17 +84,23 @@ export function createAgentArtifacts({ store, events, machines }: { store: Store
     },
     async status(id: string): Promise<AgentArtifactRecord> {
       const record = get(id);
+      if (record.status === 'deploying') return record;
       if (!record.approval || record.status === 'pending') return { ...record, reason: '尚未确认此版本，不核实或加载代码' };
       verifyAgentArtifact({ manifest: record.manifest, source: record.source, approval: record.approval });
       try {
         const result = await client(record).call(record.machineId, 'extension.status', { id: record.pluginId });
-        if (validResult(result, record)) return save({ ...record, status: 'loaded', methods: result.methods, reason: '执行机已核实该版本正在加载' });
+        // A load may have started while this read was in flight.
+        const current = get(id);
+        if (current.status !== record.status) return current;
+        if (validResult(result, record)) return save({ ...record, status: 'loaded', methods: result.methods, reason: '执行机已核实该版本已加载' });
         if (object(result) && result.loaded === false && result.id === record.pluginId
           && result.version === record.manifest.version && result.sha256 === record.manifest.sha256) {
           return save({ ...record, status: 'unloaded', methods: [], reason: '执行机仅保留记录，当前未加载；重新暂存并确认后才可加载' });
         }
         return save({ ...record, status: record.status === 'loaded' ? 'unknown' : record.status, reason: '执行机当前状态与此制品不匹配，不能证明已加载' });
       } catch (error) {
+        const current = get(id);
+        if (current.status !== record.status) return current;
         return save({ ...record, status: record.status === 'loaded' ? 'unknown' : record.status, reason: error instanceof Error ? error.message : '无法获取执行机状态' });
       }
     },

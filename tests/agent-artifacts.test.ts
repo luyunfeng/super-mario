@@ -157,7 +157,11 @@ test('service stage → explicit SHA approval → fake-node deployment; immutabl
   assert.throws(() => f.service.approve(first.id, { sha256: '0'.repeat(64) }), /SHA256/);
   assert.equal(f.count(), 0);
   f.service.approve(first.id, { sha256: first.manifest.sha256 });
-  const loaded = await f.service.deploy(first.id);
+  const earlierCheck = f.service.status(first.id);
+  const loading = f.service.deploy(first.id);
+  assert.equal((await f.service.status(first.id)).status, 'deploying');
+  assert.ok(['deploying','loaded'].includes((await earlierCheck).status));
+  const loaded = await loading;
   assert.equal(loaded.status, 'loaded');
   assert.deepEqual(await f.service.call(first.id, { method: 'x.probe.echo', params: { text: 'gateway' } }), { echo: 'gateway' });
   assert.equal((await f.service.status(first.id)).status, 'loaded');

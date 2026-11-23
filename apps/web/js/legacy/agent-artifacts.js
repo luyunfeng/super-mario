@@ -107,7 +107,7 @@ export function createAgentArtifactsUI({ api, element, onChanged }) {
       }
     } catch (cause) {
       if (epoch !== generation || request !== writing) return;
-      error.textContent = `操作失败：${cause.message || String(cause)}。不会自动重试；请核查电脑状态。`;
+      error.textContent = `未收到成功回执：${cause.message || String(cause)}。不会自动重试；请核查电脑状态。`;
       notice.textContent = '';
       await load(epoch);
     } finally {
