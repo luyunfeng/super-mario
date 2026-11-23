@@ -5,7 +5,7 @@ import type { Todo } from '../../../packages/protocol/src/index.ts';
 export type TopicAudience = { binding: string; grant: string; chatId: string; threadId: string };
 type Input = TopicAudience & { messageId: string; root: boolean; command: boolean; words: string };
 type Turn = { todoId: string; opening: boolean; words: string };
-type Receipt = { topic: string; turn?: Turn };
+type Receipt = { topic: string; turn?: Turn; hinted?: boolean };
 const threads = 'feishu.topic-todos', receipts = 'feishu.topic-turns';
 
 function key(parts: string[]) {
@@ -48,7 +48,7 @@ export function createTopicTurns(store: Pick<Store, 'get' | 'put' | 'transaction
       if (todoId) {
         const todo = store.get<Todo>('todos', todoId);
         if (!todo || todo.completedAt) {
-          store.put(receipts, event, { topic: id } satisfies Receipt);
+          store.put(receipts, event, { topic: id, ...(old && { hinted: true }) } satisfies Receipt);
           return;
         }
       }
@@ -71,5 +71,20 @@ export function createTopicTurns(store: Pick<Store, 'get' | 'put' | 'transaction
       return turn;
     });
   }
-  return { accept, bindHome, todoFor };
+  function hint(a: TopicAudience, messageId: string, explicit: boolean, empty: boolean) {
+    const id = topic(a), event = key([a.binding, a.chatId, messageId]);
+    return store.transaction(() => {
+      const receipt = store.get<Receipt>(receipts, event);
+      if (!id || !receipt || receipt.topic !== id || receipt.turn || receipt.hinted) return;
+      store.put(receipts, event, { ...receipt, hinted: true });
+      const todo = todoFor(a), done = todo && store.get<Todo>('todos', todo)?.completedAt;
+      if (todo && !done) return;
+      const now = Date.now(), previous = store.get<number>('feishu.topic-hints', id);
+      if (!explicit && previous !== undefined && now - previous < 600_000) return;
+      store.put('feishu.topic-hints', id, now);
+      if (done) return '这个话题的待办已完成。要继续办理，可在 Web 重新打开待办。';
+      return explicit && empty ? '请在 /ai 后写下要办理的任务。' : '这个话题还没有待办。请发送 /ai 加任务说明。';
+    });
+  }
+  return { accept, bindHome, todoFor, hint };
 }

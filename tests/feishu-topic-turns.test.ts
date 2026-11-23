@@ -66,3 +66,20 @@ test('主群新话题可幂等绑定已存在待办，冲突或丢失的待办�
   assert.equal(turns.accept({ ...message, root: true, messageId: 'deleted' }), undefined);
   assert.equal(store.list('todos').length, 1);
 });
+
+test('未绑定和已结待办回复用法；相同消息不重复提示，普通跟进共用冷却期', t => {
+  const { store, turns, other } = fixture(t);
+  const notice = (id: string, command: boolean) => {
+    other.accept({ ...message, messageId: id, command, words: command ? '' : '继续' });
+    return turns.hint(a, id, command, command);
+  };
+  assert.match(notice('first', false)!, /还没有待办/);
+  assert.equal(notice('second', false), undefined);
+  assert.match(notice('empty', true)!, /写下/);
+  assert.equal(notice('empty', true), undefined);
+  const opened = turns.accept({ ...message, messageId: 'opened', root: true })!;
+  store.put('todos', opened.todoId, { id: opened.todoId, completedAt: '2026-01-01T00:00:00Z' });
+  assert.equal(notice('opened', false), undefined);
+  assert.match(notice('finished', true)!, /已完成/);
+  assert.equal(store.list('todos').length, 1);
+});

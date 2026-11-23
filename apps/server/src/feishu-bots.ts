@@ -2009,7 +2009,18 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const turn = topicTurns.accept({ binding: topicBindingKey, grant, chatId: source.chatId, threadId: source.threadId,
         messageId: source.messageId, root: !source.rootId || source.rootId === source.messageId,
         words: task ? task.task : words, command: !!task });
-      if (!turn) return;
+      if (!turn) {
+        const notice = topicTurns.hint({ binding: topicBindingKey, grant, chatId: source.chatId, threadId: source.threadId },
+          source.messageId, !!task, !(task ? task.task : words).trim());
+        const adapter = runtime(bot.id).adapter;
+        if (notice && adapter) await sendTaskMessage(bot, adapter, source.chatId, notice, source.messageId,
+          digest([topicBindingKey, source.messageId, 'hint']).slice(0, 32), () => {
+            if (!active(bot.id, epoch, bot.revision) || topics.grant(topicBindingKey, source.chatId) !== grant ||
+              (topics.read(topicBindingKey).items.find(item => item.chatId === source.chatId)?.requireOwnerMention && !source.mentionedSelf))
+              throw noDelivery('话题授权已变化。');
+          }, source.threadId);
+        return;
+      }
       await postTopicTurn(bot, source, { todoId: turn.todoId, opening: turn.opening, grant }, turn.words);
       return;
     }
