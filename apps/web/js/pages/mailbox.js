@@ -60,6 +60,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
   const archiveSelected=Button({label:'归档待处理',onClick:()=>bulk('archive'),size:'sm'});
   const reopenSelected=Button({label:'恢复已归档',onClick:()=>bulk('reopen'),size:'sm'});
   let dueDrawer,singleFailure;
+  const singleWrites=new Map();
   const eligibleForTodo=row=>!row.archivedAt && !row.todoId;
   const todoSelected=Button({label:'转为待办',size:'sm',onClick:()=>chooseDue()});
   const selectedCount=h('span',{class:'small',role:'status'});
@@ -145,7 +146,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     // A new write supersedes the previous undo, including when its outcome is unknown.
     lastArchive=undefined;
     const singleId=todo?.singleId;
-    if(singleId) {pending.add(singleId);singleFailure=undefined;}
+    if(singleId) {singleWrites.set(singleId,items);pending.add(singleId);singleFailure=undefined;}
     bulkBusy=true;bulkMessage='正在保存…';paint();
     try {
       const result=await api.post('/inbox/bulk',{action,items,...todo?.due});
@@ -177,7 +178,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
           if(current() && store.view.loadError) bulkMessage+=' 最新记录读取失败。';
         } catch {if(current()) bulkMessage+=' 最新记录读取失败。';}
       }
-      if(singleId && owner===api.draftOwner()) pending.delete(singleId);
+      if(singleWrites.get(singleId)===items) {singleWrites.delete(singleId);pending.delete(singleId);}
       if(current()) {snapshot=store.view.snapshot;bulkBusy=false;paint();}
     }
   }
@@ -467,7 +468,9 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     const owner = api.draftOwner();
     if (detailOwner !== owner || view.unauthorized || !view.snapshot || view.snapshotOwner !== owner) {
       detailOwner = owner;
-      lastArchive=undefined;singleFailure=undefined;pending.clear();uncertain.clear();clearSelection();
+      lastArchive=undefined;singleFailure=undefined;
+      for(const id of singleWrites.keys()) pending.delete(id);
+      singleWrites.clear();clearSelection();
       drawer?.close();
       translation?.clear();
       mailbox = []; deliveries = []; updated.clear(); drafts.clear(); mailboxOwner = undefined;
