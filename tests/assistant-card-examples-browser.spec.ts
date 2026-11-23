@@ -139,6 +139,19 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await expect(form.getByRole('status')).toHaveText('收到：修订评审');
   const endpoint=server.url+'/api/v1/plugin-forms/review/notes';
   assert.equal((await page.request.post(endpoint,{data:{note:' '}})).status(),400);
+  let received=0;
+  await page.route(endpoint,async route=>{
+    const response=await route.fetch();
+    assert.equal(response.status(),200);
+    received++;
+    await route.abort('failed');
+  });
+  await form.getByLabel('备注').fill('回执中断的评审');
+  await form.getByRole('button',{name:'提交'}).click();
+  await expect(form.getByRole('status')).toContainText('提交结果待核对');
+  await expect(form.getByRole('button',{name:'提交'})).toBeDisabled();
+  await form.locator('form').evaluate(el=>(el as HTMLFormElement).requestSubmit());
+  assert.equal(received,1);
   const stopped=await page.request.post(server.url+'/api/v1/plugins/review',{data:{enabled:false}});
   assert.equal(stopped.status(),200);
   assert.equal((await page.request.post(endpoint,{data:{note:'旧页提交'}})).status(),404);

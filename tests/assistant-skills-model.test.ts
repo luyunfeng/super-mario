@@ -5110,6 +5110,8 @@ test('Web 和飞书询问插件图表时收到实际读数与示例的范围指�
   const {server,api,ask}=await fixture(t,request=>{
     assert.match(request.system,/插件自己的补丁或图表.*按卡片标题查找/);
     assert.match(request.system,/提供相关行或补丁片段，勿引用内置示例数字作答/);
+    assert.match(request.system,/点击提交后交给所属插件处理.*仅显示“已提交”时只能确认提交/);
+    assert.match(request.system,/提交结果待核对.*核对插件业务记录/);
     return {role:'assistant',content:answer};
   },options=>{
     adapter=options;
