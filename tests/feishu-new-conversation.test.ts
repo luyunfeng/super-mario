@@ -332,6 +332,7 @@ test('飞书为独立会话改选模型，固定主会话和其他独立会话�
   assert.ok(f.sent.at(-1)?.text.includes('当前模型 · ' + selected));
   assert.match(f.sent.at(-1)!.text, /独立对话模型目录 · 选型甲/);
   const threadUrl = (id:string) => 'https://workbench.example/#' + ['agent','private-thread',a.row.id,id].map(encodeURIComponent).join('/');
+  assert.ok(f.sent.at(-1)!.text.endsWith(threadUrl(one.threadId)));
   assert.ok(JSON.stringify(f.sent.at(-1)?.context?.card).includes(JSON.stringify(threadUrl(one.threadId))));
   await a.receive('/modellist', 'inspect-active');
   assert.ok(JSON.stringify(f.sent.at(-1)?.context?.card).includes(JSON.stringify(threadUrl(two.threadId))));
