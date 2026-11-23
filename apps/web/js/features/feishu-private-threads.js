@@ -29,6 +29,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     onClose() { loadId++; childEditor?.close(); unsubscribe(); onClose(closeReason); } });
   let archived = false;
   let query = '';
+  let speaker = '';
   let selectedTag = '';
   // Keep loaded search pages when returning from a message. A write invalidates the cache.
   let searchPage;
@@ -46,6 +47,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     if (enabled === searchEnabled) return;
     searchEnabled = enabled;
     query = '';
+    speaker = '';
     searchPage = undefined;
     if (showingList) void list();
     else if (!enabled) {
@@ -150,6 +152,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     const results = h('div', { class: 'stack', 'aria-live': 'polite' });
     const search = (text, scope) => {
       query = text.trim();
+      if (!query) speaker = '';
       archived = scope;
       searchPage = undefined;
       return list();
@@ -160,6 +163,11 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     select.addEventListener('change', () => {
       selectedTag = select.value;
       void search(input.value, archived);
+    });
+    const speakerSelect = Select({ options: [['', '全部'], ['user', '我'], ['assistant', '助手']], value: speaker });
+    speakerSelect.addEventListener('change', () => {
+      speaker = speakerSelect.value;
+      void search(query, archived);
     });
     const tagFilter = Field({ label: '筛选标签', control: select });
     let tagState;
@@ -206,6 +214,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     replace(body, notice && h('p', { role: 'status' }, notice), h('div', { class: 'row' }, filter(false), filter(true), sort), tagFilter, manage,
       searchEnabled ? h('form', { class: 'stack', onsubmit: event => { event.preventDefault(); void search(input.value, archived); } },
         Field({ label: '搜索独立对话', control: input }),
+        query && Field({ label: '筛选发言人', control: speakerSelect }),
         h('div', { class: 'row' }, Button({ label: '搜索', type: 'submit' }),
           query && Button({ label: '清除搜索', onClick: () => search('', archived) })))
         : h('p', { class: 'muted' }, '对话历史搜索插件已停用。'), results);
@@ -224,6 +233,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       page.loading = true;
       page.error = '';
       const params = new URLSearchParams({ q: query, archived: archived ? '1' : '0' });
+      if (speaker) params.set('role', speaker);
       if (selectedTag) params.set('tag', selectedTag);
       if (page.nextBefore) params.set('before', page.nextBefore);
       const visible = () => current(id) && searchEnabled && expanded.get(row.threadId) === page;
@@ -297,6 +307,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
           return;
         }
         params.set('q', query);
+        if (speaker) params.set('role', speaker);
         params.set('archived', archived ? '1' : '0');
         if (before) params.set('before', before);
         const page = await api.get(base + '/search?' + params);

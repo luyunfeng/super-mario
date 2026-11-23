@@ -170,7 +170,7 @@ export async function createWorkbench(config: AppConfig) {
   let feishuPinReader: FeishuPinReader | undefined;
   let feishuHistoryReader: FeishuHistoryReader | undefined;
   let groupReadRecords: ((id: string, before?: string, sourceId?: string, recordId?: string) => GroupReadPage) | undefined;
-  let privateSearch: ((id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string, threadId?: string) => Json) | undefined;
+  let privateSearch: ((id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string, threadId?: string, role?: 'user' | 'assistant') => Json) | undefined;
   let privateExport: ((botId: string, threadId: string) => { title: string; messages: Message[] }) | undefined;
   let privateConversation: ((botId: string, threadId: string, action: 'read' | 'update', input: JsonObject) => Json) | undefined;
   let botRelay: ((input: { sourceBotId: string; targetBotId: string; text: string; key: string; parentEntryId?: string; chatId?: string; sourceMessageId?: string }) => Promise<import('../../protocol/src/bots.ts').MailboxEntry>) | undefined;
@@ -3048,13 +3048,14 @@ export async function createWorkbench(config: AppConfig) {
   }
   function searchPrivateConversations(args: Json): Json {
     if (!args || typeof args !== 'object' || Array.isArray(args) || (args.query !== undefined && typeof args.query !== 'string')
-      || Object.keys(args).some(key => !['query', 'botId', 'archived', 'before', 'tag', 'threadId'].includes(key))
+      || Object.keys(args).some(key => !['query', 'botId', 'archived', 'before', 'tag', 'threadId', 'role'].includes(key))
+      || (args.role !== undefined && (!args.query?.trim() || (args.role !== 'user' && args.role !== 'assistant')))
       || (args.threadId !== undefined && (typeof args.threadId !== 'string' || !args.query || !/^[a-f0-9]{64}$/.test(args.threadId)))
       || (args.archived !== undefined && typeof args.archived !== 'boolean') || (args.before !== undefined && typeof args.before !== 'string')
       || (args.botId !== undefined && typeof args.botId !== 'string') || (args.tag !== undefined && typeof args.tag !== 'string')) throw new InputError('独立对话检索参数无效');
     if (!privateSearch) throw new InputError('当前输入无法检索机器人独立对话', 403);
     const caller = ownerHistoryCaller(args.botId, '检索该机器人的独立对话');
-    return privateSearch(caller.botId, args.query, args.archived === true, args.before ?? null, caller.sourceId, args.tag, args.threadId);
+    return privateSearch(caller.botId, args.query, args.archived === true, args.before ?? null, caller.sourceId, args.tag, args.threadId, args.role);
   }
   // The server checks the persisted private input against the current pairing again when it reads the records.
   function ownerHistoryCaller(botId: string | undefined, operation: string) {

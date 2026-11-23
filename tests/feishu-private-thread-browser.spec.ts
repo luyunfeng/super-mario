@@ -231,6 +231,14 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await expect(drawer.locator('section').filter({hasText:'命中消息'})).toContainText('较新的记录 0');
   await drawer.getByRole('button', {name:'返回列表'}).click();
   await expect(drawer.locator('button mark')).toHaveCount(44);
+  const speaker = drawer.getByLabel('筛选发言人');
+  await speaker.selectOption('user');
+  await drawer.getByRole('button', {name:'查看全部匹配发言'}).click();
+  await expect(drawer).toContainText('共匹配 22 条发言，已显示 20 条');
+  await drawer.getByRole('button', {name:'加载更多匹配发言'}).click();
+  await expect(drawer.locator('button mark')).toHaveCount(22);
+  await expect(drawer.getByRole('button', {name:/助手.*较新的记录/})).toHaveCount(0);
+  await speaker.selectOption('');
   const historicalReply=server.app.store.list<Message>('messages').find(m=>m.role==='assistant' && m.text.includes(keyword))!;
   server.app.store.put('messages',historicalReply.id,{...historicalReply,status:'failed'});
   await drawer.getByRole('textbox', { name: '搜索独立对话' }).fill(keyword);

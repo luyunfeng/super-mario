@@ -92,7 +92,9 @@ export function readPrivateThreadHistory(store: Pick<Store, 'get' | 'list'>, row
   return archived ? items : inPreferredOrder(items, order);
 }
 
-function privateSearchPattern(query: string) {
+function privateSearchPattern(query: string, role?: string) {
+  if (role !== undefined && role !== 'user' && role !== 'assistant')
+    throw Object.assign(new Error('发言人须为 user 或 assistant'), { status: 400 });
   if (typeof query !== 'string' || !query.trim() || query.length > 500)
     throw Object.assign(new Error('检索词须为 1 至 500 个字符'), { status: 400 });
   return new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
@@ -107,8 +109,8 @@ function privateSearchHit({ id, role, text, createdAt, status }: Message, match:
   return { id, role, excerpt: text.slice(start, end), matchStart:match.index-start, matchEnd:match.index-start+match[0].length, truncated: start > 0 || end < text.length, omittedBefore:start>0, omittedAfter:end<text.length, status: status ?? null, createdAt };
 }
 
-export function searchPrivateThreadHits(store: Pick<Store, 'get' | 'list'>, row: PrivateThread, query: string, archived: boolean, before: string | null, tag?: string) {
-  const pattern = privateSearchPattern(query);
+export function searchPrivateThreadHits(store: Pick<Store, 'get' | 'list'>, row: PrivateThread, query: string, archived: boolean, before: string | null, tag?: string, role?: string) {
+  const pattern = privateSearchPattern(query, role);
   if ((row.archived === true) !== archived || (tag && !row.tags?.includes(tag)))
     throw Object.assign(new Error('对话归档状态或标签已变化，请重新搜索'), { status: 409 });
   const list = threadMessages(store, [row]).get(row.threadId) ?? [];
@@ -116,6 +118,7 @@ export function searchPrivateThreadHits(store: Pick<Store, 'get' | 'list'>, row:
   let hitCount = 0, more = false, pastCursor = before === null;
   for (let i = list.length - 1; i >= 0; i--) {
     const message = list[i];
+    if (role && message.role !== role) continue;
     const match = pattern.exec(message.text);
     if (!match) continue;
     hitCount++;
@@ -130,20 +133,21 @@ export function searchPrivateThreadHits(store: Pick<Store, 'get' | 'list'>, row:
   return { hits, hitCount, nextBefore: more ? hits.at(-1)!.id : null };
 }
 
-function* matchingThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived: boolean, tag?: string) {
-  const pattern = privateSearchPattern(query);
+function* matchingThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived: boolean, tag?: string, role?: string) {
+  const pattern = privateSearchPattern(query, role);
   for (const { info, list } of historyEntries(store, rows, archived, tag)) {
     const titleMatch = pattern.test(info.title);
     const hits = [];
     let hitCount = 0;
     for (let i = list.length - 1; i >= 0; i--) {
+      if (role && list[i].role !== role) continue;
       const match = pattern.exec(list[i].text);
       if (!match) continue;
       hitCount++;
       if (hits.length < 3) hits.push(privateSearchHit(list[i], match));
     }
     const matchedTags = info.tags.filter(label => pattern.test(label));
-    if (hits.length || titleMatch || matchedTags.length) yield { ...info, titleMatch, ...(matchedTags.length && {matchedTags}), hitCount, hits };
+    if (hits.length || (!role && (titleMatch || matchedTags.length))) yield { ...info, titleMatch, ...(matchedTags.length && {matchedTags}), hitCount, hits };
   }
 }
 
@@ -162,10 +166,10 @@ export function searchPrivateThreadList(store: Pick<Store, 'get' | 'list'>, rows
   return {threads:inPreferredOrder(threads,order), snippets, messageIds};
 }
 
-export function searchPrivateThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived = false, before: string | null = null, tag?: string) {
+export function searchPrivateThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived = false, before: string | null = null, tag?: string, role?: string) {
   const items = [];
   let pastCursor = before === null;
-  for (const info of matchingThreads(store, rows, query, archived, tag)) {
+  for (const info of matchingThreads(store, rows, query, archived, tag, role)) {
     if (!pastCursor) {
       pastCursor = info.threadId === before;
       continue;

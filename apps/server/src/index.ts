@@ -542,11 +542,13 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             if (params.has('around') || params.has('after') || params.getAll('before').length > 1)
               throw new InputError('搜索仅支持一个 before 游标');
             if (!['0', '1'].includes(params.get('archived') ?? '0')) throw new InputError('归档筛选值无效');
+            if (params.getAll('role').length > 1) throw new InputError('发言人筛选不可重复');
+            const role = params.get('role') ?? undefined;
             if (botThreads[2] !== 'search') {
               const row = bots.requireThread(id, botThreads[2].split('/')[0]);
-              return json(res, 200, searchPrivateThreadHits(app.store, row, params.get('q') ?? '', params.get('archived') === '1', params.get('before'), tag));
+              return json(res, 200, searchPrivateThreadHits(app.store, row, params.get('q') ?? '', params.get('archived') === '1', params.get('before'), tag, role));
             }
-            return json(res, 200, searchPrivateThreads(app.store, bots.privateThreads(id), params.get('q') ?? '', params.get('archived') === '1', params.get('before'), tag));
+            return json(res, 200, searchPrivateThreads(app.store, bots.privateThreads(id), params.get('q') ?? '', params.get('archived') === '1', params.get('before'), tag, role));
           }
           const row = bots.requireThread(id, botThreads[2]);
           if (['before', 'after', 'around'].some(key => params.getAll(key).length > 1)) throw new InputError('消息位置不可重复');
