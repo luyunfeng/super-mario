@@ -139,7 +139,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     openThreadId = undefined;
     listNotice = notice;
     const id = ++loadId;
-    const input = Input({ value: query, type: 'text', maxLength: 500 });
+    const input = Input({ value: query, type: 'text', maxLength: 500, placeholder:'标题、标签或发言正文' });
     const results = h('div', { class: 'stack', 'aria-live': 'polite' });
     const search = (text, scope) => {
       query = text.trim();
@@ -206,6 +206,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     function showResults() {
       const items = searchPage.items;
       replace(results, items.length ? items.map(row => h('div', { class: 'stack' }, openThread(row),
+        row.matchedTags?.length && h('span', {class:'small muted'}, '匹配标签：' + row.matchedTags.join('、')),
         row.titleMatch && h('span', { class: 'small muted' }, '标题匹配'),
         row.hits.map(hit => h('button',{type:'button',class:'btn btn--secondary btn--sm',onclick:()=>detail(row,'',undefined,hit.id)},
           historyMessageLabel(hit),' · ',hit.omittedBefore?'…':'',hit.excerpt.slice(0,hit.matchStart),

@@ -91,7 +91,7 @@ export function readPrivateThreadHistory(store: Pick<Store, 'get' | 'list'>, row
   return archived ? items : inPreferredOrder(items, order);
 }
 
-function* matchingThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived: boolean, tag?: string, includeTags = false) {
+function* matchingThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived: boolean, tag?: string) {
   if (typeof query !== 'string' || !query.trim() || query.length > 500)
     throw Object.assign(new Error('检索词须为 1 至 500 个字符'), { status: 400 });
   const pattern = new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
@@ -109,13 +109,14 @@ function* matchingThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThrea
       if (end < text.length && /[\uDC00-\uDFFF]/.test(text[end])) end++;
       hits.push({ id, role, excerpt: text.slice(start, end), matchStart:match.index-start, matchEnd:match.index-start+match[0].length, truncated: start > 0 || end < text.length, omittedBefore:start>0, omittedAfter:end<text.length, status: status ?? null, createdAt });
     }
-    if (hits.length || titleMatch || (includeTags && info.tags.some(label => pattern.test(label)))) yield { ...info, titleMatch, hits };
+    const matchedTags = info.tags.filter(label => pattern.test(label));
+    if (hits.length || titleMatch || matchedTags.length) yield { ...info, titleMatch, ...(matchedTags.length && {matchedTags}), hits };
   }
 }
 
 export function searchPrivateThreadList(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, order:string[] = []) {
   const threads = [], snippets: Record<string,string> = Object.create(null), messageIds: Record<string,string> = Object.create(null);
-  for (const { hits, titleMatch, ...thread } of matchingThreads(store, rows, query, false, undefined, true)) {
+  for (const { hits, titleMatch, ...thread } of matchingThreads(store, rows, query, false)) {
     threads.push(thread);
     const first = hits[0];
     if (first) {
