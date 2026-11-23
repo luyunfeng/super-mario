@@ -79,6 +79,7 @@ export function createWebImageExport({api,source,redraw}) {
         replace(output,pages.map((blob,i)=>{
           const label='第 '+(i+1)+' 页';
           return h('section',{class:'stack'},h('img',{src:urls[i],alt:'PNG 预览 '+label,style:{maxWidth:'100%',height:'auto'}}),
+            pages.length>1 && h('small',{class:'muted'},label+'，共 '+pages.length+' 页'),
             h('div',{class:'row row--wrap'},Button({label:'复制'+label,size:'sm',onClick:async()=>{
               if(!valid())return;
               try{await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);if(valid())status.textContent='已复制'+label+'。';}

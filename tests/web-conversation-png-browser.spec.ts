@@ -52,6 +52,8 @@ test('独立对话跨页选消息，附上原提问后预览、复制和下载 P
   await drawer.getByLabel('显示对话标题').uncheck();await drawer.getByLabel('显示日期').uncheck();
   const image=drawer.getByAltText('PNG 预览 第 1 页',{exact:true});
   await expect(image).toBeVisible();await expect(drawer.getByAltText('PNG 预览 第 2 页',{exact:true})).toBeVisible();
+  const pageCount=await drawer.locator('img').count();
+  await expect(drawer.getByText('第 2 页，共 '+pageCount+' 页',{exact:true})).toBeVisible();
   await drawer.getByRole('button',{name:'复制第 1 页'}).click();
   await expect.poll(()=>page.evaluate(async()=>(await navigator.clipboard.read()).some(item=>item.types.includes('image/png')))).toBe(true);
   const downloading=page.waitForEvent('download');await drawer.getByRole('button',{name:'下载第 2 页',exact:true}).click();
