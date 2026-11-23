@@ -19,7 +19,7 @@ function shareChart(card) {
     if (share > 0) {
       const start = end;
       end += share * 100;
-      stops.push(color + ' ' + start + '% ' + end + '%');
+      stops.push(color + ' ' + start + '%', color + ' ' + end + '%');
     }
     const percent = share > 0 && share < 0.01 ? '<1%' : Math.round(share * 1000) / 10 + '%';
     return h('tr',{},h('th',{scope:'row'},h('span',{'aria-hidden':'true',style:{color}},'● '),point.label),
