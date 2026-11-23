@@ -8,7 +8,7 @@ export type GroupTaskReportSource = {
   botId: string; appId: string; binding: string; chatId: string; messageId: string;
   todoId: string; privateMessageId: string; senderId: string;
 };
-type Source = Partial<GroupTaskReportSource> & { handedOff?: boolean; recalled?: boolean };
+type Source = Partial<GroupTaskReportSource> & { delivery?: string; handedOff?: boolean; recalled?: boolean };
 type Route = {
   delayMinutes?: number;
   preview(text: string, guard: () => void): Promise<string>;
@@ -17,7 +17,7 @@ type Route = {
 type Report = {
   status: 'planned' | 'previewUnknown' | 'sendUnknown' | 'sent' | 'cancelled' | 'failed';
   completedAt?: string; text?: string; due?: number; previewId?: string; sentId?: string;
-  previewAttempts?: number; sendAttempts?: number; stopRequested?: boolean;
+  previewAttempts?: number; sendAttempts?: number; stopRequested?: boolean; cancelledBeforePreview?: true; previewUncertain?: true; homePreviewCompletedAt?: string;
 };
 const collection = 'feishu.group-task-reports';
 const sources = 'feishu.group-tasks';
@@ -74,6 +74,34 @@ export function createGroupTaskReports(store: Pick<Store, 'get' | 'list' | 'put'
     if (text) return { completedAt, text: publicLine(text) };
   }
 
+  function homeCompletionNeeded(source: GroupTaskReportSource): boolean {
+    if (closed || !source?.homeChatId || !source.homeGrant || !source.homeThreadId) return false;
+    const key = keyFor(source), raw = store.get<Source>(sources, key);
+    const saved = raw?.handedOff === true && raw.delivery === 'confirmed' && sourceOf(raw);
+    if (!saved || !saved.homeChatId || !saved.homeGrant || !saved.homeThreadId ||
+      !Object.entries(saved).every(([field, value]) => source[field as keyof GroupTaskReportSource] === value)) return false;
+    const todo = store.get<Todo>('todos', saved.todoId);
+    if (todo?.id !== saved.todoId || todo.projectId !== undefined || !todo.completedAt) return false;
+    const age = now() - Date.parse(todo.completedAt);
+    if (!(age >= 0 && age <= week)) return false;
+    const route = options.lookup(saved);
+    if (!route) return false;
+    const report = read(key);
+    if (!report) return route.delayMinutes === 0;
+    if (report.homePreviewCompletedAt === todo.completedAt) return false;
+    // Terminal original-group reports never restart for a later completion.
+    if (report.completedAt && report.completedAt !== todo.completedAt)
+      return report.status !== 'planned' || route.delayMinutes === 0;
+    // Historical cancelled rows may lack a generation. A known preview, or an ambiguous
+    // cancellation without pre-preview evidence, cannot justify another home-topic post.
+    if (report.previewId || report.due !== undefined || report.status === 'previewUnknown' || report.previewUncertain) return false;
+    if (report.status === 'cancelled') return report.cancelledBeforePreview === true;
+    if (report.status === 'planned') return route.delayMinutes === 0;
+    // sent/sendUnknown were claimed after skipping the preview; failed records represent definite non-delivery.
+    return report.completedAt === todo.completedAt &&
+      (report.status === 'sent' || report.status === 'sendUnknown' || report.status === 'failed');
+  }
+
   async function step(source: GroupTaskReportSource) {
     const key = keyFor(source);
     let report = read(key);
@@ -83,11 +111,14 @@ export function createGroupTaskReports(store: Pick<Store, 'get' | 'list' | 'put'
       // A reopened task or corrected outcome needs a fresh private preview and a full cancellation window.
       const reset = store.transaction(() => {
         if (JSON.stringify(read(key)) !== JSON.stringify(report)) return false;
-        store.put(collection, key, { status: 'planned' } satisfies Report);
+        // Updating the public outcome may replace the plan within the same generation.
+        // Keep the fact that its home topic already received a completion preview.
+        const homePreviewCompletedAt = report!.homePreviewCompletedAt ?? (report!.previewId ? report!.completedAt : undefined);
+        store.put(collection, key, { status: 'planned', ...(homePreviewCompletedAt && { homePreviewCompletedAt }) } satisfies Report);
         return true;
       });
       if (!reset) return;
-      report = { status: 'planned' };
+      report = read(key);
     }
     if (!result || closed) return;
     const route = options.lookup(source);
@@ -129,7 +160,8 @@ export function createGroupTaskReports(store: Pick<Store, 'get' | 'list' | 'put'
         if (read(key)?.status !== status) return;
         if (preview) {
           const due = now() + delay * minute;
-          store.put(collection, key, { ...claim, status: 'planned', due, previewId: id });
+          store.put(collection, key, { ...claim, status: 'planned', due, previewId: id,
+            ...(source.homeChatId && { homePreviewCompletedAt: result.completedAt }) });
           wake(due);
         } else store.put(collection, key, { ...claim, status: 'sent', sentId: id });
       });
@@ -139,7 +171,11 @@ export function createGroupTaskReports(store: Pick<Store, 'get' | 'list' | 'put'
         store.transaction(() => {
           const state = read(key);
           if (state?.status !== status) return;
-          if (state.stopRequested) { store.put(collection, key, { ...state, status: 'cancelled' }); return; }
+          if (state.stopRequested) {
+            store.put(collection, key, { ...state, status: 'cancelled',
+              ...(!state.previewId && state.due === undefined && { cancelledBeforePreview: true }) } satisfies Report);
+            return;
+          }
           const attempts = (preview ? claim.previewAttempts : claim.sendAttempts) ?? 1;
           store.put(collection, key, { ...claim, status: attempts < 2 ? 'planned' : 'failed' });
         });
@@ -177,9 +213,11 @@ export function createGroupTaskReports(store: Pick<Store, 'get' | 'list' | 'put'
         return 'unknown' as const;
       }
       if (prior?.status === 'cancelled') return 'already' as const;
-      store.put(collection, key, { status: 'cancelled', previewId: prior?.previewId } satisfies Report);
+      store.put(collection, key, { ...prior, status: 'cancelled',
+        ...(prior?.status === 'previewUnknown' ? { previewUncertain: true } :
+          !prior?.previewId && prior?.due === undefined ? { cancelledBeforePreview: true } : {}) } satisfies Report);
       return 'cancelled' as const;
     });
   }
-  return { sweep, cancel, close() { closed = true; if (timer) clearTimeout(timer); return sweeping ?? Promise.resolve(); } };
+  return { sweep, cancel, homeCompletionNeeded, close() { closed = true; if (timer) clearTimeout(timer); return sweeping ?? Promise.resolve(); } };
 }

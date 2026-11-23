@@ -1913,6 +1913,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   // Opening routes already contain durable authority for existing topics. Index only their IDs.
   // External /ai handoffs have a separate preview, deadline and cancellation path.
   const openingInputs = new Map<string, string | null>();
+  // Web can complete a newly created todo while its home message/thread is still being confirmed.
+  const pendingHome = new Map<string, { changed: boolean }>();
   function indexOpening(route: Routed) {
     if (route.channel !== 'feishu' || !route.topic?.opening || !route.inputId) return;
     const old = openingInputs.get(route.topic.todoId);
@@ -1950,12 +1952,6 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         || live.threadId !== source.threadId) throw noDelivery('原话题连接已变化。');
     }, source.threadId, true);
   }
-  const topicCompletions = createTopicCompletions(app.store, {
-    resolve(todoId) {
-      const opening = resolveTopicPost(todoId);
-      if (opening && !app.store.get<Routed>('message.routes', opening.inputId)?.topic?.externalSource) return opening;
-    }, send: sendTopicPost,
-  });
   function currentWebDecision(id: string) {
     if (app.workDecisions) return webTopicDecision(app.store, app.workDecisions.ledger.get,
       { type: 'work.decision.recorded', data: { id, version: 1, status: 'active' } });
@@ -1997,6 +1993,25 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         preview: (text, guard) => sendTaskMessage(bot, adapter, source.homeChatId ?? paired.chatId, text, source.privateMessageId, key('preview', text), checked(guard), source.homeThreadId),
         send: (text, guard) => sendTaskMessage(bot, adapter, source.chatId, text, source.messageId, key('result', text), checked(guard)) };
     },
+  });
+  const topicCompletions = createTopicCompletions(app.store, {
+    resolve(todoId) {
+      const inputId = openingInputs.get(todoId);
+      if (!inputId) return;
+      try {
+        const opening = openingSource(todoId, inputId);
+        if (!opening) return;
+        const external = opening.topic.externalSource;
+        if (!external) return { inputId };
+        const { bot, paired, route, threadId, messageId, topic } = opening;
+        if (!route.target || !paired.senderId || external.chatId === route.target) return;
+        if (taskReports.homeCompletionNeeded({ botId: bot.id, appId: bot.appId, senderId: paired.senderId,
+          binding: groupReadBinding(bot, paired), todoId, chatId: external.chatId, messageId: external.messageId,
+          homeChatId: route.target, privateMessageId: messageId, homeThreadId: threadId, homeGrant: topic.grant }))
+          return { inputId, homeHandoff: true };
+      } catch { /* The topic or its authorizing handoff is no longer current. */ }
+    },
+    send: sendTopicPost,
   });
   let reportTimer: ReturnType<typeof setInterval> | undefined;
   const sweepReports = () => { if (!closed) void taskReports.sweep().catch(error => { if (!closed) app.events.publish('feishu.changed', { reason: redact(error) }); }); };
@@ -2060,13 +2075,24 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         if (topics.grant(binding, target.chatId) !== target.grant || !topics.read(binding).items.some(item => item.chatId === target.chatId && item.home))
           throw noDelivery('主话题群登记已变化。');
       };
+      let joining: string | undefined;
+      function beginHome(todoId: string) {
+        if (joining) return;
+        joining = todoId;
+        pendingHome.set(todoId, { changed: false });
+      }
       await groupTasks.open(bot.id, bot.appId, binding, { ...source, ...(quote && { quotedText: quote }), ...(home && { home }) }, task.task, check,
-        (todo, original) => original.home ? sendTaskMessage(bot, adapter, original.home.chatId,
-          '来自群内 /ai 的任务：' + original.request.slice(0, 1200) + (original.quote ? '\n群内引用（仅作背景）：' + original.quote : ''),
-          undefined, digest([binding, todo.id, 'home']).slice(0, 32), () => homeGuard(original.home!), undefined, true) : send(initialOwner.chatId, '已从群消息建立待办「' + todo.title + '」。后续讨论在此私聊继续。待办编号 ' + todo.id),
-        text => send(source.chatId, text, source.messageId), async (todo, anchorId, original) => {
+        (todo, original) => {
+          const target = original.home;
+          if (!target) return send(initialOwner.chatId, '已从群消息建立待办「' + todo.title + '」。后续讨论在此私聊继续。待办编号 ' + todo.id);
+          beginHome(todo.id);
+          return sendTaskMessage(bot, adapter, target.chatId,
+            '来自群内 /ai 的任务：' + original.request.slice(0, 1200) + (original.quote ? '\n群内引用（仅作背景）：' + original.quote : ''),
+            undefined, digest([binding, todo.id, 'home']).slice(0, 32), () => homeGuard(target), undefined, true);
+        }, text => send(source.chatId, text, source.messageId), async (todo, anchorId, original) => {
           check();
           if (original.home) {
+            beginHome(todo.id);
             const target = original.home;
             homeGuard(target);
             const threadId = await adapter.topicOfMessage?.(target.chatId, anchorId, () => homeGuard(target));
@@ -2100,6 +2126,14 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
             await send(source.chatId, notice, source.messageId);
           }
           throw error;
+        }).finally(async () => {
+          if (!joining) return;
+          const pending = pendingHome.get(joining);
+          pendingHome.delete(joining);
+          if (!closed && pending?.changed) {
+            sweepReports();
+            await topicCompletions.changed(joining);
+          }
         });
       return;
     }
@@ -2808,9 +2842,13 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     }
     if (event.type === 'todos.changed') {
       sweepReports();
-      if (typeof event.data.id === 'string') void topicCompletions.changed(event.data.id).catch(error => {
-        if (!closed) app.events.publish('feishu.changed', { reason: redact(error) });
-      });
+      if (typeof event.data.id === 'string') {
+        const pending = pendingHome.get(event.data.id);
+        if (pending) pending.changed = true;
+        else void topicCompletions.changed(event.data.id).catch(error => {
+          if (!closed) app.events.publish('feishu.changed', { reason: redact(error) });
+        });
+      }
     }
     if (event.type === 'runs.changed' && typeof event.data.id === 'string') {
       const run = app.store.get<Run>('runs', event.data.id);

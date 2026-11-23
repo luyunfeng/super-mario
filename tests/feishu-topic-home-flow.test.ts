@@ -16,6 +16,8 @@ test('外群 @/ai 在已登记主群开题并续答，主群可取消原群回�
   let receiver!: FeishuOptions, missingThread = false;
   const sent: Array<{ id:string; chat:string; replyTo?:string; thread:boolean; text:string }> = [];
   const reads: string[] = [];
+  let waitForThread: Promise<void> | undefined;
+  const threads = new Map<string,string>();
   const chats = new Map<string,string>();
   const factory = (options: FeishuOptions) => {
     receiver = options;
@@ -29,7 +31,8 @@ test('外群 @/ai 在已登记主群开题并续答，主群可取消原群回�
           const id = path.split('/').at(-1)!;
           assert.equal(path, '/open-apis/im/v1/messages/' + id);
           assert.equal(chats.get(id), 'oc_home'); reads.push(id);
-          return Response.json({code:0,data:{items:[{message_id:id,chat_id:'oc_home',...(missingThread ? {} : {thread_id:'omt_home'})}]}});
+          if (waitForThread) await waitForThread;
+          return Response.json({code:0,data:{items:[{message_id:id,chat_id:'oc_home',...(missingThread ? {} : {thread_id:threads.get(id)})}]}});
         }
         assert.ok(path.startsWith('/open-apis/im/v1/messages'));
         const body = JSON.parse(String(init?.body));
@@ -39,6 +42,7 @@ test('外群 @/ai 在已登记主群开题并续答，主群可取消原群回�
         const id = 'om_sent_' + sent.length;
         sent.push({id, chat, replyTo, thread:!!body.reply_in_thread, text:body.content});
         chats.set(id,chat);
+        if (!replyTo && chat === 'oc_home') threads.set(id, 'omt_home_' + id);
         return Response.json({code:0,data:{message_id:id}});
       },
       wsFactory: opts => ({async start() {opts.onReady?.();}, close() {},
@@ -71,7 +75,7 @@ test('外群 @/ai 在已登记主群开题并续答，主群可取消原群回�
   assert.match(root.text,/核对合成主群任务/);
   assert.deepEqual(reads,[root.id]);
   await t.waitFor(() => assert.ok(sent.some(row => row.replyTo === root.id && row.thread)));
-  await emit('om_follow','oc_home','合成讨论结论乙',{threadId:'omt_home',rootId:root.id,parentId:root.id});
+  await emit('om_follow','oc_home','合成讨论结论乙',{threadId:threads.get(root.id),rootId:root.id,parentId:root.id});
   await t.waitFor(() => assert.ok(sent.some(row => row.replyTo === 'om_follow' && row.thread)));
   assert.deepEqual((await todos()).map(row => row.id),[task.id]);
   const decision = await fetch(host.url + '/api/v1/todos/' + task.id + '/decisions', {
@@ -87,17 +91,87 @@ test('外群 @/ai 在已登记主群开题并续答，主群可取消原群回�
     const row = sent.find(row => row.replyTo === root.id && row.text.includes('/noreply'));
     assert.ok(row && row.thread && row.chat === 'oc_home'); return row;
   });
-  await emit('om_veto','oc_home','/noreply',{threadId:'omt_home',rootId:root.id,parentId:preview.id});
+  await emit('om_veto','oc_home','/noreply',{threadId:threads.get(root.id),rootId:root.id,parentId:preview.id});
   assert.ok(sent.some(row => row.replyTo === 'om_veto' && row.thread && row.text.includes('取消')));
   offset = 11 * 60000;
   await host.close();
   host = await startServer(config,{botFactory:factory});
   await t.waitFor(() => assert.ok(receiver.topicPolicy?.('oc_home')));
+  async function newHandoff(sourceId:string, title:string) {
+    const count = roots().length;
+    await emit(sourceId, 'oc_source', '/ai ' + title, {mentionedSelf:true});
+    const todo = (await todos()).find(row => row.title === title);
+    assert.ok(todo);
+    const opening = roots()[count];
+    assert.ok(opening && opening.text.includes(title));
+    assert.equal(reads.at(-1), opening.id);
+    await t.waitFor(() => assert.ok(sent.some(row => row.replyTo === opening.id && row.thread)));
+    return {todo,opening};
+  }
+  const plain = (raw:string) => JSON.parse(raw).text as string | undefined;
+  const completions = (openingId:string) => sent.filter(row => row.chat === 'oc_home' && row.thread
+    && row.replyTo === openingId && plain(row.text) === '这项待办已完成。');
+  const previewCount = (openingId:string) => sent.filter(row => row.replyTo === openingId && plain(row.text)?.includes('分钟后回复原群消息')).length;
+  const published = (sourceId:string) => sent.filter(row => row.chat === 'oc_source' && row.replyTo === sourceId);
+  const early = await newHandoff('om_early', '提前取消回报');
+  await emit('om_early_veto','oc_home','/noreply',{threadId:threads.get(early.opening.id),rootId:early.opening.id,parentId:early.opening.id});
+  assert.ok(sent.some(row => row.replyTo === 'om_early_veto' && row.thread && plain(row.text)?.includes('已取消')));
+  await api('todos/' + early.todo.id,{completed:true});
+  await t.waitFor(() => assert.equal(completions(early.opening.id).length,1));
+  await api('feishu/bots/' + bot.id, {groupTaskReportDelayMinutes:0});
+  const instant = await newHandoff('om_instant', '即时回报有公开结论');
+  await api('todos/' + instant.todo.id,{expectedGroupTaskOutcome:'',groupTaskOutcome:'合成公开验收结论。',completed:true});
+  await t.waitFor(() => {
+    assert.equal(completions(instant.opening.id).length,1);
+    assert.deepEqual(published('om_instant').map(row => plain(row.text)),['合成公开验收结论。']);
+  });
+  // The Web can mark a task complete while the platform is still resolving the home topic ID.
+  let release!: () => void;
+  waitForThread = new Promise<void>(resolve => { release = resolve; });
+  const racingTitle = '核实话题时提前完成';
+  const handoff = emit('om_race','oc_source','/ai ' + racingTitle,{mentionedSelf:true});
+  let raceRoot: string;
+  try {
+    const opening = await t.waitFor(() => {
+      const row = roots().find(row => row.text.includes(racingTitle));
+      assert.ok(row && reads.includes(row.id));
+      return row;
+    });
+    raceRoot = opening.id;
+    const todo = (await todos()).find(todo => todo.title === racingTitle);
+    assert.ok(todo);
+    const completed: Todo = await api('todos/' + todo.id,{completed:true});
+    assert.ok(completed.completedAt);
+    assert.equal(completions(raceRoot).length,0);
+    assert.equal(published('om_race').length,0);
+  } finally {
+    release();
+    waitForThread = undefined;
+    await handoff;
+  }
+  await t.waitFor(() => {
+    assert.equal(completions(raceRoot).length,1);
+    assert.deepEqual(published('om_race').map(row => plain(row.text)),['这项待办已完成。']);
+  });
+  offset += 11 * 60000;
+  await host.close();
+  host = await startServer(config,{botFactory:factory});
+  await t.waitFor(() => assert.ok(receiver.topicPolicy?.('oc_home')));
+  assert.equal(completions(early.opening.id).length,1);
+  assert.equal(completions(instant.opening.id).length,1);
+  assert.equal(completions(root.id).length,0);
+  assert.equal(previewCount(root.id),1);
+  assert.equal(previewCount(early.opening.id),0);
+  assert.equal(previewCount(instant.opening.id),0);
+  assert.equal(published('om_early').length,0);
+  assert.equal(published('om_instant').length,1);
+  assert.equal(completions(raceRoot).length,1);
+  assert.equal(published('om_race').length,1);
   missingThread = true;
   await assert.rejects(emit('om_missing','oc_source','/ai 无话题编号的任务',{mentionedSelf:true}),/话题/);
-  assert.equal(roots().length,2);
-  assert.equal(reads.at(-1),roots()[1].id);
-  assert.equal((await todos()).length,2);
+  assert.equal(roots().length,5);
+  assert.equal(reads.at(-1),roots()[4].id);
+  assert.equal((await todos()).length,5);
   assert.ok(sent.some(row => row.replyTo === 'om_missing' && row.text.includes('无法确认主群话题')));
   assert.equal(sent.filter(row => row.chat === 'oc_private').length,privateCount);
   assert.equal(sent.some(row => row.replyTo === 'om_external'),false);

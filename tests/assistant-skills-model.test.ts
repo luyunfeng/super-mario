@@ -3050,6 +3050,7 @@ test('Web 和飞书询问怎样开工时提供表单说明并保留当前执行�
     assert.match(req.system, /全局机器人私聊发送 \/start 目标 或 \/开工/);
     assert.match(req.system, /普通群实际 @ 已配对的全局机器人并发送 \/ai/);
     assert.match(req.system, /10 分钟后才回原群原消息/);
+    assert.match(req.system, /设为即时回报或完成前已取消原群回报时看单独的完成提醒/);
     assert.match(req.system, /设有主话题群时在该群的新话题承接/);
     assert.match(req.system, /同话题补充归入原待办决定/);
     assert.match(req.system, /Web「等你处理」请求输入审批/);

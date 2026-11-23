@@ -7,10 +7,11 @@ import { join } from 'node:path';
 import { createGroupTaskReports, type GroupTaskReportSource } from '../apps/server/src/feishu-group-task-reports.ts';
 import { createStore } from '../packages/core/src/store.ts';
 
-function fixture(t: TestContext) {
+function fixture(t: TestContext, home = false) {
   const dir = mkdtempSync(join(tmpdir(), 'group-reports-')), path = join(dir, 'test.sqlite');
   const source: GroupTaskReportSource = { botId: 'bot', appId: 'app', binding: 'pair-a', chatId: 'group',
-    messageId: 'question', todoId: 'todo', privateMessageId: 'anchor', senderId: 'owner' };
+    messageId: 'question', todoId: 'todo', privateMessageId: 'anchor', senderId: 'owner',
+    ...(home && { homeChatId:'home', homeGrant:'grant', homeThreadId:'thread' }) };
   const key = createHash('sha256').update(JSON.stringify(['bot', 'app', 'group', 'question'])).digest('hex');
   const preview: string[] = [], sent: string[] = [];
   const state = { time: Date.parse('2026-01-01T00:00:00Z'), delay: undefined as number | undefined,
@@ -18,7 +19,7 @@ function fixture(t: TestContext) {
     preview: async (text: string, guard: () => void) => { guard(); preview.push(text); return 'notice'; },
     send: async (text: string, guard: () => void) => { guard(); sent.push(text); return 'receipt'; } };
   let store = createStore(path);
-  store.put('feishu.group-tasks', key, { ...source, handedOff: true, task: { request: '仅私聊的合成任务' } });
+  store.put('feishu.group-tasks', key, { ...source, delivery: 'confirmed', handedOff: true, task: { request: '仅私聊的合成任务' } });
   function completed(done = true) {
     store.put('todos', source.todoId, { id: source.todoId, notes: '仅私聊的合成笔记', ...(done && { completedAt: new Date(state.time).toISOString() }) });
   }
@@ -36,8 +37,12 @@ function fixture(t: TestContext) {
   return { source, state, preview, sent, completed,
     sweep: () => reports.sweep(),
     restart() { reports.close(); store.close(); store = createStore(path); reports = open(); },
+    needed: (s = source) => reports.homeCompletionNeeded(s),
+    setSource: (patch: object) => store.put('feishu.group-tasks', key, { ...source, delivery: 'confirmed', handedOff:true, ...patch }),
+    setReport: (row: object) => store.put('feishu.group-task-reports', key, row),
+    cancelHome: () => reports.cancel(source.botId,source.binding,[],{chatId:'home',grant:'grant',threadId:'thread'}),
     cancel: (id = 'notice', binding = source.binding) => reports.cancel(source.botId, binding, [id]),
-    recall: () => store.put('feishu.group-tasks', key, { ...source, handedOff: true, recalled: true }),
+    recall: () => store.put('feishu.group-tasks', key, { ...source, delivery: 'confirmed', handedOff: true, recalled: true }),
     receipt: () => store.get<{sentId?: string; status: string}>('feishu.group-task-reports', key),
   };
 }
@@ -135,4 +140,54 @@ test('投递钩子等待期间撤销授权，最后检查阻止发群；过期�
   };
   await f.sweep();
   assert.deepEqual(f.sent, []);
+});
+
+test('只读判定核验主群承接登记、当前授权和原消息，零延迟不占用预览', async t => {
+  const f = fixture(t,true); f.state.delay = 0;
+  assert.equal(f.needed(),true); assert.equal(f.needed(),true); assert.equal(f.receipt(),undefined);
+  const fields: (keyof GroupTaskReportSource)[] = ['homeChatId','homeGrant','homeThreadId','botId','appId','binding','chatId','messageId','todoId','privateMessageId','senderId'];
+  for (const field of fields) assert.equal(f.needed({...f.source,[field]:'mismatch'}),false,field);
+  f.setSource({delivery:'unknown'}); assert.equal(f.needed(),false);
+  f.setSource({handedOff:false}); assert.equal(f.needed(),false); f.setSource({});
+  f.state.authorized = false; assert.equal(f.needed(),false); f.state.authorized = true;
+  f.completed(false); assert.equal(f.needed(),false); f.completed();
+  await f.sweep(); assert.equal(f.needed(),true);
+  assert.deepEqual(f.preview,[]); assert.deepEqual(f.sent,['合成结果']);
+  f.recall(); assert.equal(f.needed(),false);
+  const privateOnly = fixture(t); privateOnly.state.delay = 0; assert.equal(privateOnly.needed(),false);
+});
+
+test('提前取消允许本代主群完成行，已预览、预览未知及其取消不得重复通知', async t => {
+  for (const mode of ['early','preview','unknown'] as const) await t.test(mode,async t => {
+    const f = fixture(t,true);
+    assert.equal(f.needed(),false);
+    if (mode === 'early') {
+      f.completed(false);
+      assert.equal(f.cancelHome(),'cancelled'); assert.equal(f.needed(),false);
+      f.completed();
+    } else {
+      if (mode === 'unknown') f.state.preview = async () => '';
+      await f.sweep(); f.state.delay = 0;
+      assert.equal(f.needed(),false); assert.equal(f.cancelHome(),'cancelled');
+    }
+    f.restart(); assert.equal(f.needed(),mode === 'early');
+    if (mode !== 'early') { f.state.time += 1000; f.completed(); assert.equal(f.needed(),true); }
+  });
+});
+
+test('同一代已预览并回报仍抑制；已回报的上一代重开后可单独通知主群', async t => {
+  const f = fixture(t,true);
+  await f.sweep(); f.state.time += 600_001;
+  await f.sweep(); assert.equal(f.receipt()?.status,'sent'); assert.equal(f.needed(),false);
+  f.completed(false); assert.equal(f.needed(),false);
+  f.completed(); f.restart(); assert.equal(f.needed(),true);
+  await f.sweep(); assert.deepEqual(f.sent,['合成结果']); assert.equal(f.needed(),true);
+  f.setReport({status:'cancelled', previewId:'legacy-preview'}); assert.equal(f.needed(),false);
+  f.setReport({status:'cancelled'}); assert.equal(f.needed(),false);
+});
+
+test('同一完成代次修改公开结论并切换零延迟后，保留已有主群预览证据', async t => {
+  const f = fixture(t,true); await f.sweep(); assert.equal(f.needed(),false);
+  f.state.outcome = '修订后结论'; f.state.delay = 0; await f.sweep(); f.restart();
+  assert.deepEqual(f.sent,['修订后结论']); assert.equal(f.needed(),false);
 });

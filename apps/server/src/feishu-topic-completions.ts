@@ -3,13 +3,13 @@ import type { Store } from '../../../packages/plugin-sdk/src/index.ts';
 import type { Todo } from '../../../packages/protocol/src/index.ts';
 
 const receipts = 'feishu.topic-completions';
-type Route = { inputId: string };
+type Route = { inputId: string; homeHandoff?: true };
 type Options = {
   resolve(todoId: string): Route | undefined;
   send(todoId: string, inputId: string, text: string, key: string, guard: () => void): Promise<string>;
 };
 
-/** Notify the original directly registered topic only on a completion seen by this controller. */
+/** Announce an observed completion on its opening message when the home thread has no report preview. */
 export function createTopicCompletions(store: Pick<Store, 'get' | 'put' | 'list' | 'transaction'>, options: Options) {
   const observed = new Map<string, string>();
   for (const todo of store.list<Todo>('todos')) {
@@ -19,7 +19,7 @@ export function createTopicCompletions(store: Pick<Store, 'get' | 'put' | 'list'
   const jobs = new Set<Promise<void>>();
 
   function eligible(todo: Todo | undefined, id: string) {
-    return todo?.id === id && todo.projectId === undefined && !todo.groupTask && typeof todo.completedAt === 'string'
+    return todo?.id === id && todo.projectId === undefined && typeof todo.completedAt === 'string'
       && Number.isFinite(Date.parse(todo.completedAt));
   }
   async function notify(id: string) {
@@ -31,7 +31,9 @@ export function createTopicCompletions(store: Pick<Store, 'get' | 'put' | 'list'
     // All changes (including edits to title/notes) share the same event. Don't backfill old or unroutable completions.
     observed.set(id, generation);
     if (!eligible(todo, id)) return;
-    const inputId = options.resolve(id)?.inputId;
+    const route = options.resolve(id);
+    if (!route || !!todo.groupTask !== !!route.homeHandoff) return;
+    const { inputId } = route;
     if (typeof inputId !== 'string' || !inputId.trim()) return;
     const key = createHash('sha256').update(JSON.stringify([id, generation])).digest('hex');
     const receipt = { todoId: id, completedAt: generation, inputId };
@@ -43,7 +45,9 @@ export function createTopicCompletions(store: Pick<Store, 'get' | 'put' | 'list'
     if (!claimed) return;
     const guard = () => {
       const latest = store.get<Todo>('todos', id);
-      if (closed || !eligible(latest, id) || latest?.completedAt !== generation || options.resolve(id)?.inputId !== inputId)
+      const live = options.resolve(id);
+      if (closed || !eligible(latest, id) || latest?.completedAt !== generation || live?.inputId !== inputId
+        || live.homeHandoff !== route.homeHandoff || !!latest.groupTask !== !!live.homeHandoff)
         throw Object.assign(new Error('话题待办的完成状态或原消息已变化。'), { delivery: 'no' });
     };
     let messageId: string;
