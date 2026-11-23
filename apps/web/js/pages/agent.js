@@ -5,7 +5,7 @@ import { Button, Card, Dot, Pill, Empty, Banner } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
 import { createAssistantSkills } from '../features/assistant-skills.js';
 import { createAssistantProfile } from '../features/assistant-profile.js';
-import { openModelDrawer } from '../features/model-drawer.js';
+import { openBotModelDrawer, openModelDrawer } from '../features/model-drawer.js';
 import { openAddComputer, openComputer } from '../features/computers.js';
 import { createPolicyCard } from '../features/policy.js';
 import { createFollowUpCard } from '../features/follow-up.js';
@@ -45,7 +45,7 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
     replace(modelStatus, Dot(available ? 'ok' : 'danger'), h('strong', null, available ? '可用' : '不可用'),
       h('span', { class: 'muted small' }, snapshot.agent.reason ?? ''));
     modelDetail.textContent = modelError ? `读取模型配置失败：${modelError}`
-      : model ? `来源：${MODE_NAMES[model.mode] ?? model.mode}${model.provider && model.mode !== 'codex-cli' ? ` · ${model.provider}` : ''}${model.model ? ` · ${model.model}` : ' · 尚未选择模型'}`
+      : model ? `默认接入：${MODE_NAMES[model.mode] ?? model.mode}${model.provider && model.mode !== 'codex-cli' ? ` · ${model.provider}` : ''}${model.model ? ` · ${model.model}` : ' · 尚未选择模型'}`
       : '正在读取…';
   }
 
@@ -80,6 +80,7 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
       replace(botStatus, bots.length ? bots.map(bot => h('div', { class: 'row row--wrap' },
         Dot(bot.enabled && bot.paired && bot.connected ? 'ok' : 'warn'), h('strong', null, bot.name),
         Pill(bot.enabled ? bot.connected ? '已连接' : '未连接' : '已停用'), Pill(bot.paired ? '已配对' : '未配对'),
+        bot.enabled && bot.paired && Button({ label: '会话模型', size: 'sm', onClick: () => openBotModelDrawer({ api, bot }) }),
         h('a', { href: router.href('channels', 'bot', bot.id) }, '管理')))
         : h('p', { class: 'muted small' }, '尚未绑定全局机器人。配置后，主 Agent 可用它在飞书中跟进各项目。'));
     } catch (cause) {

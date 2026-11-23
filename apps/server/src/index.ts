@@ -125,7 +125,21 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if(path==='/api/v1/eventbox/cleanup-plugin'&&method==='POST'){const input=await body(req);const owner=requiredText(input.owner,'插件');if(input.confirm!==true||owner==='core'||!app.plugins.list().some(p=>p.id===owner&&p.status==='disabled'))throw new InputError('请先停用插件，并显式确认清理',409);app.background.cleanupOwner(owner);return json(res,200,{ok:true});}
         if(path==='/api/v1/eventbox/model-grants'&&method==='PUT'){const input=await body(req);app.background.modelGrant(requiredText(input.owner,'插件'),input.enabled as boolean,input.dailyLimit as number);return json(res,200,app.background.modelGrants());}
         if(path==='/api/v1/supervisor/resume'&&method==='POST'){await app.supervisorAgent.resume();return json(res,200,app.supervisorAgent.settings());}
-        if (path === '/api/v1/model/catalog' && method === 'GET') return json(res, 200, app.modelCatalog());
+        const botModel = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/model\/(catalog|pick)$/);
+        if (botModel || path === '/api/v1/model/catalog' || path === '/api/v1/model/pick') {
+          const botId = botModel ? decodeURIComponent(botModel[1]!) : undefined;
+          if (botId !== undefined) {
+            const bot = bots.list().find(row => row.id === botId);
+            if (!bot) throw new InputError('机器人不存在', 404);
+            if (bot.scope.kind !== 'global' || !bot.paired || !bot.enabled) throw new InputError('请选择已启用并配对的全局机器人', 409);
+          }
+          if (path.endsWith('/catalog') && method === 'GET') return json(res, 200, app.modelCatalog(botId));
+          if (path.endsWith('/pick') && method === 'PUT') {
+            const input = await body(req);
+            if (Object.keys(input).some(key => key !== 'model')) throw new InputError('会话模型选择只接受 model 字段');
+            return json(res, 200, await app.pickConversationModel(requiredText(input.model, '模型'), botId));
+          }
+        }
         if (path === '/api/v1/model' && method === 'GET') return json(res, 200, app.modelStatus());
         if (path === '/api/v1/model' && method === 'PUT') return json(res, 200, await app.configureModel(await body(req)));
         if (path === '/api/v1/agent-artifacts' && method === 'GET') return json(res, 200, artifacts.list());

@@ -1654,3 +1654,76 @@ test('飞书模型目录按中文名单的 UTF-8 字节限制回执，并保留�
   assert.match(text, /Web.*完整目录/);
   assert.match(text, /账号权限/);
 });
+
+test('主人在有效主会话精确切换模型，命令和参数保持独立，失败结果可核对', async t => {
+  const f = fixture(t), bot = await f.add('PickModel');
+  const receive = bot.instance.options.onMessage;
+  const user = (id: string) => ({ ...source(id), senderType: 'user' as const });
+  const picks: string[] = [];
+  let reads = 0;
+  f.app.modelCatalog = () => { reads++; return { current: 'start', models: ['Model-X', 'busy', 'broken'], provider: 'test', source: 'builtin', demo: false }; };
+  f.app.pickConversationModel = async (model, id) => {
+    assert.equal(id, bot.bot.id);
+    picks.push(model);
+    if (model === 'busy') throw Object.assign(new Error('provider text'), { status: 409 });
+    if (model === 'broken') throw new Error('private-provider-detail');
+    return { current: model };
+  };
+  await receive('/modelchange Model-X', user('unpaired'));
+  await bot.pair();
+  await receive('/modelchange Model-X', { ...user('group'), chatType: 'group' });
+  await receive('/modelchange Model-X', { ...user('other'), senderId: 'other' });
+  await receive('/modelchange', user('usage'));
+  assert.match(bot.instance.sent.at(-1)![1], /模型 ID/);
+  assert.equal(reads, 0);
+  await receive('/modelchange model-x', user('case'));
+  assert.match(bot.instance.sent.at(-1)![1], /目录没有/);
+  assert.equal(picks.length, 0);
+  await Promise.all([receive('／MODELCHANGE Model-X', user('pick')), receive('/modelchange Model-X', user('pick'))]);
+  assert.match(bot.instance.sent.at(-1)![1], /已选择模型.*Model-X/);
+  bot.instance.contexts.at(-1)!.onSent!('main-receipt');
+
+  f.app.projectWorkspace = { async post() { throw new Error('命令不应作为项目消息执行'); } };
+  f.store.put('projects', 'selected-project', { id: 'selected-project', name: '项目' });
+  await receive('/list', user('conversations'));
+  const card = bot.instance.contexts.at(-1)!.card as { elements: Array<{ actions?: Array<{ value: Record<string, unknown> }> }> };
+  const choice = card.elements.flatMap(row => row.actions ?? []).find(action => action.value.projectId === 'selected-project')!;
+  await bot.instance.options.onCardAction!({ value: choice.value, messageId: 'project-ref', chatId: 'owner', operatorId: 'human' });
+  await receive('/modelchange Model-X', user('selected'));
+  assert.match(bot.instance.sent.at(-1)![1], /\/main/);
+  await receive('/modelchange busy', { ...user('busy'), parentId: 'main-receipt' });
+  assert.match(bot.instance.sent.at(-1)![1], /会话忙/);
+  await receive('/main', user('return'));
+  await receive('/modelchange Model-X', { ...user('project-ref-command'), rootId: 'project-ref' });
+  assert.match(bot.instance.sent.at(-1)![1], /\/main/);
+  await receive('/modelchange broken', user('broken'));
+  assert.match(bot.instance.sent.at(-1)![1], /结果未知/);
+  assert.doesNotMatch(JSON.stringify(f.effects.list()), /private-provider-detail/);
+  await receive('//modelchange Model-X', user('literal'));
+  assert.deepEqual(f.posts.map(post => post.text), ['/modelchange Model-X']);
+  assert.deepEqual(picks, ['Model-X', 'busy', 'broken']);
+});
+
+test('模型切换在回执落库失败、机器人重启和后续切换后仍保留原动作结果', async t => {
+  const f = fixture(t), bot = await f.add('PickReplay');
+  await bot.pair();
+  const user = (id: string) => ({ ...source(id), senderType: 'user' as const });
+  const picks: string[] = [];
+  f.app.modelCatalog = () => ({ current: picks.at(-1) ?? '', models: ['first', 'second'], provider: 'test', source: 'builtin', demo: false });
+  f.app.pickConversationModel = async model => { picks.push(model); return { current: model }; };
+  const put = f.mailboxes.put;
+  f.mailboxes.put = input => {
+    if (input.eventKey.startsWith('feishu-model-change:')) throw new Error('receipt unavailable');
+    return put(input);
+  };
+  await assert.rejects(bot.instance.options.onMessage('/modelchange first', user('old')), /receipt unavailable/);
+  f.mailboxes.put = put;
+  await f.restart();
+  const receive = f.instances.at(-1)!.options.onMessage;
+  await receive('/modelchange second', user('new'));
+  await receive('/modelchange first', user('old'));
+  assert.deepEqual(picks, ['first', 'second']);
+  assert.match(f.instances.at(-1)!.sent.at(-1)![1], /本次已选择模型.*first/);
+  await receive('/modelchange first', user('old'));
+  assert.equal(f.instances.at(-1)!.sent.length, 2);
+});

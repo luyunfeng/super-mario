@@ -3,6 +3,57 @@ import { h } from '../lib/dom.js';
 import { Button, Field, Input, Select, Check, Banner } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 
+// The same conversation can be selected from its bot in Feishu or its named row on the Web.
+function conversationModelPicker(api, path, name) {
+  const catalog = h('div', { class: 'stack', 'aria-live': 'polite' });
+  const load = async () => {
+    refresh.disabled = true;
+    catalog.textContent = '正在读取模型清单…';
+    try {
+      const result = await api.get(path + '/catalog');
+      const description = result.source === 'builtin' ? '内置目录，账号权限需另行核实。'
+        : result.source === 'configured' ? '仅列出配置中记录的模型。' : '自动选择模型。';
+      const current = h('p');
+      const report = value => {
+        current.textContent = (result.demo ? '演示模式。' : '') +
+          (value ? `${name}当前配置为 ${result.provider} / ${value}。` : `${name}尚无已选模型记录。`) + description;
+      };
+      report(result.current);
+      catalog.replaceChildren(current);
+      if (!result.models.length) return;
+      const list = Select({ name: 'catalogModels', options: result.models.map(id => [id, id]), value: result.current });
+      const feedback = h('p', { role: 'status' });
+      const apply = Button({ label: '应用到此会话', size: 'sm', disabled: true, onClick: async () => {
+        list.disabled = true;
+        refresh.disabled = true;
+        try {
+          const saved = await api.put(path + '/pick', { model: list.value });
+          result.current = saved.current;
+          report(saved.current);
+          feedback.textContent = '已保存，下条消息使用所选模型。';
+        } catch (cause) {
+          feedback.textContent = cause.status && cause.status < 500 ? `切换失败：${cause.message}` : '切换结果未知，请重新查看清单核对。';
+        } finally {
+          list.disabled = false;
+          refresh.disabled = false;
+          apply.disabled = list.value === result.current;
+        }
+      } });
+      list.addEventListener('change', () => { apply.disabled = list.value === result.current; feedback.textContent = ''; });
+      catalog.append(Field({ label: `模型清单（${result.models.length}）`, control: list }), apply, feedback);
+    } catch { catalog.textContent = '模型清单读取失败，可重新查看。'; }
+    finally { refresh.disabled = false; }
+  };
+  const refresh = Button({ label: '查看当前配置的模型清单', size: 'sm', onClick: load });
+  return { controls: [refresh, catalog], load };
+}
+
+export function openBotModelDrawer({ api, bot }) {
+  const picker = conversationModelPicker(api, '/feishu/bots/' + encodeURIComponent(bot.id) + '/model', bot.name);
+  openDrawer({ title: bot.name + '的主会话模型', body: picker.controls });
+  void picker.load();
+}
+
 export function openModelDrawer({ api, config, onSaved }) {
   const mode = Select({ options: [['api', '模型 API（填写服务商和密钥）'], ['codex-cli', 'Codex 命令行']], value: config.mode === 'codex-cli' ? 'codex-cli' : 'api', name: 'mode' });
   const provider = Input({ name: 'provider', value: config.provider === 'codex-cli' ? '' : config.provider ?? '', list: 'model-providers', placeholder: '例如 openai、anthropic' });
@@ -11,21 +62,7 @@ export function openModelDrawer({ api, config, onSaved }) {
   const apiKey = Input({ name: 'apiKey', type: 'password', autocomplete: 'new-password', placeholder: config.apiKeyConfigured ? '已保存，留空保持不变' : '粘贴密钥' });
   const clearKey = Check({ label: '清除已保存的密钥', name: 'clearApiKey' });
   const model = Input({ name: 'model', value: config.model ?? '', placeholder: '模型名称', required: true });
-  const catalog = h('div', { class: 'stack', 'aria-live': 'polite' });
-  const showCatalog = Button({ label: '查看当前配置的模型清单', size: 'sm', onClick: async () => {
-    catalog.textContent = '正在读取模型清单…';
-    try {
-      const result = await api.get('/model/catalog');
-      const description = result.source === 'builtin' ? '内置目录，账号权限需另行核实。'
-        : result.source === 'configured' ? '仅列出配置中记录的模型。' : result.current ? '此会话自动选择了该模型。' : '自动选择，尚无已选模型记录。';
-      catalog.replaceChildren(h('p', null, result.demo ? '演示模式。' : '',
-        result.current ? `当前配置为 ${result.provider} / ${result.current}。` : '', description));
-      if (result.models.length) {
-        const list = Select({ name: 'catalogModels', options: result.models.map(name => [name, name]), value: result.current });
-        catalog.append(Field({ label: `模型清单（${result.models.length}）`, control: list, hint: '这里只供查阅。要修改配置，请填写模型名称并保存。' }));
-      }
-    } catch { catalog.textContent = '模型清单读取失败，可重新查看。'; }
-  } });
+  const picker = conversationModelPicker(api, '/model', 'Web 主会话');
   const cliCommand = Input({ name: 'cliCommand', value: config.cliCommand ?? '', maxlength: 4096, placeholder: 'codex' });
   const cliConfigDir = Input({ name: 'cliConfigDir', value: config.cliConfigDir ?? '', maxlength: 4096, placeholder: '绝对路径（可选）' });
   const cliFields = h('div', { class: 'stack' },
@@ -77,8 +114,8 @@ export function openModelDrawer({ api, config, onSaved }) {
     },
   });
   const drawer = openDrawer({
-    title: '主 Agent 模型', subtitle: '主 Agent 和自动跟进共用这份配置，但对话各自独立。',
-    body: [Field({ label: '接入方式', control: mode }), apiFields, cliFields, Field({ label: '模型', control: model }), showCatalog, catalog, error],
+    title: '主 Agent 模型', subtitle: '保存接入配置会更新工作台默认模型。模型清单中的「应用到此会话」只切换 Web 主会话。',
+    body: [Field({ label: '接入方式', control: mode }), apiFields, cliFields, Field({ label: '模型', control: model }), ...picker.controls, error],
     footer: [Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();

@@ -8,7 +8,7 @@ import { chooseCommandTarget, createCommandMentionEvidence, type CommandCandidat
 import type { Card } from '../../../packages/core/src/interactions.ts';
 import { buildFeishuDashboard, conversationListDashboard, dashboardCommand, dashboardHelp, modelListDashboard, privateCommandText, statusDashboard, todayDashboard, questionForm, type DashboardView } from './feishu-dashboard.ts';
 import { createAgentProgressStream } from './agent-progress-stream.ts';
-import { buildAgentProgressCard } from '../../../plugins/agent-progress-card.ts';
+import { buildAgentProgressCard, publicText } from '../../../plugins/agent-progress-card.ts';
 import { buildFeishuMessageCard, cardButtons, cardDocument, cardPlain } from './feishu-cards.ts';
 import type { FeishuCardAction } from '../../../plugins/feishu.ts';
 import { botConversationId } from '../../../packages/core/src/bot-agent-routing.ts';
@@ -39,6 +39,7 @@ export interface FeishuBotsApp {
   /** Host injects readOnly result context; it must never dispatch a new request. */
   postScopedResult?(input: { text: string; scope: BotScope; botId: string; sourceMessageId?: string }): Promise<Message>;
   routeCommandProject?: CommandClassifier;
+  pickConversationModel?(model: string, botId?: string): Promise<{ current: string }>;
   modelCatalog?(botId: string): { provider: string; current: string; models: string[]; source: string; demo: boolean };
   attention?(): AttentionItem[];
   projects?: { list(): Project[] };
@@ -357,9 +358,41 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       && binding.revision === bot.revision && binding.expiresAt > Date.now());
     return { main, binding, fingerprint: digest([paired, bot.revision, binding, main]) };
   }
-  function showModelList(bot: FeishuBotSettings, epoch: number, paired: Owner, incoming: FeishuMessageSource) {
+  async function changeModel(bot: FeishuBotSettings, model: string, eventKey: string,
+    target: ReturnType<typeof modelListTarget>, valid: () => boolean) {
+    const mainOnly = '请发送 /main 切回主对话，再直接发送 /modelchange <模型 ID>。';
+    const unavailable = '模型切换服务不可用。';
+    const unknown = '本次模型切换结果未知，请发送 /modellist 核对。';
+    if (!model) return target.main ? '请发送 /modelchange <模型 ID>。可先用 /modellist 查看目录。' : mainOnly;
+    if (!app.effects) return target.main ? unavailable : mainOnly;
+    // Claim before checking the catalog. Even a previously refused action must not run after a route change.
+    try {
+      return await app.effects.perform({ key: eventKey, kind: 'conversation.model.change', target: bot.id, summary: '切换机器人主会话模型',
+        content: { request: digest([target.fingerprint, model]) }, async run() {
+          if (!valid() || !target.main) throw noDelivery(mainOnly);
+          if (!app.modelCatalog || !app.pickConversationModel) throw noDelivery(unavailable);
+          let catalog;
+          try { catalog = app.modelCatalog(bot.id); } catch { throw noDelivery(unavailable); }
+          if (!catalog.models.includes(model)) throw noDelivery('当前目录没有该模型 ID，请发送 /modellist 核对完整拼写。');
+          try {
+            const result = await app.pickConversationModel(model, bot.id);
+            if (result.current !== model) throw new Error(unknown);
+          } catch (error) {
+            const status = error && typeof error === 'object' && 'status' in error ? error.status : undefined;
+            if (status === 409) throw noDelivery('会话忙或模型配置已变化，请在当前操作结束后发送 /modellist 核对。');
+            if (status === 400) throw noDelivery('模型选择无效，请发送 /modellist 核对。');
+            if (status === 403 || status === 404) throw noDelivery('当前主会话不可用，请重新打开机器人主对话。');
+            throw new Error(unknown);
+          }
+          return '本次已选择模型 · ' + publicText(model, 100).replace(/\s+/g, ' ');
+        } });
+    } catch (error) {
+      return error instanceof Error && 'delivery' in error && error.delivery === 'no' ? publicText(redact(error), 160) : unknown;
+    }
+  }
+  function modelCommand(bot: FeishuBotSettings, epoch: number, paired: Owner, incoming: FeishuMessageSource, model?: string) {
     const source = { chatId: incoming.chatId, parentId: incoming.parentId, rootId: incoming.rootId };
-    const eventKey = 'feishu-model-list:' + JSON.stringify([bot.id, bot.appId, incoming.messageId]);
+    const eventKey = (model === undefined ? 'feishu-model-list:' : 'feishu-model-change:') + JSON.stringify([bot.id, bot.appId, incoming.messageId]);
     const pending = chatCommands.get(eventKey);
     if (pending) return pending;
     const job = (async () => {
@@ -372,11 +405,21 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         return;
       }
       const target = modelListTarget(bot, paired, source);
-      let catalog: ReturnType<NonNullable<FeishuBotsApp['modelCatalog']>> | undefined;
-      try { if (target.main) catalog = app.modelCatalog?.(bot.id); }
-      catch { /* An unavailable catalog must not leak raw provider errors. */ }
-      const dashboard = modelListDashboard(catalog, target.main);
-      const entry = await put(bot, { direction: 'outbox', eventKey, title: '主对话模型目录', text: dashboard.text,
+      const valid = () => active(bot.id, epoch, bot.revision) && owner(bot)?.chatId === paired.chatId
+        && owner(bot)?.senderId === paired.senderId && modelListTarget(current(bot.id), paired, source).fingerprint === target.fingerprint;
+      const title = model === undefined ? '主对话模型目录' : '主对话模型切换';
+      let dashboard;
+      if (model === undefined) {
+        let catalog: ReturnType<NonNullable<FeishuBotsApp['modelCatalog']>> | undefined;
+        try { if (target.main) catalog = app.modelCatalog?.(bot.id); }
+        catch { /* An unavailable catalog must not leak raw provider errors. */ }
+        dashboard = modelListDashboard(catalog, target.main);
+      } else {
+        const text = await changeModel(bot, model, eventKey, target, valid);
+        if (!valid()) return;
+        dashboard = { text, card: cardDocument(title, [{ tag: 'div', text: cardPlain(text) }]) };
+      }
+      const entry = await put(bot, { direction: 'outbox', eventKey, title, text: dashboard.text,
         target: paired.chatId, sourceMessageId: incoming.messageId, requiresConfirmation: false }, bot.scope,
         { dashboard: { owner: paired, card: dashboard.card }, modelListGrant: { source, fingerprint: target.fingerprint },
           chatBinding: target.binding || { projectId: '', revision: bot.revision, senderId: paired.senderId!,
@@ -681,7 +724,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!paired?.senderId || paired.chatId !== entry.target || stamp?.dashboard?.owner.senderId !== paired.senderId
         || stamp.dashboard.owner.chatId !== paired.chatId) throw noDelivery('命令提示的配对记录已变化');
     }
-    if (entry.eventKey.startsWith('feishu-model-list:')) {
+    if (entry.eventKey.startsWith('feishu-model-list:') || entry.eventKey.startsWith('feishu-model-change:')) {
       const paired = owner(bot), grant = stamp?.modelListGrant;
       if (bot.scope.kind !== 'global' || !paired?.senderId || paired.chatId !== entry.target || !grant || grant.source.chatId !== paired.chatId
         || stamp?.dashboard?.owner.senderId !== paired.senderId || stamp.dashboard.owner.chatId !== paired.chatId
@@ -1029,9 +1072,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     let paired = owner(bot);
     const group = source.chatType === 'group';
     const requested = dashboardCommand(text);
-    if (requested === 'modellist') {
+    const change = /^[／/]modelchange(?:\s+([\s\S]+))?$/i.exec(text.trim());
+    if (requested === 'modellist' || change) {
       if (!group && bot.scope.kind === 'global' && source.senderType === 'user' && paired?.senderId
-        && paired.chatId === source.chatId && paired.senderId === source.senderId) await showModelList(bot, epoch, paired, source);
+        && paired.chatId === source.chatId && paired.senderId === source.senderId) await modelCommand(bot, epoch, paired, source, change ? change[1]?.trim() ?? '' : undefined);
       return;
     }
     const scopedHelp = requested === 'help' && bot.scope.kind !== 'global';

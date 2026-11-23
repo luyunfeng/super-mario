@@ -4,7 +4,7 @@ import type { BotScope } from '../../protocol/src/bots.ts';
 import type { AppConfig, MainAssistantProfile, ExecutorInfo, Message, Project, Todo, Json } from '../../protocol/src/index.ts';
 import type { Contributions, EventBus, Store } from '../../plugin-sdk/src/index.ts';
 import { SCOPED_WORK_SYSTEM_PROMPT } from './prompts.ts';
-import { readModelCatalog } from './agent-runtime/model-catalog.ts';
+import { conversationModels } from './agent-runtime/model-catalog.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 
 type Runtime = ReturnType<typeof createAgentRuntime>;
@@ -33,7 +33,7 @@ export function createScopedAgents(options: Options) {
   let configuring = false;
 
   function identity(input: BotScope, botId: string) {
-    if (typeof botId !== 'string' || !botId.trim()) throw new Error('botId 必须为非空字符串');
+    if (typeof botId !== 'string' || !botId.trim()) throw Object.assign(new Error('botId 必须为非空字符串'), { status: 400 });
     if (!input || !['global', 'unmarked', 'project', 'task'].includes(input.kind)) throw new Error('无效 Bot 作用域');
     let scope: BotScope;
     if (input.kind === 'project') {
@@ -52,7 +52,7 @@ export function createScopedAgents(options: Options) {
       }
       scope = { kind: 'task', todoId: todo.id, ...(todo.projectId ? { projectId: todo.projectId } : {}) };
     } else scope = { kind: input.kind };
-    if (options.validScope?.(structuredClone(scope), botId) === false) throw new Error('Bot 作用域已失效');
+    if (options.validScope?.(structuredClone(scope), botId) === false) throw Object.assign(new Error('Bot 作用域已失效'), { status: 403 });
     const digest = createHash('sha256').update(JSON.stringify(scope)).digest('hex');
     return { scope, conversationId: `bot:${botId}:${digest}` };
   }
@@ -92,7 +92,13 @@ export function createScopedAgents(options: Options) {
     modelCatalog(botId: string) {
       const binding = identity({ kind: 'global' }, botId);
       return agents.get(binding.conversationId)?.runtime.modelCatalog()
-        ?? readModelCatalog(options.config.model, undefined, options.config.demo);
+        ?? conversationModels(options.config, options.store, binding.conversationId).catalog();
+    },
+    pickConversationModel(model: string, botId: string) {
+      if (closed || configuring) throw Object.assign(new Error('正在应用模型配置，请稍后修改型号'), { status: 409 });
+      const { conversationId } = identity({ kind: 'global' }, botId);
+      const runtime = agents.get(conversationId)?.runtime;
+      return runtime ? runtime.pickConversationModel(model) : conversationModels(options.config, options.store, conversationId).pick(model);
     },
     status(scope?: BotScope, botId?: string) {
       if (closed) return { available: false, reason: 'Bot 运行时已关闭' };

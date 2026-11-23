@@ -1,3 +1,4 @@
+import { discardObsoleteModelPicks } from './agent-runtime/model-catalog.ts';
 import { createFeishuWebConfig } from './feishu-web-config.ts';
 import { createInboxAssistant, type InboxAnalysis } from './inbox-assistant.ts';
 import { excludesPersonalGroupFromBrief } from '../../protocol/src/inbox-origin.ts';
@@ -98,6 +99,7 @@ export async function createWorkbench(config: AppConfig) {
   const modelConfig = createModelConfig(config);
   let modelRevision = randomUUID();
   const store = createStore(join(config.dataDir, 'workbench.sqlite'));
+  discardObsoleteModelPicks(store, config.model);
   const events = createEventBus(store);
   const mailboxes = createEventMailboxes({ store, events });
   const projects = createProjects({ store, events });
@@ -1762,6 +1764,9 @@ export async function createWorkbench(config: AppConfig) {
     setBotRelay(relay: NonNullable<typeof botRelay>) { botRelay = relay; },
     setBotScopeAccess(validate: typeof botScopeAccess) { botScopeAccess = validate; channelBindingsReady = true; scheduledWork.sync(); },
     setMailboxProposer(propose: (input: Record<string, unknown>) => Json) { mailboxProposer = propose; },
+    async pickConversationModel(model: string, botId?: string) {
+      return botId === undefined ? agent.pickConversationModel(model) : scopedAgents.pickConversationModel(model, botId);
+    },
     async configureModel(input: Record<string, unknown>) {
       if (agent.configurationBusy() || supervisorRuntime.configurationBusy()) throw new InputError('Agent 正在处理对话，请稍后保存模型配置', 409);
       if (!scopedAgents.tryLockConfiguration()) throw new InputError('项目或事项 Agent 正在处理对话，请稍后保存模型配置', 409);
@@ -1770,6 +1775,7 @@ export async function createWorkbench(config: AppConfig) {
         commandRouter.cancel();
         await Promise.all([inboxClassifier.abortCurrent(),inboxAssistantRuntime.abortCurrent(),inboxHandlingRuntime.abortCurrent()]);
         modelConfig.write(input);
+        discardObsoleteModelPicks(store, config.model);
         modelRevision = randomUUID();
         await Promise.all([agent.reloadConfiguration(), supervisorRuntime.reloadConfiguration(), scopedAgents.reloadConfiguration()]);
         changed('model.changed', {});

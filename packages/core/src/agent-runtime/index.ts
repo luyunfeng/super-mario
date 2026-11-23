@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
-import { readModelCatalog } from './model-catalog.ts';
+import { conversationModels } from './model-catalog.ts';
 import { acceptMessage } from '../message-receipts.ts';
 import { runWithAgentInput } from '../agent-input.ts';
 import { buildWorkContext, formatWorkContextMarkdown } from '../work-context.ts';
@@ -27,6 +27,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   const basePrompt = options.contextMode === 'project-memory' ? PROJECT_MEMORY_SYSTEM_PROMPT : options.systemPrompt ?? MAIN_AGENT_SYSTEM_PROMPT;
   const { config, store, events, contributions } = options;
   const ownConversation = options.conversationId ?? 'main';
+  const models = conversationModels(config, store, ownConversation);
+  let modelPickChanged = false;
   const scope = options.scope && structuredClone(options.scope);
   const scopedProject = scope && (scope.kind === 'project' || scope.kind === 'task') ? scope.projectId : undefined;
   let state: { available: boolean; reason?: string } = config.demo
@@ -239,10 +241,11 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     }
     settleCredentials = () => modelRuntime.settleCredentialWrites();
     const available = await modelRuntime.getAvailable();
+    const selectedId = config.model ? models.catalog().current : '';
     const model = config.model
-      ? modelRuntime.getModel(config.model.provider, config.model.model)
+      ? modelRuntime.getModel(config.model.provider, selectedId)
       : available[0];
-    if (!model) throw new Error(config.model ? `未找到模型 ${config.model.provider}/${config.model.model}。` : '缺少可用模型或凭证；请配置模型和 API Key。');
+    if (!model) throw new Error(config.model ? `未找到模型 ${config.model.provider}/${selectedId}。` : '缺少可用模型或凭证；请配置模型和 API Key。');
     if (!available.some(item => item.provider === model.provider && item.id === model.id)) {
       throw new Error(`模型 ${model.provider}/${model.id} 缺少可用凭证。`);
     }
@@ -468,6 +471,20 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     state = { available: false, reason: safeError(error) };
   }).then(() => { events.publish('agent.status', { conversationId: ownConversation, ...state }); });
 
+  async function reloadConfiguration(drainAcceptedTurn = false) {
+    await ready;
+    await settleCredentials();
+    // Graceful shutdown drains accepted input with its selected model.
+    if (closed && (!drainAcceptedTurn || stopping)) return;
+    session?.dispose(); session = undefined;
+    modelPickChanged = false;
+    state = { available: false, reason: '正在应用模型配置…' };
+    ready = config.demo ? Promise.resolve() : initialize().catch(error => { state = { available: false, reason: safeError(error) }; });
+    await ready;
+    if (config.demo) state = { available: true, reason: '本地演示模式：固定回复，不调用模型或外部 CLI。' };
+    events.publish('agent.status', { conversationId: ownConversation, ...state });
+  }
+
   async function reply(user: Message, readOnlyAction?: ReadOnlyAction) {
     const assistant: Message = {
       id: randomUUID(), conversationId: ownConversation, role: 'assistant', replyTo: user.id, text: '',
@@ -493,6 +510,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     };
     try {
       await ready;
+      if (modelPickChanged && !stopping) await reloadConfiguration(true);
       if (!config.demo && stopping) throw new Error('运行时已关闭，本条输入未执行。');
       if (options.canUseScope?.(user) === false) throw new Error('机器人已停用或绑定范围已改变，本条输入未执行');
       if (!state.available) throw new Error(state.reason);
@@ -721,18 +739,17 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       configuring = true;
     },
     unlockConfiguration() { configuring = false; },
-    async reloadConfiguration() {
-      await ready;
-      await settleCredentials();
-      if (closed) return;
-      session?.dispose(); session = undefined;
-      state = { available: false, reason: '正在应用模型配置…' };
-      ready = config.demo ? Promise.resolve() : initialize().catch(error => { state = { available: false, reason: safeError(error) }; });
-      await ready;
-      if (config.demo) state = { available: true, reason: '本地演示模式：固定回复，不调用模型或外部 CLI。' };
-      events.publish('agent.status', { conversationId: ownConversation, ...state });
+    reloadConfiguration: () => reloadConfiguration(),
+    modelCatalog() { return models.catalog(closed ? undefined : session?.model); },
+    pickConversationModel(model: string) {
+      if (!mainIdentity || options.canUseScope?.() === false) throw Object.assign(new Error('当前会话无权修改主会话型号'), { status: 403 });
+      if (closed || configuring || queuedInputs > 0) throw Object.assign(new Error('会话正忙，请稍后修改型号'), { status: 409 });
+      const catalog = models.catalog(session?.model);
+      const picked = models.pick(model, catalog);
+      // The command only saves a preference. Open the selected model on the next user turn.
+      if (!config.demo && model !== catalog.current) modelPickChanged = true;
+      return picked;
     },
-    modelCatalog() { return readModelCatalog(config.model, closed ? undefined : session?.model, config.demo); },
     status() { return closed ? { available: false, reason: '运行时已关闭。' } : { ...state }; },
     async post(text: string, conversationId: string = ownConversation, context?: PostContext): Promise<Message> {
       if (closed) throw new Error('运行时已关闭。');
