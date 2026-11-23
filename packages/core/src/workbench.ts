@@ -464,7 +464,8 @@ export async function createWorkbench(config: AppConfig) {
     const input=currentAgentInput();
     if (!input?.directWebInput || input.role!=='user' || input.replyTo || (input.origin && input.origin!=='user') ||
         store.get('message.routes',input.id) || !plugins.list().some(p=>p.id==='conversation-queue' && p.status==='active')) return;
-    return queuedMessages(input.conversationId,input.projectId,input.todoId).items.length;
+    const {items}=queuedMessages(input.conversationId,input.projectId,input.todoId);
+    return {queuedMessages:items.length,nextQueuedMessage:items[0] ?? null};
   }));
   plugins.register(conversationDrafts);
   plugins.register(conversationImages);
@@ -1177,6 +1178,24 @@ export async function createWorkbench(config: AppConfig) {
       return true;
     }).map(input=>({id:input.id,text:input.text.slice(0,240),images:input.images?.length??0,files:input.files?.length??0}));
     return {items};
+  }
+  function reorderQueuedMessages(conversationId:string,projectId:string|undefined,todoId:string|undefined,request:Record<string,unknown>) {
+    const current=queuedMessages(conversationId,projectId,todoId);
+    const {expected,ordered}=request;
+    const idList=(value:unknown):value is string[]=>Array.isArray(value) && value.every(id=>typeof id==='string' && id.length>0);
+    if (Object.keys(request).some(key=>key!=='expected' && key!=='ordered') || !idList(expected) || !idList(ordered))
+      throw new InputError('请提供原队列和调整后的消息顺序');
+    if (expected.length!==current.items.length || current.items.some((item,i)=>item.id!==expected[i]))
+      throw new InputError('排队消息已变化，请按最新顺序调整',409);
+    const ids=new Set(expected);
+    if (ordered.length!==ids.size || new Set(ordered).size!==ids.size || ordered.some(id=>!ids.has(id)))
+      throw new InputError('调整后的队列必须且只能包含原队列的每条消息');
+    if (ordered.every((id,i)=>id===expected[i])) return current;
+    // Validation and assignment run synchronously; the next dequeue cannot interleave.
+    if (conversationId==='main') agent.reorderQueuedInputs(expected,ordered);
+    else scopedAgents.reorderQueuedInputs(conversationId,expected,ordered);
+    events.publish('messages.changed',{conversationId});
+    return queuedMessages(conversationId,projectId,todoId);
   }
   function validateQueuedWebInput(input:Message) { requireQueueScope(input.projectId,input.todoId); }
   function requireQueueScope(projectId?:string,todoId?:string) {
@@ -2742,7 +2761,7 @@ export async function createWorkbench(config: AppConfig) {
     setBotScopeAccess(validate: typeof botScopeAccess) { botScopeAccess = validate; channelBindingsReady = true; scheduledWork.sync(); },
     setMailboxProposer(propose: (input: Record<string, unknown>) => Json) { mailboxProposer = propose; },
     modelConfigurationRevision: () => modelRevision,
-    queuedMessages,
+    queuedMessages, reorderQueuedMessages,
     cancelQueuedTurn(conversationId:string,inputId:string) {
       requireConversationQueue();
       const input=store.get<Message>('messages',inputId);

@@ -172,7 +172,7 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
 }
 
 type ReadFiles = (input: { projectId: string; kind: 'search'; query: string }) => Promise<Json>;
-export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input: Json) => Json, queuedCount?: () => number | undefined): Extension => ({
+export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input: Json) => Json, queueStatus?: () => {queuedMessages:number;nextQueuedMessage:{id:string;text:string;images:number;files:number}|null} | undefined): Extension => ({
   id: 'conversation-search', name: '对话历史搜索', capabilities: ['conversation.search'],
   permissions: ['contribute:tools', 'service.provide:conversation-search.saved', 'service.provide:conversation-search.projects', 'service.provide:conversation-search.files', 'service.provide:conversation-search.status', 'store.read', 'store.write'],
   activate(context) {
@@ -232,8 +232,8 @@ export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input:
       name: 'conversation_status', description: '查看当前会话已记录的进度、最近发言、明确执行目标和待用户决定的卡片。仅记录事实，无记录或结果未知时如实说明。',
       parameters: { type: 'object', additionalProperties: false, properties: {} },
       async execute(input, signal) {
-        const facts=status(input,signal), queued=queuedCount?.();
-        return queued===undefined ? facts : {...facts,queuedMessages:queued};
+        const facts=status(input,signal);
+        return {...facts,...queueStatus?.()};
       },
     });
     context.contribute('tools', 'project_file_search', {

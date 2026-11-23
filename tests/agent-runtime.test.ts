@@ -720,3 +720,39 @@ test('工作台重启时恢复项目队列，只打开工作区即可看到可�
   const resent=await app.retryFailedReply(notice.id,conversationId);
   assert.equal(resent.retryOf,notice.id); assert.equal(resent.text,'未开始的请求');
 });
+
+test('重排调换实际 Web 轮次，保留内部消息和其他范围的槽位与权限，ask 等到自己的答复',async t=>{
+  const f=await fixture(t,false), sdk=fakeSDK();
+  f.contributions.add('tools','notify',{name:'notify_user',description:'通知',parameters:{type:'object'},async execute(){return {};}});
+  let load!:()=>void, finish!:()=>void, lastEntered=false, answered=false;
+  const startup=new Promise<void>(ok=>{load=ok;}), last=new Promise<void>(ok=>{finish=ok;});
+  const runtime=createAgentRuntime(f,async()=>{await startup;return sdk.load();});
+  const original=sdk.session.prompt.bind(sdk.session);
+  sdk.session.prompt=async(text,opts)=>{
+    if(text==='问答'){lastEntered=true;assert.ok(!sdk.calls.activeTools.includes('notify_user'));await last;}
+    if(text==='内部')assert.ok(sdk.calls.activeTools.includes('notify_user'));
+    await original(text,opts);
+  };
+  const send=(text:string,projectId?:string)=>runtime.post(text,'main',{directWebInput:true,projectId});
+  const head=await send('运行中');
+  await t.waitFor(()=>assert.equal(f.store.get<Message>('messages',head.id)?.queueState,'running'));
+  const result=runtime.ask('问答',{directWebInput:true,readOnly:true}).finally(()=>{answered=true;});
+  const a=runtime.queuedWebInputs().find(m=>m.text==='问答')!;
+  const internal=await runtime.post('内部','main',{origin:'notification',readOnly:true,readOnlyAction:'notify_user'});
+  const other=await send('其他范围','project-different');
+  const b=await send('提前');
+  const cancelled=await send('仍能取消');
+  runtime.reorderQueuedInputs([a.id,b.id],[b.id,a.id]);
+  assert.deepEqual(runtime.queuedWebInputs().map(m=>m.id),[b.id,other.id,a.id,cancelled.id]);
+  assert.throws(()=>runtime.reorderQueuedInputs([a.id,b.id],[a.id,b.id]),{status:409});
+  for(const id of [internal.id,head.id]) assert.throws(()=>runtime.reorderQueuedInputs([id,b.id],[b.id,id]),{status:409});
+  assert.throws(()=>runtime.reorderQueuedInputs([b.id,a.id],[b.id,b.id]),{status:400});
+  assert.equal(runtime.cancelQueuedTurn(cancelled.id).outcome,'cancelled');
+  load();
+  await t.waitFor(()=>assert.ok(lastEntered));
+  assert.equal(answered,false);assert.deepEqual(sdk.prompts,['运行中','提前','内部','其他范围']);
+  finish();
+  assert.equal((await result).replyTo,a.id);
+  await runtime.close();
+  assert.deepEqual(sdk.prompts,['运行中','提前','内部','其他范围','问答']);
+});

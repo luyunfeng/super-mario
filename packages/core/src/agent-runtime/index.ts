@@ -54,6 +54,10 @@ interface PendingTurn {
   user: Message;
   assistant?: Message;
   stopped: boolean;
+  readOnlyAction?:ReadOnlyAction;
+  rememberModel?:false;
+  finished?:Promise<void>;
+  settle?:()=>void;
   toolStarted?:true;
   abort?: () => void;
   aborting?: Promise<void>;
@@ -149,6 +153,9 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   let settleCredentials = async () => {};
   let queue = Promise.resolve();
   const pendingTurns = new Map<string, PendingTurn>();
+  // Each scheduled slot takes its turn at dequeue time. Moving the whole turn
+  // keeps its caller, tool permissions and completion signal with the input.
+  const waiting:PendingTurn[] = [];
   let configuring = false;
   const safeError = (error: unknown) => {
     const message = errorText(error);
@@ -737,6 +744,35 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     return true;
   }
 
+  function queuedWebInputs():Message[] {
+    const queued:Message[] = [];
+    for (const turn of waiting) {
+      if (turn.stopped || turn.user.queueState !== 'queued') continue;
+      const saved = store.get<Message>('messages',turn.user.id);
+      if (saved?.queueState === 'queued' && saved.status === 'pending' && saved.role === 'user' &&
+          saved.conversationId === ownConversation && directWebSource(store,saved) && options.canUseScope?.(saved) !== false)
+        queued.push(structuredClone(saved));
+    }
+    return queued;
+  }
+
+  function reorderQueuedInputs(expected:string[],ordered:string[]) {
+    if (!Array.isArray(expected) || !Array.isArray(ordered) || expected.length !== ordered.length ||
+        !expected.every(id=>typeof id==='string' && id.length>0))
+      throw Object.assign(new Error('消息队列顺序参数无效'),{status:400});
+    const selected = new Set(expected);
+    if (selected.size !== expected.length || new Set(ordered).size !== ordered.length || !ordered.every(id=>selected.has(id)))
+      throw Object.assign(new Error('新顺序需包含相同且不重复的消息编号'),{status:400});
+    const current = queuedWebInputs().filter(input=>selected.has(input.id));
+    if (closed || current.length !== expected.length || current.some((input,index)=>input.id!==expected[index]))
+      throw Object.assign(new Error('排队消息已变化，请重新核对顺序'),{status:409});
+    for (const input of current) options.validateQueuedWebInput?.(input);
+    let index = 0;
+    for (let slot=0;slot<waiting.length;slot++) {
+      if (selected.has(waiting[slot]!.user.id)) waiting[slot] = pendingTurns.get(ordered[index++]!)!;
+    }
+  }
+
   function cancelQueuedTurn(inputId:string):{outcome:'cancelled'|'started'|'idle'} {
     const turn = pendingTurns.get(inputId);
     let changed = false;
@@ -756,6 +792,9 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       turn.stopped = true;
       leaveQueue(turn);
       pendingTurns.delete(inputId);
+      const slot = waiting.indexOf(turn);
+      if (slot >= 0) waiting.splice(slot,1);
+      turn.settle?.();
       events.publish('messages.changed',{conversationId:ownConversation,messageId:inputId});
     }
     return {outcome};
@@ -1113,17 +1152,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     // Tool actions must use the executing input, not the latest persisted/queued user.
     currentInput(): Message | undefined { return activeInput; },
     interruptTurn, cancelQueuedTurn,
-    queuedWebInputs():Message[] {
-      const queued:Message[] = [];
-      for (const turn of pendingTurns.values()) {
-        if (turn.stopped || turn.user.queueState !== 'queued') continue;
-        const saved = store.get<Message>('messages',turn.user.id);
-        if (saved?.queueState === 'queued' && saved.status === 'pending' && saved.role === 'user' &&
-            saved.conversationId === ownConversation && directWebSource(store,saved) && options.canUseScope?.(saved) !== false)
-          queued.push(structuredClone(saved));
-      }
-      return queued;
-    },
+    queuedWebInputs, reorderQueuedInputs,
     configurationBusy() { return closed || configuring || pendingTurns.size > 0; },
     lockConfiguration() {
       if (closed || configuring || pendingTurns.size > 0) throw new Error('Agent 正在处理对话，请稍后保存模型配置');
@@ -1223,19 +1252,20 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       // does not mean the conversation has a backlog behind a pending turn.
       const queuedBehindWork = context?.internalSourceId && [...pendingTurns.values()].some(previous =>
         !previous.stopped && (!previous.assistant || previous.assistant.status === 'pending'));
-      const turn: PendingTurn = { user: message, stopped: false };
+      const turn: PendingTurn = { user: message, stopped: false, readOnlyAction, rememberModel };
       pendingTurns.set(message.id, turn);
+      waiting.push(turn);
       queue = queue.then(async () => {
+        await setImmediate();
+        const next = waiting.shift();
+        if (!next) return;
         try {
-          await setImmediate();
-          leaveQueue(turn);
-          if (beginQueuedTurn(turn)) await reply(turn, readOnlyAction, rememberModel);
+          leaveQueue(next);
+          if (beginQueuedTurn(next)) await reply(next, next.readOnlyAction, next.rememberModel);
+        } finally {
+          try { await next.aborting; } finally { pendingTurns.delete(next.user.id); next.settle?.(); }
         }
-        finally {
-          try { await turn.aborting; } finally { pendingTurns.delete(message.id); }
-        }
-      })
-        .catch(error => { infrastructureErrors.push(error); });
+      }).catch(error => { infrastructureErrors.push(error); });
       if (queuedBehindWork && context?.internalSourceId) {
         try { turn.dequeue=options.onInternalQueued?.(message,context.internalSourceId); }
         catch { console.warn('内部队列观察器暂不可用，继续处理原消息。'); }
@@ -1245,10 +1275,14 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     },
     async ask(text: string, context?: Omit<PostContext, 'requestId'>): Promise<Message> {
       const accepted = await this.post(text, ownConversation, context);
-      const pending = queue;
-      await pending;
+      const turn = pendingTurns.get(accepted.id);
+      if (turn) {
+        turn.finished ??= new Promise<void>(resolve => { turn.settle = resolve; });
+        await turn.finished;
+      }
       const reply = store.list<Message>('messages').find(message => message.conversationId === ownConversation && message.role === 'assistant' && message.replyTo === accepted.id);
-      if (!reply) throw new Error('模型回答未能持久化');
+      if (!reply && store.get<Message>('messages',accepted.id)?.queueState === 'cancelled') throw new Error('排队消息已取消，未开始处理。');
+      if (!reply || reply.status === 'pending') throw new Error('模型回答未能持久化');
       if (reply.status === 'failed') throw new Error(reply.text);
       return reply;
     },

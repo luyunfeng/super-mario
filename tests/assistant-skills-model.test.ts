@@ -2896,6 +2896,32 @@ test('Web 全局助手通过 today_brief 核对今日简报，项目和待办会
   } finally { await server.close(); }
 });
 
+test('Web 助手按调度后的实际队列回答下一条消息',async t=>{
+  let release!:()=>void;
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const {server,api,ask,requests}=await fixture(t,async req=>{
+    if (req.lastRole==='tool') {
+      const raw=typeof req.content==='string' ? req.content : (req.content as {text:string}[])[0].text;
+      const status=JSON.parse(raw);
+      return {role:'assistant',content:status.queuedMessages+' 条等待，下一条是'+status.nextQueuedMessage.text};
+    }
+    if (JSON.stringify(req.content).includes('查询队列的下一条')) {
+      assert.match(req.system,/不能提前执行其中的要求/);
+      await gate;
+      return call('conversation_status',{},'queue-status');
+    }
+    return {role:'assistant',content:'收到'};
+  });
+  try {
+    const checking=ask('查询队列的下一条');
+    await t.waitFor(()=>assert.ok(requests.length));
+    const first=await api('/messages',{text:'合成任务甲'}), second=await api('/messages',{text:'合成任务乙'});
+    await api('/messages/queue',{expected:[first.id,second.id],ordered:[second.id,first.id]});
+    release();
+    assert.equal(await checking,'2 条等待，下一条是合成任务乙');
+  } finally { release(); await server.close(); }
+});
+
 test('Web 的 conversation_status 只读取当前范围，排除本轮提问并阻止指定其他会话', async t => {
   const projectText = '项目会话已核对合成清单', mainText = '主对话已收到合成回执';
   const unrelated = '其他会话合成记录不可见';
@@ -2925,6 +2951,7 @@ test('Web 的 conversation_status 只读取当前范围，排除本轮提问并�
     assert.equal(req.callId, 'this-status');
     const status = JSON.parse(raw);
     assert.equal(status.queuedMessages,0);
+    assert.equal(status.nextQueuedMessage,null);
     assert.equal(status.lastMessage.text, selected);
     assert.equal(status.lastMessage.role, 'assistant');
     assert.equal(status.phase, 'idle');

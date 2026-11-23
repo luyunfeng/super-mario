@@ -138,6 +138,12 @@ export function createScopedAgents(options: Options) {
       if (entry?.scope.kind!=='project' || conversationId !== 'project:'+entry.scope.projectId+':work') return [];
       return entry.runtime.queuedWebInputs();
     },
+    reorderQueuedInputs(conversationId:string,expected:string[],ordered:string[]) {
+      const entry=agents.get(conversationId);
+      if (entry?.scope.kind!=='project' || conversationId !== 'project:'+entry.scope.projectId+':work')
+        throw Object.assign(new Error('项目排队消息已变化'),{status:409});
+      entry.runtime.reorderQueuedInputs(expected,ordered);
+    },
     cancelQueuedTurn(conversationId:string,inputId:string):{outcome:'cancelled'|'started'|'idle'} {
       const input = options.store.get<Message>('messages',inputId);
       if (!input?.projectId || !input.directWebInput || input.role !== 'user' || input.replyTo || (input.origin && input.origin!=='user') ||

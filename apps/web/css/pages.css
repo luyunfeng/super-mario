@@ -390,3 +390,8 @@ body:has(.splash-background) #root { position: relative; }
 .message-queue summary { cursor:pointer; }
 .message-queue ol { max-height:10rem; overflow:auto; margin:.35rem 0; padding-inline-start:1.7rem; }
 .message-queue li { padding-block:.15rem; overflow-wrap:anywhere; }
+.message-queue-row { display:flex; align-items:center; gap:.5rem; }
+.message-queue-row > a { flex:1; min-width:0; overflow-wrap:anywhere; }
+.message-queue-actions { display:flex; flex:none; gap:.2rem; }
+.message-queue-actions button[aria-disabled=true] { opacity:.5; cursor:default; }
+.message-queue li[draggable=true] { cursor:grab; }

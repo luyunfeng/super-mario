@@ -862,13 +862,15 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res,202,await app.retryFailedReply(decodeURIComponent(retryReply[1]!),conversationId));
         }
         const queueView = path.match(/^\/api\/v1(?:\/projects\/([^/]+))?\/messages\/queue$/);
-        if (queueView && method==='GET') {
+        if (queueView && (method==='GET' || method==='POST')) {
           const project = queueView[1] && decodeURIComponent(queueView[1]);
           const filter = url.searchParams.get('projectId') || undefined;
           const todoId = url.searchParams.get('todoId') || undefined;
           if (project && filter && filter!==project || !project && todoId)
             throw new InputError('队列筛选范围与当前会话不符');
-          return json(res,200,app.queuedMessages(project ? `project:${project}:work` : 'main',project || filter,todoId));
+          const conversationId=project ? `project:${project}:work` : 'main';
+          if (method==='POST') return json(res,200,app.reorderQueuedMessages(conversationId,project || filter,todoId,await body(req)));
+          return json(res,200,app.queuedMessages(conversationId,project || filter,todoId));
         }
         const stopMessage = path.match(/^\/api\/v1(?:\/projects\/([^/]+))?\/messages\/([^/]+)\/(stop|cancel-queued)$/);
         if (stopMessage && method === 'POST') {

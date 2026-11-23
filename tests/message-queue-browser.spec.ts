@@ -10,7 +10,7 @@ import {startServer} from '../apps/server/src/index.ts';
 import {createProjectDiscovery} from '../plugins/project-discovery.ts';
 import type {Message} from '../packages/protocol/src/index.ts';
 
-test('主对话与项目能在回复中排队，刷新后取消一项；已开始的排队项拒绝迟到的取消', {timeout:60000},async t=>{
+test('主对话与项目能在回复中排队，刷新后调序并取消一项；已开始的排队项拒绝迟到的取消', {timeout:60000},async t=>{
   const dir=await mkdtemp(join(tmpdir(),'mario-queue-browser-')),token='fixture-queue',machineId='fixture-workspace';
   const calls:string[]=[],held=new Map<string,ServerResponse>();
   const frame=(delta:object,finish_reason:string|null)=>'data: '+JSON.stringify({id:'fixture',model:'fixture',object:'chat.completion.chunk',
@@ -20,7 +20,7 @@ test('主对话与项目能在回复中排队，刷新后取消一项；已开�
     if(req.method!=='POST'){res.writeHead(404).end();return;}
     let body='';for await(const part of req)body+=part;
     const payload=JSON.parse(body),user=payload.messages.findLast((m:{role:string})=>m.role==='user');
-    const tag=JSON.stringify(user?.content).match(/queue-(main|project)-(first|cancel|race|last)/)?.[0]??'unexpected';
+    const tag=JSON.stringify(user?.content).match(/queue-(main|project|other)-(first|cancel|race|last)/)?.[0]??'unexpected';
     calls.push(tag);res.writeHead(200,{'content-type':'text/event-stream'});
     res.write(frame({role:'assistant',content:'合成答复 '+tag},null));
     if(tag.endsWith('-first') || tag.endsWith('-race'))held.set(tag,res);
@@ -65,12 +65,28 @@ test('主对话与项目能在回复中排队，刷新后取消一项；已开�
     const first=await sendInput('first');
     await expect.poll(()=>held.has(tag+'first')).toBe(true);
     const drop=await sendInput('cancel'),race=await sendInput('race'),last=await sendInput('last');
+    const reorder=(expected:string[],ordered:string[])=>page.request.post(endpoint+'/queue',{headers,data:{expected,ordered}});
     if (scoped) {
+      const main=server.url+'/api/v1/messages';
+      const postMain=async(text:string)=>{
+        const res=await page.request.post(main,{headers,data:{text}});
+        assert.equal(res.status(),202);return (await res.json() as Message).id;
+      };
+      await postMain('queue-other-first');
+      await expect.poll(()=>held.has('queue-other-first')).toBe(true);
+      const outsider=await postMain('queue-other-cancel');
+      const visible=[drop.id,race.id,last.id];
+      const injected=await reorder(visible,[race.id,outsider,drop.id]);
+      assert.equal(injected.status(),400,await injected.text());
+      const other=await page.request.get(main+'/queue',{headers});
+      assert.deepEqual((await other.json()).items.map((item:Message)=>item.id),[outsider]);
+      finish(held.get('queue-other-first')!);
       const wrong=await page.request.post(server.url+'/api/v1/messages/'+drop.id+'/cancel-queued',{headers,data:{}});
       assert.equal(wrong.status(),404);
       const plugin=server.url+'/api/v1/plugins/conversation-queue';
       assert.equal((await page.request.post(plugin,{headers,data:{enabled:false}})).status(),200);
       assert.equal((await page.request.get(endpoint+'/queue',{headers})).status(),503);
+      assert.equal((await reorder(visible,[race.id,last.id,drop.id])).status(),503);
       assert.equal((await page.request.post(url(drop),{headers,data:{}})).status(),503);
       assert.equal((await page.request.post(plugin,{headers,data:{enabled:true}})).status(),200);
     }
@@ -93,6 +109,17 @@ test('主对话与项目能在回复中排队，刷新后取消一项；已开�
     await expect(row(drop)).toContainText('已取消排队');
     await checkQueue([race,last]);
     await expect(summary).toHaveText('排队消息（2）');
+    const outdated=await reorder([drop.id,race.id,last.id],[last.id,race.id,drop.id]);
+    assert.equal(outdated.status(),409);
+    await checkQueue([race,last]);
+    const moved=page.waitForResponse(r=>r.url().split('?')[0]===endpoint+'/queue' && r.request().method()==='POST');
+    await overview.getByRole('listitem').filter({hasText:last.text}).getByRole('button',{name:'上移',exact:true}).click();
+    const result=await moved;
+    assert.equal(result.status(),200,await result.text());
+    assert.deepEqual(result.request().postDataJSON(),{expected:[race.id,last.id],ordered:[last.id,race.id]});
+    assert.deepEqual((await result.json()).items.map((item:Message)=>item.id),[last.id,race.id]);
+    await expect(overview.getByRole('link').first()).toHaveText(last.text);
+    await checkQueue([last,race]);
     const again=await page.request.post(url(drop),{headers:{authorization:'Bearer '+token},data:{}});
     assert.equal(again.status(),200);assert.equal((await again.json()).outcome,'cancelled');
     let release!:()=>void;const travelling=new Promise<void>(done=>{release=done;});
@@ -110,7 +137,7 @@ test('主对话与项目能在回复中排队，刷新后取消一项；已开�
     finish(held.get(tag+'race')!);
     await expect.poll(()=>server.app.store.list<Message>('messages').filter(m=>m.role==='assistant' &&
       [first.id,race.id,last.id].includes(m.replyTo??'') && m.status==='done').length).toBe(3);
-    assert.deepEqual(calls.filter(call=>call.startsWith(tag)),['first','race','last'].map(s=>tag+s));
+    assert.deepEqual(calls.filter(call=>call.startsWith(tag)),['first','last','race'].map(s=>tag+s));
     assert.deepEqual(stops,[]);
   }
 });
