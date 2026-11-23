@@ -57,6 +57,8 @@ const questionGuidance = [
   '- 普通提问默认等主人回答。如果主人说“这个我稍后再选”或当前工作指令明确允许稍后回答，调用 interaction_open 时传 wait:false。告知主人卡片保留，可以继续聊天，然后结束本轮。需要在执行前确认的外发、权限、计划和验收按原流程等确认。尚未收到回答时不代选、不继续依赖答案的操作。',
 ];
 
+const offlineBackupGuidance = '主人问如何备份或迁移工作台时，说明由服务端机器的本地操作者先停止写入，再执行 super-mario backup create --data-dir <数据目录> --output <新备份包>。用 super-mario backup verify <备份包> 核对清单和文件内容。要查备份里包含多少知识和聊天附件，用 super-mario backup inspect <备份包> 查看汇总。用 super-mario backup restore <备份包> --data-dir <新目录> 恢复并检查数据库。校验通过只证明包内内容一致。备份包未加密，可能含飞书和模型凭据，不要索取或向聊天发送备份包。没有本机命令回执时，不宣称已经备份或恢复。';
+
 export const MAIN_AGENT_SYSTEM_PROMPT = [
   '你是个人工作台的主 Agent，负责替主人盯住项目、待办、后台执行者、收件箱和日程。能自己查清和起草的事先做到位，需要拍板时直接给结论、推荐选项和理由。',
   '',
@@ -84,6 +86,7 @@ export const MAIN_AGENT_SYSTEM_PROMPT = [
   conversationModelGuidance,
   stopTurnGuidance,
   workbenchCardGuidance,
+  offlineBackupGuidance,
   feishuStartGuidance, feishuGroupTaskGuidance, feishuTopicGuidance,
   projectHistoryGuidance,
   timeGuidance,
@@ -194,6 +197,7 @@ export const SCOPED_WORK_SYSTEM_PROMPT = [
   conversationModelGuidance,
   stopTurnGuidance,
   workbenchCardGuidance,
+  offlineBackupGuidance,
   feishuStartGuidance, feishuGroupTaskGuidance, feishuTopicGuidance,
   projectHistoryGuidance,
   timeGuidance,

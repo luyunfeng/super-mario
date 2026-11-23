@@ -4663,3 +4663,29 @@ test('工作区看板只在主人 Web 主对话和飞书配对私聊提供当前
     assert.equal(await ask('核对隔离'),'当前无法读取看板。');
   } finally { await server.close(); }
 });
+
+test('Web 和飞书答复离线备份问题时区分校验与实际恢复', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const answer = '请在服务器停写后创建备份，校验后恢复到新目录。我没有收到本机恢复回执。';
+  const {server, api, ask} = await fixture(t, request => {
+    assert.match(request.system, /super-mario backup create --data-dir/);
+    assert.match(request.system, /super-mario backup verify/);
+    assert.match(request.system, /super-mario backup restore/);
+    assert.match(request.system, /不要索取或向聊天发送备份包/);
+    assert.match(request.system, /不宣称已经备份或恢复/);
+    return {role:'assistant',content:answer};
+  }, options => {
+    adapter = options;
+    return {start:async()=>{}, close:async()=>{}, collect:async()=>[], status:()=>({connected:true}),
+      send:async (_target,text)=>{ sent.push(text); }};
+  });
+  try {
+    assert.equal(await ask('怎么备份整台工作台，校验完就算恢复了吗？'), answer);
+    const bot = await api('/feishu/bots',{name:'备份问答',appId:'cli_1111111111111111',appSecret:'fixture',scope:{kind:'global'},requireConfirmation:false});
+    const owner = {chatId:'oc_dm',senderId:'ou_owner',senderType:'user',chatType:'p2p'} as const;
+    await adapter.onMessage(bot.pairingCode,{...owner,messageId:'backup-pair'});
+    await adapter.onMessage('如何恢复到新的目录？',{...owner,messageId:'backup-guide'});
+    await t.waitFor(()=>assert.ok(sent.includes(answer)));
+  } finally { await server.close(); }
+});

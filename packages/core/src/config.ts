@@ -3,6 +3,11 @@ import { isAbsolute, resolve, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { AppConfig } from '../../protocol/src/index.ts';
 
+export function serverDataDirectory(directory?: string, env: NodeJS.ProcessEnv = process.env): string {
+  const cacheRoot = env.XDG_CACHE_HOME && isAbsolute(env.XDG_CACHE_HOME) ? env.XDG_CACHE_HOME : join(homedir(), '.cache');
+  return resolve(directory ?? env.SUPER_MARIO_DATA_DIR ?? (env.SUPER_MARIO_DEV === '1' ? join(cacheRoot, 'super-mario', 'dev') : join(homedir(), '.super-mario')));
+}
+
 export function readServerOptions(args: string[], env: NodeJS.ProcessEnv = process.env): AppConfig & { help: boolean; version: boolean } {
   const { values } = parseArgs({ args, options: { host: { type: 'string' }, port: { type: 'string' }, 'data-dir': { type: 'string' }, token: { type: 'string' }, provider: { type: 'string' }, model: { type: 'string' }, demo: { type: 'boolean' }, help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' } } });
   const host = values.host ?? env.SUPER_MARIO_HOST ?? '127.0.0.1';
@@ -16,7 +21,6 @@ export function readServerOptions(args: string[], env: NodeJS.ProcessEnv = proce
   if (Boolean(provider) !== Boolean(model)) throw new Error('请同时设置 provider 和 model');
   const feishuEnabled = env.SUPER_MARIO_FEISHU_ENABLED === '1';
   const feishu = feishuEnabled ? { appId: env.SUPER_MARIO_FEISHU_APP_ID ?? '', appSecret: env.SUPER_MARIO_FEISHU_APP_SECRET ?? '', profile: env.SUPER_MARIO_FEISHU_USER_PROFILE } : undefined;
-  const cacheRoot = env.XDG_CACHE_HOME && isAbsolute(env.XDG_CACHE_HOME) ? env.XDG_CACHE_HOME : join(homedir(), '.cache');
-  const dataDir = resolve(values['data-dir'] ?? env.SUPER_MARIO_DATA_DIR ?? (dev ? join(cacheRoot, 'super-mario', 'dev') : join(homedir(), '.super-mario')));
+  const dataDir = serverDataDirectory(values['data-dir'], env);
   return { feishu, host, port, token, dataDir, demo: values.demo ?? env.SUPER_MARIO_DEMO === '1', model: provider && model ? { provider, model } : undefined, help: values.help ?? false, version: values.version ?? false };
 }

@@ -2,16 +2,21 @@
 import { existsSync } from 'node:fs';
 // Published packages use JavaScript: Node does not strip TypeScript in node_modules.
 const compiled = process.env.SUPER_MARIO_DEV !== '1' && existsSync(new URL('../dist/packages/core/src/config.js', import.meta.url));
-const { readServerOptions } = await import(compiled ? '../dist/packages/core/src/config.js' : '../packages/core/src/config.ts');
+const { readServerOptions, serverDataDirectory } = await import(compiled ? '../dist/packages/core/src/config.js' : '../packages/core/src/config.ts');
 
 async function main() {
+  if (process.argv[2] !== 'office' && existsSync('.env')) process.loadEnvFile('.env');
+  if (process.argv[2] === 'backup') {
+    const { backupCli } = await import(compiled ? '../dist/plugins/backup/cli.js' : '../plugins/backup/cli.ts');
+    const result = await backupCli(process.argv.slice(3), serverDataDirectory());
+    console.log(typeof result === 'string' ? result : JSON.stringify(result));
+    return;
+  }
   if (process.argv[2] === 'office') {
     const { officeCli } = await import(compiled ? '../dist/plugins/office/cli.js' : '../plugins/office/cli.ts');
     console.log(JSON.stringify(await officeCli(process.argv.slice(3))));
     return;
   }
-  // Local credentials are ignored by Git; process environment takes precedence.
-  if (existsSync('.env')) process.loadEnvFile('.env');
   const config = readServerOptions(process.argv.slice(2));
   if (config.help) {
     console.log(`Super Mario — 个人 AI 工作台
@@ -19,6 +24,7 @@ async function main() {
 用法: super-mario [选项]
       super-mario office <docx|pptx|xlsx> <源文件> [-o 输出文件] [--title 标题]
       super-mario office check <办公文件>
+      super-mario backup --help
   --demo                  本地演示，不调用模型或真实执行者
   --host <地址>           默认 127.0.0.1
   --port <端口>           默认 3000
@@ -45,4 +51,4 @@ Web 页面与 API 由同一服务提供。`);
   };
   process.once('SIGINT', stop); process.once('SIGTERM', stop);
 }
-main().catch(error => { console.error((process.argv[2] === 'office' ? '办公文件处理失败：' : '启动失败：') + error.message); process.exitCode = 1; });
+main().catch(error => { console.error((process.argv[2] === 'backup' ? '备份操作失败：' : process.argv[2] === 'office' ? '办公文件处理失败：' : '启动失败：') + error.message); process.exitCode = 1; });
