@@ -14,7 +14,6 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
   const localDate = morningTimezone ? new Intl.DateTimeFormat('en-CA', {
     timeZone: morningTimezone, year: 'numeric', month: '2-digit', day: '2-digit',
   }) : undefined;
-  const morningDate = localDate?.format(cutoff);
   const projects = store.list<Project>('projects').filter(p => !p.archivedAt && (projectId === undefined || p.id === projectId));
   const runs = store.list<Run>('runs');
   const todos = store.list<Todo>('todos');
@@ -33,12 +32,14 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
     const overdue: { id: string; title: string; dueAt: string; dueDay?: string }[] = [];
     const dueToday: typeof overdue = [];
     if (localDate) {
+      const morningDate = localDate.format(cutoff);
       for (const todo of scopedTodos) {
         if (!todo.dueAt || todo.completedAt || !beforeEnd(todo.createdAt)) continue;
         const time = Date.parse(todo.dueAt);
         if (!Number.isFinite(time)) continue;
         const item = { id: todo.id, title: todo.title, dueAt: todo.dueAt, ...(todo.dueDay && { dueDay: todo.dueDay }) };
-        if (time < cutoff) overdue.push(item);
+        const pastDue = todo.dueDay ? todo.dueDay < morningDate : time < cutoff;
+        if (pastDue) overdue.push(item);
         else if ((todo.dueDay ?? localDate.format(time)) === morningDate) dueToday.push(item);
       }
       for (const group of [overdue, dueToday]) {

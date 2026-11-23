@@ -67,3 +67,13 @@ test('早报按计划时刻区分逾期和当地当天剩余期限，覆盖夏�
   assert.doesNotMatch(text, /tomorrow|other-project|future-created|invalid-date/);
   assert.equal(buildWindowBrief(store, start, scheduled, 'a').projects[0].overdue, undefined);
 });
+
+test('全天待办按早报当地日期判断逾期，保留登记日期', t => {
+  const store = facts(t);
+  for (const [id, day, offset] of [['today', '2026-01-02', '+14:00'], ['yesterday', '2026-01-01', '-12:00']]) {
+    store.put('todos', id, {id, title:id, projectId:'a', dueDay:day, dueAt:day + 'T23:59:59.999' + offset, createdAt:from, updatedAt:from});
+  }
+  const [project] = buildWindowBrief(store, from, '2026-01-02T11:00:00Z', 'a', [], 'UTC').projects;
+  assert.deepEqual(project.overdue?.map(item => item.id), ['yesterday']);
+  assert.deepEqual(project.dueToday?.map(item => item.id), ['today']);
+});
