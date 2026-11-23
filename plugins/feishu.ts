@@ -10,7 +10,7 @@ import type { CollectedReplyEvidence } from '../packages/protocol/src/index.ts';
 /** Factory injection keeps tests offline while exercising the real SDK dispatcher. */
 export type FeishuWSFactory = (options: ConstructorParameters<typeof WSClient>[0]) => Pick<WSClient, 'start' | 'close' | 'getConnectionStatus'>;
 export interface FeishuMention { self?: true; key?: string; openId?: string; appId?: string; name?: string }
-export interface FeishuMessageSource { privateFile?:true; privateImage?:true; mentions?: FeishuMention[]; chatId: string; messageId: string; chatType?: string; chatName?: string; senderName?: string; senderId?: string; senderType?: 'user' | 'bot'; mentionedSelf?: boolean; parentId?: string; threadId?: string; rootId?: string }
+export interface FeishuMessageSource { privateForward?:true; privateFile?:true; privateImage?:true; mentions?: FeishuMention[]; chatId: string; messageId: string; chatType?: string; chatName?: string; senderName?: string; senderId?: string; senderType?: 'user' | 'bot'; mentionedSelf?: boolean; parentId?: string; threadId?: string; rootId?: string }
 /** Private resume data. The host commits it only after durable inbox ingestion. */
 export interface PersonalCheckpoint {
   version: 1;
@@ -75,6 +75,7 @@ export interface FeishuOptions {
   groupMessages?: boolean;
   privateImages?: boolean;
   privateFiles?: boolean;
+  privateForwards?: boolean;
   groupChatIds?: string[];
   readGroup?: boolean;
   /** Forward explicitly addressed /ai requests. The host validates the paired owner. */
@@ -139,6 +140,37 @@ function meetingMinutes(hit: Row) {
 }
 const collectSender = (hit: Row) => !botSender(hit) || meetingMinutes(hit);
 
+const forwardMedia = new Map(Object.entries({
+  image:'[图片]', img:'[图片]', file:'[文件]', media:'[视频]', audio:'[语音消息]', emotion:'[表情]',
+  sticker:'[表情]', interactive:'[卡片]', merge_forward:'[合并转发]', share_chat:'[分享的群]', share_user:'[分享的名片]',
+}));
+function forwardBody(message: Row): string {
+  const type = string(message.msg_type);
+  if (type !== 'text' && type !== 'post') return type ? forwardMedia.get(type) ?? '[其他消息]' : '';
+  let raw: Row;
+  try { raw = object(JSON.parse(string(object(message.body).content))); } catch { return ''; }
+  const mentions = new Map<string,string>();
+  for (const value of Array.isArray(message.mentions) ? message.mentions : []) {
+    const mention = object(value), name = string(mention.name);
+    if (name) mentions.set(string(mention.key), name);
+  }
+  let text = string(raw.text);
+  if (type === 'post') {
+    const post = Array.isArray(raw.content) ? raw : object(raw.zh_cn ?? raw.en_us ?? raw.ja_jp);
+    const lines = [string(post.title)];
+    for (const line of Array.isArray(post.content) ? post.content : []) {
+      if (!Array.isArray(line)) continue;
+      lines.push(line.map(value => {
+        const node = object(value), tag = string(node.tag);
+        if (tag === 'a' || tag === 'text') return string(node.text);
+        if (tag === 'at') return '@' + (string(node.user_name) || mentions.get(string(node.user_id)) || '成员');
+        return forwardMedia.get(tag) ?? '';
+      }).join(''));
+    }
+    text = lines.join('\n');
+  }
+  return text.replace(/@_user_\d+/g, key => mentions.has(key) ? '@' + mentions.get(key) : key).trim();
+}
 /** Platform timestamps use milliseconds; CLI output may use seconds or ISO dates. */
 function isoTime(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
@@ -322,24 +354,78 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const { id, type } = await postMessage('/open-apis/im/v1/messages?receive_id_type=chat_id', { receive_id: chatId, ...payload, ...(context?.replyKey && { uuid: context.replyKey }) }, fallback, context?.beforeSend);
     if (id) context?.onSent?.(id, type);
   }
-  async function readVerifiedMessage(chatId: string, messageId: string, guard: () => void, openId=false): Promise<Row | undefined> {
-    if (!chatId || !messageId || messageId.length > 200 || /[^\w-]/.test(messageId)) return;
+  async function readMessageItems(messageId: string, guard: () => void, openId: boolean): Promise<Row[]> {
+    if (!messageId || messageId.length > 200 || /[^\w-]/.test(messageId)) throw new Error('飞书消息 ID 无效');
     const epoch = generation, signal = controller.signal;
     const check = () => {
       guard();
-      if (!running || closed || epoch !== generation) throw new Error('任务来源的机器人连接已变化');
+      if (!running || closed || epoch !== generation) throw new Error('来源的机器人连接已变化');
     };
     check();
+    const bearer = await getToken();
+    check();
+    const data = await request('/open-apis/im/v1/messages/' + encodeURIComponent(messageId) + (openId ? '?user_id_type=open_id' : ''), {}, bearer, signal, 'GET', 'error');
+    check();
+    const items = object(data.data).items;
+    if (!Array.isArray(items)) throw new Error('飞书未返回原消息');
+    return items.map(object);
+  }
+  async function readVerifiedMessage(chatId: string, messageId: string, guard: () => void, openId=false): Promise<Row | undefined> {
+    if (!chatId) return;
+    const epoch = generation;
     try {
-      const bearer = await getToken();
-      check();
-      const data = await request('/open-apis/im/v1/messages/' + encodeURIComponent(messageId)+(openId?'?user_id_type=open_id':''), {}, bearer, signal, 'GET', 'error');
-      check();
-      const items = object(data.data).items;
-      if (!Array.isArray(items) || items.length !== 1) return;
-      const message = object(items[0]);
-      if (message.message_id === messageId && message.chat_id === chatId && message.deleted !== true) return message;
-    } catch { check(); }
+      const items = await readMessageItems(messageId, guard, openId);
+      const message = items[0];
+      if (items.length === 1 && message?.message_id === messageId && message.chat_id === chatId && message.deleted !== true) return message;
+    } catch {
+      guard();
+      if (!running || closed || epoch !== generation) throw new Error('来源的机器人连接已变化');
+    }
+  }
+  async function readPrivateForward(chatId: string, messageId: string, senderId: string, guard: () => void): Promise<string> {
+    if (!options.privateForwards || !chatId || !senderId) throw new Error('私聊合并转发来源未启用或不完整');
+    const epoch = generation;
+    const items = await readMessageItems(messageId, guard, true);
+    guard();
+    if (!running || closed || generation !== epoch) throw new Error('来源的机器人连接已变化');
+    const roots = items.filter(row => row.message_id === messageId);
+    const root = roots[0], sender = object(root?.sender);
+    if (roots.length !== 1 || !root || root.msg_type !== 'merge_forward' || root.chat_id !== chatId ||
+        root.chat_type && root.chat_type !== 'p2p' || root.upper_message_id || root.deleted === true || root.updated === true ||
+        sender.sender_type !== 'user' || sender.id_type !== 'open_id' || sender.id !== senderId)
+      throw new Error('无法核对原始私聊合并转发');
+    const children = items.filter(row => row.upper_message_id === messageId && row.deleted !== true && string(row.message_id))
+      .map(row => ({row, at: isoTime(row.create_time)}))
+      .sort((a, b) => (a.at ?? '~').localeCompare(b.at ?? '~'));
+    const ids = new Set<string>(), speakers = new Map<string, number>();
+    const lines: string[] = [];
+    let length = 0;
+    for (const {row, at} of children) {
+      const id = string(row.message_id);
+      if (ids.has(id)) continue;
+      ids.add(id);
+      const text = forwardBody(row);
+      if (!text) continue;
+      const author = object(row.sender), userId = string(author.id);
+      let name = '未知发送者';
+      if (author.sender_type === 'app') name = '机器人';
+      if (author.sender_type === 'user') {
+        if (userId && !speakers.has(userId)) speakers.set(userId, speakers.size + 1);
+        name = string(author.name).trim() || (userId ? '成员' + speakers.get(userId) : '成员');
+      }
+      const line = (lines.length ? '\n' : '') + (at ?? '时间未知') + ' ' + name + '：' + text;
+      const available = 30_000 - length;
+      // UTF-16 slicing first bounds the work even for a very long single text.
+      const chars = Array.from(line.slice(0, available * 2 + 2));
+      if (chars.length > available) {
+        const marker = '\n[聊天记录已截断]';
+        return Array.from(lines.join('') + chars.slice(0, available).join('')).slice(0, 30_000 - Array.from(marker).length).join('') + marker;
+      }
+      lines.push(line);
+      length += chars.length;
+    }
+    if (!lines.length) throw new Error('合并转发没有可读取的直接子消息');
+    return lines.join('');
   }
   async function readPrivateResource<T>(kind:'file'|'image',chatId:string,messageId:string,ownerId:string,guard:()=>void,
     consume:(name:string,mime:string,stream:AsyncIterable<Uint8Array>)=>Promise<T>):Promise<T> {
@@ -526,7 +612,8 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const post = group && message.message_type === 'post' && (options.readGroup || options.groupTasks || topics);
     const image = options.privateImages && message.chat_type === 'p2p' && message.message_type === 'image';
     const file = options.privateFiles && message.chat_type === 'p2p' && message.message_type === 'file';
-    if (sender.sender_type !== 'user' || (message.message_type !== 'text' && !post && !image && !file)) return;
+    const forward = options.privateForwards && message.chat_type === 'p2p' && message.message_type === 'merge_forward' && !!string(object(sender.sender_id).open_id);
+    if (sender.sender_type !== 'user' || (message.message_type !== 'text' && !post && !image && !file && !forward)) return;
     if (group && !commandGroup && !topics && options.groupMessages && !botOpenId) return;
     if (group && !commandGroup && options.commandGroupChatId && !options.groupMessages && !groupCommands) return;
     // Preserve unknown entries too: an unresolved @ must not look like a message with no addressee.
@@ -538,7 +625,8 @@ export function createFeishuIntegration(options: FeishuOptions) {
     }) : undefined;
     const pendingSetting = topics && [...topicTransitions].some(change => change.chatId === chatId);
     let text: string | undefined;
-    try {
+    if (forward) text = '[转发的聊天记录]';
+    else try {
       const raw = object(JSON.parse(string(message.content)));
       text = file ? (/^file_[\w-]{1,240}$/.test(string(raw.file_key)) ? '[文件]' : undefined) : image ? (/^img_[\w-]{1,240}$/.test(string(raw.image_key)) ? '[图片]' : undefined) : post ? readGroupPost(raw, mentions ?? [], { readGroup: options.readGroup, groupTasks: options.groupTasks,
         topicCommands: topics, topicBody: topics && !!threadId && (!!options.topicPolicy?.(chatId) || pendingSetting) }) : string(raw.text);
@@ -562,7 +650,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     if (queue.length >= 100) { operationReason = '飞书消息队列已满，消息未处理'; return; }
     remember(messageId);
     const source: FeishuMessageSource = {
-      ...(file && {privateFile:true}), ...(image && {privateImage:true}), chatId, messageId, chatType: string(message.chat_type) || undefined,
+      ...(forward && {privateForward:true}), ...(file && {privateFile:true}), ...(image && {privateImage:true}), chatId, messageId, chatType: string(message.chat_type) || undefined,
       senderId: string(object(sender.sender_id).open_id) || undefined, senderType: 'user',
       // EventDispatcher preserves the SDK's nested id; CLI-normalized mentions differ.
       mentionedSelf: !!botOpenId && !!mentions?.some(mention => mention.openId === botOpenId),
@@ -1074,7 +1162,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const detail = [channelReason, identityReason, operationReason].filter(Boolean).join('；');
     return { connected, ...(detail ? { reason: detail } : {}) };
   }
-  return { start, close, send, readPrivateImage, readPrivateFile, readTaskQuote, topicOfMessage, readReaction, updateCard, collect, collectBatch, status,
+  return { start, close, send, readPrivateForward, readPrivateImage, readPrivateFile, readTaskQuote, topicOfMessage, readReaction, updateCard, collect, collectBatch, status,
     pinMessage: (id: string) => changePlatformMessage('pin', id),
     unpinMessage: (id: string) => changePlatformMessage('unpin', id),
     recallMessage: (id: string) => changePlatformMessage('recall', id),

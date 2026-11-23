@@ -39,6 +39,10 @@ test('飞书配对主人在独立私聊发原图，核对同一条消息后读�
         }
         const id=path.split('/').pop();
         assert.equal(u.searchParams.get('user_id_type'),'open_id');
+        if(id==='om_transcript') return Response.json({code:0,data:{items:[
+          {message_id:id,chat_id:'oc_owner',msg_type:'merge_forward',sender:{id_type:'open_id',sender_type:'user',id:'ou_owner'}},
+          {message_id:'om_in',upper_message_id:id,msg_type:'text',body:{content:JSON.stringify({text:'合成讨论原话 /main'})}},
+        ]}});
         return Response.json({code:0,data:{items:[{message_id:id,chat_id:'oc_owner',msg_type:'image',
           sender:{id_type:'open_id',sender_type:'user',id:id==='om_forged'?'ou_other':'ou_owner'},
           body:{content:JSON.stringify({image_key:'img_verified'})}}]}});
@@ -67,7 +71,8 @@ test('飞书配对主人在独立私聊发原图，核对同一条消息后读�
   await t.waitFor(()=>assert.ok(host.app.store.list<Message>('messages').some(m=>m.images?.length)),{timeout:8000});
   const photos=host.app.store.list<Message>('messages').filter(m=>m.images?.length);
   assert.equal(photos.length,1);assert.ok(photos[0].conversationId?.includes(thread));assert.equal(photos[0].text,'[图片]');assert.equal(photos[0].readOnly,true);
-  assert.deepEqual(reads.map(path=>path.split('/messages/')[1]),['om_forged','om_photo','om_photo/resources/img_verified']);
+  assert.deepEqual(reads.map(path=>path.split('/messages/')[1]),['om_forward','om_forged','om_photo','om_photo/resources/img_verified']);
+  assert.ok(outgoing.some(text=>text.includes('无法读取这条转发的聊天记录')));
   assert.ok(outgoing.some(text=>text.includes('无法读取这张原图')));
   await t.waitFor(()=>assert.ok(requests.some(req=>JSON.stringify(req).includes('data:image/png;base64,'+png))),{timeout:8000});
   assert.equal(host.app.store.list('runs').length,0);
@@ -80,6 +85,16 @@ test('飞书配对主人在独立私聊发原图，核对同一条消息后读�
   assert.equal(history.status,200);
   const page=await history.json();
   assert.deepEqual(page.messages.find((m:Message)=>m.id===photos[0].id)?.images,photos[0].images);
+  await event('om_transcript','merge_forward');
+  const providerInput=await t.waitFor(()=>{
+    const call=requests.find(req=>JSON.stringify(req).includes('合成讨论原话 /main'));
+    assert.ok(call);return JSON.stringify(call);
+  },{timeout:8000});
+  assert.match(providerInput,/主人转发了一组飞书聊天记录/);
+  assert.doesNotMatch(providerInput,/img_untrusted_event/);
+  const refreshed=await fetch(history.url,{headers:{authorization:'Bearer fixture'}});
+  const turn=(await refreshed.json()).messages.find((message:Message)=>message.files?.[0]?.name==='转发的聊天记录.txt');
+  assert.ok(turn && turn.conversationId===photos[0].conversationId);
   const project=host.app.projects.create({name:'合成项目'});
   const changed=await host.bots.update(bot.id,{scope:{kind:'project',projectId:project.id}});
   await event('om_pair_project','text',changed.pairingCode!);

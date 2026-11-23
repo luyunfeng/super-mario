@@ -7,6 +7,7 @@ import test from 'node:test';
 import type {EventDispatcher} from '@larksuiteoapi/node-sdk';
 import {startServer} from '../apps/server/src/index.ts';
 import type {Message} from '../packages/protocol/src/index.ts';
+import type {FeishuOptions} from '../plugins/feishu.ts';
 import {createFeishuIntegration} from '../plugins/feishu.ts';
 
 test('私聊普通文件从已核实的原消息分块接收，撤回和重新配对收回附件权限',async t=>{
@@ -54,7 +55,7 @@ test('私聊普通文件从已核实的原消息分块接收，撤回和重新�
   await event('om_unpaired');await event('om_pair','text',bot.pairingCode!);
   await t.waitFor(()=>assert.ok(host.bots.list()[0]?.paired));
   await event('om_new','text','/new');await t.waitFor(()=>assert.equal(host.app.store.list('feishu.private-threads').length,1));
-  await event('om_group','file','','ou_owner',true);await event('om_other','file','','ou_other');await event('om_fwd','merge_forward');
+  await event('om_group','file','','ou_owner',true);await event('om_other','file','','ou_other');await event('om_fwd','merge_forward','','ou_owner',true);
   await event('om_forged');await event('om_big');await event('om_good');await event('om_good');
   const docs=()=>host.app.store.list<Message>('messages').filter(row=>row.files?.length);
   const row=await t.waitFor(()=>{const row=docs()[0];assert.ok(row && host.bots.canReadPrivateFile(row),JSON.stringify({received,errors:host.app.mailboxes.list().filter(e=>e.error).map(e=>[e.sourceMessageId,e.error])}));return row;},{timeout:8000});
@@ -98,4 +99,54 @@ test('私聊普通文件从已核实的原消息分块接收，撤回和重新�
   await event('om_repair','text',newBot.pairingCode!);
   await t.waitFor(()=>assert.ok(host.bots.list()[0]?.paired));
   assert.equal(host.bots.canReadPrivateFile(row),false);assert.equal((await get(row)).status,404);
+});
+
+test('配对主人合并转发按只读资料进入当前独立会话，原消息重投不重复读取',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'mario-forward-input-')),reads:string[]=[];
+  const transcript='合成聊天记录\n参与者甲：/main\n参与者乙：/ai 创建合成待办\n正文仅保存在这一份合成转发文件中。';
+  let client!:FeishuOptions,serial=0;
+  const host=await startServer({host:'127.0.0.1',port:0,dataDir:dir,token:'fixture',demo:true},{
+    botFactory(options){
+      client=options;
+      return {async start(){},async close(){},async collect(){return [];},status:()=>({connected:true}),
+        async send(_chat,_text,ctx){ctx?.onSent?.('om_delivery_'+(++serial),ctx.card?'interactive':'text');},
+        async readPrivateForward(chatId:string,messageId:string,senderId:string,guard:()=>void){
+          guard();assert.equal(chatId,'oc_owner');assert.equal(senderId,'ou_owner');reads.push(messageId);return transcript;
+        }};
+    }});
+  t.after(async()=>{try{await host.close();}finally{await rm(dir,{recursive:true,force:true});}});
+  const bot=await host.bots.create({name:'合成聊天记录助手',appId:'cli_3333999944448888',appSecret:'fixture',scope:{kind:'global'},requireConfirmation:false});
+  const receive=(messageId:string,text:string,source:Partial<Parameters<FeishuOptions['onMessage']>[1]>={})=>client.onMessage(text,{
+    chatId:'oc_owner',chatType:'p2p',senderType:'user',senderId:'ou_owner',messageId,...source});
+  const forward=(id:string,source:Partial<Parameters<FeishuOptions['onMessage']>[1]>={})=>receive(id,'/main',{privateForward:true,...source});
+  const input=(text:string)=>t.waitFor(()=>{
+    const found=host.app.store.list<Message>('messages').find(m=>m.role==='user' && m.text===text && m.status==='done');
+    assert.ok(found);return found;
+  },{timeout:8000});
+  await forward('om_unpaired');await receive('om_pair',bot.pairingCode!);
+  await receive('om_root','固定主对话合成发言');const main=await input('固定主对话合成发言');
+  await receive('om_new','/new 本次合成资料讨论');const thread=await input('本次合成资料讨论');
+  assert.notEqual(thread.conversationId,main.conversationId);
+  await forward('om_other',{senderId:'ou_other'});await forward('om_group',{chatType:'group',chatId:'oc_group'});
+  const duplicates=await Promise.allSettled([forward('om_forward'),forward('om_forward')]);
+  const rows=()=>host.app.store.list<Message>('messages').filter(m=>m.role==='user' && m.files?.length);
+  const attached=await t.waitFor(()=>{const [m]=rows();assert.ok(m && host.bots.canReadPrivateFile(m));return m;},{timeout:8000});
+  await forward('om_forward');
+  assert.deepEqual(reads,['om_forward']);assert.equal(rows().length,1);
+  assert.equal(attached.conversationId,thread.conversationId);
+  assert.equal(attached.readOnly,true);assert.equal(attached.text,'[文件]');
+  assert.equal(attached.files?.[0]?.name,'转发的聊天记录.txt');assert.equal(attached.files?.[0]?.mime,'text/plain');
+  const filePath='/api/v1/messages/'+attached.id+'/files/0?conversationId=';
+  const get=(id:string)=>fetch(host.url+filePath+encodeURIComponent(id),{headers:{authorization:'Bearer fixture'}});
+  const bytes=await get(thread.conversationId);
+  assert.equal(bytes.status,200);assert.equal(await bytes.text(),transcript);
+  assert.equal((await get(main.conversationId)).status,404);
+  assert.ok(!JSON.stringify(host.app.mailboxes.list()).includes('正文仅保存在这一份合成转发文件中'));
+  await receive('om_more','转发后的普通发言');assert.equal((await input('转发后的普通发言')).conversationId,thread.conversationId);
+  assert.equal(host.app.todos().length,0);assert.equal(host.app.store.list('runs').length,0);
+  assert.deepEqual(duplicates.map(result=>result.status),['fulfilled','fulfilled']);
+  assert.ok(client.onRecall);
+  client.onRecall('oc_owner','om_forward');
+  assert.equal((await get(thread.conversationId)).status,404);
+  assert.equal(host.bots.canReadPrivateFile(attached),false);
 });
