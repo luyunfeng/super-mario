@@ -188,7 +188,10 @@ test('配对主人按标题或正文搜索活动独立对话，点击结果后�
   await a.receive('/list '+query,'wrong-sender',{senderId:'stranger'});
   await a.receive('/对话 '+query,'wrong-chat',{chatType:'group',chatId:'group-test'});
   assert.ok(!f.sent.slice(beforeUnauthorized).some(row=>['wrong-sender','wrong-chat'].includes(row.context?.replyTo??'')));
+  f.store.put('messages','matched-reply',{...body,id:'matched-reply',role:'assistant',replyTo:body.id,
+    createdAt:'2099-01-01T00:00:00.000Z',status:'done',text:'助手摘录'+query});
   const matches=await invoke('/list '+query,'listed-english');
+  assert.match(matches.text,/助手 · 2099-01-01T00:00:00.000Z\n助手摘录/);
   assert.deepEqual(buttons(matches.context?.card).map(b=>String(b.value.conversationThreadId)).sort(),wanted);
   assert.doesNotMatch(matches.text,/他人私聊|已归档|无关会话|无来源样例/);
   const chinese=await invoke('/对话 '+query,'listed-chinese');

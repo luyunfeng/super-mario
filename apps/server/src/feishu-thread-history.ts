@@ -119,7 +119,8 @@ export function searchPrivateThreadList(store: Pick<Store, 'get' | 'list'>, rows
     threads.push(thread);
     const first = hits[0];
     if (first) {
-      snippets[thread.threadId] = first.excerpt;
+      const speaker=first.role==='assistant'?'助手':'你';
+      snippets[thread.threadId] = speaker+' · '+first.createdAt+'\n'+first.excerpt;
       messageIds[thread.threadId] = first.id;
     }
   }
