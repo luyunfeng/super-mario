@@ -58,8 +58,13 @@ test('保留通知按最近时间展示，项目简报可查看同一通知',asy
   const dir=await mkdtemp(join(tmpdir(),'mario-held-notices-'));
   const server=await startServer({host:'127.0.0.1',port:0,dataDir:dir,demo:true});
   t.after(async()=>{await server.close();await rm(dir,{recursive:true,force:true});});
+  const project=await server.app.createProject({name:'简报来源项目'});
+  const runId='held-source-run';
+  const at=new Date(Date.now()-10000).toISOString();
+  server.app.store.put('runs',runId,{id:runId,projectId:project.id,conversationId:'main',executorId:'fixture',
+    prompt:'核对合成执行来源',status:'completed',output:'已生成合成结果',createdAt:at,updatedAt:at});
   for(const [id,ago] of [['earlier',60000],['latest',10000]] as const){
-    server.app.store.put('notifications.away',id,{id,status:'held',createdAt:new Date(Date.now()-ago).toISOString(),text:'合成通知 '+id});
+    server.app.store.put('notifications.away',id,{id,status:'held',projectId:project.id,...(id==='latest' && {runId}),createdAt:new Date(Date.now()-ago).toISOString(),text:'合成通知 '+id});
   }
   const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
   t.after(()=>browser.close());
@@ -74,5 +79,10 @@ test('保留通知按最近时间展示，项目简报可查看同一通知',asy
   await page.getByRole('button',{name:'查看简报',exact:true}).click();
   const brief=page.getByRole('dialog',{name:'简报与提醒'});
   await expect(brief).toContainText('低干扰保留通知 2');
-  await expect(brief).toContainText('合成通知 latest');
+  await expect(brief.getByRole('link',{name:'合成通知 earlier'})).toHaveCount(0);
+  await brief.getByRole('link',{name:'合成通知 latest'}).click();
+  await expect(brief).toBeHidden();
+  await expect(page.getByRole('heading',{name:'核对合成执行来源',exact:true})).toBeVisible();
+  await page.getByRole('tab',{name:'结果',exact:true}).click();
+  await expect(page.getByText('已生成合成结果',{exact:true}).first()).toBeVisible();
 });
