@@ -28,7 +28,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const drafts = createConversationDrafts({ api, store });
   const pending = new Map();
   const notices = new Map();
-  let workspace, readError = '', historyQuery = '', anchor = '', focused = false, navigationState;
+  let workspace, readError = '', historyQuery = '', anchor = '', citationVersion = '', focused = false, navigationState;
   const locationNote = h('div', { class: 'row row--wrap small', hidden: true });
   const status = h('div', { 'aria-live': 'polite' });
   const readErrorText = h('span');
@@ -142,10 +142,12 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     const before = page?.hasEarlier && rows[0]?.id;
     const after = page?.hasLater && rows.at(-1)?.id;
     const missing = anchor && workspace && !rows.some(row => row.id === anchor);
-    const navState = JSON.stringify([path, historyQuery, before, after, Boolean(missing)]);
+    const changed = Boolean(anchor && citationVersion && page?.anchorVersion && citationVersion !== page.anchorVersion);
+    const navState = JSON.stringify([path, historyQuery, before, after, Boolean(missing), changed]);
     if (navState !== navigationState) {
       navigationState = navState;
       replace(locationNote, missing && '当前项目中找不到这条消息。',
+        changed && '原消息在引用后已修改，当前显示最新正文。',
         before && h('a', { href: path + separator + 'before=' + encodeURIComponent(before) }, '较早消息'),
         after && h('a', { href: path + separator + 'after=' + encodeURIComponent(after) }, '较新消息'),
         historyQuery && h('a', { href: path }, '返回最新消息'));
@@ -245,7 +247,8 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
       const kind = ['at', 'before', 'after'].find(key => query?.has(key));
       const next = kind ? '?' + kind + '=' + encodeURIComponent(query.get(kind)) : '';
       if (historyQuery !== next || projectId !== id) { workspace = undefined; readError = ''; }
-      historyQuery = next; anchor = query?.get('at') || ''; focused = false;
+      historyQuery = next; anchor = query?.get('at') || '';
+      citationVersion = query?.get('version') || ''; focused = false;
       if (projectId !== id) {
         instructions.close();
         prompts.changeScope();

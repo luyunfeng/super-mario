@@ -1,3 +1,4 @@
+import { messageVersion } from '../../plugin-sdk/src/index.ts';
 import type { ReviewEvidenceReader } from './run-review.ts';
 import { createHash } from "node:crypto";
 import type {
@@ -394,7 +395,8 @@ export function createProjectWorkspace(options: {
               b.scope.projectId === id,
           ),
         messages: history.slice(start, end),
-        historyPage: { hasEarlier: start > 0, hasLater: end < history.length },
+        historyPage: { hasEarlier: start > 0, hasLater: end < history.length,
+          ...(cursor?.kind === 'at' && index >= 0 && { anchorVersion: messageVersion(history[index]!.text) }) },
         knowledge: (
           await options.knowledge().list({ layer: "project", projectId: id })
         ).map(({ content, ...k }) => k),

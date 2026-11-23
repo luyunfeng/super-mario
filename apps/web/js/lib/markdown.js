@@ -11,7 +11,7 @@ const inlineTokens = new RegExp([
   /\[查看整理记录\]\(#memory\?curator=1&job=[A-Za-z0-9_-]{1,128}\)/.source,
   /\[查看执行\]\(#projects\/[A-Za-z0-9_-]{1,128}\/runs\/[A-Za-z0-9_-]{1,128}\)/.source,
   /\[查看待办\]\(#projects\/[A-Za-z0-9_-]{1,128}\/todos\/detail\/[A-Za-z0-9_-]{1,128}\)/.source,
-  /\[查看原文\]\(#projects\/[A-Za-z0-9_-]{1,128}\/workspace\?at=(?:[A-Za-z0-9_.*+\-]|%[0-9A-Fa-f]{2})+\)/.source,
+  /\[查看原文\]\(#projects\/[A-Za-z0-9_-]{1,128}\/workspace\?at=(?:[A-Za-z0-9_.*+\-]|%[0-9A-Fa-f]{2})+(?:&version=[a-f0-9]{64})?\)/.source,
   /\[查看原文\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&source=[A-Za-z0-9_-]{1,128}(?:&line=[1-9][0-9]{0,8})?\)/.source,
   /\[查看修订\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&revision=(?:[a-f0-9]{40}|[a-f0-9]{64})\)/.source,
   /(?<!!)\[[^\[\]\n]+\]\(https?:\/\/(?:[^\s()<>\\]|\([^\s()<>\\]*\))+\)/.source,

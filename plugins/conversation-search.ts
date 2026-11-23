@@ -1,4 +1,5 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { messageVersion } from '../packages/plugin-sdk/src/index.ts';
+import { randomBytes } from 'node:crypto';
 import type { Extension, Json, Store } from '../packages/plugin-sdk/src/index.ts';
 
 import type { Message, Project, Todo } from '../packages/protocol/src/index.ts';
@@ -97,12 +98,8 @@ function readableMessage(message: Message, project: Project, excludeId: unknown)
     ['user', 'assistant'].includes(message.role) && (!message.origin || message.origin === 'user');
 }
 
-function messageVersion(text: string) {
-  return createHash('sha256').update(text).digest('hex');
-}
-
-function messageCitation(projectId: string, id: string) {
-  return '[查看原文](#projects/' + encodeURIComponent(projectId) + '/workspace?' + new URLSearchParams({ at: id }) + ')';
+function messageCitation(projectId: string, id: string, version: string) {
+  return '[查看原文](#projects/' + encodeURIComponent(projectId) + '/workspace?' + new URLSearchParams({ at: id, version }) + ')';
 }
 
 function projectMessages(store: Store, input: Json, excludeId?: string) {
@@ -154,8 +151,9 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
       const start = match.index, end = start + match[0].length;
       return { before: message.text.slice(Math.max(0, start - 18), start), match: match[0], after: message.text.slice(end, end + 32) };
     });
+    const version = messageVersion(message.text);
     hits.push({ projectId: project.id, projectName: project.name, createdAt: message.createdAt, id: message.id,
-      role: message.role, version: messageVersion(message.text), status: message.status ?? 'unknown', webCitation: messageCitation(project.id, message.id), ...(todoId !== undefined && { todoId }),
+      role: message.role, version, status: message.status ?? 'unknown', webCitation: messageCitation(project.id, message.id, version), ...(todoId !== undefined && { todoId }),
       ...(listMessages ? { preview: message.text.slice(0, 120) } : excerpts[0]), ...(excerpts.length > 1 ? { excerpts } : {}) });
   }
   if (!pastCursor) fail(404, '未找到当前检索的消息游标');
@@ -199,7 +197,7 @@ export const conversationSearch: Extension = {
         let end = Math.min(offset + 4000, message.text.length);
         if (end < message.text.length && /[\uD800-\uDBFF]/u.test(message.text[end - 1])) end--;
         return { id, projectId, projectName: project.name, role: message.role, createdAt: message.createdAt,
-          status: message.status ?? 'unknown', webCitation: messageCitation(projectId, id), text: message.text.slice(offset, end), offset, nextOffset: end < message.text.length ? end : null, version: current };
+          status: message.status ?? 'unknown', webCitation: messageCitation(projectId, id, current), text: message.text.slice(offset, end), offset, nextOffset: end < message.text.length ? end : null, version: current };
       },
     });
     context.provide('conversation-search.projects', input => projectMessages(context.store, input));

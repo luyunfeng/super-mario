@@ -79,6 +79,14 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     const cited = page.locator('#panel-workspace .msg.is-search-hit');
     await expect(cited).toBeFocused();
     await expect(cited).toContainText(keyword);
+    const changed = page.getByText('原消息在引用后已修改，当前显示最新正文。');
+    await expect(changed).toBeHidden();
+    putMessage('historic', work, '季度复核旧记录 ' + keyword + ' 已调整期限');
+    server.app.events.publish('messages.changed', { conversationId: work, messageId: 'historic' });
+    await expect(changed).toBeVisible();
+    await expect(cited).toContainText('已调整期限');
+    await page.reload();
+    await expect(changed).toBeVisible();
     await page.goBack();
     await expect(sourceLink).toBeVisible();
     await search.fill('签收单');
@@ -126,6 +134,7 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     const original = page.locator('#panel-workspace .msg.is-search-hit');
     await expect(original).toBeFocused();
     await expect(original).toContainText(keyword);
+    await expect(changed).toBeHidden();
     await page.reload();
     await expect(original).toBeFocused();
     await page.getByRole('link', { name: '返回最新消息' }).click();

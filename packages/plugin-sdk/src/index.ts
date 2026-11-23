@@ -1,3 +1,4 @@
+export { messageVersion } from './message-version.ts';
 export type { ExecutionProgress, WorkDecision, WorkDecisionSource } from '../../protocol/src/index.ts';
 import type { NativeResumeSpec } from '../../protocol/src/agent-sessions.ts';
 export { assertPluginPermissions } from './permissions.ts';

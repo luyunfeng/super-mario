@@ -3,7 +3,7 @@ import { runWithAgentInput } from '../packages/core/src/agent-input.ts';
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1373,7 +1373,7 @@ test('Web 与飞书项目助手检索项目原话，范围固定且排除当前�
       }
       assert.equal(part.text, sourceText.slice(3999));
       assert.equal(part.nextOffset, null);
-      assert.equal(part.webCitation, '[查看原文](#projects/' + currentProjectId + '/workspace?at=original)');
+      assert.equal(part.webCitation, '[查看原文](#projects/' + currentProjectId + '/workspace?at=original&version=' + part.version + ')');
       assert.match(req.system, /飞书回复写明项目、发言角色、消息时间和摘录/);
       const source = part.projectName + ' · 用户 · ' + part.createdAt;
       const condition = part.text.match(/先核对来源[^。]*。/u)?.[0];
@@ -1384,7 +1384,7 @@ test('Web 与飞书项目助手检索项目原话，范围固定且排除当前�
     const original = hits.find((hit: {id: string}) => hit.id === 'original');
     assert.equal(original.projectName, '抽样项目');
     assert.equal(original.role, 'user');
-    assert.equal(original.webCitation, '[查看原文](#projects/' + currentProjectId + '/workspace?at=original)');
+    assert.equal(original.webCitation, '[查看原文](#projects/' + currentProjectId + '/workspace?at=original&version=' + original.version + ')');
     assert.deepEqual(original.excerpts.map((e: {match: string}) => e.match), ['抽样批次', '[乙]']);
     assert.ok(original.excerpts.every((e: {before: string; match: string; after: string}) => sourceText.includes(e.before + e.match + e.after)));
     assert.ok(!hits.some((hit: {id: string}) => hit.id === 'partial'));
@@ -1413,7 +1413,7 @@ test('Web 与飞书项目助手检索项目原话，范围固定且排除当前�
         role: 'user', text, status: 'done', createdAt });
     }
     const question = '请查一下上次说的' + query + '，原话有什么条件？';
-    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), updatedCondition + '[查看原文](#projects/' + project.id + '/workspace?at=original)');
+    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), updatedCondition + '[查看原文](#projects/' + project.id + '/workspace?at=original&version=' + createHash('sha256').update(sourceText).digest('hex') + ')');
     const bot = await api('/feishu/bots', { name: '历史检索', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
     const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
