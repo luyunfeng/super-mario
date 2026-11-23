@@ -137,6 +137,17 @@ function botSender(hit: Row) {
   const type = string(sender.sender_type) || string(hit.sender_type) || string(sender.type);
   return type === 'app' || type === 'bot' || (!type && sender.id_type === 'app_id');
 }
+function personalInboxBody(hit: Row): string {
+  const text = string(hit.content);
+  if ((hit.msg_type ?? hit.message_type) !== 'file') return text;
+  let content = hit.content;
+  if (typeof content === 'string') {
+    try { content = JSON.parse(content); } catch { return text || '文件附件'; }
+  }
+  const name = string(object(content).file_name).split(/[\\/]/).pop()?.replace(/[\p{Cc}\p{Bidi_Control}]/gu, '').trim();
+  return name ? '文件附件：' + name : '文件附件';
+}
+
 function personalMessageLocation(hit: Row, chat: string) {
   const link = URL.parse(string(hit.message_app_link));
   if (!link || link.protocol !== 'https:' || link.username || link.password ||
@@ -1050,7 +1061,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
         thread: `feishu:message:${JSON.stringify([chat, id])}`,
         last: `${id}${hit.update_time ? `:${String(hit.update_time)}` : ''}`,
         title: string(hit.chat_name) || chat,
-        text: `[${id}] ${sender}: ${string(hit.content)}`,
+        text: `[${id}] ${sender}: ${personalInboxBody(hit)}`,
         sender, receivedAt: isoTime(hit.create_time),
       });
     }

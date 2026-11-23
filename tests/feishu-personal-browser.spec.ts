@@ -21,6 +21,7 @@ test('个人消息：点击授权→显示二维码→确认后自动连接→�
       reads++;
       const row = {chat_id:'oc_offline', chat_type:'p2p', create_time:String(Date.now()), sender:{id:'ou_sender',id_type:'open_id',name:'测试发送人'}};
       return { ok: true, identity: 'user', data: { has_more: false, messages: [
+        {...row,message_id:'om_file',msg_type:'file',content:JSON.stringify({file_key:'file_synthetic',file_name:'合成附件.pdf'})},
         {...row,thread_id:'omt_fixture',message_app_link:'https://applink.feishu.cn/client/thread/open?thread_position=8&open_thread_id=omt_fixture&open_chat_id=oc_offline',message_id:'om_reply',reply_to:'om_offline',content:'已收到测试事项'},
         {...row,message_app_link:'https://applink.feishu.cn/client/chat/open?openChatId=oc_other&position=2',message_id:'om_offline',content:'请处理测试事项'},
       ] } };
@@ -63,6 +64,10 @@ test('个人消息：点击授权→显示二维码→确认后自动连接→�
     await expect(detail.getByRole('link',{name:'打开原消息'})).toHaveAttribute('href','https://applink.feishu.cn/client/thread/open?open_chat_id=oc_offline&open_thread_id=omt_fixture&thread_position=8');
     await expect(detail.locator('pre')).toContainText('已收到测试事项');
     await expect(detail.getByRole('region', {name:'同一事项'})).toContainText('上级收件');
+    const file = server.app.inbox.list().find(item => item.last === 'om_file')!;
+    await page.goto(server.url + '/#inbox?item=' + encodeURIComponent(file.id));
+    await expect(detail.locator('pre')).toContainText('文件附件：合成附件.pdf');
+    await expect(detail.locator('pre')).not.toContainText('file_synthetic');
     assert.deepEqual(errors, []);
     for (const payload of payloads) for (const secret of ['private-profile', 'private-device-code']) assert.ok(!payload.includes(secret));
     const unauthorized = await fetch(`${server.url}/api/v1/feishu/personal`); assert.equal(unauthorized.status, 401);
