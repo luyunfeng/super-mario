@@ -78,12 +78,23 @@ test('外群 @/ai 在已登记主群开题并续答，主群可取消原群回�
   await emit('om_follow','oc_home','合成讨论结论乙',{threadId:threads.get(root.id),rootId:root.id,parentId:root.id});
   await t.waitFor(() => assert.ok(sent.some(row => row.replyTo === 'om_follow' && row.thread)));
   assert.deepEqual((await todos()).map(row => row.id),[task.id]);
-  const decision = await fetch(host.url + '/api/v1/todos/' + task.id + '/decisions', {
+  async function addDecision(todo:Todo, text:string) {
+    const response = await fetch(host.url + '/api/v1/todos/' + todo.id + '/decisions', {
     method: 'POST', headers: {authorization: 'Bearer synthetic', 'content-type': 'application/json'},
-    body: JSON.stringify({text: '合成的私有决定正文', expectedProjectId: null}),
+    body: JSON.stringify({text, expectedProjectId: null}),
+    });
+    assert.ok(response.ok);
+  }
+  const revoked = await newHandoff('om_withdrawn_source', '来源已撤回的群任务');
+  assert.ok(receiver.onRecall);
+  await receiver.onRecall('oc_source','om_withdrawn_source');
+  await emit('om_post_recall','oc_home','来源撤回后的主人发言',{
+    threadId:threads.get(revoked.opening.id),rootId:revoked.opening.id,parentId:revoked.opening.id,
   });
-  assert.ok(decision.ok);
-  await t.waitFor(() => assert.ok(sent.some(row => row.chat === 'oc_home' && row.replyTo === root.id && row.thread
+  await addDecision(revoked.todo, '撤回来源的私有决定');
+  await api('todos/' + revoked.todo.id,{completed:true});
+  await addDecision(task, '合成的私有决定正文');
+  await t.waitFor(() => assert.ok(sent.some(row => row.chat === 'oc_home' && row.replyTo === 'om_follow' && row.thread
     && row.text.includes('待办新增 1 项决定'))), { timeout: 8000 });
   assert.ok(sent.every(row => !row.text.includes('合成的私有决定正文')));
   await api('todos/' + task.id,{completed:true});
@@ -117,7 +128,7 @@ test('外群 @/ai 在已登记主群开题并续答，主群可取消原群回�
   await emit('om_early_veto','oc_home','/noreply',{threadId:threads.get(early.opening.id),rootId:early.opening.id,parentId:early.opening.id});
   assert.ok(sent.some(row => row.replyTo === 'om_early_veto' && row.thread && plain(row.text)?.includes('已取消')));
   await api('todos/' + early.todo.id,{completed:true});
-  await t.waitFor(() => assert.equal(completions(early.opening.id).length,1));
+  await t.waitFor(() => assert.equal(completions('om_early_veto').length,1));
   await api('feishu/bots/' + bot.id, {groupTaskReportDelayMinutes:0});
   const instant = await newHandoff('om_instant', '即时回报有公开结论');
   await api('todos/' + instant.todo.id,{expectedGroupTaskOutcome:'',groupTaskOutcome:'合成公开验收结论。',completed:true});
@@ -157,9 +168,9 @@ test('外群 @/ai 在已登记主群开题并续答，主群可取消原群回�
   await host.close();
   host = await startServer(config,{botFactory:factory});
   await t.waitFor(() => assert.ok(receiver.topicPolicy?.('oc_home')));
-  assert.equal(completions(early.opening.id).length,1);
+  assert.equal(completions('om_early_veto').length,1);
   assert.equal(completions(instant.opening.id).length,1);
-  assert.equal(completions(root.id).length,0);
+  for (const parent of [root.id,'om_follow','om_veto',early.opening.id]) assert.equal(completions(parent).length,0);
   assert.equal(previewCount(root.id),1);
   assert.equal(previewCount(early.opening.id),0);
   assert.equal(previewCount(instant.opening.id),0);
@@ -167,11 +178,15 @@ test('外群 @/ai 在已登记主群开题并续答，主群可取消原群回�
   assert.equal(published('om_instant').length,1);
   assert.equal(completions(raceRoot).length,1);
   assert.equal(published('om_race').length,1);
+  const revokedParents = new Set([revoked.opening.id,'om_post_recall']);
+  assert.equal(published('om_withdrawn_source').length,0);
+  assert.ok(!sent.some(row => row.replyTo && revokedParents.has(row.replyTo) &&
+    /待办新增|这项待办已完成|分钟后回复原群消息/u.test(row.text)));
   missingThread = true;
   await assert.rejects(emit('om_missing','oc_source','/ai 无话题编号的任务',{mentionedSelf:true}),/话题/);
-  assert.equal(roots().length,5);
-  assert.equal(reads.at(-1),roots()[4].id);
-  assert.equal((await todos()).length,5);
+  assert.equal(roots().length,6);
+  assert.equal(reads.at(-1),roots()[5].id);
+  assert.equal((await todos()).length,6);
   assert.ok(sent.some(row => row.replyTo === 'om_missing' && row.text.includes('无法确认主群话题')));
   assert.equal(sent.filter(row => row.chat === 'oc_private').length,privateCount);
   assert.equal(sent.some(row => row.replyTo === 'om_external'),false);

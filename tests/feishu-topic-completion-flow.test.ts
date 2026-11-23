@@ -47,7 +47,7 @@ test('Web 完成直接开题的待办只向原话题发一次短通知，撤销�
   const moved = await open('oc_main','moved');
   const revoked = await open('oc_separate','revoked');
   const control = await open('oc_main','control');
-  // A later owner message must not silently replace the opening message as the completion destination.
+  // A later owner message becomes the parent, while the opening still fixes the thread and task.
   await emit('oc_main','om_later','合成后续决定',{threadId:'omt_main',rootId:'om_root_main',parentId:'om_root_main'});
   await wait(() => assert.ok(sent.some(s => s.context?.replyTo === 'om_later' && s.text.includes('合成后续决定'))));
   const project = host.app.projects.create({name:'项目私有合成标记'});
@@ -58,14 +58,14 @@ test('Web 完成直接开题的待办只向原话题发一次短通知，撤销�
   const finish = (todo:Todo) => api<Todo>('todos/' + todo.id,'PATCH',{completed:true});
   const finished = await finish(main);
   assert.ok(finished.completedAt);
-  await wait(() => assert.ok(sent.slice(start).some(s => s.context?.replyTo === 'om_root_main' && s.text.includes('完成'))));
+  await wait(() => assert.ok(sent.slice(start).some(s => s.context?.replyTo === 'om_later' && s.text.includes('完成'))));
   await finish(main);
   await finish(moved);
   await finish(revoked);
   await finish(control);
   await wait(() => assert.ok(sent.slice(start).some(s => s.context?.replyTo === 'om_root_control' && s.text.includes('完成'))));
   const receipts = () => sent.slice(start).filter(row => row.text.includes('完成'));
-  const expected = ['main','control'].map(key => ['oc_main','om_root_' + key,'omt_' + key]);
+  const expected = [['oc_main','om_later','omt_main'],['oc_main','om_root_control','omt_control']];
   assert.deepEqual(sent.slice(start).map(row => [row.chat,row.context?.replyTo,row.context?.threadId]),expected);
   for (const row of receipts()) {
     assert.ok(Array.from(row.text).length < 100);
@@ -77,5 +77,5 @@ test('Web 完成直接开题的待办只向原话题发一次短通知，撤销�
   const more = await open('oc_main','restart');
   await finish(more);
   await wait(() => assert.ok(receipts().some(s => s.context?.replyTo === 'om_root_restart')));
-  assert.deepEqual(receipts().map(row => row.context?.replyTo),['om_root_main','om_root_control','om_root_restart']);
+  assert.deepEqual(receipts().map(row => row.context?.replyTo),['om_later','om_root_control','om_root_restart']);
 });

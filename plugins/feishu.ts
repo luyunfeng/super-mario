@@ -102,6 +102,9 @@ const string = (value: unknown): string => typeof value === 'string' ? value : '
 const origin = 'https://open.feishu.cn';
 class CardContentRejected extends Error {}
 class TextFallbackDenied extends Error {}
+class FeishuReplyParentGone extends Error { readonly delivery = 'no'; }
+/** Only an explicit business rejection of the reply identifies a withdrawn/deleted parent. */
+export function isFeishuMessageGone(error: unknown): boolean { return error instanceof FeishuReplyParentGone; }
 // These Feishu business errors explicitly reject a message mutation (arguments, chat access,
 // credentials, permissions or rate limit). Unrecognized business errors leave the effect unknown.
 const messageMutationRejections = new Set([
@@ -111,8 +114,10 @@ const messageMutationRejections = new Set([
 class FeishuResponseError extends Error {
   readonly httpStatus: number;
   readonly apiCode?: number;
-  constructor(message: string, httpStatus: number, apiCode?: number) {
+  readonly path: string;
+  constructor(message: string, path: string, httpStatus: number, apiCode?: number) {
     super(message);
+    this.path = path;
     this.httpStatus = httpStatus;
     this.apiCode = apiCode;
   }
@@ -199,7 +204,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
       if (response.status === 400 && body.msg_type === 'interactive' && data.code === 230099)
         throw new CardContentRejected('飞书拒绝创建卡片内容');
       if (response.status === 401 && bearer) token = undefined;
-      throw new FeishuResponseError(`飞书 HTTP ${response.status}`, response.status,
+      throw new FeishuResponseError(`飞书 HTTP ${response.status}`, path, response.status,
         typeof data.code === 'number' ? data.code : undefined);
     }
     const data = object(await response.json());
@@ -209,7 +214,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
       // Do not retry a send: the remote effect may already have happened.
       if (bearer && [99991661, 99991663, 99991664, 99991668].includes(Number(data.code))) token = undefined;
       throw new FeishuResponseError(`飞书 API ${String(data.code)}: ${reason(string(data.msg) || '响应无效', bearer ? [bearer] : [])}`,
-        response.status, typeof data.code === 'number' ? data.code : undefined);
+        path, response.status, typeof data.code === 'number' ? data.code : undefined);
     }
     return data;
   }
@@ -269,6 +274,12 @@ export function createFeishuIntegration(options: FeishuOptions) {
       if (id) remember(id);
       return { id, type };
     } catch (error) {
+      if (!closed && epoch === generation && error instanceof FeishuResponseError && error.path === path &&
+          path.endsWith('/reply') && (error.apiCode === 230011 || error.apiCode === 230110) &&
+          (error.httpStatus < 300 || error.httpStatus === 400 || error.httpStatus === 404)) {
+        operationReason = '飞书回复的父消息已撤回或删除。';
+        throw new FeishuReplyParentGone(operationReason);
+      }
       const message = reason(error, bearer ? [bearer] : []);
       const detail = error instanceof TextFallbackDenied ? '卡片未创建，文本未发送：' + message
         : `发送失败，未自动重试（网络中断时结果可能为 unknown）：${message}`;

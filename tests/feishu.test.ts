@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setImmediate as tick, setTimeout as delay } from 'node:timers/promises';
 import type { EventDispatcher, WSClient } from '@larksuiteoapi/node-sdk';
-import { createFeishuIntegration } from '../plugins/feishu.ts';
+import { createFeishuIntegration, isFeishuMessageGone } from '../plugins/feishu.ts';
 import type { FeishuMessageSource, FeishuOptions } from '../plugins/feishu.ts';
 
 // All external effects in this suite are explicit offline fakes.
@@ -781,4 +781,34 @@ test('卡片被拒后只报告实际送达的文本类型', async t => {
   rejectCard = true;
   await integration.send('oc_chat', '工作台', { ...context, replyTo: 'om_command' });
   assert.deepEqual(sent, [['om_interactive', 'interactive'], ['om_text', 'text']]);
+});
+
+
+test('只有回复父消息被飞书明确判定已撤回或删除时，释放该话题锚点', async t => {
+  let status = 400, code = 230011, loseConnection = false, replies = 0;
+  const { integration } = setup({ fetch: async url => {
+    if (String(url).includes('tenant_access_token')) return Response.json({code:0,tenant_access_token:'fixture',expire:7200});
+    replies++;
+    if (loseConnection) throw new Error('network timeout 230011');
+    return Response.json({code,msg:'业务错误'}, {status});
+  } });
+  t.after(() => integration.close());
+  const reply = () => integration.send('oc_fixture','合成状态',{replyTo:'om_anchor',threadId:'omt_fixture',plainText:true});
+  for (const businessCode of [230011,230110]) {
+    code=businessCode;
+    for (const http of [200,400,404]) {
+      status=http;
+      await assert.rejects(reply(), error => isFeishuMessageGone(error) && (error as {delivery?:string}).delivery==='no');
+    }
+  }
+  for (const [http, businessCode] of [[403,99991672],[404,0],[429,230429],[502,230011],[400,230027]]) {
+    status=http;code=businessCode;
+    await assert.rejects(reply(), error => !isFeishuMessageGone(error));
+  }
+  status=400;code=230011;
+  await assert.rejects(integration.send('oc_fixture','普通群消息'), error=>!isFeishuMessageGone(error));
+  loseConnection=true;
+  await assert.rejects(reply(), error=>!isFeishuMessageGone(error));
+  assert.equal(replies,13);
+  assert.equal(isFeishuMessageGone(Object.assign(new Error('230110'),{apiCode:230110})),false);
 });

@@ -12,6 +12,7 @@ import { createTopicCompletions } from './feishu-topic-completions.ts';
 import { createTopicTurnResults } from './feishu-topic-turn-results.ts';
 import { createTopicExecutor } from './feishu-topic-executor.ts';
 import { createTopicInputReceipts, TopicInputReceiptNotReady } from './feishu-topic-input-receipts.ts';
+import { createTopicAnchors } from './feishu-topic-anchors.ts';
 import { createTopicTurns } from './feishu-topic-turns.ts';
 import { createTopicRegistry } from './feishu-topic-registry.ts';
 import { groupTaskCommand, readGroupCommand, topicGroupCommand, topicOwnerWords } from '../../../plugins/feishu-read-command.ts';
@@ -33,7 +34,7 @@ import { buildAgentProgressCard, publicText } from '../../../plugins/agent-progr
 import { buildFeishuMessageCard, cardButtons, cardDocument, cardPlain } from './feishu-cards.ts';
 import type { FeishuCardAction } from '../../../plugins/feishu.ts';
 import { botConversationId } from '../../../packages/core/src/bot-agent-routing.ts';
-import { createFeishuIntegration } from '../../../plugins/feishu.ts';
+import { createFeishuIntegration, isFeishuMessageGone } from '../../../plugins/feishu.ts';
 import { joinedCommandMember, type CommandGroup, allowedBotGroup, canRelayBotScope, nextRelayPath } from '../../../packages/core/src/bot-group-policy.ts';
 import type { FeishuMessageSource, FeishuSendContext, FeishuOptions } from '../../../plugins/feishu.ts';
 import { createFeishuBotConfig, sameBotScope } from '../../../plugins/feishu-bot-config.ts';
@@ -130,6 +131,7 @@ export function dashboardWebBase(config: Pick<AppConfig, 'host' | 'port'>, confi
 export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig, options: { factory?: FeishuBotFactory; webBase?: string; readGroup?: GroupReadService } = {}) {
   const topics = createTopicRegistry(app.store);
   const topicExecutor = createTopicExecutor(app);
+  const topicAnchors = createTopicAnchors(app.store);
   const topicTurns = createTopicTurns(app.store, input => {
     if (!app.createTodo) throw noDelivery('当前服务缺少待办创建能力。');
     return app.createTodo(input);
@@ -1426,7 +1428,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!app.store.get('feishu.bot.envelopes', entry.id)) app.store.put('feishu.bot.envelopes', entry.id, { revision: bot.revision });
     }
   }
-  function checkEnvelope(entry: MailboxEntry, bot: FeishuBotSettings) {
+  function checkEnvelope(entry: MailboxEntry, bot: FeishuBotSettings, topicStatus = false) {
     const stamp = app.store.get<Envelope>('feishu.bot.envelopes', entry.id);
     if (entry.botId !== bot.id || (bot.scope.kind !== 'unmarked' && !sameBotScope(entry.scope, bot.scope)) || (stamp && stamp.revision !== bot.revision)) throw noDelivery('机器人绑定已变化，旧邮箱条目不能执行');
     validateScope(entry.scope);
@@ -1503,9 +1505,15 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       // A topic enrollment covers the original project-free todo. Moving it in Web does not grant the group project access.
       const todo = app.store.get<Todo>('todos', stamp.topic.todoId);
       if (!todo || todo.projectId) throw noDelivery('话题待办已移除或转入项目，请在 Web 中继续。');
-      if (groupTasks.recalled(bot.id, bot.appId, source.chatId, source.messageId)
+      // A withdrawn opening cannot authorize its old text. An enrolled thread may still receive
+      // a status at a subsequent verified owner message. Its original external handoff must remain valid.
+      const latest = topicStatus && stamp.topic.opening
+        ? topicAnchors.lookup({ binding, grant: stamp.topic.grant, chatId: source.chatId, threadId: thread }) : undefined;
+      if (latest === null) throw noDelivery('原话题没有可回复的消息。');
+      const parent = latest ?? source;
+      if (groupTasks.recalled(bot.id, bot.appId, source.chatId, parent.messageId)
         || (stamp.topic.externalSource && groupTasks.recalled(bot.id, bot.appId, stamp.topic.externalSource.chatId, stamp.topic.externalSource.messageId))
-        || !policy || (policy.requireOwnerMention && !source.mentionedSelf) || topics.grant(binding, source.chatId) !== stamp.topic.grant
+        || !policy || (policy.requireOwnerMention && !parent.mentionedSelf) || topics.grant(binding, source.chatId) !== stamp.topic.grant
         || topicTurns.todoFor({ binding, grant: stamp.topic.grant, chatId: source.chatId, threadId: thread }) !== stamp.topic.todoId)
         throw noDelivery('话题登记或待办绑定已变化。');
     } else if (stamp?.group?.chatId && stamp.group.chatId === commandGroup()?.chatId) throw noDelivery('总指挥群需要已验证的主人指令');
@@ -1528,6 +1536,9 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   /** Recheck the accepted input's original grant at use time, including after a
    * model wait or delayed approval. A conversation hash alone is not a grant. */
   function canUseScope(scope: BotScope, botId: string, input?: Message, threadId?: string): boolean {
+    return validInputScope(scope, botId, input, threadId);
+  }
+  function validInputScope(scope: BotScope, botId: string, input?: Message, threadId?: string, topicStatus = false): boolean {
     try {
       const bot = current(botId);
       if (!owner(bot) || !sameBotScope(validateScope(scope), scope)
@@ -1546,7 +1557,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         const envelope = app.mailboxes.list().find(entry => entry.id === route.envelopeId);
         if (!envelope || !sameBotScope(envelope.scope, scope)
           || app.store.get<Envelope>('feishu.bot.envelopes', envelope.id)?.conversationThreadId !== route.conversationThreadId) return false;
-        checkEnvelope(envelope, bot);
+        checkEnvelope(envelope, bot, topicStatus);
         const receipt = app.store.get<{ status: string; id?: string }>('feishu.bot.dispatch', `${botId}:${bot.appId}:${envelope.id}`);
         const start = envelope.direction === 'outbox' && envelope.botId === bot.id && envelope.eventKey.startsWith('feishu-dashboard:start:')
           && route.inputId === stored.id && stored.id === 'feishu-start:' + createHash('sha256').update(envelope.eventKey).digest('hex')
@@ -1864,12 +1875,12 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
     if (app.mailboxes.list().find(row => row.id === entry.id)?.status !== 'completed') throw new Error('话题待办已保存，接收结果待核对。');
   }
-  function requireTopicSource(botId: string, inputId: string) {
+  function requireTopicSource(botId: string, inputId: string, topicStatus = false) {
     const bot = current(botId), paired = owner(bot), adapter = runtime(botId).adapter;
     const message = app.store.get<Message>('messages', inputId);
     const route = app.store.get<Routed>('message.routes', inputId);
     if (!message || !route?.topic || !route.group || !route.threadId || !route.platformReplyTo || !adapter || !paired?.senderId
-      || !canUseScope(bot.scope, botId, message)) throw noDelivery('原话题绑定已失效。');
+      || !validInputScope(bot.scope, botId, message, undefined, topicStatus)) throw noDelivery('原话题绑定已失效。');
     return { bot, paired, adapter, route, topic: route.topic, messageId: route.platformReplyTo, threadId: route.threadId };
   }
   function receiptReady(id: string) {
@@ -1924,7 +1935,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   function openingSource(todoId: string, inputId: string) {
     const route = app.store.get<Routed>('message.routes', inputId);
     if (!route?.botId || route.inputId !== inputId || !receiptReady(route.botId)) return;
-    const source = requireTopicSource(route.botId, inputId);
+    const source = requireTopicSource(route.botId, inputId, true);
     const stamp = app.store.get<Envelope>('feishu.bot.envelopes', route.envelopeId);
     if (app.store.get<Message>('messages', inputId)?.todoId !== todoId || route.sourceMessageId !== source.messageId
       || !source.topic.opening || source.topic.todoId !== todoId
@@ -1944,13 +1955,26 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   async function sendTopicPost(todoId: string, inputId: string, text: string, key: string, guard: () => void) {
     const source = openingSource(todoId, inputId), todo = app.store.get<Todo>('todos', todoId);
     if (!source || !todo) throw noDelivery('原话题已不可用。');
+    const audience = { binding: groupReadBinding(source.bot, source.paired), grant: source.topic.grant,
+      chatId: source.route.target, threadId: source.threadId };
+    const stored = topicAnchors.lookup(audience);
+    // The verified opening is the migration fallback for registrations predating stored reply parents.
+    const parent = stored === undefined ? { messageId: source.messageId, mentionedSelf: !!source.route.group?.mentionedSelf } : stored;
+    if (!parent) throw noDelivery('原话题没有可回复的消息。');
     const body = publicWeb ? text + '\n' + publicWeb + '/' + actionTodoLink(todo).webPath : text;
-    return sendTaskMessage(source.bot, source.adapter, source.route.target, body, source.messageId, digest([key]).slice(0, 32), () => {
-      guard();
-      const live = openingSource(todoId, inputId);
-      if (live?.adapter !== source.adapter || live.route.target !== source.route.target || live.messageId !== source.messageId
-        || live.threadId !== source.threadId) throw noDelivery('原话题连接已变化。');
-    }, source.threadId, true);
+    try {
+      return await sendTaskMessage(source.bot, source.adapter, audience.chatId, body, parent.messageId, digest([key]).slice(0, 32), () => {
+        guard();
+        const live = openingSource(todoId, inputId);
+        if (live?.adapter !== source.adapter || live.route.target !== audience.chatId || live.messageId !== source.messageId
+          || live.threadId !== audience.threadId || groupTasks.recalled(source.bot.id, source.bot.appId, audience.chatId, parent.messageId)
+          || (topics.read(audience.binding).items.find(item => item.chatId === audience.chatId)?.requireOwnerMention && !parent.mentionedSelf))
+          throw noDelivery('原话题连接、回复消息或点名授权已变化。');
+      }, source.threadId, true);
+    } catch (error) {
+      if (isFeishuMessageGone(error)) topicAnchors.forget(audience, parent.messageId);
+      throw error;
+    }
   }
   function currentWebDecision(id: string) {
     if (app.workDecisions) return webTopicDecision(app.store, app.workDecisions.ledger.get,
@@ -2099,9 +2123,12 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
             homeGuard(target);
             if (!threadId) throw new Error('主群消息缺少可核实的话题编号。');
             app.store.transaction(() => {
-              if (!topicTurns.bindHome({ binding, grant: target.grant, chatId: target.chatId, threadId, todoId: todo.id }))
+              const audience = { binding, grant: target.grant, chatId: target.chatId, threadId };
+              const existing = topicTurns.todoFor(audience);
+              if (!topicTurns.bindHome({ ...audience, todoId: todo.id }))
                 throw new Error('目标话题已绑定其他待办。');
               groupTasks.confirmHomeThread(bot.id, bot.appId, source, anchorId, threadId);
+              if (!existing) topicAnchors.remember(audience, anchorId, !!source.mentionedSelf);
             });
             await postTopicTurn(bot, { ...source, chatId: target.chatId, messageId: anchorId, threadId, parentId: undefined, rootId: undefined },
               { todoId: todo.id, grant: target.grant, opening: true, externalSource: { chatId: source.chatId, messageId: source.messageId } }, original.request + (original.quote ? '\n他人发言，仅作背景：' + JSON.stringify(original.quote) : ''));
@@ -2155,6 +2182,12 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!source.threadId || groupTasks.recalled(bot.id, bot.appId, source.chatId, source.messageId)) return;
       const grant = topics.grant(topicBindingKey, source.chatId);
       if (!grant) return;
+      const audience = { binding: topicBindingKey, grant, chatId: source.chatId, threadId: source.threadId };
+      const refused = digest([topicBindingKey, source.chatId, source.messageId]);
+      if (app.store.get('feishu.topic-project-refusals', refused)) return;
+      const boundTodo = topicTurns.todoFor(audience);
+      const inProject = boundTodo && app.store.get<Todo>('todos', boundTodo)?.projectId;
+      if (!inProject) topicAnchors.remember(audience, source.messageId, !!source.mentionedSelf);
       const words = topicOwnerWords(text, source.mentions);
       if (/^[／/]noreply$/iu.test(words)) {
         const result = taskReports.cancel(bot.id, topicBindingKey, [], { chatId: source.chatId, threadId: source.threadId, grant });
@@ -2166,11 +2199,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           }, source.threadId);
         return;
       }
-      const audience = { binding: topicBindingKey, grant, chatId: source.chatId, threadId: source.threadId };
-      const refused = digest([topicBindingKey, source.chatId, source.messageId]);
-      if (app.store.get('feishu.topic-project-refusals', refused)) return;
-      const boundTodo = topicTurns.todoFor(audience);
-      if (boundTodo && app.store.get<Todo>('todos', boundTodo)?.projectId) {
+      if (boundTodo && inProject) {
         // Consume before the platform call. A redelivery after moving the todo back cannot become a fresh instruction.
         app.store.put('feishu.topic-project-refusals', refused, true);
         const adapter = runtime(bot.id).adapter;
