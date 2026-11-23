@@ -379,7 +379,9 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     function scheduleInput() {
       let schedule;
       if (frequency.value === 'once') {
-        schedule = { kind: 'once', at: localInstant(once.value), tz: Intl.DateTimeFormat().resolvedOptions().timeZone };
+        const at = localInstant(once.value);
+        if (Date.parse(at) <= Date.now()) throw new Error('触发时间已过，请选择未来的时间。');
+        schedule = { kind: 'once', at, tz: Intl.DateTimeFormat().resolvedOptions().timeZone };
       } else if (frequency.value === 'interval') {
         const everySec = Number(minutes.value) * 60;
         if (!Number.isFinite(everySec) || everySec < 10) throw new Error('间隔至少为 10 秒。');

@@ -269,7 +269,10 @@ test('390px 长 title/cron/cwd 无溢出；真实执行者和同项目待办校�
 
 test('once 拒绝 DST 不存在的本地时间，并转换正常本地时间为 ISO', { timeout: 30000 }, async () => fixture(async f => {
   const { page } = f;
+  await page.clock.setFixedTime(new Date('2027-03-13T12:00:00Z'));
   await open(page); await drawer(page).getByRole('textbox', { name: '标题', exact: true }).fill('单次');
+  await drawer(page).getByLabel('本地触发时间', { exact: true }).fill('2027-03-12T12:00'); await submit(page);
+  await expect(drawer(page)).toContainText('触发时间已过'); assert.equal(f.writes.length, 0);
   await drawer(page).getByLabel('本地触发时间', { exact: true }).fill('2027-03-14T02:30'); await submit(page);
   await expect(drawer(page)).toContainText('本地触发时间无效'); assert.equal(f.writes.length, 0);
   await drawer(page).getByLabel('本地触发时间', { exact: true }).fill('2027-03-14T03:30'); await submit(page);
