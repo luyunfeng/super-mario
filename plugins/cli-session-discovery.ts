@@ -202,7 +202,10 @@ export function createCliSessionDiscovery(options: Options = {}) {
       return false;
     }
     const codexRoot = await codexHome, claudeRoot = await claudeHome;
-    if ((!target || target.executorId === 'codex') && await available(codexRoot, options.codexHome !== undefined, 'Codex')) await walk(join(codexRoot, 'sessions'), 'codex', 3);
+    if ((!target || target.executorId === 'codex') && await available(codexRoot, options.codexHome !== undefined, 'Codex')) {
+      await walk(join(codexRoot, 'sessions'), 'codex', 3);
+      await walk(join(codexRoot, 'archived_sessions'), 'codex', 0);
+    }
     if ((!target || target.executorId === 'claude-code') && await available(claudeRoot, options.claudeHome !== undefined, 'Claude')) {
       await walk(join(claudeRoot, 'projects'), 'claude-code', 2);
       await walk(join(claudeRoot, 'sessions'), 'claude-code', 1);

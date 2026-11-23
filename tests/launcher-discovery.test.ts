@@ -187,3 +187,19 @@ test('explicit metadata recursion keeps existing depth budgets', async t => {
   assert.deepEqual(sessions.sessions, []); assert.equal(sessions.truncated, true);
   assert.deepEqual(projects.projects, []); assert.equal(projects.truncated, true);
 });
+
+test('Codex 归档历史沿用项目范围校验，跨目录重名时拒绝恢复', async t => {
+  const f = await fixture(t);
+  const cwd = await f.dir('project'), other = await f.dir('other');
+  const nativeSessionId = 'archived-thread';
+  await f.file(join(f.codexHome, 'archived_sessions', nativeSessionId + '.jsonl'), {
+    type: 'session_meta', payload: { id: nativeSessionId, cwd },
+  });
+  const discovery = createCliSessionDiscovery(f.explicit);
+  const list = (root: string) => discovery.handlers['agents.sessions']({ roots: [root] });
+  assert.deepEqual((await list(cwd)).sessions.map(s => s.nativeSessionId), [nativeSessionId]);
+  assert.deepEqual((await list(other)).sessions, []);
+  await f.codex(f.codexHome, nativeSessionId, other);
+  assert.deepEqual((await list(f.base)).sessions, []);
+  await assert.rejects(discovery.validateResume({ executorId: 'codex', nativeSessionId, cwd }), /冲突/);
+});
