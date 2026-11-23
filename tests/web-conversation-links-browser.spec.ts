@@ -37,6 +37,12 @@ test('独立消息链接定位早期原文、刷新与后翻页，复制不携�
   const context=await browser.newContext({permissions:['clipboard-read','clipboard-write']});
   await context.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
   const page=await context.newPage();
+  let connections=0, disconnect: (()=>Promise<void>) | undefined;
+  await page.routeWebSocket('**/api/v1/events*',ws=>{
+    const upstream=ws.connectToServer();
+    connections++;
+    disconnect=async()=>{await ws.close();await upstream.close();};
+  });
   const errors:string[]=[];
   page.on('pageerror',e=>errors.push(e.message));
   await page.goto(server.url+'/#chat?token='+token);
@@ -56,6 +62,15 @@ test('独立消息链接定位早期原文、刷新与后翻页，复制不携�
   await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(link);
   await page.reload();
   await expect(target).toBeFocused();
+  const draft=page.getByLabel('给独立对话发消息');
+  await draft.fill('定位原文后的待发草稿');
+  const previous=connections;
+  assert.ok(disconnect);
+  await disconnect();
+  await expect.poll(()=>connections).toBeGreaterThan(previous);
+  await expect(target).toContainText(label(n));
+  await expect(draft).toHaveValue('定位原文后的待发草稿');
+  await expect(page).toHaveURL(link);
   const later=region.getByRole('button',{name:'加载后续消息'});
   const afterPattern='**/web-conversations/'+a+'/messages?after=*';
   await page.route(afterPattern,route=>route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'分页暂时失败'})}),{times:1});
