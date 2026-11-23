@@ -31,6 +31,7 @@ test('管理员可为在线执行机设置显示名，离线后仍可恢复上�
   await panel.getByRole('button',{name:'刷新执行机'}).click();
   const reported=panel.getByRole('article',{name:'合成上报名',exact:true});
   await expect(reported).toContainText('在线');
+  await expect(reported.getByRole('button',{name:'移除执行机'})).toHaveCount(0);
   await reported.getByRole('textbox',{name:'执行机显示名'}).fill('构建节点');
   await reported.getByRole('button',{name:'保存显示名'}).click();
   const renamed=panel.getByRole('article',{name:'构建节点',exact:true});
@@ -40,4 +41,20 @@ test('管理员可为在线执行机设置显示名，离线后仍可恢复上�
   await expect(renamed).toContainText('离线');
   await renamed.getByRole('button',{name:'恢复上报名'}).click();
   await expect(reported).toContainText('synthetic-machine');
+  const credentials=panel.getByRole('region',{name:'专用执行机凭据'});
+  await credentials.getByRole('button',{name:'查看专用凭据'}).click();
+  await credentials.getByRole('textbox',{name:'签发凭据的执行机 ID'}).fill('synthetic-machine');
+  await credentials.getByRole('button',{name:'签发专用凭据'}).click();
+  const secret=credentials.getByRole('textbox',{name:'新签发的执行机凭据'});
+  await expect(secret).toBeVisible();
+  await reported.getByRole('button',{name:'移除执行机'}).click();
+  await expect(reported).toContainText('任务历史会保留');
+  await reported.getByRole('button',{name:'取消移除'}).click();
+  await expect(reported.getByRole('button',{name:'确认移除'})).toHaveCount(0);
+  await expect(credentials.getByRole('button',{name:'撤销 synthetic-machine'})).toBeVisible();
+  await reported.getByRole('button',{name:'移除执行机'}).click();
+  await reported.getByRole('button',{name:'确认移除'}).click();
+  await expect(reported).toHaveCount(0);
+  await expect(credentials).toContainText('还没有专用执行机凭据');
+  await expect(secret).toHaveCount(0);
 });

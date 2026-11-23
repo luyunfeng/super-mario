@@ -5,7 +5,9 @@ function machineCredentials({request,submit,csrf,signal,active}){
   const issued=h('div',{class:'stack'}),rows=h('div',{class:'stack'}),actions=h('div',{class:'stack'});
   const machineId=h('input',{class:'input',type:'text',required:true,autocomplete:'off','aria-label':'签发凭据的执行机 ID'});
   const reload=button('查看专用凭据',()=>submit(async()=>{clearSecret();await read();}));
+  let opened=false,issuedId;
   const clearSecret=()=>{
+    issuedId=undefined;
     const input=issued.querySelector('input');
     if(input)input.value='';
     replace(issued);
@@ -20,7 +22,7 @@ function machineCredentials({request,submit,csrf,signal,active}){
       }))));
   }
   async function read(){
-    replace(actions);replace(rows);
+    opened=true;replace(actions);replace(rows);
     const result=await request('machine-credentials',undefined,{},signal);
     if(!active())return;
     reload.textContent='刷新专用凭据';
@@ -35,14 +37,17 @@ function machineCredentials({request,submit,csrf,signal,active}){
     const result=await request('machine-credentials/issue',{id},csrf,signal);
     if(!active())return;
     const token=h('input',{class:'input',type:'text',readOnly:true,autocomplete:'off','aria-label':'新签发的执行机凭据'});
-    token.value=result.token;
+    token.value=result.token;issuedId=result.id;
     replace(issued,h('p',{},'请将凭据保存至 '+result.id+' 的执行机配置。此处仅展示一次。'),token,button('清除已显示凭据',clearSecret));
     machineId.value='';
     await read();
   });}},h('label',{class:'field'},'签发凭据的执行机 ID',machineId),h('button',{type:'submit',class:'btn btn--sm'},'签发专用凭据'));
   const el=h('section',{class:'stack','aria-label':'专用执行机凭据'},h('h3',{},'专用执行机凭据'),
     h('p',{class:'small muted'},'可在执行机首次连接前签发针对该 ID 的凭据。撤销专用凭据后，使用主令牌的连接仍然有效。'),reload,issued,rows,actions);
-  return {el,clearSecret};
+  return {el,clearSecret,async afterRemoval(id){
+    if(issuedId===id)clearSecret();
+    if(opened)await read();
+  }};
 }
 
 export function createAdminMachines({request,submit,csrf,current}){
@@ -70,8 +75,22 @@ export function createAdminMachines({request,submit,csrf,current}){
         h('form',{class:'stack',onsubmit:event=>{event.preventDefault();void save(row.id,name.value.trim());}},
           h('label',{class:'field'},'执行机显示名',name),
           h('div',{class:'row row--wrap'},h('button',{class:'btn btn--sm',type:'submit'},'保存显示名'),
-            button('恢复上报名',()=>save(row.id,'')))));
+            button('恢复上报名',()=>save(row.id,'')))),row.online?null:removal(row));
     }));
+  }
+  function removal(row){
+    const box=h('div',{class:'stack'});
+    const open=button('移除执行机',()=>replace(box,
+      h('p',{},'移除 '+(row.name || row.id)+'（'+row.id+'）将删除执行机记录和显示名，并撤销其专用凭据。任务历史会保留。使用主令牌的执行机仍可重新登记。'),
+      h('div',{class:'row'},button('取消移除',()=>replace(box,open)),button('确认移除',()=>submit(async()=>{
+        if(!active())return;
+        const result=await request('machines/remove',{id:row.id},csrf,life.signal);
+        if(!active())return;
+        paint(result.machines);
+        status.textContent='已移除执行机 '+(row.name || row.id)+'。';
+        await credentials.afterRemoval(row.id);
+      })))));
+    box.append(open);return box;
   }
   async function load(){
     await submit(async()=>{

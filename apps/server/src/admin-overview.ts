@@ -9,6 +9,7 @@ type Options={
   store:Store; version:string; startedAt:string; demo:boolean;
   address:()=>AddressInfo|string|null;
   machines:()=>MachineInfo[];
+  machineRemoved?:(id:string)=>void;
   plugins:()=>{id:string;status:string}[];
   devices:()=>{id:string}[];
 };
@@ -63,6 +64,18 @@ export function createAdminOverview(options:Options) {
     else store.remove(machineNames,id);
     return machineList();
   }
+  function removeMachine(id:string,revoke:(id:string)=>boolean){
+    store.transaction(()=>{
+      const machine=options.machines().find(item=>item.id===id);
+      if(!machine)throw Object.assign(new Error('未找到执行机'),{status:404});
+      if(machine.online)throw Object.assign(new Error('执行机仍在线，请先断开连接'),{status:409});
+      if(!store.remove('machines',id))throw Object.assign(new Error('未找到执行机'),{status:404});
+      store.remove(machineNames,id);
+      revoke(id);
+    });
+    options.machineRemoved?.(id);
+    return machineList();
+  }
   function doctor(){
     const checkedAt=new Date().toISOString(),checks:Check[]=[];
     function check(label:string,run:()=>Omit<Check,'label'>){
@@ -85,5 +98,5 @@ export function createAdminOverview(options:Options) {
     });
     return {checkedAt,checks};
   }
-  return {read,rename,doctor,machineList,renameMachine};
+  return {read,rename,doctor,machineList,renameMachine,removeMachine};
 }

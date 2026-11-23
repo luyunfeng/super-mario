@@ -1369,7 +1369,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
     }
   });
   const overview=createAdminOverview({store:app.store,version,startedAt,demo:!!config.demo,address:()=>server.address(),
-    machines:()=>machines.list(),plugins:()=>app.plugins.list(),devices:()=>app.browserDevices.list()});
+    machines:()=>machines.list(),machineRemoved:id=>app.events.publish('machines.changed',{id}),plugins:()=>app.plugins.list(),devices:()=>app.browserDevices.list()});
   const browserPassword=createBrowserPassword(app.store,app.browserDevices,devicePlugin);
   const passwordRoutes=createPublicPasswordRoutes(browserPassword,config.token,devicePlugin,body,json);
   const machineCredentials=createMachineCredentials(app.store);

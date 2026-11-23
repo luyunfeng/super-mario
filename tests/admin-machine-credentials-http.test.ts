@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
 import WebSocket from 'ws';
+import type {Run} from '../packages/protocol/src/index.ts';
 import {startServer} from '../apps/server/src/index.ts';
 
 test('管理员签发单机凭据，执行机身份受限且撤销立即断开现有连接',{timeout:20000},async t=>{
@@ -48,6 +49,11 @@ test('管理员签发单机凭据，执行机身份受限且撤销立即断开�
   assert.equal((await once(wrong,'close'))[0],1008);
   const current=socket('/node',token);await once(current,'open');hello(current,id);
   await once(current,'message');
+  assert.equal((await post('machines/remove',{id},bearer(root))).status,401);
+  assert.equal((await post('machines/remove',{id},{cookie})).status,403);
+  assert.equal((await post('machines/remove',{id},{...admin,origin:'https://unrelated.invalid'})).status,403);
+  assert.equal((await post('machines/remove',{id},admin)).status,409);
+  assert.deepEqual(await(await fetch(endpoint,{headers:{cookie}})).json(),{machines:[{id}]});
   assert.equal((await post('machine-credentials/revoke',{id},{cookie})).status,403);
   const closed=once(current,'close');
   const revoked=await post('machine-credentials/revoke',{id},admin);
@@ -55,4 +61,25 @@ test('管理员签发单机凭据，执行机身份受限且撤销立即断开�
   await assert.rejects(once(socket('/node',token),'open'),/401|403/);
   assert.deepEqual(await(await fetch(endpoint,{headers:{cookie}})).json(),{machines:[]});
   assert.equal((await post('machine-credentials/revoke',{id},admin)).status,404);
+  const replacement=await post('machine-credentials/issue',{id},admin);assert.equal(replacement.status,201);
+  const replacementToken=(await replacement.json()).token;
+  for(let attempt=0;attempt<2;attempt++){
+    const peer=socket('/node',replacementToken);await once(peer,'open');hello(peer,id);
+    await once(peer,'message');peer.close();await once(peer,'close');
+    await t.waitFor(async()=>{
+      const list=await(await fetch(api+'/admin/machines',{headers:{cookie}})).json();
+      assert.equal(list.machines.find((m:{id:string})=>m.id===id).online,false);
+    });
+  }
+  const at=new Date().toISOString();
+  const history:Run={id:'fixture-history',executorId:'fixture-executor',machineId:id,conversationId:'main',
+    prompt:'合成任务',status:'completed',output:'已有结果',createdAt:at,updatedAt:at};
+  server.app.store.put('runs',history.id,history);
+  const removed=await post('machines/remove',{id},admin);assert.equal(removed.status,200);
+  assert.deepEqual(await removed.json(),{machines:[]});
+  assert.deepEqual(await(await fetch(endpoint,{headers:{cookie}})).json(),{machines:[]});
+  await assert.rejects(once(socket('/node',replacementToken),'open'),/401|403/);
+  const snapshot=await(await fetch(api+'/state',{headers:bearer(root)})).json();
+  assert.deepEqual(snapshot.runs.find((r:Run)=>r.id===history.id),history);
+  assert.equal((await post('machines/remove',{id},admin)).status,404);
 });

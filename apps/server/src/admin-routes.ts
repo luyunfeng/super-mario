@@ -133,7 +133,7 @@ export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootTo
       }
     }
     const credentialAction=action==='machine-credentials/issue'||action==='machine-credentials/revoke';
-    if(!credentialAction && !['setup-code','setup','login','password','logout','name','devices/pairings','devices/revoke','machines/name'].includes(action))fail(404,'管理接口不存在');
+    if(!credentialAction && !['setup-code','setup','login','password','logout','name','devices/pairings','devices/revoke','machines/name','machines/remove'].includes(action))fail(404,'管理接口不存在');
     if(req.method!=='POST')fail(405,'此管理操作需要 POST');
     sameOrigin(req);
     if(req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json')fail(415,'管理操作需要 JSON 请求');
@@ -142,11 +142,11 @@ export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootTo
       if(!rootToken || !loopback(req.socket.remoteAddress??'') || !localHost(req.headers.host) || proxy || req.headersDistinct.authorization?.length!==1 ||
         !exact(req.headers.authorization,'Bearer '+rootToken))fail(403,'请在服务器本机使用工作台主令牌获取初始化码');
     }
-    const fields=action==='setup'?['code','password']:action==='login'?['password']:action==='password'?['currentPassword','newPassword']:action==='name'||action==='devices/pairings'?['name']:action==='devices/revoke'||credentialAction?['id']:action==='machines/name'?['id','name']:[];
+    const fields=action==='setup'?['code','password']:action==='login'?['password']:action==='password'?['currentPassword','newPassword']:action==='name'||action==='devices/pairings'?['name']:action==='devices/revoke'||action==='machines/remove'||credentialAction?['id']:action==='machines/name'?['id','name']:[];
     const input=await readBody(req,8192);
     if(Object.keys(input).some(k=>!fields.includes(k)) || fields.some(k=>typeof input[k]!=='string'))fail(400,'管理请求字段无效');
     if(action==='setup-code')return json(res,200,{code:auth.issueCode()});
-    if(credentialAction||action==='password'||action==='logout'||action==='name'||action==='machines/name'||action.startsWith('devices/')){
+    if(credentialAction||action==='password'||action==='logout'||action==='name'||action==='machines/name'||action==='machines/remove'||action.startsWith('devices/')){
       const current=auth.session(token);
       if(!current)fail(401,'请先登录管理界面');
       if(req.headersDistinct['x-csrf-token']?.length!==1||!exact(req.headers['x-csrf-token'] as string|undefined,current.csrf))fail(403,'管理请求的 CSRF 验证失败');
@@ -168,6 +168,7 @@ export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootTo
         if(!devices.revoke(input.id as string))fail(404,'设备不存在');
         return json(res,200,{revoked:true});
       }
+      if(action==='machines/remove')return json(res,200,overview.removeMachine(input.id as string,credentials.revoke));
       if(action==='machines/name')return json(res,200,overview.renameMachine(input.id as string,input.name as string));
       if(action==='name')return json(res,200,overview.rename(input.name));
       if(action==='logout'){
