@@ -42,7 +42,8 @@ export function conversationStatusButton({ api, store, scope, target, project, t
         replace(content, h('strong', null, phases[data.phase] || phases.unknown),
           data.goal && h('p', null, '当前执行目标 · ' + data.goal),
           last && h('section', { class: 'stack' }, h('h3', null, '最近发言'), h('p', { class: 'small muted' }, (last.role === 'user' ? '用户' : last.status === 'pending' ? '助手 · 处理中' : last.status === 'failed' ? '助手 · 处理失败' : '助手') + ' · ' + last.at),
-            h('p', null, last.text), last.truncated && h('p', { class: 'small muted' }, '仅显示摘录')),
+            h('p', null, last.text), last.truncated && h('p', { class: 'small muted' }, '仅显示摘录'),
+            last.id && h('a', { href: (target === 'main' ? '#chat' : '#projects/' + encodeURIComponent(projectId) + '/workspace') + '?at=' + encodeURIComponent(last.id) + (todoId ? '&todo=' + encodeURIComponent(todoId) : ''), onclick: () => drawer.close() }, '查看原文')),
           h('section', { class: 'stack' }, h('h3', null, '待决定 · ' + data.pending.total),
             data.pending.items.map(item => h('p', null, (kinds[item.kind] || item.kind) + ' · ' + item.title)),
             data.pending.truncated && h('p', { class: 'small muted' }, '仅显示部分待决定事项')));

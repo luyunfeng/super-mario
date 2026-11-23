@@ -6,7 +6,7 @@ type Interaction = { id: string; runId?: string; projectId?: string; status: str
   kind: QuestionKind; title: string; createdAt: string; expiresAt?: string };
 export type ConversationStatus = {
   phase: 'no_records' | 'idle' | 'working' | 'waiting' | 'failed' | 'unknown';
-  lastMessage: { role: Message['role']; status?: Message['status']; text: string; at: string; truncated: boolean } | null;
+  lastMessage: { id?: string; role: Message['role']; status?: Message['status']; text: string; at: string; truncated: boolean } | null;
   pending: { total: number; items: { kind: QuestionKind; title: string }[]; truncated: boolean };
   goal: string | null;
 };
@@ -65,7 +65,7 @@ export function readConversationStatus(store: Pick<Store, 'list' | 'get'>, input
   else if (latest.status === 'failed') phase = 'failed';
   else if (latest.status === 'done' || latest.status === 'completed' || latest.status === 'cancelled') phase = 'idle';
   else phase = 'unknown';
-  return { phase, lastMessage: last ? { role: last.role, ...(last.role === 'assistant' && last.status && { status: last.status }), at: last.createdAt, ...excerpt(last.text, 160) } : null,
+  return { phase, lastMessage: last ? { id: last.id, role: last.role, ...(last.role === 'assistant' && last.status && { status: last.status }), at: last.createdAt, ...excerpt(last.text, 160) } : null,
     goal: active.length === 1 ? excerpt(active[0].prompt, 120).text || null : null,
     pending: { total: pending.length, items: pending.slice(0, 5).map(card => ({ kind: card.kind, title: excerpt(card.title, 100).text })),
       truncated: pending.length > 5 } };

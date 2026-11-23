@@ -29,7 +29,7 @@ test('status is pinned to a conversation and task; pending requires the exact or
   store.put('messages', message.id, message);
   const idle = status();
   assert.equal(idle.phase, 'idle');
-  assert.deepEqual(idle.lastMessage, { role: 'user', text: '最近 发言', truncated: false, at });
+  assert.deepEqual(idle.lastMessage, { id: message.id, role: 'user', text: '最近 发言', truncated: false, at });
   for (const queueState of ['withdrawn', 'cancelled']) {
     store.put('messages', 'removed', { ...message, id: 'removed', queueState, status: 'failed', text: '已移除的草稿', createdAt: later });
     assert.equal(status().phase, 'idle');

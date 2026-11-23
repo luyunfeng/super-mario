@@ -39,6 +39,10 @@ test('Web 会话状态只展示当前入口及项目内的最近发言，手动�
   add('work-latest', target, '刷新后甲的回复', now + 2, p.id);
   await drawer.getByRole('button', { name: '刷新状态' }).click();
   await expect(drawer).toContainText('刷新后甲的回复');
+  await drawer.getByRole('link', { name: '查看原文' }).click();
+  await expect(page).toHaveURL(new RegExp('at=work-latest$'));
+  await expect(page.locator('[data-id="work-latest"]').first()).toContainText('刷新后甲的回复');
+  await open.click();
   const endpoint = server.url + '/api/v1/conversation-status';
   assert.equal((await fetch(endpoint, { method: 'POST', body: '{}' })).status, 401);
   const headers = { authorization: 'Bearer ' + token };
