@@ -1289,6 +1289,10 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
       assert.match(req.system, /关联执行已结束仍可能待验收/);
       const question = JSON.stringify(req.content);
       assert.match(req.system, /没有执行记录只表示工作台未记录派发/);
+      if (question.includes('核对日历这周')) {
+        assert.match(req.system, /优先采用周视图标题的起止日期/);
+        return call('todos_list', { query: '换季', dueFrom: '2026-11-01T00:00:00-04:00', dueBefore: '2026-11-08T00:00:00-05:00' }, 'local-week');
+      }
       if (question.includes('纽约换季核验')) {
         assert.match(req.system, /同传 dueDay 和 timeZone/);
         return call('todos_list', { query: '换季', dueDay: '2026-11-01', timeZone: 'America/New_York', status: 'open' }, 'local-day');
@@ -1318,6 +1322,7 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
       return { role: 'assistant', content: answer };
     }
     if (req.callId === 'local-day') assert.deepEqual(titles, ['换季甲', '换季乙', '换季日末']);
+    else if (req.callId === 'local-week') assert.deepEqual(titles, ['换季甲', '换季乙', '换季日末', '换季次日']);
     else if (req.callId === 'responsible') assert.deepEqual(titles, ['加急复核']);
     else if (req.callId === 'waiting') assert.deepEqual(titles, ['加急复核']);
     else if (req.callId === 'undated') assert.deepEqual(titles, ['加急复核', '月报未定期限']);
@@ -1382,6 +1387,12 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
     }
     const dayQuestion = '纽约换季核验：当地 11 月 1 日到期的换季待办有哪些？按 2026 年查。';
     const dayAnswer = '换季甲、换季乙、换季日末';
+    await api('/todos', { title: '换季下周', dueAt: '2026-11-08T05:00:00Z', projectId: project.id });
+    const weekQuestion = '核对日历这周的换季待办，纽约时间 2026-11-01 至 2026-11-07。';
+    const weekAnswer = '换季甲、换季乙、换季日末、换季次日';
+    assert.equal(await ask(weekQuestion, path), weekAnswer);
+    await adapter.onMessage(weekQuestion, { ...source, messageId: 'local-week-question' });
+    await t.waitFor(() => assert.ok(sent.includes(weekAnswer)));
     const lookup = server.app.contributions.list('tools').find(item => item.value.name === 'todos_list')!.value;
     const signal = new AbortController().signal;
     await assert.rejects(async () => lookup.execute({ dueDay: '2026-02-30', timeZone: 'UTC' }, signal), /日期不存在/);

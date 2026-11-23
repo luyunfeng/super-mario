@@ -16,7 +16,7 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
     await server.close();
     await rm(dataDir, { recursive: true, force: true });
   });
-  const page = await browser.newPage({ timezoneId: 'America/Los_Angeles', viewport: { width: 1440, height: 1000 } });
+  const page = await browser.newPage({ locale: 'zh-CN', timezoneId: 'America/Los_Angeles', viewport: { width: 1440, height: 1000 } });
   page.setDefaultTimeout(5000);
   await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
   const project = server.app.projects.create({ name: '日历项目' });
@@ -227,6 +227,25 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   const previousDay = root.locator('[data-day="2030-03-09"][data-hour="2"]');
   await springEntry.dragTo(previousDay);
   await expect.poll(() => server.app.store.get<Todo>('todos', spring.id)?.dueAt).toBe('2030-03-09T10:30:00.000Z');
+  // Locale controls week boundaries independently of the browser timezone.
+  const usPage = await browser.newPage({ locale: 'en-US', timezoneId: 'America/Los_Angeles' });
+  await usPage.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+  await usPage.goto(base + '/week/2030-03-10');
+  const usCalendar = usPage.getByRole('region', { name: '待办日历' });
+  await expect(usCalendar).toContainText('2030-03-10 至 2030-03-16');
+  await expect(root).toContainText('2030-03-04 至 2030-03-10');
+  await usPage.goto(base + '/month/2030-03-10');
+  await expect(usCalendar.locator('.cal-head').first()).toHaveText('周日');
+  await expect(usCalendar.locator('.cal-cell').first()).toHaveAttribute('data-day', '2030-02-24');
+  await usPage.clock.setFixedTime(new Date('2030-03-08T12:00:00-08:00'));
+  await usPage.goto(base);
+  const sundayTodo = server.app.createTodo({ title: '周日截止', projectId: project.id, dueAt: springDue });
+  const usPanel = usPage.locator('#panel-todos');
+  await expect(usPanel.locator('.todo', { hasText: sundayTodo.title })).toBeVisible();
+  await usPanel.getByLabel('按截止日期筛选').selectOption('week');
+  await expect(usPanel.locator('.todo', { hasText: spring.title })).toBeVisible();
+  await expect(usPanel.locator('.todo', { hasText: sundayTodo.title })).toHaveCount(0);
+  await usPage.close();
   const disabled = await fetch(server.url + '/api/v1/plugins/todo-calendar', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: false }),
   });

@@ -6,7 +6,7 @@ import { Button, Check, Segmented } from '../ui/kit.js';
 const dragType = 'application/x-super-mario-todo';
 const pad = number => String(number).padStart(2, '0');
 const modeLabels = [['day', '日'], ['week', '周'], ['month', '月']];
-const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 export function localDate(value, withTime = false) {
   if (!value) return '';
   const date = new Date(value);
@@ -35,11 +35,28 @@ function shift(date, days) {
   return next;
 }
 
+// Intl numbers weekdays from Monday (1) through Sunday (7); Date uses Sunday (0).
+function firstWeekday() {
+  try {
+    const locale = new Intl.Locale(navigator.language);
+    const first = (locale.getWeekInfo?.() ?? locale.weekInfo)?.firstDay;
+    if (first) return first % 7;
+    const region = locale.maximize().region;
+    if ('AG AS BD BR BS BT BW BZ CA CO DM DO ET GT GU HK HN ID IL IN JM JP KE KH KR LA MH MM MO MT MX MZ NI NP PA PE PH PK PR PT PY SA SG SV TH TT TW UM US VE VI WS YE ZA ZW'.split(' ').includes(region)) return 0;
+    if ('AE AF BH DJ DZ EG IQ IR JO KW LY OM QA SD SY'.split(' ').includes(region)) return 6;
+  } catch { /* Use the workbench default when the browser has no locale information. */ }
+  return 1;
+}
+
+export function weekOffset(date) {
+  return (date.getDay() - firstWeekday() + 7) % 7;
+}
+
 function daysFor(anchor, mode) {
   if (mode === 'day') return [anchor];
   const start = new Date(anchor);
   if (mode === 'month') start.setDate(1);
-  start.setDate(start.getDate() - (start.getDay() + 6) % 7);
+  start.setDate(start.getDate() - weekOffset(start));
   const days = [];
   do {
     for (let i = 0; i < 7; i++) days.push(shift(start, days.length));
@@ -139,14 +156,14 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
   }
   let content;
   if (mode === 'month') {
-    content = h('div', { class: 'cal-grid cal-month' }, weekdays.map(name => h('strong', { class: 'cal-head' }, name)),
+    content = h('div', { class: 'cal-grid cal-month' }, days.slice(0, 7).map(day => h('strong', { class: 'cal-head' }, weekdays[day.getDay()])),
       days.map(day => {
         const entries = dated.get(localDate(day)) ?? [];
         return cell(day, undefined, dayButton(day, day.getDate()), entries.slice(0, 3).map(entry),
           entries.length > 3 && dayButton(day, `还有 ${entries.length - 3} 项`));
       }));
   } else {
-    const headers = days.map(day => dayButton(day, `${weekdays[(day.getDay() + 6) % 7]} ${day.getMonth() + 1}/${day.getDate()}`));
+    const headers = days.map(day => dayButton(day, `${weekdays[day.getDay()]} ${day.getMonth() + 1}/${day.getDate()}`));
     const hours = ['end', ...Array.from({ length: 24 }, (_, i) => i)];
     content = h('div', { class: 'cal-grid cal-axis', style: { gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(5rem, 1fr))` } },
       h('span', { class: 'cal-head' }, '时间'), headers,

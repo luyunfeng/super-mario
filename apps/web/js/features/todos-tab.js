@@ -5,7 +5,7 @@ import { formatDate, todoPriorityLabels } from '../lib/format.js';
 import { Button, Empty, Fold, Field, Input, TextArea, Select, Segmented } from '../ui/kit.js';
 import { openDrawer, toast } from '../ui/overlay.js';
 
-import { todoCalendar, localDate, dueInstant, calendarRoute } from './todo-calendar.js';
+import { todoCalendar, localDate, dueInstant, weekOffset, calendarRoute } from './todo-calendar.js';
 import { openTaskClosure, refreshTaskClosure } from './task-closure.js';
 import { createTodoDetail, openTodoDetail, openTodoDelegate } from './todo-detail.js';
 import { openTodoHistory } from './todo-history.js';
@@ -20,8 +20,8 @@ const orders = [['recent', '最近更新'], ['due', '截止时间最早'], ['pri
 function dateRanges(now) {
   const year = now.getFullYear(), month = now.getMonth(), day = now.getDate();
   const midnight = offset => new Date(year, month, day + offset).getTime();
-  const monday = -((now.getDay() + 6) % 7);
-  return { today: [midnight(0), midnight(1)], week: [midnight(monday), midnight(monday + 7)],
+  const weekStart = -weekOffset(now);
+  return { today: [midnight(0), midnight(1)], week: [midnight(weekStart), midnight(weekStart + 7)],
     month: [+new Date(year, month, 1), +new Date(year, month + 1, 1)] };
 }
 
