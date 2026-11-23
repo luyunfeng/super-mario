@@ -36,6 +36,15 @@ function timingDelay(ms) {
   return `晚 ${Math.floor(ms / 3600000)} 小时`;
 }
 
+function configurationText(item) {
+  if (item.status === 'active') return '已生效（仅配置生效）';
+  if (item.status === 'cancelled') return '已取消计划';
+  if (item.status !== 'pending') return '未确认';
+  if (item.approvalStatus === 'pending') return '待创建确认';
+  if (['rejected', 'failed'].includes(item.approvalStatus)) return '计划未生效';
+  return '计划生效情况待核对';
+}
+
 function occurrenceText(o) {
   if (o.status === 'unknown') return '动作结果未知，停止堆积；请核对原记录';
   if (o.status === 'claimed') return '已认领，动作结果尚未确认';
@@ -143,7 +152,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
           : item.todoId && ' · 待办 ' + item.todoId),
       line(timingText(item.schedule)),
       item.schedule.until && line('结束时间：' + timeText(item.schedule.until)),
-      line(`配置状态：${({ pending: '待创建确认', active: '已生效（仅配置生效）', cancelled: '已取消计划' })[item.status] ?? '未确认'} · 创建审批 ${approvalText(item.approvalStatus)}`),
+      line(`配置状态：${configurationText(item)} · 创建审批 ${approvalText(item.approvalStatus)}`),
       line(item.scheduleStatus === 'done' && item.schedule.kind === 'once' ? '单次计划已触发' : `调度状态：${({ active: '等待触发', paused: '已暂停', done: '已结束', cancelled: '已取消' })[item.scheduleStatus] ?? '未确认'}`),
       item.skipToken && line('将跳过：' + timeText(item.nextAt)),
       item.skipToken && item.nextActionAt === null && line('跳过本次后，计划截止前没有下一期。'),

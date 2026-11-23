@@ -96,6 +96,12 @@ test('现有创建审批生效、单次已触发与到期派发审批 pending/co
   const { page } = f;
   await expect(panel(page)).toContainText('待创建确认');
   await expect(panel(page).getByRole('link', {name:'查看待处理审批'})).toHaveAttribute('href', '#chat?approval=creation-one');
+  for (const [approvalStatus, label] of [['rejected','计划未生效 · 创建审批 已拒绝'], ['failed','计划未生效 · 创建审批 失败'], ['unknown','计划生效情况待核对 · 创建审批 结果未知']]) {
+    f.items = [work({approvalStatus})];
+    await emit(page);
+    await expect(panel(page)).toContainText(label);
+    await expect(panel(page).getByRole('link', {name:'查看待处理审批'})).toHaveCount(0);
+  }
   for (const approvalStatus of ['pending', 'completed', 'unknown']) {
     f.items = [work({ status: 'active', approvalStatus: 'completed', scheduleStatus: 'done', schedule: { kind: 'once', at }, action: { kind: 'dispatch', executorId: 'real-cli' }, occurrences: [{ key: 'o', kind: 'dispatch', status: 'completed', scheduledFor: at, approvalId: 'dispatch-one', approvalStatus }], occurrenceTotal: 30, occurrencesTruncated: true })];
     await emit(page);
