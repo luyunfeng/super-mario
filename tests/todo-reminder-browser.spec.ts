@@ -69,9 +69,10 @@ for (const timezoneId of ['Asia/Shanghai', 'America/Los_Angeles']) {
         assert.equal(read().reminderAt, reminderAt);
       }
       await save();
+      // Changing the date keeps the explicit local cutoff shown in the time field.
       const expected = timezoneId === 'Asia/Shanghai'
-        ? { due: '2099-02-03T15:59:00.000Z', reminder: '2099-02-03T02:20:00.000Z' }
-        : { due: '2099-02-04T07:59:00.000Z', reminder: '2099-02-03T18:20:00.000Z' };
+        ? { due: '2099-02-03T01:02:00.000Z', reminder: '2099-02-03T02:20:00.000Z' }
+        : { due: '2099-02-04T01:02:00.000Z', reminder: '2099-02-03T18:20:00.000Z' };
       assert.equal(read().dueAt, expected.due);
       assert.equal(read().reminderAt, expected.reminder);
       assert.equal(read().remindedAt, undefined);
