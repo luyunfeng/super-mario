@@ -1,4 +1,5 @@
 import {createMessageCopyActions,conversationExportActive,openConversationExport} from './conversation-export.js';
+import {attachSavedPrompts} from './saved-prompts.js';
 import {createMessageFavorites} from './message-favorites.js';
 import {createAssistantSwitcher} from './assistant-roster.js';
 import {conversationMessageSearch} from './conversation-message-search.js';
@@ -50,14 +51,15 @@ export function createWebConversations({api,store,scope,router}){
   const scroller=h('div',{class:'chat__scroll'},h('div',{class:'chat__inner'},more,messages,later));
   const input=h('textarea',{class:'composer__input',rows:2,maxLength:20000,'aria-label':'给独立对话发消息',placeholder:'输入消息，Enter 发送'});
   const quote=createMessageQuote({drafts,input,store,router,scope});
-  let quoteKey=null;
+  const prompts=attachSavedPrompts({api,store,input,getScope:()=>meta && valid(current) ? meta.id : null});
+  let promptEpoch=prompts.epoch,quoteKey=null;
   const send=h('button',{class:'btn btn--sm btn--primary',type:'submit'},'发送');
   const cleanupRetry=button('按原版本重试删除',retryDeletion);
   cleanupRetry.hidden=true;
   let unconfirmedDeletion;
   const retry=button('重新读取对话',()=>{reset();update();});
   const form=h('form',{class:'composer',onsubmit:event=>{event.preventDefault();void post();}},
-    h('div',{class:'composer__box'},quote.bar,input,h('div',{class:'composer__bar'},h('span',{class:'grow'}),send)));
+    h('div',{class:'composer__box'},quote.bar,prompts.menu,input,h('div',{class:'composer__bar'},prompts.manage,h('span',{class:'grow'}),send)));
   const rename=button('修改对话标题',openRename),archive=button('归档对话',()=>changeArchive());
   const stateLabel=h('span',{class:'small muted'});
   const controls=h('div',{class:'row row--wrap'},stateLabel,rename,archive,button('删除对话',openDelete));
@@ -83,7 +85,7 @@ export function createWebConversations({api,store,scope,router}){
     canPersistDraft:()=>store.view.snapshot?.plugins.some(p=>p.id==='conversation-drafts' && p.status==='active')});
   form.prepend(submissions.panel,submissions.button);
   input.oninput=()=>{const key=context().key;if(key)drafts.write(key,input.value);};
-  input.onkeydown=e=>{if(e.key==='Enter' && !e.shiftKey && !e.isComposing){e.preventDefault();form.requestSubmit();}};
+  input.onkeydown=e=>{if(!e.defaultPrevented && e.key==='Enter' && !e.shiftKey && !e.isComposing){e.preventDefault();form.requestSubmit();}};
 
   function syncSearch(){
     const readable=meta && valid(current);
@@ -94,14 +96,14 @@ export function createWebConversations({api,store,scope,router}){
     const nextQuoteKey=readable && !meta.archived && store.view.snapshot.plugins.some(p=>p.id==='conversation-quotes' && p.status==='active') ? draftKey : null;
     const quoteChanged=quoteKey!==nextQuoteKey;
     if(quoteChanged){quoteKey=nextQuoteKey;quote.restore(quoteKey);epoch++;}
-    if(exportButton.hidden!==hidden || quoteChanged || favoriteEpoch!==favorites.epoch){
-      favoriteEpoch=favorites.epoch;
+    if(exportButton.hidden!==hidden || quoteChanged || favoriteEpoch!==favorites.epoch || promptEpoch!==prompts.epoch){
+      promptEpoch=prompts.epoch;favoriteEpoch=favorites.epoch;
       exportButton.hidden=hidden;
       if(readable && rows.length)display();
     }
   }
   function reset(){
-    quoteKey=null;quote.restore(null);
+    prompts.changeScope();quoteKey=null;quote.restore(null);
     exportButton.hidden=true;exportDrawer?.close();exportDrawer=null;search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
     favorites.update();input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
     submissions.update();switcher.update();
@@ -159,6 +161,7 @@ export function createWebConversations({api,store,scope,router}){
     if(meta && row.version<meta.version)return;
     if(!meta){draftKey=JSON.stringify(['web',stamp.id]);input.value=drafts.read(draftKey);}
     if(meta && row.version>meta.version)notice.textContent='';
+    if(row.archived && !meta?.archived)prompts.reset();
     meta=row;heading.textContent=row.title;
     form.hidden=!!row.archived;controls.hidden=false;
     stateLabel.textContent=row.archived?'已归档 · 只读':'';
@@ -302,6 +305,7 @@ export function createWebConversations({api,store,scope,router}){
           h('div',{class:'msg__bubble'},copies.renderMessage(row,row.text)),
           h('div',{class:'msg__meta row row--wrap'},copies.copyMessage(row,m=>m.text),
             row.origin!=='notification' && favorites.mark(row,meta.projectId,stamp.id,()=>valid(stamp) && meta?.id===stamp.id && rows.includes(row)),
+            row.directWebInput && prompts.fromMessage(row),
             quoteKey && row.origin!=='notification' && quote.action(row,row.role==='user'?'我':'助手'),
             row.status==='pending' && h('small',{},'处理中…'),row.status==='failed' && h('small',{},'处理失败'),
             h('button',{type:'button',class:'btn btn--ghost btn--icon btn--sm','aria-label':'复制消息链接',title:'复制消息链接',

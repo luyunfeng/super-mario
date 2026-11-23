@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -261,4 +262,50 @@ test('插件设置可管理提示词；并发编辑保留草稿，已打开的�
   await input.press('Tab');
   await expect(input).toBeFocused();
   await expect(input).toHaveValue('正文 plan-beta');
+});
+
+test('归档独立对话中的本人发言可保存为提示词，斜杠选取只填写当前独立对话的草稿', {timeout:40000}, async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'web-thread-prompts-')),token='synthetic-thread-prompts';
+  const server=await startServer({dataDir,host:'127.0.0.1',port:0,demo:true,token});
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(async()=>{await browser.close();await server.close();await rm(dataDir,{recursive:true,force:true});});
+  const page=await browser.newPage(),headers={Authorization:'Bearer '+token};
+  await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  const path=server.url+'/api/v1/web-conversations',archive=randomUUID(),active=randomUUID();
+  for(const [id,title] of [[archive,'提供原话的对话'],[active,'使用提示词的对话']]){
+    assert.equal((await page.request.post(path,{headers,data:{id,title}})).status(),201);
+  }
+  const url=(id:string)=>server.url+'/#chat?thread='+id;
+  const input=page.getByLabel('给独立对话发消息'),region=page.getByLabel('独立对话内容');
+  await page.goto(url(archive)+'&token='+token);
+  const template='请先列出**原始证据**。\n再写出尚待核实的问题。';
+  await input.fill(template);await input.press('Enter');await expect(input).toHaveValue('');
+  const source=region.locator('.msg--user').filter({hasText:'原始证据'});
+  await expect(region.locator('.msg--assistant').first()).toBeVisible();
+  const meta=await (await page.request.get(path+'/'+archive,{headers})).json();
+  assert.equal((await page.request.patch(path+'/'+archive,{headers,data:{version:meta.version,archived:true}})).status(),200);
+  await expect(input).toBeHidden();
+  const save=source.getByRole('button',{name:'保存为提示词',exact:true});
+  await expect(region.locator('.msg--assistant').getByRole('button',{name:'保存为提示词'})).toHaveCount(0);
+  await save.click();
+  const drawer=page.getByRole('dialog',{name:'常用提示词',exact:true});
+  await expect(drawer.getByLabel('提示词正文')).toHaveValue(template);
+  await drawer.getByLabel('名称',{exact:true}).fill('verify');
+  await drawer.getByRole('button',{name:'保存',exact:true}).click();
+  await expect(drawer.getByRole('button',{name:'编辑 verify'})).toBeVisible();
+  await drawer.getByRole('button',{name:'关闭',exact:true}).click();
+  const posts:string[]=[];
+  page.on('request',req=>{if(req.method()==='POST' && new URL(req.url()).pathname.endsWith('/messages'))posts.push(req.url());});
+  await page.goto(url(active));await input.fill('/');
+  const suggestion=region.getByRole('button',{name:'/verify',exact:true});
+  await expect(suggestion).toBeVisible();await input.press('Enter');await expect(input).toHaveValue(template);
+  await page.goto(url(archive));await expect(input).toBeHidden();
+  await page.goto(url(active));await expect(input).toHaveValue(template);
+  assert.deepEqual(posts,[]);
+  assert.deepEqual((await (await page.request.get(path+'/'+active+'/messages',{headers})).json()).messages,[]);
+  await input.fill('/ver');await expect(suggestion).toBeVisible();
+  assert.equal((await page.request.post(server.url+'/api/v1/plugins/saved-prompts',{headers,data:{enabled:false}})).status(),200);
+  await expect(suggestion).toBeHidden();await expect(input).toHaveValue('/ver');
+  await expect(region.getByRole('button',{name:'常用提示词',exact:true})).toBeHidden();
+  await page.goto(url(archive));await expect(source).toBeVisible();await expect(save).toBeHidden();
 });
