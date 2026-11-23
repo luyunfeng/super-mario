@@ -1454,7 +1454,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             values[field.name] = value;
           }
           const submitService = pluginForm[1] + '.submit_form';
-          if (!app.plugins.providesService(pluginForm[1], submitService)) throw new InputError('表单所属插件未提供提交服务', 503);
+          if (!app.plugins.providesService(pluginForm[1], submitService)) throw new InputError('表单所属插件未提供提交服务', 409);
           return json(res,200,await app.plugins.invocations.use(submitService,{formId:id,values}));
         }
         const plugin = path.match(/^\/api\/v1\/plugins\/([^/]+)$/);

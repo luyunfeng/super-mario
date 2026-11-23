@@ -27,6 +27,12 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
     ctx.provide('review.local.submit_form',async input=>({message:input.values.priority+'：'+input.values.note}));
     ctx.contribute('web_extensions','future',{slot:'advanced-interface',renderer:'future',title:'其他格式',fallback:'纯文字说明'});
   }}`);
+  const draftExtension = join(dataDir,'extensions','draft');
+  await mkdir(draftExtension,{recursive:true});
+  await writeFile(join(draftExtension,'super-mario.extension.json'),JSON.stringify({id:'draft',version:'1.0.0',apiVersion:1,main:'index.mjs'}));
+  await writeFile(join(draftExtension,'index.mjs'),`export default {id:'draft',name:'草稿插件',capabilities:[],activate(ctx){
+    ctx.contribute('web_extensions','draft/notes',{slot:'advanced-interface',renderer:'form',title:'草稿备注',fields:[{name:'note',label:'草稿'}],fallback:'草稿表单'});
+  }}`);
   const server=await startServer({host:'127.0.0.1',port:0,dataDir,demo:true});
   t.after(async()=>{await server.close();await rm(dataDir,{recursive:true,force:true});});
   const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
@@ -144,6 +150,11 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await form.getByLabel('备注').fill(revisedNote);
   await form.getByRole('button',{name:'提交'}).click();
   await expect.poll(()=>form.getByRole('status').textContent()).toBe('优先：'+revisedNote);
+  const draft=page.getByRole('region',{name:'草稿备注'});
+  await draft.getByLabel('草稿',{exact:true}).fill('尚未提交');
+  await draft.getByRole('button',{name:'提交'}).click();
+  await expect(draft.getByRole('status')).toHaveText('表单所属插件未提供提交服务');
+  await expect(draft.getByLabel('草稿',{exact:true})).toBeEditable();
   const endpoint=server.url+'/api/v1/plugin-forms/review.local/notes';
   assert.equal((await page.request.post(endpoint,{data:{note:' '}})).status(),400);
   assert.equal((await page.request.post(endpoint,{data:{note:'评审',priority:'未定义'}})).status(),400);
