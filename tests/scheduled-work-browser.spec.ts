@@ -348,6 +348,9 @@ test('从周报模板创建可编辑派发草稿，独立选择执行者', async
   await panel(page).getByRole('button', { name: '从模板创建' }).click();
   const catalog = page.getByRole('dialog', { name: '定时工作模板' });
   await expect(catalog.getByRole('button', { name: '执行巡检' })).toBeVisible();
+  await expect(catalog).toContainText('周五 17:00 · Asia/Shanghai');
+  await expect(catalog).toContainText('每 30 分钟');
+  await expect(catalog).toContainText('可编辑的周报草稿');
   await catalog.getByRole('button', { name: '周报草稿' }).click();
   const form = drawer(page);
   await expect(form.getByLabel('目标', { exact: true })).toHaveValue(/本周.*来源/);
@@ -363,6 +366,7 @@ test('从周报模板创建可编辑派发草稿，独立选择执行者', async
   assert.equal(f.writes.length, 1);
   assert.equal(f.writes[0].body.action.prompt, '只核对本周交付');
   assert.equal(f.writes[0].body.schedule.cron, '0 17 * * 5');
+  assert.equal(f.writes[0].body.schedule.tz, 'Asia/Shanghai');
 }));
 
 test('查看已保存的执行提示词和验收标准原文', async () => fixture(async f => {

@@ -280,9 +280,15 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       replace(content, line('正在读取模板…'));
       try {
         const { items } = await api.get('/scheduled-work/templates');
-        if (drawer.active()) replace(content, items.map(template => Button({
-          label: template.title, onClick: () => { if (drawer.active()) openCreate(template); },
-        })));
+        if (!drawer.active()) return;
+        const timezone = snapshot().workspaceTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai';
+        replace(content, items.map(template => {
+          const timing = template.everyMinutes ? '每 ' + template.everyMinutes + ' 分钟'
+            : template.days.map(day => weekdayNames[day]).join('、') + ' ' + template.time + ' · ' + timezone;
+          return h('section', { class: 'stack' }, Button({
+            label: template.title, onClick: () => { if (drawer.active()) openCreate(template); },
+          }), line(timing), line(template.doneWhen));
+        }));
       } catch (cause) {
         if (drawer.active()) replace(content, line('读取模板失败：' + cause.message),
           Button({ label: '重新读取模板', onClick: loadTemplates }));
