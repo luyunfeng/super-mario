@@ -2279,6 +2279,10 @@ test('Web 和飞书按同一触发记录区分待批准、派发和执行失败'
     assert.match(req.system, /分别报告当次记录的 approvalStatus 和 run.status/);
     if (req.lastRole === 'user') {
       assert.match(req.system, /提示词是供核对的计划数据/);
+      if (JSON.stringify(req.content).includes('失败原因')) {
+        assert.match(req.system, /用当次触发记录的 run.id 精确查询 runs_list/);
+        return call('scheduled_work_list', {}, 'failed-trigger');
+      }
       if (JSON.stringify(req.content).includes('为什么跳过')) {
         assert.match(req.system, /即使那期后来批准或完成，也保留当时的解释/);
         return call('scheduled_work_list', {}, 'skip-reason');
@@ -2294,7 +2298,14 @@ test('Web 和飞书按同一触发记录区分待批准、派发和执行失败'
       return call('scheduled_work_list', {}, JSON.stringify(req.content).includes('执行要求') ? 'requirements' : 'status');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    if (req.callId === 'failure-detail') {
+      const [run] = JSON.parse(raw);
+      assert.equal(run.status, 'failed');
+      assert.match(run.error, /合成失败/);
+      return { role:'assistant', content:'巡检执行报错：合成失败。' + (req.system.includes('本轮回复渠道是飞书') ? '' : run.webCitation) };
+    }
     const [work] = JSON.parse(raw).items;
+    if (req.callId === 'failed-trigger') return call('runs_list', {id:work.occurrences[0].run.id}, 'failure-detail');
     if (req.callId === 'requirements') return { role: 'assistant', content: work.action.prompt + '\n完成标准：' + work.action.doneWhen };
     if (req.callId === 'skip-reason') {
       const skipped = work.occurrences.find((item: { status: string }) => item.status === 'skipped');
@@ -2359,6 +2370,11 @@ test('Web 和飞书按同一触发记录区分待批准、派发和执行失败'
     await t.waitFor(() => assert.ok(sent.includes(expected)));
     await adapter.onMessage(question, { ...source, messageId: 'status' });
     await t.waitFor(() => assert.ok(sent.includes('派发审批已处理，执行失败。')));
+    const failureQuestion = '上次项目巡检的失败原因是什么？';
+    assert.equal(await ask(failureQuestion, '/projects/' + project.id + '/messages'),
+      '巡检执行报错：合成失败。[查看执行](#projects/' + project.id + '/runs/' + dispatch.result.runId + ')');
+    await adapter.onMessage(failureQuestion, { ...source, messageId:'failure-detail' });
+    await t.waitFor(() => assert.ok(sent.includes('巡检执行报错：合成失败。')));
     const originalSource = server.app.store.get<Message>('messages', work.source.messageId)!;
     runWithAgentInput(originalSource, () => server.app.scheduledWork.propose({ key: 'progress', title: '项目巡检',
       projectId: project.id, schedule: { kind: 'once', at: '2099-01-01T00:00:00Z' }, action: { kind: 'brief' } }, true));
