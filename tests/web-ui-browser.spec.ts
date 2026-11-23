@@ -676,6 +676,9 @@ test('启动页跨浏览器保存，优先保留深链，并在插件页面恢�
     const saved = page.waitForResponse(r => r.url().endsWith('/api/v1/start-page'));
     await dialog.getByRole('button', { name: '保存启动页' }).click();
     assert.equal((await saved).status(), 200);
+    await select.selectOption('memory');
+    await dialog.getByRole('button',{name:'打开所选页面'}).click();
+    await expect(page).toHaveURL(/#memory$/);
     const second = (await open('')).page;
     await expect(second).toHaveURL(/#inbox$/);
     await second.goto(server.url + '/#chat?at=synthetic');

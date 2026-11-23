@@ -63,7 +63,7 @@ export function startPages(plugins) {
     ...plugins.filter(p => p.status === 'active').flatMap(p => features(p).map(item => ({ ...item, label: item.label + ' · ' + p.name })))];
 }
 
-function startPageEditor({ api, store }, preference, choices) {
+function startPageEditor({ api, store }, preference, choices, openFeature) {
   if (!preference) return null;
   const listed = choices.some(item => item.key === preference.key);
   const select = h('select', { class: 'select', 'aria-label': '默认打开的页面' },
@@ -71,6 +71,11 @@ function startPageEditor({ api, store }, preference, choices) {
     !listed && h('option', { value: preference.key, disabled: true }, '已选插件页面暂不可用'));
   select.value = preference.key;
   const status = h('span', { role: 'status' });
+  const preview = Button({ label: '打开所选页面', disabled: !listed, onClick: () => {
+    const page = choices.find(item => item.key === select.value);
+    if (page) openFeature(page);
+  } });
+  select.addEventListener('change', () => { preview.disabled = !choices.some(item => item.key === select.value); });
   return h('div', { class: 'stack' }, h('label', { class: 'field' }, '默认打开的页面', select),
     !listed && h('p', { class: 'small muted' }, '目前打开首页。插件恢复后会再次使用已选页面。'),
     Button({ label: '保存启动页', onClick: async () => {
@@ -78,7 +83,7 @@ function startPageEditor({ api, store }, preference, choices) {
         await api.post('/start-page', { key: select.value, revision: preference.revision });
         status.textContent = '已保存启动页';
       } finally { await store.refresh(); }
-    } }), status);
+    } }), preview, status);
 }
 
 export function createPluginSettings({ api, store, router }) {
@@ -157,7 +162,7 @@ export function createPluginSettings({ api, store, router }) {
         preferenceEditor(plugin.id),
         plugin.id === 'reading-fonts' && plugin.status === 'active' && readingFontEditor(),
         plugin.id === 'shortcut-settings' && Button({ label: '快捷键设置', disabled: plugin.status !== 'active', onClick: () => openShortcutSettings(store) }),
-        plugin.id === 'start-page' && startPageEditor({ api, store }, snapshot.startPage, startPages(plugins)),
+        plugin.id === 'start-page' && startPageEditor({ api, store }, snapshot.startPage, startPages(plugins), openFeature),
         plugin.id === 'saved-prompts' && Button({ label: '管理常用提示词', size: 'sm', disabled: plugin.status !== 'active',
           onClick: () => openSavedPrompts({ api, store }) }),
         plugin.capabilities?.length > 0 && h('details', null, h('summary', { class: 'small' }, '查看插件声明的能力'), h('ul', null, plugin.capabilities.map(name => h('li', null, name)))),
