@@ -50,7 +50,7 @@ test('主人富文本在当前独立对话传入正文和核验原图，区分�
               create_time:String(path.endsWith('_old')?parentCreatedAt-86400000:parentCreatedAt),deleted:path.endsWith('_deleted'),
               sender:{id_type:'open_id',sender_type:'user',id:path.endsWith('_other')?'ou_other':'ou_owner'},
               mentions:[{key:'@_user_1',name:'合成人员'}],body:{content:JSON.stringify(path.endsWith('_post')?
-                {content:[[{tag:'text',text:'来自遗漏的富文本'}]]}:{text:'@_user_1 旧文中的合成要求'})}
+                {content:[[{tag:'text',text:'来自遗漏的富文本'}]]}:{text:'@_user_1 旧文中的合成要求\u2028第二行引文\u2029第三行引文'})}
             }]}});
           }
           if(path==='om_post'){
@@ -140,7 +140,7 @@ test('主人富文本在当前独立对话传入正文和核验原图，区分�
       const call=modelCalls.find(c=>JSON.stringify(c.messages.at(-1)?.content).includes(prompt));
       assert.ok(call);
       const text=JSON.stringify(call.messages.at(-1)?.content);
-      if(suffix==='text')assert.match(text,/> @合成人员 旧文中的合成要求/);
+      if(suffix==='text')assert.ok(text.includes('> @合成人员 旧文中的合成要求\\n> 第二行引文\\n> 第三行引文'));
       else if(suffix==='post')assert.match(text,/> 来自遗漏的富文本/);
       else {assert.match(text,/飞书引用原文不可用/);assert.doesNotMatch(text,/旧文中的合成要求|来自遗漏的富文本/);}
     });

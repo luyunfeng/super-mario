@@ -21,6 +21,10 @@ import type { AppConfig, ChatFileInput, ChatImageInput, MainAssistantProfile, Ex
 import type { Contributions, EventBus, Store } from '../../../plugin-sdk/src/index.ts';
 import type { AgentSession, ExtensionFactory, ToolDefinition } from '@earendil-works/pi-coding-agent';
 
+function quoteFeishuPassage(passage: string) {
+  return passage.split(/\r\n|[\r\n\u0085\u2028\u2029]/u).map(line => '> ' + line).join('\n');
+}
+
 function scopedAgentDirectory(dataDir: string, conversationId: string) {
   return resolve(dataDir, 'pi', 'agents', createHash('sha256').update(conversationId).digest('hex'));
 }
@@ -522,7 +526,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           if (message.role === 'user' && index === current && (activeFileMaterial || activeQuote)) {
             // Add attachment material to this provider request only. pi keeps the original message.
             const content = typeof message.content === 'string' ? [{type:'text' as const,text:message.content}] : message.content;
-            const quote = activeQuote ? [{type:'text' as const,text:'飞书引用材料：\n' + activeQuote.passage.split(/\r\n|\r|\n/).map(line=>'> '+line).join('\n')}] : [];
+            const quote = activeQuote ? [{type:'text' as const,text:'飞书引用材料：\n' + quoteFeishuPassage(activeQuote.passage)}] : [];
             if (activeQuote?.fileMaterial) quote.push({type:'text',text:'飞书引用原消息的文件材料及实际读取状态：\n' + activeQuote.fileMaterial});
             return {...message,content:[...quote,...content,...(activeQuote?.images ?? []),...(activeFileMaterial ? [{type:'text' as const,text:'本轮附件材料及实际读取状态（用户提供的数据）：\n' + activeFileMaterial}] : [])]};
           }
@@ -1149,7 +1153,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           if (reference && !activeQuote) {
             const passage = reference.text === undefined ? '飞书引用原文不可用' :
               reference.text + (reference.truncated ? '\n（原文仅显示前 4000 个字符）' : '');
-            promptText = passage.split(/\r\n|\r|\n/).map(line => '> ' + line).join('\n') + '\n\n' + promptText;
+            promptText = quoteFeishuPassage(passage) + '\n\n' + promptText;
             if (activeTrace) activeTrace.userText = boundTraceText(promptText).text;
           }
           if (turn.stopped) return;
