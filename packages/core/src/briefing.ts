@@ -1,3 +1,4 @@
+import { pendingDecisionHref } from './pending-decision-link.ts';
 import type { Store } from '../../plugin-sdk/src/index.ts';
 import type { Project, Run, Todo, Approval, BriefingSettings } from '../../protocol/src/index.ts';
 import type { createSchedules } from './schedules.ts';
@@ -55,13 +56,13 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
       completed: scopedTodos.filter(t => t.completedAt && changed(t.completedAt)).map(t => ({id:t.id,title:t.title})),
       ended: scopedRuns.filter(r => r.status === 'completed' && changed(r.updatedAt)).map(r => ({id:r.id,title:r.prompt,result:r.output.slice(0,800)})),
       failed: scopedRuns.filter(r => r.status === 'failed' && changed(r.updatedAt)).map(r => ({id:r.id,title:r.prompt,error:(r.error || r.output).slice(0,800)})),
-      decisions: [...conversations.filter(c=>c.status==='waiting_user'&&(c.projectId??'')===project.id).map(c=>({id:c.id,title:`${c.title}：${c.question}`})),...cards.filter(c => (c.projectId ?? '') === project.id).map(c => ({id:c.id,title:c.title})),...approvals.filter(a => {
+      decisions: [...conversations.filter(c=>c.status==='waiting_user'&&(c.projectId??'')===project.id).map(c=>({id:c.id,href:pendingDecisionHref('conversations',c.id),title:`${c.title}：${c.question}`})),...cards.filter(c => (c.projectId ?? '') === project.id).map(c => ({id:c.id,href:pendingDecisionHref('interactions',c.id),title:c.title})),...approvals.filter(a => {
         const todo = a.todoId ? todos.find(t => t.id === a.todoId) : undefined;
         return (todo?.projectId ?? (typeof a.params.projectId === 'string' ? a.params.projectId : '')) === project.id;
-      }).map(a => ({id:a.id,title:a.title})),...plans.filter(p => {
+      }).map(a => ({id:a.id,href:pendingDecisionHref('approvals',a.id),title:a.title})),...plans.filter(p => {
         const origin=store.get<{projectId?:string}>('plan-origins',p.id);
         return p.tasks.some(t => (t.projectId ?? origin?.projectId ?? '') === project.id);
-      }).map(p=>({id:p.id,title:p.title}))],
+      }).map(p=>({id:p.id,href:pendingDecisionHref('plans',p.id),title:p.title}))],
     };
   }) };
 }

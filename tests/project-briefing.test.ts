@@ -22,6 +22,7 @@ test('optional project filter isolates todos and all decision sources', t => {
   assert.deepEqual(brief.projects.map(p => p.projectId), ['a']);
   assert.deepEqual(brief.projects[0].todoUpdates.map(t => t.id), ['a-todo']);
   assert.deepEqual(brief.projects[0].decisions.map(t => t.id), ['a-card', 'a-approval', 'a-plan']);
+  assert.deepEqual(brief.projects[0].decisions.map(t => t.href), ['#chat?interaction=a-card', '#chat?approval=a-approval', '#chat?plan=a-plan']);
   assert.doesNotMatch(JSON.stringify(brief), /b-todo|b-card|global-card|unassigned|global-plan|global-approval/);
 });
 

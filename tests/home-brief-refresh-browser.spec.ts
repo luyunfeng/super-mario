@@ -42,3 +42,32 @@ test('首页简报读取失败收起旧执行记录和无更新结论，手动�
   await expect(retry).toHaveCount(0);
   assert.equal(successfulRetries,1);
 });
+
+test('首页项目总结的同名待决定链接准确打开对应审批卡', {timeout:30000},async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'home-brief-decision-')),token='synthetic-brief-decision';
+  const server=await startServer({dataDir:dir,port:0,host:'127.0.0.1',demo:true,token});
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(async()=>{await browser.close();await server.close();await rm(dir,{recursive:true,force:true});});
+  const selected=server.app.projects.create({name:'目标项目'}),other=server.app.projects.create({name:'另一个项目'});
+  const title='核对提交内容';
+  const create=(projectId:string,details:string)=>server.app.approvals.propose({kind:'dispatch',title,details,params:{projectId}});
+  const decoy=create(other.id,'另一张合成审批'),target=create(selected.id,'本项目合成审批');
+  const page=await browser.newPage();
+  const writes:string[]=[];
+  page.on('request',r=>{if(r.method()!=='GET' && new URL(r.url()).pathname.startsWith('/api/v1/approvals'))writes.push(r.method());});
+  await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  await page.goto(server.url+'/#home?token='+token);
+  const decisionLink=(project:string)=>page.locator('.home-project').filter({has:page.getByRole('heading',{name:project})})
+    .locator('p').filter({hasText:'待决定'}).getByRole('link',{name:title,exact:true});
+  await expect(decisionLink(other.name)).toHaveAttribute('href','#chat?approval='+decoy.id);
+  await expect(decisionLink(selected.name)).toHaveAttribute('href','#chat?approval='+target.id);
+  await decisionLink(selected.name).click();
+  await expect(page).toHaveURL(server.url+'/#chat?approval='+target.id);
+  const card=page.locator('#attention [data-id="approval:'+target.id+'"]');
+  await expect(card).toBeVisible();
+  await expect(card).toBeFocused();
+  await expect(card).toContainText(title);
+  await expect(card.getByRole('button',{name:'批准',exact:true})).toBeVisible();
+  assert.deepEqual(server.app.approvals.list().map(row=>row.status),['pending','pending']);
+  assert.deepEqual(writes,[]);
+});

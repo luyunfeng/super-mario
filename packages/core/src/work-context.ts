@@ -1,4 +1,5 @@
 import type { InboxConversation } from '../../protocol/src/inbox-conversations.ts';
+import { pendingDecisionHref } from './pending-decision-link.ts';
 import { actionTodoLink } from './todo-link.ts';
 import { actionableInbox } from './attention.ts';
 import type { ReviewEvidenceReader } from './run-review.ts';
@@ -82,9 +83,8 @@ export function pendingDecisionPage(store: WorkStore, scope: BotScope, offset: n
     (scope.kind !== 'unmarked' && row.projectId === scope.projectId && (scope.kind !== 'task' || row.todoId === scope.todoId)), conversations, channels)
     .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.collection.localeCompare(b.collection) || a.id.localeCompare(b.id));
   const end = offset + 25;
-  const routes = { inbox: '#chat?inbox=', approvals: '#chat?approval=', interactions: '#chat?interaction=', plans: '#chat?plan=', mailboxes: '#chat?mailbox=', conversations: '#inbox?conversation=' };
   const items = decisions.slice(offset, end).map(row => ({
-    ...row, webCitation: row.collection === 'deferredQuestions' ? row.webCitation : `[查看待决定事项](${routes[row.collection]}${encodeURIComponent(row.id)})`,
+    ...row, webCitation: row.collection === 'deferredQuestions' ? row.webCitation : `[查看待决定事项](${pendingDecisionHref(row.collection, row.id)})`,
   }));
   return { total: decisions.length, items, nextOffset: end < decisions.length ? end : null };
 }

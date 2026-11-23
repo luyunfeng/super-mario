@@ -2551,6 +2551,7 @@ test('Web 与飞书项目助手完整列出待主人决定的事项，仅查询�
       titles = [];
       lines = [];
       assert.match(req.system, /按 nextOffset 续查完整清单/);
+      assert.match(req.system, /首页项目总结的待决定条目打开原卡或收件会话/);
       assert.match(req.system, /Web 附每条记录返回的 webCitation，飞书列类型和标题，省略站内链接/);
       assert.match(req.system, /附上本轮返回的 question，让用户在收件箱回复主助手/);
       assert.match(req.system, /linkedTodo 为真时提示已有待办/);
