@@ -27,7 +27,7 @@ const descriptions = {
   'conversation-retry':'在主对话和项目对话中，手动重试执行工具前失败的回复，沿用原消息及附件。',
   'conversation-files':'在主对话和项目工作对话附加文件，从原消息下载。每条最多 20 件，每件最多 200 MiB。',
   'conversation-images':'在 Web 和飞书对话发送、查看图片。停用后可继续发送文字，再次启用可恢复原图和已保存的图片草稿。',
-  'conversation-export':'下载或复制主对话和项目工作对话的 Markdown 记录。',
+  'conversation-export':'复制消息正文或表格，导出对话 Markdown。在独立 Web 对话中可选择消息并导出 PNG。',
   'reply-translation':'翻译助手回复和飞书收件，可按会话选择自动翻译。',
   'conversation-edit':'把自己发过的文字放回输入框，修改后可作为新消息发送。',
   'conversation-quotes':'在主对话和项目工作对话中引用一条消息，可附上自己的问题。',

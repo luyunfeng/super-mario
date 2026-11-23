@@ -12,7 +12,7 @@ type ScopedPostContext = Omit<NonNullable<Parameters<Runtime['post']>[2]>, 'read
 interface Options {
   webThreadAssistant?(threadId:string):{id:string;name:string;instructions:string}|undefined;
   webConversationAllowed?(id:string,projectId?:string):boolean;
-  savedPromptsEnabled?():boolean;
+  webComposerPlugins?():ReadonlySet<string>;
   chatFilesEnabled?():boolean;
   canReadChatFiles?(message:Message):boolean;
   readChatFileText?:NonNullable<Parameters<typeof createAgentRuntime>[0]['readChatFileText']>;

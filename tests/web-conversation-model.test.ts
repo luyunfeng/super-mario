@@ -120,8 +120,12 @@ test('SDK requests preserve the correct Web thread history within a shared proje
       assert.match(system(thread), /不能把回复描述成已发往飞书/);
     }
     await server.app.plugins.setEnabled('saved-prompts',false);
+    await server.app.plugins.setEnabled('conversation-export',false);
     const libraryOff=system(await askA('怎么复用旧要求？'));
     assert.match(libraryOff,/常用提示词插件不可用/);
+    assert.match(libraryOff,/当前对话导出插件已停用/);
+    assert.doesNotMatch(libraryOff,/下载 PNG|「复制表格」/);
+    await server.app.plugins.setEnabled('conversation-export',true);
     assert.doesNotMatch(libraryOff,/点「保存为提示词」/);
     await server.app.plugins.setEnabled('saved-prompts',true);
     assert.match(system(await askA('现在如何保存要求？')),/点「保存为提示词」/);
