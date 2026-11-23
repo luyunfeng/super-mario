@@ -41,6 +41,12 @@ test('independent web conversations persist exact scopes and idempotent creation
   f.store.put('messages','unrelated',{...message,id:'unrelated',projectId:'p',text:'其他范围',createdAt:'2099-02-01T00:00:00.000Z'});
   const recent=await call({action:'list'}) as {items:{id:string;lastInputText?:string}[]};
   assert.deepEqual(recent.items.map(row=>[row.id,row.lastInputText]),[[id,'合成 最近输入'],[other,undefined]]);
+  f.store.put('messages','other-input',{...message,id:'other-input',conversationId:'web:'+other,createdAt:'2099-01-03T00:00:00.000Z'});
+  f.store.put('messages','matched-answer',{...message,id:'matched-answer',role:'assistant',replyTo:message.id,
+    directWebInput:false,status:'done',createdAt:'2099-01-04T00:00:00.000Z'});
+  const results=await call({action:'list',query:'合成'}) as {items:{id:string;match:{id:string;role:string;at:string}}[]};
+  assert.deepEqual(results.items.map(row=>[row.id,row.match.role,row.match.id]),[[id,'assistant','matched-answer'],[other,'user','other-input']]);
+  assert.equal(results.items[0].match.at,'2099-01-04T00:00:00.000Z');
   assert.equal(webConversationMatches(f.store,pid,'p'),true);
   assert.equal(webConversationMatches(f.store,pid),false);
   assert.equal(webConversationMatches(f.store,id),true);

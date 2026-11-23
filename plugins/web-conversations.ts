@@ -115,7 +115,7 @@ export const webConversationsExtension: Extension = {
         const threads=new Set(rows.map(row=>'web:'+row.id));
         const query=input.query;
         if(query!==undefined && (typeof query!=='string' || !query.trim() || query.length>200))fail(400,'搜索词须为 1 至 200 个字符');
-        const hits=new Map<string,{id:string;text:string;at:string}>();
+        const hits=new Map<string,{id:string;text:string;at:string;role:Message['role']}>();
         const latest=new Map<string,Message>();
         if(threads.size)for(const message of store.list<Message>('messages')){
           if(!threads.has(message.conversationId) || (message.role!=='user' && !(query && message.role==='assistant' && message.status==='done')) || (message.role==='user' && !message.directWebInput) || typeof message.id!=='string' || typeof message.text!=='string' || typeof message.createdAt!=='string' || !independentWebSource(store,message,message.conversationId,projectId))continue;
@@ -123,7 +123,7 @@ export const webConversationsExtension: Extension = {
             const offset=message.text.indexOf(query.trim());
             if(offset>=0 && message.createdAt >= (hits.get(message.conversationId)?.at ?? '')){
               const start=Math.max(0,offset-32),end=offset+query.trim().length+64;
-              hits.set(message.conversationId,{id:message.id,at:message.createdAt,text:(start?'…':'')+message.text.slice(start,end)+(end<message.text.length?'…':'')});
+              hits.set(message.conversationId,{id:message.id,role:message.role,at:message.createdAt,text:(start?'…':'')+message.text.slice(start,end)+(end<message.text.length?'…':'')});
             }
           }
           if(message.role==='user' && message.createdAt >= (latest.get(message.conversationId)?.createdAt ?? ''))latest.set(message.conversationId,message);
@@ -131,7 +131,7 @@ export const webConversationsExtension: Extension = {
         const items=rows.filter(row=>!query || hits.has('web:'+row.id)).map(row=>{
           const last=latest.get('web:'+row.id);
           return {...view(row),...(query && {match:hits.get('web:'+row.id)!}),...(last && {lastInputId:last.id,lastInputAt:last.createdAt,lastInputText:[...last.text.trim().replace(/\s+/gu,' ')].slice(0,100).join('')})};
-        }).sort((a,b)=>(b.lastInputAt || b.createdAt).localeCompare(a.lastInputAt || a.createdAt));
+        }).sort((a,b)=>(b.match?.at || b.lastInputAt || b.createdAt).localeCompare(a.match?.at || a.lastInputAt || a.createdAt));
         return {items};
       }
       const id = conversationKey(input.id);
