@@ -62,6 +62,10 @@ test('主人从项目页添加项目，按可见范围批量置顶和归档，�
   await board.getByRole('button',{name:'全选可见卡片',exact:true}).click();
   await board.getByRole('button',{name:'归档',exact:true}).click();
   await expect(visibleRows).toHaveCount(0);
+  const receipt=board.locator('details').filter({has:page.getByText('本次批量操作结果（2 张）',{exact:true})});
+  await receipt.locator('summary').click();
+  for(const project of projects.slice(0,2)) await expect(receipt.getByRole('listitem').filter({hasText:project.name})).toContainText('已归档');
+  await expect(receipt.getByRole('listitem')).toHaveCount(2);
   await board.getByLabel('显示卡片',{exact:true}).selectOption({label:'已归档'});
   await expect(visibleRows).toHaveCount(2);
   await board.getByRole('button',{name:'全选可见卡片',exact:true}).click();

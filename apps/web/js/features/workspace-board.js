@@ -45,6 +45,7 @@ export function openWorkspaceBoard({ api, store, router }) {
   const columnControls = h('div', { class: 'stack' });
   const manage = h('details', {}, h('summary', {}, '管理看板列'), columnControls);
   const controls = h('fieldset', { class: 'stack', style:{border:'0',padding:'0',margin:'0',minWidth:'0'} }, add, h('div', { class: 'row row--wrap' }, search, Field({label:'绑定机器',control:machine}), filter), tools, h('p',{class:'small muted'},'每列先显示置顶卡片。可拖到同一置顶状态的卡片前，或拖到目标列末。移到列末的卡片会排在本组最后。'), cards, manage);
+  const batchResult=h('details',{hidden:true},h('summary',{},'本次批量操作结果'));
   const manualHeader=h('div',{class:'row row--between'},message,h('div',{class:'row'},Button({label:'变更历史',size:'sm',onClick:()=>history()}),refresh));
   let automatic=false;
   const flow=createBoardFlow({api,store,router,authorized:()=>authorized(),close:()=>drawer.close()});
@@ -56,11 +57,12 @@ export function openWorkspaceBoard({ api, store, router }) {
     automatic=next;
     if (remember) writeLocal(preferenceKey, automatic ? 'auto' : 'manual');
     manualHeader.hidden=controls.hidden=automatic;
+    batchResult.hidden=automatic || batchResult.childElementCount<2;
     flowButton.setAttribute('aria-pressed',String(automatic)); manualButton.setAttribute('aria-pressed',String(!automatic));
     if (automatic) { clearDrag(); flow.show(); }
     else { flow.hide(); void request(); }
   }
-  const drawer = openDrawer({ title:'工作区看板',wide:true,body:[h('div',{class:'row'},manualButton,flowButton),manualHeader,controls,flow.el],onClose:()=>{
+  const drawer = openDrawer({ title:'工作区看板',wide:true,body:[h('div',{class:'row'},manualButton,flowButton),manualHeader,batchResult,controls,flow.el],onClose:()=>{
     flow.hide(); historyDrawer?.close(); removeConfirmation?.close(); unsubscribe();
   }});
   const authorized = () => drawer.el.open && api.draftOwner() === owner && workspaceBoardEnabled(api, store);
@@ -272,7 +274,19 @@ export function openWorkspaceBoard({ api, store, router }) {
       else if (undo && undo.revision !== doc.revision) undo = undefined;
       board = doc;
       stale = false;
-      if (change?.action === 'batch_cards') for (const {id} of change.changes) selected.delete(id);
+      if (change?.action === 'batch_cards') {
+        const changedIds=new Set(change.changes.map(item=>item.id));
+        const results=doc.cards.filter(card=>changedIds.has(card.id)).map(card=>{
+          selected.delete(card.id);
+          const column=doc.columns.find(item=>item.id===card.columnId);
+          return h('li',{},[card.title,column?.title,card.pinned?'已置顶':'未置顶',card.archived?'已归档':'未归档'].filter(Boolean).join(' · '));
+        });
+        replace(batchResult,h('summary',{},'本次批量操作结果（'+results.length+' 张）'),h('ul',{},results));
+        batchResult.hidden=automatic;
+      } else if(change) {
+        replace(batchResult,h('summary',{},'本次批量操作结果'));
+        batchResult.hidden=true;
+      }
       paintAdd(); paintCards(); paintColumns();
       message.textContent = '';
     } catch (error) {
