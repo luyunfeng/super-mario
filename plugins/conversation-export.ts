@@ -55,6 +55,31 @@ type ReadPrivate = (botId: string, threadId: string) => { title: string; message
 type ReadWeb = (threadId:string, projectId?:string) => { title:string; messages:Message[] };
 type ReadAssistant = () => Promise<{ name: string } | undefined>;
 
+function imagePreview(input: Record<string, Json>, readWeb?: ReadWeb) {
+  const {webThreadId, projectId, messageIds, includeQuestions = false} = input;
+  if (Object.keys(input).some(k=>!['action','webThreadId','projectId','messageIds','includeQuestions'].includes(k))
+      || typeof webThreadId!=='string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(webThreadId)
+      || (projectId!==undefined && (typeof projectId!=='string' || !projectId.trim())) || typeof includeQuestions!=='boolean'
+      || !Array.isArray(messageIds) || !messageIds.length || messageIds.length>100
+      || messageIds.some(id=>typeof id!=='string' || !id.trim() || id.length>256)
+      || new Set(messageIds).size!==messageIds.length) fail(400,'图片导出需要选择 1–100 条不同的独立对话消息');
+  if (!readWeb) fail(503,'独立 Web 对话服务尚未连接');
+  const {title,messages}=readWeb(webThreadId.toLowerCase(),projectId);
+  const eligible=messages.filter(m=>m.status==='done' && !m.stoppedByUser && !m.queueState);
+  const selected=new Set(messageIds);
+  const picked=eligible.filter(m=>selected.has(m.id));
+  if (picked.length!==selected.size) fail(404,'部分消息已不可导出，请重新选择');
+  if (includeQuestions) {
+    const users=new Set(eligible.filter(m=>m.role==='user').map(m=>m.id));
+    for (const m of picked) if (m.role==='assistant' && m.replyTo && users.has(m.replyTo)) selected.add(m.replyTo);
+  }
+  // Pixels are fetched independently through the message's authenticated image endpoint.
+  return {title,messages:eligible.filter(m=>selected.has(m.id)).map(m=>({
+    id:m.id, role:m.role, text:m.text, createdAt:m.createdAt, images:(m.images??[]).map((_,index)=>({index})),
+    files:(m.files??[]).map(({name,bytes})=>({name,bytes})),
+  }))};
+}
+
 async function markdown(store: Store, input: Json, signal: AbortSignal, readNative?: ReadNative, readAssistant?: ReadAssistant, readPrivate?: ReadPrivate, readWeb?: ReadWeb) {
   if (!input || typeof input !== 'object' || Array.isArray(input)
     || typeof input.includeWork !== 'boolean'
@@ -142,7 +167,13 @@ export function createConversationExport(readNative?: ReadNative, readAssistant?
     id: 'conversation-export', name: '对话导出', capabilities: ['conversation.export'],
     permissions: ['service.provide:conversation-export.markdown', 'store.read'],
     activate(context) {
-      context.provide('conversation-export.markdown', (input, signal) => markdown(context.store, input, signal, readNative, readAssistant, readPrivate, readWeb));
+      context.provide('conversation-export.markdown', (input, signal) => {
+        if (input && typeof input==='object' && !Array.isArray(input) && input.action==='preview_image') {
+          signal.throwIfAborted();
+          return imagePreview(input, readWeb);
+        }
+        return markdown(context.store, input, signal, readNative, readAssistant, readPrivate, readWeb);
+      });
     },
   };
 }
