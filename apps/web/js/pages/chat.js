@@ -42,6 +42,15 @@ export function createChatPage({ api, store, scope, router }) {
   const code = createCodeSidebar({ api, store });
   const recent = createRecentWork({ api, store, router, scope });
   const banner = h('div', { id: 'chat-banner' });
+  const approvalNotice = h('div', { role: 'status', hidden: true });
+  let pendingApproval = '';
+  function revealApproval() {
+    if (!pendingApproval || router.current.page !== 'chat' || !store.view.snapshot) return;
+    const found = attention.reveal('approval:' + pendingApproval);
+    approvalNotice.hidden = found;
+    approvalNotice.textContent = found ? '' : '当前待处理列表中没有这条审批。';
+    if (found) pendingApproval = '';
+  }
   const setup = h('div', { id: 'onboarding' });
   const runStrip = h('div', { id: 'run-strip', hidden: true });
   const messages = h('div', { class: 'msgs', id: 'messages', 'aria-live': 'polite' });
@@ -55,7 +64,7 @@ export function createChatPage({ api, store, scope, router }) {
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '对话'), h('p', { class: 'page__sub' }, hintCopy('nav.chat').tag)),
         h('div', { class: 'page__actions' }, favorites.button, transcript.button, officeDocumentsButton({ api, store }), code.toggle, Hint('nav.chat'))),
-      banner, attention.el, setup, runStrip));
+      banner, approvalNotice, attention.el, setup, runStrip));
   const scroller = h('div', { class: 'chat__scroll', id: 'chat-scroll' }, h('div', { class: 'chat__inner' }, messages, hero));
 
   // —— 输入框 ——
@@ -319,6 +328,9 @@ export function createChatPage({ api, store, scope, router }) {
       quote.restore(quotesEnabled ? draftKey : null);
       prompts.reset();
       recent.refresh();
+      pendingApproval = route.query.get('approval') || '';
+      approvalNotice.hidden = true;
+      revealApproval();
       pendingMessage = route.query.get('favorite') || route.query.get('at') || '';
       markedMessage?.classList.remove('is-search-hit');
       if (pendingMessage) revealMessage();
@@ -335,6 +347,7 @@ export function createChatPage({ api, store, scope, router }) {
       }
       code.show(scope.get());
       attention.update(items);
+      revealApproval();
       renderBanner(state); renderSetup(state); renderRuns(state);
       recent.update(state);
       const list = state.messages ?? [];

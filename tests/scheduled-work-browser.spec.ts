@@ -109,6 +109,12 @@ test('现有创建审批生效、单次已触发与到期派发审批 pending/co
     await expect(details).toContainText('最近记录已截断');
     await expect(details).toContainText('source-message');
   }
+  f.items = [work({ occurrences: [{ key: 'trigger', kind: 'dispatch', status: 'completed', scheduledFor: at,
+    approvalId: 'dispatch-one', approvalStatus: 'completed', run: { id: 'fixture-run', status: 'failed' } }] })];
+  await emit(page);
+  await expect(panel(page)).toContainText('执行失败');
+  await panel(page).locator('summary').click();
+  await expect(panel(page).getByRole('link', { name: '查看实际执行记录' })).toHaveAttribute('href', '#projects/a/runs/fixture-run');
 }));
 
 test('取消须明确确认当前 version；409 不盲重试，核对新版本再取消', { timeout: 30000 }, async () => fixture(async f => {

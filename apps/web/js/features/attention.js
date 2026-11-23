@@ -182,6 +182,16 @@ export function createAttention({ api, store, task = false }) {
       for (const id of cards.keys()) if (!ids.has(id)) cards.delete(id);
       paint();
     },
+    reveal(id) {
+      if (!items.some(item => item.id === id)) return false;
+      currentId = id;
+      minimized = false;
+      paint();
+      const card = cards.get(id)?.node;
+      card?.focus();
+      card?.scrollIntoView({ block: 'nearest' });
+      return true;
+    },
     expand() { expanded = true; minimized = false; paint(); },
   };
 }

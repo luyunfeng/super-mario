@@ -1,5 +1,5 @@
 import type { Store, EventBus } from '../../plugin-sdk/src/index.ts';
-import type { Approval, BotScope, Json, Message, ScheduledWorkInput, ScheduledWorkOccurrence, ScheduledWorkRecord, ScheduledWorkScope } from '../../protocol/src/index.ts';
+import type { Approval, BotScope, Json, Message, Run, ScheduledWorkInput, ScheduledWorkOccurrence, ScheduledWorkRecord, ScheduledWorkScope } from '../../protocol/src/index.ts';
 import { createScheduledWork } from './scheduled-work.ts';
 import type { createSchedules } from './schedules.ts';
 import type { createApprovalService } from './approvals.ts';
@@ -56,6 +56,16 @@ export function createScheduledWorkService(options: {
       }
     }
   }
+  function dispatchReceipt(work: ScheduledWorkRecord, occurrence: ScheduledWorkOccurrence) {
+    if (!occurrence.approvalId) return {};
+    const approval = store.get<Approval>('approvals', occurrence.approvalId);
+    if (!approval || approval.kind !== 'dispatch' || approval.params.scheduledWorkOccurrence !== occurrence.key) return {};
+    const runId = store.get<string>('dispatch-keys', `approval:${approval.id}:${occurrence.approvalVersion}`);
+    const run = runId ? store.get<Run>('runs', runId) : undefined;
+    const matches = run && run.projectId === work.input.projectId && run.todoId === work.input.todoId
+      && run.sourceMessageId === work.sourceMessage.id;
+    return { approvalStatus: approval.status, ...(matches ? { run: { id: run.id, status: run.status } } : {}) };
+  }
   function historyPage(work: ScheduledWorkRecord, occurrences: ScheduledWorkOccurrence[], after?: string) {
     const history = occurrences.slice().sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor) || b.key.localeCompare(a.key));
     const start = after === undefined ? 0 : history.findIndex(o => o.key === after) + 1;
@@ -64,7 +74,7 @@ export function createScheduledWorkService(options: {
     const more = start + page.length < history.length;
     return {
       occurrences: page.map(o => ({ key: o.key, scheduledFor: o.scheduledFor, status: o.status, approvalId: o.approvalId,
-        approvalStatus: o.approvalId ? store.get<Approval>('approvals', o.approvalId)?.status : undefined,
+        ...dispatchReceipt(work, o),
         result: o.result, kind: work.input.action.kind, ...(o.error ? { error: '结果未知，请核对原记录' } : {}) })),
       occurrenceTotal: history.length, occurrencesTruncated: more, nextOccurrenceKey: more ? page[page.length - 1].key : null,
     };

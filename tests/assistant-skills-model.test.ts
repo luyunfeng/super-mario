@@ -149,6 +149,7 @@ test('Web 与飞书项目助手核对计划当次简报的原文', async t => {
   const sent: string[] = [];
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
+      assert.match(req.system, /分别报告当次记录的 approvalStatus 和 run.status/);
       assert.match(req.system, /scheduled_work_history 传 workId 和 after=nextOccurrenceKey/);
       assert.match(req.system, /不用当前快照重构过去的内容/);
       return call('scheduled_work_list', {}, 'list');
@@ -2004,5 +2005,50 @@ test('Web 登记项目子项，飞书项目助手查询直接子项的完成数'
     await adapter.onMessage('为核对明细移除前置整理附件', { ...chat, messageId: 'remove' });
     await t.waitFor(() => assert.ok(sent.includes('现在有两项前置依赖，请核对后决定。')));
     assert.deepEqual(server.app.todos().find(todo => todo.id === childId)?.afterTodoIds, [prerequisiteId, newerId]);
+  } finally { await server.close(); }
+});
+
+test('Web 和飞书按同一触发记录区分待批准、派发和执行失败', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const { server, api, ask } = await fixture(t, req => {
+    assert.match(req.system, /分别报告当次记录的 approvalStatus 和 run.status/);
+    if (req.lastRole === 'user') return call('scheduled_work_list', {}, 'status');
+    const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    const [work] = JSON.parse(raw).items;
+    const [trigger] = work.occurrences;
+    if (trigger.approvalStatus === 'pending') {
+      assert.equal(trigger.run, undefined);
+      return { role: 'assistant', content: '派发仍待批准。' };
+    }
+    assert.equal(trigger.approvalStatus, 'completed');
+    assert.equal(trigger.run.status, 'failed');
+    return { role: 'assistant', content: '派发审批已处理，执行失败。' };
+  }, options => {
+    adapter = options;
+    return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    server.app.contributions.add('executors', 'fixture', { id: 'fixture', name: '离线替身', machineId: 'local',
+      kind: 'test', available: true, mode: 'demo', description: '合成执行失败', async execute() { throw new Error('合成失败'); } });
+    const project = await api('/projects', { name: '定时派发进度' });
+    const approval = await api('/scheduled-work', { key: 'progress', title: '项目巡检', projectId: project.id,
+      schedule: { kind: 'once', at: '2001-01-01T00:00:00Z' },
+      action: { kind: 'dispatch', executorId: 'fixture', prompt: '合成巡检', doneWhen: '生成报告', expectMinutes: 1 } });
+    await api('/approvals/' + approval.id + '/approve', { version: approval.version });
+    await server.app.background.tick();
+    await server.app.background.eventbox.drain();
+    const question = '上次项目巡检执行成功了吗？';
+    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), '派发仍待批准。');
+    const [work] = server.app.scheduledWork.list({ projectId: project.id }).items;
+    const dispatch = await api('/approvals/' + work.occurrences[0].approvalId + '/approve', { version: 1 });
+    await t.waitFor(() => assert.equal(server.app.store.get<Run>('runs', dispatch.result.runId)?.status, 'failed'));
+    const bot = await api('/feishu/bots', { name: '巡检查询', appId: 'cli_4444444444444444', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(question, { ...source, messageId: 'status' });
+    await t.waitFor(() => assert.ok(sent.includes('派发审批已处理，执行失败。')));
   } finally { await server.close(); }
 });

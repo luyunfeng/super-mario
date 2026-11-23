@@ -13,7 +13,7 @@ test('real HTTP creation approval activates one schedule and program fact brief 
 test('due dispatch creates a second explicit approval; cancel closes its pending receipt without executing',async t=>{
  const f=await fixture(t);let launches=0;f.server.app.contributions.add('executors','fixture',{id:'fixture',name:'Offline executor',machineId:'local',kind:'test',available:true,mode:'demo',description:'local fake',async execute(){launches++;return{text:'synthetic'};}});
  const action={kind:'dispatch',executorId:'fixture',prompt:'local work',doneWhen:'return synthetic',expectMinutes:1};const created=(await f.request('/scheduled-work','POST',work('dispatch',action))).data;
- await f.request('/approvals/'+created.id+'/approve','POST',{version:1});await f.due();const row=(await f.request('/scheduled-work')).data.items[0];assert.equal(launches,0);assert.equal(row.occurrences[0].approvalStatus,'pending');assert.equal(f.server.app.store.list('runs').length,0);
+ await f.request('/approvals/'+created.id+'/approve','POST',{version:1});await f.due();const row=(await f.request('/scheduled-work')).data.items[0];assert.equal(launches,0);assert.equal(row.occurrences[0].approvalStatus,'pending');assert.equal(row.occurrences[0].run,undefined);assert.equal(f.server.app.store.list('runs').length,0);
  assert.equal((await f.request('/scheduled-work/'+row.id+'/cancel','POST',{version:row.version+1})).status,409);const cancelled=await f.request('/scheduled-work/'+row.id+'/cancel','POST',{version:row.version});assert.equal(cancelled.status,200);assert.equal(f.server.app.store.get<Approval>('approvals',row.occurrences[0].approvalId)!.status,'rejected');assert.equal(launches,0);
  assert.equal((await f.request('/approvals/'+row.occurrences[0].approvalId+'/approve','POST',{version:1})).status,409);
 });
@@ -21,6 +21,12 @@ test('current periodic dispatch approval runs the ordinary executor exactly once
  const f=await fixture(t);let launches=0;f.server.app.contributions.add('executors','fixture',{id:'fixture',name:'Offline executor',machineId:'local',kind:'test',available:true,mode:'demo',description:'fake',async execute(){launches++;return{text:'synthetic'};}});
  const todo=f.server.app.createTodo({title:'周期待办'});const creation=(await f.request('/scheduled-work','POST',work('go',{kind:'dispatch',executorId:'fixture',prompt:'local work',doneWhen:'return synthetic',expectMinutes:1},{todoId:todo.id}))).data;await f.request('/approvals/'+creation.id+'/approve','POST',{version:1});await f.due();const row=(await f.request('/scheduled-work')).data.items[0];const id=row.occurrences[0].approvalId;
  assert.equal((await f.request('/approvals/'+id+'/approve','POST',{version:1})).data.status,'completed');for(let n=0;launches===0&&n<100;n++)await delay(5);assert.equal(launches,1);await f.due();assert.equal(launches,1);assert.equal(f.server.app.todos().find(x=>x.id===todo.id)!.completedAt,undefined);
+ const receipt=(await f.request('/scheduled-work/history','POST',{workId:row.id,todoId:todo.id})).data.occurrences[0];
+ const run=f.server.app.store.list<Run>('runs')[0];
+ assert.equal(receipt.approvalStatus,'completed');
+ assert.deepEqual(receipt.run,{id:run.id,status:run.status});
+ f.server.app.store.put('runs',run.id,{...run,todoId:'another-todo'});
+ assert.equal((await f.request('/scheduled-work')).data.items[0].occurrences[0].run,undefined);
 });
 test('builtin tool pins real user provenance; readonly result turns cannot create schedules or leak raw source text',async t=>{
  const f=await fixture(t);const source:Message={id:'real-user',role:'user',conversationId:'main',text:'PRIVATE_USER_TEXT',status:'pending',createdAt:new Date().toISOString()};f.server.app.store.put('messages',source.id,source);const tool=f.server.app.contributions.list('tools').find(x=>x.value.name==='scheduled_work_propose')!.value;

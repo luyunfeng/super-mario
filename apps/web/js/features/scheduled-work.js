@@ -3,15 +3,18 @@ import { h, replace } from '../lib/dom.js';
 import { Button, Card, Field, Input, Select, TextArea, Banner, Empty } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 
-const approvalText = value => ({ pending: '待批准', approved: '已批准', executing: '处理中', completed: '已处理', rejected: '已拒绝', unknown: '结果未知', failed: '失败' }[value] ?? '未确认');
+const approvalText = value => ({ pending: '待批准', approved: '已批准', running: '处理中', executing: '处理中', completed: '已处理', rejected: '已拒绝', unknown: '结果未知', failed: '失败' }[value] ?? '未确认');
 const timeText = value => value ? (Number.isNaN(Date.parse(value)) ? value : new Date(value).toLocaleString('zh-CN')) : '未提供';
 const chatLink = () => h('a', { href: '#chat' }, '去对话核对与确认');
+const approvalLink = (id, close) => h('a', { href: '#chat?approval=' + encodeURIComponent(id), onClick: close }, '查看待处理审批');
+const runStatus = status => ({ queued: '排队中', running: '执行中', completed: '执行已完成', failed: '执行失败', cancelled: '已取消', unknown: '执行结果未知' }[status] ?? '执行状态未知');
 const line = text => h('p', { class: 'item__meta' }, text);
 const timingText = s => s.kind === 'once' ? `一次 · ${timeText(s.at)}` : s.kind === 'interval' ? `每 ${s.everySec / 60} 分钟${s.anchorAt ? ` · 起点 ${timeText(s.anchorAt)}` : ''}` : `cron ${s.cron} · ${s.tz}`;
 function occurrenceText(o) {
   if (o.status === 'unknown') return '动作结果未知，停止堆积；请核对原记录';
   if (o.status === 'claimed') return '已认领，动作结果尚未确认';
   if (o.status === 'skipped') return '本次已跳过';
+  if (o.run) return `派发审批 · ${approvalText(o.approvalStatus)} · ${runStatus(o.run.status)}`;
   if (o.kind === 'dispatch') return `已生成派发审批 · ${approvalText(o.approvalStatus)}；任务最终完成情况未确认，请到对话查看执行记录`;
   return '事实简报已生成（仅程序汇总已接入事实，不调用模型、不外发）';
 }
@@ -89,6 +92,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       h('div', { class: 'fold__body' },
         line(`来源消息：${item.source?.messageId ?? '未提供'} · ${timeText(item.source?.createdAt)}`),
         line(`创建审批：${item.approvalId} · ${approvalText(item.approvalStatus)}`),
+        item.approvalStatus === 'pending' && approvalLink(item.approvalId),
         item.action.kind === 'dispatch' && line(`执行者：${item.action.executorId} · 工作目录：${item.action.cwd ?? '默认'}`),
         history.map(o => renderOccurrence(item, o)),
         item.occurrencesTruncated && line(`最近记录已截断：显示 ${history.length} 条，共 ${item.occurrenceTotal} 条。`),
@@ -128,7 +132,9 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     return h('div', null, line(`${timeText(o.scheduledFor)} · ${occurrenceText(o)}`),
       o.approvalId && line(`派发审批：${o.approvalId} · ${approvalText(o.approvalStatus)}`),
       o.result?.messageId && line(`结果消息：${o.result.messageId}`),
-      o.status === 'completed' && o.result?.messageId && Button({ label: '查看简报原文', size: 'sm', onClick: () => openBrief(item, o) }), o.error && line(o.error), o.approvalId && chatLink());
+      o.status === 'completed' && o.result?.messageId && Button({ label: '查看简报原文', size: 'sm', onClick: () => openBrief(item, o) }), o.error && line(o.error),
+      o.approvalStatus === 'pending' && approvalLink(o.approvalId, () => editor?.close()),
+      o.run && h('a', { href: `#projects/${encodeURIComponent(item.projectId || 'all')}/runs/${encodeURIComponent(o.run.id)}`, onClick: () => editor?.close() }, '查看实际执行记录'));
   }
   function openHistory(item) {
     if (syncIdentity()) { requestRead(); return; }
