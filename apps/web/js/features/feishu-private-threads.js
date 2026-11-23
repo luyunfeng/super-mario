@@ -35,7 +35,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
   let searchEnabled = hasSearch();
   let lastSnapshot = store.view.snapshot;
   let showingList = false;
-  let openThreadId;
+  let openThreadId, openMessageId;
   let pendingDelete;
   let listNotice = '';
   let lastDeletion = store.view.deletedFeishuThread;
@@ -77,7 +77,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       searchPage = undefined;
       if (showingList) void list(listNotice);
       else if (openThreadId && openThreadId !== pendingDelete) {
-        if(target) void detail({threadId:openThreadId},'',undefined,target.messageId);
+        if(target) void detail({threadId:openThreadId},'',undefined,openMessageId);
         else void verifyOpenThread(openThreadId);
       }
     }
@@ -254,6 +254,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
   function detail(row, notice = '', draft, around) {
     showingList = false;
     openThreadId = row.threadId;
+    openMessageId = around;
     const path = base + '/' + encodeURIComponent(row.threadId);
     return load(path + (around ? '?around=' + encodeURIComponent(around) : ''), (page, id) => {
       if (target && (page.threadId!==row.threadId || (around && !page.messages.some(message=>message.id===around)))) {
@@ -445,7 +446,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
         } })));
     const picker = conversationModelPicker(api, path + '/model', row.title);
     const history = h('div', { class: 'stack' });
-    function openQuotedMessage(messageId) {
+    function showMessagePosition(messageId) {
       if (!current(id) || edit.disabled) return;
       void detail(row, '', {
         title:title.value !== row.title ? title.value : undefined,
@@ -454,7 +455,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       }, messageId);
     }
     const entries = items => items.map(message => h('section', { class: 'stack' },
-      around && message.id === around && h('mark', { tabIndex: -1 }, query || target ? '命中消息' : '定位到的消息'),
+      around && message.id === around && h('mark', { tabIndex: -1 }, query && row.hits?.some(hit => hit.id === around) ? '命中消息' : '定位到的消息'),
       h('strong', null, historyMessageLabel(message)),
       copyMessageLinkButton('#agent/private-thread/' + [bot.id, row.threadId, message.id].map(encodeURIComponent).join('/')),
       message.text?.trim() && h('button', { type:'button', class:'btn btn--ghost btn--sm',
@@ -463,8 +464,8 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
           try { await copyText(message.text); if (current(id)) feedback.textContent = '已复制正文。'; }
           catch { if (current(id)) feedback.textContent = '复制失败，请选中消息正文复制。'; }
         } }, '复制正文'),
-      message.quotedImageMessageId && Button({ label:'查看引用原图', size:'sm', onClick:()=>openQuotedMessage(message.quotedImageMessageId) }),
-      message.quotedFileMessageId && Button({ label:'查看引用文件', size:'sm', onClick:()=>openQuotedMessage(message.quotedFileMessageId) }),
+      message.quotedImageMessageId && Button({ label:'查看引用原图', size:'sm', onClick:()=>showMessagePosition(message.quotedImageMessageId) }),
+      message.quotedFileMessageId && Button({ label:'查看引用文件', size:'sm', onClick:()=>showMessagePosition(message.quotedFileMessageId) }),
       message.quotedFilesUnavailable && h('span',{class:'small muted'},'引用文件不可用'),
       message.quotedImagesUnavailable && h('span',{class:'small muted'},'引用原图不可用'),
       h('p', { style: 'white-space: pre-wrap' }, message.text), messageImages(api,store,message),messageFiles(api,store,message,[])));
@@ -514,7 +515,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       Button({ label: '复制对话 ID', size: 'sm', onClick: async () => {
         try { await copyText(row.threadId); if (current(id)) feedback.textContent = '已复制对话 ID。'; }
         catch { if (current(id)) feedback.textContent = '复制失败，请检查剪贴板权限。'; }
-      } }), feedback, ...picker.controls, nextBefore && more(true), history, nextAfter && more(false));
+      } }), feedback, ...picker.controls, around && Button({ label:'返回最新消息', size:'sm', onClick:() => showMessagePosition(undefined) }), nextBefore && more(true), history, nextAfter && more(false));
     history.querySelector('mark')?.focus();
   }
   if (target) void detail({threadId:target.threadId}, '', undefined, target.messageId);

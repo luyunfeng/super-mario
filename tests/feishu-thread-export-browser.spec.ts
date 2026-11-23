@@ -86,4 +86,7 @@ test('Web 将飞书独立对话的完整历史复制并下载，临时错误可�
   await page.goto(messageLink);
   await page.reload();
   await expect(drawer.locator('section').filter({has:page.locator('mark')}).last()).toContainText(history.at(-1)!);
+  await drawer.getByRole('button',{name:'返回最新消息'}).click();
+  await expect(drawer.locator('mark')).toHaveCount(0);
+  await expect(drawer.getByText(history.at(-1)!,{exact:true})).toBeVisible();
 });

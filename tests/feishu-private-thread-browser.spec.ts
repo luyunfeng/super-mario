@@ -289,7 +289,7 @@ test('飞书搜索卡提供可授权定位的 Web 原话链接，未知工作台
   await page.goto(link);
   assert.equal((await around).status(),200);
   const drawer=page.getByRole('dialog',{name:'独立对话记录'});
-  const mark=drawer.getByText('命中消息',{exact:true});
+  const mark=drawer.getByText('定位到的消息',{exact:true});
   await expect(mark).toBeFocused();await expect(mark.locator('..')).toContainText(phrase);
   const citationId=randomUUID();
   server.app.store.put('messages',citationId,{id:citationId,conversationId:'main',role:'assistant',status:'done',
