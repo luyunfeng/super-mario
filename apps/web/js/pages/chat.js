@@ -1,3 +1,4 @@
+import { createWebConversations } from '../features/web-conversations.js';
 import { conversationMessageSearch } from '../features/conversation-message-search.js';
 import { createQueuedDraftEditor } from '../features/edit-queued.js';
 import { createMessageFiles, messageFiles } from '../features/message-files.js';
@@ -42,6 +43,8 @@ const SETUP_STEPS = [
 ];
 
 export function createChatPage({ api, store, scope, router }) {
+  const threads=createWebConversations({api,store,scope,router});
+  const showingThread=()=>router.current.page==='chat' && router.current.query.has('thread');
   const translation = createReplyTranslation({ api, store, getScope: scope.get, getConversationId: () => 'main' });
   const messageSearch=conversationMessageSearch({api,store,router});
   const favorites = createMessageFavorites({ api, store, router });
@@ -92,7 +95,7 @@ export function createChatPage({ api, store, scope, router }) {
     h('div', { class: 'chat__inner chat__inner--top' },
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '对话'), h('p', { class: 'page__sub' }, hintCopy('nav.chat').tag)),
-        h('div', { class: 'page__actions' }, conversationStatusButton({ api, store, scope, target: 'main', project: scope.get }), messageSearch.button, favorites.button, transcript.button, sharing.button, officeDocumentsButton({ api, store }), code.toggle, Hint('nav.chat'))),
+        h('div', { class: 'page__actions' }, threads.entry, conversationStatusButton({ api, store, scope, target: 'main', project: scope.get }), messageSearch.button, favorites.button, transcript.button, sharing.button, officeDocumentsButton({ api, store }), code.toggle, Hint('nav.chat'))),
       banner, decisionNotice, messageNotice, attention.el, setup, runStrip));
   const scroller = h('div', { class: 'chat__scroll', id: 'chat-scroll' }, h('div', { class: 'chat__inner' }, messages, hero));
 
@@ -114,7 +117,10 @@ export function createChatPage({ api, store, scope, router }) {
     recent.el, queue.el,
     h('div', { class: 'composer__box' }, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, files.el, input, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, mentions.button, pictures.button, files.button, h('span', { class: 'grow' }), send)), status);
 
-  const el = h('section', { class: 'page page--chat', id: 'chat' }, h('div', { class: 'chat-code-main' }, top, scroller, form), code.el);
+  const main=h('div',{style:{display:'contents'}},h('div',{class:'chat-code-main'},top,scroller,form),code.el);
+  const el=h('section',{class:'page page--chat',id:'chat'},main,threads.el);
+  const showRoute=()=>{main.hidden=showingThread();threads.update();};
+  router.subscribe(showRoute);showRoute();
 
   const pending = new Map();
   let draftKey, owner, enabled, quotesEnabled, editEnabled, outboxEnabled, epoch = 0;
@@ -148,7 +154,7 @@ export function createChatPage({ api, store, scope, router }) {
     const nextOwner = valid ? currentOwner : null;
     const nextEnabled = !!valid && snapshot.plugins?.some(p => p.id === 'conversation-drafts' && p.status === 'active');
     const id = scope.get() || '';
-    const key = valid && (!id || snapshot.projects?.some(p => p.id === id && !p.archivedAt)) ? JSON.stringify(['main', id]) : null;
+    const key = valid && !showingThread() && (!id || snapshot.projects?.some(p => p.id === id && !p.archivedAt)) ? JSON.stringify(['main', id]) : null;
     const nextQuotes = !!key && snapshot.plugins?.some(p => p.id === 'conversation-quotes' && p.status === 'active');
     const allowEdit = !!key && snapshot.plugins?.some(p => p.id === 'conversation-edit' && p.status === 'active');
     return { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled };
@@ -387,6 +393,7 @@ export function createChatPage({ api, store, scope, router }) {
   return {
     el,
     onShow(route) {
+      showRoute();if(showingThread())return;
       const savedDraft = draftKey ? drafts.read(draftKey) : '';
       if (input.value !== savedDraft) {
         input.value = savedDraft;
@@ -405,7 +412,7 @@ export function createChatPage({ api, store, scope, router }) {
       revealMessage();
       if (!route.query.has('favorite') && !route.query.has('at')) scrollToEnd(true);
     },
-    focus() { input.focus(); },
+    focus() { if(showingThread())threads.focus();else input.focus(); },
     onState({ snapshot: state, attention: items }) {
       snapshot = state;
       const nextLabel = mainAssistantName(store.view);

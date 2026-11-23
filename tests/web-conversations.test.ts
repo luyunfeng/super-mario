@@ -1,0 +1,52 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createEventBus } from '../packages/core/src/events.ts';
+import { createContributions, PluginHost } from '../packages/core/src/plugin-host.ts';
+import { createStore } from '../packages/core/src/store.ts';
+import type { JsonObject } from '../packages/plugin-sdk/src/index.ts';
+import { webConversationMatches, webConversationsExtension } from '../plugins/web-conversations.ts';
+
+test('independent web conversations persist exact scopes and idempotent creation through plugin lifecycle', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'sm-web-conversations-'));
+  const open = async () => {
+    const store = createStore(join(dir, 'test.sqlite')), events = createEventBus(store);
+    const host = new PluginHost({ store, events, dataDir: dir, contributions: createContributions() });
+    host.register(webConversationsExtension);
+    await host.start();
+    return { store, events, host, close: async () => { await host.close(); store.close(); } };
+  };
+  let f = await open();
+  t.after(async () => { await f.close(); rmSync(dir, { recursive: true, force: true }); });
+  const call = (input: JsonObject) => f.host.invocations.use('web-conversations.manage', input);
+  for (const id of ['p','q']) f.store.put('projects', id, { id });
+  const id = randomUUID(), request = { action:'create', id, title:'测试' };
+  const [a,b] = await Promise.all([call(request),call(request)]);
+  assert.deepEqual(a,b);
+  assert.equal(f.events.since(0).filter(event => event.type === 'web-conversations.changed').length, 1);
+  await assert.rejects(call({...request,title:'改名'}),{status:409});
+  await assert.rejects(call({...request,projectId:'p'}),{status:409});
+  const pid = randomUUID();
+  const projectRow = await call({action:'create',id:pid,projectId:'p'});
+  assert.deepEqual(await call({action:'list'}),{items:[a]});
+  assert.deepEqual(await call({action:'list',projectId:'p'}),{items:[projectRow]});
+  assert.deepEqual(await call({action:'get',id:pid}),projectRow);
+  assert.equal(webConversationMatches(f.store,pid,'p'),true);
+  assert.equal(webConversationMatches(f.store,pid),false);
+  assert.equal(webConversationMatches(f.store,id),true);
+  await assert.rejects(call({action:'get',id:pid,projectId:'q'}),{status:404});
+  await assert.rejects(call({action:'create',id:'main'}),{status:400});
+  await assert.rejects(call({action:'create',id:randomUUID(),projectId:'missing'}),{status:404});
+  await f.close();
+  f = await open();
+  assert.deepEqual(await call(request),a);
+  f.store.put('projects','p',{id:'p',archivedAt:new Date().toISOString()});
+  assert.equal(webConversationMatches(f.store,pid,'p'),false);
+  for (const input of [{action:'get',id:pid},{action:'list',projectId:'p'},{action:'create',id:pid,projectId:'p'}] as JsonObject[])
+    await assert.rejects(call(input),{status:409});
+  await f.host.setEnabled('web-conversations',false);
+  await assert.rejects(call({action:'list'}),/unavailable/);
+});

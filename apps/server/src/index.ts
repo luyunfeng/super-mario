@@ -1139,6 +1139,56 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           res.writeHead(200,{'content-type':image.mime,'cache-control':'private, no-store','x-content-type-options':'nosniff'});
           return res.end(Buffer.from(image.data,'base64'));
         }
+        const webConversation=/^\/api\/v1\/web-conversations(?:\/([^/]+)(?:\/(messages)(?:\/receipts\/([^/]+))?)?)?$/.exec(path);
+        if(webConversation){
+          const enabled=()=>{if(!app.plugins.list().some(p=>p.id==='web-conversations'&&p.status==='active'))throw new InputError('独立 Web 对话插件已停用',503);};
+          enabled();
+          if(method==='POST' && req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json')
+            throw new InputError('独立对话需要 JSON 请求',415);
+          const [,id,messages,receiptKey]=webConversation;
+          const invoke=async(args:JsonObject)=>{
+            enabled();
+            const result=await app.plugins.invocations.use('web-conversations.manage',args);
+            enabled();
+            return result;
+          };
+          if(!id){
+            if(method==='GET'){
+              const projectId=url.searchParams.get('projectId');
+              return json(res,200,await invoke({action:'list',...(projectId && {projectId})}));
+            }
+            if(method==='POST'){
+              const input=await body(req,8192);
+              if(Object.keys(input).some(key=>!['id','title','projectId'].includes(key)))throw new InputError('独立对话包含未知字段');
+              return json(res,201,await invoke({...input as JsonObject,action:'create'}));
+            }
+          }else{
+            const row=await invoke({action:'get',id}) as {id:string;projectId?:string};
+            if(row?.id!==id.toLowerCase())throw new InputError('独立对话登记与请求不一致',409);
+            const conversationId='web:'+row.id;
+            if(!messages && method==='GET')return json(res,200,row);
+            if(receiptKey && method==='GET'){
+              const receipt=readMessageReceipt(app.store,conversationId,receiptKey);
+              if(!receipt)return json(res,404,{error:'当前会话中未找到这次发送的回执',code:'MESSAGE_RECEIPT_NOT_FOUND'});
+              return json(res,200,receipt);
+            }
+            if(messages && !receiptKey && method==='GET'){
+              const before=url.searchParams.get('before');
+              const history=app.store.list<Message>('messages').filter(m=>m.conversationId===conversationId && m.projectId===row.projectId);
+              const end=before===null?history.length:history.findIndex(m=>m.id===before);
+              if(end<0)throw new InputError('当前会话中未找到消息位置',404);
+              const start=Math.max(0,end-50);
+              return json(res,200,{messages:history.slice(start,end),nextBefore:start>0?history[start]!.id:null});
+            }
+            if(messages && !receiptKey && method==='POST'){
+              const input=await body(req);
+              if(Object.keys(input).some(key=>key!=='text'))throw new InputError('独立对话仅接受正文，项目由原会话决定');
+              enabled();
+              return json(res,202,await app.postWebConversation(row.id,row.projectId,requiredText(input.text,'消息正文'),{requestId:messageRequestId(req)}));
+            }
+          }
+          throw new InputError('独立对话不支持此请求方法',405);
+        }
         const messageReceipt = path.match(/^\/api\/v1(?:\/projects\/([^/]+))?\/messages\/receipts\/([^/]+)$/);
         if (messageReceipt && method === 'GET') {
           const projectId = messageReceipt[1] && decodeURIComponent(messageReceipt[1]);

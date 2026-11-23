@@ -3,13 +3,14 @@ import { botConversationId } from './bot-agent-routing.ts';
 import type { BotScope } from '../../protocol/src/bots.ts';
 import type { AppConfig, MainAssistantProfile, ExecutorInfo, Message, Project, Todo, Json } from '../../protocol/src/index.ts';
 import type { Contributions, EventBus, Store } from '../../plugin-sdk/src/index.ts';
-import { SCOPED_WORK_SYSTEM_PROMPT } from './prompts.ts';
+import { MAIN_AGENT_SYSTEM_PROMPT, SCOPED_WORK_SYSTEM_PROMPT, WEB_THREAD_GUIDANCE } from './prompts.ts';
 import { conversationModels } from './agent-runtime/model-catalog.ts';
 import { createAgentRuntime, recoverInterruptedInputs, removeScopedTranscript } from './agent-runtime/index.ts';
 
 type Runtime = ReturnType<typeof createAgentRuntime>;
 type ScopedPostContext = Omit<NonNullable<Parameters<Runtime['post']>[2]>, 'readOnlyAction'>;
 interface Options {
+  webConversationAllowed?(id:string,projectId?:string):boolean;
   chatFilesEnabled?():boolean;
   canReadChatFiles?(message:Message):boolean;
   readChatFileText?:NonNullable<Parameters<typeof createAgentRuntime>[0]['readChatFileText']>;
@@ -41,7 +42,7 @@ interface Options {
 export function createScopedAgents(options: Options) {
   // Project conversations stay lazy, but their durable queue must be recovered
   // before a workspace view can display its terminal state or manual retry.
-  recoverInterruptedInputs(options.store,options.events,id=>id.startsWith('project:') && id.endsWith(':work'));
+  recoverInterruptedInputs(options.store,options.events,id=>id.startsWith('web:') || (id.startsWith('project:') && id.endsWith(':work')));
   const agents = new Map<string, { botId: string; scope: BotScope; conversationId: string; runtime: Runtime }>();
   const deleting = new Map<string, Promise<void>>();
   let closed = false;
@@ -92,6 +93,20 @@ export function createScopedAgents(options: Options) {
       if (!source?.projectId || source.conversationId !== 'project:' + source.projectId + ':work')
         throw Object.assign(new Error('仅可重试原项目工作会话的回复'),{status:403});
       return projectAgent(source.projectId).retryFailedInput(source,failed);
+    },
+    postWebConversation(id:string,projectId:string|undefined,text:string,context:{requestId?:string}={}) {
+      if(closed||configuring)throw Object.assign(new Error('对话运行时正在关闭或应用配置'),{status:503});
+      const conversationId='web:'+id;
+      const current=()=>options.webConversationAllowed?.(id,projectId)===true;
+      if(!current())throw Object.assign(new Error('独立对话已停用或范围已变化'),{status:409});
+      let entry=agents.get(conversationId);
+      if(!entry){
+        const scope:BotScope=projectId?{kind:'project',projectId}:{kind:'global'};
+        const runtime=createAgentRuntime({...options,scope,conversationId,canUseScope:current,botContext:undefined,
+          systemPrompt:(projectId?SCOPED_WORK_SYSTEM_PROMPT:MAIN_AGENT_SYSTEM_PROMPT)+'\n'+WEB_THREAD_GUIDANCE});
+        entry={botId:conversationId,scope,conversationId,runtime};agents.set(conversationId,entry);
+      }
+      return entry.runtime.post(text,conversationId,{requestId:context.requestId,directWebInput:true,projectId});
     },
     postProject(projectId:string, text:string, context?:ScopedPostContext) {
       return projectAgent(projectId).post(text, undefined, context);

@@ -1,3 +1,4 @@
+export {webConversationsExtension, webConversationMatches} from './web-conversations.ts';
 import { readTodayBrief, type TodayBriefSources } from './today-brief.ts';
 import { localDayFormatter, validateLocalDay } from './local-day.ts';
 import { scheduledWorkTemplates } from './scheduled-work-templates.ts';
