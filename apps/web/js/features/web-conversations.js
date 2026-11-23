@@ -6,6 +6,7 @@ import {icon} from '../ui/icons.js';
 import {h,replace} from '../lib/dom.js';
 import {uuid} from '../lib/format.js';
 import {createConversationDrafts} from '../lib/conversation-drafts.js';
+import {createMessageQuote,quoteDraftKey} from '../lib/message-quote.js';
 import {createMessageSubmissions} from '../lib/message-submissions.js';
 import {openDrawer} from '../ui/overlay.js';
 
@@ -46,13 +47,15 @@ export function createWebConversations({api,store,scope,router}){
   const latest=h('a',{class:'btn btn--sm',hidden:true},'返回最新消息');
   const scroller=h('div',{class:'chat__scroll'},h('div',{class:'chat__inner'},more,messages,later));
   const input=h('textarea',{class:'composer__input',rows:2,maxLength:20000,'aria-label':'给独立对话发消息',placeholder:'输入消息，Enter 发送'});
+  const quote=createMessageQuote({drafts,input,store,router,scope});
+  let quoteKey=null;
   const send=h('button',{class:'btn btn--sm btn--primary',type:'submit'},'发送');
   const cleanupRetry=button('按原版本重试删除',retryDeletion);
   cleanupRetry.hidden=true;
   let unconfirmedDeletion;
   const retry=button('重新读取对话',()=>{reset();update();});
   const form=h('form',{class:'composer',onsubmit:event=>{event.preventDefault();void post();}},
-    h('div',{class:'composer__box'},input,h('div',{class:'composer__bar'},h('span',{class:'grow'}),send)));
+    h('div',{class:'composer__box'},quote.bar,input,h('div',{class:'composer__bar'},h('span',{class:'grow'}),send)));
   const rename=button('修改对话标题',openRename),archive=button('归档对话',()=>changeArchive());
   const stateLabel=h('span',{class:'small muted'});
   const controls=h('div',{class:'row row--wrap'},stateLabel,rename,archive,button('删除对话',openDelete));
@@ -64,11 +67,13 @@ export function createWebConversations({api,store,scope,router}){
   const copies=createMessageCopyActions({api,store,matches:row=>valid(current) && meta &&
     row.conversationId==='web:'+current.id && row.projectId===meta.projectId});
   function context(){
-    return {key:meta && !meta.archived && valid(current)?draftKey:null,owner:current?.owner,epoch,draft:input.value,body:input.value.trim(),
-      captured:'',conversation:'web:'+current?.id,projectId:meta?.projectId || undefined,url:path+'/'+current?.id+'/messages'};
+    const captured=quoteKey ? quote.capture() : '';
+    return {key:meta && !meta.archived && valid(current)?draftKey:null,owner:current?.owner,epoch,draft:input.value,body:quote.compose(captured,input.value.trim()).trim(),
+      captured,conversation:'web:'+current?.id,projectId:meta?.projectId || undefined,url:path+'/'+current?.id+'/messages'};
   }
   function confirmed(ctx){
     drafts.clearIf(ctx.key,ctx.draft);
+    if(ctx.captured)quote.accepted(ctx.key,ctx.captured);
     if(context().key===ctx.key && input.value===ctx.draft)input.value=drafts.read(ctx.key);
   }
   const submissions=createMessageSubmissions({api,context,onConfirmed:confirmed,onStatus:text=>{notice.textContent=text;},captureEdit:()=>()=>{},
@@ -83,12 +88,16 @@ export function createWebConversations({api,store,scope,router}){
     search.update(readable && {conversationId:'web:'+meta.id,projectId:meta.projectId});
     const hidden=!readable || !conversationExportActive(store);
     if(hidden)exportDrawer?.close();
-    if(exportButton.hidden!==hidden){
+    const nextQuoteKey=readable && !meta.archived && store.view.snapshot.plugins.some(p=>p.id==='conversation-quotes' && p.status==='active') ? draftKey : null;
+    const quoteChanged=quoteKey!==nextQuoteKey;
+    if(quoteChanged){quoteKey=nextQuoteKey;quote.restore(quoteKey);epoch++;}
+    if(exportButton.hidden!==hidden || quoteChanged){
       exportButton.hidden=hidden;
       if(rows.length)display();
     }
   }
   function reset(){
+    quoteKey=null;quote.restore(null);
     exportButton.hidden=true;exportDrawer?.close();exportDrawer=null;search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
     input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
     submissions.update();switcher.update();
@@ -176,7 +185,7 @@ export function createWebConversations({api,store,scope,router}){
   function deleted(id,owner){
     if(owner!==drafts.owner())return;
     const key=JSON.stringify(['web',id]);
-    drafts.forget(key);submissions.forgetScope(owner,key);
+    drafts.forget(key);drafts.forget(quoteDraftKey(key));submissions.forgetScope(owner,key);
     if(routeId()!==id)return;
     reset();current={id,owner,deleted:true};notice.textContent='该独立对话已删除，原链接已失效。';
     if(unconfirmedDeletion?.id===id && unconfirmedDeletion.owner===owner){
@@ -288,6 +297,7 @@ export function createWebConversations({api,store,scope,router}){
         h('div',{class:'msg__col'},
           h('div',{class:'msg__bubble'},copies.renderMessage(row,row.text)),
           h('div',{class:'msg__meta row row--wrap'},copies.copyMessage(row,m=>m.text),
+            quoteKey && row.origin!=='notification' && quote.action(row,row.role==='user'?'我':'助手'),
             row.status==='pending' && h('small',{},'处理中…'),row.status==='failed' && h('small',{},'处理失败'),
             h('button',{type:'button',class:'btn btn--ghost btn--icon btn--sm','aria-label':'复制消息链接',title:'复制消息链接',
               onclick:()=>copyLink(stamp,row.id)},icon('copy')))));
@@ -349,7 +359,7 @@ export function createWebConversations({api,store,scope,router}){
     pending=true;send.disabled=true;notice.textContent='';
     try{
       const receipt=await submissions.preflight(ticket,ctx);
-      if(!valid(stamp) || !context().key)return;
+      if(!valid(stamp) || !context().key || (!receipt && ctx.epoch!==epoch))return;
       const reply=receipt ?? await api.post(ctx.url,{text:ctx.body},{'Idempotency-Key':ticket.record.id});
       if(!valid(stamp))return;
       if(!submissions.accepted(ticket,reply,ctx)){submissions.block(ticket);throw Error('回执与原消息不匹配。');}

@@ -30,12 +30,12 @@ test('独立 Web 对话实际收发、刷新及草稿隔离，停用或失效链
   await expect(main).toBeHidden();await expect(thread).toHaveValue('');
   await thread.fill(text);await thread.press('Enter');
   const messages=page.locator('[aria-label="独立对话内容"] .msgs');
-  await expect(messages.locator('.msg--user')).toHaveText(text);
+  await expect(messages.locator('.msg--user .msg__bubble')).toHaveText(text);
   await expect(messages.locator('.msg--assistant').first()).toBeVisible();
   await expect(thread).toHaveValue('');
   await thread.fill('第一条线的未发草稿');await page.reload();
   await expect(thread).toHaveValue('第一条线的未发草稿');
-  await expect(messages.locator('.msg--user')).toHaveText(text);
+  await expect(messages.locator('.msg--user .msg__bubble')).toHaveText(text);
   await create('验收记录乙');
   await expect(messages.locator('article')).toHaveCount(0);await expect(thread).toHaveValue('');
   await page.getByRole('button',{name:'独立对话',exact:true}).click();
@@ -93,7 +93,7 @@ test('两个标签页并发改名与归档时核对版本，归档深链只读�
   await drawer.getByLabel('对话状态').selectOption('active');
   await drawer.getByRole('link',{name:'第二份草稿'}).click();
   await expect(thread).toHaveValue('保留的未发草稿');await thread.fill('恢复后的正文');await thread.press('Enter');
-  await expect(first.locator('.msg--user:visible').last()).toHaveText('恢复后的正文');
+  await expect(first.locator('.msg--user:visible .msg__bubble').last()).toHaveText('恢复后的正文');
 });
 
 test('永久删除使用已确认版本，回执未知时核对；两个标签页清消息、草稿及待确认发件',{timeout:40000},async t=>{

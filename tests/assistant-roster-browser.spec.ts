@@ -31,7 +31,7 @@ test('Web 切换助理按项目恢复独立历史与草稿，主对话仍保留�
   await expect(main).toHaveValue('项目主线未发草稿');await expect(scope).toHaveValue(project.id);
   await open();await list.getByRole('button',{name:'审阅助理',exact:true}).click();
   await expect(page).toHaveURL(projectThread);await expect(thread).toHaveValue('项目助理草稿');
-  await expect(page.locator('.msg--user:visible')).toHaveText('项目线的合成记录');
+  await expect(page.locator('.msg--user:visible .msg__bubble')).toHaveText('项目线的合成记录');
   await open();await list.getByRole('button',{name:'主助手',exact:true}).click();
   await scope.selectOption('');await open();await list.getByRole('button',{name:'审阅助理',exact:true}).click();
   await expect(thread).toBeVisible();assert.notEqual(page.url(),projectThread);
