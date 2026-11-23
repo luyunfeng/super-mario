@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { submitInputOnce } from './executor-input-receipts.ts';
+import { codexTurnEndpoint, startCodexTopicTurn, codexTopicAnswer, type CodexTurnEndpoint } from './codex-topic-turns.ts';
+import { nativeInputFingerprint, submitInputOnce } from './executor-input-receipts.ts';
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { delimiter, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -71,6 +72,8 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
   // Only launch in this services lifetime grants current-agent authority.
   // Neither a persisted agent ID nor a matching pane/cwd can restore it.
   const currentSessions = new Set<string>();
+  const codexSocket = process.env.SUPER_MARIO_CODEX_SOCKET;
+  const codexEndpoints = new Map<string, CodexTurnEndpoint>();
   const recoveryReason = 'Historical session ownership is unknown after agent restart; observation and control are disabled';
   function assertCurrentPane(paneId: string) {
     if ([...bindings.values()].some(b => b.paneId === paneId && !currentSessions.has(b.sessionId))) throw new Error(recoveryReason);
@@ -183,7 +186,9 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
     }
     // -- ends option parsing, including prompts starting with '-' or containing shell syntax.
     let args = executorId === 'codex' ? [command, '--', prompt] : [command, '--session-id', sessionId, '--', prompt];
-    if (resumeCommand) args = [command, ...resumeCommand.args];
+    const endpoint = nativeResume?.executorId === 'codex' && params.mode !== 'task' && codexSocket !== undefined
+      ? codexTurnEndpoint(codexSocket, cwd, nativeResume.nativeSessionId) : undefined;
+    if (resumeCommand) args = [command, ...(endpoint ? ['--remote', 'unix://' + endpoint.path] : []), ...resumeCommand.args];
     if (params.mode === 'task') {
       const tasksDir = join(resolve(options.dataDir), 'task-results');
       mkdirSync(tasksDir, { recursive: true, mode: 0o700 });
@@ -209,6 +214,7 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
       throw new Error(`CLI may be running in pane ${pane.id}, but binding persistence failed; outcome unknown`, { cause: error });
     }
     currentSessions.add(sessionId);
+    if (endpoint) codexEndpoints.set(sessionId, endpoint);
     return copyBinding(result);
   }
   const handlers: Record<string, NodeHandler> = {
@@ -256,13 +262,28 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
         if (pending.text !== text) throw new Error('clientMessageId was already used with different input');
         return pending.job;
       }
+      const endpoint = codexEndpoints.get(b.sessionId);
       const job = submitInputOnce(options.dataDir, machineId, b.sessionId, id, text, action => {
         assertCurrentPane(b.paneId);
         if (isTaskSession(b)) throw new Error('Task sessions do not accept interactive input');
         return write(b.paneId, action);
-      }, () => submitText(b.paneId, text)).finally(() => pendingInput.delete(key));
+      }, () => endpoint ? startCodexTopicTurn(endpoint, text) : submitText(b.paneId, text)).finally(() => pendingInput.delete(key));
       pendingInput.set(key, { text, job });
       return job;
+    },
+    'executor.turnResult': async params => {
+      if (Object.keys(params).some(key => !['sessionId','clientMessageId','nativeSessionId','turnId'].includes(key))) throw new Error('Invalid turn result parameters');
+      const b = binding(params), endpoint = codexEndpoints.get(b.sessionId);
+      const ids = {sessionId:b.sessionId,clientMessageId:string(params,'clientMessageId'),nativeSessionId:string(params,'nativeSessionId'),turnId:string(params,'turnId')};
+      const unknown = {state:'unknown',...ids};
+      if (!endpoint || endpoint.nativeSessionId !== ids.nativeSessionId) return unknown;
+      try {
+        const hash = nativeInputFingerprint(options.dataDir, machineId, b.sessionId, ids.clientMessageId, ids);
+        if (!hash) return unknown;
+        const result = await codexTopicAnswer(endpoint, ids.turnId, hash);
+        if (result.state === 'completed' && nativeInputFingerprint(options.dataDir, machineId, b.sessionId, ids.clientMessageId, ids) !== hash) return unknown;
+        return { ...ids, source:'codex-app-server', ...result } as Json;
+      } catch { return unknown; }
     },
     'executor.interrupt': async params => { const b = binding(params); return write(b.paneId, () => host.keys(b.paneId, ['C-c'])); },
     'terminal.list': async () => (await host.list()).map(p => ({ ...p })),
@@ -289,6 +310,7 @@ export function createExecutionServices(options: { host: TerminalHost; dataDir: 
     },
     'terminal.unwatch': async params => { await unwatch(string(params, 'watchId')); return { requested: true }; },
   };
+  if (!codexSocket) delete handlers['executor.turnResult'];
   return {
     handlers,
     async describe(machineId) {
