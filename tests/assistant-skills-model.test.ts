@@ -4594,20 +4594,43 @@ test('搜索本对话工具固定 Web 发言范围并排除当前检索提问', 
 test('工作区看板只在主人 Web 主对话和飞书配对私聊提供当前卡片及查询指令', async t => {
   let adapter!: FeishuOptions;
   const sent: string[] = [];
+  let historyAnswer = '';
+  let cardId: string;
   const answer = '进行中列有合成工作区。执行结果需另查。';
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       if (JSON.stringify(req.content).includes('核对隔离')) {
         assert.ok(!req.tools.includes('workspace_board_read'));
+        assert.ok(!req.tools.includes('workspace_board_activity'));
         assert.doesNotMatch(req.system, /默认查看未归档卡片/);
         return { role: 'assistant', content: '当前无法读取看板。' };
       }
       assert.ok(req.tools.includes('workspace_board_read'));
       assert.match(req.system, /不能据此断言执行成功/);
+      if (JSON.stringify(req.content).includes('何时移列')) {
+        assert.ok(req.tools.includes('workspace_board_activity'));
+        assert.match(req.system, /先查摘要，再用 revision 读详情/);
+        return call('workspace_board_read', {columnId:'doing'}, 'find-card');
+      }
       return call('workspace_board_read', { columnId: 'doing' }, 'cards');
     }
     const payload = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
     const result = JSON.parse(payload);
+    if (req.callId === 'find-card') {
+      assert.equal(result.cards[0].id, cardId);
+      return call('workspace_board_activity', {cardId:result.cards[0].id}, 'history');
+    }
+    if (req.callId === 'history') {
+      assert.ok(result.entries[0].kinds.includes('card_updated'));
+      return call('workspace_board_activity', {cardId,revision:result.entries[0].revision}, 'movement');
+    }
+    if (req.callId === 'movement') {
+      assert.ok(Number.isFinite(Date.parse(result.at)));
+      assert.equal(result.changes[0].before.columnTitle, '待办');
+      assert.equal(result.changes[0].after.columnTitle, '进行中');
+      historyAnswer = result.at + '，合成工作区从待办移到了进行中。';
+      return {role:'assistant',content:historyAnswer};
+    }
     assert.deepEqual(result.cards.map((c:{title:string}) => c.title), ['合成工作区']);
     assert.equal(result.cards[0].columnId, 'doing');
     return { role: 'assistant', content: answer };
@@ -4619,7 +4642,10 @@ test('工作区看板只在主人 Web 主对话和飞书配对私聊提供当前
   try {
     const project = await api('/projects', {name:'合成工作区'});
     const board = await api('/workspace-board', {action:'list'});
-    await api('/workspace-board', {action:'add_card', projectId:project.id, columnId:'doing', revision:board.revision});
+    const added = await api('/workspace-board', {action:'add_card', projectId:project.id, columnId:'todo', revision:board.revision});
+    cardId = added.cards[0].id;
+    await api('/workspace-board', {action:'batch_cards',revision:added.revision,changes:[{id:cardId,columnId:'doing'}]});
+    assert.equal(await ask('合成工作区何时移列？'),historyAnswer);
     assert.equal(await ask('工作区看板进行中有哪些项目？'), answer);
     const bot = await api('/feishu/bots', {name:'看板助手',appId:'cli_1111111111111111',appSecret:'fixture',
       scope:{kind:'global'},requireConfirmation:false,groupChats:[{chatId:'oc_group',mentionOnly:true,allowedSenderIds:['ou_owner']}]});
@@ -4627,6 +4653,8 @@ test('工作区看板只在主人 Web 主对话和飞书配对私聊提供当前
     await adapter.onMessage(bot.pairingCode, {...owner,messageId:'pair-board'});
     await adapter.onMessage('看板进行中有哪些项目？', {...owner,messageId:'board'});
     await t.waitFor(() => assert.ok(sent.includes(answer)));
+    await adapter.onMessage('合成工作区何时移列？', {...owner,messageId:'board-history'});
+    await t.waitFor(() => assert.ok(sent.includes(historyAnswer)));
     assert.equal(await ask('核对隔离','/projects/'+project.id+'/messages'),'当前无法读取看板。');
     await adapter.onMessage('核对隔离', {...owner,chatType:'group',chatId:'oc_group',mentionedSelf:true,messageId:'group-board'});
     await t.waitFor(() => assert.ok(sent.includes('当前无法读取看板。')));

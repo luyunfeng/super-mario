@@ -191,12 +191,13 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     }
     if (name === 'interaction_open' && scope && (!activeInput || !options.canOpenQuestion?.(activeInput))) return false;
     // The owner's cross-project agenda has a separate paired-private command on Feishu.
-    const directOwnerTool=name==='workspace_board_read' || name==='inbox_tree' || name==='source_subscriptions_read' || name==='source_subscription_draft';
+    const boardTool = name === 'workspace_board_read' || name === 'workspace_board_activity';
+    const directOwnerTool=boardTool || name==='inbox_tree' || name==='source_subscriptions_read' || name==='source_subscription_draft';
     if (directOwnerTool || name === 'private_conversation_search' || name === 'private_conversation_list' || name === 'group_read_records') {
       if (!mainIdentity || options.conversationThreadId || currentProjectId || !activeInput || activeInput.todoId || activeInput.readOnly ||
         (activeInput.origin && activeInput.origin !== 'user')) return false;
       const route = store.get<{ channel?: string; inputId?: string; privateSenderId?: string; group?: unknown; relay?: unknown; command?: unknown; topic?: unknown; groupTaskOrigin?: unknown; resumed?: boolean }>('message.routes', activeInput.id);
-      if (name === 'workspace_board_read' && route && (route.channel !== 'feishu' || route.inputId !== activeInput.id || route.topic || route.groupTaskOrigin || route.resumed)) return false;
+      if (boardTool && route && (route.channel !== 'feishu' || route.inputId !== activeInput.id || route.topic || route.groupTaskOrigin || route.resumed)) return false;
       if (directOwnerTool && (activeInput.replyTo || (ownConversation === 'main' && !activeInput.directWebInput))) return false;
       if (ownConversation === 'main' ? !!route : !route?.privateSenderId || route.group || route.relay || route.command) return false;
     }

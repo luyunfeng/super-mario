@@ -1,3 +1,4 @@
+import {readBoardActivity,recordBoardActivity} from './workspace-board-activity.ts';
 import { randomUUID } from 'node:crypto';
 import type { Extension, Json, JsonObject, Store } from '../packages/plugin-sdk/src/index.ts';
 import type { Project } from '../packages/protocol/src/index.ts';
@@ -118,6 +119,10 @@ export const workspaceBoard: Extension = {
     provide('workspace-board.manage',(raw,signal)=>{
       signal.throwIfAborted();
       const input=object(raw);
+      if (input.action==='activity' || input.action==='activity_detail') {
+        const {action,...query}=input;
+        return readBoardActivity(store,query,action==='activity_detail');
+      }
       if (typeof input.action!=='string' || !Object.hasOwn(fields,input.action)) fail(400,'未知的看板操作');
       const action=input.action as keyof typeof fields;
       keys(input,action==='list'?['action']:['action','revision',...fields[action]]);
@@ -127,13 +132,25 @@ export const workspaceBoard: Extension = {
       const result=store.transaction(()=>{
         const board=load(store);
         if (board.revision!==revision) fail(409,'看板已更新，请刷新后核对');
+        const before=structuredClone(view(store,board));
         update(store,board,action,input);
         board.revision++;
         store.put('workspace-board','board',board);
-        return view(store,board);
+        const after=view(store,board);
+        recordBoardActivity(store,before,after);
+        return after;
       });
       events.publish('workspace-board.changed',{revision:result.revision});
       return result;
+    });
+    contribute('tools','workspace_board_activity',{
+      name:'workspace_board_activity',description:'只读查询工作区看板活动。可按卡片筛选，以 before 翻页；指定 revision 后以 offset 分页核对这次变更的前后元数据。看板变更不代表执行进度。',
+      parameters:{type:'object',additionalProperties:false,properties:{cardId:{type:'string'},before:{type:'integer',minimum:1},
+        revision:{type:'integer',minimum:1},offset:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:100}}},
+      async execute(input,signal) {
+        signal.throwIfAborted();
+        return readBoardActivity(store,input,input.revision!==undefined);
+      },
     });
     contribute('tools','workspace_board_read',{
       name:'workspace_board_read',description:'只读查询主人的工作区看板。列是主人维护的项目阶段，卡片置顶、归档或移列不代表项目执行结果。默认列出未归档卡片，使用 nextOffset 翻页。',

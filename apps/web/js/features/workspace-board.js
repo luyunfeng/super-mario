@@ -1,5 +1,6 @@
 import { h, replace } from '../lib/dom.js';
 import { Button, Check, Field, Input, Select } from '../ui/kit.js';
+import { openWorkspaceBoardHistory } from './workspace-board-history.js';
 import { confirmDialog, openDrawer } from '../ui/overlay.js';
 
 export function workspaceBoardEnabled(api, store) {
@@ -11,7 +12,7 @@ export function openWorkspaceBoard({ api, store, router }) {
   if (!workspaceBoardEnabled(api, store)) return;
   const owner = api.draftOwner();
   const selected = new Set();
-  let board, removeConfirmation, busy = false, stale = false;
+  let board, historyDrawer, removeConfirmation, busy = false, stale = false;
   let seenRevision = store.view.workspaceBoardRevision;
   const message = h('p', { role: 'status', class: 'muted small' });
   const refresh = Button({ label: '刷新看板', size: 'sm', onClick: () => request() });
@@ -23,10 +24,13 @@ export function openWorkspaceBoard({ api, store, router }) {
   const columnControls = h('div', { class: 'stack' });
   const manage = h('details', {}, h('summary', {}, '管理看板列'), columnControls);
   const controls = h('fieldset', { class: 'stack', style:{border:'0',padding:'0',margin:'0',minWidth:'0'} }, add, h('div', { class: 'row row--wrap' }, search, filter), tools, cards, manage);
-  const drawer = openDrawer({ title: '工作区看板', wide: true, body: [h('div', { class: 'row row--between' }, message, refresh), controls], onClose: () => { removeConfirmation?.close(); unsubscribe(); } });
+  const drawer = openDrawer({ title: '工作区看板', wide: true, body: [h('div', { class: 'row row--between' }, message, h('div',{class:'row'},Button({label:'变更历史',size:'sm',onClick:() => history()}),refresh)), controls], onClose: () => { historyDrawer?.close(); removeConfirmation?.close(); unsubscribe(); } });
   const authorized = () => drawer.el.open && api.draftOwner() === owner && workspaceBoardEnabled(api, store);
   const columns = () => board.columns.map(col => [col.id, col.title]);
   const btn = (label, onClick, disabled = false) => Button({ label, onClick, disabled, size: 'sm' });
+  function history(card) {
+    historyDrawer = openWorkspaceBoardHistory({api,store,authorized,card});
+  }
   function projectLink(card) {
     const project = store.view.snapshot.projects?.find(p => p.id === card.projectId);
     if (!project || project.archivedAt) return h('span', {class:'muted small'}, project ? '项目已归档' : '项目已移除');
@@ -75,6 +79,7 @@ export function openWorkspaceBoard({ api, store, router }) {
             paintCards();
             cards.querySelector('[data-board-card="' + CSS.escape(card.id) + '"] input')?.focus({preventScroll:true});
           } }), projectLink(card),
+          Button({label:'变更历史',ariaLabel:'变更历史 ' + card.title,size:'sm',onClick:() => history(card)}),
           card.pinned && h('span',{class:'pill'},'已置顶'), card.archived && h('span',{class:'pill'},'已归档'))) :
           h('span', { class: 'muted small' }, '没有符合条件的卡片')));
     }));
