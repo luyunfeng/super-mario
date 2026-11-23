@@ -147,6 +147,13 @@ export function createMessageImages(input) {
       }
       paint();
     },
+    forget(targetOwner,draftKey) {
+      const key=JSON.stringify([targetOwner,draftKey]);
+      if(current===key){generation++;editor?.close();busy=false;loading=undefined;}
+      memory.delete(key);
+      void storedDraft(key,()=>[]).catch(()=>{if(current===key)status('未能清理本机图片草稿。');});
+      if(current===key)paint();
+    },
     prepareRestore(ctx,rows) {
       if (!Array.isArray(rows) || rows.length>20) throw new Error('一条消息最多可附 20 张图片。');
       if (!rows.length) return ()=>{};
@@ -262,11 +269,17 @@ class MessageImage extends HTMLElement {
   }
 }
 customElements.define('sm-message-image',MessageImage);
-export function messageImages(api,store,message,editCopy) {
+export function messageImages(api,store,message,editCopy,container) {
   if(!message.images?.length) return null;
-  return h('div',{class:'message-images'},message.images.map((_,index)=>{
+  const owner=api.draftOwner(),group=JSON.stringify([message.conversationId,message.projectId,message.todoId]);
+  // Keep an open viewer attached while a fresh page of messages replaces the same immutable image.
+  const existing=container?.querySelector('[data-id="'+CSS.escape(message.id)+'"] sm-message-image')?.parentElement;
+  if(existing && existing.children.length===message.images.length && Array.from(existing.children).every((el,index)=>
+    el.source.owner===owner && el.source.group===group && !!el.source.editCopy===!!editCopy &&
+    el.source.sha256===message.images[index].sha256))return existing;
+  return h('div',{class:'message-images'},message.images.map((image,index)=>{
     const el=document.createElement('sm-message-image');
-    el.source={api,store,editCopy,group:JSON.stringify([message.conversationId,message.projectId,message.todoId]),owner:api.draftOwner(),label:'消息图片 '+(index+1),path:'/messages/'+encodeURIComponent(message.id)+'/images/'+index+'?conversationId='+encodeURIComponent(message.conversationId)};
+    el.source={api,store,editCopy,group,owner,sha256:image.sha256,label:'消息图片 '+(index+1),path:'/messages/'+encodeURIComponent(message.id)+'/images/'+index+'?conversationId='+encodeURIComponent(message.conversationId)};
     return el;
   }));
 }

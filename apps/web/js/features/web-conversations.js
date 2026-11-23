@@ -1,3 +1,4 @@
+import {conversationImagesActive,createMessageImages,messageImages} from './message-images.js';
 import {createMessageFiles,messageFiles} from './message-files.js';
 import {createMessageCopyActions,conversationExportActive,openConversationExport} from './conversation-export.js';
 import {attachSavedPrompts} from './saved-prompts.js';
@@ -52,6 +53,7 @@ export function createWebConversations({api,store,scope,router}){
   const latest=h('a',{class:'btn btn--sm',hidden:true},'返回最新消息');
   const scroller=h('div',{class:'chat__scroll'},h('div',{class:'chat__inner'},more,messages,later));
   const input=h('textarea',{class:'composer__input',rows:2,maxLength:20000,'aria-label':'给独立对话发消息',placeholder:'输入消息，Enter 发送'});
+  const pictures=createMessageImages(input);
   const files=createMessageFiles(api,store,input);
   const quote=createMessageQuote({drafts,input,store,router,scope});
   const prompts=attachSavedPrompts({api,store,input,getScope:()=>meta && valid(current) ? meta.id : null});
@@ -66,7 +68,7 @@ export function createWebConversations({api,store,scope,router}){
   let unconfirmedDeletion;
   const retry=button('重新读取对话',()=>{reset();update();});
   const form=h('form',{class:'composer',onsubmit:event=>{event.preventDefault();void post();}},
-    h('div',{class:'composer__box'},edit.notice,quote.bar,prompts.menu,files.el,input,h('div',{class:'composer__bar'},prompts.manage,files.button,h('span',{class:'grow'}),send)));
+    h('div',{class:'composer__box'},edit.notice,quote.bar,prompts.menu,pictures.el,files.el,input,h('div',{class:'composer__bar'},prompts.manage,pictures.button,files.button,h('span',{class:'grow'}),send)));
   const rename=button('修改对话标题',openRename),archive=button('归档对话',()=>changeArchive());
   const stateLabel=h('span',{class:'small muted'});
   const controls=h('div',{class:'row row--wrap'},stateLabel,rename,archive,button('删除对话',openDelete));
@@ -80,10 +82,10 @@ export function createWebConversations({api,store,scope,router}){
   function context(){
     const captured=quoteKey ? quote.capture() : '';
     return {key:meta && !meta.archived && valid(current)?draftKey:null,owner:current?.owner,epoch,draft:input.value,body:quote.compose(captured,input.value.trim()).trim(),
-      captured,files:files.capture(),conversation:'web:'+current?.id,projectId:meta?.projectId || undefined,url:path+'/'+current?.id+'/messages'};
+      captured,images:pictures.capture(),files:files.capture(),conversation:'web:'+current?.id,projectId:meta?.projectId || undefined,url:path+'/'+current?.id+'/messages'};
   }
   function confirmed(ctx){
-    files.accepted(ctx);drafts.clearIf(ctx.key,ctx.draft);
+    pictures.accepted(ctx);files.accepted(ctx);drafts.clearIf(ctx.key,ctx.draft);
     if(ctx.captured)quote.accepted(ctx.key,ctx.captured);
     if(context().key===ctx.key && input.value===ctx.draft)input.value=drafts.read(ctx.key);
   }
@@ -96,8 +98,10 @@ export function createWebConversations({api,store,scope,router}){
 
   function syncSearch(){
     const readable=meta && valid(current);
-    files.update(readable && !meta.archived ? draftKey : null,drafts.owner(),
-      !!store.view.snapshot?.plugins.some(p=>p.id==='conversation-drafts' && p.status==='active'),
+    const writableKey=readable && !meta.archived ? draftKey : null;
+    const persist=!!store.view.snapshot?.plugins.some(p=>p.id==='conversation-drafts' && p.status==='active');
+    pictures.update(writableKey,drafts.owner(),persist,conversationImagesActive(store));
+    files.update(writableKey,drafts.owner(),persist,
       readable ? {conversationId:'web:'+meta.id,...(meta.projectId && {projectId:meta.projectId})} : undefined);
     favorites.update();
     search.update(readable && {conversationId:'web:'+meta.id,projectId:meta.projectId});
@@ -116,7 +120,7 @@ export function createWebConversations({api,store,scope,router}){
     }
   }
   function reset(){
-    files.update(null,drafts.owner(),false);
+    pictures.update(null,drafts.owner(),false,false);files.update(null,drafts.owner(),false);
     editEnabled=false;edit.reset();prompts.changeScope();quoteKey=null;quote.restore(null);
     exportButton.hidden=true;exportDrawer?.close();exportDrawer=null;search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
     favorites.update();input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
@@ -206,7 +210,7 @@ export function createWebConversations({api,store,scope,router}){
   function deleted(id,owner){
     if(owner!==drafts.owner())return;
     const key=JSON.stringify(['web',id]);
-    files.forget(owner,key);drafts.forget(key);drafts.forget(quoteDraftKey(key));submissions.forgetScope(owner,key);
+    pictures.forget(owner,key);files.forget(owner,key);drafts.forget(key);drafts.forget(quoteDraftKey(key));submissions.forgetScope(owner,key);
     if(routeId()!==id)return;
     reset();current={id,owner,deleted:true};notice.textContent='该独立对话已删除，原链接已失效。';
     if(unconfirmedDeletion?.id===id && unconfirmedDeletion.owner===owner){
@@ -316,7 +320,8 @@ export function createWebConversations({api,store,scope,router}){
       return h('article',{class:'msg msg--'+(row.role==='user'?'user':'assistant')+(selected?' is-search-hit':''),
         dataset:{id:row.id},tabIndex:selected?-1:undefined,'aria-current':selected?'true':undefined},
         h('div',{class:'msg__col'},
-          h('div',{class:'msg__bubble'},copies.renderMessage(row,row.text),messageFiles(api,store,row,rows,messages)),
+          h('div',{class:'msg__bubble'},copies.renderMessage(row,row.text),
+            messageImages(api,store,row,meta.archived ? undefined : pictures.editCopy.bind(null,draftKey),messages),messageFiles(api,store,row,rows,messages)),
           h('div',{class:'msg__meta row row--wrap'},copies.copyMessage(row,m=>m.text),
             row.origin!=='notification' && favorites.mark(row,meta.projectId,stamp.id,()=>valid(stamp) && meta?.id===stamp.id && rows.includes(row)),
             row.directWebInput && prompts.fromMessage(row),
@@ -377,7 +382,10 @@ export function createWebConversations({api,store,scope,router}){
   }
   async function post(){
     const stamp=current,ctx=context();
-    if(!valid(stamp) || !ctx.key || pending || !files.ready() || (!ctx.body && !ctx.files.length))return;
+    if(!valid(stamp) || !ctx.key || pending || !pictures.ready() || !files.ready() || (!ctx.body && !ctx.files.length && !ctx.images.length))return;
+    let payload;
+    try{payload=messagePayload(ctx,{text:ctx.body});}
+    catch(error){notice.textContent=error.message;return;}
     const ticket=submissions.begin(ctx);if(!ticket)return;
     if(ticket.record.blocked){notice.textContent='请先核对发送回执。';return;}
     const finishEdit=edit.onAccepted();
@@ -385,7 +393,7 @@ export function createWebConversations({api,store,scope,router}){
     try{
       const receipt=await submissions.preflight(ticket,ctx);
       if(!valid(stamp) || !context().key || (!receipt && ctx.epoch!==epoch))return;
-      const reply=receipt ?? await api.post(ctx.url,messagePayload(ctx,{text:ctx.body}),{'Idempotency-Key':ticket.record.id});
+      const reply=receipt ?? await api.post(ctx.url,payload,{'Idempotency-Key':ticket.record.id});
       if(!valid(stamp))return;
       if(!submissions.accepted(ticket,reply,ctx)){submissions.block(ticket);throw Error('回执与原消息不匹配。');}
       finishEdit();confirmed(ctx);
