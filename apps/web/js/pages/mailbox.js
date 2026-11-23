@@ -43,6 +43,9 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
   const list = h('div', { class: 'stack', 'aria-label': `${name}消息列表` });
   let multi=false, multiEpoch=0, bulkBusy=false, choices=[], bulkMessage='';
   const picked=new Map();
+  let lastArchive;
+  const undoArchive=Button({label:'撤销本次归档',size:'sm',onClick:()=>lastArchive && bulk('reopen',lastArchive)});
+  undoArchive.hidden=true;
   const multiselect=Button({label:'多选',size:'sm',onClick:()=>{clearSelection(!multi);paint();}});
   const selectAll=Button({label:'全选当前页',size:'sm',onClick:()=>{
     if(bulkBusy) return;
@@ -57,6 +60,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
   const reopenSelected=Button({label:'恢复已归档',onClick:()=>bulk('reopen'),size:'sm'});
   const selectedCount=h('span',{class:'small',role:'status'});
   const bulkStatus=h('p',{class:'small',role:'status',hidden:true});
+  const bulkFeedback=h('div',{class:'row row--wrap',hidden:true},bulkStatus,undoArchive);
   const bulkBar=h('div',{class:'row row--wrap',hidden:true},selectedCount,selectAll,archiveSelected,reopenSelected);
   function clearSelection(mode=false) {
     multiEpoch++;multi=mode;bulkBusy=false;picked.clear();choices=[];bulkMessage='';
@@ -77,22 +81,32 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     selectAll.disabled=bulkBusy || !choices.length;
     archiveSelected.textContent='归档待处理（'+open+'）';archiveSelected.disabled=bulkBusy || !open;
     reopenSelected.textContent='恢复已归档（'+archived+'）';reopenSelected.disabled=bulkBusy || !archived;
-    bulkStatus.textContent=bulkMessage;bulkStatus.hidden=!bulkMessage;
+    undoArchive.hidden=!lastArchive || !bulkOwner() || lastArchive.owner!==api.draftOwner();
+    undoArchive.disabled=bulkBusy;
+    const statusText=bulkMessage || (!undoArchive.hidden?'上次已归档 '+lastArchive.items.length+' 条收件。':'');
+    bulkStatus.textContent=statusText;bulkStatus.hidden=!statusText;
+    bulkFeedback.hidden=!statusText && undoArchive.hidden;
   }
-  async function bulk(action) {
-    if(!multi || bulkBusy || !bulkOwner()) return;
+  async function bulk(action,undo) {
+    if((!multi && !undo) || bulkBusy || !bulkOwner()) return;
+    if(undo && (undo!==lastArchive || undo.owner!==api.draftOwner())) return;
     const owner=api.draftOwner(),epoch=multiEpoch;
     const current=()=>epoch===multiEpoch && owner===api.draftOwner() && bulkOwner() && router.current.page===direction;
     const selected=[...picked.entries()].filter(([,row])=>!!row.archivedAt===(action==='reopen'));
-    if(!selected.length || selected.length>100) return;
-    const items=selected.map(([,row])=>({id:row.id,version:row.version}));
+    const items=undo ? undo.items : selected.map(([,row])=>({id:row.id,version:row.version}));
+    if(!items.length || items.length>100) return;
+    // A new write supersedes the previous undo, including when its outcome is unknown.
+    lastArchive=undefined;
     bulkBusy=true;bulkMessage='正在保存…';paint();
     try {
       const result=await api.post('/inbox/bulk',{action,items});
       if(current()) {
         if(result.updated!==items.length) throw Error('回执数量与请求不符');
-        for(const [id] of selected) picked.delete(id);
-        bulkMessage=(action==='archive'?'已归档 ':'已恢复 ')+result.updated+' 条收件。';
+        for(const row of items) picked.delete('personal:'+row.id);
+        if(action==='archive') {
+          lastArchive={owner,items:items.map(({id,version})=>({id,version:version+1}))};
+        }
+        bulkMessage=(undo?'已撤销归档，恢复 ':action==='archive'?'已归档 ':'已恢复 ')+result.updated+' 条收件。';
       }
     } catch(cause) {
       if(current()) {
@@ -116,8 +130,8 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
         clearSelection();paint();multiselect.focus();
       }
     });
-    router.subscribe?.(()=>clearSelection());
-    scope?.subscribe(()=>{if(multi){clearSelection();paint();}});
+    router.subscribe?.(()=>{lastArchive=undefined;clearSelection();});
+    scope?.subscribe(()=>{if(multi || lastArchive){lastArchive=undefined;clearSelection();paint();}});
   }
   const more = Button({ label: '加载更多', onClick: () => { displayLimit += PAGE_SIZE; paint(); } });
   more.hidden = true;
@@ -128,7 +142,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
       incoming && h('p', { class: 'small muted' }, '主 Agent 按联系人合并上下文并在后台跟进。需要你补充信息时会明确提问，原消息仍可追溯。'),
       h('div', { class: 'mailbox-toolbar stack' },
         incoming && sourceChips, incoming && stageChips,
-        h('div', { class: 'row row--wrap mailbox-filters' }, h('div', { class: 'grow', style: { minWidth: '180px' } }, query), incoming && projectFilter, filter)), incoming && bulkBar, incoming && bulkStatus, summary, notice, list, more)));
+        h('div', { class: 'row row--wrap mailbox-filters' }, h('div', { class: 'grow', style: { minWidth: '180px' } }, query), incoming && projectFilter, filter)), incoming && bulkBar, incoming && bulkFeedback, summary, notice, list, more)));
 
   const conversationsUI=createInboxConversationsUI({api,store,router,redraw:()=>paint(),openSource:id=>open(id)});
   function records() {
@@ -215,7 +229,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     if(incoming&&router.current.query?.get('conversation'))location.hash=router.href('inbox');
     query.value = ''; filter.value = 'all'; projectFilter.value = 'all'; sourceFilter = 'all'; stageFilter = 'all'; resetWindow();
   }
-  function resetWindow() { clearSelection(multi); displayLimit = PAGE_SIZE; paint(); }
+  function resetWindow() { lastArchive=undefined;clearSelection(multi); displayLimit = PAGE_SIZE; paint(); }
   function paintFilters(all) {
     function chips(el, options, dimension, active, change) {
       replace(el, options.map(([key, label]) => {
@@ -393,7 +407,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     const owner = api.draftOwner();
     if (detailOwner !== owner || view.unauthorized || !view.snapshot || view.snapshotOwner !== owner) {
       detailOwner = owner;
-      clearSelection();
+      lastArchive=undefined;clearSelection();
       drawer?.close();
       translation?.clear();
       mailbox = []; deliveries = []; updated.clear(); drafts.clear(); mailboxOwner = undefined;

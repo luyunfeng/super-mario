@@ -313,3 +313,42 @@ test('个人收件多选只归档和恢复当前筛选项，任一版本过期�
   }
   assert.deepEqual(f.stored('inbox',formerArchived.id),formerArchived);
 });
+
+test('撤销本次归档只恢复本批两条；另一窗口改过其中一条时保留整批现状',{timeout:40000},async t=>{
+  const f=await fixture(t),page=await f.open(),inbox=page.locator('#inbox');
+  const pair=[f.item('group-me'),f.item('group-other')],earlier=f.item('direct-archived'),bystander=f.item('direct-fyi');
+  const stored=(id:string)=>f.stored<InboxItem>('inbox',id)!;
+  const undo=inbox.getByRole('button',{name:'撤销本次归档',exact:true});
+  const project=(id:string,version:number)=>f.api('/inbox/'+id+'/project','PATCH',{version,projectId:f.project.id});
+  await inbox.getByLabel('搜索收件箱',{exact:true}).fill('核对离线报告');
+  await expect(cards(page)).toHaveCount(2);
+  async function archive(){
+    const enter=inbox.getByRole('button',{name:'多选',exact:true});
+    if(await enter.isVisible()) await enter.click();
+    await inbox.getByRole('button',{name:'全选当前页',exact:true}).click();
+    const result=await write(page,inbox.getByRole('button',{name:/^归档待处理.*2/}),'/inbox/bulk','POST');
+    assert.equal(result.body.updated,2);
+    await expect(undo).toBeVisible();
+    return pair.map(row=>({id:row.id,version:stored(row.id).version}));
+  }
+  const versions=await archive();
+  const result=await write(page,undo,'/inbox/bulk','POST');
+  assert.equal(result.request.action,'reopen');assert.equal(result.body.updated,2);
+  assert.deepEqual(result.request.items.sort((a:InboxItem,b:InboxItem)=>a.id.localeCompare(b.id)),versions.sort((a,b)=>a.id.localeCompare(b.id)));
+  await expect(undo).toBeHidden();
+  for(const row of pair) {
+    const reopened=stored(row.id);assert.equal(reopened.archivedAt,undefined);
+    assert.equal(reopened.version,row.version+2);assert.equal(reopened.text,row.text);
+  }
+  assert.deepEqual(stored(earlier.id),earlier);assert.deepEqual(stored(bystander.id),bystander);
+
+  await archive();
+  const untouched=stored(pair[0]!.id),updated=stored(pair[1]!.id);
+  await project(updated.id,updated.version);
+  const changed=stored(updated.id);
+  assert.ok(changed.archivedAt);assert.equal(changed.projectId,f.project.id);
+  await write(page,undo,'/inbox/bulk','POST',409);
+  await expect(undo).toBeHidden();
+  assert.deepEqual(stored(untouched.id),untouched);assert.deepEqual(stored(changed.id),changed);
+  assert.deepEqual(stored(earlier.id),earlier);
+});
