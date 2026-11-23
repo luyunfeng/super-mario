@@ -1664,7 +1664,7 @@ test('飞书模型目录只在主对话读取，重复投递只读一次，项�
   await receive('/main', human('switch-main'));
   for (const ref of [{ parentId: 'project-choice' }, { rootId: 'project-choice' }]) {
     await receive('/modellist', { ...human('quoted-project-' + Object.keys(ref)[0]), ...ref });
-    assert.match(bot.instance.sent.at(-1)![1], /\/main/);
+    assert.match(bot.instance.sent.at(-1)![1], /\/main.*\/list.*请勿引用旧消息/);
   }
   assert.equal(reads, 2);
   assert.equal(projectPosts.length, 0);
@@ -1736,7 +1736,7 @@ test('主人在有效主会话精确切换模型，命令和参数保持独立�
   assert.match(bot.instance.sent.at(-1)![1], /会话忙/);
   await receive('/main', user('return'));
   await receive('/modelchange Model-X', { ...user('project-ref-command'), rootId: 'project-ref' });
-  assert.match(bot.instance.sent.at(-1)![1], /\/main/);
+  assert.match(bot.instance.sent.at(-1)![1], /\/main.*\/list.*请勿引用旧消息/);
   await receive('/modelchange broken', user('broken'));
   assert.match(bot.instance.sent.at(-1)![1], /结果未知/);
   assert.doesNotMatch(JSON.stringify(f.effects.list()), /private-provider-detail/);

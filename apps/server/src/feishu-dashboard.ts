@@ -144,7 +144,7 @@ export function conversationListDashboard(app: DashboardApp, bot: { conversation
 export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp['modelCatalog']>> | undefined, allowed: boolean, title = '主对话模型目录') {
   const lines: string[] = [];
   const safe = (value: string) => publicText(value, 256).replace(/\s+/g, ' ');
-  if (!allowed) lines.push('请发送 /main 切回主对话，再直接发送 /modellist。');
+  if (!allowed) lines.push('要操作主对话，请发送 /main；要操作独立对话，请发送 /list 并选择目标。切换后新发一条 /modellist，请勿引用旧消息。');
   else if (!catalog) lines.push('模型目录服务不可用。');
   else {
     if (catalog.demo) lines.push('当前处于演示模式。');

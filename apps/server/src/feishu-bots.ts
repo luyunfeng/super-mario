@@ -1114,7 +1114,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   }
   async function changeModel(bot: FeishuBotSettings, model: string, eventKey: string,
     target: ReturnType<typeof modelListTarget>, valid: () => boolean) {
-    const mainOnly = '请发送 /main 切回主对话，再直接发送 /modelchange <模型 ID>。';
+    const mainOnly = '要操作主对话，请发送 /main；要操作独立对话，请发送 /list 并选择目标。切换后新发一条 /modelchange <模型 ID>，请勿引用旧消息。';
     const unavailable = '模型切换服务不可用。';
     const unknown = '本次模型切换结果未知，请发送 /modellist 核对。';
     if (!model) return target.allowed ? '请发送 /modelchange <模型 ID>。可先用 /modellist 查看目录。' : mainOnly;
