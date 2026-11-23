@@ -351,3 +351,54 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await rm(dataDir, { recursive: true, force: true });
   }
 });
+
+test('空搜索按保存顺序展示前五项，支持鼠标与键盘套用并在插件停用时清空', {timeout:30000}, async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'mario-top-search-'));
+  const token='synthetic-top-search';
+  const server=await startServer({dataDir,token,port:0,host:'127.0.0.1',demo:true});
+  t.after(async()=>{try{await server.close();}finally{await rm(dataDir,{recursive:true,force:true});}});
+  const post=async(path:string,body:object)=>{
+    const response=await fetch(server.url+'/api/v1'+path,{method:'POST',
+      headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify(body)});
+    assert.equal(response.status,200);return response.json();
+  };
+  const projectNames=['合成文账甲','合成文账乙'];
+  for(const name of projectNames) await server.app.createProject({name});
+  const names=['固定甲','固定乙','固定丙','固定丁','固定戊','固定己'];
+  let book:{revision:number;searches:{id:string;name:string}[]}={revision:0,searches:[]};
+  for(const [i,name] of names.entries()) book=await post('/saved-searches',{
+    action:'add',revision:book.revision,name,query:projectNames[i%2]});
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(()=>browser.close());
+  const page=await browser.newPage();
+  await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  await page.goto(server.url+'/#chat?token='+token);
+  const search=page.locator('#workspace-search'),results=page.locator('#search-results');
+  const quick=results.getByRole('button',{name:/^套用 /});
+  await expect(search).toHaveAccessibleName(/搜索对话/);
+  await search.click();
+  await expect(quick.first()).toHaveAccessibleName('套用 固定甲');
+  await post('/saved-searches',{action:'move',revision:book.revision,id:book.searches[5].id,beforeId:book.searches[0].id});
+  const expected=['固定己','固定甲','固定乙','固定丙','固定丁'];
+  await expect(quick).toHaveCount(5);
+  for(const [i,name] of expected.entries()) await expect(quick.nth(i)).toHaveAccessibleName('套用 '+name);
+  await expect(results.getByRole('button',{name:'套用 固定戊'})).toHaveCount(0);
+  await quick.first().click();
+  await expect(search).toHaveValue(projectNames[1]);
+  await expect(results.getByRole('link',{name:projectNames[1],exact:true})).toBeVisible();
+  await expect(quick).toHaveCount(0);
+  await search.fill('');
+  await expect(quick).toHaveCount(5);
+  await search.press('ArrowDown');
+  await expect(quick.first()).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(quick.nth(1)).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(search).toHaveValue(projectNames[0]);
+  await expect(results.getByRole('link',{name:projectNames[0],exact:true})).toBeVisible();
+  await search.fill('');
+  await expect(quick).toHaveCount(5);
+  await post('/plugins/conversation-search',{enabled:false});
+  await expect(quick).toHaveCount(0);
+  await expect(results).toBeHidden();
+});

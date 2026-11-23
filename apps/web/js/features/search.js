@@ -43,12 +43,12 @@ function markedPath(path, query) {
 export function createSearch({ shell, store, router, api, scope }) {
   const { searchInput: input, results } = shell;
 
-  function remoteGroup(enabled, fetchHits, errorLabel, context = () => null) {
+  function remoteGroup(enabled, fetchHits, errorLabel, context = () => null, acceptEmpty = false) {
     let key, generation = 0, timer;
     const state = { hits: [], pending: false, error: '', truncated: false };
     const keyFor = query => JSON.stringify([api.token(), query, context()]);
     function update(query, refresh = false) {
-      const next = query && enabled(store.view.snapshot) && !store.view.unauthorized ? keyFor(query) : '';
+      const next = (query || (acceptEmpty && query === '')) && enabled(store.view.snapshot) && !store.view.unauthorized ? keyFor(query) : '';
       if (next === key && !refresh) return;
       key = next;
       const stamp = ++generation;
@@ -73,6 +73,18 @@ export function createSearch({ shell, store, router, api, scope }) {
       }, 180);
     }
     return { state, update };
+  }
+  let appliedShortcut;
+  const savedAuthorized = () => !store.view.unauthorized && !!api.draftOwner() &&
+    store.view.snapshotOwner === api.draftOwner() && conversationSearchActive(store.view.snapshot);
+  const shortcuts = remoteGroup(savedAuthorized, async () => {
+    const doc = await api.get('/saved-searches');
+    return { hits: doc.searches.slice(0, 5) };
+  }, '保存的检索读取失败：', () => [api.draftOwner(), store.view.savedSearchesRevision ?? null], true);
+  function closeResults() {
+    results.hidden = true;
+    shortcuts.update(null);
+    results.replaceChildren();
   }
   const conversations = remoteGroup(conversationSearchActive,
     async query => ({ hits: (await api.post('/project-message-search', { query, limit: 6 })).hits }), '项目对话检索失败：');
@@ -262,13 +274,14 @@ export function createSearch({ shell, store, router, api, scope }) {
   function paint(refresh = false) {
     const query = input.value.trim();
     const snapshot = store.view.snapshot;
-    const savedEnabled = conversationSearchActive(snapshot);
+    const savedEnabled = savedAuthorized();
     conversations.update(query, refresh === true);
     meetings.update(query, refresh === true);
     files.update(query, refresh === true);
     const searches = [conversations.state, meetings.state, files.state];
     results.hidden = !snapshot || store.view.unauthorized || (!query && !savedEnabled);
-    if (results.hidden) { results.replaceChildren(); return; }
+    if (results.hidden) { closeResults(); return; }
+    shortcuts.update(query ? null : '', refresh === true);
     // A delayed project search or snapshot refresh can insert a group above the focused link.
     const focused = results.contains(document.activeElement) ? document.activeElement : null;
     const href = focused?.getAttribute('href');
@@ -277,16 +290,14 @@ export function createSearch({ shell, store, router, api, scope }) {
     const apply = value => { input.value = value; input.focus(); paint(); };
     const openFilters = () => {
       const owner = api.draftOwner();
-      results.hidden = true;
-      results.replaceChildren();
+      closeResults();
       openRunFilters({ query, snapshot, store, onApply: apply, authorized: () => api.draftOwner() === owner &&
         store.view.snapshotOwner === owner && conversationSearchActive(store.view.snapshot) && !store.view.unauthorized });
     };
     const open = initialQuery => {
-      results.hidden = true;
-      results.replaceChildren();
+      closeResults();
       openSavedSearches({
-        api, store, initialQuery, isEnabled: () => conversationSearchActive(store.view.snapshot) && !store.view.unauthorized,
+        api, store, initialQuery, isEnabled: savedAuthorized,
         onApply: apply,
       });
     };
@@ -306,6 +317,15 @@ export function createSearch({ shell, store, router, api, scope }) {
     ]), files.state.pending && h('p', { class: 'search__group', role: 'status' }, '正在检索项目文件…'),
     files.state.error && Button({ label: '重试文件检索', size: 'sm', onClick: () => { files.update(query, true); paint(); } }),
     files.state.truncated && h('p', { class: 'search__group' }, '文件检索达到上限，可能还有其他匹配。'),
+    !query && shortcuts.state.hits.length > 0 && h('div', { class: 'search__group' }, '保存的检索'),
+    !query && shortcuts.state.hits.map(item => h('button', { class: 'search__hit saved-search-apply', type: 'button',
+      'aria-label': '套用 ' + item.name, onclick() {
+        if (!results.hidden && !input.value.trim() && savedAuthorized() && shortcuts.state.hits.includes(item)) {
+          appliedShortcut = { owner: api.draftOwner(), query: item.query };
+          apply(item.query);
+        }
+      } }, h('strong', null, item.name), h('span', { class: 'muted small' }, item.query))),
+    !query && shortcuts.state.error && h('p', { class: 'search__group', role: 'status' }, shortcuts.state.error),
     savedEnabled && h('div', { class: 'saved-search-actions' },
       Button({ label: '筛选执行记录', size: 'sm', onClick: openFilters }),
       query && h('button', { class: 'btn btn--sm', type: 'button', onclick: () => open(query) }, '保存当前检索'),
@@ -319,6 +339,10 @@ export function createSearch({ shell, store, router, api, scope }) {
 
   function refreshContext() {
     const { snapshot, unauthorized } = store.view;
+    if (appliedShortcut && (!savedAuthorized() || appliedShortcut.owner !== api.draftOwner())) {
+      if (input.value === appliedShortcut.query) input.value = '';
+      appliedShortcut = undefined;
+    }
     const types = ['待办', '执行', '记忆'];
     if (!unauthorized && snapshot?.plugins?.some(p => p.id === 'knowledge-local' && p.status === 'active')) types.push('会议');
     if (!unauthorized && conversationSearchActive(snapshot)) types.unshift('对话');
@@ -328,14 +352,13 @@ export function createSearch({ shell, store, router, api, scope }) {
     input.setAttribute('aria-label', label);
     if (!snapshot || unauthorized) {
       conversations.update(''); meetings.update(''); files.update('');
-      results.hidden = true;
-      results.replaceChildren();
+      closeResults();
     } else if (document.activeElement === input || !results.hidden) paint();
   }
   store.subscribe(refreshContext);
   router.subscribe(refreshContext);
   scope.subscribe(refreshContext);
-  input.addEventListener('input', paint);
+  input.addEventListener('input', () => { appliedShortcut = undefined; paint(); });
   input.addEventListener('focus', () => paint(true));
   function navigate(event) {
     if (event.defaultPrevented || event.isComposing || event.altKey || event.shiftKey) return;
@@ -350,7 +373,7 @@ export function createSearch({ shell, store, router, api, scope }) {
     if (event.key === 'Escape') {
       event.preventDefault();
       event.target.blur();
-      results.hidden = true;
+      closeResults();
       return;
     }
     if (results.hidden) return;
@@ -371,5 +394,5 @@ export function createSearch({ shell, store, router, api, scope }) {
   results.addEventListener('keydown', navigate);
   const search = input.closest('.search');
   // A retry can replace its own button before the click reaches the document.
-  document.addEventListener('click', event => { if (!event.composedPath().includes(search)) results.hidden = true; });
+  document.addEventListener('click', event => { if (!event.composedPath().includes(search)) closeResults(); });
 }

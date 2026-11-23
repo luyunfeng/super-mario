@@ -3,7 +3,7 @@ import { readConversationStatus } from './conversation-status.ts';
 import { localDayFormatter } from './local-day.ts';
 import { messageVersion } from '../packages/plugin-sdk/src/index.ts';
 import { randomBytes } from 'node:crypto';
-import type { Extension, Json, Store } from '../packages/plugin-sdk/src/index.ts';
+import type { Extension, ExtensionContext, Json, Store } from '../packages/plugin-sdk/src/index.ts';
 
 import type { Message, Project, Run, Todo } from '../packages/protocol/src/index.ts';
 
@@ -48,7 +48,7 @@ function indexOf(searches: SavedSearch[], id: Json | undefined) {
   return index;
 }
 
-function savedSearches(store: Store, input: Json): Json {
+function savedSearches({ store, events }: ExtensionContext, input: Json): Json {
   if (!input || typeof input !== 'object' || Array.isArray(input)
     || typeof input.action !== 'string' || !Object.hasOwn(fields, input.action)) fail(400, '检索操作无效');
   const action = input.action as keyof typeof fields;
@@ -60,7 +60,7 @@ function savedSearches(store: Store, input: Json): Json {
     fail(400, '检索版本无效');
 
   // Revision, order and the single undo entry are persisted together.
-  return store.transaction(() => {
+  const updated = store.transaction(() => {
     const book = read(store);
     if (book.revision !== revision) fail(409, '保存的检索已更新，请刷新后重试');
     const searches = [...book.searches];
@@ -93,6 +93,8 @@ function savedSearches(store: Store, input: Json): Json {
     store.put('conversation-search', 'saved', next);
     return snapshot(next);
   });
+  events.publish('saved-searches.changed', { revision: updated.revision });
+  return updated;
 }
 
 function readableMessage(message: Message, project: Project, excludeId: unknown): boolean {
@@ -427,7 +429,7 @@ function webMessages(store: Store, input: Json, canReadFiles?:CanReadMessageFile
 type ReadFiles = (input: { projectId: string; kind: 'search'; query: string }) => Promise<Json>;
 export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input: Json) => Json, queueStatus?: () => {queuedMessages:number;nextQueuedMessage:{id:string;text:string;images:number;files:number}|null} | undefined, canReadFiles?:CanReadMessageFiles): Extension => ({
   id: 'conversation-search', name: '对话历史搜索', capabilities: ['conversation.search'],
-  permissions: ['contribute:tools', 'service.provide:conversation-search.saved', 'service.provide:conversation-search.projects', 'service.provide:conversation-search.messages', 'service.provide:conversation-search.tool-records', 'service.provide:conversation-search.files', 'service.provide:conversation-search.status', 'store.read', 'store.write'],
+  permissions: ['contribute:tools', 'service.provide:conversation-search.saved', 'service.provide:conversation-search.projects', 'service.provide:conversation-search.messages', 'service.provide:conversation-search.tool-records', 'service.provide:conversation-search.files', 'service.provide:conversation-search.status', 'store.read', 'store.write', 'events.publish'],
   activate(context) {
     let active = true;
     context.defer(() => { active = false; });
@@ -552,6 +554,6 @@ export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input:
     context.provide('conversation-search.tool-records', input=>projectToolRecords(context.store,input));
     context.provide('conversation-search.messages', input => webMessages(context.store, input, canReadFiles));
     context.provide('conversation-search.projects', input => projectMessages(context.store, input));
-    context.provide('conversation-search.saved', input => savedSearches(context.store, input));
+    context.provide('conversation-search.saved', input => savedSearches(context, input));
   },
 });
