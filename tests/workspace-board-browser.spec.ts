@@ -196,6 +196,9 @@ test('项目看板自动分组按工作状态和查询筛选，点击待办进�
   const server=await startServer({host:'127.0.0.1',port:0,dataDir,token:'fixture',demo:true});
   t.after(async()=>{try{await server.close();}finally{await rm(dataDir,{recursive:true,force:true});}});
   const project=await server.app.createProject({name:'合成工作台'});
+  const runId='board-project-run',runTitle='合成执行检查',now=new Date().toISOString();
+  server.app.store.put('runs',runId,{id:runId,projectId:project.id,conversationId:'main',prompt:runTitle,
+    executorId:'synthetic',status:'running',output:'',createdAt:now,updatedAt:now});
   const one=server.app.createTodo({title:'合成计划交接'});
   server.app.createTodo({title:'合成计划复核'});
   const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
@@ -231,4 +234,12 @@ test('项目看板自动分组按工作状态和查询筛选，点击待办进�
   await expect(board).toBeHidden();
   await expect(page).toHaveURL(new RegExp('/todos/detail/'+one.id+'$'));
   await expect(page.getByRole('heading',{name:one.title,exact:true})).toBeVisible();
+  await page.goto(server.url+'/#projects/'+project.id+'/workspace');
+  await reopen.click();
+  await board.getByLabel('工作状态',{exact:true}).selectOption('working');
+  await board.getByLabel('筛选自动分组',{exact:true}).fill(runTitle);
+  const run=board.getByRole('link',{name:'打开执行 '+runTitle,exact:true});
+  await expect(run).toHaveAttribute('href','#projects/'+project.id+'/runs/'+runId);
+  await run.click();
+  await expect(page.getByRole('heading',{name:runTitle,exact:true})).toBeVisible();
 });
