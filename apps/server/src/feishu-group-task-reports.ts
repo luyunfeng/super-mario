@@ -4,6 +4,7 @@ import type { Store } from '../../../packages/plugin-sdk/src/index.ts';
 import type { Todo } from '../../../packages/protocol/src/index.ts';
 
 export type GroupTaskReportSource = {
+  homeChatId?: string; homeGrant?: string; homeThreadId?: string;
   botId: string; appId: string; binding: string; chatId: string; messageId: string;
   todoId: string; privateMessageId: string; senderId: string;
 };
@@ -27,7 +28,8 @@ function sourceOf(raw?: Source): GroupTaskReportSource | undefined {
   if (!raw || raw.recalled) return;
   const { botId, appId, binding, chatId, messageId, todoId, privateMessageId, senderId } = raw;
   if (botId && appId && binding && chatId && messageId && todoId && privateMessageId && senderId)
-    return { botId, appId, binding, chatId, messageId, todoId, privateMessageId, senderId };
+    return { botId, appId, binding, chatId, messageId, todoId, privateMessageId, senderId,
+      ...(raw.homeChatId && { homeChatId: raw.homeChatId, homeGrant: raw.homeGrant, homeThreadId: raw.homeThreadId }) };
 }
 function keyFor(s: GroupTaskReportSource) {
   return createHash('sha256').update(JSON.stringify([s.botId, s.appId, s.chatId, s.messageId])).digest('hex');
@@ -156,11 +158,13 @@ export function createGroupTaskReports(store: Pick<Store, 'get' | 'list' | 'put'
     return sweeping;
   }
 
-  function cancel(botId: string, binding: string, quotedIds: readonly string[]) {
+  function cancel(botId: string, binding: string, quotedIds: readonly string[], topic?: { chatId: string; threadId: string; grant: string }) {
     return store.transaction(() => {
-      if (closed || !botId || !binding || !quotedIds.length) return 'missing' as const;
+      if (closed || !botId || !binding || (!quotedIds.length && !topic)) return 'missing' as const;
       const matches = store.list<Source>(sources).map(sourceOf).filter(s => {
         if (!s || s.botId !== botId || s.binding !== binding) return false;
+        if (topic) return s.homeChatId === topic.chatId && s.homeThreadId === topic.threadId && s.homeGrant === topic.grant;
+        if (s.homeChatId) return false;
         const p = read(keyFor(s))?.previewId;
         return quotedIds.includes(s.privateMessageId) || (!!p && quotedIds.includes(p));
       });

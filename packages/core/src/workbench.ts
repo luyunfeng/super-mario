@@ -1924,6 +1924,17 @@ export async function createWorkbench(config: AppConfig) {
         return webConfig.public();
       });
     },
+    recordTopicDecision(inputId: string): void {
+      const source = store.get<Message>('messages', inputId);
+      const route = store.get<{ channel?: string; topic?: { opening?: boolean; todoId?: string }; botId?: string; accountId?: string; sourceMessageId?: string }>('message.routes', inputId);
+      if (!source?.todoId || route?.channel !== 'feishu' || route.topic?.opening !== false || route.topic.todoId !== source.todoId)
+        throw new InputError('需要已接收的飞书话题续聊消息', 403);
+      const scope = { kind: 'task' as const, todoId: source.todoId };
+      // record() rechecks both historical stamps and the completed dispatch in the same transaction.
+      const key = 'feishu-topic:' + createHash('sha256').update(JSON.stringify([route.botId, route.accountId, route.sourceMessageId])).digest('hex');
+      const excerpt = source.text.length > 4000 ? source.text.slice(0, 3970).replace(/[\uD800-\uDBFF]$/u, '') + '…（节选，全文见来源消息）' : source.text;
+      workDecisions.ledger.record({ key, scope, text: excerpt, sourceMessageId: inputId });
+    },
     config, store, events, effects, plugins, contributions, workDecisions, todoDecisions, waitingReplies, inboxAssistant, inboxClassifier, inboxHandling, inboxHandlingRuntime, agent, supervisorRuntime, supervisorAgent, policies, plans, proposePlan, interactions, inbox, approvals, supervision, monitor,
     setInboxReplyHost(access: typeof mailboxHandlingAccess, reply: NonNullable<typeof replyToInboxSource>) { mailboxHandlingAccess=access;replyToInboxSource=reply; },
     readInboxHandlingSource: inboxHandlingSources,

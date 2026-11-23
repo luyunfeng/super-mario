@@ -6,12 +6,15 @@ import { sameBotScope, scopeError, validateBotScope } from './bot-scopes.ts';
 
 // This is the persisted shape written by feishu-bots.dispatchInbox, not current
 // bot configuration. A later disable/rebind must not revoke an explicit fact.
-type HistoricalRoute = MessageRoute & {
-  conversationThreadId?: string; privateSenderId?: string; group?: unknown; botId?: string; scope?: BotScope; revision?: number; inputId?: string;
+type Topic = { todoId: string; opening: boolean; grant: string };
+type GroupSource = { chatId: string; chatType?: string; senderType?: string; senderId?: string; messageId: string; threadId?: string };
+type TopicEvidence = { topic?: Topic; group?: GroupSource; threadId?: string; platformReplyTo?: string };
+type HistoricalRoute = MessageRoute & TopicEvidence & {
+  conversationThreadId?: string; privateSenderId?: string; botId?: string; scope?: BotScope; revision?: number; inputId?: string;
   envelopeId?: string; sourceMessageId?: string; relay?: unknown;
   resultRelayEntryId?: string;
 };
-type Envelope = { conversationThreadId?: string; privateSenderId?: string; group?: unknown; revision?: number; relay?: unknown; resultRelayEntryId?: string };
+type Envelope = TopicEvidence & { conversationThreadId?: string; privateSenderId?: string; revision?: number; relay?: unknown; resultRelayEntryId?: string };
 function deny(): never { return scopeError('工作决定来源路由或身份范围无效', 403); }
 const identifier = (value: unknown): value is string => typeof value === 'string' && value.trim() === value && value.length > 0;
 
@@ -51,7 +54,7 @@ export function authorizeWorkDecisionSource(store: Store, scope: BotScope, sourc
   if (source.conversationId === 'main') {
     // Direct main-channel connectors write a plain route without bot identity.
     if (route && (!matchedChannel || !identifier(route.accountId) || !identifier(route.target)
-      || route.conversationThreadId !== undefined || route.botId !== undefined || route.scope !== undefined || route.inputId !== undefined || route.envelopeId !== undefined)) deny();
+      || route.topic !== undefined || route.conversationThreadId !== undefined || route.botId !== undefined || route.scope !== undefined || route.inputId !== undefined || route.envelopeId !== undefined)) deny();
     return;
   }
   if (source.projectId !== undefined && source.conversationId === `project:${source.projectId}:work`) {
@@ -67,7 +70,7 @@ export function authorizeWorkDecisionSource(store: Store, scope: BotScope, sourc
     || source.conversationId !== botConversationId({ id: route.botId, scope: owner }, route.conversationThreadId)) deny();
   // Scoped runtimes stamp the exact project/task identity on accepted messages.
   if (source.projectId !== ('projectId' in owner ? owner.projectId : undefined)
-    || source.todoId !== (owner.kind === 'task' ? owner.todoId : undefined)) deny();
+    || source.todoId !== (route.topic !== undefined ? route.topic?.todoId : owner.kind === 'task' ? owner.todoId : undefined)) deny();
   narrow(owner);
   const envelope = store.get<MailboxEntry>('event.mailboxes', route.envelopeId);
   const stamp = store.get<Envelope>(matchedChannel.envelopeCollection, route.envelopeId);
@@ -81,6 +84,21 @@ export function authorizeWorkDecisionSource(store: Store, scope: BotScope, sourc
     || envelope.text !== source.text || envelope.origin?.kind !== 'direct' && envelope.origin?.kind !== 'group'
     || !stamp || stamp.conversationThreadId !== route.conversationThreadId || stamp.revision !== route.revision || stamp.relay !== undefined || stamp.resultRelayEntryId !== undefined
     || receipt?.status !== 'completed' || receipt.id !== source.id) deny();
+  if (route.topic !== undefined || stamp.topic !== undefined) {
+    // The dispatcher authenticated the paired owner before accepting this input.
+    // Recheck the two persisted SDK stamps and receipt, independent of today's pairing.
+    const t = route.topic, copy = stamp.topic, group = route.group, original = stamp.group;
+    if (!t || !copy || !group || !original || t.opening !== false || copy.opening !== false
+      || !identifier(t.grant) || t.grant !== copy.grant || !identifier(t.todoId) || t.todoId !== copy.todoId
+      || matchedChannel.channel !== 'feishu' || owner.kind !== 'global' || route.conversationThreadId !== undefined
+      || target.kind !== 'task' || target.projectId !== undefined || target.todoId !== t.todoId
+      || envelope.origin?.kind !== 'group' || envelope.origin.chatId !== route.target
+      || route.privateSenderId !== undefined || stamp.privateSenderId !== undefined
+      || group.chatType !== 'group' || original.chatType !== 'group' || group.senderType !== 'user' || original.senderType !== 'user'
+      || !identifier(group.senderId) || group.senderId !== original.senderId || group.chatId !== route.target || original.chatId !== route.target
+      || !identifier(group.threadId) || [original.threadId, stamp.threadId, route.threadId].some(id => id !== group.threadId)
+      || [group.messageId, original.messageId, stamp.platformReplyTo, route.platformReplyTo].some(id => id !== route.sourceMessageId)) deny();
+  }
   if (route.conversationThreadId !== undefined && (envelope.origin?.kind !== 'direct' || route.group || stamp.group
     || !identifier(stamp.privateSenderId) || stamp.privateSenderId !== route.privateSenderId)) deny();
 }

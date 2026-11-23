@@ -283,6 +283,11 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 200, bots.list().map(bot => bot.scope.kind === 'global' && bot.paired
             ? { ...bot, workbench: bots.workbenchStatus(bot.id) } : bot));
         }
+        const topicChats = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/topic-chats$/);
+        if (topicChats && (method === 'GET' || method === 'PUT')) {
+          if (!app.plugins.list().some(p => p.id === 'feishu' && p.status === 'active')) throw new InputError('飞书插件已停用', 503);
+          return json(res, 200, bots.topicChats(decodeURIComponent(topicChats[1]!), method === 'PUT' ? await body(req) : undefined));
+        }
         const groupReads = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/group-reads$/);
         if (method === 'GET' && groupReads) {
           if (!app.plugins.list().some(p => p.id === 'feishu' && p.status === 'active')) throw new InputError('飞书插件已停用', 503);

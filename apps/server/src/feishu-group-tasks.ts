@@ -6,11 +6,12 @@ import type { FeishuMessageSource } from '../../../plugins/feishu.ts';
 const collection = 'feishu.group-tasks';
 type TaskStore = Pick<Store, 'get' | 'put' | 'transaction'>;
 type Delivery = 'pending' | 'unknown' | 'confirmed';
-type FrozenTask = { request: string; quote?: string };
+export type TopicHome = { chatId: string; grant: string };
+type FrozenTask = { home?: TopicHome; request: string; quote?: string };
 type Receipt = {
   botId?: string; appId?: string; task?: FrozenTask;
   binding?: string; senderId?: string; chatId?: string; messageId?: string;
-  todoId?: string; delivery?: Delivery; privateMessageId?: string; handedOff?: boolean; recalled?: boolean;
+  homeChatId?: string; homeGrant?: string; homeThreadId?: string; todoId?: string; delivery?: Delivery; privateMessageId?: string; handedOff?: boolean; recalled?: boolean;
 };
 type Gate = () => boolean | void;
 
@@ -33,8 +34,8 @@ export function createGroupTasks(store: TaskStore, createTodo: (input: { title: 
   function recalled(botId: string, appId: string, chatId: string, messageId: string) {
     return read(sourceKey(botId, appId, chatId, messageId))?.recalled === true;
   }
-  async function open(botId: string, appId: string, binding: string, source: FeishuMessageSource & { quotedText?: string },
-    task: string, check: Gate, privateNotify: (todo: Todo) => Promise<string | void>,
+  async function open(botId: string, appId: string, binding: string, source: FeishuMessageSource & { quotedText?: string; home?: TopicHome },
+    task: string, check: Gate, privateNotify: (todo: Todo, original: FrozenTask) => Promise<string | void>,
     publicNotify: (text: string) => Promise<string | void>, handoff?: (todo: Todo, privateMessageId: string, task: FrozenTask) => Promise<void>) {
     if (!botId || !appId || !binding || !source.chatId || !source.messageId || !source.senderId ||
         source.senderType !== 'user' || source.chatType !== 'group' || !source.mentionedSelf) return;
@@ -55,7 +56,8 @@ export function createGroupTasks(store: TaskStore, createTodo: (input: { title: 
           const todo = createTodo({ title: Array.from(words.replace(/\s+/gu, ' ')).slice(0, 80).join(''), notes });
           todoId = todo.id;
         }
-        const record: Receipt = { botId, appId, binding, task: { request: words, ...(quote && { quote }) }, senderId: source.senderId, chatId: source.chatId, messageId: source.messageId,
+        const record: Receipt = { botId, appId, binding, task: { request: words, ...(quote && { quote }), ...(source.home && { home: source.home }) },
+          ...(source.home && { homeChatId: source.home.chatId, homeGrant: source.home.grant }), senderId: source.senderId, chatId: source.chatId, messageId: source.messageId,
           ...(todoId && { todoId }), delivery: 'pending' };
         store.put(collection, key, record);
         return record;
@@ -75,7 +77,7 @@ export function createGroupTasks(store: TaskStore, createTodo: (input: { title: 
         if (!claimed) return;
         let id: string | void;
         try {
-          id = todo ? await privateNotify(todo) : await publicNotify('请在 /ai 后写下要办理的任务。');
+          id = todo && record.task ? await privateNotify(todo, record.task) : await publicNotify('请在 /ai 后写下要办理的任务。');
         } catch (error) {
           // Only explicit evidence of no delivery permits a later attempt.
           if (error && typeof error === 'object' && 'delivery' in error && error.delivery === 'no') {
@@ -99,5 +101,11 @@ export function createGroupTasks(store: TaskStore, createTodo: (input: { title: 
       });
     } finally { active.delete(key); }
   }
-  return { open, recall, recalled };
+  function confirmHomeThread(botId: string, appId: string, source: FeishuMessageSource, anchor: string, threadId: string) {
+    const key = sourceKey(botId, appId, source.chatId, source.messageId), row = read(key);
+    if (!row?.homeGrant || row.privateMessageId !== anchor || row.recalled || (row.homeThreadId && row.homeThreadId !== threadId))
+      throw new Error('主话题群绑定与发送回执不匹配。');
+    store.put(collection, key, { ...row, homeThreadId: threadId });
+  }
+  return { open, recall, recalled, confirmHomeThread };
 }

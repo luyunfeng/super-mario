@@ -5,13 +5,9 @@ import type { WorkDecision } from './work-decisions.ts';
 import { randomUUID } from 'node:crypto';
 import type { Card } from './interactions.ts';
 
-type Decision = { id: string; text: string; source: 'manual' | 'answer'; sourceId?: string; active: boolean };
+type Decision = { id: string; text: string; source: 'manual' | 'answer' | 'topic'; sourceId?: string; active: boolean };
 type Ledger = ReturnType<typeof createWorkDecisionService>;
 const withdrawals = 'todo.decision-answer-withdrawals';
-
-function manual(fact: WorkDecision): Decision {
-  return { id: fact.id, text: fact.text, source: 'manual', sourceId: fact.source.messageId, active: fact.status === 'active' };
-}
 
 // Interaction cards have free-form questions and answers, with no credential field type.
 // Exclude credential prompts even when their answer is just an unrecognisable short string.
@@ -22,6 +18,14 @@ function fail(message: string, status: number): never {
 }
 
 export function createTodoDecisions(store: Store, workDecisions: Ledger) {
+  function decision(fact: WorkDecision): Decision {
+    // Corrections have their own source; keep the original topic input visible in the task chain.
+    const route = store.get<{ channel?: string; topic?: { opening?: boolean } }>('message.routes', fact.recordSource.messageId);
+    const fromTopic = route?.channel === 'feishu' && route.topic?.opening === false;
+    return { id: fact.id, text: fact.text, source: fromTopic ? 'topic' : 'manual',
+      sourceId: fromTopic ? fact.recordSource.messageId : fact.source.messageId, active: fact.status === 'active' };
+  }
+
   function readTodo(todoId: string) {
     return store.get<Todo>('todos', todoId) ?? fail('待办不存在', 404);
   }
@@ -41,7 +45,7 @@ export function createTodoDecisions(store: Store, workDecisions: Ledger) {
     const todo = readTodo(todoId);
     const runs = new Set(store.list<Run>('runs')
       .filter(run => run.todoId === todoId && run.projectId === todo.projectId).map(run => run.id));
-    const decisions = facts(todo).map(manual);
+    const decisions = facts(todo).map(decision);
     for (const card of store.list<Card>('interactions')) {
       // user_chat is authored by the model's answer tool. Only a direct user answer is evidence.
       if (card.kind !== 'question' || !card.runId || !runs.has(card.runId) || card.projectId !== todo.projectId ||
@@ -63,8 +67,8 @@ export function createTodoDecisions(store: Store, workDecisions: Ledger) {
         if (typeof text !== 'string' || !text.trim()) fail('决定内容必须为非空文本', 400);
         const value = text.trim();
         const existing = facts(todo).find(fact => fact.status === 'active' && fact.text === value);
-        if (existing) return manual(existing);
-        return manual(workDecisions.recordFromWeb({ todoId, projectId: todo.projectId, key: randomUUID(), text: value }));
+        if (existing) return decision(existing);
+        return decision(workDecisions.recordFromWeb({ todoId, projectId: todo.projectId, key: randomUUID(), text: value }));
       });
     },
     withdraw(todoId: string, id: string): Decision {
@@ -73,7 +77,7 @@ export function createTodoDecisions(store: Store, workDecisions: Ledger) {
         if (!id.startsWith('answer:')) {
           const fact = facts(todo).find(item => item.id === id);
           if (!fact) fail('待办决定不存在', 404);
-          return fact.status === 'active' ? manual(workDecisions.changeFromWeb({ id, version: fact.version }, true)) : manual(fact);
+          return fact.status === 'active' ? decision(workDecisions.changeFromWeb({ id, version: fact.version }, true)) : decision(fact);
         }
         const answer = list(todoId).find(item => item.id === id);
         if (!answer?.sourceId) fail('待办决定不存在', 404);

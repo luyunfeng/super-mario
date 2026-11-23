@@ -6,7 +6,7 @@ import type { MailboxEntry, Message } from '../../../protocol/src/index.ts';
 type Cutover = { generation: string; revision: number; appId: string; senderId: string; chatId: string };
 type Route = { channel: string; botId: string; accountId: string; revision: number; target: string; inputId: string; envelopeId: string;
   scope?: { kind: string }; conversationThreadId?: string; privateSenderId?: string; chatProject?: string; audienceGeneration?: string;
-  group?: { chatType?: string; chatId: string; senderType?: string }; command?: string; relay?: unknown; resultRelayEntryId?: string };
+  topic?: { grant: string; todoId: string }; threadId?: string; group?: { chatType?: string; chatId: string; senderType?: string }; command?: string; relay?: unknown; resultRelayEntryId?: string };
 export type FeishuAudience = { key: string; kind: 'owner' | 'group' | 'isolated' };
 const hash = (parts: unknown[]) => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 
@@ -29,6 +29,7 @@ export function feishuAudienceHistory(store: Store, botId: string, conversationI
     const base = [botId, route.accountId, generation, paired.chatId, paired.senderId];
     if (route.group) {
       if (route.group.chatType !== 'group' || route.group.chatId !== route.target || route.group.senderType !== 'user') return isolated;
+      if (route.topic && route.threadId) return { key: hash([...base, 'topic', route.target, route.topic.grant, route.threadId, route.topic.todoId]), kind: 'group' };
       return { key: hash([...base, 'group', route.target]), kind: 'group' };
     }
     if (paired.chatId !== route.target || paired.senderId !== route.privateSenderId) return isolated;
