@@ -41,8 +41,11 @@ export function openTodoHistory({ api, store, router, todo }) {
         (round.answerReceipts ?? []).map(receipt => {
           const target = receipt.target === 'executor' ? '执行会话输入' : '工作台本地处理';
           const status = { confirmed: '已确认', failed: '失败', unknown: '结果未知' };
-          return h('p', { class: 'small' }, (receipt.answeredBy === 'deadline_default' ? '系统到期采用推荐 · ' : '已记录答复 · ') + receipt.title + ' · ' + target + (status[receipt.delivery] ?? '结果未知'),
-            receipt.answeredAt && ' · ' + formatDate(receipt.answeredAt, true));
+          const source = {deadline_default:'系统到期采用推荐',supervisor_delegated:'督办受托决定'}[receipt.answeredBy] ?? '已记录答复';
+          return h('p', { class: 'small' }, source + ' · ' + receipt.title + ' · ' + target + (status[receipt.delivery] ?? '结果未知'),
+            receipt.answeredAt && ' · ' + formatDate(receipt.answeredAt, true),
+            receipt.delegatedAnswer && h('span', {class:'block'}, '决定：' + receipt.delegatedAnswer),
+            receipt.decisionAssumption && h('span', {class:'block'}, '依据：' + receipt.decisionAssumption));
         }),
         round.decisions.map(decision => h('div', { class: 'row row--wrap small' },
           `历史决定：${decision.action === 'accept' ? '用户已验收' : '用户要求返工'} · ${decision.at ? formatDate(decision.at, true) : '决定时间未记录'}${decision.defects ? ' · ' + decision.defects : ''}`,

@@ -22,7 +22,9 @@ function deadlineTime(value:string, now:number) {
   return now+duration;
 }
 
-export function questionDeadline(input:{kind:string;runId?:string;questions?:QuestionItem[];deadline?:string;reversible?:boolean},now:number, boundRun=false) {
+export function questionDeadline(input:{kind:string;runId?:string;questions?:QuestionItem[];deadline?:string;reversible?:boolean;externallyVisible?:boolean},now:number, boundRun=false):Pick<Card,'decisionDeadlineAt'|'reversible'|'externallyVisible'> {
+  if (input.externallyVisible!==undefined && (typeof input.externallyVisible!=='boolean' || !boundRun || !input.runId || (typeof input.deadline!=='string' || !input.deadline.trim())))
+    invalid('externallyVisible 仅适用于执行的结构化截止提问，须为布尔值');
   if (input.deadline===undefined && input.reversible===undefined) return {};
   if (input.kind!=='question' || (input.runId && !boundRun) || !input.questions?.length) invalid('只有对话中的结构化普通问题支持截止设置');
   if (input.reversible!==undefined && typeof input.reversible!=='boolean') invalid('reversible 须为布尔值');
@@ -32,11 +34,12 @@ export function questionDeadline(input:{kind:string;runId?:string;questions?:Que
     invalid('设置截止须明确是否可逆，并为每题推荐一个已有选项');
   const at=deadlineTime(input.deadline.trim(),now);
   if (!Number.isFinite(at) || at-now<60000 || at-now>30*86400000) invalid('截止时间须在 1 分钟至 30 天之间');
-  return {decisionDeadlineAt:new Date(at).toISOString(),reversible:input.reversible};
+  return {decisionDeadlineAt:new Date(at).toISOString(),reversible:input.externallyVisible===true ? false : input.reversible,
+    ...(input.externallyVisible!==undefined && {externallyVisible:input.externallyVisible})};
 }
 
-export function cardAcceptsAnswer(card:Pick<Card,'status'|'expiresAt'|'decisionDeadlineAt'|'reversible'|'deadlineRemindedAt'|'contextRequestedAt'>,now=Date.now()) {
+export function cardAcceptsAnswer(card:Pick<Card,'status'|'expiresAt'|'decisionDeadlineAt'|'reversible'|'deadlineRemindedAt'|'contextRequestedAt'|'delegationRequestedAt'>,now=Date.now()) {
   if (card.status!=='open') return false;
-  if (card.decisionDeadlineAt) return Date.parse(card.decisionDeadlineAt)>now || card.reversible===false || !!card.deadlineRemindedAt || !!card.contextRequestedAt;
+  if (card.decisionDeadlineAt) return Date.parse(card.decisionDeadlineAt)>now || card.reversible===false || !!card.deadlineRemindedAt || !!card.contextRequestedAt || !!card.delegationRequestedAt;
   return Date.parse(card.expiresAt)>now;
 }

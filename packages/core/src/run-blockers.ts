@@ -28,7 +28,7 @@ export function readRunBlockers(store: Pick<Store, 'get' | 'list'>, asOf?: numbe
             ...(card.decisionDeadlineAt && {alternatives:q.options.filter(item => item.label !== option.label)})}] : [];
         }) : undefined;
         add(card.runId, card.projectId, undefined, { id, title, kind, createdAt, version,
-          ...(includeRecommendations && card.decisionDeadlineAt && {decisionContext:card.body, contextRequestedAt:card.contextRequestedAt, decisionExplanation:card.decisionExplanation,
+          ...(includeRecommendations && card.decisionDeadlineAt && {decisionContext:card.body, delegationRequestedAt:card.delegationRequestedAt, ownerConfirmation:card.ownerConfirmation, contextRequestedAt:card.contextRequestedAt, decisionExplanation:card.decisionExplanation,
             decisionDeadlineAt:card.decisionDeadlineAt, reversible:card.reversible, deadlineRemindedAt:card.deadlineRemindedAt}),
           ...(questions?.length && {questions}), href: '#chat?interaction=' + encodeURIComponent(id) }, card.decisionDeadlineAt ? card : undefined);
       }

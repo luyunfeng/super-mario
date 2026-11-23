@@ -17,6 +17,8 @@ export interface AttentionItem {
   origin?: InboxOrigin;
   questions?: QuestionItem[];
   wait?: boolean;
+  delegationError?:string;
+  delegationRequestedAt?: string; decisionAssumption?: string; ownerConfirmation?: string;
   runId?: string; contextRequestedAt?: string; decisionExplanation?: string;
   decisionDeadlineAt?: string; reversible?: boolean; deadlineRemindedAt?: string;
   id: string;
@@ -37,8 +39,10 @@ export interface AttentionItem {
 }
 // Structural input avoids coupling this projection to interaction service internals.
 interface InteractionInput {
+  error?:string;
   questions?: QuestionItem[];
   wait?: boolean;
+  delegationRequestedAt?: string; decisionAssumption?: string; ownerConfirmation?: string;
   runId?: string; contextRequestedAt?: string; decisionExplanation?: string;
   decisionDeadlineAt?: string; reversible?: boolean; deadlineRemindedAt?: string;
   id: string; version: number; title: string; body: string; status: string;
@@ -108,17 +112,23 @@ export function collectAttention({ inboxConversations = [], approvals = [], inte
     if (item.status !== 'open' || (item.handler !== undefined && item.handler !== 'user')) continue;
     const highRisk = item.kind === 'permission';
     const canAnswerLater = item.kind === 'question' && item.wait === false;
+    const runQuestion = item.kind === 'question' && !!item.runId && !!item.decisionDeadlineAt;
+    const confirm = (accept:boolean,label:string) => ({...action('interactions',item.id,'confirm-delegation',item.version,label), body:{version:item.version,accept}});
     rows.push({ id: `interaction:${item.id}`, type: 'interaction', version: item.version, ...(item.questions && { questions: item.questions }), ...(canAnswerLater && { wait: false }),
       ...(item.runId && {runId:item.runId}),
+      ...(item.delegationRequestedAt && {delegationRequestedAt:item.delegationRequestedAt,decisionAssumption:item.decisionAssumption,ownerConfirmation:item.ownerConfirmation,
+        ...(item.error && {delegationError:'督办尚无可核实的选择，请在原卡作答。'})}),
       ...(item.contextRequestedAt && {contextRequestedAt:item.contextRequestedAt,decisionExplanation:item.decisionExplanation}),
       ...(item.decisionDeadlineAt && {decisionDeadlineAt:item.decisionDeadlineAt,reversible:item.reversible,
         ...(item.deadlineRemindedAt && {deadlineRemindedAt:item.deadlineRemindedAt})}),
       ...(item.todoId && { todoId: item.todoId }), ...(item.route && { route: item.route }), title: item.title, context: canAnswerLater ? '可继续聊天，稍后回到这张卡回答。' : '等待你的回答', detail: [item.body, item.suggestion ? `建议回答：${item.suggestion}` : ''].filter(Boolean).join('\n\n'),
       source: 'Agent', createdAt: item.createdAt, ...project(item.projectId), highRisk,
       actions: [{ ...action('interactions', item.id, 'answer', item.version, '回答'), requiresText: true, highRisk },
-        ...(item.kind === 'question' && item.runId && item.decisionDeadlineAt && !item.contextRequestedAt ?
+        ...(runQuestion && !item.delegationRequestedAt ? [action('interactions', item.id, 'delegate', item.version, '你来定')] : []),
+        ...(runQuestion && item.ownerConfirmation ? [confirm(true,'是，采用列出的推荐'),confirm(false,'否，我自己选')] : []),
+        ...(runQuestion && !item.contextRequestedAt ?
           [action('interactions', item.id, 'context', item.version, '先告诉我背景')] : []),
-        ...(item.kind === 'question' && item.runId && item.decisionDeadlineAt ?
+        ...(runQuestion ?
           [action('interactions', item.id, 'mismatch', item.version, '这不是我要的')] : []),
         ...(canAnswerLater ? [action('interactions', item.id, 'withdraw', item.version, '关闭提问')] : [])] });
   }

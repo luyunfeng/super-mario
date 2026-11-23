@@ -166,7 +166,7 @@ function decisionSection(api, store, todo) {
       const run = agent && store.view.snapshot.runs?.find(r => r.id === item.sourceId && (!r.todoId || r.todoId === todo.id) && r.projectId === todo.projectId);
       const executor = run && (store.view.snapshot.executors?.find(e => e.id === run.executorId)?.name || run.executorId);
       const origin = agent ? ['执行会话', executor].filter(Boolean).join(' · ') :
-        ({ answer: '来自答复', topic: '飞书话题', manual: '手工记录' })[item.source] || '其他来源';
+        ({ answer: '来自答复', delegated:'督办受托决定', topic: '飞书话题', manual: '手工记录' })[item.source] || '其他来源';
       const next = successor.get(item.id), previous = byId.get(item.supersedesId);
       const state = item.active ? '生效中' : next ? '已被替代' : '已撤回';
       return h('div', { class: 'item', dataset: { decisionId: item.id } },

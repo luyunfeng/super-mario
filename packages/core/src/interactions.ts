@@ -1,3 +1,4 @@
+import { recommendedChoices, confirmationText, delegatedChoice, manualDecision } from './run-question-delegation.ts';
 import { cardAcceptsAnswer, questionDeadline } from './question-deadline.ts';
 import { questionItems, readQuestionResponses } from './question-responses.ts';
 import type { QuestionItem, QuestionResponse } from '../../protocol/src/index.ts';
@@ -35,6 +36,12 @@ export interface Card {
   wait?: boolean;
   decisionDeadlineAt?: string;
   reversible?: boolean;
+  externallyVisible?: boolean;
+  delegationRequestedAt?: string;
+  delegationRequestedVersion?: number;
+  delegationBasis?: string;
+  decisionAssumption?: string;
+  ownerConfirmation?: string;
   deadlineRemindedAt?: string;
   contextRequestedAt?: string;
   decisionExplanation?: string;
@@ -60,7 +67,7 @@ export interface Card {
   userNotifiedAt?: string;
   routingHistory?: { handler: Decision['handler']; outcome: string; at: string }[];
 }
-type Input = Pick<Card, 'kind' | 'title' | 'body' | 'runId' | 'projectId' | 'executorId' | 'cwd' | 'questions' | 'wait'> & {deadline?:string; reversible?:boolean};
+type Input = Pick<Card, 'kind' | 'title' | 'body' | 'runId' | 'projectId' | 'executorId' | 'cwd' | 'questions' | 'wait'> & {deadline?:string; reversible?:boolean;externallyVisible?:boolean};
 const collection = 'interactions';
 export class InteractionError extends Error {
   readonly status: 400 | 404 | 409 | 503;
@@ -75,9 +82,11 @@ function text(value: unknown, name: string, empty = false): asserts value is str
 }
 
 /** Parent owns expireTick and must await close() before closing the store. No automatic replay. */
-export function createInteractions({ store, events, decide, answer: deliver, askAgent, publish, deadlineOutcome, questionContext, holdMismatch, defaultHeld }: {
+export function createInteractions({ store, events, decide, answer: deliver, askAgent, publish, deadlineOutcome, questionContext, holdMismatch, defaultHeld, chooseDelegated, delegationBasis }: {
   store: Store;
   events: EventBus;
+  delegationBasis?: (card:Card)=>string|undefined;
+  chooseDelegated?: (card:Card,signal:AbortSignal)=>Promise<unknown>;
   holdMismatch?: (card:Card)=>void;
   defaultHeld?: (card:Card)=>boolean;
   questionContext?: (card:Card) => {facts:string; explain?:(signal:AbortSignal)=>Promise<string>};
@@ -123,7 +132,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
   function settleDeadline(id:string, now:number):Card|undefined {
     const result=store.transaction(() => {
       const card=store.get<Card>(collection,id);
-      if (!card || card.status!=='open' || !card.decisionDeadlineAt || !(Date.parse(card.decisionDeadlineAt)<=now) || card.deadlineRemindedAt || card.contextRequestedAt) return;
+      if (!card || card.status!=='open' || !card.decisionDeadlineAt || !(Date.parse(card.decisionDeadlineAt)<=now) || card.deadlineRemindedAt || card.contextRequestedAt || card.delegationRequestedAt) return;
       const outcome=deadlineOutcome?.(card);
       if (outcome === 'initializing') return;
       if (card.wait===false && outcome==='spoke') return save(card,{status:'expired'});
@@ -151,6 +160,67 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
   }
   const explaining=new Map<string,Promise<Card>>();
   const contextStop=new AbortController();
+  const delegating=new Map<string,Promise<Card>>();
+  function eligibleDelegation(id:string,version:number) {
+    active();
+    text(id,'id');
+    if (!Number.isSafeInteger(version) || version<1) throw new InteractionError('version必须为正整数');
+    const card=store.get<Card>(collection,id);
+    if (!card) throw new InteractionError('交互卡片不存在',404);
+    if (!card.runId || card.kind!=='question' || !card.decisionDeadlineAt || !card.questions?.length)
+      throw new InteractionError('仅原执行的结构化截止提问可委托');
+    if (card.handler!=='user' || deadlineOutcome?.(card)!=='eligible' || defaultHeld?.(card))
+      throw new InteractionError('原执行、授权或偏题暂停状态已变化',409);
+    return card;
+  }
+  async function delegateDecision(id:string,version:number):Promise<Card> {
+    const claimed=store.transaction(()=>{
+      const card=eligibleDelegation(id,version);
+      if (card.delegationRequestedAt && (card.version===version || card.delegationRequestedVersion===version) &&
+          (card.status==='open' || card.answeredBy==='supervisor_delegated')) return {card};
+      if (card.version!==version || !cardAcceptsAnswer(card)) throw new InteractionError('原问题版本或截止状态已变化',409);
+      const confirmation=card.reversible!==true || card.externallyVisible!==false ? confirmationText(card) : undefined;
+      const basis=delegationBasis?.(card);
+      if (delegationBasis && !basis) throw new InteractionError('无法核对原执行依据',409);
+      const next=save(card,{delegationRequestedAt:new Date().toISOString(),delegationRequestedVersion:version,delegationBasis:basis,
+        ...(confirmation ? {ownerConfirmation:confirmation} : {error:manualDecision})});
+      return {card:next,choose:!confirmation};
+    });
+    const {card}=claimed;
+    if (claimed.choose===undefined) return delegating.get(id)??card;
+    if (!claimed.choose || !chooseDelegated) {changed(id);return card;}
+    const job=track(Promise.resolve().then(async()=>{
+      let raw:unknown;
+      try { raw=await chooseDelegated(card,contextStop.signal); } catch { /* The persisted form remains available to its owner. */ }
+      const next=store.transaction(()=>{
+        const current=eligibleDelegation(id,version);
+        if (current.version!==card.version || current.status!=='open' || current.delegationRequestedAt!==card.delegationRequestedAt)
+          throw new InteractionError('委托期间原问题已更新',409);
+        if (delegationBasis && current.delegationBasis!==delegationBasis(current)) return current;
+        const choice=delegatedChoice(current,raw);
+        if (!choice) return current;
+        if (choice.confirmation) return save(current,{ownerConfirmation:choice.confirmation,error:undefined});
+        if (!choice.response || !choice.assumption) return current;
+        return claim(id,current.version,{status:'answered',answeredBy:'supervisor_delegated',answeredAt:new Date().toISOString(),
+          delivery:'unknown',answer:choice.response.text,answers:choice.response.answers,decisionAssumption:choice.assumption,error:undefined});
+      });
+      if (next.answeredBy==='supervisor_delegated') return deliverAnswer(next,next.answer!);
+      if (next.version!==card.version) changed(id);
+      return next;
+    }).finally(()=>delegating.delete(id)));
+    delegating.set(id,job); changed(id); return job;
+  }
+  async function confirmDelegation(id:string,version:number,accept:boolean,by='user'):Promise<Card> {
+    if (typeof accept!=='boolean' || !['user','user_feishu'].includes(by)) throw new InteractionError('需要主人明确选择是或否');
+    const card=eligibleDelegation(id,version);
+    if (card.status!=='open' || card.version!==version || !card.ownerConfirmation || card.ownerConfirmation!==confirmationText(card))
+      throw new InteractionError('主人确认卡已更新或处理',409);
+    if (accept && delegationBasis && card.delegationBasis!==delegationBasis(card))
+      throw new InteractionError('执行目标或标准已变化，请重新核对原题',409);
+    if (accept) return answer(id,version,recommendedChoices(card),by);
+    const next=store.transaction(()=>save(get(id,version),{ownerConfirmation:undefined}));
+    changed(id); return next;
+  }
   function reportMismatch(id:string,version:number):Card {
     active();
     text(id,'id');
@@ -242,6 +312,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
     text(by, 'by');
     // Claim before any I/O. Unknown also covers a crash between delivery and confirmation.
     const card = claim(id, version, { status: 'answered', answer: value, ...(response && {answers:response.answers}), answeredBy: by,
+      ...(current.delegationRequestedAt && {ownerConfirmation:undefined,error:undefined}),
       answeredAt: new Date(now).toISOString(), delivery: 'unknown' },now);
     if (card.status === 'expired') {
       changed(id);
@@ -376,7 +447,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       const now = new Date().toISOString();
       const card: Card = { ...fields, id: randomUUID(), version: 1, status: 'open', handler: 'user', layer: 'default',
         expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(), createdAt: now, updatedAt: now };
-      Object.assign(card,questionDeadline({...fields,deadline:input.deadline,reversible:input.reversible},Date.parse(now),boundRun));
+      Object.assign(card,questionDeadline({...fields,deadline:input.deadline,reversible:input.reversible,externallyVisible:input.externallyVisible},Date.parse(now),boundRun));
       const policy = decide(structuredClone(card), conversationQuestion);
       const decision: Decision = card.wait === false || card.decisionDeadlineAt ? {...policy,handler:'user',mode:'suggest',answer:undefined,ruleId:undefined,
         ...(policy.stages && {stages:[{handler:'user',mode:'suggest'}]})} : policy;
@@ -412,7 +483,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       if (card.stages && card.handler === 'user') events.publish('interactions.user_required', { id: card.id });
       return structuredClone(card);
     },
-    answer, requestContext, reportMismatch,
+    answer, requestContext, reportMismatch, delegateDecision, confirmDelegation,
     withdraw(id: string, version: number, reason?:'user_spoke'): Card {
       active();
       const now=Date.now();
@@ -435,7 +506,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       for (const card of expired) changed(card.id);
       const escalated: Card[] = [];
       for (const card of store.list<Card>(collection)) {
-        if (card.status === 'open' && card.decisionDeadlineAt && !card.deadlineRemindedAt && !card.contextRequestedAt && Date.parse(card.decisionDeadlineAt)<=now) {
+        if (card.status === 'open' && card.decisionDeadlineAt && !card.deadlineRemindedAt && !card.contextRequestedAt && !card.delegationRequestedAt && Date.parse(card.decisionDeadlineAt)<=now) {
           const next=settleDeadline(card.id,now); if (next) escalated.push(next);
         } else if (card.status === 'open' && card.stages && card.handler !== 'user' && card.stageDueAt && Date.parse(card.stageDueAt) <= now) {
           const next = advance(card, 'timeout', now); if (next) escalated.push(next);
@@ -445,19 +516,20 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
     },
     recoverRunDefault(id:string, attempted:boolean) {
       const current=store.get<Card>(collection,id);
-      if (closed || !current?.runId || current.status!=='answered' || !current.byDefault || !current.answer ||
+      if (closed || !current?.runId || current.status!=='answered' || (!current.byDefault && current.answeredBy!=='supervisor_delegated') || !current.answer ||
           current.delivery!=='unknown' || current.error || delivering.has(id)) return;
       if (!attempted) {
         const state=deadlineOutcome?.(current);
-        if (state==='initializing') return;
-        if (state!=='eligible' || defaultHeld?.(current)) {
+        if (state==='initializing' && current.answeredBy!=='supervisor_delegated') return;
+        if (current.answeredBy==='supervisor_delegated' || state!=='eligible' || defaultHeld?.(current)) {
           // No executor input was ever claimed. Leave the original choice for its owner.
           store.transaction(()=>{
             const row=store.get<Card>(collection,id);
             if (!row || row.version!==current.version || store.get('effects','interaction:'+id)) return;
             save(row,{status:'open',byDefault:undefined,answers:undefined,answer:undefined,answeredAt:undefined,
-              decisionVersion:undefined,answeredBy:undefined,delivery:undefined,deadlineRemindedAt:new Date().toISOString()});
-            events.publish('interactions.deadline_overdue',{id});
+              decisionVersion:undefined,answeredBy:undefined,delivery:undefined,decisionAssumption:undefined,
+              ...(row.delegationRequestedAt ? {error:manualDecision} : {deadlineRemindedAt:new Date().toISOString()})});
+            if (!row.delegationRequestedAt) events.publish('interactions.deadline_overdue',{id});
           });
           changed(id);
           return;

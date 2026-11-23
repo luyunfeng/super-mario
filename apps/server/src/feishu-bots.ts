@@ -32,7 +32,7 @@ import { createHash, randomInt, randomUUID } from 'node:crypto';
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
 import { chooseCommandTarget, createCommandMentionEvidence, type CommandCandidate, type CommandClassifier, type CommandIdentity, type CommandRoute, type CommandTarget } from './feishu-command-routing.ts';
 import type { Card } from '../../../packages/core/src/interactions.ts';
-import { buildFeishuDashboard, conversationListDashboard, dashboardCommand, dashboardHelp, modelListDashboard, privateCommandText, statusDashboard, todayDashboard, questionForm, parseQuestionForm, type DashboardView } from './feishu-dashboard.ts';
+import { buildFeishuDashboard, conversationListDashboard, dashboardCommand, dashboardHelp, modelListDashboard, privateCommandText, statusDashboard, todayDashboard, delegatedQuestionCard, questionForm, parseQuestionForm, type DashboardView } from './feishu-dashboard.ts';
 import { createAgentProgressStream } from './agent-progress-stream.ts';
 import { buildAgentProgressCard, publicText } from '../../../plugins/agent-progress-card.ts';
 import { buildFeishuMessageCard, cardButtons, cardDocument, cardPlain } from './feishu-cards.ts';
@@ -64,7 +64,7 @@ export interface FeishuBotsApp {
   dispatch?(input: Record<string, unknown>, key?: string, nativeApproved?: boolean, executionGuard?: () => void): Run;
   agentSessions?: { discover(input: Record<string, never>): Promise<SessionList>; proposeResume?(input: Record<string, unknown>): Promise<{id: string; status: string}> };
   approvals?: { propose(input: Pick<Approval, 'kind' | 'title' | 'details' | 'params' | 'todoId'>): Pick<Approval, 'id' | 'status'> };
-  interactions?: { reportMismatch?(id:string,version:number):Card|Promise<Card>; requestContext?(id:string,version:number):Card|Promise<Card>; withdraw(id:string,version:number):Card; answer(id: string, version: number, text: string | QuestionResponse[], by: string): Promise<Card> };
+  interactions?: { delegateDecision?(id:string,version:number):Promise<Card>; confirmDelegation?(id:string,version:number,accept:boolean,by:'user_feishu'):Promise<Card>|Card; reportMismatch?(id:string,version:number):Card|Promise<Card>; requestContext?(id:string,version:number):Card|Promise<Card>; withdraw(id:string,version:number):Card; answer(id: string, version: number, text: string | QuestionResponse[], by: string): Promise<Card> };
   projectWorkspace?: { post(id: string, text: string): Promise<Message> };
   postScoped(text: string, scope: BotScope, botId: string, threadId?: string, todoId?: string): Promise<Message>;
   /** Host injects readOnly result context; it must never dispatch a new request. */
@@ -1230,7 +1230,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       void track(bot.id, stopCommand(bot, epoch, paired, { chatId: paired.chatId, parentId: input.messageId }, input.messageId, true));
       return { toast: { type: 'info', content: '正在核对本轮中断请求。' } };
     }
-    if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || !['workbench.startForm','workbench.startSubmit','workbench.agents','workbench.agentSelect','workbench.today','workbench.navigate','workbench.chat','workbench.sessions','workbench.readSessions','workbench.resumeForm','workbench.resumeSubmit','workbench.questionForm','workbench.answerQuestion','workbench.closeQuestion','workbench.questionContext','workbench.questionMismatch'].includes(String(value.kind))
+    if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || !['workbench.startForm','workbench.startSubmit','workbench.agents','workbench.agentSelect','workbench.today','workbench.navigate','workbench.chat','workbench.sessions','workbench.readSessions','workbench.resumeForm','workbench.resumeSubmit','workbench.questionForm','workbench.answerQuestion','workbench.closeQuestion','workbench.questionContext','workbench.questionMismatch','workbench.questionDelegate','workbench.confirmDelegation'].includes(String(value.kind))
       || typeof value.navigation !== 'string'
       || !input.messageId) return fail;
     const paired = owner(bot);
@@ -1244,7 +1244,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     let cap = app.store.get<CardNavigation>('feishu.card.navigation', value.navigation);
     // A deadline may be much later than dashboard navigation expires. Only the original
     // confirmed platform message can still submit this specific question.
-    if ((!cap || cap.expiresAt <= Date.now()) && ['workbench.answerQuestion','workbench.closeQuestion','workbench.questionContext','workbench.questionMismatch'].includes(String(value.kind))) {
+    if ((!cap || cap.expiresAt <= Date.now()) && ['workbench.answerQuestion','workbench.closeQuestion','workbench.questionContext','workbench.questionMismatch','workbench.questionDelegate','workbench.confirmDelegation'].includes(String(value.kind))) {
       const receipt = app.store.get<SentQuestion>(sentQuestions,digest([bot.id,groupReadBinding(bot,paired),input.messageId]));
       const question = receipt && receipt.navigation === value.navigation && receipt.messageId === input.messageId &&
         receipt.questionId === value.id && receipt.version === value.version && liveQuestion(receipt,bot,paired);
@@ -1290,7 +1290,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       });
       return { toast: { type: 'success', content: '已选择执行会话。后续消息将为该会话申请输入审批，发送 /main 切回主对话。' } };
     }
-    if (value.kind === 'workbench.questionForm' || value.kind === 'workbench.answerQuestion' || value.kind === 'workbench.closeQuestion' || value.kind === 'workbench.questionContext' || value.kind === 'workbench.questionMismatch') {
+    if (value.kind === 'workbench.questionForm' || value.kind === 'workbench.answerQuestion' || value.kind === 'workbench.closeQuestion' || value.kind === 'workbench.questionContext' || value.kind === 'workbench.questionMismatch' || value.kind === 'workbench.questionDelegate' || value.kind === 'workbench.confirmDelegation') {
       const service = app.interactions;
       const question = typeof value.id === 'string' && app.store.get<Card>('interactions',value.id);
       if (!service || !question || !canViewQuestion(bot,paired,question) || question.kind !== 'question' || question.handler !== 'user' || question.version !== value.version ||
@@ -1318,12 +1318,24 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         if (!receipt || receipt.messageId !== input.messageId || receipt.navigation !== value.navigation ||
             receipt.questionId !== question.id || !liveQuestion(receipt,bot,paired)) return fail;
       }
-      if (value.kind === 'workbench.questionContext' || value.kind === 'workbench.questionMismatch') {
+      if (value.kind === 'workbench.questionContext' || value.kind === 'workbench.questionMismatch' || value.kind === 'workbench.questionDelegate' || value.kind === 'workbench.confirmDelegation') {
         const key = digest([bot.id,groupReadBinding(bot,paired),input.messageId]);
         const receipt = app.store.get<SentQuestion>(sentQuestions,key);
         if (!runtime(bot.id).adapter?.updateCard || !question.runId || !question.decisionDeadlineAt ||
             !grant || grant.webOnly || !receipt || receipt.navigation !== value.navigation || receipt.questionId !== question.id ||
             !liveQuestion(receipt,bot,paired)) return fail;
+        if (value.kind === 'workbench.questionDelegate' || value.kind === 'workbench.confirmDelegation') {
+          const confirm = value.kind === 'workbench.confirmDelegation';
+          if (!service.delegateDecision || !service.confirmDelegation || (confirm ? !question.ownerConfirmation || typeof value.accept!=='boolean' : !!question.delegationRequestedAt)) return fail;
+          const decide=async()=>{
+            const result=confirm
+              ? await service.confirmDelegation!(question.id,question.version,value.accept as boolean,'user_feishu')
+              : await service.delegateDecision!(question.id,question.version);
+            refreshContextForms(result.id,[receipt]);
+          };
+          void track(bot.id,decide());
+          return {toast:{type:'info',content:confirm?'正在记录你的确认，请查看原卡。':'已请求督办决定，请查看原卡。'}};
+        }
         if (value.kind === 'workbench.questionMismatch') {
           if (!service.reportMismatch) return fail;
           const report = async () => {
@@ -2279,8 +2291,15 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     return q;
   }
   const contextUpdates = new Map<string,Promise<void>>();
+  const formFingerprint=(card:Card)=>digest([card.version,card.decisionExplanation,card.delegationRequestedAt,card.decisionAssumption,card.ownerConfirmation,card.delivery]);
+  function originalFormActions(adapter:FeishuBotAdapter) {
+    const service=app.interactions;
+    return adapter.updateCard && service ? {context:!!service.requestContext,mismatch:!!service.reportMismatch,
+      delegate:!!service.delegateDecision && !!service.confirmDelegation} : {};
+  }
   function refreshContextForms(id:string, known?:SentQuestion[]) {
-    if (!app.store.get<Card>('interactions',id)?.contextRequestedAt) return;
+    const latest=app.store.get<Card>('interactions',id);
+    if (!latest?.contextRequestedAt && !latest?.delegationRequestedAt) return;
     for (const original of known ?? app.store.list<SentQuestion>(sentQuestions)) {
       if (original.questionId!==id || original.webOnly) continue;
       const key=digest([original.botId,original.binding,original.messageId]);
@@ -2290,15 +2309,20 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         const bot=current(original.botId), paired=owner(bot), state=runtime(bot.id), adapter=state.adapter, epoch=state.epoch;
         const receipt=app.store.get<SentQuestion>(sentQuestions,key);
         const question=app.store.get<Card>('interactions',id);
-        if (!receipt || !paired || !question?.contextRequestedAt || !question.runId || !question.decisionDeadlineAt || !adapter?.updateCard) return;
+        if (!receipt || !paired || !question || (!question.contextRequestedAt && !question.delegationRequestedAt) || !question.runId || !question.decisionDeadlineAt || !adapter?.updateCard) return;
         const updated={...receipt,version:question.version};
+        const answered = !!question.delegationRequestedAt && question.status==='answered';
         const authorized=()=>active(bot.id,epoch,bot.revision) && state.adapter===adapter && state.readyEpoch===epoch && adapter.status().connected &&
-          !!liveQuestion(updated,bot,paired) && owner(bot)?.senderId===paired.senderId && owner(bot)?.chatId===paired.chatId;
+          (answered ? groupReadBinding(bot,paired)===receipt.binding && !!privateTurn(bot,paired,receipt.inputId) &&
+            app.store.get<{inputId?:string}>('interaction-origins',id)?.inputId===receipt.inputId &&
+            app.store.get<Card>('interactions',id)?.version===question.version &&
+            !groupTasks.recalled(bot.id,bot.appId,paired.chatId,receipt.messageId) : !!liveQuestion(updated,bot,paired)) && owner(bot)?.senderId===paired.senderId && owner(bot)?.chatId===paired.chatId;
         if (!authorized()) return;
-        const {card,acceptsAnswer}=questionForm(question,receipt.navigation,webBase,true,!!app.interactions?.reportMismatch);
-        const fingerprint=digest([question.version,question.decisionExplanation]);
+        const {card,acceptsAnswer}=answered ? {card:delegatedQuestionCard(question),acceptsAnswer:false} :
+          questionForm(question,receipt.navigation,webBase,originalFormActions(adapter));
+        const fingerprint=formFingerprint(question);
         if (receipt.contextFingerprint===fingerprint) return;
-        const payload={botId:bot.id,accountId:bot.appId,chatId:paired.chatId,target:paired.chatId,text:publicText(question.decisionExplanation,2400),key:'question-context:'+key+':'+fingerprint};
+        const payload={botId:bot.id,accountId:bot.appId,chatId:paired.chatId,target:paired.chatId,text:[question.decisionExplanation,question.ownerConfirmation,question.decisionAssumption,question.delivery].filter(Boolean).map(value=>publicText(value,2400)).join('\n'),key:'question-context:'+key+':'+fingerprint};
         const patch=async(value:Json)=>{
           if (!authorized() || !value || typeof value!=='object' || Array.isArray(value) || Object.entries(payload).some(([k,v])=>value[k]!==v))
             throw noDelivery('问题卡或原配对已变化。');
@@ -2308,7 +2332,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         if (app.plugins?.invocations) await app.plugins.invocations.invoke('channel.send',payload,patch); else await patch(payload);
         if (!authorized()) return;
         app.store.transaction(()=>{
-          app.store.put(sentQuestions,key,{...updated,contextFingerprint:fingerprint,...(!acceptsAnswer && {webOnly:true})});
+          app.store.put(sentQuestions,key,{...updated,contextFingerprint:fingerprint,...(!acceptsAnswer && !answered && {webOnly:true})});
           const cap=app.store.get<CardNavigation>('feishu.card.navigation',receipt.navigation);
           if (cap?.questionForm?.messageId===receipt.messageId) app.store.put('feishu.card.navigation',receipt.navigation,
             {...cap,questionForm:{id,version:question.version,messageId:receipt.messageId,...(!acceptsAnswer && {webOnly:true})}});
@@ -2356,14 +2380,14 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   }
   async function remindDeadline(bot:FeishuBotSettings,paired:Owner,card:SentQuestion,question:Card) {
     const state=runtime(bot.id), adapter=state.adapter, epoch=state.epoch;
-    if (question.contextRequestedAt || !adapter || state.readyEpoch!==epoch || !active(bot.id,epoch,bot.revision) || !adapter.status().connected || !app.effects) return;
+    if (question.contextRequestedAt || question.delegationRequestedAt || !adapter || state.readyEpoch!==epoch || !active(bot.id,epoch,bot.revision) || !adapter.status().connected || !app.effects) return;
     const replyKey=digest(['question-deadline',question.id,question.decisionDeadlineAt]).slice(0,32);
     const key='deadline-'+replyKey;
     if (app.store.get('effects',key)) return;
     const guard=()=>{
       const live=liveQuestion(card,bot,paired);
       if (!active(bot.id,epoch,bot.revision) || state.adapter!==adapter || owner(bot)?.senderId!==paired.senderId ||
-          owner(bot)?.chatId!==paired.chatId || live?.contextRequestedAt || live?.deadlineRemindedAt!==question.deadlineRemindedAt)
+          owner(bot)?.chatId!==paired.chatId || live?.contextRequestedAt || live?.delegationRequestedAt || live?.deadlineRemindedAt!==question.deadlineRemindedAt)
         throw noDelivery('提问或原私聊绑定已变化。');
     };
     const text='提问已到截止时间：'+Array.from(question.title).slice(0,120).join('')+'。仍需你在原卡回答，未采用推荐选项。';
@@ -2379,7 +2403,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const cards=app.store.list<SentQuestion>(sentQuestions).filter(card=>{
       if(Date.parse(card.sentAt)>=oldest)return true;
       const question=app.store.get<Card>('interactions',card.questionId);
-      if (question?.decisionDeadlineAt && (question.status==='open' || (question.withdrawnReason==='owner_mismatch' && !card.closeAttempted))) return true;
+      if (question?.decisionDeadlineAt && (question.status==='open' || (question.status==='answered' && question.delegationRequestedAt && !card.webOnly && formFingerprint(question)!==card.contextFingerprint) || (question.withdrawnReason==='owner_mismatch' && !card.closeAttempted))) return true;
       app.store.remove?.(sentQuestions,digest([card.botId,card.binding,card.messageId]));
       return false;
     });
@@ -2395,9 +2419,9 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       for (const card of bound) {
         // An edit may have been interrupted after Web stored the explanation.
         const current=app.store.get<Card>('interactions',card.questionId);
-        if (current?.status==='open' && current.contextRequestedAt && !card.webOnly && digest([current.version,current.decisionExplanation])!==card.contextFingerprint) refreshContextForms(current.id,[card]);
+        if (current && ((current.status==='open' && (current.contextRequestedAt || current.delegationRequestedAt)) || (current.status==='answered' && current.delegationRequestedAt)) && !card.webOnly && formFingerprint(current)!==card.contextFingerprint) refreshContextForms(current.id,[card]);
         const question=liveQuestion(card,bot,paired);
-        if (!question || question.contextRequestedAt) continue;
+        if (!question || question.contextRequestedAt || question.delegationRequestedAt) continue;
         if (question.deadlineRemindedAt && question.reversible === false) await remindDeadline(bot,paired,card,question);
         else if (!question.decisionDeadlineAt || Date.parse(question.decisionDeadlineAt)>Date.now()) waiting.push(card);
       }
@@ -2411,7 +2435,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         if(!claim)continue;
         const guard=()=>{
           const now=current(bot.id),ownerNow=owner(now);
-          if(!active(bot.id,epoch,bot.revision) || state.adapter!==adapter || !ownerNow || !liveQuestion(card,now,ownerNow) || app.store.get<Card>('interactions',card.questionId)?.contextRequestedAt ||
+          if(!active(bot.id,epoch,bot.revision) || state.adapter!==adapter || !ownerNow || !liveQuestion(card,now,ownerNow) || app.store.get<Card>('interactions',card.questionId)?.contextRequestedAt || app.store.get<Card>('interactions',card.questionId)?.delegationRequestedAt ||
             (now.decisionNudgeMinutes ?? 60)!==after || decisionQuietNow(app.store,new Date()))
             throw noDelivery('问题卡片或提醒设置已变化。');
         };
@@ -3066,7 +3090,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         const q = app.store.get<Card>('interactions',stamp.questionId);
         if (q?.kind === 'question' && canViewQuestion(bot,paired,q) && q.handler === 'user' && q.status === 'open' && cardAcceptsAnswer(q)) {
           const navigationId=navigation(bot,paired,entry.id)!;
-          const {card, acceptsAnswer} = questionForm(q, navigationId, webBase, !!app.interactions.requestContext && !!adapter.updateCard, !!app.interactions.reportMismatch && !!adapter.updateCard);
+          const {card, acceptsAnswer} = questionForm(q, navigationId, webBase, originalFormActions(adapter));
           context.card = card;
           if (acceptsAnswer || q.wait === false || q.decisionDeadlineAt) {
             const previous = context.onSent;

@@ -81,6 +81,22 @@ test('direct human answers to the exact run enter task history, including answer
   assert.ok(!service.list('todo').some(row=>row.id===answer.id));
 });
 
+test('交接仅引用已送达的受托选择并标明督办依据，主人可撤回', t=>{
+  const {store,service}=fixture(t);
+  const card={id:'delegated',runId:'run',projectId:'project',title:'草稿顺序',body:'',kind:'question',status:'answered',
+    answeredBy:'supervisor_delegated',reversible:true,externallyVisible:false,decisionDeadlineAt:'2026-11-01',expiresAt:'2026-11-01',
+    delegationRequestedAt:'2026-10-31',answeredAt:'2026-11-02',answer:'按月份',decisionAssumption:'这份草稿只用于内部核对'};
+  store.put('interactions',card.id,{...card,delivery:'unknown'});
+  assert.equal(service.context('todo'),'');
+  store.put('interactions',card.id,{...card,delivery:'confirmed'});
+  const [row]=service.list('todo');
+  assert.equal(row?.source,'delegated');
+  assert.match(service.context('todo'),/受托督办决定/);
+  assert.match(service.context('todo'),/只用于内部核对/);
+  assert.equal(service.withdraw('todo',row.id).active,false);
+  assert.equal(service.context('todo'),'');
+});
+
 test('executor receives current task ledger decisions and drops withdrawn ones on the next dispatch', async t => {
   const dataDir = await mkdtemp(join(tmpdir(), 'todo-decisions-'));
   const app = await createWorkbench({ host: '127.0.0.1', port: 0, dataDir, demo: true });

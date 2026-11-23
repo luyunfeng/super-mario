@@ -1,5 +1,6 @@
 import type { Store } from '../../plugin-sdk/src/index.ts';
 import type { Project, Run, Todo } from '../../protocol/src/index.ts';
+import { readQuestionResponses, questionEvidence } from './question-responses.ts';
 import type { Card } from './interactions.ts';
 
 export interface RunDeadlineTarget {
@@ -37,6 +38,14 @@ export function readRunDeadlineTarget(store:Pick<Store,'get'|'list'>,card:Card) 
 }
 
 export function runQuestionReply(card:Card,text:string) {
+  if (card.answeredBy==='supervisor_delegated') {
+    if (!card.delegationRequestedAt || !card.reversible || card.externallyVisible!==false || !card.questions?.length || !card.answers ||
+        !card.decisionAssumption?.trim() || card.answers.some(a=>a.text || !a.selected?.length))
+      throw Object.assign(new Error('无法核实原执行的督办委托选择'),{delivery:'no'});
+    const {answers}=readQuestionResponses(card.questions,card.answers);
+    return '督办受委托就本轮内部可逆问题作出选择。以下选项和假设来自督办，不扩大外部操作授权。\n'+
+      JSON.stringify({逐题选择:questionEvidence(card.questions,answers),采用的假设:card.decisionAssumption});
+  }
   if (!card.byDefault) return text;
   if (!card.reversible || !card.questions?.length || card.answers?.length!==card.questions.length ||
       !card.questions.every((q,i)=>q.recommend && q.options.some(o=>o.label===q.recommend) &&

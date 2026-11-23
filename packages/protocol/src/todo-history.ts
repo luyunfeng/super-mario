@@ -12,7 +12,7 @@ export interface TodoExecutionRound {
   run: Pick<Run, 'id' | 'executorId' | 'prompt' | 'status' | 'createdAt' | 'updatedAt' | 'doneWhen' | 'output' | 'error' | 'resultSource'>;
   outputTruncated: boolean;
   review?: ExecutionReviewEvidence;
-  answerReceipts: Array<{ cardId: string; title: string; answeredAt?: string; answeredBy?: string;
+  answerReceipts: Array<{ cardId: string; title: string; answeredAt?: string; answeredBy?: string; delegatedAnswer?:string; decisionAssumption?:string;
     target: 'executor' | 'workbench'; delivery: 'confirmed' | 'failed' | 'unknown' }>;
   decisions: Array<{ action: 'accept' | 'rework'; defects?: string; at?: string; receiptUpdatedAt: string; reworkRunId?: string; dispatchStatus?: 'dispatching' | 'unknown'; dispatchNote?: string }>;
 }

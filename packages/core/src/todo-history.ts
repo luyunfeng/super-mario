@@ -42,6 +42,7 @@ export function readTodoHistory(store: Pick<Store, 'get' | 'list'>, id: string, 
       outputTruncated: run.output.length > 4000,
       answerReceipts: answered.filter(card => card.runId === run.id).map(card => ({
         cardId: card.id, title: card.title, answeredAt: card.answeredAt, answeredBy: card.answeredBy,
+        ...(card.answeredBy === 'supervisor_delegated' && {delegatedAnswer:card.answer,decisionAssumption:card.decisionAssumption}),
         target: card.kind === 'question' || card.kind === 'permission' ? 'executor' : 'workbench',
         delivery: card.delivery ?? 'unknown',
       })),

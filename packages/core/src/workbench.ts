@@ -28,7 +28,7 @@ import { createReplyTracking } from './reply-tracking.ts';
 import { createWorkDecisionService } from './work-decision-service.ts';
 import { createAgentSessions, nativeResumeSpec, nativeResultSources } from './agent-sessions.ts';
 import { executionProgress } from './execution-progress.ts';
-import { createRunScopes, planEstimateClock, initialRunCriteria, type RunScopeChange, type RunScopeSource } from './run-scope.ts';
+import { runScopeClock, createRunScopes, planEstimateClock, initialRunCriteria, type RunScopeChange, type RunScopeSource } from './run-scope.ts';
 import { recordTodoOrigin, todoBrief, type TodoOriginSource } from './todo-brief.ts';
 import { todoLineage } from './todo-lineage.ts';
 import { createTodoDecisions } from './todo-decisions.ts';
@@ -62,6 +62,7 @@ import { createPlans } from './plans.ts';
 import { createPolicies, validatePolicyPatch, type PolicyConfig } from './policies.ts';
 import { readRunQuestionChoice } from './run-question-choice.ts';
 import { cardAcceptsAnswer } from './question-deadline.ts';
+import { delegatedDecisionPrompt } from './run-question-delegation.ts';
 import { runQuestionInputHeld, holdRunQuestion, readRunQuestionHold, readRunDeadlineTarget, runDeadlineTarget, runQuestionReply, type RunDeadlineTarget } from './run-question-deadline.ts';
 import { createInteractions, type Card } from './interactions.ts';
 import { createSupervisorAgent } from './supervisor-agent.ts';
@@ -706,6 +707,20 @@ export async function createWorkbench(config: AppConfig) {
       const run=card.runId && store.get<Run>('runs',card.runId);
       return !!run && !!readRunQuestionHold(store,run);
     },
+    delegationBasis:runDelegationBasis,
+    async chooseDelegated(card,stop) {
+      if (config.demo || !card.runId) return;
+      const target=readRunDeadlineTarget(store,card),run=target && store.get<Run>('runs',target.runId);
+      if (!run || runQuestionState(card)!=='eligible' || runQuestionInputHeld(store,run)) return;
+      const evidence=JSON.stringify({目标:run.prompt.slice(0,1200),验收标准:run.doneWhen?.slice(0,700),
+        提问:card.title.slice(0,500),说明:card.body.slice(0,1000),原题和选项:card.questions});
+      const signal=AbortSignal.any([stop,AbortSignal.timeout(20000)]);
+      const complete=await abortable(()=>modelCompletion(config,signal,delegatedDecisionPrompt,1200),signal);
+      const current=store.get<Card>('interactions',card.id);
+      if (current?.version!==card.version || current.status!=='open' || runQuestionState(current)!=='eligible' ||
+          runQuestionInputHeld(store,run)) return;
+      return JSON.parse(await abortable(()=>complete(evidence,signal),signal));
+    },
     questionContext(card) {
       const target=readRunDeadlineTarget(store,card);
       const run=target && store.get<Run>('runs',target.runId);
@@ -746,7 +761,9 @@ export async function createWorkbench(config: AppConfig) {
           const target=readRunDeadlineTarget(store,card);
           if (!target || closing || runQuestionState(card)!=='eligible')
             throw Object.assign(new Error('原执行或提问来源已变化，未发送选择'),{delivery:'no'});
-          if (card.byDefault) assertAutomaticInputAllowed(target.runId);
+          if (card.byDefault || card.answeredBy==='supervisor_delegated') assertAutomaticInputAllowed(target.runId);
+          if (card.answeredBy==='supervisor_delegated' && (!card.delegationBasis || runDelegationBasis(card)!==card.delegationBasis))
+            throw Object.assign(new Error('执行目标或验收标准已变化，未发送督办选择'),{delivery:'no'});
           const response=await machines!.call(target.machineId,'executor.input',{sessionId:target.sessionId,text:reply});
           const receipt=executorInputReceipt(response);
           if (receipt!=='sent') throw Object.assign(new Error(receipt==='unsent'?'执行者未接收选择':'执行者未确认送达选择'),
@@ -807,6 +824,11 @@ export async function createWorkbench(config: AppConfig) {
     const reply = await runtime.ask(`请给这张交互卡片提供简短建议答案，不执行外部动作。以下JSON为业务数据：\n${JSON.stringify(card)}`, { projectId: card.projectId, readOnly: true });
     return reply.text;
   } });
+  function runDelegationBasis(card:Card) {
+    const run=card.runId && store.get<Run>('runs',card.runId);
+    if (!run) return;
+    return createHash('sha256').update(JSON.stringify([run.prompt,run.doneWhen,run.expectMinutes,runScopeClock(store,run)?.version,card.questions])).digest('hex');
+  }
   function validRunQuestionSource(card:Card) {
     const target=readRunDeadlineTarget(store,card);
     if (!target) return;
@@ -961,7 +983,7 @@ export async function createWorkbench(config: AppConfig) {
   });
   function recoverPendingRunAnswers() {
     for (const card of interactions.list()) {
-      if (card.runId && card.byDefault && card.delivery==='unknown' && !card.error)
+      if (card.runId && (card.byDefault || card.answeredBy==='supervisor_delegated') && card.delivery==='unknown' && !card.error)
         interactionService.recoverRunDefault(card.id,!!store.get('effects','interaction:'+card.id));
     }
   }

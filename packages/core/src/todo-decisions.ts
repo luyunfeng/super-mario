@@ -7,14 +7,14 @@ import { responsibleSessionTodos } from './responsible-session.ts';
 import { randomUUID } from 'node:crypto';
 import type { Card } from './interactions.ts';
 
-type UserDecision = { id: string; text: string; source: 'manual' | 'answer' | 'topic'; sourceId?: string; active: boolean };
+type RecordedDecision = { id: string; text: string; source: 'manual' | 'answer' | 'topic' | 'delegated'; sourceId?: string; active: boolean };
 type AgentRecord = {
   id: string; todoId: string; projectId?: string; runId: string; machineId: string; sessionId: string;
   question: string; choice: string; reason?: string; supersedesId?: string; createdAt: string; active: boolean;
 };
 type AgentDecision = Pick<AgentRecord, 'id'|'question'|'choice'|'reason'|'supersedesId'|'createdAt'|'active'> &
   { text: string; source: 'agent'; sourceId: string };
-type Decision = UserDecision | AgentDecision;
+type Decision = RecordedDecision | AgentDecision;
 const agentRecords = 'todo.agent-decisions';
 
 function agentView(row: AgentRecord): AgentDecision {
@@ -38,6 +38,7 @@ const credential = /密码|口令|验证码|校验码|动态码|密钥|秘钥|�
 
 function sourceLabel(row: Decision): string {
   if (row.source === 'agent') return `工作者决定 ${row.id}，来源执行 ${row.sourceId}`;
+  if (row.source === 'delegated') return `受托督办决定，问答卡 ${row.sourceId}`;
   if (row.source === 'answer') return `主人回答，问答卡 ${row.sourceId}`;
   if (row.source === 'topic') return `飞书话题主人决定 ${row.id}，来源消息 ${row.sourceId}`;
   return `主人工作决定 ${row.id}，来源消息 ${row.sourceId}`;
@@ -80,18 +81,22 @@ export function createTodoDecisions(store: Store, workDecisions: Ledger) {
       return decision(fact);
     });
     for (const card of store.list<Card>('interactions')) {
-      // user_chat is authored by the model's answer tool. Only a direct user answer is evidence.
+      // Carry a supervisor decision into later work only after the worker confirmed delivery.
+      const delegated = card.answeredBy === 'supervisor_delegated' && card.delivery === 'confirmed' &&
+        card.reversible === true && card.externallyVisible === false && !!card.decisionAssumption?.trim() &&
+        Date.parse(card.delegationRequestedAt ?? '') <= Date.parse(card.answeredAt ?? '');
+      if (!delegated && !['user','user_feishu'].includes(card.answeredBy ?? '')) continue;
       if (card.kind !== 'question' || !card.runId || !runs.has(card.runId) || card.projectId !== todo.projectId ||
-          card.status !== 'answered' || !['user','user_feishu'].includes(card.answeredBy ?? '') || !card.answer?.trim()) continue;
+          card.status !== 'answered' || !card.answer?.trim()) continue;
       // A paused default or a reminder leaves the same run question open for a later human answer.
       const answeredAt = Date.parse(card.answeredAt ?? '');
-      const keptOpen = card.decisionDeadlineAt && [card.contextRequestedAt,card.deadlineRemindedAt]
+      const keptOpen = card.decisionDeadlineAt && [card.contextRequestedAt,card.deadlineRemindedAt,card.delegationRequestedAt]
         .some(at => at && Date.parse(at) <= answeredAt);
       if (!(answeredAt < Date.parse(card.expiresAt) || keptOpen)) continue;
-      if ([card.title, card.body, card.answer].some(value => credential.test(value))) continue;
+      if ([card.title, card.body, card.answer, card.decisionAssumption ?? ''].some(value => credential.test(value))) continue;
       times?.set('answer:' + card.id, card.answeredAt!);
-      decisions.push({ id: 'answer:' + card.id, text: card.title + '：' + card.answer.trim(),
-        source: 'answer', sourceId: card.id, active: !store.get(withdrawals, withdrawalKey(todo, card.id)) });
+      decisions.push({ id: 'answer:' + card.id, text: card.title + '：' + card.answer.trim() + (delegated ? '\n依据：'+card.decisionAssumption : ''),
+        source: delegated ? 'delegated' : 'answer', sourceId: card.id, active: !store.get(withdrawals, withdrawalKey(todo, card.id)) });
     }
     for (const row of store.list<AgentRecord>(agentRecords)) {
       if (row.todoId !== todoId || row.projectId !== todo.projectId) continue;
@@ -107,7 +112,7 @@ export function createTodoDecisions(store: Store, workDecisions: Ledger) {
     const sourcesByText = new Map<string, string[]>();
     for (const decision of list(todoId)) {
       if (!decision.active) continue;
-      const source = decision.source === 'agent' ? `工作者决定 ${decision.id}，来源执行 ${decision.sourceId}` : decision.source === 'answer' ? `问答卡 ${decision.sourceId}` : `工作决定 ${decision.id}，来源消息 ${decision.sourceId}`;
+      const source = sourceLabel(decision);
       const sources = sourcesByText.get(decision.text);
       if (sources) sources.push(source);
       else sourcesByText.set(decision.text, [source]);

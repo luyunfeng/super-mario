@@ -61,6 +61,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
             h('a', { href: /^#chat\?(interaction|approval)=[A-Za-z0-9_-]+$/.test(item.href) ? item.href : '#chat' }, item.title),
             h('span', { class: 'small muted' }, ` · ${formatDate(item.createdAt, true)}`),
             item.decisionContext && h('div', { class: 'small' }, item.decisionContext),
+            item.ownerConfirmation && h('div', {class:'small'}, item.ownerConfirmation),
             item.decisionExplanation && h('div', { class: 'small' }, item.decisionExplanation),
             item.decisionDeadlineAt && h('div', { class: 'small' }, questionDeadlineText(item)),
             item.questions?.map(q => h('div', { class: 'small' }, h('strong', null, q.question),

@@ -351,10 +351,11 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
     ...(view === 'questions' && { questionRows:questions.slice(page * pageSize, (page + 1) * pageSize).map(q => ({id:q.id,version:q.version})) }) };
 }
 
-export function deadlineInfo(question: Pick<Card,'decisionDeadlineAt'|'reversible'|'deadlineRemindedAt'|'wait'|'contextRequestedAt'>) {
+export function deadlineInfo(question: Pick<Card,'decisionDeadlineAt'|'reversible'|'deadlineRemindedAt'|'wait'|'contextRequestedAt'|'delegationRequestedAt'>) {
   const deadline = new Date(question.decisionDeadlineAt!);
   if (!Number.isFinite(deadline.getTime())) return '';
   const time = deadline.toLocaleString('zh-CN', {timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}) + '（北京时间）';
+  if (question.delegationRequestedAt) return '原决定截止时间 ' + time + '。已暂停到期默认选择。';
   if (question.contextRequestedAt) return '原决定截止时间 ' + time + '。已暂停到期默认选择，请阅读背景后亲自回答。';
   if (question.deadlineRemindedAt) return '已过决定截止时间 ' + time + '，仍需你亲自回答。';
   if (question.wait === false) return '决定截止时间 ' + time + '。若期间在原对话另发消息，到期将关闭提问。' + (question.reversible ? '若未另发消息或答卡，到期将采用每题的推荐选项。' : '若未另发消息或答卡，到期只提醒一次，仍需你亲自决定。');
@@ -362,7 +363,7 @@ export function deadlineInfo(question: Pick<Card,'decisionDeadlineAt'|'reversibl
 }
 const compactQuestion = (question: Card) => question.questions?.length === 1 && !question.questions[0].multiSelect && question.questions[0].options.length <= 4
   && question.questions[0].options.every(option => [...option.label].length <= 30);
-export function questionForm(question: Card, navigation: string, webBase?: string, allowContext = false, allowMismatch = false) {
+export function questionForm(question: Card, navigation: string, webBase?: string, actions: {context?:boolean;mismatch?:boolean;delegate?:boolean} = {}) {
   const later = '这道题可稍后回答。你可以继续在原对话聊天；要回答这张卡时，请通过表单提交。';
   const deadline = question.decisionDeadlineAt && deadlineInfo(question);
   const submit = {kind:'workbench.answerQuestion',navigation,id:question.id,version:question.version};
@@ -380,10 +381,18 @@ export function questionForm(question: Card, navigation: string, webBase?: strin
   if (question.wait === false) elements.push({tag:'div',text:cardPlain(later)});
   const explanation = question.contextRequestedAt && question.decisionExplanation && cardPlain(publicText(question.decisionExplanation,2400));
   if (explanation) elements.push({tag:'div',text:explanation});
-  else if (allowContext && question.runId && question.decisionDeadlineAt && !question.contextRequestedAt)
+  else if (actions.context && question.runId && question.decisionDeadlineAt && !question.contextRequestedAt)
     elements.push({tag:'button',text:cardPlain('先告诉我背景'),behaviors:callback({...submit,kind:'workbench.questionContext'})});
-  if (allowMismatch && question.runId && question.decisionDeadlineAt)
+  if (actions.mismatch && question.runId && question.decisionDeadlineAt)
     elements.push({tag:'button',text:cardPlain('这不是我要的'),behaviors:callback({...submit,kind:'workbench.questionMismatch'})});
+  if (actions.delegate && question.runId && question.decisionDeadlineAt && !question.delegationRequestedAt)
+    elements.push({tag:'button',text:cardPlain('你来定'),behaviors:callback({...submit,kind:'workbench.questionDelegate'})});
+  if (question.decisionAssumption) elements.push({tag:'div',text:cardPlain('督办依据：'+publicText(question.decisionAssumption,900))});
+  if (question.ownerConfirmation) {
+    elements.push({tag:'div',text:cardPlain(publicText(question.ownerConfirmation,1200))});
+    if (actions.delegate) for (const [accept,label] of [[true,'是，采用推荐选项'],[false,'否，返回原题']] as const)
+      elements.push({tag:'button',text:cardPlain(label),behaviors:callback({...submit,kind:'workbench.confirmDelegation',accept})});
+  } else if (question.delegationRequestedAt) elements.push({tag:'div',text:cardPlain('仍可在原题选择或填写答案。')});
   const fields: Record<string, unknown>[] = [];
   const input = (name: string, hint: string) => ({tag:'input',name,width:'fill',input_type:'multiline_text',rows:2,max_length:1000,placeholder:cardPlain(hint)});
   const compact = compactQuestion(question);
@@ -420,6 +429,17 @@ export function questionForm(question: Card, navigation: string, webBase?: strin
     if (explanation.content !== full) explanation.content += '…';
   }
   return Buffer.byteLength(JSON.stringify(card)) <= 24000 ? {card, acceptsAnswer:true} : web();
+}
+
+export function delegatedQuestionCard(question:Card) {
+  const delivery = question.delivery==='confirmed' ? '执行机已确认收到。' : question.delivery==='failed' ? '回答未送达，请核对执行状态。' :
+    question.delivery==='unknown' ? '执行机是否收到尚未确认。' : '正在等待执行机回执。';
+  const lines=[publicText(question.title,180), ...(question.questions??[]).flatMap((q,i)=>{
+    const answer=question.answers?.[i];
+    return answer ? [publicText(q.question,150)+'：'+publicText([...answer.selected,answer.text].filter(Boolean).join('、'),240)] : [];
+  }), ...(question.decisionAssumption ? ['督办依据：'+publicText(question.decisionAssumption,1000)] : []),delivery];
+  return {schema:'2.0',header:{template:'blue',title:cardPlain(question.answeredBy==='supervisor_delegated'?'督办已代选':'已记录你的选择')},
+    body:{elements:lines.map(text=>({tag:'div',text:cardPlain(text)}))}};
 }
 
 // Callback values are only indexes. Labels and question order always come from the versioned stored card.

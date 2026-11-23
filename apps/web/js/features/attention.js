@@ -71,6 +71,23 @@ export function createAttention({ api, store, task = false }) {
   }
 
   function resultNote(result, action) {
+    const confirmDelegation = action.path.endsWith('/confirm-delegation');
+    if (confirmDelegation && !action.body.accept && result?.status === 'open')
+      return { text: '已保留原问题，请自行选择。', open: true };
+    if (action.path.endsWith('/delegate') || confirmDelegation) {
+      if (result?.status === 'open') return { text: result.ownerConfirmation ? '仍需你亲自确认，请核对原卡。' : '请在原卡核对并回答。', open: true };
+      if (result?.status === 'answered') {
+        const receipt = result.delivery === 'confirmed' ? '原执行会话已确认接收。' :
+          result.delivery === 'failed' ? '未能送达原执行会话。' : '送达结果未知，请先核对回执。';
+        const choices = result.questions?.flatMap((question, index) => {
+          const selected = result.answers?.[index]?.selected;
+          return selected?.length ? [question.question + '：' + selected.join('、')] : [];
+        });
+        return { text: [choices?.join('；'), result.decisionAssumption && '决定依据：' + result.decisionAssumption, receipt].filter(Boolean).join(' '),
+          toast: true, tone: result.delivery === 'confirmed' ? undefined : 'danger' };
+      }
+      return { text: '决定结果未知，请核对原卡和执行回执。', tone: 'danger', toast: true };
+    }
     if (result?.status === 'answered') {
       if (result.delivery === 'failed') return { text: '回答已记录，后续处理失败。', tone: 'danger' };
       if (result.delivery !== 'confirmed') return { text: '回答已记录，后续处理结果未知。请核对回执。', tone: 'danger' };
@@ -135,10 +152,10 @@ export function createAttention({ api, store, task = false }) {
       try {
         const result = await api(action.path, { method: action.method, body: { ...action.body, ...(answers ? { answers } : action.requiresText ? { text } : {}) } });
         const outcome = resultNote(result, action);
-        if (outcome.toast) toast(outcome.text);
+        if (outcome.toast) toast(outcome.text, outcome.tone);
         note.textContent = outcome.text;
         note.className = `small ${outcome.tone === 'danger' ? 'text-danger' : 'muted'}`;
-        if (!outcome.retry) { done = true; actions.hidden = true; if (input) input.disabled = true; }
+        if (!outcome.retry && !outcome.open) { done = true; actions.hidden = true; if (input) input.disabled = true; }
       } catch (error) {
         note.textContent = error.status === 409 ? '原卡已更新，请核对当前状态。' : `提交没有成功：${error.message}。内容已保留。`;
         note.className = `small ${error.status === 409 ? 'muted' : 'text-danger'}`;
@@ -155,8 +172,9 @@ export function createAttention({ api, store, task = false }) {
         const requestsContext = action.path.endsWith('/context');
         if (requestsContext && requestedVersion === action.body.version) continue;
         const mismatch = action.path.endsWith('/mismatch');
-        actions.append(Button({ label: action.label, title: mismatch ? '退回原督办核对要求，暂停该执行的自动跟进' : undefined,
-          kind: mismatch || requestsContext || item.wait === false ? 'ghost' : index === 0 ? 'primary' : 'secondary', size: 'sm', onClick: () => submit(action), dataset: { action: action.label } }));
+        const delegate = action.path.endsWith('/delegate');
+        actions.append(Button({ label: action.label, title: mismatch ? '退回原督办核对要求，暂停该执行的自动跟进' : delegate ? '委托督办作出本次决定并记录依据' : undefined,
+          kind: delegate || mismatch || requestsContext || item.wait === false ? 'ghost' : index === 0 ? 'primary' : 'secondary', size: 'sm', onClick: () => submit(action), dataset: { action: action.label } }));
       }
       if (item.type === 'approval' && item.editable !== false && item.id.startsWith('approval:')) actions.append(Button({ label: '改一下', kind: 'ghost', size: 'sm', onClick: () => openEdit(item), dataset: { action: '改一下' } }));
       actions.hidden = done || !actions.childElementCount;
@@ -172,11 +190,17 @@ export function createAttention({ api, store, task = false }) {
     const deadline = item.decisionDeadlineAt && h('p', { class:'small', role:'status' }, questionDeadlineText(item));
     const explanation = h('p', { class:'small', hidden:!item.decisionExplanation });
     explanation.textContent = item.decisionExplanation ? '决定背景：' + item.decisionExplanation : '';
+    const assumption = h('p', {class:'small',hidden:!item.decisionAssumption});
+    assumption.textContent = item.decisionAssumption ? '决定依据：' + item.decisionAssumption : '';
+    const confirmation = h('p', {class:'small',hidden:!item.ownerConfirmation});
+    confirmation.textContent = item.ownerConfirmation ?? '';
+    const delegationError = h('p', {class:'small text-danger', role:'status', hidden:!item.delegationError});
+    delegationError.textContent = item.delegationError ?? '';
     const node = h('article', { class: `attn__card ${item.highRisk ? 'is-risk' : ''}`, tabindex: -1, dataset: { type: item.type, id: item.id } },
       h('header', { class: 'attn__top' },
         Pill(type.text, type.tone), item.highRisk && Pill('高风险', 'danger'),
         h('h3', { class: 'attn__title' }, item.title), h('span', { class: 'attn__time muted small' }, timeAgo(item.createdAt))),
-      context, deadline, explanation,
+      context, deadline, explanation, assumption, confirmation, delegationError,
       detail,
       questions?.el,
       textAction && h('div', { class: 'attn__reply' }, input, Button({ label: textAction.label, kind: 'primary', size: 'sm', onClick: () => submit(textAction), dataset: { action: textAction.label } })),
@@ -191,6 +215,12 @@ export function createAttention({ api, store, task = false }) {
       if (deadline) deadline.textContent = questionDeadlineText(item);
       explanation.hidden = !item.decisionExplanation;
       explanation.textContent = item.decisionExplanation ? '决定背景：' + item.decisionExplanation : '';
+      delegationError.hidden = !item.delegationError;
+      delegationError.textContent = item.delegationError ?? '';
+      confirmation.hidden = !item.ownerConfirmation;
+      confirmation.textContent = item.ownerConfirmation ?? '';
+      assumption.hidden = !item.decisionAssumption;
+      assumption.textContent = item.decisionAssumption ? '决定依据：' + item.decisionAssumption : '';
       paintActions();
     } };
   }
@@ -198,16 +228,17 @@ export function createAttention({ api, store, task = false }) {
   function renderCard(item) {
     const signature = JSON.stringify(item), previous = cards.get(item.id);
     if (previous?.signature === signature) return previous.node;
-    // Title, questions and scope are immutable during automatic release. Rebuild for
-    // other changes so an old selection cannot become an answer to a different question.
-    const { wait, actions, version, context, deadlineRemindedAt, contextRequestedAt, decisionExplanation, ...content } = item;
+    // Exclude routing, receipts and action versions from the identity of the original
+    // form. Changed questions or scope must never reuse an earlier selection.
+    const { wait, actions, version, context, deadlineRemindedAt, contextRequestedAt, decisionExplanation,
+      delegationRequestedAt, decisionAssumption, ownerConfirmation, delegationError, ...content } = item;
     const questionKey = item.type === 'interaction' && JSON.stringify(content);
-    if (previous && questionKey && questionKey === previous.questionKey && ((wait === false && previous.wait !== false) || deadlineRemindedAt !== previous.deadlineRemindedAt || contextRequestedAt !== previous.contextRequestedAt || decisionExplanation !== previous.decisionExplanation)) {
+    if (previous && questionKey && questionKey === previous.questionKey) {
       previous.release(item);
-      Object.assign(previous, { signature, wait, deadlineRemindedAt, contextRequestedAt, decisionExplanation });
+      previous.signature = signature;
       return previous.node;
     }
-    const card = { ...createCard(item), signature, wait, questionKey, deadlineRemindedAt, contextRequestedAt, decisionExplanation };
+    const card = { ...createCard(item), signature, questionKey };
     cards.set(item.id, card);
     return card.node;
   }

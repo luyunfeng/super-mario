@@ -241,7 +241,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         if (actions) {
           for (const [name, action, description, properties] of [
             ['todo_detail', actions.todoDetail, '按唯一待办 ID 读取当前备注、期限、提醒、等待对象、回复跟踪和已记录决定。reminderDeliveries 是当前提醒版本的飞书投递记录，仅含状态和更新时间。续办时，todo.continuesTodoId 是直接前序 ID，todo.continuationReason 是交接说明，todo.continuationRootId 是这条续办链的起点。lineage 列出当前可读的同一续办链各阶段，用 current 标出本项，按 continuesTodoId 识别分支。任务范围仅可查看本项。brief.origin 返回最早可核实的登记来源和登记内容；仅 origin.requestText 是有来源的交办原话摘录。brief.reconstructed 标明重建。brief.criteria 是按次派工的 doneWhen，按 todoId、runId 和 createdAt 核对。pendingRequests 是本事项当前等用户处理的交互卡。replyTracking 仅含本项目最近跟踪周期的状态与时间。active=false 的决定已撤回或已被替代。source=agent 是执行者自己的取舍，按 question、choice 和 reason 说明，用 supersedesId 核对替代关系。', { todoId: { type: 'string' } }],
-            ['todo_history', actions.todoHistory, '按待办读取最近20轮执行及用户验收或返工决定，decisions 是历史决定，review 是该轮当前验收状态，含返工派发回执。answerReceipts 给出该轮已记录答复的处理目标与状态。首页的 conversationReceipts 给出无执行轮次的对话答复及后续输入接收证据。读取更早记录时将 nextBefore 作为 before。', { todoId: { type: 'string' }, before: { type: 'string' } }],
+            ['todo_history', actions.todoHistory, '按待办读取最近20轮执行及用户验收或返工决定，decisions 是历史决定，review 是该轮当前验收状态，含返工派发回执。answerReceipts 给出该轮已记录答复的处理目标与状态。answeredBy 为 supervisor_delegated 表示督办受托选择，delegatedAnswer 与 decisionAssumption 分别记录选择与依据；仅按 delivery 报告是否送达。首页的 conversationReceipts 给出无执行轮次的对话答复及后续输入接收证据。读取更早记录时将 nextBefore 作为 before。', { todoId: { type: 'string' }, before: { type: 'string' } }],
             ['pending_decisions_list', actions.pendingDecisionsList, '查询等主人处理的待批申请、超时转待办的问题、待回答的交互、待启动计划、已归类的机器人收发确认、待处理的独立收件和等待主人补充信息的合并会话。按当前范围返回总数和标题，可用 nextOffset 续查。', { projectId: { type: 'string' }, todoId: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }],
             ['work_decisions_list', actions.workDecisionsList, '读取当前范围的工作决定及版本；不是原始聊天，纠正后旧版本不可沿用。', { projectId: { type: 'string' }, todoId: { type: 'string' } }],
             ['work_decision_record', actions.workDecisionRecord, '按当前真实用户明确要求记录一个工作决定摘要；必须提供稳定key和内容，不自动推断私聊决定。', { key: { type: 'string' }, text: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' } }],
@@ -287,6 +287,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             kind: { type: 'string', enum: ['question', 'permission', 'plan', 'review'] }, title: { type: 'string' }, body: { type: 'string' },
             wait: { type: 'boolean', description: '默认 true。仅在主人或当前工作指令明确允许稍后回答的普通提问中设为 false。卡片保留，本轮结束，答案稍后回到原会话。' },
             deadline: { type: 'string', description: '普通结构化问题的可选决定期限。针对原交互执行时同时指定核实过的 runId。用时长（如 90m、2h）或 RFC 3339 时间，范围为 1 分钟至 30 天。填写时必须明确 reversible，每题给出 recommend。' },
+            externallyVisible: { type: 'boolean', description: '原执行的决定会发给别人或改变别人可见的内容时填 true。只有确认所有选项仅影响私有工作时才填 false；不确定请省略，由本人确认。' },
             reversible: { type: 'boolean', description: '整个决定可撤回才为 true。涉及删除、对外发送、花钱或生产变更时填 false，到期仍等主人。' },
             questions: { type: 'array', minItems: 1, maxItems: 4, description: '仅用于普通问题。题目不能重复。', items: {
               type: 'object', additionalProperties: false, required: ['question','options'], properties: {
