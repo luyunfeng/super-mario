@@ -248,10 +248,12 @@ export function createSupervision({ store, events, enabled = () => true, now = (
       const timestamp = now().getTime();
       const timezone = readBriefingSettings(store).timezone;
       const todos = store.list<Todo>('todos');
+      const today = new Intl.DateTimeFormat('en-CA', {timeZone:timezone, year:'numeric', month:'2-digit', day:'2-digit'}).format(timestamp);
       const partitions: Record<string, Todo[]> = { overdue: [], waiting: [], upcoming: [], completed: [] };
       for (const todo of todos) {
+        const overdue = todo.dueDay ? todo.dueDay < today : todo.dueAt && Date.parse(todo.dueAt) <= timestamp;
         const group = todo.completedAt ? 'completed' : todo.waitingOn ? 'waiting'
-          : todo.dueAt && Date.parse(todo.dueAt) <= timestamp ? 'overdue' : 'upcoming';
+          : overdue ? 'overdue' : 'upcoming';
         partitions[group].push(todo);
       }
       const runs: Record<Run['status'], number> = { queued: 0, running: 0, completed: 0, failed: 0, cancelled: 0, unknown: 0 };
