@@ -114,7 +114,7 @@ export function conversationListDashboard(app: DashboardApp, bot: { conversation
     const labels = row.tags?.length ? '标签：' + row.tags.map(tag => publicText(tag, 32)).join('、') : '';
     const snippet = search && row.conversationThreadId && Object.hasOwn(search.snippets, row.conversationThreadId)
       ? publicText(search.snippets[row.conversationThreadId], 700) : '';
-    const detail = search ? [publicText(row.name, 60), snippet].filter(Boolean).join('\n') : [publicText(row.name, 60), labels, latest?.createdAt ?? row.latestAt, latest && publicText(latest.text, 100).replace(/\s+/g, ' ')].filter(Boolean).join(' · ');
+    const detail = search ? [publicText(row.name, 60), labels, snippet].filter(Boolean).join('\n') : [publicText(row.name, 60), labels, latest?.createdAt ?? row.latestAt, latest && publicText(latest.text, 100).replace(/\s+/g, ' ')].filter(Boolean).join(' · ');
     const threadId=row.conversationThreadId;
     const messageId=threadId && search?.messageIds?.[threadId];
     const link=threadId ? {label:messageId ? '查看原文' : '查看对话',

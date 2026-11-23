@@ -94,6 +94,11 @@ test('飞书对话列表按可公开的最近发言排序，并为项目工作�
   assert.match(text, /2026-01-03/);
   assert.doesNotMatch(text, /fixture-secret|归档项目|group|relay|other-chat|unknown-route|old|task|another-project|internal|notice|partial-reply/);
   assert.match(JSON.stringify(card), /https:\/\/work\.example\/#projects\/a%2Fb\/workspace/);
+  const sameTitle = ['甲组','乙组'].map((tag,index) => ({...history[0],threadId:'same-'+index,tags:[tag]}));
+  const found = conversationListDashboard(app, bot, 'grant', undefined, 0, sameTitle, {query:'季度',snippets:{'same-1':'乙组摘录'}});
+  assert.match(found.text,/季度复核\n标签：甲组/);
+  assert.match(found.text,/季度复核\n标签：乙组\n乙组摘录/);
+  assert.match(JSON.stringify(found.card),/标签：乙组/);
   const local = conversationListDashboard(app, bot, 'grant', 'https://work.example/?token=private', 0, history);
   assert.doesNotMatch(JSON.stringify(local.card), /"url"|token=private/);
 });
