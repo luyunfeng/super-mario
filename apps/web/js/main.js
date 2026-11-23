@@ -1,5 +1,6 @@
 // 启动：创建接口、数据仓库、路由和各页面，把它们接到外壳上。
 import { h, readLocal, writeLocal } from './lib/dom.js';
+import {acceptBrowserPair,takeBrowserPair} from './features/browser-devices.js';
 import { createApi } from './lib/api.js';
 import { installReadingFonts } from './features/reading-fonts.js';
 import { installPresence } from './features/presence.js';
@@ -27,6 +28,7 @@ import { createChannelsPage } from './pages/channels.js';
 
 applyHintPreference();
 
+let pendingBrowserPair=takeBrowserPair();
 let applyStartPage = !location.hash || /^#\??token=/.test(location.hash);
 const api = createApi();
 const initialHash = location.hash;
@@ -104,6 +106,9 @@ let shown = '';
 router.subscribe((route) => {
   if (location.hash !== initialHash) applyStartPage = false;
   closeOverlays();
+  const code=pendingBrowserPair ?? takeBrowserPair();
+  pendingBrowserPair=undefined;
+  if(code!==undefined)acceptBrowserPair(code,api,store);
   for (const [key, page] of Object.entries(pages)) page.el.classList.toggle('is-active', key === route.page);
   shell.setActive(route.page);
   renderChrome(store.view);

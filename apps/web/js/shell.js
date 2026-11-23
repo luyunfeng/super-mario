@@ -52,7 +52,10 @@ export function createShell({ api, store, router, scope }) {
   const tokenForm = h('form', { class: 'stack', id: 'auth-form' },
     h('label', { class: 'field__label', for: 'token' }, '服务访问令牌'), tokenInput,
     h('div', { class: 'row' }, h('button', { class: 'btn btn--primary btn--sm', type: 'submit' }, '连接工作台'), Button({ label: '立即重试', size: 'sm', onClick: () => store.reconnect() })));
-  const connPop = h('div', { class: 'conn__pop', hidden: true }, connMessage, tokenForm);
+  const devicesLink=h('a',{class:'btn btn--sm',href:'#agent?browserDevices=1',hidden:true,onclick:event=>{
+    event.preventDefault();toggleConn(false);router.go('#agent?browserDevices=1');
+  }},'浏览器设备');
+  const connPop = h('div', { class: 'conn__pop', hidden: true }, connMessage, tokenForm, devicesLink);
   const conn = h('div', { class: 'conn' }, connButton, connPop);
   const toggleConn = (open) => { connPop.hidden = !open; connButton.setAttribute('aria-expanded', String(open)); if (open) tokenInput.focus(); };
   connButton.addEventListener('click', () => toggleConn(connPop.hidden));
@@ -63,6 +66,7 @@ export function createShell({ api, store, router, scope }) {
     toggleConn(false);
     store.reset();
   });
+  let shownCredential=api.draftOwner();
   tokenInput.value = api.token();
 
   const terminalsLink = Button({ label: '多屏现场', size: 'sm', onClick: () => openTerminalWall(api, scope.get()) });
@@ -102,7 +106,9 @@ export function createShell({ api, store, router, scope }) {
       scopeSelect.value = scope.get();
       syncScopeClass();
     },
-    setConnection({ connection, unauthorized, loadError }) {
+    setConnection({ connection, unauthorized, loadError, snapshot }) {
+      devicesLink.hidden=unauthorized || !snapshot?.plugins.some(plugin=>plugin.id==='browser-devices' && plugin.status==='active');
+      if(shownCredential!==api.draftOwner()){shownCredential=api.draftOwner();tokenInput.value='';}
       const tone = connection === 'online' ? 'ok' : connection === 'connecting' ? 'warn' : 'danger';
       connDot.className = `dot dot--${tone}`;
       connLabel.textContent = unauthorized ? '需要令牌' : connection === 'online' ? '已连接' : connection === 'connecting' ? '连接中' : '重连中';

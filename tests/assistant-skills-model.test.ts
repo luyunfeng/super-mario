@@ -4895,6 +4895,28 @@ test('Web 和飞书答复离线备份问题时区分校验与实际恢复', asyn
   } finally { await server.close(); }
 });
 
+test('Web 与配对飞书说明浏览器接入时不索取凭据',async t=>{
+  let adapter!:FeishuOptions;
+  const sent:string[]=[],answer='请在主浏览器的「浏览器设备」生成一次性链接，在目标浏览器确认。';
+  const {server,api,ask}=await fixture(t,request=>{
+    assert.match(request.system,/目标浏览器打开并确认/);
+    assert.match(request.system,/不要在飞书、聊天、日志或笔记中索取或转发/);
+    return {role:'assistant',content:answer};
+  },options=>{
+    adapter=options;
+    return {start:async()=>{},close:async()=>{},collect:async()=>[],status:()=>({connected:true}),send:async(_target,text)=>{sent.push(text);}};
+  });
+  try{
+    assert.equal(await ask('怎么让另外一台浏览器登录？'),answer);
+    const bot=await api('/feishu/bots',{name:'设备说明',appId:'cli_1111111111111111',appSecret:'fixture',scope:{kind:'global'},requireConfirmation:false});
+    const owner={chatId:'oc_device',senderId:'ou_owner',senderType:'user',chatType:'p2p'} as const;
+    await adapter.onMessage(bot.pairingCode,{...owner,messageId:'device-pair'});
+    await adapter.onMessage('能在这里拿浏览器的登录凭据吗？',{...owner,messageId:'device-help'});
+    await t.waitFor(()=>assert.ok(sent.includes(answer)));
+    assert.deepEqual(server.app.browserDevices.list(),[]);
+  }finally{await server.close();}
+});
+
 test('Web 与配对飞书私聊读取订阅额度缓存，项目没有账户池工具',async t=>{
   let adapter!:FeishuOptions;
   const sent:string[]=[];

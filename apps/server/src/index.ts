@@ -1,3 +1,4 @@
+import {createBrowserAccess,pairingQR} from './browser-access.ts';
 import { privateThreadPage, searchPrivateThreads } from './feishu-thread-history.ts';
 import { createSessionAnalysis } from './session-analysis.ts';
 import { nativeExportProgress } from '../../../packages/core/src/native-conversation-export.ts';
@@ -96,13 +97,29 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
   const artifacts = createAgentArtifacts({ store: app.store, events: app.events, machines: () => machines });
   const gateway = createFeishuGateway(app, config, dependencies);
   const { feishu, personal, personalAi, personalAiView, configurePersonalAi, personalView, bots, registrations, registrationView, proposeMail } = gateway;
-  const authorized = (req: IncomingMessage, url: URL) => !config.token || req.headers.authorization === `Bearer ${config.token}` || url.searchParams.get('token') === config.token;
+  const browserAccess=createBrowserAccess(config.token,token=>app.browserDevices.authenticate(token));
+  app.setBrowserDeviceInvalidator(browserAccess.invalidate);
+  function devicePlugin() {
+    if(!app.plugins.list().some(p=>p.id==='browser-devices' && p.status==='active'))throw new InputError('浏览器设备插件已停用',503);
+  }
+  function requireDeviceJSON(req:IncomingMessage) {
+    if(req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json')throw new InputError('配对操作需要 JSON 请求',415);
+  }
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
       const path = url.pathname;
       if (path === '/api/health' || path === '/api/v1/health') return json(res, 200, { ok: true, version: '0.1.0' });
       // A share token grants access to this single snapshot, independently of the owner's session.
+      if(path==='/api/v1/public/browser-pair'){
+        if(req.method!=='POST')throw new InputError('设备配对需要 POST',405);
+        res.setHeader('cache-control','no-store');res.setHeader('referrer-policy','no-referrer');
+        devicePlugin();if(!config.token)throw new InputError('请先配置工作台访问令牌',403);
+        requireDeviceJSON(req);
+        const input=await body(req,1024);devicePlugin();
+        if(Object.keys(input).length!==1 || typeof input.code!=='string')throw new InputError('请提供配对码');
+        return json(res,201,app.browserDevices.redeem(input.code));
+      }
       if (path === '/api/v1/public/conversation-share') {
         if (req.method !== 'POST') throw new InputError('请使用 POST 读取分享',405);
         res.setHeader('referrer-policy','no-referrer');
@@ -145,8 +162,34 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         return json(res, 200, bots.bindWorkerTopic(todo.id, prompt, input.arguments as Record<string,unknown>));
       }
       if (path.startsWith('/api/')) {
-        if (!authorized(req, url)) throw new InputError('访问令牌无效', 401);
+        const access=browserAccess.access(req,url);
+        if(!access) throw new InputError('访问令牌无效',401);
+        if(access.kind==='device'){
+          const release=browserAccess.track(access.id,()=>res.destroy());
+          res.once('close',release);
+        }
         const method = req.method;
+        if(path==='/api/v1/browser/devices' || path.startsWith('/api/v1/browser/devices/')){
+          devicePlugin();res.setHeader('cache-control','no-store');res.setHeader('referrer-policy','no-referrer');
+          if(method==='GET' && path==='/api/v1/browser/devices'){
+            const devices=access.kind==='local'?[]:app.browserDevices.list().filter(d=>access.kind==='root'||(access.kind==='device' && d.id===access.id));
+            return json(res,200,{devices,canManage:access.kind==='root',...(access.kind==='device' && {currentDeviceId:access.id})});
+          }
+          if(access.kind!=='root')throw new InputError('管理配对设备需要工作台主令牌',403);
+          if(method==='POST' && path==='/api/v1/browser/devices/pairings'){
+            requireDeviceJSON(req);
+            const input=await body(req,1024);devicePlugin();
+            if(Object.keys(input).length!==1 || typeof input.name!=='string')throw new InputError('请填写设备名称');
+            const invite=app.browserDevices.issue(input.name);
+            return json(res,201,{...invite,...await pairingQR(req.headers.origin,invite.code)});
+          }
+          const single=/^\/api\/v1\/browser\/devices\/([^/]+)$/.exec(path);
+          if(method==='DELETE' && single){
+            if(!app.browserDevices.revoke(decodeURIComponent(single[1]!)))throw new InputError('设备不存在',404);
+            return json(res,200,{revoked:true});
+          }
+          throw new InputError('设备管理接口不存在',404);
+        }
         if(path==='/api/v1/usage/gateway-accounts' && method==='GET'){
           const query:Record<string,unknown>={};
           for(const [name,value] of url.searchParams){
@@ -1228,6 +1271,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         }
         const plugin = path.match(/^\/api\/v1\/plugins\/([^/]+)$/);
         if (plugin && method === 'POST') {
+          if(plugin[1]==='browser-devices' && access.kind==='device')throw new InputError('更改配对插件需要工作台主令牌',403);
           const input = await body(req);
           if (typeof input.enabled !== 'boolean') throw new InputError('enabled必须为布尔值');
           if (!app.plugins.list().some(entry => entry.id === plugin[1])) throw new InputError('插件不存在', 404);
@@ -1293,11 +1337,15 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
   });
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
-    if (!authorized(req, url) || !['/api/v1/events', '/api/v1/node', '/api/v1/terminal', '/api/v1/live-terminal'].includes(url.pathname) || (url.pathname.endsWith('/node') && !config.token)) {
+    const access=browserAccess.access(req,url);
+    if (!access || !['/api/v1/events', '/api/v1/node', '/api/v1/terminal', '/api/v1/live-terminal'].includes(url.pathname) || (url.pathname.endsWith('/node') && access.kind!=='root')) {
       socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); return;
     }
     sockets.handleUpgrade(req, socket, head, ws => {
       ws.on('error', () => {});
+      if(access.kind==='device'){
+        const release=browserAccess.track(access.id,()=>ws.terminate());ws.once('close',release);
+      }
       if (url.pathname === '/api/v1/live-terminal') {
         const machineId = url.searchParams.get('machineId') || '';
         const mode = url.searchParams.get('mode') || 'full';
@@ -1345,7 +1393,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             } else throw new Error('当前终端模式不支持此操作');
             if (++pendingWrites > 256) throw new Error('终端输入积压，请重新连接');
             writeChain = writeChain.then(async () => {
-              if (!closed) await machines.call(machineId, method, params);
+              if (!closed && ws.readyState===WebSocket.OPEN) await machines.call(machineId, method, params);
             }).catch(fail).finally(() => { pendingWrites--; });
           } catch (error) { fail(error); }
         });

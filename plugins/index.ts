@@ -884,3 +884,5 @@ export {feishuChatPinsExtension,type FeishuPinReader,type FeishuPinOriginalReade
 
 export {createUsageSources} from './usage-sources.ts';
 export type {UsageWindowCache,UsageInventoryPage,UsageInventoryReader} from './usage-source-extension.ts';
+
+export {createBrowserDevices} from './browser-devices.ts';

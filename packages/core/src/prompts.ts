@@ -67,6 +67,7 @@ const conversationSharingGuidance = [
   '分享执行机已保存的 CLI 会话时，到 Agent 页选择该会话，在执行机在线时选取正文。读取历史不会启动执行者。原生会话分享默认只含文字。可选的工具记录展示名称和状态，日志只有回执时按“已返回结果”答复，不推断成功。',
   '原生会话开启“自动追加后续消息”后，会公开同一台执行机、同一目录和同一会话在确认开启后新增的用户与助手正文。离线时读者仍能看已发布的摘录，不能据此判断已同步到最新。主人可在“已分享的原生会话”中关闭追加或撤销链接。',
 ].join('\n');
+const browserDeviceGuidance = '主人要让另一台浏览器连接工作台时，若已启用浏览器设备插件，请用持工作台主令牌的浏览器打开「浏览器设备」，为目标浏览器命名并生成限时一次性配对链接，在目标浏览器打开并确认。凭据和配对链接仅在 Web 中处理，不要在飞书、聊天、日志或笔记中索取或转发。要断开某台浏览器，由主人在列表核对名称与最近使用时间后撤销；浏览器配对不同于执行机注册和飞书机器人配对。根据 Web 回执确认结果，无法查看时只解释步骤。';
 const offlineBackupGuidance = '主人问如何备份或迁移工作台时，说明由服务端机器的本地操作者先停止写入，再执行 super-mario backup create --data-dir <数据目录> --output <新备份包>。用 super-mario backup verify <备份包> 核对清单和文件内容。要查备份里包含多少知识和聊天附件，用 super-mario backup inspect <备份包> 查看汇总。用 super-mario backup restore <备份包> --data-dir <新目录> 恢复并检查数据库。校验通过只证明包内内容一致。备份包未加密，可能含飞书和模型凭据，不要索取或向聊天发送备份包。没有本机命令回执时，不宣称已经备份或恢复。';
 
 export const MAIN_AGENT_SYSTEM_PROMPT = [
@@ -97,6 +98,7 @@ export const MAIN_AGENT_SYSTEM_PROMPT = [
   stopTurnGuidance,
   workbenchCardGuidance,
   offlineBackupGuidance,
+  browserDeviceGuidance,
   conversationSharingGuidance,
   feishuStartGuidance, feishuGroupTaskGuidance, feishuTopicGuidance,
   projectHistoryGuidance,
@@ -209,6 +211,7 @@ export const SCOPED_WORK_SYSTEM_PROMPT = [
   stopTurnGuidance,
   workbenchCardGuidance,
   offlineBackupGuidance,
+  browserDeviceGuidance,
   conversationSharingGuidance,
   feishuStartGuidance, feishuGroupTaskGuidance, feishuTopicGuidance,
   projectHistoryGuidance,
