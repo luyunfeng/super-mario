@@ -17,6 +17,7 @@ async function fixture(t:test.TestContext){
  app.setMachineClient({list:()=>[m,{...m,id:'legacy',executors:[],capabilities:[]},{...m,id:'offline',online:false,executors:[]}],async call(id,method,params){calls.push({method,params});if(id!=='m')throw Error('wrong machine');
   if(method==='agents.sessions')return {sessions:metadata.filter(s=>badScope||!params.roots||((params.roots as string[]).some(root=>s.cwd===root||s.cwd.startsWith(root+'/')))),roots:params.roots??[],warnings:[],truncated:false} as never;
   if(method==='agents.session'){const found=metadata.find(s=>s.executorId===params.executorId&&s.nativeSessionId===params.nativeSessionId&&s.cwd===params.cwd);if(!found)throw Error('not found');return {...found};}
+  if(method==='executor.input')return {accepted:true};
   if(method==='executor.resume')return {sessionId:'node-session'};
   if(method==='executor.result')return result;
   throw Error('unexpected RPC '+method);
@@ -95,4 +96,45 @@ test('edited top-level approval task ownership is validated after final paramete
  const f=await fixture(t);const foreign=f.app.createTodo({title:'B task',projectId:f.b.id});
  const original=await f.app.agentSessions.proposeResume(f.body);const edited=f.app.approvals.edit(original.id,original.version,{todoId:foreign.id});
  const result=await f.app.approvals.approve(edited.id,edited.version);assert.equal(result.status,'failed');assert.equal(f.calls.some(c=>c.method==='executor.resume'),false);assert.equal(f.app.store.list('runs').length,0);
+});
+
+test('飞书会话输入审批只向选择时的交互执行发送，可修改正文，撤权和目标改变均阻止输入', async t => {
+  const { app, a, calls } = await fixture(t);
+  const target = { runId: 'original', machineId: 'm', sessionId: 'rpc-1', nativeSessionId: 'thread-a', executorId: 'm/codex',
+    projectId: a.id, todoId: '', botId: 'fixture', appId: 'fixture-app', revision: 1, owner: { chatId: 'private', senderId: 'owner' } };
+  let active = true;
+  app.setAgentInputOwnerValidator(value => active && value.owner.senderId === 'owner');
+  const run: Run = { id: target.runId, machineId: 'm', executorId: target.executorId, sessionId: target.sessionId,
+    nativeSessionId: target.nativeSessionId, executionMode: 'interactive', status: 'running', projectId: a.id, conversationId: 'main',
+    createdAt: '', updatedAt: '', output: '', prompt: '合成输入目标' };
+  app.store.put('runs', run.id, run);
+  const params = { id: run.id, projectId: a.id, sessionId: target.sessionId, machineId: target.machineId, nativeSessionId: target.nativeSessionId,
+    executorId: target.executorId, text: '原始正文' };
+  function propose() {
+    const row = app.approvals.propose({ kind: 'input', title: '输入', details: '', params });
+    app.store.put('feishu.agent-input-targets', row.id, target);
+    return row;
+  }
+  const ok = propose();
+  const edited = app.approvals.edit(ok.id, ok.version, { params: { ...params, text: '已核对的正文' } });
+  assert.equal((await app.approvals.approve(ok.id, edited.version)).status, 'completed');
+  const changed = propose();
+  const editedKind = app.approvals.edit(changed.id, changed.version, { kind: 'dispatch' });
+  assert.equal((await app.approvals.approve(changed.id, editedKind.version)).status, 'failed');
+  for (const patch of [{ sessionId: 'rpc-2' }, { executorId: 'm/other' }, { nativeSessionId: 'thread-b' },
+    { status: 'completed' }, { projectId: 'different' }, { executionMode: 'task' }]) {
+    const row = propose();
+    app.store.put('runs', run.id, { ...run, ...patch });
+    assert.equal((await app.approvals.approve(row.id, row.version)).status, 'failed');
+    app.store.put('runs', run.id, run);
+  }
+  const superseded = propose();
+  app.store.put('runs', 'later', { ...run, id: 'later', createdAt: new Date().toISOString() });
+  assert.equal((await app.approvals.approve(superseded.id, superseded.version)).status, 'failed');
+  app.store.remove('runs', 'later');
+  const revoked = propose();
+  active = false;
+  assert.equal((await app.approvals.approve(revoked.id, revoked.version)).status, 'failed');
+  assert.deepEqual(calls.filter(call => call.method.startsWith('executor.') && call.method !== 'executor.result'),
+    [{ method: 'executor.input', params: { sessionId: target.sessionId, text: '已核对的正文' } }]);
 });

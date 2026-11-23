@@ -10,6 +10,7 @@ import { createStore } from '../packages/core/src/store.ts';
 import { createEventBus } from '../packages/core/src/events.ts';
 import { createEffects } from '../packages/core/src/effects.ts';
 import { createInteractions } from '../packages/core/src/interactions.ts';
+import { createApprovalService } from '../packages/core/src/approvals.ts';
 import { createEventMailboxes } from '../packages/core/src/event-mailboxes.ts';
 import type { FeishuSendContext, FeishuOptions } from '../plugins/feishu.ts';
 import type { BotScope, MailboxEntry } from '../packages/protocol/src/bots.ts';
@@ -1244,5 +1245,205 @@ test('飞书对话命令只允许已配对主人的全局私聊', async t => {
     assert.equal(f.mailboxes.list().length, baseline);
     assert.equal(scoped.instance.sent.length, 0);
   }
+  assert.equal(f.posts.length, 0);
+});
+
+function enableTerminalPluginForAgents(app: FeishuBotsApp) {
+  const plugins = app.plugins!;
+  const existing = plugins.list;
+  plugins.list = () => [...existing(), { id: 'terminal-host', enabled: true, status: 'active' }];
+}
+
+test('/agents 仅接受配对主人在全局机器人私聊中的请求，重放只返回原有结果', async t => {
+  const f = fixture(t), bot = await f.add('AgentDirectory');
+  enableTerminalPluginForAgents(f.app);
+  const human = (id: string) => ({ ...source(id), senderType: 'user' as const });
+  let reads = 0;
+  f.app.agentSessions = { async discover() {
+    reads++;
+    return { capturedAt: new Date().toISOString(), machines: [] };
+  } };
+  const receive = bot.instance.options.onMessage;
+  await receive('/agents', human('unpaired'));
+  await bot.pair();
+  const baseline = f.mailboxes.list().length;
+  for (const [index, patch] of [
+    { senderId: 'other' }, { senderType: 'bot' as const }, { senderType: undefined },
+    { chatType: 'group' }, { chatId: 'elsewhere' },
+  ].entries()) await receive('/agent 查询', { ...human('denied-' + index), ...patch });
+  assert.equal(f.mailboxes.list().length, baseline);
+  assert.equal(bot.instance.sent.length, 0);
+  assert.equal(reads, 0);
+  f.store.put('projects', 'only', { id: 'only', name: '本项目' });
+  const scoped = await f.add('AgentProject', { kind: 'project', projectId: 'only' });
+  await scoped.pair();
+  await scoped.instance.options.onMessage('/agents', human('fixed'));
+  assert.equal(scoped.instance.sent.length, 0);
+  assert.equal(f.posts.length, 0);
+  assert.equal(reads, 0);
+  await Promise.all([receive('/AGENTS', human('directory')), receive('/AGENTS', human('directory'))]);
+  assert.equal(bot.instance.sent.length, 1);
+  assert.ok(bot.instance.contexts.at(-1)?.card);
+  assert.equal(reads, 1);
+  const firstReads = reads;
+  await f.restart();
+  const restarted = f.instances.findLast(instance => instance.options.appId === bot.bot.appId)!;
+  await restarted.options.onMessage('/AGENTS', human('directory'));
+  assert.equal(reads, firstReads);
+  assert.equal(restarted.sent.length, 0);
+  await restarted.options.onMessage('/agentsExtra', human('ordinary'));
+  assert.equal(f.posts.at(-1)?.text, '/agentsExtra');
+});
+
+test('/agent 搜索按已发现的会话和同台执行记录匹配，待决定优先，历史日志不能证明运行', async t => {
+  const f = fixture(t), bot = await f.add('FilteredAgents');
+  await bot.pair();
+  const now = new Date().toISOString(), cwd = '/work/atlas';
+  const machine = (machineId: string, ids: string[], online = true) => ({
+    machineId, machineName: '电脑-' + machineId, online, available: online, truncated: false,
+    sessions: ids.map(nativeSessionId => ({ executorId: 'codex', nativeSessionId, cwd, resumable: true, fileModifiedAt: now })),
+  });
+  f.app.agentSessions = { async discover() { return { capturedAt: now, machines: [
+    machine('alpha', ['one', 'two', 'history']), machine('beta', ['one'], false),
+  ] }; } };
+  enableTerminalPluginForAgents(f.app);
+  f.store.put('machines', 'alpha', { id: 'alpha', name: '电脑-alpha', online: true });
+  f.store.put('projects', 'p', { id: 'p', name: '星图', workspace: { machineId: 'alpha', cwd } });
+  const run = (id: string, machineId: string, nativeSessionId: string, prompt: string) => ({
+    id, machineId, executorId: machineId + '/codex', nativeSessionId, sessionId: 'host-' + id, conversationId: 'project:p:work', cwd,
+    createdAt: now, updatedAt: now, prompt, projectId: 'p', executionMode: 'interactive', status: 'running', output: '',
+  });
+  for (const row of [run('working', 'alpha', 'one', '核对索引'),
+    run('waiting', 'alpha', 'two', '等待确认索引'), run('wrong', 'beta', 'one', '离线电脑同名会话')]) f.store.put('runs', row.id, row);
+  f.store.put('interactions', 'question', { id: 'question', kind: 'question', title: '选哪个目录', runId: 'waiting',
+    handler: 'user', status: 'open', expiresAt: new Date(Date.now() + 600000).toISOString(), version: 1, createdAt: now });
+  const receive = bot.instance.options.onMessage;
+  const human = (messageId: string) => ({ ...source(messageId), senderType: 'user' as const });
+  await receive('原主对话消息', human('before-selection'));
+  await receive('/agent ATLAS', human('cwd'));
+  const text = JSON.stringify(bot.instance.contexts.at(-1)?.card);
+  assert.ok(text.includes('核对索引') && text.includes('等待确认索引'));
+  assert.ok(text.indexOf('等待确认索引') < text.indexOf('核对索引'));
+  assert.doesNotMatch(text, /离线电脑同名会话|history/);
+  await receive('/agents 核对索引', human('title'));
+  const single = JSON.stringify(bot.instance.contexts.at(-1)?.card);
+  assert.match(single, /核对索引/);
+  assert.doesNotMatch(single, /等待确认索引/);
+  const approvals = createApprovalService({ store: f.store, events: f.events, execute: async () => assert.fail('仅建立申请') });
+  t.after(() => approvals.close());
+  f.app.approvals = approvals;
+  const card = bot.instance.contexts.at(-1)?.card as { elements: Array<{ actions?: Array<{value?: Record<string, unknown>}> }> };
+  const select = card.elements.flatMap(el => el.actions ?? []).find(b => b.value?.kind === 'workbench.agentSelect')?.value;
+  assert.ok(select);
+  const click = (operatorId: string, value: Record<string, unknown>) => bot.instance.options.onCardAction!({
+    value, operatorId, chatId: 'owner', messageId: 'filtered-card',
+  }) as { toast?: { type: string } };
+  assert.notEqual(click('stranger', select).toast?.type, 'success');
+  assert.equal(click('human', { ...select, machineId: 'beta', runId: 'wrong' }).toast?.type, 'success');
+  await receive('原主对话消息', human('before-selection'));
+  assert.equal(approvals.list().length, 0);
+  await receive('/status', human('selected-status'));
+  const status = bot.instance.sent.at(-1)![1];
+  const statusReceipt = bot.instance.contexts.at(-1)?.onSent;
+  assert.ok(statusReceipt);
+  assert.match(status, /执行会话.*working/);
+  assert.match(status, /运行中/);
+  await Promise.all([receive('补充一个条件', human('follow')), receive('补充一个条件', human('follow'))]);
+  const proposals = approvals.list();
+  assert.equal(proposals.length, 1);
+  assert.equal(proposals[0].kind, 'input');
+  assert.equal(proposals[0].status, 'pending');
+  assert.equal(proposals[0].params.id, 'working');
+  assert.equal(proposals[0].params.machineId, 'alpha');
+  assert.equal(proposals[0].params.sessionId, 'host-working');
+  assert.equal(proposals[0].params.nativeSessionId, 'one');
+  assert.equal(proposals[0].params.text, '补充一个条件');
+  const pinned = f.store.get<import('../packages/protocol/src/bots.ts').FeishuAgentInputTarget>('feishu.agent-input-targets', proposals[0].id);
+  assert.equal(pinned?.runId, 'working');
+  assert.equal(pinned.botId, bot.bot.id);
+  assert.deepEqual(pinned.owner, { chatId: 'owner', senderId: 'human' });
+  assert.match(bot.instance.sent.at(-1)![1], /审批/);
+  await receive('/main', human('back-main'));
+  statusReceipt('agent-status-card');
+  await receive('引用原执行', { ...human('quoted-input'), parentId: 'agent-status-card' });
+  assert.equal(approvals.list().length, 2);
+  assert.equal(approvals.list().find(row => row.params.text === '引用原执行')?.params.id, 'working');
+  f.store.put('machines', 'alpha', { id: 'alpha', name: '电脑-alpha', online: false });
+  await receive('电脑刚离线', { ...human('offline-follow'), parentId: 'agent-status-card' });
+  assert.equal(approvals.list().length, 2);
+  await receive('/agents 不存在的工作', human('empty'));
+  assert.doesNotMatch(JSON.stringify(bot.instance.contexts.at(-1)?.card), /核对索引|等待确认索引/);
+  assert.deepEqual(f.posts.map(row => row.text), ['原主对话消息']);
+});
+
+test('/agents 读取会话期间私聊绑定变化，旧结果不得发送', async t => {
+  const f = fixture(t), bot = await f.add('AgentsRevoked');
+  enableTerminalPluginForAgents(f.app);
+  await bot.pair();
+  let started = false;
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  f.app.agentSessions = { async discover() {
+    started = true;
+    await hold;
+    return { capturedAt: new Date().toISOString(), machines: [] };
+  } };
+  const incoming = bot.instance.options.onMessage('/agents', { ...source('revoked'), senderType: 'user' });
+  try {
+    await t.waitFor(() => assert.ok(started), { timeout: 1200 });
+    f.store.put('settings', 'feishu.bot.owner:' + bot.bot.id + ':' + bot.bot.appId, { senderId: 'human', chatId: 'replacement' });
+  } finally {
+    release();
+    await incoming;
+  }
+  assert.equal(bot.instance.sent.length, 0);
+  assert.equal(f.mailboxes.list().some(row => row.sourceMessageId === 'revoked'), false);
+});
+
+test('/agents 的待验收执行经翻页选中，只向原生会话提恢复申请，旧卡无法恢复新一轮', async t => {
+  const f = fixture(t), bot = await f.add('ReviewedAgent');
+  enableTerminalPluginForAgents(f.app);
+  await bot.pair();
+  const now = new Date().toISOString(), cwd = '/work/fable';
+  f.store.put('projects', 'p', { id: 'p', name: '寓言', workspace: { machineId: 'm', cwd } });
+  f.store.put('machines', 'm', { id: 'm', name: '测试主机', online: true });
+  const resumed: Record<string, unknown>[] = [];
+  const rows = Array.from({ length: 6 }, (_, i) => ({
+    id: 'r' + i, createdAt: now, updatedAt: now, prompt: '合成会话' + i, status: 'completed', projectId: 'p',
+    executorId: 'm/codex', nativeSessionId: 'n' + i, machineId: 'm', conversationId: 'project:p:work', cwd,
+    todoId: 't' + i, output: '样例结果',
+  }));
+  for (const row of rows) {
+    f.store.put('runs', row.id, row);
+    f.store.put('todos', row.todoId, { id: row.todoId, projectId: 'p', title: row.prompt });
+  }
+  f.app.agentSessions = {
+    async discover() { return { capturedAt: now, machines: [{ machineId: 'm', machineName: '测试主机', online: true, available: true,
+      truncated: false, sessions: rows.map(row => ({ nativeSessionId: row.nativeSessionId, executorId: 'codex', cwd, resumable: true })) }] }; },
+    async proposeResume(args) { resumed.push(args); return { id: 'resume-request', status: 'pending' }; },
+  };
+  await bot.instance.options.onMessage('/agents 寓言', { ...source('agents-page'), senderType: 'user' });
+  type Button = { value: Record<string, unknown>; text: { content: string } };
+  const buttons = (card: any): Button[] => card.elements.flatMap((el: {actions?: Button[]}) => el.actions ?? []);
+  const click = (value: Record<string, unknown>, formValue?: Record<string, unknown>) =>
+    bot.instance.options.onCardAction!({ operatorId: 'human', chatId: 'owner', messageId: 'agent-card', value, formValue }) as any;
+  const page = buttons(bot.instance.contexts.at(-1)!.card).find(b => b.text.content === '下一页')!;
+  const second = click(page.value).card.data;
+  assert.match(JSON.stringify(second), /合成会话5/);
+  const open = buttons(second).find(b => b.value?.kind === 'workbench.agentSelect')!;
+  const form = click(open.value).card.data.body.elements.find((el: {tag: string}) => el.tag === 'form');
+  const submit = form.elements.find((el: {form_action_type?: string}) => el.form_action_type === 'submit').behaviors[0].value;
+  const fields = { prompt: '继续核对', doneWhen: '比对两份回执', stopped: '已停止', minutes: '5', nativeSessionId: 'n0' };
+  click(submit, fields);
+  await t.waitFor(() => assert.ok(bot.instance.sent.some(([,text]) => text.includes('resume-request'))));
+  assert.equal(resumed.length, 1);
+  assert.deepEqual([resumed[0].nativeSessionId, resumed[0].machineId, resumed[0].executorId, resumed[0].projectId, resumed[0].todoId],
+    ['n5', 'm', 'codex', 'p', 't5']);
+  const newer = { ...rows[5], id: 'subsequent', createdAt: new Date(Date.now() + 1000).toISOString(), status: 'running' };
+  f.store.put('runs', newer.id, newer);
+  assert.equal(click(open.value).card, undefined);
+  assert.equal(click(submit, fields).card, undefined);
+  await tick();
+  assert.equal(resumed.length, 1);
   assert.equal(f.posts.length, 0);
 });

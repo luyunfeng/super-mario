@@ -6,7 +6,7 @@ import type { RunBlocker } from '../../protocol/src/execution-progress.ts';
 type ScopedRequest = { projectId?: unknown; todoId?: unknown; request: RunBlocker };
 
 /** Build the index only when a visible run needs it. Share one snapshot across a batch of runs. */
-export function readRunBlockers(store: Store) {
+export function readRunBlockers(store: Pick<Store, 'list'>, asOf?: number) {
   let byRun: Map<string, ScopedRequest[]> | undefined;
   return (run: Run) => {
     if (!byRun) {
@@ -18,7 +18,7 @@ export function readRunBlockers(store: Store) {
         index.set(id, requests);
       };
       for (const card of store.list<Card>('interactions')) {
-        if (card.status !== 'open' || card.handler !== 'user') continue;
+        if (card.status !== 'open' || card.handler !== 'user' || (asOf !== undefined && !(Date.parse(card.expiresAt) > asOf))) continue;
         const { id, title, kind, createdAt, version } = card;
         add(card.runId, card.projectId, undefined, { id, title, kind, createdAt, version, href: '#chat?interaction=' + encodeURIComponent(id) });
       }

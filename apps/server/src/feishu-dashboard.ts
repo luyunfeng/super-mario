@@ -28,7 +28,7 @@ export function dashboardCommand(text: string) {
 export function dashboardHelp(sessions: boolean, scoped = false) {
   const status = '/status 或 /状态：查看当前会话状态';
   const text = scoped ? status : ['/home 或「工作台」：打开工作台', '/tasks 或 /进展：查看任务进展', '/inbox 或 /收件箱：查看收件',
-    '/list 或 /对话：列出可切换的对话', '/main 或 /主对话：切回主 Agent', status, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
+    '/agents [关键词] 或 /agent：查找执行会话', '/list 或 /对话：列出可切换的对话', '/main 或 /主对话：切回主 Agent', status, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
   return { text, card: cardDocument('工作台命令', cardSection('在此私聊中发送', text)) };
 }
 

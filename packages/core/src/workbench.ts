@@ -68,6 +68,7 @@ import { currentAgentInput } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
 import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
+import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, ExecutionResult, InboxItem, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
@@ -116,6 +117,7 @@ export async function createWorkbench(config: AppConfig) {
   const projectFolders = createProjectFolders(() => machines);
   let replyToFeishu: ((chatId: string, text: string, key: string) => Promise<void>) | undefined;
   let channelStatus = () => ({ connected: false, reason: '请在 Web 配置飞书' });
+  let validateAgentInputOwner: (target: FeishuAgentInputTarget) => boolean = () => false;
   let botsStatus: () => Json = () => [];
   let notificationBots: () => import('../../protocol/src/index.ts').FeishuBot[] = () => botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[];
   const presence = createWebPresence();
@@ -694,6 +696,14 @@ export async function createWorkbench(config: AppConfig) {
     if (approval.todoId && !store.get<Todo>('todos', approval.todoId)) throw new InputError('关联待办不存在', 404);
     // A persisted binding wins over a mutated kind/params: never fall through to
     // another handler or the generic plugin acknowledgement for an edited approval.
+    const target = store.get<FeishuAgentInputTarget>('feishu.agent-input-targets', approval.id);
+    if (target) {
+      if (approval.kind !== 'input' || approval.params.id !== target.runId || (approval.todoId ?? '') !== target.todoId
+        || (approval.params.projectId ?? '') !== target.projectId || (approval.params.todoId ?? '') !== target.todoId
+        || (['machineId', 'sessionId', 'nativeSessionId', 'executorId'] as const).some(key => approval.params[key] !== target[key]))
+        throw new InputError('审批已改变原执行目标，请重新选择会话', 409);
+      return inputRun(target.runId, requiredText(approval.params.text, '输入'), `approval:${approval.id}:${approval.version}`, target);
+    }
     if (approval.kind === inboxHandlingApprovalKind || store.get('inbox-handling.approvals',approval.id)) return inboxHandling.executeApproved(approval);
     if (approval.params.outboxId) return await background.outbox.approve(approval) as unknown as Json;
     if (approval.kind === knowledgeSourceApprovalKind) { knowledgeSourceApproval.approve(approval); return {jobId:approval.params.jobId,queued:true}; }
@@ -1447,11 +1457,29 @@ export async function createWorkbench(config: AppConfig) {
     return { runId: id, status: run.status, progress: executionProgress(run.progress) ?? null,
       blockedBy: readRunBlockers(store)(run) };
   }
-  async function inputRun(id: string, text: string, key: string = randomUUID()): Promise<Json> {
+  async function inputRun(id: string, text: string, key: string = randomUUID(), pinned?: FeishuAgentInputTarget): Promise<Json> {
     if (closing) throw new InputError('服务正在关闭', 503);
     const run = remoteRun(id);
     if (run.executionMode === 'task') throw new InputError('任务模式不接受交互输入；请新建任务或选择交互模式', 409);
-    return effects.perform({ key, kind: 'executor.input', target: run.id, summary: '发送会话输入', content: { text }, run: () => machines!.call(run.machineId, 'executor.input', { sessionId: run.sessionId, text: requiredText(text, '输入') }) });
+    return effects.perform({ key, kind: 'executor.input', target: run.id, summary: '发送会话输入', content: { text }, run: () => {
+      if (pinned) {
+        // effects.perform schedules I/O after claiming the key. Check live state at that boundary.
+        const current = store.get<Run>('runs', id);
+        const project = pinned.projectId ? store.get<Project>('projects', pinned.projectId) : undefined;
+        const todo = pinned.todoId ? store.get<Todo>('todos', pinned.todoId) : undefined;
+        if (!validateAgentInputOwner(pinned) || !current || current.status !== 'running' || current.executionMode !== 'interactive'
+          || current.machineId !== pinned.machineId || current.executorId !== pinned.executorId || current.sessionId !== pinned.sessionId
+          || (pinned.cwd && current.cwd && current.cwd !== pinned.cwd)
+          || (current.nativeSessionId ?? current.nativeResume?.nativeSessionId) !== pinned.nativeSessionId
+          || (current.projectId ?? '') !== pinned.projectId || (current.todoId ?? '') !== pinned.todoId
+          || (pinned.projectId && (!project || project.archivedAt)) || (pinned.todoId && (!todo || todo.completedAt || todo.projectId !== current.projectId))
+          || store.list<Run>('runs').some(other => other.id !== current.id && other.machineId === pinned.machineId && other.executorId === pinned.executorId
+            && (other.nativeSessionId ?? other.nativeResume?.nativeSessionId) === pinned.nativeSessionId && other.createdAt >= current.createdAt)
+          || !machines?.list().some(machine => machine.id === pinned.machineId && machine.online))
+          throw Object.assign(new InputError('执行会话或机器人授权已变化，请重新选择会话', 409), { delivery: 'no' });
+      }
+      return machines!.call(pinned?.machineId ?? run.machineId, 'executor.input', { sessionId: pinned?.sessionId ?? run.sessionId, text: requiredText(text, '输入') });
+    } });
   }
   async function cancel(id: string) {
     const run = store.get<Run>('runs', id);
@@ -1729,6 +1757,7 @@ export async function createWorkbench(config: AppConfig) {
       if (source && source.conversationId !== botConversationId({ id: input.botId, scope })) throw new InputError('协作回报不属于发起机器人', 403);
       return scopedAgents.post(requiredText(input.text, '协作回报'), scope, input.botId, context);
     },
+    setAgentInputOwnerValidator(validate: typeof validateAgentInputOwner) { validateAgentInputOwner = validate; },
     setBotsStatus(status: () => Json) { botsStatus = status; },
     setBotRelay(relay: NonNullable<typeof botRelay>) { botRelay = relay; },
     setBotScopeAccess(validate: typeof botScopeAccess) { botScopeAccess = validate; channelBindingsReady = true; scheduledWork.sync(); },

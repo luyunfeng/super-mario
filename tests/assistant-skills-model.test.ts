@@ -1466,6 +1466,8 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
   const day = { updatedFrom: '2026-03-08T00:00:00-05:00', updatedBefore: '2026-03-09T00:00:00-04:00' };
   const criterionQuestion = '哪个任务要求保存签收单作为验收条件？';
   const machineQuestion = '只查 Build-A 上 worker/1 执行器的“账期”记录。';
+  const threadQuestion = 'Build-A 的 worker/1 原生线程 native-1 之前派过哪条执行？';
+  const threadAnswer = '该线程有一条匹配的已结束执行 target。';
   const machineAnswer = 'Build-A 上 worker/1 登记了账期核验。';
   const dayQuestion = '纽约当地 3 月 8 日更新过哪些执行？按 2026 年查询。';
   const dayAnswer = '纽约当地 2026-03-08 更新了两条执行。';
@@ -1476,6 +1478,10 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
       if (JSON.stringify(req.content).includes(criterionQuestion)) {
         assert.match(req.system, /queryField=doneWhen/);
         return call('runs_list', { query: '保存 签收单', queryField: 'doneWhen' }, 'criterion');
+      }
+      if (JSON.stringify(req.content).includes(threadQuestion)) {
+        assert.match(req.system, /只发现历史日志不能证明进程在线/);
+        return call('runs_list', { nativeSessionId: 'native-1', machineId: 'Build-A', executorId: 'worker/1' }, 'native-thread');
       }
       if (JSON.stringify(req.content).includes(machineQuestion)) {
         assert.match(req.system, /旧执行未登记机器就说明未知/);
@@ -1495,6 +1501,10 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
       assert.deepEqual(rows.map((row: {id: string}) => row.id), ['partial']);
       assert.deepEqual(rows[0].evidence.map((hit: {field: string}) => hit.field), ['doneWhen', 'doneWhen']);
       return { role: 'assistant', content: 'partial 的登记要求是保存签收单。' };
+    }
+    if (req.callId === 'native-thread') {
+      assert.deepEqual(rows.map((r: Run) => [r.id, r.status]), [['target', 'completed']]);
+      return { role: 'assistant', content: threadAnswer };
     }
     if (req.callId === 'machine') {
       assert.deepEqual(rows.map((r: {id: string}) => r.id), ['target']);
@@ -1548,14 +1558,19 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
     }
     for (const [id, machineId, executorId] of [['target', 'Build-A', 'worker/1'], ['same-name', 'build-a', 'worker/1'],
       ['other-executor', 'Build-A', 'worker/10'], ['legacy', undefined, 'worker/1'], ['other-project', 'Build-A', 'worker/1']] as const) {
-      const run: Run = { id, machineId, executorId, projectId: id === 'other-project' ? other.id : project.id, prompt: '账期核验',
+      const run: Run = { id, machineId, executorId, nativeResume: { executorId: 'worker', nativeSessionId: 'native-1' },
+        ...(id === 'legacy' && { nativeSessionId: 'different-receipt' }), projectId: id === 'other-project' ? other.id : project.id, prompt: '账期核验',
         createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', conversationId: 'main', status: 'completed', output: '' };
       server.app.store.put('runs', id, run);
     }
     assert.equal(await ask(criterionQuestion, '/projects/' + project.id + '/messages'), 'partial 的登记要求是保存签收单。');
+    assert.equal(await ask(threadQuestion, '/projects/' + project.id + '/messages'), threadAnswer);
     assert.equal(await ask(machineQuestion, '/projects/' + project.id + '/messages'), machineAnswer);
     const listRuns = server.app.contributions.list('tools').find(item => item.value.name === 'runs_list')!.value;
     const signal = new AbortController().signal;
+    const byThread = await listRuns.execute({ nativeSessionId: 'native-1', projectId: project.id }, signal) as {id:string}[];
+    assert.deepEqual(byThread.map(hit => hit.id).sort(), ['other-executor', 'same-name', 'target']);
+    await assert.rejects(async () => listRuns.execute({ nativeSessionId: '' }, signal), /原生会话 ID/);
     const byExecutor = await listRuns.execute({ executorId: 'worker/1', projectId: project.id, query: '账期' }, signal) as {id:string; machineId?:string}[];
     assert.deepEqual(byExecutor.map(hit => hit.id).sort(), ['legacy', 'same-name', 'target']);
     assert.equal(byExecutor.find(hit => hit.id === 'legacy')?.machineId, undefined);
@@ -1579,6 +1594,8 @@ test('Web 和飞书按报错查执行，按同一 ID 核对范围、原文与登
     assert.equal(requests.filter(req => req.callId === 'detail').length, 2);
     await adapter.onMessage(criterionQuestion, { ...source, messageId: 'criterion-question' });
     await t.waitFor(() => assert.ok(sent.includes('partial 的登记要求是保存签收单。')));
+    await adapter.onMessage(threadQuestion, { ...source, messageId: 'native-thread-question' });
+    await t.waitFor(() => assert.ok(sent.includes(threadAnswer)));
     await adapter.onMessage(machineQuestion, { ...source, messageId: 'machine-question' });
     await t.waitFor(() => assert.ok(sent.includes(machineAnswer)));
     assert.equal(server.app.store.list('runs').length, 14);

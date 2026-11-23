@@ -1,6 +1,6 @@
 import { cardButtons, cardDocument, cardPlain, cardSection } from './feishu-cards.ts';
 
-export type SessionList = { capturedAt: string; machines: Array<{ machineId?: string; machineName: string; reason?: string; truncated: boolean; sessions: Array<{ executorId: string; nativeSessionId: string; cwd: string; fileModifiedAt?: string; resumable: boolean }> }> };
+export type SessionList = { capturedAt: string; machines: Array<{ machineId?: string; machineName: string; online?: boolean; available?: boolean; warnings?: string[]; reason?: string; truncated: boolean; sessions: Array<{ executorId: string; nativeSessionId: string; cwd: string; fileModifiedAt?: string; resumable: boolean }> }> };
 export function sessionCardSnapshot(result: SessionList) {
   const all = result.machines.flatMap(m => m.sessions.map(s => ({
     machineId: m.machineId, machine: m.machineName.slice(0,100), agent: s.executorId, id: s.nativeSessionId, cwd: s.cwd,
@@ -32,7 +32,7 @@ export function sessionCard(data: SessionCardSnapshot, navigation: string, reque
   return cardDocument('CLI 会话 · 只读历史', elements);
 }
 
-export function resumeForm(row: SessionCardSnapshot['rows'][number], navigation: string, index: number) {
+export function resumeForm(row: SessionCardSnapshot['rows'][number], navigation: string, index: number, returnKind: 'workbench.agents' | 'workbench.sessions' = 'workbench.sessions') {
   const field = (name: string, label: string) => ({
     tag: 'input', name, required: true, label_position: 'top', width: 'fill', max_length: 1000, label: cardPlain(label), placeholder: cardPlain(label),
   });
@@ -46,7 +46,7 @@ export function resumeForm(row: SessionCardSnapshot['rows'][number], navigation:
         {tag:'button', name:'submit_resume', text:cardPlain('提交审批申请'), type:'primary', form_action_type:'submit',
           behaviors:[{type:'callback', value:{kind:'workbench.resumeSubmit',navigation,index}}]},
       ]},
-      {tag:'button',text:cardPlain('返回会话列表'),behaviors:[{type:'callback',value:{kind:'workbench.sessions',navigation,page:Math.floor(index / 5)}}]},
+      {tag:'button',text:cardPlain('返回会话列表'),behaviors:[{type:'callback',value:{kind:returnKind,navigation,page:Math.floor(index / 5)}}]},
     ]},
   };
 }
