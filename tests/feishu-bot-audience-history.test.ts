@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { FeishuOptions, FeishuMessageSource } from '../plugins/feishu.ts';
 import type { FeishuBotFactory } from '../apps/server/src/feishu-bots.ts';
+import { botConversationId } from '../packages/core/src/bot-agent-routing.ts';
 import { startServer } from '../apps/server/src/index.ts';
 
 test('全局机器人按私聊主人和各群隔离模型实际历史，重启后同一受众能继续追问', async t => {
@@ -53,6 +54,21 @@ test('全局机器人按私聊主人和各群隔离模型实际历史，重启�
   await opts.onMessage(bot.pairingCode!, { ...owner, messageId: 'pair' });
   await opts.onMessage('/读群 核对版本', { ...group('oc_original_source'), messageId: 'read' });
   assert.ok(deliveries.some(row => row.chat === 'oc_original_source' && row.text === marker));
+  // Reopen a paired database as an installation being upgraded, before this audience has an SDK transcript.
+  const pairedOptions = opts;
+  await host.close(); host = await startServer(config, dependencies);
+  await t.waitFor(() => assert.notEqual(opts, pairedOptions));
+  const cutover = host.app.store.get<{ revision: number }>('feishu.audience.cutover', bot.id)!;
+  assert.ok(cutover);
+  const oldId = 'old-input', envelopeId = 'old-inbox', oldText = '仅原主人可见的升级前发言';
+  host.app.store.put('messages', oldId, { id: oldId, conversationId: botConversationId(bot), role: 'user',
+    status: 'done', text: oldText, createdAt: '2025-01-01T00:00:00Z' });
+  host.app.store.put('message.routes', oldId, { botId: bot.id, accountId: bot.appId, channel: 'feishu', scope: bot.scope,
+    revision: cutover.revision, target: owner.chatId, privateSenderId: owner.senderId, inputId: oldId, envelopeId });
+  host.app.store.put('event.mailboxes', envelopeId, { id: envelopeId, direction: 'inbox', botId: bot.id, scope: bot.scope,
+    target: owner.chatId, status: 'completed', text: oldText, eventKey: 'legacy-input', resultId: oldId,
+    title: '旧收件', version: 2, requiresConfirmation: false, createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-01T00:00:00Z' });
+  host.app.store.put('feishu.bot.dispatch', bot.id + ':' + bot.appId + ':' + envelopeId, { id: oldId, status: 'completed' });
   async function ask(label: Turn, source: Omit<FeishuMessageSource, 'messageId'>) {
     turn = label;
     await opts.onMessage(questions[label], { ...source, messageId: 'turn-' + label });
@@ -66,6 +82,7 @@ test('全局机器人按私聊主人和各群隔离模型实际历史，重启�
   assert.ok(calls.get('private')!.some(req => req.messages.some(msg => msg.role === 'tool' && JSON.stringify(msg.content).includes(marker))));
   assert.ok(original.includes(questions.private));
   const firstInputMessages = calls.get('private')![0].messages.filter(message => message.role !== 'system' && message.role !== 'developer');
+  assert.ok(JSON.stringify(firstInputMessages).includes(oldText), '首次 SDK 初始化没有从旧收件恢复已核实的发言');
   assert.equal(JSON.stringify(firstInputMessages).split(questions.private).length - 1, 1, '首次初始化重复写入当前输入');
   const second = await ask('follow', owner);
   assert.ok(second.includes(questions.private) && second.includes(marker), '原主人私聊追问丢失已核对的结论');
@@ -82,11 +99,11 @@ test('全局机器人按私聊主人和各群隔离模型实际历史，重启�
   const newChat = await ask('rebound', newOwner);
   const unexpected: string[] = [];
   for (const [label, history, forbidden] of [
-    ['群甲', a, [marker, questions.private, questions.follow]],
-    ['群乙', b, [marker, questions.private, questions.follow, questions.a]],
-    ['群甲重启后', groupFollow, [marker, questions.private, questions.follow, questions.b]],
+    ['群甲', a, [oldText, marker, questions.private, questions.follow]],
+    ['群乙', b, [oldText, marker, questions.private, questions.follow, questions.a]],
+    ['群甲重启后', groupFollow, [oldText, marker, questions.private, questions.follow, questions.b]],
     ['主人私聊重启后', privateFollow, [questions.a, questions.b, questions.again]],
-    ['新主人', newChat, [marker, questions.private, questions.follow, questions.a, questions.b, questions.again, questions.later]],
+    ['新主人', newChat, [oldText, marker, questions.private, questions.follow, questions.a, questions.b, questions.again, questions.later]],
   ] as const) {
     const count = forbidden.filter(text => history.includes(text)).length;
     if (count) unexpected.push(label + ' 混入 ' + count + ' 项其他受众内容');
