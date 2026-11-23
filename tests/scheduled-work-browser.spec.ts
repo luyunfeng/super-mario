@@ -206,7 +206,13 @@ test('创建失败/409 保留输入及 key；重复点击只有一个在途写�
   await drawer(page).getByLabel('频率', { exact: true }).selectOption('interval');
   await drawer(page).getByLabel('重复间隔', { exact: true }).fill('0.1'); await submit(page);
   await expect(drawer(page)).toContainText('间隔至少为 10 秒'); assert.equal(f.writes.length, 0);
-  await drawer(page).getByLabel('重复间隔', { exact: true }).fill('2');
+  const interval = drawer(page).getByLabel('重复间隔', { exact: true });
+  const preview = drawer(page).getByLabel('创建预览');
+  for (const [value, text] of [['0.5', '每 30 秒'], ['90', '每 1 小时 30 分钟'], ['1440', '每 1 天']]) {
+    await interval.fill(value);
+    await expect(preview).toContainText(text);
+  }
+  await interval.fill('2');
   await drawer(page).getByLabel('间隔单位').selectOption('3600');
   for (const [index,status] of [409, 503].entries()) {
     f.writeStatus = status; await submit(page);

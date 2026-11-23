@@ -24,9 +24,20 @@ function localInstant(value) {
   return date.toISOString();
 }
 
+function intervalText(seconds) {
+  const parts = [];
+  for (const [unit, size] of [['天', 86400], ['小时', 3600], ['分钟', 60]]) {
+    const count = Math.floor(seconds / size);
+    if (count) parts.push(count + ' ' + unit);
+    seconds %= size;
+  }
+  if (seconds) parts.push(seconds + ' 秒');
+  return '每 ' + parts.join(' ');
+}
+
 function timingText(s) {
   if (s.kind === 'once') return `一次 · ${timeText(s.at, s.tz)}`;
-  if (s.kind === 'interval') return `每 ${s.everySec / 60} 分钟${s.anchorAt ? ` · 起点 ${timeText(s.anchorAt)}` : ''}`;
+  if (s.kind === 'interval') return `${intervalText(s.everySec)}${s.anchorAt ? ` · 起点 ${timeText(s.anchorAt, s.tz)}` : ''}`;
   const fixed = /^(\d{1,2}) (\d{1,2}) \* \* (\*|1-5|[0-6](?:,[0-6])*)$/.exec(s.cron);
   if (!fixed) return `cron ${s.cron} · ${s.tz}`;
   const days = fixed[3] === '*' ? weekOrder : fixed[3] === '1-5' ? weekOrder.slice(0, 5) : fixed[3].split(',').map(Number);
@@ -303,7 +314,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
         if (!drawer.active()) return;
         const timezone = snapshot().workspaceTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai';
         replace(content, items.map(template => {
-          const timing = template.everyMinutes ? '每 ' + template.everyMinutes + ' 分钟'
+          const timing = template.everyMinutes ? intervalText(template.everyMinutes * 60)
             : template.days.map(day => weekdayNames[day]).join('、') + ' ' + template.time + ' · ' + timezone;
           return h('section', { class: 'stack' }, Button({
             label: template.title, onClick: () => { if (drawer.active()) openCreate(template); },
