@@ -428,7 +428,7 @@ export async function createWorkbench(config: AppConfig) {
     store.put('core.plugin-settings', 'feishu-web', { enabled: false, revision: 1 });
   }
   plugins.register({ ...webExtension, activate: context => serializeWeb(() => webExtension.activate(context)) });
-  const subscriptions = createSubscriptionHost({store,contributions,use:plugins.invocations.use,
+  const subscriptions = createSubscriptionHost({store,contributions,use:plugins.invocations.use,timezone:()=>briefing.settings().timezone,
     authorizeRead() {
       const input=currentAgentInput();
       if (!input || input.role!=='user' || input.readOnly || input.replyTo || input.projectId || input.todoId || (input.origin && input.origin!=='user'))
@@ -2038,7 +2038,7 @@ export async function createWorkbench(config: AppConfig) {
   }
   return {
     subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
-    briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); projectFollowUp.sync(); return result; } },
+    briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {
       history: todoHistory,

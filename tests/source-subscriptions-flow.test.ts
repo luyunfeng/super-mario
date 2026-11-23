@@ -144,3 +144,48 @@ test('GitHub 来源跨页补收 35 个新版本，服务重启与重复条目不
   assert.equal(received.length,37);
   assert.deepEqual(new Set(received.map(item=>item.title)),new Set(Array.from({length:37},(_,i)=>'v'+(i+1))));
 });
+
+test('仓库快照只在变化时更新同一收件，重启后恢复旧状态仍归入该订阅的个人记忆',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'sm-repo-state-'));
+  const config={host:'127.0.0.1',port:0,dataDir:dir,demo:true,token:'snapshot-fixture'};
+  let server=await startServer(config);
+  t.after(async()=>{try{await server.close();}finally{await rm(dir,{recursive:true,force:true});}});
+  let branch='main';
+  const localFetch=fetch;
+  t.mock.method(globalThis,'fetch',async(url:RequestInfo|URL,init?:RequestInit)=>{
+    const req=new Request(url,init);
+    if(new URL(req.url).origin===server.url)return localFetch(req);
+    assert.equal(req.url,'https://api.github.com/repos/sample/fixture');
+    return Response.json({full_name:'sample/fixture',default_branch:branch,description:'状态验收',archived:false,disabled:false,private:false});
+  });
+  async function api(path:string,body?:object) {
+    const res=await localFetch(server.url+'/api/v1/'+path,{method:body?'POST':'GET',headers:{
+      authorization:'Bearer '+config.token,'content-type':'application/json'},...(body && {body:JSON.stringify(body)})});
+    assert.ok(res.ok,await res.clone().text());return res.json();
+  }
+  const route='source-subscriptions', resource={sourceId:'release-source.repository',resource:'sample/fixture'};
+  const catalog=await api(route);
+  assert.ok(catalog.timezone);
+  assert.equal(catalog.sources.find((s:{id:string})=>s.id===resource.sourceId).mode,'snapshot');
+  const sub=await api(route,{...resource,name:'仓库状态',destinations:['inbox','knowledge']});
+  assert.equal(sub.dailyAt,'08:00');
+  const pull=()=>api(route+'/'+sub.id+'/pull',{version:sub.version});
+  const inbox=async()=>(await api('inbox') as InboxItem[]).filter(r=>r.source==='subscription:'+sub.id);
+  const knowledge=async()=>(await api('knowledge') as KnowledgeEntry[]).filter(r=>r.tags?.includes('订阅:'+sub.id));
+  assert.equal((await api(route+'/preview',{...resource,subscriptionId:sub.id})).firstObservation,true);
+  assert.deepEqual(await inbox(),[]);
+  await pull();
+  const [a]=await inbox();assert.match(a!.text,/main/);
+  assert.equal((await api(route+'/preview',{...resource,subscriptionId:sub.id})).changed,false);
+  await pull();assert.deepEqual(await inbox(),[a]);assert.equal((await knowledge()).length,1);
+  branch='stable';assert.equal((await api(route+'/preview',{...resource,subscriptionId:sub.id})).changed,true);
+  await pull();
+  const [b]=await inbox();assert.equal(b!.id,a!.id);assert.match(b!.text,/stable/);
+  await server.close();server=await startServer(config);branch='main';
+  await pull();await pull();
+  const final=await inbox();assert.equal(final.length,1);
+  assert.equal(final[0]!.id,a!.id);assert.ok(final[0]!.version>b!.version);assert.match(final[0]!.text,/main/);
+  const history=await api(route+'/'+sub.id+'/snapshot-history');
+  assert.deepEqual(history.items.map((entry:{sequence:number})=>entry.sequence),[3,2,1]);
+  const pages=await knowledge();assert.equal(pages.length,3);assert.ok(pages.every(p=>p.layer==='personal'));
+});

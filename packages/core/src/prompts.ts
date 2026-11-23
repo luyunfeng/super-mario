@@ -1,4 +1,3 @@
-import { subscriptionReadGuidance } from './subscription-tools.ts';
 /**
  * System prompts for super-mario agents.
  * Written in direct, low-fluff Chinese so the assistant responds like a sharp
@@ -78,7 +77,6 @@ export const MAIN_AGENT_SYSTEM_PROMPT = [
   stopTurnGuidance,
   workbenchCardGuidance,
   feishuStartGuidance, feishuGroupTaskGuidance, feishuTopicGuidance,
-  subscriptionReadGuidance,
   projectHistoryGuidance,
   timeGuidance,
   todoListGuidance,

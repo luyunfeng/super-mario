@@ -842,7 +842,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res,200,{runId:id,completionTiming:runCompletionTiming(app.store,run) ?? null});
         }
         if (path === '/api/v1/source-subscriptions' && method === 'GET') {
-          return json(res,200,{sources:app.subscriptions.sources(),subscriptions:app.subscriptions.service().list()});
+          return json(res,200,{sources:app.subscriptions.sources(),subscriptions:app.subscriptions.service().list(),timezone:app.subscriptions.timezone()});
         }
         if (path === '/api/v1/source-subscriptions/drafts' && method === 'GET')
           return json(res,200,{items:app.subscriptions.drafts.list()});
@@ -854,6 +854,8 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (path === '/api/v1/source-subscriptions' && method === 'POST') {
           return json(res,201,app.subscriptions.drafts.create(await body(req)));
         }
+        const snapshotHistory=path.match(/^\/api\/v1\/source-subscriptions\/([^/]+)\/snapshot-history$/);
+        if(snapshotHistory && method==='GET') return json(res,200,app.subscriptions.service().snapshotHistory(decodeURIComponent(snapshotHistory[1]!)));
         const subscription = path.match(/^\/api\/v1\/source-subscriptions\/([^/]+)(\/pull)?$/);
         if (subscription && ((method === 'POST' && subscription[2]) || ((method === 'PATCH' || method === 'DELETE') && !subscription[2]))) {
           const id = decodeURIComponent(subscription[1]!), input = await body(req);

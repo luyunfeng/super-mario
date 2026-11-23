@@ -1,4 +1,5 @@
 import { uuid } from '../lib/format.js';
+import { subscriptionSchedule, subscriptionScheduleLabel } from './subscription-schedule.js';
 import { subscriptionPaths } from './subscription-paths.js';
 import { h, replace } from '../lib/dom.js';
 import { externalSourceLink } from '../lib/markdown.js';
@@ -18,7 +19,8 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
   const resource = Input({required:true});
   const resourceField = Field({label:'资源',control:resource});
   const name = Input({required:true});
-  const interval = Input({type:'number',min:1,max:10080,step:1,value:60,required:true});
+  const schedule=subscriptionSchedule();
+  let inspectedSnapshot, recentSnapshots;
   const checks = Object.entries(destinations).map(([id,label]) => Check({label,name:id,checked:id === 'inbox'}));
   const notice = h('p',{role:'status',class:'small'});
   let selectedDraft = null;
@@ -32,7 +34,7 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
   const create = Button({label:'创建订阅',kind:'primary',type:'submit'});
   const fields = h('fieldset',{class:'stack'},
     Field({label:'来源连接器',control:source}), resourceField, h('div',null,preview), results,
-    Field({label:'订阅名称',control:name}),Field({label:'拉取间隔（分钟）',control:interval}),
+    Field({label:'订阅名称',control:name}),schedule.element,
     h('fieldset', {class:'row row--wrap'}, h('legend',null,'新内容送往'), checks),h('div',null,create));
   const form = h('form',{onsubmit:event => {event.preventDefault(); void createSubscription();}},fields);
   const refresh = Button({label:'刷新订阅',size:'sm',onClick:load});
@@ -57,6 +59,7 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
     if (connection !== 'online') settings?.close();
     const nextPlugins = pluginStates(view);
     if (revision !== view.sourceSubscriptionsChange || plugins !== nextPlugins || reconnect) {
+      inspectedSnapshot=undefined;recentSnapshots=undefined;
       plugins = nextPlugins;
       revision = view.sourceSubscriptionsChange; pendingRead = true;
       if (draftList.open && connection === 'online') void loadDraftList();
@@ -67,6 +70,7 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
     if (busy || !pendingRead || connection !== 'online' || !active()) return;
     pendingRead = false; void load(true);
   }
+  let timezone;
   let sources = [], subscriptions = [], busy = false, loaded = false;
   function sync() {
     fields.disabled = connection !== 'online' || busy || !loaded || !sources.length;
@@ -75,13 +79,15 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
     for (const button of rows.querySelectorAll('button')) button.disabled = connection !== 'online' || busy || button.dataset.unavailable === 'true';
   }
   function setResourceLabel() {
-    resourceField.querySelector('label').textContent = sources.find(item => item.id === source.value)?.resourceLabel ?? '资源';
+    const definition=sources.find(item => item.id===source.value);
+    resourceField.querySelector('label').textContent = definition?.resourceLabel ?? '资源';
+    schedule.set(definition);
     replace(results);
   }
   source.addEventListener('change',setResourceLabel);
   resource.addEventListener('input',() => replace(results));
   function edit(row,remove=false) {
-    settings=openSubscriptionSettings({row,remove,api,path,active:() => active() && store.view.connection === 'online',
+    settings=openSubscriptionSettings({row,remove,timezone,api,path,active:() => active() && store.view.connection === 'online',
       changed:message => {notice.textContent=message;pendingRead=true;refreshIfNeeded();}});
   }
   function paint() {
@@ -92,16 +98,26 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
       pull.dataset.unavailable = String(!sourceName || !row.enabled);
       return h('article',{class:'card card__body stack','aria-label':row.name,tabIndex:-1,dataset:{id:row.id}},
         h('div',{class:'row row--between'},h('strong',null,row.name),h('span',null,row.enabled ? '已启用' : '已暂停')),
-        h('div',{class:'small'},(sourceName ?? row.sourceId + '（连接器不可用）') + ' · ' + row.resource),
-        h('div',{class:'small muted'},row.destinations.map(id => destinations[id]).join('、') + ' · 每 ' + row.intervalMinutes + ' 分钟'),
+        h('div',{class:'small'},row.mode==='snapshot' && '状态快照 · ',(sourceName ?? row.sourceId + '（连接器不可用）') + ' · ' + row.resource),
+        h('div',{class:'small muted'},row.destinations.map(id => destinations[id]).join('、') + ' · ' + subscriptionScheduleLabel(row,timezone)),
         row.nextPageNumber && h('div',{class:'small'},'本轮尚有后续页，下次读取第 '+row.nextPageNumber+' 页。'),
+        inspectedSnapshot?.id===row.id && h('div',{class:'stack',role:'status'},
+          ...previewItems(inspectedSnapshot.preview,true)),
+        recentSnapshots?.id===row.id && h('section',{class:'stack','aria-label':'最近 24 小时的状态记录'},
+          h('strong',null,'最近 24 小时的状态记录'),recentSnapshots.items.length ? recentSnapshots.items.map(({item,changedAt}) =>
+            h('article',{class:'stack'},h('strong',null,item.title),h('time',{dateTime:changedAt},date(changedAt)),
+              h('div',{style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}},item.text),
+              item.url && externalSourceLink(item.url,'打开来源原文'))) : '暂无状态变化记录。'),
         row.lastRunAt && h('div',{class:'small'},'最近拉取 · ' + date(row.lastRunAt)),
         Number.isFinite(Date.parse(row.retryAt)) && h('div',{class:'small'},
           '来源限流，可再次读取的时间 · ',retryTime(row.retryAt),
           row.enabled && h('p',{class:'muted small'},'等待期间，立即拉取可补投此前已收到的条目。')),
         row.enabled && row.nextRunAt && h('div',{class:'small'},'下次拉取 · ' + date(row.nextRunAt)),
         row.error && h('p',{class:'text-danger'},row.error),
-        h('div',{class:'row row--wrap'},pull,Button({label:'编辑订阅',size:'sm',onClick:() => edit(row)}),
+        h('div',{class:'row row--wrap'},pull,
+          row.mode==='snapshot' && Button({label:recentSnapshots?.id===row.id?'收起状态记录':'近期状态记录',size:'sm',onClick:() => history(row)}),
+          row.mode==='snapshot' && Button({label:'查看当前状态',size:'sm',onClick:() => inspect(row)}),
+          Button({label:'编辑订阅',size:'sm',onClick:() => edit(row)}),
           Button({label:'删除订阅',size:'sm',onClick:() => edit(row,true)}),Button({label:row.enabled ? '暂停订阅' : '恢复订阅',size:'sm',onClick:() => change(row,false)})));
     }) : '暂无订阅。');
     sync();
@@ -110,13 +126,15 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
     const state = await api.get(path);
     if (!active()) return;
     const previous = source.value;
+    const previousMode=sources.find(item=>item.id===previous)?.mode;
+    timezone=state.timezone;schedule.setTimezone(timezone);
     sources = state.sources; subscriptions = state.subscriptions;
     replace(source,sources.map(item => h('option',{value:item.id},item.name)));
     if (sources.some(item => item.id === previous)) source.value = previous;
     else if (previous && sources.length) {
       source.prepend(h('option',{value:''},'请选择来源连接器')); source.value = '';
     }
-    if (!previous || source.value !== previous) setResourceLabel();
+    if (!previous || source.value !== previous || sources.find(item=>item.id===source.value)?.mode!==previousMode) setResourceLabel();
     loaded = true;
     paint();
   }
@@ -142,17 +160,37 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
       if (active() && !sources.length) notice.textContent = '没有可用的来源连接器。';
     },false,quiet === true);
   }
+  function previewItems({items,hasMore,changed,firstObservation},snapshot) {
+    const comparison=firstObservation ? '这条订阅还没有已记录的状态。' : changed===true ? '与上次记录不同。' : changed===false ? '与上次记录相同。' : '';
+    return [h('strong',null,'来源预览'),
+      snapshot && h('p',{class:'small muted'},'当前状态快照。'+comparison+'预览不会触发投递。'),
+      hasMore && h('p',{class:'small muted'},'仅预览首页，来源还有后续页。'),
+      items.length ? items.map(item => h('article',{class:'stack'},h('strong',null,item.title),
+        h('div',{class:'small',style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}},item.text),
+        item.url && externalSourceLink(item.url,'打开来源原文'))) : hasMore ? '本页暂无条目。' : '暂无可预览的内容。'];
+  }
+  function history(row) {
+    if(recentSnapshots?.id===row.id) {recentSnapshots=undefined;paint();return;}
+    return act(async () => {
+      recentSnapshots=undefined;paint();
+      const {items}=await api.get(path+'/'+encodeURIComponent(row.id)+'/snapshot-history');
+      if(active()) {recentSnapshots={id:row.id,items};paint();}
+    });
+  }
+  function inspect(row) {
+    return act(async () => {
+      inspectedSnapshot=undefined; paint();
+      const preview=await api.post(path+'/preview',{subscriptionId:row.id,sourceId:row.sourceId,resource:row.resource});
+      if(active()) {inspectedSnapshot={id:row.id,preview};paint();}
+    });
+  }
   function previewSource() {
     if (!source.reportValidity() || !resource.reportValidity() || !resource.value.trim()) return;
     replace(results);
     return act(async () => {
-      const {items,hasMore} = await api.post(path+'/preview',{sourceId:source.value,resource:resource.value.trim()});
-      if (active()) replace(results,h('strong',null,'来源预览'),
-        hasMore && h('p',{class:'small muted'},'仅预览首页，来源还有后续页。'),
-        items.length ? items.map(item =>
-        h('article',{class:'stack'},h('strong',null,item.title),
-          h('div',{class:'small',style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}},item.text),
-          item.url && externalSourceLink(item.url,'打开来源原文'))) : hasMore ? '本页暂无条目。' : '暂无可预览的内容。');
+      const snapshot=sources.find(item=>item.id===source.value)?.mode==='snapshot';
+      const preview=await api.post(path+'/preview',{sourceId:source.value,resource:resource.value.trim()});
+      if (active()) replace(results,...previewItems(preview,snapshot));
     });
   }
   let createAttempt;
@@ -161,7 +199,7 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
     if (!selected.length) {notice.textContent = '请选择新内容的去向。'; return;}
     return act(async () => {
       const input = {sourceId:source.value,resource:resource.value.trim(),name:name.value.trim(),
-        destinations:selected,intervalMinutes:Number(interval.value),...(selectedDraft && {draftId:selectedDraft})};
+        destinations:selected,...schedule.input(),...(selectedDraft && {draftId:selectedDraft})};
       const signature=JSON.stringify(input);
       if(createAttempt?.signature!==signature) createAttempt={signature,id:uuid()};
       const row = await api.post(path,{...input,requestId:createAttempt.id});
@@ -178,6 +216,7 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
       const updated = pull ? await api.post(url+'/pull',{version:row.version}) :
         await api.patch(url,{version:row.version,enabled:!row.enabled});
       if (!active()) return;
+      if (inspectedSnapshot?.id===updated.id) inspectedSnapshot=undefined;
       subscriptions = subscriptions.map(existing => existing.id === updated.id ? updated : existing);
       paint(); notice.textContent = updated.error || (pull
         ? updated.nextPageNumber ? '已拉取本页，下次读取第 '+updated.nextPageNumber+' 页。' : '本轮拉取完成。'
@@ -200,7 +239,7 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
       if(!active() || draft.id!==id) return;
       if(!sources.some(item=>item.id===draft.sourceId)) throw new Error('草案的来源连接器已停用。');
       source.value=draft.sourceId;setResourceLabel();resource.value=draft.resource;name.value=draft.name;
-      interval.value=String(draft.intervalMinutes);
+      schedule.set({...draft,mode:sources.find(item=>item.id===draft.sourceId)?.mode});
       for(const label of checks) {
         const box=label.querySelector('input');box.checked=draft.destinations.includes(box.name);
       }

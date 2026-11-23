@@ -1,23 +1,32 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { nextOccurrence } from './schedules.ts';
 import type { Store } from '../../plugin-sdk/src/index.ts';
 
 type Destination = 'inbox' | 'knowledge';
 export type SourceItem = {id:string; title:string; text:string; url?:string};
 type SubscriptionInput = {sourceId:string; resource:string; name:string; destinations:Destination[]; intervalMinutes:number};
 export interface SourceSubscription extends SubscriptionInput {
-  id:string; version:number; enabled:boolean; nextRunAt:string; lastRunAt?:string; nextPageNumber?:number; retryAt?:string; error?:string;
+  mode?:'snapshot'; dailyAt?:string; id:string; version:number; enabled:boolean; nextRunAt:string; lastRunAt?:string; nextPageNumber?:number; retryAt?:string; error?:string;
 }
 type Options = {
   store:Store;
+  timezone?:()=>string;
   onChange?:(id:string)=>void;
-  sources:()=>{id:string;name:string;resourceLabel:string}[];
-  read:(sourceId:string,resource:string,signal:AbortSignal,cursor?:string,checkpoint?:string)=>Promise<SourceItem[]|{items:SourceItem[];nextCursor?:string;checkpoint?:string}>;
-  deliver:(destination:Destination,key:string,item:SourceItem,subscription:{id:string;name:string})=>Promise<void>|void;
+  sources:()=>{id:string;name:string;resourceLabel:string;mode?:'snapshot'}[];
+  read:(sourceId:string,resource:string,signal:AbortSignal,cursor?:string,checkpoint?:string)=>Promise<SourceItem[]|{items:SourceItem[];nextCursor?:string;checkpoint?:string}|{snapshot:Omit<SourceItem,'id'>}>;
+  deliver:(destination:Destination,key:string,item:SourceItem,subscription:{id:string;name:string;mode?:'snapshot'})=>Promise<void>|void;
 };
 const rows = 'source.subscriptions';
 const pending = 'source.subscription-pending';
 const receipts = 'source.subscription-receipts';
 
+const snapshots = 'source.subscription-snapshots';
+const snapshotChanges='source.snapshot-changes';
+const snapshotCatchups='source.snapshot-catchups';
+const snapshotTargets='source.snapshot-targets';
+type Change={sequence:number; changedAt:string; item:SourceItem};
+type Catchup={item:SourceItem; destination:Destination};
+type SnapshotState = {sequence:number; digest:string; changedAt:string; item:SourceItem};
 const positions = 'source.subscription-positions';
 const stagedPages = 'source.subscription-staged-pages';
 const checkpoints = 'source.subscription-checkpoints';
@@ -59,7 +68,7 @@ function deliveryKey(id:string,item:string,destination:Destination) {
   return 'source-subscription:'+createHash('sha256').update(JSON.stringify([id,item,destination])).digest('hex');
 }
 
-export function createSourceSubscriptions({store,sources,read,deliver,onChange}:Options) {
+export function createSourceSubscriptions({store,sources,read,deliver,onChange,timezone=()=>Intl.DateTimeFormat().resolvedOptions().timeZone}:Options) {
   let closed=false;
   const deliveries=new Set<Promise<void>>();
   const previews=new Set<AbortController>();
@@ -70,10 +79,42 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
   function requireSource(sourceId:string) {
     if(!available(sourceId)) failure('来源插件已停用或不可用。',503);
   }
+  function scheduled(row:{intervalMinutes:number; dailyAt?:string}, after=Date.now()) {
+    if(!row.dailyAt) return new Date(after+row.intervalMinutes*60_000).toISOString();
+    const [hour,minute]=row.dailyAt.split(':').map(Number);
+    return nextOccurrence({kind:'cron',name:'订阅每日快照',cron:minute+' '+hour+' * * *',tz:timezone()},after);
+  }
+  function syncTimezone() {
+    const zone=timezone();
+    if(store.get<string>('source.subscription-clock','timezone')===zone) return;
+    const now=Date.now();
+    const changed=store.transaction(()=>{
+      const ids:string[]=[];
+      for(const row of store.list<SourceSubscription>(rows)) {
+        // Keep immediate catch-up and recovery attempts. Their next successful run sets the new daily deadline.
+        if(!row.dailyAt || !row.enabled || !row.lastRunAt || row.error || Date.parse(row.nextRunAt)<=now) continue;
+        const nextRunAt=scheduled(row,now);
+        if(nextRunAt===row.nextRunAt) continue;
+        store.put(rows,row.id,{...row,nextRunAt}); ids.push(row.id);
+      }
+      store.put('source.subscription-clock','timezone',zone);
+      return ids;
+    });
+    for(const id of changed) onChange?.(id);
+  }
   function get(id:string) {
     const row=store.get<SourceSubscription>(rows,id);
     if(!row || row.id!==id) failure('来源订阅不存在。',404);
     return row;
+  }
+  function recentChanges(id:string) {
+    const since=Date.now()-86400000;
+    return (store.get<Change[]>(snapshotChanges,id) ?? []).filter(change=>Date.parse(change.changedAt)>=since);
+  }
+  function snapshotHistory(id:string) {
+    open();
+    if(get(id).mode!=='snapshot') failure('此订阅不是快照来源。',400);
+    return {items:recentChanges(id).reverse()};
   }
   function current(id:string,version:unknown) {
     open();
@@ -129,14 +170,17 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
       readerFailure(error);
     } finally { reads.delete(key);release(); }
   }
-  async function load(sourceId:string,resource:string,controller:AbortController,cursor?:string,checkpoint?:string) {
+  async function load(sourceId:string,resource:string,controller:AbortController,cursor?:string,checkpoint?:string,mode?:'snapshot') {
     requireSource(sourceId);
     const raw=await readConnector(sourceId,resource,controller,cursor,checkpoint);
-    const paged=!Array.isArray(raw);
-    const result=paged ? raw?.items : raw;
     open();
     controller.signal.throwIfAborted();
     requireSource(sourceId);
+    const isSnapshot=raw && !Array.isArray(raw) && 'snapshot' in raw;
+    if((mode==='snapshot')!==Boolean(isSnapshot)) failure('来源返回的内容模式与订阅不一致。',502);
+    if(isSnapshot && ('items' in raw || 'nextCursor' in raw || 'checkpoint' in raw)) failure('快照来源不能同时返回分页或条目。',502);
+    const paged=!isSnapshot && !Array.isArray(raw);
+    const result=isSnapshot ? [{...raw.snapshot,id:'snapshot:preview'}] : paged ? raw?.items : raw;
     if(!Array.isArray(result)) failure('来源插件未返回有效的条目列表。',502);
     if(result.length>100) failure('来源单次读取超过 100 个条目。',502);
     const items=new Map<string,SourceItem>();
@@ -147,7 +191,9 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
         failure('来源条目超出支持的长度。',502);
       if(!items.has(entry.id)) items.set(entry.id,{id:entry.id,title:entry.title,text:entry.text,...(entry.url && {url:entry.url})});
     }
-    return {items:[...items.values()],paged,nextCursor:paged ? token(raw.nextCursor) : undefined,checkpoint:paged ? token(raw.checkpoint) : undefined};
+    const first=items.values().next().value;
+    const digest=isSnapshot && first ? createHash('sha256').update(JSON.stringify([first.title,first.text,first.url ?? ''])).digest('hex') : undefined;
+    return {items:[...items.values()],digest,paged,nextCursor:paged ? token(raw.nextCursor) : undefined,checkpoint:paged ? token(raw.checkpoint) : undefined};
   }
   function list() {
     open();
@@ -162,27 +208,42 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
   async function preview(input:Record<string,unknown>, signal?:AbortSignal) {
     open();
     const sourceId=required(input?.sourceId,'来源'),resource=required(input?.resource,'资源');
+    const mode=sources().find(source=>source.id===sourceId)?.mode;
+    const row=input.subscriptionId!==undefined ? get(required(input.subscriptionId,'订阅编号')) : undefined;
+    if(row && (row.sourceId!==sourceId || row.resource!==resource || row.mode!==mode)) failure('预览资源与订阅不符。',409);
     signal?.throwIfAborted();
     const controller=new AbortController();previews.add(controller);
     const cancel=()=>controller.abort(signal?.reason);
     signal?.addEventListener('abort',cancel,{once:true});
-    try { const page=await load(sourceId,resource,controller); return {items:page.items,...(page.nextCursor && {hasMore:true as const})}; }
+    try {
+      const page=await load(sourceId,resource,controller,undefined,undefined,mode);
+      if(row) get(row.id);
+      const prior=row && page.digest ? store.get<SnapshotState>(snapshots,row.id) : undefined;
+      return {items:page.items,...(page.nextCursor && {hasMore:true as const}),
+        ...(row && page.digest && {changed:prior?.digest!==page.digest,...(!prior && {firstObservation:true})})};
+    }
     finally { signal?.removeEventListener('abort',cancel); previews.delete(controller); }
   }
-  function settings(input:Record<string,unknown>) {
+  function settings(input:Record<string,unknown>,mode?:'snapshot') {
     const name=required(input.name,'订阅名称');
-    const {destinations,intervalMinutes}=input;
+    const {destinations}=input;
+    const dailyAt=mode==='snapshot' ? input.dailyAt ?? (input.intervalMinutes===undefined ? '08:00' : '') : undefined;
+    if(input.dailyAt!==undefined && mode!=='snapshot') failure('只有快照订阅支持每日时间。',400);
+    if(dailyAt!==undefined && (typeof dailyAt!=='string' || (dailyAt!=='' && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(dailyAt)))) failure('每日快照时间须为 HH:mm。',400);
+    const intervalMinutes=input.intervalMinutes ?? (mode==='snapshot' ? 1440 : undefined);
     if(!Array.isArray(destinations) || !destinations.length || destinations.some(d=>d!=='inbox' && d!=='knowledge'))
       failure('请选择有效的投递位置。',400);
     if(typeof intervalMinutes!=='number' || !Number.isSafeInteger(intervalMinutes) || intervalMinutes<1 || intervalMinutes>10080)
       failure('拉取间隔必须为 1–10080 的整数分钟。',400);
-    return {name,intervalMinutes,destinations:[...new Set<Destination>(destinations)]};
+    if(mode==='snapshot' && !dailyAt && intervalMinutes<60) failure('快照固定间隔至少为 60 分钟。',400);
+    return {name,intervalMinutes,...(typeof dailyAt==='string' && {dailyAt}),destinations:[...new Set<Destination>(destinations)]};
   }
   function configuration(input:Record<string,unknown>) {
     open();
     const sourceId=required(input?.sourceId,'来源'),resource=required(input?.resource,'资源');
     requireSource(sourceId);
-    return {sourceId,resource,...settings(input)};
+    const mode=sources().find(source=>source.id===sourceId)?.mode;
+    return {sourceId,resource,...(mode && {mode}),...settings(input,mode)};
   }
   function create(input:Record<string,unknown>) {
     const config=configuration(input);
@@ -201,7 +262,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
         return existing;
       }
       if(store.get(rows,id)) failure('创建请求编号已使用。',409);
-      const row:SourceSubscription={id,...config,enabled:true,version:1,nextRunAt:nextRun(config.intervalMinutes)};
+      const row:SourceSubscription={id,...config,enabled:true,version:1,nextRunAt:config.mode ? new Date().toISOString() : nextRun(config.intervalMinutes)};
       store.put(rows,id,row);
       if(requestId) store.put('source.subscription-requests',id,fingerprint);
       onChange?.(id);
@@ -210,15 +271,15 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
   }
   function update(id:string,input:Record<string,unknown>) {
     const fields=Object.keys(input).filter(key=>key!=='version');
-    if(!fields.length || fields.some(key=>!['enabled','name','intervalMinutes','destinations'].includes(key)))
+    if(!fields.length || fields.some(key=>!['enabled','name','intervalMinutes','destinations','dailyAt'].includes(key)))
       failure('只支持修改名称、拉取间隔、投递位置和开关。',400);
     const row=store.transaction(()=>{
       const previous=current(id,input.version);
       if(running.has(id) && !(fields.length===1 && input.enabled===false)) failure('订阅正在拉取，请稍后再修改。',409);
       const enabled=Object.hasOwn(input,'enabled') ? input.enabled : previous.enabled;
       if(typeof enabled!=='boolean') failure('订阅开关无效。',400);
-      const config=settings({...previous,...input});
-      const reschedule=enabled!==previous.enabled || config.intervalMinutes!==previous.intervalMinutes;
+      const config=settings({...previous,...input},previous.mode);
+      const reschedule=enabled!==previous.enabled || config.intervalMinutes!==previous.intervalMinutes || config.dailyAt!==previous.dailyAt;
       if(!reschedule && previous.name===config.name && previous.destinations.length===config.destinations.length &&
         config.destinations.every(d=>previous.destinations.includes(d))) return previous;
       const next={...previous,...config,enabled,version:previous.version+1};
@@ -228,7 +289,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
       if(enabled && (!previous.enabled || addedDestination)) next.nextRunAt=new Date().toISOString();
       else if(reschedule) {
         const last=Date.parse(previous.lastRunAt ?? '');
-        next.nextRunAt=Number.isFinite(last) ? new Date(last+next.intervalMinutes*60_000).toISOString() : nextRun(next.intervalMinutes);
+        next.nextRunAt=scheduled(next,next.dailyAt || !Number.isFinite(last) ? Date.now() : last);
       }
       if(enabled!==previous.enabled) delete next.error;
       if(!enabled || addedDestination) {
@@ -236,7 +297,21 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
         store.remove(stagedPages,id);
         delete next.nextPageNumber;
       }
-      if(addedDestination) store.remove(checkpoints,id);
+      if(addedDestination) {
+        store.remove(checkpoints,id);
+        if(previous.mode==='snapshot') {
+          const history=recentChanges(id);
+          const jobs=store.get<Catchup[]>(snapshotCatchups,id) ?? [];
+          for(const destination of config.destinations.filter(d=>!previous.destinations.includes(d))) {
+            const changes=destination==='inbox' ? history.slice(-1) : history;
+            for(const change of changes) {
+              if(!jobs.some(job=>job.item.id===change.item.id && job.destination===destination))
+                jobs.push({item:change.item,destination});
+            }
+          }
+          if(jobs.length) store.put(snapshotCatchups,id,jobs);
+        }
+      }
       store.put(rows,id,next);return next;
     });
     if(!row.enabled) running.get(id)?.abort();
@@ -250,6 +325,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
       for(const key of store.list<string>(receipts+'.'+id)) store.remove(receipts+'.'+id,key);
       store.remove(pending,id);
       store.remove(positions,id);store.remove(stagedPages,id);store.remove(checkpoints,id);
+      for(const kind of [snapshots,snapshotChanges,snapshotCatchups,snapshotTargets]) store.remove(kind,id);
       store.remove(rows,id);
     });
     onChange?.(id);
@@ -261,7 +337,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
     if(running.has(id)) failure('订阅正在拉取。',409);
     requireSource(row.sourceId);
     const until=retryTime(row.sourceId);
-    if(until && !store.get(pending,id)) limited(until);
+    if(until && !store.get(pending,id) && !store.get(snapshotCatchups,id)) limited(until);
     const controller=new AbortController();running.set(id,controller);
     const ownedReceipts=receipts+'.'+id;
     function delivered(key:string) {
@@ -274,7 +350,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
       requireSource(row.sourceId);
     }
     function finish(error?:string,retryAt?:string) {
-      const next={...row,lastRunAt:new Date().toISOString(),nextRunAt:retryAt ?? nextRun(row.intervalMinutes)};
+      const next={...row,lastRunAt:new Date().toISOString(),nextRunAt:retryAt ?? scheduled(row)};
       const nextPosition=store.get<Position>(positions,id);
       if(nextPosition) {
         next.nextPageNumber=nextPosition.page;
@@ -284,17 +360,18 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
       store.put(rows,id,next);
       return next;
     }
-    async function deliverQueue(queue:SourceItem[]) {
+    async function deliverQueue(queue:SourceItem[],targets=row.destinations) {
       for(let index=0;index<queue.length;index++) {
         const item=queue[index]!;
-        for(const destination of row.destinations) {
+        for(const destination of targets) {
+          if(!row.destinations.includes(destination)) continue;
           guard();
           const key=deliveryKey(id,item.id,destination);
           if(delivered(key)) continue;
           // The host's destination writer must commit this key with its content for crash-safe replay.
           const delivery = Promise.resolve().then(() => {
             guard();
-            return deliver(destination,key,{...item},{id,name:row.name});
+            return deliver(destination,key,{...item},{id,name:row.name,...(row.mode && {mode:row.mode})});
           });
           deliveries.add(delivery);
           try { await delivery; }
@@ -311,7 +388,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
     }
     function commitPage(advance:Advance) {
       return store.transaction(()=>{
-        store.remove(pending,id);store.remove(stagedPages,id);
+        store.remove(pending,id);store.remove(stagedPages,id);store.remove(snapshotTargets,id);
         if(advance.position) store.put(positions,id,advance.position);
         else {
           store.remove(positions,id);
@@ -323,10 +400,16 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
     let reading=false;
     try {
       guard();
+      if(row.mode==='snapshot') {
+        const jobs=store.get<Catchup[]>(snapshotCatchups,id) ?? [];
+        for(const job of jobs) await deliverQueue([job.item],[job.destination]);
+        guard();
+        if(jobs.length) store.remove(snapshotCatchups,id);
+      }
       const backlog=store.get<SourceItem[]>(pending,id) ?? [];
       const staged=store.get<Advance>(stagedPages,id);
       if(backlog.length || staged) {
-        await deliverQueue(backlog);
+        await deliverQueue(backlog,row.mode ? store.get<Destination[]>(snapshotTargets,id) : undefined);
         guard();
         if(staged) {
           const updated=commitPage(staged);onChange?.(id);return updated;
@@ -336,9 +419,27 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
       const position=store.get<Position>(positions,id);
       const checkpoint=store.get<string>(checkpoints,id);
       reading=true;
-      const page=await load(row.sourceId,row.resource,controller,position?.cursor,checkpoint);
+      const page=await load(row.sourceId,row.resource,controller,position?.cursor,checkpoint,row.mode);
       reading=false;
       guard();
+      if(row.mode==='snapshot') {
+        const prior=store.get<SnapshotState>(snapshots,id);
+        const digest=page.digest;
+        if(digest && digest!==prior?.digest) {
+          const sequence=(prior?.sequence ?? 0)+1;
+          const item={...page.items[0]!,id:'snapshot:'+sequence};
+          store.transaction(()=>{
+            const change={sequence,changedAt:new Date().toISOString(),item};
+            store.put(snapshots,id,{...change,digest} satisfies SnapshotState);
+            store.put(snapshotChanges,id,[...recentChanges(id),change]);
+            store.put(pending,id,[item]);
+            store.put(snapshotTargets,id,row.destinations);
+          });
+          await deliverQueue([item]);
+        }
+        guard();
+        const updated=commitPage({});onChange?.(id);return updated;
+      }
       let advance:Advance={};
       if(page.paged || position) {
         const candidate=position ? position.candidate : page.checkpoint;
@@ -388,12 +489,12 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
     const now=Date.now();
     await Promise.allSettled(store.list<SourceSubscription>(rows).filter(row=>
       row.enabled && !running.has(row.id) && Date.parse(row.nextRunAt)<=now &&
-      (!retryTime(row.sourceId) || Boolean(store.get(pending,row.id)))).map(row=>pull(row.id,row.version)));
+      (!retryTime(row.sourceId) || Boolean(store.get(pending,row.id) || store.get(snapshotCatchups,row.id)))).map(row=>pull(row.id,row.version)));
   }
   async function close() {
     closed=true;
     for(const controller of [...previews,...running.values()]) controller.abort();
     await Promise.allSettled([...deliveries]);
   }
-  return {list,preview,configuration,create,update,remove,pull,tick,close};
+  return {list,preview,syncTimezone,snapshotHistory,configuration,create,update,remove,pull,tick,close};
 }

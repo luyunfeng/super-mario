@@ -32,7 +32,8 @@ test('版本来源通过插件服务匿名读取官方仓库，将已发布版�
     ]);
   });
   assert.deepEqual(contributions.list('connectors'),[{id:'releases',value:{kind:'subscription-source',name:'GitHub 版本发布',
-    resourceLabel:'仓库（owner/repo）',service:'release-source.releases'}}]);
+    resourceLabel:'仓库（owner/repo）',service:'release-source.releases'}},
+    {id:'repository',value:{kind:'subscription-source',mode:'snapshot',name:'GitHub 仓库状态',resourceLabel:'仓库（owner/repo）',service:'release-source.repository'}}]);
   assert.deepEqual(await read(),{checkpoint:'27',items:[
     {id:'27',title:'测试版',text:'说明一\n说明二',url:'https://github.com/sample/.github/releases/tag/v3%2Ftest'},
     {id:'26',title:'v2',text:'v2',url:'https://github.com/sample/.github/releases/tag/v2'},
@@ -163,4 +164,42 @@ test('首页只给候选水位，超过一页的新发布继续查找旧水位�
   assert.equal(first.items.length+second.items.length+last.items.length,70);
   assert.equal(last.nextCursor,undefined);
   for (const invalid of ['0','07','bad','999999999999999999999']) await assert.rejects(read(invalid),{status:400});
+});
+
+test('仓库快照只反映五项仓库设置，忽略分页链接和活动计数',async t=>{
+  const base={full_name:'Sample/Project',description:'仓库说明',default_branch:'main',archived:false,disabled:false};
+  let response:unknown={...base,stargazers_count:100,html_url:'https://example.invalid/'};
+  const {host}=await fixture(t,async(url,init)=>{
+    assert.equal(String(url),'https://api.github.com/repos/sample/project');
+    assert.equal(init?.redirect,'error');
+    assert.equal(init?.credentials,'omit');
+    return Response.json(response,{headers:{link:'<https://example.invalid/>; rel="next"'}});
+  });
+  const read=()=>host.invocations.use('release-source.repository',{resource:'sample/project'});
+  const expected={snapshot:{title:'Sample/Project 仓库状态',url:'https://github.com/Sample/Project',
+    text:'仓库：Sample/Project\n描述："仓库说明"\n默认分支：main\n已归档：否\n已禁用：否'}};
+  assert.deepEqual(await read(),expected);
+  response={updated_at:'2026-08-10',stargazers_count:101,...base};
+  assert.deepEqual(await read(),expected);
+  response={...base,description:null,default_branch:'next',archived:true,disabled:true};
+  assert.deepEqual(await read(),{snapshot:{...expected.snapshot,text:'仓库：Sample/Project\n描述：未填写\n默认分支：next\n已归档：是\n已禁用：是'}});
+  for (const invalid of [{...base,private:true},{...base,full_name:'sample/other'},{...base,disabled:null},{}]) {
+    response=invalid;
+    await assert.rejects(read(),{status:502,sourceReadCode:'unavailable'});
+  }
+});
+
+test('仓库快照复用读取限流提示，拒绝分页或外部 URL',async t=>{
+  let calls=0;
+  const {host}=await fixture(t,async()=>{
+    calls++;
+    return new Response(null,{status:429,headers:{'retry-after':'18'}});
+  });
+  const use=(input:Record<string,string>)=>host.invocations.use('release-source.repository',input);
+  const invalid:Record<string,string>[]=[{resource:'https://example.invalid'},{resource:'sample/project',cursor:'2'},{resource:'sample/project',checkpoint:'10'}];
+  for (const args of invalid)
+    await assert.rejects(use(args),{status:400,sourceReadCode:'invalid_resource'});
+  assert.equal(calls,0);
+  await assert.rejects(use({resource:'sample/project'}),{status:429,sourceReadCode:'rate_limited',retryAfterSeconds:18});
+  assert.equal(calls,1);
 });

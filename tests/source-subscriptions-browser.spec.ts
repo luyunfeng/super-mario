@@ -249,3 +249,72 @@ test('预览只读首页，分两次拉取并对跨页重复的条目只投递�
   assert.deepEqual(memory.filter((x:{tags?:string[]})=>x.tags?.includes('来源订阅')).map((x:{title:string})=>x.title).sort(),
     [first.title,second.title].sort());
 });
+
+test('快照支持每日定时与固定间隔，当前状态预览不投递，恢复原状态可再交付', {timeout:35000},async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'mario-web-snapshot-'));
+  const server=await startServer({dataDir:dir,port:0,host:'127.0.0.1',token:'snapshot-owner',demo:true});
+  t.after(async()=>{await server.close();await rm(dir,{recursive:true,force:true});});
+  let observed='样本状态 A';
+  const source='snapshot-test.value';
+  server.app.plugins.register({id:'snapshot-test',name:'合成快照',capabilities:['subscription.source'],
+    permissions:['contribute:connectors','service.provide:'+source],activate(ctx){
+      ctx.contribute('connectors','snapshot-test-value',{kind:'subscription-source',mode:'snapshot',name:'离线快照',resourceLabel:'状态编号',service:source});
+      ctx.contribute('services','snapshot-test-value',{name:source,version:1,readOnly:true,async handler(){
+        return {snapshot:{title:'当前合成状态',text:observed}};
+      }});
+    }});
+  await server.app.plugins.setEnabled('snapshot-test',true);
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(()=>browser.close());
+  const page=await browser.newPage({timezoneId:'Europe/London'});page.setDefaultTimeout(6000);
+  await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  await page.goto(server.url+'/#memory?token=snapshot-owner');
+  await page.getByRole('button',{name:'来源订阅',exact:true}).click();
+  const drawer=page.getByRole('dialog',{name:'来源订阅'});
+  await drawer.getByLabel('来源连接器').selectOption(source);
+  await drawer.getByLabel('状态编号').fill('sample-state');
+  await expect(drawer.getByLabel('每天检查时间（Asia/Shanghai）')).toHaveValue('08:00');
+  await drawer.getByRole('button',{name:'预览来源'}).click();
+  await expect(drawer).toContainText('当前状态快照。预览不会触发投递。');
+  await expect(drawer).toContainText(observed);
+  await drawer.getByLabel('订阅名称').fill('状态变化');
+  await drawer.getByLabel('个人记忆').check();
+  await drawer.getByRole('button',{name:'创建订阅'}).click();
+  const row=drawer.getByRole('article',{name:'状态变化',exact:true});
+  await expect(row).toContainText('每天 08:00（Asia/Shanghai）');
+  await row.getByRole('button',{name:'编辑订阅'}).click();
+  const editor=page.getByRole('dialog',{name:'编辑订阅'});
+  await editor.getByLabel('快照检查方式').selectOption('interval');
+  const minutes=editor.getByLabel('拉取间隔（分钟）');
+  await minutes.fill('30');
+  await editor.getByRole('button',{name:'保存订阅'}).click();
+  assert.equal(await minutes.evaluate(el=>(el as HTMLInputElement).validity.rangeUnderflow),true);
+  await minutes.fill('90');
+  await editor.getByRole('button',{name:'保存订阅'}).click();
+  await expect(row).toContainText('每 90 分钟');
+  const {id}=server.app.subscriptions.service().list()[0]!;
+  const memory=async()=>{
+    const result=await page.request.get(server.url+'/api/v1/knowledge',{headers:{Authorization:'Bearer snapshot-owner'}});
+    return (await result.json()).filter((entry:{tags?:string[]})=>entry.tags?.includes('订阅:'+id));
+  };
+  const read=async()=>{const response=page.waitForResponse(res=>res.url().endsWith('/'+id+'/pull'));
+    await row.getByRole('button',{name:'立即拉取'}).click();assert.equal((await response).status(),200);};
+  assert.equal((await memory()).length,0);
+  await read();await read();
+  assert.equal((await memory()).length,1);
+  await row.getByRole('button',{name:'查看当前状态'}).click();
+  await expect(row).toContainText('与上次记录相同');
+  observed='<em>样本状态 B</em>';
+  await row.getByRole('button',{name:'查看当前状态'}).click();
+  await expect(row).toContainText('与上次记录不同');
+  assert.equal((await memory()).length,1);
+  await read();observed='样本状态 A';await read();
+  const recorded=await memory();
+  assert.equal(recorded.length,3);
+  assert.equal(recorded.filter((entry:{content:string})=>entry.content.includes('样本状态 A')).length,2);
+  await row.getByRole('button',{name:'近期状态记录'}).click();
+  const history=row.getByRole('region',{name:'最近 24 小时的状态记录'});
+  await expect(history.getByRole('article')).toHaveCount(3);
+  await expect(history.getByRole('article').nth(1)).toContainText('<em>样本状态 B</em>');
+  await expect(history.locator('em')).toHaveCount(0);
+});
