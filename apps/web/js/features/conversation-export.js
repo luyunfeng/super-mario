@@ -45,28 +45,40 @@ export function openConversationExport({ api, store, source, subtitle, isCurrent
   if (!conversationExportActive(store) || !isCurrent()) return;
   const token = api.token();
   const route = location.hash;
-  let request = 0;
+  let reading;
   const includeWork = h('input', { type: 'checkbox', onchange: load });
   const status = h('div', { class: 'muted small', role: 'status' });
   const preview = h('pre', { class: 'mailbox-content', 'aria-label': 'Markdown 预览', hidden: true });
   const drawer = openDrawer({
     title: '导出对话', subtitle, wide: true,
     body: [h('label', { class: 'row' }, includeWork, '包含公开工作步骤'), status, preview], footer: [],
-    onClose: () => { unsubscribe(); preview.textContent = ''; drawer.foot.replaceChildren(); },
+    onClose: () => {
+      reading?.abort();
+      unsubscribe();
+      window.removeEventListener('hashchange', checkScope);
+      preview.textContent = '';
+      drawer.foot.replaceChildren();
+    },
   });
   const current = () => drawer.el.open && token === api.token() && route === location.hash && conversationExportActive(store) && isCurrent();
-  const unsubscribe = store.subscribe(() => { if (!current()) drawer.close(); });
+  function checkScope() { if (!current()) drawer.close(); }
+  const unsubscribe = store.subscribe(checkScope);
+  window.addEventListener('hashchange', checkScope);
 
   async function load() {
     if (!current()) return;
-    const order = ++request;
-    const valid = () => current() && order === request;
+    reading?.abort();
+    reading = new AbortController();
+    const { signal } = reading;
+    const valid = () => current() && !signal.aborted;
     preview.hidden = true;
     preview.textContent = '';
     drawer.foot.replaceChildren();
     status.textContent = '正在导出对话…';
     try {
-      const { markdown, filename, count, hasContent } = await api.post('/conversation-export', { ...source, includeWork: includeWork.checked });
+      const { markdown, filename, count, hasContent } = await api('/conversation-export', {
+        method: 'POST', body: { ...source, includeWork: includeWork.checked }, signal,
+      });
       if (!valid()) return;
       if (!count && !hasContent) { status.textContent = '暂无可导出的消息'; return; }
       const file = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });

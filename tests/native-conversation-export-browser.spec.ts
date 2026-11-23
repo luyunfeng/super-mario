@@ -49,8 +49,26 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
   const server = await startServer({ dataDir: join(dir, 'data'), host: '127.0.0.1', port: 0, demo: true, token });
   const history = createCliSessionDiscovery({ home, cwd: codexCwd, temporaryRoots: [] });
   const projects = createProjectDiscovery({ home, cwd: codexCwd, roots: [], temporaryRoots: [], ignoreEnvironmentRoots: true });
+  let holdNext = false;
+  const held: (() => void)[] = [];
+  const offsets: number[] = [];
+  let releasedPages = 0, disconnected = 0;
+  server.server.on('request', (req, res) => {
+    if (req.url === '/api/v1/conversation-export') res.once('close', () => {
+      if (!res.writableEnded) disconnected++;
+    });
+  });
+  const transcript = async (params: unknown) => {
+    offsets.push((params as { offset: number }).offset);
+    if (holdNext) {
+      holdNext = false;
+      await new Promise<void>(resolve => held.push(resolve));
+      releasedPages++;
+    }
+    return history.handlers['agents.transcript'](params);
+  };
   const node = startAgentNode({ url: server.url, token, machineId, name: '合成历史电脑', dataDir: join(dir, 'node'),
-    handlers: { ...history.handlers, 'workspace.directory': projects.handlers['workspace.directory'] }, executors: [] });
+    handlers: { ...history.handlers, 'agents.transcript': transcript, 'workspace.directory': projects.handlers['workspace.directory'] }, executors: [] });
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
   t.after(async () => { await browser.close(); await node.close(); await server.close(); await rm(dir, { recursive: true, force: true }); });
   await expect.poll(() => server.machines.list().some(m => m.id === machineId && m.online)).toBe(true);
@@ -69,6 +87,18 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
   await expect(rows).toContainText(codexId);
   await card.getByLabel('CLI 会话项目').selectOption('');
   await expect(rows).toHaveCount(2);
+  // Hold the first RPC of two exports while the browser supersedes one and closes the other.
+  holdNext = true;
+  await rows.filter({ hasText: codexId }).getByRole('button', { name: '导出对话', exact: true }).click();
+  await expect.poll(() => held.length).toBe(1);
+  holdNext = true;
+  await drawer.getByRole('checkbox', { name: '包含公开工作步骤' }).check();
+  await expect.poll(() => held.length).toBe(2);
+  await expect.poll(() => disconnected).toBe(1);
+  await drawer.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect.poll(() => disconnected).toBe(2);
+  for (const release of held) release();
+  await expect.poll(() => releasedPages).toBe(2);
   for (const [id, source, other, tool] of [
     [codexId, 'Codex', 'Claude', 'fixture_lookup'],
     [claudeId, 'Claude', 'Codex', 'fixture_read'],
@@ -76,6 +106,12 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
     await rows.filter({ hasText: id }).getByRole('button', { name: '导出对话', exact: true }).click();
     await expect(preview).toContainText('合成 ' + source + ' 最终回复');
     await expect(preview).not.toContainText(tool);
+    // The two abandoned reads stopped after their first page. Only this fresh export read the full file.
+    if (id === codexId) {
+      assert.deepEqual(offsets.slice(0, 3), [0, 0, 0]);
+      const laterPages = offsets.slice(3);
+      assert.ok(laterPages.length && laterPages.every((offset, i) => offset > (laterPages[i - 1] ?? 0)));
+    }
     await drawer.getByRole('checkbox', { name: '包含公开工作步骤' }).check();
     await expect(preview).toContainText(tool);
     const pending = page.waitForEvent('download');
