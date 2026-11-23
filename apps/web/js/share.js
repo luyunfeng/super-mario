@@ -4,6 +4,7 @@ import {renderSharedTools} from './lib/shared-excerpt-tools.js';
 (() => {
   const status = document.querySelector('[role="status"]');
   const list = document.querySelector('ol');
+  const retryButton = document.querySelector('main > button');
   const expiry = document.querySelector('time');
   let pending, polling, deadline, revision;
 
@@ -17,6 +18,7 @@ import {renderSharedTools} from './lib/shared-excerpt-tools.js';
     expiry.hidden = true;
     expiry.removeAttribute('datetime');
     expiry.textContent = '';
+    retryButton.hidden = true;
     status.textContent = message;
   }
 
@@ -44,6 +46,7 @@ import {renderSharedTools} from './lib/shared-excerpt-tools.js';
     pending = request;
     const timeout = setTimeout(()=>request.abort(),15_000);
     let retry = true;
+    let rateLimited = false;
     let refreshInterval = 30_000;
     try {
       const response = await fetch('/api/v1/public/conversation-share', {
@@ -51,7 +54,8 @@ import {renderSharedTools} from './lib/shared-excerpt-tools.js';
         credentials:'omit', cache:'no-store', referrerPolicy:'no-referrer', redirect:'error', signal:request.signal,
       });
       if (!response.ok) {
-        retry = response.status >= 500 || response.status === 429;
+        rateLimited = response.status === 429;
+        retry = response.status >= 500 || rateLimited;
         throw new Error();
       }
       const page = await response.json();
@@ -86,6 +90,7 @@ import {renderSharedTools} from './lib/shared-excerpt-tools.js';
     } catch {
       if (pending !== request) return;
       clear('无法读取这份摘录。分享可能已过期、已撤销或暂时无法访问。');
+      retryButton.hidden = !retry || rateLimited;
     } finally {
       clearTimeout(timeout);
     }
@@ -97,6 +102,7 @@ import {renderSharedTools} from './lib/shared-excerpt-tools.js';
     clear('正在读取摘录…');
     void read();
   }
+  retryButton.addEventListener('click',restart);
   window.addEventListener('hashchange',restart);
   document.addEventListener('visibilitychange',restart);
   window.addEventListener('pagehide',()=>clear('正在读取摘录…'));

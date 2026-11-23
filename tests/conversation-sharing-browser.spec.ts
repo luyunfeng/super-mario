@@ -84,6 +84,12 @@ test('工作台预览并更新摘录，原匿名链接只显示已确认的版�
   const publicRead=requests.filter(r=>r.path==='/api/v1/public/conversation-share');
   assert.equal(publicRead.length,1);assert.deepEqual(JSON.parse(publicRead[0].data!),{token:url.hash.slice(1)});
   assert.equal(publicRead[0].auth,undefined);assert.equal(publicRead[0].referrer,undefined);assert.equal(publicRead[0].cookie,undefined);
+  await reader.route('**/api/v1/public/conversation-share', route => route.fulfill({status:503}), {times:1});
+  await reader.reload();
+  await expect(messages.getByRole('listitem')).toHaveCount(0);
+  await reader.getByRole('button',{name:'重新读取摘录'}).click();
+  await expect(messages.locator('p')).toHaveText([shared,assistantText]);
+  await expect(reader.getByRole('button',{name:'重新读取摘录'})).toHaveCount(0);
   await manager.getByRole('button',{name:'关闭',exact:true}).click();
   const open=owner.getByRole('button',{name:'分享对话摘录',exact:true});
   await open.click();
