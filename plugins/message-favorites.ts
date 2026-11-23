@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { nativeSource } from './native-conversation-source.ts';
-import type { Extension, Json, JsonObject, Store } from '../packages/plugin-sdk/src/index.ts';
+import type { Extension, ExtensionContext, Json, JsonObject, Store } from '../packages/plugin-sdk/src/index.ts';
 import type { Message, NativeExportSource, NativeFavoriteMessage, Project } from '../packages/protocol/src/index.ts';
 
 const format = 'super-mario.message-favorites';
@@ -40,6 +40,20 @@ function list(book: Book) {
 function save(store: Store, book: Book) {
   book.revision++;
   store.put('message-favorites', 'collection', book);
+}
+
+// Publish only after the transaction commits so subscribers can read that revision.
+function updateBook<T>({ store, events }: ExtensionContext, operation: (book: Book) => T): T {
+  let changedRevision: number | undefined;
+  const result = store.transaction(() => {
+    const book = read(store);
+    const previous = book.revision;
+    const value = operation(book);
+    if (book.revision !== previous) changedRevision = book.revision;
+    return value;
+  });
+  if (changedRevision !== undefined) events.publish('message-favorites.changed', { revision: changedRevision });
+  return result;
 }
 
 function checkRevision(revision: Json | undefined, book: Book) {
@@ -144,7 +158,8 @@ async function verified(reader: ReadPage | undefined, native: NativeExportSource
   return message;
 }
 
-async function manage(store: Store, raw: Json, reader: ReadPage | undefined, signal: AbortSignal): Promise<Json> {
+async function manage(context: ExtensionContext, raw: Json, reader: ReadPage | undefined, signal: AbortSignal): Promise<Json> {
+  const { store } = context;
   const input = object(raw);
   if (typeof input.action !== 'string' || !Object.hasOwn(fields, input.action)) fail(400, '收藏操作无效');
   const action = input.action as keyof typeof fields;
@@ -159,8 +174,7 @@ async function manage(store: Store, raw: Json, reader: ReadPage | undefined, sig
     // Re-read the book only after RPC completes. Concurrent add/remove and
     // a disable followed by re-enable must never revive a stale write.
     signal.throwIfAborted();
-    return store.transaction(() => {
-      const book = read(store);
+    return updateBook(context, book => {
       const exists = book.items.some(item => item.index === index && item.fingerprint === fingerprint &&
         item.native?.machineId === native.machineId && item.native.executorId === native.executorId &&
         item.native.nativeSessionId === native.nativeSessionId && item.native.cwd === native.cwd);
@@ -202,8 +216,7 @@ async function manage(store: Store, raw: Json, reader: ReadPage | undefined, sig
     return { messageId: source.id, ...(item.projectId && { projectId: item.projectId }),
       text: source.text, role: source.role, createdAt: source.createdAt };
   }
-  return store.transaction(() => {
-    const book = read(store);
+  return updateBook(context, book => {
     if (action === 'add') {
       add(store, book, input);
       return list(book);
@@ -235,11 +248,11 @@ async function manage(store: Store, raw: Json, reader: ReadPage | undefined, sig
 export function createMessageFavorites(readPage?: ReadPage): Extension {
   return {
     id: 'message-favorites', name: '消息收藏', capabilities: ['message.favorites'],
-    permissions: ['service.provide:message-favorites.manage', 'store.read', 'store.write'],
+    permissions: ['service.provide:message-favorites.manage', 'store.read', 'store.write', 'events.publish'],
     activate(context) {
       const lifetime = new AbortController();
       context.provide('message-favorites.manage', (input, signal) =>
-        manage(context.store, input, readPage, AbortSignal.any([signal, lifetime.signal])));
+        manage(context, input, readPage, AbortSignal.any([signal, lifetime.signal])));
       context.defer(() => lifetime.abort(Object.assign(new Error('消息收藏插件已停用'), { status: 503 })));
     },
   };

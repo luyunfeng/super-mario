@@ -1,5 +1,5 @@
 // 主对话和项目工作对话共享收藏标记。消息正文只保留在打开的抽屉中。
-import { h, replace } from '../lib/dom.js';
+import { h, keyedList, replace } from '../lib/dom.js';
 import { Button, Field, Input } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 
@@ -11,9 +11,28 @@ const nativeKey = (native, index, fingerprint) => JSON.stringify([
 ]);
 const speaker = role => role === 'user' ? '我' : '助手';
 function favoriteMetadata(item) {
-  return [speaker(item.role), item.createdAt ?? '消息时间未知', !item.messageId && !item.native && '恢复快照'].filter(Boolean).join(' · ');
+  return [speaker(item.role), item.createdAt || '收藏于 ' + item.starredAt, !item.messageId && !item.native && '恢复快照'].filter(Boolean).join(' · ');
 }
 const fold = text => text.normalize('NFKC').toLocaleLowerCase();
+
+const pageSize = 24;
+
+function snapshotPreview(text) {
+  const lines = text.split('\n', 7);
+  const visible = lines.length > 6 ? lines.slice(0, 6).join('\n') : text;
+  return Array.from(visible).slice(0, 420).join('');
+}
+
+function watchChanges(store, callback) {
+  let revision = store.view.messageFavoritesRevision, connection = store.view.connection;
+  return store.subscribe(view => {
+    const reconnected = connection !== 'online' && view.connection === 'online';
+    const changed = revision !== view.messageFavoritesRevision;
+    revision = view.messageFavoritesRevision;
+    connection = view.connection;
+    if (changed || reconnected) callback(revision, reconnected);
+  });
+}
 
 function sharedModel(api, store) {
   if (models.has(api)) return models.get(api);
@@ -26,7 +45,7 @@ function sharedModel(api, store) {
     button.setAttribute('aria-pressed', String(marked));
   }
   function accept(doc) {
-    if (doc.revision < revision) return;
+    if (doc.revision < revision || doc.revision < store.view.messageFavoritesRevision) return;
     revision = doc.revision;
     marks.clear();
     for (const item of doc.items) {
@@ -40,11 +59,15 @@ function sharedModel(api, store) {
     if (enabled === active && token === api.token()) return;
     enabled = active;
     token = api.token();
-    const generation = ++epoch;
+    ++epoch;
     revision = -1;
     marks.clear();
     document.querySelectorAll('[data-favorite-message]').forEach(paint);
-    if (enabled) void api.post('/message-favorites', { action: 'marks' }).then(doc => {
+    if (enabled) refreshMarks();
+  }
+  function refreshMarks() {
+    const generation = epoch;
+    void api.post('/message-favorites', { action: 'marks' }).then(doc => {
       if (current(generation)) accept(doc);
     }).catch(() => { /* 打开收藏列表时会重新读取，并在抽屉中显示读取失败的原因。 */ });
   }
@@ -52,6 +75,9 @@ function sharedModel(api, store) {
   const model = { paint, accept, current, marks, get epoch() { return epoch; }, get revision() { return revision; }, get enabled() { return enabled; } };
   models.set(api, model);
   store.subscribe(update);
+  watchChanges(store, (next, reconnected) => {
+    if (enabled && (reconnected || next > revision)) refreshMarks();
+  });
   update();
   return model;
 }
@@ -183,15 +209,33 @@ export function createMessageFavorites({ api, store, router }) {
     const generation = model.epoch;
     if (!model.current(generation)) return;
     let doc, backup, preview;
-    let busy = false;
-    const drawer = openDrawer({ title: '消息收藏', wide: true, onClose: () => unsubscribe() });
+    let busy = false, limit = pageSize, refreshOrder = 0;
+    const drawer = openDrawer({ title: '消息收藏', wide: true, onClose() { unsubscribe(); unwatch(); } });
     const current = () => drawer.el.open && model.current(generation);
     const unsubscribe = store.subscribe(() => { if (!current()) drawer.close(); });
+    const unwatch = watchChanges(store, (next, reconnected) => {
+      if (current() && (reconnected || next > (doc?.revision ?? -1))) void refresh();
+    });
     const status = h('p', { role: 'status', class: 'small' });
-    const search = Input({ type: 'search', placeholder: '搜索收藏', 'aria-label': '搜索收藏', oninput: renderRows });
+    const refreshError = h('div', { class: 'small' });
+    async function refresh() {
+      const order = ++refreshOrder;
+      try { await load(); }
+      catch (error) {
+        if (current() && order === refreshOrder) replace(refreshError, error.message, Button({ label: '重新读取收藏', onClick: refresh }));
+      }
+    }
+    const search = Input({ type: 'search', placeholder: '搜索收藏', 'aria-label': '搜索收藏', oninput() { limit = pageSize; renderRows(); } });
     const file = Input({ type: 'file', accept: '.json,application/json', onchange: selectFile });
     const actions = h('fieldset', { class: 'stack' });
     const rows = h('div', { class: 'stack', 'aria-label': '收藏列表' });
+    const empty = h('p', { class: 'muted' });
+    const more = Button({ label: '显示更多消息', size: 'sm', onClick() {
+      const firstNew = limit;
+      limit += pageSize;
+      renderRows();
+      rows.children[firstNew]?.focus();
+    } });
     const review = h('div', { class: 'stack' });
     replace(actions, search, h('div', { class: 'row row--wrap' },
       Button({ label: '下载收藏备份', onClick: () => run(async () => {
@@ -201,13 +245,14 @@ export function createMessageFavorites({ api, store, router }) {
       Button({ label: '下载 Markdown', onClick: () => run(async () => {
         await load();
         if (!current()) return;
+        if (!doc || doc.revision < store.view.messageFavoritesRevision) throw new Error('收藏列表已更改，请重新下载。');
         const sections = doc.items.map(item => [
           '## ' + item.title, favoriteMetadata(item), item.text,
           item.omitted ? '已省略 ' + item.omitted + ' 个字符' : '',
         ].filter(Boolean).join('\n\n'));
         download('message-favorites.md', ['# 消息收藏', ...sections].join('\n\n'), 'text/markdown;charset=utf-8');
       }) })),
-      Field({ label: '导入收藏备份', control: file, hint: '选择不超过 8 MiB 的 JSON 文件。' }), review, rows);
+      Field({ label: '导入收藏备份', control: file, hint: '选择不超过 8 MiB 的 JSON 文件。' }), review, refreshError, empty, rows, more);
     replace(drawer.body, status, actions);
 
     async function run(work) {
@@ -233,11 +278,20 @@ export function createMessageFavorites({ api, store, router }) {
     }
     async function load() {
       const next = await post({ action: 'list' });
-      if (current()) { doc = next; model.accept(next); renderRows(); }
+      if (current()) acceptList(next);
+    }
+    function acceptList(next) {
+      if (next.revision < (doc?.revision ?? -1) || next.revision < store.view.messageFavoritesRevision) return;
+      refreshError.replaceChildren();
+      doc = next;
+      model.accept(next);
+      renderRows();
     }
     function renderRows() {
       if (!doc) {
-        replace(rows, Button({ label: '重新读取收藏', onClick: () => run(load) }));
+        empty.hidden = true;
+        more.hidden = true;
+        replace(refreshError, Button({ label: '重新读取收藏', onClick: refresh }));
         return;
       }
       const terms = fold(search.value.trim()).split(/\s+/).filter(Boolean);
@@ -245,37 +299,58 @@ export function createMessageFavorites({ api, store, router }) {
         const text = fold([item.title, speaker(item.role), item.text].join('\n'));
         return terms.every(term => text.includes(term));
       });
-      replace(rows, !found.length && h('p', { class: 'muted' }, terms.length ? '没有匹配的收藏。' : '还没有收藏的消息。'), found.map(item => {
-        const original = h('div', { class: 'stack' });
-        return h('article', { class: 'card' }, h('div', { class: 'card__body stack' },
-          h('strong', null, item.title), h('p', { class: 'small muted' }, favoriteMetadata(item)),
-          h('pre', { class: 'mailbox-content' }, item.text), item.omitted > 0 && h('p', { class: 'small muted' }, '已省略 ' + item.omitted + ' 个字符'),
-          h('div', { class: 'row row--wrap' },
-            item.native && Button({ label: '查看原文', size: 'sm', onClick: () => {
-              if (current()) openNativeMessages({ api, store, native: item.native, target: item,
-                onClose: () => { if (current()) void run(load); } });
-            } }),
-            item.messageId && Button({ label: '查看原文', size: 'sm', onClick: () => run(async () => {
-              const source = await post({ action: 'source', id: item.id });
-              if (current()) replace(original, h('strong', null, '消息原文'), h('pre', { class: 'mailbox-content' }, source.text));
-            }) }),
-            item.messageId && Button({ label: '定位到原会话', size: 'sm', onClick: () => run(async () => {
-              const source = await post({ action: 'locate', id: item.id });
-              if (!current()) return;
-              const route = source.projectId ? router.href('projects', source.projectId, 'workspace') + '?at=' : router.href('chat') + '?favorite=';
-              drawer.close();
-              router.go(route + encodeURIComponent(source.messageId));
-            }) }),
-            Button({ label: '复制正文', size: 'sm', onClick: () => run(async () => {
-              if (!navigator.clipboard?.writeText) throw new Error('当前浏览器无法写入剪贴板，请选中收藏正文复制。');
-              await navigator.clipboard.writeText(item.text);
-              if (current()) status.textContent = '已复制正文。';
-            }) }),
-            Button({ label: '取消收藏', size: 'sm', onClick: () => run(async () => {
-              const next = await post({ action: 'remove', id: item.id, revision: doc.revision });
-              if (current()) { doc = next; model.accept(next); renderRows(); }
-            }) })), original));
-      }));
+      empty.hidden = found.length > 0;
+      empty.textContent = terms.length ? '没有匹配的收藏。' : '还没有收藏的消息。';
+      more.hidden = found.length <= limit;
+      const focused = document.activeElement;
+      const hadFocus = rows.contains(focused);
+      keyedList(rows, found.slice(0, limit), item => item.id, renderItem);
+      if (hadFocus && focused.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
+    }
+    function renderItem(item) {
+      const excerpt = snapshotPreview(item.text);
+      const content = h('pre', { class: 'mailbox-content' }, excerpt);
+      const toggle = excerpt !== item.text && Button({ label: '显示已保存的全文', size: 'sm', onClick() {
+        const expanded = toggle.getAttribute('aria-expanded') !== 'true';
+        toggle.setAttribute('aria-expanded', String(expanded));
+        toggle.textContent = expanded ? '收起' : '显示已保存的全文';
+        content.textContent = expanded ? item.text : excerpt;
+      } });
+      if (toggle) toggle.setAttribute('aria-expanded', 'false');
+      const original = h('div', { class: 'stack' });
+      return h('article', { class: 'card', tabIndex: -1 }, h('div', { class: 'card__body stack' },
+        h('strong', null, item.title), h('p', { class: 'small muted' }, favoriteMetadata(item)),
+        content, toggle, item.omitted > 0 && h('p', { class: 'small muted' }, '已省略 ' + item.omitted + ' 个字符'),
+        h('div', { class: 'row row--wrap' },
+          item.native && Button({ label: '查看原文', size: 'sm', onClick: () => {
+            if (current()) openNativeMessages({ api, store, native: item.native, target: item,
+              onClose: () => { if (current()) void run(load); } });
+          } }),
+          item.messageId && Button({ label: '查看原文', size: 'sm', onClick: () => run(async () => {
+            const source = await post({ action: 'source', id: item.id });
+            if (current()) replace(original, h('strong', null, '消息原文'), h('pre', { class: 'mailbox-content' }, source.text));
+          }) }),
+          item.messageId && Button({ label: '定位到原会话', size: 'sm', onClick: () => run(async () => {
+            const source = await post({ action: 'locate', id: item.id });
+            if (!current()) return;
+            const route = source.projectId ? router.href('projects', source.projectId, 'workspace') + '?at=' : router.href('chat') + '?favorite=';
+            drawer.close();
+            router.go(route + encodeURIComponent(source.messageId));
+          }) }),
+          Button({ label: '复制正文', size: 'sm', onClick: () => run(async () => {
+            if (!navigator.clipboard?.writeText) throw new Error('当前浏览器无法写入剪贴板，请选中收藏正文复制。');
+            await navigator.clipboard.writeText(item.text);
+            if (current()) status.textContent = '已复制正文。';
+          }) }),
+          Button({ label: '取消收藏', size: 'sm', onClick: () => run(async () => {
+            const next = await post({ action: 'remove', id: item.id, revision: doc.revision });
+            if (current()) {
+              acceptList(next);
+              requestAnimationFrame(() => {
+                if (current() && [document.body, drawer.el].includes(document.activeElement)) search.focus();
+              });
+            }
+          }) })), original));
     }
     async function selectFile() {
       const selected = file.files?.[0];

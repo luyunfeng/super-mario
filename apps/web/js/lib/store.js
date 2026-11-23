@@ -3,7 +3,7 @@
 
 export function createStore(api) {
   const listeners = new Set();
-  const view = { snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, projectInstructionsChange: null, connection: 'connecting', unauthorized: false, loadError: '' };
+  const view = { snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, connection: 'connecting', unauthorized: false, loadError: '' };
   let request = 0;
   let socket;
   let reconnectTimer;
@@ -46,11 +46,15 @@ export function createStore(api) {
     ws.onopen = () => { if (current === generation) { set({ connection: 'online' }); refresh(); } };
     ws.onmessage = ({ data }) => {
       if (current !== generation) return;
-      // An open slash menu can refresh independently from the workspace snapshot.
+      // Plugin views refresh their private data independently of the workspace snapshot.
       let event;
       try { event = JSON.parse(data); } catch { /* Refresh state after an unrecognized frame. */ }
       if (event?.type === 'saved-prompts.changed' && Number.isSafeInteger(event.data?.revision)) {
         set({ savedPromptsRevision: event.data.revision });
+        return;
+      }
+      if (event?.type === 'message-favorites.changed' && Number.isSafeInteger(event.data?.revision)) {
+        set({ messageFavoritesRevision: event.data.revision });
         return;
       }
       if (event?.type === 'project-instructions.changed' && typeof event.data?.projectId === 'string' && Number.isSafeInteger(event.data.revision)) {
@@ -76,7 +80,7 @@ export function createStore(api) {
     refresh,
     connect,
     reconnect: connect,
-    reset() { request += 1; set({ snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, projectInstructionsChange: null, unauthorized: false, loadError: '' }); connect(); },
+    reset() { request += 1; set({ snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, unauthorized: false, loadError: '' }); connect(); },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
   };
 }

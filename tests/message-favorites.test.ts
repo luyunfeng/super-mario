@@ -13,17 +13,19 @@ import { createMessageFavorites, messageFavorites } from '../plugins/message-fav
 async function fixture(t: test.TestContext, extension = messageFavorites) {
   const dir = await mkdtemp(join(tmpdir(), 'message-favorites-'));
   const store = createStore(join(dir, 'test.sqlite'));
-  const host = new PluginHost({ store, dataDir: dir, events: createEventBus(store), contributions: createContributions() });
+  const events = createEventBus(store);
+  const host = new PluginHost({ store, dataDir: dir, events, contributions: createContributions() });
   t.after(async () => { await host.close(); store.close(); await rm(dir, { recursive: true, force: true }); });
   host.register(extension);
   await host.start();
   const call = async (request: JsonObject) => await host.invocations.use('message-favorites.manage', request) as JsonObject;
-  return { store, host, call };
+  const changes = () => events.since(0).filter(event => event.type === 'message-favorites.changed').map(event => event.data);
+  return { store, host, call, changes };
 }
 
 const source = { id: 'local-msg', conversationId: 'main', role: 'assistant', text: '🐢'.repeat(4005), createdAt: '2026-01-01T00:00:00Z' };
 test('favorites snapshot actual work messages, cap by Unicode character and recheck the original conversation', async t => {
-  const { store, call, host } = await fixture(t);
+  const { store, call, host, changes } = await fixture(t);
   store.put('messages', source.id, source);
   const request = { action: 'add', messageId: source.id };
   await assert.rejects(call({ ...request, text: 'forged' }), { status: 400 });
@@ -59,6 +61,8 @@ test('favorites snapshot actual work messages, cap by Unicode character and rech
   await assert.rejects(call({ action: 'source', id: projectItem.id }), { status: 404 });
   await assert.rejects(call({ action: 'remove', id: item.id, revision: 1 }), { status: 409 });
   assert.equal((await call({ action: 'remove', id: item.id, revision: 2 })).revision, 3);
+  assert.equal((await call({ action: 'remove', id: item.id, revision: 3 })).revision, 3);
+  assert.deepEqual(changes(), [{ revision: 1 }, { revision: 2 }, { revision: 3 }]);
   await host.setEnabled('message-favorites', false);
   await assert.rejects(call({ action: 'list' }), /unavailable/);
   await host.setEnabled('message-favorites', true);
@@ -97,6 +101,7 @@ test('portable backups merge by stable key, never convey source access, and reje
   assert.equal((await target.call({ action: 'list' })).revision, 1);
   batch.messages.pop();
   assert.equal((await target.call({ ...restore, revision: 1, backup: batch })).toAdd, 299);
+  assert.deepEqual(target.changes(), [{ revision: 1 }, { revision: 2 }]);
   target.store.put('messages', source.id, source);
   await assert.rejects(target.call({ action: 'add', messageId: source.id }), { status: 400 });
 });
@@ -106,7 +111,7 @@ const fingerprint = '1'.repeat(64);
 const nativeMessage = { index: 26, fingerprint, role: 'user' as const, text: '字'.repeat(4100), createdAt: null };
 test('native favorites verify positional fingerprints, project public fields and back up without source locators', async t => {
   let current = [{ ...nativeMessage, privateMetadata: 'private' }];
-  const { call } = await fixture(t, createMessageFavorites(async (source, offset) => {
+  const { call, changes } = await fixture(t, createMessageFavorites(async (source, offset) => {
     assert.deepEqual(source, native);
     return { items: current.filter(row => row.index >= offset && row.index < offset + 25), total: 27 };
   }));
@@ -118,6 +123,7 @@ test('native favorites verify positional fingerprints, project public fields and
   await assert.rejects(call({ ...add, fingerprint: '2'.repeat(64) }), { status: 409 });
   const [a, b] = await Promise.all([call(add), call(add)]);
   assert.deepEqual(a, b);
+  assert.deepEqual(changes(), [{ revision: 1 }]);
   const [item] = a.items as JsonObject[];
   assert.equal(a.revision, 1);
   assert.deepEqual(item.native, native);
