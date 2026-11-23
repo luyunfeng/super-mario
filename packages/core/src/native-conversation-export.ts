@@ -26,6 +26,7 @@ async function readConversation(
   message: (index: number, role: 'user' | 'assistant', parts: Part[], createdAt: string | null, raw: unknown) => void,
   tool?: (step: ToolStep, at: string | null) => void,
   progress?: ExportProgress,
+  shareBoundary?: (userTurn:boolean) => void,
 ) {
   const { machineId, executorId, nativeSessionId, cwd } = source;
   const machine = machines?.list().find(item => item.id === machineId && item.online);
@@ -37,18 +38,30 @@ async function readConversation(
   }
   // Keep references to public steps so a later receipt can update the original position.
   const calls = new Map<string, ToolStep>();
+  // A native receipt can arrive after the assistant's text. It must still belong to
+  // the same user turn. Exports keep their existing whole-session receipt semantics.
+  const turnCalls = new Set<string>();
+  let previousUuid: string | undefined;
+  function shareBoundaryAt(userTurn:boolean) {
+    if (!shareBoundary) return;
+    turnCalls.clear();
+    shareBoundary(userTurn);
+  }
   function observeCall(name: string, kind: string, id: unknown) {
     const step: ToolStep = { name, result: '未记录结果' };
     if (typeof id === 'string' && id) {
       const key = kind + ':' + id, previous = calls.get(key);
       if (previous) previous.result = step.result = '结果无法唯一对应';
       calls.set(key, step);
+      if (shareBoundary) turnCalls.add(key);
     }
     return step;
   }
   function observeResult(kind: string, id: unknown, isError?: unknown) {
     if (typeof id !== 'string' || !id) return;
-    const step = calls.get(kind + ':' + id);
+    const key=kind+':'+id;
+    if (shareBoundary && !turnCalls.has(key)) return;
+    const step = calls.get(key);
     if (step) step.result = step.result !== '未记录结果' ? '结果无法唯一对应'
       : isError === true ? '失败' : isError === false ? '成功' : '已返回结果';
   }
@@ -72,8 +85,9 @@ async function readConversation(
       if (row.type === 'session_meta' && record(row.payload).id !== nativeSessionId) throw new Error('会话标识已改变');
       if (row.type !== 'response_item') return;
       const payload = record(row.payload);
-      if (tool && (payload.type === 'function_call' || payload.type === 'custom_tool_call') && publicToolName(payload.name)) {
-        tool(observeCall(payload.name, payload.type, payload.call_id), at);
+      if (tool && (payload.type === 'function_call' || payload.type === 'custom_tool_call')) {
+        if (publicToolName(payload.name)) tool(observeCall(payload.name,payload.type,payload.call_id),at);
+        else if (shareBoundary) observeCall('',payload.type,payload.call_id);
       }
       if (tool && (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output')) {
         observeResult(payload.type.slice(0, -'_output'.length), payload.call_id);
@@ -85,6 +99,15 @@ async function readConversation(
       role = row.type; content = record(row.message).content;
     }
     if (role !== 'user' && role !== 'assistant') return;
+    // Adjacent mainline JSONL records may represent different Claude branches.
+    // An explicit jump breaks both the pending calls and their receipt ownership.
+    if (shareBoundary && executorId==='claude-code') {
+      if (previousUuid && ((typeof row.parentUuid==='string' && row.parentUuid!==previousUuid) || row.parentUuid===null)) shareBoundaryAt(false);
+      previousUuid=typeof row.uuid==='string'?row.uuid:undefined;
+    }
+    // Claude encodes tool receipts as user-role records. A receipt-only record is
+    // part of the previous turn, while actual user content starts a new turn.
+    if (role==='user' && !(Array.isArray(content) && content.length && content.every(part=>record(part).type==='tool_result'))) shareBoundaryAt(true);
     const paragraphs: Part[] = [];
     let hasMessage = false;
     function appendText(text: string) {
@@ -97,9 +120,10 @@ async function readConversation(
       if (['input_text', 'output_text', 'text'].includes(String(block.type)) && typeof block.text === 'string') appendText(block.text);
       if (['input_image', 'output_image', 'image'].includes(String(block.type))) appendText('[图像附件]');
       if (tool && role === 'user' && block.type === 'tool_result') observeResult('tool_use', block.tool_use_id, block.is_error);
-      if (tool && role === 'assistant' && block.type === 'tool_use' && publicToolName(block.name)) {
+      if (tool && role === 'assistant' && block.type === 'tool_use') {
         // Mixed records retain their block order under a single message heading.
-        paragraphs.push(observeCall(block.name, 'tool_use', block.id));
+        if (publicToolName(block.name)) paragraphs.push(observeCall(block.name,'tool_use',block.id));
+        else if (shareBoundary) observeCall('','tool_use',block.id);
       }
     }
     if (!hasMessage) {
@@ -121,23 +145,36 @@ function nativeFingerprint(source: NativeExportSource, index: number, raw: unkno
 
 export async function readNativeShareMessages(
   machines: MachineClient | undefined, source: NativeExportSource,
-  selection: {offset:number} | {ids:string[]}, signal: AbortSignal,
+  selection: {offset:number} | {ids:string[];showTools?:boolean}, signal: AbortSignal,
 ) {
   const wanted = 'ids' in selection ? new Set(selection.ids) : undefined;
   const offset = 'offset' in selection ? selection.offset : 0;
-  const items: {id:string;index:number;role:'user'|'assistant';text:string}[] = [];
+  type SharedTool={name:string;status:'succeeded'|'failed'|'unknown'|'returned'};
+  const items: {id:string;index:number;role:'user'|'assistant';text:string;tools?:SharedTool[]}[] = [];
+  const withTools='ids' in selection && selection.showTools===true;
+  const selectedSteps = new Map<string,ToolStep[]>();
+  let pending:ToolStep[]=[], inUserTurn=false;
   let selectedBytes = 0;
   const {count:total} = await readConversation(machines,source,signal,(index,role,parts,_at,raw)=>{
+    // Consume pending steps at every assistant message, including unselected rows.
+    const steps=withTools && role==='assistant' ? pending.concat(parts.filter((part):part is ToolStep=>typeof part!=='string')) : [];
+    pending=[];
     if (!wanted && (index < offset || index >= offset + 25)) return;
     const id = nativeFingerprint(source,index,raw);
     if (wanted && !wanted.has(id)) return;
-    const text = parts.join('\n');
+    const text = parts.filter(part=>typeof part==='string').join('\n');
     if (wanted) {
       selectedBytes += Buffer.byteLength(text);
       if (selectedBytes > 262144) throw Object.assign(new Error('分享摘录超过 256 KiB，请减少所选消息'),{status:400});
     }
     items.push({id,index,role,text});
-  });
+    if (steps.length) selectedSteps.set(id,steps);
+  },withTools ? step=>{if (inUserTurn) pending.push(step);} : undefined,undefined,
+  withTools ? userTurn=>{pending=[];inUserTurn=userTurn;} : undefined);
+  for (const item of items) {
+    const steps=selectedSteps.get(item.id);
+    if (steps) item.tools=steps.map(({name,result})=>({name,status:result==='成功'?'succeeded':result==='失败'?'failed':result==='已返回结果'?'returned':'unknown'}));
+  }
   return {items,total};
 }
 

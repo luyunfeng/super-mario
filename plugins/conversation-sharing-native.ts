@@ -1,12 +1,14 @@
 import {createHash} from 'node:crypto';
 import type {NativeExportSource} from '../packages/protocol/src/index.ts';
 
-type Item={id:string;index:number;role:'user'|'assistant';text:string};
-export type ReadNative=(source:NativeExportSource,selection:{offset:number}|{ids:string[]},signal:AbortSignal)=>Promise<{items:Item[];total:number}>;
+export type NativeToolRecord={name:string;status:'succeeded'|'failed'|'unknown'|'returned'};
+type Item={id:string;index:number;role:'user'|'assistant';text:string;tools?:NativeToolRecord[]};
+type Selection={offset:number}|{ids:string[];showTools?:boolean};
+export type ReadNative=(source:NativeExportSource,selection:Selection,signal:AbortSignal)=>Promise<{items:Item[];total:number}>;
 export function nativeShareKey(source:NativeExportSource) {
   return 'native:'+createHash('sha256').update(JSON.stringify([source.machineId,source.executorId,source.nativeSessionId,source.cwd])).digest('hex');
 }
-export async function readShareItems(reader:ReadNative|undefined,source:NativeExportSource,selection:{offset:number}|{ids:string[]},signal:AbortSignal) {
+export async function readShareItems(reader:ReadNative|undefined,source:NativeExportSource,selection:Selection,signal:AbortSignal) {
   if (!reader) throw Object.assign(Error('原生会话读取服务未连接'),{status:503});
   signal.throwIfAborted();
   const result=await reader(source,selection,signal);
@@ -23,7 +25,18 @@ export async function readShareItems(reader:ReadNative|undefined,source:NativeEx
         (expected && !expected.has(item.id)) || ('offset' in selection && item.index!==selection.offset+i) ||
         (item.role!=='user' && item.role!=='assistant') || typeof item.text!=='string') throw invalid();
     ids.add(item.id);indices.add(item.index);
-    return {id:item.id,index:item.index,role:item.role,text:item.text};
+    const selected:Item={id:item.id,index:item.index,role:item.role,text:item.text};
+    if ('ids' in selection && selection.showTools && item.role==='assistant' && item.tools!==undefined) {
+      if (!Array.isArray(item.tools)) throw invalid();
+      // Even an adapter returning full tool objects grants access only to these two fields.
+      const tools=item.tools.map(tool=>{
+        if (!tool || typeof tool.name!=='string' || !/^[a-zA-Z0-9_.:-]{1,80}$/.test(tool.name) ||
+            !['succeeded','failed','unknown','returned'].includes(tool.status)) throw invalid();
+        return {name:tool.name,status:tool.status};
+      });
+      if (tools.length) selected.tools=tools;
+    }
+    return selected;
   });
   return {items,total:result.total};
 }

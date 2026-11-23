@@ -284,7 +284,7 @@ test('原生分享独立核对选中指纹，离线仍可读、缩减、撤销�
   assert.deepEqual(await list(),{sources:[native]});
   assert.deepEqual(await manage('list',{native:{...native,cwd:'/other'}}),{shares:[]});
   await assert.rejects(manage('detail',{id,native:{...native,machineId:'other'}}),{status:404});
-  for (const invalid of [{showTools:true},{includeFuture:true},{futureScope:{}},{conversationId:'main'}] as JsonObject[])
+  for (const invalid of [{showTools:'true'},{includeFuture:true},{futureScope:{}},{conversationId:'main'}] as JsonObject[])
     await assert.rejects(manage('preview',{...selection,...invalid}),{status:400});
   await assert.rejects(manage('preview',{messageIds:['f'.repeat(64)]}),{status:409});
   online=false;
@@ -300,4 +300,62 @@ test('原生分享独立核对选中指纹，离线仍可读、缩减、撤销�
   assert.deepEqual(store.list('messages'),[]);
   await manage('revoke',{id,revision:2});assert.deepEqual(await list(),{sources:[]});
   await assert.rejects(use('read',{token:created.token!}),{status:404});
+});
+
+test('原生分享启用工具时在线复核，冻结公开名称与状态；离线关闭可移除所有细节',async t=>{
+  const store=createStore(':memory:'),host=new PluginHost({store,events:createEventBus(store),contributions:createContributions(),dataDir:':memory:'});
+  t.after(async()=>{await host.close();store.close();});
+  const native={machineId:'m',executorId:'codex',nativeSessionId:'n',cwd:'/fixture/root'};
+  const ids=['a'.repeat(64),'b'.repeat(64),'c'.repeat(64)],messageIds=ids.slice(0,2);
+  let online=true,reads=0,text='已确认回答';
+  const firstTool={name:'read_file',status:'returned' as const,args:'原始参数',result:'内部回执',headers:'凭据'};
+  let tools=[firstTool];
+  host.register(createConversationSharing('',async(_s,selection)=>{
+    reads++;if (!online) throw Object.assign(Error('执行机离线'),{status:503});
+    const rows=[{id:ids[0]!,index:0,role:'user' as const,text:'问题',tools:[{...firstTool,name:'用户不应出现工具'}]},
+      {id:ids[1]!,index:1,role:'assistant' as const,text,tools},
+      {id:ids[2]!,index:2,role:'assistant' as const,text:'另一个回答',tools:[{...firstTool,name:'another_tool'}]}];
+    return {items:'offset' in selection ? rows : rows.filter(r=>selection.ids.includes(r.id)),total:3};
+  }));
+  await host.start();
+  const manage=(action:string,body:JsonObject={})=>host.invocations.use('conversation-sharing.manage',{action,native,...body}) as Promise<JsonObject>;
+  const preview=(opts:JsonObject)=>manage('preview',opts);
+  const publish=async(opts:JsonObject)=>manage(opts.id?'update':'create',{...opts,previewHash:(await preview(opts)).previewHash!});
+  const catalog=await manage('catalog');
+  assert.ok((catalog.items as JsonObject[]).every(item=>!Object.hasOwn(item,'tools')));
+  const plain={messageIds};
+  const created=await publish(plain),id=created.id!;
+  const read=()=>host.invocations.use('conversation-sharing.read',{token:created.token!}) as Promise<JsonObject>;
+  const enabled={...plain,id,revision:1,showTools:true};
+  online=false;await assert.rejects(preview(enabled),{status:503});online=true;
+  const candidates=await preview(enabled);
+  const expected=[{role:'user',text:'问题'},{role:'assistant',text,tools:[{name:'read_file',status:'returned'}]}];
+  assert.deepEqual(candidates.messages,expected);
+  tools=[{...firstTool,name:'changed_tool'}];
+  await assert.rejects(manage('update',{...enabled,previewHash:candidates.previewHash!}),{status:409});
+  tools=[firstTool];text='正文发生变化，指纹由宿主复核';
+  await manage('update',{...enabled,previewHash:candidates.previewHash!});
+  online=false;
+  const oldReads=reads;
+  await publish({...plain,id,revision:2,expireHours:1});
+  assert.deepEqual((await read()).messages,expected);
+  assert.equal(reads,oldReads);
+  await assert.rejects(preview({id,revision:3,messageIds:ids}),{status:503});
+  await publish({id,revision:3,messageIds:[ids[0]!]});
+  assert.deepEqual((await read()).messages,[expected[0]]);
+  online=true;
+  await publish({id,revision:4,messageIds:[ids[0]!,ids[2]!]});
+  assert.ok(JSON.stringify((await read()).messages).includes('another_tool'));
+  online=false;
+  await publish({id,revision:5,messageIds:[ids[0]!,ids[2]!],showTools:false});
+  assert.ok(!JSON.stringify(await read()).includes('tools'));
+  online=true;
+  tools=Array.from({length:8000},()=>firstTool);
+  await assert.rejects(preview({messageIds,showTools:true}),{status:400});
+  tools=[{...firstTool,name:'bad key private details'}];
+  await assert.rejects(preview({messageIds,showTools:true}),{status:409});
+  tools=[firstTool];
+  const direct=await publish({messageIds,showTools:true});
+  const live=await host.invocations.use('conversation-sharing.read',{token:direct.token!});
+  for (const forbidden of ['原始参数','内部回执','凭据','headers','/fixture/root']) assert.ok(!JSON.stringify(live).includes(forbidden));
 });

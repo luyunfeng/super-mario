@@ -65,7 +65,7 @@ export function createConversationSharing({api,store,getRows}) {
     const editBar=h('div',{class:'row row--between',hidden:true},editLabel,Button({label:'取消编辑',size:'sm',onClick:()=>{if (!writing) resetMode();}}));
     const inputs=h('fieldset',{class:'stack',style:{border:'0',padding:'0',margin:'0',minWidth:'0'}},
       h('div',{class:'row row--wrap'},Button({label:'全选当前消息',size:'sm',onClick:()=>chooseFrom(0)}),
-        Button({label:'全不选',size:'sm',onClick:()=>chooseFrom(rows.length)})),candidates,catalogControls,status,!native && h('label',{class:'check'},showTools,'包含工具记录'),!native && h('label',{class:'check'},includeFuture,'自动追加后续消息'),futureHint,Field({label:'分享有效期',control:expiry}),inspect);
+        Button({label:'全不选',size:'sm',onClick:()=>chooseFrom(rows.length)})),candidates,catalogControls,status,h('label',{class:'check'},showTools,'包含工具记录'),!native && h('label',{class:'check'},includeFuture,'自动追加后续消息'),futureHint,Field({label:'分享有效期',control:expiry}),inspect);
     const drawer=openDrawer({title:'分享对话摘录',subtitle:native && (native.executorId+' · '+native.nativeSessionId),wide:true,body:[
       editBar,inputs,previewBox,feedback,result,h('section',{class:'stack','aria-label':'已有分享'},
         h('div',{class:'row row--between'},h('h3',{},'本对话已有分享'),Button({label:'刷新分享列表',size:'sm',onClick:loadList})),historyStatus,history)
@@ -185,7 +185,7 @@ export function createConversationSharing({api,store,getRows}) {
       } finally {if(current() && stamp===editStamp){loadingEdit=false;inputs.disabled=false;counts();}}
     }
     function parameters() {
-      return {...source,...(!native && {showTools:showTools.checked,includeFuture:includeFuture.checked,...(includeFuture.checked && {futureScope:futureScope()})}),messageIds:rows.filter(m=>selected.has(m.id)).map(m=>m.id),...(editing?{id:editing.id,revision:editing.revision}:{}),...(expiry.value==='keep'?{}:{expireHours:Number(expiry.value)})};
+      return {...source,showTools:showTools.checked,...(!native && {includeFuture:includeFuture.checked,...(includeFuture.checked && {futureScope:futureScope()})}),messageIds:rows.filter(m=>selected.has(m.id)).map(m=>m.id),...(editing?{id:editing.id,revision:editing.revision}:{}),...(expiry.value==='keep'?{}:{expireHours:Number(expiry.value)})};
     }
     async function showPreview() {
       if (!current() || !selected.size || selected.size>100 || writing || loadingEdit) return;
@@ -200,7 +200,7 @@ export function createConversationSharing({api,store,getRows}) {
           h('div',{class:'card__body stack'},value.messages.map(m=>h('div',{},h('strong',{},roleLabel(m.role)),h('pre',{class:'mailbox-content'},m.text),args.showTools && renderSharedTools(m.tools))),
             args.includeFuture && h('p',{},h('strong',{},describeFuture(args.futureScope,args.showTools))),
             !args.includeFuture && editing?.includeFuture && h('p',{},'确认后停止自动追加，原链接将保留以上摘录。'),
-            args.showTools && h('p',{class:'small'},'持有链接的人也能查看预览中的工具名称、状态、参数和结果。请展开工具记录，核对后再确认。'),
+            args.showTools && h('p',{class:'small'},native ? '持有链接的人可查看所选回复的工具名称和调用状态。请核对后再确认。' : '持有链接的人也能查看预览中的工具名称、状态、参数和结果。请展开工具记录，核对后再确认。'),
             h('p',{class:'small'},args.expireHours ? '持有链接的人可在 '+args.expireHours+' 小时内查看以上正文。' : '原链接到期时间为 '+dateLabel(editing.expiresAt)+'。'),
             Button({label:editing?'确认更新分享':'确认创建分享',kind:'primary',onClick:create})));
         feedback.textContent='';

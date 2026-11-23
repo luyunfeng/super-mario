@@ -1,5 +1,5 @@
 import {nativeSource} from './native-conversation-source.ts';
-import {nativeShareKey,readShareItems,type ReadNative} from './conversation-sharing-native.ts';
+import {nativeShareKey,readShareItems,type ReadNative,type NativeToolRecord} from './conversation-sharing-native.ts';
 import {collectFuture,futureScopeFor,startFollowing,stopFollowing,type FutureScope} from './conversation-sharing-future.ts';
 import {checkedResult,phaseLabels,record,traceObject} from './tool-trace-public-fields.ts';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
@@ -8,7 +8,7 @@ import type {Message,Project,Todo,NativeExportSource} from '../packages/protocol
 import {publicText} from './agent-progress-card.ts';
 
 const shares='conversation-sharing.shares', snapshots='conversation-sharing.snapshots', tokens='conversation-sharing.tokens';
-type ToolRecord={name:string;status:'succeeded'|'failed'|'unknown';args?:string;result?:string};
+type ToolRecord={name:string;status:NativeToolRecord['status'];args?:string;result?:string};
 type Excerpt={role:'user'|'assistant';text:string;tools?:ToolRecord[]};
 type Share={native?:NativeExportSource;includeFuture?:boolean;futureScope?:FutureScope;pauseReason?:string;showTools?:boolean;revision?:number;id:string;conversationId:string;createdAt:string;expiresAt:string;revokedAt?:string;messageCount:number;tokenHash:string};
 type Snapshot={ids:string[];messages:Excerpt[];scopeHash:string};
@@ -203,8 +203,9 @@ export function createConversationSharing(workspaceToken='',readNative?:ReadNati
         const nativeKey=native && nativeShareKey(native);
         let nativeTexts:Map<string,Excerpt>|undefined;
         if (native && nativeKey) {
-          if ((input.includeFuture!==undefined && input.includeFuture!==false) || input.futureScope!==undefined ||
-              (input.showTools!==undefined && input.showTools!==false)) fail(400,'原生会话仅支持分享所选对话正文');
+          if ((input.includeFuture!==undefined && input.includeFuture!==false) || input.futureScope!==undefined)
+            fail(400,'原生会话仅支持分享已选择的消息，不支持追加后续消息');
+          if (input.showTools!==undefined && typeof input.showTools!=='boolean') fail(400,'请选择是否分享工具记录');
           if (action==='catalog') {
             const offset=input.offset??0;
             if (typeof offset!=='number' || !Number.isSafeInteger(offset) || offset<0) fail(400,'原生会话分页位置无效');
@@ -216,16 +217,18 @@ export function createConversationSharing(workspaceToken='',readNative?:ReadNati
           if (action==='preview' || action==='update' || action==='create') {
             const ids=selectionIds(input.messageIds);
             if (ids.some(id=>!/^[a-f0-9]{64}$/.test(id))) fail(400,'原生消息指纹无效');
-            let retained:string[]=[];
+            let retained:string[]=[],previousTools=false;
             if (action==='update' || input.id!==undefined) {
               const share=typeof input.id==='string' && store.get<Share>(shares,input.id);
               if (!share || share.conversationId!==nativeKey || !share.native) return missing();
               checkRevision(input.revision,share);
               retained=currentSnapshot(store,share).ids;
+              previousTools=share.showTools===true;
             }
-            const fresh=ids.filter(id=>!retained.includes(id));
-            const {items}=fresh.length ? await readShareItems(readNative,native,{ids:fresh},signal) : {items:[]};
-            nativeTexts=new Map(items.map(({id,role,text})=>[id,{role,text}]));
+            const showTools=input.showTools??previousTools;
+            const fresh=showTools && !previousTools ? ids : ids.filter(id=>!retained.includes(id));
+            const {items}=fresh.length ? await readShareItems(readNative,native,{ids:fresh,...(showTools && {showTools:true})},signal) : {items:[]};
+            nativeTexts=new Map(items.map(({id,role,text,tools})=>[id,{role,text,...(tools && {tools})}]));
           }
         }
         requireActive();
@@ -278,7 +281,12 @@ export function createConversationSharing(workspaceToken='',readNative?:ReadNati
         const showTools=input.showTools===undefined ? (share?.showTools??false) : input.showTools;
         if (typeof showTools!=='boolean') fail(400,'请选择是否分享工具记录');
         const excerpts=new Map(rows.map(row=>[row.id,retained.get(row.id)?.text??visibleText(row.text,workspaceToken)]));
-        const messages=nativeItems ? nativeItems.map((item,i)=>retained.get(ids[i]!)??{role:item.role,text:visibleText(item.text,workspaceToken)}) : rows.map((row):Excerpt=>{
+        const messages=nativeItems ? nativeItems.map((item,i):Excerpt=>{
+          const key=ids[i]!,previous=retained.get(key),fresh=nativeTexts?.get(key);
+          if (previous && fresh && previous.role!==fresh.role) fail(409,'原生消息角色已变化，请重新选择');
+          const tools=showTools && item.role==='assistant' && (previous && share?.showTools ? previous.tools : fresh?.tools);
+          return {role:item.role,text:previous?.text??visibleText(item.text,workspaceToken),...(tools && {tools})};
+        }) : rows.map((row):Excerpt=>{
           const message:Excerpt={role:row.role,text:excerpts.get(row.id)!};
           if (showTools && row.role==='assistant') {
             const sourceText=row.replyTo && excerpts.get(row.replyTo);
