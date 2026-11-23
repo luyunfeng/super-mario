@@ -5110,6 +5110,9 @@ test('Web 和飞书解释摘录分享的确认步骤及撤销范围', async t =>
   const {server,api,ask}=await fixture(t,req=>{
     assert.match(req.system,/勾选消息，核对预览正文和有效期/);
     assert.match(req.system,/读者继续使用原链接，默认沿用原到期时间/);
+    assert.match(req.system,/通用错误无法判定是否已撤销/);
+    assert.match(req.system,/重新读取摘录.*原页重试/);
+    assert.match(req.system,/只需错误提示，不请求完整链接/);
     assert.match(req.system,/工具记录默认关闭/);
     assert.match(req.system,/后续消息默认不追加/);
     assert.match(req.system,/同范围新发的 Web 提问及其完成的回复/);
