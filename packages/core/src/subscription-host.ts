@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Contributions, Extension, KnowledgeBackend, Store } from '../../plugin-sdk/src/index.ts';
-import type { InboxSubscriptionDelivery, InboxThing, Json } from '../../protocol/src/index.ts';
+import type { InboxItem, InboxSubscriptionDelivery, InboxThing, Json, SubscriptionFailureNotice } from '../../protocol/src/index.ts';
 import { subscriptionDrafts } from './subscription-drafts.ts';
 import { subscriptionDraftTool, subscriptionReadTool } from './subscription-tools.ts';
 import { createSourceSubscriptions, deliveryKey, type SourceItem } from './source-subscriptions.ts';
@@ -12,6 +12,8 @@ export function createSubscriptionHost(options: {
   contributions: Contributions;
   use: (name:string,input:Json,options:{signal:AbortSignal; timeoutMs:number})=>Promise<Json>;
   ingest: (source:string,things:InboxThing[],policy?:InboxSubscriptionDelivery)=>Promise<void>;
+  syncFailureNotice:(notice:SubscriptionFailureNotice)=>void;
+  failureCard:(subscriptionId:string)=>InboxItem|undefined;
   knowledge: ()=>KnowledgeBackend;
   changed: (event:string,id:string)=>void;
 }) {
@@ -34,7 +36,7 @@ export function createSubscriptionHost(options: {
     id:'source-subscriptions', name:'来源订阅',capabilities:['subscriptions'],
     activate(context) {
       const service = createSourceSubscriptions({
-        store:options.store,sources,timezone:options.timezone,
+        store:options.store,sources,timezone:options.timezone,onFailureNotice:options.syncFailureNotice,
         async read(sourceId,resource,signal,cursor?:string,checkpoint?:string) {
           const source=sources().find(source => source.id===sourceId);
           if (!source) throw Object.assign(new Error('订阅来源不可用'),{status:503});
@@ -93,7 +95,7 @@ export function createSubscriptionHost(options: {
         },
         onChange:id=>options.changed('source-subscriptions.changed',id),
       });
-      context.contribute('tools','source_subscriptions_read',subscriptionReadTool(service,sources,options.authorizeRead,options.timezone,()=>publicBase));
+      context.contribute('tools','source_subscriptions_read',subscriptionReadTool(service,sources,options.authorizeRead,options.timezone,options.failureCard,()=>publicBase));
       context.contribute('tools','source_subscription_draft',subscriptionDraftTool((input,signal)=>drafts.propose(input,options.authorizeRead,signal),()=>publicBase));
       active = service;
       service.syncTimezone();

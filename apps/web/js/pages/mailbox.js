@@ -147,6 +147,14 @@ export function createMailboxPage({ api, store, router, direction }) {
     replace(projectFilter, options.map(([id, label]) => h('option', { value: id }, `${label} (${new Set(all.filter(item => matches(item, 'project') && (id === 'all' || (projectId(item) || 'none') === id)).map(item=>item.conversation?.id??item.id)).size})`)));
     projectFilter.value = current;
   }
+  function subscriptionFailure(item) {
+    const failure=item.raw.subscriptionFailure;
+    if(!failure) return null;
+    const states={open:'来源读取持续失败',recovered:'来源读取已恢复',paused:'订阅已暂停',deleted:'订阅已删除'};
+    const label=states[failure.state];
+    return h('div',{class:'small'},label && !item.title.includes(label) && h('strong',null,label+' · '),
+      '读取失败始于 ',h('time',{dateTime:failure.since},formatDate(failure.since,true)));
+  }
   function metadata(item) {
     const origin = item.raw.origin;
     if(item.raw.source?.startsWith('subscription:')) {
@@ -154,6 +162,7 @@ export function createMailboxPage({ api, store, router, direction }) {
       const label={thread:'来源话题',source:'整条订阅',digest:'补收摘要'};
       return h('div',{class:'row row--wrap mailbox-meta'},
         item.raw.sender && h('span',null,'订阅：'+item.raw.sender),
+        subscriptionFailure(item),
         move && h('span',null,label[move.kind]+' · 本次收录 '+move.count+' 条'),
         h('span',null,'项目：'+projectName(item)));
     }

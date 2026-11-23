@@ -3,7 +3,7 @@ import {runTitle,subscriptionRuns,type SubscriptionRun} from './subscription-run
 export type {SubscriptionRun} from './subscription-runs.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { nextOccurrence } from './schedules.ts';
-import type { InboxSubscriptionPolicy } from '../../protocol/src/index.ts';
+import type { InboxSubscriptionPolicy, SubscriptionFailureNotice } from '../../protocol/src/index.ts';
 import type { Store } from '../../plugin-sdk/src/index.ts';
 
 type Destination = 'inbox' | 'knowledge';
@@ -11,6 +11,7 @@ type SubscriptionTriagePolicy = Omit<InboxSubscriptionPolicy,'due'>;
 export type SourceItem = {id:string; title:string; text:string; url?:string; dueAt?:string; thread?:string; occurredAt?:string};
 type SubscriptionInput = {sourceId:string; resource:string; name:string; destinations:Destination[]; intervalMinutes:number};
 export interface SourceSubscription extends SubscriptionInput, SubscriptionTriagePolicy {
+  failingSince?:string; failureReason?:string;
   inboxGroup?:'thread'|'source'; mode?:'snapshot'; dailyAt?:string; id:string; version:number; enabled:boolean; nextRunAt:string; lastRunAt?:string; nextPageNumber?:number; retryAt?:string; error?:string;
 }
 type Options = {
@@ -18,6 +19,7 @@ type Options = {
   timezone?:()=>string;
   deliverInbox?:(row:SourceSubscription,group:SubscriptionInboxGroup)=>Promise<void>|void;
   onChange?:(id:string)=>void;
+  onFailureNotice?:(notice:SubscriptionFailureNotice)=>void;
   sources:()=>{id:string;name:string;resourceLabel:string;mode?:'snapshot';triageRules?:string}[];
   read:(sourceId:string,resource:string,signal:AbortSignal,cursor?:string,checkpoint?:string)=>Promise<SourceItem[]|{items:SourceItem[];nextCursor?:string;checkpoint?:string}|{snapshot:Omit<SourceItem,'id'>}>;
   deliver:(destination:Destination,key:string,item:SourceItem,subscription:{id:string;name:string;mode?:'snapshot'} & SubscriptionTriagePolicy)=>Promise<void>|void;
@@ -53,8 +55,12 @@ function token(value:unknown) {
   return value;
 }
 
+class SubscriptionError extends Error {
+  readonly status:number;
+  constructor(message:string,status:number) { super(message);this.status=status; }
+}
 function failure(message:string,status:number):never {
-  throw Object.assign(new Error(message),{status});
+  throw new SubscriptionError(message,status);
 }
 function tooLong(text:string, limit:number) {
   return text.length>limit && (text.length>2*limit || Array.from(text).length>limit);
@@ -89,7 +95,7 @@ export function deliveryKey(id:string,item:string,destination:Destination) {
   return 'source-subscription:'+createHash('sha256').update(JSON.stringify([id,item,destination])).digest('hex');
 }
 
-export function createSourceSubscriptions({store,sources,read,deliver,deliverInbox,onChange,timezone=()=>Intl.DateTimeFormat().resolvedOptions().timeZone}:Options) {
+export function createSourceSubscriptions({store,sources,read,deliver,deliverInbox,onChange,onFailureNotice,timezone=()=>Intl.DateTimeFormat().resolvedOptions().timeZone}:Options) {
   let closed=false;
   const records=subscriptionRuns(store);
   const deliveries=new Set<Promise<void>>();
@@ -164,9 +170,9 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
     return until>Date.now() ? until : 0;
   }
   function limited(until:number):never {
-    throw Object.assign(new Error('来源服务已限流，请稍后再拉取。'),{status:429,retryAt:new Date(until).toISOString()});
+    throw Object.assign(new SubscriptionError('来源服务已限流，请稍后再拉取。',429),{retryAt:new Date(until).toISOString()});
   }
-  async function readConnector(sourceId:string,resource:string,controller:AbortController,cursor?:string,checkpoint?:string) {
+  async function readConnector(sourceId:string,resource:string,controller:AbortController,cursor?:string,checkpoint?:string,onRead?:()=>void) {
     const key=connector(sourceId);
     // Recheck after every preceding read. Its response may have paused the whole connector.
     if(reads.has(key)) {
@@ -184,7 +190,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
     if(until) limited(until);
     let release!:()=>void;
     reads.set(key,new Promise<void>(resolve=>{release=resolve;}));
-    try { return await read(sourceId,resource,controller.signal,cursor,checkpoint); }
+    try { onRead?.();return await read(sourceId,resource,controller.signal,cursor,checkpoint); }
     catch(error) {
       open(); controller.signal.throwIfAborted();
       if(error && typeof error==='object' && 'sourceReadCode' in error && error.sourceReadCode==='rate_limited') {
@@ -200,9 +206,9 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
       readerFailure(error);
     } finally { reads.delete(key);release(); }
   }
-  async function load(sourceId:string,resource:string,controller:AbortController,cursor?:string,checkpoint?:string,mode?:'snapshot') {
+  async function load(sourceId:string,resource:string,controller:AbortController,cursor?:string,checkpoint?:string,mode?:'snapshot',onRead?:()=>void) {
     requireSource(sourceId);
-    const raw=await readConnector(sourceId,resource,controller,cursor,checkpoint);
+    const raw=await readConnector(sourceId,resource,controller,cursor,checkpoint,onRead);
     open();
     controller.signal.throwIfAborted();
     requireSource(sourceId);
@@ -353,6 +359,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
         next.nextRunAt=scheduled(next,next.dailyAt || !Number.isFinite(last) ? Date.now() : last);
       }
       if(enabled!==previous.enabled) delete next.error;
+      if(!enabled) clearFailure(next,'paused');
       if(!enabled || addedDestination) {
         store.remove(positions,id);
         store.remove(stagedPages,id);
@@ -379,14 +386,24 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
     if(row.version!==input.version) onChange?.(id);
     return row;
   }
+  function notifyFailure(row:SourceSubscription,state:SubscriptionFailureNotice['state']) {
+    if(row.failingSince && row.failureReason) onFailureNotice?.({subscriptionId:row.id,name:row.name,
+      since:row.failingSince,reason:row.failureReason,state});
+  }
+  function clearFailure(row:SourceSubscription,state:'recovered'|'paused') {
+    notifyFailure(row,state);
+    delete row.failingSince;
+    delete row.failureReason;
+  }
   function remove(id:string,version:unknown) {
     store.transaction(()=>{
-      current(id,version);
+      const row=current(id,version);
       if(running.has(id)) failure('订阅正在拉取，请稍后再删除。',409);
       for(const key of store.list<string>(receipts+'.'+id)) store.remove(receipts+'.'+id,key);
       store.remove(pending,id);
       store.remove(positions,id);store.remove(stagedPages,id);store.remove(checkpoints,id);
       for(const kind of [snapshots,snapshotChanges,snapshotCatchups,snapshotTargets,observations,inboxBoundary,catchupItems,inboxJobs]) store.remove(kind,id);
+      notifyFailure(row,'deleted');
       records.remove(id);
       store.remove(rows,id);
     });
@@ -414,7 +431,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
       requireSource(row.sourceId);
     }
     function finish(error?:string,retryAt?:string) {
-      const next={...row,lastRunAt:new Date().toISOString(),nextRunAt:retryAt ?? scheduled(row)};
+      const next={...get(id),lastRunAt:new Date().toISOString(),nextRunAt:retryAt ?? scheduled(row)};
       const nextPosition=store.get<Position>(positions,id);
       if(nextPosition) {
         next.nextPageNumber=nextPosition.page;
@@ -580,7 +597,14 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
       const position=store.get<Position>(positions,id);
       const checkpoint=store.get<string>(checkpoints,id);
       reading=true;
-      const page=await load(row.sourceId,row.resource,controller,position?.cursor,checkpoint,row.mode).catch(async error=>{
+      let readStartedAt:string|undefined;
+      const page=await load(row.sourceId,row.resource,controller,position?.cursor,checkpoint,row.mode,()=>{readStartedAt=new Date().toISOString();}).catch(async error=>{
+        if(readStartedAt && !closed && !controller.signal.aborted && available(row.sourceId) && !(error instanceof SubscriptionError && error.status===429)) {
+          const active=current(id,version);
+          active.failingSince ??=readStartedAt;
+          active.failureReason=error instanceof SubscriptionError || error instanceof PaginationError ? error.message : '读取订阅来源失败，请检查来源连接与权限。';
+          store.put(rows,id,active);
+        }
         const catchup=store.get<HeldInboxItem[]>(catchupItems,id)?.map(h=>h.item);
         if(boundary.awaitingFirst && catchup?.length && !closed && !controller.signal.aborted) {
           guard();
@@ -592,7 +616,27 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
       });
       reading=false;
       guard();
-      audit.item.readCount=page.readCount;audit.save();
+      let advance:Advance={};
+      if(page.paged || position) {
+        const candidate=position ? position.candidate : page.checkpoint;
+        if(page.nextCursor) {
+          const seen=position?.seen ?? [];
+          const pageNumber=position?.page ?? 1;
+          const fingerprint=createHash('sha256').update(page.nextCursor).digest('hex');
+          if(seen.includes(fingerprint)) throw new PaginationError('来源重复返回分页标识，订阅已暂停。');
+          if(pageNumber>=100) throw new PaginationError('来源超过 100 页，订阅已暂停。');
+          advance={position:{page:pageNumber+1,cursor:page.nextCursor,seen:[...seen,fingerprint],candidate}};
+        } else advance={checkpoint:candidate};
+      }
+      // A verified read ends the streak even when the destination subsequently rejects delivery.
+      store.transaction(()=>{
+        const active=current(id,version);
+        if(active.failingSince) {
+          clearFailure(active,'recovered');
+          store.put(rows,id,active);
+        }
+        audit.item.readCount=page.readCount;audit.save();
+      });
       if(row.mode==='snapshot') {
         const prior=store.get<SnapshotState>(snapshots,id);
         const digest=page.digest;
@@ -611,18 +655,6 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
         }
         guard();
         const updated=commitPage({});onChange?.(id);return updated;
-      }
-      let advance:Advance={};
-      if(page.paged || position) {
-        const candidate=position ? position.candidate : page.checkpoint;
-        if(page.nextCursor) {
-          const seen=position?.seen ?? [];
-          const pageNumber=position?.page ?? 1;
-          const fingerprint=createHash('sha256').update(page.nextCursor).digest('hex');
-          if(seen.includes(fingerprint)) throw new PaginationError('来源重复返回分页标识，订阅已暂停。');
-          if(pageNumber>=100) throw new PaginationError('来源超过 100 页，订阅已暂停。');
-          advance={position:{page:pageNumber+1,cursor:page.nextCursor,seen:[...seen,fingerprint],candidate}};
-        } else advance={checkpoint:candidate};
       }
       const caught=store.get<HeldInboxItem[]>(catchupItems,id)?.map(h=>h.item) ?? [];
       const queue=store.transaction(()=>{
@@ -667,7 +699,9 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
           if(error instanceof PaginationError) store.remove(positions,id);
           const updated=finish(error instanceof Error && 'status' in error ? error.message : '来源订阅拉取失败。',
             error instanceof Error && 'retryAt' in error && typeof error.retryAt==='string' ? error.retryAt : undefined);
-          if(error instanceof PaginationError) store.put(rows,id,{...updated,enabled:false,version:updated.version+1});
+          if(error instanceof PaginationError) {
+            clearFailure(updated,'paused');store.put(rows,id,{...updated,enabled:false,version:updated.version+1});
+          }
         });
       }
       if(!closed) onChange?.(id);
@@ -678,7 +712,12 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
   async function tick() {
     if(closed) return;
     const now=Date.now();
-    await Promise.allSettled(store.list<SourceSubscription>(rows).filter(row=>
+    const subscriptions=store.list<SourceSubscription>(rows);
+    for(const row of subscriptions) {
+      if(row.enabled && row.failingSince && Date.parse(row.failingSince)+86400000<=now)
+        store.transaction(()=>notifyFailure(row,'open'));
+    }
+    await Promise.allSettled(subscriptions.filter(row=>
       row.enabled && !running.has(row.id) && Date.parse(row.nextRunAt)<=now &&
       (!retryTime(row.sourceId) || Boolean(store.get(pending,row.id) || store.get(snapshotCatchups,row.id) || store.get(catchupItems,row.id) || store.get(inboxJobs,row.id)))).map(row=>runPull(row.id,row.version,'schedule')));
   }

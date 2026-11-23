@@ -1,7 +1,7 @@
 import { excludesPersonalGroupFromAutomation } from '../../protocol/src/inbox-origin.ts';
 import { createHash } from 'node:crypto';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
-import type { InboxItem, InboxSubscriptionDelivery, InboxSubscriptionPolicy, InboxThing, InboxTriageInput, Project, Todo } from '../../protocol/src/index.ts';
+import type { InboxItem, InboxSubscriptionDelivery, InboxSubscriptionPolicy, InboxThing, InboxTriageInput, Project, SubscriptionFailureNotice, Todo } from '../../protocol/src/index.ts';
 import { normalizeInboxOrigin } from './inbox-origin.ts';
 
 export class InboxError extends Error {
@@ -72,6 +72,8 @@ export function createInboxService({ store, events, createTodo, triage }: {
 }): {
   list(): InboxItem[];
   ingest(source: string, things: InboxThing[], policy?:InboxSubscriptionDelivery): Promise<void>;
+  syncSubscriptionFailure(notice:SubscriptionFailureNotice):void;
+  subscriptionFailureCard(subscriptionId:string):InboxItem|undefined;
   retryPending(): Promise<void>;
   confirm(id: string, version: number, details?: { title: string; notes: string }): { todoId: string };
   archive(id: string, version: number): void;
@@ -116,6 +118,44 @@ export function createInboxService({ store, events, createTodo, triage }: {
   }
   return {
     list() { return store.list<InboxItem>(collection).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); },
+    subscriptionFailureCard(subscriptionId) {
+      const item=store.get<InboxItem>(collection,inboxItemId('subscription:'+subscriptionId,'failing'));
+      return item?.subscriptionFailure ? item : undefined;
+    },
+    syncSubscriptionFailure(notice) {
+      if(closed) throw new InboxError('收件箱服务已关闭',503);
+      required(notice.subscriptionId,'subscriptionId');
+      required(notice.name,'name');
+      const started=Date.parse(notice.since);
+      if(!Number.isFinite(started)) throw new InboxError('故障开始时间无效');
+      const source='subscription:'+notice.subscriptionId, thread='failing', id=inboxItemId(source,thread);
+      const item=store.get<InboxItem>(collection,id);
+      // This thread is owned by the service. Never adopt an unrelated legacy message.
+      if(item && !item.subscriptionFailure) return;
+      const previous=item?.subscriptionFailure;
+      const openedAt=started+86400000;
+      const now=new Date();
+      let next:InboxItem;
+      if(notice.state==='open') {
+        if(now.getTime()<openedAt || (previous && started<=Date.parse(previous.since))) return;
+        // The host supplies a mapped source-read reason, never an external exception or source content.
+        const text=notice.reason?.trim() || '来源持续读取失败，请检查订阅状态。';
+        next={id,source,thread,sender:notice.name,last:'failing:'+notice.since,title:notice.name+' · 订阅来源持续读取失败',text,
+          tier:'fyi',reason:'订阅来源连续读取失败已满 24 小时',
+          receivedAt:new Date(openedAt).toISOString(),updatedAt:now.toISOString(),version:(item?.version ?? 0)+1,
+          subscriptionFailure:{since:notice.since,state:'open'},
+          ...(item?.projectId && {projectId:item.projectId})};
+      } else {
+        if(!item || !previous || previous.state!=='open' || previous.since!==notice.since) return;
+        const status={recovered:'来源读取已恢复',paused:'订阅已暂停',deleted:'订阅已删除'}[notice.state];
+        if(!status) throw new InboxError('订阅故障状态无效');
+        next={...item,sender:notice.name,subscriptionFailure:{since:notice.since,state:notice.state},title:notice.name+' · '+status,
+          text:item.text+'\n\n'+status+'，本次故障提醒已关闭。',reason:item.reason+'；'+status,
+          archivedAt:item.archivedAt ?? now.toISOString(),updatedAt:now.toISOString(),version:item.version+1};
+      }
+      store.put(collection,id,next);
+      changed(id);
+    },
     async ingest(source, things, policy) {
       if (closed) throw new InboxError('收件箱服务已关闭', 503);
       required(source, 'source');
@@ -126,6 +166,7 @@ export function createInboxService({ store, events, createTodo, triage }: {
       const subscriptionPolicy = delivery ? classification : undefined;
       const batch = things.map(value => {
         const thing = validateThing(value);
+        if(source.startsWith('subscription:') && thing.thread==='failing') throw new InboxError('该线程保留给订阅故障提醒');
         if (thing.origin && !source.startsWith('feishu:')) delete thing.origin.personalGroupObserved;
         return thing;
       });

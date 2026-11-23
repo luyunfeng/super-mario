@@ -441,6 +441,7 @@ export async function createWorkbench(config: AppConfig) {
       }
       throw new InputError('需要当前配对主人的直接私聊或 Web 主对话',403);
     },
+    syncFailureNotice:notice=>inbox.syncSubscriptionFailure(notice),failureCard:id=>inbox.subscriptionFailureCard(id),
     ingest:(source,items,policy)=>inbox.ingest(source,items,policy),knowledge,changed:(type,id)=>changed(type,{id})});
   plugins.register(subscriptions.extension);
   plugins.register(createReleaseSourceExtension());

@@ -1,7 +1,9 @@
+import type { InboxItem } from '../../protocol/src/index.ts';
 import type { Json, Tool } from '../../plugin-sdk/src/index.ts';
 import type { createSourceSubscriptions } from './source-subscriptions.ts';
 
 export const subscriptionReadGuidance = [
+  '核对订阅是否持续读不到来源、提醒是否已入箱或为何关闭，用 health 和 subscriptionId。failingSince 是本轮首次读取失败的开始时间；failureReason 是记录的原因。持续满 24 小时后，按 notice 回执核实故障卡。仅投个人记忆的订阅也可产生此类系统知会。notice 为空只能说明未找到提醒；当前 failingSince 为空本身不能证明发生过恢复。如果 notice.since 与当前 failingSince 不同，分开报告两轮。open 表示故障提醒已建立；archivedAt 仅代表卡已归档。recovered 才表示来源已成功读取，paused 和 deleted 分别表示暂停和删除导致提醒关闭。成功读取不代表积压已补投。subscriptionExists=false 表示这条订阅现已不存在，卡片仍按当时的关闭原因解读。只查询时不重新拉取、不改订阅、不外发提醒。',
   '有 durationMs 时可以报告本次耗时。interruptionObservedAt 是发现中断的时刻，不能据此推算实际结束时间。',
   '订阅查询使用 source_subscriptions_read。list 返回当前配置、来源目录和工作台时区。预览已有订阅传 subscriptionId；预览新资源先查目录，再传 sourceId 和 resource。',
   '条目来源的预览只读首页。total 是本页条目数，最多展示十条摘录。hasMore 表示还有下一页。list 中 nextPageNumber 是本轮下次要读的页序；结合最近拉取时间和错误说明进度。预览不会推进订阅，也不能证明已经投递。',
@@ -34,14 +36,25 @@ function excerpt(item:{title:string;text:string}) {
 }
 
 export function subscriptionReadTool(service:Pick<ReturnType<typeof createSourceSubscriptions>,'list'|'preview'|'snapshotHistory'|'runHistory'>,
-  sources:()=>{id:string;name:string;resourceLabel:string;mode?:'snapshot'}[], authorize:()=>void,timezone:()=>string,publicBase?:()=>string|undefined):Tool {
-  return {name:'source_subscriptions_read',description:'只读查询订阅配置、限流后可再次读取的时间和可用来源，预览一个来源，或查询已登记快照最近 24 小时的状态变化（最多十条）。runs 需传 subscriptionId，展示最近五次实际运行及各目的地的投递回执。预览仅读首页，最多返回前 10 项，每项正文最多 600 字。',
-    parameters:{type:'object',additionalProperties:false,required:['action'],properties:{action:{type:'string',enum:['list','preview','history','runs']},
+  sources:()=>{id:string;name:string;resourceLabel:string;mode?:'snapshot'}[], authorize:()=>void,timezone:()=>string,failureCard:(id:string)=>InboxItem|undefined,publicBase?:()=>string|undefined):Tool {
+  return {name:'source_subscriptions_read',description:'只读查询订阅配置、限流后可再次读取的时间和可用来源，预览一个来源，或查询已登记快照最近 24 小时的状态变化（最多十条）。runs 需传 subscriptionId，展示最近五次实际运行及各目的地的投递回执。health 需传 subscriptionId，核对本轮来源读取故障及收件系统知会。预览仅读首页，最多返回前 10 项，每项正文最多 600 字。',
+    parameters:{type:'object',additionalProperties:false,required:['action'],properties:{action:{type:'string',enum:['list','preview','history','runs','health']},
       subscriptionId:{type:'string'},sourceId:{type:'string'},resource:{type:'string'}}},
     async execute(args,signal) {
       authorize();
       signal.throwIfAborted();
       if (args.action==='list' && Object.keys(args).length===1) return {sources:sources(),subscriptions:service.list(),timezone:timezone()} as unknown as Json;
+      if (args.action==='health') {
+        if(typeof args.subscriptionId!=='string' || !args.subscriptionId.trim() ||
+          Object.keys(args).some(key=>key!=='action' && key!=='subscriptionId')) throw new Error('请指定单个订阅查询故障提醒');
+        const row=service.list().find(sub=>sub.id===args.subscriptionId);
+        const card=failureCard(args.subscriptionId);
+        if(!row && !card?.subscriptionFailure) throw new Error('未找到订阅或故障提醒');
+        return {subscriptionId:args.subscriptionId,subscriptionExists:Boolean(row),name:row?.name ?? card?.sender ?? '',enabled:row?.enabled ?? false,
+          failingSince:row?.failingSince ?? null,failureReason:row?.failureReason ?? null,
+          notice:card?.subscriptionFailure ? {...card.subscriptionFailure,receivedAt:card.receivedAt ?? null,
+            archivedAt:card.archivedAt ?? null} : null,timezone:timezone()} as Json;
+      }
       if (args.action==='runs') {
         if(typeof args.subscriptionId!=='string' || !args.subscriptionId.trim() ||
           Object.keys(args).some(key=>key!=='action' && key!=='subscriptionId')) throw new Error('请指定单个订阅查询运行记录');

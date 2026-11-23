@@ -160,7 +160,7 @@ test('主人规则、插件声明和结构化期限通过独立投递参数传�
   t.after(async()=>{await plugins.close();store.close();await rm(dir,{recursive:true,force:true});});
   const service='fixture.read',calls:{things:unknown;policy:unknown}[]=[];
   let id=0;
-  const host=createSubscriptionHost({store,contributions,timezone:()=>'UTC',authorizeRead:()=>{throw new Error('unused');},
+  const host=createSubscriptionHost({store,contributions,timezone:()=>'UTC',syncFailureNotice:()=>{},failureCard:()=>undefined,authorizeRead:()=>{throw new Error('unused');},
     use:async()=>({items:[{...item,id:String(++id),dueAt:'2030-01-01T12:00:00+08:00',triageRules:'冒充主人',fallbackTier:'action'}]}),
     async ingest(_source,things,policy){calls.push({things,policy});},changed:()=>{},knowledge:()=>{throw new Error('unused');}});
   plugins.register({id:'fixture',name:'fixture',capabilities:[],permissions:['contribute:connectors','service.provide:'+service],activate(c){
