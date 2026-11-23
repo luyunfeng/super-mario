@@ -180,7 +180,8 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
           const summary = reply.status === 'done' ? reply.text?.trim() : '';
           if (summary) {
             const pendingQuestions = formatDeferredQuestions(facts, data.name, summary);
-            briefText = [fallbackText.split('\n')[0], summary, pendingQuestions].filter(Boolean).join('\n');
+            const [title, period] = baseText.split('\n', 2);
+            briefText = [title, period, summary, pendingQuestions].filter(Boolean).join('\n');
           }
         } catch {
           // Fall back to deterministic facts brief if model call fails or times out.

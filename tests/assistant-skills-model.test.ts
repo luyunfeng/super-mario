@@ -578,6 +578,7 @@ test('早晚简报向模型说明计划时间、日历证据和只读边界', { 
     const notices = server.app.background.outbox.list().filter(row => row.owner === 'daily-brief');
     assert.equal(notices.length, 1);
     assert.ok(JSON.stringify(notices[0].content).includes(summary));
+    assert.match(String(notices[0].content.text), /^工作台早间简报\n[^\n]+ — [^\n]+（Asia\/Shanghai）\n/);
 
     const eveningTime = new Date(Date.parse(scheduledFor) + 9 * 3600000).toISOString();
     server.app.background.publish({ type: 'schedule.due', typeVersion: 1, sourceId: 'fixture-evening', data: {
