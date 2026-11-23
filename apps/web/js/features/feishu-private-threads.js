@@ -213,7 +213,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     // Restore settled pages only. Requests from a previous list view cannot update this view.
     const expanded = new Map();
     for (const [threadId, page] of searchPage?.expanded ?? []) {
-      if (page.hits) expanded.set(threadId, { hits: page.hits, nextBefore: page.nextBefore });
+      if (page.hits) expanded.set(threadId, { hits: page.hits, nextBefore: page.nextBefore, hitCount: page.hitCount });
     }
     if (searchPage) searchPage.expanded = expanded;
     async function readHits(row) {
@@ -231,6 +231,13 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       try {
         const result = await api.get(base + '/' + encodeURIComponent(row.threadId) + '/search?' + params);
         if (!visible()) return;
+        if (page.hits && page.hitCount !== result.hitCount) {
+          page.hits = null;
+          page.nextBefore = null;
+          page.error = '匹配发言数已变化，请重新读取。';
+          return;
+        }
+        page.hitCount = result.hitCount;
         page.hits = (page.hits ?? []).concat(result.hits);
         page.nextBefore = result.nextBefore;
       } catch (error) {
@@ -256,7 +263,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       const hits = page?.hits ?? row.hits;
       return [
         row.hitCount > row.hits.length && h('span', {class:'small muted'}, page?.hits
-          ? `共匹配 ${row.hitCount} 条发言，已显示 ${hits.length} 条。`
+          ? `共匹配 ${page.hitCount ?? row.hitCount} 条发言，已显示 ${hits.length} 条。`
           : `共匹配 ${row.hitCount} 条发言，显示最近 ${row.hits.length} 条。`),
         hits.map(hit => h('button',{type:'button',class:'btn btn--secondary btn--sm',onclick:()=>detail({...row,hits},'',undefined,hit.id)},
           historyMessageLabel(hit),' · ',hit.omittedBefore?'…':'',hit.excerpt.slice(0,hit.matchStart),
