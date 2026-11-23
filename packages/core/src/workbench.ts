@@ -21,6 +21,7 @@ import { createReplyTracking } from './reply-tracking.ts';
 import { createWorkDecisionService } from './work-decision-service.ts';
 import { createAgentSessions, nativeResumeSpec, nativeResultSources } from './agent-sessions.ts';
 import { executionProgress } from './execution-progress.ts';
+import { todoLineage } from './todo-lineage.ts';
 import { createTodoDecisions } from './todo-decisions.ts';
 import { createTodoReporting } from './todo-reporting.ts';
 import { readRunBlockers } from './run-blockers.ts';
@@ -881,7 +882,7 @@ export async function createWorkbench(config: AppConfig) {
     const pendingRequests = pendingUserCards().filter(card => card.todoId === id && card.projectId === todo.projectId)
       .map(({ kind, title, body, suggestion }) => ({ kind, title, body, suggestion }));
     const reminderDeliveries = readReminderDeliveries(todo);
-    return { todo, pendingRequests, replyTracking, reminderDeliveries, decisions: todoDecisions.list(id), ...actionTodoLink(todo) } as unknown as Json;
+    return { todo, pendingRequests, replyTracking, reminderDeliveries, decisions: todoDecisions.list(id), ...(args.includeLineage !== false && {lineage:todoLineage(store,id)}), ...actionTodoLink(todo) } as unknown as Json;
   }
   async function knowledgeActionStatus(args: Record<string, unknown>, projectId?: string) {
     const { page, items } = await prepareKnowledgeActions(args, projectId);

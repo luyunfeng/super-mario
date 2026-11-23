@@ -7,6 +7,7 @@ import { policyPresets, applyPolicyPreset, policyRuleHits } from '../../../packa
 import { todoSections, todoDecisionIds } from '../../../packages/core/src/todo-sections.ts';
 import { createAgentArtifacts } from './agent-artifacts.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { todoLineage } from '../../../packages/core/src/todo-lineage.ts';
 import { currentWorkerTodo } from './worker-session.ts';
 import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
@@ -655,6 +656,13 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (closure[2] === 'report' && method === 'POST') return json(res, 200, app.taskClosure.reporting.report({ ...input, todoId } as Parameters<typeof app.taskClosure.reporting.report>[0]));
           if (closure[2] === 'review' && method === 'POST') return json(res, 200, app.taskClosure.review.attach({ ...input, todoId } as Parameters<typeof app.taskClosure.review.attach>[0]));
           if (closure[2] === 'review/decide' && method === 'POST') return json(res, 200, app.taskClosure.review.decide({ ...input, todoId } as Parameters<typeof app.taskClosure.review.decide>[0]));
+        }
+        const lineage = path.match(/^\/api\/v1\/todos\/([^/]+)\/lineage$/);
+        if (lineage && method === 'GET') {
+          const id = decodeURIComponent(lineage[1]!);
+          if (!app.store.get<Todo>('todos',id)) throw new InputError('待办不存在',404);
+          if (url.searchParams.has('expectedProjectId')) checkTodoScope(app,id,{expectedProjectId:url.searchParams.get('expectedProjectId') || null});
+          return json(res,200,{steps:todoLineage(app.store,id)});
         }
         const continuation = path.match(/^\/api\/v1\/todos\/([^/]+)\/continue$/);
         if (continuation && method === 'POST') return json(res, 201, app.continueTodo(decodeURIComponent(continuation[1]!), await body(req)));

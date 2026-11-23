@@ -202,6 +202,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         pin(task); return task;
       });
     } else if (['work_dispatch', 'todo_create', 'todos_list', 'runs_list', 'todo_detail', 'todo_history', 'projects_list', 'agent_sessions', 'session_resume', 'inbox_list', 'inbox_handling_read', 'scheduled_work_history', 'scheduled_work_brief', 'scheduled_work_list', 'pending_decisions_list', 'work_decisions_list', 'work_decision_record', 'scheduled_work_propose', 'schedule_followup', 'followups_list', 'notify_user', 'project_file_search', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'].includes(name)) pin(args);
+    // A task bot sees its own todo. The other phases can belong to different task bots.
+    if (name === 'todo_detail' && scope.kind === 'task') args.includeLineage = false;
     return args;
   }
   function scopedResult(name: string, result: import('../../../protocol/src/index.ts').Json) {

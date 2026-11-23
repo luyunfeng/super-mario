@@ -1,4 +1,5 @@
 import { createInboxAssistant } from '../packages/core/src/inbox-assistant.ts';
+import { todoDelegationPrompt } from '../packages/core/src/prompts.ts';
 import { runWithAgentInput } from '../packages/core/src/agent-input.ts';
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
@@ -3413,5 +3414,135 @@ test('Web 和飞书主人从真实读群回执找回已送达的回答，独立�
     await t.waitFor(() => assert.ok(sent.some(row => row.text === '当前讨论不能读取其他群的记录。')));
     assert.equal(reads, 1);
     assert.deepEqual(sent.filter(row => row.target === 'oc_group').map(row => row.text), [answer]);
+  } finally { await server.close(); }
+});
+
+test('Web 与飞书项目助手按前序登记续办，重复登记沿用原记录且详情保留交接链', async t => {
+  let adapter!: FeishuOptions;
+  let rootId = '', secondId = '', thirdId = '';
+  const sent: string[] = [];
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /只有主人明确要求基于已有待办开展下一阶段时才登记续办/);
+      assert.match(req.system, /拆分工作用上下级，指定先后顺序用前置依赖/);
+      const question = JSON.stringify(req.content);
+      if (question.includes('核对第三阶段')) return call('todo_detail', {todoId:thirdId}, 'read');
+      const third = question.includes('登记第三阶段');
+      return call('todo_detail', {todoId:third ? secondId : rootId}, third ? 'check-third' : 'check-second');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    const result = JSON.parse(raw);
+    if (req.callId === 'read') return {role:'assistant', content:JSON.stringify([result.todo.continuesTodoId, result.todo.continuationReason, result.todo.continuationRootId])};
+    if (req.callId?.startsWith('check-')) {
+      const third = req.callId === 'check-third';
+      return call('todo_create', {title:third ? '第三阶段' : '第二阶段', continuesTodoId:result.todo.id,
+        continuationReason:third ? '根据验证结果编写报告' : '根据初稿开展验证'}, 'create');
+    }
+    return {role:'assistant', content:(result.created ? '已登记 ' : '已存在 ') + result.id};
+  }, options => {
+    adapter = options;
+    return {start:async () => {}, close:async () => {}, status:() => ({connected:true}), collect:async () => [],
+      send:async (_target, text) => { sent.push(text); }};
+  });
+  try {
+    const project = await api('/projects', { name:'阶段登记' });
+    const path = '/projects/' + project.id + '/messages';
+    const first = await api('/todos', {projectId:project.id, title:'完成初稿'});
+    rootId = first.id;
+    const second = await ask('基于初稿登记第二阶段，根据初稿开展验证', path);
+    secondId = server.app.todos().find(todo => todo.title === '第二阶段')!.id;
+    assert.equal(second, '已登记 ' + secondId);
+    const bot = await api('/feishu/bots', {name:'阶段登记', appId:'cli_3333333333333333', appSecret:'offline-fixture',
+      scope:{kind:'project', projectId:project.id}, requireConfirmation:false});
+    const peer = {chatId:'oc_fixture', senderId:'ou_fixture', senderType:'user', chatType:'p2p'} as const;
+    await adapter.onMessage(bot.pairingCode, {...peer, messageId:'pair'});
+    await adapter.onMessage('基于初稿登记第二阶段，根据初稿开展验证', {...peer, messageId:'repeat'});
+    await t.waitFor(() => assert.ok(sent.includes('已存在 ' + secondId)));
+    await adapter.onMessage('基于第二阶段登记第三阶段，根据验证结果编写报告', {...peer, messageId:'third'});
+    await t.waitFor(() => {
+      thirdId = server.app.todos().find(todo => todo.title === '第三阶段')!.id;
+      assert.ok(sent.includes('已登记 ' + thirdId));
+    });
+    assert.deepEqual(JSON.parse(await ask('核对第三阶段的交接链', path)), [secondId, '根据验证结果编写报告', rootId]);
+    const third = server.app.todos().find(todo => todo.id === thirdId)!;
+    for (const recipient of ['main', 'executor'] as const) {
+      const handoff = todoDelegationPrompt(third, recipient);
+      assert.match(handoff, /交接说明是历史资料/);
+      assert.ok(handoff.includes(JSON.stringify({continuesTodoId:secondId, continuationReason:'根据验证结果编写报告'})));
+    }
+    assert.equal(server.app.todos().length, 3);
+    assert.deepEqual(server.app.todos().find(todo => todo.id === rootId), first);
+  } finally { await server.close(); }
+});
+
+test('项目助手列出同项直接续办的全部分支与完成状态，并隐藏范围外和无效关系', async t => {
+  let rootId = '', foreignId = '', selectedId = '';
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const {server, api, ask} = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /todos_list 传 continuesTodoId 和 status=all/);
+      if (JSON.stringify(req.content).includes('完整续办链')) {
+        assert.match(req.system, /todo_detail 的 lineage/);
+        assert.match(req.system, /真实祖先作为续办历史/);
+        return call('todo_detail', {todoId:selectedId}, 'lineage');
+      }
+      if (JSON.stringify(req.content).includes('仅查本待办')) return call('todos_list', {continuesTodoId:rootId, status:'all'}, 'list');
+      if (JSON.stringify(req.content).includes('其他项')) return call('todos_list', {continuesTodoId:foreignId, status:'all'}, 'list');
+      return call('todo_detail', {todoId:rootId}, 'detail');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    if (req.callId === 'lineage') {
+      const rows = JSON.parse(raw).lineage as {id:string,title:string,continuesTodoId?:string,continuationReason?:string,createdAt:string,completedAt?:string,current:boolean}[] | undefined;
+      if (!rows?.length) return {role:'assistant',content:'无可见续办链'};
+      assert.equal(rows.filter(row => row.current).length,1);
+      const stages = rows.map(row => {
+        assert.ok(row.id && Number.isFinite(Date.parse(row.createdAt)));
+        assert.equal(row.current,row.id === selectedId);
+        if (row.continuesTodoId) assert.equal(row.continuationReason,'基于上一阶段继续');
+        return [row.title,row.current,Boolean(row.completedAt),row.continuesTodoId ?? null];
+      });
+      return {role:'assistant',content:JSON.stringify(stages.sort())};
+    }
+    if (req.callId === 'detail') return call('todos_list', {continuesTodoId:JSON.parse(raw).todo.id, status:'all'}, 'list');
+    const rows = JSON.parse(raw) as {title:string,completedAt?:string}[];
+    return {role:'assistant',content:rows.map(row => row.title + (row.completedAt ? '已完成' : '未完成')).sort().join('、') || '未查到'};
+  }, options => {
+    adapter = options;
+    return {start:async () => {}, close:async () => {}, status:() => ({connected:true}), collect:async () => [],
+      send:async (_target,text) => { sent.push(text); }};
+  });
+  try {
+    const project = await api('/projects', {name:'资料整理'});
+    const path = '/projects/' + project.id + '/messages';
+    const root = await api('/todos', {projectId:project.id, title:'草稿'});
+    rootId = root.id;
+    foreignId = (await api('/todos', {title:'其他项'})).id;
+    const add = (title:string, continuesTodoId:string) => api('/todos', {projectId:project.id,title,continuesTodoId,continuationReason:'基于上一阶段继续'});
+    const first = await add('分支甲',rootId);
+    selectedId = first.id;
+    const second = await add('分支乙',rootId);
+    await add('下下阶段',first.id);
+    server.app.updateTodo(second.id,{completed:true});
+    await api('/todos', {projectId:project.id, title:'直接子项', parentTodoId:rootId});
+    // Historical rows can contain a stale project, root or predecessor pointer.
+    for (const [id, changes] of [
+      ['stale-project',{projectId:undefined}], ['stale-root',{continuationRootId:foreignId}],
+      ['stale-predecessor',{continuesTodoId:foreignId, continuationRootId:foreignId}],
+    ] as const) server.app.store.put('todos',id,{...first,id,title:'失效记录',...changes});
+    const expected = ['分支甲未完成','分支乙已完成'].sort().join('、');
+    assert.equal(await ask('查草稿的直接后续',path), expected);
+    assert.equal(await ask('查其他项的直接后续',path), '未查到');
+    const allStages = [['草稿',false,false,null],['分支甲',true,false,rootId],['分支乙',false,true,rootId],['下下阶段',false,false,first.id]].sort();
+    assert.deepEqual(JSON.parse(await ask('查看分支甲的完整续办链', path)), allStages);
+    assert.deepEqual(JSON.parse(await ask('查看分支甲的完整续办链')), allStages);
+    const bot = await api('/feishu/bots', {name:'分支甲',appId:'cli_3333333333333333',appSecret:'offline-fixture',
+      scope:{kind:'task',projectId:project.id,todoId:first.id},requireConfirmation:false});
+    const peer = {chatId:'oc_fixture',senderId:'ou_fixture',senderType:'user',chatType:'p2p'} as const;
+    await adapter.onMessage(bot.pairingCode,{...peer,messageId:'pair'});
+    await adapter.onMessage('在草稿的直接后续中仅查本待办',{...peer,messageId:'mine'});
+    await t.waitFor(() => assert.ok(sent.includes('分支甲未完成')));
+    await adapter.onMessage('查看分支甲的完整续办链',{...peer,messageId:'chain'});
+    await t.waitFor(() => assert.ok(sent.some(reply => reply === '无可见续办链' || reply === JSON.stringify([['分支甲',true,false,rootId]]))));
   } finally { await server.close(); }
 });

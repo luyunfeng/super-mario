@@ -39,6 +39,11 @@ test('Web 建立续办，执行者只接收真实前序决定，重试和项目�
   assert.equal((await phase(second,'形成报告','third')).id,third.id);
   await request(path(first)+'/continue','POST',{title:'跨项目',continuationReason:'测试',requestId:'bad',expectedProjectId:other.id},409);
   await request(path(third),'PATCH',{continuesTodoId:sibling.id},400);
+  await request(path(third)+'/lineage?expectedProjectId='+other.id,'GET',undefined,409);
+  const history = await request(path(third)+'/lineage?expectedProjectId='+project.id);
+  assert.deepEqual(history.steps.map((step:Todo)=>step.id).sort(),[first.id,second.id,sibling.id,third.id,fourth.id].sort());
+  assert.deepEqual(history.steps.filter((step:{current:boolean})=>step.current).map((step:Todo)=>step.id),[third.id]);
+  assert.ok(history.steps.find((step:Todo)=>step.id===first.id)?.completedAt);
   const local = await request(path(third)+'/decisions');
   assert.deepEqual(local.decisions,[]);
   const prompts:string[]=[];
@@ -64,5 +69,7 @@ test('Web 建立续办，执行者只接收真实前序决定，重试和项目�
   assert.equal(rows.find(row=>row.id===fourth.id)?.continuationRootId,third.id);
   assert.equal(rows.find(row=>row.id===sibling.id)?.continuationRootId,first.id);
   assert.doesNotMatch(await dispatch(fourth),/原阶段核对甲列|中间阶段保留表头/);
+  const afterMove = await request(path(fourth)+'/lineage');
+  assert.deepEqual(afterMove.steps.map((step:Todo)=>step.id).sort(),[third.id,fourth.id].sort());
   await phase(second,'形成报告','third',409);
 });

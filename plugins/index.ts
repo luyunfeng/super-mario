@@ -233,7 +233,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         // Business mutations stay in core services; tools only adapt model arguments.
         if (actions) {
           for (const [name, action, description, properties] of [
-            ['todo_detail', actions.todoDetail, '按唯一待办 ID 读取当前备注、期限、提醒、等待对象、回复跟踪和已记录决定。reminderDeliveries 是当前提醒版本的飞书投递记录，仅含状态和更新时间。pendingRequests 是本事项当前等用户处理的交互卡。replyTracking 仅含本项目最近跟踪周期的状态与时间。active=false 的决定已撤回或已被替代。source=agent 是执行者自己的取舍，按 question、choice 和 reason 说明，用 supersedesId 核对替代关系。', { todoId: { type: 'string' } }],
+            ['todo_detail', actions.todoDetail, '按唯一待办 ID 读取当前备注、期限、提醒、等待对象、回复跟踪和已记录决定。reminderDeliveries 是当前提醒版本的飞书投递记录，仅含状态和更新时间。续办时，todo.continuesTodoId 是直接前序 ID，todo.continuationReason 是交接说明，todo.continuationRootId 是这条续办链的起点。lineage 列出当前可读的同一续办链各阶段，用 current 标出本项，按 continuesTodoId 识别分支。任务范围仅可查看本项。pendingRequests 是本事项当前等用户处理的交互卡。replyTracking 仅含本项目最近跟踪周期的状态与时间。active=false 的决定已撤回或已被替代。source=agent 是执行者自己的取舍，按 question、choice 和 reason 说明，用 supersedesId 核对替代关系。', { todoId: { type: 'string' } }],
             ['todo_history', actions.todoHistory, '按待办读取最近20轮执行及用户验收或返工决定，decisions 是历史决定，review 是该轮当前验收状态，含返工派发回执。answerReceipts 给出该轮已记录答复的处理目标与状态。首页的 conversationReceipts 给出无执行轮次的对话答复及后续输入接收证据。读取更早记录时将 nextBefore 作为 before。', { todoId: { type: 'string' }, before: { type: 'string' } }],
             ['pending_decisions_list', actions.pendingDecisionsList, '查询等主人处理的待批申请、待回答的交互、待启动计划、已归类的机器人收发确认、待处理的独立收件和等待主人补充信息的合并会话。按当前范围返回总数和标题，可用 nextOffset 续查。', { projectId: { type: 'string' }, todoId: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }],
             ['work_decisions_list', actions.workDecisionsList, '读取当前范围的工作决定及版本；不是原始聊天，纠正后旧版本不可沿用。', { projectId: { type: 'string' }, todoId: { type: 'string' } }],
@@ -309,11 +309,14 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
               return actions.confirmKnowledgeTodo!(args);
             },
             { id: { type: 'string' }, updatedAt: { type: 'string' }, actions: { type: 'array', minItems: 1, items: { type: 'object', properties: { actionLine: { type: 'string' }, dueAt: { type: 'string' } }, required: ['actionLine'], additionalProperties: false } }, actionLine: { type: 'string' }, dueAt: { type: 'string', description: '仅在期限明确时传带时区的 ISO 时间' } }));
-          context.contribute('tools', 'todo_create', tool('todo_create', '登记待办。同项目和同上级中同标题、同截止时间的未完成事项会返回原记录，created 表明是否新建。', async (args, signal) => {
+          context.contribute('tools', 'todo_create', tool('todo_create', '登记待办。同项目和同上级中同标题、同截止时间的未完成事项会返回原记录，created 表明是否新建。主人明确要求基于某项进入下一阶段时，同时传已核实的前序 ID 和交接说明。', async (args, signal) => {
             signal.throwIfAborted();
             validateAssistantReminder(args.reminderAt);
             return actions.createTodo(args);
-          }, { title: { type: 'string' }, afterTodoIds: afterTodoIdsParameter, parentTodoId: { type: 'string' }, notes: { type: 'string' }, projectId: { type: 'string' }, dueAt: { type: 'string' }, priority: priorityParameter, reminderAt: reminderParameter, responsiblePerson: { type: 'string', description: '登记负责人姓名，清除时传空字符串' }, waitingOn: { type: 'string' } }));
+          }, { title: { type: 'string' },
+            continuesTodoId: { type: 'string', description: '同项目的直接前序待办 ID，与 continuationReason 一起传' },
+            continuationReason: { type: 'string', description: '据主人明确要求说明这次续办承接什么、下一阶段要做什么' },
+            afterTodoIds: afterTodoIdsParameter, parentTodoId: { type: 'string' }, notes: { type: 'string' }, projectId: { type: 'string' }, dueAt: { type: 'string' }, priority: priorityParameter, reminderAt: reminderParameter, responsiblePerson: { type: 'string', description: '登记负责人姓名，清除时传空字符串' }, waitingOn: { type: 'string' } }));
         }
         context.contribute('tools', 'todos_list', tool('todos_list', '读取工作台待办。status=open 查未完成，done 查已完成，all 或省略可查全部。overdue=true 仅查已过截止时间的未完成事项。可按项目、优先级、标题和备注关键词及截止时段组合筛选。', async (args, signal) => {
           signal.throwIfAborted();
@@ -336,6 +339,12 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           const responsiblePerson = args.responsiblePerson?.trim().normalize('NFC').toLowerCase();
           const waitingOn = args.waitingOn?.trim().normalize('NFC').toLowerCase();
           const candidates = context.store.list<Todo>('todos');
+          let predecessor: Todo | undefined;
+          if (args.continuesTodoId !== undefined) {
+            if (typeof args.continuesTodoId !== 'string' || !args.continuesTodoId.trim()) throw new Error('直接前序待办 ID 须为非空文本');
+            predecessor = candidates.find(todo => todo.id === args.continuesTodoId);
+            if (!predecessor || (args.projectId !== undefined && predecessor.projectId !== args.projectId)) return [];
+          }
           const dispatched = new Set<string>();
           if (args.hasExecution !== undefined) {
             const projects = new Map(candidates.map(todo => [todo.id, todo.projectId]));
@@ -354,6 +363,8 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           const todos = candidates.filter(todo => {
             if (args.reminderStatus === 'pending' && (!todo.reminderAt || todo.completedAt || todo.remindedAt)) return false;
             if (args.reminderStatus === 'triggered' && (!todo.reminderAt || !todo.remindedAt)) return false;
+            if (predecessor && (todo.continuesTodoId !== predecessor.id || todo.id === predecessor.id ||
+              todo.projectId !== predecessor.projectId || todo.continuationRootId !== (predecessor.continuationRootId ?? predecessor.id))) return false;
             if (args.parentTodoId !== undefined && todo.parentTodoId !== args.parentTodoId) return false;
             if (args.responsibleMachineId !== undefined && todo.responsibleSession?.machineId !== args.responsibleMachineId) return false;
             if (args.responsibleSessionId !== undefined && todo.responsibleSession?.sessionId !== args.responsibleSessionId) return false;
@@ -394,6 +405,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         }, { pageSearch: { type: 'string', description: '核对待办页面时原样传搜索框文字，在标题、备注、负责人、等待对象或负责会话中匹配整段' },
           query: { type: 'string', description: '标题或备注中的关键词，多词用空格分隔' }, projectId: { type: 'string' },
           parentTodoId: { type: 'string', description: '仅返回指定上级的直接子待办' },
+          continuesTodoId: { type: 'string', description: '仅返回由该前序待办直接续办的事项。查全部分支及完成情况时同时传 status=all' },
           responsibleMachineId: { type: 'string', description: '完整匹配登记负责会话的电脑 ID' },
           responsibleSessionId: { type: 'string', description: '完整匹配登记的负责会话 ID，可同时限定电脑' },
           responsiblePerson: { type: 'string', description: '按登记负责人姓名完整匹配' },
