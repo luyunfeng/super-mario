@@ -202,7 +202,9 @@ test('独立对话正文结果可从三条预览翻页定位到较早原文', as
   await page.getByRole('button', { name: '独立对话', exact: true }).click();
   const drawer = page.getByRole('dialog', { name: '独立对话' });
   await drawer.getByLabel('按标题查找').fill('季度记录');
-  await drawer.getByRole('button', { name: '按正文查找' }).click();
+  await drawer.getByLabel('按标题查找').dispatchEvent('keydown', {key:'Enter',isComposing:true});
+  await expect(drawer.locator('a mark')).toHaveCount(0);
+  await drawer.getByLabel('按标题查找').press('Enter');
   await expect(drawer.locator('a mark')).toHaveCount(3);
   await drawer.getByRole('button', { name: '查看全部匹配发言' }).click();
   await expect(drawer.locator('a mark')).toHaveCount(20);
@@ -212,6 +214,6 @@ test('独立对话正文结果可从三条预览翻页定位到较早原文', as
   await drawer.getByRole('button', { name: '查看全部匹配发言' }).click();
   await drawer.getByRole('button', { name: '加载更多匹配发言' }).click();
   await expect(drawer.locator('a mark')).toHaveCount(22);
-  await drawer.getByRole('link', { name: '季度记录 0', exact: true }).click();
+  await drawer.getByRole('link', { name: '季度记录 0', exact: true }).press('Enter');
   await expect(page.locator('[data-id="synthetic-match-0"][aria-current="true"]')).toBeVisible();
 });

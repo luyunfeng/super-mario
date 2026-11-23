@@ -271,6 +271,11 @@ export function createWebConversations({api,store,scope,router}){
           h('a',{href:href(row.id,row.lastInputId),onclick:()=>drawer.close()},row.lastInputText || '查看最近发言')]))));
     }
     lookup.onclick=()=>{if(canSearch() && searchTitle.value.trim()){bodyQuery=searchTitle.value.trim();void listRefresh();}};
+    searchTitle.onkeydown=event=>{
+      if(event.key!=='Enter' || event.isComposing || event.keyCode===229 || !canSearch() || !searchTitle.value.trim())return;
+      event.preventDefault();
+      lookup.click();
+    };
     searchTitle.maxLength=200;
     searchTitle.placeholder='输入标题或正文中的文字';
     searchTitle.oninput=()=>{if(bodyQuery){bodyQuery='';void listRefresh();}else drawList();};
