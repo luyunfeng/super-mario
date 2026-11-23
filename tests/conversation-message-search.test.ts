@@ -77,6 +77,16 @@ test('独立对话搜索验证直接 Web 来源、精确项目和注册状态，
   put('internal',{origin:'notification'});
   put('global',{conversationId:'web:'+globalId,projectId:undefined});
   put('wrong-project-in-global',{conversationId:'web:'+globalId});
+  const files=[{name:'核对清单.txt',mime:'text/plain',bytes:3,sha256:'0'.repeat(64)}];
+  put('attachment',{text:'',files});
+  put('sibling-attachment',{text:'',files,conversationId:'web:'+sibling});
+  const byFile={query:'核对清单',category:'file'};
+  const fileHits=(await (await search(byFile)).json()).hits;
+  assert.deepEqual(fileHits.map((hit:{id:string})=>hit.id),['attachment']);
+  assert.deepEqual(fileHits[0].matches,[{category:'file',text:'核对清单.txt'}]);
+  await server.app.plugins.setEnabled('conversation-files',false);
+  assert.deepEqual((await (await search(byFile)).json()).hits,[]);
+  await server.app.plugins.setEnabled('conversation-files',true);
   const first=await (await search()).json();
   assert.equal(first.hits.length,25);
   const second=await (await search({before:first.nextBefore})).json();

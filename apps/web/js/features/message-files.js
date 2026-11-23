@@ -90,6 +90,16 @@ export function createMessageFiles(api, store, input) {
       .catch(()=>{if(generation===stamp) status('文件草稿仅保留在当前页面。');})
       .finally(()=>{if(generation===stamp){load=undefined;paint();}});
     paint();
+  },forget(targetOwner,draftKey) {
+    const target=JSON.stringify([targetOwner,draftKey]);
+    if (target===key) {
+      generation++;
+      for (const job of jobs.values()) job.abort();
+      jobs.clear();load=undefined;
+    }
+    memory.delete(target);
+    void drafts(target,()=>[]).catch(()=>{if(key===target) status('未能清理本机文件草稿。');});
+    if (key===target) paint();
   },prepareRestore(ctx,rows) {
     if (!Array.isArray(rows) || rows.length>20) throw new Error('每条消息最多可附 20 个文件。');
     if (!rows.length) return ()=>{};

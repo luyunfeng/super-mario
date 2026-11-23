@@ -12,7 +12,7 @@ import type { FollowupRecord } from './followups.ts';
 
 const webThread=/^web:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const webTombstones='web-conversations.deleted';
-type DeletedWebThread={id:string;version:number;cleanupPending:boolean};
+type DeletedWebThread={id:string;version:number;cleanupPending:boolean;filesPending?:true};
 
 /** Called in the same transaction as the channel tombstone. Business records retain their own history. */
 export function forgetPrivateConversation(store: Store, conversationId: string) {
@@ -63,15 +63,22 @@ export function forgetPrivateConversation(store: Store, conversationId: string) 
   for (const row of store.list<{id:string;inputId:string}>('interaction.later-questions')) {
     if (belongs(row.inputId)) store.remove('interaction.later-questions',row.id);
   }
+  let hasFiles = messages.some(m=>m.files?.length);
   for (const origin of store.list<import('./agent-input.ts').OfficeFileOrigin>('office.file-origins')) {
     const docId=origin.ref.officeDocumentId;
     if (docId && belongs(origin.sourceId)) {
+      hasFiles = true;
       store.remove('office.file-origins',docId);
       store.remove('office.documents',docId);
       store.remove('office.files',docId);
     }
   }
-  removeChatFileUploads(store,conversationId);
+  const removedTickets = removeChatFileUploads(store,conversationId);
+  if ((removedTickets || hasFiles) && webThread.test(conversationId)) {
+    const id = conversationId.slice(4);
+    const deleted = store.get<DeletedWebThread>(webTombstones,id);
+    if (deleted?.cleanupPending) store.put(webTombstones,id,{...deleted,filesPending:true});
+  }
   for (const m of messages) {
     removeChatImages(store,m);
     if(m.requestId)store.remove('message.requests',JSON.stringify([conversationId,m.requestId]));
@@ -101,7 +108,7 @@ export function forgetPrivateConversation(store: Store, conversationId: string) 
 
 
 /** Retry only committed deletions. A restart may occur between SQLite commit and disk cleanup. */
-export function createWebThreadCleanup(store: Store, forget: (id: string) => Promise<void>) {
+export function createWebThreadCleanup(store: Store, forget: (id: string, filesPending: boolean) => Promise<void>) {
   const jobs = new Map<string, Promise<void>>();
   let closed = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -123,8 +130,8 @@ export function createWebThreadCleanup(store: Store, forget: (id: string) => Pro
 
     const active = jobs.get(id);
     if (active) return active;
-    const job = Promise.resolve().then(() => forget(id)).then(() => {
-      store.put(webTombstones, id, { ...record, cleanupPending: false });
+    const job = Promise.resolve().then(() => forget(id,record.filesPending===true)).then(() => {
+      store.put(webTombstones, id, { id, version:record.version, cleanupPending:false });
     }).catch(() => {
       scheduleRetry();
       throw Object.assign(new Error('对话已删除，磁盘记录尚待清理。可用原版本再次核对'), { status: 503 });

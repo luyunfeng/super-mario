@@ -113,7 +113,7 @@ export function createScopedAgents(options: Options) {
         throw Object.assign(new Error('仅可重试原项目工作会话的回复'),{status:403});
       return projectAgent(source.projectId).retryFailedInput(source,failed);
     },
-    postWebConversation(id:string,projectId:string|undefined,text:string,context:{requestId?:string}={}) {
+    postWebConversation(id:string,projectId:string|undefined,text:string,context:Pick<ScopedPostContext,'requestId'|'files'>={}) {
       if(closed||configuring)throw Object.assign(new Error('对话运行时正在关闭或应用配置'),{status:503});
       const conversationId='web:'+id;
       const current=()=>options.webConversationAllowed?.(id,projectId)===true;
@@ -131,7 +131,7 @@ export function createScopedAgents(options: Options) {
           systemPrompt:(projectId?SCOPED_WORK_SYSTEM_PROMPT:MAIN_AGENT_SYSTEM_PROMPT)+'\n'+WEB_THREAD_GUIDANCE});
         entry={botId:conversationId,scope,conversationId,runtime};agents.set(conversationId,entry);
       }
-      return entry.runtime.post(text,conversationId,{requestId:context.requestId,directWebInput:true,projectId});
+      return entry.runtime.post(text,conversationId,{requestId:context.requestId,files:context.files,directWebInput:true,projectId});
     },
     postProject(projectId:string, text:string, context?:ScopedPostContext) {
       return projectAgent(projectId).post(text, undefined, context);

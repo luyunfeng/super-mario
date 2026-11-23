@@ -93,7 +93,7 @@ test('独立对话搜索仅显示本线原文和引用，点击旧发言可精�
   await expect(region.locator('[data-id="'+target+'"]')).toHaveCount(0);
   await region.getByRole('button',{name:'搜索本对话'}).click();
   const drawer=page.getByRole('dialog',{name:'搜索本对话'}),category=drawer.getByLabel('搜索内容');
-  assert.deepEqual(await category.locator('option').allTextContents(),['全部','正文','引用']);
+  assert.deepEqual(await category.locator('option').allTextContents(),['全部','正文','引用','附件名']);
   await category.selectOption('quoted');
   const pending=page.waitForRequest(r=>r.method()==='POST' && r.url().endsWith('/conversation-message-search'));
   await drawer.getByRole('searchbox').fill(source);

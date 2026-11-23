@@ -45,8 +45,11 @@ export async function uploadChatFile(store:Store,dir:string,scope:Scope,name:str
     const ref = {name,mime:media,bytes,sha256:hash.digest('hex')};
     const path = join(root,ref.sha256);
     // Publish the complete file before its ticket, without yielding between them.
-    if (!existsSync(path)) renameSync(temp,path);
-    store.put(tickets,uploadId,{...scope,uploadId,ref,expires:Date.now()+day} satisfies Ticket);
+    store.transaction(()=>{
+      guard?.();
+      if (!existsSync(path)) renameSync(temp,path);
+      store.put(tickets,uploadId,{...scope,uploadId,ref,expires:Date.now()+day} satisfies Ticket);
+    });
     return {uploadId,...ref};
   } finally { await rm(temp,{force:true}); }
 }
@@ -92,25 +95,36 @@ export function issueMessageFileTickets(store:Store,dir:string,message:Message) 
 }
 
 export function removeChatFileUploads(store:Store,conversationId:string) {
-  for (const value of store.list<Ticket>(tickets))
-    if (value.conversationId === conversationId) store.remove(tickets,value.uploadId);
+  let removed = false;
+  for (const value of store.list<Ticket>(tickets)) {
+    if (value.conversationId === conversationId) {
+      store.remove(tickets,value.uploadId);
+      removed = true;
+    }
+  }
+  return removed;
 }
 
-export function sweepChatFiles(store:Store,dir:string) {
+export function sweepChatFiles(store:Store,dir:string,force=false) {
   const now=Date.now(),root=folder(dir);
-  if (now-(lastSweep.get(store)??0)<day || !existsSync(root)) return;
+  if ((!force && now-(lastSweep.get(store)??0)<day) || !existsSync(root)) return;
   const live=new Set<string>();
   store.transaction(()=>{
     for (const value of store.list<Ticket>(tickets)) {
       if (value.expires<=now) store.remove(tickets,value.uploadId);
       else live.add(value.ref.sha256);
     }
+    // Office document generation can have committed its binding before the assistant reply lands.
+    for (const origin of store.list<{ref:ChatFileRef}>('office.file-origins')) live.add(origin.ref.sha256);
+    for (const m of store.list<Message>('messages')) for(const ref of m.files??[]) live.add(ref.sha256);
+    for (const name of readdirSync(root)) {
+      const path=join(root,name);
+      if (sha.test(name) && !live.has(name)) rmSync(path,{force:true});
+      if (/^upload-[a-f0-9-]{36}$/.test(name)) {
+        const stat=statSync(path,{throwIfNoEntry:false});
+        if (stat && now-stat.mtimeMs>day) rmSync(path,{force:true});
+      }
+    }
   });
-  for (const m of store.list<Message>('messages')) for(const ref of m.files??[]) live.add(ref.sha256);
-  for (const name of readdirSync(root)) {
-    const path=join(root,name);
-    if (sha.test(name) && !live.has(name)) rmSync(path,{force:true});
-    if (/^upload-[a-f0-9-]{36}$/.test(name) && now-statSync(path).mtimeMs>day) rmSync(path,{force:true});
-  }
   lastSweep.set(store,now);
 }

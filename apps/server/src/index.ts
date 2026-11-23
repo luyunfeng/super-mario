@@ -53,8 +53,8 @@ function answerInput(input: Record<string,unknown>, versioned = false): string |
   // The core validates every answer against the persisted card.
   return input.answers as QuestionResponse[];
 }
-async function chatMessageBody(req:IncomingMessage):Promise<Record<string,unknown> & {text:string;images?:ChatImageInput[];files?:ChatFileInput[]}> {
-  const input = await body(req,chatImageRequestBytes);
+async function chatMessageBody(req:IncomingMessage,maxBytes=chatImageRequestBytes):Promise<Record<string,unknown> & {text:string;images?:ChatImageInput[];files?:ChatFileInput[]}> {
+  const input = await body(req,maxBytes);
   const {images,...fields} = input;
   if (Buffer.byteLength(JSON.stringify(fields)) > 1024*1024) throw new InputError('消息内容过大',413);
   if (images !== undefined && !Array.isArray(images)) throw new InputError('图片列表格式无效');
@@ -1105,8 +1105,8 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (path === '/api/v1/chat-files/uploads' && method === 'PUT') {
           const conversationId=requiredText(url.searchParams.get('conversationId'),'目标会话');
           const projectId=url.searchParams.get('projectId') || undefined, todoId=url.searchParams.get('todoId') || undefined;
-          if (conversationId==='main' ? !!todoId : !projectId || conversationId!==`project:${projectId}:work`)
-            throw new InputError('文件上传目标必须为当前主对话或项目对话',403);
+          if (!conversationId.startsWith('web:') && (conversationId==='main' ? !!todoId : !projectId || conversationId!==`project:${projectId}:work`))
+            throw new InputError('文件上传目标必须为已登记的 Web 对话',403);
           if (Number(req.headers['content-length'])>maxChatFileBytes) throw new InputError('单个文件最多 200 MiB',413);
           const name=url.searchParams.get('name') ?? '';
           const uploaded=await app.uploadChatFile({conversationId,projectId,todoId},name,req.headers['content-type'] || 'application/octet-stream',req);
@@ -1203,10 +1203,11 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             }
             if(messages && !receiptKey && method==='POST'){
               if(row.archived)throw new InputError('对话已归档，请恢复后再发送',409);
-              const input=await body(req);
-              if(Object.keys(input).some(key=>key!=='text'))throw new InputError('独立对话仅接受正文，项目由原会话决定');
+              const input=await chatMessageBody(req,1024*1024);
+              if (input.images !== undefined || Object.keys(input).some(key => !['text','files','images'].includes(key)))
+                throw new InputError('独立对话仅接受正文和文件，项目由原会话决定');
               enabled();
-              return json(res,202,await app.postWebConversation(row.id,row.projectId,requiredText(input.text,'消息正文'),{requestId:messageRequestId(req)}));
+              return json(res,202,await app.postWebConversation(row.id,row.projectId,input.text,{requestId:messageRequestId(req),files:input.files}));
             }
           }
           throw new InputError('独立对话不支持此请求方法',405);

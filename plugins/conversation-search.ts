@@ -382,7 +382,7 @@ function webMessages(context: ExtensionContext, input: Json, canReadFiles?:CanRe
     if (row.id===excludeId || (excludeId && row.replyTo===excludeId) || row.conversationId!==conversationId || (projectId && rowProject!==projectId) || (todoId && row.todoId!==todoId) ||
         (rowProject && !activeProjects.has(rowProject)) || (row.origin && row.origin!=='user' && row.origin!=='result')) continue;
     const matches=matchedPassages(row,pattern,category);
-    const checkFiles=!thread && row.origin!=='result' && (!category || category==='file') && !!row.files?.length && canReadFiles;
+    const checkFiles=row.origin!=='result' && (!category || category==='file') && !!row.files?.length && canReadFiles;
     const checkRuntime=!thread && row.role==='assistant' && (!category || category==='event' || (row.origin!=='result' && category.startsWith('tool_')));
     if (!matches.length && !checkFiles && !checkRuntime) continue;
     const source = thread ? independentWebSource(store,row,conversationId,projectId) : searchableWebSource(store,row,conversationId==='main' ? undefined : projectId);
