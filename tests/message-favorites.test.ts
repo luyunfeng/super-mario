@@ -8,6 +8,7 @@ import { createEventBus } from '../packages/core/src/events.ts';
 import { createContributions, PluginHost } from '../packages/core/src/plugin-host.ts';
 import { createStore } from '../packages/core/src/store.ts';
 import type { JsonObject } from '../packages/plugin-sdk/src/index.ts';
+import { webConversationsExtension, eraseWebConversationRegistration } from '../plugins/web-conversations.ts';
 import { createMessageFavorites, messageFavorites } from '../plugins/message-favorites.ts';
 
 async function fixture(t: test.TestContext, extension = messageFavorites) {
@@ -255,4 +256,46 @@ test('undo can be retried after making room and retains archive order for tied t
   const final = await call(undo);
   assert.equal(final.revision, 7);
   assert.deepEqual((final.items as JsonObject[]).find(saved => saved.id === local.id), local);
+});
+
+test('independent Web favorites bind direct input to the exact thread and project; backup restores only the snapshot', async t => {
+  const {store,host,call}=await fixture(t);
+  host.register(webConversationsExtension);
+  await host.start();
+  const webThreadId=randomUUID(), title='合成线程', projectId='p';
+  store.put('projects',projectId,{id:projectId});
+  await host.invocations.use('web-conversations.manage',{action:'create',id:webThreadId,title,projectId});
+  const user={id:'user',role:'user',text:'合成输入',directWebInput:true,projectId,conversationId:'web:'+webThreadId,createdAt:source.createdAt};
+  const reply={...user,id:'reply',role:'assistant',text:'合成答复',replyTo:user.id,directWebInput:false};
+  store.put('messages',user.id,user);store.put('messages',reply.id,reply);
+  const add={action:'add',messageId:reply.id,webThreadId,projectId};
+  for(const request of [{action:'add',messageId:reply.id,webThreadId},{...add,webThreadId:randomUUID()},{...add,projectId:'other'}])
+    await assert.rejects(call(request as JsonObject),{status:404});
+  store.put('message.routes',user.id,{channel:'feishu'});
+  await assert.rejects(call(add),{status:404});
+  store.remove('message.routes',user.id);
+  const saved=await call(add), [item]=saved.items as JsonObject[];
+  assert.deepEqual([item.webThreadId,item.title,item.text],[webThreadId,title,reply.text]);
+  const locator={webThreadId,projectId,messageId:reply.id};
+  assert.deepEqual(await call({action:'marks'}),{revision:1,items:[{id:item.id,...locator}]});
+  assert.deepEqual(await call({action:'locate',id:item.id}),locator);
+  assert.deepEqual(await call({action:'source',id:item.id}),{...locator,text:reply.text,role:reply.role,createdAt:reply.createdAt});
+  await host.setEnabled('web-conversations',false);
+  await assert.rejects(call({action:'locate',id:item.id}),{status:503});
+  await host.setEnabled('web-conversations',true);
+  await host.invocations.use('web-conversations.manage',{action:'update',id:webThreadId,version:1,archived:true});
+  assert.deepEqual(await call({action:'locate',id:item.id}),locator);
+  const backup=await call({action:'backup'});
+  assert.ok(!JSON.stringify(backup).includes(webThreadId));
+  store.transaction(()=>eraseWebConversationRegistration(store,webThreadId,2));
+  for(const action of ['source','locate'])await assert.rejects(call({action,id:item.id}),{status:410});
+  assert.deepEqual(await call({action:'list'}),saved);
+  await call({action:'remove',id:item.id,revision:1});
+  await call({action:'restore',revision:2,backup});
+  const restored=((await call({action:'list'})).items as JsonObject[])[0];
+  assert.equal(restored.text,reply.text);
+  assert.equal(restored.webThreadId,undefined);
+  assert.equal(restored.projectId,undefined);
+  assert.equal(restored.messageId,undefined);
+  await assert.rejects(call({action:'locate',id:restored.id}),{status:404});
 });

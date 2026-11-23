@@ -1,4 +1,5 @@
 import {createMessageCopyActions,conversationExportActive,openConversationExport} from './conversation-export.js';
+import {createMessageFavorites} from './message-favorites.js';
 import {createAssistantSwitcher} from './assistant-roster.js';
 import {conversationMessageSearch} from './conversation-message-search.js';
 import {copyText} from '../lib/clipboard.js';
@@ -29,7 +30,8 @@ export function createWebConversations({api,store,scope,router}){
     if(threadId===null)return {projectId:scope.get() || undefined};
     if(active() && meta && current?.owner===drafts.owner() && meta.id===threadId)return {threadId,projectId:meta.projectId};
   }});
-  let exportDrawer;
+  const favorites=createMessageFavorites({api,store,router,readable:()=>!!meta && valid(current)});
+  let favoriteEpoch=favorites.epoch,exportDrawer;
   const exportButton=button('导出对话',()=>{
     const stamp=current,row=meta;
     const isCurrent=()=>valid(stamp) && meta?.id===row?.id && meta?.projectId===row?.projectId;
@@ -60,7 +62,7 @@ export function createWebConversations({api,store,scope,router}){
   const stateLabel=h('span',{class:'small muted'});
   const controls=h('div',{class:'row row--wrap'},stateLabel,rename,archive,button('删除对话',openDelete));
   const el=h('div',{class:'chat-code-main',hidden:true,'aria-label':'独立对话内容'},
-    h('div',{class:'chat__top'},h('header',{class:'page__head'},heading,h('div',{class:'page__actions'},button('独立对话',openList),switcher.threadButton,search.button,exportButton,
+    h('div',{class:'chat__top'},h('header',{class:'page__head'},heading,h('div',{class:'page__actions'},button('独立对话',openList),switcher.threadButton,search.button,favorites.button,exportButton,
       h('a',{class:'btn btn--sm',href:'#chat'},'返回主对话'))),controls,notice,latest,retry,cleanupRetry),scroller,form);
   let pending=false,epoch=0,draftKey=null,renameDrawer,deleteDrawer,listRefresh,lastMetaEvent,changing=false;
   const valid=stamp=>current===stamp && stamp && stamp.owner===drafts.owner() && routeId()===stamp.id && active();
@@ -85,21 +87,23 @@ export function createWebConversations({api,store,scope,router}){
 
   function syncSearch(){
     const readable=meta && valid(current);
+    favorites.update();
     search.update(readable && {conversationId:'web:'+meta.id,projectId:meta.projectId});
     const hidden=!readable || !conversationExportActive(store);
     if(hidden)exportDrawer?.close();
     const nextQuoteKey=readable && !meta.archived && store.view.snapshot.plugins.some(p=>p.id==='conversation-quotes' && p.status==='active') ? draftKey : null;
     const quoteChanged=quoteKey!==nextQuoteKey;
     if(quoteChanged){quoteKey=nextQuoteKey;quote.restore(quoteKey);epoch++;}
-    if(exportButton.hidden!==hidden || quoteChanged){
+    if(exportButton.hidden!==hidden || quoteChanged || favoriteEpoch!==favorites.epoch){
+      favoriteEpoch=favorites.epoch;
       exportButton.hidden=hidden;
-      if(rows.length)display();
+      if(readable && rows.length)display();
     }
   }
   function reset(){
     quoteKey=null;quote.restore(null);
     exportButton.hidden=true;exportDrawer?.close();exportDrawer=null;search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
-    input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
+    favorites.update();input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
     submissions.update();switcher.update();
   }
   function openList(){
@@ -244,7 +248,7 @@ export function createWebConversations({api,store,scope,router}){
       }
     });
     const drawer=openDrawer({title:'永久删除独立对话',
-      body:[h('p',{},'永久删除「'+title+'」？'),h('p',{},'这会清除该对话的消息、草稿和待确认发件，原链接也会失效。删除后无法恢复。'),status],
+      body:[h('p',{},'永久删除「'+title+'」？'),h('p',{},'这会清除该对话的消息、草稿和待确认发件，原链接也会失效。删除后无法恢复。已收藏的消息快照会保留，可在收藏列表单独移除。'),status],
       footer:[cancel,confirm],onClose:()=>{if(deleteDrawer===drawer)deleteDrawer=null;}});
     deleteDrawer=drawer;
   }
@@ -297,6 +301,7 @@ export function createWebConversations({api,store,scope,router}){
         h('div',{class:'msg__col'},
           h('div',{class:'msg__bubble'},copies.renderMessage(row,row.text)),
           h('div',{class:'msg__meta row row--wrap'},copies.copyMessage(row,m=>m.text),
+            row.origin!=='notification' && favorites.mark(row,meta.projectId,stamp.id,()=>valid(stamp) && meta?.id===stamp.id && rows.includes(row)),
             quoteKey && row.origin!=='notification' && quote.action(row,row.role==='user'?'我':'助手'),
             row.status==='pending' && h('small',{},'处理中…'),row.status==='failed' && h('small',{},'处理失败'),
             h('button',{type:'button',class:'btn btn--ghost btn--icon btn--sm','aria-label':'复制消息链接',title:'复制消息链接',

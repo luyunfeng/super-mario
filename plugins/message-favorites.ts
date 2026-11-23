@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { independentWebSource, requireWebConversationHistory } from './web-conversations.ts';
 import { nativeSource } from './native-conversation-source.ts';
 import type { Extension, ExtensionContext, Json, JsonObject, Store } from '../packages/plugin-sdk/src/index.ts';
 import type { Message, NativeExportSource, NativeFavoriteMessage, Project } from '../packages/protocol/src/index.ts';
@@ -7,7 +8,7 @@ const format = 'super-mario.message-favorites';
 const maxItems = 300;
 const maxChars = 4000;
 type Snapshot = { title: string; role: 'user' | 'assistant'; text: string; omitted: number; createdAt: string | null; starredAt: string };
-type Favorite = Snapshot & { id: string; messageId?: string; projectId?: string; backupKey?: string; native?: { [K in keyof NativeExportSource]: NativeExportSource[K] }; index?: number; fingerprint?: string };
+type Favorite = Snapshot & { id: string; messageId?: string; projectId?: string; webThreadId?: string; backupKey?: string; native?: { [K in keyof NativeExportSource]: NativeExportSource[K] }; index?: number; fingerprint?: string };
 type ReadPage = (source: NativeExportSource, offset: number, signal: AbortSignal) => Promise<{ items: NativeFavoriteMessage[]; total: number }>;
 type Book = { revision: number; items: Favorite[] };
 
@@ -93,19 +94,33 @@ function sourceMessage(store: Store, messageId: string, projectId?: string) {
   return source;
 }
 
-function add(store: Store, book: Book, input: JsonObject) {
+function webSource(context:ExtensionContext, threadId:string, messageId:string, projectId?:string) {
+  if (!context.contributions.list('services').some(service=>service.value.name==='web-conversations.manage'))
+    fail(503,'独立 Web 对话插件已停用');
+  const {store}=context;
+  const {title}=requireWebConversationHistory(store,threadId,projectId);
+  const message=store.get<Message>('messages',messageId);
+  if (!message || message.id!==messageId || !independentWebSource(store,message,'web:'+threadId,projectId))
+    fail(404,'独立 Web 对话中没有这条消息');
+  return {title,message};
+}
+
+function add(context: ExtensionContext, book: Book, input: JsonObject) {
+  const {store}=context;
   const messageId = id(input.messageId);
   const projectId = input.projectId === undefined ? undefined : id(input.projectId);
-  let title = '主对话';
-  if (projectId !== undefined) {
+  const webThreadId = input.webThreadId === undefined ? undefined : id(input.webThreadId);
+  const thread = webThreadId ? webSource(context,webThreadId,messageId,projectId) : undefined;
+  let title = thread?.title ?? '主对话';
+  if (!thread && projectId !== undefined) {
     const project = store.get<Project>('projects', projectId);
     if (!project || project.id !== projectId) fail(404, '项目不存在');
     title = Array.from('项目工作对话 · ' + project.name.replace(/[\p{C}\s]+/gu, ' ').trim()).slice(0, 200).join('').trim();
   }
-  const source = sourceMessage(store, messageId, projectId);
-  if (book.items.some(item => item.messageId === messageId && item.projectId === projectId)) return;
+  const source = thread?.message ?? sourceMessage(store, messageId, projectId);
+  if (book.items.some(item => item.messageId === messageId && item.projectId === projectId && item.webThreadId === webThreadId)) return;
   if (source.status === 'pending') fail(409, '消息仍在生成，请等待完成后收藏');
-  append(store, book, { messageId, ...(projectId && { projectId }), title, role: source.role,
+  append(store, book, { messageId, ...(webThreadId && {webThreadId}), ...(projectId && { projectId }), title, role: source.role,
     createdAt: new Date(source.createdAt).toISOString(), text: source.text });
 }
 
@@ -155,7 +170,7 @@ function parseBackup(raw: Json | undefined) {
 }
 
 const fields = {
-  list: [], marks: [], backup: [], source: ['id'], locate: ['id'], add: ['messageId', 'projectId'], remove: ['id', 'revision'], undo: ['undoToken'],
+  list: [], marks: [], backup: [], source: ['id'], locate: ['id'], add: ['messageId', 'projectId', 'webThreadId'], remove: ['id', 'revision'], undo: ['undoToken'],
   nativePage: ['native', 'offset'], addNative: ['native', 'index', 'fingerprint'],
   preview: ['backup', 'revision'], restore: ['backup', 'revision'],
 } as const;
@@ -209,8 +224,8 @@ async function manage(context: ExtensionContext, raw: Json, reader: ReadPage | u
     // Paint per-message controls on startup without loading any saved text.
     const book = read(store);
     const items: Json[] = [];
-    for (const { id, messageId, projectId, native, index, fingerprint } of book.items) {
-      if (messageId) items.push({ id, messageId, ...(projectId && { projectId }) });
+    for (const { id, messageId, projectId, webThreadId, native, index, fingerprint } of book.items) {
+      if (messageId) items.push({ id, messageId, ...(webThreadId && {webThreadId}), ...(projectId && { projectId }) });
       else if (native && index !== undefined && fingerprint) items.push({ id, native, index, fingerprint });
     }
     return { revision: book.revision, items };
@@ -226,15 +241,17 @@ async function manage(context: ExtensionContext, raw: Json, reader: ReadPage | u
       return { native: item.native, ...message };
     }
     if (!item?.messageId) fail(404, '此收藏没有可查看的本地原文');
-    const source = sourceMessage(store, item.messageId, item.projectId);
+    const source = item.webThreadId ? webSource(context,item.webThreadId,item.messageId,item.projectId).message :
+      sourceMessage(store, item.messageId, item.projectId);
+    const locator = { messageId: source.id, ...(item.webThreadId && {webThreadId:item.webThreadId}), ...(item.projectId && {projectId:item.projectId}) };
     if (action === 'locate') {
-      if (item.projectId) {
+      if (item.projectId && !item.webThreadId) {
         const project = store.get<Project>('projects', item.projectId);
         if (!project || project.archivedAt) fail(404, '原项目不存在或已归档，仍可查看收藏快照');
       }
-      return { messageId: source.id, ...(item.projectId && { projectId: item.projectId }) };
+      return locator;
     }
-    return { messageId: source.id, ...(item.projectId && { projectId: item.projectId }),
+    return { ...locator,
       text: source.text, role: source.role, createdAt: source.createdAt };
   }
   if (action === 'remove') {
@@ -258,7 +275,7 @@ async function manage(context: ExtensionContext, raw: Json, reader: ReadPage | u
     const { item } = entry;
     const result = updateBook(context, book => {
       const exists = book.items.some(saved => (saved.backupKey ?? saved.id) === (item.backupKey ?? item.id)
-        || (item.messageId && item.messageId === saved.messageId && item.projectId === saved.projectId)
+        || (item.messageId && item.messageId === saved.messageId && item.projectId === saved.projectId && item.webThreadId === saved.webThreadId)
         || (item.native && sameNative(saved, item.native, item.index, item.fingerprint)));
       if (!exists) {
         if (book.items.length >= maxItems) fail(409, '收藏已满，请腾出空间后再撤销');
@@ -275,7 +292,7 @@ async function manage(context: ExtensionContext, raw: Json, reader: ReadPage | u
   }
   return updateBook(context, book => {
     if (action === 'add') {
-      add(store, book, input);
+      add(context, book, input);
       return list(book);
     }
     if (action !== 'preview' || input.revision !== undefined) checkRevision(input.revision, book);

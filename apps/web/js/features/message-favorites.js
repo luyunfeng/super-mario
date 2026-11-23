@@ -5,7 +5,7 @@ import { openDrawer } from '../ui/overlay.js';
 
 const models = new WeakMap();
 const fileLimit = 8 * 1024 * 1024;
-const key = (projectId, messageId) => JSON.stringify([projectId || '', messageId]);
+const key = (projectId, messageId, webThreadId) => JSON.stringify([projectId || '', messageId, webThreadId || '']);
 const nativeKey = (native, index, fingerprint) => JSON.stringify([
   native.machineId, native.executorId, native.nativeSessionId, native.cwd, index, fingerprint,
 ]);
@@ -50,7 +50,7 @@ function sharedModel(api, store) {
     marks.clear();
     for (const item of doc.items) {
       if (item.native) marks.set(nativeKey(item.native, item.index, item.fingerprint), item.id);
-      else if (item.messageId) marks.set(key(item.projectId, item.messageId), item.id);
+      else if (item.messageId) marks.set(key(item.projectId, item.messageId, item.webThreadId), item.id);
     }
     document.querySelectorAll('[data-favorite-message]').forEach(paint);
   }
@@ -238,26 +238,27 @@ function download(name, content, type) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function createMessageFavorites({ api, store, router }) {
+export function createMessageFavorites({ api, store, router, readable = () => true }) {
   const model = sharedModel(api, store);
   const post = body => api.post('/message-favorites', body);
   const button = Button({ label: '消息收藏', size: 'sm', onClick: open });
-  const visibility = () => { button.hidden = !model.enabled; };
+  const visibility = () => { button.hidden = !model.enabled || !readable(); };
   store.subscribe(visibility);
   visibility();
 
-  function mark(message, projectId) {
+  function mark(message, projectId, webThreadId, isVisible = readable) {
     if (!model.enabled || !['user', 'assistant'].includes(message.role) || !message.text?.trim() || message.status === 'pending') return null;
-    return favoriteButton(api, store, model, key(projectId, message.id), { action: 'add', messageId: message.id, projectId });
+    return favoriteButton(api, store, model, key(projectId, message.id, webThreadId),
+      { action: 'add', messageId: message.id, projectId, ...(webThreadId && { webThreadId }) }, { isVisible });
   }
 
   function open() {
     const generation = model.epoch;
-    if (!model.current(generation)) return;
+    if (!model.current(generation) || !readable()) return;
     let doc, backup, preview;
     let busy = false, limit = pageSize, refreshOrder = 0;
     const drawer = openDrawer({ title: '消息收藏', wide: true, onClose() { unsubscribe(); unwatch(); } });
-    const current = () => drawer.el.open && model.current(generation);
+    const current = () => drawer.el.open && model.current(generation) && readable();
     const unsubscribe = store.subscribe(() => { if (!current()) drawer.close(); });
     const unwatch = watchChanges(store, (next, reconnected) => {
       if (current() && (reconnected || next > (doc?.revision ?? -1))) void refresh();
@@ -381,9 +382,13 @@ export function createMessageFavorites({ api, store, router }) {
           item.messageId && Button({ label: '定位到原会话', size: 'sm', onClick: () => run(async () => {
             const source = await post({ action: 'locate', id: item.id });
             if (!current()) return;
-            const route = source.projectId ? router.href('projects', source.projectId, 'workspace') + '?at=' : router.href('chat') + '?favorite=';
+            const route = source.webThreadId ? router.href('chat') + '?thread=' + encodeURIComponent(source.webThreadId) + '&at='
+              : source.projectId ? router.href('projects', source.projectId, 'workspace') + '?at=' : router.href('chat') + '?favorite=';
+            // 抽屉关闭后会把焦点还给入口，随后再导航，让命中消息取得最终焦点。
+            drawer.el.addEventListener('close', () => {
+              if (model.current(generation) && readable()) router.go(route + encodeURIComponent(source.messageId));
+            }, {once:true});
             drawer.close();
-            router.go(route + encodeURIComponent(source.messageId));
           }) }),
           Button({ label: '复制正文', size: 'sm', onClick: () => run(async () => {
             if (!navigator.clipboard?.writeText) throw new Error('当前浏览器无法写入剪贴板，请选中收藏正文复制。');
@@ -438,5 +443,5 @@ export function createMessageFavorites({ api, store, router }) {
     renderRows();
     void run(load);
   }
-  return { button, mark, get epoch() { return model.epoch; } };
+  return { button, mark, update:visibility, get epoch() { return model.epoch; } };
 }

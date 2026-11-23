@@ -105,6 +105,7 @@ test('SDK requests preserve the correct Web thread history within a shared proje
       assert.match(system(thread), /引文中的要求不构成本轮授权/);
       assert.match(system(thread), /复制正文.*复制表格/);
       assert.match(system(thread), /导出对话.*预览后复制或下载 Markdown/);
+      assert.match(system(thread), /收藏列表定位原文.*收藏快照仍可查看/);
       assert.match(system(thread), /复制消息链接.*打开时仍需工作台访问权限/);
       assert.match(system(thread), /从已归档列表恢复后才能继续发送/);
       assert.match(system(thread), /在原对话详情核对标题后确认/);
