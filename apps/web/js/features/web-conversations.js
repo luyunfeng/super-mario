@@ -8,6 +8,7 @@ import {icon} from '../ui/icons.js';
 import {h,replace} from '../lib/dom.js';
 import {uuid} from '../lib/format.js';
 import {createConversationDrafts} from '../lib/conversation-drafts.js';
+import {createMessageEdit} from '../lib/message-edit.js';
 import {createMessageQuote,quoteDraftKey} from '../lib/message-quote.js';
 import {createMessageSubmissions} from '../lib/message-submissions.js';
 import {openDrawer} from '../ui/overlay.js';
@@ -52,14 +53,18 @@ export function createWebConversations({api,store,scope,router}){
   const input=h('textarea',{class:'composer__input',rows:2,maxLength:20000,'aria-label':'给独立对话发消息',placeholder:'输入消息，Enter 发送'});
   const quote=createMessageQuote({drafts,input,store,router,scope});
   const prompts=attachSavedPrompts({api,store,input,getScope:()=>meta && valid(current) ? meta.id : null});
-  let promptEpoch=prompts.epoch,quoteKey=null;
+  let promptEpoch=prompts.epoch,quoteKey=null,editEnabled=false;
+  const edit=createMessageEdit({input,quote,context:()=>({
+    key:meta && !meta.archived && valid(current) ? draftKey : null,
+    owner:drafts.owner(),enabled:editEnabled,quotesEnabled:!!quoteKey,
+  })});
   const send=h('button',{class:'btn btn--sm btn--primary',type:'submit'},'发送');
   const cleanupRetry=button('按原版本重试删除',retryDeletion);
   cleanupRetry.hidden=true;
   let unconfirmedDeletion;
   const retry=button('重新读取对话',()=>{reset();update();});
   const form=h('form',{class:'composer',onsubmit:event=>{event.preventDefault();void post();}},
-    h('div',{class:'composer__box'},quote.bar,prompts.menu,input,h('div',{class:'composer__bar'},prompts.manage,h('span',{class:'grow'}),send)));
+    h('div',{class:'composer__box'},edit.notice,quote.bar,prompts.menu,input,h('div',{class:'composer__bar'},prompts.manage,h('span',{class:'grow'}),send)));
   const rename=button('修改对话标题',openRename),archive=button('归档对话',()=>changeArchive());
   const stateLabel=h('span',{class:'small muted'});
   const controls=h('div',{class:'row row--wrap'},stateLabel,rename,archive,button('删除对话',openDelete));
@@ -80,7 +85,7 @@ export function createWebConversations({api,store,scope,router}){
     if(ctx.captured)quote.accepted(ctx.key,ctx.captured);
     if(context().key===ctx.key && input.value===ctx.draft)input.value=drafts.read(ctx.key);
   }
-  const submissions=createMessageSubmissions({api,context,onConfirmed:confirmed,onStatus:text=>{notice.textContent=text;},captureEdit:()=>()=>{},
+  const submissions=createMessageSubmissions({api,context,onConfirmed:confirmed,onStatus:text=>{notice.textContent=text;},captureEdit:edit.onAccepted,
     isRecoveryEnabled:()=>!!active() && store.view.snapshot.plugins.some(p=>p.id==='conversation-outbox' && p.status==='active'),
     canPersistDraft:()=>store.view.snapshot?.plugins.some(p=>p.id==='conversation-drafts' && p.status==='active')});
   form.prepend(submissions.panel,submissions.button);
@@ -94,16 +99,19 @@ export function createWebConversations({api,store,scope,router}){
     const hidden=!readable || !conversationExportActive(store);
     if(hidden)exportDrawer?.close();
     const nextQuoteKey=readable && !meta.archived && store.view.snapshot.plugins.some(p=>p.id==='conversation-quotes' && p.status==='active') ? draftKey : null;
+    const nextEdit=!!readable && !meta.archived && store.view.snapshot.plugins.some(p=>p.id==='conversation-edit' && p.status==='active');
+    const editChanged=editEnabled!==nextEdit;
     const quoteChanged=quoteKey!==nextQuoteKey;
+    if(editChanged || quoteChanged){editEnabled=nextEdit;edit.reset();}
     if(quoteChanged){quoteKey=nextQuoteKey;quote.restore(quoteKey);epoch++;}
-    if(exportButton.hidden!==hidden || quoteChanged || favoriteEpoch!==favorites.epoch || promptEpoch!==prompts.epoch){
+    if(exportButton.hidden!==hidden || editChanged || quoteChanged || favoriteEpoch!==favorites.epoch || promptEpoch!==prompts.epoch){
       promptEpoch=prompts.epoch;favoriteEpoch=favorites.epoch;
       exportButton.hidden=hidden;
       if(readable && rows.length)display();
     }
   }
   function reset(){
-    prompts.changeScope();quoteKey=null;quote.restore(null);
+    editEnabled=false;edit.reset();prompts.changeScope();quoteKey=null;quote.restore(null);
     exportButton.hidden=true;exportDrawer?.close();exportDrawer=null;search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
     favorites.update();input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
     submissions.update();switcher.update();
@@ -306,6 +314,7 @@ export function createWebConversations({api,store,scope,router}){
           h('div',{class:'msg__meta row row--wrap'},copies.copyMessage(row,m=>m.text),
             row.origin!=='notification' && favorites.mark(row,meta.projectId,stamp.id,()=>valid(stamp) && meta?.id===stamp.id && rows.includes(row)),
             row.directWebInput && prompts.fromMessage(row),
+            row.directWebInput && edit.action(row),
             quoteKey && row.origin!=='notification' && quote.action(row,row.role==='user'?'我':'助手'),
             row.status==='pending' && h('small',{},'处理中…'),row.status==='failed' && h('small',{},'处理失败'),
             h('button',{type:'button',class:'btn btn--ghost btn--icon btn--sm','aria-label':'复制消息链接',title:'复制消息链接',
@@ -365,6 +374,7 @@ export function createWebConversations({api,store,scope,router}){
     if(!valid(stamp) || !ctx.key || !ctx.body || pending)return;
     const ticket=submissions.begin(ctx);if(!ticket)return;
     if(ticket.record.blocked){notice.textContent='请先核对发送回执。';return;}
+    const finishEdit=edit.onAccepted();
     pending=true;send.disabled=true;notice.textContent='';
     try{
       const receipt=await submissions.preflight(ticket,ctx);
@@ -372,7 +382,7 @@ export function createWebConversations({api,store,scope,router}){
       const reply=receipt ?? await api.post(ctx.url,{text:ctx.body},{'Idempotency-Key':ticket.record.id});
       if(!valid(stamp))return;
       if(!submissions.accepted(ticket,reply,ctx)){submissions.block(ticket);throw Error('回执与原消息不匹配。');}
-      confirmed(ctx);
+      finishEdit();confirmed(ctx);
       if(targetMessage!==null)notice.textContent='消息已受理。可返回最新消息查看本轮回复。';
       else await loadMessages();
     }catch(error){submissions.failed(ticket,error);if(valid(stamp))notice.textContent='发送未确认：'+error.message;}

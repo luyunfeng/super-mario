@@ -38,7 +38,7 @@ test('主对话和项目工作会话独立恢复引用，发送时逐行引用�
   await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
   await page.goto(server.url + '/#chat?token=' + token);
   const chat = page.locator('#chat'), workspace = page.locator('#panel-workspace');
-  const mainPreview = chat.locator('[data-message-quote]'), workPreview = workspace.locator('[data-message-quote]');
+  const mainPreview = chat.locator('#message-form [data-message-quote]'), workPreview = workspace.locator('[data-message-quote]');
   const mainQuote = chat.locator('#messages [data-id="quote-main-original"]').getByRole('button', { name: '引用消息', exact: true });
   const projectQuote = workspace.locator('[data-id="quote-work-original"]').getByRole('button', { name: '引用消息', exact: true });
   const mainInput = chat.getByLabel('给 Agent 的消息'), projectInput = workspace.getByLabel('项目目标');

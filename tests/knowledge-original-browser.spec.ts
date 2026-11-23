@@ -89,7 +89,7 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   });
   await picker.getByRole('button', { name: '引用到主对话' }).click();
   await expect(page.getByLabel('给 Agent 的消息')).toHaveValue('请解释这段话');
-  const quote = page.locator('#chat [data-message-quote]');
+  const quote = page.locator('#message-form [data-message-quote]');
   await expect(quote).toContainText('第 2 行');
   await expect(quote).toContainText(route);
   await expect(quote).not.toContainText('散会');

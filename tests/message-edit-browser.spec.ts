@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -53,7 +54,7 @@ test('编辑自己的历史消息可撤销替换，手动发送才新增消息�
     const theirs = panel.locator('.msg--assistant').filter({ hasText: ctx.name + '引用来源。' });
     const action = mine.getByRole('button', { name: '编辑消息', exact: true });
     const undo = panel.getByRole('button', { name: '撤销替换', exact: true });
-    const preview = panel.locator('[data-message-quote]');
+    const preview = panel.locator(ctx.panel === '#chat' ? '#message-form [data-message-quote]' : '[data-message-quote]');
     await expect(action).toBeVisible();
     await expect(theirs).toBeVisible();
     await expect(theirs.getByRole('button', { name: '编辑消息' })).toHaveCount(0);
@@ -120,13 +121,13 @@ test('编辑自己的历史消息可撤销替换，手动发送才新增消息�
   await toggle('conversation-edit', true);
   await expect(chat.getByRole('button', { name: '编辑消息' })).toHaveCount(2);
   await chat.locator('.msg--assistant').filter({ hasText: '主对话引用来源。' }).getByRole('button', { name: '引用消息' }).click();
-  await expect(chat.locator('[data-message-quote]')).toContainText('主对话引用来源。');
+  await expect(chat.locator('#message-form [data-message-quote]')).toContainText('主对话引用来源。');
   await toggle('conversation-quotes', false);
   await expect(chat.getByRole('button', { name: '引用消息' })).toHaveCount(0);
   const quoted = own('main')[0];
   await chat.locator('.msg--user').filter({ hasText: '主对话历史正文' }).getByRole('button', { name: '编辑消息' }).click();
   await expect(chat.getByLabel('给 Agent 的消息')).toHaveValue(quoted.text);
-  await expect(chat.locator('[data-message-quote]')).toBeHidden();
+  await expect(chat.locator('#message-form [data-message-quote]')).toBeHidden();
   assert.equal(own('main').length, 2);
   assert.deepEqual(own(readOnly.conversationId), [readOnly]);
 
@@ -172,5 +173,47 @@ test('编辑自己的历史消息可撤销替换，手动发送才新增消息�
   assert.deepEqual(own('main').map(m => m.text), [quoted.text, second.text, sentA, sentB]);
   await toggle('conversation-quotes', true);
   await expect(chat.getByRole('button', { name: '引用消息' }).first()).toBeVisible();
-  await expect(chat.locator('[data-message-quote]')).toBeHidden();
+  await expect(chat.locator('#message-form [data-message-quote]')).toBeHidden();
+});
+
+test('独立对话编辑自己的历史消息可还原原草稿与引用，发送修订只新增一条', {timeout:35000}, async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'web-thread-edit-')),token='synthetic-thread-edit';
+  const server=await startServer({dataDir,host:'127.0.0.1',port:0,demo:true,token});
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(async()=>{await browser.close();await server.close();await rm(dataDir,{recursive:true,force:true});});
+  const page=await browser.newPage(),headers={Authorization:'Bearer '+token},id=randomUUID();
+  await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  const path=server.url+'/api/v1/web-conversations',original='先整理**原始证据**。\n保持段落。';
+  assert.equal((await page.request.post(path,{headers,data:{id,title:'编辑验收对话'}})).status(),201);
+  const response=await page.request.post(path+'/'+id+'/messages',{headers:{...headers,'Idempotency-Key':randomUUID()},data:{text:original}});
+  assert.equal(response.status(),202);const source=await response.json();
+  await page.goto(server.url+'/#chat?thread='+id+'&token='+token);
+  const region=page.getByLabel('独立对话内容'),input=region.getByLabel('给独立对话发消息');
+  const row=region.locator('article[data-id="'+source.id+'"]'),edit=row.getByRole('button',{name:'编辑消息',exact:true});
+  const undo=region.getByRole('button',{name:'撤销替换',exact:true}),quote=region.locator('[data-message-quote]');
+  await expect(region.locator('.msg--assistant').first()).toBeVisible();
+  await expect(region.locator('.msg--assistant').getByRole('button',{name:'编辑消息'})).toHaveCount(0);
+  const draft='尚未发送的原草稿';await input.fill(draft);
+  await row.getByRole('button',{name:'引用消息',exact:true}).click();await expect(quote).toContainText('原始证据');
+  await edit.click();await expect(input).toHaveValue(original);await expect(quote).toBeHidden();
+  await undo.click();await expect(input).toHaveValue(draft);await expect(quote).toContainText('原始证据');
+  const userHistory=async()=>{
+    const res=await page.request.get(path+'/'+id+'/messages',{headers});
+    assert.equal(res.status(),200);
+    return (await res.json()).messages.filter((message:Message)=>message.role==='user').map(({id,text}:Message)=>({id,text}));
+  };
+  assert.deepEqual(await userHistory(),[{id:source.id,text:original}]);
+  await edit.click();const revision='改为记录**测试证据**。';await input.fill(revision);
+  const received=page.waitForResponse(r=>r.request().method()==='POST' && r.url()===path+'/'+id+'/messages');
+  await region.getByRole('button',{name:'发送',exact:true}).click();
+  const accepted=await received;assert.equal(accepted.status(),202);const sent=await accepted.json();
+  assert.notEqual(sent.id,source.id);assert.deepEqual(await userHistory(),[{id:source.id,text:original},{id:sent.id,text:revision}]);
+  const archive=async(archived:boolean)=>{
+    const meta=await (await page.request.get(path+'/'+id,{headers})).json();
+    assert.equal((await page.request.patch(path+'/'+id,{headers,data:{version:meta.version,archived}})).status(),200);
+  };
+  await archive(true);await expect(input).toBeHidden();await expect(edit).toBeHidden();await expect(row).toContainText('原始证据');
+  await archive(false);await expect(edit).toBeVisible();
+  assert.equal((await page.request.post(server.url+'/api/v1/plugins/conversation-edit',{headers,data:{enabled:false}})).status(),200);
+  await expect(region.getByRole('button',{name:'编辑消息',exact:true})).toHaveCount(0);await expect(input).toBeVisible();
 });
