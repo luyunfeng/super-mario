@@ -23,7 +23,7 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
     const stream={slot:'advanced-interface',renderer:'stream',title:'处理记录',lines:['已开始'],fallback:'等待记录'};
     ctx.contribute('web_extensions','stream',stream);
     ctx.onEvent(event=>{if(event.type==='review.progress')stream.lines.push(event.data.text);});
-    ctx.contribute('web_extensions','review/notes',{slot:'advanced-interface',renderer:'form',title:'评审备注',fields:[{name:'note',label:'备注',required:true,multiline:true}],fallback:'备注表单'});
+    ctx.contribute('web_extensions','review/notes',{slot:'advanced-interface',renderer:'form',title:'评审备注',fields:[{name:'note',label:'备注',required:true,multiline:true},{name:'priority',label:'等级',options:['普通','优先']}],fallback:'备注表单'});
     ctx.provide('review.submit_form',async input=>({message:'收到：'+input.values.note}));
     ctx.contribute('web_extensions','future',{slot:'advanced-interface',renderer:'future',title:'其他格式',fallback:'纯文字说明'});
   }}`);
@@ -126,6 +126,7 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   assert.ok((await page.request.post(examplesApi,{data:{enabled:true}})).ok());
   await expect(entry).toBeVisible();
   const form=page.getByRole('region',{name:'评审备注'});
+  await form.getByLabel('等级').selectOption('优先');
   await form.getByLabel('备注').fill('合成评审');
   await form.getByRole('button',{name:'提交'}).click();
   await expect(form.getByRole('status')).toHaveText('收到：合成评审');
@@ -140,6 +141,7 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await expect.poll(()=>form.getByRole('status').textContent()).toBe('收到：'+revisedNote);
   const endpoint=server.url+'/api/v1/plugin-forms/review/notes';
   assert.equal((await page.request.post(endpoint,{data:{note:' '}})).status(),400);
+  assert.equal((await page.request.post(endpoint,{data:{note:'评审',priority:'未定义'}})).status(),400);
   let received=0;
   await page.route(endpoint,async route=>{
     const response=await route.fetch();

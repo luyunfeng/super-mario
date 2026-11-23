@@ -283,6 +283,8 @@ export class PluginHost {
                 !Array.isArray(form.fields) || !form.fields.length || !form.fields.every(field => field &&
                   typeof field.name === 'string' && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(field.name) && typeof field.label === 'string' &&
                   (field.multiline === undefined || typeof field.multiline === 'boolean') &&
+                  (field.options === undefined || (!field.multiline && Array.isArray(field.options) && field.options.length > 0 &&
+                    field.options.every(option => typeof option === 'string' && option.trim()) && new Set(field.options).size === field.options.length)) &&
                   (field.required === undefined || typeof field.required === 'boolean')) ||
                 new Set(form.fields.map(field => field.name)).size !== form.fields.length) throw new Error('无效的插件表单声明');
           }

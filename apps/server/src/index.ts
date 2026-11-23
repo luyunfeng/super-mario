@@ -1450,7 +1450,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           const values: Record<string,string> = Object.create(null);
           for (const field of form.fields) {
             const value = Object.hasOwn(input,field.name) ? input[field.name] : '';
-            if (typeof value !== 'string' || (field.required && !value.trim())) throw new InputError('请核对字段：'+field.label);
+            if (typeof value !== 'string' || (field.required && !value.trim()) || (value && field.options && !field.options.includes(value))) throw new InputError('请核对字段：'+field.label);
             values[field.name] = value;
           }
           return json(res,200,await app.plugins.invocations.use(pluginForm[1]+'.submit_form',{formId:id,values}));

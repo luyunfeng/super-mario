@@ -197,7 +197,11 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
       if (typeof value.title !== 'string') continue;
       let content, stream;
       if (value.renderer === 'form' && Array.isArray(value.fields)) {
-        const fields = value.fields.map(field => h(field.multiline ? 'textarea' : 'input',{class:'input',required:field.required}));
+        const fields = value.fields.map(field => {
+          if (field.options) return h('select',{class:'input',required:field.required},
+            h('option',{value:''},'请选择'),field.options.map(option=>h('option',{value:option},option)));
+          return h(field.multiline ? 'textarea' : 'input',{class:'input',required:field.required});
+        });
         const status = h('p',{role:'status'});
         const submit = Button({label:'提交',type:'submit'});
         let accepted;
@@ -209,17 +213,17 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
           if (submit.disabled) return;
           submit.disabled = true;
           const payload = values();
-          for (const field of fields) field.readOnly = true;
+          for (const field of fields) field.disabled = true;
           status.textContent = '正在提交…';
           try {
             const result = await api.post('/plugin-forms/'+id,payload);
             accepted = JSON.stringify(payload);
-            for (const field of fields) field.readOnly = false;
+            for (const field of fields) field.disabled = false;
             status.textContent = typeof result?.message === 'string' ? result.message : '已提交';
           } catch (error) {
             status.textContent = error.message;
             if (error.status >= 400 && error.status < 500) {
-              for (const field of fields) field.readOnly = false;
+              for (const field of fields) field.disabled = false;
               submit.disabled = JSON.stringify(payload) === accepted;
             } else {
               accepted = undefined;
