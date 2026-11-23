@@ -117,7 +117,7 @@ export function createApi() {
     const { value: token, owner } = current();
     const init = {
       method,
-      ...(blob && {cache:'no-store',redirect:'error'}),
+      ...((blob || body instanceof Blob) && {cache:'no-store',redirect:'error'}),
       keepalive,
       signal,
       headers: {
@@ -127,7 +127,7 @@ export function createApi() {
         ...headers,
       },
     };
-    if (body !== undefined) init.body = typeof body === 'string' ? body : JSON.stringify(body);
+    if (body !== undefined) init.body = (typeof body === 'string' || body instanceof Blob) ? body : JSON.stringify(body);
     let response;
     try { response = await fetch(`/api/v1${path}`, init); }
     catch { throw new ApiError('无法连接到服务，请检查网络', 0); }

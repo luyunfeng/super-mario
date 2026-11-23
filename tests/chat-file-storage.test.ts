@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Readable } from 'node:stream';
+import test from 'node:test';
+import { prepareChatFiles, readChatFile, removeChatFileUploads, sweepChatFiles, uploadChatFile } from '../packages/core/src/chat-files.ts';
+import { createStore } from '../packages/core/src/store.ts';
+import type { Message } from '../packages/protocol/src/index.ts';
+
+test('文件上传按范围签收，重启后保留原件并清理失去全部引用的文件',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'mario-file-store-'));
+  const db=join(dir,'test.sqlite');
+  let store=createStore(db);
+  t.after(async()=>{store.close();await rm(dir,{recursive:true,force:true});});
+  const scope={conversationId:'project:demo:work',projectId:'demo',todoId:'task'};
+  const text='合成的附件正文';
+  const upload=(name:string,parts:string[])=>uploadChatFile(store,dir,scope,name,'text/plain',Readable.from(parts.map(s=>Buffer.from(s))));
+  const a=await upload(' 报表.csv',['合成的','附件正文']);
+  const b=await upload('另一份.csv',[text]);
+  const other=await upload('待移除.txt',['待清理']);
+  assert.equal(a.sha256,createHash('sha256').update(text).digest('hex'));
+  assert.equal(a.sha256,b.sha256);
+  assert.notEqual(a.uploadId,b.uploadId);
+  await assert.rejects(upload('../outside',[]),{status:400});
+  assert.throws(()=>prepareChatFiles(store,[a],{...scope,todoId:undefined}),{status:403});
+  assert.throws(()=>prepareChatFiles(store,[a],{conversationId:'main'}),{status:403});
+  const files=prepareChatFiles(store,[a],scope);
+  const msg:Message={id:'m1',role:'user',text:'',...scope,createdAt:new Date().toISOString(),files};
+  store.put('messages',msg.id,msg);
+  // An interrupted stream cannot leave an addressable ticket or a partial original.
+  const broken=async function*(){yield Buffer.from('部分');throw Error('收件中断');};
+  await assert.rejects(uploadChatFile(store,dir,scope,'broken.txt','text/plain',broken()),/中断/);
+  assert.deepEqual((await readdir(join(dir,'chat-files'))).sort(),[a.sha256,other.sha256].sort());
+  removeChatFileUploads(store,scope.conversationId);
+  store.close();store=createStore(db);
+  sweepChatFiles(store,dir);
+  assert.throws(()=>prepareChatFiles(store,[a],scope),{status:410});
+  const actual=readChatFile(store,dir,msg,0);
+  assert.equal(actual.ref.name,' 报表.csv');
+  assert.equal(await readFile(actual.path,'utf8'),text);
+  assert.deepEqual(await readdir(join(dir,'chat-files')),[a.sha256]);
+});

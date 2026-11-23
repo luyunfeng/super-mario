@@ -1,3 +1,4 @@
+import { messageFiles } from './message-files.js';
 import { messageImages } from './message-images.js';
 import { h, replace } from '../lib/dom.js';
 import { conversationExportActive, openConversationExport } from './conversation-export.js';
@@ -346,7 +347,7 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
     const entries = items => items.map(message => h('section', { class: 'stack' },
       query && around && message.id === around && h('mark', { tabIndex: -1 }, '命中消息'),
       h('strong', null, (message.role === 'user' ? '用户' : '助手') + ' · ' + new Date(message.createdAt).toLocaleString()),
-      h('p', { style: 'white-space: pre-wrap' }, message.text), messageImages(api,store,message)));
+      h('p', { style: 'white-space: pre-wrap' }, message.text), messageImages(api,store,message),messageFiles(api,store,message)));
     history.append(...entries(messages));
     const more = older => Button({ label: older ? '加载更早消息' : '加载后续消息', onClick: async (_, button) => {
       try {

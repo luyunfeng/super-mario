@@ -146,6 +146,7 @@ export function createFeishuGateway(
     inbox: entry => bots.dispatchInbox(entry),
     outbox: async entry => { await bots.send(entry.botId, requiredText(entry.target, '发送目标'), entry.text, entry.eventKey); },
   });
+  app.setPrivateFileValidator(bots.canReadPrivateFile);
   app.setPrivateImageValidator(bots.canReadPrivateImage);
   app.setScopeRequestValidator(bots.ownerScopeRequest);
   app.setAgentInputOwnerValidator(bots.validateAgentInputOwner);

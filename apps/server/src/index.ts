@@ -1,6 +1,7 @@
 import { privateThreadPage, searchPrivateThreads } from './feishu-thread-history.ts';
 import { createSessionAnalysis } from './session-analysis.ts';
 import { nativeExportProgress } from '../../../packages/core/src/native-conversation-export.ts';
+import { maxChatFileBytes } from '../../../packages/core/src/chat-files.ts';
 import { chatImageRequestBytes } from '../../../packages/core/src/chat-images.ts';
 import { readMessageReceipt } from '../../../packages/core/src/message-receipts.ts';
 import { createProjectFolders } from '../../../packages/core/src/project-folders.ts';
@@ -22,7 +23,7 @@ import { createMachineHub } from '../../../packages/core/src/machines.ts';
 import type { FeishuRegistrationInput } from './feishu-registration.ts';
 import { createFeishuGateway, type FeishuGatewayDependencies } from './feishu-gateway.ts';
 import { validateBotScope } from '../../../packages/core/src/bot-scopes.ts';
-import type { AppConfig, ChatImageInput, FeishuBotInput, JsonObject, KnowledgeImportance, Message, NodeMessage, QuestionResponse, Run, Todo } from '../../../packages/protocol/src/index.ts';
+import type { AppConfig, ChatFileInput, ChatImageInput, FeishuBotInput, JsonObject, KnowledgeImportance, Message, NodeMessage, QuestionResponse, Run, Todo } from '../../../packages/protocol/src/index.ts';
 
 async function body(req: IncomingMessage, maxBytes = 1024 * 1024): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []; let size = 0;
@@ -44,15 +45,16 @@ function answerInput(input: Record<string,unknown>, versioned = false): string |
   // The core validates every answer against the persisted card.
   return input.answers as QuestionResponse[];
 }
-async function chatMessageBody(req:IncomingMessage):Promise<Record<string,unknown> & {text:string;images?:ChatImageInput[]}> {
+async function chatMessageBody(req:IncomingMessage):Promise<Record<string,unknown> & {text:string;images?:ChatImageInput[];files?:ChatFileInput[]}> {
   const input = await body(req,chatImageRequestBytes);
   const {images,...fields} = input;
   if (Buffer.byteLength(JSON.stringify(fields)) > 1024*1024) throw new InputError('消息内容过大',413);
   if (images !== undefined && !Array.isArray(images)) throw new InputError('图片列表格式无效');
+  if (input.files !== undefined && !Array.isArray(input.files)) throw new InputError('文件列表格式无效');
   const text = input.text === undefined ? '' : input.text;
-  if (typeof text !== 'string' || (!text.trim() && !images?.length)) throw new InputError('消息不能为空');
+  if (typeof text !== 'string' || (!text.trim() && !images?.length && !input.files?.length)) throw new InputError('消息不能为空');
   // The runtime validates media types, image bytes and counts before accepting or queuing the message.
-  return {...fields,text,images:images as ChatImageInput[]|undefined};
+  return {...fields,text,files:input.files as ChatFileInput[]|undefined,images:images as ChatImageInput[]|undefined};
 }
 function messageRequestId(req: IncomingMessage) {
   const keys = req.headersDistinct['idempotency-key'];
@@ -769,7 +771,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (projectWorkspace[2] === 'messages' && method === 'POST') {
             const input = await chatMessageBody(req);
             const todoId = input.todoId === undefined ? undefined : requiredText(input.todoId, '待办标识');
-            return json(res, 202, await app.projectWorkspace.post(id, input.text, messageRequestId(req), todoId, true, input.images));
+            return json(res, 202, await app.projectWorkspace.post(id, input.text, messageRequestId(req), todoId, true, input.images, input.files));
           }
           if(projectWorkspace[2]==='memory'&&method==='GET')return json(res,200,app.projectWorkspace.memoryConversation(id));
           if(projectWorkspace[2]==='memory'&&method==='POST')return json(res,202,app.projectWorkspace.request(id));
@@ -863,6 +865,26 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             throw new InputError('当前会话中未找到这条输入', 404);
           return json(res, 200, await app.interruptTurn(conversationId, message.id));
         }
+        if (path === '/api/v1/chat-files/uploads' && method === 'PUT') {
+          const conversationId=requiredText(url.searchParams.get('conversationId'),'目标会话');
+          const projectId=url.searchParams.get('projectId') || undefined, todoId=url.searchParams.get('todoId') || undefined;
+          if (conversationId==='main' ? !!todoId : !projectId || conversationId!==`project:${projectId}:work`)
+            throw new InputError('文件上传目标必须为当前主对话或项目对话',403);
+          if (Number(req.headers['content-length'])>maxChatFileBytes) throw new InputError('单个文件最多 200 MiB',413);
+          const name=url.searchParams.get('name') ?? '';
+          const uploaded=await app.uploadChatFile({conversationId,projectId,todoId},name,req.headers['content-type'] || 'application/octet-stream',req);
+          return json(res,201,uploaded);
+        }
+        const fileRoute=path.match(/^\/api\/v1\/messages\/([^/]+)\/files\/(0|[1-9]\d*)$/);
+        if (fileRoute && method === 'GET') {
+          const messageId=decodeURIComponent(fileRoute[1]!), conversationId=requiredText(url.searchParams.get('conversationId'),'原会话');
+          const {path:diskPath,ref}=app.messageFile(messageId,conversationId,Number(fileRoute[2]));
+          res.writeHead(200,{'content-type':'application/octet-stream','content-length':ref.bytes,'cache-control':'private, no-store',
+            'content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(ref.name).replace(/['()*]/g,c=>'%'+c.charCodeAt(0).toString(16)),
+            'x-content-type-options':'nosniff','content-security-policy':"sandbox"});
+          try { await pipeline(createReadStream(diskPath),res); } catch { res.destroy(); }
+          return;
+        }
         const messageImage = path.match(/^\/api\/v1\/messages\/([^/]+)\/images\/(0|[1-9]\d*)$/);
         if (messageImage && method === 'GET') {
           const conversationId = requiredText(url.searchParams.get('conversationId'),'原会话');
@@ -881,7 +903,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         }
         if (path === '/api/v1/messages' && method === 'POST') {
           const input = await chatMessageBody(req);
-          return json(res, 202, await app.agent.post(input.text, 'main', { directWebInput:true, images:input.images, requestId: messageRequestId(req), ...(typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : {}), ...(input.readOnly === true ? { readOnly: true } : {}) }));
+          return json(res, 202, await app.agent.post(input.text, 'main', { directWebInput:true, images:input.images, files:input.files, requestId: messageRequestId(req), ...(typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : {}), ...(input.readOnly === true ? { readOnly: true } : {}) }));
         }
         if (path === '/api/v1/runs' && method === 'POST') return json(res, 202, app.dispatch(await body(req), typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : undefined));
         const completion = path.match(/^\/api\/v1\/runs\/([^/]+)\/completion$/);

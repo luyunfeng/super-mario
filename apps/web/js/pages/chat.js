@@ -1,11 +1,12 @@
-import { conversationImagesActive, createMessageImages, imagePayload, messageImages } from '../features/message-images.js';
+import { createMessageFiles, messageFiles } from '../features/message-files.js';
+import { conversationImagesActive, createMessageImages, messageImages } from '../features/message-images.js';
 import { stopTurnButton } from '../features/stop-turn.js';
 import { createReplyReadAloud } from '../features/reply-read-aloud.js';
 import { createVoiceInput } from '../features/voice-input.js';
 import { attachSentHistory } from '../features/sent-history.js';
 // 对话：主页。顶部是“等你处理”，中间是消息流，输入框固定在底部。
 import { h, keyedList, replace } from '../lib/dom.js';
-import { createMessageSubmissions } from '../lib/message-submissions.js';
+import { createMessageSubmissions, messagePayload } from '../lib/message-submissions.js';
 import { createConversationDrafts } from '../lib/conversation-drafts.js';
 import { createMessageQuote } from '../lib/message-quote.js';
 import { createMessageEdit } from '../lib/message-edit.js';
@@ -91,6 +92,7 @@ export function createChatPage({ api, store, scope, router }) {
 
   // —— 输入框 ——
   const input = h('textarea', { class: 'composer__input', id: 'message-text', rows: 1, placeholder: '说出目标，Enter 发送，Shift + Enter 换行', 'aria-label': '给 Agent 的消息', maxLength: 20000 });
+  const files = createMessageFiles(api,store,input);
   const pictures = createMessageImages(input);
   const readAloud = createReplyReadAloud(router, () => voice.reset());
   const voice = createVoiceInput(input, readAloud.stop, api);
@@ -105,7 +107,7 @@ export function createChatPage({ api, store, scope, router }) {
   const status = h('p', { class: 'small composer__status', role: 'status' });
   const form = h('form', { class: 'composer', id: 'message-form' },
     recent.el,
-    h('div', { class: 'composer__box' }, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, input, voice.caption, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, mentions.button, pictures.button, voice.button, voice.upload, h('span', { class: 'grow' }), send)), status);
+    h('div', { class: 'composer__box' }, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, files.el, input, voice.caption, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, mentions.button, pictures.button, files.button, voice.button, voice.upload, h('span', { class: 'grow' }), send)), status);
 
   const el = h('section', { class: 'page page--chat', id: 'chat' }, h('div', { class: 'chat-code-main' }, top, scroller, form), code.el);
 
@@ -118,11 +120,12 @@ export function createChatPage({ api, store, scope, router }) {
     const { key, owner } = composerContext();
     const draft = input.value, captured = quotesEnabled ? quote.capture() : '';
     const body = (captured ? quote.compose(captured, draft.trim()) : draft).trim();
-    return { key, owner, draft, captured, images:pictures.capture(), body, epoch, conversation: 'main', projectId: scope.get() || undefined, url: '/messages' };
+    return { key, owner, draft, captured, images:pictures.capture(), files:files.capture(), body, epoch, conversation: 'main', projectId: scope.get() || undefined, url: '/messages' };
   }
   function clearSubmittedDraft(ctx) {
     history.record(ctx);
     pictures.accepted(ctx);
+    files.accepted(ctx);
     const { key, draft, captured } = ctx;
     drafts.clearIf(key, draft);
     if (captured) quote.accepted(key, captured);
@@ -143,6 +146,7 @@ export function createChatPage({ api, store, scope, router }) {
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
     if (router.current.page !== 'chat') pictures.closeEditor();
+    files.update(key,nextOwner,nextEnabled,{conversationId:'main',...(scope.get() && {projectId:scope.get()})});
     pictures.update(key,nextOwner,nextEnabled,conversationImagesActive(store));
     readAloud.update(key, nextOwner, store.view.snapshot);
     voice.update(router.current.page === 'chat' && key, nextOwner, store.view.snapshot, scope.get());
@@ -221,9 +225,9 @@ export function createChatPage({ api, store, scope, router }) {
     event.preventDefault();
     syncDraft();
     const ctx = submissionContext(), { key, body: text, projectId } = ctx;
-    if (!key || !pictures.ready() || (!text && !ctx.images.length) || pending.has(key) || !store.view.snapshot?.agent.available) return;
+    if (!key || !pictures.ready() || !files.ready() || (!text && !ctx.images.length && !ctx.files.length) || pending.has(key) || !store.view.snapshot?.agent.available) return;
     let payload;
-    try { payload=imagePayload(ctx,{text,...(projectId && {projectId})}); }
+    try { payload=messagePayload(ctx,{text,...(projectId && {projectId})}); }
     catch(error) { status.textContent=error.message;return; }
     voice.reset();
     const ticket = submissions.begin(ctx);
@@ -253,6 +257,7 @@ export function createChatPage({ api, store, scope, router }) {
         }
       }
     } catch (error) {
+      if(error.status===410) files.expired(ctx);
       syncDraft();
       if (stamp !== epoch) return;
       if (error.status && /unknown|结果未知/i.test(error.message)) submissions.block(ticket);
@@ -294,7 +299,7 @@ export function createChatPage({ api, store, scope, router }) {
       const imageDraft = (!message.todoId && (message.projectId || '') === (scope.get() || ''))
         ? pictures.editCopy.bind(null,composerContext().key) : undefined;
       return h('article', { class: 'msg msg--user', dataset: { id: message.id } },
-        h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text), messageImages(api,store,message,imageDraft)),
+        h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text), messageImages(api,store,message,imageDraft),messageFiles(api,store,message)),
         h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.stoppedByUser ? ' · 已停止本轮' : message.status === 'failed' && ' · 处理失败', stopTurnButton(api, message), mark, transcript.copyMessage(message, translation.displayedText), canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
     }
     const personal = message.conversationId === 'main' && (!message.origin || message.origin === 'user');
@@ -305,7 +310,7 @@ export function createChatPage({ api, store, scope, router }) {
       h('div', { class: 'msg__col' },
         h('span', { class: 'msg__label', dataset: personal ? { assistantName: 'true' } : undefined }, label),
         agentProgress(message, api),
-        bubble,
+        bubble, messageFiles(api,store,message),
         h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, transcript.copyMessage(message, translation.displayedText), translation.action(message, bubble, transcript.renderMessage), personal && readAloud.action(message, translation.displayedText), canQuote && message.role === 'assistant' && quote.action(message, label))));
   }
 

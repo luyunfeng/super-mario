@@ -1,5 +1,6 @@
+import { readChatFile, uploadChatFile, sweepChatFiles } from './chat-files.ts';
 import { readChatImage } from './chat-images.ts';
-import type { ChatImageInput } from '../../protocol/src/index.ts';
+import type { ChatFileInput, ChatImageInput } from '../../protocol/src/index.ts';
 import { executorInputReceipt } from '../../protocol/src/executor-input-receipt.ts';
 import { createQuestionRelease } from './question-release.ts';
 import { createLaterQuestions, type QuestionHost } from './later-questions.ts';
@@ -86,7 +87,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
-import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationFiles, readChatFileText, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
@@ -159,6 +160,7 @@ export async function createWorkbench(config: AppConfig) {
   } });
   const runScopes = createRunScopes(store);
   let ownerScopeReady = false;
+  let canReadPrivateFile: (input:Message)=>boolean = () => false;
   let canReadPrivateImage: (input:Message)=>boolean = () => false;
   let ownerScopeRequest: (input:Message)=>boolean = () => false;
   function reviseScope(id:string, args: Record<string,unknown>, source:RunScopeSource) {
@@ -460,6 +462,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(conversationSearch(readWorkspaceCode, searchPrivateConversations));
   plugins.register(conversationDrafts);
   plugins.register(conversationImages);
+  plugins.register(conversationFiles);
   plugins.register(createRunComparison(readRunCommitDiff, (id, offset, version) => runWorktreeStatus(id, true, offset, version), readRunWorktreeChange, runWorktreeHistory));
   plugins.register(shortcutSettings);
   plugins.register(readingFonts);
@@ -525,8 +528,8 @@ export async function createWorkbench(config: AppConfig) {
   function todoHistory(id: string, before?: string) {
     return readTodoHistory(store, id, before, reviewEvidence);
   }
-  const agent = createAgentRuntime({ config, store, events, contributions, chatImagesEnabled, canReadChatImages, onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
-  const scopedAgents = createScopedAgents({ chatImagesEnabled, canReadChatImages, canOpenQuestion:source=>Boolean(questionFormAudience(source)), onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
+  const agent = createAgentRuntime({ config, store, events, contributions, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
+  const scopedAgents = createScopedAgents({ chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, canOpenQuestion:source=>Boolean(questionFormAudience(source)), onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
     allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'],
     systemPrompt: SUPERVISOR_SYSTEM_PROMPT });
@@ -606,7 +609,7 @@ export async function createWorkbench(config: AppConfig) {
     enqueueMeetingMemory(items, knowledgeCurator.addSource, knowledgeReaderSettings.read().trustedHosts);
     reconciledMeetingAccounts.add(source);
   }
-  const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,reviewEvidence,projectDecisions:id=>workDecisions.context({kind:"project",projectId:id}),onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text,requestId,todoId,directWebInput,images)=>scopedAgents.postProject(id,text,{requestId,todoId,directWebInput,images}),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
+  const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,reviewEvidence,projectDecisions:id=>workDecisions.context({kind:"project",projectId:id}),onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text,requestId,todoId,directWebInput,images,files)=>scopedAgents.postProject(id,text,{requestId,todoId,directWebInput,images,files}),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
   const controllers = new Map<string, AbortController>();
   const jobs = new Set<Promise<void>>();
   const commandRouter = createCommandProjectRouter(config, () => !closing && inboxClassifier.status().available);
@@ -1011,6 +1014,13 @@ export async function createWorkbench(config: AppConfig) {
     }
   }, 30_000);
   triageTimer.unref();
+  function cleanChatUploads() {
+    try { sweepChatFiles(store,config.dataDir); }
+    catch { console.warn('对话文件清理失败，将在下次清理时重试。'); }
+  }
+  cleanChatUploads();
+  const uploadCleanup = setInterval(cleanChatUploads,24*60*60*1000);
+  uploadCleanup.unref();
   const expireTimer = setInterval(() => { interactions.expireTick(); recoverPendingRunAnswers(); deferredQuestions.recover(); laterQuestions.recover(); }, 30_000); expireTimer.unref();
   const awayNotifications = createAwayNotifications({ store, events, background, presence, bots: () => notificationBots(), channel: bot => notificationChannel(bot) });
   const projectFollowUp = createProjectFollowUp({ store, events, conversations:()=>inboxAssistant.list(), schedules: background.schedules, settings: briefing.settings,
@@ -1087,8 +1097,20 @@ export async function createWorkbench(config: AppConfig) {
   function chatImagesEnabled() {
     return plugins.list().some(p => p.id === 'conversation-images' && p.status === 'active');
   }
+  function chatFilesEnabled() {
+    return plugins.list().some(p => p.id === 'conversation-files' && p.status === 'active');
+  }
+  function canReadChatFiles(message:Message) {
+    if (message.todoId) {
+      const todo=store.get<Todo>('todos',message.todoId);
+      if (!todo || todo.projectId!==message.projectId) return false;
+    }
+    return chatFilesEnabled() && attachmentAudience(message,canReadPrivateFile);
+  }
   function canReadChatImages(message:Message) {
-    if (!chatImagesEnabled()) return false;
+    return chatImagesEnabled() && attachmentAudience(message,canReadPrivateImage);
+  }
+  function attachmentAudience(message:Message,privateAccess:(message:Message)=>boolean) {
     if (message.role !== 'user' || message.replyTo || (message.origin && message.origin !== 'user')) return false;
     if (message.projectId) {
       const project = store.get<Project>('projects',message.projectId);
@@ -1096,7 +1118,7 @@ export async function createWorkbench(config: AppConfig) {
     }
     if (message.directWebInput && !store.get('message.routes',message.id))
       return message.conversationId === 'main' || (!!message.projectId && message.conversationId === `project:${message.projectId}:work`);
-    return canReadPrivateImage(message);
+    return privateAccess(message);
   }
 
   function directQuestionAudience(message: Message | undefined) {
@@ -2520,6 +2542,28 @@ export async function createWorkbench(config: AppConfig) {
       const source=store.get<Message>('messages',inputId);
       if(source)conversationUserSpoke(source);
     },
+    uploadChatFile(scope:{conversationId:string;projectId?:string;todoId?:string},name:string,mime:string,source:AsyncIterable<Uint8Array>,guard?:()=>void) {
+      const validate=()=>{
+        if (!chatFilesEnabled()) throw new InputError('对话文件插件已停用',503);
+        if (scope.projectId) {
+          const project=store.get<Project>('projects',scope.projectId);
+          if (!project || project.archivedAt) throw new InputError('原项目不可用',404);
+        }
+        if (scope.todoId) {
+          const todo=store.get<Todo>('todos',scope.todoId);
+          if (!todo || todo.projectId!==scope.projectId) throw new InputError('文件对应的待办已变化',409);
+        }
+        guard?.();
+      };
+      return uploadChatFile(store,config.dataDir,scope,name,mime,source,validate);
+    },
+    messageFile(id:string,conversationId:string,index:number) {
+      if (!chatFilesEnabled()) throw new InputError('对话文件插件已停用',503);
+      const message=store.get<Message>('messages',id);
+      if (!message || message.conversationId!==conversationId || !canReadChatFiles(message))
+        throw new InputError('当前会话中未找到该文件',404);
+      return readChatFile(store,config.dataDir,message,index);
+    },
     messageImage(id:string, conversationId:string, index:number) {
       if (!chatImagesEnabled()) throw new InputError('对话图片插件已停用',503);
       const message = store.get<Message>('messages',id);
@@ -2527,8 +2571,8 @@ export async function createWorkbench(config: AppConfig) {
         throw new InputError('当前会话中未找到该图片',404);
       return readChatImage(store,message,index);
     },
-    postScoped(text: string, scope: BotScope, botId: string, threadId?: string, todoId?: string, images?: ChatImageInput[]) {
-      return scopedAgents.post(text, validateBotScope(store, scope), botId, {todoId,images}, threadId);
+    postScoped(text: string, scope: BotScope, botId: string, threadId?: string, todoId?: string, images?: ChatImageInput[], files?: ChatFileInput[]) {
+      return scopedAgents.post(text, validateBotScope(store, scope), botId, {todoId,images,files}, threadId);
     },
     async postScopedResult(input: { text: string; scope: BotScope; botId: string; sourceMessageId?: string; threadId?: string }) {
       const scope = validateBotScope(store, input.scope);
@@ -2549,6 +2593,7 @@ export async function createWorkbench(config: AppConfig) {
     },
     readTopicTurnResult,
     runScopes: {read:runScopes.read,reviseWeb:(id:string,args:Record<string,unknown>)=>reviseScope(id,args,{kind:'web'})},
+    setPrivateFileValidator(check:typeof canReadPrivateFile) { canReadPrivateFile = check; },
     setPrivateImageValidator(check:typeof canReadPrivateImage) { canReadPrivateImage = check; },
     setScopeRequestValidator(check: typeof ownerScopeRequest) { ownerScopeRequest = check; ownerScopeReady = true; interactions.expireTick(); recoverDeferredQuestions(); },
     setAgentInputOwnerValidator(validate: typeof validateAgentInputOwner) { validateAgentInputOwner = validate; },
@@ -2647,7 +2692,7 @@ export async function createWorkbench(config: AppConfig) {
       await stopWeb();
       commandRouter.cancel();
       await wiredBackground.close(); projectFollowUp.close();
-      supervision.close(); plans.close(); clearInterval(expireTimer); await awayNotifications.close();
+      supervision.close(); plans.close(); clearInterval(expireTimer); clearInterval(uploadCleanup); await awayNotifications.close();
       await knowledgeCurator.close();
       await monitor.close();
       await approvals.close();

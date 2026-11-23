@@ -15,7 +15,8 @@ function fingerprint(message: Message): string {
   // Only bind immutable input fields. Status is read live from the message.
   return createHash('sha256').update(JSON.stringify([message.conversationId, message.role, message.text,
     message.projectId, message.todoId, !!message.readOnly, message.origin, message.replyTo,
-    ...(message.images?.length ? [message.images.map(ref => [ref.mime, ref.bytes, ref.sha256])] : [])])).digest('hex');
+    ...(message.images?.length ? [message.images.map(ref => [ref.mime, ref.bytes, ref.sha256])] : []),
+    ...(message.files?.length ? [{files:message.files.map(ref => [ref.name,ref.mime,ref.bytes,ref.sha256])}] : [])])).digest('hex');
 }
 
 function conflict(): never {

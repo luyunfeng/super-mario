@@ -10,6 +10,9 @@ import { createAgentRuntime, removeScopedTranscript } from './agent-runtime/inde
 type Runtime = ReturnType<typeof createAgentRuntime>;
 type ScopedPostContext = Omit<NonNullable<Parameters<Runtime['post']>[2]>, 'readOnlyAction'>;
 interface Options {
+  chatFilesEnabled?():boolean;
+  canReadChatFiles?(message:Message):boolean;
+  readChatFileText?:NonNullable<Parameters<typeof createAgentRuntime>[0]['readChatFileText']>;
   chatImagesEnabled?():boolean;
   canReadChatImages?(message:Message):boolean;
   canOpenQuestion?(message:Message):boolean;

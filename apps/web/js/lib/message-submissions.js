@@ -1,5 +1,18 @@
 import { Button } from '../ui/kit.js';
 
+export const messageRequestLimit = 32 * 1024 * 1024;
+export function messagePayload(ctx, fields) {
+  if (!ctx.images?.length && !ctx.files?.length) return fields;
+  const body = {...fields};
+  if (ctx.files?.length) body.files = ctx.files.map(({uploadId}) => ({uploadId}));
+  if (ctx.images?.length) {
+    body.images = ctx.images.map(({mime,data}) => ({mime,data}));
+    if (new Blob([JSON.stringify(body)]).size > messageRequestLimit)
+      throw new Error('发送内容超过 32 MiB，请移除部分图片。');
+  }
+  return body;
+}
+
 const hex = bytes => Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
 const digest = value => hex(globalThis.sha256(new TextEncoder().encode(value)));
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -20,8 +33,13 @@ export function createMessageSubmissions({ api, context, onConfirmed, onStatus, 
   button.hidden = true;
   const path = ctx => ctx.key && ctx.owner ? 'sm.message-submissions.' + JSON.stringify([ctx.owner, ctx.key]) : '';
   const imageKey = images => images.map(({mime,bytes,sha256})=>[mime,bytes,sha256]);
-  const draftDigest = ctx => digest(JSON.stringify([ctx.draft, ctx.captured, ...(ctx.images?.length ? [imageKey(ctx.images)] : [])]));
-  const messageHash = (text, images) => digest(JSON.stringify(images?.length ? [text,imageKey(images)] : text));
+  const fileKey = files => files.map(({name,mime,bytes,sha256})=>[name,mime,bytes,sha256]);
+  const attachments = (images,files) => [
+    ...(images?.length ? [imageKey(images)] : []),
+    ...(files?.length ? [{files:fileKey(files)}] : []),
+  ];
+  const draftDigest = ctx => digest(JSON.stringify([ctx.draft,ctx.captured,...attachments(ctx.images,ctx.files)]));
+  const messageHash = (text,images,files) => digest(JSON.stringify(images?.length || files?.length ? [text,...attachments(images,files)] : text));
 
   function entries(key) {
     if (!key) return [];
@@ -53,7 +71,7 @@ export function createMessageSubmissions({ api, context, onConfirmed, onStatus, 
       onStatus('发送组件未加载，请刷新后重试。草稿已保留。');
       return null;
     }
-    const key = path(ctx), rows = entries(key), hash = messageHash(ctx.body,ctx.images);
+    const key = path(ctx), rows = entries(key), hash = messageHash(ctx.body,ctx.images,ctx.files);
     let record = rows.find(row => row.hash === hash);
     if (!record) {
       record = { id: newId(), hash, draft: '', blocked: false };
@@ -82,7 +100,7 @@ export function createMessageSubmissions({ api, context, onConfirmed, onStatus, 
     if ((keyed || reply.conversationId !== undefined) && reply.conversationId !== ctx.conversation) return false;
     if ((keyed || reply.projectId !== undefined) && (reply.projectId ?? null) !== (ctx.projectId ?? null)) return false;
     if ((reply.todoId ?? null) !== (ctx.todoId ?? null)) return false;
-    if ((keyed || reply.text !== undefined) && (typeof reply.text !== 'string' || ticket.record.hash !== messageHash(reply.text,reply.images))) return false;
+    if ((keyed || reply.text !== undefined) && (typeof reply.text !== 'string' || ticket.record.hash !== messageHash(reply.text,reply.images,reply.files))) return false;
     if (!['done', 'pending'].includes(reply.status) && !(keyed && reply.status === 'failed')) return false;
     save(ticket.key, entries(ticket.key).filter(row => row.id !== ticket.record.id));
     update();
@@ -108,7 +126,7 @@ export function createMessageSubmissions({ api, context, onConfirmed, onStatus, 
           result.push('回执未确认受理，请核对对话。');
         } else {
           const now = context();
-          if (record.draft === draftDigest(now) && record.hash === messageHash(now.body,now.images)) {
+          if (record.draft === draftDigest(now) && record.hash === messageHash(now.body,now.images,now.files)) {
             finishEdit();
             onConfirmed(now);
           }

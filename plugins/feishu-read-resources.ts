@@ -3,8 +3,7 @@ import { mkdir, mkdtemp, open, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { imageSize } from 'image-size';
-import { fromBufferPromise, type Entry } from 'yauzl';
-import { SaxesParser } from 'saxes';
+import { readArchiveText } from './chat-file-text.ts';
 import { extractKnowledgeAttachment } from './knowledge-attachment-parser.ts';
 import { runPersonalCLI, type PersonalCLI } from './feishu-personal.ts';
 
@@ -52,59 +51,6 @@ function candidates(rows: Input['rows'], notes: string[]) {
   if (missingFiles) notes.push(missingFiles + ' 处附件占位符缺少资源标识，未能读取。');
   if (missing) notes.push(missing + ' 条消息只显示图片占位符，未取得图片资源标识。');
   return items;
-}
-
-// Read only bounded worksheet XML and ZIP entry names. Never unpack files to the filesystem.
-async function archiveText(bytes: Buffer, spreadsheet: boolean, signal: AbortSignal) {
-  const zip = await fromBufferPromise(bytes, { lazyEntries: true });
-  try {
-    if (zip.entryCount > 4096) throw Error();
-    const entries: Entry[] = [];
-    for await (const entry of zip.eachEntry()) entries.push(entry);
-    if (!spreadsheet) return '压缩包目录（前 120 项，未解压正文）\n' + entries.slice(0, 120).map(e => e.fileName.slice(0, 200)).join('\n');
-    const strings: string[] = [], lines: string[] = [];
-    let expanded = 0, chars = 0;
-    const sheets = entries.filter(e => /^xl\/worksheets\/[^/]+\.xml$/.test(e.fileName));
-    if (!sheets.length) throw Error();
-    for (const entry of [...entries.filter(e => e.fileName === 'xl/sharedStrings.xml'), ...sheets]) {
-      signal.throwIfAborted();
-      if ((expanded += entry.uncompressedSize) > 12 * MiB) throw Error();
-      const stream = await zip.openReadStreamPromise(entry);
-      const parser = new SaxesParser({ xmlns: true });
-      const decoder = new TextDecoder('utf-8', { fatal: true });
-      const shared = entry.fileName === 'xl/sharedStrings.xml';
-      let cell = '', type = '', value = '', capture = false, inCell = false;
-      parser.on('doctype', () => { throw Error(); });
-      parser.on('opentag', tag => {
-        if (tag.local === 'si' || tag.local === 'c') {
-          inCell = true; value = ''; cell = tag.attributes.r?.value ?? ''; type = tag.attributes.t?.value ?? '';
-        }
-        capture = inCell && (tag.local === 't' || tag.local === 'v');
-      });
-      parser.on('text', text => { if (capture && value.length < 4000) value += text.slice(0, 4000 - value.length); });
-      parser.on('closetag', tag => {
-        capture = false;
-        if (shared && tag.local === 'si') { strings.push(value); inCell = false; }
-        if (!shared && tag.local === 'c') {
-          inCell = false;
-          const actual = type === 's' ? strings[Number(value)] ?? '' : value;
-          if (actual && chars < 18000) { lines.push(cell + ' ' + actual); chars += actual.length + cell.length + 1; }
-        }
-      });
-      if (!shared) lines.push(entry.fileName);
-      let count = 0;
-      try {
-        for await (const chunk of stream) {
-          signal.throwIfAborted();
-          if ((count += chunk.length) > entry.uncompressedSize) throw Error();
-          parser.write(decoder.decode(chunk, { stream: true }));
-        }
-        parser.write(decoder.decode()).close();
-      } finally { stream.destroy(); }
-      if (chars >= 18000) { lines.push('表格内容已截断。'); break; }
-    }
-    return lines.join('\n');
-  } finally { zip.close(); }
 }
 
 export async function readGroupResources(input: Input, cli: PersonalCLI = runPersonalCLI) {
@@ -173,7 +119,7 @@ export async function readGroupResources(input: Input, cli: PersonalCLI = runPer
         } else {
           let text: string;
           if (/\.(pdf|docx)$/i.test(item.name)) text = await extractKnowledgeAttachment({ bytes, name: item.name, signal: input.signal });
-          else if (/\.(zip|xlsx)$/i.test(item.name)) text = await archiveText(bytes, /\.xlsx$/i.test(item.name), input.signal);
+          else if (/\.(zip|xlsx)$/i.test(item.name)) text = (await readArchiveText(bytes, /\.xlsx$/i.test(item.name) ? 'xlsx' : 'zip', input.signal)).text;
           else {
             text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
             if (/[\x00-\x08\x0e-\x1f]/.test(text)) throw Error();

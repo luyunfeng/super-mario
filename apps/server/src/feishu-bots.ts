@@ -44,7 +44,7 @@ import type { FeishuMessageSource, FeishuSendContext, FeishuOptions } from '../.
 import { createFeishuBotConfig, sameBotScope } from '../../../plugins/feishu-bot-config.ts';
 import type { FeishuBotSettings } from '../../../plugins/feishu-bot-config.ts';
 import type { EventBus, Store } from '../../../packages/plugin-sdk/src/index.ts';
-import type { ChatImageInput, AppConfig, Approval, ExecutorInfo, InboxThing, Json, MachineInfo, Message, Project, QuestionResponse, Run, Todo } from '../../../packages/protocol/src/index.ts';
+import type { ChatFileInput, ChatImageInput, AppConfig, Approval, ExecutorInfo, InboxThing, Json, MachineInfo, Message, Project, QuestionResponse, Run, Todo } from '../../../packages/protocol/src/index.ts';
 import type { BotScope, FeishuAgentInputTarget, FeishuBot, FeishuBotInput, MailboxEntry } from '../../../packages/protocol/src/bots.ts';
 
 export type FeishuMailboxInput = Pick<MailboxEntry, 'direction' | 'scope' | 'botId' | 'eventKey' | 'title' | 'text' | 'requiresConfirmation'>
@@ -65,8 +65,10 @@ export interface FeishuBotsApp {
   agentSessions?: { discover(input: Record<string, never>): Promise<SessionList>; proposeResume?(input: Record<string, unknown>): Promise<{id: string; status: string}> };
   approvals?: { propose(input: Pick<Approval, 'kind' | 'title' | 'details' | 'params' | 'todoId'>): Pick<Approval, 'id' | 'status'> };
   interactions?: { delegateDecision?(id:string,version:number):Promise<Card>; confirmDelegation?(id:string,version:number,accept:boolean,by:'user_feishu'):Promise<Card>|Card; reportMismatch?(id:string,version:number):Card|Promise<Card>; requestContext?(id:string,version:number):Card|Promise<Card>; withdraw(id:string,version:number):Card; answer(id: string, version: number, text: string | QuestionResponse[], by: string): Promise<Card> };
-  projectWorkspace?: { post(id: string, text: string, requestId?:string, todoId?:string, directWebInput?:boolean, images?:ChatImageInput[]): Promise<Message> };
-  postScoped(text: string, scope: BotScope, botId: string, threadId?: string, todoId?: string, images?:ChatImageInput[]): Promise<Message>;
+  projectWorkspace?: { post(id: string, text: string, requestId?:string, todoId?:string, directWebInput?:boolean, images?:ChatImageInput[], files?:ChatFileInput[]): Promise<Message> };
+  uploadChatFile?(scope:{conversationId:string;projectId?:string;todoId?:string},name:string,mime:string,source:AsyncIterable<Uint8Array>,guard?:()=>void):
+    Promise<{uploadId:string;name:string;mime:string;bytes:number;sha256:string}>;
+  postScoped(text: string, scope: BotScope, botId: string, threadId?: string, todoId?: string, images?:ChatImageInput[], files?:ChatFileInput[]): Promise<Message>;
   /** Host injects readOnly result context; it must never dispatch a new request. */
   postScopedResult?(input: { text: string; scope: BotScope; botId: string; sourceMessageId?: string; threadId?: string }): Promise<Message>;
   routeCommandProject?: CommandClassifier;
@@ -91,6 +93,8 @@ export interface FeishuBotsApp {
 export interface FeishuBotAdapter {
   start(): Promise<void>; close(): Promise<void>; send(target: string, text: string, context?: FeishuSendContext): Promise<void>;
   topicOfMessage?(chatId: string, messageId: string, guard: () => void): Promise<string | undefined>;
+  readPrivateFile?<T>(chatId:string,messageId:string,ownerId:string,guard:()=>void,
+    consume:(name:string,mime:string,source:AsyncIterable<Uint8Array>)=>Promise<T>):Promise<T>;
   readPrivateImage?(chatId:string,messageId:string,ownerId:string,guard:()=>void):Promise<ChatImageInput>;
   readTaskQuote?(chatId: string, parentId: string, guard: () => void): Promise<string | undefined>;
   readReaction?(messageId: string, emoji: 'OnIt' | 'DONE', guard: () => void, removeId?: string): Promise<string>;
@@ -114,7 +118,7 @@ type StatusSource = Pick<FeishuMessageSource, 'chatId' | 'parentId' | 'rootId'>;
 type StatusGrant = { source: StatusSource; fingerprint: string; binding?: ChatBinding };
 type GroupTaskOrigin = { chatId: string; messageId: string; binding: string; todoId: string };
 type TopicStamp = { todoId: string; grant: string; opening: boolean; sourceOpening?: true; authorityVersion?: string; externalSource?: { chatId: string; messageId: string } };
-type Envelope = { privateImageBinding?:string; topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
+type Envelope = { privateFileBinding?:string; privateImageBinding?:string; topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
 type Routed = Route & Envelope & { envelopeId: string; replyReference?: { text: string; truncated: boolean } | { unavailable: true } };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
 type SentQuestion = DecisionNudgeCard & { questionId:string; version:number; inputId:string; navigation:string; closeAttempted?:true; webOnly?:true; contextFingerprint?:string };
@@ -195,16 +199,17 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       || input.conversationId !== botConversationId(bot, route.conversationThreadId)) return;
     return input;
   }
-  function canReadPrivateImage(message:Message):boolean {
+  function canReadPrivateResource(message:Message,kind:'image'|'file'):boolean {
+    const binding=kind==='image' ? 'privateImageBinding' : 'privateFileBinding';
     try {
       const input=app.store.get<Message>('messages',message.id);
       const route=app.store.get<Routed>('message.routes',message.id);
-      if (!input?.images?.length || input.role!=='user' || input.replyTo || (input.origin && input.origin!=='user') ||
-          input.conversationId!==message.conversationId || !route?.privateImageBinding || route.channel!=='feishu' ||
+      if (!input || !(kind==='image' ? input.images : input.files)?.length || input.role!=='user' || input.replyTo || (input.origin && input.origin!=='user') ||
+          input.conversationId!==message.conversationId || !route?.[binding] || route.channel!=='feishu' ||
           route.inputId!==input.id || !route.botId || !route.sourceMessageId || route.group || route.command || route.relay || route.resultRelayEntryId) return false;
       const bot=current(route.botId), paired=owner(bot);
       if (!paired?.senderId || route.accountId!==bot.appId || route.revision!==bot.revision ||
-          route.privateSenderId!==paired.senderId || route.target!==paired.chatId || route.privateImageBinding!==groupReadBinding(bot,paired) ||
+          route.privateSenderId!==paired.senderId || route.target!==paired.chatId || route[binding]!==groupReadBinding(bot,paired) ||
           route.audienceGeneration!==audienceGeneration(bot.id)) return false;
       const entry=app.store.get<MailboxEntry>('event.mailboxes',route.envelopeId);
       const stamp=app.store.get<Envelope>('feishu.bot.envelopes',route.envelopeId);
@@ -213,7 +218,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           entry.botId!==bot.id || entry.target!==paired.chatId || entry.sourceMessageId!==route.sourceMessageId ||
           entry.eventKey!=='feishu-in:'+JSON.stringify([bot.id,bot.appId,route.sourceMessageId]) ||
           receipt?.status!=='completed' || receipt.id!==message.id || !sameBotScope(entry.scope,route.scope) ||
-          stamp?.privateImageBinding!==route.privateImageBinding || stamp.privateSenderId!==paired.senderId ||
+          stamp?.[binding]!==route[binding] || stamp.privateSenderId!==paired.senderId ||
           stamp.chatProject!==route.chatProject || stamp.conversationThreadId!==route.conversationThreadId) return false;
       checkEnvelope(entry,bot);
       const project=stamp.chatProject ?? ('projectId' in entry.scope ? entry.scope.projectId : undefined);
@@ -1593,13 +1598,15 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const stamp = app.store.get<Envelope>('feishu.bot.envelopes', entry.id);
     if (entry.botId !== bot.id || (bot.scope.kind !== 'unmarked' && !sameBotScope(entry.scope, bot.scope)) || (stamp && stamp.revision !== bot.revision)) throw noDelivery('机器人绑定已变化，旧邮箱条目不能执行');
     validateScope(entry.scope);
-    if (stamp?.privateImageBinding) {
-      if (app.plugins && !app.plugins.list().some(p => p.id === 'conversation-images' && p.status === 'active'))
-        throw noDelivery('对话图片插件已停用');
+    const resourceBinding=stamp?.privateFileBinding ?? stamp?.privateImageBinding;
+    if (resourceBinding) {
+      const pluginId=stamp?.privateFileBinding ? 'conversation-files' : 'conversation-images';
+      if (app.plugins && !app.plugins.list().some(p => p.id === pluginId && p.status === 'active'))
+        throw noDelivery('对话附件插件已停用');
       const paired=owner(bot);
-      if (!paired?.senderId || paired.chatId!==entry.target || groupReadBinding(bot,paired)!==stamp.privateImageBinding ||
+      if (!paired?.senderId || paired.chatId!==entry.target || groupReadBinding(bot,paired)!==resourceBinding ||
           (entry.sourceMessageId && groupTasks.recalled(bot.id,bot.appId,paired.chatId,entry.sourceMessageId)))
-        throw noDelivery('图片原消息或主人配对已变化。');
+        throw noDelivery('附件原消息或主人配对已变化。');
     }
     if (stamp?.groupTaskOrigin) {
       const origin = stamp.groupTaskOrigin, paired = owner(bot);
@@ -2493,10 +2500,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (!active(bot.id, epoch, bot.revision) || !['p2p', 'group'].includes(source.chatType ?? '') || !source.chatId || !source.messageId || !text.trim()) return;
     let paired = owner(bot);
     const group = source.chatType === 'group';
-    if (source.privateImage) {
+    if (source.privateImage || source.privateFile) {
       if (group || !paired?.senderId || paired.senderId!==source.senderId || paired.chatId!==source.chatId || source.senderType!=='user') return;
-      // Native image events have no caption. Never interpret an image key or extracted text as a command.
-      text='[图片]';
+      // Native attachments have no user-authored instruction. Keys and filenames must never become commands.
+      text=source.privateFile ? '[文件]' : '[图片]';
     }
     const topicBindingKey = group && bot.scope.kind === 'global' && paired?.senderId ? groupReadBinding(bot, paired) : undefined;
     const topicPolicy = topicBindingKey && topics.read(topicBindingKey).items.find(item => item.chatId === source.chatId);
@@ -2841,7 +2848,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       ...(group ? { group: structuredClone(source) } : {}), platformReplyTo: source.messageId, threadId,
     } : {};
     if (!group && source.senderType === 'user' && paired?.senderId && source.senderId === paired.senderId) context.privateSenderId = paired.senderId;
-    if (source.privateImage && paired) context.privateImageBinding=groupReadBinding(bot,paired);
+    if (paired && (source.privateImage || source.privateFile)) context[source.privateFile?'privateFileBinding':'privateImageBinding']=groupReadBinding(bot,paired);
     if (source.parentId && source.parentId !== source.messageId) context.parentMessageId = source.parentId;
     if (!group && bot.scope.kind === 'global' && paired?.senderId && paired.senderId === source.senderId) {
       const original = app.store.get<ChatBinding>('feishu.chat-target', digest([bot.id, source.chatId, source.messageId]));
@@ -2862,9 +2869,9 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         }
         app.store.put('feishu.chat-target',digest([bot.id,source.chatId,source.messageId]),bound);
         if (bound.agentTarget) {
-          if (source.privateImage) {
-            const notice=await put(bot,{direction:'outbox',eventKey:'feishu-agent-image:'+source.messageId,title:'执行会话暂不接收图片',
-              text:'请先用 /main 切回助手，再发送图片。',target:source.chatId,sourceMessageId:source.messageId,requiresConfirmation:false},bot.scope,
+          if (source.privateImage || source.privateFile) {
+            const notice=await put(bot,{direction:'outbox',eventKey:'feishu-agent-attachment:'+source.messageId,title:'执行会话暂不接收附件',
+              text:'请先用 /main 切回助手，再发送附件。',target:source.chatId,sourceMessageId:source.messageId,requiresConfirmation:false},bot.scope,
               {privateSenderId:paired.senderId,platformReplyTo:source.messageId});
             if(notice.status==='ready') await app.mailboxes.process(notice.id,notice.version);
             return;
@@ -2913,7 +2920,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!active(id, epoch, bot.revision)) return;
       const chatId = subscription(bot);
       state.commandSubscription = chatId;
-      const adapter = factory({ appId: bot.appId, appSecret: bot.appSecret,privateImages:true,
+      const adapter = factory({ appId: bot.appId, appSecret: bot.appSecret,privateImages:true,privateFiles:true,
         ...(bot.scope.kind === 'global' && { groupTasks: true,
           topicPolicy: (id: string) => {
             const paired = owner(bot);
@@ -2970,10 +2977,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const pending = inboxJobs.get(key); if (pending) return pending;
     const receipt = app.store.get<{ status: string; id?: string }>('feishu.bot.dispatch', key);
     if (receipt?.status === 'completed' && receipt.id) return { id: receipt.id };
-    if (receipt?.status==='failed') throw noDelivery('原始私聊图片未能读取，请重新发送。');
+    if (receipt?.status==='failed') throw noDelivery('原始私聊附件未能读取，请重新发送。');
     if (receipt) throw new Error('之前的消息分派结果为 unknown，不能自动重放');
     app.store.put('feishu.bot.dispatch', key, { status: 'unknown' });
-    let readingImage=!!stamp?.privateImageBinding;
+    let readingAttachment=!!(stamp?.privateImageBinding || stamp?.privateFileBinding);
     const job = (async () => {
       let replyReference: Routed['replyReference'];
       if (stamp?.parentMessageId) {
@@ -3006,31 +3013,46 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         }
       }
       let images:ChatImageInput[]|undefined;
-      if (stamp?.privateImageBinding) {
+      let files:ChatFileInput[]|undefined;
+      if (stamp?.privateImageBinding || stamp?.privateFileBinding) {
         const {adapter,epoch}=runtime(bot.id);
         const guard=()=>{
           const paired=owner(bot);
           if (!paired?.senderId || stamp.privateSenderId!==paired.senderId || paired.chatId!==entry.target ||
             runtime(bot.id).adapter!==adapter ||
             !active(bot.id,epoch,bot.revision) ||
-            stamp.group || stamp.relay || stamp.command || stamp.chatBinding?.agentTarget || !entry.sourceMessageId) throw noDelivery('图片原消息或主人配对已变化。');
+            stamp.group || stamp.relay || stamp.command || stamp.chatBinding?.agentTarget || !entry.sourceMessageId) throw noDelivery('附件原消息或主人配对已变化。');
           checkEnvelope(entry,bot);
         };
         guard();
-        if (!adapter?.readPrivateImage) throw noDelivery('当前机器人无法读取私聊图片。');
-        try { images=[await adapter.readPrivateImage(entry.target!,entry.sourceMessageId!,stamp.privateSenderId!,guard)]; }
-        catch {
+        const file=!!stamp.privateFileBinding;
+        try {
+          if (file) {
+            if (!adapter?.readPrivateFile || !app.uploadChatFile) throw noDelivery('当前机器人无法读取私聊文件。');
+            const scope={
+              conversationId:stamp.chatProject ? 'project:'+stamp.chatProject+':work' : botConversationId({id:bot.id,scope:entry.scope},stamp.conversationThreadId),
+              projectId:stamp.chatProject ?? ('projectId' in entry.scope ? entry.scope.projectId : undefined),
+              todoId:entry.scope.kind==='task' ? entry.scope.todoId : undefined,
+            };
+            const uploaded=await adapter.readPrivateFile(entry.target!,entry.sourceMessageId!,stamp.privateSenderId!,guard,
+              (name,mime,stream)=>app.uploadChatFile!(scope,name,mime,stream,guard));
+            files=[{uploadId:uploaded.uploadId}];
+          } else {
+            if (!adapter?.readPrivateImage) throw noDelivery('当前机器人无法读取私聊图片。');
+            images=[await adapter.readPrivateImage(entry.target!,entry.sourceMessageId!,stamp.privateSenderId!,guard)];
+          }
+        } catch {
           guard();
-          const notice=await put(bot,{direction:'outbox',eventKey:'feishu-image-unavailable:'+entry.id,title:'图片未读取',
-            text:'无法读取这张原图。请重新发送 PNG、JPEG、GIF 或 WebP 图片，每张最多 3.75 MB。',target:entry.target,
-            sourceMessageId:entry.sourceMessageId,requiresConfirmation:false},entry.scope,
-            {privateSenderId:stamp.privateSenderId,privateImageBinding:stamp.privateImageBinding,platformReplyTo:entry.sourceMessageId});
+          const notice=await put(bot,{direction:'outbox',eventKey:'feishu-'+(file?'file':'image')+'-unavailable:'+entry.id,title:file?'文件未读取':'图片未读取',
+            text:file?'无法读取这个文件。请重新发送不超过 200 MiB 的普通文件。':'无法读取这张原图。请重新发送 PNG、JPEG、GIF 或 WebP 图片，每张最多 3.75 MB。',
+            target:entry.target,sourceMessageId:entry.sourceMessageId,requiresConfirmation:false},entry.scope,
+            {privateSenderId:stamp.privateSenderId,privateFileBinding:stamp.privateFileBinding,privateImageBinding:stamp.privateImageBinding,platformReplyTo:entry.sourceMessageId});
           if(notice.status==='ready') await app.mailboxes.process(notice.id,notice.version);
-          throw noDelivery('未能核对或读取原始私聊图片。');
+          throw noDelivery('未能核对或读取原始私聊附件。');
         }
         guard();
       }
-      readingImage=false;
+      readingAttachment=false;
       let accepted: Message;
       const selection = stamp?.topic && !stamp.topic.opening ? topicExecutor.select(stamp.topic.todoId) : undefined;
       if (selection && stamp?.topic) {
@@ -3040,8 +3062,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       } else if (stamp?.chatProject) {
         const project = app.store.get<Project>('projects', stamp.chatProject);
         if (!app.projectWorkspace || !project || project.archivedAt || bot.scope.kind !== 'global' || !entry.target || entry.target !== owner(bot)?.chatId) throw noDelivery('已选项目会话不可用');
-        accepted = images ? await app.projectWorkspace.post(project.id,entry.text,undefined,undefined,false,images) : await app.projectWorkspace.post(project.id, entry.text);
-      } else accepted = await app.postScoped(entry.text, structuredClone(entry.scope), bot.id, stamp?.conversationThreadId, stamp?.topic?.todoId ?? stamp?.groupTaskOrigin?.todoId,images);
+        accepted = images || files ? await app.projectWorkspace.post(project.id,entry.text,undefined,undefined,false,images,files) : await app.projectWorkspace.post(project.id, entry.text);
+      } else accepted = await app.postScoped(entry.text, structuredClone(entry.scope), bot.id, stamp?.conversationThreadId, stamp?.topic?.todoId ?? stamp?.groupTaskOrigin?.todoId,images,files);
       if (stamp?.conversationThreadId && accepted.conversationId !== botConversationId(bot, stamp.conversationThreadId))
         throw new Error('独立对话接收结果未确认。');
       let notice: string | undefined;
@@ -3067,7 +3089,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           }
         }
         if (!stamp?.conversationThreadId || !stamp.privateSenderId || stamp.group || stamp.command || stamp.relay
-          || stamp.resultRelayEntryId || accepted.role !== 'user' || (accepted.readOnly && !stamp.privateImageBinding) || (accepted.origin && accepted.origin !== 'user')) return false;
+          || stamp.resultRelayEntryId || accepted.role !== 'user' || (accepted.readOnly && !stamp.privateImageBinding && !stamp.privateFileBinding) || (accepted.origin && accepted.origin !== 'user')) return false;
         const row = ownedThread(bot.id, stamp.conversationThreadId);
         if (!row?.archived || row.revision !== stamp.revision || row.chatId !== entry.target || row.senderId !== stamp.privateSenderId) return false;
         app.store.put('feishu.private-threads', row.threadId, { ...row, archived: false, version: (row.version ?? 0) + 1 });
@@ -3088,7 +3110,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       }
       return { id: accepted.id };
     })().catch(error => {
-      if (readingImage) {
+      if (readingAttachment) {
         app.store.put('feishu.bot.dispatch',key,{status:'failed'});
         throw noDelivery(redact(error));
       }
@@ -3567,7 +3589,9 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       await Promise.allSettled([...runtimes.values()].map(state => state.adapter?.close()));
       await Promise.allSettled([pinDrain, deletionDrain, reportDrain, receiptDrain, topicPostDrain, completionDrain, turnDrain, ...tasks, ...inboxJobs.values(), ...[...relayJobs.values()].map(item => item.job)]);
     },
-    sweepDecisionNudges, send, dispatchInbox, relay, canReadPrivateImage,
+    sweepDecisionNudges, send, dispatchInbox, relay,
+    canReadPrivateImage:(message:Message)=>canReadPrivateResource(message,'image'),
+    canReadPrivateFile:(message:Message)=>canReadPrivateResource(message,'file'),
     async collect(id: string) {
       const bot = current(id), state = runtime(id), epoch = state.epoch, adapter = state.adapter;
       if (!adapter) throw noDelivery('机器人尚未连接');

@@ -1,11 +1,12 @@
-import { conversationImagesActive, createMessageImages, imagePayload, messageImages } from './message-images.js';
+import { createMessageFiles, messageFiles } from './message-files.js';
+import { conversationImagesActive, createMessageImages, messageImages } from './message-images.js';
 import { stopTurnButton } from './stop-turn.js';
 import { createReplyReadAloud } from './reply-read-aloud.js';
 import { createVoiceInput } from './voice-input.js';
 import { attachSentHistory } from './sent-history.js';
 // 项目工作对话复用真实隔离会话。快照只更新消息区，草稿按身份和项目隔离。
 import { h, replace, keyedList } from '../lib/dom.js';
-import { createMessageSubmissions } from '../lib/message-submissions.js';
+import { createMessageSubmissions, messagePayload } from '../lib/message-submissions.js';
 import { createConversationDrafts } from '../lib/conversation-drafts.js';
 import { createMessageQuote } from '../lib/message-quote.js';
 import { createMessageEdit } from '../lib/message-edit.js';
@@ -42,6 +43,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const progress = h('p', { class: 'muted small' });
   const messages = h('div', { class: 'project-conversation__messages', role: 'log', 'aria-label': '项目对话' });
   const text = TextArea({ rows: 3, placeholder: '告诉我这个文件夹里要做什么，我们持续推进。', 'aria-label': '项目目标' });
+  const files = createMessageFiles(api,store,text);
   const pictures = createMessageImages(text);
   const readAloud = createReplyReadAloud(router, () => voice.reset());
   const voice = createVoiceInput(text, readAloud.stop, api);
@@ -65,7 +67,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const notice = h('div', { 'aria-live': 'polite' });
   const topic = h('p', { class: 'small', hidden: true });
   const selectedTodo = () => store.view.snapshot?.todos?.find(t => t.id === todoId && t.projectId === projectId);
-  const composer = h('div', { class: 'project-conversation__composer stack' }, topic, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, text, voice.caption, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, mentions.button, pictures.button, voice.button, voice.upload, send), notice);
+  const composer = h('div', { class: 'project-conversation__composer stack' }, topic, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, files.el, text, voice.caption, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, mentions.button, pictures.button, files.button, voice.button, voice.upload, send), notice);
   const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, statusButton, favorites.button, transcript.button, code.toggle)), status, locationNote, readNotice, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
   let draftKey, owner, enabled, quotesEnabled, editEnabled, epoch = 0;
@@ -76,11 +78,12 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     const { key, owner } = composerContext();
     const draft = text.value, captured = quotesEnabled ? quote.capture() : '';
     const body = (captured ? quote.compose(captured, draft.trim()) : draft).trim();
-    return { key, owner, draft, captured, images:pictures.capture(), body, epoch, conversation: `project:${projectId}:work`, projectId, todoId: todoId || undefined, url: `/projects/${encodeURIComponent(projectId)}/messages` };
+    return { key, owner, draft, captured, images:pictures.capture(), files:files.capture(), body, epoch, conversation: `project:${projectId}:work`, projectId, todoId: todoId || undefined, url: `/projects/${encodeURIComponent(projectId)}/messages` };
   }
   function clearSubmittedDraft(ctx) {
     history.record(ctx);
     pictures.accepted(ctx);
+    files.accepted(ctx);
     const { key, draft, captured } = ctx;
     drafts.clearIf(key, draft);
     if (captured) quote.accepted(key, captured);
@@ -100,6 +103,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
     if (!visible || router.current.page !== 'projects') pictures.closeEditor();
+    files.update(key,nextOwner,nextEnabled,{conversationId:`project:${projectId}:work`,projectId,...(todoId && {todoId})});
     pictures.update(key,nextOwner,nextEnabled,conversationImagesActive(store));
     readAloud.update(key, nextOwner, store.view.snapshot);
     voice.update(visible && router.current.page === 'projects' && key, nextOwner, store.view.snapshot, projectId);
@@ -182,7 +186,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
           h('span', { class: 'msg__label' }, user ? '我' : '项目助手'),
           m.todoId && h('a', { class: 'small', href: router.href('projects', projectId, 'todos', 'detail', m.todoId) }, '查看关联待办'),
           agentProgress(m),
-          bubble, user && messageImages(api,store,m,(m.todoId || '') === (todoId || '') ? pictures.editCopy.bind(null,composerContext().key) : undefined),
+          bubble, messageFiles(api,store,m), user && messageImages(api,store,m,(m.todoId || '') === (todoId || '') ? pictures.editCopy.bind(null,composerContext().key) : undefined),
           statusText && h('span', { class: 'msg__meta' }, statusText),
           h('span', null, stopTurnButton(api, m, projectId), favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble, transcript.renderMessage), m.conversationId === `project:${projectId}:work` && readAloud.action(m, translation.displayedText), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
     }, m => JSON.stringify([prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, projectId, todoId, anchor, m]));
@@ -211,9 +215,9 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   async function submit() {
     syncDraft();
     const ctx = submissionContext(), { key, projectId: id, body } = ctx, sender = epoch;
-    if (!key || send.disabled || !pictures.ready() || (!body && !ctx.images.length)) return;
+    if (!key || send.disabled || !pictures.ready() || !files.ready() || (!body && !ctx.images.length && !ctx.files.length)) return;
     let payload;
-    try { payload=imagePayload(ctx,{text:body,todoId:ctx.todoId}); }
+    try { payload=messagePayload(ctx,{text:body,todoId:ctx.todoId}); }
     catch(error) { notices.set(key,error.message);paint();return; }
     voice.reset();
     const ticket = submissions.begin(ctx);
@@ -240,6 +244,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
       } else if (draftKey === key) await load();
       void store.refresh().catch(() => {});
     } catch (error) {
+      if(error.status===410) files.expired(ctx);
       syncDraft();
       if (sender !== epoch) return;
       if (!error.status || error.status >= 500 || /unknown|结果未知/i.test(error.message)) {

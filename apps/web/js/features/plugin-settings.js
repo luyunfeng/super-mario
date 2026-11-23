@@ -22,6 +22,7 @@ const descriptions = {
   'project-instructions':'为项目工作对话和新的项目派发保存工作方法、术语和验收要求。',
   'saved-prompts':'管理可在对话输入框中用斜杠插入的常用提示词。',
   'message-favorites':'收藏工作台消息，查看快照或从备份恢复。',
+  'conversation-files':'在主对话和项目工作对话附加文件，从原消息下载。每条最多 20 件，每件最多 200 MiB。',
   'conversation-images':'在 Web 和飞书对话发送、查看图片。停用后可继续发送文字，再次启用可恢复原图和已保存的图片草稿。',
   'conversation-export':'下载或复制主对话和项目工作对话的 Markdown 记录。',
   'reply-translation':'翻译助手回复和飞书收件，可按会话选择自动翻译。',

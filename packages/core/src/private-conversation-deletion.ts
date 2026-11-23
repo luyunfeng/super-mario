@@ -1,3 +1,4 @@
+import { removeChatFileUploads } from './chat-files.ts';
 import { removeChatImages } from './chat-images.ts';
 import type { Store, ScheduleInfo } from '../../plugin-sdk/src/index.ts';
 import type { AppEvent, Approval, Message, Run, Todo } from '../../protocol/src/index.ts';
@@ -58,6 +59,7 @@ export function forgetPrivateConversation(store: Store, conversationId: string) 
   for (const row of store.list<{id:string;inputId:string}>('interaction.later-questions')) {
     if (belongs(row.inputId)) store.remove('interaction.later-questions',row.id);
   }
+  removeChatFileUploads(store,conversationId);
   for (const m of messages) {
     removeChatImages(store,m);
     store.remove('messages', m.id);

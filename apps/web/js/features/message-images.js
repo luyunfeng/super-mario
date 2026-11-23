@@ -1,41 +1,17 @@
+import { messageRequestLimit as requestLimit } from '../lib/message-submissions.js';
+import { attachmentDraftStore } from '../lib/attachment-drafts.js';
 import { openChatImageViewer } from './chat-image-viewer.js';
 import { openChatImageEditor } from './chat-image-editor.js';
 import { h } from '../lib/dom.js';
 import { Button } from '../ui/kit.js';
 
 const byteLimit = 3750000;
-const requestLimit = 32 * 1024 * 1024;
+
 export function conversationImagesActive(store) {
   return !store.view.unauthorized && store.view.snapshot?.plugins?.some(plugin=>plugin.id==='conversation-images' && plugin.status==='active');
 }
 const allowed = ['image/png','image/jpeg','image/webp','image/gif'];
-let database;
-function draftDatabase() {
-  return database ??= new Promise((resolve,reject) => {
-    const req = indexedDB.open('sm-message-image-drafts',1);
-    req.onupgradeneeded = () => req.result.createObjectStore('images');
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-async function storedDraft(key, change) {
-  const db = await draftDatabase();
-  return new Promise((resolve,reject) => {
-    const tx = db.transaction('images',change ? 'readwrite' : 'readonly');
-    const rows = tx.objectStore('images');
-    const lookup = rows.get(key);
-    let next;
-    lookup.onsuccess = () => {
-      next = lookup.result || [];
-      if (change) {
-        next = change(next);
-        if (next.length) rows.put(next,key); else rows.delete(key);
-      }
-    };
-    tx.oncomplete = () => resolve(next);
-    tx.onabort = () => reject(tx.error);
-  });
-}
+const storedDraft = attachmentDraftStore('sm-message-image-drafts','images');
 
 async function prepare(file) {
   if (!allowed.includes(file.type)) throw new Error('请选择 PNG、JPEG、WebP 或 GIF 图片。');
@@ -69,13 +45,6 @@ async function prepare(file) {
   });
   const id = Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-');
   return { id, name:file.name || '粘贴的图片', mime:blob.type, data, bytes:blob.size, sha256 };
-}
-
-export function imagePayload(ctx, fields) {
-  if (!ctx.images?.length) return fields;
-  const body = {...fields,images:ctx.images.map(({mime,data}) => ({mime,data}))};
-  if (new Blob([JSON.stringify(body)]).size > requestLimit) throw new Error('发送内容超过 32 MiB，请移除部分图片。');
-  return body;
 }
 
 export function createMessageImages(input) {

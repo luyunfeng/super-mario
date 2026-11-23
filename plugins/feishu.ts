@@ -10,7 +10,7 @@ import type { CollectedReplyEvidence } from '../packages/protocol/src/index.ts';
 /** Factory injection keeps tests offline while exercising the real SDK dispatcher. */
 export type FeishuWSFactory = (options: ConstructorParameters<typeof WSClient>[0]) => Pick<WSClient, 'start' | 'close' | 'getConnectionStatus'>;
 export interface FeishuMention { self?: true; key?: string; openId?: string; appId?: string; name?: string }
-export interface FeishuMessageSource { privateImage?:true; mentions?: FeishuMention[]; chatId: string; messageId: string; chatType?: string; chatName?: string; senderName?: string; senderId?: string; senderType?: 'user' | 'bot'; mentionedSelf?: boolean; parentId?: string; threadId?: string; rootId?: string }
+export interface FeishuMessageSource { privateFile?:true; privateImage?:true; mentions?: FeishuMention[]; chatId: string; messageId: string; chatType?: string; chatName?: string; senderName?: string; senderId?: string; senderType?: 'user' | 'bot'; mentionedSelf?: boolean; parentId?: string; threadId?: string; rootId?: string }
 /** Private resume data. The host commits it only after durable inbox ingestion. */
 export interface PersonalCheckpoint {
   version: 1;
@@ -74,6 +74,7 @@ export interface FeishuOptions {
   /** Enable self-identity resolution for precise group mentions; default off. */
   groupMessages?: boolean;
   privateImages?: boolean;
+  privateFiles?: boolean;
   groupChatIds?: string[];
   readGroup?: boolean;
   /** Forward explicitly addressed /ai requests. The host validates the paired owner. */
@@ -340,43 +341,70 @@ export function createFeishuIntegration(options: FeishuOptions) {
       if (message.message_id === messageId && message.chat_id === chatId && message.deleted !== true) return message;
     } catch { check(); }
   }
-  async function readPrivateImage(chatId:string,messageId:string,ownerId:string,guard:()=>void):Promise<ChatImageInput> {
-    const epoch=generation, signal=AbortSignal.any([controller.signal,AbortSignal.timeout(15000)]);
+  async function readPrivateResource<T>(kind:'file'|'image',chatId:string,messageId:string,ownerId:string,guard:()=>void,
+    consume:(name:string,mime:string,stream:AsyncIterable<Uint8Array>)=>Promise<T>):Promise<T> {
+    const file=kind==='file',limit=file ? 200*1024*1024 : 3_750_000;
+    const epoch=generation,signal=AbortSignal.any([controller.signal,AbortSignal.timeout(file ? 300_000 : 15_000)]);
     function check() {
       guard();
       signal.throwIfAborted();
-      if (!running || closed || epoch!==generation) throw new Error('图片来源的机器人连接已变化');
+      if (!running || closed || epoch!==generation) throw new Error('附件来源的机器人连接已变化');
     }
     const message=await readVerifiedMessage(chatId,messageId,check,true);
     const sender=object(message?.sender);
-    if (!message || message.updated===true || message.msg_type!=='image' || sender.sender_type!=='user' || sender.id_type!=='open_id' || sender.id!==ownerId)
-      throw new Error('无法核对原始私聊图片');
-    let key='';
-    try { key=string(object(JSON.parse(string(object(message.body).content))).image_key); } catch { /* invalid platform content */ }
-    if (!/^img_[\w-]{1,240}$/.test(key)) throw new Error('原消息缺少有效图片');
+    if (!message || message.updated===true || message.msg_type!==kind || sender.sender_type!=='user' ||
+        sender.id_type!=='open_id' || sender.id!==ownerId) throw new Error('无法核对原始私聊附件');
+    let content:Row;
+    try { content=object(JSON.parse(string(object(message.body).content))); } catch { throw new Error('附件来源无效'); }
+    const key=string(file ? content.file_key : content.image_key);
+    const name=file ? string(content.file_name) : '';
+    if (!(file ? /^file_[\w-]{1,240}$/ : /^img_[\w-]{1,240}$/).test(key) || (file && !name.trim()))
+      throw new Error('原消息缺少有效附件');
     const bearer=await getToken();
     check();
-    const response=await (options.fetch??fetch)(origin+'/open-apis/im/v1/messages/'+encodeURIComponent(messageId)+'/resources/'+encodeURIComponent(key)+'?type=image',
-      {headers:{Authorization:'Bearer '+bearer},redirect:'error',signal});
-    const limit=3_750_000;
+    const url=origin+'/open-apis/im/v1/messages/'+encodeURIComponent(messageId)+'/resources/'+encodeURIComponent(key)+'?type='+kind;
+    const response=await (options.fetch??fetch)(url,{headers:{Authorization:'Bearer '+bearer},redirect:'error',signal});
     if (!response.ok || !response.body || Number(response.headers.get('content-length'))>limit) {
       await response.body?.cancel();
-      throw new Error('私聊图片下载失败或超过大小限制');
+      throw new Error('附件下载失败或超过大小限制');
     }
-    let size=0;
-    const chunks:Uint8Array[]=[];
+    const declared=response.headers.get('content-length');
+    const exactBytes=declared && /^\d+$/.test(declared) && !response.headers.get('content-encoding') ? Number(declared) : undefined;
     const reader=response.body.getReader();
-    try {
+    async function* chunks() {
+      let size=0;
       for (;;) {
+        check();
         const part=await reader.read();
         check();
-        if (part.done) break;
-        size+=part.value.length;
-        if (size>limit) throw new Error('私聊图片超过大小限制');
-        chunks.push(part.value);
+        if (part.done) {
+          if (exactBytes!==undefined && size!==exactBytes) throw new Error('附件下载不完整');
+          return;
+        }
+        size+=part.value.byteLength;
+        if (size>limit) throw new Error('附件超过大小限制');
+        yield part.value;
       }
+    }
+    try {
+      check();
+      const mime=response.headers.get('content-type')?.split(';')[0]?.trim() || 'application/octet-stream';
+      const result=await consume(name,mime,chunks());
+      check();
+      return result;
     } finally { await reader.cancel(); }
-    const bytes=Buffer.concat(chunks,size);
+  }
+  async function readPrivateFile<T>(chatId:string,messageId:string,ownerId:string,guard:()=>void,
+    consume:(name:string,mime:string,stream:AsyncIterable<Uint8Array>)=>Promise<T>):Promise<T> {
+    return readPrivateResource('file',chatId,messageId,ownerId,guard,consume);
+  }
+  async function readPrivateImage(chatId:string,messageId:string,ownerId:string,guard:()=>void):Promise<ChatImageInput> {
+    const chunks=await readPrivateResource('image',chatId,messageId,ownerId,guard,async(_name,_mime,stream)=>{
+      const parts:Uint8Array[]=[];
+      for await (const part of stream) parts.push(part);
+      return parts;
+    });
+    const bytes=Buffer.concat(chunks);
     let type:string|undefined;
     try { type=imageSize(bytes).type; } catch { /* generic user-visible failure */ }
     if (!type || !['png','jpg','webp','gif'].includes(type)) throw new Error('私聊图片格式不受支持');
@@ -497,7 +525,8 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const threadId = string(message.thread_id);
     const post = group && message.message_type === 'post' && (options.readGroup || options.groupTasks || topics);
     const image = options.privateImages && message.chat_type === 'p2p' && message.message_type === 'image';
-    if (sender.sender_type !== 'user' || (message.message_type !== 'text' && !post && !image)) return;
+    const file = options.privateFiles && message.chat_type === 'p2p' && message.message_type === 'file';
+    if (sender.sender_type !== 'user' || (message.message_type !== 'text' && !post && !image && !file)) return;
     if (group && !commandGroup && !topics && options.groupMessages && !botOpenId) return;
     if (group && !commandGroup && options.commandGroupChatId && !options.groupMessages && !groupCommands) return;
     // Preserve unknown entries too: an unresolved @ must not look like a message with no addressee.
@@ -511,7 +540,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     let text: string | undefined;
     try {
       const raw = object(JSON.parse(string(message.content)));
-      text = image ? (/^img_[\w-]{1,240}$/.test(string(raw.image_key)) ? '[图片]' : undefined) : post ? readGroupPost(raw, mentions ?? [], { readGroup: options.readGroup, groupTasks: options.groupTasks,
+      text = file ? (/^file_[\w-]{1,240}$/.test(string(raw.file_key)) ? '[文件]' : undefined) : image ? (/^img_[\w-]{1,240}$/.test(string(raw.image_key)) ? '[图片]' : undefined) : post ? readGroupPost(raw, mentions ?? [], { readGroup: options.readGroup, groupTasks: options.groupTasks,
         topicCommands: topics, topicBody: topics && !!threadId && (!!options.topicPolicy?.(chatId) || pendingSetting) }) : string(raw.text);
     } catch { operationReason = '收到无法解析的飞书消息'; return; }
     if (!text?.trim()) return;
@@ -533,7 +562,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     if (queue.length >= 100) { operationReason = '飞书消息队列已满，消息未处理'; return; }
     remember(messageId);
     const source: FeishuMessageSource = {
-      ...(image && {privateImage:true}), chatId, messageId, chatType: string(message.chat_type) || undefined,
+      ...(file && {privateFile:true}), ...(image && {privateImage:true}), chatId, messageId, chatType: string(message.chat_type) || undefined,
       senderId: string(object(sender.sender_id).open_id) || undefined, senderType: 'user',
       // EventDispatcher preserves the SDK's nested id; CLI-normalized mentions differ.
       mentionedSelf: !!botOpenId && !!mentions?.some(mention => mention.openId === botOpenId),
@@ -1045,7 +1074,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const detail = [channelReason, identityReason, operationReason].filter(Boolean).join('；');
     return { connected, ...(detail ? { reason: detail } : {}) };
   }
-  return { start, close, send, readPrivateImage, readTaskQuote, topicOfMessage, readReaction, updateCard, collect, collectBatch, status,
+  return { start, close, send, readPrivateImage, readPrivateFile, readTaskQuote, topicOfMessage, readReaction, updateCard, collect, collectBatch, status,
     pinMessage: (id: string) => changePlatformMessage('pin', id),
     unpinMessage: (id: string) => changePlatformMessage('unpin', id),
     recallMessage: (id: string) => changePlatformMessage('recall', id),

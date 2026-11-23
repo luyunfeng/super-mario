@@ -8,7 +8,7 @@ export type PrivateThread = {
 };
 type Receipt = {
   channel: string; botId: string; accountId: string; revision: number; target: string;
-  privateImageBinding?: string; privateSenderId?: string; conversationThreadId?: string; group?: unknown; relay?: unknown;
+  privateFileBinding?: string; privateImageBinding?: string; privateSenderId?: string; conversationThreadId?: string; group?: unknown; relay?: unknown;
 };
 
 // A registered thread may still be empty after /new. Only show utterances with a matching private delivery route.
@@ -21,7 +21,7 @@ function threadMessages(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[
     if (!row || (message.role !== 'user' && message.role !== 'assistant') || message.projectId || message.todoId || (message.origin && message.origin !== 'user')) continue;
     const inputId = message.role === 'user' ? message.id : message.replyTo;
     const route = inputId ? store.get<Receipt>('message.routes', inputId) : undefined;
-    if (message.readOnly && !route?.privateImageBinding) continue;
+    if (message.readOnly && !route?.privateImageBinding && !route?.privateFileBinding) continue;
     if (!route || route.channel !== 'feishu' || route.botId !== row.botId || route.accountId !== row.appId
       || route.revision !== row.revision || route.conversationThreadId !== row.threadId || route.group || route.relay
       || route.target !== row.chatId || route.privateSenderId !== row.senderId) continue;
@@ -145,6 +145,6 @@ export function privateThreadPage(store: Pick<Store, 'get' | 'list'>, row: Priva
     }
   }
   const page = list.slice(start, end);
-  return { ...metadata(row, list), messages: page.map(({ id, role, text, createdAt, status, images, conversationId }) => ({ id, role, text, createdAt, status, ...(images?.length ? { images, conversationId } : {}) })),
+  return { ...metadata(row, list), messages: page.map(({ id, role, text, createdAt, status, images, files, conversationId }) => ({ id, role, text, createdAt, status, ...(images?.length ? { images, conversationId } : {}), ...(files?.length ? { files, conversationId } : {}) })),
     nextBefore: start && page.length ? page[0].id : null, nextAfter: end < list.length && page.length ? page[page.length - 1].id : null };
 }
