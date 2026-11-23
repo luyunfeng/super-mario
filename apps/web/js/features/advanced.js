@@ -86,42 +86,54 @@ function candleChart(card) {
 
 function chartBody(card) {
   if (card.kind === 'candlestick') return candleChart(card);
-  const points = card.points;
-  if (!['bar','line','area','pie','donut'].includes(card.kind) || !Array.isArray(points) || !points.length ||
-      !points.every(point => typeof point?.label === 'string' && Number.isFinite(point.value))) return;
-  if (card.kind === 'pie' || card.kind === 'donut') return shareChart(card);
-  const scale = points.reduce((max, point) => Math.max(max, Math.abs(point.value)), 0) || 1;
-  const low = points.reduce((min, point) => Math.min(min, point.value / scale), 0);
-  const high = points.reduce((max, point) => Math.max(max, point.value / scale), 0);
+  if (!['bar','line','area','pie','donut'].includes(card.kind)) return;
+  const series = card.series ?? [{name:'数值',points:card.points}];
+  if (!Array.isArray(series) || !series.length) return;
+  const points = series[0]?.points;
+  if (!Array.isArray(points) || !points.length || !series.every(line => typeof line?.name === 'string' &&
+      Array.isArray(line.points) && line.points.length === points.length && line.points.every((p,i) =>
+        typeof p?.label === 'string' && p.label === points[i]?.label && Number.isFinite(p.value)))) return;
+  if (card.kind === 'pie' || card.kind === 'donut') return card.series ? undefined : shareChart(card);
+  let minimum = 0, maximum = 0;
+  for (const line of series) for (const point of line.points) {
+    minimum = Math.min(minimum,point.value);
+    maximum = Math.max(maximum,point.value);
+  }
+  const scale = Math.max(-minimum,maximum) || 1;
+  const low = minimum / scale, high = maximum / scale;
   const y = value => 96 - 92 * (value / scale - low) / (high - low || 1);
   const width = 300 / points.length;
   const baseline = y(0);
   const marks = [['line',{x1:0,x2:300,y1:baseline,y2:baseline,stroke:'currentColor'}]];
-  if (card.kind === 'bar') {
-    points.forEach((point, index) => marks.push(['rect', {x:(index + 0.15) * width, width:width * 0.7,
-      y:Math.min(baseline, y(point.value)), height:Math.abs(baseline - y(point.value)), fill:'currentColor'}]));
-  } else {
-    const x = index => (index + 0.5) * width;
-    const path = points.map((point, index) => x(index) + ',' + y(point.value)).join(' ');
-    if (card.kind === 'area') marks.push(['polygon', {points:x(0)+','+baseline+' '+path+' '+x(points.length-1)+','+baseline,
-      fill:'currentColor', opacity:0.2}]);
-    marks.push(['polyline', {points:path, fill:'none', stroke:'currentColor', 'stroke-width':2}]);
-    if (points.length === 1) marks.push(['circle', {cx:x(0), cy:y(points[0].value), r:3, fill:'currentColor'}]);
-  }
+  const colors = series.map((_,i) => series.length === 1 ? 'currentColor' : 'hsl(' + (i * 137.5 % 360) + ' 50% 46%)');
+  series.forEach(({points},n) => {
+    const color = colors[n];
+    if (card.kind === 'bar') {
+      points.forEach((point, index) => marks.push(['rect', {x:(index + 0.15 + n * 0.7 / series.length) * width, width:width * 0.7 / series.length,
+        y:Math.min(baseline, y(point.value)), height:Math.abs(baseline - y(point.value)), fill:color}]));
+    } else {
+      const x = index => (index + 0.5) * width;
+      const path = points.map((point, index) => x(index) + ',' + y(point.value)).join(' ');
+      if (card.kind === 'area') marks.push(['polygon', {points:x(0)+','+baseline+' '+path+' '+x(points.length-1)+','+baseline,
+        fill:color, opacity:0.2}]);
+      marks.push(['polyline', {points:path, fill:'none', stroke:color, 'stroke-width':2}]);
+      if (points.length === 1) marks.push(['circle', {cx:x(0), cy:y(points[0].value), r:3, fill:color}]);
+    }
+  });
   const graph = svg(marks);
   graph.setAttribute('viewBox','0 0 300 100');
   graph.setAttribute('height','120');
   return h('div',{class:'stack'}, graph, h('table',{class:'table','aria-label':card.title},
-    h('thead',{},h('tr',{},h('th',{scope:'col'},'项目'),h('th',{scope:'col'},'数值'))),
-    h('tbody',{},points.map(point => h('tr',{},h('th',{scope:'row'},point.label),h('td',{},pointReading(point,card.unit)))))));
+    h('thead',{},h('tr',{},h('th',{scope:'col'},'项目'),series.map((line,i)=>h('th',{scope:'col'},h('span',{'aria-hidden':'true',style:{color:colors[i]}},series.length > 1 ? '● ' : ''),line.name)))),
+    h('tbody',{},points.map((point,i) => h('tr',{},h('th',{scope:'row'},point.label),series.map(line=>h('td',{},pointReading(line.points[i],card.unit))))))));
 }
 
 function extensionChart(card) {
   const body = chartBody(card);
   if (!body) return body;
   const table = body.querySelector('table');
-  const columns = Array.from(table.tHead.rows[0].cells, cell => cell.textContent);
-  const picker = h('input',{type:'range', min:1, max:card.points.length, value:1});
+  const columns = Array.from(table.tHead.rows[0].cells, cell => cell.textContent.replace(/^● /,''));
+  const picker = h('input',{type:'range', min:1, max:table.tBodies[0].rows.length, value:1});
   const readout = h('span');
   const status = h('span',{role:'status'});
   const copy = Button({label:'复制数据点',size:'sm',onClick:async () => {
@@ -131,14 +143,14 @@ function extensionChart(card) {
   function readPoint() {
     status.textContent = '';
     const cells = table.tBodies[0].rows[picker.valueAsNumber - 1].cells;
-    const values = [card.points[picker.valueAsNumber - 1].label];
+    const values = [(card.series?.[0].points ?? card.points)[picker.valueAsNumber - 1].label];
     for (let i = 1; i < cells.length; i++) values.push(columns[i] + ' ' + cells[i].textContent);
     readout.textContent = values.join('，');
     picker.setAttribute('aria-valuetext',readout.textContent);
   }
   picker.addEventListener('input',readPoint);
   readPoint();
-  if (card.points.length > 1) table.before(h('label',{class:'field'},'查看数据点',picker), readout);
+  if (table.tBodies[0].rows.length > 1) table.before(h('label',{class:'field'},'查看数据点',picker), readout);
   table.before(h('div',{class:'row'},copy,status));
   return body;
 }

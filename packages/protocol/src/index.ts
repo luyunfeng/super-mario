@@ -63,11 +63,13 @@ export interface Run { planEstimate?: PlanEstimateDispatch; worktreeRunId?: stri
 export interface ExecutorInfo { taskOnly?: boolean; nativeResultSources?: string[]; id: string; name: string; kind: string; machineId: string; available: boolean; mode: 'demo' | 'real'; description: string; reason?: string; defaultCwd?: string }
 export interface PluginNavigationItem { id: string; label: string; route: string }
 export interface PluginInfo { dependencies?: string[]; navigation?: PluginNavigationItem[]; id: string; name: string; enabled: boolean; status: 'active' | 'disabled' | 'waiting' | 'failed'; error?: string; capabilities: string[] }
+export interface ChartReading { label:string; value:number; display?:string }
 /** Declarative browser contribution. The browser owns rendering and cleanup; no server-supplied script executes. */
 export type WebExtension =
   | { slot: 'startup'; renderer: 'brand-splash'; title: string; subtitle: string; durationMs?: number }
   | { slot: 'advanced-interface'; renderer: 'assistant-card-examples' }
-  | { slot: 'advanced-interface'; renderer: 'chart'; kind: 'bar' | 'line' | 'area' | 'pie' | 'donut'; title: string; unit?: string; points: {label:string; value:number; display?:string}[]; fallback: string }
+  | { slot: 'advanced-interface'; renderer: 'chart'; kind: 'bar' | 'line' | 'area' | 'pie' | 'donut'; title: string; unit?: string; points: ChartReading[]; fallback: string }
+  | { slot: 'advanced-interface'; renderer: 'chart'; kind: 'bar' | 'line' | 'area'; title:string; unit?:string; series:{name:string; points:ChartReading[]}[]; fallback:string }
   | { slot: 'advanced-interface'; renderer: 'chart'; kind: 'candlestick'; title: string; points: {label:string; value:number; open:number; high:number; low:number; close?:number; volume?:number}[]; fallback: string }
   | { slot: 'advanced-interface'; renderer: 'form'; title:string; fields:{name:string; label:string; required?:boolean; multiline?:boolean; options?:string[]; initial?:string}[]; fallback:string }
   | { slot: 'advanced-interface'; renderer: 'stream'; title:string; lines:string[]; fallback:string }

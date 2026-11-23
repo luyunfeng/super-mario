@@ -14,6 +14,10 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await writeFile(join(extension,'index.mjs'),`export default {id:'review.local',name:'合成评审',capabilities:[],activate(ctx){
     ctx.contribute('web_extensions','patch',{slot:'advanced-interface',renderer:'diff',title:'变更摘录',patch:'-before\\n+<img src=x>\\n',fallback:'新增一行'});
     ctx.contribute('web_extensions','chart',{slot:'advanced-interface',renderer:'chart',kind:'bar',title:'数量变化',unit:'件',points:[{label:'昨日',value:-3},{label:'今日',value:5,display:'新增 5 件'}],fallback:'数量变化摘要'});
+    for (const kind of ['line','area','bar']) ctx.contribute('web_extensions','compare-'+kind,{slot:'advanced-interface',renderer:'chart',kind,title:'收支 '+kind,series:[
+      {name:'收入',points:[{label:'周一',value:2},{label:'周二',value:5}]},
+      {name:'支出',points:[{label:'周一',value:-3},{label:'周二',value:-1}]}
+    ],fallback:'收支摘要'});
     ctx.contribute('web_extensions','line',{slot:'advanced-interface',renderer:'chart',kind:'line',title:'单点趋势',points:[{label:'当前',value:0}],fallback:'当前为零'});
     ctx.contribute('web_extensions','area',{slot:'advanced-interface',renderer:'chart',kind:'area',title:'跨零走势',points:[{label:'昨日',value:-1},{label:'今日',value:1}],fallback:'由负转正'});
     for (const kind of ['pie','donut']) ctx.contribute('web_extensions',kind,{slot:'advanced-interface',renderer:'chart',kind,title:'占比 '+kind,
@@ -91,6 +95,13 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),patchText);
   await expect(patch.locator('img')).toHaveCount(0);
   await expect(page.getByRole('region',{name:'其他格式'})).toContainText('纯文字说明');
+  for (const [kind,selector,count] of [['line','polyline',2],['area','polygon',2],['bar','rect',4]] as const) {
+    const comparison=page.getByRole('region',{name:'收支 '+kind});
+    await expect(comparison.locator('svg '+selector)).toHaveCount(count);
+    const cursor=comparison.getByRole('slider');
+    await cursor.press('ArrowRight');
+    await expect(cursor).toHaveAttribute('aria-valuetext','周二，收入 5，支出 -1');
+  }
   const chart=page.getByRole('region',{name:'数量变化'});
   await expect(chart.getByRole('cell')).toHaveText(['-3 件','新增 5 件']);
   await expect(chart.locator('svg rect')).toHaveCount(2);
