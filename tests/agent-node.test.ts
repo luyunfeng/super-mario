@@ -27,9 +27,9 @@ async function fixture(t: TestContext) {
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
-  const peers: Array<{ socket: WebSocket; url: string; messages: NodeMessage[] }> = [];
+  const peers: Array<{ socket: WebSocket; url: string; authorization?: string; messages: NodeMessage[] }> = [];
   server.on('connection', (socket, request) => {
-    const peer = { socket, url: request.url!, messages: [] as NodeMessage[] };
+    const peer = { socket, url: request.url!, authorization:request.headers.authorization, messages: [] as NodeMessage[] };
     peers.push(peer);
     socket.on('message', (data) => peer.messages.push(JSON.parse(data.toString())));
   });
@@ -54,6 +54,15 @@ test('requires a token and validates connection options before connecting', () =
   assert.throws(() => startAgentNode({ ...options, token: 'secret', url: 'bad secret URL' }),
     { message: 'Agent node server URL is invalid' });
   assert.throws(() => startAgentNode({ ...options, token: 'secret', reconnectMs: 0 }), /reconnectMs/);
+});
+
+test('dedicated machine credential travels only in the upgrade header', async t => {
+  const f = await fixture(t);
+  f.options.token = 'smmc_' + 'x'.repeat(43);
+  f.start();
+  const peer = await waitFor(() => f.peers[0]);
+  assert.equal(peer.url, '/api/v1/node');
+  assert.equal(peer.authorization, 'Bearer ' + f.options.token);
 });
 
 test('hello, welcome, heartbeat and read-only status use the shared wire protocol', async (t) => {

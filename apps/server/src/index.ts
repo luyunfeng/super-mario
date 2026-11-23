@@ -1,3 +1,4 @@
+import {createMachineCredentials} from './machine-credentials.ts';
 import {createAdminOverview} from './admin-overview.ts';
 import {createAdminAuth} from './admin-auth.ts';
 import {createBrowserPassword} from './browser-password.ts';
@@ -1371,16 +1372,35 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
     machines:()=>machines.list(),plugins:()=>app.plugins.list(),devices:()=>app.browserDevices.list()});
   const browserPassword=createBrowserPassword(app.store,app.browserDevices,devicePlugin);
   const passwordRoutes=createPublicPasswordRoutes(browserPassword,config.token,devicePlugin,body,json);
+  const machineCredentials=createMachineCredentials(app.store);
+  const credentialSockets=new Map<string,Set<WebSocket>>();
+  const adminMachineCredentials={...machineCredentials,revoke(id:string){
+    if(!machineCredentials.revoke(id))return false;
+    for(const client of credentialSockets.get(id)??[])client.terminate();
+    credentialSockets.delete(id);
+    return true;
+  }};
   const adminRoutes=createAdminRoutes(createAdminAuth(app.store),config.token,body,json,overview,app.browserDevices,devicePlugin,browserPassword,
-    app.plugins,()=>app.plugins.inspections(version));
+    app.plugins,()=>app.plugins.inspections(version),adminMachineCredentials);
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
-    const access=browserAccess.access(req,url);
-    if (!access || !['/api/v1/events', '/api/v1/node', '/api/v1/terminal', '/api/v1/live-terminal'].includes(url.pathname) || (url.pathname.endsWith('/node') && access.kind!=='root')) {
+    const nodeToken=url.pathname==='/api/v1/node' && req.headersDistinct.authorization?.length===1
+      ? /^Bearer (smmc_[A-Za-z0-9_-]{43})$/.exec(req.headers.authorization??'')?.[1] : undefined;
+    const nodeId=nodeToken && machineCredentials.resolve(nodeToken);
+    const access=nodeId?{kind:'machine' as const,id:nodeId}:browserAccess.access(req,url);
+    if (!access || !['/api/v1/events', '/api/v1/node', '/api/v1/terminal', '/api/v1/live-terminal'].includes(url.pathname) || (url.pathname.endsWith('/node') && access.kind!=='root' && access.kind!=='machine')) {
       socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); return;
     }
     sockets.handleUpgrade(req, socket, head, ws => {
       ws.on('error', () => {});
+      if(access.kind==='machine'){
+        const clients=credentialSockets.get(access.id)??new Set<WebSocket>();
+        clients.add(ws);credentialSockets.set(access.id,clients);
+        ws.once('close',()=>{
+          clients.delete(ws);
+          if(!clients.size && credentialSockets.get(access.id)===clients)credentialSockets.delete(access.id);
+        });
+      }
       if(access.kind==='device'){
         const release=browserAccess.track(access.id,()=>ws.terminate());ws.once('close',release);
       }
@@ -1525,6 +1545,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           const message = JSON.parse(raw.toString()) as NodeMessage;
           if (message.type === 'hello') {
             if (registered) throw new Error('重复执行机注册');
+            if(access.kind==='machine' && access.id!==message.machineId)throw new Error('执行机标识与凭据不符');
             machines.attach(ws, message); registered = true;
           } else {
             if (!registered) throw new Error('请先注册执行机');

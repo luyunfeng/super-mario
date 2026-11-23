@@ -7,18 +7,19 @@ import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 async function main() {
-  const { values } = parseArgs({ options: { url: { type: 'string' }, token: { type: 'string' }, name: { type: 'string' }, 'data-dir': { type: 'string' }, 'codex-command': { type: 'string' }, 'codex-config-dir': { type: 'string' }, 'claude-command': { type: 'string' }, 'pi-command': { type: 'string' }, 'claude-config-dir': { type: 'string' }, help: { type: 'boolean', short: 'h' } } });
-  if (values.help) { console.log('用法: super-mario-agent --url http://127.0.0.1:3000 --token <服务端令牌> [--name 名称] [--data-dir 目录]\n提供执行机注册、真实 CLI 会话和终端 RPC。终端命令默认 herdr，可用 SUPER_MARIO_TERMINAL_COMMAND 指定。\n执行者可选配置：--codex-command <启动器> --codex-config-dir <绝对配置目录> --claude-command <启动器> --claude-config-dir <绝对配置目录> --pi-command <启动器>（环境变量 SUPER_MARIO_PI_COMMAND，默认 pi）。仅作用于此执行机，不自动登录。'); return; }
+  const { values } = parseArgs({ options: { 'print-machine-id': { type: 'boolean' }, url: { type: 'string' }, token: { type: 'string' }, name: { type: 'string' }, 'data-dir': { type: 'string' }, 'codex-command': { type: 'string' }, 'codex-config-dir': { type: 'string' }, 'claude-command': { type: 'string' }, 'pi-command': { type: 'string' }, 'claude-config-dir': { type: 'string' }, help: { type: 'boolean', short: 'h' } } });
+  if (values.help) { console.log('用法: super-mario-agent --url http://127.0.0.1:3000 --token <服务端令牌> [--name 名称] [--data-dir 目录]\n使用 --print-machine-id 可生成或读取本机 ID 后退出。\n提供执行机注册、真实 CLI 会话和终端 RPC。终端命令默认 herdr，可用 SUPER_MARIO_TERMINAL_COMMAND 指定。\n执行者可选配置：--codex-command <启动器> --codex-config-dir <绝对配置目录> --claude-command <启动器> --claude-config-dir <绝对配置目录> --pi-command <启动器>（环境变量 SUPER_MARIO_PI_COMMAND，默认 pi）。仅作用于此执行机，不自动登录。'); return; }
   const url = values.url ?? process.env.SUPER_MARIO_SERVER_URL;
   const token = values.token ?? process.env.SUPER_MARIO_TOKEN;
-  if (!url || !token) throw new Error('请设置 --url 和 --token，或对应的 SUPER_MARIO_SERVER_URL / SUPER_MARIO_TOKEN');
+  if (!values['print-machine-id'] && (!url || !token)) throw new Error('请设置 --url 和 --token，或对应的 SUPER_MARIO_SERVER_URL / SUPER_MARIO_TOKEN');
   const dataDir = resolve(values['data-dir'] ?? join(homedir(), '.super-mario', 'agent'));
   await mkdir(dataDir, { recursive: true });
   const file = join(dataDir, 'machine.json');
   let machineId;
   try { machineId = JSON.parse(await readFile(file, 'utf8')).id; }
-  catch (error) { if (error.code !== 'ENOENT') throw error; machineId = randomUUID(); await writeFile(file, JSON.stringify({ id: machineId }), { mode: 0o600 }); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; machineId = randomUUID(); await writeFile(file, JSON.stringify({ id: machineId }), { mode: 0o600, flag: 'wx' }); }
   if (typeof machineId !== 'string' || !machineId) throw new Error('执行机标识无效，请检查 machine.json');
+  if (values['print-machine-id']) { console.log(machineId); return; }
   const compiled = process.env.SUPER_MARIO_DEV !== '1' && existsSync(new URL('../dist/apps/agent-node/src/index.js', import.meta.url));
   const { startAgentNode } = await import(compiled ? '../dist/apps/agent-node/src/index.js' : '../apps/agent-node/src/index.ts');
   const { loadDefaultNodePlugins } = await import(compiled ? '../dist/apps/agent-node/src/node-plugins.js' : '../apps/agent-node/src/node-plugins.ts');

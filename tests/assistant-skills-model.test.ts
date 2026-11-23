@@ -4910,6 +4910,7 @@ test('Web 与配对飞书说明浏览器接入和管理诊断时不索取凭据'
     assert.match(request.system,/先核对插件 ID、统计窗口和调用数/);
     assert.match(request.system,/没有调用记录时，不推断插件已经故障/);
     assert.match(request.system,/「最近调用」筛选失败记录，核对操作名和完成时间/);
+    assert.match(request.system,/super-mario-agent --print-machine-id/);
     assert.match(request.system,/「执行机管理」刷新清单，按执行机 ID 核对上报名/);
     if(JSON.stringify(request.content).includes('诊断结果'))return {role:'assistant',content:diagnosis};
     return {role:'assistant',content:JSON.stringify(request.content).includes('仅本地退出')?'旧凭据可能仍然有效。':answer};

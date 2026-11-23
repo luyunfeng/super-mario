@@ -59,7 +59,7 @@ export function startAgentNode(options: NodeOptions & { piCommand?: string }): {
   if (!Number.isFinite(reconnectMs) || reconnectMs < 1) {
     throw new Error('reconnectMs must be a positive number');
   }
-  // Construct the URL once; never include it in diagnostics because it contains the token.
+  // Dedicated credentials use a header. Existing root-token connections retain their wire format.
   let url: URL;
   try { url = new URL('/api/v1/node', options.url); }
   catch { throw new Error('Agent node server URL is invalid'); }
@@ -68,7 +68,9 @@ export function startAgentNode(options: NodeOptions & { piCommand?: string }): {
   if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password) {
     throw new Error('Agent node server URL must use HTTP(S) or WS(S) without credentials');
   }
-  url.searchParams.set('token', options.token);
+
+  const dedicated=/^smmc_[A-Za-z0-9_-]{43}$/.test(options.token);
+  if(!dedicated)url.searchParams.set('token', options.token);
 
   // Snapshot the whitelist; node.status always remains the built-in read-only method.
   const handlers = new Map(Object.entries(options.handlers ?? {}));
@@ -81,7 +83,7 @@ export function startAgentNode(options: NodeOptions & { piCommand?: string }): {
 
   function connect(): void {
     if (stopped) return;
-    const connection = new WebSocket(url, { handshakeTimeout: 5000 });
+    const connection = new WebSocket(url, { handshakeTimeout: 5000, headers:dedicated?{authorization:`Bearer ${options.token}`}:undefined });
     socket = connection;
     let welcomed = false;
     let disconnected = false;

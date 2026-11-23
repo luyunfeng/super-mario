@@ -9,7 +9,7 @@ export function createBrowserAccess(rootToken:string|undefined,authenticate:(tok
     const query=url.searchParams.get('token');
     // Root URLs and existing node clients retain their original authentication path.
     if(rootToken && (header===rootToken || query===rootToken))return {kind:'root'};
-    if(!rootToken)return header?.startsWith('smbd_') || query?.startsWith('smbd_') ? undefined:{kind:'local'};
+    if(!rootToken)return [header,query].some(value=>value?.startsWith('smbd_') || value?.startsWith('smmc_')) ? undefined:{kind:'local'};
     const token=header??query;
     if(!token?.startsWith('smbd_'))return;
     const id=authenticate(token);

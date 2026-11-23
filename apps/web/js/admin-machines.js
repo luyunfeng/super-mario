@@ -1,11 +1,57 @@
 import {h,replace} from './lib/dom.js';
 
 const button=(text,action)=>h('button',{type:'button',class:'btn btn--sm',onclick:action},text);
+function machineCredentials({request,submit,csrf,signal,active}){
+  const issued=h('div',{class:'stack'}),rows=h('div',{class:'stack'}),actions=h('div',{class:'stack'});
+  const machineId=h('input',{class:'input',type:'text',required:true,autocomplete:'off','aria-label':'签发凭据的执行机 ID'});
+  const reload=button('查看专用凭据',()=>submit(async()=>{clearSecret();await read();}));
+  const clearSecret=()=>{
+    const input=issued.querySelector('input');
+    if(input)input.value='';
+    replace(issued);
+  };
+  function confirmRevoke(id){
+    clearSecret();
+    replace(actions,h('p',{},'确认撤销 '+id+' 的专用凭据？'),
+      h('div',{class:'row'},button('取消撤销',()=>replace(actions,form)),button('确认撤销',()=>submit(async()=>{
+        await request('machine-credentials/revoke',{id},csrf,signal);
+        if(!active())return;
+        await read();
+      }))));
+  }
+  async function read(){
+    replace(actions);replace(rows);
+    const result=await request('machine-credentials',undefined,{},signal);
+    if(!active())return;
+    reload.textContent='刷新专用凭据';
+    replace(rows,result.machines.length?result.machines.map(({id})=>h('div',{class:'row'},h('code',{},id),
+      button('撤销 '+id,()=>confirmRevoke(id)))):h('p',{class:'small muted'},'还没有专用执行机凭据。'));
+    replace(actions,form);
+  }
+  const form=h('form',{class:'stack',onsubmit:event=>{event.preventDefault();void submit(async()=>{
+    const id=machineId.value.trim();
+    if(!id)throw Error('请输入执行机 ID。');
+    clearSecret();
+    const result=await request('machine-credentials/issue',{id},csrf,signal);
+    if(!active())return;
+    const token=h('input',{class:'input',type:'text',readOnly:true,autocomplete:'off','aria-label':'新签发的执行机凭据'});
+    token.value=result.token;
+    replace(issued,h('p',{},'请将凭据保存至 '+result.id+' 的执行机配置。此处仅展示一次。'),token,button('清除已显示凭据',clearSecret));
+    machineId.value='';
+    await read();
+  });}},h('label',{class:'field'},'签发凭据的执行机 ID',machineId),h('button',{type:'submit',class:'btn btn--sm'},'签发专用凭据'));
+  const el=h('section',{class:'stack','aria-label':'专用执行机凭据'},h('h3',{},'专用执行机凭据'),
+    h('p',{class:'small muted'},'可在执行机首次连接前签发针对该 ID 的凭据。撤销专用凭据后，使用主令牌的连接仍然有效。'),reload,issued,rows,actions);
+  return {el,clearSecret};
+}
+
 export function createAdminMachines({request,submit,csrf,current}){
   const life=new AbortController(),drafts=new Map();
   const status=h('p',{class:'small muted'}),list=h('div',{class:'stack'}),loadButton=button('查看执行机',load);
   const section=h('section',{class:'stack','aria-label':'执行机管理'},h('h2',{},'执行机管理'),loadButton,status,list);
   const active=()=>current() && section.isConnected && !life.signal.aborted;
+  const credentials=machineCredentials({request,submit,csrf,signal:life.signal,active});
+  section.append(credentials.el);
   let loaded=false;
   function paint(rows){
     loaded=true;loadButton.textContent='刷新执行机';
@@ -50,5 +96,5 @@ export function createAdminMachines({request,submit,csrf,current}){
       }catch(error){if(active())throw error;}
     });
   }
-  return {el:section,close(){life.abort();drafts.clear();replace(list);}};
+  return {el:section,close(){life.abort();credentials.clearSecret();drafts.clear();replace(list);}};
 }
