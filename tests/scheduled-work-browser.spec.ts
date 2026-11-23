@@ -117,6 +117,13 @@ test('现有创建审批生效、单次已触发与到期派发审批 pending/co
     await expect(details).toContainText('source-message');
     await expect(details).toContainText('开始处理时间未记录');
   }
+  for (const [approvalStatus, label] of [['rejected', '派发审批已拒绝'], ['failed', '派发审批处理失败']]) {
+    f.items = [work({ occurrences: [{ key: 'dispatch', kind: 'dispatch', status: 'completed', scheduledFor: at,
+      approvalId: 'dispatch-one', approvalStatus }] })];
+    await emit(page);
+    await expect(panel(page)).toContainText(label + '，本次没有关联执行记录');
+    await expect(panel(page).getByRole('link', { name: '查看实际执行记录' })).toHaveCount(0);
+  }
   f.items = [work({ todoId: 'todo-a', occurrences: [{ key: 'trigger', kind: 'dispatch', status: 'completed', scheduledFor: at,
     workVersion: 1, handledAt: '2026-11-17T08:02:03Z', delayMs: 123000, approvalId: 'dispatch-one', approvalStatus: 'completed', run: { id: 'fixture-run', status: 'failed' } }] })];
   await emit(page);

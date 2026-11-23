@@ -58,6 +58,8 @@ function occurrenceText(o, timeZone) {
   if (o.status === 'skipped' && o.blockedBy) return `本次已跳过 · ${o.blockedBy.reason}（关联计划时间：${timeText(o.blockedBy.scheduledFor, timeZone)}）`;
   if (o.status === 'skipped') return '本次已跳过，原因未记录';
   if (o.run) return `派发审批 · ${approvalText(o.approvalStatus)} · ${runStatus(o.run.status)}`;
+  if (o.kind === 'dispatch' && o.approvalStatus === 'rejected') return '派发审批已拒绝，本次没有关联执行记录';
+  if (o.kind === 'dispatch' && o.approvalStatus === 'failed') return '派发审批处理失败，本次没有关联执行记录';
   if (o.kind === 'dispatch') return `已生成派发审批 · ${approvalText(o.approvalStatus)}；任务最终完成情况未确认，请到对话查看执行记录`;
   if (o.kind === 'brief') return '事实简报已生成（仅程序汇总已接入事实，不调用模型、不外发）';
   return '已处理，原动作类型未确认';
