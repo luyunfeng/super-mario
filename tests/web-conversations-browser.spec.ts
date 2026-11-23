@@ -212,8 +212,20 @@ test('独立对话正文结果可从三条预览翻页定位到较早原文', as
   await expect(drawer.locator('a mark')).toHaveCount(3);
   await expect(drawer.getByLabel('按标题查找')).toHaveValue('季度记录');
   await drawer.getByRole('button', { name: '查看全部匹配发言' }).click();
+  const attempts: string[] = [];
+  await page.route('**/web-conversations/*/search?*before=*', async route => {
+    attempts.push(route.request().url());
+    if (attempts.length === 1) {
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '临时读取失败' }) });
+    } else await route.continue();
+  });
   await drawer.getByRole('button', { name: '加载更多匹配发言' }).click();
+  await expect(drawer.getByRole('alert')).toContainText('临时读取失败');
+  await expect(drawer.locator('a mark')).toHaveCount(20);
+  await drawer.getByRole('button', { name: '重试读取匹配发言' }).click();
   await expect(drawer.locator('a mark')).toHaveCount(22);
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0], attempts[1]);
   await drawer.getByRole('link', { name: '季度记录 0', exact: true }).press('Enter');
   await expect(page.locator('[data-id="synthetic-match-0"][aria-current="true"]')).toBeVisible();
   await page.getByRole('button', { name: '独立对话', exact: true }).click();
