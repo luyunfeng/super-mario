@@ -916,7 +916,7 @@ export async function createWorkbench(config: AppConfig) {
     if (todoId && (!todo || todo.projectId !== projectId)) throw new InputError('当前范围的待办不可用', 404);
     const offset = input.offset === undefined ? 0 : input.offset;
     if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) throw new InputError('查询位置无效');
-    return pendingDecisionPage(store, todoId ? { kind: 'task', todoId, projectId } : projectId ? { kind: 'project', projectId } : { kind: 'global' }, offset);
+    return pendingDecisionPage(store, todoId ? { kind: 'task', todoId, projectId } : projectId ? { kind: 'project', projectId } : { kind: 'global' }, offset, inboxAssistant.list());
   }
   function readInboxHandlingFromAgent(input: Record<string,unknown>):Json {
     if(!['personal','mailbox'].includes(String(input.kind)))throw new InputError('请选择收件来源');

@@ -155,3 +155,19 @@ test('待决定清单仅向正确的项目与待办展示可核实的执行关�
   }
   assert.equal(pendingDecisionPage(store, { kind: 'unmarked' }, 0).total, 0);
 });
+
+test('合并收件追问按项目与待办范围列出，排除已答问题和原始聊天', async t => {
+  const store = await fixture(t);
+  const group = { id: 'a'.repeat(64), version: 2, projectId: 'A', todoIds: ['A'], title: '合成会话', question: '需要哪个环境？',
+    status: 'waiting_user' as const, latestAt: '2030-01-01', preview: 'PRIVATE_PREVIEW', person: 'PRIVATE_PERSON',
+    kind: 'direct' as const, messageIds: ['private-message'], pendingCount: 1 };
+  const groups = [group, { ...group, id: 'mixed', todoIds: ['A', 'sibling'] }, { ...group, id: 'other', projectId: 'B' },
+    { ...group, id: 'answered', status: 'watching' as const }, { ...group, id: 'missing-question', question: '' }];
+  const rows = (todoId?: string) => pendingDecisionPage(store, todoId ? { kind: 'task', projectId: 'A', todoId }
+    : { kind: 'project', projectId: 'A' }, 0, groups).items.filter(row => row.collection === 'conversations');
+  assert.deepEqual(rows().map(row => row.id), [group.id, 'mixed']);
+  const taskRows = rows('A');
+  assert.deepEqual(taskRows.map(row => row.id), [group.id]);
+  assert.equal(taskRows[0]?.webCitation, '[查看待决定事项](#inbox?conversation=' + group.id + ')');
+  assert.doesNotMatch(JSON.stringify(taskRows), /PRIVATE_|private-message/);
+});

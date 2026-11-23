@@ -1,3 +1,4 @@
+import type { InboxConversation } from '../../protocol/src/inbox-conversations.ts';
 import type { ReviewEvidenceReader } from './run-review.ts';
 import type { Approval, BotScope, ExecutorInfo, MachineInfo, MailboxEntry, Project, Run, Todo } from '../../protocol/src/index.ts';
 import type { Store } from '../../plugin-sdk/src/index.ts';
@@ -11,7 +12,12 @@ import type { InboxSuggestion, InboxHandlingRequest } from '../../protocol/src/i
 type WorkStore = Pick<Store, 'list' | 'get'>;
 type Relation = { projectId?: string; todoId?: string; runId?: string };
 
-function pendingDecisions(store: WorkStore, visible: (relation: Relation) => boolean) {
+// A merged question can concern multiple tasks. Only a single-task conversation belongs in a task-specific answer.
+function conversationRelation(group: InboxConversation): Relation {
+  return { projectId: group.projectId, todoId: group.todoIds.length === 1 ? group.todoIds[0] : undefined };
+}
+
+function pendingDecisions(store: WorkStore, visible: (relation: Relation) => boolean, conversations: InboxConversation[] = []) {
   // Resolve ownership from linked facts, never just a model-provided project label.
   const ownership = (value: Relation): Relation => {
     const run = value.runId ? store.get<Run>('runs', value.runId) : undefined;
@@ -43,27 +49,31 @@ function pendingDecisions(store: WorkStore, visible: (relation: Relation) => boo
       version: entry.version, createdAt: entry.createdAt,
       ...ownership(entry.scope.kind === 'task' || entry.scope.kind === 'project' ? entry.scope : {}),
     })),
+    ...conversations.filter(group => group.status === 'waiting_user' && group.question?.trim()).map(group => ({
+      collection: 'conversations' as const, id: group.id, title: group.title.slice(0, 180), question: group.question!.slice(0, 400),
+      version: group.version, createdAt: group.latestAt, ...conversationRelation(group),
+    })),
     // Mixed-project plans must not leak their title into a restricted context.
     ...store.list<Plan>('plans').filter(p => p.status === 'pending' && p.tasks.length > 0 && p.tasks.every(t => visible(ownership(t)))).map(p =>
       ({ collection: 'plans' as const, id: p.id, title: (p.title ?? '').slice(0, 180), version: p.version, createdAt: p.createdAt, ...ownership(p.tasks[0]) })),
   ].filter(visible);
 }
 
-export function pendingDecisionPage(store: WorkStore, scope: BotScope, offset: number) {
+export function pendingDecisionPage(store: WorkStore, scope: BotScope, offset: number, conversations: InboxConversation[] = []) {
   const decisions = pendingDecisions(store, row => scope.kind === 'global' ||
-    (scope.kind !== 'unmarked' && row.projectId === scope.projectId && (scope.kind !== 'task' || row.todoId === scope.todoId)))
+    (scope.kind !== 'unmarked' && row.projectId === scope.projectId && (scope.kind !== 'task' || row.todoId === scope.todoId)), conversations)
     .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.collection.localeCompare(b.collection) || a.id.localeCompare(b.id));
   const end = offset + 25;
-  const routes = { approvals: 'approval', interactions: 'interaction', plans: 'plan', mailboxes: 'mailbox' };
+  const routes = { approvals: '#chat?approval=', interactions: '#chat?interaction=', plans: '#chat?plan=', mailboxes: '#chat?mailbox=', conversations: '#inbox?conversation=' };
   const items = decisions.slice(offset, end).map(row => ({
-    ...row, webCitation: `[查看待决定事项](#chat?${routes[row.collection]}=${encodeURIComponent(row.id)})`,
+    ...row, webCitation: `[查看待决定事项](${routes[row.collection]}${encodeURIComponent(row.id)})`,
   }));
   return { total: decisions.length, items, nextOffset: end < decisions.length ? end : null };
 }
 
 /** Read shared facts at execution time, across channel histories. Never read private settings
  * or copy raw chats. Scope filtering precedes counts, selection and rendering. */
-export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: BotScope, projectId?: string, live?: { reviewEvidence?: ReviewEvidenceReader; executors?: ExecutorInfo[]; inboxConversations?: import("../../protocol/src/inbox-conversations.ts").InboxConversation[] }) {
+export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: BotScope, projectId?: string, live?: { reviewEvidence?: ReviewEvidenceReader; executors?: ExecutorInfo[]; inboxConversations?: InboxConversation[] }) {
   if (scope?.kind === 'unmarked') return { scope: { kind: 'unmarked' }, unavailable: '未标记身份不提供工作事实，请先归类' };
   const project = scope?.kind === 'project' || scope?.kind === 'task' ? scope.projectId : projectId;
   const task = scope?.kind === 'task' ? scope.todoId : undefined;
@@ -84,7 +94,7 @@ export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: Bot
   const handlingVisible=(row:{conversationId:string})=>visible(handlingScopes.get(row.conversationId)??{});
   const handlingSuggestions=recent(store.list<InboxSuggestion>('inbox-handling.suggestions').filter(handlingVisible));
   const handlingRequests=recent(store.list<InboxHandlingRequest>('inbox-handling.requests').filter(handlingVisible));
-  const decisions = pendingDecisions(store, visible);
+  const decisions = pendingDecisions(store, visible, live?.inboxConversations);
   // Only visible runs contribute relationships and counts, even when executors share a machine.
   const executors = new Map((live?.executors ?? []).map(e => [e.id, e]));
   const visibleExecutorIds = new Set(runs.map(r => r.executorId).filter(Boolean));
@@ -135,7 +145,7 @@ export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: Bot
       blockedBy: decisions.filter(decision => decision.runId === r.id).map(({ collection, id, title, version }) => ({ collection, id, title, version })), updatedAt: r.updatedAt ?? r.createdAt })),
       counts: Object.fromEntries(['queued', 'running', 'completed', 'failed', 'cancelled', 'unknown'].map(status => [status, runs.filter(r => r.status === status).length])) },
     externalAgents,
-    inboxAssistant: take((live?.inboxConversations ?? []).filter(c => (!restricted || c.projectId === project) && (task === undefined || c.todoIds.includes(task))).map(c => ({
+    inboxAssistant: take((live?.inboxConversations ?? []).filter(c => visible(conversationRelation(c))).map(c => ({
       id: c.id, projectId:c.projectId, title:clip(c.title), status:c.status, summary:clip(c.summary,400), question:clip(c.question,400), todoIds:c.todoIds.filter(id => todos.some(t => t.id===id)), updatedAt:c.updatedAt,
     }))),
     inboxHandling:{
@@ -159,16 +169,11 @@ export function formatWorkContextMarkdown(context: ReturnType<typeof buildWorkCo
   ];
   const needs = context.needsYou;
   if (needs.total > 0) {
-    lines.push(`\n### 待你拍板 (${needs.total}${needs.omitted ? `，仅列前 ${needs.items.length}` : ''})`);
-    for (const item of needs.items.slice(0, 8)) {
-      lines.push(`- [${item.collection}] ${item.title} (id=${item.id})`);
-    }
-  }
-  const waitingInbox = context.inboxAssistant.items.filter(c => c.status === 'waiting_user');
-  if (waitingInbox.length > 0) {
-    lines.push(`\n### 收件箱待你回答 (${waitingInbox.length})`);
-    for (const item of waitingInbox.slice(0, 6)) {
-      lines.push(`- ${item.title}：${item.question || item.summary}`);
+    const shown = needs.items.slice(0, 8);
+    lines.push(`\n### 待你拍板 (${needs.total}${shown.length < needs.total ? `，仅列前 ${shown.length}` : ''})`);
+    for (const item of shown) {
+      const question = item.collection === 'conversations' ? '：' + item.question : '';
+      lines.push(`- [${item.collection}] ${item.title}${question} (id=${item.id})`);
     }
   }
   const todos = context.todos;

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { chromium, expect } from "@playwright/test";
 import { startServer } from "../apps/server/src/index.ts";
+import { pendingDecisionPage } from "../packages/core/src/work-context.ts";
 import { createInboxAssistant } from "../packages/core/src/inbox-assistant.ts";
 
 test(
@@ -88,7 +89,13 @@ test(
       const errors: string[] = [];
       page.on("pageerror", (e) => errors.push(e.message));
       page.setDefaultTimeout(7000);
-      await page.goto(server.url + "/#inbox?token=people-fixture");
+      const decision = pendingDecisionPage(server.app.store, { kind: "global" }, 0, assistant.list()).items.find(row => row.collection === "conversations");
+      assert.equal(decision?.question, "这项工作使用哪个合成环境？");
+      server.app.store.put("messages", "inbox-question", { id: "inbox-question", conversationId: "main", role: "assistant",
+        status: "done", createdAt: now, text: decision.webCitation });
+      await page.goto(server.url + "/#chat?token=people-fixture");
+      await page.getByRole("link", { name: "查看待决定事项", exact: true }).click();
+      await expect(page).toHaveURL(server.url + "/#inbox?conversation=" + decision.id);
       const inbox = page.locator("#inbox");
       await expect(
         inbox.getByRole("heading", { name: "测试联系人甲", exact: true }),
@@ -112,6 +119,9 @@ test(
       assert.equal(server.app.todos().length, 1);
       assert.equal(server.app.store.list("inbox").length, 3);
       assert.equal(server.app.attention().length, 0);
+      assert.equal(pendingDecisionPage(server.app.store, { kind: "global" }, 0, assistant.list()).total, 0);
+      await page.getByRole("link", { name: "查看全部会话", exact: true }).click();
+      await expect(page).toHaveURL(server.url + "/#inbox");
       await inbox.getByText("查看原始消息（3 条）", { exact: true }).click();
       await expect(
         inbox.getByText("合成上下文 1", { exact: false }),
