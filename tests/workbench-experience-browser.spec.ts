@@ -66,23 +66,33 @@ test('保留通知按最近时间展示，项目简报可查看同一通知',asy
   for(const [id,ago] of [['earlier',60000],['latest',10000]] as const){
     server.app.store.put('notifications.away',id,{id,status:'held',projectId:project.id,...(id==='latest' && {runId}),createdAt:new Date(Date.now()-ago).toISOString(),text:'合成通知 '+id});
   }
+  const messageId='held-reply';
+  server.app.store.put('messages',messageId,{id:messageId,projectId:project.id,conversationId:'project:'+project.id+':work',
+    role:'assistant',status:'done',createdAt:at,text:'核对合成项目原句'});
+  server.app.store.put('notifications.away','reply',{id:'reply',status:'held',projectId:project.id,messageId,
+    createdAt:new Date(Date.now()-30000).toISOString(),text:'合成项目回复通知'});
   const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
   t.after(()=>browser.close());
   const page=await browser.newPage();
   await page.goto(server.url+'/#agent');
   await page.getByRole('button',{name:'简报与离场通知设置'}).click();
   const dialog=page.getByRole('dialog',{name:'简报与离场通知'});
-  await dialog.getByText('已保留的通知（2）').click();
-  await expect(dialog.locator('details article p')).toHaveText(['合成通知 latest','合成通知 earlier']);
+  await dialog.getByText('已保留的通知（3）').click();
+  await expect(dialog.locator('details article p')).toHaveText(['合成通知 latest','合成项目回复通知','合成通知 earlier']);
   await expect(dialog.locator('time').first()).toBeVisible();
   await dialog.getByRole('button',{name:'关闭',exact:true}).click();
   await page.getByRole('button',{name:'查看简报',exact:true}).click();
   const brief=page.getByRole('dialog',{name:'简报与提醒'});
-  await expect(brief).toContainText('低干扰保留通知 2');
+  await expect(brief).toContainText('低干扰保留通知 3');
   await expect(brief.getByRole('link',{name:'合成通知 earlier'})).toHaveCount(0);
   await brief.getByRole('link',{name:'合成通知 latest'}).click();
   await expect(brief).toBeHidden();
   await expect(page.getByRole('heading',{name:'核对合成执行来源',exact:true})).toBeVisible();
   await page.getByRole('tab',{name:'结果',exact:true}).click();
   await expect(page.getByText('已生成合成结果',{exact:true}).first()).toBeVisible();
+  await page.goto(server.url+'/#agent');
+  await page.getByRole('button',{name:'查看简报',exact:true}).click();
+  await brief.getByRole('link',{name:'合成项目回复通知'}).click();
+  await expect(page).toHaveURL(server.url+'/#projects/'+project.id+'/workspace?at='+messageId);
+  await expect(page.locator('#panel-workspace').getByText('核对合成项目原句',{exact:true})).toBeInViewport();
 });
