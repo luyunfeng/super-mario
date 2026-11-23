@@ -186,7 +186,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
           h('span', { class: 'msg__label' }, user ? '我' : '项目助手'),
           m.todoId && h('a', { class: 'small', href: router.href('projects', projectId, 'todos', 'detail', m.todoId) }, '查看关联待办'),
           agentProgress(m),
-          bubble, messageFiles(api,store,m), user && messageImages(api,store,m,(m.todoId || '') === (todoId || '') ? pictures.editCopy.bind(null,composerContext().key) : undefined),
+          bubble, messageFiles(api,store,m,rows,messages), user && messageImages(api,store,m,(m.todoId || '') === (todoId || '') ? pictures.editCopy.bind(null,composerContext().key) : undefined),
           statusText && h('span', { class: 'msg__meta' }, statusText),
           h('span', null, stopTurnButton(api, m, projectId), favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble, transcript.renderMessage), m.conversationId === `project:${projectId}:work` && readAloud.action(m, translation.displayedText), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
     }, m => JSON.stringify([prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, projectId, todoId, anchor, m]));

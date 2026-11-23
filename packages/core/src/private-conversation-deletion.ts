@@ -59,6 +59,14 @@ export function forgetPrivateConversation(store: Store, conversationId: string) 
   for (const row of store.list<{id:string;inputId:string}>('interaction.later-questions')) {
     if (belongs(row.inputId)) store.remove('interaction.later-questions',row.id);
   }
+  for (const origin of store.list<import('./agent-input.ts').OfficeFileOrigin>('office.file-origins')) {
+    const docId=origin.ref.officeDocumentId;
+    if (docId && belongs(origin.sourceId)) {
+      store.remove('office.file-origins',docId);
+      store.remove('office.documents',docId);
+      store.remove('office.files',docId);
+    }
+  }
   removeChatFileUploads(store,conversationId);
   for (const m of messages) {
     removeChatImages(store,m);

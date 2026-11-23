@@ -299,7 +299,7 @@ export function createChatPage({ api, store, scope, router }) {
       const imageDraft = (!message.todoId && (message.projectId || '') === (scope.get() || ''))
         ? pictures.editCopy.bind(null,composerContext().key) : undefined;
       return h('article', { class: 'msg msg--user', dataset: { id: message.id } },
-        h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text), messageImages(api,store,message,imageDraft),messageFiles(api,store,message)),
+        h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text), messageImages(api,store,message,imageDraft),messageFiles(api,store,message,store.view.snapshot?.messages,messages)),
         h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.stoppedByUser ? ' · 已停止本轮' : message.status === 'failed' && ' · 处理失败', stopTurnButton(api, message), mark, transcript.copyMessage(message, translation.displayedText), canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
     }
     const personal = message.conversationId === 'main' && (!message.origin || message.origin === 'user');
@@ -310,7 +310,7 @@ export function createChatPage({ api, store, scope, router }) {
       h('div', { class: 'msg__col' },
         h('span', { class: 'msg__label', dataset: personal ? { assistantName: 'true' } : undefined }, label),
         agentProgress(message, api),
-        bubble, messageFiles(api,store,message),
+        bubble, messageFiles(api,store,message,store.view.snapshot?.messages,messages),
         h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, transcript.copyMessage(message, translation.displayedText), translation.action(message, bubble, transcript.renderMessage), personal && readAloud.action(message, translation.displayedText), canQuote && message.role === 'assistant' && quote.action(message, label))));
   }
 

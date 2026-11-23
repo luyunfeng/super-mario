@@ -15,6 +15,7 @@ interface Options {
   readChatFileText?:NonNullable<Parameters<typeof createAgentRuntime>[0]['readChatFileText']>;
   chatImagesEnabled?():boolean;
   canReadChatImages?(message:Message):boolean;
+  canGenerateOffice?(message:Message):boolean;
   canOpenQuestion?(message:Message):boolean;
   onDirectWebInput?(message:Message):void;
   onInternalQueued?(message:Message,sourceId:string):()=>void;

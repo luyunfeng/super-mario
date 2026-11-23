@@ -151,15 +151,17 @@ class MessageFiles extends HTMLElement {
     this.replaceChildren(); this.visible=false;
   }
   valid() {
-    const {api,owner,store,message}=this.source;
-    const currentAudience=message.directWebInput || store.view.connection==='online';
-    return currentAudience && this.isConnected && !this.revoked && active(store) && store.view.snapshotOwner===owner && api.draftOwner()===owner;
+    const {api,owner,store,message,webOrigin}=this.source;
+    const currentAudience=webOrigin || store.view.connection==='online';
+    const officeEnabled=message.role!=='assistant' || store.view.snapshot?.plugins?.some(p=>p.id==='office-documents' && p.status==='active');
+    return officeEnabled && currentAudience && this.isConnected && !this.revoked && active(store) && store.view.snapshotOwner===owner && api.draftOwner()===owner;
   }
   refresh() {
     const {store,message}=this.source;
-    if (store.view.revokedAttachment?.messageId === message.id) this.revoked=true;
+    const revoked=store.view.revokedAttachment?.messageId;
+    if (revoked && (revoked===message.id || (message.role==='assistant' && revoked===message.replyTo))) this.revoked=true;
     const change=store.view.feishuBotChange;
-    if (change && this.lastBotChange!==change && !message.directWebInput) {
+    if (change && this.lastBotChange!==change && !this.source.webOrigin) {
       this.stop();
       // After a binding change, require an explicit fresh preview request.
       this.suppressAuto=true;
@@ -284,11 +286,25 @@ class MessageFiles extends HTMLElement {
   }
 }
 customElements.define('sm-message-files',MessageFiles);
-export function messageFiles(api,store,message) {
+export function messageFiles(api,store,message,history=store.view.snapshot?.messages,container) {
   if(!message.files?.length) return null;
+  // Assistant replies inherit the audience of the original turn. A paginated
+  // view can lack that input, in which case keep the live-channel checks.
+  const origin=message.role==='assistant'
+    ? history?.find(m=>m.id===message.replyTo && m.role==='user' && m.conversationId===message.conversationId)
+    : message;
+  const webOrigin=origin?.directWebInput===true, owner=api.draftOwner();
+  // A status update can replace the bubble while its authorized preview is
+  // open. Move the same card only within that list and for identical bytes.
+  const existing=container?.querySelector('[data-id="'+CSS.escape(message.id)+'"] sm-message-files');
+  const old=existing?.source;
+  if (old && old.owner===owner && old.webOrigin===webOrigin && old.message.conversationId===message.conversationId &&
+      old.message.role===message.role && old.message.replyTo===message.replyTo &&
+      old.message.projectId===message.projectId && old.message.todoId===message.todoId &&
+      JSON.stringify(old.message.files)===JSON.stringify(message.files)) return existing;
   const node=document.createElement('sm-message-files');
   node.className='message-file-list';
   node.lastBotChange=store.view.feishuBotChange;
-  node.source={api,store,message,owner:api.draftOwner()};
+  node.source={api,store,message,webOrigin,owner};
   return node;
 }

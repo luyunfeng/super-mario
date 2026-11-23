@@ -199,17 +199,22 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       || input.conversationId !== botConversationId(bot, route.conversationThreadId)) return;
     return input;
   }
-  function canReadPrivateResource(message:Message,kind:'image'|'file'):boolean {
-    const binding=kind==='image' ? 'privateImageBinding' : 'privateFileBinding';
+  function canReadPrivateResource(message:Message,kind:'image'|'file'|'office'):boolean {
+    const binding=kind==='office' ? undefined : kind==='image' ? 'privateImageBinding' : 'privateFileBinding';
     try {
       const input=app.store.get<Message>('messages',message.id);
       const route=app.store.get<Routed>('message.routes',message.id);
-      if (!input || !(kind==='image' ? input.images : input.files)?.length || input.role!=='user' || input.replyTo || (input.origin && input.origin!=='user') ||
-          input.conversationId!==message.conversationId || !route?.[binding] || route.channel!=='feishu' ||
+      if (!input || (binding && !(kind==='image' ? input.images : input.files)?.length) || input.role!=='user' || input.replyTo || (input.origin && input.origin!=='user') ||
+          input.conversationId!==message.conversationId || !route || (binding && !route[binding]) || route.channel!=='feishu' ||
           route.inputId!==input.id || !route.botId || !route.sourceMessageId || route.group || route.command || route.relay || route.resultRelayEntryId) return false;
       const bot=current(route.botId), paired=owner(bot);
+      if (kind==='office') {
+        if (input.readOnly || input.todoId || !['global','project'].includes(bot.scope.kind) ||
+            !sameBotScope(bot.scope,route.scope) || route.topic || route.groupTaskOrigin || route.chatBinding?.agentTarget) return false;
+        if (!app.plugins?.list().some(p=>p.id==='office-documents' && p.status==='active')) return false;
+      }
       if (!paired?.senderId || route.accountId!==bot.appId || route.revision!==bot.revision ||
-          route.privateSenderId!==paired.senderId || route.target!==paired.chatId || route[binding]!==groupReadBinding(bot,paired) ||
+          route.privateSenderId!==paired.senderId || route.target!==paired.chatId || (binding && route[binding]!==groupReadBinding(bot,paired)) ||
           route.audienceGeneration!==audienceGeneration(bot.id)) return false;
       const entry=app.store.get<MailboxEntry>('event.mailboxes',route.envelopeId);
       const stamp=app.store.get<Envelope>('feishu.bot.envelopes',route.envelopeId);
@@ -218,7 +223,9 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           entry.botId!==bot.id || entry.target!==paired.chatId || entry.sourceMessageId!==route.sourceMessageId ||
           entry.eventKey!=='feishu-in:'+JSON.stringify([bot.id,bot.appId,route.sourceMessageId]) ||
           receipt?.status!=='completed' || receipt.id!==message.id || !sameBotScope(entry.scope,route.scope) ||
-          stamp?.[binding]!==route[binding] || stamp.privateSenderId!==paired.senderId ||
+          !stamp || (binding && stamp[binding]!==route[binding]) || stamp.privateSenderId!==paired.senderId ||
+          (kind==='office' && (entry.text!==input.text || stamp.group || stamp.command || stamp.relay || stamp.topic || stamp.groupTaskOrigin ||
+            stamp.resultRelayEntryId || groupTasks.recalled(bot.id,bot.appId,paired.chatId,route.sourceMessageId))) ||
           stamp.chatProject!==route.chatProject || stamp.conversationThreadId!==route.conversationThreadId) return false;
       checkEnvelope(entry,bot);
       const project=stamp.chatProject ?? ('projectId' in entry.scope ? entry.scope.projectId : undefined);
@@ -2937,9 +2944,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
             if (bot.scope.kind==='global') groupReads.recall(bot, chatId, messageId);
             groupTasks.recall(bot.id, bot.appId, chatId, messageId);
             const sourceId=app.store.get<string>('feishu.stop-references',stopReference(bot,chatId,messageId));
-            const input=sourceId && app.store.get<Message>('messages',sourceId);
-            if (input && (input.files?.length || input.images?.length))
-              app.events.publish('message-attachment.revoked',{messageId:input.id});
+            // An original text request may own files on its assistant reply.
+            if (sourceId) app.events.publish('message-attachment.revoked',{messageId:sourceId});
           }
         },
         onMessage: (text, source) => track(id, receive(bot, epoch, text, source)),
@@ -3596,6 +3602,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     sweepDecisionNudges, send, dispatchInbox, relay,
     canReadPrivateImage:(message:Message)=>canReadPrivateResource(message,'image'),
     canReadPrivateFile:(message:Message)=>canReadPrivateResource(message,'file'),
+    canReadOfficeSource:(message:Message)=>canReadPrivateResource(message,'office'),
     async collect(id: string) {
       const bot = current(id), state = runtime(id), epoch = state.epoch, adapter = state.adapter;
       if (!adapter) throw noDelivery('机器人尚未连接');

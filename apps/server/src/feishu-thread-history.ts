@@ -128,7 +128,7 @@ export function readPrivateThreadMetadata(store: Pick<Store, 'get' | 'list'>, ro
 }
 
 export function privateThreadPage(store: Pick<Store, 'get' | 'list'>, row: PrivateThread, before: string | null,
-  after: string | null = null, around: string | null = null) {
+  after: string | null = null, around: string | null = null, canReadFiles?: (message: Message) => boolean) {
   const cursors = [before, after, around].filter(value => value !== null);
   if (cursors.length > 1) throw Object.assign(new Error('每次只可采用一个消息位置'), { status: 400 });
   const list = threadMessages(store, [row]).get(row.threadId) ?? [];
@@ -145,6 +145,12 @@ export function privateThreadPage(store: Pick<Store, 'get' | 'list'>, row: Priva
     }
   }
   const page = list.slice(start, end);
-  return { ...metadata(row, list), messages: page.map(({ id, role, text, createdAt, status, images, files, conversationId }) => ({ id, role, text, createdAt, status, ...(images?.length ? { images, conversationId } : {}), ...(files?.length ? { files, conversationId } : {}) })),
+  return { ...metadata(row, list), messages: page.map(message => {
+    const {id,role,text,createdAt,status,images,files,conversationId,replyTo} = message;
+    return {id,role,text,createdAt,status,
+      ...(images?.length ? {images,conversationId} : {}),
+      ...(files?.length && canReadFiles?.(message) ? {files,conversationId,...(role === 'assistant' && replyTo ? {replyTo} : {})} : {}),
+    };
+  }),
     nextBefore: start && page.length ? page[0].id : null, nextAfter: end < list.length && page.length ? page[page.length - 1].id : null };
 }

@@ -53,7 +53,7 @@ export interface ChatFilePreview {
   note?:string;
 }
 export interface ChatFileInput { uploadId:string }
-export interface ChatFileRef { name:string; mime:string; bytes:number; sha256:string }
+export interface ChatFileRef { officeDocumentId?:string; name:string; mime:string; bytes:number; sha256:string }
 export interface ChatImageInput { mime:string; data:string }
 export interface ChatImageRef { mime:string; bytes:number; sha256:string }
 export interface Message { files?:ChatFileRef[]; images?:ChatImageRef[]; runResult?: { runId: string; status: 'completed' | 'failed'; source: string }; directWebInput?: true; stoppedByUser?: true; requestId?: string; progress?: ExecutionProgress; id: string; conversationId: string; role: 'user' | 'assistant'; replyTo?: string; projectId?: string; todoId?: string; readOnly?: boolean; origin?: 'user' | 'result' | 'notification'; text: string; createdAt: string; status?: 'pending' | 'done' | 'failed' }

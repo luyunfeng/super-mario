@@ -85,9 +85,9 @@ import { canRelayBotScope } from './bot-group-policy.ts';
 import { createScopedAgents } from './scoped-agents.ts';
 import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
-import { currentAgentInput } from './agent-input.ts';
+import { currentAgentInput, currentAgentReplyId, type OfficeFileOrigin } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
-import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
@@ -160,6 +160,7 @@ export async function createWorkbench(config: AppConfig) {
   } });
   const runScopes = createRunScopes(store);
   let ownerScopeReady = false;
+  let canReadPrivateOffice: (input:Message)=>boolean = () => false;
   let canReadPrivateFile: (input:Message)=>boolean = () => false;
   let canReadPrivateImage: (input:Message)=>boolean = () => false;
   let ownerScopeRequest: (input:Message)=>boolean = () => false;
@@ -474,7 +475,32 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(savedPrompts);
   plugins.register(projectInstructions);
   plugins.register(assistantProfile);
-  plugins.register(officeDocuments);
+  plugins.register(createOfficeDocuments({
+    async attach(doc,bytes,signal) {
+      const source=currentAgentInput(), replyId=currentAgentReplyId();
+      if (!source || !replyId) throw new InputError('办公工具缺少原对话',403);
+      const validate=()=>{
+        signal.throwIfAborted();
+        const original=store.get<Message>('messages',source.id);
+        if (!original || original.stoppedByUser || !canGenerateOffice(original)) throw new InputError('原对话已失效',403);
+      };
+      const types:Record<string,string>={docx:'wordprocessingml.document',xlsx:'spreadsheetml.sheet',pptx:'presentationml.presentation'};
+      const {uploadId,...file}=await uploadChatFile(store,config.dataDir,{conversationId:source.conversationId,projectId:source.projectId,todoId:source.todoId},
+        doc.filename,'application/vnd.openxmlformats-officedocument.'+types[doc.format],(async function*(){yield bytes;})(),validate);
+      validate();
+      const ref={...file,officeDocumentId:doc.id};
+      store.transaction(()=>{
+        store.put('office.file-origins',doc.id,{sourceId:source.id,replyId,ref} satisfies OfficeFileOrigin);
+        store.remove('message.file-uploads',uploadId);
+      });
+      return ref;
+    },
+    canRead(docId) {
+      const origin=store.get<OfficeFileOrigin>('office.file-origins',docId);
+      const source=origin && store.get<Message>('messages',origin.sourceId);
+      return !!source && canGenerateOffice(source);
+    },
+  }));
   plugins.register(createAssistantSkills(() => machines));
   plugins.register(createMessageFavorites((source, offset, signal) => readNativeFavoritePage(machines, source, offset, signal)));
   plugins.register(createConversationExport((source, includeWork, signal) => exportNativeConversation(machines, source, includeWork, signal), currentMainAssistant, (botId, threadId) => {
@@ -528,8 +554,8 @@ export async function createWorkbench(config: AppConfig) {
   function todoHistory(id: string, before?: string) {
     return readTodoHistory(store, id, before, reviewEvidence);
   }
-  const agent = createAgentRuntime({ config, store, events, contributions, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
-  const scopedAgents = createScopedAgents({ chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, canOpenQuestion:source=>Boolean(questionFormAudience(source)), onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
+  const agent = createAgentRuntime({ config, store, events, contributions, canGenerateOffice, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
+  const scopedAgents = createScopedAgents({ canGenerateOffice, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, canOpenQuestion:source=>Boolean(questionFormAudience(source)), onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
     allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'],
     systemPrompt: SUPERVISOR_SYSTEM_PROMPT });
@@ -1100,10 +1126,32 @@ export async function createWorkbench(config: AppConfig) {
   // A page can display several document cards at once. PDF rendering runs
   // in workers, so limit simultaneous parses across the whole workbench.
   const previewJobs=new Set<Promise<void>>();
+  function canGenerateOffice(source:Message) {
+    if (source.readOnly || !plugins.list().some(p=>p.id==='office-documents' && p.status==='active')) return false;
+    if (source.todoId) {
+      const todo=store.get<Todo>('todos',source.todoId);
+      if (!todo || todo.projectId!==source.projectId) return false;
+    }
+    return attachmentAudience(source,canReadPrivateOffice);
+  }
+  function canReadMessageFiles(message:Message) {
+    if (message.role==='user') return canReadChatFiles(message);
+    if (!chatFilesEnabled() || !message.replyTo || !message.files?.length) return false;
+    const source=store.get<Message>('messages',message.replyTo);
+    if (!source || source.conversationId!==message.conversationId || source.projectId!==message.projectId ||
+        source.todoId!==message.todoId || !canGenerateOffice(source)) return false;
+    return message.files.every(file=>{
+      if (!file.officeDocumentId) return false;
+      const binding=store.get<OfficeFileOrigin>('office.file-origins',file.officeDocumentId);
+      return binding?.replyId===message.id && binding.sourceId===source.id && binding.ref.name===file.name &&
+        binding.ref.bytes===file.bytes && binding.ref.sha256===file.sha256 && binding.ref.mime===file.mime &&
+        store.get<{conversationBound?:boolean}>('office.documents',file.officeDocumentId)?.conversationBound===true;
+    });
+  }
   function messageFile(id:string,conversationId:string,index:number) {
     if (!chatFilesEnabled()) throw new InputError('对话文件插件已停用',503);
     const message=store.get<Message>('messages',id);
-    if (!message || message.conversationId!==conversationId || !canReadChatFiles(message))
+    if (!message || message.conversationId!==conversationId || !canReadMessageFiles(message))
       throw new InputError('当前会话中未找到该文件',404);
     return readChatFile(store,config.dataDir,message,index);
   }
@@ -2567,7 +2615,7 @@ export async function createWorkbench(config: AppConfig) {
       };
       return uploadChatFile(store,config.dataDir,scope,name,mime,source,validate);
     },
-    messageFile,
+    canReadMessageFiles, messageFile,
     async previewMessageFile(id:string,conversationId:string,index:number,signal:AbortSignal) {
       // Authorize before waiting and again before publishing parsed private data.
       const resolveFile=()=>messageFile(id,conversationId,index);
@@ -2617,6 +2665,7 @@ export async function createWorkbench(config: AppConfig) {
     },
     readTopicTurnResult,
     runScopes: {read:runScopes.read,reviseWeb:(id:string,args:Record<string,unknown>)=>reviseScope(id,args,{kind:'web'})},
+    setPrivateOfficeValidator(check:typeof canReadPrivateOffice) { canReadPrivateOffice = check; },
     setPrivateFileValidator(check:typeof canReadPrivateFile) { canReadPrivateFile = check; },
     setPrivateImageValidator(check:typeof canReadPrivateImage) { canReadPrivateImage = check; },
     setScopeRequestValidator(check: typeof ownerScopeRequest) { ownerScopeRequest = check; ownerScopeReady = true; interactions.expireTick(); recoverDeferredQuestions(); },

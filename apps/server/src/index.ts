@@ -387,7 +387,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           }
           const row = bots.requireThread(id, botThreads[2]);
           if (['before', 'after', 'around'].some(key => params.getAll(key).length > 1)) throw new InputError('消息位置不可重复');
-          return json(res, 200, privateThreadPage(app.store, row, params.get('before'), params.get('after'), params.get('around')));
+          return json(res, 200, privateThreadPage(app.store, row, params.get('before'), params.get('after'), params.get('around'), app.canReadMessageFiles));
         }
         const botWorkbench = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/workbench$/);
         if (botWorkbench && method === 'GET') {
