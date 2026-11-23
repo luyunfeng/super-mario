@@ -1203,7 +1203,7 @@ test('飞书对话列表可分页选项目，主对话命令持久切换，旧�
   const restarted = f.instances.at(-1)!.options.onMessage;
   await restarted('重启后的主对话', human('after-restart'));
   assert.equal(f.posts.at(-1)?.text, '重启后的主对话');
-  await restarted('/list 里有什么', human('ordinary-with-command-prefix'));
+  await restarted('//list 里有什么', human('ordinary-with-command-prefix'));
   assert.equal(f.posts.at(-1)?.text, '/list 里有什么');
   await restarted('引用项目继续', { ...human('quote-project'), parentId: 'project-card' });
   assert.equal(projectTexts.at(-1), '引用项目继续');

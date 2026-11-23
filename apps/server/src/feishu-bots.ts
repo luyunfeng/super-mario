@@ -22,7 +22,7 @@ import { createTopicRegistry } from './feishu-topic-registry.ts';
 import { groupTaskCommand, readGroupCommand, topicGroupCommand, topicOwnerWords } from '../../../plugins/feishu-read-command.ts';
 import { createThreadDeletionCleanup, deletedThreads, eraseThreadChannel, type DeletedThread } from './feishu-thread-delete.ts';
 import { parseStartForm, startCard, startCardSnapshot, type StartCardSnapshot } from './feishu-start-card.ts';
-import { trimUnicodeSpace, privateThreadTags, normalizeThreadTags, searchPrivateThreads, readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
+import { trimUnicodeSpace, privateThreadTags, normalizeThreadTags, searchPrivateThreadList, searchPrivateThreads, readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
 import { createPinnedWorkbench } from './feishu-pinned-workbench.ts';
 import { selectedAgentStatus, agentCard, agentCardSnapshot, type AgentCardSnapshot } from './feishu-agent-card.ts';
 import type { ConversationStatus } from '../../../plugins/conversation-status.ts';
@@ -109,7 +109,7 @@ type Owner = { chatId: string; senderId?: string };
 type StartForm = { snapshot: StartCardSnapshot; key: string; sourceId: string; threadId?: string; conversationThreadId?: string; computers: Record<string, string> };
 type StartReceipt = { signature: string; runId?: string; reason?: string; sessionId?: string; demo?: boolean;
   selection?: { messageId: string; previous: string; binding: ChatBinding } };
-type CardNavigation = { questionList?: {messageId:string;rows:{id:string;version:number}[]}; questionForm?: {id:string;version:number;messageId:string;webOnly?:true}; start?: StartForm; threadIds?: string[]; homeMessageId?: string; agentSnapshot?: AgentCardSnapshot; sessionSnapshot?: SessionCardSnapshot; botId: string; appId: string; revision: number; owner: Owner; expiresAt: number };
+type CardNavigation = { threadSearch?:{query:string;page:number}; questionList?: {messageId:string;rows:{id:string;version:number}[]}; questionForm?: {id:string;version:number;messageId:string;webOnly?:true}; start?: StartForm; threadIds?: string[]; homeMessageId?: string; agentSnapshot?: AgentCardSnapshot; sessionSnapshot?: SessionCardSnapshot; botId: string; appId: string; revision: number; owner: Owner; expiresAt: number };
 type Route = { audienceGeneration?: string; channel: 'feishu'; accountId: string; botId: string; target: string; scope: BotScope; revision: number; inputId: string; sourceMessageId?: string };
 type Relay = { sourceMessageId?: string; sourceFingerprint?: string; sourceRouteFingerprint?: string; sourceBotId: string; sourceRevision: number; targetRevision: number; parentEntryId?: string; path: string[]; rootId: string; expiresAt: number; chatId?: string; fingerprint: string };
 type AgentTarget = { startedBy?: string; cwd?: string; runId: string; executorId: string; machineId: string; sessionId: string; nativeSessionId?: string; projectId?: string; todoId?: string };
@@ -118,7 +118,7 @@ type StatusSource = Pick<FeishuMessageSource, 'chatId' | 'parentId' | 'rootId'>;
 type StatusGrant = { source: StatusSource; fingerprint: string; binding?: ChatBinding };
 type GroupTaskOrigin = { chatId: string; messageId: string; binding: string; todoId: string };
 type TopicStamp = { todoId: string; grant: string; opening: boolean; sourceOpening?: true; authorityVersion?: string; externalSource?: { chatId: string; messageId: string } };
-type Envelope = { privateFileBinding?:string; privateImageBinding?:string; topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
+type Envelope = { threadSearchGrant?:string; privateFileBinding?:string; privateImageBinding?:string; topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
 type Routed = Route & Envelope & { envelopeId: string; replyReference?: { text: string; truncated: boolean } | { unavailable: true } };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
 type SentQuestion = DecisionNudgeCard & { questionId:string; version:number; inputId:string; navigation:string; closeAttempted?:true; webOnly?:true; contextFingerprint?:string };
@@ -964,15 +964,24 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     }
     return lookup('');
   }
-  function chatList(bot: FeishuBotSettings, paired: Owner, grant: string, page = 0) {
-    const result = conversationListDashboard(app, { conversationId: botConversationId(bot), id: bot.id, appId: bot.appId,
-      revision: bot.revision, chatId: paired.chatId }, grant, webBase, page, listPrivateHistory(bot.id));
-    const cap = app.store.get<CardNavigation>('feishu.card.navigation', grant);
-    if (cap) app.store.put('feishu.card.navigation', grant, { ...cap, threadIds: result.threadIds });
+  const threadSearchEnabled = () => !!app.plugins?.list().some(p=>p.id==='conversation-search' && p.status==='active');
+  function buildChatList(bot:FeishuBotSettings,paired:Owner,grant:string,page:number,query?:string) {
+    const identity={conversationId:botConversationId(bot),id:bot.id,appId:bot.appId,revision:bot.revision,chatId:paired.chatId};
+    if (query) {
+      const {threads,snippets}=searchPrivateThreadList(app.store,privateThreads(bot.id),query,threadOrder(bot.id).order);
+      return conversationListDashboard(app,identity,grant,webBase,page,threads,{query,snippets});
+    }
+    return conversationListDashboard(app,identity,grant,webBase,page,listPrivateHistory(bot.id));
+  }
+  function chatList(bot: FeishuBotSettings, paired: Owner, grant: string, page = 0, query?:string) {
+    const result=buildChatList(bot,paired,grant,page,query);
+    const cap=app.store.get<CardNavigation>('feishu.card.navigation',grant);
+    if (cap) app.store.put('feishu.card.navigation',grant,{...cap,threadIds:result.threadIds,
+      ...(query && {threadSearch:{query,page}})});
     return result;
   }
   const chatCommands = new Map<string, Promise<void>>();
-  function chatCommand(bot: FeishuBotSettings, epoch: number, paired: { chatId: string; senderId: string }, source: FeishuMessageSource, main: boolean) {
+  function chatCommand(bot: FeishuBotSettings, epoch: number, paired: { chatId: string; senderId: string }, source: FeishuMessageSource, main: boolean, query?:string) {
     const eventKey = 'feishu-dashboard:' + (main ? 'main:' : 'conversations:') + JSON.stringify([bot.id, bot.appId, source.messageId]);
     const pending = chatCommands.get(eventKey);
     if (pending) return pending;
@@ -994,12 +1003,14 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           if (main) app.store.put('feishu.chat-target', digest([bot.id, paired.chatId, '']), captured);
         });
       }
-      const text = '已切回主 Agent。接下来直接发送的消息会进入主对话。';
-      const dashboard = main ? { text, card: buildFeishuMessageCard(text, { title: '主对话' })!, projectIds: undefined, threadIds: undefined }
-        : chatList(bot, paired, navigation(bot, paired, eventKey)!);
+      const issue=query && (!threadSearchEnabled() ? '对话历史搜索插件已停用。' : query.length>500 ? '检索词须为 1 至 500 个字符。' : undefined);
+      const grant=main || issue ? undefined : navigation(bot,paired,eventKey)!;
+      const text=issue || '已切回主 Agent。接下来直接发送的消息会进入主对话。';
+      const dashboard = grant ? chatList(bot,paired,grant,0,query)
+        : { text, card:buildFeishuMessageCard(text,{title:main?'主对话':'搜索独立对话'})!,projectIds:main?undefined:[],threadIds:undefined };
       const entry = await put(bot, { direction: 'outbox', eventKey, title: main ? '主对话' : '最近对话', text: dashboard.text,
         target: paired.chatId, sourceMessageId: source.messageId, requiresConfirmation: false }, bot.scope,
-        { dashboard: { owner: paired, card: dashboard.card }, listProjectIds: dashboard.projectIds, listThreadIds: dashboard.threadIds, chatBinding: binding, platformReplyTo: source.messageId, threadId: source.threadId ?? source.rootId });
+        { dashboard: { owner: paired, card: dashboard.card }, listProjectIds: dashboard.projectIds, listThreadIds: dashboard.threadIds, ...(query && grant && {threadSearchGrant:grant}), chatBinding: binding, platformReplyTo: source.messageId, threadId: source.threadId ?? source.rootId });
       if (active(bot.id, epoch, bot.revision) && entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
     })().finally(() => chatCommands.delete(eventKey));
     chatCommands.set(eventKey, job);
@@ -1297,6 +1308,14 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (!cap || cap.expiresAt <= Date.now() || cap.botId !== bot.id || cap.appId !== bot.appId || cap.revision !== bot.revision
       || !cap.owner.senderId || cap.owner.senderId !== input.operatorId || cap.owner.chatId !== input.chatId
       || paired?.senderId !== input.operatorId || paired.chatId !== input.chatId) return fail;
+    if (cap.threadSearch) {
+      if (!threadSearchEnabled()) return {toast:{type:'info',content:'对话历史搜索插件已停用。'}};
+      if (value.kind==='workbench.chat') {
+        const thread=value.conversationThreadId;
+        if (value.projectId!=='' || typeof thread!=='string' || !cap.threadIds?.includes(thread) ||
+            !buildChatList(bot,paired,value.navigation,cap.threadSearch.page,cap.threadSearch.query).threadIds.includes(thread)) return fail;
+      } else if (value.kind!=='workbench.navigate' || value.view!=='conversations') return fail;
+    }
     if (value.kind === 'workbench.startForm') {
       void track(bot.id, showStart(bot, epoch, paired, { chatId: input.chatId, messageId: input.messageId }, ''));
       return { toast: { type: 'info', content: '正在打开执行表单。' } };
@@ -1488,7 +1507,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       return { toast: { type: 'success', content: thread ? '已切回选中的独立对话。' : project ? '接下来与「' + project.name + '」项目 Agent 对话' : '已切回主 Agent' } };
     }
     if (!['home','tasks','inbox','projects','questions','conversations'].includes(String(value.view)) || !Number.isSafeInteger(value.page) || (value.page as number) < 0 || (value.page as number) > 100000) return fail;
-    const dashboard = value.view === 'conversations' ? chatList(bot, paired, value.navigation, value.page as number)
+    const dashboard = value.view === 'conversations' ? chatList(bot, paired, value.navigation, value.page as number, cap.threadSearch?.query)
       : dashboardPage(bot, paired, value.view as DashboardView, value.page as number, value.navigation, input.messageId);
     pins.displayed(bot.id, input.messageId, value.view as DashboardView | 'conversations', value.page as number, dashboard.card);
     return { toast: { type: 'success', content: '已读取最新状态' }, card: { type: 'raw', data: dashboard.card } };
@@ -1632,6 +1651,16 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!stamp?.listProjectIds || !stamp.dashboard?.owner.senderId || bot.scope.kind !== 'global'
         || paired?.senderId !== stamp.dashboard.owner.senderId || paired.chatId !== entry.target || stamp.dashboard.owner.chatId !== entry.target)
         throw noDelivery('对话清单的配对记录已变化');
+      if (stamp.threadSearchGrant) {
+        const grant=stamp.threadSearchGrant, cap=app.store.get<CardNavigation>('feishu.card.navigation',grant);
+        if (!threadSearchEnabled() || !cap?.threadSearch || cap.expiresAt<=Date.now() ||
+            cap.botId!==bot.id || cap.appId!==bot.appId || cap.revision!==bot.revision ||
+            cap.owner.chatId!==paired.chatId || cap.owner.senderId!==paired.senderId)
+          throw noDelivery('对话检索已停用或授权已过期，请重新发送 /list');
+        const fresh=buildChatList(bot,paired,grant,0,cap.threadSearch.query);
+        if (fresh.text!==entry.text || digest(fresh.card)!==digest(stamp.dashboard.card))
+          throw noDelivery('对话检索结果已变化，请重新发送 /list');
+      }
       if (stamp.listThreadIds?.some(id => !validThread(bot, paired, id, true))) throw noDelivery('独立对话的私聊绑定已变化，请重新发送 /list');
       for (const id of stamp.listProjectIds) {
         const project = app.store.get<Project>('projects', id);
@@ -2512,6 +2541,11 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       // Native attachments have no user-authored instruction. Keys and filenames must never become commands.
       text=source.privateFile ? '[文件]' : '[图片]';
     }
+    // Consume keyword commands even in a registered group topic, before its
+    // ordinary messages can reach a model. Escaped //list remains literal.
+    const listQuery=/^[／/](?:list|对话)\s+([\s\S]+)$/iu.exec((group ? topicOwnerWords(text,source.mentions) : text).trim())?.[1]?.trim();
+    if (listQuery && (group || bot.scope.kind!=='global' || source.senderType!=='user' || !paired?.senderId ||
+        paired.senderId!==source.senderId || paired.chatId!==source.chatId)) return;
     const topicBindingKey = group && bot.scope.kind === 'global' && paired?.senderId ? groupReadBinding(bot, paired) : undefined;
     const topicPolicy = topicBindingKey && topics.read(topicBindingKey).items.find(item => item.chatId === source.chatId);
     if (topicPolicy && (source.senderType !== 'user' || source.senderId !== paired?.senderId ||
@@ -2729,7 +2763,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       await newChat(bot, epoch, { chatId: paired.chatId, senderId: paired.senderId }, source, startChat[1]?.trim() ?? '');
       return;
     }
-    const requested = dashboardCommand(text);
+    const requested = listQuery ? 'conversations' : dashboardCommand(text);
     if (requested === 'stop') {
       if (!group && bot.scope.kind !== 'unmarked' && source.senderType === 'user' && paired?.senderId
         && paired.senderId === source.senderId && paired.chatId === source.chatId)
@@ -2784,7 +2818,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     }
     if (requested === 'main' || requested === 'conversations') {
       if (bot.scope.kind === 'global' && paired?.senderId && paired.senderId === source.senderId)
-        await chatCommand(bot, epoch, { chatId: paired.chatId, senderId: paired.senderId }, source, requested === 'main');
+        await chatCommand(bot, epoch, { chatId: paired.chatId, senderId: paired.senderId }, source, requested === 'main',listQuery);
       return;
     }
     if (requested === 'status' || scopedHelp) {

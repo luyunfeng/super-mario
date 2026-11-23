@@ -56,7 +56,7 @@ async function fixture(t: test.TestContext, model?: ModelConfig, demo = !model) 
     assert.equal(response.status, 200);
     return (await response.json()).current as string;
   }
-  return { bot, sent, users, input, threads, currentModel, get store() { return server.app.store; }, async restart() { await server.close(); server = await startServer(config, { botFactory: factory }); } };
+  return { bot, sent, users, input, threads, currentModel, get url() { return server.url; }, get store() { return server.app.store; }, async restart() { await server.close(); server = await startServer(config, { botFactory: factory }); } };
 }
 
 test('主人裸 /new 延迟开会话，带正文的命令原样保留段落，重放与旧引用不会改错会话', async t => {
@@ -147,6 +147,75 @@ test('连续输入跟随新会话，状态与清单只展示本主人的会话�
   assert.equal((await f.input('重启后继续选中的甲')).conversationId, alpha.conversationId);
 });
 
+
+test('配对主人按标题或正文搜索活动独立对话，点击结果后在原会话续聊',async t=>{
+  const f=await fixture(t);
+  const a=await f.bot('cli_1122334455667788','search-a'),b=await f.bot('cli_2233445566778899','search-b');
+  await a.pair();await b.pair();
+  const query='合成检验词';
+  async function create(person:typeof a,title:string,id:string){
+    await person.receive('/new '+title,id);
+    return f.input(title);
+  }
+  await create(a,query+' 标题甲','title');
+  const body=await create(a,'第二个工作记录','body');
+  await a.receive('本轮正文包含'+query,'follow-body');await f.input('本轮正文包含'+query);
+  await create(a,query+' 已归档','archived');
+  const noMatch=await create(a,'无关会话','unmatched');
+  await create(b,query+' 他人私聊','foreign');
+  const active=await (await f.threads(a.row.id)).json() as {threadId:string;title:string;version:number}[];
+  const find=(title:string)=>active.find(r=>r.title===title)!;
+  const archived=find(query+' 已归档');
+  const headers={authorization:'Bearer synthetic-thread-test','content-type':'application/json'};
+  const hide=await fetch(f.url+'/api/v1/feishu/bots/'+a.row.id+'/threads/'+archived.threadId,{
+    method:'PATCH',headers,body:JSON.stringify({version:archived.version,archived:true})});
+  assert.equal(hide.status,200);
+  // Copied text without its own authenticated private route must never make a thread searchable.
+  f.store.put('messages','unverified-row',{...noMatch,id:'unverified-row',text:query+' 无来源样例'});
+  type Action={value:Record<string,unknown>};
+  const buttons=(card:FeishuSendContext['card'])=>((card?.elements??[]) as Array<{actions?:Action[]}>)
+    .flatMap(el=>el.actions??[]).filter(button=>button.value.kind==='workbench.chat' && button.value.conversationThreadId);
+  const invoke=async(command:string,id:string)=>{
+    const before=f.sent.length;
+    await a.receive(command,id);
+    return t.waitFor(()=>{
+      const reply=f.sent.slice(before).find(row=>row.appId===a.row.appId && row.context?.replyTo===id);
+      assert.ok(reply);return reply;
+    },{timeout:5000});
+  };
+  const wanted=[find(query+' 标题甲').threadId,find('第二个工作记录').threadId].sort();
+  const beforeUnauthorized=f.sent.length;
+  await a.receive('/list '+query,'wrong-sender',{senderId:'stranger'});
+  await a.receive('/对话 '+query,'wrong-chat',{chatType:'group',chatId:'group-test'});
+  assert.ok(!f.sent.slice(beforeUnauthorized).some(row=>['wrong-sender','wrong-chat'].includes(row.context?.replyTo??'')));
+  const matches=await invoke('/list '+query,'listed-english');
+  assert.deepEqual(buttons(matches.context?.card).map(b=>String(b.value.conversationThreadId)).sort(),wanted);
+  assert.doesNotMatch(matches.text,/他人私聊|已归档|无关会话|无来源样例/);
+  const chinese=await invoke('/对话 '+query,'listed-chinese');
+  const choices=buttons(chinese.context?.card);
+  assert.deepEqual(choices.map(b=>String(b.value.conversationThreadId)).sort(),wanted);
+  const selected=choices.find(b=>b.value.conversationThreadId===find('第二个工作记录').threadId)!;
+  await a.click(chinese.id,selected.value);
+  await a.receive('点击搜索卡后继续记录','continue-from-search');
+  assert.equal((await f.input('点击搜索卡后继续记录')).conversationId,body.conversationId);
+  const forged=await a.click(chinese.id,{...selected.value,conversationThreadId:find('无关会话').threadId});
+  assert.ok(forged);
+  await a.receive('检验越界按钮未切换','after-forged');
+  assert.equal((await f.input('检验越界按钮未切换')).conversationId,body.conversationId);
+  const plugin=await fetch(f.url+'/api/v1/plugins/conversation-search',{method:'POST',headers,body:JSON.stringify({enabled:false})});
+  assert.equal(plugin.status,200);
+  const staleChoice=choices.find(b=>b.value.conversationThreadId===find(query+' 标题甲').threadId)!;
+  const stale=await a.click(chinese.id,staleChoice.value);
+  assert.match(JSON.stringify(stale),/停用/);
+  await a.receive('停用后旧搜索卡保持原会话','after-disabled-click');
+  assert.equal((await f.input('停用后旧搜索卡保持原会话')).conversationId,body.conversationId);
+  const disabled=await invoke('/list '+query,'disabled-search');
+  assert.deepEqual(buttons(disabled.context?.card),[]);
+  assert.match(disabled.text,/停用|未启用|关闭/);
+  const ordinary=await invoke('/list','unfiltered');
+  assert.equal(buttons(ordinary.context?.card).length,3);
+  assert.ok(!f.users().some(row=>/^\/(list|对话)/.test(row.text)));
+});
 
 test('新会话实际使用独立 SDK 历史，切回原会话后可继续原来的上下文', { timeout: 60000 }, async t => {
   const inputs: string[][] = [];

@@ -58,46 +58,63 @@ export function dashboardHelp(sessions: boolean, scoped = false) {
   const status = '/status 或 /状态：查看当前会话状态';
   const stop = '/stop 或 /停止、/停：请求中断当前轮次';
   const text = scoped ? [status, stop].join('\n') : ['/home 或「工作台」：打开工作台', '/tasks 或 /进展：查看任务进展', '/inbox 或 /收件箱：查看收件',
-    '/agents [关键词] 或 /agent：查找执行会话', '/start [目标] 或 /开工：填写并提交执行表单', '群内 @ 本机器人发送 /ai 任务：建立待办，在主话题群或主人私聊承接', '在群里发送 /topics 登记话题群，/topics home 设主群，/topics off 退出', '引用任务回报预览发送 /noreply：取消向原群回报', '/list 或 /对话：列出可切换的对话', '/new 或 /新对话：开启独立对话，可在命令后直接写第一条消息', '/main 或 /主对话：切回主 Agent', '/modellist：查看当前对话的模型目录', '/modelchange <模型 ID>：切换当前对话模型', status, stop, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
+    '/agents [关键词] 或 /agent：查找执行会话', '/start [目标] 或 /开工：填写并提交执行表单', '群内 @ 本机器人发送 /ai 任务：建立待办，在主话题群或主人私聊承接', '在群里发送 /topics 登记话题群，/topics home 设主群，/topics off 退出', '引用任务回报预览发送 /noreply：取消向原群回报', '/list 或 /对话：列出可切换的对话', '/list 关键词 或 /对话 关键词：搜索独立对话', '/new 或 /新对话：开启独立对话，可在命令后直接写第一条消息', '/main 或 /主对话：切回主 Agent', '/modellist：查看当前对话的模型目录', '/modelchange <模型 ID>：切换当前对话模型', status, stop, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
   const help = text + '\n在工作台对话中发送命令原文可再加一个斜杠，例如 //status。';
   return { text: help, card: cardDocument('工作台命令', cardSection('在此私聊中发送', help)) };
 }
 
 export function conversationListDashboard(app: DashboardApp, bot: { conversationId: string; id: string; appId: string; revision: number; chatId: string },
-  navigation: string, webBase?: string, requestedPage = 0, history: { threadId: string; title: string; latestAt: string; tags?: string[] }[] = []) {
+  navigation: string, webBase?: string, requestedPage = 0, history: { threadId: string; title: string; latestAt: string; tags?: string[] }[] = [],
+  search?: { query: string; snippets: Record<string, string> }) {
   type Row = { projectId: string; name: string; tags?: string[]; latest?: Message; conversationThreadId?: string; latestAt?: string };
-  const main: Row = { projectId: '', name: '主对话' };
-  const rows = new Map<string, Row>([[bot.conversationId, main]]);
-  if (app.projectWorkspace) for (const project of app.store.list<Project>('projects')) {
-    if (!project.archivedAt) rows.set('project:' + project.id + ':work', { projectId: project.id, name: project.name });
-  }
-  for (const message of app.store.list<Message>('messages')) {
-    const row = rows.get(message.conversationId);
-    if (!row || message.readOnly || message.todoId || (message.projectId && message.projectId !== row.projectId)
-      || (message.origin && message.origin !== 'user') || !message.text.trim()
-      || (message.role !== 'user' && !(message.role === 'assistant' && (message.status === 'done' || message.status === 'failed')))) continue;
-    if (row === main) {
-      // Bot conversations may also receive groups and relays. Only preview this owner's private thread.
-      const input = message.role === 'user' ? message.id : message.replyTo;
-      const route = input && app.store.get<{ botId: string; accountId: string; revision: number; target: string; group?: unknown; relay?: unknown }>('message.routes', input);
-      if (!route || route.botId !== bot.id || route.accountId !== bot.appId || route.revision !== bot.revision
-        || route.target !== bot.chatId || route.group || route.relay) continue;
-    }
-    if (!row.latest || message.createdAt >= row.latest.createdAt) row.latest = message;
-  }
   const independent: Row[] = history.map(thread => ({ projectId: '', name: '独立对话 · ' + thread.title,
     conversationThreadId: thread.threadId, latestAt: thread.latestAt, tags: thread.tags }));
-  const byTime = [...rows.values(), ...independent].sort((a, b) => (b.latest?.createdAt ?? b.latestAt ?? '').localeCompare(a.latest?.createdAt ?? a.latestAt ?? ''));
-  // Keep main/project entries in their existing slots while applying the owner's independent conversation order.
-  let independentIndex = 0;
-  const entries = byTime.map(row => row.conversationThreadId ? independent[independentIndex++] : row);
-  const pages = Math.ceil(entries.length / 5), page = Math.min(requestedPage, pages - 1);
-  const elements: Record<string, unknown>[] = [], lines = ['最近对话'];
+  function recentEntries() {
+    const main: Row = { projectId: '', name: '主对话' };
+    const rows = new Map<string, Row>([[bot.conversationId, main]]);
+    if (app.projectWorkspace) for (const project of app.store.list<Project>('projects')) {
+      if (!project.archivedAt) rows.set('project:' + project.id + ':work', { projectId: project.id, name: project.name });
+    }
+    for (const message of app.store.list<Message>('messages')) {
+      const row = rows.get(message.conversationId);
+      if (!row || message.readOnly || message.todoId || (message.projectId && message.projectId !== row.projectId)
+        || (message.origin && message.origin !== 'user') || !message.text.trim()
+        || (message.role !== 'user' && !(message.role === 'assistant' && (message.status === 'done' || message.status === 'failed')))) continue;
+      if (row === main) {
+        // Bot conversations may also receive groups and relays. Only preview this owner's private thread.
+        const input = message.role === 'user' ? message.id : message.replyTo;
+        const route = input && app.store.get<{ botId: string; accountId: string; revision: number; target: string; group?: unknown; relay?: unknown }>('message.routes', input);
+        if (!route || route.botId !== bot.id || route.accountId !== bot.appId || route.revision !== bot.revision
+          || route.target !== bot.chatId || route.group || route.relay) continue;
+      }
+      if (!row.latest || message.createdAt >= row.latest.createdAt) row.latest = message;
+    }
+    const byTime = [...rows.values(), ...independent].sort((a, b) => (b.latest?.createdAt ?? b.latestAt ?? '').localeCompare(a.latest?.createdAt ?? a.latestAt ?? ''));
+    // Keep main/project entries in their existing slots while applying the owner's independent conversation order.
+    let independentIndex = 0;
+    return byTime.map(row => row.conversationThreadId ? independent[independentIndex++] : row);
+  }
+  const entries = search ? independent : recentEntries();
+  const pages = Math.max(1, Math.ceil(entries.length / 5)), page = Math.max(0, Math.min(Math.trunc(requestedPage) || 0, pages - 1));
+  const title = search ? '搜索独立对话' : '最近对话';
+  const elements: Record<string, unknown>[] = [], lines = [title];
+  if (search) {
+    const query = '关键词：' + publicText(search.query, 160);
+    elements.push({ tag: 'div', text: cardPlain(query) });
+    lines.push(query);
+    if (!entries.length) {
+      const empty = '没有找到匹配的独立对话。';
+      elements.push({ tag: 'div', text: cardPlain(empty) });
+      lines.push(empty);
+    }
+  }
   const visible = entries.slice(page * 5, page * 5 + 5);
   for (const row of visible) {
     const latest = row.latest;
     const labels = row.tags?.length ? '标签：' + row.tags.map(tag => publicText(tag, 32)).join('、') : '';
-    const detail = [publicText(row.name, 60), labels, latest?.createdAt ?? row.latestAt, latest && publicText(latest.text, 100).replace(/\s+/g, ' ')].filter(Boolean).join(' · ');
+    const snippet = search && row.conversationThreadId && Object.hasOwn(search.snippets, row.conversationThreadId)
+      ? publicText(search.snippets[row.conversationThreadId], 220) : '';
+    const detail = search ? [publicText(row.name, 60), snippet].filter(Boolean).join('\n') : [publicText(row.name, 60), labels, latest?.createdAt ?? row.latestAt, latest && publicText(latest.text, 100).replace(/\s+/g, ' ')].filter(Boolean).join(' · ');
     lines.push(detail);
     elements.push({ tag: 'div', text: cardPlain(detail) }, ...cardButtons([
       { label: '在这里聊', value: { kind: 'workbench.chat', navigation, projectId: row.projectId, ...(row.conversationThreadId && { conversationThreadId: row.conversationThreadId }) } },
@@ -111,7 +128,7 @@ export function conversationListDashboard(app: DashboardApp, bot: { conversation
     ...(page > 0 ? [pageButton('上一页', page - 1)] : []),
     ...(page + 1 < pages ? [pageButton('下一页', page + 1)] : []), pageButton('刷新当前页', page),
   ]));
-  return { text: lines.join('\n'), card: cardDocument('最近对话', elements), projectIds: visible.map(row => row.projectId).filter(Boolean), threadIds: visible.flatMap(row => row.conversationThreadId ? [row.conversationThreadId] : []) };
+  return { text: lines.join('\n'), card: cardDocument(title, elements), projectIds: visible.map(row => row.projectId).filter(Boolean), threadIds: visible.flatMap(row => row.conversationThreadId ? [row.conversationThreadId] : []) };
 }
 
 export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp['modelCatalog']>> | undefined, allowed: boolean, title = '主对话模型目录') {

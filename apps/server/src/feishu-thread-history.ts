@@ -79,19 +79,21 @@ function historyEntries(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[
   }).sort((a, b) => b.info.latestAt.localeCompare(a.info.latestAt) || a.info.threadId.localeCompare(b.info.threadId));
 }
 
-export function readPrivateThreadHistory(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], archived = false, tag?: string, order: string[] = []) {
-  const items = historyEntries(store, rows, archived, tag).map(entry => entry.info);
-  if (archived || !order.length) return items;
+function inPreferredOrder<T extends {threadId:string}>(items:T[], order:string[]) {
+  if (!order.length) return items;
   const rank = new Map(order.map((id, i) => [id, i]));
   return items.sort((a, b) => (rank.get(a.threadId) ?? order.length) - (rank.get(b.threadId) ?? order.length));
 }
 
-export function searchPrivateThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived = false, before: string | null = null, tag?: string) {
+export function readPrivateThreadHistory(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], archived = false, tag?: string, order: string[] = []) {
+  const items = historyEntries(store, rows, archived, tag).map(entry => entry.info);
+  return archived ? items : inPreferredOrder(items, order);
+}
+
+function* matchingThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived: boolean, tag?: string) {
   if (typeof query !== 'string' || !query.trim() || query.length > 500)
     throw Object.assign(new Error('检索词须为 1 至 500 个字符'), { status: 400 });
   const pattern = new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
-  const items = [];
-  let pastCursor = before === null;
   for (const { info, list } of historyEntries(store, rows, archived, tag)) {
     const titleMatch = pattern.test(info.title);
     const hits = [];
@@ -106,13 +108,29 @@ export function searchPrivateThreads(store: Pick<Store, 'get' | 'list'>, rows: P
       if (end < text.length && /[\uDC00-\uDFFF]/.test(text[end])) end++;
       hits.push({ id, role, excerpt: text.slice(start, end), truncated: start > 0 || end < text.length, status: status ?? null, createdAt });
     }
-    if (!hits.length && !titleMatch) continue;
+    if (hits.length || titleMatch) yield { ...info, titleMatch, hits };
+  }
+}
+
+export function searchPrivateThreadList(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, order:string[] = []) {
+  const threads = [], snippets: Record<string,string> = Object.create(null);
+  for (const { hits, titleMatch, ...thread } of matchingThreads(store, rows, query, false)) {
+    threads.push(thread);
+    if (hits.length) snippets[thread.threadId] = hits[0].excerpt;
+  }
+  return {threads:inPreferredOrder(threads,order), snippets};
+}
+
+export function searchPrivateThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived = false, before: string | null = null, tag?: string) {
+  const items = [];
+  let pastCursor = before === null;
+  for (const info of matchingThreads(store, rows, query, archived, tag)) {
     if (!pastCursor) {
       pastCursor = info.threadId === before;
       continue;
     }
     if (items.length === 20) return { items, nextBefore: items[items.length - 1].threadId };
-    items.push({ ...info, titleMatch, hits });
+    items.push(info);
   }
   if (!pastCursor) throw Object.assign(new Error('检索位置已失效，请重新搜索'), { status: 409 });
   return { items, nextBefore: null };

@@ -2940,6 +2940,7 @@ test('Web 的 conversation_status 只读取当前范围，排除本轮提问并�
       assert.match(req.system, /\/modelchange 加完整型号/);
       assert.match(req.system, /切换回执只证明选型已保存/);
       assert.match(req.system, /已配对的全局机器人私聊发送 \/list/);
+      assert.match(req.system, /发送 \/list 关键词 或 \/对话 关键词/);
       assert.match(req.system, /发送 \/main 可让后续未引用消息回到该机器人的主会话/);
       return call('conversation_status', { conversationId: forbiddenId }, 'forged-status');
     }
