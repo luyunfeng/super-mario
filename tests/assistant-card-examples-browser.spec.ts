@@ -18,6 +18,8 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
       {name:'收入',points:[{label:'周一',value:2},{label:'周二',value:5}]},
       {name:'支出',points:[{label:'周一',value:-3},{label:'周二',value:-1}]}
     ],fallback:'收支摘要'});
+    for (const kind of ['bar','area']) ctx.contribute('web_extensions','balance-'+kind,{slot:'advanced-interface',renderer:'chart',kind,stacked:true,title:'正负堆叠 '+kind,series:
+      [1,-1,1,-1].map((value,i)=>({name:'系列'+i,points:[{label:'上午',value},{label:'下午',value:-value}]})),fallback:'正负摘要'});
     ctx.contribute('web_extensions','allocation',{slot:'advanced-interface',renderer:'chart',kind:'bar',stacked:true,title:'单日分配',series:[
       {name:'甲',points:[{label:'今日',value:Number.MAX_VALUE}]},
       {name:'乙',points:[{label:'今日',value:Number.MAX_VALUE}]}
@@ -106,6 +108,12 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
     await cursor.press('ArrowRight');
     await expect(cursor).toHaveAttribute('aria-valuetext','周二，收入 5，支出 -1');
   }
+  const bars=page.getByRole('region',{name:'正负堆叠 bar'}).locator('svg rect');
+  assert.deepEqual(await bars.evaluateAll(nodes=>nodes.map(node=>[node.getAttribute('y'),node.getAttribute('height')])),
+    ['27','50','50','27','4','73','73','4'].map(y=>[y,'23']));
+  const areas=page.getByRole('region',{name:'正负堆叠 area'}).locator('svg polygon');
+  await expect(areas.nth(2)).toHaveAttribute('points','75,4 225,96 225,73 75,27');
+  await expect(areas.nth(3)).toHaveAttribute('points','75,96 225,4 225,27 75,73');
   const shares=page.getByRole('region',{name:'单日分配'}).locator('svg rect');
   await expect(shares).toHaveCount(2);
   await expect(shares.first()).toHaveAttribute('width','150');
