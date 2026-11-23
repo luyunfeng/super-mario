@@ -119,6 +119,10 @@ test('execution comparison keeps project boundaries, opens either record and sur
   await expect(comparison.getByRole('article').first()).toContainText('目录内已提交差异：未上报');
   await expect(comparison.getByRole('article').first()).toContainText('本次 Token：未上报');
   await expect(comparison.getByRole('article').last()).toContainText('本次 Token：输入 10 · 输出 0');
+  await expect(comparison).toContainText('用量差额：有执行未上报 Token。');
+  server.app.store.put('runs', first.id, {...first, usage:{input:8, output:4}});
+  await page.reload();
+  await expect(comparison).toContainText('所选执行相对当前执行的 Token 差额：输入 +2 · 输出 -4');
   await comparison.getByRole('link', { name: '查看执行详情' }).last().click();
   await expect(page).toHaveURL(/runs\/second$/);
   await page.goto(base + '?compare=outside');

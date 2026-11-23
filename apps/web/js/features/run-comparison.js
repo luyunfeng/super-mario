@@ -251,7 +251,15 @@ export function compareRuns({ run, runs, projectId, router, executorName, api, s
       h('a', { href: href(item.id) }, '查看执行详情'));
   }
   const peer = peers.find(item => item.id === selected);
+  function usageDifference(peer) {
+    if (!peer.usage || !run.usage) return '用量差额：有执行未上报 Token。';
+    const signed = new Intl.NumberFormat('zh-CN', { signDisplay: 'exceptZero' });
+    const input = peer.usage.input - run.usage.input;
+    const output = peer.usage.output - run.usage.output;
+    return `所选执行相对当前执行的 Token 差额：输入 ${signed.format(input)} · 输出 ${signed.format(output)}`;
+  }
   return h('section', { class: 'stack', 'aria-label': '执行对比' }, pick,
+    peer && h('p', { class: 'small' }, usageDifference(peer)),
     selected && h('a', { href: href(run.id) }, '关闭对比'),
     selected === 'group' && group ? h('div', { class: 'run-comparison' }, group.map((id, index) => {
       const item = id === run.id ? run : peers.find(candidate => candidate.id === id && candidate.comparisonRunIds?.[0] === group[0]);
