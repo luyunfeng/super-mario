@@ -353,6 +353,9 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
           const ok = await confirmDialog({ title: '中断这次执行？', message: '会请求执行者停止；已经产生的修改不会自动撤销。', confirmLabel: '请求中断', danger: true });
           if (ok) { await api.post(`/runs/${encodeURIComponent(run.id)}/cancel`, {}); store.refresh(); }
         } })),
+      comparisonEnabled && ['completed','failed','cancelled'].includes(run.status) && Button({
+        label: '准备执行交接', size: 'sm', onClick: () => openLaunch(undefined, undefined, run),
+      }),
       run.worktree?.name && h('strong', null, '工作树：', run.worktree.name),
       comparisonEnabled && run.worktree?.branch && !run.worktree.removedAt && Button({ label: '重命名工作树', size: 'sm', onClick: () => renameWorktree({ item: run, api, store, router }) }),
       run.worktree && h('p', { class: 'muted small' }, run.worktree.branchDeletedAt ? '工作树目录已清理 · 执行分支已删除' : run.worktree.removedAt ? `工作树目录已清理 · 保留分支 ${run.worktree.branch}` : run.worktree.branch
@@ -382,9 +385,9 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
   }
 
   // —— 发起执行 ——
-  function openLaunch(parentRun, projectTree) {
+  function openLaunch(parentRun, projectTree, handoff) {
     const snapshot = store.view.snapshot;
-    const launchProjectId = parentRun?.projectId ?? projectId;
+    const launchProjectId = parentRun?.projectId ?? handoff?.projectId ?? projectId;
     const binding = snapshot.projects?.find(item => item.id === launchProjectId)?.workspace;
     const candidates = (snapshot.executors ?? []).filter(item => !binding || item.machineId === binding.machineId);
     const executors = candidates.filter(item => item.available);
@@ -396,6 +399,19 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     const key = uuid();
     let uncertain = false;
     const prompt = TextArea({ rows: 4, placeholder: '例如：修复登录页的报错，并跑通现有测试', required: true });
+    const handoffGoal = handoff && TextArea({ rows: 2, required: true });
+    if (handoff) {
+      prompt.value = [
+        '以下为上一轮执行的历史材料。请按本轮交接目标处理，重新核对当前目录和所需权限。',
+        '来源执行：' + handoff.id + ' · ' + executorName(handoff.executorId),
+        handoff.model && '来源指定模型：' + handoff.model,
+        '记录时间：' + handoff.updatedAt + ' · 状态：' + (runStatus[handoff.status]?.text ?? handoff.status),
+        '原任务：' + handoff.prompt,
+        handoff.doneWhen && '原验收标准：' + handoff.doneWhen,
+        handoff.output && '原执行输出：' + handoff.output,
+        handoff.error && '原执行错误：' + handoff.error,
+      ].filter(Boolean).join('\n\n');
+    }
     const executor = Select({ options: [...(!binding ? [['', '自动选择（推荐）']] : []), ...executors.map(item => {
       const host = snapshot.machines?.find(machine => machine.id === item.machineId);
       const label = host?.name && host.name !== item.machineId ? host.name+' ('+item.machineId+')' : item.machineId;
@@ -437,9 +453,9 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     for (const control of [executor, mode]) control.addEventListener('change', sync);
     const drawer = openDrawer({
       onClose: () => { offRoute(); offStore(); },
-      title: '发起执行', subtitle: launchProjectId === 'all' ? '不归属于某个项目' : `归属项目：${(snapshot.projects ?? []).find(item => item.id === launchProjectId)?.name ?? ''}`,
+      title: handoff ? '准备执行交接' : '发起执行', subtitle: launchProjectId === 'all' ? '不归属于某个项目' : `归属项目：${(snapshot.projects ?? []).find(item => item.id === launchProjectId)?.name ?? ''}`,
       body: [!executors.length && Banner({ tone: 'warn', children: unavailable, action: h('a', { class: 'btn btn--sm', href: router.href('agent') }, '查看电脑') }),
-        Field({ label: '要做什么', control: prompt, required: true }), Field({ label: '谁来做', control: executor }), modelField,
+        Field({ label: handoff ? '交接材料' : '要做什么', control: prompt, required: true }), handoffGoal && Field({ label: '本轮交接目标', control: handoffGoal, required: true }), Field({ label: '谁来做', control: executor }), modelField,
         binding && h('p', { class: 'muted folder-path' }, parentRun ? `复用工作树：${parentRun.worktree.name ?? parentRun.worktree.branch} · ${parentRun.cwd}` : projectTree ? `工作树：${projectTree.name} · ${projectTree.cwd}` : `继承项目文件夹：${binding.cwd}`), Field({ label: '关联待办', control: todo }), criteriaField, minutesField, isolation, copiesField,
         Fold({ title: '更多选项', body: [Field({ label: parentRun || projectTree ? '工作树目录' : binding ? '目录（继承项目）' : '目录', control: cwd }), Field({ label: '执行方式', control: mode })] }), message],
       footer: [Button({ label: '取消', onClick: () => drawer.close() }), Button({
@@ -456,7 +472,8 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
             replace(message, Banner({ tone: 'warn', children: '预计用时须大于 0 分钟且不超过一周。' }));
             minutes.focus(); return;
           }
-          const body = { prompt: prompt.value.trim(), ...(!modelField.hidden && model.value.trim() && { model: model.value.trim() }), ...(parentRun && { worktreeRunId: parentRun.id }), ...(isolated && { isolatedWorktree: true, ...(canCompare && { copies: Number(copies.value) }) }), ...(executor.value ? { executorId: executor.value } : {}), ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}),
+          if (handoffGoal && !handoffGoal.value.trim()) { replace(message, Banner({ tone: 'warn', children: '请填写本轮交接目标。' })); handoffGoal.focus(); return; }
+          const body = { prompt: handoffGoal ? prompt.value.trim() + '\n\n本轮交接目标：' + handoffGoal.value.trim() : prompt.value.trim(), ...(!modelField.hidden && model.value.trim() && { model: model.value.trim() }), ...(parentRun && { worktreeRunId: parentRun.id }), ...(isolated && { isolatedWorktree: true, ...(canCompare && { copies: Number(copies.value) }) }), ...(executor.value ? { executorId: executor.value } : {}), ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}),
             ...(launchProjectId !== 'all' ? { projectId: launchProjectId } : {}), ...(todo.value ? { todoId: todo.value } : {}), ...(criteria.value.trim() ? { doneWhen: criteria.value.trim() } : {}),
             ...(minutes.value ? { expectMinutes: Number(minutes.value) } : {}), executionMode: mode.value };
           try { const run = await api.post('/runs', body, { 'Idempotency-Key': key }); drawer.close(); store.refresh(); router.go(router.href('projects', launchProjectId, 'runs', run.id) + (run.comparisonRunIds ? '?compare=group' : '')); }

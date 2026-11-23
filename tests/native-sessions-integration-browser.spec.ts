@@ -94,6 +94,12 @@ console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:21,cached_
 
  server.app.store.put('runs', 'comparison-peer', { ...run, id: 'comparison-peer', prompt: '对照任务' });
  await page.goto(server.url + '/#projects/' + project.id + '/runs/' + run.id + '?compare=comparison-peer');
+ await page.getByRole('button', { name: '准备执行交接' }).click();
+ const handoff = page.getByRole('dialog', { name: '准备执行交接' });
+ await expect(handoff.getByLabel('交接材料')).toHaveValue(new RegExp(run.id));
+ await expect(handoff.getByLabel('交接材料')).toHaveValue(/fixture native recovery evidence/);
+ await handoff.getByRole('button', { name: '取消', exact: true }).click();
+ assert.equal(creates, 1);
  await page.getByRole('button', { name: '查看文件差异' }).first().click();
  const diffDrawer = page.getByRole('dialog', { name: '已提交文件差异' });
  await expect(diffDrawer.getByRole('combobox')).toHaveValue('result.txt');
