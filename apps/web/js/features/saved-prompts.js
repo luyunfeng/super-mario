@@ -11,7 +11,7 @@ const post = (api, body, assistantId) => api.post('/saved-prompts' + (assistantI
 
 // Preserve the user's order within each match group, including the bare "/" list.
 function matchingPrompts(items, filter) {
-  if (!filter) return items.slice(0, 25);
+  if (!filter) return items;
   const exact = [], prefix = [], substring = [];
   for (const item of items) {
     const name = item.name.toLowerCase();
@@ -19,7 +19,7 @@ function matchingPrompts(items, filter) {
     else if (name.startsWith(filter)) prefix.push(item);
     else if (name.includes(filter)) substring.push(item);
   }
-  return [...exact, ...prefix, ...substring].slice(0, 25);
+  return [...exact, ...prefix, ...substring];
 }
 
 function suggestedName(text, items) {
@@ -167,7 +167,8 @@ export function openSavedPrompts({ api, store, initialText, assistantId, assista
   }
   function list() {
     return h('div', { class: 'stack' },
-      Button({ label: '新增提示词', disabled: busy || stale, onClick: () => edit() }),
+      h('p', { class: 'muted' }, '已保存 ' + doc.items.length + ' / 100 条。上移或下移可调整斜杠菜单中的顺序。'),
+      Button({ label: '新增提示词', disabled: busy || stale || doc.items.length >= 100, onClick: () => edit() }),
       !doc.items.length && h('p', { class: 'muted' }, '还没有常用提示词。在输入框键入 / 可选择已保存的提示词。'),
       doc.items.map((item, index) => {
         const action = (label, onClick, atEnd = false) => Button({ label, size: 'sm',
@@ -255,12 +256,14 @@ export function attachSavedPrompts({ api, store, input, getScope = () => '', get
     if (!validMenu?.()) { reset(); return; }
     const filter = query();
     if (filter === null) { reset(); return; }
-    matches = matchingPrompts(items, filter);
+    const results = matchingPrompts(items, filter);
+    matches = results.slice(0, 25);
     selected = Math.min(selected, Math.max(0, matches.length - 1));
     replace(menu, matches.length ? matches.map((item, index) =>
       Button({ label: '/' + item.name, kind: index === selected ? 'primary' : 'secondary', size: 'sm', onClick() {
         if (validMenu?.() && query() !== null) choose(item);
-      } })) : h('p', { class: 'small muted' }, '没有匹配的提示词。'));
+      } })) : h('p', { class: 'small muted' }, '没有匹配的提示词。'),
+      results.length > matches.length && h('p', { class: 'small muted' }, '共匹配 ' + results.length + ' 条，已显示前 ' + matches.length + ' 条。继续输入名称可缩小范围。'));
   }
   async function suggest() {
     if (disposed || inserting || !enabled || query() === null) { reset(); return; }

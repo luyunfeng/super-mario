@@ -76,6 +76,7 @@ test('本人消息可保存为常用提示词，主对话和项目斜杠菜单�
 
   const editButtons = drawer.getByRole('button', { name: /^编辑 / });
   await expect(editButtons).toHaveCount(2);
+  await expect(drawer).toContainText('已保存 2 / 100 条');
   await expect(editButtons.first()).toHaveAccessibleName('编辑 review');
   await button('下移 review').click();
   await expect(editButtons.first()).toHaveAccessibleName('编辑 weekly');
@@ -256,6 +257,7 @@ test('插件设置可管理提示词；并发编辑保留草稿，已打开的�
   await input.fill('/');
   const rows = first.getByRole('group', { name: '提示词候选' }).getByRole('button');
   await expect(rows).toHaveCount(25);
+  await expect(first.getByRole('group', { name: '提示词候选' })).toContainText('共匹配 29 条，已显示前 25 条');
   await input.fill('/PLAN');
   await expect(rows).toHaveText(['/plan', '/plan-beta', '/plan-alpha', '/xplan']);
   await input.press('ArrowDown');
