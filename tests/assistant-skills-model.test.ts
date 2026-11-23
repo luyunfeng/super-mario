@@ -4423,12 +4423,16 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
         assert.ok(!req.tools.includes('inbox_tree'));
         assert.ok(!req.tools.includes('inbox_edit_history'));
         assert.ok(!req.tools.includes('inbox_file_text'));
+        assert.ok(!req.tools.includes('held_notifications_list'));
         assert.ok(!req.tools.includes('inbox_chat_pins'));
         assert.ok(!req.tools.includes('inbox_pin_original'));
         assert.ok(!req.tools.includes('inbox_pin_topic'));
         assert.ok(!req.tools.includes('inbox_message_reactions'));
         assert.doesNotMatch(req.system,/优先用 inbox_tree/);
         return call('inbox_list',{query:'合成中心'},'restricted-list');
+      }
+      if(JSON.stringify(req.content).includes('项目保留通知')){
+        return call('held_notifications_list',{projectId:'fixture-project',query:'交付'},'held-results');
       }
       if(JSON.stringify(req.content).includes('合成附件条款')){
         assert.ok(req.tools.includes('inbox_file_text'));
@@ -4485,6 +4489,12 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
       assert.deepEqual(result.messages,[{messageId:'om_removed',deleted:true}]);
       assert.equal(result.nextCursor,null);
       return {role:'assistant',content:'置顶正文属于合成议题，另有一条回复已撤回。'};
+    }
+    if(req.callId==='held-results'){
+      assert.equal(result.total,1);
+      assert.equal(result.nextOffset,null);
+      assert.equal(result.items[0].text,'合成交付结果');
+      return {role:'assistant',content:result.items[0].text};
     }
     if(req.callId==='file-search'){
       assert.equal(result.total,1);
@@ -4591,6 +4601,12 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
       assert.equal(id,attachmentId);
       return {name:'样例.txt',text:'合成条款第六条',truncated:false};
     });
+    for(const projectId of ['fixture-project','other-project']){
+      server.app.store.put('notifications.away',projectId,{id:projectId,projectId,status:'held',text:'合成交付结果'});
+    }
+    assert.equal(await ask('查询项目保留通知'),'合成交付结果');
+    await adapter.onMessage('查询项目保留通知',{...owner,messageId:'held-query'});
+    await t.waitFor(()=>assert.ok(sent.includes('合成交付结果')));
     const fileQuestion='请查询样例.txt 的合成附件条款';
     assert.equal(await ask(fileQuestion),'合成条款第六条');
     await adapter.onMessage(fileQuestion,{...owner,messageId:'file-question'});

@@ -1905,9 +1905,10 @@ export async function createWorkbench(config: AppConfig) {
     const offset=input.offset ?? 0;
     if(typeof offset!=='number' || !Number.isSafeInteger(offset) || offset<0 || (input.query!==undefined && typeof input.query!=='string'))
       throw new InputError('通知筛选参数无效');
+    const projectId=optionalText(input.projectId,'项目');
     const query=String(input.query ?? '').trim().toLowerCase();
     const rows=store.list<import('../../protocol/src/index.ts').AwayNotification>('notifications.away')
-      .filter(row=>row.status==='held' && row.text.toLowerCase().includes(query))
+      .filter(row=>row.status==='held' && (!projectId || row.projectId===projectId) && row.text.toLowerCase().includes(query))
       .sort((a,b)=>(b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.id.localeCompare(b.id));
     const items=rows.slice(offset,offset+20).map(row=>({text:row.text.slice(0,800),textTruncated:row.text.length>800,
       ...(row.createdAt && {createdAt:row.createdAt}),...(row.projectId && {projectId:row.projectId})}));
