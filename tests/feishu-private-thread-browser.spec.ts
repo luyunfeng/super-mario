@@ -238,7 +238,10 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await drawer.getByRole('button', {name:'加载更多匹配发言'}).click();
   await expect(drawer.locator('button mark')).toHaveCount(22);
   await expect(drawer.getByRole('button', {name:/助手.*较新的记录/})).toHaveCount(0);
+  await drawer.getByLabel('搜索独立对话').fill(keyword);
   await speaker.selectOption('');
+  await expect(drawer.getByLabel('搜索独立对话')).toHaveValue(keyword);
+  await expect(drawer.getByRole('button', {name:new RegExp('用户.*'+keyword)}).first()).toBeVisible();
   const historicalReply=server.app.store.list<Message>('messages').find(m=>m.role==='assistant' && m.text.includes(keyword))!;
   server.app.store.put('messages',historicalReply.id,{...historicalReply,status:'failed'});
   await drawer.getByRole('textbox', { name: '搜索独立对话' }).fill(keyword);

@@ -167,7 +167,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     const speakerSelect = Select({ options: [['', '全部'], ['user', '我'], ['assistant', '助手']], value: speaker });
     speakerSelect.addEventListener('change', () => {
       speaker = speakerSelect.value;
-      void search(query, archived);
+      void search(input.value, archived);
     });
     const tagFilter = Field({ label: '筛选标签', control: select });
     let tagState;
