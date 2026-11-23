@@ -42,9 +42,11 @@ function column(board: Board, value: Json | undefined) {
   return board.columns.find(c=>c.id===columnId) ?? fail(404,'看板列不存在');
 }
 function view(store: Store, board: Board) {
-  return {...board, cards:board.cards.map(card=>({
-    ...card,title:store.get<Project>('projects',card.projectId)?.name ?? '项目已移除',
-  }))};
+  return {...board, cards:board.cards.map(card=>{
+    const project=store.get<Project>('projects',card.projectId);
+    return {...card,title:project?.name ?? '项目已移除',
+      ...(project && !project.archivedAt && {webCitation:'[查看项目](#projects/'+encodeURIComponent(project.id)+'/workspace)'})};
+  })};
 }
 function batchCards(board: Board, raw: Json | undefined) {
   if (!Array.isArray(raw) || !raw.length || raw.length>1000) fail(400,'每批须提交 1 至 1000 张卡片');

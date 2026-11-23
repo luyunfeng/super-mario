@@ -11,6 +11,7 @@ const inlineTokens = new RegExp([
   /\[核对订阅草案\]\(#memory\?subscriptionDraft=[A-Za-z0-9_-]{1,128}\)/.source,
   /\[确认来源读取\]\(#chat\?approval=[A-Za-z0-9_-]{1,128}\)/.source,
   /\[查看整理记录\]\(#memory\?curator=1&job=[A-Za-z0-9_-]{1,128}\)/.source,
+  /\[查看项目\]\(#projects\/[A-Za-z0-9_-]{1,128}\/workspace\)/.source,
   /\[查看执行\]\(#projects\/[A-Za-z0-9_-]{1,128}\/runs\/[A-Za-z0-9_-]{1,128}\)/.source,
   /\[查看待办\]\(#projects\/[A-Za-z0-9_-]{1,128}\/todos\/detail\/[A-Za-z0-9_-]{1,128}\)/.source,
   /\[查看文件\]\(#projects\/[A-Za-z0-9_-]{1,128}\/workspace\?file=(?:[A-Za-z0-9_.*+\-]|%[0-9A-Fa-f]{2})+\)/.source,
@@ -41,7 +42,7 @@ function renderInline(line) {
       const split = token.indexOf('](');
       const href = token.slice(split + 2, -1), label = token.slice(1, split);
       if (href.startsWith('#')) parts.push(h('a', { href }, label));
-      else if (label === '核对订阅草案' || label === '确认来源读取' || /^查看(?:文件|原文|修订|待办|执行|整理记录|订阅运行记录|待决定事项)$/.test(label)) parts.push(token);
+      else if (label === '核对订阅草案' || label === '确认来源读取' || /^查看(?:项目|文件|原文|修订|待办|执行|整理记录|订阅运行记录|待决定事项)$/.test(label)) parts.push(token);
       else parts.push(externalSourceLink(href, label) ?? token);
     } else if (token.startsWith('<') || /^https?:/i.test(token)) {
       const href = token.startsWith('<') ? token.slice(1, -1) : token;
@@ -160,7 +161,7 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
       h('p', { class: 'md-p' }, reference.passage));
     text = reference.body;
   }
-  const hasMarkdown = text.includes('\n') || text.includes('`') || text.includes('**') || /https?:\/\//i.test(text) || /\[(?:核对订阅草案|查看(?:文件|原文|修订|待办|执行|整理记录|订阅运行记录|待决定事项))\]\(/.test(text) || /^ {0,3}(?:#{1,6}(?:\s|$)|>)/.test(text) || /^\s*(?:[-*]\s|\d+\.\s)/.test(text);
+  const hasMarkdown = text.includes('\n') || text.includes('`') || text.includes('**') || /https?:\/\//i.test(text) || /\[(?:核对订阅草案|查看(?:项目|文件|原文|修订|待办|执行|整理记录|订阅运行记录|待决定事项))\]\(/.test(text) || /^ {0,3}(?:#{1,6}(?:\s|$)|>)/.test(text) || /^\s*(?:[-*]\s|\d+\.\s)/.test(text);
   if (!hasMarkdown) return quoted ? h('div', { class: 'md' }, quoted, text) : text;
 
   const blocks = quoted ? [quoted] : [];

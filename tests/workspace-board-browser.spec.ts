@@ -93,6 +93,12 @@ test('主人从项目页添加项目，按可见范围批量置顶和归档，�
   await expect(cardHistory).not.toContainText(projects[0].name);
   assert.equal((await post('/plugins/workspace-board',{enabled:false})).status,200);
   await expect(cardHistory).toBeHidden();await expect(board).toBeHidden();await expect(entry).toHaveCount(0);
+  const citation='[查看项目](#projects/'+projects[1].id+'/workspace)';
+  server.app.store.put('messages','fixture-board-reply',{id:'fixture-board-reply',role:'assistant',conversationId:'main',
+    createdAt:new Date().toISOString(),status:'done',text:citation});
+  await page.goto(server.url+'/#chat');await page.reload();
+  await page.getByRole('link',{name:'查看项目',exact:true}).click();
+  await expect.poll(()=>new URL(page.url()).hash).toBe('#projects/'+projects[1].id+'/workspace');
 });
 
 test('批量移动非连续卡后撤销还原原序，另一窗口调序立即收回旧撤销', {timeout:30000},async t=>{

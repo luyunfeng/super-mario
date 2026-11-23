@@ -4792,6 +4792,7 @@ test('工作区看板只在主人 Web 主对话和飞书配对私聊提供当前
     }
     if (req.callId === 'find-card') {
       assert.equal(result.cards[0].id, cardId);
+      assert.equal(result.cards[0].webCitation,'[查看项目](#projects/'+result.cards[0].projectId+'/workspace)');
       return call('workspace_board_activity', {cardId:result.cards[0].id}, 'history');
     }
     if (req.callId === 'history') {
