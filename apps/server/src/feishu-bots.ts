@@ -3799,7 +3799,11 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         const items = rows.slice(index + 1, index + 21);
         return { items, nextBefore: index + 1 + items.length < rows.length ? items.at(-1)!.threadId : null };
       }
-      return searchPrivateThreads(app.store, privateThreads(id), query, archived, before, tag);
+      const page=searchPrivateThreads(app.store,privateThreads(id),query,archived,before,tag);
+      if(sourceId)return page;
+      return {...page,items:page.items.map(thread=>({...thread,hits:thread.hits.map(hit=>({...hit,
+        webCitation:'[查看原文](#agent/private-thread/'+[id,thread.threadId,hit.id].map(encodeURIComponent).join('/')+')'
+      }))}))};
     },
     workbenchStatus: pins.status,
     async refreshCommandGroup() {

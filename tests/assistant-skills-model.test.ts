@@ -3385,7 +3385,7 @@ test('独立对话助手使用当前版本改名和归档，Web 主助手仅指�
 });
 
 test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离其他会话', async t => {
-  let adapter!: FeishuOptions, botId = '';
+  let adapter!: FeishuOptions, botId = '', webSearch=false;
   const sent: string[] = [];
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
@@ -3403,6 +3403,7 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
       assert.match(req.system, /引用正文须写明会话标题和发言角色/);
       assert.match(req.system, /createdAt.*pending.*处理中.*failed.*处理失败.*对应执行记录/);
       const web = JSON.stringify(req.content).includes('从网页查');
+      webSearch=web;
       return web ? call('private_conversation_search', { query: '青瓷样本', botId, tag: '验收' }, 'find-source')
         : call('private_conversation_search', { query: '青瓷样本', botId: 'other-bot' }, 'wrong-account');
     }
@@ -3425,6 +3426,7 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
     assert.match(hit.excerpt, /青瓷样本/);
     const failed=page.items[0].hits.find((item:{role:string})=>item.role==='assistant');
     assert.equal(failed.status,'failed');assert.equal(failed.createdAt,'2099-01-01T00:00:00.000Z');
+    assert.equal(failed.webCitation,webSearch ? '[查看原文](#agent/private-thread/'+botId+'/'+page.items[0].threadId+'/failed-excerpt)' : undefined);
     return { role: 'assistant', content: '已从用户发言核对青瓷样本。' };
   }, options => {
     adapter = options;
