@@ -110,9 +110,21 @@ test('Web 和飞书可以相互核对同一机器人的选型，Web 主会话独
   await page.getByRole('button', { name: '会话模型', exact: true }).click();
   const list = page.getByRole('combobox', { name: /^模型清单/ });
   await expect(list).toHaveValue('gpt-4o');
+  let picks = 0;
+  await page.route(url, async route => {
+    picks++;
+    assert.equal((await route.fetch()).status(), 200);
+    await route.abort('failed');
+  });
   await list.selectOption('gpt-4o-mini');
-  await page.getByRole('button', { name: '应用到此会话' }).click();
-  await expect(page.getByRole('dialog')).toContainText('已保存，下条消息使用所选模型');
+  const apply = page.getByRole('button', { name: '应用到此会话' });
+  await apply.click();
+  await expect(page.getByRole('dialog')).toContainText('切换结果未知');
+  await expect(apply).toBeDisabled();
+  await page.getByRole('button', { name: '查看当前配置的模型清单' }).click();
+  await expect(list).toBeEnabled();
+  await expect(list).toHaveValue('gpt-4o-mini');
+  assert.equal(picks, 1);
   await send('/modellist', 'check-from-bot');
   assert.match(replies.at(-1)!, /当前模型 · gpt-4o-mini/);
   await send('/modelchange gpt-4o', 'restore-from-bot');
