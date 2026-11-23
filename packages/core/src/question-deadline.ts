@@ -35,8 +35,8 @@ export function questionDeadline(input:{kind:string;runId?:string;questions?:Que
   return {decisionDeadlineAt:new Date(at).toISOString(),reversible:input.reversible};
 }
 
-export function cardAcceptsAnswer(card:Pick<Card,'status'|'expiresAt'|'decisionDeadlineAt'|'reversible'|'deadlineRemindedAt'>,now=Date.now()) {
+export function cardAcceptsAnswer(card:Pick<Card,'status'|'expiresAt'|'decisionDeadlineAt'|'reversible'|'deadlineRemindedAt'|'contextRequestedAt'>,now=Date.now()) {
   if (card.status!=='open') return false;
-  if (card.decisionDeadlineAt) return Date.parse(card.decisionDeadlineAt)>now || card.reversible===false || !!card.deadlineRemindedAt;
+  if (card.decisionDeadlineAt) return Date.parse(card.decisionDeadlineAt)>now || card.reversible===false || !!card.deadlineRemindedAt || !!card.contextRequestedAt;
   return Date.parse(card.expiresAt)>now;
 }

@@ -82,9 +82,12 @@ export function createTodoDecisions(store: Store, workDecisions: Ledger) {
     for (const card of store.list<Card>('interactions')) {
       // user_chat is authored by the model's answer tool. Only a direct user answer is evidence.
       if (card.kind !== 'question' || !card.runId || !runs.has(card.runId) || card.projectId !== todo.projectId ||
-          card.status !== 'answered' || card.answeredBy !== 'user' || !card.answer?.trim()) continue;
-      // The deadline limits answering. An answer recorded in time remains a historical decision.
-      if (!(Date.parse(card.answeredAt ?? '') < Date.parse(card.expiresAt))) continue;
+          card.status !== 'answered' || !['user','user_feishu'].includes(card.answeredBy ?? '') || !card.answer?.trim()) continue;
+      // A paused default or a reminder leaves the same run question open for a later human answer.
+      const answeredAt = Date.parse(card.answeredAt ?? '');
+      const keptOpen = card.decisionDeadlineAt && [card.contextRequestedAt,card.deadlineRemindedAt]
+        .some(at => at && Date.parse(at) <= answeredAt);
+      if (!(answeredAt < Date.parse(card.expiresAt) || keptOpen)) continue;
       if ([card.title, card.body, card.answer].some(value => credential.test(value))) continue;
       times?.set('answer:' + card.id, card.answeredAt!);
       decisions.push({ id: 'answer:' + card.id, text: card.title + '：' + card.answer.trim(),

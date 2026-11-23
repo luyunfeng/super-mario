@@ -43,7 +43,7 @@ test('manual decisions validate the todo, deduplicate retries and persist withdr
   assert.deepEqual(service.list('todo'), []);
 });
 
-test('only on-time, direct user answers to the exact task run enter context, without credential cards', async t => {
+test('direct human answers to the exact run enter task history, including answers after a paused deadline', async t => {
   const { store, ledger, service } = fixture(t);
   const interactions = createInteractions({ store, events: createEventBus(store), decide: () => ({ handler: 'user', layer: 'default' }), answer: async () => {} });
   const input = { kind: 'question' as const, title: '发布顺序', body: '先发布哪一项？', runId: 'run', projectId: 'project' };
@@ -74,6 +74,11 @@ test('only on-time, direct user answers to the exact task run enter context, wit
   assert.equal(service.withdraw('todo', answer.id).active, false);
   assert.equal(createTodoDecisions(store, ledger).list('todo').find(item => item.source === 'answer')?.active, false);
   assert.deepEqual(store.get('interactions', valid.id), valid);
+  const late = new Date(Date.parse(valid.expiresAt) + 1000).toISOString();
+  store.put('interactions',valid.id,{...valid,answeredBy:'user_feishu',answeredAt:late,decisionDeadlineAt:valid.expiresAt,contextRequestedAt:valid.createdAt});
+  assert.equal(service.list('todo').find(row=>row.id===answer.id)?.text,answer.text);
+  store.put('interactions',valid.id,{...valid,answeredBy:'deadline_default',answeredAt:late,decisionDeadlineAt:valid.expiresAt});
+  assert.ok(!service.list('todo').some(row=>row.id===answer.id));
 });
 
 test('executor receives current task ledger decisions and drops withdrawn ones on the next dispatch', async t => {

@@ -28,7 +28,8 @@ export function readRunBlockers(store: Pick<Store, 'get' | 'list'>, asOf?: numbe
             ...(card.decisionDeadlineAt && {alternatives:q.options.filter(item => item.label !== option.label)})}] : [];
         }) : undefined;
         add(card.runId, card.projectId, undefined, { id, title, kind, createdAt, version,
-          ...(includeRecommendations && card.decisionDeadlineAt && {decisionContext:card.body, decisionDeadlineAt:card.decisionDeadlineAt, reversible:card.reversible, deadlineRemindedAt:card.deadlineRemindedAt}),
+          ...(includeRecommendations && card.decisionDeadlineAt && {decisionContext:card.body, contextRequestedAt:card.contextRequestedAt, decisionExplanation:card.decisionExplanation,
+            decisionDeadlineAt:card.decisionDeadlineAt, reversible:card.reversible, deadlineRemindedAt:card.deadlineRemindedAt}),
           ...(questions?.length && {questions}), href: '#chat?interaction=' + encodeURIComponent(id) }, card.decisionDeadlineAt ? card : undefined);
       }
       for (const approval of store.list<Approval>('approvals').sort((a, b) => (b.updatedAt ?? b.createdAt ?? '').localeCompare(a.updatedAt ?? a.createdAt ?? ''))) {

@@ -121,6 +121,7 @@ export function selectedAgentStatus(store: Pick<Store, 'get' | 'list'>, run: Run
   for (const item of pending.slice(0,5)) {
     const block = ['• ' + (types[item.kind] ?? '决定') + ' · ' + line(item.title,120)];
     if (item.decisionContext) block.push(line(item.decisionContext,220));
+    if (item.decisionExplanation) block.push(line(item.decisionExplanation,400));
     if (item.decisionDeadlineAt) block.push(deadlineInfo(item));
     for (const q of item.questions ?? []) {
       block.push(line(q.question,80), '推荐选项：' + line(q.recommend,60));

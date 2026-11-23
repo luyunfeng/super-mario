@@ -38,6 +38,7 @@ export function createQuestionAnswers(questions) {
 }
 
 export function questionDeadlineText(card) {
+  if (card.contextRequestedAt) return '已请求补充背景，本轮截止默认选择已暂停。你仍可在原卡回答。';
   if (!card.decisionDeadlineAt) return '';
   const date = new Date(card.decisionDeadlineAt);
   if (!Number.isFinite(date.getTime())) return '';

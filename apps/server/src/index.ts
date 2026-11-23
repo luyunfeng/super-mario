@@ -223,9 +223,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         }
         if (path === '/api/v1/interactions' && method === 'GET') return json(res, 200, app.interactions.list());
         if (path === '/api/v1/interactions' && method === 'POST') return json(res, 201, app.interactions.openFromWeb(await body(req) as unknown as Parameters<typeof app.interactions.open>[0]));
-        const card = path.match(/^\/api\/v1\/interactions\/([^/]+)\/(answer|withdraw)$/);
+        const card = path.match(/^\/api\/v1\/interactions\/([^/]+)\/(answer|withdraw|context)$/);
         if (card && method === 'POST') {
           const input = await body(req);
+          if (card[2] === 'context') return json(res,200,await app.interactions.requestContext(card[1],input.version as number));
           return json(res, 200, card[2] === 'answer' ? await app.interactions.answer(card[1], input.version as number, answerInput(input,true)) : app.interactions.withdraw(card[1], input.version as number));
         }
         if (path === '/api/v1/policies/presets') {

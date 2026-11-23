@@ -351,17 +351,18 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
     ...(view === 'questions' && { questionRows:questions.slice(page * pageSize, (page + 1) * pageSize).map(q => ({id:q.id,version:q.version})) }) };
 }
 
-export function deadlineInfo(question: Pick<Card,'decisionDeadlineAt'|'reversible'|'deadlineRemindedAt'|'wait'>) {
+export function deadlineInfo(question: Pick<Card,'decisionDeadlineAt'|'reversible'|'deadlineRemindedAt'|'wait'|'contextRequestedAt'>) {
   const deadline = new Date(question.decisionDeadlineAt!);
   if (!Number.isFinite(deadline.getTime())) return '';
   const time = deadline.toLocaleString('zh-CN', {timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}) + '（北京时间）';
+  if (question.contextRequestedAt) return '原决定截止时间 ' + time + '。已暂停到期默认选择，请阅读背景后亲自回答。';
   if (question.deadlineRemindedAt) return '已过决定截止时间 ' + time + '，仍需你亲自回答。';
   if (question.wait === false) return '决定截止时间 ' + time + '。若期间在原对话另发消息，到期将关闭提问。' + (question.reversible ? '若未另发消息或答卡，到期将采用每题的推荐选项。' : '若未另发消息或答卡，到期只提醒一次，仍需你亲自决定。');
   return '决定截止时间 ' + time + (question.reversible ? '，届时未回答将采用每题的推荐选项。' : '，届时未回答只提醒一次，仍需你亲自决定。');
 }
 const compactQuestion = (question: Card) => question.questions?.length === 1 && !question.questions[0].multiSelect && question.questions[0].options.length <= 4
   && question.questions[0].options.every(option => [...option.label].length <= 30);
-export function questionForm(question: Card, navigation: string, webBase?: string) {
+export function questionForm(question: Card, navigation: string, webBase?: string, allowContext = false) {
   const later = '这道题可稍后回答。你可以继续在原对话聊天；要回答这张卡时，请通过表单提交。';
   const deadline = question.decisionDeadlineAt && deadlineInfo(question);
   const submit = {kind:'workbench.answerQuestion',navigation,id:question.id,version:question.version};
@@ -377,6 +378,10 @@ export function questionForm(question: Card, navigation: string, webBase?: strin
   if ((question.questions?.length ?? 0) > 6 || question.questions?.some(q => q.options.length > 20)) return web();
   const elements: Record<string, unknown>[] = [question.title, question.body].filter(Boolean).map(text => ({tag:'div',text:cardPlain(text)}));
   if (question.wait === false) elements.push({tag:'div',text:cardPlain(later)});
+  if (question.contextRequestedAt && question.decisionExplanation)
+    elements.push({tag:'div',text:cardPlain(publicText(question.decisionExplanation,2400))});
+  else if (allowContext && question.runId && question.decisionDeadlineAt && !question.contextRequestedAt)
+    elements.push({tag:'button',text:cardPlain('先告诉我背景'),behaviors:callback({...submit,kind:'workbench.questionContext'})});
   const fields: Record<string, unknown>[] = [];
   const input = (name: string, hint: string) => ({tag:'input',name,width:'fill',input_type:'multiline_text',rows:2,max_length:1000,placeholder:cardPlain(hint)});
   const compact = compactQuestion(question);
