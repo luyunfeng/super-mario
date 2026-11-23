@@ -1,3 +1,4 @@
+import {subscriptionInboxGroups,type HeldInboxItem,type SubscriptionInboxGroup} from './subscription-inbox-groups.ts';
 import {runTitle,subscriptionRuns,type SubscriptionRun} from './subscription-runs.ts';
 export type {SubscriptionRun} from './subscription-runs.ts';
 import { createHash, randomUUID } from 'node:crypto';
@@ -7,14 +8,15 @@ import type { Store } from '../../plugin-sdk/src/index.ts';
 
 type Destination = 'inbox' | 'knowledge';
 type SubscriptionTriagePolicy = Omit<InboxSubscriptionPolicy,'due'>;
-export type SourceItem = {id:string; title:string; text:string; url?:string; dueAt?:string};
+export type SourceItem = {id:string; title:string; text:string; url?:string; dueAt?:string; thread?:string; occurredAt?:string};
 type SubscriptionInput = {sourceId:string; resource:string; name:string; destinations:Destination[]; intervalMinutes:number};
 export interface SourceSubscription extends SubscriptionInput, SubscriptionTriagePolicy {
-  mode?:'snapshot'; dailyAt?:string; id:string; version:number; enabled:boolean; nextRunAt:string; lastRunAt?:string; nextPageNumber?:number; retryAt?:string; error?:string;
+  inboxGroup?:'thread'|'source'; mode?:'snapshot'; dailyAt?:string; id:string; version:number; enabled:boolean; nextRunAt:string; lastRunAt?:string; nextPageNumber?:number; retryAt?:string; error?:string;
 }
 type Options = {
   store:Store;
   timezone?:()=>string;
+  deliverInbox?:(row:SourceSubscription,group:SubscriptionInboxGroup)=>Promise<void>|void;
   onChange?:(id:string)=>void;
   sources:()=>{id:string;name:string;resourceLabel:string;mode?:'snapshot';triageRules?:string}[];
   read:(sourceId:string,resource:string,signal:AbortSignal,cursor?:string,checkpoint?:string)=>Promise<SourceItem[]|{items:SourceItem[];nextCursor?:string;checkpoint?:string}|{snapshot:Omit<SourceItem,'id'>}>;
@@ -31,6 +33,12 @@ const snapshotTargets='source.snapshot-targets';
 type Change={sequence:number; changedAt:string; item:SourceItem};
 type Catchup={item:SourceItem; destination:Destination};
 type SnapshotState = {sequence:number; digest:string; changedAt:string; item:SourceItem};
+const observations='source.subscription-observations';
+const inboxBoundary='source.subscription-inbox-boundary';
+const catchupItems='source.subscription-inbox-catchup';
+const inboxJobs='source.subscription-inbox-jobs';
+type Boundary={catchupAt?:string;groupFrom?:string;awaitingFirst?:boolean;previousGroup?:'thread'|'source'};
+type GroupJob={group:SubscriptionInboxGroup; items:{id:string;title:string}[]};
 const positions = 'source.subscription-positions';
 const stagedPages = 'source.subscription-staged-pages';
 const checkpoints = 'source.subscription-checkpoints';
@@ -61,13 +69,13 @@ function readerFailure(error:unknown):never {
     default: return failure('读取订阅来源失败，请检查来源连接与权限。',502);
   }
 }
-function dueTime(value:unknown) {
+function dueTime(value:unknown,label='截止时间') {
   if(value===undefined) return undefined;
   if(typeof value!=='string' || !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-]\d{2}:[0-5]\d)$/i.test(value))
-    failure('来源条目的截止时间须为带时区的 ISO 时间。',502);
+    failure('来源条目的'+label+'须为带时区的 ISO 时间。',502);
   const datePart=value.slice(0,10), day=Date.parse(datePart+'T00:00:00Z'), time=Date.parse(value);
   if(!Number.isFinite(time) || !Number.isFinite(day) || new Date(day).toISOString().slice(0,10)!==datePart)
-    failure('来源条目的截止时间无效。',502);
+    failure('来源条目的'+label+'无效。',502);
   return new Date(time).toISOString();
 }
 function required(value:unknown,name:string) {
@@ -77,11 +85,11 @@ function required(value:unknown,name:string) {
 function nextRun(minutes:number) {
   return new Date(Date.now()+minutes*60000).toISOString();
 }
-function deliveryKey(id:string,item:string,destination:Destination) {
+export function deliveryKey(id:string,item:string,destination:Destination) {
   return 'source-subscription:'+createHash('sha256').update(JSON.stringify([id,item,destination])).digest('hex');
 }
 
-export function createSourceSubscriptions({store,sources,read,deliver,onChange,timezone=()=>Intl.DateTimeFormat().resolvedOptions().timeZone}:Options) {
+export function createSourceSubscriptions({store,sources,read,deliver,deliverInbox,onChange,timezone=()=>Intl.DateTimeFormat().resolvedOptions().timeZone}:Options) {
   let closed=false;
   const records=subscriptionRuns(store);
   const deliveries=new Set<Promise<void>>();
@@ -126,6 +134,12 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
   function recentChanges(id:string) {
     const since=Date.now()-86400000;
     return (store.get<Change[]>(snapshotChanges,id) ?? []).filter(change=>Date.parse(change.changedAt)>=since);
+  }
+  function observed(id:string) {
+    return (store.get<(HeldInboxItem & {inDigest?:boolean})[]>(observations,id) ?? []).filter(h=>Date.parse(h.storedAt)>=Date.now()-8*86400000);
+  }
+  function recent(id:string) {
+    return observed(id).filter(h=>Date.parse(h.storedAt)>=Date.now()-86400000).slice(-500);
   }
   function snapshotHistory(id:string) {
     open();
@@ -206,7 +220,10 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
       if(tooLong(entry.id,512) || tooLong(entry.title,512) || tooLong(entry.text,16000) || (entry.url && tooLong(entry.url,4096)))
         failure('来源条目超出支持的长度。',502);
       const dueAt=dueTime(entry.dueAt);
-      if(!items.has(entry.id)) items.set(entry.id,{id:entry.id,title:entry.title,text:entry.text,...(entry.url && {url:entry.url}),...(dueAt && {dueAt})});
+      const occurredAt=dueTime(entry.occurredAt,'发生时间');
+      if(entry.thread!==undefined && (typeof entry.thread!=='string' || !entry.thread.trim() || tooLong(entry.thread,512)))
+        failure('来源条目话题编号无效。',502);
+      if(!items.has(entry.id)) items.set(entry.id,{id:entry.id,title:entry.title,text:entry.text,...(entry.url && {url:entry.url}),...(dueAt && {dueAt}),...(entry.thread && {thread:entry.thread}),...(occurredAt && {occurredAt})});
     }
     const first=items.values().next().value;
     const digest=isSnapshot && first ? createHash('sha256').update(JSON.stringify([first.title,first.text,first.url ?? '',...(first.dueAt ? [first.dueAt] : [])])).digest('hex') : undefined;
@@ -241,7 +258,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
     }
     finally { signal?.removeEventListener('abort',cancel); previews.delete(controller); }
   }
-  function settings(input:Record<string,unknown>,mode?:'snapshot'): Pick<SubscriptionInput,'name'|'destinations'|'intervalMinutes'> & SubscriptionTriagePolicy & {dailyAt?:string} {
+  function settings(input:Record<string,unknown>,mode?:'snapshot'): Pick<SubscriptionInput,'name'|'destinations'|'intervalMinutes'> & SubscriptionTriagePolicy & {dailyAt?:string;inboxGroup?:'source'|'thread'} {
     const name=required(input.name,'订阅名称');
     const {destinations}=input;
     const dailyAt=mode==='snapshot' ? input.dailyAt ?? (input.intervalMinutes===undefined ? '08:00' : '') : undefined;
@@ -253,14 +270,15 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
     if(typeof intervalMinutes!=='number' || !Number.isSafeInteger(intervalMinutes) || intervalMinutes<1 || intervalMinutes>10080)
       failure('拉取间隔必须为 1–10080 的整数分钟。',400);
     if(mode==='snapshot' && !dailyAt && intervalMinutes<60) failure('快照固定间隔至少为 60 分钟。',400);
-    const {triageRules,fallbackTier}=input;
+    const {triageRules,fallbackTier,inboxGroup}=input;
+    if(inboxGroup!==undefined && (mode==='snapshot' || (inboxGroup!=='thread' && inboxGroup!=='source'))) failure('收件分组设置无效。',400);
     if(triageRules!==undefined && (typeof triageRules!=='string' || tooLong(triageRules,4000))) failure('分拣规则上限为 4000 个字符。',400);
     if(fallbackTier!==undefined && fallbackTier!=='auto' && fallbackTier!=='wait' && fallbackTier!=='action' && fallbackTier!=='fyi')
       failure('请选择有效的订阅分拣回退策略。',400);
     // Default/empty settings remain absent, including in legacy idempotency fingerprints.
     return {name,intervalMinutes,...(typeof dailyAt==='string' && {dailyAt}),destinations:[...new Set<Destination>(destinations)],
       ...(triageRules?.trim() && {triageRules:triageRules.trim()}),
-      ...(fallbackTier && fallbackTier!=='auto' && {fallbackTier})};
+      ...(fallbackTier && fallbackTier!=='auto' && {fallbackTier}),...(inboxGroup==='source' && {inboxGroup})};
   }
   function configuration(input:Record<string,unknown>) {
     open();
@@ -287,6 +305,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
       if(store.get(rows,id)) failure('创建请求编号已使用。',409);
       const row:SourceSubscription={id,...config,enabled:true,version:1,nextRunAt:config.mode ? new Date().toISOString() : nextRun(config.intervalMinutes)};
       store.put(rows,id,row);
+      if(!row.mode && row.destinations.includes('inbox')) store.put(inboxBoundary,id,{awaitingFirst:true});
       if(requestId) store.put('source.subscription-requests',id,fingerprint);
       onChange?.(id);
       return row;
@@ -294,7 +313,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
   }
   function update(id:string,input:Record<string,unknown>) {
     const fields=Object.keys(input).filter(key=>key!=='version');
-    if(!fields.length || fields.some(key=>!['enabled','name','intervalMinutes','destinations','dailyAt','triageRules','fallbackTier'].includes(key)))
+    if(!fields.length || fields.some(key=>!['enabled','name','intervalMinutes','destinations','dailyAt','triageRules','fallbackTier','inboxGroup'].includes(key)))
       failure('修改项须为名称、调度、投递位置、分拣设置或开关。',400);
     const row=store.transaction(()=>{
       const previous=current(id,input.version);
@@ -303,9 +322,26 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
       if(typeof enabled!=='boolean') failure('订阅开关无效。',400);
       const config=settings({...previous,...input},previous.mode);
       const reschedule=enabled!==previous.enabled || config.intervalMinutes!==previous.intervalMinutes || config.dailyAt!==previous.dailyAt;
-      if(!reschedule && previous.name===config.name && previous.triageRules===config.triageRules && previous.fallbackTier===config.fallbackTier && previous.destinations.length===config.destinations.length &&
+      if(!reschedule && previous.name===config.name && previous.triageRules===config.triageRules && previous.fallbackTier===config.fallbackTier && previous.inboxGroup===config.inboxGroup && previous.destinations.length===config.destinations.length &&
         config.destinations.every(d=>previous.destinations.includes(d))) return previous;
       const next={...previous,...config,enabled,version:previous.version+1};
+      if(!config.inboxGroup) delete next.inboxGroup;
+      if(!previous.mode) {
+        const priorBoundary=store.get<Boundary>(inboxBoundary,id) ?? {};
+        const held=recent(id);
+        const lastTime=Date.parse(held.at(-1)?.storedAt ?? '') || 0;
+        const time=Math.max(Date.now(),lastTime);
+        if(next.inboxGroup!==previous.inboxGroup) {
+          priorBoundary.groupFrom=new Date(time+1).toISOString();priorBoundary.previousGroup=previous.inboxGroup ?? 'thread';
+        }
+        if(next.destinations.includes('inbox') && !previous.destinations.includes('inbox')) {
+          priorBoundary.awaitingFirst=true;delete priorBoundary.catchupAt;
+          const waiting=held.filter(h=>!store.get(receipts+'.'+id,deliveryKey(id,h.item.id,'inbox')));
+          if(waiting.length) store.put(catchupItems,id,waiting);
+        }
+        if(!next.destinations.includes('inbox')) {store.remove(catchupItems,id);delete priorBoundary.awaitingFirst;}
+        store.put(inboxBoundary,id,priorBoundary);
+      }
       if(!config.triageRules) delete next.triageRules;
       if(!config.fallbackTier) delete next.fallbackTier;
       // A newly enabled destination can use the next scheduler tick. Interval changes
@@ -350,7 +386,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
       for(const key of store.list<string>(receipts+'.'+id)) store.remove(receipts+'.'+id,key);
       store.remove(pending,id);
       store.remove(positions,id);store.remove(stagedPages,id);store.remove(checkpoints,id);
-      for(const kind of [snapshots,snapshotChanges,snapshotCatchups,snapshotTargets]) store.remove(kind,id);
+      for(const kind of [snapshots,snapshotChanges,snapshotCatchups,snapshotTargets,observations,inboxBoundary,catchupItems,inboxJobs]) store.remove(kind,id);
       records.remove(id);
       store.remove(rows,id);
     });
@@ -364,7 +400,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
     const sourceRules=requireSource(row.sourceId).triageRules;
     const rules=row.triageRules || sourceRules;
     const until=retryTime(row.sourceId);
-    if(until && !store.get(pending,id) && !store.get(snapshotCatchups,id)) limited(until);
+    if(until && !store.get(pending,id) && !store.get(snapshotCatchups,id) && !store.get(catchupItems,id) && !store.get(inboxJobs,id)) limited(until);
     const audit=records.begin(id,trigger,row.nextPageNumber ?? 1);
     const controller=new AbortController();running.set(id,controller);
     const ownedReceipts=receipts+'.'+id;
@@ -394,11 +430,88 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
       }
       audit.save();
     }
+    const boundary=store.get<Boundary>(inboxBoundary,id) ?? {};
+    function observe(items:SourceItem[]) {
+      const held=observed(id), known=new Set(held.map(h=>h.item.id));
+      let sequence=held.at(-1)?.sequence ?? 0;
+      const time=Math.max(Date.now(),Date.parse(boundary.catchupAt ?? '')+1 || 0,Date.parse(boundary.groupFrom ?? '') || 0);
+      for(const item of items) {
+        if(known.has(item.id) || delivered(deliveryKey(id,item.id,'inbox')) || delivered(deliveryKey(id,item.id,'knowledge'))) continue;
+        held.push({item,storedAt:new Date(time).toISOString(),sequence:++sequence});known.add(item.id);
+      }
+      // Catch-up has a 24-hour / 500-item window. Live thread context retains the latest 300 for eight days.
+      const active=held.filter(h=>!h.inDigest && (delivered(deliveryKey(id,h.item.id,'inbox')) || row.destinations.includes('inbox') && !delivered(deliveryKey(id,h.item.id,'knowledge'))));
+      const keep=new Set([...held.filter(h=>Date.parse(h.storedAt)>=Date.now()-86400000).slice(-500),...active.slice(-300)]);
+      store.put(observations,id,held.filter(h=>keep.has(h)));
+    }
+    async function sendJobs(jobs:GroupJob[]) {
+      for(const job of jobs) {
+        const missing=job.items.filter(item=>!delivered(deliveryKey(id,item.id,'inbox')));
+        if(!missing.length) continue;
+        for(const item of missing) audit.queue(item.id,item.title,'inbox');
+        audit.save();
+        guard();
+        const promise=Promise.resolve().then(()=>{
+          guard();return deliverInbox!({...row,triageRules:rules},structuredClone(job.group));
+        });
+        deliveries.add(promise);
+        try { await promise; } catch { failure('订阅条目投递失败，已保留未完成的投递。',502); }
+        finally { deliveries.delete(promise); }
+        if(closed) failure('订阅服务关闭，投递回执待核对。',503);
+        store.transaction(()=>{
+          if(job.group.kind==='digest') {
+            const ids=new Set(missing.map(item=>item.id));
+            store.put(observations,id,observed(id).map(h=>ids.has(h.item.id) ? {...h,inDigest:true} : h));
+          }
+          for(const item of missing) {
+            const key=deliveryKey(id,item.id,'inbox');store.put(ownedReceipts,key,key);
+            audit.confirm(item.id,'inbox');
+          }
+        });
+      }
+      store.remove(inboxJobs,id);
+    }
+    async function groupInbox(queue:SourceItem[]) {
+      const waiting=queue.filter(item=>!delivered(deliveryKey(id,item.id,'inbox')));
+      if(!waiting.length) return;
+      const waitingIds=new Set(waiting.map(item=>item.id));
+      const available=observed(id);
+      const eligible=available.filter(h=>!h.inDigest && (waitingIds.has(h.item.id) || delivered(deliveryKey(id,h.item.id,'inbox'))));
+      const live=new Set(eligible.slice(-300));
+      const held:HeldInboxItem[]=eligible.filter(h=>live.has(h) || waitingIds.has(h.item.id));
+      const byId=new Set(held.map(h=>h.item.id));
+      for(const frozen of store.get<HeldInboxItem[]>(catchupItems,id) ?? []) {
+        if(waitingIds.has(frozen.item.id) && !byId.has(frozen.item.id)) {
+          held.push(frozen);byId.add(frozen.item.id);
+        }
+      }
+      // Legacy pending rows may predate the observations table.
+      for(const item of waiting) if(!byId.has(item.id))
+        held.push({item,storedAt:new Date().toISOString(),sequence:(held.at(-1)?.sequence ?? 0)+1});
+      const options={name:row.name,timezone:timezone(),inboxGroup:row.inboxGroup};
+      // Catch-up summaries only contain unacknowledged members of the current activation.
+      const catchup=boundary.catchupAt ? held.filter(h=>h.storedAt<=boundary.catchupAt! && waitingIds.has(h.item.id)) : [];
+      const groups=subscriptionInboxGroups({...options,held:catchup.sort((a,b)=>a.sequence-b.sequence).slice(-500),pendingIds:[...waitingIds],catchupAt:boundary.catchupAt})
+        .filter(group=>group.kind==='digest');
+      const digested=new Set(groups.flatMap(group=>group.itemIds));
+      const context=held.filter(h=>!digested.has(h.item.id));
+      const old=boundary.groupFrom ? context.filter(h=>h.storedAt<boundary.groupFrom!) : [];
+      if(old.some(h=>waitingIds.has(h.item.id))) groups.push(...subscriptionInboxGroups({...options,inboxGroup:boundary.previousGroup,
+        held:old,pendingIds:[...waitingIds]}));
+      groups.push(...subscriptionInboxGroups({...options,held:context,pendingIds:[...waitingIds],groupFrom:boundary.groupFrom}));
+      const groupedIds=new Set(groups.flatMap(group=>group.itemIds));
+      if(waiting.some(item=>!groupedIds.has(item.id))) failure('收件分组缺少待投递的条目。',502);
+      const jobs=groups.map(group=>({group,items:waiting.filter(item=>group.itemIds.includes(item.id)).map(({id,title})=>({id,title}))}));
+      store.put(inboxJobs,id,jobs);
+      await sendJobs(jobs);
+    }
     async function deliverQueue(queue:SourceItem[],targets=row.destinations) {
+      const grouped=!row.mode && deliverInbox && targets.includes('inbox') && row.destinations.includes('inbox');
+      if(grouped) await groupInbox(queue);
       for(let index=0;index<queue.length;index++) {
         const item=queue[index]!;
         for(const destination of targets) {
-          if(!row.destinations.includes(destination)) continue;
+          if(!row.destinations.includes(destination) || (grouped && destination==='inbox')) continue;
           guard();
           const key=deliveryKey(id,item.id,destination);
           if(delivered(key)) continue;
@@ -436,6 +549,16 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
     try {
       onChange?.(id);
       guard();
+      if(!row.mode && row.destinations.includes('inbox')) {
+        const saved=store.get<GroupJob[]>(inboxJobs,id);
+        if(saved && deliverInbox) await sendJobs(saved);
+        const catchup=store.get<HeldInboxItem[]>(catchupItems,id)?.map(h=>h.item);
+        if(catchup && !boundary.awaitingFirst) {
+          const existing=store.get<SourceItem[]>(pending,id) ?? [];
+          const combined=[...new Map([...catchup,...existing].map(item=>[item.id,item])).values()];
+          planDeliveries(combined,['inbox']);await deliverQueue(combined,['inbox']);store.remove(catchupItems,id);
+        }
+      }
       if(row.mode==='snapshot') {
         const jobs=store.get<Catchup[]>(snapshotCatchups,id) ?? [];
         for(const job of jobs) planDeliveries([job.item],[job.destination]);
@@ -457,7 +580,16 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
       const position=store.get<Position>(positions,id);
       const checkpoint=store.get<string>(checkpoints,id);
       reading=true;
-      const page=await load(row.sourceId,row.resource,controller,position?.cursor,checkpoint,row.mode);
+      const page=await load(row.sourceId,row.resource,controller,position?.cursor,checkpoint,row.mode).catch(async error=>{
+        const catchup=store.get<HeldInboxItem[]>(catchupItems,id)?.map(h=>h.item);
+        if(boundary.awaitingFirst && catchup?.length && !closed && !controller.signal.aborted) {
+          guard();
+          boundary.catchupAt=new Date(Date.now()).toISOString();
+          store.put(inboxBoundary,id,boundary);
+          planDeliveries(catchup,['inbox']);await deliverQueue(catchup,['inbox']);store.remove(catchupItems,id);
+        }
+        throw error;
+      });
       reading=false;
       guard();
       audit.item.readCount=page.readCount;audit.save();
@@ -492,14 +624,30 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
           advance={position:{page:pageNumber+1,cursor:page.nextCursor,seen:[...seen,fingerprint],candidate}};
         } else advance={checkpoint:candidate};
       }
-      const queue=page.items.filter(item=>row.destinations.some(d=>!delivered(deliveryKey(id,item.id,d))));
-      if(queue.length) {
-        store.transaction(()=>{
+      const caught=store.get<HeldInboxItem[]>(catchupItems,id)?.map(h=>h.item) ?? [];
+      const queue=store.transaction(()=>{
+        observe(page.items);
+        const retained=new Set(recent(id).map(h=>h.item.id));
+        const queue=page.items.filter(item=>row.destinations.some(d=>!delivered(deliveryKey(id,item.id,d)) &&
+          !(d==='inbox' && !retained.has(item.id) && delivered(deliveryKey(id,item.id,'knowledge')))));
+        if(boundary.awaitingFirst) {
+          const newest=recent(id).at(-1)?.storedAt;
+          boundary.catchupAt=new Date(Math.max(Date.now(),Date.parse(newest ?? '') || 0)).toISOString();
+          delete boundary.awaitingFirst;store.put(inboxBoundary,id,boundary);
+        }
+        if(queue.length || caught.length) {
           store.put(pending,id,queue);
           audit.item.newCount+=queue.filter(item=>!delivered(deliveryKey(id,item.id,'inbox')) && !delivered(deliveryKey(id,item.id,'knowledge'))).length;
           planDeliveries(queue);
           if(page.paged || position) store.put(stagedPages,id,advance);
-        });
+        }
+        return queue;
+      });
+      if(queue.length || caught.length) {
+        if(caught.length) {
+          const combined=[...new Map([...caught,...queue].map(item=>[item.id,item])).values()];
+          planDeliveries(combined,['inbox']);await deliverQueue(combined,['inbox']);store.remove(catchupItems,id);
+        }
         await deliverQueue(queue);
       }
       guard();
@@ -532,7 +680,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
     const now=Date.now();
     await Promise.allSettled(store.list<SourceSubscription>(rows).filter(row=>
       row.enabled && !running.has(row.id) && Date.parse(row.nextRunAt)<=now &&
-      (!retryTime(row.sourceId) || Boolean(store.get(pending,row.id) || store.get(snapshotCatchups,row.id)))).map(row=>runPull(row.id,row.version,'schedule')));
+      (!retryTime(row.sourceId) || Boolean(store.get(pending,row.id) || store.get(snapshotCatchups,row.id) || store.get(catchupItems,row.id) || store.get(inboxJobs,row.id)))).map(row=>runPull(row.id,row.version,'schedule')));
   }
   async function close() {
     if(!closed) {
@@ -555,6 +703,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange,t
     }
     const targets=(row.mode && store.get<Destination[]>(snapshotTargets,id)) || row.destinations;
     for(const item of store.get<SourceItem[]>(pending,id) ?? []) for(const dest of targets) add(item,dest);
+    for(const item of store.get<HeldInboxItem[]>(catchupItems,id)?.map(h=>h.item) ?? []) add(item,'inbox');
     for(const job of store.get<Catchup[]>(snapshotCatchups,id) ?? []) add(job.item,job.destination);
     return {items:records.list(id),currentPending:{...counts,totalEntries:entries.size,entries:[...entries.values()].slice(0,10)}};
   }

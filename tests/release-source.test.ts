@@ -26,7 +26,7 @@ test('版本来源通过插件服务匿名读取官方仓库，将已发布版�
     assert.equal(init?.credentials,'omit');
     assert.equal(new Headers(init?.headers).has('authorization'),false);
     return Response.json([
-      {id:27, tag_name:'v3/test', name:'测试版', prerelease:true, draft:false, body:'说明一\n说明二',html_url:'https://invalid.example/'},
+      {id:27, tag_name:'v3/test', published_at:'2026-01-01T08:00:00Z', name:'测试版', prerelease:true, draft:false, body:'说明一\n说明二',html_url:'https://invalid.example/'},
       {id:26, tag_name:'v2', name:null, body:null, draft:false},
       {id:28, draft:true, tag_name:'草稿', body:'此项不应出现'},
     ]);
@@ -35,7 +35,7 @@ test('版本来源通过插件服务匿名读取官方仓库，将已发布版�
     resourceLabel:'仓库（owner/repo）',service:'release-source.releases'}},
     {id:'repository',value:{kind:'subscription-source',mode:'snapshot',name:'GitHub 仓库状态',resourceLabel:'仓库（owner/repo）',service:'release-source.repository'}}]);
   assert.deepEqual(await read(),{checkpoint:'27',items:[
-    {id:'27',title:'测试版',text:'说明一\n说明二',url:'https://github.com/sample/.github/releases/tag/v3%2Ftest'},
+    {id:'27',title:'测试版',occurredAt:'2026-01-01T08:00:00Z',text:'说明一\n说明二',url:'https://github.com/sample/.github/releases/tag/v3%2Ftest'},
     {id:'26',title:'v2',text:'v2',url:'https://github.com/sample/.github/releases/tag/v2'},
   ]});
   for (const bad of ['https://example.invalid/repo','sample/..','sample/%2e%2e','sample/repo?find=x','sample/repo/private','/root','sample/rr#name'])

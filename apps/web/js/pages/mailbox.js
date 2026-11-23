@@ -57,7 +57,7 @@ export function createMailboxPage({ api, store, router, direction }) {
     const personal = incoming ? (snapshot?.inbox ?? []).map(item => updated.get(item.id)?.version > item.version ? updated.get(item.id) : item).map(item => ({
       id: `personal:${item.id}`, kind: 'personal', raw: item, conversation:conversationByMessage.get(item.id),
       title: /^oc_/.test(item.title) ? item.origin?.chatName || '会话消息' : item.title,
-      text: readable(item.text), source: item.origin?.connector || (item.source?.startsWith('feishu:') ? '飞书采集' : '收件消息'),
+      text: readable(item.text), source: item.origin?.connector || (item.source?.startsWith('feishu:') ? '飞书采集' : item.source?.startsWith('subscription:') ? '来源订阅' : '收件消息'),
       status: item.todoId ? '已转待办' : item.archivedAt ? '已归档' : TIER[item.tier] ?? '待查看',
       time: item.receivedAt ?? item.updatedAt,
     })) : [];
@@ -149,6 +149,14 @@ export function createMailboxPage({ api, store, router, direction }) {
   }
   function metadata(item) {
     const origin = item.raw.origin;
+    if(item.raw.source?.startsWith('subscription:')) {
+      const move=item.raw.subscriptionMove;
+      const label={thread:'来源话题',source:'整条订阅',digest:'补收摘要'};
+      return h('div',{class:'row row--wrap mailbox-meta'},
+        item.raw.sender && h('span',null,'订阅：'+item.raw.sender),
+        move && h('span',null,label[move.kind]+' · 本次收录 '+move.count+' 条'),
+        h('span',null,'项目：'+projectName(item)));
+    }
     return h('div', { class: 'row row--wrap mailbox-meta' }, Pill(originLabel(item)),
       origin?.chatName && h('span', null, `会话：${origin.chatName}`),
       (origin?.senderName || item.raw.sender) && h('span', null, `最近发言人：${origin?.senderName || item.raw.sender}`),

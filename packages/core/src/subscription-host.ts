@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import type { Contributions, Extension, KnowledgeBackend, Store } from '../../plugin-sdk/src/index.ts';
-import type { InboxSubscriptionPolicy, InboxThing, Json } from '../../protocol/src/index.ts';
+import type { InboxSubscriptionDelivery, InboxThing, Json } from '../../protocol/src/index.ts';
 import { subscriptionDrafts } from './subscription-drafts.ts';
 import { subscriptionDraftTool, subscriptionReadTool } from './subscription-tools.ts';
-import { createSourceSubscriptions, type SourceItem } from './source-subscriptions.ts';
+import { createSourceSubscriptions, deliveryKey, type SourceItem } from './source-subscriptions.ts';
 
 export function createSubscriptionHost(options: {
   timezone:()=>string;
@@ -11,7 +11,7 @@ export function createSubscriptionHost(options: {
   store: Store;
   contributions: Contributions;
   use: (name:string,input:Json,options:{signal:AbortSignal; timeoutMs:number})=>Promise<Json>;
-  ingest: (source:string,things:InboxThing[],policy?:InboxSubscriptionPolicy)=>Promise<void>;
+  ingest: (source:string,things:InboxThing[],policy?:InboxSubscriptionDelivery)=>Promise<void>;
   knowledge: ()=>KnowledgeBackend;
   changed: (event:string,id:string)=>void;
 }) {
@@ -55,6 +55,19 @@ export function createSubscriptionHost(options: {
           return {items,
             ...(value.nextCursor!==undefined && {nextCursor:value.nextCursor as string}),
             ...(value.checkpoint!==undefined && {checkpoint:value.checkpoint as string})};
+        },
+        async deliverInbox(subscription,group) {
+          // A standalone item keeps its historic thread across upgrades and crash replay.
+          const inboxId=(item:string) => 'subscription-'+createHash('sha256')
+            .update(deliveryKey(subscription.id,item,'inbox')).digest('hex');
+          const last=inboxId(group.last);
+          const thread=group.kind==='item' ? last : group.thread;
+          await options.ingest('subscription:'+subscription.id,[{thread,last,receivedAt:group.receivedAt,
+            title:group.title,text:group.text,sender:subscription.name}],{
+            ...(subscription.triageRules && {triageRules:subscription.triageRules}),
+            ...(subscription.fallbackTier && {fallbackTier:subscription.fallbackTier}),...(group.due && {due:true}),
+            ...(group.kind!=='item' && {move:{kind:group.kind,count:group.itemIds.length}}),
+          });
         },
         async deliver(destination,key,item,subscription) {
           const id = 'subscription-'+createHash('sha256').update(key).digest('hex');

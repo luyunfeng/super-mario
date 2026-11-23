@@ -1,7 +1,7 @@
 import { excludesPersonalGroupFromAutomation } from '../../protocol/src/inbox-origin.ts';
 import { createHash } from 'node:crypto';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
-import type { InboxItem, InboxSubscriptionPolicy, InboxThing, InboxTriageInput, Project, Todo } from '../../protocol/src/index.ts';
+import type { InboxItem, InboxSubscriptionDelivery, InboxSubscriptionPolicy, InboxThing, InboxTriageInput, Project, Todo } from '../../protocol/src/index.ts';
 import { normalizeInboxOrigin } from './inbox-origin.ts';
 
 export class InboxError extends Error {
@@ -71,7 +71,7 @@ export function createInboxService({ store, events, createTodo, triage }: {
   triage?: (thing: InboxTriageInput) => Promise<Triage>;
 }): {
   list(): InboxItem[];
-  ingest(source: string, things: InboxThing[], policy?:InboxSubscriptionPolicy): Promise<void>;
+  ingest(source: string, things: InboxThing[], policy?:InboxSubscriptionDelivery): Promise<void>;
   retryPending(): Promise<void>;
   confirm(id: string, version: number, details?: { title: string; notes: string }): { todoId: string };
   archive(id: string, version: number): void;
@@ -121,7 +121,9 @@ export function createInboxService({ store, events, createTodo, triage }: {
       required(source, 'source');
       if (!Array.isArray(things)) throw new InboxError('things必须为数组');
       // Validate and snapshot the entire batch before queueing any writes or model calls.
-      const subscriptionPolicy = source.startsWith('subscription:') && policy ? structuredClone(policy) : undefined;
+      const delivery = source.startsWith('subscription:') && policy ? structuredClone(policy) : undefined;
+      const {move,...classification} = delivery ?? {};
+      const subscriptionPolicy = delivery ? classification : undefined;
       const batch = things.map(value => {
         const thing = validateThing(value);
         if (thing.origin && !source.startsWith('feishu:')) delete thing.origin.personalGroupObserved;
@@ -160,6 +162,7 @@ export function createInboxService({ store, events, createTodo, triage }: {
             tier: result.tier, reason: withTodo(result.reason, previous?.todoId), updatedAt: new Date().toISOString(),
             ...(previous?.todoId ? { todoId: previous.todoId } : {}),
             ...(previous?.projectId ? { projectId: previous.projectId } : {}) };
+          if(move) item.subscriptionMove=move;
           if(item.todoId && item.tier==='pending') {
             item.tier='action';
             item.reason=withTodo('主人已确认此线程需要处理',item.todoId);

@@ -109,6 +109,7 @@ function releaseItems(rows:unknown, resource:string) {
     // Construct the link from validated identity. Release notes and API-provided links are untrusted data.
     const url = 'https://github.com/' + resource + '/releases/tag/' + encodeURIComponent(row.tag_name);
     items.push({id:String(row.id), title:excerpt(title,512), text:excerpt(row.body?.trim() || row.tag_name,16000),
+      ...(typeof row.published_at==='string' && {occurredAt:row.published_at}),
       ...(url.length <= 4096 && {url})});
   }
   return {items};

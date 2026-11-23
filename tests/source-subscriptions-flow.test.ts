@@ -207,3 +207,45 @@ test('仓库快照只在变化时更新同一收件，重启后恢复旧状态�
   assert.deepEqual(history.items.map((entry:{sequence:number})=>entry.sequence),[3,2,1]);
   const pages=await knowledge();assert.equal(pages.length,3);assert.ok(pages.every(p=>p.layer==='personal'));
 });
+
+test('开启收件后从本地存档补送摘要，将未来到期单独列出，个人记忆逐条保留', async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'sm-inbox-digest-'));
+  const server=await startServer({dataDir,host:'127.0.0.1',port:0,demo:true,token:'local-digest-test'});
+  t.after(async()=>{try {await server.close();}finally {await rm(dataDir,{recursive:true,force:true});}});
+  const sourceId='archive-sample.changes';
+  let items=Array.from({length:5},(_,i)=>({id:'sample-'+i,title:'更新 '+i,text:'本地合成正文 '+i,
+    ...(i===4 && {dueAt:new Date(Date.now()+86400000).toISOString()})}));
+  server.app.plugins.register({id:'archive-sample',name:'本地存档样本',capabilities:['subscription.source'],
+    activate(context) {
+      context.contribute('connectors','changes',{kind:'subscription-source',service:sourceId,name:'更新',resourceLabel:'项目'});
+      context.contribute('services','changes',{name:sourceId,version:1,readOnly:true,handler:async()=>({items})});
+    }});
+  await server.app.plugins.setEnabled('archive-sample',true);
+  const route='/api/v1/source-subscriptions';
+  async function request(path:string,method='GET',input?:object) {
+    const response=await fetch(server.url+path,{method,headers:{authorization:'Bearer local-digest-test','content-type':'application/json'},
+      ...(input && {body:JSON.stringify(input)})});
+    assert.ok(response.ok,method+' '+path+' '+response.status);
+    return response.json();
+  }
+  const row=await request(route,'POST',{sourceId,resource:'local',name:'更新订阅',intervalMinutes:60,destinations:['knowledge']});
+  const path=route+'/'+row.id;
+  await request(path+'/pull','POST',{version:row.version});
+  items=[]; // The source can no longer provide the five observed items.
+  const changed=await request(path,'PATCH',{version:row.version,destinations:['inbox','knowledge']});
+  await request(path+'/pull','POST',{version:changed.version});
+  const readInbox=async()=>(await request('/api/v1/inbox') as InboxItem[]).filter(item=>item.source==='subscription:'+row.id);
+  const cards=await readInbox();assert.equal(cards.length,2);
+  const due=cards.find(item=>item.title==='更新 4');
+  assert.equal(due?.tier,'action');
+  const digest=cards.find(item=>item!==due)!;
+  for(let i=0;i<4;i++) assert.match(digest.text,new RegExp('更新 '+i));
+  assert.doesNotMatch(digest.text,/更新 4/);
+  assert.deepEqual(digest.subscriptionMove,{kind:'digest',count:4});
+  const run=(await request(path+'/runs')).items[0];
+  assert.equal(run.delivered.inbox,5);
+  const pages=await request('/api/v1/knowledge') as KnowledgeEntry[];
+  assert.equal(pages.filter(item=>item.tags?.includes('来源订阅')).length,5);
+  await request(path+'/pull','POST',{version:changed.version});
+  assert.deepEqual(await readInbox(),cards);
+});

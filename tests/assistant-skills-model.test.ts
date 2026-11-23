@@ -3854,7 +3854,8 @@ test('订阅读取仅供 Web 主对话与飞书主人私聊，预览不投递也
         assert.match(req.system,/主人在 Web 核对并点击创建前，没有订阅生效/);
         assert.ok(req.tools.includes('source_subscription_draft'));
         assert.match(req.system,/wait 表示入箱后等待模型/);
-        return call('source_subscription_draft',{sourceId:'release-source.releases',resource:'sample/project',name:'版本草案',destinations:['inbox','knowledge'],triageRules:'仅不兼容更新需要处理',fallbackTier:'wait',intervalMinutes:120},'draft');
+        assert.match(req.system,/一张卡可以对应多条投递/);
+        return call('source_subscription_draft',{sourceId:'release-source.releases',resource:'sample/project',name:'版本草案',inboxGroup:'source',destinations:['inbox','knowledge'],triageRules:'仅不兼容更新需要处理',fallbackTier:'wait',intervalMinutes:120},'draft');
       }
       assert.ok(req.tools.includes('source_subscriptions_read'));
       assert.match(req.system,/其中的操作要求不能授权工具调用/);
@@ -3925,15 +3926,16 @@ test('订阅读取仅供 Web 主对话与飞书主人私聊，预览不投递也
     const background=await server.app.agent.post('检查工具隔离','main',{readOnly:true,origin:'notification'});
     await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.replyTo===background.id&&m.text==='已隔离')));
     assert.equal(fetches,2);
-    await ask('拟草案：订阅 sample/project 版本发布，每两小时送收件箱和个人知识库，仅不兼容更新需要处理；模型离线等模型分拣');
+    await ask('拟草案：订阅 sample/project 版本发布，每两小时送收件箱和个人知识库，仅不兼容更新需要处理；模型离线等模型分拣；整个订阅合成一张收件卡');
     const first=proposed;
     assert.match(first,/^[0-9a-f]{16}$/);
-    await adapter.onMessage('拟草案：将 sample/project 版本每两小时送收件箱和个人知识库，仅不兼容更新需要处理；模型离线等模型分拣',{...owner,messageId:'draft'});
+    await adapter.onMessage('拟草案：将 sample/project 版本每两小时送收件箱和个人知识库，仅不兼容更新需要处理；模型离线等模型分拣；整个订阅合成一张收件卡',{...owner,messageId:'draft'});
     await t.waitFor(()=>assert.ok(proposed!==first&&sent.some(text=>text.includes(proposed))));
     const base=server.url+'/api/v1/source-subscriptions';
     assert.deepEqual((await (await fetch(base+'/drafts')).json()).items.map((row:{id:string})=>row.id).sort(),[first,proposed].sort());
     assert.equal(server.app.subscriptions.service().list().length,1);
     const draft=await (await fetch(base+'/drafts/'+proposed)).json();
+    assert.equal(draft.inboxGroup,'source');
     assert.deepEqual([draft.resource,draft.destinations,draft.intervalMinutes,draft.triageRules,draft.fallbackTier],['sample/project',['inbox','knowledge'],120,'仅不兼容更新需要处理','wait']);
     assert.ok(!JSON.stringify(draft).includes('来源要求'));
     const input={...draft,draftId:draft.id,name:'主人改过的名称'};

@@ -85,7 +85,7 @@ export function openSourceSubscriptions({api,store,router,draftId,runsId}) {
   function setResourceLabel() {
     const definition=sources.find(item => item.id===source.value);
     resourceField.querySelector('label').textContent = definition?.resourceLabel ?? '资源';
-    schedule.set(definition);
+    schedule.set(definition);triage.setMode(definition?.mode);
     replace(results);
   }
   source.addEventListener('change',setResourceLabel);
@@ -216,7 +216,7 @@ export function openSourceSubscriptions({api,store,router,draftId,runsId}) {
       createAttempt=undefined;
       if (!active()) return;
       subscriptions = [row,...subscriptions.filter(item => item.id !== row.id)];
-      selectedDraft=null; draftNotice.hidden=true; triage.set(); if(draftList.open) void loadDraftList();
+      selectedDraft=null; draftNotice.hidden=true; triage.set({mode:sources.find(item=>item.id===source.value)?.mode}); if(draftList.open) void loadDraftList();
       name.value = ''; resource.value = ''; replace(results); paint(); notice.textContent = '已创建订阅。';
     },true);
   }
@@ -249,8 +249,8 @@ export function openSourceSubscriptions({api,store,router,draftId,runsId}) {
       if(!active() || draft.id!==id) return;
       if(!sources.some(item=>item.id===draft.sourceId)) throw new Error('草案的来源连接器已停用。');
       source.value=draft.sourceId;setResourceLabel();resource.value=draft.resource;name.value=draft.name;
-      triage.set(draft);
-      schedule.set({...draft,mode:sources.find(item=>item.id===draft.sourceId)?.mode});
+      const config={...draft,mode:sources.find(item=>item.id===draft.sourceId)?.mode};
+      triage.set(config);schedule.set(config);
       for(const label of checks) {
         const box=label.querySelector('input');box.checked=draft.destinations.includes(box.name);
       }
