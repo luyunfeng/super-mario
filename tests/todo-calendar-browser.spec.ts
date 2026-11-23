@@ -462,4 +462,12 @@ test('全天待办按创建日期跨时区显示，改期保留全天，填入�
   await expect.poll(()=>server.app.store.get<Todo>('todos',created.id)?.dueAt).toBe('2030-04-03T01:30:00.000Z');
   assert.equal(server.app.store.get<Todo>('todos',created.id)?.dueDay,undefined);
   await east.goto(base+'/day/2030-04-03');await expect(cal.locator('[data-hour="9"]')).toContainText(name);
+  await east.goto(base+'/week/2030-04-03');
+  const nextSlot=cal.locator('[data-day="2030-04-04"][data-hour="11"]');
+  await cal.getByRole('button',{name:new RegExp('09:30.*'+name)}).dragTo(nextSlot);
+  await expect.poll(()=>server.app.store.get<Todo>('todos',created.id)?.dueAt).toBe('2030-04-04T03:30:00.000Z');
+  await east.reload();
+  await expect(nextSlot.getByRole('button',{name:new RegExp('11:30.*'+name)})).toBeVisible();
+  await west.goto(base+'/day/2030-04-03');
+  await expect(west.locator('[data-hour="20"]').getByRole('button',{name:new RegExp('20:30.*'+name)})).toBeVisible();
 });
