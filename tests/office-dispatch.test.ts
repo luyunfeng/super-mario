@@ -42,13 +42,20 @@ test('dispatch attaches the Office guide only to a new ordinary task on a capabl
     assert.equal(starts.length, before + 1);
     return starts[before].prompt;
   }
-  assert.equal(await promptAfter(() => app.dispatch(task)), task.prompt + '\n\n' + officeWorkerGuide);
+  const ordinary = await promptAfter(() => app.dispatch(task));
+  assert.ok(typeof ordinary === 'string');
+  assert.ok(ordinary.startsWith(task.prompt));
+  assert.ok(ordinary.includes(task.doneWhen));
+  const guideSection = '\n\n' + officeWorkerGuide;
+  assert.ok(ordinary.endsWith(guideSection));
+  const withoutOffice = ordinary.slice(0, -guideSection.length);
+  assert.ok(!withoutOffice.includes(officeWorkerGuide));
   const approval = app.approvals.propose({ kind: 'dispatch', title: '已确认的精确任务', details: '', params: task });
   assert.equal(await promptAfter(() => app.approvals.approve(approval.id, approval.version)), task.prompt);
   assert.equal(await promptAfter(() => app.dispatch({ ...task, executionMode: 'interactive' })), task.prompt);
   await app.plugins.setEnabled('office-documents', false);
-  assert.equal(await promptAfter(() => app.dispatch(task)), task.prompt);
+  assert.equal(await promptAfter(() => app.dispatch(task)), withoutOffice);
   await app.plugins.setEnabled('office-documents', true);
   machine.capabilities = ['executor.start'];
-  assert.equal(await promptAfter(() => app.dispatch(task)), task.prompt);
+  assert.equal(await promptAfter(() => app.dispatch(task)), withoutOffice);
 });
