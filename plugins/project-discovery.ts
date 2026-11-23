@@ -347,7 +347,12 @@ export function createProjectDiscovery(options: { home?: string; codexHome?: str
         }
       }
 
-      await walkMetadata(root, source === 'codex' ? 3 : 2);
+      if (source === 'codex') {
+        await walkMetadata(join(root, 'sessions'), 3);
+        await walkMetadata(join(root, 'archived_sessions'), 0);
+      } else {
+        await walkMetadata(join(root, 'projects'), 2);
+      }
     }
 
     async function available(root: string, explicit: boolean, label: string) {
@@ -359,8 +364,8 @@ export function createProjectDiscovery(options: { home?: string; codexHome?: str
     }
     // Each provider owns a byte, file and time budget. A busy provider cannot
     // exhaust the other's allowance or force a full transcript scan.
-    if (await available(codexRoot, options.codexHome !== undefined, 'Codex')) await scanProvider('codex', join(codexRoot, 'sessions'));
-    if (await available(claudeRoot, options.claudeHome !== undefined, 'Claude')) await scanProvider('claude', join(claudeRoot, 'projects'));
+    if (await available(codexRoot, options.codexHome !== undefined, 'Codex')) await scanProvider('codex', codexRoot);
+    if (await available(claudeRoot, options.claudeHome !== undefined, 'Claude')) await scanProvider('claude', claudeRoot);
 
     result.projects = [...found.values()].sort((a, b) => (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? '') || a.cwd.localeCompare(b.cwd));
     // Plain objects satisfy the transport's JSON boundary without changing shared contracts.

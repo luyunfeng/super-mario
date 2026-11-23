@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { test, type TestContext } from 'node:test';
@@ -202,4 +202,17 @@ test('Codex 归档历史沿用项目范围校验，跨目录重名时拒绝恢�
   await f.codex(f.codexHome, nativeSessionId, other);
   assert.deepEqual((await list(f.base)).sessions, []);
   await assert.rejects(discovery.validateResume({ executorId: 'codex', nativeSessionId, cwd }), /冲突/);
+});
+
+test('只有已归档 Codex 对话的项目仍可在项目选择器发现', async t => {
+  const f = await fixture(t);
+  const cwd = await f.dir('archived-project');
+  await f.codex(f.codexHome, 'first-thread', cwd);
+  const archive = join(f.codexHome, 'archived_sessions');
+  await mkdir(archive);
+  await rename(join(f.codexHome, 'sessions/2026/11/17/first-thread.jsonl'), join(archive, 'first-thread.jsonl'));
+  const discovery = createProjectDiscovery(f.explicit);
+  const result = await discovery.handlers['workspace.projects']({});
+  assert.deepEqual(result.projects.map(p => p.cwd), [cwd]);
+  assert.equal(result.truncated, false);
 });
