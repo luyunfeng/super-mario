@@ -29,15 +29,41 @@ export function createAdminOverview(options:Options) {
   });
   const host=hostname().split('.')[0]?.trim();
   const defaultName=host && host!=='localhost' && !/^[a-f0-9]{12,64}$/i.test(host) ? host : 'super-mario-'+instanceId.slice(0,6);
-  function read(){
-    const name=store.get<string>(collection,'name')??defaultName;
+  function listener(){
     const address=options.address();
     const listen=!address?'':typeof address==='string'?address:
       (address.family==='IPv6'?'['+address.address+']':address.address)+':'+address.port;
+    return {listen,endpoints:adminEndpoints(address)};
+  }
+  function publicOrigin(){
+    return store.get<string>(collection,'publicOrigin')??'';
+  }
+  function network(){
+    return {publicOrigin:publicOrigin(), ...listener()};
+  }
+  function setPublicOrigin(value:unknown){
+    const invalid=()=>Object.assign(new Error('请输入完整的 HTTPS 源地址，仅回环地址允许 HTTP'),{status:400});
+    if(typeof value!=='string'||value.length>512)throw invalid();
+    if(value===''){
+      store.remove(collection,'publicOrigin');
+      return network();
+    }
+    // Reject paths and empty credentials/query/fragment before URL normalizes them away.
+    const authority=/^https?:\/\/([^/@?#\\%\s]+)\/?$/iu.exec(value)?.[1];
+    if(!authority||/[\p{Cc}\p{Cs}]/u.test(value))throw invalid();
+    let url:URL;
+    try{url=new URL(value);}catch{throw invalid();}
+    if(url.protocol==='http:' && !/^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(authority))throw invalid();
+    if(url.origin.length>512)throw invalid();
+    store.put(collection,'publicOrigin',url.origin);
+    return network();
+  }
+  function read(){
+    const name=store.get<string>(collection,'name')??defaultName;
     const machines=options.machines();
     const devices=options.plugins().some(p=>p.id==='browser-devices'&&p.status==='active')?options.devices().length:null;
     return {version:options.version,name,defaultName,instanceId,platform:process.platform,arch:process.arch,startedAt:options.startedAt,
-      listen,endpoints:adminEndpoints(address),mode:options.demo?'demo' as const:'live' as const,
+      ...listener(),mode:options.demo?'demo' as const:'live' as const,
       machines:{online:machines.filter(m=>m.online).length,total:machines.length},devices};
   }
   function rename(value:unknown){
@@ -98,5 +124,5 @@ export function createAdminOverview(options:Options) {
     });
     return {checkedAt,checks};
   }
-  return {read,rename,doctor,machineList,renameMachine,removeMachine};
+  return {read,rename,doctor,machineList,renameMachine,removeMachine,network,setPublicOrigin,publicOrigin};
 }

@@ -210,7 +210,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             const input=await body(req,1024);devicePlugin();
             if(Object.keys(input).length!==1 || typeof input.name!=='string')throw new InputError('请填写设备名称');
             const invite=app.browserDevices.issue(input.name);
-            return json(res,201,{...invite,...await pairingQR(req.headers.origin,invite.code)});
+            const publicOrigin=overview.publicOrigin();
+            const qr=await pairingQR(publicOrigin || req.headers.origin,invite.code);
+            if(publicOrigin!==overview.publicOrigin())throw new InputError('对外访问地址已变化，请重新签发配对码',409);
+            return json(res,201,{...invite,publicOrigin,...qr});
           }
           const single=/^\/api\/v1\/browser\/devices\/([^/]+)$/.exec(path);
           if(method==='DELETE' && single){

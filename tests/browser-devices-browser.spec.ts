@@ -45,6 +45,18 @@ test('两台浏览器主动配对、持久登录、单次兑换与撤销',{timeo
   await confirm.getByRole('button',{name:'取消'}).click();await expect(row).toBeVisible();
   await row.getByRole('button',{name:'撤销设备'}).click();await confirm.getByRole('button',{name:'确认撤销'}).click();
   await expect(row).toHaveCount(0);await device.reload();await expect(device.locator('#connection')).toContainText('需要令牌');
+  const network=server.url+'/api/v1/admin';
+  const issue=await admin.request.post(network+'/setup-code',{headers:{authorization:'Bearer '+token},data:{}});
+  const setup=await admin.request.post(network+'/setup',{data:{code:(await issue.json()).code,password:'fixture-network-owner'}});
+  const saved=await admin.request.post(network+'/network',{headers:{'x-csrf-token':(await setup.json()).csrf},
+    data:{publicOrigin:'https://workbench.example.test'}});
+  assert.equal(saved.status(),200);
+  await manage.getByLabel('设备名称').fill('使用对外地址');
+  await manage.getByRole('button',{name:'生成配对链接'}).click();
+  await expect(manage.getByLabel('一次性配对链接')).toHaveValue(/^https:\/\/workbench\.example\.test\/#home\?browserPair=/);
+  const externalLink=await manage.getByLabel('一次性配对链接').inputValue();
+  await expect(manage.getByRole('img',{name:'浏览器配对二维码'})).toHaveAttribute('src',await QRCode.toDataURL(externalLink,{width:240,margin:4,errorCorrectionLevel:'M'}));
+
 });
 
 test('主动断开需确认，未确认撤销只在选择后退出并在下次配对替换原设备',{timeout:40000},async t=>{

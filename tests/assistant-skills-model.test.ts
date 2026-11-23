@@ -4910,6 +4910,7 @@ test('Web 与配对飞书说明浏览器接入和管理诊断时不索取凭据'
     assert.match(request.system,/先核对插件 ID、统计窗口和调用数/);
     assert.match(request.system,/没有调用记录时，不推断插件已经故障/);
     assert.match(request.system,/「最近调用」筛选失败记录，核对操作名和完成时间/);
+    assert.match(request.system,/新配对链接和二维码会使用该地址/);
     assert.match(request.system,/super-mario-agent --print-machine-id/);
     assert.match(request.system,/历史任务保留，专用凭据随记录移除/);
     assert.match(request.system,/「执行机管理」刷新清单，按执行机 ID 核对上报名/);

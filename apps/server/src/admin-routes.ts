@@ -114,7 +114,7 @@ export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootTo
     if(req.method==='GET'){
       if(action==='state')return json(res,200,{configured:auth.configured(),authenticated:!!session,...(session && {csrf:session.csrf,expiresAt:session.expiresAt})});
       const pluginData=/^plugins\/([^/]*)\/(metrics|calls)$/.exec(action);
-      if(action==='overview'||action==='doctor'||action==='devices'||action==='plugins'||action==='machines'||action==='machine-credentials'||pluginData){
+      if(action==='overview'||action==='doctor'||action==='devices'||action==='plugins'||action==='machines'||action==='machine-credentials'||action==='network'||pluginData){
         if(!session)fail(401,'请先登录管理界面');
         if(pluginData){
           const id=pluginData[1]!;
@@ -126,6 +126,7 @@ export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootTo
           return json(res,200,plugins.metrics(id,window));
         }
         if(action==='plugins')return json(res,200,{plugins:inspectPlugins()});
+        if(action==='network')return json(res,200,overview.network());
         if(action==='machine-credentials')return json(res,200,{machines:credentials.list()});
         if(action==='machines')return json(res,200,overview.machineList());
         if(action==='devices')return json(res,200,{devices:devices.list()});
@@ -133,7 +134,7 @@ export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootTo
       }
     }
     const credentialAction=action==='machine-credentials/issue'||action==='machine-credentials/revoke';
-    if(!credentialAction && !['setup-code','setup','login','password','logout','name','devices/pairings','devices/revoke','machines/name','machines/remove'].includes(action))fail(404,'管理接口不存在');
+    if(!credentialAction && !['setup-code','setup','login','password','logout','name','devices/pairings','devices/revoke','machines/name','machines/remove','network'].includes(action))fail(404,'管理接口不存在');
     if(req.method!=='POST')fail(405,'此管理操作需要 POST');
     sameOrigin(req);
     if(req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json')fail(415,'管理操作需要 JSON 请求');
@@ -142,11 +143,11 @@ export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootTo
       if(!rootToken || !loopback(req.socket.remoteAddress??'') || !localHost(req.headers.host) || proxy || req.headersDistinct.authorization?.length!==1 ||
         !exact(req.headers.authorization,'Bearer '+rootToken))fail(403,'请在服务器本机使用工作台主令牌获取初始化码');
     }
-    const fields=action==='setup'?['code','password']:action==='login'?['password']:action==='password'?['currentPassword','newPassword']:action==='name'||action==='devices/pairings'?['name']:action==='devices/revoke'||action==='machines/remove'||credentialAction?['id']:action==='machines/name'?['id','name']:[];
+    const fields=action==='setup'?['code','password']:action==='login'?['password']:action==='password'?['currentPassword','newPassword']:action==='name'||action==='devices/pairings'?['name']:action==='devices/revoke'||action==='machines/remove'||credentialAction?['id']:action==='machines/name'?['id','name']:action==='network'?['publicOrigin']:[];
     const input=await readBody(req,8192);
     if(Object.keys(input).some(k=>!fields.includes(k)) || fields.some(k=>typeof input[k]!=='string'))fail(400,'管理请求字段无效');
     if(action==='setup-code')return json(res,200,{code:auth.issueCode()});
-    if(credentialAction||action==='password'||action==='logout'||action==='name'||action==='machines/name'||action==='machines/remove'||action.startsWith('devices/')){
+    if(credentialAction||action==='network'||action==='password'||action==='logout'||action==='name'||action==='machines/name'||action==='machines/remove'||action.startsWith('devices/')){
       const current=auth.session(token);
       if(!current)fail(401,'请先登录管理界面');
       if(req.headersDistinct['x-csrf-token']?.length!==1||!exact(req.headers['x-csrf-token'] as string|undefined,current.csrf))fail(403,'管理请求的 CSRF 验证失败');
@@ -159,15 +160,18 @@ export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootTo
         if(!rootToken)fail(403,'请先配置工作台访问令牌');
         const generation=deviceRevision();
         const invite=devices.issue(input.name as string);
-        const qr=await pairingQR(req.headers.origin,invite.code);
+        const publicOrigin=overview.publicOrigin();
+        const qr=await pairingQR(publicOrigin||req.headers.origin,invite.code);
         if(!auth.session(token))fail(401,'管理员会话已失效');
         if(deviceRevision()!==generation)fail(409,'设备配对设置已变化，请重新签发配对码');
-        return json(res,201,{...invite,...qr});
+        if(overview.publicOrigin()!==publicOrigin)fail(409,'公开访问地址已变化，请重新签发配对码');
+        return json(res,201,{...invite,...qr,publicOrigin});
       }
       if(action==='devices/revoke'){
         if(!devices.revoke(input.id as string))fail(404,'设备不存在');
         return json(res,200,{revoked:true});
       }
+      if(action==='network')return json(res,200,overview.setPublicOrigin(input.publicOrigin as string));
       if(action==='machines/remove')return json(res,200,overview.removeMachine(input.id as string,credentials.revoke));
       if(action==='machines/name')return json(res,200,overview.renameMachine(input.id as string,input.name as string));
       if(action==='name')return json(res,200,overview.rename(input.name));
