@@ -4,7 +4,7 @@
 export function createStore(api) {
   const listeners = new Set();
   const queueChanges = new Set();
-  const view = { snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, savedSearchesRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, todoThreadChange: null, todoDecisionsChange: null, deletedFeishuThread: null, revokedAttachment: null, feishuBotChange: null, connection: 'connecting', unauthorized: false, loadError: '' };
+  const view = { snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, workspaceBoardRevision: null, savedSearchesRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, todoThreadChange: null, todoDecisionsChange: null, deletedFeishuThread: null, revokedAttachment: null, feishuBotChange: null, connection: 'connecting', unauthorized: false, loadError: '' };
   let request = 0;
   let socket;
   let reconnectTimer;
@@ -67,6 +67,10 @@ export function createStore(api) {
         scheduleRefresh();
         return;
       }
+      if (event?.type === 'workspace-board.changed' && Number.isSafeInteger(event.data?.revision)) {
+        set({ workspaceBoardRevision: event.data.revision });
+        return;
+      }
       if (event?.type === 'saved-searches.changed' && Number.isSafeInteger(event.data?.revision)) {
         set({ savedSearchesRevision: event.data.revision });
         return;
@@ -118,7 +122,7 @@ export function createStore(api) {
     refresh,
     connect,
     reconnect: connect,
-    reset() { request += 1; queueChanges.clear(); set({ messageQueueChanges:[], snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, savedSearchesRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, todoThreadChange: null, todoDecisionsChange: null, deletedFeishuThread: null, revokedAttachment: null, feishuBotChange: null, unauthorized: false, loadError: '' }); connect(); },
+    reset() { request += 1; queueChanges.clear(); set({ messageQueueChanges:[], snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, workspaceBoardRevision: null, savedSearchesRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, todoThreadChange: null, todoDecisionsChange: null, deletedFeishuThread: null, revokedAttachment: null, feishuBotChange: null, unauthorized: false, loadError: '' }); connect(); },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
   };
 }

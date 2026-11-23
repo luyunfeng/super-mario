@@ -1,0 +1,58 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {chromium,expect} from '@playwright/test';
+import {startServer} from '../apps/server/src/index.ts';
+
+test('主人从项目页添加项目，按可见范围批量置顶和归档，恢复后保持同一项目', {timeout:30000},async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'mario-board-browser-'));
+  const token='offline-board';
+  const server=await startServer({host:'127.0.0.1',port:0,dataDir,token,demo:true});
+  t.after(async()=>{try{await server.close();}finally{await rm(dataDir,{recursive:true,force:true});}});
+  const projects:{id:string;name:string}[]=[];
+  for(const name of ['合成签收甲','合成签收乙','合成留档丙']) projects.push(await server.app.createProject({name}));
+  const post=(path:string,body:object)=>fetch(server.url+'/api/v1'+path,{method:'POST',
+    headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify(body)});
+  const rows=async()=>{
+    const r=await post('/workspace-board',{action:'list'});assert.equal(r.status,200);
+    return (await r.json()).cards as {projectId:string;pinned:boolean;archived:boolean}[];
+  };
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(()=>browser.close());
+  const page=await browser.newPage({viewport:{width:1280,height:900}});
+  page.setDefaultTimeout(6000);
+  await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  await page.goto(server.url+'/#projects/'+projects[0].id+'/workspace?token='+token);
+  const entry=page.getByRole('button',{name:'工作区看板',exact:true});
+  await entry.click();
+  const board=page.getByRole('dialog',{name:'工作区看板'});
+  const visibleRows=board.getByRole('checkbox',{name:/^选择 /});
+  for(const project of projects){
+    await board.getByLabel('添加项目',{exact:true}).selectOption({label:project.name});
+    await board.getByRole('button',{name:'添加卡片',exact:true}).click();
+    await expect(board.getByRole('checkbox',{name:'选择 '+project.name})).toBeVisible();
+  }
+  await board.getByLabel('筛选项目',{exact:true}).fill('签收');
+  await expect(visibleRows).toHaveCount(2);
+  await board.getByRole('button',{name:'全选可见卡片',exact:true}).click();
+  await board.getByRole('button',{name:'置顶',exact:true}).click();
+  await expect.poll(async()=>(await rows()).filter(c=>c.pinned).map(c=>c.projectId).sort()).toEqual(projects.slice(0,2).map(p=>p.id).sort());
+  await expect(board.getByText('已置顶',{exact:true})).toHaveCount(2);
+  await board.getByRole('button',{name:'全选可见卡片',exact:true}).click();
+  await board.getByRole('button',{name:'归档',exact:true}).click();
+  await expect(visibleRows).toHaveCount(0);
+  await board.getByLabel('显示卡片',{exact:true}).selectOption({label:'已归档'});
+  await expect(visibleRows).toHaveCount(2);
+  await board.getByRole('button',{name:'全选可见卡片',exact:true}).click();
+  await board.getByRole('button',{name:'恢复',exact:true}).click();
+  await expect(visibleRows).toHaveCount(0);
+  await board.getByLabel('筛选项目',{exact:true}).fill('');
+  await board.getByLabel('显示卡片',{exact:true}).selectOption({label:'未归档'});
+  await expect(visibleRows).toHaveCount(3);
+  const all=await rows();assert.ok(all.every(c=>!c.archived));
+  assert.equal(all.find(c=>c.projectId===projects[2].id)?.pinned,false);
+  assert.equal((await post('/plugins/workspace-board',{enabled:false})).status,200);
+  await expect(board).toBeHidden();await expect(entry).toHaveCount(0);
+});

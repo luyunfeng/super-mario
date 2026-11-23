@@ -4590,3 +4590,47 @@ test('搜索本对话工具固定 Web 发言范围并排除当前检索提问', 
     assert.match(await ask('找出工具曾返回的三份合成样张原话。',path),/交接清单里有三份合成样张/);
   } finally { await server.close(); }
 });
+
+test('工作区看板只在主人 Web 主对话和飞书配对私聊提供当前卡片及查询指令', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const answer = '进行中列有合成工作区。执行结果需另查。';
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      if (JSON.stringify(req.content).includes('核对隔离')) {
+        assert.ok(!req.tools.includes('workspace_board_read'));
+        assert.doesNotMatch(req.system, /默认查看未归档卡片/);
+        return { role: 'assistant', content: '当前无法读取看板。' };
+      }
+      assert.ok(req.tools.includes('workspace_board_read'));
+      assert.match(req.system, /不能据此断言执行成功/);
+      return call('workspace_board_read', { columnId: 'doing' }, 'cards');
+    }
+    const payload = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    const result = JSON.parse(payload);
+    assert.deepEqual(result.cards.map((c:{title:string}) => c.title), ['合成工作区']);
+    assert.equal(result.cards[0].columnId, 'doing');
+    return { role: 'assistant', content: answer };
+  }, options => {
+    adapter = options;
+    return { start: async () => {}, close: async () => {}, collect: async () => [],
+      status: () => ({connected:true}), send: async (_target,text) => { sent.push(text); } };
+  });
+  try {
+    const project = await api('/projects', {name:'合成工作区'});
+    const board = await api('/workspace-board', {action:'list'});
+    await api('/workspace-board', {action:'add_card', projectId:project.id, columnId:'doing', revision:board.revision});
+    assert.equal(await ask('工作区看板进行中有哪些项目？'), answer);
+    const bot = await api('/feishu/bots', {name:'看板助手',appId:'cli_1111111111111111',appSecret:'fixture',
+      scope:{kind:'global'},requireConfirmation:false,groupChats:[{chatId:'oc_group',mentionOnly:true,allowedSenderIds:['ou_owner']}]});
+    const owner = {chatId:'oc_dm',senderId:'ou_owner',senderType:'user',chatType:'p2p'} as const;
+    await adapter.onMessage(bot.pairingCode, {...owner,messageId:'pair-board'});
+    await adapter.onMessage('看板进行中有哪些项目？', {...owner,messageId:'board'});
+    await t.waitFor(() => assert.ok(sent.includes(answer)));
+    assert.equal(await ask('核对隔离','/projects/'+project.id+'/messages'),'当前无法读取看板。');
+    await adapter.onMessage('核对隔离', {...owner,chatType:'group',chatId:'oc_group',mentionedSelf:true,messageId:'group-board'});
+    await t.waitFor(() => assert.ok(sent.includes('当前无法读取看板。')));
+    await api('/plugins/workspace-board',{enabled:false});
+    assert.equal(await ask('核对隔离'),'当前无法读取看板。');
+  } finally { await server.close(); }
+});

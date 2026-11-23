@@ -10,6 +10,7 @@ import { openDrawer } from '../ui/overlay.js';
 import { systemText } from '../copy/terms.js';
 
 const descriptions = {
+  'workspace-board':'在项目页按列管理项目卡片，批量移动、置顶或归档。主人可在 Web 主对话和飞书配对私聊查询看板。',
   'run-comparison':'并排查看同一项目的两次执行。',
   'reading-fonts':'调整阅读字号，选择或输入本机安装的字体。留空使用工作台默认字体，选择保存在当前浏览器。',
   'shortcut-settings':'调整本浏览器的全局快捷键。',

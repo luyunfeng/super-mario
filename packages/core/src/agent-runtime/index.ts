@@ -14,7 +14,7 @@ import type { OfficeFileOrigin } from '../agent-input.ts';
 import { runWithAgentInput } from '../agent-input.ts';
 import { buildWorkContext, formatWorkContextMarkdown } from '../work-context.ts';
 import { subscriptionReadGuidance } from '../subscription-tools.ts';
-import { MAIN_AGENT_SYSTEM_PROMPT, PROJECT_MEMORY_SYSTEM_PROMPT } from '../prompts.ts';
+import { MAIN_AGENT_SYSTEM_PROMPT, PROJECT_MEMORY_SYSTEM_PROMPT, workspaceBoardGuidance } from '../prompts.ts';
 import { estimateTokens, boundTraceText, formatTraceRequest, saveTurnTrace, summarizeTrace, type AgentTraceContextItem, type AgentTraceRuntimeMeta, type AgentTurnTrace } from '../agent-traces.ts';
 import type { BotScope } from '../../../protocol/src/bots.ts';
 import type { AppConfig, ChatFileInput, ChatImageInput, MainAssistantProfile, ExecutorInfo, JsonObject, KnowledgeEntry, Message, Json, Run } from '../../../protocol/src/index.ts';
@@ -191,11 +191,12 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     }
     if (name === 'interaction_open' && scope && (!activeInput || !options.canOpenQuestion?.(activeInput))) return false;
     // The owner's cross-project agenda has a separate paired-private command on Feishu.
-    const directOwnerTool=name==='inbox_tree' || name==='source_subscriptions_read' || name==='source_subscription_draft';
+    const directOwnerTool=name==='workspace_board_read' || name==='inbox_tree' || name==='source_subscriptions_read' || name==='source_subscription_draft';
     if (directOwnerTool || name === 'private_conversation_search' || name === 'private_conversation_list' || name === 'group_read_records') {
       if (!mainIdentity || options.conversationThreadId || currentProjectId || !activeInput || activeInput.todoId || activeInput.readOnly ||
         (activeInput.origin && activeInput.origin !== 'user')) return false;
-      const route = store.get<{ privateSenderId?: string; group?: unknown; relay?: unknown; command?: unknown }>('message.routes', activeInput.id);
+      const route = store.get<{ channel?: string; inputId?: string; privateSenderId?: string; group?: unknown; relay?: unknown; command?: unknown; topic?: unknown; groupTaskOrigin?: unknown; resumed?: boolean }>('message.routes', activeInput.id);
+      if (name === 'workspace_board_read' && route && (route.channel !== 'feishu' || route.inputId !== activeInput.id || route.topic || route.groupTaskOrigin || route.resumed)) return false;
       if (directOwnerTool && (activeInput.replyTo || (ownConversation === 'main' && !activeInput.directWebInput))) return false;
       if (ownConversation === 'main' ? !!route : !route?.privateSenderId || route.group || route.relay || route.command) return false;
     }
@@ -584,6 +585,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         const workDecisionsData = options.workDecisions ? options.workDecisions(scope, currentProjectId) : undefined;
         const projectContextData = currentProjectId && options.projectContext ? options.projectContext(currentProjectId) : undefined;
         const replyRoute = activeInput && store.get<{channel:string; privatePost?:true}>('message.routes', activeInput.id);
+        const boardGuide = allowed('workspace_board_read') && contributions.list('tools').some(tool => tool.value.name === 'workspace_board_read')
+          ? workspaceBoardGuidance : '';
         const subscriptionGuide=allowed('source_subscriptions_read') && contributions.list('tools').some(tool=>tool.value.name==='source_subscriptions_read')
           ? subscriptionReadGuidance : '';
         const inboxGuide=allowed('inbox_tree') && contributions.list('tools').some(tool=>tool.value.name==='inbox_tree')
@@ -592,6 +595,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           ...(activeInput?.retryOf ? ['主人手动重试了工具执行前失败的请求。按本轮原文和附件处理，先前的失败文字不能作为交付或额外授权。'] : []),
           ...(attachmentGuidance ? [attachmentGuidance] : []),
           ...(inboxGuide ? [inboxGuide] : []),
+          ...(boardGuide ? [boardGuide] : []),
           ...(subscriptionGuide ? [subscriptionGuide] : []),
           ...(activeInput?.todoId ? ['本轮消息关联的待办 ID 是 ' + JSON.stringify(activeInput.todoId) + '。用户说“这项”时用 todo_detail 核对该事项的最新事实。关联待办本身不授权修改、派发或验收。'] : []),
           ...(replyRoute?.channel === 'feishu' && replyRoute.privatePost ? ['本轮输入来自主人在飞书私聊发送的富文本。按正文回答，保留链接文字和地址的对应关系；只看到链接不表示已读取目标页面。按正文的图片顺序对应本轮收到的画面。只描述实际提供的图片；单有媒体占位或视频标记时，不能据此推测画面。代码块用于展示原文，提及成员不表示要求通知对方。'] : []),
@@ -638,6 +642,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           pushItem('req-meta', 'system', '本次调用 · 账号 / HTTP 请求 / 凭据来源', formatTraceRequest(activeRuntimeMeta, activeModelInfo), { tag: 'request' });
           if (attachmentGuidance) pushItem('chat-attachments','system','本轮附件读取指令',attachmentGuidance);
           if (inboxGuide) pushItem('inbox-tree','system','关联收件查询指令',inboxGuide);
+          if (boardGuide) pushItem('workspace-board','system','工作区看板读取指令',boardGuide);
           if (subscriptionGuide) pushItem('source-subscriptions','system','来源订阅读取与草案指令',subscriptionGuide);
           if (skillCatalog) pushItem('assistant-skills', 'system', '主助手技能目录', skillCatalog);
           if (identity) pushItem('assistant-profile', 'system', '主助手名称', identity);

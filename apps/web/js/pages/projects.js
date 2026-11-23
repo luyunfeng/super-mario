@@ -4,6 +4,7 @@ import { h, replace, keyedList } from '../lib/dom.js';
 import { Button, Tabs, Empty } from '../ui/kit.js';
 import { Hint } from '../ui/hint.js';
 import { createProjectDiscoveryList } from '../features/project-discovery-list.js';
+import { openWorkspaceBoard, workspaceBoardEnabled } from '../features/workspace-board.js';
 import { openProjectFolders } from '../features/project-folders.js';
 import { createProjectConversation } from '../features/project-conversation.js';
 import { createTodosTab } from '../features/todos-tab.js';
@@ -78,6 +79,8 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
     h('div', { class: 'row row--between' }, h('div', null, title, sub), detailHint),
     binding, tabs.el, panelHost);
 
+  const boardButton = Button({ label: '工作区看板', onClick: () => openWorkspaceBoard({ api, store, router }) });
+  boardButton.hidden = true;
   const empty = h('div', { hidden: true }, Empty({ title: '还没有项目', text: '从电脑发现项目文件夹，添加后持续推进工作。' }));
   const layout = h('div', { class: 'proj' }, h('aside', { class: 'proj__side' }, h('div', { class: 'row row--between proj__side-head' }, h('strong', null, '项目'), newButton), projectList, removed), detail);
 
@@ -85,7 +88,7 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
     h('div', { class: 'page__inner page__inner--wide' },
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '项目'), h('p', { class: 'page__sub' }, '选择电脑上的文件夹，持续推进项目')),
-        h('div', { class: 'page__actions' }, Hint('nav.projects'))),
+        h('div', { class: 'page__actions' }, boardButton, Hint('nav.projects'))),
       layout, empty, discovered.el));
 
   function paintMemory(snapshot) {
@@ -134,6 +137,7 @@ export function createProjectsPage({ api, store, router, scope, consoleDrawer, m
 
   function render() {
     const snapshot = store.view.snapshot;
+    boardButton.hidden = !workspaceBoardEnabled(api, store);
     if (!snapshot) return;
     const projects = (snapshot.projects ?? []).filter(item => !item.archivedAt);
     const known = projectId === 'all' || projects.some(item => item.id === projectId);
