@@ -52,6 +52,13 @@ test('独立消息链接定位早期原文、刷新与后翻页，复制不携�
   await page.reload();
   await expect(target).toBeFocused();
   const later=region.getByRole('button',{name:'加载后续消息'});
+  const afterPattern='**/web-conversations/'+a+'/messages?after=*';
+  await page.route(afterPattern,route=>route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({error:'分页暂时失败'})}),{times:1});
+  const initialRows=await region.locator('article').count();
+  await later.click();
+  await region.getByRole('button',{name:'重新读取对话'}).click();
+  await expect.poll(()=>region.locator('article').count()).toBeGreaterThan(initialRows);
+  await expect(target).toContainText(label(n));
   for(let i=0;i<3 && !await region.getByText(label(127),{exact:true}).count();i++){
     const count=await region.locator('article').count();
     await later.click();

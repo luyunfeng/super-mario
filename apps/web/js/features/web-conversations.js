@@ -81,7 +81,11 @@ export function createWebConversations({api,store,scope,router}){
   const cleanupRetry=button('按原版本重试删除',retryDeletion);
   cleanupRetry.hidden=true;
   let unconfirmedDeletion;
-  const retry=button('重新读取对话',()=>{reset();update();});
+  let failedPage;
+  const retry=button('重新读取对话',()=>{
+    if(failedPage && meta)return loadMessages(failedPage);
+    reset();update();
+  });
   const form=h('form',{class:'composer',onsubmit:event=>{event.preventDefault();void post();}},
     h('div',{class:'composer__box'},edit.notice,quote.bar,prompts.menu,pictures.el,files.el,input,h('div',{class:'composer__bar'},prompts.manage,pictures.button,files.button,h('span',{class:'grow'}),send)));
   const rename=button('修改对话标题',openRename),archive=button('归档对话',()=>changeArchive());
@@ -150,7 +154,7 @@ export function createWebConversations({api,store,scope,router}){
     }
   }
   function reset(){
-    history.reset();queue.update(null);queuedEdit.observe(null,drafts.owner(),false);queueEnabled=false;imageExport.reset();pictures.update(null,drafts.owner(),false,false);files.update(null,drafts.owner(),false);
+    failedPage=null;history.reset();queue.update(null);queuedEdit.observe(null,drafts.owner(),false);queueEnabled=false;imageExport.reset();pictures.update(null,drafts.owner(),false,false);files.update(null,drafts.owner(),false);
     canStop=false;retryEnabled=false;editEnabled=false;edit.reset();prompts.changeScope();quoteKey=null;quote.restore(null);
     exportButton.hidden=true;exportDrawer?.close();exportDrawer=null;search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
     translation.update([]);favorites.update();input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
@@ -437,7 +441,9 @@ export function createWebConversations({api,store,scope,router}){
         else{rows=page.messages;nextBefore=page.nextBefore;}
         nextAfter=page.nextAfter;
       }
-      display();retry.hidden=true;
+      display();
+      if(failedPage)notice.textContent='';
+      failedPage=null;retry.hidden=true;
       if(direction==='before')scroller.scrollTop+=scroller.scrollHeight-previousHeight;
       else if(direction==='at'){
         const hit=messages.querySelector('[aria-current="true"]');
@@ -449,6 +455,7 @@ export function createWebConversations({api,store,scope,router}){
       if([401,403,409,503].includes(error.status) || error.status===404 && direction==='latest'){
         controls.hidden=true;meta=null;syncSearch();heading.textContent='独立对话';replace(messages);rows=[];input.value='';form.hidden=true;more.hidden=true;later.hidden=true;
       }
+      failedPage=meta && (direction==='before' || direction==='after') ? direction : null;
       notice.textContent=error.message;retry.hidden=false;
     }finally{if(valid(stamp) && version===readVersion){more.disabled=false;later.disabled=false;}}
   }
