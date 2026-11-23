@@ -130,6 +130,13 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await form.getByRole('button',{name:'提交'}).click();
   await expect(form.getByRole('status')).toHaveText('收到：合成评审');
   await expect(form.getByRole('button',{name:'提交'})).toBeDisabled();
+  await form.getByLabel('备注').fill('另一条合成评审');
+  await expect(form.getByRole('button',{name:'提交'})).toBeEnabled();
+  await form.getByLabel('备注').fill('合成评审');
+  await expect(form.getByRole('button',{name:'提交'})).toBeDisabled();
+  await form.getByLabel('备注').fill('修订评审');
+  await form.getByRole('button',{name:'提交'}).click();
+  await expect(form.getByRole('status')).toHaveText('收到：修订评审');
   const endpoint=server.url+'/api/v1/plugin-forms/review/notes';
   assert.equal((await page.request.post(endpoint,{data:{note:' '}})).status(),400);
   const stopped=await page.request.post(server.url+'/api/v1/plugins/review',{data:{enabled:false}});

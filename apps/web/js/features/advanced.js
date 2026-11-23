@@ -200,17 +200,31 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
         const fields = value.fields.map(field => h('input',{class:'input',required:field.required}));
         const status = h('p',{role:'status'});
         const submit = Button({label:'提交',type:'submit'});
-        content = h('form',{class:'stack',onsubmit:async event => {
+        let accepted;
+        const values = () => Object.fromEntries(value.fields.map((field,i)=>[field.name,fields[i].value]));
+        content = h('form',{class:'stack',oninput:() => {
+          if (accepted !== undefined) submit.disabled = JSON.stringify(values()) === accepted;
+        },onsubmit:async event => {
           event.preventDefault();
           if (submit.disabled) return;
           submit.disabled = true;
+          const payload = values();
+          for (const field of fields) field.readOnly = true;
           status.textContent = '正在提交…';
           try {
-            const result = await api.post('/plugin-forms/'+id,Object.fromEntries(value.fields.map((field,i)=>[field.name,fields[i].value])));
+            const result = await api.post('/plugin-forms/'+id,payload);
+            accepted = JSON.stringify(payload);
+            for (const field of fields) field.readOnly = false;
             status.textContent = typeof result?.message === 'string' ? result.message : '已提交';
           } catch (error) {
             status.textContent = error.message;
-            if (error.status >= 400 && error.status < 500) submit.disabled = false;
+            if (error.status >= 400 && error.status < 500) {
+              for (const field of fields) field.readOnly = false;
+              submit.disabled = JSON.stringify(payload) === accepted;
+            } else {
+              accepted = undefined;
+              status.textContent += '。提交结果待核对。';
+            }
           }
         }}, value.fields.map((field,i)=>h('label',{class:'field'},field.label,fields[i])),submit,status);
       }
