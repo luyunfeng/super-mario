@@ -45,6 +45,7 @@ test('独立消息链接定位早期原文、刷新与后翻页，复制不携�
   const region=page.getByLabel('独立对话内容');
   const target=region.locator('article[aria-current=true][data-id="'+ids[n]+'"]');
   await expect(target).toContainText(label(n));
+  await expect(target.locator('time')).toHaveAttribute('datetime',new Date(Date.UTC(2026,0,1)+n*1000).toISOString());
   await expect(target).toBeFocused();
   await expect(region.getByText(label(127),{exact:true})).toHaveCount(0);
   await target.getByRole('button',{name:'复制消息链接'}).click();
