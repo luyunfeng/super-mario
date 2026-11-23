@@ -148,8 +148,12 @@ test('本人消息可保存为常用提示词，主对话和项目斜杠菜单�
   await expect(projectInput).toHaveValue('正在编辑的草稿');
   await projectInput.press('Control+r');
   const search = page.getByRole('dialog', { name: '已发送内容' });
+  const historyField = search.getByRole('combobox');
+  await historyField.press('ArrowDown');
+  const selectedHistory = search.getByRole('option', {selected:true});
+  await expect(historyField).toHaveAttribute('aria-activedescendant', (await selectedHistory.getAttribute('id'))!);
   await search.getByLabel('搜索已发送内容').fill('补充 进展');
-  await expect(search.getByRole('button', { name: /补充主对话结论/ })).toBeVisible();
+  await expect(search.getByRole('option', { name: /补充主对话结论/ })).toBeVisible();
   await search.getByLabel('搜索已发送内容').press('Escape');
   await expect(projectInput).toHaveValue('正在编辑的草稿');
   await projectInput.press('Control+r');

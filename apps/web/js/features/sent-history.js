@@ -2,6 +2,8 @@
 import { h, replace } from '../lib/dom.js';
 import { openDrawer } from '../ui/overlay.js';
 
+let listSequence = 0;
+
 export function attachSentHistory({ input, store, context, currentConversationOnly = false }) {
   let recalled, searchDrawer;
   const prefix = owner => 'sm.sent-history.' + owner + '.';
@@ -27,8 +29,9 @@ export function attachSentHistory({ input, store, context, currentConversationOn
   input.addEventListener('input', () => { recalled = undefined; });
 
   function search(scope) {
-    const field = h('input', { class: 'input', 'aria-label': '搜索已发送内容', placeholder: '输入关键词' });
-    const list = h('div', { class: 'stack' });
+    const listId = 'sent-history-list-' + ++listSequence;
+    const field = h('input', { class: 'input', role: 'combobox', 'aria-expanded': 'true', 'aria-controls': listId, 'aria-label': '搜索已发送内容', placeholder: '输入关键词' });
+    const list = h('div', { class: 'stack', role: 'listbox', id: listId, 'aria-label': '匹配的已发送内容' });
     let selected = 0, rows = [], unsubscribe;
     const drawer = openDrawer({ title: '已发送内容', body: [field, list], onClose() { unsubscribe?.(); if (searchDrawer === drawer) searchDrawer = undefined; } });
     searchDrawer = drawer;
@@ -65,8 +68,17 @@ export function attachSentHistory({ input, store, context, currentConversationOn
       }).slice(0, 100);
       selected = Math.min(selected, Math.max(0, rows.length - 1));
       replace(list, rows.length ? rows.map((row, i) => h('button', { type: 'button',
-        class: 'btn ' + (i === selected ? 'btn--primary' : 'btn--secondary'), onclick: () => pick(row) }, row.text.slice(0, 180))) :
-        h('p', { class: 'small muted' }, '没有匹配的已发送内容。'));
+        role: 'option', id: listId + '-' + i, tabIndex: -1, title: row.text, onclick: () => pick(row) }, row.text.slice(0, 180))) :
+        h('p', { class: 'small muted', role: 'status' }, '没有匹配的已发送内容。'));
+      updateSelection();
+    }
+    function updateSelection() {
+      if (!rows.length) { field.removeAttribute('aria-activedescendant'); return; }
+      field.setAttribute('aria-activedescendant', list.children[selected].id);
+      for (const [i, option] of [...list.children].entries()) {
+        option.setAttribute('aria-selected', String(i === selected));
+        option.className = 'btn ' + (i === selected ? 'btn--primary' : 'btn--secondary');
+      }
     }
     let projects = store.view.snapshot?.projects;
     unsubscribe = store.subscribe(() => {
@@ -85,7 +97,7 @@ export function attachSentHistory({ input, store, context, currentConversationOn
       if (rows.length && (up || down)) {
         e.preventDefault();
         selected = (selected + (up ? -1 : 1) + rows.length) % rows.length;
-        for (const [i, button] of [...list.children].entries()) button.className = 'btn ' + (i === selected ? 'btn--primary' : 'btn--secondary');
+        updateSelection();
         list.children[selected]?.scrollIntoView({ block: 'nearest' });
       } else if (rows.length && bare && ['Enter', 'Tab'].includes(e.key)) {
         e.preventDefault(); pick(rows[selected]);

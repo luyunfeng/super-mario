@@ -281,7 +281,7 @@ test('处理指令可在本来源回取，改绑后关闭搜索且不能读取�
   await input.press('ArrowDown');
   await input.press('Control+r');
   const search = page.getByRole('dialog', { name: '已发送内容' });
-  await expect(search.getByRole('button', { name: '先整理交付要求' })).toBeVisible();
+  await expect(search.getByRole('option', { name: '先整理交付要求' })).toBeVisible();
   conversationId = 'second';
   await emit(page);
   await expect(search).toHaveCount(0);
