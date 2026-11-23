@@ -111,7 +111,18 @@ export const webConversationsExtension: Extension = {
       if (input.archived !== undefined && typeof input.archived !== 'boolean') fail(400, '归档状态无效');
       if (action === 'list') {
         requireProject(store, projectId);
-        return { items: store.list<Conversation>(collection).filter(row => row.projectId === projectId && (row.archived ?? false) === (input.archived ?? false)).reverse().map(view) };
+        const rows=store.list<Conversation>(collection).filter(row=>row.projectId===projectId && (row.archived ?? false)===(input.archived ?? false)).reverse();
+        const threads=new Set(rows.map(row=>'web:'+row.id));
+        const latest=new Map<string,Message>();
+        if(threads.size)for(const message of store.list<Message>('messages')){
+          if(!threads.has(message.conversationId) || message.role!=='user' || !message.directWebInput || typeof message.id!=='string' || typeof message.text!=='string' || typeof message.createdAt!=='string' || !independentWebSource(store,message,message.conversationId,projectId))continue;
+          if(message.createdAt >= (latest.get(message.conversationId)?.createdAt ?? ''))latest.set(message.conversationId,message);
+        }
+        const items=rows.map(row=>{
+          const last=latest.get('web:'+row.id);
+          return {...view(row),...(last && {lastInputAt:last.createdAt,lastInputText:[...last.text.trim().replace(/\s+/gu,' ')].slice(0,100).join('')})};
+        }).sort((a,b)=>(b.lastInputAt || b.createdAt).localeCompare(a.lastInputAt || a.createdAt));
+        return {items};
       }
       const id = conversationKey(input.id);
       if (action === 'get') {

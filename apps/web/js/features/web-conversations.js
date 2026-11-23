@@ -16,7 +16,7 @@ import {conversationMessageSearch} from './conversation-message-search.js';
 import {copyText} from '../lib/clipboard.js';
 import {icon} from '../ui/icons.js';
 import {h,replace} from '../lib/dom.js';
-import {uuid} from '../lib/format.js';
+import {uuid, timeAgo} from '../lib/format.js';
 import {createConversationDrafts} from '../lib/conversation-drafts.js';
 import {createMessageEdit} from '../lib/message-edit.js';
 import {createMessageQuote,quoteDraftKey} from '../lib/message-quote.js';
@@ -197,7 +197,9 @@ export function createWebConversations({api,store,scope,router}){
       const term=searchTitle.value.trim().toLowerCase();
       const matches=items.filter(row=>row.title.toLowerCase().includes(term));
       status.textContent=matches.length?'':items.length?'没有匹配的对话标题。':filter.value==='archived'?'当前范围没有已归档对话。':'当前范围还没有独立对话。';
-      replace(list,matches.map(row=>h('a',{class:'btn btn--ghost',href:href(row.id),onclick:()=>drawer.close()},row.title)));
+      replace(list,matches.map(row=>h('div',{class:'stack'},
+        h('a',{class:'btn btn--ghost',href:href(row.id),onclick:()=>drawer.close()},row.title),
+        h('small',{class:'muted'},[timeAgo(row.lastInputAt || row.createdAt),row.lastInputText].filter(Boolean).join(' · ')))));
     }
     searchTitle.oninput=drawList;
     listRefresh=async()=>{

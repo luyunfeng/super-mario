@@ -34,6 +34,13 @@ test('independent web conversations persist exact scopes and idempotent creation
   assert.deepEqual(await call({action:'list'}),{items:[a]});
   assert.deepEqual(await call({action:'list',projectId:'p'}),{items:[projectRow]});
   assert.deepEqual(await call({action:'get',id:pid}),projectRow);
+  const other=randomUUID();
+  await call({action:'create',id:other,title:'测试'});
+  const message={id:'recent',role:'user',text:'合成  最近输入',conversationId:'web:'+id,directWebInput:true,createdAt:'2099-01-02T00:00:00.000Z'};
+  f.store.put('messages',message.id,message);
+  f.store.put('messages','unrelated',{...message,id:'unrelated',projectId:'p',text:'其他范围',createdAt:'2099-02-01T00:00:00.000Z'});
+  const recent=await call({action:'list'}) as {items:{id:string;lastInputText?:string}[]};
+  assert.deepEqual(recent.items.map(row=>[row.id,row.lastInputText]),[[id,'合成 最近输入'],[other,undefined]]);
   assert.equal(webConversationMatches(f.store,pid,'p'),true);
   assert.equal(webConversationMatches(f.store,pid),false);
   assert.equal(webConversationMatches(f.store,id),true);
