@@ -55,6 +55,10 @@ export function forgetPrivateConversation(store: Store, conversationId: string) 
   for (const m of messages) {
     store.remove('messages', m.id);
     store.remove('input-paused', m.id);
+    store.remove('conversation.question-continuations', m.id);
+  }
+  for (const row of store.entries?.<string>('conversation.last-direct-input') ?? []) {
+    if (belongs(row.value)) store.remove('conversation.last-direct-input', row.id);
   }
   for (const trace of traces) store.remove(TRACE_COLLECTION, trace.id);
   for (const record of scheduled) {

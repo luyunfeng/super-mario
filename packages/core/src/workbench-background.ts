@@ -314,7 +314,7 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
     void Promise.resolve().then(() => {
       if (isClosing()) return;
       const card = store.get<Card>('interactions', id);
-      if (!card || card.userNotifiedAt) return;
+      if (!card || card.withdrawnReason === 'user_spoke' || card.userNotifiedAt) return;
       const origin = store.get<{ inputId?: string }>('interaction-origins', id);
       const now = new Date().toISOString();
       const messageId = `interaction-notice:${id}`;

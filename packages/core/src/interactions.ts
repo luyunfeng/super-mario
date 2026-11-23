@@ -28,6 +28,7 @@ export interface Card {
   cwd?: string;
   status: 'open' | 'answered' | 'expired' | 'withdrawn';
   answer?: string;
+  withdrawnReason?: 'user_spoke';
   answeredBy?: string;
   suggestion?: string;
   handler: Decision['handler'];
@@ -253,9 +254,9 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       return structuredClone(card);
     },
     answer,
-    withdraw(id: string, version: number): Card {
+    withdraw(id: string, version: number, reason?:'user_spoke'): Card {
       active();
-      const card = claim(id, version, { status: 'withdrawn' });
+      const card = claim(id, version, { status: 'withdrawn', ...(reason && {withdrawnReason:reason}) });
       changed(id);
       return card;
     },

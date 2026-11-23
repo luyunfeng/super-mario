@@ -4304,3 +4304,27 @@ test('连接器规则归组与模型恢复后，Web 和飞书主人只读核对�
     assert.equal(server.app.todos().length,0);
   }finally{await server.close();}
 });
+
+test('主对话的提问提示词和工具支持用户中途改目标，旧问题不产生答案', async t => {
+  const { server, ask } = await fixture(t, request => {
+    if (request.lastRole === 'tool') return { role:'assistant', content:'请在问题卡里选择发布日。' };
+    assert.match(request.system, /若原问题卡已撤回，以新消息明确表达的意思为准/);
+    if (JSON.stringify(request.content).includes('先只整理文档')) {
+      return { role:'assistant', content:'现在只整理文档。' };
+    }
+    assert.ok(request.tools.includes('interaction_open'));
+    return call('interaction_open',{ kind:'question', title:'哪天发布？', body:'周一能提早验证，周五可多做测试。建议周五。' },'release-day');
+  });
+  try {
+    server.app.policies.write({}, {ladder:['user']});
+    assert.match(await ask('帮我确定发布日，先问我。'),/哪天发布|请在问题卡里选择发布日/);
+    const [before] = server.app.interactions.list();
+    assert.equal(before?.status,'open');
+    assert.equal(await ask('先只整理文档，发布日稍后再定。'),'现在只整理文档。');
+    const after = server.app.interactions.list().find(card => card.id === before!.id);
+    assert.ok(after);
+    assert.notEqual(after.status,'open');
+    assert.notEqual(after.status,'answered');
+    assert.equal(after.answer,undefined);
+  } finally { await server.close(); }
+});

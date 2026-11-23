@@ -78,6 +78,7 @@ export interface FeishuBotsApp {
   readTopicTurnResult?(target: FeishuAgentInputTarget, turnId: string): Promise<Json>;
   workDecisions?: { ledger: { get(id: string): WorkDecision | undefined } };
   recordTopicDecision?(inputId: string): void;
+  conversationUserSpoke?(inputId:string):void;
   createFeishuTodo?(input: Record<string, unknown>, source: FeishuTodoSource): Todo;
   plugins?: {
     list(): Array<{ id: string; enabled: boolean; status: string }>;
@@ -113,7 +114,7 @@ type TopicStamp = { todoId: string; grant: string; opening: boolean; sourceOpeni
 type Envelope = { topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
 type Routed = Route & Envelope & { envelopeId: string; replyReference?: { text: string; truncated: boolean } | { unavailable: true } };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
-type SentQuestion = DecisionNudgeCard & { questionId:string; version:number; inputId:string; navigation:string };
+type SentQuestion = DecisionNudgeCard & { questionId:string; version:number; inputId:string; navigation:string; closeAttempted?:true };
 const sentQuestions='feishu.sent-question-cards';
 type Runtime = { readyEpoch?: number; commandSubscription?: string; epoch: number; adapter?: FeishuBotAdapter; reason?: string; code: string; expires: number; operations: Promise<void> };
 const noDelivery = (message: string) => Object.assign(new Error(message), { delivery: 'no' as const });
@@ -2160,6 +2161,39 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if(q.projectId && (!app.store.get<Project>('projects',q.projectId) || app.store.get<Project>('projects',q.projectId)?.archivedAt))return;
     return q;
   }
+  function closeWithdrawnForms(id:string, known?:SentQuestion[]) {
+    const q=app.store.get<Card>('interactions',id);
+    if(q?.status!=='withdrawn' || q.withdrawnReason!=='user_spoke')return;
+    for(const card of known ?? app.store.list<SentQuestion>(sentQuestions)){
+      if(card.closeAttempted || card.questionId!==id)continue;
+      // Defer platform I/O until the accepting transaction has committed.
+      void track(card.botId,Promise.resolve().then(async ()=>{
+        const bot=current(card.botId),paired=owner(bot),{adapter,epoch}=runtime(bot.id);
+        if(!paired || !adapter?.updateCard)return;
+        const key=digest([bot.id,card.binding,card.messageId]);
+        const guard=()=>{
+          if(!active(bot.id,epoch,bot.revision) || runtime(bot.id).adapter!==adapter || runtime(bot.id).readyEpoch!==epoch || !adapter.status().connected)return false;
+          const live=current(bot.id),activeOwner=owner(live);
+          return app.store.get<Card>('interactions',id)?.withdrawnReason==='user_spoke' &&
+            !!activeOwner && groupReadBinding(live,activeOwner)===card.binding && !!privateTurn(live,activeOwner,card.inputId) &&
+            !groupTasks.recalled(bot.id,bot.appId,paired.chatId,card.messageId) && runtime(bot.id).adapter===adapter;
+        };
+        const sent=app.store.get<SentQuestion>(sentQuestions,key);
+        if(!sent || sent.closeAttempted || !guard())return;
+        app.store.put(sentQuestions,key,{...sent,closeAttempted:true});
+        const payload={botId:bot.id,accountId:bot.appId,target:paired.chatId,chatId:paired.chatId,key:'question-withdrawn:'+key,text:'你已在此对话发送新消息，无需再回答。'};
+        const update=async (value:Json)=>{
+          if(!guard() || !value || typeof value!=='object' || Array.isArray(value) || Object.entries(payload).some(([k,v])=>value[k]!==v))
+            throw noDelivery('提问卡片的绑定已变化。');
+          await adapter.updateCard!(card.messageId,{schema:'2.0',header:{template:'grey',title:cardPlain('提问已撤回')},
+            body:{elements:[{tag:'div',text:cardPlain(payload.text)}]}});
+          return null;
+        };
+        if(app.plugins?.invocations)await app.plugins.invocations.invoke('channel.send',payload,update);
+        else await update(payload);
+      }));
+    }
+  }
   async function sweepDecisionNudges(onlyBot?:string) {
     if(closed || !pluginEnabled())return;
     // Six days is the largest delay. The ledger drops nudges a day past due.
@@ -2174,8 +2208,11 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const paired=owner(bot);
       if(!paired?.senderId)continue;
       const binding=groupReadBinding(bot,paired), after=bot.decisionNudgeMinutes ?? 60;
+      const bound=cards.filter(card=>card.botId===bot.id && card.binding===binding);
+      // After a restart, finish a withdrawal that committed before any platform edit was attempted.
+      for(const card of bound) if(!card.closeAttempted)closeWithdrawnForms(card.questionId,[card]);
       const due=nudges.scan({botId:bot.id,binding,afterMinutes:after,quiet:decisionQuietNow(app.store,new Date()),
-        cards:cards.filter(card=>card.botId===bot.id && card.binding===binding && liveQuestion(card,bot,paired))});
+        cards:bound.filter(card=>liveQuestion(card,bot,paired))});
       for(const card of due){
         const state=runtime(bot.id),epoch=state.epoch,adapter=state.adapter;
         if(!adapter || state.readyEpoch!==epoch || !active(bot.id,epoch,bot.revision) || !adapter.status().connected)continue;
@@ -2729,6 +2766,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         if (stamp?.privateSenderId && entry.target && entry.sourceMessageId)
           app.store.put('feishu.stop-references', stopReference(bot, entry.target, entry.sourceMessageId), accepted.id);
         app.store.put('feishu.bot.dispatch', key, { status: 'completed', id: accepted.id });
+        if(stamp?.privateSenderId && !stamp.group && !stamp.command && !stamp.relay && !stamp.resultRelayEntryId) app.conversationUserSpoke?.(accepted.id);
         if (stamp?.topic && !stamp.topic.opening) {
           if (selection && !app.recordTopicDecision) throw noDelivery('当前服务缺少话题决定记录能力。');
           app.recordTopicDecision?.(accepted.id);
@@ -2807,6 +2845,15 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
             : 'projectId' in bot.scope && bot.scope.projectId ? `projects/${encodeURIComponent(bot.scope.projectId)}/workspace` : bot.scope.kind === 'task' ? 'projects/all/todos' : 'chat' },
       };
       if (stamp?.topic) context.beforeSend = () => checkEnvelope(entry, current(botId));
+      if(stamp?.questionId){
+        const prior=context.beforeSend;
+        context.beforeSend=()=>{
+          prior?.();
+          if(app.store.get<Card>('interactions',stamp.questionId!)?.withdrawnReason==='user_spoke')
+            throw noDelivery('主人已在原对话发言，提问已撤回。');
+        };
+        context.beforeSend();
+      }
       const paired = owner(bot);
       if ((key.startsWith('feishu-stop:') || stamp?.modelListGrant || stamp?.agentList || stamp?.statusGrant?.binding?.agentTarget || key.startsWith('feishu-dashboard:conversations:')) && dashboard) {
         context.beforeTextFallback = () => {
@@ -2837,6 +2884,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
                   botId:bot.id,binding,decisionKey:'question:'+q.id+':'+q.version,messageId,sentAt:new Date().toISOString(),
                   questionId:q.id,version:q.version,inputId,navigation:navigationId
                 } satisfies SentQuestion);
+                // A new input may have withdrawn the question while the original send awaited its receipt.
+                closeWithdrawnForms(q.id);
               };
             }
           }
@@ -3025,6 +3074,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const noticeId = message.origin === 'notification' && message.id.startsWith('interaction-notice:')
       ? message.id.slice('interaction-notice:'.length) : undefined;
     const questionId = noticeId && app.store.get<{inputId?:string}>('interaction-origins',noticeId)?.inputId === message.replyTo ? noticeId : undefined;
+    if (questionId && app.store.get<Card>('interactions',questionId)?.withdrawnReason === 'user_spoke') return;
     const entry = await put(bot, { direction: 'outbox', eventKey: `feishu-reply:${JSON.stringify([bot.id, bot.appId, route.inputId, message.id])}`,
       title: bot.name, text: message.text, target: route.target, replyTo: route.inputId, sourceMessageId: route.sourceMessageId, requiresConfirmation: false }, route.scope, { questionId, topic: route.topic, groupTaskOrigin: route.groupTaskOrigin, resultRelayEntryId: route.resultRelayEntryId, chatProject: route.chatProject, conversationThreadId: route.conversationThreadId, privateSenderId: route.privateSenderId, chatBinding: route.chatBinding, group: route.group, command: route.command, relay: route.relay, platformReplyTo: route.platformReplyTo ?? (questionId ? route.sourceMessageId : undefined), threadId: route.threadId });
     if (active(bot.id, epoch, bot.revision) && entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
@@ -3044,6 +3094,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const decision = webTopicDecision(app.store, app.workDecisions.ledger.get, event);
       if (decision) topicPosts.changed(decision.todoId, decision.decisionId);
     }
+    if(event.type==='interactions.changed' && typeof event.data.id==='string')closeWithdrawnForms(event.data.id);
     if (event.type === 'approvals.changed' && typeof event.data.id === 'string') {
       const target = app.store.get<FeishuAgentInputTarget>('feishu.agent-input-targets', event.data.id);
       if (target?.topic) {

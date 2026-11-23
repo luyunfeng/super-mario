@@ -44,7 +44,17 @@ export function createChatPage({ api, store, scope, router }) {
   const code = createCodeSidebar({ api, store });
   const recent = createRecentWork({ api, store, router, scope });
   const banner = h('div', { id: 'chat-banner' });
-  const decisionNotice = h('div', { role: 'status', hidden: true });
+  const decisionText = h('span');
+  const originalQuestion = Button({ label: '查看原提问通知', size: 'sm', kind: 'ghost', onClick: () => {
+    const row = messages.querySelector(`[data-id="${CSS.escape(originalQuestion.dataset.notice)}"]`);
+    if (!row) return;
+    const details = row.querySelector('details');
+    if (details) details.open = true;
+    row.tabIndex = -1;
+    row.focus();
+    row.scrollIntoView({ block: 'center' });
+  }});
+  const decisionNotice = h('div', { role: 'status', hidden: true }, decisionText, originalQuestion);
   const messageStatus = h('span');
   const messageNotice = h('div', { role: 'status', hidden: true }, messageStatus, ' · ',
     h('a', { href: router.href('chat') }, '返回最新消息'));
@@ -54,7 +64,12 @@ export function createChatPage({ api, store, scope, router }) {
     if (!pendingDecision || router.current.page !== 'chat' || !store.view.snapshot) return;
     const found = attention.reveal(pendingDecision);
     decisionNotice.hidden = found;
-    decisionNotice.textContent = found ? '' : `当前待处理列表中没有这条${decisionLabels[pendingDecision.split(':')[0]]}。`;
+    const [type, id] = pendingDecision.split(':');
+    decisionText.textContent = found ? '' : `当前待处理列表中没有这条${decisionLabels[type]}。`;
+    const noticeId = 'interaction-notice:' + id;
+    originalQuestion.dataset.notice = noticeId;
+    originalQuestion.hidden = found || type !== 'interaction' || !store.view.snapshot.messages?.some(message =>
+      message.id === noticeId && message.origin === 'notification');
     if (found) pendingDecision = '';
   }
   const setup = h('div', { id: 'onboarding' });

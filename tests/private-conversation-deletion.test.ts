@@ -35,7 +35,13 @@ test('删除独立对话逐一核对真实工作关联，保留独立业务记�
   assert.throws(remove, { status: 409 });
   store.put('todos', 'older', { id: 'older', completedAt: '2026-01-02' });
   store.put('scheduled-work.requests', 'old', { id: 'old', status: 'cancelled', sourceMessage: m });
+  store.put('conversation.question-continuations', m.id, 'earlier-input');
+  store.put('conversation.last-direct-input', 'audience', m.id);
+  store.put('conversation.last-direct-input', 'other-audience', 'other-input');
   remove();
+  assert.equal(store.get('conversation.question-continuations', m.id), undefined);
+  assert.equal(store.get('conversation.last-direct-input', 'audience'), undefined);
+  assert.equal(store.get('conversation.last-direct-input', 'other-audience'), 'other-input');
   assert.equal(store.get('messages', m.id), undefined);
   assert.equal(store.get('agent.traces', 'trace'), undefined);
   assert.doesNotMatch(JSON.stringify(store.list('scheduled-work.requests')), /样例正文/);

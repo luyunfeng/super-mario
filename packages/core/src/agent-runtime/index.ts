@@ -33,6 +33,7 @@ export async function removeScopedTranscript(dataDir: string, conversationId: st
 type SDK = typeof import('@earendil-works/pi-coding-agent');
 interface Options {
   feishuBotId?: string;
+  onDirectWebInput?(message:Message):void;
   reviewEvidence?: ReviewEvidenceReader; mainSkillCatalog?: () => Promise<string>; mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>; projectInstructions?: (projectId: string) => Promise<string>; inboxConversations?: () => import("../../../protocol/src/inbox-conversations.ts").InboxConversation[]; workspaceDir?: string; contextMode?: 'full' | 'principles' | 'project-memory'; workDecisions?: (scope?:BotScope, projectId?:string)=>unknown; config: AppConfig; store: Store; events: EventBus; contributions: Contributions; conversationId?: string; scope?: BotScope; canUseScope?: (input?: Message) => boolean; allowedTools?: string[]; systemPrompt?: string; projectContext?: (projectId:string)=>Json; executors?: () => ExecutorInfo[]; conversationThreadId?: string; botContext?: (conversationId:string, scope?:BotScope, threadId?:string)=>Json }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -940,7 +941,11 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         ...(context?.readOnly || scope?.kind === 'unmarked' ? { readOnly: true } : {}),
         createdAt: new Date().toISOString(), status: 'pending',
       };
-      const existing = acceptMessage(store, message);
+      const existing = message.directWebInput && options.onDirectWebInput ? store.transaction(()=>{
+        const replay=acceptMessage(store,message);
+        if(!replay)options.onDirectWebInput!(message);
+        return replay;
+      }) : acceptMessage(store, message);
       if (existing) {
         if (options.canUseScope?.(existing) === false) throw Object.assign(new Error('原消息作用域已失效'), { status: 403 });
         return existing;

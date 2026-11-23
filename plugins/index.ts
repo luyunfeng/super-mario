@@ -277,13 +277,13 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if (actions.taskPlan) context.contribute('tools', 'task_plan', tool('task_plan', '把目标拆成1–8个任务，每项须给出验收标准；省略 expectMinutes 时由工作台估算，回执的 estimateSource 标明默认 default、历史 learned 或显式指定 override。start=true立即按当前用户请求派发，否则等待用户开始。', async (args, signal) => { signal.throwIfAborted(); return actions.taskPlan!(args); }, {
             title: { type: 'string' }, start: { type: 'boolean' }, tasks: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object', required: ['prompt', 'doneWhen'], additionalProperties: false, properties: { prompt: { type: 'string' }, doneWhen: { type: 'string' }, expectMinutes: { type: 'number', exclusiveMinimum: 0, maximum: 10080, description: '仅显式指定时填正数分钟，否则省略以自动估算' }, executionMode: { type: 'string', enum: ['task','interactive'] }, executorId: { type: 'string' }, cwd: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' }, policy: taskPolicyParameters } } },
           }));
-          if (actions.interactionOpen) context.contribute('tools', 'interaction_open', tool('interaction_open', '需要回答或验收时建立交互卡片，按配置给出建议或等待用户，不能绕过审批。', async (args, signal) => { signal.throwIfAborted(); return actions.interactionOpen!(args); }, {
+          if (actions.interactionOpen) context.contribute('tools', 'interaction_open', tool('interaction_open', '需要主人作决定时建立交互卡片。普通问题在 title 写明决定事项，在 body 写需要补充的具体信息，或列出可选做法、影响及建议。发出后等待明确答复，权限、计划和验收各用对应 kind。', async (args, signal) => { signal.throwIfAborted(); return actions.interactionOpen!(args); }, {
             kind: { type: 'string', enum: ['question', 'permission', 'plan', 'review'] }, title: { type: 'string' }, body: { type: 'string' }, runId: { type: 'string' }, projectId: { type: 'string' }, executorId: { type: 'string' }, cwd: { type: 'string' },
-          }));
+          }, ['kind', 'title', 'body']));
           if (actions.interactionsList) context.contribute('tools', 'interactions_list', tool('interactions_list', '查看交互卡、当前版本和待回答问题。', async (_args, signal) => { signal.throwIfAborted(); return actions.interactionsList!(); }));
-          if (actions.answerQuestion) context.contribute('tools', 'interaction_answer', tool('interaction_answer', '把当前用户对先前普通问题的回答写回交互卡，并在本轮继续原目标。不能自行回答本轮刚提出的问题，也不能代批权限或计划。', async (args, signal) => {
+          if (actions.answerQuestion) context.contribute('tools', 'interaction_answer', tool('interaction_answer', '仅将主人明确给出的答案写回当前对话中仍待答的普通问题。先从 interactions_list 核对 id、版本和状态。已撤回的卡按最新发言继续对话。权限和计划由主人直接确认。', async (args, signal) => {
             signal.throwIfAborted(); return actions.answerQuestion!(String(args.id ?? ''), Number(args.version), String(args.text ?? ''));
-          }, { id: { type: 'string' }, version: { type: 'integer' }, text: { type: 'string' } }));
+          }, { id: { type: 'string' }, version: { type: 'integer' }, text: { type: 'string' } }, ['id', 'version', 'text']));
           if (actions.projectsList) context.contribute('tools', 'projects_list', tool('projects_list', '列出工作台项目及归档状态。', async (_args, signal) => { signal.throwIfAborted(); return actions.projectsList!(); }));
           if (actions.projectsDiscover) context.contribute('tools', 'projects_discover', tool('projects_discover', '只读发现已连接电脑上已有的项目文件夹。不会创建项目或执行工作；开发项目先发现目录，再绑定电脑和目录。', async (args, signal) => { signal.throwIfAborted(); return actions.projectsDiscover!(args); }, { machineId: { type: 'string' }, roots: { type: 'array', items: { type: 'string' } } }));
           if (actions.workspaceCode) {

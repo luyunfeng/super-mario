@@ -506,8 +506,8 @@ export async function createWorkbench(config: AppConfig) {
   function todoHistory(id: string, before?: string) {
     return readTodoHistory(store, id, before, reviewEvidence);
   }
-  const agent = createAgentRuntime({ config, store, events, contributions, reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
-  const scopedAgents = createScopedAgents({ inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
+  const agent = createAgentRuntime({ config, store, events, contributions, onDirectWebInput:conversationUserSpoke, reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
+  const scopedAgents = createScopedAgents({ onDirectWebInput:conversationUserSpoke, inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
     allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'],
     systemPrompt: SUPERVISOR_SYSTEM_PROMPT });
@@ -699,6 +699,9 @@ export async function createWorkbench(config: AppConfig) {
       store.transaction(() => {
         if (route) store.put('message.routes', accepted.id, { ...route, resumed: true });
         store.put('interaction-origins', card.id, { ...origin, continuationId: accepted.id });
+        const root = questionSource(original);
+        if (root && original.conversationId === accepted.conversationId)
+          store.put('conversation.question-continuations', accepted.id, root.id);
       });
     } else {
       if (answeredInCurrentTurn.has(card.id)) return;
@@ -721,7 +724,13 @@ export async function createWorkbench(config: AppConfig) {
       executorId: run?.executorId ?? input.executorId, cwd: run?.cwd ?? input.cwd }, Boolean(source && !runId && input.kind === 'question'));
     const inputId = run?.sourceMessageId ?? source?.id;
     store.put('interaction-origins', card.id, { inputId });
-    if (card.kind === 'question' && !runId && inputId) store.put('input-paused', inputId, { cardId: card.id });
+    if (card.kind === 'question' && !runId && inputId) {
+      store.put('input-paused', inputId, { cardId: card.id });
+      const root = questionSource(source);
+      const audience = directQuestionAudience(root);
+      const latest = audience && store.get<string>('conversation.last-direct-input', audience);
+      if (latest && latest !== root?.id) return interactionService.withdraw(card.id, card.version, 'user_spoke');
+    }
     return card;
   } };
   const supervisorAgent = createSupervisorAgent({ store, events, agent: supervisorRuntime, signals: supervision.signals, reviewEvidence, durable: true, publish: background.publish,
@@ -801,13 +810,64 @@ export async function createWorkbench(config: AppConfig) {
     // Explicit start from the main Agent follows a current user request. Other plans await the Web action.
     return input.start === true && source && !plan.tasks.some(task => task.policy !== undefined) ? plans.start(plan.id, plan.version) : plan;
   }
+  function directQuestionAudience(message: Message | undefined) {
+    if (!message || message.role !== 'user' || message.replyTo || message.readOnly || (message.origin && message.origin !== 'user')) return;
+    const route = store.get<MessageRoute & {botId?: string; inputId?: string; revision?: number; privateSenderId?: string;
+      audienceGeneration?: string; conversationThreadId?: string}>('message.routes', message.id);
+    const scope = [message.conversationId, message.projectId ?? null, message.todoId ?? null];
+    let audience;
+    if (!route && message.directWebInput && (message.conversationId === 'main' || message.conversationId === `project:${message.projectId}:work`)) {
+      audience = ['web', ...scope];
+    } else if (route?.channel === 'feishu' && route.inputId === message.id && !route.resumed && route.botId && route.privateSenderId) {
+      try {
+        if (ownerScopeRequest(message)) audience = ['feishu', ...scope, route.botId, route.accountId, route.target,
+          route.privateSenderId, route.revision, route.audienceGeneration, route.conversationThreadId];
+      } catch { /* A retired source no longer identifies an authorized conversation. */ }
+    }
+    if (audience) return createHash('sha256').update(JSON.stringify(audience)).digest('hex');
+  }
+
+  // A card answer resumes the same conversation. Its synthetic turn may ask a
+  // second question, but cannot itself count as a new human message.
+  function questionSource(input: Message | undefined) {
+    if (!input) return;
+    const rootId = store.get<string>('conversation.question-continuations', input.id);
+    if (!rootId) return input;
+    const root = store.get<Message>('messages', rootId);
+    if (root?.conversationId === input.conversationId && root.projectId === input.projectId && root.todoId === input.todoId) return root;
+  }
+
+  function conversationUserSpoke(message: Message) {
+    const audience = directQuestionAudience(message);
+    if (!audience) return;
+    store.put('conversation.last-direct-input', audience, message.id);
+    for (const card of interactionService.list()) {
+      if (card.kind !== 'question' || card.status !== 'open' || card.runId || card.projectId !== message.projectId) continue;
+      const origin = store.get<{inputId?: string}>('interaction-origins', card.id)?.inputId;
+      if (!origin || origin === message.id || store.get<{cardId?: string}>('input-paused', origin)?.cardId !== card.id) continue;
+      const original = store.get<Message>('messages', origin);
+      if (original?.conversationId !== message.conversationId || directQuestionAudience(questionSource(original)) !== audience) continue;
+      const closed = interactionService.withdraw(card.id, card.version, 'user_spoke');
+      if (closed.withdrawnReason !== 'user_spoke') continue;
+      const id = 'interaction-notice:' + card.id;
+      const notice = store.get<Message>('messages', id);
+      if (notice?.origin === 'notification' && notice.replyTo === origin) {
+        store.put('messages', id, { ...notice, text: `提问已撤回：${card.title}\n你已在此对话发送新消息，无需再回答。` });
+      }
+    }
+  }
   async function answerQuestion(id: string, version: number, text: string): Promise<Json> {
-    const source = agent.currentInput();
+    const source = currentAgentInput();
     const card = store.get<import('./interactions.ts').Card>('interactions', id);
     if (!source || !card) throw new InputError('没有当前用户输入或交互卡不存在', 404);
     if (card.kind !== 'question') throw new InputError('权限、计划和验收卡需要用户直接确认，主 Agent 不能代批', 403);
     const origin = store.get<{ inputId?: string }>('interaction-origins', id);
-    if (origin?.inputId === source.id) throw new InputError('不能自行回答当前轮次刚提出的问题', 403);
+    const audience = directQuestionAudience(source);
+    if (!audience || card.runId || card.projectId !== source.projectId || !origin?.inputId ||
+        store.get<{cardId?: string}>('input-paused', origin.inputId)?.cardId !== id ||
+        directQuestionAudience(questionSource(store.get<Message>('messages', origin.inputId))) !== audience)
+      throw new InputError('这次输入不能回答其他来源的问题', 403);
+    if (origin.inputId === source.id) throw new InputError('不能自行回答当前轮次刚提出的问题', 403);
     answeredInCurrentTurn.add(id);
     try { return await interactions.answer(id, version, text, 'user_chat') as unknown as Json; }
     finally { answeredInCurrentTurn.delete(id); }
@@ -2113,6 +2173,10 @@ export async function createWorkbench(config: AppConfig) {
     },
     setNotificationChannel(channel: typeof notificationChannel) { notificationChannel = channel; },
     setNotificationBots(source: typeof notificationBots) { notificationBots = source; },
+    conversationUserSpoke(inputId:string) {
+      const source=store.get<Message>('messages',inputId);
+      if(source)conversationUserSpoke(source);
+    },
     postScoped(text: string, scope: BotScope, botId: string, threadId?: string, todoId?: string) {
       return scopedAgents.post(text, validateBotScope(store, scope), botId, todoId ? { todoId } : undefined, threadId);
     },

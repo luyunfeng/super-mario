@@ -9,6 +9,7 @@ import { createAgentRuntime, removeScopedTranscript } from './agent-runtime/inde
 
 type Runtime = ReturnType<typeof createAgentRuntime>;
 interface Options {
+  onDirectWebInput?(message:Message):void;
   inboxConversations?: () => import('../../protocol/src/inbox-conversations.ts').InboxConversation[];
   reviewEvidence?: ReviewEvidenceReader;
   config: AppConfig; store: Store; events: EventBus; contributions: Contributions;
