@@ -22,7 +22,7 @@ export type { InboxOrigin } from './inbox-origin.ts';
 import type { InboxOrigin } from './inbox-origin.ts';
 import type { NativeResumeSpec } from './agent-sessions.ts';
 /** Wire values stay JSON-compatible so the web and execution node share one contract. */
-export type { BotScope, BotGroupAccess, BotCollaboration, FeishuBotInput, FeishuBot, MailboxEntry } from './bots.ts';
+export type { BotScope, BotGroupAccess, BotCollaboration, GroupReadPage, GroupReadRecord, FeishuBotInput, FeishuBot, MailboxEntry } from './bots.ts';
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type JsonObject = { [key: string]: Json };
 export type KnowledgeLayer = 'personal' | 'global' | 'project';

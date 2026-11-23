@@ -71,7 +71,7 @@ import { exportNativeConversation, readNativeFavoritePage } from './native-conve
 import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
-import type { AppConfig, Approval, BotScope, ExecutionResult, InboxItem, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
+import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxItem, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
 export class InputError extends Error {
@@ -126,6 +126,7 @@ export async function createWorkbench(config: AppConfig) {
   const presence = createWebPresence();
   let notificationChannel: (bot: import('../../protocol/src/index.ts').FeishuBot) => string = () => { throw new InputError('通知渠道尚未连接', 503); };
   let mailboxProposer: ((input: Record<string, unknown>) => Json) | undefined;
+  let groupReadRecords: ((id: string, before?: string, sourceId?: string, recordId?: string) => GroupReadPage) | undefined;
   let privateSearch: ((id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string) => Json) | undefined;
   let privateExport: ((botId: string, threadId: string) => { title: string; messages: Message[] }) | undefined;
   let privateConversation: ((botId: string, threadId: string, action: 'read' | 'update', input: JsonObject) => Json) | undefined;
@@ -321,7 +322,7 @@ export async function createWorkbench(config: AppConfig) {
     }
     return raw as unknown as Json;
   }
-  for (const extension of createSystemExtensions({ demo: config.demo, actions: { todayBriefSources, triageAgent: { status: () => inboxClassifier.status(), ask: (text, context) => inboxClassifier.ask(text, context) }, ruleTriage, scheduledWorkCronPreview: input => scheduledWork.previewCron(input), scheduledWorkHistory: input => scheduledWork.readHistory(input) as unknown as Json, scheduledWorkBrief: input => scheduledWork.readBrief(input), scheduledWorkList: input => scheduledWork.list(input) as unknown as Json, scheduledWorkPropose: input => scheduledWork.propose(input,true) as unknown as Json, scheduledWorkSkipNext: input => scheduledWork.skipNext(input,true), scheduledWorkSetPaused: input => scheduledWork.changeTiming(input,true) as unknown as Json, scheduledWorkCancel: input => scheduledWork.cancel(input,true) as unknown as Json, followupCreate: input => followups.create(input, currentAgentInput()?.conversationId) as unknown as Json, followupList: input => followups.list(input) as unknown as Json, followupCancel: id => followups.cancel(id) as unknown as Json, notifyUser: input => followups.notifyUser(input), calendarAgenda: (input, signal) => fetchCalendarAgenda({ profile: knowledgeAccount()?.profile, ...input, signal }), workspaceCode: readWorkspaceCode, knowledgeReaderService: () => protectedReaderService(), pendingDecisionsList: readPendingDecisions, workDecisionsList: input => workDecisions.list(input) as unknown as Json, workDecisionRecord: input => workDecisions.recordFromAgent(input) as unknown as Json, workDecisionCorrect: input => workDecisions.changeFromAgent(input) as unknown as Json, workDecisionWithdraw: input => workDecisions.changeFromAgent(input, true) as unknown as Json, workDecisionReference: input => workDecisions.referenceFromAgent(input) as unknown as Json, inboxList: readInbox, inboxHandlingRead: readInboxHandlingFromAgent, inboxAssignProject: assignInboxProject, agentSessions: async input => await agentSessions.discover(input) as unknown as Json, resumeSession: async input => { const source = currentAgentInput() ?? agent.currentInput(); return await agentSessions.proposeResume({ ...input, key: source ? `${source.id}:${requiredText(input.key, '恢复请求标识')}` : input.key }, source) as unknown as Json; }, botsList: () => botsStatus(), privateConversation: managePrivateConversation, botRelay: relayFromAgent, mailboxesList: input => mailboxes.list(input as Parameters<typeof mailboxes.list>[0]) as unknown as Json, mailboxPropose: input => { if (!mailboxProposer) throw new InputError('机器人信箱尚未连接', 503); return mailboxProposer(input); }, projectsList: () => projects.list() as unknown as Json, projectCreate: async input => await createProject(input) as unknown as Json, projectsDiscover: discoverProjects, knowledgeSource: input => {
+  for (const extension of createSystemExtensions({ demo: config.demo, actions: { todayBriefSources, triageAgent: { status: () => inboxClassifier.status(), ask: (text, context) => inboxClassifier.ask(text, context) }, ruleTriage, scheduledWorkCronPreview: input => scheduledWork.previewCron(input), scheduledWorkHistory: input => scheduledWork.readHistory(input) as unknown as Json, scheduledWorkBrief: input => scheduledWork.readBrief(input), scheduledWorkList: input => scheduledWork.list(input) as unknown as Json, scheduledWorkPropose: input => scheduledWork.propose(input,true) as unknown as Json, scheduledWorkSkipNext: input => scheduledWork.skipNext(input,true), scheduledWorkSetPaused: input => scheduledWork.changeTiming(input,true) as unknown as Json, scheduledWorkCancel: input => scheduledWork.cancel(input,true) as unknown as Json, followupCreate: input => followups.create(input, currentAgentInput()?.conversationId) as unknown as Json, followupList: input => followups.list(input) as unknown as Json, followupCancel: id => followups.cancel(id) as unknown as Json, notifyUser: input => followups.notifyUser(input), calendarAgenda: (input, signal) => fetchCalendarAgenda({ profile: knowledgeAccount()?.profile, ...input, signal }), workspaceCode: readWorkspaceCode, knowledgeReaderService: () => protectedReaderService(), pendingDecisionsList: readPendingDecisions, workDecisionsList: input => workDecisions.list(input) as unknown as Json, workDecisionRecord: input => workDecisions.recordFromAgent(input) as unknown as Json, workDecisionCorrect: input => workDecisions.changeFromAgent(input) as unknown as Json, workDecisionWithdraw: input => workDecisions.changeFromAgent(input, true) as unknown as Json, workDecisionReference: input => workDecisions.referenceFromAgent(input) as unknown as Json, inboxList: readInbox, inboxHandlingRead: readInboxHandlingFromAgent, inboxAssignProject: assignInboxProject, agentSessions: async input => await agentSessions.discover(input) as unknown as Json, resumeSession: async input => { const source = currentAgentInput() ?? agent.currentInput(); return await agentSessions.proposeResume({ ...input, key: source ? `${source.id}:${requiredText(input.key, '恢复请求标识')}` : input.key }, source) as unknown as Json; }, botsList: () => botsStatus(), privateConversation: managePrivateConversation, groupReadRecords: readGroupRecordsFromChat, botRelay: relayFromAgent, mailboxesList: input => mailboxes.list(input as Parameters<typeof mailboxes.list>[0]) as unknown as Json, mailboxPropose: input => { if (!mailboxProposer) throw new InputError('机器人信箱尚未连接', 503); return mailboxProposer(input); }, projectsList: () => projects.list() as unknown as Json, projectCreate: async input => await createProject(input) as unknown as Json, projectsDiscover: discoverProjects, knowledgeSource: input => {
     const source=currentAgentInput()??agent.currentInput();if(!source||source.role!=='user'||source.readOnly||source.origin&&source.origin!=='user')throw new InputError('来源投放需要当前用户输入',403);
     validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
     return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
@@ -1741,19 +1742,40 @@ export async function createWorkbench(config: AppConfig) {
       || Object.keys(args).some(key => !['query', 'botId', 'archived', 'before', 'tag'].includes(key))
       || (args.archived !== undefined && typeof args.archived !== 'boolean') || (args.before !== undefined && typeof args.before !== 'string')
       || (args.botId !== undefined && typeof args.botId !== 'string') || (args.tag !== undefined && typeof args.tag !== 'string')) throw new InputError('独立对话检索参数无效');
+    if (!privateSearch) throw new InputError('当前输入无法检索机器人独立对话', 403);
+    const caller = ownerHistoryCaller(args.botId, '检索该机器人的独立对话');
+    return privateSearch(caller.botId, args.query, args.archived === true, args.before ?? null, caller.sourceId, args.tag);
+  }
+  // The server checks the persisted private input against the current pairing again when it reads the records.
+  function ownerHistoryCaller(botId: string | undefined, operation: string) {
     const input = currentAgentInput();
-    if (!privateSearch || !input || input.role !== 'user' || input.readOnly || input.projectId || input.todoId || (input.origin && input.origin !== 'user'))
-      throw new InputError('当前输入无法检索机器人独立对话', 403);
+    if (!input || input.role !== 'user' || input.readOnly || input.projectId || input.todoId || (input.origin && input.origin !== 'user'))
+      throw new InputError('此会话不能' + operation, 403);
     const route = store.get<{ botId?: string }>('message.routes', input.id);
     if (input.conversationId === 'main' && !route) {
-      if (!args.botId) throw new InputError('请先选择已配对的全局机器人');
-      return privateSearch(args.botId, args.query, args.archived === true, args.before ?? null, undefined, args.tag);
+      if (!botId) throw new InputError('请先选择已配对的全局机器人');
+      return { botId };
     }
-    if (!route?.botId || (args.botId !== undefined && args.botId !== route.botId)
+    if (!route?.botId || (botId !== undefined && botId !== route.botId)
       || input.conversationId !== botConversationId({ id: route.botId, scope: { kind: 'global' } }))
-      throw new InputError('此会话不能检索该机器人的独立对话', 403);
+      throw new InputError('此会话不能' + operation, 403);
     assertBotInput(input);
-    return privateSearch(route.botId, args.query, args.archived === true, args.before ?? null, input.id, args.tag);
+    return { botId: route.botId, sourceId: input.id };
+  }
+  function readGroupRecordsFromChat(args: JsonObject): Json {
+    if (Object.keys(args).some(key => !['botId', 'id', 'before'].includes(key))
+      || Object.values(args).some(value => typeof value !== 'string' || !value.trim())
+      || (args.before !== undefined && args.id !== undefined)) throw new InputError('读群记录查询参数无效');
+    if (!groupReadRecords) throw new InputError('读群记录服务尚未连接', 503);
+    const caller = ownerHistoryCaller(args.botId as string | undefined, '查阅该机器人的读群记录');
+    const page = groupReadRecords(caller.botId, args.before as string | undefined, caller.sourceId, args.id as string | undefined);
+    if (args.id) return page;
+    // Discovery returns a short preview. An explicit record lookup returns all confirmed segments.
+    return { ...page, items: page.items.map(item => {
+      const chars = Array.from(item.answer), question = Array.from(item.task);
+      return { ...item, task: question.slice(0, 240).join(''), answer: chars.slice(0, 240).join(''),
+        truncated: chars.length > 240 || question.length > 240 };
+    }) };
   }
   function managePrivateConversation(action: 'read' | 'update', args: JsonObject): Json {
     const input = currentAgentInput(), threadId = sourceThread(input);
@@ -1835,6 +1857,7 @@ export async function createWorkbench(config: AppConfig) {
     },
     setAgentInputOwnerValidator(validate: typeof validateAgentInputOwner) { validateAgentInputOwner = validate; },
     setBotsStatus(status: () => Json) { botsStatus = status; },
+    setGroupReadRecords(handler: NonNullable<typeof groupReadRecords>) { groupReadRecords = handler; },
     setPrivateSearch(handler: NonNullable<typeof privateSearch>) { privateSearch = handler; },
     setPrivateExport(handler: NonNullable<typeof privateExport>) { privateExport = handler; },
     setPrivateConversation(handler: NonNullable<typeof privateConversation>) { privateConversation = handler; },

@@ -10,13 +10,14 @@ import { join } from 'node:path';
 import JSZip from 'jszip';
 import { startServer } from '../apps/server/src/index.ts';
 import type { FeishuOptions } from '../plugins/feishu.ts';
+import type { GroupReadService } from '../apps/server/src/feishu-group-read-delivery.ts';
 import type { FeishuBotFactory } from '../apps/server/src/feishu-bots.ts';
 import type { Json, Message, Run } from '../packages/protocol/src/index.ts';
 
 type Request = { system: string; tools: string[]; lastRole: string; content: unknown; callId?: string };
 type Reply = { role: string; content?: string; tool_calls?: unknown[] };
 
-async function fixture(t: TestContext, respond: (request: Request, turn: number) => Reply, botFactory?: FeishuBotFactory) {
+async function fixture(t: TestContext, respond: (request: Request, turn: number) => Reply, botFactory?: FeishuBotFactory, readGroup?: GroupReadService) {
   const dir = await mkdtemp(join(tmpdir(), 'mario-skill-model-'));
   const requests: Request[] = [];
   const model = createServer(async (req, res) => {
@@ -46,7 +47,7 @@ async function fixture(t: TestContext, respond: (request: Request, turn: number)
   const address = model.address(); assert.ok(address && typeof address === 'object');
   const server = await startServer({ dataDir: dir, host: '127.0.0.1', port: 0, demo: false, model: {
     provider: 'openai-compatible', model: 'fixture', apiKey: 'offline-model-fixture', baseUrl: 'http://127.0.0.1:' + address.port + '/v1',
-  } }, { botFactory });
+  } }, { botFactory, readGroup });
   const api = async (path: string, input: unknown) => {
     const response = await fetch(server.url + '/api/v1' + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) });
     assert.ok(response.ok, await response.clone().text());
@@ -3321,5 +3322,63 @@ test('Web 与飞书私聊解释读群的身份、公开受众和触发方式', a
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
     await adapter.onMessage(question, { ...source, messageId: 'how-to-read' });
     await t.waitFor(() => assert.ok(sent.includes(reply)));
+  } finally { await server.close(); }
+});
+
+test('Web 和飞书主人从真实读群回执找回已送达的回答，独立对话隔离此工具', async t => {
+  let adapter!: FeishuOptions, botId = '', recordId = '', reads = 0;
+  const sent: { target: string; text: string }[] = [];
+  const answer = '合成的群内公开依据。'.repeat(32) + '最后核对批次为甲。';
+  const result = '按已送达的群回复，最后核对批次为甲。';
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      if (JSON.stringify(req.content).includes('独立讨论隔离')) {
+        assert.ok(!req.tools.includes('group_read_records'));
+        return { role: 'assistant', content: '当前讨论不能读取其他群的记录。' };
+      }
+      assert.ok(req.tools.includes('group_read_records'));
+      assert.match(req.system, /按 confirmedParts 区分已送达的段落/);
+      assert.match(req.system, /不因查询重新读群或向群里发消息/);
+      const web = JSON.stringify(req.content).includes('网页');
+      return call('group_read_records', { botId: web ? botId : 'other-bot' }, web ? 'list-web' : 'wrong-bot');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    if (req.callId === 'wrong-bot') {
+      assert.match(raw, /此会话不能查阅/);
+      return call('group_read_records', {}, 'list-private');
+    }
+    const page = JSON.parse(raw);
+    assert.equal(page.items.length, 1);
+    const item = page.items[0];
+    assert.equal(item.status, 'completed');
+    assert.equal(item.confirmedParts, 1);
+    if (req.callId?.startsWith('list-')) {
+      assert.equal(item.truncated, true);
+      assert.ok(!item.answer.includes('最后核对'));
+      recordId = item.id;
+      return call('group_read_records', req.callId === 'list-web' ? { id: recordId, botId } : { id: recordId }, 'detail');
+    }
+    assert.equal(item.id, recordId);
+    assert.equal(item.answer, answer);
+    return { role: 'assistant', content: result };
+  }, options => {
+    adapter = options;
+    return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
+      async send(target, text, context) { sent.push({ target, text }); context?.onSent?.('om_public_' + sent.length, 'text'); } };
+  }, { account: () => 'synthetic-account', async run() { reads++; return answer; } });
+  try {
+    const bot = await api('/feishu/bots', { name: '读群记录合成验收', appId: 'cli_1111111111111111', appSecret: 'fixture',
+      scope: { kind: 'global' }, readGroup: true, requireConfirmation: false });
+    botId = bot.id;
+    const owner = { chatId: 'oc_dm', senderId: 'ou_owner', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...owner, messageId: 'om_pair' });
+    await adapter.onMessage('/读群 读取合成批次', { ...owner, chatType: 'group', chatId: 'oc_group', messageId: 'om_read', mentionedSelf: true });
+    assert.equal(await ask('在网页中查找上次读群回答的批次'), result);
+    await adapter.onMessage('请从已有读群回执查找当时的批次', { ...owner, messageId: 'om_lookup' });
+    await t.waitFor(() => assert.ok(sent.some(row => row.target === owner.chatId && row.text === result)));
+    await adapter.onMessage('/new 独立讨论隔离检查', { ...owner, messageId: 'om_isolated' });
+    await t.waitFor(() => assert.ok(sent.some(row => row.text === '当前讨论不能读取其他群的记录。')));
+    assert.equal(reads, 1);
+    assert.deepEqual(sent.filter(row => row.target === 'oc_group').map(row => row.text), [answer]);
   } finally { await server.close(); }
 });

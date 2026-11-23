@@ -634,6 +634,19 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     app.events.publish('feishu.changed', { botId, threadsChanged: true, ...(deletedThreadId && { deletedThreadId }) });
     pins.scheduleRefresh();
   }
+  function groupReadBinding(bot: FeishuBotSettings, paired: Owner) {
+    return digest([bot.id, bot.appId, paired.chatId, paired.senderId, app.store.get<string>('feishu.group-read.generation', bot.id) ?? '']);
+  }
+  function listGroupReads(botId: string, before?: string, sourceId?: string, recordId?: string) {
+    let bot;
+    try { bot = current(botId); } catch { throw Object.assign(new Error('已配对的全局机器人不存在或已停用'), { status: 404 }); }
+    const paired = owner(bot);
+    if (bot.scope.kind !== 'global' || !paired?.senderId || !paired.chatId)
+      throw Object.assign(new Error('已配对的全局机器人不存在'), { status: 404 });
+    if (sourceId !== undefined && privateTurn(bot, paired, sourceId)?.conversationId !== botConversationId(bot))
+      throw Object.assign(new Error('只有机器人主人的主私聊可读取读群记录'), { status: 403 });
+    return groupReads.list(groupReadBinding(bot, paired), before, recordId);
+  }
   function threadPreferenceKey(botId: string) {
     const missing = () => Object.assign(new Error('当前全局机器人的私聊配对已变化'), { status: 404 });
     let bot;
@@ -1738,14 +1751,15 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const read = readGroupCommand(text, source.mentions);
     if (read && group && bot.scope.kind === 'global' && bot.readGroup) {
       const state = runtime(bot.id), adapter = state.adapter, initialOwner = paired;
+      const binding = initialOwner && groupReadBinding(bot, initialOwner);
       const checkOwner = () => {
         if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || !current(bot.id).readGroup
           || !adapter || state.adapter !== adapter || !initialOwner?.senderId || initialOwner.senderId !== source.senderId) return false;
         const now = owner(bot);
-        return now?.senderId === initialOwner.senderId && now.chatId === initialOwner.chatId;
+        return !!now && groupReadBinding(bot, now) === binding;
       };
-      if (adapter && read.addressed && source.mentionedSelf === true && source.senderType === 'user' && checkOwner())
-        await groupReads.read(bot, adapter, source, read.task, checkOwner, value => redact(value, Number.MAX_SAFE_INTEGER));
+      if (adapter && binding && read.addressed && source.mentionedSelf === true && source.senderType === 'user' && checkOwner())
+        await groupReads.read(bot, adapter, source, read.task, binding, checkOwner, value => redact(value, Number.MAX_SAFE_INTEGER));
       return;
     }
     if (!group && paired?.senderId === source.senderId && paired?.chatId === source.chatId) {
@@ -1800,12 +1814,18 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!paired && candidate) {
         if (source.senderId !== candidate.openId) return;
         paired = { chatId: source.chatId, senderId: candidate.openId };
-        app.store.put('settings', ownerKey(bot), paired);
+        app.store.transaction(() => {
+          app.store.put('settings', ownerKey(bot), paired);
+          app.store.put('feishu.group-read.generation', bot.id, randomUUID());
+        });
         app.events.publish('feishu.changed', { botId: bot.id, paired: true });
       }
       if (!paired) {
         if (text.trim() !== publicBot(bot).pairingCode) return;
-        app.store.put('settings', ownerKey(bot), { chatId: source.chatId, ...(source.senderId ? { senderId: source.senderId } : {}) });
+        app.store.transaction(() => {
+          app.store.put('settings', ownerKey(bot), { chatId: source.chatId, ...(source.senderId ? { senderId: source.senderId } : {}) });
+          app.store.put('feishu.group-read.generation', bot.id, randomUUID());
+        });
         app.events.publish('feishu.changed', { botId: bot.id, paired: true });
         const entry = await put(bot, { direction: 'outbox', eventKey: `feishu-pair:${JSON.stringify([bot.id, bot.appId, source.messageId])}`, title: '机器人配对',
           text: '工作台已绑定。', target: source.chatId, sourceMessageId: source.messageId, requiresConfirmation: false }, bot.scope.kind === 'unmarked' ? { kind: 'global' } : bot.scope);
@@ -1964,7 +1984,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           route: 'projectId' in bot.scope && bot.scope.projectId ? `projects/${encodeURIComponent(bot.scope.projectId)}/workspace` : 'chat', ...context?.presentation }),
         onCardAction: input => cardAction(bot, epoch, input),
         onRecall: (chatId, messageId) => {
-          if (active(bot.id, epoch, bot.revision) && bot.readGroup && bot.scope.kind === 'global') groupReads.recall(bot, chatId, messageId);
+          if (active(bot.id, epoch, bot.revision) && bot.scope.kind === 'global') groupReads.recall(bot, chatId, messageId);
         },
         onMessage: (text, source) => track(id, receive(bot, epoch, text, source)),
         onInbox: things => track(id, ingest(bot, epoch, things)),
@@ -2326,7 +2346,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           && paired.chatId === target.owner.chatId && paired.senderId === target.owner.senderId;
       } catch { return false; }
     },
-    canUseScope, privateThreads, requireThread, deletePrivateThread, privateThreadMetadata, updatePrivateThread, threadPreferenceKey, threadTagPreferences, threadOrder, listPrivateHistory,
+    canUseScope, listGroupReads, privateThreads, requireThread, deletePrivateThread, privateThreadMetadata, updatePrivateThread, threadPreferenceKey, threadTagPreferences, threadOrder, listPrivateHistory,
     searchPrivateHistory(id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string) {
       const bot = current(id), paired = owner(bot);
       if (!paired?.senderId || bot.scope.kind !== 'global' || (sourceId && !privateTurn(bot, paired, sourceId)))
@@ -2389,6 +2409,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const previous = settings.read(id); const scope = validateScope(input.scope ?? previous.scope);
       stampExisting(previous);
       const bot = settings.write(id, { ...input, scope }); if (bot.appSecret) secrets.add(bot.appSecret);
+      if (bot.appId !== previous.appId || !sameBotScope(bot.scope, previous.scope))
+        app.store.put('feishu.group-read.generation', bot.id, randomUUID());
       await restart(id); return publicBot(bot);
     },
     async archive(id: string) { stampExisting(settings.read(id)); const bot = settings.archive(id); await restart(id); return publicBot(bot); },

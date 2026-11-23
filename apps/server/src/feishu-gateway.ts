@@ -168,6 +168,7 @@ export function createFeishuGateway(
     if (!app.plugins.list().some(p => p.id === 'feishu' && p.status === 'active')) throw new InputError('飞书插件已停用', 503);
     return privateThreadExport(app.store, bots.requireThread(id, threadId));
   });
+  app.setGroupReadRecords(bots.listGroupReads);
   app.setPrivateSearch(bots.searchPrivateHistory);
   app.setPrivateConversation((id, threadId, action, input) => action === 'read'
     ? bots.privateThreadMetadata(id, threadId) : bots.updatePrivateThread(id, threadId, input, 'assistant'));

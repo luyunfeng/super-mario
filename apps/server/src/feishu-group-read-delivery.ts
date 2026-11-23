@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { GroupReadRecord, GroupReadPage } from '../../../packages/protocol/src/index.ts';
 import type { FeishuMessageSource } from '../../../plugins/feishu.ts';
 import { publicText } from '../../../plugins/agent-progress-card.ts';
 import type { FeishuBotSettings } from '../../../plugins/feishu-bot-config.ts';
@@ -11,7 +12,10 @@ export interface GroupReadService {
 }
 
 const collection = 'feishu.group-read';
-type Receipt = { status: 'unknown' | 'completed' | 'failed' | 'recalled'; replies?: string[] };
+type Status = GroupReadRecord['status'];
+type Receipt = { status: Exclude<Status, 'working'>; replies?: string[]; history?: {
+  id: string; binding: string; previousId?: string; createdAt: string; task: string; answer: string; totalParts: number | null;
+} };
 
 function answerPieces(answer: string) {
   let chars = Array.from(publicText(answer, Number.MAX_SAFE_INTEGER));
@@ -28,23 +32,63 @@ const keyFor = (bot: FeishuBotSettings, chatId: string, messageId: string) =>
 
 /** Only this command can reply in an unlisted group. Each part can only reply to the triggering message. */
 export function groupReadDelivery(app: FeishuBotsApp, service?: GroupReadService) {
+  const working = new Set<string>();
+  const changed = (botId: string) => app.events.publish('feishu.changed', { botId, groupReadsChanged: true });
+  function visible(row: Receipt): GroupReadRecord {
+    const { id, createdAt, task, answer, totalParts } = row.history!;
+    const status: Status = row.status === 'unknown' && working.has(id) ? 'working' : row.status;
+    return { id, createdAt, task, answer, totalParts, status, confirmedParts: row.replies?.length ?? 0 };
+  }
   return {
+    list(binding: string, before?: string, recordId?: string): GroupReadPage {
+      if (recordId !== undefined) {
+        const row = app.store.get<Receipt>(collection, recordId);
+        if (!row?.history || row.history.binding !== binding) throw Object.assign(new Error('读群记录不存在'), { status: 404 });
+        return { items: [visible(row)], nextBefore: null };
+      }
+      let id: string | undefined;
+      if (before === undefined) id = app.store.get<string>('feishu.group-read.latest', binding);
+      else {
+        const cursor = app.store.get<Receipt>(collection, before)?.history;
+        if (!cursor || cursor.binding !== binding) throw Object.assign(new Error('读群记录游标已失效'), { status: 400 });
+        id = cursor.previousId;
+      }
+      const items: GroupReadRecord[] = [];
+      while (id && items.length < 20) {
+        const row = app.store.get<Receipt>(collection, id);
+        if (!row?.history || row.history.binding !== binding) break;
+        items.push(visible(row));
+        id = row.history.previousId;
+      }
+      return { items, nextBefore: id && items.length === 20 ? items[19].id : null };
+    },
     recall(bot: FeishuBotSettings, chatId: string, messageId: string) {
-      app.store.put(collection, keyFor(bot, chatId, messageId), { status: 'recalled' } satisfies Receipt);
+      const key = keyFor(bot, chatId, messageId), row = app.store.get<Receipt>(collection, key);
+      if ((!row && !bot.readGroup) || row?.status === 'recalled') return;
+      app.store.put(collection, key, { ...row, status: 'recalled',
+        ...(row?.history && { history: { ...row.history, task: '', answer: '' } }) } satisfies Receipt);
+      if (row?.history) changed(bot.id);
     },
     async read(bot: FeishuBotSettings, adapter: FeishuBotAdapter, source: FeishuMessageSource,
-      task: string, checkOwner: () => boolean, redact: (error: unknown) => string) {
+      task: string, binding: string, checkOwner: () => boolean, redact: (error: unknown) => string) {
       const { chatId, messageId, threadId, senderId } = source;
       if (!senderId || !chatId || !/^[\w-]+$/.test(messageId) || !checkOwner()) return;
       const key = keyFor(bot, chatId, messageId);
+      const history: NonNullable<Receipt['history']> = { id: key, binding, createdAt: new Date().toISOString(),
+        task: publicText(redact(task), 4000), answer: '', totalParts: null };
       const claimed = app.store.transaction(() => {
         if (app.store.get(collection, key)) return false;
+        // The cursor chain is immutable after insertion. A later request cannot shift an open page.
+        history.previousId = app.store.get<string>('feishu.group-read.latest', binding);
+        app.store.put('feishu.group-read.latest', binding, key);
         // Claim before I/O, so a crash or missing send receipt cannot cause an unsolicited retry.
-        app.store.put(collection, key, { status: 'unknown' } satisfies Receipt);
+        app.store.put(collection, key, { status: 'unknown', history } satisfies Receipt);
         return true;
       });
       if (!claimed) return;
-      const account = service?.account(bot.id);
+      let account: string | undefined;
+      working.add(key);
+      changed(bot.id);
       const authorized = () => checkOwner() && service?.account(bot.id) === account
         && app.store.get<Receipt>(collection, key)?.status === 'unknown';
       function guard() {
@@ -52,6 +96,7 @@ export function groupReadDelivery(app: FeishuBotsApp, service?: GroupReadService
       }
       let reaction: string | undefined;
       try {
+        account = service?.account(bot.id);
         if (adapter.readReaction) reaction = await adapter.readReaction(messageId, 'OnIt', guard).catch(() => undefined);
         guard();
         let answer: string;
@@ -68,6 +113,9 @@ export function groupReadDelivery(app: FeishuBotsApp, service?: GroupReadService
         }
         guard();
         const pieces = answerPieces(redact(answer));
+        history.totalParts = pieces.length;
+        app.store.put(collection, key, { status: 'unknown', history } satisfies Receipt);
+        changed(bot.id);
         const replies: string[] = [];
         for (const [index, text] of pieces.entries()) {
           guard();
@@ -82,7 +130,9 @@ export function groupReadDelivery(app: FeishuBotsApp, service?: GroupReadService
             guard();
             if (!platformId || replies.includes(platformId)) throw new Error('未收到本段读群回复的独立回执');
             replies.push(platformId);
-            app.store.put(collection, key, { status: 'unknown', replies } satisfies Receipt);
+            history.answer += text;
+            app.store.put(collection, key, { status: 'unknown', replies, history } satisfies Receipt);
+            changed(bot.id);
             return null;
           }
           if (app.plugins?.invocations) await app.plugins.invocations.invoke('channel.send', payload, async prepared => {
@@ -95,7 +145,8 @@ export function groupReadDelivery(app: FeishuBotsApp, service?: GroupReadService
           if (replies.length !== index + 1) throw new Error('渠道未确认本段读群回复');
         }
         const status = answered ? 'completed' : 'failed';
-        app.store.put(collection, key, { status, replies } satisfies Receipt);
+        app.store.put(collection, key, { status, replies, history } satisfies Receipt);
+        changed(bot.id);
         const afterSend = () => {
           if (!checkOwner() || service?.account(bot.id) !== account || app.store.get<Receipt>(collection, key)?.status !== status)
             throw new Error('读群回执已失效');
@@ -107,6 +158,9 @@ export function groupReadDelivery(app: FeishuBotsApp, service?: GroupReadService
         if (!authorized()) return;
         if (reaction) await adapter.readReaction?.(messageId, 'OnIt', guard, reaction).catch(() => {});
         throw new Error('读群回复未确认送达，请核对原群消息。');
+      } finally {
+        working.delete(key);
+        if (app.store.get<Receipt>(collection, key)?.status === 'unknown') changed(bot.id);
       }
     },
   };

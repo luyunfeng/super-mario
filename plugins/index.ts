@@ -181,6 +181,7 @@ export interface SystemActions {
   agentSessions?(input: Record<string, unknown>): Promise<Json>;
   resumeSession?(input: Record<string, unknown>): Promise<Json>;
   botsList?(): Json;
+  groupReadRecords?(input: JsonObject): Json;
   privateConversation?(action: 'read' | 'update', input: JsonObject): Json;
   botRelay?(input: Record<string, unknown>): Promise<Json>;
   mailboxesList?(input: Record<string, unknown>): Json;
@@ -619,6 +620,9 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         context.contribute('channels', 'feishu', { id: 'feishu', name: '飞书', outboxPrefixes: ['feishu.bot', 'feishu.personal'], approvalKinds: ['feishu-reply'], sourcePrefix: 'feishu:' });
         context.contribute('tools', 'feishu_status', statusTool('feishu', '请在 Web 飞书设置中查看真实连接状态。', actions?.status ? () => actions.status!('feishu') : undefined));
         if (actions?.botsList) context.contribute('tools', 'bots_list', tool('bots_list', '查看主 Agent、项目和事项机器人的真实绑定与连接状态，不含凭证。', async (_args, signal) => { signal.throwIfAborted(); return actions.botsList!(); }));
+        if (actions?.groupReadRecords) context.contribute('tools', 'group_read_records', tool('group_read_records',
+          '查阅已有读群请求及公开回复回执。Web 主对话提供 botId；飞书主人主私聊只能查当前机器人。用 before 翻页，或用 id 读取某一条的已确认回答。',
+          async args => actions.groupReadRecords!(args), { botId: { type: 'string' }, before: { type: 'string' }, id: { type: 'string' } }));
         if (actions?.privateConversation) {
           context.contribute('tools', 'private_conversation_read', tool('private_conversation_read',
             '读取当前飞书独立对话的名称、标签、归档状态和版本。', async args => actions.privateConversation!('read', args)));

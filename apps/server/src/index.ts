@@ -283,6 +283,12 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 200, bots.list().map(bot => bot.scope.kind === 'global' && bot.paired
             ? { ...bot, workbench: bots.workbenchStatus(bot.id) } : bot));
         }
+        const groupReads = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/group-reads$/);
+        if (method === 'GET' && groupReads) {
+          if (!app.plugins.list().some(p => p.id === 'feishu' && p.status === 'active')) throw new InputError('飞书插件已停用', 503);
+          if (url.searchParams.getAll('before').length > 1) throw new InputError('只能指定一个读群记录游标');
+          return json(res, 200, bots.listGroupReads(decodeURIComponent(groupReads[1]!), url.searchParams.get('before') ?? undefined));
+        }
         const botThreads = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/threads(?:\/(order|search|tags|[0-9a-f]{64}))?$/);
         if (botThreads && (method === 'GET' || (method === 'DELETE' && /^[0-9a-f]{64}$/.test(botThreads[2] ?? '')) || (method === 'PATCH' && botThreads[2] && botThreads[2] !== 'search'))) {
           if (!app.plugins.list().some(p => p.id === 'feishu' && p.status === 'active')) throw new InputError('飞书插件已停用', 503);

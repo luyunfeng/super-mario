@@ -3,7 +3,7 @@
 
 export function createStore(api) {
   const listeners = new Set();
-  const view = { snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, deletedFeishuThread: null, connection: 'connecting', unauthorized: false, loadError: '' };
+  const view = { snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, deletedFeishuThread: null, feishuBotChange: null, connection: 'connecting', unauthorized: false, loadError: '' };
   let request = 0;
   let socket;
   let reconnectTimer;
@@ -62,9 +62,13 @@ export function createStore(api) {
         set({ projectInstructionsChange: event.data });
         return;
       }
-      if (event?.type === 'feishu.changed' && event.data?.threadsChanged === true &&
-          typeof event.data.botId === 'string' && typeof event.data.deletedThreadId === 'string' && /^[0-9a-f]{64}$/.test(event.data.deletedThreadId)) {
-        set({ deletedFeishuThread: { botId: event.data.botId, threadId: event.data.deletedThreadId } });
+      if (event?.type === 'feishu.changed' && typeof event.data?.botId === 'string') {
+        const botId = event.data.botId;
+        const threadId = event.data.deletedThreadId;
+        if (event.data.groupReadsChanged === true || typeof event.data.paired === 'boolean' || Object.keys(event.data).length === 1)
+          set({ feishuBotChange: { botId, bindingChanged: event.data.groupReadsChanged !== true } });
+        if (event.data.threadsChanged === true && typeof threadId === 'string' && /^[0-9a-f]{64}$/.test(threadId))
+          set({ deletedFeishuThread: { botId, threadId } });
       }
       scheduleRefresh();
     };
@@ -85,7 +89,7 @@ export function createStore(api) {
     refresh,
     connect,
     reconnect: connect,
-    reset() { request += 1; set({ snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, deletedFeishuThread: null, unauthorized: false, loadError: '' }); connect(); },
+    reset() { request += 1; set({ snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, deletedFeishuThread: null, feishuBotChange: null, unauthorized: false, loadError: '' }); connect(); },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
   };
 }
