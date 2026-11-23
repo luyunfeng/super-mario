@@ -93,6 +93,14 @@ export function createAgentArtifacts({ store, events, machines }: { store: Store
         const current = get(id);
         if (current.status !== record.status) return current;
         if (validResult(result, record)) return save({ ...record, status: 'loaded', methods: result.methods, reason: '执行机已核实该版本已加载' });
+        if (object(result) && result.id === record.pluginId && result.loaded === true) {
+          const manifest = validateAgentArtifactManifest(result);
+          if ((manifest.version !== record.manifest.version || manifest.sha256 !== record.manifest.sha256)
+            && validResult(result, { ...record, manifest })) {
+            return save({ ...record, status: record.status === 'confirmed' ? 'confirmed' : 'unloaded', methods: [],
+              reason: `执行机当前加载的是版本 ${manifest.version}（SHA256：${manifest.sha256}），与本条记录不同` });
+          }
+        }
         if (object(result) && result.loaded === false && result.id === record.pluginId
           && result.version === record.manifest.version && result.sha256 === record.manifest.sha256) {
           return save({ ...record, status: 'unloaded', methods: [], reason: '执行机仅保留记录，当前未加载；重新暂存并确认后才可加载' });

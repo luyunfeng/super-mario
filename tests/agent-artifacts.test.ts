@@ -171,6 +171,13 @@ test('service stage → explicit SHA approval → fake-node deployment; immutabl
   assert.equal(next.approval, undefined);
   await assert.rejects(f.service.deploy(next.id));
   assert.throws(() => f.service.approve(next.id, { sha256: first.manifest.sha256 }));
+  f.service.approve(next.id, {sha256:next.manifest.sha256});
+  assert.equal((await f.service.status(next.id)).status,'confirmed');
+  await f.service.deploy(next.id);
+  const replaced = await f.service.status(first.id);
+  assert.equal(replaced.status,'unloaded');
+  assert.deepEqual(replaced.methods,[]);
+  assert.ok(replaced.reason?.includes(next.manifest.version) && replaced.reason.includes(next.manifest.sha256));
   assert.ok(f.events.since(0).every(event => !JSON.stringify(event.data).includes('source')));
   assert.throws(() => f.service.stage({ machineId: 'm1', manifest: { ...first.manifest, sha256: '0'.repeat(64) }, source: first.source }), /SHA256/);
 });
