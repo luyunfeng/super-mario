@@ -1,4 +1,5 @@
 // 记忆条目：新增/编辑抽屉和列表行。记忆页和项目的“资料”标签共用。
+import { externalSourceLink } from '../lib/markdown.js';
 import { h, replace } from '../lib/dom.js';
 import { appendConversationQuestion, createConversationDrafts } from '../lib/conversation-drafts.js';
 import { quoteDraftKey } from '../lib/message-quote.js';
@@ -74,6 +75,8 @@ function originalSources(api, entry, selected, line, ask, handoff) {
           onclick: () => ask(source, original) }, '引用原文追问');
         const notice = h('span', { role: 'status', hidden: true }, '引用的行号超出原文范围。');
         const detail = h('details', { open: source.id === selected }, h('summary', null, source.title, source.meetingStartedAt && ' · ' + source.meetingStartedAt), notice, text, action);
+        const sourceLink = source.sourceUrl && externalSourceLink(source.sourceUrl, '打开原始网址');
+        if (sourceLink) detail.append(sourceLink);
         if (source.meeting && handoff) detail.append(Button({ label: '准备会议交接稿', size: 'sm', onClick: () => handoff(source) }));
         detail.addEventListener('toggle', async () => {
           if (!detail.open) return;

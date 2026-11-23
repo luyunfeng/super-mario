@@ -3,15 +3,26 @@ import { h } from './dom.js';
 import { copyText } from './clipboard.js';
 import { toast } from '../ui/overlay.js';
 
-// Only known workbench destinations become links in assistant replies.
+// Workbench citations use explicit routes. External references open outside the workbench.
 const inlineTokens = new RegExp([
   /\[查看执行\]\(#projects\/[A-Za-z0-9_-]{1,128}\/runs\/[A-Za-z0-9_-]{1,128}\)/.source,
   /\[查看待办\]\(#projects\/[A-Za-z0-9_-]{1,128}\/todos\/detail\/[A-Za-z0-9_-]{1,128}\)/.source,
   /\[查看原文\]\(#projects\/[A-Za-z0-9_-]{1,128}\/workspace\?at=(?:[A-Za-z0-9_.*+\-]|%[0-9A-Fa-f]{2})+\)/.source,
   /\[查看原文\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&source=[A-Za-z0-9_-]{1,128}(?:&line=[1-9][0-9]{0,8})?\)/.source,
   /\[查看修订\]\(#memory\?entry=[A-Za-z0-9_-]{1,128}&revision=(?:[a-f0-9]{40}|[a-f0-9]{64})\)/.source,
+  /(?<!!)\[[^\[\]\n]+\]\(https?:\/\/(?:[^\s()<>\\]|\([^\s()<>\\]*\))+\)/.source,
+  /<https?:\/\/[^\s<>\\]+>/.source,
+  /^https?:\/\/[^\s<>\\]+$/.source,
   /`[^`\n]+`|\*\*(?:[^*]|\*(?!\*))+?\*\*/.source,
 ].join('|'), 'g');
+
+export function externalSourceLink(href, label) {
+  let url;
+  try { url = new URL(href); } catch { return null; }
+  if (!['https:', 'http:'].includes(url.protocol) || url.origin === location.origin ||
+      url.username || url.password) return null;
+  return h('a', { href: url.href, target: '_blank', rel: 'noopener noreferrer', title: url.href }, label);
+}
 
 function renderInline(line) {
   const parts = [];
@@ -19,8 +30,16 @@ function renderInline(line) {
   for (const match of line.matchAll(inlineTokens)) {
     if (match.index > last) parts.push(line.slice(last, match.index));
     const token = match[0];
-    if (token.startsWith('[')) parts.push(h('a', { href: token.slice(token.indexOf('(') + 1, -1) }, token.slice(1, token.indexOf(']'))));
-    else if (token.startsWith('`')) parts.push(inlineCode(token.slice(1, -1)));
+    if (token.startsWith('[')) {
+      const split = token.indexOf('](');
+      const href = token.slice(split + 2, -1), label = token.slice(1, split);
+      if (href.startsWith('#')) parts.push(h('a', { href }, label));
+      else if (/^查看(?:原文|修订|待办|执行)$/.test(label)) parts.push(token);
+      else parts.push(externalSourceLink(href, label) ?? token);
+    } else if (token.startsWith('<') || /^https?:/i.test(token)) {
+      const href = token.startsWith('<') ? token.slice(1, -1) : token;
+      parts.push(externalSourceLink(href, href) ?? token);
+    } else if (token.startsWith('`')) parts.push(inlineCode(token.slice(1, -1)));
     else parts.push(h('strong', null, token.slice(2, -2)));
     last = match.index + token.length;
   }
@@ -134,7 +153,7 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
       h('p', { class: 'md-p' }, reference.passage));
     text = reference.body;
   }
-  const hasMarkdown = text.includes('\n') || text.includes('`') || text.includes('**') || /\[查看(?:原文|修订|待办|执行)\]\(/.test(text) || /^ {0,3}(?:#{1,6}(?:\s|$)|>)/.test(text) || /^\s*(?:[-*]\s|\d+\.\s)/.test(text);
+  const hasMarkdown = text.includes('\n') || text.includes('`') || text.includes('**') || /https?:\/\//i.test(text) || /\[查看(?:原文|修订|待办|执行)\]\(/.test(text) || /^ {0,3}(?:#{1,6}(?:\s|$)|>)/.test(text) || /^\s*(?:[-*]\s|\d+\.\s)/.test(text);
   if (!hasMarkdown) return quoted ? h('div', { class: 'md' }, quoted, text) : text;
 
   const blocks = quoted ? [quoted] : [];

@@ -852,6 +852,8 @@ test('Web 与飞书项目会话可按会议主题核对决定、建议和未决�
 test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目的旧版', { timeout: 30000 }, async t => {
   let pageId = '', foreignId = '', adapter!: FeishuOptions;
   let shortCommit = '';
+  const sourceUrl = 'https://docs.example.test/review/receipt';
+  const sourceAnswer = '[样本来源](' + sourceUrl + ')';
   const sent: string[] = [];
   const answer = '最近一次保存把标签从待复核改为样本核对，正文仍是样本乙。更早的记录写的是样本甲。';
   const unavailable = '当前项目无法读取指定知识页，请提供可读取的版本或原文。';
@@ -868,6 +870,10 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
       assert.match(req.system, /contentLocked=true 表示正文仅由用户手工编辑/);
       assert.match(req.system, /比较两版返回的 tags/);
       assert.match(req.system, /共用别名时不要据此合并知识页/);
+      if (JSON.stringify(req.content).includes('原始网址')) {
+        assert.match(req.system, /按页 ID 用 knowledge_original 查来源列表/);
+        return call('knowledge_original', { pageId }, 'urls');
+      }
       if (JSON.stringify(req.content).includes('指定修订短号')) {
         assert.match(req.system, /八位短号可原样查询/);
         return call('knowledge_revision', { pageId, commit: shortCommit }, 'specified-revision');
@@ -879,6 +885,11 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
       return call('knowledge_list', { query: '旧样本库', tag: '样本核对', importance: 'P1', minRelevance: 80 }, 'tagged');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[]).map(p => p.text).join('');
+    if (req.callId === 'urls') {
+      const { sources } = JSON.parse(raw);
+      assert.deepEqual(sources.map((source: {sourceUrl?: string}) => source.sourceUrl), [sourceUrl]);
+      return { role: 'assistant', content: '[' + sources[0].title + '](' + sources[0].sourceUrl + ')' };
+    }
     if (req.callId === 'tagged') {
       assert.deepEqual(JSON.parse(raw).map((page: {id:string}) => page.id), [pageId]);
       assert.equal(JSON.parse(raw)[0].confirmedFacts, '核对时采用样本丙');
@@ -930,6 +941,8 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
     const other = await api('/projects', { name: '独立项目' });
     const input = { layer: 'project', projectId: project.id, importance: 'P1', relevance: 80, contentLocked: true, confirmedFacts: '核对时采用样本丙', aliases: ['旧样本库'], tags: ['样本核对'], title: '验收样本' };
     pageId = (await api('/knowledge', { ...input, tags: ['待复核'], content: '测'.repeat(4000) + '样本甲' })).id;
+    const sourceJob = server.app.knowledgeCurator.addSource({ title: '样本来源', url: sourceUrl, layer: 'project', projectId: project.id });
+    server.app.store.put('knowledge.sources', sourceJob.id, { ...sourceJob, status: 'completed', knowledgeIds: [pageId] });
     await api('/knowledge', { ...input, id: pageId, tags: ['待复核'], content: '样本乙' });
     await api('/knowledge', { ...input, id: pageId, content: '样本乙' });
     foreignId = (await api('/knowledge', { ...input, projectId: other.id, content: '其他项目样本' })).id;
@@ -945,6 +958,10 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
     await adapter.onMessage(question, { ...source, messageId: 'revision-question' });
     await t.waitFor(() => assert.ok(sent.includes(answer)));
     assert.equal(requests.filter(req => req.callId === 'tail').length, 2);
+    const sourceQuestion = '知识页 ' + pageId + ' 登记的原始网址是什么？';
+    assert.equal(await ask(sourceQuestion, '/projects/' + project.id + '/messages'), sourceAnswer);
+    await adapter.onMessage(sourceQuestion, { ...source, messageId: 'original-url' });
+    await t.waitFor(() => assert.ok(sent.includes(sourceAnswer)));
     const specified = '查知识页 ' + pageId + ' 的指定修订短号 ' + shortCommit + '，当时是什么标签？';
     assert.equal(await ask(specified, '/projects/' + project.id + '/messages'), '该版标签为待复核。');
     await adapter.onMessage(specified, { ...source, messageId: 'short-revision' });

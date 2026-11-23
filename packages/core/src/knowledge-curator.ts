@@ -530,7 +530,7 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
       const matches = all.filter(job => job.layer === page.layer && job.projectId === page.projectId &&
         job.knowledgeIds.includes(pageId));
       if (handoffExcerpt && !sourceId) throw new CuratorError('请指定会议转写来源');
-      if (sourceId === undefined) return { sources: matches.map(({ id, title, createdAt, meetingStartedAt, materialKind, requestOrigin, speakerNames }) => ({ id, title: titles.get(roots.get(id) ?? id) ?? title, createdAt,
+      if (sourceId === undefined) return { sources: matches.map(({ id, title, url, createdAt, meetingStartedAt, materialKind, requestOrigin, speakerNames }) => ({ id, ...(url ? { sourceUrl: url } : {}), title: titles.get(roots.get(id) ?? id) ?? title, createdAt,
         ...(speakerNames ? { speakerNames } : {}),
         ...(materialKind === 'meeting-transcript' || requestOrigin === 'meeting' ? { meeting: true } : {}),
         ...(materialKind ? { materialKind } : {}), ...(meetingStartedAt ? { meetingStartedAt } : {}) })) };

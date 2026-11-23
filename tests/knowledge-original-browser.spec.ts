@@ -23,7 +23,8 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
     createdAt: new Date().toISOString(), text: '依据见[查看原文](' + route + ')' });
   const project = await server.app.createProject({ name: '原文追问项目' });
   const projectEntry = await knowledge.put({ title: '项目记录', content: '项目摘要', layer: 'project', projectId: project.id });
-  const projectJob = server.app.knowledgeCurator.addSource({ title: '项目来源', text: original, layer: 'project', projectId: project.id });
+  const projectUrl = 'https://docs.example.test/project/material';
+  const projectJob = server.app.knowledgeCurator.addSource({ title: '项目来源', url: projectUrl, text: original, layer: 'project', projectId: project.id });
   server.app.store.put('knowledge.sources', projectJob.id, { ...projectJob, status: 'completed', knowledgeIds: [projectEntry.id] });
   await writeFile(join(rawDir, projectJob.id + '.md'), original);
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
@@ -37,6 +38,7 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   await dialog.getByText('合成会议原文 · 2032-02-29T00:10:00+05:45', { exact: true }).click();
   await expect(dialog.locator('pre')).toHaveText(original);
   await expect(dialog.locator('pre em')).toHaveCount(0);
+  await expect(dialog.getByRole('link', { name: '打开原始网址' })).toHaveCount(0);
   await dialog.getByRole('button', { name: '准备会议交接稿' }).click();
   const handoff = page.getByRole('dialog', { name: '准备会议交接稿' });
   await expect(handoff.getByRole('checkbox')).not.toBeChecked();
@@ -85,6 +87,7 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   await expect(dialog.getByText('引用的来源已不可用。')).toBeVisible();
   await expect(dialog.locator('pre')).toBeHidden();
   await page.evaluate(route => { location.hash = route; }, '#memory?entry=' + projectEntry.id + '&source=' + projectJob.id);
+  await expect(dialog.getByRole('link', { name: '打开原始网址' })).toHaveAttribute('href', projectUrl);
   await dialog.getByRole('button', { name: '引用原文追问' }).click();
   await picker.getByLabel('选择要追问的原文').evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(0, 2));
   await picker.getByRole('button', { name: '引用到项目工作对话' }).click();
