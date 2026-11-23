@@ -67,6 +67,42 @@ function call(name: string, args: object, id: string): Reply {
   } }] };
 }
 
+test('Web 和飞书从同一项目范围查询接下来三项已生效的定时工作', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /scheduled_work_list 的 upcoming/);
+      return call('scheduled_work_list', {}, 'upcoming');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    const titles = JSON.parse(raw).upcoming.map((item: { title: string }) => item.title);
+    assert.deepEqual(titles, ['安排1', '安排2', '安排3']);
+    return { role: 'assistant', content: titles.join('、') };
+  }, options => {
+    adapter = options;
+    return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    const project = await api('/projects', { name: '定时工作项目' });
+    for (const [day, title, projectId] of [[1, '其他范围', undefined], [1, '尚待确认', project.id],
+      ...[4, 2, 3, 1].map(day => [day, '安排' + day, project.id])]) {
+      const approval = await api('/scheduled-work', { key: title, title, projectId, schedule: { kind: 'once', at: '2099-02-0' + day + 'T10:00:00Z' }, action: { kind: 'brief' } });
+      if (title !== '尚待确认') await api('/approvals/' + approval.id + '/approve', { version: approval.version });
+    }
+    const question = '当前项目接下来会自动做什么？';
+    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), '安排1、安排2、安排3');
+    const bot = await api('/feishu/bots', { name: '定时工作查询', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(question, { ...source, messageId: 'upcoming' });
+    await t.waitFor(() => assert.ok(sent.includes('安排1、安排2、安排3')));
+    assert.equal(server.app.store.list('runs').length, 0);
+  } finally { await server.close(); }
+});
+
 test('Web 主助手按目录读取技能及引用文件，停用后下一轮撤回工具与目录', { timeout: 30000 }, async t => {
   const name = 'fixture-check', reference = 'references/sample.md', fact = '合成结果 234';
   const instructions = '请读取 references/sample.md，再根据其中的证据作答。';

@@ -10,6 +10,7 @@ export function mainAssistantName(view) {
 }
 
 export function createAssistantProfile({ api, store }) {
+  let upcoming, scheduleOwner, scheduleError;
   let bots, botsOwner, botsError = '';
   const body = h('div', { class: 'stack' });
   const edit = Button({ label: '修改名称', size: 'sm', onClick: open });
@@ -33,6 +34,18 @@ export function createAssistantProfile({ api, store }) {
       h('dt', null, '模型状态'), h('dd', null, online ? model : '连接中断，状态未知'),
       h('dt', null, '在线执行机'), h('dd', null, online && machines ? machines.filter(machine => machine.online).length + ' 台' : '状态未知'),
       h('dt', null, '已连接全局机器人'), h('dd', null, !online ? '状态未知' : botsError || (bots === undefined ? '正在读取…' : bots + ' 个'))),
+      h('section', { class: 'stack', 'aria-label': '接下来的定时工作' },
+        h('strong', null, '接下来的定时工作'),
+        !online || scheduleOwner !== api.token() || scheduleError || !Array.isArray(upcoming)
+          ? h('span', { class: 'small muted' }, scheduleError && online ? '定时工作读取失败' : '定时工作尚未确认')
+          : upcoming.length ? upcoming.map(item => h('div', { class: 'row row--wrap' },
+            h('time', { datetime: item.nextAt }, new Date(item.nextAt).toLocaleString('zh-CN')), item.title))
+            : h('span', { class: 'small muted' }, '当前范围没有即将触发的定时工作'),
+        online && scheduleOwner === api.token() && upcoming?.length > 0 && Button({ label: '查看定时工作', size: 'sm', onClick() {
+          const panel = document.getElementById('agent-scheduled-work');
+          panel?.scrollIntoView({ block: 'start' });
+          panel?.querySelector('button')?.focus({ preventScroll: true });
+        } })),
       !mainAssistant && Button({ label: '重新读取主助手资料', size: 'sm', onClick: () => store.refresh() }));
   }
   function setBots(rows, owner, error = '') {
@@ -126,5 +139,11 @@ export function createAssistantProfile({ api, store }) {
   }
   store.subscribe?.(update);
   update();
-  return { el, setBots };
+  function setUpcoming(items, error) {
+    scheduleOwner = api.token();
+    upcoming = items;
+    scheduleError = error;
+    update();
+  }
+  return { el, setBots, setUpcoming };
 }

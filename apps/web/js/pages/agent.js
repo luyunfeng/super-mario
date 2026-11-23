@@ -116,7 +116,7 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
   const cliSessions = createCliSessions({ api, store, router });
   const policy = createPolicyCard({ api, store });
   const followUp = createFollowUpCard({ api, store });
-  const scheduledWork = createScheduledWorkCard({ api, store, scope });
+  const scheduledWork = createScheduledWorkCard({ api, store, scope, onUpcoming: profile.setUpcoming });
   const advanced = createAdvanced({ api, store, router, openPluginSettings: shell?.openPluginSettings });
 
   const el = h('section', { class: 'page', id: 'agent' },

@@ -16,7 +16,7 @@ function occurrenceText(o) {
   return '事实简报已生成（仅程序汇总已接入事实，不调用模型、不外发）';
 }
 
-export function createScheduledWorkCard({ api, store, scope }) {
+export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
   const currentScope = () => scope?.get?.() ?? '';
   const currentToken = () => api.token?.() ?? '';
   const snapshot = () => store.view.snapshot ?? {};
@@ -61,6 +61,7 @@ export function createScheduledWorkCard({ api, store, scope }) {
     }
   }
   function paint() {
+    onUpcoming?.(loaded && !error ? result?.upcoming : undefined, error);
     replace(notice, error ? Banner({ tone: 'warn', children: `${error} 列表状态未确认${loaded ? '，以下保留上次数据' : ''}。` }) : !loaded ? '正在读取定时工作…' : null,
       result?.truncated && line(`仅显示前 ${result.limit ?? 100} 项，共 ${result.total} 项。`));
     replace(list, items.map(renderItem), !items.length && loaded && !error ? Empty({ title: '当前范围没有定时工作' }) : null);

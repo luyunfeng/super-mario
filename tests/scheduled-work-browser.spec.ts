@@ -56,7 +56,7 @@ async function fixture(body: (f: any) => Promise<void>, noScope = false) {
       const component = createAgentPage({ api, store, ...(noScope ? {} : { scope }), router: { href: (...parts: string[]) => '#' + parts.map(encodeURIComponent).join('/'), current: { page: 'agent' }, subscribe() {} }, consoleDrawer: {} });
       document.body.replaceChildren(component.el); component.el.classList.add('is-active');
       (window as any).scheduledTest = { api, store, scope, component, emit() { store.view.snapshot = { ...store.view.snapshot }; component.onState(store.view); } };
-      component.onState(store.view); component.onShow({ parts: [] });
+      component.onState(store.view); component.onShow({ parts: [], query: new URLSearchParams() });
     }, { noScope });
     await expect(panel(page)).toContainText('每日项目事实');
     await body(f);

@@ -59,9 +59,15 @@ export function createScheduledWorkService(options: {
   function publicRows(input:Record<string,unknown>={}) {
     const scope=scopeOf(input as any), rows=manager.list(); cleanup(rows);
     const selected=rows.filter(row=>scope.kind==='global' || row.input.projectId===('projectId' in scope?scope.projectId:undefined) && (scope.kind!=='task'||row.input.todoId===scope.todoId));
-    const schedules=options.schedules.forOwner('daily-brief').list();
+    const schedules = new Map(options.schedules.forOwner('daily-brief').list().map(schedule => [schedule.id, schedule]));
+    const now = Date.now();
+    const upcoming = selected.flatMap(row => {
+      const schedule = row.scheduleId ? schedules.get(row.scheduleId) : undefined;
+      if (row.status !== 'active' || schedule?.status !== 'active' || !schedule.nextAt || !(Date.parse(schedule.nextAt) >= now)) return [];
+      return [{ id: row.id, title: row.input.title, nextAt: schedule.nextAt }];
+    }).sort((a, b) => Date.parse(a.nextAt) - Date.parse(b.nextAt) || a.id.localeCompare(b.id)).slice(0, 3);
     return { items:selected.slice(0,100).map(row=>{
-      const schedule=schedules.find(s=>s.id===row.scheduleId), history=[...row.occurrences].sort((a,b)=>b.scheduledFor.localeCompare(a.scheduledFor));
+      const schedule=row.scheduleId ? schedules.get(row.scheduleId) : undefined, history=[...row.occurrences].sort((a,b)=>b.scheduledFor.localeCompare(a.scheduledFor));
       return {id:row.id,version:row.version,title:row.input.title,status:row.status,projectId:row.input.projectId,todoId:row.input.todoId,schedule:row.input.schedule,action:row.input.action,
         approvalId:row.approvalId,approvalStatus:store.get<Approval>('approvals',row.approvalId)?.status,
         source:{messageId:row.sourceMessage.id,createdAt:row.sourceMessage.createdAt},
@@ -69,7 +75,7 @@ export function createScheduledWorkService(options: {
         occurrences:history.slice(0,20).map(o=>({key:o.key,scheduledFor:o.scheduledFor,status:o.status,approvalId:o.approvalId,
           approvalStatus:o.approvalId?store.get<Approval>('approvals',o.approvalId)?.status:undefined,result:o.result,
           kind:row.input.action.kind,...(o.error?{error:'结果未知，请核对原记录'}:{})})),occurrenceTotal:history.length,occurrencesTruncated:history.length>20};
-    }),total:selected.length,truncated:selected.length>100,limit:100 };
+    }),upcoming,total:selected.length,truncated:selected.length>100,limit:100 };
   }
   function propose(input:Record<string,unknown>,fromAgent=false) {
     return store.transaction(()=>{

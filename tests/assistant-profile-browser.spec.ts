@@ -25,6 +25,19 @@ test('Agent 页修改主助手名称后同步到已有气泡，并发冲突保�
   put({ id: 'fixture-result', text: '执行结果样例。', origin: 'result' });
   put({ id: 'fixture-project', text: '项目助手的既有回复。', conversationId: `project:${project.id}:work`, projectId: project.id });
 
+  const schedule = async (key: string, title: string, at: string, approved: boolean) => {
+    const post = async (path: string, body: unknown) => {
+      const response = await fetch(server.url + '/api/v1' + path, { method: 'POST',
+        headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      assert.ok(response.ok);
+      return response.json();
+    };
+    const approval = await post('/scheduled-work', { key, title, schedule: { kind: 'once', at }, action: { kind: 'brief' } });
+    if (approved) await post('/approvals/' + approval.id + '/approve', { version: approval.version });
+  };
+  await schedule('later', '下午复核', '2099-01-02T15:00:00Z', true);
+  await schedule('pending', '待批准简报', '2099-01-01T08:00:00Z', false);
+  await schedule('early', '上午简报', '2099-01-02T09:00:00Z', true);
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
   const chat = await browser.newPage(), first = await browser.newPage(), second = await browser.newPage();
   for (const [page, route] of [[chat, 'chat'], [first, 'agent'], [second, 'agent']] as const) {
@@ -40,6 +53,11 @@ test('Agent 页修改主助手名称后同步到已有气泡，并发冲突保�
   const name = (page: Page) => editor(page).getByLabel('主助手名称', { exact: true });
   const action = (page: Page, text: string) => editor(page).getByRole('button', { name: text, exact: true });
   await expect(card(first)).toContainText('演示模式 · 可用');
+  const upcoming = card(first).getByRole('region', { name: '接下来的定时工作' });
+  await expect(upcoming).toContainText(/上午简报.*下午复核/s);
+  await expect(upcoming).not.toContainText('待批准简报');
+  await upcoming.getByRole('button', { name: '查看定时工作' }).click();
+  await expect(first.locator('#agent-scheduled-work').getByRole('button', { name: '创建定时工作' })).toBeFocused();
   await expect(card(first)).toContainText('0 台');
   await expect(card(first)).toContainText('0 个');
   for (const page of [first, second]) {
