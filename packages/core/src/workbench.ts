@@ -1177,7 +1177,7 @@ export async function createWorkbench(config: AppConfig) {
     }
     if (patch.waitingOn !== undefined) next.waitingOn = optionalText(patch.waitingOn, '等待对象');
     if (patch.reminderAt !== undefined) next.reminderAt = dueDate(patch.reminderAt);
-    if (patch.completed !== undefined) next.completedAt = patch.completed ? new Date().toISOString() : undefined;
+    if (patch.completed !== undefined) next.completedAt = patch.completed ? (todo.completedAt ?? next.updatedAt) : undefined;
     const cycleChanged = next.waitingOn !== todo.waitingOn || next.reminderAt !== todo.reminderAt
       || next.projectId !== todo.projectId || !!next.completedAt !== !!todo.completedAt;
     if (cycleChanged) { next.reminderVersion = (todo.reminderVersion ?? 1) + 1; next.remindedAt = undefined; }
