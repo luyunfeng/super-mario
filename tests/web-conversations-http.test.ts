@@ -66,10 +66,28 @@ test('同项目独立 Web 对话隔离真实 SDK 历史、分页位置和首轮�
   assert.equal(history.messages.length,4);assert.equal(history.nextBefore,null);
   assert.ok(history.messages.every((m:Message)=>m.conversationId==='web:'+a));
   assert.equal(requests.length,3);
-  for(let i=0;i<50;i++){const id=randomUUID();server.app.store.put('messages',id,{...one,id,requestId:undefined,text:'已加载原文'+i});}
+  for(let i=0;i<50;i++){const id=randomUUID();server.app.store.put('messages',id,{...one,id,requestId:undefined,status:'done',text:'已加载原文'+i});}
   const page=await(await get('/'+a+'/messages')).json();assert.equal(page.messages.length,50);
   assert.equal(page.nextBefore,page.messages[0].id);
   const earlier=await(await get('/'+a+'/messages?before='+page.nextBefore)).json();assert.deepEqual(earlier,history);
+  const patch=(input:object)=>fetch(server.url+path+'/'+a,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify(input)});
+  // A pre-versioning SQLite record stays readable and accepts its first versioned update.
+  const old={...record,createdAt:one.createdAt};
+  server.app.store.put('web-conversations',a,old);
+  const beforeEdit=await(await get('/'+a)).json();assert.equal(beforeEdit.version,1);assert.equal(beforeEdit.archived,false);
+  const renamed=await patch({version:1,title:'新的对话标题'});assert.equal(renamed.status,200);
+  const changed=await renamed.json();assert.equal(changed.title,'新的对话标题');assert.equal(changed.version,2);
+  assert.equal((await patch({version:1,archived:true})).status,409);
+  assert.equal((await patch({version:2,projectId:'other',archived:true})).status,400);
+  const archived=await patch({version:2,archived:true});assert.equal(archived.status,200);assert.equal((await archived.json()).archived,true);
+  const list=async(flag:string)=>(await(await get('?projectId='+projectId+flag)).json()).items.map((row:{id:string})=>row.id);
+  assert.deepEqual(await list(''),[b]);assert.deepEqual(await list('&archived=false'),[b]);assert.deepEqual(await list('&archived=true'),[a]);
+  assert.equal((await get('?archived=all')).status,400);
+  assert.equal((await post('/'+a+'/messages',{text:'归档后的新消息'},randomUUID())).status,409);
+  assert.equal((await(await get('/'+a+'/messages/receipts/'+key)).json()).id,one.id);
+  assert.equal((await(await get('/'+a+'/messages')).json()).messages.length,50);
+  const back=await patch({version:3,archived:false});assert.equal(back.status,200);
+  await turn(a,'恢复后继续',randomUUID());
   await server.app.plugins.setEnabled('web-conversations',false);
   assert.equal((await get('/'+a+'/messages')).status,503);
   assert.equal((await post('/'+a+'/messages',{text:'已停用'},randomUUID())).status,503);

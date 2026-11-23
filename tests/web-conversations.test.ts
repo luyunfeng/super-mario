@@ -50,3 +50,36 @@ test('independent web conversations persist exact scopes and idempotent creation
   await f.host.setEnabled('web-conversations',false);
   await assert.rejects(call({action:'list'}),/unavailable/);
 });
+
+test('legacy conversation rename, archive and restore use exact versions and preserve original create receipts', async t => {
+  const store = createStore(':memory:'), events = createEventBus(store);
+  const host = new PluginHost({store, events, dataDir:'', contributions:createContributions()});
+  t.after(async () => { await host.close(); store.close(); });
+  host.register(webConversationsExtension);
+  await host.start();
+  const id=randomUUID(), legacy={id,title:'Original',createdAt:new Date().toISOString()};
+  store.put('web-conversations',id,legacy);
+  const use=(args:JsonObject)=>host.invocations.use('web-conversations.manage',args);
+  const original={...legacy,version:1,archived:false};
+  assert.deepEqual(await use({action:'get',id}),original);
+  assert.deepEqual(await use({action:'update',id,version:1,title:'Original'}),original);
+  const edited={...original,title:'Renamed',version:2};
+  assert.deepEqual(await use({action:'update',id,version:1,title:'Renamed'}),edited);
+  assert.deepEqual(await use({action:'create',id,title:'Original'}),edited);
+  await assert.rejects(use({action:'create',id,title:'Renamed'}),{status:409});
+  await assert.rejects(use({action:'update',id,version:1,archived:true}),{status:409});
+  store.put('messages','wait',{role:'user',conversationId:'web:'+id,status:'pending'});
+  await assert.rejects(use({action:'update',id,version:2,archived:true}),{status:409});
+  assert.deepEqual(await use({action:'list'}),{items:[edited]});
+  store.put('messages','wait',{role:'user',conversationId:'web:'+id,status:'done'});
+  store.put('messages','other',{role:'user',conversationId:'web:'+randomUUID(),status:'pending'});
+  const archived={...edited,archived:true,version:3};
+  assert.deepEqual(await use({action:'update',id,version:2,archived:true}),archived);
+  assert.deepEqual(await use({action:'list'}),{items:[]});
+  assert.deepEqual(await use({action:'list',archived:true}),{items:[archived]});
+  assert.deepEqual(await use({action:'get',id}),archived);
+  assert.equal(webConversationMatches(store,id),false);
+  assert.deepEqual(await use({action:'update',id,version:3,archived:false}),{...edited,version:4});
+  assert.equal(webConversationMatches(store,id),true);
+  assert.equal(events.since(0).filter(event=>event.type==='web-conversations.changed').length,3);
+});

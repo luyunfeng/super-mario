@@ -1143,7 +1143,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if(webConversation){
           const enabled=()=>{if(!app.plugins.list().some(p=>p.id==='web-conversations'&&p.status==='active'))throw new InputError('独立 Web 对话插件已停用',503);};
           enabled();
-          if(method==='POST' && req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json')
+          if((method==='POST'||method==='PATCH') && req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json')
             throw new InputError('独立对话需要 JSON 请求',415);
           const [,id,messages,receiptKey]=webConversation;
           const invoke=async(args:JsonObject)=>{
@@ -1155,7 +1155,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if(!id){
             if(method==='GET'){
               const projectId=url.searchParams.get('projectId');
-              return json(res,200,await invoke({action:'list',...(projectId && {projectId})}));
+              const archived=url.searchParams.getAll('archived');
+              if(archived.length>1 || archived.some(value=>value!=='true' && value!=='false'))throw new InputError('归档筛选需要 true 或 false');
+              return json(res,200,await invoke({action:'list',archived:archived[0]==='true',...(projectId && {projectId})}));
             }
             if(method==='POST'){
               const input=await body(req,8192);
@@ -1163,7 +1165,12 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
               return json(res,201,await invoke({...input as JsonObject,action:'create'}));
             }
           }else{
-            const row=await invoke({action:'get',id}) as {id:string;projectId?:string};
+            if(!messages && method==='PATCH'){
+              const input=await body(req,8192);
+              if(Object.keys(input).some(key=>!['version','title','archived'].includes(key)))throw new InputError('独立对话包含未知字段');
+              return json(res,200,await invoke({...input as JsonObject,id,action:'update'}));
+            }
+            const row=await invoke({action:'get',id}) as {id:string;projectId?:string;archived:boolean};
             if(row?.id!==id.toLowerCase())throw new InputError('独立对话登记与请求不一致',409);
             const conversationId='web:'+row.id;
             if(!messages && method==='GET')return json(res,200,row);
@@ -1181,6 +1188,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
               return json(res,200,{messages:history.slice(start,end),nextBefore:start>0?history[start]!.id:null});
             }
             if(messages && !receiptKey && method==='POST'){
+              if(row.archived)throw new InputError('对话已归档，请恢复后再发送',409);
               const input=await body(req);
               if(Object.keys(input).some(key=>key!=='text'))throw new InputError('独立对话仅接受正文，项目由原会话决定');
               enabled();

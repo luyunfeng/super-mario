@@ -25,14 +25,17 @@ export function createWebConversations({api,store,scope,router}){
   const retry=button('重新读取对话',()=>{reset();update();});
   const form=h('form',{class:'composer',onsubmit:event=>{event.preventDefault();void post();}},
     h('div',{class:'composer__box'},input,h('div',{class:'composer__bar'},h('span',{class:'grow'}),send)));
+  const rename=button('修改对话标题',openRename),archive=button('归档对话',()=>changeArchive());
+  const stateLabel=h('span',{class:'small muted'});
+  const controls=h('div',{class:'row row--wrap'},stateLabel,rename,archive);
   const el=h('div',{class:'chat-code-main',hidden:true,'aria-label':'独立对话内容'},
     h('div',{class:'chat__top'},h('header',{class:'page__head'},heading,h('div',{class:'page__actions'},button('独立对话',openList),
-      h('a',{class:'btn btn--sm',href:'#chat'},'返回主对话'))),notice,retry),scroller,form);
+      h('a',{class:'btn btn--sm',href:'#chat'},'返回主对话'))),controls,notice,retry),scroller,form);
   let selector,selectorScope,selectorOwner,current,meta,nextBefore,readVersion=0,rows=[],lastChanges,lastConnection;
-  let pending=false,epoch=0,draftKey=null;
+  let pending=false,epoch=0,draftKey=null,renameDrawer,listRefresh,lastMetaEvent,changing=false;
   const valid=stamp=>current===stamp && stamp && stamp.owner===drafts.owner() && routeId()===stamp.id && active();
   function context(){
-    return {key:meta && valid(current)?draftKey:null,owner:current?.owner,epoch,draft:input.value,body:input.value.trim(),
+    return {key:meta && !meta.archived && valid(current)?draftKey:null,owner:current?.owner,epoch,draft:input.value,body:input.value.trim(),
       captured:'',conversation:'web:'+current?.id,projectId:meta?.projectId || undefined,url:path+'/'+current?.id+'/messages'};
   }
   function confirmed(ctx){
@@ -47,7 +50,7 @@ export function createWebConversations({api,store,scope,router}){
   input.onkeydown=e=>{if(e.key==='Enter' && !e.shiftKey && !e.isComposing){e.preventDefault();form.requestSubmit();}};
 
   function reset(){
-    current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;
+    renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;
     input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
     submissions.update();
   }
@@ -81,15 +84,82 @@ export function createWebConversations({api,store,scope,router}){
       }catch(error){if(ok())status.textContent=error.message;}
       finally{if(ok()){submit.disabled=false;name.readOnly=false;}}
     }},h('label',{class:'field'},'对话标题',name),submit);
-    const drawer=openDrawer({title:'独立对话',body:[draft,status,list],onClose:()=>{if(selector===drawer)selector=null;}});
+    const filter=h('select',{class:'input','aria-label':'对话状态'},h('option',{value:'active'},'进行中'),h('option',{value:'archived'},'已归档'));
+    const drawer=openDrawer({title:'独立对话',body:[draft,h('label',{class:'field'},'对话状态',filter),status,list],onClose:()=>{if(selector===drawer){selector=null;listRefresh=null;}}});
     selector=drawer;
     const ok=()=>selector===drawer && drawer.el.open && active() && drafts.owner()===owner && listProject()===projectId;
-    status.textContent='正在读取对话…';
-    api.get(path+'?'+new URLSearchParams({projectId})).then(result=>{
-      if(!ok())return;
-      status.textContent=result.items.length?'':'当前范围还没有独立对话。';
-      replace(list,result.items.map(row=>h('a',{class:'btn btn--ghost',href:href(row.id),onclick:()=>drawer.close()},row.title)));
-    }).catch(error=>{if(ok())status.textContent=error.message;});
+    let request=0;
+    listRefresh=async()=>{
+      const seq=++request,query=new URLSearchParams({projectId});
+      if(filter.value==='archived')query.set('archived','true');
+      replace(list);status.textContent='正在读取对话…';
+      try{
+        const result=await api.get(path+'?'+query);
+        if(!ok() || seq!==request)return;
+        status.textContent=result.items.length?'':filter.value==='archived'?'当前范围没有已归档对话。':'当前范围还没有独立对话。';
+        replace(list,result.items.map(row=>h('a',{class:'btn btn--ghost',href:href(row.id),onclick:()=>drawer.close()},row.title)));
+      }catch(error){if(ok() && seq===request)status.textContent=error.message;}
+    };
+    filter.onchange=()=>listRefresh?.();void listRefresh();
+  }
+  function applyMeta(stamp,row){
+    if(row.id!==stamp.id)throw Error('对话记录与链接不匹配。');
+    if(meta && row.version<meta.version)return;
+    if(!meta){draftKey=JSON.stringify(['web',stamp.id]);input.value=drafts.read(draftKey);}
+    if(meta && row.version>meta.version)notice.textContent='';
+    meta=row;heading.textContent=row.title;
+    form.hidden=!!row.archived;controls.hidden=false;
+    stateLabel.textContent=row.archived?'已归档 · 只读':'';
+    archive.textContent=row.archived?'恢复对话':'归档对话';
+    archive.disabled=changing;submissions.update();
+  }
+  async function refreshMeta(stamp){
+    try{
+      const row=await api.get(path+'/'+stamp.id);
+      if(valid(stamp))applyMeta(stamp,row);
+    }catch(error){if(valid(stamp)){
+      reset();current=stamp;notice.textContent=error.message;retry.hidden=false;
+    }}
+  }
+  async function modify(stamp,version,fields){
+    if(!meta || !valid(stamp))return;
+    try{
+      const row=await api.patch(path+'/'+stamp.id,{version,...fields});
+      if(!valid(stamp))return;
+      applyMeta(stamp,row);return true;
+    }catch(error){
+      if(!valid(stamp))return;
+      if(error.status===409)await refreshMeta(stamp);
+      throw error;
+    }
+  }
+  function openRename(){
+    const stamp=current;
+    if(!valid(stamp) || !meta || renameDrawer)return;
+    let version=meta.version;
+    const name=h('input',{class:'input',maxLength:160,value:meta.title,'aria-label':'新的对话标题'}),status=h('p',{role:'status'});
+    const save=h('button',{type:'submit',class:'btn btn--primary'},'保存标题');
+    const editor=h('form',{class:'stack',onsubmit:async e=>{
+      e.preventDefault();
+      if(save.disabled || !valid(stamp))return;
+      const title=name.value.trim();if(!title || [...title].length>80){status.textContent='请输入 1 至 80 个字符的标题。';return;}
+      save.disabled=true;
+      try{if(await modify(stamp,version,{title}))drawer.close();}
+      catch(error){if(valid(stamp)){
+        version=meta.version;
+        status.textContent=error.status===409?'对话已变化。当前标题为「'+meta.title+'」，请核对后再保存。':error.message;
+      }}finally{save.disabled=false;}
+    }},h('label',{class:'field'},'新的对话标题',name),save,status);
+    const drawer=openDrawer({title:'修改对话标题',body:editor,onClose:()=>{if(renameDrawer===drawer)renameDrawer=null;}});
+    renameDrawer=drawer;
+  }
+  async function changeArchive(){
+    const stamp=current;
+    if(!valid(stamp) || !meta || changing)return;
+    const archived=!meta.archived;changing=true;archive.disabled=true;
+    try{if(await modify(stamp,meta.version,{archived}))notice.textContent=archived?'已归档对话。':'已恢复对话。';}
+    catch(error){if(valid(stamp))notice.textContent=error.status===409?'对话已变化，请核对当前状态后重试。':error.message;}
+    finally{if(valid(stamp)){changing=false;archive.disabled=false;}}
   }
   function display(){
     replace(messages,rows.map(row=>h('article',{class:'msg msg--'+(row.role==='user'?'user':'assistant'),dataset:{id:row.id}},
@@ -115,18 +185,17 @@ export function createWebConversations({api,store,scope,router}){
       if(earlier)scroller.scrollTop+=scroller.scrollHeight-previousHeight;else if(nearEnd)scroller.scrollTop=scroller.scrollHeight;
     }catch(error){
       if(!valid(stamp) || version!==readVersion)return;
-      if([401,403,404,410,503].includes(error.status)){meta=null;replace(messages);rows=[];input.value='';form.hidden=true;more.hidden=true;}
+      if([401,403,404,409,410,503].includes(error.status)){controls.hidden=true;meta=null;heading.textContent='独立对话';replace(messages);rows=[];input.value='';form.hidden=true;more.hidden=true;}
       notice.textContent=error.message;retry.hidden=false;
     }finally{if(valid(stamp) && version===readVersion)more.disabled=false;}
   }
   async function open(stamp){
     notice.textContent='正在读取对话…';
     try{
-      const result=await api.get(path+'/'+stamp.id);
+      const event=lastMetaEvent,result=await api.get(path+'/'+stamp.id);
       if(!valid(stamp))return;
-      if(result.id!==stamp.id)throw Error('对话记录与链接不匹配。');
-      meta=result;draftKey=JSON.stringify(['web',stamp.id]);heading.textContent=result.title;
-      notice.textContent='';input.value=drafts.read(draftKey);form.hidden=false;submissions.update();
+      if(lastMetaEvent!==event && lastMetaEvent?.id===stamp.id){void open(stamp);return;}
+      notice.textContent='';applyMeta(stamp,result);
       await loadMessages();
     }catch(error){if(valid(stamp)){notice.textContent=error.message;retry.hidden=false;}}
   }
@@ -138,7 +207,7 @@ export function createWebConversations({api,store,scope,router}){
     pending=true;send.disabled=true;notice.textContent='';
     try{
       const receipt=await submissions.preflight(ticket,ctx);
-      if(!valid(stamp))return;
+      if(!valid(stamp) || !context().key)return;
       const reply=receipt ?? await api.post(ctx.url,{text:ctx.body},{'Idempotency-Key':ticket.record.id});
       if(!valid(stamp))return;
       if(!submissions.accepted(ticket,reply,ctx)){submissions.block(ticket);throw Error('回执与原消息不匹配。');}
@@ -149,6 +218,9 @@ export function createWebConversations({api,store,scope,router}){
   function update(){
     const id=routeId(),owner=drafts.owner();
     entry.hidden=!active();el.hidden=id===null;
+    const event=store.view.webConversationChange,changed=event && lastMetaEvent!==event;
+    lastMetaEvent=event;
+    if(changed && selector && (event.projectId || '')===selectorScope)void listRefresh?.();
     if(selector && (!active() || selectorOwner!==owner || selectorScope!==listProject()))selector.close();
     if(id===null || !active() || !uuid4.test(id)){
       if(current || !form.hidden)reset();
@@ -159,8 +231,9 @@ export function createWebConversations({api,store,scope,router}){
       reset();notice.textContent='原项目已归档或不可用。';return;
     }
     if(current?.id!==id || current.owner!==owner){reset();current={id,owner};send.disabled=false;void open(current);}
-    else if(meta && ((lastChanges!==store.view.messageQueueChanges && store.view.messageQueueChanges?.includes('web:'+id)) ||
-      (lastConnection!=='online' && store.view.connection==='online')))void loadMessages();
+    else if(meta && (changed && event.id===id || lastConnection!=='online' && store.view.connection==='online')){
+      void refreshMeta(current);void loadMessages();
+    }else if(meta && lastChanges!==store.view.messageQueueChanges && store.view.messageQueueChanges?.includes('web:'+id))void loadMessages();
     lastChanges=store.view.messageQueueChanges;lastConnection=store.view.connection;
   }
   reset();store.subscribe(update);router.subscribe(update);scope.subscribe(update);
