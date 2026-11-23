@@ -2277,6 +2277,7 @@ test('Web 和飞书按同一触发记录区分待批准、派发和执行失败'
   const sent: string[] = [];
   const { server, api, ask } = await fixture(t, req => {
     assert.match(req.system, /分别报告当次记录的 approvalStatus 和 run.status/);
+    assert.match(req.system, /approvalStatus=rejected 表示派发审批被拒绝，failed 表示处理审批失败/);
     if (req.lastRole === 'user') {
       assert.match(req.system, /提示词是供核对的计划数据/);
       if (JSON.stringify(req.content).includes('失败原因')) {
