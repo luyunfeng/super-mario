@@ -3580,6 +3580,11 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
         assert.ok(!req.tools.includes('private_conversation_list'));
         return { role: 'assistant', content: '首轮已收到。' };
       }
+      if (JSON.stringify(req.content).includes('搜索停用后找原话')) {
+        assert.ok(!req.tools.includes('private_conversation_search') && !req.tools.includes('private_conversation_list'));
+        assert.match(req.system, /本轮没有飞书独立对话检索工具.*按归档状态和标题浏览原消息/);
+        return { role: 'assistant', content: '请在对应机器人的记录中按标题浏览。' };
+      }
       assert.ok(req.tools.includes('private_conversation_list'));
       if (JSON.stringify(req.content).includes('列出独立对话')) {
         assert.match(req.system, /清单位置不代表任务优先级或完成状态/);
@@ -3665,6 +3670,11 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
     await t.waitFor(() => assert.ok(sent.includes(ordered), sent.at(-1)));
     await send('请查本机器人验收标签下的青瓷样本记录', 'find');
     await t.waitFor(() => assert.ok(sent.includes(answer), sent.at(-1)));
+    await api('/plugins/conversation-search', { enabled: false });
+    const fallback = '请在对应机器人的记录中按标题浏览。';
+    assert.equal(await ask('搜索停用后找原话'), fallback);
+    await send('搜索停用后找原话', 'search-disabled');
+    await t.waitFor(() => assert.ok(sent.includes(fallback)));
   } finally { await server.close(); }
 });
 

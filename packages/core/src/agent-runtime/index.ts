@@ -642,6 +642,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
               ? '当前工作台对话导出服务可用。飞书独立对话的复制与导出入口位于对应机器人的 Web 记录详情。'
               : '当前工作台对话导出服务不可用。可手动选取可见文字；需完整备份时，请先恢复对话导出插件并核对下载文件，再决定是否删除。'
           ] : []),
+          ...(allowed('private_conversation_search') && !contributions.list('tools').some(tool => tool.value.name === 'private_conversation_search')
+            ? ['本轮没有飞书独立对话检索工具。用户要找原话时，指引他在 Web 打开对应机器人的「独立对话记录」，按归档状态和标题浏览原消息。需要按正文检索时，先到插件配置核对对话历史搜索。不能将工具不可用解释为没有匹配记录。'] : []),
           ...(historyGuide ? [historyGuide] : []),
           ...(webPlugins ? webComposerGuidance(webPlugins) : []),
           ...(activeInput?.retryOf ? ['主人手动重试了工具执行前失败的请求。按本轮原文和附件处理，先前的失败文字不能作为交付或额外授权。'] : []),
