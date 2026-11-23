@@ -10,7 +10,7 @@ test('从插件配置固定入口，刷新、停用与恢复，并从窄屏打�
   const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: dir, demo: true });
   let attempts = 0;
   server.app.plugins.register({ id: 'fixture-retry', name: '合成重试插件', capabilities: [], activate() {
-    if (++attempts === 1) throw new Error('合成首次启动失败');
+    if (++attempts <= 2) throw new Error('合成启动失败 ' + attempts);
   } });
   await server.app.plugins.setEnabled('fixture-retry', true);
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
@@ -31,9 +31,15 @@ test('从插件配置固定入口，刷新、停用与恢复，并从窄屏打�
   await dialog.getByLabel('搜索插件').fill('fixture-retry');
   const retryPlugin = dialog.getByRole('region', { name: '合成重试插件' });
   await retryPlugin.getByRole('button', { name: '重试启动' }).click();
+  await expect(retryPlugin).toContainText('合成启动失败 2');
+  await retryPlugin.getByRole('button', { name: '停用' }).click();
+  await expect(retryPlugin).toContainText('已停用');
+  await expect(retryPlugin).not.toContainText('合成启动失败');
+  expect(attempts).toBe(2);
+  await retryPlugin.getByRole('button', { name: '启用', exact: true }).click();
   await expect(retryPlugin).toContainText('已启用');
   await expect(retryPlugin.getByRole('button', { name: '重试启动' })).toHaveCount(0);
-  expect(attempts).toBe(2);
+  expect(attempts).toBe(3);
   await dialog.getByLabel('搜索插件').fill('feishu');
   await expect(plugin.getByText(/直接依赖此插件/)).toContainText('飞书消息表情回应');
   await plugin.getByRole('checkbox').check();

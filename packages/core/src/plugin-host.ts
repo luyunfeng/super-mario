@@ -197,7 +197,10 @@ export class PluginHost {
     });
     for (const entry of this.entries.values()) {
       if (entry.info.status === 'active' && !canRemain(entry)) await this.stop(entry, errors);
-      if (!entry.info.enabled && entry.info.status !== 'failed') entry.info.status = 'disabled';
+      if (!entry.info.enabled && !(entry.info.status === 'failed' && entry.failure === 'cleanup')) {
+        entry.info.status = 'disabled';
+        delete entry.info.error;
+      }
     }
     const visited = new Set<string>();
     const activate = async (entry: Entry): Promise<void> => {
@@ -346,9 +349,11 @@ export class PluginHost {
     } catch (error) {
       this.options.background?.ownerEnabled(entry.info.id,false);
       let message = error instanceof Error ? error.message : String(error);
-      try { await entry.dispose(); } catch (cleanup) { message += `; ${String(cleanup)}`; }
+      entry.failure = 'activation';
+      try { await entry.dispose(); }
+      catch (cleanup) { entry.failure = 'cleanup'; message += `; ${String(cleanup)}`; }
       entry.dispose = undefined;
-      entry.failure = 'activation'; entry.info.status = 'failed'; entry.info.error = message;
+      entry.info.status = 'failed'; entry.info.error = message;
     }
   }
 
