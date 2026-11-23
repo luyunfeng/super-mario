@@ -113,12 +113,22 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await expect(drawer.locator('section').filter({has:page.getByText('定位到的消息',{exact:true})})).toContainText('[图片]');
   await drawer.getByRole('button',{name:'查看引用文件'}).click();
   await expect(drawer.locator('section').filter({has:page.getByText('定位到的消息',{exact:true})})).toContainText('转发的聊天记录.txt');
+  const toggleSearch = (enabled: boolean) => page.request.post(server.url + '/api/v1/plugins/conversation-search', {
+    headers: { authorization: 'Bearer ' + token }, data: { enabled },
+  });
+  assert.ok((await toggleSearch(false)).ok());
   await drawer.getByRole('button', { name: '复制对话 ID' }).click();
   await expect(drawer).toContainText('已复制对话 ID。');
   assert.deepEqual(clipboardWrites, [thread]);
   await drawer.getByRole('button', { name: '查看当前配置的模型清单' }).click();
   await expect(drawer).toContainText('演示模式');
   await drawer.getByRole('button', { name: '返回列表' }).click();
+  await expect(drawer).toContainText('对话历史搜索插件已停用');
+  await drawer.getByRole('button', { name: /核对独立方案/ }).click();
+  await drawer.getByRole('button', { name: '查看引用文件' }).click();
+  assert.ok((await toggleSearch(true)).ok());
+  await drawer.getByRole('button', { name: '返回列表' }).click();
+  await expect(drawer.getByLabel('搜索独立对话')).toBeVisible();
   await expect(drawer.getByRole('button', { name: /核对独立方案/ })).toBeVisible();
   await drawer.getByRole('button', { name: /核对独立方案/ }).click();
   await drawer.getByRole('textbox', { name: '对话标题' }).fill('归档核验方案');
@@ -201,7 +211,12 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await drawer.getByRole('button', { name: '加载后续消息' }).click();
   await expect(drawer).toContainText('较新的记录 21');
   await expect(marked).toHaveCount(1);
+  assert.ok((await toggleSearch(false)).ok());
+  await expect(drawer.getByText('定位到的消息', { exact: true }).locator('..')).toContainText(keyword);
+  assert.ok((await toggleSearch(true)).ok());
   await drawer.getByRole('button', { name: '返回列表' }).click();
+  await drawer.getByLabel('搜索独立对话').fill(keyword);
+  await drawer.getByRole('button', { name: '搜索', exact: true }).click();
   await hitButton.click();
   await drawer.getByRole('textbox', {name:'对话标题'}).fill('待核对的标题草稿');
   await drawer.getByLabel('新标签', { exact: true }).fill('草稿标签');

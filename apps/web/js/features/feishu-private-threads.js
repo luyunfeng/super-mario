@@ -47,7 +47,10 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     query = '';
     searchPage = undefined;
     if (showingList) void list();
-    else if (!target) body.querySelector('mark')?.remove();
+    else if (!enabled) {
+      const marker = body.querySelector('[data-thread-position]');
+      if (marker) marker.textContent = '定位到的消息';
+    }
   }
   const unsubscribe = store.subscribe(() => {
     if (!valid()) {
@@ -458,7 +461,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       }, messageId);
     }
     const entries = items => items.map(message => h('section', { class: 'stack' },
-      around && message.id === around && h('mark', { tabIndex: -1 }, query && row.hits?.some(hit => hit.id === around) ? '命中消息' : '定位到的消息'),
+      around && message.id === around && h('mark', { tabIndex: -1, dataset: { threadPosition: '' } }, query && row.hits?.some(hit => hit.id === around) ? '命中消息' : '定位到的消息'),
       h('strong', null, historyMessageLabel(message)),
       copyMessageLinkButton('#agent/private-thread/' + [bot.id, row.threadId, message.id].map(encodeURIComponent).join('/')),
       message.text?.trim() && h('button', { type:'button', class:'btn btn--ghost btn--sm',
