@@ -43,6 +43,29 @@ test('搜索本对话按当前项目和待办返回原话，翻页后能定位�
     put('just-text','> 请核对。\n\n类目词 仅在正文。',conversationId,project.id,task.id);
     put('assistant-block','> 类目词 助手列出的引文。\n\n已核对。',conversationId,project.id,task.id,'just-text');
     put('foreign-quote','> 类目词 另一待办。',conversationId,project.id,otherTask.id);
+    const store=server.app.store;
+    const putReply=(id:string,extra:Partial<Message>={})=>{
+      put(id,'无工具名的展示正文',conversationId,project.id,task.id,'just-text');
+      store.put('messages',id,{...store.get<Message>('messages',id)!,...extra});
+    };
+    const observedAt=new Date(Date.UTC(2026,0,1)).toISOString();
+    const hidden='仅内部可见的合成标记';
+    const toolCalls=[{id:'call',name:'fixture_history_lookup',args:hidden+'参数',result:hidden+'输出',startedAt:observedAt}];
+    for(const [id,cid,source] of [
+      ['trace-good',conversationId,'just-text'],['trace-cross','main','just-text'],['trace-other-input',conversationId,'main-other'],
+    ] as const){
+      putReply(id);
+      store.put('agent.traces',id,{id,conversationId:cid,userMessageId:source,status:'done',toolCalls});
+    }
+    const progress={phase:'tool' as const,toolName:'fixture_active_lookup',observedAt,detail:'合成工作轨迹',recentSteps:['不应展示的合成旧步骤']};
+    putReply('progress-active',{status:'pending',progress});
+    putReply('progress-done',{status:'done',progress});
+    putReply('progress-foreign',{status:'pending',progress,todoId:otherTask.id,replyTo:'project-other-task'});
+    for(const [id,sourceMessageId] of [['actual-run','just-text'],['misbound-run','main-other']]){
+      store.put('runs',id!,{id,sourceMessageId,conversationId,projectId:project.id,todoId:task.id,status:'completed',output:hidden,
+        prompt:hidden,executorId:'fixture',resultSource:'real',createdAt:observedAt,updatedAt:observedAt});
+      putReply('run-result:'+id,{origin:'result',runResult:{runId:id!,status:'completed',source:'real'},text:'执行完成：合成公开回执'});
+    }
     // Keep the selected answer outside the project's normal 60-message history window.
     for(let i=0;i<70;i++) put('newer-'+i,'后续记录 '+i,conversationId,project.id,task.id);
   });
@@ -131,6 +154,38 @@ test('搜索本对话按当前项目和待办返回原话，翻页后能定位�
     await expect(rows).toHaveCount(hits.length);
     await expect(drawer.getByRole('link')).toHaveCount(hits.length);
     await expect(drawer.getByRole('button',{name:'加载更多'})).toBeHidden();
+  }
+  const currentScope={conversationId,projectId:project.id,todoId:task.id};
+  const searchRun=async(query:string,category?:string)=>{
+    const res=await request({...currentScope,query,category});
+    assert.equal(res.status(),200,await res.text());return (await res.json()).hits;
+  };
+  for(const [category,query,id] of [
+    ['tool_name','fixture_history_lookup','trace-good'], ['tool_name','fixture_active_lookup','progress-active'],
+    ['event','合成工作轨迹','progress-active'], ['event','正在调用工具','progress-active'], ['event','执行完成','run-result:actual-run'],
+  ]){
+    const hits=await searchRun(query!,category);
+    assert.deepEqual(hits.map((h:Message)=>h.id),[id]);
+    for(const match of hits[0].matches) assert.equal(match.category,category);
+    assert.ok(!JSON.stringify(hits).includes('仅内部可见的合成标记'));
+  }
+  assert.deepEqual(await searchRun('不应展示的合成旧步骤','event'),[]);
+  for(const category of ['tool_name','event',undefined]) assert.deepEqual(await searchRun('仅内部可见的合成标记',category),[]);
+  for(const [category,query,id] of [['tool_name','fixture_history_lookup','trace-good'],['event','合成工作轨迹','progress-active']]){
+    await filter.selectOption(category!);
+    await keyword.fill(query!);await keyword.press('Enter');
+    await expect(rows).toHaveCount(1);
+    await drawer.getByRole('link',{name:new RegExp(query!)}).click();
+    const located=page.getByRole('log',{name:'项目对话'}).locator('[data-id="'+id+'"]');
+    await expect(located).toHaveClass(/is-search-hit/);
+    if (category==='tool_name'){
+      const receipt=page.waitForResponse(r=>r.url().endsWith('/conversation-tool-records') && r.request().method()==='POST');
+      await located.getByRole('button',{name:'查看工具记录'}).click();
+      const proof=await receipt;assert.deepEqual(await proof.json(),{names:['fixture_history_lookup']});
+      await expect(located).toContainText('fixture_history_lookup');
+      await expect(located).not.toContainText('仅内部可见的合成标记');
+    }
+    await open.click();
   }
   const name='合成归档附件.txt', bytes=Buffer.from('仅存在于文件内的标记');
   const upload=await page.request.put(server.url+'/api/v1/chat-files/uploads?'+new URLSearchParams({conversationId:'main',name}),{

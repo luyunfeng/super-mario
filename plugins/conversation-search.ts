@@ -5,7 +5,7 @@ import { messageVersion } from '../packages/plugin-sdk/src/index.ts';
 import { randomBytes } from 'node:crypto';
 import type { Extension, Json, Store } from '../packages/plugin-sdk/src/index.ts';
 
-import type { Message, Project, Todo } from '../packages/protocol/src/index.ts';
+import type { Message, Project, Run, Todo } from '../packages/protocol/src/index.ts';
 
 type SavedSearch = { id: string; name: string; query: string };
 type SearchBook = {
@@ -171,20 +171,59 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
   return { hits, nextBefore: null };
 }
 
-type MessageCategory = 'text'|'quoted'|'file';
+const messageCategories = ['text','quoted','file','tool_name','event'] as const;
+type MessageCategory = typeof messageCategories[number];
+type SearchMatch = {category:MessageCategory;text:string};
 type CanReadMessageFiles = (message:Message)=>boolean;
 
+function addMatch(matches:SearchMatch[],category:MessageCategory,text:string,pattern:RegExp) {
+  const match=pattern.exec(text);
+  if (!match) return;
+  let start=Math.max(0,match.index-48),end=Math.min(text.length,match.index+match[0].length+80);
+  if (start && /[\uDC00-\uDFFF]/.test(text[start]!)) start--;
+  if (end<text.length && /[\uDC00-\uDFFF]/.test(text[end]!)) end++;
+  matches.push({category,text:text.slice(start,end)});
+}
+
+function messageToolNames(store:Store,row:Message,source:Message) {
+  type ToolNames = {id:string;conversationId:string;userMessageId:string;projectId?:string;toolCalls?:{name:string}[]};
+  const trace=store.get<ToolNames>('agent.traces',row.id);
+  const names=new Set<string>();
+  if (trace?.id===row.id && trace.conversationId===row.conversationId && trace.userMessageId===source.id &&
+      (!trace.projectId || trace.projectId===row.projectId) && Array.isArray(trace.toolCalls)) {
+    for (const call of trace.toolCalls) if (typeof call?.name==='string') names.add(call.name);
+  } else if (!trace && row.status==='pending' && row.progress?.phase==='tool' && row.progress.toolName) {
+    names.add(row.progress.toolName);
+  }
+  return [...names].filter(name=>/^[a-zA-Z0-9_.:-]{1,80}$/.test(name));
+}
+
+function addRuntimeMatches(store:Store,row:Message,source:Message,pattern:RegExp,category:MessageCategory|undefined,matches:SearchMatch[]) {
+  if (row.origin==='result') {
+    const result=row.runResult;
+    if (!result || row.id!=='run-result:'+result.runId || row.status!=='done' || !result.source ||
+        !['completed','failed'].includes(result.status)) return;
+    const run=store.get<Run>('runs',result.runId);
+    if (run?.id===result.runId && run.sourceMessageId===source.id && run.status===result.status &&
+        run.resultSource===result.source && run.conversationId===row.conversationId &&
+        run.projectId===row.projectId && run.todoId===row.todoId) addMatch(matches,'event',row.text,pattern);
+    return;
+  }
+  if (!category || category==='tool_name') {
+    for (const name of messageToolNames(store,row,source)) if (pattern.test(name)) matches.push({category:'tool_name',text:name});
+  }
+  if ((!category || category==='event') && row.status==='pending' && row.progress) {
+    const labels={starting:'正在启动',thinking:'正在分析',tool:'正在调用工具',responding:'正在输出',waiting:'等待后续事件'};
+    const steps=new Set([labels[row.progress.phase] ?? '正在处理',row.progress.detail]);
+    for (const step of steps) if (typeof step==='string') addMatch(matches,'event',step,pattern);
+  }
+}
+
 function matchedPassages(row:Message,pattern:RegExp,category?:MessageCategory) {
-  const matches:{category:MessageCategory;text:string}[]=[];
-  if (category==='file') return matches;
+  const matches:SearchMatch[]=[];
+  if (category && category!=='quoted' && category!=='text' || row.origin==='result') return matches;
   function add(kind:MessageCategory,text:string) {
-    if (category && category!==kind) return;
-    const match=pattern.exec(text);
-    if (!match) return;
-    let start=Math.max(0,match.index-48),end=Math.min(text.length,match.index+match[0].length+80);
-    if (start && /[\uDC00-\uDFFF]/.test(text[start]!)) start--;
-    if (end<text.length && /[\uDC00-\uDFFF]/.test(text[end]!)) end++;
-    matches.push({category:kind,text:text.slice(start,end)});
+    if (!category || category===kind) addMatch(matches,kind,text,pattern);
   }
   // Match the Web renderer's splitLeadingQuote, including its whitespace
   // and newline handling. Quoted Markdown in assistant replies stays body text.
@@ -202,14 +241,39 @@ function matchedPassages(row:Message,pattern:RegExp,category?:MessageCategory) {
   return matches;
 }
 
+function webInputFor(store:Store,row:Message,workProject:string|undefined) {
+  const source = row.role==='user' ? row : row.role==='assistant' && row.replyTo ? store.get<Message>('messages',row.replyTo) : undefined;
+  if (source?.role==='user' && !source.replyTo && (!source.origin || source.origin==='user') &&
+      (row.role==='user' || source.id===row.replyTo) && source.conversationId===row.conversationId &&
+      (source.projectId ?? workProject)===(row.projectId ?? workProject) && source.todoId===row.todoId &&
+      !store.get('message.routes',source.id) && (source.id===row.id || !store.get('message.routes',row.id))) return source;
+}
+
+function projectToolRecords(store:Store,input:Json) {
+  if (!input || typeof input!=='object' || Array.isArray(input) ||
+      Object.keys(input).some(k=>!['conversationId','projectId','todoId','messageId'].includes(k)) ||
+      typeof input.projectId!=='string' || !input.projectId || typeof input.messageId!=='string' || !input.messageId ||
+      (input.todoId!==undefined && (typeof input.todoId!=='string' || !input.todoId))) fail(400,'工具记录查询参数无效');
+  const {conversationId,projectId,todoId,messageId}=input;
+  const project=store.get<Project>('projects',projectId), row=store.get<Message>('messages',messageId);
+  if (!project || project.id!==projectId || project.archivedAt || conversationId!==`project:${projectId}:work` ||
+      !row || row.id!==messageId || row.conversationId!==conversationId || row.projectId!==projectId ||
+      row.role!=='assistant' || (row.origin && row.origin!=='user') || (todoId!==undefined && row.todoId!==todoId) ||
+      (row.todoId && store.get<Todo>('todos',row.todoId)?.projectId!==projectId)) fail(404,'未找到当前项目的工具记录');
+  const source=webInputFor(store,row,projectId);
+  if (!source?.directWebInput || source.projectId!==projectId) fail(404,'未找到当前项目的工具记录');
+  return {names:messageToolNames(store,row,source)};
+}
+
 // Main and project conversations may also receive Feishu turns and internal
 // notifications. Only the original Web input establishes a searchable audience.
 function webMessages(store: Store, input: Json, canReadFiles?:CanReadMessageFiles, excludeId?:string): Json {
   if (!input || typeof input !== 'object' || Array.isArray(input) ||
       Object.keys(input).some(k => !['conversationId','projectId','todoId','query','before','category'].includes(k)))
     fail(400,'消息检索参数无效');
-  const {conversationId,projectId,todoId,query,before,category} = input;
-  if (category!==undefined && category!=='text' && category!=='quoted' && category!=='file') fail(400,'消息检索类别无效');
+  const {conversationId,projectId,todoId,query,before} = input;
+  const category=messageCategories.find(v=>v===input.category);
+  if (input.category!==undefined && !category) fail(400,'消息检索类别无效');
   for (const id of [conversationId,projectId,todoId,before]) {
     if (id !== undefined && (typeof id !== 'string' || !id.trim() || id.length>512 || /[\p{Cc}]/u.test(id))) fail(400,'检索范围或游标无效');
   }
@@ -230,15 +294,13 @@ function webMessages(store: Store, input: Json, canReadFiles?:CanReadMessageFile
   for (const row of store.list<Message>('messages').reverse()) {
     const rowProject:string|undefined=row.projectId ?? (conversationId==='main' ? undefined : projectId);
     if (row.id===excludeId || (excludeId && row.replyTo===excludeId) || row.conversationId!==conversationId || (projectId && rowProject!==projectId) || (todoId && row.todoId!==todoId) ||
-        (rowProject && !activeProjects.has(rowProject)) || (row.origin && row.origin!=='user')) continue;
+        (rowProject && !activeProjects.has(rowProject)) || (row.origin && row.origin!=='user' && row.origin!=='result')) continue;
     const matches=matchedPassages(row,pattern,category);
-    const checkFiles=(!category || category==='file') && !!row.files?.length && canReadFiles;
-    if (!matches.length && !checkFiles) continue;
-    const source = row.role==='user' ? row : row.role==='assistant' && row.replyTo ? store.get<Message>('messages',row.replyTo) : undefined;
-    if (!source || source.role!=='user' || source.replyTo || (source.origin && source.origin!=='user') ||
-        source.conversationId!==conversationId || (source.projectId ?? (conversationId==='main' ? undefined : projectId))!==rowProject || source.todoId!==row.todoId ||
-        store.get('message.routes',source.id) || (source.id!==row.id && store.get('message.routes',row.id)) ||
-        (row.todoId && !matchesTodo(row.todoId,rowProject))) continue;
+    const checkFiles=row.origin!=='result' && (!category || category==='file') && !!row.files?.length && canReadFiles;
+    const checkRuntime=row.role==='assistant' && (!category || category==='event' || (row.origin!=='result' && category==='tool_name'));
+    if (!matches.length && !checkFiles && !checkRuntime) continue;
+    const source = webInputFor(store,row,conversationId==='main' ? undefined : projectId);
+    if (!source || (row.todoId && !matchesTodo(row.todoId,rowProject))) continue;
     // Before directWebInput existed, the browser already used a durable send
     // receipt. Feishu dispatch never supplied that key. Card continuations
     // now use receipts too, but carry their own atomic source record.
@@ -253,6 +315,7 @@ function webMessages(store: Store, input: Json, canReadFiles?:CanReadMessageFile
           matches.push({category:'file',text:name});
       }
     }
+    if (checkRuntime && source.directWebInput) addRuntimeMatches(store,row,source,pattern,category,matches);
     if (!matches.length) continue;
     if (!pastCursor) {pastCursor=row.id===before;continue;}
     if (hits.length===25) return {hits,nextBefore:hits[hits.length-1]!.id};
@@ -267,7 +330,7 @@ function webMessages(store: Store, input: Json, canReadFiles?:CanReadMessageFile
 type ReadFiles = (input: { projectId: string; kind: 'search'; query: string }) => Promise<Json>;
 export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input: Json) => Json, queueStatus?: () => {queuedMessages:number;nextQueuedMessage:{id:string;text:string;images:number;files:number}|null} | undefined, canReadFiles?:CanReadMessageFiles): Extension => ({
   id: 'conversation-search', name: '对话历史搜索', capabilities: ['conversation.search'],
-  permissions: ['contribute:tools', 'service.provide:conversation-search.saved', 'service.provide:conversation-search.projects', 'service.provide:conversation-search.messages', 'service.provide:conversation-search.files', 'service.provide:conversation-search.status', 'store.read', 'store.write'],
+  permissions: ['contribute:tools', 'service.provide:conversation-search.saved', 'service.provide:conversation-search.projects', 'service.provide:conversation-search.messages', 'service.provide:conversation-search.tool-records', 'service.provide:conversation-search.files', 'service.provide:conversation-search.status', 'store.read', 'store.write'],
   activate(context) {
     let active = true;
     context.defer(() => { active = false; });
@@ -322,9 +385,9 @@ export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input:
       });
     }
     context.contribute('tools','current_web_message_search',{
-      name:'current_web_message_search', description:'按连续词句检索当前 Web 对话的原发言与回复，按消息返回分类摘录。category=text 查正文，quoted 查用户开头引用，file 只查当前可读的附件名，省略查全部。引用只代表当时引用的材料。用返回的 nextBefore 续查更早的结果。',
+      name:'current_web_message_search', description:'按连续词句检索当前 Web 对话的原发言与回复，按消息返回分类摘录。category=text 查正文，quoted 查用户开头引用，file 只查可读附件名，tool_name 查已记录的工具名称，event 查公开进度及有执行回执的结果。工具名或进行中状态不能证明执行成功。省略类别查全部。引用只代表当时引用的材料。用返回的 nextBefore 续查更早的结果。',
       parameters:{type:'object',additionalProperties:false,required:['query'],properties:{
-        query:{type:'string',minLength:1,maxLength:500},before:{type:'string'},category:{type:'string',enum:['text','quoted','file']},
+        query:{type:'string',minLength:1,maxLength:500},before:{type:'string'},category:{type:'string',enum:[...messageCategories]},
       }},
       async execute({excludeId,...input},signal) {
         signal.throwIfAborted();
@@ -389,6 +452,7 @@ export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input:
           status: message.status ?? 'unknown', webCitation: messageCitation(projectId, id, current), text: message.text.slice(offset, end), offset, nextOffset: end < message.text.length ? end : null, version: current };
       },
     });
+    context.provide('conversation-search.tool-records', input=>projectToolRecords(context.store,input));
     context.provide('conversation-search.messages', input => webMessages(context.store, input, canReadFiles));
     context.provide('conversation-search.projects', input => projectMessages(context.store, input));
     context.provide('conversation-search.saved', input => savedSearches(context.store, input));

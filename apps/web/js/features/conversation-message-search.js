@@ -23,7 +23,8 @@ export function conversationMessageSearch({api,store,router}) {
     if(!scope || drawer) return;
     const input=h('input',{type:'search',class:'input','aria-label':'搜索关键词',placeholder:'输入要查找的原文'});
     const category=h('select',{'aria-label':'搜索内容'},
-      h('option',{value:''},'全部'), h('option',{value:'text'},'正文'), h('option',{value:'quoted'},'引用'), filesEnabled && h('option',{value:'file'},'附件名'));
+      h('option',{value:''},'全部'), h('option',{value:'text'},'正文'), h('option',{value:'quoted'},'引用'), filesEnabled && h('option',{value:'file'},'附件名'),
+      h('option',{value:'tool_name'},'工具名'), h('option',{value:'event'},'工作事件'));
     const status=h('p',{class:'muted small',role:'status'});
     const list=h('ul',{class:'stack','aria-label':'命中消息'});
     const more=Button({label:'加载更多',size:'sm',onClick:()=>void read(cursor)});
@@ -63,7 +64,7 @@ export function conversationMessageSearch({api,store,router}) {
           const excerpts=matches.map(part=>{
             const match=pattern.exec(part.text);
             const excerpt=match ? [part.text.slice(0,match.index),h('mark',null,match[0]),part.text.slice(match.index+match[0].length)] : [part.text];
-            const label={text:'正文',quoted:'引用',file:'附件名'}[part.category];
+            const label={text:'正文',quoted:'引用',file:'附件名',tool_name:'工具名',event:'工作事件'}[part.category];
             return h('div',null,label && h('span',{class:'small muted'},label+' · '),h('a',{href,onClick:e=>{
               if(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
               e.preventDefault();close();router.go(href);

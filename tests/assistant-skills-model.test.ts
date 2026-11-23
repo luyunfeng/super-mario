@@ -4531,15 +4531,26 @@ test('模型从注册工具发出限时提问，到期回合只读且不能冒�
 
 test('搜索本对话工具固定 Web 发言范围并排除当前检索提问', async t => {
   const query = '交接清单', oldText = '交接清单里有三份合成样张';
+  let findTool = false;
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.ok(req.tools.includes('current_web_message_search'));
       assert.match(req.system, /current_web_message_search/);
+      if (findTool) {
+        assert.match(req.system, /category=tool_name/);
+        return call('current_web_message_search', {query:'current_web_message_search',category:'tool_name'}, 'find-prior-call');
+      }
       assert.match(req.system, /category=quoted/);
       return call('current_web_message_search', {query,category:'quoted'}, 'search-current');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
     const {hits} = JSON.parse(raw);
+    if (findTool) {
+      assert.equal(hits.length,1);
+      assert.equal(hits[0].role,'assistant');
+      assert.deepEqual(hits[0].matches,[{category:'tool_name',text:'current_web_message_search'}]);
+      return {role:'assistant', content:'前一轮记录了检索工具调用。'};
+    }
     assert.deepEqual(hits.map((row:{text:string}) => row.text), [oldText]);
     assert.deepEqual(hits[0].matches,[{category:'quoted',text:oldText}]);
     return {role:'assistant', content:hits[0].text};
@@ -4551,6 +4562,9 @@ test('搜索本对话工具固定 Web 发言范围并排除当前检索提问', 
       server.app.store.put('messages', id, {id, conversationId, ...(conversationId === 'main' ? {} : {projectId:project.id}),
         directWebInput:true, role:'user', text:'> '+oldText+'\n\n交接清单的数量待确认。', status:'done', createdAt:'2026-03-01T10:00:00.000Z'} satisfies Message);
     }
-    assert.equal(await ask('找一下本对话中我引用过的交接清单原话。','/projects/'+project.id+'/messages'),oldText);
+    const path='/projects/'+project.id+'/messages';
+    assert.equal(await ask('找一下本对话中我引用过的交接清单原话。',path),oldText);
+    findTool=true;
+    assert.equal(await ask('上一轮有调用 current_web_message_search 吗？',path),'前一轮记录了检索工具调用。');
   } finally { await server.close(); }
 });

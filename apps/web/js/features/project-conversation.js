@@ -1,3 +1,4 @@
+import { conversationSearchActive } from './search.js';
 import { conversationMessageSearch } from './conversation-message-search.js';
 import { createQueuedDraftEditor } from './edit-queued.js';
 import { createMessageFiles, messageFiles } from './message-files.js';
@@ -145,6 +146,29 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   store.subscribe(syncDraft);
   syncDraft();
 
+  // Project history exposes only tool names for this Web reply. The full trace
+  // may contain model context, tool arguments and output from other sources.
+  function toolRecords(message,range) {
+    const originalOwner=api.draftOwner();
+    const output=h('div',{class:'small muted',role:'status',hidden:true});
+    const valid=()=>button.isConnected && visible && originalOwner===api.draftOwner() && originalOwner===store.view.snapshotOwner &&
+      !store.view.unauthorized && conversationSearchActive(store.view.snapshot) && projectId===range.projectId && (todoId||undefined)===range.todoId;
+    const button=Button({label:'查看工具记录',size:'sm',kind:'ghost',onClick:async()=>{
+      if(!valid()) return;
+      if(!output.hidden) {output.hidden=true;button.textContent='查看工具记录';return;}
+      output.hidden=false;output.textContent='正在读取…';button.disabled=true;
+      try {
+        const result=await api.post('/conversation-tool-records',{...range,messageId:message.id});
+        if(valid()) {
+          replace(output,result.names.length?h('ul',null,result.names.map(name=>h('li',null,name))):'此答复没有已记录的工具调用。');
+          button.textContent='收起工具记录';
+        }
+      } catch(error) {
+        if(valid()) {output.textContent=error.status===404?'此答复没有可核对的工具记录。':'读取失败：'+error.message;button.textContent='收起工具记录';}
+      } finally {button.disabled=false;}
+    }});
+    return h('div',null,button,output);
+  }
   function paint() {
     instructions.update();
     code.show(projectId);
@@ -192,6 +216,12 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     }
     if (!messages._keyed) messages.replaceChildren();
     const queueEnabled = turnQueueActive(store);
+    const searchable=conversationSearchActive(store.view.snapshot) && !store.view.unauthorized && !!owner;
+    const range={conversationId:`project:${projectId}:work`,projectId,todoId:todoId||undefined};
+    const webInputs=new Set(rows.filter(row=>row.role==='user' && row.directWebInput && row.conversationId===range.conversationId &&
+      row.projectId===projectId && (!todoId || row.todoId===todoId)).map(row=>row.id));
+    const toolRecordAllowed=m=>searchable && m.role==='assistant' && (!m.origin || m.origin==='user') && m.projectId===projectId &&
+      m.conversationId===range.conversationId && (!todoId || todoId===m.todoId) && m.replyTo && (webInputs.has(m.replyTo) || m.id===anchor);
     const retryEnabled = turnRetryActive(store);
     const retried = new Set(rows.filter(m=>m.retryOf).map(m=>m.retryOf));
     keyedList(messages, rows, m => m.id, m => {
@@ -205,13 +235,13 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
         h('div', { class: 'msg__col' },
           h('span', { class: 'msg__label' }, user ? '我' : '项目助手'),
           m.todoId && h('a', { class: 'small', href: router.href('projects', projectId, 'todos', 'detail', m.todoId) }, '查看关联待办'),
-          agentProgress(m),
+          agentProgress(m), toolRecordAllowed(m) && toolRecords(m,range),
           bubble, messageFiles(api,store,m,rows,messages), user && messageImages(api,store,m,(m.todoId || '') === (todoId || '') ? pictures.editCopy.bind(null,composerContext().key) : undefined),
           statusText && h('span', { class: 'msg__meta' }, statusText),
           (!todoId || todoId === m.todoId) && retryTurn(m,rows,`project:${projectId}:work`,
             id=>router.href('projects',m.projectId,'workspace')+'?at='+encodeURIComponent(id)+(m.todoId?'&todo='+encodeURIComponent(m.todoId):'')),
           h('span', null, stopTurnButton(api,m,projectId,queueEnabled), queuedEdit.action(m), favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble, transcript.renderMessage), m.conversationId === `project:${projectId}:work` && readAloud.action(m, translation.displayedText), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
-    }, m => JSON.stringify([prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, projectId, todoId, anchor, queueEnabled, retryEnabled, retried.has(m.id), m]));
+    }, m => JSON.stringify([prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, projectId, todoId, anchor, !!toolRecordAllowed(m), queueEnabled, retryEnabled, retried.has(m.id), m]));
     if (historyQuery && !focused && el.isConnected && router.current.page === 'projects' && router.current.parts[1] === 'workspace') {
       const row = anchor ? messages.querySelector('[data-id="' + CSS.escape(anchor) + '"]') : messages.firstElementChild;
       if (row) { focused = true; row.tabIndex = -1; row.focus({ preventScroll: true }); row.scrollIntoView({ block: 'center' }); }

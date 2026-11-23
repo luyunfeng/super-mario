@@ -77,6 +77,7 @@ function json(res: ServerResponse, status: number, value: unknown) {
 const conversationReaders = new Map<string, { id: string; disabled: string; service: string; limit?: number; timeoutMs?: number }>([
   ['/api/v1/briefing/today', { id: 'daily-brief', disabled: '每日简报插件已停用', service: 'daily-brief.today', limit: 1024 }],
   ['/api/v1/conversation-message-search', { id: 'conversation-search', disabled: '对话搜索插件已停用', service: 'conversation-search.messages', limit: 8192 }],
+  ['/api/v1/conversation-tool-records', { id: 'conversation-search', disabled: '对话搜索插件已停用', service: 'conversation-search.tool-records', limit: 4096 }],
   ['/api/v1/project-message-search', { id: 'conversation-search', disabled: '对话搜索插件已停用', service: 'conversation-search.projects', limit: 4096 }],
   ['/api/v1/conversation-export', { id: 'conversation-export', disabled: '对话导出插件已停用', service: 'conversation-export.markdown' }],
   ['/api/v1/message-favorites', { id: 'message-favorites', disabled: '消息收藏插件已停用', service: 'message-favorites.manage', limit: 8 * 1024 * 1024 + 1024 }],
