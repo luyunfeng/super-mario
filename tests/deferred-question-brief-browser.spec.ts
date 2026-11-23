@@ -15,6 +15,9 @@ test('主人从 Web 简报中的可稍后回答项目打开原待办', async t =
   const id = 'synthetic-question';
   const title = '请选择合成验收方案';
   server.app.store.put('todos', id, {id, title, notes:'合成选项说明', deferredQuestion:{cardId:'synthetic-card', askedAt:now}, createdAt:now, updatedAt:now});
+  const decisionId = 'synthetic-decision';
+  const decisionTitle = '请选择合成排期';
+  server.app.store.put('interactions', decisionId, {id:decisionId, title:decisionTitle, status:'open', createdAt:now});
   browser = await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
   const page = await browser.newPage();
   await page.addInitScript(() => localStorage.setItem('sm.splash.seen','true'));
@@ -24,6 +27,7 @@ test('主人从 Web 简报中的可稍后回答项目打开原待办', async t =
   await expect(drawer).toContainText('统计时段（');
   await expect(drawer).toContainText('持久记录的最新状态');
   await expect(drawer).toContainText('可稍后回答 1');
+  await expect(drawer.getByRole('link', {name:decisionTitle})).toHaveAttribute('href', '#chat?interaction=' + decisionId);
   await drawer.getByRole('link', {name:title}).click();
   await expect(page).toHaveURL(new RegExp('/todos/detail/' + id + '$'));
   await expect(page.locator('#panel-todos').getByRole('heading', {name:title})).toBeVisible();
