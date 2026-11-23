@@ -204,7 +204,10 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
     const { target, route } = pendingSection;
     pendingSection = undefined;
     requestAnimationFrame(() => {
-      if (router.current.canonical === route) document.getElementById(target)?.scrollIntoView({ block: 'start' });
+      if (router.current.canonical !== route) return;
+      const element = document.getElementById(target);
+      if (element) element.scrollIntoView({ block:'start' });
+      else if (target.startsWith('agent-extension-')) linkStatus('当前插件卡片不可用，请核对插件是否已启用。');
     });
   }
 
@@ -223,7 +226,9 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
       pendingStatistics = route.query.get('tokenStats') === '1';
       showStatistics();
       scheduledWork.load(); loadModel(); loadFeishu(); policy.load(); followUp.load(); cliSessions.onShow();
-      const target = { 'command-group': 'agent-command-group', rules: 'agent-rules', 'follow-up': 'agent-follow-up', advanced: 'agent-advanced' }[route.parts[0]];
+      const cardId = route.parts[0] === 'extensions' && route.parts.slice(1).join('/');
+      if (cardId) advanced.openInterface();
+      const target = cardId ? 'agent-extension-'+cardId : { 'command-group': 'agent-command-group', rules: 'agent-rules', 'follow-up': 'agent-follow-up', advanced: 'agent-advanced' }[route.parts[0]];
       pendingSection = target && { target, route: route.canonical };
       showSection();
       if (route.parts[0] === 'advanced') advanced.el.open = true;

@@ -249,7 +249,7 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
         content = stream;
       }
       if (!content && !fallback) continue;
-      const node = h('section', {class:'card card__body stack', 'aria-label':value.title},
+      const node = h('section', {id:'agent-extension-'+id, class:'card card__body stack', 'aria-label':value.title},
         h('h3', {}, value.title), content || h('p', {}, fallback));
       previous?.node.replaceWith(node);
       cardNodes.set(id,{signature,node,stream});
@@ -269,5 +269,5 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
     extensionCards.hidden = !visible.size;
   }
 
-  return { el, update: paint };
+  return { el, update: paint, openInterface() { el.open = true; ui.open = true; } };
 }

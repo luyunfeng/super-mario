@@ -40,9 +40,8 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
     connections++;
     disconnectEvents = async () => { await ws.close(); await upstream.close(); };
   });
-  await page.goto(server.url+'/#agent');
-  await page.getByText('高级：插件与排查',{exact:true}).click();
-  await page.getByText('界面',{exact:true}).click();
+  await page.goto(server.url+'/#agent/extensions/review/notes');
+  await expect(page.getByRole('region',{name:'评审备注'})).toBeVisible();
   const entry=page.getByRole('button',{name:'助理卡片示例',exact:true});
   await expect(entry).toBeVisible();
   const stream=page.getByRole('region',{name:'处理记录'}).locator('pre');
@@ -60,8 +59,7 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await expect(stream).toBeFocused();
   assert.equal(await page.evaluate(()=>window.getSelection()?.toString()),'已开始');
   await page.reload();
-  await page.getByText('高级：插件与排查',{exact:true}).click();
-  await page.getByText('界面',{exact:true}).click();
+  await expect(page.getByRole('region',{name:'评审备注'})).toBeVisible();
   await expect(stream).toHaveText('已开始\n已处理首批');
   const beforeDisconnect = connections;
   assert.ok(disconnectEvents);
