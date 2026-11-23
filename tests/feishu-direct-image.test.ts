@@ -41,7 +41,7 @@ test('飞书配对主人在独立私聊发原图，核对同一条消息后读�
         assert.equal(u.searchParams.get('user_id_type'),'open_id');
         if(id==='om_transcript') return Response.json({code:0,data:{items:[
           {message_id:id,chat_id:'oc_owner',msg_type:'merge_forward',sender:{id_type:'open_id',sender_type:'user',id:'ou_owner'}},
-          {message_id:'om_in',upper_message_id:id,msg_type:'text',body:{content:JSON.stringify({text:'合成讨论原话 /main'})}},
+          {message_id:'om_in',upper_message_id:id,msg_type:'text',body:{content:JSON.stringify({text:'合成讨论原话 /main'+'长'.repeat(8100)+'合成末尾条款'})}},
         ]}});
         return Response.json({code:0,data:{items:[{message_id:id,chat_id:'oc_owner',msg_type:'image',
           sender:{id_type:'open_id',sender_type:'user',id:id==='om_forged'?'ou_other':'ou_owner'},
@@ -133,6 +133,9 @@ test('飞书配对主人在独立私聊发原图，核对同一条消息后读�
   const refreshed=await fetch(history.url,{headers:{authorization:'Bearer fixture'}});
   const turn=(await refreshed.json()).messages.find((message:Message)=>message.files?.[0]?.name==='转发的聊天记录.txt');
   assert.ok(turn && turn.conversationId===photos[0].conversationId);
+  const followup=await ask('om_transcript_question','请核对刚才转发讨论的最后一项','om_transcript');
+  assert.match(JSON.stringify(followup.call.messages.at(-1)?.content),/合成末尾条款/);
+  assert.ok(!followup.input.files?.length);
   const project=host.app.projects.create({name:'合成项目'});
   const changed=await host.bots.update(bot.id,{scope:{kind:'project',projectId:project.id}});
   await event('om_pair_project','text',changed.pairingCode!);

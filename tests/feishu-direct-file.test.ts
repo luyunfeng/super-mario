@@ -16,7 +16,20 @@ test('私聊普通文件从已核实的原消息分块接收，撤回和重新�
   const received:string[]=[],sent:string[]=[];
   let dispatcher!:EventDispatcher,sequence=0;
   let resume!:()=>void;const hold=new Promise<void>(resolve=>{resume=resolve;});
-  const host=await startServer({host:'127.0.0.1',port:0,dataDir:dir,token:'fixture',demo:true},{
+  const baseUrl='http://127.0.0.1:1/private-file';
+  const requests:{messages:{role:string;content:unknown}[]}[]=[];
+  const realFetch=globalThis.fetch;
+  t.mock.method(globalThis,'fetch',async(input:RequestInfo|URL,init?:RequestInit)=>{
+    const req=new Request(input,init);
+    if(req.url!==baseUrl+'/chat/completions'){assert.equal(new URL(req.url).hostname,'127.0.0.1');return realFetch(req);}
+    requests.push(await req.json());
+    const frames=[{role:'assistant',content:'合成答复'},{}].map((delta,i)=>'data: '+JSON.stringify({
+      id:'fixture',model:'fixture',object:'chat.completion.chunk',choices:[{index:0,delta,finish_reason:i?'stop':null}]
+    }));
+    return new Response([...frames,'data: [DONE]',''].join('\n\n'),{headers:{'content-type':'text/event-stream'}});
+  });
+  const host=await startServer({host:'127.0.0.1',port:0,dataDir:dir,token:'fixture',demo:false,
+    model:{provider:'openai-compatible',model:'fixture',apiKey:'fixture',baseUrl}},{
     botFactory:options=>createFeishuIntegration({...options,fetch:async(input,init)=>{
       const url=new URL(String(input)),path=url.pathname;
       if(path.includes('tenant_access_token')) return Response.json({code:0,tenant_access_token:'synthetic',expire:7200});
@@ -46,9 +59,9 @@ test('私聊普通文件从已核实的原消息分块接收，撤回和重新�
       getConnectionStatus:()=>({state:'connected',reconnectAttempts:0})})})});
   t.after(async()=>{resume();try{await host.close();}finally{await rm(dir,{recursive:true,force:true});}});
   const bot=await host.bots.create({name:'合成资料助手',appId:'cli_8888888888888888',appSecret:'fixture',scope:{kind:'global'},requireConfirmation:false});
-  const event=(id:string,type='file',text='',sender='ou_owner',group=false)=>dispatcher.invoke({schema:'2.0',
+  const event=(id:string,type='file',text='',sender='ou_owner',group=false,parentId?:string)=>dispatcher.invoke({schema:'2.0',
     header:{event_type:'im.message.receive_v1',event_id:'e'+ ++sequence},event:{sender:{sender_type:'user',sender_id:{open_id:sender}},
-      message:{message_id:id,message_type:type,chat_id:group?'oc_other':'oc_owner',chat_type:group?'group':'p2p',content:JSON.stringify(
+      message:{message_id:id,parent_id:parentId,message_type:type,chat_id:group?'oc_other':'oc_owner',chat_type:group?'group':'p2p',content:JSON.stringify(
         type==='text'?{text}:{file_name:'event-name.txt',file_key:'file_untrusted',text:'/ai 创建待办'})}}},{needCheck:false});
   const recall=(id:string)=>dispatcher.invoke({schema:'2.0',header:{event_id:'r'+ ++sequence,event_type:'im.message.recalled_v1'},
     event:{chat_id:'oc_owner',message_id:id}},{needCheck:false});
@@ -66,6 +79,31 @@ test('私聊普通文件从已核实的原消息分块接收，撤回和重新�
   const get=(m:Message)=>fetch(host.url+'/api/v1/messages/'+m.id+'/files/0?conversationId='+encodeURIComponent(m.conversationId),{headers});
   const res=await get(row);assert.equal(res.status,200);assert.deepEqual(Buffer.from(await res.arrayBuffer()),file);
   assert.ok(!JSON.stringify(host.app.mailboxes.list()).includes('合成文件第一段'));
+  const marker='合成文件第二段';
+  const ask=async(id:string,text:string,parent?:string)=>{
+    await event(id,'text',text,'ou_owner',false,parent);
+    return t.waitFor(()=>{
+      const call=requests.find(r=>JSON.stringify(r.messages.at(-1)?.content).includes(text));
+      const question=host.app.store.list<Message>('messages').find(m=>m.role==='user' && m.text===text);
+      assert.ok(call && question && question.conversationId===row.conversationId);
+      return {call,question};
+    },{timeout:8000});
+  };
+  const quoted=await ask('om_file_question','请核对所引文件中的合成结论','om_good');
+  assert.ok(JSON.stringify(quoted.call.messages).includes(marker));
+  assert.ok(!quoted.question.files?.length);assert.equal((await get(quoted.question)).status,404);
+  const {threadId}=host.app.store.list<{threadId:string}>('feishu.private-threads')[0];
+  const historyQuote=async(id=quoted.question.id)=>{
+    const result=await fetch(host.url+'/api/v1/feishu/bots/'+bot.id+'/threads/'+threadId,{headers});
+    assert.equal(result.status,200);
+    return (await result.json()).messages.find((m:Message)=>m.id===id);
+  };
+  const visible=await historyQuote();
+  assert.equal(visible.quotedFileMessageId,row.id);assert.ok(!visible.files?.length);
+  const plain=await ask('om_plain','继续讨论另一个合成话题');
+  assert.ok(!JSON.stringify(plain.call.messages).includes(marker));
+  const wrong=await ask('om_unknown','这个不同来源的引用能否读取','om_missing');
+  assert.ok(!JSON.stringify(wrong.call.messages).includes(marker));
   const plugin=host.url+'/api/v1/plugins/conversation-files';
   const toggle=(enabled:boolean)=>fetch(plugin,{method:'POST',headers:{...headers,'content-type':'application/json'},body:JSON.stringify({enabled})});
   assert.equal((await toggle(false)).status,200);
@@ -84,17 +122,27 @@ test('私聊普通文件从已核实的原消息分块接收，撤回和重新�
   const preview=await fetch(previewUrl,{headers});
   assert.equal(preview.status,200);
   assert.match((await preview.json()).text,/合成文件第一段/);
+  const previewQuote=await ask('om_preview_question','这份待撤回资料记录了什么','om_preview');
+  assert.ok(JSON.stringify(previewQuote.call.messages).includes(marker));
   const revoked:unknown[]=[];
   const off=host.app.events.subscribe(e=>{if(e.type==='message-attachment.revoked') revoked.push(e.data);});
   try { await recall('om_preview'); } finally { off(); }
   assert.deepEqual(revoked,[{messageId:previewRow.id}]);
   assert.equal((await fetch(previewUrl,{headers})).status,404);
+  const readsBefore=received.length;
+  const hidden=await historyQuote(previewQuote.question.id);
+  assert.equal(hidden.quotedFileMessageId,undefined);assert.equal(hidden.quotedFilesUnavailable,true);
+  const revokedQuestion=await ask('om_revoked_question','请确认已撤回原件的状态','om_preview');
+  assert.ok(!JSON.stringify(revokedQuestion.call.messages).includes(marker));
+  assert.equal(received.length,readsBefore);
+  assert.equal(received.filter(x=>x==='om_good/resources/file_verified').length,1);
   const key=createHash('sha256').update(JSON.stringify([bot.id,'oc_owner',''])).digest('hex');
   const binding=host.app.store.get<Record<string,unknown>>('feishu.chat-target',key)!;
   host.app.store.put('feishu.chat-target',key,{...binding,conversationThreadId:undefined,agentTarget:{sessionId:'fixture'}});
   await event('om_agent');
   await t.waitFor(()=>assert.ok(sent.some(text=>text.includes('切回助手'))));
   assert.ok(!received.includes('om_agent'));assert.equal(host.app.store.list('runs').length,0);
+  assert.equal((await get(row)).status,200);
   const newBot=await host.bots.update(bot.id,{appId:'cli_7777777777777777',appSecret:'another-fixture'});
   await event('om_repair','text',newBot.pairingCode!);
   await t.waitFor(()=>assert.ok(host.bots.list()[0]?.paired));

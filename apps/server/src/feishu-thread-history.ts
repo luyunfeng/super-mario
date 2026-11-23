@@ -8,7 +8,7 @@ export type PrivateThread = {
 };
 type Receipt = {
   channel: string; botId: string; accountId: string; revision: number; target: string;
-  parentMessageId?:string; sourceMessageId?:string; replyReference?:{imageSourceId?:string; imagesUnavailable?:boolean};
+  parentMessageId?:string; sourceMessageId?:string; replyReference?:{imageSourceId?:string; imagesUnavailable?:boolean;fileSourceId?:string;filesUnavailable?:boolean};
   privateFileBinding?: string; privateImageBinding?: string; privateSenderId?: string; conversationThreadId?: string; group?: unknown; relay?: unknown;
 };
 
@@ -172,14 +172,17 @@ export function privateThreadPage(store: Pick<Store, 'get' | 'list'>, row: Priva
   return { ...metadata(row, list), messages: page.map(message => {
     const {id,role,text,createdAt,status,images,files,conversationId,replyTo} = message;
     const route = role === 'user' ? store.get<Receipt>('message.routes', id) : undefined;
-    const sourceId = route?.replyReference?.imageSourceId;
+    const reference = route?.replyReference;
+    const sourceId = reference?.fileSourceId ?? reference?.imageSourceId;
     const source = sourceId ? store.get<Message>('messages',sourceId) : undefined;
     const sourceRoute = source && store.get<Receipt>('message.routes',source.id);
     const showSource = source && source.role === 'user' && source.conversationId === conversationId &&
-      route?.parentMessageId && route.parentMessageId === sourceRoute?.sourceMessageId && canReadImages?.(source);
+      route?.parentMessageId && route.parentMessageId === sourceRoute?.sourceMessageId;
     return {id,role,text,createdAt,status,
-      ...(showSource ? {quotedImageMessageId:source.id} :
-        (sourceId || route?.replyReference?.imagesUnavailable) ? {quotedImagesUnavailable:true} : {}),
+      ...(showSource && reference?.imageSourceId === source.id && canReadImages?.(source) ? {quotedImageMessageId:source.id} :
+        (reference?.imageSourceId || reference?.imagesUnavailable) ? {quotedImagesUnavailable:true} : {}),
+      ...(showSource && reference?.fileSourceId === source.id && canReadFiles?.(source) ? {quotedFileMessageId:source.id} :
+        (reference?.fileSourceId || reference?.filesUnavailable) ? {quotedFilesUnavailable:true} : {}),
       ...(images?.length && canReadImages?.(message) ? {images,conversationId} : {}),
       ...(files?.length && canReadFiles?.(message) ? {files,conversationId,...(role === 'assistant' && replyTo ? {replyTo} : {})} : {}),
     };

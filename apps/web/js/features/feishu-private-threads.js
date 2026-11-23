@@ -435,7 +435,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
         } })));
     const picker = conversationModelPicker(api, path + '/model', row.title);
     const history = h('div', { class: 'stack' });
-    function openQuotedImage(messageId) {
+    function openQuotedMessage(messageId) {
       if (!current(id) || edit.disabled) return;
       void detail(row, '', {
         title:title.value !== row.title ? title.value : undefined,
@@ -446,7 +446,9 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     const entries = items => items.map(message => h('section', { class: 'stack' },
       around && message.id === around && h('mark', { tabIndex: -1 }, query || target ? '命中消息' : '定位到的消息'),
       h('strong', null, (message.role === 'user' ? '用户' : '助手') + ' · ' + new Date(message.createdAt).toLocaleString()),
-      message.quotedImageMessageId && Button({ label:'查看引用原图', size:'sm', onClick:()=>openQuotedImage(message.quotedImageMessageId) }),
+      message.quotedImageMessageId && Button({ label:'查看引用原图', size:'sm', onClick:()=>openQuotedMessage(message.quotedImageMessageId) }),
+      message.quotedFileMessageId && Button({ label:'查看引用文件', size:'sm', onClick:()=>openQuotedMessage(message.quotedFileMessageId) }),
+      message.quotedFilesUnavailable && h('span',{class:'small muted'},'引用文件不可用'),
       message.quotedImagesUnavailable && h('span',{class:'small muted'},'引用原图不可用'),
       h('p', { style: 'white-space: pre-wrap' }, message.text), messageImages(api,store,message),messageFiles(api,store,message,[])));
     history.append(...entries(messages));

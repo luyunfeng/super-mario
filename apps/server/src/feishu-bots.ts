@@ -121,7 +121,7 @@ type StatusGrant = { source: StatusSource; fingerprint: string; binding?: ChatBi
 type GroupTaskOrigin = { chatId: string; messageId: string; binding: string; todoId: string };
 type TopicStamp = { todoId: string; grant: string; opening: boolean; sourceOpening?: true; authorityVersion?: string; externalSource?: { chatId: string; messageId: string } };
 type Envelope = { privatePostImages?:true; privatePost?:true; privateForward?:true; threadSearchGrant?:string; privateFileBinding?:string; privateImageBinding?:string; topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
-type Routed = Route & Envelope & { envelopeId: string; replyReference?: ({ text: string; truncated: boolean } | { unavailable: true }) & {imageSourceId?:string;imagesUnavailable?:true} };
+type Routed = Route & Envelope & { envelopeId: string; replyReference?: ({ text: string; truncated: boolean } | { unavailable: true }) & {imageSourceId?:string;imagesUnavailable?:true;fileSourceId?:string;filesUnavailable?:true} };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
 type SentQuestion = DecisionNudgeCard & { questionId:string; version:number; inputId:string; navigation:string; closeAttempted?:true; webOnly?:true; contextFingerprint?:string };
 const sentQuestions='feishu.sent-question-cards';
@@ -3075,7 +3075,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     let readingAttachment=!!(stamp?.privateImageBinding || stamp?.privateFileBinding);
     const job = (async () => {
       let replyReference: Routed['replyReference'];
-      let imageParent: MailboxEntry | undefined;
+      let attachmentParent: {envelopeId:string;kind:'image'|'file'} | undefined;
       if (stamp?.parentMessageId) {
         // Resolve the direct parent only. A thread root or a matching id in another chat is insufficient.
         const eventKey = 'feishu-in:' + JSON.stringify([bot.id, bot.appId, stamp.parentMessageId]);
@@ -3096,11 +3096,13 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         };
         replyReference = parent && canQuote(parent, binding)
           ? { text: parent.text.slice(0, 4000), truncated: parent.text.length > 4000 } : { unavailable: true };
-        if (parent && binding?.privateImageBinding && stamp.privateSenderId && !stamp.group && !stamp.command &&
+        if (parent && (binding?.privateImageBinding || binding?.privateFileBinding) && stamp.privateSenderId && !stamp.group && !stamp.command &&
             !stamp.relay && !stamp.resultRelayEntryId && !stamp.chatBinding?.agentTarget &&
             binding.privateSenderId===stamp.privateSenderId && binding.revision===stamp.revision &&
             binding.chatProject===stamp.chatProject && binding.conversationThreadId===stamp.conversationThreadId &&
-            entry.eventKey==='feishu-in:'+JSON.stringify([bot.id,bot.appId,entry.sourceMessageId])) imageParent=parent;
+            entry.eventKey==='feishu-in:'+JSON.stringify([bot.id,bot.appId,entry.sourceMessageId])) {
+          attachmentParent={envelopeId:parent.id,kind:binding.privateFileBinding?'file':'image'};
+        }
         if (!parent) {
           const sent = app.store.get<{ entryId: string; text: string; truncated: boolean }>('feishu.bot.reply-references',
             digest([bot.id, bot.appId, bot.revision, entry.target, stamp.parentMessageId]));
@@ -3186,17 +3188,17 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         if (selection) app.store.put('messages', accepted.id, accepted);
         if (replyReference && stamp?.parentMessageId && entry.target && deletedAnchor(bot, entry.target, stamp.parentMessageId))
           replyReference = { unavailable: true };
-        else if (imageParent && replyReference && stamp?.parentMessageId && entry.target && entry.sourceMessageId) {
+        else if (attachmentParent && replyReference && stamp?.parentMessageId && entry.target && entry.sourceMessageId) {
           // Bind to the accepted input only after both sides have a concrete conversation.
-          // The model must reauthorize this reference when it actually reads the image.
-          const original=app.store.get<{status:string;id?:string}>('feishu.bot.dispatch',bot.id+':'+bot.appId+':'+imageParent.id);
+          // The model must reauthorize this reference when it actually reads the attachment.
+          const original=app.store.get<{status:string;id?:string}>('feishu.bot.dispatch',bot.id+':'+bot.appId+':'+attachmentParent.envelopeId);
           const input=original?.status==='completed' && original.id ? app.store.get<Message>('messages',original.id) : undefined;
           const route=input && app.store.get<Routed>('message.routes',input.id);
-          if (input && route?.envelopeId===imageParent.id && route.sourceMessageId===stamp.parentMessageId &&
+          if (input && route?.envelopeId===attachmentParent.envelopeId && route.sourceMessageId===stamp.parentMessageId &&
               input.conversationId===accepted.conversationId && input.projectId===accepted.projectId && input.todoId===accepted.todoId &&
-              !groupTasks.recalled(bot.id,bot.appId,entry.target,entry.sourceMessageId) && canReadPrivateResource(input,'image')) {
-            replyReference={...replyReference,imageSourceId:input.id};
-          } else replyReference={unavailable:true,imagesUnavailable:true};
+              !groupTasks.recalled(bot.id,bot.appId,entry.target,entry.sourceMessageId) && canReadPrivateResource(input,attachmentParent.kind)) {
+            replyReference=attachmentParent.kind==='file' ? {...replyReference,fileSourceId:input.id} : {...replyReference,imageSourceId:input.id};
+          } else replyReference=attachmentParent.kind==='file' ? {unavailable:true,filesUnavailable:true} : {unavailable:true,imagesUnavailable:true};
         }
         // The original accepted input id is the durable destination for later run results.
         app.store.put('message.routes', accepted.id, { channel: 'feishu', accountId: bot.appId, botId: bot.id, target: entry.target ?? '',
