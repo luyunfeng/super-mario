@@ -51,6 +51,7 @@ test('registered action schema pairs each kind with real params; all valid propo
   const todo = f.app.createTodo({ title: 'schema todo', projectId: project.id });
   const actions = [
     proposal('dispatch', { prompt: '自动选择执行者' }),
+    proposal('dispatch', { prompt: '核对指定模型', model: 'fixture/model-v1' }),
     { ...proposal('dispatch', { ...task, executorId: 'demo', cwd: '/tmp', projectId: project.id, todoId: todo.id, executionMode: 'task' }), todoId: todo.id },
     proposal('dispatch', { prompt: '交互工作', executionMode: 'interactive', policy: { agentModes: { main_agent: 'suggest' } } }),
     proposal('input', { id: 'existing-run', text: '继续' }),
@@ -70,6 +71,8 @@ test('registered action schema pairs each kind with real params; all valid propo
   assert.deepEqual(f.find('action_propose').parameters.required, ['title', 'details', 'kind', 'params']);
   assert.equal(f.find('task_plan').parameters.required, undefined);
   assert.equal(f.find('work_dispatch').parameters.required, undefined);
+  assert.equal(f.validate('work_dispatch', { ...task, model: 'fixture/model-v1' }).model, 'fixture/model-v1');
+  assert.throws(() => f.validate('work_dispatch', { ...task, model: '--invalid' }));
   assert.deepEqual(f.find('scheduled_work_propose').parameters.required, ['key', 'title', 'schedule', 'action']);
   f.idle();
 });

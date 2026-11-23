@@ -7,6 +7,11 @@ const handler: JsonObject = { type: 'string', enum: ['user', 'main_agent', 'supe
 const minutes: JsonObject = { type: 'number', multipleOf: 1, minimum: 1, maximum: 43200 };
 
 // Model-facing patch only; cross-field policy rules remain checked by the host.
+export const dispatchModelParameter: JsonObject = {
+  type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$',
+  description: '用户为本次执行指定的模型标识。先从 executors_list 核对执行者 supportsModel，未指定时省略。',
+};
+
 export const taskPolicyParameters: JsonObject = {
   type: 'object', additionalProperties: false,
   description: '单任务策略覆盖，各字段可选。模型提出覆盖后计划等待用户核对，start=true也不会启动。',
@@ -48,7 +53,7 @@ export const actionProposeParameters: JsonObject = {
         type: 'object', additionalProperties: false, required: ['prompt'],
         description: '批准后才派发。真实task模式需要doneWhen和expectMinutes；不填写executorId时由宿主自动选择。',
         properties: {
-          prompt: nonempty, executorId: { ...nonempty, description: '可选，已有执行器ID。' },
+          model: dispatchModelParameter, prompt: nonempty, executorId: { ...nonempty, description: '可选，已有执行器ID。' },
           cwd: { ...nonempty, description: '执行机上已存在的绝对目录；省略时使用宿主默认目录。' },
           projectId: { ...nonempty, description: '可选，已有项目ID。' },
           todoId: { ...nonempty, description: '可选，已有待办ID；顶层todoId优先。' },

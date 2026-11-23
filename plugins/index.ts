@@ -10,7 +10,7 @@ import type { InboxFallbackInput } from '../packages/protocol/src/index.ts';
 import { createInboxTriage } from './inbox-triage.ts';
 import { createLocalKnowledge } from './knowledge-local.ts';
 import { isProtectedKnowledgeURL } from './knowledge-source-reader.ts';
-import { actionProposeParameters, taskPolicyParameters } from './tool-parameters.ts';
+import { actionProposeParameters, dispatchModelParameter, taskPolicyParameters } from './tool-parameters.ts';
 
 export { createFeishuWebLogin } from './feishu-web-login.ts';
 export { createFeishuWebSource } from './feishu-web-source.ts';
@@ -294,7 +294,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
 
           context.contribute('tools', 'work_dispatch', tool('work_dispatch', '异步派活，立即返回执行记录，不能把已派发当作完成。', async (args, signal) => {
             signal.throwIfAborted(); return actions.dispatch(args);
-          }, { worktreeRunId: { type: 'string', description: '复用此执行记录创建的工作树，保留现有文件。在原目录启动新的执行。' }, copies: { type: 'integer', minimum: 1, maximum: 4, description: '用户明确要求同一起点的多份并行执行时，与 isolatedWorktree=true 一起使用；默认 1。' }, isolatedWorktree: { type: 'boolean', description: '仅在用户明确要求独立 Git 工作树时设为 true；指定执行者和已绑定的项目，使用 task 模式。' }, executorId: { type: 'string' }, prompt: { type: 'string' }, cwd: { type: 'string', description: '真实执行机上已存在的绝对工作目录，不填使用执行机默认目录' }, doneWhen: { type: 'string' }, expectMinutes: { type: 'number' }, projectId: { type: 'string' }, todoId: { type: 'string' }, executionMode: { type: 'string', enum: ['task', 'interactive'] } }));
+          }, { model: dispatchModelParameter, worktreeRunId: { type: 'string', description: '复用此执行记录创建的工作树，保留现有文件。在原目录启动新的执行。' }, copies: { type: 'integer', minimum: 1, maximum: 4, description: '用户明确要求同一起点的多份并行执行时，与 isolatedWorktree=true 一起使用；默认 1。' }, isolatedWorktree: { type: 'boolean', description: '仅在用户明确要求独立 Git 工作树时设为 true；指定执行者和已绑定的项目，使用 task 模式。' }, executorId: { type: 'string' }, prompt: { type: 'string' }, cwd: { type: 'string', description: '真实执行机上已存在的绝对工作目录，不填使用执行机默认目录' }, doneWhen: { type: 'string' }, expectMinutes: { type: 'number' }, projectId: { type: 'string' }, todoId: { type: 'string' }, executionMode: { type: 'string', enum: ['task', 'interactive'] } }));
           for (const [name, description, action, properties] of [
             ['work_read', '读取外部执行会话当前屏幕。屏幕不代表业务完成。', (args: JsonObject) => actions.readRun!(String(args.id ?? '')), { id: { type: 'string' } }],
             ['work_input', '向已派发会话发送一条消息并提交，不自动重复发送。', (args: JsonObject) => actions.inputRun!(String(args.id ?? ''), String(args.text ?? '')), { id: { type: 'string' }, text: { type: 'string' } }],
