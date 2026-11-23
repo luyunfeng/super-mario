@@ -1,5 +1,5 @@
 import { readTodayBrief, type TodayBriefSources } from './today-brief.ts';
-import { localDayFormatter } from './local-day.ts';
+import { localDayFormatter, validateLocalDay } from './local-day.ts';
 import { scheduledWorkTemplates } from './scheduled-work-templates.ts';
 import { setTimeout } from 'node:timers/promises';
 import type { Executor, Extension, ExtensionContext, KnowledgeBackend, KnowledgeQuery, Tool } from '../packages/plugin-sdk/src/index.ts';
@@ -420,6 +420,13 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if (from >= before) throw new Error('待办查询起点必须早于终点');
           const bounded = args.dueFrom !== undefined || args.dueBefore !== undefined;
           const dayFormat = localDayFormatter(args.dueDay, args.timeZone, '截止日期');
+          const firstDay = typeof args.dueDay === 'string' ? args.dueDay : '';
+          let lastDay = firstDay;
+          if (args.dueThroughDay !== undefined) {
+            validateLocalDay(args.dueThroughDay, '截止日期范围终点');
+            lastDay = args.dueThroughDay;
+            if (!dayFormat || lastDay < firstDay) throw new Error('日期范围需要起始日期，且终点不能早于起点');
+          }
           if (args.hasDueDate === false && (bounded || dayFormat || args.overdue === true)) throw new Error('无截止日期不能与截止时段或逾期条件组合');
           const now = Date.now();
           const todos = candidates.filter(todo => {
@@ -439,7 +446,11 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             if ((args.status === 'open' && todo.completedAt) || (args.status === 'done' && !todo.completedAt)) return false;
             const due = Date.parse(todo.dueAt ?? '');
             if (args.hasDueDate !== undefined && Number.isFinite(due) !== args.hasDueDate) return false;
-            if (dayFormat && (!Number.isFinite(due) || (todo.dueDay ?? dayFormat.format(due).padStart(10, '0')) !== args.dueDay)) return false;
+            if (dayFormat) {
+              if (!Number.isFinite(due)) return false;
+              const day = todo.dueDay ?? dayFormat.format(due).padStart(10, '0');
+              if (day < firstDay || day > lastDay) return false;
+            }
             if (args.overdue && (todo.completedAt || !(due < now))) return false;
             if (bounded && !(due >= from && due < before)) return false;
             if (pageSearch) {
@@ -478,6 +489,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           priority: priorityParameter, hasExecution: { type: 'boolean', description: '是否存在同项目下关联该待办的执行记录，包含已结束的执行' },
           status: { type: 'string', enum: ['open', 'done', 'all'] }, overdue: { type: 'boolean' },
           dueDay: { type: 'string', description: '按当地日期匹配截止时间，格式 YYYY-MM-DD，与 timeZone 同传' },
+          dueThroughDay: { type: 'string', description: '选查多天时的最后一天，含当天，与起始日期 dueDay 和 timeZone 同传' },
           timeZone: { type: 'string', description: 'dueDay 对应的 IANA 时区，如 Asia/Shanghai' },
           dueFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, dueBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' } }));
         const runStates = ['queued', 'running', 'completed', 'failed', 'cancelled', 'unknown'];

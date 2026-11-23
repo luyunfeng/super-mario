@@ -385,3 +385,49 @@ test('收件多选共用全天期限，各自生成关联待办并归档', {time
   }
   assert.equal(ids.size,2);
 });
+
+test('个人收件卡片与详情可按指定期限转为待办，取消保留原收件，快捷转办仍可用',{timeout:40000},async t=>{
+  const f=await fixture(t),page=await f.open();
+  const first=f.item('direct-fyi'),second=f.item('group-me'),quick=f.item('group-other');
+  const label='设置期限并转为待办';
+  const menu=page.getByRole('dialog',{name:label,exact:true});
+  const detail=page.getByRole('dialog',{name:'收件箱消息详情',exact:true});
+  const mode=menu.getByRole('combobox',{name:'待办期限',exact:true});
+  const stored=(id:string)=>f.stored<InboxItem>('inbox',id)!;
+  const enter=(row:InboxItem)=>card(page,row.title).getByRole('button',{name:label,exact:true}).click();
+  await enter(first);
+  await expect(mode.locator('option')).toHaveText(['今天全天','一小时后','指定时间','无期限']);
+  await mode.selectOption('custom');await menu.getByRole('button',{name:'取消',exact:true}).click();
+  await expect(menu).toBeHidden();assert.deepEqual(stored(first.id),first);assert.equal(f.server.app.todos().length,0);
+
+  await enter(first);await mode.selectOption('hour');
+  const before=Date.now()+3600000;
+  const hour=await write(page,menu.getByRole('button',{name:'创建待办',exact:true}),'/inbox/bulk','POST');
+  const end=Date.now()+3600000;
+  assert.equal(hour.request.action,'todo');assert.deepEqual(hour.request.items,[{id:first.id,version:first.version}]);
+  const firstTodo=f.stored<Todo>('todos',stored(first.id).todoId!)!;
+  assert.equal(firstTodo.dueAt,hour.request.dueAt);assert.equal(firstTodo.dueDay,undefined);
+  assert.ok(Date.parse(firstTodo.dueAt!)>=before && Date.parse(firstTodo.dueAt!)<=end);
+  assert.ok(stored(first.id).archivedAt);assert.deepEqual(stored(second.id),second);
+
+  await card(page,second.title).getByRole('button',{name:'查看原文与详情',exact:true}).click();
+  const enterDetail=detail.getByRole('button',{name:label,exact:true});
+  await enterDetail.click();await menu.getByRole('button',{name:'取消',exact:true}).click();
+  await expect(menu).toBeHidden();await expect(detail).toBeVisible();assert.deepEqual(stored(second.id),second);
+  await enterDetail.click();await mode.selectOption('custom');
+  const custom='2032-09-17T13:20';
+  await menu.getByLabel('截止时间',{exact:true}).fill(custom);
+  const expectedAt=await page.evaluate(value=>new Date(value).toISOString(),custom);
+  const set=await write(page,menu.getByRole('button',{name:'创建待办',exact:true}),'/inbox/bulk','POST');
+  assert.deepEqual(set.request,{action:'todo',items:[{id:second.id,version:second.version}],dueAt:expectedAt});
+  assert.ok(stored(second.id).archivedAt);
+  assert.equal(f.stored<Todo>('todos',stored(second.id).todoId!)?.dueAt,expectedAt);
+  await expect(detail).toBeVisible();
+  await detail.locator('.drawer__foot').getByRole('button',{name:'关闭',exact:true}).click();
+
+  const confirmed=await write(page,card(page,quick.title).getByRole('button',{name:'转为待办',exact:true}),
+    '/inbox/'+quick.id+'/confirm','POST',201);
+  assert.deepEqual(confirmed.request,{version:quick.version});
+  const quickTodo=f.stored<Todo>('todos',stored(quick.id).todoId!)!;
+  assert.equal(quickTodo.title,quick.title);assert.equal(quickTodo.dueAt,undefined);
+});

@@ -1617,8 +1617,8 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
       const question = JSON.stringify(req.content);
       assert.match(req.system, /没有执行记录只表示工作台未记录派发/);
       if (question.includes('核对日历这周')) {
-        assert.match(req.system, /优先采用周视图标题的起止日期/);
-        return call('todos_list', { query: '换季', dueFrom: '2026-11-01T00:00:00-04:00', dueBefore: '2026-11-08T00:00:00-05:00' }, 'local-week');
+        assert.match(req.system, /优先采用周视图标题的起止日期.*dueThroughDay/);
+        return call('todos_list', { query: '换季', dueDay: '2026-11-01', dueThroughDay:'2026-11-07', timeZone:'America/New_York' }, 'local-week');
       }
       if (question.includes('纽约换季核验')) {
         assert.match(req.system, /同传 dueDay 和 timeZone.*全天待办按记录的 dueDay/);
@@ -1651,7 +1651,7 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
       return { role: 'assistant', content: answer };
     }
     if (req.callId === 'local-day') assert.deepEqual(titles, ['换季甲', '换季乙', '归档', '换季日末']);
-    else if (req.callId === 'local-week') assert.deepEqual(titles, ['换季甲', '换季乙', '换季日末', '换季次日']);
+    else if (req.callId === 'local-week') assert.deepEqual(titles, ['换季甲', '换季乙', '换季日末', '换季次日', '换季周末全天']);
     else if (req.callId === 'responsible') assert.deepEqual(titles, ['加急复核']);
     else if (req.callId === 'waiting') assert.deepEqual(titles, ['加急复核']);
     else if (req.callId === 'undated') assert.deepEqual(titles, ['加急复核', '月报未定期限']);
@@ -1719,7 +1719,8 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
     const dayAnswer = '换季甲、换季乙、归档、换季日末';
     await api('/todos', { title: '换季下周', dueAt: '2026-11-08T05:00:00Z', projectId: project.id });
     const weekQuestion = '核对日历这周的换季待办，纽约时间 2026-11-01 至 2026-11-07。';
-    const weekAnswer = '换季甲、换季乙、换季日末、换季次日';
+    await api('/todos', {title:'换季周末全天', dueDay:'2026-11-07', dueAt:'2026-11-08T07:59:59.999Z', projectId:project.id});
+    const weekAnswer = '换季甲、换季乙、换季日末、换季次日、换季周末全天';
     assert.equal(await ask(weekQuestion, path), weekAnswer);
     await adapter.onMessage(weekQuestion, { ...source, messageId: 'local-week-question' });
     await t.waitFor(() => assert.ok(sent.includes(weekAnswer)));
@@ -1728,6 +1729,7 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
     await assert.rejects(async () => lookup.execute({ dueDay: '2026-02-30', timeZone: 'UTC' }, signal), /日期不存在/);
     await assert.rejects(async () => lookup.execute({ dueDay: '2026-11-01' }, signal), /须提供时区/);
     await assert.rejects(async () => lookup.execute({ dueDay: '2026-11-01', timeZone: 'Invalid/City' }, signal), /时区无效/);
+    await assert.rejects(async () => lookup.execute({dueDay:'2026-11-07',dueThroughDay:'2026-11-01',timeZone:'UTC'}, signal), /终点不能早于起点/);
     // A West Coast calendar day ends on the next UTC date.
     const allDay = await api('/todos', {title:'跨区全天', dueDay:'2026-11-01', dueAt:'2026-11-02T07:59:59.999Z', projectId:project.id});
     const byDay = (dueDay: string) => lookup.execute({ query:'跨区全天', dueDay, timeZone:'UTC' }, signal);
@@ -2400,7 +2402,7 @@ test('Web 主对话绑定项目及飞书项目助手只查看该项目的整理�
       assert.match(req.system, /附工具返回的 approvalCitation/);
       assert.match(req.system, /用 inbox_handling_read 核对对应回复建议版本的 delivery.status/);
       assert.match(req.system, /用 inbox_handling_read 查 linkedTodo/);
-      assert.match(req.system, /批量归档或恢复.*每条收件分别关联一个新待办.*撤销本次归档.*版本冲突.*归档只表示收件已整理/);
+      assert.match(req.system, /批量归档或恢复.*设置期限并转为待办.*每条收件分别关联一个新待办.*撤销本次归档.*版本冲突.*归档只表示收件已整理/);
       assert.match(req.system, /飞书回复说明哪份资料待确认/);
       return call('knowledge_jobs', { projectId: otherId }, 'outside');
     }

@@ -59,9 +59,9 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
   }});
   const archiveSelected=Button({label:'归档待处理',onClick:()=>bulk('archive'),size:'sm'});
   const reopenSelected=Button({label:'恢复已归档',onClick:()=>bulk('reopen'),size:'sm'});
-  let dueDrawer;
+  let dueDrawer,singleFailure;
   const eligibleForTodo=row=>!row.archivedAt && !row.todoId;
-  const todoSelected=Button({label:'转为待办',size:'sm',onClick:chooseDue});
+  const todoSelected=Button({label:'转为待办',size:'sm',onClick:()=>chooseDue()});
   const selectedCount=h('span',{class:'small',role:'status'});
   const bulkStatus=h('p',{class:'small',role:'status',hidden:true});
   const bulkFeedback=h('div',{class:'row row--wrap',hidden:true},bulkStatus,undoArchive);
@@ -94,19 +94,22 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     bulkStatus.textContent=statusText;bulkStatus.hidden=!statusText;
     bulkFeedback.hidden=!statusText && undoArchive.hidden;
   }
-  function chooseDue() {
-    if(!multi || bulkBusy || dueDrawer?.el.open || !bulkOwner()) return;
+  function chooseDue(single) {
+    if((!multi && !single) || bulkBusy || dueDrawer?.el.open || !bulkOwner()) return;
     const epoch=multiEpoch,owner=api.draftOwner();
-    const items=[...picked.values()].filter(eligibleForTodo).map(({id,version})=>({id,version}));
+    const items=(single?[single.raw]:[...picked.values()]).filter(eligibleForTodo).map(({id,version})=>({id,version}));
     if(!items.length) return;
-    const mode=Select({'aria-label':'共用期限',value:'today',options:[
+    const mode=Select({'aria-label':single?'待办期限':'共用期限',value:'today',options:[
       ['today','今天全天'],['hour','一小时后'],['custom','指定时间'],['none','无期限']]});
     const time=Input({type:'datetime-local','aria-label':'截止时间',hidden:true});
     mode.onchange=()=>{time.hidden=mode.value!=='custom';};
     const error=h('p',{class:'small',role:'alert',hidden:true});
     const submit=Button({label:'创建待办',kind:'primary',onClick:()=>{
       if(!view.el.open || epoch!==multiEpoch || owner!==api.draftOwner() || !bulkOwner() || bulkBusy) return;
-      if(items.some(({id,version})=>picked.get('personal:'+id)?.version!==version)) {
+      const currentRow=single && records().find(row=>row.id===single.id)?.raw;
+      const changed=single ? !currentRow || !eligibleForTodo(currentRow) || currentRow.version!==single.raw.version ||
+        pending.has(single.id) || uncertain.has(single.id) : items.some(({id,version})=>picked.get('personal:'+id)?.version!==version);
+      if(changed) {
         error.textContent='已选收件已变化，请关闭后重新选择。';error.hidden=false;return;
       }
       const due={};
@@ -123,16 +126,16 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
         error.textContent=cause.message;error.hidden=false;time.focus();return;
       }
       view.close();
-      return bulk('todo',undefined,{items,due});
+      return bulk('todo',undefined,{items,due,singleId:single?.id});
     }});
-    const view=openDrawer({title:'批量转为待办',body:h('div',{class:'stack'},
-      h('p',null,'将 '+items.length+' 条收件分别转为待办，共用以下期限。'),mode,time,error),
+    const view=openDrawer({title:single?'设置期限并转为待办':'批量转为待办',body:h('div',{class:'stack'},
+      h('p',null,single?'收件：'+single.title:'将 '+items.length+' 条收件分别转为待办，共用以下期限。'),mode,time,error),
       footer:[Button({label:'取消',onClick:()=>view.close()}),submit],
       onClose:()=>{if(dueDrawer===view) dueDrawer=undefined;}});
     dueDrawer=view;
   }
   async function bulk(action,undo,todo) {
-    if((!multi && !undo) || bulkBusy || !bulkOwner()) return;
+    if((!multi && !undo && !todo?.singleId) || bulkBusy || !bulkOwner()) return;
     if(undo && (undo!==lastArchive || undo.owner!==api.draftOwner())) return;
     const owner=api.draftOwner(),epoch=multiEpoch;
     const current=()=>epoch===multiEpoch && owner===api.draftOwner() && bulkOwner() && router.current.page===direction;
@@ -141,6 +144,8 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     if(!items.length || items.length>100) return;
     // A new write supersedes the previous undo, including when its outcome is unknown.
     lastArchive=undefined;
+    const singleId=todo?.singleId;
+    if(singleId) {pending.add(singleId);singleFailure=undefined;}
     bulkBusy=true;bulkMessage='正在保存…';paint();
     try {
       const result=await api.post('/inbox/bulk',{action,items,...todo?.due});
@@ -160,9 +165,10 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
       }
     } catch(cause) {
       if(current()) {
-        picked.clear();
+        if(!singleId) picked.clear();
         bulkMessage=cause.status===409?'收件状态已变化，请核对最新记录后重新选择。':
-          cause.status && cause.status<500?'批量操作未完成：'+cause.message:'批量操作结果未确认，请核对最新记录。';
+          cause.status && cause.status<500?'操作未完成：'+cause.message:'操作结果未确认，请核对最新记录。';
+        if(singleId) singleFailure={id:singleId,message:bulkMessage};
       }
     } finally {
       if(owner===api.draftOwner() && bulkOwner()) {
@@ -171,6 +177,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
           if(current() && store.view.loadError) bulkMessage+=' 最新记录读取失败。';
         } catch {if(current()) bulkMessage+=' 最新记录读取失败。';}
       }
+      if(singleId && owner===api.draftOwner()) pending.delete(singleId);
       if(current()) {snapshot=store.view.snapshot;bulkBusy=false;paint();}
     }
   }
@@ -181,7 +188,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
       }
     });
     router.subscribe?.(()=>{lastArchive=undefined;clearSelection();});
-    scope?.subscribe(()=>{if(multi || lastArchive){lastArchive=undefined;clearSelection();paint();}});
+    scope?.subscribe(()=>{if(multi || lastArchive || dueDrawer?.el.open || bulkBusy){lastArchive=undefined;clearSelection();paint();}});
   }
   const more = Button({ label: '加载更多', onClick: () => { displayLimit += PAGE_SIZE; paint(); } });
   more.hidden = true;
@@ -366,6 +373,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     // Confirming an inbox item also archives it. Keep its resulting todo accessible.
     if (item.raw.archivedAt) return [...(todoLink ? [todoLink] : []), Button({ label: '恢复到收件箱', size: 'sm', onClick: () => act(item, 'reopen') })];
     return [todoLink || Button({ label: '转为待办', kind: 'primary', size: 'sm', onClick: () => act(item, 'confirm') }),
+    !item.raw.todoId && Button({ label: '设置期限并转为待办', size: 'sm', onClick: () => chooseDue(item) }),
     Button({ label: '归档', size: 'sm', onClick: () => act(item, 'archive') })];
   }
   function detail() {
@@ -379,7 +387,8 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
         active:()=>Boolean(drawer?.el.open && selected===item.id && router.current.page===direction)});
       relations.update(snapshot?.inbox ?? []);
     } else relations = undefined;
-    const key = JSON.stringify([item, showRelations, error, snapshot?.projects, Boolean(scopedTodo(raw)), drafts.get(item.id), pending.has(item.id), uncertain.has(item.id)]);
+    const detailFailure=singleFailure?.id===item.id ? singleFailure.message : undefined;
+    const key = JSON.stringify([item, showRelations, detailFailure, error, snapshot?.projects, Boolean(scopedTodo(raw)), drafts.get(item.id), pending.has(item.id), uncertain.has(item.id)]);
     // Keep the translation controls and any in-flight request across unrelated detail updates.
     const translated = translation && (item.kind !== 'mailbox' || mailboxOwner === api.draftOwner()) ? translation.view(item) : null;
     if (!translated && translation) translation.clear();
@@ -398,6 +407,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
       ['pending', 'needs_approval'].includes(raw.status) && !incoming && h('p', { class: 'small muted' }, '内容仍待确认，尚未发送。可在对话页处理审批，或在渠道高级设置中处理机器人发件。'),
       relations?.el,
       incoming && projectEditor(item),
+      detailFailure && Banner({ tone:'danger', children:detailFailure }),
       error && Banner({ tone: 'danger', children: error }));
     replace(drawer.foot, Button({ label: '关闭', onClick: () => drawer.close() }), ...actions(item),
       incoming && Button({ label: '处理与建议', onClick: () => {
@@ -457,7 +467,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     const owner = api.draftOwner();
     if (detailOwner !== owner || view.unauthorized || !view.snapshot || view.snapshotOwner !== owner) {
       detailOwner = owner;
-      lastArchive=undefined;clearSelection();
+      lastArchive=undefined;singleFailure=undefined;pending.clear();uncertain.clear();clearSelection();
       drawer?.close();
       translation?.clear();
       mailbox = []; deliveries = []; updated.clear(); drafts.clear(); mailboxOwner = undefined;
