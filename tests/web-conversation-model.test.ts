@@ -119,6 +119,12 @@ test('SDK requests preserve the correct Web thread history within a shared proje
       assert.match(system(thread), /承接上文时只使用本会话实际提供的消息/);
       assert.match(system(thread), /不能把回复描述成已发往飞书/);
     }
+    await server.app.plugins.setEnabled('saved-prompts',false);
+    const libraryOff=system(await askA('怎么复用旧要求？'));
+    assert.match(libraryOff,/常用提示词插件不可用/);
+    assert.doesNotMatch(libraryOff,/点「保存为提示词」/);
+    await server.app.plugins.setEnabled('saved-prompts',true);
+    assert.match(system(await askA('现在如何保存要求？')),/点「保存为提示词」/);
     assert.ok(JSON.stringify(firstB).includes(bOnly));
     assert.ok(!JSON.stringify(firstB).includes(aOnly));
     assert.ok(JSON.stringify(nextA.filter(m=>m.role==='user')).includes(aOnly));
