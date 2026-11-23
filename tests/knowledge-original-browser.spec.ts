@@ -643,10 +643,13 @@ test('会议日回顾按时区和项目分页，空结果区分未注日期，�
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
   t.after(() => browser.close());
   const page = await browser.newPage({ timezoneId: 'UTC' });
+  await page.clock.setFixedTime(new Date('2032-02-28T16:30:00Z'));
   await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
   await page.goto(server.url + '/#memory?token=fixture');
   await page.getByRole('button', { name: '会议日回顾' }).click();
   const recap = page.getByRole('dialog', { name: '会议日回顾' });
+  await expect(recap.getByLabel('回顾时区')).toHaveValue('Asia/Shanghai');
+  await expect(recap.getByLabel('回顾日期')).toHaveValue('2032-02-29');
   await recap.getByLabel('回顾日期').fill('2032-02-28');
   await recap.getByRole('combobox', { name: '项目' }).selectOption(project.id);
   await recap.getByLabel('回顾时区').fill('Invalid/Zone');

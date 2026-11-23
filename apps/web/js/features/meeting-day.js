@@ -25,7 +25,7 @@ export function editMeetingTitle(api, id, title, current, saved) {
 }
 
 export function openMeetingDay({ api, store, scope, router }) {
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const timezone = store.view.snapshot.workspaceTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const date = Input({ type: 'date', value: new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()) });
   const zone = Input({ value: timezone });
   const projects = store.view.snapshot.projects.filter(row => !row.archivedAt);
