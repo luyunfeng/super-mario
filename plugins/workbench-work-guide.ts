@@ -25,7 +25,7 @@ export const workGuide = {
     ['references/delegate.md', [
       '# 派活',
       '先定位对应项目、待办、已有执行和可用执行器。把已有的 projectId、todoId 随任务传入，避免同一工作另开一份。执行器或目录不明时先查 executors_list、projects_list。',
-      '单项执行用 work_dispatch，提供具体产物、可核验的 doneWhen 和 expectMinutes。多步工作用 task_plan，每步给验收标准。用户只要计划时留待启动，明确要求立即执行时才传 start=true。',
+      '单项执行用 work_dispatch，提供具体产物、可核验的 doneWhen 和 expectMinutes。多步工作用 task_plan，每步给验收标准。主人为某一步指定模型时，核对该步执行器支持指定模型，将标识写入对应任务的 model，其他步骤沿用各自设置。用户只要计划时留待启动，明确要求立即执行时才传 start=true。',
       '依据回执说明谁接手、在等审批还是已启动。回执为 unknown 时先查 runs_list；外部动作的结果未查清前保留原记录。交付结果回到原会话后再核对。',
     ].join('\n')],
     ['references/progress.md', [

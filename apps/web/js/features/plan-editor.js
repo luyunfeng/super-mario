@@ -2,7 +2,7 @@ import {h,replace} from '../lib/dom.js';
 import {Button,Field,Input,Select,TextArea} from '../ui/kit.js';
 import {openDrawer,toast} from '../ui/overlay.js';
 
-const fields=[['prompt','执行内容'],['doneWhen','完成标准'],['executorId','执行者'],['cwd','工作目录'],['expectMinutes','预计分钟']];
+const fields=[['prompt','执行内容'],['doneWhen','完成标准'],['executorId','执行者'],['model','本次执行模型'],['cwd','工作目录'],['expectMinutes','预计分钟']];
 
 export function createPlanEditor(api,store){
   const drafts=new Map();
@@ -50,7 +50,7 @@ export function createPlanEditor(api,store){
           }
           return [name,name==='prompt' || name==='doneWhen' ? TextArea({value,rows:2,oninput:remember}) :
             Input({value,type:name==='expectMinutes'?'number':'text',step:name==='expectMinutes'?'any':undefined,
-              placeholder:name==='cwd'?'使用默认工作目录':undefined,oninput:remember})];
+              placeholder:name==='model'?'留空使用执行者默认模型':name==='cwd'?'使用默认工作目录':undefined,oninput:remember})];
         })));
         replace(body,inputs.map((row,index)=>h('fieldset',{class:'stack'},h('legend',{},'任务 '+(index+1)),
           plan.tasks[index].projectId && h('p',{class:'small muted'},'项目：'+(store.view.snapshot.projects?.find(p=>p.id===plan.tasks[index].projectId)?.name || plan.tasks[index].projectId)),
@@ -68,7 +68,7 @@ export function createPlanEditor(api,store){
         for(const [name,label] of fields){
           const control=controls[name],raw=control.value.trim();
           if(raw===String(original[name] ?? '').trim())continue;
-          if(!raw || name==='cwd' && (!raw.startsWith('/') || /[\x00-\x1f\x7f]/.test(raw)) ||
+          if(!raw && name!=='model' || name==='cwd' && (!raw.startsWith('/') || /[\x00-\x1f\x7f]/.test(raw)) ||
             name==='expectMinutes' && (!Number.isFinite(Number(raw)) || Number(raw)<=0 || Number(raw)>10080)){
             status.textContent='任务 '+(index+1)+'：'+(!raw?label+'不能为空。':name==='cwd'?'工作目录需要绝对路径。':'预计分钟须大于 0 且不超过 10080。');
             control.focus();return;

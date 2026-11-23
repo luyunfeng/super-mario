@@ -27,7 +27,7 @@ test('validates every task and the 1–8 limit before storing or dispatching', t
     { ...input, tasks: Array(9).fill(task) }, { ...input, tasks: Array(2) }];
   for (const patch of [{ prompt: '' }, { doneWhen: ' ' }, { doneWhen: undefined },
     { expectMinutes: 0 }, { expectMinutes: -1 }, { expectMinutes: Infinity }, { expectMinutes: NaN },
-    { expectMinutes: '5' }, { executorId: '' }, { cwd: 1 }, { projectId: '' }, { todoId: '' }, { executionMode: 'other' }]) {
+    { model: '--invalid' }, { expectMinutes: '5' }, { executorId: '' }, { cwd: 1 }, { projectId: '' }, { todoId: '' }, { executionMode: 'other' }]) {
     invalid.push({ ...input, tasks: [task, { ...task, ...patch }] });
   }
   for (const value of invalid) assert.throws(() => plans.propose(value as never), status(400));
@@ -129,4 +129,13 @@ test('reject, stale versions, missing ids and close have explicit statuses', t =
   assert.throws(() => plans.reject(pending.id, 1), status(503));
   assert.equal(plans.get(pending.id).status, 'pending');
   assert.equal(plans.list().length, 2);
+});
+
+test('计划分别保存模型，确认前可以替换或还原为默认模型', t => {
+  const models: unknown[] = [];
+  const { plans } = fixture(t, input => { models.push(input.model); return { id: String(models.length) }; });
+  const plan = plans.propose({ title: '模型分工', tasks: ['alpha','beta','gamma'].map(model => ({ ...task, model })) });
+  assert.deepEqual(plans.list()[0].tasks.map(task => task.model), ['alpha','beta','gamma']);
+  plans.start(plan.id, plan.version, [{ index: 1, model: 'delta' }, { index: 2, model: '' }]);
+  assert.deepEqual(models, ['alpha','delta',undefined]);
 });

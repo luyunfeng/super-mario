@@ -16,6 +16,7 @@ export class PlansError extends Error {
 export interface PlanTaskInput {
   prompt: string;
   executorId?: string;
+  model?: string;
   cwd?: string;
   projectId?: string;
   todoId?: string;
@@ -37,6 +38,10 @@ export interface Plan {
 const collection = 'plans';
 function text(value: unknown, field: string): asserts value is string {
   if (typeof value !== 'string' || !value.trim()) throw new PlansError(`${field}必须为非空文本`);
+}
+function modelId(value: unknown): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(value)) throw new PlansError('模型标识无效');
+  return value;
 }
 function minutes(value: unknown): asserts value is number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 10080) {
@@ -63,6 +68,9 @@ function applyStartEdits(plan: Plan, edits: unknown) {
           task.estimateSource = 'override';
           delete task.estimateEvidence;
         }
+      } else if (key === 'model') {
+        if (value === '') delete task.model;
+        else task.model = modelId(value);
       } else if (key === 'prompt' || key === 'doneWhen' || key === 'executorId' || key === 'cwd') {
         text(value,key);
         if (key === 'cwd' && (!isAbsolute(value.trim()) || /[\x00-\x1f\x7f]/.test(value))) throw new PlansError('工作目录必须为绝对路径');
@@ -86,6 +94,7 @@ function validate(store: Store, input: { title: string; tasks: PlanTaskInput[] }
     for (const key of ['executorId', 'cwd', 'projectId', 'todoId'] as const) {
       if (task[key] !== undefined) { text(task[key], key); result[key] = task[key]; }
     }
+    if (task.model !== undefined) result.model = modelId(task.model);
     if (task.executionMode !== undefined) {
       if (!['task', 'interactive'].includes(task.executionMode)) throw new PlansError('executionMode必须为task或interactive');
       result.executionMode = task.executionMode;
