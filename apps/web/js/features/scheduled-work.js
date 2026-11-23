@@ -4,7 +4,12 @@ import { Button, Card, Field, Input, Select, TextArea, Banner, Empty } from '../
 import { openDrawer } from '../ui/overlay.js';
 
 import { approvalText } from '../lib/format.js';
-const timeText = value => value ? (Number.isNaN(Date.parse(value)) ? value : new Date(value).toLocaleString('zh-CN')) : '未提供';
+function timeText(value, timeZone) {
+  if (!value) return '未提供';
+  if (Number.isNaN(Date.parse(value))) return value;
+  const zone = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return new Date(value).toLocaleString('zh-CN', { timeZone: zone }) + ' · ' + zone;
+}
 const chatLink = () => h('a', { href: '#chat' }, '去对话核对与确认');
 const approvalLink = (id, close) => h('a', { href: '#chat?approval=' + encodeURIComponent(id), onClick: close }, '查看待处理审批');
 const runStatus = status => ({ queued: '排队中', running: '执行中', completed: '执行已完成', failed: '执行失败', cancelled: '已取消', unknown: '执行结果未知' }[status] ?? '执行状态未知');
@@ -45,12 +50,12 @@ function configurationText(item) {
   return '计划生效情况待核对';
 }
 
-function occurrenceText(o) {
+function occurrenceText(o, timeZone) {
   if (o.status === 'unknown') return '动作结果未知，停止堆积；请核对原记录';
   if (o.status === 'claimed') return '已认领，动作结果尚未确认';
   if (o.endedAt) return '已到计划结束时间，停止触发';
   if (o.ownerSkipped) return '已按你的设置跳过';
-  if (o.status === 'skipped' && o.blockedBy) return `本次已跳过 · ${o.blockedBy.reason}（关联计划时间：${timeText(o.blockedBy.scheduledFor)}）`;
+  if (o.status === 'skipped' && o.blockedBy) return `本次已跳过 · ${o.blockedBy.reason}（关联计划时间：${timeText(o.blockedBy.scheduledFor, timeZone)}）`;
   if (o.status === 'skipped') return '本次已跳过，原因未记录';
   if (o.run) return `派发审批 · ${approvalText(o.approvalStatus)} · ${runStatus(o.run.status)}`;
   if (o.kind === 'dispatch') return `已生成派发审批 · ${approvalText(o.approvalStatus)}；任务最终完成情况未确认，请到对话查看执行记录`;
@@ -151,15 +156,15 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
         todo ? h('a', { href: '#projects/' + encodeURIComponent(item.projectId || 'all') + '/todos/detail/' + encodeURIComponent(todo.id) }, ' · 待办 ' + todo.title)
           : item.todoId && ' · 待办 ' + item.todoId),
       line(timingText(item.schedule)),
-      item.schedule.until && line('结束时间：' + timeText(item.schedule.until)),
+      item.schedule.until && line('结束时间：' + timeText(item.schedule.until, item.schedule.tz)),
       line(`配置状态：${configurationText(item)} · 创建审批 ${approvalText(item.approvalStatus)}`),
       line(item.scheduleStatus === 'done' && item.schedule.kind === 'once' ? '单次计划已触发' : `调度状态：${({ active: '等待触发', paused: '已暂停', done: '已结束', cancelled: '已取消' })[item.scheduleStatus] ?? '未确认'}`),
-      item.skipToken && line('将跳过：' + timeText(item.nextAt)),
+      item.skipToken && line('将跳过：' + timeText(item.nextAt, item.schedule.tz)),
       item.skipToken && item.nextActionAt === null && line('跳过本次后，计划截止前没有下一期。'),
-      item.skipToken && item.nextActionAt && line('跳过后预计触发：' + timeText(item.nextActionAt)),
+      item.skipToken && item.nextActionAt && line('跳过后预计触发：' + timeText(item.nextActionAt, item.schedule.tz)),
       item.scheduleStatus === 'paused' && line('恢复前不会触发'),
-      item.status === 'active' && item.scheduleStatus === 'active' && !item.skipToken && item.nextAt && line('下次触发：' + timeText(item.nextAt)),
-      line(`最新实际结果：${latest ? occurrenceText(latest) : '尚无到期动作记录'}`),
+      item.status === 'active' && item.scheduleStatus === 'active' && !item.skipToken && item.nextAt && line('下次触发：' + timeText(item.nextAt, item.schedule.tz)),
+      line(`最新实际结果：${latest ? occurrenceText(latest, item.schedule.tz) : '尚无到期动作记录'}`),
       item.action.kind === 'brief' && line('事实简报仅程序汇总已接入事实，不自动调用模型或外发。'),
       line('上次动作结果未知或派发审批待批准时，暂停生成新动作。取消计划不会终止已派发的任务。'),
       h('div', { class: 'row row--wrap' }, item.approvalStatus === 'pending' && item.approvalId ? approvalLink(item.approvalId) : chatLink(),
@@ -202,9 +207,9 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     return drawer;
   }
   function renderOccurrence(item, o) {
-    return h('div', null, line(`${timeText(o.scheduledFor)} · ${occurrenceText(o)}`),
+    return h('div', null, line(`${timeText(o.scheduledFor, item.schedule.tz)} · ${occurrenceText(o, item.schedule.tz)}`),
       o.workVersion && o.workVersion !== item.version && line(`计划版本 ${o.workVersion} · ${({ dispatch: '派发任务', brief: '生成简报' })[o.kind] ?? '原动作类型未确认'}`),
-      o.handledAt && line(`开始处理：${timeText(o.handledAt)} · ${timingDelay(o.delayMs)}`),
+      o.handledAt && line(`开始处理：${timeText(o.handledAt, item.schedule.tz)} · ${timingDelay(o.delayMs)}`),
       !o.handledAt && !o.ownerSkipped && !o.endedAt && line('开始处理时间未记录'),
       o.approvalId && line(`派发审批：${o.approvalId} · ${approvalText(o.approvalStatus)}`),
       o.result?.messageId && line(`结果消息：${o.result.messageId}`),
@@ -240,8 +245,8 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       replace(content, line('正在读取简报…'));
       try {
         const result = await api.post('/scheduled-work/brief', { workId: item.id, occurrenceKey: occurrence.key, projectId: currentScope() || undefined });
-        if (drawer.active()) replace(content, line('计划时间：' + timeText(result.scheduledFor)),
-          line('生成时间：' + timeText(result.createdAt)), h('pre', { class: 'mailbox-content' }, result.text));
+        if (drawer.active()) replace(content, line('计划时间：' + timeText(result.scheduledFor, item.schedule.tz)),
+          line('生成时间：' + timeText(result.createdAt, item.schedule.tz)), h('pre', { class: 'mailbox-content' }, result.text));
       } catch (cause) {
         if (drawer.active()) replace(content, Banner({ tone: 'warn', children: cause.message }),
           Button({ label: '重新读取简报', size: 'sm', onClick: read }));

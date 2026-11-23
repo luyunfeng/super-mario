@@ -299,6 +299,7 @@ test('定时工作历史可重试并按触发记录继续翻页', async () => fi
   const history = page.getByRole('dialog', { name: '更早的触发记录' });
   await history.getByRole('button', { name: '重试读取记录' }).click();
   await expect(history).toContainText('receipt-recent');
+  await expect(history).toContainText(/16:00:00 · Asia\/Shanghai/);
   await history.getByRole('button', { name: '继续查看更早记录' }).click();
   await expect(history).toContainText('receipt-older');
   await expect(history).toContainText('receipt-recent');
