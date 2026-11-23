@@ -7,18 +7,29 @@ import { createAgentArtifactsUI } from '../legacy/agent-artifacts.js';
 import { createBackgroundPage } from '../legacy/background-page.js';
 const node = (tag, text, className) => { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; if (className) value.className = className; return value; };
 
-function barChart(card) {
+function extensionChart(card) {
   const points = card.points;
-  if (card.kind !== 'bar' || !Array.isArray(points) || !points.length ||
+  if (!['bar','line','area'].includes(card.kind) || !Array.isArray(points) || !points.length ||
       !points.every(point => typeof point?.label === 'string' && Number.isFinite(point.value))) return;
   const scale = points.reduce((max, point) => Math.max(max, Math.abs(point.value)), 0) || 1;
   const low = points.reduce((min, point) => Math.min(min, point.value / scale), 0);
   const high = points.reduce((max, point) => Math.max(max, point.value / scale), 0);
   const y = value => 96 - 92 * (value / scale - low) / (high - low || 1);
   const width = 300 / points.length;
-  const marks = points.map((point, index) => ['rect', {x:(index + 0.15) * width, width:width * 0.7,
-    y:Math.min(y(0), y(point.value)), height:Math.abs(y(0) - y(point.value)), fill:'currentColor'}]);
-  const graph = svg([['line',{x1:0,x2:300,y1:y(0),y2:y(0),stroke:'currentColor'}], ...marks]);
+  const baseline = y(0);
+  const marks = [['line',{x1:0,x2:300,y1:baseline,y2:baseline,stroke:'currentColor'}]];
+  if (card.kind === 'bar') {
+    points.forEach((point, index) => marks.push(['rect', {x:(index + 0.15) * width, width:width * 0.7,
+      y:Math.min(baseline, y(point.value)), height:Math.abs(baseline - y(point.value)), fill:'currentColor'}]));
+  } else {
+    const x = index => (index + 0.5) * width;
+    const path = points.map((point, index) => x(index) + ',' + y(point.value)).join(' ');
+    if (card.kind === 'area') marks.push(['polygon', {points:x(0)+','+baseline+' '+path+' '+x(points.length-1)+','+baseline,
+      fill:'currentColor', opacity:0.2}]);
+    marks.push(['polyline', {points:path, fill:'none', stroke:'currentColor', 'stroke-width':2}]);
+    if (points.length === 1) marks.push(['circle', {cx:x(0), cy:y(points[0].value), r:3, fill:'currentColor'}]);
+  }
+  const graph = svg(marks);
   graph.setAttribute('viewBox','0 0 300 100');
   graph.setAttribute('height','120');
   return h('div',{class:'stack'}, graph, h('table',{class:'table','aria-label':card.title},
@@ -65,7 +76,7 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
       const patch = value.renderer === 'diff' && typeof value.patch === 'string' && value.patch;
       const fallback = typeof value.fallback === 'string' && value.fallback;
       if (typeof value.title !== 'string') continue;
-      const content = patch ? h('pre', {}, h('code', {}, patch)) : value.renderer === 'chart' && barChart(value);
+      const content = patch ? h('pre', {}, h('code', {}, patch)) : value.renderer === 'chart' && extensionChart(value);
       if (!content && !fallback) continue;
       cards.push(h('section', {class:'card card__body stack', 'aria-label':value.title},
         h('h3', {}, value.title), content || h('p', {}, fallback)));

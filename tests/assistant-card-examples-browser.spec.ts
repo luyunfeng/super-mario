@@ -14,6 +14,8 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await writeFile(join(extension,'index.mjs'),`export default {id:'review',name:'合成评审',capabilities:[],activate(ctx){
     ctx.contribute('web_extensions','patch',{slot:'advanced-interface',renderer:'diff',title:'变更摘录',patch:'+<img src=x>',fallback:'新增一行'});
     ctx.contribute('web_extensions','chart',{slot:'advanced-interface',renderer:'chart',kind:'bar',title:'数量变化',points:[{label:'昨日',value:-3},{label:'今日',value:5}],fallback:'数量变化摘要'});
+    ctx.contribute('web_extensions','line',{slot:'advanced-interface',renderer:'chart',kind:'line',title:'单点趋势',points:[{label:'当前',value:0}],fallback:'当前为零'});
+    ctx.contribute('web_extensions','area',{slot:'advanced-interface',renderer:'chart',kind:'area',title:'跨零走势',points:[{label:'昨日',value:-1},{label:'今日',value:1}],fallback:'由负转正'});
     ctx.contribute('web_extensions','future',{slot:'advanced-interface',renderer:'future',title:'其他格式',fallback:'纯文字说明'});
   }}`);
   const server=await startServer({host:'127.0.0.1',port:0,dataDir,demo:true});
@@ -34,6 +36,10 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   const chart=page.getByRole('region',{name:'数量变化'});
   await expect(chart.getByRole('cell')).toHaveText(['-3','5']);
   await expect(chart.locator('svg rect')).toHaveCount(2);
+  await expect(page.getByRole('region',{name:'单点趋势'}).locator('circle')).toHaveAttribute('cx','150');
+  const area=page.getByRole('region',{name:'跨零走势'});
+  await expect(area.locator('polygon')).toHaveAttribute('points','75,50 75,96 225,4 225,50');
+  await expect(area.locator('polyline')).toHaveAttribute('points','75,96 225,4');
   const stopped=await page.request.post(server.url+'/api/v1/plugins/review',{data:{enabled:false}});
   assert.equal(stopped.status(),200);
   await expect(patch).toHaveCount(0);

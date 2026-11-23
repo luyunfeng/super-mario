@@ -67,7 +67,7 @@ export interface PluginInfo { dependencies?: string[]; navigation?: PluginNaviga
 export type WebExtension =
   | { slot: 'startup'; renderer: 'brand-splash'; title: string; subtitle: string; durationMs?: number }
   | { slot: 'advanced-interface'; renderer: 'assistant-card-examples' }
-  | { slot: 'advanced-interface'; renderer: 'chart'; kind: 'bar'; title: string; points: {label:string; value:number}[]; fallback: string }
+  | { slot: 'advanced-interface'; renderer: 'chart'; kind: 'bar' | 'line' | 'area'; title: string; points: {label:string; value:number}[]; fallback: string }
   | { slot: 'advanced-interface'; renderer: 'diff'; title: string; patch: string; fallback: string };
 export interface AppEvent { id: number; type: string; data: Json; createdAt: string }
 export interface MachineInfo { agentInstanceId?: string; id: string; name: string; online: boolean; platform: string; connectedAt: string; capabilities: string[]; executors?: ExecutorInfo[] }
