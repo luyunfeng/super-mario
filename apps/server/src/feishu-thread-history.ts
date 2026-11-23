@@ -18,6 +18,7 @@ function threadMessages(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[
   const messages = new Map<string, Message[]>();
   if (!rows.length) return messages;
   for (const message of store.list<Message>('messages')) {
+    if (message.queueState === 'withdrawn' || message.queueState === 'cancelled') continue;
     const row = conversations.get(message.conversationId);
     if (!row || (message.role !== 'user' && message.role !== 'assistant') || message.projectId || message.todoId || (message.origin && message.origin !== 'user')) continue;
     const inputId = message.role === 'user' ? message.id : message.replyTo;

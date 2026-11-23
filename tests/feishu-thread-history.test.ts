@@ -20,11 +20,16 @@ test('独立对话记录按可见发言分页，排除其他配对、群组、�
     routes.set(id, { channel: 'feishu', accountId: 'app', botId: 'a', target: 'chat', privateSenderId: 'owner',
       conversationThreadId: row.threadId, revision: 3, ...[{ privateSenderId: 'other' }, { group: {} }, { relay: {} }, { revision: 2 }][i] });
   }
+  for (const queueState of ['withdrawn', 'cancelled'] as const) {
+    messages.push({ ...messages[4], id: queueState, text: '已移出队列', queueState });
+    routes.set(queueState, routes.get('4'));
+  }
   const store = { list<T>() { return messages as T[]; }, get<T>(_type: string, id: string) { return routes.get(id) as T | undefined; } };
   const rows = readPrivateThreadHistory(store, [row, { ...row, threadId: 'b'.repeat(64) }]);
-  assert.deepEqual(rows, [{ threadId: row.threadId, title: '发言 4', version: 0, archived: false, tags: [], latestAt: messages.at(-1)!.createdAt, count: 44 }]);
+  assert.deepEqual(rows, [{ threadId: row.threadId, title: '发言 4', version: 0, archived: false, tags: [], latestAt: messages[47].createdAt, count: 44 }]);
   assert.deepEqual(searchPrivateThreads(store, [row], '发言 0').items, []);
-  for (const id of ['0', '1', '2', '3']) {
+  assert.deepEqual(searchPrivateThreads(store, [row], '已移出队列').items, []);
+  for (const id of ['0', '1', '2', '3', 'withdrawn', 'cancelled']) {
     assert.throws(() => privateThreadPage(store, row, null, null, id), { status: 409 });
   }
   const tagged = {...row, tags:['FY[26]']};
