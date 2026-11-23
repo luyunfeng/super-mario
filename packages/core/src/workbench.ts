@@ -233,7 +233,7 @@ export async function createWorkbench(config: AppConfig) {
     return visibleScope(reviseScope(id,args,{kind:'assistant',messageId:actor.id}));
   }
   const todoDecisions = createTodoDecisions(store, workDecisions);
-  type ProjectWorktree = { id: string; projectId: string; machineId: string; source: string; cwd: string; name: string; branch?: string; base?: string };
+  type ProjectWorktree = { id: string; projectId: string; machineId: string; source: string; cwd: string; name: string; note?: string; branch?: string; base?: string };
   function projectWorktreeBinding(projectId: string) {
     if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
     const project = store.get<Project>('projects', projectId);
@@ -241,8 +241,8 @@ export async function createWorkbench(config: AppConfig) {
     if (project.archivedAt || !project.workspace) throw new InputError('需要已绑定工作目录的活动项目', 409);
     return project.workspace;
   }
-  function projectTreeReceipt({ cwd, name, branch, base }: ProjectWorktree) {
-    return { cwd, name, ...(branch && { branch }), ...(base && { base }) };
+  function projectTreeReceipt({ cwd, name, note, branch, base }: ProjectWorktree) {
+    return { cwd, name, ...(note && { note }), ...(branch && { branch }), ...(base && { base }) };
   }
   function listProjectWorktrees(projectId: string) {
     const binding = projectWorktreeBinding(projectId);
@@ -268,20 +268,25 @@ export async function createWorkbench(config: AppConfig) {
   }
   async function createProjectWorktree(projectId: string, input: Record<string, unknown>) {
     const binding = projectWorktreeBinding(projectId);
-    if (Object.keys(input).some(key => key !== 'name' && key !== 'base') || typeof input.name !== 'string' || !input.name.trim()
+    if (Object.keys(input).some(key => key !== 'name' && key !== 'base' && key !== 'note') || typeof input.name !== 'string' || !input.name.trim()
       || input.name.length > 80 || /[\x00-\x1f\x7f]/.test(input.name)) throw new InputError('请输入 1 至 80 个字符的单行名称');
     const name = input.name.trim();
+    if (input.note !== undefined && (typeof input.note !== 'string' || input.note.length > 2000))
+      throw new InputError('工作树备注最多 2000 个字符');
+    const note = input.note?.trim() || undefined;
     const base = input.base;
     if (base !== undefined && (typeof base !== 'string' || !commitHash.test(base))) throw new InputError('起始提交无效');
     const key = JSON.stringify([projectId, binding.machineId, binding.cwd, name]);
     // Retain the allocated ID before calling the machine so concurrent requests and retries share the effect.
-    const claim = store.get<string | { id: string; base: string }>('project-worktree-names', key);
+    const claim = store.get<string | { id: string; base?: string; note?: string }>('project-worktree-names', key);
     const existingId = typeof claim === 'string' ? claim : claim?.id;
     const existing = existingId && store.get<ProjectWorktree>('project-worktrees', existingId);
     if (existing) {
+      if (note !== undefined && note !== existing.note) throw new InputError('同名工作树的备注不同', 409);
       if (base !== undefined && base !== existing.base) throw new InputError('同名工作树已使用其他起点或起点未登记', 409);
       return projectTreeReceipt(existing);
     }
+    if (claim && note !== (typeof claim === 'string' ? undefined : claim.note)) throw new InputError('同名工作树已有不同备注的创建请求', 409);
     if (claim && base !== (typeof claim === 'string' ? undefined : claim.base)) throw new InputError('同名工作树已有其他起点的创建请求', 409);
     const hub = machines;
     const machine = hub?.list().find(row => row.id === binding.machineId);
@@ -289,7 +294,7 @@ export async function createWorkbench(config: AppConfig) {
     if (!machine.capabilities.includes('workspace.prepareRunWorktree')) throw new InputError('请升级执行机代理以创建独立工作树', 409);
     if (base && !machine.capabilities.includes('workspace.worktreeBases')) throw new InputError('请升级执行机代理以选择工作树起点', 409);
     const id = existingId || randomUUID();
-    if (!existingId) store.put('project-worktree-names', key, base ? { id, base } : id);
+    if (!existingId) store.put('project-worktree-names', key, base || note ? { id, ...(base && { base }), ...(note && { note }) } : id);
     const cwd = join(binding.cwd + '-worktrees', id);
     const params = { cwd: binding.cwd, id, ...(base && { base }) };
     const receipt = await effects.perform({ key: 'project-worktree:' + id, kind: 'workspace.prepareRunWorktree', target: machine.id,
@@ -307,7 +312,7 @@ export async function createWorkbench(config: AppConfig) {
         }
         throw new EffectError('工作树创建结果未确认，请核对执行机目录 ' + cwd + '。' + (error instanceof Error ? error.message : String(error)), 'unknown');
       });
-    const tree = { id, projectId, machineId: machine.id, source: binding.cwd, cwd, name, branch: receipt.branch, base: receipt.base };
+    const tree = { id, projectId, machineId: machine.id, source: binding.cwd, cwd, name, ...(note && { note }), branch: receipt.branch, base: receipt.base };
     store.put('project-worktrees', id, tree);
     const current = projectWorktreeBinding(projectId);
     if (current.cwd !== binding.cwd || current.machineId !== binding.machineId) throw new InputError('工作树已建在原项目目录，项目绑定已变化', 409);

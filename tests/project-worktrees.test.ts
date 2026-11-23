@@ -71,11 +71,13 @@ test('项目只创建工作树时返回独立目录，不生成或派发执行',
   assert.deepEqual((await bases.json()).find((branch: { name: string }) => branch.name === 'release/fixture'),
     { name: 'release/fixture', base: alternate });
   const fromBranch = (base: string) => fetch(worktreesUrl, { method: 'POST', headers,
-    body: JSON.stringify({ name: '从分支准备', base }) });
+    body: JSON.stringify({ name: '从分支准备', note: '单独准备\n等复核后开工', base }) });
   const chosen = await fromBranch(alternate);
   const tree = await chosen.json();
   assert.equal(chosen.status, 201, JSON.stringify(tree));
   assert.equal(tree.base, alternate);
+  assert.equal(tree.note, '单独准备\n等复核后开工');
+  assert.ok((await (await fetch(worktreesUrl, { headers })).json()).some((item: typeof tree) => item.name === tree.name && item.note === tree.note));
   assert.equal(git(tree.cwd, 'rev-parse', 'HEAD'), alternate);
   assert.equal((await fromBranch(result.base)).status, 409);
   assert.equal(git(tree.cwd, 'rev-parse', 'HEAD'), alternate);

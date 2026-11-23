@@ -139,6 +139,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     if (!binding) return;
     const path = '/projects/' + encodeURIComponent(id) + '/worktrees';
     const name = Input({ required: true, maxLength: 80 });
+    const note = TextArea({ maxLength: 2000, rows: 2 });
     const base = Select({ options: [['', '当前提交（HEAD）']] });
     const baseField = Field({ label: '起始分支', control: base });
     const baseStatus = h('div', { 'aria-live': 'polite' });
@@ -187,6 +188,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
         if (!current() || read !== revision) return;
         replace(rows, trees.length ? trees.map(tree => h('div', { class: 'item' },
           h('strong', null, tree.name), h('div', { class: 'folder-path' }, tree.cwd),
+          tree.note && h('div', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, tree.note),
           tree.branch && h('div', { class: 'muted' }, '创建时分支 · ' + tree.branch),
           tree.base && h('div', { class: 'folder-path' }, '起始提交 · ' + tree.base),
           executionHistory(tree),
@@ -206,13 +208,14 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     }
     const drawer = openDrawer({
       title: '项目工作树', subtitle: binding.cwd,
-      body: [availability, Field({ label: '工作树名称', control: name, required: true }), baseField, baseStatus, message, rows],
+      body: [availability, Field({ label: '工作树名称', control: name, required: true }), Field({ label: '备注（可选）', control: note }), baseField, baseStatus, message, rows],
       footer: Button({ label: '只创建工作树', kind: 'primary', onClick: async (_event, button) => {
         if (!current() || !name.reportValidity()) return;
         try {
-          const tree = await api.post(path, { name: name.value.trim(), ...(base.value && { base: base.value }) });
+          const tree = await api.post(path, { name: name.value.trim(), ...(note.value.trim() && { note: note.value.trim() }), ...(base.value && { base: base.value }) });
           if (!current()) return;
           name.value = '';
+          note.value = '';
           replace(message, h('p', null, '已创建 ' + tree.name), h('code', { class: 'folder-path' }, tree.cwd));
           await load();
         } catch (error) {
