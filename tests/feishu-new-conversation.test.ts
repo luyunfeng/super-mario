@@ -225,7 +225,7 @@ test('配对主人按标题或正文搜索活动独立对话，点击结果后�
   assert.equal((await f.input('停用后旧搜索卡保持原会话')).conversationId,body.conversationId);
   const disabled=await invoke('/list '+query,'disabled-search');
   assert.deepEqual(buttons(disabled.context?.card),[]);
-  assert.match(disabled.text,/停用|未启用|关闭/);
+  assert.match(disabled.text,/已停用.*\/list（不带关键词）/);
   const ordinary=await invoke('/list','unfiltered');
   assert.equal(buttons(ordinary.context?.card).length,3);
   assert.ok(!f.users().some(row=>/^\/(list|对话)/.test(row.text)));

@@ -3582,7 +3582,7 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
       }
       if (JSON.stringify(req.content).includes('搜索停用后找原话')) {
         assert.ok(!req.tools.includes('private_conversation_search') && !req.tools.includes('private_conversation_list'));
-        assert.match(req.system, /本轮没有飞书独立对话检索工具.*按归档状态和标题浏览原消息/);
+        assert.match(req.system, /本轮没有飞书独立对话检索工具.*按归档状态和标题浏览原消息.*不带关键词的 \/list/);
         return { role: 'assistant', content: '请在对应机器人的记录中按标题浏览。' };
       }
       assert.ok(req.tools.includes('private_conversation_list'));

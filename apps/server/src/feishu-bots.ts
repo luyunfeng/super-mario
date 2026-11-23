@@ -1057,7 +1057,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           if (main) app.store.put('feishu.chat-target', digest([bot.id, paired.chatId, '']), captured);
         });
       }
-      const issue=query && (!threadSearchEnabled() ? '对话历史搜索插件已停用。' : query.length>500 ? '检索词须为 1 至 500 个字符。' : undefined);
+      const issue=query && (!threadSearchEnabled() ? '对话历史搜索插件已停用。发送 /list（不带关键词）可浏览当前机器人的对话清单。' : query.length>500 ? '检索词须为 1 至 500 个字符。' : undefined);
       const grant=main || issue ? undefined : navigation(bot,paired,eventKey)!;
       const text=issue || '已切回主 Agent。接下来直接发送的消息会进入主对话。';
       const dashboard = grant ? chatList(bot,paired,grant,0,query)
@@ -1452,7 +1452,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       || !cap.owner.senderId || cap.owner.senderId !== input.operatorId || cap.owner.chatId !== input.chatId
       || paired?.senderId !== input.operatorId || paired.chatId !== input.chatId) return fail;
     if (cap.threadSearch) {
-      if (!threadSearchEnabled()) return {toast:{type:'info',content:'对话历史搜索插件已停用。'}};
+      if (!threadSearchEnabled()) return {toast:{type:'info',content:'对话历史搜索插件已停用。发送 /list（不带关键词）可浏览当前机器人的对话清单。'}};
       if (value.kind==='workbench.chat') {
         const thread=value.conversationThreadId;
         if (value.projectId!=='' || typeof thread!=='string' || !cap.threadIds?.includes(thread) ||
