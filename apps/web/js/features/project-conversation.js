@@ -22,6 +22,7 @@ import { createProjectInstructions } from './project-instructions.js';
 import { conversationStatusButton } from './conversation-status.js';
 import { createReplyTranslation } from './reply-translation.js';
 import { createMessageFavorites } from './message-favorites.js';
+import { createConversationSharing } from './conversation-sharing.js';
 import { createConversationExport } from './conversation-export.js';
 
 export function createProjectConversation({ api, store, router, scope, bindFolder }) {
@@ -32,6 +33,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const instructions = createProjectInstructions({ api, store, getProjectId: () => projectId });
   const messageSearch=conversationMessageSearch({api,store,router});
   const favorites = createMessageFavorites({ api, store, router });
+  const sharing = createConversationSharing({api,store,getRows:()=>workspace?.messages});
   const transcript = createConversationExport({ api, store, getProjectId: () => projectId });
   let generation = 0;
   let request = 0;
@@ -72,7 +74,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const topic = h('p', { class: 'small', hidden: true });
   const selectedTodo = () => store.view.snapshot?.todos?.find(t => t.id === todoId && t.projectId === projectId);
   const composer = h('div', { class: 'project-conversation__composer stack' }, topic, queue.el, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, files.el, text, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, mentions.button, pictures.button, files.button, send), notice);
-  const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, statusButton, messageSearch.button, favorites.button, transcript.button, code.toggle)), status, locationNote, readNotice, messages, composer), code.el);
+  const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, statusButton, messageSearch.button, favorites.button, transcript.button, sharing.button, code.toggle)), status, locationNote, readNotice, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
   let draftKey, owner, enabled, quotesEnabled, editEnabled, outboxEnabled, epoch = 0;
   const submissions = createMessageSubmissions({ api, context: submissionContext, onConfirmed: clearSubmittedDraft, captureEdit: edit.onAccepted,
@@ -111,7 +113,8 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   }
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
-    messageSearch.update(visible && key && router.current.page==='projects' && {conversationId:`project:${projectId}:work`,projectId,todoId:todoId||undefined});
+    const searchScope = visible && key && router.current.page==='projects' && {conversationId:`project:${projectId}:work`,projectId,todoId:todoId||undefined};
+    messageSearch.update(searchScope); sharing.update(searchScope);
     queuedEdit.observe(key,nextOwner,visible && router.current.page==='projects');
     queue.update(visible && router.current.page==='projects' && key && '/projects/'+encodeURIComponent(projectId)+'/messages/queue'+(todoId?'?todoId='+encodeURIComponent(todoId):''),`project:${projectId}:work`);
     if (!visible || router.current.page !== 'projects') pictures.closeEditor();
@@ -184,6 +187,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     const errorText = readError && (workspace ? '无法更新项目对话，当前显示上次读取的记录。' : '无法读取项目对话。') + readError;
     if (readErrorText.textContent !== errorText) readErrorText.textContent = errorText;
     const rows = workspace?.messages ?? [];
+    sharing.refreshRows();
     const translationEpoch = translation.update(rows);
     const path = router.href('projects', projectId, 'workspace') + (todoId ? '?todo=' + encodeURIComponent(todoId) : '');
     const separator = todoId ? '&' : '?';

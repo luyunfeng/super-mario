@@ -4691,6 +4691,33 @@ test('工作区看板只在主人 Web 主对话和飞书配对私聊提供当前
   } finally { await server.close(); }
 });
 
+test('Web 和飞书解释摘录分享的确认步骤及撤销范围', async t => {
+  let adapter!: FeishuOptions;
+  const sent:string[]=[];
+  const answer='请在 Web 原对话勾选正文并核对预览，确认后再复制生成的链接。';
+  const {server,api,ask}=await fixture(t,req=>{
+    assert.match(req.system,/勾选消息，核对预览正文和有效期/);
+    assert.match(req.system,/已经读走的副本无法收回/);
+    assert.match(req.system,/不代为生成、发送链接/);
+    assert.ok(!req.tools.some(name=>name.startsWith('conversation_shar')));
+    return {role:'assistant',content:answer};
+  },options=>{
+    adapter=options;
+    return {start:async()=>{},close:async()=>{},collect:async()=>[],status:()=>({connected:true}),
+      send:async(_target,text)=>{sent.push(text);}};
+  });
+  try {
+    const question='怎样只让别人阅读我挑选的几条对话？';
+    assert.equal(await ask(question),answer);
+    const bot=await api('/feishu/bots',{name:'摘录助手',appId:'cli_1111111111111111',appSecret:'fixture',
+      scope:{kind:'global'},requireConfirmation:false});
+    const owner={chatId:'oc_dm',senderId:'ou_owner',senderType:'user',chatType:'p2p'} as const;
+    await adapter.onMessage(bot.pairingCode,{...owner,messageId:'share-pair'});
+    await adapter.onMessage(question,{...owner,messageId:'share-guide'});
+    await t.waitFor(()=>assert.ok(sent.includes(answer)));
+  } finally {await server.close();}
+});
+
 test('Web 和飞书答复离线备份问题时区分校验与实际恢复', async t => {
   let adapter!: FeishuOptions;
   const sent: string[] = [];

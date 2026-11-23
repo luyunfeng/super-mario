@@ -102,6 +102,17 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       const url = new URL(req.url ?? '/', 'http://localhost');
       const path = url.pathname;
       if (path === '/api/health' || path === '/api/v1/health') return json(res, 200, { ok: true, version: '0.1.0' });
+      // A share token grants access to this single snapshot, independently of the owner's session.
+      if (path === '/api/v1/public/conversation-share') {
+        if (req.method !== 'POST') throw new InputError('请使用 POST 读取分享',405);
+        res.setHeader('referrer-policy','no-referrer');
+        res.setHeader('x-content-type-options','nosniff');
+        const input = await body(req,1024);
+        if (Object.keys(input).length !== 1 || typeof input.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(input.token)
+            || !app.plugins.list().some(p => p.id === 'conversation-sharing' && p.status === 'active'))
+          throw new InputError('分享不存在或已失效',404);
+        return json(res,200,await app.plugins.invocations.use('conversation-sharing.read',{token:input.token}));
+      }
       if (path === '/api/v1/worker-tools/todo-bind-thread' || path === '/api/v1/worker-tools/todo-decisions' || path === '/api/v1/worker-tools/todo-decision-add') {
         if (req.method !== 'POST') throw new InputError('此工具需要 POST', 405);
         const key = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.headers.authorization ?? '')?.[1];
@@ -134,6 +145,14 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       if (path.startsWith('/api/')) {
         if (!authorized(req, url)) throw new InputError('访问令牌无效', 401);
         const method = req.method;
+        if (path === '/api/v1/conversation-shares' && method === 'POST') {
+          // In local mode a browser may have no bearer credential. Require JSON so a cross-origin form cannot publish.
+          if (req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json')
+            throw new InputError('分享管理需要 JSON 请求',415);
+          if (!app.plugins.list().some(p => p.id === 'conversation-sharing' && p.status === 'active'))
+            throw new InputError('对话摘录分享插件已停用',503);
+          return json(res,200,await app.plugins.invocations.use('conversation-sharing.manage',await body(req,32*1024) as JsonObject));
+        }
         if (path === '/api/v1/conversation-status' && method === 'POST') {
           if (!app.plugins.list().some(p => p.id === 'conversation-search' && p.status === 'active')) throw new InputError('对话历史搜索插件已停用', 503);
           const input = await body(req, 2048);
@@ -1145,7 +1164,12 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         assetURL = new URL(path.endsWith('.css') ? '../css/xterm.css' : './xterm.js', import.meta.resolve('@xterm/xterm'));
         contentType = path.endsWith('.css') ? 'text/css' : 'text/javascript';
       } else {
-        const relative = path === '/' ? 'index.html' : path.slice(1);
+        const relative = path === '/' ? 'index.html' : path === '/share' ? 'share.html' : path.slice(1);
+        if (relative === 'share.html') {
+          res.setHeader('cache-control','no-store');
+          res.setHeader('referrer-policy','no-referrer');
+          res.setHeader('content-security-policy',"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+        }
         const extension = relative.slice(relative.lastIndexOf('.'));
         if (!/^[\w./-]+$/.test(relative) || relative.split('/').some(part => part === '..' || part.startsWith('.')) || !types[extension]) throw new InputError('页面不存在', 404);
         assetURL = new URL(`../../web/${relative}`, import.meta.url);

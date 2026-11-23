@@ -22,6 +22,7 @@ import { attachSavedPrompts } from '../features/saved-prompts.js';
 import { officeDocumentsButton } from '../features/office-documents.js';
 import { createReplyTranslation } from '../features/reply-translation.js';
 import { createMessageFavorites, messageFavoritesActive } from '../features/message-favorites.js';
+import { createConversationSharing } from '../features/conversation-sharing.js';
 import { createConversationExport } from '../features/conversation-export.js';
 import { conversationSearchActive } from '../features/search.js';
 import { createAttention } from '../features/attention.js';
@@ -44,6 +45,7 @@ export function createChatPage({ api, store, scope, router }) {
   const translation = createReplyTranslation({ api, store, getScope: scope.get, getConversationId: () => 'main' });
   const messageSearch=conversationMessageSearch({api,store,router});
   const favorites = createMessageFavorites({ api, store, router });
+  const sharing = createConversationSharing({api,store,getRows:()=>store.view.snapshot?.messages});
   const transcript = createConversationExport({ api, store });
   const attention = createAttention({ api, store });
   const code = createCodeSidebar({ api, store });
@@ -90,7 +92,7 @@ export function createChatPage({ api, store, scope, router }) {
     h('div', { class: 'chat__inner chat__inner--top' },
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '对话'), h('p', { class: 'page__sub' }, hintCopy('nav.chat').tag)),
-        h('div', { class: 'page__actions' }, conversationStatusButton({ api, store, scope, target: 'main', project: scope.get }), messageSearch.button, favorites.button, transcript.button, officeDocumentsButton({ api, store }), code.toggle, Hint('nav.chat'))),
+        h('div', { class: 'page__actions' }, conversationStatusButton({ api, store, scope, target: 'main', project: scope.get }), messageSearch.button, favorites.button, transcript.button, sharing.button, officeDocumentsButton({ api, store }), code.toggle, Hint('nav.chat'))),
       banner, decisionNotice, messageNotice, attention.el, setup, runStrip));
   const scroller = h('div', { class: 'chat__scroll', id: 'chat-scroll' }, h('div', { class: 'chat__inner' }, messages, hero));
 
@@ -154,7 +156,8 @@ export function createChatPage({ api, store, scope, router }) {
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
     const queueProject = scope.get();
-    messageSearch.update(router.current.page==='chat' && key && {conversationId:'main',projectId:scope.get()||undefined});
+    const searchScope = router.current.page==='chat' && key && {conversationId:'main',projectId:scope.get()||undefined};
+    messageSearch.update(searchScope); sharing.update(searchScope);
     queuedEdit.observe(key,nextOwner,router.current.page==='chat');
     queue.update(router.current.page==='chat' && key && '/messages/queue'+(queueProject?'?projectId='+encodeURIComponent(queueProject):''),'main');
     if (router.current.page !== 'chat') pictures.closeEditor();

@@ -1,0 +1,73 @@
+import assert from 'node:assert/strict';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import test from 'node:test';
+import {chromium,expect} from '@playwright/test';
+import {startServer} from '../apps/server/src/index.ts';
+import type {Message} from '../packages/protocol/src/index.ts';
+
+test('工作台选择并预览摘录，匿名只读页仅展示所选正文，撤销后无法再读', {timeout:35000},async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'mario-share-browser-'));
+  const token='synthetic-workbench-private';
+  const server=await startServer({host:'127.0.0.1',port:0,dataDir,token,demo:true});
+  t.after(async()=>{try{await server.close();}finally{await rm(dataDir,{recursive:true,force:true});}});
+  const shared='合成公开结论\n<img src="https://example.invalid/picture.png">',privateText='合成内部备注，不在本次公开范围';
+  for(const text of [shared,privateText]){
+    const response=await fetch(server.url+'/api/v1/messages',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
+      body:JSON.stringify({text})});
+    assert.equal(response.status,202);const source=await response.json();
+    await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.replyTo===source.id && m.status==='done')),{timeout:6000});
+  }
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(()=>browser.close());
+  const owner=await browser.newPage();
+  await owner.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  await owner.goto(server.url+'/#chat?token='+token);
+  await owner.getByRole('button',{name:'分享对话摘录',exact:true}).click();
+  const manager=owner.getByRole('dialog',{name:'分享对话摘录',exact:true});
+  await manager.getByRole('checkbox',{name:/选择消息.*合成公开结论/}).first().check();
+  await manager.getByRole('button',{name:'预览公开内容',exact:true}).click();
+  const preview=manager.getByRole('region',{name:'公开内容预览',exact:true});
+  await expect(preview.locator('pre')).toHaveCount(1);await expect(preview.locator('pre')).toHaveText(shared);
+  await expect(preview).not.toContainText(privateText);
+  await manager.getByRole('button',{name:'确认创建分享',exact:true}).click();
+  const field=manager.getByRole('textbox',{name:'分享链接',exact:true});
+  await expect(field).toBeVisible();
+  const url=new URL(await field.inputValue());
+  assert.equal(url.pathname,'/share');assert.equal(url.origin,server.url);
+  assert.equal(url.search,'');assert.match(url.hash,/^#[a-zA-Z0-9_-]{43}$/);
+  const anonymous=await browser.newContext();
+  const reader=await anonymous.newPage();
+  const requests:{path:string;auth?:string;referrer?:string;cookie?:string;data:string|null}[]=[];
+  await anonymous.route('**/*',async route=>{
+    const req=route.request(),target=new URL(req.url()),headers=await req.allHeaders();
+    requests.push({path:target.pathname,auth:headers.authorization,referrer:headers.referer,cookie:headers.cookie,data:req.postData()});
+    if(target.origin!==server.url) return route.abort();
+    return route.continue();
+  });
+  await anonymous.addCookies([{url:server.url,name:'unused-session',value:'synthetic-cookie'}]);
+  const receipt=reader.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/public/conversation-share');
+  const document=await reader.goto(url.href);
+  assert.equal(document?.headers()['referrer-policy'],'no-referrer');
+  assert.match(document?.headers()['cache-control']??'',/no-store/);
+  const publicResponse=await receipt;
+  assert.ok(publicResponse.ok());assert.match(publicResponse.headers()['cache-control']??'',/no-store/);
+  const messages=reader.getByRole('list',{name:'分享的消息'});
+  await expect(messages.getByRole('listitem')).toHaveCount(1);
+  await expect(messages.locator('p')).toHaveText(shared);
+  await expect(reader.locator('body')).not.toContainText(privateText);
+  await expect(messages.locator('img,script,a')).toHaveCount(0);
+  assert.ok(requests.every(r=>['/share','/css/base.css','/js/share.js','/api/v1/public/conversation-share','/favicon.ico'].includes(r.path)));
+  const publicRead=requests.filter(r=>r.path==='/api/v1/public/conversation-share');
+  assert.equal(publicRead.length,1);assert.deepEqual(JSON.parse(publicRead[0].data!),{token:url.hash.slice(1)});
+  assert.equal(publicRead[0].auth,undefined);assert.equal(publicRead[0].referrer,undefined);assert.equal(publicRead[0].cookie,undefined);
+  await manager.getByRole('button',{name:'撤销分享',exact:true}).click();
+  const revoked=owner.waitForResponse(r=>r.request().method()==='POST' && r.ok() && r.request().postData()?.includes('revoke')===true);
+  await owner.getByRole('button',{name:'确认撤销',exact:true}).click();
+  await revoked;
+  await reader.reload();
+  await expect(reader.getByRole('status')).toContainText('无法读取');
+  await expect(messages.getByRole('listitem')).toHaveCount(0);
+  await expect(reader.locator('body')).not.toContainText('合成公开结论');
+});
