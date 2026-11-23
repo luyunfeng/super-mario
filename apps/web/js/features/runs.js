@@ -188,7 +188,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     const status = runStatus[run.status] ?? { text: run.status, tone: '' };
     const todo = run.todoId && snapshot.todos.find(item => item.id === run.todoId);
     const comparisonEnabled = !store.view.unauthorized && snapshot.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active');
-    const comparison = comparisonEnabled && compareRuns({ run, runs: snapshot.runs, projectId, router, executorName, api, store });
+    const comparison = comparisonEnabled && compareRuns({ run, runs: snapshot.runs, projectId, router, executorName, progressView, api, store });
     const worktreeRuns = comparisonEnabled && run.worktree?.branch
       ? snapshot.runs.filter(item => item.worktreeRunId === run.id && item.projectId === run.projectId)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))

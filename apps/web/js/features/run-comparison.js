@@ -213,7 +213,7 @@ export function openWorktreeStatus(options) {
   void load();
 }
 
-export function compareRuns({ run, runs, projectId, router, executorName, api, store }) {
+export function compareRuns({ run, runs, projectId, router, executorName, progressView, api, store }) {
   const peers = runs.filter(item => item.id !== run.id && item.projectId === run.projectId)
     .sort((a, b) => Number(Boolean(run.todoId && b.todoId === run.todoId)) - Number(Boolean(run.todoId && a.todoId === run.todoId))
       || b.createdAt.localeCompare(a.createdAt));
@@ -248,6 +248,7 @@ export function compareRuns({ run, runs, projectId, router, executorName, api, s
       item.worktree?.base && h('div', { class: 'small' }, '工作树起点：', h('code', { title: item.worktree.base }, item.worktree.base.slice(0, 10))),
       item.cwd && h('div', null, '工作目录：', item.cwd),
       item.doneWhen && h('div', null, '完成标准：', item.doneWhen),
+      progressView(item, item.progress, true),
       h('pre', { class: 'output' }, item.output || '暂无输出'),
       item.error && h('pre', { class: 'output output--error' }, item.error),
       item.resultSource && h('span', { class: 'muted small' }, '结果来源：', item.resultSource),
