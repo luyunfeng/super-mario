@@ -1895,3 +1895,63 @@ test('真实问题表单发送回执启动飞书提醒，沿原卡回复，重�
   await f.restart();await f.controller.sweepDecisionNudges();
   assert.equal(nudged.length,1);
 });
+
+test('结构化问题只接受主人在已展示原卡上按题提交，校验配对、版本及每个选项', async t => {
+  const f = fixture(t, (_target,_text,context) => {
+    if (context?.card && JSON.stringify(context.card).includes('submit_answer'))
+      context.onSent?.('om-structured-notice','interactive');
+  }), bot = await f.add('Structured');
+  await bot.pair();
+  const delivered: string[] = [];
+  const service = createInteractions({store:f.store,events:f.events,decide:()=>({handler:'user',layer:'default'}),
+    answer:async (_,answer) => { delivered.push(answer); }});
+  f.app.interactions = service; t.after(() => service.close());
+  const questions = [
+    {header:'交付地点',question:'在哪里先验收？',options:[{label:'本地',description:'使用合成数据'},{label:'测试站'}]},
+    {question:'检查哪些功能？',multiSelect:true,options:[{label:'页面'},{label:'接口'}]},
+  ];
+  const q = service.open({kind:'question',title:'合成验收表单',body:'请逐项确认',questions});
+  const other = service.open({kind:'question',title:'另一张卡',body:'',questions});
+  await bot.instance.options.onMessage('工作台', source('show-question-list'));
+  const actions = (card:any) => card.elements.flatMap((row:any)=>row.actions??[]);
+  const list = actions(bot.instance.contexts.at(-1)?.card).find((b:any)=>b.value?.view==='questions').value;
+  const click = (value:Record<string,unknown>,formValue?:Record<string,unknown>,messageId='om-form',operatorId='human',chatId='owner') =>
+    f.instances.at(-1)!.options.onCardAction!({operatorId,chatId,messageId,value,formValue}) as any;
+  const open = actions(click(list).card.data).find((b:any)=>b.value?.id===q.id).value;
+  assert.equal(click(open,undefined,'another-card').card,undefined);
+  const form = click(open).card.data.body.elements.find((item:any)=>item.tag==='form');
+  assert.match(JSON.stringify(form),/交付地点|使用合成数据/);
+  assert.deepEqual(form.elements.filter((e:any)=>e.name==='q0'||e.name==='q1').map((e:any)=>e.tag),['select_static','multi_select_static']);
+  const submit = form.elements.find((el:any)=>el.form_action_type==='submit').behaviors[0].value;
+  const fields = {q0:'1',q1:['1','0'],t1:'额外说明'};
+  for (const bad of [{q0:'1'}, {...fields,q0:['0','1']}, {...fields,q1:['1','1']}, {...fields,q0:'测试站'}, {...fields,q1:['2']}, {...fields,answers:['伪造答案']}]) {
+    assert.equal(click(submit,bad).toast.type,'error');
+  }
+  for (const result of [click(submit,fields,'another-card'),click(submit,fields,'om-form','other'),
+    click(submit,fields,'om-form','human','other-chat'),click({...submit,id:other.id},fields),click({...submit,version:99},fields)])
+    assert.doesNotMatch(result.toast.content,/正在提交/);
+  assert.equal(delivered.length,0);
+  await f.restart();
+  click(submit,fields);
+  click(submit,fields);
+  await tick();
+  assert.equal(delivered.length,1);
+  const stored = service.list().find(x=>x.id===q.id)!;
+  assert.equal(stored.answeredBy,'user_feishu');
+  assert.deepEqual(stored.answers,[{selected:['测试站']},{selected:['页面','接口'],text:'额外说明'}]);
+  assert.equal(service.list().find(x=>x.id===other.id)?.status,'open');
+
+  const current = f.instances.at(-1)!;
+  await current.options.onMessage('发起另一项讨论',source('original-question-input'));
+  const input = f.posts.at(-1)!;
+  f.store.put('interaction-origins',other.id,{inputId:input.id});
+  f.reply(input.id,'interaction-notice:'+other.id,'notification');
+  await tick();
+  const notice = current.contexts.at(-1)?.card as any;
+  const submitNotice = notice.body.elements.find((el:any)=>el.tag==='form').elements.at(-1).behaviors[0].value;
+  assert.doesNotMatch(click(submitNotice,fields,'om-form').toast.content,/正在提交/);
+  assert.equal(service.list().find(x=>x.id===other.id)?.status,'open');
+  assert.match(click(submitNotice,{t0:'另一种环境',q1:['0']},'om-structured-notice').toast.content,/正在提交/);
+  await tick();
+  assert.deepEqual(service.list().find(x=>x.id===other.id)?.answers,[{selected:[],text:'另一种环境'},{selected:['页面']}]);
+});

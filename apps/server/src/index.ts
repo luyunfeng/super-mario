@@ -21,7 +21,7 @@ import { createMachineHub } from '../../../packages/core/src/machines.ts';
 import type { FeishuRegistrationInput } from './feishu-registration.ts';
 import { createFeishuGateway, type FeishuGatewayDependencies } from './feishu-gateway.ts';
 import { validateBotScope } from '../../../packages/core/src/bot-scopes.ts';
-import type { AppConfig, FeishuBotInput, JsonObject, KnowledgeImportance, Message, NodeMessage, Run, Todo } from '../../../packages/protocol/src/index.ts';
+import type { AppConfig, FeishuBotInput, JsonObject, KnowledgeImportance, Message, NodeMessage, QuestionResponse, Run, Todo } from '../../../packages/protocol/src/index.ts';
 
 async function body(req: IncomingMessage, maxBytes = 1024 * 1024): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []; let size = 0;
@@ -34,6 +34,14 @@ async function body(req: IncomingMessage, maxBytes = 1024 * 1024): Promise<Recor
   try { value = JSON.parse(Buffer.concat(chunks).toString() || '{}'); } catch { throw new InputError('请求必须是有效JSON'); }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new InputError('请求必须是JSON对象');
   return value as Record<string, unknown>;
+}
+function answerInput(input: Record<string,unknown>, versioned = false): string | QuestionResponse[] {
+  if (Object.keys(input).some(key => key !== 'text' && key !== 'answers' && !(key === 'version' && versioned)) ||
+      Object.hasOwn(input,'text') === Object.hasOwn(input,'answers')) throw new InputError('请提交一种回答格式');
+  if (!Object.hasOwn(input,'answers')) return requiredText(input.text,'回答');
+  if (!Array.isArray(input.answers)) throw new InputError('逐题回答须为数组');
+  // The core validates every answer against the persisted card.
+  return input.answers as QuestionResponse[];
 }
 function messageRequestId(req: IncomingMessage) {
   const keys = req.headersDistinct['idempotency-key'];
@@ -218,7 +226,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         const card = path.match(/^\/api\/v1\/interactions\/([^/]+)\/(answer|withdraw)$/);
         if (card && method === 'POST') {
           const input = await body(req);
-          return json(res, 200, card[2] === 'answer' ? await app.interactions.answer(card[1], input.version as number, requiredText(input.text, '回答')) : app.interactions.withdraw(card[1], input.version as number));
+          return json(res, 200, card[2] === 'answer' ? await app.interactions.answer(card[1], input.version as number, answerInput(input,true)) : app.interactions.withdraw(card[1], input.version as number));
         }
         if (path === '/api/v1/policies/presets') {
           const input = method === 'POST' ? await body(req) : {};
@@ -703,8 +711,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         const questionAnswer=path.match(/^\/api\/v1\/todos\/([^/]+)\/question-answer$/);
         if (questionAnswer && method==='POST') {
           const input=await body(req);
-          if (Object.keys(input).some(key=>key!=='text')) throw new InputError('回答仅接受文本');
-          return json(res,200,await app.answerDeferredQuestion(decodeURIComponent(questionAnswer[1]!),input.text));
+          return json(res,200,await app.answerDeferredQuestion(decodeURIComponent(questionAnswer[1]!),answerInput(input)));
         }
         const todo = path.match(/^\/api\/v1\/todos\/([^/]+)$/);
         if (todo && method === 'PATCH') return json(res, 200, app.updateTodo(todo[1], await body(req), true));

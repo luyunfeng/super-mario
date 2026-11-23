@@ -1,7 +1,7 @@
 import type { ConversationStatus } from '../../../plugins/conversation-status.ts';
 import type { TodayBrief, TodaySection } from '../../../plugins/today-brief.ts';
 import type { FeishuBotsApp } from './feishu-bots.ts';
-import type { InboxItem, MachineInfo, Message, Project, Run, Todo } from '../../../packages/protocol/src/index.ts';
+import type { InboxItem, MachineInfo, Message, Project, QuestionResponse, Run, Todo } from '../../../packages/protocol/src/index.ts';
 import { publicText } from '../../../plugins/agent-progress-card.ts';
 import type { Card } from '../../../packages/core/src/interactions.ts';
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
@@ -341,18 +341,67 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
   elements.push({ tag: 'note', elements: [cardPlain('仅供已配对的主人私聊查看。按钮导航不会批准、发件或验收；数据为卡片生成时的快照。')] });
   const date = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' }).format(options.now ?? new Date());
   const title = `${date} · ${view === 'home' ? '今日工作台' : view === 'tasks' ? '任务进展' : view === 'projects' ? '项目 Agent' : view === 'questions' ? '待回答的问题' : '收件箱'}`;
-  return { text: lines.join('\n\n'), card: cardDocument(title, elements) };
+  return { text: lines.join('\n\n'), card: cardDocument(title, elements),
+    ...(view === 'questions' && { questionRows:questions.slice(page * pageSize, (page + 1) * pageSize).map(q => ({id:q.id,version:q.version})) }) };
 }
 
-export function questionForm(question: Card, navigation: string) {
+const compactQuestion = (question: Card) => question.questions?.length === 1 && !question.questions[0].multiSelect && question.questions[0].options.length <= 4
+  && question.questions[0].options.every(option => [...option.label].length <= 30);
+export function questionForm(question: Card, navigation: string, webBase?: string) {
   const submit = {kind:'workbench.answerQuestion',navigation,id:question.id,version:question.version};
-  return {schema:'2.0',header:{template:'orange',title:cardPlain('回答 Agent 的问题')},body:{elements:[
-    {tag:'div',text:cardPlain(question.title)},
-    {tag:'div',text:cardPlain(question.body)},
-    {tag:'form',name:'answer_question',elements:[
-      {tag:'input',name:'answer',required:true,width:'fill',input_type:'multiline_text',rows:3,max_length:1000,placeholder:cardPlain('输入你的回答')},
-      {tag:'button',name:'submit_answer',form_action_type:'submit',type:'primary',text:cardPlain('发送回答'),behaviors:[{type:'callback',value:submit}]},
-    ]},
-    {tag:'button',text:cardPlain('返回问题列表'),behaviors:[{type:'callback',value:{kind:'workbench.navigate',navigation,view:'questions',page:0}}]},
-  ]}};
+  const callback = (value: Record<string, unknown>) => [{type:'callback',value}];
+  const back = {tag:'button',text:cardPlain('返回问题列表'),behaviors:callback({kind:'workbench.navigate',navigation,view:'questions',page:0})};
+  const build = (elements: Record<string, unknown>[]) => ({schema:'2.0',header:{template:'orange',title:cardPlain('回答 Agent 的问题')},body:{elements:[...elements, back]}});
+  const web = () => {
+    const base = cardWebBase(webBase);
+    const tip = '问题内容超过飞书表单容量。请打开 Web 工作台，在主对话的「等你处理」找到这道题并回答。';
+    return {acceptsAnswer:false, card:build([{tag:'div',text:cardPlain([...question.title].slice(0,200).join(''))},{tag:'div',text:cardPlain(tip)}, ...(base ? [{tag:'button',text:cardPlain('打开 Web 主对话'),behaviors:[{type:'open_url',default_url:base+'#chat?interaction='+encodeURIComponent(question.id)}]}] : [])])};
+  };
+  if ((question.questions?.length ?? 0) > 6 || question.questions?.some(q => q.options.length > 20)) return web();
+  const elements: Record<string, unknown>[] = [question.title, question.body].filter(Boolean).map(text => ({tag:'div',text:cardPlain(text)}));
+  const fields: Record<string, unknown>[] = [];
+  const input = (name: string, hint: string) => ({tag:'input',name,width:'fill',input_type:'multiline_text',rows:2,max_length:1000,placeholder:cardPlain(hint)});
+  if (!question.questions) fields.push({...input('answer','输入你的回答'),required:true});
+  else for (const [i,q] of question.questions.entries()) {
+    const heading = [q.header, q.question, ...q.options.filter(o=>o.description).map(o => o.label + '：' + o.description)].filter(Boolean).join('\n');
+    const prompt = {tag:'div',text:cardPlain(heading)};
+    if (compactQuestion(question)) {
+      elements.push(prompt, ...q.options.map((o,j) => ({tag:'button',text:cardPlain(o.label),behaviors:callback({...submit,pick:String(j)})})));
+    } else {
+      fields.push(prompt);
+      if (q.options.length) fields.push({tag:q.multiSelect?'multi_select_static':'select_static',name:'q'+i,width:'fill',
+        placeholder:cardPlain(q.multiSelect?'可选择多项':'选择一项'),options:q.options.map((o,j)=>({text:cardPlain(o.label),value:String(j)}))});
+    }
+    fields.push(input('t'+i, q.options.length?'也可填写自己的回答':'填写回答'));
+  }
+  fields.push({tag:'button',name:'submit_answer',form_action_type:'submit',type:'primary',text:cardPlain('发送回答'),behaviors:callback(submit)});
+  elements.push({tag:'form',name:'answer_question',elements:fields});
+  const card = build(elements);
+  return Buffer.byteLength(JSON.stringify(card)) <= 24000 ? {card, acceptsAnswer:true} : web();
+}
+
+// Callback values are only indexes. Labels and question order always come from the versioned stored card.
+export function parseQuestionForm(question: Card, fields: Record<string, unknown>, pick?: unknown): string | QuestionResponse[] {
+  if (!question.questions) {
+    const answer = fields.answer;
+    if (typeof answer !== 'string' || !answer.trim() || answer.length > 1000) throw new Error('请填写回答，最多 1000 字。');
+    return answer.trim();
+  }
+  if (pick !== undefined && !compactQuestion(question)) throw new Error('问题选项不匹配。');
+  const names = new Set(question.questions.flatMap((_,i) => ['q'+i, 't'+i]));
+  if (Object.keys(fields).some(k => !names.has(k))) throw new Error('表单字段已变化，请重新打开问题。');
+  return question.questions.map((q,i) => {
+    const raw = pick === undefined ? fields['q'+i] : pick;
+    const tokens = raw === undefined || raw === null || raw === '' ? [] : Array.isArray(raw) ? raw : [raw];
+    if (tokens.length > q.options.length || (!q.multiSelect && tokens.length > 1) || new Set(tokens).size !== tokens.length)
+      throw new Error('请核对所选选项。');
+    const selected = tokens.map(token => {
+      if (typeof token !== 'string' || !/^(0|[1-9][0-9]*)$/.test(token) || !q.options[Number(token)]) throw new Error('选项已变化，请重新打开问题。');
+      return q.options[Number(token)].label;
+    });
+    const text = fields['t'+i] ?? '';
+    if (typeof text !== 'string' || [...text].length > 1000) throw new Error('每题自填回答最多 1000 字。');
+    if (!selected.length && !text.trim()) throw new Error('请回答每一道题后再提交。');
+    return {selected,...(text.trim() && {text:text.trim()})};
+  });
 }

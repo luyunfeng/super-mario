@@ -812,3 +812,41 @@ test('只有回复父消息被飞书明确判定已撤回或删除时，释放�
   assert.equal(replies,13);
   assert.equal(isFeishuMessageGone(Object.assign(new Error('230110'),{apiCode:230110})),false);
 });
+
+test('SDK 原生结构化表单发送与回调保留单选、多选数组和自填原文，超限可定位 Web 原卡', async t => {
+  const { questionForm,parseQuestionForm } = await import('../apps/server/src/feishu-dashboard.ts');
+  const q:import('../packages/core/src/interactions.ts').Card = {
+    id:'test / 问题',version:1,kind:'question',title:'合成卡',body:'选择检查项',status:'open',handler:'user',layer:'default',
+    expiresAt:'2099-01-01T00:00:00Z',createdAt:'2026-01-01T00:00:00Z',updatedAt:'2026-01-01T00:00:00Z',
+    questions:[{question:'环境',options:[{label:'合成'},{label:'本地'}]},{question:'检查',multiSelect:true,options:[{label:'读'},{label:'写'}]}],
+  };
+  const {card} = questionForm(q,'nav');
+  let answer:unknown;
+  const {integration,http,socket} = setup({onCardAction(input) {
+    answer = parseQuestionForm(q,input.formValue??{});
+    return {toast:{type:'success',content:'已提交'}};
+  }});
+  t.after(()=>integration.close());
+  await integration.start();
+  await integration.send('oc_owner','合成测试',{card});
+  const sent = JSON.parse(String(http.calls.find(c=>c.body.msg_type==='interactive')!.body.content));
+  const fields = sent.body.elements.find((row:any)=>row.tag==='form').elements;
+  const selects = fields.filter((row:any)=>row.tag.endsWith('select_static'));
+  assert.deepEqual(selects.map((row:any)=>row.tag),['select_static','multi_select_static']);
+  const value = fields.find((row:any)=>row.form_action_type==='submit').behaviors[0].value;
+  const ack = await socket.dispatcher.invoke({schema:'2.0',header:{event_type:'card.action.trigger',event_id:'questions-test'},
+    event:{operator:{open_id:'ou_owner'},context:{open_chat_id:'oc_owner',open_message_id:'om_card'},action:{
+      value,form_value:{q0:selects[0].options[1].value,q1:selects[1].options.map((o:any)=>o.value),t1:'补充 样例'},
+    }}},{needCheck:false}) as any;
+  assert.equal(ack.toast.content,'已提交');
+  assert.deepEqual(answer,[{selected:['本地']},{selected:['读','写'],text:'补充 样例'}]);
+  const single = {...q,questions:[q.questions![0]!]};
+  const quick = questionForm(single,'nav').card.body.elements.find((e:any)=>e.behaviors?.[0].value?.pick==='0') as any;
+  assert.deepEqual(parseQuestionForm(single,{},quick.behaviors[0].value.pick),[{selected:['合成']}]);
+  const large = questionForm({...q,body:'超'.repeat(8500)},'nav','https://work.example/');
+  assert.equal(large.acceptsAnswer,false);
+  assert.match(JSON.stringify(large.card),/可|主对话/);
+  const web = large.card.body.elements.find((e:any)=>e.behaviors?.[0].type==='open_url') as any;
+  assert.equal(web.behaviors[0].default_url,'https://work.example/#chat?interaction='+encodeURIComponent(q.id));
+  assert.doesNotMatch(JSON.stringify(large.card),/submit_answer|超超超/);
+});

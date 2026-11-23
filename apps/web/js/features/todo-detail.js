@@ -8,6 +8,7 @@ import { createTodoThread } from './todo-thread.js';
 import { createTodoLineage, openTodoContinuation } from './todo-continuation.js';
 import { createTodoBrief } from './todo-brief.js';
 import { openTodoHistory } from './todo-history.js';
+import { createQuestionAnswers } from './question-answers.js';
 import { openWaitingReply } from './waiting-reply.js';
 
 const section = (title, ...content) => h('section', { class: 'stack' }, h('h3', null, title), content);
@@ -90,6 +91,7 @@ function groupTaskOutcome(api, store, todo) {
 
 function deferredQuestionSection(api, store, todo) {
   const owner = api.draftOwner();
+  const questions = todo.deferredQuestion?.questions?.length ? createQuestionAnswers(todo.deferredQuestion.questions) : null;
   const askedAt = h('p', { class: 'small muted' });
   const title = h('strong');
   const question = h('p', { style: { whiteSpace: 'pre-wrap' } });
@@ -100,11 +102,12 @@ function deferredQuestionSection(api, store, todo) {
   const submit = Button({ label: '提交回答', kind: 'primary', size: 'sm', onClick: async () => {
     update(current());
     if (submit.disabled || panel.hidden) return;
-    const text = input.value.trim();
+    const text = input.value.trim(), answers = questions?.answers();
+    if (questions && !answers) { feedback.textContent = '请回答每一道题。'; return; }
     if (Array.from(text).length > 4000) { feedback.textContent = '回答最多可填写 4000 个字。'; return; }
     busy = true; update(current());
     try {
-      const receipt = await api.post(todoPath(todo) + '/question-answer', { text });
+      const receipt = await api.post(todoPath(todo) + '/question-answer', answers ? { answers } : { text });
       if (receipt?.todoId !== todo.id || !receipt.messageId) throw new Error('缺少原会话受理回执');
       saved = true; input.value = '';
       feedback.textContent = '原会话已受理你的回答。';
@@ -117,8 +120,8 @@ function deferredQuestionSection(api, store, todo) {
     }
   } });
   const feedback = h('p', { class: 'small', role: 'status' });
-  const controls = h('div', { class: 'stack' }, Field({ label: '回答原提问', control: input }), submit);
-  const panel = section('超时提问', askedAt, title, question, state, controls, feedback);
+  const controls = h('div', { class: 'stack' }, !questions && Field({ label: '回答原提问', control: input }), submit);
+  const panel = section('超时提问', askedAt, title, question, state, questions?.el, controls, feedback);
   input.addEventListener('input', () => update(current()));
   function update(row) {
     panel.hidden = !row?.deferredQuestion || !matchesScope(store, todo) || owner !== api.draftOwner() ||
@@ -132,7 +135,8 @@ function deferredQuestionSection(api, store, todo) {
     state.textContent = row.completedAt ? '待办已完成' : saved ? '回答已提交' : available ? '等待你的回答' : '';
     controls.hidden = !available || !!row.completedAt || saved;
     input.disabled = busy || controls.hidden;
-    submit.disabled = input.disabled || !input.value.trim();
+    questions?.disable(input.disabled);
+    submit.disabled = input.disabled || (!questions && !input.value.trim());
   }
   return { panel, update };
 }

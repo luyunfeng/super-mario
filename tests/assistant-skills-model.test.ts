@@ -4359,3 +4359,33 @@ test('待办回答回到最初发问的主对话，模型收到原目标、实�
     assert.ok(server.app.todos().find(item => item.id === todo.id)?.completedAt);
   } finally { await server.close(); }
 });
+
+test('主助手通过注册工具发出结构化问题，逐题回答后按主人的实际选择续聊', async t => {
+  const questions = [
+    {header:'时间',question:'哪天演示？',options:[{label:'周一'},{label:'周二',description:'多一天准备'}]},
+    {header:'材料',question:'需要哪些材料？',multiSelect:true,options:[{label:'讲稿'},{label:'样例'}]},
+  ];
+  const {server,ask,api} = await fixture(t, request => {
+    if (request.lastRole === 'tool') return {role:'assistant',content:'请在问题卡中选择。'};
+    const content = JSON.stringify(request.content);
+    if (content.includes('另带打印版')) {
+      for (const value of ['周二','讲稿','样例']) assert.ok(content.includes(value));
+      return {role:'assistant',content:'已收到逐题答复。'};
+    }
+    assert.match(request.system,/可同时采用多个时才设 multiSelect/);
+    return call('interaction_open',{kind:'question',title:'确认演示安排',body:'请核对时间和材料。',questions},'demo-plan');
+  });
+  try {
+    server.app.policies.write({}, {ladder:['user']});
+    await ask('请我选演示日期与材料。');
+    const [card] = server.app.interactions.list();
+    assert.ok(card);
+    assert.deepEqual(card.questions?.map(item=>item.question),questions.map(item=>item.question));
+    const answers = [{selected:['周二']},{selected:['讲稿','样例'],text:'另带打印版'}];
+    await api('/interactions/'+card.id+'/answer',{version:card.version,answers});
+    const after=server.app.interactions.list().find(item=>item.id===card.id);
+    assert.deepEqual(after?.answers,answers);
+    await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>
+      m.conversationId==='main' && m.role==='assistant' && m.status==='done' && m.text==='已收到逐题答复。')));
+  } finally { await server.close(); }
+});

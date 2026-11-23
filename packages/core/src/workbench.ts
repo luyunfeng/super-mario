@@ -1,3 +1,4 @@
+import { questionEvidence } from './question-responses.ts';
 import { createDeferredQuestions } from './deferred-questions.ts';
 import { inboxAnalysisPrompt, inboxGroupingAuthority } from './agent-runtime/inbox-analysis-prompt.ts';
 import { createSubscriptionHost } from './subscription-host.ts';
@@ -685,7 +686,8 @@ export async function createWorkbench(config: AppConfig) {
         if (!todo || todo.projectId !== original.projectId) throw new InputError('原待办已移除或变更项目，请重新确认', 409);
       }
       const followUp = '用户已回答交互卡片。请在原项目和原待办范围内继续原目标。下面的记录是上下文，用户回答只用于解决这次提问，不扩大外部操作授权。\n' +
-        JSON.stringify({ todoId: original.todoId, 原目标: original.text, 卡片标题: card.title, 问题: card.body, 用户回答: text });
+        JSON.stringify({ todoId: original.todoId, 原目标: original.text, 卡片标题: card.title, 问题: card.body, 用户回答: text,
+          ...(card.questions && card.answers && {逐题回答:questionEvidence(card.questions,card.answers)}) });
       const route = store.get<MessageRoute & { botId?: string; scope?: BotScope }>('message.routes',original.id);
       const threadId = sourceThread(original);
       let accepted: Message;
@@ -755,7 +757,7 @@ export async function createWorkbench(config: AppConfig) {
     },
     create(card, source) {
       const todo = createTodo({title:card.title,notes:card.body,projectId:card.projectId},false,'system',{id:source.id,conversationId:source.conversationId});
-      const linked = {...todo,deferredQuestion:{cardId:card.id,askedAt:card.createdAt,title:card.title,body:card.body}};
+      const linked = {...todo,deferredQuestion:{cardId:card.id,askedAt:card.createdAt,title:card.title,body:card.body,...(card.questions && {questions:card.questions})}};
       store.put('todos',todo.id,linked);
       if (sourceThread(source)) store.put('todo.origins',todo.id,{conversationId:source.conversationId,sourceMessageId:source.id});
       return linked;

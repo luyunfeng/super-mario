@@ -4,6 +4,7 @@ import { h, keyedList } from '../lib/dom.js';
 import { timeAgo } from '../lib/format.js';
 import { Button, Pill, Field, Input, TextArea, Banner } from '../ui/kit.js';
 import { confirmDialog, openDrawer } from '../ui/overlay.js';
+import { createQuestionAnswers } from './question-answers.js';
 import { openInboxHandlingDrawer } from './inbox-handling.js';
 
 const TYPES = {
@@ -87,13 +88,16 @@ export function createAttention({ api, store, task = false }) {
     const note = h('p', { class: 'small', role: 'status' });
     const actions = h('div', { class: 'attn__actions' });
     const textAction = item.actions.find(action => action.requiresText);
-    const input = textAction && h('input', { class: 'input', placeholder: '输入你的回答，回车发送', 'aria-label': `回答：${item.title}`, autocomplete: 'off' });
-    let done = false;
+    const questions = textAction && item.questions?.length ? createQuestionAnswers(item.questions) : null;
+    const input = textAction && !questions ? h('input', { class: 'input', placeholder: '输入你的回答，回车发送', 'aria-label': `回答：${item.title}`, autocomplete: 'off' }) : null;
+    let done = false, submitting = false;
 
     async function submit(action) {
-      if (done) return;
+      if (done || submitting) return;
       const text = input?.value.trim() ?? '';
-      if (action.requiresText && !text) { note.textContent = '请先写下回答'; input.focus(); return; }
+      const answers = action.requiresText && questions?.answers();
+      if (action.requiresText && questions && !answers) { note.textContent = '请回答每一道题。'; return; }
+      if (action.requiresText && !questions && !text) { note.textContent = '请先写下回答'; input.focus(); return; }
       if (action.highRisk) {
         const ok = await confirmDialog({
           title: `${action.label}这项高风险操作？`,
@@ -102,8 +106,10 @@ export function createAttention({ api, store, task = false }) {
         });
         if (!ok) return;
       }
+      if (done || submitting) return;
+      submitting = true; questions?.disable(true);
       try {
-        const result = await api(action.path, { method: action.method, body: { ...action.body, ...(action.requiresText ? { text } : {}) } });
+        const result = await api(action.path, { method: action.method, body: { ...action.body, ...(answers ? { answers } : action.requiresText ? { text } : {}) } });
         const outcome = resultNote(result, action);
         note.textContent = outcome.text;
         note.className = `small ${outcome.tone === 'danger' ? 'text-danger' : 'muted'}`;
@@ -113,6 +119,8 @@ export function createAttention({ api, store, task = false }) {
         note.textContent = error.status === 409 ? '已在另一处处理，列表即将更新。' : `提交没有成功：${error.message}。内容已保留。`;
         note.className = `small ${error.status === 409 ? 'muted' : 'text-danger'}`;
       }
+      submitting = false;
+      if (!done) questions?.disable(false);
       store.refresh();
     }
 
@@ -133,7 +141,8 @@ export function createAttention({ api, store, task = false }) {
         h('h3', { class: 'attn__title' }, item.title), h('span', { class: 'attn__time muted small' }, timeAgo(item.createdAt))),
       h('p', { class: 'muted small' }, context),
       detail,
-      input && h('div', { class: 'attn__reply' }, input, Button({ label: textAction.label, kind: 'primary', size: 'sm', onClick: () => submit(textAction), dataset: { action: textAction.label } })),
+      questions?.el,
+      textAction && h('div', { class: 'attn__reply' }, input, Button({ label: textAction.label, kind: 'primary', size: 'sm', onClick: () => submit(textAction), dataset: { action: textAction.label } })),
       actions.children.length > 0 && actions, note,
       item.route && !(task && item.type === 'interaction') && h('a', { class: 'small', href: item.route.href }, item.route.label));
   }

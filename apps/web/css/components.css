@@ -42,6 +42,8 @@
 
 /* 表单 */
 .field { display: grid; gap: 5px; min-width: 0; }
+.question-field { min-width: 0; margin: 0; padding: 8px 12px 12px; border: 1px solid var(--line); border-radius: var(--radius); }
+.question-field legend { max-width: 100%; padding: 0 4px; font-weight: 600; overflow-wrap: anywhere; }
 .field__label { font-weight: 600; font-size: calc(13px * var(--reading-scale, 1)); color: var(--text); }
 .field__hint { font-size: calc(13px * var(--reading-scale, 1)); color: var(--text-3); }
 .field__req { color: var(--danger); margin-left: 2px; }

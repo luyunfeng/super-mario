@@ -1,3 +1,5 @@
+import { questionItems, readQuestionResponses } from './question-responses.ts';
+import type { QuestionItem, QuestionResponse } from '../../protocol/src/index.ts';
 import type { PolicyStage } from './policies.ts';
 import { randomUUID } from 'node:crypto';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
@@ -28,6 +30,8 @@ export interface Card {
   cwd?: string;
   status: 'open' | 'answered' | 'expired' | 'withdrawn';
   answer?: string;
+  questions?: QuestionItem[];
+  answers?: QuestionResponse[];
   withdrawnReason?: 'user_spoke';
   answeredBy?: string;
   suggestion?: string;
@@ -48,7 +52,7 @@ export interface Card {
   userNotifiedAt?: string;
   routingHistory?: { handler: Decision['handler']; outcome: string; at: string }[];
 }
-type Input = Pick<Card, 'kind' | 'title' | 'body' | 'runId' | 'projectId' | 'executorId' | 'cwd'>;
+type Input = Pick<Card, 'kind' | 'title' | 'body' | 'runId' | 'projectId' | 'executorId' | 'cwd' | 'questions'>;
 const collection = 'interactions';
 export class InteractionError extends Error {
   readonly status: 400 | 404 | 409 | 503;
@@ -104,12 +108,21 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
     });
     return card;
   }
-  function answer(id: string, version: number, value: string, by = 'user'): Promise<Card> {
+  function answer(id: string, version: number, input: string | QuestionResponse[], by = 'user'): Promise<Card> {
     active();
+    const current = get(id, version);
+    if (Date.parse(current.expiresAt) <= Date.now()) {
+      claim(id, version, {status:'expired'});
+      changed(id);
+      throw new InteractionError('交互卡片已过期', 409);
+    }
+    const response = current.questions ? readQuestionResponses(current.questions, input) : undefined;
+    const value = response?.text ?? input;
     text(value, 'answer');
+    if (response && !['user','user_feishu'].includes(by)) throw new InteractionError('逐题回答须由主人提交');
     text(by, 'by');
     // Claim before any I/O. Unknown also covers a crash between delivery and confirmation.
-    const card = claim(id, version, { status: 'answered', answer: value, answeredBy: by,
+    const card = claim(id, version, { status: 'answered', answer: value, ...(response && {answers:response.answers}), answeredBy: by,
       answeredAt: new Date().toISOString(), delivery: 'unknown' });
     if (card.status === 'expired') {
       changed(id);
@@ -164,15 +177,16 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
     }
     if (current.stages && current.stageDueAt && Date.parse(current.stageDueAt) <= Date.now()) { advance(current, 'timeout'); return; }
     text(value, 'suggestion');
-    if (card.mode === 'auto') return answer(card.id, card.version, value, card.handler);
+    if (card.mode === 'auto' && !current.questions) return answer(card.id, card.version, value, card.handler);
     // A missing mode is conservative: an available response is only a suggestion.
     const currentCard = get(card.id, card.version);
     const userIndex = currentCard.stages?.findIndex(stage => stage.handler === 'user');
     const next = store.transaction(() => save(currentCard, { suggestion: value,
+      ...(currentCard.questions && {handler:'user', mode:'suggest'}),
       ...(userIndex !== undefined && userIndex >= 0 ? { handler: 'user', mode: 'suggest', stageIndex: userIndex, stageDueAt: undefined,
         routingHistory: [...(currentCard.routingHistory ?? []), { handler: currentCard.handler, outcome: 'suggested', at: new Date().toISOString() }] } : {}) }));
     changed(next.id);
-    if (next.stages) events.publish('interactions.user_required', { id: next.id });
+    if (next.stages || next.questions) events.publish('interactions.user_required', { id: next.id });
   }
   function background(card: Card): void {
     const job = Promise.resolve().then(async () => {
@@ -217,6 +231,10 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       text(input.title, 'title');
       text(input.body, 'body', true);
       const fields: Input = { kind: input.kind, title: input.title, body: input.body };
+      if (input.questions !== undefined) {
+        if (input.kind !== 'question') throw new InteractionError('只有普通问题卡支持逐题选项');
+        fields.questions = questionItems(input.questions);
+      }
       for (const key of ['runId', 'projectId', 'executorId', 'cwd'] as const) {
         if (input[key] !== undefined) { text(input[key], key); fields[key] = input[key]; }
       }

@@ -1,7 +1,7 @@
 import type { ChannelContribution } from '../../plugin-sdk/src/index.ts';
 import type { InboxConversation } from '../../protocol/src/inbox-conversations.ts';
 import { excludesPersonalGroupFromBrief } from '../../protocol/src/inbox-origin.ts';
-import type { Approval, InboxItem, InboxOrigin, JsonObject, MailboxEntry, Project, FeishuBot } from '../../protocol/src/index.ts';
+import type { Approval, QuestionItem, InboxItem, InboxOrigin, JsonObject, MailboxEntry, Project, FeishuBot } from '../../protocol/src/index.ts';
 import type { Plan } from './plans.ts';
 
 /** Read-only projection; action bodies are versioned descriptions, never executed here. */
@@ -15,6 +15,7 @@ export interface AttentionAction {
 }
 export interface AttentionItem {
   origin?: InboxOrigin;
+  questions?: QuestionItem[];
   id: string;
   type: 'approval' | 'interaction' | 'inbox' | 'plan';
   version: number;
@@ -33,6 +34,7 @@ export interface AttentionItem {
 }
 // Structural input avoids coupling this projection to interaction service internals.
 interface InteractionInput {
+  questions?: QuestionItem[];
   id: string; version: number; title: string; body: string; status: string;
   handler?: string; kind?: string; createdAt: string; projectId?: string;
   route?: AttentionItem['route']; suggestion?: string; userNotifiedAt?: string; todoId?: string;
@@ -99,7 +101,7 @@ export function collectAttention({ inboxConversations = [], approvals = [], inte
     // must finish/escalate before its question counts as requiring a human.
     if (item.status !== 'open' || (item.handler !== undefined && item.handler !== 'user')) continue;
     const highRisk = item.kind === 'permission';
-    rows.push({ id: `interaction:${item.id}`, type: 'interaction', version: item.version,
+    rows.push({ id: `interaction:${item.id}`, type: 'interaction', version: item.version, ...(item.questions && { questions: item.questions }),
       ...(item.todoId && { todoId: item.todoId }), ...(item.route && { route: item.route }), title: item.title, context: '等待你的回答', detail: [item.body, item.suggestion ? `建议回答：${item.suggestion}` : ''].filter(Boolean).join('\n\n'),
       source: 'Agent', createdAt: item.createdAt, ...project(item.projectId), highRisk,
       actions: [{ ...action('interactions', item.id, 'answer', item.version, '回答'), requiresText: true, highRisk }] });
