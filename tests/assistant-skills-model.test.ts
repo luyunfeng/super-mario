@@ -291,6 +291,19 @@ test('独立助理与主助手分别读取自己安装的同名技能，项目�
       assert.ok(requests[before].tools.includes('assistant_skill_read'));
       for (const label of labels) assert.equal(requests[before].system.includes('目录标记' + label), label === labels[index]);
     }
+    await api('/assistant-profile',{action:'save',revision:0,name:'主线资料审阅员'});
+    const mainTurn = requests.length;
+    await ask('重新核对主线材料');
+    assert.match(requests[mainTurn].system,/主线资料审阅员/);
+    const profile = profiles[1];
+    await api('/assistant-roster',{action:'update',id:profile.id,revision:profile.revision ?? 0,
+      name:'项目材料审阅员',instructions:'逐条核实来源再总结'});
+    const reopened = await api('/assistant-roster',{action:'open',id:profile.id,projectId:project.id});
+    const projectTurn = requests.length;
+    await ask('重新核对项目材料','/web-conversations/'+reopened.threadId+'/messages');
+    assert.match(requests[projectTurn].system,/项目材料审阅员/);
+    assert.match(requests[projectTurn].system,/逐条核实来源再总结/);
+    assert.doesNotMatch(requests[projectTurn].system,/主线资料审阅员|根据自己的目录工作/);
     assert.equal(await ask('核对这个项目工作会话能否读取技能', '/projects/' + project.id + '/messages'), '没有技能读取工具');
     forgedOwner = profiles[1].id;
     const rejected = await ask('测试伪造技能所有者');
