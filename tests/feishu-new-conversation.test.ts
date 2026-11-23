@@ -146,6 +146,9 @@ test('连续输入跟随新会话，状态与清单只展示本主人的会话�
   assert.equal(renamed.status,200);
   const selected = await a.click(list.id, buttons[0].value);
   assert.match(JSON.stringify(selected),/已选中「合成新标题」。下一条未引用消息/);
+  await a.receive('/status', 'renamed-status');
+  const renamedStatus = f.sent.findLast(item => item.context?.replyTo === 'renamed-status');
+  assert.match(renamedStatus?.text ?? '', /独立对话 · 合成新标题/);
   await a.receive('从清单恢复甲', 'from-list');
   assert.equal((await f.input('从清单恢复甲')).conversationId, alpha.conversationId);
   await f.restart();

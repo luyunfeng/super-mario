@@ -1269,8 +1269,9 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const pluginRevision = app.store.get<string>('settings', 'feishu.status-plugin-revision');
     const agentRun = binding?.agentTarget && currentAgentRun(binding.agentTarget, bot);
     const agentStatus = !expired && agentRun ? selectedAgentStatus(app.store, agentRun, webBase) : undefined;
-    const fingerprint = digest([bot.id, bot.revision, paired, scope, binding ?? null, expired, enabled, pluginRevision, agentStatus?.card]);
-    const name = binding?.agentTarget && !expired ? '执行会话 · ' + binding.agentTarget.runId : project && !expired ? '项目工作会话 · ' + project.name : binding?.conversationThreadId ? '独立对话 · ' + bot.name : '机器人会话 · ' + bot.name;
+    const threadTitle = !expired && binding?.conversationThreadId ? privateThreadMetadata(bot.id, binding.conversationThreadId).title : undefined;
+    const fingerprint = digest([bot.id, bot.revision, paired, scope, binding ?? null, expired, enabled, pluginRevision, agentStatus?.card, ...(threadTitle ? [threadTitle] : [])]);
+    const name = binding?.agentTarget && !expired ? '执行会话 · ' + binding.agentTarget.runId : project && !expired ? '项目工作会话 · ' + project.name : binding?.conversationThreadId ? '独立对话 · ' + (threadTitle ?? bot.name) : '机器人会话 · ' + bot.name;
     const error = expired ? '会话选择已过期或项目已归档，请在工作台重新选择。'
       : binding?.agentTarget && !agentRun ? '当前无法核实执行会话，请发送 /agents 重新选择。'
       : scope.kind === 'unmarked' ? '机器人尚未绑定具体作用域，无法读取会话状态。'
