@@ -348,7 +348,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     replace(detailBody,
       h('div', null, h('a', { class: 'btn btn--ghost btn--sm', href: router.href('projects', projectId, 'runs') }, icon('back'), '执行')),
       h('div', { class: 'row row--between row--wrap' },
-        h('div', { class: 'stack' }, h('h2', { class: 'run__title' }, run.prompt), h('div', { class: 'row' }, Pill(status.text, status.tone), h('span', { class: 'muted small' }, `${executorName(run.executorId)} · ${timeAgo(run.createdAt)}`))),
+        h('div', { class: 'stack' }, h('h2', { class: 'run__title' }, run.prompt), h('div', { class: 'row' }, Pill(status.text, status.tone), h('span', { class: 'muted small' }, `${executorName(run.executorId)}${run.model ? ` · 指定模型：${run.model}` : ''} · ${timeAgo(run.createdAt)}`))),
         isRunActive(run) && Button({ label: '中断', kind: 'danger', size: 'sm', onClick: async () => {
           const ok = await confirmDialog({ title: '中断这次执行？', message: '会请求执行者停止；已经产生的修改不会自动撤销。', confirmLabel: '请求中断', danger: true });
           if (ok) { await api.post(`/runs/${encodeURIComponent(run.id)}/cancel`, {}); store.refresh(); }

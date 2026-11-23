@@ -232,6 +232,7 @@ export function compareRuns({ run, runs, projectId, router, executorName, progre
     return h('article', { class: 'card card__body stack' },
       h('h3', null, index === undefined ? item.prompt : `执行 ${index + 1} · ${item.prompt}`), Pill(status.text, status.tone),
       h('span', { class: 'small' }, executorName(item.executorId), ' · ', formatDate(item.createdAt, true)),
+      item.model && h('div', { class: 'small' }, '指定模型：', item.model),
       h('div', null, item.usage
         ? `本次 Token：输入 ${item.usage.input.toLocaleString()} · 输出 ${item.usage.output.toLocaleString()}`
         : '本次 Token：未上报'),

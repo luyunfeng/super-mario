@@ -34,7 +34,7 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   let baseReads = 0, groupedCheckouts = 0;
 
   const node = startAgentNode({ url: server.url, token: 'worktree-fixture', machineId: 'fixture', name: 'fixture', dataDir: join(root, 'node'),
-    executors: [{ id: 'codex', machineId: 'fixture', name: '协议替身', kind: 'cli', available: true, mode: 'real', description: 'fixture' }],
+    executors: [{ id: 'codex', supportsModel: true, machineId: 'fixture', name: '协议替身', kind: 'cli', available: true, mode: 'real', description: 'fixture' }],
     handlers: { ...discovery.handlers,
       'workspace.retainedBranchStatus': async args => incompleteBranchStatus ? {} : discovery.handlers['workspace.retainedBranchStatus'](args),
       'workspace.worktreeBase': async args => {
@@ -74,6 +74,7 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   await page.getByRole('button', { name: '发起执行', exact: true }).first().click();
   const drawer = page.getByRole('dialog', { name: '发起执行' });
   await drawer.getByLabel('要做什么').fill('第一项任务');
+  await drawer.getByLabel('本次执行模型').fill('fixture-first');
   await drawer.getByLabel('怎样算完成').fill('核对文件');
   await drawer.getByLabel('预计用时').fill('2');
   await drawer.getByLabel('从当前提交创建独立 Git 工作树').check();
@@ -124,7 +125,9 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   const peer = runs.find(run => run.id !== first.id)!;
   await page.getByLabel('选择对比执行').selectOption(peer.id);
   await expect(page.getByRole('region', { name: '执行对比' }).getByText('工作树：接口修订')).toBeVisible();
+  await expect(page.getByRole('region', { name: '执行对比' }).getByRole('article').first()).toContainText('指定模型：fixture-first');
   const peerCard = page.getByRole('region', {name:'执行对比'}).getByRole('article').last();
+  await expect(peerCard).not.toContainText('指定模型');
   await peerCard.getByRole('button', {name:'检查此执行的工作树'}).click();
   const peerTree = page.getByRole('dialog', {name:'工作树状态'});
   await expect(peerTree).toContainText(peer.cwd!);
