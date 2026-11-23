@@ -119,3 +119,12 @@ test('partial Agent-mode updates preserve previous choices and reject explicit u
   assert.throws(()=>policies.write({}, {ladder:undefined}),TypeError);
   assert.throws(()=>policies.write({}, {agentModes:undefined}),TypeError);
 });
+
+test('主对话问题默认等待两小时，显式用户期限及执行机期限优先', t => {
+  const { policies } = fixture(t);
+  const question = { kind:'question' as const, createdAt };
+  assert.equal(policies.decide(question, true).userDeadlineAt, '2026-01-01T02:00:00.000Z');
+  assert.equal(policies.decide({...question, runId:'r'}, true).userDeadlineAt, '2026-01-01T00:15:00.000Z');
+  policies.write({}, {userDeadlineMinutes:8});
+  assert.equal(policies.decide(question, true).userDeadlineAt, '2026-01-01T00:08:00.000Z');
+});

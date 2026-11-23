@@ -668,8 +668,8 @@ export async function createWorkbench(config: AppConfig) {
     return dispatch({ ...input, sourceMessageId: origin?.sourceMessageId, conversationId: origin?.conversationId, projectId: input.projectId ?? origin?.projectId, todoId: input.todoId ?? origin?.todoId }, key,false,undefined,estimate);
   } });
   const answeredInCurrentTurn = new Set<string>();
-  const interactionService = createInteractions({ store, events, publish: background.publish, decide: card => {
-    const decision = policies.decide(card);
+  const interactionService = createInteractions({ store, events, publish: background.publish, decide: (card, conversationQuestion) => {
+    const decision = policies.decide(card, conversationQuestion);
     return { ...decision, layer: decision.layer === 'run' ? 'task' : decision.layer, answer: decision.answer ?? undefined, ruleId: decision.ruleId ?? undefined };
   }, async answer(card, text) {
     if (card.runId && ['question', 'permission'].includes(card.kind)) {
@@ -718,7 +718,7 @@ export async function createWorkbench(config: AppConfig) {
     if (runId && !run) throw new InputError('关联执行记录不存在', 404);
     // Execution context comes from core facts; model-provided metadata cannot select a weaker policy.
     const card = interactionService.open({ ...input, runId, projectId: run?.projectId ?? source?.projectId ?? input.projectId,
-      executorId: run?.executorId ?? input.executorId, cwd: run?.cwd ?? input.cwd });
+      executorId: run?.executorId ?? input.executorId, cwd: run?.cwd ?? input.cwd }, Boolean(source && !runId && input.kind === 'question'));
     const inputId = run?.sourceMessageId ?? source?.id;
     store.put('interaction-origins', card.id, { inputId });
     if (card.kind === 'question' && !runId && inputId) store.put('input-paused', inputId, { cardId: card.id });

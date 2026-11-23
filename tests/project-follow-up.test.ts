@@ -16,7 +16,7 @@ function fixture(t: test.TestContext) {
   const path = join(dir, 'test.sqlite');
   let store = createStore(path);
   let time = Date.parse('2026-01-01T00:00:00Z');
-  const global: BriefingSettings = { timezone: 'UTC', morning: '09:00', evening: '18:00', intervalHours: 4, intervalEnabled: false, activeStart: '09:00', activeEnd: '21:00', awayNotifications: true };
+  const global: BriefingSettings = { decisionQuietHours: { enabled:false, start:'22:00', end:'08:00' }, timezone: 'UTC', morning: '09:00', evening: '18:00', intervalHours: 4, intervalEnabled: false, activeStart: '09:00', activeEnd: '21:00', awayNotifications: true };
   const sent: ProjectBriefInput[] = [];
   let fail = false;
   function open() {

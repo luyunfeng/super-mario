@@ -79,9 +79,11 @@ export function validatePolicyPatch(patch: Partial<PolicyConfig>): void {
 
 /** Configuration only: deciding never approves a card or performs external actions. */
 export function createPolicies({ store, events }: { store: Store; events: EventBus }) {
-  function resolved(scope: PolicyScope = {}) {
+  function resolved(scope: PolicyScope = {}, conversationQuestion = false) {
     scopeKey(scope);
     let config = structuredClone(defaults);
+    // A conversation question must outlive the default one-hour Feishu reminder.
+    if (conversationQuestion) config.userDeadlineMinutes = 120;
     let layer: PolicyDecision['layer'] = 'default';
     const layers: [PolicyDecision['layer'], PolicyScope][] = [['global', {}]];
     if (scope.projectId !== undefined) layers.push(['project', { projectId: scope.projectId }]);
@@ -118,7 +120,7 @@ export function createPolicies({ store, events }: { store: Store; events: EventB
       if (options.notify !== false) events.publish('policies.changed', {});
       return resolved(scope).config;
     },
-    decide(card: PolicyCard): PolicyDecision {
+    decide(card: PolicyCard, conversationQuestion = false): PolicyDecision {
       // Cards may contain additional business fields; only policy inputs are consumed.
       if (!card || typeof card !== 'object' || Array.isArray(card) || !kinds.includes(card.kind)) throw new TypeError('无效卡片kind');
       const scope: PolicyScope = {};
@@ -129,7 +131,7 @@ export function createPolicies({ store, events }: { store: Store; events: EventB
       if (card.createdAt !== undefined) text(card.createdAt);
       const created = card.createdAt === undefined ? Date.now() : Date.parse(card.createdAt);
       if (!Number.isFinite(created)) throw new TypeError('createdAt必须为有效日期');
-      const { config, layer } = resolved(scope);
+      const { config, layer } = resolved(scope, conversationQuestion && card.kind === 'question' && !card.runId);
       const rule = config.rules.find(rule => {
         if (rule.kind !== card.kind || (rule.executorId !== undefined && rule.executorId !== card.executorId)) return false;
         if (rule.cwdUnder === undefined) return true;

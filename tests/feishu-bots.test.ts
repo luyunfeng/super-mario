@@ -20,7 +20,7 @@ import type { Message } from '../packages/protocol/src/index.ts';
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 const source = (messageId: string, chatId = 'owner', senderId = 'human', chatType = 'p2p') => ({ messageId, chatId, senderId, chatType });
 
-function fixture(t: test.TestContext) {
+function fixture(t: test.TestContext, delivered?: (target:string,text:string,context?:FeishuSendContext)=>void) {
   const dataDir = mkdtempSync(join(tmpdir(), 'mario-bots-'));
   const store = createStore(join(dataDir, 'test.sqlite'));
   const events = createEventBus(store), effects = createEffects({ store, events });
@@ -33,7 +33,7 @@ function fixture(t: test.TestContext) {
       collect: async () => [{ thread: 'personal-thread', last: 'personal-message', title: '采集', text: '上下文' }] };
     instances.push(state);
     return { start: async () => {}, close: async () => { state.closed = true; state.closeCount++; },
-      send: async (target, text, context) => { state.contexts.push(context); state.sent.push([target, text]); if (uncertain) throw new Error(`network ${options.appSecret}`); },
+      send: async (target, text, context) => { state.contexts.push(context); state.sent.push([target, text]); if (uncertain) throw new Error(`network ${options.appSecret}`); delivered?.(target,text,context); },
       collect: () => state.collect(), status: () => ({ connected: !state.closed }) };
   };
   let controller: ReturnType<typeof createFeishuBotsController>;
@@ -1842,4 +1842,56 @@ test('两条独立对话同时等待回复时，停止命令按当前选择和�
   assert.deepEqual(stopped, [second.id]);
   await receive('/停止', { ...human('stop-quoted'), parentId: 'first-thread' });
   assert.deepEqual(stopped, [second.id, first.id]);
+});
+
+test('真实问题表单发送回执启动飞书提醒，沿原卡回复，重启、纯文本回退与已回答卡不会重复提醒',async t=>{
+  const base=Date.UTC(2026,10,22,23),nudged:{target:string;text:string;key:string;parent:string}[]=[];
+  t.mock.timers.enable({apis:['Date'],now:base});
+  let formType:'interactive'|'text'|undefined='interactive',platformId='';
+  const f=fixture(t,(target,text,context)=>{
+    if(context?.card && JSON.stringify(context.card).includes('submit_answer')){
+      context.onSent?.(platformId,formType);
+    } else if(context?.replyKey?.startsWith('nudge-')){
+      context.beforeSend?.();
+      assert.ok(context.plainText && context.replyTo);
+      nudged.push({target,text,key:context.replyKey,parent:context.replyTo});
+      context.onSent?.('receipt-'+nudged.length,'text');
+    }
+  });
+  const a=await f.add('Nudges',{kind:'global'},false,{decisionNudgeMinutes:1});
+  await a.pair();
+  const service=createInteractions({store:f.store,events:f.events,decide:()=>({handler:'user',layer:'default',
+    deadlineAt:new Date(base+3600000).toISOString()}),answer:async()=>{}});
+  f.app.interactions=service;t.after(()=>service.close());
+  async function notify(id:string,type:'interactive'|'text'|undefined){
+    formType=type;platformId='om-'+id;
+    const q=service.open({kind:'question',title:'合成问题'+id,body:'仅原始表单中的私密正文'});
+    await a.instance.options.onMessage('本次发起'+id,{...source('source-'+id),senderType:'user'});
+    const input=f.posts.at(-1)!;
+    f.store.put('interaction-origins',q.id,{inputId:input.id});
+    f.reply(input.id,'interaction-notice:'+q.id,'notification');
+    await tick();
+    assert.match(JSON.stringify(a.instance.contexts.at(-1)?.card),/submit_answer/);
+    return q;
+  }
+  await notify('active','interactive');
+  const answered=await notify('answered','interactive');
+  await service.answer(answered.id,answered.version,'已答','user_web');
+  await notify('fallback','text');await notify('untyped',undefined);
+  await notify('recalled','interactive');await a.instance.options.onRecall?.('owner','om-recalled');
+  const before=f.hookCount();
+  await f.controller.sweepDecisionNudges();
+  assert.equal(nudged.length,0);
+  t.mock.timers.setTime(base+60001);
+  f.store.put('briefing.settings','default',{timezone:'UTC',decisionQuietHours:{enabled:true,start:'22:00',end:'08:00'}});
+  await f.controller.sweepDecisionNudges();
+  assert.equal(nudged.length,0);
+  f.store.put('briefing.settings','default',{timezone:'UTC',decisionQuietHours:{enabled:false,start:'22:00',end:'08:00'}});
+  await Promise.all([f.controller.sweepDecisionNudges(),f.controller.sweepDecisionNudges()]);
+  assert.equal(nudged.length,1);
+  assert.equal(nudged[0]!.parent,'om-active');assert.equal(nudged[0]!.target,'owner');
+  assert.equal(nudged[0]!.text,'仍在等待你回答：合成问题active');
+  assert.ok(f.hookCount()>before);
+  await f.restart();await f.controller.sweepDecisionNudges();
+  assert.equal(nudged.length,1);
 });

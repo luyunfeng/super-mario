@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 import { join } from 'node:path';
 import type { BotCollaboration, BotGroupAccess, BotScope, FeishuBotInput } from '../packages/protocol/src/index.ts';
 
@@ -59,7 +60,7 @@ export function validateBotGroupConfig(input: { groupChats?: unknown; collaborat
 /** Private configuration only. Never publish these records into events or snapshots. */
 export interface FeishuBotSettings {
   id: string; name: string; appId: string; appSecret: string; enabled: boolean;
-  scope: BotScope; ownerDirectReply?: boolean; readGroup?: boolean; groupTaskReportDelayMinutes?: number; requireConfirmation: boolean; profile?: string;
+  scope: BotScope; ownerDirectReply?: boolean; readGroup?: boolean; groupTaskReportDelayMinutes?: number; decisionNudgeMinutes?: number; requireConfirmation: boolean; profile?: string;
   executorId?: string; groupChats?: BotGroupAccess[]; collaboration?: BotCollaboration;
   revision: number; createdAt: string; updatedAt: string; archivedAt?: string;
 }
@@ -94,7 +95,7 @@ export function createFeishuBotConfig(dataDir: string, legacyAppId?: string) {
         || typeof row.enabled !== 'boolean' || typeof row.requireConfirmation !== 'boolean') throw new Error('机器人配置文件格式无效');
       if (row.collaboration?.peerBotIds.includes(row.id)) throw new Error('peerBotIds 不能包含机器人自身');
       const scope = validateBotScope(row.scope);
-      return { ...row, scope, ...(scope.kind === 'global' && { groupTaskReportDelayMinutes: row.groupTaskReportDelayMinutes ?? 10 }) };
+      return { ...row, scope, decisionNudgeMinutes: row.decisionNudgeMinutes ?? 60, ...(scope.kind === 'global' && { groupTaskReportDelayMinutes: row.groupTaskReportDelayMinutes ?? 10 }) };
     });
     if (new Set(rows.map(row => row.id)).size !== rows.length || new Set(rows.map(row => row.appId)).size !== rows.length) throw new Error('机器人配置包含重复标识');
     chmodSync(file, 0o600);
@@ -106,6 +107,9 @@ export function createFeishuBotConfig(dataDir: string, legacyAppId?: string) {
     for (const key of ['enabled', 'requireConfirmation', 'ownerDirectReply', 'readGroup'] as const) if (input[key] !== undefined && typeof input[key] !== 'boolean') throw new Error(`${key} 必须为布尔值`);
     for (const key of ['appSecret', 'profile'] as const) if (input[key] !== undefined && typeof input[key] !== 'string') throw new Error(`${key} 必须为文本`);
     if (input.scope !== undefined) validateBotScope(input.scope);
+    const nudge = input.decisionNudgeMinutes;
+    if (nudge !== undefined && (!Number.isSafeInteger(nudge) || nudge < 0 || nudge > 8640))
+      throw new Error('待决定提醒须为 0 至 8640 的整数分钟');
     const delay = input.groupTaskReportDelayMinutes;
     if (delay !== undefined && (!Number.isInteger(delay) || delay < 0 || delay > 60))
       throw new Error('群任务回报预览时长须为 0 至 60 的整数分钟');
@@ -145,6 +149,7 @@ export function createFeishuBotConfig(dataDir: string, legacyAppId?: string) {
         id: previous?.id ?? randomUUID(), name, appId, scope,
         appSecret: input.appSecret?.trim() || (previous?.appId === appId ? previous.appSecret : ''),
         enabled: input.enabled ?? previous?.enabled ?? true,
+        decisionNudgeMinutes: input.decisionNudgeMinutes ?? (previous?.appId === appId ? previous.decisionNudgeMinutes ?? 60 : 60),
         ownerDirectReply: input.ownerDirectReply ?? previous?.ownerDirectReply ?? false,
         readGroup: scope.kind === 'global' && (input.readGroup ?? (previous?.appId === appId && previous.readGroup === true)),
         ...(scope.kind === 'global' && { groupTaskReportDelayMinutes: input.groupTaskReportDelayMinutes ??
@@ -158,6 +163,20 @@ export function createFeishuBotConfig(dataDir: string, legacyAppId?: string) {
       row.groupChats = extra.groupChats ?? previous?.groupChats;
       row.collaboration = extra.collaboration ?? previous?.collaboration;
       if (row.collaboration?.peerBotIds.includes(row.id)) throw new Error('peerBotIds 不能包含机器人自身');
+      // Reminder timing does not change a card's recipient or its authority to answer.
+      if (previous && input.decisionNudgeMinutes !== undefined) {
+        const identityFields = new Set([...Object.keys(previous), ...Object.keys(row)] as (keyof FeishuBotSettings)[]);
+        for (const key of ['decisionNudgeMinutes', 'revision', 'updatedAt'] as const) identityFields.delete(key);
+        // The Web form posts empty lists even when older configurations omitted them.
+        const comparable = (value: FeishuBotSettings, key: keyof FeishuBotSettings) => {
+          if (key === 'groupChats') return value.groupChats ?? [];
+          if (key === 'collaboration') return value.collaboration?.peerBotIds ?? [];
+          return value[key];
+        };
+        if ([...identityFields].every(key => isDeepStrictEqual(comparable(previous, key), comparable(row, key)))) {
+          row.revision = previous.revision;
+        }
+      }
       save([...rows.filter(item => item.id !== row.id), row]);
       return structuredClone(row);
     },

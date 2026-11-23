@@ -50,6 +50,15 @@ export function createFollowUpCard({ api, store }) {
     const hours = Input({ type:'number',min:1,max:168,value:briefing.intervalHours });
     const interval = Check({label:'启用间隔简报',checked:briefing.intervalEnabled});
     const away = Check({label:'离开页面后通知结果和待决定',checked:briefing.awayNotifications});
+    const quiet = briefing.decisionQuietHours ?? { enabled:false, start:'22:00', end:'08:00' };
+    const quietToggle = Check({label:'飞书待决定提醒免打扰',checked:quiet.enabled});
+    const quietCheck = quietToggle.querySelector('input');
+    const quietStart = Input({type:'time',value:quiet.start,required:true});
+    const quietEnd = Input({type:'time',value:quiet.end,required:true});
+    const quietTimes = h('div',{class:'form-row'},
+      Field({label:'免打扰开始',control:quietStart}), Field({label:'免打扰结束',control:quietEnd}));
+    quietTimes.hidden = !quietCheck.checked;
+    quietCheck.addEventListener('change',()=>{quietTimes.hidden=!quietCheck.checked;});
     const message = h('div',{role:'alert'});
     const backlog = (presence?.notifications ?? []).filter(n => n.status === 'pending');
     const drawer = openDrawer({title:'简报与离场通知',body:[
@@ -58,9 +67,12 @@ export function createFollowUpCard({ api, store }) {
       h('div',{class:'form-row'},Field({label:'早间时间',control:morning}),Field({label:'晚间时间',control:evening})), interval,
       Field({label:'间隔（小时）',control:hours}),
       h('div',{class:'form-row'},Field({label:'时段开始',control:start}),Field({label:'时段结束',control:end})),away,
+      quietToggle,quietTimes,
+      h('p',{class:'small muted'},'免打扰按简报时区生效。时段结束后，仍待回答的飞书提问卡才会提醒。'),
       h('p',null,`待路由通知 ${backlog.length} 条`),backlog.map(n => h('p',{class:'small'},n.reason)),message],
       footer:Button({label:'保存简报设置',kind:'primary',onClick:async()=>{
-        try { briefing = await api.put('/briefing/settings',{timezone:zone.value,morning:morning.value,evening:evening.value,activeStart:start.value,activeEnd:end.value,intervalHours:Number(hours.value),intervalEnabled:interval.querySelector('input').checked,awayNotifications:away.querySelector('input').checked});drawer.close();await load(); }
+        if(quietCheck.checked && (!quietStart.reportValidity() || !quietEnd.reportValidity())) return;
+        try { briefing = await api.put('/briefing/settings',{timezone:zone.value,morning:morning.value,evening:evening.value,activeStart:start.value,activeEnd:end.value,intervalHours:Number(hours.value),intervalEnabled:interval.querySelector('input').checked,awayNotifications:away.querySelector('input').checked,decisionQuietHours:{enabled:quietCheck.checked,start:quietStart.value || quiet.start,end:quietEnd.value || quiet.end}});drawer.close();await load(); }
         catch(error){replace(message,Banner({tone:'danger',children:`保存失败：${error.message}`}));}
       }})});
   }

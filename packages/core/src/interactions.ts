@@ -66,7 +66,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
   store: Store;
   events: EventBus;
   publish?: (input: import('../../plugin-sdk/src/index.ts').EventInput) => unknown;
-  decide: (card: Card) => Decision;
+  decide: (card: Card, conversationQuestion: boolean) => Decision;
   answer: (card: Card, text: string) => Promise<void>;
   askAgent?: (handler: 'main_agent' | 'supervisor', card: Card) => Promise<string>;
 }) {
@@ -208,7 +208,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
     track(job);
   }
   return {
-    open(input: Input): Card {
+    open(input: Input, conversationQuestion = false): Card {
       active();
       if (!input || !['question', 'permission', 'plan', 'review'].includes(input.kind)) throw new InteractionError('无效的交互 kind');
       text(input.title, 'title');
@@ -220,7 +220,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       const now = new Date().toISOString();
       const card: Card = { ...fields, id: randomUUID(), version: 1, status: 'open', handler: 'user', layer: 'default',
         expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(), createdAt: now, updatedAt: now };
-      const decision = decide(structuredClone(card));
+      const decision = decide(structuredClone(card), conversationQuestion);
       if (!decision || !['rules', 'user', 'main_agent', 'supervisor'].includes(decision.handler) ||
         !['global', 'project', 'task', 'default'].includes(decision.layer) ||
         (decision.mode !== undefined && !['auto', 'suggest'].includes(decision.mode))) throw new InteractionError('无效的策略决定');

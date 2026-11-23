@@ -1,3 +1,5 @@
+import { createDecisionNudges, type DecisionNudgeCard } from './feishu-decision-nudges.ts';
+import { decisionQuietNow } from '../../../packages/core/src/decision-quiet-hours.ts';
 import { groupReadDelivery, type GroupReadService } from './feishu-group-read-delivery.ts';
 import { createGroupTaskReports } from './feishu-group-task-reports.ts';
 import { createGroupTasks } from './feishu-group-tasks.ts';
@@ -111,6 +113,8 @@ type TopicStamp = { todoId: string; grant: string; opening: boolean; sourceOpeni
 type Envelope = { topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
 type Routed = Route & Envelope & { envelopeId: string; replyReference?: { text: string; truncated: boolean } | { unavailable: true } };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
+type SentQuestion = DecisionNudgeCard & { questionId:string; version:number; inputId:string; navigation:string };
+const sentQuestions='feishu.sent-question-cards';
 type Runtime = { readyEpoch?: number; commandSubscription?: string; epoch: number; adapter?: FeishuBotAdapter; reason?: string; code: string; expires: number; operations: Promise<void> };
 const noDelivery = (message: string) => Object.assign(new Error(message), { delivery: 'no' as const });
 
@@ -1386,6 +1390,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       ...(bot.executorId ? { executorId: bot.executorId } : {}),
       ...(bot.groupChats ? { groupChats: structuredClone(bot.groupChats) } : {}),
       ...(bot.collaboration ? { collaboration: structuredClone(bot.collaboration) } : {}),
+      decisionNudgeMinutes: bot.decisionNudgeMinutes ?? 60,
       ...(bot.readGroup && { readGroup: true }),
       ...(bot.scope.kind === 'global' && { groupTaskReportDelayMinutes: bot.groupTaskReportDelayMinutes ?? 10 }),
       ownerDirectReply: bot.ownerDirectReply === true, requireConfirmation: bot.requireConfirmation, ...(bot.profile ? { profile: bot.profile } : {}),
@@ -2141,6 +2146,61 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     },
     send: sendTopicPost,
   });
+  const nudges=createDecisionNudges(app.store,()=>Date.now());
+  function liveQuestion(card:SentQuestion,bot:FeishuBotSettings,paired:Owner) {
+    if(!paired.senderId || groupReadBinding(bot,paired)!==card.binding ||
+      groupTasks.recalled(bot.id,bot.appId,paired.chatId,card.messageId) || !privateTurn(bot,paired,card.inputId)) return;
+    const cap=app.store.get<CardNavigation>('feishu.card.navigation',card.navigation);
+    if(!cap || cap.botId!==bot.id || cap.appId!==bot.appId || cap.revision!==bot.revision ||
+      cap.owner.chatId!==paired.chatId || cap.owner.senderId!==paired.senderId || cap.expiresAt<=Date.now())return;
+    const q=app.store.get<Card>('interactions',card.questionId);
+    if(q?.kind!=='question' || q.status!=='open' || q.handler!=='user' || q.version!==card.version ||
+      !(Date.parse(q.expiresAt)>Date.now()) || app.store.get<{inputId:string}>('interaction-origins',q.id)?.inputId!==card.inputId) return;
+    if(q.runId && app.store.get<Run>('runs',q.runId)?.status!=='running')return;
+    if(q.projectId && (!app.store.get<Project>('projects',q.projectId) || app.store.get<Project>('projects',q.projectId)?.archivedAt))return;
+    return q;
+  }
+  async function sweepDecisionNudges(onlyBot?:string) {
+    if(closed || !pluginEnabled())return;
+    // Six days is the largest delay. The ledger drops nudges a day past due.
+    const oldest=Date.now()-7*86400000;
+    const cards=app.store.list<SentQuestion>(sentQuestions).filter(card=>{
+      if(Date.parse(card.sentAt)>=oldest)return true;
+      app.store.remove?.(sentQuestions,digest([card.botId,card.binding,card.messageId]));
+      return false;
+    });
+    for(const bot of settings.list()){
+      if((onlyBot && bot.id!==onlyBot) || bot.archivedAt || !bot.enabled || bot.scope.kind!=='global')continue;
+      const paired=owner(bot);
+      if(!paired?.senderId)continue;
+      const binding=groupReadBinding(bot,paired), after=bot.decisionNudgeMinutes ?? 60;
+      const due=nudges.scan({botId:bot.id,binding,afterMinutes:after,quiet:decisionQuietNow(app.store,new Date()),
+        cards:cards.filter(card=>card.botId===bot.id && card.binding===binding && liveQuestion(card,bot,paired))});
+      for(const card of due){
+        const state=runtime(bot.id),epoch=state.epoch,adapter=state.adapter;
+        if(!adapter || state.readyEpoch!==epoch || !active(bot.id,epoch,bot.revision) || !adapter.status().connected)continue;
+        const question=liveQuestion(card,bot,paired);
+        if(!question)continue;
+        const claim=nudges.claim(card,after,decisionQuietNow(app.store,new Date()));
+        if(!claim)continue;
+        const guard=()=>{
+          const now=current(bot.id),ownerNow=owner(now);
+          if(!active(bot.id,epoch,bot.revision) || state.adapter!==adapter || !ownerNow || !liveQuestion(card,now,ownerNow) ||
+            (now.decisionNudgeMinutes ?? 60)!==after || decisionQuietNow(app.store,new Date()))
+            throw noDelivery('问题卡片或提醒设置已变化。');
+        };
+        const title=Array.from(question.title.trim().split(/[\r\n]/,1)[0] ?? '').slice(0,100).join('');
+        try{
+          await sendTaskMessage(bot,adapter,paired.chatId,title?'仍在等待你回答：'+title:'这张问题卡片仍在等待你回答。',card.messageId,claim.key,guard,undefined,true);
+          nudges.finish(card,claim.attempt,'sent');
+        }catch(error){
+          const failure=error as {delivery?:string;retryable?:boolean};
+          nudges.finish(card,claim.attempt,isFeishuMessageGone(error)?'refused':failure?.delivery==='no' ?
+            (failure.retryable?'retryable':'refused') : 'unknown');
+        }
+      }
+    }
+  }
   let reportTimer: ReturnType<typeof setInterval> | undefined;
   const sweepReports = () => { if (!closed) void taskReports.sweep().catch(error => { if (!closed) app.events.publish('feishu.changed', { reason: redact(error) }); }); };
   async function receive(bot: FeishuBotSettings, epoch: number, text: string, source: Parameters<FeishuOptions['onMessage']>[1]) {
@@ -2762,8 +2822,24 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           paired?.senderId && paired.chatId === target) {
         const q = app.store.get<Card>('interactions',stamp.questionId);
         if (q?.kind === 'question' && q.handler === 'user' && q.status === 'open' && Date.parse(q.expiresAt) > Date.now()) {
-          const form = questionForm(q,navigation(bot,paired,entry.id)!);
-          if (Buffer.byteLength(JSON.stringify(form)) <= 24000) context.card = form;
+          const navigationId=navigation(bot,paired,entry.id)!;
+          const form = questionForm(q,navigationId);
+          if (Buffer.byteLength(JSON.stringify(form)) <= 24000) {
+            context.card = form;
+            const inputId=entry.replyTo,binding=groupReadBinding(bot,paired);
+            if(inputId && privateTurn(bot,paired,inputId)){
+              const previous=context.onSent;
+              context.onSent=(messageId,type)=>{
+                previous?.(messageId,type);
+                if(!messageId?.trim() || type!=='interactive')return;
+                const key=digest([bot.id,binding,messageId]);
+                if(!app.store.get(sentQuestions,key)) app.store.put(sentQuestions,key,{
+                  botId:bot.id,binding,decisionKey:'question:'+q.id+':'+q.version,messageId,sentAt:new Date().toISOString(),
+                  questionId:q.id,version:q.version,inputId,navigation:navigationId
+                } satisfies SentQuestion);
+              };
+            }
+          }
         }
       }
       if (stamp?.command && key === 'feishu-command:feedback:' + stamp.command) {
@@ -2796,8 +2872,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       } else if (stamp?.chatProject && stamp.platformReplyTo) {
         const binding = app.store.get<{projectId:string}>('feishu.chat-target',digest([bot.id,target,stamp.platformReplyTo]));
         const previous = context.onSent;
-        context.onSent = messageId => {
-          previous?.(messageId);
+        context.onSent = (messageId,type) => {
+          previous?.(messageId,type);
           if (binding?.projectId === stamp.chatProject) app.store.put('feishu.chat-target',digest([bot.id,target,messageId]),binding);
         };
       } else if (context.presentation && bot.scope.kind === 'global' && paired?.senderId && paired.chatId === target) {
@@ -2806,16 +2882,16 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         if (targetProjectId) {
           const previous = context.onSent;
           const binding = { projectId: targetProjectId, revision: bot.revision, senderId: paired.senderId, expiresAt: Date.now() + 7 * 24 * 3600 * 1000 };
-          context.onSent = messageId => {
-            previous?.(messageId);
+          context.onSent = (messageId,type) => {
+            previous?.(messageId,type);
             app.store.put('feishu.chat-target', digest([bot.id, target, messageId]), binding);
           };
         }
       }
       if (entry.eventKey.startsWith('feishu-reply:') && !context.card && !stamp?.relay && !stamp?.resultRelayEntryId && !stamp?.command) {
         const previous = context.onSent;
-        context.onSent = messageId => {
-          previous?.(messageId);
+        context.onSent = (messageId,type) => {
+          previous?.(messageId,type);
           if (entry.replyTo && paired && privateTurn(bot, paired, entry.replyTo))
             app.store.put('feishu.stop-references', stopReference(bot, target, messageId), entry.replyTo);
           app.store.put('feishu.bot.reply-references', digest([bot.id, bot.appId, bot.revision, target, messageId]),
@@ -3084,6 +3160,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const previous = settings.read(id); const scope = validateScope(input.scope ?? previous.scope);
       stampExisting(previous);
       const bot = settings.write(id, { ...input, scope }); if (bot.appSecret) secrets.add(bot.appSecret);
+      if (bot.revision === previous.revision) {
+        await sweepDecisionNudges(id);
+        return publicBot(bot);
+      }
       if (bot.appId !== previous.appId || !sameBotScope(bot.scope, previous.scope))
         app.store.put('feishu.group-read.generation', bot.id, randomUUID());
       await restart(id); return publicBot(bot);
@@ -3094,12 +3174,16 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       await Promise.all([deletionCleanup.recover(), ...settings.list().filter(bot => !bot.archivedAt).map(bot => restart(bot.id))]);
       if (!reportTimer && !closed) { reportTimer = setInterval(() => {
         sweepReports();
+        const sweep=sweepDecisionNudges();
+        tasks.add(sweep);
+        void sweep.catch(error=>{if(!closed)app.events.publish('feishu.changed',{reason:redact(error)});}).finally(()=>tasks.delete(sweep));
         void Promise.all([topicReceipts.retryReady(), topicTurnResults.sweep()]).catch(error => { if (!closed) app.events.publish('feishu.changed', { reason: redact(error) }); });
       }, 60_000); reportTimer.unref(); }
       if (!closed) topicPosts.recover();
       sweepReports();
       if (!closed) await topicReceipts.sweep();
       if (!closed) await topicTurnResults.sweep();
+      if (!closed) await sweepDecisionNudges();
     },
     async close() {
       if (closed) return; closed = true;
@@ -3112,7 +3196,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       await Promise.allSettled([...runtimes.values()].map(state => state.adapter?.close()));
       await Promise.allSettled([pinDrain, deletionDrain, reportDrain, receiptDrain, topicPostDrain, completionDrain, turnDrain, ...tasks, ...inboxJobs.values(), ...[...relayJobs.values()].map(item => item.job)]);
     },
-    send, dispatchInbox, relay,
+    sweepDecisionNudges, send, dispatchInbox, relay,
     async collect(id: string) {
       const bot = current(id), state = runtime(id), epoch = state.epoch, adapter = state.adapter;
       if (!adapter) throw noDelivery('机器人尚未连接');

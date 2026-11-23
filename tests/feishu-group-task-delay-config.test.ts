@@ -29,3 +29,23 @@ test('群任务预览时长兼容旧配置，保留零值并拒绝非法值', as
   assert.equal(reopened.write(global.id, { scope: { kind: 'unmarked' } }).groupTaskReportDelayMinutes, undefined);
   assert.equal(reopened.write(global.id, { scope: { kind: 'global' } }).groupTaskReportDelayMinutes, 10);
 });
+
+test('调整提醒保留原卡版本，变更身份失效原卡，并支持旧配置和关闭提醒', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-nudge-setting-'));
+  t.after(() => rm(dir, { recursive:true, force:true }));
+  const store = createFeishuBotConfig(dir);
+  const bot = store.write(undefined, { appId:'cli_example', name:'合成机器人', scope:{ kind:'global' } });
+  const path = join(dir,'bots.json');
+  const [legacy] = JSON.parse(await readFile(path,'utf8'));
+  delete legacy.decisionNudgeMinutes;
+  await writeFile(path, JSON.stringify([legacy]));
+  const reopened = createFeishuBotConfig(dir);
+  assert.equal(reopened.read(bot.id).decisionNudgeMinutes, 60);
+  for (const invalid of [-1, 8641, 0.5, '60', null])
+    assert.throws(() => reopened.write(bot.id,{ decisionNudgeMinutes: invalid as number }), /整数分钟/);
+  const disabled = reopened.write(bot.id,{ decisionNudgeMinutes:0, groupChats:[], collaboration:{peerBotIds:[]} });
+  assert.equal(disabled.revision, bot.revision);
+  assert.equal(createFeishuBotConfig(dir).read(bot.id).decisionNudgeMinutes, 0);
+  const moved = reopened.write(bot.id,{ decisionNudgeMinutes:8640, scope:{kind:'unmarked'} });
+  assert.equal(moved.revision, bot.revision+1);
+});

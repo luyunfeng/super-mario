@@ -43,6 +43,15 @@ export function createBotMailboxesUI({ api, element, getState, onChanged, showRe
   const confirmation = field(form, 'requireConfirmation', '处理前需要人工确认'); confirmation.type = 'checkbox'; confirmation.checked = true;
   const direct = field(form, 'ownerDirectReply', '主机器人直接处理已配对主人的私聊'); direct.type = 'checkbox'; direct.parentElement.classList.add('checkbox');
   const readSettings = node('div', undefined, 'stack');
+  const decisionNudge = field(readSettings, 'decisionNudgeMinutes', '待决定提醒等待时长', 'select');
+  function setDecisionNudge(minutes = 60) {
+    const choices = [...new Set([0, 15, 30, 60, 120, 240, 480, minutes])].sort((a, b) => a - b);
+    decisionNudge.value = '';
+    options(decisionNudge, choices.map(n => [String(n), n === 0 ? '关闭' : n % 60 === 0 ? (n / 60) + ' 小时' : n + ' 分钟']));
+    decisionNudge.value = String(minutes);
+  }
+  setDecisionNudge();
+  readSettings.append(node('p', '全局机器人私聊发出的提问卡，如果主人尚未作答，会在原卡下提醒一次。', 'muted'));
   const readGroup = field(readSettings, 'readGroup', '允许已配对主人在群内读群');
   readGroup.type = 'checkbox'; readGroup.parentElement.classList.add('checkbox');
   readSettings.append(node('p', '在机器人所在群明确 @ 本机器人，发送「/读群 总结本群的待办」或「/read」。结果回复在原消息下，群成员可见。此开关适用于机器人所在的所有群。', 'muted'));
@@ -203,7 +212,7 @@ export function createBotMailboxesUI({ api, element, getState, onChanged, showRe
   relayTarget.addEventListener('change', () => { relayChat.value = ''; syncRelay(); });
   draftBot.addEventListener('change', () => { target.value = ''; render(); });
   function clearBotForm() {
-    editingId = null; form.reset(); secret.value = ''; confirmation.checked = true;
+    editingId = null; form.reset(); setDecisionNudge(); secret.value = ''; confirmation.checked = true;
     executor.value = ''; groups.replaceChildren(); syncPeers([]); advanced.open = false;
     formTitle.textContent = '添加机器人'; scopeFields(); sync();
   }
@@ -213,7 +222,7 @@ export function createBotMailboxesUI({ api, element, getState, onChanged, showRe
     for (const group of bot.groupChats || []) addGroup(group);
     advanced.open = !!bot.groupChats?.length || !!bot.collaboration?.peerBotIds.length;
     executor.value = ''; options(executor, [[bot.executorId || '', '原绑定执行者已不可用']], '不绑定执行者'); executor.value = bot.executorId || '';
-    name.value = bot.name; scope.value = bot.scope.kind;
+    name.value = bot.name; scope.value = bot.scope.kind; setDecisionNudge(bot.decisionNudgeMinutes);
     project.value = bot.scope.projectId || ''; render(); todo.value = bot.scope.todoId || '';
     appId.value = bot.appId; secret.value = ''; confirmation.checked = bot.requireConfirmation; direct.checked = !!bot.ownerDirectReply; readGroup.checked = bot.readGroup === true; reportDelay.value = String(bot.groupTaskReportDelayMinutes ?? 10); enabled.checked = bot.enabled;
     formTitle.textContent = `编辑机器人：${bot.name}`; form.scrollIntoView({ block: 'nearest' }); sync();
@@ -308,6 +317,7 @@ export function createBotMailboxesUI({ api, element, getState, onChanged, showRe
       const minutes = reportDelay.valueAsNumber;
       if (!Number.isInteger(minutes) || minutes < 0 || minutes > 60) { error.textContent = '群任务回报预览时长须为 0 至 60 的整数分钟。'; return; }
       body.groupTaskReportDelayMinutes = minutes;
+      body.decisionNudgeMinutes = Number(decisionNudge.value);
     }
     if (!appId.value.trim() || (!editingId && !secret.value.trim())) { error.textContent = '手动接入需要应用标识和应用密钥。'; return; }
     body.executorId = executor.value;
