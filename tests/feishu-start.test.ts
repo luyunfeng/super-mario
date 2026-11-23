@@ -102,13 +102,15 @@ test('飞书 /开工 预填目标，主人提交后只派发一次，同一执�
   assert.equal((await f.webRuns()).length, 0);
   assert.ok(form.elements.some(item => item.name === 'model'));
   const selected = { ...f.values, model: 'fixture-model' };
-  f.click(form.submit, selected);
+  const receipt = f.click(form.submit, selected);
+  assert.match(JSON.stringify(receipt.card), /指定模型：fixture-model/);
   f.click(form.submit, selected);
   await t.waitFor(async () => assert.ok((await f.webRuns()).some(run => run.sessionId === 'fixture-session-1')));
   const matches = (await f.webRuns()).filter(run => run.prompt === f.values.prompt);
   assert.equal(matches.length, 1);
   assert.equal(matches[0].model, 'fixture-model');
   assert.equal(f.starts[0].model, 'fixture-model');
+  await t.waitFor(() => assert.ok(f.sent.some(entry => entry.text.includes(matches[0].id) && entry.text.includes('指定模型：fixture-model'))));
   assert.equal(matches[0].status, 'running');
   assert.equal(matches[0].executionMode, 'interactive');
   assert.equal(matches[0].machineId, f.machine.id);

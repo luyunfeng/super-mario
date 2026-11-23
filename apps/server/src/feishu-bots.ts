@@ -564,7 +564,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       startStateChanged(run);
       const text = (executor.mode === 'demo' ? '演示执行已登记 ' : '已登记执行 ') + run.id + '。引用本卡发送 /status 可查看该执行的进展。';
       const buttons = cardButtons([{ label: '查看执行', route: 'projects/' + encodeURIComponent(run.projectId ?? 'all') + '/runs/' + encodeURIComponent(run.id) }], webBase && webBase + '/');
-      return { toast: { type: 'success', content: text }, card: { type: 'raw', data: cardDocument('执行已登记', [{ tag: 'div', text: cardPlain(text) }, ...buttons]) } };
+      return { toast: { type: 'success', content: text }, card: { type: 'raw', data: cardDocument('执行已登记', [{ tag: 'div', text: cardPlain([text, run.model && '指定模型：' + run.model].filter(Boolean).join('\n')) }, ...buttons]) } };
     } catch (error) { return toast('error', redact(error)); }
   }
   function startStateChanged(run: Run) {
@@ -603,7 +603,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const eventKey = 'feishu-dashboard:start-state:' + run.id + ':' + run.status;
     if (sessionReads.has(eventKey) || app.mailboxes.list().some(entry => entry.botId === bot.id && entry.eventKey === eventKey)) return;
     const text = run.status === 'running' ? '执行机已返回会话标识，执行尚在进行。' : run.status === 'failed' ? '执行启动或运行失败。' : '执行结果未知，未自动重派。';
-    const detail = [text, '执行 ' + run.id, run.status !== 'running' && publicText(run.error, 240)].filter(Boolean).join('\n');
+    const detail = [text, '执行 ' + run.id, run.model && '指定模型：' + run.model, run.status !== 'running' && publicText(run.error, 240)].filter(Boolean).join('\n');
     const card = cardDocument('执行回执', [{ tag: 'div', text: cardPlain(detail) }, ...cardButtons([{ label: '查看执行',
       route: 'projects/' + encodeURIComponent(run.projectId ?? 'all') + '/runs/' + encodeURIComponent(run.id) }], webBase && webBase + '/')]);
     const job = (async () => {
