@@ -426,7 +426,7 @@ test('交办依据显示原始登记与各轮标准，分支隔离并在重连�
   const panel = page.locator('details[aria-label="交办依据"]');
   const [loaded] = await Promise.all([
     page.waitForResponse(r => new URL(r.url()).pathname === '/api/v1/todos/'+child.id+'/brief'),
-    panel.locator('summary').click()
+    panel.locator(':scope > summary').click()
   ]);
   assert.equal(new URL(loaded.url()).searchParams.get('expectedProjectId'),todo.projectId);
   await expect(panel).toContainText('主人在 Web 填写');
@@ -447,8 +447,8 @@ test('交办依据显示原始登记与各轮标准，分支隔离并在重连�
   await expect(panel).toContainText('后来修改标题');
   await expect(panel).not.toContainText('主人在 Web 填写');
   recordTodoOrigin(app.store,root,'assistant',{id:'source-fixture',conversationId:'main',text:'按合成批次核对。'});
-  await panel.locator('summary').click();
-  await panel.locator('summary').click();
+  await panel.locator(':scope > summary').click();
+  await panel.locator(':scope > summary').click();
   await expect(panel).toContainText('助手登记');
   await expect(panel).toContainText('交办时的原话');
   await expect(panel).toContainText('按合成批次核对。');
@@ -466,14 +466,14 @@ test('飞书交办标明正文已去除命令和机器人点名，仅展示服�
   }}));
   await page.goto(new URL('/#projects/'+todo.projectId+'/todos/detail/'+todo.id,page.url()).toString());
   const panel = page.locator('details[aria-label="交办依据"]');
-  await panel.locator('summary').click();
+  await panel.locator(':scope > summary').click();
   await expect(panel).toContainText('主人在飞书交办');
   await expect(panel).toContainText('交办正文摘录（已去除命令和机器人点名）');
   await expect(panel.getByText(requestText,{exact:true})).toBeVisible();
   await expect(panel).not.toContainText('交办时的原话');
   showExcerpt = false;
-  await panel.locator('summary').click();
-  await panel.locator('summary').click();
+  await panel.locator(':scope > summary').click();
+  await panel.locator(':scope > summary').click();
   await expect(panel).toContainText('独立登记备注');
   await expect(panel).not.toContainText('交办正文摘录');
   await expect(panel).not.toContainText(requestText);

@@ -21,6 +21,7 @@ import { createReplyTracking } from './reply-tracking.ts';
 import { createWorkDecisionService } from './work-decision-service.ts';
 import { createAgentSessions, nativeResumeSpec, nativeResultSources } from './agent-sessions.ts';
 import { executionProgress } from './execution-progress.ts';
+import { createRunScopes, initialRunCriteria, type RunScopeChange, type RunScopeSource } from './run-scope.ts';
 import { recordTodoOrigin, todoBrief, type TodoOriginSource } from './todo-brief.ts';
 import { todoLineage } from './todo-lineage.ts';
 import { createTodoDecisions } from './todo-decisions.ts';
@@ -142,6 +143,44 @@ export async function createWorkbench(config: AppConfig) {
     if (input.conversationId.startsWith('bot:') && !configuredBots().some(bot => input.conversationId.startsWith(`bot:${bot.id}:`))) throw new InputError('机器人来源已失效', 403);
     assertBotInput(input);
   } });
+  const runScopes = createRunScopes(store);
+  let ownerScopeRequest: (input:Message)=>boolean = () => false;
+  function reviseScope(id:string, args: Record<string,unknown>, source:RunScopeSource) {
+    const scope = runScopes.revise(id,args as unknown as RunScopeChange,source);
+    changed('runs.changed',{id});
+    return scope;
+  }
+  function assistantRunScope(args:Record<string,unknown>,write=false): Json {
+    const actor = currentAgentInput();
+    if (!actor || actor.role !== 'user' || actor.todoId) throw new InputError('需要主人主对话或项目对话',403);
+    assertBotInput(actor);
+    const id = requiredText(args.runId,'执行标识');
+    const scope = runScopes.read(id);
+    if (actor.projectId && actor.projectId !== scope.projectId) throw new InputError('执行不属于当前项目',403);
+    const web = actor.conversationId === 'main' || (actor.projectId && actor.conversationId === 'project:'+actor.projectId+':work');
+    if (!web && !['global','project'].includes(botForConversation(configuredBots(),actor.conversationId,undefined,sourceThread(actor))?.scope.kind ?? ''))
+      throw new InputError('当前会话没有查看执行标准的权限',403);
+    function visibleScope(value: typeof scope): Json {
+      return {...value, history:value.history.map(event => {
+        const id = event.source.messageId;
+        return id && store.get<Message>('messages',id)?.conversationId !== actor!.conversationId
+          ? {...event,source:{kind:event.source.kind}} : event;
+      })} as unknown as Json;
+    }
+    if (!(web && actor.directWebInput) && !ownerScopeRequest(actor)) throw new InputError('需要已核实的主人消息',403);
+    if (!write) return visibleScope(scope);
+    if (actor.readOnly || actor.replyTo || (actor.origin && actor.origin !== 'user')) throw new InputError('需要主人本轮直接确认',403);
+    // A quoted suggestion, a negation or an unrelated owner turn cannot authorize this write.
+    const standard = requiredText(args.doneWhen,'新标准');
+    const reason = requiredText(args.reason,'调整原因');
+    const defaultReason = '主人明确调整验收标准';
+    const minutes = args.expectMinutes === undefined ? '' : '\n预计分钟：' + args.expectMinutes;
+    const forms = ['修改执行 ' + id + ' 的验收标准为\n', '把执行 ' + id + ' 的验收标准改为 '];
+    const exact = forms.some(prefix => [prefix + standard + '\n原因：' + reason + minutes,
+      ...(reason === defaultReason ? [prefix + standard + minutes] : [])].includes(actor.text.trim()));
+    if (!exact) throw new InputError('请主人单独发送「把执行 ' + id + ' 的验收标准改为 完整新标准」，可另起一行填写「原因：…」或「预计分钟：…」',403);
+    return visibleScope(reviseScope(id,args,{kind:'assistant',messageId:actor.id}));
+  }
   const todoDecisions = createTodoDecisions(store, workDecisions);
   function renameRunWorktree(id: string, input: Record<string, unknown>) {
     if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
@@ -346,7 +385,7 @@ export async function createWorkbench(config: AppConfig) {
       const scoped = pinChannelTask(input, channelTaskScope(source));
       return dispatch({ ...scoped, conversationId: source?.conversationId, sourceMessageId: source?.id,
         projectId: scoped.projectId ?? source?.projectId, todoId: scoped.todoId ?? source?.todoId }) as unknown as Json;
-    }, createTodo: registerChatTodo, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoDetail, todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRun: id => readRun(id), runObservations, inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => store.transaction(() => {
+    }, createTodo: registerChatTodo, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoDetail, todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRunScope: args => assistantRunScope(args), reviseRunScope: args => assistantRunScope(args,true), readRun: id => readRun(id), runObservations, inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => store.transaction(() => {
       const approval = approvals.propose(input as Parameters<typeof approvals.propose>[0]);
       const source = currentAgentInput();
       if (source && sourceThread(source)) store.put('approval.origins', approval.id, { conversationId: source.conversationId, sourceMessageId: source.id });
@@ -1374,14 +1413,15 @@ export async function createWorkbench(config: AppConfig) {
       const run = previous && store.get<Run>('runs', previous);
       if (run) {
         const requestHash = store.get<string>('dispatch-prompt-hashes', key);
+        const firstCriteria = initialRunCriteria(store,run);
         const samePrompt = requestHash ? createHash('sha256').update(prompt).digest('hex') === requestHash : run.prompt === prompt;
         if (!samePrompt || (requestedExecutor !== undefined && run.executorId !== requestedExecutor)
           || run.projectId !== projectId || run.conversationId !== conversationId
           || run.worktreeRunId !== worktreeRunId || (run.comparisonRunIds?.length ?? 1) !== copies || Boolean(run.worktree) !== isolated || (input.cwd !== undefined && (run.worktree?.source ?? run.cwd) !== input.cwd)
           || run.todoId !== todoId || run.sourceMessageId !== optionalText(input.sourceMessageId, '来源消息')
           || (input.executionMode !== undefined && run.executionMode !== input.executionMode)
-          || (input.doneWhen !== undefined && run.doneWhen !== input.doneWhen)
-          || (input.expectMinutes !== undefined && run.expectMinutes !== input.expectMinutes) || JSON.stringify(run.nativeResume) !== JSON.stringify(input.nativeResume)) throw new InputError('同一派发标识不能用于不同工作', 409);
+          || (input.doneWhen !== undefined && firstCriteria.doneWhen !== input.doneWhen)
+          || (input.expectMinutes !== undefined && firstCriteria.expectMinutes !== input.expectMinutes) || JSON.stringify(run.nativeResume) !== JSON.stringify(input.nativeResume)) throw new InputError('同一派发标识不能用于不同工作', 409);
         return run;
       }
     }
@@ -2019,6 +2059,8 @@ export async function createWorkbench(config: AppConfig) {
       return scopedAgents.post(requiredText(input.text, '协作回报'), scope, input.botId, context, thread);
     },
     readTopicTurnResult,
+    runScopes: {read:runScopes.read,reviseWeb:(id:string,args:Record<string,unknown>)=>reviseScope(id,args,{kind:'web'})},
+    setScopeRequestValidator(check: typeof ownerScopeRequest) { ownerScopeRequest = check; },
     setAgentInputOwnerValidator(validate: typeof validateAgentInputOwner) { validateAgentInputOwner = validate; },
     setBotsStatus(status: () => Json) { botsStatus = status; },
     setGroupReadRecords(handler: NonNullable<typeof groupReadRecords>) { groupReadRecords = handler; },

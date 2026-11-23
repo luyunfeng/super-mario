@@ -65,8 +65,8 @@ export { workspaceSplash } from './workspace-splash.ts';
 export { createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from './knowledge-source-reader.ts';
 export { fetchCalendarAgenda } from './feishu-calendar.ts';
 
-function tool(name: string, description: string, execute: Tool['execute'], properties: JsonObject = {}): Tool {
-  return { name, description, parameters: { type: 'object', properties, additionalProperties: false }, execute };
+function tool(name: string, description: string, execute: Tool['execute'], properties: JsonObject = {}, required?: string[]): Tool {
+  return { name, description, parameters: { type: 'object', properties, ...(required && {required}), additionalProperties: false }, execute };
 }
 
 function runCitation(run: Run) {
@@ -209,6 +209,8 @@ export interface SystemActions {
   listExecutors?(): Json;
   status?(id: string): Json;
   readRun?(id: string): Promise<Json>;
+  readRunScope?(args: Record<string, unknown>): Json;
+  reviseRunScope?(args: Record<string, unknown>): Json;
   runObservations?(id: string): { progress: ExecutionProgress | null; blockedBy: RunBlocker[] };
   todoDetail?(input: Record<string, unknown>): Json;
   todoHistory?(input: Record<string, unknown>): Json;
@@ -242,6 +244,17 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             ['work_decision_withdraw', actions.workDecisionWithdraw, '按当前用户明确要求撤回当前版本决定，保留审计记录。', { id: { type: 'string' }, version: { type: 'integer' } }],
             ['work_decision_reference', actions.workDecisionReference, '使用工作决定前核对id和version；已纠正、撤回、来源失效时拒绝旧引用。', { id: { type: 'string' }, version: { type: 'integer' } }],
           ] as const) if (action) context.contribute('tools', name, tool(name, description, async (args, signal) => { signal.throwIfAborted(); return action(args); }, properties));
+
+          if (actions.readRunScope) context.contribute('tools','read_run_scope',tool('read_run_scope',
+            '按已核实的 runId 读取初始和当前验收标准、版本及历次修改理由。',
+            async (args, signal) => { signal.throwIfAborted(); return actions.readRunScope!(args); }, {runId:{type:'string'}}, ['runId']));
+          if (actions.reviseRunScope) context.contribute('tools','revise_run_scope',tool('revise_run_scope',
+            '主人在当前消息独立提交指定 runId 和完整标准的确认句后，按刚读到的版本和旧标准登记。该操作只更新工作台记录。',
+            async (args, signal) => { signal.throwIfAborted(); return actions.reviseRunScope!(args); }, {
+              runId: {type:'string'}, expectedVersion: {type:'integer',minimum:0}, expectedDoneWhen: {type:'string',description:'原样传 read_run_scope 的 doneWhen'},
+              doneWhen: {type:'string',description:'主人本轮明确给出的新标准原文'}, reason: {type:'string',description:'据主人要求说明本次变更原因'},
+              expectMinutes: {type:'number',exclusiveMinimum:0,maximum:10080,description:'仅在主人明确调整预计时长时传分钟数'},
+            }, ['runId','expectedVersion','expectedDoneWhen','doneWhen','reason']));
 
           context.contribute('tools', 'work_dispatch', tool('work_dispatch', '异步派活，立即返回执行记录，不能把已派发当作完成。', async (args, signal) => {
             signal.throwIfAborted(); return actions.dispatch(args);

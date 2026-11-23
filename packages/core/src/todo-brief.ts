@@ -1,4 +1,5 @@
 import type { Store } from '../../plugin-sdk/src/index.ts';
+import { initialRunCriteria } from './run-scope.ts';
 import type { Run, Todo } from '../../protocol/src/index.ts';
 
 export type TodoOriginSource = {id:string; conversationId:string; text?:string};
@@ -67,9 +68,10 @@ export function todoBrief(store: Store, todoId: string, includeAncestors = true,
   const criteria: Criterion[] = [];
   function collect(id: string, run?: Run) {
     if (!run || run.id !== id || !run.todoId || !ids.has(run.todoId) || run.projectId !== projectId ||
-      typeof run.doneWhen !== 'string' || !run.doneWhen.trim()) return;
-    criteria.push({todoId:run.todoId, runId:id, createdAt:run.createdAt, doneWhen:run.doneWhen, executorId:run.executorId,
-      ...(typeof run.expectMinutes === 'number' && Number.isFinite(run.expectMinutes) && run.expectMinutes > 0 && {expectMinutes:run.expectMinutes})});
+      (run.doneWhen !== undefined && typeof run.doneWhen !== 'string') || (run.status !== 'running' && !run.doneWhen?.trim())) return;
+    const initial = initialRunCriteria(store, run);
+    criteria.push({todoId:run.todoId, runId:id, createdAt:run.createdAt, doneWhen:initial.doneWhen ?? '', executorId:run.executorId,
+      ...(typeof initial.expectMinutes === 'number' && Number.isFinite(initial.expectMinutes) && initial.expectMinutes > 0 && {expectMinutes:initial.expectMinutes})});
   }
   if (store.entries) {
     for (const {id,value} of store.entries<Run>('runs')) collect(id,value);

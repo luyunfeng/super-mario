@@ -1,4 +1,5 @@
 import { h, replace } from '../lib/dom.js';
+import { createRunScope } from './run-scope.js';
 import { Button } from '../ui/kit.js';
 
 const sources = {
@@ -16,6 +17,15 @@ export function createTodoBrief({ api, store, router, todo, close }) {
   const panel = h('details', { 'aria-label': '交办依据' }, h('summary', null, '交办依据'), body);
   let sequence = 0, signature, lastSnapshot, connection = store.view.connection;
   let ancestors = new Map();
+  const editors = new Map();
+  function runScope(row) {
+    if (!editors.has(row.runId)) editors.set(row.runId, createRunScope({api,runId:row.runId,projectId:todo.projectId,
+      valid:() => sameScope() && ancestors.has(row.todoId),
+      canEdit:() => !ancestors.get(row.todoId)?.completedAt && (!todo.projectId ||
+        store.view.snapshot.projects?.some(project => project.id === todo.projectId && !project.archivedAt)),
+      saved:() => { void store.refresh(); }}));
+    return editors.get(row.runId).panel;
+  }
   const sameScope = () => owner === api.draftOwner() && owner === store.view.snapshotOwner && !store.view.unauthorized &&
     store.view.snapshot?.todos?.some(item => item.id === todo.id && (item.projectId ?? null) === (todo.projectId ?? null));
   const paragraph = text => h('p', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, text);
@@ -25,7 +35,7 @@ export function createTodoBrief({ api, store, router, todo, close }) {
     const active = () => panel.open && panel.isConnected && panel.closest('dialog')?.open !== false &&
       stamp === sequence && sameScope();
     if (!active()) return;
-    body.textContent = '正在读取交办依据…';
+    if (!body.childElementCount) body.textContent = '正在读取交办依据…';
     try {
       const query = new URLSearchParams({ expectedProjectId: todo.projectId ?? '' });
       const { origin, criteria, reconstructed } = await api.get('/todos/' + encodeURIComponent(todo.id) + '/brief?' + query);
@@ -44,11 +54,13 @@ export function createTodoBrief({ api, store, router, todo, close }) {
         origin.sourceMessageId && h('div', { class: 'muted' }, '来源消息 · ' + origin.sourceMessageId)),
       h('section', { class: 'stack' }, h('h4', null, '各轮验收标准'), criteria.length ?
         h('ol', { class: 'stack' }, criteria.map(row => h('li', null,
-          paragraph(row.doneWhen),
+          paragraph(row.doneWhen || '首派时未登记验收标准。'),
           h('div', { class: 'muted' }, [ancestors.get(row.todoId)?.title, time(row.createdAt), row.executorId,
             Number.isFinite(row.expectMinutes) && '预计 ' + row.expectMinutes + ' 分钟'].filter(Boolean).join(' · ')),
-          h('a', { href: router.href('projects', todo.projectId ?? 'all', 'runs', row.runId), onclick: () => close?.() }, '来源执行 · ' + row.runId)))) :
+          h('a', { href: router.href('projects', todo.projectId ?? 'all', 'runs', row.runId), onclick: () => close?.() }, '来源执行 · ' + row.runId),runScope(row)))) :
         h('p', { class: 'muted' }, '尚未登记执行验收标准。')));
+      const ids = new Set(criteria.map(row => row.runId));
+      for (const [id, editor] of editors) { if (ids.has(id)) void editor.refresh(); else editors.delete(id); }
     } catch (error) {
       if (active()) replace(body, h('p', null, error.message), Button({ label: '重新读取交办依据', size: 'sm', onClick: load }));
     }
@@ -58,7 +70,7 @@ export function createTodoBrief({ api, store, router, todo, close }) {
   });
   function update(current) {
     if (!current || !sameScope()) {
-      ++sequence; panel.hidden = true; panel.open = false; replace(body); signature = lastSnapshot = undefined; return;
+      ++sequence; editors.clear(); panel.hidden = true; panel.open = false; replace(body); signature = lastSnapshot = undefined; return;
     }
     const reconnected = connection !== 'online' && store.view.connection === 'online';
     connection = store.view.connection;
@@ -73,8 +85,9 @@ export function createTodoBrief({ api, store, router, todo, close }) {
       item = related.get(item.continuesTodoId);
     }
     const runs = store.view.snapshot.runs.filter(row => ancestors.has(row.todoId) && row.projectId === current.projectId);
-    const next = JSON.stringify([[...ancestors.values()].map(row => [row.id, row.title, row.notes, row.continuationReason]),
-      runs.map(row => [row.id, row.executorId, row.doneWhen, row.expectMinutes])]);
+    const next = JSON.stringify([[...ancestors.values()].map(row => [row.id, row.title, row.notes, row.continuationReason, row.completedAt]),
+      store.view.snapshot.projects?.find(project => project.id === todo.projectId)?.archivedAt,
+      runs.map(row => [row.id, row.executorId, row.status, row.doneWhen, row.expectMinutes])]);
     panel.hidden = false;
     if (next === signature && !reconnected) return;
     signature = next;

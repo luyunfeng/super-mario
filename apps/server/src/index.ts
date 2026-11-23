@@ -831,6 +831,14 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 202, await app.agent.post(input.text, 'main', { directWebInput:true, requestId: messageRequestId(req), ...(typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : {}), ...(input.readOnly === true ? { readOnly: true } : {}) }));
         }
         if (path === '/api/v1/runs' && method === 'POST') return json(res, 202, app.dispatch(await body(req), typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : undefined));
+        const runScope = path.match(/^\/api\/v1\/runs\/([^/]+)\/scope$/);
+        if (runScope && (method === 'GET' || method === 'POST')) {
+          const id = decodeURIComponent(runScope[1]!);
+          const input = method === 'POST' ? await body(req) : {expectedProjectId:url.searchParams.get('expectedProjectId') || null};
+          const scope = app.runScopes.read(id);
+          if (input.expectedProjectId !== (scope.projectId ?? null)) throw new InputError('执行所在项目已变化，请重新核对',409);
+          return json(res,200, method === 'GET' ? scope : app.runScopes.reviseWeb(id,input));
+        }
         const worktreeName = path.match(/^\/api\/v1\/runs\/([^/]+)\/worktree-name$/);
         if (worktreeName && method === 'PATCH')
           return json(res, 200, app.renameRunWorktree(decodeURIComponent(worktreeName[1]!), await body(req)));

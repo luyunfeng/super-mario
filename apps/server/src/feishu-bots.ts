@@ -3008,6 +3008,19 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   });
   return {
     validateAgentInputOwner,
+    ownerScopeRequest(input: Message) {
+      const route = app.store.get<Routed>('message.routes',input.id);
+      if (!route?.botId || !route.sourceMessageId || route.topic || route.groupTaskOrigin || route.dashboard) return false;
+      const bot = current(route.botId), paired = owner(bot);
+      if (!bot.enabled || !paired || !['global','project'].includes(bot.scope.kind) || !privateTurn(bot,paired,input.id)) return false;
+      const entry = app.mailboxes.list().find(row => row.id === route.envelopeId);
+      if (!entry || entry.botId !== bot.id || entry.direction !== 'inbox' || entry.origin?.kind !== 'direct' ||
+        entry.eventKey !== 'feishu-in:' + JSON.stringify([bot.id,bot.appId,route.sourceMessageId]) ||
+        entry.sourceMessageId !== route.sourceMessageId || entry.target !== paired.chatId || entry.text.trim() !== input.text) return false;
+      const stamp = app.store.get<Envelope>('feishu.bot.envelopes',entry.id);
+      const receipt = app.store.get<{id?:string;status:string}>('feishu.bot.dispatch',bot.id+':'+bot.appId+':'+entry.id);
+      return stamp?.revision === bot.revision && stamp.privateSenderId === paired.senderId && receipt?.id === input.id && receipt.status === 'completed';
+    },
     topicChats, todoThread, bindWorkerTopic, canUseScope, listGroupReads, privateThreads, requireThread, deletePrivateThread, privateThreadMetadata, updatePrivateThread, threadPreferenceKey, threadTagPreferences, threadOrder, listPrivateHistory,
     searchPrivateHistory(id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string) {
       const bot = current(id), paired = owner(bot);
