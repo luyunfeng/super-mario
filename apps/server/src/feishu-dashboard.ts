@@ -1,3 +1,4 @@
+import type { TodayBrief, TodaySection } from '../../../plugins/today-brief.ts';
 import type { FeishuBotsApp } from './feishu-bots.ts';
 import type { InboxItem, MachineInfo, Message, Project, Run, Todo } from '../../../packages/protocol/src/index.ts';
 import { publicText } from '../../../plugins/agent-progress-card.ts';
@@ -15,14 +16,58 @@ export function dashboardCommand(text: string) {
     case '工作台': case '/dashboard': case '/home': case '/工作台': case '/主页': return 'home';
     case '/tasks': case '/进展': case '/总览': return 'tasks';
     case '/inbox': case '/收件箱': return 'inbox';
+    case '/today': case '/今日': case '/今天': return 'today';
     case '/help': case '/帮助': return 'help';
   }
 }
 
 export function dashboardHelp(sessions: boolean) {
   const text = ['/home 或「工作台」：打开工作台', '/tasks 或 /进展：查看任务进展', '/inbox 或 /收件箱：查看收件',
-    ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
+    '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
   return { text, card: cardDocument('工作台命令', cardSection('在此私聊中发送', text)) };
+}
+
+export function todayDashboard(brief: TodayBrief | string, navigation: string) {
+  const elements: Record<string, unknown>[] = [], lines: string[] = [];
+  function section(title: string, text: string) {
+    elements.push(...cardSection(title, text));
+    lines.push(title + '\n' + text);
+  }
+  if (typeof brief === 'string') section('今日简报', brief);
+  else {
+    const today = brief.date;
+    section('今日简报', today + ' · ' + brief.timezone);
+    const clock = new Intl.DateTimeFormat('zh-CN', { timeZone: brief.timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: brief.timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+    function time(iso?: string) {
+      if (!iso || !Number.isFinite(Date.parse(iso))) return '';
+      const date = new Date(iso), local = day.format(date);
+      return (local === today ? '' : local + ' ') + clock.format(date);
+    }
+    const activity: Record<string, string> = { todo: '待办完成', completed: '执行结束', running: '正在执行', queued: '排队中' };
+    function facts(title: string, source: TodaySection) {
+      const count = (source.truncated ? '至少 ' : '') + source.total + ' 项';
+      const rows = source.items.slice(0, 3).map(item => {
+        const allDay = item.kind === 'calendar' && /^\d{4}-\d{2}-\d{2}$/.test(item.at);
+        const start = time(item.at), end = time(item.endAt);
+        const when = allDay ? '全天' : start && start + (end ? '–' + end : '');
+        return '• ' + [when, activity[item.kind], label(item.title), item.reason && label(item.reason, 80)].filter(Boolean).join(' · ');
+      });
+      if (source.total > rows.length || source.truncated) rows.push('仅显示部分记录。');
+      section(title, [count, ...rows].join('\n'));
+    }
+    facts('待你决定', brief.decisions);
+    facts('收件箱', brief.inbox);
+    facts('提及', brief.mentions);
+    facts('今日完成与执行结束', brief.completed);
+    facts('失败', brief.failed);
+    facts('当前执行', brief.running);
+    if (brief.calendar.available) facts('日历 · 已读取', brief.calendar);
+    else section('日历', '来源不可用 · ' + label(brief.calendar.reason || '当前未接入日历'));
+  }
+  lines.push('发送 /home 返回工作台。');
+  elements.push(...cardButtons([{ label: '返回工作台', value: { kind: 'workbench.navigate', navigation, view: 'home', page: 0 } }]));
+  return { text: lines.join('\n\n'), card: cardDocument('今日简报', elements) };
 }
 
 /** Owner-only, read-only views. Callback buttons refresh this card; URL buttons navigate to Web. */
@@ -69,6 +114,7 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
     Date.parse(card.expiresAt) > (options.now?.getTime() ?? Date.now())).sort((a,b) => a.createdAt.localeCompare(b.createdAt)) : [];
   if (view === 'home') {
     section('等你处理', waiting.length ? '等你拍板 · ' + waiting.length + ' 项\n' + waiting.slice(0, 3).map(a => '• ' + label(a.title)).join('\n') : '当前没有等你拍板的事。');
+    if (options.navigation) elements.push(...cardButtons([{ label: '今日简报', value: { kind: 'workbench.today', navigation: options.navigation } }]));
     if (questions.length) elements.push(...cardButtons([{label:'待回答的问题（' + questions.length + '）',
       value:{kind:'workbench.navigate',navigation:options.navigation,view:'questions',page:0}}]));
     if (waiting.length > 3) section('更多待决定', `还有 ${waiting.length - 3} 项，请打开主对话核对。`);

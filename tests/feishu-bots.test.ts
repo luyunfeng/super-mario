@@ -13,6 +13,7 @@ import { createInteractions } from '../packages/core/src/interactions.ts';
 import { createEventMailboxes } from '../packages/core/src/event-mailboxes.ts';
 import type { FeishuSendContext, FeishuOptions } from '../plugins/feishu.ts';
 import type { BotScope, MailboxEntry } from '../packages/protocol/src/bots.ts';
+import { readTodayBrief } from '../plugins/today-brief.ts';
 import type { Message } from '../packages/protocol/src/index.ts';
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 const source = (messageId: string, chatId = 'owner', senderId = 'human', chatType = 'p2p') => ({ messageId, chatId, senderId, chatType });
@@ -917,4 +918,76 @@ test('主人在工作台回答真实问题，保留版本检查和执行机送�
   assert.equal(f.store.get<{answeredBy:string}>('interactions',q.id)?.answeredBy,'user_feishu');
   assert.equal(f.posts.length,1);
   await service.close();
+});
+
+test('飞书主人私聊 /today 和主页按钮读取今日简报，去重并报告未授权日历与停用状态', async t => {
+  const f = fixture(t), bot = await f.add('TodayBrief', { kind: 'global' }, true);
+  const stamp = '2026-03-01T12:30:00.000Z';
+  const completed = { id: 'today-done', title: '已核对合成回执', notes: '', createdAt: stamp, updatedAt: stamp, completedAt: stamp };
+  f.store.put('todos', completed.id, completed);
+  const plugins = f.app.plugins!;
+  const list = plugins.list;
+  let enabled = true, reads = 0, calendarReady = false;
+  plugins.list = () => [...list(), { id: 'daily-brief', status: enabled ? 'active' : 'disabled', enabled }];
+  plugins.invocations!.use = async (name, input) => {
+    reads++;
+    assert.equal(name, 'daily-brief.today');
+    assert.deepEqual(input, {});
+    return readTodayBrief(f.store, {
+      todayBriefSources: () => ({ timezone: 'Asia/Shanghai', calendarIdentity: calendarReady ? 'local-calendar' : undefined,
+        decisions: [], inbox: [] }),
+      calendarAgenda: async () => ({ available: true, events: [{ eventId: 'local-all-day', summary: '合成全天安排',
+        startTime: '2026-03-01', endTime: '2026-03-02' }] }),
+    }, input, new AbortController().signal, Date.parse(stamp));
+  };
+  const receive = bot.instance.options.onMessage;
+  const human = (id: string) => ({ ...source(id), senderType: 'user' as const });
+  await receive('/today', human('unpaired'));
+  await bot.pair();
+  await receive('/今日', { ...human('foreign'), senderId: 'unrelated' });
+  await receive('/今天', { ...human('group'), chatType: 'group' });
+  await receive('/today', { ...human('bot'), senderType: 'bot' });
+  assert.equal(reads, 0);
+  const event = human('today-message');
+  await Promise.all([receive('/today', event), receive('/today', event)]);
+  assert.equal(reads, 1);
+  assert.equal(bot.instance.sent.length, 1);
+  const [target, fallback] = bot.instance.sent[0]!;
+  assert.equal(target, 'owner');
+  for (const detail of [fallback, JSON.stringify(bot.instance.contexts.at(-1)?.card)]) {
+    assert.match(detail, /今日简报/);
+    assert.match(detail, /2026-03-01/);
+    assert.match(detail, /Asia\/Shanghai/);
+    assert.ok(detail.includes(completed.title));
+    assert.match(detail, /来源不可用/);
+  }
+  type Button = { text: { content: string }; value: Record<string, unknown> };
+  const button = (card: unknown, label: string) => {
+    const { elements } = card as { elements: Array<{ actions?: Button[] }> };
+    const match = elements.flatMap(row => row.actions ?? []).find(row => row.text.content === label);
+    assert.ok(match);
+    return match.value;
+  };
+  const click = (value: Record<string, unknown>, operatorId = 'human') => bot.instance.options.onCardAction!({
+    value, operatorId, chatId: 'owner', messageId: 'local-platform-card',
+  });
+  const home = click(button(bot.instance.contexts.at(-1)?.card, '返回工作台')) as {card: {data:unknown}};
+  const refresh = button(home.card.data, '今日简报');
+  click(refresh, 'unrelated');
+  assert.equal(reads, 1);
+  f.store.put('todos', completed.id, { ...completed, title: '新的合成验收标题' });
+  calendarReady = true;
+  click(refresh);
+  await t.waitFor(() => assert.equal(bot.instance.sent.length, 2));
+  const refreshed = bot.instance.sent.at(-1)![1];
+  assert.match(refreshed, /新的合成验收标题/);
+  assert.match(refreshed, /全天[^\n]*合成全天安排/);
+  assert.doesNotMatch(refreshed, /08:00/);
+  assert.equal(reads, 2);
+
+  enabled = false;
+  await receive('/今天', human('disabled'));
+  assert.match(bot.instance.sent.at(-1)![1], /每日简报插件已停用/);
+  assert.equal(reads, 2);
+  assert.equal(f.posts.length, 0);
 });

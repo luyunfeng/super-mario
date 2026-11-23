@@ -1,9 +1,10 @@
+import type { TodayBrief } from '../../../plugins/today-brief.ts';
 import { resumeForm, sessionCard, sessionCardSnapshot, type SessionList, type SessionCardSnapshot } from './feishu-session-card.ts';
 import { createHash, randomInt } from 'node:crypto';
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
 import { chooseCommandTarget, createCommandMentionEvidence, type CommandCandidate, type CommandClassifier, type CommandIdentity, type CommandRoute, type CommandTarget } from './feishu-command-routing.ts';
 import type { Card } from '../../../packages/core/src/interactions.ts';
-import { buildFeishuDashboard, dashboardCommand, dashboardHelp, questionForm, type DashboardView } from './feishu-dashboard.ts';
+import { buildFeishuDashboard, dashboardCommand, dashboardHelp, todayDashboard, questionForm, type DashboardView } from './feishu-dashboard.ts';
 import { createAgentProgressStream } from './agent-progress-stream.ts';
 import { buildAgentProgressCard } from '../../../plugins/agent-progress-card.ts';
 import { buildFeishuMessageCard } from './feishu-cards.ts';
@@ -40,7 +41,7 @@ export interface FeishuBotsApp {
   todos?: () => Todo[];
   plugins?: {
     list(): Array<{ id: string; enabled: boolean; status: string }>;
-    invocations?: { invoke(name: 'channel.send', input: Json, action: (input: Json) => Promise<Json>): Promise<Json> };
+    invocations?: { use?(name: string, input: Json, options?: { timeoutMs?: number }): Promise<Json>; invoke(name: 'channel.send', input: Json, action: (input: Json) => Promise<Json>): Promise<Json> };
   };
   effects?: { perform<T>(input: { key: string; kind: string; target: string; summary: string; content?: Json; run(): Promise<T> }): Promise<T> };
 }
@@ -179,10 +180,42 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     sessionReads.set(jobKey,job);
     return job;
   }
+  const briefReads = new Map<string, Promise<void>>();
+  function showToday(bot: FeishuBotSettings, epoch: number, paired: Owner, messageId: string) {
+    const eventKey = 'feishu-dashboard:today:' + JSON.stringify([bot.id, bot.appId, messageId]);
+    const running = briefReads.get(eventKey);
+    if (running) return running;
+    const valid = () => active(bot.id, epoch, bot.revision) && owner(bot)?.chatId === paired.chatId && owner(bot)?.senderId === paired.senderId;
+    const enabled = () => app.plugins?.list().some(plugin => plugin.id === 'daily-brief' && plugin.status === 'active');
+    const job = (async () => {
+      const previous = app.mailboxes.list().find(entry => entry.botId === bot.id && entry.eventKey === eventKey && entry.direction === 'outbox');
+      if (previous) {
+        if (previous.status === 'ready' && valid()) await app.mailboxes.process(previous.id, previous.version);
+        return;
+      }
+      const grant = navigation(bot, paired, eventKey)!;
+      const disabled = '每日简报插件已停用。';
+      let result: TodayBrief | string = disabled;
+      if (enabled()) {
+        try {
+          const service = app.plugins?.invocations;
+          result = service?.use ? await service.use('daily-brief.today', {}, { timeoutMs: 30_000 }) as unknown as TodayBrief : '今日简报服务不可用。';
+        } catch (error) { result = '今日简报读取失败 · ' + redact(error); }
+      }
+      if (!valid()) return;
+      const dashboard = todayDashboard(enabled() ? result : disabled, grant);
+      const entry = await put(bot, { direction: 'outbox', eventKey, title: '今日简报', text: dashboard.text,
+        target: paired.chatId, sourceMessageId: messageId, requiresConfirmation: false }, bot.scope,
+        { dashboard: { card: dashboard.card, owner: paired } });
+      if (entry.status === 'ready' && valid()) await app.mailboxes.process(entry.id, entry.version);
+    })().finally(() => briefReads.delete(eventKey));
+    briefReads.set(eventKey, job);
+    return job;
+  }
   function cardAction(bot: FeishuBotSettings, epoch: number, input: FeishuCardAction): Record<string, unknown> {
     const fail = { toast: { type: 'info', content: '卡片已过期或配对已改变，请在主人私聊重新发送「工作台」' } };
     const value = input.value;
-    if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || !['workbench.navigate','workbench.chat','workbench.sessions','workbench.readSessions','workbench.resumeForm','workbench.resumeSubmit','workbench.questionForm','workbench.answerQuestion'].includes(String(value.kind))
+    if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || !['workbench.today','workbench.navigate','workbench.chat','workbench.sessions','workbench.readSessions','workbench.resumeForm','workbench.resumeSubmit','workbench.questionForm','workbench.answerQuestion'].includes(String(value.kind))
       || typeof value.navigation !== 'string'
       || !input.messageId) return fail;
     const cap = app.store.get<CardNavigation>('feishu.card.navigation', value.navigation), paired = owner(bot);
@@ -218,6 +251,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       };
       void track(bot.id,reply()).catch(error=>report(bot.id,error));
       return {toast:{type:'info',content:'正在提交，送达结果会发到当前私聊'}};
+    }
+    if (value.kind === 'workbench.today') {
+      void track(bot.id, showToday(bot, epoch, paired, input.messageId)).catch(error => report(bot.id, error));
+      return { toast: { type: 'info', content: '正在读取今日简报，结果会发到当前私聊' } };
     }
     if (value.kind === 'workbench.readSessions') {
       if (!app.agentSessions) return fail;
@@ -695,6 +732,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (!active(bot.id, epoch, bot.revision) || !['p2p', 'group'].includes(source.chatType ?? '') || !source.chatId || !source.messageId || !text.trim()) return;
     let paired = owner(bot);
     const group = source.chatType === 'group';
+    const requested = dashboardCommand(text);
+    if (requested === 'today' && (group || source.senderType !== 'user')) return;
     if (group) {
       const command = commandGroup();
       if (command?.chatId === source.chatId) return commandInput(bot, epoch, text, source, command);
@@ -720,11 +759,16 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       }
       if (paired.chatId !== source.chatId || (paired.senderId && paired.senderId !== source.senderId)) return;
     }
+    if (requested === 'today') {
+      if (bot.scope.kind === 'global' && paired?.senderId && paired.senderId === source.senderId)
+        await showToday(bot, epoch, paired, source.messageId);
+      return;
+    }
     if (!group && paired?.senderId && source.senderId === paired.senderId && bot.scope.kind === 'global' && app.agentSessions && /^(CLI\s*会话|\/sessions)$/i.test(text.trim())) {
       await showSessionList(bot, epoch, paired, source.messageId);
       return;
     }
-    const view = !group && paired && bot.scope.kind === 'global' ? dashboardCommand(text) : undefined;
+    const view = !group && paired && bot.scope.kind === 'global' ? requested : undefined;
     if (view && paired) {
       const eventKey = `feishu-dashboard:${JSON.stringify([bot.id, bot.appId, source.messageId])}`;
       const dashboard = view === 'help' ? dashboardHelp(Boolean(app.agentSessions && paired.senderId))

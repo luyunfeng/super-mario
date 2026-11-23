@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test from 'node:test';
+import { chromium, expect } from '@playwright/test';
+import { startServer } from '../apps/server/src/index.ts';
+
+test('Web 今日简报读取工作台日期、真实待办与日历授权状态，并随插件停用关闭', async t => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'mario-today-web-'));
+  const token = 'today-browser-fixture';
+  const server = await startServer({ host: '127.0.0.1', port: 0, token, dataDir, demo: true });
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  t.after(async () => { await browser?.close(); await server.close(); await rm(dataDir, { recursive: true, force: true }); });
+  const now = new Date().toISOString();
+  server.app.store.put('todos', 'done-local', { id: 'done-local', title: '核对合成记录', createdAt: now, updatedAt: now, completedAt: now });
+  server.app.store.put('inbox', 'foreign', { id: 'foreign', source: 'feishu:other:person', title: '其他账号样例', tier: 'action', updatedAt: now });
+  const endpoint = server.url + '/api/v1/briefing/today';
+  assert.equal((await fetch(endpoint, { method: 'POST', body: '{}' })).status, 401);
+  browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  const page = await browser.newPage();
+  await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+  await page.goto(server.url + '/#agent?token=' + token);
+  await page.getByRole('button', { name: '今日简报', exact: true }).click();
+  const drawer = page.getByRole('dialog', { name: '今日简报' });
+  await expect(drawer).toContainText('待办已完成 · 核对合成记录');
+  await expect(drawer).toContainText('Asia/Shanghai');
+  await expect(drawer).toContainText('个人飞书账号未连接');
+  await expect(drawer).not.toContainText('其他账号样例');
+  const disabled = await page.request.post(server.url + '/api/v1/plugins/daily-brief', { headers: { authorization: 'Bearer ' + token }, data: { enabled: false } });
+  assert.ok(disabled.ok());
+  await expect(drawer).toBeHidden();
+  assert.equal((await fetch(endpoint, { method: 'POST', headers: { authorization: 'Bearer ' + token }, body: '{}' })).status, 503);
+});

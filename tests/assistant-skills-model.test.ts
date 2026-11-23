@@ -2815,3 +2815,52 @@ test('Web 和飞书项目助手按明确的 @路径直接读正文并说明截�
     assert.equal(server.app.store.list('runs').length, 0);
   } finally { await server.close(); }
 });
+
+test('Web 全局助手通过 today_brief 核对今日简报，项目和待办会话不暴露全局工具', async t => {
+  const id = 'today-brief-failed-run', projectTitle = '简报范围项目';
+  const { server, api, ask, requests } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      if (!req.tools.includes('today_brief')) return { role: 'assistant', content: '此轮没有全局简报工具。' };
+      assert.match(req.system, /today_brief/);
+      return call('today_brief', {}, 'read-today');
+    }
+    assert.equal(req.callId, 'read-today');
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    const brief = JSON.parse(raw);
+    assert.match(brief.date, /^\d{4}-\d{2}-\d{2}$/);
+    assert.ok(brief.timezone);
+    assert.equal(brief.calendar.available, false);
+    assert.ok(brief.calendar.reason);
+    const failed = brief.failed.items.find((item: {id:string}) => item.id === id);
+    assert.ok(failed);
+    assert.doesNotMatch(raw, /不应展示的合成执行全文/);
+    return { role: 'assistant', content: brief.date + ' ' + brief.timezone + '，有失败执行 ' + failed.id + '。日历未核实。' };
+  });
+  try {
+    const now = new Date().toISOString();
+    const run: Run = { id, executorId: 'local-fixture', conversationId: 'main', status: 'failed', prompt: '合成核对任务',
+      error: '合成执行失败', output: '不应展示的合成执行全文', createdAt: now, updatedAt: now };
+    server.app.store.put('runs', id, run);
+    assert.match(await ask('给我今天的全局工作简报。'), /有失败执行 today-brief-failed-run。日历未核实。/);
+    assert.deepEqual(requests.map(req => req.lastRole), ['user', 'tool']);
+    assert.deepEqual(server.app.store.get('runs', id), run);
+    const project = await api('/projects', { name: projectTitle });
+    const todo = await api('/todos', { title: '仅查本事项', projectId: project.id });
+    const path = '/projects/' + project.id + '/messages';
+    for (const todoId of [undefined, todo.id]) {
+      assert.equal(await ask('当前范围能读取全局今日简报吗？', path, todoId), '此轮没有全局简报工具。');
+      assert.ok(!requests.at(-1)!.tools.includes('today_brief'));
+    }
+    const personalTodo = await api('/todos', { title: '独立待办核对' });
+    for (const input of [
+      await api('/messages', { text: '绑定项目后还能读取全局简报吗？', projectId: project.id }),
+      await api('/todos/' + personalTodo.id + '/delegate', {}),
+    ]) {
+      await t.waitFor(() => assert.equal(server.app.store.list<Message>('messages').find(m => m.replyTo === input.id
+        && m.status === 'done')?.text, '此轮没有全局简报工具。'));
+    }
+    await api('/plugins/daily-brief', { enabled: false });
+    assert.equal(await ask('再次查全局今日简报。'), '此轮没有全局简报工具。');
+    assert.deepEqual(server.app.approvals.list(), []);
+  } finally { await server.close(); }
+});

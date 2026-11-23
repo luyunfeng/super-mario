@@ -1,3 +1,4 @@
+import { readTodayBrief, type TodayBriefSources } from './today-brief.ts';
 import { localDayFormatter } from './local-day.ts';
 import { scheduledWorkTemplates } from './scheduled-work-templates.ts';
 import { setTimeout } from 'node:timers/promises';
@@ -148,6 +149,7 @@ function dailyBrief(context: ExtensionContext): Json {
 }
 
 export interface SystemActions {
+  todayBriefSources?(): TodayBriefSources;
   triageAgent?: { status(): { available: boolean }; ask(text: string, context?: { readOnly?: boolean }): Promise<{ text: string }> };
   ruleTriage?(thing: InboxThing): { tier: 'action' | 'fyi' | 'noise'; reason: string };
   readProtectedSource?(url: string, signal: AbortSignal): Promise<Json>;
@@ -632,6 +634,12 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
       activate(context) {
         const templates = async () => ({ items: structuredClone(scheduledWorkTemplates) });
         context.provide('daily-brief.templates', templates);
+        const lifetime = new AbortController();
+        context.defer(() => lifetime.abort(Object.assign(new Error('每日简报插件已停用'), { status: 503 })));
+        const today = (input: Json, signal: AbortSignal) => readTodayBrief(context.store, actions ?? {}, input, AbortSignal.any([lifetime.signal, signal]));
+        context.provide('daily-brief.today', today);
+        context.contribute('tools', 'today_brief', tool('today_brief',
+          '读取工作台时区的今日简报，含待决定、待处理收件、今日群@我、完成、失败、当前执行及个人日程。区分待办完成与执行结束，注明缺失来源和截断。', today));
         context.contribute('tools', 'scheduled_work_templates', tool('scheduled_work_templates',
           '读取定时工作模板的排期、执行提示词和验收标准。选择模板仅准备草稿。', templates));
         // Counts are a snapshot of persisted records, never simulated task results.

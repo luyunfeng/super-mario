@@ -15,6 +15,7 @@ export function createFollowUpCard({ api, store }) {
   const body = [state, summary, h('div', { class: 'row row--wrap' },
     Button({ label: '调整节奏', size: 'sm', onClick: () => openSettings() }),
     Button({ label: '简报与离场通知设置', size: 'sm', onClick: () => openBriefingSettings() }),
+    Button({ label: '今日简报', size: 'sm', onClick: openToday }),
     Button({ label: '查看简报', size: 'sm', onClick: () => openBrief() }))];
   const el = Card({ title: '自动跟进', hint: 'agent.followup', body, id: 'agent-follow-up' });
 
@@ -93,6 +94,39 @@ export function createFollowUpCard({ api, store }) {
         },
       })],
     });
+  }
+
+  function openToday() {
+    const content = h('div', { class: 'stack' });
+    const owner = api.draftOwner();
+    const controller = new AbortController();
+    const drawer = openDrawer({ title: '今日简报', body: content, onClose() { controller.abort(); unsubscribe(); } });
+    const current = () => drawer.el.open && owner === api.draftOwner() && !store.view.unauthorized;
+    const enabled = () => store.view.snapshot?.plugins?.some(p => p.id === 'daily-brief' && p.status === 'active');
+    const unsubscribe = store.subscribe(() => { if (!current() || !enabled()) drawer.close(); });
+    async function read() {
+      replace(content, h('p', { role: 'status' }, '正在读取今日简报…'));
+      try {
+        const brief = await api('/briefing/today', { method: 'POST', body: {}, signal: controller.signal });
+        if (!current() || !enabled()) return;
+        const clock = new Intl.DateTimeFormat('zh-CN', { timeZone: brief.timezone, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+        function itemLabel(item) {
+          if (item.endAt) return /^\d{4}-\d{2}-\d{2}$/.test(item.at) ? '全天' : clock.format(Date.parse(item.at)) + '–' + clock.format(Date.parse(item.endAt));
+          return { todo: '待办已完成', completed: '执行已结束', queued: '排队中', running: '执行中' }[item.kind];
+        }
+        const groups = [['待你决定', brief.decisions], ['待处理收件', brief.inbox], ['今日提及', brief.mentions], ['今日完成', brief.completed],
+          ['今日失败', brief.failed], ['当前执行', brief.running], ['今日日程', brief.calendar]];
+        replace(content, h('p', { class: 'small muted' }, brief.date + ' · ' + brief.timezone), groups.map(([title, group]) =>
+          h('section', { class: 'stack' }, h('h3', null, title),
+            group.available === false ? h('p', null, group.reason || '来源不可用') : [
+              h('p', { class: 'small muted' }, (group.available && group.truncated ? '已核实 ' : '') + group.total + ' 项' + (group.truncated ? ' · 当前仅显示部分记录' : '')),
+              group.items.map(item => h('p', null, [itemLabel(item), item.title, item.reason].filter(Boolean).join(' · '))),
+            ])));
+      } catch (error) {
+        if (current()) replace(content, h('p', { role: 'alert' }, error.message), Button({ label: '重新读取今日简报', onClick: read }));
+      }
+    }
+    void read();
   }
 
   async function openBrief() {
