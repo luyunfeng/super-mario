@@ -3329,6 +3329,7 @@ test('Web 与飞书主人询问永久删除时收到同一确认入口和保留�
   const replies: string[] = [];
   const reply = '在 Web 打开对应机器人的独立对话记录。进入详情后先点「导出对话」下载 Markdown，再点「删除对话」并确认。已送达飞书的消息仍会保留。';
   const { server, api, ask } = await fixture(t, req => {
+    assert.match(req.system, /「独立对话记录」打开原消息，点该表的「复制表格」.*插件停用时可手动选取可见文字/);
     assert.match(req.system, /「导出对话」预览、复制或下载 Markdown/);
     assert.match(req.system, /不能声称已替用户下载或发送到飞书/);
     assert.match(req.system, /Web 对应会话详情点「删除对话」并确认/);

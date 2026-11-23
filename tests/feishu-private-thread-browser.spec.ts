@@ -86,6 +86,14 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await drawer.getByRole('button', { name: '复制表格' }).first().click();
   await expect(drawer).toContainText('已复制表格。');
   assert.equal(clipboardWrites.pop(), "字段\t值\n合成\t'=2+3");
+  const toggleExport = (enabled: boolean) => page.request.post(server.url + '/api/v1/plugins/conversation-export', {
+    headers: { authorization: 'Bearer ' + token }, data: { enabled },
+  });
+  assert.ok((await toggleExport(false)).ok());
+  await expect(drawer.getByRole('button', { name: '复制表格' })).toHaveCount(0);
+  await expect(drawer.getByRole('cell', { name: '=2+3' }).first()).toBeVisible();
+  assert.ok((await toggleExport(true)).ok());
+  await expect(drawer.getByRole('button', { name: '复制表格' }).first()).toBeVisible();
   await expect(drawer).not.toContainText('其他机器人的讨论');
   assert.deepEqual(await selection(),prior);
   await first.send('只浏览详情后发送','peek-main');
