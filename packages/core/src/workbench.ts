@@ -249,34 +249,60 @@ export async function createWorkbench(config: AppConfig) {
     return store.list<ProjectWorktree>('project-worktrees').filter(row => row.projectId === projectId
       && row.machineId === binding.machineId && row.source === binding.cwd).map(projectTreeReceipt);
   }
+  const commitHash = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
+  async function listProjectWorktreeBases(projectId: string) {
+    const binding = projectWorktreeBinding(projectId);
+    const hub = machines;
+    const machine = hub?.list().find(row => row.id === binding.machineId);
+    if (!hub || !machine?.online) throw new InputError('项目绑定的电脑离线或尚未连接', 503);
+    if (!machine.capabilities.includes('workspace.worktreeBases')) throw new InputError('请升级执行机代理以查看可选起点', 409);
+    const result = await hub.call(machine.id, 'workspace.worktreeBases', { cwd: binding.cwd });
+    const current = projectWorktreeBinding(projectId);
+    if (current.cwd !== binding.cwd || current.machineId !== binding.machineId) throw new InputError('项目绑定已变化，请重新读取分支', 409);
+    if (!Array.isArray(result)) throw new InputError('执行机返回的分支清单无效', 502);
+    return result.map(row => {
+      if (!row || typeof row !== 'object' || Array.isArray(row) || typeof row.name !== 'string' || !row.name
+        || typeof row.base !== 'string' || !commitHash.test(row.base)) throw new InputError('执行机返回的分支清单无效', 502);
+      return { name: row.name, base: row.base };
+    });
+  }
   async function createProjectWorktree(projectId: string, input: Record<string, unknown>) {
     const binding = projectWorktreeBinding(projectId);
-    if (Object.keys(input).some(key => key !== 'name') || typeof input.name !== 'string' || !input.name.trim()
+    if (Object.keys(input).some(key => key !== 'name' && key !== 'base') || typeof input.name !== 'string' || !input.name.trim()
       || input.name.length > 80 || /[\x00-\x1f\x7f]/.test(input.name)) throw new InputError('请输入 1 至 80 个字符的单行名称');
     const name = input.name.trim();
+    const base = input.base;
+    if (base !== undefined && (typeof base !== 'string' || !commitHash.test(base))) throw new InputError('起始提交无效');
     const key = JSON.stringify([projectId, binding.machineId, binding.cwd, name]);
     // Retain the allocated ID before calling the machine so concurrent requests and retries share the effect.
-    const existingId = store.get<string>('project-worktree-names', key);
+    const claim = store.get<string | { id: string; base: string }>('project-worktree-names', key);
+    const existingId = typeof claim === 'string' ? claim : claim?.id;
     const existing = existingId && store.get<ProjectWorktree>('project-worktrees', existingId);
-    if (existing) return projectTreeReceipt(existing);
+    if (existing) {
+      if (base !== undefined && base !== existing.base) throw new InputError('同名工作树已使用其他起点或起点未登记', 409);
+      return projectTreeReceipt(existing);
+    }
+    if (claim && base !== (typeof claim === 'string' ? undefined : claim.base)) throw new InputError('同名工作树已有其他起点的创建请求', 409);
     const hub = machines;
     const machine = hub?.list().find(row => row.id === binding.machineId);
     if (!hub || !machine?.online) throw new InputError('项目绑定的电脑离线或尚未连接', 503);
     if (!machine.capabilities.includes('workspace.prepareRunWorktree')) throw new InputError('请升级执行机代理以创建独立工作树', 409);
+    if (base && !machine.capabilities.includes('workspace.worktreeBases')) throw new InputError('请升级执行机代理以选择工作树起点', 409);
     const id = existingId || randomUUID();
-    if (!existingId) store.put('project-worktree-names', key, id);
+    if (!existingId) store.put('project-worktree-names', key, base ? { id, base } : id);
     const cwd = join(binding.cwd + '-worktrees', id);
-    const params = { cwd: binding.cwd, id };
+    const params = { cwd: binding.cwd, id, ...(base && { base }) };
     const receipt = await effects.perform({ key: 'project-worktree:' + id, kind: 'workspace.prepareRunWorktree', target: machine.id,
       summary: '创建项目独立工作树', content: params, run: async () => {
         const receipt = await hub.call(machine.id, 'workspace.prepareRunWorktree', params, { timeoutMs: 90000 });
         if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) || receipt.cwd !== cwd || receipt.branch !== 'super-mario/' + id
-          || typeof receipt.base !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(receipt.base))
+          || typeof receipt.base !== 'string' || !commitHash.test(receipt.base) || base !== undefined && receipt.base !== base)
           throw new Error('执行机返回的工作树回执无效');
         return receipt as { cwd: string; branch: string; base: string };
       } }).catch(error => {
         if (error instanceof EffectError && error.delivery === 'no') {
-          if (store.get<string>('project-worktree-names', key) === id) store.remove('project-worktree-names', key);
+          const held = store.get<string | { id: string }>('project-worktree-names', key);
+          if ((typeof held === 'string' ? held : held?.id) === id) store.remove('project-worktree-names', key);
           throw error;
         }
         throw new EffectError('工作树创建结果未确认，请核对执行机目录 ' + cwd + '。' + (error instanceof Error ? error.message : String(error)), 'unknown');
@@ -3087,7 +3113,7 @@ export async function createWorkbench(config: AppConfig) {
   return {
     browserDevices, deleteWebConversation, postWebConversation:scopedAgents.postWebConversation,
     setBrowserDeviceInvalidator(handler:(id?:string)=>void) { browserDeviceInvalidator=handler; },
-    usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {

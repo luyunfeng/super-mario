@@ -139,6 +139,11 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     if (!binding) return;
     const path = '/projects/' + encodeURIComponent(id) + '/worktrees';
     const name = Input({ required: true, maxLength: 80 });
+    const base = Select({ options: [['', '当前提交（HEAD）']] });
+    const baseField = Field({ label: '起始分支', control: base });
+    const baseStatus = h('div', { 'aria-live': 'polite' });
+    let basesAvailable = false;
+    let basesRevision = 0;
     const message = h('div', { role: 'status' });
     const rows = h('div', { class: 'list' });
     const availability = h('p', { class: 'muted' });
@@ -151,6 +156,22 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       return drawer.el.open && projectId === id && api.token() === token &&
         next?.machineId === binding.machineId && next?.cwd === binding.cwd;
     };
+    async function loadBases() {
+      const read = ++basesRevision;
+      base.disabled = true;
+      baseStatus.textContent = '正在读取本地分支…';
+      try {
+        const branches = await api.get('/projects/' + encodeURIComponent(id) + '/worktree-bases');
+        if (!current() || read !== basesRevision) return;
+        replace(base, h('option', { value: '' }, '当前提交（HEAD）'), branches.map(branch =>
+          h('option', { value: branch.base }, branch.name + ' · ' + branch.base.slice(0, 12))));
+        baseStatus.textContent = '';
+        base.disabled = false;
+      } catch (error) {
+        if (current() && read === basesRevision) replace(baseStatus, Banner({ tone: 'warn',
+          children: '读取本地分支失败：' + systemText(error.message), action: Button({ label: '重新读取分支', onClick: loadBases }) }));
+      }
+    }
     function executionHistory(tree) {
       const runs = (store.view.snapshot?.runs ?? []).filter(run => run.projectId === id &&
         run.machineId === binding.machineId && run.cwd === tree.cwd).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -185,11 +206,11 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     }
     const drawer = openDrawer({
       title: '项目工作树', subtitle: binding.cwd,
-      body: [availability, Field({ label: '工作树名称', control: name, required: true }), message, rows],
+      body: [availability, Field({ label: '工作树名称', control: name, required: true }), baseField, baseStatus, message, rows],
       footer: Button({ label: '只创建工作树', kind: 'primary', onClick: async (_event, button) => {
         if (!current() || !name.reportValidity()) return;
         try {
-          const tree = await api.post(path, { name: name.value.trim() });
+          const tree = await api.post(path, { name: name.value.trim(), ...(base.value && { base: base.value }) });
           if (!current()) return;
           name.value = '';
           replace(message, h('p', null, '已创建 ' + tree.name), h('code', { class: 'folder-path' }, tree.cwd));
@@ -209,6 +230,18 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     function updateAvailability() {
       const create = supports('workspace.prepareRunWorktree');
       const launch = supports('workspace.inspectRunWorktree');
+      const canChoose = !!supports('workspace.worktreeBases');
+      baseField.hidden = !canChoose;
+      baseStatus.hidden = !canChoose;
+      if (canChoose !== basesAvailable) {
+        basesAvailable = canChoose;
+        if (canChoose) loadBases();
+        else {
+          ++basesRevision;
+          // A lost branch choice must never silently turn into a HEAD checkout.
+          if (base.value) { drawer.close(); return; }
+        }
+      }
       drawer.foot.querySelector('button').disabled = uncertainCreation || !create;
       for (const button of rows.querySelectorAll('[data-launch-worktree]')) button.disabled = !launch;
       availability.textContent = !create ? '绑定电脑离线或缺少创建工作树的能力，可查看已登记目录。'

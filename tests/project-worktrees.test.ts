@@ -64,6 +64,23 @@ test('项目只创建工作树时返回独立目录，不生成或派发执行',
   assert.deepEqual(starts, []);
   assert.equal(server.app.store.list('runs').length, 0);
 
+  const alternate = git(cwd, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'separate start');
+  git(cwd, 'branch', 'release/fixture', alternate);
+  const bases = await fetch(server.url + '/api/v1/projects/' + project.id + '/worktree-bases', { headers });
+  assert.equal(bases.status, 200);
+  assert.deepEqual((await bases.json()).find((branch: { name: string }) => branch.name === 'release/fixture'),
+    { name: 'release/fixture', base: alternate });
+  const fromBranch = (base: string) => fetch(worktreesUrl, { method: 'POST', headers,
+    body: JSON.stringify({ name: '从分支准备', base }) });
+  const chosen = await fromBranch(alternate);
+  const tree = await chosen.json();
+  assert.equal(chosen.status, 201, JSON.stringify(tree));
+  assert.equal(tree.base, alternate);
+  assert.equal(git(tree.cwd, 'rev-parse', 'HEAD'), alternate);
+  assert.equal((await fromBranch(result.base)).status, 409);
+  assert.equal(git(tree.cwd, 'rev-parse', 'HEAD'), alternate);
+  assert.deepEqual(starts, []);
+
   const launch = await fetch(server.url + '/api/v1/runs', { method: 'POST', headers, body: JSON.stringify({
     projectId: project.id, cwd: result.cwd, executorId: 'fixture/codex', prompt: '检查独立目录', doneWhen: '返回结果', expectMinutes: 1,
   }) });

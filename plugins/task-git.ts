@@ -128,6 +128,18 @@ export async function worktreeBase({ cwd, base }: JsonObject): Promise<string> {
   return resolved;
 }
 
+export async function worktreeBases({ cwd }: JsonObject): Promise<Json> {
+  if (typeof cwd !== 'string') throw new Error('工作树来源目录无效');
+  await worktreeBase({ cwd });
+  // Keep the full local branch name even when a tag has the same short name.
+  const refs = await runGit(cwd, ['for-each-ref', '--sort=refname', '--format=%(refname:lstrip=2)%09%(objectname)', 'refs/heads/']);
+  return refs.trimEnd().split('\n').filter(Boolean).map(line => {
+    const [name, base] = line.split('\t');
+    if (!name || !base || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(base)) throw new Error('本地分支记录无效');
+    return { name, base };
+  });
+}
+
 // Only the saved project binding and a server-generated run ID determine the destination.
 export async function prepareRunWorktree(params: JsonObject): Promise<Json> {
   const { cwd, id } = params;
