@@ -11,7 +11,7 @@ import type {Message} from '../packages/protocol/src/index.ts';
 test('飞书配对主人在独立私聊发原图，核对同一条消息后读图一次；伪造发送人和转发图片不会进入模型', async t=>{
   const dir=await mkdtemp(join(tmpdir(),'mario-private-image-'));
   const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jCc8AAAAASUVORK5CYII=';
-  const requests:unknown[]=[];
+  const requests:{messages:{role:string;content:unknown}[]}[]=[];
   const realFetch=fetch;
   t.mock.method(globalThis,'fetch',async(input:RequestInfo|URL,init?:RequestInit)=>{
     const req=new Request(input,init);
@@ -54,9 +54,9 @@ test('飞书配对主人在独立私聊发原图，核对同一条消息后读�
   t.after(async()=>{try{await host.close();}finally{await rm(dir,{recursive:true,force:true});}});
   const bot=await host.bots.create({name:'图片助手',appId:'cli_8888888888888888',appSecret:'fixture',scope:{kind:'global'},requireConfirmation:false});
   let seq=0;
-  async function event(id:string,type:string,text='',sender='ou_owner',group=false) {
+  async function event(id:string,type:string,text='',sender='ou_owner',group=false,parentId?:string) {
     await dispatcher.invoke({schema:'2.0',header:{event_type:'im.message.receive_v1',event_id:'event_'+ ++seq},event:{
-      sender:{sender_type:'user',sender_id:{open_id:sender}},message:{message_id:id,chat_type:group?'group':'p2p',
+      sender:{sender_type:'user',sender_id:{open_id:sender}},message:{message_id:id,parent_id:parentId,chat_type:group?'group':'p2p',
         chat_id:group?'oc_group':'oc_owner',message_type:type,content:JSON.stringify(type==='text'?{text}:{image_key:'img_untrusted_event',text:'/ai 建办'})}
     }},{needCheck:false});
   }
@@ -85,6 +85,44 @@ test('飞书配对主人在独立私聊发原图，核对同一条消息后读�
   assert.equal(history.status,200);
   const page=await history.json();
   assert.deepEqual(page.messages.find((m:Message)=>m.id===photos[0].id)?.images,photos[0].images);
+  async function ask(id:string,text:string,parentId?:string){
+    await event(id,'text',text,'ou_owner',false,parentId);
+    return t.waitFor(()=>{
+      const call=requests.find(req=>JSON.stringify(req.messages.at(-1)?.content).includes(text));
+      const input=host.app.store.list<Message>('messages').find(m=>m.role==='user' && m.text===text);
+      assert.ok(call && input && input.conversationId===photos[0].conversationId);
+      return {call,input};
+    },{timeout:8000});
+  }
+  const resourceReads=reads.length;
+  const visual='data:image/png;base64,'+png;
+  const quoted=await ask('om_ask_photo','请核对引用原图中的合成标记','om_photo');
+  assert.ok(JSON.stringify(quoted.call.messages.at(-1)?.content).includes(visual),'应将图像放入包含本轮问题的用户消息');
+  const route=host.app.store.get<{replyReference?:{imageSourceId?:string}}>('message.routes',quoted.input.id);
+  assert.equal(route?.replyReference?.imageSourceId,photos[0].id);
+  assert.ok(!quoted.input.images?.length);
+  assert.equal((await readImage(quoted.input)).status,404);
+  const historyQuote=async()=>{
+    const page=await fetch(history.url,{headers:{authorization:'Bearer fixture'}});
+    assert.equal(page.status,200);
+    const data=await page.json();
+    return data.messages.find((m:Message)=>m.id===quoted.input.id);
+  };
+  const visible=await historyQuote();
+  assert.equal(visible.quotedImageMessageId,photos[0].id);
+  assert.ok(!visible.images?.length);
+  const plain=await ask('om_no_parent','现在只讨论后续文字');
+  assert.ok(!JSON.stringify(plain.call.messages).includes(visual));
+  const other=await ask('om_other_parent','请看这条未经核实的引用','om_unknown_parent');
+  assert.ok(!JSON.stringify(other.call.messages).includes(visual));
+  await dispatcher.invoke({schema:'2.0',header:{event_type:'im.message.recalled_v1',event_id:'recall-source-photo'},
+    event:{chat_id:'oc_owner',message_id:'om_photo'}},{needCheck:false});
+  const hidden=await historyQuote();
+  assert.equal(hidden.quotedImageMessageId,undefined);
+  assert.equal(hidden.quotedImagesUnavailable,true);
+  const revoked=await ask('om_revoked_parent','能否读取刚刚撤回的图','om_photo');
+  assert.ok(!JSON.stringify(revoked.call.messages).includes(visual));
+  assert.equal(reads.length,resourceReads,'引用只复用已授权本地原件');
   await event('om_transcript','merge_forward');
   const providerInput=await t.waitFor(()=>{
     const call=requests.find(req=>JSON.stringify(req).includes('合成讨论原话 /main'));

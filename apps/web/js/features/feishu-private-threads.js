@@ -435,9 +435,19 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
         } })));
     const picker = conversationModelPicker(api, path + '/model', row.title);
     const history = h('div', { class: 'stack' });
+    function openQuotedImage(messageId) {
+      if (!current(id) || edit.disabled) return;
+      void detail(row, '', {
+        title:title.value !== row.title ? title.value : undefined,
+        tags:JSON.stringify(tags) !== JSON.stringify(savedTags) ? [...tags] : undefined,
+        tagInput:tagInput.value,
+      }, messageId);
+    }
     const entries = items => items.map(message => h('section', { class: 'stack' },
-      (query || target) && around && message.id === around && h('mark', { tabIndex: -1 }, '命中消息'),
+      around && message.id === around && h('mark', { tabIndex: -1 }, query || target ? '命中消息' : '定位到的消息'),
       h('strong', null, (message.role === 'user' ? '用户' : '助手') + ' · ' + new Date(message.createdAt).toLocaleString()),
+      message.quotedImageMessageId && Button({ label:'查看引用原图', size:'sm', onClick:()=>openQuotedImage(message.quotedImageMessageId) }),
+      message.quotedImagesUnavailable && h('span',{class:'small muted'},'引用原图不可用'),
       h('p', { style: 'white-space: pre-wrap' }, message.text), messageImages(api,store,message),messageFiles(api,store,message,[])));
     history.append(...entries(messages));
     const more = older => Button({ label: older ? '加载更早消息' : '加载后续消息', onClick: async (_, button) => {

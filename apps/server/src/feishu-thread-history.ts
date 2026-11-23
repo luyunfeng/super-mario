@@ -8,6 +8,7 @@ export type PrivateThread = {
 };
 type Receipt = {
   channel: string; botId: string; accountId: string; revision: number; target: string;
+  parentMessageId?:string; sourceMessageId?:string; replyReference?:{imageSourceId?:string; imagesUnavailable?:boolean};
   privateFileBinding?: string; privateImageBinding?: string; privateSenderId?: string; conversationThreadId?: string; group?: unknown; relay?: unknown;
 };
 
@@ -150,7 +151,8 @@ export function readPrivateThreadMetadata(store: Pick<Store, 'get' | 'list'>, ro
 }
 
 export function privateThreadPage(store: Pick<Store, 'get' | 'list'>, row: PrivateThread, before: string | null,
-  after: string | null = null, around: string | null = null, canReadFiles?: (message: Message) => boolean) {
+  after: string | null = null, around: string | null = null, canReadFiles?: (message: Message) => boolean,
+  canReadImages?: (message: Message) => boolean) {
   const cursors = [before, after, around].filter(value => value !== null);
   if (cursors.length > 1) throw Object.assign(new Error('每次只可采用一个消息位置'), { status: 400 });
   const list = threadMessages(store, [row]).get(row.threadId) ?? [];
@@ -169,8 +171,16 @@ export function privateThreadPage(store: Pick<Store, 'get' | 'list'>, row: Priva
   const page = list.slice(start, end);
   return { ...metadata(row, list), messages: page.map(message => {
     const {id,role,text,createdAt,status,images,files,conversationId,replyTo} = message;
+    const route = role === 'user' ? store.get<Receipt>('message.routes', id) : undefined;
+    const sourceId = route?.replyReference?.imageSourceId;
+    const source = sourceId ? store.get<Message>('messages',sourceId) : undefined;
+    const sourceRoute = source && store.get<Receipt>('message.routes',source.id);
+    const showSource = source && source.role === 'user' && source.conversationId === conversationId &&
+      route?.parentMessageId && route.parentMessageId === sourceRoute?.sourceMessageId && canReadImages?.(source);
     return {id,role,text,createdAt,status,
-      ...(images?.length ? {images,conversationId} : {}),
+      ...(showSource ? {quotedImageMessageId:source.id} :
+        (sourceId || route?.replyReference?.imagesUnavailable) ? {quotedImagesUnavailable:true} : {}),
+      ...(images?.length && canReadImages?.(message) ? {images,conversationId} : {}),
       ...(files?.length && canReadFiles?.(message) ? {files,conversationId,...(role === 'assistant' && replyTo ? {replyTo} : {})} : {}),
     };
   }),

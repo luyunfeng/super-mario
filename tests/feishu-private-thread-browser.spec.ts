@@ -17,6 +17,7 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
     botFactory(opts) {
       clients.set(opts.appId, opts);
       return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
+        async readPrivateImage() {return {mime:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='};},
         async send() {} };
     },
   });
@@ -92,6 +93,16 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   assert.equal((await input('仍引用最初的私聊')).conversationId,main.conversationId);
   await first.send('引用之后仍以网页选择为准','no-quote-again');
   assert.equal((await input('引用之后仍以网页选择为准')).conversationId,independent.conversationId);
+  await clients.get('cli_3333333333333333')!.onMessage('[图片]', {
+    privateImage:true,chatType:'p2p',chatId:'chat-合成甲',senderId:'合成甲',senderType:'user',messageId:'photo-parent',
+  });
+  await input('[图片]');
+  await first.send('这张图片里有什么？','quote-photo','photo-parent');
+  await input('这张图片里有什么？');
+  await drawer.getByRole('button',{name:'返回列表'}).click();
+  await drawer.getByRole('button',{name:/核对独立方案/}).click();
+  await drawer.getByRole('button',{name:'查看引用原图'}).click();
+  await expect(drawer.locator('section').filter({has:page.getByText('定位到的消息',{exact:true})})).toContainText('[图片]');
   await drawer.getByRole('button', { name: '复制对话 ID' }).click();
   await expect(drawer).toContainText('已复制对话 ID。');
   assert.deepEqual(clipboardWrites, [thread]);
