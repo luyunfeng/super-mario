@@ -401,6 +401,7 @@ function webMessages(context: ExtensionContext, input: Json, canReadFiles?:CanRe
     if (!pastCursor) {pastCursor=row.id===before;continue;}
     if (hits.length===25) return {hits,nextBefore:hits[hits.length-1]!.id};
     hits.push({id:row.id,role:row.role,createdAt:row.createdAt,text:matches[0]!.text,matches,
+      ...(thread && {webCitation:'[查看原文](#chat?'+new URLSearchParams({thread:conversationId.slice(4),at:row.id})+')'}),
       ...(row.status && {status:row.status}), ...(row.queueState && {queueState:row.queueState}),
       ...(rowProject && {projectId:rowProject}),...(row.todoId && {todoId:row.todoId})});
   }

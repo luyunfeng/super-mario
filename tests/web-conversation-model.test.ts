@@ -166,6 +166,8 @@ test('SDK requests preserve the correct Web thread history within a shared proje
     const toolReply=requests.at(-1)?.findLast(m=>m.role==='tool');
     assert.ok(toolReply);
     const retrieved=JSON.stringify(toolReply.content);
+    const original=server.app.store.list<Message>('messages').find(m=>m.text===aOnly && m.conversationId==='web:'+a.id)!;
+    assert.ok(retrieved.includes('[查看原文](#chat?thread='+a.id+'&at='+original.id+')'),retrieved);
     assert.ok(retrieved.includes(aOnly),retrieved);
     assert.ok(!retrieved.includes(bOnly) && !retrieved.includes(result.id) && !retrieved.includes(question),retrieved);
     assert.equal((await fetch(server.url+'/api/v1/web-conversations/'+a.id+'/messages').then(r=>r.json())).messages
