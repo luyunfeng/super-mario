@@ -151,5 +151,13 @@ test('读取失败如实显示；390px 长工具名和详情自然换行、不�
     t.pending.splice(index, 1)[0].reject(new Error('网络中断'));
   });
   await expect(page.locator('[data-run-blockers="one"]')).toContainText('未能读取执行观察与阻塞项：网络中断。状态未确认');
-  await expect(page.locator('[data-run-blockers="one"]')).not.toContainText('没有待你处理');
+  const blockers = page.locator('[data-run-blockers="one"]');
+  await expect(blockers).not.toContainText('没有待你处理');
+  await blockers.getByRole('button', { name: '重试读取' }).click();
+  await reply(page, 'one', { blockedBy: [{ id: 'decision', title: '核对目标', href: '#chat?approval=decision' }] });
+  await expect(blockers.getByRole('link', { name: '核对目标' })).toBeVisible();
+  await blockers.getByRole('button', { name: '刷新执行观察' }).click();
+  await reply(page, 'one', { blockedBy: [] });
+  await expect(blockers).toContainText('没有待你处理的阻塞项');
+  await expect(blockers.getByRole('link')).toHaveCount(0);
 }));

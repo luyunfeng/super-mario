@@ -3,7 +3,7 @@ import { localDayFormatter } from './local-day.ts';
 import { scheduledWorkTemplates } from './scheduled-work-templates.ts';
 import { setTimeout } from 'node:timers/promises';
 import type { Executor, Extension, ExtensionContext, KnowledgeBackend, KnowledgeQuery, Tool } from '../packages/plugin-sdk/src/index.ts';
-import type { InboxThing, Json, JsonObject, Run, Todo } from '../packages/protocol/src/index.ts';
+import type { ExecutionProgress, InboxThing, Json, JsonObject, Run, RunBlocker, Todo } from '../packages/protocol/src/index.ts';
 import { createInboxTriage } from './inbox-triage.ts';
 import { createLocalKnowledge } from './knowledge-local.ts';
 import { isProtectedKnowledgeURL } from './knowledge-source-reader.ts';
@@ -207,6 +207,7 @@ export interface SystemActions {
   listExecutors?(): Json;
   status?(id: string): Json;
   readRun?(id: string): Promise<Json>;
+  runObservations?(id: string): { progress: ExecutionProgress | null; blockedBy: RunBlocker[] };
   todoDetail?(input: Record<string, unknown>): Json;
   todoHistory?(input: Record<string, unknown>): Json;
   inputRun?(id: string, text: string): Promise<Json>;
@@ -404,7 +405,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           timeZone: { type: 'string', description: 'dueDay 对应的 IANA 时区，如 Asia/Shanghai' },
           dueFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, dueBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' } }));
         const runStates = ['queued', 'running', 'completed', 'failed', 'cancelled', 'unknown'];
-        context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。query 按关键词检索目标、验收标准、输出、错误、分支和执行 ID，返回含出处的摘录，最近更新在前。updatedFrom 含起点，updatedBefore 不含终点，按记录更新时间筛选。用 id 读取一条完整执行记录。machineId、executorId 精确匹配执行记录登记的 ID。status 可限定登记状态。worktreeRunId 仅列出在指定工作树中另起的执行。', async ({ worktreeRunId, query, queryField, status, id, projectId, todoId, machineId, executorId, nativeSessionId, updatedFrom, updatedBefore }, signal) => {
+        context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。query 按关键词检索目标、验收标准、输出、错误、分支和执行 ID，返回含出处的摘录，最近更新在前。updatedFrom 含起点，updatedBefore 不含终点，按记录更新时间筛选。用 id 单独读取完整执行记录、最近的公开进展与当前待决定事项 blockedBy。machineId、executorId 精确匹配执行记录登记的 ID。status 可限定登记状态。worktreeRunId 仅列出在指定工作树中另起的执行。', async ({ worktreeRunId, query, queryField, status, id, projectId, todoId, machineId, executorId, nativeSessionId, updatedFrom, updatedBefore }, signal) => {
           signal.throwIfAborted();
           if (queryField !== undefined && (queryField !== 'doneWhen' || query === undefined)) throw new Error('限定验收标准检索须传 query 和 queryField=doneWhen');
           if (worktreeRunId !== undefined && (typeof worktreeRunId !== 'string' || !worktreeRunId.trim())) throw new Error('缺少工作树所属执行 ID');
@@ -430,7 +431,11 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if (bounded || query !== undefined || nativeSessionId !== undefined) runs.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || a.id.localeCompare(b.id));
           if (typeof query !== 'string') {
             if (!bounded && nativeSessionId === undefined && worktreeRunId !== undefined) runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
-            if (id !== undefined) return runs.map(run => ({ ...run, webCitation: runCitation(run) })) as unknown as Json;
+            if (id !== undefined) return runs.map(run => {
+              // Resolve observations only after the project and todo filters admit this run.
+              const observed = actions?.runObservations?.(run.id);
+              return { ...run, progress: observed?.progress ?? null, blockedBy: observed?.blockedBy ?? null, webCitation: runCitation(run) };
+            }) as unknown as Json;
             return runs as unknown as Json;
           }
           const patterns = [...new Set(query.trim().split(/\s+/u))].map(term => new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'));

@@ -1,4 +1,4 @@
-import { agentCard, agentCardSnapshot, type AgentCardSnapshot } from './feishu-agent-card.ts';
+import { selectedAgentStatus, agentCard, agentCardSnapshot, type AgentCardSnapshot } from './feishu-agent-card.ts';
 import type { ConversationStatus } from '../../../plugins/conversation-status.ts';
 import type { TodayBrief } from '../../../plugins/today-brief.ts';
 import { resumeForm, sessionCard, sessionCardSnapshot, type SessionList, type SessionCardSnapshot } from './feishu-session-card.ts';
@@ -358,17 +358,17 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const enabled = !!app.plugins?.list().some(plugin => plugin.id === 'conversation-search' && plugin.status === 'active');
     const pluginRevision = app.store.get<string>('settings', 'feishu.status-plugin-revision');
     const agentRun = binding?.agentTarget && currentAgentRun(binding.agentTarget, bot);
-    const fingerprint = digest([bot.id, bot.revision, paired, scope, binding ?? null, expired, enabled, pluginRevision, agentRun?.status]);
+    const agentStatus = !expired && agentRun ? selectedAgentStatus(app.store, agentRun, webBase) : undefined;
+    const fingerprint = digest([bot.id, bot.revision, paired, scope, binding ?? null, expired, enabled, pluginRevision, agentStatus?.text]);
     const name = binding?.agentTarget && !expired ? '执行会话 · ' + binding.agentTarget.runId : project && !expired ? '项目工作会话 · ' + project.name : '机器人会话 · ' + bot.name;
     const error = expired ? '会话选择已过期或项目已归档，请在工作台重新选择。'
-      : binding?.agentTarget ? (agentRun ? '已登记执行状态 · ' + ({ running: '运行中', queued: '排队中', completed: '执行结束', failed: '失败', cancelled: '已取消', unknown: '未知' }[agentRun.status])
-        : '当前无法核实执行会话，请发送 /agents 重新选择。')
+      : binding?.agentTarget && !agentRun ? '当前无法核实执行会话，请发送 /agents 重新选择。'
       : scope.kind === 'unmarked' ? '机器人尚未绑定具体作用域，无法读取会话状态。'
-      : !enabled ? '会话搜索插件已停用。' : undefined;
+      : !agentStatus && !enabled ? '会话搜索插件已停用。' : undefined;
     const input = project ? { conversationId: 'project:' + project.id + ':work', projectId: project.id }
       : { conversationId: botConversationId(bot), ...('projectId' in scope && scope.projectId && { projectId: scope.projectId }),
         ...(scope.kind === 'task' && { todoId: scope.todoId }) };
-    return { input, error, name, fingerprint, binding };
+    return { input, error, name, fingerprint, binding, agentStatus };
   }
   const statusReads = new Map<string, Promise<void>>();
   function showStatus(bot: FeishuBotSettings, epoch: number, paired: Owner, incoming: FeishuMessageSource, help = false) {
@@ -390,12 +390,12 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         && statusTarget(current(bot.id), paired, source).fingerprint === target.fingerprint;
       let result: ConversationStatus | string = target.error ?? '会话状态服务不可用。';
       const service = app.plugins?.invocations;
-      if (!help && !target.error && service?.use) {
+      if (!help && !target.agentStatus && !target.error && service?.use) {
         try { result = await service.use('conversation-search.status', target.input) as unknown as ConversationStatus; }
         catch (error) { result = '读取会话状态失败 · ' + redact(error); }
       }
       if (!valid()) return;
-      const dashboard = help ? dashboardHelp(false, true) : statusDashboard(target.name, result);
+      const dashboard = help ? dashboardHelp(false, true) : target.agentStatus ?? statusDashboard(target.name, result);
       // Pin a returned card even when the owner had never selected a project.
       const binding = !help && (!target.error || target.binding?.agentTarget) && bot.scope.kind === 'global' ? target.binding ?? {
         projectId: '', senderId: paired.senderId!, revision: bot.revision, expiresAt: Date.now() + 7 * 86400000,
@@ -1206,7 +1206,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
             : 'projectId' in bot.scope && bot.scope.projectId ? `projects/${encodeURIComponent(bot.scope.projectId)}/workspace` : bot.scope.kind === 'task' ? 'projects/all/todos' : 'chat' },
       };
       const paired = owner(bot);
-      if ((stamp?.agentList || key.startsWith('feishu-dashboard:conversations:')) && dashboard) {
+      if ((stamp?.agentList || stamp?.statusGrant?.binding?.agentTarget || key.startsWith('feishu-dashboard:conversations:')) && dashboard) {
         context.beforeTextFallback = () => {
           if (!active(botId, epoch, bot.revision) || adapter !== state.adapter || owner(bot)?.chatId !== target
             || owner(bot)?.senderId !== dashboard.owner.senderId) throw noDelivery('对话清单的配对记录已变化');

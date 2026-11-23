@@ -1447,3 +1447,81 @@ test('/agents 的待验收执行经翻页选中，只向原生会话提恢复申
   assert.equal(resumed.length, 1);
   assert.equal(f.posts.length, 0);
 });
+
+test('/status 从所选执行读取公开进展、目标及待决定项，引用旧卡仍只读原执行', async t => {
+  const f = fixture(t), bot = await f.add('AgentStatus');
+  enableTerminalPluginForAgents(f.app);
+  await bot.pair();
+  const now = new Date().toISOString(), expiresAt = new Date(Date.now() + 600000).toISOString();
+  const run = { id: 'chosen', projectId: 'project', machineId: 'node', executorId: 'node/codex', nativeSessionId: 'thread',
+    sessionId: 'session', cwd: '/sample', executionMode: 'interactive', conversationId: 'project:project:work', status: 'running',
+    prompt: '校对汇总清单 token=fixture-goal', output: '', createdAt: now, updatedAt: now,
+    progress: { phase: 'tool', toolName: '读取清单', detail: '核对条目 token=fixture-progress', observedAt: now } };
+  f.store.put('runs', run.id, run);
+  f.store.put('machines', 'node', { id: 'node', name: '合成电脑', online: true });
+  f.store.put('projects', 'project', { id: 'project', name: '汇总项目' });
+  f.app.agentSessions = { async discover() {
+    return { capturedAt: now, machines: [{ machineId: 'node', machineName: '合成电脑', online: true, available: true,
+      truncated: false, sessions: [{ executorId: 'codex', nativeSessionId: 'thread', cwd: '/sample', resumable: false }] }] };
+  } };
+  const approvals = createApprovalService({ store: f.store, events: f.events, execute: async () => assert.fail('只读状态查询') });
+  t.after(() => approvals.close());
+  f.app.approvals = approvals;
+  const human = (messageId: string) => ({ ...source(messageId), senderType: 'user' as const });
+  const receive = bot.instance.options.onMessage;
+  await receive('/agents', human('get-list'));
+  const card = bot.instance.contexts.at(-1)?.card as { elements: Array<{ actions?: Array<{ value?: Record<string, unknown> }> }> };
+  const select = card.elements.flatMap(el => el.actions ?? []).find(b => b.value?.kind === 'workbench.agentSelect')?.value;
+  assert.ok(select);
+  const switched = bot.instance.options.onCardAction!({ value: select, operatorId: 'human', chatId: 'owner', messageId: 'pick' });
+  assert.equal((switched.toast as { type: string }).type, 'success');
+
+  const decision = { kind: 'question', runId: run.id, projectId: run.projectId, handler: 'user', status: 'open', version: 1, createdAt: now, expiresAt };
+  const putCard = (id: string, title: string, extra = {}) => f.store.put('interactions', id, { ...decision, id, title, ...extra });
+  putCard('permitted', '选择校对文件 token=fixture-question');
+  putCard('expired', '过期问题', { expiresAt: '2020-01-01T00:00:00Z' });
+  putCard('foreign', '其他项目问题', { projectId: 'other' });
+  putCard('other-run', '其他执行问题', { runId: 'different' });
+  putCard('answered', '已解决问题', { status: 'answered' });
+  putCard('auto', '自动处理问题', { handler: 'rules' });
+  const ownApproval = approvals.propose({ kind: 'input', title: '批准继续校对', details: '正文不能随状态卡公开', params: { id: run.id, projectId: run.projectId } });
+  approvals.propose({ kind: 'input', title: '其他事项审批', details: '', params: { id: run.id, todoId: 'other-task' } });
+  const before = () => [f.store.list('interactions'), approvals.list(), f.store.list('runs')];
+  const snapshots = before();
+  await receive('/status', human('selected-state'));
+  const delivered = bot.instance.contexts.at(-1)!;
+  assert.ok(delivered.onSent);
+  for (const text of [bot.instance.sent.at(-1)![1], JSON.stringify(delivered.card)]) {
+    for (const visible of ['校对汇总清单', '核对条目', '选择校对文件', '批准继续校对']) assert.ok(text.includes(visible), visible);
+    assert.doesNotMatch(text, /fixture-(goal|progress|question)|正文不能随状态卡公开|过期问题|其他项目问题|其他执行问题|已解决问题|自动处理问题|其他事项审批/);
+  }
+  assert.deepEqual(before(), snapshots);
+
+  await receive('/main', human('back-main'));
+  delivered.onSent('old-status');
+  approvals.reject(ownApproval.id, ownApproval.version);
+  assert.ok(delivered.beforeTextFallback);
+  assert.throws(() => delivered.beforeTextFallback!(), /状态回执/);
+  for (let i = 0; i < 6; i++) putCard('new-' + i, '新增待决项' + i);
+  f.store.put('runs', run.id, { ...run, progress: { ...run.progress, detail: '收到第二批条目' } });
+  const after = before();
+  await receive('/状态', { ...human('quote-state'), parentId: 'old-status' });
+  for (const text of [bot.instance.sent.at(-1)![1], JSON.stringify(bot.instance.contexts.at(-1)?.card)]) {
+    assert.match(text, /收到第二批条目/);
+    assert.match(text, /7\s*[项条个]/);
+    assert.equal((text.match(/新增待决项\d|选择校对文件/g) ?? []).length, 5);
+    assert.doesNotMatch(text, /批准继续校对|核对条目/);
+  }
+  assert.deepEqual(before(), after);
+  const sentCount = bot.instance.sent.length;
+  const invocations = f.app.plugins!.invocations!;
+  const invoke = invocations.invoke;
+  invocations.invoke = async (name, input, action) => {
+    // A question is withdrawn between preparing the card and performing the platform send.
+    putCard('permitted', '选择校对文件', { status: 'withdrawn' });
+    return invoke(name, input, action);
+  };
+  await assert.rejects(receive('/状态', { ...human('stale-before-send'), parentId: 'old-status' }), /状态回执/);
+  assert.equal(bot.instance.sent.length, sentCount);
+  assert.equal(f.posts.length, 0);
+});

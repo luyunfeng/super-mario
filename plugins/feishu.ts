@@ -42,7 +42,7 @@ export function preparePersonalCheckpoint(binding: PersonalCheckpoint['binding']
   return checkpoint;
 }
 export interface FeishuSendContext {
-  /** A read-only list may deliver its text if the platform explicitly rejects card creation.
+  /** A read-only card may deliver its text if the platform explicitly rejects card creation.
    * The host revalidates the recipient and scope immediately before the fallback. */
   beforeTextFallback?: () => void;
   mention?: { openId: string; name: string };

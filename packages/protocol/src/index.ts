@@ -14,7 +14,7 @@ export type { AgentDiagnostics, DiagnosticErrorCode, DiagnosticExecutorId } from
 export type { TerminalHostInstance, TerminalRecoveryBinding, TerminalRecoveryCheck, TerminalRecoveryTarget, TerminalRecoveryPane, TerminalRecoveryWriteResult, RecoveredTerminalAction } from './terminal-recovery.ts';
 export type { NormalizedReplyEvidence, CollectedReplyEvidence, ArmWaitingReply, WaitingReplySnapshot, ConsumeWaitingReplyResult } from './waiting-replies.ts';
 export type { WorkDecision, WorkDecisionSource } from './work-decisions.ts';
-export type { ExecutionProgress } from './execution-progress.ts';
+export type { ExecutionProgress, RunBlocker } from './execution-progress.ts';
 import type { ExecutionProgress } from './execution-progress.ts';
 export type { NativeExportSource, NativeFavoriteMessage, NativeExecutorId, NativeResumeSpec, ObservedAgentSession, AgentSessionDiscovery } from './agent-sessions.ts';
 export { excludesPersonalGroupFromBrief } from './inbox-origin.ts';

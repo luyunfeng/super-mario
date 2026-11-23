@@ -1,5 +1,6 @@
 import type { Store } from '../../../packages/plugin-sdk/src/index.ts';
 import type { Project, Run, Todo } from '../../../packages/protocol/src/index.ts';
+import { executionProgress } from '../../../packages/core/src/execution-progress.ts';
 import { readRunBlockers } from '../../../packages/core/src/run-blockers.ts';
 import { publicText } from '../../../plugins/agent-progress-card.ts';
 import { cardButtons, cardDocument, cardPlain, cardWebBase } from './feishu-cards.ts';
@@ -96,4 +97,27 @@ export function agentCard(data: AgentCardSnapshot, navigation: string, webBase?:
     { label: '发起执行', route: 'projects/all/runs/new' },
   ], base));
   return { card: cardDocument('执行会话', elements), text: ['执行会话', ...lines].join('\n\n') };
+}
+
+/** Render only the run the private owner selected. The same snapshot is used to check a queued delivery. */
+export function selectedAgentStatus(store: Pick<Store, 'list'>, run: Run, webBase?: string) {
+  const phases = { running: '运行中', queued: '排队中', completed: '执行结束', failed: '失败', cancelled: '已取消', unknown: '未知' };
+  const observations = { starting: '启动', thinking: '分析', tool: '调用工具', responding: '输出', waiting: '等待后续事件' };
+  const types: Record<string, string> = { question: '问题', permission: '权限', plan: '计划', review: '验收', approval: '审批' };
+  const lines = ['执行会话 · ' + line(run.id, 120), '已登记执行状态 · ' + phases[run.status]];
+  if (run.prompt) lines.push('登记目标 · ' + line(run.prompt, 220));
+  if (run.doneWhen) lines.push('验收条件 · ' + line(run.doneWhen, 180));
+  const progress = executionProgress(run.progress);
+  if (progress) {
+    lines.push('最近观察 · ' + [new Date(progress.observedAt).toISOString(), observations[progress.phase], line(progress.toolName), line(progress.detail, 180)].filter(Boolean).join(' · '));
+  }
+  const pending = readRunBlockers(store, Date.now())(run)
+    .sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0) || a.id.localeCompare(b.id));
+  lines.push('待处理 · ' + pending.length + ' 项' + (pending.length > 5 ? '（仅显示最近 5 项）' : ''));
+  for (const item of pending.slice(0, 5)) lines.push('• ' + (types[item.kind] ?? '决定') + ' · ' + line(item.title, 120));
+  const text = lines.join('\n');
+  const elements = [{ tag: 'div', text: cardPlain(text) }, ...cardButtons([
+    { label: '查看执行', route: 'projects/' + encodeURIComponent(run.projectId || 'all') + '/runs/' + encodeURIComponent(run.id) },
+  ], cardWebBase(webBase))];
+  return { text, card: cardDocument('执行会话状态', elements) };
 }

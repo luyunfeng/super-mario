@@ -2927,3 +2927,77 @@ test('Web 的 conversation_status 只读取当前范围，排除本轮提问并�
     assert.deepEqual(server.app.approvals.list(), []);
   } finally { await server.close(); }
 });
+
+test('Web 和飞书按执行 ID 核对目标、最近观察与仍需用户决定的事项', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const question = '执行 run-look 的目标是什么？最近有何进展，有什么等我决定？';
+  const foreignQuestion = '能读到执行 run-foreign 的待决事项吗？';
+  const unavailable = '当前项目查不到这条执行。';
+  const observedAt = '2026-02-02T10:00:00Z';
+  const answer = '核对差额清单。最近观察到正在读取索引，待确认取数口径和补充输入。';
+  const { server, api, ask, requests } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.ok(req.tools.includes('runs_list'));
+      assert.match(req.system, /按该执行的 id 单条读取/);
+      assert.match(req.system, /仅列 blockedBy 中仍待决定的标题/);
+      if (JSON.stringify(req.content).includes(foreignQuestion)) return call('runs_list', { id: 'run-foreign' }, 'foreign-observation');
+      return call('runs_list', { id: 'run-look' }, 'observation');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    const rows = JSON.parse(raw);
+    if (req.callId === 'foreign-observation') {
+      assert.deepEqual(rows, []);
+      return { role: 'assistant', content: unavailable };
+    }
+    assert.equal(rows.length, 1);
+    const row = rows[0];
+    assert.equal(row.id, 'run-look');
+    assert.equal(row.prompt, '核对差额清单');
+    assert.equal(row.progress.observedAt, observedAt);
+    assert.equal(row.progress.detail, '正在读取索引');
+    assert.equal(row.status, 'running');
+    assert.deepEqual(row.blockedBy.map((item: { title: string }) => item.title).sort(), ['取数口径', '补充输入']);
+    assert.doesNotMatch(raw, /过期请求|其他项目请求|其他事项请求|其他执行请求|已经答复/);
+    return { role: 'assistant', content: answer + (req.system.includes('本轮回复渠道是飞书') ? ' run-look' : row.webCitation) };
+  }, options => {
+    adapter = options;
+    return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    const project = await api('/projects', { name: '核对项目' });
+    const todo = await api('/todos', { projectId: project.id, title: '核对差额' });
+    const run: Run = { id: 'run-look', projectId: project.id, todoId: todo.id, executorId: 'fixture',
+      prompt: '核对差额清单', conversationId: 'main', status: 'running', output: '', createdAt: observedAt, updatedAt: observedAt,
+      progress: { phase: 'tool', detail: '正在读取索引', observedAt } };
+    const { store } = server.app;
+    store.put('runs', run.id, run);
+    store.put('runs', 'run-foreign', { ...run, id: 'run-foreign', projectId: 'another-project', todoId: undefined });
+    const card = { kind: 'question', handler: 'user', status: 'open', runId: run.id, projectId: project.id,
+      version: 1, createdAt: observedAt, expiresAt: new Date(Date.now() + 600000).toISOString() };
+    for (const [title, fields] of [
+      ['取数口径', {}], ['过期请求', { expiresAt: observedAt }], ['其他项目请求', { projectId: 'another-project' }],
+      ['其他执行请求', { runId: 'another-run' }], ['已经答复', { status: 'answered' }],
+    ] as const) store.put('interactions', title, { ...card, ...fields, id: title, title });
+    const approval = server.app.approvals.propose({ kind: 'input', title: '补充输入', details: '', todoId: todo.id,
+      params: { id: run.id, projectId: project.id, todoId: todo.id, text: '补充核对项' } });
+    store.put('approvals', 'foreign-task', { ...approval, id: 'foreign-task', title: '其他事项请求', todoId: 'other-task',
+      params: { ...approval.params, todoId: 'other-task' } });
+    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), answer + '[查看执行](#projects/' + project.id + '/runs/run-look)');
+    assert.equal(await ask(foreignQuestion, '/projects/' + project.id + '/messages'), unavailable);
+    const bot = await api('/feishu/bots', { name: '执行查询', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'private', senderId: 'owner', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(question, { ...source, messageId: 'question' });
+    await t.waitFor(() => assert.ok(sent.includes(answer + ' run-look')));
+    await adapter.onMessage(foreignQuestion, { ...source, messageId: 'foreign' });
+    await t.waitFor(() => assert.ok(sent.includes(unavailable)));
+    assert.equal(requests.filter(req => req.callId === 'foreign-observation').length, 2);
+    assert.equal(requests.filter(req => req.callId === 'observation').length, 2);
+    assert.equal(store.get<{status:string}>('approvals', approval.id)?.status, 'pending');
+    assert.equal(store.get<{status:string}>('interactions', '取数口径')?.status, 'open');
+    assert.deepEqual(store.get('runs', run.id), run);
+  } finally { await server.close(); }
+});
