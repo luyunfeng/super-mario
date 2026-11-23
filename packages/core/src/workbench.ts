@@ -582,7 +582,7 @@ export async function createWorkbench(config: AppConfig) {
   }, (threadId,projectId) => {
     if (!plugins.list().some(plugin => plugin.id === 'web-conversations' && plugin.status === 'active'))
       throw new InputError('独立 Web 对话插件已停用',503);
-    return readWebConversationExport(store,threadId,projectId);
+    return readWebConversationExport(store,threadId,projectId,{files:chatFilesEnabled(),images:chatImagesEnabled()});
   }));
   for (const loaded of await loadExtensions(config.dataDir, { reservedIds: plugins.list().map(item => item.id) })) plugins.register(loaded.extension, loaded.config, loaded.origin);
   async function mainSkillCatalog(): Promise<string> {
@@ -1346,14 +1346,16 @@ export async function createWorkbench(config: AppConfig) {
   function chatFilesEnabled() {
     return plugins.list().some(p => p.id === 'conversation-files' && p.status === 'active');
   }
+  // Each media plugin grants its own capability. Thread identity and provenance are shared.
+  function webThreadAttachmentAudience(message:Message) {
+    if (message.role !== 'user' || !plugins.list().some(p => p.id === 'web-conversations' && p.status === 'active')) return false;
+    try {
+      requireWebConversationHistory(store, message.conversationId.slice(4), message.projectId);
+      return !!independentWebSource(store, message, message.conversationId, message.projectId);
+    } catch { return false; }
+  }
   function canReadChatFiles(message:Message) {
-    if (message.conversationId.startsWith('web:')) {
-      if (message.role !== 'user' || !chatFilesEnabled() || !plugins.list().some(p => p.id === 'web-conversations' && p.status === 'active')) return false;
-      try {
-        requireWebConversationHistory(store, message.conversationId.slice(4), message.projectId);
-        return !!independentWebSource(store, message, message.conversationId, message.projectId);
-      } catch { return false; }
-    }
+    if (message.conversationId.startsWith('web:')) return chatFilesEnabled() && webThreadAttachmentAudience(message);
     if (message.todoId) {
       const todo=store.get<Todo>('todos',message.todoId);
       if (!todo || todo.projectId!==message.projectId) return false;
@@ -1361,7 +1363,7 @@ export async function createWorkbench(config: AppConfig) {
     return chatFilesEnabled() && attachmentAudience(message,canReadPrivateFile);
   }
   function canReadChatImages(message:Message) {
-    return chatImagesEnabled() && attachmentAudience(message,canReadPrivateImage);
+    return chatImagesEnabled() && (message.conversationId.startsWith('web:') ? webThreadAttachmentAudience(message) : attachmentAudience(message,canReadPrivateImage));
   }
   function attachmentAudience(message:Message,privateAccess:(message:Message)=>boolean) {
     if (message.role !== 'user' || message.replyTo || (message.origin && message.origin !== 'user')) return false;

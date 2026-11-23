@@ -80,9 +80,13 @@ export function independentWebSource(store:Store,row:Message,conversationId:stri
   return source?.directWebInput ? source : undefined;
 }
 
-export function readWebConversationExport(store:Store,id:string,projectId?:string) {
+export function readWebConversationExport(store:Store,id:string,projectId:string|undefined,attachments:{files:boolean;images:boolean}) {
   const {title}=requireWebConversationHistory(store,id,projectId);
-  const messages=store.list<Message>('messages').filter(row=>independentWebSource(store,row,'web:'+id,projectId));
+  const messages=store.list<Message>('messages').filter(row=>independentWebSource(store,row,'web:'+id,projectId))
+    .map(({files,images,...message})=>({...message,
+      ...(message.role==='user' && attachments.files && files && {files}),
+      ...(message.role==='user' && attachments.images && images && {images}),
+    }));
   return {title,messages};
 }
 

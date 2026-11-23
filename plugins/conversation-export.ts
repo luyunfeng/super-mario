@@ -118,6 +118,10 @@ async function markdown(store: Store, input: Json, signal: AbortSignal, readNati
       : message.role === 'assistant' ? speaker : '用户';
     const status = message.status === 'failed' ? ' · 失败' : message.status === 'pending' ? ' · 未完成' : '';
     lines.push(`## ${headingText(author)} · ${message.createdAt}${status}`, '', message.text, '');
+    if (web && message.role==='user') {
+      for (const file of message.files ?? []) lines.push(`附件：${headingText(file.name)}（${file.bytes} 字节）`, '');
+      if (message.images?.length) lines.push(`图片：${message.images.length} 张`, '');
+    }
     if (input.includeWork && message.role === 'assistant') {
       const steps = workSteps(store, message, userIds);
       if (steps.length) {

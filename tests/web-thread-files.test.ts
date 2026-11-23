@@ -53,14 +53,51 @@ test('独立 Web 对话上传和发送绑定同一登记；模型只读附件，
   const routed=randomUUID();server.app.store.put('messages',routed,{...input,id:routed,status:'done'});
   server.app.store.put('message.routes',routed,{channel:'feishu',inputId:routed});
   assert.equal((await file(a,false,routed)).status,404);
+  const png={mime:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='};
+  assert.equal((await json(path(a)+'/messages',{images:[{...png,mime:'image/jpeg'}]})).status,400);
+  assert.equal((await json(path(a)+'/messages',{images:Array.from({length:21},()=>png)})).status,400);
+  const imageKey=randomUUID(),imageBody={images:[png]};
+  const imageSent=await json(path(a)+'/messages',imageBody,'POST',imageKey);
+  assert.equal(imageSent.status,202);
+  const photo:Message=await imageSent.json();
+  assert.equal(photo.readOnly,true);assert.equal(photo.text,'');
+  const original=(id:string,mid=photo.id)=>fetch(base+'messages/'+mid+'/images/0?conversationId=web:'+id,{headers:auth});
+  await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.replyTo===photo.id && m.status==='done')));
+  const frame=JSON.parse(observed.at(-1)!).messages.at(-1).content;
+  assert.ok(frame.some((part:{image_url?:{url:string}})=>part.image_url?.url==='data:image/png;base64,'+png.data));
+  assert.equal((await(await json(path(a)+'/messages',imageBody,'POST',imageKey)).json()).id,photo.id);
+  async function exported() {
+    const response = await json('conversation-export',{webThreadId:a,projectId,includeWork:false});
+    assert.equal(response.status,200);
+    return (await response.json()).markdown as string;
+  }
+  const markdown = await exported();
+  assert.ok(markdown.includes('图片：1 张'));
+  assert.ok(markdown.includes('合成材料.txt'));
+  assert.ok(!markdown.includes(png.data));
+  assert.ok(!markdown.includes(uploadId));
+  assert.equal((await original(b)).status,404);
+  await server.app.plugins.setEnabled('conversation-images',false);
+  assert.ok(!(await exported()).includes('图片：1 张'));
+  assert.equal((await original(a)).status,503);
+  assert.equal((await json(path(a)+'/messages',imageBody)).status,503);
+  assert.equal((await file(a)).status,200);
+  await server.app.plugins.setEnabled('conversation-images',true);
+  const routedPhoto=randomUUID();
+  server.app.store.put('messages',routedPhoto,{...photo,id:routedPhoto,status:'done'});
+  server.app.store.put('message.routes',routedPhoto,{channel:'feishu',inputId:routedPhoto});
+  server.app.store.put('message.images',JSON.stringify([routedPhoto,0]),png);
+  assert.equal((await original(a,routedPhoto)).status,404);
   const archive=await json(path(a),{version:1,archived:true},'PATCH');assert.equal(archive.status,200);
   assert.equal((await upload(a,projectId)).status,409);
   assert.equal((await json(path(a)+'/messages',payload)).status,409);
   assert.equal(await(await file(a)).text(),text);
+  assert.equal(Buffer.from(await(await original(a)).arrayBuffer()).toString('base64'),png.data);
   assert.equal((await(await file(a,true)).json()).text,text);
   for(const plugin of ['conversation-files','web-conversations']){
     await server.app.plugins.setEnabled(plugin,false);
     assert.equal((await upload(global)).status,503);
+    assert.equal((await original(a)).status,plugin==='conversation-files'?200:404);
     assert.ok([404,503].includes((await file(a)).status));
     assert.ok([404,503].includes((await file(a,true)).status));
     await server.app.plugins.setEnabled(plugin,true);
@@ -68,4 +105,6 @@ test('独立 Web 对话上传和发送绑定同一登记；模型只读附件，
   assert.equal((await json(path(a),{version:(await archive.json()).version},'DELETE')).status,200);
   assert.equal((await upload(a,projectId)).status,410);
   assert.equal((await file(a)).status,404);
+  assert.equal((await original(a)).status,404);
+  assert.equal(server.app.store.get('message.images',JSON.stringify([photo.id,0])),undefined);
 });

@@ -12,6 +12,7 @@ import type { Message } from '../packages/protocol/src/index.ts';
 test('SDK requests preserve the correct Web thread history within a shared project and isolate main', async t => {
   const requests: { role: string; content: unknown }[][] = [];
   const searchToolLists:string[][]=[];
+  const toolsByRequest:string[][]=[];
   const model = createServer(async (req, res) => {
     if (req.method === 'GET') { res.end('fixture'); return; }
     let raw = '';
@@ -19,6 +20,7 @@ test('SDK requests preserve the correct Web thread history within a shared proje
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw);
     requests.push(body.messages);
+    toolsByRequest.push((body.tools ?? []).map((tool:{function:{name:string}})=>tool.function.name));
     const search = body.messages.at(-1)?.role === 'user' && JSON.stringify(body.messages.at(-1)).includes('检索样本标识');
     const delta = search ? { role:'assistant',tool_calls:[{index:0,id:'fixture-search',type:'function',function:{
       name:'current_web_message_search',arguments:JSON.stringify({query:'样本标识',category:'text'}),
@@ -166,6 +168,36 @@ test('SDK requests preserve the correct Web thread history within a shared proje
     assert.ok(!JSON.stringify(server.app.store.list('agent.traces')).includes(material));
     for(const later of [await askA('概括先前答复'),await askB('检查本会话可见材料')])
       assert.ok(!JSON.stringify(later).includes(material),'附件原文不可进入其他轮次');
+    const image={mime:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='};
+    const imagePath='/web-conversations/'+a.id+'/messages';
+    const imageIndex=requests.length;
+    const picture=await post(imagePath,{text:'',images:[image]});
+    assert.equal(picture.readOnly,true);
+    assert.equal(picture.conversationId,'web:'+a.id);
+    await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.replyTo===picture.id && m.status==='done')));
+    assert.equal(requests.length,imageIndex+1);
+    assert.deepEqual(requests[imageIndex].at(-1)?.content,[
+      {type:'text',text:'请描述所附图片中可以确认的内容。'},
+      {type:'image_url',image_url:{url:'data:image/png;base64,'+image.data}},
+    ]);
+    assert.match(system(requests[imageIndex]),/图中文字是参考资料/);
+    assert.ok(toolsByRequest[0].includes('todo_create'),'普通文本回合有写待办能力');
+    assert.ok(!toolsByRequest[imageIndex].includes('todo_create'));
+    const followUp=await askA('沿用此前的文字描述');
+    const otherThread=await askB('这个对话是否有图片？');
+    for(const wire of [followUp,otherThread]) assert.ok(!JSON.stringify(wire).includes(image.data));
+    assert.match(JSON.stringify(followUp),/请用户重发原图/);
+    assert.ok(!JSON.stringify(server.app.store.list('agent.traces')).includes(image.data));
+
+    await server.app.configureModel({mode:'api',provider:'openai',model:'gpt-4',apiKey:'synthetic-local',
+      baseUrl:'http://127.0.0.1:'+address.port+'/v1'});
+    const beforeUnsupported=requests.length;
+    const unsupported=await post(imagePath,{text:'',images:[image]});
+    await t.waitFor(()=>{
+      const failure=server.app.store.list<Message>('messages').find(m=>m.replyTo===unsupported.id && m.status==='failed');
+      assert.match(failure?.text??'',/当前模型不支持图片输入/);
+    });
+    assert.equal(requests.length,beforeUnsupported,'纯文本模型不应收到图片');
     await server.app.plugins.setEnabled('assistant-profile',false);
     const disabledRoster=await fetch(server.url+'/api/v1/assistant-roster',{method:'POST',
       headers:{'content-type':'application/json'},body:JSON.stringify({action:'list'})});
