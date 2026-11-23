@@ -128,5 +128,10 @@ console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:21,cached_
    doneWhen: '返回合成回执', expectMinutes: 2 });
  assert.equal(handoffResult.status,202);
  assert.equal(server.app.store.get<Run>('runs',handoffResult.data.id)?.handoffRunId,run.id);
+ const listRuns = server.app.contributions.list('tools').find(entry => entry.value.name === 'runs_list')!.value;
+ const successorsBySource = await listRuns.execute({ handoffRunId: run.id, projectId: project.id }, signal) as unknown as Run[];
+ assert.ok(successorsBySource.some(item => item.id === handoffResult.data.id));
+ assert.ok(successorsBySource.every(item => item.handoffRunId === run.id));
+ assert.deepEqual(await listRuns.execute({ handoffRunId: run.id, projectId: 'unrelated-project' }, signal), []);
  const stored=server.app.approvals.list().find(a=>a.id===approval.id)!;assert.equal(stored.status,'completed');
 });

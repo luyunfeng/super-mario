@@ -506,9 +506,10 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           timeZone: { type: 'string', description: '日期查询或全天逾期判断使用的 IANA 时区，如 Asia/Shanghai' },
           dueFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, dueBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' } }));
         const runStates = ['queued', 'running', 'completed', 'failed', 'cancelled', 'unknown'];
-        context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。query 按关键词检索目标、验收标准、输出、错误、分支和执行 ID，返回含出处的摘录，最近更新在前。updatedFrom 含起点，updatedBefore 不含终点，按记录更新时间筛选。用 id 单独读取完整执行记录、最近的公开进展与当前待决定事项 blockedBy。machineId、executorId 精确匹配执行记录登记的 ID。status 可限定登记状态。worktreeRunId 仅列出在指定工作树中另起的执行。', async ({ worktreeRunId, query, queryField, status, id, projectId, todoId, machineId, executorId, nativeSessionId, updatedFrom, updatedBefore }, signal) => {
+        context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。query 按关键词检索目标、验收标准、输出、错误、分支和执行 ID，返回含出处的摘录，最近更新在前。updatedFrom 含起点，updatedBefore 不含终点，按记录更新时间筛选。用 id 单独读取完整执行记录、最近的公开进展与当前待决定事项 blockedBy。machineId、executorId 精确匹配执行记录登记的 ID。status 可限定登记状态。worktreeRunId 仅列出在指定工作树中另起的执行。handoffRunId 查询直接接手指定来源执行的记录。', async ({ handoffRunId, worktreeRunId, query, queryField, status, id, projectId, todoId, machineId, executorId, nativeSessionId, updatedFrom, updatedBefore }, signal) => {
           signal.throwIfAborted();
           if (queryField !== undefined && (queryField !== 'doneWhen' || query === undefined)) throw new Error('限定验收标准检索须传 query 和 queryField=doneWhen');
+          if (handoffRunId !== undefined && (typeof handoffRunId !== 'string' || !handoffRunId.trim())) throw new Error('缺少交接来源执行 ID');
           if (worktreeRunId !== undefined && (typeof worktreeRunId !== 'string' || !worktreeRunId.trim())) throw new Error('缺少工作树所属执行 ID');
           if (query !== undefined && (typeof query !== 'string' || !query.trim() || query.length > 500)) throw new Error('检索词须为 1 至 500 个字符');
           if (status !== undefined && (typeof status !== 'string' || !runStates.includes(status))) throw new Error('执行状态无效');
@@ -524,14 +525,14 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
               const updated = Date.parse(run.updatedAt);
               if (!(updated >= from && updated < before)) return false;
             }
-            return (worktreeRunId === undefined || run.worktreeRunId === worktreeRunId) && (status === undefined || run.status === status) &&
+            return (handoffRunId === undefined || run.handoffRunId === handoffRunId) && (worktreeRunId === undefined || run.worktreeRunId === worktreeRunId) && (status === undefined || run.status === status) &&
               (machineId === undefined || run.machineId === machineId) && (executorId === undefined || run.executorId === executorId) &&
               (nativeSessionId === undefined || (run.nativeSessionId ?? run.nativeResume?.nativeSessionId) === nativeSessionId) &&
               (id === undefined || run.id === id) && (projectId === undefined || run.projectId === projectId) && (todoId === undefined || run.todoId === todoId);
           });
           if (bounded || query !== undefined || nativeSessionId !== undefined) runs.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || a.id.localeCompare(b.id));
           if (typeof query !== 'string') {
-            if (!bounded && nativeSessionId === undefined && worktreeRunId !== undefined) runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+            if (!bounded && nativeSessionId === undefined && (worktreeRunId !== undefined || handoffRunId !== undefined)) runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
             if (id !== undefined) return runs.map(run => {
               // Resolve observations only after the project and todo filters admit this run.
               const observed = actions?.runObservations?.(run.id);
@@ -546,7 +547,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             if (!evidence) return [];
             return [{ id: run.id, projectId: run.projectId, todoId: run.todoId, machineId: run.machineId, executorId: run.executorId, status: run.status, updatedAt: run.updatedAt, evidence, webCitation: runCitation(run) }];
           }) as unknown as Json;
-        }, { worktreeRunId: { type: 'string' }, id: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' },
+        }, { handoffRunId: { type: 'string' }, worktreeRunId: { type: 'string' }, id: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' },
           machineId: { type: 'string', description: '执行记录中登记的机器完整 ID，区分大小写。' },
           nativeSessionId: { type: 'string', description: '精确匹配原生线程标识。可同时限定机器、执行器；结果按最近更新排序。' },
           executorId: { type: 'string', description: '执行器完整 ID，保留远端执行器 ID 中的机器前缀。' },
