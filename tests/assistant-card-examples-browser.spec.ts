@@ -18,6 +18,8 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
     ctx.contribute('web_extensions','area',{slot:'advanced-interface',renderer:'chart',kind:'area',title:'跨零走势',points:[{label:'昨日',value:-1},{label:'今日',value:1}],fallback:'由负转正'});
     for (const kind of ['pie','donut']) ctx.contribute('web_extensions',kind,{slot:'advanced-interface',renderer:'chart',kind,title:'占比 '+kind,
       points:[{label:'甲',value:Number.MAX_VALUE},{label:'乙',value:Number.MAX_VALUE},{label:'扣减',value:-2}],fallback:'两类各占一半'});
+    ctx.contribute('web_extensions','candles',{slot:'advanced-interface',renderer:'chart',kind:'candlestick',title:'价格记录',
+      points:[{label:'首日',value:12,open:10,high:15,low:9,volume:24},{label:'次日',value:11,open:12,high:13,low:10}],fallback:'价格摘要'});
     ctx.contribute('web_extensions','future',{slot:'advanced-interface',renderer:'future',title:'其他格式',fallback:'纯文字说明'});
   }}`);
   const server=await startServer({host:'127.0.0.1',port:0,dataDir,demo:true});
@@ -48,6 +50,10 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
     await expect(round.getByRole('row',{name:/扣减/})).toContainText('0%');
     await expect(round.locator('div[aria-hidden]')).toHaveCSS('background-image',/conic-gradient/);
   }
+  const prices=page.getByRole('region',{name:'价格记录'});
+  await expect(prices.getByRole('cell')).toHaveText(['10','15','9','12','24','12','13','10','11','—']);
+  await expect(prices.locator('svg line')).toHaveCount(2);
+  await expect(prices.locator('svg rect')).toHaveCount(3);
   const stopped=await page.request.post(server.url+'/api/v1/plugins/review',{data:{enabled:false}});
   assert.equal(stopped.status(),200);
   await expect(patch).toHaveCount(0);

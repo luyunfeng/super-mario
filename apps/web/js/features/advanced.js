@@ -32,7 +32,44 @@ function shareChart(card) {
     h('thead',{},h('tr',{},['项目','数值','占比'].map(label=>h('th',{scope:'col'},label)))),h('tbody',{},rows)));
 }
 
+function candleChart(card) {
+  if (!Array.isArray(card.points) || !card.points.length) return;
+  const candles = [];
+  let low = Infinity, high = -Infinity, maxVolume = 0;
+  for (const p of card.points) {
+    if (!p || typeof p.label !== 'string') return;
+    const close = p.close === undefined ? p.value : p.close;
+    if (![p.low,p.open,close,p.high].every(Number.isFinite) || p.low > Math.min(p.open,close) ||
+        p.high < Math.max(p.open,close) || (p.volume !== undefined && (!Number.isFinite(p.volume) || p.volume < 0))) return;
+    candles.push({...p,close});
+    low = Math.min(low,p.low);
+    high = Math.max(high,p.high);
+    maxVolume = Math.max(maxVolume,p.volume ?? 0);
+  }
+  const scale = Math.max(Math.abs(low),Math.abs(high)) || 1;
+  const y = price => high === low ? 42 : 80 - 76 * ((price / scale - low / scale) / (high / scale - low / scale));
+  const marks = [], rows = [];
+  const step = 300 / candles.length;
+  candles.forEach((p,i) => {
+    const x = (i + 0.5) * step, width = step * 0.6;
+    const color = p.close >= p.open ? 'var(--ok, currentColor)' : 'var(--danger)';
+    marks.push(['line',{x1:x,x2:x,y1:y(p.high),y2:y(p.low),stroke:color}],
+      ['rect',{x:x-width/2,y:Math.min(y(p.open),y(p.close)),width,height:Math.max(1,Math.abs(y(p.open)-y(p.close))),fill:color}]);
+    if (maxVolume && p.volume > 0) {
+      const height = 16 * (p.volume / maxVolume);
+      marks.push(['rect',{x:x-width/2,y:100-height,width,height,fill:color,opacity:0.5}]);
+    }
+    rows.push(h('tr',{},h('th',{scope:'row'},p.label),[p.open,p.high,p.low,p.close,p.volume ?? '—'].map(v=>h('td',{},v))));
+  });
+  const graph = svg(marks);
+  graph.setAttribute('viewBox','0 0 300 100');
+  graph.setAttribute('height','120');
+  return h('div',{class:'stack'},graph,h('table',{class:'table','aria-label':card.title},
+    h('thead',{},h('tr',{},['项目','开盘','最高','最低','收盘','成交量'].map(v=>h('th',{scope:'col'},v)))),h('tbody',{},rows)));
+}
+
 function extensionChart(card) {
+  if (card.kind === 'candlestick') return candleChart(card);
   const points = card.points;
   if (!['bar','line','area','pie','donut'].includes(card.kind) || !Array.isArray(points) || !points.length ||
       !points.every(point => typeof point?.label === 'string' && Number.isFinite(point.value))) return;
