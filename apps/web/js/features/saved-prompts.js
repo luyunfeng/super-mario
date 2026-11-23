@@ -251,23 +251,33 @@ export function attachSavedPrompts({ api, store, input, getScope = () => '', get
     inserting = false;
   }
   const query = () => /^\/[\p{L}\p{Nd}\p{Mn}_.-]*$/u.test(input.value) ? input.value.slice(1).toLowerCase() : null;
-  let validMenu;
+  let validMenu, visibleLimit = 25;
   function draw() {
     if (!validMenu?.()) { reset(); return; }
     const filter = query();
     if (filter === null) { reset(); return; }
     const results = matchingPrompts(items, filter);
-    matches = results.slice(0, 25);
+    matches = results.slice(0, visibleLimit);
     selected = Math.min(selected, Math.max(0, matches.length - 1));
     replace(menu, matches.length ? matches.map((item, index) =>
       Button({ label: '/' + item.name, kind: index === selected ? 'primary' : 'secondary', size: 'sm', onClick() {
         if (validMenu?.() && query() !== null) choose(item);
       } })) : h('p', { class: 'small muted' }, '没有匹配的提示词。'),
-      results.length > matches.length && h('p', { class: 'small muted' }, '共匹配 ' + results.length + ' 条，已显示前 ' + matches.length + ' 条。继续输入名称可缩小范围。'));
+      results.length > matches.length && h('p', { class: 'small muted' }, '共匹配 ' + results.length + ' 条，已显示前 ' + matches.length + ' 条。继续输入名称可缩小范围。'),
+      results.length > matches.length && Button({ label: '显示更多提示词', size: 'sm', onClick() {
+        if (!validMenu?.() || query() !== filter) return;
+        const firstNew = matches.length;
+        input.focus();
+        visibleLimit = firstNew + 25;
+        selected = firstNew;
+        draw();
+        menu.children[selected]?.scrollIntoView({ block: 'nearest' });
+      } }));
   }
   async function suggest() {
     if (disposed || inserting || !enabled || query() === null) { reset(); return; }
     selected = 0;
+    visibleLimit = 25;
     if (!menu.hidden) { if (items) draw(); return; }
     const order = ++read, current = owner();
     validMenu = () => order === read && current();

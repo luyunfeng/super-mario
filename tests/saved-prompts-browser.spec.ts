@@ -255,9 +255,14 @@ test('插件设置可管理提示词；并发编辑保留草稿，已打开的�
     revision = (await response.json()).revision;
   }
   await input.fill('/');
-  const rows = first.getByRole('group', { name: '提示词候选' }).getByRole('button');
+  const menu = first.getByRole('group', { name: '提示词候选' });
+  const rows = menu.getByRole('button', { name: /^\// });
   await expect(rows).toHaveCount(25);
   await expect(first.getByRole('group', { name: '提示词候选' })).toContainText('共匹配 29 条，已显示前 25 条');
+  await menu.getByRole('button', { name: '显示更多提示词' }).click();
+  await expect(rows).toHaveCount(29);
+  await rows.last().click();
+  await expect(input).toHaveValue('正文 plan');
   await input.fill('/PLAN');
   await expect(rows).toHaveText(['/plan', '/plan-beta', '/plan-alpha', '/xplan']);
   await input.press('ArrowDown');
