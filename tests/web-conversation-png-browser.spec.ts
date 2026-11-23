@@ -39,7 +39,15 @@ test('独立对话跨页选消息，附上原提问后预览、复制和下载 P
   const read=await firstRead;assert.equal(read.status(),200);
   assert.deepEqual(read.request().postDataJSON(),{action:'preview_image',webThreadId:first,projectId:project.id,messageIds:[ids[55],ids[0]],includeQuestions:false});
   const drawer=page.getByRole('dialog',{name:'导出消息图片',exact:true});
-  const include=response();await drawer.getByLabel('附上对应提问').check();const withQuestion=await (await include).json();
+  await page.route('**/conversation-export',route=>route.fulfill({status:503,json:{error:'合成预览服务暂不可用'}}),{times:1});
+  await drawer.getByLabel('附上对应提问').check();
+  await expect(drawer.getByRole('status')).toContainText('合成预览服务暂不可用');
+  await expect(drawer.getByLabel('附上对应提问')).toBeChecked();
+  const include=response();
+  await drawer.getByRole('button',{name:'重试',exact:true}).click();
+  const retried=await include;
+  assert.deepEqual(retried.request().postDataJSON().messageIds,[ids[55],ids[0]]);
+  const withQuestion=await retried.json();
   assert.deepEqual(withQuestion.messages.map((m:{id:string})=>m.id),[ids[0],ids[54],ids[55]]);
   await drawer.getByLabel('显示对话标题').uncheck();await drawer.getByLabel('显示日期').uncheck();
   const image=drawer.getByAltText('PNG 预览 第 1 页',{exact:true});
