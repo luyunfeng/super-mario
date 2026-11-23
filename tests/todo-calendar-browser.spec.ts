@@ -39,6 +39,19 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await expect(root).toBeVisible();
   await expect(root).toContainText('时区 · America/Los_Angeles');
   await page.goto(base + '/month/2030-03-31');
+  const busyDay = root.locator('[data-day="2030-03-19"]');
+  for (const hour of [12, 10, 11]) {
+    server.app.createTodo({ title: '集中交付 ' + hour, projectId: project.id, dueAt: `2030-03-19T${hour}:00:00-07:00` });
+  }
+  await expect(busyDay.locator('.cal-entry')).toHaveCount(3);
+  server.app.createTodo({ title: '集中交付 13', projectId: project.id, dueAt: '2030-03-19T13:00:00-07:00' });
+  await expect(busyDay.locator('.cal-entry')).toHaveCount(2);
+  await expect(busyDay.locator('.cal-entry').last()).toContainText('集中交付 11');
+  await busyDay.getByRole('button', { name: '还有 2 项，查看 2030-03-19 的全部待办' }).press('Enter');
+  await expect(page).toHaveURL(base + '/day/2030-03-19');
+  await expect(root.getByRole('button', { name: /集中交付/ })).toHaveCount(4);
+  await page.goBack();
+  await expect(page).toHaveURL(base + '/month/2030-03-31');
   const entry = root.getByRole('button', { name: /本地三月末/ });
   await expect(root.locator('[data-day="2030-03-31"]')).toContainText(todo.title);
   await expect(entry).toHaveAccessibleName(/有待触发提醒/);

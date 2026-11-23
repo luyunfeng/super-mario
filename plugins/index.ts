@@ -303,6 +303,8 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         context.contribute('tools', 'todos_list', tool('todos_list', '读取工作台待办。status=open 查未完成，done 查已完成，all 或省略可查全部。overdue=true 仅查已过截止时间的未完成事项。可按项目、优先级、标题和备注关键词及截止时段组合筛选。', async (args, signal) => {
           signal.throwIfAborted();
           if (args.query !== undefined && typeof args.query !== 'string') throw new Error('待办关键词须为文本');
+          if (args.pageSearch !== undefined && typeof args.pageSearch !== 'string') throw new Error('页面搜索词须为文本');
+          const pageSearch = args.pageSearch?.trim().toLowerCase();
           if (args.status !== undefined && (typeof args.status !== 'string' || !['open', 'done', 'all'].includes(args.status))) throw new Error('待办状态无效');
           if (args.overdue !== undefined && typeof args.overdue !== 'boolean') throw new Error('逾期筛选须为布尔值');
           if (args.reminderStatus !== undefined && args.reminderStatus !== 'pending' && args.reminderStatus !== 'triggered') throw new Error('提醒状态无效');
@@ -360,6 +362,11 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             if (dayFormat && (!Number.isFinite(due) || dayFormat.format(due).padStart(10, '0') !== args.dueDay)) return false;
             if (args.overdue && (todo.completedAt || !(due < now))) return false;
             if (bounded && !(due >= from && due < before)) return false;
+            if (pageSearch) {
+              const session = todo.responsibleSession;
+              const fields = [todo.title, todo.notes, todo.responsiblePerson, todo.waitingOn, session && session.machineId + ' / ' + session.sessionId];
+              if (!fields.some(value => value?.toLowerCase().includes(pageSearch))) return false;
+            }
             if (!words.length) return true;
             const text = [todo.title, todo.notes].join('\n').normalize('NFC').toLowerCase();
             return words.every(word => text.includes(word));
@@ -377,7 +384,8 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             });
           }
           return todos as unknown as Json;
-        }, { query: { type: 'string', description: '标题或备注中的关键词，多词用空格分隔' }, projectId: { type: 'string' },
+        }, { pageSearch: { type: 'string', description: '核对待办页面时原样传搜索框文字，在标题、备注、负责人、等待对象或负责会话中匹配整段' },
+          query: { type: 'string', description: '标题或备注中的关键词，多词用空格分隔' }, projectId: { type: 'string' },
           parentTodoId: { type: 'string', description: '仅返回指定上级的直接子待办' },
           responsibleMachineId: { type: 'string', description: '完整匹配登记负责会话的电脑 ID' },
           responsibleSessionId: { type: 'string', description: '完整匹配登记的负责会话 ID，可同时限定电脑' },

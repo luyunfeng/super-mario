@@ -151,16 +151,19 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
         move(todo, key, slotTime(event.currentTarget, hour, event.clientY), originalDueAt);
       } }, children);
   }
-  function dayButton(day, label) {
-    return h('button', { type: 'button', class: 'cal-day', 'aria-label': `查看 ${localDate(day)}`, onclick: () => navigate('day', day) }, label);
+  function dayButton(day, label, accessibleLabel = `查看 ${localDate(day)}`) {
+    return h('button', { type: 'button', class: 'cal-day', 'aria-label': accessibleLabel, onclick: () => navigate('day', day) }, label);
   }
   let content;
   if (mode === 'month') {
     content = h('div', { class: 'cal-grid cal-month' }, days.slice(0, 7).map(day => h('strong', { class: 'cal-head' }, weekdays[day.getDay()])),
       days.map(day => {
         const entries = dated.get(localDate(day)) ?? [];
-        return cell(day, undefined, dayButton(day, day.getDate()), entries.slice(0, 3).map(entry),
-          entries.length > 3 && dayButton(day, `还有 ${entries.length - 3} 项`));
+        // Reserve the third line for opening the full day only when entries overflow.
+        const shown = entries.length > 3 ? entries.slice(0, 2) : entries;
+        const more = entries.length - shown.length;
+        return cell(day, undefined, dayButton(day, day.getDate()), shown.map(entry),
+          more > 0 && dayButton(day, `还有 ${more} 项`, `还有 ${more} 项，查看 ${localDate(day)} 的全部待办`));
       }));
   } else {
     const headers = days.map(day => dayButton(day, `${weekdays[day.getDay()]} ${day.getMonth() + 1}/${day.getDate()}`));

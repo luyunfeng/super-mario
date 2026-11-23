@@ -1295,7 +1295,9 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
       }
       if (question.includes('纽约换季核验')) {
         assert.match(req.system, /同传 dueDay 和 timeZone/);
-        return call('todos_list', { query: '换季', dueDay: '2026-11-01', timeZone: 'America/New_York', status: 'open' }, 'local-day');
+        assert.match(req.system, /按当天查询全部匹配项/);
+        assert.match(req.system, /搜索框文字原样传 pageSearch/);
+        return call('todos_list', { pageSearch: '换季', dueDay: '2026-11-01', timeZone: 'America/New_York', status: 'open' }, 'local-day');
       }
       if (question.includes('由协调员负责')) {
         assert.match(req.system, /不根据备注、等待对象或执行器推断负责人/);
@@ -1321,7 +1323,7 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
       assert.deepEqual(titles, ['月报待验收']);
       return { role: 'assistant', content: answer };
     }
-    if (req.callId === 'local-day') assert.deepEqual(titles, ['换季甲', '换季乙', '换季日末']);
+    if (req.callId === 'local-day') assert.deepEqual(titles, ['换季甲', '换季乙', '归档', '换季日末']);
     else if (req.callId === 'local-week') assert.deepEqual(titles, ['换季甲', '换季乙', '换季日末', '换季次日']);
     else if (req.callId === 'responsible') assert.deepEqual(titles, ['加急复核']);
     else if (req.callId === 'waiting') assert.deepEqual(titles, ['加急复核']);
@@ -1385,8 +1387,9 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
       ['乙', '2026-11-01T06:30:00Z'], ['日末', '2026-11-02T04:59:59Z'], ['次日', '2026-11-02T05:00:00Z']]) {
       await api('/todos', { title: '换季' + name, dueAt, projectId: project.id });
     }
-    const dayQuestion = '纽约换季核验：当地 11 月 1 日到期的换季待办有哪些？按 2026 年查。';
-    const dayAnswer = '换季甲、换季乙、换季日末';
+    const dayQuestion = '纽约换季核验：2026 年 11 月 1 日月历当天的换季待办有哪些？搜索词是换季，未勾选显示已完成。';
+    await api('/todos', { title: '归档', waitingOn: '换季复核员', dueAt: '2026-11-01T07:30:00Z', projectId: project.id });
+    const dayAnswer = '换季甲、换季乙、归档、换季日末';
     await api('/todos', { title: '换季下周', dueAt: '2026-11-08T05:00:00Z', projectId: project.id });
     const weekQuestion = '核对日历这周的换季待办，纽约时间 2026-11-01 至 2026-11-07。';
     const weekAnswer = '换季甲、换季乙、换季日末、换季次日';
