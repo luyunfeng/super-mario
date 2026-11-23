@@ -26,7 +26,7 @@ export function closeOverlays(){for(const dialog of document.querySelectorAll('d
  * 右侧抽屉。body/footer 可以是节点或节点数组。返回 { el, body, close }。
  * Esc、点击遮罩、关闭按钮都会关闭；关闭后自动移除。
  */
-export function openDrawer({ title, subtitle, body, footer, wide = false, onClose }) {
+export function openDrawer({ title, subtitle, body, footer, wide = false, onClose, canDismiss = () => true }) {
   const closeButton = h('button', { class: 'btn btn--ghost btn--icon btn--sm', type: 'button', 'aria-label': '关闭', title: '关闭' }, icon('x'));
   const bodyEl = h('div', { class: 'drawer__body' }, body);
   const footEl = footer ? h('div', { class: 'drawer__foot' }, footer) : null;
@@ -37,8 +37,10 @@ export function openDrawer({ title, subtitle, body, footer, wide = false, onClos
     bodyEl, footEl);
   const previous = document.activeElement;
   const close = () => { if (el.open) el.close(); };
-  closeButton.addEventListener('click', close);
-  el.addEventListener('click', (event) => { if (event.target === el) close(); });
+  const dismiss = () => { if (canDismiss()) close(); };
+  closeButton.addEventListener('click', dismiss);
+  el.addEventListener('cancel', event => { if (!canDismiss()) event.preventDefault(); });
+  el.addEventListener('click', (event) => { if (event.target === el) dismiss(); });
   el.addEventListener('close', () => { el.remove(); onClose?.(); previous?.focus?.(); });
   document.body.append(el);
   el.showModal();

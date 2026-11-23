@@ -58,8 +58,9 @@ function watchChanges(store, getAssistantId, onChange) {
 export function openSavedPrompts({ api, store, initialText, assistantId, assistantName, isCurrent = () => true }) {
   if (!savedPromptsActive(store, assistantId) || !isCurrent()) return;
   const token = api.token();
+  let writing = false;
   let doc, draft, deleting, busy = false, stale = false, error = '';
-  const drawer = openDrawer({ title: '常用提示词', subtitle: assistantName, onClose() { unsubscribe(); unwatch(); } });
+  const drawer = openDrawer({ title: '常用提示词', subtitle: assistantName, canDismiss: () => !writing, onClose() { unsubscribe(); unwatch(); } });
   const current = () => drawer.el.open && token === api.token() && savedPromptsActive(store, assistantId) && isCurrent();
   const unsubscribe = store.subscribe(() => { if (!current()) drawer.close(); });
 
@@ -78,6 +79,7 @@ export function openSavedPrompts({ api, store, initialText, assistantId, assista
     if (busy || !current() || (change && stale)) return;
     deleting = undefined;
     busy = true;
+    writing = Boolean(change);
     conflict.replaceChildren();
     error = '';
     draw();
@@ -105,6 +107,7 @@ export function openSavedPrompts({ api, store, initialText, assistantId, assista
       if (change && (conflict || !cause.status || cause.status >= 500)) stale = true;
     } finally {
       busy = false;
+      writing = false;
       if (current()) {
         draw();
         if (!error && doc && pendingRevision > doc.revision) {
@@ -205,7 +208,7 @@ export function openSavedPrompts({ api, store, initialText, assistantId, assista
       }));
   }
   function draw() {
-    replace(drawer.body, conflict, error && h('p', { role: 'alert' }, error),
+    replace(drawer.body, conflict, writing && h('p', { role: 'status' }, '正在保存更改…'), error && h('p', { role: 'alert' }, error),
       stale && h('p', { role: 'status' }, '请刷新提示词列表后核对并重试。'),
       (stale || (!doc && !busy)) && Button({ label: '刷新列表', disabled: busy, onClick: () => request() }),
       doc ? (draft ? editor() : list()) : busy && h('p', { role: 'status' }, '正在读取提示词…'));
