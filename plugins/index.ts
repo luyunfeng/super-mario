@@ -762,6 +762,10 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         context.defer(() => lifetime.abort(Object.assign(new Error('每日简报插件已停用'), { status: 503 })));
         const today = (input: Json, signal: AbortSignal) => readTodayBrief(context.store, actions ?? {}, input, AbortSignal.any([lifetime.signal, signal]));
         context.provide('daily-brief.today', today);
+        context.provide('daily-brief.scoped-today', async (ids, signal) => {
+          if (!Array.isArray(ids) || !ids.every(id => typeof id === 'string')) throw new Error('简报可见事项列表无效');
+          return readTodayBrief(context.store, actions ?? {}, {}, AbortSignal.any([lifetime.signal, signal]), Date.now(), new Set(ids));
+        });
         context.contribute('tools', 'today_brief', tool('today_brief',
           '读取工作台时区的今日简报，含待决定、待处理收件、今日群@我、完成、失败、当前执行及个人日程。区分待办完成与执行结束，注明缺失来源和截断。', today));
         context.contribute('tools', 'scheduled_work_templates', tool('scheduled_work_templates',

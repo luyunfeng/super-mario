@@ -75,7 +75,7 @@ async function calendarSection(actions: Actions, sources: TodayBriefSources, win
   }
 }
 
-export async function readTodayBrief(store: Pick<Store, 'list'>, actions: Actions, input: Json, signal: AbortSignal, now = Date.now()): Promise<TodayBrief> {
+export async function readTodayBrief(store: Pick<Store, 'list'>, actions: Actions, input: Json, signal: AbortSignal, now = Date.now(), visibleInteractions?: ReadonlySet<string>): Promise<TodayBrief> {
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length)
     throw Object.assign(new Error('今日简报不接受查询参数'), { status: 400 });
   signal.throwIfAborted();
@@ -98,7 +98,7 @@ export async function readTodayBrief(store: Pick<Store, 'list'>, actions: Action
   const completed = store.list<Todo>('todos').flatMap((todo): TodayItem[] => todo.completedAt && today(todo.completedAt)
     ? [{ id: todo.id, kind: 'todo', title: bounded(todo.title), at: todo.completedAt, ...(todo.projectId && { projectId: todo.projectId }) }] : []);
   return { date: window.date, timezone: current.timezone, generatedAt: new Date(now).toISOString(),
-    decisions: section(current.decisions.map(row => ({ id: row.id, kind: row.kind, at: row.at, title: bounded(row.title), ...(row.projectId && { projectId: row.projectId }) }))),
+    decisions: section(current.decisions.filter(row => row.kind !== 'interaction' || !visibleInteractions || visibleInteractions.has(row.id)).map(row => ({ id: row.id, kind: row.kind, at: row.at, title: bounded(row.title), ...(row.projectId && { projectId: row.projectId }) }))),
     inbox: section(inbox.filter(row => row.tier === 'action').map(inboxItem)),
     mentions: section(inbox.filter(row => row.origin?.kind === 'group' && row.origin.mentionedMe === true && row.receivedAt && today(row.receivedAt)).map(inboxItem)),
     completed: section([...completed, ...runs.filter(r => r.status === 'completed' && today(r.updatedAt)).map(runItem)]),

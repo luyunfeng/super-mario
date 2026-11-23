@@ -689,7 +689,9 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (enabled()) {
         try {
           const service = app.plugins?.invocations;
-          result = service?.use ? await service.use('daily-brief.today', {}, { timeoutMs: 30_000 }) as unknown as TodayBrief : '今日简报服务不可用。';
+          const visibleIds = app.store.list<Card>('interactions').filter(card => canViewQuestion(bot, paired, card))
+            .map(card => 'interaction:' + card.id);
+          result = service?.use ? await service.use('daily-brief.scoped-today', visibleIds, { timeoutMs: 30_000 }) as unknown as TodayBrief : '今日简报服务不可用。';
         } catch (error) { result = '今日简报读取失败 · ' + redact(error); }
       }
       if (!valid()) return;

@@ -933,14 +933,15 @@ test('飞书主人私聊 /today 和主页按钮读取今日简报，去重并报
   plugins.list = () => [...list(), { id: 'daily-brief', status: enabled ? 'active' : 'disabled', enabled }];
   plugins.invocations!.use = async (name, input) => {
     reads++;
-    assert.equal(name, 'daily-brief.today');
-    assert.deepEqual(input, {});
+    assert.equal(name, 'daily-brief.scoped-today');
+    assert.deepEqual(input, []);
     return readTodayBrief(f.store, {
       todayBriefSources: () => ({ timezone: 'Asia/Shanghai', calendarIdentity: calendarReady ? 'local-calendar' : undefined,
-        decisions: [], inbox: [] }),
+        decisions: [...Array.from({length: 13}, (_, i) => ({id:'interaction:'+i, kind:'interaction', title:'不可见问题', at:stamp})),
+          {id:'plan:visible', kind:'plan', title:'可见计划', at:'2026-02-28T12:00:00Z'}], inbox: [] }),
       calendarAgenda: async () => ({ available: true, events: [{ eventId: 'local-all-day', summary: '合成全天安排',
         startTime: '2026-03-01', endTime: '2026-03-02' }] }),
-    }, input, new AbortController().signal, Date.parse(stamp));
+    }, {}, new AbortController().signal, Date.parse(stamp), new Set(input as string[]));
   };
   const receive = bot.instance.options.onMessage;
   const human = (id: string) => ({ ...source(id), senderType: 'user' as const });
@@ -962,6 +963,8 @@ test('飞书主人私聊 /today 和主页按钮读取今日简报，去重并报
     assert.match(detail, /Asia\/Shanghai · 生成于 20:30/);
     assert.match(detail, /今日更新的失败执行/);
     assert.ok(detail.includes(completed.title));
+    assert.match(detail, /可见计划/);
+    assert.doesNotMatch(detail, /不可见问题/);
     assert.match(detail, /来源不可用/);
   }
   type Button = { text: { content: string }; value: Record<string, unknown> };
