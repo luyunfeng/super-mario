@@ -532,6 +532,20 @@ export function createFeishuIntegration(options: FeishuOptions) {
     return string(message?.thread_id).trim() || undefined;
   }
   /** Read exactly the quoted parent with this bot's token. Absence never widens the read to chat history. */
+  async function readPrivateQuote(chatId:string,parentId:string,ownerId:string,since:number,before:number,guard:()=>void) {
+    const message=await readVerifiedMessage(chatId,parentId,guard,true);
+    guard();
+    if (!message || !ownerId || message.upper_message_id || message.updated === true ||
+        (message.chat_type && message.chat_type !== 'p2p') || !['text','post'].includes(string(message.msg_type))) return;
+    const author=object(message.sender);
+    if (author.sender_type !== 'user' || author.id_type !== 'open_id' || author.id !== ownerId) return;
+    const created=Date.parse(isoTime(message.create_time) ?? '');
+    if (!Number.isFinite(created) || !Number.isFinite(since) || !Number.isFinite(before) || created<=since || created>before) return;
+    const text=forwardBody(message);
+    if (!text) return;
+    const chars=[...text];
+    return {text:chars.slice(0,4000).join(''),truncated:chars.length>4000};
+  }
   async function readTaskQuote(chatId: string, parentId: string, guard: () => void): Promise<string | undefined> {
     const message = await readVerifiedMessage(chatId, parentId, guard);
     guard();
@@ -1223,7 +1237,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const detail = [channelReason, identityReason, operationReason].filter(Boolean).join('；');
     return { connected, ...(detail ? { reason: detail } : {}) };
   }
-  return { start, close, send, readPrivatePostImages, readPrivateForward, readPrivateImage, readPrivateFile, readTaskQuote, topicOfMessage, readReaction, updateCard, collect, collectBatch, status,
+  return { start, close, send, readPrivateQuote, readPrivatePostImages, readPrivateForward, readPrivateImage, readPrivateFile, readTaskQuote, topicOfMessage, readReaction, updateCard, collect, collectBatch, status,
     pinMessage: (id: string) => changePlatformMessage('pin', id),
     unpinMessage: (id: string) => changePlatformMessage('unpin', id),
     recallMessage: (id: string) => changePlatformMessage('recall', id),

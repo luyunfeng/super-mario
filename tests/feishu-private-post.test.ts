@@ -16,6 +16,10 @@ test('主人富文本在当前独立对话传入正文和核验原图，区分�
   const dir=await mkdtemp(join(tmpdir(),'mario-private-post-'));
   type ModelCall={messages:{role:string;content:unknown}[]};
   const modelCalls:ModelCall[]=[];
+  let parentCreatedAt=0, release!:()=>void, reached!:()=>void;
+  const waiting=new Promise<void>(resolve=>{reached=resolve;});
+  const hold=new Promise<void>(resolve=>{release=resolve;});
+  t.after(()=>release());
   const baseUrl='http://127.0.0.1:1/post-fixture';
   t.mock.method(globalThis,'fetch',async(input:RequestInfo|URL,init?:RequestInit)=>{
     const req=new Request(input,init);
@@ -38,6 +42,17 @@ test('主人富文本在当前独立对话传入正文和核验原图，区分�
           reads.push(path);
           assert.equal(new Headers(init?.headers).get('authorization'),'Bearer fixture');
           assert.equal(init?.redirect,'error');
+          if(path.startsWith('om_untracked_')){
+            if(path.endsWith('_race')){reached();await hold;}
+            assert.equal(url.searchParams.get('user_id_type'),'open_id');
+            return Response.json({code:0,data:{items:[{
+              message_id:path,chat_id:path.endsWith('_wrong_chat')?'oc_other':'oc_private',msg_type:path.endsWith('_post')?'post':'text',
+              create_time:String(path.endsWith('_old')?parentCreatedAt-86400000:parentCreatedAt),deleted:path.endsWith('_deleted'),
+              sender:{id_type:'open_id',sender_type:'user',id:path.endsWith('_other')?'ou_other':'ou_owner'},
+              mentions:[{key:'@_user_1',name:'合成人员'}],body:{content:JSON.stringify(path.endsWith('_post')?
+                {content:[[{tag:'text',text:'来自遗漏的富文本'}]]}:{text:'@_user_1 旧文中的合成要求'})}
+            }]}});
+          }
           if(path==='om_post'){
             assert.equal(url.searchParams.get('user_id_type'),'open_id');
             return Response.json({code:0,data:{items:[{message_id:'om_post',chat_id:'oc_private',msg_type:'post',
@@ -62,9 +77,9 @@ test('主人富文本在当前独立对话传入正文和核验原图，区分�
   });
   t.after(async()=>{try{await host.close();}finally{await rm(dir,{recursive:true,force:true});}});
   const bot=await host.bots.create({name:'合成私聊助手',appId:'cli_7555555555555555',appSecret:'fixture',scope:{kind:'global'},requireConfirmation:false});
-  const emit=(id:string,body:string|object,sender='ou_owner')=>dispatcher.invoke({schema:'2.0',
+  const emit=(id:string,body:string|object,sender='ou_owner',parentId?:string)=>dispatcher.invoke({schema:'2.0',
     header:{event_type:'im.message.receive_v1',event_id:'evt_'+(++seq)},event:{
-      sender:{sender_type:'user',sender_id:{open_id:sender}},message:{chat_id:'oc_private',chat_type:'p2p',message_id:id,
+      sender:{sender_type:'user',sender_id:{open_id:sender}},message:{chat_id:'oc_private',chat_type:'p2p',message_id:id,parent_id:parentId,
         message_type:typeof body==='string'?'text':'post',
         content:JSON.stringify(typeof body==='string'?{text:body}:body),
         mentions:[{key:'@_user_1',id:{open_id:'ou_peer'},name:'合成同事'}]}}},{needCheck:false});
@@ -115,5 +130,31 @@ test('主人富文本在当前独立对话传入正文和核验原图，区分�
   await dispatcher.invoke({schema:'2.0',header:{event_type:'im.message.recalled_v1',event_id:'evt_recall'},
     event:{chat_id:'oc_private',message_id:'om_post'}},{needCheck:false});
   assert.equal((await image()).status,404);
+  parentCreatedAt=Date.now();
+  for(const suffix of ['text','post','old','wrong_chat','other','deleted']){
+    const parentId='om_untracked_'+suffix,prompt='引用查证合成问题 '+suffix;
+    await emit('om_ask_'+suffix,prompt,'ou_owner',parentId);
+    const current=await findInput(prompt);
+    assert.equal(current.text,prompt);
+    await t.waitFor(()=>{
+      const call=modelCalls.find(c=>JSON.stringify(c.messages.at(-1)?.content).includes(prompt));
+      assert.ok(call);
+      const text=JSON.stringify(call.messages.at(-1)?.content);
+      if(suffix==='text')assert.match(text,/> @合成人员 旧文中的合成要求/);
+      else if(suffix==='post')assert.match(text,/> 来自遗漏的富文本/);
+      else {assert.match(text,/飞书引用原文不可用/);assert.doesNotMatch(text,/旧文中的合成要求|来自遗漏的富文本/);}
+    });
+    assert.equal(reads.filter(id=>id===parentId).length,1);
+  }
+  const pending=emit('om_ask_race','撤回发生在引用读取期间','ou_owner','om_untracked_race');
+  await waiting;
+  await dispatcher.invoke({schema:'2.0',header:{event_type:'im.message.recalled_v1',event_id:'evt_parent_recall'},
+    event:{chat_id:'oc_private',message_id:'om_untracked_race'}},{needCheck:false});
+  release();await pending;
+  await t.waitFor(()=>{
+    const call=modelCalls.find(c=>JSON.stringify(c.messages.at(-1)?.content).includes('撤回发生在引用读取期间'));
+    assert.ok(call);const text=JSON.stringify(call.messages.at(-1)?.content);
+    assert.match(text,/飞书引用原文不可用/);assert.doesNotMatch(text,/旧文中的合成要求/);
+  });
   assert.deepEqual(unexpectedRequests,[]);
 });

@@ -98,6 +98,7 @@ export interface FeishuBotAdapter {
     consume:(name:string,mime:string,source:AsyncIterable<Uint8Array>)=>Promise<T>):Promise<T>;
   readPrivatePostImages?(chatId:string,messageId:string,senderId:string,expectedText:string,guard:()=>void):Promise<ChatImageInput[]>;
   readPrivateImage?(chatId:string,messageId:string,ownerId:string,guard:()=>void):Promise<ChatImageInput>;
+  readPrivateQuote?(chatId:string,parentId:string,ownerId:string,since:number,before:number,guard:()=>void):Promise<{text:string;truncated:boolean}|undefined>;
   readTaskQuote?(chatId: string, parentId: string, guard: () => void): Promise<string | undefined>;
   readReaction?(messageId: string, emoji: 'OnIt' | 'DONE', guard: () => void, removeId?: string): Promise<string>;
   pinMessage?(messageId: string): Promise<void>;
@@ -120,7 +121,7 @@ type StatusSource = Pick<FeishuMessageSource, 'chatId' | 'parentId' | 'rootId'>;
 type StatusGrant = { source: StatusSource; fingerprint: string; binding?: ChatBinding };
 type GroupTaskOrigin = { chatId: string; messageId: string; binding: string; todoId: string };
 type TopicStamp = { todoId: string; grant: string; opening: boolean; sourceOpening?: true; authorityVersion?: string; externalSource?: { chatId: string; messageId: string } };
-type Envelope = { privatePostImages?:true; privatePost?:true; privateForward?:true; threadSearchGrant?:string; privateFileBinding?:string; privateImageBinding?:string; topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
+type Envelope = { privateQuoteBinding?:string; privatePostImages?:true; privatePost?:true; privateForward?:true; threadSearchGrant?:string; privateFileBinding?:string; privateImageBinding?:string; topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
 type Routed = Route & Envelope & { envelopeId: string; replyReference?: ({ text: string; truncated: boolean } | { unavailable: true }) & {imageSourceId?:string;imagesUnavailable?:true;fileSourceId?:string;filesUnavailable?:true} };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
 type SentQuestion = DecisionNudgeCard & { questionId:string; version:number; inputId:string; navigation:string; closeAttempted?:true; webOnly?:true; contextFingerprint?:string };
@@ -812,6 +813,16 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   }
   function groupReadBinding(bot: FeishuBotSettings, paired: Owner) {
     return digest([bot.id, bot.appId, paired.chatId, paired.senderId, audienceGeneration(bot.id)]);
+  }
+  // Offline messages predating a verified pairing (or the upgrade that starts this clock)
+  // cannot be attributed to this audience. Retain one cutoff per bot, across restarts.
+  function quoteCutover(bot:FeishuBotSettings,paired:Owner) {
+    const binding=groupReadBinding(bot,paired);
+    const saved=app.store.get<{binding:string;since:number}>('feishu.private-quote.cutover',bot.id);
+    if(saved?.binding===binding)return saved.since;
+    const since=Date.now();
+    app.store.put('feishu.private-quote.cutover',bot.id,{binding,since});
+    return since;
   }
   function topicBinding(id: string) {
     const bot = current(id), paired = owner(bot);
@@ -2834,6 +2845,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         app.store.transaction(() => {
           app.store.put('settings', ownerKey(bot), paired);
           app.store.put('feishu.group-read.generation', bot.id, randomUUID());
+          quoteCutover(bot,owner(bot)!);
         });
         app.events.publish('feishu.changed', { botId: bot.id, paired: true });
       }
@@ -2842,6 +2854,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         app.store.transaction(() => {
           app.store.put('settings', ownerKey(bot), { chatId: source.chatId, ...(source.senderId ? { senderId: source.senderId } : {}) });
           app.store.put('feishu.group-read.generation', bot.id, randomUUID());
+          quoteCutover(bot,owner(bot)!);
         });
         app.events.publish('feishu.changed', { botId: bot.id, paired: true });
         const entry = await put(bot, { direction: 'outbox', eventKey: `feishu-pair:${JSON.stringify([bot.id, bot.appId, source.messageId])}`, title: '机器人配对',
@@ -2935,7 +2948,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       context[fileAttachment?'privateFileBinding':'privateImageBinding']=groupReadBinding(bot,paired);
       if (source.privateForward) context.privateForward=true;
     }
-    if (source.parentId && source.parentId !== source.messageId) context.parentMessageId = source.parentId;
+    if (source.parentId && source.parentId !== source.messageId) {
+      context.parentMessageId = source.parentId;
+      if (paired && context.privateSenderId && source.chatType === 'p2p') context.privateQuoteBinding=groupReadBinding(bot,paired);
+    }
     if (!group && bot.scope.kind === 'global' && paired?.senderId && paired.senderId === source.senderId) {
       const original = app.store.get<ChatBinding>('feishu.chat-target', digest([bot.id, source.chatId, source.messageId]));
       // An accepted message keeps its original route even if the owner's default has since changed.
@@ -3007,6 +3023,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       try { bot = current(id); settings.assertUnique(bot.appId, id); } catch (error) { report(id, error); return; }
       if (!bot.appSecret) { report(id, noDelivery('缺少机器人 appSecret')); return; }
       if (!active(id, epoch, bot.revision)) return;
+      const existingOwner=owner(bot);
+      if(existingOwner?.senderId)quoteCutover(bot,existingOwner);
       const chatId = subscription(bot);
       state.commandSubscription = chatId;
       const adapter = factory({ appId: bot.appId, appSecret: bot.appSecret,privateImages:true,privateFiles:true,privateForwards:true,privatePosts:true,
@@ -3049,6 +3067,32 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     });
     state.operations = job.catch(error => report(id, error));
     return state.operations;
+  }
+  async function privateParentText(bot:FeishuBotSettings,entry:MailboxEntry,stamp:Envelope,parentId:string) {
+    const paired=owner(bot), {adapter,epoch}=runtime(bot.id);
+    if (!adapter?.readPrivateQuote || !paired?.senderId || paired.senderId!==stamp.privateSenderId || paired.chatId!==entry.target ||
+        stamp.group || stamp.topic || stamp.relay || stamp.command || stamp.newThreadQuote || stamp.groupTaskOrigin || stamp.resultRelayEntryId ||
+        stamp.chatBinding?.agentTarget || !entry.sourceMessageId || entry.eventKey!=='feishu-in:'+JSON.stringify([bot.id,bot.appId,entry.sourceMessageId])) return;
+    const {chatId,senderId}=paired, binding=groupReadBinding(bot,paired);
+    if (stamp.privateQuoteBinding!==binding) return;
+    function guard() {
+      const live=owner(bot);
+      if (!live || groupReadBinding(bot,live)!==binding || !active(bot.id,epoch,bot.revision) || runtime(bot.id).adapter!==adapter ||
+          groupTasks.recalled(bot.id,bot.appId,chatId,entry.sourceMessageId!)) throw noDelivery('主人私聊来源已失效。');
+      checkEnvelope(entry,bot);
+    }
+    // Even an expired anchor is local provenance. It cannot be reinterpreted as an untracked message.
+    function knownParent() {
+      return deletedAnchor(bot,chatId,parentId) || groupTasks.recalled(bot.id,bot.appId,chatId,parentId)
+        || app.store.get('feishu.chat-target',digest([bot.id,chatId,parentId]))
+        || app.mailboxes.list().some(row=>row.botId===bot.id && row.sourceMessageId===parentId);
+    }
+    guard();
+    if (knownParent())return;
+    const since=Math.max(quoteCutover(bot,paired),Date.parse(bot.updatedAt));
+    const result=await adapter.readPrivateQuote(chatId,parentId,senderId,since,Date.parse(entry.createdAt),guard).catch(()=>undefined);
+    guard();
+    return knownParent()?undefined:result;
   }
   async function dispatchInbox(entry: MailboxEntry): Promise<{ id: string }> {
     const bot = current(entry.botId), generation = audienceGeneration(bot.id);
@@ -3110,6 +3154,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
             row.direction === 'outbox' && row.status === 'completed' && row.target === entry.target && sameBotScope(row.scope, entry.scope));
           const origin = delivery && app.store.get<Envelope>('feishu.bot.envelopes', delivery.id);
           if (sent && delivery && canQuote(delivery, origin)) replyReference = { text: sent.text, truncated: sent.truncated };
+          else if (!sent) replyReference = await privateParentText(bot,entry,stamp,stamp.parentMessageId) ?? {unavailable:true};
         }
       }
       let images:ChatImageInput[]|undefined;
@@ -3186,7 +3231,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const restored = app.store.transaction(() => {
         if (stamp?.topic || stamp?.groupTaskOrigin) checkEnvelope(entry, bot);
         if (selection) app.store.put('messages', accepted.id, accepted);
-        if (replyReference && stamp?.parentMessageId && entry.target && deletedAnchor(bot, entry.target, stamp.parentMessageId))
+        if (replyReference && stamp?.parentMessageId && entry.target && (deletedAnchor(bot, entry.target, stamp.parentMessageId) || groupTasks.recalled(bot.id,bot.appId,entry.target,stamp.parentMessageId)))
           replyReference = { unavailable: true };
         else if (attachmentParent && replyReference && stamp?.parentMessageId && entry.target && entry.sourceMessageId) {
           // Bind to the accepted input only after both sides have a concrete conversation.

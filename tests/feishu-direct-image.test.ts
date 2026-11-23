@@ -94,7 +94,7 @@ test('飞书配对主人在独立私聊发原图，核对同一条消息后读�
       return {call,input};
     },{timeout:8000});
   }
-  const resourceReads=reads.length;
+  const resourceReads=reads.filter(path=>path.includes('/resources/')).length;
   const visual='data:image/png;base64,'+png;
   const quoted=await ask('om_ask_photo','请核对引用原图中的合成标记','om_photo');
   assert.ok(JSON.stringify(quoted.call.messages.at(-1)?.content).includes(visual),'应将图像放入包含本轮问题的用户消息');
@@ -122,7 +122,7 @@ test('飞书配对主人在独立私聊发原图，核对同一条消息后读�
   assert.equal(hidden.quotedImagesUnavailable,true);
   const revoked=await ask('om_revoked_parent','能否读取刚刚撤回的图','om_photo');
   assert.ok(!JSON.stringify(revoked.call.messages).includes(visual));
-  assert.equal(reads.length,resourceReads,'引用只复用已授权本地原件');
+  assert.equal(reads.filter(path=>path.includes('/resources/')).length,resourceReads,'引用只复用已授权本地原件');
   await event('om_transcript','merge_forward');
   const providerInput=await t.waitFor(()=>{
     const call=requests.find(req=>JSON.stringify(req).includes('合成讨论原话 /main'));
