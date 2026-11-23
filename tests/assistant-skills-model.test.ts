@@ -491,7 +491,9 @@ test('主会话、项目工作和飞书机器人将 Markdown 引用作为用户�
     assert.equal(await ask(withBody), reply);
     assert.equal(await ask(quote, '/projects/' + project.id + '/messages'), reply);
 
-    const inputs = [withBody, quote];
+    const annotated = '> 预算为十万元。\n\n批注 1：请核对预算口径。\n\n> 交付日期是周三。\n\n批注 2：请把这处改成周五。';
+    assert.equal(await ask(annotated), reply);
+    const inputs = [withBody, quote, annotated];
     for (const scope of [{ kind: 'global' }, { kind: 'project', projectId: project.id }]) {
       const appId = 'cli_' + String(inputs.length).repeat(16);
       const bot = await api('/feishu/bots', { name: '引用测试' + scope.kind, appId, appSecret: 'offline-fixture',
