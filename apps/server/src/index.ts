@@ -1159,10 +1159,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
               const projectId=url.searchParams.get('projectId');
               const archived=url.searchParams.getAll('archived');
               if(archived.length>1 || archived.some(value=>value!=='true' && value!=='false'))throw new InputError('归档筛选需要 true 或 false');
-              const query=url.searchParams.get('query');
+              const query=url.searchParams.get('query'),role=url.searchParams.get('role');
               if(query!==null && !app.plugins.list().some(p=>p.id==='conversation-search' && p.status==='active'))
                 throw new InputError('对话历史搜索插件已停用',503);
-              return json(res,200,await invoke({action:'list',archived:archived[0]==='true',...(query!==null && {query}),...(projectId && {projectId})}));
+              return json(res,200,await invoke({action:'list',archived:archived[0]==='true',...(query!==null && {query}),...(role!==null && {role}),...(projectId && {projectId})}));
             }
             if(method==='POST'){
               const input=await body(req,8192);

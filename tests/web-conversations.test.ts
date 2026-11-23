@@ -56,6 +56,9 @@ test('independent web conversations persist exact scopes and idempotent creation
   assert.equal(snippet.text.slice(snippet.start,snippet.end),'A.B');
   assert.ok(snippet.text.startsWith('😀'));
   assert.deepEqual(await call({action:'list',query:'a+b'}),{items:[]});
+  const replies=await call({action:'list',query:'合成',role:'assistant'}) as {items:{id:string;matchCount:number}[]};
+  assert.deepEqual(replies.items.map(r=>[r.id,r.matchCount]),[[id,1]]);
+  await assert.rejects(call({action:'list',query:'合成',role:'system'}),{status:400});
   assert.equal(results.items[0].match.at,'2099-01-04T00:00:00.000Z');
   assert.equal(webConversationMatches(f.store,pid,'p'),true);
   assert.equal(webConversationMatches(f.store,pid),false);

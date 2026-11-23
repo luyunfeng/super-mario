@@ -189,10 +189,13 @@ export function createWebConversations({api,store,scope,router}){
     const filter=h('select',{class:'input','aria-label':'对话状态'},h('option',{value:'active'},'进行中'),h('option',{value:'archived'},'已归档'));
     const searchTitle=h('input',{type:'search',class:'input','aria-label':'按标题查找',placeholder:'输入标题中的文字'});
     const lookup=h('button',{type:'button',class:'btn btn--sm'},'按正文查找');
+    const speaker=h('select',{class:'input','aria-label':'筛选发言人',hidden:true},
+      h('option',{value:''},'全部发言人'),h('option',{value:'user'},'我'),h('option',{value:'assistant'},'助手'));
+    speaker.onchange=()=>listRefresh?.();
     const canSearch=()=>store.view.snapshot?.plugins.some(p=>p.id==='conversation-search' && p.status==='active');
     lookup.hidden=!canSearch();
     let bodyQuery='',unwatch;
-    const drawer=openDrawer({title:'独立对话',body:[draft,h('label',{class:'field'},'对话状态',filter),searchTitle,lookup,status,list],onClose:()=>{unwatch?.();if(selector===drawer){selector=null;listRefresh=null;}}});
+    const drawer=openDrawer({title:'独立对话',body:[draft,h('label',{class:'field'},'对话状态',filter),searchTitle,lookup,speaker,status,list],onClose:()=>{unwatch?.();if(selector===drawer){selector=null;listRefresh=null;}}});
     selector=drawer;
     const ok=()=>selector===drawer && drawer.el.open && active() && drafts.owner()===owner && listProject()===projectId;
     let request=0,items;
@@ -218,7 +221,8 @@ export function createWebConversations({api,store,scope,router}){
     searchTitle.oninput=()=>{if(bodyQuery){bodyQuery='';void listRefresh();}else drawList();};
     listRefresh=async(quiet=false)=>{
       const seq=++request,query=new URLSearchParams({projectId});
-      if(bodyQuery)query.set('query',bodyQuery);
+      speaker.hidden=!bodyQuery;
+      if(bodyQuery){query.set('query',bodyQuery);if(speaker.value)query.set('role',speaker.value);}
       if(filter.value==='archived')query.set('archived','true');
       if(!quiet){items=undefined;replace(list);status.textContent='正在读取对话…';}
       try{
