@@ -136,6 +136,14 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   expect(commentReads).toBe(3);expect(external).toEqual([]);
   const writes:{documentId:string;binding:string;requestId:string;action:Record<string,unknown>}[]=[];
   let solved=false;
+  const peopleReads:string[]=[];
+  const choices=['ou_fixture_a','ou_fixture_b'].map(openId=>({openId,name:'合成同名',proof:'proof-'+openId}));
+  await page.route(server.url+'/api/v1/knowledge/'+projectEntry.id+'/sources/'+projectJob.id+'/comments/people',route=>{
+    const {documentId,binding,query}=route.request().postDataJSON();
+    expect({documentId,binding}).toEqual({documentId:'fixture-doc',binding:'fixture-account'});
+    peopleReads.push(query);
+    return route.fulfill({json:{people:query==='无人匹配'?[]:choices.map((p,i)=>({...p,department:i?'合成行政':'合成工程'})),truncated:query==='合'}});
+  });
   await page.route(server.url+'/api/v1/knowledge/'+projectEntry.id+'/sources/'+projectJob.id+'/comments',route=>{
     if(route.request().method()==='GET') return route.fulfill({json:{documentId:'fixture-doc',binding:'fixture-account',actorName:'合成评论账号',threads:[
       {id:'target',quote:'需核实的段落',resolved:solved,canReply:!solved,replies:[{author:'审阅人',text:'请核实'}]},
@@ -194,6 +202,76 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   await expect(compose).toHaveCount(0);
   expect(writes.slice(3).map(row=>row.action)).toEqual([{kind:'reply',threadId:'target',text:'合成跟进'},
     {kind:'resolve',threadId:'target'},{kind:'reopen',threadId:'target'},{kind:'create',text:'全文补充'}]);
+  await comments.getByRole('button',{name:'评论全文'}).click();
+  await compose.fill('fixture@example.invalid');
+  await page.waitForTimeout(320);
+  expect(peopleReads).toEqual([]);
+  await compose.fill('@无人匹配');
+  await expect(comments.getByRole('listbox')).toContainText('没有匹配的人员');
+  const prefix='🙂 普通 @合成同名 ';
+  await compose.fill(prefix);await compose.press('End');
+  await compose.dispatchEvent('compositionstart');
+  await page.keyboard.insertText('@合');
+  await expect(comments.getByRole('listbox')).toBeHidden();
+  expect(peopleReads).toEqual(['无人匹配']);
+  await compose.dispatchEvent('compositionend');
+  const options=comments.getByRole('listbox',{name:'匹配的飞书人员'});
+  await expect(options.getByRole('option')).toHaveCount(2);
+  await expect(options).toContainText('合成行政');
+  await expect(options).toContainText('仅显示部分匹配人员');
+  await compose.press('ArrowDown');await compose.press('Enter');
+  await expect(compose).toHaveValue(prefix+'@合成同名 ');
+  await compose.dispatchEvent('compositionstart');
+  await page.keyboard.insertText('继续输入');
+  await compose.dispatchEvent('compositionend');
+  await compose.press('Home');await page.keyboard.insertText('前');
+  await review.click();
+  const wholeConfirm=page.getByRole('dialog',{name:'确认发布全文评论'});
+  await expect(wholeConfirm).toContainText('将通知：合成同名（ou_fixture_b）');
+  await wholeConfirm.getByRole('button',{name:'发布全文评论'}).click();
+  await expect(compose).toHaveCount(0);
+  expect(writes.at(-1)!.action).toEqual({kind:'create',text:'前'+prefix+'@合成同名 继续输入',mentions:[{...choices[1],start:('前'+prefix).length}]});
+  await target.getByRole('button',{name:'回复评论'}).click();
+  const replyInput=comments.getByRole('textbox',{name:'回复内容'});
+  await replyInput.fill('@合');
+  await options.getByRole('option',{name:/ou_fixture_a/}).click();
+  await replyInput.press('Control+a');
+  await page.keyboard.insertText('@合成同名');
+  await expect(options.getByRole('option')).toHaveCount(2);
+  await replyInput.press('Escape');await expect(options).toBeHidden();
+  await review.click();
+  const replyConfirm=page.getByRole('dialog',{name:'确认发送回复'});
+  await expect(replyConfirm).not.toContainText('将通知');
+  await replyConfirm.getByRole('button',{name:'发送回复'}).click();
+  await expect(replyInput).toHaveCount(0);
+  expect(writes.at(-1)!.action).toEqual({kind:'reply',threadId:'target',text:'@合成同名'});
+  // Hold two real same-origin fetches and observe the signal passed to the browser transport.
+  const held=new Map<string,()=>void>();
+  await page.route('**/comments/people',async route=>{
+    const {query}=route.request().postDataJSON();
+    await new Promise<void>(resolve=>held.set(query,resolve));
+    await route.fulfill({json:{people:[],truncated:false}});
+  });
+  await page.evaluate(()=>{
+    const originalFetch=window.fetch;
+    window.fetch=(url,init)=>{
+      if(String(url).endsWith('/comments/people')){
+        const {query}=JSON.parse(String(init?.body));
+        init?.signal?.addEventListener('abort',()=>document.body.dataset.cancelledQuery=query,{once:true});
+      }
+      return originalFetch(url,init);
+    };
+  });
+  await comments.getByRole('button',{name:'评论全文'}).click();
+  await compose.fill('@第一搜');
+  await expect.poll(()=>held.has('第一搜')).toBe(true);
+  await compose.fill('@第二搜');
+  await expect(page.locator('body')).toHaveAttribute('data-cancelled-query','第一搜');
+  held.get('第一搜')!();
+  await expect.poll(()=>held.has('第二搜')).toBe(true);
+  await comments.getByRole('button',{name:'取消编辑'}).click();
+  await expect(page.locator('body')).toHaveAttribute('data-cancelled-query','第二搜');
+  held.get('第二搜')!();
   expect(external).toEqual([]);
   await dialog.getByText('文档大纲',{exact:true}).click();
   const outline=dialog.getByRole('navigation',{name:'文档大纲'});

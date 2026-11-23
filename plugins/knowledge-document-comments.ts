@@ -1,6 +1,7 @@
 import {SaxesParser} from 'saxes';
 
-export type KnowledgeDocumentCommentAction={kind:'create';text:string;quote?:string}|{kind:'reply';threadId:string;text:string}|{kind:'resolve'|'reopen';threadId:string};
+export type KnowledgeCommentMention={openId:string;name:string;start:number};
+export type KnowledgeDocumentCommentAction={kind:'create';text:string;quote?:string;mentions?:KnowledgeCommentMention[]}|{kind:'reply';threadId:string;text:string;mentions?:KnowledgeCommentMention[]}|{kind:'resolve'|'reopen';threadId:string};
 export type KnowledgeDocumentCommentReceipt={confirmed:true;threadId?:string;replyId?:string};
 
 type Invoke=(args:string[])=>Promise<Record<string,unknown>>;
@@ -44,25 +45,44 @@ function blockForQuote(xml:string,quote:string) {
   }
   return matches[0]??invalid(409,'没有找到与引用相符的原文段落');
 }
+type CommentPart={text:string}|{openId:string};
+function commentParts(body:string,mentions:KnowledgeCommentMention[]|undefined) {
+  const parts:CommentPart[]=[];
+  if (mentions!==undefined && (!Array.isArray(mentions) || mentions.length>20)) invalid(400,'每条评论最多可提及 20 人次');
+  function addText(value:string) {
+    let current='',length=0;
+    for (const char of value) {
+      const escaped=char==='&'?'&amp;':char==='<'?'&lt;':char==='>'?'&gt;':char;
+      const size=escaped===char?1:escaped.length;
+      if (length+size>1000) {parts.push({text:current});current='';length=0;}
+      current+=escaped;length+=size;
+    }
+    if (current) parts.push({text:current});
+  }
+  const ordered=(mentions??[]).map(m=>{
+    if (!obj(m) || Object.keys(m).some(k=>!['openId','name','start'].includes(k)) || typeof m.openId!=='string' ||
+        !/^ou_[A-Za-z0-9_-]{1,128}$/.test(m.openId) || typeof m.name!=='string' || !m.name || m.name!==m.name.trim() ||
+        Array.from(m.name).length>128 || /[\p{Cc}\p{Cs}]/u.test(m.name) || !Number.isSafeInteger(m.start) ||
+        m.start<0 || !body.startsWith('@'+m.name,m.start)) invalid(400,'评论中的点名与所选联系人或文字位置不一致');
+    return m;
+  }).sort((a,b)=>a.start-b.start);
+  let offset=0;
+  for (const mention of ordered) {
+    if (mention.start<offset) invalid(400,'评论中的点名位置重叠');
+    addText(body.slice(offset,mention.start));parts.push({openId:mention.openId});
+    offset=mention.start+1+mention.name.length;
+  }
+  addText(body.slice(offset));
+  return parts;
+}
 export async function performCommentWrite(id:string,action:KnowledgeDocumentCommentAction,invoke:Invoke,beforeWrite:(id:string)=>Promise<void>):Promise<KnowledgeDocumentCommentReceipt> {
   if (!obj(action) || !['create','reply','resolve','reopen'].includes(action.kind)) invalid(400,'评论操作无效');
-  const allowed=action.kind==='create'?['kind','text','quote']:action.kind==='reply'?['kind','text','threadId']:['kind','threadId'];
+  const allowed=action.kind==='create'?['kind','text','quote','mentions']:action.kind==='reply'?['kind','text','threadId','mentions']:['kind','threadId'];
   if (Object.keys(action).some(k=>!allowed.includes(k))) invalid(400,'评论操作参数无效');
   const kind=action.kind,thread=action.kind==='create'?undefined:action.threadId;
   if (kind!=='create' && !identifier(thread)) invalid(400,'评论线程标识无效');
   const flags=['--file-token',id,'--file-type','docx'];
-  const elements:string[]=[];
-  if ('text' in action) {
-    // The create_v2 API limits each text element to 1000 characters.
-    let current='',length=0;
-    for (const char of text(action.text,4000)) {
-      const escaped=char==='&'?'&amp;':char==='<'?'&lt;':char==='>'?'&gt;':char;
-      const size=escaped===char?1:escaped.length;
-      if (length+size>1000) {elements.push(current);current='';length=0;}
-      current+=escaped;length+=size;
-    }
-    if (current) elements.push(current);
-  }
+  const elements='text' in action?commentParts(text(action.text,4000),action.mentions):[];
   let args:string[];
   if (action.kind==='create') {
     let blockId:string|undefined;
@@ -74,7 +94,7 @@ export async function performCommentWrite(id:string,action:KnowledgeDocumentComm
       blockId=blockForQuote(result.document.content,quote);
     }
     args=['drive','file.comments','create_v2','--file-token',id,'--data',JSON.stringify({file_type:'docx',
-      ...(blockId && {anchor:{block_id:blockId}}),reply_elements:elements.map(text=>({type:'text',text}))})];
+      ...(blockId && {anchor:{block_id:blockId}}),reply_elements:elements.map(p=>'text' in p?{type:'text',text:p.text}:{type:'mention_user',mention_user:p.openId})})];
   } else {
     const state=await invoke(['drive','file.comments','batch_query',...flags,'--data',JSON.stringify({comment_ids:[thread]})]);
     const item=Array.isArray(state.items) && state.items.length===1 && state.items[0];
@@ -83,7 +103,8 @@ export async function performCommentWrite(id:string,action:KnowledgeDocumentComm
       invalid(409,'无法核对原文档的评论线程');
     if (item.is_solved!==(kind==='reopen') || (kind==='reply' && item.is_whole!==false)) invalid(409,'评论状态已改变，或该评论不支持回复');
     args=kind==='reply'?['drive','file.comment.replys','create',...flags,'--comment-id',thread!,
-      '--data',JSON.stringify({content:{elements:elements.map(text=>({type:'text_run',text_run:{text}}))}})] :
+      ...(elements.some(p=>'openId' in p)?['--user-id-type','open_id']:[]),
+      '--data',JSON.stringify({content:{elements:elements.map(p=>'text' in p?{type:'text_run',text_run:{text:p.text}}:{type:'person',person:{user_id:p.openId}})}})] :
       ['drive','file.comments','patch',...flags,'--comment-id',thread!,'--data',JSON.stringify({is_solved:kind==='resolve'})];
   }
   await beforeWrite(id);

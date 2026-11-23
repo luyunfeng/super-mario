@@ -1,5 +1,6 @@
 import {CommentWriteError,performCommentWrite,type KnowledgeDocumentCommentAction,type KnowledgeDocumentCommentReceipt} from './knowledge-document-comments.ts';
 export {CommentWriteError};
+export {searchKnowledgeCommentPeople} from './knowledge-comment-people.ts';
 export type {KnowledgeDocumentCommentAction,KnowledgeDocumentCommentReceipt} from './knowledge-document-comments.ts';
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
@@ -341,7 +342,14 @@ async function readCommentPages(id:string,invoke:(args:string[])=>Promise<Record
             const link=object(element.docs_link);
             return typeof link.url==='string'?link.url:'[文档链接]';
           }
-          if (element.type==='person' || element.type==='mention') return '[提及]';
+          if (element.type==='person' || element.type==='mention' || element.type==='mention_user') {
+            const target=element.person??element.mention_user;
+            const who=target && typeof target==='object' && !Array.isArray(target)?target as Record<string,unknown>:{};
+            const name=who.name??who.localized_name;
+            if (typeof name==='string' && name.trim() && name===name.trim() && Array.from(name).length<=128 && !/[\p{Cc}\p{Cs}]/u.test(name)) return '@'+name;
+            const id=typeof target==='string'?target:who.open_id??who.user_id;
+            return typeof id==='string' && /^ou_[A-Za-z0-9_-]{1,128}$/.test(id)?'@'+id:'[提及]';
+          }
           out.truncated=true;return '[未展示的评论元素]';
         });
         return {author,text:bounded(parts.join(''),4000)};

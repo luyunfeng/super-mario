@@ -84,6 +84,7 @@ export { conversationSearch } from './conversation-search.ts';
 export { tokenStatistics } from './token-statistics.ts';
 export { createStartPage, readStartPage } from './start-page.ts';
 export { workspaceSplash } from './workspace-splash.ts';
+export { searchKnowledgeCommentPeople } from './knowledge-comment-people.ts';
 export { verifyKnowledgeCommentActor } from './feishu-personal.ts';
 export { isKnowledgeDocumentCommentsURL, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from './knowledge-source-reader.ts';
 export { fetchCalendarAgenda } from './feishu-calendar.ts';

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {isKnowledgeDocumentCommentsURL,readKnowledgeDocumentComments,writeKnowledgeDocumentComment} from '../plugins/knowledge-source-reader.ts';
+import {isKnowledgeDocumentCommentsURL,readKnowledgeDocumentComments,writeKnowledgeDocumentComment,searchKnowledgeCommentPeople} from '../plugins/knowledge-source-reader.ts';
 import type {KnowledgeSourceRunCLI} from '../packages/protocol/src/index.ts';
 
 const url='https://fixture.feishu.cn/wiki/WikiFixture';
@@ -134,4 +134,43 @@ test('逐项核对评论同文档归属、是否允许回复及解决状态，�
   }
   threadId='T1';replyId='';calls.length=0;await assert.rejects(apply('reply'),{status:502});
   assert.equal(calls.filter(a=>a[2]==='create').length,1);
+});
+
+test('联系人按显式用户 profile 查询，只返回点名所需的字段，公开标识不会与同名候选混淆',async()=>{
+  const signal=new AbortController().signal;
+  const result=await searchKnowledgeCommentPeople('fixture',' 同名 ',signal,async argv=>{
+    assert.deepEqual(argv,['contact','+search-user','--query','同名','--page-size','20','--as','user','--profile','fixture','--format','json']);
+    return {ok:true,identity:'user',data:{users:['ou_fixture1','ou_fixture2','ou_fixture1'].map(open_id=>({open_id,localized_name:'同名',department:open_id==='ou_fixture1'?'示例研发部':'',email:'仅测试内部字段'})),has_more:true}};
+  });
+  assert.deepEqual(result,{people:[{openId:'ou_fixture1',name:'同名',department:'示例研发部'},{openId:'ou_fixture2',name:'同名'}],truncated:true});
+  await assert.rejects(searchKnowledgeCommentPeople('fixture','',signal,async()=>assert.fail('空搜索不应出站')),{status:400});
+  await assert.rejects(searchKnowledgeCommentPeople('fixture','甲',signal,async()=>({ok:true,identity:'bot',data:{users:[]}})),{status:502});
+});
+
+test('评论点名按 UTF-16 位置组成平台元素，允许同人多次，拒绝错位、重叠与伪造类型',async()=>{
+  const signal=new AbortController().signal,text='😀<& @甲 / @乙 @甲',profile='p';
+  const m1={openId:'ou_fixture1',name:'甲',start:text.indexOf('@甲')},m2={openId:'ou_fixture2',name:'乙',start:text.indexOf('@乙')},
+    again={...m1,start:text.lastIndexOf('@甲')};
+  const calls:string[][]=[];
+  const runCLI:KnowledgeSourceRunCLI=async argv=>{
+    calls.push([...argv]);
+    if (argv[1]==='+inspect') return {exitCode:0,stdout:JSON.stringify({ok:true,data:inspect})};
+    const data=argv[2]==='batch_query'?{items:[{comment_id:'c1',is_whole:false,is_solved:false}]}:{reply_id:'r1',comment_id:'c1'};
+    return {exitCode:0,stdout:JSON.stringify({code:0,data})};
+  };
+  for(const kind of ['create','reply'] as const){
+    const mentions=[again,m2,m1],action=kind==='create'?{kind,text,mentions}:{kind,threadId:'c1',text,mentions};
+    await writeKnowledgeDocumentComment(url,{profile,runCLI},signal,action,async()=>{});
+    const argv=calls.at(-1)!,payload=JSON.parse(argv[argv.indexOf('--data')+1]!);
+    const expected=['😀&lt;&amp; ',m1,' / ',m2,' ',again];
+    assert.deepEqual(kind==='create'?payload.reply_elements:payload.content.elements,expected.map(e=>typeof e==='string'?
+      kind==='create'?{type:'text',text:e}:{type:'text_run',text_run:{text:e}}:kind==='create'?{type:'mention_user',mention_user:e.openId}:{type:'person',person:{user_id:e.openId}}));
+  }
+  for(const mentions of [[{...m1,start:m1.start-1}],[{...m1,name:'别名'}],[m1,m1],[{...m1,type:'link'}],Array(21).fill(m1)]) {
+    await assert.rejects(writeKnowledgeDocumentComment(url,{profile,runCLI},signal,{kind:'create',text,mentions},async()=>assert.fail('无效点名不能进入投递')),{status:400});
+  }
+  const f=fixture([cliPage([{...thread('c1',false),reply_list:{replies:[{content:{elements:[
+    {type:'person',person:{name:'合成乙',user_id:'ou_first'}},{type:'mention',mention_user:{open_id:'ou_fixture'}},{type:'mention'}]}}]}}])]);
+  const got=await readKnowledgeDocumentComments(url,{profile,runCLI:f.runCLI},signal);
+  assert.equal(got.threads[0]?.replies[0]?.text,'@合成乙@ou_fixture[提及]');
 });

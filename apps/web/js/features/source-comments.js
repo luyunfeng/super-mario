@@ -1,4 +1,5 @@
 import {h,replace} from '../lib/dom.js';
+import {commentMentions} from './source-comment-mentions.js';
 import {uuid} from '../lib/format.js';
 import {confirmDialog} from '../ui/overlay.js';
 import {Button,Field,Select,TextArea} from '../ui/kit.js';
@@ -24,20 +25,26 @@ export function sourceComments(api,path,canRead,title,selectedText) {
   const readOnly=h('p',{class:'small',hidden:true},'请先核验飞书账号，再发布或更改评论。');
   const actions=h('div',{class:'row row--wrap',hidden:true},create,quote);
   const panel=h('details',{},h('summary',{},'查看飞书文档评论'),Field({label:'评论状态',control:filter}),status,readOnly,actions,editor,threads,refresh,receipt);
-  let active,result,writing=false,editToken;
+  let active,result,writing=false,editToken,peoplePicker;
   const canWrite=()=>panel.isConnected && panel.open && canRead() && !!result?.documentId && !!result?.binding;
-  function closeEditor(){editToken=undefined;editor.replaceChildren();}
+  function closeEditor(){peoplePicker?.close();peoplePicker=undefined;editToken=undefined;editor.replaceChildren();}
   function compose(kind,thread,quote) {
     if (!canWrite() || writing) return;
+    closeEditor();
     const token=editToken={};
     const input=TextArea({rows:3});
+    const {documentId,binding}=result;
+    const people=peoplePicker=commentMentions(input,(query,signal)=>api(path+'/people',{method:'POST',body:{documentId,binding,query},signal}),
+      ()=>canWrite() && editToken===token && result.binding===binding && result.documentId===documentId);
     const label=kind==='reply'?'回复内容':'评论内容';
-    replace(editor,quote && h('blockquote',{},quote),quote && h('p',{class:'small'},'按所选文字定位到原文段落。若多处匹配或原文已更改，请重新选择。'),Field({label,control:input}),
+    replace(editor,quote && h('blockquote',{},quote),quote && h('p',{class:'small'},'按所选文字定位到原文段落。若多处匹配或原文已更改，请重新选择。'),Field({label,control:input}),people.el,
       h('div',{class:'row'},Button({label:'核对并发送',size:'sm',onClick:()=>{
-        const text=input.value.trim();
-        if(!text){report('请填写'+label+'。');input.focus();return;}
+        const text=input.value;
+        if(!text.trim()){report('请填写'+label+'。');input.focus();return;}
         if(Array.from(text).length>4000){report('评论正文最多 4000 个字符。');input.focus();return;}
-        return submit({kind,text,...(thread && {threadId:thread.id}),...(quote && {quote})},thread,token);
+        const mentions=people.values();
+        if(mentions.length>20){report('一条评论最多可加入 20 个提及。');return;}
+        return submit({kind,text,...(mentions.length && {mentions}),...(thread && {threadId:thread.id}),...(quote && {quote})},thread,token);
       }}),Button({label:'取消编辑',size:'sm',onClick:closeEditor})));
     report('');input.focus();
   }
@@ -57,7 +64,8 @@ export function sourceComments(api,path,canRead,title,selectedText) {
     try {
       const approved=await confirmDialog({title:'确认'+label,confirmLabel:label,message:h('div',{class:'stack'},
         h('p',{},'飞书文档：'+title),h('p',{},'飞书账号：'+(snapshot.actorName || '当前已核验账号')),target && h('p',{},'目标评论：'+target),
-        action.quote && h('div',{},h('p',{},'按所选文字定位到原文段落'),h('blockquote',{},action.quote)),action.text && h('p',{style:{whiteSpace:'pre-wrap'}},action.text))});
+        action.quote && h('div',{},h('p',{},'按所选文字定位到原文段落'),h('blockquote',{},action.quote)),action.text && h('p',{style:{whiteSpace:'pre-wrap'}},action.text),
+        action.mentions?.length && h('p',{},'将通知：'+action.mentions.map(p=>p.name+'（'+p.openId+'）').join('、')))});
       if(!approved || !canWrite() || result!==snapshot || (token && editToken!==token)) return;
       key='sm.document-comment.'+Array.from(globalThis.sha256(new TextEncoder().encode(
         JSON.stringify([api.draftOwner(),path,snapshot.documentId,snapshot.binding,action]))),n=>n.toString(16).padStart(2,'0')).join('');

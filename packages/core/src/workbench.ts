@@ -88,7 +88,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput, currentAgentReplyId, type OfficeFileOrigin } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage, readNativeShareMessages } from './native-conversation-export.ts';
-import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, createConversationSharing, createWorkspaceBoard, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, verifyKnowledgeCommentActor, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
+import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, createConversationSharing, createWorkspaceBoard, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, searchKnowledgeCommentPeople, verifyKnowledgeCommentActor, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
@@ -2478,24 +2478,43 @@ export async function createWorkbench(config: AppConfig) {
       return context.invoke(signal);
     }};
   }
-  function commentAction(value:unknown):KnowledgeDocumentCommentAction {
+  function commentAction(value:unknown,signPerson:(openId:string,name:string)=>string):KnowledgeDocumentCommentAction {
     if(!value || typeof value!=='object' || Array.isArray(value)) throw new InputError('评论操作格式无效');
     const a=value as Record<string,unknown>, kind=a.kind;
     if (!['create','reply','resolve','reopen'].includes(String(kind))) throw new InputError('评论操作无效');
-    const allowed=kind==='create'?['kind','text','quote']:kind==='reply'?['kind','threadId','text']:['kind','threadId'];
+    const allowed=kind==='create'?['kind','text','quote','mentions']:kind==='reply'?['kind','threadId','text','mentions']:['kind','threadId'];
     if(Object.keys(a).some(k=>!allowed.includes(k))) throw new InputError('评论操作参数无效');
     function text(key:string) {
       if (typeof a[key]!=='string' || !a[key].trim() || Array.from(a[key]).length>(key==='quote'?1000:4000)) throw new InputError('请填写有效的评论内容或标识');
       return a[key];
     }
-    if(kind==='create') return {kind,text:text('text'),...(a.quote!==undefined && {quote:text('quote')})};
+    let mentions:{openId:string;name:string;start:number}[]|undefined;
+    if(a.mentions!==undefined) {
+      if(!Array.isArray(a.mentions) || a.mentions.length>20) throw new InputError('评论提及人数无效');
+      const body=text('text');
+      mentions=a.mentions.map(item=>{
+        if(!item || typeof item!=='object' || Array.isArray(item) || Object.keys(item).some(k=>!['openId','name','start','proof'].includes(k)))
+          throw new InputError('评论提及格式无效');
+        const {openId,name,start,proof}=item;
+        if(typeof openId!=='string' || typeof name!=='string' || !name || typeof proof!=='string' ||
+          proof!==signPerson(openId,name)) throw new InputError('提及人选与本次文档或账号不匹配，请重新搜索',409);
+        if(!Number.isSafeInteger(start) || start<0 || !body.startsWith('@'+name,start)) throw new InputError('提及位置与评论正文不符');
+        return {openId,name,start};
+      }).sort((a,b)=>a.start-b.start);
+      let end=0;
+      for(const m of mentions) {
+        if(m.start<end) throw new InputError('评论中的提及位置重叠');
+        end=m.start+1+m.name.length;
+      }
+    }
+    if(kind==='create') return {kind,text:text('text'),...(mentions?.length && {mentions}),...(a.quote!==undefined && {quote:text('quote')})};
     const threadId=text('threadId');
     if(!/^[A-Za-z0-9_][A-Za-z0-9_-]{0,255}$/.test(threadId)) throw new InputError('评论标识无效');
-    if(kind==='reply') return {kind,threadId,text:text('text')};
+    if(kind==='reply') return {kind,threadId,text:text('text'),...(mentions?.length && {mentions})};
     return {kind:kind as 'resolve'|'reopen',threadId};
   }
-  async function sourceComments(pageId:string,sourceId:string,signal:AbortSignal,input?:Record<string,unknown>) {
-    const serviceName=input?commentWriteName:commentReadName;
+  async function sourceComments(pageId:string,sourceId:string,signal:AbortSignal,input?:Record<string,unknown>,people=false) {
+    const serviceName=input && !people?commentWriteName:commentReadName;
     const active=()=>contributions.list('services').find(entry=>entry.value.name===serviceName)?.value;
     const service=active();
     if(!service) throw new InputError('本地知识插件的评论读取服务不可用',503);
@@ -2518,33 +2537,61 @@ export async function createWorkbench(config: AppConfig) {
         throw new InputError('读取期间账号、设置或插件已变化，请重新读取评论',409);
     }
     const generation=store.get<{revision?:number}>('core.plugin-settings','knowledge-local')?.revision??1;
-    async function actorNow(optional=false) {
+    async function actorNow(optional=false,callSignal=signal) {
       let actor;
-      try {actor=await verifyKnowledgeCommentActor(profile!,signal);}
+      try {actor=await verifyKnowledgeCommentActor(profile!,callSignal);}
       catch {if(optional) return undefined;throw new InputError('无法核验当前飞书账号，请重新连接并读取评论',409);}
       if(!settings.profile && (actor.openId!==account?.openId || actor.appId!==account.appId))
         throw new InputError('当前飞书账号与已连接账号不一致',409);
       return actor;
     }
-    function stamp(documentId:string,actor:{appId:string;openId:string}) {
+    function sign(fields:unknown[]) {
       // A read receipt stays verifiable after restart, without retaining document contents.
       let secret=store.get<string>('knowledge.reader','comment-binding-key');
       if(!secret){secret=randomUUID();store.put('knowledge.reader','comment-binding-key',secret);}
-      return createHmac('sha256',secret).update(JSON.stringify([identity,actor.appId,actor.openId,pageId,sourceId,binding,documentId,generation])).digest('hex');
+      return createHmac('sha256',secret).update(JSON.stringify(fields)).digest('hex');
+    }
+    function stamp(documentId:string,actor:{appId:string;openId:string}) {
+      return sign([identity,actor.appId,actor.openId,pageId,sourceId,binding,documentId,generation]);
     }
     const options={profile,trustedHosts:settings.trustedHosts};
     const invoke=(call:(inner:AbortSignal)=>Promise<Json>)=>commentsContext.run({name:serviceName,invoke:call},()=>
       plugins.invocations.use(serviceName,{}, {signal,timeoutMs:35000}));
     if(input) {
       const {documentId,requestId}=input;
-      if(Object.keys(input).some(key=>!['documentId','binding','requestId','action'].includes(key)) ||
-          typeof requestId!=='string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(requestId) ||
-          typeof documentId!=='string' || !/^[A-Za-z0-9_-]{1,256}$/.test(documentId)) throw new InputError('评论确认参数无效');
+      const allowed=people?['documentId','binding','query']:['documentId','binding','requestId','action'];
+      if(Object.keys(input).some(key=>!allowed.includes(key)) || typeof documentId!=='string' || !/^[A-Za-z0-9_-]{1,256}$/.test(documentId))
+        throw new InputError('评论确认参数无效');
       if(typeof input.binding!=='string' || !/^[a-f0-9]{64}$/.test(input.binding)) throw new InputError('请先读取评论并确认当前飞书身份',409);
-      const actor=await actorNow();
-      if(!actor || input.binding!==stamp(documentId,actor)) throw new InputError('文档、账号或授权已变化，请重新读取评论后确认',409);
-      const action=commentAction(input.action);
-      await verify();
+      const documentKey=documentId,readBinding=input.binding;
+      async function confirmedActor(callSignal=signal) {
+        const actor=await actorNow(false,callSignal);
+        if(!actor || readBinding!==stamp(documentKey,actor)) throw new InputError('文档、账号或授权已变化，请重新读取评论后确认',409);
+        await verify();
+      }
+      const signPerson=(openId:string,name:string)=>sign(['comment-mention',input.binding,openId,name]);
+      if(people){
+        const query=input.query;
+        if(typeof query!=='string' || !query.trim() || Array.from(query.trim()).length>50 || /[\p{Cc}]/u.test(query)) throw new InputError('请填写有效的人员名称');
+        let directory:Awaited<ReturnType<typeof searchKnowledgeCommentPeople>>|undefined;
+        const delivered=await invoke(async inner=>{
+          await confirmedActor(inner);
+          const result=await searchKnowledgeCommentPeople(profile!,query.trim(),inner);
+          await confirmedActor(inner);
+          directory=result;
+          // A wrapper may edit its return value in place. Keep the signing input private.
+          return structuredClone(result);
+        });
+        await confirmedActor();
+        // Only sign the directory's own response. A wrapper can reject the request,
+        // but its replacement rows cannot authorize notifying a different person.
+        if(!directory || JSON.stringify(delivered)!==JSON.stringify(directory))
+          throw new InputError('未取得一致的飞书通讯录搜索回执',502);
+        return {people:directory.people.map(person=>({...person,proof:signPerson(person.openId,person.name)})),truncated:directory.truncated};
+      }
+      if(typeof requestId!=='string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(requestId)) throw new InputError('评论操作标识无效');
+      await confirmedActor();
+      const action=commentAction(input.action,signPerson);
       const result=await effects.perform({key:'knowledge-comment:'+requestId,kind:'knowledge.document.comment',target:sourceId,
         summary:'主人确认的飞书文档评论操作',content:{binding:input.binding as string,action},run:async()=>{
           let live=true,attempted=false,receipt:Json|undefined;
@@ -2814,7 +2861,7 @@ export async function createWorkbench(config: AppConfig) {
     return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
   }
   return {
-    subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {

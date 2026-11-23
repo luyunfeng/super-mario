@@ -871,6 +871,7 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
   let pageId = '', foreignId = '', adapter!: FeishuOptions;
   let shortCommit = '';
   const sourceUrl = 'https://synthetic.feishu.cn/docx/ReviewFixture';
+  const mentionAnswer = '在样本来源的评论里键入 @姓名，选择要提醒的联系人。确认时核对名单和正文。';
   const commentAnswer = '到 Web「记忆 → 查看原始资料」展开样本来源，查看未解决的评论。';
   const sourceAnswer = '[样本来源](' + sourceUrl + ')';
   const sent: string[] = [];
@@ -898,6 +899,12 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
         assert.ok(req.tools.includes('knowledge_source_lookup'));
         const different = JSON.stringify(req.content).includes('?version=2');
         return call('knowledge_source_lookup', { url: sourceUrl + (different ? '?version=2' : '') }, different ? 'no-receipt' : 'by-url');
+      }
+      if (JSON.stringify(req.content).includes('评论里提醒同事')) {
+        assert.match(req.system, /从当前飞书账号的搜索结果选择本人/);
+        assert.match(req.system, /手输 @姓名 只是正文/);
+        assert.match(req.system, /不能证明对方已收到通知或已读/);
+        return call('knowledge_original', { pageId }, 'mention-source');
       }
       if (JSON.stringify(req.content).includes('还有哪些评论待处理')) {
         assert.match(req.system, /已保存的文档正文不能证明在线评论状态/);
@@ -945,10 +952,10 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
       assert.ok(pages[0].webCitation.startsWith('[查看原文](#memory?entry=' + pageId + '&source='));
       return { role: 'assistant', content: pages[0].title + '，知识页 ' + pages[0].id };
     }
-    if (req.callId === 'comment-source') {
+    if (req.callId === 'comment-source' || req.callId === 'mention-source') {
       const {sources} = JSON.parse(raw);
       assert.deepEqual(sources.map((item: {sourceUrl: string}) => item.sourceUrl), [sourceUrl]);
-      return { role: 'assistant', content: commentAnswer };
+      return { role: 'assistant', content: req.callId === 'mention-source' ? mentionAnswer : commentAnswer };
     }
     if (req.callId === 'urls') {
       const { sources } = JSON.parse(raw);
@@ -1035,6 +1042,10 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
     assert.equal(await ask(commentQuestion, '/projects/' + project.id + '/messages'), commentAnswer);
     await adapter.onMessage(commentQuestion, { ...source, messageId: 'document-comments' });
     await t.waitFor(() => assert.ok(sent.includes(commentAnswer)));
+    const mentionQuestion = '知识页 ' + pageId + ' 的来源要怎么在评论里提醒同事？';
+    assert.equal(await ask(mentionQuestion, '/projects/' + project.id + '/messages'), mentionAnswer);
+    await adapter.onMessage(mentionQuestion, {...source, messageId:'mention-in-comment'});
+    await t.waitFor(() => assert.ok(sent.includes(mentionAnswer)));
     const statusQuestion = sourceUrl + ' 为什么失败，重试了吗？';
     const beforeLookup = server.app.store.list('knowledge.sources');
     assert.equal(await ask(statusQuestion, '/projects/' + project.id + '/messages'), '未能读取文档；重试仍在排队。');
