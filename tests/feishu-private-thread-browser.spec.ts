@@ -289,7 +289,7 @@ test('飞书搜索卡提供可授权定位的 Web 原话链接，未知工作台
   await expect(mark).toBeFocused();await expect(mark.locator('..')).toContainText(phrase);
   const citationId=randomUUID();
   server.app.store.put('messages',citationId,{id:citationId,conversationId:'main',role:'assistant',status:'done',
-    text:'合成历史答复 [查看原文]('+target.hash+')',createdAt:new Date().toISOString()});
+    text:'合成历史答复 [查看原文]('+target.hash+')，会话清单 [查看对话]('+prefix+')',createdAt:new Date().toISOString()});
   await page.goto(server.url+'/#chat');await page.reload();
   const citation=page.locator('[data-id="'+citationId+'"]').getByRole('link',{name:'查看原文'});
   await expect(citation).toHaveAttribute('href',target.hash);
@@ -299,6 +299,14 @@ test('飞书搜索卡提供可授权定位的 Web 原话链接，未知工作台
   const edit=await fetch(server.url+path,{method:'PATCH',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({version:latest.version,title:renamed})});
   assert.equal(edit.status,200);
   assert.deepEqual(await listLinks(renamed,'title-only'),[origin+'/'+prefix]);
+  const selectionBefore=(await api('')).selection;
+  await page.goto(server.url+'/#chat');
+  const conversation=page.locator('[data-id="'+citationId+'"]').getByRole('link',{name:'查看对话'});
+  await expect(conversation).toHaveAttribute('href',prefix);
+  await conversation.click();
+  await expect(drawer.getByRole('heading',{name:renamed})).toBeVisible();
+  await expect(mark).toHaveCount(0);
+  assert.deepEqual((await api('')).selection,selectionBefore);
   const wrong=origin+'/#agent/private-thread/'+foreign.id+'/'+threadId+'/'+encodeURIComponent(id);
   const rejected=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/feishu/bots/'+foreign.id+'/threads/'+threadId);
   await page.goto(wrong);assert.equal((await rejected).status(),404);
