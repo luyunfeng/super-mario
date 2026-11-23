@@ -159,6 +159,7 @@ export interface SystemActions {
   scheduledWorkBrief?(input: Record<string, unknown>): Json;
   scheduledWorkList?(input: Record<string, unknown>): Json;
   scheduledWorkPropose?(input: Record<string, unknown>): Json;
+  scheduledWorkSkipNext?(input: Record<string, unknown>): Json;
   scheduledWorkSetPaused?(input: Record<string, unknown>): Json;
   scheduledWorkCancel?(input: Record<string, unknown>): Json;
   followupCreate?(input: Record<string, unknown>): Json;
@@ -724,6 +725,9 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           propose.parameters.required = ['key', 'title', 'schedule', 'action'];
           context.contribute('tools', 'scheduled_work_propose', propose);
         }
+        if (actions?.scheduledWorkSkipNext) context.contribute('tools', 'scheduled_work_skip_next', tool('scheduled_work_skip_next',
+          '跳过周期计划的下一次触发，或用当前标记撤销跳过。', async args => actions.scheduledWorkSkipNext!(args),
+          { id: { type: 'string' }, version: { type: 'integer' }, scheduleVersion: { type: 'integer' }, at: { type: 'string' }, undoToken: { type: 'string' } }));
         if (actions?.scheduledWorkSetPaused) context.contribute('tools', 'scheduled_work_set_paused', tool('scheduled_work_set_paused',
           '按用户要求暂停或恢复指定定时计划。先核对当前工作和调度版本。', async args => actions.scheduledWorkSetPaused!(args),
           { id: { type: 'string' }, version: { type: 'integer' }, scheduleVersion: { type: 'integer' }, paused: { type: 'boolean' } }));

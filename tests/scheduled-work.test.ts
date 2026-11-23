@@ -33,7 +33,7 @@ function fixture(t: test.TestContext) {
       store.put('dispatch-keys', `approval:${a.id}:${a.version}`, id);
       return { runId: id };
     } });
-    const work = createScheduledWork({ store, events, schedules, proposeApproval: a => approvals.propose(a), enabled: () => enabled,
+    const work = createScheduledWork({ store, events, schedules, now: () => time, proposeApproval: a => approvals.propose(a), enabled: () => enabled,
       authorize: () => authorized,
       brief: async () => { briefCount++; if (briefFail) throw new Error('uncertain'); if (hold) return hold(); return { text: '只读程序事实', messageId: 'brief-ref' }; },
     });
@@ -333,4 +333,39 @@ test('runtime turn status changes preserve original user authorization; text edi
   f.store.put('messages', 'u', { ...source, status: 'done', text: '新的范围' });
   assert.equal((await f.work.handle(f.due('2026-01-01T00:02:00Z'))).status, 'skip');
   assert.equal(f.work.list()[0].status, 'cancelled');
+});
+
+
+test('只跳过指定周期，撤销校验原标记，重启和错过多期仍保留原排期', async t => {
+  const f = fixture(t);
+  const at = '2026-01-01T00:01:00.000Z';
+  await f.activate({ schedule: { kind: 'interval', everySec: 60, anchorAt: at } });
+  const [row] = f.work.list();
+  const skip = (time: string, token?: string) => f.work.skipNext(row.id, row.version, row.scheduleVersion!, time, token);
+  const marker = () => f.work.list()[0].occurrences.find(o => o.scheduledFor === at)?.ownerSkipToken;
+  skip(at);
+  const first = marker()!;
+  skip(at);
+  assert.equal(marker(), first);
+  skip(at, first);
+  assert.equal(marker(), undefined);
+  skip(at);
+  assert.throws(() => skip(at, first), /标记已改变/);
+  await f.restart();
+  const due = f.due(at);
+  assert.equal((await f.work.handle(due)).status, 'skip');
+  assert.equal(f.briefCount, 0);
+  assert.throws(() => skip(at), /时间已改变/);
+  const second = '2026-01-01T00:02:00.000Z';
+  skip(second);
+  f.due('2026-01-01T00:04:00Z');
+  const latest = f.eventbox.events().find(e => e.sourceId.endsWith(':2026-01-01T00:04:00.000Z'))!;
+  assert.equal((await f.work.handle(latest)).status, 'done');
+  assert.equal(f.briefCount, 1);
+  assert.equal(f.work.list()[0].occurrences.filter(o => o.ownerSkipToken).length, 2);
+  const next = '2026-01-01T00:05:00.000Z';
+  assert.equal(f.schedules.list()[0].nextAt, next);
+  skip(next);
+  f.work.setPaused(row.id, row.version, row.scheduleVersion!, true);
+  assert.equal(f.work.list()[0].occurrences.some(o => o.scheduledFor === next), false);
 });

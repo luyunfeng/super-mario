@@ -13,6 +13,7 @@ const timingText = s => s.kind === 'once' ? `一次 · ${timeText(s.at)}` : s.ki
 function occurrenceText(o) {
   if (o.status === 'unknown') return '动作结果未知，停止堆积；请核对原记录';
   if (o.status === 'claimed') return '已认领，动作结果尚未确认';
+  if (o.ownerSkipped) return '已按你的设置跳过';
   if (o.status === 'skipped') return '本次已跳过';
   if (o.run) return `派发审批 · ${approvalText(o.approvalStatus)} · ${runStatus(o.run.status)}`;
   if (o.kind === 'dispatch') return `已生成派发审批 · ${approvalText(o.approvalStatus)}；任务最终完成情况未确认，请到对话查看执行记录`;
@@ -103,11 +104,21 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       line(timingText(item.schedule)),
       line(`配置状态：${({ pending: '待创建确认', active: '已生效（仅配置生效）', cancelled: '已取消计划' })[item.status] ?? '未确认'} · 创建审批 ${approvalText(item.approvalStatus)}`),
       line(item.scheduleStatus === 'done' && item.schedule.kind === 'once' ? '单次计划已触发' : `调度状态：${({ active: '等待触发', paused: '已暂停', done: '已结束', cancelled: '已取消' })[item.scheduleStatus] ?? '未确认'}`),
-      line(item.scheduleStatus === 'paused' ? '恢复前不会触发' : `下次触发：${item.nextAt ? timeText(item.nextAt) : '未提供'}`),
+      item.skipToken && line('将跳过：' + timeText(item.nextAt)),
+      !item.skipToken && line(item.scheduleStatus === 'paused' ? '恢复前不会触发' : `下次触发：${item.nextAt ? timeText(item.nextAt) : '未提供'}`),
       line(`最新实际结果：${latest ? occurrenceText(latest) : '尚无到期动作记录'}`),
       item.action.kind === 'brief' && line('事实简报仅程序汇总已接入事实，不自动调用模型或外发。'),
       line('上次动作结果未知或派发审批待批准时，暂停生成新动作。取消计划不会终止已派发的任务。'),
-      h('div', { class: 'row row--wrap' }, chatLink(), item.status === 'active' && ['active', 'paused'].includes(item.scheduleStatus) && Number.isSafeInteger(item.scheduleVersion) && Button({
+      h('div', { class: 'row row--wrap' }, chatLink(),
+        item.status === 'active' && item.scheduleStatus === 'active' && item.schedule.kind !== 'once' && Date.parse(item.nextAt) > Date.now() && Button({
+          label: item.skipToken ? '撤销跳过' : '跳过下一次', size: 'sm', onClick: async () => {
+            if (syncIdentity()) { requestRead(); return; }
+            try {
+              await api.post(`/scheduled-work/${encodeURIComponent(item.id)}/skip-next`, {
+                version: item.version, scheduleVersion: item.scheduleVersion, at: item.nextAt, undoToken: item.skipToken,
+              });
+            } finally { requestRead(); }
+          } }), item.status === 'active' && ['active', 'paused'].includes(item.scheduleStatus) && Number.isSafeInteger(item.scheduleVersion) && Button({
         label: item.scheduleStatus === 'paused' ? '恢复计划' : '暂停计划', size: 'sm', onClick: async () => {
           if (syncIdentity()) { requestRead(); return; }
           try {

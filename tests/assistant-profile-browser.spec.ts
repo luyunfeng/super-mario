@@ -32,7 +32,7 @@ test('Agent 页修改主助手名称后同步到已有气泡，并发冲突保�
       assert.ok(response.ok);
       return response.json();
     };
-    const approval = await post('/scheduled-work', { key, title, schedule: { kind: 'once', at }, action: { kind: 'brief' } });
+    const approval = await post('/scheduled-work', { key, title, schedule: key === 'early' ? { kind: 'interval', everySec: 86400, anchorAt: at } : { kind: 'once', at }, action: { kind: 'brief' } });
     if (approved) await post('/approvals/' + approval.id + '/approve', { version: approval.version });
   };
   await schedule('later', '下午复核', '2099-01-02T15:00:00Z', true);
@@ -62,6 +62,11 @@ test('Agent 页修改主助手名称后同步到已有气泡，并发冲突保�
   await upcoming.getByRole('button', { name: '查看定时工作' }).click();
   await expect(first.locator('#agent-scheduled-work').getByRole('button', { name: '创建定时工作' })).toBeFocused();
   const early = first.locator('#agent-scheduled-work article').filter({ hasText: '上午简报' });
+  await early.getByRole('button', { name: '跳过下一次' }).click();
+  await expect(early).toContainText('将跳过');
+  await expect(upcoming).toContainText(/下午复核.*上午简报/s);
+  await early.getByRole('button', { name: '撤销跳过' }).click();
+  await expect(upcoming).toContainText(/上午简报.*下午复核/s);
   await early.getByRole('button', { name: '暂停计划' }).click();
   await expect(early).toContainText('恢复前不会触发');
   await expect(upcoming).not.toContainText('上午简报');

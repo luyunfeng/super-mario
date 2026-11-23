@@ -1,7 +1,7 @@
 import type { Store, EventBus } from '../../plugin-sdk/src/index.ts';
 import type { Approval, BotScope, Json, Message, Run, ScheduledWorkInput, ScheduledWorkOccurrence, ScheduledWorkRecord, ScheduledWorkScope } from '../../protocol/src/index.ts';
 import { createScheduledWork } from './scheduled-work.ts';
-import type { createSchedules } from './schedules.ts';
+import { nextOccurrence, type createSchedules } from './schedules.ts';
 import type { createApprovalService } from './approvals.ts';
 import { validateBotScope } from './bot-scopes.ts';
 import { digest, stableJson } from './eventbox.ts';
@@ -67,7 +67,7 @@ export function createScheduledWorkService(options: {
     return { approvalStatus: approval.status, ...(matches ? { run: { id: run.id, status: run.status } } : {}) };
   }
   function historyPage(work: ScheduledWorkRecord, occurrences: ScheduledWorkOccurrence[], after?: string) {
-    const history = occurrences.slice().sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor) || b.key.localeCompare(a.key));
+    const history = occurrences.filter(o => !o.ownerSkipToken || Date.parse(o.scheduledFor) <= Date.now()).sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor) || b.key.localeCompare(a.key));
     const start = after === undefined ? 0 : history.findIndex(o => o.key === after) + 1;
     if (after !== undefined && !start) fail('当前计划找不到所选触发记录', 404);
     const page = history.slice(start, start + 20);
@@ -75,7 +75,7 @@ export function createScheduledWorkService(options: {
     return {
       occurrences: page.map(o => ({ key: o.key, scheduledFor: o.scheduledFor, status: o.status, approvalId: o.approvalId,
         ...dispatchReceipt(work, o),
-        result: o.result, kind: work.input.action.kind, ...(o.error ? { error: '结果未知，请核对原记录' } : {}) })),
+        result: o.result, ...(o.ownerSkipToken ? { ownerSkipped: true } : {}), kind: work.input.action.kind, ...(o.error ? { error: '结果未知，请核对原记录' } : {}) })),
       occurrenceTotal: history.length, occurrencesTruncated: more, nextOccurrenceKey: more ? page[page.length - 1].key : null,
     };
   }
@@ -93,10 +93,15 @@ export function createScheduledWorkService(options: {
     const selected=rows.filter(row=>scope.kind==='global' || row.input.projectId===('projectId' in scope?scope.projectId:undefined) && (scope.kind!=='task'||row.input.todoId===scope.todoId));
     const schedules = new Map(options.schedules.forOwner('daily-brief').list().map(schedule => [schedule.id, schedule]));
     const now = Date.now();
+    function pendingSkip(row: typeof selected[number], schedule: ReturnType<typeof schedules.get>) {
+      if (schedule?.status !== 'active' || !(Date.parse(schedule.nextAt) > now)) return undefined;
+      return row.occurrences.find(o => o.ownerSkipToken && o.scheduleId === schedule.id && o.scheduledFor === schedule.nextAt && o.scheduleVersion === schedule.version);
+    }
     const upcoming = selected.flatMap(row => {
       const schedule = row.scheduleId ? schedules.get(row.scheduleId) : undefined;
       if (row.status !== 'active' || schedule?.status !== 'active' || !schedule.nextAt || !(Date.parse(schedule.nextAt) >= now)) return [];
-      return [{ id: row.id, title: row.input.title, nextAt: schedule.nextAt }];
+      const nextAt = pendingSkip(row, schedule) ? nextOccurrence(schedule, Date.parse(schedule.nextAt)) : schedule.nextAt;
+      return [{ id: row.id, title: row.input.title, nextAt }];
     }).sort((a, b) => Date.parse(a.nextAt) - Date.parse(b.nextAt) || a.id.localeCompare(b.id)).slice(0, 3);
     const page = selected.slice(offset, offset + limit);
     const nextOffset = offset + page.length < selected.length ? offset + page.length : null;
@@ -105,7 +110,7 @@ export function createScheduledWorkService(options: {
       return {id:row.id,version:row.version,title:row.input.title,status:row.status,projectId:row.input.projectId,todoId:row.input.todoId,schedule:row.input.schedule,action:row.input.action,
         approvalId:row.approvalId,approvalStatus:store.get<Approval>('approvals',row.approvalId)?.status,
         source:{messageId:row.sourceMessage.id,createdAt:row.sourceMessage.createdAt},
-        nextAt:schedule?.nextAt,scheduleStatus:schedule?.status,scheduleVersion:schedule?.version,
+        nextAt:schedule?.nextAt,skipToken:pendingSkip(row, schedule)?.ownerSkipToken,scheduleStatus:schedule?.status,scheduleVersion:schedule?.version,
         ...historyPage(row, row.occurrences)};
     }),upcoming,total:selected.length,offset,nextOffset,truncated:nextOffset !== null,limit };
   }
@@ -149,6 +154,18 @@ export function createScheduledWorkService(options: {
       const approval=manager.propose(value,actual.id); events.publish('scheduled.work.changed',{approvalId:approval.id}); return approval;
     });
   }
+  function skipNext(input: Record<string, unknown>, fromAgent = false) {
+    const { id, version, scheduleVersion, at, undoToken } = input;
+    if (typeof id !== 'string' || typeof version !== 'number' || !Number.isSafeInteger(version)
+      || typeof scheduleVersion !== 'number' || !Number.isSafeInteger(scheduleVersion) || typeof at !== 'string'
+      || (undoToken !== undefined && typeof undoToken !== 'string')) fail('需要计划版本、调度版本和目标触发时间', 400);
+    if (fromAgent) {
+      const row = store.get<ScheduledWorkRecord>('scheduled-work.requests', id);
+      if (!row) fail('周期工作不存在', 404);
+      options.authorize({ action: row.input.action, projectId: row.input.projectId, todoId: row.input.todoId }, actor());
+    }
+    return manager.skipNext(id, version, scheduleVersion, at, undoToken);
+  }
   function changeTiming(input: Record<string, unknown>, fromAgent = false) {
     const { id, version, scheduleVersion, paused } = input;
     if (typeof id !== 'string' || typeof version !== 'number' || !Number.isSafeInteger(version)
@@ -169,7 +186,7 @@ export function createScheduledWorkService(options: {
     });
   }
   const off=events.subscribe(event=>{if(['projects.changed','todos.changed','plugins.changed','feishu.bots.changed','bots.changed'].includes(event.type)){manager.sync();cleanup();}});
-  return { list:publicRows,readHistory,readBrief,propose,cancel,changeTiming,approveCreation:manager.approveCreation,assertDispatchCurrent:manager.assertDispatchCurrent,
+  return { list:publicRows,readHistory,readBrief,propose,cancel,skipNext,changeTiming,approveCreation:manager.approveCreation,assertDispatchCurrent:manager.assertDispatchCurrent,
     sync(){manager.sync();cleanup();},async handle(event:Parameters<typeof manager.handle>[0]){
       if(!options.ready())return {status:'retry' as const,reason:'channel_bindings_initializing',afterSec:1,deferred:true};
       const result=await manager.handle(event);cleanup();return result;

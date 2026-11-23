@@ -23,5 +23,6 @@ export interface ScheduledWorkRecord {
 export interface ScheduledWorkOccurrence {
   key: string; workId: string; workVersion: number; scheduleId: string; scheduleVersion: number; scheduledFor: string;
   status: 'claimed' | 'completed' | 'skipped' | 'unknown'; approvalId?: string; approvalVersion?: number;
+  ownerSkipToken?: string;
   dispatchParams?: { [key: string]: Json }; result?: Json; error?: string;
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { DurableEvent, EventBus, EventResult, ScheduleInput, Store } from '../../plugin-sdk/src/index.ts';
 import type { Approval, Json, JsonObject, Message, Project, Run, Todo } from '../../protocol/src/index.ts';
 import type { ScheduledWorkInput, ScheduledWorkOccurrence, ScheduledWorkRecord, ScheduledWorkScope } from '../../protocol/src/scheduled-work.ts';
@@ -30,12 +31,12 @@ function fields(value: unknown, allowed: string[]) {
  * before any synchronous message commit, with no intervening await. The post-await
  * check here protects the receipt but cannot undo side effects inside a callback.
  */
-export function createScheduledWork({ store, events, schedules, proposeApproval, brief, authorize, enabled }: {
+export function createScheduledWork({ store, events, schedules, proposeApproval, brief, authorize, enabled, now = Date.now }: {
   store: Store; events: EventBus; schedules: Pick<ReturnType<typeof createSchedules>, 'forOwner'>;
   proposeApproval: (input: Pick<Approval, 'kind' | 'title' | 'details' | 'params' | 'todoId'>) => Approval;
   brief: (input: { scope: ScheduledWorkScope; sourceMessage: Message; occurrenceKey: string; scheduledFor: string; title: string; assertCurrent: () => void }) => Promise<Json> | Json;
   authorize: (scope: ScheduledWorkScope, sourceMessage: Message) => void | boolean;
-  enabled: () => boolean;
+  enabled: () => boolean; now?: () => number;
 }) {
   const api = schedules.forOwner(owner);
   let closed = false;
@@ -60,8 +61,14 @@ export function createScheduledWork({ store, events, schedules, proposeApproval,
     }
     if (authorization !== undefined && authorization !== true) fail('原用户来源不再授权此范围');
   }
+  function clearPendingSkip(r: ScheduledWorkRecord, s: ReturnType<typeof api.list>[number] | undefined) {
+    if (!s || Date.parse(s.nextAt) <= now()) return;
+    const key = digest([s.id, r.scheduleVersion, s.nextAt]);
+    if (store.get<ScheduledWorkOccurrence>(occurrences, key)?.ownerSkipToken) store.remove(occurrences, key);
+  }
   function stop(r: ScheduledWorkRecord) {
     const s = api.list().find(s => s.id === r.scheduleId);
+    clearPendingSkip(r, s);
     if (s && s.status !== 'cancelled') api.cancel(s.id, s.version);
     store.put(records, r.id, { ...r, status: 'cancelled' });
   }
@@ -173,10 +180,32 @@ export function createScheduledWork({ store, events, schedules, proposeApproval,
       if (!r || r.version !== version || r.scheduleVersion !== scheduleVersion) return fail('计划版本已变化，请核对当前计划');
       const s = current(r, true);
       if (s.status !== (paused ? 'active' : 'paused')) return fail('此计划当前不能' + (paused ? '暂停' : '恢复'));
+      clearPendingSkip(r, s);
       const next = api.update(s.id, { status: paused ? 'paused' : 'active' }, s.version);
       store.put(records, id, { ...r, initialScheduleVersion: r.initialScheduleVersion ?? s.version, scheduleVersion: next.version });
       events.publish('scheduled.work.changed', { id });
       return { id, scheduleVersion: next.version, scheduleStatus: next.status };
+    });
+  }
+  function skipNext(id: string, version: number, scheduleVersion: number, at: string, undoToken?: string) {
+    return store.transaction(() => {
+      const work = store.get<ScheduledWorkRecord>(records, id);
+      if (!work || work.version !== version || work.scheduleVersion !== scheduleVersion) return fail('计划版本已变化，请重新核对');
+      const schedule = current(work);
+      if (schedule.kind === 'once' || schedule.status !== 'active' || schedule.nextAt !== at || Date.parse(at) <= now())
+        return fail('该次触发时间已改变或不支持跳过');
+      // Reserve the same key that due delivery claims. Catch-up and replay cannot execute this slot.
+      const key = digest([schedule.id, schedule.version, at]);
+      const marked = store.get<ScheduledWorkOccurrence>(occurrences, key);
+      if (undoToken !== undefined) {
+        if (!marked?.ownerSkipToken || marked.ownerSkipToken !== undoToken) return fail('跳过标记已改变，请重新核对');
+        store.remove(occurrences, key);
+      } else if (!marked) {
+        store.put<ScheduledWorkOccurrence>(occurrences, key, { key, workId: id, workVersion: version, scheduleId: schedule.id,
+          scheduleVersion, scheduledFor: at, status: 'skipped', ownerSkipToken: randomUUID() });
+      } else if (!marked.ownerSkipToken) return fail('该次触发已有执行记录');
+      events.publish('scheduled.work.changed', { id });
+      return { id, at, skipped: undoToken === undefined };
     });
   }
   function blocked(r: ScheduledWorkRecord): boolean {
@@ -279,7 +308,7 @@ export function createScheduledWork({ store, events, schedules, proposeApproval,
   }
   const off = events.subscribe(e => { if (['projects.changed', 'todos.changed', 'plugins.changed'].includes(e.type)) sync(); });
   sync();
-  return { propose, setPaused, approveCreation, handle, assertDispatchCurrent, sync,
+  return { propose, skipNext, setPaused, approveCreation, handle, assertDispatchCurrent, sync,
     list() {
       sync();
       const history = store.list<ScheduledWorkOccurrence>(occurrences);

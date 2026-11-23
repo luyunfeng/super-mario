@@ -296,6 +296,12 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (path === '/api/v1/scheduled-work/history' && method === 'POST') return json(res, 200, app.scheduledWork.readHistory(await body(req)));
         if (path === '/api/v1/scheduled-work/brief' && method === 'POST') return json(res, 200, app.scheduledWork.readBrief(await body(req)));
         if (path === '/api/v1/scheduled-work' && method === 'POST') return json(res,201,app.scheduledWork.propose(await body(req)));
+        const skipScheduled = path.match(/^\/api\/v1\/scheduled-work\/([^/]+)\/skip-next$/);
+        if (skipScheduled && method === 'POST') {
+          const input = await body(req);
+          if (Object.keys(input).some(key => !['version', 'scheduleVersion', 'at', 'undoToken'].includes(key))) throw new InputError('跳过参数无效');
+          return json(res, 200, app.scheduledWork.skipNext({ ...input, id: decodeURIComponent(skipScheduled[1]!) }));
+        }
         const pauseScheduled = path.match(/^\/api\/v1\/scheduled-work\/([^/]+)\/(pause|resume)$/);
         if (pauseScheduled && method === 'POST') {
           const input = await body(req);

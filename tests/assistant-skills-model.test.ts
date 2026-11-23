@@ -78,6 +78,10 @@ test('Web 和飞书查询接下来三项定时工作，并在同一项目内翻�
         assert.match(req.system, /按 nextOffset 续读当前范围/);
         return call('scheduled_work_list', {}, 'first-page');
       }
+      if (question.includes('跳过安排1')) {
+        assert.match(req.system, /撤销跳过时另传当前 skipToken/);
+        return call('scheduled_work_list', {}, question.includes('撤销') ? 'undo-slot' : 'skip-slot');
+      }
       return call('scheduled_work_list', {}, question.includes('暂停安排1') ? 'before-pause' : question.includes('恢复安排1') ? 'before-resume' : 'upcoming');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
@@ -93,6 +97,15 @@ test('Web 和飞书查询接下来三项定时工作，并在同一项目内翻�
       assert.equal(page.nextOffset, null);
       assert.equal(page.items.at(-1).title, '末页计划');
       return { role: 'assistant', content: `已核对 ${page.total} 项，末项是末页计划。` };
+    }
+    if (req.callId === 'skip-slot' || req.callId === 'undo-slot') {
+      const row = JSON.parse(raw).items.find((item: { title: string }) => item.title === '安排1');
+      return call('scheduled_work_skip_next', { id: row.id, version: row.version, scheduleVersion: row.scheduleVersion,
+        at: row.nextAt, ...(req.callId === 'undo-slot' ? { undoToken: row.skipToken } : {}) }, 'slot-result');
+    }
+    if (req.callId === 'slot-result') {
+      const result = JSON.parse(raw);
+      return { role: 'assistant', content: (result.skipped ? '跳过 ' : '恢复 ') + result.at };
     }
     if (req.callId?.startsWith('before-')) {
       const row = JSON.parse(raw).items.find((item: { title: string }) => item.title === '安排1');
@@ -111,7 +124,7 @@ test('Web 和飞书查询接下来三项定时工作，并在同一项目内翻�
     const project = await api('/projects', { name: '定时工作项目' });
     for (const [day, title, projectId] of [[1, '其他范围', undefined], [1, '尚待确认', project.id],
       ...[4, 2, 3, 1].map(day => [day, '安排' + day, project.id])]) {
-      const approval = await api('/scheduled-work', { key: title, title, projectId, schedule: { kind: 'once', at: '2099-02-0' + day + 'T10:00:00Z' }, action: { kind: 'brief' } });
+      const approval = await api('/scheduled-work', { key: title, title, projectId, schedule: title === '安排1' ? { kind: 'interval', everySec: 86400, anchorAt: '2099-02-01T10:00:00Z' } : { kind: 'once', at: '2099-02-0' + day + 'T10:00:00Z' }, action: { kind: 'brief' } });
       if (title !== '尚待确认') await api('/approvals/' + approval.id + '/approve', { version: approval.version });
     }
     const question = '当前项目接下来会自动做什么？';
@@ -125,6 +138,12 @@ test('Web 和飞书查询接下来三项定时工作，并在同一项目内翻�
     await adapter.onMessage('请暂停安排1', { ...source, messageId: 'pause' });
     await t.waitFor(() => assert.ok(sent.includes('调度状态 paused')));
     assert.equal(await ask('请恢复安排1', '/projects/' + project.id + '/messages'), '调度状态 active');
+    assert.equal(await ask('请跳过安排1的下一次', '/projects/' + project.id + '/messages'), '跳过 2099-02-01T10:00:00.000Z');
+    const skipped = server.app.scheduledWork.list({ projectId: project.id });
+    assert.equal(skipped.items.find(item => item.title === '安排1')!.occurrenceTotal, 0);
+    assert.equal(skipped.upcoming.find(item => item.title === '安排1')!.nextAt, '2099-02-02T10:00:00.000Z');
+    await adapter.onMessage('请撤销跳过安排1的下一次', { ...source, messageId: 'undo-slot' });
+    await t.waitFor(() => assert.ok(sent.includes('恢复 2099-02-01T10:00:00.000Z')));
     for (let index = 0; index < 96; index++) {
       server.app.scheduledWork.propose({ key: 'page-' + index, title: index === 95 ? '末页计划' : '分页样本 ' + index,
         projectId: project.id, schedule: { kind: 'once', at: '2099-03-01T00:00:00Z' }, action: { kind: 'brief' } });
