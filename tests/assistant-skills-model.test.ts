@@ -3504,6 +3504,7 @@ test('独立对话助手使用当前版本改名和归档，Web 主助手仅指�
     if (req.lastRole === 'user') {
       assert.match(req.system, /只有保存回执才能报告成功/);
       if (JSON.stringify(req.content).includes('Web 如何整理')) {
+        assert.match(req.system, /搜索独立对话.*点匹配摘录可定位原消息.*复制消息链接.*返回最新消息/);
         assert.ok(!req.tools.includes('private_conversation_update'));
         return { role: 'assistant', content: '请打开对应机器人的独立对话记录。' };
       }
