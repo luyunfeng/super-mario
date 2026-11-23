@@ -249,6 +249,10 @@ export function createWebConversations({api,store,scope,router}){
           h('a', {'aria-label':hit.text, href:href(row.id,hit.id), onclick:()=>drawer.close()}, hit.text.slice(0,hit.start),
             h('mark', {}, hit.text.slice(hit.start,hit.end)), hit.text.slice(hit.end)))),
         row.matchCount > 3 && h('small', {class:'muted'}, '共 ' + row.matchCount + ' 条匹配，已显示 ' + hits.length + ' 条。'),
+        page && button('收起匹配发言', () => {
+          expanded.delete(row.id);
+          drawList();
+        }),
         page?.error && h('p', {role:'alert'}, page.error),
         page?.loading ? h('small', {role:'status'}, '正在读取匹配发言…')
           : (page?.nextBefore || (!page?.hits && row.matchCount > 3)) && button(

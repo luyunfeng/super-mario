@@ -206,6 +206,10 @@ test('独立对话正文结果可从三条预览翻页定位到较早原文', as
   await expect(drawer.locator('a mark')).toHaveCount(3);
   await drawer.getByRole('button', { name: '查看全部匹配发言' }).click();
   await expect(drawer.locator('a mark')).toHaveCount(20);
+  await drawer.getByRole('button', { name: '收起匹配发言' }).click();
+  await expect(drawer.locator('a mark')).toHaveCount(3);
+  await expect(drawer.getByLabel('按标题查找')).toHaveValue('季度记录');
+  await drawer.getByRole('button', { name: '查看全部匹配发言' }).click();
   await drawer.getByRole('button', { name: '加载更多匹配发言' }).click();
   await expect(drawer.locator('a mark')).toHaveCount(22);
   await drawer.getByRole('link', { name: '季度记录 0', exact: true }).click();
