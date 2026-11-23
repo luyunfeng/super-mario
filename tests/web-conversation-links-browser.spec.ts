@@ -68,3 +68,44 @@ test('独立消息链接定位早期原文、刷新与后翻页，复制不携�
   await expect(region.getByText(otherText,{exact:true})).toHaveCount(0);
   assert.deepEqual(errors,[]);
 });
+
+test('独立对话搜索仅显示本线原文和引用，点击旧发言可精确定位', {timeout:30000},async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'sm-search-web-thread-')),token='synthetic-search-thread';
+  const server=await startServer({dataDir:dir,host:'127.0.0.1',port:0,token,demo:true});
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(async()=>{await browser.close();await server.close();await rm(dir,{recursive:true,force:true});});
+  const project=server.app.projects.create({name:'检索项目'}),thread=randomUUID(),other=randomUUID();
+  const headers={authorization:'Bearer '+token,'content-type':'application/json'};
+  const source='逐字核对样本';
+  const submit=async(id:string,text:string)=>{
+    assert.equal((await fetch(server.url+'/api/v1/web-conversations',{method:'POST',headers,body:JSON.stringify({id,projectId:project.id,title:id===thread?'本线':'其他线'})})).status,201);
+    const res=await fetch(server.url+'/api/v1/web-conversations/'+id+'/messages',{method:'POST',headers:{...headers,'Idempotency-Key':randomUUID()},body:JSON.stringify({text})});
+    assert.equal(res.status,202);return (await res.json()).id;
+  };
+  const target=await submit(thread,'> '+source+' 选择这段原话。\n\n请核对。');
+  await submit(other,'> '+source+' 属于其他线。\n\n请核对。');
+  for(let i=0;i<52;i++){
+    const id=randomUUID();server.app.store.put('messages',id,{id,conversationId:'web:'+thread,projectId:project.id,role:'user',directWebInput:true,status:'done',text:'合成分页 '+i,createdAt:new Date().toISOString()});
+  }
+  const page=await browser.newPage();await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  await page.goto(server.url+'/#chat?thread='+thread+'&token='+token);
+  const region=page.getByLabel('独立对话内容');
+  await expect(region.locator('[data-id="'+target+'"]')).toHaveCount(0);
+  await region.getByRole('button',{name:'搜索本对话'}).click();
+  const drawer=page.getByRole('dialog',{name:'搜索本对话'}),category=drawer.getByLabel('搜索内容');
+  assert.deepEqual(await category.locator('option').allTextContents(),['全部','正文','引用']);
+  await category.selectOption('quoted');
+  const pending=page.waitForRequest(r=>r.method()==='POST' && r.url().endsWith('/conversation-message-search'));
+  await drawer.getByRole('searchbox').fill(source);
+  const request=await pending;
+  assert.deepEqual(request.postDataJSON(),{conversationId:'web:'+thread,projectId:project.id,query:source,category:'quoted'});
+  await expect(drawer.getByRole('listitem')).toHaveCount(1);await expect(drawer).not.toContainText('属于其他线');
+  const link=drawer.getByRole('link',{name:/选择这段原话/});
+  await expect(link).toHaveAttribute('href','#chat?thread='+thread+'&at='+target);
+  await link.click();
+  await expect(region.locator('[data-id="'+target+'"]')).toBeFocused();
+  await region.getByRole('button',{name:'搜索本对话'}).click();
+  const off=await fetch(server.url+'/api/v1/plugins/conversation-search',{method:'POST',headers,body:JSON.stringify({enabled:false})});
+  assert.equal(off.status,200);
+  await expect(drawer).toHaveCount(0);await expect(region.getByRole('button',{name:'搜索本对话'})).toHaveCount(0);
+});

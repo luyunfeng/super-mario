@@ -5,7 +5,7 @@ import { conversationSearchActive } from './search.js';
 
 const categories={text:'正文',quoted:'引用',file:'附件名',tool_name:'工具名',tool_input:'工具入参',tool_output:'工具返回',event:'工作事件'};
 
-export function conversationMessageSearch({api,store,router}) {
+export function conversationMessageSearch({api,store,router,hitLink,allowedCategories}) {
   let scope, owner, drawer, filesEnabled, officeEnabled;
   const button=Button({label:'搜索本对话',size:'sm',onClick:open});
   button.hidden=true;
@@ -26,7 +26,7 @@ export function conversationMessageSearch({api,store,router}) {
     const input=h('input',{type:'search',class:'input','aria-label':'搜索关键词',placeholder:'输入要查找的原文'});
     const category=h('select',{'aria-label':'搜索内容'},
       h('option',{value:''},'全部'),Object.entries(categories)
-        .filter(([value])=>value!=='file' || filesEnabled).map(([value,label])=>h('option',{value},label)));
+        .filter(([value])=>(!allowedCategories || allowedCategories.includes(value)) && (value!=='file' || filesEnabled)).map(([value,label])=>h('option',{value},label)));
     const status=h('p',{class:'muted small',role:'status'});
     const list=h('ul',{class:'stack','aria-label':'命中消息'});
     const more=Button({label:'加载更多',size:'sm',onClick:()=>void read(cursor)});
@@ -61,8 +61,8 @@ export function conversationMessageSearch({api,store,router}) {
           seen.add(hit.id);
           const at=new URLSearchParams({at:hit.id});
           if(range.todoId) at.set('todo',range.todoId);
-          const base=range.conversationId==='main'?router.href('chat'):router.href('projects',range.projectId,'workspace');
-          const href=base+'?'+at;
+          const href=hitLink?hitLink(range,hit.id):
+            (range.conversationId==='main'?router.href('chat'):router.href('projects',range.projectId,'workspace'))+'?'+at;
           const excerpts=matches.map(part=>{
             const match=pattern.exec(part.text);
             const excerpt=match ? [part.text.slice(0,match.index),h('mark',null,match[0]),part.text.slice(match.index+match[0].length)] : [part.text];

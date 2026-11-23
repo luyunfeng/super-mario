@@ -1,3 +1,4 @@
+import { requireWebConversationHistory } from './web-conversations.ts';
 import {checkedResult,phaseLabels,record,traceObject} from './tool-trace-public-fields.ts';
 import { sensitiveWorkspacePath } from './workspace-code.ts';
 import { readConversationStatus } from './conversation-status.ts';
@@ -353,10 +354,11 @@ function projectToolRecords(store:Store,input:Json) {
 
 // Main and project conversations may also receive Feishu turns and internal
 // notifications. Only the original Web input establishes a searchable audience.
-function webMessages(store: Store, input: Json, canReadFiles?:CanReadMessageFiles, excludeId?:string): Json {
+function webMessages(context: ExtensionContext, input: Json, canReadFiles?:CanReadMessageFiles, excludeId?:string): Json {
   if (!input || typeof input !== 'object' || Array.isArray(input) ||
       Object.keys(input).some(k => !['conversationId','projectId','todoId','query','before','category'].includes(k)))
     fail(400,'消息检索参数无效');
+  const {store} = context;
   const {conversationId,projectId,todoId,query,before} = input;
   const category=messageCategories.find(v=>v===input.category);
   if (input.category!==undefined && !category) fail(400,'消息检索类别无效');
@@ -365,7 +367,13 @@ function webMessages(store: Store, input: Json, canReadFiles?:CanReadMessageFile
   }
   if (typeof conversationId !== 'string' || (projectId !== undefined && typeof projectId !== 'string') ||
       (todoId !== undefined && typeof todoId !== 'string')) fail(400,'检索范围无效');
-  if (conversationId!=='main' && (!projectId || conversationId!==`project:${projectId}:work`)) fail(404,'未找到当前 Web 对话');
+  const thread = conversationId.startsWith('web:');
+  if (thread) {
+    if (!context.contributions.list('services').some(entry => entry.value.name === 'web-conversations.manage'))
+      fail(503,'独立 Web 对话插件已停用');
+    requireWebConversationHistory(store, conversationId.slice(4), projectId);
+    if (todoId) fail(404,'独立 Web 对话不属于指定待办');
+  } else if (conversationId!=='main' && (!projectId || conversationId!==`project:${projectId}:work`)) fail(404,'未找到当前 Web 对话');
   if (typeof query !== 'string' || !query.trim() || [...query].length>500) fail(400,'检索词须为 1 至 500 个字符');
   const activeProjects = new Set(store.list<Project>('projects').filter(p=>!p.archivedAt).map(p=>p.id));
   if (projectId && !activeProjects.has(projectId)) fail(404,'项目不存在或已归档');
@@ -378,15 +386,16 @@ function webMessages(store: Store, input: Json, canReadFiles?:CanReadMessageFile
   let pastCursor = before===undefined;
   const hits=[];
   for (const row of store.list<Message>('messages').reverse()) {
+    if (thread && (row.projectId !== projectId || row.todoId || row.origin && row.origin !== 'user')) continue;
     const rowProject:string|undefined=row.projectId ?? (conversationId==='main' ? undefined : projectId);
     if (row.id===excludeId || (excludeId && row.replyTo===excludeId) || row.conversationId!==conversationId || (projectId && rowProject!==projectId) || (todoId && row.todoId!==todoId) ||
         (rowProject && !activeProjects.has(rowProject)) || (row.origin && row.origin!=='user' && row.origin!=='result')) continue;
     const matches=matchedPassages(row,pattern,category);
-    const checkFiles=row.origin!=='result' && (!category || category==='file') && !!row.files?.length && canReadFiles;
-    const checkRuntime=row.role==='assistant' && (!category || category==='event' || (row.origin!=='result' && category.startsWith('tool_')));
+    const checkFiles=!thread && row.origin!=='result' && (!category || category==='file') && !!row.files?.length && canReadFiles;
+    const checkRuntime=!thread && row.role==='assistant' && (!category || category==='event' || (row.origin!=='result' && category.startsWith('tool_')));
     if (!matches.length && !checkFiles && !checkRuntime) continue;
-    const source = searchableWebSource(store,row,conversationId==='main' ? undefined : projectId);
-    if (!source || (row.todoId && !matchesTodo(row.todoId,rowProject))) continue;
+    const source = thread ? webInputFor(store,row,undefined) : searchableWebSource(store,row,conversationId==='main' ? undefined : projectId);
+    if (!source || (thread && !source.directWebInput) || (row.todoId && !matchesTodo(row.todoId,rowProject))) continue;
     // Legacy Web receipts can authenticate old text without granting access
     // to files. Office replies also need their still-live document binding.
     if (checkFiles && source.directWebInput && checkFiles(row)) {
@@ -474,7 +483,7 @@ export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input:
         signal.throwIfAborted();
         if (!active) fail(503,'对话搜索插件已停用');
         if (typeof excludeId!=='string' || !excludeId) fail(403,'缺少当前 Web 对话的原始输入');
-        return webMessages(context.store,input,canReadFiles,excludeId);
+        return webMessages(context,input,canReadFiles,excludeId);
       },
     });
     context.contribute('tools', 'conversation_status', {
@@ -534,7 +543,7 @@ export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input:
       },
     });
     context.provide('conversation-search.tool-records', input=>projectToolRecords(context.store,input));
-    context.provide('conversation-search.messages', input => webMessages(context.store, input, canReadFiles));
+    context.provide('conversation-search.messages', input => webMessages(context, input, canReadFiles));
     context.provide('conversation-search.projects', input => projectMessages(context.store, input));
     context.provide('conversation-search.saved', input => savedSearches(context, input));
   },

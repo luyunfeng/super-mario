@@ -75,10 +75,13 @@ function retryRequestId(replyId:string) {
 }
 type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' | 'replyTo' | 'requestId' | 'directWebInput'> & { files?: ChatFileInput[]; images?: ChatImageInput[]; readOnlyAction?: ReadOnlyAction; rememberModel?: false; onAccepted?: (input:Message)=>void; internalSourceId?:string };
 
+function directWebInput(store: Store, user: Message) {
+  return user.directWebInput && !user.replyTo && (!user.origin || user.origin === 'user') && !store.get('message.routes',user.id);
+}
+
 function directWebSource(store:Store,user:Message) {
-  return user.directWebInput && !user.replyTo && (!user.origin || user.origin === 'user')
-    && (user.conversationId === 'main' || (user.projectId && user.conversationId === 'project:'+user.projectId+':work'))
-    && !store.get('message.routes',user.id);
+  return (user.conversationId === 'main' || (user.projectId && user.conversationId === 'project:'+user.projectId+':work'))
+    && directWebInput(store,user);
 }
 
 function terminalInput(user:Message,status:Message['status']) {
@@ -203,7 +206,13 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     }
     if ((name === 'private_conversation_read' || name === 'private_conversation_update') &&
       (!options.conversationThreadId || !activeInput || activeInput.readOnly || activeInput.origin && activeInput.origin !== 'user')) return false;
-    if (name === 'current_web_message_search' && (!activeInput || activeInput.readOnly || !directWebSource(store, activeInput))) return false;
+    if (name === 'current_web_message_search') {
+      if (!activeInput || activeInput.role !== 'user' || activeInput.readOnly || activeInput.conversationId !== ownConversation) return false;
+      if (ownConversation.startsWith('web:')) {
+        // The independent runtime checks the registered thread/project on every tool call below.
+        if (!options.canUseScope || activeInput.todoId || !directWebInput(store, activeInput)) return false;
+      } else if (!directWebSource(store, activeInput)) return false;
+    }
     if (name === 'conversation_status' && ownConversation !== 'main' && ownConversation !== `project:${scopedProject}:work`) return false;
     if (name === 'read_run_scope' || name === 'revise_run_scope') {
       if (!activeInput || activeInput.todoId || (!mainIdentity && scope?.kind !== 'project') || options.conversationThreadId ||

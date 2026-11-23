@@ -1,3 +1,4 @@
+import {conversationMessageSearch} from './conversation-message-search.js';
 import {copyText} from '../lib/clipboard.js';
 import {icon} from '../ui/icons.js';
 import {h,replace} from '../lib/dom.js';
@@ -10,10 +11,11 @@ import {openDrawer} from '../ui/overlay.js';
 const uuid4=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const path='/web-conversations';
 const button=(label,onClick)=>h('button',{type:'button',class:'btn btn--sm',onclick:onClick},label);
-const href=id=>'#chat?'+new URLSearchParams({thread:id});
+const href=(id,at)=>'#chat?'+new URLSearchParams({thread:id,...(at && {at})});
 
 export function createWebConversations({api,store,scope,router}){
   const drafts=createConversationDrafts({api,store});
+  const search=conversationMessageSearch({api,store,router,allowedCategories:['text','quoted'],hitLink:(range,id)=>href(range.conversationId.slice(4),id)});
   const active=()=>store.view.snapshotOwner===drafts.owner() && !store.view.unauthorized &&
     store.view.snapshot?.plugins?.some(p=>p.id==='web-conversations' && p.status==='active');
   const listProject=()=>meta?.projectId || (current && meta?'':scope.get() || '');
@@ -36,7 +38,7 @@ export function createWebConversations({api,store,scope,router}){
   const stateLabel=h('span',{class:'small muted'});
   const controls=h('div',{class:'row row--wrap'},stateLabel,rename,archive,button('删除对话',openDelete));
   const el=h('div',{class:'chat-code-main',hidden:true,'aria-label':'独立对话内容'},
-    h('div',{class:'chat__top'},h('header',{class:'page__head'},heading,h('div',{class:'page__actions'},button('独立对话',openList),
+    h('div',{class:'chat__top'},h('header',{class:'page__head'},heading,h('div',{class:'page__actions'},button('独立对话',openList),search.button,
       h('a',{class:'btn btn--sm',href:'#chat'},'返回主对话'))),controls,notice,latest,retry,cleanupRetry),scroller,form);
   let selector,selectorScope,selectorOwner,current,meta,nextBefore,nextAfter,targetMessage,readVersion=0,rows=[],lastChanges,lastConnection;
   let pending=false,epoch=0,draftKey=null,renameDrawer,deleteDrawer,listRefresh,lastMetaEvent,changing=false;
@@ -56,8 +58,11 @@ export function createWebConversations({api,store,scope,router}){
   input.oninput=()=>{const key=context().key;if(key)drafts.write(key,input.value);};
   input.onkeydown=e=>{if(e.key==='Enter' && !e.shiftKey && !e.isComposing){e.preventDefault();form.requestSubmit();}};
 
+  function syncSearch(){
+    search.update(meta && valid(current) && {conversationId:'web:'+meta.id,projectId:meta.projectId});
+  }
   function reset(){
-    cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
+    search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
     input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
     submissions.update();
   }
@@ -118,7 +123,7 @@ export function createWebConversations({api,store,scope,router}){
     form.hidden=!!row.archived;controls.hidden=false;
     stateLabel.textContent=row.archived?'已归档 · 只读':'';
     archive.textContent=row.archived?'恢复对话':'归档对话';
-    archive.disabled=changing;submissions.update();
+    archive.disabled=changing;submissions.update();syncSearch();
   }
   async function refreshMeta(stamp){
     try{
@@ -243,7 +248,7 @@ export function createWebConversations({api,store,scope,router}){
   async function copyLink(stamp,id){
     if(!valid(stamp))return;
     const url=new URL(location.pathname,location.origin);
-    url.hash='chat?'+new URLSearchParams({thread:stamp.id,at:id});
+    url.hash=href(stamp.id,id);
     try{await copyText(url.href);if(valid(stamp))notice.textContent='已复制消息链接。';}
     catch(error){if(valid(stamp))notice.textContent='复制失败：'+error.message;}
   }
@@ -292,7 +297,7 @@ export function createWebConversations({api,store,scope,router}){
       if(!valid(stamp) || version!==readVersion)return;
       if(error.status===410){deleted(stamp.id,stamp.owner);return;}
       if([401,403,409,503].includes(error.status) || error.status===404 && direction==='latest'){
-        controls.hidden=true;meta=null;heading.textContent='独立对话';replace(messages);rows=[];input.value='';form.hidden=true;more.hidden=true;later.hidden=true;
+        controls.hidden=true;meta=null;syncSearch();heading.textContent='独立对话';replace(messages);rows=[];input.value='';form.hidden=true;more.hidden=true;later.hidden=true;
       }
       notice.textContent=error.message;retry.hidden=false;
     }finally{if(valid(stamp) && version===readVersion){more.disabled=false;later.disabled=false;}}
@@ -355,7 +360,7 @@ export function createWebConversations({api,store,scope,router}){
         nextAfter=rows.at(-1).id;later.hidden=false;
       }else void loadMessages();
     }
-    lastChanges=store.view.messageQueueChanges;lastConnection=store.view.connection;
+    syncSearch();lastChanges=store.view.messageQueueChanges;lastConnection=store.view.connection;
   }
   reset();store.subscribe(update);router.subscribe(update);scope.subscribe(update);
   return {el,entry,update,focus:()=>{if(!form.hidden)input.focus();}};

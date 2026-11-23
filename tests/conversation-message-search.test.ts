@@ -49,3 +49,51 @@ test('Web 消息检索限当前有效受众，旧版受理回执可溯源，游�
   await server.app.plugins.setEnabled('conversation-search',false);
   assert.equal((await search(base)).status,503);
 });
+
+test('独立对话搜索验证直接 Web 来源、精确项目和注册状态，归档后可读，停用时拒绝', async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'web-thread-search-'));
+  const server=await startServer({dataDir:dir,host:'127.0.0.1',port:0,demo:true});
+  t.after(async()=>{await server.close();await rm(dir,{recursive:true,force:true});});
+  const store=server.app.store;
+  const post=(path:string,input:object)=>fetch(server.url+'/api/v1'+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(input)});
+  const {id:projectId}=await (await post('/projects',{name:'合成项目'})).json();
+  const id=randomUUID(),sibling=randomUUID(),globalId=randomUUID();
+  for(const item of [{id,projectId},{id:sibling,projectId},{id:globalId}]) assert.equal((await post('/web-conversations',item)).status,201);
+  const conversationId='web:'+id,base={conversationId,projectId,query:'sample'};
+  const search=(overrides:object={})=>post('/conversation-message-search',{...base,...overrides});
+  function put(id:string,extra:Partial<Message>={}){
+    const message:Message={id,conversationId,projectId,role:'user',text:'sample '+id,directWebInput:true,status:'done',createdAt:new Date(0).toISOString(),...extra};
+    acceptMessage(store,message);
+  }
+  for(let i=0;i<26;i++) put('sample-'+i);
+  put('quote',{text:'> sample 引用\n\n正文'});
+  put('reply',{role:'assistant',replyTo:'sample-0',directWebInput:undefined});
+  put('sibling',{conversationId:'web:'+sibling});
+  put('unscoped',{projectId:undefined});
+  put('wrong-answer',{role:'assistant',replyTo:'unscoped',directWebInput:undefined});
+  put('bot');store.put('message.routes','bot',{channel:'feishu'});
+  put('bot-answer',{role:'assistant',replyTo:'bot',directWebInput:undefined});
+  put('not-from-Web',{directWebInput:undefined,requestId:randomUUID()});
+  put('internal',{origin:'notification'});
+  put('global',{conversationId:'web:'+globalId,projectId:undefined});
+  put('wrong-project-in-global',{conversationId:'web:'+globalId});
+  const first=await (await search()).json();
+  assert.equal(first.hits.length,25);
+  const second=await (await search({before:first.nextBefore})).json();
+  assert.deepEqual([...first.hits,...second.hits].map(row=>row.id),
+    ['reply','quote',...Array.from({length:26},(_,i)=>'sample-'+(25-i))]);
+  assert.deepEqual((await (await search({category:'quoted'})).json()).hits.map((row:{id:string})=>row.id),['quote']);
+  assert.deepEqual((await (await search({conversationId:'web:'+globalId,projectId:undefined})).json()).hits.map((row:{id:string})=>row.id),['global']);
+  for(const wrong of [{projectId:undefined},{projectId:'other'},{before:'sibling'},{conversationId:'web:'+randomUUID()},{todoId:'unknown'}])
+    assert.equal((await search(wrong)).status,404);
+  await server.app.plugins.invocations.use('web-conversations.manage',{action:'update',id,version:1,archived:true});
+  assert.equal((await (await search()).json()).hits.length,25);
+  await server.app.plugins.setEnabled('web-conversations',false);
+  assert.equal((await search()).status,503);
+  assert.equal((await search({conversationId:'main',projectId:undefined})).status,200);
+  await server.app.plugins.setEnabled('web-conversations',true);
+  store.put('projects',projectId,{id:projectId,archivedAt:new Date().toISOString()});
+  assert.equal((await search()).status,409);
+  await server.app.plugins.setEnabled('conversation-search',false);
+  assert.equal((await search()).status,503);
+});

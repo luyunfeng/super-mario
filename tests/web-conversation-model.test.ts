@@ -11,16 +11,23 @@ import type { Message } from '../packages/protocol/src/index.ts';
 
 test('SDK requests preserve the correct Web thread history within a shared project and isolate main', async t => {
   const requests: { role: string; content: unknown }[][] = [];
+  const searchToolLists:string[][]=[];
   const model = createServer(async (req, res) => {
     if (req.method === 'GET') { res.end('fixture'); return; }
     let raw = '';
     req.setEncoding('utf8');
     for await (const chunk of req) raw += chunk;
-    requests.push(JSON.parse(raw).messages);
+    const body = JSON.parse(raw);
+    requests.push(body.messages);
+    const search = body.messages.at(-1)?.role === 'user' && JSON.stringify(body.messages.at(-1)).includes('检索样本标识');
+    const delta = search ? { role:'assistant',tool_calls:[{index:0,id:'fixture-search',type:'function',function:{
+      name:'current_web_message_search',arguments:JSON.stringify({query:'样本标识',category:'text'}),
+    }}]} : { role:'assistant', content:'fixture-answer-'+requests.length };
+    if (search) searchToolLists.push(body.tools.map((tool:{function:{name:string}})=>tool.function.name));
     res.writeHead(200, { 'content-type':'text/event-stream' });
-    for (const [delta,finish_reason] of [[{ role:'assistant', content:'fixture-answer-'+requests.length },null],[{},'stop']]) {
+    for (const [chunk,finish_reason] of [[delta,null],[{},search?'tool_calls':'stop']]) {
       res.write('data: '+JSON.stringify({ id:'fixture', object:'chat.completion.chunk',created:1,model:'fixture',
-        choices:[{index:0,delta,finish_reason}] })+'\n\n');
+        choices:[{index:0,delta:chunk,finish_reason}] })+'\n\n');
     }
     res.end('data: [DONE]\n\n');
   });
@@ -64,7 +71,7 @@ test('SDK requests preserve the correct Web thread history within a shared proje
     }
     const askA=(text:string)=>ask('/web-conversations/'+a.id+'/messages','web:'+a.id,text);
     const askB=(text:string)=>ask('/web-conversations/'+b.id+'/messages','web:'+b.id,text);
-    const aOnly='A-only-'+randomUUID(), bOnly='B-only-'+randomUUID();
+    const aOnly='样本标识 A-only-'+randomUUID(), bOnly='样本标识 B-only-'+randomUUID();
     const firstA=await askA(aOnly), firstB=await askB(bOnly);
     const nextA=await askA('请回顾本对话的首条内容');
     const main=await ask('/messages','main','只看主对话上文');
@@ -85,6 +92,17 @@ test('SDK requests preserve the correct Web thread history within a shared proje
     assert.ok(!JSON.stringify(nextA).includes('fixture-answer-2'));
     assert.ok(!JSON.stringify(main).includes(aOnly) && !JSON.stringify(main).includes(bOnly));
     assert.doesNotMatch(system(main),/当前输入来自一段独立的 Web 对话/);
+    const question='请检索样本标识，排除当前问题的标识 '+randomUUID();
+    const result=await post('/web-conversations/'+a.id+'/messages',{text:question});
+    await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.replyTo===result.id && m.status==='done')));
+    assert.ok(searchToolLists.at(-1)?.includes('current_web_message_search'));
+    const toolReply=requests.at(-1)?.findLast(m=>m.role==='tool');
+    assert.ok(toolReply);
+    const retrieved=JSON.stringify(toolReply.content);
+    assert.ok(retrieved.includes(aOnly),retrieved);
+    assert.ok(!retrieved.includes(bOnly) && !retrieved.includes(result.id) && !retrieved.includes(question),retrieved);
+    assert.equal((await fetch(server.url+'/api/v1/web-conversations/'+a.id+'/messages').then(r=>r.json())).messages
+      .find((m:Message)=>m.id===result.id)?.queueState,undefined);
   } finally {
     await server.close();
   }

@@ -49,10 +49,19 @@ function projectStatus(store: Pick<Store,'get'>, projectId?: string) {
   return project.archivedAt ? 'archived' : 'available';
 }
 
-function requireProject(store: Store, projectId?: string) {
+function requireProject(store: Pick<Store,'get'>, projectId?: string) {
   const status = projectStatus(store, projectId);
   if (status === 'missing') fail(404, '项目不存在');
   if (status === 'archived') fail(409, '项目已归档');
+}
+
+// Reading archived thread history remains possible while its project is still accessible.
+export function requireWebConversationHistory(store: Pick<Store,'get'>, id: string, projectId?: string) {
+  if (!uuidV4.test(id) || id !== id.toLowerCase()) fail(404, '未找到当前 Web 对话');
+  requireNotDeleted(store, id);
+  const row = store.get<Conversation>(collection, id);
+  if (row?.id !== id || row.projectId !== projectId) fail(404, '未找到当前 Web 对话');
+  requireProject(store, projectId);
 }
 
 export function webConversationMatches(store: Pick<Store,'get'>, id: string, projectId?: string): boolean {
