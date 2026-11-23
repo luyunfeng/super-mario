@@ -758,6 +758,11 @@ test('浏览器快捷键可改绑、处理冲突和恢复，输入与弹窗保�
     await todo.getByRole('button', { name: '恢复默认' }).click();
     await expect(todo.locator('kbd')).toHaveText('c');
     await settings.getByLabel('启用全局快捷键').uncheck();
+    await settings.getByRole('button',{name:'查看当前快捷键'}).click();
+    const help=page.getByRole('dialog',{name:'快捷键',exact:true});
+    await expect(help).toContainText('关闭弹窗');
+    await expect(help).not.toContainText('添加待办');
+    await help.getByRole('button',{name:'关闭',exact:true}).click();
     await close();
     await page.keyboard.press('c');
     await expect(page.locator('#quick-todo')).not.toBeVisible();

@@ -54,6 +54,14 @@ function eventChord(event) {
 }
 const binding = (prefs, id, base) => prefs.bindings[id] ?? base;
 
+function showShortcutHelp(prefs) {
+  const rows = commands.filter(([id, , base]) => prefs.on && !prefs.disabled[id] && binding(prefs, id, base))
+    .map(([id, label, base]) => [display(binding(prefs, id, base)), label]);
+  rows.push(['Shift + Enter', '对话中换行'], ['Esc', '关闭弹窗']);
+  openDrawer({ title: '快捷键', body: h('dl', { class: 'kv' }, rows.map(([key, label]) =>
+    [h('dt', null, h('kbd', null, key)), h('dd', null, label)])) });
+}
+
 export function openShortcutSettings(store) {
   const body = h('div', { class: 'stack' });
   let conflict;
@@ -78,6 +86,7 @@ export function openShortcutSettings(store) {
     replace(body, h('label', { class: 'row' }, h('input', { type: 'checkbox', checked: prefs.on, onchange: e =>
       save({ ...preferences, on: e.target.checked }) }), '启用全局快捷键'),
       h('p', { class: 'small muted' }, '设置保存在当前浏览器。更改按键时请按 ' + (mac ? '⌘' : 'Ctrl') + ' 加字母，可加 Shift；绑定数字时请同时按 Shift。'),
+      Button({ label: '查看当前快捷键', onClick: () => showShortcutHelp(preferences) }),
       commands.map(([id, label, base]) => {
         const chord = binding(prefs, id, base);
         const notice = h('span', { role: 'status', class: 'small' });
@@ -134,14 +143,6 @@ export function installShortcuts({ shell, store, router, onQuickTodo }) {
     shell.searchHint.hidden = !p.on || p.disabled.search || !key;
   }
   store.subscribe(updateHint); window.addEventListener(changed, updateHint); updateHint();
-  function help() {
-    const p = prefs();
-    const rows = commands.filter(([id, , base]) => !p.disabled[id] && binding(p, id, base))
-      .map(([id, label, base]) => [display(binding(p, id, base)), label]);
-    rows.push(['Shift + Enter', '对话中换行'], ['Esc', '关闭弹窗']);
-    openDrawer({ title: '快捷键', body: h('dl', { class: 'kv' }, rows.map(([key, label]) =>
-      [h('dt', null, h('kbd', null, key)), h('dd', null, label)])) });
-  }
   document.addEventListener('keydown', event => {
     const p = prefs();
     if (!p.on || event.defaultPrevented || event.isComposing || event.repeat || event.target.isContentEditable ||
@@ -160,7 +161,7 @@ export function installShortcuts({ shell, store, router, onQuickTodo }) {
     const [id] = match;
     if (id === 'search') shell.searchInput.focus();
     else if (id === 'todo') onQuickTodo();
-    else if (id === 'help') help();
+    else if (id === 'help') showShortcutHelp(p);
     else router.go(router.href(id));
   });
 }
