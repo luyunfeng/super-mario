@@ -70,6 +70,19 @@ test('同项目独立 Web 对话隔离真实 SDK 历史、分页位置和首轮�
   const page=await(await get('/'+a+'/messages')).json();assert.equal(page.messages.length,50);
   assert.equal(page.nextBefore,page.messages[0].id);
   const earlier=await(await get('/'+a+'/messages?before='+page.nextBefore)).json();assert.deepEqual(earlier,history);
+  const around=async(query:string)=>(await get('/'+a+'/messages?'+query)).json();
+  const target=page.messages[23].id;
+  const centered=await around('at='+target);
+  assert.equal(centered.messages.length,50);assert.ok(centered.messages.some((m:Message)=>m.id===target));
+  assert.equal(centered.nextBefore,centered.messages[0].id);assert.equal(centered.nextAfter,centered.messages.at(-1).id);
+  const previous=await around('before='+centered.nextBefore),following=await around('after='+centered.nextAfter);
+  assert.deepEqual([...previous.messages,...centered.messages,...following.messages],[...earlier.messages,...page.messages]);
+  assert.equal(following.nextAfter,null);
+  assert.deepEqual(await around('after='+page.messages.at(-1).id),{messages:[],nextBefore:null,nextAfter:null});
+  assert.equal((await around('at='+one.id)).nextBefore,null);
+  for(const param of ['at','after'])assert.equal((await get('/'+b+'/messages?'+param+'='+target)).status,404);
+  for(const query of ['at=','at=x&after=y','before=x&after=y','at=x&before=y','after=x&after=x'])
+    assert.equal((await get('/'+a+'/messages?'+query)).status,400);
   const patch=(input:object)=>fetch(server.url+path+'/'+a,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify(input)});
   // A pre-versioning SQLite record stays readable and accepts its first versioned update.
   const old={...record,createdAt:one.createdAt};

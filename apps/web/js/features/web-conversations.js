@@ -1,3 +1,5 @@
+import {copyText} from '../lib/clipboard.js';
+import {icon} from '../ui/icons.js';
 import {h,replace} from '../lib/dom.js';
 import {uuid} from '../lib/format.js';
 import {renderFormattedText} from '../lib/markdown.js';
@@ -18,8 +20,10 @@ export function createWebConversations({api,store,scope,router}){
   const routeId=()=>router.current.page==='chat'?router.current.query.get('thread'):null;
   const entry=button('独立对话',openList);
   const heading=h('h1',{},'独立对话'),notice=h('p',{role:'status',class:'small'});
-  const messages=h('div',{class:'msgs','aria-live':'polite'}),more=button('加载更早消息',()=>loadMessages(true));
-  const scroller=h('div',{class:'chat__scroll'},h('div',{class:'chat__inner'},more,messages));
+  const messages=h('div',{class:'msgs','aria-live':'polite'});
+  const more=button('加载更早消息',()=>loadMessages('before')),later=button('加载后续消息',()=>loadMessages('after'));
+  const latest=h('a',{class:'btn btn--sm',hidden:true},'返回最新消息');
+  const scroller=h('div',{class:'chat__scroll'},h('div',{class:'chat__inner'},more,messages,later));
   const input=h('textarea',{class:'composer__input',rows:2,maxLength:20000,'aria-label':'给独立对话发消息',placeholder:'输入消息，Enter 发送'});
   const send=h('button',{class:'btn btn--sm btn--primary',type:'submit'},'发送');
   const cleanupRetry=button('按原版本重试删除',retryDeletion);
@@ -33,8 +37,8 @@ export function createWebConversations({api,store,scope,router}){
   const controls=h('div',{class:'row row--wrap'},stateLabel,rename,archive,button('删除对话',openDelete));
   const el=h('div',{class:'chat-code-main',hidden:true,'aria-label':'独立对话内容'},
     h('div',{class:'chat__top'},h('header',{class:'page__head'},heading,h('div',{class:'page__actions'},button('独立对话',openList),
-      h('a',{class:'btn btn--sm',href:'#chat'},'返回主对话'))),controls,notice,retry,cleanupRetry),scroller,form);
-  let selector,selectorScope,selectorOwner,current,meta,nextBefore,readVersion=0,rows=[],lastChanges,lastConnection;
+      h('a',{class:'btn btn--sm',href:'#chat'},'返回主对话'))),controls,notice,latest,retry,cleanupRetry),scroller,form);
+  let selector,selectorScope,selectorOwner,current,meta,nextBefore,nextAfter,targetMessage,readVersion=0,rows=[],lastChanges,lastConnection;
   let pending=false,epoch=0,draftKey=null,renameDrawer,deleteDrawer,listRefresh,lastMetaEvent,changing=false;
   const valid=stamp=>current===stamp && stamp && stamp.owner===drafts.owner() && routeId()===stamp.id && active();
   function context(){
@@ -53,7 +57,7 @@ export function createWebConversations({api,store,scope,router}){
   input.onkeydown=e=>{if(e.key==='Enter' && !e.shiftKey && !e.isComposing){e.preventDefault();form.requestSubmit();}};
 
   function reset(){
-    cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;
+    cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
     input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
     submissions.update();
   }
@@ -231,34 +235,67 @@ export function createWebConversations({api,store,scope,router}){
     catch(error){if(valid(stamp))notice.textContent=error.status===409?'对话已变化，请核对当前状态后重试。':error.message;}
     finally{if(valid(stamp)){changing=false;archive.disabled=false;}}
   }
-  function display(){
-    replace(messages,rows.map(row=>h('article',{class:'msg msg--'+(row.role==='user'?'user':'assistant'),dataset:{id:row.id}},
-      h('div',{class:'msg__bubble'},renderFormattedText(row.text,undefined,{reply:row.role==='assistant'})),
-      row.status==='pending' && h('small',{},'处理中…'),row.status==='failed' && h('small',{},'处理失败'))));
-    more.hidden=!nextBefore;
+  function setTarget(id,at){
+    targetMessage=at;readVersion++;nextBefore=null;nextAfter=null;rows=[];
+    more.hidden=true;later.hidden=true;latest.hidden=at===null;latest.href=href(id);
+    replace(messages);notice.textContent='';
   }
-  async function loadMessages(earlier=false){
-    const stamp=current,version=++readVersion;
-    if(!valid(stamp) || !meta)return;
-    const cursor=earlier?nextBefore:null;if(earlier && !cursor)return;
-    more.disabled=true;
+  async function copyLink(stamp,id){
+    if(!valid(stamp))return;
+    const url=new URL(location.pathname,location.origin);
+    url.hash='chat?'+new URLSearchParams({thread:stamp.id,at:id});
+    try{await copyText(url.href);if(valid(stamp))notice.textContent='已复制消息链接。';}
+    catch(error){if(valid(stamp))notice.textContent='复制失败：'+error.message;}
+  }
+  function display(){
+    const stamp=current;
+    replace(messages,rows.map(row=>{
+      const selected=targetMessage===row.id;
+      return h('article',{class:'msg msg--'+(row.role==='user'?'user':'assistant')+(selected?' is-search-hit':''),
+        dataset:{id:row.id},tabIndex:selected?-1:undefined,'aria-current':selected?'true':undefined},
+        h('div',{class:'msg__bubble'},renderFormattedText(row.text,undefined,{reply:row.role==='assistant'})),
+        row.status==='pending' && h('small',{},'处理中…'),row.status==='failed' && h('small',{},'处理失败'),
+        h('button',{type:'button',class:'btn btn--ghost btn--icon btn--sm','aria-label':'复制消息链接',title:'复制消息链接',
+          onclick:()=>copyLink(stamp,row.id)},icon('copy')));
+    }));
+    more.hidden=!nextBefore;later.hidden=!nextAfter;
+  }
+  async function loadMessages(direction='latest'){
+    const stamp=current,at=targetMessage;
+    if(!valid(stamp) || !meta || direction==='latest' && at!==null)return;
+    const cursor=direction==='before'?nextBefore:direction==='after'?nextAfter:at;
+    if(direction!=='latest' && !cursor){if(direction==='at')notice.textContent='消息链接缺少定位标识。';return;}
+    const version=++readVersion;
+    more.disabled=true;later.disabled=true;
     try{
-      const page=await api.get(path+'/'+stamp.id+'/messages'+(cursor?'?before='+encodeURIComponent(cursor):''));
-      if(!valid(stamp) || version!==readVersion)return;
+      const query=direction==='latest'?'':'?'+new URLSearchParams({[direction]:cursor});
+      const page=await api.get(path+'/'+stamp.id+'/messages'+query);
+      if(!valid(stamp) || version!==readVersion || at!==router.current.query.get('at'))return;
       if(page.messages.some(m=>m.conversationId!=='web:'+stamp.id || (m.projectId || '')!==(meta.projectId || '')))throw Error('消息与当前对话不匹配。');
+      if(direction==='at' && !page.messages.some(m=>m.id===at))throw Error('此对话中找不到链接中的消息。');
       const previousHeight=scroller.scrollHeight,nearEnd=previousHeight-scroller.scrollTop-scroller.clientHeight<100;
-      const overlap=earlier?-1:rows.findIndex(row=>row.id===page.messages[0]?.id);
-      if(earlier){rows=[...page.messages,...rows];nextBefore=page.nextBefore;}
-      else if(overlap>0){rows=[...rows.slice(0,overlap),...page.messages];}
-      else{rows=page.messages;nextBefore=page.nextBefore;}
+      if(direction==='before'){rows=[...page.messages,...rows];nextBefore=page.nextBefore;}
+      else if(direction==='after'){rows=[...rows,...page.messages];nextAfter=page.nextAfter;}
+      else{
+        const overlap=direction==='latest'?rows.findIndex(row=>row.id===page.messages[0]?.id):-1;
+        if(overlap>0)rows=[...rows.slice(0,overlap),...page.messages];
+        else{rows=page.messages;nextBefore=page.nextBefore;}
+        nextAfter=page.nextAfter;
+      }
       display();retry.hidden=true;
-      if(earlier)scroller.scrollTop+=scroller.scrollHeight-previousHeight;else if(nearEnd)scroller.scrollTop=scroller.scrollHeight;
+      if(direction==='before')scroller.scrollTop+=scroller.scrollHeight-previousHeight;
+      else if(direction==='at'){
+        const hit=messages.querySelector('[aria-current="true"]');
+        hit.focus({preventScroll:true});hit.scrollIntoView({block:'center'});
+      }else if(direction==='latest' && nearEnd)scroller.scrollTop=scroller.scrollHeight;
     }catch(error){
       if(!valid(stamp) || version!==readVersion)return;
       if(error.status===410){deleted(stamp.id,stamp.owner);return;}
-      if([401,403,404,409,503].includes(error.status)){controls.hidden=true;meta=null;heading.textContent='独立对话';replace(messages);rows=[];input.value='';form.hidden=true;more.hidden=true;}
+      if([401,403,409,503].includes(error.status) || error.status===404 && direction==='latest'){
+        controls.hidden=true;meta=null;heading.textContent='独立对话';replace(messages);rows=[];input.value='';form.hidden=true;more.hidden=true;later.hidden=true;
+      }
       notice.textContent=error.message;retry.hidden=false;
-    }finally{if(valid(stamp) && version===readVersion)more.disabled=false;}
+    }finally{if(valid(stamp) && version===readVersion){more.disabled=false;later.disabled=false;}}
   }
   async function open(stamp){
     notice.textContent='正在读取对话…';
@@ -267,7 +304,7 @@ export function createWebConversations({api,store,scope,router}){
       if(!valid(stamp))return;
       if(lastMetaEvent!==event && lastMetaEvent?.id===stamp.id){void open(stamp);return;}
       notice.textContent='';applyMeta(stamp,result);
-      await loadMessages();
+      await loadMessages(targetMessage!==null?'at':'latest');
     }catch(error){if(valid(stamp)){if(error.status===410){deleted(stamp.id,stamp.owner);return;}notice.textContent=error.message;retry.hidden=false;}}
   }
   async function post(){
@@ -282,7 +319,9 @@ export function createWebConversations({api,store,scope,router}){
       const reply=receipt ?? await api.post(ctx.url,{text:ctx.body},{'Idempotency-Key':ticket.record.id});
       if(!valid(stamp))return;
       if(!submissions.accepted(ticket,reply,ctx)){submissions.block(ticket);throw Error('回执与原消息不匹配。');}
-      confirmed(ctx);await loadMessages();
+      confirmed(ctx);
+      if(targetMessage!==null)notice.textContent='消息已受理。可返回最新消息查看本轮回复。';
+      else await loadMessages();
     }catch(error){submissions.failed(ticket,error);if(valid(stamp))notice.textContent='发送未确认：'+error.message;}
     finally{submissions.finish(ticket);if(valid(stamp)){pending=false;send.disabled=false;}}
   }
@@ -303,10 +342,19 @@ export function createWebConversations({api,store,scope,router}){
     if(meta?.projectId && !store.view.snapshot.projects?.some(p=>p.id===meta.projectId && !p.archivedAt)){
       reset();notice.textContent='原项目已归档或不可用。';return;
     }
-    if(current?.id!==id || current.owner!==owner){reset();current={id,owner};send.disabled=false;void open(current);}
+    const at=router.current.query.get('at');
+    if(current?.id!==id || current.owner!==owner){reset();setTarget(id,at);current={id,owner};send.disabled=false;void open(current);}
+    else if(!current.deleted && targetMessage!==at){
+      setTarget(id,at);
+      if(meta)void loadMessages(at!==null?'at':'latest');
+    }
     else if(meta && (changed && event.id===id || lastConnection!=='online' && store.view.connection==='online')){
       void refreshMeta(current);void loadMessages();
-    }else if(meta && lastChanges!==store.view.messageQueueChanges && store.view.messageQueueChanges?.includes('web:'+id))void loadMessages();
+    }else if(meta && lastChanges!==store.view.messageQueueChanges && store.view.messageQueueChanges?.includes('web:'+id)){
+      if(targetMessage!==null && rows.length && !nextAfter){
+        nextAfter=rows.at(-1).id;later.hidden=false;
+      }else void loadMessages();
+    }
     lastChanges=store.view.messageQueueChanges;lastConnection=store.view.connection;
   }
   reset();store.subscribe(update);router.subscribe(update);scope.subscribe(update);

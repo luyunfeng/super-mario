@@ -1185,12 +1185,21 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
               return json(res,200,receipt);
             }
             if(messages && !receiptKey && method==='GET'){
-              const before=url.searchParams.get('before');
-              const history=app.store.list<Message>('messages').filter(m=>m.conversationId===conversationId && m.projectId===row.projectId);
-              const end=before===null?history.length:history.findIndex(m=>m.id===before);
-              if(end<0)throw new InputError('当前会话中未找到消息位置',404);
-              const start=Math.max(0,end-50);
-              return json(res,200,{messages:history.slice(start,end),nextBefore:start>0?history[start]!.id:null});
+              const cursors = [...url.searchParams].filter(([name]) => ['before','at','after'].includes(name));
+              if (cursors.length > 1 || cursors.some(([,value]) => !value.trim())) throw new InputError('请提供单个有效的消息位置');
+              const [direction, cursor] = cursors[0] ?? [];
+              const history = app.store.list<Message>('messages').filter(m => m.conversationId === conversationId && m.projectId === row.projectId);
+              const index = cursor ? history.findIndex(m => m.id === cursor) : history.length;
+              if (index < 0) throw new InputError('当前会话中未找到消息位置', 404);
+              const limit = 50;
+              let end = index, start = Math.max(0, end - limit);
+              if (direction === 'at' || direction === 'after') {
+                start = direction === 'after' ? index + 1 : Math.max(0, Math.min(index - limit / 2, history.length - limit));
+                end = Math.min(history.length, start + limit);
+              }
+              const page = history.slice(start, end);
+              return json(res, 200, { messages: page, nextBefore: start > 0 ? page[0]?.id ?? null : null,
+                ...((direction === 'at' || direction === 'after') && { nextAfter: end < history.length ? page.at(-1)?.id ?? null : null }) });
             }
             if(messages && !receiptKey && method==='POST'){
               if(row.archived)throw new InputError('对话已归档，请恢复后再发送',409);

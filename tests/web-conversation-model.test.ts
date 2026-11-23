@@ -71,6 +71,7 @@ test('SDK requests preserve the correct Web thread history within a shared proje
     const system=(messages:typeof firstA)=>JSON.stringify(messages.filter(m=>m.role==='system'||m.role==='developer'));
     for(const thread of [firstA,firstB,nextA]){
       assert.match(system(thread), /当前输入来自一段独立的 Web 对话/);
+      assert.match(system(thread), /复制消息链接.*打开时仍需工作台访问权限/);
       assert.match(system(thread), /从已归档列表恢复后才能继续发送/);
       assert.match(system(thread), /在原对话详情核对标题后确认/);
       assert.match(system(thread), /承接上文时只使用本会话实际提供的消息/);
