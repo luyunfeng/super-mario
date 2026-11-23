@@ -49,13 +49,26 @@ test('独立 Web 对话重试原失败答复，切换后仍定位原受理消息
   await page.request.post(plugin,{headers,data:{enabled:true}});await expect(retry).toBeVisible();
   await input.fill('原线保留未发送的草稿');
   const ep=server.url+'/api/v1/messages/'+failed.id+'/retry';
-  const returned=page.waitForResponse(r=>r.url()===ep && r.request().method()==='POST');
-  await retry.click();const res=await returned;assert.equal(res.status(),202);assert.deepEqual(res.request().postDataJSON(),{conversationId:'web:'+first});
-  const accepted=await res.json();assert.equal(accepted.projectId,project.id);assert.equal(accepted.retryOf,failed.id);
+  let submissions=0;
+  await page.route(ep, async route=>{
+    submissions++;
+    assert.deepEqual(route.request().postDataJSON(),{conversationId:'web:'+first});
+    const response=await route.fetch();
+    assert.equal(response.status(),202);
+    await route.abort('failed');
+  });
+  await retry.click();
+  const accepted=await t.waitFor(()=>{
+    const records=server.app.store.list<Message>('messages').filter(m=>m.retryOf===failed.id);
+    assert.equal(records.length,1);
+    return records[0];
+  });
+  assert.equal(accepted.projectId,project.id);
+  await expect(row.getByRole('link',{name:'查看重试消息'})).toBeVisible();
   await page.goto(url(second));await expect(input).toHaveValue('');await expect(region.getByRole('link',{name:'查看重试消息'})).toHaveCount(0);
   await page.goto(url(first));await expect(input).toHaveValue('原线保留未发送的草稿');
   const link=row.getByRole('link',{name:'查看重试消息'});
   await expect(link).toHaveAttribute('href','#chat?thread='+first+'&at='+accepted.id);await link.click();
   await expect(region.locator('[data-id="'+accepted.id+'"]')).toHaveAttribute('aria-current','true');
-  await expect(region).toContainText('原线重试成功');assert.equal(calls,2);
+  await expect(region).toContainText('原线重试成功');assert.equal(calls,2);assert.equal(submissions,1);
 });
