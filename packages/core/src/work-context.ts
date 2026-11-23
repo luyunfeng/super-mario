@@ -163,7 +163,7 @@ export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: Bot
         running: runs.filter(r => r.projectId === p.id && ['queued', 'running'].includes(r.status)).length,
         memory: memory?.summary ? { summary: clip(memory.summary, 400), updatedAt: memory.updatedAt } : null };
     }), 8),
-    todos: take(recent(open).map(t => ({ id: t.id, projectId: t.projectId, title: clip(t.title), dueAt: t.dueAt, waitingOn: clip(t.waitingOn), reminderAt: t.reminderAt, ...(waiting.has(t.id) ? { replyTracking: { status: waiting.get(t.id)!.status, cycle: waiting.get(t.id)!.cycle, matchedAt: waiting.get(t.id)!.hit?.processedAt } } : {}) }))),
+    todos: take(recent(open).map(t => ({ id: t.id, projectId: t.projectId, title: clip(t.title), dueAt: t.dueAt, dueDay: t.dueDay, waitingOn: clip(t.waitingOn), reminderAt: t.reminderAt, ...(waiting.has(t.id) ? { replyTracking: { status: waiting.get(t.id)!.status, cycle: waiting.get(t.id)!.cycle, matchedAt: waiting.get(t.id)!.hit?.processedAt } } : {}) }))),
     runs: { ...recentRuns, items: recentRuns.items.map(r => ({ review: live?.reviewEvidence?.(r), id: r.id, projectId: r.projectId, todoId: r.todoId, status: r.status,
       executorId: r.executorId, sessionId: r.sessionId, nativeSessionId: r.nativeSessionId, nativeResume: r.nativeResume, machineId: r.machineId ?? executors.get(r.executorId)?.machineId,
       machineIdSource: r.machineId ? 'run' : executors.get(r.executorId)?.machineId ? 'currentExecutor' : 'unknown',

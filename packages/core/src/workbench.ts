@@ -1663,7 +1663,7 @@ export async function createWorkbench(config: AppConfig) {
       const todo = store.get<Todo>('todos', linkedId);
       if (!todo || todo.projectId !== page.projectId) return { actionLine: line, status: 'unavailable' };
       return { actionLine: line, status: todo.completedAt ? 'completed' : 'open', todoId: todo.id, title: todo.title, ...actionTodoLink(todo),
-        ...(todo.completedAt ? { completedAt: todo.completedAt } : {}), ...(todo.dueAt ? { dueAt: todo.dueAt } : {}) };
+        ...(todo.completedAt ? { completedAt: todo.completedAt } : {}), ...(todo.dueAt ? { dueAt: todo.dueAt, ...(todo.dueDay && { dueDay: todo.dueDay }) } : {}) };
     }) };
   }
   async function confirmKnowledgeActions(args: Record<string, unknown>, projectId?: string) {

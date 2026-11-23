@@ -604,7 +604,7 @@ test('Web 待办委派把期限和等待事项送入主模型，要求基于证�
     ? call('work_decisions_list', { todoId }, 'decisions')
     : { role: 'assistant', content: '合成回复：等待核对样本。' });
   try {
-    const todo = await api('/todos', { title: '复核样本', notes: '核对字段', dueAt: '2030-05-01T10:00:00Z', waitingOn: '资料确认' });
+    const todo = await api('/todos', { title: '复核样本', notes: '核对字段', dueDay: '2030-05-01', dueAt: '2030-05-02T09:59:59.999Z', waitingOn: '资料确认' });
     todoId = todo.id;
     server.app.todoDecisions.add(todoId, '仅核对样本甲');
     const other = server.app.createTodo({ title: '独立事项' });
@@ -612,7 +612,7 @@ test('Web 待办委派把期限和等待事项送入主模型，要求基于证�
     const input = await api('/todos/' + todo.id + '/delegate', {});
     await t.waitFor(() => assert.ok(requests.some(r => r.lastRole === 'user' && JSON.stringify(r.content).includes(todo.id))));
     const content = requests.find(r => JSON.stringify(r.content).includes(todo.id))!.content;
-    for (const expected of [todo.dueAt, todo.waitingOn, '按真实回执', '验收条件是否满足']) {
+    for (const expected of [todo.dueAt, todo.dueDay, '按 dueDay 交接截止日期', todo.waitingOn, '按真实回执', '验收条件是否满足']) {
       assert.ok(JSON.stringify(content).includes(expected), expected);
     }
     await t.waitFor(() => assert.ok(requests.some(r => r.lastRole === 'tool')));
