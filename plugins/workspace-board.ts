@@ -2,7 +2,7 @@ import {readBoardFlow,type ReviewForRun,type RunBlockers} from './workspace-boar
 import {readBoardActivity,recordBoardActivity} from './workspace-board-activity.ts';
 import { randomUUID } from 'node:crypto';
 import type { Extension, Json, JsonObject, Store } from '../packages/plugin-sdk/src/index.ts';
-import type { Project } from '../packages/protocol/src/index.ts';
+import type { Project, MachineInfo } from '../packages/protocol/src/index.ts';
 
 type Column = { id: string; title: string };
 type Card = { id: string; projectId: string; columnId: string; pinned: boolean; archived: boolean };
@@ -170,18 +170,27 @@ export function createWorkspaceBoard(decisionTodoIds:()=>string[],reviewForRun:R
       },
     });
     contribute('tools','workspace_board_read',{
-      name:'workspace_board_read',description:'只读查询主人的工作区看板。列是主人维护的项目阶段，卡片置顶、归档或移列不代表项目执行结果。默认列出未归档卡片，使用 nextOffset 翻页。',
-      parameters:{type:'object',additionalProperties:false,properties:{columnId:{type:'string'},archived:{type:'boolean'},offset:{type:'integer',minimum:0}}},
+      name:'workspace_board_read',description:'只读查询主人的工作区看板。列是主人维护的项目阶段，卡片置顶、归档或移列不代表项目执行结果。默认列出未归档卡片。machineId 精确匹配项目绑定的机器；query 检索项目名、绑定目录、机器 ID 或显示名。使用 nextOffset 翻页。',
+      parameters:{type:'object',additionalProperties:false,properties:{columnId:{type:'string'},archived:{type:'boolean'},machineId:{type:'string',maxLength:256},query:{type:'string',maxLength:500},offset:{type:'integer',minimum:0}}},
       async execute(input,signal) {
         signal.throwIfAborted();
-        keys(input,['columnId','archived','offset']);
+        keys(input,['columnId','archived','offset','machineId','query']);
+        const machineId=input.machineId===undefined ? undefined : id(input.machineId);
+        if (input.query!==undefined && (typeof input.query!=='string' || Array.from(input.query).length>500)) fail(400,'看板关键词须为不超过 500 字的文本');
+        const term=input.query?.trim().toLocaleLowerCase();
         const board=load(store), offset=input.offset===undefined ? 0 : input.offset;
         if (typeof offset!=='number' || !Number.isSafeInteger(offset) || offset<0 ||
             (input.archived!==undefined && typeof input.archived!=='boolean')) fail(400,'看板筛选或分页参数无效');
         const selected=input.columnId===undefined ? undefined : column(board,input.columnId);
         const columns=new Map(board.columns.map((c,i)=>[c.id,i]));
-        const cards=board.cards.filter(c=>(!selected || selected.id===c.columnId) && c.archived===(input.archived??false))
-          .sort((a,b)=>columns.get(a.columnId)!-columns.get(b.columnId)! || Number(b.pinned)-Number(a.pinned));
+        const machines=term ? new Map(store.list<MachineInfo>('machines').map(m=>[m.id,m.name])) : undefined;
+        const cards=board.cards.filter(c=>{
+          if ((selected && selected.id!==c.columnId) || c.archived!==(input.archived??false)) return false;
+          if (!machineId && !term) return true;
+          const project=store.get<Project>('projects',c.projectId);
+          if (!project || (machineId && project.workspace?.machineId!==machineId)) return false;
+          return !term || [project.name,project.workspace?.cwd,project.workspace?.machineId,project.workspace && machines?.get(project.workspace.machineId)].some(value=>value?.toLocaleLowerCase().includes(term));
+        }).sort((a,b)=>columns.get(a.columnId)!-columns.get(b.columnId)! || Number(b.pinned)-Number(a.pinned));
         return {...view(store,{...board,cards:cards.slice(offset,offset+25)}),nextOffset:offset+25<cards.length ? offset+25 : null};
       },
     });

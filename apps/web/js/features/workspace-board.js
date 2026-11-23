@@ -1,4 +1,4 @@
-import { h, replace } from '../lib/dom.js';
+import { h, replace, readLocal, writeLocal } from '../lib/dom.js';
 import { Button, Check, Field, Input, Select } from '../ui/kit.js';
 import { createBoardFlow } from './workspace-board-flow.js';
 import { openWorkspaceBoardHistory } from './workspace-board-history.js';
@@ -29,28 +29,32 @@ function inverseBatch(cards, changes) {
 export function openWorkspaceBoard({ api, store, router }) {
   if (!workspaceBoardEnabled(api, store)) return;
   const owner = api.draftOwner();
+  const preferenceKey = 'sm.workspace-board.view.' + owner;
   const selected = new Set();
   let board, undo, drag, dropTarget, historyDrawer, removeConfirmation, busy = false, stale = false;
   let seenRevision = store.view.workspaceBoardRevision;
   const message = h('p', { role: 'status', class: 'muted small' });
   const refresh = Button({ label: '刷新看板', size: 'sm', onClick: () => request() });
-  const search = Input({ 'aria-label': '筛选项目', placeholder: '筛选项目', oninput: paintCards });
+  const search = Input({ 'aria-label': '筛选项目', placeholder: '按项目、目录或机器搜索', oninput: paintCards });
   const filter = Select({ 'aria-label': '显示卡片', options: [['open','未归档'],['archived','已归档'],['all','全部']], onchange: paintCards });
+  const machine = Select({options:[['','全部机器']],onchange:paintCards});
+  let machineSignature;
   const tools = h('div', { class: 'row row--wrap' });
   const cards = h('div', { class: 'form-row', style: {alignItems:'start',gridTemplateColumns:'repeat(auto-fit, minmax(min(240px, 100%), 1fr))'} });
   const add = h('div', { class: 'row row--wrap' });
   const columnControls = h('div', { class: 'stack' });
   const manage = h('details', {}, h('summary', {}, '管理看板列'), columnControls);
-  const controls = h('fieldset', { class: 'stack', style:{border:'0',padding:'0',margin:'0',minWidth:'0'} }, add, h('div', { class: 'row row--wrap' }, search, filter), tools, h('p',{class:'small muted'},'每列先显示置顶卡片。可拖到同一置顶状态的卡片前，或拖到目标列末。移到列末的卡片会排在本组最后。'), cards, manage);
+  const controls = h('fieldset', { class: 'stack', style:{border:'0',padding:'0',margin:'0',minWidth:'0'} }, add, h('div', { class: 'row row--wrap' }, search, Field({label:'绑定机器',control:machine}), filter), tools, h('p',{class:'small muted'},'每列先显示置顶卡片。可拖到同一置顶状态的卡片前，或拖到目标列末。移到列末的卡片会排在本组最后。'), cards, manage);
   const manualHeader=h('div',{class:'row row--between'},message,h('div',{class:'row'},Button({label:'变更历史',size:'sm',onClick:()=>history()}),refresh));
   let automatic=false;
   const flow=createBoardFlow({api,store,router,authorized:()=>authorized(),close:()=>drawer.close()});
   const manualButton=Button({label:'手工列',size:'sm',onClick:()=>switchView(false)});
   const flowButton=Button({label:'自动分组',size:'sm',onClick:()=>switchView(true)});
   manualButton.setAttribute('aria-pressed','true'); flowButton.setAttribute('aria-pressed','false');
-  function switchView(next) {
+  function switchView(next, remember = true) {
     if (!authorized() || automatic===next) return;
     automatic=next;
+    if (remember) writeLocal(preferenceKey, automatic ? 'auto' : 'manual');
     manualHeader.hidden=controls.hidden=automatic;
     flowButton.setAttribute('aria-pressed',String(automatic)); manualButton.setAttribute('aria-pressed',String(!automatic));
     if (automatic) { clearDrag(); flow.show(); }
@@ -76,9 +80,33 @@ export function openWorkspaceBoard({ api, store, router }) {
     }}, '打开项目 ' + card.title);
   }
   function visible() {
-    const names = new Map(store.view.snapshot.projects?.map(p => [p.id,p.name]));
-    return board.cards.map(card => ({...card,title:names.get(card.projectId) ?? card.title})).filter(card => (filter.value === 'all' || Boolean(card.archived) === (filter.value === 'archived')) &&
-      card.title.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase()));
+    const snapshot=store.view.snapshot;
+    const projects=new Map(snapshot.projects?.map(p=>[p.id,p]));
+    const names=new Map(snapshot.machines?.map(m=>[m.id,m.name || m.id]));
+    const availableIds=new Set([...names.keys(),...board.cards.map(c=>projects.get(c.projectId)?.workspace?.machineId).filter(Boolean)]);
+    const current=machine.value;
+    const options=[['','全部机器']];
+    for (const id of [...availableIds].sort()) {
+      const name=names.get(id);
+      options.push([id,name && name!==id ? name+' · '+id : id]);
+    }
+    if (current && !availableIds.has(current)) options.push([current,(names.get(current) || current)+'（当前无绑定卡片）']);
+    const signature=JSON.stringify(options);
+    if (signature!==machineSignature) {
+      replace(machine,options.map(([id,name])=>h('option',{value:id},name)));
+      machine.value=current;
+      machineSignature=signature;
+    }
+    const term=search.value.trim().toLocaleLowerCase();
+    return board.cards.flatMap(card=>{
+      const project=projects.get(card.projectId);
+      const title=project?.name ?? card.title;
+      const workspace=project?.workspace;
+      if (filter.value!=='all' && Boolean(card.archived)!==(filter.value==='archived')) return [];
+      if (current && workspace?.machineId!==current) return [];
+      if (term && ![title,workspace?.cwd,workspace?.machineId,names.get(workspace?.machineId)].some(value=>value?.toLocaleLowerCase().includes(term))) return [];
+      return [{...card,title,location:workspace && [names.get(workspace.machineId) || workspace.machineId,workspace.cwd].filter(Boolean).join(' · ')}];
+    });
   }
 
   function paintCards() {
@@ -122,7 +150,7 @@ export function openWorkspaceBoard({ api, store, router }) {
             if (yes) selected.add(card.id); else selected.delete(card.id);
             paintCards();
             cards.querySelector('[data-board-card="' + CSS.escape(card.id) + '"] input')?.focus({preventScroll:true});
-          } }), projectLink(card),
+          } }), projectLink(card), card.location && h('span',{class:'item__meta'},card.location),
           h('div',{class:'row row--wrap'}, ['上移','下移'].map((label,direction) => {
             const peer = items[index + (direction ? 1 : -1)];
             return Button({ label, ariaLabel:label + ' ' + card.title, size:'sm', disabled:!!selected.size || !peer || peer.pinned !== card.pinned,
@@ -257,7 +285,12 @@ export function openWorkspaceBoard({ api, store, router }) {
       }
     }
   }
-  let projectSignature = JSON.stringify(store.view.snapshot.projects?.map(p => [p.id,p.name,p.archivedAt]));
+  function bindingSignature() {
+    const snapshot=store.view.snapshot;
+    return JSON.stringify([snapshot.projects?.map(p=>[p.id,p.name,p.archivedAt,p.workspace?.machineId,p.workspace?.cwd]),
+      snapshot.machines?.map(m=>[m.id,m.name])]);
+  }
+  let projectSignature = bindingSignature();
   let connection = store.view.connection;
   const unsubscribe = store.subscribe(() => {
     if (!authorized()) { flow.hide(); drawer.close(); return; }
@@ -270,8 +303,9 @@ export function openWorkspaceBoard({ api, store, router }) {
       seenRevision = revision;
       if (!board || revision > board.revision) { void request(); return; }
     }
-    const next = JSON.stringify(store.view.snapshot.projects?.map(p => [p.id,p.name,p.archivedAt]));
+    const next = bindingSignature();
     if (next !== projectSignature && board && !busy) { projectSignature = next; paintAdd(); paintCards(); }
   });
-  void request();
+  if (readLocal(preferenceKey,'manual')==='auto') switchView(true,false);
+  else void request();
 }

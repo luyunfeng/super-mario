@@ -13,6 +13,11 @@ test('主人从项目页添加项目，按可见范围批量置顶和归档，�
   t.after(async()=>{try{await server.close();}finally{await rm(dataDir,{recursive:true,force:true});}});
   const projects:{id:string;name:string}[]=[];
   for(const name of ['合成签收甲','合成签收乙','合成留档丙']) projects.push(await server.app.createProject({name}));
+  const machines=[{id:'fixture-board-west',name:'合成西站'},{id:'fixture-board-west-2',name:'合成东站'}];
+  for(const [i,machine] of machines.entries()){
+    server.app.store.put('machines',machine.id,{...machine,online:false,capabilities:[],executors:[]});
+    server.app.projects.update(projects[i].id,{workspace:{machineId:machine.id,cwd:'/work/'+['algebra','design'][i]}});
+  }
   const post=(path:string,body:object)=>fetch(server.url+'/api/v1'+path,{method:'POST',
     headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify(body)});
   const rows=async()=>{
@@ -34,6 +39,20 @@ test('主人从项目页添加项目，按可见范围批量置顶和归档，�
     await board.getByRole('button',{name:'添加卡片',exact:true}).click();
     await expect(board.getByRole('checkbox',{name:'选择 '+project.name})).toBeVisible();
   }
+  const textFilter=board.getByLabel('筛选项目',{exact:true}),machineFilter=board.getByLabel('绑定机器',{exact:true});
+  for(const [query,label] of [['签收甲',projects[0].name],['/work/design',projects[1].name],['合成西站',projects[0].name],
+    ['fixture-board-west-2',projects[1].name]]){
+    await textFilter.fill(query);
+    await expect(visibleRows).toHaveCount(1);
+    await expect(visibleRows).toHaveAccessibleName('选择 '+label);
+  }
+  await textFilter.fill('');
+  await machineFilter.selectOption(machines[0].id);
+  await expect(visibleRows).toHaveCount(1);
+  await expect(visibleRows).toHaveAccessibleName('选择 '+projects[0].name);
+  await textFilter.fill('签收乙');
+  await expect(visibleRows).toHaveCount(0);
+  await machineFilter.selectOption({label:'全部机器'});
   await board.getByLabel('筛选项目',{exact:true}).fill('签收');
   await expect(visibleRows).toHaveCount(2);
   await board.getByRole('button',{name:'全选可见卡片',exact:true}).click();
@@ -145,7 +164,19 @@ test('项目看板自动分组按工作状态和查询筛选，点击待办进�
   await page.goto(server.url+'/#projects/'+project.id+'/workspace?token=fixture');
   await page.getByRole('button',{name:'工作区看板',exact:true}).click();
   const board=page.getByRole('dialog',{name:'工作区看板'});
-  await board.getByRole('button',{name:'自动分组',exact:true}).click();
+  const auto=board.getByRole('button',{name:'自动分组',exact:true}),manual=board.getByRole('button',{name:'手工列',exact:true});
+  await expect(manual).toHaveAttribute('aria-pressed','true');
+  await auto.click();
+  await expect(auto).toHaveAttribute('aria-pressed','true');
+  await page.reload();
+  const reopen=page.getByRole('button',{name:'工作区看板',exact:true});
+  await reopen.click();
+  await expect(auto).toHaveAttribute('aria-pressed','true');
+  await manual.click();
+  await board.getByRole('button',{name:'关闭',exact:true}).click();
+  await reopen.click();
+  await expect(manual).toHaveAttribute('aria-pressed','true');
+  await auto.click();
   await board.getByLabel('工作状态',{exact:true}).selectOption('planned');
   await board.getByLabel('筛选自动分组',{exact:true}).fill('合成计划');
   const planned=board.getByRole('region',{name:'待办',exact:true});

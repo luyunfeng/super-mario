@@ -3,6 +3,11 @@ import test from 'node:test';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {createStore} from '../packages/core/src/store.ts';
+import {createEventBus} from '../packages/core/src/events.ts';
+import {PluginHost,createContributions} from '../packages/core/src/plugin-host.ts';
+import {createWorkspaceBoard} from '../plugins/workspace-board.ts';
+import type {JsonObject} from '../packages/plugin-sdk/src/index.ts';
 import {startServer} from '../apps/server/src/index.ts';
 
 type Board={revision:number;columns:{id:string;title:string}[];cards:{id:string;projectId:string;title:string;columnId:string;pinned:boolean;archived:boolean}[]};
@@ -101,4 +106,45 @@ test('项目看板的列与批量卡片修改原子保存，同版并发不覆�
   assert.equal((await post('/workspace-board',{action:'batch_cards',revision:board.revision,changes:[{id:second.id,archived:false}]})).status,503);
   assert.equal((await post('/plugins/workspace-board',{enabled:true})).status,200);
   assert.deepEqual(await read({action:'list'}),board);
+});
+
+
+test('手工看板工具先匹配当前机器和关键词，再按置顶和持久顺序分页',async t=>{
+  const store=createStore(':memory:'), contributions=createContributions();
+  const host=new PluginHost({store,contributions,events:createEventBus(store),dataDir:':memory:'});
+  t.after(async()=>{await host.close();store.close();});
+  host.register(createWorkspaceBoard(()=>[],()=>undefined,()=>()=>[]));
+  await host.start();
+  const tool=contributions.list('tools').find(entry=>entry.value.name==='workspace_board_read')!.value;
+  const read=async(input:JsonObject)=>await tool.execute(input,new AbortController().signal) as Board & {nextOffset:number|null};
+  let revision=0;
+  for (const id of ['NODE-ALPHA','NODE-ALPHA-2']) store.put('machines',id,{id,name:'同名合成机器'});
+  const cardIds:string[]=[];
+  for (let i=0;i<30;i++) {
+    const project={id:'p'+i,name:'合成项目'+i,...(i!==0 && {workspace:{
+      machineId:i===1?'NODE-ALPHA-2':'NODE-ALPHA',cwd:'/fixture/'+(i===29?'另一个目录':'Reports')+'/'+i}})};
+    store.put('projects',project.id,project);
+    const board=await host.invocations.use('workspace-board.manage',{action:'add_card',revision:revision++,projectId:project.id,columnId:'doing'}) as Board;
+    cardIds.push(board.cards.at(-1)!.id);
+  }
+  await host.invocations.use('workspace-board.manage',{action:'batch_cards',revision,changes:[
+    {id:cardIds[28],pinned:true},{id:cardIds[27],archived:true},
+  ]});
+  const filter={machineId:'NODE-ALPHA',query:'  reports  ',columnId:'doing'};
+  const first=await read(filter), second=await read({...filter,offset:25});
+  assert.equal(first.cards.length,25);assert.equal(first.cards[0].id,cardIds[28]);assert.equal(first.nextOffset,25);
+  assert.deepEqual([...first.cards,...second.cards].map(c=>c.id),[cardIds[28],...cardIds.slice(2,27)]);
+  assert.equal(second.nextOffset,null);
+  assert.deepEqual((await read({...filter,archived:true})).cards.map(c=>c.id),[cardIds[27]]);
+  assert.deepEqual((await read({query:'node-alpha-2'})).cards.map(c=>c.id),[cardIds[1]]);
+  const named=await read({query:'同名合成机器'});
+  assert.ok(named.cards.some(card=>card.id===cardIds[1]));
+  assert.ok(named.cards.some(card=>card.id===cardIds[2]));
+  assert.deepEqual((await read({query:'同名合成机器',machineId:'NODE-ALPHA-2'})).cards.map(c=>c.id),[cardIds[1]]);
+  assert.deepEqual((await read({machineId:'node-alpha'})).cards,[]);
+  assert.deepEqual((await read({query:'合成项目0'})).cards.map(c=>c.id),[cardIds[0]]);
+  assert.deepEqual((await read({...filter,columnId:'done'})).cards,[]);
+  assert.ok(!JSON.stringify(first).includes('/fixture/'));
+  for (const args of [{machineId:''},{query:null},{query:'长'.repeat(501)}] as JsonObject[])
+    await assert.rejects(read(args),{status:400});
 });
