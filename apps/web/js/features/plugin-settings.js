@@ -48,7 +48,7 @@ const descriptions = {
   'daily-brief':'汇总待办和执行进展，生成每日简报。',
 };
 const key = 'sm.pluginSidebar.v1';
-const status = { active: ['已启用', 'ok'], waiting: ['等待配置', 'warn'], disabled: ['已停用', ''], failed: ['不可用', 'danger'] };
+const status = { active: ['已启用', 'ok'], waiting: ['等待就绪', 'warn'], disabled: ['已停用', ''], failed: ['不可用', 'danger'] };
 
 function features(plugin) {
   if (!Array.isArray(plugin.navigation)) return [];
@@ -130,6 +130,10 @@ export function createPluginSettings({ api, store, router }) {
       h('strong',{},systemText(p.name)),h('small',{},status[p.status]?.[0] ?? p.status)),p=>JSON.stringify([selected===p.id,p.name,p.status]));
     if (!matches.length) { replace(list,h('p',{},'没有匹配的插件')); return; }
     const dependents = plugins.filter(p => p.dependencies?.includes(selected)).map(p => systemText(p.name));
+    const dependencies = (matches.find(p => p.id === selected)?.dependencies ?? []).map(id => {
+      const required = plugins.find(p => p.id === id);
+      return { id, name: required && systemText(required.name), state: required?.status };
+    });
     keyedList(list, matches.filter(p=>p.id===selected), p => p.id, plugin => {
       const entries = features(plugin);
       const changeEnabled = async enabled => {
@@ -144,6 +148,10 @@ export function createPluginSettings({ api, store, router }) {
         h('p',{},descriptions[plugin.id] ?? (entries.length ? '提供以下工作台功能：'+entries.map(e=>e.label).join('、') : '此插件由执行环境提供，已声明的能力见下方。')),
         h('code',{class:'small muted'},plugin.id),
         dependents.length > 0 && h('p', { class: 'small' }, '直接依赖此插件：' + dependents.join('、')),
+        plugin.status === 'waiting' && dependencies.filter(dep => dep.state !== 'active').map(dep =>
+          dep.state ? Button({ size: 'sm', label: '查看依赖 · ' + dep.name + '（' + (status[dep.state]?.[0] ?? dep.state) + '）',
+            onClick: () => { search.value = ''; selected = dep.id; paint(); } })
+          : h('p', { class: 'small' }, '缺少依赖插件：' + dep.id)),
         preferenceEditor(plugin.id),
         plugin.id === 'reading-fonts' && plugin.status === 'active' && readingFontEditor(),
         plugin.id === 'shortcut-settings' && Button({ label: '快捷键设置', disabled: plugin.status !== 'active', onClick: () => openShortcutSettings(store) }),
@@ -160,7 +168,7 @@ export function createPluginSettings({ api, store, router }) {
             if (e.target.checked) pins.add(item.key); else pins.delete(item.key);
             writeLocal(key, [...pins]); paint();
           } }), ' 固定到侧边栏'))));
-    }, plugin => JSON.stringify([plugin, dependents, features(plugin).map(item => pins.has(item.key)), plugin.id === 'start-page' && [snapshot.startPage, startPages(plugins)]]));
+    }, plugin => JSON.stringify([plugin, dependencies, dependents, features(plugin).map(item => pins.has(item.key)), plugin.id === 'start-page' && [snapshot.startPage, startPages(plugins)]]));
   }
   function open(pluginId) {
     if (typeof pluginId === 'string') { selected = pluginId; search.value = ''; }

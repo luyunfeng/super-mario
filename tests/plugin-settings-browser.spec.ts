@@ -66,6 +66,9 @@ test('从插件配置固定入口，刷新、停用与恢复，并从窄屏打�
   await plugin.getByRole('button', { name: '停用' }).click();
   await expect(plugin.getByRole('button', { name: '主机器人配置' })).toBeDisabled();
   await expect(pin).toHaveCount(0);
+  await dialog.getByLabel('搜索插件').fill('feishu-message-reactions');
+  await dialog.getByRole('button', { name: /查看依赖.*已停用/ }).click();
+  await expect(plugin.getByRole('button', { name: '启用', exact: true })).toBeVisible();
   await plugin.getByRole('button', { name: '启用' }).click();
   await expect(plugin.getByRole('button', { name: '主机器人配置' })).toBeEnabled();
   await dialog.getByRole('button', { name: '关闭' }).click();
