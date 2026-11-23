@@ -249,6 +249,7 @@ export function compareRuns({ run, runs, projectId, router, executorName, api, s
       h('pre', { class: 'output' }, item.output || '暂无输出'),
       item.error && h('pre', { class: 'output output--error' }, item.error),
       item.resultSource && h('span', { class: 'muted small' }, '结果来源：', item.resultSource),
+      index !== undefined && item.id !== run.id && h('a', { href: href(item.id) + '?compare=group' }, '设为比较基准'),
       h('a', { href: href(item.id) }, '查看执行详情'));
   }
   const peer = peers.find(item => item.id === selected);

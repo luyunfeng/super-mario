@@ -129,6 +129,12 @@ test('execution comparison keeps project boundaries, opens either record and sur
   const grouped = comparison.getByRole('article');
   await expect(grouped.last()).toContainText('当前执行（比较基准）');
   await expect(grouped.first()).toContainText('Token 差额：输入 -2 · 输出 +4');
+  await grouped.first().getByRole('link', {name:'设为比较基准'}).click();
+  await expect(page).toHaveURL(/runs\/first\?compare=group$/);
+  await expect(grouped.first()).toContainText('当前执行（比较基准）');
+  await expect(grouped.last()).toContainText('Token 差额：输入 +2 · 输出 -4');
+  await page.goBack();
+  await expect(grouped.last()).toContainText('当前执行（比较基准）');
   await page.goto(base + '?compare=outside');
   await expect(comparison).toContainText('此记录无法与当前执行对比');
   await expect(comparison).not.toContainText('其他项目交付');
