@@ -107,7 +107,7 @@ function* matchingThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThrea
       // Keep quotes exact, including complete code points on either edge.
       if (start && /[\uDC00-\uDFFF]/.test(text[start])) start--;
       if (end < text.length && /[\uDC00-\uDFFF]/.test(text[end])) end++;
-      hits.push({ id, role, excerpt: text.slice(start, end), truncated: start > 0 || end < text.length, status: status ?? null, createdAt });
+      hits.push({ id, role, excerpt: text.slice(start, end), truncated: start > 0 || end < text.length, omittedBefore:start>0, omittedAfter:end<text.length, status: status ?? null, createdAt });
     }
     if (hits.length || titleMatch) yield { ...info, titleMatch, hits };
   }
@@ -121,7 +121,7 @@ export function searchPrivateThreadList(store: Pick<Store, 'get' | 'list'>, rows
     if (first) {
       const speaker=first.role==='assistant'?'助手':'你';
       const state=first.status==='pending'?'处理中':first.status==='failed'?'处理失败':'';
-      snippets[thread.threadId] = [speaker,state,first.createdAt].filter(Boolean).join(' · ')+'\n'+first.excerpt;
+      snippets[thread.threadId] = [speaker,state,first.createdAt].filter(Boolean).join(' · ')+'\n'+(first.omittedBefore?'…':'')+first.excerpt+(first.omittedAfter?'…':'');
       messageIds[thread.threadId] = first.id;
     }
   }

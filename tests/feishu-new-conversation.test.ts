@@ -200,6 +200,11 @@ test('配对主人按标题或正文搜索活动独立对话，点击结果后�
     const response=await invoke('/对话 '+query,'status-'+status);
     assert.ok(response.text.includes('助手 · '+label+' · 2099-01-01T00:00:00.000Z'));
   }
+  const longTerm='合成检索'.repeat(70);
+  f.store.put('messages','long-match',{...body,id:'long-match',role:'assistant',replyTo:body.id,
+    createdAt:'2099-01-02T00:00:00.000Z',status:'done',text:'甲'.repeat(90)+longTerm+'乙'.repeat(100)});
+  const longResult=await invoke('/list '+longTerm,'long-search');
+  assert.ok(longResult.text.includes('…'+'甲'.repeat(50)+longTerm+'乙'.repeat(70)+'…'));
   const chinese=await invoke('/对话 '+query,'listed-chinese');
   const choices=buttons(chinese.context?.card);
   assert.deepEqual(choices.map(b=>String(b.value.conversationThreadId)).sort(),wanted);
