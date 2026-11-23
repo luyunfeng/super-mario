@@ -56,6 +56,7 @@ test('本人消息可保存为常用提示词，主对话和项目斜杠菜单�
   await expect(body).toHaveValue(sourceText);
   await name.fill('review');
   await button('保存').click();
+  await expect(page.getByText('已保存 /review', { exact: true })).toBeVisible();
   await button('编辑 review').click();
   const longDraft = '𠮷'.repeat(8000);
   await body.fill(longDraft + '甲');
@@ -67,6 +68,7 @@ test('本人消息可保存为常用提示词，主对话和项目斜杠菜单�
   await expect(body).toHaveAttribute('aria-invalid', 'false');
   await body.fill(template);
   await body.press('Control+Enter');
+  await expect(page.getByText('已更新 /review', { exact: true })).toBeVisible();
   await button('新增提示词').click();
   await name.fill('/REVIEW');
   await expect(name).toHaveAccessibleDescription('提示词名称已被使用。');
@@ -150,6 +152,7 @@ test('本人消息可保存为常用提示词，主对话和项目斜杠菜单�
   await expect(editButtons).toHaveCount(2);
   await button('删除 weekly').click();
   await button('确认删除 weekly').click();
+  await expect(page.getByText('已删除 /weekly', { exact: true })).toBeVisible();
   await expect(editButtons).toHaveCount(1);
   await expect(editButtons).toHaveAccessibleName('编辑 review');
   await button('关闭').click();

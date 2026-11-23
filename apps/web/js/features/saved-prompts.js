@@ -1,7 +1,7 @@
 // 提示词只在打开管理抽屉或输入 / 时读取。选择候选项只填写当前输入框。
 import { h, replace } from '../lib/dom.js';
 import { Button, Field, Input, TextArea } from '../ui/kit.js';
-import { openDrawer } from '../ui/overlay.js';
+import { openDrawer, toast } from '../ui/overlay.js';
 
 export const savedPromptsActive = (store, assistantId) => {
   const enabled = id => store.view.snapshot?.plugins?.some(plugin => plugin.id === id && plugin.status === 'active');
@@ -74,7 +74,16 @@ export function openSavedPrompts({ api, store, initialText, assistantId, assista
       const next = await post(api, change ? { ...change, revision: doc.revision } : { action: 'list' }, assistantId);
       if (!current()) return;
       if (!doc && initialText !== undefined) draft = { name: suggestedName(initialText, next.items), text: initialText };
-      if (change) draft = undefined;
+      if (change) {
+        const previous = doc.items.find(item => item.id === change.id);
+        if (change.action === 'remove' && previous) toast('已删除 /' + previous.name);
+        if (change.action === 'create' || change.action === 'update') {
+          const saved = change.action === 'update' ? next.items.find(item => item.id === change.id)
+            : next.items.find(item => !doc.items.some(old => old.id === item.id));
+          if (saved) toast((change.action === 'create' ? '已保存 /' : '已更新 /') + saved.name);
+        }
+        draft = undefined;
+      }
       doc = next;
       stale = false;
     } catch (cause) {
