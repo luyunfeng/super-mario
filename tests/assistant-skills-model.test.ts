@@ -852,6 +852,7 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
   let pageId = '', foreignId = '', adapter!: FeishuOptions;
   const sent: string[] = [];
   const answer = '最近一次保存把标签从待复核改为样本核对，正文仍是样本乙。更早的记录写的是样本甲。';
+  const unavailable = '当前项目无法读取指定知识页，请提供可读取的版本或原文。';
   const { server, api, ask, requests } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.match(req.system, /savedAt 是知识页保存时间/);
@@ -865,18 +866,22 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
       assert.match(req.system, /contentLocked=true 表示正文仅由用户手工编辑/);
       assert.match(req.system, /比较两版返回的 tags/);
       assert.match(req.system, /共用别名时不要据此合并知识页/);
+      if (JSON.stringify(req.content).includes(foreignId)) {
+        assert.match(req.system, /不能拿同名页面或最新版代答/);
+        return call('knowledge_revision', { pageId: foreignId }, 'foreign');
+      }
       return call('knowledge_list', { query: '旧样本库', tag: '样本核对', importance: 'P1', minRelevance: 80 }, 'tagged');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[]).map(p => p.text).join('');
     if (req.callId === 'tagged') {
       assert.deepEqual(JSON.parse(raw).map((page: {id:string}) => page.id), [pageId]);
       assert.equal(JSON.parse(raw)[0].confirmedFacts, '核对时采用样本丙');
-      return call('knowledge_revision', { pageId: foreignId }, 'foreign');
+      return call('knowledge_revision', { pageId }, 'current');
     }
     if (req.callId === 'foreign') {
       assert.match(raw, /知识页不可用/);
       assert.doesNotMatch(raw, /其他项目样本/);
-      return call('knowledge_revision', { pageId }, 'current');
+      return { role: 'assistant', content: unavailable };
     }
     const result = JSON.parse(raw);
     if (req.callId === 'current') {
@@ -926,6 +931,11 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
     await adapter.onMessage(question, { ...source, messageId: 'revision-question' });
     await t.waitFor(() => assert.ok(sent.includes(answer)));
     assert.equal(requests.filter(req => req.callId === 'tail').length, 2);
+    const exact = '请核对「验收样本」的已保存正文，我指定的知识页 ID 是 ' + foreignId;
+    assert.equal(await ask(exact, '/projects/' + project.id + '/messages'), unavailable);
+    await adapter.onMessage(exact, { ...source, messageId: 'specified-page' });
+    await t.waitFor(() => assert.ok(sent.includes(unavailable)));
+    assert.equal(requests.filter(req => req.callId === 'foreign').length, 2);
   } finally { await server.close(); }
 });
 
