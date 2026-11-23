@@ -76,7 +76,11 @@ export interface SubscriptionFailureNotice {
 export type SubscriptionMove = {kind:'thread'|'source'|'digest';count:number};
 export type InboxSubscriptionDelivery = InboxSubscriptionPolicy & {move?:SubscriptionMove};
 export type InboxTriageInput = InboxThing & {sourceKind?:'subscription';subscriptionPolicy?:InboxSubscriptionPolicy};
-export interface InboxItem extends InboxThing { parentInboxId?: string; subscriptionFailure?:Pick<SubscriptionFailureNotice,'since'|'state'>; subscriptionMove?:SubscriptionMove; projectId?: string; id: string; source: string; version: number; tier: 'action' | 'fyi' | 'noise' | 'pending'; reason: string; archivedAt?: string; todoId?: string; updatedAt: string }
+export interface InboxItem extends InboxThing {
+  parentInboxId?: string;
+  /** Legacy links with no provenance were explicitly selected by the owner. */
+  parentInboxBy?: 'user' | 'connector';
+  subscriptionFailure?:Pick<SubscriptionFailureNotice,'since'|'state'>; subscriptionMove?:SubscriptionMove; projectId?: string; id: string; source: string; version: number; tier: 'action' | 'fyi' | 'noise' | 'pending'; reason: string; archivedAt?: string; todoId?: string; updatedAt: string }
 export interface PaneInfo { id: string; title: string; cwd: string }
 export interface TerminalFrame { epoch: string; seq: number; full: boolean; width: number; height: number; data: string }
 export interface SessionBinding { machineId?: string; agentInstanceId?: string; hostKind?: string; hostInstanceId?: string; terminalId?: string; nativeResume?: NativeResumeSpec; nativeSessionId?: string; sessionId: string; paneId: string; executorId: string; cwd: string; createdAt: string }

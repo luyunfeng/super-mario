@@ -66,3 +66,18 @@ test('missing identity type, sender, ids or creation time skips incomplete evide
   // Existing inbox behavior for incoming messages remains available without evidence.
   assert.ok(batch.items.some(row => row.thread.includes('om_no_sender')));
 });
+
+test('重叠搜索结果保留同一发送者的直接引用，互相矛盾的引用不建立父项', async () => {
+  const {evidence,items} = await collect([
+    rawRow('duplicate', {reply_to:'original'}), rawRow('duplicate'),
+    rawRow('disputed', {parent_id:'one'}), rawRow('disputed', {reply_to:'two'}),
+    rawRow('disputed'), rawRow('recalled', {deleted:true}), rawRow('recalled'),
+    rawRow('changed', {edited:true}), rawRow('changed'),
+  ]);
+  const byId = new Map(evidence!.map(item => [item.messageId,item]));
+  assert.equal(byId.get('duplicate')?.parentId,'original');
+  assert.equal(byId.get('disputed')?.parentId,undefined);
+  assert.equal(byId.get('recalled')?.deleted,true);
+  assert.ok(items.every(item => item.last !== 'recalled'));
+  assert.equal(byId.get('changed')?.edited,true);
+});

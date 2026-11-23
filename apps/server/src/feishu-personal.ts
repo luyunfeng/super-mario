@@ -28,6 +28,7 @@ export function createPersonalMessages(options: {
   canCollect(): boolean; ingest(source: string, things: InboxThing[]): Promise<unknown>;
   /** Detached observer work must recheck this collection generation immediately before writing. */
   observeAi?(source: string, messages: PersonalAiMessage[], assertCurrent: () => void): void | Promise<void>;
+  collectRelations?(source:string,ownerId:string,things:InboxThing[],evidence:CollectedReplyEvidence[],assertCurrent:()=>void):void;
   observeReplies?(source: string, evidence: CollectedReplyEvidence[]): Promise<unknown> | unknown;
 }) {
   const { config } = options;
@@ -153,6 +154,8 @@ export function createPersonalMessages(options: {
         assertCurrent();
         await options.ingest(source, things);
         // Ingest may yield while stop, cancel or new authorization changes the owner.
+        assertCurrent();
+        if(batch) options.collectRelations?.(source,account.openId,things,batch.evidence ?? [],assertCurrent);
         assertCurrent();
         options.collectMeetingMemory?.(source, things);
         if (batch?.aiMessages?.length && options.observeAi) {

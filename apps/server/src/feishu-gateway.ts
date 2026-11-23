@@ -12,6 +12,7 @@ import type { PersonalProvider } from '../../../plugins/feishu-personal.ts';
 import type { FeishuRegistrationProvider } from '../../../plugins/feishu-registration.ts';
 import type { AppConfig, Json } from '../../../packages/protocol/src/index.ts';
 import { createFeishuController } from './feishu.ts';
+import {collectInboxRelations} from './feishu-inbox-relations.ts';
 import { createPersonalMessages } from './feishu-personal.ts';
 import type { GroupReadService } from './feishu-group-read-delivery.ts';
 import { createGroupReader } from './feishu-read-group.ts';
@@ -43,6 +44,7 @@ export function createFeishuGateway(
     canCollect: () => ['feishu', 'inbox-triage'].every(id => app.plugins.list().some(plugin => plugin.id === id && plugin.status === 'active')),
     ingest: (source, things) => app.inbox.ingest(source, things),
     collectMeetingMemory: app.collectMeetingMemory,
+    collectRelations:(...args)=>collectInboxRelations(app.store,app.inbox.offerConnectorParent,app.waitingReplies.observedSource,...args),
     observeReplies: (source, evidence) => app.waitingReplies.observeSource(source, evidence),
   });
   const handlePersonalAi = createPersonalAiHandler(app);

@@ -19,7 +19,11 @@ test('个人消息：点击授权→显示二维码→确认后自动连接→�
     if (args.includes('status')) return { appId: 'cli_0123456789abcdef', identity: 'user', verified: true, identities: { user: { available: true, openId: 'ou_offline', userName: '离线测试账号', scope: PERSONAL_MESSAGE_SCOPES.join(' ') } } };
     if (args.includes('im')) {
       reads++;
-      return { ok: true, identity: 'user', data: { has_more: false, messages: [{ message_id: 'om_offline', chat_id: 'oc_offline', content: '请处理测试事项', create_time: String(Date.now()), sender: { id: 'ou_sender', name: '测试发送人' } }] } };
+      const row = {chat_id:'oc_offline', chat_type:'p2p', create_time:String(Date.now()), sender:{id:'ou_sender',id_type:'open_id',name:'测试发送人'}};
+      return { ok: true, identity: 'user', data: { has_more: false, messages: [
+        {...row,message_id:'om_reply',reply_to:'om_offline',content:'已收到测试事项'},
+        {...row,message_id:'om_offline',content:'请处理测试事项'},
+      ] } };
     }
     throw new Error('unexpected command');
   } });
@@ -44,12 +48,19 @@ test('个人消息：点击授权→显示二维码→确认后自动连接→�
     assert.equal(reads, 0);
     await drawer.getByRole('button', { name: '开启采集', exact: true }).click();
     await expect(drawer.getByRole('button', { name: '停止采集' })).toBeVisible();
-    await expect.poll(() => server.app.inbox.list().length).toBe(1);
+    await expect.poll(() => server.app.inbox.list().find(item => item.last === 'om_reply')?.parentInboxBy).toBe('connector');
     assert.ok(reads >= 2);
     await drawer.getByRole('button', { name: '停止采集' }).click();
     await expect(drawer.getByRole('button', { name: '开启采集', exact: true })).toBeVisible();
     assert.equal(server.personal.status().enabled, false);
     assert.ok(await drawer.evaluate(el => el.scrollWidth <= el.clientWidth));
+    const reply = server.app.inbox.list().find(item => item.last === 'om_reply')!;
+    const original = server.app.inbox.list().find(item => item.last === 'om_offline')!;
+    assert.equal(reply.parentInboxId, original.id);
+    await page.goto(server.url + '/#inbox?item=' + encodeURIComponent(reply.id));
+    const detail = page.getByRole('dialog', {name:'收件箱消息详情'});
+    await expect(detail.locator('pre')).toContainText('已收到测试事项');
+    await expect(detail.getByRole('region', {name:'同一事项'})).toContainText('上级收件');
     assert.deepEqual(errors, []);
     for (const payload of payloads) for (const secret of ['private-profile', 'private-device-code']) assert.ok(!payload.includes(secret));
     const unauthorized = await fetch(`${server.url}/api/v1/feishu/personal`); assert.equal(unauthorized.status, 401);

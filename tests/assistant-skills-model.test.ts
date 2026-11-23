@@ -4045,6 +4045,8 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
       assert.ok(req.tools.includes('inbox_tree'));
       assert.match(req.system,/优先用 inbox_tree/);
       assert.match(req.system,/读取失败时说明未能核实/);
+      assert.match(req.system,/采集到飞书原消息直接回复上级的证据/);
+      assert.match(req.system,/主人手动关联，不能当作飞书回复或引文/);
       return call('inbox_list',{query:'合成中心'},JSON.stringify(req.content).includes('解除后')?'after-unlink':'lookup');
     }
     const raw=typeof req.content==='string'?req.content:(req.content as {text:string}[])[0].text;
@@ -4053,6 +4055,7 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
       assert.equal(result.items.length,1);
       assert.equal(result.items[0].id,center);
       assert.equal(result.items[0].parentInboxId,undefined);
+      assert.equal(result.items[0].parentInboxBy,undefined);
       if(req.callId==='restricted-list') return {role:'assistant',content:'收件列表没有披露关系。'};
       return call('inbox_tree',{id:result.items[0].id},req.callId==='after-unlink'?'detached-tree':'tree');
     }
@@ -4060,10 +4063,18 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
     assert.equal(result.item.workspaceRoute,'#inbox?item='+encodeURIComponent(center));
     assert.deepEqual(result.ancestors.map((item:{id:string})=>item.id),req.callId==='detached-tree'?[]:[parent]);
     assert.deepEqual(result.children.map((item:{id:string})=>item.id),[child]);
+    assert.equal(result.item.parentInboxBy,req.callId==='detached-tree'?undefined:'user');
+    assert.equal(result.item.parentInboxId,req.callId==='detached-tree'?undefined:parent);
+    if(result.ancestors.length) {
+      assert.equal(result.ancestors[0].parentInboxBy,undefined);
+      assert.equal(result.ancestors[0].parentInboxId,undefined);
+    }
+    assert.equal(result.children[0].parentInboxBy,'connector');
+    assert.equal(result.children[0].parentInboxId,center);
     assert.equal(result.children[0].text,'合成子项原文');
-    assert.equal(result.item.source,'fixture');
+    assert.equal(result.item.source,'feishu:fixture');
     assert.ok(!raw.includes(hidden));
-    return {role:'assistant',content:req.callId==='detached-tree'?'当前没有查到父项，仍有一项直接子项。':'查到一项真实父项和一项直接子项。'};
+    return {role:'assistant',content:req.callId==='detached-tree'?'当前没有查到父项，仍有一项直接子项。':'主人手动关联了上级，另有一项飞书直接回复。'};
   },options=>{
     adapter=options;
     return {start:async()=>{},close:async()=>{},collect:async()=>[],status:()=>({connected:true}),send:async(_target,text)=>{sent.push(text);}};
@@ -4072,15 +4083,18 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
     const project=await api('/projects',{name:'合成收件项目'});
     const inbox=server.app.inbox;
     const thing=(title:string)=>({title,thread:title,last:'1',receivedAt:'2026-01-01T00:00:00Z',text:title+'原文'});
-    await inbox.ingest('fixture',['合成中心','合成父项','合成子项'].map(thing));
+    await inbox.ingest('feishu:fixture',['合成中心','合成父项','合成子项'].map(title=>({...thing(title),origin:{kind:'direct',connector:'飞书'}})));
     await inbox.ingest('feishu:fixture',[{...thing('合成历史群'),origin:{kind:'group',connector:'飞书'}}]);
     const item=(title:string)=>inbox.list().find(x=>x.title===title)!;
     center=item('合成中心').id;parent=item('合成父项').id;child=item('合成子项').id;hidden=item('合成历史群').id;
     inbox.setParent(parent,hidden,item('合成父项').version);
-    inbox.setParent(child,center,item('合成子项').version);
+    assert.equal(inbox.offerConnectorParent(child,center),'applied');
     inbox.setParent(center,parent,inbox.assignProject(center,item('合成中心').version,project.id).version);
-    const expected='查到一项真实父项和一项直接子项。';
+    const expected='主人手动关联了上级，另有一项飞书直接回复。';
     assert.equal(await ask('核对同一事项的合成中心前因和后续'),expected);
+    // A legacy saved manual link has a parent ID and no source field.
+    const {parentInboxBy:_legacyMissing,...legacy}=inbox.tree(center).item;
+    server.app.store.put('inbox',center,legacy);
     const bot=await api('/feishu/bots',{name:'收件助手',appId:'cli_1111111111111111',appSecret:'fixture',scope:{kind:'global'},requireConfirmation:false,groupChats:[{chatId:'oc_group',mentionOnly:true,allowedSenderIds:['ou_owner']}]});
     const owner={chatId:'oc_dm',senderId:'ou_owner',senderType:'user',chatType:'p2p'} as const;
     await adapter.onMessage(bot.pairingCode,{...owner,messageId:'pair'});

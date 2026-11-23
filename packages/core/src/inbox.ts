@@ -73,6 +73,7 @@ export function createInboxService({ store, events, createTodo, triage }: {
   list(): InboxItem[];
   tree(id:string): {item:InboxItem;ancestors:InboxItem[];children:InboxItem[]};
   setParent(id:string,parentId:string|null,version:number): InboxItem;
+  offerConnectorParent(id:string,parentId:string):'applied'|'missing'|'ignored';
   ingest(source: string, things: InboxThing[], policy?:InboxSubscriptionDelivery): Promise<void>;
   syncSubscriptionFailure(notice:SubscriptionFailureNotice):void;
   subscriptionFailureCard(subscriptionId:string):InboxItem|undefined;
@@ -94,6 +95,17 @@ export function createInboxService({ store, events, createTodo, triage }: {
     return item;
   }
   const maxParentDepth=8;
+  const childrenOf=(id:string)=>'inbox.children.'+id;
+  // Legacy cards store only the forward link. Build the reverse index once, atomically.
+  function ensureChildrenIndex() {
+    if(store.get('inbox.indexes','children-v1')) return;
+    store.transaction(()=>{
+      for(const item of store.list<InboxItem>(collection)) {
+        if(item.parentInboxId) store.put(childrenOf(item.parentInboxId),item.id,item.id);
+      }
+      store.put('inbox.indexes','children-v1',true);
+    });
+  }
   function parents(item:InboxItem):InboxItem[] {
     const result:InboxItem[]=[];
     const seen=new Set([item.id]);
@@ -105,6 +117,27 @@ export function createInboxService({ store, events, createTodo, triage }: {
       result.push(ancestor);seen.add(parent);parent=ancestor.parentInboxId;
     }
     return result;
+  }
+  function writeParent(item:InboxItem,parentId:string|null,by:'user'|'connector') {
+    if((item.parentInboxId ?? null)===parentId && (!parentId || (item.parentInboxBy ?? 'user')===by)) return item;
+    ensureChildrenIndex();
+    if(parentId!==null) {
+      const ancestors=parents({...item,parentInboxId:parentId});
+      // Moving a branch must preserve the depth limit for its deepest child.
+      let level=[item.id],depth=ancestors.length;
+      while(level.length) {
+        if(depth>maxParentDepth) throw new InboxError('收件关联最多允许八层父项',409);
+        level=level.flatMap(key=>store.list<string>(childrenOf(key)));depth++;
+      }
+    }
+    const next={...item,version:item.version+1,updatedAt:new Date().toISOString()};
+    if(parentId===null) {delete next.parentInboxId;delete next.parentInboxBy;}
+    else {next.parentInboxId=parentId;next.parentInboxBy=by;}
+    if(item.parentInboxId!==parentId) {
+      if(item.parentInboxId) store.remove(childrenOf(item.parentInboxId),item.id);
+      if(parentId) store.put(childrenOf(parentId),item.id,item.id);
+    }
+    store.put(collection,item.id,next);return next;
   }
   function current(id: string, version: number): InboxItem {
     if (!Number.isSafeInteger(version) || version < 1) throw new InboxError('version必须为正整数');
@@ -135,7 +168,8 @@ export function createInboxService({ store, events, createTodo, triage }: {
     list() { return store.list<InboxItem>(collection).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); },
     tree(id) {
       const item=get(id),ancestors=parents(item);
-      const children=store.list<InboxItem>(collection).filter(child=>child.parentInboxId===id)
+      ensureChildrenIndex();
+      const children=store.list<string>(childrenOf(id)).map(child=>get(child))
         .sort((a,b)=>Date.parse(a.receivedAt ?? a.updatedAt)-Date.parse(b.receivedAt ?? b.updatedAt) || a.id.localeCompare(b.id));
       return {item,ancestors,children};
     },
@@ -146,28 +180,25 @@ export function createInboxService({ store, events, createTodo, triage }: {
       const result=store.transaction(()=>{
         const item=get(id);
         if(version!==item.version) throw new InboxError('收件箱卡片已更新，请刷新',409);
-        if((item.parentInboxId ?? null)===parentId) return item;
-        if(parentId!==null) {
-          const ancestors=parents({...item,parentInboxId:parentId});
-          const children=new Map<string,string[]>();
-          for(const child of store.list<InboxItem>(collection)) {
-            if(!child.parentInboxId) continue;
-            const siblings=children.get(child.parentInboxId);
-            if(siblings) siblings.push(child.id);else children.set(child.parentInboxId,[child.id]);
-          }
-          // Moving a branch must preserve the depth limit for its deepest child.
-          let level=[id],depth=ancestors.length;
-          while(level.length) {
-            if(depth>maxParentDepth) throw new InboxError('收件关联最多允许八层父项',409);
-            level=level.flatMap(key=>children.get(key) ?? []);depth++;
-          }
-        }
-        const next={...item,version:version+1,updatedAt:new Date().toISOString()};
-        if(parentId===null) delete next.parentInboxId;else next.parentInboxId=parentId;
-        store.put(collection,id,next);return next;
+        return writeParent(item,parentId,'user');
       });
       if(result.version!==version) changed(id);
       return result;
+    },
+    offerConnectorParent(id,parentId) {
+      const outcome=store.transaction(()=>{
+        const item=store.get<InboxItem>(collection,id);
+        if(!item || !store.get<InboxItem>(collection,parentId)) return 'missing';
+        if(item.parentInboxId && item.parentInboxBy!=='connector') return 'ignored';
+        try {return writeParent(item,parentId,'connector')===item ? 'ignored' : 'applied';}
+        catch(error) {
+          // A malformed or cyclic proposal is final. Storage failures must reach the caller for retry.
+          if(error instanceof InboxError && (error.status===409 || error.status===404)) return 'ignored';
+          throw error;
+        }
+      });
+      if(outcome==='applied') changed(id);
+      return outcome;
     },
     subscriptionFailureCard(subscriptionId) {
       const item=store.get<InboxItem>(collection,inboxItemId('subscription:'+subscriptionId,'failing'));
@@ -195,7 +226,7 @@ export function createInboxService({ store, events, createTodo, triage }: {
           tier:'fyi',reason:'订阅来源连续读取失败已满 24 小时',
           receivedAt:new Date(openedAt).toISOString(),updatedAt:now.toISOString(),version:(item?.version ?? 0)+1,
           subscriptionFailure:{since:notice.since,state:'open'},
-          ...(item?.parentInboxId && {parentInboxId:item.parentInboxId}),
+          ...(item?.parentInboxId && {parentInboxId:item.parentInboxId,parentInboxBy:item.parentInboxBy ?? 'user'}),
           ...(item?.projectId && {projectId:item.projectId})};
       } else {
         if(!item || !previous || previous.state!=='open' || previous.since!==notice.since) return;
@@ -253,7 +284,7 @@ export function createInboxService({ store, events, createTodo, triage }: {
           const previous = store.get<InboxItem>(collection, id);
           const item: InboxItem = { ...thing, id, source, version: (previous?.version ?? 0) + 1,
             tier: result.tier, reason: withTodo(result.reason, previous?.todoId), updatedAt: new Date().toISOString(),
-            ...(previous?.parentInboxId ? {parentInboxId:previous.parentInboxId} : {}),
+            ...(previous?.parentInboxId ? {parentInboxId:previous.parentInboxId,parentInboxBy:previous.parentInboxBy ?? 'user'} : {}),
             ...(previous?.todoId ? { todoId: previous.todoId } : {}),
             ...(previous?.projectId ? { projectId: previous.projectId } : {}) };
           if(move) item.subscriptionMove=move;

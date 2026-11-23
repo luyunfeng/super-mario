@@ -6,6 +6,7 @@ import { createWaitingReplies } from './waiting-replies.ts';
 type Observed = NormalizedReplyEvidence & { id: string; label?: string; preview?: string };
 function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
 const sourceCollection = 'todo.reply-sources';
+const sourceKey=(source:string,chatId:string,messageId:string)=>'reply_'+createHash('sha256').update(JSON.stringify([source,chatId,messageId])).digest('hex');
 const identifier = (value: unknown) => typeof value === 'string' && value.trim().length > 0 && value.length <= 512 && !/[\p{Cc}]/u.test(value);
 /** Trusted connectors supply metadata; HTTP and model callers can only select observed IDs. */
 export function createReplyTracking({ store, events }: { store: Store; events: EventBus }) {
@@ -38,6 +39,10 @@ export function createReplyTracking({ store, events }: { store: Store; events: E
         repliedAt: wait.hit?.evidence.createdAt,
       } : null;
     },
+    observedSource(source:string,chatId:string,messageId:string) {
+      const value=store.get<Observed>(sourceCollection,sourceKey(source,chatId,messageId));
+      return value && {senderId:value.senderId,deleted:value.deleted===true};
+    },
     observeSource(source: string, input: Array<NormalizedReplyEvidence & { label?: string; preview?: string }>) {
       if (!identifier(source) || !Array.isArray(input) || input.length > 500) fail('消息证据来源无效');
       // Validate the complete batch before any partial record or reminder mutation.
@@ -49,16 +54,22 @@ export function createReplyTracking({ store, events }: { store: Store; events: E
         const copy: NormalizedReplyEvidence = { source, chatId: value.chatId, messageId: value.messageId, senderId: value.senderId, senderIdType: value.senderIdType, createdAt: value.createdAt,
           ...(value.parentId ? { parentId: value.parentId } : {}), ...(value.rootId ? { rootId: value.rootId } : {}), ...(value.threadId ? { threadId: value.threadId } : {}),
           ...(value.edited !== undefined ? { edited: value.edited } : {}), ...(value.deleted !== undefined ? { deleted: value.deleted } : {}) };
-        return { ...copy, id: 'reply_' + createHash('sha256').update(JSON.stringify([source, copy.chatId, copy.messageId])).digest('hex'),
+        return { ...copy, id:sourceKey(source,copy.chatId,copy.messageId),
           ...(typeof value.label === 'string' ? { label: value.label.slice(0, 120) } : {}), ...(typeof value.preview === 'string' ? { preview: value.preview.slice(0, 160) } : {}) };
       });
       return store.transaction(() => {
-        let matched = 0, added = 0;
+        let matched = 0, added = 0, invalidated = 0;
         for (const value of batch) {
-          if (!store.get(sourceCollection, value.id)) { store.put(sourceCollection, value.id, value); added++; }
-          matched += waits.consume(value).matched.length;
+          const observed=store.get<Observed>(sourceCollection,value.id);
+          if (!observed) { store.put(sourceCollection, value.id, value); added++; }
+          // A deletion invalidates the first observation, including after sparse or older search replays.
+          else if (value.deleted && !observed.deleted) {
+            store.put(sourceCollection,value.id,{...observed,deleted:true});
+            invalidated++;
+          }
+          matched += waits.consume(observed?.deleted ? {...value,deleted:true} : value).matched.length;
         }
-        if (added || matched) events.publish('waiting.replies.changed', { observed: added, matched });
+        if (added || matched || invalidated) events.publish('waiting.replies.changed', { observed: added, matched });
         return { observed: added, matched };
       });
     },

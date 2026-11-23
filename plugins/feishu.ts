@@ -713,9 +713,11 @@ export function createFeishuIntegration(options: FeishuOptions) {
     return scopedHits(page.messages, lane);
   }
   function messageEvidence(messages: Row[]): CollectedReplyEvidence[] {
-    const matches = new Map(messages.map(row => [JSON.stringify([row.chat_id, row.message_id]), row]));
-    const evidence: CollectedReplyEvidence[] = [];
-    for (const hit of matches.values()) {
+    const matches = new Map<string, CollectedReplyEvidence>();
+    // Search lanes may return different projections of one message. An omitted reply field
+    // adds no evidence. Two explicit, conflicting references cannot establish a parent.
+    const parents = new Map<string, Set<string>>();
+    for (const hit of messages) {
       if (botSender(hit)) continue; // Meeting notifications are not personal reply evidence.
       const chatId = string(hit.chat_id), messageId = string(hit.message_id);
       const sender = object(hit.sender), senderId = string(sender.id), senderIdType = string(sender.id_type);
@@ -726,19 +728,33 @@ export function createFeishuIntegration(options: FeishuOptions) {
       // CLI v1.0.74 content_convert.go preserves sender, but emits parent_id
       // as reply_to ONLY without thread_id. A thread alone proves no direct reply.
       // Native API parent_id/root_id are accepted when explicitly preserved.
-      const parentId = string(hit.parent_id) || string(hit.reply_to);
+      const key = JSON.stringify([chatId, messageId]);
+      const senderKey = JSON.stringify([chatId, messageId, senderIdType, senderId]);
+      let refs = parents.get(senderKey);
+      for (const field of [hit.parent_id, hit.reply_to]) {
+        if (typeof field !== 'string' || !field) continue;
+        if (!refs) {
+          refs = new Set();
+          parents.set(senderKey, refs);
+        }
+        refs.add(field);
+      }
+      const parentId = refs?.size === 1 ? refs.values().next().value : undefined;
+      const previous = matches.get(key);
+      const edited = previous?.edited === true || hit.edited === true || hit.updated === true ? true : hit.updated;
+      const deleted = previous?.deleted === true ? true : hit.deleted;
       const rootId = string(hit.root_id), threadId = string(hit.thread_id);
-      evidence.push({
+      matches.set(key, {
         source: `feishu:${options.appId}:${options.personalOpenId!}`,
         chatId, messageId, senderId, senderIdType, createdAt,
         ...(parentId ? { parentId } : {}), ...(rootId ? { rootId } : {}), ...(threadId ? { threadId } : {}),
-        ...(typeof hit.updated === 'boolean' ? { edited: hit.updated } : {}),
-        ...(typeof hit.deleted === 'boolean' ? { deleted: hit.deleted } : {}),
+        ...(typeof edited === 'boolean' ? { edited } : {}),
+        ...(typeof deleted === 'boolean' ? { deleted } : {}),
         ...(string(hit.chat_name) ? { label: string(hit.chat_name).slice(0, 160) } : {}),
         ...(string(hit.content) ? { preview: string(hit.content).slice(0, 160) } : {}),
       });
     }
-    return evidence;
+    return [...matches.values()];
   }
   // Only scoped search results enter evidence, detail and legacy history reads.
   function scopedHits(rows: Row[], lane: SearchLane): Row[] {
@@ -771,7 +787,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const things: InboxThing[] = [];
     for (const [key, hit] of matches) {
       const chat = string(hit.chat_id), id = string(hit.message_id);
-      if (!chat || !id || hit.deleted === true) continue;
+      if (!chat || !id || hit.deleted === true || anchors.get(key)?.deleted) continue;
       const own = string(object(hit.sender).id) === options.personalOpenId;
       const anchor = anchors.get(key), text = string(hit.content);
       const type = hit.msg_type ?? hit.message_type;

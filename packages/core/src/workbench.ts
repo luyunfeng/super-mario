@@ -1083,7 +1083,7 @@ export async function createWorkbench(config: AppConfig) {
   }
 
   // Only the private relationship tool exposes links between inbox records.
-  function withoutParent({parentInboxId: _parent, ...item}:InboxItem) { return item; }
+  function withoutParent({parentInboxId: _parent, parentInboxBy: _by, ...item}:InboxItem) { return item; }
   function readInboxTree(input: Record<string,unknown>):Json {
     ownerReadInput();
     const id=requiredText(input.id,'收件编号');
@@ -1092,7 +1092,10 @@ export async function createWorkbench(config: AppConfig) {
     const hiddenAt=ancestors.findIndex(excludesPersonalGroupFromBrief);
     const visibleAncestors=hiddenAt<0?ancestors:ancestors.slice(0,hiddenAt);
     const visibleChildren=children.filter(child=>!excludesPersonalGroupFromBrief(child));
-    const present=(row:InboxItem)=>({...withoutParent(row),workspaceRoute:'#inbox?item='+encodeURIComponent(row.id)});
+    const visibleIds=new Set([item.id,...visibleAncestors.map(row=>row.id),...visibleChildren.map(row=>row.id)]);
+    const present=(row:InboxItem)=>({...withoutParent(row),
+      ...(row.parentInboxId && visibleIds.has(row.parentInboxId) && {parentInboxId:row.parentInboxId,parentInboxBy:row.parentInboxBy ?? 'user'}),
+      workspaceRoute:'#inbox?item='+encodeURIComponent(row.id)});
     return {item:present(item),ancestors:visibleAncestors.map(present),children:visibleChildren.map(present)} as unknown as Json;
   }
   function readInbox(input: Record<string, unknown>): Json {

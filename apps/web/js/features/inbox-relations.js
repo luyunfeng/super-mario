@@ -35,16 +35,23 @@ export function createInboxRelations({api,store,id,openSource,active}) {
   search.addEventListener('input',()=>{limit=30;candidates();});
   function draw() {
     if(!current()) return;
-    const section=(label,items)=>items.length && h('div',{class:'stack'},h('strong',null,label),
-      items.map(row=>button(caption(row),()=>openSource(row.id))));
+    const section=(label,items,edge)=>items.length && h('div',{class:'stack'},h('strong',null,label),
+      items.map((row,index)=>{
+        const [child,parent]=edge(row,index);
+        const source=child.parentInboxId===parent.id && (child.parentInboxBy==='connector'?'飞书直接回复':'主人手动关联');
+        return h('div',{class:'row row--wrap'},button(caption(row),()=>openSource(row.id)),
+          source && h('span',{class:'small muted'},source));
+      }));
     replace(el,h('h4',null,'同一事项'),note && h('p',{role:'status'},note),
       readError && h('p',{role:'alert'},readError),readError && button('重新读取关联',load),
       loading && !tree && h('p',{role:'status'},'正在读取关联…'),
-      tree && [section('上级收件',tree.ancestors)||null,section('下级收件',tree.children)||null,
+      tree && [section('上级收件',tree.ancestors,(row,index)=>[index?tree.ancestors[index-1]:tree.item,row])||null,section('下级收件',tree.children,row=>[row,tree.item])||null,
         !tree.ancestors.length && !tree.children.length && h('p',{class:'small muted'},'尚未关联其他收件。'),
         h('div',{class:'row row--wrap'},button(editing?'取消选择':'关联到另一条收件',()=>{
           editing=!editing;draw();if(editing)search.focus();
-        }),tree.item.parentInboxId && button('解除上级关联',()=>save(null))),
+        }),tree.ancestors[0]?.id===tree.item.parentInboxId && tree.item.parentInboxBy==='connector' &&
+          button('保留此上级',()=>save(tree.item.parentInboxId)),
+        tree.ancestors.length>0 && button('解除上级关联',()=>save(null))),
         editing && [search,choices]]);
     if(editing && tree) candidates();
   }
@@ -81,7 +88,7 @@ export function createInboxRelations({api,store,id,openSource,active}) {
   }
   function update(items) {
     // A child may move to another parent without changing the selected item's version.
-    const next=JSON.stringify(items.map(row=>[row.id,row.version,row.parentInboxId]));
+    const next=JSON.stringify(items.map(row=>[row.id,row.version,row.parentInboxId,row.parentInboxBy]));
     if(next===signature) return;
     signature=next;
     if(!busy) void load();
