@@ -125,6 +125,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
   }
   function renderItem(item) {
     const project = snapshot().projects?.find(p => p.id === item.projectId);
+    const todo = item.todoId && snapshot().todos?.find(t => t.id === item.todoId && t.projectId === item.projectId);
     const history = [...(item.occurrences ?? [])].sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor));
     const latest = history[0];
     const details = h('details', { class: 'fold', style: { minWidth: '0', overflowWrap: 'anywhere' } }, h('summary', null, '最近记录与来源'),
@@ -138,7 +139,9 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
         item.nextOccurrenceKey && Button({ label: '查看更早记录', size: 'sm', onClick: () => openHistory(item) })));
     return h('article', { class: 'stack', style: { minWidth: '0' }, dataset: { workId: item.id } },
       h('strong', { class: 'item__title' }, item.title),
-      line(`范围：${item.projectId ? project?.name ?? item.projectId : '全局'}${item.todoId ? ` · 待办 ${item.todoId}` : ''}`),
+      h('p', { class: 'item__meta' }, `范围：${item.projectId ? project?.name ?? item.projectId : '全局'}`,
+        todo ? h('a', { href: '#projects/' + encodeURIComponent(item.projectId || 'all') + '/todos/detail/' + encodeURIComponent(todo.id) }, ' · 待办 ' + todo.title)
+          : item.todoId && ' · 待办 ' + item.todoId),
       line(timingText(item.schedule)),
       item.schedule.until && line('结束时间：' + timeText(item.schedule.until)),
       line(`配置状态：${({ pending: '待创建确认', active: '已生效（仅配置生效）', cancelled: '已取消计划' })[item.status] ?? '未确认'} · 创建审批 ${approvalText(item.approvalStatus)}`),
