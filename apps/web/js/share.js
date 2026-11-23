@@ -1,3 +1,5 @@
+import {renderSharedTools} from './lib/shared-excerpt-tools.js';
+
 // This page uses only the capability in the URL fragment. Keep it out of navigation, cookies and disk caches.
 (() => {
   const status = document.querySelector('[role="status"]');
@@ -27,6 +29,8 @@
     const text = document.createElement('p');
     text.textContent = message.text;
     row.append(role,text);
+    const tools = renderSharedTools(message.tools);
+    if (tools) row.append(tools);
     return row;
   }
 

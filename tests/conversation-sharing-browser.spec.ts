@@ -13,11 +13,20 @@ test('工作台预览并更新摘录，原匿名链接只显示已确认的版�
   const server=await startServer({host:'127.0.0.1',port:0,dataDir,token,demo:true});
   t.after(async()=>{try{await server.close();}finally{await rm(dataDir,{recursive:true,force:true});}});
   const shared='合成公开结论\n<img src="https://example.invalid/picture.png">',replacement='合成修订结论：延期至周五复核。',privateText='合成内部备注，不在本次公开范围';
+  const assistantText='合成助手公开核对结果';
   for(const text of [shared,replacement,privateText]){
     const response=await fetch(server.url+'/api/v1/messages',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
       body:JSON.stringify({text})});
     assert.equal(response.status,202);const source=await response.json();
     await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.replyTo===source.id && m.status==='done')),{timeout:6000});
+    if(text===shared){
+      const reply=server.app.store.list<Message>('messages').find(m=>m.replyTo===source.id && m.role==='assistant')!;
+      server.app.store.put('messages',reply.id,{...reply,text:assistantText});
+      const details={phase:'working',goal:privateText};
+      server.app.store.put('agent.traces',reply.id,{id:reply.id,conversationId:reply.conversationId,userMessageId:source.id,status:'done',
+        toolCalls:[{id:'status',name:'conversation_status',args:JSON.stringify({internal:privateText}),isError:false,
+          result:JSON.stringify({content:[{type:'text',text:JSON.stringify(details)}],details}),startedAt:reply.createdAt,finishedAt:reply.createdAt}]});
+    }
   }
   const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
   t.after(()=>browser.close());
@@ -27,9 +36,17 @@ test('工作台预览并更新摘录，原匿名链接只显示已确认的版�
   await owner.getByRole('button',{name:'分享对话摘录',exact:true}).click();
   const manager=owner.getByRole('dialog',{name:'分享对话摘录',exact:true});
   await manager.getByRole('checkbox',{name:/选择消息.*合成公开结论/}).first().check();
+  const assistantChoice=manager.getByRole('checkbox',{name:/选择消息.*合成助手公开核对结果/});
+  await assistantChoice.check();
+  const includeTools=manager.getByRole('checkbox',{name:'包含工具记录',exact:true});
+  await expect(includeTools).not.toBeChecked();
+  await includeTools.check();
   await manager.getByRole('button',{name:'预览公开内容',exact:true}).click();
   const preview=manager.getByRole('region',{name:'公开内容预览',exact:true});
-  await expect(preview.locator('pre')).toHaveCount(1);await expect(preview.locator('pre')).toHaveText(shared);
+  await expect(preview.getByText(shared,{exact:true})).toBeVisible();
+  const previewTools=preview.getByRole('region',{name:'工具记录'});
+  await previewTools.getByText('conversation_status · 成功',{exact:true}).click();
+  await expect(previewTools.locator('pre')).toHaveText('{"phase":"working"}');
   await expect(preview).not.toContainText(privateText);
   await manager.getByRole('button',{name:'确认创建分享',exact:true}).click();
   const field=manager.getByRole('textbox',{name:'分享链接',exact:true});
@@ -55,11 +72,15 @@ test('工作台预览并更新摘录，原匿名链接只显示已确认的版�
   const publicResponse=await receipt;
   assert.ok(publicResponse.ok());assert.match(publicResponse.headers()['cache-control']??'',/no-store/);
   const messages=reader.getByRole('list',{name:'分享的消息'});
-  await expect(messages.getByRole('listitem')).toHaveCount(1);
-  await expect(messages.locator('p')).toHaveText(shared);
+  await expect(messages.getByRole('listitem')).toHaveCount(2);
+  await expect(messages.locator('p')).toHaveText([shared,assistantText]);
+  const publicTools=messages.getByRole('region',{name:'工具记录'});
+  await publicTools.getByText('conversation_status · 成功',{exact:true}).click();
+  await expect(publicTools.locator('pre')).toHaveText('{"phase":"working"}');
+  assert.ok(!(await publicResponse.text()).includes(privateText));
   await expect(reader.locator('body')).not.toContainText(privateText);
   await expect(messages.locator('img,script,a')).toHaveCount(0);
-  assert.ok(requests.every(r=>['/share','/css/base.css','/js/share.js','/api/v1/public/conversation-share','/favicon.ico'].includes(r.path)));
+  assert.ok(requests.every(r=>['/share','/css/base.css','/js/share.js','/js/lib/shared-excerpt-tools.js','/api/v1/public/conversation-share','/favicon.ico'].includes(r.path)));
   const publicRead=requests.filter(r=>r.path==='/api/v1/public/conversation-share');
   assert.equal(publicRead.length,1);assert.deepEqual(JSON.parse(publicRead[0].data!),{token:url.hash.slice(1)});
   assert.equal(publicRead[0].auth,undefined);assert.equal(publicRead[0].referrer,undefined);assert.equal(publicRead[0].cookie,undefined);
@@ -71,9 +92,15 @@ test('工作台预览并更新摘录，原匿名链接只显示已确认的版�
   const replacementChoice=manager.getByRole('checkbox',{name:/选择消息.*合成修订结论/}).first();
   await expect(originalChoice).toBeChecked();
   await originalChoice.uncheck();await replacementChoice.check();
+  await expect(assistantChoice).toBeChecked();
+  await expect(includeTools).toBeChecked();
   await manager.getByRole('button',{name:'预览公开内容',exact:true}).click();
-  await expect(preview.locator('pre')).toHaveCount(1);
-  await expect(preview.locator('pre')).toHaveText(replacement);
+  await expect(previewTools).toBeVisible();
+  await includeTools.uncheck();
+  await expect(manager.getByRole('button',{name:'确认更新分享',exact:true})).toHaveCount(0);
+  await manager.getByRole('button',{name:'预览公开内容',exact:true}).click();
+  await expect(preview.locator('pre')).toHaveText([assistantText,replacement]);
+  await expect(previewTools).toHaveCount(0);
   await expect(preview).not.toContainText(shared);await expect(preview).not.toContainText(privateText);
   async function poll(){
     const response=reader.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/public/conversation-share' && r.request().postDataJSON().knownRevision===1);
@@ -82,16 +109,17 @@ test('工作台预览并更新摘录，原匿名链接只显示已确认的版�
   }
   const unchanged=await poll();
   assert.equal(unchanged.revision,1);assert.equal(unchanged.unchanged,true);assert.equal(unchanged.messages,undefined);
-  await expect(messages.locator('p')).toHaveText(shared);
+  await expect(messages.locator('p')).toHaveText([shared,assistantText]);
   const updated=owner.waitForResponse(r=>r.request().method()==='POST' && r.ok() &&
     new URL(r.url()).pathname==='/api/v1/conversation-shares' && r.request().postDataJSON().action==='update');
   await manager.getByRole('button',{name:'确认更新分享',exact:true}).click();
   await updated;
   const changed=await poll();assert.equal(changed.revision,2);
-  assert.deepEqual(changed.messages,[{role:'user',text:replacement}]);
+  assert.deepEqual(changed.messages,[{role:'assistant',text:assistantText},{role:'user',text:replacement}]);
   await expect(reader).toHaveURL(url.href);
-  await expect(messages.getByRole('listitem')).toHaveCount(1);
-  await expect(messages.locator('p')).toHaveText(replacement);
+  await expect(messages.getByRole('listitem')).toHaveCount(2);
+  await expect(messages.locator('p')).toHaveText([assistantText,replacement]);
+  await expect(publicTools).toHaveCount(0);
   await expect(reader.locator('body')).not.toContainText(shared);
   await expect(reader.locator('body')).not.toContainText(privateText);
   await manager.getByRole('button',{name:'关闭',exact:true}).click();

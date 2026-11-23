@@ -4698,6 +4698,8 @@ test('Web 和飞书解释摘录分享的确认步骤及撤销范围', async t =>
   const {server,api,ask}=await fixture(t,req=>{
     assert.match(req.system,/勾选消息，核对预览正文和有效期/);
     assert.match(req.system,/读者继续使用原链接，默认沿用原到期时间/);
+    assert.match(req.system,/工具记录默认关闭/);
+    assert.match(req.system,/工具成功也不能证明整个任务完成/);
     assert.match(req.system,/已经读走的副本无法收回/);
     assert.match(req.system,/不代为生成、发送链接/);
     assert.ok(!req.tools.some(name=>name.startsWith('conversation_shar')));
@@ -4716,6 +4718,30 @@ test('Web 和飞书解释摘录分享的确认步骤及撤销范围', async t =>
     await adapter.onMessage(bot.pairingCode,{...owner,messageId:'share-pair'});
     await adapter.onMessage(question,{...owner,messageId:'share-guide'});
     await t.waitFor(()=>assert.ok(sent.includes(answer)));
+  } finally {await server.close();}
+});
+
+test('摘录可预览本轮实际工具回执，公开读取与预览一致', async t => {
+  const {server,api,ask}=await fixture(t,req=>{
+    if (req.lastRole==='user') return call('conversation_status',{},'share-status');
+    assert.equal(req.callId,'share-status');
+    return {role:'assistant',content:'已核对当前对话的状态。'};
+  });
+  try {
+    const text=await ask('核对当前对话的状态。');
+    const reply=server.app.store.list<Message>('messages').find(m=>m.role==='assistant' && m.text===text)!;
+    const selection={conversationId:'main',messageIds:[reply.id]};
+    const plain=await api('/conversation-shares',{action:'preview',...selection});
+    assert.equal(plain.messages[0].tools,undefined);
+    const withTools={...selection,showTools:true};
+    const preview=await api('/conversation-shares',{action:'preview',...withTools});
+    const [tool]=preview.messages[0].tools;
+    assert.equal(tool.name,'conversation_status');
+    assert.equal(tool.status,'succeeded');
+    assert.ok(tool.result);
+    const grant=await api('/conversation-shares',{action:'create',...withTools,previewHash:preview.previewHash});
+    const published=await api('/public/conversation-share',{token:grant.token});
+    assert.deepEqual(published.messages,preview.messages);
   } finally {await server.close();}
 });
 

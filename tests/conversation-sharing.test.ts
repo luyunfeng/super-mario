@@ -81,7 +81,7 @@ test('同一链接编辑保留既有快照，以版本和预览签名原子替�
   const read=(knownRevision?:number)=>host.invocations.use('conversation-sharing.read',{token:created.token!,...(knownRevision && {knownRevision})});
   message('one','改写的原消息');
   const edit={id,revision:1,messageIds:['two','one']};
-  assert.deepEqual((await manage('detail',{id})),{id,revision:1,messageIds:initial.messageIds,expiresAt:created.expiresAt,messages:[{role:'user',text:'原有摘录'},{role:'user',text:'移除的消息'}]});
+  assert.deepEqual((await manage('detail',{id})),{id,revision:1,showTools:false,messageIds:initial.messageIds,expiresAt:created.expiresAt,messages:[{role:'user',text:'原有摘录'},{role:'user',text:'移除的消息'}]});
   const preview=await manage('preview',edit);
   const update=()=>manage('update',{...edit,previewHash:preview.previewHash!});
   await assert.rejects(manage('update',{...edit,expireHours:48,previewHash:preview.previewHash!}),{status:409});
@@ -111,4 +111,63 @@ test('同一链接编辑保留既有快照，以版本和预览签名原子替�
   await manage('revoke',{id,revision:3});
   await assert.rejects(manage('detail',{id}),{status:404});
   await assert.rejects(read(3),{status:404});
+});
+
+test('分享工具按原回合投影并冻结，修改开关即更新同一链接',async t=>{
+  const store=createStore(':memory:'),host=new PluginHost({store,events:createEventBus(store),contributions:createContributions(),dataDir:':memory:'});
+  t.after(async()=>{await host.close();store.close();});
+  host.register(createConversationSharing());await host.start();
+  const base={conversationId:'main',status:'done'};
+  store.put('messages','u',{...base,id:'u',role:'user',directWebInput:true,text:'请找公开词'});
+  store.put('messages','a',{...base,id:'a',role:'assistant',replyTo:'u',text:'助手正文'});
+  const wrap=(details:object)=>JSON.stringify({details,content:[{type:'text',text:JSON.stringify(details)}]});
+  const trace={...base,id:'a',userMessageId:'u',thinkingBlocks:['隐藏推理'],toolCalls:[
+    {name:'current_web_message_search',args:JSON.stringify({query:'公开词',category:'text',before:'隐藏游标'}),result:wrap({hits:[{text:'隐藏的其他消息'}]}),isError:false},
+    {name:'conversation_status',args:'隐藏入参',result:wrap({phase:'working',info:'隐藏字段'}),isError:false},
+    {name:'office_create',args:'隐藏文件',result:'隐藏原始错误',isError:true},
+    {name:'current_web_message_search',args:JSON.stringify({query:'隐藏检索词',category:'text'})},
+    ...Array.from({length:17},()=>({name:'extra',args:'隐藏信息'})),
+  ]};
+  const save=(value:unknown)=>store.put('agent.traces','a',value);
+  save(trace);
+  const manage=(action:string,input:JsonObject={})=>host.invocations.use('conversation-sharing.manage',{action,conversationId:'main',...input}) as Promise<JsonObject>;
+  const baseInput={messageIds:['u','a']};
+  const preview=(input:JsonObject={})=>manage('preview',{...baseInput,...input});
+  const plain=await preview(),input={...baseInput,showTools:true};
+  assert.ok(!JSON.stringify(plain).includes('tools'));
+  await assert.rejects(manage('create',{...input,previewHash:plain.previewHash!}),{status:409});
+  for(const change of [{id:'wrong'},{conversationId:'bot:private'},{projectId:'p'},{userMessageId:'wrong'}]){
+    save({...trace,...change});assert.ok(!JSON.stringify(await preview(input)).includes('tools'));
+  }
+  save(trace);
+  const projected=await preview(input);
+  assert.ok(!JSON.stringify(projected).includes('隐藏'));
+  type Tool={name:string;args?:string;result?:string;status:string};
+  const tools=(projected.messages as {tools?:Tool[]}[])[1]!.tools!;
+  assert.equal(tools.length,21);
+  assert.deepEqual(tools.slice(0,4),[
+    {name:'current_web_message_search',status:'succeeded',args:JSON.stringify({query:'公开词',category:'text'})},
+    {name:'conversation_status',status:'succeeded',result:JSON.stringify({phase:'working'})},
+    {name:'office_create',status:'failed'},
+    {name:'current_web_message_search',status:'unknown',args:JSON.stringify({category:'text'})},
+  ]);
+  save({...trace,toolCalls:Array.from({length:7000},()=>({name:'synthetic_long_tool_record'}))});
+  await assert.rejects(preview(input),{status:400});
+  assert.deepEqual(await preview(),plain);
+  save({...trace,toolCalls:[]});await assert.rejects(manage('create',{...input,previewHash:projected.previewHash!}),{status:409});
+  save(trace);
+  const created=await manage('create',{...input,previewHash:projected.previewHash!}),id=created.id!;
+  const read=()=>host.invocations.use('conversation-sharing.read',{token:created.token!});
+  const edit=async(props:JsonObject)=>manage('update',{...baseInput,...props,id,previewHash:(await preview({...props,id})).previewHash!});
+  assert.equal((await manage('detail',{id})).showTools,true);
+  await host.setEnabled('conversation-sharing',false);await assert.rejects(read());await host.setEnabled('conversation-sharing',true);
+  save({...trace,toolCalls:[{name:'new_tool'}]});
+  await edit({revision:1,messageIds:['a']});
+  assert.ok(JSON.stringify(await read()).includes('office_create'));
+  assert.ok(!JSON.stringify(await read()).includes('公开词'));
+  await edit({revision:2,showTools:false});
+  assert.ok(!JSON.stringify(await read()).includes('tools'));
+  await edit({revision:3,showTools:true});
+  assert.ok(JSON.stringify(await read()).includes('new_tool'));
+  assert.ok(!JSON.stringify(await read()).includes('office_create'));
 });
