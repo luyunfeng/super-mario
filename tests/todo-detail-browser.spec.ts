@@ -47,7 +47,7 @@ async function fixture(t: test.TestContext) {
   const page = await browser.newPage();
   await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
   await page.goto(`${server.url}/#projects/${project.id}/todos?token=${token}`);
-  return { page, todo, runs, checkTodo };
+  return { page, todo, runs, checkTodo, app, previous };
 }
 
 test('待办详情记录及撤回决定，两次显式派单各自使用当时的决定并保留截止日与验收', { timeout: 40000 }, async t => {
@@ -106,4 +106,25 @@ test('待办详情记录及撤回决定，两次显式派单各自使用当时�
   const second = await dispatchDemo();
   assert.ok(!second.executorPrompt.includes(decision), '再次派单的执行器输入应排除已撤回的决定');
   assert.equal(runs().find(run => run.id === first.id)?.output, first.output, '撤回应保留首轮交付记录');
+});
+
+test('等你处理按待办名称打开原详情，回答后两处同步移除', { timeout: 30000 }, async t => {
+  const { page, todo, app, previous } = await fixture(t);
+  const card = app.interactions.open({ kind: 'review', runId: previous.id, title: '核对合成交付', body: '确认列名是否完整' });
+  const chat = new URL('/#chat', page.url()).toString();
+  await page.goto(chat);
+  const selector = '[data-id="interaction:' + card.id + '"]';
+  const globalCard = page.locator('#attention').locator(selector);
+  const link = globalCard.getByRole('link', { name: '查看待办：' + todo.title, exact: true });
+  await expect(link).toHaveAttribute('href', '#projects/' + todo.projectId + '/todos/detail/' + todo.id);
+  await link.click();
+  const scoped = page.getByRole('region', { name: '本事项等你处理' }).locator(selector);
+  await expect(page.getByRole('heading', { name: todo.title, exact: true }).first()).toBeVisible();
+  await expect(scoped.getByRole('link')).toHaveCount(0);
+  await scoped.getByRole('textbox').fill('列名完整');
+  await scoped.getByRole('button', { name: '回答', exact: true }).click();
+  await expect(scoped).toHaveCount(0);
+  await page.goto(chat);
+  await expect(globalCard).toHaveCount(0);
+  assert.equal(app.interactions.list().find(item => item.id === card.id)?.status, 'answered');
 });

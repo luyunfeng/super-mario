@@ -135,7 +135,7 @@ export function createAttention({ api, store, task = false }) {
       detail,
       input && h('div', { class: 'attn__reply' }, input, Button({ label: textAction.label, kind: 'primary', size: 'sm', onClick: () => submit(textAction), dataset: { action: textAction.label } })),
       actions.children.length > 0 && actions, note,
-      item.route && h('a', { class: 'small', href: item.route.href }, item.route.label));
+      item.route && !(task && item.type === 'interaction') && h('a', { class: 'small', href: item.route.href }, item.route.label));
   }
 
   function renderCard(item) {
@@ -168,7 +168,7 @@ export function createAttention({ api, store, task = false }) {
     const selected = Math.max(0, items.findIndex(item => item.id === currentId));
     const offset = Math.floor(selected / limit()) * limit();
     const visible = expanded ? items : items.slice(offset, offset + limit());
-    keyedList(list, visible, item => item.id, renderCard, item => `${item.id}:${item.version}:${item.title}:${item.detail?.length}`);
+    keyedList(list, visible, item => item.id, renderCard);
     more.hidden = minimized || items.length <= limit();
     more.textContent = expanded ? '收起' : `还有 ${items.length - limit()} 件`;
     nextBtn.setAttribute('aria-label', `下一件待处理，共 ${items.length} 件`);

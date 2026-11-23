@@ -24,6 +24,7 @@ import { executionProgress } from './execution-progress.ts';
 import { createTodoDecisions } from './todo-decisions.ts';
 import { createTodoReporting } from './todo-reporting.ts';
 import { readRunBlockers } from './run-blockers.ts';
+import { responsibleSessionTodos } from './responsible-session.ts';
 import { actionTodoLink } from './todo-link.ts';
 import { readTodoHistory } from './todo-history.ts';
 import { createRunReview } from './run-review.ts';
@@ -848,11 +849,21 @@ export async function createWorkbench(config: AppConfig) {
   }
   // A run or its originating message identifies the task. Titles and project membership alone are ambiguous.
   function pendingUserCards() {
+    let responsibleTodo: ReturnType<typeof responsibleSessionTodos> | undefined;
     return interactions.list().filter(card => card.status === 'open' && card.handler === 'user').map(card => {
+      const run = card.runId ? store.get<Run>('runs', card.runId) : undefined;
       const inputId = !card.runId && store.get<{ inputId?: string }>('interaction-origins', card.id)?.inputId;
-      const source = card.runId ? store.get<Run>('runs', card.runId) : inputId ? store.get<Message>('messages', inputId) : undefined;
-      const todoId = source?.projectId === card.projectId ? source?.todoId : undefined;
-      return { ...card, todoId };
+      const source = run ?? (inputId ? store.get<Message>('messages', inputId) : undefined);
+      let todo: Todo | undefined;
+      if (source && source.projectId === card.projectId) {
+        if (source.todoId) todo = store.get<Todo>('todos', source.todoId);
+        else if (run) {
+          responsibleTodo ??= responsibleSessionTodos(store);
+          todo = responsibleTodo(run);
+        }
+      }
+      if (!todo || todo.projectId !== card.projectId) return { ...card, todoId: undefined };
+      return { ...card, todoId: todo.id, route: { href: actionTodoLink(todo).webPath, label: '查看待办：' + todo.title } };
     });
   }
   function readReminderDeliveries(todo: Todo) {

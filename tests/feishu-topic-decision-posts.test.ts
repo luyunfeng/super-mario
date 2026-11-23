@@ -4,14 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 import test from 'node:test';
-import { createTopicDecisionPosts } from '../apps/server/src/feishu-topic-decision-posts.ts';
+import { createTopicPosts } from '../apps/server/src/feishu-topic-posts.ts';
 import { createStore } from '../packages/core/src/store.ts';
 
 test('安静待办首个事件等三秒，按待办合并且一分钟内最多一次；只报有效决定数', async t => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
   const store = createStore(':memory:'); t.after(() => store.close());
   const withdrawn = new Set<string>(), sends: string[][] = [];
-  const service = createTopicDecisionPosts(store, { resolve: todo => ({ inputId:'anchor-' + todo }),
+  const service = createTopicPosts(store, { resolve: todo => ({ inputId:'anchor-' + todo }),
     isCurrent: (_todo, id) => !withdrawn.has(id),
     async send(todo, input, text, key, guard) { guard(); sends.push([todo, input, text, key]); return 'ack-' + sends.length; } });
   service.recover();
@@ -38,7 +38,7 @@ test('外层事务回滚不会发送，切换锚点与异步发送前撤权会�
   let anchor: string | undefined = 'first', valid = true;
   const sends: string[] = [];
   let hook = () => {};
-  const service = createTopicDecisionPosts(store, { settleMs: 3, intervalMs: 10,
+  const service = createTopicPosts(store, { settleMs: 3, intervalMs: 10,
     resolve: () => anchor ? {inputId:anchor} : undefined, isCurrent: () => valid,
     async send(_todo, input, _text, _key, guard) { hook(); guard(); sends.push(input); return 'ack'; } });
   service.recover();
@@ -64,8 +64,8 @@ test('SQLite 重启恢复待发及节流水位，已尝试且未取得平台回�
     async send(_todo: string, _input: string, _text: string, _key: string, guard: () => void) {
       guard(); if (++attempts === 1) return ''; throw new Error('网络中断');
     } };
-  let service = createTopicDecisionPosts(store, opts);
-  async function restart() { await service.close(); store.close(); store = createStore(db); service = createTopicDecisionPosts(store,opts); }
+  let service = createTopicPosts(store, opts);
+  async function restart() { await service.close(); store.close(); store = createStore(db); service = createTopicPosts(store,opts); }
   service.recover(); service.changed('t','first'); t.mock.timers.tick(10); await restart();
   t.mock.timers.tick(5000); await setImmediate(); assert.equal(attempts,0);
   // A repeat during startup cannot arm the restored queue before the bot handshake.
@@ -91,7 +91,7 @@ test('首批在途时新决定独立入队，关闭等待在途回执并保留�
       if (++count === 1) { service.changed('t','two'); await gate; }
       return 'ack-' + count;
     } };
-  let service = createTopicDecisionPosts(store, options);
+  let service = createTopicPosts(store, options);
   service.recover(); service.changed('t','one');
   t.mock.timers.tick(5); await setImmediate();
   t.mock.timers.tick(100); await setImmediate(); assert.equal(count,1);
@@ -99,7 +99,56 @@ test('首批在途时新决定独立入队，关闭等待在途回执并保留�
   const closing = service.close().then(() => { drained = true; });
   await setImmediate(); assert.equal(drained,false);
   resume(); await closing;
-  service = createTopicDecisionPosts(store, options); service.recover();
+  service = createTopicPosts(store, options); service.recover();
   t.mock.timers.tick(1); await setImmediate(); assert.equal(count,2);
   await service.close();
+});
+
+test('恢复旧版本决定队列后，同批合并会话事件并过滤已处理请求', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
+  const store = createStore(':memory:');
+  t.after(() => store.close());
+  store.put('feishu.topic-decision-queues', 'todo', { todoId: 'todo', inputId: 'anchor',
+    decisions: ['old'], due: 2000, lastAttempt: null });
+  const sent: string[] = [];
+  const posts = createTopicPosts(store, { resolve: () => ({ inputId: 'anchor' }),
+    isCurrent: (_, id, kind) => kind !== 'interaction' || id !== 'answered',
+    async send(_, __, text, ___, guard) { guard(); sent.push(text); return 'ack'; } });
+  posts.recover();
+  posts.changed('todo', 'same', 'finished');
+  posts.changed('todo', 'same', 'interaction');
+  posts.changed('todo', 'answered', 'interaction');
+  posts.changed('todo', 'same', 'interaction');
+  t.mock.timers.tick(1000);
+  await setImmediate();
+  assert.deepEqual(sent, ['待办新增 1 项决定。\n负责会话已结束一轮执行。\n负责会话需要主人处理，请到 Web「等你处理」查看。']);
+  posts.changed('todo', 'answered-again', 'interaction');
+  t.mock.timers.tick(59_999);
+  await setImmediate();
+  assert.equal(sent.length, 1);
+  t.mock.timers.tick(1);
+  await setImmediate();
+  assert.equal(sent.length, 2);
+  await posts.close();
+});
+
+test('发送前主人处理了一张卡时，仍有效的决定保留到下一批', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
+  const store = createStore(':memory:');
+  t.after(() => store.close());
+  const sent: string[] = [];
+  let open = true;
+  const posts = createTopicPosts(store, { resolve: () => ({ inputId: 'anchor' }),
+    isCurrent: (_, __, kind) => kind === 'decision' || open,
+    async send(_, __, text, ___, guard) { open = false; guard(); sent.push(text); return 'ack'; } });
+  posts.recover();
+  posts.changed('todo', 'first');
+  posts.changed('todo', 'card', 'interaction');
+  t.mock.timers.tick(3000);
+  await setImmediate();
+  assert.deepEqual(sent, []);
+  t.mock.timers.tick(60_000);
+  await setImmediate();
+  assert.deepEqual(sent, ['待办新增 1 项决定。']);
+  await posts.close();
 });

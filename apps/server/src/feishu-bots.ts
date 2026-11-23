@@ -5,7 +5,9 @@ import { groupTaskPrompt } from '../../../packages/core/src/prompts.ts';
 import { actionTodoLink } from '../../../packages/core/src/todo-link.ts';
 import type { WorkDecision } from '../../../packages/protocol/src/work-decisions.ts';
 import { webTopicDecision } from './feishu-topic-web-decision.ts';
-import { createTopicDecisionPosts } from './feishu-topic-decision-posts.ts';
+import { topicInteractionNotice } from './feishu-topic-interaction-notice.ts';
+import { topicFinishedNotice } from './feishu-topic-finished-notice.ts';
+import { createTopicPosts } from './feishu-topic-posts.ts';
 import { createTopicCompletions } from './feishu-topic-completions.ts';
 import { createTopicTurnResults } from './feishu-topic-turn-results.ts';
 import { createTopicExecutor } from './feishu-topic-executor.ts';
@@ -1958,8 +1960,14 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (app.workDecisions) return webTopicDecision(app.store, app.workDecisions.ledger.get,
       { type: 'work.decision.recorded', data: { id, version: 1, status: 'active' } });
   }
-  const decisionPosts = createTopicDecisionPosts(app.store, {
-    resolve: resolveTopicPost, send: sendTopicPost, isCurrent: (todoId, id) => currentWebDecision(id)?.todoId === todoId,
+  const topicPosts = createTopicPosts(app.store, {
+    resolve: resolveTopicPost, send: sendTopicPost,
+    isCurrent(todoId, id, kind, inputId) {
+      if (kind === 'interaction') return topicInteractionNotice(app.store, id, inputId)?.todoId === todoId;
+      if (kind === 'finished') return id.startsWith('run-result:') &&
+        topicFinishedNotice(app.store, id.slice('run-result:'.length), id)?.todoId === todoId;
+      return currentWebDecision(id)?.todoId === todoId;
+    },
   });
   const taskReports = createGroupTaskReports(app.store, {
     // Completion is confirmed in the workbench. Private discussion, notes and execution logs stay with the owner.
@@ -2522,10 +2530,23 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     })().catch(error => { throw Object.assign(new Error(redact(error)), { delivery: 'unknown' }); }).finally(() => inboxJobs.delete(key));
     inboxJobs.set(key, job); return job;
   }
+  function privateRunNotice(id: unknown) {
+    if (typeof id !== 'string') return false;
+    if (id.startsWith('run-result:')) return true;
+    if (!id.startsWith('interaction-notice:')) return false;
+    const card = app.store.get<Card>('interactions', id.slice('interaction-notice:'.length));
+    return !card || !!card.runId;
+  }
   async function send(botId: string, target: string, text: string, key: string): Promise<void> {
     const bot = current(botId), state = runtime(botId), epoch = state.epoch, adapter = state.adapter;
     const existing = app.mailboxes.list().find(item => item.botId === botId && item.direction === 'outbox' && item.eventKey === key);
     const envelope = existing && app.store.get<Envelope>('feishu.bot.envelopes', existing.id);
+    // A pre-upgrade outbox may still hold private execution output awaiting its first send.
+    if (envelope?.topic && key.startsWith('feishu-reply:')) {
+      let ids;
+      try { ids = JSON.parse(key.slice('feishu-reply:'.length)); } catch { throw noDelivery('话题回复来源无效。'); }
+      if (!Array.isArray(ids) || ids.length !== 4 || privateRunNotice(ids[3])) throw noDelivery('执行详情请在 Web 中查看。');
+    }
     const command = envelope?.command;
     if (!adapter || !text.trim() || !key || !owner(bot) || (target === commandGroup()?.chatId ? !command
       : owner(bot)?.chatId !== target && !envelope?.topic && !bot.groupChats?.some(group => group.chatId === target))) throw noDelivery('机器人未连接、内容为空或目标未配对');
@@ -2731,6 +2752,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (message.role !== 'assistant' || !message.replyTo || !['pending', 'done', 'failed'].includes(message.status ?? '')) return;
     const route = app.store.get<Routed>('message.routes', message.replyTo);
     if (route?.channel !== 'feishu' || !route.botId) return;
+    // The workbench text contains the request, prompt or output. The topic receives a verified status separately.
+    if (route.topic && privateRunNotice(message.id)) return;
     let bot: FeishuBotSettings;
     try { bot = current(route.botId); } catch { return; }
     if (route.accountId !== bot.appId || route.revision !== bot.revision || (bot.scope.kind !== 'unmarked' && !sameBotScope(route.scope, bot.scope))) return;
@@ -2760,9 +2783,18 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   }
   const off = app.events.subscribe(event => {
     if (closed || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) return;
+    if (event.type === 'notifications.message' && typeof event.data.messageId === 'string' && event.data.messageId.startsWith('interaction-notice:')) {
+      const id = event.data.messageId.slice('interaction-notice:'.length);
+      const notice = topicInteractionNotice(app.store, id);
+      if (notice) topicPosts.changed(notice.todoId, id, 'interaction');
+    }
+    if (event.type === 'runs.result' && typeof event.data.runId === 'string' && typeof event.data.messageId === 'string') {
+      const notice = topicFinishedNotice(app.store, event.data.runId, event.data.messageId);
+      if (notice) topicPosts.changed(notice.todoId, notice.eventId, 'finished');
+    }
     if (event.type === 'work.decision.recorded' && app.workDecisions) {
       const decision = webTopicDecision(app.store, app.workDecisions.ledger.get, event);
-      if (decision) decisionPosts.changed(decision.todoId, decision.decisionId);
+      if (decision) topicPosts.changed(decision.todoId, decision.decisionId);
     }
     if (event.type === 'approvals.changed' && typeof event.data.id === 'string') {
       const target = app.store.get<FeishuAgentInputTarget>('feishu.agent-input-targets', event.data.id);
@@ -2875,7 +2907,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         sweepReports();
         void Promise.all([topicReceipts.retryReady(), topicTurnResults.sweep()]).catch(error => { if (!closed) app.events.publish('feishu.changed', { reason: redact(error) }); });
       }, 60_000); reportTimer.unref(); }
-      if (!closed) decisionPosts.recover();
+      if (!closed) topicPosts.recover();
       sweepReports();
       if (!closed) await topicReceipts.sweep();
       if (!closed) await topicTurnResults.sweep();
@@ -2883,13 +2915,13 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     async close() {
       if (closed) return; closed = true;
       if (reportTimer) clearInterval(reportTimer);
-      const reportDrain = taskReports.close(), receiptDrain = topicReceipts.close(), decisionDrain = decisionPosts.close(), completionDrain = topicCompletions.close(), turnDrain = topicTurnResults.close();
+      const reportDrain = taskReports.close(), receiptDrain = topicReceipts.close(), topicPostDrain = topicPosts.close(), completionDrain = topicCompletions.close(), turnDrain = topicTurnResults.close();
       const pinDrain = pins.close(), deletionDrain = deletionCleanup.close();
       await progressStreams.close();
       for (const state of runtimes.values()) state.epoch++;
       await off(); await Promise.all([...runtimes.values()].map(state => state.operations));
       await Promise.allSettled([...runtimes.values()].map(state => state.adapter?.close()));
-      await Promise.allSettled([pinDrain, deletionDrain, reportDrain, receiptDrain, decisionDrain, completionDrain, turnDrain, ...tasks, ...inboxJobs.values(), ...[...relayJobs.values()].map(item => item.job)]);
+      await Promise.allSettled([pinDrain, deletionDrain, reportDrain, receiptDrain, topicPostDrain, completionDrain, turnDrain, ...tasks, ...inboxJobs.values(), ...[...relayJobs.values()].map(item => item.job)]);
     },
     send, dispatchInbox, relay,
     async collect(id: string) {
