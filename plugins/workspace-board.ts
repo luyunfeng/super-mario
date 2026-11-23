@@ -1,3 +1,4 @@
+import {readBoardFlow,type ReviewForRun,type RunBlockers} from './workspace-board-flow.ts';
 import {readBoardActivity,recordBoardActivity} from './workspace-board-activity.ts';
 import { randomUUID } from 'node:crypto';
 import type { Extension, Json, JsonObject, Store } from '../packages/plugin-sdk/src/index.ts';
@@ -116,13 +117,19 @@ function update(store: Store, board: Board, action: keyof typeof fields, input: 
   }
 }
 
-export const workspaceBoard: Extension = {
+export function createWorkspaceBoard(decisionTodoIds:()=>string[],reviewForRun:ReviewForRun,runBlockers:RunBlockers):Extension {
+  return {
   id:'workspace-board',name:'工作区看板',capabilities:['workspace.board'],
   permissions:['store.read','store.write','events.publish','service.provide:workspace-board.manage','contribute:tools'],
   activate({store,provide,events,contribute}) {
+    const flow=(input:JsonObject,limit:number)=>store.transaction(()=>readBoardFlow(store,load(store).cards,input,decisionTodoIds,reviewForRun,runBlockers,limit));
     provide('workspace-board.manage',(raw,signal)=>{
       signal.throwIfAborted();
       const input=object(raw);
+      if (input.action==='flow') {
+        const {action,...query}=input;
+        return flow(query,100);
+      }
       if (input.action==='activity' || input.action==='activity_detail') {
         const {action,...query}=input;
         return readBoardActivity(store,query,action==='activity_detail');
@@ -146,6 +153,12 @@ export const workspaceBoard: Extension = {
       });
       events.publish('workspace-board.changed',{revision:result.revision});
       return result;
+    });
+    contribute('tools','workspace_board_flow',{
+      name:'workspace_board_flow',description:'只读查询动态工作看板。按持久执行、验收和待决定记录归组；区分等待主人决定、失败需排查及尚未验收。',
+      parameters:{type:'object',additionalProperties:false,properties:{archived:{type:'boolean'},query:{type:'string'},machineId:{type:'string'},
+        lane:{type:'string',enum:['needs_you','working','review','planned','idle']},offset:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:100}}},
+      async execute(input,signal){signal.throwIfAborted();return flow(input,25);},
     });
     contribute('tools','workspace_board_activity',{
       name:'workspace_board_activity',description:'只读查询工作区看板活动。可按卡片筛选，以 before 翻页；指定 revision 后以 offset 分页核对这次变更的前后元数据。看板变更不代表执行进度。',
@@ -174,3 +187,4 @@ export const workspaceBoard: Extension = {
     });
   },
 };
+}

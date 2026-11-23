@@ -1,5 +1,6 @@
 import { h, replace } from '../lib/dom.js';
 import { Button, Check, Field, Input, Select } from '../ui/kit.js';
+import { createBoardFlow } from './workspace-board-flow.js';
 import { openWorkspaceBoardHistory } from './workspace-board-history.js';
 import { confirmDialog, openDrawer } from '../ui/overlay.js';
 
@@ -41,7 +42,23 @@ export function openWorkspaceBoard({ api, store, router }) {
   const columnControls = h('div', { class: 'stack' });
   const manage = h('details', {}, h('summary', {}, '管理看板列'), columnControls);
   const controls = h('fieldset', { class: 'stack', style:{border:'0',padding:'0',margin:'0',minWidth:'0'} }, add, h('div', { class: 'row row--wrap' }, search, filter), tools, h('p',{class:'small muted'},'每列先显示置顶卡片。可拖到同一置顶状态的卡片前，或拖到目标列末。移到列末的卡片会排在本组最后。'), cards, manage);
-  const drawer = openDrawer({ title: '工作区看板', wide: true, body: [h('div', { class: 'row row--between' }, message, h('div',{class:'row'},Button({label:'变更历史',size:'sm',onClick:() => history()}),refresh)), controls], onClose: () => { historyDrawer?.close(); removeConfirmation?.close(); unsubscribe(); } });
+  const manualHeader=h('div',{class:'row row--between'},message,h('div',{class:'row'},Button({label:'变更历史',size:'sm',onClick:()=>history()}),refresh));
+  let automatic=false;
+  const flow=createBoardFlow({api,store,router,authorized:()=>authorized(),close:()=>drawer.close()});
+  const manualButton=Button({label:'手工列',size:'sm',onClick:()=>switchView(false)});
+  const flowButton=Button({label:'自动分组',size:'sm',onClick:()=>switchView(true)});
+  manualButton.setAttribute('aria-pressed','true'); flowButton.setAttribute('aria-pressed','false');
+  function switchView(next) {
+    if (!authorized() || automatic===next) return;
+    automatic=next;
+    manualHeader.hidden=controls.hidden=automatic;
+    flowButton.setAttribute('aria-pressed',String(automatic)); manualButton.setAttribute('aria-pressed',String(!automatic));
+    if (automatic) { clearDrag(); flow.show(); }
+    else { flow.hide(); void request(); }
+  }
+  const drawer = openDrawer({ title:'工作区看板',wide:true,body:[h('div',{class:'row'},manualButton,flowButton),manualHeader,controls,flow.el],onClose:()=>{
+    flow.hide(); historyDrawer?.close(); removeConfirmation?.close(); unsubscribe();
+  }});
   const authorized = () => drawer.el.open && api.draftOwner() === owner && workspaceBoardEnabled(api, store);
   const columns = () => board.columns.map(col => [col.id, col.title]);
   const btn = (label, onClick, disabled = false) => Button({ label, onClick, disabled, size: 'sm' });
@@ -243,7 +260,8 @@ export function openWorkspaceBoard({ api, store, router }) {
   let projectSignature = JSON.stringify(store.view.snapshot.projects?.map(p => [p.id,p.name,p.archivedAt]));
   let connection = store.view.connection;
   const unsubscribe = store.subscribe(() => {
-    if (!authorized()) { drawer.close(); return; }
+    if (!authorized()) { flow.hide(); drawer.close(); return; }
+    if (automatic) { flow.update(); return; }
     const reconnected = connection !== 'online' && store.view.connection === 'online';
     connection = store.view.connection;
     if (reconnected && !busy) { void request(); return; }

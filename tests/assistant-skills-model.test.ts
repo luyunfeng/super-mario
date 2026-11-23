@@ -4602,12 +4602,18 @@ test('工作区看板只在主人 Web 主对话和飞书配对私聊提供当前
       if (JSON.stringify(req.content).includes('核对隔离')) {
         assert.ok(!req.tools.includes('workspace_board_read'));
         assert.ok(!req.tools.includes('workspace_board_activity'));
+        assert.ok(!req.tools.includes('workspace_board_flow'));
         assert.doesNotMatch(req.system, /默认查看未归档卡片/);
         return { role: 'assistant', content: '当前无法读取看板。' };
       }
       assert.ok(req.tools.includes('workspace_board_read'));
       assert.match(req.system, /不能据此断言执行成功/);
       assert.match(req.system, /原看板仍打开且版本未变/);
+      if (JSON.stringify(req.content).includes('自动分组')) {
+        assert.ok(req.tools.includes('workspace_board_flow'));
+        assert.match(req.system, /手工列名不是执行状态/);
+        return call('workspace_board_flow', {lane:'planned',query:'合成下一步'}, 'flow');
+      }
       if (JSON.stringify(req.content).includes('何时移列')) {
         assert.ok(req.tools.includes('workspace_board_activity'));
         assert.match(req.system, /先查摘要，再用 revision 读详情/);
@@ -4617,6 +4623,12 @@ test('工作区看板只在主人 Web 主对话和飞书配对私聊提供当前
     }
     const payload = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
     const result = JSON.parse(payload);
+    if (req.callId === 'flow') {
+      assert.equal(result.items.length,1);
+      const item=result.items[0];
+      assert.equal(item.kind,'todo');assert.equal(item.lane,'planned');assert.ok(item.reason);
+      return {role:'assistant',content:'计划中的待办是'+item.title+'。'};
+    }
     if (req.callId === 'find-card') {
       assert.equal(result.cards[0].id, cardId);
       return call('workspace_board_activity', {cardId:result.cards[0].id}, 'history');
@@ -4646,6 +4658,8 @@ test('工作区看板只在主人 Web 主对话和飞书配对私聊提供当前
     const added = await api('/workspace-board', {action:'add_card', projectId:project.id, columnId:'todo', revision:board.revision});
     cardId = added.cards[0].id;
     await api('/workspace-board', {action:'batch_cards',revision:added.revision,changes:[{id:cardId,columnId:'doing'}]});
+    await api('/todos',{projectId:project.id,title:'合成下一步待办'});
+    assert.equal(await ask('按自动分组查计划中的合成下一步'), '计划中的待办是合成下一步待办。');
     assert.equal(await ask('合成工作区何时移列？'),historyAnswer);
     assert.equal(await ask('工作区看板进行中有哪些项目？'), answer);
     const bot = await api('/feishu/bots', {name:'看板助手',appId:'cli_1111111111111111',appSecret:'fixture',
@@ -4654,6 +4668,8 @@ test('工作区看板只在主人 Web 主对话和飞书配对私聊提供当前
     await adapter.onMessage(bot.pairingCode, {...owner,messageId:'pair-board'});
     await adapter.onMessage('看板进行中有哪些项目？', {...owner,messageId:'board'});
     await t.waitFor(() => assert.ok(sent.includes(answer)));
+    await adapter.onMessage('按自动分组查计划中的合成下一步', {...owner,messageId:'board-flow'});
+    await t.waitFor(() => assert.ok(sent.includes('计划中的待办是合成下一步待办。')));
     await adapter.onMessage('合成工作区何时移列？', {...owner,messageId:'board-history'});
     await t.waitFor(() => assert.ok(sent.includes(historyAnswer)));
     assert.equal(await ask('核对隔离','/projects/'+project.id+'/messages'),'当前无法读取看板。');

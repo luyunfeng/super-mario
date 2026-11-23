@@ -35,7 +35,7 @@ export { officeWorkerGuide } from './office/guide.ts';
 export { createOfficeDocuments, officeDocuments } from './office/index.ts';
 export { assistantProfile } from './assistant-profile.ts';
 export { projectInstructions } from './project-instructions.ts';
-export { workspaceBoard } from './workspace-board.ts';
+export { createWorkspaceBoard } from './workspace-board.ts';
 export { savedPrompts } from './saved-prompts.ts';
 // Draft text is owned by the browser. The host only advertises the user's plugin setting.
 export const conversationEdit: Extension = {

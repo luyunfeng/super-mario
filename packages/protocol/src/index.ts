@@ -4,7 +4,7 @@ import type { ExecutionUsage } from './execution-usage.ts';
 export { executionUsage, type ExecutionUsage } from './execution-usage.ts';
 export type { PersonalAiMessage } from "./personal-ai.ts";
 export type { InboxConversation, InboxMatter, InboxFallbackInput, InboxFallbackPlan } from './inbox-conversations.ts';
-export type { TodoHistory, TodoExecutionRound } from './todo-history.ts';
+export type { TodoHistory, TodoExecutionRound, ExecutionReviewEvidence } from './todo-history.ts';
 export type { ScheduledWorkInput, ScheduledWorkTiming, ScheduledWorkAction, ScheduledWorkScope, ScheduledWorkRecord, ScheduledWorkOccurrence } from './scheduled-work.ts';
 export { CODEX_MODEL_CONFIG, codexModelConfig, codexConfigArgs, codexTextItem } from './codex-model-policy.ts';
 export type { InboxHandlingRef, InboxHandlingSource, InboxHandlingAction, InboxHandlingView, InboxHandlingRequest, InboxHandlingState, InboxSuggestion } from './inbox-handling.ts';

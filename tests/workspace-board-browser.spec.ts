@@ -130,3 +130,33 @@ test('批量移动非连续卡后撤销还原原序，另一窗口调序立即�
   await expect(original).toHaveText(links([names[3],names[2],names[1]]));
   assert.deepEqual((await post({action:'list'})).cards.filter(c=>c.columnId==='doing').map(c=>c.title),[names[0]]);
 });
+
+test('项目看板自动分组按工作状态和查询筛选，点击待办进入原详情', {timeout:30000},async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'mario-board-lanes-'));
+  const server=await startServer({host:'127.0.0.1',port:0,dataDir,token:'fixture',demo:true});
+  t.after(async()=>{try{await server.close();}finally{await rm(dataDir,{recursive:true,force:true});}});
+  const project=await server.app.createProject({name:'合成工作台'});
+  const one=server.app.createTodo({title:'合成计划交接'});
+  server.app.createTodo({title:'合成计划复核'});
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(()=>browser.close());
+  const page=await browser.newPage();
+  await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  await page.goto(server.url+'/#projects/'+project.id+'/workspace?token=fixture');
+  await page.getByRole('button',{name:'工作区看板',exact:true}).click();
+  const board=page.getByRole('dialog',{name:'工作区看板'});
+  await board.getByRole('button',{name:'自动分组',exact:true}).click();
+  await board.getByLabel('工作状态',{exact:true}).selectOption('planned');
+  await board.getByLabel('筛选自动分组',{exact:true}).fill('合成计划');
+  const planned=board.getByRole('region',{name:'待办',exact:true});
+  await expect(planned.getByRole('link',{name:/^打开待办 /})).toHaveCount(2);
+  server.app.createTodo({title:'合成计划新增检查'});
+  await expect(planned.getByRole('link',{name:/^打开待办 /})).toHaveCount(3);
+  await board.getByLabel('筛选自动分组',{exact:true}).fill('交接');
+  const target=planned.getByRole('link',{name:'打开待办 '+one.title,exact:true});
+  await expect(planned.getByRole('link')).toHaveCount(1);
+  await target.click();
+  await expect(board).toBeHidden();
+  await expect(page).toHaveURL(new RegExp('/todos/detail/'+one.id+'$'));
+  await expect(page.getByRole('heading',{name:one.title,exact:true})).toBeVisible();
+});
