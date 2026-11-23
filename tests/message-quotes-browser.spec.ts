@@ -24,7 +24,7 @@ test('主对话和项目工作会话独立恢复引用，发送时逐行引用�
   await expect.poll(() => server.machines.list().some(m => m.id === machineId && m.online)).toBe(true);
   const project = await server.app.createProject({ name: '合成引用项目', workspace: { machineId, cwd } });
   const projectConversation = 'project:' + project.id + ':work';
-  const mainOriginal = '本周结论\n**原始格式**仍保留。', projectOriginal = '工作记录\n第二项已核对。';
+  const mainOriginal = '本周结论\u2028**原始格式**仍保留。\u2029补充条件。', projectOriginal = '工作记录\n第二项已核对。';
   const seed = (message: Omit<Message, 'createdAt' | 'status'>) => server.app.store.put('messages', message.id, {
     ...message, createdAt: new Date().toISOString(), status: 'done',
   });
@@ -79,13 +79,13 @@ test('主对话和项目工作会话独立恢复引用，发送时逐行引用�
   assert.deepEqual(sent('main'), []);
   assert.deepEqual(sent(projectConversation), []);
   await chat.getByRole('button', { name: '发送', exact: true }).click();
-  await expect.poll(() => sent('main')).toEqual(['> 本周结论\n> **原始格式**仍保留。\n\n请补充依据。']);
+  await expect.poll(() => sent('main')).toEqual(['> 本周结论\n> **原始格式**仍保留。\n> 补充条件。\n\n请补充依据。']);
   await expect(mainPreview).toBeHidden();
   const mainDetails = chat.locator('.msg--user details.message-quote');
   await expect(mainDetails.locator('p')).toBeHidden();
   await mainDetails.locator('summary').click();
   await expect(mainDetails.locator('p')).toBeVisible();
-  assert.equal(await mainDetails.locator('p').textContent(), mainOriginal);
+  assert.equal(await mainDetails.locator('p').textContent(), '本周结论\n**原始格式**仍保留。\n补充条件。');
   await page.goto(projectUrl);
   await expect(workPreview).toContainText('工作记录');
   await workspace.getByRole('button', { name: '发送目标', exact: true }).click();

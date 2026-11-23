@@ -190,7 +190,7 @@ export function createMessageQuote({ drafts, input, store, router, scope }) {
   function compose(raw, text) {
     const quote = decode(raw);
     if (!quote) return text;
-    const quoted = passage => passage.split(/\r\n|\r|\n/).map(line => '> ' + line).join('\n');
+    const quoted = passage => passage.split(/\r\n|[\r\n\u0085\u2028\u2029]/u).map(line => '> ' + line).join('\n');
     return [quote.text && quoted(quote.text), ...quote.comments.map((item, index) =>
       quoted(item.text) + '\n\n批注 ' + (index + 1) + '：' + item.note), text].filter(Boolean).join('\n\n');
   }
