@@ -42,6 +42,9 @@ export function createChatPage({ api, store, scope, router }) {
   const recent = createRecentWork({ api, store, router, scope });
   const banner = h('div', { id: 'chat-banner' });
   const decisionNotice = h('div', { role: 'status', hidden: true });
+  const messageStatus = h('span');
+  const messageNotice = h('div', { role: 'status', hidden: true }, messageStatus, ' · ',
+    h('a', { href: router.href('chat') }, '返回最新消息'));
   const decisionLabels = { approval: '审批', interaction: '交互请求', plan: '计划', mailbox: '信件', inbox: '收件' };
   let pendingDecision = '';
   function revealDecision() {
@@ -64,7 +67,7 @@ export function createChatPage({ api, store, scope, router }) {
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '对话'), h('p', { class: 'page__sub' }, hintCopy('nav.chat').tag)),
         h('div', { class: 'page__actions' }, favorites.button, transcript.button, officeDocumentsButton({ api, store }), code.toggle, Hint('nav.chat'))),
-      banner, decisionNotice, attention.el, setup, runStrip));
+      banner, decisionNotice, messageNotice, attention.el, setup, runStrip));
   const scroller = h('div', { class: 'chat__scroll', id: 'chat-scroll' }, h('div', { class: 'chat__inner' }, messages, hero));
 
   // —— 输入框 ——
@@ -142,31 +145,37 @@ export function createChatPage({ api, store, scope, router }) {
   let snapshot = null;
   let assistantLabel = '主 Agent';
   let lastCount = 0;
-  let pendingMessage = '';
+  let focusMessage = false;
   let scrollFrame;
   let markedMessage;
 
   function revealMessage() {
     if (!snapshot || router.current.page !== 'chat') return;
-    const canLocate = router.current.query.has('favorite') ? messageFavoritesActive(store) : conversationSearchActive(snapshot);
-    if (!canLocate) {
+    const query = router.current.query;
+    const id = query.get('favorite') || query.get('at');
+    const favorite = Boolean(query.get('favorite'));
+    const available = favorite ? messageFavoritesActive(store) : conversationSearchActive(snapshot);
+    const row = id && available ? messages.querySelector(`[data-id="${CSS.escape(id)}"]`) : null;
+    const reason = !id || row ? '' : available ? '当前主对话中找不到这条消息。'
+      : `「${favorite ? '消息收藏' : '对话历史搜索'}」插件当前不可用，无法定位原消息。`;
+    if (messageStatus.textContent !== reason) messageStatus.textContent = reason;
+    messageNotice.hidden = !reason;
+    if (markedMessage !== row) {
       markedMessage?.classList.remove('is-search-hit');
-      markedMessage = undefined;
-      if (pendingMessage) scrollToEnd(true);
-      pendingMessage = '';
-      return;
+      markedMessage = row;
+      row?.classList.add('is-search-hit');
     }
-    if (!pendingMessage) return;
-    const row = messages.querySelector(`[data-id="${CSS.escape(pendingMessage)}"]`);
-    if (!row) return;
-    pendingMessage = '';
-    cancelAnimationFrame(scrollFrame);
-    markedMessage?.classList.remove('is-search-hit');
-    markedMessage = row;
-    row.classList.add('is-search-hit');
-    row.tabIndex = -1;
-    row.focus({ preventScroll: true });
-    row.scrollIntoView({ block: 'center' });
+    if (!focusMessage) return;
+    if (!available) {
+      focusMessage = false;
+      scrollToEnd(true);
+    } else if (row) {
+      focusMessage = false;
+      cancelAnimationFrame(scrollFrame);
+      row.tabIndex = -1;
+      row.focus({ preventScroll: true });
+      row.scrollIntoView({ block: 'center' });
+    }
   }
 
   function autosize() { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 200)}px`; }
@@ -333,10 +342,9 @@ export function createChatPage({ api, store, scope, router }) {
       pendingDecision = decisionId ? decisionType + ':' + decisionId : '';
       decisionNotice.hidden = true;
       revealDecision();
-      pendingMessage = route.query.get('favorite') || route.query.get('at') || '';
-      markedMessage?.classList.remove('is-search-hit');
-      if (pendingMessage) revealMessage();
-      else scrollToEnd(true);
+      focusMessage = Boolean(route.query.get('favorite') || route.query.get('at'));
+      revealMessage();
+      if (!route.query.has('favorite') && !route.query.has('at')) scrollToEnd(true);
     },
     focus() { input.focus(); },
     onState({ snapshot: state, attention: items }) {

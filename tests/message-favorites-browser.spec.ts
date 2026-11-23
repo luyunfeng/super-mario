@@ -116,6 +116,8 @@ test('主对话与项目消息可收藏，下载的备份可预览并恢复，�
   await expect(projectLog.getByRole('button', { name: /收藏/ })).toHaveCount(0);
   await page.goto(server.url + '/#chat');
   await expect(main).toContainText(mainText);
+  await page.goto(server.url + '/#chat?favorite=main-favorite');
+  await expect(page.getByText('「消息收藏」插件当前不可用，无法定位原消息。')).toBeVisible();
   await expect(open).toHaveCount(0);
   await expect(main.getByRole('button', { name: /收藏/ })).toHaveCount(0);
   await page.getByRole('button', { name: '插件配置', exact: true }).click();

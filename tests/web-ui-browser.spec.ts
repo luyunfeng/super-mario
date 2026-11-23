@@ -121,6 +121,7 @@ test('全局搜索从历史正文定位主对话消息，并隔离其他会话�
     await post('/plugins/conversation-search', { enabled: false });
     await expect(hits).toHaveCount(0);
     await expect(target).not.toHaveClass(/is-search-hit/);
+    await expect(page.getByText('「对话历史搜索」插件当前不可用，无法定位原消息。')).toBeVisible();
     await post('/projects', { name: 'needle 示例项目' });
     await expect(hits).toHaveCount(1);
     await expect(hits.first()).toHaveText('needle 示例项目');
@@ -130,6 +131,16 @@ test('全局搜索从历史正文定位主对话消息，并隔离其他会话�
     await post('/plugins/conversation-search', { enabled: true });
     await search.fill('needle');
     await expect(hits).toHaveCount(3);
+    await expect(target).toHaveClass(/is-search-hit/);
+    server.app.store.remove('messages', 'old-answer');
+    server.app.events.publish('messages.changed', { conversationId: 'main', messageId: 'old-answer' });
+    const missing = page.getByText('当前主对话中找不到这条消息。');
+    await expect(missing).toBeVisible();
+    await page.reload();
+    await expect(missing).toBeVisible();
+    await page.locator('#chat').getByRole('link', { name: '返回最新消息', exact: true }).click();
+    await expect(page).toHaveURL(/#chat$/);
+    await expect(missing).toBeHidden();
     assert.deepEqual(errors, []);
   });
 });
