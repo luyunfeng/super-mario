@@ -1,0 +1,52 @@
+import assert from 'node:assert/strict';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import test from 'node:test';
+import {chromium,expect} from '@playwright/test';
+import {startServer} from '../apps/server/src/index.ts';
+
+test('独立管理页首次设置、登录、改密、退出，只向一次本机领码请求发工作台令牌',{timeout:40000},async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'mario-admin-')),token='synthetic-workspace-root';
+  const server=await startServer({host:'127.0.0.1',port:0,dataDir,demo:true,token});
+  t.after(async()=>{await server.close();await rm(dataDir,{recursive:true,force:true});});
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});t.after(()=>browser.close());
+  const owner=await browser.newContext(),other=await browser.newContext();
+  await owner.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  const page=await owner.newPage(),manual=await other.newPage(),adminUrl=server.url+'/admin.html';
+  await manual.goto(adminUrl);await expect(manual.getByLabel('首次设置码')).toBeVisible();
+  await expect(manual.getByRole('button',{name:'在本机获取设置码'})).toBeHidden();
+  const authPaths:string[]=[];let manualStateReads=0;
+  await manual.clock.install();
+  for(const p of [page,manual])p.on('request',r=>{
+    if(!r.url().includes('/api/v1/admin/'))return;
+    if(p===manual && r.url().endsWith('/admin/state'))manualStateReads++;
+    if(r.headers().authorization){authPaths.push(new URL(r.url()).pathname);assert.equal(r.headers().authorization,'Bearer '+token);}
+    assert.ok(!r.url().includes(token));assert.ok(!r.url().includes('synthetic-password'));
+    if(/\/(password|logout)$/.test(r.url()))assert.ok(r.headers()['x-csrf-token']);
+  });
+  await page.goto(server.url+'/#agent/advanced?token='+token);await page.getByRole('link',{name:'管理员登录'}).click();
+  assert.equal(page.url(),adminUrl);await page.getByRole('button',{name:'在本机获取设置码'}).click();
+  const code=page.getByLabel('首次设置码');await expect(code).toHaveValue(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+  const setupCode=await code.inputValue(),p1='synthetic-password-one',p2='synthetic-password-two';
+  await manual.getByLabel('首次设置码').fill(setupCode);
+  await manual.getByLabel('管理员密码',{exact:true}).fill(p1);
+  await manual.getByLabel('确认管理员密码').fill(p1+'x');await manual.getByRole('button',{name:'设置管理员密码'}).click();
+  await expect(manual.getByRole('alert')).toContainText('不一致');
+  await manual.getByLabel('确认管理员密码').fill(p1);await manual.getByRole('button',{name:'设置管理员密码'}).click();
+  await expect(manual.getByRole('heading',{name:'管理员会话'})).toBeVisible();await expect(manual.locator('dl')).toContainText('0.1.0');
+  const readCount=manualStateReads;await manual.clock.fastForward(30000);assert.equal(manualStateReads,readCount);
+  await page.reload();await expect(page.getByRole('heading',{name:'管理员登录'})).toBeVisible();
+  await page.getByLabel('管理员密码',{exact:true}).fill(p1);await page.getByRole('button',{name:'登录',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'管理员会话'})).toBeVisible();
+  await page.getByLabel('当前密码').fill(p1);await page.getByLabel('新密码',{exact:true}).fill(p2);
+  await page.getByLabel('确认新密码').fill(p2);await page.getByRole('button',{name:'保存新密码'}).click();
+  await expect(page.getByLabel('当前密码')).toHaveValue('');
+  await manual.reload();await expect(manual.getByRole('heading',{name:'管理员登录'})).toBeVisible();
+  await page.getByRole('button',{name:'退出管理员'}).click();await expect(page.getByRole('heading',{name:'管理员登录'})).toBeVisible();
+  await page.getByLabel('管理员密码',{exact:true}).fill(p1);await page.getByRole('button',{name:'登录',exact:true}).click();await expect(page.getByRole('alert')).toContainText('密码');
+  await page.getByLabel('管理员密码',{exact:true}).fill(p2);await page.getByRole('button',{name:'登录',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'管理员会话'})).toBeVisible();
+  const stored=await page.evaluate(()=>JSON.stringify([localStorage,sessionStorage]));assert.ok(!stored.includes(p1) && !stored.includes(p2) && !stored.includes(setupCode));
+  assert.deepEqual(authPaths,['/api/v1/admin/setup-code']);
+});

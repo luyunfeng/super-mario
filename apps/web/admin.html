@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>管理员 · Super Mario</title>
+  <link rel="icon" href="/favicon.svg">
+  <link rel="stylesheet" href="/css/base.css">
+  <link rel="stylesheet" href="/css/components.css">
+  <style>
+    main { max-width: 36rem; margin: 0 auto; padding: clamp(1.5rem, 7vw, 4rem) 1rem; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: 1rem; }
+    h1 { font-size: clamp(1.5rem, 4vw, 2rem); }
+    [role="alert"]:empty { display: none; }
+  </style>
+  <script type="module" src="/js/admin.js"></script>
+</head>
+<body>
+  <main>
+    <header><h1>管理员</h1><a class="btn btn--sm" href="/">返回工作台</a></header>
+    <p id="admin-error" role="alert"></p>
+    <section class="card card__body" id="admin-view" aria-live="polite"><p>正在读取登录状态…</p></section>
+    <noscript>请启用 JavaScript 以登录管理页。</noscript>
+  </main>
+</body>
+</html>

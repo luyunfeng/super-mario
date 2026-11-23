@@ -1,3 +1,5 @@
+import {createAdminAuth} from './admin-auth.ts';
+import {createAdminRoutes} from './admin-routes.ts';
 import {proofForBrowserToken} from '../../../plugins/browser-devices.ts';
 import {createBrowserAccess,pairingQR} from './browser-access.ts';
 import { privateThreadPage, searchPrivateThreads } from './feishu-thread-history.ts';
@@ -98,6 +100,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
   const artifacts = createAgentArtifacts({ store: app.store, events: app.events, machines: () => machines });
   const gateway = createFeishuGateway(app, config, dependencies);
   const { feishu, personal, personalAi, personalAiView, configurePersonalAi, personalView, bots, registrations, registrationView, proposeMail } = gateway;
+  const adminRoutes=createAdminRoutes(createAdminAuth(app.store),config.token,body,json);
   const browserAccess=createBrowserAccess(config.token,token=>app.browserDevices.authenticate(token));
   app.setBrowserDeviceInvalidator(browserAccess.invalidate);
   function devicePlugin() {
@@ -111,6 +114,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       const url = new URL(req.url ?? '/', 'http://localhost');
       const path = url.pathname;
       if (path === '/api/health' || path === '/api/v1/health') return json(res, 200, { ok: true, version: '0.1.0' });
+      if(path.startsWith('/api/v1/admin/'))return await adminRoutes(req,res,path);
       if(path==='/api/v1/public/browser-pair'){
         if(req.method!=='POST')throw new InputError('设备配对需要 POST',405);
         res.setHeader('cache-control','no-store');res.setHeader('referrer-policy','no-referrer');
@@ -1330,7 +1334,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         contentType = path.endsWith('.css') ? 'text/css' : 'text/javascript';
       } else {
         const relative = path === '/' ? 'index.html' : path === '/share' ? 'share.html' : path.slice(1);
-        if (relative === 'share.html') {
+        if (relative === 'share.html' || relative === 'admin.html') {
           res.setHeader('cache-control','no-store');
           res.setHeader('referrer-policy','no-referrer');
           res.setHeader('content-security-policy',"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");

@@ -51,6 +51,19 @@ test('JSON boundary rejects functions/classes/cycles; registration only allows n
   assert.equal(f.host.list().find(p=>p.id==='bad-json')?.status,'failed');assert.equal(f.contributions.points().some(p=>p.id==='bad-json.data'),false);
   assert.throws(()=>f.contributions.add('tools','bad',{name:'bad',parameters:{x:()=>{}},execute:async()=>null}as any),/JSON/);
 });
+test('plugins with store permissions cannot read or change administrator credentials',async t=>{
+  const f=await fixture(t);
+  let context!:ExtensionContext;
+  f.host.register({id:'store-client',name:'Store client',capabilities:[],permissions:['store.read','store.write'],activate(c){context=c;}});
+  await f.host.start();
+  const collection='core.admin-auth.sessions';
+  f.store.put(collection,'sample',{synthetic:true});
+  for (const operation of [
+    ()=>context.store.get(collection,'sample'), ()=>context.store.list(collection),
+    ()=>context.store.put(collection,'sample',{}), ()=>context.store.remove(collection,'sample'),
+  ]) assert.throws(operation,/Reserved host collection/);
+  assert.deepEqual(f.store.get(collection,'sample'),{synthetic:true});
+});
 test('wrappers cannot call downstream twice or after timing out; after failures report unknown',async t=>{
   const f=await fixture(t);let calls=0;let delayed: (()=>Promise<unknown>)|undefined;
   f.host.register({id:'service',name:'Service',capabilities:[],activate(c){c.provide('service.echo',()=>{calls++;return 'ok';});c.wrap('service.echo',async(i,next)=>{await next(i);return next(i);});c.hook('knowledge.put','after',()=>{throw new Error('after failed');});}});await f.host.start();

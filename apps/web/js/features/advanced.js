@@ -34,7 +34,7 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
 
   const el = h('details', { class: 'fold', id: 'agent-advanced' },
     h('summary', null, '高级：插件与排查'),
-    h('div', { class: 'fold__body' }, plugins, files, events, ui, diagnostics));
+    h('div', { class: 'fold__body' }, plugins, h('a',{class:'btn btn--sm',href:'/admin.html'},'管理员登录'), files, events, ui, diagnostics));
 
   function paint(snapshot) {
     examplesButton.hidden=!snapshot.plugins?.some(p=>p.id==='assistant-card-examples' && p.status==='active');

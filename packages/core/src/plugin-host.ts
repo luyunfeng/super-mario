@@ -241,16 +241,21 @@ export class PluginHost {
       since: id => { permission('events.read'); return this.options.events.since(id); },
       subscribe: listener => { assertLive(); permission('events.subscribe'); return own(this.options.events.subscribe(listener)); },
     };
+    // Host authentication records live in the same SQLite file, outside the plugin store API.
+    function pluginCollection(name:string) {
+      if (typeof name !== 'string' || name.startsWith('core.admin-auth.')) throw new Error('Reserved host collection');
+      return name;
+    }
     const backing = this.options.store;
     const store: Store = {
       ...(backing.lastMessagePosition && {lastMessagePosition:() => { permission('store.read'); return backing.lastMessagePosition!(); }}),
       ...(backing.messagesAfterPosition && {messagesAfterPosition:<T>(after:number,limit:number) => {
         permission('store.read'); return backing.messagesAfterPosition!<T>(after,limit);
       }}),
-      get: (collection, id) => { permission('store.read'); return this.options.store.get(collection, id); },
-      list: collection => { permission('store.read'); return this.options.store.list(collection); },
-      put: (collection, id, value) => { permission('store.write'); assertJson(value); this.options.store.put(collection, id, value); },
-      remove: (collection, id) => { permission('store.write'); return this.options.store.remove(collection, id); },
+      get: (collection, id) => { permission('store.read'); return this.options.store.get(pluginCollection(collection), id); },
+      list: collection => { permission('store.read'); return this.options.store.list(pluginCollection(collection)); },
+      put: (collection, id, value) => { permission('store.write'); assertJson(value); this.options.store.put(pluginCollection(collection), id, value); },
+      remove: (collection, id) => { permission('store.write'); return this.options.store.remove(pluginCollection(collection), id); },
       transaction: action => { permission('store.write'); return this.options.store.transaction(action); },
       close: () => { throw new Error('Plugins cannot close the shared store'); },
     };
