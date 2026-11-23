@@ -100,7 +100,7 @@ function decisionSection(api, todo, valid) {
   function paint() {
     replace(list, decisions.length ? decisions.map(item => h('div', { class: 'item' },
       h('div', { class: 'item__main' }, h('span', null, item.text),
-        h('span', { class: 'item__meta' }, [item.source === 'answer' ? '来自答复' : '手工记录', item.sourceId ?? item.id, item.active ? '生效中' : '已撤回'].join(' · '))),
+        h('span', { class: 'item__meta' }, [item.source === 'answer' ? '来自答复' : item.source === 'topic' ? '飞书话题' : '手工记录', item.sourceId ?? item.id, item.active ? '生效中' : '已撤回'].join(' · '))),
       item.active && Button({ label: '撤回', size: 'sm', onClick: () => change(path + '/' + encodeURIComponent(item.id) + '/withdraw', {}) })
     )) : '暂无决策');
   }
