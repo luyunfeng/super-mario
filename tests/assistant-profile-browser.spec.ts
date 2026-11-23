@@ -98,7 +98,6 @@ test('Agent 页修改主助手名称后同步到已有气泡，并发冲突保�
   await expect(brief).toContainText('生成时间');
   await brief.getByRole('button', { name: '关闭', exact: true }).click();
   const pending = first.locator('#agent-scheduled-work article').filter({ hasText: '待批准简报' });
-  await pending.locator('summary').click();
   await pending.getByRole('link', { name: '查看待处理审批' }).click();
   const selected = first.locator('#attention article').filter({ hasText: '待批准简报' });
   await expect(selected).toBeFocused();

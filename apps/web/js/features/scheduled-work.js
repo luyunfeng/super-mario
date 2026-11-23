@@ -132,7 +132,6 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       h('div', { class: 'fold__body' },
         line(`来源消息：${item.source?.messageId ?? '未提供'} · ${timeText(item.source?.createdAt)}`),
         line(`创建审批：${item.approvalId} · ${approvalText(item.approvalStatus)}`),
-        item.approvalStatus === 'pending' && approvalLink(item.approvalId),
         item.action.kind === 'dispatch' && line(`执行者：${item.action.executorId} · 工作目录：${item.action.cwd ?? '默认'}`),
         history.map(o => renderOccurrence(item, o)),
         item.occurrencesTruncated && line(`最近记录已截断：显示 ${history.length} 条，共 ${item.occurrenceTotal} 条。`),
@@ -154,7 +153,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       line(`最新实际结果：${latest ? occurrenceText(latest) : '尚无到期动作记录'}`),
       item.action.kind === 'brief' && line('事实简报仅程序汇总已接入事实，不自动调用模型或外发。'),
       line('上次动作结果未知或派发审批待批准时，暂停生成新动作。取消计划不会终止已派发的任务。'),
-      h('div', { class: 'row row--wrap' }, chatLink(),
+      h('div', { class: 'row row--wrap' }, item.approvalStatus === 'pending' && item.approvalId ? approvalLink(item.approvalId) : chatLink(),
         item.action.kind === 'dispatch' && Button({ label: '查看执行要求', size: 'sm', onClick: () => {
           if (syncIdentity()) { requestRead(); return; }
           const action = item.action;
@@ -434,7 +433,8 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
         const approval = await api.post('/scheduled-work', payload);
         if (!drawer.active()) return;
         submitted = true;
-        replace(message, Banner({ children: h('div', null, `已提交创建审批 · ${approvalText(approval.status)} · ${approval.id}。请到对话确认后才生效。`, chatLink()) }));
+        replace(message, Banner({ children: h('div', null, `已提交创建审批 · ${approvalText(approval.status)} · ${approval.id}。`,
+          approval.status === 'pending' && approval.id ? approvalLink(approval.id, () => drawer.close()) : chatLink()) }));
         for (const input of form.querySelectorAll('input, select, textarea, fieldset button')) input.disabled = true;
         requestRead();
       } catch (cause) {

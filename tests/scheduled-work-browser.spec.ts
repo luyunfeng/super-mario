@@ -87,7 +87,7 @@ test('创建每天事实简报：预览与真实 body 一致，只提交审批�
   assert.equal(f.writes.length, 0);
   await submit(page);
   await expect(drawer(page)).toContainText('已提交创建审批 · 待批准');
-  await expect(drawer(page).getByRole('link', { name: '去对话核对与确认' })).toHaveAttribute('href', '#chat');
+  await expect(drawer(page).getByRole('link', { name: '查看待处理审批' })).toHaveAttribute('href', '#chat?approval=new-approval');
   assert.deepEqual(f.writes, [{ path: '/scheduled-work', body: expected }]);
   await expect(drawer(page).getByRole('button', { name: '提交创建审批' })).toBeDisabled();
 }));
@@ -95,7 +95,7 @@ test('创建每天事实简报：预览与真实 body 一致，只提交审批�
 test('现有创建审批生效、单次已触发与到期派发审批 pending/completed/unknown 分开显示', { timeout: 30000 }, async () => fixture(async f => {
   const { page } = f;
   await expect(panel(page)).toContainText('待创建确认');
-  await expect(panel(page).getByRole('link')).toHaveAttribute('href', '#chat');
+  await expect(panel(page).getByRole('link', {name:'查看待处理审批'})).toHaveAttribute('href', '#chat?approval=creation-one');
   for (const approvalStatus of ['pending', 'completed', 'unknown']) {
     f.items = [work({ status: 'active', approvalStatus: 'completed', scheduleStatus: 'done', schedule: { kind: 'once', at }, action: { kind: 'dispatch', executorId: 'real-cli' }, occurrences: [{ key: 'o', kind: 'dispatch', status: 'completed', scheduledFor: at, approvalId: 'dispatch-one', approvalStatus }], occurrenceTotal: 30, occurrencesTruncated: true })];
     await emit(page);
