@@ -4,6 +4,8 @@ import { scheduledWorkTemplates } from './scheduled-work-templates.ts';
 import { setTimeout } from 'node:timers/promises';
 import type { Executor, Extension, ExtensionContext, KnowledgeBackend, KnowledgeQuery, Tool } from '../packages/plugin-sdk/src/index.ts';
 import type { ExecutionProgress, InboxTriageInput, Json, JsonObject, Run, RunBlocker, Todo } from '../packages/protocol/src/index.ts';
+import { groupFeishuInbox } from './feishu-inbox-grouping.ts';
+import type { InboxFallbackInput } from '../packages/protocol/src/index.ts';
 import { createInboxTriage } from './inbox-triage.ts';
 import { createLocalKnowledge } from './knowledge-local.ts';
 import { isProtectedKnowledgeURL } from './knowledge-source-reader.ts';
@@ -16,6 +18,7 @@ export function createFeishuWebExtension(source: { start(): void; stop(): Promis
   return {
     id: 'feishu-web', name: '飞书网页版网关', capabilities: ['feishu-web.inbox.read'],
     activate(context) {
+      context.provide('feishu-web.group-inbox', input => groupFeishuInbox(input as InboxFallbackInput));
       context.defer(() => source.stop());
       source.start();
     },
@@ -644,6 +647,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
       navigation: [{ id: 'main-bot', label: '主机器人配置', route: '#channels/main-bot' }],
       id: 'feishu', name: '飞书适配', capabilities: ['feishu.status'],
       activate(context) {
+        context.provide('feishu.group-inbox', input => groupFeishuInbox(input as InboxFallbackInput));
         context.contribute('channels', 'feishu', { id: 'feishu', name: '飞书', outboxPrefixes: ['feishu.bot', 'feishu.personal'], approvalKinds: ['feishu-reply'], sourcePrefix: 'feishu:' });
         context.contribute('tools', 'feishu_status', statusTool('feishu', '请在 Web 飞书设置中查看真实连接状态。', actions?.status ? () => actions.status!('feishu') : undefined));
         if (actions?.botsList) context.contribute('tools', 'bots_list', tool('bots_list', '查看主 Agent、项目和事项机器人的真实绑定与连接状态，不含凭证。', async (_args, signal) => { signal.throwIfAborted(); return actions.botsList!(); }));

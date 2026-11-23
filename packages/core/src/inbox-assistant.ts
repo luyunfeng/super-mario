@@ -1,9 +1,9 @@
-import {applyMatterGrouping,nextMatterBatch,visibleMatters,type MatterBatch,type MatterGrouping} from './inbox-matters.ts';
+import {applyFallbackPlan,fallbackMatterInput,applyMatterGrouping,nextMatterBatch,visibleMatters,type MatterBatch,type MatterGrouping} from './inbox-matters.ts';
 import { createHash } from "node:crypto";
 import type { EventBus, Store } from "../../plugin-sdk/src/index.ts";
 import type {
   InboxItem,
-  InboxMatter,
+  InboxMatter,InboxFallbackInput,InboxFallbackPlan,
   InboxConversation,
   NormalizedReplyEvidence,
   Todo,
@@ -27,6 +27,8 @@ interface Row {
   error?: string;
   updatedAt: string;
   attemptedAt?: number;
+  attemptedWithModel?:boolean;
+  rulesHash?:string;
   attempts?: number;
   tasks: Record<string, string>;
   answers?: string[];
@@ -37,6 +39,7 @@ interface Group {
   items: InboxItem[];
   signature: string;
   analysisItems:InboxItem[];
+  topics:Map<string,string>;
   row?: Row;
 }
 export interface InboxAnalysis {
@@ -61,6 +64,9 @@ export function createInboxAssistant(options: {
   workspace: string;
   context?(projectId?: string): unknown;
   isMeetingMaterial?(item: InboxItem): boolean;
+  fallbackGrouping?(input:InboxFallbackInput,source:string):Promise<InboxFallbackPlan|undefined>;
+  hasFallbackGrouping?(source:string):boolean;
+  handlingInboxIds?():Iterable<string>;
   available(): { available: boolean; reason?: string };
   enabled(): boolean;
   analyze(input: {
@@ -227,6 +233,15 @@ export function createInboxAssistant(options: {
         const allowed=admitted(latest);
         const analysisItems=activeProject && allowed ? items.filter(admitted) : [];
         const admissible=new Set(analysisItems.map(i=>i.id));
+        const topics=new Map<string,string>();
+        for(const item of analysisItems) {
+          if(!item.thread.startsWith('feishu:message:'))continue;
+          try {
+            const [chat,messageId]=JSON.parse(item.thread.slice('feishu:message:'.length));
+            const ref=evidence.get(JSON.stringify([item.source,chat,messageId]));
+            if(chat===item.origin?.chatId && ref?.threadId && !ref.deleted && !ref.edited) topics.set(item.id,ref.threadId);
+          } catch { /* No authenticated topic evidence for this item. */ }
+        }
         const matters=visibleMatters((row?.matters ?? []).filter(m=>
           row?.matterSourceIds?.[m.id]?.every(id=>admissible.has(id)) ?? true),analysisItems);
         const pendingCount =
@@ -244,14 +259,14 @@ export function createInboxAssistant(options: {
           ? "quiet"
           : !enabled()
             ? "paused"
-            : fresh
+            : fresh || row?.rulesHash===signature
               ? row!.status
               : active && ["processing", "failed"].includes(row!.status)
                 ? row!.status
                 : "queued";
         return {
           items,
-          analysisItems,
+          analysisItems,topics,
           row,
           signature,
           view: {
@@ -324,21 +339,33 @@ export function createInboxAssistant(options: {
       throw Object.assign(Error("请提供当前会话版本"), { status: 400 });
     return get(id, version);
   }
-  async function work() {
-    if (closed || !enabled() || !options.available().available) return;
-    const group = groups().find(
-      (g) =>
-        g.view.pendingCount &&
-        g.row?.processedHash !== g.signature &&
-        (!g.row ||
-          g.row.inputHash !== g.signature ||
-          g.row.status !== "failed" ||
-          ((g.row.attempts ?? 0) < 3 &&
-            now() - (g.row.attemptedAt ?? 0) >= 300000)) &&
-        now() - Date.parse(g.items.at(-1)!.updatedAt) >=
-          (options.debounceMs ?? 3000),
-    );
-    if (!group) return;
+  let offlineIdleUntil=0;
+  const stopListening=events.subscribe(event=>{
+    if(['inbox.changed','projects.changed','plugins.changed','inbox.assistant.changed'].includes(event.type)) offlineIdleUntil=0;
+  });
+  async function work(scheduled:boolean) {
+    if(closed || !enabled()) return;
+    const canModel=options.available().available;
+    if(!canModel && (!options.fallbackGrouping || scheduled && now()<offlineIdleUntil))return;
+    const supportsRules=(g:Group)=>Boolean(options.fallbackGrouping &&
+      (options.hasFallbackGrouping?.(g.analysisItems[0]?.source ?? '') ?? true));
+
+    const candidates=groups();
+    let nextCheck=Infinity;
+    const group=candidates.find(g=>{
+      if(!g.view.pendingCount || g.row?.processedHash===g.signature)return false;
+      if(!canModel && (!supportsRules(g) || g.row?.rulesHash===g.signature ||
+          !nextMatterBatch(g.analysisItems,g.view.matters ?? [],g.row?.matters ?? [],now(),g.view.kind)))return false;
+      let readyAt=Date.parse(g.items.at(-1)!.updatedAt)+(options.debounceMs ?? 3000);
+      if(g.row?.inputHash===g.signature && g.row.attemptedWithModel===canModel &&
+         (g.row.status==='failed' || canModel && g.row.rulesHash===g.signature)) {
+        if((g.row.attempts ?? 0)>=3)return false;
+        readyAt=Math.max(readyAt,(g.row.attemptedAt ?? 0)+300000);
+      }
+      nextCheck=Math.min(nextCheck,readyAt);
+      return now()>=readyAt;
+    });
+    if(!group){if(!canModel)offlineIdleUntil=Number.isFinite(nextCheck)?nextCheck:now()+60000;return;}
     const project =
       group.view.projectId &&
       store.get<Project>("projects", group.view.projectId);
@@ -352,14 +379,19 @@ export function createInboxAssistant(options: {
       tasks: { ...group.row?.tasks },
       updatedAt: new Date(now()).toISOString(),
       attemptedAt: now(),
+      attemptedWithModel:canModel,
       attempts:
-        group.row?.inputHash === group.signature
+        group.row?.inputHash === group.signature && group.row.attemptedWithModel===canModel
           ? (group.row.attempts ?? 0) + 1
           : 1,
       error: undefined,
     };
     save(row);
+    const matters=group.view.matters ?? [];
+    const grouping=nextMatterBatch(group.analysisItems,matters,row.matters ?? [],now(),group.view.kind);
+    let fallbackAllowed=true;
     try {
+      if(!canModel)throw Error('主模型未就绪');
       const linked = new Set(Object.values(row.tasks));
       const todos = store
         .list<Todo>("todos")
@@ -389,8 +421,6 @@ export function createInboxAssistant(options: {
         }));
       // Spend the extra meeting budget on the newest minutes while keeping older messages in context.
       let extra = 12000;
-      const matters=group.view.matters ?? [];
-      const grouping=nextMatterBatch(group.analysisItems,matters,row.matters ?? [],now(),group.view.kind);
       const freshIds=new Set(grouping?.batch.newMessageIds);
       const chosen=grouping ? group.analysisItems.filter(item=>freshIds.has(item.id)) : group.analysisItems.slice(-20);
       if(grouping && chosen.length<20) {
@@ -442,6 +472,7 @@ export function createInboxAssistant(options: {
         );
       if (
         !result ||
+        (grouping && options.fallbackGrouping && !result.grouping) ||
         typeof result.summary !== "string" ||
         !result.summary.trim() ||
         result.summary.length > 4000 ||
@@ -489,6 +520,7 @@ export function createInboxAssistant(options: {
           updated.matterSourceIds={...row.matterSourceIds};
           for(const matter of updated.matters) if(!previous.has(matter)) updated.matterSourceIds[matter.id]=sourceIds;
         }
+        fallbackAllowed=false;
         // Local, reversible organization only. Incoming messages never grant CLI execution, approval or external sends.
         if (result.disposition === "work")
           for (const task of result.tasks) {
@@ -522,7 +554,7 @@ export function createInboxAssistant(options: {
           version: row.version + 1,
           inputHash: signatureFor(group.items, updated),
           processedHash: result.grouping && grouping?.more ? undefined : signatureFor(group.items, updated),
-          attempts:0,
+          attempts:0,rulesHash:undefined,
           status:
             result.grouping && grouping?.more ? "queued" : result.disposition === "work" ? "watching" : result.disposition,
           summary: result.summary,
@@ -534,6 +566,36 @@ export function createInboxAssistant(options: {
         });
       });
     } catch {
+      if(fallbackAllowed && grouping && !closed && enabled() && supportsRules(group)) {
+        try {
+          const validGroup=()=>{
+            if(closed || !enabled())return;
+            const current=get(row.id);
+            if(current.row?.version===row.version && current.signature===group.signature &&
+                current.view.pendingCount && supportsRules(current)) return current;
+          };
+          const current=validGroup();
+          if(!current)return;
+          const makeInput=(g:Group)=>fallbackMatterInput(grouping.batch,g.analysisItems,g.view.matters ?? [],g.topics,g.view.kind,row.updatedAt);
+          const input=makeInput(current);
+          const plan=await options.fallbackGrouping!(structuredClone(input),current.analysisItems[0]!.source);
+          if(plan) {
+            store.transaction(()=>{
+              const latest=validGroup();
+              if(!latest || JSON.stringify(makeInput(latest))!==JSON.stringify(input))return;
+              const matters=applyFallbackPlan(input,plan,row.matters ?? [],new Set(options.handlingInboxIds?.()));
+              const updated={...row,matters,version:row.version+1,status:grouping.more?'queued' as const:'watching' as const,
+                updatedAt:new Date(now()).toISOString(),error:undefined};
+              const signature=signatureFor(latest.items,updated);
+              // Structural grouping neither generates a model summary nor completes model analysis.
+              updated.rulesHash=grouping.more?undefined:signature;
+              updated.inputHash=signature;updated.processedHash=undefined;
+              save(updated);
+            });
+            return;
+          }
+        }catch { /* Neither an invalid plan nor a stale scope authorizes side effects. */ }
+      }
       if (!closed && enabled() && store.get<Row>(collection,row.id)?.version===row.version)
         save({
           ...row,
@@ -543,15 +605,15 @@ export function createInboxAssistant(options: {
         });
     }
   }
-  function tick() {
+  function tick(scheduled=false) {
     if (!pending && !closed)
-      pending = work().finally(() => {
+      pending = work(scheduled).finally(() => {
         pending = undefined;
       });
     return pending ?? Promise.resolve();
   }
   const timer = setInterval(() => {
-    void tick().catch(() =>
+    void tick(true).catch(() =>
       events.publish("agent.error", {
         conversationId: "inbox-assistant",
         error: "后台收件状态写入失败，请检查数据目录",
@@ -647,7 +709,7 @@ export function createInboxAssistant(options: {
     },
     async close() {
       closed = true;
-      clearInterval(timer);
+      clearInterval(timer);stopListening();
       await pending;
     },
   };

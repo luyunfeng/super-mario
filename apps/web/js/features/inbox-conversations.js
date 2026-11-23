@@ -129,12 +129,17 @@ export function createInboxConversationsUI({
       function matterCard(matter) {
         const earlier = matters.find(row => row.id === matter.continues);
         const tier = {action: "需要处理", fyi: "知会", noise: "低优先级"}[matter.tier];
+        const rules=matter.groupedBy==="rules";
+        let provenance=rules ? "按连接器规则归组，暂无模型摘要。" : "由模型归组并摘要。";
+        if(rules && matter.lastGroupedBy==="model") provenance="标题来自连接器规则，暂无模型摘要。最近原文由模型归组。";
+        if(!rules && matter.lastGroupedBy==="rules") provenance="保留此前的模型摘要，最近原文按连接器规则追加。";
         return h("article", {class: "stack card__body", "aria-label": matter.title},
           h("div", {class: "row row--between row--wrap"}, h("strong", null, matter.title),
             h("div", {class: "row row--wrap"},
               !matter.doneAt && matter.urgent === true && matter.tier === "action" && Pill("紧急", "danger"),
               Pill(matter.doneAt ? "已完成" : tier))),
-          matter.summary && h("p", {class: "mailbox-preview"}, matter.summary),
+          h("p", {class:"small muted"}, provenance),
+          !rules && matter.summary && h("p", {class: "mailbox-preview"}, matter.summary),
           matter.reason && h("p", {class: "small muted"}, "分级依据："+matter.reason),
           earlier && h("p", {class: "small muted"},
             `接续事项：${earlier.title}（${earlier.doneAt ? "已完成" : "未完成"}）`),

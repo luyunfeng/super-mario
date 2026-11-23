@@ -8,13 +8,13 @@ import type {InboxItem} from '../packages/protocol/src/index.ts';
 type Analyze=Parameters<typeof createInboxAssistant>[0]['analyze'];
 const now=Date.parse('2026-06-01T10:00:00Z'),iso=new Date(now).toISOString();
 const old={summary:'会话摘要',disposition:'watching',tasks:[]} satisfies InboxAnalysis;
-function fixture(t:test.TestContext,analyze:Analyze){
+function fixture(t:test.TestContext,analyze:Analyze,custom:Partial<Parameters<typeof createInboxAssistant>[0]>={}){
   const store=createStore(':memory:'),events=createEventBus(store);let timestamp=now;
   function start(){return createInboxAssistant({store,events,workspace:'/fixture',now:()=>timestamp,debounceMs:0,
     enabled:()=>true,available:()=>({available:true}),analyze,
     createTodo(){throw Error('不应创建待办');},updateTodo(){throw Error('不应改待办');},
     archive(id,version){const item=store.get<InboxItem>('inbox',id)!;assert.equal(item.version,version);
-      store.put('inbox',id,{...item,version:version+1,archivedAt:new Date(timestamp).toISOString()});}});}
+      store.put('inbox',id,{...item,version:version+1,archivedAt:new Date(timestamp).toISOString()});},...custom});}
   let svc=start();t.after(async()=>{await svc.close();store.close();});
   function add(id:string,patch:Partial<InboxItem>={}){const item:InboxItem={id,thread:id,last:id,source:'feishu:fixture:X',
     title:id,text:'原始-'+id,tier:'fyi',reason:'合成',updatedAt:iso,receivedAt:iso,version:1,
@@ -183,4 +183,97 @@ test('无来源记录的旧摘要仅在原签名精确匹配时复用；0、负�
   assert.equal(f.svc.list().find(s=>s.id===g.id)?.summary,'合成旧库摘要');
   f.add('new',{origin:{...origin,personalGroupUserCount:2}});assert.equal(f.svc.list().find(s=>s.id===g.id)?.summary,undefined);
   await f.svc.tick();assert.equal(reads,2);
+});
+
+test('模型离线由来源插件只归组，首次防抖按时唤醒，重启幂等，模型恢复后可正常分析',async t=>{
+  let online=false,calls=0,plans=0;
+  const f=fixture(t,async ()=>{calls++;return old;},{
+    debounceMs:3000,available:()=>({available:online}),hasFallbackGrouping:s=>s==='feishu:fixture:X',
+    async fallbackGrouping(input,source){plans++;assert.equal(source,'feishu:fixture:X');
+      assert.equal(input.messages[0]?.topicId,'topic-A');assert.equal(input.messages[1]?.replyToMessageId,'a');
+      assert.equal(input.messages[1]?.topicId,undefined);assert.doesNotMatch(JSON.stringify(input),/禁止泄露的正文/);
+      return {assign:input.messages.map(m=>({message:m.id,event:'new:1'}))};}
+  });
+  const evidence={source:'feishu:fixture:X',chatId:'chat-A',messageId:'om_a',threadId:'topic-A',createdAt:iso,senderId:'s',senderIdType:'open_id'};
+  f.store.put('todo.reply-sources','one',evidence);f.store.put('todo.reply-sources','two',{...evidence,source:'other',messageId:'om_b',threadId:'foreign'});
+  f.add('a',{thread:'feishu:message:["chat-A","om_a"]',text:'禁止泄露的正文',tier:'fyi'});
+  f.add('b',{thread:'feishu:message:["chat-A","om_b"]',parentInboxBy:'connector',parentInboxId:'a',tier:'action'});
+  await f.svc.tick(true);assert.equal(plans,0);f.time(now+3000);await f.svc.tick(true);
+  const group=f.svc.list()[0]!,matter=group.matters![0]!;
+  assert.deepEqual(matter.messageIds,['a','b']);assert.equal(matter.tier,'action');assert.equal(matter.groupedBy,'rules');
+  assert.equal(matter.summary,'');assert.equal(group.summary,undefined);assert.equal(matter.lastGroupedBy,'rules');
+  await f.restart();await f.svc.tick();assert.equal(plans,1);assert.equal(calls,0);
+  online=true;await f.svc.tick();assert.equal(calls,1);assert.equal(f.svc.list()[0]!.summary,old.summary);assert.equal(plans,1);
+});
+
+test('模型坏结果经规则追加，不覆盖既有标题及模型归属；真实规则分级只升不降，已结项可重开',async t=>{
+  let online=true,initial=true,handled=false,plans=0;
+  const f=fixture(t,async input=>{
+    if(!initial) return {...old,grouping:{assign:[],events:[]}};
+    return {...old,grouping:{assign:input.matterBatch!.newMessageIds.map((id,i)=>({message:id,event:'new:'+i})),
+      events:['noise','fyi','fyi'].map((tier,i)=>({...descriptor('new:'+i),tier:tier as 'noise'|'fyi',reason:'模型依据'}))}};
+  },{available:()=>({available:online}),handlingInboxIds:()=>handled?['b']:[],
+    async fallbackGrouping(input){plans++;return {assign:input.messages.map(m=>({message:m.id,event:m.replyToMatterId!}))};}});
+  for(const id of ['a','b','c'])f.add(id);await f.svc.tick();initial=false;
+  let group=f.svc.list()[0]!,before=group.matters!;
+  f.svc.setMatterDone(group.id,before[2]!.id,group.version,true);handled=true;
+  for(const [id,parent] of [['d','a'],['e','b'],['f','c']])f.add(id!,{parentInboxBy:'connector',parentInboxId:parent,tier:'action'});
+  await f.svc.tick();group=f.svc.list()[0]!;assert.equal(plans,1);
+  assert.deepEqual(group.matters!.map(m=>m.tier),['noise','fyi','action']);
+  assert.ok(group.matters!.every((m,i)=>m.title===before[i]!.title && m.summary===before[i]!.summary && m.groupedBy==='model' && m.lastGroupedBy==='rules'));
+  assert.equal(group.matters![2]!.doneAt,undefined);assert.equal(group.matters![1]!.reason,'模型依据');
+  await f.svc.tick();assert.equal(plans,1);
+});
+
+test('无来源、非法规则计划、暂停及处理期间移出可见范围都不生成事项',async t=>{
+  let started!:()=>void,release!:()=>void;const active=new Promise<void>(r=>{started=r;});
+  let count=0,supported=false;
+  const f=fixture(t,async ()=>{throw Error('不应运行');},{available:()=>({available:false}),hasFallbackGrouping:()=>supported,
+    async fallbackGrouping(input){count++;if(count===1)return {assign:[]};
+      started();await new Promise<void>(r=>{release=r;});return {assign:input.messages.map(m=>({message:m.id,event:'new:1'}))};}});
+  f.add('a');await f.svc.tick();assert.equal(count,0);supported=true;await f.svc.tick();await f.svc.tick();assert.equal(count,1);
+  assert.equal(f.svc.list()[0]!.matters,undefined);
+  let view=f.svc.list()[0]!;f.svc.retry(view.id,view.version);const pending=f.svc.tick();await active;
+  f.svc.configure(false);release();await pending;view=f.svc.list()[0]!;assert.equal(view.matters,undefined);assert.equal(view.status,'paused');
+});
+
+test('规则归组采用首条有效原文替代飞书群名或群ID，保留具体标题，空正文使用联系人',async t=>{
+  const f=fixture(t,async ()=>{throw Error('模型已关闭');},{available:()=>({available:false}),async fallbackGrouping(input){
+    assert.deepEqual(input.messages.map(m=>m.title),['小林：周五发布计划','请复核报表','会议纪要修订','小林的收件']);
+    return {assign:input.messages.map((m,i)=>({message:m.id,event:'new:'+i}))};}});
+  const origin={kind:'group' as const,chatId:'oc_chat',chatName:'合成群',senderName:'小林',senderId:'ou_s',
+    personalGroupObserved:true as const,personalGroupUserCount:4};
+  f.add('a',{origin,title:'合成群',text:'\n[om_one] 小林：周五发布计划\n未采用的第二行'});
+  f.add('b',{origin,title:'oc_chat',text:'[om_two] 请复核报表'});
+  f.add('c',{origin,title:'会议纪要修订'});f.add('d',{origin,title:'oc_chat',text:''});
+  await f.svc.tick();assert.deepEqual(f.svc.list()[0]!.matters!.map(m=>m.title),['小林：周五发布计划','请复核报表','会议纪要修订','小林的收件']);
+});
+
+test('规则插件在途时项目归属或认证话题证据改变，过期分配不落库；不支持的来源不阻塞另一个来源',async t=>{
+  let release!:()=>void,started!:()=>void;let waiting=new Promise<void>(r=>{started=r;});
+  let calls=0;const f=fixture(t,async ()=>{throw Error('不应分析');},{available:()=>({available:false}),
+    hasFallbackGrouping:source=>source==='feishu:fixture:X',
+    async fallbackGrouping(input){calls++;started();await new Promise<void>(r=>{release=r;});
+      return {assign:input.messages.map(m=>({message:m.id,event:'new:1'}))};}});
+  const evidence={source:'feishu:fixture:X',chatId:'chat-A',messageId:'om_scoped',senderIdType:'open_id',senderId:'s',createdAt:iso,threadId:'topic1'};
+  f.store.put('todo.reply-sources','e',evidence);
+  f.add('X',{source:'feishu:unsupported',receivedAt:'2025-01-01T00:00:00Z'});f.add('A',{thread:'feishu:message:["chat-A","om_scoped"]'});
+  let job=f.svc.tick();await waiting;f.store.put('todo.reply-sources','e',{...evidence,deleted:true});release();await job;
+  assert.equal(calls,1);assert.ok(f.svc.list().every(v=>!v.matters));
+  waiting=new Promise<void>(r=>{started=r;});job=f.svc.tick();await waiting;
+  f.store.put('projects','P',{id:'P',archivedAt:iso});f.add('A',{projectId:'P'});release();await job;
+  assert.ok(f.svc.list().every(v=>!v.matters));assert.equal(f.store.list('todos').length,0);
+});
+
+test('补入三小时前的旧回复后，最近私聊候选仍按全部成员的最新活动落在两小时内',async t=>{
+  const f=fixture(t,async ()=>{throw Error('模型未连接');},{available:()=>({available:false}),async fallbackGrouping(input){
+    const candidate=input.existing[0];
+    if(candidate)assert.equal(candidate.at,iso);
+    return {assign:input.messages.map(m=>({message:m.id,event:m.replyToMatterId ?? (
+      candidate && Date.parse(candidate.at)>=Date.parse(input.now)-2*3600000 ? candidate.id : 'new:1')}))};
+  }});
+  f.add('a');await f.svc.tick();
+  f.add('b',{receivedAt:new Date(now-3*3600000).toISOString(),parentInboxBy:'connector',parentInboxId:'a'});await f.svc.tick();
+  f.time(now+3600000);f.add('c');await f.svc.tick();
+  assert.deepEqual(f.svc.list()[0]!.matters!.map(m=>m.messageIds),[['a','b','c']]);
 });

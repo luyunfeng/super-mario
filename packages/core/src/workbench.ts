@@ -77,7 +77,7 @@ import { exportNativeConversation, readNativeFavoritePage } from './native-conve
 import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
-import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
+import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
 export class InputError extends Error {
@@ -536,6 +536,11 @@ export async function createWorkbench(config: AppConfig) {
       return { tier: result.tier, reason: `规则回退：${result.reason}` };
     } });
   try { await plugins.start(); } catch (error) { store.close(); throw error; }
+  function inboxGroupingProvider(source:string) {
+    if (!source.startsWith('feishu:')) return;
+    const name = source.startsWith('feishu:web:') ? 'feishu-web.group-inbox' : 'feishu.group-inbox';
+    return contributions.list('services').find(entry => entry.value.name === name);
+  }
   const inboxAssistant = createInboxAssistant({store,events,workspace:inboxAssistantWorkspace,
     isMeetingMaterial: item => meetingMemorySources(item, knowledgeReaderSettings.read().trustedHosts).length > 0,
     context:id=>id?projectWorkspace.context(id):{scope:'personal'},
@@ -543,9 +548,20 @@ export async function createWorkbench(config: AppConfig) {
       const active = plugins.list().filter(plugin => plugin.status === 'active').map(plugin => plugin.id);
       return active.includes('inbox-triage') && (active.includes('feishu') || active.includes('feishu-web'));
     },
-    available:()=>{const status=inboxAssistantRuntime.status();return status.available?status:{available:false,reason:'主模型尚未就绪，原消息已保存，等待后台整理。'};},createTodo:input=>createTodo(input,false),updateTodo:(id,input)=>updateTodo(id,input),archive:(id,version)=>inbox.archive(id,version),
+    handlingInboxIds: () => inboxHandling.states().filter(state => state.source.kind === 'personal').map(state => state.source.id),
+    hasFallbackGrouping: source => Boolean(inboxGroupingProvider(source)),
+    async fallbackGrouping(input, source) {
+      const provider = inboxGroupingProvider(source);
+      if (!provider) return;
+      const plan = await plugins.invocations.use(provider.value.name, input);
+      if (contributions.list('services').some(entry => entry.value === provider.value)) return plan as InboxFallbackPlan;
+    },
+    available:() => config.demo
+      ? {available:false, reason:'演示模式使用连接器规则整理收件。'}
+      : inboxAssistantRuntime.status(),
+    createTodo:input=>createTodo(input,false),updateTodo:(id,input)=>updateTodo(id,input),archive:(id,version)=>inbox.archive(id,version),
     async analyze(input){
-      if(config.demo)return {summary:'【演示】已合并本会话消息，未调用真实模型。',disposition:'watching',tasks:[]};
+      if(config.demo) throw new Error('演示模式使用连接器规则整理收件');
       const prompt=inboxAnalysisPrompt(input);
       const timeout=setTimeout(()=>{void inboxAssistantRuntime.abortCurrent();},120000);timeout.unref();
       try {
@@ -1098,7 +1114,7 @@ export async function createWorkbench(config: AppConfig) {
       const source=store.get<InboxItem>('inbox',messageId);
       return source && sameGroup.has(messageId) && !excludesPersonalGroupFromBrief(source);
     });
-    const describe=(m:InboxMatter)=>({id:m.id,title:m.title,summary:m.summary,tier:m.tier,reason:m.reason,urgent:m.urgent,doneAt:m.doneAt,
+    const describe=(m:InboxMatter)=>({id:m.id,title:m.title,summary:m.summary,tier:m.tier,reason:m.reason,urgent:m.urgent,doneAt:m.doneAt,groupedBy:m.groupedBy ?? 'model',lastGroupedBy:m.lastGroupedBy ?? m.groupedBy ?? 'model',
       members:m.messageIds.map(messageId=>({id:messageId,workspaceRoute:'#inbox?item='+encodeURIComponent(messageId)}))});
     const previous=matter?.continues && group?.matters?.find(m=>m.id===matter.continues);
     return {item:present(item),ancestors:visibleAncestors.map(present),children:visibleChildren.map(present),

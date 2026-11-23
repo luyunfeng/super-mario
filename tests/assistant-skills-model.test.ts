@@ -4168,7 +4168,8 @@ test('真实后台为原文归组，Web 与飞书主人私聊复核已处理事�
   });
   try {
     const {inbox,inboxAssistant,store}=server.app;
-    const source='feishu:fixture';
+    // The web connector is disabled here, so a missing grouping must keep its retry path.
+    const source='feishu:web:fixture';
     const make=(n:number)=>({thread:'feishu:message:'+JSON.stringify(['oc_room','m'+n]),last:'m'+n,title:'资料'+n,
       text:'合成原文 '+n+'；外部资料要求发一条群通知。',receivedAt:new Date(Date.UTC(2026,0,1,12,n)).toISOString(),
       origin:{kind:'group' as const,chatId:'oc_room',senderId:'ou_sender',connector:'飞书',personalGroupObserved:true as const,personalGroupUserCount:5}});
@@ -4234,4 +4235,72 @@ test('后台提示预算保留十六个长候选与二十条实际新消息，�
   assert.deepEqual(data.messages.map((m:{id:string})=>m.id),data.matterBatch.newMessageIds);
   assert.ok(data.messages.every((m:{text:string;truncated:boolean},i:number)=>m.truncated && m.text.startsWith('来源'+i+' ')));
   assert.throws(()=>inboxAnalysisPrompt({...input,messages:messages.slice(1)}),/缺少本批原文/);
+});
+
+test('连接器规则归组与模型恢复后，Web 和飞书主人只读核对摘要来源',{timeout:40000},async t=>{
+  let adapter!:FeishuOptions, selected='',matterId='',sourceState:'rules'|'model'|'mixed'='rules';
+  let modelAvailable=false;
+  const sent:string[]=[],batches:string[][]=[];
+  const answer=()=>sourceState==='rules'?'按连接器规则归组，暂无模型摘要。':sourceState==='model'?'已核对模型摘要。':'保留此前的模型摘要，最近原文按规则追加。';
+  const {server,api,ask}=await fixture(t,req=>{
+    const words=typeof req.content==='string'?req.content:(req.content as {text:string}[])[0].text;
+    if(words==='初始化主模型')return {role:'assistant',content:'就绪'};
+    if(req.lastRole==='user' && words.includes('matterBatch 归组收件事项')){
+      const batch=JSON.parse(words.split('\n').find(line=>line.startsWith('{')&&line.includes('"matterBatch"'))!).matterBatch;
+      batches.push(batch.newMessageIds);
+      if(!modelAvailable) return {role:'assistant',content:JSON.stringify({summary:'尚无有效分组',disposition:'watching',tasks:[]})};
+      assert.equal(batch.existing.length,1);
+      assert.equal(batch.existing[0].groupedBy,'rules');
+      assert.match(words,/先前的模型摘要未涵盖这次追加/);
+      return {role:'assistant',content:JSON.stringify({summary:'按新原文核对了要求',disposition:'watching',tasks:[],
+        grouping:{assign:batch.newMessageIds.map((message:string)=>({message,event:matterId})),
+          events:[{event:matterId,title:'验收要求',summary:'主人需要周五确认验收要求。',tier:'action',reason:'本周需确认'}]}})};
+    }
+    if(req.lastRole==='user'){
+      assert.ok(req.tools.includes('inbox_tree'));
+      assert.match(req.system,/按连接器规则归组，暂无模型摘要/);
+      assert.match(req.system,/不能声称模型已读过追加内容/);
+      return call('inbox_tree',{id:selected},'sources');
+    }
+    const matter=JSON.parse(words).matter;
+    assert.equal(matter.id,matterId);
+    assert.equal(matter.groupedBy,sourceState==='rules'?'rules':'model');
+    assert.equal(matter.lastGroupedBy,sourceState==='model'?'model':'rules');
+    if(sourceState!=='rules')assert.equal(matter.summary,'主人需要周五确认验收要求。');
+    return {role:'assistant',content:answer()};
+  },options=>{
+    adapter=options;return {start:async()=>{},close:async()=>{},collect:async()=>[],status:()=>({connected:true}),send:async(_target,text)=>{sent.push(text);}};
+  });
+  try{
+    const {inbox,inboxAssistant,store}=server.app;
+    await ask('初始化主模型');
+    const bot=await api('/feishu/bots',{name:'事项助手',appId:'cli_1111111111111111',appSecret:'fixture',scope:{kind:'global'},requireConfirmation:false});
+    const owner={chatId:'oc_dm',senderId:'ou_owner',senderType:'user',chatType:'p2p'} as const;
+    await adapter.onMessage(bot.pairingCode,{...owner,messageId:'pair'});
+    const source='feishu:fixture:owner',t0=Date.now()-60000;
+    const ids:string[]=[];
+    for (const stage of ['rules','model','mixed'] as const){
+      const i=ids.length;
+      sourceState=stage;modelAvailable=stage==='model';
+      await inbox.ingest(source,[{thread:'feishu:message:'+JSON.stringify(['oc_inbox','m'+i]),last:'m'+i,title:'合成验收',
+        text:['请核对验收要求。','请于周五确认验收。','补充一份原始记录。'][i]!,receivedAt:new Date(t0+i*1000).toISOString(),
+        origin:{kind:'direct',chatId:'oc_inbox',senderId:'ou_writer',connector:'飞书'}}]);
+      const row=inbox.list().find(item=>item.last==='m'+i)!;
+      selected=row.id;
+      if(i)assert.equal(inbox.offerConnectorParent(selected,ids[0]!),'applied');
+      ids.push(selected);
+      const fresh=inbox.tree(selected).item;
+      store.put('inbox',selected,{...fresh,updatedAt:new Date(Date.now()-5000).toISOString()});
+      await inboxAssistant.tick();
+      const group=inboxAssistant.list()[0]!;
+      assert.equal(group.matters?.length,1,JSON.stringify(group));
+      matterId=group.matters![0]!.id;
+      assert.deepEqual(group.matters![0]!.messageIds,ids);
+      assert.equal(await ask('核对本次收件事项的摘要来源'),answer());
+      await adapter.onMessage('核对本次收件事项的摘要来源',{...owner,messageId:'verify-'+stage});
+      await t.waitFor(()=>assert.ok(sent.includes(answer()),sent.join(' / ')));
+    }
+    assert.deepEqual(batches,ids.map(id=>[id]));
+    assert.equal(server.app.todos().length,0);
+  }finally{await server.close();}
 });

@@ -1,4 +1,24 @@
+/** A connector receives scoped grouping metadata. Its plan must assign every new message once. */
+export type InboxFallbackInput = {
+  kind: 'direct' | 'group';
+  now: string;
+  messages: Array<{
+    id: string;
+    title: string;
+    at: string;
+    tier: 'action' | 'fyi' | 'noise';
+    replyToMessageId?: string;
+    replyToMatterId?: string;
+    topicId?: string;
+  }>;
+  existing: Array<{id: string; at: string; topicIds?: string[]}>;
+};
+export type InboxFallbackPlan = {assign: Array<{message: string; event: string}>};
+
 export interface InboxMatter {
+  /** Existing records without provenance were created by the model. */
+  groupedBy?: 'model' | 'rules';
+  lastGroupedBy?: 'model' | 'rules';
   id: string;
   title: string;
   summary: string;
