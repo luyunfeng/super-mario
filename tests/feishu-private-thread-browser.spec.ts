@@ -211,6 +211,17 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await drawer.getByRole('button', {name:'搜索',exact:true}).click();
   await expect(drawer.getByText('匹配标签：核对标签', {exact:true})).toBeVisible();
   await expect(drawer.getByRole('button', {name:/核对独立方案/})).toBeVisible();
+  await drawer.getByLabel('搜索独立对话').fill('较新的记录');
+  await drawer.getByRole('button', {name:'搜索',exact:true}).click();
+  await expect(drawer.locator('button mark')).toHaveCount(3);
+  await drawer.getByRole('button', {name:'查看全部匹配发言'}).click();
+  await expect(drawer.locator('button mark')).toHaveCount(20);
+  await drawer.getByRole('button', {name:'加载更多匹配发言'}).click();
+  await expect(drawer.locator('button mark')).toHaveCount(40);
+  await drawer.getByRole('button', {name:'加载更多匹配发言'}).click();
+  await drawer.getByRole('button', {name:/用户.*较新的记录 0$/}).click();
+  await expect(drawer.locator('section').filter({hasText:'命中消息'})).toContainText('较新的记录 0');
+  await drawer.getByRole('button', {name:'返回列表'}).click();
   const historicalReply=server.app.store.list<Message>('messages').find(m=>m.role==='assistant' && m.text.includes(keyword))!;
   server.app.store.put('messages',historicalReply.id,{...historicalReply,status:'failed'});
   await drawer.getByRole('textbox', { name: '搜索独立对话' }).fill(keyword);

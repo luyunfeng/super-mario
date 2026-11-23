@@ -92,26 +92,52 @@ export function readPrivateThreadHistory(store: Pick<Store, 'get' | 'list'>, row
   return archived ? items : inPreferredOrder(items, order);
 }
 
-function* matchingThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived: boolean, tag?: string) {
+function privateSearchPattern(query: string) {
   if (typeof query !== 'string' || !query.trim() || query.length > 500)
     throw Object.assign(new Error('检索词须为 1 至 500 个字符'), { status: 400 });
-  const pattern = new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
+  return new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
+}
+
+function privateSearchHit({ id, role, text, createdAt, status }: Message, match: RegExpExecArray) {
+  let start = Math.max(0, match.index - 50);
+  let end = Math.min(text.length, match.index + match[0].length + 70);
+  // Keep quotes exact, including complete code points on either edge.
+  if (start && /[\uDC00-\uDFFF]/.test(text[start])) start--;
+  if (end < text.length && /[\uDC00-\uDFFF]/.test(text[end])) end++;
+  return { id, role, excerpt: text.slice(start, end), matchStart:match.index-start, matchEnd:match.index-start+match[0].length, truncated: start > 0 || end < text.length, omittedBefore:start>0, omittedAfter:end<text.length, status: status ?? null, createdAt };
+}
+
+export function searchPrivateThreadHits(store: Pick<Store, 'get' | 'list'>, row: PrivateThread, query: string, archived: boolean, before: string | null, tag?: string) {
+  const pattern = privateSearchPattern(query);
+  if ((row.archived === true) !== archived || (tag && !row.tags?.includes(tag)))
+    throw Object.assign(new Error('对话归档状态或标签已变化，请重新搜索'), { status: 409 });
+  const list = threadMessages(store, [row]).get(row.threadId) ?? [];
+  let end = list.length;
+  if (before !== null) {
+    end = list.findIndex(message => message.id === before && pattern.test(message.text));
+    if (end < 0) throw Object.assign(new Error('检索位置已失效，请重新搜索'), { status: 409 });
+  }
+  const hits = [];
+  for (let i = end - 1; i >= 0; i--) {
+    const match = pattern.exec(list[i].text);
+    if (!match) continue;
+    if (hits.length === 20) return { hits, nextBefore: hits[19].id };
+    hits.push(privateSearchHit(list[i], match));
+  }
+  return { hits, nextBefore: null };
+}
+
+function* matchingThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived: boolean, tag?: string) {
+  const pattern = privateSearchPattern(query);
   for (const { info, list } of historyEntries(store, rows, archived, tag)) {
     const titleMatch = pattern.test(info.title);
     const hits = [];
     let hitCount = 0;
     for (let i = list.length - 1; i >= 0; i--) {
-      const { id, role, text, createdAt, status } = list[i];
-      const match = pattern.exec(text);
+      const match = pattern.exec(list[i].text);
       if (!match) continue;
       hitCount++;
-      if (hits.length === 3) continue;
-      let start = Math.max(0, match.index - 50);
-      let end = Math.min(text.length, match.index + match[0].length + 70);
-      // Keep quotes exact, including complete code points on either edge.
-      if (start && /[\uDC00-\uDFFF]/.test(text[start])) start--;
-      if (end < text.length && /[\uDC00-\uDFFF]/.test(text[end])) end++;
-      hits.push({ id, role, excerpt: text.slice(start, end), matchStart:match.index-start, matchEnd:match.index-start+match[0].length, truncated: start > 0 || end < text.length, omittedBefore:start>0, omittedAfter:end<text.length, status: status ?? null, createdAt });
+      if (hits.length < 3) hits.push(privateSearchHit(list[i], match));
     }
     const matchedTags = info.tags.filter(label => pattern.test(label));
     if (hits.length || titleMatch || matchedTags.length) yield { ...info, titleMatch, ...(matchedTags.length && {matchedTags}), hitCount, hits };

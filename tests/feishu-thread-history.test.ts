@@ -8,7 +8,7 @@ import type { FeishuBotFactory } from '../apps/server/src/feishu-bots.ts';
 import type { FeishuMessageSource, FeishuOptions } from '../plugins/feishu.ts';
 import { botConversationId } from '../packages/core/src/bot-agent-routing.ts';
 import type { Message } from '../packages/protocol/src/index.ts';
-import { privateThreadPage, readPrivateThreadHistory, searchPrivateThreadList, searchPrivateThreads } from '../apps/server/src/feishu-thread-history.ts';
+import { privateThreadPage, readPrivateThreadHistory, searchPrivateThreadHits, searchPrivateThreadList, searchPrivateThreads } from '../apps/server/src/feishu-thread-history.ts';
 
 test('独立对话记录按可见发言分页，排除其他配对、群组、协作回流和未知游标', () => {
   const row = { threadId: 'a'.repeat(64), botId: 'a', appId: 'app', revision: 3, chatId: 'chat', senderId: 'owner', createdAt: '2026-01-01' };
@@ -42,6 +42,19 @@ test('独立对话记录按可见发言分页，排除其他配对、群组、�
   assert.equal(allMatches.hitCount,44);
   assert.deepEqual(allMatches.hits.map(hit=>hit.id),['47','46','45']);
   assert.equal(searchPrivateThreadList(store,[row],'发言').threads[0].hitCount,44);
+  const firstHits = searchPrivateThreadHits(store, row, '发言', false, null);
+  assert.equal(firstHits.hits.length, 20);
+  assert.equal(firstHits.nextBefore, '28');
+  const secondHits = searchPrivateThreadHits(store, row, '发言', false, firstHits.nextBefore);
+  assert.equal(secondHits.hits.length, 20);
+  assert.equal(secondHits.nextBefore, '8');
+  const finalHits = searchPrivateThreadHits(store, row, '发言', false, secondHits.nextBefore);
+  assert.equal(finalHits.nextBefore, null);
+  assert.deepEqual([...firstHits.hits, ...secondHits.hits, ...finalHits.hits].map(hit => hit.id),
+    Array.from({ length: 44 }, (_, index) => String(47 - index)));
+  for (const invisible of ['0', '1', '2', '3', 'withdrawn', 'cancelled']) {
+    assert.throws(() => searchPrivateThreadHits(store, row, '发言', false, invisible), { status: 409 });
+  }
   const recent = privateThreadPage(store, row, null);
   assert.equal(recent.messages.length, 40);
   assert.equal(recent.nextBefore, '8');
@@ -118,6 +131,13 @@ test('独立对话改名和归档可跨重启，旧事件不恢复归档，引�
   const hit = bodySearch.items[0].hits.find(item => item.role === 'user');
   assert.ok(hit && hit.id && hit.createdAt && hit.excerpt.includes('归档前的跟进'));
   assert.equal(bodySearch.items[0].titleMatch, false);
+  const hitsUrl = path + '/search?' + new URLSearchParams({ q: '归档前的跟进' });
+  const hitPage = await api(a.id, hitsUrl);
+  assert.equal(hitPage.status, 200);
+  assert.deepEqual((await hitPage.json()).hits.map((item: { id: string }) => item.id),
+    bodySearch.items[0].hits.map(item => item.id));
+  assert.equal((await api(b.id, hitsUrl)).status, 404);
+  assert.equal((await api(a.id, hitsUrl + '&before=unknown')).status, 409);
   assert.deepEqual((await search(b.id, '归档前的跟进', false)).items, []);
   assert.equal((await api(b.id, path + '?around=' + hit.id)).status, 404);
   assert.equal((await api(a.id, '/search?q=蓝色调查&before=' + 'a'.repeat(64))).status, 409);
@@ -237,6 +257,7 @@ test('独立对话改名和归档可跨重启，旧事件不恢复归档，引�
   assert.deepEqual((await search(a.id, '归档前的跟进', false, 'Ops')).items, []);
   await server.app.plugins.setEnabled('conversation-search', false);
   assert.equal((await api(a.id, '/search?q=归档前')).status, 503);
+  assert.equal((await api(a.id, hitsUrl)).status, 503);
   assert.equal((await api(a.id, path)).status, 200);
 
   const account = 'cli_8888888888888888';

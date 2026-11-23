@@ -7,7 +7,7 @@ import {createAdminRoutes} from './admin-routes.ts';
 import { readWebThreadAssistant } from '../../../plugins/assistant-profile.ts';
 import {proofForBrowserToken} from '../../../plugins/browser-devices.ts';
 import {createBrowserAccess,pairingQR} from './browser-access.ts';
-import { privateThreadPage, searchPrivateThreads } from './feishu-thread-history.ts';
+import { privateThreadPage, searchPrivateThreadHits, searchPrivateThreads } from './feishu-thread-history.ts';
 import { createSessionAnalysis } from './session-analysis.ts';
 import { nativeExportProgress } from '../../../packages/core/src/native-conversation-export.ts';
 import { maxChatFileBytes } from '../../../packages/core/src/chat-files.ts';
@@ -519,8 +519,8 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           const input=await body(req,1024);
           return json(res,200,bots.privateThreadSelection(decodeURIComponent(selectThread[1]!),selectThread[2]!,input));
         }
-        const botThreads = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/threads(?:\/(order|search|tags|[0-9a-f]{64}))?$/);
-        if (botThreads && (method === 'GET' || (method === 'DELETE' && /^[0-9a-f]{64}$/.test(botThreads[2] ?? '')) || (method === 'PATCH' && botThreads[2] && botThreads[2] !== 'search'))) {
+        const botThreads = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/threads(?:\/(order|search|tags|[0-9a-f]{64}(?:\/search)?))?$/);
+        if (botThreads && (method === 'GET' || (method === 'DELETE' && /^[0-9a-f]{64}$/.test(botThreads[2] ?? '')) || (method === 'PATCH' && botThreads[2] && botThreads[2] !== 'search' && !botThreads[2].endsWith('/search')))) {
           if (!app.plugins.list().some(p => p.id === 'feishu' && p.status === 'active')) throw new InputError('飞书插件已停用', 503);
           const id = decodeURIComponent(botThreads[1]!);
           if (!bots.list().some(bot => bot.id === id && bot.scope.kind === 'global' && bot.enabled && bot.paired))
@@ -536,12 +536,16 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           const params = url.searchParams;
           const tag = params.get('tag') ?? undefined;
           if (!botThreads[2]) return json(res, 200, bots.listPrivateHistory(id, params.get('archived') === '1', tag));
-          if (botThreads[2] === 'search') {
+          if (botThreads[2] === 'search' || botThreads[2].endsWith('/search')) {
             if (!app.plugins.list().some(p => p.id === 'conversation-search' && p.status === 'active'))
               throw new InputError('对话历史搜索插件已停用', 503);
             if (params.has('around') || params.has('after') || params.getAll('before').length > 1)
               throw new InputError('搜索仅支持一个 before 游标');
             if (!['0', '1'].includes(params.get('archived') ?? '0')) throw new InputError('归档筛选值无效');
+            if (botThreads[2] !== 'search') {
+              const row = bots.requireThread(id, botThreads[2].split('/')[0]);
+              return json(res, 200, searchPrivateThreadHits(app.store, row, params.get('q') ?? '', params.get('archived') === '1', params.get('before'), tag));
+            }
             return json(res, 200, searchPrivateThreads(app.store, bots.privateThreads(id), params.get('q') ?? '', params.get('archived') === '1', params.get('before'), tag));
           }
           const row = bots.requireThread(id, botThreads[2]);

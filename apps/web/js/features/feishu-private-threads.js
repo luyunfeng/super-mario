@@ -58,7 +58,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       closeReason='当前身份、配对或插件已变化，请重新打开独立对话链接。';
       return drawer.close();
     }
-    if(target && bindingChange!==store.view.feishuBotChange) {
+    if(bindingChange!==store.view.feishuBotChange) {
       bindingChange=store.view.feishuBotChange;
       if(bindingChange?.botId===bot.id && bindingChange.bindingChanged) {
         closeReason='机器人配对或配置已变化，请重新打开链接核对。';
@@ -210,15 +210,65 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
           query && Button({ label: '清除搜索', onClick: () => search('', archived) })))
         : h('p', { class: 'muted' }, '对话历史搜索插件已停用。'), results);
     const openThread = row => Button({ label: row.title + ' · ' + row.count + ' 条消息', onClick: () => detail(row) });
+    const expanded = new Map();
+    async function readHits(row) {
+      if (!current(id) || !searchEnabled) return;
+      const page = expanded.get(row.threadId) ?? { hits: null, nextBefore: null };
+      if (page.loading || (page.hits && !page.nextBefore)) return;
+      expanded.set(row.threadId, page);
+      page.loading = true;
+      page.error = '';
+      const params = new URLSearchParams({ q: query, archived: archived ? '1' : '0' });
+      if (selectedTag) params.set('tag', selectedTag);
+      if (page.nextBefore) params.set('before', page.nextBefore);
+      const visible = () => current(id) && searchEnabled && expanded.get(row.threadId) === page;
+      showResults();
+      try {
+        const result = await api.get(base + '/' + encodeURIComponent(row.threadId) + '/search?' + params);
+        if (!visible()) return;
+        page.hits = (page.hits ?? []).concat(result.hits);
+        page.nextBefore = result.nextBefore;
+      } catch (error) {
+        if (!visible() || inaccessible(error)) return;
+        if (error.status === 410) return deleted();
+        if (error.status === 503 && error.message.includes('搜索插件已停用')) {
+          setSearchEnabled(false);
+          void store.refresh();
+          return;
+        }
+        if (error.status === 409) {
+          page.hits = null;
+          page.nextBefore = null;
+        }
+        page.error = error.message;
+      } finally {
+        page.loading = false;
+        if (visible()) showResults();
+      }
+    }
+    function matchedMessages(row) {
+      const page = expanded.get(row.threadId);
+      const hits = page?.hits ?? row.hits;
+      return [
+        row.hitCount > row.hits.length && h('span', {class:'small muted'}, page?.hits
+          ? `共匹配 ${row.hitCount} 条发言，已显示 ${hits.length} 条。`
+          : `共匹配 ${row.hitCount} 条发言，显示最近 ${row.hits.length} 条。`),
+        hits.map(hit => h('button',{type:'button',class:'btn btn--secondary btn--sm',onclick:()=>detail({...row,hits},'',undefined,hit.id)},
+          historyMessageLabel(hit),' · ',hit.omittedBefore?'…':'',hit.excerpt.slice(0,hit.matchStart),
+          h('mark',{},hit.excerpt.slice(hit.matchStart,hit.matchEnd)),hit.excerpt.slice(hit.matchEnd),hit.omittedAfter?'…':'')),
+        page && Button({label:'收起匹配发言', onClick:() => { expanded.delete(row.threadId); showResults(); }}),
+        page?.error && h('p', { role:'alert' }, page.error),
+        page?.loading ? h('p', {role:'status'}, '正在读取匹配发言…')
+          : (page?.nextBefore || (!page?.hits && row.hitCount > row.hits.length)) && Button({
+            label:page?.error ? '重试读取匹配发言' : page?.hits ? '加载更多匹配发言' : '查看全部匹配发言', onClick:()=>readHits(row) }),
+      ];
+    }
     function showResults() {
       const items = searchPage.items;
       replace(results, items.length ? items.map(row => h('div', { class: 'stack' }, openThread(row),
         row.matchedTags?.length && h('span', {class:'small muted'}, '匹配标签：' + row.matchedTags.join('、')),
         row.titleMatch && h('span', { class: 'small muted' }, '标题匹配'),
-        row.hitCount > row.hits.length && h('span', {class:'small muted'}, `共匹配 ${row.hitCount} 条发言，显示最近 ${row.hits.length} 条。`),
-        row.hits.map(hit => h('button',{type:'button',class:'btn btn--secondary btn--sm',onclick:()=>detail(row,'',undefined,hit.id)},
-          historyMessageLabel(hit),' · ',hit.omittedBefore?'…':'',hit.excerpt.slice(0,hit.matchStart),
-          h('mark',{},hit.excerpt.slice(hit.matchStart,hit.matchEnd)),hit.excerpt.slice(hit.matchEnd),hit.omittedAfter?'…':''))))
+        matchedMessages(row)))
         : h('p', { class: 'muted' }, '没有找到匹配的独立对话。'),
         searchPage.nextBefore && Button({ label: '加载更多结果', onClick: () => read(searchPage.nextBefore) }));
     }
