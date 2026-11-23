@@ -281,7 +281,9 @@ export class PluginHost {
             const form = value as Extract<ContributionMap['web_extensions'],{renderer:'form'}>;
             if (!id.startsWith(entry.info.id + '/') || !/^[a-zA-Z0-9_-]+$/.test(id.slice(entry.info.id.length + 1)) ||
                 !Array.isArray(form.fields) || !form.fields.length || !form.fields.every(field => field &&
-                  typeof field.name === 'string' && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(field.name) && typeof field.label === 'string') ||
+                  typeof field.name === 'string' && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(field.name) && typeof field.label === 'string' &&
+                  (field.multiline === undefined || typeof field.multiline === 'boolean') &&
+                  (field.required === undefined || typeof field.required === 'boolean')) ||
                 new Set(form.fields.map(field => field.name)).size !== form.fields.length) throw new Error('无效的插件表单声明');
           }
           if (kind === 'connectors' && value && typeof value === 'object' && !Array.isArray(value) &&

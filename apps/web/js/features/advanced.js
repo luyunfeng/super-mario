@@ -197,7 +197,7 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
       if (typeof value.title !== 'string') continue;
       let content, stream;
       if (value.renderer === 'form' && Array.isArray(value.fields)) {
-        const fields = value.fields.map(field => h('input',{class:'input',required:field.required}));
+        const fields = value.fields.map(field => h(field.multiline ? 'textarea' : 'input',{class:'input',required:field.required}));
         const status = h('p',{role:'status'});
         const submit = Button({label:'提交',type:'submit'});
         let accepted;
