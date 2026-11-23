@@ -120,7 +120,7 @@ export async function createWorkbench(config: AppConfig) {
   const projectFolders = createProjectFolders(() => machines);
   let replyToFeishu: ((chatId: string, text: string, key: string) => Promise<void>) | undefined;
   let channelStatus = () => ({ connected: false, reason: '请在 Web 配置飞书' });
-  let validateAgentInputOwner: (target: FeishuAgentInputTarget) => boolean = () => false;
+  let validateAgentInputOwner: (target: FeishuAgentInputTarget, purpose?: 'read-result') => boolean = () => false;
   let botsStatus: () => Json = () => [];
   let notificationBots: () => import('../../protocol/src/index.ts').FeishuBot[] = () => botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[];
   const presence = createWebPresence();
@@ -1544,6 +1544,9 @@ export async function createWorkbench(config: AppConfig) {
       const clientMessageId = pinned?.topic?.inputId;
       if (clientMessageId && machines!.list().some(item => item.id === run.machineId && item.capabilities.includes('executor.input.once'))) {
         const ack = await machines!.call(run.machineId, 'executor.input.once', { ...params, clientMessageId });
+        if (ack && typeof ack === 'object' && !Array.isArray(ack) && ack.clientMessageId === clientMessageId &&
+          ack.requested === false && ack.state === 'not-sent' && ack.accepted !== true)
+          throw Object.assign(new InputError('执行机在提交前未能确认原生会话可接收输入', 409), { delivery: 'no' });
         if (!ack || typeof ack !== 'object' || Array.isArray(ack) || ack.clientMessageId !== clientMessageId ||
           ack.requested !== true || ack.accepted === false || ack.state !== undefined)
           throw new Error('执行机未确认这条话题输入的编号，送达结果未知。');
@@ -1551,6 +1554,12 @@ export async function createWorkbench(config: AppConfig) {
       }
       return machines!.call(run.machineId, 'executor.input', params);
     } });
+  }
+  async function readTopicTurnResult(target: FeishuAgentInputTarget, turnId: string) {
+    if (!machines || !target.topic?.publishTurnResult || !target.nativeSessionId || !validateAgentInputOwner(target, 'read-result'))
+      throw new InputError('原生轮次来源已失效', 409);
+    return machines.call(target.machineId, 'executor.turnResult', { sessionId: target.sessionId, clientMessageId: target.topic.inputId,
+      nativeSessionId: target.nativeSessionId, turnId });
   }
   async function cancel(id: string) {
     const run = store.get<Run>('runs', id);
@@ -1907,6 +1916,7 @@ export async function createWorkbench(config: AppConfig) {
       if (source && source.conversationId !== botConversationId({ id: input.botId, scope }, thread)) throw new InputError('协作回报不属于发起机器人', 403);
       return scopedAgents.post(requiredText(input.text, '协作回报'), scope, input.botId, context, thread);
     },
+    readTopicTurnResult,
     setAgentInputOwnerValidator(validate: typeof validateAgentInputOwner) { validateAgentInputOwner = validate; },
     setBotsStatus(status: () => Json) { botsStatus = status; },
     setGroupReadRecords(handler: NonNullable<typeof groupReadRecords>) { groupReadRecords = handler; },

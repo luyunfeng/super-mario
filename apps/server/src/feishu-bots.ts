@@ -3,6 +3,7 @@ import { createGroupTaskReports } from './feishu-group-task-reports.ts';
 import { createGroupTasks } from './feishu-group-tasks.ts';
 import { groupTaskPrompt } from '../../../packages/core/src/prompts.ts';
 import { createTopicCompletions } from './feishu-topic-completions.ts';
+import { createTopicTurnResults } from './feishu-topic-turn-results.ts';
 import { createTopicExecutor } from './feishu-topic-executor.ts';
 import { createTopicInputReceipts, TopicInputReceiptNotReady } from './feishu-topic-input-receipts.ts';
 import { createTopicTurns } from './feishu-topic-turns.ts';
@@ -64,6 +65,7 @@ export interface FeishuBotsApp {
   attention?(): AttentionItem[];
   projects?: { list(): Project[] };
   todos?: () => Todo[];
+  readTopicTurnResult?(target: FeishuAgentInputTarget, turnId: string): Promise<Json>;
   recordTopicDecision?(inputId: string): void;
   createTodo?(input: Record<string, unknown>): Todo;
   plugins?: {
@@ -1868,21 +1870,38 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (closed || !state || state.readyEpoch !== state.epoch) return false;
     try { return state.adapter?.status().connected === true; } catch { return false; }
   }
+  async function sendTopicInputReply(target: FeishuAgentInputTarget, text: string, key: string, resultGuard?: () => void) {
+    const proof = target.topic;
+    if (!proof) throw noDelivery('缺少原话题记录。');
+    const { bot, adapter } = requireTopicSource(target.botId, proof.inputId);
+    const guard = () => {
+      resultGuard?.();
+      const now = requireTopicSource(bot.id, proof.inputId);
+      if (now.adapter !== adapter || now.route.target !== proof.chatId || now.topic.grant !== proof.grant || now.threadId !== proof.threadId
+        || now.messageId !== proof.messageId || groupReadBinding(bot, now.paired) !== proof.binding) throw noDelivery('原话题已变化。');
+    };
+    return sendTaskMessage(bot, adapter, proof.chatId, text, proof.messageId, digest([key]).slice(0, 32), guard, proof.threadId, true, () => {
+      if (!receiptReady(bot.id) || runtime(bot.id).adapter !== adapter) throw new TopicInputReceiptNotReady();
+    });
+  }
   const topicReceipts = createTopicInputReceipts(app.store, {
     ready: target => receiptReady(target.botId),
-    async send(target, text, key) {
-      const proof = target.topic;
-      if (!proof) throw noDelivery('缺少原话题记录。');
-      const { bot, adapter } = requireTopicSource(target.botId, proof.inputId);
-      const guard = () => {
-        const now = requireTopicSource(bot.id, proof.inputId);
-        if (now.adapter !== adapter || now.route.target !== proof.chatId || now.topic.grant !== proof.grant || now.threadId !== proof.threadId
-          || now.messageId !== proof.messageId || groupReadBinding(bot, now.paired) !== proof.binding) throw noDelivery('执行输入回执的原话题已变化。');
-      };
-      return sendTaskMessage(bot, adapter, proof.chatId, text, proof.messageId, digest([key]).slice(0, 32), guard, proof.threadId, undefined, () => {
-        if (!receiptReady(bot.id) || runtime(bot.id).adapter !== adapter) throw new TopicInputReceiptNotReady();
-      });
-    },
+    send: sendTopicInputReply,
+  });
+  function validateAgentInputOwner(target: FeishuAgentInputTarget, purpose?: 'read-result') {
+    try {
+      const bot = current(target.botId), paired = owner(bot);
+      return !!terminalEnabled() && bot.scope.kind === 'global' && bot.revision === target.revision && bot.appId === target.appId
+        && (!bot.executorId || bot.executorId === target.executorId) && !!paired?.senderId
+        && paired.chatId === target.owner.chatId && paired.senderId === target.owner.senderId
+        && (!target.topic || (target.topic.binding === groupReadBinding(bot, paired)
+          && requireTopicSource(bot.id, target.topic.inputId).topic.grant === target.topic.grant && topicExecutor.valid(target, purpose === 'read-result')));
+    } catch { return false; }
+  }
+  const topicTurnResults = createTopicTurnResults(app.store, {
+    valid: target => !!app.readTopicTurnResult && receiptReady(target.botId) && validateAgentInputOwner(target, 'read-result'),
+    read: (target, turnId) => app.readTopicTurnResult!(target, turnId),
+    send: sendTopicInputReply,
   });
   // Opening routes already contain durable authority for existing topics. Index only their IDs.
   // External /ai handoffs have a separate preview, deadline and cancellation path.
@@ -2720,7 +2739,13 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (closed || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) return;
     if (event.type === 'approvals.changed' && typeof event.data.id === 'string') {
       const target = app.store.get<FeishuAgentInputTarget>('feishu.agent-input-targets', event.data.id);
-      if (target?.topic) void track(target.botId, topicReceipts.changed(event.data.id));
+      if (target?.topic) {
+        const id = event.data.id;
+        void track(target.botId, topicReceipts.changed(id).then(() => topicTurnResults.changed(id)));
+      }
+    }
+    if (event.type === 'machines.changed' && event.data.online === true) {
+      void topicTurnResults.sweep().catch(error => { if (!closed) app.events.publish('feishu.changed', { reason: redact(error) }); });
     }
     if (event.type === 'todos.changed') {
       sweepReports();
@@ -2747,16 +2772,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (message) void track('replies', reply(message));
   });
   return {
-    validateAgentInputOwner(target: FeishuAgentInputTarget) {
-      try {
-        const bot = current(target.botId), paired = owner(bot);
-        return !!terminalEnabled() && bot.scope.kind === 'global' && bot.revision === target.revision && bot.appId === target.appId
-          && (!bot.executorId || bot.executorId === target.executorId) && !!paired?.senderId
-          && paired.chatId === target.owner.chatId && paired.senderId === target.owner.senderId
-          && (!target.topic || (target.topic.binding === groupReadBinding(bot, paired)
-            && requireTopicSource(bot.id, target.topic.inputId).topic.grant === target.topic.grant && topicExecutor.valid(target)));
-      } catch { return false; }
-    },
+    validateAgentInputOwner,
     topicChats, canUseScope, listGroupReads, privateThreads, requireThread, deletePrivateThread, privateThreadMetadata, updatePrivateThread, threadPreferenceKey, threadTagPreferences, threadOrder, listPrivateHistory,
     searchPrivateHistory(id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string) {
       const bot = current(id), paired = owner(bot);
@@ -2830,21 +2846,22 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       await Promise.all([deletionCleanup.recover(), ...settings.list().filter(bot => !bot.archivedAt).map(bot => restart(bot.id))]);
       if (!reportTimer && !closed) { reportTimer = setInterval(() => {
         sweepReports();
-        void topicReceipts.retryReady().catch(error => { if (!closed) app.events.publish('feishu.changed', { reason: redact(error) }); });
+        void Promise.all([topicReceipts.retryReady(), topicTurnResults.sweep()]).catch(error => { if (!closed) app.events.publish('feishu.changed', { reason: redact(error) }); });
       }, 60_000); reportTimer.unref(); }
       sweepReports();
       if (!closed) await topicReceipts.sweep();
+      if (!closed) await topicTurnResults.sweep();
     },
     async close() {
       if (closed) return; closed = true;
       if (reportTimer) clearInterval(reportTimer);
-      const reportDrain = taskReports.close(), receiptDrain = topicReceipts.close(), completionDrain = topicCompletions.close();
+      const reportDrain = taskReports.close(), receiptDrain = topicReceipts.close(), completionDrain = topicCompletions.close(), turnDrain = topicTurnResults.close();
       const pinDrain = pins.close(), deletionDrain = deletionCleanup.close();
       await progressStreams.close();
       for (const state of runtimes.values()) state.epoch++;
       await off(); await Promise.all([...runtimes.values()].map(state => state.operations));
       await Promise.allSettled([...runtimes.values()].map(state => state.adapter?.close()));
-      await Promise.allSettled([pinDrain, deletionDrain, reportDrain, receiptDrain, completionDrain, ...tasks, ...inboxJobs.values(), ...[...relayJobs.values()].map(item => item.job)]);
+      await Promise.allSettled([pinDrain, deletionDrain, reportDrain, receiptDrain, completionDrain, turnDrain, ...tasks, ...inboxJobs.values(), ...[...relayJobs.values()].map(item => item.job)]);
     },
     send, dispatchInbox, relay,
     async collect(id: string) {

@@ -21,14 +21,14 @@ const nativeId = (run: Run) => run.nativeSessionId ?? run.nativeResume?.nativeSe
 
 export function createTopicExecutor(app: Pick<FeishuBotsApp, 'store' | 'approvals' | 'mailboxes' | 'listExecutors'>) {
   const { store } = app;
-  function select(todoId: string): Selected | undefined {
+  function select(todoId: string, readResult = false): Selected | undefined {
     const todo = store.get<Todo>('todos', todoId), assigned = todo?.responsibleSession;
     if (!assigned) return;
     const worker = store.get<Run>('runs', assigned.runId);
     if (todo.completedAt || !worker || worker.id !== assigned.runId || worker.todoId !== todoId || worker.projectId !== todo.projectId ||
         !worker.machineId || !worker.sessionId || worker.machineId !== assigned.machineId || worker.sessionId !== assigned.sessionId)
       return { reason: '登记的负责会话与当前待办不再匹配。' };
-    if (worker.status !== 'running' || worker.executionMode !== 'interactive')
+    if ((worker.status !== 'running' && !(readResult && worker.status === 'unknown')) || worker.executionMode !== 'interactive')
       return { reason: '负责会话当前无法接收交互输入。' };
     if (todo.projectId) {
       const project = store.get<Project>('projects', todo.projectId);
@@ -66,9 +66,9 @@ export function createTopicExecutor(app: Pick<FeishuBotsApp, 'store' | 'approval
     const dispatch = store.get<{status: string; id?: string}>('feishu.bot.dispatch', [target.botId, target.appId, entry.id].join(':'));
     if (dispatch?.status === 'completed' && dispatch.id === msg.id) return msg.text;
   }
-  function valid(target: FeishuAgentInputTarget): boolean {
+  function valid(target: FeishuAgentInputTarget, readResult = false): boolean {
     if (!target.topic) return false;
-    const worker = select(target.todoId)?.worker;
+    const worker = select(target.todoId, readResult)?.worker;
     if (!worker || worker.id !== target.runId || worker.machineId !== target.machineId || worker.sessionId !== target.sessionId ||
       worker.executorId !== target.executorId || (worker.projectId ?? '') !== target.projectId || worker.cwd !== target.cwd ||
       (target.nativeSessionId && nativeId(worker) !== target.nativeSessionId)) return false;
@@ -95,10 +95,13 @@ export function createTopicExecutor(app: Pick<FeishuBotsApp, 'store' | 'approval
           runId: worker.id, sessionId: worker.sessionId, machineId: worker.machineId, executorId: worker.executorId, nativeSessionId: nativeId(worker),
           cwd: worker.cwd, todoId: topic.todoId, projectId: worker.projectId ?? '',
           topic: { binding: topic.binding, grant: topic.grant, chatId: source.chatId, threadId: source.threadId, messageId: source.messageId, inputId: acceptedId } };
+        const nativeReply = !!target.nativeSessionId && worker.executorId === worker.machineId + '/codex'
+          && store.get<MachineInfo>('machines', worker.machineId)?.capabilities.includes('executor.turnResult');
+        if (nativeReply) target.topic.publishTurnResult = true;
         text = words(target) ?? '';
         if (text) {
-          const approval = app.approvals.propose({ kind: 'input', title: '将话题决定发送给负责会话', details: `负责会话：${worker.sessionId}\n执行者：${worker.executorId}\n如需改动，请拒绝后在原话题重新发送。`,
-            todoId: topic.todoId, params: { fixedInput: true, id: worker.id, sessionId: worker.sessionId, machineId: worker.machineId,
+          const approval = app.approvals.propose({ kind: 'input', title: '将话题决定发送给负责会话', details: `负责会话：${worker.sessionId}\n执行者：${worker.executorId}\n如需改动，请拒绝后在原话题重新发送。${nativeReply ? '\n批准后，本轮可核实的最终答复将公开回复到原飞书话题。' : ''}`,
+            todoId: topic.todoId, params: { fixedInput: true, ...(nativeReply && { publishTurnResult: true }), id: worker.id, sessionId: worker.sessionId, machineId: worker.machineId,
               executorId: worker.executorId, ...(target.nativeSessionId && { nativeSessionId: target.nativeSessionId }),
               todoId: topic.todoId, ...(worker.projectId && { projectId: worker.projectId }), text } });
           store.put('feishu.agent-input-targets', approval.id, target);

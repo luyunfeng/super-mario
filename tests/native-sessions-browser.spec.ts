@@ -25,7 +25,7 @@ async function fixture(run: (ctx: {page: Page; json: (route: Route, data: any, s
     const page = await browser.newPage({ viewport: { width: 1200, height: 950 } });
     page.setDefaultTimeout(6000);
     await page.addInitScript(() => { localStorage.setItem('sm.splash.seen', 'true'); Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true }); });
-    const state = { machines: result().machines.map(m => ({ id: m.machineId, name: m.machineName, online: m.online, capabilities: m.machineId === 'old' ? [] : ['sessions.discover'] })), projects: [{ id: 'match', name: '同目录项目', workspace: { machineId: 'a', cwd: '/work/0' } }, { id: 'wrong', name: '其他目录项目', workspace: { machineId: 'b', cwd: '/else' } }] };
+    const state = { todos: [{ id: 'topic-todo', title: '合成话题待办' }, { id: 'project-todo', projectId: 'match', title: '合成项目待办' }], machines: result().machines.map(m => ({ id: m.machineId, name: m.machineName, online: m.online, capabilities: m.machineId === 'old' ? [] : ['sessions.discover'] })), projects: [{ id: 'match', name: '同目录项目', workspace: { machineId: 'a', cwd: '/work/0' } }, { id: 'wrong', name: '其他目录项目', workspace: { machineId: 'b', cwd: '/else' } }] };
     const reads: string[] = [], writes: any[] = [], otherWrites: string[] = [], errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
     page.on('request', r => { if (r.url().includes('/api/v1/') && r.method() !== 'GET' && !r.url().endsWith('/agents/sessions/resume')) otherWrites.push(new URL(r.url()).pathname); });
@@ -129,6 +129,25 @@ test('恢复必须勾选和填写，仅提出审批，项目不匹配不改目�
   await page.getByRole('button', { name: '查看审批', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '恢复申请审批' })).toContainText('resume-approval');
   assert.equal(otherWrites.some(path => /approve|dispatch|\/runs$/.test(path)), false);
+}));
+
+test('可将交互恢复申请关联到当前项目范围内的待办', async () => fixture(async ({ page, writes, go }) => {
+  await go('agent');
+  await page.locator('[data-cli-session="a-0"]').getByRole('button', { name: '申请恢复' }).click();
+  const todo = page.getByLabel('关联待办（可选）');
+  await todo.selectOption('topic-todo');
+  await page.getByLabel('关联项目（可选）').selectOption('match');
+  await expect(todo).toHaveValue('');
+  await expect(todo.locator('option[value="topic-todo"]')).toHaveCount(0);
+  await todo.selectOption('project-todo');
+  await page.getByLabel('恢复方式').selectOption('interactive');
+  await page.getByLabel('恢复后要做什么').fill('继续本事项');
+  await page.getByRole('checkbox').check();
+  await page.getByRole('button', { name: '提交恢复审批' }).click();
+  await expect.poll(() => writes.length).toBe(1);
+  assert.equal(writes[0].todoId, 'project-todo');
+  assert.equal(writes[0].executionMode, 'interactive');
+  assert.equal(writes[0].expectMinutes, undefined);
 }));
 
 test('unknown 保留 payload/key、跨抽屉锁定，只读核对不重放', { timeout: 40000 }, async () => fixture(async ({ page, json, go }) => {

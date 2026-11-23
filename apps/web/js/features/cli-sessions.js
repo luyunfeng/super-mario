@@ -147,11 +147,23 @@ export function createCliSessions({ api, store, router }) {
     const id = JSON.stringify([auth, machine.machineId, session.executorId, session.nativeSessionId, session.cwd]);
     let record = requests.get(id);
     const project = Select({ options: [['', '不关联项目'], ...(store.view.snapshot?.projects ?? []).filter(p => !p.archivedAt).map(p => [p.id, p.name])], value: record?.payload.projectId ?? projects.value });
+    const mode = Select({ options: [['task', '单次任务'], ['interactive', '交互会话']], value: record?.payload.executionMode ?? 'task' });
+    const todo = Select({ options: [] });
+    function refreshTodos(selected) {
+      const rows = (store.view.snapshot?.todos ?? []).filter(row => !row.completedAt && (row.projectId ?? '') === project.value);
+      replace(todo, h('option', { value: '' }, '不关联待办'), rows.map(row => h('option', { value: row.id }, row.title)));
+      if (selected && record && !rows.some(row => row.id === selected)) todo.append(h('option', { value: selected }, selected));
+      todo.value = selected ?? '';
+    }
+    refreshTodos(record?.payload.todoId);
+    project.addEventListener('change', () => refreshTodos(''));
     const prompt = TextArea({ rows: 4, required: true, value: record?.payload.prompt ?? '' });
     const doneWhen = TextArea({ rows: 3, required: true, value: record?.payload.doneWhen ?? '' });
     const minutes = Input({ type: 'number', min: 1, step: 'any', required: true, value: record?.payload.expectMinutes ?? '' });
     const message = h('div', { style: wrap });
     const mismatch = h('div');
+    const taskFields = h('div', { class: 'stack' }, Field({ label: '完成标准', control: doneWhen, required: true }),
+      Field({ label: '预计用时（分钟）', control: minutes, required: true }));
     let confirmed = false;
     const locked = () => Boolean(record);
     const compatible = () => {
@@ -160,11 +172,13 @@ export function createCliSessions({ api, store, router }) {
       return !chosen?.workspace || (chosen.workspace.machineId === machine.machineId && (root === session.cwd || session.cwd.startsWith(root + '/')));
     };
     function sync() {
-      submit.disabled = locked() || !confirmed || !compatible() || !prompt.value.trim() || !doneWhen.value.trim() || !minutes.validity.valid || !(Number(minutes.value) > 0);
+      const task = mode.value === 'task';
+      taskFields.hidden = !task;
+      submit.disabled = locked() || !confirmed || !compatible() || !prompt.value.trim() || (task && (!doneWhen.value.trim() || !minutes.validity.valid || !(Number(minutes.value) > 0)));
       replace(mismatch, !compatible() && Banner({ tone: 'warn', children: '项目 workspace 与此会话的电脑或目录不匹配。请换项目或不关联；不会更换会话电脑或目录。' }));
-      for (const control of [project, prompt, doneWhen, minutes]) control.disabled = locked();
+      for (const control of [project, todo, mode, prompt, doneWhen, minutes]) control.disabled = locked();
     }
-    for (const control of [project, prompt, doneWhen, minutes]) {
+    for (const control of [project, todo, mode, prompt, doneWhen, minutes]) {
       control.addEventListener('input', sync); control.addEventListener('change', sync);
     }
     const confirmation = Check({ label: '我已确认原终端已停止', onChange: value => { confirmed = value; sync(); } });
@@ -194,7 +208,8 @@ export function createCliSessions({ api, store, router }) {
       const current = store.view.snapshot?.machines?.find(m => m.id === machine.machineId);
       if (current && !current.online) { replace(message, Banner({ tone: 'warn', children: '电脑已离线，请重新读取。' })); return; }
       const payload = { machineId: machine.machineId, executorId: session.executorId, nativeSessionId: session.nativeSessionId, cwd: session.cwd,
-        ...(project.value ? { projectId: project.value } : {}), prompt: prompt.value.trim(), doneWhen: doneWhen.value.trim(), expectMinutes: Number(minutes.value), key: requestKey() };
+        ...(project.value ? { projectId: project.value } : {}), ...(todo.value && { todoId: todo.value }), prompt: prompt.value.trim(),
+        ...(mode.value === 'task' ? { doneWhen: doneWhen.value.trim(), expectMinutes: Number(minutes.value) } : { executionMode: 'interactive' }), key: requestKey() };
       record = { payload, status: 'sending' }; requests.set(id, record); sync();
       try {
         const approval = await api.post('/agents/sessions/resume', payload);
@@ -208,11 +223,11 @@ export function createCliSessions({ api, store, router }) {
       sync();
     } });
     openDrawer({ title: '申请恢复 CLI 会话', body: [
-      Banner({ tone: 'warn', children: '审批通过后会新建 CLI 进程，续用历史会话。不是附着原终端，也不是重派旧执行。请确认原终端已停止。此入口按任务方式继续，并采集原生结果；不会自动接管原终端。' }),
+      Banner({ tone: 'warn', children: '审批通过后会新建 CLI 进程，续用历史会话。请确认原终端已停止。单次任务采集执行结果；交互会话可继续接收输入。' }),
       text(`电脑：${machine.machineName}\n执行者：${session.executorId}\n原生 ID：${session.nativeSessionId}\n目录：${session.cwd}`),
       Field({ label: '关联项目（可选）', control: project }), mismatch,
-      Field({ label: '恢复后要做什么', control: prompt, required: true }), Field({ label: '完成标准', control: doneWhen, required: true }),
-      Field({ label: '预计用时（分钟）', control: minutes, required: true }), confirmation, message], footer: submit });
+      Field({ label: '关联待办（可选）', control: todo }), Field({ label: '恢复方式', control: mode }),
+      Field({ label: '恢复后要做什么', control: prompt, required: true }), taskFields, confirmation, message], footer: submit });
     if (record?.approval) approvalEntry(record.approval);
     else if (record?.status === 'unknown') unknownNote();
     sync();

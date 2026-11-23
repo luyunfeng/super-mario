@@ -143,7 +143,7 @@ export function createFeishuGateway(
     inbox: entry => bots.dispatchInbox(entry),
     outbox: async entry => { await bots.send(entry.botId, requiredText(entry.target, '发送目标'), entry.text, entry.eventKey); },
   });
-  app.setAgentInputOwnerValidator(target => bots.validateAgentInputOwner(target));
+  app.setAgentInputOwnerValidator(bots.validateAgentInputOwner);
   app.setBotsStatus(() => bots.list() as unknown as Json);
   app.setBotRelay(input => bots.relay(input));
   // Private owner targets are used for routing only, never restored to the public bot list.

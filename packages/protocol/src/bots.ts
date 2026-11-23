@@ -21,6 +21,6 @@ export interface MailboxEntry { origin?: InboxOrigin; id: string; version: numbe
 export interface FeishuAgentInputTarget {
   runId: string; sessionId: string; machineId: string; nativeSessionId?: string; executorId: string; cwd?: string;
   projectId: string; todoId: string; botId: string; appId: string; revision: number;
-  topic?: { grant: string; chatId: string; threadId: string; messageId: string; inputId: string; binding: string };
+  topic?: { publishTurnResult?: true; grant: string; chatId: string; threadId: string; messageId: string; inputId: string; binding: string };
   owner: { chatId: string; senderId: string };
 }

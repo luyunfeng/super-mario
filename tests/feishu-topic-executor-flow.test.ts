@@ -48,7 +48,7 @@ test('飞书话题决定经 Web 批准后仅送当前负责会话，重放、换
   });
   const correlatedId = 'fixture-correlated';
   const correlated: JsonObject[] = [], fallback: JsonObject[] = [];
-  let answer: 'ack' | 'missing' | 'different' | 'unknown' = 'ack';
+  let answer: 'ack' | 'missing' | 'different' | 'unknown' | 'busy' = 'ack';
   const newAgent = startAgentNode({ machineId: correlatedId, name: '带输入标识的执行机', dataDir: join(dataDir, 'new-node'), url: server.url, token,
     executors: [{ id: 'codex', name: '合成协议替身', machineId: correlatedId, kind: 'cli', mode: 'real', available: true, description: '', defaultCwd: dataDir }],
     handlers: {
@@ -56,6 +56,7 @@ test('飞书话题决定经 Web 批准后仅送当前负责会话，重放、换
       'executor.input': async params => { fallback.push(params); return {requested:true}; },
       'executor.input.once': async (params): Promise<JsonObject> => {
         correlated.push(params);
+        if (answer === 'busy') return {requested:false,clientMessageId:params.clientMessageId,state:'not-sent'};
         if (answer === 'missing') return {requested:true};
         if (answer === 'different') return {requested:true, clientMessageId:'unrelated-input'};
         if (answer === 'unknown') return {requested:true, clientMessageId:params.clientMessageId, state:'unknown'};
@@ -135,7 +136,7 @@ test('飞书话题决定经 Web 批准后仅送当前负责会话，重放、换
   await t.waitFor(() => assert.ok(server.machines.list().some(m => m.id === correlatedId && m.capabilities.includes('executor.input.once'))));
   const modern = await createRun(correlatedId);
   await assign(modern);
-  for (const scenario of ['ack', 'missing', 'different', 'unknown'] as const) {
+  for (const scenario of ['ack', 'missing', 'different', 'unknown', 'busy'] as const) {
     answer = scenario;
     const messageId = 'om_once_' + scenario, text = '逐轮核对合成回执 ' + scenario;
     const proposal = await propose(messageId, text);
@@ -145,21 +146,21 @@ test('飞书话题决定经 Web 批准后仅送当前负责会话，重放、换
     const before = correlated.length, beforeSend = sent.length;
     const result = await approve(proposal);
     const confirmed = scenario === 'ack';
-    assert.equal(result.status, confirmed ? 'completed' : 'unknown');
+    assert.equal(result.status, confirmed ? 'completed' : scenario === 'busy' ? 'failed' : 'unknown');
     assert.deepEqual(correlated.slice(before), [{sessionId:modern.sessionId, text, clientMessageId:bound.topic.inputId}]);
     await t.waitFor(() => {
       const notices = sent.slice(beforeSend).filter(row => row.chat === topic.chatId && row.context?.replyTo === messageId);
       assert.equal(notices.length,1);
       assert.equal(notices[0].context?.threadId,topic.threadId);
-      assert.match(notices[0].text, confirmed ? /已收到/ : /未知/);
+      assert.match(notices[0].text, confirmed ? /已收到/ : scenario === 'busy' ? /未发送/ : /未知/);
     }, {timeout:5000});
     const stored = server.app.store.get<{status:string}>('feishu.topic-input-receipts', proposal.id);
-    assert.equal(stored?.status, confirmed ? 'sent' : 'unknown');
+    assert.equal(stored?.status, confirmed ? 'sent' : scenario === 'busy' ? 'unsent' : 'unknown');
     await follow(messageId, text);
     assert.equal(correlated.length,before + 1);
     assert.equal(fallback.length,0);
   }
-  assert.equal(new Set(correlated.map(p => p.clientMessageId)).size,4);
+  assert.equal(new Set(correlated.map(p => p.clientMessageId)).size,5);
   await assign(one);
   const stale = await propose('om_change','负责人已变化的合成决定');
   await assign(two);
@@ -168,7 +169,7 @@ test('飞书话题决定经 Web 批准后仅送当前负责会话，重放、换
   assert.equal(removed.params.id,two.id);
   await emit('om_off','/topics off',{threadId:undefined});
   assert.notEqual((await approve(removed)).status,'completed');
-  assert.equal((await approvals()).length,7);
+  assert.equal((await approvals()).length,8);
   assert.equal((await decisions()).filter(row => row.text === first).length,1);
   assert.ok(!(await decisions()).some(row => row.text.includes('重放试图修改')));
   assert.equal(modelCalls,1);
