@@ -9,15 +9,23 @@ export const savedPromptsActive = (store, assistantId) => {
 };
 const post = (api, body, assistantId) => api.post('/saved-prompts' + (assistantId ? '?' + new URLSearchParams({assistantId}) : ''), body);
 
+// Names and slash queries allow only letters, marks, digits, underscores, dots and hyphens.
+function promptNamePattern(name, exact = false) {
+  const literal = name.replaceAll('.', '\\.');
+  return new RegExp(exact ? '^' + literal + '$' : literal, 'iu');
+}
+
 // Preserve the user's order within each match group, including the bare "/" list.
 function matchingPrompts(items, filter) {
   if (!filter) return items;
   const exact = [], prefix = [], substring = [];
+  const pattern = promptNamePattern(filter);
   for (const item of items) {
-    const name = item.name.toLowerCase();
-    if (name === filter) exact.push(item);
-    else if (name.startsWith(filter)) prefix.push(item);
-    else if (name.includes(filter)) substring.push(item);
+    const match = pattern.exec(item.name);
+    if (!match) continue;
+    if (match[0] === item.name) exact.push(item);
+    else if (match.index === 0) prefix.push(item);
+    else substring.push(item);
   }
   return [...exact, ...prefix, ...substring];
 }
@@ -25,9 +33,12 @@ function matchingPrompts(items, filter) {
 function suggestedName(text, items) {
   const words = text.trim().match(/[\p{L}\p{Nd}\p{Mn}_.-]+/gu) ?? [];
   const base = [...words.join('-')].slice(0, 20).join('').replace(/-+$/, '').toLowerCase() || 'prompt';
-  const existing = new Set(items.map(item => item.name.toLowerCase()));
+  const taken = candidate => {
+    const pattern = promptNamePattern(candidate, true);
+    return items.some(item => pattern.test(item.name));
+  };
   let name = base;
-  for (let i = 2; existing.has(name); i++) name = base + '-' + i;
+  for (let i = 2; taken(name); i++) name = base + '-' + i;
   return name;
 }
 
@@ -153,7 +164,7 @@ export function openSavedPrompts({ api, store, initialText, assistantId, assista
       let nameError = '', bodyError = '';
       if (!/^[\p{L}\p{Nd}\p{Mn}_.-]{1,32}$/u.test(label)) nameError = '请输入 1 至 32 个字母、汉字、组合标记、数字、点、下划线或短横线。';
       else {
-        const same = new RegExp('^' + label.replaceAll('.', '\\.') + '$', 'iu');
+        const same = promptNamePattern(label, true);
         if (doc.items.some(item => item.id !== draft.id && same.test(item.name))) nameError = '提示词名称已被使用。';
       }
       if (!count || count > 8000) bodyError = '正文须为 1 至 8000 个字符。';
@@ -259,7 +270,7 @@ export function attachSavedPrompts({ api, store, input, getScope = () => '', get
     input.dispatchEvent(new Event('input', { bubbles: true }));
     inserting = false;
   }
-  const query = () => /^\/[\p{L}\p{Nd}\p{Mn}_.-]*$/u.test(input.value) ? input.value.slice(1).toLowerCase() : null;
+  const query = () => /^\/[\p{L}\p{Nd}\p{Mn}_.-]*$/u.test(input.value) ? input.value.slice(1) : null;
   let validMenu, visibleLimit = 25, matchCount = 0;
   function draw() {
     if (!validMenu?.()) { reset(); return; }

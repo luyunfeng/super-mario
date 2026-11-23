@@ -251,7 +251,7 @@ test('插件设置可管理提示词；并发编辑保留草稿，已打开的�
   });
   const list = await manage({ action: 'list' });
   let { revision } = await list.json();
-  const names = ['xplan', 'plan-beta', 'plan-alpha', ...Array.from({ length: 24 }, (_, i) => 'item-' + i), 'plan'];
+  const names = ['xplan', 'plan-beta', 'plan-alpha', 'ſcan', ...Array.from({ length: 23 }, (_, i) => 'item-' + i), 'plan'];
   for (const name of names) {
     const response = await manage({ action: 'create', revision, name, text: '正文 ' + name });
     assert.equal(response.status(), 200);
@@ -272,6 +272,8 @@ test('插件设置可管理提示词；并发编辑保留草稿，已打开的�
   await expect(rows).toHaveCount(29);
   await input.press('Tab');
   await expect(input).toHaveValue('正文 plan');
+  await input.fill('/SCAN');
+  await expect(rows).toHaveText(['/ſcan']);
   await input.fill('/PLAN');
   await expect(rows).toHaveText(['/plan', '/plan-beta', '/plan-alpha', '/xplan']);
   await input.press('ArrowDown');
