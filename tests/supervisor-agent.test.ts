@@ -369,3 +369,23 @@ test('a similar word or a missing reason cannot silently close a review', async 
     assert.equal((await f.service.flush())?.status, 'suggestion');
   }
 });
+
+
+test('计划到点复核实际进入提示词，主人开始验收后的迟到建议作废',async t=>{
+  const f=fixture(t);
+  const run:Run={id:'run',conversationId:'main',todoId:'todo',executorId:'fixture',prompt:'核对合成材料',
+    doneWhen:'有记录',expectMinutes:5,status:'running',output:'',createdAt:'2026-01-01',updatedAt:'2026-01-01',
+    planEstimate:{planId:'plan',taskIndex:0,source:'default'}};
+  f.store.put('runs',run.id,run);f.store.put('todos','todo',{id:'todo'});
+  const id=JSON.stringify(['estimate_due',run.id,0]);
+  f.add(signal(id,'estimate_due'));
+  const reading=deferred<Message>(),started=deferred<void>();
+  f.respondWith(()=>{ started.resolve();return reading.promise; });
+  const review=f.service.flush();await started.promise;
+  assert.match(f.calls[0].text,/单凭预计时间不能宣告超时、完成或自动返工/);
+  f.ledger.attach({todoId:'todo',runId:run.id});
+  reading.resolve(answer());
+  assert.equal(await review,undefined);
+  assert.equal(await f.service.flush(),undefined);
+  assert.deepEqual(f.service.reviews(),[]);
+});

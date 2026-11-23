@@ -1,3 +1,4 @@
+import { estimatePlanTask, rememberEstimateRun, type PlanEstimateDispatch, type PlanEstimateSource, type PlanEstimateEvidence } from './plan-estimates.ts';
 import { validatePolicyPatch, type PolicyConfig } from './policies.ts';
 import { randomUUID } from 'node:crypto';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
@@ -18,7 +19,7 @@ export interface PlanTaskInput {
   projectId?: string;
   todoId?: string;
   doneWhen: string;
-  expectMinutes: number;
+  expectMinutes?: number;
   executionMode?: 'task' | 'interactive';
   policy?: Partial<PolicyConfig>;
 }
@@ -27,7 +28,7 @@ export interface Plan {
   title: string;
   version: number;
   status: 'pending' | 'running' | 'started' | 'rejected' | 'partial' | 'unknown';
-  tasks: (PlanTaskInput & { runId?: string; error?: string })[];
+  tasks: (PlanTaskInput & {expectMinutes:number; estimateSource?:PlanEstimateSource; estimateEvidence?:PlanEstimateEvidence; runId?:string; error?:string})[];
   error?: string;
   createdAt: string;
   updatedAt: string;
@@ -36,16 +37,16 @@ const collection = 'plans';
 function text(value: unknown, field: string): asserts value is string {
   if (typeof value !== 'string' || !value.trim()) throw new PlansError(`${field}必须为非空文本`);
 }
-function validate(input: { title: string; tasks: PlanTaskInput[] }) {
+function validate(store: Store, input: { title: string; tasks: PlanTaskInput[] }) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new PlansError('计划必须为对象');
   text(input.title, 'title');
   if (!Array.isArray(input.tasks) || input.tasks.length < 1 || input.tasks.length > 8) throw new PlansError('计划需要 1–8 个任务');
   // Copy only supported input fields. No writes or dispatches occur until every task passes.
-  const tasks = Array.from(input.tasks, (task): PlanTaskInput => {
+  const tasks = Array.from(input.tasks, (task): Plan['tasks'][number] => {
     if (!task || typeof task !== 'object' || Array.isArray(task)) throw new PlansError('任务必须为对象');
     text(task.prompt, 'prompt');
     text(task.doneWhen, 'doneWhen');
-    if (typeof task.expectMinutes !== 'number' || !Number.isFinite(task.expectMinutes) || task.expectMinutes <= 0 || task.expectMinutes > 10080) {
+    if (task.expectMinutes !== undefined && (typeof task.expectMinutes !== 'number' || !Number.isFinite(task.expectMinutes) || task.expectMinutes <= 0 || task.expectMinutes > 10080)) {
       throw new PlansError('expectMinutes必须为1周内的有限正数');
     }
     const result: PlanTaskInput = { prompt: task.prompt, doneWhen: task.doneWhen, expectMinutes: task.expectMinutes };
@@ -60,7 +61,7 @@ function validate(input: { title: string; tasks: PlanTaskInput[] }) {
       try { validatePolicyPatch(task.policy); } catch (error) { throw new PlansError(error instanceof Error ? error.message : '无效任务策略'); }
       result.policy = structuredClone(task.policy);
     }
-    return result;
+    return {...result,...estimatePlanTask(store,result)};
   });
   return { title: input.title, tasks };
 }
@@ -69,7 +70,7 @@ function validate(input: { title: string; tasks: PlanTaskInput[] }) {
 export function createPlans({ store, events, dispatch }: {
   store: Store;
   events: EventBus;
-  dispatch: (input: Record<string, unknown>, key?: string) => { id: string };
+  dispatch: (input: Record<string, unknown>, key?: string, estimate?:PlanEstimateDispatch) => { id: string };
 }) {
   let closed = false;
   function open() { if (closed) throw new PlansError('计划服务已关闭', 503); }
@@ -100,7 +101,7 @@ export function createPlans({ store, events, dispatch }: {
     list(): Plan[] { return store.list<Plan>(collection).sort((a, b) => b.createdAt.localeCompare(a.createdAt)); },
     propose(input: { title: string; tasks: PlanTaskInput[] }): Plan {
       open();
-      const fields = validate(input);
+      const fields = validate(store,input);
       const now = new Date().toISOString();
       const plan: Plan = { ...fields, id: randomUUID(), version: 1, status: 'pending', createdAt: now, updatedAt: now };
       store.put(collection, plan.id, plan);
@@ -119,10 +120,13 @@ export function createPlans({ store, events, dispatch }: {
       changed(id);
       for (const [index, task] of plan.tasks.entries()) {
         try {
-          const run = dispatch({ ...task }, `plan:${id}:${version}:${index}`);
+          const {estimateSource, estimateEvidence, ...payload} = task;
+          const estimate = estimateSource && {planId:id, taskIndex:index, source:estimateSource};
+          const run = dispatch(payload, `plan:${id}:${version}:${index}`, estimate);
           // A malformed receipt may still have caused an external action. Never replay it.
           if (!run || typeof run.id !== 'string' || !run.id.trim()) throw new Error('派发未返回有效 runId，结果未知');
           task.runId = run.id;
+          if (estimate) rememberEstimateRun(store, run.id, estimate);
         } catch (error) {
           task.error = error instanceof Error ? error.message || error.name : String(error);
         }

@@ -107,7 +107,7 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
     timeoutMs: 600000,
     async handler(event) {
       const data = event.data as unknown as { id: string; kind: string };
-      if (!['review', 'stalled', 'orphaned', 'needs_you'].includes(data.kind) || store.get('supervisor.processed', data.id)) return { status: 'done' };
+      if (!['review', 'estimate_due', 'stalled', 'orphaned', 'needs_you'].includes(data.kind) || store.get('supervisor.processed', data.id)) return { status: 'done' };
       if (!supervision.signals().some(s => s.id === data.id && !s.resolvedAt)) return { status: 'skip', reason: 'signal_resolved' };
       if (supervisorAgent.settings().canResume || !supervisorRuntime.status().available) return { status: 'retry', reason: '督办暂停或模型未就绪', afterSec: 30, deferred: true };
       await supervisorAgent.flush();

@@ -3709,3 +3709,73 @@ test('Web 与飞书项目主人修订运行中执行的验收标准，事项助�
     assert.equal(server.app.store.get<{sourceMessageId:string}>('message.routes',feishuId)?.sourceMessageId,'request-project');
   } finally {await server.close();}
 });
+
+test('Web 与飞书项目助手按计划回执区分自动估时和主人指定的分钟数', async t => {
+  let adapter!: FeishuOptions;
+  let todoId='', runId='';
+  const sent:string[]=[];
+  const {server,api,ask}=await fixture(t,req=>{
+    if (req.lastRole === 'user') {
+      assert.match(req.system,/未明确指定预计时长时省略 expectMinutes/);
+      assert.match(req.system,/learned 是基于已验收同类任务的历史估算/);
+      assert.match(req.system,/到点先查执行证据，不能据此判定完成或验收通过/);
+      assert.match(req.system,/dueAt 仅是预计核对时刻/);
+      const words=JSON.stringify(req.content);
+      if (words.includes('何时核对')) return call('read_run_scope',{runId:words.includes('旧执行') ? 'legacy' : runId},'timing');
+      const override=words.includes('指定 25 分钟');
+      return call('task_plan',{title:'清单核对计划',tasks:[{todoId,executorId:'machine/codex',prompt:'逐项核对清单',doneWhen:'每项附核对记录',
+        ...(override && {expectMinutes:25})}]},'plan');
+    }
+    const text=typeof req.content==='string'?req.content:(req.content as {text:string}[])[0].text;
+    const plan=JSON.parse(text);
+    if (req.callId==='timing') {
+      const timing=plan.planEstimateTiming;
+      if (!timing) return {role:'assistant',content:'缺少可核实的计划估时'};
+      assert.ok(Number.isFinite(Date.parse(timing.clockAt)));
+      assert.equal(Date.parse(timing.dueAt)-Date.parse(timing.clockAt),timing.minutes*60000);
+      return {role:'assistant',content:JSON.stringify(timing)};
+    }
+    assert.equal(plan.status,'pending');
+    return {role:'assistant',content:plan.tasks[0].estimateSource+'，预计 '+plan.tasks[0].expectMinutes+' 分钟，待开始。'};
+  },options=>{
+    adapter=options;
+    return {start:async()=>{},close:async()=>{},status:()=>({connected:true}),collect:async()=>[],
+      send:async(_target,text)=>{sent.push(text);}};
+  });
+  try {
+    const project=await api('/projects',{name:'计划估时'});
+    todoId=(await api('/todos',{projectId:project.id,title:'核对清单'})).id;
+    server.app.setMachineClient({
+      list:()=>[{id:'machine',name:'合成电脑',online:true,connectedAt:'',platform:'linux',capabilities:['executor.start'],
+        executors:[{id:'codex',machineId:'machine',name:'协议替身',kind:'fixture',mode:'real',available:true,description:'本地替身',defaultCwd:'/tmp'}]}],
+      call:async(_id,method)=>{assert.equal(method,'executor.start');return {sessionId:'offline-session'};},
+    });
+    assert.equal(await ask('拟一份逐项核对清单的计划，先不开始。','/projects/'+project.id+'/messages'),'default，预计 60 分钟，待开始。');
+    const bot=await api('/feishu/bots',{name:'清单助手',appId:'cli_3333333333333333',appSecret:'offline-fixture',
+      scope:{kind:'project',projectId:project.id},requireConfirmation:false});
+    const peer={chatId:'oc_fixture',senderId:'ou_fixture',senderType:'user',chatType:'p2p'} as const;
+    await adapter.onMessage(bot.pairingCode,{...peer,messageId:'pair'});
+    await adapter.onMessage('拟一项清单核对计划，指定 25 分钟，先不开始。',{...peer,messageId:'override'});
+    await t.waitFor(()=>assert.ok(sent.includes('override，预计 25 分钟，待开始。'),sent.join(' / ')));
+    assert.equal(server.app.plans.list().length,2);
+    assert.equal(server.app.store.list<Run>('runs').length,0);
+    const first=server.app.plans.list().find(plan=>plan.tasks[0].estimateSource==='default')!;
+    const started=await api('/plans/'+first.id+'/start',{version:first.version});
+    runId=started.tasks[0].runId;
+    await t.waitFor(()=>assert.equal(server.app.store.get<Run>('runs',runId)?.sessionId,'offline-session'));
+    const path='/projects/'+project.id+'/messages';
+    const initial=JSON.parse(await ask('计划执行何时核对？',path));
+    assert.deepEqual([initial.source,initial.minutes,initial.version],['default',60,0]);
+    await api('/runs/'+runId+'/scope',{expectedProjectId:project.id,expectedVersion:0,expectedDoneWhen:'每项附核对记录',
+      doneWhen:'每项附核对记录',reason:'主人调整核对时间',expectMinutes:15});
+    await adapter.onMessage('计划执行何时核对？',{...peer,messageId:'timing'});
+    await t.waitFor(()=>assert.ok(sent.some(reply=>{
+      if (!reply.startsWith('{')) return false;
+      const timing=JSON.parse(reply);
+      return timing.source==='override' && timing.minutes===15 && timing.version===1 && Date.parse(timing.clockAt)>=Date.parse(initial.clockAt);
+    })));
+    const legacy={...server.app.store.get<Run>('runs',runId)!,id:'legacy',planEstimate:undefined};
+    server.app.store.put('runs',legacy.id,legacy);
+    assert.equal(await ask('旧执行何时核对？',path),'缺少可核实的计划估时');
+  } finally {await server.close();}
+});

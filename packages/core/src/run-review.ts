@@ -63,10 +63,31 @@ function hash(value: unknown): string {
 }
 
 // Display names and cleanup receipts may change after the delivery was accepted.
-function evidenceVersion(run: Run): string {
+export function evidenceVersion(run: Run): string {
   if (!run.worktree) return hash(run);
   const { name, removedAt, branchDeletedAt, ...worktree } = run.worktree;
   return hash({ ...run, worktree });
+}
+
+export function completionEvidence(value: Run): void {
+  const source = value.resultSource;
+  // Declarations are supplied by the host, including for legacy native Runs.
+  // Observation/demo labels cannot become completion evidence by declaration.
+  const realSource = typeof source === 'string' && source.trim() !== ''
+    && !['demo', 'screen', 'runner', 'terminal-idle', 'idle', 'unknown'].includes(source.trim().toLowerCase())
+    && (source === 'real' || value.nativeResultSources?.includes(source));
+  if (value.status !== 'completed' || !realSource || !value.output?.trim()) {
+    throw new RunReviewError('需要真实completed及有效来源和完成证据', 409);
+  }
+  if (!value.nativeResume) return;
+  if (!value.nativeSessionId || value.nativeSessionId !== value.nativeResume.nativeSessionId) {
+    throw new RunReviewError('原生会话编号缺失或与恢复请求不符。', 409);
+  }
+  const executor = value.nativeResume.executorId;
+  const remoteMatch = value.machineId && value.executorId === `${value.machineId}/${executor}`;
+  if (!executor || (value.executorId !== executor && !remoteMatch)) {
+    throw new RunReviewError('执行者与恢复请求或绑定电脑不符。', 409);
+  }
 }
 
 /** One service per Store. The host must inject a synchronous completion guard
@@ -116,26 +137,6 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
       if (!source || source.role !== 'user' || source.origin === 'result' || source.origin === 'notification' || source.readOnly
         || !projectMatches || source.conversationId !== value.conversationId
         || (source.todoId !== undefined && source.todoId !== todoId)) throw new RunReviewError('来源消息证据与执行范围不匹配', 409);
-    }
-  }
-  function completionEvidence(value: Run): void {
-    const source = value.resultSource;
-    // Declarations are supplied by the host, including for legacy native Runs.
-    // Observation/demo labels cannot become completion evidence by declaration.
-    const realSource = typeof source === 'string' && source.trim() !== ''
-      && !['demo', 'screen', 'runner', 'terminal-idle', 'idle', 'unknown'].includes(source.trim().toLowerCase())
-      && (source === 'real' || value.nativeResultSources?.includes(source));
-    if (value.status !== 'completed' || !realSource || !value.output?.trim()) {
-      throw new RunReviewError('需要真实completed及有效来源和完成证据', 409);
-    }
-    if (!value.nativeResume) return;
-    if (!value.nativeSessionId || value.nativeSessionId !== value.nativeResume.nativeSessionId) {
-      throw new RunReviewError('原生会话编号缺失或与恢复请求不符。', 409);
-    }
-    const executor = value.nativeResume.executorId;
-    const remoteMatch = value.machineId && value.executorId === `${value.machineId}/${executor}`;
-    if (!executor || (value.executorId !== executor && !remoteMatch)) {
-      throw new RunReviewError('执行者与恢复请求或绑定电脑不符。', 409);
     }
   }
   function assertCanComplete(todoId: string): void {

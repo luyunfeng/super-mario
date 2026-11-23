@@ -105,12 +105,13 @@ export function collectAttention({ inboxConversations = [], approvals = [], inte
       actions: [{ ...action('interactions', item.id, 'answer', item.version, '回答'), requiresText: true, highRisk }] });
   }
   // A proposed plan starts real work only after the owner confirms it; starting is the explicit decision.
+  const estimateLabels = {default:'默认估时',learned:'历史估时',override:'显式指定'};
   for (const item of plans) {
     if (item.status !== 'pending') continue;
     const taskProject = item.tasks.find(task => task.projectId)?.projectId;
     rows.push({ id: `plan:${item.id}`, type: 'plan', version: item.version, title: item.title,
       context: `等待你确认开始，共 ${item.tasks.length} 项任务`,
-      detail: item.tasks.map((task, index) => `${index + 1}. ${task.prompt}\n   完成标准：${task.doneWhen}；预计 ${task.expectMinutes} 分钟${task.cwd ? `；目录：${task.cwd}` : ''}`).join('\n'),
+      detail: item.tasks.map((task, index) => `${index + 1}. ${task.prompt}\n   完成标准：${task.doneWhen}；预计 ${task.expectMinutes} 分钟${task.estimateSource ? '（'+estimateLabels[task.estimateSource]+'）' : ''}${task.estimateSource === 'learned' && task.estimateEvidence ? '，依据 '+task.estimateEvidence.sampleCount+' 个已验收样本' : ''}${task.cwd ? `；目录：${task.cwd}` : ''}`).join('\n'),
       source: 'Agent', createdAt: item.createdAt, ...project(taskProject),
       actions: [action('plans', item.id, 'start', item.version, '开始执行'), action('plans', item.id, 'reject', item.version, '拒绝')] });
   }

@@ -25,7 +25,7 @@ test('validates every task and the 1–8 limit before storing or dispatching', t
   const { plans, events } = fixture(t, () => ({ id: String(++calls) }));
   const invalid: unknown[] = [null, [], { ...input, title: ' ' }, { ...input, tasks: [] },
     { ...input, tasks: Array(9).fill(task) }, { ...input, tasks: Array(2) }];
-  for (const patch of [{ prompt: '' }, { doneWhen: ' ' }, { doneWhen: undefined }, { expectMinutes: undefined },
+  for (const patch of [{ prompt: '' }, { doneWhen: ' ' }, { doneWhen: undefined },
     { expectMinutes: 0 }, { expectMinutes: -1 }, { expectMinutes: Infinity }, { expectMinutes: NaN },
     { expectMinutes: '5' }, { executorId: '' }, { cwd: 1 }, { projectId: '' }, { todoId: '' }, { executionMode: 'other' }]) {
     invalid.push({ ...input, tasks: [task, { ...task, ...patch }] });

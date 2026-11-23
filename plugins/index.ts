@@ -246,7 +246,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           ] as const) if (action) context.contribute('tools', name, tool(name, description, async (args, signal) => { signal.throwIfAborted(); return action(args); }, properties));
 
           if (actions.readRunScope) context.contribute('tools','read_run_scope',tool('read_run_scope',
-            '按已核实的 runId 读取初始和当前验收标准、版本及历次修改理由。droppedCriteria 仅列当前仍被移除的条款 criterion、原因 reason、版本 version 和时间 createdAt；已恢复条款以当前 doneWhen 为准。',
+            '按已核实的 runId 读取初始和当前验收标准、版本及历次修改理由。droppedCriteria 仅列当前仍被移除的条款 criterion、原因 reason、版本 version 和时间 createdAt；已恢复条款以当前 doneWhen 为准。planEstimateTiming 存在时，source 和 minutes 是本版估时来源和分钟数，clockAt 是计时起点，dueAt 是预计核对时刻，version 是标准版本。',
             async (args, signal) => { signal.throwIfAborted(); return actions.readRunScope!(args); }, {runId:{type:'string'}}, ['runId']));
           if (actions.reviseRunScope) context.contribute('tools','revise_run_scope',tool('revise_run_scope',
             '主人在当前消息独立提交指定 runId 和完整标准的确认句后，按刚读到的版本和旧标准登记。该操作只更新工作台记录。',
@@ -269,8 +269,8 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
               signal.throwIfAborted(); return await action(args);
             }, properties as JsonObject));
           }
-          if (actions.taskPlan) context.contribute('tools', 'task_plan', tool('task_plan', '把目标拆成1–8个任务，所有任务需要验收标准和预计分钟。start=true立即按当前用户请求派发，否则等待用户开始。', async (args, signal) => { signal.throwIfAborted(); return actions.taskPlan!(args); }, {
-            title: { type: 'string' }, start: { type: 'boolean' }, tasks: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object', required: ['prompt', 'doneWhen', 'expectMinutes'], properties: { prompt: { type: 'string' }, doneWhen: { type: 'string' }, expectMinutes: { type: 'number' }, executorId: { type: 'string' }, cwd: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' }, policy: taskPolicyParameters } } },
+          if (actions.taskPlan) context.contribute('tools', 'task_plan', tool('task_plan', '把目标拆成1–8个任务，每项须给出验收标准；省略 expectMinutes 时由工作台估算，回执的 estimateSource 标明默认 default、历史 learned 或显式指定 override。start=true立即按当前用户请求派发，否则等待用户开始。', async (args, signal) => { signal.throwIfAborted(); return actions.taskPlan!(args); }, {
+            title: { type: 'string' }, start: { type: 'boolean' }, tasks: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'object', required: ['prompt', 'doneWhen'], additionalProperties: false, properties: { prompt: { type: 'string' }, doneWhen: { type: 'string' }, expectMinutes: { type: 'number', exclusiveMinimum: 0, maximum: 10080, description: '仅显式指定时填正数分钟，否则省略以自动估算' }, executionMode: { type: 'string', enum: ['task','interactive'] }, executorId: { type: 'string' }, cwd: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' }, policy: taskPolicyParameters } } },
           }));
           if (actions.interactionOpen) context.contribute('tools', 'interaction_open', tool('interaction_open', '需要回答或验收时建立交互卡片，按配置给出建议或等待用户，不能绕过审批。', async (args, signal) => { signal.throwIfAborted(); return actions.interactionOpen!(args); }, {
             kind: { type: 'string', enum: ['question', 'permission', 'plan', 'review'] }, title: { type: 'string' }, body: { type: 'string' }, runId: { type: 'string' }, projectId: { type: 'string' }, executorId: { type: 'string' }, cwd: { type: 'string' },

@@ -21,7 +21,7 @@ import { createReplyTracking } from './reply-tracking.ts';
 import { createWorkDecisionService } from './work-decision-service.ts';
 import { createAgentSessions, nativeResumeSpec, nativeResultSources } from './agent-sessions.ts';
 import { executionProgress } from './execution-progress.ts';
-import { createRunScopes, initialRunCriteria, type RunScopeChange, type RunScopeSource } from './run-scope.ts';
+import { createRunScopes, planEstimateClock, initialRunCriteria, type RunScopeChange, type RunScopeSource } from './run-scope.ts';
 import { recordTodoOrigin, todoBrief, type TodoOriginSource } from './todo-brief.ts';
 import { todoLineage } from './todo-lineage.ts';
 import { createTodoDecisions } from './todo-decisions.ts';
@@ -147,8 +147,11 @@ export async function createWorkbench(config: AppConfig) {
   let ownerScopeRequest: (input:Message)=>boolean = () => false;
   function reviseScope(id:string, args: Record<string,unknown>, source:RunScopeSource) {
     const scope = store.transaction(() => {
+      const run = store.get<Run>('runs',id);
+      const clock = run?.planEstimate && planEstimateClock(store,run);
       const updated = runScopes.revise(id,args as unknown as RunScopeChange,source);
       const last = updated.history.at(-1)!;
+      if (clock && run?.expectMinutes !== updated.expectMinutes) supervision.resolveEstimateDue(id,clock.version,last.createdAt);
       supervision.resolvePreviousStall(id,last.version - 1,last.createdAt);
       return updated;
     });
@@ -642,10 +645,10 @@ export async function createWorkbench(config: AppConfig) {
   }, enabled: () => plugins.list().some(plugin => plugin.id === 'daily-brief' && plugin.status === 'active') });
   supervision.start();
   const policies = createPolicies({ store, events });
-  const plans = createPlans({ store, events, dispatch: (input, key) => {
+  const plans = createPlans({ store, events, dispatch: (input, key, estimate) => {
     const planId = key?.match(/^plan:([^:]+):/)?.[1];
     const origin = planId ? store.get<{ sourceMessageId?: string; projectId?: string; conversationId?: string; todoId?: string }>('plan-origins', planId) : undefined;
-    return dispatch({ ...input, sourceMessageId: origin?.sourceMessageId, conversationId: origin?.conversationId, projectId: input.projectId ?? origin?.projectId, todoId: input.todoId ?? origin?.todoId }, key);
+    return dispatch({ ...input, sourceMessageId: origin?.sourceMessageId, conversationId: origin?.conversationId, projectId: input.projectId ?? origin?.projectId, todoId: input.todoId ?? origin?.todoId }, key,false,undefined,estimate);
   } });
   const answeredInCurrentTurn = new Set<string>();
   const interactionService = createInteractions({ store, events, publish: background.publish, decide: card => {
@@ -766,7 +769,7 @@ export async function createWorkbench(config: AppConfig) {
     const normalized = source && Array.isArray(input.tasks) ? { ...pinChannelTask(input, todo), tasks: input.tasks.map(task => {
       if (!task || typeof task !== 'object' || Array.isArray(task)) return task;
       const args = task as Record<string, unknown>;
-      return { ...pinChannelTask(args, todo), executorId: pinExecutor(source, args.executorId) };
+      return { ...pinChannelTask(args, todo), ...(args.projectId === undefined && source.projectId && {projectId:source.projectId}), executorId: pinExecutor(source, args.executorId) };
     }) } : input;
     const plan = plans.propose(normalized as unknown as Parameters<typeof plans.propose>[0]);
     store.put('plan-origins', plan.id, { sourceMessageId: source?.id, projectId: source?.projectId, conversationId: source?.conversationId, todoId: source?.todoId });
@@ -1391,7 +1394,7 @@ export async function createWorkbench(config: AppConfig) {
     return { available: executors().some(entry => entry.mode === 'real' && entry.available), machines: machines?.list().map(machine => ({ id: machine.id, online: machine.online })) ?? [] };
   }
   function executorInfo() { return executors().map(({ execute: _, ...info }) => info); }
-  function dispatch(input: Record<string, unknown>, key?: string, nativeApproved = false, executionGuard?:()=>void): Run {
+  function dispatch(input: Record<string, unknown>, key?: string, nativeApproved = false, executionGuard?:()=>void, planEstimate?: Run['planEstimate']): Run {
     if (closing) throw new InputError('服务正在关闭', 503);
     const prompt = requiredText(input.prompt, '工作内容');
     if (input.isolatedWorktree !== undefined && typeof input.isolatedWorktree !== 'boolean') throw new InputError('独立工作树选项无效');
@@ -1420,7 +1423,8 @@ export async function createWorkbench(config: AppConfig) {
         const requestHash = store.get<string>('dispatch-prompt-hashes', key);
         const firstCriteria = initialRunCriteria(store,run);
         const samePrompt = requestHash ? createHash('sha256').update(prompt).digest('hex') === requestHash : run.prompt === prompt;
-        if (!samePrompt || (requestedExecutor !== undefined && run.executorId !== requestedExecutor)
+        if (!samePrompt || (planEstimate && (run.planEstimate?.planId !== planEstimate.planId ||
+          run.planEstimate.taskIndex !== planEstimate.taskIndex || run.planEstimate.source !== planEstimate.source)) || (requestedExecutor !== undefined && run.executorId !== requestedExecutor)
           || run.projectId !== projectId || run.conversationId !== conversationId
           || run.worktreeRunId !== worktreeRunId || (run.comparisonRunIds?.length ?? 1) !== copies || Boolean(run.worktree) !== isolated || (input.cwd !== undefined && (run.worktree?.source ?? run.cwd) !== input.cwd)
           || run.todoId !== todoId || run.sourceMessageId !== optionalText(input.sourceMessageId, '来源消息')
@@ -1496,7 +1500,7 @@ export async function createWorkbench(config: AppConfig) {
     const proofSources = nativeResultSources(executor);
     const ids = Array.from({ length: copies }, () => randomUUID());
     const runs = ids.map((id): Run => ({
-      id, executorId, conversationId, prompt, projectId, todoId, doneWhen,
+      id, executorId, conversationId, prompt, projectId, todoId, doneWhen, ...(planEstimate && {planEstimate}),
       ...(copies > 1 && { comparisonRunIds: ids }),
       ...(worktreeRunId && { worktreeRunId }),
       ...(isolated && workspace && { worktree: { source: workspace.cwd } }),

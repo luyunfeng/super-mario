@@ -12,6 +12,7 @@ import { compareRuns, openWorktreeHistory, renameWorktree, openRetainedBranch, o
 import { createLiveTerminals } from './live-terminals.js';
 
 const PLAN_STATUS = { pending: ['待确认', 'warn'], running: ['启动中', 'info'], started: ['已启动', 'ok'], rejected: ['已拒绝', ''], partial: ['部分启动', 'warn'], unknown: ['结果未知', 'danger'] };
+const ESTIMATE_SOURCES = { default: '默认估时', learned: '历史估时', override: '显式指定' };
 const PHASE_LABELS = { starting: '启动', thinking: '思考', tool: '调用工具', responding: '生成回复', waiting: '等待' };
 const FILTERS = [['all', '全部'], ['active', '执行中'], ['problem', '失败 / 未知'], ['ended', '已结束']];
 
@@ -271,12 +272,16 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
   function paintPlans() {
     const rows = plans.filter(plan => projectId === 'all' || plan.tasks.some(task => task.projectId === projectId));
     if (!rows.length) { plansBox.replaceChildren(); return; }
-    plansBox.replaceChildren(Fold({ title: `计划 ${rows.length}`, body: h('div', { class: 'stack' }, rows.map((plan) => {
+    plansBox.replaceChildren(Fold({ title: `计划 ${rows.length}`, open: plansBox.firstElementChild?.open, body: h('div', { class: 'stack' }, rows.map((plan) => {
       const [text, tone] = PLAN_STATUS[plan.status] ?? [plan.status, ''];
       return h('div', { class: 'plan', dataset: { plan: plan.id } },
         h('div', { class: 'row row--between' }, h('strong', null, plan.title), Pill(text, tone)),
         h('ol', { class: 'plan__tasks' }, plan.tasks.map(task => h('li', null,
           task.runId ? h('a', { href: router.href('projects', projectId, 'runs', task.runId) }, task.prompt) : task.prompt,
+          Number.isFinite(task.expectMinutes) && h('span', { class: 'item__meta' },
+            ' · 预计 ' + task.expectMinutes + ' 分钟' + (Object.hasOwn(ESTIMATE_SOURCES, task.estimateSource) ? '（' + ESTIMATE_SOURCES[task.estimateSource] + '）' : '')),
+          task.estimateSource === 'learned' && task.estimateEvidence && h('span', {class:'item__meta'},
+            ' · 依据 ' + task.estimateEvidence.sampleCount + ' 个已验收样本'),
           task.error && h('span', { class: 'text-danger small' }, ` · ${task.error}`)))),
         plan.error && h('p', { class: 'text-danger small' }, plan.error));
     })) }));
@@ -288,7 +293,8 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
   }
 
   function apply() {
-    const sig = JSON.stringify((store.view.snapshot?.runs ?? []).map(run => [run.id, run.status]));
+    const sig = JSON.stringify([(store.view.snapshot?.runs ?? []).map(run => [run.id, run.status]),
+      (store.view.attention ?? []).filter(item => item.type === 'plan').map(item => [item.id, item.version])]);
     if (sig !== plansSignature) { plansSignature = sig; loadPlans(); }
     loadObservations();
     listView.hidden = Boolean(runId); detailView.hidden = !runId; if (runId) paintDetail(); else paintList();

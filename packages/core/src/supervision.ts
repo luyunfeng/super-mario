@@ -1,4 +1,4 @@
-import { runScopeClock } from './run-scope.ts';
+import { planEstimateClock, runScopeClock } from './run-scope.ts';
 import { todoSections, todoDecisionIds } from './todo-sections.ts';
 import { buildWindowBrief } from './briefing.ts';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
@@ -29,6 +29,18 @@ function validate(patch: Partial<AutomationSettings>): void {
       }
     }
   }
+}
+
+/** Both the scheduler and the model reader check the live task before using a queued estimate signal. */
+export function estimateReviewDeadline(store: Store, run: Run) {
+  if (run.status !== 'running' || !run.planEstimate) return;
+  if (run.todoId) {
+    const todo = store.get<Todo>('todos',run.todoId);
+    if (!todo || todo.projectId !== run.projectId || todo.completedAt ||
+      store.get<{runId:string}>('run-reviews',run.todoId)?.runId === run.id) return;
+  }
+  const clock = planEstimateClock(store,run);
+  if (clock) return {id:JSON.stringify(['estimate_due',run.id,clock.version]), ...clock};
 }
 
 /** One scheduler per store. Notifications are local events, never external actions.
@@ -83,6 +95,10 @@ export function createSupervision({ store, events, enabled = () => true, now = (
       // Only an accepted scope revision restarts the clock. Output and heartbeat updates do not.
       const estimate = typeof run.expectMinutes === 'number' && Number.isFinite(run.expectMinutes) && run.expectMinutes > 0
         ? run.expectMinutes : 0;
+      const deadline = estimateReviewDeadline(store,run);
+      if (deadline && date.getTime() >= Date.parse(deadline.dueAt) && !store.get('supervisor.processed',deadline.id)) {
+        add('estimate_due',run.id,deadline.version,`计划派工的预计 ${estimate} 分钟已到，请核对当前进度和交付证据：${run.id}`,{runId:run.id});
+      }
       const stalledMinutes = Math.max(config.stalledMinutes, estimate * config.stalledFactorOfEstimate);
       const revision = run.status === 'running' && run.todoId ? runScopeClock(store,run) : undefined;
       if (run.status === 'running' && aged(revision?.createdAt ?? run.createdAt, stalledMinutes)) {
@@ -165,6 +181,11 @@ export function createSupervision({ store, events, enabled = () => true, now = (
       return next;
     },
     signals,
+    resolveEstimateDue(runId: string, version: number, at: string) {
+      const id = JSON.stringify(['estimate_due',runId,version]);
+      const signal = store.get<SupervisionSignal>(signalsCollection,id);
+      if (signal && !signal.resolvedAt) store.put(signalsCollection,id,{...signal,resolvedAt:at});
+    },
     resolvePreviousStall(runId: string, version: number, resolvedAt: string) {
       const id = JSON.stringify(['stalled',runId,version || 'running']);
       const previous = store.get<SupervisionSignal>(signalsCollection,id);

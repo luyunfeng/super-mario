@@ -66,7 +66,11 @@ export function createRunScope({ api, runId, projectId, valid, canEdit, saved })
       if (matched) { dirty = false; notice.textContent = '已核对变更记录，验收标准已保存。'; }
     }
     const dropped = state.droppedCriteria;
+    const estimate = state.planEstimateTiming;
+    const sources = {default:'默认估时',learned:'历史估时',override:'显式指定'};
     replace(history, h('p',null,'当前标准 · ' + state.doneWhen),
+      estimate && h('p',null,'计划预计复核时间 · ' + new Date(estimate.dueAt).toLocaleString('zh-CN') +
+        '（' + sources[estimate.source] + '，' + estimate.minutes + ' 分钟）'),
       Array.isArray(dropped) && dropped.length > 0 && h('section', {class:'stack','aria-label':'已移出当前验收范围的标准'},
         h('h4',null,'已移出当前验收范围的标准'),
         h('ul',{class:'stack'},dropped.map(item => h('li',null,

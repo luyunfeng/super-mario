@@ -54,6 +54,21 @@ export function runScopeClock(store: Store, run: Run) {
   return latest && {version:latest.version, createdAt:latest.createdAt};
 }
 
+/** The plan estimate clock changes only when its duration changes. Editing the criteria alone keeps the deadline. */
+function estimateTiming(run: Run, revisions?: RunScopeEvent[]) {
+  if (!run.planEstimate || typeof run.expectMinutes !== 'number' || !Number.isFinite(run.expectMinutes) || run.expectMinutes <= 0) return;
+  const last = revisions?.slice().reverse().find(event => event.previousExpectMinutes !== event.expectMinutes);
+  const clockAt = last?.createdAt ?? run.createdAt;
+  const due = Date.parse(clockAt) + run.expectMinutes * 60000;
+  if (!Number.isFinite(due)) return;
+  return {version:last?.version ?? 0, clockAt, dueAt:new Date(due).toISOString(), minutes:run.expectMinutes,
+    source:last ? 'override' as const : run.planEstimate.source};
+}
+
+export function planEstimateClock(store: Store, run: Run) {
+  return run.planEstimate && estimateTiming(run,verifiedHistory(store,run));
+}
+
 function droppedCriteria(history: RunScopeEvent[], currentDoneWhen: string) {
   // The upstream brief keeps the earliest removal for each currently absent criterion.
   const seen = lines(currentDoneWhen);
@@ -92,9 +107,10 @@ export function createRunScopes(store: Store) {
 
   function snapshot(run: Run, todo: Todo, history: RunScopeEvent[]) {
     const initial = originalCriteria(run, history[0]);
+    const timing = estimateTiming(run,history);
     return {
       runId: run.id, todoId: todo.id, status: run.status, projectId: run.projectId, version: history.length,
-      initialDoneWhen: initial.doneWhen ?? '',
+      ...(timing && {planEstimateTiming:timing}), initialDoneWhen: initial.doneWhen ?? '',
       initialExpectMinutes: initial.expectMinutes,
       doneWhen: run.doneWhen ?? '', expectMinutes: run.expectMinutes,
       droppedCriteria: history.at(-1)?.after === run.doneWhen ? droppedCriteria(history, run.doneWhen ?? '') : [],
