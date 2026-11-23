@@ -34,6 +34,7 @@ type SDK = typeof import('@earendil-works/pi-coding-agent');
 interface Options {
   feishuBotId?: string;
   onDirectWebInput?(message:Message):void;
+  onInternalQueued?(message:Message, sourceId:string):()=>void;
   reviewEvidence?: ReviewEvidenceReader; mainSkillCatalog?: () => Promise<string>; mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>; projectInstructions?: (projectId: string) => Promise<string>; inboxConversations?: () => import("../../../protocol/src/inbox-conversations.ts").InboxConversation[]; workspaceDir?: string; contextMode?: 'full' | 'principles' | 'project-memory'; workDecisions?: (scope?:BotScope, projectId?:string)=>unknown; config: AppConfig; store: Store; events: EventBus; contributions: Contributions; conversationId?: string; scope?: BotScope; canUseScope?: (input?: Message) => boolean; allowedTools?: string[]; systemPrompt?: string; projectContext?: (projectId:string)=>Json; executors?: () => ExecutorInfo[]; conversationThreadId?: string; botContext?: (conversationId:string, scope?:BotScope, threadId?:string)=>Json }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -43,10 +44,11 @@ interface PendingTurn {
   stopped: boolean;
   abort?: () => void;
   aborting?: Promise<void>;
+  dequeue?:()=>void;
 }
 
 type ReadOnlyAction = 'schedule_followup' | 'notify_user';
-type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' | 'replyTo' | 'requestId' | 'directWebInput'> & { readOnlyAction?: ReadOnlyAction; rememberModel?: false; onAccepted?: (input:Message)=>void };
+type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' | 'replyTo' | 'requestId' | 'directWebInput'> & { readOnlyAction?: ReadOnlyAction; rememberModel?: false; onAccepted?: (input:Message)=>void; internalSourceId?:string };
 
 /** The second argument is a narrow test seam; all pi imports stay in this directory. */
 export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK> = () => import('@earendil-works/pi-coding-agent')) {
@@ -597,6 +599,11 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     };
   }
 
+  function leaveQueue(turn: PendingTurn) {
+    try { turn.dequeue?.(); } catch { console.warn('内部队列观察器清理失败，继续处理原消息。'); }
+    turn.dequeue=undefined;
+  }
+
   function interruptTurn(inputId: string): { outcome: 'requested' | 'idle' } {
     const turn = pendingTurns.get(inputId);
     if (!turn || turn.stopped || (turn.assistant && turn.assistant.status !== 'pending')
@@ -612,6 +619,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     });
     Object.assign(assistant, stopped);
     turn.stopped = true;
+    leaveQueue(turn);
     turn.abort?.();
     events.publish('messages.changed', { conversationId: ownConversation, messageId: assistant.id });
     events.publish('messages.changed', { conversationId: ownConversation, messageId: inputId });
@@ -956,15 +964,27 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       }
       // Yield before processing: posting acknowledges durable acceptance, not model completion.
       const readOnlyAction = context?.readOnlyAction;
+      // The first input of an idle runtime can start directly. setImmediate alone
+      // does not mean the conversation has a backlog behind a pending turn.
+      const queuedBehindWork = context?.internalSourceId && [...pendingTurns.values()].some(previous =>
+        !previous.stopped && (!previous.assistant || previous.assistant.status === 'pending'));
       const turn: PendingTurn = { user: message, stopped: false };
       pendingTurns.set(message.id, turn);
       queue = queue.then(async () => {
-        try { await setImmediate(); await reply(turn, readOnlyAction, context?.rememberModel); }
+        try {
+          await setImmediate();
+          leaveQueue(turn);
+          await reply(turn, readOnlyAction, context?.rememberModel);
+        }
         finally {
           try { await turn.aborting; } finally { pendingTurns.delete(message.id); }
         }
       })
         .catch(error => { infrastructureErrors.push(error); });
+      if (queuedBehindWork && context?.internalSourceId) {
+        try { turn.dequeue=options.onInternalQueued?.(message,context.internalSourceId); }
+        catch { console.warn('内部队列观察器暂不可用，继续处理原消息。'); }
+      }
       events.publish('messages.changed', { conversationId, messageId: message.id });
       return message;
     },

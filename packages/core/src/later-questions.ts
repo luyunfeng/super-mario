@@ -71,9 +71,11 @@ export function createLaterQuestions(store: Store, host: QuestionHost, materiali
     void job.then(()=>jobs.delete(id),()=>jobs.delete(id));
     return job;
   }
+  const hasCapacity = () => store.list<Later>(collection).length < 20;
   return {
+    hasCapacity,
     assertCapacity() {
-      if (store.list<Later>(collection).length >= 20) conflict('最多同时保留 20 张稍后回答的问题卡');
+      if (!hasCapacity()) conflict('最多同时保留 20 张稍后回答的问题卡');
     },
     register(card: Card, inputId: string, audience: string) {
       store.put(collection,card.id,{id:card.id,inputId,audience,requestId:randomUUID()} satisfies Later);

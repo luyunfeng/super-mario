@@ -88,7 +88,7 @@ export function createAttention({ api, store, task = false }) {
     const type = TYPES[item.type] ?? { text: '待处理', tone: '' };
     const note = h('p', { class: 'small', role: 'status' });
     const actions = h('div', { class: 'attn__actions' });
-    const textAction = item.actions.find(action => action.requiresText);
+    let textAction = item.actions.find(action => action.requiresText);
     const questions = textAction && item.questions?.length ? createQuestionAnswers(item.questions) : null;
     const input = textAction && !questions ? h('input', { class: 'input', placeholder: '输入你的回答，回车发送', 'aria-label': `回答：${item.title}`, autocomplete: 'off' }) : null;
     let done = false, submitting = false;
@@ -126,34 +126,56 @@ export function createAttention({ api, store, task = false }) {
     }
 
     // 需要文字的动作（回答）放在输入框旁；其余动作是按钮，第一个为主操作。
-    for (const [index, action] of item.actions.filter(entry => !entry.requiresText).entries()) {
-      actions.append(Button({ label: action.label, kind: item.wait === false ? 'ghost' : index === 0 ? 'primary' : 'secondary', size: 'sm', onClick: () => submit(action), dataset: { action: action.label } }));
+    function paintActions() {
+      actions.replaceChildren();
+      for (const [index, action] of item.actions.filter(entry => !entry.requiresText).entries()) {
+        actions.append(Button({ label: action.label, kind: item.wait === false ? 'ghost' : index === 0 ? 'primary' : 'secondary', size: 'sm', onClick: () => submit(action), dataset: { action: action.label } }));
+      }
+      if (item.type === 'approval' && item.editable !== false && item.id.startsWith('approval:')) actions.append(Button({ label: '改一下', kind: 'ghost', size: 'sm', onClick: () => openEdit(item), dataset: { action: '改一下' } }));
+      actions.hidden = done || !actions.childElementCount;
     }
-    if (item.type === 'approval' && item.editable !== false && item.id.startsWith('approval:')) actions.append(Button({ label: '改一下', kind: 'ghost', size: 'sm', onClick: () => openEdit(item), dataset: { action: '改一下' } }));
+    paintActions();
     input?.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); submit(textAction); }
     });
 
     const detail = item.detail && h('details', { class: 'attn__detail' }, h('summary', null, '详情'), h('pre', null, item.detail));
-    const context = [item.context, item.projectName && `项目：${item.projectName}`, item.source && `来自：${item.source}`].filter(Boolean).join(' · ');
-    return h('article', { class: `attn__card ${item.highRisk ? 'is-risk' : ''}`, tabindex: -1, dataset: { type: item.type, id: item.id } },
+    const contextText = item => [item.context, item.projectName && `项目：${item.projectName}`, item.source && `来自：${item.source}`].filter(Boolean).join(' · ');
+    const context = h('p', { class: 'muted small' }, contextText(item));
+    const node = h('article', { class: `attn__card ${item.highRisk ? 'is-risk' : ''}`, tabindex: -1, dataset: { type: item.type, id: item.id } },
       h('header', { class: 'attn__top' },
         Pill(type.text, type.tone), item.highRisk && Pill('高风险', 'danger'),
         h('h3', { class: 'attn__title' }, item.title), h('span', { class: 'attn__time muted small' }, timeAgo(item.createdAt))),
-      h('p', { class: 'muted small' }, context),
+      context,
       detail,
       questions?.el,
       textAction && h('div', { class: 'attn__reply' }, input, Button({ label: textAction.label, kind: 'primary', size: 'sm', onClick: () => submit(textAction), dataset: { action: textAction.label } })),
-      actions.children.length > 0 && actions, note,
+      actions, note,
       item.route && !(task && item.type === 'interaction') && h('a', { class: 'small', href: item.route.href }, item.route.label));
+    return { node, release(next) {
+      // Only routing state changed. Keep the actual controls, focus and unfinished IME input.
+      item = next;
+      textAction = item.actions.find(action => action.requiresText);
+      context.textContent = contextText(item);
+      paintActions();
+    } };
   }
 
   function renderCard(item) {
     const signature = JSON.stringify(item), previous = cards.get(item.id);
     if (previous?.signature === signature) return previous.node;
-    const node = createCard(item);
-    cards.set(item.id, { signature, node });
-    return node;
+    // Title, questions and scope are immutable during automatic release. Rebuild for
+    // other changes so an old selection cannot become an answer to a different question.
+    const { wait, actions, version, context, ...content } = item;
+    const questionKey = item.type === 'interaction' && JSON.stringify(content);
+    if (previous && questionKey && questionKey === previous.questionKey && wait === false && previous.wait !== false) {
+      previous.release(item);
+      Object.assign(previous, { signature, wait });
+      return previous.node;
+    }
+    const card = { ...createCard(item), signature, wait, questionKey };
+    cards.set(item.id, card);
+    return card.node;
   }
 
   more.addEventListener('click', () => { expanded = !expanded; paint(); });

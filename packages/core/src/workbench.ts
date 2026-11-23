@@ -1,3 +1,4 @@
+import { createQuestionRelease } from './question-release.ts';
 import { createLaterQuestions, type QuestionHost } from './later-questions.ts';
 import { questionEvidence } from './question-responses.ts';
 import { createDeferredQuestions } from './deferred-questions.ts';
@@ -509,8 +510,8 @@ export async function createWorkbench(config: AppConfig) {
   function todoHistory(id: string, before?: string) {
     return readTodoHistory(store, id, before, reviewEvidence);
   }
-  const agent = createAgentRuntime({ config, store, events, contributions, onDirectWebInput:conversationUserSpoke, reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
-  const scopedAgents = createScopedAgents({ onDirectWebInput:conversationUserSpoke, inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
+  const agent = createAgentRuntime({ config, store, events, contributions, onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
+  const scopedAgents = createScopedAgents({ onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
     allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'],
     systemPrompt: SUPERVISOR_SYSTEM_PROMPT });
@@ -590,7 +591,7 @@ export async function createWorkbench(config: AppConfig) {
     enqueueMeetingMemory(items, knowledgeCurator.addSource, knowledgeReaderSettings.read().trustedHosts);
     reconciledMeetingAccounts.add(source);
   }
-  const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,reviewEvidence,projectDecisions:id=>workDecisions.context({kind:"project",projectId:id}),onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text,requestId,todoId,directWebInput)=>scopedAgents.postProject(id,text,requestId,todoId,directWebInput),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
+  const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,reviewEvidence,projectDecisions:id=>workDecisions.context({kind:"project",projectId:id}),onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text,requestId,todoId,directWebInput)=>scopedAgents.postProject(id,text,{requestId,todoId,directWebInput}),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
   const controllers = new Map<string, AbortController>();
   const jobs = new Set<Promise<void>>();
   const commandRouter = createCommandProjectRouter(config, () => !closing && inboxClassifier.status().available);
@@ -694,12 +695,13 @@ export async function createWorkbench(config: AppConfig) {
       const threadId = sourceThread(original);
       let accepted: Message;
       if (original.conversationId === 'main') {
-        accepted = await agent.post(followUp,'main',{rememberModel:false,projectId:original.projectId,todoId:original.todoId});
+        accepted = await agent.post(followUp,'main',{rememberModel:false,projectId:original.projectId,todoId:original.todoId,internalSourceId:original.id});
       } else if (original.projectId && original.conversationId === `project:${original.projectId}:work`) {
-        accepted = await projectWorkspace.post(original.projectId,followUp,undefined,original.todoId);
+        validateBotScope(store,{kind:'project',projectId:original.projectId});
+        accepted = await scopedAgents.postProject(original.projectId,followUp,{todoId:original.todoId,internalSourceId:original.id});
       } else if (route?.botId && route.scope && original.conversationId === botConversationId({id:route.botId,scope:route.scope}, threadId)) {
         assertBotInput(original);
-        accepted = await scopedAgents.post(followUp,validateBotScope(store,route.scope),route.botId,{rememberModel:false,projectId:original.projectId,todoId:original.todoId}, threadId);
+        accepted = await scopedAgents.post(followUp,validateBotScope(store,route.scope),route.botId,{rememberModel:false,projectId:original.projectId,todoId:original.todoId,internalSourceId:original.id}, threadId);
       } else throw new InputError('无法核对原问题所属的 Agent',409);
       store.transaction(() => {
         if (route) store.put('message.routes', accepted.id, { ...route, resumed: true });
@@ -746,6 +748,8 @@ export async function createWorkbench(config: AppConfig) {
       const originalAudience = directQuestionAudience(root);
       const latest = originalAudience && store.get<string>('conversation.last-direct-input', originalAudience);
       if (latest && latest !== root?.id) return interactionService.withdraw(card.id, card.version, 'user_spoke');
+      questionRelease.check(card.id);
+      return store.get<typeof card>('interactions',card.id) ?? card;
     }
     return card;
   }
@@ -770,10 +774,10 @@ export async function createWorkbench(config: AppConfig) {
         if (root) store.put('conversation.question-continuations',message.id,root.id);
         accepted(message);
       };
-      const context={projectId:source.projectId,todoId:source.todoId,requestId,onAccepted,rememberModel:false as const,...(closed && {readOnly:true,origin:'notification' as const})};
+      const context={projectId:source.projectId,todoId:source.todoId,requestId,onAccepted,internalSourceId:source.id,rememberModel:false as const,...(closed && {readOnly:true,origin:'notification' as const})};
       if (source.conversationId==='main') return agent.post(text,'main',context);
       if (source.projectId && source.conversationId==='project:'+source.projectId+':work')
-        return scopedAgents.postProject(source.projectId,text,requestId,source.todoId,undefined,onAccepted,closed);
+        return scopedAgents.postProject(source.projectId,text,context);
       if (!route?.botId || !route.scope) throw new InputError('原提问机器人已失效',409);
       assertBotInput(source);
       return scopedAgents.post(text,validateBotScope(store,route.scope),route.botId,context,sourceThread(source));
@@ -792,12 +796,27 @@ export async function createWorkbench(config: AppConfig) {
     changed:id=>changed('todos.changed',{id}),
   });
   const laterQuestions = createLaterQuestions(store,questionHost,deferredQuestions.materialize,id=>changed('interactions.changed',{id}));
+  const questionRelease = createQuestionRelease(store,{
+    source:questionHost.source,
+    audience(message,sourceId) {
+      const source=store.get<Message>('messages',sourceId);
+      if (!source || source.conversationId !== message.conversationId || source.projectId !== message.projectId || source.todoId !== message.todoId) return;
+      return liveQuestionAudience(source);
+    },
+    keep(card,inputId,audience) {
+      if (!laterQuestions.hasCapacity()) return false;
+      laterQuestions.register(card,inputId,audience);
+      return true;
+    },
+    changed:id=>changed('interactions.changed',{id}),
+  });
   const offDeferredQuestions=events.subscribe(event=>{
     if (event.type !== 'interactions.changed' || !event.data || typeof event.data !== 'object' || Array.isArray(event.data) || typeof event.data.id !== 'string') return;
     const card=store.get<import('./interactions.ts').Card>('interactions',event.data.id);
     if (card?.wait === false) {
       if (card.status === 'withdrawn' || card.status === 'expired') void laterQuestions.end(card.id).catch(()=>{});
-    } else if (card) deferredQuestions.materialize(card);
+    } else if (card?.status==='open') questionRelease.check(card.id);
+    else if (card) deferredQuestions.materialize(card);
   });
   function recoverDeferredQuestions() {
     for (const card of interactions.list()) if (card.wait !== false) deferredQuestions.materialize(card);
@@ -2281,7 +2300,7 @@ export async function createWorkbench(config: AppConfig) {
         throw new InputError('协作回报的独立会话与来源不符', 403);
       if (thread !== undefined) assertBotInput(source);
       // A result is data, never a new grant to dispatch, write knowledge or relay again.
-      const context = { readOnly: true, origin: 'result' as const, ...(source ? { replyTo: source.id } : {}) };
+      const context = { readOnly: true, origin: 'result' as const, ...(source ? { replyTo: source.id, internalSourceId:source.id } : {}) };
       if (source?.conversationId === 'main') {
         if (scope.kind !== 'global') throw new InputError('项目机器人不能回报到无关主会话', 403);
         return agent.post(requiredText(input.text, '协作回报'), 'main', { ...context, projectId: source.projectId, todoId: source.todoId });
@@ -2383,7 +2402,7 @@ export async function createWorkbench(config: AppConfig) {
       if (closing) return;
       closing = true;
       clearInterval(triageTimer);
-      offDeferredQuestions(); await Promise.all([deferredQuestions.drain(),laterQuestions.drain()]);
+      offDeferredQuestions(); questionRelease.close(); await Promise.all([deferredQuestions.drain(),laterQuestions.drain()]);
       await subscriptions.close();
       await stopWeb();
       commandRouter.cancel();

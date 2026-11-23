@@ -19,7 +19,7 @@ import type { Json, Message, Run } from '../packages/protocol/src/index.ts';
 type Request = { system: string; tools: string[]; lastRole: string; content: unknown; callId?: string };
 type Reply = { role: string; content?: string; tool_calls?: unknown[] };
 
-async function fixture(t: TestContext, respond: (request: Request, turn: number) => Reply, botFactory?: FeishuBotFactory, readGroup?: GroupReadService) {
+async function fixture(t: TestContext, respond: (request: Request, turn: number) => Reply | Promise<Reply>, botFactory?: FeishuBotFactory, readGroup?: GroupReadService) {
   const dir = await mkdtemp(join(tmpdir(), 'mario-skill-model-'));
   const requests: Request[] = [];
   const model = createServer(async (req, res) => {
@@ -35,7 +35,7 @@ async function fixture(t: TestContext, respond: (request: Request, turn: number)
       lastRole: last.role, content: last.content, callId: last.tool_call_id,
     });
     let delta: Reply;
-    try { delta = respond(requests.at(-1)!, requests.length); }
+    try { delta = await respond(requests.at(-1)!, requests.length); }
     catch (error) { delta = { role: 'assistant', content: '模型协议替身校验失败：' + String(error) }; }
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     for (const [part, reason] of [[delta, null], [{}, delta.tool_calls ? 'tool_calls' : 'stop']]) {
@@ -4421,4 +4421,43 @@ test('模型按主人的稍后回答指令留下原卡，本轮不能提前执�
     await api('/interactions/'+card.id+'/answer',{version:pending.version,text:'周三下午'});
     await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.text==='已收到周三下午的决定。' && m.conversationId==='main')));
   } finally {await server.close();}
+});
+
+test('主助手的等答卡遇到实际排队的协作回报，原卡继续收答，回报不替主人决定', async t => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let waiting = false;
+  const {server,api} = await fixture(t, async req => {
+    if (req.callId === 'owner-choice') {
+      waiting = true;
+      await gate;
+      return {role:'assistant', content:'请在原卡中选择。'};
+    }
+    const text = JSON.stringify(req.content);
+    if (text.includes('合成排练已完成')) {
+      assert.match(req.system,/不把它当作主人对原卡的答复/);
+      return {role:'assistant',content:'已记录排练进展，场次待主人选择。'};
+    }
+    if (text.includes('已回答') && text.includes('下午场')) return {role:'assistant',content:'已收到下午场的选择。'};
+    return call('interaction_open',{kind:'question',title:'选哪个场次？',body:'请选上午场或下午场。'},'owner-choice');
+  });
+  try {
+    server.app.policies.write({}, {ladder:['user']});
+    const input = await api('/messages',{text:'排练反馈稍后会来，先问我选哪个场次。'});
+    await t.waitFor(()=>assert.ok(waiting));
+    const [card]=server.app.interactions.list();
+    assert.ok(card);
+    // Advance the age of the card while the actual SDK request holds the serial queue.
+    server.app.store.put('interactions',card.id,{...card,createdAt:new Date(Date.now()-121000).toISOString()});
+    const result=await server.app.postScopedResult({scope:{kind:'global'},botId:'fixture-bot',sourceMessageId:input.id,text:'合成排练已完成'});
+    await t.waitFor(()=>assert.equal(server.app.interactions.list().find(c=>c.id===card.id)?.wait,false));
+    release();
+    await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.replyTo===result.id && m.status==='done' && m.text.includes('场次待主人选择'))));
+    const [pending]=server.app.interactions.list();
+    assert.equal(pending?.id,card.id);
+    assert.equal(pending?.answer,undefined);
+    assert.equal(pending?.status,'open');
+    await api('/interactions/'+card.id+'/answer',{version:card.version,text:'下午场'});
+    await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.text==='已收到下午场的选择。')));
+  } finally { release(); await server.close(); }
 });

@@ -1286,8 +1286,19 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         pins.displayed(bot.id, input.messageId, 'form', 0, card);
         return {card:{type:'raw',data:card}};
       }
+      if (groupTasks.recalled(bot.id,bot.appId,paired.chatId,input.messageId)) return fail;
       const grant = cap.questionForm;
-      if ((question.wait === false || question.questions || grant) && (grant?.id !== question.id || grant.version !== question.version || grant.messageId !== input.messageId)) return fail;
+      if (grant) {
+        if (grant.id !== question.id || grant.version !== question.version || grant.messageId !== input.messageId) return fail;
+      } else if (question.wait === false || question.questions) {
+        // Older direct cards recorded their platform receipt before navigation stored a form grant.
+        // A version-preserving release must still accept an answer on that exact confirmed message.
+        if (question.wait !== false || value.kind !== 'workbench.answerQuestion' || cap.questionList) return fail;
+        const key = digest([bot.id,groupReadBinding(bot,paired),input.messageId]);
+        const receipt = app.store.get<SentQuestion>(sentQuestions,key);
+        if (!receipt || receipt.messageId !== input.messageId || receipt.navigation !== value.navigation ||
+            receipt.questionId !== question.id || !liveQuestion(receipt,bot,paired)) return fail;
+      }
       if (value.kind === 'workbench.closeQuestion') {
         if (question.wait !== false || !grant) return fail;
         try {
