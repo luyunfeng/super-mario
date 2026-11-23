@@ -16,7 +16,7 @@ import { createMachineHub } from '../../../packages/core/src/machines.ts';
 import type { FeishuRegistrationInput } from './feishu-registration.ts';
 import { createFeishuGateway, type FeishuGatewayDependencies } from './feishu-gateway.ts';
 import { validateBotScope } from '../../../packages/core/src/bot-scopes.ts';
-import type { AppConfig, FeishuBotInput, JsonObject, KnowledgeImportance, NodeMessage, Todo } from '../../../packages/protocol/src/index.ts';
+import type { AppConfig, FeishuBotInput, JsonObject, KnowledgeImportance, Message, NodeMessage, Todo } from '../../../packages/protocol/src/index.ts';
 
 async function body(req: IncomingMessage, maxBytes = 1024 * 1024): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []; let size = 0;
@@ -698,6 +698,17 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (!removed) throw new InputError('知识不存在', 404);
           await app.knowledgeCurator.rebuildIndex();
           app.events.publish('knowledge.changed', { id: knowledge[1] }); return json(res, 200, { removed });
+        }
+        const stopMessage = path.match(/^\/api\/v1(?:\/projects\/([^/]+))?\/messages\/([^/]+)\/stop$/);
+        if (stopMessage && method === 'POST') {
+          const projectId = stopMessage[1] && decodeURIComponent(stopMessage[1]);
+          if (projectId && !app.projects.list().some(p => p.id === projectId && !p.archivedAt))
+            throw new InputError('项目不存在或已归档', 404);
+          const conversationId = projectId ? `project:${projectId}:work` : 'main';
+          const message = app.store.get<Message>('messages', decodeURIComponent(stopMessage[2]!));
+          if (!message || message.role !== 'user' || message.conversationId !== conversationId)
+            throw new InputError('当前会话中未找到这条输入', 404);
+          return json(res, 200, await app.interruptTurn(conversationId, message.id));
         }
         const messageReceipt = path.match(/^\/api\/v1(?:\/projects\/([^/]+))?\/messages\/receipts\/([^/]+)$/);
         if (messageReceipt && method === 'GET') {

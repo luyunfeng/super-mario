@@ -1765,6 +1765,9 @@ export async function createWorkbench(config: AppConfig) {
     setBotScopeAccess(validate: typeof botScopeAccess) { botScopeAccess = validate; channelBindingsReady = true; scheduledWork.sync(); },
     setMailboxProposer(propose: (input: Record<string, unknown>) => Json) { mailboxProposer = propose; },
     modelConfigurationRevision: () => modelRevision,
+    async interruptTurn(conversationId: string, inputId: string) {
+      return conversationId === 'main' ? agent.interruptTurn(inputId) : scopedAgents.interruptTurn(conversationId, inputId);
+    },
     async pickConversationModel(model: string, botId?: string, typed = false) {
       return botId === undefined ? agent.pickConversationModel(model, typed) : scopedAgents.pickConversationModel(model, botId, typed);
     },

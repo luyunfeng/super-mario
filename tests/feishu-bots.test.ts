@@ -1374,7 +1374,15 @@ test('/agent 搜索按已发现的会话和同台执行记录匹配，待决定�
     await receive(raw, { ...human('agent-literal-' + raw), parentId: 'agent-status-card' });
     assert.equal(approvals.list().find(row => row.params.text === raw)?.params.id, 'working');
   }
+  const stops: string[] = [];
+  f.app.cancel = async id => { stops.push(id); return { accepted: true }; };
+  await receive('/停止', { ...human('stop-run'), rootId: 'agent-status-card' });
+  assert.match(bot.instance.sent.at(-1)![1], /已受理该执行的中断请求/);
+  await receive('/停止', { ...human('stop-run'), rootId: 'agent-status-card' });
+  assert.deepEqual(stops, ['working']);
   f.store.put('machines', 'alpha', { id: 'alpha', name: '电脑-alpha', online: false });
+  await receive('/stop', { ...human('stop-offline'), parentId: 'agent-status-card' });
+  assert.equal(stops.length, 1);
   await receive('电脑刚离线', { ...human('offline-follow'), parentId: 'agent-status-card' });
   assert.equal(approvals.list().length, 4);
   await receive('/agents 不存在的工作', human('empty'));
@@ -1726,4 +1734,77 @@ test('模型切换在回执落库失败、机器人重启和后续切换后仍�
   assert.match(f.instances.at(-1)!.sent.at(-1)![1], /本次已选择模型.*first/);
   await receive('/modelchange first', user('old'));
   assert.equal(f.instances.at(-1)!.sent.length, 2);
+});
+
+test('主人中断只作用于可核验的待执行私聊输入，重复和过期引用不误停下一轮', async t => {
+  const f = fixture(t), bot = await f.add('StopOwner');
+  const human = (id: string) => ({ ...source(id), senderType: 'user' as const });
+  const receive = bot.instance.options.onMessage;
+  const stopped: string[] = [];
+  f.app.interruptTurn = async (conversationId, inputId) => {
+    const input = f.store.get<Message>('messages', inputId)!;
+    assert.equal(conversationId, input.conversationId);
+    stopped.push(inputId);
+    f.store.put('messages', inputId, { ...input, status: 'failed' });
+    return { outcome: 'requested' };
+  };
+  async function pending(text: string, id: string) {
+    await receive(text, human(id));
+    const saved = f.store.get<Message>('messages', f.posts.at(-1)!.id)!;
+    f.store.put('messages', saved.id, { ...saved, status: 'pending' });
+    return saved;
+  }
+  await bot.pair();
+  const first = await pending('第一轮', 'old-source');
+  for (const source of [{ ...human('bad1'), chatType: 'group' }, { ...human('bad2'), senderId: 'other' }, { ...human('bad3'), senderType: 'bot' as const }])
+    await receive('/stop', source);
+  assert.equal(stopped.length, 0);
+  await Promise.all([receive('/停', human('stop-first')), receive('/停', human('stop-first'))]);
+  assert.deepEqual(stopped, [first.id]);
+  assert.match(bot.instance.sent.at(-1)![1], /已请求中断/);
+  const next = await pending('第二轮', 'next-source');
+  await receive('/stop', { ...human('quote-old'), parentId: 'old-source', rootId: 'next-source' });
+  await receive('/stop', { ...human('unknown-ref'), rootId: 'missing' });
+  assert.deepEqual(stopped, [first.id]);
+  assert.match(bot.instance.sent.at(-1)![1], /没有可中断/);
+  await f.restart();
+  const again = f.instances.at(-1)!.options.onMessage;
+  await again('/stop', human('stop-first'));
+  assert.equal(stopped.length, 1);
+  await again('／STOP', { ...human('stop-next'), rootId: 'next-source' });
+  assert.deepEqual(stopped, [first.id, next.id]);
+  await again('//stop', human('literal'));
+  assert.equal(f.posts.at(-1)?.text, '/stop');
+});
+
+test('中断回执丢失后重放原事件，不能把中断转给后来进入同一私聊的输入', async t => {
+  const f = fixture(t), bot = await f.add('StopReplay');
+  await bot.pair();
+  const human = (id: string) => ({ ...source(id), senderType: 'user' as const });
+  const receive = bot.instance.options.onMessage;
+  const stopped: string[] = [];
+  f.app.interruptTurn = async (_, id) => {
+    stopped.push(id);
+    f.store.put('messages', id, { ...f.store.get<Message>('messages', id)!, status: 'failed' });
+    return { outcome: 'requested' };
+  };
+  async function post(id: string) {
+    await receive('合成输入', human(id));
+    const row = f.store.get<Message>('messages', f.posts.at(-1)!.id)!;
+    f.store.put('messages', row.id, { ...row, status: 'pending' });
+    return row.id;
+  }
+  const first = await post('first');
+  const put = f.mailboxes.put;
+  f.mailboxes.put = input => {
+    if (input.eventKey.startsWith('feishu-stop:')) throw new Error('synthetic receipt failure');
+    return put(input);
+  };
+  await assert.rejects(receive('/stop', human('stop')), /synthetic receipt failure/);
+  f.mailboxes.put = put;
+  const second = await post('second');
+  await f.restart();
+  await f.instances.at(-1)!.options.onMessage('/stop', human('stop'));
+  assert.deepEqual(stopped, [first]);
+  assert.equal(f.store.get<Message>('messages', second)?.status, 'pending');
 });

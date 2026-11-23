@@ -1,3 +1,4 @@
+import { stopTurnButton } from '../features/stop-turn.js';
 import { createReplyReadAloud } from '../features/reply-read-aloud.js';
 import { createVoiceInput } from '../features/voice-input.js';
 import { attachSentHistory } from '../features/sent-history.js';
@@ -224,7 +225,7 @@ export function createChatPage({ api, store, scope, router }) {
         finishEdit();
         clearSubmittedDraft(ctx);
         if (draftKey === key) {
-          if (answer.status === 'failed') status.textContent = '消息已受理，处理失败。';
+          if (answer.status === 'failed') status.textContent = answer.stoppedByUser ? '已停止本轮。' : '消息已受理，处理失败。';
           scrollToEnd(true);
         }
       }
@@ -269,7 +270,7 @@ export function createChatPage({ api, store, scope, router }) {
       const canEdit = editEnabled && message.conversationId === 'main' && (!scope.get() || scope.get() === message.projectId);
       return h('article', { class: 'msg msg--user', dataset: { id: message.id } },
         h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text)),
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.status === 'failed' && ' · 处理失败', mark, transcript.copyMessage(message, translation.displayedText), canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.stoppedByUser ? ' · 已停止本轮' : message.status === 'failed' && ' · 处理失败', stopTurnButton(api, message), mark, transcript.copyMessage(message, translation.displayedText), canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
     }
     const personal = message.conversationId === 'main' && (!message.origin || message.origin === 'user');
     const label = personal ? assistantLabel : message.origin === 'result' ? '执行结果' : '主 Agent';

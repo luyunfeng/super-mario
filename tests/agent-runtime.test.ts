@@ -213,7 +213,7 @@ test('SDK resources, credentials, and resumed sessions stay inside the data dire
   assert.deepEqual(settings.packages, []);
   assert.equal(settings.retry.enabled, false);
   assert.equal(settings.cacheWarming, 'off');
-  assert.deepEqual(sdk.calls.promptOptions, { expandPromptTemplates: false });
+  assert.equal(sdk.calls.promptOptions.expandPromptTemplates, false);
 });
 
 test('one bridge refreshes plugin tools and global knowledge; stale tools cannot execute', async t => {
@@ -421,6 +421,20 @@ test('restart surfaces interrupted durable inputs once without replaying a model
   assert.equal(f.store.list<Message>('messages').length, 2);
 });
 
+test('older partial replies become terminal and cannot be stopped after restart', async t => {
+  const f = await fixture(t);
+  const input: Message = { id: 'old-input', role: 'user', conversationId: 'main', text: '原输入', status: 'failed', createdAt: '' };
+  f.store.put('messages', input.id, input);
+  const draft: Message = { ...input, id: 'old-draft', role: 'assistant', status: 'pending', text: '保留未完成的片段', replyTo: input.id };
+  f.store.put('messages', draft.id, draft);
+  f.store.put('messages', `interrupted:${input.id}`, { ...draft, id: `interrupted:${input.id}`, status: 'failed', text: '服务重启' });
+  const runtime = createAgentRuntime(f);
+  assert.deepEqual(f.store.get<Message>('messages', draft.id), { ...draft, status: 'failed' });
+  assert.equal(f.store.list('messages').length, 3);
+  assert.deepEqual(runtime.interruptTurn(input.id), { outcome: 'idle' });
+  await runtime.close();
+});
+
 test('main and supervisor have independent queues and never recover each other pending input', async t => {
   const f = await fixture(t);
   const main = createAgentRuntime(f);
@@ -522,4 +536,103 @@ test('project decision tools pin list/create and reject foreign references; resu
   assert.ok(called.some(x=>JSON.stringify(x)===JSON.stringify(['work_decision_record',{key:'stable',text:'明确决定',projectId:'a'}])));
   assert.ok(called.filter(x=>Array.isArray(x)&&x[0]==='work_decisions_list').every(x=>(x as any)[1].projectId==='a'));
   await runtime.close();
+});
+
+function barrier() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+test('stop pins one input, retains streamed text and skips a stopped queued input', async t => {
+  const options = await fixture(t, false);
+  const sdk = fakeSDK();
+  const original = sdk.session.prompt.bind(sdk.session);
+  const running = barrier();
+  const release = barrier();
+  const abortDone = barrier();
+  let aborts = 0;
+  let publish: ((event: unknown) => void) | undefined;
+  const subscribe = sdk.session.subscribe.bind(sdk.session);
+  sdk.session.subscribe = listener => { publish = listener; return subscribe(listener); };
+  sdk.session.prompt = async (text, opts) => {
+    if (text !== 'active') return original(text, opts);
+    const write = (content: string) => publish!({ type: 'message_update', message: { role: 'assistant', content: [{ type: 'text', text: content }] },
+      assistantMessageEvent: { type: 'text_delta' } });
+    write('已经生成的片段');
+    running.resolve();
+    await release.promise;
+    write('取消后的迟到片段');
+  };
+  Object.assign(sdk.session, { async abort() { aborts++; release.resolve(); await abortDone.promise; } });
+  const runtime = createAgentRuntime(options, sdk.load);
+  const active = await runtime.post('active');
+  await running.promise;
+  const queued = await runtime.post('queued');
+  const next = await runtime.post('next');
+  assert.deepEqual(runtime.interruptTurn('other'), { outcome: 'idle' });
+  assert.deepEqual(runtime.interruptTurn(queued.id), { outcome: 'requested' });
+  assert.equal(aborts, 0);
+  assert.deepEqual(runtime.interruptTurn(active.id), { outcome: 'requested' });
+  assert.deepEqual(runtime.interruptTurn(active.id), { outcome: 'idle' });
+  assert.equal(aborts, 1);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(sdk.prompts, []);
+  abortDone.resolve();
+  await runtime.close();
+  const messages = options.store.list<Message>('messages');
+  const answer = (input: Message) => messages.filter(row => row.replyTo === input.id);
+  assert.deepEqual(sdk.prompts, ['next']);
+  assert.equal(answer(active).length, 1);
+  assert.equal(answer(active)[0].text, '已经生成的片段\n\n已停止本轮回复。');
+  assert.equal(answer(active)[0].progress?.phase, 'responding');
+  assert.equal(answer(active)[0].progress?.detail, '正在生成回复');
+  assert.equal(answer(queued)[0].text, '已停止本轮回复。');
+  assert.equal(answer(next)[0].status, 'done');
+  for (const row of [active, queued]) {
+    assert.equal(options.store.get<Message>('messages', row.id)?.status, 'failed');
+    assert.equal(options.store.get<Message>('messages', row.id)?.stoppedByUser, true);
+    assert.equal(answer(row)[0].stoppedByUser, true);
+  }
+  assert.equal(answer(next)[0].stoppedByUser, undefined);
+  assert.equal(options.store.list<AgentTurnTrace>(TRACE_COLLECTION).find(row => row.userMessageId === active.id)?.status, 'failed');
+  assert.deepEqual(runtime.interruptTurn(next.id), { outcome: 'idle' });
+});
+
+test('stop during startup is durable before the SDK resolves and never enters prompt', async t => {
+  const options = await fixture(t, false);
+  const sdk = fakeSDK();
+  const startup = barrier();
+  const runtime = createAgentRuntime(options, async () => { await startup.promise; return sdk.load(); });
+  const first = await runtime.post('waiting');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(runtime.interruptTurn(first.id), { outcome: 'requested' });
+  assert.equal(options.store.get<Message>('messages', first.id)?.status, 'failed');
+  startup.resolve();
+  await runtime.close();
+  assert.deepEqual(sdk.prompts, []);
+});
+
+test('stop during SDK preflight is applied again after the run acquires an abort controller', async t => {
+  const options = await fixture(t, false);
+  const sdk = fakeSDK();
+  const preflight = barrier();
+  const begin = barrier();
+  const aborted = barrier();
+  let started = false;
+  Object.assign(sdk.session, { async abort() { if (started) aborted.resolve(); } });
+  sdk.session.prompt = async (_text, opts) => {
+    preflight.resolve();
+    await begin.promise;
+    started = true;
+    (opts as { preflightResult(result: string): void }).preflightResult('started');
+    await aborted.promise;
+  };
+  const runtime = createAgentRuntime(options, sdk.load);
+  const first = await runtime.post('preflight');
+  await preflight.promise;
+  assert.deepEqual(runtime.interruptTurn(first.id), { outcome: 'requested' });
+  begin.resolve();
+  await runtime.close();
+  assert.equal(options.store.get<Message>('messages', first.id)?.status, 'failed');
 });

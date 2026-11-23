@@ -19,6 +19,14 @@ interface Options {
   reviewEvidence?: ReviewEvidenceReader; mainSkillCatalog?: () => Promise<string>; mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>; projectInstructions?: (projectId: string) => Promise<string>; inboxConversations?: () => import("../../../protocol/src/inbox-conversations.ts").InboxConversation[]; workspaceDir?: string; contextMode?: 'full' | 'principles' | 'project-memory'; workDecisions?: (scope?:BotScope, projectId?:string)=>unknown; config: AppConfig; store: Store; events: EventBus; contributions: Contributions; conversationId?: string; scope?: BotScope; canUseScope?: (input?: Message) => boolean; allowedTools?: string[]; systemPrompt?: string; projectContext?: (projectId:string)=>Json; executors?: () => ExecutorInfo[]; botContext?: (conversationId:string, scope?:BotScope)=>Json }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
+interface PendingTurn {
+  user: Message;
+  assistant?: Message;
+  stopped: boolean;
+  abort?: () => void;
+  aborting?: Promise<void>;
+}
+
 type ReadOnlyAction = 'schedule_followup' | 'notify_user';
 type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' | 'replyTo' | 'requestId'> & { readOnlyAction?: ReadOnlyAction; rememberModel?: false };
 
@@ -49,7 +57,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   let activeReadOnlyAction: ReadOnlyAction | undefined;
   let settleCredentials = async () => {};
   let queue = Promise.resolve();
-  let queuedInputs = 0;
+  const pendingTurns = new Map<string, PendingTurn>();
   let configuring = false;
   const safeError = (error: unknown) => {
     const message = errorText(error);
@@ -65,6 +73,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     : scopeTools.has(name) && !(scope.kind === 'task' && ['knowledge_jobs', 'todo_create', 'knowledge_action_todo', 'knowledge_action_status', 'meeting_search', 'meeting_day'].includes(name))
       && !(!scopedProject && ['project_file_search', 'knowledge_action_todo', 'knowledge_edit_facts', 'knowledge_set_relevance', 'knowledge_set_importance', 'knowledge_change_alias', 'knowledge_change_tag', 'knowledge_put', 'knowledge_source', 'knowledge_ingest'].includes(name)));
   function allowed(name: string) {
+    if (activeInput && pendingTurns.get(activeInput.id)?.stopped) return false;
     // The owner's cross-project agenda has a separate paired-private command on Feishu.
     if (name === 'conversation_status' && ownConversation !== 'main' && ownConversation !== `project:${scopedProject}:work`) return false;
     if (name === 'today_brief' && (ownConversation !== 'main' || currentProjectId || activeInput?.todoId || activeInput?.readOnly)) return false;
@@ -195,7 +204,16 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   // A persisted pending input is not proof that its model/tools never ran.
   // Surface interrupted turns after restart without silently replaying their mutations.
   for (const input of store.list<Message>('messages')) {
-    if (input.conversationId !== ownConversation || input.role !== 'user' || input.status !== 'pending') continue;
+    if (input.conversationId !== ownConversation || input.status !== 'pending') continue;
+    if (input.role === 'assistant') {
+      // Older versions could leave the last progress snapshot pending beside a restart notice.
+      const original = input.replyTo && store.get<Message>('messages', input.replyTo);
+      if (original && original.role === 'user' && original.conversationId === ownConversation &&
+        (original.status === 'pending' || store.get('messages', `interrupted:${original.id}`))) {
+        save({ ...input, status: 'failed' });
+      }
+      continue;
+    }
     const notice: Message = { id: `interrupted:${input.id}`, conversationId: input.conversationId,
       role: 'assistant', origin: 'notification', replyTo: input.id, projectId: input.projectId,
       text: '服务重启，上轮处理结果未确认。请核对执行记录；系统不会自动重复派发或发送。',
@@ -486,14 +504,42 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     events.publish('agent.status', { conversationId: ownConversation, ...state });
   }
 
-  async function reply(user: Message, readOnlyAction?: ReadOnlyAction, rememberModel = true) {
-    let modelFinished = false;
-    const assistant: Message = {
+  function turnReply(turn: PendingTurn): Message {
+    const { user } = turn;
+    return turn.assistant ??= {
       id: randomUUID(), conversationId: ownConversation, role: 'assistant', replyTo: user.id, text: '',
       createdAt: new Date().toISOString(), status: 'pending',
       ...(user.projectId === undefined ? {} : { projectId: user.projectId }),
       ...(user.todoId === undefined ? {} : { todoId: user.todoId }),
     };
+  }
+
+  function interruptTurn(inputId: string): { outcome: 'requested' | 'idle' } {
+    const turn = pendingTurns.get(inputId);
+    if (!turn || turn.stopped || (turn.assistant && turn.assistant.status !== 'pending')
+      || options.canUseScope?.(turn.user) === false) return { outcome: 'idle' };
+    const input = store.get<Message>('messages', inputId);
+    if (input?.status !== 'pending' || input.role !== 'user' || input.conversationId !== ownConversation) return { outcome: 'idle' };
+    const assistant = turnReply(turn);
+    const stopped: Message = { ...assistant, text: [assistant.text, '已停止本轮回复。'].filter(Boolean).join('\n\n'), status: 'failed', stoppedByUser: true };
+    // Record both ends before acknowledging a stop, including queued turns that never reach pi.
+    store.transaction(() => {
+      store.put('messages', assistant.id, stopped);
+      store.put('messages', inputId, { ...turn.user, status: 'failed', stoppedByUser: true });
+    });
+    Object.assign(assistant, stopped);
+    turn.stopped = true;
+    turn.abort?.();
+    events.publish('messages.changed', { conversationId: ownConversation, messageId: assistant.id });
+    events.publish('messages.changed', { conversationId: ownConversation, messageId: inputId });
+    return { outcome: 'requested' };
+  }
+
+  async function reply(turn: PendingTurn, readOnlyAction?: ReadOnlyAction, rememberModel = true) {
+    if (turn.stopped) return;
+    const { user } = turn;
+    let modelFinished = false;
+    const assistant = turnReply(turn);
     let progressTimer: ReturnType<typeof setTimeout> | undefined;
     let lastProgressWrite = 0;
     let progressFailure: unknown;
@@ -512,7 +558,9 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     };
     try {
       await ready;
+      if (turn.stopped) return;
       if (modelPickChanged && !stopping) await reloadConfiguration(true);
+      if (turn.stopped) return;
       if (!config.demo && stopping) throw new Error('运行时已关闭，本条输入未执行。');
       if (options.canUseScope?.(user) === false) throw new Error('机器人已停用或绑定范围已改变，本条输入未执行');
       if (!state.available) throw new Error(state.reason);
@@ -584,6 +632,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         progress('thinking', '正在处理你的请求');
         // message_end contains complete text, unlike deltas which may be replayed or revised.
         const unsubscribe = session.subscribe(event => {
+          if (turn.stopped) return;
           if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end') {
             const name = /^[a-zA-Z0-9_.:-]{1,80}$/.test(event.toolName) ? event.toolName : 'tool';
             progress('tool', event.type === 'tool_execution_start' ? '正在调用工具' : event.isError ? '工具调用失败' : '工具调用已返回', name);
@@ -696,16 +745,33 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
             promptText = passage.split(/\r\n|\r|\n/).map(line => '> ' + line).join('\n') + '\n\n' + user.text;
             if (activeTrace) activeTrace.userText = boundTraceText(promptText).text;
           }
-          await session.prompt(promptText, { expandPromptTemplates: false });
+          if (turn.stopped) return;
+          const target = session;
+          turn.abort = () => {
+            // Keep the same session leased until even a slow abort has settled.
+            const aborting = (async () => {
+              try { await target.abort(); }
+              catch (error) { events.publish('agent.error', { conversationId: ownConversation, messageId: user.id, error: safeError(error) }); }
+            })();
+            turn.aborting = turn.aborting ? Promise.all([turn.aborting, aborting]).then(() => {}) : aborting;
+          };
+          await target.prompt(promptText, {
+            expandPromptTemplates: false,
+            // An abort during SDK auth/input preflight precedes its per-run abort controller.
+            preflightResult(result) { if (result === 'started' && turn.stopped) turn.abort?.(); },
+          });
         } finally {
+          turn.abort = undefined;
           unsubscribe(); clearTimeout(progressTimer); progressTimer = undefined;
           if (activeTrace) {
             activeTrace.finishedAt = new Date().toISOString();
             activeTrace.durationMs = Date.now() - turnStartMs;
-            activeTrace.status = failure ? 'failed' : 'done';
+            activeTrace.status = failure || turn.stopped ? 'failed' : 'done';
+            if (turn.stopped) activeTrace.assistantText = boundTraceText(assistant.text).text;
             flushTrace(true);
           }
         }
+        if (turn.stopped) return;
         if (progressFailure) throw progressFailure;
         if (failure) throw new Error(failure);
         assistant.text = replies.filter(Boolean).join('\n\n');
@@ -713,6 +779,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       }
       assistant.status = 'done';
     } catch (error) {
+      if (turn.stopped) return;
       assistant.status = 'failed';
       assistant.text = `回复失败：${safeError(error)}`;
       events.publish('agent.error', { conversationId: ownConversation, messageId: user.id, error: safeError(error) });
@@ -741,9 +808,10 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   return {
     // Tool actions must use the executing input, not the latest persisted/queued user.
     currentInput(): Message | undefined { return activeInput; },
-    configurationBusy() { return closed || configuring || queuedInputs > 0; },
+    interruptTurn,
+    configurationBusy() { return closed || configuring || pendingTurns.size > 0; },
     lockConfiguration() {
-      if (closed || configuring || queuedInputs > 0) throw new Error('Agent 正在处理对话，请稍后保存模型配置');
+      if (closed || configuring || pendingTurns.size > 0) throw new Error('Agent 正在处理对话，请稍后保存模型配置');
       configuring = true;
     },
     unlockConfiguration() { configuring = false; },
@@ -751,7 +819,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     modelCatalog() { return models.catalog(closed ? undefined : session?.model); },
     pickConversationModel(model: string, typed = false) {
       if (!mainIdentity || options.canUseScope?.() === false) throw Object.assign(new Error('当前会话无权修改主会话型号'), { status: 403 });
-      if (closed || configuring || queuedInputs > 0) throw Object.assign(new Error('会话正忙，请稍后修改型号'), { status: 409 });
+      if (closed || configuring || pendingTurns.size > 0) throw Object.assign(new Error('会话正忙，请稍后修改型号'), { status: 409 });
       const catalog = models.catalog(session?.model);
       const picked = models.pick(model, typed, catalog);
       // The command only saves a preference. Open the selected model on the next user turn.
@@ -793,8 +861,14 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       }
       // Yield before processing: posting acknowledges durable acceptance, not model completion.
       const readOnlyAction = context?.readOnlyAction;
-      queuedInputs++;
-      queue = queue.then(async () => { try { await setImmediate(); await reply(message, readOnlyAction, context?.rememberModel); } finally { queuedInputs--; } })
+      const turn: PendingTurn = { user: message, stopped: false };
+      pendingTurns.set(message.id, turn);
+      queue = queue.then(async () => {
+        try { await setImmediate(); await reply(turn, readOnlyAction, context?.rememberModel); }
+        finally {
+          try { await turn.aborting; } finally { pendingTurns.delete(message.id); }
+        }
+      })
         .catch(error => { infrastructureErrors.push(error); });
       events.publish('messages.changed', { conversationId, messageId: message.id });
       return message;

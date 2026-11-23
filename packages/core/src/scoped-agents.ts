@@ -89,6 +89,11 @@ export function createScopedAgents(options: Options) {
       }
       return agent.runtime.post(text, binding.conversationId, context);
     },
+    interruptTurn(conversationId: string, inputId: string) {
+      const entry = agents.get(conversationId);
+      if (!entry || !(conversationId.startsWith('bot:') || conversationId.endsWith(':work'))) return { outcome: 'idle' as const };
+      return entry.runtime.interruptTurn(inputId);
+    },
     modelCatalog(botId: string) {
       const binding = identity({ kind: 'global' }, botId);
       return agents.get(binding.conversationId)?.runtime.modelCatalog()

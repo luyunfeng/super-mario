@@ -1,3 +1,4 @@
+import { stopTurnButton } from './stop-turn.js';
 import { createReplyReadAloud } from './reply-read-aloud.js';
 import { createVoiceInput } from './voice-input.js';
 import { attachSentHistory } from './sent-history.js';
@@ -169,7 +170,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
       const canQuote = quotesEnabled && m.conversationId === `project:${projectId}:work` && (user || m.role === 'assistant')
         && m.origin !== 'notification' && typeof m.text === 'string' && m.text.trim();
       const canEdit = (m.todoId || '') === todoId && editEnabled && user && m.conversationId === `project:${projectId}:work` && (!m.projectId || m.projectId === projectId);
-      const statusText = { failed: '处理失败，请查看原因', unknown: '结果未知，请核对，勿重复发送', pending: '处理中' }[m.status];
+      const statusText = m.stoppedByUser ? '已停止本轮' : { failed: '处理失败，请查看原因', unknown: '结果未知，请核对，勿重复发送', pending: '处理中' }[m.status];
       const bubble = h('div', { class: 'msg__bubble' }, user && !/^> /m.test(m.text) ? m.text : transcript.renderMessage(m, m.text));
       return h('div', { class: 'msg msg--' + (user ? 'user' : 'assistant') + (m.id === anchor ? ' is-search-hit' : ''), dataset: { id: m.id } },
         h('div', { class: 'msg__col' },
@@ -178,7 +179,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
           agentProgress(m),
           bubble,
           statusText && h('span', { class: 'msg__meta' }, statusText),
-          h('span', null, favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble, transcript.renderMessage), m.conversationId === `project:${projectId}:work` && readAloud.action(m, translation.displayedText), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
+          h('span', null, stopTurnButton(api, m, projectId), favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble, transcript.renderMessage), m.conversationId === `project:${projectId}:work` && readAloud.action(m, translation.displayedText), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
     }, m => JSON.stringify([prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, projectId, todoId, anchor, m]));
     if (historyQuery && !focused && el.isConnected && router.current.page === 'projects' && router.current.parts[1] === 'workspace') {
       const row = anchor ? messages.querySelector('[data-id="' + CSS.escape(anchor) + '"]') : messages.firstElementChild;
@@ -224,7 +225,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
       } else {
         finishEdit();
         clearSubmittedDraft(ctx);
-        if (answer.status === 'failed') notices.set(key, '消息已受理，处理失败。');
+        if (answer.status === 'failed') notices.set(key, answer.stoppedByUser ? '已停止本轮。' : '消息已受理，处理失败。');
       }
       if (confirmed && draftKey === key && historyQuery && router.current.page === 'projects' && router.current.parts[1] === 'workspace') {
         router.go(router.href('projects', id, 'workspace') + (ctx.todoId ? '?todo=' + encodeURIComponent(ctx.todoId) : ''));

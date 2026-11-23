@@ -15,7 +15,7 @@ const dashboardAliases = new Map(Object.entries({
   dashboard: 'home', home: 'home', 工作台: 'home', 主页: 'home',
   tasks: 'tasks', 进展: 'tasks', 总览: 'tasks', inbox: 'inbox', 收件箱: 'inbox',
   main: 'main', 主对话: 'main', list: 'conversations', 对话: 'conversations',
-  modellist: 'modellist', status: 'status', 状态: 'status', today: 'today', 今日: 'today', 今天: 'today', help: 'help', 帮助: 'help',
+  stop: 'stop', 停止: 'stop', 停: 'stop', modellist: 'modellist', status: 'status', 状态: 'status', today: 'today', 今日: 'today', 今天: 'today', help: 'help', 帮助: 'help',
 } as const));
 
 // Match the whole message so commands embedded in a question stay in the conversation.
@@ -27,7 +27,7 @@ export function dashboardCommand(text: string) {
 
 // These common words and CLI commands are legal input even if they resemble a workbench command.
 const literalWords = new Set(['stats', 'man', 'min', 'task', 'session', 'hoe', 'hep', 'lit', 'gent']);
-const scopedCommands = [...dashboardAliases].filter(([, view]) => view === 'status' || view === 'help').map(([name]) => name);
+const scopedCommands = [...dashboardAliases].filter(([, view]) => view === 'status' || view === 'stop' || view === 'help').map(([name]) => name);
 const globalCommands = [...dashboardAliases.keys(), 'agent', 'agents', 'modelchange'];
 
 function isCommandSlip(typed: string, command: string) {
@@ -55,8 +55,9 @@ export function privateCommandText(text: string, options: { global: boolean; ses
 
 export function dashboardHelp(sessions: boolean, scoped = false) {
   const status = '/status 或 /状态：查看当前会话状态';
-  const text = scoped ? status : ['/home 或「工作台」：打开工作台', '/tasks 或 /进展：查看任务进展', '/inbox 或 /收件箱：查看收件',
-    '/agents [关键词] 或 /agent：查找执行会话', '/list 或 /对话：列出可切换的对话', '/main 或 /主对话：切回主 Agent', '/modellist：查看主对话的模型目录', '/modelchange <模型 ID>：切换主对话模型', status, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
+  const stop = '/stop 或 /停止、/停：请求中断当前轮次';
+  const text = scoped ? [status, stop].join('\n') : ['/home 或「工作台」：打开工作台', '/tasks 或 /进展：查看任务进展', '/inbox 或 /收件箱：查看收件',
+    '/agents [关键词] 或 /agent：查找执行会话', '/list 或 /对话：列出可切换的对话', '/main 或 /主对话：切回主 Agent', '/modellist：查看主对话的模型目录', '/modelchange <模型 ID>：切换主对话模型', status, stop, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
   const help = text + '\n在工作台对话中发送命令原文可再加一个斜杠，例如 //status。';
   return { text: help, card: cardDocument('工作台命令', cardSection('在此私聊中发送', help)) };
 }

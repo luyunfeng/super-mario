@@ -4,6 +4,8 @@ export type AgentProgressCardOptions = {
   title: string;
   /** Reply transport completion is distinct from business execution completion. */
   subject?: 'reply' | 'execution';
+  stopReplyId?: string;
+  stoppedByUser?: boolean;
   /** Full latest public response snapshot, not an unprocessed event or a delta. */
   text?: string;
   /** Only the caller's verified execution terminal may set this. */
@@ -15,6 +17,7 @@ export type AgentProgressCardOptions = {
 };
 
 type PlainText = { tag: 'plain_text'; content: string; text_size?: 'normal' | 'notation'; text_color?: 'grey' };
+type StopButton = { tag: 'button'; element_id: 'stop_turn'; text: PlainText; behaviors: [{ type: 'callback'; value: { kind: 'workbench.stop'; assistantId: string } }] };
 type TextBlock = { tag: 'div'; element_id: string; text: PlainText };
 
 /** Card 2.0 payload; pass directly as FeishuSendContext.card, without a message envelope. */
@@ -26,7 +29,7 @@ export type AgentProgressCard = {
     template: 'blue' | 'orange' | 'green' | 'red' | 'grey';
     text_tag_list: { tag: 'text_tag'; text: PlainText; color: 'blue' | 'orange' | 'green' | 'red' | 'neutral' }[];
   };
-  body: { direction: 'vertical'; elements: TextBlock[] };
+  body: { direction: 'vertical'; elements: (TextBlock | StopButton)[] };
 };
 
 const phases: Record<ExecutionProgress['phase'], string> = {
@@ -71,7 +74,9 @@ function block(id: string, content: string, secondary = false): TextBlock {
  */
 export function buildAgentProgressCard(progress: ExecutionProgress, options: AgentProgressCardOptions): AgentProgressCard {
   const reply = options.subject === 'reply';
-  const terminalStatus = options.status && options.status !== 'pending' ? {
+  const stoppedReply = reply && options.stoppedByUser && options.status === 'failed';
+  const terminalStatus = stoppedReply ? { label: '已停止本轮回复', color: 'neutral', template: 'grey' } as const
+    : options.status && options.status !== 'pending' ? {
     ...terminalStatuses[options.status],
     label: reply ? replyTerminalLabels[options.status] : terminalStatuses[options.status].label,
   } : undefined;
@@ -79,7 +84,7 @@ export function buildAgentProgressCard(progress: ExecutionProgress, options: Age
   const status = terminal
     ? (terminalStatus ?? { label: reply ? '本轮回复已结束' : '执行已结束', color: 'neutral', template: 'grey' } as const)
     : { label: phases[progress.phase], color: progress.phase === 'waiting' ? 'orange' : 'blue', template: progress.phase === 'waiting' ? 'orange' : 'blue' } as const;
-  const elements = [block('progress_status', status.label)];
+  const elements: (TextBlock | StopButton)[] = [block('progress_status', status.label)];
   const tool = publicText(progress.toolName, 120);
   const detail = publicText(progress.detail, 1000);
   const text = publicText(options.text, 4000);
@@ -97,6 +102,10 @@ export function buildAgentProgressCard(progress: ExecutionProgress, options: Age
         block('progress_history', '处理经过\n' + steps.map(step => '· ' + step).join('\n'), true));
     }
   }
+  if (reply && !terminal && options.stopReplyId) elements.push({
+    tag: 'button', element_id: 'stop_turn', text: { tag: 'plain_text', content: '停止本轮回复' },
+    behaviors: [{ type: 'callback', value: { kind: 'workbench.stop', assistantId: options.stopReplyId } }],
+  });
   return {
     schema: '2.0',
     config: { update_multi: true, width_mode: 'default' },
