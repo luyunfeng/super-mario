@@ -77,19 +77,30 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       const url = new URL(req.url ?? '/', 'http://localhost');
       const path = url.pathname;
       if (path === '/api/health' || path === '/api/v1/health') return json(res, 200, { ok: true, version: '0.1.0' });
-      if (path === '/api/v1/worker-tools/todo-bind-thread' || path === '/api/v1/worker-tools/todo-decisions') {
+      if (path === '/api/v1/worker-tools/todo-bind-thread' || path === '/api/v1/worker-tools/todo-decisions' || path === '/api/v1/worker-tools/todo-decision-add') {
         if (req.method !== 'POST') throw new InputError('此工具需要 POST', 405);
         const key = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.headers.authorization ?? '')?.[1];
         if (!key || req.headersDistinct.authorization?.length !== 1) throw new InputError('执行会话凭证无效', 401);
-        const input = await body(req, 8192);
+        const adding = path.endsWith('/todo-decision-add');
+        const input = await body(req, adding ? 192 * 1024 : 8192);
         if (Object.keys(input).some(k => !['sessionId','arguments'].includes(k)) || typeof input.sessionId !== 'string' ||
           !input.arguments || typeof input.arguments !== 'object' || Array.isArray(input.arguments)) throw new InputError('执行会话请求无效');
-        const {todo, prompt, executorId} = currentWorkerTodo(app.store, machines.list(), input.sessionId, key);
-        if (!app.listExecutors().some(item => item.id === executorId && item.available)) throw new InputError('执行者已停用或不可用', 403);
+        const {todo, prompt, run} = currentWorkerTodo(app.store, machines.list(), input.sessionId, key);
+        if (!app.listExecutors().some(item => item.id === run.executorId && item.available)) throw new InputError('执行者已停用或不可用', 403);
+        if (adding) {
+          const decision = app.todoDecisions.addAgent(todo.id, run, input.arguments as Record<string, unknown>);
+          app.events.publish('todo-decisions.changed', {todoId:todo.id});
+          return json(res, 201, {message:'已记录执行会话的决定。', decisionId:decision.id});
+        }
         if (path.endsWith('/todo-decisions')) {
           if (Object.keys(input.arguments).length) throw new InputError('读取负责待办的决定无需参数');
-          const decisions = app.todoDecisions.list(todo.id).filter(item => item.active).map(({id, text, source, sourceId}) =>
-            ({id, text, by:'user', source, sourceId}));
+          const decisions = app.todoDecisions.list(todo.id).filter(item => item.active).map(item => {
+            const {id, text, source, sourceId} = item;
+            return source === 'agent'
+              ? {id, text, source, sourceId, by:'agent', question:item.question, choice:item.choice, reason:item.reason,
+                supersedesId:item.supersedesId, createdAt:item.createdAt}
+              : {id, text, source, sourceId, by:'user'};
+          });
           return json(res, 200, {message:decisions.length ? '当前负责待办的有效决定。' : '当前负责待办没有有效决定。', decisions});
         }
         if (todo.projectId) throw new InputError('会话没有可绑定的负责待办', 403);
@@ -625,8 +636,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (method === 'POST') {
             const input = await body(req);
             checkTodoScope(app, todoId, input);
-            if (decisionId) return json(res, 200, app.todoDecisions.withdraw(todoId, decodeURIComponent(decisionId)));
-            return json(res, 201, app.todoDecisions.add(todoId, input.text));
+            const decision = decisionId ? app.todoDecisions.withdraw(todoId, decodeURIComponent(decisionId)) : app.todoDecisions.add(todoId, input.text);
+            app.events.publish('todo-decisions.changed', {todoId});
+            return json(res, decisionId ? 200 : 201, decision);
           }
         }
         const reminderDeliveries = path.match(/^\/api\/v1\/todos\/([^/]+)\/reminder-deliveries$/);

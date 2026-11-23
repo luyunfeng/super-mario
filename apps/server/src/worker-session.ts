@@ -24,5 +24,5 @@ export function currentWorkerTodo(store: Pick<Store, 'get' | 'list'>, machines: 
   if (!grant) throw new InputError('执行会话凭证无效', 401);
   const todo = responsibleSessionTodos(store)(grant.run);
   if (!todo) throw new InputError('当前会话没有负责的未完成待办', 403);
-  return {todo, prompt:grant.prompt, executorId:grant.run.executorId};
+  return {todo, prompt:grant.prompt, run:grant.run};
 }

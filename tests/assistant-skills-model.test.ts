@@ -1739,6 +1739,7 @@ test('Web 和飞书读取指定待办详情及决定，不混入同名或跨项�
   const { server, api, ask, requests } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.match(req.system, /同名时结合项目和期限请用户选定/);
+      assert.match(req.system, /执行会话登记的取舍归执行者/);
       return call('todo_detail', { todoId: JSON.stringify(req.content).includes('越界') ? foreign : id }, 'detail');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
@@ -1746,9 +1747,11 @@ test('Web 和飞书读取指定待办详情及决定，不混入同名或跨项�
     const detail = JSON.parse(raw);
     assert.equal(detail.todo.id, id);
     assert.match(detail.webCitation, /todos\/detail\//);
-    assert.deepEqual(detail.decisions.map((d: {active:boolean}) => d.active).sort(), [false, true]);
-    const active = detail.decisions.find((d: {active:boolean}) => d.active);
-    return { role: 'assistant', content: detail.todo.notes + '，等待' + detail.todo.waitingOn + '，当前决定为' + active.text };
+    assert.deepEqual(detail.decisions.map((d: {active:boolean}) => d.active).sort(), [false, true, true]);
+    const ownerChoice = detail.decisions.find((d: {active:boolean;source:string}) => d.active && d.source === 'manual');
+    const agentChoice = detail.decisions.find((d: {active:boolean;source:string}) => d.active && d.source === 'agent');
+    assert.equal(agentChoice.reason, '便于复核');
+    return { role: 'assistant', content: detail.todo.notes + '，等待' + detail.todo.waitingOn + '，主人决定' + ownerChoice.text + '，执行者选择' + agentChoice.choice };
   }, options => {
     adapter = options;
     return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
@@ -1762,8 +1765,15 @@ test('Web 和飞书读取指定待办详情及决定，不混入同名或跨项�
     const previous = server.app.todoDecisions.add(id, '先核对甲列');
     server.app.todoDecisions.withdraw(id, previous.id);
     server.app.todoDecisions.add(id, '先核对乙列');
+    const run:Run = {id:'fixture-run',machineId:'fixture-machine',sessionId:'fixture-session',status:'running',
+      executorId:'fixture-machine/codex',todoId:id,projectId:project.id,conversationId:'main',prompt:'合成查账任务',
+      output:'',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+    server.app.store.put('runs',run.id,run);
+    const todo = server.app.todos().find(item=>item.id === id)!;
+    server.app.store.put('todos',id,{...todo,responsibleSession:{runId:run.id,machineId:run.machineId,sessionId:run.sessionId}});
+    server.app.todoDecisions.addAgent(id,run,{question:'如何排序？',choice:'按日期排序',reason:'便于复核'});
     const question = '读取待办 ' + id + ' 的备注、等待对象和当前决定';
-    const answer = '核对明细，等待复核员，当前决定为先核对乙列';
+    const answer = '核对明细，等待复核员，主人决定先核对乙列，执行者选择按日期排序';
     assert.equal(await ask(question, '/projects/' + project.id + '/messages'), answer);
     const bot = await api('/feishu/bots', { name: '详情查询', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });

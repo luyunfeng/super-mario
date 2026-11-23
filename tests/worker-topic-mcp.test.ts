@@ -94,7 +94,7 @@ test('stdio MCP 声明固定工具且只使用启动环境中的负责会话，H
   assert.equal(hello.result.protocolVersion, '2025-06-18');
   assert.deepEqual(
     list.result.tools.map((item: { name: string }) => item.name),
-    ['todo_bind_thread', 'todo_decisions']
+    ['todo_bind_thread', 'todo_decisions', 'todo_decision_add']
   );
   const description = list.result.tools[0].description;
   assert.match(description, /已登记为话题群/);
@@ -138,6 +138,17 @@ test('执行会话可重读当前有效决定，逐字保留长正文和来源�
       by: 'user',
     },
     { id: 'answer:fixture', text: '已确认卡片回答', source: 'answer', by: 'user' },
+    {
+      id: 'agent-current',
+      text: '选择：CSV',
+      source: 'agent',
+      by: 'agent',
+      question: '格式',
+      choice: 'CSV',
+      reason: '可审查',
+      supersedesId: 'agent-old',
+      createdAt: '2026-01-01T00:00:00Z',
+    },
   ];
   const requests: Array<{ url: string; args: unknown }> = [];
   const server = createServer(async (req, res) => {
@@ -158,7 +169,7 @@ test('执行会话可重读当前有效决定，逐字保留长正文和来源�
       case 3:
         return res.end(JSON.stringify({ message: '当前生效决定', decisions: [{ ...records[0], text: key }] }));
       case 4:
-        return res.end(JSON.stringify({ message: '当前生效决定', decisions: [{ ...records[0], by: 'unverified' }] }));
+        return res.end(JSON.stringify({ message: '当前生效决定', decisions: [{ ...records[0], by: 'agent' }] }));
       case 5:
         return res.writeHead(403).end(JSON.stringify({ message: key }));
       default:
@@ -195,4 +206,49 @@ test('执行会话可重读当前有效决定，逐字保留长正文和来源�
   for (const request of requests) assert.deepEqual(request.args, { sessionId, arguments: {} });
   assert.ok(frames.slice(4, 8).every((frame) => frame.result.isError === true));
   assert.ok(frames.slice(8).every((frame) => frame.error.code === -32602));
+});
+
+test('执行者记录选择只经过固定工具入口，保留来源与可核验的决定编号', async (t) => {
+  const requestBodies: unknown[] = [];
+  const spec = { question: '如何导出？', choice: '采用 CSV', reason: '便于检查', supersedesId: 'agent-first' };
+  const server = createServer(async (req, res) => {
+    assert.equal(req.url, '/api/v1/worker-tools/todo-decision-add');
+    assert.equal(req.headers.authorization, 'Bearer ' + key);
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    const request = JSON.parse(body);
+    requestBodies.push(request);
+    if (request.arguments.supersedesId === 'owner-decision') return res.writeHead(403).end(JSON.stringify({ message: key }));
+    if (!request.arguments.reason) return res.end(JSON.stringify({ message: '缺少决定回执' }));
+    return res.end(JSON.stringify({ message: '已记录执行选择。', decisionId: 'agent-next' }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise<void>((ok) => server.close(() => ok()));
+  });
+  const addr = server.address();
+  assert.ok(addr && typeof addr !== 'string');
+  const url = 'http://127.0.0.1:' + addr.port + '/api/v1/worker-tools/todo-bind-thread';
+  const add = (id: number, a: object) => tool(id, a, 'todo_decision_add');
+  const input = [spec, { ...spec, supersedesId: 'owner-decision' }, { question: 'Q', choice: 'A' }];
+  const frames = await worker(url, [
+    ...input.map((a, i) => add(2 + i, a)),
+    add(5, { ...spec, by: 'user' }),
+    add(6, { ...spec, todoId: 'other' }),
+    add(7, { ...spec, choice: '  ' }),
+    add(8, { ...spec, reason: '长'.repeat(4001) }),
+  ]);
+  const definition = frames[1].result.tools.find((item: { name: string }) => item.name === 'todo_decision_add');
+  assert.match(definition.description, /执行者/);
+  assert.match(definition.description, /不能替换主人的决定/);
+  assert.deepEqual(definition.inputSchema.required, ['question', 'choice']);
+  assert.deepEqual(JSON.parse(frames[2].result.content[0].text), { message: '已记录执行选择。', decisionId: 'agent-next' });
+  assert.ok(frames[3].result.isError && frames[4].result.isError);
+  assert.ok(frames.slice(5).every((frame) => frame.error.code === -32602));
+  assert.deepEqual(
+    requestBodies,
+    input.map((arguments_) => ({ sessionId, arguments: arguments_ }))
+  );
 });

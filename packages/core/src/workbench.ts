@@ -1467,7 +1467,7 @@ export async function createWorkbench(config: AppConfig) {
             ? '本次任务的验收标准：' + JSON.stringify(doneWhen) + '\n交付时逐项给出实际核验结果和证据。未能验证的条件请说明原因。'
             : '';
           const workerDecisionGuide = todoId && executorId.endsWith('/codex') && !nativeApproved
-            ? '若当前会话提供 todo_decisions，在作选择前或上下文压缩后读取当前负责待办的有效决定。只按仍然生效的决定推进。读取失败时先核对负责会话。'
+            ? '若当前会话提供 todo_decisions，在作选择前或上下文压缩后读取当前负责待办的有效决定。只按仍然生效的决定推进。读取失败时先核对负责会话。如果工具提供 todo_decision_add，只记录影响后续工作的实际取舍，写清问题、选择和理由。执行会话的选择应注明由执行者作出。要改变主人的决定，先询问主人。'
             : '';
           const finalPrompt = [effectivePrompt, acceptance, decisions, workerDecisionGuide, guidance, isolationGuide, includeOfficeGuide ? officeWorkerGuide : ''].filter(Boolean).join('\n\n');
           const execute = async () => {

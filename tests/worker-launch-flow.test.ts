@@ -69,6 +69,8 @@ test('Web 派工签发的真实启动凭证经 stdio MCP 和 HTTP 读取 SQLite 
     {id:1,method:'initialize',params:{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'fixture',version:'1'}}},
     {method:'notifications/initialized'},{id:2,method:'tools/list'},
     {id:3,method:'tools/call',params:{name:'todo_decisions',arguments:{}}},
+    {id:4,method:'tools/call',params:{name:'todo_decision_add',arguments:{question:'如何导出？',choice:'使用双列',reason:'便于复核'}}},
+    {id:5,method:'tools/call',params:{name:'todo_decisions',arguments:{}}},
   ];
   child.stdin.end(frames.map(frame=>JSON.stringify({jsonrpc:'2.0',...frame})).join('\n')+'\n');
   const [code]=await closed;assert.equal(code,0);assert.ok(!out.includes(key) && !err.includes(key));assert.equal(err,'');
@@ -78,4 +80,11 @@ test('Web 派工签发的真实启动凭证经 stdio MCP 和 HTTP 读取 SQLite 
   assert.ok(result && !result.isError);
   const actual=JSON.parse(result.content[0].text);
   assert.deepEqual(actual.decisions.map((row:{id:string;text:string;by:string})=>[row.id,row.text,row.by]),[[decision.id,text,'user']]);
+  const added=JSON.parse(results.find(row=>row.id===4).result.content[0].text);
+  assert.ok(added.decisionId);
+  const reread=JSON.parse(results.find(row=>row.id===5).result.content[0].text);
+  const recorded=reread.decisions.find((item:{id:string})=>item.id===added.decisionId);
+  assert.deepEqual([recorded.by,recorded.sourceId,recorded.choice,recorded.reason],['agent',run.id,'使用双列','便于复核']);
+  const ledger=await web<{decisions:{id:string;source:string}[]}>('todos/'+todo.id+'/decisions');
+  assert.ok(ledger.decisions.some(item=>item.id===added.decisionId && item.source==='agent'));
 });
