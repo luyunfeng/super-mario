@@ -1,14 +1,16 @@
+import {nativeSource} from './native-conversation-source.ts';
+import {nativeShareKey,readShareItems,type ReadNative} from './conversation-sharing-native.ts';
 import {collectFuture,futureScopeFor,startFollowing,stopFollowing,type FutureScope} from './conversation-sharing-future.ts';
 import {checkedResult,phaseLabels,record,traceObject} from './tool-trace-public-fields.ts';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import type {Extension,Json,JsonObject,Store} from '../packages/plugin-sdk/src/index.ts';
-import type {Message,Project,Todo} from '../packages/protocol/src/index.ts';
+import type {Message,Project,Todo,NativeExportSource} from '../packages/protocol/src/index.ts';
 import {publicText} from './agent-progress-card.ts';
 
 const shares='conversation-sharing.shares', snapshots='conversation-sharing.snapshots', tokens='conversation-sharing.tokens';
 type ToolRecord={name:string;status:'succeeded'|'failed'|'unknown';args?:string;result?:string};
 type Excerpt={role:'user'|'assistant';text:string;tools?:ToolRecord[]};
-type Share={includeFuture?:boolean;futureScope?:FutureScope;pauseReason?:string;showTools?:boolean;revision?:number;id:string;conversationId:string;createdAt:string;expiresAt:string;revokedAt?:string;messageCount:number;tokenHash:string};
+type Share={native?:NativeExportSource;includeFuture?:boolean;futureScope?:FutureScope;pauseReason?:string;showTools?:boolean;revision?:number;id:string;conversationId:string;createdAt:string;expiresAt:string;revokedAt?:string;messageCount:number;tokenHash:string};
 type Snapshot={ids:string[];messages:Excerpt[];scopeHash:string};
 
 function fail(status:number,message:string):never {throw Object.assign(Error(message),{status});}
@@ -103,7 +105,10 @@ function scopeFingerprint(rows:Message[]) {
 function currentSnapshot(store:Store,share:Share) {
   if (share.revokedAt || !(Date.parse(share.expiresAt)>Date.now())) return missing();
   const snapshot=store.get<Snapshot>(snapshots,share.id);
-  if (!snapshot || scopeFingerprint(selected(store,scope(store,share.conversationId),snapshot.ids))!==snapshot.scopeHash) return missing();
+  if (!snapshot) return missing();
+  if (share.native) {
+    if (nativeShareKey(share.native)!==share.conversationId || snapshot.scopeHash!==hash(JSON.stringify([share.conversationId,snapshot.ids]))) return missing();
+  } else if (scopeFingerprint(selected(store,scope(store,share.conversationId),snapshot.ids))!==snapshot.scopeHash) return missing();
   return snapshot;
 }
 function futureInfo(share:Share) {
@@ -161,10 +166,13 @@ function checkRevision(value:Json|undefined,share:Share) {
   if (typeof value!=='number' || !Number.isSafeInteger(value) || value<1) fail(400,'需要有效的分享版本');
   if (value!==(share.revision??1)) fail(409,'分享已经修改，请刷新后重试');
 }
-export function createConversationSharing(workspaceToken=''):Extension {
+export function createConversationSharing(workspaceToken='',readNative?:ReadNative):Extension {
   return {id:'conversation-sharing',name:'对话摘录分享',capabilities:['conversation.sharing'],
     permissions:['store.read','store.write','events.subscribe','service.provide:conversation-sharing.manage','service.provide:conversation-sharing.read'],
-    activate({store,provide,onEvent}) {
+    activate({store,provide,onEvent,defer}) {
+      let active=true;
+      defer(()=>{active=false;});
+      function requireActive() {if (!active) fail(503,'对话摘录分享已停用');}
       const generation=store.get<{revision?:number}>('core.plugin-settings','conversation-sharing')?.revision??1;
       store.transaction(()=>{
         if (store.get<number>('conversation-sharing.settings','generation')!==generation) {
@@ -180,10 +188,50 @@ export function createConversationSharing(workspaceToken=''):Extension {
           catch(error) {if ((error as {status?:number}).status!==404) console.warn('后续分享消息同步暂未完成');}
         }
       });
-      provide('conversation-sharing.manage',(raw,signal)=>store.transaction(():Json=>{
+      provide('conversation-sharing.manage',async(raw,signal):Promise<Json>=>{
         signal.throwIfAborted();
         const input=args(raw), action=input.action;
-        const conversationId=scope(store,input.conversationId,action==='list' || action==='revoke');
+        if (action==='native_sources') {
+          if (input.native!==undefined || input.conversationId!==undefined) fail(400,'原生来源清单不接受会话范围');
+          const sources=new Map<string,NativeExportSource>();
+          for (const share of store.list<Share>(shares)) if (share.native && !share.revokedAt && Date.parse(share.expiresAt)>Date.now() &&
+              nativeShareKey(share.native)===share.conversationId) sources.set(share.conversationId,share.native);
+          return {sources:[...sources.values()].map(source=>({...source}))};
+        }
+        const native=input.native===undefined ? undefined : nativeSource(input.native);
+        if (native && input.conversationId!==undefined) fail(400,'请选择一种会话来源');
+        const nativeKey=native && nativeShareKey(native);
+        let nativeTexts:Map<string,Excerpt>|undefined;
+        if (native && nativeKey) {
+          if ((input.includeFuture!==undefined && input.includeFuture!==false) || input.futureScope!==undefined ||
+              (input.showTools!==undefined && input.showTools!==false)) fail(400,'原生会话仅支持分享所选对话正文');
+          if (action==='catalog') {
+            const offset=input.offset??0;
+            if (typeof offset!=='number' || !Number.isSafeInteger(offset) || offset<0) fail(400,'原生会话分页位置无效');
+            const page=await readShareItems(readNative,native,{offset},signal);
+            requireActive();
+            return {items:page.items.map(item=>({...item,text:Buffer.byteLength(item.text)>262144 ? '该消息超过分享容量' :
+              Array.from(visibleText(item.text,workspaceToken)).slice(0,500).join('')})),total:page.total};
+          }
+          if (action==='preview' || action==='update' || action==='create') {
+            const ids=selectionIds(input.messageIds);
+            if (ids.some(id=>!/^[a-f0-9]{64}$/.test(id))) fail(400,'原生消息指纹无效');
+            let retained:string[]=[];
+            if (action==='update' || input.id!==undefined) {
+              const share=typeof input.id==='string' && store.get<Share>(shares,input.id);
+              if (!share || share.conversationId!==nativeKey || !share.native) return missing();
+              checkRevision(input.revision,share);
+              retained=currentSnapshot(store,share).ids;
+            }
+            const fresh=ids.filter(id=>!retained.includes(id));
+            const {items}=fresh.length ? await readShareItems(readNative,native,{ids:fresh},signal) : {items:[]};
+            nativeTexts=new Map(items.map(({id,role,text})=>[id,{role,text}]));
+          }
+        }
+        requireActive();
+        return store.transaction(():Json=>{
+        signal.throwIfAborted();
+        const conversationId=nativeKey??scope(store,input.conversationId,action==='list' || action==='revoke');
         if (action==='list') {
           return {shares:store.list<Share>(shares).filter(s=>s.conversationId===conversationId).reverse()
             .map(row=>{
@@ -218,17 +266,19 @@ export function createConversationSharing(workspaceToken=''):Extension {
         const hours=input.expireHours===undefined ? (editing ? null : 24) : input.expireHours;
         if (hours!==null && (typeof hours!=='number' || !Number.isInteger(hours) || hours<1 || hours>720) || input.expireHours===null)
           fail(400,'分享期限须为 1 至 720 小时');
-        const ids=selectionIds(input.messageIds), rows=selected(store,conversationId,ids);
+        const ids=selectionIds(input.messageIds), rows=native ? [] : selected(store,conversationId,ids);
         const includeFuture=input.includeFuture===undefined ? share?.includeFuture??false : input.includeFuture;
         if (typeof includeFuture!=='boolean') fail(400,'请选择是否追加后续消息');
         const futureScope=futureScopeFor(input.futureScope,share?.futureScope,includeFuture,rows);
         const retained=new Map(original?.ids.map((id,i)=>[id,original.messages[i]!]));
-        const texts=rows.map(row=>retained.get(row.id)?.text??row.text);
+        const nativeItems=native ? ids.map(id=>retained.get(id)??nativeTexts?.get(id)??missing()) : undefined;
+        const texts=nativeItems ? nativeItems.map(item=>item.text) : rows.map(row=>retained.get(row.id)?.text??row.text);
+        if (nativeItems && texts.some(text=>!text.trim())) fail(400,'所选原生消息缺少可分享正文');
         if (texts.reduce((n,text)=>n+Buffer.byteLength(text),0)>262144) fail(400,'选择的正文超过 256 KiB');
         const showTools=input.showTools===undefined ? (share?.showTools??false) : input.showTools;
         if (typeof showTools!=='boolean') fail(400,'请选择是否分享工具记录');
         const excerpts=new Map(rows.map(row=>[row.id,retained.get(row.id)?.text??visibleText(row.text,workspaceToken)]));
-        const messages=rows.map((row):Excerpt=>{
+        const messages=nativeItems ? nativeItems.map((item,i)=>retained.get(ids[i]!)??{role:item.role,text:visibleText(item.text,workspaceToken)}) : rows.map((row):Excerpt=>{
           const message:Excerpt={role:row.role,text:excerpts.get(row.id)!};
           if (showTools && row.role==='assistant') {
             const sourceText=row.replyTo && excerpts.get(row.replyTo);
@@ -245,7 +295,7 @@ export function createConversationSharing(workspaceToken=''):Extension {
         });
         if (Buffer.byteLength(JSON.stringify(messages))>262144)
           fail(400,'分享摘录超过 256 KiB，请减少所选消息或关闭工具记录');
-        const scopeHash=scopeFingerprint(rows);
+        const scopeHash=native ? hash(JSON.stringify([conversationId,ids])) : scopeFingerprint(rows);
         const previewHash=hash(JSON.stringify([conversationId,share?.id,share?.revision??1,hours??share?.expiresAt,showTools,includeFuture,futureScope,scopeHash,texts,messages]));
         if (action==='preview') return {messages,previewHash};
         if (input.previewHash!==previewHash) fail(409,'消息已变化，请重新预览');
@@ -274,10 +324,11 @@ export function createConversationSharing(workspaceToken=''):Extension {
         const id=randomUUID(),token=randomBytes(32).toString('base64url'),tokenHash=hash(token);
         const createdAt=new Date(now).toISOString(),expiresAt=new Date(now+(hours??24)*3600000).toISOString();
         if (policy.includeFuture) startFollowing(store,id);
-        store.put(shares,id,{...policy,id,revision:1,showTools,conversationId,createdAt,expiresAt,messageCount:ids.length,tokenHash});
+        store.put(shares,id,{...policy,...(native && {native}),id,revision:1,showTools,conversationId,createdAt,expiresAt,messageCount:ids.length,tokenHash});
         store.put(snapshots,id,{ids,messages,scopeHash});store.put(tokens,tokenHash,id);
         return {id,token,expiresAt};
-      }));
+        });
+      });
       provide('conversation-sharing.read',(raw,signal)=>store.transaction(():Json=>{
         signal.throwIfAborted();
         const {token,knownRevision}=args(raw);

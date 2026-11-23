@@ -244,3 +244,60 @@ test('后续分享核对插入顺序和范围，重启处理未完输入，恢�
   assert.equal((capped.messageIds as string[]).at(-1),'hundred');
   assert.match(String(capped.pauseReason),/100/);
 });
+
+test('原生分享独立核对选中指纹，离线仍可读、缩减、撤销，执行机原文不会写成 Web 发言',async t=>{
+  const store=createStore(':memory:'),host=new PluginHost({store,events:createEventBus(store),contributions:createContributions(),dataDir:':memory:'});
+  t.after(async()=>{await host.close();store.close();});
+  const native={machineId:'machine-demo',executorId:'codex',nativeSessionId:'session-demo',cwd:'/synthetic/source'};
+  const messages=Array.from({length:26},(_,index)=>({id:(index+1).toString(16).padStart(64,'0'),index,role:index%2?'assistant' as const:'user' as const,text:'正文'+index}));
+  messages[0]!.text='用户原话 local-fixture-secret';
+  let online=true,calls=0,waitForRead:(()=>Promise<void>)|undefined;
+  host.register(createConversationSharing('local-fixture-secret',async(source,selection)=>{
+    calls++;assert.deepEqual(source,native);
+    if (waitForRead) await waitForRead();
+    if (!online) throw Object.assign(Error('执行机离线'),{status:503});
+    return {items:'offset' in selection ? messages.slice(selection.offset,selection.offset+25) :
+      messages.filter(m=>selection.ids.includes(m.id)),total:messages.length};
+  }));
+  await host.start();
+  const use=(name:string,body:JsonObject)=>host.invocations.use('conversation-sharing.'+name,body) as Promise<JsonObject>;
+  const manage=(action:string,input:JsonObject={})=>use('manage',{action,native,...input});
+  const list=()=>use('manage',{action:'native_sources'});
+  assert.deepEqual(await list(),{sources:[]});
+  assert.equal(((await manage('catalog')).items as unknown[]).length,25);
+  assert.deepEqual((await manage('catalog',{offset:25})).items,[messages[25]]);
+  const ids=messages.slice(0,2).map(row=>row.id),selection={messageIds:ids};
+  const before=calls,preview=await manage('preview',selection);
+  assert.deepEqual(preview.messages,[{role:'user',text:'用户原话 [凭证已隐藏]'},{role:'assistant',text:'正文1'}]);
+  messages[1]!.text='读取期间有变动';
+  await assert.rejects(manage('create',{...selection,previewHash:preview.previewHash!}),{status:409});
+  messages[1]!.text='正文1';
+  const created=await manage('create',{...selection,previewHash:preview.previewHash!}),id=created.id!;
+  assert.equal(calls,before+3);
+  let release!:()=>void,entered!:()=>void;
+  const waiting=new Promise<void>(resolve=>{entered=resolve;});
+  waitForRead=()=>{entered();return new Promise<void>(resolve=>{release=resolve;});};
+  const stale=manage('create',{...selection,previewHash:preview.previewHash!});
+  await waiting;await host.setEnabled('conversation-sharing',false);await host.setEnabled('conversation-sharing',true);
+  release();await assert.rejects(stale,{status:503});waitForRead=undefined;
+  assert.equal(((await manage('list')).shares as unknown[]).length,1);
+  assert.deepEqual(await list(),{sources:[native]});
+  assert.deepEqual(await manage('list',{native:{...native,cwd:'/other'}}),{shares:[]});
+  await assert.rejects(manage('detail',{id,native:{...native,machineId:'other'}}),{status:404});
+  for (const invalid of [{showTools:true},{includeFuture:true},{futureScope:{}},{conversationId:'main'}] as JsonObject[])
+    await assert.rejects(manage('preview',{...selection,...invalid}),{status:400});
+  await assert.rejects(manage('preview',{messageIds:['f'.repeat(64)]}),{status:409});
+  online=false;
+  const disconnected=calls;
+  assert.deepEqual((await use('read',{token:created.token!})).messages,preview.messages);
+  assert.ok(!JSON.stringify(await use('read',{token:created.token!})).includes('machine-demo'));
+  const subset={id,revision:1,messageIds:[ids[0]!]};
+  const reduced=await manage('preview',subset);
+  await manage('update',{...subset,previewHash:reduced.previewHash!});
+  assert.equal(calls,disconnected);
+  assert.deepEqual((await use('read',{token:created.token!})).messages,[{role:'user',text:'用户原话 [凭证已隐藏]'}]);
+  await assert.rejects(manage('preview',{id,revision:2,messageIds:ids}),{status:503});
+  assert.deepEqual(store.list('messages'),[]);
+  await manage('revoke',{id,revision:2});assert.deepEqual(await list(),{sources:[]});
+  await assert.rejects(use('read',{token:created.token!}),{status:404});
+});

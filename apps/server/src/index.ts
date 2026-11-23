@@ -153,7 +153,21 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             throw new InputError('分享管理需要 JSON 请求',415);
           if (!app.plugins.list().some(p => p.id === 'conversation-sharing' && p.status === 'active'))
             throw new InputError('对话摘录分享插件已停用',503);
-          return json(res,200,await app.plugins.invocations.use('conversation-sharing.manage',await body(req,32*1024) as JsonObject));
+          const input=await body(req,32*1024) as JsonObject;
+          const controller=new AbortController();
+          const cancel=()=>controller.abort();
+          res.once('close',cancel);
+          try {
+            if (res.destroyed) return;
+            const result=await app.plugins.invocations.use('conversation-sharing.manage',input,{
+              signal:controller.signal, timeoutMs:input.native ? 120000 : 5000,
+            });
+            if (!res.destroyed) json(res,200,result);
+            return;
+          } catch (error) {
+            if (res.destroyed) return;
+            throw error;
+          } finally {res.off('close',cancel);}
         }
         if (path === '/api/v1/conversation-status' && method === 'POST') {
           if (!app.plugins.list().some(p => p.id === 'conversation-search' && p.status === 'active')) throw new InputError('对话历史搜索插件已停用', 503);

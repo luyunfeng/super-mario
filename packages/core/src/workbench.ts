@@ -87,7 +87,7 @@ import { createScopedAgents } from './scoped-agents.ts';
 import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput, currentAgentReplyId, type OfficeFileOrigin } from './agent-input.ts';
-import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
+import { exportNativeConversation, readNativeFavoritePage, readNativeShareMessages } from './native-conversation-export.ts';
 import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, createConversationSharing, createWorkspaceBoard, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
@@ -493,7 +493,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(conversationOutbox);
   plugins.register(conversationQueue);
   plugins.register(createReplyTranslation((text, language, signal) => translateReply(config, text, language, signal), () => modelRevision));
-  plugins.register(createConversationSharing(config.token));
+  plugins.register(createConversationSharing(config.token,(source,selection,signal)=>readNativeShareMessages(machines,source,selection,signal)));
   plugins.register(createWorkspaceBoard(() => todoDecisionIds(store), run => runReview.evidenceForRun(run), () => readRunBlockers(store, Date.now())));
   plugins.register(savedPrompts);
   plugins.register(projectInstructions);

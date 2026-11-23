@@ -32,15 +32,22 @@ export function createConversationSharing({api,store,getRows}) {
       store.view.snapshot?.plugins?.some(p=>p.id==='conversation-sharing' && p.status==='active');
   }
   function update(next) {
-    const key=next && enabled() ? JSON.stringify([api.draftOwner(), next.conversationId,next.projectId,next.todoId]) : '';
+    const key=next && enabled() ? JSON.stringify([api.draftOwner(), next.conversationId,next.projectId,next.todoId,next.native]) : '';
     if (scopeKey!==key) session?.close();
     range=key ? next : undefined; scopeKey=key; button.hidden=!key;
     session?.refreshRows();
   }
   function open() {
     if (session?.drawer.el.open || !range || !enabled()) return;
-    const key=scopeKey, conversationId=range.conversationId;
+    const key=scopeKey, owner=api.draftOwner(), conversationId=range.conversationId;
+    const native=range.native, source=native?{native}:{conversationId};
     const selected=new Set();
+    const lifetime=new AbortController();
+    const manage=body=>api('/conversation-shares',{method:'POST',body,signal:lifetime.signal});
+    let catalogRows=[],offset=0,catalogLoading=false;
+    const catalogStatus=h('p',{class:'small muted',role:'status'});
+    const more=Button({label:'加载更多消息',size:'sm',onClick:loadCatalog});
+    const catalogControls=native && h('div',{class:'stack'},catalogStatus,more);
     let rows=[], rendered=false, preview, generation=0, writing=false, reading=false, issued, listStamp=0, editStamp=0, editing, loadingEdit=false;
     const candidates=h('div',{class:'stack','aria-label':'选择要公开的消息'});
     const status=h('p',{class:'small muted',role:'status'});
@@ -58,13 +65,14 @@ export function createConversationSharing({api,store,getRows}) {
     const editBar=h('div',{class:'row row--between',hidden:true},editLabel,Button({label:'取消编辑',size:'sm',onClick:()=>{if (!writing) resetMode();}}));
     const inputs=h('fieldset',{class:'stack',style:{border:'0',padding:'0',margin:'0',minWidth:'0'}},
       h('div',{class:'row row--wrap'},Button({label:'全选当前消息',size:'sm',onClick:()=>chooseFrom(0)}),
-        Button({label:'全不选',size:'sm',onClick:()=>chooseFrom(rows.length)})),candidates,status,h('label',{class:'check'},showTools,'包含工具记录'),h('label',{class:'check'},includeFuture,'自动追加后续消息'),futureHint,Field({label:'分享有效期',control:expiry}),inspect);
-    const drawer=openDrawer({title:'分享对话摘录',wide:true,body:[
+        Button({label:'全不选',size:'sm',onClick:()=>chooseFrom(rows.length)})),candidates,catalogControls,status,!native && h('label',{class:'check'},showTools,'包含工具记录'),!native && h('label',{class:'check'},includeFuture,'自动追加后续消息'),futureHint,Field({label:'分享有效期',control:expiry}),inspect);
+    const drawer=openDrawer({title:'分享对话摘录',subtitle:native && (native.executorId+' · '+native.nativeSessionId),wide:true,body:[
       editBar,inputs,previewBox,feedback,result,h('section',{class:'stack','aria-label':'已有分享'},
         h('div',{class:'row row--between'},h('h3',{},'本对话已有分享'),Button({label:'刷新分享列表',size:'sm',onClick:loadList})),historyStatus,history)
     ],onClose:()=>{if(session?.drawer===drawer) session=undefined; erase();}});
-    const current=()=>drawer.el.open && scopeKey===key && enabled();
+    const current=()=>drawer.el.open && scopeKey===key && owner===api.draftOwner() && enabled();
     function erase() {
+      lifetime.abort();
       generation++; listStamp++; editStamp++; editing=undefined; selected.clear(); rows=[]; issued=undefined; preview=undefined;
       drawer.body.replaceChildren();
     }
@@ -103,7 +111,7 @@ export function createConversationSharing({api,store,getRows}) {
     }
     function refreshRows() {
       if (!current()) return;
-      const loaded=eligible(getRows() ?? [],range,store.view.snapshot);
+      const loaded=native ? catalogRows : eligible(getRows() ?? [],range,store.view.snapshot);
       const originals=new Set(editing?.rows.map(m=>m.id));
       const next=editing ? [...editing.rows,...loaded.filter(m=>!originals.has(m.id))] : loaded;
       if (rendered && rows.length===next.length && rows.every((m,i)=>m.id===next[i].id && m.text===next[i].text)) return;
@@ -115,6 +123,23 @@ export function createConversationSharing({api,store,getRows}) {
       for (const id of selected) if (!ids.has(id)) selected.delete(id);
       if (changed) invalidate();
       paintRows();
+    }
+    async function loadCatalog() {
+      if (!current() || !native || catalogLoading) return;
+      catalogLoading=true;more.disabled=true;catalogStatus.textContent='正在读取原生会话消息…';
+      try {
+        const page=await manage({action:'catalog',native,offset});
+        if (!current()) return;
+        const seen=new Set(catalogRows.map(row=>row.id));
+        catalogRows=[...catalogRows,...page.items.filter(row=>!seen.has(row.id))];
+        offset+=25;
+        more.hidden=offset>=page.total;
+        more.textContent='加载更多消息';
+        catalogStatus.textContent='已加载 '+catalogRows.length+' 条，共 '+page.total+' 条。';
+        refreshRows();
+      } catch(error) {
+        if(current()){more.hidden=false;more.textContent='重新读取本页';catalogStatus.textContent=error.message+'。已有分享仍可在下方管理。';}
+      } finally {if(current()){catalogLoading=false;more.disabled=false;}}
     }
     function chooseFrom(index) {
       if (!current() || writing) return;
@@ -143,7 +168,7 @@ export function createConversationSharing({api,store,getRows}) {
       const stamp=editStamp;
       loadingEdit=true;inputs.disabled=true;editBar.hidden=false;editLabel.textContent='正在读取分享…';
       try {
-        const detail=await api.post('/conversation-shares',{action:'detail',conversationId,id:item.id});
+        const detail=await manage({action:'detail',...source,id:item.id});
         if (!current() || stamp!==editStamp) return;
         if (detail.id!==item.id || !detail.revision || detail.messageIds.length!==detail.messages.length) throw new Error('分享详情不完整，请刷新后再试。');
         if (detail.includeFuture && (!detail.futureScope || typeof detail.futureScope!=='object' || Array.isArray(detail.futureScope))) {
@@ -160,14 +185,14 @@ export function createConversationSharing({api,store,getRows}) {
       } finally {if(current() && stamp===editStamp){loadingEdit=false;inputs.disabled=false;counts();}}
     }
     function parameters() {
-      return {conversationId,showTools:showTools.checked,includeFuture:includeFuture.checked,...(includeFuture.checked && {futureScope:futureScope()}),messageIds:rows.filter(m=>selected.has(m.id)).map(m=>m.id),...(editing?{id:editing.id,revision:editing.revision}:{}),...(expiry.value==='keep'?{}:{expireHours:Number(expiry.value)})};
+      return {...source,...(!native && {showTools:showTools.checked,includeFuture:includeFuture.checked,...(includeFuture.checked && {futureScope:futureScope()})}),messageIds:rows.filter(m=>selected.has(m.id)).map(m=>m.id),...(editing?{id:editing.id,revision:editing.revision}:{}),...(expiry.value==='keep'?{}:{expireHours:Number(expiry.value)})};
     }
     async function showPreview() {
       if (!current() || !selected.size || selected.size>100 || writing || loadingEdit) return;
       invalidate(); const stamp=generation, args=parameters();
       reading=true;counts();feedback.textContent='正在核对可公开的正文…';
       try {
-        const value=await api.post('/conversation-shares',{action:'preview',...args});
+        const value=await manage({action:'preview',...args});
         if (!current() || stamp!==generation) return;
         preview={...args,previewHash:value.previewHash};
         previewBox.hidden=false;
@@ -188,7 +213,7 @@ export function createConversationSharing({api,store,getRows}) {
       if (issued) removeIssued(issued);
       invalidate(); writing=true;inputs.disabled=true;counts(); feedback.textContent=args.id?'正在更新分享…':'正在创建分享…';
       try {
-        const reply=await api.post('/conversation-shares',{action:args.id?'update':'create',...args});
+        const reply=await manage({action:args.id?'update':'create',...args});
         if (!current()) return;
         if (args.id) {
           if (reply.id!==args.id || !reply.revision) throw new Error('未取得更新回执');
@@ -216,7 +241,7 @@ export function createConversationSharing({api,store,getRows}) {
       const stamp=++listStamp;
       historyStatus.textContent='正在读取分享列表…';
       try {
-        const {shares}=await api.post('/conversation-shares',{action:'list',conversationId});
+        const {shares}=await manage({action:'list',...source});
         if (!current() || stamp!==listStamp) return;
         const edited=editing && shares.find(s=>s.id===editing.id);
         if (edited && (edited.revision>editing.revision || edited.revokedAt || Date.parse(edited.expiresAt)<=Date.now()) && !writing) {
@@ -234,7 +259,7 @@ export function createConversationSharing({api,store,getRows}) {
               if(loadingEdit) resetMode();
               replace(actions,h('span',{class:'small muted'},'正在撤销…'));
               try {
-                await api.post('/conversation-shares',{action:'revoke',conversationId,id:item.id,revision:item.revision});
+                await manage({action:'revoke',...source,id:item.id,revision:item.revision});
                 if(current()){removeIssued(item.id);if(editing?.id===item.id && revokeStamp===editStamp) resetMode();void loadList();}
               } catch(error) {if(current() && stamp===listStamp){actions.replaceChildren();historyStatus.textContent=error.message+'。请刷新分享列表核对。';}}
             }}),Button({label:'取消',size:'sm',onClick:revert}))}));
@@ -245,7 +270,7 @@ export function createConversationSharing({api,store,getRows}) {
       } catch(error){if(current() && stamp===listStamp){history.replaceChildren();historyStatus.textContent=error.message;}}
     }
     session={drawer,close,refreshRows};
-    refreshRows();void loadList();
+    refreshRows();void loadList();if(native) void loadCatalog();
   }
-  return {button,update,refreshRows:()=>session?.refreshRows()};
+  return {button,update,open,refreshRows:()=>session?.refreshRows()};
 }

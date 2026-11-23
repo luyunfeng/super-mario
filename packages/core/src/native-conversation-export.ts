@@ -52,12 +52,17 @@ async function readConversation(
     if (step) step.result = step.result !== '未记录结果' ? '结果无法唯一对应'
       : isError === true ? '失败' : isError === false ? '成功' : '已返回结果';
   }
-  await readNativeRecords((offset, snapshot) => {
-    const current = machines.list().find(item => item.id === machineId);
-    if (!current?.online || current.connectedAt !== machine.connectedAt || current.agentInstanceId !== machine.agentInstanceId) {
+  function checkConnection() {
+    const current = machines?.list().find(item => item.id === machineId);
+    if (!current?.online || current.connectedAt !== machine?.connectedAt || current.agentInstanceId !== machine?.agentInstanceId) {
       throw new Error('执行机连接已改变，请重新导出');
     }
-    return machines.call(machineId, 'agents.transcript', { executorId, nativeSessionId, cwd, offset, ...(snapshot && { snapshot }) });
+  }
+  await readNativeRecords(async (offset, snapshot) => {
+    checkConnection();
+    const page=await machines.call(machineId, 'agents.transcript', { executorId, nativeSessionId, cwd, offset, ...(snapshot && { snapshot }) });
+    checkConnection();
+    return page;
   }, raw => {
     const row = record(raw);
     const time = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
@@ -106,17 +111,43 @@ async function readConversation(
   return { count, machineName: machine.name };
 }
 
+// Bind positional records to both the source and the raw record. Replacing a row at
+// the same index cannot silently retarget a favorite or a previously selected excerpt.
+function nativeFingerprint(source: NativeExportSource, index: number, raw: unknown) {
+  return createHash('sha256').update(JSON.stringify([
+    source.machineId, source.executorId, source.nativeSessionId, source.cwd, index, raw,
+  ])).digest('hex');
+}
+
+export async function readNativeShareMessages(
+  machines: MachineClient | undefined, source: NativeExportSource,
+  selection: {offset:number} | {ids:string[]}, signal: AbortSignal,
+) {
+  const wanted = 'ids' in selection ? new Set(selection.ids) : undefined;
+  const offset = 'offset' in selection ? selection.offset : 0;
+  const items: {id:string;index:number;role:'user'|'assistant';text:string}[] = [];
+  let selectedBytes = 0;
+  const {count:total} = await readConversation(machines,source,signal,(index,role,parts,_at,raw)=>{
+    if (!wanted && (index < offset || index >= offset + 25)) return;
+    const id = nativeFingerprint(source,index,raw);
+    if (wanted && !wanted.has(id)) return;
+    const text = parts.join('\n');
+    if (wanted) {
+      selectedBytes += Buffer.byteLength(text);
+      if (selectedBytes > 262144) throw Object.assign(new Error('分享摘录超过 256 KiB，请减少所选消息'),{status:400});
+    }
+    items.push({id,index,role,text});
+  });
+  return {items,total};
+}
+
 export async function readNativeFavoritePage(
   machines: MachineClient | undefined, source: NativeExportSource, offset: number, signal: AbortSignal,
 ) {
   const items: NativeFavoriteMessage[] = [];
   const { count: total } = await readConversation(machines, source, signal, (index, role, parts, createdAt, raw) => {
     if (index < offset || index - offset >= 25) return;
-    // Bind positional records to their source and content. A replacement at
-    // the same index must never inherit the original favorite's identity.
-    const fingerprint = createHash('sha256').update(JSON.stringify([
-      source.machineId, source.executorId, source.nativeSessionId, source.cwd, index, raw,
-    ])).digest('hex');
+    const fingerprint = nativeFingerprint(source,index,raw);
     items.push({ index, fingerprint, role, text: parts.join('\n'), createdAt });
   });
   return { items, total };

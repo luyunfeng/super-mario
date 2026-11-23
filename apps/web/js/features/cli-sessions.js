@@ -3,6 +3,7 @@ import { h, replace } from '../lib/dom.js';
 import { Button, Card, Banner, Empty, Field, Input, TextArea, Select, Check, Pill } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 import { messageFavoritesActive, openNativeMessages } from './message-favorites.js';
+import { createConversationSharing } from './conversation-sharing.js';
 import { conversationExportActive, openConversationExport } from './conversation-export.js';
 
 const wrap = { minWidth: '0', maxWidth: '100%', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' };
@@ -25,8 +26,12 @@ export function createCliSessions({ api, store, router }) {
   const keyword = Input({ type: 'search', placeholder: '会话 ID、目录或执行者', 'aria-label': 'CLI 会话关键词' });
   const list = h('div', { class: 'stack', style: { ...wrap, maxHeight: 'min(60vh, 640px)', overflowY: 'auto' } });
   const notice = h('div');
+  const sharing=createConversationSharing({api,store});
+  let shareSource,shareOwner,sourcesDrawer;
+  const sharedSources=Button({label:'已分享的原生会话',size:'sm',onClick:openSharedSources});
+  sharedSources.hidden=true;
   const el = Card({ title: 'CLI会话', id: 'agent-cli-sessions', sub: '独立 CLI 的历史记录（只读）',
-    tools: Button({ label: '重新读取', size: 'sm', onClick: () => load(true) }),
+    tools: h('div',{class:'row row--wrap'},sharedSources,Button({ label: '重新读取', size: 'sm', onClick: () => load(true) })),
     body: [text('历史 ≠ 当前运行或空闲；恢复前请确认原终端已停止。'),
       h('div', { class: 'stack', style: { ...wrap, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))' } }, machines, projects, keyword), notice, list] });
   const visible = () => router.current.page === 'agent';
@@ -39,6 +44,34 @@ export function createCliSessions({ api, store, router }) {
     machine => machine.id === machineId && machine.online && machine.capabilities?.includes('agents.transcript'),
   );
 
+  function sharingActive() {
+    return visible() && !store.view.unauthorized && Boolean(api.draftOwner()) && api.draftOwner()===store.view.snapshotOwner &&
+      store.view.snapshot?.plugins?.some(p=>p.id==='conversation-sharing' && p.status==='active');
+  }
+  function openSharing(machineId,{executorId,nativeSessionId,cwd}) {
+    if (!sharingActive()) return;
+    sourcesDrawer?.close();
+    shareOwner=api.draftOwner();shareSource={native:{machineId,executorId,nativeSessionId,cwd}};
+    sharing.update(shareSource);sharing.open();
+  }
+  async function openSharedSources() {
+    if (!sharingActive()) return;
+    sourcesDrawer?.close();
+    const owner=api.draftOwner();shareOwner=owner;
+    const drawer=openDrawer({title:'已分享的原生会话',body:text('正在读取已分享的会话…')});
+    sourcesDrawer=drawer;
+    const current=()=>drawer.el.open && sourcesDrawer===drawer && sharingActive() && owner===api.draftOwner();
+    try {
+      const {sources}=await api.post('/conversation-shares',{action:'native_sources'});
+      if (!current()) return;
+      replace(drawer.body,sources.length?sources.map(native=>{
+        const machine=store.view.snapshot?.machines?.find(item=>item.id===native.machineId);
+        return h('div',{class:'item'},h('div',{class:'item__main'},h('strong',{},native.executorId+' · '+native.nativeSessionId),
+          text((machine?.name || native.machineId)+' · '+native.cwd)),
+          Button({label:'管理分享',size:'sm',onClick:()=>{if(current())openSharing(native.machineId,native);}}));
+      }):text('还没有已分享的原生会话。'));
+    } catch(cause) {if(current())replace(drawer.body,h('p',{role:'alert'},cause.message));}
+  }
   function exportHistory(machineId, { executorId, nativeSessionId, cwd }, button) {
     exportDrawer?.close();
     exportDrawer = openConversationExport({
@@ -48,7 +81,7 @@ export function createCliSessions({ api, store, router }) {
     });
   }
   function paint() {
-    const renderKey = JSON.stringify([ready(), conversationExportActive(store), messageFavoritesActive(store), error, loading, data, keyword.value.trim().toLowerCase(), machines.value, signature]);
+    const renderKey = JSON.stringify([ready(), sharingActive(), conversationExportActive(store), messageFavoritesActive(store), error, loading, data, keyword.value.trim().toLowerCase(), machines.value, signature]);
     if (renderKey === painted) return;
     painted = renderKey;
     exportDrawer?.close();
@@ -77,6 +110,7 @@ export function createCliSessions({ api, store, router }) {
               Button({ label: '查看消息', size: 'sm', onClick: () => openNativeMessages({ api, store, native: {
                 machineId: machine.machineId, executorId: session.executorId, nativeSessionId: session.nativeSessionId, cwd: session.cwd,
               } }) }),
+            sharingActive() && Button({ label:'分享对话摘录',size:'sm',onClick:()=>openSharing(machine.machineId,session) }),
             online && canExport(machine.machineId) && Button({ label: '导出对话', size: 'sm', onClick: (_, button) => exportHistory(machine.machineId, session, button) }),
             online && current?.capabilities.includes('agents.usage') && Button({ label: '上下文与 Token 用量', size: 'sm', onClick: () => openUsage(machine, session) }),
             session.resumable && online && machine.available
@@ -102,6 +136,9 @@ export function createCliSessions({ api, store, router }) {
     if (stamp === seq) { loading = false; paint(); }
   }
   function update() {
+    sharedSources.hidden=!sharingActive();
+    if (sharedSources.hidden || shareOwner!==api.draftOwner()) {shareSource=undefined;sourcesDrawer?.close();}
+    sharing.update(shareSource);
     const next = JSON.stringify((store.view.snapshot?.machines ?? []).map(m => [m.id, m.name, m.online, m.connectedAt, m.capabilities]));
     const changed = next !== signature || identity !== context();
     if (changed) { signature = next; identity = context(); invalidate(); }
@@ -118,7 +155,7 @@ export function createCliSessions({ api, store, router }) {
   }
   for (const control of [machines, projects]) control.addEventListener('change', () => load());
   keyword.addEventListener('input', paint);
-  router.subscribe(route => { if (route.page !== 'agent') { seq++; loading = false; } });
+  router.subscribe(route => { if (route.page !== 'agent') { sharing.update(undefined);shareSource=undefined;sourcesDrawer?.close();seq++; loading = false; } });
 
   async function openUsage(machine, session) {
     const body = h('div', { class: 'stack' }, text('正在读取会话日志…'));
