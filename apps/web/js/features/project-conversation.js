@@ -1,3 +1,4 @@
+import { copyText } from '../lib/clipboard.js';
 import { conversationSearchActive } from './search.js';
 import { conversationMessageSearch } from './conversation-message-search.js';
 import { createQueuedDraftEditor } from './edit-queued.js';
@@ -227,6 +228,15 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
       const canQuote = quotesEnabled && m.conversationId === `project:${projectId}:work` && (user || m.role === 'assistant')
         && m.origin !== 'notification' && typeof m.text === 'string' && m.text.trim();
       const canEdit = (m.todoId || '') === todoId && editEnabled && user && m.conversationId === `project:${projectId}:work` && (!m.projectId || m.projectId === projectId);
+      const messageHref = id => router.href('projects', projectId, 'workspace') + '?at=' + encodeURIComponent(id)
+        + (m.todoId ? '&todo=' + encodeURIComponent(m.todoId) : '');
+      const copyLink = h('button', { type:'button', class:'btn btn--ghost btn--sm', onclick:async event => {
+        const button = event.currentTarget;
+        const url = new URL(location.pathname, location.origin);
+        url.hash = messageHref(m.id);
+        try { await copyText(url.href); button.textContent = '已复制链接'; }
+        catch (error) { button.textContent = '复制失败：' + error.message; }
+      } }, '复制消息链接');
       const statusText = queueLabel(m,queueEnabled) || (m.stoppedByUser ? '已停止本轮' : { failed: '处理失败，请查看原因', unknown: '结果未知，请核对，勿重复发送', pending: '处理中' }[m.status]);
       const bubble = h('div', { class: 'msg__bubble' }, user && !/^> /m.test(m.text) ? m.text : transcript.renderMessage(m, m.text));
       return h('div', { class: 'msg msg--' + (user ? 'user' : 'assistant') + (m.id === anchor ? ' is-search-hit' : ''), dataset: { id: m.id } },
@@ -237,8 +247,8 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
           bubble, messageFiles(api,store,m,rows,messages), user && messageImages(api,store,m,(m.todoId || '') === (todoId || '') ? pictures.editCopy.bind(null,composerContext().key) : undefined),
           statusText && h('span', { class: 'msg__meta' }, statusText),
           (!todoId || todoId === m.todoId) && retryTurn(m,rows,`project:${projectId}:work`,
-            id=>router.href('projects',m.projectId,'workspace')+'?at='+encodeURIComponent(id)+(m.todoId?'&todo='+encodeURIComponent(m.todoId):'')),
-          h('span', null, stopTurnButton(api,m,projectId,queueEnabled), queuedEdit.action(m), favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble, transcript.renderMessage), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
+            messageHref),
+          h('span', null, copyLink, stopTurnButton(api,m,projectId,queueEnabled), queuedEdit.action(m), favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble, transcript.renderMessage), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
     }, m => JSON.stringify([prompts.epoch, favorites.epoch, transcript.active, translationEpoch, quotesEnabled, editEnabled, owner, projectId, todoId, anchor, !!toolRecordAllowed(m), queueEnabled, retryEnabled, retried.has(m.id), m]));
     if (historyQuery && !focused && el.isConnected && router.current.page === 'projects' && router.current.parts[1] === 'workspace') {
       const row = anchor ? messages.querySelector('[data-id="' + CSS.escape(anchor) + '"]') : messages.firstElementChild;

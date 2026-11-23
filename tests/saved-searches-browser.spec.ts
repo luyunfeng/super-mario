@@ -84,6 +84,11 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await expect(topic).toBeVisible();
     await expect(cited).toBeFocused();
     await expect(cited).toContainText(keyword);
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], {origin:server.url});
+    await cited.getByRole('button', {name:'复制消息链接'}).click();
+    const messageUrl = new URL(await page.evaluate(() => navigator.clipboard.readText()));
+    assert.equal(messageUrl.hash, '#projects/' + projectId + '/workspace?at=historic&todo=' + task.id);
+    assert.equal(messageUrl.search, '');
     const changed = page.getByText('原消息在引用后已修改，当前显示最新正文。');
     await expect(changed).toBeHidden();
     putMessage('historic', work, '季度复核旧记录 ' + keyword + ' 已调整期限');
