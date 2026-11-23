@@ -113,7 +113,9 @@ test('时间窗摘要：项目进展、待办完成、执行结束、失败、�
 test('简报配置：保留已有任务和暂停状态，间隔启停复用、不重复，时区时段校验',t=>{
   const {store,bg}=backend(t),s=bg.schedules.forOwner('daily-brief');const existing=s.create({name:'morning',kind:'cron',cron:'0 9 * * *',tz:'Asia/Shanghai'});
   s.update(existing.id,{status:'paused'},existing.version);const custom=s.create({name:'my-existing',kind:'interval',everySec:3600});
+  store.put('notifications.settings','away',{alwaysNotifyRuns:true});
   const config=createBriefingSettings(store,bg.schedules);config.configure({intervalEnabled:true,morning:'08:30',timezone:'America/Los_Angeles'});
+  assert.deepEqual(store.get('notifications.settings','away'),{alwaysNotifyRuns:true,enabled:true});
   assert.equal(s.list().find(i=>i.id===existing.id)!.status,'paused');assert.deepEqual(s.list().find(i=>i.id===custom.id),custom);
   const interval=s.list().find(i=>i.name==='interval')!;config.configure({intervalEnabled:false});config.configure({intervalEnabled:true,intervalHours:2});assert.equal(s.list().find(i=>i.name==='interval')!.id,interval.id);assert.equal(s.list().filter(i=>i.name==='interval').length,1);
   assert.equal(config.inActiveWindow('2026-11-17T18:00:00Z'),true);assert.equal(config.inActiveWindow('2026-11-17T09:00:00Z'),false);

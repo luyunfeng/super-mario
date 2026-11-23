@@ -156,7 +156,7 @@ export function createBriefingSettings(store: Store, schedules: ReturnType<typeo
         else for (const s of intervals) if (old.intervalHours !== next.intervalHours || !old.intervalEnabled) api.update(s.id,{everySec:next.intervalHours*3600,...(!old.intervalEnabled?{status:'active' as const}:{})},s.version);
       } else for (const s of intervals) if (!['paused','cancelled'].includes(s.status)) api.update(s.id,{status:'paused'},s.version);
       store.put('briefing.settings','default',next);
-      store.put('notifications.settings','away',{enabled:next.awayNotifications});
+      store.put('notifications.settings','away',{...store.get<{alwaysNotifyRuns?:boolean}>('notifications.settings','away'),enabled:next.awayNotifications});
       return next;
     });
   }
