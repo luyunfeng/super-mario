@@ -591,7 +591,7 @@ test('早晚简报向模型说明计划时间、日历证据和只读边界', { 
     for (const name of ['work_dispatch', 'schedule_followup', 'notify_user', 'followup_cancel']) {
       assert.ok(!evening.tools.includes(name), name);
     }
-    for (const expected of [eveningTime, 'Asia/Shanghai', '仍记录为运行中，本期无更新 1：合成任务-running', '明天最早的安排', '不能证明实际参会', '日程未核实', '本轮只读']) {
+    for (const expected of [eveningTime, 'Asia/Shanghai', '待你决定可能包含此前积压', '不算作本期进展', '仍记录为运行中，本期无更新 1：合成任务-running', '明天最早的安排', '不能证明实际参会', '日程未核实', '本轮只读']) {
       assert.ok(JSON.stringify(evening.content).includes(expected), expected);
     }
   } finally { await server.close(); }
