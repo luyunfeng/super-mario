@@ -299,6 +299,14 @@ test('飞书搜索卡提供可授权定位的 Web 原话链接，未知工作台
   const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
   t.after(()=>browser.close());
   const page=await browser.newPage();
+  await page.addInitScript(() => {
+    window.WebSocket = class extends WebSocket {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols);
+        (window as Window & { liveSocket?: WebSocket }).liveSocket = this;
+      }
+    };
+  });
   // Route the synthetic public origin to this test's loopback service. Chromium preserves the incoming fragment.
   await page.route(origin+'/**',r=>r.fulfill({status:302,headers:{location:server.url+'/'}}));
   await page.goto(server.url+'/#agent?token='+token);
@@ -322,6 +330,14 @@ test('飞书搜索卡提供可授权定位的 Web 原话链接，未知工作台
   const drawer=page.getByRole('dialog',{name:'独立对话记录'});
   const mark=drawer.getByText('定位到的消息',{exact:true});
   await expect(mark).toBeFocused();await expect(mark.locator('..')).toContainText(phrase);
+  await drawer.getByLabel('对话标题').fill('重连中的标题草稿');
+  await drawer.getByLabel('新标签', { exact: true }).fill('重连中的标签');
+  const rechecked = page.waitForResponse(r => new URL(r.url()).pathname === path && new URL(r.url()).searchParams.get('around') === id);
+  await page.evaluate(() => (window as Window & { liveSocket?: WebSocket }).liveSocket!.close());
+  assert.equal((await rechecked).status(), 200);
+  await expect(mark).toBeFocused();
+  await expect(drawer.getByLabel('对话标题')).toHaveValue('重连中的标题草稿');
+  await expect(drawer.getByLabel('新标签', { exact: true })).toHaveValue('重连中的标签');
   const citationId=randomUUID();
   server.app.store.put('messages',citationId,{id:citationId,conversationId:'main',role:'assistant',status:'done',
     text:'合成历史答复 [查看原文]('+target.hash+')，会话清单 [查看对话]('+prefix+')',createdAt:new Date().toISOString()});

@@ -35,7 +35,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
   let searchEnabled = hasSearch();
   let lastSnapshot = store.view.snapshot;
   let showingList = false;
-  let openThreadId, openMessageId;
+  let openThreadId, openMessageId, readDraft;
   let pendingDelete;
   let listNotice = '';
   let lastDeletion = store.view.deletedFeishuThread;
@@ -80,7 +80,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       searchPage = undefined;
       if (showingList) void list(listNotice);
       else if (openThreadId && openThreadId !== pendingDelete) {
-        if(target) void detail({threadId:openThreadId},'',undefined,openMessageId);
+        if(target) void detail({threadId:openThreadId},'',readDraft?.(),openMessageId);
         else void verifyOpenThread(openThreadId);
       }
     }
@@ -141,6 +141,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
   function list(notice = '') {
     exportButton = undefined;
     showingList = true;
+    readDraft = undefined;
     openThreadId = undefined;
     listNotice = notice;
     const id = ++loadId;
@@ -256,6 +257,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
   }
   function detail(row, notice = '', draft, around) {
     showingList = false;
+    readDraft = () => draft;
     openThreadId = row.threadId;
     openMessageId = around;
     const path = base + '/' + encodeURIComponent(row.threadId);
@@ -347,17 +349,18 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       if (current(id)) { knownTags = state.tags; showSuggestions(knownTags); }
     }, error => { if (current(id) && !inaccessible(error)) feedback.textContent = '标签建议读取失败，请手动输入。'; });
     const edit = h('fieldset', { class: 'stack', 'aria-label': '对话管理' });
+    readDraft = () => ({
+      title: title.value !== row.title ? title.value : undefined,
+      tags: JSON.stringify(tags) !== JSON.stringify(savedTags) ? [...tags] : undefined,
+      tagInput: tagInput.value,
+    });
     async function save(change) {
       if (!current(id) || edit.disabled) return;
       if (change.title && Array.from(change.title).length > 80) {
         feedback.textContent = '对话标题最多 80 个字符。';
         return;
       }
-      const pending = {
-        title: title.value !== row.title ? title.value : undefined,
-        tags: JSON.stringify(tags) !== JSON.stringify(savedTags) ? [...tags] : undefined,
-        tagInput: tagInput.value,
-      };
+      const pending = readDraft();
       edit.disabled = true;
       searchPage = undefined;
       try {
@@ -454,11 +457,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     const history = h('div', { class: 'stack' });
     function showMessagePosition(messageId, notice = '') {
       if (!current(id) || edit.disabled) return;
-      return detail(row, notice, {
-        title:title.value !== row.title ? title.value : undefined,
-        tags:JSON.stringify(tags) !== JSON.stringify(savedTags) ? [...tags] : undefined,
-        tagInput:tagInput.value,
-      }, messageId);
+      return detail(row, notice, readDraft(), messageId);
     }
     const entries = items => items.map(message => h('section', { class: 'stack' },
       around && message.id === around && h('mark', { tabIndex: -1, dataset: { threadPosition: '' } }, query && row.hits?.some(hit => hit.id === around) ? '命中消息' : '定位到的消息'),
