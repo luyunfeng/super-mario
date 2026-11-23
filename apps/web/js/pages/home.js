@@ -67,7 +67,9 @@ export function createHomePage({ api, router, scope, store }) {
   const body = h('div', { class: 'stack stack--lg' });
   const el = h('section', { class: 'page', id: 'home' }, h('div', { class: 'page__inner' },
     h('header', { class: 'page__head' }, h('h1', null, '首页'), Hint('nav.home')), body));
-  let brief, briefError, lastRead = 0, request = 0;
+  let brief, briefError, lastRead = 0, request = 0, briefOwner;
+  const hasSnapshot = () => store.view.snapshot && !store.view.unauthorized &&
+    store.view.snapshotOwner === api.draftOwner();
   const link = (href, text) => h('a', { class: 'home-row', href }, text);
   const guideFrameWrap = h('div', { hidden: true, style: 'margin-top:12px;' });
   let guideLoaded = false;
@@ -100,7 +102,15 @@ export function createHomePage({ api, router, scope, store }) {
   });
   function draw() {
     const view = store.view;
-    if (!view.snapshot || router.current.page !== 'home') return;
+    if (router.current.page !== 'home') return;
+    if (!hasSnapshot()) {
+      ++request; brief = undefined; briefError = ''; lastRead = 0;
+      replace(body, muted(view.unauthorized ? '请重新连接工作台。' : view.loadError || '正在读取工作台…'));
+      return;
+    }
+    if (briefOwner !== view.snapshotOwner) {
+      ++request; brief = undefined; briefError = ''; lastRead = 0; briefOwner = view.snapshotOwner;
+    }
     const { todos, projects } = view.snapshot;
     const inScope = item => !scope.get() || item.projectId === scope.get();
     const attention = needsOwner(view, inScope);
@@ -136,7 +146,7 @@ export function createHomePage({ api, router, scope, store }) {
         item => link(item.route?.href ?? router.href(item.type === 'inbox' ? 'inbox' : 'chat'), item.title), '当前没有待确认事项。'),
       priorityCard('重要紧急', '已逾期或未来 24 小时到期的待办', open.filter(urgent), todoLink, '没有即将到期的待办。'),
       priorityCard('重要不急', '其余已进入待办的事项，按截止时间排列', open.filter(t => !urgent(t)), todoLink, '没有其他未完成待办。')),
-    Card({ title: '简报', sub: '最近 24 小时', body: [briefError ? muted(briefError) : !brief ? muted('正在读取简报…') :
+    Card({ title: '简报', sub: '最近 24 小时', body: [briefError ? h('div', { class: 'stack' }, muted(briefError), h('button', { type:'button', class:'btn btn--sm', onclick:readBrief }, '重试读取简报')) : !brief ? muted('正在读取简报…') :
       h('p', null, '完成待办 ' + total('completed') + ' 项，执行结束 ' + total('ended') + ' 次，执行失败 ' + total('failed') + ' 次。'),
       digest.length > 0 && h('details', null, h('summary', null, '群聊动态 · ' + digest.length + ' 个群'), digest.map(g =>
         h('p', { class: 'home-row' }, h('strong', null, g.name + ' · ' + g.count + ' 条'), h('br'), '最近消息：' + g.latest)))] }),
@@ -162,14 +172,16 @@ export function createHomePage({ api, router, scope, store }) {
   }
   scope.subscribe(draw);
   async function readBrief() {
-    if (router.current.page !== 'home' || !store.view.snapshot) return;
+    if (router.current.page !== 'home' || !hasSnapshot()) return;
     const id = ++request;
     lastRead = Date.now();
-    briefError = '';
+    const owner = store.view.snapshotOwner;
+    const current = () => id === request && hasSnapshot() && owner === store.view.snapshotOwner;
+    brief = undefined; briefError = ''; draw();
     try {
       const result = await api.get('/brief/current');
-      if (id === request) brief = result.window;
-    } catch (cause) { if (id === request) briefError = '简报暂不可用：' + cause.message; }
+      if (current()) brief = result.window;
+    } catch (cause) { if (current()) briefError = '简报暂不可用：' + cause.message; }
     draw();
   }
   return { el,
