@@ -367,3 +367,42 @@ test('创建续办在回执丢失并刷新后使用原请求，前序链接只�
   await expect(page.getByText('当前范围内找不到前序待办。')).toBeVisible();
   await expect(previous).toHaveCount(0);
 });
+
+test('从分支末端查看全链、切到兄弟分支并刷新历程', {timeout:30000}, async t => {
+  const {page,app,todo:root} = await fixture(t);
+  const href = (id: string) => new URL('/#projects/'+root.projectId+'/todos/detail/'+id,page.url()).toString();
+  await page.goto(href(root.id));
+  const panel = page.locator('details[aria-label="续办历程"]');
+  await expect(panel).toBeHidden();
+  const next = (from: string, title: string, key: string) => app.continueTodo(from,{
+    title, continuationReason:'交接 '+title,expectedProjectId:root.projectId,requestId:key
+  });
+  const first = next(root.id,'阶段甲','first');
+  const peer = next(root.id,'阶段乙','peer');
+  const leaf = next(first.id,'阶段丙','leaf');
+  const session = {machineId:'fixture-machine',sessionId:'fixture-session',runId:'fixture-run'};
+  app.store.put('todos',first.id,{...first,responsibleSession:session,completedAt:'2030-06-01T12:00:00Z'});
+  await page.goto(href(leaf.id));
+  const [lineageResponse] = await Promise.all([
+    page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/todos/'+leaf.id+'/lineage'),
+    panel.locator('summary').click(),
+  ]);
+  assert.equal(new URL(lineageResponse.url()).searchParams.get('expectedProjectId'),root.projectId);
+  const rows = panel.getByRole('listitem');
+  await expect(rows).toHaveCount(4);
+  await expect(rows.first()).toContainText(root.title);
+  await expect(panel.locator('[aria-current="step"]')).toHaveText('阶段丙（正在查看）');
+  await expect(rows.filter({hasText:'交接说明 · 交接 阶段丙'})).toContainText('直接前序 · 阶段甲');
+  const firstRow = rows.filter({hasText:'负责会话 · fixture-machine / fixture-session'});
+  await expect(firstRow).toContainText('创建于');
+  await expect(firstRow).toContainText('完成于');
+  await panel.getByRole('link',{name:peer.title}).click();
+  await expect(page.getByRole('heading',{name:peer.title,exact:true})).toBeVisible();
+  await panel.locator('summary').click();
+  await expect(panel.locator('[aria-current="step"]')).toHaveText('阶段乙（正在查看）');
+  const extra = next(first.id,'新增分支','extra');
+  await expect(panel.getByRole('link',{name:extra.title})).toBeVisible();
+  await expect(rows).toHaveCount(5);
+  await panel.getByRole('link',{name:root.title}).click();
+  await expect(page.getByRole('heading',{name:root.title,exact:true}).first()).toBeVisible();
+});

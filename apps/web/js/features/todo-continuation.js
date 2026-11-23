@@ -70,3 +70,63 @@ export function openTodoContinuation({ api, store, router, todo }) {
   const unsubscribe = store.subscribe(() => { if (!inScope()) drawer.close(); });
   sync();
 }
+
+export function createTodoLineage({ api, store, router, todo, close }) {
+  const owner = api.draftOwner();
+  const body = h('div', { class: 'stack small', 'aria-live': 'polite' });
+  const panel = h('details', { hidden: true, 'aria-label': '续办历程' }, h('summary', null, '续办历程'), body);
+  let signature, sequence = 0, visible = new Set();
+  function sameOwner() {
+    return owner === api.draftOwner() && owner === store.view.snapshotOwner && !store.view.unauthorized;
+  }
+
+  async function load() {
+    const stamp = ++sequence;
+    const active = () => stamp === sequence && panel.isConnected && panel.open && !panel.hidden &&
+      panel.closest('dialog')?.open !== false && sameOwner();
+    if (!active()) return;
+    body.textContent = '正在读取续办历程…';
+    try {
+      const query = new URLSearchParams({ expectedProjectId: todo.projectId ?? '' });
+      const { steps } = await api.get('/todos/' + encodeURIComponent(todo.id) + '/lineage?' + query);
+      if (!active()) return;
+      if (steps.length < 2) { panel.hidden = true; panel.open = false; body.replaceChildren(); return; }
+      const current = steps.filter(step => step.current);
+      if (current.length !== 1 || current[0].id !== todo.id || steps.some(step => !visible.has(step.id))) {
+        throw new Error('待办范围已变化，请重新读取。');
+      }
+      const titles = new Map(steps.map(step => [step.id, step.title]));
+      const rows = steps.map(step => {
+        const session = step.responsibleSession;
+        const link = step.current ? h('strong', { 'aria-current': 'step' }, step.title + '（正在查看）') :
+          h('a', { href: router.href('projects', todo.projectId ?? 'all', 'todos', 'detail', step.id), onclick: () => close?.() }, step.title);
+        return h('li', { class: 'stack' }, link,
+          step.continuesTodoId && h('span', null, '直接前序 · ' + (titles.get(step.continuesTodoId) || '无法核对')),
+          h('span', { class: 'muted' }, '创建于 ' + new Date(step.createdAt).toLocaleString('zh-CN'),
+            step.completedAt && ' · 完成于 ' + new Date(step.completedAt).toLocaleString('zh-CN')),
+          step.continuationReason && h('span', { style: { whiteSpace: 'pre-wrap' } }, '交接说明 · ' + step.continuationReason),
+          session && h('span', null, '负责会话 · ' + session.machineId + ' / ' + session.sessionId));
+      });
+      body.replaceChildren(h('ol', { class: 'stack' }, rows));
+    } catch (error) {
+      if (active()) body.replaceChildren(h('p', null, error.message), Button({ label: '重新读取历程', size: 'sm', onClick: load }));
+    }
+  }
+  panel.addEventListener('toggle', () => {
+    if (panel.open) void load();
+    else { ++sequence; body.replaceChildren(); }
+  });
+  function update(family) {
+    if (!sameOwner() || family.length < 2) {
+      ++sequence; signature = undefined; visible.clear(); panel.hidden = true; panel.open = false; body.replaceChildren(); return;
+    }
+    const next = JSON.stringify(family.map(step => [step.id, step.title, step.continuesTodoId, step.createdAt,
+      step.completedAt, step.continuationReason, step.responsibleSession]));
+    if (next === signature) return;
+    signature = next;
+    visible = new Set(family.map(step => step.id));
+    panel.hidden = false;
+    if (panel.open) void load();
+  }
+  return { panel, update };
+}

@@ -5,7 +5,7 @@ import { openDrawer, toast } from '../ui/overlay.js';
 import { createAttention } from './attention.js';
 import { openTaskClosure } from './task-closure.js';
 import { createTodoThread } from './todo-thread.js';
-import { openTodoContinuation } from './todo-continuation.js';
+import { createTodoLineage, openTodoContinuation } from './todo-continuation.js';
 import { openTodoHistory } from './todo-history.js';
 import { openWaitingReply } from './waiting-reply.js';
 
@@ -283,13 +283,14 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
   const outcome = groupTaskOutcome(api, store, todo);
   const thread = createTodoThread({ api, store, todo, sameScope: () => matchesScope(store, todo) });
   const decisions = decisionSection(api, store, todo);
-  const el = h('div', { class: 'stack' }, summary, outcome.panel, thread.panel, attention.el, history.panel, reminder.panel, replyRecord(api, store, todo),
+  const lineage = createTodoLineage({ api, store, router, todo, close });
+  const el = h('div', { class: 'stack' }, summary, lineage.panel, outcome.panel, thread.panel, attention.el, history.panel, reminder.panel, replyRecord(api, store, todo),
     decisions.panel, next);
   function paint() {
     const snapshot = store.view.snapshot;
     const current = snapshot?.todos.find(item => item.id === todo.id);
     decisions.update();
-    if (!current || !matchesScope(store, todo)) return;
+    if (!current || !matchesScope(store, todo)) { lineage.update([]); return; }
     outcome.update(current);
     thread.update();
     reminder.update(current);
@@ -302,9 +303,10 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
     const related = snapshot.todos.filter(item => item.projectId === current.projectId);
     const rootId = item => item.continuesTodoId ? item.continuationRootId : item.id;
     const root = rootId(current);
-    const lineage = root ? related.filter(item => item.id !== current.id && rootId(item) === root) : [];
-    const predecessor = lineage.find(item => item.id === current.continuesTodoId);
-    const successors = lineage.filter(item => item.continuesTodoId === current.id);
+    const family = root ? related.filter(item => rootId(item) === root) : [];
+    const predecessor = family.find(item => item.id !== current.id && item.id === current.continuesTodoId);
+    const successors = family.filter(item => item.id !== current.id && item.continuesTodoId === current.id);
+    lineage.update(predecessor || successors.length ? family : []);
     const parent = related.find(item => item.id === current.parentTodoId);
     const children = related.filter(item => item.parentTodoId === current.id);
     const completedChildren = children.filter(item => item.completedAt).length;
