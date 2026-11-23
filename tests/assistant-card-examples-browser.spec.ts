@@ -23,6 +23,8 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
     const stream={slot:'advanced-interface',renderer:'stream',title:'处理记录',lines:['已开始'],fallback:'等待记录'};
     ctx.contribute('web_extensions','stream',stream);
     ctx.onEvent(event=>{if(event.type==='review.progress')stream.lines.push(event.data.text);});
+    ctx.contribute('web_extensions','review/notes',{slot:'advanced-interface',renderer:'form',title:'评审备注',fields:[{name:'note',label:'备注',required:true}],fallback:'备注表单'});
+    ctx.provide('review.submit_form',async input=>({message:'收到：'+input.values.note}));
     ctx.contribute('web_extensions','future',{slot:'advanced-interface',renderer:'future',title:'其他格式',fallback:'纯文字说明'});
   }}`);
   const server=await startServer({host:'127.0.0.1',port:0,dataDir,demo:true});
@@ -123,8 +125,16 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   assert.equal(await page.evaluate(()=>window.getSelection()?.toString()),selectionBefore);
   assert.ok((await page.request.post(examplesApi,{data:{enabled:true}})).ok());
   await expect(entry).toBeVisible();
+  const form=page.getByRole('region',{name:'评审备注'});
+  await form.getByLabel('备注').fill('合成评审');
+  await form.getByRole('button',{name:'提交'}).click();
+  await expect(form.getByRole('status')).toHaveText('收到：合成评审');
+  await expect(form.getByRole('button',{name:'提交'})).toBeDisabled();
+  const endpoint=server.url+'/api/v1/plugin-forms/review/notes';
+  assert.equal((await page.request.post(endpoint,{data:{note:' '}})).status(),400);
   const stopped=await page.request.post(server.url+'/api/v1/plugins/review',{data:{enabled:false}});
   assert.equal(stopped.status(),200);
+  assert.equal((await page.request.post(endpoint,{data:{note:'旧页提交'}})).status(),404);
   await expect(patch).toHaveCount(0);
   await expect(chart).toHaveCount(0);
   await expect(page.getByRole('region',{name:'其他格式'})).toHaveCount(0);

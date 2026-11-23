@@ -196,6 +196,24 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
       const fallback = typeof value.fallback === 'string' && value.fallback;
       if (typeof value.title !== 'string') continue;
       let content, stream;
+      if (value.renderer === 'form' && Array.isArray(value.fields)) {
+        const fields = value.fields.map(field => h('input',{class:'input',required:field.required}));
+        const status = h('p',{role:'status'});
+        const submit = Button({label:'提交',type:'submit'});
+        content = h('form',{class:'stack',onsubmit:async event => {
+          event.preventDefault();
+          if (submit.disabled) return;
+          submit.disabled = true;
+          status.textContent = '正在提交…';
+          try {
+            const result = await api.post('/plugin-forms/'+id,Object.fromEntries(value.fields.map((field,i)=>[field.name,fields[i].value])));
+            status.textContent = typeof result?.message === 'string' ? result.message : '已提交';
+          } catch (error) {
+            status.textContent = error.message;
+            if (error.status >= 400 && error.status < 500) submit.disabled = false;
+          }
+        }}, value.fields.map((field,i)=>h('label',{class:'field'},field.label,fields[i])),submit,status);
+      }
       if (patch) content = extensionPatch(patch);
       if (value.renderer === 'chart') content = extensionChart(value);
       if (value.renderer === 'stream' && Array.isArray(value.lines) && value.lines.length &&

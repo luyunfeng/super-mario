@@ -275,6 +275,15 @@ export class PluginHost {
           if (!['work.dispatch', 'channel.send', 'knowledge.put'].includes(hook.name) || !['before', 'after'].includes(hook.phase)) throw new Error('Unknown hook name or phase');
         } else {
           permission(`contribute:${String(kind)}`);
+          if (kind === 'web_extensions' && id.includes('/') && !id.startsWith(entry.info.id + '/'))
+            throw new Error('插件界面条目必须使用自己的命名空间');
+          if (kind === 'web_extensions' && value && typeof value === 'object' && 'renderer' in value && value.renderer === 'form') {
+            const form = value as Extract<ContributionMap['web_extensions'],{renderer:'form'}>;
+            if (!id.startsWith(entry.info.id + '/') || !/^[a-zA-Z0-9_-]+$/.test(id.slice(entry.info.id.length + 1)) ||
+                !Array.isArray(form.fields) || !form.fields.length || !form.fields.every(field => field &&
+                  typeof field.name === 'string' && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(field.name) && typeof field.label === 'string') ||
+                new Set(form.fields.map(field => field.name)).size !== form.fields.length) throw new Error('无效的插件表单声明');
+          }
           if (kind === 'connectors' && value && typeof value === 'object' && !Array.isArray(value) &&
             'kind' in value && value.kind === 'subscription-source') {
             const service = 'service' in value && value.service;

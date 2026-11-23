@@ -1440,6 +1440,21 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           }
           return json(res, 200, await app.plugins.invocations.use('conversation-search.saved', input));
         }
+        const pluginForm = path.match(/^\/api\/v1\/plugin-forms\/([^/]+)\/([^/]+)$/);
+        if (pluginForm && method === 'POST') {
+          const input = await body(req,64*1024);
+          const id = pluginForm[1] + '/' + pluginForm[2];
+          const form = app.contributions.list('web_extensions').find(item => item.id === id)?.value;
+          if (form?.renderer !== 'form' || form.slot !== 'advanced-interface') throw new InputError('表单已停用或不存在',404);
+          if (Object.keys(input).some(key => !form.fields.some(field => field.name === key))) throw new InputError('存在未声明字段');
+          const values: Record<string,string> = Object.create(null);
+          for (const field of form.fields) {
+            const value = Object.hasOwn(input,field.name) ? input[field.name] : '';
+            if (typeof value !== 'string' || (field.required && !value.trim())) throw new InputError('请核对字段：'+field.label);
+            values[field.name] = value;
+          }
+          return json(res,200,await app.plugins.invocations.use(pluginForm[1]+'.submit_form',{formId:id,values}));
+        }
         const plugin = path.match(/^\/api\/v1\/plugins\/([^/]+)$/);
         if (plugin && method === 'POST') {
           if(plugin[1]==='browser-devices' && access.kind==='device')throw new InputError('更改配对插件需要工作台主令牌',403);
