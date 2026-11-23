@@ -847,6 +847,7 @@ test('CLI 会话卡限定主人，读取与重复回调只发送一张，分页�
     scans++;
     return {capturedAt:'2026-11-20',machines:[{machineId:'machine',machineName:'测试电脑',truncated:true,sessions:Array.from({length:7},(_,i)=>({
       executorId:'codex',nativeSessionId:'native-'+i,cwd:'/tmp/project',resumable:i===0,
+      ...(i===1 && {parentNativeSessionId:'native-0', archived:true}), ...(i===2 && {parentNativeSessionId:'hidden-thread'}),
     }))}]};
   }, async proposeResume(input) { proposals.push(input); return {id:"approval-fixture",status:"pending"}; }};
   await a.instance.options.onMessage('工作台',source('dashboard'));
@@ -859,6 +860,9 @@ test('CLI 会话卡限定主人，读取与重复回调只发送一张，分页�
   assert.equal(scans,1);
   const card=a.instance.contexts.at(-1)!.card;
   assert.match(JSON.stringify(card),/native-0/);assert.doesNotMatch(JSON.stringify(card),/native-6/);
+  assert.match(JSON.stringify(card),/父会话：native-0/);
+  assert.match(JSON.stringify(card),/已归档的原生会话/);
+  assert.doesNotMatch(JSON.stringify(card),/hidden-thread/);
   const open=buttons(card).find((b:any)=>b.text.content==='申请恢复').value;
   assert.equal(click(open,'other').card,undefined);
   const form=click(open).card.data.body.elements.find((el:any)=>el.tag==='form');

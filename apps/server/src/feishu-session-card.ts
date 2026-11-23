@@ -1,11 +1,17 @@
 import { cardButtons, cardDocument, cardPlain, cardSection } from './feishu-cards.ts';
 
-export type SessionList = { capturedAt: string; machines: Array<{ machineId?: string; machineName: string; online?: boolean; available?: boolean; warnings?: string[]; reason?: string; truncated: boolean; sessions: Array<{ executorId: string; nativeSessionId: string; cwd: string; fileModifiedAt?: string; resumable: boolean }> }> };
+export type SessionList = { capturedAt: string; machines: Array<{ machineId?: string; machineName: string; online?: boolean; available?: boolean; warnings?: string[]; reason?: string; truncated: boolean; sessions: Array<{ executorId: string; nativeSessionId: string; parentNativeSessionId?: string; archived?: boolean; cwd: string; fileModifiedAt?: string; resumable: boolean }> }> };
 export function sessionCardSnapshot(result: SessionList) {
-  const all = result.machines.flatMap(m => m.sessions.map(s => ({
+  const all = result.machines.flatMap(m => {
+    const key = (executorId: string, id: string) => JSON.stringify([executorId, id]);
+    const visible = new Set(m.sessions.map(s => key(s.executorId, s.nativeSessionId)));
+    return m.sessions.map(s => ({
     machineId: m.machineId, machine: m.machineName.slice(0,100), agent: s.executorId, id: s.nativeSessionId, cwd: s.cwd,
+    ...(s.parentNativeSessionId && s.parentNativeSessionId !== s.nativeSessionId && visible.has(key(s.executorId, s.parentNativeSessionId)) && { parentId: s.parentNativeSessionId }),
+    ...(s.archived && { archived: true }),
     time: s.fileModifiedAt ?? '', resumable: s.resumable,
-  }))).sort((a,b) => b.time.localeCompare(a.time));
+    }));
+  }).sort((a,b) => b.time.localeCompare(a.time));
   return { capturedAt: result.capturedAt, total: all.length, rows: all.slice(0,100),
     warnings: result.machines.flatMap(m => m.reason || m.truncated ? [m.machineName + '：' + (m.reason || '记录已截断')] : []).slice(0,5) };
 }
@@ -15,7 +21,7 @@ export function sessionCard(data: SessionCardSnapshot, navigation: string, reque
   const page = Math.min(requestedPage, pages - 1);
   const elements: Record<string,unknown>[] = [];
   for (const [offset, row] of data.rows.slice(page * 5, (page + 1) * 5).entries()) {
-    elements.push(...cardSection('原生会话', row.agent + ' · ' + row.machine + '\n' + row.cwd.slice(0,360) + '\n会话 ' + row.id + (row.time ? '\n日志更新 ' + row.time : '') +
+    elements.push(...cardSection(row.archived ? '已归档的原生会话' : '原生会话', row.agent + ' · ' + row.machine + '\n' + row.cwd.slice(0,360) + '\n会话 ' + row.id + (row.parentId ? '\n父会话：' + row.parentId : '') + (row.time ? '\n日志更新 ' + row.time : '') +
       (row.resumable ? '\n支持申请恢复' : '\n仅查看历史')));
     if (row.resumable && row.machineId) elements.push(...cardButtons([{label:'申请恢复', value:{
       kind:'workbench.resumeForm', navigation, index: page * 5 + offset,
