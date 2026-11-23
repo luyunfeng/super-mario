@@ -230,3 +230,21 @@ test('返回 Web 或关闭离场通知会取消未发送积压，保留 unknown'
   bg.outbox.registerChannel(second.channel,async()=>{throw new Error('unknown');},()=>b.replyTarget);await bg.outbox.tick();assert.equal(bg.outbox.list().find(o=>o.id===second.id)!.status,'unknown');
   store.put('notifications.settings','away',{enabled:false});service.flush();assert.equal(bg.outbox.list().find(o=>o.id===second.id)!.status,'unknown');
 });
+
+test('返回 Web 时始终通知执行结果只保留执行通知',async t=>{
+  const {store,bg,cleanups}=backend(t),presence=createWebPresence(),b=bot('global',{kind:'global'});
+  const service=createAwayNotifications({store,background:bg,presence,bots:()=>[b],channel:()=> 'feishu.bot:global:0123456789abcdef'});
+  cleanups.push(()=>service.close());
+  store.put('notifications.settings','away',{enabled:true,alwaysNotifyRuns:true});
+  bg.publish({type:'run.finished',typeVersion:1,sourceId:'finished',data:{}});
+  bg.publish({type:'web.notice',typeVersion:1,sourceId:'reply',data:{}});
+  await bg.eventbox.drain();
+  assert.equal(service.list().filter(n=>n.status==='queued').length,2);
+  presence.heartbeat({tabId:'returned-web',visible:true,focused:true});
+  service.flush();
+  for(const item of service.list()){
+    const event=store.get<{type:string}>('eventbox.events',item.id.slice(5));
+    assert.equal(item.status,event?.type==='run.finished'?'queued':'skipped');
+    assert.equal(bg.outbox.list().find(o=>o.id===item.outboxId)?.status==='cancelled',event?.type!=='run.finished');
+  }
+});

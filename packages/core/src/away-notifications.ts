@@ -15,15 +15,20 @@ export function createAwayNotifications({ store, background, presence, bots, cha
     const settings = store.get<{enabled?:boolean; alwaysNotifyRuns?:boolean}>('notifications.settings','away');
     const disabled = settings?.enabled === false;
     const alwaysNotifyRuns = settings?.alwaysNotifyRuns === true;
-    if (disabled || (presence.status().present && !alwaysNotifyRuns)) {
+    if (disabled || presence.status().present) {
       for (const item of list().filter(i => ['pending','queued'].includes(i.status))) {
+        if (!disabled && alwaysNotifyRuns) {
+          // Older notices have no runId, but retain their durable event identity.
+          const isRun = item.runId || store.get<{type:string}>('eventbox.events',item.id.slice('away:'.length))?.type === 'run.finished';
+          if (isRun) continue;
+        }
         const outgoing = item.outboxId ? background.outbox.list().find(o=>o.id===item.outboxId) : undefined;
         // A return to Web may suppress unsent notifications, never rewrite uncertain delivery.
         if (outgoing && ['sending','sent','unknown'].includes(outgoing.status)) continue;
         if (outgoing && outgoing.status !== 'cancelled') background.outbox.cancel(outgoing.id,outgoing.version);
         store.put('notifications.away',item.id,{...item,status:'skipped',reason:disabled?'离场通知已关闭':'用户已返回页面，取消未发送通知'});
       }
-      return;
+      if (disabled || !alwaysNotifyRuns) return;
     }
     for (const item of list().filter(i => i.status === 'pending')) {
       if (item.decision && store.get<{status:string}>(item.decision.kind === 'approval' ? 'approvals':'plans',item.decision.id)?.status !== 'pending') {
