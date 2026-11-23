@@ -305,9 +305,12 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   });
   await dialog.getByRole('button', { name: '引用原文追问' }).click();
   expect(await picker.getByLabel('选择要追问的原文').evaluate((el: HTMLTextAreaElement) => el.value.slice(el.selectionStart,el.selectionEnd))).toBe('### 核对');
+  await picker.getByLabel('选择要追问的原文').evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(el.selectionStart, el.value.indexOf('--------')));
   await picker.getByRole('button', { name: '引用到项目工作对话' }).click();
   await expect(page).toHaveURL(new RegExp('#projects/' + project.id + '/workspace$'));
-  await expect(page.locator('#panel-workspace [data-message-quote]')).toContainText('第 9 行');
+  await expect(page.locator('#panel-workspace [data-message-quote]')).toContainText('第 9–11 行');
+  await page.goto(server.url + '/#memory?entry=' + projectEntry.id + '&source=' + projectJob.id + '&line=9&endLine=11');
+  await expect(dialog.locator('pre mark')).toHaveText(['### 核对','','后续工作']);
   const get = (id: string) => page.request.get(server.url + '/api/v1/knowledge/' + id + '/sources/' + job.id,
     { headers: { authorization: 'Bearer fixture' } });
   expect((await get(other.id)).status()).toBe(404);

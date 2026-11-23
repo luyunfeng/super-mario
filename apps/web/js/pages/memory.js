@@ -175,10 +175,10 @@ export function createMemoryPage({ api, store, router, scope }) {
   let linkedEntry;
   function openLinkedEntry() {
     if (!linkedEntry || router.current.page !== 'memory' || !store.view.snapshot || store.view.unauthorized) return;
-    const { id, sourceId, line, selectedCommit } = linkedEntry;
+    const { id, sourceId, line, endLine, selectedCommit } = linkedEntry;
     linkedEntry = undefined;
     const entry = store.view.snapshot.knowledge?.find(item => item.id === id);
-    if (entry) openKnowledgeDrawer({ api, store, router, scope, entry, sourceId, line, selectedCommit });
+    if (entry) openKnowledgeDrawer({ api, store, router, scope, entry, sourceId, line, endLine, selectedCommit });
     else toast('引用的知识页已不可用。');
   }
   return {
@@ -191,7 +191,7 @@ export function createMemoryPage({ api, store, router, scope }) {
       pendingSubscription=draftId ? {draftId} : runsId ? {runsId} : undefined;
       openLinkedSubscription();
       const entry = route.query.get('entry');
-      linkedEntry = entry && { id: entry, sourceId: route.query.get('source'), selectedCommit: route.query.get('revision'), line: Number(route.query.get('line')) };
+      linkedEntry = entry && { id: entry, sourceId: route.query.get('source'), selectedCommit: route.query.get('revision'), line: Number(route.query.get('line')), endLine: Number(route.query.get('endLine')) };
       openLinkedEntry();
       const part = route.parts[0];
       if (LAYERS.some(([key]) => key === part) && part !== layer) { layer = part; seg.set(part); }

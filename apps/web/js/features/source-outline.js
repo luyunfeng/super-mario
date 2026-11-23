@@ -2,16 +2,18 @@
 // source markup as HTML. Duplicate titles are identified by line, not by their text.
 import {h} from '../lib/dom.js';
 
-export function displaySourceText(text, outline, content, citationLine, headings = []) {
+export function displaySourceText(text, outline, content, citationLine, headings = [], endLine) {
   const lines=content.split(/\r\n|\r|\n/);
+  const lastLine=Number.isSafeInteger(endLine) && endLine>=citationLine && endLine<=lines.length ? endLine : citationLine;
   const targets=[], fragment=document.createDocumentFragment();
   const byLine=new Map(headings.map(heading=>[heading.line,heading]));
   let start=0,citation;
   for(let i=0;i<lines.length;i++) {
     const raw=lines[i],heading=byLine.get(i+1),title=heading?.title;
-    if(!title && i+1!==citationLine) continue;
+    const quoted=i+1>=citationLine && i+1<=lastLine;
+    if(!title && !quoted) continue;
     if(start<i) fragment.append(lines.slice(start,i).join('\n')+'\n');
-    const anchor=h(i+1===citationLine?'mark':'span',{},raw);
+    const anchor=h(quoted?'mark':'span',{},raw);
     if(title) {
       const level=heading.level;
       anchor.tabIndex=-1;

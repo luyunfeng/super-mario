@@ -61,7 +61,7 @@ function revisionHistory(api, entry, loadDraft, selectedCommit) {
   return section;
 }
 
-function originalSources(api, entry, selected, line, ask, handoff, canRead) {
+function originalSources(api, entry, selected, line, endLine, ask, handoff, canRead) {
   const path = '/knowledge/' + encodeURIComponent(entry.id) + '/sources';
   const body = h('div', { class: 'stack' });
   const section = h('details', { open: Boolean(selected) }, h('summary', null, '查看原始资料'), body);
@@ -113,7 +113,7 @@ function originalSources(api, entry, selected, line, ask, handoff, canRead) {
             if(stamp!==read || !detail.open || !detail.isConnected) return;
             original=content;action.hidden=!ask;
             const citationLine=selected===source.id && Number.isSafeInteger(line) && line>=1 ? line : undefined;
-            const mark=displaySourceText(text,outline,content,citationLine,headings);
+            const mark=displaySourceText(text,outline,content,citationLine,headings,endLine);
             notice.hidden=!citationLine || Boolean(mark);
             if(mark && section.open) mark.scrollIntoView({block:'center'});
           } catch(error) {if(stamp===read && detail.open) text.textContent=error.message;}
@@ -126,7 +126,7 @@ function originalSources(api, entry, selected, line, ask, handoff, canRead) {
   return section;
 }
 
-export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId, line, selectedCommit, contentLine, field, defaults = {}, onSaved }) {
+export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId, line, endLine, selectedCommit, contentLine, field, defaults = {}, onSaved }) {
   const projects = (store.view.snapshot?.projects ?? []).filter(item => !item.archivedAt);
   const layer = Select({ options: Object.entries(layerNames), value: entry?.layer ?? defaults.layer ?? 'personal', name: 'layer' });
   const project = Select({ options: [['', '请选择项目'], ...projects.map(item => [item.id, item.name])], value: entry?.projectId ?? defaults.projectId ?? '', name: 'projectId' });
@@ -227,8 +227,10 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
       const passage = field.value.slice(field.selectionStart, field.selectionEnd);
       if (!passage.trim()) return;
       const line = field.value.slice(0, field.selectionStart).split('\n').length;
-      const citation = `[查看原文](#memory?entry=${encodeURIComponent(entry.id)}&source=${encodeURIComponent(source.id)}&line=${line})`;
-      drafts.write(key, JSON.stringify({ label: source.title, text: source.title + ' · 第 ' + line + ' 行 ' + citation + '\n' + passage }));
+      const lastLine = line + passage.replace(/\n$/, '').split('\n').length - 1;
+      const range = lastLine > line ? line + '–' + lastLine : String(line);
+      const citation = `[查看原文](#memory?entry=${encodeURIComponent(entry.id)}&source=${encodeURIComponent(source.id)}&line=${line}${lastLine > line ? `&endLine=${lastLine}` : ''})`;
+      drafts.write(key, JSON.stringify({ label: source.title, text: source.title + ' · 第 ' + range + ' 行 ' + citation + '\n' + passage }));
       selection.close();
       if (!entry.projectId) scope.set('');
       router.go(entry.projectId ? router.href('projects', entry.projectId, 'workspace') : router.href('chat'));
@@ -370,7 +372,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   });
   const drawer = openDrawer({
     title: entry ? '编辑记忆' : '添加记忆', subtitle: entry ? `更新于 ${timeAgo(entry.updatedAt)}` : undefined,
-    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), actionTodos, actionStatus, actionTodos && todoReceipt, Field({ label: '正文维护方式', control: protection }), Field({ label: '已确认事实', control: facts }), factsNote, Field({ label: '别名', control: aliases }), Field({ label: '标签', control: tags }), Field({ label: '重要级', control: importance }), Field({ label: '相关度（0–100）', control: relevance }), entry && originalSources(api, entry, sourceId, line, mayQuote() ? ask : null, canReadEntry() ? handoff : null, canReadEntry), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
+    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), actionTodos, actionStatus, actionTodos && todoReceipt, Field({ label: '正文维护方式', control: protection }), Field({ label: '已确认事实', control: facts }), factsNote, Field({ label: '别名', control: aliases }), Field({ label: '标签', control: tags }), Field({ label: '重要级', control: importance }), Field({ label: '相关度（0–100）', control: relevance }), entry && originalSources(api, entry, sourceId, line, endLine, mayQuote() ? ask : null, canReadEntry() ? handoff : null, canReadEntry), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();
