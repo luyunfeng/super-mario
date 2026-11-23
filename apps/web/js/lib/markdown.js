@@ -166,7 +166,7 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
       h('p', { class: 'md-p' }, reference.passage));
     text = reference.body;
   }
-  const hasMarkdown = text.includes('\n') || text.includes('`') || text.includes('**') || /https?:\/\//i.test(text) || /\[(?:核对订阅草案|查看(?:对话|待验收交付|项目|文件|原文|修订|待办|执行(?:对比)?|整理记录|订阅运行记录|待决定事项))\]\(/.test(text) || /^ {0,3}(?:#{1,6}(?:\s|$)|>)/.test(text) || /^\s*(?:[-*]\s|\d+\.\s)/.test(text);
+  const hasMarkdown = text.includes('\n') || text.includes('`') || text.includes('**') || /https?:\/\//i.test(text) || text.includes('](#') || /^ {0,3}(?:#{1,6}(?:\s|$)|>)/.test(text) || /^\s*(?:[-*]\s|\d+\.\s)/.test(text);
   if (!hasMarkdown) return quoted ? h('div', { class: 'md' }, quoted, text) : text;
 
   const blocks = quoted ? [quoted] : [];

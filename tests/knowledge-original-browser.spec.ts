@@ -683,7 +683,9 @@ test('会议日回顾按时区和项目分页，空结果区分未注日期，�
   await recap.getByRole('list', { name: '上午' }).getByRole('link', { name: '查看原文 · 项目评审记录' }).click();
   await expect(page.getByRole('dialog', { name: '编辑记忆' }).locator('pre')).toHaveText(base.text);
   server.app.store.put('messages', 'source-progress', { id: 'source-progress', conversationId: 'main', role: 'assistant',
-    status: 'done', createdAt: new Date().toISOString(), text: '[确认来源读取](#chat?approval=source-request) [确认来源读取](https://synthetic.example/approve) [查看整理记录](#memory?curator=1&job=' + first.id + ')' });
+    status: 'done', createdAt: new Date().toISOString(), text:'请核对。[确认来源读取](#chat?approval=source-request)' });
+  server.app.store.put('messages', 'source-job', { id:'source-job', conversationId:'main', role:'assistant',
+    status:'done', createdAt:new Date().toISOString(), text:'[确认来源读取](https://synthetic.example/approve) [查看整理记录](#memory?curator=1&job=' + first.id + ')' });
   await page.goto(server.url + '/#chat');
   await page.reload();
   await expect(page.getByRole('link', { name: '确认来源读取' })).toHaveAttribute('href', '#chat?approval=source-request');
