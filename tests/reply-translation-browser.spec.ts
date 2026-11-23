@@ -177,4 +177,23 @@ test('主对话和项目回复使用隔离的模型请求翻译，切换原文�
     assert.ok(!joined.includes(other.split('\n')[0]) && !joined.includes(privateText) && !joined.includes('PRIVATE_SYSTEM_NOTICE'));
   }
   for (const source of sources) assert.deepEqual(server.app.store.get<Message>('messages', source.id), source);
+  assert.ok((await page.request.post(server.url+'/api/v1/plugins/reply-translation',{
+    headers:{authorization:'Bearer '+token},data:{enabled:true}})).ok());
+  const threadId=crypto.randomUUID(), thread='web:'+threadId;
+  const created=await page.request.post(server.url+'/api/v1/web-conversations',{
+    headers:{authorization:'Bearer '+token},data:{id:threadId,title:'合成翻译对话',projectId:project.id}});
+  assert.ok(created.ok());
+  const original:Message={...sources[1],id:'thread-question',conversationId:thread,role:'user',directWebInput:true};
+  const reply:Message={...sources[1],id:'thread-answer',conversationId:thread,replyTo:original.id};
+  for(const m of [original,reply])server.app.store.put('messages',m.id,m);
+  await page.goto(server.url+'/#chat?thread='+threadId+'&token='+token);
+  const threadRow=page.locator('[data-id="thread-answer"]');
+  await threadRow.getByRole('button',{name:'翻译回复'}).click({timeout:5000});
+  await expect(threadRow.locator('.msg__bubble')).toContainText(workTranslation);
+  await threadRow.getByRole('button',{name:'查看原文'}).click();
+  await expect(threadRow.locator('.msg__bubble')).toContainText(workText);
+  server.app.store.put('messages',original.id,{...original,directWebInput:false});
+  assert.equal((await post(reply.id,thread)).status(),404);
+  assert.equal(requests.length,5);
+
 });

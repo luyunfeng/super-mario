@@ -9,11 +9,12 @@ function fail(status: number, message: string): never {
   throw Object.assign(new Error(message), { status });
 }
 
-function readReply(store: Store, conversationId: string, messageId: string) {
+function readReply(store: Store, conversationId: string, messageId: string, canReadWebReply?: (message: Message) => boolean) {
   const missing = () => fail(404, '当前对话中没有这条可翻译的回复');
   const message = store.get<Message>('messages', messageId);
   if (!message || message.conversationId !== conversationId || message.role !== 'assistant' ||
       (message.status ?? 'done') !== 'done' || (message.origin && message.origin !== 'user') || (typeof message.text !== 'string' || !message.text.trim())) return missing();
+  if (conversationId.startsWith('web:')) return canReadWebReply?.(message) ? message.text : missing();
   if (conversationId !== 'main') {
     const projectId = /^project:(.+):work$/.exec(conversationId)?.[1];
     if (!projectId || (message.projectId && message.projectId !== projectId)) return missing();
@@ -63,7 +64,7 @@ function readInbox(store: Store, ref: InboxRef): string {
 
 type Translate = (text: string, language: string, signal: AbortSignal) => Promise<string>;
 
-export function createReplyTranslation(translate: Translate, modelRevision: () => string): Extension {
+export function createReplyTranslation(translate: Translate, modelRevision: () => string, canReadWebReply?: (message: Message) => boolean): Extension {
   return {
     id: 'reply-translation', name: '回复翻译', capabilities: ['conversation.reply.translate', 'inbox.message.translate'],
     permissions: ['service.provide:reply-translation.translate', 'service.provide:reply-translation.inbox', 'store.read'],
@@ -102,7 +103,7 @@ export function createReplyTranslation(translate: Translate, modelRevision: () =
           fail(400, '请指定回复、所属对话和目标语言');
         const { conversationId, messageId, target } = input;
         return translateSource(['reply', conversationId, messageId], target, request,
-          () => readReply(context.store, conversationId, messageId));
+          () => readReply(context.store, conversationId, messageId, canReadWebReply));
       });
       context.provide('reply-translation.inbox', async (input: Json, request) => {
         if (!input || typeof input !== 'object' || Array.isArray(input) ||

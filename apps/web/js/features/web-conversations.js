@@ -1,4 +1,5 @@
 import {createWebImageExport} from './web-conversation-image-export.js';
+import {createReplyTranslation} from './reply-translation.js';
 import {webThreadStopButton} from './stop-turn.js';
 import {createTurnRetry,turnRetryActive} from './retry-turn.js';
 import {conversationImagesActive,createMessageImages,messageImages} from './message-images.js';
@@ -33,6 +34,8 @@ export function createWebConversations({api,store,scope,router}){
   const listProject=()=>meta?.projectId || (current && meta?'':scope.get() || '');
   const routeId=()=>router.current.page==='chat'?router.current.query.get('thread'):null;
   let selector,selectorScope,selectorOwner,current,meta,nextBefore,nextAfter,targetMessage,readVersion=0,rows=[],lastChanges,lastConnection;
+  const translation=createReplyTranslation({api,store,getScope:()=>meta?.projectId,getConversationId:()=>meta && 'web:'+meta.id});
+  let translationEpoch=0;
   const switcher=createAssistantSwitcher({api,store,router,scope,target:()=>{
     if(router.current.page!=='chat')return;
     const threadId=routeId();
@@ -122,8 +125,9 @@ export function createWebConversations({api,store,scope,router}){
     const quoteChanged=quoteKey!==nextQuoteKey;
     if(editChanged || quoteChanged){editEnabled=nextEdit;edit.reset();}
     if(quoteChanged){quoteKey=nextQuoteKey;quote.restore(quoteKey);epoch++;}
-    if(canStop!==!!writableKey || retryEnabled!==nextRetry || exportButton.hidden!==hidden || editChanged || quoteChanged || favoriteEpoch!==favorites.epoch || promptEpoch!==prompts.epoch){
-      canStop=!!writableKey;retryEnabled=nextRetry;promptEpoch=prompts.epoch;favoriteEpoch=favorites.epoch;
+    const nextTranslation=translation.update(readable ? rows : []);
+    if(translationEpoch!==nextTranslation || canStop!==!!writableKey || retryEnabled!==nextRetry || exportButton.hidden!==hidden || editChanged || quoteChanged || favoriteEpoch!==favorites.epoch || promptEpoch!==prompts.epoch){
+      translationEpoch=nextTranslation;canStop=!!writableKey;retryEnabled=nextRetry;promptEpoch=prompts.epoch;favoriteEpoch=favorites.epoch;
       exportButton.hidden=hidden;
       if(readable && rows.length)display();
     }
@@ -132,7 +136,7 @@ export function createWebConversations({api,store,scope,router}){
     imageExport.reset();pictures.update(null,drafts.owner(),false,false);files.update(null,drafts.owner(),false);
     canStop=false;retryEnabled=false;editEnabled=false;edit.reset();prompts.changeScope();quoteKey=null;quote.restore(null);
     exportButton.hidden=true;exportDrawer?.close();exportDrawer=null;search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
-    favorites.update();input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
+    translation.update([]);favorites.update();input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
     submissions.update();switcher.update();
   }
   function openList(){
@@ -324,14 +328,16 @@ export function createWebConversations({api,store,scope,router}){
   }
   function display(){
     const stamp=current;
+    translation.update(rows);
     replace(messages,rows.map(row=>{
+      const text=h('div',{},copies.renderMessage(row,row.text));
       const selected=targetMessage===row.id;
       return h('article',{class:'msg msg--'+(row.role==='user'?'user':'assistant')+(selected?' is-search-hit':''),
         dataset:{id:row.id},tabIndex:selected?-1:undefined,'aria-current':selected?'true':undefined},
         h('div',{class:'msg__col'},
-          h('div',{class:'msg__bubble'},copies.renderMessage(row,row.text),
+          h('div',{class:'msg__bubble'},text,
             messageImages(api,store,row,meta.archived ? undefined : pictures.editCopy.bind(null,draftKey),messages),messageFiles(api,store,row,rows,messages)),
-          h('div',{class:'msg__meta row row--wrap'},copies.copyMessage(row,m=>m.text),
+          h('div',{class:'msg__meta row row--wrap'},copies.copyMessage(row,translation.displayedText),translation.action(row,text,copies.renderMessage),
             canStop && webThreadStopButton(api,row,meta,()=>valid(stamp) && meta?.id===stamp.id && !meta.archived && rows.includes(row)),
             imageExport.checkbox(row),
             row.origin!=='notification' && favorites.mark(row,meta.projectId,stamp.id,()=>valid(stamp) && meta?.id===stamp.id && rows.includes(row)),

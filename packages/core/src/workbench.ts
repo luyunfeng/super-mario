@@ -542,7 +542,11 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(conversationRetry);
   plugins.register(conversationOutbox);
   plugins.register(conversationQueue);
-  plugins.register(createReplyTranslation((text, language, signal) => translateReply(config, text, language, signal), () => modelRevision));
+  plugins.register(createReplyTranslation((text, language, signal) => translateReply(config, text, language, signal), () => modelRevision, message => {
+    if (!plugins.list().some(p => p.id === 'web-conversations' && p.status === 'active')) return false;
+    requireWebConversationHistory(store,message.conversationId.slice(4),message.projectId);
+    return !!independentWebSource(store,message,message.conversationId,message.projectId);
+  }));
   plugins.register(createConversationSharing(config.token,(source,selection,signal)=>readNativeShareMessages(machines,source,selection,signal)));
   plugins.register(createWorkspaceBoard(() => todoDecisionIds(store), run => runReview.evidenceForRun(run), () => readRunBlockers(store, Date.now())));
   plugins.register(savedPrompts);
