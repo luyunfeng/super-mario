@@ -70,9 +70,14 @@ test('独立对话在本线恢复引用片段并发送原始 Markdown，归档�
   await page.goto(url(second));await expect(preview).toBeHidden();
   await page.goto(url(first));await page.reload();
   await expect(preview).toContainText('改为周五');await expect(preview).not.toContainText('调整文字');
+  await region.getByRole('button',{name:'编辑批注 2'}).click();
+  const editNote=page.getByRole('dialog',{name:'编辑批注'});
+  await expect(editNote.getByLabel('批注意见')).toHaveValue('改为周五');
+  await editNote.getByLabel('批注意见').fill('改为下周一');
+  await editNote.getByRole('button',{name:'保存批注'}).click();
   await input.fill('逐项处理');const annotated=page.waitForRequest(req=>req.method()==='POST' && req.url()===path+'/'+first+'/messages');
   await input.press('Enter');
-  assert.equal((await annotated).postDataJSON().text,'> 开头\n\n批注 1：核对口径\n\n> 结尾\n\n批注 2：改为周五\n\n逐项处理');
+  assert.equal((await annotated).postDataJSON().text,'> 开头\n\n批注 1：核对口径\n\n> 结尾\n\n批注 2：改为下周一\n\n逐项处理');
   await expect(preview).toBeHidden();
   const patch=async(archived:boolean)=>{
     const meta=await (await page.request.get(path+'/'+first,{headers})).json();

@@ -43,14 +43,15 @@ export function createMessageQuote({ drafts, input, store, router, scope }) {
     field.setSelectionRange(0, 0);
   }
 
-  function comment(message, label, button) {
+  function comment(message, label, button, index) {
     const key = currentKey, owner = currentOwner, original = selected;
     if (!key || owner !== drafts.owner()) return;
+    const editing = index !== undefined;
     const selection = window.getSelection();
     const bubble = button.closest('.msg');
     const excerpt = selection && bubble?.contains(selection.anchorNode) && bubble.contains(selection.focusNode) ? selection.toString() : '';
     const field = h('textarea', {class:'textarea', rows:5, readOnly:true, 'aria-label':'待批注的原文', value:message.text});
-    const note = h('textarea', {class:'textarea', rows:3, 'aria-label':'批注意见', placeholder:'写下对所选原文的意见'});
+    const note = h('textarea', {class:'textarea', rows:3, 'aria-label':'批注意见', value:editing ? message.note : '', placeholder:'写下对所选原文的意见'});
     const apply = h('button', {type:'button', class:'btn btn--primary btn--sm', disabled:true, onclick() {
       if (key !== currentKey || owner !== drafts.owner() || drafts.read(quoteDraftKey(key)) !== original) {
         drawer.close(); restore(currentKey); return;
@@ -58,20 +59,23 @@ export function createMessageQuote({ drafts, input, store, router, scope }) {
       const text = field.value.slice(field.selectionStart, field.selectionEnd);
       if (!text.trim() || !note.value.trim()) return;
       const value = decode(original) ?? {comments:[]};
-      value.comments.push({id:message.id, label, text, note:note.value.trim()});
+      const entry = {id:message.id, label, text, note:note.value.trim()};
+      if (editing) value.comments[index] = entry;
+      else value.comments.push(entry);
       setSelection(JSON.stringify(value));
       input.focus();
-    }}, '加入草稿');
+    }}, editing ? '保存批注' : '加入草稿');
     function update() { apply.disabled = !note.value.trim() || !field.value.slice(field.selectionStart, field.selectionEnd).trim(); }
     field.addEventListener('select', update);
     note.addEventListener('input', update);
-    const drawer = openDrawer({title:'批注原文', body:h('div',{class:'stack'},'选择一段原文，再填写意见。',field,note), footer:apply,
+    const drawer = openDrawer({title:editing ? '编辑批注' : '批注原文', body:h('div',{class:'stack'},'选择一段原文，再填写意见。',field,note), footer:apply,
       onClose() { if (passageDrawer === drawer) passageDrawer = undefined; }});
     passageDrawer = drawer;
     field.focus();
     const start = excerpt.trim() ? field.value.indexOf(excerpt) : -1;
     if (start >= 0) field.setSelectionRange(start, start + excerpt.length);
     else field.select();
+    if (editing) { update(); note.focus(); }
   }
 
   function forward() {
@@ -137,6 +141,8 @@ export function createMessageQuote({ drafts, input, store, router, scope }) {
       } }, '移除引用'),
       value.comments.map((item, index) => h('div', {class:'message-quote__comment'},
         h('strong', null, '批注 ' + (index + 1)), h('blockquote', null, item.text), h('p', null, item.note),
+        h('button', {type:'button', class:'btn btn--ghost btn--sm', 'aria-label':'编辑批注 ' + (index + 1),
+          onclick:event => comment(item, item.label, event.currentTarget, index)}, '编辑批注'),
         h('button', {type:'button', class:'btn btn--ghost btn--sm', 'aria-label':'移除批注 ' + (index + 1), onclick() {
           if (drafts.read(quoteDraftKey(currentKey)) !== selected) { restore(currentKey); return; }
           const comments = value.comments.filter((_, i) => i !== index);
