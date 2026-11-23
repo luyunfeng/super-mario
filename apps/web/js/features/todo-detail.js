@@ -86,47 +86,75 @@ function groupTaskOutcome(api, store, todo) {
   return { panel, update };
 }
 
-function decisionSection(api, todo, valid) {
+function decisionSection(api, store, todo) {
   const path = todoPath(todo) + '/decisions';
+  const owner = api.draftOwner();
   const list = h('div', { class: 'stack', 'aria-live': 'polite' }, '正在读取决策…');
   const input = TextArea({ rows: 2 });
-  let decisions = [];
+  let sequence = 0, lastChange = store.view.todoDecisionsChange, connection = store.view.connection;
+  const sameOwner = () => owner === api.draftOwner() && owner === store.view.snapshotOwner && !store.view.unauthorized;
+  const valid = () => panel.isConnected && panel.closest('dialog')?.open !== false && sameOwner() && matchesScope(store, todo);
   const add = Button({ label: '添加决策', disabled: true, onClick: async () => {
     const text = input.value.trim();
     if (!text) { input.focus(); return; }
     await change(path, { text });
-    if (input.value.trim() === text) input.value = '';
+    if (valid() && input.value.trim() === text) input.value = '';
   } });
+  const panel = section('决策', list, Field({ label: '新决策', control: input }), add);
 
-  function paint() {
-    replace(list, decisions.length ? decisions.map(item => h('div', { class: 'item' },
-      h('div', { class: 'item__main' }, h('span', null, item.text),
-        h('span', { class: 'item__meta' }, [item.source === 'answer' ? '来自答复' : item.source === 'topic' ? '飞书话题' : '手工记录', item.sourceId ?? item.id, item.active ? '生效中' : '已撤回'].join(' · '))),
-      item.active && Button({ label: '撤回', size: 'sm', onClick: () => change(path + '/' + encodeURIComponent(item.id) + '/withdraw', {}) })
-    )) : '暂无决策');
+  function paint(decisions) {
+    const byId = new Map(decisions.map(item => [item.id, item]));
+    const successor = new Map(decisions.filter(item => item.supersedesId).map(item => [item.supersedesId, item]));
+    const describe = item => item.choice || item.text || item.id;
+    function row(item) {
+      const agent = item.source === 'agent';
+      const run = agent && store.view.snapshot.runs?.find(r => r.id === item.sourceId && (!r.todoId || r.todoId === todo.id) && r.projectId === todo.projectId);
+      const executor = run && (store.view.snapshot.executors?.find(e => e.id === run.executorId)?.name || run.executorId);
+      const origin = agent ? ['执行会话', executor].filter(Boolean).join(' · ') :
+        ({ answer: '来自答复', topic: '飞书话题', manual: '手工记录' })[item.source] || '其他来源';
+      const next = successor.get(item.id), previous = byId.get(item.supersedesId);
+      const state = item.active ? '生效中' : next ? '已被替代' : '已撤回';
+      return h('div', { class: 'item', dataset: { decisionId: item.id } },
+        h('div', { class: 'item__main' },
+          agent && item.question && h('span', null, '问题 · ' + item.question),
+          h('span', null, agent && item.choice ? '选择 · ' + item.choice : item.text),
+          agent && item.reason && h('span', null, '依据 · ' + item.reason),
+          item.supersedesId && h('span', { class: 'item__meta' }, '替代了 · ' + (previous ? describe(previous) : item.supersedesId)),
+          next && h('span', { class: 'item__meta' }, '由后续决定替代 · ' + describe(next)),
+          h('span', { class: 'item__meta' }, [origin, item.sourceId ?? item.id, item.createdAt && new Date(item.createdAt).toLocaleString('zh-CN'), state].filter(Boolean).join(' · '))),
+        item.active && Button({ label: '撤回', size: 'sm', onClick: () => change(path + '/' + encodeURIComponent(item.id) + '/withdraw', {}) }));
+    }
+    replace(list, decisions.length ? decisions.map(row) : '暂无决策');
   }
   async function load() {
-    add.disabled = true;
+    const stamp = ++sequence;
     try {
-      decisions = (await api.get(path)).decisions;
-      paint();
-      add.disabled = false;
+      const { decisions } = await api.get(path);
+      if (stamp !== sequence || !valid()) return;
+      paint(decisions); add.disabled = false;
     } catch (error) {
+      if (stamp !== sequence || !valid()) return;
+      add.disabled = true;
       replace(list, error.message, Button({ label: '重新读取决策', onClick: load }));
     }
   }
   async function change(url, body) {
     if (!valid()) return;
-    const result = await api.post(url, { ...body, expectedProjectId: todo.projectId ?? null });
-    if (!valid()) return;
-    if (!result?.id || typeof result.active !== 'boolean') { await load(); return; }
-    const index = decisions.findIndex(item => item.id === result.id);
-    if (index < 0) decisions.push(result);
-    else decisions[index] = result;
-    paint();
+    await api.post(url, { ...body, expectedProjectId: todo.projectId ?? null });
+    if (valid()) await load();
+  }
+  function update() {
+    if (!sameOwner() || !matchesScope(store, todo)) {
+      ++sequence; panel.hidden = true; replace(list); input.value = ''; add.disabled = true; return;
+    }
+    const event = store.view.todoDecisionsChange;
+    const refresh = panel.hidden || (event !== lastChange && event?.todoId === todo.id) ||
+      (connection !== 'online' && store.view.connection === 'online');
+    lastChange = event; connection = store.view.connection; panel.hidden = false;
+    if (refresh) void load();
   }
   void load();
-  return section('决策', list, Field({ label: '新决策', control: input }), add);
+  return { panel, update };
 }
 
 function replyRecord(api, store, todo) {
@@ -253,11 +281,13 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
   const history = conversationHistory({ api, store, router, todo, close });
   const outcome = groupTaskOutcome(api, store, todo);
   const thread = createTodoThread({ api, store, todo, sameScope: () => matchesScope(store, todo) });
+  const decisions = decisionSection(api, store, todo);
   const el = h('div', { class: 'stack' }, summary, outcome.panel, thread.panel, attention.el, history.panel, reminder.panel, replyRecord(api, store, todo),
-    decisionSection(api, todo, () => el.isConnected && el.closest('dialog')?.open !== false && matchesScope(store, todo)), next);
+    decisions.panel, next);
   function paint() {
     const snapshot = store.view.snapshot;
     const current = snapshot?.todos.find(item => item.id === todo.id);
+    decisions.update();
     if (!current || !matchesScope(store, todo)) return;
     outcome.update(current);
     thread.update();

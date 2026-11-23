@@ -3,7 +3,7 @@
 
 export function createStore(api) {
   const listeners = new Set();
-  const view = { snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, todoThreadChange: null, deletedFeishuThread: null, feishuBotChange: null, connection: 'connecting', unauthorized: false, loadError: '' };
+  const view = { snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, todoThreadChange: null, todoDecisionsChange: null, deletedFeishuThread: null, feishuBotChange: null, connection: 'connecting', unauthorized: false, loadError: '' };
   let request = 0;
   let socket;
   let reconnectTimer;
@@ -62,6 +62,10 @@ export function createStore(api) {
         set({ projectInstructionsChange: event.data });
         return;
       }
+      if (event?.type === 'todo-decisions.changed' && typeof event.data?.todoId === 'string') {
+        set({ todoDecisionsChange: { todoId: event.data.todoId } });
+        return;
+      }
       if (event?.type === 'todo-thread.changed' && typeof event.data?.todoId === 'string') {
         set({ todoThreadChange: { todoId: event.data.todoId } });
         return;
@@ -93,7 +97,7 @@ export function createStore(api) {
     refresh,
     connect,
     reconnect: connect,
-    reset() { request += 1; set({ snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, todoThreadChange: null, deletedFeishuThread: null, feishuBotChange: null, unauthorized: false, loadError: '' }); connect(); },
+    reset() { request += 1; set({ snapshot: null, snapshotOwner: null, attention: [], savedPromptsRevision: null, messageFavoritesRevision: null, projectInstructionsChange: null, todoThreadChange: null, todoDecisionsChange: null, deletedFeishuThread: null, feishuBotChange: null, unauthorized: false, loadError: '' }); connect(); },
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
   };
 }

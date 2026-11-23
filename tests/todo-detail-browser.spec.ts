@@ -268,3 +268,37 @@ test('待办详情手工绑定、改标题与换绑按当前配对和版本保�
   await expect(panel).toContainText('原机器人已停用或配对已变化');
   await expect(panel.getByRole('button',{name:'保存标题'})).toHaveCount(0);
 });
+
+test('已打开的待办实时显示执行会话决定、替代链与依据，主人可撤回', {timeout:30000}, async t => {
+  const { page, app, todo, previous } = await fixture(t);
+  const path = '/api/v1/todos/' + todo.id + '/decisions';
+  const run: Run = { ...previous, id:'fixture-run', machineId:'fixture-machine',sessionId:'fixture-session', status:'running' };
+  app.store.put('runs',run.id,run);
+  app.store.put('todos',todo.id,{...todo,responsibleSession:{machineId:run.machineId,sessionId:run.sessionId,runId:run.id}});
+  const base = app.todoDecisions.addAgent(todo.id,run,{question:'如何存储合成条目？',choice:'保存为 CSV',reason:'下游读取表格'});
+  await page.goto(new URL('/#projects/'+todo.projectId+'/todos/detail/'+todo.id,page.url()).toString());
+  const first = page.locator('[data-decision-id="'+base.id+'"]');
+  await expect(first).toContainText('执行会话');
+  await expect(first).toContainText(run.id);
+  await expect(first).toContainText('依据 · 下游读取表格');
+  await expect(first).toContainText(String(new Date(base.createdAt).getFullYear()));
+  await page.getByLabel('新决策',{exact:true}).fill('尚未提交的草稿');
+  const revision = app.todoDecisions.addAgent(todo.id,run,{question:base.question, choice:'保存为 JSON',reason:'需要保留嵌套字段',supersedesId:base.id});
+  app.events.publish('todo-decisions.changed',{todoId:todo.id});
+  const next = page.locator('[data-decision-id="'+revision.id+'"]');
+  await expect(next).toContainText('问题 · 如何存储合成条目？');
+  await expect(next).toContainText('选择 · 保存为 JSON');
+  await expect(next).toContainText('依据 · 需要保留嵌套字段');
+  await expect(first).toContainText('已被替代');
+  await expect(first).toContainText('由后续决定替代 · 保存为 JSON');
+  await expect(next).toContainText('替代了 · 保存为 CSV');
+  await expect(first.getByRole('button',{name:'撤回',exact:true})).toHaveCount(0);
+  await expect(page.getByLabel('新决策',{exact:true})).toHaveValue('尚未提交的草稿');
+  const [withdrawal] = await Promise.all([page.waitForResponse(response => new URL(response.url()).pathname === path+'/'+encodeURIComponent(revision.id)+'/withdraw'),
+    next.getByRole('button',{name:'撤回',exact:true}).click()]);
+  await expect(next).toContainText('已撤回');
+  await expect(first).toContainText('已被替代');
+  assert.equal(withdrawal.status(),200);
+  assert.deepEqual(withdrawal.request().postDataJSON(),{expectedProjectId:todo.projectId});
+  assert.equal(app.todoDecisions.list(todo.id).find(item => item.id === revision.id)?.active,false);
+});
