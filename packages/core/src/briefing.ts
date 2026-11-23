@@ -5,6 +5,14 @@ import type { createSchedules } from './schedules.ts';
 
 const defaults: BriefingSettings = { alwaysNotifyRuns:false, lowDistraction:false, decisionQuietHours: { enabled:false, start:'22:00', end:'08:00' }, timezone:'Asia/Shanghai', morning:'09:00', evening:'18:00', intervalHours:4, intervalEnabled:false, activeStart:'09:00', activeEnd:'21:00', awayNotifications:true };
 const clock = (s: unknown): s is string => typeof s === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(s);
+export function heldNotificationRecords(store:Store) {
+  return store.list<AwayNotification>('notifications.away').filter(row=>row.status==='held').map(row=>{
+    if (row.createdAt || !row.id.startsWith('away:')) return row;
+    const event=store.get<{createdAt:string}>('eventbox.events',row.id.slice('away:'.length));
+    return event?.createdAt ? {...row,createdAt:event.createdAt} : row;
+  });
+}
+
 export function buildWindowBrief(store: Store, from: string, to: string, projectId?: string, conversations: readonly import('../../protocol/src/inbox-conversations.ts').InboxConversation[] = [], morningTimezone?: string, includeContinuingRuns = false) {
   if (!Number.isFinite(Date.parse(from)) || !Number.isFinite(Date.parse(to)) || Date.parse(from) >= Date.parse(to)) throw new Error('摘要时间窗无效');
   const changed = (date: string) => Date.parse(date) > Date.parse(from) && Date.parse(date) <= Date.parse(to);
@@ -15,9 +23,8 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
     timeZone: morningTimezone, year: 'numeric', month: '2-digit', day: '2-digit',
   }) : undefined;
   const projects = store.list<Project>('projects').filter(p => !p.archivedAt && (projectId === undefined || p.id === projectId));
-  const held = store.list<AwayNotification>('notifications.away').filter(item => item.status === 'held').flatMap(item => {
-    // Older held records still point at the durable event that produced them.
-    const date = item.createdAt ?? store.get<{createdAt:string}>('eventbox.events',item.id.slice('away:'.length))?.createdAt;
+  const held = heldNotificationRecords(store).flatMap(item => {
+    const date = item.createdAt;
     if (!date || !changed(date)) return [];
     const run = item.runId ? store.get<Run>('runs',item.runId) : undefined;
     let href = run && run.projectId === item.projectId

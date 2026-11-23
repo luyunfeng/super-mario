@@ -4602,7 +4602,9 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
       return {name:'样例.txt',text:'合成条款第六条',truncated:false};
     });
     for(const projectId of ['fixture-project','other-project']){
-      server.app.store.put('notifications.away',projectId,{id:projectId,projectId,status:'held',createdAt:'2030-01-01T16:00:00Z',text:'合成交付结果'});
+      server.app.store.put('eventbox.events','fixture-'+projectId,{createdAt:'2030-01-01T16:00:00Z'});
+      const id='away:fixture-'+projectId;
+      server.app.store.put('notifications.away',id,{id,projectId,status:'held',text:'合成交付结果'});
     }
     server.app.store.put('notifications.away','previous',{id:'previous',projectId:'fixture-project',status:'held',createdAt:'2030-01-01T15:59:59Z',text:'前一天交付'});
     assert.equal(await ask('查询项目保留通知'),'合成交付结果');

@@ -46,7 +46,7 @@ import { createProjectFollowUp } from './project-follow-up.ts';
 import { applyPolicyPreset } from './policy-presets.ts';
 import { createProjectFolders } from './project-folders.ts';
 import { createWebPresence } from './web-presence.ts';
-import { createBriefingSettings } from './briefing.ts';
+import { createBriefingSettings, heldNotificationRecords } from './briefing.ts';
 import { createAgentFollowups } from './followups.ts';
 import { createAutoTakeover } from './auto-takeover.ts';
 import { todoDelegationPrompt, formatProjectInstructions, INBOX_ASSISTANT_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT } from './prompts.ts';
@@ -1909,9 +1909,9 @@ export async function createWorkbench(config: AppConfig) {
     const projectId=optionalText(input.projectId,'项目');
     const query=String(input.query ?? '').trim().toLowerCase();
     const dayFormat=localDayFormatter(input.day,input.timeZone,'通知日期');
-    const rows=store.list<import('../../protocol/src/index.ts').AwayNotification>('notifications.away')
+    const rows=heldNotificationRecords(store)
       .filter(row=>!dayFormat || (row.createdAt && Number.isFinite(Date.parse(row.createdAt)) && dayFormat.format(Date.parse(row.createdAt))===input.day))
-      .filter(row=>row.status==='held' && (!projectId || row.projectId===projectId) && row.text.toLowerCase().includes(query))
+      .filter(row=>(!projectId || row.projectId===projectId) && row.text.toLowerCase().includes(query))
       .sort((a,b)=>(b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.id.localeCompare(b.id));
     const items=rows.slice(offset,offset+20).map(row=>({text:row.text.slice(0,800),textTruncated:row.text.length>800,
       ...(row.createdAt && {createdAt:row.createdAt}),...(row.projectId && {projectId:row.projectId})}));
