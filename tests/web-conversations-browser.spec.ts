@@ -216,4 +216,19 @@ test('独立对话正文结果可从三条预览翻页定位到较早原文', as
   await expect(drawer.locator('a mark')).toHaveCount(22);
   await drawer.getByRole('link', { name: '季度记录 0', exact: true }).press('Enter');
   await expect(page.locator('[data-id="synthetic-match-0"][aria-current="true"]')).toBeVisible();
+  await page.getByRole('button', { name: '独立对话', exact: true }).click();
+  const search = drawer.getByLabel('按标题查找');
+  await search.fill('季度记录');
+  await search.press('Enter');
+  await expect(drawer.locator('a mark')).toHaveCount(3);
+  const toggleSearch = (enabled: boolean) => page.request.post(server.url + '/api/v1/plugins/conversation-search', {
+    headers: { authorization: 'Bearer ' + token }, data: { enabled } });
+  assert.ok((await toggleSearch(false)).ok());
+  await expect(search).toHaveAttribute('placeholder', '输入标题中的文字');
+  await expect(drawer.locator('a mark')).toHaveCount(0);
+  await expect(drawer.getByRole('button', { name: '按正文查找' })).toBeHidden();
+  await search.fill('合成分页');
+  await expect(drawer.getByRole('link', { name: '合成分页历史' })).toBeVisible();
+  assert.ok((await toggleSearch(true)).ok());
+  await expect(search).toHaveAttribute('placeholder', '输入标题或正文中的文字');
 });

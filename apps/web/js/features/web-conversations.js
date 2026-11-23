@@ -198,7 +198,11 @@ export function createWebConversations({api,store,scope,router}){
       h('option',{value:''},'全部发言人'),h('option',{value:'user'},'我'),h('option',{value:'assistant'},'助手'));
     speaker.onchange=()=>listRefresh?.();
     const canSearch=()=>store.view.snapshot?.plugins.some(p=>p.id==='conversation-search' && p.status==='active');
-    lookup.hidden=!canSearch();
+    function updateSearchControls(){
+      lookup.hidden=!canSearch();
+      searchTitle.placeholder=lookup.hidden?'输入标题中的文字':'输入标题或正文中的文字';
+    }
+    updateSearchControls();
     let bodyQuery='',unwatch;
     const drawer=openDrawer({title:'独立对话',body:[draft,h('label',{class:'field'},'对话状态',filter),searchTitle,lookup,speaker,status,list],onClose:()=>{unwatch?.();if(selector===drawer){selector=null;listRefresh=null;}}});
     selector=drawer;
@@ -277,7 +281,6 @@ export function createWebConversations({api,store,scope,router}){
       lookup.click();
     };
     searchTitle.maxLength=200;
-    searchTitle.placeholder='输入标题或正文中的文字';
     searchTitle.oninput=()=>{if(bodyQuery){bodyQuery='';void listRefresh();}else drawList();};
     listRefresh=async(quiet=false, changedThreads)=>{
       const seq=++request,query=searchParams();
@@ -298,7 +301,7 @@ export function createWebConversations({api,store,scope,router}){
     };
     let previousChanges=store.view.messageQueueChanges,previousConnection=store.view.connection;
     unwatch=store.subscribe(view=>{
-      lookup.hidden=!canSearch();
+      updateSearchControls();
       if(lookup.hidden && bodyQuery){bodyQuery='';void listRefresh?.();}
       // A thread outside the current results can acquire its first matching message.
       const changed=view.messageQueueChanges!==previousChanges && (bodyQuery
