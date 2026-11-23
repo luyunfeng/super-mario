@@ -105,8 +105,8 @@ function readableMessage(message: Message, project: Project, excludeId: unknown)
     ['user', 'assistant'].includes(message.role) && (!message.origin || message.origin === 'user');
 }
 
-function messageCitation(projectId: string, id: string, version: string) {
-  return '[查看原文](#projects/' + encodeURIComponent(projectId) + '/workspace?' + new URLSearchParams({ at: id, version }) + ')';
+function messageCitation(projectId: string, id: string, version: string, todoId?: string) {
+  return '[查看原文](#projects/' + encodeURIComponent(projectId) + '/workspace?' + new URLSearchParams({ at: id, version, ...(todoId && {todo:todoId}) }) + ')';
 }
 
 function projectMessages(store: Store, input: Json, excludeId?: string) {
@@ -168,7 +168,7 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
     });
     const version = messageVersion(message.text);
     hits.push({ projectId: project.id, projectName: project.name, createdAt: message.createdAt, id: message.id,
-      role: message.role, version, status: message.status ?? 'unknown', webCitation: messageCitation(project.id, message.id, version), ...(todoId !== undefined && { todoId }),
+      role: message.role, version, status: message.status ?? 'unknown', webCitation: messageCitation(project.id, message.id, version, todoId), ...(todoId !== undefined && { todoId }),
       ...(listMessages ? { preview: message.text.slice(0, 120) } : excerpts[0]), ...(excerpts.length > 1 ? { excerpts } : {}) });
   }
   if (!pastCursor) fail(404, '未找到当前检索的消息游标');
@@ -403,6 +403,7 @@ function webMessages(context: ExtensionContext, input: Json, canReadFiles?:CanRe
     const location = new URLSearchParams();
     if (thread) location.set('thread', conversationId.slice(4));
     location.set('at', row.id);
+    if (todoId && conversationId !== 'main') location.set('todo', todoId);
     const page = thread || conversationId === 'main' ? '#chat' : '#projects/' + encodeURIComponent(projectId!) + '/workspace';
     hits.push({id:row.id,role:row.role,createdAt:row.createdAt,text:matches[0]!.text,matches,
       webCitation: '[查看原文](' + page + '?' + location + ')',
@@ -535,7 +536,7 @@ export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input:
         let end = Math.min(offset + 4000, message.text.length);
         if (end < message.text.length && /[\uD800-\uDBFF]/u.test(message.text[end - 1])) end--;
         return { id, projectId, projectName: project.name, role: message.role, createdAt: message.createdAt,
-          status: message.status ?? 'unknown', webCitation: messageCitation(projectId, id, current), text: message.text.slice(offset, end), offset, nextOffset: end < message.text.length ? end : null, version: current };
+          status: message.status ?? 'unknown', webCitation: messageCitation(projectId, id, current, todoId), text: message.text.slice(offset, end), offset, nextOffset: end < message.text.length ? end : null, version: current };
       },
     });
     context.provide('conversation-search.tool-records', input=>projectToolRecords(context.store,input));

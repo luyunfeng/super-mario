@@ -16,7 +16,7 @@ const inlineTokens = new RegExp([
   /\[查看待验收交付\]\(#projects\/[A-Za-z0-9_-]{1,128}\/todos\/detail\/[A-Za-z0-9_-]{1,128}\?reviewRun=[A-Za-z0-9_-]{1,128}&reviewVersion=[1-9][0-9]{0,15}&reviewEvidence=[a-f0-9]{64}\)/.source,
   /\[查看待办\]\(#projects\/[A-Za-z0-9_-]{1,128}\/todos\/detail\/[A-Za-z0-9_-]{1,128}\)/.source,
   /\[查看文件\]\(#projects\/[A-Za-z0-9_-]{1,128}\/workspace\?file=(?:[A-Za-z0-9_.*+\-]|%[0-9A-Fa-f]{2})+\)/.source,
-  /\[查看原文\]\(#projects\/[A-Za-z0-9_-]{1,128}\/workspace\?at=(?:[A-Za-z0-9_.*+\-]|%[0-9A-Fa-f]{2})+(?:&version=[a-f0-9]{64})?\)/.source,
+  /\[查看原文\]\(#projects\/[A-Za-z0-9_-]{1,128}\/workspace\?at=(?:[A-Za-z0-9_.*+\-]|%[0-9A-Fa-f]{2})+(?:&version=[a-f0-9]{64})?(?:&todo=[A-Za-z0-9_-]{1,128})?\)/.source,
   /\[查看对话\]\(#agent\/private-thread\/[A-Za-z0-9_-]{1,128}\/[A-Za-z0-9_-]{1,128}\)/.source,
   /\[查看原文\]\(#chat\?(?:thread=[a-f0-9-]{36}&)?at=(?:[A-Za-z0-9_.*+\-]|%[0-9A-Fa-f]{2}){1,512}\)/.source,
   /\[查看原文\]\(#agent\/private-thread\/[A-Za-z0-9_-]{1,128}\/[A-Za-z0-9_-]{1,128}\/(?:[A-Za-z0-9_.~-]|%[0-9A-Fa-f]{2}){1,512}\)/.source,

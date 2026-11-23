@@ -4725,7 +4725,7 @@ test('模型从注册工具发出限时提问，到期回合只读且不能冒�
 
 test('搜索本对话工具固定 Web 发言范围并排除当前检索提问', async t => {
   const query = '交接清单', oldText = '交接清单里有三份合成样张';
-  let citationPage = '#chat';
+  let citationPage = '#chat', citationTodo = '';
   let category:'quoted'|'tool_name'|'tool_input'|'tool_output'='quoted';
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
@@ -4737,7 +4737,7 @@ test('搜索本对话工具固定 Web 发言范围并排除当前检索提问', 
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
     const {hits} = JSON.parse(raw);
-    for (const hit of hits) assert.equal(hit.webCitation, '[查看原文](' + citationPage + '?' + new URLSearchParams({at:hit.id}) + ')');
+    for (const hit of hits) assert.equal(hit.webCitation, '[查看原文](' + citationPage + '?' + new URLSearchParams({at:hit.id, ...(citationTodo && {todo:citationTodo})}) + ')');
     if (category==='tool_input' || category==='tool_output') {
       assert.equal(hits.length,1);
       const [match]=hits[0].matches;
@@ -4774,6 +4774,12 @@ test('搜索本对话工具固定 Web 发言范围并排除当前检索提问', 
     assert.match(await ask('以前有用交接清单当检索词吗？',path),/交接清单/);
     category='tool_output';
     assert.match(await ask('找出工具曾返回的三份合成样张原话。',path),/交接清单里有三份合成样张/);
+    category = 'quoted';
+    citationTodo = (await api('/todos', {projectId:project.id, title:'交接清单核对'})).id;
+    acceptMessage(server.app.store, {id:'todo-history', projectId:project.id, todoId:citationTodo,
+      conversationId:'project:'+project.id+':work', requestId:randomUUID(), role:'user', text:'> '+oldText,
+      status:'done', createdAt:'2026-03-01T10:00:00.000Z'} satisfies Message);
+    assert.equal(await ask('找一下本待办引用过的交接清单原话。',path,citationTodo),oldText);
   } finally { await server.close(); }
 });
 
