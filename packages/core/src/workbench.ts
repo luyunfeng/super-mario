@@ -1936,7 +1936,7 @@ export async function createWorkbench(config: AppConfig) {
       const matches = store.list<Todo>('todos').filter(todo =>
         !todo.completedAt && todo.projectId === requested.projectId && todo.parentTodoId === requested.parentTodoId &&
         todo.continuesTodoId === requested.continuesTodoId && todo.title.normalize('NFC') === title &&
-        todo.dueDay === requested.dueDay && (todo.dueAt ? Date.parse(todo.dueAt) : undefined) === due);
+        todo.dueDay === requested.dueDay && (requested.dueDay !== undefined || (todo.dueAt ? Date.parse(todo.dueAt) : undefined) === due));
       if (matches.length > 1) throw new InputError('已有多个同名同期限待办，请查询并选定具体事项', 409);
       const existing = matches[0];
       if (existing && existing.continuationReason !== requested.continuationReason) throw new InputError('已有同名续办的交接说明不同，请核对现有待办', 409);
