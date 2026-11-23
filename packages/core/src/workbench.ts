@@ -386,13 +386,23 @@ export async function createWorkbench(config: AppConfig) {
       || typeof result.revision !== 'number' || !Number.isSafeInteger(result.revision)) throw new InputError('主助手资料无效', 500);
     return { name: result.name, revision: result.revision };
   }
-  async function currentProjectInstructions(projectId: string): Promise<string> {
+  async function currentProjectInstructions(projectId: string, audience: 'assistant' | 'executor' = 'assistant'): Promise<string> {
     const project = store.get<Project>('projects', projectId);
-    if (!project || project.archivedAt || !plugins.list().some(p => p.id === 'project-instructions' && p.status === 'active')) return '';
+    if (!project || project.archivedAt) return '';
+    const plugin = plugins.list().find(p => p.id === 'project-instructions');
+    if (plugin?.status !== 'active') {
+      if (audience === 'executor') return '';
+      return plugin?.status === 'disabled' ? '项目工作指令插件已停用。本轮未加载指令，不能根据旧对话推断已保存的版本或正文。'
+        : '项目工作指令插件当前不可用。本轮无法核对已保存的版本或正文。';
+    }
     const value = await plugins.invocations.use('project-instructions.manage', { action: 'read', projectId });
     if (!value || typeof value !== 'object' || Array.isArray(value) || value.projectId !== projectId || typeof value.notes !== 'string'
       || typeof value.revision !== 'number' || !Number.isSafeInteger(value.revision) || value.revision < 0) {
       throw new InputError('项目工作指令来源不匹配', 409);
+    }
+    if (!value.notes && audience === 'assistant') {
+      return value.revision === 0 ? '本项目尚未保存过工作指令。用户核对版本时，说明尚无已保存的版本。'
+        : `本项目工作指令已在第 ${value.revision} 版清空。用户询问版本时说明该版本正文为空，本轮不沿用旧版本的要求。`;
     }
     return formatProjectInstructions(project, value.notes, value.revision);
   }
@@ -1294,7 +1304,7 @@ export async function createWorkbench(config: AppConfig) {
             return todoDecisions.context(todoId);
           };
           // Exact approved payloads and existing native threads retain their original terms.
-          const guidance = projectId && !nativeApproved && !executionGuard ? await currentProjectInstructions(projectId) : '';
+          const guidance = projectId && !nativeApproved && !executionGuard ? await currentProjectInstructions(projectId, 'executor') : '';
           const decisions = currentDecisions();
           const includeOfficeGuide = executor.mode === 'real' && executionMode === 'task' && !nativeApproved && !executionGuard
             && plugins.list().some(plugin => plugin.id === 'office-documents' && plugin.status === 'active')

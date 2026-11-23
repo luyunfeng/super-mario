@@ -107,4 +107,5 @@ test('executor receives current task ledger decisions and drops withdrawn ones o
   assert.ok(prompts[1]!.startsWith(input.prompt));
   assert.ok(prompts[1]!.includes(JSON.stringify(input.doneWhen)));
   assert.ok(!prompts[1]!.includes(fact.text) && !prompts[1]!.includes(notes.notes));
+  assert.doesNotMatch(prompts[1]!, /工作指令已在第.*版清空/);
 });
