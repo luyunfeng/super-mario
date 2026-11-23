@@ -51,6 +51,9 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await expect(point).toHaveAttribute('aria-valuetext','昨日，数值 -3');
   await point.press('ArrowRight');
   await expect(point).toHaveAttribute('aria-valuetext','今日，数值 5');
+  await chart.getByRole('button',{name:'复制数据点'}).click();
+  await expect(chart.getByRole('status')).toHaveText('已复制数据点');
+  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'数量变化\n今日，数值 5');
   const area=page.getByRole('region',{name:'跨零走势'});
   await expect(area.locator('polygon')).toHaveAttribute('points','75,50 75,96 225,4 225,50');
   await expect(area.locator('polyline')).toHaveAttribute('points','75,96 225,4');

@@ -113,12 +113,18 @@ function chartBody(card) {
 
 function extensionChart(card) {
   const body = chartBody(card);
-  if (!body || card.points.length < 2) return body;
+  if (!body) return body;
   const table = body.querySelector('table');
   const columns = Array.from(table.tHead.rows[0].cells, cell => cell.textContent);
   const picker = h('input',{type:'range', min:1, max:card.points.length, value:1});
   const readout = h('span');
+  const status = h('span',{role:'status'});
+  const copy = Button({label:'复制数据点',size:'sm',onClick:async () => {
+    try { await copyText(card.title + '\n' + readout.textContent); status.textContent = '已复制数据点'; }
+    catch (error) { status.textContent = '复制失败：' + error.message; }
+  }});
   function readPoint() {
+    status.textContent = '';
     const cells = table.tBodies[0].rows[picker.valueAsNumber - 1].cells;
     const values = [card.points[picker.valueAsNumber - 1].label];
     for (let i = 1; i < cells.length; i++) values.push(columns[i] + ' ' + cells[i].textContent);
@@ -127,7 +133,8 @@ function extensionChart(card) {
   }
   picker.addEventListener('input',readPoint);
   readPoint();
-  table.before(h('label',{class:'field'},'查看数据点',picker), readout);
+  if (card.points.length > 1) table.before(h('label',{class:'field'},'查看数据点',picker), readout);
+  table.before(h('div',{class:'row'},copy,status));
   return body;
 }
 
