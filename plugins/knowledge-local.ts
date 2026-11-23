@@ -86,6 +86,7 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
   }
 
   return {
+    supportsCreateOnly: true,
     async revision(id, commit) {
       const path = 'knowledge/' + safeId(id) + '.md';
       const repo = join(context.dataDir, '.git');
@@ -186,7 +187,9 @@ export function createLocalKnowledge(context: ExtensionContext): KnowledgeBacken
         try { prior = readEntry(entry.id); }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
       }
-      if (expectedUpdatedAt !== undefined && prior?.updatedAt !== expectedUpdatedAt)
+      if (expectedUpdatedAt === null && prior)
+        throw Object.assign(new Error('知识页已存在'), {status:409, code:'KNOWLEDGE_EXISTS'});
+      if (typeof expectedUpdatedAt === 'string' && prior?.updatedAt !== expectedUpdatedAt)
         throw Object.assign(new Error('知识页已有新版本或已删除，请先核对最新内容'), { status: 409 });
       if (prior && Date.parse(prior.updatedAt) >= Date.parse(entry.updatedAt))
         entry.updatedAt = new Date(Date.parse(prior.updatedAt) + 1).toISOString();

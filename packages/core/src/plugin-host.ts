@@ -219,7 +219,15 @@ export class PluginHost {
         } else if (kind === 'hooks') {
           const hook = value as ContributionMap['hooks']; permission(`hook:${hook.name}`); validateInvocationOptions(hook);
           if (!['work.dispatch', 'channel.send', 'knowledge.put'].includes(hook.name) || !['before', 'after'].includes(hook.phase)) throw new Error('Unknown hook name or phase');
-        } else permission(`contribute:${String(kind)}`);
+        } else {
+          permission(`contribute:${String(kind)}`);
+          if (kind === 'connectors' && value && typeof value === 'object' && !Array.isArray(value) &&
+            'kind' in value && value.kind === 'subscription-source') {
+            const service = 'service' in value && value.service;
+            if (typeof service !== 'string' || !service.startsWith(entry.info.id + '.') || service.slice(entry.info.id.length+1).includes('.'))
+              throw new Error('订阅来源只能公开本插件自己的读取服务');
+          }
+        }
         requireDependency(String(kind));
         return own(this.options.contributions.add(kind, id, value));
       },

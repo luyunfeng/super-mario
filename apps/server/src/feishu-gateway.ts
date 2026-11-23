@@ -16,7 +16,7 @@ import { createPersonalMessages } from './feishu-personal.ts';
 import type { GroupReadService } from './feishu-group-read-delivery.ts';
 import { createGroupReader } from './feishu-read-group.ts';
 import { privateThreadExport } from './feishu-thread-history.ts';
-import { createFeishuBotsController, type FeishuBotFactory } from './feishu-bots.ts';
+import { dashboardWebBase, createFeishuBotsController, type FeishuBotFactory } from './feishu-bots.ts';
 import { createFeishuRegistration, type FeishuRegistrationJob } from './feishu-registration.ts';
 
 export type FeishuGatewayDependencies = {
@@ -80,6 +80,7 @@ export function createFeishuGateway(
     const value = personal.status();
     return value.url ? { ...value, qrDataUrl: await QRCode.toDataURL(value.url, { width: 280, margin: 2, errorCorrectionLevel: 'M' }) } : value;
   }
+  app.subscriptions.setPublicBase(dashboardWebBase(config,process.env.SUPER_MARIO_WEB_URL));
   const bots = createFeishuBotsController(app, config, { factory: dependencies.botFactory,
     readGroup: dependencies.readGroup ?? createGroupReader(config, () => personal.sourceAccount()), webBase: process.env.SUPER_MARIO_WEB_URL });
   const commandGroup = createCommandGroup({

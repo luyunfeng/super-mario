@@ -841,6 +841,25 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (url.searchParams.get('expectedProjectId') !== (run.projectId ?? '')) throw new InputError('执行所在项目已变化',409);
           return json(res,200,{runId:id,completionTiming:runCompletionTiming(app.store,run) ?? null});
         }
+        if (path === '/api/v1/source-subscriptions' && method === 'GET') {
+          return json(res,200,{sources:app.subscriptions.sources(),subscriptions:app.subscriptions.service().list()});
+        }
+        if (path === '/api/v1/source-subscriptions/drafts' && method === 'GET')
+          return json(res,200,{items:app.subscriptions.drafts.list()});
+        const subscriptionDraft=path.match(/^\/api\/v1\/source-subscriptions\/drafts\/([^/]+)$/);
+        if (subscriptionDraft && method === 'GET') return json(res,200,app.subscriptions.drafts.get(decodeURIComponent(subscriptionDraft[1]!)));
+        if (path === '/api/v1/source-subscriptions/preview' && method === 'POST') {
+          return json(res,200,await app.subscriptions.service().preview(await body(req)));
+        }
+        if (path === '/api/v1/source-subscriptions' && method === 'POST') {
+          return json(res,201,app.subscriptions.drafts.create(await body(req)));
+        }
+        const subscription = path.match(/^\/api\/v1\/source-subscriptions\/([^/]+)(\/pull)?$/);
+        if (subscription && ((method === 'POST' && subscription[2]) || ((method === 'PATCH' || method === 'DELETE') && !subscription[2]))) {
+          const id = decodeURIComponent(subscription[1]!), input = await body(req);
+          const service = app.subscriptions.service();
+          return json(res,200,method === 'DELETE' ? service.remove(id,input.version) : method === 'PATCH' ? service.update(id,input) : await service.pull(id,input.version));
+        }
         const runScope = path.match(/^\/api\/v1\/runs\/([^/]+)\/scope$/);
         if (runScope && (method === 'GET' || method === 'POST')) {
           const id = decodeURIComponent(runScope[1]!);

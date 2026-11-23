@@ -40,9 +40,12 @@ export interface Executor extends ExecutorInfo {
 }
 export interface KnowledgeQuery { minRelevance?: number; importance?: KnowledgeImportance; tag?: string; layer?: KnowledgeLayer; projectId?: string; query?: string }
 export interface KnowledgeBackend {
+  /** Opt in only when put(entry, null) atomically rejects an existing id. */
+  readonly supportsCreateOnly?: true;
   revision?(id: string, commit?: string): Promise<{ entry: KnowledgeEntry; commit: string; previous?: string } | null>;
   list(query?: KnowledgeQuery): Promise<KnowledgeEntry[]>;
-  put(entry: Omit<KnowledgeEntry, 'id' | 'updatedAt' | 'factsEdit' | 'importance' | 'relevance'> & { id?: string; relevance?: number | null; importance?: KnowledgeImportance | null }, expectedUpdatedAt?: string, editSource?: KnowledgeEditSource): Promise<KnowledgeEntry>;
+  /** Pass null to create only. An existing id rejects with code KNOWLEDGE_EXISTS. */
+  put(entry: Omit<KnowledgeEntry, 'id' | 'updatedAt' | 'factsEdit' | 'importance' | 'relevance'> & { id?: string; relevance?: number | null; importance?: KnowledgeImportance | null }, expectedUpdatedAt?: string | null, editSource?: KnowledgeEditSource): Promise<KnowledgeEntry>;
   remove(id: string): Promise<boolean>;
 }
 export interface Routine { name: string; run(): Promise<Json> }
@@ -81,7 +84,7 @@ export type ServiceHandler = (input: Json, signal: AbortSignal) => Promise<Json>
 export type ServiceWrapper = (input: Json, next: (input: Json) => Promise<Json>, signal: AbortSignal) => Promise<Json>;
 export interface InvocationOptions { order?: number; timeoutMs?: number }
 export interface PluginHook extends InvocationOptions { name: HookName; phase: HookPhase; handler: PluginHookHandler }
-export interface PluginService { name: string; version: 1; handler: ServiceHandler }
+export interface PluginService { name: string; version: 1; readOnly?: boolean; handler: ServiceHandler }
 export interface PluginServiceWrapper extends InvocationOptions { name: string; handler: ServiceWrapper }
 export const SDK_STABILITY = { apiVersion: 1, extensionContext: 'stable', contributions: 'stable', jsonServices: 'stable', storeTransactions: 'local-only', piRuntime: 'internal', agentArtifacts: 'experimental', background:'experimental' } as const;
 export interface ExtensionContext extends Partial<BackgroundContext> {

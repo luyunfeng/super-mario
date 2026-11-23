@@ -5,6 +5,7 @@ import { Button, Empty, Input, Select, Segmented, TextArea } from '../ui/kit.js'
 import { Hint, hintCopy } from '../ui/hint.js';
 import { toast } from '../ui/overlay.js';
 import { knowledgeRow, openKnowledgeDrawer } from '../features/knowledge.js';
+import { openSourceSubscriptions } from '../features/source-subscriptions.js';
 import { openMeetingDay } from '../features/meeting-day.js';
 import { openCuratorDrawer, pendingJobs } from '../features/curator.js';
 import { createWorkDecisions } from '../features/work-decisions.js';
@@ -64,19 +65,34 @@ export function createMemoryPage({ api, store, router, scope }) {
   const list = h('div', { class: 'list' });
   const curatorLine = h('div', { class: 'row row--between curator', id: 'curator-line' });
 
+  let subscriptionsDrawer, pendingDraft;
+  function showSubscriptions(draftId) {
+    subscriptionsDrawer?.close();
+    subscriptionsDrawer = openSourceSubscriptions({api,store,router,draftId});
+  }
+  function openLinkedDraft() {
+    if (!pendingDraft || router.current.page !== 'memory' || !store.view.snapshot || store.view.unauthorized ||
+      store.view.connection !== 'online' || store.view.snapshotOwner !== api.draftOwner()) return;
+    const id=pendingDraft;pendingDraft=undefined;
+    if (!store.view.snapshot.plugins.some(p=>p.id==='source-subscriptions' && p.status==='active')) {toast('请先启用来源订阅插件。');return;}
+    showSubscriptions(id);
+  }
+  const subscriptions = Button({label:'来源订阅',size:'sm',onClick:() => showSubscriptions()});
   const recap = Button({ label: '会议日回顾', size: 'sm', onClick: () => openMeetingDay({ api, store, scope, router }) });
   recap.hidden = true;
   const el = h('section', { class: 'page', id: 'memory' },
     h('div', { class: 'page__inner' },
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '记忆'), h('p', { class: 'page__sub' }, hintCopy('nav.memory').tag)),
-        h('div', { class: 'page__actions' }, recap, Hint('nav.memory'))),
+        h('div', { class: 'page__actions' }, subscriptions, recap, Hint('nav.memory'))),
       h('div', { class: 'stack stack--lg' }, quick,
         h('div', { class: 'stack' }, h('div', { class: 'row row--between row--wrap' }, seg.el, importanceFilter, tagFilter, search), layerNote),
         list, curatorLine, decisions.el)));
 
   function paint() {
     const snapshot = store.view.snapshot;
+    subscriptions.hidden = !snapshot?.plugins?.some(p => p.id === 'source-subscriptions' && p.status === 'active');
+    subscriptions.disabled = store.view.unauthorized || store.view.snapshotOwner !== api.draftOwner() || store.view.connection !== 'online';
     recap.hidden = store.view.unauthorized || !snapshot?.plugins?.some(p => p.id === 'knowledge-local' && p.status === 'active');
     if (!snapshot) return;
     const query = search.value.trim();
@@ -171,6 +187,8 @@ export function createMemoryPage({ api, store, router, scope }) {
       decisions.show();
       loadCurator();
       if (route.query.get('curator')) openCuratorDrawer({ api, store, projectId: scope.get(), onChanged: loadCurator, jobId: route.query.get('job') });
+      pendingDraft=route.query.get('subscriptionDraft');
+      openLinkedDraft();
       const entry = route.query.get('entry');
       linkedEntry = entry && { id: entry, sourceId: route.query.get('source'), selectedCommit: route.query.get('revision'), line: Number(route.query.get('line')) };
       openLinkedEntry();
@@ -178,6 +196,6 @@ export function createMemoryPage({ api, store, router, scope }) {
       if (LAYERS.some(([key]) => key === part) && part !== layer) { layer = part; seg.set(part); }
       paint();
     },
-    onState() { paint(); openLinkedEntry(); },
+    onState() { paint(); openLinkedEntry(); openLinkedDraft(); },
   };
 }

@@ -1,3 +1,4 @@
+import { createSubscriptionHost } from './subscription-host.ts';
 import { forgetPrivateConversation } from './private-conversation-deletion.ts';
 import { discardObsoleteModelPicks } from './agent-runtime/model-catalog.ts';
 import { createFeishuWebConfig } from './feishu-web-config.ts';
@@ -72,7 +73,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
-import { createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxItem, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
@@ -427,6 +428,22 @@ export async function createWorkbench(config: AppConfig) {
     store.put('core.plugin-settings', 'feishu-web', { enabled: false, revision: 1 });
   }
   plugins.register({ ...webExtension, activate: context => serializeWeb(() => webExtension.activate(context)) });
+  const subscriptions = createSubscriptionHost({store,contributions,use:plugins.invocations.use,
+    authorizeRead() {
+      const input=currentAgentInput();
+      if (!input || input.role!=='user' || input.readOnly || input.replyTo || input.projectId || input.todoId || (input.origin && input.origin!=='user'))
+        throw new InputError('需要主人主对话查询订阅',403);
+      const route=store.get<MessageRoute & {botId?:string}>('message.routes',input.id);
+      if (!route && input.conversationId==='main' && input.directWebInput) return input;
+      if (route?.botId && input.conversationId===botConversationId({id:route.botId,scope:{kind:'global'}}) && ownerScopeRequest(input)) {
+        assertBotInput(input);
+        return input;
+      }
+      throw new InputError('需要当前配对主人的直接私聊或 Web 主对话',403);
+    },
+    ingest:(source,items)=>inbox.ingest(source,items),knowledge,changed:(type,id)=>changed(type,{id})});
+  plugins.register(subscriptions.extension);
+  plugins.register(createReleaseSourceExtension());
   plugins.register(workspaceSplash);
   plugins.register(createStartPage(() => plugins.list()));
   plugins.register(tokenStatistics);
@@ -844,6 +861,7 @@ export async function createWorkbench(config: AppConfig) {
     const backend = contributions.list('knowledge_backends')[0]?.value;
     if (!backend) throw new InputError('请启用本地知识库插件', 503);
     return {
+      ...(backend.supportsCreateOnly && {supportsCreateOnly:true}),
       ...(backend.revision ? { revision: backend.revision.bind(backend) } : {}),
       list: query => backend.list(query), remove: id => backend.remove(id),
       async put(input, expectedUpdatedAt, editSource) {
@@ -2019,7 +2037,7 @@ export async function createWorkbench(config: AppConfig) {
     return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
   }
   return {
-    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {
@@ -2160,6 +2178,7 @@ export async function createWorkbench(config: AppConfig) {
     async close() {
       if (closing) return;
       closing = true;
+      await subscriptions.close();
       await stopWeb();
       commandRouter.cancel();
       await wiredBackground.close(); projectFollowUp.close();

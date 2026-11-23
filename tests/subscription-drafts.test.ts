@@ -1,0 +1,45 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {createStore} from '../packages/core/src/store.ts';
+import {createSourceSubscriptions} from '../packages/core/src/source-subscriptions.ts';
+import {subscriptionDrafts} from '../packages/core/src/subscription-drafts.ts';
+
+test('草案重启可读，相同请求复用，通过预览并复核授权后才保存',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'sm-source-draft-'));
+  const db=join(dir,'data.sqlite');
+  let store=createStore(db), active=true, allowed=true, reads=0;
+  let onRead=()=>{};
+  const source={id:'test.versions',name:'合成来源',resourceLabel:'仓库'};
+  const input={sourceId:source.id,resource:'demo/repo',name:'合成订阅',destinations:['inbox'],intervalMinutes:90};
+  const createdAt=new Date().toISOString();
+  const owner=()=>{if(!allowed)throw new Error('已解除配对');return {id:'owner-request',createdAt};};
+  const service=()=>createSourceSubscriptions({store,sources:()=>[source],read:async()=>{
+    reads++;onRead();return [];
+  },deliver:()=>{throw new Error('草案不能投递');}});
+  let current=service();
+  const drafts=()=>subscriptionDrafts(store,()=>{if(!active)throw new Error('已停用');return current;},()=>{});
+  t.after(()=>{store.close();rmSync(dir,{recursive:true,force:true});});
+  const signal=new AbortController().signal;
+  onRead=()=>{allowed=false;};
+  await assert.rejects(drafts().propose(input,owner,signal),/已解除配对/);
+  assert.deepEqual(drafts().list(),[]);
+  onRead=()=>{};allowed=true;
+  const first=await drafts().propose(input,owner,signal);
+  assert.deepEqual(await drafts().propose(input,owner,signal),first);
+  assert.equal(reads,2);
+  await current.close();store.close();store=createStore(db);current=service();
+  assert.deepEqual(drafts().get(first.id),first);
+  active=false;
+  assert.throws(()=>drafts().get(first.id),/已停用/);
+  active=true;
+  assert.throws(()=>drafts().create({...input,draftId:first.id,intervalMinutes:0}),/间隔/);
+  assert.deepEqual(drafts().get(first.id),first);
+  t.mock.timers.enable({apis:['Date'],now:Date.parse(createdAt)+7*86400000});
+  assert.throws(()=>drafts().get(first.id),{status:410});
+  assert.deepEqual(drafts().list(),[]);
+  await assert.rejects(drafts().propose(input,owner,signal),{status:410});
+  assert.equal(current.list().length,0);
+});

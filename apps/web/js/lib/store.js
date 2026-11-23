@@ -50,6 +50,11 @@ export function createStore(api) {
       // Plugin views refresh their private data independently of the workspace snapshot.
       let event;
       try { event = JSON.parse(data); } catch { /* Refresh state after an unrecognized frame. */ }
+      if (event?.type === 'source-subscriptions.changed') {
+        set({ sourceSubscriptionsChange: {} });
+        scheduleRefresh();
+        return;
+      }
       if (event?.type === 'saved-prompts.changed' && Number.isSafeInteger(event.data?.revision)) {
         set({ savedPromptsRevision: event.data.revision });
         return;

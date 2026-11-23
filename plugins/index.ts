@@ -22,6 +22,7 @@ export function createFeishuWebExtension(source: { start(): void; stop(): Promis
   };
 }
 
+export { createReleaseSourceExtension } from './release-source.ts';
 export { todoCalendar } from './todo-calendar.ts';
 export { createReplyTranslation } from './reply-translation.ts';
 export { createConversationExport } from './conversation-export.ts';

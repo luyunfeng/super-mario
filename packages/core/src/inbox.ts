@@ -39,7 +39,9 @@ function validateThing(value: unknown): InboxThing {
 export function inboxItemId(source: string, thread: string) {
   return createHash('sha256').update(JSON.stringify([source, thread])).digest('hex');
 }
-export function ruleTriage(thing: InboxThing): Triage {
+type TriageInput = InboxThing & {sourceKind?: 'subscription'};
+export function ruleTriage(thing: TriageInput): Triage {
+  if (thing.sourceKind === 'subscription') return {tier:'fyi', reason:'订阅动态，保留为知会，供主人查看'};
   const text = `${thing.title}\n${thing.text}`;
   const keyword = text.match(/请|帮|需要|待办|截止/)?.[0];
   if (keyword) return { tier: 'action', reason: `本地规则：命中“${keyword}”，建议确认后创建待办` };
@@ -57,7 +59,7 @@ export function createInboxService({ store, events, createTodo, triage }: {
   store: Store;
   events: EventBus;
   createTodo: (input: Record<string, unknown>) => Todo;
-  triage?: (thing: InboxThing) => Promise<Triage>;
+  triage?: (thing: TriageInput) => Promise<Triage>;
 }): {
   list(): InboxItem[];
   ingest(source: string, things: InboxThing[]): Promise<void>;
@@ -117,7 +119,9 @@ export function createInboxService({ store, events, createTodo, triage }: {
             changed(id);
             continue;
           }
-          const result = triage ? await triage(structuredClone(thing)) : ruleTriage(thing);
+          // Only the ingestion route supplies this hint. Never accept it or other authority claims from an item.
+          const triageInput: TriageInput = source.startsWith('subscription:') ? {...thing,sourceKind:'subscription'} : thing;
+          const result = triage ? await triage(structuredClone(triageInput)) : ruleTriage(triageInput);
           if (!result || !['action', 'fyi', 'noise'].includes(result.tier) || typeof result.reason !== 'string' || !result.reason.trim()) {
             throw new InboxError('分拣器返回了无效结果', 502);
           }
