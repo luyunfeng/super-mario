@@ -37,6 +37,7 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await page.getByLabel('按截止日期筛选').selectOption('today');
   await page.getByRole('button', { name: '日历', exact: true }).click();
   await expect(root).toBeVisible();
+  await expect(root).toContainText('时区 · America/Los_Angeles');
   await page.goto(base + '/month/2030-03-31');
   const entry = root.getByRole('button', { name: /本地三月末/ });
   await expect(root.locator('[data-day="2030-03-31"]')).toContainText(todo.title);

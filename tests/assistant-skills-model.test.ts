@@ -1289,6 +1289,10 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
       assert.match(req.system, /关联执行已结束仍可能待验收/);
       const question = JSON.stringify(req.content);
       assert.match(req.system, /没有执行记录只表示工作台未记录派发/);
+      if (question.includes('纽约换季核验')) {
+        assert.match(req.system, /同传 dueDay 和 timeZone/);
+        return call('todos_list', { query: '换季', dueDay: '2026-11-01', timeZone: 'America/New_York', status: 'open' }, 'local-day');
+      }
       if (question.includes('由协调员负责')) {
         assert.match(req.system, /不根据备注、等待对象或执行器推断负责人/);
         return call('todos_list', { status: 'open', responsiblePerson: '协调员' }, 'responsible');
@@ -1313,7 +1317,8 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
       assert.deepEqual(titles, ['月报待验收']);
       return { role: 'assistant', content: answer };
     }
-    if (req.callId === 'responsible') assert.deepEqual(titles, ['加急复核']);
+    if (req.callId === 'local-day') assert.deepEqual(titles, ['换季甲', '换季乙', '换季日末']);
+    else if (req.callId === 'responsible') assert.deepEqual(titles, ['加急复核']);
     else if (req.callId === 'waiting') assert.deepEqual(titles, ['加急复核']);
     else if (req.callId === 'undated') assert.deepEqual(titles, ['加急复核', '月报未定期限']);
     else if (req.callId === 'dispatched') assert.deepEqual(titles, ['月报待验收']);
@@ -1371,6 +1376,20 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
     const repliesBefore = sent.length;
     await adapter.onMessage(ownerQuestion, { ...source, messageId: 'responsible-question' });
     await t.waitFor(() => assert.ok(sent.slice(repliesBefore).includes('加急复核')));
+    for (const [name, dueAt] of [['前一天', '2026-11-01T03:59:59Z'], ['甲', '2026-11-01T05:30:00Z'],
+      ['乙', '2026-11-01T06:30:00Z'], ['日末', '2026-11-02T04:59:59Z'], ['次日', '2026-11-02T05:00:00Z']]) {
+      await api('/todos', { title: '换季' + name, dueAt, projectId: project.id });
+    }
+    const dayQuestion = '纽约换季核验：当地 11 月 1 日到期的换季待办有哪些？按 2026 年查。';
+    const dayAnswer = '换季甲、换季乙、换季日末';
+    const lookup = server.app.contributions.list('tools').find(item => item.value.name === 'todos_list')!.value;
+    const signal = new AbortController().signal;
+    await assert.rejects(async () => lookup.execute({ dueDay: '2026-02-30', timeZone: 'UTC' }, signal), /日期不存在/);
+    await assert.rejects(async () => lookup.execute({ dueDay: '2026-11-01' }, signal), /须提供时区/);
+    await assert.rejects(async () => lookup.execute({ dueDay: '2026-11-01', timeZone: 'Invalid/City' }, signal), /时区无效/);
+    assert.equal(await ask(dayQuestion, path), dayAnswer);
+    await adapter.onMessage(dayQuestion, { ...source, messageId: 'local-day-question' });
+    await t.waitFor(() => assert.ok(sent.includes(dayAnswer)));
     assert.equal(server.app.todos().find(todo => todo.id === pending.id)?.completedAt, undefined);
   } finally { await server.close(); }
 });

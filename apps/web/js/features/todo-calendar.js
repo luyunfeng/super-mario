@@ -76,6 +76,7 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
     Button({ label: '今天', size: 'sm', onClick: () => navigate(mode, new Date()) }),
     Button({ label: '下一页', size: 'sm', onClick: () => step(1) }),
     h('strong', { class: 'grow' }, caption),
+    h('span', { class: 'small muted' }, '时区 · ' + Intl.DateTimeFormat().resolvedOptions().timeZone),
     Segmented({ label: '日历范围', value: mode, options: modeLabels, onChange: value => navigate(value, anchor) }).el,
     Check({ label: '显示已完成', checked: showDone, onChange: onShowDone }));
 
