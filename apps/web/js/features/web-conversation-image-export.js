@@ -71,7 +71,8 @@ export function createWebImageExport({api,source,redraw}) {
           heading:heading.checked,dates:dates.checked,signal});
         if(!valid())return;
         urls=pages.map(blob=>URL.createObjectURL(blob));
-        const filename='对话摘录-'+(result.title || '独立对话').replace(/[^\p{L}\p{N}_-]/gu,'-').slice(0,48);
+        const filename=heading.checked && result.title
+          ? '对话摘录-'+result.title.replace(/[^\p{L}\p{N}_-]/gu,'-').slice(0,48) : '对话摘录';
         function download(index){
           if(valid())h('a',{href:urls[index],download:filename+'-'+(index+1)+'.png'}).click();
         }

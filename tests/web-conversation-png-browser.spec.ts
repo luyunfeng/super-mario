@@ -47,7 +47,7 @@ test('独立对话跨页选消息，附上原提问后预览、复制和下载 P
   await drawer.getByRole('button',{name:'复制第 1 页'}).click();
   await expect.poll(()=>page.evaluate(async()=>(await navigator.clipboard.read()).some(item=>item.types.includes('image/png')))).toBe(true);
   const downloading=page.waitForEvent('download');await drawer.getByRole('button',{name:'下载第 2 页',exact:true}).click();
-  const downloaded=await downloading;assert.match(downloaded.suggestedFilename(),/-2\.png$/);
+  const downloaded=await downloading;assert.equal(downloaded.suggestedFilename(),'对话摘录-2.png');
   const bytes=await readFile((await downloaded.path())!);assert.equal(bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
   const count=await drawer.locator('img').count(),all:string[]=[];
   page.on('download',file=>all.push(file.suggestedFilename()));
