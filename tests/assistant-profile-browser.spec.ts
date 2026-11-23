@@ -38,6 +38,9 @@ test('Agent 页修改主助手名称后同步到已有气泡，并发冲突保�
   await schedule('later', '下午复核', '2099-01-02T15:00:00Z', true);
   await schedule('pending', '待批准简报', '2099-01-01T08:00:00Z', false);
   await schedule('early', '上午简报', '2099-01-02T09:00:00Z', true);
+  await schedule('archived-brief', '已生成简报', '2001-01-01T00:00:00Z', true);
+  await server.app.background.tick();
+  await server.app.background.eventbox.drain();
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
   const chat = await browser.newPage(), first = await browser.newPage(), second = await browser.newPage();
   for (const [page, route] of [[chat, 'chat'], [first, 'agent'], [second, 'agent']] as const) {
@@ -64,6 +67,13 @@ test('Agent 页修改主助手名称后同步到已有气泡，并发冲突保�
   await expect(upcoming).not.toContainText('上午简报');
   await early.getByRole('button', { name: '恢复计划' }).click();
   await expect(upcoming).toContainText(/上午简报.*下午复核/s);
+  const past = first.locator('#agent-scheduled-work article').filter({ hasText: '已生成简报' }).filter({ has: first.getByText('已生成简报', { exact: true }) });
+  await past.locator('summary').click();
+  await past.getByRole('button', { name: '查看简报原文' }).click();
+  const brief = first.getByRole('dialog', { name: '简报原文' });
+  await expect(brief.locator('pre')).toContainText('开放待办：');
+  await expect(brief).toContainText('生成时间');
+  await brief.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(card(first)).toContainText('0 台');
   await expect(card(first)).toContainText('0 个');
   for (const page of [first, second]) {

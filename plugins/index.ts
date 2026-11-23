@@ -155,6 +155,7 @@ export interface SystemActions {
   workDecisionCorrect?(input: Record<string, unknown>): Json;
   workDecisionWithdraw?(input: Record<string, unknown>): Json;
   workDecisionReference?(input: Record<string, unknown>): Json;
+  scheduledWorkBrief?(input: Record<string, unknown>): Json;
   scheduledWorkList?(input: Record<string, unknown>): Json;
   scheduledWorkPropose?(input: Record<string, unknown>): Json;
   scheduledWorkSetPaused?(input: Record<string, unknown>): Json;
@@ -621,6 +622,9 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         // Counts are a snapshot of persisted records, never simulated task results.
         context.contribute('routines', 'dailybrief', { name: 'dailybrief', async run() { return actions?.brief?.() ?? dailyBrief(context); } });
         if (actions?.brief) context.contribute('tools', 'brief_read', tool('brief_read', '读取待办、执行和督办事实简报。', async (_args, signal) => { signal.throwIfAborted(); return actions.brief!(); }));
+        if (actions?.scheduledWorkBrief) context.contribute('tools', 'scheduled_work_brief', tool('scheduled_work_brief',
+          '读取某次定时工作已经生成的简报原文。先核对计划和触发记录。', async args => actions.scheduledWorkBrief!(args),
+          { workId: { type: 'string' }, occurrenceKey: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' } }));
         if (actions?.scheduledWorkList) context.contribute('tools', 'scheduled_work_list', tool('scheduled_work_list', '读取当前范围的周期工作及实际审批/结果；创建确认、到期派发和执行完成分别计算。', async args => actions.scheduledWorkList!(args), { offset: { type: 'integer', minimum: 0, description: '续读时传上一页 nextOffset' }, projectId: { type: 'string' }, todoId: { type: 'string' } }));
         if (actions?.followupCreate) {
           context.contribute('tools', 'schedule_followup', tool('schedule_followup',

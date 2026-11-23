@@ -92,7 +92,8 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
         item.action.kind === 'dispatch' && line(`执行者：${item.action.executorId} · 工作目录：${item.action.cwd ?? '默认'}`),
         history.map(o => h('div', null, line(`${timeText(o.scheduledFor)} · ${occurrenceText(o)}`),
           o.approvalId && line(`派发审批：${o.approvalId} · ${approvalText(o.approvalStatus)}`),
-          o.result?.messageId && line(`结果消息：${o.result.messageId}`), o.error && line(o.error), o.approvalId && chatLink())),
+          o.result?.messageId && line(`结果消息：${o.result.messageId}`),
+          o.status === 'completed' && o.result?.messageId && Button({ label: '查看简报原文', size: 'sm', onClick: () => openBrief(item, o) }), o.error && line(o.error), o.approvalId && chatLink())),
         item.occurrencesTruncated && line(`最近记录已截断：显示 ${history.length} 条，共 ${item.occurrenceTotal} 条。`)));
     return h('article', { class: 'stack', style: { minWidth: '0' }, dataset: { workId: item.id } },
       h('strong', { class: 'item__title' }, item.title),
@@ -124,6 +125,23 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     drawer.active = () => !closed && drawer.el.open && valid(stamp);
     editor = drawer;
     return drawer;
+  }
+  function openBrief(item, occurrence) {
+    if (syncIdentity()) { requestRead(); return; }
+    const content = h('div', { class: 'stack' });
+    const drawer = managedDrawer({ title: '简报原文', subtitle: item.title, body: content });
+    async function read() {
+      replace(content, line('正在读取简报…'));
+      try {
+        const result = await api.post('/scheduled-work/brief', { workId: item.id, occurrenceKey: occurrence.key, projectId: currentScope() || undefined });
+        if (drawer.active()) replace(content, line('计划时间：' + timeText(result.scheduledFor)),
+          line('生成时间：' + timeText(result.createdAt)), h('pre', { class: 'mailbox-content' }, result.text));
+      } catch (cause) {
+        if (drawer.active()) replace(content, Banner({ tone: 'warn', children: cause.message }),
+          Button({ label: '重新读取简报', size: 'sm', onClick: read }));
+      }
+    }
+    void read();
   }
   function openCancel(item) {
     if (syncIdentity()) { requestRead(); return; }

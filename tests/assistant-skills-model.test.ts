@@ -143,6 +143,55 @@ test('Web 和飞书查询接下来三项定时工作，并在同一项目内翻�
   } finally { await server.close(); }
 });
 
+test('Web 与飞书项目助手核对计划当次简报的原文', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /不用当前快照重构过去的内容/);
+      return call('scheduled_work_list', {}, 'list');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    const result = JSON.parse(raw);
+    if (req.callId === 'list') {
+      assert.equal(result.items.length, 1);
+      const work = result.items[0];
+      return call('scheduled_work_brief', { workId: work.id, occurrenceKey: work.occurrences[0].key }, 'brief');
+    }
+    assert.match(result.text, /开放待办：0/);
+    return { role: 'assistant', content: result.text };
+  }, options => {
+    adapter = options;
+    return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    const project = await api('/projects', { name: '简报核对项目' });
+    const other = await api('/projects', { name: '其他项目' });
+    const approval = await api('/scheduled-work', { key: 'prior', title: '项目简报', projectId: project.id,
+      schedule: { kind: 'once', at: '2001-01-01T00:00:00Z' }, action: { kind: 'brief' } });
+    await api('/approvals/' + approval.id + '/approve', { version: approval.version });
+    await server.app.background.tick();
+    await server.app.background.eventbox.drain();
+    const [row] = server.app.scheduledWork.list({ projectId: project.id }).items;
+    const key = row.occurrences[0].key;
+    const expected = server.app.store.get<Message>('messages', 'scheduled-brief:' + key)!.text;
+    await api('/todos', { title: '简报生成后新增', projectId: project.id });
+    const question = '这个项目上次的定时简报写了什么？';
+    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), expected);
+    const bot = await api('/feishu/bots', { name: '简报查询', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(question, { ...source, messageId: 'read-brief' });
+    await t.waitFor(() => assert.ok(sent.includes(expected)));
+    const read = (projectId: string) => server.app.scheduledWork.readBrief({ workId: row.id, occurrenceKey: key, projectId });
+    assert.throws(() => read(other.id), /当前范围找不到/);
+    server.app.store.put('messages', 'scheduled-brief:' + key, { ...server.app.store.get<Message>('messages', 'scheduled-brief:' + key)!, projectId: other.id });
+    assert.throws(() => read(project.id), /没有可核对/);
+  } finally { await server.close(); }
+});
+
 test('Web 主助手按目录读取技能及引用文件，停用后下一轮撤回工具与目录', { timeout: 30000 }, async t => {
   const name = 'fixture-check', reference = 'references/sample.md', fact = '合成结果 234';
   const instructions = '请读取 references/sample.md，再根据其中的证据作答。';

@@ -1,5 +1,5 @@
 import type { Store, EventBus } from '../../plugin-sdk/src/index.ts';
-import type { Approval, BotScope, Json, Message, ScheduledWorkInput, ScheduledWorkRecord, ScheduledWorkScope } from '../../protocol/src/index.ts';
+import type { Approval, BotScope, Json, Message, ScheduledWorkInput, ScheduledWorkOccurrence, ScheduledWorkRecord, ScheduledWorkScope } from '../../protocol/src/index.ts';
 import { createScheduledWork } from './scheduled-work.ts';
 import type { createSchedules } from './schedules.ts';
 import type { createApprovalService } from './approvals.ts';
@@ -82,6 +82,23 @@ export function createScheduledWorkService(options: {
           kind:row.input.action.kind,...(o.error?{error:'结果未知，请核对原记录'}:{})})),occurrenceTotal:history.length,occurrencesTruncated:history.length>20};
     }),upcoming,total:selected.length,offset,nextOffset,truncated:nextOffset !== null,limit };
   }
+  function readBrief(input: Record<string, unknown>) {
+    const scope = scopeOf(input as { projectId?: string; todoId?: string });
+    if (typeof input.workId !== 'string' || typeof input.occurrenceKey !== 'string') fail('需要计划和触发记录标识', 400);
+    const work = store.get<ScheduledWorkRecord>('scheduled-work.requests', input.workId);
+    const occurrence = store.get<ScheduledWorkOccurrence>('scheduled-work.occurrences', input.occurrenceKey);
+    if (!work || !occurrence || occurrence.workId !== work.id || occurrence.key !== input.occurrenceKey
+      || scope.kind === 'unmarked' || (scope.kind !== 'global' && scope.projectId !== work.input.projectId)
+      || (scope.kind === 'task' && scope.todoId !== work.input.todoId)) fail('当前范围找不到这次触发记录', 404);
+    const id = 'scheduled-brief:' + occurrence.key;
+    const result = occurrence.result;
+    const message = store.get<Message>('messages', id);
+    if (occurrence.status !== 'completed' || !result || typeof result !== 'object' || Array.isArray(result)
+      || result.messageId !== id || !message || message.id !== id || message.origin !== 'notification'
+      || message.role !== 'assistant' || message.conversationId !== 'main' || message.status !== 'done'
+      || message.projectId !== work.input.projectId || message.todoId !== work.input.todoId) fail('本次触发没有可核对的简报原文', 404);
+    return { messageId: id, scheduledFor: occurrence.scheduledFor, createdAt: message.createdAt, text: message.text };
+  }
   function propose(input:Record<string,unknown>,fromAgent=false) {
     return store.transaction(()=>{
       const source=fromAgent?actor():undefined, value=normalized(input,source);
@@ -119,7 +136,7 @@ export function createScheduledWorkService(options: {
     });
   }
   const off=events.subscribe(event=>{if(['projects.changed','todos.changed','plugins.changed','feishu.bots.changed','bots.changed'].includes(event.type)){manager.sync();cleanup();}});
-  return { list:publicRows,propose,cancel,changeTiming,approveCreation:manager.approveCreation,assertDispatchCurrent:manager.assertDispatchCurrent,
+  return { list:publicRows,readBrief,propose,cancel,changeTiming,approveCreation:manager.approveCreation,assertDispatchCurrent:manager.assertDispatchCurrent,
     sync(){manager.sync();cleanup();},async handle(event:Parameters<typeof manager.handle>[0]){
       if(!options.ready())return {status:'retry' as const,reason:'channel_bindings_initializing',afterSec:1,deferred:true};
       const result=await manager.handle(event);cleanup();return result;
