@@ -1935,6 +1935,7 @@ export async function createWorkbench(config: AppConfig) {
     const query = typeof input.query === 'string' ? input.query.toLowerCase() : '';
     const items = inbox.list().filter(item => !excludesPersonalGroupFromBrief(item) && (!input.projectId || item.projectId === input.projectId) && (!input.todoId || item.todoId === input.todoId)
       && (!input.kind || (item.origin?.kind ?? 'unknown') === input.kind) && (input.mentionedMe !== true || (item.origin?.kind === 'group' && item.origin.mentionedMe === true))
+      && (input.feishuFile !== true || item.origin?.feishuFile === true)
       && (input.meetingMinutes !== true || item.origin?.meetingMinutes === true)
       && (!query || [item.title, item.text, item.origin?.chatName, item.origin?.senderName].some(text => text?.toLowerCase().includes(query))));
     return { items: items.slice(offset as number, (offset as number) + (limit as number)).map(withoutParent), total: items.length, offset, hasMore: (offset as number) + (limit as number) < items.length } as unknown as Json;

@@ -4431,7 +4431,7 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
       }
       if(JSON.stringify(req.content).includes('合成附件条款')){
         assert.ok(req.tools.includes('inbox_file_text'));
-        return call('inbox_file_text',{id:center},'file-body');
+        return call('inbox_list',{feishuFile:true,query:'样例.txt'},'file-search');
       }
       if(JSON.stringify(req.content).includes('表情回应')){
         assert.ok(req.tools.includes('inbox_message_reactions'));
@@ -4485,8 +4485,13 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
       assert.equal(result.nextCursor,null);
       return {role:'assistant',content:'置顶正文属于合成议题，另有一条回复已撤回。'};
     }
+    if(req.callId==='file-search'){
+      assert.equal(result.total,1);
+      return call('inbox_file_text',{id:result.items[0].id},'file-body');
+    }
     if(req.callId==='file-body'){
-      assert.deepEqual(result,{name:'样例.txt',text:'合成条款第六条',truncated:false,workspaceRoute:'#inbox?item='+encodeURIComponent(center),webCitation:'[查看原文](#inbox?item='+encodeURIComponent(center)+')'});
+      const resultId=server.app.inbox.list().find(item=>item.title==='样例.txt 文件')!.id;
+      assert.deepEqual(result,{name:'样例.txt',text:'合成条款第六条',truncated:false,workspaceRoute:'#inbox?item='+encodeURIComponent(resultId),webCitation:'[查看原文](#inbox?item='+encodeURIComponent(resultId)+')'});
       return {role:'assistant',content:result.text};
     }
     if(req.callId==='edits'){
@@ -4579,11 +4584,13 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
     assert.equal(await ask(reactionQuestion),reactionAnswer);
     await adapter.onMessage(reactionQuestion,{...owner,messageId:'reactions-query'});
     await t.waitFor(()=>assert.ok(sent.includes(reactionAnswer)));
+    await inbox.ingest('feishu:fixture',[{...thing('样例.txt 文件'),origin:{kind:'direct',connector:'飞书',feishuFile:true}},thing('讨论样例.txt')]);
+    const attachmentId=item('样例.txt 文件').id;
     server.app.setFeishuFileReader(async id=>{
-      assert.equal(id,center);
+      assert.equal(id,attachmentId);
       return {name:'样例.txt',text:'合成条款第六条',truncated:false};
     });
-    const fileQuestion='请查询合成附件条款，收件编号 '+center;
+    const fileQuestion='请查询样例.txt 的合成附件条款';
     assert.equal(await ask(fileQuestion),'合成条款第六条');
     await adapter.onMessage(fileQuestion,{...owner,messageId:'file-question'});
     await t.waitFor(()=>assert.ok(sent.includes('合成条款第六条')));
