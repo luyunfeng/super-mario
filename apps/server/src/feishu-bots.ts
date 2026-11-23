@@ -34,7 +34,7 @@ import { createHash, randomInt, randomUUID } from 'node:crypto';
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
 import { chooseCommandTarget, createCommandMentionEvidence, type CommandCandidate, type CommandClassifier, type CommandIdentity, type CommandRoute, type CommandTarget } from './feishu-command-routing.ts';
 import type { Card } from '../../../packages/core/src/interactions.ts';
-import { buildFeishuDashboard, conversationListDashboard, dashboardCommand, dashboardHelp, modelListDashboard, privateCommandText, statusDashboard, todayDashboard, delegatedQuestionCard, questionForm, parseQuestionForm, type DashboardView } from './feishu-dashboard.ts';
+import { dailyBriefEnabled, buildFeishuDashboard, conversationListDashboard, dashboardCommand, dashboardHelp, modelListDashboard, privateCommandText, statusDashboard, todayDashboard, delegatedQuestionCard, questionForm, parseQuestionForm, type DashboardView } from './feishu-dashboard.ts';
 import { createAgentProgressStream } from './agent-progress-stream.ts';
 import { buildAgentProgressCard, publicText } from '../../../plugins/agent-progress-card.ts';
 import { buildFeishuMessageCard, cardButtons, cardDocument, cardPlain } from './feishu-cards.ts';
@@ -676,7 +676,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const running = briefReads.get(eventKey);
     if (running) return running;
     const valid = () => active(bot.id, epoch, bot.revision) && owner(bot)?.chatId === paired.chatId && owner(bot)?.senderId === paired.senderId;
-    const enabled = () => app.plugins?.list().some(plugin => plugin.id === 'daily-brief' && plugin.status === 'active');
+    const enabled = () => dailyBriefEnabled(app);
     const job = (async () => {
       const previous = app.mailboxes.list().find(entry => entry.botId === bot.id && entry.eventKey === eventKey && entry.direction === 'outbox');
       if (previous) {
@@ -2984,7 +2984,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const view = !group && paired && bot.scope.kind === 'global' ? requested : undefined;
     if (view && paired) {
       const eventKey = `feishu-dashboard:${JSON.stringify([bot.id, bot.appId, source.messageId])}`;
-      const dashboard = view === 'help' ? dashboardHelp(Boolean(app.agentSessions && paired.senderId), false, threadSearchEnabled())
+      const dashboard = view === 'help' ? dashboardHelp(Boolean(app.agentSessions && paired.senderId), false, threadSearchEnabled(), dailyBriefEnabled(app))
         : buildFeishuDashboard(app, webBase, { view, navigation: navigation(bot, paired, eventKey), canViewQuestion:card=>canViewQuestion(bot,paired,card) });
       const entry = await put(bot, { direction: 'outbox', eventKey, title: '工作台', text: dashboard.text,
         target: paired.chatId, sourceMessageId: source.messageId, requiresConfirmation: false }, bot.scope,
