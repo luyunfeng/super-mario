@@ -7,7 +7,7 @@ import { createStore } from '../packages/core/src/store.ts';
 import { createSessionAnalysis, transcriptRecord } from '../apps/server/src/session-analysis.ts';
 import type { Json } from '../packages/protocol/src/index.ts';
 const source = { machineId: 'm', executorId: 'codex', nativeSessionId: 'session', cwd: '/project' };
-async function fixture(t: test.TestContext, text: string, failPage = false) {
+async function fixture(t: test.TestContext, text: string | Buffer, failPage = false) {
   const dir = mkdtempSync(join(tmpdir(), 'mario-full-analysis-')), store = createStore(join(dir, 'test.sqlite'));
   const bytes = Buffer.from(text), snapshot = { size: bytes.length, dev: 1, ino: 2 }; let captured = '', calls = 0;
   const service = createSessionAnalysis({ store, config: { host: '127.0.0.1', port: 0, dataDir: dir, demo: true }, available: () => true,
@@ -38,6 +38,15 @@ test('保留工具证据，去掉raw reasoning和系统消息；损坏日志不�
   assert.match(f.captured(), /最初目标/); assert.match(f.captured(), /真实验证结果/); assert.doesNotMatch(f.captured(), /PRIVATE_REASONING/);
   const bad = await fixture(t, row('目标')+'\n{"broken":');
   const failed = await bad.finish(bad.service.start(source).id); assert.equal(failed.status, 'failed'); assert.equal(failed.text, ''); assert.equal(bad.captured(), '');
+});
+test('原文含无效 UTF-8 时停止处理，避免输出被替换的正文', async t => {
+  const bytes = Buffer.from(row('source-text'));
+  bytes[bytes.indexOf('source-text')] = 0xff;
+  const f = await fixture(t, bytes);
+  const job = await f.finish(f.service.start(source).id);
+  assert.equal(job.status, 'failed');
+  assert.match(job.detail, /UTF-8/);
+  assert.equal(f.captured(), '');
 });
 test('分页不连续明确失败；不会总结已读尾部或前缀冒充完整会话', async t => {
   const f = await fixture(t, Array.from({length:10}, (_,i)=>row(String(i))).join('\n'), true);

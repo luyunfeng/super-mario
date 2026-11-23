@@ -1,4 +1,3 @@
-import { StringDecoder } from 'node:string_decoder';
 import type { Json, JsonObject } from '../../protocol/src/index.ts';
 
 interface Snapshot { size: number; dev: number; ino: number }
@@ -10,7 +9,7 @@ export async function readNativeRecords(
   signal: AbortSignal,
   onPage?: (offset: number, total: number) => void,
 ) {
-  const decoder = new StringDecoder('utf8');
+  const decoder = new TextDecoder('utf-8', {fatal:true, ignoreBOM:true});
   let pending = '', offset = 0;
   let snapshot: Snapshot | undefined;
   function line(text: string) {
@@ -36,10 +35,13 @@ export async function readNativeRecords(
     offset += bytes.length;
     if (bytes.toString('base64') !== page.data || page.nextOffset !== offset || offset > snapshot.size ||
         page.eof !== (offset === snapshot.size) || (!page.eof && !bytes.length)) throw new Error('会话分页不连续，无法确认全量覆盖');
-    const lines = (pending + decoder.write(bytes)).split('\n');
+    let chunk: string;
+    try { chunk = decoder.decode(bytes, {stream: !page.eof}); }
+    catch { throw new Error('会话日志包含损坏的 UTF-8 文本，无法确认完整内容。'); }
+    const lines = (pending + chunk).split('\n');
     pending = lines.pop()!;
     for (const record of lines) line(record);
     onPage?.(offset, snapshot.size);
-    if (page.eof) { line(pending + decoder.end()); return; }
+    if (page.eof) { line(pending); return; }
   }
 }
