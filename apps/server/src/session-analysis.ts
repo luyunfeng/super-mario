@@ -14,6 +14,7 @@ export function transcriptRecord(raw: unknown, executor: string, sessionId: stri
     const b = object(value);
     if (['text', 'input_text', 'output_text'].includes(b.type)) return typeof b.text === 'string' ? b.text : '';
     if (['input_image', 'output_image', 'image'].includes(b.type)) return '[图像附件：未解析视觉内容]';
+    if (b.type === 'input_file' || b.type === 'document') return '[文件附件：未解析正文]';
     if (b.type === 'tool_use') return `工具调用 ${b.name}: ${JSON.stringify(b.input)}`;
     if (b.type === 'tool_result') return `工具结果 ${b.tool_use_id}: ${render(b.content)}`;
     if (['thinking', 'reasoning', 'redacted_thinking'].includes(b.type)) return '';

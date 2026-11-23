@@ -119,6 +119,7 @@ async function readConversation(
       const block = record(item);
       if (['input_text', 'output_text', 'text'].includes(String(block.type)) && typeof block.text === 'string') appendText(block.text);
       if (['input_image', 'output_image', 'image'].includes(String(block.type))) appendText('[图像附件]');
+      if (block.type === 'input_file' || block.type === 'document') appendText('[文件附件]');
       if (tool && role === 'user' && block.type === 'tool_result') observeResult('tool_use', block.tool_use_id, block.is_error);
       if (tool && role === 'assistant' && block.type === 'tool_use') {
         // Mixed records retain their block order under a single message heading.

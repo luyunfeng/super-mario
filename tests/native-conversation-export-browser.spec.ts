@@ -25,7 +25,7 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
   const image = Buffer.from('synthetic image bytes '.repeat(11000)).toString('base64');
   await writeJsonLines(join(home, '.codex/sessions', codexId + '.jsonl'), [
     { type: 'session_meta', payload: { id: codexId, cwd: codexCwd } },
-    { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '先核对附件' }] } },
+    { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_file', file_data: '合成文件编码' }] } },
     { type: 'response_item', payload: { type: 'message', role: 'user', content: [
       { type: 'input_text', text: '合成 Codex 请求' }, { type: 'input_image', image_url: 'data:image/png;base64,' + image },
     ] } },
@@ -152,6 +152,8 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
     await expect(drawer.getByRole('status')).toContainText(bytes + ' 字节');
     assert.ok(body.includes('合成 ' + source + ' 请求'));
     assert.ok(body.includes('图像附件'));
+    if (id === codexId) assert.match(body, /## 用户\s+\[文件附件\]/);
+    assert.doesNotMatch(body, /合成文件编码/);
     assert.match(body, /<details><summary>公开工作步骤<\/summary>\s+> 工具调用：fixture_\w+ · (?:已返回结果|失败)\s+<\/details>/u);
     assert.ok(body.includes('电脑：合成历史电脑\n电脑 ID：' + machineId));
     const headings = body.split('\n').filter(line => line.startsWith('## '));
