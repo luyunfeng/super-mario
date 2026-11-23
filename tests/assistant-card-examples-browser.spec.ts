@@ -45,8 +45,18 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await expect(entry).toBeVisible();
   const stream=page.getByRole('region',{name:'处理记录'}).locator('pre');
   await expect(stream).toHaveText('已开始');
+  await stream.focus();
+  await stream.evaluate(pre => {
+    const range=document.createRange();
+    range.selectNodeContents(pre.firstChild!);
+    const selection=window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
   server.app.events.publish('review.progress',{text:'已处理首批'});
   await expect(stream).toHaveText('已开始\n已处理首批');
+  await expect(stream).toBeFocused();
+  assert.equal(await page.evaluate(()=>window.getSelection()?.toString()),'已开始');
   await page.reload();
   await page.getByText('高级：插件与排查',{exact:true}).click();
   await page.getByText('界面',{exact:true}).click();

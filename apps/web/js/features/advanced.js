@@ -195,18 +195,28 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
       const patch = value.renderer === 'diff' && typeof value.patch === 'string' && value.patch;
       const fallback = typeof value.fallback === 'string' && value.fallback;
       if (typeof value.title !== 'string') continue;
-      let content;
+      let content, stream;
       if (patch) content = extensionPatch(patch);
       if (value.renderer === 'chart') content = extensionChart(value);
       if (value.renderer === 'stream' && Array.isArray(value.lines) && value.lines.length &&
           value.lines.every(line => typeof line === 'string')) {
-        content = h('pre',{class:'code-sidebar__text',tabIndex:0},value.lines.join('\n'));
+        const text = value.lines.join('\n');
+        if (previous?.stream && previous.node.getAttribute('aria-label') === value.title) {
+          const old = previous.stream.textContent;
+          if (text.startsWith(old)) previous.stream.append(text.slice(old.length));
+          else previous.stream.textContent = text;
+          previous.signature = signature;
+          visible.add(id);
+          continue;
+        }
+        stream = h('pre',{class:'code-sidebar__text',tabIndex:0},text);
+        content = stream;
       }
       if (!content && !fallback) continue;
       const node = h('section', {class:'card card__body stack', 'aria-label':value.title},
         h('h3', {}, value.title), content || h('p', {}, fallback));
       previous?.node.replaceWith(node);
-      cardNodes.set(id,{signature,node});
+      cardNodes.set(id,{signature,node,stream});
       visible.add(id);
     }
     for (const [id, card] of cardNodes) {
