@@ -234,7 +234,9 @@ export function createWebConversations({api,store,scope,router}){
         const result=await api.get(path+'?'+query);
         if(!ok() || seq!==request)return;
         items=result.items;drawList();
-      }catch(error){if(ok() && seq===request)status.textContent=error.message;}
+      }catch(error){
+        if(ok() && seq===request)replace(status,error.message,' ',button('重试读取对话',()=>listRefresh?.()));
+      }
     };
     let previousChanges=store.view.messageQueueChanges,previousConnection=store.view.connection;
     unwatch=store.subscribe(view=>{

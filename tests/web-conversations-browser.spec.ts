@@ -71,7 +71,12 @@ test('两个标签页并发改名与归档时核对版本，归档深链只读�
   await expect(drawer).toContainText('归档后仍可读的合成历史');
   const id=new URLSearchParams(new URL(first.url()).hash.split('?')[1]).get('thread');
   await drawer.getByLabel('按标题查找').fill('列表保持打开时的新发言');
+  await first.route('**/api/v1/web-conversations?*query=*',route=>route.fulfill({
+    status:503,contentType:'application/json',body:JSON.stringify({error:'合成查询暂时不可用'})
+  }),{times:1});
   await drawer.getByRole('button',{name:'按正文查找'}).click();
+  await drawer.getByRole('button',{name:'重试读取对话'}).click();
+  await expect(drawer.getByLabel('按标题查找')).toHaveValue('列表保持打开时的新发言');
   await expect(drawer).toContainText('没有匹配的对话正文');
   const received=await second.request.post(server.url+'/api/v1/web-conversations/'+id+'/messages',{
     headers:{authorization:'Bearer '+token},data:{text:'列表保持打开时的新发言'}});
