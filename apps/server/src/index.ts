@@ -1453,7 +1453,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             if (typeof value !== 'string' || (field.required && !value.trim()) || (value && field.options && !field.options.includes(value))) throw new InputError('请核对字段：'+field.label);
             values[field.name] = value;
           }
-          return json(res,200,await app.plugins.invocations.use(pluginForm[1]+'.submit_form',{formId:id,values}));
+          const submitService = pluginForm[1] + '.submit_form';
+          if (!app.plugins.providesService(pluginForm[1], submitService)) throw new InputError('表单所属插件未提供提交服务', 503);
+          return json(res,200,await app.plugins.invocations.use(submitService,{formId:id,values}));
         }
         const plugin = path.match(/^\/api\/v1\/plugins\/([^/]+)$/);
         if (plugin && method === 'POST') {

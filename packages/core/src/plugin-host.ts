@@ -82,6 +82,10 @@ export class PluginHost {
       if (owner) return (elapsed, failed) => this.measure.record(owner, name, elapsed, failed);
     });
   }
+  providesService(pluginId: string, name: string): boolean {
+    const service = this.options.contributions.list('services').find(item => item.value.name === name);
+    return !!service && this.operationOwners.get('services:' + service.id) === pluginId;
+  }
   recentCalls(id: string) {
     if (!this.entries.has(id)) throw Object.assign(new Error('未找到插件'), { status: 404 });
     return this.measure.recentCalls(id);
