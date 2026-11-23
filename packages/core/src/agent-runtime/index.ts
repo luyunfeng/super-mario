@@ -75,6 +75,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   function allowed(name: string) {
     if (activeInput && pendingTurns.get(activeInput.id)?.stopped) return false;
     // The owner's cross-project agenda has a separate paired-private command on Feishu.
+    if ((name === 'private_conversation_read' || name === 'private_conversation_update') &&
+      (!options.conversationThreadId || !activeInput || activeInput.readOnly || activeInput.origin && activeInput.origin !== 'user')) return false;
     if (name === 'conversation_status' && ownConversation !== 'main' && ownConversation !== `project:${scopedProject}:work`) return false;
     if (name === 'today_brief' && (ownConversation !== 'main' || currentProjectId || activeInput?.todoId || activeInput?.readOnly)) return false;
     if (options.canUseScope?.(activeInput) === false || !scopeAllows(name) ||

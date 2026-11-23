@@ -45,6 +45,13 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   assert.equal((await get(base + second.bot.id + '/threads/' + thread)).status, 404);
   assert.equal((await fetch(server.url + base + first.bot.id + '/threads')).status, 401);
   const page = await browser.newPage();
+  const clipboardWrites: string[] = [];
+  await page.exposeFunction('captureThreadClipboard', (text: string) => { clipboardWrites.push(text); });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: {
+      writeText: (text: string) => (window as unknown as { captureThreadClipboard(value: string): Promise<void> }).captureThreadClipboard(text),
+    } });
+  });
   await page.goto(server.url + '/#agent?token=' + token);
   const row = page.locator('#agent-bot .row').filter({ has: page.getByText('合成甲', { exact: true }) });
   await row.getByRole('button', { name: '独立对话记录' }).click();
@@ -52,10 +59,41 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await drawer.getByRole('button', { name: /核对独立方案/ }).click();
   await expect(drawer.locator('section').first()).toContainText('核对独立方案');
   await expect(drawer).not.toContainText('其他机器人的讨论');
+  await drawer.getByRole('button', { name: '复制对话 ID' }).click();
+  await expect(drawer).toContainText('已复制对话 ID。');
+  assert.deepEqual(clipboardWrites, [thread]);
   await drawer.getByRole('button', { name: '查看当前配置的模型清单' }).click();
   await expect(drawer).toContainText('演示模式');
   await drawer.getByRole('button', { name: '返回列表' }).click();
   await expect(drawer.getByRole('button', { name: /核对独立方案/ })).toBeVisible();
+  await drawer.getByRole('button', { name: /核对独立方案/ }).click();
+  await drawer.getByRole('textbox', { name: '对话标题' }).fill('归档核验方案');
+  await drawer.getByRole('button', { name: '保存标题' }).click();
+  await expect(drawer.getByRole('heading', { name: '归档核验方案' })).toBeVisible();
+  await drawer.getByRole('button', { name: '归档对话' }).click();
+  await expect(drawer.getByRole('button', { name: '恢复对话' })).toBeVisible();
+  await drawer.getByRole('button', { name: '返回列表' }).click();
+  await expect(drawer.getByRole('button', { name: /归档核验方案/ })).toBeVisible();
+  await drawer.getByRole('button', { name: '未归档', exact: true }).click();
+  await expect(drawer.getByRole('button', { name: /归档核验方案/ })).toHaveCount(0);
+  await drawer.getByRole('button', { name: '已归档', exact: true }).click();
+  await drawer.getByRole('button', { name: /归档核验方案/ }).click();
+  await drawer.getByRole('button', { name: '恢复对话' }).click();
+  await expect(drawer.getByRole('button', { name: '归档对话' })).toBeVisible();
+  const saved = await (await get(base + first.bot.id + '/threads/' + thread)).json();
+  assert.equal(saved.title, '归档核验方案');
+  assert.equal(saved.archived, false);
+  const changedElsewhere = await fetch(server.url + base + first.bot.id + '/threads/' + thread, {
+    method: 'PATCH', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
+    body: JSON.stringify({ version: saved.version, title: '另一个页面的新标题' }),
+  });
+  assert.equal(changedElsewhere.status, 200);
+  await drawer.getByRole('textbox', { name: '对话标题' }).fill('不应覆盖的新标题');
+  await drawer.getByRole('button', { name: '保存标题' }).click();
+  await expect(drawer).toContainText('已在别处修改');
+  await expect(drawer.getByRole('heading', { name: '另一个页面的新标题' })).toBeVisible();
+  await drawer.getByRole('button', { name: '还原默认标题' }).click();
+  await expect(drawer.getByRole('heading', { name: '核对独立方案' })).toBeVisible();
   await server.bots.update(first.bot.id, { enabled: false });
   await expect(drawer).not.toBeVisible();
   assert.equal((await get(base + first.bot.id + '/threads/' + thread)).status, 404);

@@ -158,7 +158,9 @@ export function createFeishuGateway(
     }, () => notificationBots().find(b => b.id === bot.id && identity(b) === snapshot && b.enabled && b.paired)?.replyTarget, () => notificationBots().some(b=>b.id===bot.id&&identity(b)===snapshot&&b.enabled&&b.paired)?snapshot:undefined);
     return channel;
   });
-  app.setBotScopeAccess((scope, botId, input) => bots.canUseScope(scope, botId, input));
+  app.setBotScopeAccess((scope, botId, input, threadId) => bots.canUseScope(scope, botId, input, threadId));
+  app.setPrivateConversation((id, threadId, action, input) => action === 'read'
+    ? bots.privateThreadMetadata(id, threadId) : bots.updatePrivateThread(id, threadId, input));
   function proposeMail(input: Record<string, unknown>) {
     const bot = bots.list().find(bot => bot.id === input.botId);
     if (!bot) throw new InputError('请选择机器人', 404);

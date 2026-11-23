@@ -4,6 +4,7 @@ import { botConversationId } from '../../../packages/core/src/bot-agent-routing.
 
 export type PrivateThread = {
   threadId: string; botId: string; appId: string; revision: number; chatId: string; senderId: string; createdAt: string;
+  version?: number; archived?: boolean; title?: string;
 };
 type Receipt = {
   channel: string; botId: string; accountId: string; revision: number; target: string;
@@ -31,11 +32,23 @@ function threadMessages(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[
   return messages;
 }
 
-export function readPrivateThreadHistory(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[]) {
-  return Array.from(threadMessages(store, rows), ([threadId, list]) => ({
-    threadId, title: (list.find(row => row.role === 'user')?.text || '独立对话').replace(/\s+/g, ' ').slice(0, 80),
-    latestAt: list.at(-1)!.createdAt, count: list.length,
-  })).sort((a, b) => b.latestAt.localeCompare(a.latestAt) || a.threadId.localeCompare(b.threadId));
+function metadata(row: PrivateThread, list: Message[]) {
+  const first = list.find(message => message.role === 'user')?.text || '独立对话';
+  return { threadId: row.threadId, title: row.title || Array.from(first.replace(/\s+/g, ' ')).slice(0, 80).join(''),
+    latestAt: list.at(-1)?.createdAt ?? row.createdAt, count: list.length, archived: row.archived === true, version: row.version ?? 0 };
+}
+
+export function readPrivateThreadHistory(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], archived = false) {
+  const selected = rows.filter(row => (row.archived === true) === archived);
+  const messages = threadMessages(store, selected);
+  return selected.flatMap(row => {
+    const list = messages.get(row.threadId);
+    return list?.length ? [metadata(row, list)] : [];
+  }).sort((a, b) => b.latestAt.localeCompare(a.latestAt) || a.threadId.localeCompare(b.threadId));
+}
+
+export function readPrivateThreadMetadata(store: Pick<Store, 'get' | 'list'>, row: PrivateThread) {
+  return metadata(row, threadMessages(store, [row]).get(row.threadId) ?? []);
 }
 
 export function privateThreadPage(store: Pick<Store, 'get' | 'list'>, row: PrivateThread, before: string | null) {
@@ -43,6 +56,6 @@ export function privateThreadPage(store: Pick<Store, 'get' | 'list'>, row: Priva
   const end = before === null ? list.length : list.findIndex(message => message.id === before);
   if (end < 0) throw Object.assign(new Error('消息位置已失效，请重新打开对话'), { status: 409 });
   const start = Math.max(0, end - 40);
-  return { messages: list.slice(start, end).map(({ role, text, createdAt, status }) => ({ role, text, createdAt, status })),
+  return { ...metadata(row, list), messages: list.slice(start, end).map(({ role, text, createdAt, status }) => ({ role, text, createdAt, status })),
     nextBefore: start ? list[start].id : null };
 }

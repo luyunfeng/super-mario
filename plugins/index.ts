@@ -181,6 +181,7 @@ export interface SystemActions {
   agentSessions?(input: Record<string, unknown>): Promise<Json>;
   resumeSession?(input: Record<string, unknown>): Promise<Json>;
   botsList?(): Json;
+  privateConversation?(action: 'read' | 'update', input: JsonObject): Json;
   botRelay?(input: Record<string, unknown>): Promise<Json>;
   mailboxesList?(input: Record<string, unknown>): Json;
   mailboxPropose?(input: Record<string, unknown>): Json;
@@ -618,6 +619,15 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         context.contribute('channels', 'feishu', { id: 'feishu', name: '飞书', outboxPrefixes: ['feishu.bot', 'feishu.personal'], approvalKinds: ['feishu-reply'], sourcePrefix: 'feishu:' });
         context.contribute('tools', 'feishu_status', statusTool('feishu', '请在 Web 飞书设置中查看真实连接状态。', actions?.status ? () => actions.status!('feishu') : undefined));
         if (actions?.botsList) context.contribute('tools', 'bots_list', tool('bots_list', '查看主 Agent、项目和事项机器人的真实绑定与连接状态，不含凭证。', async (_args, signal) => { signal.throwIfAborted(); return actions.botsList!(); }));
+        if (actions?.privateConversation) {
+          context.contribute('tools', 'private_conversation_read', tool('private_conversation_read',
+            '读取当前飞书独立对话的名称、归档状态和版本。', async args => actions.privateConversation!('read', args)));
+          context.contribute('tools', 'private_conversation_update', tool('private_conversation_update',
+            '按用户明确要求整理当前飞书独立对话。传刚读取的版本和一个变更。空标题恢复默认，archived 控制归档或恢复。',
+            async args => actions.privateConversation!('update', args), {
+              version: { type: 'integer', minimum: 0 }, title: { type: 'string' }, archived: { type: 'boolean' },
+            }));
+        }
         if (actions?.botRelay) context.contribute('tools', 'bot_handoff', tool('bot_handoff', '向明确授权的机器人协作对象委派请求；复用现有项目/事项范围与确认信箱，不等于已执行或已外发。sourceBotId仅主对话选择全局机器人时填写，机器人会话不可冒用其他身份。', async args => actions.botRelay!(args), { targetBotId: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' }, sourceBotId: { type: 'string' }, chatId: { type: 'string' } }));
         if (actions?.mailboxesList) context.contribute('tools', 'mailboxes_list', tool('mailboxes_list', '查看全局、项目、事项或未标记的事件收件箱和发件箱；主 Agent 可按需查询全部进展。', async (args, signal) => { signal.throwIfAborted(); return actions.mailboxesList!(args); }, { direction: { type: 'string', enum: ['inbox', 'outbox'] }, scope: { type: 'string', enum: ['global', 'project', 'task', 'unmarked'] }, projectId: { type: 'string' }, todoId: { type: 'string' }, botId: { type: 'string' }, status: { type: 'string' } }));
         if (actions?.mailboxPropose) context.contribute('tools', 'mailbox_propose', tool('mailbox_propose', '向机器人发件箱提交一条待用户确认的消息草稿。提交不代表发送，不能代替用户确认。', async (args, signal) => { signal.throwIfAborted(); return actions.mailboxPropose!(args); }, { botId: { type: 'string' }, target: { type: 'string' }, text: { type: 'string' }, title: { type: 'string' } }));

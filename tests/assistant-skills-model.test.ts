@@ -3098,3 +3098,59 @@ test('Web 自填型号实际使用后进入飞书目录，移除后保留会话�
     assert.equal(server.app.modelCatalog().current, 'other');
   } finally { await server.close(); }
 });
+
+test('独立对话助手使用当前版本改名和归档，Web 主助手仅指导从页面整理', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  let version: number;
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /只有保存回执才能报告成功/);
+      if (JSON.stringify(req.content).includes('Web 如何整理')) {
+        assert.ok(!req.tools.includes('private_conversation_update'));
+        return { role: 'assistant', content: '请打开对应机器人的独立对话记录。' };
+      }
+      assert.ok(req.tools.includes('private_conversation_read') && req.tools.includes('private_conversation_update'));
+      return call('private_conversation_read', {}, 'current');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    if (req.callId === 'current') {
+      version = JSON.parse(raw).version;
+      assert.equal(version, 0);
+      return call('private_conversation_update', { version, title: '合成核对清单' }, 'rename');
+    }
+    if (req.callId === 'rename') {
+      const saved = JSON.parse(raw);
+      assert.equal(saved.title, '合成核对清单');
+      return call('private_conversation_update', { version: saved.version, archived: true }, 'archive');
+    }
+    if (req.callId === 'archive') {
+      const saved = JSON.parse(raw);
+      assert.equal(saved.archived, true);
+      assert.equal(saved.title, '合成核对清单');
+      // Simulate a stale write arriving from an earlier tool decision.
+      return call('private_conversation_update', { version, title: '旧版写入' }, 'stale');
+    }
+    assert.equal(req.callId, 'stale');
+    assert.match(raw, /对话版本已变化/);
+    return { role: 'assistant', content: '整理回执已核对，过期修改未生效。' };
+  }, options => {
+    adapter = options;
+    return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
+      async send(_target, text) { sent.push(text); } };
+  });
+  try {
+    assert.equal(await ask('Web 如何整理独立对话？'), '请打开对应机器人的独立对话记录。');
+    const bot = await api('/feishu/bots', { name: '对话整理', appId: 'cli_2222222222222222', appSecret: 'fixture',
+      scope: { kind: 'global' }, requireConfirmation: false });
+    const source = { chatId: 'private-chat', senderId: 'owner', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage('/new 请把当前对话命名为合成核对清单并归档。', { ...source, messageId: 'organize' });
+    await t.waitFor(() => assert.ok(sent.includes('整理回执已核对，过期修改未生效。'), sent.at(-1)), { timeout: 12000 });
+    const base = server.url + '/api/v1/feishu/bots/' + bot.id + '/threads';
+    assert.deepEqual(await (await fetch(base)).json(), []);
+    const archived = await (await fetch(base + '?archived=1')).json();
+    assert.equal(archived[0].title, '合成核对清单');
+    assert.equal(archived[0].version, 2);
+  } finally { await server.close(); }
+});

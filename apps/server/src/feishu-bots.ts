@@ -1,4 +1,4 @@
-import { readPrivateThreadHistory, type PrivateThread } from './feishu-thread-history.ts';
+import { readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
 import { createPinnedWorkbench } from './feishu-pinned-workbench.ts';
 import { selectedAgentStatus, agentCard, agentCardSnapshot, type AgentCardSnapshot } from './feishu-agent-card.ts';
 import type { ConversationStatus } from '../../../plugins/conversation-status.ts';
@@ -389,15 +389,59 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     return !!row && /^[a-f0-9]{64}$/.test(row.threadId) && bot.scope.kind === 'global' && row.botId === bot.id
       && row.appId === bot.appId && row.revision === bot.revision && !!paired?.senderId && row.senderId === paired.senderId && row.chatId === paired.chatId;
   }
-  function validThread(bot: FeishuBotSettings, paired: Owner | undefined, id: string) {
+  function validThread(bot: FeishuBotSettings, paired: Owner | undefined, id: string, listed = false) {
     const row = app.store.get<PrivateThread>('feishu.private-threads', id);
-    return row?.threadId === id && ownsThread(bot, paired, row);
+    return row?.threadId === id && ownsThread(bot, paired, row) && (!listed || !row.archived);
   }
   function privateThreads(botId: string) {
     let bot;
     try { bot = current(botId); } catch { return []; }
     const paired = owner(bot);
     return app.store.list<PrivateThread>('feishu.private-threads').filter(row => ownsThread(bot, paired, row));
+  }
+  function ownedThread(botId: string, threadId: string) {
+    let bot;
+    try { bot = current(botId); } catch { return; }
+    const row = app.store.get<PrivateThread>('feishu.private-threads', threadId);
+    return row?.threadId === threadId && ownsThread(bot, owner(bot), row) ? row : undefined;
+  }
+  function requireThread(botId: string, threadId: string) {
+    const row = ownedThread(botId, threadId);
+    if (!row) throw Object.assign(new Error('飞书独立对话不存在或绑定已变化'), { status: 404 });
+    return row;
+  }
+  function privateThreadMetadata(botId: string, threadId: string) {
+    return readPrivateThreadMetadata(app.store, requireThread(botId, threadId));
+  }
+  function threadChanged(botId: string) {
+    app.events.publish('feishu.changed', { botId, threadsChanged: true });
+    pins.scheduleRefresh();
+  }
+  function updatePrivateThread(botId: string, threadId: string, input: Record<string, unknown>) {
+    const result = app.store.transaction(() => {
+      const row = requireThread(botId, threadId);
+      const rename = Object.hasOwn(input, 'title');
+      if (!Number.isSafeInteger(input.version) || (input.version as number) < 0 || Object.keys(input).length !== 2
+        || (rename ? typeof input.title !== 'string' : typeof input.archived !== 'boolean'))
+        throw Object.assign(new Error('请提供版本号以及标题或归档状态'), { status: 400 });
+      if (input.version !== (row.version ?? 0))
+        throw Object.assign(new Error('对话版本已变化，请刷新后再操作'), { status: 409 });
+      const next = { ...row };
+      if (rename) {
+        const title = (input.title as string).trim();
+        if (Array.from(title).length > 80) throw Object.assign(new Error('对话标题最多 80 个字符'), { status: 400 });
+        if (title) next.title = title;
+        else delete next.title;
+      } else next.archived = input.archived === true;
+      const changed = next.title !== row.title || (next.archived === true) !== (row.archived === true);
+      if (changed) {
+        next.version = (row.version ?? 0) + 1;
+        app.store.put('feishu.private-threads', threadId, next);
+      }
+      return { changed, meta: readPrivateThreadMetadata(app.store, next) };
+    });
+    if (result.changed) threadChanged(botId);
+    return result.meta;
   }
   function legacyMainAnchor(bot: FeishuBotSettings, paired: Owner, messageId: string): ChatBinding | undefined {
     if (!paired.senderId || bot.scope.kind !== 'global') return;
@@ -875,7 +919,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const project = app.store.get<Project>('projects', value.projectId);
       if (value.projectId && (!project || project.archivedAt)) return fail;
       const thread = value.conversationThreadId;
-      if (thread !== undefined && (typeof thread !== 'string' || !cap.threadIds?.includes(thread) || !validThread(bot, paired, thread) || value.projectId)) return fail;
+      if (thread !== undefined && (typeof thread !== 'string' || !cap.threadIds?.includes(thread) || !validThread(bot, paired, thread, true) || value.projectId)) return fail;
       const binding = { ...(typeof thread === 'string' && { conversationThreadId: thread }), selectionId: randomUUID(), projectId: value.projectId, revision: bot.revision, senderId: paired.senderId, expiresAt: cap.expiresAt };
       app.store.transaction(() => {
         for (const messageId of ['', input.messageId]) app.store.put('feishu.chat-target', digest([bot.id, input.chatId, messageId]), binding);
@@ -983,7 +1027,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!stamp?.listProjectIds || !stamp.dashboard?.owner.senderId || bot.scope.kind !== 'global'
         || paired?.senderId !== stamp.dashboard.owner.senderId || paired.chatId !== entry.target || stamp.dashboard.owner.chatId !== entry.target)
         throw noDelivery('对话清单的配对记录已变化');
-      if (stamp.listThreadIds?.some(id => !validThread(bot, paired, id))) throw noDelivery('独立对话的私聊绑定已变化，请重新发送 /list');
+      if (stamp.listThreadIds?.some(id => !validThread(bot, paired, id, true))) throw noDelivery('独立对话的私聊绑定已变化，请重新发送 /list');
       for (const id of stamp.listProjectIds) {
         const project = app.store.get<Project>('projects', id);
         if (!project || project.archivedAt) throw noDelivery('对话清单中的项目已变化，请重新发送 /list');
@@ -1621,14 +1665,21 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       } else accepted = await app.postScoped(entry.text, structuredClone(entry.scope), bot.id, stamp?.conversationThreadId);
       if (stamp?.conversationThreadId && accepted.conversationId !== botConversationId(bot, stamp.conversationThreadId))
         throw new Error('独立对话接收结果未确认。');
-      app.store.transaction(() => {
+      const restored = app.store.transaction(() => {
         // The original accepted input id is the durable destination for later run results.
         app.store.put('message.routes', accepted.id, { channel: 'feishu', accountId: bot.appId, botId: bot.id, target: entry.target ?? '',
           ...stamp, ...(replyReference ? { replyReference } : {}), envelopeId: entry.id, scope: entry.scope, revision: bot.revision, inputId: accepted.id, sourceMessageId: entry.sourceMessageId } satisfies Routed);
         if (stamp?.privateSenderId && entry.target && entry.sourceMessageId)
           app.store.put('feishu.stop-references', stopReference(bot, entry.target, entry.sourceMessageId), accepted.id);
         app.store.put('feishu.bot.dispatch', key, { status: 'completed', id: accepted.id });
+        if (!stamp?.conversationThreadId || !stamp.privateSenderId || stamp.group || stamp.command || stamp.relay
+          || stamp.resultRelayEntryId || accepted.role !== 'user' || accepted.readOnly || (accepted.origin && accepted.origin !== 'user')) return false;
+        const row = ownedThread(bot.id, stamp.conversationThreadId);
+        if (!row?.archived || row.revision !== stamp.revision || row.chatId !== entry.target || row.senderId !== stamp.privateSenderId) return false;
+        app.store.put('feishu.private-threads', row.threadId, { ...row, archived: false, version: (row.version ?? 0) + 1 });
+        return true;
       });
+      if (restored) threadChanged(bot.id);
       return { id: accepted.id };
     })().catch(error => { throw Object.assign(new Error(redact(error)), { delivery: 'unknown' }); }).finally(() => inboxJobs.delete(key));
     inboxJobs.set(key, job); return job;
@@ -1881,7 +1932,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           && paired.chatId === target.owner.chatId && paired.senderId === target.owner.senderId;
       } catch { return false; }
     },
-    canUseScope, privateThreads,
+    canUseScope, privateThreads, privateThreadMetadata, updatePrivateThread,
     workbenchStatus: pins.status,
     async refreshCommandGroup() {
       await Promise.all(settings.list().filter(bot => bot.enabled && !bot.archivedAt &&
