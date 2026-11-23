@@ -338,6 +338,11 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await manage.click();
     await expect(button('套用 复核项目')).toBeVisible();
 
+    const previous = await (await api('/saved-searches')).json();
+    assert.ok((await api('/saved-searches', {
+      action: 'add', revision: previous.revision, name: '跨窗口检索', query: '项目',
+    })).ok);
+    await expect(button('套用 跨窗口检索')).toBeVisible();
     await button('编辑 复核项目').click();
     const current = await (await api('/saved-searches')).json();
     assert.ok((await api('/saved-searches', {

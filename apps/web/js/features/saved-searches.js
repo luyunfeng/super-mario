@@ -18,7 +18,13 @@ export function openSavedSearches({ api, store, isEnabled, initialQuery, onApply
     if (authorized() && applied !== undefined) onApply(applied);
   } });
   const authorized = () => token === api.token() && isEnabled();
-  const unsubscribe = store.subscribe(() => { if (!authorized()) drawer.close(); });
+  function refreshListIfChanged() {
+    if (doc && !busy && !draft && !needsRefresh && !message && store.view.savedSearchesRevision > doc.revision) void request();
+  }
+  const unsubscribe = store.subscribe(() => {
+    if (!authorized()) drawer.close();
+    else refreshListIfChanged();
+  });
   function current() {
     if (!authorized()) drawer.close();
     return drawer.el.open;
@@ -53,7 +59,7 @@ export function openSavedSearches({ api, store, isEnabled, initialQuery, onApply
       }
     } finally {
       busy = false;
-      if (current()) render();
+      if (current()) { render(); refreshListIfChanged(); }
     }
   }
 
@@ -89,7 +95,7 @@ export function openSavedSearches({ api, store, isEnabled, initialQuery, onApply
       latest ? '草稿已保留。当前保存的内容：' + latest.name + ' · ' + latest.query : '列表已刷新，草稿已保留。'),
     h('div', { class: 'saved-search-actions' },
       Button({ label: removed ? '另存为新检索' : '保存', kind: 'primary', type: 'submit', disabled: busy || needsRefresh }),
-      Button({ label: '取消', disabled: busy, onClick() { draft = null; message = ''; render(); } })));
+      Button({ label: '取消', disabled: busy, onClick() { draft = null; message = ''; render(); refreshListIfChanged(); } })));
   }
 
   function list() {
