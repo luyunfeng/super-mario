@@ -14,12 +14,22 @@ test('工作台预览并更新摘录，原匿名链接只显示已确认的版�
   t.after(async()=>{try{await server.close();}finally{await rm(dataDir,{recursive:true,force:true});}});
   const shared='合成公开结论\n<img src="https://example.invalid/picture.png">',replacement='合成修订结论：延期至周五复核。',privateText='合成内部备注，不在本次公开范围';
   const assistantText='合成助手公开核对结果';
+  const attachmentName='合成内部附件.txt', attachmentBody='仅供工作台读取的附件内容';
+  const upload=await fetch(server.url+'/api/v1/chat-files/uploads?'+new URLSearchParams({conversationId:'main',name:attachmentName}),{
+    method:'PUT',headers:{authorization:'Bearer '+token,'content-type':'text/plain'},body:attachmentBody});
+  assert.equal(upload.status,201);
+  const {uploadId}=await upload.json();
+  let attachmentUrl='';
   for(const text of [shared,replacement,privateText]){
     const response=await fetch(server.url+'/api/v1/messages',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
-      body:JSON.stringify({text})});
+      body:JSON.stringify({text,...(text===shared && {files:[{uploadId}]})})});
     assert.equal(response.status,202);const source=await response.json();
     await t.waitFor(()=>assert.ok(server.app.store.list<Message>('messages').some(m=>m.replyTo===source.id && m.status==='done')),{timeout:6000});
     if(text===shared){
+      attachmentUrl=server.url+'/api/v1/messages/'+source.id+'/files/0?conversationId=main';
+      const download=await fetch(attachmentUrl,{headers:{authorization:'Bearer '+token}});
+      assert.equal(download.status,200);
+      assert.equal(await download.text(),attachmentBody);
       const reply=server.app.store.list<Message>('messages').find(m=>m.replyTo===source.id && m.role==='assistant')!;
       server.app.store.put('messages',reply.id,{...reply,text:assistantText});
       const details={phase:'working',goal:privateText};
@@ -77,7 +87,10 @@ test('工作台预览并更新摘录，原匿名链接只显示已确认的版�
   const publicTools=messages.getByRole('region',{name:'工具记录'});
   await publicTools.getByText('conversation_status · 成功',{exact:true}).click();
   await expect(publicTools.locator('pre')).toHaveText('{"phase":"working"}');
-  assert.ok(!(await publicResponse.text()).includes(privateText));
+  const publicBody=await publicResponse.text();
+  for(const hidden of [privateText,attachmentName,attachmentBody]) assert.ok(!publicBody.includes(hidden));
+  const privateDownload=await anonymous.request.get(attachmentUrl,{headers:{authorization:'Bearer '+url.hash.slice(1)}});
+  assert.equal(privateDownload.status(),401);
   await expect(reader.locator('body')).not.toContainText(privateText);
   await expect(messages.locator('img,script,a')).toHaveCount(0);
   assert.ok(requests.every(r=>['/share','/css/base.css','/js/share.js','/js/lib/shared-excerpt-tools.js','/api/v1/public/conversation-share','/favicon.ico'].includes(r.path)));
@@ -200,4 +213,15 @@ test('主人开启自动追加后匿名链接收到后续 Web 对话，关闭后
   assert.equal((await poll()).unchanged,true);
   await expect(messages).toHaveText([original,later,answer]);
   await expect(reader).toHaveURL(link);
+
+  // Open the same published snapshot just before its deadline, then let it expire between polls.
+  const expiresAt = await reader.locator('time').getAttribute('datetime');
+  await reader.clock.setSystemTime(new Date(Date.parse(expiresAt!) - 5000));
+  await reader.reload();
+  await expect(messages).toHaveText([original,later,answer]);
+  await reader.clock.fastForward(5001);
+  await expect(reader.getByRole('status')).toHaveText('分享已过期。');
+  await expect(messages).toHaveCount(0);
+  await expect(reader.locator('time')).toBeHidden();
+  await expect(reader.getByRole('button',{name:'重新读取摘录'})).toHaveCount(0);
 });
