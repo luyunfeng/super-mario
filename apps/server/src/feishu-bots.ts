@@ -697,7 +697,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         const decisions = result.decisions;
         const items = decisions.items.filter(item => item.kind !== 'interaction' ||
           visibleQuestionId(bot,paired,item.id.slice('interaction:'.length)));
-        if (items.length !== decisions.items.length) result = {...result,decisions:{...decisions,items,total:items.length}};
+        if (items.length !== decisions.items.length) result = {...result,decisions:{...decisions,items,total:items.length,...(decisions.truncated && {totalIsLowerBound:true})}};
       }
       const canRefresh = enabled();
       const dashboard = todayDashboard(canRefresh ? result : disabled, grant, canRefresh);

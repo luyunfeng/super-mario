@@ -3,7 +3,7 @@ import type { InboxItem, Run, Todo } from '../packages/protocol/src/index.ts';
 import { excludesPersonalGroupFromBrief } from '../packages/protocol/src/index.ts';
 
 export type TodayItem = { id: string; title: string; kind: string; at: string; reason?: string; projectId?: string; endAt?: string };
-export type TodaySection = { total: number; items: TodayItem[]; truncated: boolean };
+export type TodaySection = { total: number; items: TodayItem[]; truncated: boolean; totalIsLowerBound?: boolean };
 type CalendarSection = TodaySection & { available: boolean; reason?: string };
 export type TodayBrief = { date: string; timezone: string; generatedAt: string; decisions: TodaySection; inbox: TodaySection;
   mentions: TodaySection; completed: TodaySection; failed: TodaySection; running: TodaySection; calendar: CalendarSection };
@@ -67,7 +67,8 @@ async function calendarSection(actions: Actions, sources: TodayBriefSources, win
         at: event.startTime, endAt: event.endTime, ...(typeof event.status === 'string' && { reason: bounded(event.status) }) });
     }
     const page = section(items, true);
-    return { ...page, available: true, truncated: page.truncated || result.partial === true || unreadable };
+    const incomplete = result.partial === true || unreadable;
+    return { ...page, available: true, truncated: page.truncated || incomplete, ...(incomplete && {totalIsLowerBound:true}) };
   } catch {
     signal.throwIfAborted();
     return unavailable('读取飞书日历失败，日程尚未核实');

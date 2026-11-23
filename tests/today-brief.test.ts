@@ -37,6 +37,8 @@ test('today uses the workbench civil day across DST, bounded facts and exact men
   } }, {}, signal, now);
   assert.equal(receipt.date, '2026-03-08');
   assert.equal(receipt.calendar.truncated, true);
+  assert.equal(receipt.calendar.totalIsLowerBound,true);
+  assert.equal(receipt.running.totalIsLowerBound,undefined);
   assert.deepEqual(receipt.calendar.items.map(row => row.id), ['all-day', 'meeting']);
   assert.deepEqual(receipt.inbox.items.map(row => row.id), ['not-mentioned', 'pending', 'backlog']);
   assert.deepEqual(receipt.mentions.items.map(row => row.id), ['pending']);

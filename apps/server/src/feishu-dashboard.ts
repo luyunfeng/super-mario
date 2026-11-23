@@ -210,7 +210,7 @@ export function todayDashboard(brief: TodayBrief | string, navigation: string, c
     section('今日简报', [today, brief.timezone, generated && '生成于 ' + generated].filter(Boolean).join(' · '));
     const activity: Record<string, string> = { todo: '待办完成', completed: '执行结束', running: '正在执行', queued: '排队中' };
     function facts(title: string, source: TodaySection) {
-      const count = (source.truncated ? '至少 ' : '') + source.total + ' 项';
+      const count = (source.totalIsLowerBound ? '至少 ' : '') + source.total + ' 项';
       const rows = source.items.slice(0, 3).map(item => {
         const allDay = item.kind === 'calendar' && /^\d{4}-\d{2}-\d{2}$/.test(item.at);
         const start = time(item.at), end = time(item.endAt);
