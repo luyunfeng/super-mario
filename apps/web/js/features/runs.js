@@ -130,7 +130,6 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     const project = snapshot?.projects?.find(item => item.id === id && !item.archivedAt);
     const binding = project?.workspace;
     return binding && snapshot.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active')
-      && snapshot.machines?.some(m => m.id === binding.machineId && m.online && m.capabilities.includes('workspace.prepareRunWorktree'))
       ? binding : undefined;
   }
 
@@ -142,6 +141,10 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     const name = Input({ required: true, maxLength: 80 });
     const message = h('div', { role: 'status' });
     const rows = h('div', { class: 'list' });
+    const availability = h('p', { class: 'muted' });
+    const supports = capability => store.view.snapshot?.machines?.some(machine =>
+      machine.id === binding.machineId && machine.online && machine.capabilities.includes(capability));
+    let uncertainCreation = false;
     let revision = 0;
     const current = () => {
       const next = worktreeBinding(store.view.snapshot, id);
@@ -160,7 +163,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
             await copyText(tree.cwd);
             if (current()) message.textContent = '已复制工作树目录。';
           } }),
-          Button({ label: '在此工作树发起执行', size: 'sm', disabled: !store.view.snapshot.machines.some(m => m.id === binding.machineId && m.capabilities.includes('workspace.inspectRunWorktree')), onClick: () => {
+          Button({ label: '在此工作树发起执行', size: 'sm', dataset: { launchWorktree: '1' }, disabled: !supports('workspace.inspectRunWorktree'), onClick: () => {
             if (!current()) return;
             drawer.close();
             openLaunch(undefined, tree);
@@ -171,7 +174,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     }
     const drawer = openDrawer({
       title: '项目工作树', subtitle: binding.cwd,
-      body: [Field({ label: '工作树名称', control: name, required: true }), message, rows],
+      body: [availability, Field({ label: '工作树名称', control: name, required: true }), message, rows],
       footer: Button({ label: '只创建工作树', kind: 'primary', onClick: async (_event, button) => {
         if (!current() || !name.reportValidity()) return;
         try {
@@ -183,7 +186,8 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
         } catch (error) {
           if (!current()) return;
           const uncertain = !error.status || error.status >= 500;
-          button.disabled = uncertain;
+          uncertainCreation = uncertain;
+          button.disabled = uncertain || !supports('workspace.prepareRunWorktree');
           replace(message, Banner({ tone: 'warn', children: uncertain ? '创建结果待核对，请检查绑定电脑上的工作树。' : systemText(error.message) }));
           if (uncertain) await load();
         }
@@ -191,7 +195,20 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       onClose: () => { offRoute(); offStore(); },
     });
     const offRoute = router.subscribe(() => drawer.close());
-    const offStore = store.subscribe(view => { if (view.unauthorized || !current()) drawer.close(); });
+    function updateAvailability() {
+      const create = supports('workspace.prepareRunWorktree');
+      const launch = supports('workspace.inspectRunWorktree');
+      drawer.foot.querySelector('button').disabled = uncertainCreation || !create;
+      for (const button of rows.querySelectorAll('[data-launch-worktree]')) button.disabled = !launch;
+      availability.textContent = !create ? '绑定电脑离线或缺少创建工作树的能力，可查看已登记目录。'
+        : !launch ? '执行机缺少核对工作树的能力，请升级代理后发起执行。' : '';
+      availability.hidden = !availability.textContent;
+    }
+    const offStore = store.subscribe(view => {
+      if (view.unauthorized || !current()) drawer.close();
+      else updateAvailability();
+    });
+    updateAvailability();
     load();
   }
 
@@ -382,7 +399,10 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     });
     const offRoute = router.subscribe(() => drawer.close());
     const offStore = store.subscribe(view => {
-      if (view.unauthorized || api.token() !== launchToken || projectTree && !worktreeBinding(view.snapshot, launchProjectId) || parentRun && !view.snapshot?.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active')) drawer.close();
+      const nextBinding = projectTree && worktreeBinding(view.snapshot, launchProjectId);
+      const treeUnavailable = projectTree && (nextBinding?.cwd !== binding.cwd || nextBinding?.machineId !== binding.machineId
+        || !view.snapshot?.machines?.some(machine => machine.id === binding.machineId && machine.online && machine.capabilities.includes('workspace.inspectRunWorktree')));
+      if (view.unauthorized || api.token() !== launchToken || treeUnavailable || parentRun && !view.snapshot?.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active')) drawer.close();
     });
     sync();
   }

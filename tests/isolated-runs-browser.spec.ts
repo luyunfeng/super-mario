@@ -493,5 +493,14 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   await preparedRow.getByRole('button', { name: '在此工作树发起执行' }).click();
   await expect(drawer).toContainText(prepared);
   assert.equal(server.app.store.list('runs').length, beforePreparation);
+  await drawer.getByRole('button', { name: '关闭', exact: true }).click();
+  await node.close();
+  await expect.poll(() => server.machines.list().some(machine => machine.id === 'fixture' && machine.online)).toBe(false);
+  await page.reload();
+  await page.getByRole('button', { name: '项目工作树' }).click();
+  await expect(preparedRow).toContainText(prepared);
+  await expect(preparedRow.getByRole('button', { name: '复制目录' })).toBeEnabled();
+  await expect(preparedRow.getByRole('button', { name: '在此工作树发起执行' })).toBeDisabled();
+  await expect(trees.getByRole('button', { name: '只创建工作树' })).toBeDisabled();
 
 });
