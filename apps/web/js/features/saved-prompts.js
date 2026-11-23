@@ -77,6 +77,7 @@ export function openSavedPrompts({ api, store, initialText, assistantId, assista
 
   async function request(change) {
     if (busy || !current() || (change && stale)) return;
+    const openingFromMessage = !doc && initialText !== undefined;
     deleting = undefined;
     busy = true;
     writing = Boolean(change);
@@ -86,7 +87,7 @@ export function openSavedPrompts({ api, store, initialText, assistantId, assista
     try {
       const next = await post(api, change ? { ...change, revision: doc.revision } : { action: 'list' }, assistantId);
       if (!current()) return;
-      if (!doc && initialText !== undefined) draft = { name: suggestedName(initialText, next.items), text: initialText };
+      if (openingFromMessage) draft = { name: suggestedName(initialText, next.items), text: initialText };
       if (change) {
         const previous = doc.items.find(item => item.id === change.id);
         if (change.action === 'remove' && previous) toast('已删除 /' + previous.name);
@@ -110,6 +111,11 @@ export function openSavedPrompts({ api, store, initialText, assistantId, assista
       writing = false;
       if (current()) {
         draw();
+        if (openingFromMessage && doc) {
+          const body = drawer.body.querySelector('textarea');
+          body?.focus();
+          body?.setSelectionRange(body.value.length, body.value.length);
+        }
         if (!error && doc && pendingRevision > doc.revision) {
           if (draft) replace(conflict, '列表已更新。保存时会核对版本。');
           else { pendingRevision = -1; void request(); }

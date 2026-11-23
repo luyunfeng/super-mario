@@ -54,6 +54,10 @@ test('本人消息可保存为常用提示词，主对话和项目斜杠菜单�
   const name = drawer.getByLabel('名称', { exact: true });
   const body = drawer.getByLabel('提示词正文', { exact: true });
   await expect(body).toHaveValue(sourceText);
+  await expect(body).toBeFocused();
+  await page.keyboard.type(" +");
+  await expect(body).toHaveValue(sourceText + " +");
+  await body.fill(sourceText);
   await name.fill('review');
   let releaseSave!: () => void;
   const pendingSave = new Promise<void>(resolve => { releaseSave = resolve; });
