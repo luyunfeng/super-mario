@@ -183,3 +183,31 @@ test('永久删除使用已确认版本，回执未知时核对；两个标签�
   await page.reload();await expect(page.getByText('该独立对话已删除，原链接已失效。')).toBeVisible();
   await page.getByRole('link',{name:'返回主对话'}).click();await expect(page.locator('#message-text')).toHaveValue('保留的主线草稿');
 });
+
+test('独立对话正文结果可从三条预览翻页定位到较早原文', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'web-search-pages-')), token = 'synthetic-pages';
+  const server = await startServer({ dataDir: dir, port: 0, host: '127.0.0.1', demo: true, token });
+  const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  t.after(async () => { await browser.close(); await server.close(); await rm(dir, { recursive: true, force: true }); });
+  const id = crypto.randomUUID();
+  server.app.store.put('web-conversations', id, { id, title: '合成分页历史', createdAt: new Date(0).toISOString() });
+  for (let i = 0; i < 22; i++) {
+    const key = 'synthetic-match-' + i;
+    server.app.store.put('messages', key, { id: key, conversationId: 'web:' + id, role: 'user', directWebInput: true,
+      text: '季度记录 ' + i, status: 'done', createdAt: new Date(i * 1000).toISOString() });
+  }
+  const page = await browser.newPage();
+  await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+  await page.goto(server.url + '/#chat?token=' + token);
+  await page.getByRole('button', { name: '独立对话', exact: true }).click();
+  const drawer = page.getByRole('dialog', { name: '独立对话' });
+  await drawer.getByLabel('按标题查找').fill('季度记录');
+  await drawer.getByRole('button', { name: '按正文查找' }).click();
+  await expect(drawer.locator('a mark')).toHaveCount(3);
+  await drawer.getByRole('button', { name: '查看全部匹配发言' }).click();
+  await expect(drawer.locator('a mark')).toHaveCount(20);
+  await drawer.getByRole('button', { name: '加载更多匹配发言' }).click();
+  await expect(drawer.locator('a mark')).toHaveCount(22);
+  await drawer.getByRole('link', { name: '季度记录 0', exact: true }).click();
+  await expect(page.locator('[data-id="synthetic-match-0"][aria-current="true"]')).toBeVisible();
+});

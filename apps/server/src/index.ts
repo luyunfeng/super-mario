@@ -1153,28 +1153,36 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           res.writeHead(200,{'content-type':image.mime,'cache-control':'private, no-store','x-content-type-options':'nosniff'});
           return res.end(Buffer.from(image.data,'base64'));
         }
-        const webConversation=/^\/api\/v1\/web-conversations(?:\/([^/]+)(?:\/(messages)(?:\/receipts\/([^/]+)|\/([^/]+)\/(stop|edit-queued|cancel-queued)|\/(queue))?)?)?$/.exec(path);
+        const webConversation=/^\/api\/v1\/web-conversations(?:\/([^/]+)(?:\/(?:(messages)(?:\/receipts\/([^/]+)|\/([^/]+)\/(stop|edit-queued|cancel-queued)|\/(queue))?|(search)))?)?$/.exec(path);
         if(webConversation){
           const enabled=()=>{if(!app.plugins.list().some(p=>p.id==='web-conversations'&&p.status==='active'))throw new InputError('独立 Web 对话插件已停用',503);};
           enabled();
           if((method==='POST'||method==='PATCH'||method==='DELETE') && req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json')
             throw new InputError('独立对话需要 JSON 请求',415);
-          const [,id,messages,receiptKey,stopId,action,queue]=webConversation;
+          const [,id,messages,receiptKey,stopId,action,queue,search]=webConversation;
           const invoke=async(args:JsonObject)=>{
             enabled();
             const result=await app.plugins.invocations.use('web-conversations.manage',args);
             enabled();
             return result;
           };
-          if(!id){
+          if(search && method!=='GET')throw new InputError('搜索只接受读取',405);
+          if(!id || search){
             if(method==='GET'){
               const projectId=url.searchParams.get('projectId');
               const archived=url.searchParams.getAll('archived');
               if(archived.length>1 || archived.some(value=>value!=='true' && value!=='false'))throw new InputError('归档筛选需要 true 或 false');
               const query=url.searchParams.get('query'),role=url.searchParams.get('role');
-              if(query!==null && !app.plugins.list().some(p=>p.id==='conversation-search' && p.status==='active'))
-                throw new InputError('对话历史搜索插件已停用',503);
-              return json(res,200,await invoke({action:'list',archived:archived[0]==='true',...(query!==null && {query}),...(role!==null && {role}),...(projectId && {projectId})}));
+              const checkSearch=()=>{
+                if((query!==null || search) && !app.plugins.list().some(p=>p.id==='conversation-search' && p.status==='active'))
+                  throw new InputError('对话历史搜索插件已停用',503);
+              };
+              checkSearch();
+              const before=url.searchParams.get('before');
+              const result=await invoke({...(search ? {action:'search',id:id!,...(before!==null && {before})} : {action:'list'}),
+                archived:archived[0]==='true',...(query!==null && {query}),...(role!==null && {role}),...(projectId && {projectId})});
+              checkSearch();
+              return json(res,200,result);
             }
             if(method==='POST'){
               const input=await body(req,8192);

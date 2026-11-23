@@ -114,3 +114,50 @@ test('同项目独立 Web 对话隔离真实 SDK 历史、分页位置和首轮�
   assert.equal((await get('/'+a+'/messages')).status,503);
   assert.equal((await post('/'+a+'/messages',{text:'已停用'},randomUUID())).status,503);
 });
+
+test('独立对话正文搜索分页只返回当前项目和归档范围的可见命中', async t => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'web-conversation-hit-pages-'));
+  const server = await startServer({ dataDir, host: '127.0.0.1', port: 0, demo: true });
+  t.after(async () => { await server.close(); await rm(dataDir, { recursive: true, force: true }); });
+  const projectId = server.app.projects.create({ name: '示例搜索项目' }).id;
+  const otherProject = server.app.projects.create({ name: '另一个项目' }).id;
+  const id = randomUUID(), otherThread = randomUUID();
+  const url = server.url + '/api/v1/web-conversations';
+  const headers = { 'content-type': 'application/json' };
+  for (const thread of [id, otherThread]) {
+    const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify({ id: thread, title: '合成对话', projectId }) });
+    assert.equal(response.status, 201);
+  }
+  const sample: Message = { id: 'example', conversationId: 'web:' + id, projectId, createdAt: new Date(0).toISOString(),
+    role: 'user', directWebInput: true, status: 'done', text: '本轮匹配内容' };
+  const expected: string[] = [];
+  for (let index = 0; index < 23; index++) {
+    const message = { ...sample, id: randomUUID(), createdAt: new Date(index * 1000).toISOString() };
+    server.app.store.put('messages', message.id, message);
+    expected.unshift(message.id);
+  }
+  const otherId = randomUUID();
+  server.app.store.put('messages', otherId, { ...sample, id: otherId, conversationId: 'web:' + otherThread });
+  const search = (params: Record<string, string> = {}) => fetch(url + '/' + id + '/search?' +
+    new URLSearchParams({ query: '匹配', projectId, ...params }));
+  const first = await search();
+  assert.equal(first.status, 200, await first.clone().text());
+  const page = await first.json();
+  assert.deepEqual(page.hits.map((hit: Message) => hit.id), expected.slice(0, 20));
+  assert.equal(page.nextBefore, expected[19]);
+  const last = await (await search({ before: page.nextBefore })).json();
+  assert.deepEqual(last.hits.map((hit: Message) => hit.id), expected.slice(20));
+  assert.equal(last.nextBefore, null);
+  assert.deepEqual((await (await search({ role: 'assistant' })).json()).hits, []);
+  assert.equal((await search({ projectId: otherProject })).status, 404);
+  assert.ok(!(await search({ before: otherId })).ok);
+  const archived = await fetch(url + '/' + id, { method: 'PATCH', headers, body: JSON.stringify({ archived: true, version: 1 }) });
+  assert.equal(archived.status, 200);
+  assert.ok(!(await search()).ok);
+  assert.deepEqual((await (await search({ archived: 'true' })).json()).hits, page.hits);
+  const disabled = await fetch(server.url + '/api/v1/plugins/conversation-search', {
+    method: 'POST', headers, body: JSON.stringify({ enabled: false }),
+  });
+  assert.ok(disabled.ok);
+  assert.equal((await search({ archived: 'true' })).status, 503);
+});

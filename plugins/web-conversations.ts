@@ -7,7 +7,7 @@ function view(row: Conversation) {
   return { id, title, ...(projectId && { projectId }), createdAt, archived, version };
 }
 const fields = {
-  list: ['projectId', 'archived', 'query', 'role'], create: ['id', 'projectId', 'title'],
+  list: ['projectId', 'archived', 'query', 'role'], search: ['id', 'projectId', 'archived', 'query', 'role', 'before'], create: ['id', 'projectId', 'title'],
   get: ['id', 'projectId'], update: ['id', 'title', 'version', 'archived'],
 } as const;
 const collection = 'web-conversations';
@@ -104,28 +104,40 @@ export const webConversationsExtension: Extension = {
     provide('web-conversations.manage', (input): Json => {
       if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, '独立对话参数无效');
       const { action, projectId } = input;
-      if (action !== 'list' && action !== 'create' && action !== 'get' && action !== 'update') fail(400, '独立对话操作无效');
+      if (action !== 'list' && action !== 'search' && action !== 'create' && action !== 'get' && action !== 'update') fail(400, '独立对话操作无效');
       const allowed: readonly string[] = ['action', ...fields[action]];
       if (Object.keys(input).some(key => !allowed.includes(key))) fail(400, '独立对话包含未知字段');
       if (projectId !== undefined && (typeof projectId !== 'string' || !projectId.trim())) fail(400, '项目 ID 无效');
       if (input.archived !== undefined && typeof input.archived !== 'boolean') fail(400, '归档状态无效');
-      if (action === 'list') {
+      if (action === 'list' || action === 'search') {
         requireProject(store, projectId);
-        const rows=store.list<Conversation>(collection).filter(row=>row.projectId===projectId && (row.archived ?? false)===(input.archived ?? false)).reverse();
+        const selected = action === 'search' ? requireWebConversationHistory(store, conversationKey(input.id), projectId) : undefined;
+        if (selected && (selected.archived ?? false) !== (input.archived ?? false)) fail(409, '对话归档状态已变化，请重新搜索');
+        const rows=selected ? [selected] : store.list<Conversation>(collection).filter(row=>row.projectId===projectId && (row.archived ?? false)===(input.archived ?? false)).reverse();
         const threads=new Set(rows.map(row=>'web:'+row.id));
         const query=input.query;
+        if(selected && query===undefined)fail(400,'请提供搜索词');
         if(query!==undefined && (typeof query!=='string' || !query.trim() || query.length>200))fail(400,'搜索词须为 1 至 200 个字符');
         const role=input.role;
         if(role!==undefined && (!query || (role!=='user' && role!=='assistant')))fail(400,'正文搜索的发言人须为本人或助手');
         const literal=query && new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'iu');
         type Hit={id:string;text:string;at:string;role:Message['role'];start:number;end:number};
         const hits=new Map<string,{recent:Hit[];count:number}>();
+        const before = input.before;
+        if (before !== undefined && (typeof before !== 'string' || !before)) fail(400, '分页位置无效');
+        const cursor = before ? store.get<Message>('messages', before) : undefined;
+        if (before && (!cursor || cursor.conversationId !== 'web:' + selected?.id || typeof cursor.createdAt !== 'string'))
+          fail(409, '搜索位置已失效，请重新搜索');
+        const order = (a: {at:string;id:string}, b: {at:string;id:string}) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id);
+        let foundCursor = false;
         const latest=new Map<string,Message>();
         if(threads.size)for(const message of store.list<Message>('messages')){
           if(!threads.has(message.conversationId) || (message.role!=='user' && !(query && message.role==='assistant' && message.status==='done')) || (message.role==='user' && !message.directWebInput) || typeof message.id!=='string' || typeof message.text!=='string' || typeof message.createdAt!=='string' || !independentWebSource(store,message,message.conversationId,projectId))continue;
           if(literal && (!role || message.role===role)){
             const found=literal.exec(message.text);
             if(found){
+              if (before && message.id === before) foundCursor = true;
+              if (cursor && order({at:message.createdAt,id:message.id},{at:cursor.createdAt,id:cursor.id}) <= 0) continue;
               let start=Math.max(0,found.index-32),end=found.index+found[0].length+64;
               if(start && /[\uDC00-\uDFFF]/.test(message.text.charAt(start)))start--;
               if(/[\uDC00-\uDFFF]/.test(message.text.charAt(end)))end++;
@@ -133,12 +145,18 @@ export const webConversationsExtension: Extension = {
               const group=hits.get(message.conversationId) ?? {recent:[],count:0};
               group.count++;
               group.recent.unshift({id:message.id,role:message.role,at:message.createdAt,start:matchStart,end:matchStart+found[0].length,text:(start?'…':'')+message.text.slice(start,end)+(end<message.text.length?'…':'')});
-              group.recent.sort((a,b)=>b.at.localeCompare(a.at));
-              if(group.recent.length>3)group.recent.pop();
+              group.recent.sort(order);
+              if(group.recent.length>(selected ? 21 : 3))group.recent.pop();
               hits.set(message.conversationId,group);
             }
           }
           if(message.role==='user' && message.createdAt >= (latest.get(message.conversationId)?.createdAt ?? ''))latest.set(message.conversationId,message);
+        }
+        if (selected) {
+          if (before && !foundCursor) fail(409, '搜索位置已失效，请重新搜索');
+          const recent = hits.get('web:' + selected.id)?.recent ?? [];
+          const page = recent.slice(0,20);
+          return { hits:page, nextBefore:recent.length > page.length ? page.at(-1)!.id : null };
         }
         const items=rows.filter(row=>!query || hits.has('web:'+row.id)).map(row=>{
           const last=latest.get('web:'+row.id);
