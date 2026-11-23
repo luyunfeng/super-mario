@@ -20,7 +20,7 @@ import type { Message } from '../packages/protocol/src/index.ts';
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 const source = (messageId: string, chatId = 'owner', senderId = 'human', chatType = 'p2p') => ({ messageId, chatId, senderId, chatType });
 
-function fixture(t: test.TestContext, delivered?: (target:string,text:string,context?:FeishuSendContext)=>void) {
+function fixture(t: test.TestContext, delivered?: (target:string,text:string,context?:FeishuSendContext)=>void, webBase?: string) {
   const dataDir = mkdtempSync(join(tmpdir(), 'mario-bots-'));
   const store = createStore(join(dataDir, 'test.sqlite'));
   const events = createEventBus(store), effects = createEffects({ store, events });
@@ -72,7 +72,7 @@ function fixture(t: test.TestContext, delivered?: (target:string,text:string,con
     },
   };
   const config = { dataDir, host: '127.0.0.1', port: 0, demo: true };
-  controller = createFeishuBotsController(app, config, { factory });
+  controller = createFeishuBotsController(app, config, { factory, webBase });
   t.after(async () => { await controller.close(); await effects.close(); store.close(); rmSync(dataDir, { recursive: true, force: true }); });
   async function add(name: string, scope: BotScope = { kind: 'global' }, requireConfirmation = false, extra: Partial<import('../packages/protocol/src/bots.ts').FeishuBotInput> = {}) {
     const bot = await controller.create({ name, scope, requireConfirmation, appId: `cli_${name}`, appSecret: `private-${name}`, ...extra });
@@ -87,7 +87,7 @@ function fixture(t: test.TestContext, delivered?: (target:string,text:string,con
   }
   return { dataDir, store, app, events, effects, mailboxes, instances, posts, add, reply,
     get controller() { return controller; },
-    async restart() { await controller.close(); controller = createFeishuBotsController(app, config, { factory }); await controller.start(); },
+    async restart() { await controller.close(); controller = createFeishuBotsController(app, config, { factory, webBase }); await controller.start(); },
     disable() { enabled = false; events.publish('plugins.changed', { id: 'feishu' }); },
     deny() { denied = true; }, uncertain() { uncertain = true; }, postFail() { postFailure = true; }, hookCount: () => hookCount };
 }
@@ -1463,7 +1463,7 @@ test('/agents 的待验收执行经翻页选中，只向原生会话提恢复申
 });
 
 test('/status 从所选执行读取公开进展、目标及待决定项，引用旧卡仍只读原执行', async t => {
-  const f = fixture(t), bot = await f.add('AgentStatus');
+  const f = fixture(t,undefined,'https://workbench.example'), bot = await f.add('AgentStatus');
   enableTerminalPluginForAgents(f.app);
   await bot.pair();
   const now = new Date().toISOString(), expiresAt = new Date(Date.now() + 600000).toISOString();
@@ -1492,9 +1492,11 @@ test('/status 从所选执行读取公开进展、目标及待决定项，引用
 
   const decision = { kind: 'question', runId: run.id, projectId: run.projectId, handler: 'user', status: 'open', version: 1, createdAt: now, expiresAt };
   const putCard = (id: string, title: string, extra = {}) => f.store.put('interactions', id, { ...decision, id, title, ...extra });
-  putCard('permitted', '选择校对文件 token=fixture-question');
+  const recommended = {question:'使用哪份清单？',recommend:'已核实的清单',options:[
+    {label:'其它文件',description:'无关选项的备注'}, {label:'已核实的清单',description:'已核对时间 token=fixture-reason'}]};
+  putCard('permitted', '选择校对文件 token=fixture-question', {questions:[recommended]});
   putCard('expired', '过期问题', { expiresAt: '2020-01-01T00:00:00Z' });
-  putCard('foreign', '其他项目问题', { projectId: 'other' });
+  putCard('foreign', '其他项目问题', { projectId: 'other', questions:[{...recommended,question:'跨项目合成标记'}] });
   putCard('other-run', '其他执行问题', { runId: 'different' });
   putCard('answered', '已解决问题', { status: 'answered' });
   putCard('auto', '自动处理问题', { handler: 'rules' });
@@ -1506,11 +1508,22 @@ test('/status 从所选执行读取公开进展、目标及待决定项，引用
   const delivered = bot.instance.contexts.at(-1)!;
   assert.ok(delivered.onSent);
   for (const text of [bot.instance.sent.at(-1)![1], JSON.stringify(delivered.card)]) {
-    for (const visible of ['校对汇总清单', '核对条目', '选择校对文件', '批准继续校对']) assert.ok(text.includes(visible), visible);
-    assert.doesNotMatch(text, /fixture-(goal|progress|question)|正文不能随状态卡公开|过期问题|其他项目问题|其他执行问题|已解决问题|自动处理问题|其他事项审批/);
+    for (const visible of ['校对汇总清单', '核对条目', '选择校对文件', '批准继续校对','使用哪份清单','推荐选项：已核实的清单','理由：已核对时间']) assert.ok(text.includes(visible), visible);
+    assert.doesNotMatch(text, /fixture-(goal|progress|question|reason)|跨项目合成标记|无关选项的备注|正文不能随状态卡公开|过期问题|其他项目问题|其他执行问题|已解决问题|自动处理问题|其他事项审批/);
   }
+  assert.match(JSON.stringify(delivered.card),/https:\/\/workbench\.example\/#chat\?interaction=permitted/);
+  assert.doesNotMatch(JSON.stringify(delivered.card),/interaction=foreign|interaction=expired/);
+  await receive('/status',{...human('group-status'),chatId:'outside-group',chatType:'group',mentionedSelf:true});
+  assert.ok(!bot.instance.sent.some(([target,body])=>target==='outside-group' && body.includes('已核实的清单')));
   assert.deepEqual(before(), snapshots);
 
+  // Identical wording may come from a different question. A queued card must retain the exact target.
+  f.store.remove('interactions','permitted');
+  putCard('replacement','选择校对文件 token=fixture-question',{questions:[recommended]});
+  assert.throws(()=>delivered.beforeSend!(), /状态回执/);
+  assert.throws(()=>delivered.beforeTextFallback!(), /状态回执/);
+  f.store.remove('interactions','replacement');
+  putCard('permitted','选择校对文件 token=fixture-question',{questions:[recommended]});
   await receive('/main', human('back-main'));
   delivered.onSent('old-status');
   approvals.reject(ownApproval.id, ownApproval.version);

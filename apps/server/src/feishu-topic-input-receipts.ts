@@ -1,6 +1,7 @@
+import { executorInputReceipt } from '../../../packages/protocol/src/executor-input-receipt.ts';
 import { createHash } from 'node:crypto';
 import type { Store } from '../../../packages/plugin-sdk/src/index.ts';
-import type { Approval, Json } from '../../../packages/protocol/src/index.ts';
+import type { Approval } from '../../../packages/protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../../packages/protocol/src/bots.ts';
 import type { EffectRecord } from '../../../packages/core/src/effects.ts';
 
@@ -12,13 +13,6 @@ const messages = {
   unknown: '这条输入的送达结果未知。',
 };
 
-function ack(result?: Json) {
-  if (!result || typeof result !== 'object' || Array.isArray(result)) return 'unknown';
-  if (result.accepted === false || result.requested === false) return result.requested === true ? 'unknown' : 'unsent';
-  // executor.input returns requested:true only after both writing the text and pressing Enter.
-  return result.requested === true ? 'sent' : 'unknown';
-}
-
 function outcome(a: Approval, target: FeishuAgentInputTarget, effect?: EffectRecord): keyof typeof messages {
   if (!effect) return a.status === 'rejected' ? 'rejected' : a.status === 'failed' ? 'unsent' : 'unknown';
   if (effect.kind !== 'executor.input' || effect.target !== target.runId || effect.key !== 'approval:' + a.id + ':' + a.version
@@ -27,8 +21,8 @@ function outcome(a: Approval, target: FeishuAgentInputTarget, effect?: EffectRec
   if (effect.fingerprint !== fingerprint || a.status === 'rejected') return 'unknown';
   if (effect.status === 'failed') return 'unsent';
   if (effect.status !== 'confirmed') return 'unknown';
-  const confirmed = ack(effect.result);
-  if (a.status === 'completed' && ack(a.result) !== confirmed) return 'unknown';
+  const confirmed = executorInputReceipt(effect.result);
+  if (a.status === 'completed' && executorInputReceipt(a.result) !== confirmed) return 'unknown';
   return confirmed;
 }
 

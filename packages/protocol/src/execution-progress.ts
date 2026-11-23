@@ -9,5 +9,6 @@ export type ExecutionProgress = {
 };
 
 export interface RunBlocker {
+  questions?: {question: string; recommend: string; reason?: string}[];
   id: string; kind: string; title: string; version: number; createdAt: string; href: string;
 }

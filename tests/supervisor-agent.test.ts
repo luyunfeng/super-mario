@@ -389,3 +389,80 @@ test('计划到点复核实际进入提示词，主人开始验收后的迟到�
   assert.equal(await f.service.flush(),undefined);
   assert.deepEqual(f.service.reviews(),[]);
 });
+
+function waitingQuestion(t: TestContext) {
+  const f = fixture(t);
+  const card = { id:'question/1', version:2, kind:'question', title:'发布步骤', body:'先做哪项？', runId:'run',
+    handler:'user', status:'open', expiresAt:new Date(Date.now()+60000).toISOString(),
+    questions:[{question:'先做哪项？',recommend:'备份',options:[{label:'备份',description:'保留恢复点'},{label:'检查'}]}] };
+  const run = {id:'run',todoId:'todo',status:'running',executionMode:'interactive',executorId:'fixture',prompt:'准备草稿',output:''};
+  const todo = {id:'todo',title:'准备计划'};
+  const signalRow: SupervisionSignal = {...signal(JSON.stringify(['needs_you',['question',card.id],2]),'needs_you'),
+    todoId:'todo',questionCardId:card.id,questionVersion:card.version};
+  f.store.put('interactions',card.id,card);
+  f.store.put('runs',run.id,run);
+  f.store.put('todos',todo.id,todo);
+  f.store.put('runs','unrelated',{...run,id:'unrelated',prompt:'同待办其他执行的私密内容'});
+  f.add(signalRow);
+  return {...f,card,run,signalRow};
+}
+
+test('督办仅为真实的原问题提供已记录的选项、理由和原卡入口，摘要不重复通知', async t => {
+  const f=waitingQuestion(t);
+  const published:unknown[]=[];
+  const reviewer=createSupervisorAgent({store:f.store,events:f.events,signals:f.signals,agent:f.agent,publish:event=>published.push(event)});
+  t.after(()=>reviewer.close());
+  const result=await reviewer.flush();
+  assert.equal(result?.status,'suggestion');
+  assert.deepEqual(result?.runIds,['run']);
+  const prompt=f.calls[0]!.text;
+  const evidence=JSON.parse(prompt.split('\n').at(-1)!);
+  assert.deepEqual(evidence.question.questions,f.card.questions);
+  assert.equal(evidence.question.expiresAt,f.card.expiresAt);
+  assert.equal(evidence.question.body,f.card.body);
+  assert.equal(evidence.question.href,'#chat?interaction=question%2F1');
+  assert.doesNotMatch(prompt,/同待办其他执行的私密内容/);
+  assert.match(prompt,/不能凭推荐宣称执行者已收到/);
+  assert.match(prompt,/没有新决策依据，回复 SILENT/);
+  assert.deepEqual(published,[]);
+  assert.equal(f.events.since(0).filter(event=>event.type==='supervisor.review').length,1);
+  assert.deepEqual(f.store.get('interactions',f.card.id),f.card);
+  assert.equal(await reviewer.flush(),undefined);
+});
+
+test('已答、执行身份变化或已解决的信号在生成期间使摘要失效',async t=>{
+  for(const change of ['answered','session','resolved']) await t.test(change,async t=>{
+    const f=waitingQuestion(t);
+    f.respondWith(async()=>{
+      if(change==='answered') f.store.put('interactions',f.card.id,{...f.card,status:'answered'});
+      if(change==='session') f.store.put('runs',f.run.id,{...f.run,sessionId:'different'});
+      if(change==='resolved') f.add({...f.signalRow,resolvedAt:new Date().toISOString()},false);
+      return answer();
+    });
+    assert.equal(await f.service.flush(),undefined);
+    assert.equal(f.calls.length,1);
+    assert.deepEqual(f.service.reviews(),[]);
+    assert.equal(f.store.get('supervisor.processed',f.signalRow.id),undefined);
+  });
+});
+
+test('真实问题信号与执行、待办不符或只在事件中出现时不读取原文',async t=>{
+  for(const change of ['run','todo','only-event']) await t.test(change,async t=>{
+    const f=waitingQuestion(t);
+    if(change==='only-event') f.store.remove('supervision.signals',f.signalRow.id);
+    else f.add({...f.signalRow,...(change==='run'?{runId:'wrong'}:{todoId:'wrong'})});
+    assert.equal(await f.service.flush(),undefined);
+    assert.deepEqual(f.calls,[]);
+  });
+});
+
+test('原问题没有新决策依据时仅记录一次静默核验',async t=>{
+  const f=waitingQuestion(t);
+  f.respondWith(async()=>({...answer(),text:'SILENT: 已有原卡等待主人。'}));
+  assert.equal((await f.service.flush())?.status,'silent');
+  f.store.remove('supervisor.settings','lastReviewAt');
+  assert.equal(await f.service.flush(),undefined);
+  assert.equal(f.calls.length,1);
+  assert.equal(f.events.since(0).some(event=>event.type==='supervisor.review'),false);
+  assert.deepEqual(f.store.get('interactions',f.card.id),f.card);
+});

@@ -2980,6 +2980,9 @@ test('Web 和飞书按执行 ID 核对目标、最近观察与仍需用户决定
     assert.equal(row.progress.detail, '正在读取索引');
     assert.equal(row.status, 'running');
     assert.deepEqual(row.blockedBy.map((item: { title: string }) => item.title).sort(), ['取数口径', '补充输入']);
+    assert.deepEqual(row.blockedBy.find((item: {title:string})=>item.title==='取数口径').questions,
+      [{question:'用哪天的余额？',recommend:'周五',reason:'周末没有结算'}]);
+    assert.match(req.system,/不能据此声称执行者已收到答复/);
     assert.doesNotMatch(raw, /过期请求|其他项目请求|其他事项请求|其他执行请求|已经答复/);
     return { role: 'assistant', content: answer + (req.system.includes('本轮回复渠道是飞书') ? ' run-look' : row.webCitation) };
   }, options => {
@@ -2999,7 +3002,7 @@ test('Web 和飞书按执行 ID 核对目标、最近观察与仍需用户决定
     const card = { kind: 'question', handler: 'user', status: 'open', runId: run.id, projectId: project.id,
       version: 1, createdAt: observedAt, expiresAt: new Date(Date.now() + 600000).toISOString() };
     for (const [title, fields] of [
-      ['取数口径', {}], ['过期请求', { expiresAt: observedAt }], ['其他项目请求', { projectId: 'another-project' }],
+      ['取数口径', {questions:[{question:'用哪天的余额？',recommend:'周五',options:[{label:'周五',description:'周末没有结算'},{label:'周六'}]}]}], ['过期请求', { expiresAt: observedAt }], ['其他项目请求', { projectId: 'another-project' }],
       ['其他执行请求', { runId: 'another-run' }], ['已经答复', { status: 'answered' }],
     ] as const) store.put('interactions', title, { ...card, ...fields, id: title, title });
     const approval = server.app.approvals.propose({ kind: 'input', title: '补充输入', details: '', todoId: todo.id,

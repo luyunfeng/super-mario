@@ -6,7 +6,7 @@ import type { RunBlocker } from '../../protocol/src/execution-progress.ts';
 type ScopedRequest = { projectId?: unknown; todoId?: unknown; request: RunBlocker };
 
 /** Build the index only when a visible run needs it. Share one snapshot across a batch of runs. */
-export function readRunBlockers(store: Pick<Store, 'list'>, asOf?: number) {
+export function readRunBlockers(store: Pick<Store, 'list'>, asOf?: number, includeRecommendations = false) {
   let byRun: Map<string, ScopedRequest[]> | undefined;
   return (run: Run) => {
     if (!byRun) {
@@ -20,7 +20,11 @@ export function readRunBlockers(store: Pick<Store, 'list'>, asOf?: number) {
       for (const card of store.list<Card>('interactions')) {
         if (card.status !== 'open' || card.handler !== 'user' || (asOf !== undefined && !(Date.parse(card.expiresAt) > asOf))) continue;
         const { id, title, kind, createdAt, version } = card;
-        add(card.runId, card.projectId, undefined, { id, title, kind, createdAt, version, href: '#chat?interaction=' + encodeURIComponent(id) });
+        const questions = includeRecommendations && kind === 'question' ? card.questions?.flatMap(q => {
+          const option = q.options.find(item => item.label === q.recommend);
+          return option ? [{question:q.question, recommend:option.label, ...(option.description && {reason:option.description})}] : [];
+        }) : undefined;
+        add(card.runId, card.projectId, undefined, { id, title, kind, createdAt, version, ...(questions?.length && {questions}), href: '#chat?interaction=' + encodeURIComponent(id) });
       }
       for (const approval of store.list<Approval>('approvals').sort((a, b) => (b.updatedAt ?? b.createdAt ?? '').localeCompare(a.updatedAt ?? a.createdAt ?? ''))) {
         if (approval.status !== 'pending' || !approval.params) continue;

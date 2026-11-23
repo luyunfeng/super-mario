@@ -31,7 +31,7 @@ async function fixture(body: (page: Page) => Promise<void>) {
       const router = createRouter();
       const state: any = { runs: [], todos: [], projects: [], executors: [], approvals: [] };
       const pending: any[] = [], reads: string[] = [], writes: string[] = [];
-      const api: any = { token: () => '', get: (path: string) => {
+      const api: any = { draftOwner: () => 'test-owner', token: () => '', get: (path: string) => {
         reads.push(path);
         if (path === '/plans') return Promise.resolve([]);
         return new Promise((resolve, reject) => pending.push({ path, resolve, reject }));
@@ -112,12 +112,16 @@ test('等待你仅列真实阻塞入口；waiting 不表示已批准；迟到切
   await setRuns(page, [run('one', { progress: progress('waiting', { detail: '模型说：已批准' }) }), run('two')]);
   await go(page, 'one');
   await reply(page, 'one', { progress: progress('waiting'), blockedBy: [
-    { id: 'question', kind: 'question', title: '请确认工作目录', version: 1, createdAt: observedAt, href: '#chat?interaction=question' },
+    { id: 'question', kind: 'question', title: '请确认工作目录', version: 1, createdAt: observedAt, href: '#chat?interaction=question',
+      questions:[{question:'使用哪个目录？', recommend:'样例目录', reason:'已准备示例配置。'}, {question:'如何命名？',recommend:'按日期'}] },
     { id: 'permission', kind: 'permission', title: '允许写入吗', version: 2, createdAt: observedAt, href: '#chat' },
   ] });
   const blockers = page.locator('[data-run-blockers="one"]');
   await expect(blockers.getByRole('link')).toHaveCount(2);
   await expect(blockers.getByRole('link').first()).toHaveAttribute('href', '#chat?interaction=question');
+  const original = blockers.getByRole('listitem').first();
+  for (const text of ['使用哪个目录？','推荐选项：样例目录','理由：已准备示例配置。','推荐选项：按日期']) await expect(original).toContainText(text);
+  await expect(blockers.getByRole('listitem').last()).not.toContainText('推荐选项');
   await expect(blockers).not.toContainText('已批准');
   await page.evaluate(() => { const t = (window as any).progressTest; t.state.approvals = [{ id: 'new', status: 'pending' }]; t.update(); });
   await go(page, 'two');

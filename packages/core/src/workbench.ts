@@ -1,3 +1,4 @@
+import { executorInputReceipt } from '../../protocol/src/executor-input-receipt.ts';
 import { createQuestionRelease } from './question-release.ts';
 import { createLaterQuestions, type QuestionHost } from './later-questions.ts';
 import { questionEvidence } from './question-responses.ts';
@@ -400,7 +401,7 @@ export async function createWorkbench(config: AppConfig) {
       const scoped = pinChannelTask(input, channelTaskScope(source));
       return dispatch({ ...scoped, conversationId: source?.conversationId, sourceMessageId: source?.id,
         projectId: scoped.projectId ?? source?.projectId, todoId: scoped.todoId ?? source?.todoId }) as unknown as Json;
-    }, createTodo: registerChatTodo, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoDetail, todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRunScope: args => assistantRunScope(args), reviseRunScope: args => assistantRunScope(args,true), readRun: id => readRun(id), runObservations, inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => store.transaction(() => {
+    }, createTodo: registerChatTodo, listExecutors: () => executorInfo() as unknown as Json, status: id => hostStatus(id), todoDetail, todoHistory: args => todoHistory(requiredText(args.todoId, '待办标识'), optionalText(args.before, '历史位置')) as unknown as Json, readRunScope: args => assistantRunScope(args), reviseRunScope: args => assistantRunScope(args,true), readRun: id => readRun(id), runObservations: id => runObservations(id, Boolean(directQuestionAudience(currentAgentInput()))), inputRun: (id, text) => inputRun(id, text), cancelRun: id => cancel(id), propose: input => store.transaction(() => {
       const approval = approvals.propose(input as Parameters<typeof approvals.propose>[0]);
       const source = currentAgentInput();
       if (source && sourceThread(source)) store.put('approval.origins', approval.id, { conversationId: source.conversationId, sourceMessageId: source.id });
@@ -688,7 +689,11 @@ export async function createWorkbench(config: AppConfig) {
   }, async answer(card, text) {
     if (card.wait === false || card.byDefault) return laterQuestions.end(card.id);
     if (card.runId && ['question', 'permission'].includes(card.kind)) {
-      await inputRun(card.runId, text, `interaction:${card.id}`);
+      const receipt = executorInputReceipt(await inputRun(card.runId, text, `interaction:${card.id}`));
+      if (receipt !== 'sent') {
+        throw Object.assign(new Error(receipt === 'unsent' ? '执行者未接收这条答复' : '执行者未确认收到这条答复'),
+          {delivery:receipt === 'unsent' ? 'no' : 'unknown'});
+      }
     } else if (card.kind === 'question' && store.get<{inputId?:string}>('interaction-origins',card.id)?.inputId) {
       if (answeredInCurrentTurn.has(card.id)) return;
       const origin = store.get<{ inputId?: string; formAudience?:string }>('interaction-origins', card.id);
@@ -1936,11 +1941,11 @@ export async function createWorkbench(config: AppConfig) {
     const run = remoteRun(id);
     return machines!.call(run.machineId, 'executor.read', { sessionId: run.sessionId });
   }
-  function runObservations(id: string) {
+  function runObservations(id: string, includeRecommendations = true) {
     const run = store.get<Run>('runs', id);
     if (!run) throw new InputError('执行记录不存在', 404);
     return { runId: id, status: run.status, progress: executionProgress(run.progress) ?? null,
-      blockedBy: readRunBlockers(store, Date.now())(run) };
+      blockedBy: readRunBlockers(store, Date.now(), includeRecommendations)(run) };
   }
   async function inputRun(id: string, text: string, key: string = randomUUID(), pinned?: FeishuAgentInputTarget): Promise<Json> {
     if (closing) throw new InputError('服务正在关闭', 503);

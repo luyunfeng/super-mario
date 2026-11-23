@@ -1159,7 +1159,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const pluginRevision = app.store.get<string>('settings', 'feishu.status-plugin-revision');
     const agentRun = binding?.agentTarget && currentAgentRun(binding.agentTarget, bot);
     const agentStatus = !expired && agentRun ? selectedAgentStatus(app.store, agentRun, webBase) : undefined;
-    const fingerprint = digest([bot.id, bot.revision, paired, scope, binding ?? null, expired, enabled, pluginRevision, agentStatus?.text]);
+    const fingerprint = digest([bot.id, bot.revision, paired, scope, binding ?? null, expired, enabled, pluginRevision, agentStatus?.card]);
     const name = binding?.agentTarget && !expired ? '执行会话 · ' + binding.agentTarget.runId : project && !expired ? '项目工作会话 · ' + project.name : binding?.conversationThreadId ? '独立对话 · ' + bot.name : '机器人会话 · ' + bot.name;
     const error = expired ? '会话选择已过期或项目已归档，请在工作台重新选择。'
       : binding?.agentTarget && !agentRun ? '当前无法核实执行会话，请发送 /agents 重新选择。'
@@ -2980,6 +2980,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
             || owner(bot)?.senderId !== dashboard.owner.senderId) throw noDelivery('对话清单的配对记录已变化');
           checkEnvelope(entry, current(botId));
         };
+        if (stamp?.statusGrant?.binding?.agentTarget) context.beforeSend = context.beforeTextFallback;
       }
       if (context.presentation && !stamp?.progressMessageId && bot.scope.kind === 'global' && paired?.senderId && paired.chatId === target) {
         context.presentation.navigation = navigation(bot, paired, entry.id);

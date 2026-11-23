@@ -111,13 +111,30 @@ export function selectedAgentStatus(store: Pick<Store, 'list'>, run: Run, webBas
   if (progress) {
     lines.push('最近观察 · ' + [new Date(progress.observedAt).toISOString(), observations[progress.phase], line(progress.toolName), line(progress.detail, 180)].filter(Boolean).join(' · '));
   }
-  const pending = readRunBlockers(store, Date.now())(run)
+  const pending = readRunBlockers(store, Date.now(), true)(run)
     .sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0) || a.id.localeCompare(b.id));
   lines.push('待处理 · ' + pending.length + ' 项' + (pending.length > 5 ? '（仅显示最近 5 项）' : ''));
-  for (const item of pending.slice(0, 5)) lines.push('• ' + (types[item.kind] ?? '决定') + ' · ' + line(item.title, 120));
+  const base = cardWebBase(webBase);
+  const elements:Record<string,unknown>[] = [];
+  let section = [...lines];
+  for (const item of pending.slice(0,5)) {
+    const block = ['• ' + (types[item.kind] ?? '决定') + ' · ' + line(item.title,120)];
+    for (const q of item.questions ?? []) {
+      block.push(line(q.question,80), '推荐选项：' + line(q.recommend,60));
+      if (q.reason) block.push('理由：' + line(q.reason,100));
+    }
+    lines.push(...block);
+    section.push(...block);
+    if (item.questions?.length && base) {
+      elements.push({tag:'div',text:cardPlain(section.join('\n'))},
+        ...cardButtons([{label:'查看原问题卡',url:base+'#chat?interaction='+encodeURIComponent(item.id)}]));
+      section = [];
+    }
+  }
   const text = lines.join('\n');
-  const elements = [{ tag: 'div', text: cardPlain(text) }, ...cardButtons([
+  if (section.length) elements.push({tag:'div',text:cardPlain(section.join('\n'))});
+  elements.push(...cardButtons([
     { label: '查看执行', route: 'projects/' + encodeURIComponent(run.projectId || 'all') + '/runs/' + encodeURIComponent(run.id) },
-  ], cardWebBase(webBase))];
+  ], base));
   return { text, card: cardDocument('执行会话状态', elements) };
 }

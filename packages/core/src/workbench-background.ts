@@ -10,7 +10,7 @@ import type { createContributions, PluginHost } from './plugin-host.ts';
 import type { createProjectFollowUp } from './project-follow-up.ts';
 import type { createReplyTracking } from './reply-tracking.ts';
 import type { createStore } from './store.ts';
-import type { createSupervision } from './supervision.ts';
+import { supervisionSignalEvent, type createSupervision } from './supervision.ts';
 import type { createSupervisorAgent } from './supervisor-agent.ts';
 import type { createWebPresence } from './web-presence.ts';
 import type { Approval, CollectedReplyEvidence, FeishuBot, InboxThing, Json, Message, Run, Todo } from '../../protocol/src/index.ts';
@@ -119,19 +119,7 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
   // Reconcile old claimed reminders and open signals before the worker starts.
   store.transaction(() => {
     for (const signal of supervision.signals().filter(s => !s.resolvedAt)) {
-      background.publish({
-        type: 'supervision.signal',
-        typeVersion: 1,
-        sourceId: `signal:${signal.id}`,
-        data: {
-          id: signal.id,
-          kind: signal.kind,
-          text: signal.text,
-          ...(signal.runId ? { runId: signal.runId } : {}),
-          ...(signal.todoId ? { todoId: signal.todoId } : {}),
-        },
-        subject: { kind: signal.runId ? 'run' : 'todo', id: signal.runId || signal.todoId || signal.id },
-      });
+      background.publish(supervisionSignalEvent(signal));
       if (signal.kind === 'reminder' && signal.todoId) {
         const todo = store.get<Todo>('todos', signal.todoId);
         if (todo?.remindedAt && todo.reminderAt) {

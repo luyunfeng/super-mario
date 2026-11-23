@@ -1,8 +1,9 @@
+import type { Card } from './interactions.ts';
 import { planEstimateClock, runScopeClock } from './run-scope.ts';
 import { todoSections, todoDecisionIds } from './todo-sections.ts';
 import { buildWindowBrief } from './briefing.ts';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
-import type { Approval, AutomationSettings as ProtocolAutomationSettings, JsonObject, MachineInfo, Run, SupervisionSignal, Todo } from '../../protocol/src/index.ts';
+import type { Approval, AutomationSettings as ProtocolAutomationSettings, JsonObject, MachineInfo, Project, Run, SupervisionSignal, Todo } from '../../protocol/src/index.ts';
 
 // Keep compatibility until the shared protocol also exposes the estimate factor.
 type AutomationSettings = ProtocolAutomationSettings & { stalledFactorOfEstimate?: number };
@@ -41,6 +42,33 @@ export function estimateReviewDeadline(store: Store, run: Run) {
   }
   const clock = planEstimateClock(store,run);
   if (clock) return {id:JSON.stringify(['estimate_due',run.id,clock.version]), ...clock};
+}
+
+/** Re-read the owner question and its current scope before publishing or reviewing a signal. */
+export function waitingRunQuestion(store: Pick<Store,'get'>, cardId:string, now=Date.now()) {
+  const card=store.get<Card>('interactions',cardId);
+  if (!card || card.id!==cardId || card.kind!=='question' || card.status!=='open' || card.handler!=='user' ||
+      card.wait===false || !card.runId || !Number.isSafeInteger(card.version) || card.version<1 ||
+      !(Date.parse(card.expiresAt)>now)) return;
+  const run=store.get<Run>('runs',card.runId);
+  if (!run || run.id!==card.runId || run.status!=='running' || run.executionMode==='task' || run.projectId!==card.projectId ||
+      (card.executorId!==undefined && card.executorId!==run.executorId) || (card.cwd!==undefined && card.cwd!==run.cwd)) return;
+  if (run.projectId!==undefined) {
+    const project=store.get<Project>('projects',run.projectId);
+    if (!project || project.id!==run.projectId || project.archivedAt) return;
+  }
+  const todo=run.todoId===undefined ? undefined : store.get<Todo>('todos',run.todoId);
+  if (run.todoId!==undefined && (!todo || todo.id!==run.todoId || todo.projectId!==run.projectId || todo.completedAt)) return;
+  return {card,run,todo};
+}
+
+/** Startup reconciliation and live ticks must publish the same durable event. */
+export function supervisionSignalEvent(signal: SupervisionSignal): import('../../plugin-sdk/src/index.ts').EventInput {
+  const {id,kind,text,runId,todoId,questionCardId,questionVersion} = signal;
+  return {type:'supervision.signal', typeVersion:1, sourceId:'signal:'+id,
+    data:{id,kind,text,...(runId && {runId}),...(todoId && {todoId}),
+      ...(questionCardId && questionVersion !== undefined && {questionCardId,questionVersion})},
+    subject:{kind:runId ? 'run' : 'todo', id:runId || todoId || id}};
 }
 
 /** One scheduler per store. Notifications are local events, never external actions.
@@ -82,10 +110,15 @@ export function createSupervision({ store, events, enabled = () => true, now = (
     const timestamp = date.toISOString();
     const aged = (value: string, minutes: number) => date.getTime() - Date.parse(value) >= minutes * 60000;
     const desired = new Map<string, SupervisionSignal>();
-    function add(kind: SupervisionSignal['kind'], target: string, version: string | number,
-      text: string, reference: { runId?: string; todoId?: string } = {}) {
+    function add(kind: SupervisionSignal['kind'], target: string | ['question',string], version: string | number,
+      text: string, reference: { runId?: string; todoId?: string; questionCardId?:string; questionVersion?:number } = {}) {
       // JSON tuple encoding avoids collisions between ids containing separators.
       const id = JSON.stringify([kind, target, version]);
+      if (reference.questionCardId) {
+        // A card version already attributed to one scope cannot be rebound to another task.
+        const previous=store.get<SupervisionSignal>(signalsCollection,id);
+        if (previous && (previous.runId!==reference.runId || previous.todoId!==reference.todoId)) return;
+      }
       desired.set(id, { id, kind, text, ...reference, createdAt: timestamp });
     }
     for (const run of store.list<Run>('runs')) {
@@ -118,6 +151,17 @@ export function createSupervision({ store, events, enabled = () => true, now = (
     }
     const notifications: SupervisionSignal[] = [];
     store.transaction(() => {
+      for (const card of store.list<Card>('interactions')) {
+        if (card.kind!=='question' || !card.runId || card.handler!=='user' || card.status!=='open') continue;
+        // Time spent in a policy ladder before it handed the decision to the owner does not count.
+        const waitingSince=card.routingHistory?.at(-1)?.at ?? card.updatedAt ?? card.createdAt;
+        if (!aged(waitingSince,config.needsYouMinutes)) continue;
+        const evidence=waitingRunQuestion(store,card.id,date.getTime());
+        if (!evidence) continue;
+        const {run,todo}=evidence;
+        add('needs_you',['question',card.id],card.version,'执行中的提问正在等待你回答。',
+          {runId:run.id,...(todo && {todoId:todo.id}),questionCardId:card.id,questionVersion:card.version});
+      }
       for (const todo of store.list<Todo>('todos')) {
         if (!config.remindersEnabled || todo.completedAt || !todo.reminderAt || Date.parse(todo.reminderAt) > date.getTime()
           || !Number.isFinite(Date.parse(todo.reminderAt))) continue;
@@ -141,7 +185,7 @@ export function createSupervision({ store, events, enabled = () => true, now = (
           const { resolvedAt: _, ...open } = candidate;
           store.put(signalsCollection, id, open);
           notifications.push(open);
-          publish?.({ type: 'supervision.signal', typeVersion: 1, sourceId: `signal:${open.id}`, data: { id: open.id, kind: open.kind, text: open.text, ...(open.runId ? { runId: open.runId } : {}), ...(open.todoId ? { todoId: open.todoId } : {}) }, subject: { kind: open.runId ? 'run' : 'todo', id: open.runId || open.todoId || open.id } });
+          publish?.(supervisionSignalEvent(open));
         }
       }
       for (const previous of signals()) {
