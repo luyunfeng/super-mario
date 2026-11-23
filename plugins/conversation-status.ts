@@ -60,7 +60,7 @@ export function readConversationStatus(store: Pick<Store, 'list' | 'get'>, input
   else if (active.length || currentMessages.some(m => m.status === 'pending')) phase = 'working';
   else if (!latest) phase = 'no_records';
   else if (runs.some(run => run.status === 'unknown')) phase = 'unknown';
-  else if ('queueState' in latest && latest.queueState === 'cancelled') phase = 'idle';
+  else if ('queueState' in latest && (latest.queueState === 'cancelled' || latest.queueState === 'withdrawn')) phase = 'idle';
   else if (latest.status === 'failed') phase = 'failed';
   else if (latest.status === 'done' || latest.status === 'completed' || latest.status === 'cancelled') phase = 'idle';
   else phase = 'unknown';

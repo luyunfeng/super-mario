@@ -652,6 +652,9 @@ test('stop during SDK preflight is applied again after the run acquires an abort
 
 test('Web 排队取消仅作用于未开始的消息，顺序、迟到点击和取消重放可核对', async t=>{
   const f=await fixture(t,false),sdk=fakeSDK();
+  const {createStore}=await import('../packages/core/src/store.ts');
+  f.store=createStore(':memory:');
+  t.after(()=>f.store.close());
   let loaded!:()=>void;
   const gate=new Promise<void>(ok=>{loaded=ok;});
   const runtime=createAgentRuntime({...f,validateQueuedWebInput(input){if(input.text==='已移动')throw Error('原待办归属变化');}},async()=>{await gate;return sdk.load();});
@@ -663,6 +666,13 @@ test('Web 排队取消仅作用于未开始的消息，顺序、迟到点击和�
   assert.deepEqual(runtime.queuedWebInputs().map(m=>m.id),[second.id,third.id]);
   assert.deepEqual(runtime.cancelQueuedTurn(first.id),{outcome:'started'});
   assert.deepEqual(runtime.cancelQueuedTurn(internal.id),{outcome:'idle'});
+  // A failure while preparing the draft rolls back its receipts and keeps the queue slot.
+  assert.throws(()=>runtime.cancelQueuedTurn(second.id,()=>{
+    f.store.put('test.receipts',second.id,{prepared:true});
+    throw Error('附件原件缺失');
+  }),/附件原件缺失/);
+  assert.equal(f.store.get('test.receipts',second.id),undefined);
+  assert.deepEqual(runtime.queuedWebInputs().map(m=>m.id),[second.id,third.id]);
   assert.deepEqual(runtime.cancelQueuedTurn(second.id),{outcome:'cancelled'});
   assert.deepEqual(runtime.cancelQueuedTurn(second.id),{outcome:'cancelled'});
   assert.deepEqual(runtime.queuedWebInputs().map(m=>m.id),[third.id]);

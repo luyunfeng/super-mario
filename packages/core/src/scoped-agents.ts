@@ -144,7 +144,7 @@ export function createScopedAgents(options: Options) {
         throw Object.assign(new Error('项目排队消息已变化'),{status:409});
       entry.runtime.reorderQueuedInputs(expected,ordered);
     },
-    cancelQueuedTurn(conversationId:string,inputId:string):{outcome:'cancelled'|'started'|'idle'} {
+    cancelQueuedTurn(conversationId:string,inputId:string,beforeWithdraw?:()=>void):{outcome:'cancelled'|'started'|'idle'} {
       const input = options.store.get<Message>('messages',inputId);
       if (!input?.projectId || !input.directWebInput || input.role !== 'user' || input.replyTo || (input.origin && input.origin!=='user') ||
           input.conversationId!==conversationId || conversationId!=='project:'+input.projectId+':work' ||
@@ -152,8 +152,8 @@ export function createScopedAgents(options: Options) {
       const project=options.store.get<Project>('projects',input.projectId);
       if (!project || project.archivedAt) return {outcome:'idle'};
       const runtime=agents.get(conversationId)?.runtime;
-      if (runtime) return runtime.cancelQueuedTurn(inputId);
-      return {outcome:input.queueState==='cancelled' && input.status==='failed' && input.stoppedByUser ? 'cancelled' : 'idle'};
+      if (runtime) return runtime.cancelQueuedTurn(inputId,beforeWithdraw);
+      return {outcome:!beforeWithdraw && input.queueState==='cancelled' && input.status==='failed' && input.stoppedByUser ? 'cancelled' : 'idle'};
     },
     interruptTurn(conversationId: string, inputId: string) {
       const entry = agents.get(conversationId);

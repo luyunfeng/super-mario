@@ -147,6 +147,33 @@ export function createMessageImages(input) {
       }
       paint();
     },
+    prepareRestore(ctx,rows) {
+      if (!Array.isArray(rows) || rows.length>20) throw new Error('一条消息最多可附 20 张图片。');
+      if (!rows.length) return ()=>{};
+      const stamp=generation;
+      const check=()=>{
+        if (!ctx.owner || ctx.owner!==owner || !ctx.key || current!==JSON.stringify([owner,ctx.key]) ||
+            stamp!==generation || editor || busy || loading) throw new Error('原会话的图片草稿不可用。');
+      };
+      check();
+      const images=rows.map(({id,name,mime,data,bytes,sha256})=>{
+        if (!id || typeof id!=='string' || !name || typeof name!=='string' || !allowed.includes(mime) ||
+            !Number.isInteger(bytes) || bytes<=0 || bytes>byteLimit || typeof data!=='string' ||
+            data.length!==4*Math.ceil(bytes/3) || !/^[A-Za-z0-9+/]+={0,2}$/.test(data) ||
+            typeof sha256!=='string' || !/^[a-f0-9]{64}$/.test(sha256)) throw new Error('原消息图片数据无效。');
+        return {id,name,mime,data,bytes,sha256};
+      });
+      const append=existing=>{
+        const ids=new Set(existing.map(row=>row.id));
+        const combined=[...existing];
+        for (const row of images) if (!ids.has(row.id)) {ids.add(row.id);combined.push(row);}
+        if (combined.length>20) throw new Error('一条消息最多可附 20 张图片。');
+        if (combined.reduce((sum,row)=>sum+row.data.length,0)>requestLimit) throw new Error('图片合计超过 32 MiB，请先移除部分图片。');
+        return combined;
+      };
+      append(memory.get(current)||[]);
+      return ()=>{check();mutate(current,append,persist);};
+    },
     async editCopy(key,blob,original) {
       const stamp = generation;
       if (!key || current !== JSON.stringify([owner,key]) || busy || loading || editor) throw new Error('原会话的图片草稿不可用。');

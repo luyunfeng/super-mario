@@ -773,18 +773,21 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     }
   }
 
-  function cancelQueuedTurn(inputId:string):{outcome:'cancelled'|'started'|'idle'} {
+  function cancelQueuedTurn(inputId:string, beforeWithdraw?:()=>void):{outcome:'cancelled'|'started'|'idle'} {
     const turn = pendingTurns.get(inputId);
     let changed = false;
     const outcome = store.transaction(() => {
       const input = store.get<Message>('messages',inputId);
       if (!input || input.role !== 'user' || input.conversationId !== ownConversation ||
           !directWebSource(store,input) || options.canUseScope?.(input) === false) return 'idle';
-      if (input.queueState === 'cancelled' && input.status === 'failed' && input.stoppedByUser) return 'cancelled';
+      if (!beforeWithdraw && input.queueState === 'cancelled' && input.status === 'failed' && input.stoppedByUser) return 'cancelled';
       if (!turn || turn.stopped || input.status !== 'pending') return 'idle';
       if (input.queueState === 'running') return 'started';
       if (input.queueState !== 'queued') return 'idle';
-      store.put('messages',inputId,{...input,status:'failed',queueState:'cancelled',stoppedByUser:true} satisfies Message);
+      // Prepare the attachment receipts in the same transaction. If any original
+      // is unavailable, leave this turn in its current place in the queue.
+      beforeWithdraw?.();
+      store.put('messages',inputId,{...input,status:'failed',queueState:beforeWithdraw?'withdrawn':'cancelled',stoppedByUser:true} satisfies Message);
       changed = true;
       return 'cancelled';
     });
@@ -1281,7 +1284,11 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         await turn.finished;
       }
       const reply = store.list<Message>('messages').find(message => message.conversationId === ownConversation && message.role === 'assistant' && message.replyTo === accepted.id);
-      if (!reply && store.get<Message>('messages',accepted.id)?.queueState === 'cancelled') throw new Error('排队消息已取消，未开始处理。');
+      if (!reply) {
+        const queueState = store.get<Message>('messages',accepted.id)?.queueState;
+        if (queueState === 'withdrawn') throw new Error('排队消息已取回编辑，未开始处理。');
+        if (queueState === 'cancelled') throw new Error('排队消息已取消，未开始处理。');
+      }
       if (!reply || reply.status === 'pending') throw new Error('模型回答未能持久化');
       if (reply.status === 'failed') throw new Error(reply.text);
       return reply;

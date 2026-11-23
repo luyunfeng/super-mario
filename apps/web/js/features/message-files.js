@@ -27,7 +27,7 @@ export function createMessageFiles(api, store, input) {
   function paint() {
     button.disabled=!key || !!load;
     tray.replaceChildren(...(memory.get(key)||[]).map(row=>h('div',{class:'row row--wrap message-file-draft'},
-      h('span',null,row.name+' · '+size(row.blob.size)),h('span',{class:'small muted'},jobs.has(row.id)?'正在上传':usable(row)?'已上传':'待上传'),
+      h('span',null,row.name+' · '+size(row.bytes ?? row.blob?.size ?? 0)),h('span',{class:'small muted'},jobs.has(row.id)?'正在上传':usable(row)?'已上传':'待上传'),
       !jobs.has(row.id) && !usable(row) && Button({label:'重试上传',size:'sm',onClick:()=>upload(row)}),
       Button({label:'移除',ariaLabel:'移除文件 '+row.name,kind:'ghost',size:'sm',onClick:()=>{
         jobs.get(row.id)?.abort();
@@ -40,10 +40,19 @@ export function createMessageFiles(api, store, input) {
     const controller=new AbortController();
     jobs.set(row.id,controller);paint();
     try {
+      const valid=()=>stamp===generation && !controller.signal.aborted && owner===api.draftOwner() && active(store);
       const params=new URLSearchParams({...scope,name:row.name});
-      const receipt=await api('/chat-files/uploads?'+params,{method:'PUT',body:row.blob,headers:{'Content-Type':row.blob.type || 'application/octet-stream'},signal:controller.signal});
-      if(stamp!==generation || controller.signal.aborted || owner!==api.draftOwner()) return;
-      if(typeof receipt?.uploadId!=='string' || typeof receipt.sha256!=='string' || receipt.bytes!==row.blob.size) throw new Error('文件上传回执无效。');
+      let blob=row.blob;
+      if (!blob && row.sourceMessageId && Number.isInteger(row.sourceIndex)) {
+        blob=await api.blob(filePath({id:row.sourceMessageId,conversationId:scope.conversationId},row.sourceIndex),controller.signal);
+        if (!valid()) return;
+        if (blob.size!==row.bytes) throw new Error('原文件大小已变化。');
+      }
+      if (!blob) throw new Error('原文件不可用，请重新选择文件。');
+      const receipt=await api('/chat-files/uploads?'+params,{method:'PUT',body:blob,headers:{'Content-Type':row.mime || blob.type || 'application/octet-stream'},signal:controller.signal});
+      if(!valid()) return;
+      if(typeof receipt?.uploadId!=='string' || typeof receipt.sha256!=='string' || receipt.bytes!==blob.size ||
+          (row.sourceMessageId && (receipt.sha256!==row.sha256 || receipt.name!==row.name || receipt.mime!==row.mime))) throw new Error('文件上传回执无效。');
       const patch={uploadId:receipt.uploadId,uploadedAt:Date.now(),name:receipt.name,mime:receipt.mime,bytes:receipt.bytes,sha256:receipt.sha256};
       change(k,rows=>rows.map(r=>r.id===row.id ? {...r,...patch} : r),persist);
     } catch(e) { if(stamp===generation && !controller.signal.aborted) status(row.name+' 上传失败：'+e.message); }
@@ -81,6 +90,32 @@ export function createMessageFiles(api, store, input) {
       .catch(()=>{if(generation===stamp) status('文件草稿仅保留在当前页面。');})
       .finally(()=>{if(generation===stamp){load=undefined;paint();}});
     paint();
+  },prepareRestore(ctx,rows) {
+    if (!Array.isArray(rows) || rows.length>20) throw new Error('每条消息最多可附 20 个文件。');
+    if (!rows.length) return ()=>{};
+    const stamp=generation;
+    const check=()=>{
+      if (!ctx.owner || ctx.owner!==owner || owner!==api.draftOwner() || !ctx.key || key!==JSON.stringify([owner,ctx.key]) ||
+          ctx.conversation!==scope?.conversationId || ctx.projectId!==scope?.projectId || ctx.todoId!==scope?.todoId ||
+          !active(store) || stamp!==generation || load) throw new Error('原会话的文件草稿不可用。');
+    };
+    check();
+    const files=rows.map(({id,name,mime,bytes,sha256,uploadId,uploadedAt,sourceMessageId,sourceIndex})=>{
+      if (typeof id!=='string' || !id || typeof name!=='string' || !name || typeof mime!=='string' || !mime ||
+          !Number.isInteger(bytes) || bytes<0 || bytes>sizeLimit || typeof sha256!=='string' || !/^[a-f0-9]{64}$/.test(sha256) ||
+          typeof uploadId!=='string' || !uploadId || !Number.isFinite(uploadedAt) ||
+          typeof sourceMessageId!=='string' || !sourceMessageId || !Number.isInteger(sourceIndex) || sourceIndex<0 || sourceIndex>=20)
+        throw new Error('原消息文件信息无效。');
+      return {id,name,mime,bytes,sha256,uploadId,uploadedAt,sourceMessageId,sourceIndex};
+    });
+    const append=existing=>{
+      const combined=[...existing],ids=new Set(existing.map(row=>row.id));
+      for (const row of files) if (!ids.has(row.id)) {ids.add(row.id);combined.push(row);}
+      if (combined.length>20) throw new Error('每条消息最多可附 20 个文件。');
+      return combined;
+    };
+    append(memory.get(key)||[]);
+    return ()=>{check();change(key,append,durable);};
   },capture:()=>memory.get(key)||[],ready() {
     if(load || (memory.get(key)||[]).some(row=>!usable(row))) {paint();status('请先完成文件上传，或移除待上传文件。');return false;}
     return true;

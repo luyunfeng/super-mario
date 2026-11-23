@@ -23,7 +23,7 @@ const descriptions = {
   'saved-prompts':'管理可在对话输入框中用斜杠插入的常用提示词。',
   'message-favorites':'收藏工作台消息，查看快照或从备份恢复。',
   'conversation-outbox':'在原对话找回未确认的发件，逐条核对回执、重发或移除本地记录。',
-  'conversation-queue':'显示主对话和项目对话中等待处理的消息，开始前可单独取消排队。',
+  'conversation-queue':'显示主对话和项目对话中等待处理的消息，开始前可调序、取消或取回原文和附件继续编辑。',
   'conversation-retry':'在主对话和项目对话中，手动重试执行工具前失败的回复，沿用原消息及附件。',
   'conversation-files':'在主对话和项目工作对话附加文件，从原消息下载。每条最多 20 件，每件最多 200 MiB。',
   'conversation-images':'在 Web 和飞书对话发送、查看图片。停用后可继续发送文字，再次启用可恢复原图和已保存的图片草稿。',

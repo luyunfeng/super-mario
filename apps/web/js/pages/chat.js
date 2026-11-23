@@ -1,3 +1,4 @@
+import { createQueuedDraftEditor } from '../features/edit-queued.js';
 import { createMessageFiles, messageFiles } from '../features/message-files.js';
 import { conversationImagesActive, createMessageImages, messageImages } from '../features/message-images.js';
 import { createTurnRetry, turnRetryActive } from '../features/retry-turn.js';
@@ -79,7 +80,7 @@ export function createChatPage({ api, store, scope, router }) {
   const setup = h('div', { id: 'onboarding' });
   const runStrip = h('div', { id: 'run-strip', hidden: true });
   const messages = h('div', { class: 'msgs', id: 'messages', 'aria-live': 'polite' });
-  const queue = createMessageQueue(api,store,messages,id=>router.href('chat')+'?at='+encodeURIComponent(id));
+  const queue = createMessageQueue(api,store,messages,id=>router.href('chat')+'?at='+encodeURIComponent(id),item=>queuedEdit.action(store.view.snapshot?.messages?.find(m=>m.id===item.id) || item,true));
   const hero = h('div', { class: 'hero', hidden: true },
     h('h2', { class: 'hero__title' }, '今天想推进什么？'),
     h('p', { class: 'muted' }, '说出目标，Agent 会结合记忆安排下一步。'),
@@ -123,6 +124,8 @@ export function createChatPage({ api, store, scope, router }) {
     onStatus: message => { status.className = 'small composer__status'; status.textContent = message; } });
   send.before(submissions.button);
   form.prepend(submissions.panel);
+  const queuedEdit=createQueuedDraftEditor({api,store,input,pictures,files,context:submissionContext,
+    isEditing:()=>!edit.notice.hidden,isSending:key=>pending.has(key),persist:()=>composerContext().draftsEnabled});
   function submissionContext() {
     const { key, owner } = composerContext();
     const draft = input.value, captured = quotesEnabled ? quote.capture() : '';
@@ -153,6 +156,7 @@ export function createChatPage({ api, store, scope, router }) {
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
     const queueProject = scope.get();
+    queuedEdit.observe(key,nextOwner,router.current.page==='chat');
     queue.update(router.current.page==='chat' && key && '/messages/queue'+(queueProject?'?projectId='+encodeURIComponent(queueProject):''),'main');
     if (router.current.page !== 'chat') pictures.closeEditor();
     files.update(key,nextOwner,nextEnabled,{conversationId:'main',...(scope.get() && {projectId:scope.get()})});
@@ -317,7 +321,7 @@ export function createChatPage({ api, store, scope, router }) {
         ? pictures.editCopy.bind(null,composerContext().key) : undefined;
       return h('article', { class: 'msg msg--user', dataset: { id: message.id } },
         h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text), messageImages(api,store,message,imageDraft),messageFiles(api,store,message,store.view.snapshot?.messages,messages)),
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), stateLabel && ' · '+stateLabel, stopTurnButton(api,message,undefined,queueEnabled), mark, transcript.copyMessage(message, translation.displayedText), canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), stateLabel && ' · '+stateLabel, stopTurnButton(api,message,undefined,queueEnabled), queuedEdit.action(message), mark, transcript.copyMessage(message, translation.displayedText), canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
     }
     const personal = message.conversationId === 'main' && (!message.origin || message.origin === 'user');
     const label = personal ? assistantLabel : message.origin === 'result' ? '执行结果' : '主 Agent';

@@ -1,3 +1,4 @@
+import { createQueuedDraftEditor } from './edit-queued.js';
 import { createMessageFiles, messageFiles } from './message-files.js';
 import { conversationImagesActive, createMessageImages, messageImages } from './message-images.js';
 import { createTurnRetry, turnRetryActive } from './retry-turn.js';
@@ -44,7 +45,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     Button({ label: '重试读取对话', size: 'sm', onClick: load }));
   const progress = h('p', { class: 'muted small' });
   const messages = h('div', { class: 'project-conversation__messages', role: 'log', 'aria-label': '项目对话' });
-  const queue = createMessageQueue(api,store,messages,id=>router.href('projects',projectId,'workspace')+'?at='+encodeURIComponent(id)+(todoId?'&todo='+encodeURIComponent(todoId):''));
+  const queue = createMessageQueue(api,store,messages,id=>router.href('projects',projectId,'workspace')+'?at='+encodeURIComponent(id)+(todoId?'&todo='+encodeURIComponent(todoId):''),item=>queuedEdit.action(workspace?.messages?.find(m=>m.id===item.id) || item,true));
   const text = TextArea({ rows: 3, placeholder: '告诉我这个文件夹里要做什么，我们持续推进。', 'aria-label': '项目目标' });
   const retryTurn = createTurnRetry(api,store);
   const files = createMessageFiles(api,store,text);
@@ -81,6 +82,8 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     onStatus: message => { notices.set(draftKey, message); paint(); } });
   send.before(submissions.button);
   composer.prepend(submissions.panel);
+  const queuedEdit=createQueuedDraftEditor({api,store,input:text,pictures,files,context:submissionContext,
+    isEditing:()=>!edit.notice.hidden,isSending:key=>pending.has(key),persist:()=>composerContext().draftsEnabled});
   function submissionContext() {
     const { key, owner } = composerContext();
     const draft = text.value, captured = quotesEnabled ? quote.capture() : '';
@@ -109,6 +112,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   }
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
+    queuedEdit.observe(key,nextOwner,visible && router.current.page==='projects');
     queue.update(visible && router.current.page==='projects' && key && '/projects/'+encodeURIComponent(projectId)+'/messages/queue'+(todoId?'?todoId='+encodeURIComponent(todoId):''),`project:${projectId}:work`);
     if (!visible || router.current.page !== 'projects') pictures.closeEditor();
     files.update(key,nextOwner,nextEnabled,{conversationId:`project:${projectId}:work`,projectId,...(todoId && {todoId})});
@@ -203,7 +207,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
           statusText && h('span', { class: 'msg__meta' }, statusText),
           (!todoId || todoId === m.todoId) && retryTurn(m,rows,`project:${projectId}:work`,
             id=>router.href('projects',m.projectId,'workspace')+'?at='+encodeURIComponent(id)+(m.todoId?'&todo='+encodeURIComponent(m.todoId):'')),
-          h('span', null, stopTurnButton(api,m,projectId,queueEnabled), favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble, transcript.renderMessage), m.conversationId === `project:${projectId}:work` && readAloud.action(m, translation.displayedText), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
+          h('span', null, stopTurnButton(api,m,projectId,queueEnabled), queuedEdit.action(m), favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble, transcript.renderMessage), m.conversationId === `project:${projectId}:work` && readAloud.action(m, translation.displayedText), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
     }, m => JSON.stringify([prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, projectId, todoId, anchor, queueEnabled, retryEnabled, retried.has(m.id), m]));
     if (historyQuery && !focused && el.isConnected && router.current.page === 'projects' && router.current.parts[1] === 'workspace') {
       const row = anchor ? messages.querySelector('[data-id="' + CSS.escape(anchor) + '"]') : messages.firstElementChild;

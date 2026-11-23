@@ -1,4 +1,4 @@
-import { readChatFile, uploadChatFile, sweepChatFiles } from './chat-files.ts';
+import { issueMessageFileTickets, readChatFile, uploadChatFile, sweepChatFiles } from './chat-files.ts';
 import { readChatImage } from './chat-images.ts';
 import type { ChatFileInput, ChatImageInput } from '../../protocol/src/index.ts';
 import { executorInputReceipt } from '../../protocol/src/executor-input-receipt.ts';
@@ -1158,6 +1158,16 @@ export async function createWorkbench(config: AppConfig) {
     if (source.images?.length && !canReadChatImages(source)) throw new InputError('原图片读取权限已失效',403);
     if (source.files?.length && !canReadChatFiles(source)) throw new InputError('原文件读取权限已失效',403);
     return conversationId==='main' ? agent.retryFailedInput(source,failed) : scopedAgents.retryFailedInput(source,failed);
+  }
+  function queuedWebSource(conversationId:string,inputId:string) {
+    requireConversationQueue();
+    const input=store.get<Message>('messages',inputId);
+    if (!input || !input.directWebInput || input.conversationId!==conversationId || input.role!=='user' || input.replyTo ||
+        (input.origin && input.origin!=='user') || store.get('message.routes',inputId) ||
+        !(conversationId==='main' || (input.projectId && conversationId===`project:${input.projectId}:work`)))
+      throw new InputError('当前 Web 对话中未找到这条输入',404);
+    requireQueueScope(input.projectId,input.todoId);
+    return input;
   }
   function requireConversationQueue() {
     if (!plugins.list().some(p=>p.id==='conversation-queue' && p.status==='active'))
@@ -2763,14 +2773,28 @@ export async function createWorkbench(config: AppConfig) {
     modelConfigurationRevision: () => modelRevision,
     queuedMessages, reorderQueuedMessages,
     cancelQueuedTurn(conversationId:string,inputId:string) {
-      requireConversationQueue();
-      const input=store.get<Message>('messages',inputId);
-      if (!input || !input.directWebInput || input.conversationId!==conversationId || input.role!=='user' || input.replyTo ||
-          (input.origin && input.origin!=='user') || store.get('message.routes',inputId) ||
-          !(conversationId==='main' || (input.projectId && conversationId===`project:${input.projectId}:work`)))
-        throw new InputError('当前 Web 对话中未找到这条输入',404);
-      requireQueueScope(input.projectId,input.todoId);
+      queuedWebSource(conversationId,inputId);
       return conversationId==='main' ? agent.cancelQueuedTurn(inputId) : scopedAgents.cancelQueuedTurn(conversationId,inputId);
+    },
+    editQueuedTurn(conversationId:string,inputId:string,projectId?:string,todoId?:string) {
+      const source=queuedWebSource(conversationId,inputId);
+      if (source.projectId!==projectId || source.todoId!==todoId) throw new InputError('请在原项目和待办范围取回消息',409);
+      const restore=()=>{
+        if (source.images?.length && !canReadChatImages(source)) throw new InputError('原图片不可读取，请核对对话图片插件',503);
+        if (source.files?.length && !canReadChatFiles(source)) throw new InputError('原文件不可读取，请核对对话文件插件',503);
+        return {images:(source.images??[]).map((ref,index)=>({...ref,...readChatImage(store,source,index)})),
+          files:issueMessageFileTickets(store,config.dataDir,source)};
+      };
+      let restored:ReturnType<typeof restore>|undefined;
+      if (source.queueState==='withdrawn' && source.status==='failed' && source.stoppedByUser) {
+        restored=store.transaction(restore);
+      } else {
+        const beforeWithdraw=()=>{ restored=restore(); };
+        const result=conversationId==='main' ? agent.cancelQueuedTurn(inputId,beforeWithdraw)
+          : scopedAgents.cancelQueuedTurn(conversationId,inputId,beforeWithdraw);
+        if (result.outcome!=='cancelled' || !restored) throw new InputError('这条消息已开始处理或已离开队列',409);
+      }
+      return {input:store.get<Message>('messages',inputId)!,...restored};
     },
     async interruptTurn(conversationId: string, inputId: string) {
       return conversationId === 'main' ? agent.interruptTurn(inputId) : scopedAgents.interruptTurn(conversationId, inputId);

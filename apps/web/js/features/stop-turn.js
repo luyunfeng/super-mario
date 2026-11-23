@@ -7,6 +7,7 @@ export function turnQueueActive(store) {
 
 export function queueLabel(message, enabled) {
   if (!enabled || message.role!=='user' || !message.directWebInput) return '';
+  if (message.queueState==='withdrawn') return '已取回编辑';
   if (message.queueState==='cancelled') return '已取消排队';
   if (message.status!=='pending') return '';
   if (message.queueState==='queued') return '排队中';
@@ -19,7 +20,7 @@ export function stopTurnButton(api, message, projectId, queueEnabled=false) {
   const conversationId = projectId ? `project:${projectId}:work` : 'main';
   if (message.role !== 'user' || message.status !== 'pending' || message.conversationId !== conversationId) return null;
   const queueState = queueEnabled && message.directWebInput ? message.queueState : undefined;
-  if (queueState==='cancelled') return null;
+  if (queueState==='cancelled' || queueState==='withdrawn') return null;
   const cancel = queueState==='queued';
   const prefix = projectId ? '/projects/' + encodeURIComponent(projectId) : '';
   const notice = h('span', { role: 'status' });

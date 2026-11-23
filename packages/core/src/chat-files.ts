@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Store } from '../../plugin-sdk/src/index.ts';
@@ -68,8 +68,27 @@ export function readChatFile(store:Store,dir:string,message:Message,index:number
   const ref = store.get<Message>('messages',message.id)?.files?.[index];
   if (!ref || !sha.test(ref.sha256)) fail('当前消息中未找到该文件',404);
   const path = join(folder(dir),ref.sha256);
-  if (statSync(path,{throwIfNoEntry:false})?.size!==ref.bytes) fail('消息原文件缺失或大小不符',409);
+  const stat = lstatSync(path,{throwIfNoEntry:false});
+  if (!stat?.isFile() || stat.size!==ref.bytes) fail('消息原文件缺失或大小不符',409);
   return {path,ref};
+}
+
+// The caller authorizes the original message. Re-read its immutable references
+// rather than accepting filenames, hashes or scope from a draft.
+export function issueMessageFileTickets(store:Store,dir:string,message:Message) {
+  return store.transaction(()=>{
+    const original = store.get<Message>('messages',message.id);
+    if (!original || original.conversationId!==message.conversationId ||
+        original.projectId!==message.projectId || original.todoId!==message.todoId) fail('原消息范围已变化',409);
+    const {conversationId,projectId,todoId} = original;
+    const expires = Date.now()+day;
+    return (original.files??[]).map((_,index)=>{
+      const {ref} = readChatFile(store,dir,original,index);
+      const uploadId = randomUUID();
+      store.put(tickets,uploadId,{conversationId,projectId,todoId,uploadId,ref,expires} satisfies Ticket);
+      return {uploadId,...ref};
+    });
+  });
 }
 
 export function removeChatFileUploads(store:Store,conversationId:string) {

@@ -10,9 +10,9 @@ import {startServer} from '../apps/server/src/index.ts';
 import {createProjectDiscovery} from '../plugins/project-discovery.ts';
 import type {Message} from '../packages/protocol/src/index.ts';
 
-test('主对话与项目能在回复中排队，刷新后调序并取消一项；已开始的排队项拒绝迟到的取消', {timeout:60000},async t=>{
+test('主对话与项目能在回复中排队，刷新后调序、取消并取回编辑；已开始的排队项拒绝迟到的取消', {timeout:60000},async t=>{
   const dir=await mkdtemp(join(tmpdir(),'mario-queue-browser-')),token='fixture-queue',machineId='fixture-workspace';
-  const calls:string[]=[],held=new Map<string,ServerResponse>();
+  const calls:string[]=[],held=new Map<string,ServerResponse>(),editedPayloads=new Map<string,string>();
   const frame=(delta:object,finish_reason:string|null)=>'data: '+JSON.stringify({id:'fixture',model:'fixture',object:'chat.completion.chunk',
     choices:[{index:0,delta,finish_reason}]})+'\n\n';
   const finish=(res:ServerResponse)=>res.end(frame({},'stop')+'data: [DONE]\n\n');
@@ -20,10 +20,11 @@ test('主对话与项目能在回复中排队，刷新后调序并取消一项�
     if(req.method!=='POST'){res.writeHead(404).end();return;}
     let body='';for await(const part of req)body+=part;
     const payload=JSON.parse(body),user=payload.messages.findLast((m:{role:string})=>m.role==='user');
-    const tag=JSON.stringify(user?.content).match(/queue-(main|project|other)-(first|cancel|race|last)/)?.[0]??'unexpected';
+    const tag=JSON.stringify(user?.content).match(/queue-(main|project|other)-(first|cancel|race|last|edit-block|edit-original|edit-final|edit-drop)/)?.[0]??'unexpected';
+    if(tag.endsWith('-edit-final'))editedPayloads.set(tag,JSON.stringify(payload.messages.filter((m:{role:string})=>m.role==='user')));
     calls.push(tag);res.writeHead(200,{'content-type':'text/event-stream'});
     res.write(frame({role:'assistant',content:'合成答复 '+tag},null));
-    if(tag.endsWith('-first') || tag.endsWith('-race'))held.set(tag,res);
+    if(tag.endsWith('-first') || tag.endsWith('-race') || tag.endsWith('-edit-block'))held.set(tag,res);
     else finish(res);
   });
   await new Promise<void>(done=>model.listen(0,'127.0.0.1',done));const addr=model.address();assert.ok(addr && typeof addr==='object');
@@ -60,7 +61,7 @@ test('主对话与项目能在回复中排队，刷新后调序并取消一项�
     const checkQueue=async(expected:Message[])=>{
       const response=await page.request.get(endpoint+'/queue',{headers});
       assert.equal(response.status(),200);
-      assert.deepEqual(await response.json(),{items:expected.map(m=>({id:m.id,text:m.text,images:0,files:0}))});
+      assert.deepEqual(await response.json(),{items:expected.map(m=>({id:m.id,text:m.text,images:m.images?.length??0,files:m.files?.length??0}))});
     };
     const first=await sendInput('first');
     await expect.poll(()=>held.has(tag+'first')).toBe(true);
@@ -139,5 +140,74 @@ test('主对话与项目能在回复中排队，刷新后调序并取消一项�
       [first.id,race.id,last.id].includes(m.replyTo??'') && m.status==='done').length).toBe(3);
     assert.deepEqual(calls.filter(call=>call.startsWith(tag)),['first','last','race'].map(s=>tag+s));
     assert.deepEqual(stops,[]);
+
+    const blocker=await sendInput('edit-block');
+    await expect.poll(()=>held.has(tag+'edit-block')).toBe(true);
+    const composer=input.locator('xpath=ancestor::*[contains(@class,"composer") and .//input[@type="file" and @multiple]][1]');
+    const png=await page.evaluate(()=>document.createElement('canvas').toDataURL().split(',')[1]!);
+    await composer.getByLabel('选择图片').setInputFiles({name:'示例图片.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});
+    await composer.getByLabel('选择文件').setInputFiles({name:'合成附件.txt',mimeType:'text/plain',buffer:Buffer.from('原附件合成标记')});
+    await expect(composer.getByText('已上传',{exact:true})).toBeVisible();
+    const queued=await sendInput('edit-original'),removed=await sendInput('edit-drop');
+    const scopeData=scoped?{projectId:project.id}:{};
+    const edit=(m:Message,data:Record<string,unknown>=scopeData)=>page.request.post(endpoint+'/'+m.id+'/edit-queued',{headers,data});
+    assert.equal((await edit(blocker)).status(),409);
+    assert.equal((await page.request.post(url(removed),{headers,data:{}})).status(),200);
+    assert.equal((await edit(removed)).status(),409);
+    if (!scoped) {
+      assert.equal((await edit(queued,{projectId:project.id})).status(),409);
+      const filePlugin=server.url+'/api/v1/plugins/conversation-files';
+      assert.equal((await page.request.post(filePlugin,{headers,data:{enabled:false}})).status(),200);
+      assert.equal((await edit(queued)).status(),503);
+      assert.equal((await page.request.post(filePlugin,{headers,data:{enabled:true}})).status(),200);
+    }
+    await checkQueue([queued]);
+    await input.fill('已有未发草稿 '+tag);
+    await composer.getByLabel('选择文件').setInputFiles({name:'草稿保留.txt',mimeType:'text/plain',buffer:Buffer.from('已有草稿文件')});
+    await expect(composer.getByText('已上传',{exact:true})).toBeVisible();
+    await expect(summary).toHaveText('排队消息（1）');
+    if (!await overview.evaluate(el=>(el as HTMLDetailsElement).open)) await summary.click();
+    const editUrl=endpoint+'/'+queued.id+'/edit-queued';
+    const retrieval=page.waitForResponse(r=>r.url()===editUrl && r.request().method()==='POST');
+    await overview.getByRole('listitem').filter({hasText:queued.text}).getByRole('button',{name:'取回编辑'}).click();
+    const confirm=page.getByRole('dialog',{name:'追加到现有草稿'});
+    await confirm.getByRole('button',{name:'追加到草稿',exact:true}).click();
+    const retrieved=await retrieval;
+    assert.equal(retrieved.status(),200,await retrieved.text());
+    const draft=await retrieved.json();
+    assert.equal(draft.input.id,queued.id);
+    assert.equal(draft.images[0].data,png);assert.equal(draft.files[0].name,'合成附件.txt');
+    await checkQueue([]);
+    const repeated=await edit(queued);
+    assert.equal(repeated.status(),200,await repeated.text());
+    const restoredText='已有未发草稿 '+tag+'\n\n'+queued.text;
+    await expect(input).toHaveValue(restoredText);
+    await expect(composer.locator('.message-image-draft')).toHaveCount(1);
+    await expect(composer.locator('.message-file-draft')).toHaveCount(2);
+    await expect(composer).toContainText('草稿保留.txt');
+    await expect(composer).toContainText('合成附件.txt');
+    if (!scoped) {
+      await page.goto(server.url+'/#projects/'+project.id+'/workspace');
+      await expect(page.getByRole('textbox',{name:'项目目标'})).toHaveValue('');
+      await page.goto(server.url+'/#chat');
+      await page.locator('#message-form').getByLabel('项目范围').selectOption('');
+      await expect(input).toHaveValue(restoredText);
+      await expect(composer.locator('.message-image-draft')).toHaveCount(1);
+      await expect(composer.locator('.message-file-draft')).toHaveCount(2);
+    }
+    // Finish the active input before sending: retrieving from the queue alone must never start a model turn.
+    finish(held.get(tag+'edit-block')!);
+    await expect.poll(()=>server.app.store.list<Message>('messages').some(m=>m.replyTo===blocker.id && m.status==='done')).toBe(true);
+    assert.ok(!calls.includes(tag+'edit-original'));
+    const revised=await sendInput('edit-final');
+    assert.notEqual(revised.id,queued.id);
+    assert.equal(revised.images?.[0]?.sha256,queued.images?.[0]?.sha256);
+    assert.equal(revised.files?.find(f=>f.name==='合成附件.txt')?.sha256,queued.files?.[0]?.sha256);
+    assert.equal(revised.files?.length,2);
+    assert.ok(revised.images?.[0]?.sha256 && revised.files?.[0]?.sha256);
+    await expect.poll(()=>server.app.store.list<Message>('messages').some(m=>m.replyTo===revised.id && m.status==='done')).toBe(true);
+    assert.ok(editedPayloads.get(tag+'edit-final')?.includes(png));
+    assert.ok(!editedPayloads.get(tag+'edit-final')?.includes(tag+'edit-original'));
+    assert.deepEqual(calls.filter(call=>call.startsWith(tag+'edit-')), [tag+'edit-block',tag+'edit-final']);
   }
 });

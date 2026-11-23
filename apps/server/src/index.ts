@@ -872,13 +872,21 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (method==='POST') return json(res,200,app.reorderQueuedMessages(conversationId,project || filter,todoId,await body(req)));
           return json(res,200,app.queuedMessages(conversationId,project || filter,todoId));
         }
-        const stopMessage = path.match(/^\/api\/v1(?:\/projects\/([^/]+))?\/messages\/([^/]+)\/(stop|cancel-queued)$/);
+        const stopMessage = path.match(/^\/api\/v1(?:\/projects\/([^/]+))?\/messages\/([^/]+)\/(stop|cancel-queued|edit-queued)$/);
         if (stopMessage && method === 'POST') {
           const projectId = stopMessage[1] && decodeURIComponent(stopMessage[1]);
           if (projectId && !app.projects.list().some(p => p.id === projectId && !p.archivedAt))
             throw new InputError('项目不存在或已归档', 404);
           const conversationId = projectId ? `project:${projectId}:work` : 'main';
           const inputId = decodeURIComponent(stopMessage[2]!);
+          if (stopMessage[3]==='edit-queued') {
+            const input=await body(req);
+            if (Object.keys(input).some(key=>key!=='projectId' && key!=='todoId')) throw new InputError('取回编辑仅接受原草稿范围');
+            const draftProject=input.projectId===undefined ? projectId || undefined : requiredText(input.projectId,'项目标识');
+            const todoId=input.todoId===undefined ? undefined : requiredText(input.todoId,'待办标识');
+            if (projectId && projectId!==draftProject) throw new InputError('编辑框与消息项目不一致',409);
+            return json(res,200,app.editQueuedTurn(conversationId,inputId,draftProject,todoId));
+          }
           if (stopMessage[3]==='cancel-queued') return json(res,200,app.cancelQueuedTurn(conversationId,inputId));
           const message = app.store.get<Message>('messages',inputId);
           if (!message || message.role !== 'user' || message.conversationId !== conversationId)

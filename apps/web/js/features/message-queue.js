@@ -2,7 +2,7 @@ import { h, keyedList } from '../lib/dom.js';
 import { toast } from '../ui/overlay.js';
 import { turnQueueActive } from './stop-turn.js';
 
-export function createMessageQueue(api, store, messages, messageHref) {
+export function createMessageQueue(api, store, messages, messageHref, editAction) {
   const summary=h('summary',null,'排队消息');
   const list=h('ol');
   const notice=h('p',{role:'status',hidden:true});
@@ -23,7 +23,7 @@ export function createMessageQueue(api, store, messages, messageHref) {
     list.setAttribute('aria-busy',String(!!writing));
     Array.from(list.children).forEach((row,index)=>{
       row.draggable=!writing && rows.length>1;
-      for (const button of row.querySelectorAll('button')) {
+      for (const button of row.querySelectorAll('button[data-step]')) {
         const target=index+Number(button.dataset.step);
         button.setAttribute('aria-disabled',String(!!writing || target<0 || target>=rows.length));
       }
@@ -55,7 +55,7 @@ export function createMessageQueue(api, store, messages, messageHref) {
         void move(ids,item.id,ids.indexOf(item.id)+step);
       }},label);
       return h('li',{dataset:{queueId:item.id},'aria-keyshortcuts':'ArrowUp ArrowDown Home End',title:'可拖动调序，也可在本行按上下方向键、Home 或 End'},
-        h('div',{class:'message-queue-row'},link,h('div',{class:'message-queue-actions'},moveButton('上移',-1),moveButton('下移',1))));
+        h('div',{class:'message-queue-row'},link,h('div',{class:'message-queue-actions'},moveButton('上移',-1),moveButton('下移',1),editAction?.(item))));
     });
     updateControls();
     // keyedList moves DOM nodes. Preserve keyboard focus on the same item,
