@@ -3058,6 +3058,8 @@ test('Web 和飞书询问怎样开工时提供表单说明并保留当前执行�
     assert.match(req.system, /Web 输入审批写明答复将公开/);
     assert.match(req.system, /同一会话、同一轮次、同一输入的最终正文/);
     assert.match(req.system, /在 Web 确认完成后会在原话题发一条完成通知/);
+    assert.match(req.system, /原话题只会收到合并的决定数量/);
+    assert.match(req.system, /查看详情需要 Web 访问权限/);
     assert.match(req.system, /引用任务承接消息或预览发送 \/noreply 取消/);
     assert.match(req.system, /只询问操作方法时不要派发/);
     assert.match(req.system, /收到编号只说明已登记/);

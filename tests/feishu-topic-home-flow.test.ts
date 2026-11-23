@@ -74,6 +74,14 @@ test('外群 @/ai 在已登记主群开题并续答，主群可取消原群回�
   await emit('om_follow','oc_home','合成讨论结论乙',{threadId:'omt_home',rootId:root.id,parentId:root.id});
   await t.waitFor(() => assert.ok(sent.some(row => row.replyTo === 'om_follow' && row.thread)));
   assert.deepEqual((await todos()).map(row => row.id),[task.id]);
+  const decision = await fetch(host.url + '/api/v1/todos/' + task.id + '/decisions', {
+    method: 'POST', headers: {authorization: 'Bearer synthetic', 'content-type': 'application/json'},
+    body: JSON.stringify({text: '合成的私有决定正文', expectedProjectId: null}),
+  });
+  assert.ok(decision.ok);
+  await t.waitFor(() => assert.ok(sent.some(row => row.chat === 'oc_home' && row.replyTo === root.id && row.thread
+    && row.text.includes('待办新增 1 项决定'))), { timeout: 8000 });
+  assert.ok(sent.every(row => !row.text.includes('合成的私有决定正文')));
   await api('todos/' + task.id,{completed:true});
   const preview = await t.waitFor(() => {
     const row = sent.find(row => row.replyTo === root.id && row.text.includes('/noreply'));
