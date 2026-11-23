@@ -4,8 +4,26 @@ const service = 'release-source.releases';
 const bytesLimit = 2 * 1024 * 1024;
 
 type ReadCode = 'invalid_resource'|'not_found'|'rate_limited'|'forbidden'|'unavailable';
-function error(status: number, message: string, sourceReadCode: ReadCode = 'unavailable'): never {
-  throw Object.assign(new Error(message), {status, sourceReadCode});
+function error(status: number, message: string, sourceReadCode: ReadCode = 'unavailable', retryAfterSeconds?: number): never {
+  throw Object.assign(new Error(message), {status, sourceReadCode, ...(retryAfterSeconds !== undefined && {retryAfterSeconds})});
+}
+
+function rateLimitDelay(headers: Headers): number | undefined {
+  const now = Date.now();
+  const retry = headers.get('retry-after')?.trim() ?? '';
+  if (/^\d+$/.test(retry)) {
+    const seconds = Number(retry);
+    if (Number.isSafeInteger(seconds) && seconds > 0) return seconds;
+  } else {
+    // GitHub's HTTP-date uses IMF-fixdate. Round-trip the canonical form so that
+    // Date.parse's non-HTTP inputs and impossible calendar dates cannot cause a delay.
+    const at = Date.parse(retry);
+    if (at > now && new Date(at).toUTCString() === retry) return Math.ceil((at - now) / 1000);
+  }
+  const reset = headers.get('x-ratelimit-reset')?.trim() ?? '';
+  if (!/^\d+$/.test(reset)) return;
+  const at = new Date(Number(reset) * 1000).getTime();
+  if (at > now) return Math.ceil((at - now) / 1000);
 }
 
 function repository(input: Json) {
@@ -90,7 +108,7 @@ export function createReleaseSourceExtension(options: {fetch?: typeof fetch; tim
             await response.body?.cancel();
             if (response.status === 404) error(404, '找不到公开 GitHub 仓库，请核对 owner/repo。','not_found');
             if (response.status === 429 || (response.status === 403 && (response.headers.has('retry-after') || response.headers.get('x-ratelimit-remaining') === '0')))
-              error(429, 'GitHub API 已限流，请稍后再试。','rate_limited');
+              error(429, 'GitHub API 已限流，请稍后再试。','rate_limited',rateLimitDelay(response.headers));
             if (response.status === 403) error(403, 'GitHub 拒绝读取该仓库的版本。','forbidden');
             error(502, 'GitHub 读取版本失败，HTTP ' + response.status + '。');
           }

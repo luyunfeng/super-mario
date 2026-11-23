@@ -91,3 +91,35 @@ test('长发布说明按 Unicode 码点生成可投递的摘录', async t => {
   assert.equal(result.items[0].title,'🚀'.repeat(511)+'…');
   assert.equal(result.items[0].text,'🚀'.repeat(15999)+'…');
 });
+
+test('限流优先使用 Retry-After，其次使用尚未到期的 GitHub 重置时刻', async t => {
+  const now=Date.parse('2026-11-23T10:20:30.250Z');
+  t.mock.timers.enable({apis:['Date'],now});
+  let headers=new Headers();
+  const {read}=await fixture(t,async()=>new Response(null,{status:403,headers}));
+  const reset=String(Math.floor(now/1000)+75);
+  const futureDate=new Date(now+42000).toUTCString();
+  const cases: [Record<string,string>,number|undefined][]=[
+    [{'retry-after':'18','x-ratelimit-reset':reset},18],
+    [{'retry-after':futureDate,'x-ratelimit-reset':reset},42],
+    [{'x-ratelimit-reset':reset},75],
+    [{'retry-after':'0','x-ratelimit-reset':reset},75],
+    [{'retry-after':'invalid','x-ratelimit-reset':reset},75],
+    [{'retry-after':new Date(now-60000).toUTCString(),'x-ratelimit-reset':reset},75],
+    [{'retry-after':'1.5','x-ratelimit-reset':'12e3'},undefined],
+    [{'retry-after':'-1','x-ratelimit-reset':String(Math.floor(now/1000))},undefined],
+    [{'retry-after':'9007199254740993','x-ratelimit-reset':'9007199254740993'},undefined],
+    [{},undefined],
+  ];
+  for (const [values,seconds] of cases) {
+    headers=new Headers({'x-ratelimit-remaining':'0',...values});
+    await assert.rejects(read(),err=>{
+      assert.ok(err instanceof Error && 'sourceReadCode' in err && err.sourceReadCode==='rate_limited');
+      if (seconds===undefined) assert.ok(!Object.hasOwn(err,'retryAfterSeconds'));
+      else assert.ok('retryAfterSeconds' in err && err.retryAfterSeconds===seconds);
+      return true;
+    });
+  }
+  headers=new Headers({'x-ratelimit-remaining':'42','x-ratelimit-reset':reset});
+  await assert.rejects(read(),{status:403,sourceReadCode:'forbidden'});
+});

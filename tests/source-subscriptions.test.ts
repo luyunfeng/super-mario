@@ -80,14 +80,16 @@ test('整批校验条目、间隔和目的地；关闭时不再派送',async t=>
 
 test('限流等受控错误可诊断，通知回调读取的是已提交的状态',async t=>{
   const store=createStore(':memory:');t.after(()=>store.close());
+  t.mock.timers.enable({apis:['Date'],now:Date.now()});
   const visible:(string|undefined)[]=[];
   let code='rate_limited', result=[{...item,title:'😀'.repeat(512)}];
   const svc=createSourceSubscriptions({store,sources:()=>[source],read:async()=>{
     if(code) throw Object.assign(new Error('raw-secret'),{sourceReadCode:code});return result;
-  },deliver:()=>{},onChange(id){visible.push(store.get<{error?:string}>('source.subscriptions',id)?.error);}});
+  },deliver:()=>{},onChange(id){const row=store.get<{error?:string}>('source.subscriptions',id);if(row)visible.push(row.error);}});
   const row=svc.create(request);
   await assert.rejects(svc.pull(row.id,1),{status:429});
   assert.deepEqual(visible,[undefined,'来源服务已限流，请稍后再拉取。']);
+  t.mock.timers.tick(60000);
   code='not_found';await assert.rejects(svc.preview(request),{status:404});
   code='invalid_resource';await assert.rejects(svc.preview(request),{status:400});
   code='';await svc.pull(row.id,1);assert.equal(visible[2],undefined);

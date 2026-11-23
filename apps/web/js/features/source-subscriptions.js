@@ -10,6 +10,7 @@ import { openSubscriptionSettings } from './subscription-settings.js';
 const path = '/source-subscriptions';
 const destinations = {inbox:'收件箱', knowledge:'个人记忆'};
 const date = value => new Date(value).toLocaleString('zh-CN');
+const retryTime = value => h('time',{dateTime:value},new Date(value).toLocaleString('zh-CN',{timeZoneName:'short'}));
 
 export function openSourceSubscriptions({api,store,router,draftId}) {
   const owner = api.draftOwner();
@@ -94,6 +95,9 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
         h('div',{class:'small'},(sourceName ?? row.sourceId + '（连接器不可用）') + ' · ' + row.resource),
         h('div',{class:'small muted'},row.destinations.map(id => destinations[id]).join('、') + ' · 每 ' + row.intervalMinutes + ' 分钟'),
         row.lastRunAt && h('div',{class:'small'},'最近拉取 · ' + date(row.lastRunAt)),
+        Number.isFinite(Date.parse(row.retryAt)) && h('div',{class:'small'},
+          '来源限流，可再次读取的时间 · ',retryTime(row.retryAt),
+          row.enabled && h('p',{class:'muted small'},'等待期间，立即拉取可补投此前已收到的条目。')),
         row.enabled && row.nextRunAt && h('div',{class:'small'},'下次拉取 · ' + date(row.nextRunAt)),
         row.error && h('p',{class:'text-danger'},row.error),
         h('div',{class:'row row--wrap'},pull,Button({label:'编辑订阅',size:'sm',onClick:() => edit(row)}),
@@ -127,6 +131,7 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
       }
       if (active()) notice.textContent = (error.status === 409 ? '订阅已变化，请核对后再操作。' :
         mutation && !error.status ? '提交结果未确认，请先核对订阅。' : '') + error.message;
+      if (active() && error.retryAt) notice.append(' 可再次读取的时间 · ',retryTime(error.retryAt));
     }
     finally {busy = false; if (active()) {sync(); refreshIfNeeded();}}
   }

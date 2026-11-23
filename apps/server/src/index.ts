@@ -1017,7 +1017,11 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       res.writeHead(200, { 'content-type': `${contentType}; charset=utf-8`, 'x-content-type-options': 'nosniff' }); res.end(content);
     } catch (error) {
       const status = error && typeof error === 'object' && 'status' in error && typeof error.status === 'number' ? error.status : 500;
-      json(res, status, { error: error instanceof Error ? error.message : '请求失败' });
+      const retryAt = status===429 && error instanceof Error && 'retryAt' in error && typeof error.retryAt==='string'
+        ? Date.parse(error.retryAt) : NaN;
+      if (Number.isFinite(retryAt)) res.setHeader('Retry-After',String(Math.max(1,Math.ceil((retryAt-Date.now())/1000))));
+      json(res, status, { error: error instanceof Error ? error.message : '请求失败',
+        ...(Number.isFinite(retryAt) && {retryAt:new Date(retryAt).toISOString()}) });
     }
   });
   server.on('upgrade', (req, socket, head) => {

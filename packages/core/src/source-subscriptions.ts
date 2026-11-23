@@ -5,7 +5,7 @@ type Destination = 'inbox' | 'knowledge';
 export type SourceItem = {id:string; title:string; text:string; url?:string};
 type SubscriptionInput = {sourceId:string; resource:string; name:string; destinations:Destination[]; intervalMinutes:number};
 export interface SourceSubscription extends SubscriptionInput {
-  id:string; version:number; enabled:boolean; nextRunAt:string; lastRunAt?:string; error?:string;
+  id:string; version:number; enabled:boolean; nextRunAt:string; lastRunAt?:string; retryAt?:string; error?:string;
 }
 type Options = {
   store:Store;
@@ -29,7 +29,6 @@ function readerFailure(error:unknown):never {
   switch(code) {
     case 'invalid_resource': return failure('来源资源格式无效，请检查填写的资源标识。',400);
     case 'not_found': return failure('找不到来源资源，或资源未向当前连接开放。',404);
-    case 'rate_limited': return failure('来源服务已限流，请稍后再拉取。',429);
     case 'forbidden': return failure('当前连接没有读取来源资源的权限。',403);
     case 'unavailable': return failure('来源服务暂不可用。',503);
     default: return failure('读取订阅来源失败，请检查来源连接与权限。',502);
@@ -69,11 +68,56 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
     if(row.version!==version) failure('来源订阅已更新，请刷新。',409);
     return row;
   }
+  // All anonymous reads from the same connector use the same upstream quota.
+  const reads=new Map<string,Promise<void>>();
+  function connector(sourceId:string) {
+    const separator=sourceId.lastIndexOf('.');
+    return separator<0 ? sourceId : sourceId.slice(0,separator);
+  }
+  function retryTime(sourceId:string) {
+    const until=store.get<number>('source.connector-retry',connector(sourceId)) ?? 0;
+    return until>Date.now() ? until : 0;
+  }
+  function limited(until:number):never {
+    throw Object.assign(new Error('来源服务已限流，请稍后再拉取。'),{status:429,retryAt:new Date(until).toISOString()});
+  }
+  async function readConnector(sourceId:string,resource:string,controller:AbortController) {
+    const key=connector(sourceId);
+    // Recheck after every preceding read. Its response may have paused the whole connector.
+    if(reads.has(key)) {
+      const {signal}=controller;
+      signal.throwIfAborted();
+      let cancel!:()=>void;
+      const stopped=new Promise<never>((_,reject)=>{cancel=()=>reject(signal.reason);});
+      signal.addEventListener('abort',cancel,{once:true});
+      try {
+        while(reads.has(key)) await Promise.race([reads.get(key),stopped]);
+      } finally { signal.removeEventListener('abort',cancel); }
+    }
+    open(); controller.signal.throwIfAborted(); requireSource(sourceId);
+    const until=retryTime(sourceId);
+    if(until) limited(until);
+    let release!:()=>void;
+    reads.set(key,new Promise<void>(resolve=>{release=resolve;}));
+    try { return await read(sourceId,resource,controller.signal); }
+    catch(error) {
+      open(); controller.signal.throwIfAborted();
+      if(error && typeof error==='object' && 'sourceReadCode' in error && error.sourceReadCode==='rate_limited') {
+        const seconds='retryAfterSeconds' in error ? error.retryAfterSeconds : undefined;
+        const delay=typeof seconds==='number' && Number.isFinite(seconds) && seconds>0 ? Math.ceil(seconds*1000) : 60000;
+        const until=Date.now()+delay;
+        const deadline=Number.isFinite(new Date(until).valueOf()) ? until : Date.now()+60000;
+        store.put('source.connector-retry',key,deadline);
+        // A preview can encounter the limit before any subscription is polled.
+        onChange?.(sourceId);
+        limited(deadline);
+      }
+      readerFailure(error);
+    } finally { reads.delete(key);release(); }
+  }
   async function load(sourceId:string,resource:string,controller:AbortController) {
     requireSource(sourceId);
-    let result:SourceItem[];
-    try { result=await read(sourceId,resource,controller.signal); }
-    catch(error) { readerFailure(error); }
+    const result=await readConnector(sourceId,resource,controller);
     open();
     controller.signal.throwIfAborted();
     requireSource(sourceId);
@@ -91,8 +135,13 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
   }
   function list() {
     open();
-    return store.list<SourceSubscription>(rows).map(row=>row.enabled && !available(row.sourceId)
-      ? {...row,error:'来源插件已停用或不可用。'} : row);
+    return store.list<SourceSubscription>(rows).map(row=>{
+      if(row.enabled && !available(row.sourceId)) return {...row,error:'来源插件已停用或不可用。'};
+      const until=retryTime(row.sourceId);
+      if(!until) return row;
+      const retryAt=new Date(until).toISOString();
+      return {...row,retryAt,nextRunAt:Date.parse(row.nextRunAt)<until ? retryAt : row.nextRunAt};
+    });
   }
   async function preview(input:Record<string,unknown>, signal?:AbortSignal) {
     open();
@@ -187,6 +236,9 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
     const row=current(id,version);
     if(!row.enabled) failure('订阅已暂停。',409);
     if(running.has(id)) failure('订阅正在拉取。',409);
+    requireSource(row.sourceId);
+    const until=retryTime(row.sourceId);
+    if(until && !store.get(pending,id)) limited(until);
     const controller=new AbortController();running.set(id,controller);
     const ownedReceipts=receipts+'.'+id;
     function delivered(key:string) {
@@ -198,8 +250,8 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
       if(!active.enabled) failure('订阅已暂停。',409);
       requireSource(row.sourceId);
     }
-    function finish(error?:string) {
-      const next={...row,lastRunAt:new Date().toISOString(),nextRunAt:nextRun(row.intervalMinutes)};
+    function finish(error?:string,retryAt?:string) {
+      const next={...row,lastRunAt:new Date().toISOString(),nextRunAt:retryAt ?? nextRun(row.intervalMinutes)};
       if(error) next.error=error;else delete next.error;
       store.put(rows,id,next);
       return next;
@@ -251,7 +303,8 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
       return updated;
     } catch(error) {
       if(!closed && !controller.signal.aborted && get(id).version===version) {
-        finish(error instanceof Error && 'status' in error ? error.message : '来源订阅拉取失败。');
+        finish(error instanceof Error && 'status' in error ? error.message : '来源订阅拉取失败。',
+          error instanceof Error && 'retryAt' in error && typeof error.retryAt==='string' ? error.retryAt : undefined);
         onChange?.(id);
       }
       if(controller.signal.aborted) failure('订阅拉取已停止。',409);
@@ -262,7 +315,8 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
     if(closed) return;
     const now=Date.now();
     await Promise.allSettled(store.list<SourceSubscription>(rows).filter(row=>
-      row.enabled && !running.has(row.id) && Date.parse(row.nextRunAt)<=now).map(row=>pull(row.id,row.version)));
+      row.enabled && !running.has(row.id) && Date.parse(row.nextRunAt)<=now &&
+      (!retryTime(row.sourceId) || Boolean(store.get(pending,row.id)))).map(row=>pull(row.id,row.version)));
   }
   async function close() {
     closed=true;

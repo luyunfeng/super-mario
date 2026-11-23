@@ -145,3 +145,53 @@ test('主人从对话或草案清单核对、编辑并创建一次订阅', {time
   await expect(drawer.getByText(/已使用或过期/)).toBeVisible();
   await expect(drawer.getByLabel('订阅名称')).toHaveValue('');
 });
+
+test('限流后的订阅显示来源允许读取的时刻，主人仍可手动补投已收到的条目', {timeout:30_000},async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'mario-subscription-retry-'));
+  const server=await startServer({dataDir:dir,port:0,host:'127.0.0.1',token:'offline-delay',demo:true});
+  t.after(async()=>{await server.close();await rm(dir,{recursive:true,force:true});});
+  const service='rate-fixture.read';
+  let reads=0;
+  server.app.plugins.register({id:'rate-fixture',name:'合成限流来源',capabilities:['subscription.source'],
+    permissions:['contribute:connectors','service.provide:'+service],activate(context){
+      context.contribute('connectors','read',{kind:'subscription-source',name:'离线限流连接器',resourceLabel:'集合',service});
+      context.contribute('services','read',{name:service,version:1,readOnly:true,async handler(){
+        reads++;
+        throw Object.assign(new Error('synthetic rate limit'),{sourceReadCode:'rate_limited',retryAfterSeconds:120,status:429});
+      }});
+    }});
+  await server.app.plugins.setEnabled('rate-fixture',true);
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(()=>browser.close());
+  const page=await browser.newPage();
+  await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  await page.goto(server.url+'/#memory?token=offline-delay');
+  await page.getByRole('button',{name:'来源订阅',exact:true}).click();
+  const drawer=page.getByRole('dialog',{name:'来源订阅'});
+  await drawer.getByLabel('来源连接器').selectOption(service);
+  await drawer.getByLabel('集合').fill('local');
+  const limited=page.waitForResponse(res=>res.url().endsWith('/source-subscriptions/preview'));
+  await drawer.getByRole('button',{name:'预览来源'}).click();
+  const limitedResponse=await limited;
+  assert.equal(limitedResponse.status(),429);
+  const previewRetryAt=(await limitedResponse.json()).retryAt;
+  await expect(drawer.getByRole('status').locator('time')).toHaveAttribute('datetime',previewRetryAt);
+  assert.equal(server.app.subscriptions.service().list().length,0);
+  const subscription=server.app.subscriptions.service().create({sourceId:service,resource:'local',
+    name:'限流样本',destinations:['inbox'],intervalMinutes:60});
+  const row=page.getByRole('article',{name:'限流样本'});
+  await expect(row).toContainText('等待期间，立即拉取可补投此前已收到的条目');
+  const response=await page.request.get(server.url+'/api/v1/source-subscriptions',{
+    headers:{Authorization:'Bearer offline-delay'}});
+  const retryAt=(await response.json()).subscriptions.find((item:{id:string})=>item.id===subscription.id).retryAt;
+  assert.ok(Date.parse(retryAt)>Date.now());
+  await expect(row.locator('time')).toHaveAttribute('datetime',retryAt);
+  const localTime=await page.evaluate(time=>new Date(time).toLocaleString('zh-CN',{timeZoneName:'short'}),retryAt);
+  await expect(row.locator('time')).toHaveText(localTime);
+  server.app.store.put('source.subscription-pending',subscription.id,[{id:'cached-item',title:'补投合成样本',text:'合成正文'}]);
+  const pull=page.waitForResponse(res=>res.url().endsWith('/'+subscription.id+'/pull'));
+  await row.getByRole('button',{name:'立即拉取'}).click();await pull;
+  assert.equal(reads,1);
+  const inbox=await page.request.get(server.url+'/api/v1/inbox',{headers:{Authorization:'Bearer offline-delay'}});
+  assert.ok((await inbox.json()).some((item:{title:string})=>item.title==='补投合成样本'));
+});

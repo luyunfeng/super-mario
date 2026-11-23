@@ -13,7 +13,7 @@ test('来源订阅通过真实 HTTP 恢复分目的地投递，重启后保留�
   let server=await startServer(config);
   t.after(async()=>{try{await server.close();}finally{await rm(dir,{recursive:true,force:true});}});
   const endpoint='source-subscriptions',service='local-source.releases';
-  let reads=0, sensitiveReads=0;
+  let reads=0, sensitiveReads=0, throttled=false;
   const release={id:'synthetic-release-001',title:'本地版本一',text:'首个版本说明',url:'https://example.test/release/1'};
   const input={sourceId:service,name:'合成发布订阅',resource:'local/testing',intervalMinutes:60,destinations:['inbox','knowledge']};
   async function api<T>(path:string,method='GET',body?:object,status=200,authorized=true){
@@ -29,7 +29,9 @@ test('来源订阅通过真实 HTTP 恢复分目的地投递，重启后保留�
         ctx.contribute('connectors','fixture-unsafe',{kind:'subscription-source',name:'写服务',resourceLabel:'资源',service:'local-source.unsafe'});
         ctx.contribute('services','unsafe',{name:'local-source.unsafe',version:1,handler(){sensitiveReads++;return {items:[]};}});
         ctx.contribute('services','local-fixture-releases',{name:service,version:1,readOnly:true,async handler(raw){
-          assert.deepEqual(raw,{resource:input.resource});reads++;return {items:[release]};
+          assert.deepEqual(raw,{resource:input.resource});reads++;
+          if(throttled) throw Object.assign(new Error('private fixture detail'),{sourceReadCode:'rate_limited',retryAfterSeconds:180});
+          return {items:[release]};
         }});
       }});
     await toggle('local-source',true);
@@ -92,4 +94,14 @@ test('来源订阅通过真实 HTTP 恢复分目的地投递，重启后保留�
   assert.ok(!catalog.sources.some(x=>x.id===privateService));
   await api(endpoint+'/preview','POST',{...input,sourceId:privateService},503);
   assert.equal(sensitiveReads,0);
+
+  throttled=true;
+  const preview=await fetch(server.url+'/api/v1/'+endpoint+'/preview',{method:'POST',
+    headers:{authorization:'Bearer '+config.token,'content-type':'application/json'},body:JSON.stringify(input)});
+  assert.equal(preview.status,429);
+  assert.ok(Number(preview.headers.get('retry-after'))>0);
+  const wait=await preview.json();
+  assert.ok(Date.parse(wait.retryAt)>Date.now());
+  assert.doesNotMatch(wait.error,/private fixture/);
+  assert.equal((await api<{subscriptions:SourceSubscription[]}>(endpoint)).subscriptions[0]?.retryAt,wait.retryAt);
 });

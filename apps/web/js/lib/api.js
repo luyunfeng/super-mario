@@ -3,7 +3,11 @@
 const TOKEN_KEY = 'super-mario-token';
 
 export class ApiError extends Error {
-  constructor(message, status) { super(message); this.name = 'ApiError'; this.status = status; }
+  constructor(message, status, retryAt) {
+    super(message); this.name = 'ApiError'; this.status = status;
+    if (status === 429 && typeof retryAt === 'string' && Number.isFinite(Date.parse(retryAt)))
+      this.retryAt = new Date(retryAt).toISOString();
+  }
 }
 
 const TOKEN_LIFETIME = 30 * 24 * 60 * 60 * 1000;
@@ -131,7 +135,7 @@ export function createApi() {
     const data = response.status === 204 ? null : await response.json().catch(() => null);
     if (!response.ok) {
       if (response.status === 401 && current().owner === owner) onUnauthorized();
-      throw new ApiError(data?.error || `请求失败（${response.status}）`, response.status);
+      throw new ApiError(data?.error || `请求失败（${response.status}）`, response.status, data?.retryAt);
     }
     return data;
   }
