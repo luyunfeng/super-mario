@@ -48,9 +48,9 @@ test('从主对话和项目工作区导出完整 Markdown，并通过插件配�
       '[未知路径](#channels)', '[无效链接](javascript:void(0))', '[同源接口](' + server.url + '/api/v1/state)',
       '![不加载图片](https://docs.example.test/image.png)', '`' + sourceLink + '`'].join('\n') });
   const report = '## **核对结果** ##\n> 摘录\n\n### 原文依据\n' + passage;
-  const sampleCode = '# 示例标题\n> 示例原文\n```md\n' + tableText + '\n```';
+  const sampleCode = '# 示例标题\n  > 示例原文\n```md\n' + tableText + '\n```';
   put({ id: 'table-reply', conversationId: 'main', role: 'assistant', projectId: project.id,
-    text: report + '\n\n' + tableText + '\n\n````md\n' + sampleCode + '\n````' });
+    text: report + '\n\n' + tableText + '\n\n  ````md\n' + sampleCode.split('\n').map(line => '  ' + line).join('\n') + '\n  ````' });
   put({ id: 'main-reply', conversationId: 'main', role: 'assistant', text: mainText, projectId: project.id,
     progress: { phase: 'responding', observedAt: createdAt, detail: '内部详情标记' } });
   const projectTexts = Array.from({ length: 64 }, (_, index) => '项目甲历史消息-' + String(index + 1).padStart(3, '0'));

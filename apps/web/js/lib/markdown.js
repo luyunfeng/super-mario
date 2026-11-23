@@ -176,6 +176,7 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
   let olStart = 1;
   let codeFence = '';
   let codeLang = '';
+  let codeIndent = 0;
   let codeLines = [];
 
   function flushPara() {
@@ -205,7 +206,9 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
         codeLang = '';
         codeLines = [];
       } else {
-        codeLines.push(line);
+        let indent = 0;
+        while (indent < codeIndent && line[indent] === ' ') indent++;
+        codeLines.push(line.slice(indent));
       }
       continue;
     }
@@ -215,6 +218,7 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
       flushPara();
       flushLists();
       codeFence = fence[1];
+      codeIndent = line.indexOf(codeFence);
       codeLang = fence[2].trim().split(/\s+/)[0];
       codeLines = [];
       continue;
