@@ -456,6 +456,14 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
 
   // 计划：主 Agent 一次拆出的几项任务。待确认的计划在对话里等你决定，这里保留全部历史。
   function paintPlans() {
+    const runById = new Map((store.view.snapshot?.runs ?? []).map(run=>[run.id,run]));
+    function stepSummary(task,plan) {
+      const run = runById.get(task.runId);
+      const executor = run?.executorId ?? task.executorId;
+      const status = run ? runStatus[run.status]?.text ?? run.status : task.runId ? '已取得执行编号'
+        : task.error ? '派发待核对' : plan.status === 'pending' ? '待确认' : plan.status === 'rejected' ? '未派发' : '待核对派发记录';
+      return ' · 执行者：' + (executor ? executorName(executor) : '默认执行者') + ' · ' + status;
+    }
     const rows = plans.filter(plan => projectId === 'all' || plan.tasks.some(task => task.projectId === projectId));
     if (!rows.length) { plansBox.replaceChildren(); return; }
     plansBox.replaceChildren(Fold({ title: `计划 ${rows.length}`, open: plansBox.firstElementChild?.open, body: h('div', { class: 'stack' }, rows.map((plan) => {
@@ -464,6 +472,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
         h('div', { class: 'row row--between' }, h('strong', null, plan.title), Pill(text, tone)),
         h('ol', { class: 'plan__tasks' }, plan.tasks.map(task => h('li', null,
           task.runId ? h('a', { href: router.href('projects', projectId, 'runs', task.runId) }, task.prompt) : task.prompt,
+          h('span', {class:'item__meta'},stepSummary(task,plan)),
           Number.isFinite(task.expectMinutes) && h('span', { class: 'item__meta' },
             ' · 预计 ' + task.expectMinutes + ' 分钟' + (Object.hasOwn(ESTIMATE_SOURCES, task.estimateSource) ? '（' + ESTIMATE_SOURCES[task.estimateSource] + '）' : '')),
           task.estimateSource === 'learned' && task.estimateEvidence && h('span', {class:'item__meta'},

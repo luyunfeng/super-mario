@@ -30,7 +30,7 @@ test('待确认计划和执行历史按任务显示估时来源，旧计划保�
   await expect(legacy.getByRole('listitem').filter({hasText:'根据验收历史估算'})).toContainText('预计 19 分钟（历史估时）');
   await expect(legacy).toContainText('依据 7 个已验收样本');
   const old = legacy.getByRole('listitem').filter({hasText:'历史遗留任务'});
-  await expect(old).toHaveText('历史遗留任务 · 预计 33 分钟');
+  await expect(old).toHaveText('历史遗留任务 · 执行者：默认执行者 · 待确认 · 预计 33 分钟');
   const created = await page.request.post(new URL('/api/v1/plans',page.url()).href,{headers:{Authorization:'Bearer '+token},data:{
     title:'新提交的合成计划',tasks:[{...common,prompt:'由系统估时'},{...common,prompt:'提交时指定时长',expectMinutes:12}]
   }});
@@ -49,5 +49,6 @@ test('待确认计划和执行历史按任务显示估时来源，旧计划保�
   await page.goto(new URL('/#projects/'+project.id+'/runs',page.url()).href);
   if (!await box.locator('details').evaluate(el => (el as HTMLDetailsElement).open)) await box.locator('summary').click();
   await expect(current).toContainText('已拒绝');
+  await expect(current.getByRole('listitem').first()).toContainText('未派发');
   await expect(current.getByRole('listitem').last()).toContainText('预计 12 分钟（显式指定）');
 });
