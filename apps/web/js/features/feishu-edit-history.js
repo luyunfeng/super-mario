@@ -81,7 +81,9 @@ export function inboxEditHistory(api,store,row){
         h('p',{class:'mailbox-content'},version.text))) : h('p',{role:'status'},'没有保存的旧版本。'),
         result.truncated && h('p',{class:'small muted'},'仅显示部分旧版本。'));
     }catch(error){
-      if(current() && panel.open && !signal.aborted) replace(content,h('p',{role:'alert'},'无法读取编辑历史：'+error.message));
+      if(current() && panel.open && !signal.aborted) replace(content,
+        h('p',{role:'alert'},'无法读取编辑历史：'+error.message),
+        Button({label:'重新读取旧版本',onClick:load}));
     }
   }
   panel.addEventListener('toggle',()=>{if(panel.open)void load();else{read?.abort();replace(content);}});

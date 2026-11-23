@@ -53,7 +53,7 @@ test('主人设置个人采集编辑历史，按需查看旧正文，权限变�
   await toggle.click();await expect(drawer).not.toContainText(old);
   await toggle.click();await expect(drawer).toContainText('没有保存的旧版本');
   await toggle.click();await toggle.click();await expect(drawer.getByRole('alert')).toContainText('读取旧版本的权限已失效');
-  await toggle.click();await toggle.click();await expect(drawer).toContainText(old);
+  await drawer.getByRole('button',{name:'重新读取旧版本'}).click();await expect(drawer).toContainText(old);
   config={...config,source:'feishu:cli_fixture:ou_other',accountKey:'synthetic-b'};
   server.app.events.publish('feishu.edit-history.changed',{accountChanged:true});
   await expect(toggle).toBeHidden();await expect(drawer).not.toContainText(old);assert.equal(oldReads,4);
