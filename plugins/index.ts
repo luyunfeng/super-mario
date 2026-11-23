@@ -879,4 +879,5 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
   ];
 }
 
+export {feishuMessageReactionsExtension,type FeishuReactionReader} from './feishu-message-reactions.ts';
 export {feishuChatPinsExtension,type FeishuPinReader,type FeishuPinOriginalReader,type FeishuPinTopicReader} from './feishu-chat-pins.ts';

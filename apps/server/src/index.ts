@@ -612,24 +612,28 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           }
         }
         const pinRoute=path.match(/^\/api\/v1\/inbox\/([^/]+)\/pins(?:\/([^/]+)\/(original|topic))?$/);
-        if(pinRoute && (method==='GET' || method==='POST')) {
-          const id=decodeURIComponent(pinRoute[1]!);
+        const reactionRoute=path.match(/^\/api\/v1\/inbox\/([^/]+)\/reactions$/);
+        const messageRoute=pinRoute??reactionRoute;
+        if(messageRoute && (method==='GET' || method==='POST')) {
+          const id=decodeURIComponent(messageRoute[1]!);
+          const service=reactionRoute?gateway.reactions:gateway.pins;
           const controller=new AbortController(),abort=()=>controller.abort();
           res.once('close',abort);
           try {
-            if(pinRoute[2]){
+            if(pinRoute?.[2]){
               if(method!=='GET') throw new InputError('原消息仅支持读取',405);
               if(pinRoute[3]==='topic') return json(res,200,await gateway.pins.topic(id,decodeURIComponent(pinRoute[2]),url.searchParams.get('accountKey'),url.searchParams.get('cursor')??undefined,controller.signal));
               return json(res,200,await gateway.pins.locate(id,decodeURIComponent(pinRoute[2]),url.searchParams.get('accountKey'),controller.signal));
             }
-            if(method==='GET') return json(res,200,await gateway.pins.list(id,url.searchParams.get('cursor')??undefined,controller.signal));
-            if(req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json') throw new InputError('置顶操作需要 JSON 请求',415);
-            return json(res,200,await gateway.pins.write(id,await body(req,8192),controller.signal));
+            if(method==='GET') return json(res,200,await service.list(id,url.searchParams.get('cursor')??undefined,controller.signal));
+            if(req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json') throw new InputError('消息操作需要 JSON 请求',415);
+            return json(res,200,await service.write(id,await body(req,8192),controller.signal));
           }catch(error){
             if(res.destroyed) return;
             if(error && typeof error==='object' && 'delivery' in error) {
               const unknown=error.delivery==='unknown';
-              return json(res,unknown?502:409,{error:error instanceof Error?error.message:'飞书置顶操作未执行',code:unknown?'PIN_DELIVERY_UNKNOWN':'PIN_NOT_SENT'});
+              const prefix=reactionRoute?'REACTION':'PIN';
+              return json(res,unknown?502:409,{error:error instanceof Error?error.message:'飞书操作未执行',code:prefix+(unknown?'_DELIVERY_UNKNOWN':'_NOT_SENT')});
             }
             throw error;
           }finally {res.off('close',abort);}

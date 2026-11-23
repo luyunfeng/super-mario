@@ -13,6 +13,8 @@ import type { FeishuRegistrationProvider } from '../../../plugins/feishu-registr
 import type { AppConfig, Json } from '../../../packages/protocol/src/index.ts';
 import { createFeishuController } from './feishu.ts';
 import {inboxItemId} from '../../../packages/core/src/inbox.ts';
+import {createPersonalReactions} from '../../../plugins/feishu-personal-reactions.ts';
+import {createInboxReactions} from './feishu-inbox-reactions.ts';
 import {createInboxPins} from './feishu-inbox-pins.ts';
 import {createPersonalPins} from '../../../plugins/feishu-personal-pins.ts';
 import {createFeishuEditHistory} from '../../../plugins/feishu-edit-history.ts';
@@ -30,6 +32,7 @@ export type FeishuGatewayDependencies = {
   commandGroupPlatform?: CommandGroupPlatform;
   registrationProvider?: FeishuRegistrationProvider;
   personalProvider?: PersonalProvider;
+  personalReactions?:ReturnType<typeof createPersonalReactions>;
   personalPins?:ReturnType<typeof createPersonalPins>;
 };
 
@@ -117,10 +120,13 @@ export function createFeishuGateway(
     return history.read(state.accountKey,chatId,messageId);
   }
   app.setFeishuEditHistoryReader(readEditHistory);
-  const pins=createInboxPins(app,dependencies.personalPins??createPersonalPins(),()=>{
+  function currentPersonalActor() {
     const account=personal.sourceAccount();
     return account?{account:{...account,name:personal.status().account?.name??''},key:accountKey(account),generation:personalGeneration}:undefined;
-  });
+  }
+  const pins=createInboxPins(app,dependencies.personalPins??createPersonalPins(),currentPersonalActor);
+  const reactions=createInboxReactions(app,dependencies.personalReactions??createPersonalReactions(),currentPersonalActor);
+  app.setFeishuReactionReader(reactions.list);
   app.setFeishuPinReader(pins.list);
   app.setFeishuPinOriginalReader(pins.readListedOriginal);
   app.setFeishuPinTopicReader(pins.readListedTopic);
@@ -259,5 +265,5 @@ export function createFeishuGateway(
   );
   app.setFeishuStatus(() => ({ ...feishu.status(), reason: feishu.status().reason ?? '' }));
 
-  return { feishu, personal, pins, currentHistory, configureHistory, readEditHistory, personalAi, personalAiView, configurePersonalAi, personalView, bots, registrations, registrationView, proposeMail, commandGroup };
+  return { feishu, personal, pins, reactions, currentHistory, configureHistory, readEditHistory, personalAi, personalAiView, configurePersonalAi, personalView, bots, registrations, registrationView, proposeMail, commandGroup };
 }

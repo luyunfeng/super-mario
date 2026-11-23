@@ -88,7 +88,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput, currentAgentReplyId, type OfficeFileOrigin } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage, readNativeShareMessages } from './native-conversation-export.ts';
-import { feishuChatPinsExtension, type FeishuPinReader, type FeishuPinOriginalReader, type FeishuPinTopicReader, feishuEditHistoryExtension, type FeishuHistoryReader, createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, createConversationSharing, createWorkspaceBoard, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, searchKnowledgeCommentPeople, verifyKnowledgeCommentActor, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
+import { feishuMessageReactionsExtension, type FeishuReactionReader, feishuChatPinsExtension, type FeishuPinReader, type FeishuPinOriginalReader, type FeishuPinTopicReader, feishuEditHistoryExtension, type FeishuHistoryReader, createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, createConversationSharing, createWorkspaceBoard, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, searchKnowledgeCommentPeople, verifyKnowledgeCommentActor, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
@@ -165,6 +165,7 @@ export async function createWorkbench(config: AppConfig) {
   let mailboxProposer: ((input: Record<string, unknown>) => Json) | undefined;
   let feishuPinTopicReader: FeishuPinTopicReader | undefined;
   let feishuPinOriginalReader: FeishuPinOriginalReader | undefined;
+  let feishuReactionReader: FeishuReactionReader | undefined;
   let feishuPinReader: FeishuPinReader | undefined;
   let feishuHistoryReader: FeishuHistoryReader | undefined;
   let groupReadRecords: ((id: string, before?: string, sourceId?: string, recordId?: string) => GroupReadPage) | undefined;
@@ -484,7 +485,7 @@ export async function createWorkbench(config: AppConfig) {
     const item=store.get<InboxItem>('inbox',id);
     if(!item || excludesPersonalGroupFromBrief(item)) throw new InputError('没有可读取的飞书收件',404);
   }
-  async function ownerPinRead<T>(id:string,read:()=>Promise<T>|undefined) {
+  async function ownerFeishuRead<T>(id:string,read:()=>Promise<T>|undefined) {
     assertOwnerFeishuInbox(id);
     const pending=read();
     if(!pending) throw new InputError('个人飞书服务未连接',503);
@@ -492,10 +493,12 @@ export async function createWorkbench(config: AppConfig) {
     assertOwnerFeishuInbox(id);
     return result;
   }
+  plugins.register(feishuMessageReactionsExtension((id,cursor,signal)=>
+    ownerFeishuRead(id,()=>feishuReactionReader?.(id,cursor,signal))));
   plugins.register(feishuChatPinsExtension(
-    (id,cursor,signal)=>ownerPinRead(id,()=>feishuPinReader?.(id,cursor,signal)),
-    (id,messageId,ref,signal)=>ownerPinRead(id,()=>feishuPinOriginalReader?.(id,messageId,ref,signal)),
-    (id,messageId,ref,cursor,signal)=>ownerPinRead(id,()=>feishuPinTopicReader?.(id,messageId,ref,cursor,signal)),
+    (id,cursor,signal)=>ownerFeishuRead(id,()=>feishuPinReader?.(id,cursor,signal)),
+    (id,messageId,ref,signal)=>ownerFeishuRead(id,()=>feishuPinOriginalReader?.(id,messageId,ref,signal)),
+    (id,messageId,ref,cursor,signal)=>ownerFeishuRead(id,()=>feishuPinTopicReader?.(id,messageId,ref,cursor,signal)),
   ));
   plugins.register(feishuEditHistoryExtension(id=>{
     assertOwnerFeishuInbox(id);
@@ -2993,6 +2996,7 @@ export async function createWorkbench(config: AppConfig) {
     setBotsStatus(status: () => Json) { botsStatus = status; },
     setFeishuPinTopicReader(handler:FeishuPinTopicReader) { feishuPinTopicReader=handler; },
     setFeishuPinOriginalReader(handler:FeishuPinOriginalReader) { feishuPinOriginalReader=handler; },
+    setFeishuReactionReader(handler:FeishuReactionReader) { feishuReactionReader=handler; },
     setFeishuPinReader(handler:FeishuPinReader) { feishuPinReader=handler; },
     setFeishuEditHistoryReader(handler:FeishuHistoryReader) { feishuHistoryReader=handler; },
     setGroupReadRecords(handler: NonNullable<typeof groupReadRecords>) { groupReadRecords = handler; },

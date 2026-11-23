@@ -4115,8 +4115,14 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
         assert.ok(!req.tools.includes('inbox_chat_pins'));
         assert.ok(!req.tools.includes('inbox_pin_original'));
         assert.ok(!req.tools.includes('inbox_pin_topic'));
+        assert.ok(!req.tools.includes('inbox_message_reactions'));
         assert.doesNotMatch(req.system,/优先用 inbox_tree/);
         return call('inbox_list',{query:'合成中心'},'restricted-list');
+      }
+      if(JSON.stringify(req.content).includes('表情回应')){
+        assert.ok(req.tools.includes('inbox_message_reactions'));
+        assert.match(req.system,/表情不能证明同意、审批或完成/);
+        return call('inbox_message_reactions',{id:center},'reactions-first');
       }
       if(JSON.stringify(req.content).includes('置顶消息')){
         assert.match(req.system,/读取可能在飞书侧标记已读/);
@@ -4141,6 +4147,16 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
     if(req.callId==='pins'){
       assert.deepEqual(result,{pins:[{messageId:'om_pinned',originalRef:'synthetic-ref'}],nextCursor:null});
       return call('inbox_pin_original',{id:center,messageId:result.pins[0].messageId,originalRef:result.pins[0].originalRef},'pin-source');
+    }
+    if(req.callId==='reactions-first'){
+      assert.equal(result.items[0].mine,true);
+      assert.equal(result.accountKey,undefined);
+      return call('inbox_message_reactions',{id:center,cursor:result.nextCursor},'reactions-next');
+    }
+    if(req.callId==='reactions-next'){
+      assert.equal(result.items[0].operatorType,'app');
+      assert.equal(result.nextCursor,null);
+      return {role:'assistant',content:'这条消息有两个表情回应，其中一个来自你，另一个来自应用。'};
     }
     if(req.callId==='pin-source'){
       assert.deepEqual(result,{messageId:'om_pinned',deleted:false,text:'合成置顶正文',threadId:'omt_fixture',textTruncated:false});
@@ -4229,6 +4245,18 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
     assert.equal(await ask(pinQuestion),'置顶正文属于合成议题，另有一条回复已撤回。');
     await adapter.onMessage(pinQuestion,{...owner,messageId:'pins-read'});
     await t.waitFor(()=>assert.ok(sent.includes('置顶正文属于合成议题，另有一条回复已撤回。')));
+    server.app.setFeishuReactionReader(async(id,cursor,signal)=>{
+      assert.equal(id,center);signal.throwIfAborted();
+      const first=cursor===undefined;
+      if(!first) assert.equal(cursor,'synthetic-page-2');
+      return {accountKey:'synthetic-binding',items:[{emoji:'OK',operatorId:first?'ou_owner':'cli_app',reactionId:first?'one':'two',
+        operatorType:first?'user':'app',mine:first}],nextCursor:first?'synthetic-page-2':null};
+    });
+    const reactionQuestion='这条飞书收件有多少表情回应？编号 '+center;
+    const reactionAnswer='这条消息有两个表情回应，其中一个来自你，另一个来自应用。';
+    assert.equal(await ask(reactionQuestion),reactionAnswer);
+    await adapter.onMessage(reactionQuestion,{...owner,messageId:'reactions-query'});
+    await t.waitFor(()=>assert.ok(sent.includes(reactionAnswer)));
     const editQuestion='请核对合成中心收件的编辑历史，编号 '+center;
     assert.equal(await ask(editQuestion),'采集到的上一版是合成旧正文。');
     await adapter.onMessage(editQuestion,{...owner,messageId:'edit-history'});
