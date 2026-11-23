@@ -211,7 +211,7 @@ export interface SystemActions {
   knowledgeCommentWriteService?(): import('../packages/plugin-sdk/src/index.ts').PluginService;
   knowledgeCommentsService?(): import('../packages/plugin-sdk/src/index.ts').PluginService;
   knowledgeReaderService?(): import('../packages/plugin-sdk/src/index.ts').PluginService;
-  inboxFileText?(id:string,signal:AbortSignal): Promise<Json>;
+  inboxFileText?(id:string,signal:AbortSignal): Promise<{name:string;text:string;truncated:boolean}>;
   inboxTree?(input: Record<string, unknown>): Json;
   inboxList?(input: Record<string, unknown>): Json;
   inboxHandlingRead?(input: Record<string, unknown>): Json;
@@ -773,10 +773,11 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           context.provide('inbox-triage.classify', async input => await classifier(input as unknown as InboxTriageInput));
         }
         context.contribute('tools', 'inbox_triage_status', statusTool('inbox-triage', '收件箱默认使用本地规则分类，确认后才创建待办。', actions?.status ? () => actions.status!('inbox-triage') : undefined));
-        if (actions?.inboxFileText) context.contribute('tools','inbox_file_text',tool('inbox_file_text','核对个人飞书原消息并读取其文件附件正文。返回 name、text 和 truncated。',async (args,signal)=>{
+        if (actions?.inboxFileText) context.contribute('tools','inbox_file_text',tool('inbox_file_text','核对个人飞书原消息并读取其文件附件正文。返回文件名、正文、截断标记和收件详情 workspaceRoute。',async (args,signal)=>{
           if(typeof args.id!=='string' || !args.id || args.id.length>256) throw Error('请提供原始收件编号');
           signal.throwIfAborted();
-          return actions.inboxFileText!(args.id,signal);
+          const file=await actions.inboxFileText!(args.id,signal);
+          return {...file,workspaceRoute:'#inbox?item='+encodeURIComponent(args.id)};
         },{id:{type:'string'}},['id']));
         if (actions?.inboxTree) context.contribute('tools', 'inbox_tree', tool('inbox_tree', '按真实收件编号查询本项、从近到远的可见父项以及直接子项，含真实来源和工作台入口；已归组时返回所属收件事项、可见前序和后续事项。只读。', async (args,signal) => {
           signal.throwIfAborted();

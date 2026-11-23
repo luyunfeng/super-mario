@@ -4486,7 +4486,7 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
       return {role:'assistant',content:'置顶正文属于合成议题，另有一条回复已撤回。'};
     }
     if(req.callId==='file-body'){
-      assert.deepEqual(result,{name:'样例.txt',text:'合成条款第六条',truncated:false});
+      assert.deepEqual(result,{name:'样例.txt',text:'合成条款第六条',truncated:false,workspaceRoute:'#inbox?item='+encodeURIComponent(center)});
       return {role:'assistant',content:result.text};
     }
     if(req.callId==='edits'){
