@@ -100,8 +100,20 @@ function chartBody(card) {
     maximum = Math.max(maximum,point.value);
   }
   const scale = Math.max(-minimum,maximum) || 1;
-  const low = minimum / scale, high = maximum / scale;
-  const y = value => 96 - 92 * (value / scale - low) / (high - low || 1);
+  const stacked = card.stacked === true && series.length > 1 && ['bar','area'].includes(card.kind);
+  const positive = points.map(() => 0), negative = points.map(() => 0);
+  // Scale before accumulating so a stack of finite values cannot overflow.
+  let low = minimum / scale, high = maximum / scale;
+  const bands = series.map(line => line.points.map((point,i) => {
+    const totals = point.value < 0 ? negative : positive;
+    const start = stacked ? totals[i] : 0;
+    const end = start + point.value / scale;
+    if (stacked) totals[i] = end;
+    low = Math.min(low,end);
+    high = Math.max(high,end);
+    return {start,end};
+  }));
+  const y = value => 96 - 92 * (value - low) / (high - low || 1);
   const width = 300 / points.length;
   const baseline = y(0);
   const marks = [['line',{x1:0,x2:300,y1:baseline,y2:baseline,stroke:'currentColor'}]];
@@ -109,15 +121,25 @@ function chartBody(card) {
   series.forEach(({points},n) => {
     const color = colors[n];
     if (card.kind === 'bar') {
-      points.forEach((point, index) => marks.push(['rect', {x:(index + 0.15 + n * 0.7 / series.length) * width, width:width * 0.7 / series.length,
-        y:Math.min(baseline, y(point.value)), height:Math.abs(baseline - y(point.value)), fill:color}]));
+      bands[n].forEach(({start,end},index) => {
+        if (stacked && points.length === 1 && low === 0 && high > 0) {
+          marks.push(['rect',{x:300 * start / high,y:40,width:300 * (end-start) / high,height:16,fill:color}]);
+          return;
+        }
+        const barWidth = width * 0.7 / (stacked ? 1 : series.length);
+        marks.push(['rect',{x:(index + 0.15) * width + (stacked ? 0 : n * barWidth),width:barWidth,
+          y:Math.min(y(start),y(end)),height:Math.abs(y(start)-y(end)),fill:color}]);
+      });
     } else {
       const x = index => (index + 0.5) * width;
-      const path = points.map((point, index) => x(index) + ',' + y(point.value)).join(' ');
-      if (card.kind === 'area') marks.push(['polygon', {points:x(0)+','+baseline+' '+path+' '+x(points.length-1)+','+baseline,
-        fill:color, opacity:0.2}]);
+      const path = bands[n].map(({end},index) => x(index) + ',' + y(end)).join(' ');
+      if (card.kind === 'area') {
+        const base = bands[n].map(({start},index) => x(index) + ',' + y(start));
+        const polygon = stacked ? path+' '+base.reverse().join(' ') : base[0]+' '+path+' '+base.at(-1);
+        marks.push(['polygon',{points:polygon,fill:color,opacity:0.2}]);
+      }
       marks.push(['polyline', {points:path, fill:'none', stroke:color, 'stroke-width':2}]);
-      if (points.length === 1) marks.push(['circle', {cx:x(0), cy:y(points[0].value), r:3, fill:color}]);
+      if (points.length === 1) marks.push(['circle', {cx:x(0), cy:y(bands[n][0].end), r:3, fill:color}]);
     }
   });
   const graph = svg(marks);

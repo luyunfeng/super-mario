@@ -18,6 +18,10 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
       {name:'收入',points:[{label:'周一',value:2},{label:'周二',value:5}]},
       {name:'支出',points:[{label:'周一',value:-3},{label:'周二',value:-1}]}
     ],fallback:'收支摘要'});
+    ctx.contribute('web_extensions','allocation',{slot:'advanced-interface',renderer:'chart',kind:'bar',stacked:true,title:'单日分配',series:[
+      {name:'甲',points:[{label:'今日',value:Number.MAX_VALUE}]},
+      {name:'乙',points:[{label:'今日',value:Number.MAX_VALUE}]}
+    ],fallback:'分配摘要'});
     ctx.contribute('web_extensions','line',{slot:'advanced-interface',renderer:'chart',kind:'line',title:'单点趋势',points:[{label:'当前',value:0}],fallback:'当前为零'});
     ctx.contribute('web_extensions','area',{slot:'advanced-interface',renderer:'chart',kind:'area',title:'跨零走势',points:[{label:'昨日',value:-1},{label:'今日',value:1}],fallback:'由负转正'});
     for (const kind of ['pie','donut']) ctx.contribute('web_extensions',kind,{slot:'advanced-interface',renderer:'chart',kind,title:'占比 '+kind,
@@ -102,6 +106,10 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
     await cursor.press('ArrowRight');
     await expect(cursor).toHaveAttribute('aria-valuetext','周二，收入 5，支出 -1');
   }
+  const shares=page.getByRole('region',{name:'单日分配'}).locator('svg rect');
+  await expect(shares).toHaveCount(2);
+  await expect(shares.first()).toHaveAttribute('width','150');
+  await expect(shares.last()).toHaveAttribute('x','150');
   const chart=page.getByRole('region',{name:'数量变化'});
   await expect(chart.getByRole('cell')).toHaveText(['-3 件','新增 5 件']);
   await expect(chart.locator('svg rect')).toHaveCount(2);

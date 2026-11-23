@@ -69,7 +69,7 @@ export type WebExtension =
   | { slot: 'startup'; renderer: 'brand-splash'; title: string; subtitle: string; durationMs?: number }
   | { slot: 'advanced-interface'; renderer: 'assistant-card-examples' }
   | { slot: 'advanced-interface'; renderer: 'chart'; kind: 'bar' | 'line' | 'area' | 'pie' | 'donut'; title: string; unit?: string; points: ChartReading[]; fallback: string }
-  | { slot: 'advanced-interface'; renderer: 'chart'; kind: 'bar' | 'line' | 'area'; title:string; unit?:string; series:{name:string; points:ChartReading[]}[]; fallback:string }
+  | { slot: 'advanced-interface'; renderer: 'chart'; kind: 'bar' | 'line' | 'area'; title:string; unit?:string; stacked?:boolean; series:{name:string; points:ChartReading[]}[]; fallback:string }
   | { slot: 'advanced-interface'; renderer: 'chart'; kind: 'candlestick'; title: string; points: {label:string; value:number; open:number; high:number; low:number; close?:number; volume?:number}[]; fallback: string }
   | { slot: 'advanced-interface'; renderer: 'form'; title:string; fields:{name:string; label:string; required?:boolean; multiline?:boolean; options?:string[]; initial?:string}[]; fallback:string }
   | { slot: 'advanced-interface'; renderer: 'stream'; title:string; lines:string[]; fallback:string }
