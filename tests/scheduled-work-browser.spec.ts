@@ -53,7 +53,7 @@ async function fixture(body: (f: any) => Promise<void>, noScope = false) {
       const p = '/js/pages/agent.js', a = '/js/lib/api.js', s = '/js/lib/scope.js';
       const { createAgentPage } = await import(p), { createApi } = await import(a), { createScope } = await import(s);
       const api = createApi(), scope = createScope(); scope.set('a');
-      const snapshot = { agent: { available: true }, projects: [{ id: 'a', name: '项目甲' }, { id: 'b', name: '项目乙' }], todos: [{ id: 'todo-a', title: '甲待办', projectId: 'a' }, { id: 'todo-b', title: '乙待办', projectId: 'b' }], machines: [], executors: [{ id: 'real-cli', name: '实际 CLI', available: true }, { id: 'offline-cli', name: '离线 CLI', available: false, reason: '电脑离线' }], plugins: [], runs: [], knowledge: [] };
+      const snapshot = { workspaceTimezone: 'Asia/Shanghai', agent: { available: true }, projects: [{ id: 'a', name: '项目甲' }, { id: 'b', name: '项目乙' }], todos: [{ id: 'todo-a', title: '甲待办', projectId: 'a' }, { id: 'todo-b', title: '乙待办', projectId: 'b' }], machines: [], executors: [{ id: 'real-cli', name: '实际 CLI', available: true }, { id: 'offline-cli', name: '离线 CLI', available: false, reason: '电脑离线' }], plugins: [], runs: [], knowledge: [] };
       const store = { view: { snapshot, connection: 'online', unauthorized: false }, refresh() {} };
       const component = createAgentPage({ api, store, ...(noScope ? {} : { scope }), router: { href: (...parts: string[]) => '#' + parts.map(encodeURIComponent).join('/'), current: { page: 'agent' }, subscribe() {} }, consoleDrawer: {} });
       document.body.replaceChildren(component.el); component.el.classList.add('is-active');
@@ -76,7 +76,7 @@ test('创建每天事实简报：预览与真实 body 一致，只提交审批�
   await drawer(page).getByRole('textbox', { name: '标题', exact: true }).fill('早间事实');
   await drawer(page).getByLabel('频率', { exact: true }).selectOption('daily');
   await drawer(page).getByLabel('每天时间', { exact: true }).fill('08:35');
-  await drawer(page).getByLabel('IANA 时区', { exact: true }).fill('Asia/Shanghai');
+  await expect(drawer(page).getByLabel('IANA 时区', { exact: true })).toHaveValue('Asia/Shanghai');
   await drawer(page).getByLabel('关联待办', { exact: true }).selectOption('todo-a');
   const preview = await drawer(page).getByLabel('创建预览').innerText();
   const expected = JSON.parse(preview.slice(preview.indexOf('{')));

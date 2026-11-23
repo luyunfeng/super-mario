@@ -304,7 +304,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     const daily = Input({ type: 'time', value: '09:00', name: 'dailyTime' });
     const minutes = Input({ type: 'number', min: 1 / 6, step: 'any', value: 60, name: 'minutes' });
     const cron = Input({ name: 'cron', placeholder: '0 9 * * *' });
-    const zone = Input({ name: 'tz', value: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai' });
+    const zone = Input({ name: 'tz', value: snapshot().workspaceTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai' });
     const action = Select({ name: 'action', options: [['brief', '事实简报'], ['dispatch', '派给执行者']] });
     const executors = snapshot().executors ?? [];
     const executor = Select({ name: 'executorId', options: [['', '请选择实际执行者'], ...executors.map(e => [e.id, `${e.name} · ${e.id} · ${e.available ? '可用' : e.reason ?? '离线或不可用'}`])] });
