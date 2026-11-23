@@ -1693,6 +1693,7 @@ test('飞书模型目录按中文名单的 UTF-8 字节限制回执，并保留�
   assert.ok(text.includes(models[0]) && text.includes(models[20]) && !text.includes(models.at(-1)!));
   assert.ok(Buffer.byteLength(text, 'utf8') <= 16000);
   assert.match(text, /Web.*完整目录/);
+  assert.match(text, /回复本条目录消息.*\/modelchange.*完整模型 ID/);
   assert.match(text, /账号权限/);
 });
 

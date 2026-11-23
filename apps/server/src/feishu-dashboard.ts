@@ -153,7 +153,7 @@ export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp
       '目录来源 · ' + (Object.hasOwn(sources, catalog.source) ? sources[catalog.source] : '未知'), '候选模型');
     const custom = new Set(catalog.custom);
     const models = [...new Set(catalog.models)].filter(Boolean);
-    const hint = '账号权限以提供方实际授权为准。';
+    const hint = (models.length ? '要为这段对话切换模型，请回复本条目录消息，发送 /modelchange 加完整模型 ID。\n' : '') + '账号权限以提供方实际授权为准。';
     const truncated = '目录较长，请在 Web 的模型设置中查看完整目录。';
     // Reserve space for both footers so a Chinese catalog and the text fallback share one byte limit.
     let bytes = Buffer.byteLength([title, ...lines, truncated, hint].join('\n'));
