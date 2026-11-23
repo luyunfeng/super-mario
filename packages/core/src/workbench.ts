@@ -582,7 +582,12 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(conversationDrafts);
   plugins.register(conversationImages);
   plugins.register(conversationFiles);
-  plugins.register(createRunComparison(readRunCommitDiff, (id, offset, version) => runWorktreeStatus(id, true, offset, version), readRunWorktreeChange, runWorktreeHistory));
+  plugins.register(createRunComparison(readRunCommitDiff, (id, offset, version) => runWorktreeStatus(id, true, offset, version), readRunWorktreeChange, runWorktreeHistory, () => {
+    const source = currentAgentInput();
+    if (!source?.projectId || source.todoId || source.readOnly || source.role !== 'user' || source.origin && source.origin !== 'user')
+      throw new InputError('请在项目对话中查询工作树', 403);
+    return listProjectWorktrees(source.projectId);
+  }));
   plugins.register(shortcutSettings);
   plugins.register(readingFonts);
   plugins.register(assistantCardExamples);

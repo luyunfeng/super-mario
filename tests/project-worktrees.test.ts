@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { runWithAgentInput } from '../packages/core/src/agent-input.ts';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
@@ -51,6 +52,13 @@ test('项目只创建工作树时返回独立目录，不生成或派发执行',
   assert.equal(listed.status, 200);
   assert.deepEqual((await listed.json()).map(({ name, cwd }: { name: string; cwd: string }) => ({ name, cwd })),
     [{ name: result.name, cwd: result.cwd }]);
+  const query = server.app.contributions.list('tools').find(entry => entry.value.name === 'project_worktrees_list')!.value;
+  const message = { id: 'synthetic-query', conversationId: 'project:' + project.id + ':work', projectId: project.id,
+    role: 'user' as const, directWebInput: true as const, text: '已准备哪些目录？', createdAt: new Date().toISOString() };
+  const signal = new AbortController().signal;
+  assert.deepEqual(await runWithAgentInput(message, () => query.execute({}, signal)), [result]);
+  await assert.rejects(runWithAgentInput(message, () => query.execute({ projectId: 'another' }, signal)), /无需参数/);
+  await assert.rejects(runWithAgentInput({ ...message, todoId: 'task' }, () => query.execute({}, signal)), /项目对话/);
   assert.deepEqual(starts, []);
   assert.equal(server.app.store.list('runs').length, 0);
 

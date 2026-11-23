@@ -9,10 +9,20 @@ function visibleChanges(changes: Json | undefined, files: Json[]): Record<string
 }
 
 export function createRunComparison(read: (id: string, path?: string) => Promise<Json>, status: (id: string, offset?: number, version?: string) => Promise<Json>,
-  change: (id: string, path: string, area: string) => Promise<Json>, history: (id: string, mode: string, offset: number, version?: string, commit?: string, path?: string) => Promise<Json>): Extension {
+  change: (id: string, path: string, area: string) => Promise<Json>, history: (id: string, mode: string, offset: number, version?: string, commit?: string, path?: string) => Promise<Json>,
+  projectTrees: () => Json): Extension {
   return {
     id: 'run-comparison', name: '执行对比', capabilities: ['web.runComparison', 'runs.diff.read'],
     activate(context) {
+      context.contribute('tools', 'project_worktrees_list', {
+        name: 'project_worktrees_list', description: '列出本项目单独创建的 Git 工作树名称和登记目录。',
+        parameters: { type: 'object', properties: {}, additionalProperties: false },
+        async execute(args, signal) {
+          signal.throwIfAborted();
+          if (Object.keys(args).length) throw new Error('查询只使用本轮项目，无需参数');
+          return projectTrees();
+        },
+      });
       context.contribute('tools', 'run_worktree_status', {
         name: 'run_worktree_status', description: '读取本次执行独立工作树的当前分支、未提交文件和未进入来源目录当前 HEAD 的提交数。文件列表可能截断。目录已清理时返回 removedAt，以及保留分支的实时状态或分支删除回执时间 branchDeletedAt。',
         parameters: { type: 'object', required: ['id'], additionalProperties: false, properties: { id: { type: 'string' },
