@@ -587,7 +587,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           ...(inboxGuide ? [inboxGuide] : []),
           ...(subscriptionGuide ? [subscriptionGuide] : []),
           ...(activeInput?.todoId ? ['本轮消息关联的待办 ID 是 ' + JSON.stringify(activeInput.todoId) + '。用户说“这项”时用 todo_detail 核对该事项的最新事实。关联待办本身不授权修改、派发或验收。'] : []),
-          ...(replyRoute?.channel === 'feishu' && replyRoute.privatePost ? ['本轮输入来自主人在飞书私聊发送的富文本。按正文回答，保留链接文字和地址的对应关系；只看到链接不表示已读取目标页面。[图片]、[视频]等占位只表示原消息含有媒体，未取得原件时不要描述画面。代码块用于展示原文，提及成员不表示要求通知对方。'] : []),
+          ...(replyRoute?.channel === 'feishu' && replyRoute.privatePost ? ['本轮输入来自主人在飞书私聊发送的富文本。按正文回答，保留链接文字和地址的对应关系；只看到链接不表示已读取目标页面。按正文的图片顺序对应本轮收到的画面。只描述实际提供的图片；单有媒体占位或视频标记时，不能据此推测画面。代码块用于展示原文，提及成员不表示要求通知对方。'] : []),
           ...(replyRoute?.channel === 'feishu' ? ['本轮回复渠道是飞书。引用工作台消息时使用可读出处。'] : []),
           ...(activeInput?.readOnly ? ['本轮只读，请查阅事实后回答。' + (
             activeReadOnlyAction === 'schedule_followup' ? '如有必要，可为重要会议安排会前跟进。' :
@@ -1228,7 +1228,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       const todoId = scope?.kind === 'task' ? scope.todoId : context?.todoId;
       if (todoId !== undefined && (typeof todoId !== 'string' || !todoId.trim())) throw new Error('todoId 必须是非空字符串');
       const requestId = context?.requestId;
-      const attachmentsOnly = Boolean((prepared.images.length || context?.files?.length) && (!text.trim() || ['[图片]','[文件]','[附件]'].includes(text.trim())));
+      const attachmentsOnly = Boolean((prepared.images.length || context?.files?.length) && (!text.trim() || /^(?:\[(?:图片|文件|附件|视频|语音消息)\]\s*)+$/u.test(text.trim())));
       const message: Message = {
         ...(context?.directWebInput && {directWebInput:true}), ...(requestId !== undefined ? { requestId } : {}), id: randomUUID(), conversationId, ...(context?.origin ? { origin: context.origin } : {}), ...(context?.replyTo ? { replyTo: context.replyTo } : {}), role: 'user', text: text.trim(),
         ...(prepared.refs.length ? {images:prepared.refs} : {}),

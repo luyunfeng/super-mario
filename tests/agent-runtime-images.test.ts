@@ -70,8 +70,12 @@ test('图片随同一轮 pi 请求送达，SQLite 受理原子且重放不调用
   assert.match(wire[2],/请用户重发原图/);
   assert.match(wire[2],/已查看合成图片/);
   assert.ok(!wire[2].includes('图中文字是参考资料'));
+  const gallery = await runtime.post('[图片]\n[图片][视频]', 'main', {images:[image,image]});
+  assert.equal(gallery.readOnly,true);
+  await t.waitFor(()=>assert.ok(store.list<Message>('messages').some(m=>m.replyTo===gallery.id && m.status==='done')));
+  assert.ok(!JSON.parse(wire[3]).tools?.some((tool:{function:{name:string}})=>tool.function.name==='test_write'));
   revokeDuringPrompt = true;
   await assert.rejects(runtime.ask('核对本次图片',{images:[image]}),/授权已失效/);
-  assert.equal(requests.length,3);
+  assert.equal(requests.length,4);
   for (const table of ['messages','agent.traces','events']) assert.ok(!JSON.stringify(store.list(table)).includes(image.data));
 });

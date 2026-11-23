@@ -96,6 +96,7 @@ export interface FeishuBotAdapter {
   readPrivateForward?(chatId:string,messageId:string,senderId:string,guard:()=>void):Promise<string>;
   readPrivateFile?<T>(chatId:string,messageId:string,ownerId:string,guard:()=>void,
     consume:(name:string,mime:string,source:AsyncIterable<Uint8Array>)=>Promise<T>):Promise<T>;
+  readPrivatePostImages?(chatId:string,messageId:string,senderId:string,expectedText:string,guard:()=>void):Promise<ChatImageInput[]>;
   readPrivateImage?(chatId:string,messageId:string,ownerId:string,guard:()=>void):Promise<ChatImageInput>;
   readTaskQuote?(chatId: string, parentId: string, guard: () => void): Promise<string | undefined>;
   readReaction?(messageId: string, emoji: 'OnIt' | 'DONE', guard: () => void, removeId?: string): Promise<string>;
@@ -119,7 +120,7 @@ type StatusSource = Pick<FeishuMessageSource, 'chatId' | 'parentId' | 'rootId'>;
 type StatusGrant = { source: StatusSource; fingerprint: string; binding?: ChatBinding };
 type GroupTaskOrigin = { chatId: string; messageId: string; binding: string; todoId: string };
 type TopicStamp = { todoId: string; grant: string; opening: boolean; sourceOpening?: true; authorityVersion?: string; externalSource?: { chatId: string; messageId: string } };
-type Envelope = { privatePost?:true; privateForward?:true; threadSearchGrant?:string; privateFileBinding?:string; privateImageBinding?:string; topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
+type Envelope = { privatePostImages?:true; privatePost?:true; privateForward?:true; threadSearchGrant?:string; privateFileBinding?:string; privateImageBinding?:string; topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
 type Routed = Route & Envelope & { envelopeId: string; replyReference?: { text: string; truncated: boolean } | { unavailable: true } };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
 type SentQuestion = DecisionNudgeCard & { questionId:string; version:number; inputId:string; navigation:string; closeAttempted?:true; webOnly?:true; contextFingerprint?:string };
@@ -224,7 +225,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           entry.botId!==bot.id || entry.target!==paired.chatId || entry.sourceMessageId!==route.sourceMessageId ||
           entry.eventKey!=='feishu-in:'+JSON.stringify([bot.id,bot.appId,route.sourceMessageId]) ||
           receipt?.status!=='completed' || receipt.id!==message.id || !sameBotScope(entry.scope,route.scope) ||
-          !stamp || (binding && stamp[binding]!==route[binding]) || stamp.privateForward!==route.privateForward || stamp.privateSenderId!==paired.senderId ||
+          !stamp || (binding && stamp[binding]!==route[binding]) || stamp.privateForward!==route.privateForward || stamp.privatePostImages!==route.privatePostImages || stamp.privateSenderId!==paired.senderId ||
           (kind==='office' && (entry.text!==input.text || stamp.group || stamp.command || stamp.relay || stamp.topic || stamp.groupTaskOrigin ||
             stamp.resultRelayEntryId || groupTasks.recalled(bot.id,bot.appId,paired.chatId,route.sourceMessageId))) ||
           stamp.chatProject!==route.chatProject || stamp.conversationThreadId!==route.conversationThreadId) return false;
@@ -2571,7 +2572,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     let paired = owner(bot);
     const group = source.chatType === 'group';
     const fileAttachment=!!(source.privateFile || source.privateForward);
-    const privateAttachment=fileAttachment || source.privateImage;
+    const privateAttachment=fileAttachment || source.privateImage || source.privatePostImages;
+    // Parse control commands against the attachment placeholder, then deliver the
+    // owner's original rich text only to the bound assistant as part of the turn.
+    const postWithImages=source.privatePostImages ? text : undefined;
     if (privateAttachment || source.privatePost) {
       if (group || !paired?.senderId || paired.senderId!==source.senderId || paired.chatId!==source.chatId || source.senderType!=='user') return;
       // Native attachments have no user-authored instruction. Keys and filenames must never become commands.
@@ -2925,7 +2929,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       ...(group ? { group: structuredClone(source) } : {}), platformReplyTo: source.messageId, threadId,
     } : {};
     if (!group && source.senderType === 'user' && paired?.senderId && source.senderId === paired.senderId) context.privateSenderId = paired.senderId;
-    if (source.privatePost) context.privatePost=true;
+    if (source.privatePost || source.privatePostImages) context.privatePost=true;
+    if (source.privatePostImages) context.privatePostImages=true;
     if (paired && privateAttachment) {
       context[fileAttachment?'privateFileBinding':'privateImageBinding']=groupReadBinding(bot,paired);
       if (source.privateForward) context.privateForward=true;
@@ -2967,7 +2972,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         context.threadId = source.threadId ?? source.rootId;
       }
     }
-    await acceptChat(bot, epoch, paired, source, text, context);
+    await acceptChat(bot, epoch, paired, source, postWithImages ?? text, context);
   }
   async function acceptChat(bot: FeishuBotSettings, epoch: number, paired: Owner | undefined, source: FeishuMessageSource, text: string,
     context: Omit<Envelope, 'revision'>) {
@@ -3136,6 +3141,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
                 (name,mime,stream)=>upload(scope,name,mime,stream,guard));
               files=[{uploadId:uploaded.uploadId}];
             }
+          } else if (stamp.privatePostImages) {
+            if (!adapter?.readPrivatePostImages || !stamp.privatePost) throw noDelivery('当前机器人无法读取私聊图文原件。');
+            images=await adapter.readPrivatePostImages(entry.target!,entry.sourceMessageId!,stamp.privateSenderId!,entry.text,guard);
+            if (!Array.isArray(images) || images.length===0 || images.length>20) throw noDelivery('图文原件未能完整读取。');
           } else {
             if (!adapter?.readPrivateImage) throw noDelivery('当前机器人无法读取私聊图片。');
             images=[await adapter.readPrivateImage(entry.target!,entry.sourceMessageId!,stamp.privateSenderId!,guard)];
@@ -3143,7 +3152,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         } catch {
           guard();
           const notice=await put(bot,{direction:'outbox',eventKey:'feishu-'+(file?'file':'image')+'-unavailable:'+entry.id,title:stamp.privateForward?'转发记录未读取':file?'文件未读取':'图片未读取',
-            text:stamp.privateForward?'无法读取这条转发的聊天记录。请核对原消息后重新转发。':file?'无法读取这个文件。请重新发送不超过 200 MiB 的普通文件。':'无法读取这张原图。请重新发送 PNG、JPEG、GIF 或 WebP 图片，每张最多 3.75 MB。',
+            text:stamp.privatePostImages?'无法完整读取这条图文消息的原图，请核对后重新发送。':stamp.privateForward?'无法读取这条转发的聊天记录。请核对原消息后重新转发。':file?'无法读取这个文件。请重新发送不超过 200 MiB 的普通文件。':'无法读取这张原图。请重新发送 PNG、JPEG、GIF 或 WebP 图片，每张最多 3.75 MB。',
             target:entry.target,sourceMessageId:entry.sourceMessageId,requiresConfirmation:false},entry.scope,
             {privateSenderId:stamp.privateSenderId,privateFileBinding:stamp.privateFileBinding,privateImageBinding:stamp.privateImageBinding,platformReplyTo:entry.sourceMessageId});
           if(notice.status==='ready') await app.mailboxes.process(notice.id,notice.version);

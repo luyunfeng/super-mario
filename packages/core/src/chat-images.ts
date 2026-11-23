@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
 import { imageSize } from 'image-size';
 import type { Store } from '../../plugin-sdk/src/index.ts';
-import type { ChatImageInput, ChatImageRef, Message } from '../../protocol/src/index.ts';
+import { chatImageLimits, type ChatImageInput, type ChatImageRef, type Message } from '../../protocol/src/index.ts';
 
 const collection = 'message.images';
-export const chatImageRequestBytes = 32 * 1024 * 1024;
-const maxImageBytes = 3_750_000;
+export const chatImageRequestBytes = chatImageLimits.totalBase64Bytes;
+const maxImageBytes = chatImageLimits.bytesPerImage;
 const mimeTypes = new Map([['png','image/png'],['jpg','image/jpeg'],['gif','image/gif'],['webp','image/webp']]);
 
 function fail(reason:string, status=400):never {
@@ -14,7 +14,7 @@ function fail(reason:string, status=400):never {
 
 export function prepareChatImages(value:unknown):{images:ChatImageInput[]; refs:ChatImageRef[]} {
   if (value === undefined) return {images:[],refs:[]};
-  if (!Array.isArray(value) || value.length > 20) fail('每条消息最多可附 20 张图片');
+  if (!Array.isArray(value) || value.length > chatImageLimits.count) fail(`每条消息最多可附 ${chatImageLimits.count} 张图片`);
   const images:ChatImageInput[] = [], refs:ChatImageRef[] = [];
   let encodedBytes = 0;
   for (const raw of value) {

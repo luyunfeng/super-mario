@@ -12,7 +12,7 @@ function pickPost(value: Row): Row | undefined {
   }
 }
 
-export function renderFeishuPost(value: Row, rawMentions: unknown, direct = false): string {
+export function renderFeishuPost(value: Row, rawMentions: unknown, direct = false, onImage?: (key:string) => void): string {
   const post = pickPost(value);
   if (!post) return '';
   const names = new Map<string, string>();
@@ -39,7 +39,9 @@ export function renderFeishuPost(value: Row, rawMentions: unknown, direct = fals
           const id = string(node.user_id);
           return '@' + (string(node.user_name) || (id === 'all' ? '所有人' : names.get(id)) || '成员');
         }
-        case 'img': case 'image': return '[图片]';
+        case 'img': case 'image':
+          onImage?.(string(node.image_key));
+          return '[图片]';
         case 'media': return '[视频]';
         case 'file': return '[文件]';
         case 'audio': return '[语音消息]';
