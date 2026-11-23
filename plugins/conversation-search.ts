@@ -104,21 +104,23 @@ function messageCitation(projectId: string, id: string, version: string) {
 
 function projectMessages(store: Store, input: Json, excludeId?: string) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, '检索参数无效');
-  const { query, todoId, replyTo, before, limit = 5, mode = 'phrase' } = input;
+  const { query, role, todoId, replyTo, before, limit = 5, mode = 'phrase' } = input;
   if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 25) fail(400, '每页须为 1 至 25 条');
   if (before !== undefined && (typeof before !== 'string' || !before)) fail(400, '消息游标无效');
   if (todoId !== undefined) {
     if (typeof todoId !== 'string' || typeof input.projectId !== 'string' ||
         store.get<Todo>('todos', todoId)?.projectId !== input.projectId) fail(404, '未找到当前项目的待办');
   }
+  if (role !== undefined && role !== 'user' && role !== 'assistant') fail(400, '发言角色须为 user 或 assistant');
   let question: Message | undefined;
   if (replyTo !== undefined) {
+    if (role === 'user') fail(400, '按原提问查询回复时须选择助手角色');
     const project = typeof input.projectId === 'string' && store.get<Project>('projects', input.projectId);
     question = typeof replyTo === 'string' ? store.get<Message>('messages', replyTo) : undefined;
     if (!project || !question || question.role !== 'user' || !readableMessage(question, project, excludeId) ||
         (todoId !== undefined && question.todoId !== todoId)) fail(404, '未找到当前范围的原提问');
   }
-  const listMessages = (todoId !== undefined || question !== undefined) && query === undefined;
+  const listMessages = (todoId !== undefined || question !== undefined || (role !== undefined && typeof input.projectId === 'string')) && query === undefined;
   if (!listMessages && (typeof query !== 'string' || !query.trim() || query.length > 500)) fail(400, '检索词须为 1 至 500 个字符');
   if (mode !== 'phrase' && mode !== 'keywords') fail(400, '检索方式无效');
   let terms: string[] = [];
@@ -133,6 +135,7 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
   for (const message of store.list<Message>('messages').reverse()) {
     const project = projects.get(message.conversationId);
     if (!project || (todoId !== undefined && message.todoId !== todoId) || !readableMessage(message, project, excludeId)) continue;
+    if (role !== undefined && message.role !== role) continue;
     if (question && (message.role !== 'assistant' || message.replyTo !== question.id || message.todoId !== question.todoId)) continue;
     const matches = [];
     for (const pattern of patterns) {
@@ -166,9 +169,9 @@ export const conversationSearch: Extension = {
   activate(context) {
     context.contribute('tools', 'project_message_search', {
       name: 'project_message_search',
-      description: '从新到旧查找项目工作对话。默认按连续原文匹配；mode=keywords 要求同一条消息含全部关键词（空格分隔，最多 8 个，顺序不限）。返回发言角色、消息状态、ID、正文版本和命中前后的摘录。传 projectId 和 todoId 可限定一项待办，省略 query 则列出该项最近消息。查询某个提问的回答时传 projectId 和 replyTo（原提问 ID），按 status 核对结果。可用 nextBefore 继续查更早的结果。',
+      description: '从新到旧查找项目工作对话。默认按连续原文匹配；mode=keywords 要求同一条消息含全部关键词（空格分隔，最多 8 个，顺序不限）。可传 role=user 或 assistant 限定发言角色；指定项目和角色后省略 query 可浏览该角色的最近发言。返回发言角色、消息状态、ID、正文版本和命中前后的摘录。传 projectId 和 todoId 可限定一项待办，省略 query 则列出该项最近消息。查询某个提问的回答时传 projectId 和 replyTo（原提问 ID），按 status 核对结果。可用 nextBefore 继续查更早的结果。',
       parameters: { type: 'object', additionalProperties: false, properties: {
-        query: { type: 'string' }, replyTo: { type: 'string' }, todoId: { type: 'string' }, mode: { type: 'string', enum: ['phrase', 'keywords'] }, projectId: { type: 'string' }, before: { type: 'string' },
+        query: { type: 'string' }, role: { type: 'string', enum: ['user', 'assistant'] }, replyTo: { type: 'string' }, todoId: { type: 'string' }, mode: { type: 'string', enum: ['phrase', 'keywords'] }, projectId: { type: 'string' }, before: { type: 'string' },
       } },
       async execute(args, signal) {
         signal.throwIfAborted();

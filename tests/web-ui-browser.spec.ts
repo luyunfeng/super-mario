@@ -91,6 +91,10 @@ test('全局搜索从历史正文定位主对话消息，并隔离其他会话�
     await page.getByRole('button', { name: '查看全部主对话消息' }).click();
     const matches = page.getByRole('dialog', { name: '主对话消息搜索结果' });
     await expect(matches.getByRole('link')).toHaveCount(25);
+    await matches.getByLabel('发言角色').selectOption('user');
+    await expect(matches.getByRole('link')).toHaveCount(0);
+    await matches.getByLabel('发言角色').selectOption('assistant');
+    await expect(matches.getByRole('link')).toHaveCount(25);
     const more = matches.getByRole('button', { name: '查看更多主对话消息' });
     await more.click();
     await expect(matches.getByRole('link')).toHaveCount(37);

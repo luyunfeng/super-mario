@@ -2572,3 +2572,52 @@ test('Web 与飞书项目助手完整列出待主人决定的事项，仅查询�
     assert.equal(server.app.store.get<{status:string}>('interactions', 'question')?.status, 'open');
   } finally { await server.close(); }
 });
+
+test('Web 和飞书按发言角色查项目原话，翻页只计入匹配角色', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const { server, api, ask } = await fixture(t, req => {
+    const bot = req.system.includes('本轮回复渠道是飞书');
+    const role = bot ? 'assistant' : 'user';
+    if (req.lastRole === 'user') {
+      assert.match(req.system, /查用户提出的要求时传 role=user，查助手之前的说法时传 role=assistant/);
+      return call('project_message_search', bot ? { role } : { role, query: '交付标准' }, 'by-role');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    const result = JSON.parse(raw);
+    assert.ok(result.hits.every((row: {role: string}) => row.role === role));
+    assert.doesNotMatch(raw, /项目外的标准|通知中的标准/);
+    if (req.callId === 'by-role') {
+      assert.equal(result.hits.length, 5);
+      assert.ok(result.nextBefore);
+      return call('project_message_search', { role, before: result.nextBefore, ...(bot ? {} : { query: '交付标准' }) }, 'older');
+    }
+    assert.equal(result.nextBefore, null);
+    const oldest = result.hits.at(-1);
+    assert.equal(oldest.id, role + '-0');
+    return { role: 'assistant', content: bot ? oldest.preview : oldest.match + oldest.after };
+  }, options => {
+    adapter = options;
+    return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    const project = await api('/projects', { name: '角色查询样本' });
+    const other = await api('/projects', { name: '其他项目' });
+    const base = { conversationId: 'project:' + project.id + ':work', projectId: project.id, createdAt: new Date().toISOString(), status: 'done' };
+    for (let i = 0; i < 6; i++) for (const role of ['user', 'assistant']) {
+      const id = role + '-' + i;
+      server.app.store.put('messages', id, { ...base, id, role, text: '交付标准 ' + role + ' ' + i });
+    }
+    server.app.store.put('messages', 'other', { ...base, conversationId: 'project:' + other.id + ':work', projectId: other.id,
+      id: 'other', role: 'assistant', text: '项目外的标准' });
+    server.app.store.put('messages', 'notice', { ...base, id: 'notice', role: 'assistant', origin: 'notification', text: '通知中的标准' });
+    assert.equal(await ask('找用户最早提的交付标准。', '/projects/' + project.id + '/messages'), '交付标准 user 0');
+    const bot = await api('/feishu/bots', { name: '历史查询', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage('查项目助手最早说了什么。', { ...source, messageId: 'lookup' });
+    await t.waitFor(() => assert.ok(sent.includes('交付标准 assistant 0')));
+  } finally { await server.close(); }
+});
