@@ -14,6 +14,7 @@ export function createCliSessions({ api, store, router }) {
   const cache = new Map();
   const machines = Select({ options: [['', '全部电脑']], 'aria-label': 'CLI 会话电脑' });
   const projects = Select({ options: [['', '全部项目']], 'aria-label': 'CLI 会话项目' });
+  const archiveFilter = Select({ options: [['', '全部历史'], ['archived', '仅已归档']], 'aria-label': 'CLI 会话归档筛选' });
   const keyword = Input({ type: 'search', placeholder: '会话 ID、目录或执行者', 'aria-label': 'CLI 会话关键词' });
   const list = h('div', { class: 'stack', style: { ...wrap, maxHeight: 'min(60vh, 640px)', overflowY: 'auto' } });
   const notice = h('div');
@@ -24,7 +25,7 @@ export function createCliSessions({ api, store, router }) {
   const el = Card({ title: 'CLI会话', id: 'agent-cli-sessions', sub: '独立 CLI 的历史记录（只读）',
     tools: h('div',{class:'row row--wrap'},sharedSources,Button({ label: '重新读取', size: 'sm', onClick: () => load(true) })),
     body: [text('历史 ≠ 当前运行或空闲；恢复前请确认原终端已停止。'),
-      h('div', { class: 'stack', style: { ...wrap, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))' } }, machines, projects, keyword), notice, list] });
+      h('div', { class: 'stack', style: { ...wrap, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))' } }, machines, projects, archiveFilter, keyword), notice, list] });
   const visible = () => router.current.page === 'agent';
   const context = () => JSON.stringify([api.token(), store.view.connection, store.view.unauthorized]);
   const ready = () => store.view.connection === 'online' && !store.view.unauthorized;
@@ -72,7 +73,7 @@ export function createCliSessions({ api, store, router }) {
     });
   }
   function paint() {
-    const renderKey = JSON.stringify([ready(), sharingActive(), conversationExportActive(store), messageFavoritesActive(store), error, loading, data, keyword.value.trim().toLowerCase(), machines.value, signature]);
+    const renderKey = JSON.stringify([ready(), sharingActive(), conversationExportActive(store), messageFavoritesActive(store), error, loading, data, keyword.value.trim().toLowerCase(), machines.value, archiveFilter.value, signature]);
     if (renderKey === painted) return;
     painted = renderKey;
     exportDrawer?.close();
@@ -81,7 +82,7 @@ export function createCliSessions({ api, store, router }) {
     const query = keyword.value.trim().toLowerCase();
     const groups = (data?.machines ?? []).filter(m => !machines.value || machines.value === m.machineId);
     replace(list, groups.map(machine => {
-      const rows = machine.sessions.filter(s => `${s.nativeSessionId} ${s.cwd} ${s.executorId}`.toLowerCase().includes(query));
+      const rows = machine.sessions.filter(s => (!archiveFilter.value || s.archived === true) && `${s.nativeSessionId} ${s.cwd} ${s.executorId}`.toLowerCase().includes(query));
       const current = store.view.snapshot?.machines?.find(m => m.id === machine.machineId);
       const online = machine.online && (current ? current.online : true);
       return h('section', { class: 'stack', style: wrap, dataset: { cliMachine: machine.machineId } },
@@ -145,6 +146,7 @@ export function createCliSessions({ api, store, router }) {
     else if (visible()) paint();
   }
   for (const control of [machines, projects]) control.addEventListener('change', () => load());
+  archiveFilter.addEventListener('change', paint);
   keyword.addEventListener('input', paint);
   router.subscribe(route => { if (route.page !== 'agent') { sharing.update(undefined);shareSource=undefined;sourcesDrawer?.close();seq++; loading = false; } });
 
