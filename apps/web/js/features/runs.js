@@ -396,7 +396,11 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     const key = uuid();
     let uncertain = false;
     const prompt = TextArea({ rows: 4, placeholder: '例如：修复登录页的报错，并跑通现有测试', required: true });
-    const executor = Select({ options: [...(!binding ? [['', '自动选择（推荐）']] : []), ...executors.map(item => [item.id, item.name])] });
+    const executor = Select({ options: [...(!binding ? [['', '自动选择（推荐）']] : []), ...executors.map(item => {
+      const host = snapshot.machines?.find(machine => machine.id === item.machineId);
+      const label = host?.name && host.name !== item.machineId ? host.name+' ('+item.machineId+')' : item.machineId;
+      return [item.id, label && !binding ? item.name+' · '+label : item.name];
+    })] });
     if (parentRun) executor.value = parentRun.executorId;
     const cwd = Input({ value: parentRun?.cwd ?? projectTree?.cwd ?? binding?.cwd ?? '', readOnly: Boolean(binding), placeholder: '留空使用这台电脑的默认目录' });
     const todos = (snapshot.todos ?? []).filter(todo => !todo.completedAt && (launchProjectId === 'all' || todo.projectId === launchProjectId));

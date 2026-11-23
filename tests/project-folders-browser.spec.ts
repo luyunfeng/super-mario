@@ -38,8 +38,8 @@ async function withFolders(run: (ctx: { page: Page; base: string; first: any; se
       state.projects.push(...imported);
       state.machines = machines;
       state.executors = [
-        { id: 'exec-a', name: '甲执行者', machineId: 'a', available: true, mode: 'real' },
-        { id: 'exec-b', name: '乙执行者', machineId: 'b', available: true, mode: 'real' },
+        { id: 'exec-a', name: '合成执行者', machineId: 'a', available: true, mode: 'real' },
+        { id: 'exec-b', name: '合成执行者', machineId: 'b', available: true, mode: 'real' },
       ];
       await json(route, state);
     });
@@ -205,7 +205,14 @@ test('旧扫描与旧项目响应不污染新选择；unknown 写操作只发送
 });
 
 test('直接执行继承文件夹、限定电脑，真实任务保留验收和时间校验', { timeout: 40000 }, async () => {
-  await withFolders(async ({ page, first, go, json }) => {
+  await withFolders(async ({ page, first, old, go, json }) => {
+    await go(old.id, 'runs');
+    await page.getByRole('button',{name:'发起执行',exact:true}).click();
+    const executor=page.getByLabel('谁来做');
+    await executor.selectOption({label:'合成执行者 · 电脑乙 (b)'});
+    await expect(executor).toHaveValue('exec-b');
+    await expect(executor.locator('option')).toContainText(['自动选择','合成执行者 · 电脑甲 (a)','合成执行者 · 电脑乙 (b)']);
+    await page.getByRole('dialog').getByRole('button',{name:'取消',exact:true}).click();
     await go(first.id, 'runs');
     await page.getByRole('button', { name: '发起执行', exact: true }).click();
     await expect(page.getByLabel('谁来做')).toHaveValue('exec-a');
