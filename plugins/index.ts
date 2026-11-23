@@ -155,6 +155,7 @@ export interface SystemActions {
   workDecisionCorrect?(input: Record<string, unknown>): Json;
   workDecisionWithdraw?(input: Record<string, unknown>): Json;
   workDecisionReference?(input: Record<string, unknown>): Json;
+  scheduledWorkCronPreview?(input: Record<string, unknown>): Json;
   scheduledWorkHistory?(input: Record<string, unknown>): Json;
   scheduledWorkBrief?(input: Record<string, unknown>): Json;
   scheduledWorkList?(input: Record<string, unknown>): Json;
@@ -624,6 +625,9 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         // Counts are a snapshot of persisted records, never simulated task results.
         context.contribute('routines', 'dailybrief', { name: 'dailybrief', async run() { return actions?.brief?.() ?? dailyBrief(context); } });
         if (actions?.brief) context.contribute('tools', 'brief_read', tool('brief_read', '读取待办、执行和督办事实简报。', async (_args, signal) => { signal.throwIfAborted(); return actions.brief!(); }));
+        if (actions?.scheduledWorkCronPreview) context.contribute('tools', 'scheduled_work_cron_preview', tool('scheduled_work_cron_preview',
+          '只读试算拟定规则的下三次排期，返回 UTC 时刻和规则时区。', async args => actions.scheduledWorkCronPreview!(args),
+          { cron: { type: 'string' }, tz: { type: 'string' } }));
         if (actions?.scheduledWorkHistory) context.contribute('tools', 'scheduled_work_history', tool('scheduled_work_history',
           '分页读取指定计划的触发记录。续读时传入上一页的 nextOccurrenceKey。', async args => actions.scheduledWorkHistory!(args),
           { workId: { type: 'string' }, after: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' } }));

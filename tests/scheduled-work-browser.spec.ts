@@ -293,9 +293,14 @@ test('定时工作历史可重试并按触发记录继续翻页', async () => fi
 
 test('每周计划按所选星期和当地时间预览并提交审批', async () => fixture(async f => {
   const page: Page = f.page;
+  await page.route('**/scheduled-work/cron-preview?**', route => route.continue());
   await open(page);
   const form = drawer(page);
   await form.getByRole('textbox', { name: '标题', exact: true }).fill('周回顾');
+  await form.getByLabel('频率').selectOption('cron');
+  await form.getByLabel('cron 表达式', { exact: true }).fill('invalid');
+  await expect(form.getByRole('status', { name: '排期试算' })).toContainText('五段表达式');
+  assert.equal(f.writes.length, 0);
   await form.getByLabel('频率').selectOption('weekly');
   await form.getByLabel('每周触发时间').fill('08:35');
   await form.getByLabel('IANA 时区').fill('America/New_York');
@@ -308,6 +313,10 @@ test('每周计划按所选星期和当地时间预览并提交审批', async ()
   await form.getByLabel('周日', { exact: true }).check();
   await form.getByLabel('周二', { exact: true }).check();
   await expect(form.getByLabel('创建预览')).toContainText('35 8 * * 2,0');
+  const preview = form.getByRole('status', { name: '排期试算' });
+  await expect(preview.locator('time')).toHaveCount(3);
+  for (const moment of await preview.locator('time').allTextContents()) assert.match(moment, /星期[二日].*08:35/);
+  assert.equal(f.writes.length, 0);
   await submit(page);
   await expect(form).toContainText('已提交创建审批');
   assert.deepEqual(f.writes[0].body.schedule, { kind: 'cron', cron: '35 8 * * 2,0', tz: 'America/New_York' });

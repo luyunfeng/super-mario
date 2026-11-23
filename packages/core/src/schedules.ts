@@ -103,6 +103,22 @@ function validate(input: ScheduleInput, now: number): ScheduleInput {
     backgroundError("调度载荷超过 4KB");
   return result;
 }
+/** Preview a newly activated cron rule with the scheduler's clock and timezone semantics. */
+export function previewCron(input: Record<string, unknown>, now = Date.now()) {
+  if (typeof input.cron !== 'string' || typeof input.tz !== 'string')
+    backgroundError('需要五段 cron 表达式和 IANA 时区');
+  const spec = validate({ name: '排期预览', kind: 'cron', cron: input.cron.trim(), tz: input.tz.trim() }, now);
+  const nextRuns: string[] = [];
+  let cursor = now - 1;
+  while (nextRuns.length < 3) {
+    const at = nextOccurrence(spec, cursor);
+    cursor = Date.parse(at);
+    const previous = nextRuns.at(-1);
+    if (!previous || wall(previous, spec.tz!) !== wall(at, spec.tz!)) nextRuns.push(at);
+  }
+  return { cron: spec.cron!, tz: spec.tz!, nextRuns };
+}
+
 export function createSchedules({
   store,
   eventbox,

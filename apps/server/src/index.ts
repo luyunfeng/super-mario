@@ -293,6 +293,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (offset !== null && !/^\d+$/.test(offset)) throw new InputError('分页起点须为非负整数');
           return json(res,200,app.scheduledWork.list({ ...Object.fromEntries(url.searchParams), offset: offset === null ? undefined : Number(offset) }));
         }
+        if (path === '/api/v1/scheduled-work/cron-preview' && method === 'GET') return json(res, 200, app.scheduledWork.previewCron(Object.fromEntries(url.searchParams)));
         if (path === '/api/v1/scheduled-work/history' && method === 'POST') return json(res, 200, app.scheduledWork.readHistory(await body(req)));
         if (path === '/api/v1/scheduled-work/brief' && method === 'POST') return json(res, 200, app.scheduledWork.readBrief(await body(req)));
         if (path === '/api/v1/scheduled-work' && method === 'POST') return json(res,201,app.scheduledWork.propose(await body(req)));

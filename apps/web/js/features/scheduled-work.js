@@ -269,6 +269,19 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       if (!title.value.trim()) throw new Error('请填写标题。');
       if (project.value && !projects().some(p => p.id === project.value)) throw new Error('项目已不可用，请关闭后核对项目。');
       if (todo.value && !(snapshot().todos ?? []).some(t => t.id === todo.value && (t.projectId ?? '') === project.value)) throw new Error('关联待办已不属于所选项目，请重新选择。');
+      const schedule = scheduleInput();
+      let workAction = { kind: 'brief' };
+      if (action.value === 'dispatch') {
+        const selected = (snapshot().executors ?? []).find(e => e.id === executor.value);
+        if (!selected?.available) throw new Error(`执行者不可用：${selected?.reason ?? '请选择在线、可用的实际执行者'}。`);
+        if (!prompt.value.trim() || !doneWhen.value.trim()) throw new Error('请填写目标和完成标准。');
+        const expectMinutes = Number(estimate.value);
+        if (!Number.isInteger(expectMinutes) || expectMinutes < 1) throw new Error('预计分钟必须为正整数。');
+        workAction = { kind: 'dispatch', executorId: selected.id, prompt: prompt.value.trim(), doneWhen: doneWhen.value.trim(), expectMinutes, ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}) };
+      }
+      return { key, title: title.value.trim(), schedule, action: workAction, ...(project.value ? { projectId: project.value } : {}), ...(todo.value ? { todoId: todo.value } : {}) };
+    }
+    function scheduleInput() {
       let schedule;
       if (frequency.value === 'once') {
         const date = new Date(once.value);
@@ -294,18 +307,40 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
         if (!expression) throw new Error('请填写 cron 表达式。');
         schedule = { kind: 'cron', cron: expression, tz: zone.value.trim() };
       }
-      let workAction = { kind: 'brief' };
-      if (action.value === 'dispatch') {
-        const selected = (snapshot().executors ?? []).find(e => e.id === executor.value);
-        if (!selected?.available) throw new Error(`执行者不可用：${selected?.reason ?? '请选择在线、可用的实际执行者'}。`);
-        if (!prompt.value.trim() || !doneWhen.value.trim()) throw new Error('请填写目标和完成标准。');
-        const expectMinutes = Number(estimate.value);
-        if (!Number.isInteger(expectMinutes) || expectMinutes < 1) throw new Error('预计分钟必须为正整数。');
-        workAction = { kind: 'dispatch', executorId: selected.id, prompt: prompt.value.trim(), doneWhen: doneWhen.value.trim(), expectMinutes, ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}) };
+      return schedule;
+    }
+    const nextTimes = h('div', { role: 'status', 'aria-label': '排期试算' });
+    let previewKey, previewTimer, previewRevision = 0;
+    function refreshTimes() {
+      let schedule, problem;
+      if (['daily', 'weekly', 'cron'].includes(frequency.value)) {
+        try { schedule = scheduleInput(); } catch (cause) { problem = cause.message; }
       }
-      return { key, title: title.value.trim(), schedule, action: workAction, ...(project.value ? { projectId: project.value } : {}), ...(todo.value ? { todoId: todo.value } : {}) };
+      const key = JSON.stringify(schedule ?? problem);
+      if (previewKey === key) return;
+      previewKey = key;
+      const revision = ++previewRevision;
+      clearTimeout(previewTimer);
+      replace(nextTimes, problem && line(problem));
+      if (!schedule) return;
+      const { cron, tz } = schedule;
+      nextTimes.textContent = '正在试算排期…';
+      previewTimer = setTimeout(async () => {
+        if (!drawer.active()) return;
+        try {
+          const result = await api.get('/scheduled-work/cron-preview?' + new URLSearchParams({ cron, tz }));
+          if (revision !== previewRevision || !drawer.active()) return;
+          const format = new Intl.DateTimeFormat('zh-CN', { timeZone: tz, dateStyle: 'full', timeStyle: 'short' });
+          replace(nextTimes, line('接下来三次 · ' + tz), h('ul', null, result.nextRuns.map(at =>
+            h('li', null, h('time', { datetime: at }, format.format(new Date(at)))))));
+        } catch (cause) {
+          if (revision === previewRevision && drawer.active()) replace(nextTimes, line('排期试算失败：' + cause.message),
+            Button({ label: '重新试算', size: 'sm', onClick: () => { previewKey = undefined; refreshTimes(); } }));
+        }
+      }, 300);
     }
     function sync() {
+      refreshTimes();
       onceField.hidden = frequency.value !== 'once'; dailyField.hidden = frequency.value !== 'daily'; weeklyFields.hidden = frequency.value !== 'weekly';
       intervalField.hidden = frequency.value !== 'interval'; cronField.hidden = frequency.value !== 'cron';
       zoneField.hidden = !['daily', 'weekly', 'cron'].includes(frequency.value); dispatchFields.hidden = action.value !== 'dispatch';
@@ -317,7 +352,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     let busy = false, submitted = false;
     const form = h('div', { class: 'stack' },
       Field({ label: '标题', control: title, required: true }), Field({ label: '项目', control: project, hint: '默认继承顶栏。切换顶栏范围会关闭此抽屉，避免误提交。' }),
-      Field({ label: '关联待办', control: todo }), Field({ label: '频率', control: frequency }), onceField, dailyField, weeklyFields, intervalField, cronField, zoneField,
+      Field({ label: '关联待办', control: todo }), Field({ label: '频率', control: frequency }), onceField, dailyField, weeklyFields, intervalField, cronField, zoneField, nextTimes,
       Field({ label: '动作', control: action }), line('事实简报只程序汇总已接入事实，不自动调用模型或外发。派发每次到期仍会生成审批，审批生成不代表任务完成。'), dispatchFields, preview, message);
     form.addEventListener('input', sync); form.addEventListener('change', sync);
     const save = Button({ label: '提交创建审批', kind: 'primary', onClick: async () => {

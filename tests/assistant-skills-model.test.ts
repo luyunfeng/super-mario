@@ -2079,12 +2079,21 @@ test('飞书创建每周简报审批，Web 核对同一排期，跨夏令时保�
     assert.match(req.system, /星期日用 0/);
     assert.match(req.system, /法定工作日或调休/);
     if (req.lastRole === 'user') {
+      if (JSON.stringify(req.content).includes('只试算')) {
+        assert.match(req.system, /只预览不提创建审批/);
+        return call('scheduled_work_cron_preview', { cron: '35 8 * * 2,0', tz: 'America/New_York' }, 'preview');
+      }
       if (JSON.stringify(req.content).includes('查看排期')) return call('scheduled_work_list', {}, 'read');
       return call('scheduled_work_propose', { key: 'weekly-summary', title: '每周简报', schedule: {
         kind: 'cron', cron: '35 8 * * 2,0', tz: 'America/New_York' }, action: { kind: 'brief' } }, 'proposal');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
     const receipt = JSON.parse(raw);
+    if (req.callId === 'preview') {
+      assert.equal(receipt.nextRuns.length, 3);
+      const formatter = new Intl.DateTimeFormat('zh-CN', { timeZone: receipt.tz, dateStyle: 'full', timeStyle: 'short' });
+      return { role: 'assistant', content: '试算：' + receipt.nextRuns.map((at: string) => formatter.format(new Date(at))).join('、') };
+    }
     if (req.callId === 'proposal') {
       assert.equal(receipt.status, 'pending');
       return { role: 'assistant', content: '每周二和周日 08:35（纽约时间），创建审批待确认。' };
@@ -2105,6 +2114,9 @@ test('飞书创建每周简报审批，Web 核对同一排期，跨夏令时保�
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
     const source = { chatId: 'oc_weekly', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage('只试算纽约每周二和周日 08:35 的下三次触发', { ...source, messageId: 'preview' });
+    await t.waitFor(() => assert.ok(sent.some(reply => reply.startsWith('试算：') && (reply.match(/星期[二日].*?08:35/g) ?? []).length === 3)));
+    assert.equal(server.app.scheduledWork.list({ projectId: project.id }).total, 0);
     await adapter.onMessage('纽约每周二和周日早上 8:35 生成项目简报', { ...source, messageId: 'weekly' });
     await t.waitFor(() => assert.ok(sent.includes('每周二和周日 08:35（纽约时间），创建审批待确认。')));
     const [row] = server.app.scheduledWork.list({ projectId: project.id }).items;

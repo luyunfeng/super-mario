@@ -1,7 +1,7 @@
 import type { Store, EventBus } from '../../plugin-sdk/src/index.ts';
 import type { Approval, BotScope, Json, Message, Run, ScheduledWorkInput, ScheduledWorkOccurrence, ScheduledWorkRecord, ScheduledWorkScope } from '../../protocol/src/index.ts';
 import { createScheduledWork } from './scheduled-work.ts';
-import { nextOccurrence, type createSchedules } from './schedules.ts';
+import { nextOccurrence, previewCron, type createSchedules } from './schedules.ts';
 import type { createApprovalService } from './approvals.ts';
 import { validateBotScope } from './bot-scopes.ts';
 import { digest, stableJson } from './eventbox.ts';
@@ -186,7 +186,10 @@ export function createScheduledWorkService(options: {
     });
   }
   const off=events.subscribe(event=>{if(['projects.changed','todos.changed','plugins.changed','feishu.bots.changed','bots.changed'].includes(event.type)){manager.sync();cleanup();}});
-  return { list:publicRows,readHistory,readBrief,propose,cancel,skipNext,changeTiming,approveCreation:manager.approveCreation,assertDispatchCurrent:manager.assertDispatchCurrent,
+  return { list:publicRows, previewCron(input: Record<string, unknown>) {
+    if (!options.enabled()) fail('定时工作插件已停用', 409);
+    return previewCron(input);
+  }, readHistory,readBrief,propose,cancel,skipNext,changeTiming,approveCreation:manager.approveCreation,assertDispatchCurrent:manager.assertDispatchCurrent,
     sync(){manager.sync();cleanup();},async handle(event:Parameters<typeof manager.handle>[0]){
       if(!options.ready())return {status:'retry' as const,reason:'channel_bindings_initializing',afterSec:1,deferred:true};
       const result=await manager.handle(event);cleanup();return result;
