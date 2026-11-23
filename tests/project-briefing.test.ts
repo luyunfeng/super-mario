@@ -77,3 +77,14 @@ test('全天待办按早报当地日期判断逾期，保留登记日期', t => 
   assert.deepEqual(project.overdue?.map(item => item.id), ['yesterday']);
   assert.deepEqual(project.dueToday?.map(item => item.id), ['today']);
 });
+
+test('低干扰保留通知按事件时间与项目归入简报，旧记录使用原事件', t => {
+  const store=facts(t);
+  for (const [id,projectId,time] of [['one','a',to],['other','b',to],['edge','a',from]]) {
+    store.put('eventbox.events',id,{createdAt:time});
+    store.put('notifications.away','away:'+id,{id:'away:'+id,projectId,status:'held',text:'合成通知 '+id});
+  }
+  const brief=buildWindowBrief(store,from,to,'a');
+  assert.deepEqual(brief.projects[0].heldNotifications,[{id:'away:one',title:'合成通知 one'}]);
+  assert.match(formatWindowBrief(brief,'project'),/低干扰保留通知 1：合成通知 one/);
+});

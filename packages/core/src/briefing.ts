@@ -1,6 +1,6 @@
 import { pendingDecisionHref } from './pending-decision-link.ts';
 import type { Store } from '../../plugin-sdk/src/index.ts';
-import type { Project, Run, Todo, Approval, BriefingSettings } from '../../protocol/src/index.ts';
+import type { Project, Run, Todo, Approval, AwayNotification, BriefingSettings } from '../../protocol/src/index.ts';
 import type { createSchedules } from './schedules.ts';
 
 const defaults: BriefingSettings = { lowDistraction:false, decisionQuietHours: { enabled:false, start:'22:00', end:'08:00' }, timezone:'Asia/Shanghai', morning:'09:00', evening:'18:00', intervalHours:4, intervalEnabled:false, activeStart:'09:00', activeEnd:'21:00', awayNotifications:true };
@@ -15,6 +15,11 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
     timeZone: morningTimezone, year: 'numeric', month: '2-digit', day: '2-digit',
   }) : undefined;
   const projects = store.list<Project>('projects').filter(p => !p.archivedAt && (projectId === undefined || p.id === projectId));
+  const held = store.list<AwayNotification>('notifications.away').filter(item => item.status === 'held').flatMap(item => {
+    // Older held records still point at the durable event that produced them.
+    const date = item.createdAt ?? store.get<{createdAt:string}>('eventbox.events',item.id.slice('away:'.length))?.createdAt;
+    return date && changed(date) ? [{id:item.id,projectId:item.projectId,date,title:item.text.slice(0,800)}] : [];
+  }).sort((a,b)=>b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
   const runs = store.list<Run>('runs');
   const todos = store.list<Todo>('todos');
   const completedTodoIds = new Set(todos.filter(t => t.completedAt && beforeEnd(t.completedAt)).map(t => t.id));
@@ -48,7 +53,8 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
     }
     const updates = (status: Run['status']) => scopedRuns.filter(r => changed(r.updatedAt) && r.status === status)
       .map(r => ({ id: r.id, title: r.prompt, status: r.status }));
-    return { projectId:project.id, name:project.name, deferredQuestions,
+    const heldNotifications = held.filter(item => (item.projectId ?? '') === project.id).map(({id,title})=>({id,title}));
+    return { projectId:project.id, name:project.name, deferredQuestions, heldNotifications,
       ...(localDate ? { overdue, dueToday } : {}),
       ...(includeContinuingRuns ? { continuing: scopedRuns
         .filter(r => r.status === 'running' && Date.parse(r.updatedAt) <= Date.parse(from))
@@ -86,7 +92,7 @@ export function formatWindowBrief(brief: ReturnType<typeof buildWindowBrief> & {
   const rows=[`工作台${({morning:'早间',evening:'晚间',interval:'间隔',project:'项目'} as Record<string,string>)[name]||''}简报`,`${date.format(new Date(brief.from))} — ${date.format(new Date(brief.to))}（${timezone}）`];
   let changed=false;
   for(const p of brief.projects){
-    const sections=[['待你决定',p.decisions],['逾期待办',p.overdue ?? []],['今日到期',p.dueToday ?? []],['执行失败',p.failed],['执行结果未知',p.unknown],['执行已取消',p.cancelled],['等待执行',p.queued],['已完成待办',p.completed],['执行结束，待验收',p.ended],['进行中',p.progress],['仍记录为运行中，本期无更新',p.continuing ?? []],['事项更新',p.todoUpdates]] as const;
+    const sections=[['待你决定',p.decisions],['逾期待办',p.overdue ?? []],['今日到期',p.dueToday ?? []],['执行失败',p.failed],['执行结果未知',p.unknown],['执行已取消',p.cancelled],['等待执行',p.queued],['已完成待办',p.completed],['执行结束，待验收',p.ended],['进行中',p.progress],['仍记录为运行中，本期无更新',p.continuing ?? []],['事项更新',p.todoUpdates],['低干扰保留通知',p.heldNotifications ?? []]] as const;
     const nonempty=sections.filter(([,items])=>items.length);if(!nonempty.length)continue;changed=true;rows.push(`\n${p.name}`);
     for (const [label, items] of nonempty) {
       const titles = items.slice(0, 20).map(item => {
