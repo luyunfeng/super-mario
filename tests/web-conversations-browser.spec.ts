@@ -67,6 +67,14 @@ test('两个标签页并发改名与归档时核对版本，归档深链只读�
   const thread=first.getByLabel('给独立对话发消息');
   await thread.fill('归档后仍可读的合成历史');await thread.press('Enter');await expect(thread).toHaveValue('');
   await thread.fill('保留的未发草稿');
+  await first.getByRole('button',{name:'独立对话',exact:true}).click();
+  await expect(drawer).toContainText('归档后仍可读的合成历史');
+  const id=new URLSearchParams(new URL(first.url()).hash.split('?')[1]).get('thread');
+  const received=await second.request.post(server.url+'/api/v1/web-conversations/'+id+'/messages',{
+    headers:{authorization:'Bearer '+token},data:{text:'列表保持打开时的新发言'}});
+  assert.equal(received.status(),202);
+  await expect(drawer).toContainText('列表保持打开时的新发言');
+  await drawer.getByRole('link',{name:'原始名称'}).click();
   await second.goto(first.url());await second.getByRole('button',{name:'修改对话标题'}).click();
   const editor=second.getByRole('dialog',{name:'修改对话标题'});
   await editor.getByLabel('新的对话标题').fill('第二份草稿');
@@ -82,7 +90,7 @@ test('两个标签页并发改名与归档时核对版本，归档深链只读�
   await second.getByRole('button',{name:'归档对话',exact:true}).click();
   await expect(thread).toBeHidden();await expect(first.getByText('已归档 · 只读')).toBeVisible();
   await first.reload();await expect(first.getByText('已归档 · 只读')).toBeVisible();
-  await expect(first.locator('.msg--user:visible')).toContainText('归档后仍可读的合成历史');
+  await expect(first.locator('.msg--user:visible').first()).toContainText('归档后仍可读的合成历史');
   await expect(thread).toBeHidden();
   await first.getByRole('button',{name:'独立对话',exact:true}).click();
   await expect(drawer).toContainText('当前范围还没有独立对话');

@@ -188,7 +188,8 @@ export function createWebConversations({api,store,scope,router}){
     }},h('label',{class:'field'},'对话标题',name),submit);
     const filter=h('select',{class:'input','aria-label':'对话状态'},h('option',{value:'active'},'进行中'),h('option',{value:'archived'},'已归档'));
     const searchTitle=h('input',{type:'search',class:'input','aria-label':'按标题查找',placeholder:'输入标题中的文字'});
-    const drawer=openDrawer({title:'独立对话',body:[draft,h('label',{class:'field'},'对话状态',filter),searchTitle,status,list],onClose:()=>{if(selector===drawer){selector=null;listRefresh=null;}}});
+    let unwatch;
+    const drawer=openDrawer({title:'独立对话',body:[draft,h('label',{class:'field'},'对话状态',filter),searchTitle,status,list],onClose:()=>{unwatch?.();if(selector===drawer){selector=null;listRefresh=null;}}});
     selector=drawer;
     const ok=()=>selector===drawer && drawer.el.open && active() && drafts.owner()===owner && listProject()===projectId;
     let request=0,items;
@@ -202,16 +203,23 @@ export function createWebConversations({api,store,scope,router}){
         h('small',{class:'muted'},[timeAgo(row.lastInputAt || row.createdAt),row.lastInputText].filter(Boolean).join(' · ')))));
     }
     searchTitle.oninput=drawList;
-    listRefresh=async()=>{
+    listRefresh=async(quiet=false)=>{
       const seq=++request,query=new URLSearchParams({projectId});
       if(filter.value==='archived')query.set('archived','true');
-      items=undefined;replace(list);status.textContent='正在读取对话…';
+      if(!quiet){items=undefined;replace(list);status.textContent='正在读取对话…';}
       try{
         const result=await api.get(path+'?'+query);
         if(!ok() || seq!==request)return;
         items=result.items;drawList();
       }catch(error){if(ok() && seq===request)status.textContent=error.message;}
     };
+    let previousChanges=store.view.messageQueueChanges,previousConnection=store.view.connection;
+    unwatch=store.subscribe(view=>{
+      const changed=view.messageQueueChanges!==previousChanges && items?.some(row=>view.messageQueueChanges?.includes('web:'+row.id));
+      const reconnected=view.connection==='online' && previousConnection!=='online';
+      previousChanges=view.messageQueueChanges;previousConnection=view.connection;
+      if(ok() && (changed || reconnected))void listRefresh?.(true);
+    });
     filter.onchange=()=>listRefresh?.();void listRefresh();
   }
   function applyMeta(stamp,row){
