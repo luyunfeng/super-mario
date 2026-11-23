@@ -535,8 +535,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (method === 'PATCH') return json(res, 200, bots.updatePrivateThread(id, botThreads[2]!, await body(req)));
           const params = url.searchParams;
           const tag = params.get('tag') ?? undefined;
+          const isSearch = botThreads[2] === 'search' || botThreads[2]?.endsWith('/search');
+          if (params.has('role') && !isSearch) throw new InputError('发言人筛选仅用于搜索正文');
           if (!botThreads[2]) return json(res, 200, bots.listPrivateHistory(id, params.get('archived') === '1', tag));
-          if (botThreads[2] === 'search' || botThreads[2].endsWith('/search')) {
+          if (isSearch) {
             if (!app.plugins.list().some(p => p.id === 'conversation-search' && p.status === 'active'))
               throw new InputError('对话历史搜索插件已停用', 503);
             if (params.has('around') || params.has('after') || params.getAll('before').length > 1)

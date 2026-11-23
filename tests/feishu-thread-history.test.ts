@@ -133,6 +133,13 @@ test('独立对话改名和归档可跨重启，旧事件不恢复归档，引�
   assert.ok(hit && hit.id && hit.createdAt && hit.excerpt.includes('归档前的跟进'));
   assert.equal(bodySearch.items[0].titleMatch, false);
   const hitsUrl = path + '/search?' + new URLSearchParams({ q: '归档前的跟进' });
+  for (const endpoint of ['?role=user', path + '?role=user', '/search?q=蓝色调查&role=system',
+    hitsUrl + '&role=user&role=assistant']) {
+    assert.equal((await api(a.id, endpoint)).status, 400, endpoint);
+  }
+  const titleOnly = await api(a.id, '/search?q=蓝色调查&role=user');
+  assert.equal(titleOnly.status, 200);
+  assert.deepEqual((await titleOnly.json()).items, []);
   const hitPage = await api(a.id, hitsUrl);
   assert.equal(hitPage.status, 200);
   assert.deepEqual((await hitPage.json()).hits.map((item: { id: string }) => item.id),
