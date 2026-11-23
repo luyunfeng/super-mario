@@ -197,7 +197,7 @@ export interface SystemActions {
     sources?: { id: string; title: string; sourceUrl?: string; createdAt: string; meeting?: boolean; speakerNames?: Record<string, string>; materialKind?: 'meeting-transcript'; meetingStartedAt?: string }[]; truncated?: boolean; content?: string; title?: string }>;
   searchMeetings?(query: string, projectId?: string, offset?: number): Promise<Json>;
   meetingDay?(date: string, timezone?: string, projectId?: string, offset?: number): Promise<Json>;
-  knowledgeJobs?(): Json;
+  knowledgeJobs?(args: Record<string, unknown>): Json;
   dispatch(input: Record<string, unknown>): Json;
   createTodo(input: Record<string, unknown>): Json;
   listExecutors?(): Json;
@@ -575,7 +575,10 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
               throw new Error('请核对日期、时区、项目和分页位置');
             return actions.meetingDay!(args.date, args.timezone, args.projectId, args.offset);
           }, { date: { type: 'string' }, timezone: { type: 'string', description: '可选 IANA 时区' }, projectId: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
-        if (actions?.knowledgeJobs) context.contribute('tools', 'knowledge_jobs', tool('knowledge_jobs', '查看知识整理队列、真实 Agent 状态及生成的知识标识。', async (_args, signal) => { signal.throwIfAborted(); return actions.knowledgeJobs!(); }));
+        if (actions?.knowledgeJobs) context.contribute('tools', 'knowledge_jobs', tool('knowledge_jobs', '查知识整理队列。可传 projectId 和 status，按 nextOffset 续查；项目队列只显示本项目的提交记录。全局无筛选时可查看整理器状态。', async (args, signal) => {
+          signal.throwIfAborted();
+          return actions.knowledgeJobs!(args);
+        }, { projectId: { type: 'string' }, status: { type: 'string', enum: ['queued', 'running', 'awaiting_approval', 'completed', 'failed', 'unknown'] }, offset: { type: 'integer', minimum: 0 } }));
       },
     },
     {

@@ -2318,3 +2318,69 @@ test('飞书创建每周简报审批，Web 核对同一排期，跨夏令时保�
     assert.equal(nextOccurrence(schedule, Date.parse(before)), '2026-03-08T12:35:00.000Z');
   } finally { await server.close(); }
 });
+
+test('Web 主对话绑定项目及飞书项目助手只查看该项目的整理队列', async t => {
+  let adapter!: FeishuOptions, projectId = '', otherId = '';
+  const sent: string[] = [];
+  const summary = '本项目有 26 次失败提交。';
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.ok(req.tools.includes('knowledge_jobs'));
+      assert.match(req.system, /按 total 报告符合条件的提交次数/);
+      return call('knowledge_jobs', { projectId: otherId }, 'outside');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    if (req.callId === 'outside') {
+      assert.match(raw, /跨作用域 projectId/);
+      return call('knowledge_jobs', {}, 'all');
+    }
+    const page = JSON.parse(raw);
+    if (req.callId === 'all') {
+      assert.equal(page.total, 27);
+      assert.ok(!('worker' in page) && !('settings' in page));
+      assert.ok(page.jobs.every((job: {projectId:string}) => job.projectId === projectId));
+      return call('knowledge_jobs', { status: 'failed' }, 'first');
+    }
+    assert.equal(page.total, 26);
+    assert.deepEqual(Object.keys(page).sort(), ['jobs', 'nextOffset', 'total']);
+    for (const job of page.jobs) {
+      assert.equal(job.projectId, projectId);
+      assert.equal(job.status, 'failed');
+      assert.equal(job.text, undefined);
+    }
+    if (req.callId === 'first') {
+      assert.equal(page.jobs.length, 25);
+      assert.equal(page.nextOffset, 25);
+      return call('knowledge_jobs', { status: 'failed', offset: page.nextOffset }, 'next');
+    }
+    assert.deepEqual(page.jobs.map((job: {id:string}) => job.id), ['failed-0']);
+    assert.equal(page.nextOffset, null);
+    return { role: 'assistant', content: summary };
+  }, options => {
+    adapter = options;
+    return { async start() {}, async close() {}, async collect() { return []; }, status: () => ({ connected: true }),
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    projectId = (await api('/projects', { name: '队列项目' })).id;
+    otherId = (await api('/projects', { name: '独立项目' })).id;
+    const base = { layer: 'project', projectId, status: 'failed', title: '合成来源', createdAt: '2032-01-01T00:00:00Z',
+      updatedAt: '2032-01-01T00:01:00Z', knowledgeIds: [], text: '原始材料', error: '来源读取失败' };
+    for (let i = 0; i < 26; i++) server.app.store.put('knowledge.sources', 'failed-' + i, { ...base, id: 'failed-' + i });
+    for (const [id, fields] of Object.entries({ outside: { projectId: otherId }, personal: { layer: 'personal', projectId: undefined }, handled: { status: 'completed' } })) {
+      server.app.store.put('knowledge.sources', id, { ...base, ...fields, id });
+    }
+    const before = server.app.store.list('knowledge.sources');
+    const question = '本项目哪些资料整理失败了？';
+    const main = await api('/messages', { text: question, projectId });
+    await t.waitFor(() => assert.equal(server.app.store.list<Message>('messages').find(m => m.replyTo === main.id && m.status === 'done')?.text, summary));
+    assert.equal(await ask(question, '/projects/' + projectId + '/messages'), summary);
+    const bot = await api('/feishu/bots', { name: '队列查询', appId: 'cli_4444444444444444', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(question, { ...source, messageId: 'queue' });
+    await t.waitFor(() => assert.ok(sent.includes(summary)));
+    assert.deepEqual(server.app.store.list('knowledge.sources'), before);
+  } finally { await server.close(); }
+});

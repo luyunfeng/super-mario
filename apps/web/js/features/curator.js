@@ -17,7 +17,7 @@ const retries = new WeakMap();
 const wrap = { overflowWrap: 'anywhere', minWidth: '0' };
 const failure = error => `${error.status ? `HTTP ${error.status}` : '网络或响应异常'}，请求结果未确认`;
 
-export function openCuratorDrawer({ api, store, onChanged, jobId }) {
+export function openCuratorDrawer({ api, store, onChanged, jobId, projectId }) {
   const token = api.token?.();
   if (!retries.has(api)) retries.set(api, new Map());
   const identities = retries.get(api);
@@ -40,7 +40,12 @@ export function openCuratorDrawer({ api, store, onChanged, jobId }) {
   let lastHealth = '';
   const status = h('div', { style: wrap, role: 'status' }, '正在读取…');
   const settings = h('div', { class: 'stack' });
-  const jobsRegion = h('section', { class: 'stack', 'aria-label': '整理队列', style: wrap });
+  const jobsTitle = h('h3', null, '整理队列');
+  const jobState = Select({ options: [['', '全部状态'], ...Object.entries(STATUS)], 'aria-label': '筛选整理状态', onchange: paintJobs });
+  const jobScope = Select({ options: [['', '全部范围'], ['personal', '个人']], 'aria-label': '筛选整理范围', onchange: paintJobs });
+  const filters = h('div', { class: 'row row--wrap', hidden: true }, jobScope, jobState);
+  const jobRows = h('div', { class: 'stack' });
+  const jobsRegion = h('section', { class: 'stack', 'aria-label': '整理队列', style: wrap }, jobsTitle, filters, jobRows);
   const body = h('div', { class: 'stack stack--lg' }, status, settings, jobsRegion);
   function dispose() {
     clearTimeout(timer); ++generation; unsubscribe?.(); reader?.destroy(); titleEditor?.close();
@@ -93,11 +98,24 @@ export function openCuratorDrawer({ api, store, onChanged, jobId }) {
   }
   function paintJobs() {
     if (!curator) return;
-    const jobs = curator.jobs;
     const snapshot = store.view.snapshot;
     const pages = new Map((snapshot?.knowledge ?? []).map(page => [page.id, page]));
     const projects = new Set((snapshot?.projects ?? []).filter(project => !project.archivedAt).map(project => project.id));
-    replace(jobsRegion, h('h3', null, `整理队列 ${jobs.length}`), !verified && h('p', { class: 'muted small' }, '以下为上次读取的数据，当前进度未确认。'),
+    const options = (snapshot?.projects ?? []).map(project => ['project:' + project.id, project.name + (project.archivedAt ? '（已归档）' : '')]);
+    const signature = JSON.stringify(options);
+    if (jobScope.dataset.projects !== signature) {
+      const selected = jobScope.dataset.projects === undefined && projectId && !jobId ? 'project:' + projectId : jobScope.value;
+      replace(jobScope, [['', '全部范围'], ['personal', '个人'], ...options].map(([value, name]) => h('option', { value }, name)));
+      if (selected && ![...jobScope.options].some(option => option.value === selected)) jobScope.append(h('option', { value: selected }, '所选项目'));
+      jobScope.value = selected;
+      jobScope.dataset.projects = signature;
+    }
+    filters.hidden = !curator.jobs.length;
+    const jobs = curator.jobs.filter(job =>
+      (!jobScope.value || jobScope.value === (job.layer === 'project' ? 'project:' + job.projectId : 'personal')) &&
+      (!jobState.value || jobState.value === (DONE.has(job.status) ? 'completed' : job.status)));
+    jobsTitle.textContent = '整理队列 ' + jobs.length;
+    replace(jobRows, !verified && h('p', { class: 'muted small' }, '以下为上次读取的数据，当前进度未确认。'),
       jobs.length ? h('div', { class: 'list' }, jobs.map(job => {
         const attempt = attempts.get(job.id);
         const next = successor(job);
@@ -131,7 +149,7 @@ export function openCuratorDrawer({ api, store, onChanged, jobId }) {
             disabled: !verified || !!attempt?.busy || (!!attempt && !checked.has(job.id)), onClick: () => retry(job),
           }),
           canRetry && !next && !attempt?.accepted && (!verified || (attempt && !checked.has(job.id))) && Button({ label: '核对现有队列', size: 'sm', onClick: load }));
-      })) : h('p', { class: 'muted small' }, '队列是空的。'));
+      })) : h('p', { class: 'muted small' }, curator.jobs.length ? '没有符合筛选条件的整理记录。' : '队列是空的。'));
   }
 
   async function retry(job) {

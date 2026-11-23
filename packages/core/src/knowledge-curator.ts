@@ -123,6 +123,14 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
       URL.parse(job.url)?.href === url.href);
     return { matches, start: offset, end: offset + 25 };
   }
+  function attemptSummary(job: Job, title = job.title) {
+    return {
+      id: job.id, title, layer: job.layer, projectId: job.projectId ?? null,
+      status: job.status, createdAt: job.createdAt, updatedAt: job.updatedAt,
+      error: job.error ?? null, retryOf: job.retryOf ?? null,
+      webCitation: `[查看整理记录](#memory?curator=1&job=${encodeURIComponent(job.id)})`,
+    };
+  }
   function visibleMeetings(projectId?: string) {
     if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
     if (projectId && !options.validProject(projectId)) throw new CuratorError('项目不可用', 404);
@@ -554,13 +562,22 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
       const { matches, start, end } = sourceUrlMatches(value, projectId, offset);
       // Newest submissions first, independent of later changes to an older attempt.
       const visible = matches.filter(job => !job.projectId || options.validProject(job.projectId)).reverse();
-      const attempts = visible.slice(start, end).map(job => ({
-        id: job.id, title: job.title, layer: job.layer, projectId: job.projectId ?? null,
-        status: job.status, createdAt: job.createdAt, updatedAt: job.updatedAt,
-        error: job.error ?? null, retryOf: job.retryOf ?? null,
-        webCitation: `[查看整理记录](#memory?curator=1&job=${encodeURIComponent(job.id)})`,
-      }));
+      const attempts = visible.slice(start, end).map(job => attemptSummary(job));
       return { attempts, total: visible.length, nextOffset: end < visible.length ? end : null };
+    },
+    queueJobs(projectId: string | undefined, state: unknown, offset: unknown = 0) {
+      if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
+      if (projectId && !options.validProject(projectId)) throw new CuratorError('项目不可用', 404);
+      if (state !== undefined && (typeof state !== 'string' || !['queued', 'running', 'awaiting_approval', 'completed', 'failed', 'unknown'].includes(state)))
+        throw new CuratorError('整理任务状态无效');
+      if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0)
+        throw new CuratorError('队列查询位置无效');
+      const all = jobs(), titles = meetingTitles(), roots = titles.size ? meetingRoots(all) : new Map<string, string>();
+      const matches = all.filter(job => (state === undefined || job.status === state) &&
+        (projectId ? job.layer === 'project' && job.projectId === projectId : !job.projectId || options.validProject(job.projectId))).reverse();
+      const end = offset + 25;
+      return { jobs: matches.slice(offset, end).map(job => attemptSummary(job, titles.get(roots.get(job.id) ?? job.id))),
+        total: matches.length, nextOffset: end < matches.length ? end : null };
     },
     async pageSources(pageId: string, sourceId?: string, projectId?: string, handoffExcerpt = false) {
       if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);

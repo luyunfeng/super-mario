@@ -497,6 +497,13 @@ test('会议日回顾按时区和项目分页，空结果区分未注日期，�
   await page.getByRole('link', { name: '查看整理记录' }).click();
   const queue = page.getByRole('region', { name: '整理队列' });
   await expect(queue.locator('.is-search-hit')).toHaveAttribute('data-job-id', first.id);
+  await queue.getByLabel('筛选整理范围').selectOption('project:' + project.id);
+  await queue.getByLabel('筛选整理状态').selectOption('queued');
+  await expect(queue.locator('[data-job-id]')).toHaveCount(26);
+  await expect(queue).not.toContainText('个人范围来源');
+  await queue.getByLabel('筛选整理状态').selectOption('failed');
+  await expect(queue).toContainText('没有符合筛选条件的整理记录');
+  await queue.getByLabel('筛选整理状态').selectOption('');
   await queue.locator('[data-job-id]').filter({ hasText: '未填写日期' }).getByRole('button', { name: '修改标题' }).click();
   await editor.getByRole('textbox', { name: '会议标题' }).fill('未定日期的复核');
   await editor.getByRole('button', { name: '保存标题' }).click();

@@ -144,7 +144,7 @@ export function createMemoryPage({ api, store, router, scope }) {
     const enabled = curator?.settings?.enabled;
     replace(curatorLine,
       h('span', { class: 'small muted' }, `整理 Agent：${curator ? (enabled ? '已启用' : '已暂停') : '读取中…'}${pending ? ` · 待整理 ${pending}` : ''}`),
-      Button({ label: '设置与队列', size: 'sm', kind: 'ghost', onClick: () => openCuratorDrawer({ api, store, onChanged: loadCurator }) }));
+      Button({ label: '设置与队列', size: 'sm', kind: 'ghost', onClick: () => openCuratorDrawer({ api, store, projectId: scope.get(), onChanged: loadCurator }) }));
   }
 
   scope.subscribe(() => paint());
@@ -170,7 +170,7 @@ export function createMemoryPage({ api, store, router, scope }) {
     onShow(route) {
       decisions.show();
       loadCurator();
-      if (route.query.get('curator')) openCuratorDrawer({ api, store, onChanged: loadCurator, jobId: route.query.get('job') });
+      if (route.query.get('curator')) openCuratorDrawer({ api, store, projectId: scope.get(), onChanged: loadCurator, jobId: route.query.get('job') });
       const entry = route.query.get('entry');
       linkedEntry = entry && { id: entry, sourceId: route.query.get('source'), selectedCommit: route.query.get('revision'), line: Number(route.query.get('line')) };
       openLinkedEntry();
