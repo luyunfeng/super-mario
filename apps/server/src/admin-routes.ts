@@ -1,6 +1,7 @@
 import {timingSafeEqual} from 'node:crypto';
 import type {IncomingMessage,ServerResponse} from 'node:http';
 import {isIP} from 'node:net';
+import type {createAdminOverview} from './admin-overview.ts';
 import type {createAdminAuth} from './admin-auth.ts';
 
 const base='/api/v1/admin/',cookieName='sm_admin_session';
@@ -45,7 +46,7 @@ function cookie(req:IncomingMessage,res:ServerResponse,token:string,expiresAt:nu
 }
 export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootToken:string|undefined,
   readBody:(req:IncomingMessage,limit:number)=>Promise<Record<string,unknown>>,
-  json:(res:ServerResponse,status:number,value:unknown)=>void) {
+  json:(res:ServerResponse,status:number,value:unknown)=>void,overview:ReturnType<typeof createAdminOverview>) {
   // Reserve a slot before the password hash starts, so concurrent guesses count as well.
   const attempts=new Map<string,{count:number;until:number}>();
   async function limited<T>(req:IncomingMessage,res:ServerResponse,operation:()=>Promise<T>):Promise<T> {
@@ -67,12 +68,12 @@ export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootTo
     const action=path.slice(base.length),token=sessionToken(req),session=token?auth.session(token):undefined;
     if(req.method==='GET'){
       if(action==='state')return json(res,200,{configured:auth.configured(),authenticated:!!session,...(session && {csrf:session.csrf,expiresAt:session.expiresAt})});
-      if(action==='overview'){
+      if(action==='overview'||action==='doctor'){
         if(!session)fail(401,'请先登录管理界面');
-        return json(res,200,{version:'0.1.0'});
+        return json(res,200,action==='overview'?overview.read():overview.doctor());
       }
     }
-    if(!['setup-code','setup','login','password','logout'].includes(action))fail(404,'管理接口不存在');
+    if(!['setup-code','setup','login','password','logout','name'].includes(action))fail(404,'管理接口不存在');
     if(req.method!=='POST')fail(405,'此管理操作需要 POST');
     sameOrigin(req);
     if(req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json')fail(415,'管理操作需要 JSON 请求');
@@ -81,14 +82,15 @@ export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootTo
       if(!rootToken || !loopback(req.socket.remoteAddress??'') || !localHost(req.headers.host) || proxy || req.headersDistinct.authorization?.length!==1 ||
         !exact(req.headers.authorization,'Bearer '+rootToken))fail(403,'请在服务器本机使用工作台主令牌获取初始化码');
     }
-    const fields=action==='setup'?['code','password']:action==='login'?['password']:action==='password'?['currentPassword','newPassword']:[];
+    const fields=action==='setup'?['code','password']:action==='login'?['password']:action==='password'?['currentPassword','newPassword']:action==='name'?['name']:[];
     const input=await readBody(req,8192);
     if(Object.keys(input).some(k=>!fields.includes(k)) || fields.some(k=>typeof input[k]!=='string'))fail(400,'管理请求字段无效');
     if(action==='setup-code')return json(res,200,{code:auth.issueCode()});
-    if(action==='password'||action==='logout'){
+    if(action==='password'||action==='logout'||action==='name'){
       const current=auth.session(token);
       if(!current)fail(401,'请先登录管理界面');
       if(req.headersDistinct['x-csrf-token']?.length!==1||!exact(req.headers['x-csrf-token'] as string|undefined,current.csrf))fail(403,'管理请求的 CSRF 验证失败');
+      if(action==='name')return json(res,200,overview.rename(input.name));
       if(action==='logout'){
         auth.logout(token);cookie(req,res,'',0);return json(res,200,{configured:auth.configured(),authenticated:false});
       }

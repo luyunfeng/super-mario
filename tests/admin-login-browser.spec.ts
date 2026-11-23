@@ -23,7 +23,7 @@ test('独立管理页首次设置、登录、改密、退出，只向一次本�
     if(p===manual && r.url().endsWith('/admin/state'))manualStateReads++;
     if(r.headers().authorization){authPaths.push(new URL(r.url()).pathname);assert.equal(r.headers().authorization,'Bearer '+token);}
     assert.ok(!r.url().includes(token));assert.ok(!r.url().includes('synthetic-password'));
-    if(/\/(password|logout)$/.test(r.url()))assert.ok(r.headers()['x-csrf-token']);
+    if(/\/(password|logout|name)$/.test(r.url()))assert.ok(r.headers()['x-csrf-token']);
   });
   await page.goto(server.url+'/#agent/advanced?token='+token);await page.getByRole('link',{name:'管理员登录'}).click();
   assert.equal(page.url(),adminUrl);await page.getByRole('button',{name:'在本机获取设置码'}).click();
@@ -40,6 +40,18 @@ test('独立管理页首次设置、登录、改密、退出，只向一次本�
   await page.getByLabel('管理员密码',{exact:true}).fill(p1);await page.getByRole('button',{name:'登录',exact:true}).click();
   await expect(page.getByRole('heading',{name:'管理员会话'})).toBeVisible();
   await page.getByLabel('当前密码').fill(p1);await page.getByLabel('新密码',{exact:true}).fill(p2);
+  const overview=page.getByRole('region',{name:'服务概览'});
+  await expect(overview).toContainText('演示');await expect(overview).toContainText('运行时长');await expect(overview).toContainText('启动时间');
+  const defaultName=await overview.locator('dd').first().innerText();
+  await page.getByRole('textbox',{name:'实例名称',exact:true}).fill('合成管理实例');await page.getByRole('button',{name:'保存名称'}).click();
+  await expect(overview).toContainText('合成管理实例');
+  await page.getByRole('button',{name:'刷新概览'}).click();await expect(page.getByRole('status')).toContainText('已刷新');
+  await page.getByRole('button',{name:'运行诊断'}).click();
+  await expect(page.getByRole('region',{name:'运行诊断'})).toContainText('检查时间');
+  await expect(page.getByLabel('当前密码')).toHaveValue(p1);await expect(page.getByLabel('新密码',{exact:true})).toHaveValue(p2);
+  await page.getByRole('textbox',{name:'实例名称',exact:true}).fill('');await page.getByRole('button',{name:'保存名称'}).click();
+  await expect(overview.locator('dd').first()).toHaveText(defaultName);
+  await expect(overview.getByLabel('本机访问地址').first()).toHaveValue(/^http:\/\//);
   await page.getByLabel('确认新密码').fill(p2);await page.getByRole('button',{name:'保存新密码'}).click();
   await expect(page.getByLabel('当前密码')).toHaveValue('');
   await manual.reload();await expect(manual.getByRole('heading',{name:'管理员登录'})).toBeVisible();

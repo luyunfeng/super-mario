@@ -1,3 +1,4 @@
+import {createAdminOverview} from './admin-overview.ts';
 import {createAdminAuth} from './admin-auth.ts';
 import {createAdminRoutes} from './admin-routes.ts';
 import {proofForBrowserToken} from '../../../plugins/browser-devices.ts';
@@ -91,6 +92,8 @@ const conversationReaders = new Map<string, { id: string; disabled: string; serv
 
 /** One HTTP server serves both the product and its API; no second frontend process is needed. */
 export async function startServer(config: AppConfig, dependencies: FeishuGatewayDependencies = {}) {
+  const startedAt=new Date().toISOString();
+  const version='0.1.0';
   const app = await createWorkbench(config);
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const machines = createMachineHub(app);
@@ -100,7 +103,6 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
   const artifacts = createAgentArtifacts({ store: app.store, events: app.events, machines: () => machines });
   const gateway = createFeishuGateway(app, config, dependencies);
   const { feishu, personal, personalAi, personalAiView, configurePersonalAi, personalView, bots, registrations, registrationView, proposeMail } = gateway;
-  const adminRoutes=createAdminRoutes(createAdminAuth(app.store),config.token,body,json);
   const browserAccess=createBrowserAccess(config.token,token=>app.browserDevices.authenticate(token));
   app.setBrowserDeviceInvalidator(browserAccess.invalidate);
   function devicePlugin() {
@@ -113,7 +115,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
       const path = url.pathname;
-      if (path === '/api/health' || path === '/api/v1/health') return json(res, 200, { ok: true, version: '0.1.0' });
+      if (path === '/api/health' || path === '/api/v1/health') return json(res, 200, { ok: true, version });
       if(path.startsWith('/api/v1/admin/'))return await adminRoutes(req,res,path);
       if(path==='/api/v1/public/browser-pair'){
         if(req.method!=='POST')throw new InputError('设备配对需要 POST',405);
@@ -1357,6 +1359,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           ...((retryKind==='failures' || retryKind==='rate_limit') && {retryKind})}) });
     }
   });
+  const overview=createAdminOverview({store:app.store,version,startedAt,demo:!!config.demo,address:()=>server.address(),
+    machines:()=>machines.list(),plugins:()=>app.plugins.list(),devices:()=>app.browserDevices.list()});
+  const adminRoutes=createAdminRoutes(createAdminAuth(app.store),config.token,body,json,overview);
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const access=browserAccess.access(req,url);

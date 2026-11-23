@@ -37,11 +37,12 @@ async function refresh(){
     const next=await request('state');
     if(stamp!==generation)return;
     if(next.authenticated){
+      if(state?.authenticated && state.csrf===next.csrf && state.expiresAt===next.expiresAt)return;
       const overview=await request('overview');
       if(stamp!==generation)return;
-      if(state?.authenticated && state.csrf===next.csrf && state.expiresAt===next.expiresAt)return;
       clear();state=next;showSession(overview);
-      if(next.expiresAt)timer=setTimeout(()=>{clear();void refresh();},Math.max(0,next.expiresAt-Date.now()));
+      const expiry=new Date(next.expiresAt).getTime();
+      if(Number.isFinite(expiry))timer=setTimeout(()=>{clear();void refresh();},Math.max(0,expiry-Date.now()));
     }else{
       if(state && !state.authenticated && state.configured===next.configured)return;
       clear();state=next;showLogin(next.configured);
@@ -87,11 +88,63 @@ function showLogin(configured){
     await request('setup',{code:value(code),password:value(password)});clear();await refresh();
   }));
 }
+function uptime(startedAt){
+  const minutes=Math.floor((Date.now()-Date.parse(startedAt))/60000);
+  if(!Number.isFinite(minutes) || minutes<0)return;
+  if(minutes<1)return '不足 1 分钟';
+  if(minutes<60)return minutes+' 分钟';
+  const hours=Math.floor(minutes/60);
+  return hours<24?hours+' 小时 '+minutes%60+' 分钟':Math.floor(hours/24)+' 天 '+hours%24+' 小时';
+}
 function showSession(overview){
   const old=secret('当前密码','current-password'),next=secret('新密码','new-password'),confirm=secret('确认新密码','new-password');
   const csrf={'x-csrf-token':state.csrf};
-  replace(view,h('h2',{},'管理员会话'),h('dl',{class:'kv'},h('dt',{},'服务版本'),h('dd',{},overview.version),
-    h('dt',{},'会话到期'),h('dd',{},state.expiresAt?new Date(state.expiresAt).toLocaleString('zh-CN'):'未提供')),
+  const session=state,info=h('dl',{class:'kv'}),name=h('input',{class:'input',type:'text'}),feedback=h('p',{role:'status'}),
+    report=h('div',{class:'stack','aria-label':'诊断结果'});
+  const endpoints=h('div',{class:'stack'});
+  let dirty=false;
+  name.oninput=()=>{dirty=true;feedback.textContent='';};
+  function paint(data){
+    const display=data.name || data.defaultName;
+    if(!dirty)name.value=data.name===data.defaultName?'':(data.name ?? '');
+    name.placeholder=data.defaultName || '';
+    const details=[
+      ['实例名称',display],['服务版本',data.version],['实例 ID',data.instanceId],
+      ['运行模式',data.mode==='demo'?'演示':data.mode==='live'?'正式':undefined],
+      ['操作系统',[data.platform,data.arch].filter(Boolean).join(' / ')],['监听地址',data.listen],
+      ['运行时长',uptime(data.startedAt)],['启动时间',data.startedAt && new Date(data.startedAt).toLocaleString('zh-CN')],
+      ['执行机',data.machines && (data.machines.online+' 台在线，共 '+data.machines.total+' 台')],
+      ['已配对浏览器',data.devices==null?'不可用':data.devices+' 台'],
+      ['会话到期',session.expiresAt && new Date(session.expiresAt).toLocaleString('zh-CN')],
+    ];
+    replace(endpoints,data.endpoints?.length?[h('h4',{},'服务直连 HTTP 地址'),
+      ...data.endpoints.map(endpoint=>h('label',{class:'field'},endpoint.kind==='local'?'本机访问地址':'网络访问地址',
+        h('input',{class:'input',readOnly:true,value:endpoint.url,onclick:event=>event.target.select()}))),
+      h('small',{class:'muted'},'来自服务监听和本机网络接口，外网连通性未经测试。')]:[]);
+    replace(info,details.map(([label,text])=>[h('dt',{},label),h('dd',{},text ?? '未提供')]));
+  }
+  const saveName=form('修改实例名称',[h('label',{class:'field'},'实例名称',name),
+    h('small',{class:'muted'},'留空保存可恢复默认名称。')],'保存名称',async()=>{
+    const updated=await request('name',{name:name.value.trim()},csrf);
+    if(state!==session)return;
+    dirty=false;paint(updated);feedback.textContent='实例名称已更新。';
+  });
+  const reload=button('刷新概览',()=>submit(async()=>{
+    const updated=await request('overview');
+    if(state===session){paint(updated);feedback.textContent='概览已刷新。';}
+  }));
+  const statusLabels={ok:'正常',warning:'警告',error:'错误'};
+  const diagnose=button('运行诊断',()=>submit(async()=>{
+    replace(report);
+    const result=await request('doctor');
+    if(state!==session)return;
+    replace(report,h('p',{},'检查时间 '+new Date(result.checkedAt).toLocaleString('zh-CN')),
+      h('ul',{},result.checks.map(check=>h('li',{},h('strong',{},check.label+' · '+statusLabels[check.status]),
+        h('p',{},check.detail)))));
+  }));
+  paint(overview);
+  replace(view,h('h2',{},'管理员会话'),h('section',{class:'stack','aria-label':'服务概览'},h('h3',{},'服务概览'),info,endpoints,reload),
+    saveName,feedback,h('section',{class:'stack','aria-label':'运行诊断'},h('h3',{},'运行诊断'),diagnose,report),
     form('修改密码',[old,next,confirm],'保存新密码',async()=>{
       if(value(confirm)!==value(next))throw Error('两次输入的新密码不一致。');
       await request('password',{currentPassword:value(old),newPassword:value(next)},csrf);

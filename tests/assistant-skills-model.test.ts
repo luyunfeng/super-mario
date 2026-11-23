@@ -4895,13 +4895,16 @@ test('Web 和飞书答复离线备份问题时区分校验与实际恢复', asyn
   } finally { await server.close(); }
 });
 
-test('Web 与配对飞书说明浏览器接入时不索取凭据',async t=>{
+test('Web 与配对飞书说明浏览器接入和管理诊断时不索取凭据',async t=>{
   let adapter!:FeishuOptions;
   const sent:string[]=[],answer='请在主浏览器的「浏览器设备」生成一次性链接，在目标浏览器确认。';
+  const diagnosis='请在管理员页运行诊断，查看该次检查的时间和结果。';
   const {server,api,ask}=await fixture(t,request=>{
     assert.match(request.system,/目标浏览器打开并确认/);
     assert.match(request.system,/不要在飞书、聊天、日志或笔记中索取或转发/);
     assert.match(request.system,/没有撤销回执时，要说明旧凭据可能仍然有效/);
+    assert.match(request.system,/没有管理页面回执时只说明步骤，不代报诊断结果/);
+    if(JSON.stringify(request.content).includes('诊断结果'))return {role:'assistant',content:diagnosis};
     return {role:'assistant',content:JSON.stringify(request.content).includes('仅本地退出')?'旧凭据可能仍然有效。':answer};
   },options=>{
     adapter=options;
@@ -4917,6 +4920,9 @@ test('Web 与配对飞书说明浏览器接入时不索取凭据',async t=>{
     assert.equal(await ask('仅本地退出后，设备的旧凭据一定失效了吗？'),'旧凭据可能仍然有效。');
     await adapter.onMessage('仅本地退出能保证撤销成功吗？',{...owner,messageId:'device-local-exit'});
     await t.waitFor(()=>assert.ok(sent.includes('旧凭据可能仍然有效。')));
+    assert.equal(await ask('在哪里看服务端的诊断结果？'),diagnosis);
+    await adapter.onMessage('如何核对实例的诊断结果？',{...owner,messageId:'admin-diagnosis'});
+    await t.waitFor(()=>assert.ok(sent.includes(diagnosis)));
     assert.deepEqual(server.app.browserDevices.list(),[]);
   }finally{await server.close();}
 });
