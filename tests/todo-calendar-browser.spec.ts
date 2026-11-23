@@ -438,7 +438,9 @@ test('全天待办按创建日期跨时区显示，改期保留全天，填入�
   const created=await response.json() as Todo;
   assert.equal(created.dueDay,'2030-04-01');assert.equal(created.dueAt,'2030-04-02T06:59:59.999Z');
   const east=await browser.newPage({timezoneId:'Asia/Shanghai'});
+  await east.clock.setFixedTime(new Date('2030-04-01T04:00:00Z'));
   await east.goto(base);
+  await east.getByLabel('按截止日期筛选').selectOption('today');
   await expect(east.locator('#panel-todos .todo').filter({hasText:name})).toContainText('2030-04-01 · 全天');
   await east.goto(base+'/day/2030-04-01');
   const cal=east.getByRole('region',{name:'待办日历'}),entry=cal.getByRole('button',{name:new RegExp('全天.*'+name)});

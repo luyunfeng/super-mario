@@ -31,7 +31,9 @@ function matchesPeriod(todo, period, ranges, now) {
   if (period === 'overdue') return !todo.completedAt && due < now;
   if (period === 'none') return !Number.isFinite(due);
   const [start, end] = ranges[period];
-  return (!todo.completedAt && due < now) || (start <= due && due < end);
+  if (!todo.completedAt && due < now) return true;
+  if (todo.dueDay) return localDate(start) <= todo.dueDay && todo.dueDay < localDate(end);
+  return start <= due && due < end;
 }
 
 function orderTodos(items, order) {
