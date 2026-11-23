@@ -49,7 +49,7 @@ function workSteps(store: Store, message: Message, userIds: Set<string>): string
 }
 
 type ReadNative = (source: NativeExportSource, includeWork: boolean, signal: AbortSignal) =>
-  Promise<{ markdown: string; filename: string; count: number }>;
+  Promise<{ markdown: string; filename: string; count: number; hasContent?: boolean }>;
 
 type ReadAssistant = () => Promise<{ name: string } | undefined>;
 

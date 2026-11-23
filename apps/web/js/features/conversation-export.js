@@ -66,10 +66,11 @@ export function openConversationExport({ api, store, source, subtitle, isCurrent
     drawer.foot.replaceChildren();
     status.textContent = '正在导出对话…';
     try {
-      const { markdown, filename, count } = await api.post('/conversation-export', { ...source, includeWork: includeWork.checked });
+      const { markdown, filename, count, hasContent } = await api.post('/conversation-export', { ...source, includeWork: includeWork.checked });
       if (!valid()) return;
-      if (!count) { status.textContent = '暂无可导出的消息'; return; }
-      status.textContent = `共 ${count} 条消息`;
+      if (!count && !hasContent) { status.textContent = '暂无可导出的消息'; return; }
+      const file = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+      status.textContent = `共 ${count} 条消息 · ${file.size.toLocaleString()} 字节`;
       preview.textContent = markdown;
       preview.hidden = false;
       replace(drawer.foot,
@@ -84,7 +85,7 @@ export function openConversationExport({ api, store, source, subtitle, isCurrent
         } }),
         Button({ label: '下载 .md', kind: 'primary', onClick: () => {
           if (!valid()) return;
-          const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
+          const url = URL.createObjectURL(file);
           h('a', { href: url, download: filename }).click();
           setTimeout(() => URL.revokeObjectURL(url), 1000);
         } }));

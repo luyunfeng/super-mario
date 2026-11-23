@@ -37,7 +37,8 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
       { type: 'text', text: '合成 Claude 请求' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: image } },
     ] } },
     { sessionId: claudeId, cwd: claudeCwd, type: 'assistant', message: { content: [
-      { type: 'thinking', thinking: '内部推理标记' }, { type: 'tool_use', name: 'fixture_read', input: { path: '参数标记' } },
+      { type: 'text', text: '准备读取' }, { type: 'thinking', thinking: '内部推理标记' },
+      { type: 'tool_use', name: 'fixture_read', input: { path: '参数标记' } }, { type: 'text', text: '读取结束' },
     ] } },
     { sessionId: 'foreign-session', type: 'assistant', message: { content: '其他会话标记' } },
     { sessionId: claudeId, isSidechain: true, type: 'assistant', message: { content: '子会话标记' } },
@@ -85,13 +86,34 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
     assert.ok(path);
     const body = await readFile(path, 'utf8');
     assert.equal(body, await preview.textContent());
+    const bytes = await page.evaluate(size => size.toLocaleString(), Buffer.byteLength(body));
+    await expect(drawer.getByRole('status')).toContainText(bytes + ' 字节');
     assert.ok(body.includes('合成 ' + source + ' 请求'));
     assert.ok(body.includes('图像附件'));
+    if (id === claudeId) {
+      assert.match(body, /准备读取\s+> 工具调用：fixture_read\s+读取结束/u);
+      assert.match(body, /共 3 条消息/);
+    }
     assert.ok(!body.includes(image.slice(0, 40)));
     assert.ok(!body.includes('合成 ' + other));
     assert.doesNotMatch(body, /data:image|工具输出标记|参数标记|内部推理标记|其他会话标记|子会话标记/);
     await drawer.getByRole('button', { name: '关闭', exact: true }).click();
   }
+
+  // A session can record an action before it has produced any message text.
+  await writeJsonLines(join(home, '.claude/projects/beta', claudeId + '.jsonl'), [
+    { sessionId: claudeId, cwd: claudeCwd, type: 'assistant', message: { content: [
+      { type: 'tool_use', name: 'only_public_step', input: { value: '参数标记' } },
+    ] } },
+  ]);
+  await rows.filter({ hasText: claudeId }).getByRole('button', { name: '导出对话', exact: true }).click();
+  await expect(drawer.getByRole('status')).toHaveText('暂无可导出的消息');
+  await drawer.getByRole('checkbox', { name: '包含公开工作步骤' }).check();
+  await expect(preview).toContainText('工具调用：only_public_step');
+  await expect(preview).not.toContainText('参数标记');
+  await expect(drawer.getByRole('status')).toContainText('共 0 条消息');
+  await expect(drawer.getByRole('button', { name: '下载 .md' })).toBeEnabled();
+  await drawer.getByRole('button', { name: '关闭', exact: true }).click();
 
   const request = (cwd: string) => page.request.post(server.url + '/api/v1/conversation-export', {
     headers: { Authorization: 'Bearer ' + token },

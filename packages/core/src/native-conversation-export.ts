@@ -18,8 +18,8 @@ async function readConversation(
   if (!machines || !machine) throw Object.assign(new Error('执行机离线'), { status: 503 });
   if (!machine.capabilities.includes('agents.transcript')) throw Object.assign(new Error('执行机尚不支持完整会话读取'), { status: 409 });
   let count = 0;
-  function step(name: unknown) {
-    if (tool && typeof name === 'string' && /^[\w.:-]{1,80}$/.test(name)) tool(name);
+  function publicToolName(value: unknown): value is string {
+    return typeof value === 'string' && /^[\w.:-]{1,80}$/.test(value);
   }
   await readNativeRecords((offset, snapshot) => {
     const current = machines.list().find(item => item.id === machineId);
@@ -34,7 +34,7 @@ async function readConversation(
       if (row.type === 'session_meta' && record(row.payload).id !== nativeSessionId) throw new Error('会话标识已改变');
       if (row.type !== 'response_item') return;
       const payload = record(row.payload);
-      if (payload.type === 'function_call' || payload.type === 'custom_tool_call') step(payload.name);
+      if ((payload.type === 'function_call' || payload.type === 'custom_tool_call') && publicToolName(payload.name)) tool?.(payload.name);
       if (payload.type !== 'message') return;
       role = payload.role; content = payload.content;
     } else {
@@ -43,14 +43,27 @@ async function readConversation(
     }
     if (role !== 'user' && role !== 'assistant') return;
     const paragraphs: string[] = [];
-    if (typeof content === 'string') paragraphs.push(content);
+    const steps: string[] = [];
+    let hasMessage = false;
+    function appendText(text: string) {
+      paragraphs.push(text);
+      if (text.trim()) hasMessage = true;
+    }
+    if (typeof content === 'string') appendText(content);
     if (Array.isArray(content)) for (const item of content) {
       const block = record(item);
-      if (['input_text', 'output_text', 'text'].includes(String(block.type)) && typeof block.text === 'string') paragraphs.push(block.text);
-      if (['input_image', 'output_image', 'image'].includes(String(block.type))) paragraphs.push('[图像附件]');
-      if (block.type === 'tool_use') step(block.name);
+      if (['input_text', 'output_text', 'text'].includes(String(block.type)) && typeof block.text === 'string') appendText(block.text);
+      if (['input_image', 'output_image', 'image'].includes(String(block.type))) appendText('[图像附件]');
+      if (tool && role === 'assistant' && block.type === 'tool_use' && publicToolName(block.name)) {
+        // Mixed records retain their block order under a single message heading.
+        steps.push(block.name);
+        paragraphs.push('\n> 工具调用：' + block.name + '\n');
+      }
     }
-    if (!paragraphs.some(text => text.trim())) return;
+    if (!hasMessage) {
+      for (const name of steps) tool?.(name);
+      return;
+    }
     const at = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
     message(count++, role, paragraphs.join('\n'), Number.isFinite(at) ? new Date(at).toISOString() : null, row);
   }, signal);
@@ -82,7 +95,7 @@ export async function exportNativeConversation(
     lines.push('## ' + (role === 'user' ? '用户' : 'Agent 回复') + (at ? ' · ' + at : ''), '', text, '');
   }, includeWork ? name => lines.push('> 工具调用：' + name, '') : undefined);
   const stem = Array.from(nativeSessionId.replace(/[^\p{L}\p{N}_-]+/gu, '-')).slice(0, 48).join('');
-  return { filename: `super-mario-${executorId}-${stem}.md`, count, markdown: [
+  return { filename: `super-mario-${executorId}-${stem}.md`, count, hasContent: lines.length > 0, markdown: [
     '# 原生会话 · ' + executorId, '', '会话：' + nativeSessionId, '电脑：' + machineId, '目录：' + cwd, '导出时间：' + new Date().toISOString(), '', `共 ${count} 条消息`, '', ...lines,
   ].join('\n') };
 }
