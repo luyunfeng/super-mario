@@ -1,3 +1,4 @@
+import { copyMessageLinkButton } from '../lib/clipboard.js';
 import { createWebConversations } from '../features/web-conversations.js';
 import { conversationMessageSearch } from '../features/conversation-message-search.js';
 import { createQueuedDraftEditor } from '../features/edit-queued.js';
@@ -308,6 +309,8 @@ export function createChatPage({ api, store, scope, router }) {
   }
 
   function renderMessage(message) {
+    const link = message.conversationId === 'main' && conversationSearchActive(snapshot)
+      ? copyMessageLinkButton(router.href('chat') + '?at=' + encodeURIComponent(message.id)) : null;
     const mark = message.conversationId === 'main' ? favorites.mark(message) : null;
     const text = message.origin === 'notification' ? systemText(message.text) : message.text;
     if (message.origin === 'notification') {
@@ -315,7 +318,7 @@ export function createChatPage({ api, store, scope, router }) {
       const [first, ...rest] = text.split('\n');
       return h('article', { class: 'msg msg--system', dataset: { id: message.id } },
         h('span', { class: 'msg__note' }, first, ' ', h('span', { class: 'msg__meta' }, timeAgo(message.createdAt))),
-        rest.length > 0 && h('details', null, h('summary', null, '详情'), h('pre', null, rest.join('\n'))), mark);
+        rest.length > 0 && h('details', null, h('summary', null, '详情'), h('pre', null, rest.join('\n'))), mark, link);
     }
     const canQuote = quotesEnabled && message.conversationId === 'main' && typeof message.text === 'string' && message.text.trim();
     if (message.role === 'user') {
@@ -326,7 +329,7 @@ export function createChatPage({ api, store, scope, router }) {
         ? pictures.editCopy.bind(null,composerContext().key) : undefined;
       return h('article', { class: 'msg msg--user', dataset: { id: message.id } },
         h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text), messageImages(api,store,message,imageDraft),messageFiles(api,store,message,store.view.snapshot?.messages,messages)),
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), stateLabel && ' · '+stateLabel, stopTurnButton(api,message,undefined,queueEnabled), queuedEdit.action(message), mark, transcript.copyMessage(message, translation.displayedText), canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), stateLabel && ' · '+stateLabel, stopTurnButton(api,message,undefined,queueEnabled), queuedEdit.action(message), mark, link, transcript.copyMessage(message, translation.displayedText), canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
     }
     const personal = message.conversationId === 'main' && (!message.origin || message.origin === 'user');
     const label = personal ? assistantLabel : message.origin === 'result' ? '执行结果' : '主 Agent';
@@ -338,7 +341,7 @@ export function createChatPage({ api, store, scope, router }) {
         agentProgress(message, api),
         bubble, messageFiles(api,store,message,store.view.snapshot?.messages,messages),
         (!scope.get() || message.projectId === scope.get()) && retryTurn(message,store.view.snapshot?.messages,'main',id=>router.href('chat')+'?at='+encodeURIComponent(id)),
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, transcript.copyMessage(message, translation.displayedText), translation.action(message, bubble, transcript.renderMessage), canQuote && message.role === 'assistant' && quote.action(message, label))));
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, link, transcript.copyMessage(message, translation.displayedText), translation.action(message, bubble, transcript.renderMessage), canQuote && message.role === 'assistant' && quote.action(message, label))));
   }
 
   function paintMessages(list) {
@@ -347,7 +350,7 @@ export function createChatPage({ api, store, scope, router }) {
     const retryEnabled = turnRetryActive(store);
     const retried = new Set(list.filter(m=>m.retryOf).map(m=>m.retryOf));
     keyedList(messages, list, item => item.id, renderMessage, item => JSON.stringify([
-      prompts.epoch, favorites.epoch, transcript.active, translationEpoch, quotesEnabled, editEnabled, owner, draftKey, queueEnabled, retryEnabled, retried.has(item.id), item,
+      prompts.epoch, favorites.epoch, conversationSearchActive(snapshot), transcript.active, translationEpoch, quotesEnabled, editEnabled, owner, draftKey, queueEnabled, retryEnabled, retried.has(item.id), item,
     ]));
   }
 

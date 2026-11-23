@@ -68,6 +68,13 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     const manage = results.getByRole('button', { name: '管理保存的检索', exact: true });
     const saveQuery = results.getByRole('button', { name: '保存当前检索', exact: true });
     await expect(search).toHaveAccessibleName(/搜索对话/);
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], {origin:server.url});
+    const mainMessage = page.locator('article[data-id="run-answer"]');
+    await mainMessage.getByRole('button', {name:'复制消息链接'}).click();
+    const mainLink = await page.evaluate(() => navigator.clipboard.readText());
+    assert.equal(mainLink, server.url + '/#chat?at=run-answer');
+    await page.goto(mainLink);
+    await expect(mainMessage).toBeFocused();
     const runLink = page.getByRole('link', { name: '查看执行', exact: true });
     await expect(runLink).toHaveCount(2);
     await runLink.last().click();

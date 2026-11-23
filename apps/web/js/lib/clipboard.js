@@ -32,3 +32,13 @@ export async function copyText(text, html) {
     }
   }
 }
+
+export function copyMessageLinkButton(hash) {
+  return h('button', { type: 'button', class: 'btn btn--ghost btn--sm', onclick: async event => {
+    const button = event.currentTarget;
+    const url = new URL(location.pathname, location.origin);
+    url.hash = hash;
+    try { await copyText(url.href); button.textContent = '已复制链接'; }
+    catch (error) { button.textContent = '复制失败：' + error.message; }
+  } }, '复制消息链接');
+}
