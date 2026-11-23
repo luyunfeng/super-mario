@@ -4,7 +4,7 @@ import { actionTodoLink } from './todo-link.ts';
 import { mailboxEntryId } from './event-mailboxes.ts';
 import type { EventBus, OutboxItem, Store } from '../../plugin-sdk/src/index.ts';
 import type { Approval, Json, MailboxEntry, Message, Todo } from '../../protocol/src/index.ts';
-import type { InboxHandlingAction, InboxHandlingRef, InboxHandlingRequest, InboxHandlingSource, InboxHandlingView, InboxSuggestion, InboxSuggestionProgress, InboxReplyDelivery, InboxLinkedTodo } from '../../protocol/src/inbox-handling.ts';
+import type { InboxHandlingAction, InboxHandlingRef, InboxHandlingRequest, InboxHandlingSource, InboxHandlingView, InboxSuggestion, InboxSuggestionProgress, InboxReplyDelivery, InboxLinkedTodo, InboxDispatchRun } from '../../protocol/src/inbox-handling.ts';
 import type { InboxHandlingState } from '../../protocol/src/inbox-handling.ts';
 import type { Run } from '../../protocol/src/index.ts';
 import { digest, stableJson } from './eventbox.ts';
@@ -169,6 +169,19 @@ export function createInboxHandling(options: InboxHandlingOptions) {
     if (approval && matching(approval, binding.approval)) return approval;
   }
   const executionKey = (row: InboxSuggestion) => `inbox-handling:${row.id}:${row.version}`;
+  function dispatchRun(row: InboxSuggestion): InboxDispatchRun | undefined {
+    if (row.action.kind !== 'dispatch' || !row.approvalId) return;
+    const id = store.get<string>('dispatch-keys', executionKey(row));
+    if (!id) return;
+    const receipt = row.result;
+    if (receipt !== undefined && (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) || receipt.runId !== id)) return;
+    const scope = store.get<Conversation>(conversations, row.conversationId);
+    const run = store.get<Run>('runs', id);
+    if (!scope || scope.source.kind !== row.source.kind || scope.source.id !== row.source.id || !run ||
+        run.projectId !== scope.projectId || run.todoId !== scope.todoId) return;
+    const webPath = '#projects/' + encodeURIComponent(run.projectId ?? 'all') + '/runs/' + encodeURIComponent(id);
+    return { id, status: run.status, updatedAt: run.updatedAt, webPath, webCitation: '[查看执行](' + webPath + ')' };
+  }
   function replyDelivery(row: InboxSuggestion): InboxReplyDelivery | undefined {
     if (row.action.kind !== 'reply' || !row.approvalId) return;
     const key = executionKey(row);
@@ -214,6 +227,7 @@ export function createInboxHandling(options: InboxHandlingOptions) {
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
       const recent = own.slice(0, 20).map(item => ({
         id: item.id, version: item.version, kind: item.action.kind, status: item.status, approvalStatus: boundApproval(item)?.status, ...(item.action.kind === 'reply' ? { delivery: replyDelivery(item) } : {}),
+        ...(item.action.kind === 'dispatch' ? { run: dispatchRun(item) } : {}),
       }));
       const todo = linkedTodo(initial.value);
       const result = await options.think(structuredClone(initial.value), row.conversationId, row.text, { total: own.length, recent, ...(todo && { linkedTodo: todo }) });
@@ -264,7 +278,7 @@ export function createInboxHandling(options: InboxHandlingOptions) {
         let latest:InboxHandlingSource;try{latest=synchronous(()=>options.readSource(conversation.source));}catch{continue;}
         if(!latest.active||conversationIdentity(latest)!==conversation.id)continue;
         const own=drafts.filter(row=>row.conversationId===conversation.id),pending=own.some(row=>row.status==='draft'||row.status==='submitted'&&boundApproval(row)?.status==='pending');
-        const runs=own.flatMap(row=>row.result&&typeof row.result==='object'&&!Array.isArray(row.result)&&typeof row.result.runId==='string'?[store.get<Run>('runs',row.result.runId)].filter((run):run is Run=>!!run):[]);
+        const runs = own.map(dispatchRun).filter((run): run is InboxDispatchRun => !!run);
         const active=runs.find(run=>['queued','running'].includes(run.status));
         const blocked=runs.some(run=>blockedRuns.has(run.id));
         const lastTurn=turns.filter(row=>row.conversationId===conversation.id).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
@@ -291,8 +305,8 @@ export function createInboxHandling(options: InboxHandlingOptions) {
         messages: store.list<Message>('messages').filter(row => history.has(row.conversationId)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)),
         suggestions: store.list<InboxSuggestion>(suggestions).filter(row => row.source.kind===ref.kind&&row.source.id===ref.id).map(row => {
           const approval = boundApproval(row);
-          const delivery = replyDelivery(row);
-          return { ...row, ...(approval && { approvalStatus: approval.status }), ...(delivery && { delivery }) };
+          const delivery = replyDelivery(row), run = dispatchRun(row);
+          return { ...row, ...(approval && { approvalStatus: approval.status }), ...(delivery && { delivery }), ...(run && { run }) };
         }),
         requests: store.list<RequestRow>(requests).filter(row => row.conversationId === current.conversationId).map(publicRequest) };
     },

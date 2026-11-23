@@ -79,7 +79,7 @@ test('inbox processing stages derive from model admission, actual Runs and human
   const events=f.events.since(0).length;assert.equal(f.inbox.states()[0]?.stage,'ai');assert.equal(f.events.since(0).length,events);
   await settled();gate.resolve(answer(pending.conversationId));await settled();
   const draft=f.save({kind:'dispatch',executorId:'fixture',prompt:'合成任务',doneWhen:'合成结果',expectMinutes:1});
-  f.execute=async()=>{f.store.put('runs','r1',{id:'r1',status:'queued',projectId:undefined});return{runId:'r1'};};
+  f.execute=async(_source,_action,key)=>{f.store.put('dispatch-keys',key,'r1');f.store.put('runs','r1',{id:'r1',status:'queued',projectId:undefined});return{runId:'r1'};};
   const approved=f.confirm(draft);await f.approvals.approve(approved.id,approved.version);
   assert.equal(f.inbox.states()[0]?.stage,'ai');f.store.put('runs','r1',{id:'r1',status:'running'});assert.equal(f.inbox.states()[0]?.stage,'processing');
   f.store.put('interactions','q',{id:'q',status:'open',handler:'user',runId:'r1'});assert.equal(f.inbox.states()[0]?.stage,'human');assert.match(f.inbox.states()[0]?.label??'',/等你决定/);

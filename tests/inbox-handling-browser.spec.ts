@@ -78,6 +78,22 @@ test('只读打开、JSON answer、安全渲染、桌面与390px；missing模型
   assert.ok(calls.filter(c => c.method === 'POST').every(c => c.path.endsWith('/suggestions')));
 }));
 
+test('派发建议随执行回执更新，失去对应记录后关闭详情入口', async () => fixture(async ({ page, calls, setHandler }) => {
+  const item = suggestion({ status: 'applied', action: { kind: 'dispatch', executorId: 'fixture', prompt: '核对收件', doneWhen: '完成核对', expectMinutes: 1 },
+    result: { runId: 'r1' }, run: { status: 'running', webPath: '#projects/p1/runs/r1' } });
+  setHandler(() => ({ data: view({ suggestions: [item] }) }));
+  await open(page);
+  await expect(drawer(page)).toContainText('派发执行 · 执行中');
+  const link = drawer(page).getByRole('link', { name: '查看实际执行记录' });
+  await expect(link).toHaveAttribute('href', '#projects/p1/runs/r1');
+  item.run.status = 'failed'; await emit(page);
+  await expect(drawer(page)).toContainText('派发执行 · 失败');
+  delete item.run; await emit(page);
+  await expect(drawer(page)).toContainText('当前无法核对这次派发');
+  await expect(link).toHaveCount(0);
+  assert.ok(calls.every(call => call.method === 'GET'));
+}));
+
 test('未知的投递回执能打开对应个人或机器人发件记录', async () => fixture(async ({ page, calls, setHandler }) => {
   for (const kind of ['personal', 'mailbox']) {
     setHandler(() => ({ data: view({ source: { ...view().source, kind }, suggestions: [

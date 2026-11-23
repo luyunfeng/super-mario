@@ -1,6 +1,6 @@
 import { h, replace, debounce } from '../lib/dom.js';
 import { Banner, Button, Card, Field, Input, Select, TextArea } from '../ui/kit.js';
-import { approvalText } from '../lib/format.js';
+import { approvalText, runStatus } from '../lib/format.js';
 import { attachSentHistory } from './sent-history.js';
 import { createConversationDrafts } from '../lib/conversation-drafts.js';
 import { attachSavedPrompts } from './saved-prompts.js';
@@ -177,7 +177,9 @@ export function openInboxHandlingDrawer({ api, store, source }) {
         h('p', null, STATUS[item.status] || item.status), h('pre', { class: 'mailbox-content' }, actionText(item.action)),
         item.error && h('p', null, item.error), item.approvalId && h('p', null, `审批 ID：${item.approvalId} · ${approvalText(item.approvalStatus)}`,
           item.status === 'submitted' && item.approvalStatus === 'pending' && h('a', { href: '#chat?approval=' + encodeURIComponent(item.approvalId), onClick: () => drawer.close() }, '去对话审批')),
-        item.result?.runId&&h('a',{href:`#projects/${encodeURIComponent(view.source.projectId||'all')}/runs/${encodeURIComponent(item.result.runId)}`,onClick:()=>drawer.close()},'查看实际执行记录'),
+        item.run && h('p', null, '派发执行 · ' + (runStatus[item.run.status]?.text || '状态未确认') + ' · ',
+          h('a', { href: item.run.webPath, onClick: () => drawer.close() }, '查看实际执行记录')),
+        item.result?.runId && !item.run && h('p', { class: 'small muted' }, '当前无法核对这次派发的执行记录。'),
         item.result?.todoId&&h('p',null,`已关联待办：${item.result.todoId}`),
         item.delivery && h('p', null, '回复投递 · ' + ({ sent: '已发送', pending: '等待确认', failed: '发送失败', unknown: '结果未知' }[item.delivery.status] || '未确认')),
         (item.delivery || item.result?.outboxId) && h('a', {

@@ -125,6 +125,13 @@ test('approved inbox dispatch keeps exact scope/prompt and blocks a late hook re
   f.server.app.plugins.register({id:'alter-work',name:'Synthetic work policy',capabilities:[],activate(c){c.hook('work.dispatch','before',value=>({action:'continue',value:{...(value as JsonObject),prompt:'未确认的工作'}}));}});await f.server.app.plugins.start();
   const next=await f.save(action),nextApproval=await f.confirm(next),nextReceipt=(await f.approve(nextApproval)).data;
   await until(()=>f.server.app.store.get<any>('runs',nextReceipt.result.runId)?.status==='failed');assert.equal(calls,1);
+  const current = async () => ((await f.api(f.route)).data as InboxHandlingView).suggestions;
+  assert.equal((await current()).find(row => row.id === next.id)?.run?.status, 'failed');
+  assert.equal((await current()).find(row => row.id === suggestion.id)?.run?.webPath, '#projects/' + project.id + '/runs/' + run.id);
+  f.server.app.store.put('runs', run.id, { ...run, projectId: 'outside' });
+  assert.equal((await current()).find(row => row.id === suggestion.id)?.run, undefined);
+  f.server.app.store.put('dispatch-keys', 'inbox-handling:' + suggestion.id + ':1', nextReceipt.result.runId);
+  assert.equal((await current()).find(row => row.id === suggestion.id)?.run, undefined);
 });
 test('main work facts expose scoped handling receipts without raw chats; reassigned history stays out of project model tools',async t=>{
   const f=await fixture(t),a=await f.server.app.createProject({name:'A'}),b=await f.server.app.createProject({name:'B'});
