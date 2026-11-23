@@ -170,13 +170,13 @@ export function createScopedAgents(options: Options) {
     forgetDeletedWebThread(id:string) { return forgetRuntime('web:'+id); },
     queuedWebInputs(conversationId:string):Message[] {
       const entry=agents.get(conversationId);
-      if (entry?.scope.kind!=='project' || conversationId !== 'project:'+entry.scope.projectId+':work') return [];
+      if (!entry || (!conversationId.startsWith('web:') && (entry.scope.kind!=='project' || conversationId !== 'project:'+entry.scope.projectId+':work'))) return [];
       return entry.runtime.queuedWebInputs();
     },
     reorderQueuedInputs(conversationId:string,expected:string[],ordered:string[]) {
       const entry=agents.get(conversationId);
-      if (entry?.scope.kind!=='project' || conversationId !== 'project:'+entry.scope.projectId+':work')
-        throw Object.assign(new Error('项目排队消息已变化'),{status:409});
+      if (!entry || (!conversationId.startsWith('web:') && (entry.scope.kind!=='project' || conversationId !== 'project:'+entry.scope.projectId+':work')))
+        throw Object.assign(new Error('排队消息已变化'),{status:409});
       entry.runtime.reorderQueuedInputs(expected,ordered);
     },
     cancelQueuedTurn(conversationId:string,inputId:string,beforeWithdraw?:()=>void):{outcome:'cancelled'|'started'|'idle'} {

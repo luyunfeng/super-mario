@@ -1301,6 +1301,8 @@ export async function createWorkbench(config: AppConfig) {
   function queuedMessages(conversationId:string,projectId?:string,todoId?:string) {
     requireConversationQueue();
     requireQueueScope(projectId,todoId);
+    if(conversationId.startsWith('web:') && !webConversationAllowed(conversationId.slice(4),projectId))
+      throw new InputError('独立对话已归档或范围已变化',409);
     const queue=conversationId==='main' ? agent.queuedWebInputs() : scopedAgents.queuedWebInputs(conversationId);
     // Project and todo membership can change while the preceding turn runs.
     const items=queue.filter(input=>{

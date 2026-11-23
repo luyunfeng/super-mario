@@ -44,7 +44,12 @@ test('独立 Web 对话只可停止原线正在处理的直接输入，排队及
   const stop=(path:string,id:string)=>call(path+'/messages/'+id+'/stop',{});
   const first=await ask(a,'SAMPLE_FIRST'), sibling=await ask(b,'SAMPLE_SIBLING');
   await t.waitFor(()=>assert.ok(streams.has('SAMPLE_FIRST') && streams.has('SAMPLE_SIBLING')));
+  const earlier=await ask(a,'SAMPLE_LATER');
   const taken=await ask(a,'SAMPLE_WITHDRAW');
+  const reorder=(expected:string[],ordered:string[])=>call(a+'/messages/queue',{expected,ordered});
+  const queueResult=await data(await reorder([earlier.id,taken.id],[taken.id,earlier.id]),200);
+  assert.deepEqual(queueResult.items.map((m:Message)=>m.id),[taken.id,earlier.id]);
+  assert.equal((await reorder([earlier.id,taken.id],[taken.id,earlier.id])).status,409);
   const take=(path:string)=>call(path+'/messages/'+taken.id+'/edit-queued',{projectId:project.id});
   assert.equal((await take(b)).status,404);
   const receipt=await data(await take(a),200);
@@ -57,6 +62,7 @@ test('独立 Web 对话只可停止原线正在处理的直接输入，排队及
   assert.deepEqual(await data(await cancel(a,first.id),200),{outcome:'started'});
   for(let i=0;i<2;i++)assert.deepEqual(await data(await cancel(a,discarded.id),200),{outcome:'cancelled'});
   const queued=await ask(a,'SAMPLE_NEXT');
+  await data(await reorder([earlier.id,queued.id],[queued.id,earlier.id]),200);
   assert.deepEqual(await data(await stop(a,queued.id),200),{outcome:'idle'});
   assert.equal((await stop(b,first.id)).status,404);
   for(const [id,changes] of [['indirect',{directWebInput:false}],['wrong-project',{projectId:'other'}],['routed',{}]] as const){
@@ -72,6 +78,8 @@ test('独立 Web 对话只可停止原线正在处理的直接输入，排队及
   assert.equal(stopped?.status,'failed');assert.equal(stopped?.stoppedByUser,true);
   assert.equal(host.app.store.get<Message>('messages',sibling.id)?.status,'pending');
   for(const tag of ['SAMPLE_NEXT','SAMPLE_SIBLING'])streams.get(tag)!.end(frame({},'stop')+'data: [DONE]\n\n');
+  await t.waitFor(()=>assert.ok(streams.has('SAMPLE_LATER')));
+  streams.get('SAMPLE_LATER')!.end(frame({},'stop')+'data: [DONE]\n\n');
   await t.waitFor(()=>assert.ok([sibling,queued].every(input=>host.app.store.get<Message>('messages',input.id)?.status==='done')));
   assert.ok(!streams.has('SAMPLE_WITHDRAW') && !streams.has('SAMPLE_CANCEL'));
   assert.deepEqual(await data(await stop(b,sibling.id),200),{outcome:'idle'});

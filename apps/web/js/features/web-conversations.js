@@ -1,3 +1,4 @@
+import {createMessageQueue} from './message-queue.js';
 import {createQueuedDraftEditor} from './edit-queued.js';
 import {turnQueueActive,queueLabel} from './stop-turn.js';
 import {createWebImageExport} from './web-conversation-image-export.js';
@@ -100,6 +101,8 @@ export function createWebConversations({api,store,scope,router}){
   let queueEnabled=false;
   const queuedEdit=createQueuedDraftEditor({api,store,input,pictures,files,context,isEditing:()=>!edit.notice.hidden,
     isSending:()=>pending,persist:()=>store.view.snapshot?.plugins.some(p=>p.id==='conversation-drafts' && p.status==='active')});
+  const queue=createMessageQueue(api,store,messages,id=>href(current.id,id),item=>queuedEdit.action(rows.find(row=>row.id===item.id) || item,true));
+  form.prepend(queue.el);
   function confirmed(ctx){
     pictures.accepted(ctx);files.accepted(ctx);drafts.clearIf(ctx.key,ctx.draft);
     if(ctx.captured)quote.accepted(ctx.key,ctx.captured);
@@ -124,6 +127,7 @@ export function createWebConversations({api,store,scope,router}){
     const hidden=!readable || !conversationExportActive(store);
     if(hidden)exportDrawer?.close();
     const nextQuoteKey=readable && !meta.archived && store.view.snapshot.plugins.some(p=>p.id==='conversation-quotes' && p.status==='active') ? draftKey : null;
+    queue.update(writableKey && path+'/'+meta.id+'/messages/queue',meta && 'web:'+meta.id);
     queuedEdit.observe(writableKey,drafts.owner(),!!writableKey);
     const nextQueue=!!writableKey && turnQueueActive(store);
     const nextRetry=!!writableKey && turnRetryActive(store);
@@ -140,7 +144,7 @@ export function createWebConversations({api,store,scope,router}){
     }
   }
   function reset(){
-    queuedEdit.observe(null,drafts.owner(),false);queueEnabled=false;imageExport.reset();pictures.update(null,drafts.owner(),false,false);files.update(null,drafts.owner(),false);
+    queue.update(null);queuedEdit.observe(null,drafts.owner(),false);queueEnabled=false;imageExport.reset();pictures.update(null,drafts.owner(),false,false);files.update(null,drafts.owner(),false);
     canStop=false;retryEnabled=false;editEnabled=false;edit.reset();prompts.changeScope();quoteKey=null;quote.restore(null);
     exportButton.hidden=true;exportDrawer?.close();exportDrawer=null;search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
     translation.update([]);favorites.update();input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';

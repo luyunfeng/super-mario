@@ -811,7 +811,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       if (turn.stopped || turn.user.queueState !== 'queued') continue;
       const saved = store.get<Message>('messages',turn.user.id);
       if (saved?.queueState === 'queued' && saved.status === 'pending' && saved.role === 'user' &&
-          saved.conversationId === ownConversation && directWebSource(store,saved) && options.canUseScope?.(saved) !== false)
+          saved.conversationId === ownConversation && queueSource(saved) && options.canUseScope?.(saved) !== false)
         queued.push(structuredClone(saved));
     }
     return queued;
