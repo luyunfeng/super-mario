@@ -415,5 +415,9 @@ test('自定义助理按名单管理提示词，消息可保存，斜杠菜单�
   await expect(menu.getByRole('button',{name:'/from-message'})).toHaveCount(0);
   await menu.getByRole('button',{name:'/first'}).click();
   await expect(input).toHaveValue('另一份草稿');
+  await input.press('Enter');
+  await expect(thread.locator('.msg--user .msg__bubble')).toHaveText('另一份草稿');
+  await switcher.click();await roster.getByRole('button',{name:'审阅',exact:true}).click();
+  await expect(thread.locator('.msg--user .msg__bubble')).toHaveText('将合成检查说明留作模板');
   assert.deepEqual((await post('saved-prompts',{action:'list'})).items,[]);
 });
