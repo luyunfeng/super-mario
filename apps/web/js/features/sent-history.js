@@ -33,7 +33,11 @@ export function attachSentHistory({ input, store, context, currentConversationOn
     const field = h('input', { class: 'input', role: 'combobox', 'aria-expanded': 'true', 'aria-controls': listId, 'aria-label': '搜索已发送内容', placeholder: '输入关键词' });
     const list = h('div', { class: 'stack', role: 'listbox', id: listId, 'aria-label': '匹配的已发送内容' });
     let selected = 0, rows = [], unsubscribe;
-    const drawer = openDrawer({ title: '已发送内容', body: [field, list], onClose() { unsubscribe?.(); if (searchDrawer === drawer) searchDrawer = undefined; } });
+    const drawer = openDrawer({ title: '已发送内容', body: [field, list], onClose() {
+      unsubscribe?.();
+      window.removeEventListener('storage', historyChanged);
+      if (searchDrawer === drawer) searchDrawer = undefined;
+    } });
     searchDrawer = drawer;
     function valid() {
       const now = context();
@@ -80,6 +84,14 @@ export function attachSentHistory({ input, store, context, currentConversationOn
         option.className = 'btn ' + (i === selected ? 'btn--primary' : 'btn--secondary');
       }
     }
+    function historyChanged(event) {
+      if (event.storageArea !== localStorage || (event.key !== null && !event.key.startsWith(prefix(scope.owner)))) return;
+      if (!valid()) { drawer.close(); return; }
+      candidates = readCandidates();
+      selected = 0;
+      draw();
+    }
+    window.addEventListener('storage', historyChanged);
     let projects = store.view.snapshot?.projects;
     unsubscribe = store.subscribe(() => {
       if (!valid()) { drawer.close(); return; }

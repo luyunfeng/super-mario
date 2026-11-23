@@ -34,7 +34,8 @@ test('本人消息可保存为常用提示词，主对话和项目斜杠菜单�
     .filter(m => m.conversationId === conversation && m.role === 'user').map(m => m.text);
 
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await context.newPage();
   const sent: string[] = [];
   page.on('request', request => {
     if (request.method() === 'POST' && /\/api\/v1\/(projects\/[^/]+\/)?messages$/.test(request.url())) {
@@ -154,6 +155,19 @@ test('本人消息可保存为常用提示词，主对话和项目斜杠菜单�
   await expect(historyField).toHaveAttribute('aria-activedescendant', (await selectedHistory.getAttribute('id'))!);
   await search.getByLabel('搜索已发送内容').fill('补充 进展');
   await expect(search.getByRole('option', { name: /补充主对话结论/ })).toBeVisible();
+  const peer = await page.context().newPage();
+  await peer.goto(server.url + '/favicon.ico');
+  const savedHistory = await peer.evaluate(() => {
+    const key = Object.keys(localStorage).find(key => key.startsWith('sm.sent-history.') && key.endsWith('["main",""]'))!;
+    const value = localStorage.getItem(key)!;
+    localStorage.removeItem(key);
+    return {key, value};
+  });
+  await expect(search.getByRole('option')).toHaveCount(0);
+  await expect(historyField).toHaveValue('补充 进展');
+  await peer.evaluate(({key, value}) => localStorage.setItem(key, value), savedHistory);
+  await expect(search.getByRole('option', {name:/补充主对话结论/})).toBeVisible();
+  await peer.close();
   await search.getByLabel('搜索已发送内容').press('Escape');
   await expect(projectInput).toHaveValue('正在编辑的草稿');
   await projectInput.press('Control+r');
