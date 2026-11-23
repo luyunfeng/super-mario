@@ -111,7 +111,8 @@ export function recoverInterruptedInputs(store:Store,events:EventBus,includes:(c
       }
       continue;
     }
-    const queued = input.queueState === 'queued' && directWebSource(store,input);
+    const queued = input.queueState === 'queued' && (directWebSource(store,input) ||
+      (ownConversation.startsWith('web:') && !input.todoId && directWebInput(store,input)));
     const notice: Message = { id: queued ? randomUUID() : `interrupted:${input.id}`, conversationId: input.conversationId,
       role: 'assistant', ...(queued ? {retryable:true} : {origin:'notification'}), replyTo: input.id, projectId: input.projectId, todoId:input.todoId,
       text: queued ? '服务重启，这条排队消息尚未开始处理。可手动重试。' : '服务重启，上轮处理结果未确认。请核对执行记录；系统不会自动重复派发或发送。',

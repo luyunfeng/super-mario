@@ -91,3 +91,27 @@ test('独立 Web 对话只可停止原线正在处理的直接输入，排队及
   await data(await call(b,{version:2},'DELETE'),200);
   assert.equal((await stop(b,sibling.id)).status,410);
 });
+
+test('重启区分独立对话中尚未开始和已开始的输入，仅前者可以按原消息重试',async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'web-restart-queue-'));
+  const start=()=>startServer({dataDir,host:'127.0.0.1',port:0,demo:true});
+  let server=await start();
+  t.after(async()=>{await server.close();await rm(dataDir,{recursive:true,force:true});});
+  const id=randomUUID(),conversationId='web:'+id;
+  const post=(path:string,data:object)=>fetch(server.url+'/api/v1/'+path,{
+    method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(data)});
+  assert.equal((await post('web-conversations',{id,title:'合成恢复对话'})).status,201);
+  for(const queueState of ['queued','running'] as const){
+    const message:Message={id:queueState,conversationId,role:'user',text:'合成恢复输入',status:'pending',queueState,
+      directWebInput:true,createdAt:new Date().toISOString()};
+    server.app.store.put('messages',message.id,message);
+  }
+  await server.close();server=await start();
+  const rows=server.app.store.list<Message>('messages').filter(m=>m.conversationId===conversationId);
+  const queued=rows.find(m=>m.replyTo==='queued'),running=rows.find(m=>m.replyTo==='running');
+  assert.ok(queued?.retryable && running && !running.retryable);
+  assert.equal(rows.filter(m=>m.role==='user').length,2);
+  assert.match(running.text,/结果未确认/);
+  assert.equal((await post('messages/'+queued.id+'/retry',{conversationId})).status,202);
+  assert.notEqual((await post('messages/'+running.id+'/retry',{conversationId})).status,202);
+});
