@@ -1,6 +1,6 @@
 import { pendingDecisionHref } from './pending-decision-link.ts';
 import type { Store } from '../../plugin-sdk/src/index.ts';
-import type { Project, Run, Todo, Approval, AwayNotification, BriefingSettings } from '../../protocol/src/index.ts';
+import type { Project, Run, Todo, Approval, Message, AwayNotification, BriefingSettings } from '../../protocol/src/index.ts';
 import type { createSchedules } from './schedules.ts';
 
 const defaults: BriefingSettings = { lowDistraction:false, decisionQuietHours: { enabled:false, start:'22:00', end:'08:00' }, timezone:'Asia/Shanghai', morning:'09:00', evening:'18:00', intervalHours:4, intervalEnabled:false, activeStart:'09:00', activeEnd:'21:00', awayNotifications:true };
@@ -20,8 +20,15 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
     const date = item.createdAt ?? store.get<{createdAt:string}>('eventbox.events',item.id.slice('away:'.length))?.createdAt;
     if (!date || !changed(date)) return [];
     const run = item.runId ? store.get<Run>('runs',item.runId) : undefined;
-    const href = run && run.projectId === item.projectId
+    let href = run && run.projectId === item.projectId
       ? '#projects/'+encodeURIComponent(run.projectId ?? 'all')+'/runs/'+encodeURIComponent(run.id) : undefined;
+    if (!href && item.projectId && item.messageId) {
+      const message = store.get<Message>('messages',item.messageId);
+      if (message?.projectId === item.projectId && message.conversationId === 'project:'+item.projectId+':work' && message.role === 'assistant') {
+        const query = new URLSearchParams({at:message.id,...(message.todoId && {todo:message.todoId})});
+        href = '#projects/'+encodeURIComponent(item.projectId)+'/workspace?'+query;
+      }
+    }
     return [{id:item.id,projectId:item.projectId,date,title:item.text.slice(0,800),href}];
   }).sort((a,b)=>b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
   const runs = store.list<Run>('runs');

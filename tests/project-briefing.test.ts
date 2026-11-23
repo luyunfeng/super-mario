@@ -93,4 +93,9 @@ test('低干扰保留通知按事件时间与项目归入简报，旧记录使�
   assert.equal(read().href,'#projects/a/runs/r');
   store.put('runs','r',{id:'r',projectId:'b',status:'running',updatedAt:from});
   assert.equal(read().href,undefined);
+  store.put('notifications.away','away:one',{id:'away:one',messageId:'message+1',projectId:'a',createdAt:to,status:'held',text:'项目答复'});
+  store.put('messages','message+1',{id:'message+1',projectId:'a',conversationId:'project:a:work',role:'assistant',todoId:'todo-1'});
+  assert.equal(read().href,'#projects/a/workspace?at=message%2B1&todo=todo-1');
+  store.put('messages','message+1',{id:'message+1',projectId:'a',conversationId:'main',role:'assistant'});
+  assert.equal(read().href,undefined);
 });
