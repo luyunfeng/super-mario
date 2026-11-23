@@ -54,6 +54,17 @@ export function createFollowUpCard({ api, store }) {
     const grading = Check({label:'低干扰：保留执行结果和项目对话通知',checked:briefing.lowDistraction === true});
     const held = (presence?.notifications ?? []).filter(n => n.status === 'held')
       .sort((a,b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
+    const heldSearch = Input({type:'search','aria-label':'搜索保留通知',placeholder:'搜索通知正文'});
+    const heldList = h('div',{class:'stack'});
+    function showHeld() {
+      const query = heldSearch.value.trim().toLowerCase();
+      const matches = held.filter(n=>n.text.toLowerCase().includes(query));
+      replace(heldList,matches.length ? matches.map(n=>h('article',{},
+        n.createdAt && h('time',{class:'small muted',dateTime:n.createdAt},formatDate(n.createdAt,true)),h('p',{},n.text)))
+        : h('p',{role:'status'},query ? '没有匹配的保留通知。' : '暂无保留通知。'));
+    }
+    heldSearch.addEventListener('input',showHeld);
+    showHeld();
     const quiet = briefing.decisionQuietHours ?? { enabled:false, start:'22:00', end:'08:00' };
     const quietToggle = Check({label:'飞书待决定提醒免打扰',checked:quiet.enabled});
     const quietCheck = quietToggle.querySelector('input');
@@ -72,7 +83,7 @@ export function createFollowUpCard({ api, store }) {
       Field({label:'间隔（小时）',control:hours}),
       h('div',{class:'form-row'},Field({label:'时段开始',control:start}),Field({label:'时段结束',control:end})),away,
       grading, h('details',{},h('summary',{},'已保留的通知（'+held.length+'）'),
-        held.map(n=>h('article',{},n.createdAt && h('time',{class:'small muted',dateTime:n.createdAt},formatDate(n.createdAt,true)),h('p',{},n.text)))), quietToggle,quietTimes,
+        held.length > 0 && heldSearch,heldList), quietToggle,quietTimes,
       h('p',{class:'small muted'},'免打扰按简报时区生效。时段结束后，仍待回答的飞书提问卡才会提醒。'),
       h('p',null,`待路由通知 ${backlog.length} 条`),backlog.map(n => h('p',{class:'small'},n.reason)),message],
       footer:Button({label:'保存简报设置',kind:'primary',onClick:async()=>{

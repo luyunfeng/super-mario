@@ -80,6 +80,13 @@ test('保留通知按最近时间展示，项目简报可查看同一通知',asy
   await dialog.getByText('已保留的通知（3）').click();
   await expect(dialog.locator('details article p')).toHaveText(['合成通知 latest','合成项目回复通知','合成通知 earlier']);
   await expect(dialog.locator('time').first()).toBeVisible();
+  const query=dialog.getByRole('searchbox',{name:'搜索保留通知'});
+  await query.fill(' LATEST ');
+  await expect(dialog.locator('details article p')).toHaveText(['合成通知 latest']);
+  await query.fill('不存在的关键词');
+  await expect(dialog.getByText('没有匹配的保留通知。')).toBeVisible();
+  await query.fill('');
+  await expect(dialog.locator('details article')).toHaveCount(3);
   await dialog.getByRole('button',{name:'关闭',exact:true}).click();
   await page.getByRole('button',{name:'查看简报',exact:true}).click();
   const brief=page.getByRole('dialog',{name:'简报与提醒'});
