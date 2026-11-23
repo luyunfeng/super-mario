@@ -66,7 +66,6 @@ interface PendingTurn {
 }
 
 type ReadOnlyAction = 'schedule_followup' | 'notify_user';
-const originalRetryInput: unique symbol = Symbol('verified retry input');
 function retryRequestId(replyId:string) {
   const bytes = createHash('sha256').update('workbench/web-retry/v1:' + replyId).digest().subarray(0,16);
   bytes[6] = (bytes[6]! & 15) | 64;
@@ -74,7 +73,7 @@ function retryRequestId(replyId:string) {
   const hex = bytes.toString('hex');
   return [hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-');
 }
-type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' | 'replyTo' | 'requestId' | 'directWebInput'> & { [originalRetryInput]?:{source:Message;replyId:string}; files?: ChatFileInput[]; images?: ChatImageInput[]; readOnlyAction?: ReadOnlyAction; rememberModel?: false; onAccepted?: (input:Message)=>void; internalSourceId?:string };
+type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' | 'replyTo' | 'requestId' | 'directWebInput'> & { files?: ChatFileInput[]; images?: ChatImageInput[]; readOnlyAction?: ReadOnlyAction; rememberModel?: false; onAccepted?: (input:Message)=>void; internalSourceId?:string };
 
 function directWebSource(store:Store,user:Message) {
   return user.directWebInput && !user.replyTo && (!user.origin || user.origin === 'user')
@@ -122,6 +121,8 @@ export function recoverInterruptedInputs(store:Store,events:EventBus,includes:(c
 
 /** The second argument is a narrow test seam; all pi imports stay in this directory. */
 export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK> = () => import('@earendil-works/pi-coding-agent')) {
+  // Keep verified replay data private to the runtime that checked the original input.
+  const verifiedRetries = new WeakMap<PostContext, { source: Message; replyId: string }>();
   const basePrompt = options.contextMode === 'project-memory' ? PROJECT_MEMORY_SYSTEM_PROMPT : options.systemPrompt ?? MAIN_AGENT_SYSTEM_PROMPT;
   const { config, store, events, contributions } = options;
   const ownConversation = options.conversationId ?? 'main';
@@ -1219,9 +1220,11 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       if (options.canUseScope?.(source)===false) throw Object.assign(new Error('原对话范围已失效'),{status:403});
       checkAttachmentAccess(source);
       for (let i=0;i<(source.files?.length??0);i++) readChatFile(store,config.dataDir,source,i);
-      return this.post(source.text,ownConversation,{[originalRetryInput]:{source,replyId:reply.id},requestId:retryRequestId(reply.id),
+      const context: PostContext = {requestId:retryRequestId(reply.id),
         directWebInput:true,projectId:source.projectId,todoId:source.todoId,origin:source.origin,readOnly:source.readOnly,
-        ...(source.images?.length && {images:readChatImages(store,source)})});
+        ...(source.images?.length && {images:readChatImages(store,source)})};
+      verifiedRetries.set(context, {source, replyId: reply.id});
+      return this.post(source.text, ownConversation, context);
     },
     async post(text: string, conversationId: string = ownConversation, context?: PostContext): Promise<Message> {
       if (closed) throw new Error('运行时已关闭。');
@@ -1232,7 +1235,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       if (context?.images?.length && options.chatImagesEnabled?.() === false)
         throw Object.assign(new Error('对话图片插件已停用'), {status:503});
       if (context?.files?.length && options.chatFilesEnabled?.() === false) throw Object.assign(new Error('对话文件插件已停用'),{status:503});
-      const retry = context?.[originalRetryInput];
+      const retry = context && verifiedRetries.get(context);
       const retryFiles = retry?.source.files;
       if (retryFiles?.length && options.chatFilesEnabled?.() === false) throw Object.assign(new Error('对话文件插件已停用'),{status:503});
       const prepared = prepareChatImages(context?.images);
