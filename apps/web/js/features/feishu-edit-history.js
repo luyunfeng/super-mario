@@ -3,11 +3,13 @@ import {Button} from '../ui/kit.js';
 import {openDrawer} from '../ui/overlay.js';
 
 const settingsPath='/feishu/personal/edit-history';
-export function editHistoryActive(store,api){
+export function personalInboxPluginActive(store,api,plugin){
   const v=store.view;
   return !v.unauthorized && v.connection!=='offline' && v.connection!=='connecting' && v.snapshotOwner===api.draftOwner?.() &&
-    ['feishu','feishu-edit-history'].every(id=>v.snapshot?.plugins?.some(p=>p.id===id && p.status==='active'));
+    ['feishu',plugin].every(id=>v.snapshot?.plugins?.some(p=>p.id===id && p.status==='active'));
 }
+
+export const editHistoryActive=(store,api)=>personalInboxPluginActive(store,api,'feishu-edit-history');
 
 export function showEditHistorySettings(api,store,currentAccount){
   const label=currentAccount()?.account?.name,owner=api.draftOwner();
@@ -45,14 +47,19 @@ export function showEditHistorySettings(api,store,currentAccount){
   void load();
 }
 
-// Read the account-level permission first. Previous message text is requested only after the owner expands it.
-export function inboxEditHistory(api,store,row){
-  if(!editHistoryActive(store,api) || !/^feishu:cli_[\w-]+:ou_[\w-]+$/.test(row.source) ||
+export function personalInboxMessageId(row){
+  if(!/^feishu:cli_[\w-]+:ou_[\w-]+$/.test(row.source) ||
       !row.thread?.startsWith('feishu:message:') || !['direct','group'].includes(row.origin?.kind)) return;
   try {
     const [chat,message]=JSON.parse(row.thread.slice('feishu:message:'.length));
     if(!/^oc_[\w-]+$/.test(chat) || !/^om_[\w-]+$/.test(message) || chat!==row.origin.chatId || row.last?.split(':')[0]!==message) return;
+    return message;
   }catch{return;}
+}
+
+// Read the account-level permission first. Previous message text is requested only after the owner expands it.
+export function inboxEditHistory(api,store,row){
+  if(!editHistoryActive(store,api) || !personalInboxMessageId(row)) return;
   const content=h('div',{class:'stack'}),panel=h('details',{hidden:true},h('summary',{},'查看消息编辑历史'),content);
   const controller=new AbortController();
   let grant,read;

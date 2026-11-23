@@ -46,7 +46,8 @@ export function openDrawer({ title, subtitle, body, footer, wide = false, onClos
 }
 
 /** 破坏性或高风险操作的确认。正文必须写明后果，按钮用具体动词。 */
-export function confirmDialog({ title, message, confirmLabel = '确认', danger = false }) {
+export function confirmDialog({ title, message, confirmLabel = '确认', danger = false, signal }) {
+  if (signal?.aborted) return Promise.resolve(false);
   return new Promise((resolve) => {
     let answer = false;
     const ok = h('button', { class: `btn ${danger ? 'btn--danger' : 'btn--primary'}`, type: 'button' }, confirmLabel);
@@ -55,7 +56,9 @@ export function confirmDialog({ title, message, confirmLabel = '确认', danger 
       h('h2', null, title), h('div', { class: 'small' }, message), h('div', { class: 'modal__actions' }, cancel, ok));
     ok.addEventListener('click', () => { answer = true; el.close(); });
     cancel.addEventListener('click', () => el.close());
-    el.addEventListener('close', () => { el.remove(); resolve(answer); });
+    const abort = () => { answer=false; el.close(); };
+    signal?.addEventListener('abort',abort,{once:true});
+    el.addEventListener('close', () => { signal?.removeEventListener('abort',abort); el.remove(); resolve(answer); });
     document.body.append(el);
     el.showModal();
     cancel.focus();

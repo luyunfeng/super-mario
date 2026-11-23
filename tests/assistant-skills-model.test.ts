@@ -4112,8 +4112,15 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
       if(JSON.stringify(req.content).includes('核对隔离')){
         assert.ok(!req.tools.includes('inbox_tree'));
         assert.ok(!req.tools.includes('inbox_edit_history'));
+        assert.ok(!req.tools.includes('inbox_chat_pins'));
+        assert.ok(!req.tools.includes('inbox_pin_original'));
         assert.doesNotMatch(req.system,/优先用 inbox_tree/);
         return call('inbox_list',{query:'合成中心'},'restricted-list');
+      }
+      if(JSON.stringify(req.content).includes('置顶消息')){
+        assert.match(req.system,/读取可能在飞书侧标记已读/);
+        assert.ok(req.tools.includes('inbox_chat_pins'));
+        return call('inbox_chat_pins',{id:center},'pins');
       }
       if(JSON.stringify(req.content).includes('编辑历史')){
         assert.ok(req.tools.includes('inbox_edit_history'));
@@ -4129,6 +4136,14 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
     }
     const raw=typeof req.content==='string'?req.content:(req.content as {text:string}[])[0].text;
     const result=JSON.parse(raw);
+    if(req.callId==='pins'){
+      assert.deepEqual(result,{pins:[{messageId:'om_pinned',originalRef:'synthetic-ref'}],nextCursor:null});
+      return call('inbox_pin_original',{id:center,messageId:result.pins[0].messageId,originalRef:result.pins[0].originalRef},'pin-source');
+    }
+    if(req.callId==='pin-source'){
+      assert.deepEqual(result,{messageId:'om_pinned',deleted:false,text:'合成置顶正文',textTruncated:false});
+      return {role:'assistant',content:'会话置顶了合成置顶正文。'};
+    }
     if(req.callId==='edits'){
       assert.equal(result.versions[0].text,'合成旧正文');
       assert.equal(result.versions[0].replacedAt,'2026-01-01T08:00:00Z');
@@ -4188,6 +4203,18 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
       assert.equal(id,center);
       return {versions:[{text:'合成旧正文',replacedAt:'2026-01-01T08:00:00Z'}],truncated:false};
     });
+    server.app.setFeishuPinReader(async(id,cursor,signal)=>{
+      assert.equal(id,center);assert.equal(cursor,undefined);signal.throwIfAborted();
+      return {pins:[{messageId:'om_pinned',originalRef:'synthetic-ref'}],accountKey:'synthetic-binding'};
+    });
+    server.app.setFeishuPinOriginalReader(async(id,messageId,ref,signal)=>{
+      assert.deepEqual([id,messageId,ref],[center,'om_pinned','synthetic-ref']);signal.throwIfAborted();
+      return {messageId,deleted:false,text:'合成置顶正文'};
+    });
+    const pinQuestion='请查看这条收件所在会话的置顶消息 '+center;
+    assert.equal(await ask(pinQuestion),'会话置顶了合成置顶正文。');
+    await adapter.onMessage(pinQuestion,{...owner,messageId:'pins-read'});
+    await t.waitFor(()=>assert.ok(sent.includes('会话置顶了合成置顶正文。')));
     const editQuestion='请核对合成中心收件的编辑历史，编号 '+center;
     assert.equal(await ask(editQuestion),'采集到的上一版是合成旧正文。');
     await adapter.onMessage(editQuestion,{...owner,messageId:'edit-history'});
