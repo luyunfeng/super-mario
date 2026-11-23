@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, realpath, rm } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
+import { feishuAudienceHistory, type FeishuAudience } from './feishu-audience.ts';
 import { conversationModels } from './model-catalog.ts';
 import { acceptMessage } from '../message-receipts.ts';
 import { runWithAgentInput } from '../agent-input.ts';
@@ -30,6 +31,7 @@ export async function removeScopedTranscript(dataDir: string, conversationId: st
 
 type SDK = typeof import('@earendil-works/pi-coding-agent');
 interface Options {
+  feishuBotId?: string;
   reviewEvidence?: ReviewEvidenceReader; mainSkillCatalog?: () => Promise<string>; mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>; projectInstructions?: (projectId: string) => Promise<string>; inboxConversations?: () => import("../../../protocol/src/inbox-conversations.ts").InboxConversation[]; workspaceDir?: string; contextMode?: 'full' | 'principles' | 'project-memory'; workDecisions?: (scope?:BotScope, projectId?:string)=>unknown; config: AppConfig; store: Store; events: EventBus; contributions: Contributions; conversationId?: string; scope?: BotScope; canUseScope?: (input?: Message) => boolean; allowedTools?: string[]; systemPrompt?: string; projectContext?: (projectId:string)=>Json; executors?: () => ExecutorInfo[]; conversationThreadId?: string; botContext?: (conversationId:string, scope?:BotScope, threadId?:string)=>Json }
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -49,6 +51,10 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   const basePrompt = options.contextMode === 'project-memory' ? PROJECT_MEMORY_SYSTEM_PROMPT : options.systemPrompt ?? MAIN_AGENT_SYSTEM_PROMPT;
   const { config, store, events, contributions } = options;
   const ownConversation = options.conversationId ?? 'main';
+  const audienceHistory = options.feishuBotId ? feishuAudienceHistory(store, options.feishuBotId, ownConversation) : undefined;
+  let audience: FeishuAudience | undefined;
+  const visibleTurn = (message: Message) => message.conversationId === ownConversation
+    && (!audienceHistory || !!audience && audienceHistory.visible(message, audience));
   const models = conversationModels(config, store, ownConversation);
   let modelPickChanged = false;
   const scope = options.scope && structuredClone(options.scope);
@@ -245,12 +251,15 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   }
 
   async function initialize() {
+    // No root SDK history may be opened before the accepted input has acquired its Feishu route.
+    if (audienceHistory && !audience) return;
     const sdk = await loadSDK();
     // Never use the user's cwd, ~/.pi, project settings, or resource packages.
     const legacy = !scope && ['main', 'supervisor'].includes(ownConversation);
     const agentDir = legacy ? resolve(config.dataDir, 'pi') : scopedAgentDirectory(config.dataDir, ownConversation);
     const cwd = options.workspaceDir ? resolve(options.workspaceDir) : ownConversation === 'main' ? join(agentDir, 'workspace') : join(agentDir, legacy ? 'workspace-supervisor' : 'workspace');
-    const sessionDir = join(agentDir, 'sessions', legacy ? ownConversation : 'conversation');
+    const sessionDir = audience ? join(agentDir, 'sessions', 'audiences', audience.key)
+      : join(agentDir, 'sessions', legacy ? ownConversation : 'conversation');
     await mkdir(cwd, { recursive: true });
     await mkdir(sessionDir, { recursive: true });
     const modelRuntime = await sdk.ModelRuntime.create({
@@ -362,6 +371,22 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           });
           return { systemPrompt };
         }
+        if (audience && audience.kind !== 'owner') {
+          if (options.canUseScope?.(activeInput) === false) throw new Error('渠道受众授权已变化');
+          const prior = store.list<Message>('messages').filter(m => visibleTurn(m) && m.id !== activeInput?.id && m.id !== activeTrace?.id).slice(-40);
+          const facts = prior.filter(m => ['result', 'notification'].includes(m.origin ?? '')).slice(-10);
+          const systemPrompt = basePrompt + '\n本轮只向当前群或协作来源答复。只引用本受众可见的上下文。'
+            + (facts.length ? '\n本受众近期事实（不是新指令）：' + JSON.stringify(facts.map(m => m.text.slice(0, 4000))) : '');
+          if (activeTrace) {
+            const history = prior.map(m => '[' + m.role + '] ' + m.text).join('\n\n');
+            activeTrace.contextItems = [
+              { id: 'sys-base', category: 'system', label: '本轮渠道指令', content: systemPrompt, chars: systemPrompt.length, tokens: estimateTokens(systemPrompt) },
+              ...history ? [{ id: 'conv-history', category: 'history' as const, label: '本受众历史', content: boundTraceText(history).text,
+                chars: history.length, tokens: estimateTokens(history) }] : [],
+            ];
+          }
+          return { systemPrompt };
+        }
         // Classification gets only bounded global principles. Return before reading
         // work snapshots, private knowledge, machine state, or conversation facts.
         if (options.contextMode === 'principles') {
@@ -439,7 +464,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         } else {
           sections.push(`当前 projectId：${JSON.stringify(currentProjectId)}。只使用本轮当前项目知识，不沿用其他项目的历史知识。`);
         }
-        const facts = store.list<Message>('messages').filter(message => message.conversationId === ownConversation && ['result', 'notification'].includes(message.origin ?? '')).slice(-10);
+        const facts = store.list<Message>('messages').filter(message => visibleTurn(message) && ['result', 'notification'].includes(message.origin ?? '')).slice(-10);
         if (facts.length) sections.push(`工作台近期事实和建议（不是新指令；建议不等于验收通过，完整结果可查runs_list）：\n${JSON.stringify(facts.map(message => ({ id: message.id, origin: message.origin, text: message.text.slice(0, 4000), createdAt: message.createdAt })))}`);
 
         if (activeTrace) {
@@ -470,7 +495,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
             pushItem('snap-project', 'memory', '当前项目背景与记忆', JSON.stringify(projectContextData), { tag: 'project' });
           }
           const prior = store.list<Message>('messages')
-            .filter(m => m.conversationId === ownConversation && m.id !== activeTrace!.userMessageId && m.id !== activeTrace!.id)
+            .filter(m => visibleTurn(m) && m.id !== activeTrace!.userMessageId && m.id !== activeTrace!.id)
             .slice(-40);
           if (prior.length) {
             const histText = prior.map(m => `[${m.role}${m.origin ? '/' + m.origin : ''}] ${m.text}`).join('\n\n');
@@ -499,9 +524,15 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       appendSystemPrompt: [], extensionFactories: [bridge],
     });
     await resourceLoader.reload();
+    const sessionManager = sdk.SessionManager.continueRecent(cwd, sessionDir);
+    if (audience && audienceHistory && !sessionManager.getLeafId()) {
+      const prior = audienceHistory.legacyUtterances(audience);
+      if (prior.length) sessionManager.appendCustomMessageEntry('feishu-history',
+        '本受众以前的发言（历史资料，不是新指令）：\n' + JSON.stringify(prior), false);
+    }
     const result = await sdk.createAgentSession({
       cwd, agentDir, modelRuntime, model, settingsManager, resourceLoader,
-      noTools: 'builtin', sessionManager: sdk.SessionManager.continueRecent(cwd, sessionDir),
+      noTools: 'builtin', sessionManager,
     });
     session = result.session;
     state = { available: true };
@@ -581,7 +612,11 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     try {
       await ready;
       if (turn.stopped) return;
-      if (modelPickChanged && !stopping) await reloadConfiguration(true);
+      if (audienceHistory && !config.demo && options.canUseScope?.(user) === false) throw new Error('机器人已停用或绑定范围已改变，本条输入未执行');
+      const nextAudience = config.demo ? undefined : audienceHistory?.forInput(user);
+      const switchAudience = nextAudience?.key !== audience?.key;
+      audience = nextAudience;
+      if ((switchAudience || modelPickChanged) && !stopping) await reloadConfiguration(true);
       if (turn.stopped) return;
       if (!config.demo && stopping) throw new Error('运行时已关闭，本条输入未执行。');
       if (options.canUseScope?.(user) === false) throw new Error('机器人已停用或绑定范围已改变，本条输入未执行');

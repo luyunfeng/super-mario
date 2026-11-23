@@ -77,7 +77,7 @@ type StartForm = { snapshot: StartCardSnapshot; key: string; sourceId: string; t
 type StartReceipt = { signature: string; runId?: string; reason?: string; sessionId?: string; demo?: boolean;
   selection?: { messageId: string; previous: string; binding: ChatBinding } };
 type CardNavigation = { start?: StartForm; threadIds?: string[]; homeMessageId?: string; agentSnapshot?: AgentCardSnapshot; sessionSnapshot?: SessionCardSnapshot; botId: string; appId: string; revision: number; owner: Owner; expiresAt: number };
-type Route = { channel: 'feishu'; accountId: string; botId: string; target: string; scope: BotScope; revision: number; inputId: string; sourceMessageId?: string };
+type Route = { audienceGeneration?: string; channel: 'feishu'; accountId: string; botId: string; target: string; scope: BotScope; revision: number; inputId: string; sourceMessageId?: string };
 type Relay = { sourceMessageId?: string; sourceFingerprint?: string; sourceRouteFingerprint?: string; sourceBotId: string; sourceRevision: number; targetRevision: number; parentEntryId?: string; path: string[]; rootId: string; expiresAt: number; chatId?: string; fingerprint: string };
 type AgentTarget = { startedBy?: string; cwd?: string; runId: string; executorId: string; machineId: string; sessionId: string; nativeSessionId?: string; projectId?: string; todoId?: string };
 type ChatBinding = { conversationThreadId?: string; agentTarget?: AgentTarget; projectId: string; revision: number; senderId: string; expiresAt: number; selectionId?: string };
@@ -134,6 +134,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const input = app.store.get<Message>('messages', inputId), route = app.store.get<Routed>('message.routes', inputId);
     if (!paired.senderId || !input || input.role !== 'user' || input.readOnly || (input.origin && input.origin !== 'user')
       || !route || route.inputId !== inputId || route.channel !== 'feishu' || route.botId !== bot.id || route.accountId !== bot.appId
+      || (route.audienceGeneration !== undefined && route.audienceGeneration !== audienceGeneration(bot.id))
       || route.revision !== bot.revision || !sameBotScope(bot.scope, route.scope) || route.target !== paired.chatId
       || route.privateSenderId !== paired.senderId || route.group || route.command || route.relay || route.resultRelayEntryId) return;
     if (route.chatProject) {
@@ -389,7 +390,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       app.store.transaction(() => {
         app.store.put('messages', sourceId, source);
         app.store.put('message.routes', sourceId, { channel: 'feishu', accountId: bot.appId, botId: bot.id, target: paired.chatId,
-          scope: bot.scope, revision: bot.revision, inputId: sourceId, sourceMessageId: draft.sourceId, envelopeId: envelope.id,
+          audienceGeneration: audienceGeneration(bot.id), scope: bot.scope, revision: bot.revision, inputId: sourceId, sourceMessageId: draft.sourceId, envelopeId: envelope.id,
           platformReplyTo: input.messageId, threadId: draft.threadId, privateSenderId: paired.senderId,
           conversationThreadId, chatProject: selected.projectId } satisfies Routed);
         app.store.put('feishu.start-submissions', key, { signature } satisfies StartReceipt);
@@ -635,7 +636,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     pins.scheduleRefresh();
   }
   function groupReadBinding(bot: FeishuBotSettings, paired: Owner) {
-    return digest([bot.id, bot.appId, paired.chatId, paired.senderId, app.store.get<string>('feishu.group-read.generation', bot.id) ?? '']);
+    return digest([bot.id, bot.appId, paired.chatId, paired.senderId, audienceGeneration(bot.id)]);
   }
   function listGroupReads(botId: string, before?: string, sourceId?: string, recordId?: string) {
     let bot;
@@ -1285,6 +1286,15 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   }
   const ownerKey = (bot: FeishuBotSettings) => `feishu.bot.owner:${bot.id}:${bot.appId}`;
   const owner = (bot: FeishuBotSettings) => app.store.get<Owner>('settings', ownerKey(bot));
+  // Freeze the old pairing once so unstamped messages cannot be inherited by a later pairing.
+  app.store.transaction(() => {
+    for (const bot of settings.list()) {
+      if (bot.scope.kind !== 'global' || app.store.get('feishu.audience.cutover', bot.id)) continue;
+      const paired = owner(bot);
+      app.store.put('feishu.audience.cutover', bot.id, { generation: audienceGeneration(bot.id), revision: bot.revision,
+        appId: bot.appId, chatId: paired?.chatId ?? '', senderId: paired?.senderId ?? '' });
+    }
+  });
   const ownerCandidate = (bot: FeishuBotSettings) => app.store.get<{ openId: string }>('feishu.bot.verified-owners', `${bot.id}:${bot.appId}`);
   const pluginEnabled = () => !app.plugins || app.plugins.list().some(item => item.id === 'feishu' && item.enabled && item.status === 'active');
   function validateScope(scope: BotScope): BotScope {
@@ -1435,6 +1445,9 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       checkRelay(input, bot, stamp.relay);
     }
   }
+  function audienceGeneration(botId: string): string {
+    return app.store.get<string>('feishu.group-read.generation', botId) ?? '';
+  }
   /** Recheck the accepted input's original grant at use time, including after a
    * model wait or delayed approval. A conversation hash alone is not a grant. */
   function canUseScope(scope: BotScope, botId: string, input?: Message, threadId?: string): boolean {
@@ -1451,6 +1464,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         || stored.conversationId !== botConversationId({ id: botId, scope }, route?.conversationThreadId)) return false;
       if (route) {
         if (route.channel !== 'feishu' || route.botId !== botId || route.accountId !== bot.appId
+          || (route.audienceGeneration !== undefined && route.audienceGeneration !== audienceGeneration(botId))
           || route.revision !== bot.revision || !sameBotScope(route.scope, scope)) return false;
         const envelope = app.mailboxes.list().find(entry => entry.id === route.envelopeId);
         if (!envelope || !sameBotScope(envelope.scope, scope)
@@ -2003,7 +2017,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     return state.operations;
   }
   async function dispatchInbox(entry: MailboxEntry): Promise<{ id: string }> {
-    const bot = current(entry.botId);
+    const bot = current(entry.botId), generation = audienceGeneration(bot.id);
     if (entry.direction !== 'inbox') throw noDelivery('需要 inbox 条目');
     checkEnvelope(entry, bot);
     if (entry.scope.kind === 'unmarked') throw noDelivery('请先为未标记信件分配作用域');
@@ -2067,7 +2081,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           replyReference = { unavailable: true };
         // The original accepted input id is the durable destination for later run results.
         app.store.put('message.routes', accepted.id, { channel: 'feishu', accountId: bot.appId, botId: bot.id, target: entry.target ?? '',
-          ...stamp, ...(replyReference ? { replyReference } : {}), envelopeId: entry.id, scope: entry.scope, revision: bot.revision, inputId: accepted.id, sourceMessageId: entry.sourceMessageId } satisfies Routed);
+          ...stamp, audienceGeneration: generation, ...(replyReference ? { replyReference } : {}), envelopeId: entry.id, scope: entry.scope, revision: bot.revision, inputId: accepted.id, sourceMessageId: entry.sourceMessageId } satisfies Routed);
         if (stamp?.privateSenderId && entry.target && entry.sourceMessageId)
           app.store.put('feishu.stop-references', stopReference(bot, entry.target, entry.sourceMessageId), accepted.id);
         app.store.put('feishu.bot.dispatch', key, { status: 'completed', id: accepted.id });

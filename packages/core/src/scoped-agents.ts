@@ -84,7 +84,8 @@ export function createScopedAgents(options: Options) {
       let agent = agents.get(binding.conversationId);
       if (!agent) {
         const systemPrompt = ['project', 'task'].includes(binding.scope.kind) ? SCOPED_WORK_SYSTEM_PROMPT : undefined;
-        const runtime = createAgentRuntime({ ...options, ...binding, systemPrompt, canUseScope: input => options.validScope?.(structuredClone(binding.scope), botId, input, threadId) !== false });
+        const runtime = createAgentRuntime({ ...options, ...binding, systemPrompt,
+          ...(scope.kind === 'global' && !threadId && { feishuBotId: botId }), canUseScope: input => options.validScope?.(structuredClone(binding.scope), botId, input, threadId) !== false });
         agent = { botId, ...binding, runtime };
         agents.set(binding.conversationId, agent);
       }
