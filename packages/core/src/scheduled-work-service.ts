@@ -76,6 +76,9 @@ export function createScheduledWorkService(options: {
     if (occurrence.workVersion === work.version) return work.input.action.kind;
     return 'unknown';
   }
+  function occurrenceTimezone(work: ScheduledWorkRecord, occurrence: ScheduledWorkOccurrence) {
+    return occurrence.timezone ?? (occurrence.workVersion === work.version ? work.input.schedule.tz : undefined) ?? 'UTC';
+  }
   function historyPage(work: ScheduledWorkRecord, occurrences: ScheduledWorkOccurrence[], schedule?: ScheduleInfo, after?: string) {
     // The scheduler persists cutoff separately from delivered work. Include it in the same cursor order.
     const history: (ScheduledWorkOccurrence & { endedAt?: string })[] = occurrences.filter(o => !o.ownerSkipToken || Date.parse(o.scheduledFor) <= Date.now());
@@ -89,7 +92,7 @@ export function createScheduledWorkService(options: {
     const page = history.slice(start, start + 20);
     const more = start + page.length < history.length;
     return {
-      occurrences: page.map(o => ({ blockedBy: o.blockedBy, endedAt: o.endedAt, workVersion: o.workVersion, key: o.key, scheduledFor: o.scheduledFor, timezone: o.timezone ?? (o.workVersion === work.version ? work.input.schedule.tz : 'UTC'), status: o.status, approvalId: o.approvalId,
+      occurrences: page.map(o => ({ blockedBy: o.blockedBy, endedAt: o.endedAt, workVersion: o.workVersion, key: o.key, scheduledFor: o.scheduledFor, timezone: occurrenceTimezone(work, o), status: o.status, approvalId: o.approvalId,
         ...(o.handledAt ? { handledAt: o.handledAt, delayMs: Date.parse(o.handledAt) - Date.parse(o.scheduledFor) } : {}),
         ...dispatchReceipt(work, o),
         result: o.result, ...(o.ownerSkipToken ? { ownerSkipped: true } : {}), kind: historicalKind(work, o), ...(o.error ? { error: '结果未知，请核对原记录' } : {}) })),
@@ -163,7 +166,7 @@ export function createScheduledWorkService(options: {
       || result.messageId !== id || !message || message.id !== id || message.origin !== 'notification'
       || message.role !== 'assistant' || message.conversationId !== 'main' || message.status !== 'done'
       || message.projectId !== work.input.projectId || message.todoId !== work.input.todoId) fail('本次触发没有可核对的简报原文', 404);
-    return { messageId: id, scheduledFor: occurrence.scheduledFor, createdAt: message.createdAt, text: message.text };
+    return { messageId: id, scheduledFor: occurrence.scheduledFor, timezone: occurrenceTimezone(work, occurrence), createdAt: message.createdAt, text: message.text };
   }
   function propose(input:Record<string,unknown>,fromAgent=false) {
     return store.transaction(()=>{

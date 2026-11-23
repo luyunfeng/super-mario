@@ -255,8 +255,8 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       replace(content, line('正在读取简报…'));
       try {
         const result = await api.post('/scheduled-work/brief', { workId: item.id, occurrenceKey: occurrence.key, projectId: currentScope() || undefined });
-        if (drawer.active()) replace(content, line('计划时间：' + timeText(result.scheduledFor, occurrence.timezone ?? item.schedule.tz)),
-          line('生成时间：' + timeText(result.createdAt, occurrence.timezone ?? item.schedule.tz)), h('pre', { class: 'mailbox-content' }, result.text));
+        if (drawer.active()) replace(content, line('计划时间：' + timeText(result.scheduledFor, result.timezone ?? occurrence.timezone ?? item.schedule.tz)),
+          line('生成时间：' + timeText(result.createdAt, result.timezone ?? occurrence.timezone ?? item.schedule.tz)), h('pre', { class: 'mailbox-content' }, result.text));
       } catch (cause) {
         if (drawer.active()) replace(content, Banner({ tone: 'warn', children: cause.message }),
           Button({ label: '重新读取简报', size: 'sm', onClick: read }));

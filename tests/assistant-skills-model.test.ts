@@ -210,6 +210,7 @@ test('Web 与飞书项目助手核对计划当次简报的原文', async t => {
       assert.equal(result.occurrences.length, 1);
       return call('scheduled_work_brief', { workId, occurrenceKey: result.occurrences[0].key }, 'brief');
     }
+    assert.equal(result.timezone, 'UTC');
     assert.match(result.text, /开放待办：0/);
     return { role: 'assistant', content: result.text };
   }, options => {
