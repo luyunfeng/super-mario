@@ -11,6 +11,29 @@ type Favorite = Snapshot & { id: string; messageId?: string; projectId?: string;
 type ReadPage = (source: NativeExportSource, offset: number, signal: AbortSignal) => Promise<{ items: NativeFavoriteMessage[]; total: number }>;
 type Book = { revision: number; items: Favorite[] };
 
+type UndoEntries = Map<string, { item: Favorite; nextId?: string; expiresAt: number; timer: NodeJS.Timeout }>;
+
+function forgetUndo(entries: UndoEntries, token: string) {
+  const entry = entries.get(token);
+  if (entry) clearTimeout(entry.timer);
+  entries.delete(token);
+}
+
+function rememberUndo(entries: UndoEntries, item: Favorite, nextId?: string) {
+  const oldest = entries.keys().next();
+  if (entries.size >= maxItems && !oldest.done) forgetUndo(entries, oldest.value);
+  const token = randomUUID();
+  const ttl = 60_000;
+  const timer = setTimeout(() => entries.delete(token), ttl).unref();
+  entries.set(token, { item, nextId, expiresAt: Date.now() + ttl, timer });
+  return token;
+}
+
+function sameNative(item: Favorite, native: NativeExportSource, index: number | undefined, fingerprint: string | undefined) {
+  return item.index === index && item.fingerprint === fingerprint && item.native?.machineId === native.machineId
+    && item.native.executorId === native.executorId && item.native.nativeSessionId === native.nativeSessionId && item.native.cwd === native.cwd;
+}
+
 function fail(status: number, message: string): never {
   throw Object.assign(new Error(message), { status });
 }
@@ -132,7 +155,7 @@ function parseBackup(raw: Json | undefined) {
 }
 
 const fields = {
-  list: [], marks: [], backup: [], source: ['id'], locate: ['id'], add: ['messageId', 'projectId'], remove: ['id', 'revision'],
+  list: [], marks: [], backup: [], source: ['id'], locate: ['id'], add: ['messageId', 'projectId'], remove: ['id', 'revision'], undo: ['undoToken'],
   nativePage: ['native', 'offset'], addNative: ['native', 'index', 'fingerprint'],
   preview: ['backup', 'revision'], restore: ['backup', 'revision'],
 } as const;
@@ -158,7 +181,7 @@ async function verified(reader: ReadPage | undefined, native: NativeExportSource
   return message;
 }
 
-async function manage(context: ExtensionContext, raw: Json, reader: ReadPage | undefined, signal: AbortSignal): Promise<Json> {
+async function manage(context: ExtensionContext, raw: Json, reader: ReadPage | undefined, entries: UndoEntries, signal: AbortSignal): Promise<Json> {
   const { store } = context;
   const input = object(raw);
   if (typeof input.action !== 'string' || !Object.hasOwn(fields, input.action)) fail(400, '收藏操作无效');
@@ -175,9 +198,7 @@ async function manage(context: ExtensionContext, raw: Json, reader: ReadPage | u
     // a disable followed by re-enable must never revive a stale write.
     signal.throwIfAborted();
     return updateBook(context, book => {
-      const exists = book.items.some(item => item.index === index && item.fingerprint === fingerprint &&
-        item.native?.machineId === native.machineId && item.native.executorId === native.executorId &&
-        item.native.nativeSessionId === native.nativeSessionId && item.native.cwd === native.cwd);
+      const exists = book.items.some(item => sameNative(item, native, index, fingerprint));
       if (!exists) append(store, book, { native, index, fingerprint, title: `${native.executorId} 原生会话`,
         role: message.role, text: message.text, createdAt: message.createdAt === null ? null : new Date(message.createdAt).toISOString() });
       return list(book);
@@ -216,21 +237,48 @@ async function manage(context: ExtensionContext, raw: Json, reader: ReadPage | u
     return { messageId: source.id, ...(item.projectId && { projectId: item.projectId }),
       text: source.text, role: source.role, createdAt: source.createdAt };
   }
+  if (action === 'remove') {
+    const itemId = id(input.id);
+    const { removed, nextId, result } = updateBook(context, book => {
+      checkRevision(input.revision, book);
+      const index = book.items.findIndex(item => item.id === itemId);
+      const removed = index >= 0 ? book.items.splice(index, 1)[0] : undefined;
+      if (removed) save(store, book);
+      return { removed, nextId: book.items[index]?.id, result: list(book) };
+    });
+    return removed ? { ...result, undoToken: rememberUndo(entries, removed, nextId) } : result;
+  }
+  if (action === 'undo') {
+    const token = id(input.undoToken);
+    const entry = entries.get(token);
+    if (!entry || entry.expiresAt <= Date.now()) {
+      forgetUndo(entries, token);
+      fail(410, '撤销已失效');
+    }
+    const { item } = entry;
+    const result = updateBook(context, book => {
+      const exists = book.items.some(saved => (saved.backupKey ?? saved.id) === (item.backupKey ?? item.id)
+        || (item.messageId && item.messageId === saved.messageId && item.projectId === saved.projectId)
+        || (item.native && sameNative(saved, item.native, item.index, item.fingerprint)));
+      if (!exists) {
+        if (book.items.length >= maxItems) fail(409, '收藏已满，请腾出空间后再撤销');
+        // Backups may contain multiple entries with the same timestamp.
+        const before = book.items.findIndex(saved => saved.starredAt < item.starredAt
+          || (saved.starredAt === item.starredAt && saved.id === entry.nextId));
+        book.items.splice(before < 0 ? book.items.length : before, 0, item);
+        save(store, book);
+      }
+      return list(book);
+    });
+    forgetUndo(entries, token);
+    return result;
+  }
   return updateBook(context, book => {
     if (action === 'add') {
       add(store, book, input);
       return list(book);
     }
     if (action !== 'preview' || input.revision !== undefined) checkRevision(input.revision, book);
-    if (action === 'remove') {
-      const itemId = id(input.id);
-      const index = book.items.findIndex(item => item.id === itemId);
-      if (index !== -1) {
-        book.items.splice(index, 1);
-        save(store, book);
-      }
-      return list(book);
-    }
     const messages = parseBackup(input.backup);
     const saved = new Set(book.items.map(item => item.backupKey ?? item.id));
     const additions = messages.filter(item => !saved.has(item.key));
@@ -251,9 +299,13 @@ export function createMessageFavorites(readPage?: ReadPage): Extension {
     permissions: ['service.provide:message-favorites.manage', 'store.read', 'store.write', 'events.publish'],
     activate(context) {
       const lifetime = new AbortController();
+      const entries: UndoEntries = new Map();
       context.provide('message-favorites.manage', (input, signal) =>
-        manage(context, input, readPage, AbortSignal.any([signal, lifetime.signal])));
-      context.defer(() => lifetime.abort(Object.assign(new Error('消息收藏插件已停用'), { status: 503 })));
+        manage(context, input, readPage, entries, AbortSignal.any([signal, lifetime.signal])));
+      context.defer(() => {
+        lifetime.abort(Object.assign(new Error('消息收藏插件已停用'), { status: 503 }));
+        for (const token of entries.keys()) forgetUndo(entries, token);
+      });
     },
   };
 }

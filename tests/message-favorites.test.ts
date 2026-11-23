@@ -167,3 +167,92 @@ test('a delayed native read cannot write after the plugin has been disabled and 
   await assert.rejects(pending, { status: 503 });
   assert.deepEqual(await call({ action: 'list' }), { revision: 0, items: [] });
 });
+
+test('undo restores the saved snapshot and only its original local source', async t => {
+  const { store, call, changes, host } = await fixture(t);
+  store.put('messages', source.id, source);
+  const [item] = (await call({ action: 'add', messageId: source.id })).items as JsonObject[];
+  const remove = { action: 'remove', id: item.id, revision: 1 };
+  const deleted = await call(remove);
+  assert.equal(typeof deleted.undoToken, 'string');
+  assert.deepEqual(await call({ ...remove, revision: 2 }), { items: [], revision: 2 });
+  const undo = { action: 'undo', undoToken: deleted.undoToken };
+  await assert.rejects(call({ ...undo, messageId: 'forged' }), { status: 400 });
+  await assert.rejects(call({ ...undo, undoToken: randomUUID() }), { status: 410 });
+  store.put('messages', source.id, { ...source, text: 'edited' });
+  assert.deepEqual(await call(undo), { revision: 3, items: [item] });
+  assert.equal((await call({ action: 'source', id: item.id })).text, 'edited');
+  await assert.rejects(call(undo), { status: 410 });
+  const next = await call({ ...remove, revision: 3 });
+  await host.setEnabled('message-favorites', false);
+  await host.setEnabled('message-favorites', true);
+  await assert.rejects(call({ ...undo, undoToken: next.undoToken }), { status: 410 });
+  assert.deepEqual(changes(), [1, 2, 3, 4].map(revision => ({ revision })));
+});
+
+test('undo respects another client favorite, stable backup keys and archive access', async t => {
+  const { store, call } = await fixture(t);
+  store.put('messages', source.id, source);
+  const add = { action: 'add', messageId: source.id };
+  const [item] = (await call(add)).items as JsonObject[];
+  const removed = await call({ action: 'remove', id: item.id, revision: 1 });
+  store.put('messages', source.id, { ...source, text: 'new snapshot' });
+  const current = await call(add);
+  assert.deepEqual(await call({ action: 'undo', undoToken: removed.undoToken }), current);
+  const backup = await call({ action: 'backup' });
+  const [latest] = current.items as JsonObject[];
+  const next = await call({ action: 'remove', id: latest.id, revision: 3 });
+  await call({ action: 'restore', backup, revision: 4 });
+  const archives = await call({ action: 'list' });
+  assert.deepEqual(await call({ action: 'undo', undoToken: next.undoToken }), archives);
+  const [archive] = archives.items as JsonObject[];
+  const deletedArchive = await call({ action: 'remove', id: archive.id, revision: 5 });
+  assert.deepEqual(await call({ action: 'undo', undoToken: deletedArchive.undoToken }), { revision: 7, items: [archive] });
+  await assert.rejects(call({ action: 'source', id: archive.id }), { status: 404 });
+  assert.deepEqual(await call({ action: 'backup' }), backup);
+});
+
+test('native undo keeps the original fingerprint and checks for other clients and expiry', async t => {
+  let available = true;
+  const { call } = await fixture(t, createMessageFavorites(async () => {
+    assert.ok(available, 'undo must use the stored snapshot');
+    return { items: [nativeMessage], total: 27 };
+  }));
+  const add = { action: 'addNative', native, index: 26, fingerprint };
+  const [item] = (await call(add)).items as JsonObject[];
+  const remove = { action: 'remove', id: item.id, revision: 1 };
+  const first = await call(remove);
+  available = false;
+  assert.deepEqual(await call({ action: 'undo', undoToken: first.undoToken }), { revision: 3, items: [item] });
+  const second = await call({ ...remove, revision: 3 });
+  available = true;
+  const fresh = await call(add);
+  assert.deepEqual(await call({ action: 'undo', undoToken: second.undoToken }), fresh);
+  const [latest] = fresh.items as JsonObject[];
+  const now = Date.now();
+  const clock = t.mock.method(Date, 'now', () => now);
+  const last = await call({ ...remove, id: latest.id, revision: 5 });
+  clock.mock.mockImplementation(() => now + 60_000);
+  await assert.rejects(call({ action: 'undo', undoToken: last.undoToken }), { status: 410 });
+  assert.deepEqual(await call({ action: 'list' }), { revision: 6, items: [] });
+});
+
+test('undo can be retried after making room and retains archive order for tied timestamps', async t => {
+  const { call, store } = await fixture(t);
+  store.put('messages', source.id, source);
+  const [local] = (await call({ action: 'add', messageId: source.id })).items as JsonObject[];
+  const backup = await call({ action: 'backup' });
+  const [record] = backup.messages as JsonObject[];
+  const first = await call({ action: 'remove', id: local.id, revision: 1 });
+  const messages = Array.from({ length: 300 }, () => ({ ...record, key: randomUUID(), text: 'archive', omitted: 0 }));
+  await call({ action: 'restore', backup: { ...backup, messages }, revision: 2 });
+  const undo = { action: 'undo', undoToken: first.undoToken };
+  await assert.rejects(call(undo), { status: 409 });
+  const archives = (await call({ action: 'list' })).items as JsonObject[];
+  const middle = await call({ action: 'remove', id: archives[130].id, revision: 3 });
+  assert.deepEqual(await call({ action: 'undo', undoToken: middle.undoToken }), { revision: 5, items: archives });
+  await call({ action: 'remove', id: archives[0].id, revision: 5 });
+  const final = await call(undo);
+  assert.equal(final.revision, 7);
+  assert.deepEqual((final.items as JsonObject[]).find(saved => saved.id === local.id), local);
+});

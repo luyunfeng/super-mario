@@ -37,4 +37,23 @@ test('收藏通过服务鉴权、跨重启保留，超出普通请求大小的�
   assert.equal((await post('plugins/message-favorites', { enabled: true })).status, 200);
   const current = await (await post(endpoint, { action: 'list' })).json();
   assert.deepEqual(current, favorites);
+
+  const remove = await post(endpoint, { action: 'remove', id: current.items[0].id, revision: current.revision });
+  assert.equal(remove.status, 200);
+  const { undoToken } = await remove.json();
+  assert.equal(typeof undoToken, 'string');
+  const undo = { action: 'undo', undoToken };
+  assert.equal((await post(endpoint, undo, false)).status, 401);
+  for (const action of ['list', 'marks', 'backup']) {
+    const receipt = await post(endpoint, { action });
+    assert.equal(receipt.status, 200);
+    assert.ok(!(await receipt.text()).includes(undoToken));
+  }
+  const event = server.app.events.since(0).filter(e => e.type === 'message-favorites.changed').at(-1);
+  assert.deepEqual(event?.data, { revision: current.revision + 1 });
+  await server.close();
+  server = await startServer(config);
+  assert.equal((await post(endpoint, undo)).status, 410);
+  const reopened = await (await post(endpoint, { action: 'list' })).json();
+  assert.deepEqual(reopened.items, []);
 });

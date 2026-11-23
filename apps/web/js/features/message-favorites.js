@@ -86,10 +86,54 @@ export function messageFavoritesActive(store) {
   return !store.view.unauthorized && !!store.view.snapshot?.plugins?.some(p => p.id === 'message-favorites' && p.status === 'active');
 }
 
-function favoriteButton(api, model, messageKey, addition, { isVisible = () => true, onError } = {}) {
+// 回执只在当前操作区域短时保留。服务端核验回执，浏览器不重建消息或来源。
+function offerUndo({ api, store, host, undoToken, current, accept, returnFocus, title }) {
+  if (!undoToken || !current() || !host.isConnected) return;
+  const label = h('span', { role: 'status' }, title ? '已取消收藏 · ' + title : '已取消收藏');
+  const notice = h('span', { class: 'small' }, label, ' ');
+  const panel = host.closest('dialog');
+  const available = () => current() && notice.isConnected;
+  const button = Button({ label: '撤销', kind: 'ghost', size: 'sm', onClick: async () => {
+    if (!available() || store.view.connection !== 'online') return;
+    try {
+      const next = await api.post('/message-favorites', { action: 'undo', undoToken });
+      if (current()) accept(next);
+      clear();
+    } catch (error) {
+      if (!available()) return;
+      label.textContent = error.message;
+      // 回执已失效时移除操作。网络失败可在剩余时间内手动重试。
+      if ([404, 410].includes(error.status)) {
+        if (document.activeElement === button) returnFocus?.focus({ preventScroll: true });
+        button.remove();
+      }
+    }
+  } });
+  notice.append(button);
+  host.append(notice);
+  function update() {
+    if (!available()) clear();
+    else button.disabled = store.view.connection !== 'online';
+  }
+  function clear() {
+    const focused = notice.contains(document.activeElement);
+    clearTimeout(timer);
+    unsubscribe();
+    panel?.removeEventListener('close', clear);
+    notice.remove();
+    if (focused && current()) returnFocus?.focus({ preventScroll: true });
+  }
+  const unsubscribe = store.subscribe(update);
+  const timer = setTimeout(clear, 30_000);
+  panel?.addEventListener('close', clear);
+  update();
+}
+
+function favoriteButton(api, store, model, messageKey, addition, { isVisible = () => true, onError } = {}) {
   const generation = model.epoch;
   const current = () => model.current(generation) && isVisible();
   const post = body => api.post('/message-favorites', body);
+  const host = h('span');
   const node = Button({ label: '收藏消息', kind: 'ghost', size: 'sm', dataset: { favoriteMessage: messageKey },
     onClick: async () => {
       if (!current()) return;
@@ -97,6 +141,7 @@ function favoriteButton(api, model, messageKey, addition, { isVisible = () => tr
       try {
         const doc = await post(id ? { action: 'remove', id, revision: model.revision } : addition);
         if (model.current(generation)) model.accept(doc);
+        if (id) offerUndo({ api, store, host, undoToken: doc.undoToken, current, accept: model.accept, returnFocus: node });
       } catch (error) {
         if (!current()) return;
         if (id && error.status === 409) {
@@ -110,7 +155,8 @@ function favoriteButton(api, model, messageKey, addition, { isVisible = () => tr
       }
     } });
   model.paint(node);
-  return node;
+  host.prepend(node);
+  return host;
 }
 
 export function openNativeMessages({ api, store, native, target, onClose }) {
@@ -171,7 +217,7 @@ export function openNativeMessages({ api, store, native, target, onClose }) {
             h('strong', null, speaker(item.role), ' · 第 ' + (item.index + 1) + ' 条'),
             h('span', { class: 'small muted' }, item.createdAt ?? '消息时间未知'),
             h('pre', { class: 'mailbox-content' }, item.text),
-            favoriteButton(api, model, nativeKey(native, item.index, item.fingerprint),
+            favoriteButton(api, store, model, nativeKey(native, item.index, item.fingerprint),
               { action: 'addNative', native, index: item.index, fingerprint: item.fingerprint },
               { isVisible: valid, onError: showProblem })));
       });
@@ -202,7 +248,7 @@ export function createMessageFavorites({ api, store, router }) {
 
   function mark(message, projectId) {
     if (!model.enabled || !['user', 'assistant'].includes(message.role) || !message.text?.trim() || message.status === 'pending') return null;
-    return favoriteButton(api, model, key(projectId, message.id), { action: 'add', messageId: message.id, projectId });
+    return favoriteButton(api, store, model, key(projectId, message.id), { action: 'add', messageId: message.id, projectId });
   }
 
   function open() {
@@ -217,6 +263,7 @@ export function createMessageFavorites({ api, store, router }) {
       if (current() && (reconnected || next > (doc?.revision ?? -1))) void refresh();
     });
     const status = h('p', { role: 'status', class: 'small' });
+    const undoNotices = h('div', { class: 'stack', style: { display: 'contents' } });
     const refreshError = h('div', { class: 'small' });
     async function refresh() {
       const order = ++refreshOrder;
@@ -254,6 +301,7 @@ export function createMessageFavorites({ api, store, router }) {
       }) })),
       Field({ label: '导入收藏备份', control: file, hint: '选择不超过 8 MiB 的 JSON 文件。' }), review, refreshError, empty, rows, more);
     replace(drawer.body, status, actions);
+    search.after(undoNotices);
 
     async function run(work) {
       if (busy || !current()) return;
@@ -345,7 +393,10 @@ export function createMessageFavorites({ api, store, router }) {
           Button({ label: '取消收藏', size: 'sm', onClick: () => run(async () => {
             const next = await post({ action: 'remove', id: item.id, revision: doc.revision });
             if (current()) {
-              acceptList(next);
+              const { undoToken, ...list } = next;
+              acceptList(list);
+              offerUndo({ api, store, host: undoNotices, undoToken, current, accept: acceptList,
+                returnFocus: search, title: item.title });
               requestAnimationFrame(() => {
                 if (current() && [document.body, drawer.el].includes(document.activeElement)) search.focus();
               });

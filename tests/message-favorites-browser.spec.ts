@@ -299,3 +299,80 @@ test('收藏分批显示，搜索覆盖折叠及未显示的快照，复制与�
   await expect(cards).toHaveCount(24);
   await expect(more).toBeVisible();
 });
+
+test('撤销从消息行或收藏列表取消的收藏，恢复原快照并同步另一窗口', { timeout: 45000 }, async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-favorites-undo-'));
+  const token = 'local-favorites-undo';
+  const server = await startServer({ dataDir: dir, host: '127.0.0.1', port: 0, demo: true, token });
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  t.after(async () => {
+    await browser?.close();
+    await server.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const post = (body: object, authorization = token) => fetch(server.url + '/api/v1/message-favorites', {
+    method: 'POST', headers: { Authorization: 'Bearer ' + authorization, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const original = { id: 'undo-chat', role: 'user', conversationId: 'main', text: '首次收藏的正文',
+    createdAt: '2026-03-01T10:00:00.000Z', status: 'done' };
+  server.app.store.put('messages', original.id, original);
+  const archive = { key: '00000000-0000-4000-8000-000000000007', title: '外部归档合成样例',
+    role: 'assistant', text: '导入的原始快照'.padEnd(4000, '归'), omitted: 19, createdAt: null, starredAt: original.createdAt };
+  const backup = { format: 'super-mario.message-favorites', version: 1, messages: [archive] };
+  assert.equal((await post({ action: 'restore', revision: 0, backup })).status, 200);
+
+  browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
+  const chat = await browser.newPage(), library = await browser.newPage();
+  for (const page of [chat, library]) {
+    await page.addInitScript(() => localStorage.setItem('sm.splash.seen', 'true'));
+    await page.goto(server.url + '/#chat?token=' + token);
+  }
+  const bubble = chat.locator('#messages [data-id="undo-chat"]');
+  const mark = (name: string) => bubble.getByRole('button', { name, exact: true });
+  const drawer = library.getByRole('dialog', { name: '消息收藏', exact: true });
+  await library.getByRole('button', { name: '消息收藏', exact: true }).click();
+  const cards = drawer.getByRole('article');
+  const saved = cards.filter({ hasText: original.text });
+  const imported = cards.filter({ hasText: archive.title });
+  await mark('收藏消息').click();
+  await expect(saved).toBeVisible();
+  const before = await (await post({ action: 'backup' })).json();
+  const remove = chat.waitForResponse(response => response.url().endsWith('/api/v1/message-favorites')
+    && response.request().postDataJSON()?.action === 'remove');
+  await mark('已收藏').click();
+  const { undoToken } = await (await remove).json();
+  assert.equal(typeof undoToken, 'string');
+  await expect(saved).toHaveCount(0);
+  await expect(mark('收藏消息')).toBeVisible();
+  await expect(drawer.getByRole('button', { name: '撤销' })).toHaveCount(0);
+
+  // An undo receipt cannot replace authentication. Restoring uses the saved snapshot after an edit.
+  assert.equal((await post({ action: 'undo', undoToken }, 'invalid-fixture')).status, 401);
+  server.app.store.put('messages', original.id, { ...original, text: '收藏后编辑的正文' });
+  const request = chat.waitForRequest(req => req.url().endsWith('/api/v1/message-favorites')
+    && req.postDataJSON()?.action === 'undo');
+  await mark('撤销').click();
+  assert.deepEqual((await request).postDataJSON(), { action: 'undo', undoToken });
+  await expect(mark('已收藏')).toBeVisible();
+  await expect(mark('撤销')).toHaveCount(0);
+  await expect(saved).toBeVisible();
+  assert.deepEqual(await (await post({ action: 'backup' })).json(), before);
+  assert.equal((await post({ action: 'undo', undoToken })).status, 410);
+
+  await imported.getByRole('button', { name: '取消收藏' }).click();
+  await expect(imported).toHaveCount(0);
+  const restore = drawer.getByRole('button', { name: '撤销', exact: true });
+  await expect(restore).toBeVisible();
+  // A concurrent write on a different favorite must survive restoring this archive.
+  await mark('已收藏').click();
+  await expect(saved).toHaveCount(0);
+  await restore.click();
+  await expect(imported).toContainText('已省略 19 个字符');
+  await imported.getByRole('button', { name: '显示已保存的全文' }).click();
+  await expect(imported.locator('pre')).toHaveText(archive.text);
+  await expect(imported.getByRole('button', { name: '查看原文' })).toHaveCount(0);
+  await expect(restore).toHaveCount(0);
+  await expect(mark('收藏消息')).toBeVisible();
+  assert.deepEqual(await (await post({ action: 'backup' })).json(), backup);
+});
