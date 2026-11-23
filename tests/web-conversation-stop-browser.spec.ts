@@ -35,7 +35,12 @@ test('独立对话停止按钮只中断原线待处理的本人输入，归档�
   await page.goto(url(a)+'&token='+token);
   const region=page.getByLabel('独立对话内容'),stop=(id:string)=>region.locator('[data-id="'+id+'"]').getByRole('button',{name:'停止本轮',exact:true});
   await expect(stop(inputs[0]!.id)).toBeVisible();
-  const waiting=await page.request.post(path+'/'+a+'/messages',{headers,data:{text:'合成待编辑消息'}});
+  const query=new URLSearchParams({conversationId:'web:'+a,projectId,name:'排队附件.txt'});
+  const upload=await page.request.put(server.url+'/api/v1/chat-files/uploads?'+query,{
+    headers:{...headers,'content-type':'text/plain'},data:'合成文件内容'});
+  assert.equal(upload.status(),201);
+  const {uploadId}=await upload.json();
+  const waiting=await page.request.post(path+'/'+a+'/messages',{headers,data:{text:'合成待编辑消息',files:[{uploadId}]}});
   assert.equal(waiting.status(),202);
   const waitingId=(await waiting.json()).id;
   const another=await page.request.post(path+'/'+a+'/messages',{headers,data:{text:'合成优先处理'}});
@@ -48,6 +53,15 @@ test('独立对话停止按钮只中断原线待处理的本人输入，归档�
   await region.locator('[data-id="'+waitingId+'"]').getByRole('button',{name:'取回编辑'}).click();
   await expect(region.locator('textarea')).toHaveValue('合成待编辑消息');
   assert.equal(server.app.store.get<Message>('messages',waitingId)?.queueState,'withdrawn');
+  await region.locator('textarea').fill('取回后修改的消息');
+  const posted=page.waitForResponse(r=>r.request().method()==='POST' && r.url()===path+'/'+a+'/messages');
+  await region.getByRole('button',{name:'发送',exact:true}).click();
+  const sent=await posted;assert.equal(sent.status(),202);
+  const edited:Message=await sent.json();
+  assert.equal(edited.text,'取回后修改的消息');
+  assert.deepEqual(edited.files,server.app.store.get<Message>('messages',waitingId)?.files);
+  assert.equal(edited.files?.[0]?.name,'排队附件.txt');
+  await region.locator('[data-id="'+edited.id+'"]').getByRole('button',{name:'取消排队'}).click();
   const extra=await page.request.post(path+'/'+a+'/messages',{headers,data:{text:'合成取消排队'}});
   const extraId=(await extra.json()).id;
   const queuedRow=region.locator('[data-id="'+extraId+'"]');
