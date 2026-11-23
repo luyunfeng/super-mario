@@ -1090,11 +1090,24 @@ export async function createWorkbench(config: AppConfig) {
     }
     return ids;
   }
+  function continuationFields(input: Record<string, unknown>, projectId?: string) {
+    if (input.continuationRootId !== undefined) throw new InputError('续办来源由工作台确定');
+    if (input.continuesTodoId === undefined && input.continuationReason === undefined) return {};
+    const previousId = requiredText(input.continuesTodoId, '前序待办');
+    const reason = requiredText(input.continuationReason, '交接说明');
+    if (Array.from(reason).length > 4000 || Array.from(requiredText(input.title, '标题')).length > 500)
+      throw new InputError('续办标题最多 500 字，交接说明最多 4000 字');
+    const previous = store.get<Todo>('todos', previousId);
+    if (!previous || previous.projectId !== projectId) throw new InputError('前序待办不在当前范围', 409);
+    validateBotScope(store, {kind:'task',todoId:previousId,projectId});
+    return {continuesTodoId:previous.id, continuationReason:reason, continuationRootId:previous.continuationRootId ?? previous.id};
+  }
+
   function newTodo(input: Record<string, unknown>): Todo {
     const now = new Date().toISOString();
     const projectId = optionalText(input.projectId, '项目');
     const parentTodoId = parentFor(input.parentTodoId, projectId);
-    return { id: randomUUID(), afterTodoIds: dependenciesFor(input.afterTodoIds, parentTodoId, projectId), parentTodoId, priority: todoPriority(input.priority), responsiblePerson: optionalText(input.responsiblePerson, '负责人'), title: requiredText(input.title, '标题'), notes: optionalText(input.notes, '备注') ?? '', projectId, dueAt: dueDate(input.dueAt), reminderAt: dueDate(input.reminderAt), reminderVersion: 1, waitingOn: optionalText(input.waitingOn, '等待对象'), createdAt: now, updatedAt: now };
+    return { id: randomUUID(), ...continuationFields(input, projectId), afterTodoIds: dependenciesFor(input.afterTodoIds, parentTodoId, projectId), parentTodoId, priority: todoPriority(input.priority), responsiblePerson: optionalText(input.responsiblePerson, '负责人'), title: requiredText(input.title, '标题'), notes: optionalText(input.notes, '备注') ?? '', projectId, dueAt: dueDate(input.dueAt), reminderAt: dueDate(input.reminderAt), reminderVersion: 1, waitingOn: optionalText(input.waitingOn, '等待对象'), createdAt: now, updatedAt: now };
   }
   function registerChatTodo(input: Record<string, unknown>): Json {
     const requested = newTodo(input);
@@ -1102,10 +1115,12 @@ export async function createWorkbench(config: AppConfig) {
     const due = requested.dueAt ? Date.parse(requested.dueAt) : undefined;
     return store.transaction(() => {
       const matches = store.list<Todo>('todos').filter(todo =>
-        !todo.completedAt && todo.projectId === requested.projectId && todo.parentTodoId === requested.parentTodoId && todo.title.normalize('NFC') === title &&
+        !todo.completedAt && todo.projectId === requested.projectId && todo.parentTodoId === requested.parentTodoId &&
+        todo.continuesTodoId === requested.continuesTodoId && todo.title.normalize('NFC') === title &&
         (todo.dueAt ? Date.parse(todo.dueAt) : undefined) === due);
       if (matches.length > 1) throw new InputError('已有多个同名同期限待办，请查询并选定具体事项', 409);
       const existing = matches[0];
+      if (existing && existing.continuationReason !== requested.continuationReason) throw new InputError('已有同名续办的交接说明不同，请核对现有待办', 409);
       if (existing) return { ...existing, created: false } as unknown as Json;
       store.put('todos', requested.id, requested);
       const source = currentAgentInput();
@@ -1119,9 +1134,60 @@ export async function createWorkbench(config: AppConfig) {
     store.put('todos', todo.id, todo); if (notify) changed('todos.changed', { id: todo.id });
     return todo;
   }
+  function continueTodo(previousId: string, input: Record<string, unknown>): Todo {
+    const requestId = requiredText(input.requestId, '续办请求号');
+    if (requestId.length > 128 || /[\s\p{Cc}]/u.test(requestId)) throw new InputError('续办请求号无效');
+    if (!Object.hasOwn(input,'expectedProjectId') || Object.keys(input).some(key =>
+      !['requestId','expectedProjectId','title','continuationReason'].includes(key))) throw new InputError('续办参数或预期项目无效');
+    return store.transaction(() => {
+      const previous = store.get<Todo>('todos',previousId);
+      if (!previous) throw new InputError('前序待办不存在', 404);
+      if ((previous.projectId ?? null) !== input.expectedProjectId) throw new InputError('前序待办已移动，请重新打开', 409);
+      const todo = newTodo({title:input.title, projectId:previous.projectId, continuesTodoId:previousId, continuationReason:input.continuationReason});
+      const key = JSON.stringify([previousId,requestId]);
+      const receipt = store.get<{todoId:string; fingerprint:string}>('todo.continuations',key);
+      const fingerprint = createHash('sha256').update(JSON.stringify([todo.projectId ?? null,todo.title,todo.continuationReason])).digest('hex');
+      if (receipt) {
+        const existing = store.get<Todo>('todos',receipt.todoId);
+        if (!existing || existing.continuesTodoId !== previousId || existing.projectId !== previous.projectId ||
+          receipt.fingerprint !== fingerprint) throw new InputError('此请求已用于其他续办内容或范围', 409);
+        return existing;
+      }
+      store.put('todos',todo.id,todo);
+      store.put('todo.continuations',key,{todoId:todo.id,fingerprint});
+      changed('todos.changed',{id:todo.id});
+      return todo;
+    });
+  }
+
+  // Moving a phase to another project cuts each crossing edge permanently. Its former
+  // children become independent roots and keep their own same-project descendants.
+  function detachContinuationBranches(todo: Todo, now: string) {
+    const children = new Map<string,Todo[]>();
+    for (const child of store.list<Todo>('todos')) {
+      if (!child.continuesTodoId || child.projectId !== todo.projectId) continue;
+      const branch = children.get(child.continuesTodoId) ?? [];
+      branch.push(child);
+      children.set(child.continuesTodoId,branch);
+    }
+    const queue = (children.get(todo.id) ?? []).map(child => ({child, rootId:child.id}));
+    const seen = new Set([todo.id]);
+    for (const {child,rootId} of queue) {
+      if (seen.has(child.id)) continue;
+      seen.add(child.id);
+      const next = {...child,updatedAt:now};
+      if (child.id === rootId) {
+        delete next.continuesTodoId; delete next.continuationReason; delete next.continuationRootId;
+      } else next.continuationRootId = rootId;
+      store.put('todos',next.id,next);
+      changed('todos.changed',{id:next.id});
+      for (const descendant of children.get(child.id) ?? []) queue.push({child:descendant,rootId});
+    }
+  }
   function updateTodo(id: string, patch: Record<string, unknown>, fromWeb = false): Todo {
     const todo = store.get<Todo>('todos', id);
     if (!todo) throw new InputError('待办不存在', 404);
+    if (['continuesTodoId','continuationRootId','continuationReason'].some(key => Object.hasOwn(patch,key))) throw new InputError('续办来源在新建时确定');
     if (patch.expectedAfterTodoIds !== undefined) {
       const expected = patch.expectedAfterTodoIds;
       if (!Array.isArray(expected) || expected.some(id => typeof id !== 'string') || new Set(expected).size !== expected.length)
@@ -1164,6 +1230,7 @@ export async function createWorkbench(config: AppConfig) {
       // A published draft belongs to its original audience. A later move back must not publish a project's draft.
       if (patch.groupTaskOutcome === undefined) delete next.groupTaskOutcome;
       delete next.responsibleSession;
+      delete next.continuesTodoId; delete next.continuationReason; delete next.continuationRootId;
       delete next.parentTodoId;
     }
     if (patch.parentTodoId !== undefined) next.parentTodoId = parentFor(patch.parentTodoId, next.projectId, id);
@@ -1193,6 +1260,7 @@ export async function createWorkbench(config: AppConfig) {
       || next.projectId !== todo.projectId || !!next.completedAt !== !!todo.completedAt;
     if (cycleChanged) { next.reminderVersion = (todo.reminderVersion ?? 1) + 1; next.remindedAt = undefined; }
     store.transaction(() => {
+      if (next.projectId !== todo.projectId) detachContinuationBranches(todo, next.updatedAt);
       if (moved) {
         for (const child of store.list<Todo>('todos')) {
           const losesParent = child.parentTodoId === id && next.projectId !== todo.projectId;
@@ -1229,7 +1297,8 @@ export async function createWorkbench(config: AppConfig) {
       const prompt = todoDelegationPrompt(todo, 'executor', criterion);
       return dispatch({ ...scope, executorId: selected, prompt, doneWhen: criterion, expectMinutes });
     }
-    return agent.post(todoDelegationPrompt(todo, 'main'), 'main', scope);
+    const history = todo.continuesTodoId ? todoDecisions.handoffContext(id) : '';
+    return agent.post([todoDelegationPrompt(todo, 'main'),history].filter(Boolean).join('\n\n'), 'main', scope);
   }
   function executors(): Executor[] {
     const local = contributions.list('executors').map(entry => entry.value);
@@ -1418,7 +1487,7 @@ export async function createWorkbench(config: AppConfig) {
             if (!current || current.projectId !== projectId) {
               throw Object.assign(new InputError('待办归属已变更，请核对后重新派单', 409), { delivery: 'no' });
             }
-            return todoDecisions.context(todoId);
+            return nativeApproved ? todoDecisions.context(todoId) : todoDecisions.handoffContext(todoId);
           };
           // Exact approved payloads and existing native threads retain their original terms.
           const guidance = projectId && !nativeApproved ? await currentProjectInstructions(projectId, 'executor') : '';
@@ -2021,7 +2090,7 @@ export async function createWorkbench(config: AppConfig) {
       } : undefined;
     },
     forgetPrivateConversation: (id: string) => forgetPrivateConversation(store, id),
-    delegateTodo, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; }, listExecutors: executorInfo, snapshot, knowledgeRevision, confirmKnowledgeActions, knowledgeActionStatus, todos, createTodo, updateTodo, dispatch, cancel, knowledge,
+    delegateTodo, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; }, listExecutors: executorInfo, snapshot, knowledgeRevision, confirmKnowledgeActions, knowledgeActionStatus, todos, createTodo, continueTodo, updateTodo, dispatch, cancel, knowledge,
     async close() {
       if (closing) return;
       closing = true;

@@ -656,6 +656,8 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (closure[2] === 'review' && method === 'POST') return json(res, 200, app.taskClosure.review.attach({ ...input, todoId } as Parameters<typeof app.taskClosure.review.attach>[0]));
           if (closure[2] === 'review/decide' && method === 'POST') return json(res, 200, app.taskClosure.review.decide({ ...input, todoId } as Parameters<typeof app.taskClosure.review.decide>[0]));
         }
+        const continuation = path.match(/^\/api\/v1\/todos\/([^/]+)\/continue$/);
+        if (continuation && method === 'POST') return json(res, 201, app.continueTodo(decodeURIComponent(continuation[1]!), await body(req)));
         const delegate = path.match(/^\/api\/v1\/todos\/([^/]+)\/delegate$/);
         if (delegate && method === 'POST') {
           const todoId = decodeURIComponent(delegate[1]!);
