@@ -73,6 +73,7 @@ export function createHomePage({ api, router, scope, store }) {
   const body = h('div', { class: 'stack stack--lg' });
   const el = h('section', { class: 'page', id: 'home' }, h('div', { class: 'page__inner' },
     h('header', { class: 'page__head' }, h('h1', null, '首页'), Hint('nav.home')), body));
+  const expandedSections = new Set();
   let brief, briefError, lastRead = 0, request = 0, briefOwner;
   const hasSnapshot = () => store.view.snapshot && !store.view.unauthorized &&
     store.view.snapshotOwner === api.draftOwner();
@@ -110,12 +111,12 @@ export function createHomePage({ api, router, scope, store }) {
     const view = store.view;
     if (router.current.page !== 'home') return;
     if (!hasSnapshot()) {
-      ++request; brief = undefined; briefError = ''; lastRead = 0;
+      expandedSections.clear(); ++request; brief = undefined; briefError = ''; lastRead = 0;
       replace(body, muted(view.unauthorized ? '请重新连接工作台。' : view.loadError || '正在读取工作台…'));
       return;
     }
     if (briefOwner !== view.snapshotOwner) {
-      ++request; brief = undefined; briefError = ''; lastRead = 0; briefOwner = view.snapshotOwner;
+      expandedSections.clear(); ++request; brief = undefined; briefError = ''; lastRead = 0; briefOwner = view.snapshotOwner;
     }
     const { todos, projects } = view.snapshot;
     const inScope = item => !scope.get() || item.projectId === scope.get();
@@ -163,15 +164,34 @@ export function createHomePage({ api, router, scope, store }) {
       return h('section', { class: 'home-project' },
         h('h3', null, link(router.href('projects', p.id || 'all', p.id ? 'workspace' : 'todos'), p.name)),
         muted((p.description ? p.description + ' · ' : '') + '未完成待办 ' + (counts.get(p.id) ?? 0) + ' 项'),
-        updates.filter(([,items]) => items.length).map(([name, items, tab]) => h('p', null, name + ' ' + items.length + ' 项 · ',
-          items.slice(0, 2).flatMap((item, index) => {
-            const path = tab === 'todos' ? ['todos', 'detail'] : ['runs'];
-            const href = tab ? router.href('projects', p.id || 'all', ...path, item.id) : item.href;
-            const title = href ? h('a', { href }, item.title) : item.title;
-            const target=tab==='runs' && name==='执行结束' && continuation.target(item.id);
-            const action=target && (target.projectId || '')===p.id && continuation.button(target);
-            return [index ? '、' : '', title, action];
-          }))),
+        updates.filter(([,items]) => items.length).map(([name, items, tab]) => {
+          function links(rows) {
+            return rows.flatMap((item, index) => {
+              const path = tab === 'todos' ? ['todos', 'detail'] : ['runs'];
+              const href = tab ? router.href('projects', p.id || 'all', ...path, item.id) : item.href;
+              const title = href ? h('a', { href }, item.title) : item.title;
+              const target = tab === 'runs' && name === '执行结束' && continuation.target(item.id);
+              const action = target && (target.projectId || '') === p.id && continuation.button(target);
+              return [index ? '、' : '', title, action];
+            });
+          }
+          const preview = h('p', null, name + ' ' + items.length + ' 项 · ', links(items.slice(0, 2)));
+          if (items.length <= 2) return preview;
+          const key = JSON.stringify([p.id, name]);
+          const open = expandedSections.has(key);
+          const content = h('p', null, open && links(items.slice(2)));
+          const rest = h('details', { open, ontoggle:event => {
+            if (!event.currentTarget.isConnected) return;
+            if (event.currentTarget.open) {
+              expandedSections.add(key);
+              if (!content.hasChildNodes()) replace(content, links(items.slice(2)));
+            } else {
+              expandedSections.delete(key);
+              replace(content);
+            }
+          } }, h('summary', null, name + ' · 其余 ' + (items.length - 2) + ' 项'), content);
+          return [preview, rest];
+        }),
         chats.length > 0 && muted('有群聊动态：' + chats.map(g => g.name).join('、')),
         window && !chats.length && !updates.some(([,items]) => items.length) && muted('最近 24 小时没有更新。'));
     }) : muted('当前范围内没有项目。') }),

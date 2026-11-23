@@ -52,14 +52,20 @@ test('首页项目总结的同名待决定链接准确打开对应审批卡', {t
   const title='核对提交内容';
   const create=(projectId:string,details:string)=>server.app.approvals.propose({kind:'dispatch',title,details,params:{projectId}});
   const decoy=create(other.id,'另一张合成审批'),target=create(selected.id,'本项目合成审批');
+  for(const details of ['补充一','补充二'])server.app.approvals.propose({kind:'dispatch',title:details,details,params:{projectId:selected.id}});
   const page=await browser.newPage();
   const writes:string[]=[];
   page.on('request',r=>{if(r.method()!=='GET' && new URL(r.url()).pathname.startsWith('/api/v1/approvals'))writes.push(r.method());});
   await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
   await page.goto(server.url+'/#home?token='+token);
   const decisionLink=(project:string)=>page.locator('.home-project').filter({has:page.getByRole('heading',{name:project})})
-    .locator('p').filter({hasText:'待决定'}).getByRole('link',{name:title,exact:true});
+    .getByRole('link',{name:title,exact:true});
   await expect(decisionLink(other.name)).toHaveAttribute('href','#chat?approval='+decoy.id);
+  const section=page.locator('.home-project').filter({has:page.getByRole('heading',{name:selected.name})});
+  const more=section.locator('details').filter({hasText:'待决定 · 其余 1 项'});
+  await more.locator('summary').click();
+  await expect(more.getByRole('link')).toHaveCount(1);
+  assert.match(await more.getByRole('link').getAttribute('href') || '',/^#chat\?approval=/);
   await expect(decisionLink(selected.name)).toHaveAttribute('href','#chat?approval='+target.id);
   await decisionLink(selected.name).click();
   await expect(page).toHaveURL(server.url+'/#chat?approval='+target.id);
@@ -68,6 +74,6 @@ test('首页项目总结的同名待决定链接准确打开对应审批卡', {t
   await expect(card).toBeFocused();
   await expect(card).toContainText(title);
   await expect(card.getByRole('button',{name:'批准',exact:true})).toBeVisible();
-  assert.deepEqual(server.app.approvals.list().map(row=>row.status),['pending','pending']);
+  assert.deepEqual(server.app.approvals.list().map(row=>row.status),['pending','pending','pending','pending']);
   assert.deepEqual(writes,[]);
 });
