@@ -321,12 +321,15 @@ test('飞书为独立会话改选模型，固定主会话和其他独立会话�
   const one = rows.find(row => row.title === '选型甲'), two = rows.find(row => row.title === '选型乙');
   assert.ok(one && two);
   await a.receive('/modelchange ' + selected, 'change', { parentId: 'one' });
+  assert.match(f.sent.at(-1)!.text, /独立对话模型切换 · 选型甲/);
   assert.equal(await f.currentModel(a.row.id, one.threadId), selected);
   assert.equal(await f.currentModel(a.row.id, two.threadId), initial);
   assert.equal(await f.currentModel(a.row.id), initial);
   await a.receive('/modellist', 'inspect', { parentId: 'one' });
   assert.ok(f.sent.at(-1)?.text.includes('当前模型 · ' + selected));
+  assert.match(f.sent.at(-1)!.text, /独立对话模型目录 · 选型甲/);
   await a.receive('/modellist', 'inspect-active');
+  assert.match(f.sent.at(-1)!.text, /独立对话模型目录 · 选型乙/);
   assert.ok(f.sent.at(-1)?.text.includes('当前模型 · ' + initial));
   const secondChoice = 'openai/gpt-oss-20b';
   await a.receive('/modelchange ' + secondChoice, 'change-active');

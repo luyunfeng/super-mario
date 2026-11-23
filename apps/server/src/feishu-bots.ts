@@ -1161,7 +1161,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const target = modelListTarget(bot, paired, source);
       const valid = () => active(bot.id, epoch, bot.revision) && owner(bot)?.chatId === paired.chatId
         && owner(bot)?.senderId === paired.senderId && modelListTarget(current(bot.id), paired, source).fingerprint === target.fingerprint;
-      const title = (target.binding?.conversationThreadId ? '独立对话' : '主对话') + (model === undefined ? '模型目录' : '模型切换');
+      const threadId = target.allowed && target.binding?.conversationThreadId;
+      const threadName = threadId ? publicText(privateThreadMetadata(bot.id, threadId).title, 80).replace(/\s+/g, ' ') : '';
+      const title = (threadId ? '独立对话' : target.allowed ? '主对话' : '会话') + (model === undefined ? '模型目录' : '模型切换')
+        + (threadName ? ' · ' + threadName : '');
       let dashboard;
       if (model === undefined) {
         let catalog: ReturnType<NonNullable<FeishuBotsApp['modelCatalog']>> | undefined;
@@ -1171,7 +1174,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       } else {
         const text = await changeModel(bot, model, eventKey, target, valid);
         if (!valid()) return;
-        dashboard = { text, card: cardDocument(title, [{ tag: 'div', text: cardPlain(text) }]) };
+        dashboard = { text: threadName ? title + '\n' + text : text, card: cardDocument(title, [{ tag: 'div', text: cardPlain(text) }]) };
       }
       const entry = await put(bot, { direction: 'outbox', eventKey, title, text: dashboard.text,
         target: paired.chatId, sourceMessageId: incoming.messageId, requiresConfirmation: false }, bot.scope,
