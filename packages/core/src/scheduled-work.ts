@@ -209,20 +209,29 @@ export function createScheduledWork({ store, events, schedules, proposeApproval,
       return { id, at, skipped: undoToken === undefined };
     });
   }
-  function blocked(r: ScheduledWorkRecord): boolean {
-    return store.list<ScheduledWorkOccurrence>(occurrences).filter(o => o.workId === r.id).some(o => {
-      if (o.status === 'claimed' || o.status === 'unknown') return true;
-      if (!o.approvalId) return false;
-      const a = store.get<Approval>('approvals', o.approvalId);
-      if (!a || ['running', 'unknown'].includes(a.status)) return true;
-      // Invalidated pending approvals can no longer execute. Unknown/running
-      // actions and active Runs remain blockers even across plan revisions.
-      if (a.status === 'pending') return samePlan(r, o);
-      const runId = store.get<string>('dispatch-keys', `approval:${a.id}:${a.version}`) ?? (a.result as JsonObject | undefined)?.runId;
-      const run = typeof runId === 'string' ? store.get<Run>('runs', runId) : undefined;
-      // A completed receipt without a traceable Run is uncertain, never evidence to repeat.
-      return a.status === 'completed' && !run || !!run && ['queued', 'running', 'unknown'].includes(run.status);
-    });
+  function blockingReason(r: ScheduledWorkRecord, o: ScheduledWorkOccurrence) {
+    if (o.status === 'claimed') return '先前触发仍在处理';
+    if (o.status === 'unknown') return '先前触发的动作结果未知';
+    if (!o.approvalId) return;
+    const approval = store.get<Approval>('approvals', o.approvalId);
+    if (!approval) return '先前的派发审批记录缺失';
+    if (approval.status === 'running') return '先前的派发审批正在处理';
+    if (approval.status === 'unknown') return '先前的派发审批结果未知';
+    // A pending approval from an invalidated plan cannot dispatch. Active runs can outlive a revision.
+    if (approval.status === 'pending') return samePlan(r, o) ? '先前的派发仍待批准' : undefined;
+    const runId = store.get<string>('dispatch-keys', `approval:${approval.id}:${approval.version}`) ?? (approval.result as JsonObject | undefined)?.runId;
+    const run = typeof runId === 'string' ? store.get<Run>('runs', runId) : undefined;
+    if (!run && approval.status === 'completed') return '先前的派发审批已处理，未找到关联执行记录';
+    if (run?.status === 'queued') return '先前派发的任务仍在排队';
+    if (run?.status === 'running') return '先前派发的任务仍在执行';
+    if (run?.status === 'unknown') return '先前派发的任务执行结果未知';
+  }
+  function findBlocker(r: ScheduledWorkRecord): ScheduledWorkOccurrence['blockedBy'] {
+    for (const previous of store.list<ScheduledWorkOccurrence>(occurrences)) {
+      if (previous.workId !== r.id) continue;
+      const reason = blockingReason(r, previous);
+      if (reason) return { occurrenceKey: previous.key, scheduledFor: previous.scheduledFor, reason };
+    }
   }
   async function handle(event: DurableEvent): Promise<EventResult> {
     if (closed || event.type !== 'schedule.due' || event.typeVersion !== 1 || event.source !== 'core') return { status: 'skip', reason: 'not_scheduled_work' };
@@ -252,7 +261,11 @@ export function createScheduledWork({ store, events, schedules, proposeApproval,
         const key = digest([s.id, s.version, d.scheduledFor]);
         if (store.get(occurrences, key)) return undefined;
         const o: ScheduledWorkOccurrence = { key, workId: r.id, workVersion: r.version, scheduleId: s.id, scheduleVersion: s.version, scheduledFor: d.scheduledFor, actionKind: r.input.action.kind, handledAt: new Date(now()).toISOString(), status: 'claimed' };
-        if (blocked(r)) { store.put(occurrences, key, { ...o, status: 'skipped' }); return undefined; }
+        const blockedBy = findBlocker(r);
+        if (blockedBy) {
+          store.put(occurrences, key, { ...o, status: 'skipped', blockedBy });
+          return undefined;
+        }
         if (r.input.action.kind === 'dispatch') {
           const { kind: _, ...action } = r.input.action;
           const params: JsonObject = { ...action, sourceMessageId: r.sourceMessage.id, conversationId: r.sourceMessage.conversationId,

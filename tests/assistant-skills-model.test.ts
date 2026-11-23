@@ -2051,6 +2051,10 @@ test('Web 和飞书按同一触发记录区分待批准、派发和执行失败'
     assert.match(req.system, /分别报告当次记录的 approvalStatus 和 run.status/);
     if (req.lastRole === 'user') {
       assert.match(req.system, /提示词是供核对的计划数据/);
+      if (JSON.stringify(req.content).includes('为什么跳过')) {
+        assert.match(req.system, /即使那期后来批准或完成，也保留当时的解释/);
+        return call('scheduled_work_list', {}, 'skip-reason');
+      }
       if (JSON.stringify(req.content).includes('上个版本')) {
         assert.match(req.system, /不把当前计划的动作当成旧版本的事实/);
         return call('scheduled_work_list', {}, 'previous-version');
@@ -2064,6 +2068,13 @@ test('Web 和飞书按同一触发记录区分待批准、派发和执行失败'
     const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
     const [work] = JSON.parse(raw).items;
     if (req.callId === 'requirements') return { role: 'assistant', content: work.action.prompt + '\n完成标准：' + work.action.doneWhen };
+    if (req.callId === 'skip-reason') {
+      const skipped = work.occurrences.find((item: { status: string }) => item.status === 'skipped');
+      assert.equal(skipped.blockedBy.reason, '先前的派发仍待批准');
+      const prior = work.occurrences.find((item: { key: string }) => item.key === skipped.blockedBy.occurrenceKey);
+      assert.equal(prior.approvalStatus, 'completed');
+      return { role: 'assistant', content: '当时' + skipped.blockedBy.reason + '，这期跳过。' };
+    }
     const [trigger] = work.occurrences;
     if (req.callId === 'previous-version') {
       assert.equal(work.action.kind, 'brief');
@@ -2127,6 +2138,16 @@ test('Web 和飞书按同一触发记录区分待批准、派发和执行失败'
     assert.equal(await ask(pastQuestion, '/projects/' + project.id + '/messages'), '第 1 版是派发任务，关联执行失败。');
     await adapter.onMessage(pastQuestion, { ...source, messageId: 'previous' });
     await t.waitFor(() => assert.ok(sent.includes('第 1 版是派发任务，关联执行失败。')));
+    const prior = work.occurrences[0];
+    const stored = server.app.store.get<import('../packages/protocol/src/index.ts').ScheduledWorkOccurrence>('scheduled-work.occurrences', prior.key)!;
+    server.app.store.put('scheduled-work.occurrences', 'skipped-fixture', { key: 'skipped-fixture', workId: work.id,
+      workVersion: stored.workVersion, scheduleId: stored.scheduleId, scheduleVersion: stored.scheduleVersion,
+      status: 'skipped', scheduledFor: '2001-01-02T00:00:00.000Z',
+      blockedBy: { occurrenceKey: prior.key, scheduledFor: prior.scheduledFor, reason: '先前的派发仍待批准' } });
+    const why = '1 月 2 日的项目巡检为什么跳过？';
+    assert.equal(await ask(why, '/projects/' + project.id + '/messages'), '当时先前的派发仍待批准，这期跳过。');
+    await adapter.onMessage(why, { ...source, messageId: 'skipped' });
+    await t.waitFor(() => assert.ok(sent.includes('当时先前的派发仍待批准，这期跳过。')));
   } finally { await server.close(); }
 });
 

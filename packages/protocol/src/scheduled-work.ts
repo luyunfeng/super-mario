@@ -26,6 +26,8 @@ export interface ScheduledWorkOccurrence {
   /** Time the host began handling this due event, before creating a brief or dispatch approval. */
   handledAt?: string;
   actionKind?: ScheduledWorkAction['kind'];
+  /** Snapshot of the earlier occurrence that prevented a new action at this trigger. */
+  blockedBy?: { occurrenceKey: string; scheduledFor: string; reason: string };
   ownerSkipToken?: string;
   dispatchParams?: { [key: string]: Json }; result?: Json; error?: string;
 }

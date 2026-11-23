@@ -41,7 +41,8 @@ function occurrenceText(o) {
   if (o.status === 'claimed') return '已认领，动作结果尚未确认';
   if (o.endedAt) return '已到计划结束时间，停止触发';
   if (o.ownerSkipped) return '已按你的设置跳过';
-  if (o.status === 'skipped') return '本次已跳过';
+  if (o.status === 'skipped' && o.blockedBy) return `本次已跳过 · ${o.blockedBy.reason}（关联计划时间：${timeText(o.blockedBy.scheduledFor)}）`;
+  if (o.status === 'skipped') return '本次已跳过，原因未记录';
   if (o.run) return `派发审批 · ${approvalText(o.approvalStatus)} · ${runStatus(o.run.status)}`;
   if (o.kind === 'dispatch') return `已生成派发审批 · ${approvalText(o.approvalStatus)}；任务最终完成情况未确认，请到对话查看执行记录`;
   if (o.kind === 'brief') return '事实简报已生成（仅程序汇总已接入事实，不调用模型、不外发）';

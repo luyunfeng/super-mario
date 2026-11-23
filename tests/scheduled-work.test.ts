@@ -173,6 +173,9 @@ test('pending and unknown dispatch approvals do not accumulate, including after 
   assert.equal(f.approvals.list().find(x => x.id === a.id)?.status, 'unknown');
   assert.equal((await f.work.handle(f.due('2026-01-01T00:03:00Z'))).status, 'skip');
   assert.equal(f.approvals.list().filter(a => a.kind === 'dispatch').length, 1);
+  const history = f.work.list()[0].occurrences.sort((a,b) => a.scheduledFor.localeCompare(b.scheduledFor));
+  assert.deepEqual(history[1].blockedBy, { occurrenceKey: history[0].key, scheduledFor: history[0].scheduledFor, reason: '先前的派发仍待批准' });
+  assert.equal(history[2].blockedBy?.reason, '先前的派发审批结果未知');
 });
 
 test('active/unknown Runs block next dispatch; terminal Run permits a new approval', async t => {

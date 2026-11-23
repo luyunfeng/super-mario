@@ -118,6 +118,10 @@ test('现有创建审批生效、单次已触发与到期派发审批 pending/co
   await expect(panel(page).locator('details')).toContainText('计划版本 1 · 派发任务');
   await expect(panel(page).locator('details')).toContainText('晚 2 分钟');
   await expect(panel(page).getByRole('link', { name: '查看实际执行记录' })).toHaveAttribute('href', '#projects/a/runs/fixture-run');
+  f.items = [work({ occurrences: [{ key: 'skip', scheduledFor: at, status: 'skipped',
+    blockedBy: { occurrenceKey: 'prior', scheduledFor: '2026-11-16T08:00:00Z', reason: '先前派发的任务仍在执行' } }] })];
+  await emit(page);
+  await expect(panel(page)).toContainText('本次已跳过 · 先前派发的任务仍在执行');
 }));
 
 test('取消须明确确认当前 version；409 不盲重试，核对新版本再取消', { timeout: 30000 }, async () => fixture(async f => {
