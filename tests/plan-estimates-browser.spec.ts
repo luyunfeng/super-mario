@@ -51,4 +51,19 @@ test('待确认计划和执行历史按任务显示估时来源，旧计划保�
   await expect(current).toContainText('已拒绝');
   await expect(current.getByRole('listitem').first()).toContainText('未派发');
   await expect(current.getByRole('listitem').last()).toContainText('预计 12 分钟（显式指定）');
+  const other=app.projects.create({name:'协作项目'});
+  const multi=await page.request.post(server.url+'/api/v1/plans',{headers:{Authorization:'Bearer '+token},data:{
+    title:'跨项目计划',tasks:[{...common,prompt:'当前项目工作'},{...common,projectId:other.id,prompt:'协作项目工作'}]
+  }});
+  assert.equal(multi.status(),201);
+  const proposal=await multi.json();
+  const started=await page.request.post(server.url+'/api/v1/plans/'+proposal.id+'/start',{
+    headers:{Authorization:'Bearer '+token},data:{version:proposal.version}});
+  assert.equal(started.status(),200);
+  const result=await started.json();
+  const target=box.getByRole('link',{name:'协作项目工作'});
+  await expect(target).toHaveAttribute('href','#projects/'+other.id+'/runs/'+result.tasks[1].runId);
+  await target.click();
+  await expect(page.getByRole('heading',{name:'协作项目工作',exact:true})).toBeVisible();
+
 });

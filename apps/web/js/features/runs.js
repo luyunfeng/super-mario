@@ -471,7 +471,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       return h('div', { class: 'plan', dataset: { plan: plan.id } },
         h('div', { class: 'row row--between' }, h('strong', null, plan.title), Pill(text, tone)),
         h('ol', { class: 'plan__tasks' }, plan.tasks.map(task => h('li', null,
-          task.runId ? h('a', { href: router.href('projects', projectId, 'runs', task.runId) }, task.prompt) : task.prompt,
+          task.runId ? h('a', { href: router.href('projects', runById.get(task.runId)?.projectId ?? task.projectId ?? 'all', 'runs', task.runId) }, task.prompt) : task.prompt,
           h('span', {class:'item__meta'},stepSummary(task,plan)),
           Number.isFinite(task.expectMinutes) && h('span', { class: 'item__meta' },
             ' · 预计 ' + task.expectMinutes + ' 分钟' + (Object.hasOwn(ESTIMATE_SOURCES, task.estimateSource) ? '（' + ESTIMATE_SOURCES[task.estimateSource] + '）' : '')),
