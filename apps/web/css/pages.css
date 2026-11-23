@@ -85,6 +85,10 @@ kbd { padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 4px
 .message-quote__preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .message-quote--draft .message-quote__preview { flex: 1 1 12em; }
 summary.message-quote__preview { cursor: pointer; }
+.md-heading { margin: 0; line-height: 1.35; font-size: 1em; }
+h1.md-heading, h2.md-heading { font-size: 1.13em; }
+sm-reply-quotation { display: block; }
+sm-reply-quotation .is-folded { max-height: 4lh; overflow: hidden; }
 .md-p { margin: 0; white-space: pre-wrap; line-height: 1.62; }
 .md-table { min-width: 0; max-width: 100%; overflow-x: auto; }
 .md-table table { border-collapse: collapse; }

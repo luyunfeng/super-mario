@@ -70,11 +70,47 @@ function tableCells(line) {
   return cells.map(cell => cell.trim());
 }
 
+// Quote height changes with the viewport and the user's reading size.
+function registerReplyQuotation() {
+  if (customElements.get('sm-reply-quotation')) return;
+  customElements.define('sm-reply-quotation', class extends HTMLElement {
+    connectedCallback() {
+      const body = this.querySelector('blockquote');
+      const toggle = this.querySelector('button');
+      if (!body || !toggle) return;
+      const update = () => {
+        const line = Number.parseFloat(getComputedStyle(body).lineHeight);
+        toggle.hidden = body.scrollHeight <= line * 4 + 1;
+      };
+      this.observer = new ResizeObserver(update);
+      this.observer.observe(body);
+      update();
+    }
+    disconnectedCallback() { this.observer?.disconnect(); }
+  });
+}
+
+function replyQuotation(lines, streaming) {
+  const body = h('blockquote', { class: 'md-p' }, lines.flatMap((line, i) =>
+    i ? [h('br'), ...renderInline(line)] : renderInline(line)));
+  if (streaming) return h('div', { class: 'message-quote' }, body);
+  const toggle = h('button', { type: 'button', hidden: true, class: 'btn btn--ghost btn--sm',
+    'aria-expanded': 'false', onclick: () => {
+      const open = toggle.getAttribute('aria-expanded') === 'false';
+      toggle.setAttribute('aria-expanded', String(open));
+      toggle.textContent = open ? '收起引用' : '展开引用';
+      body.classList.toggle('is-folded', !open);
+    } }, '展开引用');
+  registerReplyQuotation();
+  body.classList.add('is-folded');
+  return h('sm-reply-quotation', { class: 'message-quote' }, body, toggle);
+}
+
 /** 将纯文本安全渲染为紧凑纯文本或轻量富文本节点。 */
-export function renderFormattedText(raw, tableAction) {
+export function renderFormattedText(raw, tableAction, { reply = false, streaming = false } = {}) {
   let text = String(raw ?? '');
   let quoted;
-  const reference = splitLeadingQuote(text);
+  const reference = !reply && splitLeadingQuote(text);
   if (reference) {
     const summary = reference.passage.replace(/\s+/g, ' ').trim();
     quoted = h('details', { class: 'message-quote' },
@@ -82,7 +118,7 @@ export function renderFormattedText(raw, tableAction) {
       h('p', { class: 'md-p' }, reference.passage));
     text = reference.body;
   }
-  const hasMarkdown = text.includes('\n') || text.includes('`') || text.includes('**') || /\[查看(?:原文|修订|待办|执行)\]\(/.test(text) || /^\s*(?:[-*]\s|\d+\.\s)/.test(text);
+  const hasMarkdown = text.includes('\n') || text.includes('`') || text.includes('**') || /\[查看(?:原文|修订|待办|执行)\]\(/.test(text) || /^ {0,3}(?:#{1,6}(?:\s|$)|>)/.test(text) || /^\s*(?:[-*]\s|\d+\.\s)/.test(text);
   if (!hasMarkdown) return quoted ? h('div', { class: 'md' }, quoted, text) : text;
 
   const blocks = quoted ? [quoted] : [];
@@ -137,6 +173,23 @@ export function renderFormattedText(raw, tableAction) {
     if (!line.trim()) {
       flushPara();
       flushLists();
+      continue;
+    }
+
+    const heading = line.match(/^ {0,3}(#{1,6})(?:[ \t]+(.*)|$)/);
+    if (heading) {
+      flushPara();
+      flushLists();
+      const title = (heading[2] ?? '').replace(/(?:^|[ \t]+)#+[ \t]*$/, '').trim();
+      blocks.push(h('h' + heading[1].length, { class: 'md-heading' }, renderInline(title)));
+      continue;
+    }
+    if (/^ {0,3}>/.test(line)) {
+      flushPara();
+      flushLists();
+      const passage = [line];
+      while (/^ {0,3}>/.test(lines[index + 1] ?? '')) passage.push(lines[++index]);
+      blocks.push(replyQuotation(passage.map(part => part.replace(/^ {0,3}> ?/, '')), streaming));
       continue;
     }
 

@@ -85,7 +85,8 @@ export function createConversationExport({ api, store, getProjectId = () => unde
     return copyAction(message, '复制正文', () => navigator.clipboard.writeText(getText(message)));
   }
   function renderMessage(message, text) {
-    return renderFormattedText(text, table => copyAction(message, '复制表格', () => writeTable(table)));
+    return renderFormattedText(text, table => copyAction(message, '复制表格', () => writeTable(table)),
+      { reply: message.role === 'assistant', streaming: message.status === 'pending' });
   }
   return { button, copyMessage, renderMessage, get active() { return conversationExportActive(store); }, close: () => drawer?.close() };
 }

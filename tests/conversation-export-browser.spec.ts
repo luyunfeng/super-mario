@@ -39,12 +39,15 @@ test('从主对话和项目工作区导出完整 Markdown，并通过插件配�
 
   const mainText = '主对话的独立正文\n\n- 保留 Markdown 换行';
   const tableText = '| **字段** | 值 |\n| --- | ---: |\n| A\\|B | =3+4 |\n| `标记` | "原文" |';
+  const passage = '> 第一行\n> 第二行\n> 第三行\n> 第四行\n> 第五行';
+  put({ id: 'pending-quote', conversationId: 'main', role: 'assistant', status: 'pending', projectId: project.id, text: passage });
+  const report = '## **核对结果** ##\n> 摘录\n\n### 原文依据\n' + passage;
   put({ id: 'table-reply', conversationId: 'main', role: 'assistant', projectId: project.id,
-    text: tableText + '\n\n```md\n' + tableText + '\n```' });
+    text: report + '\n\n' + tableText + '\n\n```md\n# 示例标题\n> 示例原文\n' + tableText + '\n```' });
   put({ id: 'main-reply', conversationId: 'main', role: 'assistant', text: mainText, projectId: project.id,
     progress: { phase: 'responding', observedAt: createdAt, detail: '内部详情标记' } });
   const projectTexts = Array.from({ length: 64 }, (_, index) => '项目甲历史消息-' + String(index + 1).padStart(3, '0'));
-  const projectLast = projectTexts.at(-1)! + '\n\n' + tableText;
+  const projectLast = projectTexts.at(-1)! + '\n\n' + report + '\n\n' + tableText;
   for (const [index, text] of projectTexts.entries()) {
     put({ id: 'project-' + index, conversationId: `project:${project.id}:work`, projectId: project.id, role: index % 2 ? 'assistant' : 'user', text: index === projectTexts.length - 1 ? projectLast : text });
   }
@@ -61,6 +64,17 @@ test('从主对话和项目工作区导出完整 Markdown，并通过插件配�
   const drawer = page.getByRole('dialog', { name: '导出对话', exact: true });
   const steps = drawer.getByRole('checkbox', { name: '包含公开工作步骤' });
   const tableMessage = page.locator('#chat [data-id="table-reply"]');
+  const pending = page.locator('#chat [data-id="pending-quote"]');
+  await expect(pending.locator('blockquote')).toContainText('第五行');
+  await expect(pending.locator('blockquote.is-folded')).toHaveCount(0);
+  await expect(tableMessage.getByRole('heading', { level: 2, name: '核对结果' })).toBeVisible();
+  await expect(tableMessage.getByRole('heading')).toHaveCount(2);
+  await expect(tableMessage.locator('blockquote')).toHaveCount(2);
+  const expand = tableMessage.getByRole('button', { name: '展开引用' });
+  await expect(expand).toHaveCount(1);
+  await expand.click();
+  await expect(tableMessage.getByRole('button', { name: '收起引用' })).toHaveAttribute('aria-expanded', 'true');
+  await tableMessage.getByRole('button', { name: '收起引用' }).click();
   await expect(tableMessage.getByRole('table')).toHaveCount(1);
   await expect(tableMessage.getByRole('cell', { name: 'A|B', exact: true })).toBeVisible();
   const copyTable = tableMessage.getByRole('button', { name: '复制表格' });
@@ -90,6 +104,8 @@ test('从主对话和项目工作区导出完整 Markdown，并通过插件配�
   const log = page.getByRole('log', { name: '项目对话' });
   await expect(log).toContainText(projectTexts.at(-1)!);
   await expect(log).not.toContainText(projectTexts[0]);
+  await expect(log.getByRole('heading', { level: 3, name: '原文依据' })).toBeVisible();
+  await expect(log.getByRole('button', { name: '展开引用' })).toBeVisible();
   const projectCopy = log.locator('[data-id="project-63"]').getByRole('button', { name: '复制正文', exact: true });
   await projectCopy.click();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), projectLast);
