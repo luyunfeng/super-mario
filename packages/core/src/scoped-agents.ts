@@ -83,6 +83,12 @@ export function createScopedAgents(options: Options) {
     return entry.runtime;
   }
   return {
+    retryFailedInput(original:Message,failed:Message) {
+      const source = options.store.get<Message>('messages',original.id);
+      if (!source?.projectId || source.conversationId !== 'project:' + source.projectId + ':work')
+        throw Object.assign(new Error('仅可重试原项目工作会话的回复'),{status:403});
+      return projectAgent(source.projectId).retryFailedInput(source,failed);
+    },
     postProject(projectId:string, text:string, context?:ScopedPostContext) {
       return projectAgent(projectId).post(text, undefined, context);
     },

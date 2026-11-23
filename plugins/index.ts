@@ -41,6 +41,10 @@ export const conversationEdit: Extension = {
   id: 'conversation-edit', name: '编辑为新消息', capabilities: ['web.conversation.edit'], activate() {},
 };
 
+export const conversationRetry: Extension = {
+  id: 'conversation-retry', name: '重试失败答复', capabilities: ['web.conversation.retry'], activate() {},
+};
+
 export { createRunComparison } from './run-comparison.ts';
 
 export const readingFonts: Extension = {

@@ -1,5 +1,6 @@
 import { createMessageFiles, messageFiles } from './message-files.js';
 import { conversationImagesActive, createMessageImages, messageImages } from './message-images.js';
+import { createTurnRetry, turnRetryActive } from './retry-turn.js';
 import { stopTurnButton } from './stop-turn.js';
 import { createReplyReadAloud } from './reply-read-aloud.js';
 import { createVoiceInput } from './voice-input.js';
@@ -43,6 +44,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const progress = h('p', { class: 'muted small' });
   const messages = h('div', { class: 'project-conversation__messages', role: 'log', 'aria-label': '项目对话' });
   const text = TextArea({ rows: 3, placeholder: '告诉我这个文件夹里要做什么，我们持续推进。', 'aria-label': '项目目标' });
+  const retryTurn = createTurnRetry(api,store);
   const files = createMessageFiles(api,store,text);
   const pictures = createMessageImages(text);
   const readAloud = createReplyReadAloud(router, () => voice.reset());
@@ -174,6 +176,8 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
       return;
     }
     if (!messages._keyed) messages.replaceChildren();
+    const retryEnabled = turnRetryActive(store);
+    const retried = new Set(rows.filter(m=>m.retryOf).map(m=>m.retryOf));
     keyedList(messages, rows, m => m.id, m => {
       const user = m.role === 'user';
       const canQuote = quotesEnabled && m.conversationId === `project:${projectId}:work` && (user || m.role === 'assistant')
@@ -188,8 +192,10 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
           agentProgress(m),
           bubble, messageFiles(api,store,m,rows,messages), user && messageImages(api,store,m,(m.todoId || '') === (todoId || '') ? pictures.editCopy.bind(null,composerContext().key) : undefined),
           statusText && h('span', { class: 'msg__meta' }, statusText),
+          (!todoId || todoId === m.todoId) && retryTurn(m,rows,`project:${projectId}:work`,
+            id=>router.href('projects',m.projectId,'workspace')+'?at='+encodeURIComponent(id)+(m.todoId?'&todo='+encodeURIComponent(m.todoId):'')),
           h('span', null, stopTurnButton(api, m, projectId), favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble, transcript.renderMessage), m.conversationId === `project:${projectId}:work` && readAloud.action(m, translation.displayedText), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
-    }, m => JSON.stringify([prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, projectId, todoId, anchor, m]));
+    }, m => JSON.stringify([prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, projectId, todoId, anchor, retryEnabled, retried.has(m.id), m]));
     if (historyQuery && !focused && el.isConnected && router.current.page === 'projects' && router.current.parts[1] === 'workspace') {
       const row = anchor ? messages.querySelector('[data-id="' + CSS.escape(anchor) + '"]') : messages.firstElementChild;
       if (row) { focused = true; row.tabIndex = -1; row.focus({ preventScroll: true }); row.scrollIntoView({ block: 'center' }); }

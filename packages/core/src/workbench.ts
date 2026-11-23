@@ -87,7 +87,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput, currentAgentReplyId, type OfficeFileOrigin } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
-import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationRetry, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
@@ -471,6 +471,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(replyReadAloud);
   plugins.register(conversationQuotes);
   plugins.register(conversationEdit);
+  plugins.register(conversationRetry);
   plugins.register(createReplyTranslation((text, language, signal) => translateReply(config, text, language, signal), () => modelRevision));
   plugins.register(savedPrompts);
   plugins.register(projectInstructions);
@@ -1126,6 +1127,30 @@ export async function createWorkbench(config: AppConfig) {
   // A page can display several document cards at once. PDF rendering runs
   // in workers, so limit simultaneous parses across the whole workbench.
   const previewJobs=new Set<Promise<void>>();
+  // Use the persisted pair as the only source of the new input and its scope.
+  async function retryFailedReply(id:string, conversationId:string) {
+    if (!plugins.list().some(p=>p.id==='conversation-retry' && p.status==='active'))
+      throw new InputError('重试失败答复插件已停用',503);
+    const failed=store.get<Message>('messages',id);
+    const source=failed?.replyTo && store.get<Message>('messages',failed.replyTo);
+    if (!failed || failed.role!=='assistant' || failed.conversationId!==conversationId || !source ||
+        source.role!=='user' || !source.directWebInput || source.replyTo ||
+        (source.origin && source.origin!=='user') || store.get('message.routes',source.id) ||
+        source.conversationId!==conversationId || source.projectId!==failed.projectId || source.todoId!==failed.todoId ||
+        !(conversationId==='main' || (source.projectId && conversationId===`project:${source.projectId}:work`)))
+      throw new InputError('当前 Web 对话中没有这条答复',404);
+    if (source.projectId) {
+      const project=store.get<Project>('projects',source.projectId);
+      if (!project || project.archivedAt) throw new InputError('原项目已不可用',409);
+    }
+    if (source.todoId) {
+      const todo=store.get<Todo>('todos',source.todoId);
+      if (!todo || todo.projectId!==source.projectId) throw new InputError('原待办归属已变化',409);
+    }
+    if (source.images?.length && !canReadChatImages(source)) throw new InputError('原图片读取权限已失效',403);
+    if (source.files?.length && !canReadChatFiles(source)) throw new InputError('原文件读取权限已失效',403);
+    return conversationId==='main' ? agent.retryFailedInput(source,failed) : scopedAgents.retryFailedInput(source,failed);
+  }
   function canGenerateOffice(source:Message) {
     if (source.readOnly || !plugins.list().some(p=>p.id==='office-documents' && p.status==='active')) return false;
     if (source.todoId) {
@@ -2615,7 +2640,7 @@ export async function createWorkbench(config: AppConfig) {
       };
       return uploadChatFile(store,config.dataDir,scope,name,mime,source,validate);
     },
-    canReadMessageFiles, messageFile,
+    retryFailedReply, canReadMessageFiles, messageFile,
     async previewMessageFile(id:string,conversationId:string,index:number,signal:AbortSignal) {
       // Authorize before waiting and again before publishing parsed private data.
       const resolveFile=()=>messageFile(id,conversationId,index);

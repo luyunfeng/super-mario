@@ -1,5 +1,6 @@
 import { createMessageFiles, messageFiles } from '../features/message-files.js';
 import { conversationImagesActive, createMessageImages, messageImages } from '../features/message-images.js';
+import { createTurnRetry, turnRetryActive } from '../features/retry-turn.js';
 import { stopTurnButton } from '../features/stop-turn.js';
 import { createReplyReadAloud } from '../features/reply-read-aloud.js';
 import { createVoiceInput } from '../features/voice-input.js';
@@ -92,6 +93,7 @@ export function createChatPage({ api, store, scope, router }) {
 
   // —— 输入框 ——
   const input = h('textarea', { class: 'composer__input', id: 'message-text', rows: 1, placeholder: '说出目标，Enter 发送，Shift + Enter 换行', 'aria-label': '给 Agent 的消息', maxLength: 20000 });
+  const retryTurn = createTurnRetry(api,store);
   const files = createMessageFiles(api,store,input);
   const pictures = createMessageImages(input);
   const readAloud = createReplyReadAloud(router, () => voice.reset());
@@ -311,13 +313,16 @@ export function createChatPage({ api, store, scope, router }) {
         h('span', { class: 'msg__label', dataset: personal ? { assistantName: 'true' } : undefined }, label),
         agentProgress(message, api),
         bubble, messageFiles(api,store,message,store.view.snapshot?.messages,messages),
+        (!scope.get() || message.projectId === scope.get()) && retryTurn(message,store.view.snapshot?.messages,'main',id=>router.href('chat')+'?at='+encodeURIComponent(id)),
         h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, transcript.copyMessage(message, translation.displayedText), translation.action(message, bubble, transcript.renderMessage), personal && readAloud.action(message, translation.displayedText), canQuote && message.role === 'assistant' && quote.action(message, label))));
   }
 
   function paintMessages(list) {
     const translationEpoch = translation.update(list);
+    const retryEnabled = turnRetryActive(store);
+    const retried = new Set(list.filter(m=>m.retryOf).map(m=>m.retryOf));
     keyedList(messages, list, item => item.id, renderMessage, item => JSON.stringify([
-      prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, draftKey, item,
+      prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, draftKey, retryEnabled, retried.has(item.id), item,
     ]));
   }
 

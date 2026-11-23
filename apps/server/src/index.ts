@@ -854,6 +854,13 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           await app.knowledgeCurator.rebuildIndex();
           app.events.publish('knowledge.changed', { id: knowledge[1] }); return json(res, 200, { removed });
         }
+        const retryReply = path.match(/^\/api\/v1\/messages\/([^/]+)\/retry$/);
+        if (retryReply && method === 'POST') {
+          const input=await body(req);
+          if (Object.keys(input).some(key=>key!=='conversationId')) throw new InputError('重试仅接受原会话标识');
+          const conversationId=requiredText(input.conversationId,'原会话');
+          return json(res,202,await app.retryFailedReply(decodeURIComponent(retryReply[1]!),conversationId));
+        }
         const stopMessage = path.match(/^\/api\/v1(?:\/projects\/([^/]+))?\/messages\/([^/]+)\/stop$/);
         if (stopMessage && method === 'POST') {
           const projectId = stopMessage[1] && decodeURIComponent(stopMessage[1]);
