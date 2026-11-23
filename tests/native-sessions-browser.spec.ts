@@ -7,7 +7,7 @@ import { chromium, expect, type Page, type Route, type Browser } from '@playwrig
 import { startServer } from '../apps/server/src/index.ts';
 
 const longPath = '/work/' + '完整目录'.repeat(90);
-const session = (n: number, machineId = 'a') => ({ ...(n === 12 ? { archived: true } : {}), id: `${machineId}-${n}`, executorId: 'codex', nativeSessionId: `native-${machineId}-${n}`, cwd: n === 12 ? longPath : `/work/${n}`, observedAt: '2026-11-17T00:00:00Z', metadataTimestamp: '2026-11-16T00:00:00Z', source: 'session-metadata', state: 'historical', writable: false, machineId, remoteExecutorId: 'remote-codex', resumable: true, relatedRunIds: [] });
+const session = (n: number, machineId = 'a') => ({ ...(n === 12 ? { archived: true, parentNativeSessionId: 'native-a-0' } : {}), id: `${machineId}-${n}`, executorId: 'codex', nativeSessionId: `native-${machineId}-${n}`, cwd: n === 12 ? longPath : `/work/${n}`, observedAt: '2026-11-17T00:00:00Z', metadataTimestamp: '2026-11-16T00:00:00Z', source: 'session-metadata', state: 'historical', writable: false, machineId, remoteExecutorId: 'remote-codex', resumable: true, relatedRunIds: [] });
 const result = (id = '') => ({ capturedAt: '2026-11-17T00:00:00Z', machines: [
   { machineId: 'a', machineName: '电脑甲', online: true, available: true, roots: ['/work'], warnings: ['仅元数据'], truncated: true, sessions: Array.from({ length: 13 }, (_, n) => session(n)) },
   { machineId: 'b', machineName: '电脑乙', online: true, available: true, roots: [], warnings: [], truncated: false, sessions: [session(1, 'b')] },
@@ -64,7 +64,12 @@ test('CLI 历史全部展示、只读筛选、窄屏完整路径与页面缓存'
   assert.equal(reads.length, beforeFilter);
   await archiveFilter.selectOption('');
   await expect(card.locator('[data-cli-session]')).toHaveCount(14);
-  await page.getByLabel('CLI 会话关键词').fill('native-a-12');
+  const search = page.getByLabel('CLI 会话关键词');
+  await search.fill('native-a-0');
+  await expect(card.locator('[data-cli-session]')).toHaveCount(2);
+  await search.fill('电脑乙');
+  await expect(card.locator('[data-cli-session]')).toHaveAttribute('data-cli-session', 'b-1');
+  await search.fill('native-a-12');
   await expect(card.locator('[data-cli-session]')).toHaveCount(1);
   await page.setViewportSize({ width: 390, height: 844 });
   const path = card.locator('p').filter({ hasText: `目录：${longPath}` });

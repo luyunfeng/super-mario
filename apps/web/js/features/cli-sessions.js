@@ -15,7 +15,7 @@ export function createCliSessions({ api, store, router }) {
   const machines = Select({ options: [['', '全部电脑']], 'aria-label': 'CLI 会话电脑' });
   const projects = Select({ options: [['', '全部项目']], 'aria-label': 'CLI 会话项目' });
   const archiveFilter = Select({ options: [['', '全部历史'], ['current', '未归档'], ['archived', '仅已归档']], 'aria-label': 'CLI 会话归档筛选' });
-  const keyword = Input({ type: 'search', placeholder: '会话 ID、目录或执行者', 'aria-label': 'CLI 会话关键词' });
+  const keyword = Input({ type: 'search', placeholder: '会话或父会话 ID、目录、电脑或执行者', 'aria-label': 'CLI 会话关键词' });
   const list = h('div', { class: 'stack', style: { ...wrap, maxHeight: 'min(60vh, 640px)', overflowY: 'auto' } });
   const notice = h('div');
   const sharing=createConversationSharing({api,store});
@@ -82,7 +82,7 @@ export function createCliSessions({ api, store, router }) {
     const query = keyword.value.trim().toLowerCase();
     const groups = (data?.machines ?? []).filter(m => !machines.value || machines.value === m.machineId);
     replace(list, groups.map(machine => {
-      const rows = machine.sessions.filter(s => (!archiveFilter.value || Boolean(s.archived) === (archiveFilter.value === 'archived')) && `${s.nativeSessionId} ${s.cwd} ${s.executorId}`.toLowerCase().includes(query));
+      const rows = machine.sessions.filter(s => (!archiveFilter.value || Boolean(s.archived) === (archiveFilter.value === 'archived')) && `${s.nativeSessionId} ${s.parentNativeSessionId ?? ''} ${s.cwd} ${s.executorId} ${machine.machineName} ${machine.machineId}`.toLowerCase().includes(query));
       const current = store.view.snapshot?.machines?.find(m => m.id === machine.machineId);
       const online = machine.online && (current ? current.online : true);
       return h('section', { class: 'stack', style: wrap, dataset: { cliMachine: machine.machineId } },
