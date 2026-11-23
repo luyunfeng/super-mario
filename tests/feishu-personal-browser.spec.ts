@@ -57,6 +57,7 @@ test('个人消息：点击授权→显示二维码→确认后自动连接→�
     assert.ok(await drawer.evaluate(el => el.scrollWidth <= el.clientWidth));
     const reply = server.app.inbox.list().find(item => item.last === 'om_reply')!;
     const original = server.app.inbox.list().find(item => item.last === 'om_offline')!;
+    assert.equal(reply.origin?.feishuFile,undefined);
     assert.equal(reply.parentInboxId, original.id);
     assert.equal(original.origin?.feishuLocation,undefined);
     await page.goto(server.url + '/#inbox?item=' + encodeURIComponent(reply.id));
@@ -65,6 +66,7 @@ test('个人消息：点击授权→显示二维码→确认后自动连接→�
     await expect(detail.locator('pre')).toContainText('已收到测试事项');
     await expect(detail.getByRole('region', {name:'同一事项'})).toContainText('上级收件');
     const file = server.app.inbox.list().find(item => item.last === 'om_file')!;
+    assert.equal(file.origin?.feishuFile,true);
     await page.goto(server.url + '/#inbox?item=' + encodeURIComponent(file.id));
     await expect(detail.locator('pre')).toContainText('文件附件：合成附件.pdf');
     await expect(detail.locator('pre')).not.toContainText('file_synthetic');

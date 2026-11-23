@@ -4,6 +4,8 @@ export interface InboxOrigin {
   connector?: string;
   chatId?: string;
   chatName?: string;
+  /** Connector reported an ordinary file message; its body requires a separate authorized read. */
+  feishuFile?: true;
   /** Position from this message's connector-provided deep link. */
   feishuLocation?: { host: 'applink.feishu.cn' | 'applink.larksuite.com'; position: string; threadId?: string };
   senderName?: string;

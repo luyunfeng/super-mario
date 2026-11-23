@@ -13,6 +13,7 @@ export function normalizeInboxOrigin(value: unknown): InboxOrigin | undefined {
     if (typeof input[key] !== 'string' || input[key].length > 1000 || input[key].includes('\0')) return fail();
     if (input[key].trim()) result[key] = input[key].trim();
   }
+  if (result.connector === '飞书' && input.feishuFile === true) result.feishuFile = true;
   if (result.connector === '飞书' && input.meetingMinutes === true) result.meetingMinutes = true;
   if (result.connector === '飞书' && input.feishuLocation !== undefined) {
     const location = input.feishuLocation as Record<string, unknown> | null;

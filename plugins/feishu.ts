@@ -1056,7 +1056,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
       const mentionedMe = !!options.personalOpenId && Array.isArray(hit.mentions) && hit.mentions.some(mention =>
         string(object(mention).id) === options.personalOpenId || string(object(object(mention).id).open_id) === options.personalOpenId);
       things.push({
-        origin: { ...chatOrigin, connector: '飞书', chatId: chat, feishuLocation: personalMessageLocation(hit, chat), ...(string(hit.chat_name) ? { chatName: string(hit.chat_name) } : {}),
+        origin: { ...chatOrigin, connector: '飞书', chatId: chat, ...(type === 'file' && { feishuFile: true as const }), feishuLocation: personalMessageLocation(hit, chat), ...(string(hit.chat_name) ? { chatName: string(hit.chat_name) } : {}),
           senderName: sender, ...(meetingMinutes(hit) ? { meetingMinutes: true as const } : {}), ...(string(object(hit.sender).id) ? { senderId: string(object(hit.sender).id), senderIdType: string(object(hit.sender).id_type) || 'unknown' } : {}), ...(kind === 'group' ? { mentionedMe } : {}) },
         thread: `feishu:message:${JSON.stringify([chat, id])}`,
         last: `${id}${hit.update_time ? `:${String(hit.update_time)}` : ''}`,
