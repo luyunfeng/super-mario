@@ -32,16 +32,20 @@ function threadMessages(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[
   return messages;
 }
 
+// Match Unicode White_Space for stored labels and ordered IDs. JavaScript trim() uses a different set.
+export function trimUnicodeSpace(raw: string) {
+  let left = 0, right = raw.length;
+  while (left < right && /\p{White_Space}/u.test(raw[left])) left++;
+  while (right > left && /\p{White_Space}/u.test(raw[right - 1])) right--;
+  return raw.slice(left, right);
+}
+
 export function normalizeThreadTags(input: unknown, max = 10): string[] {
   if (!Array.isArray(input)) throw Object.assign(new Error('标签须为字符串数组'), { status: 400 });
   const tags = new Set<string>();
   for (const raw of input) {
     if (typeof raw !== 'string') throw Object.assign(new Error('标签须为字符串'), { status: 400 });
-    // Unicode White_Space includes U+0085. JavaScript trim() uses a different set.
-    let left = 0, right = raw.length;
-    while (left < right && /\p{White_Space}/u.test(raw[left])) left++;
-    while (right > left && /\p{White_Space}/u.test(raw[right - 1])) right--;
-    const tag = raw.slice(left, right);
+    const tag = trimUnicodeSpace(raw);
     if (!tag) continue;
     if (Array.from(tag).length > 32) throw Object.assign(new Error('每个标签最多 32 个字符'), { status: 400 });
     tags.add(tag);
@@ -74,8 +78,11 @@ function historyEntries(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[
   }).sort((a, b) => b.info.latestAt.localeCompare(a.info.latestAt) || a.info.threadId.localeCompare(b.info.threadId));
 }
 
-export function readPrivateThreadHistory(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], archived = false, tag?: string) {
-  return historyEntries(store, rows, archived, tag).map(entry => entry.info);
+export function readPrivateThreadHistory(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], archived = false, tag?: string, order: string[] = []) {
+  const items = historyEntries(store, rows, archived, tag).map(entry => entry.info);
+  if (archived || !order.length) return items;
+  const rank = new Map(order.map((id, i) => [id, i]));
+  return items.sort((a, b) => (rank.get(a.threadId) ?? order.length) - (rank.get(b.threadId) ?? order.length));
 }
 
 export function searchPrivateThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived = false, before: string | null = null, tag?: string) {

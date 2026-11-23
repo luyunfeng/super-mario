@@ -86,7 +86,10 @@ export function conversationListDashboard(app: DashboardApp, bot: { conversation
   }
   const independent: Row[] = history.map(thread => ({ projectId: '', name: '独立对话 · ' + thread.title,
     conversationThreadId: thread.threadId, latestAt: thread.latestAt, tags: thread.tags }));
-  const entries = [...rows.values(), ...independent].sort((a, b) => (b.latest?.createdAt ?? b.latestAt ?? '').localeCompare(a.latest?.createdAt ?? a.latestAt ?? ''));
+  const byTime = [...rows.values(), ...independent].sort((a, b) => (b.latest?.createdAt ?? b.latestAt ?? '').localeCompare(a.latest?.createdAt ?? a.latestAt ?? ''));
+  // Keep main/project entries in their existing slots while applying the owner's independent conversation order.
+  let independentIndex = 0;
+  const entries = byTime.map(row => row.conversationThreadId ? independent[independentIndex++] : row);
   const pages = Math.ceil(entries.length / 5), page = Math.min(requestedPage, pages - 1);
   const elements: Record<string, unknown>[] = [], lines = ['最近对话'];
   const visible = entries.slice(page * 5, page * 5 + 5);

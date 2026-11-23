@@ -3170,7 +3170,13 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
     if (req.lastRole === 'user') {
       if (JSON.stringify(req.content).includes('合成记要：')) {
         assert.ok(!req.tools.includes('private_conversation_search'));
+        assert.ok(!req.tools.includes('private_conversation_list'));
         return { role: 'assistant', content: '首轮已收到。' };
+      }
+      assert.ok(req.tools.includes('private_conversation_list'));
+      if (JSON.stringify(req.content).includes('列出独立对话')) {
+        assert.match(req.system, /清单位置不代表任务优先级或完成状态/);
+        return call('private_conversation_list', JSON.stringify(req.content).includes('网页') ? { botId } : {}, 'list-ordered');
       }
       assert.ok(req.tools.includes('private_conversation_search'));
       assert.match(req.system, /引用正文须写明会话标题和发言角色/);
@@ -3179,6 +3185,13 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
         : call('private_conversation_search', { query: '青瓷样本', botId: 'other-bot' }, 'wrong-account');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    if (req.callId === 'list-ordered') {
+      const page = JSON.parse(raw);
+      assert.deepEqual(page.items.map((item: {title: string}) => item.title),
+        ['合成记要：周三交付青瓷样本', '合成记要：另一段无标签的青瓷样本']);
+      assert.ok(page.items.every((item: object) => !('hits' in item) && !('messages' in item)));
+      return { role: 'assistant', content: '已按保存的顺序列出两个对话。' };
+    }
     if (req.callId === 'wrong-account') {
       assert.match(raw, /此会话不能检索该机器人的独立对话/);
       return call('private_conversation_search', { query: '青瓷样本', tag: '验收' }, 'find-source');
@@ -3208,9 +3221,17 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
     assert.equal(tagging.status, 200);
     await send('/new 合成记要：另一段无标签的青瓷样本', 'unrelated');
     await t.waitFor(() => assert.equal(sent.filter(text => text === '首轮已收到。').length, 2));
+    const pref = await (await fetch(threads + '/order')).json();
+    const ordering = await fetch(threads + '/order', { method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ binding: pref.binding, version: pref.version, order: [row.threadId] }) });
+    assert.equal(ordering.status, 200);
+    const ordered = '已按保存的顺序列出两个对话。';
+    assert.equal(await ask('在网页按保存的顺序列出独立对话'), ordered);
     const answer = '已从用户发言核对青瓷样本。';
     assert.equal(await ask('从网页查已指定机器人在验收标签下的青瓷样本记录'), answer);
     await send('/main', 'back');
+    await send('按当前顺序列出独立对话', 'list-ordered');
+    await t.waitFor(() => assert.ok(sent.includes(ordered), sent.at(-1)));
     await send('请查本机器人验收标签下的青瓷样本记录', 'find');
     await t.waitFor(() => assert.ok(sent.includes(answer), sent.at(-1)));
   } finally { await server.close(); }

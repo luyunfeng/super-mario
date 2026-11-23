@@ -125,7 +125,7 @@ export async function createWorkbench(config: AppConfig) {
   const presence = createWebPresence();
   let notificationChannel: (bot: import('../../protocol/src/index.ts').FeishuBot) => string = () => { throw new InputError('通知渠道尚未连接', 503); };
   let mailboxProposer: ((input: Record<string, unknown>) => Json) | undefined;
-  let privateSearch: ((id: string, query: string, archived: boolean, before: string | null, sourceId?: string, tag?: string) => Json) | undefined;
+  let privateSearch: ((id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string) => Json) | undefined;
   let privateConversation: ((botId: string, threadId: string, action: 'read' | 'update', input: JsonObject) => Json) | undefined;
   let botRelay: ((input: { sourceBotId: string; targetBotId: string; text: string; key: string; parentEntryId?: string; chatId?: string; sourceMessageId?: string }) => Promise<import('../../protocol/src/bots.ts').MailboxEntry>) | undefined;
   const configuredBots = () => botsStatus() as unknown as import('../../protocol/src/bots.ts').FeishuBot[];
@@ -1724,7 +1724,7 @@ export async function createWorkbench(config: AppConfig) {
     return { self: { ...summarize(own), scope: scope ?? own.scope }, peers: peers.map(summarize), instructions: '机器人是可选渠道身份。绑定执行者时直接派发须使用该执行者，其他协作使用 bot_handoff；范围和确认仍由服务端核验。' } as unknown as Json;
   }
   function searchPrivateConversations(args: Json): Json {
-    if (!args || typeof args !== 'object' || Array.isArray(args) || typeof args.query !== 'string'
+    if (!args || typeof args !== 'object' || Array.isArray(args) || (args.query !== undefined && typeof args.query !== 'string')
       || Object.keys(args).some(key => !['query', 'botId', 'archived', 'before', 'tag'].includes(key))
       || (args.archived !== undefined && typeof args.archived !== 'boolean') || (args.before !== undefined && typeof args.before !== 'string')
       || (args.botId !== undefined && typeof args.botId !== 'string') || (args.tag !== undefined && typeof args.tag !== 'string')) throw new InputError('独立对话检索参数无效');

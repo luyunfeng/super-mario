@@ -1,4 +1,5 @@
 import { h, replace } from '../lib/dom.js';
+import { editThreadOrder } from './feishu-thread-order.js';
 import { editThreadTagFilters } from './feishu-tag-filters.js';
 import { conversationModelPicker } from './model-drawer.js';
 import { Button, Field, Input, Select, copyText } from '../ui/kit.js';
@@ -9,12 +10,12 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
   const owner = api.draftOwner(), route = location.hash;
   const body = h('div', { class: 'stack', 'aria-live': 'polite' });
   let loadId = 0;
-  let filterEditor;
+  let childEditor;
   let knownTags = [];
   const valid = () => api.draftOwner() === owner && location.hash === route && !store.view.unauthorized &&
     store.view.snapshot?.plugins?.some(plugin => plugin.id === 'feishu' && plugin.status === 'active');
   const drawer = openDrawer({ title: '独立对话记录', subtitle: bot.name, body,
-    onClose() { loadId++; filterEditor?.close(); unsubscribe(); onClose(); } });
+    onClose() { loadId++; childEditor?.close(); unsubscribe(); onClose(); } });
   let archived = false;
   let query = '';
   let selectedTag = '';
@@ -95,7 +96,7 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
     }
     const manage = Button({ label: '管理标签筛选', disabled: true, size: 'sm', onClick: () => {
       if (!current(id) || !tagState) return;
-      filterEditor = editThreadTagFilters({ api, path: base + '/tags', state: tagState,
+      childEditor = editThreadTagFilters({ api, path: base + '/tags', state: tagState,
         onSaved(state) {
           if (!drawer.el.open || !valid() || !showingList) return;
           if (!(state.filters ?? state.tags).includes(selectedTag)) selectedTag = '';
@@ -113,8 +114,13 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
           Button({ label: '重试读取标签', onClick: () => list() }));
       }
     }
+    const sort = Button({ label: '调整对话顺序', size: 'sm', onClick: () => {
+      if (!current(id)) return;
+      childEditor = editThreadOrder({ api, base, valid: () => drawer.el.open && valid(),
+        onSaved() { searchPage = undefined; if (showingList) void list(); }, onInvalid: () => drawer.close() });
+    } });
     void loadTags();
-    replace(body, h('div', { class: 'row' }, filter(false), filter(true)), tagFilter, manage,
+    replace(body, h('div', { class: 'row' }, filter(false), filter(true), sort), tagFilter, manage,
       searchEnabled ? h('form', { class: 'stack', onsubmit: event => { event.preventDefault(); void search(input.value, archived); } },
         Field({ label: '搜索独立对话', control: input }),
         h('div', { class: 'row' }, Button({ label: '搜索', type: 'submit' }),

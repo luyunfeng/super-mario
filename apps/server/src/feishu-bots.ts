@@ -1,4 +1,4 @@
-import { privateThreadTags, normalizeThreadTags, searchPrivateThreads, readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
+import { trimUnicodeSpace, privateThreadTags, normalizeThreadTags, searchPrivateThreads, readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
 import { createPinnedWorkbench } from './feishu-pinned-workbench.ts';
 import { selectedAgentStatus, agentCard, agentCardSnapshot, type AgentCardSnapshot } from './feishu-agent-card.ts';
 import type { ConversationStatus } from '../../../plugins/conversation-status.ts';
@@ -417,7 +417,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     app.events.publish('feishu.changed', { botId, threadsChanged: true });
     pins.scheduleRefresh();
   }
-  function tagPreferenceKey(botId: string) {
+  function threadPreferenceKey(botId: string) {
     const missing = () => Object.assign(new Error('当前全局机器人的私聊配对已变化'), { status: 404 });
     let bot;
     try { bot = current(botId); } catch { throw missing(); }
@@ -425,9 +425,50 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (bot.scope.kind !== 'global' || !paired?.senderId || !paired.chatId) throw missing();
     return digest([bot.id, bot.appId, bot.revision, paired.chatId, paired.senderId]);
   }
+  function checkPreferenceVersion(input: Record<string, unknown>, binding: string, version: number, field: string) {
+    if (Object.keys(input).length !== 3 || !Object.hasOwn(input, field) || typeof input.binding !== 'string'
+      || !Number.isSafeInteger(input.version) || (input.version as number) < 0)
+      throw Object.assign(new Error('请同时提供当前配对标识、版本号和偏好值'), { status: 400 });
+    if (input.binding !== binding) throw Object.assign(new Error('私聊配对已变化，请重新打开机器人'), { status: 404 });
+    if (input.version !== version) throw Object.assign(new Error('偏好版本已变化，请刷新后再操作'), { status: 409 });
+  }
+  function threadOrder(botId: string, expectedBinding?: string, input?: Record<string, unknown>) {
+    const binding = threadPreferenceKey(botId);
+    if (expectedBinding !== undefined && binding !== expectedBinding)
+      throw Object.assign(new Error('当前全局机器人的私聊配对已变化'), { status: 409 });
+    const collection = 'feishu.private-thread-order';
+    const stored = () => app.store.get<{ version: number; order: string[] }>(collection, binding) ?? { version: 0, order: [] };
+    if (!input) return { binding, ...stored() };
+    const result = app.store.transaction(() => {
+      const last = stored();
+      checkPreferenceVersion(input, binding, last.version, 'order');
+      if (!Array.isArray(input.order) || input.order.length > 10000)
+        throw Object.assign(new Error('排序须为最多 10000 项的对话 ID 数组'), { status: 400 });
+      const known = new Set(privateThreads(botId).map(row => row.threadId));
+      const ids = new Set<string>();
+      for (const raw of input.order) {
+        if (typeof raw !== 'string') throw Object.assign(new Error('排序中的对话 ID 无效'), { status: 400 });
+        const id = trimUnicodeSpace(raw);
+        if (!id) continue;
+        if (!/^[0-9a-f]{64}$/.test(id)) throw Object.assign(new Error('排序中的对话 ID 无效'), { status: 400 });
+        if (!known.has(id)) throw Object.assign(new Error('排序中有不属于当前配对的对话'), { status: 404 });
+        ids.add(id);
+      }
+      const order = [...ids];
+      if (JSON.stringify(order) === JSON.stringify(last.order)) return last;
+      const next = { version: last.version + 1, order };
+      app.store.put(collection, binding, next);
+      return next;
+    });
+    if (result.version !== input.version) threadChanged(botId);
+    return { binding, ...result };
+  }
+  function listPrivateHistory(botId: string, archived = false, tag?: string) {
+    return readPrivateThreadHistory(app.store, privateThreads(botId), archived, tag, archived ? [] : threadOrder(botId).order);
+  }
   function threadTagPreferences(botId: string, expectedKey: string, input?: Record<string, unknown>) {
     type Preference = { version: number; filters: string[] | null };
-    if (tagPreferenceKey(botId) !== expectedKey)
+    if (threadPreferenceKey(botId) !== expectedKey)
       throw Object.assign(new Error('当前全局机器人的私聊配对已变化'), { status: 409 });
     const collection = 'feishu.private-thread-tag-filters';
     const stored = () => app.store.get<Preference>(collection, expectedKey) ?? { version: 0, filters: null };
@@ -435,10 +476,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (input) {
       pref = app.store.transaction(() => {
         const last = stored();
-        if (Object.keys(input).length !== 3 || !Object.hasOwn(input, 'filters') || typeof input.binding !== 'string' || !Number.isSafeInteger(input.version) || (input.version as number) < 0)
-          throw Object.assign(new Error('请同时提供当前配对标识、版本号和筛选标签'), { status: 400 });
-        if (input.binding !== expectedKey) throw Object.assign(new Error('标签筛选的配对已变化，请重新打开机器人'), { status: 404 });
-        if (input.version !== last.version) throw Object.assign(new Error('标签筛选版本已变化，请刷新后再操作'), { status: 409 });
+        checkPreferenceVersion(input, expectedKey, last.version, 'filters');
         const filters = input.filters === null ? null : normalizeThreadTags(input.filters, 50);
         if (JSON.stringify(filters) === JSON.stringify(last.filters)) return last;
         const next = { version: last.version + 1, filters };
@@ -536,7 +574,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   }
   function chatList(bot: FeishuBotSettings, paired: Owner, grant: string, page = 0) {
     const result = conversationListDashboard(app, { conversationId: botConversationId(bot), id: bot.id, appId: bot.appId,
-      revision: bot.revision, chatId: paired.chatId }, grant, webBase, page, readPrivateThreadHistory(app.store, privateThreads(bot.id)));
+      revision: bot.revision, chatId: paired.chatId }, grant, webBase, page, listPrivateHistory(bot.id));
     const cap = app.store.get<CardNavigation>('feishu.card.navigation', grant);
     if (cap) app.store.put('feishu.card.navigation', grant, { ...cap, threadIds: result.threadIds });
     return result;
@@ -1982,11 +2020,18 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           && paired.chatId === target.owner.chatId && paired.senderId === target.owner.senderId;
       } catch { return false; }
     },
-    canUseScope, privateThreads, privateThreadMetadata, updatePrivateThread, tagPreferenceKey, threadTagPreferences,
-    searchPrivateHistory(id: string, query: string, archived: boolean, before: string | null, sourceId?: string, tag?: string) {
+    canUseScope, privateThreads, privateThreadMetadata, updatePrivateThread, threadPreferenceKey, threadTagPreferences, threadOrder, listPrivateHistory,
+    searchPrivateHistory(id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string) {
       const bot = current(id), paired = owner(bot);
       if (!paired?.senderId || bot.scope.kind !== 'global' || (sourceId && !privateTurn(bot, paired, sourceId)))
         throw Object.assign(new Error('需要已配对全局机器人的主人私聊'), { status: 403 });
+      if (query === undefined) {
+        const rows = listPrivateHistory(id, archived, tag);
+        const index = before === null ? -1 : rows.findIndex(row => row.threadId === before);
+        if (before !== null && index < 0) throw Object.assign(new Error('清单位置已失效，请重新读取'), { status: 409 });
+        const items = rows.slice(index + 1, index + 21);
+        return { items, nextBefore: index + 1 + items.length < rows.length ? items.at(-1)!.threadId : null };
+      }
       return searchPrivateThreads(app.store, privateThreads(id), query, archived, before, tag);
     },
     workbenchStatus: pins.status,

@@ -204,17 +204,30 @@ export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input:
       return readConversationStatus(context.store, input);
     };
     context.provide('conversation-search.status', status);
-    if (searchPrivate) context.contribute('tools', 'private_conversation_search', {
-      name: 'private_conversation_search', description: '在指定全局机器人的主人独立对话中按标题或发言片段查找，返回会话名、命中角色及摘录。Web 主对话提供 botId，飞书主人主会话自动限定当前机器人。archived=true 单查归档，tag 可精确限定一个标签，before 用上页 nextBefore。',
-      parameters: { type: 'object', additionalProperties: false, required: ['query'], properties: {
-        query: { type: 'string' }, botId: { type: 'string' }, archived: { type: 'boolean' }, before: { type: 'string' }, tag: { type: 'string' },
-      } },
-      async execute(input, signal) {
+    if (searchPrivate) {
+      const filters = { botId: { type: 'string' }, archived: { type: 'boolean' }, before: { type: 'string' }, tag: { type: 'string' } };
+      const run = (input: Json, signal: AbortSignal) => {
         signal.throwIfAborted();
         if (!active) fail(503, '对话搜索插件已停用');
         return searchPrivate(input);
-      },
-    });
+      };
+      context.contribute('tools', 'private_conversation_list', {
+        name: 'private_conversation_list', description: '按 Web 显示顺序列出指定全局机器人的主人独立对话，返回名称、标签、发言数量和最近发言时间。Web 主对话提供 botId，飞书主人主会话自动限定当前机器人。可按 archived 和 tag 筛选，before 用上页 nextBefore。',
+        parameters: { type: 'object', additionalProperties: false, properties: filters },
+        async execute(input, signal) {
+          if (!input || typeof input !== 'object' || Array.isArray(input) || 'query' in input) fail(400, '按词查发言请使用独立对话搜索');
+          return run(input, signal);
+        },
+      });
+      context.contribute('tools', 'private_conversation_search', {
+        name: 'private_conversation_search', description: '在指定全局机器人的主人独立对话中按标题或发言片段查找，返回会话名、命中角色及摘录。Web 主对话提供 botId，飞书主人主会话自动限定当前机器人。archived=true 单查归档，tag 可精确限定一个标签，before 用上页 nextBefore。',
+        parameters: { type: 'object', additionalProperties: false, required: ['query'], properties: { ...filters, query: { type: 'string' } } },
+        async execute(input, signal) {
+          if (!input || typeof input !== 'object' || Array.isArray(input) || typeof input.query !== 'string') fail(400, '请提供要检索的词句');
+          return run(input, signal);
+        },
+      });
+    }
     context.contribute('tools', 'conversation_status', {
       name: 'conversation_status', description: '查看当前会话已记录的进度、最近发言、明确执行目标和待用户决定的卡片。仅记录事实，无记录或结果未知时如实说明。',
       parameters: { type: 'object', additionalProperties: false, properties: {} },

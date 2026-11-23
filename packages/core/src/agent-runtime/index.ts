@@ -75,7 +75,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   function allowed(name: string) {
     if (activeInput && pendingTurns.get(activeInput.id)?.stopped) return false;
     // The owner's cross-project agenda has a separate paired-private command on Feishu.
-    if (name === 'private_conversation_search') {
+    if (name === 'private_conversation_search' || name === 'private_conversation_list') {
       if (!mainIdentity || options.conversationThreadId || currentProjectId || !activeInput || activeInput.todoId || activeInput.readOnly ||
         (activeInput.origin && activeInput.origin !== 'user')) return false;
       const route = store.get<{ privateSenderId?: string; group?: unknown; relay?: unknown; command?: unknown }>('message.routes', activeInput.id);
