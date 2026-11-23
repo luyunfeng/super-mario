@@ -10,6 +10,7 @@ export function todoSections(todos: Todo[], now = new Date(), needsYouIds: reado
   if (!Number.isFinite(now.getTime())) throw new TypeError('分组时间无效');
   const start = new Date(now); start.setHours(0, 0, 0, 0);
   const end = new Date(start); end.setDate(end.getDate() + 1);
+  const today = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
   const needsYou = new Set(needsYouIds);
   const sections: Record<TodoSection, TodoSectionRow[]> = { '需要你': [], '逾期': [], '今天': [], '等待中': [], '之后': [], '某天': [], '刚完成': [], '已完成': [] };
   // Count the full set before the client narrows a section by date or search.
@@ -29,9 +30,9 @@ export function todoSections(todos: Todo[], now = new Date(), needsYouIds: reado
     let section: TodoSection;
     if (todo.completedAt) section = Date.parse(todo.completedAt) >= start.getTime() ? '刚完成' : '已完成';
     else if (needsYou.has(todo.id)) section = '需要你';
-    else if (Number.isFinite(due) && due < start.getTime()) section = '逾期';
+    else if (todo.dueDay ? todo.dueDay < today : due < start.getTime()) section = '逾期';
     else if (todo.waitingOn?.trim()) section = '等待中';
-    else if (Number.isFinite(due) && due < end.getTime()) section = '今天';
+    else if (todo.dueDay ? todo.dueDay === today : due < end.getTime()) section = '今天';
     else if (Number.isFinite(due)) section = '之后';
     else section = '某天';
     const childProgress = counts.get(todo.id);

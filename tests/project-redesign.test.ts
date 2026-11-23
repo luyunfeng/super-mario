@@ -18,6 +18,12 @@ test('server todo sections are exclusive, preserve todos, and do not invent need
   assert.deepEqual(Object.fromEntries(Object.entries(sections).map(([k, v]) => [k, v.map(t => t.id)])), { '需要你': [], '逾期': ['late'], '今天': ['today'], '等待中': ['waiting'], '之后': ['later'], '某天': ['someday'], '刚完成': ['recent'], '已完成': ['done'] });
   assert.equal(Object.values(sections).flat().length, todos.length);
   assert.deepEqual(todos, before);
+  const allDay = todoSections([
+    make('today-abroad', { dueDay: '2026-11-16', dueAt: day(1) }),
+    make('yesterday-abroad', { dueDay: '2026-11-15', dueAt: day(0) }),
+  ], now);
+  assert.equal(allDay['今天'][0]?.id, 'today-abroad');
+  assert.equal(allDay['逾期'][0]?.id, 'yesterday-abroad');
   assert.throws(() => todoSections([], new Date('invalid')), /时间无效/);
 });
 
