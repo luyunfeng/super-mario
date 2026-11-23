@@ -212,6 +212,9 @@ test('Web 和机器人模型抽屉支持输入、成功使用后列入历史，�
   await page.route(endpoint, route => route.abort(), { times: 1 });
   await forget.click();
   await expect(dialog).toContainText('移除结果未知');
+  await expect(forget).toBeDisabled();
+  await expect(apply).toBeDisabled();
+  await expect(refresh).toBeEnabled();
   await refresh.click();
   await expect(list).toHaveValue(model);
   await forget.click();

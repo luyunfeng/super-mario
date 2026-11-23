@@ -62,8 +62,13 @@ export function conversationModelPicker(api, path, name) {
           }
         } catch (cause) {
           const action = forgetHistory ? '移除' : '切换';
-          feedback.textContent = cause.status && cause.status < 500 ? `${action}失败：${cause.message}` : `${action}结果未知，请重新查看清单核对。`;
-          sync();
+          if (cause.status && cause.status < 500) {
+            feedback.textContent = `${action}失败：${cause.message}`;
+            sync();
+          } else {
+            feedback.textContent = `${action}结果未知，请重新查看清单核对。`;
+            refresh.disabled = false;
+          }
           return;
         }
         await load(message);
