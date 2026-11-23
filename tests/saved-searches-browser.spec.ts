@@ -156,6 +156,40 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     assert.equal((await api(workspacePath + '?before=historic&after=historic')).status, 400);
     await expect(composer).toHaveValue('翻页期间的合成草稿');
 
+    // A saved pagination URL can outlive its boundary message. The draft belongs to the project.
+    putMessage('removed-boundary', work, '临时翻页位置');
+    const oldPage = server.url + '/#projects/' + projectId + '/workspace?before=removed-boundary';
+    await page.goto(oldPage);
+    await expect(log.last()).toContainText('翻页期间到达');
+    server.app.store.remove('messages', 'removed-boundary');
+    await page.reload();
+    const projectLog = page.getByRole('log', { name: '项目对话' });
+    const readNotice = page.locator('#panel-workspace').getByRole('status').filter({ hasText: '重试读取对话' });
+    await expect(readNotice).toContainText('当前项目中找不到翻页位置');
+    await expect(projectLog).not.toContainText('正在读取');
+    await expect(composer).toHaveValue('翻页期间的合成草稿');
+    await page.getByRole('link', { name: '返回最新消息' }).click();
+    await expect(log.last()).toContainText('翻页期间到达');
+    const workspaceUrl = '**/api/v1' + workspacePath;
+    await page.route(workspaceUrl, route => route.fulfill({ status: 503, contentType: 'application/json',
+      body: JSON.stringify({ error: '刷新稍后再试' }) }));
+    server.app.events.publish('messages.changed', { conversationId: work, messageId: 'new-arrival' });
+    await expect(readNotice).toContainText('当前显示上次读取的记录');
+    await expect(log.last()).toContainText('翻页期间到达');
+    await page.unroute(workspaceUrl);
+    await readNotice.getByRole('button', { name: '重试读取对话' }).click();
+    await expect(readNotice).toBeHidden();
+    // Recovery uses the same page and only repeats a read.
+    await page.route('**/workspace?after=new-arrival', route => route.fulfill({
+      status: 503, contentType: 'application/json', body: JSON.stringify({ error: '历史存储暂不可用' }),
+    }));
+    await page.goto(server.url + '/#projects/' + projectId + '/workspace?after=new-arrival');
+    await expect(readNotice).toContainText('历史存储暂不可用');
+    await page.unroute('**/workspace?after=new-arrival');
+    await readNotice.getByRole('button', { name: '重试读取对话' }).click();
+    await expect(projectLog).toContainText('这个位置没有更多消息');
+    await expect(composer).toHaveValue('翻页期间的合成草稿');
+
     await search.fill('后续记录');
     await results.getByRole('button', { name: '查看全部匹配消息' }).click();
     const messageDrawer = page.getByRole('dialog', { name: '消息搜索结果' });

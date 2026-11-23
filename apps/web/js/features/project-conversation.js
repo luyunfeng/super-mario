@@ -28,9 +28,12 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const drafts = createConversationDrafts({ api, store });
   const pending = new Map();
   const notices = new Map();
-  let workspace, historyQuery = '', anchor = '', focused = false, navigationState;
+  let workspace, readError = '', historyQuery = '', anchor = '', focused = false, navigationState;
   const locationNote = h('div', { class: 'row row--wrap small', hidden: true });
   const status = h('div', { 'aria-live': 'polite' });
+  const readErrorText = h('span');
+  const readNotice = h('div', { class: 'row row--wrap', role: 'status', hidden: true }, readErrorText,
+    Button({ label: '重试读取对话', size: 'sm', onClick: load }));
   const progress = h('p', { class: 'muted small' });
   const messages = h('div', { class: 'project-conversation__messages', role: 'log', 'aria-label': '项目对话' });
   const text = TextArea({ rows: 3, placeholder: '告诉我这个文件夹里要做什么，我们持续推进。', 'aria-label': '项目目标' });
@@ -56,7 +59,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const topic = h('p', { class: 'small', hidden: true });
   const selectedTodo = () => store.view.snapshot?.todos?.find(t => t.id === todoId && t.projectId === projectId);
   const composer = h('div', { class: 'project-conversation__composer stack' }, topic, edit.notice, quote.bar, prompts.menu, text, voice.caption, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, voice.button, voice.upload, send), notice);
-  const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, favorites.button, transcript.button, code.toggle)), status, locationNote, messages, composer), code.el);
+  const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, favorites.button, transcript.button, code.toggle)), status, locationNote, readNotice, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
   let draftKey, owner, enabled, quotesEnabled, editEnabled, epoch = 0;
   const submissions = createMessageSubmissions({ api, context: submissionContext, onConfirmed: clearSubmittedDraft, captureEdit: edit.onAccepted,
@@ -97,7 +100,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     if (sameDraft) return;
     quote.restore(nextQuotes ? key : null);
     if (owner !== nextOwner) {
-      generation++; request++; workspace = undefined;
+      generation++; request++; workspace = undefined; readError = '';
       pending.clear(); notices.clear();
     }
     if (owner !== nextOwner || enabled !== nextEnabled || quotesEnabled !== nextQuotes) epoch++;
@@ -127,6 +130,9 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
       ' · ', h('a', { href: router.href('projects', projectId, 'workspace') }, '返回项目对话'));
     send.disabled = !draftKey || !p?.workspace || pending.has(draftKey) || submissions.blocked() || !workspace || work?.available === false;
     replace(notice, notices.get(draftKey) ? Banner({ tone: 'warn', children: notices.get(draftKey) }) : null);
+    readNotice.hidden = !readError;
+    const errorText = readError && (workspace ? '无法更新项目对话，当前显示上次读取的记录。' : '无法读取项目对话。') + readError;
+    if (readErrorText.textContent !== errorText) readErrorText.textContent = errorText;
     const rows = workspace?.messages ?? [];
     const translationEpoch = translation.update(rows);
     const path = router.href('projects', projectId, 'workspace') + (todoId ? '?todo=' + encodeURIComponent(todoId) : '');
@@ -146,7 +152,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     }
     if (!rows.length) {
       const title = !workspace ? '正在读取项目对话…' : historyQuery ? '这个位置没有更多消息' : '在这个文件夹里持续工作';
-      replace(messages, Empty({ title, text: workspace && !historyQuery ? '直接输入目标，项目工作会话负责拆解并跟进。' : undefined }));
+      replace(messages, !readError && Empty({ title, text: workspace && !historyQuery ? '直接输入目标，项目工作会话负责拆解并跟进。' : undefined }));
       messages._keyed = undefined;
       return;
     }
@@ -178,11 +184,15 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     try {
       const value = await api.get(`/projects/${encodeURIComponent(id)}/workspace` + historyQuery);
       if (stamp !== generation || order !== request) return;
+      readError = '';
       workspace = value;
       paint();
     } catch (error) {
       if (stamp !== generation || order !== request) return;
-      replace(notice, Banner({ tone: 'danger', children: `无法读取项目对话：${error.message}` }));
+      // Keep an already loaded page during transient failures. A rejected read invalidates its contents.
+      if (error.status >= 400 && error.status < 500) workspace = undefined;
+      readError = error.message || '读取失败，请重试。';
+      paint();
     }
   }
   async function submit() {
@@ -234,7 +244,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
       todoId = query?.get('todo') || '';
       const kind = ['at', 'before', 'after'].find(key => query?.has(key));
       const next = kind ? '?' + kind + '=' + encodeURIComponent(query.get(kind)) : '';
-      if (historyQuery !== next || projectId !== id) workspace = undefined;
+      if (historyQuery !== next || projectId !== id) { workspace = undefined; readError = ''; }
       historyQuery = next; anchor = query?.get('at') || ''; focused = false;
       if (projectId !== id) {
         instructions.close();
