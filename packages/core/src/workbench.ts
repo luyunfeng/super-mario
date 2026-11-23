@@ -52,7 +52,7 @@ import { todoDelegationPrompt, formatProjectInstructions, INBOX_ASSISTANT_SYSTEM
 import { reminderReference, reminderSourceId, wireWorkbenchBackground } from './workbench-background.ts';
 import { createAwayNotifications } from './away-notifications.ts';
 import { collectAttention } from './attention.ts';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID, createHash, createHmac } from 'node:crypto';
 import { join } from 'node:path';
 import { PluginCallError } from './plugin-invocations.ts';
 import { createProjectWorkspace } from './project-workspace.ts';
@@ -88,7 +88,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput, currentAgentReplyId, type OfficeFileOrigin } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage, readNativeShareMessages } from './native-conversation-export.ts';
-import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, createConversationSharing, createWorkspaceBoard, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, readKnowledgeDocumentComments, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
+import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, createConversationSharing, createWorkspaceBoard, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, verifyKnowledgeCommentActor, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
@@ -143,7 +143,8 @@ export async function createWorkbench(config: AppConfig) {
   const knowledgeReaderSettings = createKnowledgeSourceSettings(store, events);
   // Only the authenticated page/source route grants a short-lived document read.
   // Service wrappers cannot substitute an arbitrary URL or choose a different identity.
-  const commentsContext = new AsyncLocalStorage<(signal:AbortSignal)=>Promise<Json>>();
+  const commentReadName='knowledge-local.document.comments',commentWriteName='knowledge-local.document.comment-write';
+  const commentsContext = new AsyncLocalStorage<{name:string;invoke:(signal:AbortSignal)=>Promise<Json>}>();
   const protectedReaderContext = new AsyncLocalStorage<{ source: string; current: () => boolean; credentialAuthorized?:boolean }>();
   let knowledgeAccount: () => {profile:string;appId:string;openId:string} | undefined = () => undefined;
   let knowledgeAccountReady = () => false;
@@ -408,13 +409,7 @@ export async function createWorkbench(config: AppConfig) {
     }
     return raw as unknown as Json;
   }
-  for (const extension of createSystemExtensions({ demo: config.demo, actions: { todayBriefSources, triageAgent: { status: () => inboxClassifier.status(), ask: (text, context) => inboxClassifier.ask(text, context) }, ruleTriage, scheduledWorkCronPreview: input => scheduledWork.previewCron(input), scheduledWorkHistory: input => scheduledWork.readHistory(input) as unknown as Json, scheduledWorkBrief: input => scheduledWork.readBrief(input), scheduledWorkList: input => scheduledWork.list(input) as unknown as Json, scheduledWorkPropose: input => scheduledWork.propose(input,true) as unknown as Json, scheduledWorkSkipNext: input => scheduledWork.skipNext(input,true), scheduledWorkSetPaused: input => scheduledWork.changeTiming(input,true) as unknown as Json, scheduledWorkCancel: input => scheduledWork.cancel(input,true) as unknown as Json, followupCreate: input => followups.create(input, currentAgentInput()?.conversationId) as unknown as Json, followupList: input => followups.list(input) as unknown as Json, followupCancel: id => followups.cancel(id) as unknown as Json, notifyUser: input => followups.notifyUser(input), calendarAgenda: (input, signal) => fetchCalendarAgenda({ profile: knowledgeAccount()?.profile, ...input, signal }), workspaceCode: readWorkspaceCode, knowledgeReaderService: () => protectedReaderService(), knowledgeCommentsService:()=>({
-      name:'knowledge-local.document.comments',version:1,readOnly:true,async handler(_input,signal) {
-        const read=commentsContext.getStore();
-        if(!read) throw new InputError('请从已关联的知识来源读取评论',403);
-        return read(signal);
-      },
-    }), pendingDecisionsList: readPendingDecisions, workDecisionsList: input => workDecisions.list(input) as unknown as Json, workDecisionRecord: input => workDecisions.recordFromAgent(input) as unknown as Json, workDecisionCorrect: input => workDecisions.changeFromAgent(input) as unknown as Json, workDecisionWithdraw: input => workDecisions.changeFromAgent(input, true) as unknown as Json, workDecisionReference: input => workDecisions.referenceFromAgent(input) as unknown as Json, inboxList: readInbox, inboxTree: readInboxTree, inboxHandlingRead: readInboxHandlingFromAgent, inboxAssignProject: assignInboxProject, agentSessions: async input => await agentSessions.discover(input) as unknown as Json, resumeSession: async input => { const source = currentAgentInput() ?? agent.currentInput(); return await agentSessions.proposeResume({ ...input, key: source ? `${source.id}:${requiredText(input.key, '恢复请求标识')}` : input.key }, source) as unknown as Json; }, botsList: () => botsStatus(), privateConversation: managePrivateConversation, groupReadRecords: readGroupRecordsFromChat, botRelay: relayFromAgent, mailboxesList: input => mailboxes.list(input as Parameters<typeof mailboxes.list>[0]) as unknown as Json, mailboxPropose: input => { if (!mailboxProposer) throw new InputError('机器人信箱尚未连接', 503); return mailboxProposer(input); }, projectsList: () => projects.list() as unknown as Json, projectCreate: async input => await createProject(input) as unknown as Json, projectsDiscover: discoverProjects, knowledgeSource: input => {
+  for (const extension of createSystemExtensions({ demo: config.demo, actions: { todayBriefSources, triageAgent: { status: () => inboxClassifier.status(), ask: (text, context) => inboxClassifier.ask(text, context) }, ruleTriage, scheduledWorkCronPreview: input => scheduledWork.previewCron(input), scheduledWorkHistory: input => scheduledWork.readHistory(input) as unknown as Json, scheduledWorkBrief: input => scheduledWork.readBrief(input), scheduledWorkList: input => scheduledWork.list(input) as unknown as Json, scheduledWorkPropose: input => scheduledWork.propose(input,true) as unknown as Json, scheduledWorkSkipNext: input => scheduledWork.skipNext(input,true), scheduledWorkSetPaused: input => scheduledWork.changeTiming(input,true) as unknown as Json, scheduledWorkCancel: input => scheduledWork.cancel(input,true) as unknown as Json, followupCreate: input => followups.create(input, currentAgentInput()?.conversationId) as unknown as Json, followupList: input => followups.list(input) as unknown as Json, followupCancel: id => followups.cancel(id) as unknown as Json, notifyUser: input => followups.notifyUser(input), calendarAgenda: (input, signal) => fetchCalendarAgenda({ profile: knowledgeAccount()?.profile, ...input, signal }), workspaceCode: readWorkspaceCode, knowledgeReaderService: () => protectedReaderService(), knowledgeCommentsService:()=>commentsService(false), knowledgeCommentWriteService:()=>commentsService(true), pendingDecisionsList: readPendingDecisions, workDecisionsList: input => workDecisions.list(input) as unknown as Json, workDecisionRecord: input => workDecisions.recordFromAgent(input) as unknown as Json, workDecisionCorrect: input => workDecisions.changeFromAgent(input) as unknown as Json, workDecisionWithdraw: input => workDecisions.changeFromAgent(input, true) as unknown as Json, workDecisionReference: input => workDecisions.referenceFromAgent(input) as unknown as Json, inboxList: readInbox, inboxTree: readInboxTree, inboxHandlingRead: readInboxHandlingFromAgent, inboxAssignProject: assignInboxProject, agentSessions: async input => await agentSessions.discover(input) as unknown as Json, resumeSession: async input => { const source = currentAgentInput() ?? agent.currentInput(); return await agentSessions.proposeResume({ ...input, key: source ? `${source.id}:${requiredText(input.key, '恢复请求标识')}` : input.key }, source) as unknown as Json; }, botsList: () => botsStatus(), privateConversation: managePrivateConversation, groupReadRecords: readGroupRecordsFromChat, botRelay: relayFromAgent, mailboxesList: input => mailboxes.list(input as Parameters<typeof mailboxes.list>[0]) as unknown as Json, mailboxPropose: input => { if (!mailboxProposer) throw new InputError('机器人信箱尚未连接', 503); return mailboxProposer(input); }, projectsList: () => projects.list() as unknown as Json, projectCreate: async input => await createProject(input) as unknown as Json, projectsDiscover: discoverProjects, knowledgeSource: input => {
     const source=currentAgentInput()??agent.currentInput();if(!source||source.role!=='user'||source.readOnly||source.origin&&source.origin!=='user')throw new InputError('来源投放需要当前用户输入',403);
     validateSourceActor(source,input.layer??'personal',typeof input.projectId==='string'?input.projectId:undefined);
     return knowledgeCurator.addSource(input,{requestOrigin:'agent',sourceMessageId:source.id}) as unknown as Json;
@@ -2475,8 +2470,32 @@ export async function createWorkbench(config: AppConfig) {
       return result;
     } };
   }
-  async function readSourceComments(pageId:string,sourceId:string,signal:AbortSignal) {
-    const serviceName='knowledge-local.document.comments';
+  function commentsService(write:boolean) {
+    const name=write?commentWriteName:commentReadName;
+    return {name,version:1 as const,readOnly:!write,async handler(_input:Json,signal:AbortSignal) {
+      const context=commentsContext.getStore();
+      if(context?.name!==name) throw new InputError('请从已关联的知识来源操作评论',403);
+      return context.invoke(signal);
+    }};
+  }
+  function commentAction(value:unknown):KnowledgeDocumentCommentAction {
+    if(!value || typeof value!=='object' || Array.isArray(value)) throw new InputError('评论操作格式无效');
+    const a=value as Record<string,unknown>, kind=a.kind;
+    if (!['create','reply','resolve','reopen'].includes(String(kind))) throw new InputError('评论操作无效');
+    const allowed=kind==='create'?['kind','text','quote']:kind==='reply'?['kind','threadId','text']:['kind','threadId'];
+    if(Object.keys(a).some(k=>!allowed.includes(k))) throw new InputError('评论操作参数无效');
+    function text(key:string) {
+      if (typeof a[key]!=='string' || !a[key].trim() || Array.from(a[key]).length>(key==='quote'?1000:4000)) throw new InputError('请填写有效的评论内容或标识');
+      return a[key];
+    }
+    if(kind==='create') return {kind,text:text('text'),...(a.quote!==undefined && {quote:text('quote')})};
+    const threadId=text('threadId');
+    if(!/^[A-Za-z0-9_][A-Za-z0-9_-]{0,255}$/.test(threadId)) throw new InputError('评论标识无效');
+    if(kind==='reply') return {kind,threadId,text:text('text')};
+    return {kind:kind as 'resolve'|'reopen',threadId};
+  }
+  async function sourceComments(pageId:string,sourceId:string,signal:AbortSignal,input?:Record<string,unknown>) {
+    const serviceName=input?commentWriteName:commentReadName;
     const active=()=>contributions.list('services').find(entry=>entry.value.name===serviceName)?.value;
     const service=active();
     if(!service) throw new InputError('本地知识插件的评论读取服务不可用',503);
@@ -2498,11 +2517,74 @@ export async function createWorkbench(config: AppConfig) {
         identity!==digestReaderIdentity(knowledgeReaderSettings.read(),knowledgeAccount()))
         throw new InputError('读取期间账号、设置或插件已变化，请重新读取评论',409);
     }
-    const result=await commentsContext.run(async callSignal=>{
+    const generation=store.get<{revision?:number}>('core.plugin-settings','knowledge-local')?.revision??1;
+    async function actorNow(optional=false) {
+      let actor;
+      try {actor=await verifyKnowledgeCommentActor(profile!,signal);}
+      catch {if(optional) return undefined;throw new InputError('无法核验当前飞书账号，请重新连接并读取评论',409);}
+      if(!settings.profile && (actor.openId!==account?.openId || actor.appId!==account.appId))
+        throw new InputError('当前飞书账号与已连接账号不一致',409);
+      return actor;
+    }
+    function stamp(documentId:string,actor:{appId:string;openId:string}) {
+      // A read receipt stays verifiable after restart, without retaining document contents.
+      let secret=store.get<string>('knowledge.reader','comment-binding-key');
+      if(!secret){secret=randomUUID();store.put('knowledge.reader','comment-binding-key',secret);}
+      return createHmac('sha256',secret).update(JSON.stringify([identity,actor.appId,actor.openId,pageId,sourceId,binding,documentId,generation])).digest('hex');
+    }
+    const options={profile,trustedHosts:settings.trustedHosts};
+    const invoke=(call:(inner:AbortSignal)=>Promise<Json>)=>commentsContext.run({name:serviceName,invoke:call},()=>
+      plugins.invocations.use(serviceName,{}, {signal,timeoutMs:35000}));
+    if(input) {
+      const {documentId,requestId}=input;
+      if(Object.keys(input).some(key=>!['documentId','binding','requestId','action'].includes(key)) ||
+          typeof requestId!=='string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(requestId) ||
+          typeof documentId!=='string' || !/^[A-Za-z0-9_-]{1,256}$/.test(documentId)) throw new InputError('评论确认参数无效');
+      if(typeof input.binding!=='string' || !/^[a-f0-9]{64}$/.test(input.binding)) throw new InputError('请先读取评论并确认当前飞书身份',409);
+      const actor=await actorNow();
+      if(!actor || input.binding!==stamp(documentId,actor)) throw new InputError('文档、账号或授权已变化，请重新读取评论后确认',409);
+      const action=commentAction(input.action);
+      await verify();
+      const result=await effects.perform({key:'knowledge-comment:'+requestId,kind:'knowledge.document.comment',target:sourceId,
+        summary:'主人确认的飞书文档评论操作',content:{binding:input.binding as string,action},run:async()=>{
+          let live=true,attempted=false,receipt:Json|undefined;
+          try {
+            await invoke(async inner=>{
+              await verify();
+              const value=await writeKnowledgeDocumentComment(binding.url,options,inner,action,async id=>{
+                inner.throwIfAborted();
+                const liveActor=await actorNow();
+                await verify();
+                if(!liveActor || stamp(documentId,liveActor)!==input.binding) throw new InputError('飞书账号已变化，请重新读取评论',409);
+                if(id!==documentId) throw new InputError('来源已指向另一个文档，请重新读取评论',409);
+                inner.throwIfAborted();
+                if(!live || attempted) throw new InputError('评论确认已失效',409);
+                attempted=true;
+              });
+              receipt=value as unknown as Json;
+              return receipt;
+            });
+            if(!receipt) throw new Error('没有可核实的飞书回执');
+            return receipt;
+          } catch(error) {
+            live=false;
+            const rejected=error instanceof KnowledgeSourceReaderError && (error.code==='UNAUTHORIZED' || error.code==='CLI_UNAVAILABLE');
+            if(attempted && !rejected) throw new Error('评论操作结果未确认，请刷新飞书评论核对');
+            throw Object.assign(new Error(error instanceof InputError || error instanceof KnowledgeSourceReaderError || error instanceof CommentWriteError?error.message:'未能核验飞书评论操作'),{delivery:'no'});
+          }
+        }});
+      try {await verify();}
+      catch {throw Object.assign(new InputError('评论请求已处理，权限已变化，请重新读取后核对',409),{delivery:'unknown'});}
+      return result;
+    }
+    const firstActor=await actorNow(true);
+    let confirmedDocument:string|undefined;
+    const result=await invoke(async inner=>{
       await verify();
       try {
-        const value=await readKnowledgeDocumentComments(binding.url,{profile,trustedHosts:settings.trustedHosts},callSignal);
+        const value=await readKnowledgeDocumentComments(binding.url,options,inner);
         await verify();
+        confirmedDocument=value.documentId;
         return value as unknown as Json;
       } catch(error) {
         if(!(error instanceof KnowledgeSourceReaderError)) throw error;
@@ -2510,9 +2592,15 @@ export async function createWorkbench(config: AppConfig) {
           ['INVALID_RESPONSE','CLI_FAILED'].includes(error.code)?502:400;
         throw new InputError(error.message,status);
       }
-    },()=>plugins.invocations.use(serviceName,{}, {signal,timeoutMs:35000}));
+    });
     await verify();
-    return result;
+    if(!confirmedDocument || !result || Array.isArray(result) || typeof result!=='object' || result.documentId!==confirmedDocument)
+      throw new InputError('未取得原文档的评论回执',502);
+    const actor=await actorNow(true);
+    await verify();
+    if(firstActor?.appId!==actor?.appId || firstActor?.openId!==actor?.openId)
+      throw new InputError('评论读取期间飞书身份已变化，请重新读取',409);
+    return {...result,...(actor && {actorName:actor.name,binding:stamp(confirmedDocument,actor)})};
   }
   async function readProtectedKnowledgeSource(url: string, signal?: AbortSignal, job?: import('./knowledge-curator.ts').Job) {
     const settings = knowledgeReaderSettings.read();
@@ -2726,7 +2814,7 @@ export async function createWorkbench(config: AppConfig) {
     return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
   }
   return {
-    subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:readSourceComments, status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {

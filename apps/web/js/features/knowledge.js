@@ -80,7 +80,12 @@ function originalSources(api, entry, selected, line, ask, handoff, canRead) {
         const detail = h('details', { open: source.id === selected }, h('summary', null, source.title, source.meetingStartedAt && ' · ' + source.meetingStartedAt), notice, outline, text, action);
         const sourceLink = source.sourceUrl && externalSourceLink(source.sourceUrl, '打开原始网址');
         if (sourceLink) detail.append(sourceLink);
-        const comments=source.supportsComments && sourceComments(api,path+'/'+encodeURIComponent(source.id)+'/comments',canRead);
+        const comments=source.supportsComments && sourceComments(api,path+'/'+encodeURIComponent(source.id)+'/comments',canRead,source.title,()=>{
+          const selection=window.getSelection();
+          if (!selection || selection.rangeCount!==1 || selection.isCollapsed || original===undefined) return '';
+          const range=selection.getRangeAt(0);
+          return text.contains(range.startContainer) && text.contains(range.endContainer) ? selection.toString() : '';
+        });
         if (comments) detail.append(comments);
         if (source.meeting && handoff) detail.append(Button({ label: '准备会议交接稿', size: 'sm', onClick: () => handoff(source) }));
         detail.addEventListener('toggle', async () => {

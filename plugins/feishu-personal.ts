@@ -56,6 +56,27 @@ export const runPersonalCLI: PersonalCLI = (args, options) => new Promise((resol
   child.stdin?.end(options.input ?? '');
 });
 
+// Comment publication and personal collection must bind to the verified account behind
+// a profile. The profile name alone survives signing out and signing in as someone else.
+async function verifiedProfile(profile: string, signal: AbortSignal, cli: PersonalCLI) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(profile)) throw new PersonalAuthError('failed');
+  signal.throwIfAborted();
+  const raw = await cli(['--profile', profile, 'auth', 'status', '--json', '--verify'], {signal});
+  signal.throwIfAborted();
+  const data = raw.data ?? raw, user = data.identities?.user;
+  if (data.identity !== 'user' || data.verified !== true || user?.available !== true ||
+      typeof data.appId !== 'string' || !data.appId || typeof user.openId !== 'string' || !user.openId)
+    throw new PersonalAuthError('failed');
+  const name = typeof user.userName === 'string' && user.userName.trim() ? user.userName : '';
+  return {appId: data.appId as string, openId: user.openId as string, name: name as string,
+    scopes: typeof user.scope === 'string' ? user.scope.split(/[\s,]+/) as string[] : []};
+}
+
+export async function verifyKnowledgeCommentActor(profile: string, signal: AbortSignal) {
+  const {appId, openId, name} = await verifiedProfile(profile, signal, runPersonalCLI);
+  return {appId, openId, name: name || openId};
+}
+
 export interface PersonalProvider {
   application(signal: AbortSignal): Promise<PersonalApplication>;
   begin(application: PersonalApplication, signal: AbortSignal): Promise<PersonalAuthorization>;
@@ -98,12 +119,10 @@ export function createPersonalProvider(options: {
     return detail;
   }
   async function verify(account: PersonalApplication, signal: AbortSignal): Promise<PersonalAccount> {
-    const raw = await cli(['--profile', account.profile, 'auth', 'status', '--json', '--verify'], { signal });
-    const data = raw.data ?? raw, user = data.identities?.user;
-    if (data.appId !== account.appId || data.identity !== 'user' || data.verified !== true || user?.available !== true || typeof user.openId !== 'string') throw new PersonalAuthError('failed');
-    const scopes = typeof user.scope === 'string' ? user.scope.split(/[\s,]+/) : [];
-    if (!PERSONAL_MESSAGE_SCOPES.every(scope => scopes.includes(scope))) throw new PersonalAuthError('permissions');
-    return { profile: account.profile, appId: account.appId, openId: user.openId, name: typeof user.userName === 'string' ? user.userName : '飞书用户' };
+    const actor = await verifiedProfile(account.profile, signal, cli);
+    if (actor.appId !== account.appId) throw new PersonalAuthError('failed');
+    if (!PERSONAL_MESSAGE_SCOPES.every(scope => actor.scopes.includes(scope))) throw new PersonalAuthError('permissions');
+    return { profile: account.profile, appId: actor.appId, openId: actor.openId, name: actor.name || '飞书用户' };
   }
   return {
     async application(signal) {

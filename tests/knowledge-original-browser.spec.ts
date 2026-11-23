@@ -134,6 +134,67 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   await comments.getByRole('button',{name:'刷新评论'}).click();
   await expect(comments.getByRole('status')).toHaveText('暂无评论。');
   expect(commentReads).toBe(3);expect(external).toEqual([]);
+  const writes:{documentId:string;binding:string;requestId:string;action:Record<string,unknown>}[]=[];
+  let solved=false;
+  await page.route(server.url+'/api/v1/knowledge/'+projectEntry.id+'/sources/'+projectJob.id+'/comments',route=>{
+    if(route.request().method()==='GET') return route.fulfill({json:{documentId:'fixture-doc',binding:'fixture-account',actorName:'合成评论账号',threads:[
+      {id:'target',quote:'需核实的段落',resolved:solved,canReply:!solved,replies:[{author:'审阅人',text:'请核实'}]},
+      {id:'whole',quote:'',resolved:false,canReply:false,replies:[{author:'作者',text:'全文意见'}]},
+    ],truncated:false}});
+    const body=route.request().postDataJSON();writes.push(body);
+    if(writes.length===1) return route.abort('connectionreset');
+    if(writes.length===3) return route.fulfill({status:409,json:{code:'COMMENT_NOT_SENT',error:'合成账号权限不足'}});
+    if(body.action.kind==='resolve') solved=true;
+    if(body.action.kind==='reopen') solved=false;
+    return route.fulfill({json:{confirmed:true,threadId:'target'}});
+  });
+  await filter.selectOption('all');
+  const refresh=comments.getByRole('button',{name:'刷新评论'});
+  await refresh.click();
+  const selectedComment=comments.getByRole('button',{name:'评论选段',exact:true});
+  await dialog.locator('pre').evaluate(el=>{
+    const text=el.firstChild!;
+    const range=el.ownerDocument.createRange();range.setStart(text,0);range.setEnd(text,2);
+    const selection=el.ownerDocument.getSelection()!;selection.removeAllRanges();selection.addRange(range);
+  });
+  await selectedComment.click();
+  const compose=comments.getByRole('textbox',{name:'评论内容'});
+  await compose.fill('合成选段意见');
+  const review=comments.getByRole('button',{name:'核对并发送'});
+  await review.click();
+  const confirm=page.getByRole('dialog',{name:'确认发布选段评论',exact:true});
+  await expect(confirm).toContainText('合成评论账号');await expect(confirm).toContainText('开场');await expect(confirm).toContainText('合成选段意见');
+  await confirm.getByRole('button',{name:'取消'}).click();
+  expect(writes).toHaveLength(0);
+  for(let attempt=0;attempt<2;attempt++){
+    await review.click();await confirm.getByRole('button',{name:'发布选段评论'}).click();
+    if(!attempt) await expect(comments).toContainText('未确认操作结果');
+  }
+  await expect(compose).toHaveCount(0);
+  expect(writes[0]).toEqual(writes[1]);
+  expect(writes[1]).toMatchObject({documentId:'fixture-doc',binding:'fixture-account',action:{kind:'create',quote:'开场',text:'合成选段意见'}});
+  expect(writes[1]!.requestId).toBeTruthy();
+  const target=comments.locator('article').filter({hasText:'需核实的段落'});
+  await expect(comments.locator('article').filter({hasText:'全文意见'}).getByRole('button',{name:'回复评论'})).toHaveCount(0);
+  await target.getByRole('button',{name:'回复评论'}).click();
+  await comments.getByRole('textbox',{name:'回复内容'}).fill('合成跟进');await review.click();
+  await page.getByRole('dialog',{name:'确认发送回复'}).getByRole('button',{name:'发送回复'}).click();
+  await expect(comments).toContainText('未发送：合成账号权限不足');
+  await review.click();
+  await page.getByRole('dialog',{name:'确认发送回复'}).getByRole('button',{name:'发送回复'}).click();
+  await expect(comments.getByRole('textbox',{name:'回复内容'})).toHaveCount(0);
+  expect(writes[2]!.requestId).not.toBe(writes[3]!.requestId);
+  for(const [label,state] of [['解决评论','已解决'],['重新打开评论','未解决']]){
+    await target.getByRole('button',{name:label,exact:true}).click();
+    await page.getByRole('dialog',{name:'确认'+label}).getByRole('button',{name:label,exact:true}).click();
+    await expect(target.locator('strong').first()).toHaveText(state!);
+  }
+  await comments.getByRole('button',{name:'评论全文'}).click();await compose.fill('全文补充');await review.click();
+  await page.getByRole('dialog',{name:'确认发布全文评论'}).getByRole('button',{name:'发布全文评论'}).click();
+  await expect(compose).toHaveCount(0);
+  expect(writes.slice(3).map(row=>row.action)).toEqual([{kind:'reply',threadId:'target',text:'合成跟进'},
+    {kind:'resolve',threadId:'target'},{kind:'reopen',threadId:'target'},{kind:'create',text:'全文补充'}]);
+  expect(external).toEqual([]);
   await dialog.getByText('文档大纲',{exact:true}).click();
   const outline=dialog.getByRole('navigation',{name:'文档大纲'});
   await expect(outline.getByRole('button')).toHaveText(['计划','核对','核对']);

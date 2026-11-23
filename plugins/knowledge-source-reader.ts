@@ -1,3 +1,6 @@
+import {CommentWriteError,performCommentWrite,type KnowledgeDocumentCommentAction,type KnowledgeDocumentCommentReceipt} from './knowledge-document-comments.ts';
+export {CommentWriteError};
+export type {KnowledgeDocumentCommentAction,KnowledgeDocumentCommentReceipt} from './knowledge-document-comments.ts';
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { lstat, mkdtemp, open, realpath, rmdir, unlink } from 'node:fs/promises';
@@ -133,13 +136,15 @@ function protectedReader(options: KnowledgeSourceReaderOptions) {
   const parseURL=(input:string)=>parseProtectedURL(input,handles);
   function read(input:string,request?:{signal?:AbortSignal}):Promise<KnowledgeSourceResult>;
   function read(input:string,request:{signal:AbortSignal},mode:'comments'):Promise<DocumentComments>;
-  async function read(input:string,request:{signal?:AbortSignal}={},mode?:'comments'):Promise<KnowledgeSourceResult|DocumentComments> {
+  function read(input:string,request:{signal:AbortSignal},mode:{action:KnowledgeDocumentCommentAction;beforeWrite:(id:string)=>Promise<void>}):Promise<KnowledgeDocumentCommentReceipt>;
+  async function read(input:string,request:{signal?:AbortSignal}={},mode?:'comments'|{action:KnowledgeDocumentCommentAction;beforeWrite:(id:string)=>Promise<void>}):Promise<KnowledgeSourceResult|DocumentComments|KnowledgeDocumentCommentReceipt> {
     const source = parseURL(input);
-    if (mode==='comments' && source.type!=='wiki' && source.type!=='docx') fail('UNSUPPORTED');
+    if (mode && source.type!=='wiki' && source.type!=='docx') fail('UNSUPPORTED');
     if (!profile) fail('MISSING_PROFILE');
     if (request.signal?.aborted) fail('CANCELLED');
     const controller = new AbortController();
     let timedOut = false, fileTooLarge = false;
+    let guardError:unknown;
     const cancel = () => controller.abort();
     request.signal?.addEventListener('abort', cancel, { once: true });
     const deadline = setTimeout(() => { timedOut = true; controller.abort(); }, TIMEOUT_MS);
@@ -157,11 +162,11 @@ function protectedReader(options: KnowledgeSourceReaderOptions) {
       const envelope = json(result.stdout);
       // Generated Drive API commands can return the OpenAPI code/data envelope.
       // Shortcut responses, including the initial document lookup, use ok/data.
-      const rawReply = mode === 'comments' && args[1] === 'file.comment.replys' && envelope.ok === undefined;
+      const rawReply = mode && (args[1] === 'file.comment.replys' || args[1] === 'file.comments') && envelope.ok === undefined;
       if (rawReply ? envelope.code !== 0 : envelope.ok !== true) cliFailure(result.stdout);
       // Comment list envelopes may omit the identity echo. The fixed command
       // still requires --as user and the configured profile on every page.
-      if (envelope.identity !== 'user' && !(mode==='comments' && envelope.identity===undefined)) fail('INVALID_RESPONSE');
+      if (envelope.identity !== 'user' && !(mode && envelope.identity===undefined)) fail('INVALID_RESPONSE');
       return object(envelope.data);
     }
     try {
@@ -182,6 +187,13 @@ function protectedReader(options: KnowledgeSourceReaderOptions) {
         try { resolved = parseURL(metadata.url); } catch { return fail('CROSS_ORIGIN'); }
         if (resolved.url.origin !== source.url.origin || resolved.type !== type || resolved.token !== id) fail('CROSS_ORIGIN');
         canonical = resolved.source;
+      }
+      if (typeof mode==='object') {
+        if (type!=='docx') fail('UNSUPPORTED');
+        return await performCommentWrite(id,mode.action,invoke,async docId=>{
+          if (controller.signal.aborted) fail('CANCELLED');
+          try {await mode.beforeWrite(docId);} catch(error) {guardError=error;throw error;}
+        });
       }
       if (mode==='comments') {
         if (type!=='docx') fail('UNSUPPORTED');
@@ -235,6 +247,7 @@ function protectedReader(options: KnowledgeSourceReaderOptions) {
       if (!text.trim()) fail('EMPTY_SOURCE');
       return { source: source.source, title, text, format: type === 'docx' ? 'markdown' : 'text', trust: 'untrusted', references: [{ url: canonical, title, type, token: id }] };
     } catch (error) {
+      if (error instanceof CommentWriteError || (guardError!==undefined && error===guardError)) throw error;
       if (fileTooLarge) fail('LIMIT_EXCEEDED');
       if (timedOut) fail('TIMEOUT');
       if (request.signal?.aborted) fail('CANCELLED');
@@ -259,10 +272,10 @@ function protectedReader(options: KnowledgeSourceReaderOptions) {
   return { status: ():ReturnType<KnowledgeSourceReader['status']> => ({ state: profile ? 'configured' : 'missing_config', authorization: 'unchecked' }), handles, read };
 }
 
-type DocumentComments={threads:{id:string;quote:string;resolved:boolean;replies:{author:string;text:string}[]}[];truncated:boolean};
+type DocumentComments={documentId:string;threads:{id:string;quote:string;resolved:boolean;canReply?:boolean;replies:{author:string;text:string}[]}[];truncated:boolean};
 
 async function readCommentPages(id:string,invoke:(args:string[])=>Promise<Record<string,unknown>>):Promise<DocumentComments> {
-  const out:DocumentComments={threads:[],truncated:false};
+  const out:DocumentComments={documentId:id,threads:[],truncated:false};
   const cursors=new Set<string>(),ids=new Set<string>();
   let cursor='',remaining=50000,replyRequests=0;
   function nextCursor(value:unknown,seen:Set<string>) {
@@ -333,7 +346,7 @@ async function readCommentPages(id:string,invoke:(args:string[])=>Promise<Record
         });
         return {author,text:bounded(parts.join(''),4000)};
       });
-      out.threads.push({id:commentId,quote,resolved:item.is_solved,replies});
+      out.threads.push({id:commentId,quote,resolved:item.is_solved,...(typeof item.is_whole==='boolean' && {canReply:!item.is_whole && !item.is_solved}),replies});
     }
     if (!data.has_more) return out;
     if (page===3 || remaining===0 || out.threads.length===100) {out.truncated=true;return out;}
@@ -347,6 +360,10 @@ export function createKnowledgeSourceReader(options:KnowledgeSourceReaderOptions
 }
 export function readKnowledgeDocumentComments(url:string,options:KnowledgeSourceReaderOptions,signal:AbortSignal):Promise<DocumentComments> {
   return protectedReader(options).read(url,{signal},'comments');
+}
+
+export function writeKnowledgeDocumentComment(url:string,options:KnowledgeSourceReaderOptions,signal:AbortSignal,action:KnowledgeDocumentCommentAction,beforeWrite:(resolvedDocumentId:string)=>Promise<void>):Promise<KnowledgeDocumentCommentReceipt> {
+  return protectedReader(options).read(url,{signal},{action:structuredClone(action),beforeWrite});
 }
 
 /** Host contributes this service through the existing SDK. Config stays outside JSON input. */

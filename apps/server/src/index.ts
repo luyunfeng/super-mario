@@ -847,15 +847,26 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 200, { revision: await app.knowledgeRevision(decodeURIComponent(knowledgeRevision[1]!), url.searchParams.get('commit') ?? undefined) });
         }
         const comments=path.match(/^\/api\/v1\/knowledge\/([^/]+)\/sources\/([^/]+)\/comments$/);
-        if(comments && method==='GET') {
+        if(comments && (method==='GET' || method==='POST')) {
           if([...url.searchParams.keys()].some(key=>key!=='token')) throw new InputError('来源评论不接受额外的地址或读取参数',400);
+          if(method==='POST' && req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json')
+            throw new InputError('评论操作需要 JSON 请求',415);
+          const input=method==='POST'?await body(req,64*1024):undefined;
           const controller=new AbortController(),abort=()=>controller.abort();
           res.once('close',abort);
           if(res.destroyed) abort();
           try {
-            const value=await app.knowledgeSources.readComments(decodeURIComponent(comments[1]!),decodeURIComponent(comments[2]!),controller.signal);
+            const pageId=decodeURIComponent(comments[1]!),sourceId=decodeURIComponent(comments[2]!);
+            const value=input ? await app.knowledgeSources.writeComment(pageId,sourceId,input,controller.signal) :
+              await app.knowledgeSources.readComments(pageId,sourceId,controller.signal);
             if(!res.destroyed) return json(res,200,value);
-          } catch(error) {if(!res.destroyed) throw error;} finally {res.off('close',abort);}
+          } catch(error) {
+            if(!res.destroyed){
+              if(input && error instanceof Error && 'status' in error && typeof error.status==='number')
+                return json(res,error.status,{error:error.message,code:'delivery' in error && error.delivery==='unknown'?'COMMENT_DELIVERY_UNKNOWN':'COMMENT_NOT_SENT'});
+              throw error;
+            }
+          } finally {res.off('close',abort);}
           return;
         }
         const pageSources = path.match(/^\/api\/v1\/knowledge\/([^/]+)\/sources(?:\/([^/]+))?$/);

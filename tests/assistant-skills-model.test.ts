@@ -902,6 +902,8 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
       if (JSON.stringify(req.content).includes('还有哪些评论待处理')) {
         assert.match(req.system, /已保存的文档正文不能证明在线评论状态/);
         assert.match(req.system, /没有实时评论回执时不要报数量/);
+        assert.match(req.system, /核对文档、引用段落或目标讨论，再确认发送/);
+        assert.match(req.system, /外部结果未知时先到原文档核对/);
         return call('knowledge_original', { pageId }, 'comment-source');
       }
       if (JSON.stringify(req.content).includes('原始网址')) {
