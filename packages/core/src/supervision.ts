@@ -3,7 +3,7 @@ import { cardAcceptsAnswer } from './question-deadline.ts';
 import type { Card } from './interactions.ts';
 import { planEstimateClock, runScopeClock } from './run-scope.ts';
 import { todoSections, todoDecisionIds } from './todo-sections.ts';
-import { buildWindowBrief } from './briefing.ts';
+import { buildWindowBrief, readBriefingSettings } from './briefing.ts';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
 import type { Approval, AutomationSettings as ProtocolAutomationSettings, JsonObject, MachineInfo, Project, Run, SupervisionSignal, Todo } from '../../protocol/src/index.ts';
 
@@ -246,6 +246,7 @@ export function createSupervision({ store, events, enabled = () => true, now = (
     brief(): JsonObject | null {
       if (!usable()) return null;
       const timestamp = now().getTime();
+      const timezone = readBriefingSettings(store).timezone;
       const todos = store.list<Todo>('todos');
       const partitions: Record<string, Todo[]> = { overdue: [], waiting: [], upcoming: [], completed: [] };
       for (const todo of todos) {
@@ -256,7 +257,7 @@ export function createSupervision({ store, events, enabled = () => true, now = (
       const runs: Record<Run['status'], number> = { queued: 0, running: 0, completed: 0, failed: 0, cancelled: 0, unknown: 0 };
       for (const run of store.list<Run>('runs')) runs[run.status]++;
       // Serialization removes optional undefined fields from protocol records.
-      return JSON.parse(JSON.stringify({ window: buildWindowBrief(store,new Date(timestamp-86400000).toISOString(),new Date(timestamp).toISOString(),undefined,conversations?.()), sections: todoSections(todos, new Date(timestamp), todoDecisionIds(store)), todos: partitions, runs, signals: signals().filter(signal => !signal.resolvedAt) })) as JsonObject;
+      return JSON.parse(JSON.stringify({ timezone, window: buildWindowBrief(store,new Date(timestamp-86400000).toISOString(),new Date(timestamp).toISOString(),undefined,conversations?.()), sections: todoSections(todos, new Date(timestamp), todoDecisionIds(store), timezone), todos: partitions, runs, signals: signals().filter(signal => !signal.resolvedAt) })) as JsonObject;
     },
   };
 }

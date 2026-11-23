@@ -127,7 +127,11 @@ test('brief partitions todos and counts actual run states without modifying reco
     f.store.put('todos', id, { ...f.todo, id, ...fields });
   }
   f.store.put('runs', 'run', f.run);
+  f.store.put('briefing.settings', 'default', {timezone:'Pacific/Kiritimati'});
+  f.store.put('todos', 'local-day', {...f.todo, id:'local-day', dueDay:'2026-01-02', dueAt:'2026-01-02T09:59:59Z'});
   const brief = f.service.brief()!;
+  assert.equal(brief.timezone, 'Pacific/Kiritimati');
+  assert.ok((brief.sections as unknown as Record<string, Todo[]>)['今天'].some(row => row.id === 'local-day'));
   assert.deepEqual((brief.runs as Record<string, number>).running, 1);
   const todos = brief.todos as unknown as Record<string, Todo[]>;
   for (const key of ['overdue', 'waiting', 'upcoming', 'completed']) assert.equal(todos[key][0].id, key);
