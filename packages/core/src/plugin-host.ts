@@ -285,6 +285,8 @@ export class PluginHost {
                   (field.multiline === undefined || typeof field.multiline === 'boolean') &&
                   (field.options === undefined || (!field.multiline && Array.isArray(field.options) && field.options.length > 0 &&
                     field.options.every(option => typeof option === 'string' && option.trim()) && new Set(field.options).size === field.options.length)) &&
+                  (field.initial === undefined || (typeof field.initial === 'string' &&
+                    (!field.initial || !field.options || field.options.includes(field.initial)))) &&
                   (field.required === undefined || typeof field.required === 'boolean')) ||
                 new Set(form.fields.map(field => field.name)).size !== form.fields.length) throw new Error('无效的插件表单声明');
           }

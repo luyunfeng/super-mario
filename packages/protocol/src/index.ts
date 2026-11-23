@@ -69,7 +69,7 @@ export type WebExtension =
   | { slot: 'advanced-interface'; renderer: 'assistant-card-examples' }
   | { slot: 'advanced-interface'; renderer: 'chart'; kind: 'bar' | 'line' | 'area' | 'pie' | 'donut'; title: string; points: {label:string; value:number}[]; fallback: string }
   | { slot: 'advanced-interface'; renderer: 'chart'; kind: 'candlestick'; title: string; points: {label:string; value:number; open:number; high:number; low:number; close?:number; volume?:number}[]; fallback: string }
-  | { slot: 'advanced-interface'; renderer: 'form'; title:string; fields:{name:string; label:string; required?:boolean; multiline?:boolean; options?:string[]}[]; fallback:string }
+  | { slot: 'advanced-interface'; renderer: 'form'; title:string; fields:{name:string; label:string; required?:boolean; multiline?:boolean; options?:string[]; initial?:string}[]; fallback:string }
   | { slot: 'advanced-interface'; renderer: 'stream'; title:string; lines:string[]; fallback:string }
   | { slot: 'advanced-interface'; renderer: 'diff'; title: string; patch: string; fallback: string };
 export interface AppEvent { id: number; type: string; data: Json; createdAt: string }

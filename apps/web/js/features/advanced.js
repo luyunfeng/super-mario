@@ -199,8 +199,8 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
       if (value.renderer === 'form' && Array.isArray(value.fields)) {
         const fields = value.fields.map(field => {
           if (field.options) return h('select',{class:'input',required:field.required},
-            h('option',{value:''},'请选择'),field.options.map(option=>h('option',{value:option},option)));
-          return h(field.multiline ? 'textarea' : 'input',{class:'input',required:field.required});
+            h('option',{value:''},'请选择'),field.options.map(option=>h('option',{value:option,selected:option === field.initial},option)));
+          return h(field.multiline ? 'textarea' : 'input',{class:'input',required:field.required,value:field.initial ?? ''});
         });
         const status = h('p',{role:'status'});
         const submit = Button({label:'提交',type:'submit'});
