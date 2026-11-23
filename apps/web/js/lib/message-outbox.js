@@ -73,5 +73,14 @@ export function createMessageOutbox({enabled,persist,act,render}) {
           }})));
     }));
   }
-  return {panel,remember,forget,paint};
+  function forgetScope(ctx) {
+    for (const records of [payloads,loads]) {
+      for (const saved of records.keys()) {
+        const [owner,scope]=JSON.parse(saved);
+        if(owner===ctx.owner && scope===ctx.key) records.delete(saved);
+      }
+    }
+    return clearSubmissionPayloads(ctx.owner,ctx.key);
+  }
+  return {forgetScope,panel,remember,forget,paint};
 }

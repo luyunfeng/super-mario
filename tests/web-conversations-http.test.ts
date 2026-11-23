@@ -88,6 +88,15 @@ test('同项目独立 Web 对话隔离真实 SDK 历史、分页位置和首轮�
   assert.equal((await(await get('/'+a+'/messages')).json()).messages.length,50);
   const back=await patch({version:3,archived:false});assert.equal(back.status,200);
   await turn(a,'恢复后继续',randomUUID());
+  const remove=(id:string,payload:object,type='application/json')=>fetch(server.url+path+'/'+id,{
+    method:'DELETE',headers:{'content-type':type},body:JSON.stringify(payload)});
+  assert.equal((await remove(b,{version:1},'text/plain')).status,415);
+  assert.equal((await remove(b,{version:1,title:'wrong'})).status,400);
+  assert.equal((await remove(b,{version:2})).status,409);
+  assert.deepEqual(await (await remove(b,{version:1})).json(),{deleted:true});
+  assert.equal((await get('/'+b+'/messages')).status,410);
+  assert.equal((await remove(b,{version:1})).status,200);
+  assert.equal((await get('/'+a+'/messages')).status,200);
   await server.app.plugins.setEnabled('web-conversations',false);
   assert.equal((await get('/'+a+'/messages')).status,503);
   assert.equal((await post('/'+a+'/messages',{text:'已停用'},randomUUID())).status,503);

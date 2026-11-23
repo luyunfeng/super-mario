@@ -10,10 +10,36 @@ const fields = {
   get: ['id', 'projectId'], update: ['id', 'title', 'version', 'archived'],
 } as const;
 const collection = 'web-conversations';
+const deletedCollection = 'web-conversations.deleted';
 const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function fail(status: number, message: string): never {
   throw Object.assign(new Error(message), { status });
+}
+
+function conversationKey(value: unknown) {
+  if (typeof value !== 'string' || !uuidV4.test(value)) fail(400, '对话 ID 须为 UUID v4');
+  return value.toLowerCase();
+}
+
+function requireNotDeleted(store: Pick<Store,'get'>, id: string) {
+  if (store.get(deletedCollection, id)) fail(410, '独立对话已删除');
+}
+
+/** Called inside the host transaction that checks dependent work and removes private history. */
+export function eraseWebConversationRegistration(store: Store, id: string, version: number): void {
+  const key = conversationKey(id);
+  if (!Number.isSafeInteger(version) || version < 1) fail(400, '请提供有效的对话版本');
+  const deleted = store.get<{ version: number }>(deletedCollection, key);
+  if (deleted) {
+    if (deleted.version !== version) fail(409, '删除时的对话版本不符');
+    return;
+  }
+  const row = store.get<Conversation>(collection, key);
+  if (!row) fail(404, '独立对话不存在');
+  if ((row.version ?? 1) !== version) fail(409, '对话已更新，请重新读取');
+  store.remove(collection, key);
+  store.put(deletedCollection, key, { id: key, version, cleanupPending: true });
 }
 
 function projectStatus(store: Pick<Store,'get'>, projectId?: string) {
@@ -52,10 +78,10 @@ export const webConversationsExtension: Extension = {
         requireProject(store, projectId);
         return { items: store.list<Conversation>(collection).filter(row => row.projectId === projectId && (row.archived ?? false) === (input.archived ?? false)).reverse().map(view) };
       }
-      if (typeof input.id !== 'string' || !uuidV4.test(input.id)) fail(400, '对话 ID 须为 UUID v4');
-      const id = input.id.toLowerCase();
+      const id = conversationKey(input.id);
       if (action === 'get') {
         const row = store.get<Conversation>(collection, id);
+        requireNotDeleted(store, id);
         if (!row || (projectId !== undefined && row.projectId !== projectId)) fail(404, '独立对话不存在');
         requireProject(store, row.projectId);
         return view(row);
@@ -65,6 +91,7 @@ export const webConversationsExtension: Extension = {
         fail(400, '对话标题须为单行文字，最多 80 个字符');
       const title = titleValue?.trim() || '新对话';
       return store.transaction(() => {
+        requireNotDeleted(store, id);
         const existing = store.get<Conversation>(collection, id);
         if (action === 'update') {
           if (!Number.isSafeInteger(input.version) || typeof input.version !== 'number' || input.version < 1 ||

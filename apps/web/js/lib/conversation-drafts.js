@@ -68,7 +68,12 @@ export function createConversationDrafts({ api, store }) {
   store.subscribe(() => {
     if (persistent()) for (const [key, entry] of memory) flush(key, entry);
   });
-  const drafts = { read, write, clearIf, owner };
+  function forget(key) {
+    owner();
+    memory.delete(key);
+    try { localStorage.removeItem(storageKey(key)); } catch { /* Storage can be disabled. */ }
+  }
+  const drafts = { read, write, clearIf, forget, owner };
   clients.set(api, drafts);
   return drafts;
 }

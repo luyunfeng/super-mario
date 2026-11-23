@@ -54,7 +54,7 @@ export function createStore(api) {
       let event;
       try { event = JSON.parse(data); } catch { /* Refresh state after an unrecognized frame. */ }
       if (event?.type === 'web-conversations.changed' && typeof event.data?.id === 'string') {
-        set({webConversationChange:{id:event.data.id,projectId:event.data.projectId}});
+        set({webConversationChange:{id:event.data.id,projectId:event.data.projectId,deleted:event.data.deleted===true}});
         return;
       }
       if (event?.type === 'messages.changed' && typeof event.data?.conversationId === 'string') {

@@ -87,6 +87,24 @@ export function createScopedAgents(options: Options) {
     }
     return entry.runtime;
   }
+  function assertIdle(id:string) {
+    if (configuring || agents.get(id)?.runtime.configurationBusy())
+      throw Object.assign(new Error('独立对话仍有进行中的操作，请稍后再删除'), { status: 409 });
+  }
+  function forgetRuntime(id:string):Promise<void> {
+    const pending=deleting.get(id);
+    if(pending)return pending;
+    const job=(async()=>{
+      const entry=agents.get(id);
+      if(entry){
+        try {await entry.runtime.close();}
+        finally {agents.delete(id);}
+      }
+      await removeScopedTranscript(options.config.dataDir,id);
+    })().finally(()=>deleting.delete(id));
+    deleting.set(id,job);
+    return job;
+  }
   return {
     retryFailedInput(original:Message,failed:Message) {
       const source = options.store.get<Message>('messages',original.id);
@@ -129,25 +147,13 @@ export function createScopedAgents(options: Options) {
       return agent.runtime.post(text, binding.conversationId, context);
     },
     assertThreadIdle(botId: string, threadId: string) {
-      const id = botConversationId({ id: botId, scope: { kind: 'global' } }, threadId);
-      if (configuring || agents.get(id)?.runtime.configurationBusy())
-        throw Object.assign(new Error('独立对话仍有进行中的操作，请稍后再删除'), { status: 409 });
+      assertIdle(botConversationId({ id: botId, scope: { kind: 'global' } }, threadId));
     },
-    async forgetDeletedThread(botId: string, threadId: string) {
-      const id = botConversationId({ id: botId, scope: { kind: 'global' } }, threadId);
-      const pending = deleting.get(id);
-      if (pending) return pending;
-      const cleanup = (async () => {
-        const entry = agents.get(id);
-        if (entry) {
-          try { await entry.runtime.close(); }
-          finally { agents.delete(id); }
-        }
-        await removeScopedTranscript(options.config.dataDir, id);
-      })().finally(() => deleting.delete(id));
-      deleting.set(id, cleanup);
-      return cleanup;
+    forgetDeletedThread(botId: string, threadId: string) {
+      return forgetRuntime(botConversationId({ id: botId, scope: { kind: 'global' } }, threadId));
     },
+    assertWebThreadIdle(id:string) { assertIdle('web:'+id); },
+    forgetDeletedWebThread(id:string) { return forgetRuntime('web:'+id); },
     queuedWebInputs(conversationId:string):Message[] {
       const entry=agents.get(conversationId);
       if (entry?.scope.kind!=='project' || conversationId !== 'project:'+entry.scope.projectId+':work') return [];

@@ -243,6 +243,14 @@ export function createMessageSubmissions({ api, context, onConfirmed, onStatus, 
       recovering.delete(record.id);update();
     }
   }
-  return { panel:outbox.panel, failed, preflight, button, update, begin, finish, block, accepted,
+  function forgetScope(owner,key){
+    const ctx={owner,key},scope=path(ctx);
+    if(!scope)return;
+    memory.delete(scope);
+    try {sessionStorage.removeItem(scope);} catch {/* No persisted receipts. */}
+    void outbox.forgetScope(ctx);
+    update();
+  }
+  return { forgetScope,panel:outbox.panel, failed, preflight, button, update, begin, finish, block, accepted,
     blocked: () => !isRecoveryEnabled() && entries(path(context())).some(row => row.blocked) };
 }

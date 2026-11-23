@@ -72,6 +72,7 @@ test('SDK requests preserve the correct Web thread history within a shared proje
     for(const thread of [firstA,firstB,nextA]){
       assert.match(system(thread), /当前输入来自一段独立的 Web 对话/);
       assert.match(system(thread), /从已归档列表恢复后才能继续发送/);
+      assert.match(system(thread), /在原对话详情核对标题后确认/);
       assert.match(system(thread), /承接上文时只使用本会话实际提供的消息/);
       assert.match(system(thread), /不能把回复描述成已发往飞书/);
     }

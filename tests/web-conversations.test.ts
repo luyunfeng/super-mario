@@ -8,7 +8,7 @@ import { createEventBus } from '../packages/core/src/events.ts';
 import { createContributions, PluginHost } from '../packages/core/src/plugin-host.ts';
 import { createStore } from '../packages/core/src/store.ts';
 import type { JsonObject } from '../packages/plugin-sdk/src/index.ts';
-import { webConversationMatches, webConversationsExtension } from '../plugins/web-conversations.ts';
+import { eraseWebConversationRegistration, webConversationMatches, webConversationsExtension } from '../plugins/web-conversations.ts';
 
 test('independent web conversations persist exact scopes and idempotent creation through plugin lifecycle', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'sm-web-conversations-'));
@@ -82,4 +82,43 @@ test('legacy conversation rename, archive and restore use exact versions and pre
   assert.deepEqual(await use({action:'update',id,version:3,archived:false}),{...edited,version:4});
   assert.equal(webConversationMatches(store,id),true);
   assert.equal(events.since(0).filter(event=>event.type==='web-conversations.changed').length,3);
+});
+
+
+test('host deletion participates in rollback and freezes the original version without retaining text', async t => {
+  const store = createStore(':memory:');
+  const host = new PluginHost({store, events:createEventBus(store), dataDir:'', contributions:createContributions()});
+  t.after(async () => { await host.close(); store.close(); });
+  host.register(webConversationsExtension);
+  await host.start();
+  const use = (input:JsonObject) => host.invocations.use('web-conversations.manage',input);
+  const erase = (id:string,version:number) => store.transaction(()=>eraseWebConversationRegistration(store,id,version));
+  assert.throws(()=>erase('main',1),{status:400});
+  assert.throws(()=>erase(randomUUID(),0),{status:400});
+  assert.throws(()=>erase(randomUUID(),1),{status:404});
+  for (const archived of [false,true]) {
+    const id=randomUUID(),version=archived?2:1;
+    const create={action:'create',id,title:'Private title'};
+    await use(create);
+    if(archived) await use({action:'update',id,version:1,archived});
+    await assert.rejects(use({action:'delete',id,version}),{status:400});
+    assert.throws(()=>erase(id,version+1),{status:409});
+    assert.throws(()=>store.transaction(()=>{
+      eraseWebConversationRegistration(store,id,version);
+      throw Error('cleanup failed');
+    }),/cleanup failed/);
+    assert.ok(store.get('web-conversations',id));
+    assert.equal(store.get('web-conversations.deleted',id),undefined);
+    erase(id,version);
+    assert.deepEqual(store.get('web-conversations.deleted',id),{id,version,cleanupPending:true});
+    assert.equal(store.get('web-conversations',id),undefined);
+    assert.equal(webConversationMatches(store,id),false);
+    for(const input of [create,{action:'get',id},{action:'update',id,version,title:'Other title'}] as JsonObject[])
+      await assert.rejects(use(input),{status:410});
+    assert.deepEqual(await use({action:'list',archived}),{items:[]});
+    store.put('web-conversations.deleted',id,{id,version,cleanupPending:false});
+    erase(id,version);
+    assert.deepEqual(store.get('web-conversations.deleted',id),{id,version,cleanupPending:false});
+    assert.throws(()=>erase(id,version+1),{status:409});
+  }
 });

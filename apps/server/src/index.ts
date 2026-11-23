@@ -1143,7 +1143,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if(webConversation){
           const enabled=()=>{if(!app.plugins.list().some(p=>p.id==='web-conversations'&&p.status==='active'))throw new InputError('独立 Web 对话插件已停用',503);};
           enabled();
-          if((method==='POST'||method==='PATCH') && req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json')
+          if((method==='POST'||method==='PATCH'||method==='DELETE') && req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json')
             throw new InputError('独立对话需要 JSON 请求',415);
           const [,id,messages,receiptKey]=webConversation;
           const invoke=async(args:JsonObject)=>{
@@ -1165,6 +1165,11 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
               return json(res,201,await invoke({...input as JsonObject,action:'create'}));
             }
           }else{
+            if(!messages && method==='DELETE'){
+              const input=await body(req,1024);
+              if(Object.keys(input).length!==1 || !Number.isSafeInteger(input.version) || Number(input.version)<1)throw new InputError('请提供当前对话版本');
+              return json(res,200,await app.deleteWebConversation(id,Number(input.version)));
+            }
             if(!messages && method==='PATCH'){
               const input=await body(req,8192);
               if(Object.keys(input).some(key=>!['version','title','archived'].includes(key)))throw new InputError('独立对话包含未知字段');

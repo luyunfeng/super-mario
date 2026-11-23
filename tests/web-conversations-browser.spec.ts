@@ -95,3 +95,62 @@ test('两个标签页并发改名与归档时核对版本，归档深链只读�
   await expect(thread).toHaveValue('保留的未发草稿');await thread.fill('恢复后的正文');await thread.press('Enter');
   await expect(first.locator('.msg--user:visible').last()).toHaveText('恢复后的正文');
 });
+
+test('永久删除使用已确认版本，回执未知时核对；两个标签页清消息、草稿及待确认发件',{timeout:40000},async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'web-chat-delete-')),token='synthetic-web-delete';
+  const server=await startServer({dataDir:dir,port:0,host:'127.0.0.1',demo:true,token});
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(async()=>{await browser.close();await server.close();await rm(dir,{recursive:true,force:true});});
+  const context=await browser.newContext(),page=await context.newPage(),peer=await context.newPage();
+  await context.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  await page.goto(server.url+'/#chat?token='+token);
+  await page.locator('#message-text').fill('保留的主线草稿');
+  await page.getByRole('button',{name:'独立对话',exact:true}).click();
+  const list=page.getByRole('dialog',{name:'独立对话'});
+  await list.getByLabel('对话标题').fill('删除验收线');await list.getByRole('button',{name:'创建对话'}).click();
+  const input=page.getByLabel('给独立对话发消息');
+  await input.fill('合成历史');await input.press('Enter');await expect(input).toHaveValue('');
+  const link=page.url(),id=new URLSearchParams(new URL(link).hash.split('?')[1]).get('thread')!;
+  await peer.goto(link);await expect(peer.getByText('合成历史',{exact:true})).toBeVisible();
+  await page.route('**/web-conversations/'+id+'/messages',route=>route.request().method()==='POST'?route.abort():route.continue());
+  await input.fill('删除时清理的未发送合成数据');await input.press('Enter');
+  await expect(page.getByRole('region',{name:'待确认发件'})).toContainText('删除时清理的未发送合成数据');
+  const remove=page.getByRole('button',{name:'删除对话',exact:true}),dialog=page.getByRole('dialog',{name:'永久删除独立对话'});
+  await remove.click();await expect(dialog).toContainText('删除验收线');await dialog.getByRole('button',{name:'取消',exact:true}).click();
+  await expect(input).toHaveValue('删除时清理的未发送合成数据');
+  await remove.click();
+  await peer.getByRole('button',{name:'修改对话标题'}).click();await peer.getByLabel('新的对话标题').fill('再次核对的标题');
+  await peer.getByRole('button',{name:'保存标题'}).click();await expect(peer.getByRole('heading',{name:'再次核对的标题'})).toBeVisible();
+  const confirm=dialog.getByRole('button',{name:'确认永久删除'});await confirm.click();
+  await expect(dialog.getByRole('status')).toContainText('重新核对');await expect(confirm).toBeDisabled();
+  await dialog.getByRole('button',{name:'取消',exact:true}).click();await remove.click();await expect(dialog).toContainText('再次核对的标题');
+  const versions:number[]=[];
+  await page.route('**/web-conversations/'+id,route=>{
+    if(route.request().method()!=='DELETE')return route.continue();
+    versions.push(route.request().postDataJSON().version);
+    if(versions.length===1)return route.abort();
+    if(versions.length===2)return route.fetch().then(()=>route.fulfill({status:503,json:{error:'合成磁盘清理回执稍后核对'}}));
+    return route.continue();
+  });
+  await confirm.click();await expect(dialog.getByRole('status')).toContainText('可以按同一版本重试');
+  await confirm.click();
+  await expect(peer.getByText('该独立对话已删除，原链接已失效。')).toBeVisible();
+  await expect(page.getByText(/合成磁盘清理回执稍后核对/)).toBeVisible();
+  await page.getByRole('button',{name:'按原版本重试删除'}).click();
+  await expect(page.getByText('该独立对话已删除，原链接已失效。',{exact:true})).toBeVisible();
+  assert.equal(versions.length,3);assert.equal(new Set(versions).size,1);
+  for(const tab of [page,peer]){
+    await expect(tab.getByLabel('给独立对话发消息')).toBeHidden();await expect(tab.getByText('合成历史',{exact:true})).toHaveCount(0);
+    const present=await tab.evaluate(threadId=>[...Object.keys(localStorage),...Object.keys(sessionStorage)].some(k=>k.includes(threadId)),id);
+    assert.equal(present,false);
+  }
+  const payloadCount=()=>page.evaluate(threadId=>new Promise<number>((resolve,reject)=>{
+    const db=indexedDB.open('sm-submission-payloads');
+    db.onsuccess=()=>{const read=db.result.transaction('payloads').objectStore('payloads').getAllKeys();
+      read.onsuccess=()=>{db.result.close();resolve(read.result.filter(k=>Array.isArray(k) && k[1]===JSON.stringify(['web',threadId])).length);};read.onerror=()=>reject(read.error);};
+    db.onerror=()=>reject(db.error);
+  }),id);
+  await expect.poll(payloadCount).toBe(0);
+  await page.reload();await expect(page.getByText('该独立对话已删除，原链接已失效。')).toBeVisible();
+  await page.getByRole('link',{name:'返回主对话'}).click();await expect(page.locator('#message-text')).toHaveValue('保留的主线草稿');
+});
