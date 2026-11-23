@@ -624,6 +624,7 @@ test('早晚简报向模型说明计划时间、日历证据和只读边界', { 
     await ask('检查本地模型连接。');
     const scheduledFor = new Date().toISOString();
     const old = new Date(Date.parse(scheduledFor) - 7 * 86400000).toISOString();
+    server.app.store.put('notifications.away','held-fixture',{id:'held-fixture',status:'held',createdAt:scheduledFor,text:'合成项目更新'});
     server.app.store.put('todos', 'old-due', { id: 'old-due', title: '合成积压事项', notes: '',
       createdAt: old, updatedAt: old, dueAt: old });
     for (const status of ['queued', 'running', 'unknown', 'cancelled'] as const) {
@@ -641,7 +642,7 @@ test('早晚简报向模型说明计划时间、日历证据和只读边界', { 
     assert.ok(request.tools.includes('schedule_followup'));
     assert.ok(!request.tools.includes('notify_user'));
     const prompt = JSON.stringify(request.content);
-    for (const expected of [scheduledFor, '逾期待办 1：合成积压事项', '日程未核实', '等待执行 1：合成任务-queued', '进行中 1：合成任务-running',
+    for (const expected of [scheduledFor, '低干扰保留通知 1：合成项目更新', '不能据此说飞书已送达', '逾期待办 1：合成积压事项', '日程未核实', '等待执行 1：合成任务-queued', '进行中 1：合成任务-running',
       '执行结果未知 1：合成任务-unknown', '执行已取消 1：合成任务-cancelled']) assert.ok(prompt.includes(expected), expected);
     const response = await fetch(server.url + '/api/v1/brief/current');
     assert.ok(response.ok);
