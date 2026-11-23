@@ -4432,7 +4432,7 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
         return call('inbox_list',{query:'合成中心'},'restricted-list');
       }
       if(JSON.stringify(req.content).includes('项目保留通知')){
-        return call('held_notifications_list',{projectId:'fixture-project',query:'交付'},'held-results');
+        return call('held_notifications_list',{projectId:'fixture-project',query:'交付',day:'2030-01-02',timeZone:'Asia/Shanghai'},'held-results');
       }
       if(JSON.stringify(req.content).includes('合成附件条款')){
         assert.ok(req.tools.includes('inbox_file_text'));
@@ -4602,8 +4602,9 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
       return {name:'样例.txt',text:'合成条款第六条',truncated:false};
     });
     for(const projectId of ['fixture-project','other-project']){
-      server.app.store.put('notifications.away',projectId,{id:projectId,projectId,status:'held',text:'合成交付结果'});
+      server.app.store.put('notifications.away',projectId,{id:projectId,projectId,status:'held',createdAt:'2030-01-01T16:00:00Z',text:'合成交付结果'});
     }
+    server.app.store.put('notifications.away','previous',{id:'previous',projectId:'fixture-project',status:'held',createdAt:'2030-01-01T15:59:59Z',text:'前一天交付'});
     assert.equal(await ask('查询项目保留通知'),'合成交付结果');
     await adapter.onMessage('查询项目保留通知',{...owner,messageId:'held-query'});
     await t.waitFor(()=>assert.ok(sent.includes('合成交付结果')));

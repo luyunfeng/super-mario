@@ -813,7 +813,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           '按时间从新到旧查询低干扰模式保留的通知，可按项目编号和正文筛选。',async (args,signal)=>{
             signal.throwIfAborted();
             return actions.heldNotifications!(args);
-          },{projectId:{type:'string'},query:{type:'string'},offset:{type:'integer',minimum:0}}));
+          },{day:{type:'string'},timeZone:{type:'string'},projectId:{type:'string'},query:{type:'string'},offset:{type:'integer',minimum:0}}));
         if (actions?.brief) context.contribute('tools', 'brief_read', tool('brief_read', '读取待办、执行和督办事实简报。', async (_args, signal) => { signal.throwIfAborted(); return actions.brief!(); }));
         if (actions?.scheduledWorkCronPreview) context.contribute('tools', 'scheduled_work_cron_preview', tool('scheduled_work_cron_preview',
           '只读试算拟定规则的下三次排期，返回 UTC 时刻和规则时区。', async args => actions.scheduledWorkCronPreview!(args),
