@@ -117,7 +117,7 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
     const pending = page.waitForEvent('download');
     await drawer.getByRole('button', { name: '下载 .md' }).click();
     const download = await pending;
-    assert.match(download.suggestedFilename(), /\.md$/);
+    assert.match(download.suggestedFilename(), /-\d{4}-\d{2}-\d{2}\.md$/);
     const path = await download.path();
     assert.ok(path);
     const body = await readFile(path, 'utf8');
@@ -126,8 +126,9 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
     await expect(drawer.getByRole('status')).toContainText(bytes + ' 字节');
     assert.ok(body.includes('合成 ' + source + ' 请求'));
     assert.ok(body.includes('图像附件'));
+    assert.match(body, /<details><summary>公开工作步骤<\/summary>\s+> 工具调用：fixture_\w+\s+<\/details>/u);
     if (id === claudeId) {
-      assert.match(body, /准备读取\s+> 工具调用：fixture_read\s+读取结束/u);
+      assert.match(body, /准备读取\s+<details>[^]*?fixture_read\s+<\/details>\s+读取结束/u);
       assert.match(body, /共 3 条消息/);
     }
     assert.ok(!body.includes(image.slice(0, 40)));

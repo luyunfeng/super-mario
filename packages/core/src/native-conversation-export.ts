@@ -7,6 +7,11 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+// Tool names reach the export only after the public-name check below.
+function toolBlock(name: string) {
+  return '<details><summary>公开工作步骤</summary>\n\n> 工具调用：' + name + '\n\n</details>';
+}
+
 /** Read an already persisted session through the node's exact, read-only lookup. */
 async function readConversation(
   machines: MachineClient | undefined, source: NativeExportSource, signal: AbortSignal,
@@ -57,7 +62,7 @@ async function readConversation(
       if (tool && role === 'assistant' && block.type === 'tool_use' && publicToolName(block.name)) {
         // Mixed records retain their block order under a single message heading.
         steps.push(block.name);
-        paragraphs.push('\n> 工具调用：' + block.name + '\n');
+        paragraphs.push('\n' + toolBlock(block.name) + '\n');
       }
     }
     if (!hasMessage) {
@@ -93,7 +98,7 @@ export async function exportNativeConversation(
   const lines: string[] = [];
   const count = await readConversation(machines, source, signal, (_, role, text, at) => {
     lines.push('## ' + (role === 'user' ? '用户' : 'Agent 回复') + (at ? ' · ' + at : ''), '', text, '');
-  }, includeWork ? name => lines.push('> 工具调用：' + name, '') : undefined);
+  }, includeWork ? name => lines.push(toolBlock(name), '') : undefined);
   const stem = Array.from(nativeSessionId.replace(/[^\p{L}\p{N}_-]+/gu, '-')).slice(0, 48).join('');
   return { filename: `super-mario-${executorId}-${stem}.md`, count, hasContent: lines.length > 0, markdown: [
     '# 原生会话 · ' + executorId, '', '会话：' + nativeSessionId, '电脑：' + machineId, '目录：' + cwd, '导出时间：' + new Date().toISOString(), '', `共 ${count} 条消息`, '', ...lines,

@@ -102,6 +102,8 @@ export function openConversationExport({ api, store, source, subtitle, isCurrent
       });
       if (!valid()) return;
       if (!count && !hasContent) { status.textContent = '暂无可导出的消息'; return; }
+      const day = new Intl.DateTimeFormat('sv-SE', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+      const downloadName = filename.replace(/\.md$/i, '') + '-' + day + '.md';
       const file = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
       status.textContent = `共 ${count} 条消息 · ${file.size.toLocaleString()} 字节`;
       preview.textContent = markdown;
@@ -119,7 +121,7 @@ export function openConversationExport({ api, store, source, subtitle, isCurrent
         Button({ label: '下载 .md', kind: 'primary', onClick: () => {
           if (!valid()) return;
           const url = URL.createObjectURL(file);
-          h('a', { href: url, download: filename }).click();
+          h('a', { href: url, download: downloadName }).click();
           setTimeout(() => URL.revokeObjectURL(url), 1000);
         } }));
     } catch (error) {

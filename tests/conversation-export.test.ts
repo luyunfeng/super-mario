@@ -14,7 +14,7 @@ test('export is an authenticated plugin read of one owner-selected work conversa
     method: 'POST', headers: { 'content-type': 'application/json', ...(authorized && { authorization: 'Bearer ' + config.token }) },
     body: JSON.stringify(body),
   });
-  const project = server.app.projects.create({ name: '本地验收' });
+  const project = server.app.projects.create({ name: '本地验收', workspace: { machineId: 'fixture-node', cwd: '/workspace/[alpha]' } });
   const scope = `project:${project.id}:work`;
   const store = server.app.store;
   for (const [id, conversationId, text] of [
@@ -37,6 +37,8 @@ test('export is an authenticated plugin read of one owner-selected work conversa
   assert.equal(response.status, 200);
   const document = await response.json();
   assert.equal(document.count, 1);
+  assert.ok(document.markdown.includes('导出时绑定的电脑：fixture-node'));
+  assert.ok(document.markdown.includes(String.raw`导出时绑定的目录：/workspace/\[alpha\]`));
   assert.match(document.markdown, /浏览器工作会话/);
   assert.doesNotMatch(document.markdown, /独立记忆记录|机器人独立记录|主对话记录|归属不一致的输入/);
   for (const id of ['reply', 'wrong-scope']) {
@@ -54,6 +56,7 @@ test('export is an authenticated plugin read of one owner-selected work conversa
   store.put('messages', 'main-reply', { ...store.get<object>('messages', 'main')!, id: 'main-reply', role: 'assistant' });
   await post('/assistant-profile', { action: 'save', revision: 0, name: '[合成](地址)' });
   const named = await (await post(path, { includeWork: false })).json();
+  assert.doesNotMatch(named.markdown, /fixture-node|导出时绑定的目录/);
   assert.ok(named.markdown.includes(String.raw`## \[合成\](地址) ·`));
   await post('/plugins/assistant-profile', { enabled: false });
   const unnamed = await (await post(path, { includeWork: false })).json();

@@ -64,6 +64,7 @@ async function markdown(store: Store, input: Json, signal: AbortSignal, readNati
     if (!readNative) fail(503, '原生会话导出未配置');
     return readNative(source, input.includeWork, signal);
   }
+  let workspace: Project['workspace'];
   let title = '主对话';
   let conversationId = 'main';
   if (input.projectId !== undefined) {
@@ -71,6 +72,7 @@ async function markdown(store: Store, input: Json, signal: AbortSignal, readNati
     const project = store.get<Project>('projects', input.projectId);
     if (!project) fail(404, '项目不存在');
     conversationId = `project:${project.id}:work`;
+    workspace = project.workspace;
     title = `项目工作对话 · ${project.name.replace(/[\p{Cc}\p{Cf}\s]+/gu, ' ').trim()}`;
   }
 
@@ -84,14 +86,25 @@ async function markdown(store: Store, input: Json, signal: AbortSignal, readNati
     message.conversationId === conversationId && (input.projectId === undefined || message.projectId === undefined || message.projectId === input.projectId)
     && (message.role === 'user' || message.role === 'assistant'));
   const userIds = new Set(input.includeWork ? messages.filter(message => message.role === 'user').map(message => message.id) : []);
-  const lines = [`# ${headingText(title)}`, '', `导出时间：${new Date().toISOString()}`, '', `共 ${messages.length} 条消息`, ''];
+  const lines = [`# ${headingText(title)}`, '', `导出时间：${new Date().toISOString()}`, ''];
+  if (workspace) {
+    // This binding can change during the life of a project. It describes the export's context.
+    const label = (value: string) => headingText(value.replace(/[\p{Cc}\p{Cf}]/gu, ' '));
+    lines.push('导出时绑定的电脑：' + label(workspace.machineId), '', '导出时绑定的目录：' + label(workspace.cwd), '');
+  }
+  lines.push(`共 ${messages.length} 条消息`, '');
   for (const message of messages) {
     const author = message.origin === 'result' ? '执行结果' : message.origin === 'notification' ? '系统提醒'
       : message.role === 'assistant' ? speaker : '用户';
     const status = message.status === 'failed' ? ' · 失败' : message.status === 'pending' ? ' · 未完成' : '';
     lines.push(`## ${headingText(author)} · ${message.createdAt}${status}`, '', message.text, '');
     if (input.includeWork && message.role === 'assistant') {
-      for (const line of workSteps(store, message, userIds)) lines.push(line);
+      const steps = workSteps(store, message, userIds);
+      if (steps.length) {
+        lines.push('<details><summary>公开工作步骤</summary>', '');
+        for (const line of steps) lines.push(line);
+        lines.push('</details>', '');
+      }
     }
   }
   // A fixed prefix avoids device names. At 48 code points even four-byte

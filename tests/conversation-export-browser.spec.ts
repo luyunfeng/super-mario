@@ -11,7 +11,7 @@ async function downloadMarkdown(page: Page, drawer: Locator) {
   const pending = page.waitForEvent('download');
   await drawer.getByRole('button', { name: '下载 .md', exact: true }).click();
   const download = await pending;
-  assert.match(download.suggestedFilename(), /\.md$/);
+  assert.match(download.suggestedFilename(), /-\d{4}-\d{2}-\d{2}\.md$/);
   const path = await download.path();
   assert.ok(path);
   const markdown = await readFile(path, 'utf8');
@@ -131,6 +131,8 @@ test('从主对话和项目工作区导出完整 Markdown，并通过插件配�
   await expect(drawer.getByLabel('Markdown 预览')).toContainText('正在输出');
   const expanded = await downloadMarkdown(page, drawer);
   assert.ok(expanded.includes(mainText));
+  assert.match(expanded, /<details><summary>公开工作步骤<\/summary>\s+> 工作进度：正在输出[^<]*<\/details>/u);
+  assert.doesNotMatch(plain, /<summary>公开工作步骤/);
   assert.doesNotMatch(expanded, /项目甲历史消息|隔离标记|内部详情标记/);
   await drawer.getByRole('button', { name: '复制 Markdown' }).click();
   await expect(drawer.getByRole('status')).toContainText('已复制');
