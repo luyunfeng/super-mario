@@ -41,6 +41,13 @@ test('独立对话停止按钮只中断原线待处理的本人输入，归档�
   await region.locator('[data-id="'+waitingId+'"]').getByRole('button',{name:'取回编辑'}).click();
   await expect(region.locator('textarea')).toHaveValue('合成待编辑消息');
   assert.equal(server.app.store.get<Message>('messages',waitingId)?.queueState,'withdrawn');
+  const extra=await page.request.post(path+'/'+a+'/messages',{headers,data:{text:'合成取消排队'}});
+  const extraId=(await extra.json()).id;
+  const queuedRow=region.locator('[data-id="'+extraId+'"]');
+  await queuedRow.getByRole('button',{name:'取消排队',exact:true}).click();
+  await expect(queuedRow).toContainText('已取消排队');
+  assert.equal(server.app.store.get<Message>('messages',extraId)?.queueState,'cancelled');
+  assert.equal(started,2);
   await page.goto(url(b)+'&at='+inputs[1]!.id);await expect(stop(inputs[0]!.id)).toHaveCount(0);
   await expect(region.getByRole('button',{name:'取消排队'})).toHaveCount(0);
   const endpoint=path+'/'+b+'/messages/'+inputs[1]!.id+'/stop';

@@ -26,11 +26,11 @@ export function stopTurnButton(api, message, projectId, queueEnabled=false) {
   return stopControl(api, prefix, message.id, cancel);
 }
 
-export function webThreadStopButton(api, message, thread, isCurrent) {
+export function webThreadStopButton(api, message, thread, isCurrent, queueEnabled=false) {
   if (thread.archived || message.role!=='user' || message.status!=='pending' || !message.directWebInput || message.stoppedByUser ||
       message.replyTo || (message.origin && message.origin!=='user') || message.todoId ||
       message.projectId!==thread.projectId || message.conversationId!=='web:'+thread.id) return null;
-  return stopControl(api, '/web-conversations/'+encodeURIComponent(thread.id), message.id, false, isCurrent);
+  return stopControl(api, '/web-conversations/'+encodeURIComponent(thread.id), message.id, queueEnabled && message.queueState==='queued', isCurrent);
 }
 
 function stopControl(api, prefix, inputId, cancel, isCurrent = () => true) {

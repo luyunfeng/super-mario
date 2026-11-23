@@ -1,5 +1,5 @@
 import {createQueuedDraftEditor} from './edit-queued.js';
-import {turnQueueActive} from './stop-turn.js';
+import {turnQueueActive,queueLabel} from './stop-turn.js';
 import {createWebImageExport} from './web-conversation-image-export.js';
 import {createReplyTranslation} from './reply-translation.js';
 import {webThreadStopButton} from './stop-turn.js';
@@ -345,7 +345,7 @@ export function createWebConversations({api,store,scope,router}){
           h('div',{class:'msg__bubble'},text,
             messageImages(api,store,row,meta.archived ? undefined : pictures.editCopy.bind(null,draftKey),messages),messageFiles(api,store,row,rows,messages)),
           h('div',{class:'msg__meta row row--wrap'},copies.copyMessage(row,translation.displayedText),translation.action(row,text,copies.renderMessage),
-            canStop && webThreadStopButton(api,row,meta,()=>valid(stamp) && meta?.id===stamp.id && !meta.archived && rows.includes(row)),
+            canStop && webThreadStopButton(api,row,meta,()=>valid(stamp) && meta?.id===stamp.id && !meta.archived && rows.includes(row),queueEnabled),
             queueEnabled && queuedEdit.action(row),imageExport.checkbox(row),
             row.origin!=='notification' && favorites.mark(row,meta.projectId,stamp.id,()=>valid(stamp) && meta?.id===stamp.id && rows.includes(row)),
             retryEnabled && retryTurn(row,rows,'web:'+stamp.id,id=>href(stamp.id,id),
@@ -353,7 +353,7 @@ export function createWebConversations({api,store,scope,router}){
             row.directWebInput && prompts.fromMessage(row),
             row.directWebInput && edit.action(row),
             quoteKey && row.origin!=='notification' && quote.action(row,row.role==='user'?'我':'助手'),
-            row.status==='pending' && h('small',{},'处理中…'),row.status==='failed' && h('small',{},row.queueState==='withdrawn'?'已取回编辑':row.stoppedByUser?'已停止本轮':'处理失败'),
+            row.status==='pending' && h('small',{},queueLabel(row,queueEnabled) || '处理中…'),row.status==='failed' && h('small',{},row.queueState==='cancelled'?'已取消排队':row.queueState==='withdrawn'?'已取回编辑':row.stoppedByUser?'已停止本轮':'处理失败'),
             h('button',{type:'button',class:'btn btn--ghost btn--icon btn--sm','aria-label':'复制消息链接',title:'复制消息链接',
               onclick:()=>copyLink(stamp,row.id)},icon('copy')))));
     }));

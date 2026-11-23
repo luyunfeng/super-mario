@@ -3117,7 +3117,8 @@ export async function createWorkbench(config: AppConfig) {
     modelConfigurationRevision: () => modelRevision,
     queuedMessages, reorderQueuedMessages,
     cancelQueuedTurn(conversationId:string,inputId:string) {
-      queuedWebSource(conversationId,inputId);
+      const input=queuedWebSource(conversationId,inputId);
+      if(input.queueState==='cancelled' && input.stoppedByUser && input.status==='failed') return {outcome:'cancelled' as const};
       return conversationId==='main' ? agent.cancelQueuedTurn(inputId) : scopedAgents.cancelQueuedTurn(conversationId,inputId);
     },
     editQueuedTurn(conversationId:string,inputId:string,projectId?:string,todoId?:string) {

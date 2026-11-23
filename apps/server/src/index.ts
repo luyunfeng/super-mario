@@ -1141,7 +1141,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           res.writeHead(200,{'content-type':image.mime,'cache-control':'private, no-store','x-content-type-options':'nosniff'});
           return res.end(Buffer.from(image.data,'base64'));
         }
-        const webConversation=/^\/api\/v1\/web-conversations(?:\/([^/]+)(?:\/(messages)(?:\/receipts\/([^/]+)|\/([^/]+)\/(stop|edit-queued))?)?)?$/.exec(path);
+        const webConversation=/^\/api\/v1\/web-conversations(?:\/([^/]+)(?:\/(messages)(?:\/receipts\/([^/]+)|\/([^/]+)\/(stop|edit-queued|cancel-queued))?)?)?$/.exec(path);
         if(webConversation){
           const enabled=()=>{if(!app.plugins.list().some(p=>p.id==='web-conversations'&&p.status==='active'))throw new InputError('独立 Web 对话插件已停用',503);};
           enabled();
@@ -1189,8 +1189,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
                   throw new InputError('取回消息需要原对话的项目范围',409);
                 return json(res,200,app.editQueuedTurn(conversationId,decodeURIComponent(stopId),row.projectId));
               }
-              if(Object.keys(await body(req,1024)).length) throw new InputError('停止本轮回复不接受附加参数');
+              if(Object.keys(await body(req,1024)).length) throw new InputError('消息操作不接受附加参数');
               enabled();
+              if(action==='cancel-queued')return json(res,200,app.cancelQueuedTurn(conversationId,decodeURIComponent(stopId)));
               return json(res,200,app.stopWebConversation(row.id,row.projectId,decodeURIComponent(stopId)));
             }
             if(receiptKey && method==='GET'){
