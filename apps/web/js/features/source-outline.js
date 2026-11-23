@@ -3,7 +3,7 @@
 import {h} from '../lib/dom.js';
 
 export function displaySourceText(text, outline, content, citationLine, headings = []) {
-  const lines=content.split('\n');
+  const lines=content.split(/\r\n|\r|\n/);
   const targets=[], fragment=document.createDocumentFragment();
   const byLine=new Map(headings.map(heading=>[heading.line,heading]));
   let start=0,citation;

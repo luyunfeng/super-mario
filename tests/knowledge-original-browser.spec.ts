@@ -37,10 +37,12 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   const documentText = original+'\n# 计划\n## 核对\n~~~md\n## 示例标题\n~~~\n### 核对\n\n后续工作\n--------';
   const projectJob = server.app.knowledgeCurator.addSource({ title: '项目来源', url: projectUrl, text: documentText, layer: 'project', projectId: project.id });
   server.app.store.put('knowledge.sources', projectJob.id, { ...projectJob, status: 'completed', knowledgeIds: [projectEntry.id] });
-  await writeFile(join(rawDir, projectJob.id + '.md'), documentText);
+  await writeFile(join(rawDir, projectJob.id + '.md'), documentText.replace('\n# 计划', '\r# 计划').replace('\n## 核对', '\r\n## 核对'));
   const originalTool = server.app.contributions.list('tools').find(entry => entry.value.name === 'knowledge_original')!.value;
   const result = await originalTool.execute({pageId:projectEntry.id, sourceId:projectJob.id, projectId:project.id, outline:true}, new AbortController().signal) as { headings: { title:string; line:number }[] };
   assert.deepEqual(result.headings.map(({title,line})=>[title,line]), [['计划',4],['核对',5],['核对',9],['后续工作',11]]);
+  const search = await originalTool.execute({pageId:projectEntry.id,sourceId:projectJob.id,projectId:project.id,query:'后续工作'},new AbortController().signal) as {matches:{line:number}[]};
+  assert.deepEqual(search.matches.map(item=>item.line),[11]);
   const readSection = (sectionLine:number) => originalTool.execute({pageId:projectEntry.id,sourceId:projectJob.id,projectId:project.id,sectionLine},new AbortController().signal);
   const chapter = await readSection(5) as {text:string;lastLine:number};
   assert.equal(chapter.lastLine,10);

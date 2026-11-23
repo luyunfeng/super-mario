@@ -673,7 +673,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             }
             if (handoffExcerpt) return { title: result.title, text: result.content, truncated: result.truncated, webCitation: `[查看原文](${route})` } as Json;
             if (typeof query === 'string') {
-              const lines = result.content.split('\n');
+              const lines = result.content.split(/\r\n|\r|\n/);
               const matches = [];
               let index = offset;
               while (index < lines.length && matches.length < 10) {
