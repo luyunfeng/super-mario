@@ -210,7 +210,12 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
           query && Button({ label: '清除搜索', onClick: () => search('', archived) })))
         : h('p', { class: 'muted' }, '对话历史搜索插件已停用。'), results);
     const openThread = row => Button({ label: row.title + ' · ' + row.count + ' 条消息', onClick: () => detail(row) });
+    // Restore settled pages only. Requests from a previous list view cannot update this view.
     const expanded = new Map();
+    for (const [threadId, page] of searchPage?.expanded ?? []) {
+      if (page.hits) expanded.set(threadId, { hits: page.hits, nextBefore: page.nextBefore });
+    }
+    if (searchPage) searchPage.expanded = expanded;
     async function readHits(row) {
       if (!current(id) || !searchEnabled) return;
       const page = expanded.get(row.threadId) ?? { hits: null, nextBefore: null };
@@ -289,7 +294,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
         if (before) params.set('before', before);
         const page = await api.get(base + '/search?' + params);
         if (!current(id)) return;
-        searchPage = { items: before ? [...searchPage.items, ...page.items] : page.items, nextBefore: page.nextBefore };
+        searchPage = { items: before ? [...searchPage.items, ...page.items] : page.items, nextBefore: page.nextBefore, expanded };
         showResults();
       } catch (error) {
         if (!current(id) || inaccessible(error)) return;
