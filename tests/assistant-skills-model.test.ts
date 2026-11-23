@@ -4535,11 +4535,13 @@ test('搜索本对话工具固定 Web 发言范围并排除当前检索提问', 
     if (req.lastRole === 'user') {
       assert.ok(req.tools.includes('current_web_message_search'));
       assert.match(req.system, /current_web_message_search/);
-      return call('current_web_message_search', {query}, 'search-current');
+      assert.match(req.system, /category=quoted/);
+      return call('current_web_message_search', {query,category:'quoted'}, 'search-current');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
     const {hits} = JSON.parse(raw);
     assert.deepEqual(hits.map((row:{text:string}) => row.text), [oldText]);
+    assert.deepEqual(hits[0].matches,[{category:'quoted',text:oldText}]);
     return {role:'assistant', content:hits[0].text};
   });
   try {
@@ -4547,8 +4549,8 @@ test('搜索本对话工具固定 Web 发言范围并排除当前检索提问', 
     for (const conversationId of ['main', 'project:' + project.id + ':work']) {
       const id = 'search-fixture-' + conversationId;
       server.app.store.put('messages', id, {id, conversationId, ...(conversationId === 'main' ? {} : {projectId:project.id}),
-        directWebInput:true, role:'user', text:oldText, status:'done', createdAt:'2026-03-01T10:00:00.000Z'} satisfies Message);
+        directWebInput:true, role:'user', text:'> '+oldText+'\n\n交接清单的数量待确认。', status:'done', createdAt:'2026-03-01T10:00:00.000Z'} satisfies Message);
     }
-    assert.equal(await ask('找一下本对话中提到交接清单的原话。','/projects/'+project.id+'/messages'),oldText);
+    assert.equal(await ask('找一下本对话中我引用过的交接清单原话。','/projects/'+project.id+'/messages'),oldText);
   } finally { await server.close(); }
 });

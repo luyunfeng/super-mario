@@ -4,7 +4,7 @@ import { openDrawer } from '../ui/overlay.js';
 import { conversationSearchActive } from './search.js';
 
 export function conversationMessageSearch({api,store,router}) {
-  let scope, owner, drawer;
+  let scope, owner, drawer, filesEnabled, officeEnabled;
   const button=Button({label:'搜索本对话',size:'sm',onClick:open});
   button.hidden=true;
   function close() {
@@ -14,17 +14,21 @@ export function conversationMessageSearch({api,store,router}) {
     const who=api.draftOwner();
     if(!next || !who || who!==store.view.snapshotOwner || store.view.unauthorized || !conversationSearchActive(store.view.snapshot))
       next=undefined;
-    if(owner!==who || scope?.conversationId!==next?.conversationId || scope?.projectId!==next?.projectId || scope?.todoId!==next?.todoId) close();
-    owner=who;scope=next;button.hidden=!next;
+    const files=!!store.view.snapshot?.plugins?.some(plugin=>plugin.id==='conversation-files' && plugin.status==='active');
+    const office=!!store.view.snapshot?.plugins?.some(plugin=>plugin.id==='office-documents' && plugin.status==='active');
+    if(officeEnabled!==office || filesEnabled!==files || owner!==who || scope?.conversationId!==next?.conversationId || scope?.projectId!==next?.projectId || scope?.todoId!==next?.todoId) close();
+    officeEnabled=office;filesEnabled=files;owner=who;scope=next;button.hidden=!next;
   }
   function open() {
     if(!scope || drawer) return;
     const input=h('input',{type:'search',class:'input','aria-label':'搜索关键词',placeholder:'输入要查找的原文'});
+    const category=h('select',{'aria-label':'搜索内容'},
+      h('option',{value:''},'全部'), h('option',{value:'text'},'正文'), h('option',{value:'quoted'},'引用'), filesEnabled && h('option',{value:'file'},'附件名'));
     const status=h('p',{class:'muted small',role:'status'});
     const list=h('ul',{class:'stack','aria-label':'命中消息'});
     const more=Button({label:'加载更多',size:'sm',onClick:()=>void read(cursor)});
     const submit=Button({label:'搜索',type:'submit',size:'sm'});
-    const form=h('form',{class:'row'},input,submit);
+    const form=h('form',{class:'row'},input,category,submit);
     const body=h('div',{class:'stack'},form,status,list,more);
     let job,timer,cursor,total=0;
     const seen=new Set();
@@ -45,23 +49,27 @@ export function conversationMessageSearch({api,store,router}) {
       const valid=()=>view.el.open && drawer===view && job===task && !task.signal.aborted && owner===api.draftOwner() && !store.view.unauthorized;
       more.disabled=true;status.textContent='正在搜索…';
       try {
-        const result=await api('/conversation-message-search',{method:'POST',body:{...range,query,before},signal:task.signal});
+        const result=await api('/conversation-message-search',{method:'POST',body:{...range,query,before,...(category.value && {category:category.value})},signal:task.signal});
         if(!valid()) return;
         const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
         for(const hit of result.hits) {
-          if(seen.has(hit.id)) continue;
+          const matches=(hit.matches?.length?hit.matches:[{text:hit.text}]).filter(part=>part.category!=='file' || filesEnabled);
+          if(!matches.length || seen.has(hit.id)) continue;
           seen.add(hit.id);
           const at=new URLSearchParams({at:hit.id});
           if(range.todoId) at.set('todo',range.todoId);
           const base=range.conversationId==='main'?router.href('chat'):router.href('projects',range.projectId,'workspace');
           const href=base+'?'+at;
-          const match=pattern.exec(hit.text);
-          const excerpt=match ? [hit.text.slice(0,match.index),h('mark',null,match[0]),hit.text.slice(match.index+match[0].length)] : [hit.text];
-          const link=h('a',{href,onClick:e=>{
-            if(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-            e.preventDefault();close();router.go(href);
-          }},...excerpt);
-          list.append(h('li',null,h('div',{class:'small muted'},(hit.role==='user'?'我':'助手')+' · '+new Date(hit.createdAt).toLocaleString()),link));
+          const excerpts=matches.map(part=>{
+            const match=pattern.exec(part.text);
+            const excerpt=match ? [part.text.slice(0,match.index),h('mark',null,match[0]),part.text.slice(match.index+match[0].length)] : [part.text];
+            const label={text:'正文',quoted:'引用',file:'附件名'}[part.category];
+            return h('div',null,label && h('span',{class:'small muted'},label+' · '),h('a',{href,onClick:e=>{
+              if(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+              e.preventDefault();close();router.go(href);
+            }},...excerpt));
+          });
+          list.append(h('li',null,h('div',{class:'small muted'},(hit.role==='user'?'我':'助手')+' · '+new Date(hit.createdAt).toLocaleString()),...excerpts));
           total++;
         }
         cursor=result.nextBefore;more.hidden=!cursor;
@@ -73,6 +81,7 @@ export function conversationMessageSearch({api,store,router}) {
       }
     }
     input.addEventListener('input',()=>{reset();if(input.value.trim())timer=setTimeout(()=>void read(),200);});
+    category.addEventListener('change',()=>{reset();void read();});
     form.addEventListener('submit',event=>{event.preventDefault();reset();void read();});
     reset();input.focus();
   }

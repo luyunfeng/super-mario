@@ -38,6 +38,11 @@ test('搜索本对话按当前项目和待办返回原话，翻页后能定位�
     put('private',query+' 独立机器人原话','private:fixture');
     put('side',query+' 项目其他对话','project:'+project.id+':memory',project.id);
     put('foreign',query+' 其他项目工作对话','project:'+other.id+':work',other.id);
+    for(let i=0;i<26;i++) put('dual-'+i,'> 类目词 引材-'+i+'。\n\n类目词 跟进-'+i+'。',conversationId,project.id,task.id);
+    put('just-quote','> 类目词 仅在引用。\n\n请核对。',conversationId,project.id,task.id);
+    put('just-text','> 请核对。\n\n类目词 仅在正文。',conversationId,project.id,task.id);
+    put('assistant-block','> 类目词 助手列出的引文。\n\n已核对。',conversationId,project.id,task.id,'just-text');
+    put('foreign-quote','> 类目词 另一待办。',conversationId,project.id,otherTask.id);
     // Keep the selected answer outside the project's normal 60-message history window.
     for(let i=0;i<70;i++) put('newer-'+i,'后续记录 '+i,conversationId,project.id,task.id);
   });
@@ -96,6 +101,59 @@ test('搜索本对话按当前项目和待办返回原话，翻页后能定位�
     if(isProject) assert.equal(new URLSearchParams(new URL(page.url()).hash.split('?')[1]).get('todo'),task.id);
   }
   await open.click();
+  const filter=drawer.getByRole('combobox',{name:'搜索内容'});
+  const keyword=drawer.getByRole('searchbox',{name:'搜索关键词'});
+  await keyword.fill('类目词');await keyword.press('Enter');
+  const rows=drawer.getByRole('listitem');
+  await expect(rows).toHaveCount(25);
+  const dual=rows.filter({hasText:'引材-25。'});
+  await expect(dual).toHaveCount(1);
+  await expect(dual.getByRole('link')).toHaveText(['类目词 引材-25。','类目词 跟进-25。']);
+  await expect(dual.locator('mark')).toHaveText(['类目词','类目词']);
+  await expect(dual).toContainText('正文');await expect(dual).toContainText('引用');
+  const assistant=rows.filter({hasText:'助手列出的引文'});
+  await expect(assistant).toContainText('正文');
+  await expect(assistant).not.toContainText('引用');
+  for(const category of ['quoted','text']){
+    const initial=page.waitForResponse(r=>r.url()===endpoint && r.request().postDataJSON().category===category);
+    await filter.selectOption(category);
+    const first=await initial;
+    const payload=await first.json();
+    assert.equal(first.request().postDataJSON().before,undefined);
+    const next=page.waitForResponse(r=>r.url()===endpoint && r.request().postDataJSON().before===payload.nextBefore);
+    await drawer.getByRole('button',{name:'加载更多'}).click();
+    const second=await next;
+    assert.deepEqual(second.request().postDataJSON(),{query:'类目词',category,before:payload.nextBefore,conversationId,projectId:project.id,todoId:task.id});
+    const hits=[...payload.hits,...(await second.json()).hits];
+    const dualIds=Array.from({length:26},(_,i)=>'dual-'+(25-i));
+    assert.deepEqual(hits.map(hit=>hit.id),category==='quoted'?['just-quote',...dualIds]:['assistant-block','just-text',...dualIds]);
+    for(const hit of hits) assert.deepEqual(hit.matches.map((part:{category:string})=>part.category),[category]);
+    await expect(rows).toHaveCount(hits.length);
+    await expect(drawer.getByRole('link')).toHaveCount(hits.length);
+    await expect(drawer.getByRole('button',{name:'加载更多'})).toBeHidden();
+  }
+  const name='合成归档附件.txt', bytes=Buffer.from('仅存在于文件内的标记');
+  const upload=await page.request.put(server.url+'/api/v1/chat-files/uploads?'+new URLSearchParams({conversationId:'main',name}),{
+    headers:{...headers,'content-type':'text/plain'},data:bytes});
+  assert.equal(upload.status(),201,await upload.text());
+  const ticket=await upload.json();
+  const sent=await page.request.post(server.url+'/api/v1/messages',{headers,data:{text:'请收下测试资料',files:[{uploadId:ticket.uploadId}]}});
+  assert.equal(sent.status(),202,await sent.text());
+  const withFile=await sent.json() as Message;
+  server.app.store.put('messages','routed-main',{...server.app.store.get<Message>('messages','routed-main')!,files:withFile.files});
+  const fileSearch=async(query:string)=>{
+    const res=await request({query,conversationId:'main',category:'file'});
+    assert.equal(res.status(),200,await res.text());return (await res.json()).hits;
+  };
+  const files=await fileSearch('归档附件');
+  assert.deepEqual(files.map((hit:Message)=>hit.id),[withFile.id]);
+  assert.equal(files[0].matches[0].category,'file');assert.equal(files[0].matches[0].text,name);
+  assert.deepEqual(await fileSearch(bytes.toString()),[]);
+  assert.ok(!JSON.stringify(files).includes(ticket.sha256));
+  const filesOff=await page.request.post(server.url+'/api/v1/plugins/conversation-files',{headers,data:{enabled:false}});
+  assert.equal(filesOff.status(),200);assert.deepEqual(await fileSearch('归档附件'),[]);
+  const all=await request({query:'归档附件',conversationId:'main'});
+  assert.equal(all.status(),200);assert.ok(!(await all.text()).includes(name));
   const off=await page.request.post(server.url+'/api/v1/plugins/conversation-search',{headers,data:{enabled:false}});
   assert.equal(off.status(),200);await expect(drawer).toBeHidden();await expect(open).toBeHidden();
   assert.equal((await request({conversationId,projectId:project.id})).status(),503);

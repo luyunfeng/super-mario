@@ -234,8 +234,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         throw new Error('执行不属于当前作用域');
     }
     if (name === 'current_web_message_search') {
-      if (!activeInput || Object.keys(input).some(key => key !== 'query' && key !== 'before'))
-        throw new Error('搜索本对话只接受关键词和分页游标');
+      if (!activeInput || Object.keys(input).some(key => key !== 'query' && key !== 'before' && key !== 'category'))
+        throw new Error('搜索本对话只接受关键词、内容类别和分页游标');
       return { ...input, conversationId: ownConversation, excludeId: activeInput.id,
         ...(activeInput.projectId && {projectId: activeInput.projectId}), ...(activeInput.todoId && {todoId: activeInput.todoId}) };
     }

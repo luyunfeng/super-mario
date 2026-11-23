@@ -171,13 +171,45 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
   return { hits, nextBefore: null };
 }
 
+type MessageCategory = 'text'|'quoted'|'file';
+type CanReadMessageFiles = (message:Message)=>boolean;
+
+function matchedPassages(row:Message,pattern:RegExp,category?:MessageCategory) {
+  const matches:{category:MessageCategory;text:string}[]=[];
+  if (category==='file') return matches;
+  function add(kind:MessageCategory,text:string) {
+    if (category && category!==kind) return;
+    const match=pattern.exec(text);
+    if (!match) return;
+    let start=Math.max(0,match.index-48),end=Math.min(text.length,match.index+match[0].length+80);
+    if (start && /[\uDC00-\uDFFF]/.test(text[start]!)) start--;
+    if (end<text.length && /[\uDC00-\uDFFF]/.test(text[end]!)) end++;
+    matches.push({category:kind,text:text.slice(start,end)});
+  }
+  // Match the Web renderer's splitLeadingQuote, including its whitespace
+  // and newline handling. Quoted Markdown in assistant replies stays body text.
+  let body=row.text;
+  const lead=row.role==='user' && body.match(/^(?: {0,3}>[^\r\n]*(?:\r\n|\r|\n|$))+/);
+  if (lead) {
+    const passage=lead[0].replace(/(?:\r\n|\r|\n)$/,'').split(/\r\n|\r|\n/)
+      .map(line=>line.replace(/^ {0,3}> ?/,'')).join('\n');
+    if (passage.trim()) {
+      add('quoted',passage);
+      body=body.slice(lead[0].length).replace(/^[ \t]*(?:\r\n|\r|\n)/,'');
+    }
+  }
+  add('text',body);
+  return matches;
+}
+
 // Main and project conversations may also receive Feishu turns and internal
 // notifications. Only the original Web input establishes a searchable audience.
-function webMessages(store: Store, input: Json, excludeId?:string): Json {
+function webMessages(store: Store, input: Json, canReadFiles?:CanReadMessageFiles, excludeId?:string): Json {
   if (!input || typeof input !== 'object' || Array.isArray(input) ||
-      Object.keys(input).some(k => !['conversationId','projectId','todoId','query','before'].includes(k)))
+      Object.keys(input).some(k => !['conversationId','projectId','todoId','query','before','category'].includes(k)))
     fail(400,'消息检索参数无效');
-  const {conversationId,projectId,todoId,query,before} = input;
+  const {conversationId,projectId,todoId,query,before,category} = input;
+  if (category!==undefined && category!=='text' && category!=='quoted' && category!=='file') fail(400,'消息检索类别无效');
   for (const id of [conversationId,projectId,todoId,before]) {
     if (id !== undefined && (typeof id !== 'string' || !id.trim() || id.length>512 || /[\p{Cc}]/u.test(id))) fail(400,'检索范围或游标无效');
   }
@@ -199,8 +231,9 @@ function webMessages(store: Store, input: Json, excludeId?:string): Json {
     const rowProject:string|undefined=row.projectId ?? (conversationId==='main' ? undefined : projectId);
     if (row.id===excludeId || (excludeId && row.replyTo===excludeId) || row.conversationId!==conversationId || (projectId && rowProject!==projectId) || (todoId && row.todoId!==todoId) ||
         (rowProject && !activeProjects.has(rowProject)) || (row.origin && row.origin!=='user')) continue;
-    const match = pattern.exec(row.text);
-    if (!match) continue;
+    const matches=matchedPassages(row,pattern,category);
+    const checkFiles=(!category || category==='file') && !!row.files?.length && canReadFiles;
+    if (!matches.length && !checkFiles) continue;
     const source = row.role==='user' ? row : row.role==='assistant' && row.replyTo ? store.get<Message>('messages',row.replyTo) : undefined;
     if (!source || source.role!=='user' || source.replyTo || (source.origin && source.origin!=='user') ||
         source.conversationId!==conversationId || (source.projectId ?? (conversationId==='main' ? undefined : projectId))!==rowProject || source.todoId!==row.todoId ||
@@ -211,12 +244,19 @@ function webMessages(store: Store, input: Json, excludeId?:string): Json {
     // now use receipts too, but carry their own atomic source record.
     if (!source.directWebInput && (!source.requestId || store.get('conversation.question-continuations',source.id) ||
         store.get<{messageId:string}>('message.requests',JSON.stringify([conversationId,source.requestId]))?.messageId!==source.id)) continue;
+    // Legacy Web receipts can authenticate old text without granting access
+    // to files. Office replies also need their still-live document binding.
+    if (checkFiles && source.directWebInput && checkFiles(row)) {
+      const names = new Set(row.files!.map(file=>file.name));
+      for (const name of names) {
+        if (typeof name==='string' && !/[/\\\p{Cc}]/u.test(name) && pattern.test(name))
+          matches.push({category:'file',text:name});
+      }
+    }
+    if (!matches.length) continue;
     if (!pastCursor) {pastCursor=row.id===before;continue;}
     if (hits.length===25) return {hits,nextBefore:hits[hits.length-1]!.id};
-    let start=Math.max(0,match.index-48),end=Math.min(row.text.length,match.index+match[0].length+80);
-    if (start && /[\uDC00-\uDFFF]/.test(row.text[start]!)) start--;
-    if (end<row.text.length && /[\uDC00-\uDFFF]/.test(row.text[end]!)) end++;
-    hits.push({id:row.id,role:row.role,createdAt:row.createdAt,text:row.text.slice(start,end),
+    hits.push({id:row.id,role:row.role,createdAt:row.createdAt,text:matches[0]!.text,matches,
       ...(row.status && {status:row.status}), ...(row.queueState && {queueState:row.queueState}),
       ...(rowProject && {projectId:rowProject}),...(row.todoId && {todoId:row.todoId})});
   }
@@ -225,7 +265,7 @@ function webMessages(store: Store, input: Json, excludeId?:string): Json {
 }
 
 type ReadFiles = (input: { projectId: string; kind: 'search'; query: string }) => Promise<Json>;
-export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input: Json) => Json, queueStatus?: () => {queuedMessages:number;nextQueuedMessage:{id:string;text:string;images:number;files:number}|null} | undefined): Extension => ({
+export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input: Json) => Json, queueStatus?: () => {queuedMessages:number;nextQueuedMessage:{id:string;text:string;images:number;files:number}|null} | undefined, canReadFiles?:CanReadMessageFiles): Extension => ({
   id: 'conversation-search', name: '对话历史搜索', capabilities: ['conversation.search'],
   permissions: ['contribute:tools', 'service.provide:conversation-search.saved', 'service.provide:conversation-search.projects', 'service.provide:conversation-search.messages', 'service.provide:conversation-search.files', 'service.provide:conversation-search.status', 'store.read', 'store.write'],
   activate(context) {
@@ -282,15 +322,15 @@ export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input:
       });
     }
     context.contribute('tools','current_web_message_search',{
-      name:'current_web_message_search', description:'按连续词句检索当前 Web 对话的原发言与回复，从新到旧列出真实命中摘录。用返回的 nextBefore 续查更早的结果。',
+      name:'current_web_message_search', description:'按连续词句检索当前 Web 对话的原发言与回复，按消息返回分类摘录。category=text 查正文，quoted 查用户开头引用，file 只查当前可读的附件名，省略查全部。引用只代表当时引用的材料。用返回的 nextBefore 续查更早的结果。',
       parameters:{type:'object',additionalProperties:false,required:['query'],properties:{
-        query:{type:'string',minLength:1,maxLength:500},before:{type:'string'},
+        query:{type:'string',minLength:1,maxLength:500},before:{type:'string'},category:{type:'string',enum:['text','quoted','file']},
       }},
       async execute({excludeId,...input},signal) {
         signal.throwIfAborted();
         if (!active) fail(503,'对话搜索插件已停用');
         if (typeof excludeId!=='string' || !excludeId) fail(403,'缺少当前 Web 对话的原始输入');
-        return webMessages(context.store,input,excludeId);
+        return webMessages(context.store,input,canReadFiles,excludeId);
       },
     });
     context.contribute('tools', 'conversation_status', {
@@ -349,7 +389,7 @@ export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input:
           status: message.status ?? 'unknown', webCitation: messageCitation(projectId, id, current), text: message.text.slice(offset, end), offset, nextOffset: end < message.text.length ? end : null, version: current };
       },
     });
-    context.provide('conversation-search.messages', input => webMessages(context.store, input));
+    context.provide('conversation-search.messages', input => webMessages(context.store, input, canReadFiles));
     context.provide('conversation-search.projects', input => projectMessages(context.store, input));
     context.provide('conversation-search.saved', input => savedSearches(context.store, input));
   },

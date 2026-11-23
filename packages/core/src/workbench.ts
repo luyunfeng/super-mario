@@ -466,7 +466,7 @@ export async function createWorkbench(config: AppConfig) {
         store.get('message.routes',input.id) || !plugins.list().some(p=>p.id==='conversation-queue' && p.status==='active')) return;
     const {items}=queuedMessages(input.conversationId,input.projectId,input.todoId);
     return {queuedMessages:items.length,nextQueuedMessage:items[0] ?? null};
-  }));
+  },canReadMessageFiles));
   plugins.register(conversationDrafts);
   plugins.register(conversationImages);
   plugins.register(conversationFiles);
