@@ -133,11 +133,12 @@ export function createScheduledWorkService(options: {
     const nextOffset = offset + page.length < ordered.length ? offset + page.length : null;
     return { items:page.map(row=>{
       const schedule=row.scheduleId ? schedules.get(row.scheduleId) : undefined;
+      const skipToken = pendingSkip(row, schedule)?.ownerSkipToken;
       return {id:row.id,version:row.version,title:row.input.title,status:row.status,projectId:row.input.projectId,todoId:row.input.todoId,schedule:row.input.schedule,action:row.input.action,
         approvalId:row.approvalId,approvalStatus:store.get<Approval>('approvals',row.approvalId)?.status,
         source:{messageId:row.sourceMessage.id,createdAt:row.sourceMessage.createdAt},
-        nextActionAt:upcomingByWork.get(row.id)?.nextAt,
-        nextAt:row.status === 'active' && schedule?.status === 'active' && (!schedule.until || Date.parse(schedule.nextAt) < Date.parse(schedule.until)) ? schedule.nextAt : undefined,skipToken:pendingSkip(row, schedule)?.ownerSkipToken,scheduleStatus:schedule?.status,scheduleVersion:schedule?.version,
+        nextActionAt:upcomingByWork.get(row.id)?.nextAt ?? (row.status === 'active' && skipToken && schedule?.until ? null : undefined),
+        nextAt:row.status === 'active' && schedule?.status === 'active' && (!schedule.until || Date.parse(schedule.nextAt) < Date.parse(schedule.until)) ? schedule.nextAt : undefined,skipToken,scheduleStatus:schedule?.status,scheduleVersion:schedule?.version,
         ...historyPage(row, row.occurrences, schedule)};
     }),upcoming,total:ordered.length,offset,nextOffset,truncated:nextOffset !== null,limit };
   }

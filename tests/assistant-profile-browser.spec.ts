@@ -32,7 +32,7 @@ test('Agent 页修改主助手名称后同步到已有气泡，并发冲突保�
       assert.ok(response.ok);
       return response.json();
     };
-    const approval = await post('/scheduled-work', { key, title, schedule: key === 'early' ? { kind: 'interval', everySec: 86400, anchorAt: at } : { kind: 'once', at }, action: { kind: 'brief' } });
+    const approval = await post('/scheduled-work', { key, title, schedule: (key === 'early' || key === 'final-slot') ? { ...(key === 'final-slot' && {until:'2099-01-04T09:00:00Z'}), kind: 'interval', everySec: 86400, anchorAt: at } : { kind: 'once', at }, action: { kind: 'brief' } });
     if (approved) await post('/approvals/' + approval.id + '/approve', { version: approval.version });
   };
   await schedule('later', '下午复核', '2099-01-02T15:00:00Z', true);
@@ -83,6 +83,13 @@ test('Agent 页修改主助手名称后同步到已有气泡，并发冲突保�
   await expect(upcoming).not.toContainText('上午简报');
   await early.getByRole('button', { name: '恢复计划' }).click();
   await expect(upcoming).toContainText(/上午简报.*下午复核/s);
+  await schedule('final-slot', '最后一期复核', '2099-01-03T09:00:00Z', true);
+  const finalSlot = plans.locator('article').filter({hasText:'最后一期复核'});
+  await finalSlot.getByRole('button', {name:'跳过下一次'}).click();
+  await expect(finalSlot).toContainText('跳过本次后，计划截止前没有下一期。');
+  await expect(upcoming).not.toContainText('最后一期复核');
+  await finalSlot.getByRole('button', {name:'撤销跳过'}).click();
+  await expect(upcoming).toContainText('最后一期复核');
   const past = first.locator('#agent-scheduled-work article').filter({ hasText: '已生成简报' }).filter({ has: first.getByText('已生成简报', { exact: true }) });
   await past.locator('summary').click();
   await past.getByRole('button', { name: '查看简报原文' }).click();

@@ -147,6 +147,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       line(`配置状态：${({ pending: '待创建确认', active: '已生效（仅配置生效）', cancelled: '已取消计划' })[item.status] ?? '未确认'} · 创建审批 ${approvalText(item.approvalStatus)}`),
       line(item.scheduleStatus === 'done' && item.schedule.kind === 'once' ? '单次计划已触发' : `调度状态：${({ active: '等待触发', paused: '已暂停', done: '已结束', cancelled: '已取消' })[item.scheduleStatus] ?? '未确认'}`),
       item.skipToken && line('将跳过：' + timeText(item.nextAt)),
+      item.skipToken && item.nextActionAt === null && line('跳过本次后，计划截止前没有下一期。'),
       item.skipToken && item.nextActionAt && line('跳过后预计触发：' + timeText(item.nextActionAt)),
       item.scheduleStatus === 'paused' && line('恢复前不会触发'),
       item.status === 'active' && item.scheduleStatus === 'active' && !item.skipToken && item.nextAt && line('下次触发：' + timeText(item.nextAt)),
