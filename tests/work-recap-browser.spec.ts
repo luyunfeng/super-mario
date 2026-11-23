@@ -105,7 +105,19 @@ test('execution comparison keeps project boundaries, opens either record and sur
   server.app.store.put('runs', 'second', { ...first, id: 'second', progress:{phase:'tool', observedAt:now, detail:'正在核对第二份清单'}, output: '', error: '校验失败', status: 'failed', usage: { input: 10, output: 0 },
     commitChanges: { base: 'a'.repeat(40), head: 'b'.repeat(40), files: 2, added: 3, deleted: 1 } });
   server.app.store.put('runs', 'outside', { ...first, id: 'outside', projectId: other.id, output: '其他项目交付' });
+  const tool = server.app.contributions.list('tools').find(entry => entry.value.name === 'runs_list')!.value;
+  const [result] = await tool.execute({id:'second', projectId:project.id},new AbortController().signal) as {groupWebCitation:string}[];
+  server.app.store.put('messages','group-answer',{id:'group-answer',conversationId:'main',role:'assistant',
+    status:'done',createdAt:now,text:'第二份校验失败。' + result.groupWebCitation});
   await open();
+  const citation = page.getByRole('link',{name:'查看执行对比',exact:true});
+  assert.ok(result.groupWebCitation);
+  await expect(page.locator('[data-id="group-answer"]')).toContainText('第二份校验失败');
+  await citation.click();
+  await expect(page).toHaveURL(server.url + '/#projects/' + project.id + '/runs/second?compare=group');
+  await expect(page.getByRole('region',{name:'执行对比'}).getByRole('article').last()).toContainText('当前执行（比较基准）');
+  await page.goBack();
+  await expect(citation).toBeVisible();
   const base = server.url + '/#projects/all/runs/first';
   await page.goto(base);
   const comparison = page.getByRole('region', { name: '执行对比' });
