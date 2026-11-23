@@ -68,5 +68,12 @@ export function readingFontEditor() {
     initialSize = size.value = next.size ?? 'standard';
     window.dispatchEvent(new Event('sm-reading-fonts'));
     notice.textContent = '字体设置已保存';
-  } }, '保存字体'), notice);
+  } }, '保存字体'), h('button', { type: 'button', class: 'btn', onclick() {
+    try { localStorage.removeItem(storageKey); }
+    catch { notice.textContent = '当前浏览器未能恢复字体设置。'; return; }
+    for (const { key } of fields) inputs[key].defaultValue = inputs[key].value = '';
+    initialSize = size.value = 'standard';
+    window.dispatchEvent(new Event('sm-reading-fonts'));
+    notice.textContent = '已恢复工作台默认字体和字号';
+  } }, '恢复默认字体和字号'), notice);
 }

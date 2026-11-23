@@ -140,8 +140,12 @@ test('阅读字体与字号独立保存，窄屏可用，停用后还原默认�
   await expect.poll(bodyFont).toBe(originalBody);
   await expect.poll(codeFont).toMatch(/^"Fixture Mono",/);
   await expect.poll(measured).toEqual(expectedSize(12 / 13));
-  await size.selectOption('standard');
-  await dialog.getByRole('button', { name: '保存字体' }).click();
+  await dialog.getByRole('button', { name: '恢复默认字体和字号' }).click();
+  await expect(size).toHaveValue('standard');
+  await expect.poll(codeFont).toBe(originalCode);
+  await page.reload();
+  await openFonts();
+  await expect(dialog.getByLabel('代码字体')).toHaveValue('');
   await expect.poll(measured).toEqual(standard);
 });
 
