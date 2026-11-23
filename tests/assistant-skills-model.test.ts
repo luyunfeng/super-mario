@@ -3087,6 +3087,38 @@ test('Web 的 conversation_status 只读取当前范围，排除本轮提问并�
   } finally { await server.close(); }
 });
 
+test('项目对话可按执行 ID 核对两次原生用量，保留零值与缺失的区别', async t => {
+  let baseline: Run['usage'];
+  const {server, api, ask} = await fixture(t, req => {
+    assert.match(req.system, /按两条执行 ID 分别读取详情/);
+    if (req.lastRole === 'user') return call('runs_list', {id:'baseline'}, 'first-usage');
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    const [run] = JSON.parse(raw);
+    if (req.callId === 'first-usage') {
+      baseline = run.usage;
+      return call('runs_list', {id:'candidate'}, 'second-usage');
+    }
+    assert.ok(baseline);
+    return {role:'assistant', content:run.usage
+      ? `输入增加 ${run.usage.input - baseline.input}，输出减少 ${baseline.output - run.usage.output}。`
+      : 'candidate 未上报用量。'};
+  });
+  try {
+    const project = await api('/projects', {name:'合成用量比较'});
+    const at = new Date().toISOString();
+    const run: Run = {id:'baseline', projectId:project.id, conversationId:'main', executorId:'fixture',
+      prompt:'复核清单', status:'completed', output:'', createdAt:at, updatedAt:at};
+    server.app.store.put('runs', run.id, {...run, usage:{input:8,output:4}});
+    const candidate = {...run, id:'candidate'};
+    server.app.store.put('runs', candidate.id, {...candidate, usage:{input:10,output:0}});
+    const path = '/projects/' + project.id + '/messages';
+    const question = '比较 candidate 相对 baseline 的 Token 用量。';
+    assert.equal(await ask(question,path),'输入增加 2，输出减少 4。');
+    server.app.store.put('runs',candidate.id,candidate);
+    assert.equal(await ask(question,path),'candidate 未上报用量。');
+  } finally { await server.close(); }
+});
+
 test('Web 和飞书按执行 ID 核对目标、最近观察与仍需用户决定的事项', async t => {
   let adapter!: FeishuOptions;
   const sent: string[] = [];
