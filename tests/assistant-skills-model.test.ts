@@ -4528,3 +4528,27 @@ test('模型从注册工具发出限时提问，到期回合只读且不能冒�
     assert.equal(history.conversationReceipts?.[0]?.continuationAccepted,true);
   } finally {await server.close();}
 });
+
+test('搜索本对话工具固定 Web 发言范围并排除当前检索提问', async t => {
+  const query = '交接清单', oldText = '交接清单里有三份合成样张';
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.ok(req.tools.includes('current_web_message_search'));
+      assert.match(req.system, /current_web_message_search/);
+      return call('current_web_message_search', {query}, 'search-current');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    const {hits} = JSON.parse(raw);
+    assert.deepEqual(hits.map((row:{text:string}) => row.text), [oldText]);
+    return {role:'assistant', content:hits[0].text};
+  });
+  try {
+    const project = await api('/projects', {name:'合成清单'});
+    for (const conversationId of ['main', 'project:' + project.id + ':work']) {
+      const id = 'search-fixture-' + conversationId;
+      server.app.store.put('messages', id, {id, conversationId, ...(conversationId === 'main' ? {} : {projectId:project.id}),
+        directWebInput:true, role:'user', text:oldText, status:'done', createdAt:'2026-03-01T10:00:00.000Z'} satisfies Message);
+    }
+    assert.equal(await ask('找一下本对话中提到交接清单的原话。','/projects/'+project.id+'/messages'),oldText);
+  } finally { await server.close(); }
+});

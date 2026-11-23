@@ -171,10 +171,63 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
   return { hits, nextBefore: null };
 }
 
+// Main and project conversations may also receive Feishu turns and internal
+// notifications. Only the original Web input establishes a searchable audience.
+function webMessages(store: Store, input: Json, excludeId?:string): Json {
+  if (!input || typeof input !== 'object' || Array.isArray(input) ||
+      Object.keys(input).some(k => !['conversationId','projectId','todoId','query','before'].includes(k)))
+    fail(400,'消息检索参数无效');
+  const {conversationId,projectId,todoId,query,before} = input;
+  for (const id of [conversationId,projectId,todoId,before]) {
+    if (id !== undefined && (typeof id !== 'string' || !id.trim() || id.length>512 || /[\p{Cc}]/u.test(id))) fail(400,'检索范围或游标无效');
+  }
+  if (typeof conversationId !== 'string' || (projectId !== undefined && typeof projectId !== 'string') ||
+      (todoId !== undefined && typeof todoId !== 'string')) fail(400,'检索范围无效');
+  if (conversationId!=='main' && (!projectId || conversationId!==`project:${projectId}:work`)) fail(404,'未找到当前 Web 对话');
+  if (typeof query !== 'string' || !query.trim() || [...query].length>500) fail(400,'检索词须为 1 至 500 个字符');
+  const activeProjects = new Set(store.list<Project>('projects').filter(p=>!p.archivedAt).map(p=>p.id));
+  if (projectId && !activeProjects.has(projectId)) fail(404,'项目不存在或已归档');
+  const matchesTodo = (id:string,project:string|undefined) => {
+    const todo = store.get<Todo>('todos',id);
+    return !!todo && todo.projectId===project;
+  };
+  if (todoId && !matchesTodo(todoId,projectId)) fail(404,'未找到当前范围的待办');
+  const pattern = new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'iu');
+  let pastCursor = before===undefined;
+  const hits=[];
+  for (const row of store.list<Message>('messages').reverse()) {
+    const rowProject:string|undefined=row.projectId ?? (conversationId==='main' ? undefined : projectId);
+    if (row.id===excludeId || (excludeId && row.replyTo===excludeId) || row.conversationId!==conversationId || (projectId && rowProject!==projectId) || (todoId && row.todoId!==todoId) ||
+        (rowProject && !activeProjects.has(rowProject)) || (row.origin && row.origin!=='user')) continue;
+    const match = pattern.exec(row.text);
+    if (!match) continue;
+    const source = row.role==='user' ? row : row.role==='assistant' && row.replyTo ? store.get<Message>('messages',row.replyTo) : undefined;
+    if (!source || source.role!=='user' || source.replyTo || (source.origin && source.origin!=='user') ||
+        source.conversationId!==conversationId || (source.projectId ?? (conversationId==='main' ? undefined : projectId))!==rowProject || source.todoId!==row.todoId ||
+        store.get('message.routes',source.id) || (source.id!==row.id && store.get('message.routes',row.id)) ||
+        (row.todoId && !matchesTodo(row.todoId,rowProject))) continue;
+    // Before directWebInput existed, the browser already used a durable send
+    // receipt. Feishu dispatch never supplied that key. Card continuations
+    // now use receipts too, but carry their own atomic source record.
+    if (!source.directWebInput && (!source.requestId || store.get('conversation.question-continuations',source.id) ||
+        store.get<{messageId:string}>('message.requests',JSON.stringify([conversationId,source.requestId]))?.messageId!==source.id)) continue;
+    if (!pastCursor) {pastCursor=row.id===before;continue;}
+    if (hits.length===25) return {hits,nextBefore:hits[hits.length-1]!.id};
+    let start=Math.max(0,match.index-48),end=Math.min(row.text.length,match.index+match[0].length+80);
+    if (start && /[\uDC00-\uDFFF]/.test(row.text[start]!)) start--;
+    if (end<row.text.length && /[\uDC00-\uDFFF]/.test(row.text[end]!)) end++;
+    hits.push({id:row.id,role:row.role,createdAt:row.createdAt,text:row.text.slice(start,end),
+      ...(row.status && {status:row.status}), ...(row.queueState && {queueState:row.queueState}),
+      ...(rowProject && {projectId:rowProject}),...(row.todoId && {todoId:row.todoId})});
+  }
+  if (!pastCursor) fail(404,'未找到当前检索的消息游标');
+  return {hits};
+}
+
 type ReadFiles = (input: { projectId: string; kind: 'search'; query: string }) => Promise<Json>;
 export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input: Json) => Json, queueStatus?: () => {queuedMessages:number;nextQueuedMessage:{id:string;text:string;images:number;files:number}|null} | undefined): Extension => ({
   id: 'conversation-search', name: '对话历史搜索', capabilities: ['conversation.search'],
-  permissions: ['contribute:tools', 'service.provide:conversation-search.saved', 'service.provide:conversation-search.projects', 'service.provide:conversation-search.files', 'service.provide:conversation-search.status', 'store.read', 'store.write'],
+  permissions: ['contribute:tools', 'service.provide:conversation-search.saved', 'service.provide:conversation-search.projects', 'service.provide:conversation-search.messages', 'service.provide:conversation-search.files', 'service.provide:conversation-search.status', 'store.read', 'store.write'],
   activate(context) {
     let active = true;
     context.defer(() => { active = false; });
@@ -228,6 +281,18 @@ export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input:
         },
       });
     }
+    context.contribute('tools','current_web_message_search',{
+      name:'current_web_message_search', description:'按连续词句检索当前 Web 对话的原发言与回复，从新到旧列出真实命中摘录。用返回的 nextBefore 续查更早的结果。',
+      parameters:{type:'object',additionalProperties:false,required:['query'],properties:{
+        query:{type:'string',minLength:1,maxLength:500},before:{type:'string'},
+      }},
+      async execute({excludeId,...input},signal) {
+        signal.throwIfAborted();
+        if (!active) fail(503,'对话搜索插件已停用');
+        if (typeof excludeId!=='string' || !excludeId) fail(403,'缺少当前 Web 对话的原始输入');
+        return webMessages(context.store,input,excludeId);
+      },
+    });
     context.contribute('tools', 'conversation_status', {
       name: 'conversation_status', description: '查看当前会话已记录的进度、最近发言、明确执行目标和待用户决定的卡片。仅记录事实，无记录或结果未知时如实说明。',
       parameters: { type: 'object', additionalProperties: false, properties: {} },
@@ -284,6 +349,7 @@ export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input:
           status: message.status ?? 'unknown', webCitation: messageCitation(projectId, id, current), text: message.text.slice(offset, end), offset, nextOffset: end < message.text.length ? end : null, version: current };
       },
     });
+    context.provide('conversation-search.messages', input => webMessages(context.store, input));
     context.provide('conversation-search.projects', input => projectMessages(context.store, input));
     context.provide('conversation-search.saved', input => savedSearches(context.store, input));
   },

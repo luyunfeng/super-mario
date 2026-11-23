@@ -1,3 +1,4 @@
+import { conversationMessageSearch } from './conversation-message-search.js';
 import { createQueuedDraftEditor } from './edit-queued.js';
 import { createMessageFiles, messageFiles } from './message-files.js';
 import { conversationImagesActive, createMessageImages, messageImages } from './message-images.js';
@@ -30,6 +31,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const statusButton = conversationStatusButton({ api, store, scope, target: 'project', project: () => projectId, todo: () => todoId });
   const translation = createReplyTranslation({ api, store, getScope: () => projectId, getConversationId: () => `project:${projectId}:work` });
   const instructions = createProjectInstructions({ api, store, getProjectId: () => projectId });
+  const messageSearch=conversationMessageSearch({api,store,router});
   const favorites = createMessageFavorites({ api, store, router });
   const transcript = createConversationExport({ api, store, getProjectId: () => projectId });
   let generation = 0;
@@ -73,7 +75,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const topic = h('p', { class: 'small', hidden: true });
   const selectedTodo = () => store.view.snapshot?.todos?.find(t => t.id === todoId && t.projectId === projectId);
   const composer = h('div', { class: 'project-conversation__composer stack' }, topic, queue.el, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, files.el, text, voice.caption, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, mentions.button, pictures.button, files.button, voice.button, voice.upload, send), notice);
-  const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, statusButton, favorites.button, transcript.button, code.toggle)), status, locationNote, readNotice, messages, composer), code.el);
+  const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, statusButton, messageSearch.button, favorites.button, transcript.button, code.toggle)), status, locationNote, readNotice, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
   let draftKey, owner, enabled, quotesEnabled, editEnabled, outboxEnabled, epoch = 0;
   const submissions = createMessageSubmissions({ api, context: submissionContext, onConfirmed: clearSubmittedDraft, captureEdit: edit.onAccepted,
@@ -112,6 +114,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   }
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
+    messageSearch.update(visible && key && router.current.page==='projects' && {conversationId:`project:${projectId}:work`,projectId,todoId:todoId||undefined});
     queuedEdit.observe(key,nextOwner,visible && router.current.page==='projects');
     queue.update(visible && router.current.page==='projects' && key && '/projects/'+encodeURIComponent(projectId)+'/messages/queue'+(todoId?'?todoId='+encodeURIComponent(todoId):''),`project:${projectId}:work`);
     if (!visible || router.current.page !== 'projects') pictures.closeEditor();

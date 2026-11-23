@@ -34,7 +34,7 @@ const descriptions = {
   'voice-input':'使用浏览器听写或服务端录音转写，将文字加入当前对话草稿。',
   'conversation-quotes':'在主对话和项目工作对话中引用一条消息，可附上自己的问题。',
   'conversation-drafts':'在当前浏览器保留未发送的对话文字，按会话和访问凭据恢复。',
-  'conversation-search':'在顶栏搜索对话和执行记录，保存常用检索条件。助手可查找项目工作对话原话。',
+  'conversation-search':'在主对话和项目工作对话中搜索原文并定位消息。顶栏可搜索对话和执行记录、保存常用检索条件。助手可查找项目工作对话原话。',
   'token-statistics':'从 Codex 和 Claude Code 的本地会话日志统计 Token，按日期、模型和 Agent 查看分布。',
   'workspace-splash':'进入工作台时播放开屏动画。',
   'builtin-tools':'让工作台 Agent 查询可用执行器、项目和知识。',

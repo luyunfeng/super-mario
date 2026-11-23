@@ -1,3 +1,4 @@
+import { conversationMessageSearch } from '../features/conversation-message-search.js';
 import { createQueuedDraftEditor } from '../features/edit-queued.js';
 import { createMessageFiles, messageFiles } from '../features/message-files.js';
 import { conversationImagesActive, createMessageImages, messageImages } from '../features/message-images.js';
@@ -43,6 +44,7 @@ const SETUP_STEPS = [
 
 export function createChatPage({ api, store, scope, router }) {
   const translation = createReplyTranslation({ api, store, getScope: scope.get, getConversationId: () => 'main' });
+  const messageSearch=conversationMessageSearch({api,store,router});
   const favorites = createMessageFavorites({ api, store, router });
   const transcript = createConversationExport({ api, store });
   const attention = createAttention({ api, store });
@@ -90,7 +92,7 @@ export function createChatPage({ api, store, scope, router }) {
     h('div', { class: 'chat__inner chat__inner--top' },
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '对话'), h('p', { class: 'page__sub' }, hintCopy('nav.chat').tag)),
-        h('div', { class: 'page__actions' }, conversationStatusButton({ api, store, scope, target: 'main', project: scope.get }), favorites.button, transcript.button, officeDocumentsButton({ api, store }), code.toggle, Hint('nav.chat'))),
+        h('div', { class: 'page__actions' }, conversationStatusButton({ api, store, scope, target: 'main', project: scope.get }), messageSearch.button, favorites.button, transcript.button, officeDocumentsButton({ api, store }), code.toggle, Hint('nav.chat'))),
       banner, decisionNotice, messageNotice, attention.el, setup, runStrip));
   const scroller = h('div', { class: 'chat__scroll', id: 'chat-scroll' }, h('div', { class: 'chat__inner' }, messages, hero));
 
@@ -156,6 +158,7 @@ export function createChatPage({ api, store, scope, router }) {
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
     const queueProject = scope.get();
+    messageSearch.update(router.current.page==='chat' && key && {conversationId:'main',projectId:scope.get()||undefined});
     queuedEdit.observe(key,nextOwner,router.current.page==='chat');
     queue.update(router.current.page==='chat' && key && '/messages/queue'+(queueProject?'?projectId='+encodeURIComponent(queueProject):''),'main');
     if (router.current.page !== 'chat') pictures.closeEditor();
