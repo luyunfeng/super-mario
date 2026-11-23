@@ -71,3 +71,62 @@ test('主人从项目页添加项目，按可见范围批量置顶和归档，�
   assert.equal((await post('/plugins/workspace-board',{enabled:false})).status,200);
   await expect(cardHistory).toBeHidden();await expect(board).toBeHidden();await expect(entry).toHaveCount(0);
 });
+
+test('批量移动非连续卡后撤销还原原序，另一窗口调序立即收回旧撤销', {timeout:30000},async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'mario-board-order-'));
+  const token='synthetic-order';
+  const server=await startServer({host:'127.0.0.1',port:0,dataDir,token,demo:true});
+  t.after(async()=>{try{await server.close();}finally{await rm(dataDir,{recursive:true,force:true});}});
+  const post=async(body:object)=>{
+    const r=await fetch(server.url+'/api/v1/workspace-board',{method:'POST',headers:{authorization:'Bearer '+token,
+      'content-type':'application/json'},body:JSON.stringify(body)});
+    assert.equal(r.status,200);return r.json() as Promise<{revision:number;cards:{columnId:string;title:string}[]}>;
+  };
+  const names=['批次甲','批次乙','批次丙','批次丁'];
+  let version=(await post({action:'list'})).revision;
+  let projectId='';
+  for(const name of names){
+    const p=await server.app.createProject({name});projectId=p.id;
+    version=(await post({action:'add_card',projectId:p.id,columnId:'todo',revision:version})).revision;
+  }
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(()=>browser.close());
+  const context=await browser.newContext({viewport:{width:1280,height:900}});
+  await context.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  const open=async()=>{
+    const page=await context.newPage();
+    await page.goto(server.url+'/#projects/'+projectId+'/workspace?token='+token);
+    await page.getByRole('button',{name:'工作区看板',exact:true}).click();
+    const board=page.getByRole('dialog',{name:'工作区看板'});
+    await expect(board.getByRole('checkbox',{name:'选择 '+names[0]})).toBeVisible();
+    return board;
+  };
+  const board=await open(),peer=await open();
+  const undo=board.getByRole('button',{name:'撤销上次批量操作',exact:true});
+  const original=board.getByRole('region',{name:'待办',exact:true}).getByRole('link',{name:/^打开项目 /});
+  const doing=board.getByRole('region',{name:'进行中',exact:true}).getByRole('link',{name:/^打开项目 /});
+  const links=(items:string[])=>items.map(n=>'打开项目 '+n);
+  await expect(original).toHaveText(links(names));
+  for(const n of [names[0],names[2]]) await board.getByRole('checkbox',{name:'选择 '+n}).check();
+  await board.getByLabel('移动到列',{exact:true}).selectOption('doing');
+  await board.getByRole('button',{name:'移动卡片',exact:true}).click();
+  await expect(original).toHaveText(links([names[1],names[3]]));
+  await expect(doing).toHaveText(links([names[0],names[2]]));
+  await undo.click();
+  await expect(original).toHaveText(links(names));
+  await expect(doing).toHaveCount(0);
+  assert.deepEqual((await post({action:'list'})).cards.filter(c=>c.columnId==='todo').map(c=>c.title),names);
+  await board.getByRole('checkbox',{name:'选择 '+names[3]}).check();
+  await board.getByRole('button',{name:'置顶',exact:true}).click();
+  await expect(undo).toBeVisible();
+  await expect(peer.getByText('已置顶',{exact:true})).toBeVisible();
+  await peer.getByRole('button',{name:'上移 '+names[2],exact:true}).press('Enter');
+  await expect(undo).toHaveCount(0);
+  await expect(original).toHaveText(links([names[3],names[0],names[2],names[1]]));
+  const drag=board.locator('[data-board-card]').filter({has:board.page().getByRole('checkbox',{name:'选择 '+names[0],exact:true})});
+  const end=board.locator('[data-board-column-end="doing"]');
+  await drag.dragTo(end,{sourcePosition:{x:2,y:2}});
+  await expect(doing).toHaveText(links([names[0]]));
+  await expect(original).toHaveText(links([names[3],names[2],names[1]]));
+  assert.deepEqual((await post({action:'list'})).cards.filter(c=>c.columnId==='doing').map(c=>c.title),[names[0]]);
+});

@@ -8,11 +8,28 @@ export function workspaceBoardEnabled(api, store) {
     !!store.view.snapshot?.plugins?.some(p => p.id === 'workspace-board' && p.status === 'active');
 }
 
+// Restore successors first, including original neighbours hidden by the current filter.
+function inverseBatch(cards, changes) {
+  const byId = new Map(changes.map(change => [change.id, change]));
+  const successor = new Map();
+  const inverse = [];
+  for (let i = cards.length - 1; i >= 0; i--) {
+    const card = cards[i], change = byId.get(card.id);
+    if (change) inverse.push({id:card.id,
+      ...(change.columnId !== undefined && {columnId:card.columnId, beforeId:successor.get(card.columnId)}),
+      ...(change.pinned !== undefined && {pinned:card.pinned}),
+      ...(change.archived !== undefined && {archived:card.archived}),
+    });
+    successor.set(card.columnId, card.id);
+  }
+  return inverse;
+}
+
 export function openWorkspaceBoard({ api, store, router }) {
   if (!workspaceBoardEnabled(api, store)) return;
   const owner = api.draftOwner();
   const selected = new Set();
-  let board, historyDrawer, removeConfirmation, busy = false, stale = false;
+  let board, undo, drag, dropTarget, historyDrawer, removeConfirmation, busy = false, stale = false;
   let seenRevision = store.view.workspaceBoardRevision;
   const message = h('p', { role: 'status', class: 'muted small' });
   const refresh = Button({ label: '刷新看板', size: 'sm', onClick: () => request() });
@@ -23,7 +40,7 @@ export function openWorkspaceBoard({ api, store, router }) {
   const add = h('div', { class: 'row row--wrap' });
   const columnControls = h('div', { class: 'stack' });
   const manage = h('details', {}, h('summary', {}, '管理看板列'), columnControls);
-  const controls = h('fieldset', { class: 'stack', style:{border:'0',padding:'0',margin:'0',minWidth:'0'} }, add, h('div', { class: 'row row--wrap' }, search, filter), tools, cards, manage);
+  const controls = h('fieldset', { class: 'stack', style:{border:'0',padding:'0',margin:'0',minWidth:'0'} }, add, h('div', { class: 'row row--wrap' }, search, filter), tools, h('p',{class:'small muted'},'每列先显示置顶卡片。可拖到同一置顶状态的卡片前，或拖到目标列末。移到列末的卡片会排在本组最后。'), cards, manage);
   const drawer = openDrawer({ title: '工作区看板', wide: true, body: [h('div', { class: 'row row--between' }, message, h('div',{class:'row'},Button({label:'变更历史',size:'sm',onClick:() => history()}),refresh)), controls], onClose: () => { historyDrawer?.close(); removeConfirmation?.close(); unsubscribe(); } });
   const authorized = () => drawer.el.open && api.draftOwner() === owner && workspaceBoardEnabled(api, store);
   const columns = () => board.columns.map(col => [col.id, col.title]);
@@ -56,13 +73,17 @@ export function openWorkspaceBoard({ api, store, router }) {
     const batch = change => {
       const changes = chosen.filter(card => Object.entries(change).some(([key,value]) => card[key] !== value))
         .map(card => ({ id: card.id, ...change }));
-      if (changes.length) return request({ action: 'batch_cards', changes });
+      if (changes.length) return request({ action: 'batch_cards', changes }, {remember:true});
     };
     const destination = Select({ 'aria-label': '移动到列', options: columns() });
+    const receipt = undo;
+    const undoButton = !stale && receipt && receipt.revision === board.revision && btn('撤销上次批量操作', () => {
+      if (receipt === undo && receipt.revision === board.revision) return request({action:'batch_cards', changes:receipt.changes});
+    });
     replace(tools, btn(rows.length && selected.size === rows.length ? '取消全选' : '全选可见卡片', () => {
       if (selected.size === rows.length) selected.clear(); else for (const row of rows) selected.add(row.id);
       paintCards();
-    }, !rows.length), h('span', { class: 'small muted' }, '已选 ' + selected.size + ' 张'),
+    }, !rows.length), undoButton, h('span', { class: 'small muted' }, '已选 ' + selected.size + ' 张'),
       chosen.length > 0 && [
         btn('置顶', () => batch({ pinned:true }), chosen.every(c => c.pinned)),
         btn('取消置顶', () => batch({ pinned:false }), chosen.every(c => !c.pinned)),
@@ -73,16 +94,78 @@ export function openWorkspaceBoard({ api, store, router }) {
     replace(cards, board.columns.map(col => {
       const items = rows.filter(card => card.columnId === col.id).sort((a,b) => Number(b.pinned) - Number(a.pinned));
       return h('section', { class: 'card', 'aria-label': col.title }, h('header', { class: 'card__head' }, h('h3', {}, col.title), h('span', {class:'muted small'}, items.length + ' 张')),
-        h('div', { class: 'card__body list' }, items.length ? items.map(card => h('div', { class: 'stack', dataset:{boardCard:card.id} },
+        h('div', { class: 'card__body list' }, items.length ? items.map((card,index) => h('div', { class: 'stack', dataset:{boardCard:card.id}, draggable: !selected.size,
+          ondragstart(event) {
+            if (!authorized() || selected.size || busy || event.target !== event.currentTarget) { event.preventDefault(); return; }
+            drag = {id:card.id,pinned:card.pinned,revision:board.revision};
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('application/x-super-mario-board-card', card.id);
+          }, ondragend:clearDrag, ...dropHandlers(col.id,card) },
           Check({ label: '选择 ' + card.title, checked: selected.has(card.id), onChange: yes => {
             if (yes) selected.add(card.id); else selected.delete(card.id);
             paintCards();
             cards.querySelector('[data-board-card="' + CSS.escape(card.id) + '"] input')?.focus({preventScroll:true});
           } }), projectLink(card),
+          h('div',{class:'row row--wrap'}, ['上移','下移'].map((label,direction) => {
+            const peer = items[index + (direction ? 1 : -1)];
+            return Button({ label, ariaLabel:label + ' ' + card.title, size:'sm', disabled:!!selected.size || !peer || peer.pinned !== card.pinned,
+              onClick: async () => {
+                const original = board.cards.filter(item => item.columnId === col.id);
+                const before = direction ? original[original.findIndex(item => item.id === peer.id)+1]?.id : peer.id;
+                await moveCard(card.id,col.id,before);
+                const row = cards.querySelector('[data-board-card="' + CSS.escape(card.id) + '"]');
+                if (authorized() && row) (row.querySelector('button[aria-label="' + CSS.escape(label + ' ' + card.title) + '"]:enabled') ?? row.querySelector('input'))?.focus({preventScroll:true});
+              } });
+          })),
           Button({label:'变更历史',ariaLabel:'变更历史 ' + card.title,size:'sm',onClick:() => history(card)}),
           card.pinned && h('span',{class:'pill'},'已置顶'), card.archived && h('span',{class:'pill'},'已归档'))) :
-          h('span', { class: 'muted small' }, '没有符合条件的卡片')));
+          h('span', { class: 'muted small' }, '没有符合条件的卡片'),
+          h('div',{class:'small muted',dataset:{boardColumnEnd:col.id},...dropHandlers(col.id)}, '拖到此处移至列末')));
     }));
+  }
+
+  function clearDrag() {
+    drag = undefined;
+    if (dropTarget) dropTarget.style.outline = '';
+    dropTarget = undefined;
+  }
+  function dropHandlers(columnId,targetCard) {
+    const beforeId = targetCard?.id;
+    return {
+      ondragover(event) {
+        if (!drag || !authorized() || drag.revision !== board.revision || beforeId === drag.id || busy || stale) return;
+        event.preventDefault();
+        if (targetCard && drag.pinned !== targetCard.pinned) {
+          event.dataTransfer.dropEffect = 'none';
+          message.textContent = '只能放在同一置顶状态的卡片前，或拖到目标列末。';
+          return;
+        }
+        message.textContent = '';
+        event.dataTransfer.dropEffect = 'move';
+        if (dropTarget && dropTarget !== event.currentTarget) dropTarget.style.outline = '';
+        dropTarget = event.currentTarget;
+        dropTarget.style.outline = '2px solid var(--accent)';
+      },
+      ondragleave(event) {
+        if (dropTarget === event.currentTarget && !event.currentTarget.contains(event.relatedTarget)) {
+          dropTarget.style.outline = ''; dropTarget = undefined;
+        }
+      },
+      ondrop(event) {
+        if (!drag || drag.revision !== board.revision || busy || stale || !authorized()) return;
+        event.preventDefault();
+        const id = drag.id;
+        clearDrag();
+        if (!targetCard || board.cards.find(c => c.id === id)?.pinned === targetCard.pinned) void moveCard(id,columnId,beforeId);
+      },
+    };
+  }
+  async function moveCard(id,columnId,beforeId) {
+    if (id === beforeId) return;
+    const original = board.cards.filter(c => c.columnId === columnId);
+    const index = original.findIndex(c => c.id === id);
+    if (index >= 0 && original[index+1]?.id === beforeId) return;
+    await request({action:'batch_cards',changes:[{id,columnId,beforeId}]});
   }
 
   function paintAdd() {
@@ -121,14 +204,18 @@ export function openWorkspaceBoard({ api, store, router }) {
       }));
   }
 
-  async function request(change) {
+  async function request(change, {remember = false} = {}) {
     if (!authorized() || busy || (change && (!board || stale))) return;
+    const inverse = remember ? inverseBatch(board.cards,change.changes) : undefined;
+    clearDrag();
     busy = true;
     controls.disabled = controls.inert = refresh.disabled = true;
     message.textContent = change ? '正在保存…' : '正在读取看板…';
     try {
       const doc = await api.post('/workspace-board', change ? {...change,revision:board.revision} : {action:'list'});
       if (!authorized()) return;
+      if (inverse) undo = {revision:doc.revision,changes:inverse};
+      else if (undo && undo.revision !== doc.revision) undo = undefined;
       board = doc;
       stale = false;
       if (change?.action === 'batch_cards') for (const {id} of change.changes) selected.delete(id);
@@ -137,6 +224,7 @@ export function openWorkspaceBoard({ api, store, router }) {
     } catch (error) {
       if (!authorized()) return;
       stale = true;
+      paintCards();
       message.textContent = error.message + '。请刷新看板后核对。';
     } finally {
       busy = false;

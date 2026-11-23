@@ -4607,6 +4607,7 @@ test('工作区看板只在主人 Web 主对话和飞书配对私聊提供当前
       }
       assert.ok(req.tools.includes('workspace_board_read'));
       assert.match(req.system, /不能据此断言执行成功/);
+      assert.match(req.system, /原看板仍打开且版本未变/);
       if (JSON.stringify(req.content).includes('何时移列')) {
         assert.ok(req.tools.includes('workspace_board_activity'));
         assert.match(req.system, /先查摘要，再用 revision 读详情/);

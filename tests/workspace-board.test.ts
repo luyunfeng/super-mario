@@ -32,7 +32,19 @@ test('项目看板的列与批量卡片修改原子保存，同版并发不覆�
   for(const project of [a,b]) board=await read({action:'add_card',revision:board.revision,projectId:project.id,columnId:'todo'});
   const first=board.cards.find(c=>c.projectId===a.id)!,second=board.cards.find(c=>c.projectId===b.id)!;
   assert.ok(first && second);
+  board=await read({action:'batch_cards',revision:board.revision,changes:[{id:second.id,columnId:'todo',beforeId:first.id}]});
+  assert.deepEqual(board.cards.filter(c=>c.columnId==='todo').map(c=>c.id),[second.id,first.id]);
   const beforeFailure=await history();
+  for(const invalid of [
+    {id:second.id,columnId:'todo',beforeId:'missing-card'},
+    {id:second.id,columnId:'review',beforeId:first.id},
+    {id:second.id,pinned:true,beforeId:first.id}
+  ]){
+    const invalidBatch=await post('/workspace-board',{action:'batch_cards',revision:board.revision,changes:[{id:first.id,pinned:true},invalid]});
+    assert.ok([400,404,409].includes(invalidBatch.status));
+    assert.deepEqual(await read({action:'list'}),board);
+    assert.deepEqual(await history(),beforeFailure);
+  }
   const bad=await post('/workspace-board',{action:'batch_cards',revision:board.revision,changes:[
     {id:first.id,pinned:true},{id:second.id,columnId:'missing-column'}]});
   assert.ok([400,404,409].includes(bad.status));assert.deepEqual(await read({action:'list'}),board);

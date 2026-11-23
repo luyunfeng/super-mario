@@ -51,7 +51,8 @@ function batchCards(board: Board, raw: Json | undefined) {
   const changed=new Set<string>();
   for (const entry of raw) {
     const patch=object(entry);
-    keys(patch,['id','columnId','pinned','archived']);
+    keys(patch,['id','columnId','beforeId','pinned','archived']);
+    if (patch.beforeId !== undefined && patch.columnId === undefined) fail(400,'指定卡片位置时须提供目标列');
     const cardId=id(patch.id);
     if (changed.has(cardId) || Object.keys(patch).length===1) fail(400,'卡片重复或缺少变更字段');
     changed.add(cardId);
@@ -63,13 +64,16 @@ function batchCards(board: Board, raw: Json | undefined) {
       card[field]=value;
     }
     if (patch.columnId!==undefined) {
-      card.columnId=column(board,patch.columnId).id;
-      // Reinsertion appends this card after the destination's existing cards, even for same-column moves.
-      cards.delete(cardId);
-      cards.set(cardId,card);
+      const destination = column(board, patch.columnId);
+      const anchor = patch.beforeId === undefined ? undefined : cards.get(id(patch.beforeId));
+      // Earlier moves in this batch may already have restored the anchor to its original column.
+      if (patch.beforeId !== undefined && (!anchor || anchor === card || anchor.columnId !== destination.id))
+        fail(400,'定位卡片必须是目标列中的另一张卡片');
+      board.cards.splice(board.cards.indexOf(card), 1);
+      card.columnId = destination.id;
+      board.cards.splice(anchor ? board.cards.indexOf(anchor) : board.cards.length, 0, card);
     }
   }
-  board.cards=[...cards.values()];
 }
 function update(store: Store, board: Board, action: keyof typeof fields, input: JsonObject) {
   switch(action) {
