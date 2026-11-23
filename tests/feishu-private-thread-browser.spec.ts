@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -285,6 +286,14 @@ test('飞书搜索卡提供可授权定位的 Web 原话链接，未知工作台
   assert.equal((await around).status(),200);
   const drawer=page.getByRole('dialog',{name:'独立对话记录'});
   const mark=drawer.getByText('命中消息',{exact:true});
+  await expect(mark).toBeFocused();await expect(mark.locator('..')).toContainText(phrase);
+  const citationId=randomUUID();
+  server.app.store.put('messages',citationId,{id:citationId,conversationId:'main',role:'assistant',status:'done',
+    text:'合成历史答复 [查看原文]('+target.hash+')',createdAt:new Date().toISOString()});
+  await page.goto(server.url+'/#chat');await page.reload();
+  const citation=page.locator('[data-id="'+citationId+'"]').getByRole('link',{name:'查看原文'});
+  await expect(citation).toHaveAttribute('href',target.hash);
+  await citation.click();
   await expect(mark).toBeFocused();await expect(mark.locator('..')).toContainText(phrase);
   const renamed='只匹配标题的合成词';
   const edit=await fetch(server.url+path,{method:'PATCH',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({version:latest.version,title:renamed})});
