@@ -210,6 +210,13 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await expect(drawer).toContainText('消息位置已变化');
   await expect(drawer.getByRole('textbox', {name:'对话标题'})).toHaveValue('待核对的标题草稿');
   await expect(drawer.getByLabel('新标签', { exact: true })).toHaveValue('草稿标签');
+  await page.route('**/threads/*', route => route.request().method() === 'PATCH'
+    ? route.fulfill({ status: 502, json: { error: '合成保存回执丢失' } })
+    : route.fallback(), { times: 1 });
+  await drawer.getByRole('button', { name: '保存标题' }).click();
+  await expect(drawer).toContainText('保存结果未知');
+  await expect(drawer.getByRole('textbox', { name: '对话标题' })).not.toHaveValue('待核对的标题草稿');
+  await expect(drawer.getByLabel('新标签', { exact: true })).toHaveValue('草稿标签');
   await drawer.getByRole('button', { name: '返回列表' }).click();
   await expect(drawer.getByRole('textbox', { name: '搜索独立对话' })).toHaveValue(keyword);
   await expect(drawer.getByRole('combobox', { name: '筛选标签' })).toHaveValue('核对标签');

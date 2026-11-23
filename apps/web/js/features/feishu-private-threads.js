@@ -372,8 +372,11 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
           searchPage = undefined;
           const conflict = error.status === 409;
           if (conflict && change.tags) pending.tags = [...change.tags];
+          // 回执丢失时重新读取提交的字段，保留未随本次请求发送的草稿。
+          if (!conflict && 'title' in change) pending.title = undefined;
+          if (!conflict && 'tags' in change) pending.tags = undefined;
           await detail(row, conflict ? '对话已在别处修改，已重新读取，请核对后再操作。' : '保存结果未知，已重新读取，请核对。',
-            conflict ? pending : undefined, around);
+            pending, around);
         } else {
           feedback.textContent = error.message;
           edit.disabled = false;
