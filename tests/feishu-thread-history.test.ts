@@ -123,6 +123,12 @@ test('独立对话改名和归档可跨重启，旧事件不恢复归档，引�
   assert.ok(tagged.version > afterRename.version);
   await a.receive('/list', 'listed-tags');
   assert.match(sent.at(-1)!.text, /标签：Ops、ops、#核对/);
+  const beforeSearch = server.bots.privateThreadSelection(a.id, initial.threadId);
+  await a.receive('/对话 #核对', 'tag-search');
+  assert.match(sent.at(-1)!.text, /独立对话 · 蓝色调查\s+标签：Ops、ops、#核对/);
+  assert.deepEqual(server.bots.privateThreadSelection(a.id, initial.threadId), beforeSearch);
+  await b.receive('/list #核对', 'foreign-tag-search');
+  assert.match(sent.at(-1)!.text, /没有找到匹配的独立对话/);
   assert.equal(tagged.tagsUpdatedBy, 'user');
   assert.ok(Number.isFinite(Date.parse(tagged.tagsUpdatedAt)));
   const unchanged = await (await api(a.id, path, { version: tagged.version, tags: expectedTags })).json();
@@ -188,6 +194,8 @@ test('独立对话改名和归档可跨重启，旧事件不恢复归档，引�
   assert.ok(viewed.messages.some((m: Message) => m.role === 'user' && m.text === '第一条合成目标'));
   await a.receive('/new 第一条合成目标', 'initial');
   await a.receive('归档前的跟进', 'old-follow');
+  await a.receive('/list #核对', 'archived-tag-search');
+  assert.match(sent.at(-1)!.text, /没有找到匹配的独立对话/);
   await a.receive('/list', 'listed-archived');
   assert.doesNotMatch(sent.at(-1)!.text, /蓝色调查|第一条合成目标/);
   assert.equal((await (await api(a.id, path)).json()).version, saved.version);
