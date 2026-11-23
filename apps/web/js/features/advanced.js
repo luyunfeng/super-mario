@@ -1,11 +1,22 @@
 // 高级：插件、插件文件、后台事件、界面、诊断。通常不用动，默认全部折叠。
 import {openAssistantCardExamples} from './assistant-card-examples.js';
 import { h, replace, svg } from '../lib/dom.js';
-import { Button, Fold, Pill, Check } from '../ui/kit.js';
+import { renderDiffLines } from './code-sidebar.js';
+import { Button, Fold, Pill, Check, copyText } from '../ui/kit.js';
 import { hintsEnabled, setHintsEnabled } from '../ui/hint.js';
 import { createAgentArtifactsUI } from '../legacy/agent-artifacts.js';
 import { createBackgroundPage } from '../legacy/background-page.js';
 const node = (tag, text, className) => { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; if (className) value.className = className; return value; };
+
+function extensionPatch(text) {
+  const status = h('span',{role:'status'});
+  const copy = Button({label:'复制补丁',size:'sm',onClick:async () => {
+    try { await copyText(text); status.textContent = '已复制补丁'; }
+    catch (error) { status.textContent = '复制失败：' + error.message; }
+  }});
+  return h('div',{class:'stack'},h('pre',{class:'code-sidebar__text',tabIndex:0},h('code',{},renderDiffLines(text))),
+    h('div',{class:'row'},copy,status));
+}
 
 function shareChart(card) {
   const max = card.points.reduce((largest, point) => Math.max(largest, point.value), 0);
@@ -154,7 +165,7 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
       const patch = value.renderer === 'diff' && typeof value.patch === 'string' && value.patch;
       const fallback = typeof value.fallback === 'string' && value.fallback;
       if (typeof value.title !== 'string') continue;
-      const content = patch ? h('pre', {}, h('code', {}, patch)) : value.renderer === 'chart' && extensionChart(value);
+      const content = patch ? extensionPatch(patch) : value.renderer === 'chart' && extensionChart(value);
       if (!content && !fallback) continue;
       cards.push(h('section', {class:'card card__body stack', 'aria-label':value.title},
         h('h3', {}, value.title), content || h('p', {}, fallback)));

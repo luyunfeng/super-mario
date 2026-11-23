@@ -12,7 +12,7 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await mkdir(extension,{recursive:true});
   await writeFile(join(extension,'super-mario.extension.json'),JSON.stringify({id:'review',version:'1.0.0',apiVersion:1,main:'index.mjs'}));
   await writeFile(join(extension,'index.mjs'),`export default {id:'review',name:'合成评审',capabilities:[],activate(ctx){
-    ctx.contribute('web_extensions','patch',{slot:'advanced-interface',renderer:'diff',title:'变更摘录',patch:'+<img src=x>',fallback:'新增一行'});
+    ctx.contribute('web_extensions','patch',{slot:'advanced-interface',renderer:'diff',title:'变更摘录',patch:'-before\\n+<img src=x>\\n',fallback:'新增一行'});
     ctx.contribute('web_extensions','chart',{slot:'advanced-interface',renderer:'chart',kind:'bar',title:'数量变化',points:[{label:'昨日',value:-3},{label:'今日',value:5}],fallback:'数量变化摘要'});
     ctx.contribute('web_extensions','line',{slot:'advanced-interface',renderer:'chart',kind:'line',title:'单点趋势',points:[{label:'当前',value:0}],fallback:'当前为零'});
     ctx.contribute('web_extensions','area',{slot:'advanced-interface',renderer:'chart',kind:'area',title:'跨零走势',points:[{label:'昨日',value:-1},{label:'今日',value:1}],fallback:'由负转正'});
@@ -34,7 +34,13 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   const entry=page.getByRole('button',{name:'助理卡片示例',exact:true});
   await expect(entry).toBeVisible();
   const patch=page.getByRole('region',{name:'变更摘录'});
-  await expect(patch.locator('code')).toHaveText('+<img src=x>');
+  const patchText='-before\n+<img src=x>\n';
+  await expect(patch.locator('.diff-line--del')).toHaveText('-before');
+  await expect(patch.locator('.diff-line--add')).toHaveText('+<img src=x>');
+  await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:server.url});
+  await patch.getByRole('button',{name:'复制补丁'}).click();
+  await expect(patch.getByRole('status')).toHaveText('已复制补丁');
+  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),patchText);
   await expect(patch.locator('img')).toHaveCount(0);
   await expect(page.getByRole('region',{name:'其他格式'})).toContainText('纯文字说明');
   const chart=page.getByRole('region',{name:'数量变化'});
@@ -61,10 +67,12 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
     selection.removeAllRanges();
     selection.addRange(range);
   });
+  const selectionBefore=await page.evaluate(()=>window.getSelection()?.toString());
+  assert.ok(selectionBefore?.includes('+<img src=x>'));
   const examplesApi=server.url+'/api/v1/plugins/assistant-card-examples';
   assert.ok((await page.request.post(examplesApi,{data:{enabled:false}})).ok());
   await expect(entry).toBeHidden();
-  assert.equal(await page.evaluate(()=>window.getSelection()?.toString()),'+<img src=x>');
+  assert.equal(await page.evaluate(()=>window.getSelection()?.toString()),selectionBefore);
   assert.ok((await page.request.post(examplesApi,{data:{enabled:true}})).ok());
   await expect(entry).toBeVisible();
   const stopped=await page.request.post(server.url+'/api/v1/plugins/review',{data:{enabled:false}});
