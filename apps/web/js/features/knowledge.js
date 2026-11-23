@@ -75,7 +75,22 @@ function originalSources(api, entry, selected, line, ask, handoff, canRead) {
         const outline=h('div');
         let original,read=0;
         const action = h('button', { type: 'button', class: 'btn btn--ghost btn--sm', hidden: true,
-          onclick: () => ask(source, original) }, '引用原文追问');
+          onmousedown: event => { if (event.button === 0) event.preventDefault(); },
+          onclick: () => {
+            const selection=window.getSelection();
+            let selectedRange;
+            if (selection?.rangeCount === 1 && !selection.isCollapsed) {
+              const range=selection.getRangeAt(0);
+              if (text.contains(range.startContainer) && text.contains(range.endContainer)) {
+                const prefix=range.cloneRange();
+                prefix.selectNodeContents(text);
+                prefix.setEnd(range.startContainer,range.startOffset);
+                const start=prefix.toString().length;
+                selectedRange=[start,start+range.toString().length];
+              }
+            }
+            ask(source, original, selectedRange);
+          } }, '引用原文追问');
         const notice = h('span', { role: 'status', hidden: true }, '引用的行号超出原文范围。');
         const detail = h('details', { open: source.id === selected }, h('summary', null, source.title, source.meetingStartedAt && ' · ' + source.meetingStartedAt), notice, outline, text, action);
         const sourceLink = source.sourceUrl && externalSourceLink(source.sourceUrl, '打开原始网址');
@@ -196,7 +211,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   function hasUnsavedChanges() {
     return fields.some((field, i) => field.value !== baseline[i]) || changedScope() || (protection.value === 'locked') !== Boolean(reviewed.contentLocked);
   }
-  function ask(source, original) {
+  function ask(source, original, selectedRange) {
     if (!mayQuote()) { note.textContent = '当前无法引用，请检查插件和知识页状态。'; return; }
     if (hasUnsavedChanges()) {
       note.textContent = '请先保存记忆修改，再引用原文。'; return;
@@ -224,7 +239,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
     }
     field.addEventListener('select', refresh);
     const selection = openDrawer({ title: '选择原文追问', body: field, footer: apply });
-    refresh(); field.focus(); field.setSelectionRange(0, 0);
+    field.focus(); field.setSelectionRange(...(selectedRange ?? [0, 0])); refresh();
   }
 
   async function loadDraft(revision) {
