@@ -5301,3 +5301,38 @@ test('Web 与配对飞书私聊读取订阅额度缓存，项目没有账户池�
     assert.equal(reads,readsBeforeQueries);
   }finally{await server.close();}
 });
+
+test('Web 与飞书项目对话通过模型工具读取本项目工作树登记', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const cwd = '/synthetic/worktree-project';
+  const tree = { cwd: cwd + '-worktrees/fixture', name: '已准备目录' };
+  const answer = '登记目录为 ' + tree.cwd;
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.ok(req.tools.includes('project_worktrees_list'));
+      assert.match(req.system, /登记记录不能证明机器在线或目录仍存在/);
+      return call('project_worktrees_list', {}, 'registered');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    assert.deepEqual(JSON.parse(raw), [tree]);
+    return { role: 'assistant', content: answer };
+  }, options => {
+    adapter = options;
+    return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }),
+      collect: async () => [], send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    const workspace = { machineId: 'fixture', cwd };
+    const project = server.app.projects.create({ name: '项目工作树查询', workspace });
+    server.app.store.put('project-worktrees', 'fixture', { ...tree, id: 'fixture', projectId: project.id, machineId: workspace.machineId, source: cwd });
+    const question = '这个项目已单独创建哪些工作树？';
+    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), answer);
+    const bot = await api('/feishu/bots', { name: '工作树查询', appId: 'cli_5151515151515151', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
+    const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(question, { ...source, messageId: 'query' });
+    await t.waitFor(() => assert.ok(sent.includes(answer)));
+  } finally { await server.close(); }
+});
