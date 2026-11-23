@@ -43,6 +43,7 @@ test('recursively reduces large summaries and preserves provenance across multip
   let mapped = 0;
   const result = await analyzeSession('a'.repeat(36000), config, noop, { complete: async prompt => {
     const input = JSON.parse(prompt);
+    assert.match(input.instructions, /占位标记只能证明该处有附件.*注明是谁的描述.*待核对的具体内容/);
     if (input.task === '分段归纳') { mapped++; return `来源${input.segment}证据` + '摘'.repeat(12990); }
     if (input.task === '层次归纳') {
       levels.add(input.level);
