@@ -52,14 +52,24 @@ type ReadNative = (source: NativeExportSource, includeWork: boolean, signal: Abo
   Promise<{ markdown: string; filename: string; count: number; hasContent?: boolean }>;
 
 type ReadPrivate = (botId: string, threadId: string) => { title: string; messages: Message[] };
+type ReadWeb = (threadId:string, projectId?:string) => { title:string; messages:Message[] };
 type ReadAssistant = () => Promise<{ name: string } | undefined>;
 
-async function markdown(store: Store, input: Json, signal: AbortSignal, readNative?: ReadNative, readAssistant?: ReadAssistant, readPrivate?: ReadPrivate) {
+async function markdown(store: Store, input: Json, signal: AbortSignal, readNative?: ReadNative, readAssistant?: ReadAssistant, readPrivate?: ReadPrivate, readWeb?: ReadWeb) {
   if (!input || typeof input !== 'object' || Array.isArray(input)
     || typeof input.includeWork !== 'boolean'
-    || Object.keys(input).some(key => key !== 'projectId' && key !== 'includeWork' && key !== 'native' && key !== 'botId' && key !== 'threadId'))
+    || Object.keys(input).some(key => key !== 'projectId' && key !== 'includeWork' && key !== 'native' && key !== 'botId' && key !== 'threadId' && key !== 'webThreadId'))
     fail(400, '对话导出参数无效');
   let thread: ReturnType<ReadPrivate> | undefined;
+  const web = Object.hasOwn(input, 'webThreadId');
+  if (web) {
+    if (Object.hasOwn(input, 'native') || Object.hasOwn(input, 'botId') || Object.hasOwn(input, 'threadId')
+        || typeof input.webThreadId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.webThreadId)
+        || (input.projectId !== undefined && (typeof input.projectId !== 'string' || !input.projectId.trim())))
+      fail(400, '独立 Web 对话导出参数无效');
+    if (!readWeb) fail(503, '独立 Web 对话服务尚未连接');
+    thread = readWeb(input.webThreadId.toLowerCase(), input.projectId);
+  }
   if (Object.hasOwn(input, 'botId') || Object.hasOwn(input, 'threadId')) {
     if (Object.hasOwn(input, 'projectId') || Object.hasOwn(input, 'native')
       || typeof input.botId !== 'string' || !input.botId.trim()
@@ -77,7 +87,7 @@ async function markdown(store: Store, input: Json, signal: AbortSignal, readNati
   let workspace: Project['workspace'];
   let title = thread?.title ?? '主对话';
   let conversationId = 'main';
-  if (input.projectId !== undefined) {
+  if (!web && input.projectId !== undefined) {
     if (typeof input.projectId !== 'string' || !input.projectId.trim()) fail(400, '项目 ID 无效');
     const project = store.get<Project>('projects', input.projectId);
     if (!project) fail(404, '项目不存在');
@@ -123,12 +133,12 @@ async function markdown(store: Store, input: Json, signal: AbortSignal, readNati
   return { filename: `super-mario-${stem}.md`, markdown: lines.join('\n'), count: messages.length };
 }
 
-export function createConversationExport(readNative?: ReadNative, readAssistant?: ReadAssistant, readPrivate?: ReadPrivate): Extension {
+export function createConversationExport(readNative?: ReadNative, readAssistant?: ReadAssistant, readPrivate?: ReadPrivate, readWeb?: ReadWeb): Extension {
   return {
     id: 'conversation-export', name: '对话导出', capabilities: ['conversation.export'],
     permissions: ['service.provide:conversation-export.markdown', 'store.read'],
     activate(context) {
-      context.provide('conversation-export.markdown', (input, signal) => markdown(context.store, input, signal, readNative, readAssistant, readPrivate));
+      context.provide('conversation-export.markdown', (input, signal) => markdown(context.store, input, signal, readNative, readAssistant, readPrivate, readWeb));
     },
   };
 }

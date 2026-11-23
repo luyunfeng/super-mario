@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PluginHost, createContributions } from '../packages/core/src/plugin-host.ts';
+import { createStore } from '../packages/core/src/store.ts';
+import { createEventBus } from '../packages/core/src/events.ts';
+import { createConversationExport } from '../plugins/conversation-export.ts';
+import type { JsonObject } from '../packages/plugin-sdk/src/index.ts';
 import { startServer } from '../apps/server/src/index.ts';
 
 test('export is an authenticated plugin read of one owner-selected work conversation', async t => {
@@ -63,4 +68,28 @@ test('export is an authenticated plugin read of one owner-selected work conversa
   assert.match(unnamed.markdown, /## 主 Agent ·/);
   assert.equal((await post('/plugins/conversation-export', { enabled: false })).status, 200);
   assert.equal((await post(path, request)).status, 503);
+});
+
+test('independent Web thread export reads the whole registered history and validates source exclusivity', async t=>{
+  const store=createStore(':memory:'), id='b9c8631f-3c50-4507-82d2-67e16a057351';
+  const host=new PluginHost({store,events:createEventBus(store),dataDir:'',contributions:createContributions()});
+  t.after(async()=>{await host.close();store.close();});
+  let reads=0;
+  host.register(createConversationExport(undefined,async()=>{throw Error('must not read main speaker');},undefined,(thread,project)=>{
+    assert.equal(thread,id);assert.equal(project,'scope');reads++;
+    return {title:'合成 [独立] 对话',messages:Array.from({length:125},(_,i)=>({
+      id:String(i),conversationId:'web:'+id,projectId:'scope',role:i%2?'assistant':'user',
+      text:'正文编号 '+i,createdAt:'2026-11-17T02:04:00Z',
+    }))};
+  }));
+  await host.start();
+  const input={webThreadId:id,projectId:'scope',includeWork:false};
+  for(const mixed of [{native:{}},{botId:'bot'},{threadId:'00'},{webThreadId:'web:'+id},{projectId:123}] as JsonObject[])
+    await assert.rejects(host.invocations.use('conversation-export.markdown',{...input,...mixed}),{status:400});
+  assert.equal(reads,0);
+  const doc=await host.invocations.use('conversation-export.markdown',input) as {markdown:string;count:number;filename:string};
+  assert.equal(reads,1);assert.equal(doc.count,125);
+  assert.match(doc.markdown,/正文编号 124/);assert.match(doc.markdown,/## 助手 ·/);
+  assert.ok(doc.markdown.startsWith(String.raw`# 合成 \[独立\] 对话`));
+  assert.doesNotMatch(doc.markdown,/## 主 Agent|## 项目助手|导出时绑定/);
 });

@@ -1,4 +1,4 @@
-import { requireWebConversationHistory } from './web-conversations.ts';
+import { requireWebConversationHistory, webInputFor, independentWebSource } from './web-conversations.ts';
 import {checkedResult,phaseLabels,record,traceObject} from './tool-trace-public-fields.ts';
 import { sensitiveWorkspacePath } from './workspace-code.ts';
 import { readConversationStatus } from './conversation-status.ts';
@@ -319,14 +319,6 @@ function webPassages(row:Message) {
   return {text:body};
 }
 
-function webInputFor(store:Store,row:Message,workProject:string|undefined) {
-  const source = row.role==='user' ? row : row.role==='assistant' && row.replyTo ? store.get<Message>('messages',row.replyTo) : undefined;
-  if (source?.role==='user' && !source.replyTo && (!source.origin || source.origin==='user') &&
-      (row.role==='user' || source.id===row.replyTo) && source.conversationId===row.conversationId &&
-      (source.projectId ?? workProject)===(row.projectId ?? workProject) && source.todoId===row.todoId &&
-      !store.get('message.routes',source.id) && (source.id===row.id || !store.get('message.routes',row.id))) return source;
-}
-
 // Legacy browser sends predate directWebInput but have durable send receipts.
 // Internal card continuations can also have receipts and are excluded.
 function searchableWebSource(store:Store,row:Message,workProject:string|undefined) {
@@ -386,7 +378,6 @@ function webMessages(context: ExtensionContext, input: Json, canReadFiles?:CanRe
   let pastCursor = before===undefined;
   const hits=[];
   for (const row of store.list<Message>('messages').reverse()) {
-    if (thread && (row.projectId !== projectId || row.todoId || row.origin && row.origin !== 'user')) continue;
     const rowProject:string|undefined=row.projectId ?? (conversationId==='main' ? undefined : projectId);
     if (row.id===excludeId || (excludeId && row.replyTo===excludeId) || row.conversationId!==conversationId || (projectId && rowProject!==projectId) || (todoId && row.todoId!==todoId) ||
         (rowProject && !activeProjects.has(rowProject)) || (row.origin && row.origin!=='user' && row.origin!=='result')) continue;
@@ -394,8 +385,8 @@ function webMessages(context: ExtensionContext, input: Json, canReadFiles?:CanRe
     const checkFiles=!thread && row.origin!=='result' && (!category || category==='file') && !!row.files?.length && canReadFiles;
     const checkRuntime=!thread && row.role==='assistant' && (!category || category==='event' || (row.origin!=='result' && category.startsWith('tool_')));
     if (!matches.length && !checkFiles && !checkRuntime) continue;
-    const source = thread ? webInputFor(store,row,undefined) : searchableWebSource(store,row,conversationId==='main' ? undefined : projectId);
-    if (!source || (thread && !source.directWebInput) || (row.todoId && !matchesTodo(row.todoId,rowProject))) continue;
+    const source = thread ? independentWebSource(store,row,conversationId,projectId) : searchableWebSource(store,row,conversationId==='main' ? undefined : projectId);
+    if (!source || (row.todoId && !matchesTodo(row.todoId,rowProject))) continue;
     // Legacy Web receipts can authenticate old text without granting access
     // to files. Office replies also need their still-live document binding.
     if (checkFiles && source.directWebInput && checkFiles(row)) {

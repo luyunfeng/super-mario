@@ -1,3 +1,4 @@
+import type { Message } from '../packages/protocol/src/index.ts';
 import type { Extension, Json, Store } from '../packages/plugin-sdk/src/index.ts';
 
 type Conversation = { id: string; title: string; projectId?: string; createdAt: string; version?: number; archived?: boolean; creationTitle?: string };
@@ -62,6 +63,27 @@ export function requireWebConversationHistory(store: Pick<Store,'get'>, id: stri
   const row = store.get<Conversation>(collection, id);
   if (row?.id !== id || row.projectId !== projectId) fail(404, '未找到当前 Web 对话');
   requireProject(store, projectId);
+  return row;
+}
+
+export function webInputFor(store:Store,row:Message,workProject:string|undefined) {
+  const source = row.role==='user' ? row : row.role==='assistant' && row.replyTo ? store.get<Message>('messages',row.replyTo) : undefined;
+  if (source?.role==='user' && !source.replyTo && (!source.origin || source.origin==='user') &&
+      (row.role==='user' || source.id===row.replyTo) && source.conversationId===row.conversationId &&
+      (source.projectId ?? workProject)===(row.projectId ?? workProject) && source.todoId===row.todoId &&
+      !store.get('message.routes',source.id) && (source.id===row.id || !store.get('message.routes',row.id))) return source;
+}
+
+export function independentWebSource(store:Store,row:Message,conversationId:string,projectId?:string) {
+  if (row.conversationId!==conversationId || row.projectId!==projectId || row.todoId || row.origin && row.origin!=='user') return;
+  const source=webInputFor(store,row,undefined);
+  return source?.directWebInput ? source : undefined;
+}
+
+export function readWebConversationExport(store:Store,id:string,projectId?:string) {
+  const {title}=requireWebConversationHistory(store,id,projectId);
+  const messages=store.list<Message>('messages').filter(row=>independentWebSource(store,row,'web:'+id,projectId));
+  return {title,messages};
 }
 
 export function webConversationMatches(store: Pick<Store,'get'>, id: string, projectId?: string): boolean {

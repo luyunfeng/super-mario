@@ -1,3 +1,4 @@
+import {conversationExportActive,openConversationExport} from './conversation-export.js';
 import {createAssistantSwitcher} from './assistant-roster.js';
 import {conversationMessageSearch} from './conversation-message-search.js';
 import {copyText} from '../lib/clipboard.js';
@@ -28,6 +29,17 @@ export function createWebConversations({api,store,scope,router}){
     if(threadId===null)return {projectId:scope.get() || undefined};
     if(active() && meta && current?.owner===drafts.owner() && meta.id===threadId)return {threadId,projectId:meta.projectId};
   }});
+  let exportDrawer;
+  const exportButton=button('导出对话',()=>{
+    const stamp=current,row=meta;
+    const isCurrent=()=>valid(stamp) && meta?.id===row?.id && meta?.projectId===row?.projectId;
+    if(!row || !isCurrent() || exportDrawer?.el.open)return;
+    exportDrawer=openConversationExport({api,store,subtitle:row.title,source:{webThreadId:row.id,...(row.projectId && {projectId:row.projectId})},
+      isCurrent,onSourceError:error=>{
+        if(error.status!==410)return false;
+        deleted(stamp.id,stamp.owner);return true;
+      }});
+  });
   const entry=button('独立对话',openList);
   const heading=h('h1',{},'独立对话'),notice=h('p',{role:'status',class:'small'});
   const messages=h('div',{class:'msgs','aria-live':'polite'});
@@ -46,7 +58,7 @@ export function createWebConversations({api,store,scope,router}){
   const stateLabel=h('span',{class:'small muted'});
   const controls=h('div',{class:'row row--wrap'},stateLabel,rename,archive,button('删除对话',openDelete));
   const el=h('div',{class:'chat-code-main',hidden:true,'aria-label':'独立对话内容'},
-    h('div',{class:'chat__top'},h('header',{class:'page__head'},heading,h('div',{class:'page__actions'},button('独立对话',openList),switcher.threadButton,search.button,
+    h('div',{class:'chat__top'},h('header',{class:'page__head'},heading,h('div',{class:'page__actions'},button('独立对话',openList),switcher.threadButton,search.button,exportButton,
       h('a',{class:'btn btn--sm',href:'#chat'},'返回主对话'))),controls,notice,latest,retry,cleanupRetry),scroller,form);
   let pending=false,epoch=0,draftKey=null,renameDrawer,deleteDrawer,listRefresh,lastMetaEvent,changing=false;
   const valid=stamp=>current===stamp && stamp && stamp.owner===drafts.owner() && routeId()===stamp.id && active();
@@ -66,10 +78,13 @@ export function createWebConversations({api,store,scope,router}){
   input.onkeydown=e=>{if(e.key==='Enter' && !e.shiftKey && !e.isComposing){e.preventDefault();form.requestSubmit();}};
 
   function syncSearch(){
-    search.update(meta && valid(current) && {conversationId:'web:'+meta.id,projectId:meta.projectId});
+    const readable=meta && valid(current);
+    search.update(readable && {conversationId:'web:'+meta.id,projectId:meta.projectId});
+    exportButton.hidden=!readable || !conversationExportActive(store);
+    if(exportButton.hidden)exportDrawer?.close();
   }
   function reset(){
-    search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
+    exportButton.hidden=true;exportDrawer?.close();exportDrawer=null;search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
     input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
     submissions.update();switcher.update();
   }
