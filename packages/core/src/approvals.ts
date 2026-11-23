@@ -92,6 +92,8 @@ export function createApprovalService({ store, events, execute, publish, allowed
     edit(id: string, version: number, patch: Partial<Input>): Approval {
       const item = store.transaction(() => {
         const previous = current(id, version);
+        if (previous.kind === 'input' && previous.params.fixedInput === true)
+          throw new ApprovalError('这条审批绑定原始输入，请拒绝后在原话题重新发送', 409);
         if (!patch || typeof patch !== 'object' || Array.isArray(patch) ||
           Object.keys(patch).some(key => !['kind', 'title', 'details', 'params', 'todoId'].includes(key))) {
           throw new ApprovalError('无效的审批修改字段');

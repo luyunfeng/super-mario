@@ -17,9 +17,10 @@ export type GroupReadPage = { items: GroupReadRecord[]; nextBefore: string | nul
 
 export interface MailboxEntry { origin?: InboxOrigin; id: string; version: number; direction: 'inbox' | 'outbox'; scope: BotScope; botId: string; eventKey: string; title: string; text: string; target?: string; sourceMessageId?: string; replyTo?: string; requiresConfirmation: boolean; status: 'pending' | 'ready' | 'processing' | 'completed' | 'rejected' | 'failed' | 'unknown'; resultId?: string; error?: string; createdAt: string; updatedAt: string }
 
-/** Original recipient of a private bot input proposal. Persist separately from editable approval fields. */
+/** Original recipient of a paired bot input proposal. Persist separately from editable approval fields. */
 export interface FeishuAgentInputTarget {
   runId: string; sessionId: string; machineId: string; nativeSessionId?: string; executorId: string; cwd?: string;
   projectId: string; todoId: string; botId: string; appId: string; revision: number;
+  topic?: { grant: string; chatId: string; threadId: string; messageId: string; inputId: string; binding: string };
   owner: { chatId: string; senderId: string };
 }

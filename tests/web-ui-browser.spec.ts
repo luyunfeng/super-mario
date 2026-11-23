@@ -521,6 +521,21 @@ test('审批：先“改一下”再批准，批准的是最新版本；旧版�
   });
 });
 
+test('话题原文审批可展开核对负责会话，可拒绝并保留来源原文', async () => {
+  await withApp(async ({ open, post, server }) => {
+    const { page } = await open('#chat');
+    const approval = await post('/approvals', { kind: 'input', title: '发送合成决定',
+      details: '负责会话：sample-session', params: { fixedInput: true, text: '核对合成样本' } });
+    const card = page.locator('.attn__card', { hasText: '发送合成决定' });
+    await card.locator('summary').click();
+    await expect(card).toContainText('sample-session');
+    await expect(card).toContainText('核对合成样本');
+    await expect(card.getByRole('button', { name: '改一下' })).toHaveCount(0);
+    await card.getByRole('button', { name: '拒绝' }).click();
+    await expect.poll(() => server.app.approvals.list().find(row => row.id === approval.id)?.status).toBe('rejected');
+  });
+});
+
 test('主 Agent 有独立的全局机器人入口，进入向导不发起外部注册', async () => {
   await withApp(async ({ open }) => {
     const { page } = await open('#agent');

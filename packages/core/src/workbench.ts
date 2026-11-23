@@ -749,6 +749,8 @@ export async function createWorkbench(config: AppConfig) {
         || (approval.params.projectId ?? '') !== target.projectId || (approval.params.todoId ?? '') !== target.todoId
         || (['machineId', 'sessionId', 'nativeSessionId', 'executorId'] as const).some(key => approval.params[key] !== target[key]))
         throw new InputError('审批已改变原执行目标，请重新选择会话', 409);
+      if (target.topic && store.get<Message>('messages', target.topic.inputId)?.text !== approval.params.text)
+        throw new InputError('审批输入已偏离话题原文，请从原话题重新提交', 409);
       return inputRun(target.runId, requiredText(approval.params.text, '输入'), `approval:${approval.id}:${approval.version}`, target);
     }
     if (approval.kind === inboxHandlingApprovalKind || store.get('inbox-handling.approvals',approval.id)) return inboxHandling.executeApproved(approval);
@@ -1148,6 +1150,8 @@ export async function createWorkbench(config: AppConfig) {
     if (patch.projectId !== undefined) next.projectId = optionalText(patch.projectId, '项目');
     if (patch.dueAt !== undefined) next.dueAt = dueDate(patch.dueAt);
     if (next.projectId !== todo.projectId) {
+      // A published draft belongs to its original audience. A later move back must not publish a project's draft.
+      if (patch.groupTaskOutcome === undefined) delete next.groupTaskOutcome;
       delete next.responsibleSession;
       delete next.parentTodoId;
     }

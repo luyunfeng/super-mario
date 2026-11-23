@@ -3052,6 +3052,9 @@ test('Web 和飞书询问怎样开工时提供表单说明并保留当前执行�
     assert.match(req.system, /10 分钟后才回原群原消息/);
     assert.match(req.system, /设有主话题群时在该群的新话题承接/);
     assert.match(req.system, /同话题补充归入原待办决定/);
+    assert.match(req.system, /Web「等你处理」请求输入审批/);
+    assert.match(req.system, /只向原负责会话发送该条原文/);
+    assert.match(req.system, /报告工作完成还需要对应的执行结果/);
     assert.match(req.system, /引用任务承接消息或预览发送 \/noreply 取消/);
     assert.match(req.system, /只询问操作方法时不要派发/);
     assert.match(req.system, /收到编号只说明已登记/);

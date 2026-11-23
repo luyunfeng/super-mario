@@ -13,12 +13,14 @@ test('主人登记话题群后在原话题开待办、记决定并收到答复�
   const dir = await mkdtemp(join(tmpdir(), 'mario-topic-flow-'));
   const model: Array<{ messages: Array<{ role: string; content: unknown }> }> = [];
   const realFetch = fetch;
+  let pauseReply: Promise<void> | undefined;
   t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init), url = new URL(request.url);
     assert.equal(url.hostname, '127.0.0.1');
     if (url.port !== '1') return realFetch(request);
     assert.equal(url.pathname, '/offline/chat/completions');
     model.push(await request.json());
+    await pauseReply;
     const frames = [{ role: 'assistant', content: '原话题合成答复-' + model.length }, {}].map((delta, i) =>
       'data: ' + JSON.stringify({ id: 'offline', object: 'chat.completion.chunk', model: 'fixture',
         choices: [{ index: 0, delta, finish_reason: i ? 'stop' : null }] }));
@@ -54,8 +56,8 @@ test('主人登记话题群后在原话题开待办、记决定并收到答复�
         mentions: opts.mention ? [{ key: '@_user_1', id: { open_id: 'ou_bot' }, name: '合成话题助手' }] : [] },
     } }, { needCheck: false });
   }
-  async function api<T>(path: string, body?: unknown) {
-    const reply = await fetch(host.url + '/api/v1/' + path, { method: body ? 'PUT' : 'GET',
+  async function api<T>(path: string, body?: unknown, method = body ? 'PUT' : 'GET') {
+    const reply = await fetch(host.url + '/api/v1/' + path, { method,
       headers: { authorization: 'Bearer fixture', 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
     assert.equal(reply.status, 200);
     return reply.json() as Promise<T>;
@@ -109,6 +111,20 @@ test('主人登记话题群后在原话题开待办、记决定并收到答复�
   const visible = await decisions(todo.id);
   assert.equal(visible.filter(row => row.active && row.text === decision).length, 1);
   assert.ok(visible.some(row => row.text.includes('确认严格模式可跟进')));
+  const project = host.app.projects.create({ name: '仅项目可见的合成名称' });
+  const move = (id: string) => api<Todo>('todos/' + todo.id, { projectId: id }, 'PATCH');
+  await move(project.id);
+  const rejected = 'om_project_scope';
+  await event(rejected, '迁入项目后不可沿用话题决定', { ...threadReply, mention: true });
+  await t.waitFor(() => assert.ok(sent.some(s => s.path.endsWith('/' + rejected + '/reply') && s.body.includes('在 Web 项目中继续'))));
+  const publicReply = sent.find(s => s.path.endsWith('/' + rejected + '/reply'))!;
+  assert.ok(publicReply.inThread);
+  assert.ok(!publicReply.body.includes(project.name));
+  assert.equal(model.length, 3);
+  await move('');
+  await event(rejected, '同一旧消息不可重新解释', { ...threadReply, mention: true });
+  assert.equal((await decisions(todo.id)).filter(d => /迁入项目|重新解释/.test(d.text)).length, 0);
+  assert.equal(sent.filter(s => s.path.endsWith('/' + rejected + '/reply')).length, 1);
   const updated = await host.bots.update(bot.id, { appId: 'cli_7777777777777777', appSecret: 'other-fixture' });
   await pair('om_new_pair', updated.pairingCode!);
   assert.deepEqual((await registry()).items, []);
@@ -131,5 +147,17 @@ test('主人登记话题群后在原话题开待办、记决定并收到答复�
   const resumed = JSON.stringify(model.at(-1));
   assert.ok(resumed.includes('全新配对后另立任务'));
   assert.ok(!resumed.includes('其他话题独有的合成任务'));
+
+  let release!: () => void;
+  pauseReply = new Promise<void>(resolve => { release = resolve; });
+  const late = event('om_late', '在途合成答复', threadReply);
+  try {
+    await t.waitFor(() => assert.equal(model.length, 7));
+    await api('todos/' + fresh.id, { projectId: project.id }, 'PATCH');
+  } finally { pauseReply = undefined; release(); }
+  await late;
+  await event('om_second_follow', '等待另一个话题回复', { thread: 'omt_second', root: 'om_second_root' });
+  await answer('om_second_follow', 8);
+  assert.ok(!sent.some(s => s.path.endsWith('/om_late/reply') && s.body.includes('原话题合成答复-7')));
 
 });

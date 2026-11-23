@@ -64,6 +64,10 @@ test('Web 完成群任务后按预览时限发送原群回报，主人取消与�
   assert.deepEqual(published(), []);
   await receiver.onMessage('/noreply', { ...owner, messageId: 'om_veto', parentId: preview.id });
 
+  const project = host.app.projects.create({ name: '仅项目可见的合成项目名称' });
+  const moved = await make('om_moved', '转移到项目的任务');
+  await api('todos/' + moved.id, { projectId: project.id });
+  await api('todos/' + moved.id, { groupTaskOutcome: '项目范围的合成结论', expectedGroupTaskOutcome: '', completed: true });
   const control = await make('om_control', '核对乙项');
   const approved = '乙项的三个合成样本一致，验收通过。';
   const updateOutcome = (id: string, outcome: string, expected = '', status = 200) => api('todos/' + id,
@@ -89,6 +93,7 @@ test('Web 完成群任务后按预览时限发送原群回报，主人取消与�
   assert.deepEqual(published().map(message => message.context?.replyTo), ['om_control']);
   assert.equal(published()[0].text, approved);
 
+  assert.ok(!sent.some(message => message.text.includes('项目范围的合成结论')));
   await api('feishu/bots/' + bot.id, { groupTaskReportDelayMinutes: 0 });
   const instant = await make('om_immediate', '核对丙项');
   await receiver.onMessage('私聊限定标记X7F', { ...owner, messageId: 'om_private_followup' });
@@ -106,4 +111,6 @@ test('Web 完成群任务后按预览时限发送原群回报，主人取消与�
   await receiver.onMessage('/ai 核对丙项', { ...owner, chatType: 'group', chatId: 'oc_original', messageId: 'om_immediate', mentionedSelf: true });
   assert.deepEqual(published().map(message => message.context?.replyTo), ['om_control', 'om_immediate']);
   assert.equal(previews().length, previewCount);
+  const reverted = await api('todos/' + moved.id, { projectId: '' });
+  assert.equal(reverted.groupTaskOutcome, undefined);
 });

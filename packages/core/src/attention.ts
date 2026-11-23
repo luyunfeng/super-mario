@@ -27,6 +27,7 @@ export interface AttentionItem {
   projectName?: string;
   todoId?: string;
   highRisk?: boolean;
+  editable?: boolean;
   route?: { href: string; label: string };
   actions: AttentionAction[];
 }
@@ -82,6 +83,7 @@ export function collectAttention({ inboxConversations = [], approvals = [], inte
       || /\brm\s+-[a-z]*[rf]|\bdrop\s+(table|database)\b|\bgit\s+(reset\s+--hard|push\s+.*--force)|删除|清空|放宽权限|免审批/i.test(command);
     rows.push({ id: `approval:${item.id}`, type: 'approval', version: item.version,
       title: item.title, context: '等待你批准这次操作',
+      ...(item.kind === 'input' && item.params.fixedInput === true && { editable: false }),
       // Show the actual user-facing payload, not just a proposal's description.
       // Internal relation keys are intentionally not copied into visible details.
       detail: [item.details, ...(['prompt', 'text', 'command', 'cwd', 'doneWhen'] as const).flatMap(key => {
