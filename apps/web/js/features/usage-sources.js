@@ -1,3 +1,4 @@
+import {openGatewayAccounts} from './usage-gateway-accounts.js';
 import {h,replace} from '../lib/dom.js';
 import {Button} from '../ui/kit.js';
 import {confirmDialog,openDrawer} from '../ui/overlay.js';
@@ -125,6 +126,7 @@ export function openUsageSources({api,store}){
         hiddenProviders:[...new Set(hidden.value.split(/[,，]/).map(item=>item.trim()).filter(Boolean))]});draftSettings=undefined;});
     }});
     controls.append(Button({label:'新增用量来源',disabled:busy || settings.sources.length>=settings.limit,onClick:()=>{editor=editSource(api,null,load);}}),
+      Button({label:'网关账户清单',onClick:()=>{editor=openGatewayAccounts(api,store,settings.sources.filter(s=>s.enabled && s.type==='relay'));}}),
       Button({label:'刷新面板',disabled:busy,onClick:()=>{notice.textContent='';return load();}}));
     const sources=settings.sources.map(source=>{
       const path=base+'/'+encodeURIComponent(source.id),s=source.status;

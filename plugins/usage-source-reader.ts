@@ -1,7 +1,14 @@
 export interface UsageSourceConfig {type:'relay'|'relay_key'|'generic';url:string;key?:string}
 type UsageWindow={label:string;windowMinutes:number;usedPercent:number;resetsAt?:string;model?:string};
 type Account={id:string;name:string;provider:string;plan?:string;sampledAt?:string;stale?:boolean;windows:UsageWindow[]};
-export type UsageSourceReadResult={accounts:Account[];seen:{accounts:number;windows:number;listed:number;providers:Record<string,number>;quotaHidden?:boolean;partial?:true}};
+export interface GatewayWindow {
+  kind:string; scope?:string; scopedModel?:string; usedRatio?:number; limit?:number; remaining?:number; resetsAt?:string;
+}
+export interface GatewayAccount {
+  accountId:string; name:string; provider:string; status:string; schedulable:boolean; reason?:string; cooldownUntil?:string;
+  plan?:string; planRaw?:string; planDisplayName?:string; checkedAt?:string; cached:boolean; stale:boolean; windows:GatewayWindow[];
+}
+export type UsageSourceReadResult={accounts:Account[];inventory?:GatewayAccount[];seen:{accounts:number;windows:number;listed:number;providers:Record<string,number>;quotaHidden?:boolean;partial?:true}};
 const errors={bad_config:'用量源地址、类型或密钥无效',unauthorized:'用量源密钥未获认证',forbidden:'用量源拒绝访问',not_found:'用量源接口不存在',
   redirect:'用量源返回重定向，已停止读取',server_error:'用量源服务端出错',bad_response:'用量源返回的数据无效',too_large:'用量源响应超过读取上限',
   unreachable:'无法连接用量源',timeout:'读取用量源超时',aborted:'用量读取已取消'};
@@ -56,6 +63,40 @@ function account(info:Row,entry:Row,mode:UsageSourceConfig['type'],now:string):A
   return {id:str(info.id??info.account_id,128),provider,name,...(plan&&{plan}),sampledAt:!sampled||sampled>now?now:sampled,
     ...(entry.stale===true||!!str(entry.error,1)?{stale:true}:{}),windows:[...windows.values()].map(w=>w.value).sort((a,b)=>a.windowMinutes-b.windowMinutes||(a.model??'').localeCompare(b.model??''))};
 }
+// Inventory preserves the gateway's own vocabulary, including non-time windows such as credits.
+// Compact summaries have fewer fields than full reads and never supply a fresh observation.
+function inventoryAccount(info:Row, entry:Row|undefined, key?:string):GatewayAccount {
+  function field(value:unknown,max:number) {
+    if (key && typeof value==='string' && value.includes(key)) fail('bad_response');
+    return str(value,max);
+  }
+  const head=typeof info.last_error==='string' ? info.last_error.split(':',1)[0]!.trim() : '';
+  const reason=/^[a-z_]{1,32}$/.test(head) ? field(head,32) : undefined;
+  const full=rows(entry?.windows??[]);
+  const summary=!entry || !full.length;
+  const windows:GatewayWindow[]=[];
+  let checkedAt=instant(entry?.checked_at);
+  for(const w of summary ? rows(info.quota_summary??[]) : full){
+    const kind=field(w.kind,64);
+    if(!kind) continue;
+    const scopedModel=field(w.scoped_model,80);
+    const scope=summary ? (scopedModel?'model':'account') : field(w.scope,16);
+    const resetsAt=instant(w.resets_at);
+    windows.push({kind,...(scope&&{scope}),...(scopedModel&&{scopedModel}),...(resetsAt&&{resetsAt}),
+      ...(number(w.used_ratio)&&{usedRatio:w.used_ratio}),...(!summary && number(w.limit)&&{limit:w.limit}),
+      ...(!summary && number(w.remaining)&&{remaining:w.remaining})});
+    const observed=!summary && instant(w.checked_at);
+    if(observed && (!checkedAt || observed>checkedAt)) checkedAt=observed;
+    if(windows.length===32) break;
+  }
+  const plan=field(entry?.plan,40),planRaw=field(entry?.plan_raw,40),planDisplayName=field(entry?.plan_display_name,40);
+  const cooldownUntil=instant(info.cooldown_until);
+  return {accountId:field(info.id,128),name:field(info.name,80),provider:field(info.provider,32).toLowerCase(),
+    status:field(info.status,32).toLowerCase(),schedulable:info.schedulable!==false,...(reason&&{reason}),
+    ...(cooldownUntil&&{cooldownUntil}),...(plan&&{plan}),...(planRaw&&{planRaw}),...(planDisplayName&&{planDisplayName}),
+    ...(checkedAt&&{checkedAt}),cached:entry?.cached===true,stale:!entry || entry.stale===true ||
+      !!str(entry.error,1) || summary && windows.length>0,windows};
+}
 export function normalizeUsageSourceURL(raw:string):string {
   if(typeof raw!=='string'||raw.length>512||/[?#\\\p{Cc}]/u.test(raw)) fail('bad_config');
   let url:URL;try{url=new URL(raw);}catch{fail('bad_config');}
@@ -97,7 +138,7 @@ export async function readUsageSource(config:UsageSourceConfig,signal:AbortSigna
   };
   const distinct=new Set<string>();
   if(config.type==='relay'){
-    const accounts=new Map<string,Row>(),seenCursors=new Set<string>();
+    const inventory=new Map<string,Row>(),samples=new Map<string,Row>(),seenCursors=new Set<string>();
     let next='',scanned=0;
     do{
       let entries:Row[], following='';
@@ -120,8 +161,8 @@ export async function readUsageSource(config:UsageSourceConfig,signal:AbortSigna
       }
       const remaining=2000-scanned;
       for(const info of entries.slice(0,remaining)){
-        const id=str(info.id,512);if(!id||distinct.has(id))continue;
-        distinct.add(id);if(info.status!=='disabled'&&accounts.size<500)accounts.set(id,info);
+        const id=str(info.id,512);
+        if(id && !inventory.has(id))inventory.set(id,info);
       }
       scanned+=entries.length;
       next=following;
@@ -132,14 +173,18 @@ export async function readUsageSource(config:UsageSourceConfig,signal:AbortSigna
       if(!next)break;
       seenCursors.add(next);
     }while(next);
-    const ids=[...accounts.keys()];
+    const ids=[...inventory].filter(([,info])=>info.status!=='disabled').slice(0,500).map(([id])=>id);
     for(let i=0;i<ids.length;i+=100){
       const batch=ids.slice(i,i+100),requested=new Set(batch);
       for(const entry of rows(row(await request('/api/admin/accounts/usage',batch)).accounts)){
-        const id=str(entry.account_id,512);if(requested.delete(id))add(account(accounts.get(id)!,entry,'relay',now));
+        const id=str(entry.account_id,512);
+        if(!requested.delete(id))continue;
+        samples.set(id,entry);
+        add(account(inventory.get(id)!,entry,'relay',now));
       }
     }
-    result.seen.listed=distinct.size;
+    result.inventory=[...inventory].map(([id,info])=>inventoryAccount(info,samples.get(id),config.key));
+    result.seen.listed=inventory.size;
   } else {
     const doc=row(await request(config.type==='relay_key'?'/me/usage':''));
     if(config.type==='relay_key'&&doc.account_quota_shared===false){result.seen.quotaHidden=true;return result;}

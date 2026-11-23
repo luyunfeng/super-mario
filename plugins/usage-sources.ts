@@ -2,19 +2,20 @@ import {createHash,randomUUID} from 'node:crypto';
 import {mkdirSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import type {Extension,ExtensionContext,Store} from '../packages/plugin-sdk/src/index.ts';
-import {createUsageWindowTool,type UsageSourceCoverage} from './usage-source-extension.ts';
-import {normalizeUsageSourceURL,readUsageSource,UsageSourceReaderError,type UsageSourceConfig,type UsageSourceReadResult} from './usage-source-reader.ts';
+import {createUsageWindowTool,createUsageInventoryTool,type UsageInventoryReader,type UsageSourceCoverage} from './usage-source-extension.ts';
+import {normalizeUsageSourceURL,readUsageSource,UsageSourceReaderError,type GatewayAccount,type UsageSourceConfig,type UsageSourceReadResult} from './usage-source-reader.ts';
 
 type Input=Record<string,unknown>;
 type Source={id:string;type:UsageSourceConfig['type'];name:string;url:string;enabled:boolean;revision:number;keyRef?:string};
 type Settings={enabled:boolean;revision:number;pollMinutes:number;hiddenProviders:string[]};
-type Sample={at:string;okAt?:string;error?:string;result?:UsageSourceReadResult};
+type Sample={at:string;okAt?:string;error?:string;result?:Omit<UsageSourceReadResult,'inventory'>};
 const sources='usage.sources',samples='usage.samples',settingsCollection='usage.settings',limit=8;
 function fail(message:string,status=400):never{throw Object.assign(new Error(message),{status});}
 function fields(input:Input,allowed:string[]){if(Object.keys(input).some(k=>!allowed.includes(k)))fail('用量配置包含未知字段');}
 function version(expected:unknown,actual:number){if(expected!==actual)fail('用量设置已变化，请重新加载后再保存',409);}
 function reason(e:unknown){return e instanceof UsageSourceReaderError?e.message:'无法读取用量来源';}
-export function createUsageSources(store:Store,modelWindows?:Parameters<typeof createUsageWindowTool>[0],reader=readUsageSource) {
+export function createUsageSources(store:Store,modelWindows?:Parameters<typeof createUsageWindowTool>[0],reader=readUsageSource,modelInventory?:UsageInventoryReader) {
+  const inventories=new Map<string,{accounts:GatewayAccount[];checkedAt?:string;complete:boolean;error?:string}>();
   let ctx:ExtensionContext|undefined,timer:NodeJS.Timeout|undefined,session=new AbortController();
   const jobs=new Map<string,{controller:AbortController;promise:Promise<void>}>();
   function active(){return ctx??fail('用量来源插件已停用',503);}
@@ -72,8 +73,10 @@ export function createUsageSources(store:Store,modelWindows?:Parameters<typeof c
       store.put(sources,row.id,row);
       if(old && (keyRef!==old.keyRef||row.url!==old.url||row.type!==old.type))store.remove(samples,row.id);
     });}catch(error){if(newKey&&keyRef)rmSync(keyPath(keyRef),{force:true});throw error;}
+    if(!row.enabled || old && (keyRef!==old.keyRef||row.url!==old.url||row.type!==old.type))inventories.delete(row.id);
     if(old?.keyRef && old.keyRef!==keyRef)rmSync(keyPath(old.keyRef),{force:true});
-    stop(row.id);changed();return view();
+    stop(row.id);if(row.enabled && old?.enabled===false)queueMicrotask(poll);
+    changed();return view();
   }
   function settings(input:Input){
     active();fields(input,['revision','enabled','pollMinutes','hiddenProviders']);
@@ -85,13 +88,14 @@ export function createUsageSources(store:Store,modelWindows?:Parameters<typeof c
     const next:Settings={enabled:typeof input.enabled==='boolean'?input.enabled:old.enabled,pollMinutes:typeof input.pollMinutes==='number'?input.pollMinutes:old.pollMinutes,
       hiddenProviders:[...new Set((hidden as string[]).map(x=>x.trim().toLowerCase()))],revision:old.revision+1};
     store.put(settingsCollection,'current',next);
-    if(!next.enabled)for(const id of jobs.keys())stop(id);
+    if(!next.enabled){inventories.clear();for(const id of jobs.keys())stop(id);}
+    else if(!old.enabled)queueMicrotask(poll);
     changed();return view();
   }
   function remove(id:string,input:Input) {
     active();fields(input,['revision']);const row=get(id);version(input.revision,row.revision);
     store.transaction(()=>{store.remove(sources,id);store.remove(samples,id);});
-    stop(id);if(row.keyRef)rmSync(keyPath(row.keyRef),{force:true});
+    inventories.delete(id);stop(id);if(row.keyRef)rmSync(keyPath(row.keyRef),{force:true});
     changed();return view();
   }
   async function read(input:UsageSourceConfig,signal:AbortSignal) {
@@ -110,17 +114,26 @@ export function createUsageSources(store:Store,modelWindows?:Parameters<typeof c
       try{result=await read({type:row.type,url:row.url,key:secret(row.keyRef)},signal);}
       catch(error){
         if(!valid())fail('用量配置已变化，请重新读取',409);
+        if(row.type==='relay')inventories.set(id,{...inventories.get(id)??{accounts:[],complete:false},
+          error:error instanceof UsageSourceReaderError?error.code:'unreachable'});
         const message=reason(error);store.put(samples,id,{...sample(id),at:new Date().toISOString(),error:message});changed();fail(message,502);
       }
       if(!valid())fail('用量配置已变化，请重新读取',409);
-      const at=new Date().toISOString();store.put(samples,id,{at,okAt:at,result});changed();
+      const at=new Date().toISOString();
+      // Inventory includes operational account IDs and never enters the persistent window sample.
+      store.put(samples,id,{at,okAt:at,result:{seen:result.seen,accounts:result.accounts}});
+      if(row.type==='relay' && result.inventory)inventories.set(id,{accounts:result.inventory,complete:!result.seen.partial,checkedAt:at});
+      changed();
     }).finally(()=>{if(jobs.get(id)?.controller===controller)jobs.delete(id);});
     jobs.set(id,{controller,promise});return promise;
   }
   function poll() {
     if(!ctx || !prefs().enabled)return;
     const cutoff=Date.now()-prefs().pollMinutes*60000;
-    for(const row of all())if(row.enabled && !jobs.has(row.id) && Date.parse(sample(row.id)?.at??'1970-01-01')<=cutoff)void pull(row.id).catch(()=>{});
+    for(const row of all()){
+      const coldInventory=row.type==='relay' && !inventories.has(row.id);
+      if(row.enabled && !jobs.has(row.id) && (coldInventory||Date.parse(sample(row.id)?.at??'1970-01-01')<=cutoff))void pull(row.id).catch(()=>{});
+    }
   }
   function windows(){
     active();const {enabled,hiddenProviders}=prefs(),now=Date.now();
@@ -144,6 +157,28 @@ export function createUsageSources(store:Store,modelWindows?:Parameters<typeof c
     accounts.sort((a,b)=>Number(a.stale)-Number(b.stale)||peak(b)-peak(a));
     return {accounts,enabled,hiddenProviders,coverage};
   }
+  function inventory(input:Input={}) {
+    active();fields(input,['sourceId','offset','limit']);
+    const {sourceId,offset=0,limit=50}=input;
+    if(sourceId!==undefined && (typeof sourceId!=='string' || !sourceId.trim() || sourceId.length>128) ||
+      typeof offset!=='number'||!Number.isSafeInteger(offset)||offset<0 ||
+      typeof limit!=='number'||!Number.isSafeInteger(limit)||limit<1||limit>200)fail('账户清单筛选或分页参数无效');
+    const sources=[],accounts:Array<GatewayAccount & {sourceId:string}>=[];
+    let total=0;
+    for(const row of prefs().enabled?all():[]){
+      if(row.type!=='relay' || !row.enabled)continue;
+      const current=inventories.get(row.id),error=current?current.error:'pending';
+      sources.push({id:row.id,name:row.name,...(current?.checkedAt && {checkedAt:current.checkedAt}),
+        ...(error && {error}),listed:current?.accounts.length??0,complete:current?.complete??false});
+      if(sourceId!==undefined && row.id!==sourceId)continue;
+      for(const account of current?.accounts??[]) {
+        if(total>=offset && accounts.length<limit)accounts.push({...structuredClone(account),sourceId:row.id,stale:!!(account.stale||error)});
+        total++;
+      }
+    }
+    const next=offset+accounts.length;
+    return {sources,accounts,total,nextOffset:next<total?next:null};
+  }
   let testing=false;
   async function test(input:Input,signal?:AbortSignal){
     active();fields(input,['id','type','url','key','clearKey','name']);
@@ -163,10 +198,11 @@ export function createUsageSources(store:Store,modelWindows?:Parameters<typeof c
   const extension:Extension={id:'usage-sources',name:'用量来源',capabilities:['usage.sources'],permissions:['contribute:tools','events.publish'],
     navigation:[{id:'sources',label:'用量来源',route:'#agent?usageSources=1'}],activate(context){
       ctx=context;session=new AbortController();
+      if(modelInventory)context.contribute('tools','usage_gateway_accounts',createUsageInventoryTool(modelInventory));
       if(modelWindows)context.contribute('tools','usage_source_windows',createUsageWindowTool(modelWindows));
       timer=setInterval(poll,15000);timer.unref();queueMicrotask(poll);
-      context.defer(()=>{ctx=undefined;session.abort();clearInterval(timer);for(const id of jobs.keys())stop(id);});
+      context.defer(()=>{ctx=undefined;inventories.clear();session.abort();clearInterval(timer);for(const id of jobs.keys())stop(id);});
     }};
-  return {extension,view,windows,test,settings,add:(input:Input)=>save(input),update:(id:string,input:Input)=>save(input,id),remove,
+  return {extension,view,windows,inventory,test,settings,add:(input:Input)=>save(input),update:(id:string,input:Input)=>save(input,id),remove,
     async refresh(id:string){await pull(id);return view();},poll};
 }

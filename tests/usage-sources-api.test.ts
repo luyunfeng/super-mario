@@ -74,3 +74,70 @@ test('用量来源管理在真实 HTTP、SQLite 和本地网关之间保持凭�
   for(const filename of (await readdir(dataDir)).filter(f=>f.startsWith('workbench.sqlite')))
     assert.equal((await readFile(join(dataDir,filename))).includes(Buffer.from(key)),false);
 });
+
+test('账户池清单仅存本次进程，HTTP 与显式授权插件读取同份缓存',async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'gateway-inventory-'));
+  let calls=0,failed=false,partial=false,gate:Promise<void>|undefined,entered:(()=>void)|undefined;
+  const gateway=createServer(async(req,res)=>{
+    calls++;entered?.();await gate;
+    if(failed){res.writeHead(503);res.end();return;}
+    res.setHeader('content-type','application/json');
+    const accounts=[{id:'private-inventory-only',provider:'test',status:'disabled',schedulable:false,last_error:'quarantine:private detail',quota_summary:[{kind:'kiro_bonus'}]},
+      {id:'active-id',provider:'test',status:'active'}];
+    if(req.url?.startsWith('/api/admin/accounts?')){
+      if(req.url.includes('after_id=')){res.writeHead(503);res.end();return;}
+      res.end(JSON.stringify({accounts,...(partial&&{next_after_id:'cursor'})}));
+    }else res.end(JSON.stringify({accounts:[{account_id:'active-id',windows:[{kind:'weekly',used_ratio:0.5}]}]}));
+  });
+  await new Promise<void>(r=>gateway.listen(0,'127.0.0.1',r));
+  const endpoint=gateway.address();assert.ok(endpoint && typeof endpoint==='object');
+  const start=()=>startServer({dataDir,host:'127.0.0.1',port:0,token:'fixture',demo:true});
+  let server=await start();
+  t.after(async()=>{await server.close();await new Promise<void>(r=>gateway.close(()=>r()));await rm(dataDir,{recursive:true,force:true});});
+  const headers={authorization:'Bearer fixture','content-type':'application/json'};
+  const req=async(path:string,method='GET',data?:object,status=200)=>{
+    const r=await fetch(server.url+'/api/v1/usage/'+path,{method,headers,body:data&&JSON.stringify(data)}),v=await r.json();
+    assert.equal(r.status,status,JSON.stringify(v));return v;
+  };
+  const base='gateway-accounts',newSource=await req('sources','POST',{type:'relay',url:'http://127.0.0.1:'+endpoint.port,key:'synthetic-key'},201);
+  const id=newSource.sources[0].id,path='sources/'+id;
+  assert.deepEqual((await req(base)).sources[0],{id,name:'Relay',error:'pending',listed:0,complete:false});
+  assert.equal(calls,0);
+  await req(path+'/refresh','POST',{});
+  const reads=calls,all=await req(base);
+  assert.equal(all.total,2);assert.equal(all.sources[0].complete,true);
+  assert.equal(all.accounts[0].reason,'quarantine');assert.equal(all.accounts[0].windows[0].kind,'kiro_bonus');
+  assert.deepEqual((await req(base+'?limit=1&offset=1')).accounts,[all.accounts[1]]);
+  assert.equal((await req(base+'?sourceId=missing')).total,0);
+  await req(base+'?offset=-1','GET',undefined,400);
+  assert.equal(calls,reads);
+  const host=server.app.plugins;
+  for(const [suffix,permissions,allowed] of [
+    ['explicit',['usage_gateways'],true],['legacy',undefined,false],['wildcard',['*'],false],['service',['service.use:usage.gateway_accounts'],false]
+  ] as const){
+    let read:(()=>Promise<unknown>)|undefined;
+    const pluginId='test-inventory-'+suffix;
+    host.register({id:pluginId,name:pluginId,capabilities:[],permissions:permissions?[...permissions]:undefined,activate(ctx){
+      read=()=>ctx.use('usage.gateway_accounts',{limit:1});
+    }});
+    await host.setEnabled(pluginId,true);assert.ok(read);
+    if(allowed)assert.deepEqual(await read(),await req(base+'?limit=1'));
+    else await assert.rejects(read,/usage_gateways/);
+    await host.setEnabled(pluginId,false);await assert.rejects(read,/closed/);
+  }
+  assert.equal(calls,reads);
+  partial=true;await req(path+'/refresh','POST',{});assert.equal((await req(base)).sources[0].complete,false);
+  failed=true;await req(path+'/refresh','POST',{},502);
+  const stale=await req(base);assert.equal(stale.sources[0].error,'server_error');assert.equal(stale.total,2);assert.ok(stale.accounts.every((a:{stale:boolean})=>a.stale));
+  await server.close();failed=false;partial=false;
+  let release!:()=>void;gate=new Promise<void>(r=>{release=r;});const requested=new Promise<void>(r=>{entered=r;});
+  server=await start();await requested;
+  try {const cold=await req(base);assert.equal(cold.sources[0].error,'pending');assert.equal(cold.total,0);}
+  finally {gate=undefined;release();}
+  await t.waitFor(async()=>assert.equal((await req(base)).total,2));
+  const updated=await req(path,'PUT',{revision:1,key:'synthetic-replacement'});assert.equal((await req(base)).sources[0].error,'pending');
+  await req(path+'/refresh','POST',{});await req(path,'PUT',{revision:updated.sources[0].revision,enabled:false});
+  assert.deepEqual((await req(base)).accounts,[]);assert.deepEqual((await req(base)).sources,[]);
+  for(const name of (await readdir(dataDir)).filter(f=>f.startsWith('workbench.sqlite')))
+    assert.equal((await readFile(join(dataDir,name))).includes(Buffer.from('private-inventory-only')),false);
+});

@@ -88,7 +88,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput, currentAgentReplyId, type OfficeFileOrigin } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage, readNativeShareMessages } from './native-conversation-export.ts';
-import { createUsageSources, type UsageWindowCache, feishuMessageReactionsExtension, type FeishuReactionReader, feishuChatPinsExtension, type FeishuPinReader, type FeishuPinOriginalReader, type FeishuPinTopicReader, feishuEditHistoryExtension, type FeishuHistoryReader, createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, createConversationSharing, createWorkspaceBoard, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, searchKnowledgeCommentPeople, verifyKnowledgeCommentActor, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
+import { createUsageSources, type UsageWindowCache, type UsageInventoryPage, type UsageInventoryReader, feishuMessageReactionsExtension, type FeishuReactionReader, feishuChatPinsExtension, type FeishuPinReader, type FeishuPinOriginalReader, type FeishuPinTopicReader, feishuEditHistoryExtension, type FeishuHistoryReader, createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, readingFonts, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, assistantProfile, projectInstructions, createConversationSharing, createWorkspaceBoard, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, searchKnowledgeCommentPeople, verifyKnowledgeCommentActor, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
@@ -152,7 +152,8 @@ export async function createWorkbench(config: AppConfig) {
   let replyToInboxSource: ((source: InboxHandlingSource, text: string, key: string) => Promise<Json>) | undefined;
   const background = createBackground({ store, events, effects, propose: input => approvals.propose(input) });
   const briefing = createBriefingSettings(store, background.schedules);
-  const plugins = new PluginHost({ store, events, contributions, dataDir: config.dataDir, background: background.host });
+  const plugins = new PluginHost({ store, events, contributions, dataDir: config.dataDir, background: background.host,
+    usageGatewayAccounts:input=>usageSources.inventory(input) });
   let machines: MachineClient | undefined;
   const projectFolders = createProjectFolders(() => machines);
   let replyToFeishu: ((chatId: string, text: string, key: string) => Promise<void>) | undefined;
@@ -506,7 +507,11 @@ export async function createWorkbench(config: AppConfig) {
     return feishuHistoryReader(id);
   }));
   plugins.register(createStartPage(() => plugins.list()));
-  const usageSources=createUsageSources(store,readUsageSourceWindows);
+  const usageSources=createUsageSources(store,readUsageSourceWindows,undefined,readUsageInventory);
+  function readUsageInventory(query:Parameters<UsageInventoryReader>[0]):UsageInventoryPage {
+    ownerReadInput();
+    return usageSources.inventory(query);
+  }
   function readUsageSourceWindows():UsageWindowCache {
     ownerReadInput();
     return usageSources.windows();

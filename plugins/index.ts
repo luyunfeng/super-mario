@@ -883,4 +883,4 @@ export {feishuMessageReactionsExtension,type FeishuReactionReader} from './feish
 export {feishuChatPinsExtension,type FeishuPinReader,type FeishuPinOriginalReader,type FeishuPinTopicReader} from './feishu-chat-pins.ts';
 
 export {createUsageSources} from './usage-sources.ts';
-export type {UsageWindowCache} from './usage-source-extension.ts';
+export type {UsageWindowCache,UsageInventoryPage,UsageInventoryReader} from './usage-source-extension.ts';

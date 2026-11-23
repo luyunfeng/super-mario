@@ -59,7 +59,7 @@ export function createContributions(): Contributions {
 }
 
 type Entry = { extension: Extension; config: JsonObject; info: PluginInfo; dispose?: () => Promise<void> };
-type HostOptions = { store: Store; events: EventBus; contributions: Contributions; dataDir: string; background?: BackgroundHost };
+type HostOptions = { store: Store; events: EventBus; contributions: Contributions; dataDir: string; usageGatewayAccounts?:(input:Record<string,unknown>)=>unknown; background?: BackgroundHost };
 const settingsCollection = 'core.plugin-settings';
 
 export class PluginHost {
@@ -213,10 +213,13 @@ export class PluginHost {
           catch (error) { registered(); throw error; }
         } else if (kind === 'services') {
           const service = value as ContributionMap['services']; permission(`service.provide:${service.name}`);
+          if(service.name==='usage.gateway_accounts') throw new Error('Reserved host operation');
           if (!service.name.startsWith(entry.info.id + '.') || service.version !== 1) throw new Error('Service name must belong to its provider and use version 1');
           if (this.options.contributions.list('services').some(item => item.value.name === service.name)) throw new Error('Service already provided');
         } else if (kind === 'service_wrappers') {
-          const wrapper = value as ContributionMap['service_wrappers']; permission(`service.wrap:${wrapper.name}`); requireDependency(wrapper.name); validateInvocationOptions(wrapper);
+          const wrapper = value as ContributionMap['service_wrappers'];
+          if(wrapper.name==='usage.gateway_accounts') throw new Error('Reserved host operation');
+          permission(`service.wrap:${wrapper.name}`); requireDependency(wrapper.name); validateInvocationOptions(wrapper);
         } else if (kind === 'hooks') {
           const hook = value as ContributionMap['hooks']; permission(`hook:${hook.name}`); validateInvocationOptions(hook);
           if (!['work.dispatch', 'channel.send', 'knowledge.put'].includes(hook.name) || !['before', 'after'].includes(hook.phase)) throw new Error('Unknown hook name or phase');
@@ -265,7 +268,16 @@ export class PluginHost {
       ...(this.options.background ? this.options.background.context(entry.info.id, name => { assertLive(); permission(name); }) : {}),
       hook: (name, phase, handler, options = {}) => contributions.add('hooks', `${entry.info.id}:hook:${++this.sequence}`, { name, phase, handler, ...options }),
       provide: (name, handler) => contributions.add('services', `${entry.info.id}:service:${name}`, { name, version: 1, handler }),
-      use: async (name, input) => { assertLive(); permission(`service.use:${name}`); requireDependency(name); return this.invocations.use(name, name.startsWith('core.') && input && typeof input === 'object' && !Array.isArray(input) ? { ...input, __owner: entry.info.id } : input); },
+      use: async (name, input) => { assertLive();
+        if(name==='usage.gateway_accounts'){
+          // This private account inventory must be granted explicitly, including for legacy SDK callers.
+          if(!entry.extension.permissions?.includes('usage_gateways')) throw new Error('Plugin requires usage_gateways');
+          if(!this.options.usageGatewayAccounts) throw new Error('Gateway account inventory unavailable');
+          if(!input || typeof input!=='object' || Array.isArray(input)) throw new Error('Invalid inventory query');
+          const result=this.options.usageGatewayAccounts(input);
+          assertJson(result);return result;
+        }
+        permission(`service.use:${name}`); requireDependency(name); return this.invocations.use(name, name.startsWith('core.') && input && typeof input === 'object' && !Array.isArray(input) ? { ...input, __owner: entry.info.id } : input); },
       wrap: (name, handler, options = {}) => contributions.add('service_wrappers', `${entry.info.id}:wrap:${++this.sequence}`, { name, handler, ...options }),
       contribute: (kind, id, value) => { contributions.add(kind, id, value); },
       onEvent: listener => { events.subscribe(listener); }, defer: dispose => { own(dispose); },

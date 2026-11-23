@@ -97,3 +97,32 @@ test('generic 可原样回读工作台 camelCase 用量结果，并保留采样�
   const url=await local(t,(_req,res)=>res.end(JSON.stringify({accounts:[original]})));
   assert.deepEqual((await readUsageSource({type:'generic',url},signal)).accounts,[original]);
 });
+test('库存按原清单顺序保留停用账号、未回执和余额；紧凑摘要只标旧，禁止新增字段或错误原文外传',async t=>{
+  const secret='sensitive-fixture-key';let echo=false;
+  const url=await local(t,(req,res)=>{
+    if(req.method==='POST'){
+      res.end(JSON.stringify({accounts:[
+        {account_id:'active',cached:true,plan:'team',plan_raw:'t',plan_display_name:'Team',checked_at:'2020-01-01T01:00:00Z',
+          windows:[{kind:'credits',limit:100,remaining:0,checked_at:'2020-01-01T02:00:00Z',token:secret},
+            {kind:'vendor_bonus',scope:'model',scoped_model:echo?secret:'custom',used_ratio:0}]},
+        {account_id:'empty',windows:[]},{account_id:'outside',plan:secret}]}));
+    }else res.end(JSON.stringify({accounts:[
+      {id:'disabled',name:'example',provider:'X',status:'disabled',schedulable:false,email:secret,
+        last_error:'rate_limited: '+secret,cooldown_until:'2020-01-01T08:00:00+08:00',quota_summary:[{kind:'bonus',scoped_model:'x',used_ratio:0,remaining:999,checked_at:'2020-01-01T02:00:00Z'}]},
+      {id:'active',provider:'X',status:'ready',last_error:'free text contains '+secret},
+      {id:'empty',quota_summary:[{kind:'day',used_ratio:.1}]},{id:'missing'}]}));
+  });
+  const config={type:'relay' as const,url,key:secret};
+  const result=await readUsageSource(config,signal);
+  assert.deepEqual(result.accounts,[]);assert.equal(result.seen.listed,4);
+  const inventory=result.inventory!;
+  assert.deepEqual(inventory.map(a=>a.accountId),['disabled','active','empty','missing']);
+  assert.deepEqual(inventory[0],{accountId:'disabled',name:'example',provider:'x',status:'disabled',schedulable:false,
+    reason:'rate_limited',cooldownUntil:'2020-01-01T00:00:00.000Z',cached:false,stale:true,windows:[{kind:'bonus',scope:'model',scopedModel:'x',usedRatio:0}]});
+  assert.deepEqual(inventory[1],{accountId:'active',name:'',provider:'x',status:'ready',schedulable:true,cached:true,stale:false,
+    checkedAt:'2020-01-01T02:00:00.000Z',plan:'team',planRaw:'t',planDisplayName:'Team',windows:[
+      {kind:'credits',limit:100,remaining:0},{kind:'vendor_bonus',scope:'model',scopedModel:'custom',usedRatio:0}]});
+  assert.equal(inventory[2]?.stale,true);assert.equal(inventory[2]?.windows[0]?.scope,'account');assert.equal(inventory[3]?.stale,true);
+  assert.ok(!JSON.stringify(result).includes(secret));echo=true;
+  await assert.rejects(readUsageSource(config,signal),{code:'bad_response'});
+});

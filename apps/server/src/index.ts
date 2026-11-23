@@ -147,6 +147,15 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       if (path.startsWith('/api/')) {
         if (!authorized(req, url)) throw new InputError('访问令牌无效', 401);
         const method = req.method;
+        if(path==='/api/v1/usage/gateway-accounts' && method==='GET'){
+          const query:Record<string,unknown>={};
+          for(const [name,value] of url.searchParams){
+            if(name==='token')continue;
+            if(!['sourceId','offset','limit'].includes(name)||Object.hasOwn(query,name))throw new InputError('账户清单筛选参数无效');
+            query[name]=name==='sourceId'?value:/^\d+$/.test(value)?Number(value):NaN;
+          }
+          return json(res,200,app.usageSources.inventory(query));
+        }
         if(path==='/api/v1/usage/windows' && method==='GET')return json(res,200,app.usageSources.windows());
         const usage=path.match(/^\/api\/v1\/usage\/sources(?:\/([^/]+)(\/refresh)?)?$/);
         if(usage){

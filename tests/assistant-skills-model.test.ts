@@ -4898,21 +4898,35 @@ test('Web 和飞书答复离线备份问题时区分校验与实际恢复', asyn
 test('Web 与配对飞书私聊读取订阅额度缓存，项目没有账户池工具',async t=>{
   let adapter!:FeishuOptions;
   const sent:string[]=[];
+  const inventoryAnswer='合成停用账户已停用，清单没有它的剩余额度。';
   const answer='合成账户的五小时窗口已用 73%。';
   const {server,api,ask}=await fixture(t,req=>{
     if(req.lastRole==='user'){
       if(JSON.stringify(req.content).includes('项目查看')){
         assert.ok(!req.tools.includes('usage_source_windows'));
+        assert.ok(!req.tools.includes('usage_gateway_accounts'));
         return {role:'assistant',content:'项目未获得读取账户池的工具。'};
+      }
+      if(JSON.stringify(req.content).includes('停用账户')){
+        assert.ok(req.tools.includes('usage_gateway_accounts'));
+        assert.match(req.system,/不能把缺失的 remaining 或 limit 当作零/);
+        return call('usage_gateway_accounts',{},'inventory');
       }
       assert.ok(req.tools.includes('usage_source_windows'));
       assert.match(req.system,/多个窗口不能相加/);
       assert.match(req.system,/空列表、停用或缺少样本不能解释为零用量/);
       return call('usage_source_windows',{provider:'sample'},'read-windows');
     }
-    assert.equal(req.callId,'read-windows');
     const text=typeof req.content==='string'?req.content:(req.content as {text:string}[])[0].text;
     const result=JSON.parse(text);
+    if(req.callId==='inventory'){
+      assert.equal(result.total,2);
+      assert.equal(result.sources[0].complete,true);
+      assert.equal(result.accounts.find((a:{status:string})=>a.status==='disabled')?.windows[0].remaining,null);
+      assert.ok(!text.includes('fixture-secret-detail'));
+      return {role:'assistant',content:inventoryAnswer};
+    }
+    assert.equal(req.callId,'read-windows');
     assert.equal(result.enabled,true);
     assert.equal(result.accounts.length,1);
     assert.equal(result.accounts[0].windows[0].usedPercent,73);
@@ -4929,13 +4943,17 @@ test('Web 与配对飞书私聊读取订阅额度缓存，项目没有账户池�
     const gateway=createServer((_req,res)=>{
       reads++;
       res.setHeader('content-type','application/json');
-      res.end(JSON.stringify({accounts:[{id:'unpublished',name:'合成账户',provider:'sample',
-        windows:[{label:'5h',window_minutes:300,used_percent:73}]}]}));
+      const response=_req.method==='GET'?{accounts:[
+        {id:'unpublished',name:'合成账户',provider:'sample',status:'active'},
+        {id:'disabled',name:'合成停用账户',provider:'sample',status:'disabled',schedulable:false,
+          last_error:'disabled:fixture-secret-detail',quota_summary:[{kind:'credits'}]},
+      ]}:{accounts:[{account_id:'unpublished',windows:[{kind:'five_hour',used_ratio:.73}]}]};
+      res.end(JSON.stringify(response));
     });
     await new Promise<void>(done=>gateway.listen(0,'127.0.0.1',done));
     t.after(()=>new Promise<void>(done=>{gateway.closeAllConnections();gateway.close(()=>done());}));
     const address=gateway.address();assert.ok(address && typeof address==='object');
-    const config=await api('/usage/sources',{name:'合成网关',type:'generic',url:'http://127.0.0.1:'+address.port+'/windows'});
+    const config=await api('/usage/sources',{name:'合成网关',type:'relay',key:'synthetic-relay-key',url:'http://127.0.0.1:'+address.port});
     await api('/usage/sources/'+config.sources[0].id+'/refresh',{});
     const readsBeforeQueries=reads;assert.ok(readsBeforeQueries>0);
     assert.equal(await ask('合成订阅账户池的五小时额度用掉多少？'),answer);
@@ -4944,6 +4962,9 @@ test('Web 与配对飞书私聊读取订阅额度缓存，项目没有账户池�
     await adapter.onMessage(bot.pairingCode,{...owner,messageId:'usage-pair'});
     await adapter.onMessage('查一下订阅额度缓存',{...owner,messageId:'usage-read'});
     await t.waitFor(()=>assert.ok(sent.includes(answer)));
+    assert.equal(await ask('有没有停用账户，还剩多少额度？'),inventoryAnswer);
+    await adapter.onMessage('帮我看网关的停用账户',{...owner,messageId:'inventory-read'});
+    await t.waitFor(()=>assert.ok(sent.includes(inventoryAnswer)));
     const project=await api('/projects',{name:'合成项目'});
     assert.equal(await ask('项目查看账户池','/projects/'+project.id+'/messages'),'项目未获得读取账户池的工具。');
     assert.equal(reads,readsBeforeQueries);
