@@ -24,9 +24,12 @@ export function readRunBlockers(store: Pick<Store, 'get' | 'list'>, asOf?: numbe
         const { id, title, kind, createdAt, version } = card;
         const questions = includeRecommendations && kind === 'question' ? card.questions?.flatMap(q => {
           const option = q.options.find(item => item.label === q.recommend);
-          return option ? [{question:q.question, recommend:option.label, ...(option.description && {reason:option.description})}] : [];
+          return option ? [{question:q.question, recommend:option.label, ...(option.description && {reason:option.description}),
+            ...(card.decisionDeadlineAt && {alternatives:q.options.filter(item => item.label !== option.label)})}] : [];
         }) : undefined;
-        add(card.runId, card.projectId, undefined, { id, title, kind, createdAt, version, ...(questions?.length && {questions}), href: '#chat?interaction=' + encodeURIComponent(id) }, card.decisionDeadlineAt ? card : undefined);
+        add(card.runId, card.projectId, undefined, { id, title, kind, createdAt, version,
+          ...(includeRecommendations && card.decisionDeadlineAt && {decisionContext:card.body, decisionDeadlineAt:card.decisionDeadlineAt, reversible:card.reversible, deadlineRemindedAt:card.deadlineRemindedAt}),
+          ...(questions?.length && {questions}), href: '#chat?interaction=' + encodeURIComponent(id) }, card.decisionDeadlineAt ? card : undefined);
       }
       for (const approval of store.list<Approval>('approvals').sort((a, b) => (b.updatedAt ?? b.createdAt ?? '').localeCompare(a.updatedAt ?? a.createdAt ?? ''))) {
         if (approval.status !== 'pending' || !approval.params) continue;

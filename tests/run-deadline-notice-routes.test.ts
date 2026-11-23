@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { startAgentNode } from '../apps/agent-node/src/index.ts';
+import { selectedAgentStatus } from '../apps/server/src/feishu-agent-card.ts';
 import { startServer } from '../apps/server/src/index.ts';
 import type { Message, Run } from '../packages/protocol/src/index.ts';
 import type { Card } from '../packages/core/src/interactions.ts';
@@ -35,7 +36,7 @@ test('执行问题截止继续阻塞，Web 与已配对私聊各自提醒一次�
     await t.waitFor(()=>assert.ok(app.store.get<Run>('runs',run.id)?.sessionId),{timeout:10000});
     const res=await fetch(server.url+'/api/v1/interactions',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
       body:JSON.stringify({kind:'question',runId:run.id,title,body:'请核对当前执行',deadline:'2m',reversible:false,
-        questions:[{question:'使用哪份清单？',recommend:'甲',options:[{label:'甲'},{label:'乙'}]}]})});
+        questions:[{question:'使用哪份清单？',recommend:'甲',options:[{label:'甲'},{label:'乙',description:'先核对明细'}]}]})});
     const raw=await res.text();assert.equal(res.status,201,raw);return JSON.parse(raw) as Card;
   }
   function expire(card:Card) {
@@ -52,6 +53,15 @@ test('执行问题截止继续阻塞，Web 与已配对私聊各自提醒一次�
   assert.equal(app.store.get<Message>('messages',noticeId)?.replyTo,webSource.id);
   assert.equal(app.runObservations(web.runId!).blockedBy[0]?.id,web.id);
   assert.equal(waitingRunQuestion(app.store,web.id)?.run.id,web.runId);
+  const detail=app.runObservations(web.runId!).blockedBy[0]!;
+  assert.equal(detail.decisionContext,'请核对当前执行');
+  assert.equal(detail.reversible,false);
+  assert.ok(detail.deadlineRemindedAt);
+  assert.deepEqual(detail.questions?.[0]?.alternatives,[{label:'乙',description:'先核对明细'}]);
+  const summary=selectedAgentStatus(app.store,app.store.get<Run>('runs',web.runId!)!).text;
+  assert.match(summary,/已过决定截止时间.*仍需你亲自回答/);
+  assert.match(summary,/乙 · 先核对明细/);
+  assert.equal(app.runObservations(web.runId!,false).blockedBy[0]?.questions,undefined);
   assert.deepEqual(inputs,[]);
   const former = app.store.get<Run>('runs',web.runId!)!;
   app.store.put('runs',former.id,{...former,sessionId:randomUUID()});

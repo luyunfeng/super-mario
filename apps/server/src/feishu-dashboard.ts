@@ -351,7 +351,7 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
     ...(view === 'questions' && { questionRows:questions.slice(page * pageSize, (page + 1) * pageSize).map(q => ({id:q.id,version:q.version})) }) };
 }
 
-function deadlineInfo(question: Card) {
+export function deadlineInfo(question: Pick<Card,'decisionDeadlineAt'|'reversible'|'deadlineRemindedAt'|'wait'>) {
   const deadline = new Date(question.decisionDeadlineAt!);
   if (!Number.isFinite(deadline.getTime())) return '';
   const time = deadline.toLocaleString('zh-CN', {timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}) + '（北京时间）';

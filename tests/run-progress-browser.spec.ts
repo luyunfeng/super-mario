@@ -113,14 +113,15 @@ test('等待你仅列真实阻塞入口；waiting 不表示已批准；迟到切
   await go(page, 'one');
   await reply(page, 'one', { progress: progress('waiting'), blockedBy: [
     { id: 'question', kind: 'question', title: '请确认工作目录', version: 1, createdAt: observedAt, href: '#chat?interaction=question',
-      questions:[{question:'使用哪个目录？', recommend:'样例目录', reason:'已准备示例配置。'}, {question:'如何命名？',recommend:'按日期'}] },
+      decisionDeadlineAt:'2026-11-24T04:00:00Z', reversible:false,
+      questions:[{question:'使用哪个目录？', recommend:'样例目录', reason:'已准备示例配置。', alternatives:[{label:'空目录',description:'从头配置'}]}, {question:'如何命名？',recommend:'按日期'}] },
     { id: 'permission', kind: 'permission', title: '允许写入吗', version: 2, createdAt: observedAt, href: '#chat' },
   ] });
   const blockers = page.locator('[data-run-blockers="one"]');
   await expect(blockers.getByRole('link')).toHaveCount(2);
   await expect(blockers.getByRole('link').first()).toHaveAttribute('href', '#chat?interaction=question');
   const original = blockers.getByRole('listitem').first();
-  for (const text of ['使用哪个目录？','推荐选项：样例目录','理由：已准备示例配置。','推荐选项：按日期']) await expect(original).toContainText(text);
+  for (const text of ['决定截止时间','只提醒一次','空目录 · 从头配置','使用哪个目录？','推荐选项：样例目录','理由：已准备示例配置。','推荐选项：按日期']) await expect(original).toContainText(text);
   await expect(blockers.getByRole('listitem').last()).not.toContainText('推荐选项');
   await expect(blockers).not.toContainText('已批准');
   await page.evaluate(() => { const t = (window as any).progressTest; t.state.approvals = [{ id: 'new', status: 'pending' }]; t.update(); });

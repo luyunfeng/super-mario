@@ -3,6 +3,7 @@ import type { Project, Run, Todo } from '../../../packages/protocol/src/index.ts
 import { executionProgress } from '../../../packages/core/src/execution-progress.ts';
 import { readRunBlockers } from '../../../packages/core/src/run-blockers.ts';
 import { publicText } from '../../../plugins/agent-progress-card.ts';
+import { deadlineInfo } from './feishu-dashboard.ts';
 import { cardButtons, cardDocument, cardPlain, cardWebBase } from './feishu-cards.ts';
 import type { SessionList } from './feishu-session-card.ts';
 
@@ -119,9 +120,12 @@ export function selectedAgentStatus(store: Pick<Store, 'get' | 'list'>, run: Run
   let section = [...lines];
   for (const item of pending.slice(0,5)) {
     const block = ['• ' + (types[item.kind] ?? '决定') + ' · ' + line(item.title,120)];
+    if (item.decisionContext) block.push(line(item.decisionContext,220));
+    if (item.decisionDeadlineAt) block.push(deadlineInfo(item));
     for (const q of item.questions ?? []) {
       block.push(line(q.question,80), '推荐选项：' + line(q.recommend,60));
       if (q.reason) block.push('理由：' + line(q.reason,100));
+      for (const option of q.alternatives ?? []) block.push(line(option.label,60) + (option.description ? ' · ' + line(option.description,100) : ''));
     }
     lines.push(...block);
     section.push(...block);

@@ -11,6 +11,7 @@ import { openTaskClosure, refreshTaskClosure } from './task-closure.js';
 import { compareRuns, openWorktreeHistory, renameWorktree, openRetainedBranch, openWorktreeStatus } from './run-comparison.js';
 import { createLiveTerminals } from './live-terminals.js';
 
+import { questionDeadlineText } from './question-answers.js';
 import { completionTimingView } from './run-completion.js';
 
 const PLAN_STATUS = { pending: ['待确认', 'warn'], running: ['启动中', 'info'], started: ['已启动', 'ok'], rejected: ['已拒绝', ''], partial: ['部分启动', 'warn'], unknown: ['结果未知', 'danger'] };
@@ -58,8 +59,11 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
           : observations.blockedBy.length ? h('ul', null, observations.blockedBy.map(item => h('li', null,
             h('a', { href: /^#chat\?(interaction|approval)=[A-Za-z0-9_-]+$/.test(item.href) ? item.href : '#chat' }, item.title),
             h('span', { class: 'small muted' }, ` · ${formatDate(item.createdAt, true)}`),
+            item.decisionContext && h('div', { class: 'small' }, item.decisionContext),
+            item.decisionDeadlineAt && h('div', { class: 'small' }, questionDeadlineText(item)),
             item.questions?.map(q => h('div', { class: 'small' }, h('strong', null, q.question),
-              h('div', null, '推荐选项：' + q.recommend), q.reason && h('div', { class: 'muted' }, '理由：' + q.reason))))))
+              h('div', null, '推荐选项：' + q.recommend), q.reason && h('div', { class: 'muted' }, '理由：' + q.reason),
+              q.alternatives?.map(option => h('div', { class: 'muted' }, option.label + (option.description ? ' · ' + option.description : ''))))))))
             : h('p', { class: 'small muted' }, '没有待你处理的阻塞项。'));
   }
 
