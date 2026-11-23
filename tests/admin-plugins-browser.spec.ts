@@ -66,6 +66,14 @@ test('管理员按名称和状态诊断本地插件，普通凭据不可查清�
   await search.fill('SERVICE.PROVIDE:fixture-ready.count');
   await expect(panel.locator('summary')).toHaveCount(1);
   await expect(panel.locator('summary')).toContainText('合成资料整理');
+  await search.fill('fixture-provider');
+  const provider=panel.locator('details').filter({has:page.locator('summary',{hasText:'合成资料来源'})});
+  await provider.locator('summary').click();
+  await expect(provider.getByText('直接依赖此插件',{exact:true}).locator('+ dd')).toHaveText('fixture-ready');
+  await search.fill('fixture-absent');
+  await status.selectOption('waiting');
+  await expect(panel.locator('summary')).toHaveCount(1);
+  await expect(panel.locator('summary')).toContainText('合成资料等待');
   await search.fill('合成资料');
   await status.selectOption('active');
   const ready=panel.locator('details').filter({has:page.locator('summary',{hasText:'合成资料整理'})});

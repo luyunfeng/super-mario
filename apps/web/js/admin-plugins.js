@@ -8,7 +8,7 @@ const listText=items=>items.length?items.join('、'):'无';
 export function createAdminPlugins({request,current,checkSession}){
   const life=new AbortController();
   const filters=h('div',{class:'stack',hidden:true}),message=h('p',{class:'small muted'}),list=h('div',{class:'stack'});
-  const search=h('input',{type:'search',class:'input',placeholder:'名称、ID、能力或权限'});
+  const search=h('input',{type:'search',class:'input',placeholder:'名称、ID、能力、权限或依赖'});
   const status=h('select',{class:'select'},h('option',{value:''},'全部状态'),
     ['active','disabled','waiting','failed'].map(value=>h('option',{value},statuses[value])));
   const read=button('查看插件',load);
@@ -67,7 +67,7 @@ export function createAdminPlugins({request,current,checkSession}){
     stopReports();
     const query=search.value.trim().toLowerCase();
     const results=rows.filter(p=>(!status.value || p.status===status.value) &&
-      [p.id,p.name,...p.capabilities,...(p.permissions ?? [])].some(value=>value.toLowerCase().includes(query)));
+      [p.id,p.name,...p.capabilities,...(p.permissions ?? []),...p.dependencies.map(dep=>dep.id)].some(value=>value.toLowerCase().includes(query)));
     message.textContent=results.length?'显示 '+results.length+' / '+rows.length+' 个插件。':
       rows.length?'没有符合条件的插件。':'尚未登记插件。';
     replace(list,results.map(p=>{
@@ -77,6 +77,7 @@ export function createAdminPlugins({request,current,checkSession}){
           ['配置开关',p.enabled?'已启用':'已停用'],['能力',listText(p.capabilities)],
           ['权限',p.permissions===null?'宿主默认':p.permissions.length?listText(p.permissions):'无显式授权'],
           ['依赖',listText(p.dependencies.map(dep=>dep.id+'（'+(statuses[dep.status] ?? dep.status)+'）'))],
+          ['直接依赖此插件',listText(rows.filter(other=>other.dependencies.some(dep=>dep.id===p.id)).map(other=>other.id))],
           ...(p.reason?[['原因',p.reason]]:[]),
         ].map(([label,text])=>[h('dt',{},label),h('dd',{},text)])));
       const resetMetrics=attachMetrics(detail,p.id);
