@@ -78,6 +78,20 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       if (path.startsWith('/api/')) {
         if (!authorized(req, url)) throw new InputError('访问令牌无效', 401);
         const method = req.method;
+        if (path === '/api/v1/conversation-status' && method === 'POST') {
+          if (!app.plugins.list().some(p => p.id === 'conversation-search' && p.status === 'active')) throw new InputError('对话历史搜索插件已停用', 503);
+          const input = await body(req, 2048);
+          if (Object.keys(input).some(k => !['target', 'projectId', 'todoId'].includes(k)) || !['main', 'project'].includes(String(input.target)))
+            throw new InputError('会话状态请求无效');
+          const projectId = input.projectId === undefined ? undefined : requiredText(input.projectId, '项目');
+          const todoId = input.todoId === undefined ? undefined : requiredText(input.todoId, '待办');
+          if (input.target === 'project' && !projectId) throw new InputError('缺少项目');
+          if (projectId && !app.projects.list().some(p => p.id === projectId && !p.archivedAt)) throw new InputError('项目不存在或已归档', 404);
+          if (todoId) checkTodoScope(app, todoId, { expectedProjectId: projectId ?? null });
+          const conversationId = input.target === 'project' ? `project:${projectId}:work` : 'main';
+          return json(res, 200, await app.plugins.invocations.use('conversation-search.status', { conversationId,
+            ...(projectId && { projectId }), ...(todoId && { todoId }) }));
+        }
         if (path === '/api/v1/briefing/settings' && method === 'GET') return json(res, 200, app.briefing.settings());
         if (path === '/api/v1/briefing/settings' && method === 'PUT') {
           try { const settings = app.briefing.configure(await body(req)); app.awayNotifications.flush(); return json(res,200,settings); }

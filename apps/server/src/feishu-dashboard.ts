@@ -1,3 +1,4 @@
+import type { ConversationStatus } from '../../../plugins/conversation-status.ts';
 import type { TodayBrief, TodaySection } from '../../../plugins/today-brief.ts';
 import type { FeishuBotsApp } from './feishu-bots.ts';
 import type { InboxItem, MachineInfo, Message, Project, Run, Todo } from '../../../packages/protocol/src/index.ts';
@@ -16,15 +17,37 @@ export function dashboardCommand(text: string) {
     case '工作台': case '/dashboard': case '/home': case '/工作台': case '/主页': return 'home';
     case '/tasks': case '/进展': case '/总览': return 'tasks';
     case '/inbox': case '/收件箱': return 'inbox';
+    case '/status': case '/状态': return 'status';
     case '/today': case '/今日': case '/今天': return 'today';
     case '/help': case '/帮助': return 'help';
   }
 }
 
-export function dashboardHelp(sessions: boolean) {
-  const text = ['/home 或「工作台」：打开工作台', '/tasks 或 /进展：查看任务进展', '/inbox 或 /收件箱：查看收件',
-    '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
+export function dashboardHelp(sessions: boolean, scoped = false) {
+  const status = '/status 或 /状态：查看当前会话状态';
+  const text = scoped ? status : ['/home 或「工作台」：打开工作台', '/tasks 或 /进展：查看任务进展', '/inbox 或 /收件箱：查看收件',
+    status, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
   return { text, card: cardDocument('工作台命令', cardSection('在此私聊中发送', text)) };
+}
+
+export function statusDashboard(target: string, status: ConversationStatus | string) {
+  const lines = [target];
+  if (typeof status === 'string') lines.push(status);
+  else {
+    const phases = { no_records: '没有会话记录', idle: '空闲', working: '处理中', waiting: '等待处理', failed: '失败', unknown: '运行状态未知' };
+    lines.push('状态 · ' + phases[status.phase]);
+    if (status.goal) lines.push('目标 · ' + label(status.goal, 400));
+    if (status.lastMessage) {
+      const last = status.lastMessage;
+      lines.push('最近消息 · ' + (last.role === 'user' ? '用户' : '助手') + ' · ' + last.at + '\n' + last.text + (last.truncated ? '…' : ''));
+    }
+    const pending = status.pending;
+    const kinds = { question: '问题', permission: '权限', plan: '计划', review: '验收' };
+    lines.push('待处理 · ' + pending.total + ' 项' + (pending.truncated ? '（仅显示部分）' : ''),
+      ...pending.items.map(item => '• ' + kinds[item.kind] + ' · ' + label(item.title, 200)));
+  }
+  const text = lines.join('\n');
+  return { text: '当前会话状态\n' + text, card: cardDocument('当前会话状态', [{ tag: 'div', text: cardPlain(text) }]) };
 }
 
 export function todayDashboard(brief: TodayBrief | string, navigation: string) {

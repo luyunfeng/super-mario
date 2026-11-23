@@ -11,6 +11,7 @@ import { timeAgo } from '../lib/format.js';
 import { icon } from '../ui/icons.js';
 import { Button, Banner, Card, Pill } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
+import { conversationStatusButton } from '../features/conversation-status.js';
 import { attachFileMentions } from '../features/file-mentions.js';
 import { attachSavedPrompts } from '../features/saved-prompts.js';
 import { officeDocumentsButton } from '../features/office-documents.js';
@@ -67,7 +68,7 @@ export function createChatPage({ api, store, scope, router }) {
     h('div', { class: 'chat__inner chat__inner--top' },
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '对话'), h('p', { class: 'page__sub' }, hintCopy('nav.chat').tag)),
-        h('div', { class: 'page__actions' }, favorites.button, transcript.button, officeDocumentsButton({ api, store }), code.toggle, Hint('nav.chat'))),
+        h('div', { class: 'page__actions' }, conversationStatusButton({ api, store, scope, target: 'main', project: scope.get }), favorites.button, transcript.button, officeDocumentsButton({ api, store }), code.toggle, Hint('nav.chat'))),
       banner, decisionNotice, messageNotice, attention.el, setup, runStrip));
   const scroller = h('div', { class: 'chat__scroll', id: 'chat-scroll' }, h('div', { class: 'chat__inner' }, messages, hero));
 

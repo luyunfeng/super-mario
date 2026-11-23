@@ -2864,3 +2864,47 @@ test('Web 全局助手通过 today_brief 核对今日简报，项目和待办会
     assert.deepEqual(server.app.approvals.list(), []);
   } finally { await server.close(); }
 });
+
+test('Web 的 conversation_status 只读取当前范围，排除本轮提问并阻止指定其他会话', async t => {
+  const projectText = '项目会话已核对合成清单', mainText = '主对话已收到合成回执';
+  const unrelated = '其他会话合成记录不可见';
+  let selected = mainText, forbiddenId = '';
+  const { server, api, ask, requests } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.ok(req.tools.includes('conversation_status'));
+      assert.match(req.system, /conversation_status/);
+      return call('conversation_status', { conversationId: forbiddenId }, 'forged-status');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
+    assert.ok(!raw.includes(unrelated));
+    if (req.callId === 'forged-status') {
+      assert.match(raw, /conversationId: unknown field|不接受自选会话/);
+      return call('conversation_status', {}, 'this-status');
+    }
+    assert.equal(req.callId, 'this-status');
+    const status = JSON.parse(raw);
+    assert.equal(status.lastMessage.text, selected);
+    assert.equal(status.lastMessage.role, 'assistant');
+    assert.equal(status.phase, 'idle');
+    assert.deepEqual(status.pending, { total: 0, items: [], truncated: false });
+    return { role: 'assistant', content: '已读到上一条回复「' + status.lastMessage.text + '」。' };
+  });
+  try {
+    const project = await api('/projects', { name: '状态验收项目' });
+    const outside = await api('/projects', { name: '另一合成项目' });
+    forbiddenId = 'project:' + outside.id + ':work';
+    const put = (id: string, text: string, conversationId: string, projectId?: string) => {
+      server.app.store.put('messages', id, { id, conversationId, ...(projectId && {projectId}), role: 'assistant', status: 'done',
+        text, createdAt: '2026-03-01T10:00:00.000Z' } satisfies Message);
+    };
+    put('status-main-last', mainText, 'main');
+    put('status-project-last', projectText, 'project:' + project.id + ':work', project.id);
+    put('status-outside', unrelated, forbiddenId, outside.id);
+    for (const [expected, path] of [[mainText, '/messages'], [projectText, '/projects/' + project.id + '/messages']]) {
+      selected = expected!;
+      assert.equal(await ask('当前会话是什么状态？请看上一条回复。', path), '已读到上一条回复「' + selected + '」。');
+    }
+    assert.deepEqual(requests.map(req => req.lastRole), ['user', 'tool', 'tool', 'user', 'tool', 'tool']);
+    assert.deepEqual(server.app.approvals.list(), []);
+  } finally { await server.close(); }
+});

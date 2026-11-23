@@ -13,6 +13,7 @@ import { createInteractions } from '../packages/core/src/interactions.ts';
 import { createEventMailboxes } from '../packages/core/src/event-mailboxes.ts';
 import type { FeishuSendContext, FeishuOptions } from '../plugins/feishu.ts';
 import type { BotScope, MailboxEntry } from '../packages/protocol/src/bots.ts';
+import { readConversationStatus } from '../plugins/conversation-status.ts';
 import { readTodayBrief } from '../plugins/today-brief.ts';
 import type { Message } from '../packages/protocol/src/index.ts';
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
@@ -989,5 +990,152 @@ test('飞书主人私聊 /today 和主页按钮读取今日简报，去重并报
   await receive('/今天', human('disabled'));
   assert.match(bot.instance.sent.at(-1)![1], /每日简报插件已停用/);
   assert.equal(reads, 2);
+  assert.equal(f.posts.length, 0);
+});
+
+test('飞书 /status 读取当前机器人或引用卡片的会话，旧目标与重复事件不会改投', async t => {
+  const f = fixture(t), bot = await f.add('ConversationStatus');
+  const plugins = f.app.plugins!, list = plugins.list;
+  let enabled = true, failRead = false;
+  const reads: string[] = [];
+  let inFlight: Promise<void> | undefined;
+  plugins.list = () => [...list(), { id: 'conversation-search', enabled, status: enabled ? 'active' : 'disabled' }];
+  plugins.invocations!.use = async (name, input) => {
+    assert.equal(name, 'conversation-search.status');
+    reads.push((input as {conversationId:string}).conversationId);
+    if (failRead) throw Error('合成状态来源暂不可用');
+    if (inFlight) await inFlight;
+    return readConversationStatus(f.store, input);
+  };
+  const human = (id: string) => ({ ...source(id), senderType: 'user' as const });
+  const receive = bot.instance.options.onMessage;
+  await receive('/status', human('before-pair'));
+  await bot.pair();
+  await receive('/状态', { ...human('group-status'), chatType: 'group' });
+  await receive('/status', { ...human('bot-status'), senderType: 'bot' });
+  await receive('/status', { ...human('another-owner'), senderId: 'other' });
+  await receive('/status', { ...human('another-chat'), chatId: 'other' });
+  assert.deepEqual(reads, []);
+  assert.equal(bot.instance.sent.length, 0);
+
+  const projectInputs: Array<{ projectId: string; text: string }> = [];
+  f.app.projectWorkspace = { async post(projectId, text) {
+    projectInputs.push({ projectId, text });
+    return { id: 'status-follow-up', text, role: 'user', projectId, conversationId: 'project:' + projectId + ':work',
+      createdAt: new Date().toISOString() };
+  } };
+  const project = { id: 'status-project', name: '合成项目目标' };
+  f.store.put('projects', project.id, project);
+  const other = { id: 'status-other-project', name: '切换后的合成项目' };
+  f.store.put('projects', other.id, other);
+  const projectConversation = 'project:' + project.id + ':work';
+  const botConversation = botConversationId(bot.bot);
+  const putMessage = (id: string, text: string, conversationId: string, projectId?: string) => {
+    f.store.put('messages', id, { id, text, conversationId, ...(projectId && { projectId }), role: 'assistant',
+      status: 'done', createdAt: '2026-03-01T10:00:00.000Z' } satisfies Message);
+  };
+  const direct = '私聊机器人上一条合成回复', projectText = '引用项目上一条合成回复';
+  putMessage('status-bot-last', direct, botConversation);
+  putMessage('status-project-last', projectText, projectConversation, project.id);
+  await Promise.all([receive('/status', human('same-event')), receive('/status', human('same-event'))]);
+  assert.deepEqual(reads, [botConversation]);
+  assert.equal(bot.instance.sent.length, 1);
+  assert.ok(bot.instance.sent[0]![1].includes(direct));
+  assert.ok(!bot.instance.sent[0]![1].includes(projectText));
+  const acknowledgeCard = (outgoingId: string) => {
+    const onSent = bot.instance.contexts.at(-1)?.onSent;
+    assert.ok(onSent);
+    onSent(outgoingId);
+  };
+  acknowledgeCard('outgoing-main-status');
+  await receive('工作台', human('dashboard-for-status'));
+  const dashboard = bot.instance.contexts.at(-1)!.card as { elements: Array<{actions?: Array<{value: Record<string,unknown>}>}> };
+  const select = (projectId: string, messageId: string) => {
+    const button = dashboard.elements.flatMap(row => row.actions ?? []).find(action =>
+      action.value.kind === 'workbench.chat' && action.value.projectId === projectId);
+    assert.ok(button);
+    return bot.instance.options.onCardAction!({ operatorId: 'human', chatId: 'owner', messageId, value: button.value });
+  };
+  select(project.id, 'choose-project');
+  await receive('/状态', human('default-project'));
+  assert.equal(reads.at(-1), projectConversation);
+  const delayedReceipt = bot.instance.contexts.at(-1)?.onSent;
+  assert.ok(delayedReceipt);
+  select(other.id, 'choose-other');
+  delayedReceipt('outgoing-project-status');
+  await receive('/status', human('new-default'));
+  assert.equal(reads.at(-1), 'project:' + other.id + ':work');
+  await receive('/status', { ...human('quote-status-card'), parentId: 'outgoing-project-status' });
+  assert.equal(reads.at(-1), projectConversation);
+  assert.ok(bot.instance.sent.at(-1)![1].includes(projectText));
+  await receive('/status', { ...human('quote-main-status-card'), parentId: 'outgoing-main-status' });
+  assert.equal(reads.at(-1), botConversation);
+  assert.ok(bot.instance.sent.at(-1)![1].includes(direct));
+  await receive('继续处理这张状态卡里的事项', { ...human('ordinary-card-reply'), parentId: 'outgoing-project-status' });
+  assert.deepEqual(projectInputs, [{ projectId: project.id, text: '继续处理这张状态卡里的事项' }]);
+  select('', 'choose-main');
+  await receive('/status', { ...human('quoted-project'), parentId: 'choose-project', rootId: 'choose-main' });
+  assert.equal(reads.at(-1), projectConversation);
+  assert.ok(bot.instance.sent.at(-1)![1].includes(projectText));
+  assert.ok(!bot.instance.sent.at(-1)![1].includes(direct));
+  assert.equal(bot.instance.contexts.at(-1)?.replyTo, 'quoted-project');
+  assert.equal(bot.instance.contexts.at(-1)?.threadId, 'choose-main');
+  await receive('/status', human('back-to-main'));
+  assert.equal(reads.at(-1), botConversation);
+
+  let release!: () => void;
+  inFlight = new Promise<void>(resolve => { release = resolve; });
+  const baseline = reads.length, sent = bot.instance.sent.length;
+  const stale = receive('/status', human('status-in-flight'));
+  await t.waitFor(() => assert.equal(reads.length, baseline + 1));
+  select(other.id, 'switch-during-read');
+  release();
+  await stale;
+  assert.equal(bot.instance.sent.length, sent);
+  inFlight = undefined;
+
+  f.store.put('projects', project.id, { ...project, archivedAt: '2026-03-02' });
+  const previous = reads.length;
+  await receive('/status', { ...human('archived-quote'), parentId: 'choose-project' });
+  assert.equal(reads.length, previous);
+  assert.match(bot.instance.sent.at(-1)![1], /重新选择/);
+  failRead = true;
+  await receive('/status', human('failed-read'));
+  assert.match(bot.instance.sent.at(-1)![1], /失败|不可用/);
+  assert.ok(!bot.instance.sent.at(-1)![1].includes(direct));
+  enabled = false;
+  await receive('/status', human('disabled-read'));
+  assert.match(bot.instance.sent.at(-1)![1], /停用|不可用/);
+  assert.equal(reads.length, previous + 1);
+  assert.equal(f.posts.length, 0);
+});
+
+test('/status 在固定项目和待办机器人使用各自绑定，未标记机器人不能借用其他会话', async t => {
+  const f = fixture(t);
+  const projectId = 'status-fixed-project', todoId = 'status-fixed-todo';
+  f.store.put('projects', projectId, { id: projectId, name: '固定机器人合成项目' });
+  f.store.put('todos', todoId, { id: todoId, projectId, title: '固定机器人合成事项' });
+  const plugins = f.app.plugins!, original = plugins.list;
+  plugins.list = () => [...original(), { id: 'conversation-search', enabled: true, status: 'active' }];
+  const reads: unknown[] = [];
+  plugins.invocations!.use = async (_name, input) => {
+    reads.push(input);
+    return readConversationStatus(f.store, input);
+  };
+  const scopes: BotScope[] = [{ kind: 'project', projectId }, { kind: 'task', projectId, todoId }, { kind: 'unmarked' }];
+  for (const scope of scopes) {
+    const scoped = await f.add('ScopeStatus' + scope.kind, scope);
+    await scoped.pair();
+    await scoped.instance.options.onMessage('/status', { ...source('status-' + scope.kind), senderType: 'user' });
+    const answer = scoped.instance.sent.at(-1)![1];
+    if (scope.kind === 'unmarked') {
+      assert.match(answer, /尚未绑定/);
+      assert.equal(reads.length, 2);
+    } else {
+      assert.deepEqual(reads.at(-1), { conversationId: botConversationId(scoped.bot), projectId,
+        ...(scope.kind === 'task' && { todoId }) });
+      assert.match(answer, /没有会话记录/);
+    }
+  }
   assert.equal(f.posts.length, 0);
 });

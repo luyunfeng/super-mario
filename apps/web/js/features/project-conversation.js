@@ -13,6 +13,7 @@ import { createCodeSidebar } from './code-sidebar.js';
 import { attachFileMentions } from './file-mentions.js';
 import { attachSavedPrompts } from './saved-prompts.js';
 import { createProjectInstructions } from './project-instructions.js';
+import { conversationStatusButton } from './conversation-status.js';
 import { createReplyTranslation } from './reply-translation.js';
 import { createMessageFavorites } from './message-favorites.js';
 import { createConversationExport } from './conversation-export.js';
@@ -20,6 +21,7 @@ import { createConversationExport } from './conversation-export.js';
 export function createProjectConversation({ api, store, router, scope, bindFolder }) {
   const code = createCodeSidebar({ api, store });
   let projectId = '', todoId = '', requestedFile = '';
+  const statusButton = conversationStatusButton({ api, store, scope, target: 'project', project: () => projectId, todo: () => todoId });
   const translation = createReplyTranslation({ api, store, getScope: () => projectId, getConversationId: () => `project:${projectId}:work` });
   const instructions = createProjectInstructions({ api, store, getProjectId: () => projectId });
   const favorites = createMessageFavorites({ api, store, router });
@@ -61,7 +63,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const topic = h('p', { class: 'small', hidden: true });
   const selectedTodo = () => store.view.snapshot?.todos?.find(t => t.id === todoId && t.projectId === projectId);
   const composer = h('div', { class: 'project-conversation__composer stack' }, topic, edit.notice, quote.bar, prompts.menu, mentions.menu, text, voice.caption, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, mentions.button, voice.button, voice.upload, send), notice);
-  const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, favorites.button, transcript.button, code.toggle)), status, locationNote, readNotice, messages, composer), code.el);
+  const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, statusButton, favorites.button, transcript.button, code.toggle)), status, locationNote, readNotice, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
   let draftKey, owner, enabled, quotesEnabled, editEnabled, epoch = 0;
   const submissions = createMessageSubmissions({ api, context: submissionContext, onConfirmed: clearSubmittedDraft, captureEdit: edit.onAccepted,

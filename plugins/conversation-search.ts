@@ -1,4 +1,5 @@
 import { sensitiveWorkspacePath } from './workspace-code.ts';
+import { readConversationStatus } from './conversation-status.ts';
 import { localDayFormatter } from './local-day.ts';
 import { messageVersion } from '../packages/plugin-sdk/src/index.ts';
 import { randomBytes } from 'node:crypto';
@@ -173,7 +174,7 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
 type ReadFiles = (input: { projectId: string; kind: 'search'; query: string }) => Promise<Json>;
 export const conversationSearch = (readFiles: ReadFiles): Extension => ({
   id: 'conversation-search', name: '对话历史搜索', capabilities: ['conversation.search'],
-  permissions: ['contribute:tools', 'service.provide:conversation-search.saved', 'service.provide:conversation-search.projects', 'service.provide:conversation-search.files', 'store.read', 'store.write'],
+  permissions: ['contribute:tools', 'service.provide:conversation-search.saved', 'service.provide:conversation-search.projects', 'service.provide:conversation-search.files', 'service.provide:conversation-search.status', 'store.read', 'store.write'],
   activate(context) {
     let active = true;
     context.defer(() => { active = false; });
@@ -197,6 +198,17 @@ export const conversationSearch = (readFiles: ReadFiles): Extension => ({
       return { paths, truncated: result.truncated };
     }
     context.provide('conversation-search.files', searchFiles);
+    const status = (input: Json, signal: AbortSignal) => {
+      signal.throwIfAborted();
+      if (!active) fail(503, '对话搜索插件已停用');
+      return readConversationStatus(context.store, input);
+    };
+    context.provide('conversation-search.status', status);
+    context.contribute('tools', 'conversation_status', {
+      name: 'conversation_status', description: '查看当前会话已记录的进度、最近发言、明确执行目标和待用户决定的卡片。仅记录事实，无记录或结果未知时如实说明。',
+      parameters: { type: 'object', additionalProperties: false, properties: {} },
+      async execute(input, signal) { return status(input, signal); },
+    });
     context.contribute('tools', 'project_file_search', {
       name: 'project_file_search', description: '按相对路径模糊检索一个已绑定项目的文件名。返回命中路径和 Web 引用。truncated 表示仅覆盖了部分文件或匹配结果。',
       parameters: { type: 'object', required: ['query'], additionalProperties: false, properties: {
