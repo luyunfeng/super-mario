@@ -206,7 +206,7 @@ export function createChatPage({ api, store, scope, router }) {
     const favorite = Boolean(query.get('favorite'));
     const available = favorite ? messageFavoritesActive(store) : conversationSearchActive(snapshot);
     const row = id && available ? messages.querySelector(`[data-id="${CSS.escape(id)}"]`) : null;
-    const reason = !id || row ? '' : available ? '当前主对话中找不到这条消息。'
+    const reason = !id ? '' : row ? '已定位到原消息。' : available ? '当前主对话中找不到这条消息。'
       : `「${favorite ? '消息收藏' : '对话历史搜索'}」插件当前不可用，无法定位原消息。`;
     if (messageStatus.textContent !== reason) messageStatus.textContent = reason;
     messageNotice.hidden = !reason;
@@ -430,7 +430,7 @@ export function createChatPage({ api, store, scope, router }) {
       renderBanner(state); renderSetup(state); renderRuns(state);
       recent.update(state);
       const list = state.messages ?? [];
-      const follow = nearBottom();
+      const follow = !router.current.query.has('at') && !router.current.query.has('favorite') && nearBottom();
       paintMessages(list);
       hero.hidden = list.length > 0 || !setup.hidden;
       if (list.length !== lastCount) { lastCount = list.length; if (follow) scrollToEnd(true); }

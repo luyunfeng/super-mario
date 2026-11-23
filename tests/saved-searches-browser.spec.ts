@@ -73,8 +73,13 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await mainMessage.getByRole('button', {name:'复制消息链接'}).click();
     const mainLink = await page.evaluate(() => navigator.clipboard.readText());
     assert.equal(mainLink, server.url + '/#chat?at=run-answer');
+    for (let index = 0; index < 55; index++) putMessage('main-later-' + index, 'main', '后续合成发言 ' + index);
     await page.goto(mainLink);
+    await page.reload();
     await expect(mainMessage).toBeFocused();
+    await expect(mainMessage).toBeInViewport();
+    await page.getByRole('link', {name:'返回最新消息',exact:true}).click();
+    await expect(page.locator('article[data-id="main-later-54"]')).toBeInViewport();
     const runLink = page.getByRole('link', { name: '查看执行', exact: true });
     await expect(runLink).toHaveCount(2);
     await runLink.last().click();
