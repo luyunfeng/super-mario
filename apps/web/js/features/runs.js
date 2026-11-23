@@ -166,6 +166,8 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
         if (!current() || read !== revision) return;
         replace(rows, trees.length ? trees.map(tree => h('div', { class: 'item' },
           h('strong', null, tree.name), h('div', { class: 'folder-path' }, tree.cwd),
+          tree.branch && h('div', { class: 'muted' }, '创建时分支 · ' + tree.branch),
+          tree.base && h('div', { class: 'folder-path' }, '起始提交 · ' + tree.base),
           executionHistory(tree),
           Button({ label: '复制目录', size: 'sm', icon: 'copy', onClick: async () => {
             if (!current()) return;

@@ -233,7 +233,7 @@ export async function createWorkbench(config: AppConfig) {
     return visibleScope(reviseScope(id,args,{kind:'assistant',messageId:actor.id}));
   }
   const todoDecisions = createTodoDecisions(store, workDecisions);
-  type ProjectWorktree = { id: string; projectId: string; machineId: string; source: string; cwd: string; name: string };
+  type ProjectWorktree = { id: string; projectId: string; machineId: string; source: string; cwd: string; name: string; branch?: string; base?: string };
   function projectWorktreeBinding(projectId: string) {
     if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
     const project = store.get<Project>('projects', projectId);
@@ -241,10 +241,13 @@ export async function createWorkbench(config: AppConfig) {
     if (project.archivedAt || !project.workspace) throw new InputError('需要已绑定工作目录的活动项目', 409);
     return project.workspace;
   }
+  function projectTreeReceipt({ cwd, name, branch, base }: ProjectWorktree) {
+    return { cwd, name, ...(branch && { branch }), ...(base && { base }) };
+  }
   function listProjectWorktrees(projectId: string) {
     const binding = projectWorktreeBinding(projectId);
     return store.list<ProjectWorktree>('project-worktrees').filter(row => row.projectId === projectId
-      && row.machineId === binding.machineId && row.source === binding.cwd).map(({cwd, name}) => ({cwd, name}));
+      && row.machineId === binding.machineId && row.source === binding.cwd).map(projectTreeReceipt);
   }
   async function createProjectWorktree(projectId: string, input: Record<string, unknown>) {
     const binding = projectWorktreeBinding(projectId);
@@ -255,7 +258,7 @@ export async function createWorkbench(config: AppConfig) {
     // Retain the allocated ID before calling the machine so concurrent requests and retries share the effect.
     const existingId = store.get<string>('project-worktree-names', key);
     const existing = existingId && store.get<ProjectWorktree>('project-worktrees', existingId);
-    if (existing) return { cwd: existing.cwd, name: existing.name };
+    if (existing) return projectTreeReceipt(existing);
     const hub = machines;
     const machine = hub?.list().find(row => row.id === binding.machineId);
     if (!hub || !machine?.online) throw new InputError('项目绑定的电脑离线或尚未连接', 503);
@@ -264,13 +267,13 @@ export async function createWorkbench(config: AppConfig) {
     if (!existingId) store.put('project-worktree-names', key, id);
     const cwd = join(binding.cwd + '-worktrees', id);
     const params = { cwd: binding.cwd, id };
-    await effects.perform({ key: 'project-worktree:' + id, kind: 'workspace.prepareRunWorktree', target: machine.id,
+    const receipt = await effects.perform({ key: 'project-worktree:' + id, kind: 'workspace.prepareRunWorktree', target: machine.id,
       summary: '创建项目独立工作树', content: params, run: async () => {
         const receipt = await hub.call(machine.id, 'workspace.prepareRunWorktree', params, { timeoutMs: 90000 });
         if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) || receipt.cwd !== cwd || receipt.branch !== 'super-mario/' + id
           || typeof receipt.base !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(receipt.base))
           throw new Error('执行机返回的工作树回执无效');
-        return receipt;
+        return receipt as { cwd: string; branch: string; base: string };
       } }).catch(error => {
         if (error instanceof EffectError && error.delivery === 'no') {
           if (store.get<string>('project-worktree-names', key) === id) store.remove('project-worktree-names', key);
@@ -278,10 +281,11 @@ export async function createWorkbench(config: AppConfig) {
         }
         throw new EffectError('工作树创建结果未确认，请核对执行机目录 ' + cwd + '。' + (error instanceof Error ? error.message : String(error)), 'unknown');
       });
-    store.put('project-worktrees', id, { id, projectId, machineId: machine.id, source: binding.cwd, cwd, name } satisfies ProjectWorktree);
+    const tree = { id, projectId, machineId: machine.id, source: binding.cwd, cwd, name, branch: receipt.branch, base: receipt.base };
+    store.put('project-worktrees', id, tree);
     const current = projectWorktreeBinding(projectId);
     if (current.cwd !== binding.cwd || current.machineId !== binding.machineId) throw new InputError('工作树已建在原项目目录，项目绑定已变化', 409);
-    return { cwd, name };
+    return projectTreeReceipt(tree);
   }
   function renameRunWorktree(id: string, input: Record<string, unknown>) {
     if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);

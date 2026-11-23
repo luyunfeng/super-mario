@@ -41,6 +41,8 @@ test('项目只创建工作树时返回独立目录，不生成或派发执行',
   const result = await response.json();
   assert.ok(response.ok, JSON.stringify(result));
   assert.equal(result.name, '独立准备');
+  assert.equal(result.branch, git(result.cwd, 'branch', '--show-current'));
+  assert.equal(result.base, git(result.cwd, 'rev-parse', 'HEAD'));
   assert.notEqual(result.cwd, cwd);
   assert.equal(git(result.cwd, 'rev-parse', '--show-toplevel'), result.cwd);
   assert.equal(git(result.cwd, 'rev-parse', 'HEAD'), git(cwd, 'rev-parse', 'HEAD'));
