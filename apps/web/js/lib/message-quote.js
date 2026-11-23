@@ -43,11 +43,11 @@ export function createMessageQuote({ drafts, input, store, router, scope }) {
     field.setSelectionRange(0, 0);
   }
 
-  function comment(message, label) {
+  function comment(message, label, button) {
     const key = currentKey, owner = currentOwner, original = selected;
     if (!key || owner !== drafts.owner()) return;
     const selection = window.getSelection();
-    const bubble = document.querySelector('[data-id="' + CSS.escape(message.id) + '"]');
+    const bubble = button.closest('.msg');
     const excerpt = selection && bubble?.contains(selection.anchorNode) && bubble.contains(selection.focusNode) ? selection.toString() : '';
     const field = h('textarea', {class:'textarea', rows:5, readOnly:true, 'aria-label':'待批注的原文', value:message.text});
     const note = h('textarea', {class:'textarea', rows:3, 'aria-label':'批注意见', placeholder:'写下对所选原文的意见'});
@@ -178,7 +178,8 @@ export function createMessageQuote({ drafts, input, store, router, scope }) {
     if (!currentKey || !message.text?.trim()) return null;
     return [h('button', { type: 'button', class: 'btn btn--ghost btn--sm', 'aria-label': '引用消息',
       onclick: () => select(message, label) }, '引用'),
-      h('button', {type:'button', class:'btn btn--ghost btn--sm', onclick:() => comment(message, label)}, '批注原文')];
+      h('button', {type:'button', class:'btn btn--ghost btn--sm', onmousedown:event => { if (event.button === 0 && !window.getSelection()?.isCollapsed) event.preventDefault(); },
+        onclick:event => comment(message, label, event.currentTarget)}, '批注原文')];
   }
   function compose(raw, text) {
     const quote = decode(raw);

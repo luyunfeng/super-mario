@@ -45,9 +45,22 @@ test('独立对话在本线恢复引用片段并发送原始 Markdown，归档�
   const history=await (await page.request.get(path+'/'+first+'/messages',{headers})).json();
   assert.ok(history.messages.some((m:{role:string;text:string})=>m.role==='user' && m.text===expected));
   for(const [text,note] of [['开头','核对口径'],['第二行','调整文字'],['结尾','改为周五']]){
-    await region.locator('[data-id="'+sourceId+'"]').getByRole('button',{name:'批注原文'}).click();
+    const source = region.locator('[data-id="'+sourceId+'"]');
+    if (text === '开头') await source.evaluate(el => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode, offset = node.textContent!.indexOf('开头');
+        if (offset < 0) continue;
+        const range = document.createRange(); range.setStart(node, offset); range.setEnd(node, offset + 2);
+        window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(range); return;
+      }
+      throw Error('原消息缺少预期片段');
+    });
+    await source.getByRole('button',{name:'批注原文'}).click();
     const editor=page.getByRole('dialog',{name:'批注原文'});
-    await editor.getByLabel('待批注的原文').evaluate((el:HTMLTextAreaElement,s:string)=>{
+    if (text === '开头') assert.equal(await editor.getByLabel('待批注的原文').evaluate((el:HTMLTextAreaElement) =>
+      el.value.slice(el.selectionStart, el.selectionEnd)), text);
+    else await editor.getByLabel('待批注的原文').evaluate((el:HTMLTextAreaElement,s:string)=>{
       const start=el.value.indexOf(s);el.setSelectionRange(start,start+s.length);
     },text);
     await editor.getByLabel('批注意见').fill(note);
