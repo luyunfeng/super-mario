@@ -56,13 +56,14 @@ test('plugins with store permissions cannot read or change administrator credent
   let context!:ExtensionContext;
   f.host.register({id:'store-client',name:'Store client',capabilities:[],permissions:['store.read','store.write'],activate(c){context=c;}});
   await f.host.start();
-  const collection='core.admin-auth.sessions';
-  f.store.put(collection,'sample',{synthetic:true});
-  for (const operation of [
-    ()=>context.store.get(collection,'sample'), ()=>context.store.list(collection),
-    ()=>context.store.put(collection,'sample',{}), ()=>context.store.remove(collection,'sample'),
-  ]) assert.throws(operation,/Reserved host collection/);
-  assert.deepEqual(f.store.get(collection,'sample'),{synthetic:true});
+  for(const collection of ['core.admin-auth.sessions','browser-devices.credentials']){
+    f.store.put(collection,'sample',{synthetic:true});
+    for (const operation of [
+      ()=>context.store.get(collection,'sample'), ()=>context.store.list(collection),
+      ()=>context.store.put(collection,'sample',{}), ()=>context.store.remove(collection,'sample'),
+    ]) assert.throws(operation,/Reserved host collection/);
+    assert.deepEqual(f.store.get(collection,'sample'),{synthetic:true});
+  }
 });
 test('wrappers cannot call downstream twice or after timing out; after failures report unknown',async t=>{
   const f=await fixture(t);let calls=0;let delayed: (()=>Promise<unknown>)|undefined;

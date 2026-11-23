@@ -3,7 +3,7 @@ import type {Extension, Store} from '../packages/plugin-sdk/src/index.ts';
 
 export interface BrowserDevice {id:string; name:string; createdAt:string; lastSeenAt?:string}
 export type BrowserReplacement = {id:string; proof:string};
-type StoredDevice = BrowserDevice & {digest:string};
+type StoredDevice = BrowserDevice & {digest:string;source?:'password'};
 type Pairing = {digest:string; name:string; expires:number};
 
 const devices = 'browser-devices.devices';
@@ -39,14 +39,18 @@ export function createBrowserDevices(store:Store,onInvalidate:(id?:string)=>void
     requireActive();
     return store.list<StoredDevice>(devices).map(metadata).sort((a,b)=>b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
   }
-  function issue(name:string) {
-    requireActive();
+  function validName(name:string) {
     if(typeof name!=='string' || !name.trim() || Array.from(name.trim()).length>80 || /[\p{Cc}\p{Cs}]/u.test(name))
       fail(400,'请输入 1 至 80 个字符的设备名称');
+    return name.trim();
+  }
+  function issue(name:string) {
+    requireActive();
+    const normalized=validName(name);
     return store.transaction(()=>{
       cleanCodes(false);
       const code=randomBytes(24).toString('base64url'),digest=digestOf(code),expires=Date.now()+lifetime;
-      store.put<Pairing>(pairings,digest,{digest,name:name.trim(),expires});
+      store.put<Pairing>(pairings,digest,{digest,name:normalized,expires});
       return {code,expiresAt:new Date(expires).toISOString()};
     });
   }
@@ -72,16 +76,34 @@ export function createBrowserDevices(store:Store,onInvalidate:(id?:string)=>void
       if(!pairing) return;
       // Consume even expired codes. Throw outside the transaction so expiry cleanup commits.
       if(!store.remove(pairings,digest) || pairing.expires<=Date.now()) return;
-      const token='smbd_'+randomBytes(32).toString('base64url');
-      const device:StoredDevice={id:randomUUID(),name:pairing.name,createdAt:new Date(Date.now()).toISOString(),digest:digestOf(token)};
       const replaced=replaceDevice(replaces);
-      store.put(devices,device.id,device);
-      store.put(credentials,device.digest,device.id);
-      return {replaced,token,device:metadata(device)};
+      return {replaced,...newDevice(pairing.name)};
     });
     if (!receipt) fail(401,'配对码无效或已过期');
     if (receipt.replaced) onInvalidate(receipt.replaced);
-    return {token:receipt.token,device:receipt.device,replacementProof:proofForBrowserToken(receipt.token)};
+    const {replaced,...result}=receipt;
+    return result;
+  }
+  // Every authentication method issues the same revocable browser credential.
+  function newDevice(name:string,source?:'password') {
+    const token='smbd_'+randomBytes(32).toString('base64url');
+    const device:StoredDevice={id:randomUUID(),name,createdAt:new Date(Date.now()).toISOString(),digest:digestOf(token),source};
+    store.put(devices,device.id,device);
+    store.put(credentials,device.digest,device.id);
+    return {token,device:metadata(device),replacementProof:proofForBrowserToken(token)};
+  }
+  function issuePassword(name:string) {
+    requireActive();
+    return store.transaction(()=>newDevice(validName(name),'password'));
+  }
+  // The password setting and its affected credentials must commit together. Disconnect after commit.
+  function revokePasswordDevices() {
+    requireActive();
+    const removed:string[]=[];
+    for(const device of store.list<StoredDevice>(devices)){
+      if(device.source==='password' && removeDevice(device))removed.push(device.id);
+    }
+    return ()=>{for(const id of removed)onInvalidate(id);};
   }
   function authenticate(token:string):string|undefined {
     if(!active || typeof token!=='string' || !/^smbd_[A-Za-z0-9_-]{43}$/.test(token)) return;
@@ -121,5 +143,5 @@ export function createBrowserDevices(store:Store,onInvalidate:(id?:string)=>void
       });
     }
   };
-  return {extension,list,issue,redeem,authenticate,revoke};
+  return {extension,list,issue,redeem,authenticate,revoke,issuePassword,revokePasswordDevices};
 }

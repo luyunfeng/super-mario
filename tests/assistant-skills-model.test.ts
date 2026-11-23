@@ -4901,6 +4901,7 @@ test('Web 与配对飞书说明浏览器接入和管理诊断时不索取凭据'
   const diagnosis='请在管理员页运行诊断，查看该次检查的时间和结果。';
   const {server,api,ask}=await fixture(t,request=>{
     assert.match(request.system,/已登录的管理员页面或持工作台主令牌的浏览器/);
+    assert.match(request.system,/浏览器连接密码只签发普通设备凭据/);
     assert.match(request.system,/目标浏览器打开并确认/);
     assert.match(request.system,/不要在飞书、聊天、日志或笔记中索取或转发/);
     assert.match(request.system,/没有撤销回执时，要说明旧凭据可能仍然有效/);

@@ -4,6 +4,7 @@ import {isIP} from 'node:net';
 import type {createAdminOverview} from './admin-overview.ts';
 import {pairingQR} from './browser-access.ts';
 import type {createBrowserDevices} from '../../../plugins/browser-devices.ts';
+import type {createBrowserPassword} from './browser-password.ts';
 import type {createAdminAuth} from './admin-auth.ts';
 
 const base='/api/v1/admin/',cookieName='sm_admin_session';
@@ -29,7 +30,7 @@ function secure(req:IncomingMessage) {
   return ('encrypted' in req.socket && req.socket.encrypted===true) ||
     (loopback(req.socket.remoteAddress??'') && req.headers['x-forwarded-proto']==='https');
 }
-function sameOrigin(req:IncomingMessage) {
+export function sameOrigin(req:IncomingMessage) {
   const origin=req.headers.origin,site=req.headers['sec-fetch-site'];
   if(site && site!=='none' && site!=='same-origin')fail(403,'管理请求必须来自同一站点');
   if(origin!==undefined){
@@ -49,7 +50,7 @@ function cookie(req:IncomingMessage,res:ServerResponse,token:string,expiresAt:nu
 export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootToken:string|undefined,
   readBody:(req:IncomingMessage,limit:number)=>Promise<Record<string,unknown>>,
   json:(res:ServerResponse,status:number,value:unknown)=>void,overview:ReturnType<typeof createAdminOverview>,
-  devices:Pick<ReturnType<typeof createBrowserDevices>,'list'|'issue'|'revoke'>,deviceRevision:()=>number) {
+  devices:Pick<ReturnType<typeof createBrowserDevices>,'list'|'issue'|'revoke'>,deviceRevision:()=>number,passwordLogin:ReturnType<typeof createBrowserPassword>) {
   // Reserve a slot before the password hash starts, so concurrent guesses count as well.
   const attempts=new Map<string,{count:number;until:number}>();
   async function limited<T>(req:IncomingMessage,res:ServerResponse,operation:()=>Promise<T>):Promise<T> {
@@ -69,6 +70,44 @@ export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootTo
   return async(req:IncomingMessage,res:ServerResponse,path:string)=>{
     res.setHeader('cache-control','no-store');res.setHeader('referrer-policy','no-referrer');
     const action=path.slice(base.length),token=sessionToken(req),session=token?auth.session(token):undefined;
+    if(action==='password-login' || action.startsWith('password-login/')){
+      const checkAdmin=()=>{
+        const current=auth.session(token);
+        if(!session || current?.csrf!==session.csrf)fail(401,'请先登录管理界面');
+        if(req.method==='POST' && (req.headersDistinct['x-csrf-token']?.length!==1 ||
+          !exact(req.headers['x-csrf-token'] as string|undefined,current.csrf)))fail(403,'管理请求的 CSRF 验证失败');
+        return current.csrf;
+      };
+      const csrf=checkAdmin();
+      if(action==='password-login' && req.method==='GET'){
+        deviceRevision();
+        return json(res,200,passwordLogin.state());
+      }
+      if(req.method!=='POST')fail(405,'此管理操作需要 POST');
+      sameOrigin(req);
+      if(req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json')fail(415,'管理操作需要 JSON 请求');
+      const generation=deviceRevision();
+      const recheck=()=>{
+        checkAdmin();
+        if(deviceRevision()!==generation)fail(409,'设备配对设置已变化');
+      };
+      const input=await readBody(req,8192);
+      recheck();
+      if(!rootToken && action!=='password-login/disable')fail(403,'请先配置工作台访问令牌');
+      let result;
+      if(action==='password-login/register/start' && Object.keys(input).length===2 &&
+        typeof input.message==='string' && typeof input.revision==='string'){
+        result=await passwordLogin.registerStart(csrf,input.message,input.revision);
+      }else if(action==='password-login/register/finish' && Object.keys(input).length===3 &&
+        typeof input.session==='string' && typeof input.message==='string' && typeof input.revokeDevices==='boolean'){
+        result=await passwordLogin.registerFinish(csrf,input.session,input.message,input.revokeDevices);
+      }else if((action==='password-login/enable'||action==='password-login/disable') && Object.keys(input).length===2 &&
+        typeof input.revision==='string' && typeof input.revokeDevices==='boolean'){
+        result=await passwordLogin[action.endsWith('/enable')?'enable':'disable'](input.revision,input.revokeDevices);
+      }else fail(400,'密码登录管理请求无效');
+      recheck();
+      return json(res,200,result);
+    }
     if(req.method==='GET'){
       if(action==='state')return json(res,200,{configured:auth.configured(),authenticated:!!session,...(session && {csrf:session.csrf,expiresAt:session.expiresAt})});
       if(action==='overview'||action==='doctor'||action==='devices'){

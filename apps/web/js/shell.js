@@ -4,6 +4,7 @@ import { icon } from './ui/icons.js';
 import { Button, Input } from './ui/kit.js';
 import { hintCopy } from './ui/hint.js';
 import { alertLabel } from './lib/alerts.js';
+import {openPasswordLogin} from './features/password-login.js';
 import {disconnectBrowser} from './features/disconnect-browser.js';
 import { createPluginSettings } from './features/plugin-settings.js';
 import { openTerminalWall } from './features/terminal-wall.js';
@@ -58,7 +59,8 @@ export function createShell({ api, store, router, scope }) {
   }},'浏览器设备');
   const disconnect=Button({label:'断开此浏览器',size:'sm',onClick:()=>{toggleConn(false);disconnectBrowser(api,store);}});
   disconnect.hidden=!api.token();
-  const connPop = h('div', { class: 'conn__pop', hidden: true }, connMessage, tokenForm, devicesLink, disconnect);
+  const passwordLogin=Button({label:'使用浏览器密码登录',size:'sm',onClick:()=>{toggleConn(false);openPasswordLogin(api,store);}});
+  const connPop = h('div', { class: 'conn__pop', hidden: true }, connMessage, tokenForm, passwordLogin, devicesLink, disconnect);
   const conn = h('div', { class: 'conn' }, connButton, connPop);
   const toggleConn = (open) => { connPop.hidden = !open; connButton.setAttribute('aria-expanded', String(open)); if (open) tokenInput.focus(); };
   connButton.addEventListener('click', () => toggleConn(connPop.hidden));

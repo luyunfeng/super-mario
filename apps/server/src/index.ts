@@ -1,5 +1,7 @@
 import {createAdminOverview} from './admin-overview.ts';
 import {createAdminAuth} from './admin-auth.ts';
+import {createBrowserPassword} from './browser-password.ts';
+import {createPublicPasswordRoutes} from './browser-password-routes.ts';
 import {createAdminRoutes} from './admin-routes.ts';
 import {proofForBrowserToken} from '../../../plugins/browser-devices.ts';
 import {createBrowserAccess,pairingQR} from './browser-access.ts';
@@ -118,6 +120,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       const path = url.pathname;
       if (path === '/api/health' || path === '/api/v1/health') return json(res, 200, { ok: true, version });
       if(path.startsWith('/api/v1/admin/'))return await adminRoutes(req,res,path);
+      if(path.startsWith('/api/v1/public/password/'))return await passwordRoutes(req,res,path);
       if(path==='/api/v1/public/browser-pair'){
         if(req.method!=='POST')throw new InputError('设备配对需要 POST',405);
         res.setHeader('cache-control','no-store');res.setHeader('referrer-policy','no-referrer');
@@ -1329,7 +1332,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
       let assetURL: URL;
       let contentType: string;
-      if (path === '/vendor/sha256.js') {
+      if (path === '/vendor/opaque.js') {
+        assetURL = new URL('../esm/index.js',import.meta.resolve('@serenity-kit/opaque'));
+        contentType = 'text/javascript';
+      } else if (path === '/vendor/sha256.js') {
         assetURL = new URL(import.meta.resolve('fast-sha256'));
         contentType = 'text/javascript';
       } else if (path === '/vendor/xterm.js' || path === '/vendor/xterm.css') {
@@ -1340,8 +1346,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (relative === 'share.html' || relative === 'admin.html') {
           res.setHeader('cache-control','no-store');
           res.setHeader('referrer-policy','no-referrer');
-          res.setHeader('content-security-policy',"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+          res.setHeader('content-security-policy',(relative==='admin.html'?"worker-src 'self'; ":'')+"default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
         }
+        if(relative==='js/browser-password-worker.js')res.setHeader('content-security-policy',"default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' data:");
         const extension = relative.slice(relative.lastIndexOf('.'));
         if (!/^[\w./-]+$/.test(relative) || relative.split('/').some(part => part === '..' || part.startsWith('.')) || !types[extension]) throw new InputError('页面不存在', 404);
         assetURL = new URL(`../../web/${relative}`, import.meta.url);
@@ -1362,7 +1369,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
   });
   const overview=createAdminOverview({store:app.store,version,startedAt,demo:!!config.demo,address:()=>server.address(),
     machines:()=>machines.list(),plugins:()=>app.plugins.list(),devices:()=>app.browserDevices.list()});
-  const adminRoutes=createAdminRoutes(createAdminAuth(app.store),config.token,body,json,overview,app.browserDevices,devicePlugin);
+  const browserPassword=createBrowserPassword(app.store,app.browserDevices,devicePlugin);
+  const passwordRoutes=createPublicPasswordRoutes(browserPassword,config.token,devicePlugin,body,json);
+  const adminRoutes=createAdminRoutes(createAdminAuth(app.store),config.token,body,json,overview,app.browserDevices,devicePlugin,browserPassword);
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const access=browserAccess.access(req,url);

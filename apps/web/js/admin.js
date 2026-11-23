@@ -1,9 +1,10 @@
+import {adminBrowserPassword} from './features/admin-browser-password.js';
 import {createAdminDevices} from './admin-devices.js';
 import {h,replace} from './lib/dom.js';
 
 const view=document.getElementById('admin-view'),errorBox=document.getElementById('admin-error');
 const base='/api/v1/admin/';
-let devices,state,timer,busy=false,generation=0;
+let browserPassword,devices,state,timer,busy=false,generation=0;
 const button=(text,action)=>h('button',{class:'btn',type:'button',onclick:action},text);
 const secret=(label,autocomplete)=>h('label',{class:'field'},label,h('input',{class:'input',type:'password',autocomplete,required:true}));
 const value=field=>field.querySelector('input').value;
@@ -28,7 +29,7 @@ async function request(endpoint,body,headers={},signal){
   return reply;
 }
 function clear(){
-  clearTimeout(timer);devices?.close();devices=undefined;state=undefined;generation++;
+  clearTimeout(timer);browserPassword?.close();browserPassword=undefined;devices?.close();devices=undefined;state=undefined;generation++;
   for(const input of view.querySelectorAll('input'))input.value='';
   replace(view);
 }
@@ -143,11 +144,12 @@ function showSession(overview){
       h('ul',{},result.checks.map(check=>h('li',{},h('strong',{},check.label+' · '+statusLabels[check.status]),
         h('p',{},check.detail)))));
   }));
+  browserPassword=adminBrowserPassword({request,submit,csrf,current:()=>state===session});
   devices=createAdminDevices({request,submit,csrf,current:()=>state===session});
   paint(overview);
   replace(view,h('h2',{},'管理员会话'),h('section',{class:'stack','aria-label':'服务概览'},h('h3',{},'服务概览'),info,endpoints,reload),
     saveName,feedback,h('section',{class:'stack','aria-label':'运行诊断'},h('h3',{},'运行诊断'),diagnose,report),
-    devices.el,form('修改密码',[old,next,confirm],'保存新密码',async()=>{
+    devices.el,browserPassword.el,form('修改密码',[old,next,confirm],'保存新密码',async()=>{
       if(value(confirm)!==value(next))throw Error('两次输入的新密码不一致。');
       await request('password',{currentPassword:value(old),newPassword:value(next)},csrf);
       clear();await refresh();

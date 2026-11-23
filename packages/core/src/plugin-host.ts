@@ -243,7 +243,7 @@ export class PluginHost {
     };
     // Host authentication records live in the same SQLite file, outside the plugin store API.
     function pluginCollection(name:string) {
-      if (typeof name !== 'string' || name.startsWith('core.admin-auth.')) throw new Error('Reserved host collection');
+      if (typeof name !== 'string' || name.startsWith('core.admin-auth.') || name.startsWith('browser-devices.')) throw new Error('Reserved host collection');
       return name;
     }
     const backing = this.options.store;
