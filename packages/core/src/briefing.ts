@@ -18,7 +18,11 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
   const held = store.list<AwayNotification>('notifications.away').filter(item => item.status === 'held').flatMap(item => {
     // Older held records still point at the durable event that produced them.
     const date = item.createdAt ?? store.get<{createdAt:string}>('eventbox.events',item.id.slice('away:'.length))?.createdAt;
-    return date && changed(date) ? [{id:item.id,projectId:item.projectId,date,title:item.text.slice(0,800)}] : [];
+    if (!date || !changed(date)) return [];
+    const run = item.runId ? store.get<Run>('runs',item.runId) : undefined;
+    const href = run && run.projectId === item.projectId
+      ? '#projects/'+encodeURIComponent(run.projectId ?? 'all')+'/runs/'+encodeURIComponent(run.id) : undefined;
+    return [{id:item.id,projectId:item.projectId,date,title:item.text.slice(0,800),href}];
   }).sort((a,b)=>b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
   const runs = store.list<Run>('runs');
   const todos = store.list<Todo>('todos');
@@ -53,7 +57,7 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
     }
     const updates = (status: Run['status']) => scopedRuns.filter(r => changed(r.updatedAt) && r.status === status)
       .map(r => ({ id: r.id, title: r.prompt, status: r.status }));
-    const heldNotifications = held.filter(item => (item.projectId ?? '') === project.id).map(({id,title})=>({id,title}));
+    const heldNotifications = held.filter(item => (item.projectId ?? '') === project.id).map(({id,title,href})=>({id,title,...(href && {href})}));
     return { projectId:project.id, name:project.name, deferredQuestions, heldNotifications,
       ...(localDate ? { overdue, dueToday } : {}),
       ...(includeContinuingRuns ? { continuing: scopedRuns

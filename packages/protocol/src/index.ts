@@ -83,7 +83,7 @@ export interface ProjectWorkspaceBinding { machineId: string; cwd: string }
 export interface WebPresenceInput { tabId: string; visible: boolean; focused: boolean; sequence?: number }
 export interface BriefingSettings { lowDistraction?: boolean; decisionQuietHours: { enabled: boolean; start: string; end: string }; timezone: string; morning: string; evening: string; intervalHours: number; intervalEnabled: boolean; activeStart: string; activeEnd: string; awayNotifications: boolean }
 export type CodeBrowseKind = 'tree' | 'file' | 'diff';
-export interface AwayNotification { id: string; createdAt?: string; text: string; todoId?: string; projectId?: string; cardId?: string; decision?: {kind:'approval'|'plan';id:string;version:number}; status: 'pending' | 'queued' | 'skipped' | 'held'; reason?: string; outboxId?: string }
+export interface AwayNotification { id: string; createdAt?: string; runId?: string; text: string; todoId?: string; projectId?: string; cardId?: string; decision?: {kind:'approval'|'plan';id:string;version:number}; status: 'pending' | 'queued' | 'skipped' | 'held'; reason?: string; outboxId?: string }
 export interface DiscoveredProject { name: string; cwd: string; sources: string[]; exists: boolean; lastUsedAt?: string }
 export interface ProjectDiscovery { homeDir?: string; projects: DiscoveredProject[]; roots: string[]; warnings: string[]; truncated: boolean }
 export interface Project { workspace?: ProjectWorkspaceBinding; id: string; name: string; description: string; memoryEnabled?: boolean; followUp?: { briefingEnabled?: boolean; briefingTime: string; overdueReminders: boolean; automation: 'inherit' | 'conservative' | 'balanced' | 'quiet' }; createdAt: string; updatedAt: string; archivedAt?: string }

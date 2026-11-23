@@ -87,4 +87,10 @@ test('低干扰保留通知按事件时间与项目归入简报，旧记录使�
   const brief=buildWindowBrief(store,from,to,'a');
   assert.deepEqual(brief.projects[0].heldNotifications,[{id:'away:one',title:'合成通知 one'}]);
   assert.match(formatWindowBrief(brief,'project'),/低干扰保留通知 1：合成通知 one/);
+  store.put('notifications.away','away:one',{id:'away:one',runId:'r',projectId:'a',createdAt:to,status:'held',text:'执行结果'});
+  store.put('runs','r',{id:'r',projectId:'a',status:'running',updatedAt:from});
+  const read=()=>buildWindowBrief(store,from,to,'a').projects[0].heldNotifications[0];
+  assert.equal(read().href,'#projects/a/runs/r');
+  store.put('runs','r',{id:'r',projectId:'b',status:'running',updatedAt:from});
+  assert.equal(read().href,undefined);
 });
