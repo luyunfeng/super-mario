@@ -41,7 +41,7 @@ export function conversationStatusButton({ api, store, scope, target, project, t
         const last = data.lastMessage;
         replace(content, h('strong', null, phases[data.phase] || phases.unknown),
           data.goal && h('p', null, '当前执行目标 · ' + data.goal),
-          last && h('section', { class: 'stack' }, h('h3', null, '最近发言'), h('p', { class: 'small muted' }, (last.role === 'user' ? '用户' : '助手') + ' · ' + last.at),
+          last && h('section', { class: 'stack' }, h('h3', null, '最近发言'), h('p', { class: 'small muted' }, (last.role === 'user' ? '用户' : last.status === 'pending' ? '助手 · 处理中' : last.status === 'failed' ? '助手 · 处理失败' : '助手') + ' · ' + last.at),
             h('p', null, last.text), last.truncated && h('p', { class: 'small muted' }, '仅显示摘录')),
           h('section', { class: 'stack' }, h('h3', null, '待决定 · ' + data.pending.total),
             data.pending.items.map(item => h('p', null, (kinds[item.kind] || item.kind) + ' · ' + item.title)),

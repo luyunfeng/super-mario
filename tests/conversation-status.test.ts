@@ -4,6 +4,7 @@ import { createStore } from '../packages/core/src/store.ts';
 import { createEventBus } from '../packages/core/src/events.ts';
 import { createContributions, PluginHost } from '../packages/core/src/plugin-host.ts';
 import { conversationSearch } from '../plugins/conversation-search.ts';
+import { statusDashboard } from '../apps/server/src/feishu-dashboard.ts';
 import { readConversationStatus } from '../plugins/conversation-status.ts';
 
 const at = '2026-11-23T09:00:00Z';
@@ -89,4 +90,14 @@ test('old project turns remain visible and an interrupted assistant placeholder 
   assert.equal(readConversationStatus(store, scope).phase, 'failed');
   assert.equal(readConversationStatus(store, scope).lastMessage?.text, '最近 发言');
   assert.equal(readConversationStatus(store, { ...scope, projectId: 'other' }).phase, 'no_records');
+});
+
+test('最近助手发言保留本轮状态，飞书卡片标明未完成的摘录', t => {
+  const store = createStore(':memory:'); t.after(() => store.close());
+  for (const [status, label] of [['pending', '处理中'], ['failed', '处理失败']]) {
+    store.put('messages', 'reply', { ...message, id: 'reply', role: 'assistant', status, text: '合成回复片段' });
+    const report = readConversationStatus(store, scope);
+    assert.equal(report.lastMessage?.status, status);
+    assert.ok(statusDashboard('合成对话', report).text.includes('最近消息 · 助手 · ' + label));
+  }
 });

@@ -179,7 +179,7 @@ export function statusDashboard(target: string, status: ConversationStatus | str
     if (status.goal) lines.push('目标 · ' + label(status.goal, 400));
     if (status.lastMessage) {
       const last = status.lastMessage;
-      lines.push('最近消息 · ' + (last.role === 'user' ? '用户' : '助手') + ' · ' + last.at + '\n' + last.text + (last.truncated ? '…' : ''));
+      lines.push('最近消息 · ' + (last.role === 'user' ? '用户' : last.status === 'pending' ? '助手 · 处理中' : last.status === 'failed' ? '助手 · 处理失败' : '助手') + ' · ' + last.at + '\n' + last.text + (last.truncated ? '…' : ''));
     }
     const pending = status.pending;
     const kinds = { question: '问题', permission: '权限', plan: '计划', review: '验收' };
