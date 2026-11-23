@@ -180,9 +180,12 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await drawer.getByRole('combobox', { name: '筛选标签' }).selectOption('核对标签');
   await expect(drawer.getByRole('button', { name: /核对独立方案/ })).toBeVisible();
   await expect(drawer).not.toContainText('另一条没有标签的资料');
+  const historicalReply=server.app.store.list<Message>('messages').find(m=>m.role==='assistant' && m.text.includes(keyword))!;
+  server.app.store.put('messages',historicalReply.id,{...historicalReply,status:'failed'});
   await drawer.getByRole('textbox', { name: '搜索独立对话' }).fill(keyword);
   await drawer.getByRole('button', { name: '搜索', exact: true }).click();
   const hitButton=drawer.getByRole('button',{name:new RegExp('用户.*'+keyword)}).first();
+  await expect(drawer.getByRole('button',{name:/助手 · 处理失败/})).toContainText(keyword);
   await expect(hitButton.locator('mark')).toHaveText(keyword);
   await expect(hitButton).toContainText('…');
   await hitButton.click();

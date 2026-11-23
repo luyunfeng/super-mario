@@ -8,6 +8,11 @@ import { conversationModelPicker } from './model-drawer.js';
 import { Button, Field, Input, Select, copyText } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 
+function historyMessageLabel(message) {
+  const status={pending:'处理中',failed:'处理失败'}[message.status];
+  return [message.role==='user'?'用户':'助手',status,new Date(message.createdAt).toLocaleString()].filter(Boolean).join(' · ');
+}
+
 export function openPrivateThreads({ api, bot, store, onClose, target }) {
   const base = '/feishu/bots/' + encodeURIComponent(bot.id) + '/threads';
   const owner = api.draftOwner(), route = location.hash;
@@ -203,7 +208,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       replace(results, items.length ? items.map(row => h('div', { class: 'stack' }, openThread(row),
         row.titleMatch && h('span', { class: 'small muted' }, '标题匹配'),
         row.hits.map(hit => h('button',{type:'button',class:'btn btn--secondary btn--sm',onclick:()=>detail(row,'',undefined,hit.id)},
-          hit.role==='user'?'用户':'助手',' · ',hit.omittedBefore?'…':'',hit.excerpt.slice(0,hit.matchStart),
+          historyMessageLabel(hit),' · ',hit.omittedBefore?'…':'',hit.excerpt.slice(0,hit.matchStart),
           h('mark',{},hit.excerpt.slice(hit.matchStart,hit.matchEnd)),hit.excerpt.slice(hit.matchEnd),hit.omittedAfter?'…':''))))
         : h('p', { class: 'muted' }, '没有找到匹配的独立对话。'),
         searchPage.nextBefore && Button({ label: '加载更多结果', onClick: () => read(searchPage.nextBefore) }));
@@ -446,7 +451,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     }
     const entries = items => items.map(message => h('section', { class: 'stack' },
       around && message.id === around && h('mark', { tabIndex: -1 }, query || target ? '命中消息' : '定位到的消息'),
-      h('strong', null, (message.role === 'user' ? '用户' : '助手') + ' · ' + new Date(message.createdAt).toLocaleString()),
+      h('strong', null, historyMessageLabel(message)),
       message.quotedImageMessageId && Button({ label:'查看引用原图', size:'sm', onClick:()=>openQuotedMessage(message.quotedImageMessageId) }),
       message.quotedFileMessageId && Button({ label:'查看引用文件', size:'sm', onClick:()=>openQuotedMessage(message.quotedFileMessageId) }),
       message.quotedFilesUnavailable && h('span',{class:'small muted'},'引用文件不可用'),
