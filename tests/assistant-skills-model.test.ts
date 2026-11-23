@@ -1311,8 +1311,9 @@ test('Web 与飞书项目助手检索项目原话，范围固定且排除当前�
   let selectedTodo = '';
   const sent: string[] = [];
   const query = '[乙] 抽样批次';
-  const sourceText = '记录抽样批次。'.padEnd(3999, '甲') + '📝先核对来源。' + '其余字段待复核。'.repeat(10) + '选定[乙]。';
-  const answer = '原话要求“先核对来源”。';
+  let hitVersion = '';
+  let sourceText = '记录抽样批次。'.padEnd(3999, '甲') + '📝先核对来源。' + '其余字段待复核。'.repeat(10) + '选定[乙]。';
+  const updatedCondition = '先核对来源，再登记依据。';
   const { server, api, ask, requests } = await fixture(t, req => {
     if (req.lastRole === 'user' && JSON.stringify(req.content).includes('上次这个问题怎么回答的')) {
       assert.match(req.system, /不要用时间相邻的消息推测对应关系/);
@@ -1350,11 +1351,23 @@ test('Web 与飞书项目助手检索项目原话，范围固定且排除当前�
     if (req.callId === 'wrong-message') {
       assert.match(raw, /未找到当前项目的可读消息/);
       assert.doesNotMatch(raw, /保密批次/);
-      return call('project_message_read', { projectId: currentProjectId, id: 'original' }, 'first');
+      return call('project_message_read', { projectId: currentProjectId, id: 'original', version: hitVersion }, 'stale-hit');
+    }
+    if (req.callId === 'stale-hit') {
+      assert.match(raw, /消息正文已变化/);
+      assert.match(req.system, /丢弃旧摘录和已读片段，重新检索/);
+      return call('project_message_search', { query, mode: 'keywords' }, 'refreshed');
+    }
+    if (req.callId === 'refreshed') {
+      const hit = JSON.parse(raw).hits.find((item: {id: string}) => item.id === 'original');
+      assert.notEqual(hit.version, hitVersion);
+      assert.equal(hit.status, 'done');
+      return call('project_message_read', { projectId: hit.projectId, id: hit.id, version: hit.version }, 'first');
     }
     if (req.callId === 'first' || req.callId === 'rest') {
       const part = JSON.parse(raw);
       if (req.callId === 'first') {
+        assert.equal(part.status, 'done');
         assert.equal(part.text, sourceText.slice(0, 3999));
         return call('project_message_read', { projectId: part.projectId, id: part.id, version: part.version, offset: part.nextOffset }, 'rest');
       }
@@ -1363,7 +1376,9 @@ test('Web 与飞书项目助手检索项目原话，范围固定且排除当前�
       assert.equal(part.webCitation, '[查看原文](#projects/' + currentProjectId + '/workspace?at=original)');
       assert.match(req.system, /飞书回复写明项目、发言角色、消息时间和摘录/);
       const source = part.projectName + ' · 用户 · ' + part.createdAt;
-      return { role: 'assistant', content: answer + (req.system.includes('本轮回复渠道是飞书') ? source : part.webCitation) };
+      const condition = part.text.match(/先核对来源[^。]*。/u)?.[0];
+      assert.equal(condition, updatedCondition);
+      return { role: 'assistant', content: condition + (req.system.includes('本轮回复渠道是飞书') ? source : part.webCitation) };
     }
     const hits = JSON.parse(raw).hits;
     const original = hits.find((hit: {id: string}) => hit.id === 'original');
@@ -1377,6 +1392,11 @@ test('Web 与飞书项目助手检索项目原话，范围固定且排除当前�
     if (requests.filter(r => r.callId === 'history').length === 1) assert.doesNotMatch(raw, /请查一下/);
     assert.doesNotMatch(raw, /先核对来源/);
     assert.match(req.system, /按命中的 projectId 和 id 读正文/);
+    assert.match(original.version, /^[a-f0-9]{64}$/);
+    hitVersion = original.version;
+    sourceText = sourceText.replace('先核对来源。', updatedCondition) + '本轮复核。';
+    const previous = server.app.store.get<Message>('messages', original.id)!;
+    server.app.store.put('messages', original.id, { ...previous, text: sourceText });
     return call('project_message_read', { projectId: original.projectId, id: 'foreign' }, 'wrong-message');
   }, options => {
     adapter = options;
@@ -1393,13 +1413,13 @@ test('Web 与飞书项目助手检索项目原话，范围固定且排除当前�
         role: 'user', text, status: 'done', createdAt });
     }
     const question = '请查一下上次说的' + query + '，原话有什么条件？';
-    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), answer + '[查看原文](#projects/' + project.id + '/workspace?at=original)');
+    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), updatedCondition + '[查看原文](#projects/' + project.id + '/workspace?at=original)');
     const bot = await api('/feishu/bots', { name: '历史检索', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
     const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
     await adapter.onMessage('抽样的项目过去说过什么？', { ...source, messageId: 'question' });
-    await t.waitFor(() => assert.ok(sent.includes(answer + '抽样项目 · 用户 · ' + createdAt)));
+    await t.waitFor(() => assert.ok(sent.includes(updatedCondition + '抽样项目 · 用户 · ' + createdAt)));
     assert.equal(requests.filter(r => r.callId === 'history').length, 2);
     const response = requests.find(r => r.callId === 'first')!.content;
     const first = JSON.parse(typeof response === 'string' ? response : (response as {text:string}[])[0].text);

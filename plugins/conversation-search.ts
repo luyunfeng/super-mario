@@ -97,6 +97,10 @@ function readableMessage(message: Message, project: Project, excludeId: unknown)
     ['user', 'assistant'].includes(message.role) && (!message.origin || message.origin === 'user');
 }
 
+function messageVersion(text: string) {
+  return createHash('sha256').update(text).digest('hex');
+}
+
 function messageCitation(projectId: string, id: string) {
   return '[查看原文](#projects/' + encodeURIComponent(projectId) + '/workspace?' + new URLSearchParams({ at: id }) + ')';
 }
@@ -151,8 +155,7 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
       return { before: message.text.slice(Math.max(0, start - 18), start), match: match[0], after: message.text.slice(end, end + 32) };
     });
     hits.push({ projectId: project.id, projectName: project.name, createdAt: message.createdAt, id: message.id,
-      role: message.role, webCitation: messageCitation(project.id, message.id), ...(todoId !== undefined && { todoId }),
-      ...((todoId !== undefined || question) && { status: message.status }),
+      role: message.role, version: messageVersion(message.text), status: message.status ?? 'unknown', webCitation: messageCitation(project.id, message.id), ...(todoId !== undefined && { todoId }),
       ...(listMessages ? { preview: message.text.slice(0, 120) } : excerpts[0]), ...(excerpts.length > 1 ? { excerpts } : {}) });
   }
   if (!pastCursor) fail(404, '未找到当前检索的消息游标');
@@ -165,7 +168,7 @@ export const conversationSearch: Extension = {
   activate(context) {
     context.contribute('tools', 'project_message_search', {
       name: 'project_message_search',
-      description: '从新到旧查找项目工作对话。默认按连续原文匹配；mode=keywords 要求同一条消息含全部关键词（空格分隔，最多 8 个，顺序不限）。返回发言角色、消息 ID 和命中前后的摘录。传 projectId 和 todoId 可限定一项待办，省略 query 则列出该项最近消息。查询某个提问的回答时传 projectId 和 replyTo（原提问 ID），按 status 核对结果。可用 nextBefore 继续查更早的结果。',
+      description: '从新到旧查找项目工作对话。默认按连续原文匹配；mode=keywords 要求同一条消息含全部关键词（空格分隔，最多 8 个，顺序不限）。返回发言角色、消息状态、ID、正文版本和命中前后的摘录。传 projectId 和 todoId 可限定一项待办，省略 query 则列出该项最近消息。查询某个提问的回答时传 projectId 和 replyTo（原提问 ID），按 status 核对结果。可用 nextBefore 继续查更早的结果。',
       parameters: { type: 'object', additionalProperties: false, properties: {
         query: { type: 'string' }, replyTo: { type: 'string' }, todoId: { type: 'string' }, mode: { type: 'string', enum: ['phrase', 'keywords'] }, projectId: { type: 'string' }, before: { type: 'string' },
       } },
@@ -176,7 +179,7 @@ export const conversationSearch: Extension = {
     });
     context.contribute('tools', 'project_message_read', {
       name: 'project_message_read',
-      description: '按检索命中的项目 ID 和消息 ID 读取一条项目工作消息的正文。续读时传回 nextOffset 和 version。',
+      description: '按检索命中的项目 ID 和消息 ID 读取一条项目工作消息的正文。首次读取传检索返回的 version。续读时传回 nextOffset 和 version。',
       parameters: { type: 'object', required: ['projectId', 'id'], additionalProperties: false, properties: {
         projectId: { type: 'string' }, todoId: { type: 'string' }, id: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, version: { type: 'string' },
       } },
@@ -190,13 +193,13 @@ export const conversationSearch: Extension = {
         if (!project || !message || !readableMessage(message, project, excludeId)) fail(404, '未找到当前项目的可读消息');
         if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || (offset > 0 && typeof version !== 'string'))
           fail(400, '续读需要有效位置和原版本');
-        const current = createHash('sha256').update(message.text).digest('hex');
+        const current = messageVersion(message.text);
         if (version !== undefined && version !== current) fail(409, '消息正文已变化，请从头读取');
         if (offset > message.text.length) fail(400, '位置超出消息正文');
         let end = Math.min(offset + 4000, message.text.length);
         if (end < message.text.length && /[\uD800-\uDBFF]/u.test(message.text[end - 1])) end--;
         return { id, projectId, projectName: project.name, role: message.role, createdAt: message.createdAt,
-          webCitation: messageCitation(projectId, id), text: message.text.slice(offset, end), offset, nextOffset: end < message.text.length ? end : null, version: current };
+          status: message.status ?? 'unknown', webCitation: messageCitation(projectId, id), text: message.text.slice(offset, end), offset, nextOffset: end < message.text.length ? end : null, version: current };
       },
     });
     context.provide('conversation-search.projects', input => projectMessages(context.store, input));
