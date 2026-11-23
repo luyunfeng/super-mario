@@ -41,6 +41,12 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   const originalTool = server.app.contributions.list('tools').find(entry => entry.value.name === 'knowledge_original')!.value;
   const result = await originalTool.execute({pageId:projectEntry.id, sourceId:projectJob.id, projectId:project.id, outline:true}, new AbortController().signal) as { headings: { title:string; line:number }[] };
   assert.deepEqual(result.headings.map(({title,line})=>[title,line]), [['计划',4],['核对',5],['核对',9],['后续工作',11]]);
+  const readSection = (sectionLine:number) => originalTool.execute({pageId:projectEntry.id,sourceId:projectJob.id,projectId:project.id,sectionLine},new AbortController().signal);
+  const chapter = await readSection(5) as {text:string;lastLine:number};
+  assert.equal(chapter.lastLine,10);
+  assert.match(chapter.text,/### 核对/);
+  assert.doesNotMatch(chapter.text,/后续工作/);
+  await assert.rejects(readSection(7),/没有章节标题/);
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
   t.after(() => browser.close());
   const page = await browser.newPage();

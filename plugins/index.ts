@@ -645,6 +645,8 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             if (handoffExcerpt !== undefined && (typeof handoffExcerpt !== 'boolean' ||
                 (handoffExcerpt && (!sourceId || query !== undefined || args.offset !== undefined)))) throw new Error('交接节选须指定转写来源，不能同时搜索或分页');
             if (args.outline !== undefined && (typeof args.outline !== 'boolean' || (args.outline && (!sourceId || query !== undefined || handoffExcerpt)))) throw new Error('文档大纲须指定来源并单独查询');
+            const sectionLine = args.sectionLine;
+            if (sectionLine !== undefined && (!sourceId || typeof sectionLine !== 'number' || !Number.isSafeInteger(sectionLine) || sectionLine < 1 || args.outline || query !== undefined || handoffExcerpt)) throw new Error('请使用大纲中的章节起始行单独读取');
             const result = await actions.knowledgeOriginal!(pageId, sourceId, typeof projectId === 'string' ? projectId : undefined, handoffExcerpt);
             if (result.sources) {
               const end = offset + 25;
@@ -652,6 +654,18 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             }
             if (typeof sourceId !== 'string' || typeof result.content !== 'string' || typeof result.title !== 'string') throw new Error('来源正文不可用');
             const route = '#memory?entry=' + encodeURIComponent(pageId) + '&source=' + encodeURIComponent(sourceId);
+            if (typeof sectionLine === 'number') {
+              const headings = documentHeadings(result.content);
+              const heading = headings.find(item => item.line === sectionLine);
+              if (!heading) throw new Error('指定行没有章节标题，请重新核对文档大纲');
+              const lines = result.content.split(/\r\n|\r|\n/);
+              const next = headings.find(item => item.line > sectionLine && item.level <= heading.level);
+              const lastLine = next ? next.line - 1 : lines.length;
+              const chars = Array.from(lines.slice(sectionLine - 1, lastLine).join('\n'));
+              const end = offset + 4000;
+              return { title: result.title, heading, lastLine, text: chars.slice(offset, end).join(''), nextOffset: end < chars.length ? end : null,
+                webCitation: `[查看章节](${route}&line=${sectionLine})` } as Json;
+            }
             if (args.outline) {
               const headings = documentHeadings(result.content);
               const end = offset + 25;
@@ -677,7 +691,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             const chars = Array.from(result.content);
             const end = offset + 4000;
             return { title: result.title, webCitation: `[查看原文](${route})`, text: chars.slice(offset, end).join(''), nextOffset: end < chars.length ? end : null } as Json;
-          }, { pageId: { type: 'string' }, sourceId: { type: 'string' }, outline: { type: 'boolean', description: '列出已保存原文的 Markdown 标题、层级和行号。按 nextOffset 续读；同名标题按行号区分。' }, handoffExcerpt: { type: 'boolean', description: '用户明确要求附转写时获取交接用正文；长文只保留首尾。' }, query: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
+          }, { pageId: { type: 'string' }, sourceId: { type: 'string' }, sectionLine: { type: 'integer', minimum: 1, description: '大纲返回的标题行。读取此章节及其子章节，按 nextOffset 续读。' }, outline: { type: 'boolean', description: '列出已保存原文的 Markdown 标题、层级和行号。按 nextOffset 续读；同名标题按行号区分。' }, handoffExcerpt: { type: 'boolean', description: '用户明确要求附转写时获取交接用正文；长文只保留首尾。' }, query: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }));
         if (actions?.searchMeetings) context.contribute('tools', 'meeting_search', tool('meeting_search',
           '按会议当前标题或登记标题检索可见会议，包含未注明日期的来源。返回当前标题、开始时间、整理状态和可读知识页。', async (args, signal) => {
             signal.throwIfAborted();
