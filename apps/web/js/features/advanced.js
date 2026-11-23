@@ -130,12 +130,27 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
     h('summary', null, '高级：插件与排查'),
     h('div', { class: 'fold__body' }, plugins, h('a',{class:'btn btn--sm',href:'/admin.html'},'管理员登录'), files, events, ui, diagnostics));
 
+  let cardSignature;
   function paint(snapshot) {
     examplesButton.hidden=!snapshot.webExtensions?.some(entry=>entry.value?.slot==='advanced-interface' && entry.value.renderer==='assistant-card-examples');
     if(examplesButton.hidden){examplesDrawer?.close();examplesDrawer=undefined;}
+    paintCards(snapshot.webExtensions ?? []);
+    const setup = snapshot.setup ?? {};
+    replace(setupList, [['配置 Agent', setup.agent], ['新建项目', setup.project], ['添加记忆', setup.memory], ['连接飞书', setup.channel]].map(([name, value]) =>
+      h('div', { class: 'row row--between' }, h('span', null, name), value === true || value === 'done' ? Pill('已完成', 'ok') : value === 'skipped' ? Pill('已跳过') : Pill('未完成', 'warn'))));
+    replace(diag,
+      h('dt', null, '版本'), h('dd', null, snapshot.version),
+      h('dt', null, '运行模式'), h('dd', null, snapshot.mode === 'demo' ? '演示' : '正式'),
+      (snapshot.problems ?? []).map(item => [h('dt', null, item.area === 'agent' ? 'Agent' : '渠道'), h('dd', null, `${item.message}。${item.fix}`)]));
+  }
+
+  function paintCards(extensions) {
+    const entries = extensions.filter(({value}) => value?.slot === 'advanced-interface' && value.renderer !== 'assistant-card-examples');
+    const signature = JSON.stringify(entries);
+    if (signature === cardSignature) return;
+    cardSignature = signature;
     const cards = [];
-    for (const {value} of snapshot.webExtensions ?? []) {
-      if (value?.slot !== 'advanced-interface' || value.renderer === 'assistant-card-examples') continue;
+    for (const {value} of entries) {
       const patch = value.renderer === 'diff' && typeof value.patch === 'string' && value.patch;
       const fallback = typeof value.fallback === 'string' && value.fallback;
       if (typeof value.title !== 'string') continue;
@@ -146,13 +161,6 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
     }
     replace(extensionCards, cards);
     extensionCards.hidden = !cards.length;
-    const setup = snapshot.setup ?? {};
-    replace(setupList, [['配置 Agent', setup.agent], ['新建项目', setup.project], ['添加记忆', setup.memory], ['连接飞书', setup.channel]].map(([name, value]) =>
-      h('div', { class: 'row row--between' }, h('span', null, name), value === true || value === 'done' ? Pill('已完成', 'ok') : value === 'skipped' ? Pill('已跳过') : Pill('未完成', 'warn'))));
-    replace(diag,
-      h('dt', null, '版本'), h('dd', null, snapshot.version),
-      h('dt', null, '运行模式'), h('dd', null, snapshot.mode === 'demo' ? '演示' : '正式'),
-      (snapshot.problems ?? []).map(item => [h('dt', null, item.area === 'agent' ? 'Agent' : '渠道'), h('dd', null, `${item.message}。${item.fix}`)]));
   }
 
   return { el, update: paint };

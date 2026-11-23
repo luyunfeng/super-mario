@@ -54,6 +54,19 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await expect(prices.getByRole('cell')).toHaveText(['10','15','9','12','24','12','13','10','11','—']);
   await expect(prices.locator('svg line')).toHaveCount(2);
   await expect(prices.locator('svg rect')).toHaveCount(3);
+  await patch.locator('code').evaluate(code => {
+    const range=document.createRange();
+    range.selectNodeContents(code);
+    const selection=window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
+  const examplesApi=server.url+'/api/v1/plugins/assistant-card-examples';
+  assert.ok((await page.request.post(examplesApi,{data:{enabled:false}})).ok());
+  await expect(entry).toBeHidden();
+  assert.equal(await page.evaluate(()=>window.getSelection()?.toString()),'+<img src=x>');
+  assert.ok((await page.request.post(examplesApi,{data:{enabled:true}})).ok());
+  await expect(entry).toBeVisible();
   const stopped=await page.request.post(server.url+'/api/v1/plugins/review',{data:{enabled:false}});
   assert.equal(stopped.status(),200);
   await expect(patch).toHaveCount(0);
