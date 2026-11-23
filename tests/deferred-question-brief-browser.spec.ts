@@ -21,6 +21,8 @@ test('主人从 Web 简报中的可稍后回答项目打开原待办', async t =
   await page.goto(server.url + '/#agent?token=' + token);
   await page.getByRole('button', {name:'查看简报', exact:true}).click();
   const drawer = page.getByRole('dialog', {name:'简报与提醒'});
+  await expect(drawer).toContainText('统计时段（');
+  await expect(drawer).toContainText('持久记录的最新状态');
   await expect(drawer).toContainText('可稍后回答 1');
   await drawer.getByRole('link', {name:title}).click();
   await expect(page).toHaveURL(new RegExp('/todos/detail/' + id + '$'));

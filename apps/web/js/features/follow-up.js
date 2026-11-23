@@ -151,7 +151,12 @@ export function createFollowUpCard({ api, store }) {
       const groups = brief.sections || { 逾期: brief.todos?.overdue || [], 等待中: brief.todos?.waiting || [], 待处理: brief.todos?.upcoming || [], 已完成: brief.todos?.completed || [] };
       const blocks = Object.entries(groups).filter(([, items]) => items.length)
         .map(([name, items]) => h('div', { class: 'stack' }, h('h3', null, name), items.map(item => h('p', null, item.title))));
-      if (brief.window) blocks.unshift(h('div',{class:'stack'},h('p',{class:'small muted'},`${brief.window.from} → ${brief.window.to}`),
+      if (brief.window) {
+        const timeZone = brief.timezone || 'UTC';
+        const format = new Intl.DateTimeFormat('zh-CN', { timeZone, dateStyle: 'medium', timeStyle: 'short' });
+        blocks.unshift(h('div', { class: 'stack' },
+          h('p', { class: 'small muted' }, `统计时段（${timeZone}） ${format.format(new Date(brief.window.from))} → ${format.format(new Date(brief.window.to))}`),
+          brief.window.basis && h('p', { class: 'small muted' }, brief.window.basis),
         brief.window.projects.map(p => {
           const sections = [['进展', [...p.progress, ...p.todoUpdates]], ['待办完成', p.completed],
             ['执行结束，待验收', p.ended], ['失败', p.failed], ['待决定', p.decisions]];
@@ -161,6 +166,7 @@ export function createFollowUpCard({ api, store }) {
           return h('section', { class: 'stack' }, h('h3', null, p.name), sections.map(([label, items]) =>
             h('div', null, h('strong', null, `${label} ${items.length}`), items.map(i => h('p', null, label === '可稍后回答' ? h('a', { href: '#projects/all/todos/detail/' + encodeURIComponent(i.id) }, i.title) : i.title)))));
         })));
+      }
       for (const signal of brief.signals || []) blocks.push(h('p', null, signal.text));
       replace(content, blocks.length ? blocks : h('p', { class: 'muted' }, '当前没有需要跟进的内容。'));
     } catch (cause) { replace(content, h('p', { class: 'text-danger' }, `简报暂时不可读：${cause.message}`)); }
