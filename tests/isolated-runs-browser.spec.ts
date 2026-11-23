@@ -379,6 +379,8 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   const followupSent = page.waitForRequest(r => r.method() === 'POST' && r.url().endsWith('/api/v1/runs'));
   await drawer.getByRole('button', { name: '开始执行' }).click();
   const followupRequest = await followupSent;
+  const response = await followupRequest.response();
+  assert.equal(response?.status(), 202, await response?.text());
   await expect.poll(() => continuedIn).toEqual([peer.cwd]);
   const child = server.app.store.list<Run>('runs').find(run => run.worktreeRunId === peer.id)!;
   assert.equal(child.cwd, peer.cwd);
@@ -468,5 +470,24 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   await expect(status).toContainText('文件列表已变化');
   await status.getByRole('button', { name: '重试' }).click();
   await expect(status.getByRole('button', { name: '下一页文件' })).toBeVisible();
+  await status.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.goto(server.url + '/#projects/' + project.id + '/runs');
+  const beforePreparation = server.app.store.list('runs').length;
+  await page.getByRole('button', { name: '项目工作树' }).click();
+  const trees = page.getByRole('dialog', { name: '项目工作树' });
+  await trees.getByLabel('工作树名称').fill('待后续执行');
+  await trees.getByRole('button', { name: '只创建工作树' }).click();
+  const receipt = trees.getByRole('status');
+  await expect(receipt).toContainText('已创建 待后续执行');
+  const prepared = await receipt.locator('code').innerText();
+  assert.equal(git(prepared, 'rev-parse', '--show-toplevel'), prepared);
+  assert.equal(server.app.store.list('runs').length, beforePreparation);
+  await page.reload();
+  await page.getByRole('button', { name: '项目工作树' }).click();
+  const preparedRow = trees.locator('.item').filter({ hasText: '待后续执行' });
+  await expect(preparedRow).toContainText(prepared);
+  await preparedRow.getByRole('button', { name: '在此工作树发起执行' }).click();
+  await expect(drawer).toContainText(prepared);
+  assert.equal(server.app.store.list('runs').length, beforePreparation);
 
 });

@@ -936,6 +936,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (!('followUp' in input) || Object.keys(input).some(key => !['followUp', 'expectedUpdatedAt', 'confirmed'].includes(key))) throw new InputError('项目跟进参数无效');
           return json(res, 200, app.updateProject(decodeURIComponent(projectFollowUp[1]!), input));
         }
+        const projectTrees = path.match(/^\/api\/v1\/projects\/([^/]+)\/worktrees$/);
+        if (projectTrees && method === 'GET') return json(res, 200, app.listProjectWorktrees(decodeURIComponent(projectTrees[1]!)));
+        if (projectTrees && method === 'POST') return json(res, 201, await app.createProjectWorktree(decodeURIComponent(projectTrees[1]!), await body(req)));
         const projectWorkspace=path.match(/^\/api\/v1\/projects\/([^/]+)\/(workspace|messages|memory)$/);
         const code = path.match(/^\/api\/v1\/projects\/([^/]+)\/code$/);
         if (code && method === 'GET') {

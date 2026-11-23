@@ -109,9 +109,11 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
   let plansSeq = 0;
   let plansSignature = '';
   const seg = Segmented({ options: FILTERS, value: filter, label: '执行状态', onChange: (value) => { filter = value; paintList(); } });
+  const worktrees = Button({ label: '项目工作树', onClick: openProjectWorktrees });
+  worktrees.hidden = true;
   const listView = h('div', { class: 'stack stack--lg' },
     h('div', { class: 'row row--between row--wrap' }, seg.el,
-      Button({ label: '发起执行', icon: 'plus', kind: 'primary', onClick: () => openLaunch() })),
+      h('div', { class: 'row' }, worktrees, Button({ label: '发起执行', icon: 'plus', kind: 'primary', onClick: () => openLaunch() }))),
     live.el, plansBox, list);
 
   function runRow(run) {
@@ -124,8 +126,73 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       h('span', { class: 'muted' }, '›'));
   }
 
+  function worktreeBinding(snapshot, id) {
+    const project = snapshot?.projects?.find(item => item.id === id && !item.archivedAt);
+    const binding = project?.workspace;
+    return binding && snapshot.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active')
+      && snapshot.machines?.some(m => m.id === binding.machineId && m.online && m.capabilities.includes('workspace.prepareRunWorktree'))
+      ? binding : undefined;
+  }
+
+  function openProjectWorktrees() {
+    const id = projectId, token = api.token();
+    const binding = worktreeBinding(store.view.snapshot, id);
+    if (!binding) return;
+    const path = '/projects/' + encodeURIComponent(id) + '/worktrees';
+    const name = Input({ required: true, maxLength: 80 });
+    const message = h('div', { role: 'status' });
+    const rows = h('div', { class: 'list' });
+    let revision = 0;
+    const current = () => {
+      const next = worktreeBinding(store.view.snapshot, id);
+      return drawer.el.open && projectId === id && api.token() === token &&
+        next?.machineId === binding.machineId && next?.cwd === binding.cwd;
+    };
+    async function load() {
+      const read = ++revision;
+      try {
+        const trees = await api.get(path);
+        if (!current() || read !== revision) return;
+        replace(rows, trees.length ? trees.map(tree => h('div', { class: 'item' },
+          h('strong', null, tree.name), h('div', { class: 'folder-path' }, tree.cwd),
+          Button({ label: '在此工作树发起执行', size: 'sm', disabled: !store.view.snapshot.machines.some(m => m.id === binding.machineId && m.capabilities.includes('workspace.inspectRunWorktree')), onClick: () => {
+            if (!current()) return;
+            drawer.close();
+            openLaunch(undefined, tree);
+          } }))) : Empty({ title: '还没有独立创建的工作树' }));
+      } catch (error) {
+        if (current() && read === revision) replace(rows, Banner({ tone: 'warn', children: systemText(error.message), action: Button({ label: '重新读取', onClick: load }) }));
+      }
+    }
+    const drawer = openDrawer({
+      title: '项目工作树', subtitle: binding.cwd,
+      body: [Field({ label: '工作树名称', control: name, required: true }), message, rows],
+      footer: Button({ label: '只创建工作树', kind: 'primary', onClick: async (_event, button) => {
+        if (!current() || !name.reportValidity()) return;
+        try {
+          const tree = await api.post(path, { name: name.value.trim() });
+          if (!current()) return;
+          name.value = '';
+          replace(message, h('p', null, '已创建 ' + tree.name), h('code', { class: 'folder-path' }, tree.cwd));
+          await load();
+        } catch (error) {
+          if (!current()) return;
+          const uncertain = !error.status || error.status >= 500;
+          button.disabled = uncertain;
+          replace(message, Banner({ tone: 'warn', children: uncertain ? '创建结果待核对，请检查绑定电脑上的工作树。' : systemText(error.message) }));
+          if (uncertain) await load();
+        }
+      } }),
+      onClose: () => { offRoute(); offStore(); },
+    });
+    const offRoute = router.subscribe(() => drawer.close());
+    const offStore = store.subscribe(view => { if (view.unauthorized || !current()) drawer.close(); });
+    load();
+  }
+
   function paintList() {
     const snapshot = store.view.snapshot;
+    worktrees.hidden = !worktreeBinding(snapshot, projectId);
     if (!snapshot) return;
     const rows = (snapshot.runs ?? []).filter(inScope).filter((run) => filter === 'all' || (filter === 'active' && isRunActive(run))
       || (filter === 'problem' && isRunProblem(run)) || (filter === 'ended' && !isRunActive(run) && !isRunProblem(run)))
@@ -246,7 +313,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
   }
 
   // —— 发起执行 ——
-  function openLaunch(parentRun) {
+  function openLaunch(parentRun, projectTree) {
     const snapshot = store.view.snapshot;
     const launchProjectId = parentRun?.projectId ?? projectId;
     const binding = snapshot.projects?.find(item => item.id === launchProjectId)?.workspace;
@@ -257,13 +324,13 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     const prompt = TextArea({ rows: 4, placeholder: '例如：修复登录页的报错，并跑通现有测试', required: true });
     const executor = Select({ options: [...(!binding ? [['', '自动选择（推荐）']] : []), ...executors.map(item => [item.id, item.name])] });
     if (parentRun) executor.value = parentRun.executorId;
-    const cwd = Input({ value: parentRun?.cwd ?? binding?.cwd ?? '', readOnly: Boolean(binding), placeholder: '留空使用这台电脑的默认目录' });
+    const cwd = Input({ value: parentRun?.cwd ?? projectTree?.cwd ?? binding?.cwd ?? '', readOnly: Boolean(binding), placeholder: '留空使用这台电脑的默认目录' });
     const todos = (snapshot.todos ?? []).filter(todo => !todo.completedAt && (launchProjectId === 'all' || todo.projectId === launchProjectId));
     const todo = Select({ options: [['', '不关联'], ...todos.map(item => [item.id, item.title])] });
     const criteria = Input({ placeholder: '例如：npm test 通过，登录页无报错' });
     const minutes = Input({ type: 'number', min: 1, max: 10080, placeholder: '例如：15' });
     const mode = Select({ options: [['task', '任务：做完就结束'], ['interactive', '交互会话：可以持续对话']] });
-    const canIsolate = !parentRun && binding && snapshot.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active')
+    const canIsolate = !parentRun && !projectTree && binding && snapshot.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active')
       && snapshot.machines?.some(m => m.id === binding.machineId && m.capabilities.includes('workspace.prepareRunWorktree'));
     let isolated = false;
     const canCompare = canIsolate && snapshot.machines.some(m => m.id === binding.machineId && m.capabilities.includes('workspace.worktreeBase'));
@@ -292,8 +359,8 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       title: '发起执行', subtitle: launchProjectId === 'all' ? '不归属于某个项目' : `归属项目：${(snapshot.projects ?? []).find(item => item.id === launchProjectId)?.name ?? ''}`,
       body: [!executors.length && Banner({ tone: 'warn', children: '现在没有可用的执行者。请先在 Agent 里连接一台电脑。', action: h('a', { class: 'btn btn--sm', href: router.href('agent') }, '去连接') }),
         Field({ label: '要做什么', control: prompt, required: true }), Field({ label: '谁来做', control: executor }),
-        binding && h('p', { class: 'muted folder-path' }, parentRun ? `复用工作树：${parentRun.worktree.name ?? parentRun.worktree.branch} · ${parentRun.cwd}` : `继承项目文件夹：${binding.cwd}`), Field({ label: '关联待办', control: todo }), criteriaField, minutesField, isolation, copiesField,
-        Fold({ title: '更多选项', body: [Field({ label: parentRun ? '原工作树目录' : binding ? '目录（继承项目）' : '目录', control: cwd }), Field({ label: '执行方式', control: mode })] }), message],
+        binding && h('p', { class: 'muted folder-path' }, parentRun ? `复用工作树：${parentRun.worktree.name ?? parentRun.worktree.branch} · ${parentRun.cwd}` : projectTree ? `工作树：${projectTree.name} · ${projectTree.cwd}` : `继承项目文件夹：${binding.cwd}`), Field({ label: '关联待办', control: todo }), criteriaField, minutesField, isolation, copiesField,
+        Fold({ title: '更多选项', body: [Field({ label: parentRun || projectTree ? '工作树目录' : binding ? '目录（继承项目）' : '目录', control: cwd }), Field({ label: '执行方式', control: mode })] }), message],
       footer: [Button({ label: '取消', onClick: () => drawer.close() }), Button({
         label: '开始执行', kind: 'primary',
         onClick: async (_event, button) => {
@@ -310,7 +377,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     });
     const offRoute = router.subscribe(() => drawer.close());
     const offStore = store.subscribe(view => {
-      if (view.unauthorized || api.token() !== launchToken || parentRun && !view.snapshot?.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active')) drawer.close();
+      if (view.unauthorized || api.token() !== launchToken || projectTree && !worktreeBinding(view.snapshot, launchProjectId) || parentRun && !view.snapshot?.plugins?.some(p => p.id === 'run-comparison' && p.status === 'active')) drawer.close();
     });
     sync();
   }

@@ -53,7 +53,7 @@ import { reminderReference, reminderSourceId, wireWorkbenchBackground } from './
 import { createAwayNotifications } from './away-notifications.ts';
 import { collectAttention } from './attention.ts';
 import { randomUUID, createHash, createHmac } from 'node:crypto';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { PluginCallError } from './plugin-invocations.ts';
 import { createProjectWorkspace } from './project-workspace.ts';
 import { createProjects } from './projects.ts';
@@ -69,7 +69,7 @@ import { delegatedDecisionPrompt } from './run-question-delegation.ts';
 import { runQuestionInputHeld, holdRunQuestion, readRunQuestionHold, readRunDeadlineTarget, runDeadlineTarget, runQuestionReply, type RunDeadlineTarget } from './run-question-deadline.ts';
 import { createInteractions, type Card } from './interactions.ts';
 import { createSupervisorAgent } from './supervisor-agent.ts';
-import { createEffects } from './effects.ts';
+import { createEffects, EffectError } from './effects.ts';
 import { createRunMonitor } from './run-monitor.ts';
 import { createApprovalService } from './approvals.ts';
 import { todoDecisionIds } from './todo-sections.ts';
@@ -233,6 +233,56 @@ export async function createWorkbench(config: AppConfig) {
     return visibleScope(reviseScope(id,args,{kind:'assistant',messageId:actor.id}));
   }
   const todoDecisions = createTodoDecisions(store, workDecisions);
+  type ProjectWorktree = { id: string; projectId: string; machineId: string; source: string; cwd: string; name: string };
+  function projectWorktreeBinding(projectId: string) {
+    if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
+    const project = store.get<Project>('projects', projectId);
+    if (!project) throw new InputError('项目不存在', 404);
+    if (project.archivedAt || !project.workspace) throw new InputError('需要已绑定工作目录的活动项目', 409);
+    return project.workspace;
+  }
+  function listProjectWorktrees(projectId: string) {
+    const binding = projectWorktreeBinding(projectId);
+    return store.list<ProjectWorktree>('project-worktrees').filter(row => row.projectId === projectId
+      && row.machineId === binding.machineId && row.source === binding.cwd).map(({cwd, name}) => ({cwd, name}));
+  }
+  async function createProjectWorktree(projectId: string, input: Record<string, unknown>) {
+    const binding = projectWorktreeBinding(projectId);
+    if (Object.keys(input).some(key => key !== 'name') || typeof input.name !== 'string' || !input.name.trim()
+      || input.name.length > 80 || /[\x00-\x1f\x7f]/.test(input.name)) throw new InputError('请输入 1 至 80 个字符的单行名称');
+    const name = input.name.trim();
+    const key = JSON.stringify([projectId, binding.machineId, binding.cwd, name]);
+    // Retain the allocated ID before calling the machine so concurrent requests and retries share the effect.
+    const existingId = store.get<string>('project-worktree-names', key);
+    const existing = existingId && store.get<ProjectWorktree>('project-worktrees', existingId);
+    if (existing) return { cwd: existing.cwd, name: existing.name };
+    const hub = machines;
+    const machine = hub?.list().find(row => row.id === binding.machineId);
+    if (!hub || !machine?.online) throw new InputError('项目绑定的电脑离线或尚未连接', 503);
+    if (!machine.capabilities.includes('workspace.prepareRunWorktree')) throw new InputError('请升级执行机代理以创建独立工作树', 409);
+    const id = existingId || randomUUID();
+    if (!existingId) store.put('project-worktree-names', key, id);
+    const cwd = join(binding.cwd + '-worktrees', id);
+    const params = { cwd: binding.cwd, id };
+    await effects.perform({ key: 'project-worktree:' + id, kind: 'workspace.prepareRunWorktree', target: machine.id,
+      summary: '创建项目独立工作树', content: params, run: async () => {
+        const receipt = await hub.call(machine.id, 'workspace.prepareRunWorktree', params, { timeoutMs: 90000 });
+        if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) || receipt.cwd !== cwd || receipt.branch !== 'super-mario/' + id
+          || typeof receipt.base !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(receipt.base))
+          throw new Error('执行机返回的工作树回执无效');
+        return receipt;
+      } }).catch(error => {
+        if (error instanceof EffectError && error.delivery === 'no') {
+          if (store.get<string>('project-worktree-names', key) === id) store.remove('project-worktree-names', key);
+          throw error;
+        }
+        throw new EffectError('工作树创建结果未确认，请核对执行机目录 ' + cwd + '。' + (error instanceof Error ? error.message : String(error)), 'unknown');
+      });
+    store.put('project-worktrees', id, { id, projectId, machineId: machine.id, source: binding.cwd, cwd, name } satisfies ProjectWorktree);
+    const current = projectWorktreeBinding(projectId);
+    if (current.cwd !== binding.cwd || current.machineId !== binding.machineId) throw new InputError('工作树已建在原项目目录，项目绑定已变化', 409);
+    return { cwd, name };
+  }
   function renameRunWorktree(id: string, input: Record<string, unknown>) {
     if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active')) throw new InputError('执行对比插件已停用', 503);
     const run = store.get<Run>('runs', id);
@@ -2255,6 +2305,16 @@ export async function createWorkbench(config: AppConfig) {
         throw new InputError('请升级执行机代理以核对原工作树', 409);
     }
     const cwd = optionalText(input.cwd, '工作目录') ?? parentRun?.cwd ?? workspace?.cwd ?? executor?.defaultCwd;
+    const savedTree = cwd ? store.get<ProjectWorktree>('project-worktrees', basename(cwd)) : undefined;
+    const projectTree = cwd && savedTree && join(cwd) === savedTree.cwd ? savedTree : undefined;
+    if (projectTree) {
+      if (cwd !== projectTree.cwd) throw new InputError('请使用已登记的工作树目录', 409);
+      if (!projectId || projectTree.projectId !== projectId || projectTree.source !== workspace?.cwd || projectTree.machineId !== workspace.machineId)
+        throw new InputError('工作树与当前项目绑定不符', 409);
+      projectWorktreeBinding(projectId);
+      if (!machines?.list().some(machine => machine.id === workspace.machineId && machine.capabilities.includes('workspace.inspectRunWorktree')))
+        throw new InputError('请升级执行机代理以核对工作树', 409);
+    }
     if (cwd && [...cleaningWorktrees.values()].some(tree => tree.machineId === executor?.machineId &&
       (join(cwd) === tree.cwd || join(cwd).startsWith(tree.cwd + '/')))) throw new InputError('执行目录正在清理', 409);
     const executionMode = input.executionMode ?? 'task';
@@ -2281,13 +2341,13 @@ export async function createWorkbench(config: AppConfig) {
       (inputMessage?.projectId && inputMessage.projectId !== projectId))) throw new InputError('待办与来源消息的范围不匹配', 403);
     if (!executor?.available) throw new InputError(executor?.reason ?? '执行者不可用', 503);
     return {prompt, executorId, executor, projectId, conversationId, todoId, doneWhen, expectMinutes, executionMode,
-      cwd, workspace, copies, isolated, worktreeRunId, parentRun, nativeResume, inputMessage, taskPolicy};
+      cwd, workspace, copies, isolated, worktreeRunId, projectTree, parentRun, nativeResume, inputMessage, taskPolicy};
   }
   function dispatch(input: Record<string, unknown>, key?: string, nativeApproved = false, executionGuard?:()=>void, planEstimate?: Run['planEstimate']): Run {
     const prepared = prepareDispatch(input,key,nativeApproved,planEstimate);
     if (prepared.previous) return prepared.previous;
     const {prompt, executorId, executor, projectId, conversationId, todoId, doneWhen, expectMinutes, executionMode,
-      cwd, workspace, copies, isolated, worktreeRunId, parentRun, nativeResume, inputMessage, taskPolicy} = prepared;
+      cwd, workspace, copies, isolated, worktreeRunId, projectTree, parentRun, nativeResume, inputMessage, taskPolicy} = prepared;
     const now = new Date().toISOString();
     const proofSources = nativeResultSources(executor);
     const ids = Array.from({ length: copies }, () => randomUUID());
@@ -2352,7 +2412,7 @@ export async function createWorkbench(config: AppConfig) {
             && plugins.list().some(plugin => plugin.id === 'office-documents' && plugin.status === 'active')
             && machines?.list().some(machine => machine.id === executor.machineId && machine.online && machine.capabilities.includes('office.guide'));
           const checkWorktreeBinding = () => {
-            if ((!isolated && !worktreeRunId) || !workspace) return;
+            if ((!isolated && !worktreeRunId && !projectTree) || !workspace) return;
             const currentProject = store.get<Project>('projects', projectId!);
             if (!plugins.list().some(p => p.id === 'run-comparison' && p.status === 'active') || currentProject?.archivedAt
               || currentProject?.workspace?.cwd !== workspace.cwd || currentProject.workspace.machineId !== workspace.machineId)
@@ -2387,7 +2447,8 @@ export async function createWorkbench(config: AppConfig) {
               throw Object.assign(new Error('工作树回执无效，请核对执行机'), { delivery: 'unknown' });
             update({ worktree: { source: workspace.cwd, branch: receipt.branch, base: receipt.base } });
           }
-          const isolationGuide = worktreeRunId ? '本次在原执行工作树中开始新任务。先核对现有文件和未提交修改，保留已有工作。仅报告本次产生的结果和验证证据。' : isolated ? '本次使用独立 Git 工作树。所有项目改动在当前工作目录中完成，记录改动文件、提交和测试证据；合并和清理工作树由用户决定。' : '';
+          const reuseGuide = projectTree ? '本次在项目独立工作树中开始新任务。' : worktreeRunId ? '本次在原执行工作树中开始新任务。' : '';
+          const isolationGuide = reuseGuide ? reuseGuide + '先核对现有文件和未提交修改，保留已有工作。仅报告本次产生的结果和验证证据。' : isolated ? '本次使用独立 Git 工作树。所有项目改动在当前工作目录中完成，记录改动文件、提交和测试证据；合并和清理工作树由用户决定。' : '';
           const acceptance = executionMode === 'task' && doneWhen && !nativeApproved
             ? '本次任务的验收标准：' + JSON.stringify(doneWhen) + '\n交付时逐项给出实际核验结果和证据。未能验证的条件请说明原因。'
             : '';
@@ -2403,6 +2464,13 @@ export async function createWorkbench(config: AppConfig) {
                 throw Object.assign(new Error(error instanceof Error ? error.message : '原工作树状态未核实'), { delivery: 'no' });
               });
               if (!state || typeof state !== 'object' || Array.isArray(state) || state.cwd !== destination || state.branch !== parentRun?.worktree?.branch)
+                throw Object.assign(new InputError('工作树目录或分支已变化，执行未启动', 409), { delivery: 'no' });
+              controller.signal.throwIfAborted();
+            }
+            if (projectTree) {
+              const state = await machines!.call(projectTree.machineId, 'workspace.inspectRunWorktree', { id: projectTree.id, source: projectTree.source })
+                .catch(error => { throw Object.assign(new Error(error instanceof Error ? error.message : '工作树状态未核实'), { delivery: 'no' }); });
+              if (!state || typeof state !== 'object' || Array.isArray(state) || state.cwd !== destination || state.branch !== 'super-mario/' + projectTree.id)
                 throw Object.assign(new InputError('工作树目录或分支已变化，执行未启动', 409), { delivery: 'no' });
               controller.signal.throwIfAborted();
             }
@@ -2998,7 +3066,7 @@ export async function createWorkbench(config: AppConfig) {
   return {
     browserDevices, deleteWebConversation, postWebConversation:scopedAgents.postWebConversation,
     setBrowserDeviceInvalidator(handler:(id?:string)=>void) { browserDeviceInvalidator=handler; },
-    usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {
