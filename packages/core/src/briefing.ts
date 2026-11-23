@@ -3,7 +3,7 @@ import type { Store } from '../../plugin-sdk/src/index.ts';
 import type { Project, Run, Todo, Approval, Message, AwayNotification, BriefingSettings } from '../../protocol/src/index.ts';
 import type { createSchedules } from './schedules.ts';
 
-const defaults: BriefingSettings = { lowDistraction:false, decisionQuietHours: { enabled:false, start:'22:00', end:'08:00' }, timezone:'Asia/Shanghai', morning:'09:00', evening:'18:00', intervalHours:4, intervalEnabled:false, activeStart:'09:00', activeEnd:'21:00', awayNotifications:true };
+const defaults: BriefingSettings = { alwaysNotifyRuns:false, lowDistraction:false, decisionQuietHours: { enabled:false, start:'22:00', end:'08:00' }, timezone:'Asia/Shanghai', morning:'09:00', evening:'18:00', intervalHours:4, intervalEnabled:false, activeStart:'09:00', activeEnd:'21:00', awayNotifications:true };
 const clock = (s: unknown): s is string => typeof s === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(s);
 export function buildWindowBrief(store: Store, from: string, to: string, projectId?: string, conversations: readonly import('../../protocol/src/inbox-conversations.ts').InboxConversation[] = [], morningTimezone?: string, includeContinuingRuns = false) {
   if (!Number.isFinite(Date.parse(from)) || !Number.isFinite(Date.parse(to)) || Date.parse(from) >= Date.parse(to)) throw new Error('摘要时间窗无效');
@@ -125,7 +125,8 @@ export function formatWindowBrief(brief: ReturnType<typeof buildWindowBrief> & {
   return rows.join('\n');
 }
 export function readBriefingSettings(store: Pick<Store, 'get'>): BriefingSettings {
-  return { ...defaults, ...store.get<BriefingSettings>('briefing.settings', 'default') };
+  return { ...defaults, ...store.get<BriefingSettings>('briefing.settings', 'default'),
+    alwaysNotifyRuns:store.get<{alwaysNotifyRuns?:boolean}>('notifications.settings','away')?.alwaysNotifyRuns === true };
 }
 
 export function createBriefingSettings(store: Store, schedules: ReturnType<typeof createSchedules>) {
@@ -137,7 +138,7 @@ export function createBriefingSettings(store: Store, schedules: ReturnType<typeo
     if (!quiet || typeof quiet.enabled !== 'boolean' || !clock(quiet.start) || !clock(quiet.end)
       || Object.keys(quiet).some(key => !['enabled','start','end'].includes(key))) throw new Error('请填写有效的飞书待决定提醒免打扰时段');
     if (![next.morning,next.evening,next.activeStart,next.activeEnd].every(clock) || next.activeStart >= next.activeEnd) throw new Error('请填写有效时段，开始必须早于结束');
-    if (!Number.isInteger(next.intervalHours) || next.intervalHours < 1 || next.intervalHours > 168 || typeof next.lowDistraction !== 'boolean' || typeof next.intervalEnabled !== 'boolean' || typeof next.awayNotifications !== 'boolean') throw new Error('简报间隔必须为 1–168 小时，开关必须为布尔值');
+    if (!Number.isInteger(next.intervalHours) || next.intervalHours < 1 || next.intervalHours > 168 || typeof next.alwaysNotifyRuns !== 'boolean' || typeof next.lowDistraction !== 'boolean' || typeof next.intervalEnabled !== 'boolean' || typeof next.awayNotifications !== 'boolean') throw new Error('简报间隔必须为 1–168 小时，开关必须为布尔值');
     if (typeof next.timezone !== 'string') throw new Error('时区必须为 IANA 名称');
     new Intl.DateTimeFormat('en',{timeZone:next.timezone}).format();
     const api = schedules.forOwner('daily-brief');
@@ -156,7 +157,7 @@ export function createBriefingSettings(store: Store, schedules: ReturnType<typeo
         else for (const s of intervals) if (old.intervalHours !== next.intervalHours || !old.intervalEnabled) api.update(s.id,{everySec:next.intervalHours*3600,...(!old.intervalEnabled?{status:'active' as const}:{})},s.version);
       } else for (const s of intervals) if (!['paused','cancelled'].includes(s.status)) api.update(s.id,{status:'paused'},s.version);
       store.put('briefing.settings','default',next);
-      store.put('notifications.settings','away',{...store.get<{alwaysNotifyRuns?:boolean}>('notifications.settings','away'),enabled:next.awayNotifications});
+      store.put('notifications.settings','away',{alwaysNotifyRuns:next.alwaysNotifyRuns,enabled:next.awayNotifications});
       return next;
     });
   }

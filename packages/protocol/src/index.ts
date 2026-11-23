@@ -81,7 +81,7 @@ export interface AppConfig { host: string; port: number; dataDir: string; token?
 /** A project is a durable workspace on one connected machine, not an execution attempt. */
 export interface ProjectWorkspaceBinding { machineId: string; cwd: string }
 export interface WebPresenceInput { tabId: string; visible: boolean; focused: boolean; sequence?: number }
-export interface BriefingSettings { lowDistraction?: boolean; decisionQuietHours: { enabled: boolean; start: string; end: string }; timezone: string; morning: string; evening: string; intervalHours: number; intervalEnabled: boolean; activeStart: string; activeEnd: string; awayNotifications: boolean }
+export interface BriefingSettings { alwaysNotifyRuns?: boolean; lowDistraction?: boolean; decisionQuietHours: { enabled: boolean; start: string; end: string }; timezone: string; morning: string; evening: string; intervalHours: number; intervalEnabled: boolean; activeStart: string; activeEnd: string; awayNotifications: boolean }
 export type CodeBrowseKind = 'tree' | 'file' | 'diff';
 export interface AwayNotification { id: string; createdAt?: string; runId?: string; messageId?: string; text: string; todoId?: string; projectId?: string; cardId?: string; decision?: {kind:'approval'|'plan';id:string;version:number}; status: 'pending' | 'queued' | 'skipped' | 'held'; reason?: string; outboxId?: string }
 export interface DiscoveredProject { name: string; cwd: string; sources: string[]; exists: boolean; lastUsedAt?: string }
