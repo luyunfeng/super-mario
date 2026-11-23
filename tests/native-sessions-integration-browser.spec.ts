@@ -116,5 +116,11 @@ console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:21,cached_
  assert.deepEqual(server.app.store.get<Run>('runs',run.id)!.commitChanges,{base,head:git('rev-parse','HEAD').trim(),files:1,added:1,deleted:0});
  assert.deepEqual(server.app.store.get<Run>('runs',run.id)!.usage,{input:21,output:3});
  assert.equal(server.app.store.get<Run>('runs',run.id)!.status,'completed');assert.equal(creates,1,'Reconnection/restart restores records; it must not resume a second process');
+ const handoffRequest = { handoffRunId: run.id, prompt: '整理本次交接', executorId: 'demo', executionMode: 'task' };
+ assert.equal((await api('/runs','POST',handoffRequest)).status,409);
+ const handoffResult = await api('/runs','POST',{ ...handoffRequest, projectId: project.id, cwd, executorId: run.executorId,
+   doneWhen: '返回合成回执', expectMinutes: 2 });
+ assert.equal(handoffResult.status,202);
+ assert.equal(server.app.store.get<Run>('runs',handoffResult.data.id)?.handoffRunId,run.id);
  const stored=server.app.approvals.list().find(a=>a.id===approval.id)!;assert.equal(stored.status,'completed');
 });

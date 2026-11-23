@@ -353,6 +353,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
           const ok = await confirmDialog({ title: '中断这次执行？', message: '会请求执行者停止；已经产生的修改不会自动撤销。', confirmLabel: '请求中断', danger: true });
           if (ok) { await api.post(`/runs/${encodeURIComponent(run.id)}/cancel`, {}); store.refresh(); }
         } })),
+      comparisonEnabled && run.handoffRunId && h('a', { href: router.href('projects', run.projectId ?? 'all', 'runs', run.handoffRunId) }, '查看交接来源执行'),
       comparisonEnabled && ['completed','failed','cancelled'].includes(run.status) && Button({
         label: '准备执行交接', size: 'sm', onClick: () => openLaunch(undefined, undefined, run),
       }),
@@ -473,7 +474,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
             minutes.focus(); return;
           }
           if (handoffGoal && !handoffGoal.value.trim()) { replace(message, Banner({ tone: 'warn', children: '请填写本轮交接目标。' })); handoffGoal.focus(); return; }
-          const body = { prompt: handoffGoal ? prompt.value.trim() + '\n\n本轮交接目标：' + handoffGoal.value.trim() : prompt.value.trim(), ...(!modelField.hidden && model.value.trim() && { model: model.value.trim() }), ...(parentRun && { worktreeRunId: parentRun.id }), ...(isolated && { isolatedWorktree: true, ...(canCompare && { copies: Number(copies.value) }) }), ...(executor.value ? { executorId: executor.value } : {}), ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}),
+          const body = { ...(handoff && { handoffRunId: handoff.id }), prompt: handoffGoal ? prompt.value.trim() + '\n\n本轮交接目标：' + handoffGoal.value.trim() : prompt.value.trim(), ...(!modelField.hidden && model.value.trim() && { model: model.value.trim() }), ...(parentRun && { worktreeRunId: parentRun.id }), ...(isolated && { isolatedWorktree: true, ...(canCompare && { copies: Number(copies.value) }) }), ...(executor.value ? { executorId: executor.value } : {}), ...(cwd.value.trim() ? { cwd: cwd.value.trim() } : {}),
             ...(launchProjectId !== 'all' ? { projectId: launchProjectId } : {}), ...(todo.value ? { todoId: todo.value } : {}), ...(criteria.value.trim() ? { doneWhen: criteria.value.trim() } : {}),
             ...(minutes.value ? { expectMinutes: Number(minutes.value) } : {}), executionMode: mode.value };
           try { const run = await api.post('/runs', body, { 'Idempotency-Key': key }); drawer.close(); store.refresh(); router.go(router.href('projects', launchProjectId, 'runs', run.id) + (run.comparisonRunIds ? '?compare=group' : '')); }

@@ -2286,6 +2286,7 @@ export async function createWorkbench(config: AppConfig) {
     const prompt = requiredText(input.prompt, '工作内容');
     if (input.isolatedWorktree !== undefined && typeof input.isolatedWorktree !== 'boolean') throw new InputError('独立工作树选项无效');
     const isolated = input.isolatedWorktree === true;
+    const handoffRunId = optionalText(input.handoffRunId, '交接来源执行');
     const worktreeRunId = input.worktreeRunId === undefined ? undefined : requiredText(input.worktreeRunId, '工作树所属执行');
     const copies = input.copies === undefined ? 1 : input.copies;
     if (typeof copies !== 'number' || !Number.isInteger(copies) || copies < 1 || copies > 4 || copies > 1 && !isolated)
@@ -2310,7 +2311,7 @@ export async function createWorkbench(config: AppConfig) {
         const requestHash = store.get<string>('dispatch-prompt-hashes', key);
         const firstCriteria = initialRunCriteria(store,run);
         const samePrompt = requestHash ? createHash('sha256').update(prompt).digest('hex') === requestHash : run.prompt === prompt;
-        if (!samePrompt || run.model !== input.model || (planEstimate && (run.planEstimate?.planId !== planEstimate.planId ||
+        if (!samePrompt || run.handoffRunId !== handoffRunId || run.model !== input.model || (planEstimate && (run.planEstimate?.planId !== planEstimate.planId ||
           run.planEstimate.taskIndex !== planEstimate.taskIndex || run.planEstimate.source !== planEstimate.source)) || (requestedExecutor !== undefined && run.executorId !== requestedExecutor)
           || run.projectId !== projectId || run.conversationId !== conversationId
           || run.worktreeRunId !== worktreeRunId || (run.comparisonRunIds?.length ?? 1) !== copies || Boolean(run.worktree) !== isolated || (input.cwd !== undefined && (run.worktree?.source ?? run.cwd) !== input.cwd)
@@ -2320,6 +2321,11 @@ export async function createWorkbench(config: AppConfig) {
           || (input.expectMinutes !== undefined && firstCriteria.expectMinutes !== input.expectMinutes) || JSON.stringify(run.nativeResume) !== JSON.stringify(input.nativeResume)) throw new InputError('同一派发标识不能用于不同工作', 409);
         return {previous:run};
       }
+    }
+    if (handoffRunId) {
+      if (!plugins.list().some(plugin => plugin.id === 'run-comparison' && plugin.status === 'active')) throw new InputError('执行对比插件已停用', 503);
+      const source = store.get<Run>('runs', handoffRunId);
+      if (!source || source.projectId !== projectId || !['completed','failed','cancelled'].includes(source.status)) throw new InputError('交接来源须为同一项目中已结束的执行', 409);
     }
     const nativeResume = input.nativeResume === undefined ? undefined : nativeResumeSpec(input.nativeResume);
     if (nativeResume && !nativeApproved) throw new InputError('原生恢复必须先通过明确的恢复审批，不能直接派发', 403);
@@ -2395,13 +2401,13 @@ export async function createWorkbench(config: AppConfig) {
     if (todo && ((inputMessage?.todoId && inputMessage.todoId !== todoId) ||
       (inputMessage?.projectId && inputMessage.projectId !== projectId))) throw new InputError('待办与来源消息的范围不匹配', 403);
     if (!executor?.available) throw new InputError(executor?.reason ?? '执行者不可用', 503);
-    return {prompt, model, executorId, executor, projectId, conversationId, todoId, doneWhen, expectMinutes, executionMode,
+    return {prompt, model, handoffRunId, executorId, executor, projectId, conversationId, todoId, doneWhen, expectMinutes, executionMode,
       cwd, workspace, copies, isolated, worktreeRunId, projectTree, parentRun, nativeResume, inputMessage, taskPolicy};
   }
   function dispatch(input: Record<string, unknown>, key?: string, nativeApproved = false, executionGuard?:()=>void, planEstimate?: Run['planEstimate']): Run {
     const prepared = prepareDispatch(input,key,nativeApproved,planEstimate);
     if (prepared.previous) return prepared.previous;
-    const {prompt, model, executorId, executor, projectId, conversationId, todoId, doneWhen, expectMinutes, executionMode,
+    const {prompt, model, handoffRunId, executorId, executor, projectId, conversationId, todoId, doneWhen, expectMinutes, executionMode,
       cwd, workspace, copies, isolated, worktreeRunId, projectTree, parentRun, nativeResume, inputMessage, taskPolicy} = prepared;
     const now = new Date().toISOString();
     const proofSources = nativeResultSources(executor);
@@ -2409,6 +2415,7 @@ export async function createWorkbench(config: AppConfig) {
     const runs = ids.map((id): Run => ({
       id, executorId, conversationId, prompt, ...(model && {model}), projectId, todoId, doneWhen, ...(planEstimate && {planEstimate}),
       ...(copies > 1 && { comparisonRunIds: ids }),
+      ...(handoffRunId && { handoffRunId }),
       ...(worktreeRunId && { worktreeRunId }),
       ...(isolated && workspace && { worktree: { source: workspace.cwd } }),
       ...(nativeResume && { nativeResume }),
