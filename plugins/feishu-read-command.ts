@@ -1,7 +1,8 @@
 import type { FeishuMention } from './feishu.ts';
 
 const trim = (value: string) => value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '');
-const command = /^[／/](?:read|读群)(?=$|\p{White_Space})([\s\S]*)$/iu;
+const readCommand = /^[／/](?:read|读群)(?=$|\p{White_Space})([\s\S]*)$/iu;
+const taskCommand = /^[／/]ai(?=$|\p{White_Space})([\s\S]*)$/iu;
 function withoutMentions(raw: string, mentions: FeishuMention[]) {
   let text = trim(raw);
   for (;;) {
@@ -13,15 +14,24 @@ function withoutMentions(raw: string, mentions: FeishuMention[]) {
 }
 
 /** Identity comes from the SDK mention, never from a matching display name on its own. */
-export function readGroupCommand(text: string, mentions: FeishuMention[] = []) {
+function parseCommand(command: RegExp, text: string, mentions: FeishuMention[]) {
   const match = command.exec(withoutMentions(text, mentions));
   if (!match) return;
   const addressed = command.exec(withoutMentions(text, mentions.filter(m => m.self)));
   return { task: trim(match[1]), addressed: !!addressed };
 }
 
+export function readGroupCommand(text: string, mentions: FeishuMention[] = []) {
+  return parseCommand(readCommand, text, mentions);
+}
+
+export function groupTaskCommand(text: string, mentions: FeishuMention[] = []) {
+  return parseCommand(taskCommand, text, mentions);
+}
+
 /** Rich posts carry at elements. An adjacent text node can start the command without a space. */
-export function readGroupPost(raw: Record<string, unknown>, mentions: FeishuMention[]): string | undefined {
+export function readGroupPost(raw: Record<string, unknown>, mentions: FeishuMention[],
+  enabled: { readGroup?: boolean; groupTasks?: boolean } = { readGroup: true }): string | undefined {
   const post = (Array.isArray(raw.content) ? raw : raw.zh_cn ?? raw.en_us ?? raw.ja_jp) as typeof raw | undefined;
   if (!post || !Array.isArray(post.content)) return;
   let text = typeof post.title === 'string' && trim(post.title) ? trim(post.title) + '\n' : '';
@@ -39,5 +49,6 @@ export function readGroupPost(raw: Record<string, unknown>, mentions: FeishuMent
     }
     text += '\n';
   }
-  return command.test(text.trim()) ? text.trim() : undefined;
+  const result = trim(text);
+  return (enabled.readGroup && readCommand.test(result)) || (enabled.groupTasks && taskCommand.test(result)) ? result : undefined;
 }

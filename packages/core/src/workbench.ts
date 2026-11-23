@@ -1835,8 +1835,8 @@ export async function createWorkbench(config: AppConfig) {
     },
     setNotificationChannel(channel: typeof notificationChannel) { notificationChannel = channel; },
     setNotificationBots(source: typeof notificationBots) { notificationBots = source; },
-    postScoped(text: string, scope: BotScope, botId: string, threadId?: string) {
-      return scopedAgents.post(text, validateBotScope(store, scope), botId, undefined, threadId);
+    postScoped(text: string, scope: BotScope, botId: string, threadId?: string, todoId?: string) {
+      return scopedAgents.post(text, validateBotScope(store, scope), botId, todoId ? { todoId } : undefined, threadId);
     },
     async postScopedResult(input: { text: string; scope: BotScope; botId: string; sourceMessageId?: string; threadId?: string }) {
       const scope = validateBotScope(store, input.scope);

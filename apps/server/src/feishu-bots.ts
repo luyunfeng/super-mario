@@ -1,5 +1,7 @@
 import { groupReadDelivery, type GroupReadService } from './feishu-group-read-delivery.ts';
-import { readGroupCommand } from '../../../plugins/feishu-read-command.ts';
+import { createGroupTasks } from './feishu-group-tasks.ts';
+import { groupTaskPrompt } from '../../../packages/core/src/prompts.ts';
+import { groupTaskCommand, readGroupCommand } from '../../../plugins/feishu-read-command.ts';
 import { createThreadDeletionCleanup, deletedThreads, eraseThreadChannel, type DeletedThread } from './feishu-thread-delete.ts';
 import { parseStartForm, startCard, startCardSnapshot, type StartCardSnapshot } from './feishu-start-card.ts';
 import { trimUnicodeSpace, privateThreadTags, normalizeThreadTags, searchPrivateThreads, readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
@@ -45,7 +47,7 @@ export interface FeishuBotsApp {
   approvals?: { propose(input: Pick<Approval, 'kind' | 'title' | 'details' | 'params' | 'todoId'>): Pick<Approval, 'id' | 'status'> };
   interactions?: { answer(id: string, version: number, text: string, by: string): Promise<Card> };
   projectWorkspace?: { post(id: string, text: string): Promise<Message> };
-  postScoped(text: string, scope: BotScope, botId: string, threadId?: string): Promise<Message>;
+  postScoped(text: string, scope: BotScope, botId: string, threadId?: string, todoId?: string): Promise<Message>;
   /** Host injects readOnly result context; it must never dispatch a new request. */
   postScopedResult?(input: { text: string; scope: BotScope; botId: string; sourceMessageId?: string; threadId?: string }): Promise<Message>;
   routeCommandProject?: CommandClassifier;
@@ -56,6 +58,7 @@ export interface FeishuBotsApp {
   attention?(): AttentionItem[];
   projects?: { list(): Project[] };
   todos?: () => Todo[];
+  createTodo?(input: Record<string, unknown>): Todo;
   plugins?: {
     list(): Array<{ id: string; enabled: boolean; status: string }>;
     invocations?: { use?(name: string, input: Json, options?: { timeoutMs?: number }): Promise<Json>; invoke(name: 'channel.send', input: Json, action: (input: Json) => Promise<Json>): Promise<Json> };
@@ -64,6 +67,7 @@ export interface FeishuBotsApp {
 }
 export interface FeishuBotAdapter {
   start(): Promise<void>; close(): Promise<void>; send(target: string, text: string, context?: FeishuSendContext): Promise<void>;
+  readTaskQuote?(chatId: string, parentId: string, guard: () => void): Promise<string | undefined>;
   readReaction?(messageId: string, emoji: 'OnIt' | 'DONE', guard: () => void, removeId?: string): Promise<string>;
   pinMessage?(messageId: string): Promise<void>;
   unpinMessage?(messageId: string): Promise<void>;
@@ -83,7 +87,8 @@ type AgentTarget = { startedBy?: string; cwd?: string; runId: string; executorId
 type ChatBinding = { conversationThreadId?: string; agentTarget?: AgentTarget; projectId: string; revision: number; senderId: string; expiresAt: number; selectionId?: string };
 type StatusSource = Pick<FeishuMessageSource, 'chatId' | 'parentId' | 'rootId'>;
 type StatusGrant = { source: StatusSource; fingerprint: string; binding?: ChatBinding };
-type Envelope = { newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
+type GroupTaskOrigin = { chatId: string; messageId: string; binding: string; todoId: string };
+type Envelope = { groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
 type Routed = Route & Envelope & { envelopeId: string; replyReference?: { text: string; truncated: boolean } | { unavailable: true } };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
 type Runtime = { commandSubscription?: string; epoch: number; adapter?: FeishuBotAdapter; reason?: string; code: string; expires: number; operations: Promise<void> };
@@ -105,6 +110,10 @@ export function dashboardWebBase(config: Pick<AppConfig, 'host' | 'port'>, confi
 
 /** Composition uses a narrow host interface so mailbox/workbench can install handlers without a cycle. */
 export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig, options: { factory?: FeishuBotFactory; webBase?: string; readGroup?: GroupReadService } = {}) {
+  const groupTasks = createGroupTasks(app.store, input => {
+    if (!app.createTodo) throw noDelivery('当前服务未提供待办创建能力。');
+    return app.createTodo(input);
+  });
   const groupReads = groupReadDelivery(app, options.readGroup);
   const settings = createFeishuBotConfig(config.dataDir, config.feishu?.appId);
   const webBase = dashboardWebBase(config, options.webBase);
@@ -1375,6 +1384,12 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const stamp = app.store.get<Envelope>('feishu.bot.envelopes', entry.id);
     if (entry.botId !== bot.id || (bot.scope.kind !== 'unmarked' && !sameBotScope(entry.scope, bot.scope)) || (stamp && stamp.revision !== bot.revision)) throw noDelivery('机器人绑定已变化，旧邮箱条目不能执行');
     validateScope(entry.scope);
+    if (stamp?.groupTaskOrigin) {
+      const origin = stamp.groupTaskOrigin, paired = owner(bot);
+      if (!paired?.senderId || !stamp.privateSenderId || stamp.privateSenderId !== paired.senderId || entry.target !== paired.chatId
+        || origin.binding !== groupReadBinding(bot, paired) || groupTasks.recalled(bot.id, bot.appId, origin.chatId, origin.messageId))
+        throw noDelivery('原群任务已撤回或配对已变化。');
+    }
     if (stamp?.privateSenderId && !stamp.group && !stamp.relay &&
       (owner(bot)?.chatId !== entry.target || owner(bot)?.senderId !== stamp.privateSenderId))
       throw noDelivery('主人私聊配对已改变。');
@@ -1758,10 +1773,61 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     commandJobs.set(key, job);
     return job;
   }
+  async function sendTaskMessage(bot: FeishuBotSettings, adapter: FeishuBotAdapter, chatId: string, text: string,
+    replyTo: string | undefined, key: string, guard: () => void): Promise<string> {
+    const payload = { botId: bot.id, accountId: bot.appId, target: chatId, chatId, text, key, ...(replyTo && { replyTo }) };
+    let platformId = '', attempted = false;
+    const deliver = async () => {
+      guard();
+      if (attempted) throw new Error('本次群任务通知已尝试发送。');
+      attempted = true;
+      await adapter.send(chatId, text, { ...(replyTo && { replyTo, groupReadReply: guard }), beforeSend: guard,
+        replyKey: key, onSent(id) { platformId = id; } });
+      return null;
+    };
+    if (app.plugins?.invocations) await app.plugins.invocations.invoke('channel.send', payload, async prepared => {
+      if (!prepared || typeof prepared !== 'object' || Array.isArray(prepared) ||
+        Object.entries(payload).some(([name, value]) => prepared[name] !== value)) throw noDelivery('群任务通知的来源、正文或收件人已变化。');
+      return deliver();
+    }); else await deliver();
+    if (!platformId) throw new Error('群任务通知缺少飞书回执，送达结果未知。');
+    return platformId;
+  }
   async function receive(bot: FeishuBotSettings, epoch: number, text: string, source: Parameters<FeishuOptions['onMessage']>[1]) {
     if (!active(bot.id, epoch, bot.revision) || !['p2p', 'group'].includes(source.chatType ?? '') || !source.chatId || !source.messageId || !text.trim()) return;
     let paired = owner(bot);
     const group = source.chatType === 'group';
+    const task = group && groupTaskCommand(text, source.mentions);
+    if (task && bot.scope.kind === 'global' && source.chatId !== commandGroup()?.chatId) {
+      const initialOwner = paired, adapter = runtime(bot.id).adapter;
+      if (!task.addressed || !source.mentionedSelf || source.senderType !== 'user' || !adapter || !initialOwner?.senderId
+        || initialOwner.senderId !== source.senderId || groupTasks.recalled(bot.id, bot.appId, source.chatId, source.messageId)) return;
+      const binding = groupReadBinding(bot, initialOwner);
+      const check = () => {
+        const now = owner(bot);
+        if (!active(bot.id, epoch, bot.revision) || runtime(bot.id).adapter !== adapter || !now?.senderId
+          || groupReadBinding(bot, now) !== binding || groupTasks.recalled(bot.id, bot.appId, source.chatId, source.messageId))
+          throw noDelivery('原群任务已撤回或主人配对已变化。');
+      };
+      const send = (chat: string, body: string, replyTo?: string) => sendTaskMessage(bot, adapter, chat, body, replyTo,
+        digest([bot.id, binding, source.chatId, source.messageId, replyTo ? 'usage' : 'anchor']).slice(0, 32), check);
+      const quote = source.parentId && task.task && adapter.readTaskQuote
+        ? await adapter.readTaskQuote(source.chatId, source.parentId, check).catch(() => undefined) : undefined;
+      check();
+      await groupTasks.open(bot.id, bot.appId, binding, { ...source, ...(quote && { quotedText: quote }) }, task.task, check,
+        todo => send(initialOwner.chatId, '已从群消息建立待办「' + todo.title + '」。后续讨论在此私聊继续。待办编号 ' + todo.id),
+        text => send(source.chatId, text, source.messageId), async (todo, anchorId, original) => {
+          check();
+          const entry = await put(bot, { direction: 'inbox', eventKey: 'feishu-group-task:' + todo.id, title: '群任务交接',
+            text: groupTaskPrompt(todo, original.request, original.quote), target: initialOwner.chatId, sourceMessageId: anchorId, requiresConfirmation: false },
+            bot.scope, { privateSenderId: initialOwner.senderId, platformReplyTo: anchorId,
+              groupTaskOrigin: { chatId: source.chatId, messageId: source.messageId, binding, todoId: todo.id } });
+          if (entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
+          if (app.mailboxes.list().find(row => row.id === entry.id)?.status !== 'completed') throw new Error('待办已保存，主会话接收结果待核对。');
+          if (adapter.readReaction) await adapter.readReaction(source.messageId, 'OnIt', check).catch(() => {});
+        });
+      return;
+    }
     const read = readGroupCommand(text, source.mentions);
     if (read && group && bot.scope.kind === 'global' && bot.readGroup) {
       const state = runtime(bot.id), adapter = state.adapter, initialOwner = paired;
@@ -1991,14 +2057,17 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const chatId = subscription(bot);
       state.commandSubscription = chatId;
       const adapter = factory({ appId: bot.appId, appSecret: bot.appSecret,
-        ...(bot.scope.kind === 'global' && bot.readGroup && { readGroup: true, groupChatIds: bot.groupChats?.map(group => group.chatId) ?? [] }),
+        ...(bot.scope.kind === 'global' && { groupTasks: true, ...(bot.readGroup && { readGroup: true }), groupChatIds: bot.groupChats?.map(group => group.chatId) ?? [] }),
         groupMessages: Boolean(bot.groupChats?.length || (chatId && bot.scope.kind === 'project')),
         ...(chatId && bot.scope.kind === 'global' ? { commandGroupChatId: chatId } : {}), ...(bot.profile ? { profile: bot.profile } : {}),
         renderMessage: (text, context) => buildFeishuMessageCard(text, { title: bot.name, webBase,
           route: 'projectId' in bot.scope && bot.scope.projectId ? `projects/${encodeURIComponent(bot.scope.projectId)}/workspace` : 'chat', ...context?.presentation }),
         onCardAction: input => cardAction(bot, epoch, input),
         onRecall: (chatId, messageId) => {
-          if (active(bot.id, epoch, bot.revision) && bot.scope.kind === 'global') groupReads.recall(bot, chatId, messageId);
+          if (active(bot.id, epoch, bot.revision) && bot.scope.kind === 'global') {
+            groupReads.recall(bot, chatId, messageId);
+            groupTasks.recall(bot.id, bot.appId, chatId, messageId);
+          }
         },
         onMessage: (text, source) => track(id, receive(bot, epoch, text, source)),
         onInbox: things => track(id, ingest(bot, epoch, things)),
@@ -2073,7 +2142,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         const project = app.store.get<Project>('projects', stamp.chatProject);
         if (!app.projectWorkspace || !project || project.archivedAt || bot.scope.kind !== 'global' || !entry.target || entry.target !== owner(bot)?.chatId) throw noDelivery('已选项目会话不可用');
         accepted = await app.projectWorkspace.post(project.id, entry.text);
-      } else accepted = await app.postScoped(entry.text, structuredClone(entry.scope), bot.id, stamp?.conversationThreadId);
+      } else accepted = await app.postScoped(entry.text, structuredClone(entry.scope), bot.id, stamp?.conversationThreadId, stamp?.groupTaskOrigin?.todoId);
       if (stamp?.conversationThreadId && accepted.conversationId !== botConversationId(bot, stamp.conversationThreadId))
         throw new Error('独立对话接收结果未确认。');
       const restored = app.store.transaction(() => {
@@ -2328,7 +2397,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       ? message.id.slice('interaction-notice:'.length) : undefined;
     const questionId = noticeId && app.store.get<{inputId?:string}>('interaction-origins',noticeId)?.inputId === message.replyTo ? noticeId : undefined;
     const entry = await put(bot, { direction: 'outbox', eventKey: `feishu-reply:${JSON.stringify([bot.id, bot.appId, route.inputId, message.id])}`,
-      title: bot.name, text: message.text, target: route.target, replyTo: route.inputId, sourceMessageId: route.sourceMessageId, requiresConfirmation: false }, route.scope, { questionId, resultRelayEntryId: route.resultRelayEntryId, chatProject: route.chatProject, conversationThreadId: route.conversationThreadId, privateSenderId: route.privateSenderId, chatBinding: route.chatBinding, group: route.group, command: route.command, relay: route.relay, platformReplyTo: route.platformReplyTo ?? (questionId ? route.sourceMessageId : undefined), threadId: route.threadId });
+      title: bot.name, text: message.text, target: route.target, replyTo: route.inputId, sourceMessageId: route.sourceMessageId, requiresConfirmation: false }, route.scope, { questionId, groupTaskOrigin: route.groupTaskOrigin, resultRelayEntryId: route.resultRelayEntryId, chatProject: route.chatProject, conversationThreadId: route.conversationThreadId, privateSenderId: route.privateSenderId, chatBinding: route.chatBinding, group: route.group, command: route.command, relay: route.relay, platformReplyTo: route.platformReplyTo ?? (questionId ? route.sourceMessageId : undefined), threadId: route.threadId });
     if (active(bot.id, epoch, bot.revision) && entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
   }
   const off = app.events.subscribe(event => {
