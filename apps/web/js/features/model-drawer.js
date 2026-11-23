@@ -4,7 +4,7 @@ import { Button, Field, Input, Select, Check, Banner } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 
 // The same conversation can be selected from its bot in Feishu or its named row on the Web.
-function conversationModelPicker(api, path, name) {
+export function conversationModelPicker(api, path, name) {
   const catalog = h('div', { class: 'stack', 'aria-live': 'polite' });
   const load = async (notice = '') => {
     refresh.disabled = true;

@@ -28,7 +28,7 @@ export function dashboardCommand(text: string) {
 // These common words and CLI commands are legal input even if they resemble a workbench command.
 const literalWords = new Set(['stats', 'man', 'min', 'task', 'session', 'hoe', 'hep', 'lit', 'gent']);
 const scopedCommands = [...dashboardAliases].filter(([, view]) => view === 'status' || view === 'stop' || view === 'help').map(([name]) => name);
-const globalCommands = [...dashboardAliases.keys(), 'agent', 'agents', 'modelchange'];
+const globalCommands = [...dashboardAliases.keys(), 'agent', 'agents', 'modelchange', 'new', '新对话'];
 
 function isCommandSlip(typed: string, command: string) {
   // Only a missing letter or a single adjacent transposition qualifies. Check ASCII names only.
@@ -57,14 +57,14 @@ export function dashboardHelp(sessions: boolean, scoped = false) {
   const status = '/status 或 /状态：查看当前会话状态';
   const stop = '/stop 或 /停止、/停：请求中断当前轮次';
   const text = scoped ? [status, stop].join('\n') : ['/home 或「工作台」：打开工作台', '/tasks 或 /进展：查看任务进展', '/inbox 或 /收件箱：查看收件',
-    '/agents [关键词] 或 /agent：查找执行会话', '/list 或 /对话：列出可切换的对话', '/main 或 /主对话：切回主 Agent', '/modellist：查看主对话的模型目录', '/modelchange <模型 ID>：切换主对话模型', status, stop, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
+    '/agents [关键词] 或 /agent：查找执行会话', '/list 或 /对话：列出可切换的对话', '/new 或 /新对话：开启独立对话，可在命令后直接写第一条消息', '/main 或 /主对话：切回主 Agent', '/modellist：查看当前对话的模型目录', '/modelchange <模型 ID>：切换当前对话模型', status, stop, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
   const help = text + '\n在工作台对话中发送命令原文可再加一个斜杠，例如 //status。';
   return { text: help, card: cardDocument('工作台命令', cardSection('在此私聊中发送', help)) };
 }
 
 export function conversationListDashboard(app: DashboardApp, bot: { conversationId: string; id: string; appId: string; revision: number; chatId: string },
-  navigation: string, webBase?: string, requestedPage = 0) {
-  type Row = { projectId: string; name: string; latest?: Message };
+  navigation: string, webBase?: string, requestedPage = 0, history: { threadId: string; title: string; latestAt: string }[] = []) {
+  type Row = { projectId: string; name: string; latest?: Message; conversationThreadId?: string; latestAt?: string };
   const main: Row = { projectId: '', name: '主对话' };
   const rows = new Map<string, Row>([[bot.conversationId, main]]);
   if (app.projectWorkspace) for (const project of app.store.list<Project>('projects')) {
@@ -84,16 +84,18 @@ export function conversationListDashboard(app: DashboardApp, bot: { conversation
     }
     if (!row.latest || message.createdAt >= row.latest.createdAt) row.latest = message;
   }
-  const entries = [...rows.values()].sort((a, b) => (b.latest?.createdAt ?? '').localeCompare(a.latest?.createdAt ?? ''));
+  const independent: Row[] = history.map(thread => ({ projectId: '', name: '独立对话 · ' + thread.title,
+    conversationThreadId: thread.threadId, latestAt: thread.latestAt }));
+  const entries = [...rows.values(), ...independent].sort((a, b) => (b.latest?.createdAt ?? b.latestAt ?? '').localeCompare(a.latest?.createdAt ?? a.latestAt ?? ''));
   const pages = Math.ceil(entries.length / 5), page = Math.min(requestedPage, pages - 1);
   const elements: Record<string, unknown>[] = [], lines = ['最近对话'];
   const visible = entries.slice(page * 5, page * 5 + 5);
   for (const row of visible) {
     const latest = row.latest;
-    const detail = [label(row.name, 60), latest?.createdAt, latest && publicText(latest.text, 100).replace(/\s+/g, ' ')].filter(Boolean).join(' · ');
+    const detail = [publicText(row.name, 60), latest?.createdAt ?? row.latestAt, latest && publicText(latest.text, 100).replace(/\s+/g, ' ')].filter(Boolean).join(' · ');
     lines.push(detail);
     elements.push({ tag: 'div', text: cardPlain(detail) }, ...cardButtons([
-      { label: '在这里聊', value: { kind: 'workbench.chat', navigation, projectId: row.projectId } },
+      { label: '在这里聊', value: { kind: 'workbench.chat', navigation, projectId: row.projectId, ...(row.conversationThreadId && { conversationThreadId: row.conversationThreadId }) } },
       ...(row.projectId ? [{ label: '打开网页版', route: 'projects/' + encodeURIComponent(row.projectId) + '/workspace' }] : []),
     ], cardWebBase(webBase)));
   }
@@ -104,13 +106,13 @@ export function conversationListDashboard(app: DashboardApp, bot: { conversation
     ...(page > 0 ? [pageButton('上一页', page - 1)] : []),
     ...(page + 1 < pages ? [pageButton('下一页', page + 1)] : []), pageButton('刷新当前页', page),
   ]));
-  return { text: lines.join('\n'), card: cardDocument('最近对话', elements), projectIds: visible.map(row => row.projectId).filter(Boolean) };
+  return { text: lines.join('\n'), card: cardDocument('最近对话', elements), projectIds: visible.map(row => row.projectId).filter(Boolean), threadIds: visible.flatMap(row => row.conversationThreadId ? [row.conversationThreadId] : []) };
 }
 
-export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp['modelCatalog']>> | undefined, main: boolean) {
+export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp['modelCatalog']>> | undefined, allowed: boolean, title = '主对话模型目录') {
   const lines: string[] = [];
   const safe = (value: string) => publicText(value, 256).replace(/\s+/g, ' ');
-  if (!main) lines.push('请发送 /main 切回主对话，再直接发送 /modellist。');
+  if (!allowed) lines.push('请发送 /main 切回主对话，再直接发送 /modellist。');
   else if (!catalog) lines.push('模型目录服务不可用。');
   else {
     if (catalog.demo) lines.push('当前处于演示模式。');
@@ -122,7 +124,7 @@ export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp
     const hint = '账号权限以提供方实际授权为准。';
     const truncated = '目录较长，请在 Web 的模型设置中查看完整目录。';
     // Reserve space for both footers so a Chinese catalog and the text fallback share one byte limit.
-    let bytes = Buffer.byteLength(['主对话模型目录', ...lines, truncated, hint].join('\n'));
+    let bytes = Buffer.byteLength([title, ...lines, truncated, hint].join('\n'));
     for (const model of models) {
       const line = '• ' + safe(model) + (custom.has(model) ? '（最近使用）' : '');
       bytes += Buffer.byteLength('\n' + line);
@@ -133,7 +135,7 @@ export function modelListDashboard(catalog: ReturnType<NonNullable<FeishuBotsApp
     lines.push(hint);
   }
   const text = lines.join('\n');
-  return { text: '主对话模型目录\n' + text, card: cardDocument('主对话模型目录', [{ tag: 'div', text: cardPlain(text) }]) };
+  return { text: title + '\n' + text, card: cardDocument(title, [{ tag: 'div', text: cardPlain(text) }]) };
 }
 
 export function statusDashboard(target: string, status: ConversationStatus | string) {

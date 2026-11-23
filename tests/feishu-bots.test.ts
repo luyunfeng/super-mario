@@ -1808,3 +1808,38 @@ test('中断回执丢失后重放原事件，不能把中断转给后来进入�
   assert.deepEqual(stopped, [first]);
   assert.equal(f.store.get<Message>('messages', second)?.status, 'pending');
 });
+
+test('两条独立对话同时等待回复时，停止命令按当前选择和引用准确中断指定输入', async t => {
+  const f = fixture(t), bot = await f.add('StopPrivateThreads');
+  await bot.pair();
+  const receive = bot.instance.options.onMessage;
+  const human = (id: string) => ({ ...source(id), senderType: 'user' as const });
+  const accepted: Message[] = [], stopped: string[] = [];
+  f.app.postScoped = async (text, scope, id, threadId) => {
+    const input: Message = { id: 'private-' + accepted.length, text, role: 'user', status: 'pending',
+      conversationId: botConversationId({ id, scope }, threadId), createdAt: new Date().toISOString() };
+    f.store.put('messages', input.id, input);
+    accepted.push(input);
+    return input;
+  };
+  f.app.interruptTurn = async (conversationId, inputId) => {
+    const input = f.store.get<Message>('messages', inputId)!;
+    assert.equal(input.conversationId, conversationId);
+    assert.equal(input.status, 'pending');
+    stopped.push(input.id);
+    f.store.put('messages', input.id, { ...input, status: 'failed' });
+    return { outcome: 'requested' };
+  };
+  await receive('/new 第一项', human('first-thread'));
+  await receive('/new 第二项', human('second-thread'));
+  const [first, second] = accepted;
+  assert.notEqual(first.conversationId, second.conversationId);
+  await receive('/stop', human('stop-selected'));
+  assert.deepEqual(stopped, [second.id]);
+  assert.equal(f.store.get<Message>('messages', first.id)?.status, 'pending');
+  await receive('/main', human('main'));
+  await receive('/stop', human('stop-main'));
+  assert.deepEqual(stopped, [second.id]);
+  await receive('/停止', { ...human('stop-quoted'), parentId: 'first-thread' });
+  assert.deepEqual(stopped, [second.id, first.id]);
+});

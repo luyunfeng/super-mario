@@ -60,7 +60,7 @@ import { createEventBus } from './events.ts';
 import { createBackground } from './background.ts';
 import { createEventMailboxes } from './event-mailboxes.ts';
 import { validateBotScope } from './bot-scopes.ts';
-import { botConversationId, botForConversation, pinBotExecutor, relaySender } from './bot-agent-routing.ts';
+import { botConversationId, botForConversation, pinBotExecutor, relaySender, validBotThreadId } from './bot-agent-routing.ts';
 import { canRelayBotScope } from './bot-group-policy.ts';
 import { createScopedAgents } from './scoped-agents.ts';
 import { createContributions, PluginHost } from './plugin-host.ts';
@@ -127,9 +127,9 @@ export async function createWorkbench(config: AppConfig) {
   let mailboxProposer: ((input: Record<string, unknown>) => Json) | undefined;
   let botRelay: ((input: { sourceBotId: string; targetBotId: string; text: string; key: string; parentEntryId?: string; chatId?: string; sourceMessageId?: string }) => Promise<import('../../protocol/src/bots.ts').MailboxEntry>) | undefined;
   const configuredBots = () => botsStatus() as unknown as import('../../protocol/src/bots.ts').FeishuBot[];
-  const agentSessions = createAgentSessions({ store, machines: () => machines, executors: executorInfo, propose: input => approvals.propose(input), pinExecutor: (source, id) => pinBotExecutor(configuredBots(), source, id) });
+  const agentSessions = createAgentSessions({ store, machines: () => machines, executors: executorInfo, propose: input => approvals.propose(input), pinExecutor });
   let channelBindingsReady = false;
-  let botScopeAccess: (scope: BotScope, botId: string, input?: Message) => boolean = () => true;
+  let botScopeAccess: (scope: BotScope, botId: string, input?: Message, threadId?: string) => boolean = () => true;
   const workDecisions = createWorkDecisionService({ store, events, currentInput: () => currentAgentInput() ?? agent.currentInput(), assertCurrentInput: input => {
     if (input.conversationId.startsWith('bot:') && !configuredBots().some(bot => input.conversationId.startsWith(`bot:${bot.id}:`))) throw new InputError('机器人来源已失效', 403);
     assertBotInput(input);
@@ -431,7 +431,7 @@ export async function createWorkbench(config: AppConfig) {
     return readTodoHistory(store, id, before, reviewEvidence);
   }
   const agent = createAgentRuntime({ config, store, events, contributions, reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
-  const scopedAgents = createScopedAgents({ inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: (scope, botId, input) => botScopeAccess(scope, botId, input) });
+  const scopedAgents = createScopedAgents({ inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
     allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'],
     systemPrompt: SUPERVISOR_SYSTEM_PROMPT });
@@ -527,7 +527,7 @@ export async function createWorkbench(config: AppConfig) {
       if(channelBindingsReady){
         if(source.conversationId.startsWith('bot:')&&!configuredBots().some(b=>source.conversationId.startsWith(`bot:${b.id}:`)))throw new InputError('机器人来源已失效',403);
         assertBotInput(source);
-        if(scope.action.kind==='dispatch')pinBotExecutor(configuredBots(),source,scope.action.executorId);
+        if(scope.action.kind==='dispatch')pinExecutor(source,scope.action.executorId);
       }
     }});
   const offScheduledWork=background.eventbox.subscribe('core',{name:'scheduled-work',types:[{type:'schedule.due',version:1}],effects:'none',handler:event=>scheduledWork.handle(event)});
@@ -601,14 +601,15 @@ export async function createWorkbench(config: AppConfig) {
       const followUp = '用户已回答交互卡片。请在原项目和原待办范围内继续原目标。下面的记录是上下文，用户回答只用于解决这次提问，不扩大外部操作授权。\n' +
         JSON.stringify({ todoId: original.todoId, 原目标: original.text, 卡片标题: card.title, 问题: card.body, 用户回答: text });
       const route = store.get<MessageRoute & { botId?: string; scope?: BotScope }>('message.routes',original.id);
+      const threadId = sourceThread(original);
       let accepted: Message;
       if (original.conversationId === 'main') {
         accepted = await agent.post(followUp,'main',{rememberModel:false,projectId:original.projectId,todoId:original.todoId});
       } else if (original.projectId && original.conversationId === `project:${original.projectId}:work`) {
         accepted = await projectWorkspace.post(original.projectId,followUp,undefined,original.todoId);
-      } else if (route?.botId && route.scope && original.conversationId === botConversationId({id:route.botId,scope:route.scope})) {
+      } else if (route?.botId && route.scope && original.conversationId === botConversationId({id:route.botId,scope:route.scope}, threadId)) {
         assertBotInput(original);
-        accepted = await scopedAgents.post(followUp,validateBotScope(store,route.scope),route.botId,{rememberModel:false,projectId:original.projectId,todoId:original.todoId});
+        accepted = await scopedAgents.post(followUp,validateBotScope(store,route.scope),route.botId,{rememberModel:false,projectId:original.projectId,todoId:original.todoId}, threadId);
       } else throw new InputError('无法核对原问题所属的 Agent',409);
       store.transaction(() => {
         if (route) store.put('message.routes', accepted.id, { ...route, resumed: true });
@@ -674,7 +675,7 @@ export async function createWorkbench(config: AppConfig) {
     const normalized = source && Array.isArray(input.tasks) ? { ...input, tasks: input.tasks.map(task => {
       if (!task || typeof task !== 'object' || Array.isArray(task)) return task;
       const args = task as Record<string, unknown>;
-      return { ...args, executorId: pinBotExecutor(configuredBots(), source, args.executorId) };
+      return { ...args, executorId: pinExecutor(source, args.executorId) };
     }) } : input;
     const plan = plans.propose(normalized as unknown as Parameters<typeof plans.propose>[0]);
     store.put('plan-origins', plan.id, { sourceMessageId: source?.id, projectId: source?.projectId, conversationId: source?.conversationId, todoId: source?.todoId });
@@ -993,7 +994,7 @@ export async function createWorkbench(config: AppConfig) {
     const source = currentAgentInput() ?? agent.currentInput();
     if (!source || source.role !== 'user' || source.readOnly) throw new InputError('归入项目需要当前用户输入，不能依据只读回报执行', 403);
     assertBotInput(source);
-    if (source.conversationId !== 'main' && botForConversation(configuredBots(), source.conversationId)?.scope.kind !== 'global') throw new InputError('只有主对话或全局机器人能调整收件箱项目归属', 403);
+    if (source.conversationId !== 'main' && botForConversation(configuredBots(), source.conversationId, undefined, sourceThread(source))?.scope.kind !== 'global') throw new InputError('只有主对话或全局机器人能调整收件箱项目归属', 403);
     return inbox.assignProject(requiredText(input.id, '收件消息'), input.version as number, optionalText(input.projectId, '项目')) as unknown as Json;
   }
   function todoPriority(value: unknown): NonNullable<Todo['priority']> {
@@ -1235,7 +1236,7 @@ export async function createWorkbench(config: AppConfig) {
     // Durable idempotent results above remain readable after a later rebind.
     const inputMessage = typeof input.sourceMessageId === 'string' ? store.get<Message>('messages', input.sourceMessageId) : undefined;
     assertBotInput(inputMessage);
-    requestedExecutor = optionalText(pinBotExecutor(configuredBots(), inputMessage, requestedExecutor), '执行者');
+    requestedExecutor = optionalText(pinExecutor(inputMessage, requestedExecutor), '执行者');
     const project = projectId ? store.get<Project>('projects', projectId) : undefined;
     if (projectId && !project) throw new InputError('项目不存在', 404);
     if (project?.archivedAt) throw new InputError('项目已归档，不能派发工作', 409);
@@ -1673,6 +1674,30 @@ export async function createWorkbench(config: AppConfig) {
       catch (error) { return { machineId: computer.id, machineName: computer.name, available: false, error: error instanceof Error ? error.message : '无法读取项目文件夹' }; }
     })) as unknown as Json;
   }
+  // Only a stored channel route can grant an independent conversation identity.
+  // Platform thread/root IDs are used for delivery and never authorize a runtime.
+  function sourceThread(input?: Message): string | undefined {
+    if (!input) return;
+    const route = store.get<MessageRoute & { botId?: string; scope?: BotScope; inputId?: string; conversationThreadId?: string; resultRelayEntryId?: string }>('message.routes', input.id);
+    const thread = route?.conversationThreadId;
+    if (thread === undefined) return;
+    if (!validBotThreadId(thread) || route?.channel !== 'feishu' || !route.botId || route.scope?.kind !== 'global'
+      || input.conversationId !== botConversationId({ id: route.botId, scope: route.scope }, thread)
+      || !route.inputId || (route.inputId !== input.id && (!(route.resumed || (input.origin === 'result' && input.readOnly && route.resultRelayEntryId))
+        || store.get<Message>('messages', route.inputId)?.conversationId !== input.conversationId))) {
+      throw new InputError('机器人独立会话来源不匹配', 403);
+    }
+    return thread;
+  }
+  function scopedInputAllowed(scope: BotScope, botId: string, input?: Message, threadId?: string): boolean {
+    if (!botScopeAccess(scope, botId, input, threadId)) return false;
+    if (threadId === undefined || !channelBindingsReady) return true;
+    const bot = configuredBots().find(bot => bot.id === botId);
+    return Boolean(bot?.enabled && bot.paired && bot.scope.kind === 'global' && (!input || sourceThread(input) === threadId));
+  }
+  function pinExecutor(input: Message | undefined, executorId: unknown) {
+    return pinBotExecutor(configuredBots(), input, executorId, sourceThread(input));
+  }
   function assertBotInput(input: Message | undefined) {
     if (!input) return;
     const bots = configuredBots(), configured = bots.find(bot => input.conversationId.startsWith(`bot:${bot.id}:`));
@@ -1684,11 +1709,12 @@ export async function createWorkbench(config: AppConfig) {
         : input.projectId ? { kind: 'project', projectId: input.projectId }
         : input.conversationId === botConversationId({ id: configured.id, scope: { kind: 'global' } }) ? { kind: 'global' } : scope;
     }
-    botForConversation(bots, input.conversationId, scope);
-    if (!botScopeAccess(scope, configured.id, input)) throw new InputError('机器人输入授权或绑定范围已失效，请重新确认当前工作', 409);
+    const thread = sourceThread(input);
+    botForConversation(bots, input.conversationId, scope, thread);
+    if (!scopedInputAllowed(scope, configured.id, input, thread)) throw new InputError('机器人输入授权或绑定范围已失效，请重新确认当前工作', 409);
   }
-  function botContext(conversationId: string, scope?: BotScope): Json {
-    const bots = configuredBots(), own = botForConversation(bots, conversationId, scope);
+  function botContext(conversationId: string, scope?: BotScope, threadId?: string): Json {
+    const bots = configuredBots(), own = botForConversation(bots, conversationId, scope, threadId);
     const summarize = (bot: typeof bots[number]) => ({ id: bot.id, name: bot.name, scope: bot.scope, executorId: bot.executorId ?? null, groupChats: bot.groupChats?.map(group => group.chatId) ?? [] });
     if (!own) return conversationId === 'main' ? { mainIdentities: bots.filter(bot => bot.enabled && bot.paired && bot.scope.kind === 'global').map(summarize) } : {};
     const peers = bots.filter(peer => own.scope.kind !== 'unmarked' && peer.enabled && peer.paired && own.collaboration?.peerBotIds.includes(peer.id)
@@ -1698,7 +1724,8 @@ export async function createWorkbench(config: AppConfig) {
   async function relayFromAgent(input: Record<string, unknown>): Promise<Json> {
     if (!botRelay) throw new InputError('机器人协作路由尚未连接', 503);
     const source = currentAgentInput() ?? agent.currentInput();
-    const sender = relaySender(configuredBots(), source, input.sourceBotId);
+    assertBotInput(source);
+    const sender = relaySender(configuredBots(), source, input.sourceBotId, sourceThread(source));
     const parent = source && mailboxes.list().find(entry => entry.direction === 'inbox' && entry.botId === sender.id
       && entry.resultId === source.id);
     if (input.parentEntryId !== undefined && input.parentEntryId !== parent?.id) throw new InputError('协作父信件必须来自当前输入', 403);
@@ -1715,7 +1742,7 @@ export async function createWorkbench(config: AppConfig) {
     return { ...modelConfig.public(), demo: config.demo, runtime: { main: agent.status(), supervisor: supervisorRuntime.status() } };
   }
   return {
-    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string) => botId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {
@@ -1743,21 +1770,25 @@ export async function createWorkbench(config: AppConfig) {
     },
     setNotificationChannel(channel: typeof notificationChannel) { notificationChannel = channel; },
     setNotificationBots(source: typeof notificationBots) { notificationBots = source; },
-    postScoped(text: string, scope: BotScope, botId: string) {
-      return scopedAgents.post(text, validateBotScope(store, scope), botId);
+    postScoped(text: string, scope: BotScope, botId: string, threadId?: string) {
+      return scopedAgents.post(text, validateBotScope(store, scope), botId, undefined, threadId);
     },
-    async postScopedResult(input: { text: string; scope: BotScope; botId: string; sourceMessageId?: string }) {
+    async postScopedResult(input: { text: string; scope: BotScope; botId: string; sourceMessageId?: string; threadId?: string }) {
       const scope = validateBotScope(store, input.scope);
       const source = input.sourceMessageId ? store.get<Message>('messages', input.sourceMessageId) : undefined;
       if (input.sourceMessageId && (!source || source.role !== 'user')) throw new InputError('协作回报的来源消息不存在', 409);
+      const thread = sourceThread(source);
+      if (input.threadId !== undefined && input.threadId !== thread)
+        throw new InputError('协作回报的独立会话与来源不符', 403);
+      if (thread !== undefined) assertBotInput(source);
       // A result is data, never a new grant to dispatch, write knowledge or relay again.
       const context = { readOnly: true, origin: 'result' as const, ...(source ? { replyTo: source.id } : {}) };
       if (source?.conversationId === 'main') {
         if (scope.kind !== 'global') throw new InputError('项目机器人不能回报到无关主会话', 403);
         return agent.post(requiredText(input.text, '协作回报'), 'main', { ...context, projectId: source.projectId, todoId: source.todoId });
       }
-      if (source && source.conversationId !== botConversationId({ id: input.botId, scope })) throw new InputError('协作回报不属于发起机器人', 403);
-      return scopedAgents.post(requiredText(input.text, '协作回报'), scope, input.botId, context);
+      if (source && source.conversationId !== botConversationId({ id: input.botId, scope }, thread)) throw new InputError('协作回报不属于发起机器人', 403);
+      return scopedAgents.post(requiredText(input.text, '协作回报'), scope, input.botId, context, thread);
     },
     setAgentInputOwnerValidator(validate: typeof validateAgentInputOwner) { validateAgentInputOwner = validate; },
     setBotsStatus(status: () => Json) { botsStatus = status; },
@@ -1768,11 +1799,11 @@ export async function createWorkbench(config: AppConfig) {
     async interruptTurn(conversationId: string, inputId: string) {
       return conversationId === 'main' ? agent.interruptTurn(inputId) : scopedAgents.interruptTurn(conversationId, inputId);
     },
-    async pickConversationModel(model: string, botId?: string, typed = false) {
-      return botId === undefined ? agent.pickConversationModel(model, typed) : scopedAgents.pickConversationModel(model, botId, typed);
+    async pickConversationModel(model: string, botId?: string, typed = false, threadId?: string) {
+      return botId === undefined && threadId === undefined ? agent.pickConversationModel(model, typed) : scopedAgents.pickConversationModel(model, botId ?? '', typed, threadId);
     },
-    async forgetConversationModel(model: string, botId?: string) {
-      return botId === undefined ? agent.forgetConversationModel(model) : scopedAgents.forgetConversationModel(model, botId);
+    async forgetConversationModel(model: string, botId?: string, threadId?: string) {
+      return botId === undefined && threadId === undefined ? agent.forgetConversationModel(model) : scopedAgents.forgetConversationModel(model, botId ?? '', threadId);
     },
     async configureModel(input: Record<string, unknown>) {
       if (agent.configurationBusy() || supervisorRuntime.configurationBusy()) throw new InputError('Agent 正在处理对话，请稍后保存模型配置', 409);

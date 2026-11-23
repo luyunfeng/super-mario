@@ -1,3 +1,4 @@
+import { openPrivateThreads } from '../features/feishu-private-threads.js';
 import { openTokenStatistics } from '../features/token-statistics.js';
 // Agent：配置谁来干活。模型、执行者与电脑、CLI 会话、自动处理、自动跟进；其余收进“高级”。
 import { h, replace } from '../lib/dom.js';
@@ -56,12 +57,13 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
     body: botStatus,
   });
   const commandGroup = createCommandGroupCard({ api, store });
-  let botRequest = 0, botCredential, botSnapshot;
+  let botRequest = 0, botCredential, botSnapshot, privateHistory;
   store.subscribe?.(view => {
     if (botCredential !== api.token() || view.unauthorized) {
       botRequest++;
       botCredential = undefined;
       botSnapshot = undefined;
+      privateHistory?.close();
     }
   });
   function loadFeishu() {
@@ -75,6 +77,7 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
     try {
       const bots = (await api.get('/feishu/bots')).filter(bot => bot.scope?.kind === 'global');
       if (stamp !== botRequest || credential !== api.token()) return;
+      privateHistory?.verify(bots);
       profile.setBots(bots, credential);
       commandGroup.setMainBots(bots);
       replace(botStatus, bots.length ? bots.map(bot => h('div', { class: 'row row--wrap' },
@@ -83,11 +86,16 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
         bot.workbench && h('span', { class: 'muted small' },
           ({ none: '暂无工作台置顶回执', pinned: '工作台置顶已确认', unconfirmed: '工作台置顶未确认' })[bot.workbench.state],
           bot.workbench.detail && ' · ' + bot.workbench.detail),
+        bot.enabled && bot.paired && store.view.snapshot?.plugins?.some(p => p.id === 'feishu' && p.status === 'active') &&
+          Button({ label: '独立对话记录', size: 'sm', onClick: () => {
+            privateHistory = openPrivateThreads({ api, bot, store, onClose: () => { privateHistory = undefined; } });
+          } }),
         bot.enabled && bot.paired && Button({ label: '会话模型', size: 'sm', onClick: () => openBotModelDrawer({ api, bot }) }),
         h('a', { href: router.href('channels', 'bot', bot.id) }, '管理')))
         : h('p', { class: 'muted small' }, '尚未绑定全局机器人。配置后，主 Agent 可用它在飞书中跟进各项目。'));
     } catch (cause) {
       if (stamp !== botRequest || credential !== api.token()) return;
+      privateHistory?.close();
       profile.setBots(undefined, credential, '读取失败：' + cause.message);
       commandGroup.setMainBots(undefined);
       replace(botStatus, Banner({ tone: 'warn', children: '读取飞书机器人失败：' + cause.message,

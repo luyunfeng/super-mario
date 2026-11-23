@@ -1,3 +1,4 @@
+import { privateThreadPage, readPrivateThreadHistory } from './feishu-thread-history.ts';
 import { createSessionAnalysis } from './session-analysis.ts';
 import { nativeExportProgress } from '../../../packages/core/src/native-conversation-export.ts';
 import { readMessageReceipt } from '../../../packages/core/src/message-receipts.ts';
@@ -125,7 +126,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if(path==='/api/v1/eventbox/cleanup-plugin'&&method==='POST'){const input=await body(req);const owner=requiredText(input.owner,'插件');if(input.confirm!==true||owner==='core'||!app.plugins.list().some(p=>p.id===owner&&p.status==='disabled'))throw new InputError('请先停用插件，并显式确认清理',409);app.background.cleanupOwner(owner);return json(res,200,{ok:true});}
         if(path==='/api/v1/eventbox/model-grants'&&method==='PUT'){const input=await body(req);app.background.modelGrant(requiredText(input.owner,'插件'),input.enabled as boolean,input.dailyLimit as number);return json(res,200,app.background.modelGrants());}
         if(path==='/api/v1/supervisor/resume'&&method==='POST'){await app.supervisorAgent.resume();return json(res,200,app.supervisorAgent.settings());}
-        const conversationModel = path.match(/^\/api\/v1\/(?:feishu\/bots\/([^/]+)\/)?model\/(catalog|pick|custom)$/);
+        const conversationModel = path.match(/^\/api\/v1\/(?:feishu\/bots\/([^/]+)\/(?:threads\/([0-9a-f]{64})\/)?)?model\/(catalog|pick|custom)$/);
         if (conversationModel) {
           const botId = conversationModel[1] && decodeURIComponent(conversationModel[1]);
           if (botId !== undefined) {
@@ -133,17 +134,23 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             if (!bot) throw new InputError('机器人不存在', 404);
             if (bot.scope.kind !== 'global' || !bot.paired || !bot.enabled) throw new InputError('请选择已启用并配对的全局机器人', 409);
           }
-          const action = conversationModel[2];
+          const threadId = conversationModel[2];
+          const checkThread = () => {
+            if (threadId && !bots.privateThreads(botId!).some(row => row.threadId === threadId))
+              throw new InputError('独立对话不存在或绑定已变化', 404);
+          };
+          checkThread();
+          const action = conversationModel[3];
           const checkRevision = (revision: unknown) => {
             if (revision !== undefined && revision !== app.modelConfigurationRevision())
               throw new InputError('模型接入已变化，请重新查看清单', 409);
           };
           if (action === 'custom' && method === 'DELETE') {
             checkRevision(url.searchParams.get('revision') ?? undefined);
-            return json(res, 200, await app.forgetConversationModel(requiredText(url.searchParams.get('model'), '模型'), botId));
+            return json(res, 200, await app.forgetConversationModel(requiredText(url.searchParams.get('model'), '模型'), botId, threadId));
           }
           if (action === 'catalog' && method === 'GET') {
-            const catalog = app.modelCatalog(botId);
+            const catalog = app.modelCatalog(botId, threadId);
             return json(res, 200, catalog.typed ? { ...catalog, revision: app.modelConfigurationRevision() } : catalog);
           }
           if (action === 'pick' && method === 'PUT') {
@@ -151,7 +158,8 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             if (Object.keys(input).some(key => !['model', 'typed', 'revision'].includes(key))) throw new InputError('会话模型选择包含未知字段');
             if (input.typed !== undefined && typeof input.typed !== 'boolean') throw new InputError('typed 必须为布尔值');
             checkRevision(input.revision);
-            return json(res, 200, await app.pickConversationModel(requiredText(input.model, '模型'), botId, input.typed === true));
+            checkThread();
+            return json(res, 200, await app.pickConversationModel(requiredText(input.model, '模型'), botId, input.typed === true, threadId));
           }
         }
         if (path === '/api/v1/model' && method === 'GET') return json(res, 200, app.modelStatus());
@@ -275,6 +283,18 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (path === '/api/v1/feishu/bots' && method === 'GET') {
           return json(res, 200, bots.list().map(bot => bot.scope.kind === 'global' && bot.paired
             ? { ...bot, workbench: bots.workbenchStatus(bot.id) } : bot));
+        }
+        const botThreads = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/threads(?:\/([0-9a-f]{64}))?$/);
+        if (botThreads && method === 'GET') {
+          if (!app.plugins.list().some(p => p.id === 'feishu' && p.status === 'active')) throw new InputError('飞书插件已停用', 503);
+          const id = decodeURIComponent(botThreads[1]!);
+          if (!bots.list().some(bot => bot.id === id && bot.scope.kind === 'global' && bot.enabled && bot.paired))
+            throw new InputError('已配对的全局机器人不存在或已停用', 404);
+          const rows = bots.privateThreads(id);
+          if (!botThreads[2]) return json(res, 200, readPrivateThreadHistory(app.store, rows));
+          const row = rows.find(item => item.threadId === botThreads[2]);
+          if (!row) throw new InputError('飞书独立对话不存在或绑定已变化', 404);
+          return json(res, 200, privateThreadPage(app.store, row, url.searchParams.get('before')));
         }
         const botWorkbench = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/workbench$/);
         if (botWorkbench && method === 'GET') {

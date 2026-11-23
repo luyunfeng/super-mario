@@ -1,5 +1,5 @@
 import type { ReviewEvidenceReader } from './run-review.ts';
-import { createHash } from 'node:crypto';
+import { botConversationId } from './bot-agent-routing.ts';
 import type { BotScope } from '../../protocol/src/bots.ts';
 import type { AppConfig, MainAssistantProfile, ExecutorInfo, Message, Project, Todo, Json } from '../../protocol/src/index.ts';
 import type { Contributions, EventBus, Store } from '../../plugin-sdk/src/index.ts';
@@ -14,13 +14,13 @@ interface Options {
   config: AppConfig; store: Store; events: EventBus; contributions: Contributions;
   /** Optional host validation (for example, whether this bot binding is still enabled). */
   executors?: () => ExecutorInfo[];
-  botContext?: (conversationId:string, scope?:BotScope)=>Json;
+  botContext?: (conversationId:string, scope?:BotScope, threadId?:string)=>Json;
   mainSkillCatalog?: () => Promise<string>;
   mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>;
   projectInstructions?: (projectId: string) => Promise<string>;
   projectContext?: (projectId:string)=>Json;
   workDecisions?: (scope?:BotScope, projectId?:string)=>unknown;
-  validScope?: (scope: BotScope, botId: string, input?: Message) => boolean | void;
+  validScope?: (scope: BotScope, botId: string, input?: Message, threadId?: string) => boolean | void;
 }
 
 /** Owns lazy, independent queues and histories. Shared records/events stay in the host store.
@@ -32,7 +32,7 @@ export function createScopedAgents(options: Options) {
   let closed = false;
   let configuring = false;
 
-  function identity(input: BotScope, botId: string) {
+  function identity(input: BotScope, botId: string, threadId?: string) {
     if (typeof botId !== 'string' || !botId.trim()) throw Object.assign(new Error('botId 必须为非空字符串'), { status: 400 });
     if (!input || !['global', 'unmarked', 'project', 'task'].includes(input.kind)) throw new Error('无效 Bot 作用域');
     let scope: BotScope;
@@ -52,9 +52,9 @@ export function createScopedAgents(options: Options) {
       }
       scope = { kind: 'task', todoId: todo.id, ...(todo.projectId ? { projectId: todo.projectId } : {}) };
     } else scope = { kind: input.kind };
-    if (options.validScope?.(structuredClone(scope), botId) === false) throw Object.assign(new Error('Bot 作用域已失效'), { status: 403 });
-    const digest = createHash('sha256').update(JSON.stringify(scope)).digest('hex');
-    return { scope, conversationId: `bot:${botId}:${digest}` };
+    const conversationId = botConversationId({ id: botId, scope }, threadId);
+    if (options.validScope?.(structuredClone(scope), botId, undefined, threadId) === false) throw Object.assign(new Error('Bot 作用域已失效'), { status: 403 });
+    return { scope, conversationId, conversationThreadId: threadId };
   }
 
   function projectAgent(projectId:string,role:'work'|'memory'='work') {
@@ -75,15 +75,15 @@ export function createScopedAgents(options: Options) {
     postProject(projectId:string,text:string,requestId?:string,todoId?:string){return projectAgent(projectId).post(text,undefined,{requestId,todoId});},
     askMemory(projectId:string,text:string){return projectAgent(projectId,'memory').ask(text,{readOnly:true});},
     projectStatus(projectId:string){const id=`project:${projectId}:work`;return{conversationId:id,...(agents.get(id)?.runtime.status()??{available:options.config.demo||Boolean(options.config.model),reason:'项目 Agent 按需初始化'})};},
-    async post(text: string, scope: BotScope, botId: string, context?: { projectId?: string; todoId?: string; readOnly?: boolean; rememberModel?: false; origin?: Message['origin']; replyTo?: string }): Promise<Message> {
+    async post(text: string, scope: BotScope, botId: string, context?: { projectId?: string; todoId?: string; readOnly?: boolean; rememberModel?: false; origin?: Message['origin']; replyTo?: string }, threadId?: string): Promise<Message> {
       if (closed) throw new Error('Bot 运行时已关闭');
       if (configuring) throw new Error('正在应用模型配置，请稍后发送消息');
       if (typeof text !== 'string' || !text.trim()) throw new Error('消息不能为空');
-      const binding = identity(scope, botId);
+      const binding = identity(scope, botId, threadId);
       let agent = agents.get(binding.conversationId);
       if (!agent) {
         const systemPrompt = ['project', 'task'].includes(binding.scope.kind) ? SCOPED_WORK_SYSTEM_PROMPT : undefined;
-        const runtime = createAgentRuntime({ ...options, ...binding, systemPrompt, canUseScope: input => options.validScope?.(structuredClone(binding.scope), botId, input) !== false });
+        const runtime = createAgentRuntime({ ...options, ...binding, systemPrompt, canUseScope: input => options.validScope?.(structuredClone(binding.scope), botId, input, threadId) !== false });
         agent = { botId, ...binding, runtime };
         agents.set(binding.conversationId, agent);
       }
@@ -94,30 +94,30 @@ export function createScopedAgents(options: Options) {
       if (!entry || !(conversationId.startsWith('bot:') || conversationId.endsWith(':work'))) return { outcome: 'idle' as const };
       return entry.runtime.interruptTurn(inputId);
     },
-    modelCatalog(botId: string) {
-      const binding = identity({ kind: 'global' }, botId);
+    modelCatalog(botId: string, threadId?: string) {
+      const binding = identity({ kind: 'global' }, botId, threadId);
       return agents.get(binding.conversationId)?.runtime.modelCatalog()
         ?? conversationModels(options.config, options.store, binding.conversationId).catalog();
     },
-    pickConversationModel(model: string, botId: string, typed = false) {
+    pickConversationModel(model: string, botId: string, typed = false, threadId?: string) {
       if (closed || configuring) throw Object.assign(new Error('正在应用模型配置，请稍后修改型号'), { status: 409 });
-      const { conversationId } = identity({ kind: 'global' }, botId);
+      const { conversationId } = identity({ kind: 'global' }, botId, threadId);
       const runtime = agents.get(conversationId)?.runtime;
       return runtime ? runtime.pickConversationModel(model, typed) : conversationModels(options.config, options.store, conversationId).pick(model, typed);
     },
-    forgetConversationModel(model: string, botId: string) {
+    forgetConversationModel(model: string, botId: string, threadId?: string) {
       if (closed || configuring) throw Object.assign(new Error('正在应用模型配置'), { status: 409 });
-      const { conversationId } = identity({ kind: 'global' }, botId);
+      const { conversationId } = identity({ kind: 'global' }, botId, threadId);
       return conversationModels(options.config, options.store, conversationId).forget(model);
     },
-    status(scope?: BotScope, botId?: string) {
+    status(scope?: BotScope, botId?: string, threadId?: string) {
       if (closed) return { available: false, reason: 'Bot 运行时已关闭' };
       if (configuring) return { available: false, reason: '正在应用模型配置' };
       if (scope === undefined && botId === undefined) {
         return { available: true, reason: 'Bot 运行时按需初始化；模型可用性请查询具体 Bot。' };
       }
       if (!scope || !botId) throw new Error('查询 Bot 状态需要 scope 和 botId');
-      const binding = identity(scope, botId);
+      const binding = identity(scope, botId, threadId);
       return agents.get(binding.conversationId)?.runtime.status() ?? { available: false, reason: 'Bot 运行时尚未初始化' };
     },
     list() {
