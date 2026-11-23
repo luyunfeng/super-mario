@@ -462,6 +462,8 @@ export default {
 
 源码插件使用 `packages/plugin-sdk/` 的接口，安装包的 TypeScript 插件可从 `super-mario/plugin-sdk` 导入类型。依赖写在 manifest 的 `dependencies` 中；资源使用 `contribute`、`onEvent`、`defer` 登记，停用时统一释放。坏插件显示失败，其余能力继续运行。当前是可信插件同进程执行，没有进程沙箱，也不提供代码热替换。
 
+服务端本地扩展需要升级或恢复旧版时，保留当前完整插件目录的副本，放到 `extensions/` 之外。将目标版本的完整目录放回原位置，重启服务。到管理员页「插件诊断」按插件 ID 核对版本、状态和依赖。这个操作恢复插件代码，插件自行写入的数据仍按该插件的版本兼容说明处理。
+
 前端展示通过同一 `context.contribute('web_extensions', id, value)` 注册。当前最小实现支持 `{slot:'startup', renderer:'brand-splash', title, subtitle, durationMs}`；声明时 `durationMs` 为 600–5000 毫秒，省略时播放至片尾。服务端只把启用中的贡献放入快照，浏览器选择已知渲染器并负责卸载。该扩展点支持声明式开屏，不是任意前端 JavaScript 或自定义页面加载器。
 
 自定义扩展点须在清单 `extensionPoints` 中声明 `<插件ID>.<名称>` 和 `version:1`，消费者声明提供者依赖。可调用行为使用 `provide/use` 的 JSON 服务；`hook` 与 `wrap` 统一登记和清理。显式 `permissions` 只允许清单授予的 SDK 调用，旧插件不声明时仍是可信本地模式。开发时运行 `npm run lint:plugins`，系统及第三方插件均禁止导入核心内部实现。完整接口与权限表见 [架构第 5 节](architecture.md#5-插件模型)。
