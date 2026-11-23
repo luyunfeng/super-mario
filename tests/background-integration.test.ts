@@ -450,6 +450,9 @@ test("reminders enqueue a notification once without automatically authorizing th
       .filter((i) => i.owner === "reminders");
     assert.equal(out.length, 1);
     assert.equal(out[0].status, "needs_approval");
+    const detail = f.server.app.contributions.list("tools").find(tool => tool.value.name === "todo_detail")!.value;
+    const read = async () => await detail.execute({ todoId: todo.id }, new AbortController().signal) as { reminderDeliveries: unknown[] };
+    assert.deepEqual((await read()).reminderDeliveries, [{ status: "needs_approval", updatedAt: out[0].updatedAt }]);
     f.server.app.supervision.tick();
     await f.server.app.background.eventbox.drain();
     assert.equal(

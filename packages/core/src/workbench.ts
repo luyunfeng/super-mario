@@ -765,7 +765,12 @@ export async function createWorkbench(config: AppConfig) {
     const replyTracking = waitingReplies.summary(id);
     const pendingRequests = pendingUserCards().filter(card => card.todoId === id && card.projectId === todo.projectId)
       .map(({ kind, title, body, suggestion }) => ({ kind, title, body, suggestion }));
-    return { todo, pendingRequests, replyTracking, decisions: todoDecisions.list(id), ...actionTodoLink(todo) } as unknown as Json;
+    const reference = todo.reminderAt ? reminderReference(todo) : undefined;
+    const reminderDeliveries = reference ? background.outbox.list().filter(item =>
+      item.owner === 'reminders' && item.channel === 'feishu.bot' && item.relatedTo?.kind === 'todo' && item.relatedTo.id === id &&
+      item.staleIf?.ref === reference.ref && item.staleIf.version === reference.version
+    ).map(({ status, updatedAt }) => ({ status, updatedAt })) : [];
+    return { todo, pendingRequests, replyTracking, reminderDeliveries, decisions: todoDecisions.list(id), ...actionTodoLink(todo) } as unknown as Json;
   }
   function actionTodoLink(todo: Todo) {
     const webPath = '#projects/' + encodeURIComponent(todo.projectId ?? 'all') + '/todos/detail/' + encodeURIComponent(todo.id);

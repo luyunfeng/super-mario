@@ -1585,6 +1585,10 @@ test('待办提醒拒绝过期创建，Web 登记未来提醒，飞书取消时�
     if (req.lastRole === 'user') {
       assert.match(req.system, /是否送达飞书另看投递回执/);
       const question = JSON.stringify(req.content);
+      if (question.includes('发到飞书了吗')) {
+        assert.match(req.system, /空数组表示未查到本轮回执/);
+        return call('todo_detail', { todoId: id }, 'delivery');
+      }
       if (question.includes('哪些提醒')) {
         assert.match(req.system, /reminderStatus=pending/);
         const status = question.includes('已经触发') ? 'triggered' : 'pending';
@@ -1600,6 +1604,10 @@ test('待办提醒拒绝过期创建，Web 登记未来提醒，飞书取消时�
       return { role: 'assistant', content: '请给出未来的提醒时间。' };
     }
     const todo = JSON.parse(raw);
+    if (req.callId === 'delivery') {
+      assert.deepEqual(todo.reminderDeliveries, [{ status: 'unknown', updatedAt: '2026-01-01T00:00:00Z' }]);
+      return { role: 'assistant', content: '这次提醒的飞书发送结果未知。' };
+    }
     if (req.callId === 'triggered') {
       assert.deepEqual(todo.map((row: {title: string}) => row.title), ['已触发样本']);
       assert.ok(todo[0].remindedAt);
@@ -1635,6 +1643,18 @@ test('待办提醒拒绝过期创建，Web 登记未来提醒，飞书取消时�
       scope: { kind: 'task', todoId: id, projectId: project.id }, requireConfirmation: false });
     const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    const current = server.app.todos().find(row => row.id === id)!;
+    const receipt = { owner: 'reminders', channel: 'feishu.bot', relatedTo: { kind: 'todo', id },
+      staleIf: { ref: 'reminder:' + JSON.stringify([id, current.reminderAt]), version: current.reminderVersion },
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', content: { text: '合成提醒' }, status: 'unknown' };
+    for (const [key, patch] of Object.entries({ current: {}, previous: { staleIf: { ...receipt.staleIf, version: 1 } },
+      unrelated: { owner: 'other' }, foreign: { relatedTo: { kind: 'todo', id: closed.id } } })) {
+      server.app.store.put('outbox.items', key, { id: key, ...receipt, ...(key !== 'current' && { status: 'sent' }), ...patch });
+    }
+    const deliveryQuestion = '这次提醒发到飞书了吗？';
+    assert.equal(await ask(deliveryQuestion, '/projects/' + project.id + '/messages'), '这次提醒的飞书发送结果未知。');
+    await adapter.onMessage(deliveryQuestion, { ...source, messageId: 'reminder-delivery' });
+    await t.waitFor(() => assert.ok(sent.includes('这次提醒的飞书发送结果未知。')));
     await adapter.onMessage(question, { ...source, messageId: 'reminder-status' });
     await t.waitFor(() => assert.ok(sent.includes('核对交付的提醒尚无本地触发记录。')));
     await adapter.onMessage('取消这项提醒', { ...source, messageId: 'clear' });

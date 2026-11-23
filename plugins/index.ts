@@ -219,7 +219,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         // Business mutations stay in core services; tools only adapt model arguments.
         if (actions) {
           for (const [name, action, description, properties] of [
-            ['todo_detail', actions.todoDetail, '按唯一待办 ID 读取当前备注、期限、提醒、等待对象、回复跟踪和已记录决定。pendingRequests 是本事项当前等用户处理的交互卡。replyTracking 仅含本项目最近跟踪周期的状态与时间。active=false 的决定已撤回。', { todoId: { type: 'string' } }],
+            ['todo_detail', actions.todoDetail, '按唯一待办 ID 读取当前备注、期限、提醒、等待对象、回复跟踪和已记录决定。reminderDeliveries 是当前提醒版本的飞书投递记录，仅含状态和更新时间。pendingRequests 是本事项当前等用户处理的交互卡。replyTracking 仅含本项目最近跟踪周期的状态与时间。active=false 的决定已撤回。', { todoId: { type: 'string' } }],
             ['todo_history', actions.todoHistory, '按待办读取最近20轮执行及用户验收或返工决定，decisions 是历史决定，review 是该轮当前验收状态，含返工派发回执。answerReceipts 给出该轮已记录答复的处理目标与状态。首页的 conversationReceipts 给出无执行轮次的对话答复及后续输入接收证据。读取更早记录时将 nextBefore 作为 before。', { todoId: { type: 'string' }, before: { type: 'string' } }],
             ['work_decisions_list', actions.workDecisionsList, '读取当前范围的工作决定及版本；不是原始聊天，纠正后旧版本不可沿用。', { projectId: { type: 'string' }, todoId: { type: 'string' } }],
             ['work_decision_record', actions.workDecisionRecord, '按当前真实用户明确要求记录一个工作决定摘要；必须提供稳定key和内容，不自动推断私聊决定。', { key: { type: 'string' }, text: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' } }],
