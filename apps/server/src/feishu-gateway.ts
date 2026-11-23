@@ -161,7 +161,7 @@ export function createFeishuGateway(
   app.setBotScopeAccess((scope, botId, input, threadId) => bots.canUseScope(scope, botId, input, threadId));
   app.setPrivateSearch(bots.searchPrivateHistory);
   app.setPrivateConversation((id, threadId, action, input) => action === 'read'
-    ? bots.privateThreadMetadata(id, threadId) : bots.updatePrivateThread(id, threadId, input));
+    ? bots.privateThreadMetadata(id, threadId) : bots.updatePrivateThread(id, threadId, input, 'assistant'));
   function proposeMail(input: Record<string, unknown>) {
     const bot = bots.list().find(bot => bot.id === input.botId);
     if (!bot) throw new InputError('请选择机器人', 404);

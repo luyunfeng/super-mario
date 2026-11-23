@@ -1,4 +1,4 @@
-import { searchPrivateThreads, readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
+import { privateThreadTags, normalizeThreadTags, searchPrivateThreads, readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
 import { createPinnedWorkbench } from './feishu-pinned-workbench.ts';
 import { selectedAgentStatus, agentCard, agentCardSnapshot, type AgentCardSnapshot } from './feishu-agent-card.ts';
 import type { ConversationStatus } from '../../../plugins/conversation-status.ts';
@@ -417,24 +417,74 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     app.events.publish('feishu.changed', { botId, threadsChanged: true });
     pins.scheduleRefresh();
   }
-  function updatePrivateThread(botId: string, threadId: string, input: Record<string, unknown>) {
+  function tagPreferenceKey(botId: string) {
+    const missing = () => Object.assign(new Error('当前全局机器人的私聊配对已变化'), { status: 404 });
+    let bot;
+    try { bot = current(botId); } catch { throw missing(); }
+    const paired = owner(bot);
+    if (bot.scope.kind !== 'global' || !paired?.senderId || !paired.chatId) throw missing();
+    return digest([bot.id, bot.appId, bot.revision, paired.chatId, paired.senderId]);
+  }
+  function threadTagPreferences(botId: string, expectedKey: string, input?: Record<string, unknown>) {
+    type Preference = { version: number; filters: string[] | null };
+    if (tagPreferenceKey(botId) !== expectedKey)
+      throw Object.assign(new Error('当前全局机器人的私聊配对已变化'), { status: 409 });
+    const collection = 'feishu.private-thread-tag-filters';
+    const stored = () => app.store.get<Preference>(collection, expectedKey) ?? { version: 0, filters: null };
+    let pref: Preference;
+    if (input) {
+      pref = app.store.transaction(() => {
+        const last = stored();
+        if (Object.keys(input).length !== 3 || !Object.hasOwn(input, 'filters') || typeof input.binding !== 'string' || !Number.isSafeInteger(input.version) || (input.version as number) < 0)
+          throw Object.assign(new Error('请同时提供当前配对标识、版本号和筛选标签'), { status: 400 });
+        if (input.binding !== expectedKey) throw Object.assign(new Error('标签筛选的配对已变化，请重新打开机器人'), { status: 404 });
+        if (input.version !== last.version) throw Object.assign(new Error('标签筛选版本已变化，请刷新后再操作'), { status: 409 });
+        const filters = input.filters === null ? null : normalizeThreadTags(input.filters, 50);
+        if (JSON.stringify(filters) === JSON.stringify(last.filters)) return last;
+        const next = { version: last.version + 1, filters };
+        app.store.put(collection, expectedKey, next);
+        return next;
+      });
+      if (pref.version !== input.version) app.events.publish('feishu.changed', { botId, tagFiltersChanged: true });
+    } else pref = stored();
+    return { ...privateThreadTags(app.store, privateThreads(botId)), binding: expectedKey, ...pref };
+  }
+  function updatePrivateThread(botId: string, threadId: string, input: Record<string, unknown>, actor: 'user' | 'assistant' = 'user') {
     const result = app.store.transaction(() => {
       const row = requireThread(botId, threadId);
-      const rename = Object.hasOwn(input, 'title');
-      if (!Number.isSafeInteger(input.version) || (input.version as number) < 0 || Object.keys(input).length !== 2
-        || (rename ? typeof input.title !== 'string' : typeof input.archived !== 'boolean'))
-        throw Object.assign(new Error('请提供版本号以及标题或归档状态'), { status: 400 });
+      const fields = Object.keys(input).filter(key => key !== 'version');
+      if (!Number.isSafeInteger(input.version) || (input.version as number) < 0 || fields.length !== 1
+        || !['title', 'tags', 'archived'].includes(fields[0]))
+        throw Object.assign(new Error('请提供版本号及一项修改内容（标题、归档状态或标签）'), { status: 400 });
       if (input.version !== (row.version ?? 0))
         throw Object.assign(new Error('对话版本已变化，请刷新后再操作'), { status: 409 });
       const next = { ...row };
-      if (rename) {
-        const title = (input.title as string).trim();
+      if (fields[0] === 'title') {
+        if (typeof input.title !== 'string') throw Object.assign(new Error('对话标题须为字符串'), { status: 400 });
+        const title = input.title.trim();
         if (Array.from(title).length > 80) throw Object.assign(new Error('对话标题最多 80 个字符'), { status: 400 });
         if (title) next.title = title;
         else delete next.title;
-      } else next.archived = input.archived === true;
-      const changed = next.title !== row.title || (next.archived === true) !== (row.archived === true);
+      } else if (fields[0] === 'tags') {
+        const tags = normalizeThreadTags(input.tags);
+        if (tags.length) next.tags = tags;
+        else delete next.tags;
+      } else {
+        if (typeof input.archived !== 'boolean') throw Object.assign(new Error('归档状态须为布尔值'), { status: 400 });
+        next.archived = input.archived;
+      }
+      const changed = next.title !== row.title || (next.archived === true) !== (row.archived === true)
+        || JSON.stringify(next.tags ?? []) !== JSON.stringify(row.tags ?? []);
       if (changed) {
+        if (fields[0] === 'tags') {
+          if (next.tags?.length) {
+            next.tagsUpdatedBy = actor;
+            next.tagsUpdatedAt = new Date().toISOString();
+          } else {
+            delete next.tagsUpdatedBy;
+            delete next.tagsUpdatedAt;
+          }
+        }
         next.version = (row.version ?? 0) + 1;
         app.store.put('feishu.private-threads', threadId, next);
       }
@@ -1932,12 +1982,12 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           && paired.chatId === target.owner.chatId && paired.senderId === target.owner.senderId;
       } catch { return false; }
     },
-    canUseScope, privateThreads, privateThreadMetadata, updatePrivateThread,
-    searchPrivateHistory(id: string, query: string, archived: boolean, before: string | null, sourceId?: string) {
+    canUseScope, privateThreads, privateThreadMetadata, updatePrivateThread, tagPreferenceKey, threadTagPreferences,
+    searchPrivateHistory(id: string, query: string, archived: boolean, before: string | null, sourceId?: string, tag?: string) {
       const bot = current(id), paired = owner(bot);
       if (!paired?.senderId || bot.scope.kind !== 'global' || (sourceId && !privateTurn(bot, paired, sourceId)))
         throw Object.assign(new Error('需要已配对全局机器人的主人私聊'), { status: 403 });
-      return searchPrivateThreads(app.store, privateThreads(id), query, archived, before);
+      return searchPrivateThreads(app.store, privateThreads(id), query, archived, before, tag);
     },
     workbenchStatus: pins.status,
     async refreshCommandGroup() {

@@ -1,6 +1,7 @@
 import { h, replace } from '../lib/dom.js';
+import { editThreadTagFilters } from './feishu-tag-filters.js';
 import { conversationModelPicker } from './model-drawer.js';
-import { Button, Field, Input, copyText } from '../ui/kit.js';
+import { Button, Field, Input, Select, copyText } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 
 export function openPrivateThreads({ api, bot, store, onClose }) {
@@ -8,12 +9,15 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
   const owner = api.draftOwner(), route = location.hash;
   const body = h('div', { class: 'stack', 'aria-live': 'polite' });
   let loadId = 0;
+  let filterEditor;
+  let knownTags = [];
   const valid = () => api.draftOwner() === owner && location.hash === route && !store.view.unauthorized &&
     store.view.snapshot?.plugins?.some(plugin => plugin.id === 'feishu' && plugin.status === 'active');
   const drawer = openDrawer({ title: '独立对话记录', subtitle: bot.name, body,
-    onClose() { loadId++; unsubscribe(); onClose(); } });
+    onClose() { loadId++; filterEditor?.close(); unsubscribe(); onClose(); } });
   let archived = false;
   let query = '';
+  let selectedTag = '';
   // Keep loaded search pages when returning from a message. A write invalidates the cache.
   let searchPage;
   const hasSearch = () => store.view.snapshot?.plugins?.some(plugin => plugin.id === 'conversation-search' && plugin.status === 'active');
@@ -68,7 +72,49 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
     };
     const filter = value => Button({ label: value ? '已归档' : '未归档', disabled: value === archived,
       onClick: () => search(input.value, value) });
-    replace(body, h('div', { class: 'row' }, filter(false), filter(true)),
+    const select = Select({ options: [['', '全部标签'], ...(selectedTag ? [[selectedTag, selectedTag]] : [])], value: selectedTag });
+    select.addEventListener('change', () => {
+      selectedTag = select.value;
+      void search(input.value, archived);
+    });
+    const tagFilter = Field({ label: '筛选标签', control: select });
+    let tagState;
+    function useFilters(state) {
+      tagState = state;
+      knownTags = state.tags;
+      const available = state.filters ?? state.tags;
+      if (selectedTag && !available.includes(selectedTag)) {
+        selectedTag = '';
+        searchPage = undefined;
+        void list();
+        return;
+      }
+      replace(select, h('option', { value: '' }, '全部标签'), available.map(tag => h('option', { value: tag }, tag)));
+      select.value = selectedTag;
+      manage.disabled = false;
+    }
+    const manage = Button({ label: '管理标签筛选', disabled: true, size: 'sm', onClick: () => {
+      if (!current(id) || !tagState) return;
+      filterEditor = editThreadTagFilters({ api, path: base + '/tags', state: tagState,
+        onSaved(state) {
+          if (!drawer.el.open || !valid() || !showingList) return;
+          if (!(state.filters ?? state.tags).includes(selectedTag)) selectedTag = '';
+          searchPage = undefined;
+          void list();
+        }, onInvalid: () => drawer.close() });
+    } });
+    async function loadTags() {
+      try {
+        const state = await api.get(base + '/tags');
+        if (current(id)) useFilters(state);
+      } catch (error) {
+        if (!current(id) || inaccessible(error)) return;
+        tagFilter.append(h('span', { role: 'alert' }, '标签读取失败：' + error.message),
+          Button({ label: '重试读取标签', onClick: () => list() }));
+      }
+    }
+    void loadTags();
+    replace(body, h('div', { class: 'row' }, filter(false), filter(true)), tagFilter, manage,
       searchEnabled ? h('form', { class: 'stack', onsubmit: event => { event.preventDefault(); void search(input.value, archived); } },
         Field({ label: '搜索独立对话', control: input }),
         h('div', { class: 'row' }, Button({ label: '搜索', type: 'submit' }),
@@ -87,13 +133,17 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
     async function read(before) {
       if (!before) replace(results, h('p', { role: 'status' }, '正在读取…'));
       try {
+        const params = new URLSearchParams();
+        if (selectedTag) params.set('tag', selectedTag);
         if (!query) {
-          const rows = await api.get(base + (archived ? '?archived=1' : ''));
+          if (archived) params.set('archived', '1');
+          const rows = await api.get(base + (params.size ? '?' + params : ''));
           if (current(id)) replace(results, rows.length ? rows.map(openThread)
-            : h('p', { class: 'muted' }, archived ? '暂无已归档对话。' : '暂无独立对话。可在机器人私聊发送 /new 加第一条消息。'));
+            : h('p', { class: 'muted' }, selectedTag ? '当前标签下暂无独立对话。' : archived ? '暂无已归档对话。' : '暂无独立对话。可在机器人私聊发送 /new 加第一条消息。'));
           return;
         }
-        const params = new URLSearchParams({ q: query, archived: archived ? '1' : '0' });
+        params.set('q', query);
+        params.set('archived', archived ? '1' : '0');
         if (before) params.set('before', before);
         const page = await api.get(base + '/search?' + params);
         if (!current(id)) return;
@@ -124,7 +174,16 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
   function renderDetail(path, row, messages, nextBefore, nextAfter, notice, id, draft, around) {
     if (!query) archived = !!row.archived;
     const feedback = h('p', { role: 'status', class: 'small muted' }, notice);
-    const title = Input({ value: draft ?? row.title });
+    const title = Input({ value: draft?.title ?? row.title });
+    const savedTags = row.tags ?? [];
+    const tags = [...(draft?.tags ?? savedTags)];
+    const suggestions = h('datalist', { id: 'thread-tags-' + id });
+    const tagInput = Input({ value: draft?.tagInput ?? '', list: suggestions.id });
+    const showSuggestions = tags => replace(suggestions, tags.map(tag => h('option', { value: tag })));
+    showSuggestions(knownTags);
+    void api.get(base + '/tags').then(state => {
+      if (current(id)) { knownTags = state.tags; showSuggestions(knownTags); }
+    }, error => { if (current(id) && !inaccessible(error)) feedback.textContent = '标签建议读取失败，请手动输入。'; });
     const edit = h('fieldset', { class: 'stack', 'aria-label': '对话管理' });
     async function save(change) {
       if (!current(id) || edit.disabled) return;
@@ -132,21 +191,29 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
         feedback.textContent = '对话标题最多 80 个字符。';
         return;
       }
+      const pending = {
+        title: title.value !== row.title ? title.value : undefined,
+        tags: JSON.stringify(tags) !== JSON.stringify(savedTags) ? [...tags] : undefined,
+        tagInput: tagInput.value,
+      };
       edit.disabled = true;
       searchPage = undefined;
       try {
         const saved = await api.patch(path, { version: row.version, ...change });
         if (!current(id)) return;
+        if ('title' in change) pending.title = undefined;
+        if ('tags' in change) pending.tags = undefined;
         renderDetail(path, { ...row, ...saved }, messages, nextBefore, nextAfter,
           change.archived === true ? '已归档。收到新的用户消息后会自动恢复。' :
-          change.archived === false ? '已恢复对话。' : '已保存标题。', ++loadId, undefined, around);
+          change.archived === false ? '已恢复对话。' : change.tags ? '已保存标签。' : '已保存标题。', ++loadId, pending, around);
       } catch (error) {
         if (!current(id) || inaccessible(error)) return;
         if (error.status === 409 || !error.status || error.status >= 500) {
           searchPage = undefined;
           const conflict = error.status === 409;
+          if (conflict && change.tags) pending.tags = [...change.tags];
           await detail(row, conflict ? '对话已在别处修改，已重新读取，请核对后再操作。' : '保存结果未知，已重新读取，请核对。',
-            conflict && change.title ? change.title : undefined, around);
+            conflict ? pending : undefined, around);
         } else {
           feedback.textContent = error.message;
           edit.disabled = false;
@@ -157,6 +224,29 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
       h('div', { class: 'row' }, Button({ label: '保存标题', size: 'sm', onClick: () => save({ title: title.value.trim() }) }),
         Button({ label: '还原默认标题', size: 'sm', onClick: () => save({ title: '' }) }),
         Button({ label: row.archived ? '恢复对话' : '归档对话', size: 'sm', onClick: () => save({ archived: !row.archived }) })));
+    const tagDraft = h('div', { class: 'row', style: { flexWrap: 'wrap' }, 'aria-label': '待保存标签' });
+    const syncTags = () => replace(tagDraft, tags.map((tag, index) =>
+      Button({ label: '移除 ' + tag, size: 'sm', onClick: () => { tags.splice(index, 1); syncTags(); } })));
+    function addTag() {
+      const tag = tagInput.value.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '');
+      if (!tag || Array.from(tag).length > 32) feedback.textContent = '每个标签须为 1 至 32 个字符。';
+      else if (tags.includes(tag)) feedback.textContent = '该标签已添加。';
+      else if (tags.length >= 10) feedback.textContent = '每个对话最多 10 个标签。';
+      else {
+        tags.push(tag);
+        tagInput.value = '';
+        feedback.textContent = '';
+        syncTags();
+      }
+    }
+    syncTags();
+    edit.append(h('p', { class: 'muted small' }, '当前已保存标签：' + (savedTags.join('、') || '无')),
+      tagDraft, Field({ label: '新标签', control: tagInput }), suggestions,
+      h('div', { class: 'row' }, Button({ label: '添加标签', size: 'sm', onClick: addTag }),
+        Button({ label: '保存标签', size: 'sm', onClick: () => {
+          if (tagInput.value.trim()) { feedback.textContent = '请先添加输入的标签。'; return; }
+          return save({ tags });
+        } })));
     const picker = conversationModelPicker(api, path + '/model', row.title);
     const history = h('div', { class: 'stack' });
     const entries = items => items.map(message => h('section', { class: 'stack' },

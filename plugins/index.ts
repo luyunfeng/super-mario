@@ -621,11 +621,11 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         if (actions?.botsList) context.contribute('tools', 'bots_list', tool('bots_list', '查看主 Agent、项目和事项机器人的真实绑定与连接状态，不含凭证。', async (_args, signal) => { signal.throwIfAborted(); return actions.botsList!(); }));
         if (actions?.privateConversation) {
           context.contribute('tools', 'private_conversation_read', tool('private_conversation_read',
-            '读取当前飞书独立对话的名称、归档状态和版本。', async args => actions.privateConversation!('read', args)));
+            '读取当前飞书独立对话的名称、标签、归档状态和版本。', async args => actions.privateConversation!('read', args)));
           context.contribute('tools', 'private_conversation_update', tool('private_conversation_update',
-            '按用户明确要求整理当前飞书独立对话。传刚读取的版本和一个变更。空标题恢复默认，archived 控制归档或恢复。',
+            '按用户明确要求整理当前飞书独立对话。传刚读取的版本和一个变更。空标题恢复默认，archived 控制归档或恢复，tags 替换整组标签。',
             async args => actions.privateConversation!('update', args), {
-              version: { type: 'integer', minimum: 0 }, title: { type: 'string' }, archived: { type: 'boolean' },
+              version: { type: 'integer', minimum: 0 }, title: { type: 'string' }, archived: { type: 'boolean' }, tags: { type: 'array', items: { type: 'string' } },
             }));
         }
         if (actions?.botRelay) context.contribute('tools', 'bot_handoff', tool('bot_handoff', '向明确授权的机器人协作对象委派请求；复用现有项目/事项范围与确认信箱，不等于已执行或已外发。sourceBotId仅主对话选择全局机器人时填写，机器人会话不可冒用其他身份。', async args => actions.botRelay!(args), { targetBotId: { type: 'string' }, text: { type: 'string' }, key: { type: 'string' }, sourceBotId: { type: 'string' }, chatId: { type: 'string' } }));

@@ -94,6 +94,17 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await expect(drawer.getByRole('heading', { name: '另一个页面的新标题' })).toBeVisible();
   await drawer.getByRole('button', { name: '还原默认标题' }).click();
   await expect(drawer.getByRole('heading', { name: '核对独立方案' })).toBeVisible();
+  async function addTag(tag: string) {
+    await drawer.getByLabel('新标签', { exact: true }).fill(tag);
+    await drawer.getByRole('button', { name: '添加标签', exact: true }).click();
+  }
+  await addTag('初始标签');
+  await drawer.getByRole('button', { name: '保存标签', exact: true }).click();
+  await expect(drawer).toContainText('当前已保存标签：初始标签');
+  await drawer.getByRole('button', { name: '移除 初始标签' }).click();
+  await addTag('核对标签');
+  await drawer.getByRole('button', { name: '保存标签', exact: true }).click();
+  await expect(drawer).toContainText('当前已保存标签：核对标签');
   const keyword = '蓝色铅笔标记';
   await first.send('很早的' + keyword, 'old-hit');
   const detailPath = base + first.bot.id + '/threads/' + thread;
@@ -111,6 +122,10 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
       '指定的用户发言应在最近一页之前');
   }, { timeout: 15000 });
   await drawer.getByRole('button', { name: '返回列表' }).click();
+  await first.send('/new 另一条没有标签的资料', 'different-thread');
+  await drawer.getByRole('combobox', { name: '筛选标签' }).selectOption('核对标签');
+  await expect(drawer.getByRole('button', { name: /核对独立方案/ })).toBeVisible();
+  await expect(drawer).not.toContainText('另一条没有标签的资料');
   await drawer.getByRole('textbox', { name: '搜索独立对话' }).fill(keyword);
   await drawer.getByRole('button', { name: '搜索', exact: true }).click();
   await drawer.getByRole('button', { name: new RegExp('用户.*' + keyword) }).first().click();
@@ -123,6 +138,12 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await expect(marked).toHaveCount(1);
   await drawer.getByRole('button', { name: '返回列表' }).click();
   await expect(drawer.getByRole('textbox', { name: '搜索独立对话' })).toHaveValue(keyword);
+  await expect(drawer.getByRole('combobox', { name: '筛选标签' })).toHaveValue('核对标签');
+  await drawer.getByRole('button', { name: /核对独立方案/ }).click();
+  await drawer.getByRole('button', { name: '移除 核对标签' }).click();
+  await drawer.getByRole('button', { name: '保存标签', exact: true }).click();
+  await expect(drawer).toContainText('当前已保存标签：无');
+  assert.deepEqual((await (await get(detailPath)).json()).tags, []);
   await server.bots.update(first.bot.id, { enabled: false });
   await expect(drawer).not.toBeVisible();
   assert.equal((await get(base + first.bot.id + '/threads/' + thread)).status, 404);

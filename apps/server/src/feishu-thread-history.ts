@@ -4,7 +4,7 @@ import { botConversationId } from '../../../packages/core/src/bot-agent-routing.
 
 export type PrivateThread = {
   threadId: string; botId: string; appId: string; revision: number; chatId: string; senderId: string; createdAt: string;
-  version?: number; archived?: boolean; title?: string;
+  version?: number; archived?: boolean; title?: string; tags?: string[]; tagsUpdatedBy?: 'user' | 'assistant'; tagsUpdatedAt?: string;
 };
 type Receipt = {
   channel: string; botId: string; accountId: string; revision: number; target: string;
@@ -32,14 +32,41 @@ function threadMessages(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[
   return messages;
 }
 
+export function normalizeThreadTags(input: unknown, max = 10): string[] {
+  if (!Array.isArray(input)) throw Object.assign(new Error('标签须为字符串数组'), { status: 400 });
+  const tags = new Set<string>();
+  for (const raw of input) {
+    if (typeof raw !== 'string') throw Object.assign(new Error('标签须为字符串'), { status: 400 });
+    // Unicode White_Space includes U+0085. JavaScript trim() uses a different set.
+    let left = 0, right = raw.length;
+    while (left < right && /\p{White_Space}/u.test(raw[left])) left++;
+    while (right > left && /\p{White_Space}/u.test(raw[right - 1])) right--;
+    const tag = raw.slice(left, right);
+    if (!tag) continue;
+    if (Array.from(tag).length > 32) throw Object.assign(new Error('每个标签最多 32 个字符'), { status: 400 });
+    tags.add(tag);
+  }
+  if (tags.size > max) throw Object.assign(new Error(`最多可设置 ${max} 个标签`), { status: 400 });
+  return [...tags];
+}
+
+export function privateThreadTags(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[]) {
+  const tagged = rows.filter(row => row.tags?.length);
+  const messages = threadMessages(store, tagged);
+  const tags = new Set(tagged.filter(row => messages.has(row.threadId)).flatMap(row => row.tags ?? []));
+  return { tags: [...tags].sort((a, b) => a.localeCompare(b)) };
+}
+
 function metadata(row: PrivateThread, list: Message[]) {
   const first = list.find(message => message.role === 'user')?.text || '独立对话';
-  return { threadId: row.threadId, title: row.title || Array.from(first.replace(/\s+/g, ' ')).slice(0, 80).join(''),
+  return { threadId: row.threadId, tags: row.tags ?? [],
+    ...(row.tags?.length && row.tagsUpdatedBy && row.tagsUpdatedAt ? { tagsUpdatedBy: row.tagsUpdatedBy, tagsUpdatedAt: row.tagsUpdatedAt } : {}),
+    title: row.title || Array.from(first.replace(/\s+/g, ' ')).slice(0, 80).join(''),
     latestAt: list.at(-1)?.createdAt ?? row.createdAt, count: list.length, archived: row.archived === true, version: row.version ?? 0 };
 }
 
-function historyEntries(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], archived = false) {
-  const selected = rows.filter(row => (row.archived === true) === archived);
+function historyEntries(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], archived = false, tag?: string) {
+  const selected = rows.filter(row => (row.archived === true) === archived && (!tag || row.tags?.includes(tag)));
   const messages = threadMessages(store, selected);
   return selected.flatMap(row => {
     const list = messages.get(row.threadId);
@@ -47,17 +74,17 @@ function historyEntries(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[
   }).sort((a, b) => b.info.latestAt.localeCompare(a.info.latestAt) || a.info.threadId.localeCompare(b.info.threadId));
 }
 
-export function readPrivateThreadHistory(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], archived = false) {
-  return historyEntries(store, rows, archived).map(entry => entry.info);
+export function readPrivateThreadHistory(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], archived = false, tag?: string) {
+  return historyEntries(store, rows, archived, tag).map(entry => entry.info);
 }
 
-export function searchPrivateThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived = false, before: string | null = null) {
+export function searchPrivateThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived = false, before: string | null = null, tag?: string) {
   if (typeof query !== 'string' || !query.trim() || query.length > 500)
     throw Object.assign(new Error('检索词须为 1 至 500 个字符'), { status: 400 });
   const pattern = new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
   const items = [];
   let pastCursor = before === null;
-  for (const { info, list } of historyEntries(store, rows, archived)) {
+  for (const { info, list } of historyEntries(store, rows, archived, tag)) {
     const titleMatch = pattern.test(info.title);
     const hits = [];
     for (let i = list.length - 1; i >= 0 && hits.length < 3; i--) {

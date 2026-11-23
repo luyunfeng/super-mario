@@ -63,8 +63,8 @@ export function dashboardHelp(sessions: boolean, scoped = false) {
 }
 
 export function conversationListDashboard(app: DashboardApp, bot: { conversationId: string; id: string; appId: string; revision: number; chatId: string },
-  navigation: string, webBase?: string, requestedPage = 0, history: { threadId: string; title: string; latestAt: string }[] = []) {
-  type Row = { projectId: string; name: string; latest?: Message; conversationThreadId?: string; latestAt?: string };
+  navigation: string, webBase?: string, requestedPage = 0, history: { threadId: string; title: string; latestAt: string; tags?: string[] }[] = []) {
+  type Row = { projectId: string; name: string; tags?: string[]; latest?: Message; conversationThreadId?: string; latestAt?: string };
   const main: Row = { projectId: '', name: '主对话' };
   const rows = new Map<string, Row>([[bot.conversationId, main]]);
   if (app.projectWorkspace) for (const project of app.store.list<Project>('projects')) {
@@ -85,14 +85,15 @@ export function conversationListDashboard(app: DashboardApp, bot: { conversation
     if (!row.latest || message.createdAt >= row.latest.createdAt) row.latest = message;
   }
   const independent: Row[] = history.map(thread => ({ projectId: '', name: '独立对话 · ' + thread.title,
-    conversationThreadId: thread.threadId, latestAt: thread.latestAt }));
+    conversationThreadId: thread.threadId, latestAt: thread.latestAt, tags: thread.tags }));
   const entries = [...rows.values(), ...independent].sort((a, b) => (b.latest?.createdAt ?? b.latestAt ?? '').localeCompare(a.latest?.createdAt ?? a.latestAt ?? ''));
   const pages = Math.ceil(entries.length / 5), page = Math.min(requestedPage, pages - 1);
   const elements: Record<string, unknown>[] = [], lines = ['最近对话'];
   const visible = entries.slice(page * 5, page * 5 + 5);
   for (const row of visible) {
     const latest = row.latest;
-    const detail = [publicText(row.name, 60), latest?.createdAt ?? row.latestAt, latest && publicText(latest.text, 100).replace(/\s+/g, ' ')].filter(Boolean).join(' · ');
+    const labels = row.tags?.length ? '标签：' + row.tags.map(tag => publicText(tag, 32)).join('、') : '';
+    const detail = [publicText(row.name, 60), labels, latest?.createdAt ?? row.latestAt, latest && publicText(latest.text, 100).replace(/\s+/g, ' ')].filter(Boolean).join(' · ');
     lines.push(detail);
     elements.push({ tag: 'div', text: cardPlain(detail) }, ...cardButtons([
       { label: '在这里聊', value: { kind: 'workbench.chat', navigation, projectId: row.projectId, ...(row.conversationThreadId && { conversationThreadId: row.conversationThreadId }) } },

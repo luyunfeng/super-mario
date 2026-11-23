@@ -22,7 +22,7 @@ test('独立对话记录按可见发言分页，排除其他配对、群组、�
   }
   const store = { list<T>() { return messages as T[]; }, get<T>(_type: string, id: string) { return routes.get(id) as T | undefined; } };
   const rows = readPrivateThreadHistory(store, [row, { ...row, threadId: 'b'.repeat(64) }]);
-  assert.deepEqual(rows, [{ threadId: row.threadId, title: '发言 4', version: 0, archived: false, latestAt: messages.at(-1)!.createdAt, count: 44 }]);
+  assert.deepEqual(rows, [{ threadId: row.threadId, title: '发言 4', version: 0, archived: false, tags: [], latestAt: messages.at(-1)!.createdAt, count: 44 }]);
   assert.deepEqual(searchPrivateThreads(store, [row], '发言 0').items, []);
   for (const id of ['0', '1', '2', '3']) {
     assert.throws(() => privateThreadPage(store, row, null, null, id), { status: 409 });
@@ -67,8 +67,9 @@ test('独立对话改名和归档可跨重启，旧事件不恢复归档，引�
       ...(patch ? { body: JSON.stringify(patch) } : {}),
     });
   }
-  async function search(botId: string, q: string, archived: boolean) {
+  async function search(botId: string, q: string, archived: boolean, tag?: string) {
     const query = new URLSearchParams({ q, archived: archived ? '1' : '0' });
+    if (tag !== undefined) query.set('tag', tag);
     const r = await api(botId, '/search?' + query);
     assert.equal(r.status, 200);
     return r.json() as Promise<{items: Array<{threadId: string; titleMatch: boolean;
@@ -104,7 +105,49 @@ test('独立对话改名和归档可跨重启，旧事件不恢复归档，引�
   assert.equal((await api(b.id, path + '?around=' + hit.id)).status, 404);
   assert.equal((await api(a.id, '/search?q=蓝色调查&before=' + 'a'.repeat(64))).status, 409);
   assert.equal((await api(a.id, path + '?around=' + hit.id + '&before=' + hit.id)).status, 400);
-  const archive = await api(a.id, path, { archived: true, version: afterRename.version });
+  const maxLabel = '📁'.repeat(32);
+  const expectedTags = ['Ops', 'ops', '#核对', maxLabel];
+  for (const invalid of [[42], null, '一个标签', ['📁'.repeat(33)], Array.from({ length: 11 }, (_, i) => 't' + i)]) {
+    assert.equal((await api(a.id, path, { version: afterRename.version, tags: invalid })).status, 400);
+  }
+  const setTags = await api(a.id, path, { version: afterRename.version, tags: ['\u0085Ops\u3000', ' ', 'ops', 'Ops', '#核对', maxLabel] });
+  assert.equal(setTags.status, 200);
+  const tagged = await setTags.json();
+  assert.deepEqual(tagged.tags, expectedTags);
+  assert.ok(tagged.version > afterRename.version);
+  await a.receive('/list', 'listed-tags');
+  assert.match(sent.at(-1)!.text, /标签：Ops、ops、#核对/);
+  assert.equal(tagged.tagsUpdatedBy, 'user');
+  assert.ok(Number.isFinite(Date.parse(tagged.tagsUpdatedAt)));
+  const unchanged = await (await api(a.id, path, { version: tagged.version, tags: expectedTags })).json();
+  assert.equal(unchanged.version, tagged.version);
+  assert.equal(unchanged.tagsUpdatedAt, tagged.tagsUpdatedAt);
+  assert.equal((await api(a.id, path, { version: afterRename.version, tags: [] })).status, 409);
+  assert.equal((await api(b.id, path, { version: tagged.version, tags: ['侵入'] })).status, 404);
+  const otherPrefs = await (await api(b.id, '/tags')).json();
+  assert.deepEqual(otherPrefs.tags, []);
+  assert.equal(otherPrefs.filters, null);
+  const initialPrefs = await (await api(a.id, '/tags')).json();
+  assert.deepEqual(new Set(initialPrefs.tags), new Set(expectedTags));
+  assert.equal(initialPrefs.filters, null);
+  assert.notEqual(initialPrefs.binding, otherPrefs.binding);
+  assert.equal((await api(a.id, '/tags', { binding: otherPrefs.binding, version: initialPrefs.version, filters: [] })).status, 404);
+  const customFilters = ['未使用', 'Ops', 'ops'];
+  const prefer = await api(a.id, '/tags', { binding: initialPrefs.binding, version: initialPrefs.version, filters: [' 未使用 ', 'Ops', '', 'ops', 'Ops'] });
+  assert.equal(prefer.status, 200);
+  const pref = await prefer.json();
+  assert.deepEqual(pref.filters, customFilters);
+  assert.deepEqual(new Set(pref.tags), new Set(expectedTags));
+  assert.ok(pref.version > initialPrefs.version);
+  assert.equal((await api(a.id, '/tags', { binding: initialPrefs.binding, version: initialPrefs.version, filters: null })).status, 409);
+  assert.equal((await api(a.id, '/tags', { binding: pref.binding, version: pref.version, filters: Array.from({ length: 51 }, (_, i) => 'f' + i) })).status, 400);
+  assert.deepEqual(await (await api(b.id, '/tags')).json(), otherPrefs);
+  assert.equal((await (await api(a.id, path)).json()).version, tagged.version);
+  assert.equal((await (await api(a.id, '?tag=Ops')).json())[0].threadId, initial.threadId);
+  assert.deepEqual(await (await api(a.id, '?tag=Op')).json(), []);
+  assert.equal((await search(a.id, '归档前的跟进', false, 'Ops')).items[0].threadId, initial.threadId);
+  assert.deepEqual((await search(a.id, '归档前的跟进', false, 'no-match')).items, []);
+  const archive = await api(a.id, path, { archived: true, version: tagged.version });
   assert.equal(archive.status, 200);
   const saved = await archive.json();
   assert.equal(saved.archived, true);
@@ -115,6 +158,18 @@ test('独立对话改名和归档可跨重启，旧事件不恢复归档，引�
   assert.equal(archived.threadId, initial.threadId);
   assert.equal(archived.version, saved.version);
   assert.equal(archived.title, '蓝色调查');
+  assert.deepEqual(archived.tags, expectedTags);
+  assert.equal(archived.tagsUpdatedAt, tagged.tagsUpdatedAt);
+  const restoredPrefs = await (await api(a.id, '/tags')).json();
+  assert.deepEqual(restoredPrefs.filters, customFilters);
+  assert.deepEqual(new Set(restoredPrefs.tags), new Set(expectedTags));
+  const noFilters = await (await api(a.id, '/tags', { binding: restoredPrefs.binding, version: restoredPrefs.version, filters: [] })).json();
+  assert.deepEqual(noFilters.filters, []);
+  const automatic = await (await api(a.id, '/tags', { binding: noFilters.binding, version: noFilters.version, filters: null })).json();
+  assert.equal(automatic.filters, null);
+  assert.deepEqual(new Set(automatic.tags), new Set(expectedTags));
+  assert.deepEqual((await search(a.id, '归档前的跟进', false, 'Ops')).items, []);
+  assert.equal((await search(a.id, '归档前的跟进', true, 'Ops')).items[0].threadId, initial.threadId);
   assert.deepEqual(await (await api(b.id, '?archived=1')).json(), []);
   assert.deepEqual((await search(a.id, '归档前的跟进', false)).items, []);
   assert.equal((await search(a.id, '归档前的跟进', true)).items[0].threadId, initial.threadId);
@@ -145,10 +200,29 @@ test('独立对话改名和归档可跨重启，旧事件不恢复归档，引�
   assert.deepEqual(detail.messages.filter((m: Message) => m.role === 'user').map((m: Message) => m.text), ['第一条合成目标', '归档前的跟进', '来自旧引用的新发言']);
   const reset = await api(a.id, path, { version: detail.version, title: '' });
   assert.equal(reset.status, 200);
-  assert.equal((await reset.json()).title, '第一条合成目标');
+  const afterReset = await reset.json();
+  assert.equal(afterReset.title, '第一条合成目标');
+  const cleared = await api(a.id, path, { version: afterReset.version, tags: [] });
+  assert.equal(cleared.status, 200);
+  const clearedRow = await cleared.json();
+  assert.deepEqual(clearedRow.tags, []);
+  assert.equal(clearedRow.tagsUpdatedAt, undefined);
+  assert.equal(clearedRow.tagsUpdatedBy, undefined);
+  assert.deepEqual((await (await api(a.id, '/tags')).json()).tags, []);
+  assert.deepEqual((await search(a.id, '归档前的跟进', false, 'Ops')).items, []);
   await server.app.plugins.setEnabled('conversation-search', false);
   assert.equal((await api(a.id, '/search?q=归档前')).status, 503);
   assert.equal((await api(a.id, path)).status, 200);
+
+  const account = 'cli_8888888888888888';
+  const rebound = await server.bots.update(a.id, { appId: account, appSecret: 'fixture-rebound' });
+  await receivers.get(account)!.onMessage(rebound.pairingCode!, { messageId: 'new-pair', senderType: 'user',
+    senderId: 'new-owner', chatType: 'p2p', chatId: 'new-private' });
+  const fresh = await (await api(a.id, '/tags')).json();
+  assert.notEqual(fresh.binding, initialPrefs.binding);
+  assert.equal(fresh.version, initialPrefs.version);
+  assert.equal((await api(a.id, '/tags', { binding: initialPrefs.binding, version: initialPrefs.version, filters: ['旧页'] })).status, 404);
+  assert.equal((await (await api(a.id, '/tags')).json()).filters, null);
 });
 
 
@@ -158,7 +232,7 @@ test('搜索结果游标只在可见的匹配结果间翻页，不重复返回�
   const rows = Array.from({ length: 23 }, (_, i) => {
     const threadId = i.toString(16).padStart(64, '0');
     const row = { threadId, botId: 'bot', appId: 'account', chatId: 'room', senderId: 'owner', revision: 1, createdAt: '',
-      archived: i === 21 };
+      archived: i === 21, tags: i < 2 ? ['稀有'] : [] };
     const conversationId = botConversationId({ id: row.botId, scope: { kind: 'global' } }, threadId);
     messages.push({ id: threadId, role: 'user', conversationId, createdAt: new Date(i).toISOString(), text: '合成.[分组]' });
     routes.set(threadId, { channel: 'feishu', accountId: row.appId, botId: row.botId, target: row.chatId,
@@ -173,4 +247,7 @@ test('搜索结果游标只在可见的匹配结果间翻页，不重复返回�
   assert.equal(second.nextBefore, null);
   assert.deepEqual([...first.items, ...second.items].map(hit => hit.threadId), rows.slice(0, 21).reverse().map(row => row.threadId));
   assert.throws(() => searchPrivateThreads(store, rows, '.[分组]', true, first.nextBefore), { status: 409 });
+  const filtered = searchPrivateThreads(store, rows, '.[分组]', false, null, '稀有');
+  assert.deepEqual(filtered.items.map(item => item.threadId), [rows[1].threadId, rows[0].threadId]);
+  assert.equal(filtered.nextBefore, null);
 });

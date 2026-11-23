@@ -125,7 +125,7 @@ export async function createWorkbench(config: AppConfig) {
   const presence = createWebPresence();
   let notificationChannel: (bot: import('../../protocol/src/index.ts').FeishuBot) => string = () => { throw new InputError('通知渠道尚未连接', 503); };
   let mailboxProposer: ((input: Record<string, unknown>) => Json) | undefined;
-  let privateSearch: ((id: string, query: string, archived: boolean, before: string | null, sourceId?: string) => Json) | undefined;
+  let privateSearch: ((id: string, query: string, archived: boolean, before: string | null, sourceId?: string, tag?: string) => Json) | undefined;
   let privateConversation: ((botId: string, threadId: string, action: 'read' | 'update', input: JsonObject) => Json) | undefined;
   let botRelay: ((input: { sourceBotId: string; targetBotId: string; text: string; key: string; parentEntryId?: string; chatId?: string; sourceMessageId?: string }) => Promise<import('../../protocol/src/bots.ts').MailboxEntry>) | undefined;
   const configuredBots = () => botsStatus() as unknown as import('../../protocol/src/bots.ts').FeishuBot[];
@@ -1725,22 +1725,22 @@ export async function createWorkbench(config: AppConfig) {
   }
   function searchPrivateConversations(args: Json): Json {
     if (!args || typeof args !== 'object' || Array.isArray(args) || typeof args.query !== 'string'
-      || Object.keys(args).some(key => !['query', 'botId', 'archived', 'before'].includes(key))
+      || Object.keys(args).some(key => !['query', 'botId', 'archived', 'before', 'tag'].includes(key))
       || (args.archived !== undefined && typeof args.archived !== 'boolean') || (args.before !== undefined && typeof args.before !== 'string')
-      || (args.botId !== undefined && typeof args.botId !== 'string')) throw new InputError('独立对话检索参数无效');
+      || (args.botId !== undefined && typeof args.botId !== 'string') || (args.tag !== undefined && typeof args.tag !== 'string')) throw new InputError('独立对话检索参数无效');
     const input = currentAgentInput();
     if (!privateSearch || !input || input.role !== 'user' || input.readOnly || input.projectId || input.todoId || (input.origin && input.origin !== 'user'))
       throw new InputError('当前输入无法检索机器人独立对话', 403);
     const route = store.get<{ botId?: string }>('message.routes', input.id);
     if (input.conversationId === 'main' && !route) {
       if (!args.botId) throw new InputError('请先选择已配对的全局机器人');
-      return privateSearch(args.botId, args.query, args.archived === true, args.before ?? null);
+      return privateSearch(args.botId, args.query, args.archived === true, args.before ?? null, undefined, args.tag);
     }
     if (!route?.botId || (args.botId !== undefined && args.botId !== route.botId)
       || input.conversationId !== botConversationId({ id: route.botId, scope: { kind: 'global' } }))
       throw new InputError('此会话不能检索该机器人的独立对话', 403);
     assertBotInput(input);
-    return privateSearch(route.botId, args.query, args.archived === true, args.before ?? null, input.id);
+    return privateSearch(route.botId, args.query, args.archived === true, args.before ?? null, input.id, args.tag);
   }
   function managePrivateConversation(action: 'read' | 'update', args: JsonObject): Json {
     const input = currentAgentInput(), threadId = sourceThread(input);

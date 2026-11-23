@@ -284,24 +284,30 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 200, bots.list().map(bot => bot.scope.kind === 'global' && bot.paired
             ? { ...bot, workbench: bots.workbenchStatus(bot.id) } : bot));
         }
-        const botThreads = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/threads(?:\/(search|[0-9a-f]{64}))?$/);
+        const botThreads = path.match(/^\/api\/v1\/feishu\/bots\/([^/]+)\/threads(?:\/(search|tags|[0-9a-f]{64}))?$/);
         if (botThreads && (method === 'GET' || (method === 'PATCH' && botThreads[2] && botThreads[2] !== 'search'))) {
           if (!app.plugins.list().some(p => p.id === 'feishu' && p.status === 'active')) throw new InputError('飞书插件已停用', 503);
           const id = decodeURIComponent(botThreads[1]!);
           if (!bots.list().some(bot => bot.id === id && bot.scope.kind === 'global' && bot.enabled && bot.paired))
             throw new InputError('已配对的全局机器人不存在或已停用', 404);
+          if (botThreads[2] === 'tags') {
+            const binding = bots.tagPreferenceKey(id);
+            const input = method === 'PATCH' ? await body(req) : undefined;
+            return json(res, 200, bots.threadTagPreferences(id, binding, input));
+          }
           if (method === 'PATCH') return json(res, 200, bots.updatePrivateThread(id, botThreads[2]!, await body(req)));
           const rows = bots.privateThreads(id);
           const params = url.searchParams;
+          const tag = params.get('tag') ?? undefined;
           if (botThreads[2] === 'search') {
             if (!app.plugins.list().some(p => p.id === 'conversation-search' && p.status === 'active'))
               throw new InputError('对话历史搜索插件已停用', 503);
             if (params.has('around') || params.has('after') || params.getAll('before').length > 1)
               throw new InputError('搜索仅支持一个 before 游标');
             if (!['0', '1'].includes(params.get('archived') ?? '0')) throw new InputError('归档筛选值无效');
-            return json(res, 200, searchPrivateThreads(app.store, rows, params.get('q') ?? '', params.get('archived') === '1', params.get('before')));
+            return json(res, 200, searchPrivateThreads(app.store, rows, params.get('q') ?? '', params.get('archived') === '1', params.get('before'), tag));
           }
-          if (!botThreads[2]) return json(res, 200, readPrivateThreadHistory(app.store, rows, params.get('archived') === '1'));
+          if (!botThreads[2]) return json(res, 200, readPrivateThreadHistory(app.store, rows, params.get('archived') === '1', tag));
           const row = rows.find(item => item.threadId === botThreads[2]);
           if (!row) throw new InputError('飞书独立对话不存在或绑定已变化', 404);
           if (['before', 'after', 'around'].some(key => params.getAll(key).length > 1)) throw new InputError('消息位置不可重复');

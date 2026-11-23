@@ -3122,6 +3122,13 @@ test('独立对话助手使用当前版本改名和归档，Web 主助手仅指�
     if (req.callId === 'rename') {
       const saved = JSON.parse(raw);
       assert.equal(saved.title, '合成核对清单');
+      assert.match(req.system, /保留用户未要求移除的标签/);
+      return call('private_conversation_update', { version: saved.version, tags: [...saved.tags, '需复核'] }, 'tag');
+    }
+    if (req.callId === 'tag') {
+      const saved = JSON.parse(raw);
+      assert.deepEqual(saved.tags, ['需复核']);
+      assert.equal(saved.tagsUpdatedBy, 'assistant');
       return call('private_conversation_update', { version: saved.version, archived: true }, 'archive');
     }
     if (req.callId === 'archive') {
@@ -3145,13 +3152,14 @@ test('独立对话助手使用当前版本改名和归档，Web 主助手仅指�
       scope: { kind: 'global' }, requireConfirmation: false });
     const source = { chatId: 'private-chat', senderId: 'owner', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
-    await adapter.onMessage('/new 请把当前对话命名为合成核对清单并归档。', { ...source, messageId: 'organize' });
+    await adapter.onMessage('/new 请把当前对话命名为合成核对清单，加上需复核标签并归档。', { ...source, messageId: 'organize' });
     await t.waitFor(() => assert.ok(sent.includes('整理回执已核对，过期修改未生效。'), sent.at(-1)), { timeout: 12000 });
     const base = server.url + '/api/v1/feishu/bots/' + bot.id + '/threads';
     assert.deepEqual(await (await fetch(base)).json(), []);
     const archived = await (await fetch(base + '?archived=1')).json();
     assert.equal(archived[0].title, '合成核对清单');
-    assert.equal(archived[0].version, 2);
+    assert.equal(archived[0].version, 3);
+    assert.deepEqual(archived[0].tags, ['需复核']);
   } finally { await server.close(); }
 });
 
@@ -3167,13 +3175,13 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
       assert.ok(req.tools.includes('private_conversation_search'));
       assert.match(req.system, /引用正文须写明会话标题和发言角色/);
       const web = JSON.stringify(req.content).includes('从网页查');
-      return web ? call('private_conversation_search', { query: '青瓷样本', botId }, 'find-source')
+      return web ? call('private_conversation_search', { query: '青瓷样本', botId, tag: '验收' }, 'find-source')
         : call('private_conversation_search', { query: '青瓷样本', botId: 'other-bot' }, 'wrong-account');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
     if (req.callId === 'wrong-account') {
       assert.match(raw, /此会话不能检索该机器人的独立对话/);
-      return call('private_conversation_search', { query: '青瓷样本' }, 'find-source');
+      return call('private_conversation_search', { query: '青瓷样本', tag: '验收' }, 'find-source');
     }
     const page = JSON.parse(raw);
     assert.equal(page.items.length, 1);
@@ -3193,10 +3201,17 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
     await send(bot.pairingCode, 'pair');
     await send('/new 合成记要：周三交付青瓷样本', 'source');
     await t.waitFor(() => assert.ok(sent.includes('首轮已收到。'), sent.at(-1)));
+    const threads = server.url + '/api/v1/feishu/bots/' + botId + '/threads';
+    const [row] = await (await fetch(threads)).json();
+    const tagging = await fetch(threads + '/' + row.threadId, { method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ version: row.version, tags: ['验收'] }) });
+    assert.equal(tagging.status, 200);
+    await send('/new 合成记要：另一段无标签的青瓷样本', 'unrelated');
+    await t.waitFor(() => assert.equal(sent.filter(text => text === '首轮已收到。').length, 2));
     const answer = '已从用户发言核对青瓷样本。';
-    assert.equal(await ask('从网页查已指定机器人的青瓷样本记录'), answer);
+    assert.equal(await ask('从网页查已指定机器人在验收标签下的青瓷样本记录'), answer);
     await send('/main', 'back');
-    await send('请查本机器人独立对话里的青瓷样本记录', 'find');
+    await send('请查本机器人验收标签下的青瓷样本记录', 'find');
     await t.waitFor(() => assert.ok(sent.includes(answer), sent.at(-1)));
   } finally { await server.close(); }
 });

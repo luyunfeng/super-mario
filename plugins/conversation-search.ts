@@ -205,9 +205,9 @@ export const conversationSearch = (readFiles: ReadFiles, searchPrivate?: (input:
     };
     context.provide('conversation-search.status', status);
     if (searchPrivate) context.contribute('tools', 'private_conversation_search', {
-      name: 'private_conversation_search', description: '在指定全局机器人的主人独立对话中按标题或发言片段查找，返回会话名、命中角色及摘录。Web 主对话提供 botId，飞书主人主会话自动限定当前机器人。archived=true 单查归档，before 用上页 nextBefore。',
+      name: 'private_conversation_search', description: '在指定全局机器人的主人独立对话中按标题或发言片段查找，返回会话名、命中角色及摘录。Web 主对话提供 botId，飞书主人主会话自动限定当前机器人。archived=true 单查归档，tag 可精确限定一个标签，before 用上页 nextBefore。',
       parameters: { type: 'object', additionalProperties: false, required: ['query'], properties: {
-        query: { type: 'string' }, botId: { type: 'string' }, archived: { type: 'boolean' }, before: { type: 'string' },
+        query: { type: 'string' }, botId: { type: 'string' }, archived: { type: 'boolean' }, before: { type: 'string' }, tag: { type: 'string' },
       } },
       async execute(input, signal) {
         signal.throwIfAborted();
