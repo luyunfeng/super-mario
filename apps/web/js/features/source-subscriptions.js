@@ -94,6 +94,7 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
         h('div',{class:'row row--between'},h('strong',null,row.name),h('span',null,row.enabled ? '已启用' : '已暂停')),
         h('div',{class:'small'},(sourceName ?? row.sourceId + '（连接器不可用）') + ' · ' + row.resource),
         h('div',{class:'small muted'},row.destinations.map(id => destinations[id]).join('、') + ' · 每 ' + row.intervalMinutes + ' 分钟'),
+        row.nextPageNumber && h('div',{class:'small'},'本轮尚有后续页，下次读取第 '+row.nextPageNumber+' 页。'),
         row.lastRunAt && h('div',{class:'small'},'最近拉取 · ' + date(row.lastRunAt)),
         Number.isFinite(Date.parse(row.retryAt)) && h('div',{class:'small'},
           '来源限流，可再次读取的时间 · ',retryTime(row.retryAt),
@@ -145,11 +146,13 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
     if (!source.reportValidity() || !resource.reportValidity() || !resource.value.trim()) return;
     replace(results);
     return act(async () => {
-      const {items} = await api.post(path+'/preview',{sourceId:source.value,resource:resource.value.trim()});
-      if (active()) replace(results,h('strong',null,'来源预览'),items.length ? items.map(item =>
+      const {items,hasMore} = await api.post(path+'/preview',{sourceId:source.value,resource:resource.value.trim()});
+      if (active()) replace(results,h('strong',null,'来源预览'),
+        hasMore && h('p',{class:'small muted'},'仅预览首页，来源还有后续页。'),
+        items.length ? items.map(item =>
         h('article',{class:'stack'},h('strong',null,item.title),
           h('div',{class:'small',style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}},item.text),
-          item.url && externalSourceLink(item.url,'打开来源原文'))) : '暂无可预览的内容。');
+          item.url && externalSourceLink(item.url,'打开来源原文'))) : hasMore ? '本页暂无条目。' : '暂无可预览的内容。');
     });
   }
   let createAttempt;
@@ -176,7 +179,9 @@ export function openSourceSubscriptions({api,store,router,draftId}) {
         await api.patch(url,{version:row.version,enabled:!row.enabled});
       if (!active()) return;
       subscriptions = subscriptions.map(existing => existing.id === updated.id ? updated : existing);
-      paint(); notice.textContent = updated.error || (pull ? '已拉取来源。' : updated.enabled ? '已恢复订阅。' : '已暂停订阅。');
+      paint(); notice.textContent = updated.error || (pull
+        ? updated.nextPageNumber ? '已拉取本页，下次读取第 '+updated.nextPageNumber+' 页。' : '本轮拉取完成。'
+        : updated.enabled ? '已恢复订阅。' : '已暂停订阅。');
     },true);
   }
   let draftRead=0;

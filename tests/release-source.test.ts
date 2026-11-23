@@ -33,7 +33,7 @@ test('版本来源通过插件服务匿名读取官方仓库，将已发布版�
   });
   assert.deepEqual(contributions.list('connectors'),[{id:'releases',value:{kind:'subscription-source',name:'GitHub 版本发布',
     resourceLabel:'仓库（owner/repo）',service:'release-source.releases'}}]);
-  assert.deepEqual(await read(),{items:[
+  assert.deepEqual(await read(),{checkpoint:'27',items:[
     {id:'27',title:'测试版',text:'说明一\n说明二',url:'https://github.com/sample/.github/releases/tag/v3%2Ftest'},
     {id:'26',title:'v2',text:'v2',url:'https://github.com/sample/.github/releases/tag/v2'},
   ]});
@@ -122,4 +122,45 @@ test('限流优先使用 Retry-After，其次使用尚未到期的 GitHub 重置
   }
   headers=new Headers({'x-ratelimit-remaining':'42','x-ratelimit-reset':reset});
   await assert.rejects(read(),{status:403,sourceReadCode:'forbidden'});
+});
+
+test('分页只信任 next 关系，游标逐页递增并始终请求同一仓库官方 URL',async t=>{
+  const requested:string[]=[];
+  const base='https://api.github.com/repos/sample/project/releases?per_page=30';
+  const {host}=await fixture(t,async url=>{
+    requested.push(String(url));
+    const page=requested.length;
+    const link=page===1 ? '<https://example.invalid/path?page=99>; rel="next", <https://example.invalid/>; rel="last"'
+      : page===2 ? '<https://example.invalid/prev>; rel="prev", <https://example.invalid/a,b>; title="page, later"; rel="next"' :
+        '<https://example.invalid/next>; rel="prev"; title="next"';
+    return Response.json([{id:page,tag_name:'v'+page}],{headers:{link}});
+  });
+  const read=(cursor?:string)=>host.invocations.use('release-source.releases',{resource:'sample/project',...(cursor!==undefined && {cursor})}) as Promise<{items:{id:string}[];nextCursor?:string}>;
+  const first=await read(), second=await read(first.nextCursor), third=await read(second.nextCursor);
+  assert.deepEqual([first.nextCursor,second.nextCursor,third.nextCursor],['2','3',undefined]);
+  assert.deepEqual([first,second,third].map(result=>result.items[0].id),['1','2','3']);
+  for (const cursor of ['', '0','1','02','2&other=x','https://example.invalid/?page=3','1.5','9007199254740993'])
+    await assert.rejects(read(cursor),{status:400,sourceReadCode:'invalid_resource'});
+  assert.deepEqual(requested,[base,base+'&page=2',base+'&page=3']);
+});
+
+
+test('首页只给候选水位，超过一页的新发布继续查找旧水位，水位消失时读至末页',async t=>{
+  const {host}=await fixture(t,async url=>{
+    const page=Number(new URL(String(url)).searchParams.get('page') ?? '1');
+    const ids=Array.from({length:page===3 ? 10 : 30},(_,i)=>70-30*(page-1)-i);
+    return Response.json(ids.map(id=>({id,tag_name:'v'+id})),{headers:page<3 ? {link:'<https://example.invalid/ignored>; rel="next"'} : {}});
+  });
+  const read=(checkpoint:string,cursor?:string)=>host.invocations.use('release-source.releases',{resource:'sample/project',checkpoint,...(cursor && {cursor})}) as Promise<{items:{id:string}[];nextCursor?:string;checkpoint?:string}>;
+  const head=await read('35');
+  assert.deepEqual([head.checkpoint,head.items.length,head.nextCursor],['70',30,'2']);
+  const tail=await read('35',head.nextCursor);
+  assert.deepEqual(tail.items.map(item=>item.id),['40','39','38','37','36']);
+  assert.equal(tail.nextCursor,undefined);
+  assert.equal(tail.checkpoint,undefined);
+  assert.deepEqual(await read('70'),{items:[],checkpoint:'70'});
+  const first=await read('80'), second=await read('80',first.nextCursor),last=await read('80',second.nextCursor);
+  assert.equal(first.items.length+second.items.length+last.items.length,70);
+  assert.equal(last.nextCursor,undefined);
+  for (const invalid of ['0','07','bad','999999999999999999999']) await assert.rejects(read(invalid),{status:400});
 });

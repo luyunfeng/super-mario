@@ -5,18 +5,32 @@ type Destination = 'inbox' | 'knowledge';
 export type SourceItem = {id:string; title:string; text:string; url?:string};
 type SubscriptionInput = {sourceId:string; resource:string; name:string; destinations:Destination[]; intervalMinutes:number};
 export interface SourceSubscription extends SubscriptionInput {
-  id:string; version:number; enabled:boolean; nextRunAt:string; lastRunAt?:string; retryAt?:string; error?:string;
+  id:string; version:number; enabled:boolean; nextRunAt:string; lastRunAt?:string; nextPageNumber?:number; retryAt?:string; error?:string;
 }
 type Options = {
   store:Store;
   onChange?:(id:string)=>void;
   sources:()=>{id:string;name:string;resourceLabel:string}[];
-  read:(sourceId:string,resource:string,signal:AbortSignal)=>Promise<SourceItem[]>;
+  read:(sourceId:string,resource:string,signal:AbortSignal,cursor?:string,checkpoint?:string)=>Promise<SourceItem[]|{items:SourceItem[];nextCursor?:string;checkpoint?:string}>;
   deliver:(destination:Destination,key:string,item:SourceItem,subscription:{id:string;name:string})=>Promise<void>|void;
 };
 const rows = 'source.subscriptions';
 const pending = 'source.subscription-pending';
 const receipts = 'source.subscription-receipts';
+
+const positions = 'source.subscription-positions';
+const stagedPages = 'source.subscription-staged-pages';
+const checkpoints = 'source.subscription-checkpoints';
+type Position = {cursor:string; page:number; seen:string[]; candidate?:string; failures?:number};
+type Advance = {position?:Position; checkpoint?:string};
+class PaginationError extends Error { status=502; }
+
+function token(value:unknown) {
+  if(value==null || (typeof value==='string' && !value.trim())) return undefined;
+  if(typeof value!=='string' || Buffer.byteLength(value,'utf8')>2048 || /[\x00-\x1F\x7F]/u.test(value))
+    throw new PaginationError('来源返回的分页标识无效。');
+  return value;
+}
 
 function failure(message:string,status:number):never {
   throw Object.assign(new Error(message),{status});
@@ -81,7 +95,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
   function limited(until:number):never {
     throw Object.assign(new Error('来源服务已限流，请稍后再拉取。'),{status:429,retryAt:new Date(until).toISOString()});
   }
-  async function readConnector(sourceId:string,resource:string,controller:AbortController) {
+  async function readConnector(sourceId:string,resource:string,controller:AbortController,cursor?:string,checkpoint?:string) {
     const key=connector(sourceId);
     // Recheck after every preceding read. Its response may have paused the whole connector.
     if(reads.has(key)) {
@@ -99,7 +113,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
     if(until) limited(until);
     let release!:()=>void;
     reads.set(key,new Promise<void>(resolve=>{release=resolve;}));
-    try { return await read(sourceId,resource,controller.signal); }
+    try { return await read(sourceId,resource,controller.signal,cursor,checkpoint); }
     catch(error) {
       open(); controller.signal.throwIfAborted();
       if(error && typeof error==='object' && 'sourceReadCode' in error && error.sourceReadCode==='rate_limited') {
@@ -115,9 +129,11 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
       readerFailure(error);
     } finally { reads.delete(key);release(); }
   }
-  async function load(sourceId:string,resource:string,controller:AbortController) {
+  async function load(sourceId:string,resource:string,controller:AbortController,cursor?:string,checkpoint?:string) {
     requireSource(sourceId);
-    const result=await readConnector(sourceId,resource,controller);
+    const raw=await readConnector(sourceId,resource,controller,cursor,checkpoint);
+    const paged=!Array.isArray(raw);
+    const result=paged ? raw?.items : raw;
     open();
     controller.signal.throwIfAborted();
     requireSource(sourceId);
@@ -131,7 +147,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
         failure('来源条目超出支持的长度。',502);
       if(!items.has(entry.id)) items.set(entry.id,{id:entry.id,title:entry.title,text:entry.text,...(entry.url && {url:entry.url})});
     }
-    return [...items.values()];
+    return {items:[...items.values()],paged,nextCursor:paged ? token(raw.nextCursor) : undefined,checkpoint:paged ? token(raw.checkpoint) : undefined};
   }
   function list() {
     open();
@@ -150,7 +166,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
     const controller=new AbortController();previews.add(controller);
     const cancel=()=>controller.abort(signal?.reason);
     signal?.addEventListener('abort',cancel,{once:true});
-    try { return {items:await load(sourceId,resource,controller)}; }
+    try { const page=await load(sourceId,resource,controller); return {items:page.items,...(page.nextCursor && {hasMore:true as const})}; }
     finally { signal?.removeEventListener('abort',cancel); previews.delete(controller); }
   }
   function settings(input:Record<string,unknown>) {
@@ -215,6 +231,12 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
         next.nextRunAt=Number.isFinite(last) ? new Date(last+next.intervalMinutes*60_000).toISOString() : nextRun(next.intervalMinutes);
       }
       if(enabled!==previous.enabled) delete next.error;
+      if(!enabled || addedDestination) {
+        store.remove(positions,id);
+        store.remove(stagedPages,id);
+        delete next.nextPageNumber;
+      }
+      if(addedDestination) store.remove(checkpoints,id);
       store.put(rows,id,next);return next;
     });
     if(!row.enabled) running.get(id)?.abort();
@@ -227,6 +249,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
       if(running.has(id)) failure('订阅正在拉取，请稍后再删除。',409);
       for(const key of store.list<string>(receipts+'.'+id)) store.remove(receipts+'.'+id,key);
       store.remove(pending,id);
+      store.remove(positions,id);store.remove(stagedPages,id);store.remove(checkpoints,id);
       store.remove(rows,id);
     });
     onChange?.(id);
@@ -252,6 +275,11 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
     }
     function finish(error?:string,retryAt?:string) {
       const next={...row,lastRunAt:new Date().toISOString(),nextRunAt:retryAt ?? nextRun(row.intervalMinutes)};
+      const nextPosition=store.get<Position>(positions,id);
+      if(nextPosition) {
+        next.nextPageNumber=nextPosition.page;
+        if(!error) next.nextRunAt=new Date().toISOString();
+      } else delete next.nextPageNumber;
       if(error) next.error=error;else delete next.error;
       store.put(rows,id,next);
       return next;
@@ -281,30 +309,74 @@ export function createSourceSubscriptions({store,sources,read,deliver,onChange}:
         }
       }
     }
+    function commitPage(advance:Advance) {
+      return store.transaction(()=>{
+        store.remove(pending,id);store.remove(stagedPages,id);
+        if(advance.position) store.put(positions,id,advance.position);
+        else {
+          store.remove(positions,id);
+          if(advance.checkpoint!==undefined) store.put(checkpoints,id,advance.checkpoint);
+        }
+        return finish();
+      });
+    }
+    let reading=false;
     try {
-      // An upstream outage must not block a retry of content already stored locally.
       guard();
       const backlog=store.get<SourceItem[]>(pending,id) ?? [];
-      if (backlog.length) {
+      const staged=store.get<Advance>(stagedPages,id);
+      if(backlog.length || staged) {
         await deliverQueue(backlog);
         guard();
+        if(staged) {
+          const updated=commitPage(staged);onChange?.(id);return updated;
+        }
         store.remove(pending,id);
       }
-      const items=await load(row.sourceId,row.resource,controller);
+      const position=store.get<Position>(positions,id);
+      const checkpoint=store.get<string>(checkpoints,id);
+      reading=true;
+      const page=await load(row.sourceId,row.resource,controller,position?.cursor,checkpoint);
+      reading=false;
       guard();
-      const queue=items.filter(item=>row.destinations.some(d=>!delivered(deliveryKey(id,item.id,d))));
+      let advance:Advance={};
+      if(page.paged || position) {
+        const candidate=position ? position.candidate : page.checkpoint;
+        if(page.nextCursor) {
+          const seen=position?.seen ?? [];
+          const pageNumber=position?.page ?? 1;
+          const fingerprint=createHash('sha256').update(page.nextCursor).digest('hex');
+          if(seen.includes(fingerprint)) throw new PaginationError('来源重复返回分页标识，订阅已暂停。');
+          if(pageNumber>=100) throw new PaginationError('来源超过 100 页，订阅已暂停。');
+          advance={position:{page:pageNumber+1,cursor:page.nextCursor,seen:[...seen,fingerprint],candidate}};
+        } else advance={checkpoint:candidate};
+      }
+      const queue=page.items.filter(item=>row.destinations.some(d=>!delivered(deliveryKey(id,item.id,d))));
       if(queue.length) {
-        store.put(pending,id,queue);
+        store.transaction(()=>{
+          store.put(pending,id,queue);
+          if(page.paged || position) store.put(stagedPages,id,advance);
+        });
         await deliverQueue(queue);
       }
       guard();
-      const updated=store.transaction(()=>{store.remove(pending,id);return finish();});
+      const updated=commitPage(advance);
       onChange?.(id);
       return updated;
     } catch(error) {
       if(!closed && !controller.signal.aborted && get(id).version===version) {
-        finish(error instanceof Error && 'status' in error ? error.message : '来源订阅拉取失败。',
-          error instanceof Error && 'retryAt' in error && typeof error.retryAt==='string' ? error.retryAt : undefined);
+        store.transaction(()=>{
+          const position=store.get<Position>(positions,id);
+          const status=error && typeof error==='object' && 'status' in error ? error.status : undefined;
+          if(reading && position && !(error instanceof PaginationError) && status!==429 && status!==503) {
+            if(position.failures) store.remove(positions,id);
+            else store.put(positions,id,{...position,failures:1});
+          }
+          if(error instanceof PaginationError) store.remove(positions,id);
+          const updated=finish(error instanceof Error && 'status' in error ? error.message : '来源订阅拉取失败。',
+            error instanceof Error && 'retryAt' in error && typeof error.retryAt==='string' ? error.retryAt : undefined);
+          if(error instanceof PaginationError) store.put(rows,id,{...updated,enabled:false,version:updated.version+1});
+        });
         onChange?.(id);
       }
       if(controller.signal.aborted) failure('订阅拉取已停止。',409);

@@ -105,3 +105,42 @@ test('来源订阅通过真实 HTTP 恢复分目的地投递，重启后保留�
   assert.doesNotMatch(wait.error,/private fixture/);
   assert.equal((await api<{subscriptions:SourceSubscription[]}>(endpoint)).subscriptions[0]?.retryAt,wait.retryAt);
 });
+
+test('GitHub 来源跨页补收 35 个新版本，服务重启与重复条目不改变收件总数',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'sm-release-pages-'));
+  const config={host:'127.0.0.1',port:0,dataDir:dir,demo:true,token:'local-pagination-test'};
+  let server=await startServer(config);
+  t.after(async()=>{try{await server.close();}finally{await rm(dir,{recursive:true,force:true});}});
+  const pages:number[]=[];
+  let latest=2;
+  const localFetch=fetch;
+  t.mock.method(globalThis,'fetch',async(url:RequestInfo|URL,init?:RequestInit)=>{
+    const request=new Request(url,init), target=new URL(request.url);
+    if(target.origin===server.url)return localFetch(request);
+    assert.equal(target.origin,'https://api.github.com');
+    assert.equal(target.pathname,'/repos/sample/fixture/releases');
+    const page=Number(target.searchParams.get('page') ?? 1);
+    pages.push(page);
+    const all=Array.from({length:latest},(_,i)=>({id:latest-i,tag_name:'v'+(latest-i),draft:false}));
+    const items=all.slice((page-1)*30,page*30);
+    return Response.json(items,{headers:page*30<all.length
+      ? {link:'<https://api.github.com/repos/sample/fixture/releases?per_page=30&page='+(page+1)+'>; rel="next"'} : {}});
+  });
+  async function api(path:string,body?:object) {
+    const res=await localFetch(server.url+'/api/v1/'+path,{method:body?'POST':'GET',headers:{
+      authorization:'Bearer '+config.token,'content-type':'application/json'},...(body && {body:JSON.stringify(body)})});
+    assert.ok(res.ok,await res.clone().text());return res.json();
+  }
+  const route='source-subscriptions';
+  const row=await api(route,{name:'合成公开版本',sourceId:'release-source.releases',resource:'sample/fixture',destinations:['inbox'],intervalMinutes:10080});
+  const pull=()=>api(route+'/'+row.id+'/pull',{version:row.version});
+  await pull();latest=37;
+  const next=await pull();assert.equal(next.nextPageNumber,2);
+  await server.close();server=await startServer(config);
+  const resumed=await pull();assert.equal(resumed.nextPageNumber,undefined);
+  await pull();
+  assert.deepEqual(pages,[1,1,2,1]);
+  const received=(await api('inbox') as InboxItem[]).filter(item=>item.source==='subscription:'+row.id);
+  assert.equal(received.length,37);
+  assert.deepEqual(new Set(received.map(item=>item.title)),new Set(Array.from({length:37},(_,i)=>'v'+(i+1))));
+});

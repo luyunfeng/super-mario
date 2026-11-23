@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { chromium, expect } from '@playwright/test';
+import type { Json } from '../packages/protocol/src/index.ts';
 import { startServer } from '../apps/server/src/index.ts';
 
 test('从记忆订阅插件来源，预览、拉取、暂停恢复和冲突核对', {timeout:40000},async t => {
@@ -194,4 +195,57 @@ test('限流后的订阅显示来源允许读取的时刻，主人仍可手动�
   assert.equal(reads,1);
   const inbox=await page.request.get(server.url+'/api/v1/inbox',{headers:{Authorization:'Bearer offline-delay'}});
   assert.ok((await inbox.json()).some((item:{title:string})=>item.title==='补投合成样本'));
+});
+
+test('预览只读首页，分两次拉取并对跨页重复的条目只投递一次', {timeout:30_000},async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'mario-web-subscription-pages-'));
+  const server=await startServer({dataDir:dir,port:0,host:'127.0.0.1',token:'offline-pages',demo:true});
+  t.after(async()=>{await server.close();await rm(dir,{recursive:true,force:true});});
+  const service='pages-fixture.releases',requests:unknown[]=[];
+  const first={id:'p1',title:'第一页样本',text:'合成正文一'}, second={id:'p2',title:'第二页样本',text:'合成正文二'};
+  server.app.plugins.register({id:'pages-fixture',name:'合成分页来源',capabilities:['subscription.source'],
+    permissions:['contribute:connectors','service.provide:'+service],activate(context){
+      context.contribute('connectors','pages-fixture-releases',{kind:'subscription-source',name:'分页离线连接器',resourceLabel:'资源编号',service});
+      context.contribute('services','pages-fixture-releases',{name:service,version:1,readOnly:true,async handler(raw):Promise<Json>{
+        requests.push(raw);
+        if(raw && typeof raw==='object' && !Array.isArray(raw) && raw.cursor==='page-two')
+          return {items:[first,second]};
+        return {items:[first],nextCursor:'page-two',checkpoint:'seen-first'};
+      }});
+    }});
+  await server.app.plugins.setEnabled('pages-fixture',true);
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(()=>browser.close());
+  const page=await browser.newPage();
+  await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  page.setDefaultTimeout(5500);
+  await page.goto(server.url+'/#memory?token=offline-pages');
+  await page.getByRole('button',{name:'来源订阅',exact:true}).click();
+  const drawer=page.getByRole('dialog',{name:'来源订阅'});
+  await drawer.getByLabel('来源连接器').selectOption(service);
+  await drawer.getByLabel('资源编号').fill('sample');
+  await drawer.getByRole('button',{name:'预览来源'}).click();
+  await expect(drawer).toContainText('仅预览首页，来源还有后续页');
+  await expect(drawer).toContainText(first.title);
+  await expect(drawer).not.toContainText(second.title);
+  assert.deepEqual(requests,[{resource:'sample'}]);
+  await drawer.getByLabel('订阅名称').fill('分页样本');
+  await drawer.getByLabel('个人记忆').check();
+  await drawer.getByRole('button',{name:'创建订阅'}).click();
+  const row=drawer.getByRole('article',{name:'分页样本'}),pull=row.getByRole('button',{name:'立即拉取'});
+  await pull.click();
+  await expect(row).toContainText('下次读取第 2 页');
+  await expect(drawer.getByRole('status')).toContainText('已拉取本页');
+  await pull.click();
+  await expect(drawer.getByRole('status')).toContainText('本轮拉取完成');
+  await expect(row).not.toContainText('下次读取第');
+  assert.deepEqual(requests,[{resource:'sample'},{resource:'sample'},{resource:'sample',cursor:'page-two'}]);
+  const {id}=server.app.subscriptions.service().list()[0]!;
+  const headers={Authorization:'Bearer offline-pages'};
+  const inbox=await (await page.request.get(server.url+'/api/v1/inbox',{headers})).json();
+  const memory=await (await page.request.get(server.url+'/api/v1/knowledge',{headers})).json();
+  assert.deepEqual(inbox.filter((x:{source:string})=>x.source==='subscription:'+id).map((x:{title:string})=>x.title).sort(),
+    [first.title,second.title].sort());
+  assert.deepEqual(memory.filter((x:{tags?:string[]})=>x.tags?.includes('来源订阅')).map((x:{title:string})=>x.title).sort(),
+    [first.title,second.title].sort());
 });

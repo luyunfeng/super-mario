@@ -3,7 +3,7 @@ import type { Contributions, Extension, KnowledgeBackend, Store } from '../../pl
 import type { InboxThing, Json } from '../../protocol/src/index.ts';
 import { subscriptionDrafts } from './subscription-drafts.ts';
 import { subscriptionDraftTool, subscriptionReadTool } from './subscription-tools.ts';
-import { createSourceSubscriptions } from './source-subscriptions.ts';
+import { createSourceSubscriptions, type SourceItem } from './source-subscriptions.ts';
 
 export function createSubscriptionHost(options: {
   authorizeRead:()=>{id:string;createdAt:string};
@@ -32,15 +32,19 @@ export function createSubscriptionHost(options: {
     activate(context) {
       const service = createSourceSubscriptions({
         store:options.store,sources,
-        async read(sourceId,resource,signal) {
+        async read(sourceId,resource,signal,cursor?:string,checkpoint?:string) {
           if (!sources().some(source => source.id === sourceId)) throw Object.assign(new Error('订阅来源不可用'),{status:503});
           const provider = options.contributions.list('services').find(s => s.value.name === sourceId)?.value;
-          const value = await options.use(sourceId,{resource},{signal,timeoutMs:30000});
+          const value = await options.use(sourceId,{resource,...(cursor && {cursor}),...(checkpoint && {checkpoint})},{signal,timeoutMs:30000});
           if (!options.contributions.list('services').some(s => s.value === provider))
             throw Object.assign(new Error('读取过程中来源插件已切换'),{sourceReadCode:'unavailable'});
           if (!value || typeof value !== 'object' || Array.isArray(value) || !Array.isArray(value.items)) throw new Error('来源返回的条目无效');
           // The subscription service validates each item before either destination can receive it.
-          return value.items as {id:string;title:string;text:string;url?:string}[];
+          const items = value.items as SourceItem[];
+          if(value.nextCursor===undefined && value.checkpoint===undefined) return items;
+          return {items,
+            ...(value.nextCursor!==undefined && {nextCursor:value.nextCursor as string}),
+            ...(value.checkpoint!==undefined && {checkpoint:value.checkpoint as string})};
         },
         async deliver(destination,key,item,subscription) {
           const id = 'subscription-'+createHash('sha256').update(key).digest('hex');

@@ -26,13 +26,35 @@ function rateLimitDelay(headers: Headers): number | undefined {
   if (at > now) return Math.ceil((at - now) / 1000);
 }
 
-function repository(input: Json) {
+function releasePage(input: Json) {
   if (input && typeof input === 'object' && !Array.isArray(input) && typeof input.resource === 'string') {
     const resource = input.resource.trim();
     const parts = /^([a-z0-9][a-z0-9_-]{0,38})\/([a-z0-9._-]{1,100})$/i.exec(resource);
-    if (parts && parts[2] !== '.' && parts[2] !== '..') return resource;
+    if (parts && parts[2] !== '.' && parts[2] !== '..') {
+      const checkpoint=input.checkpoint;
+      if (checkpoint !== undefined && (typeof checkpoint!=='string' || !/^[1-9]\d*$/.test(checkpoint) || !Number.isSafeInteger(Number(checkpoint))))
+        return error(400,'GitHub 版本发布检查点无效。','invalid_resource');
+      if (input.cursor === undefined) return {resource,page:1,checkpoint};
+      if (typeof input.cursor !== 'string' || !/^[1-9]\d*$/.test(input.cursor) ||
+          Number(input.cursor) < 2 || !Number.isSafeInteger(Number(input.cursor)))
+        return error(400, 'GitHub 版本分页游标无效。','invalid_resource');
+      return {resource,page:Number(input.cursor),checkpoint};
+    }
   }
   return error(400, '请填写公开 GitHub 仓库，格式为 owner/repo。','invalid_resource');
+}
+
+// GitHub supplies page links as <URI>; rel="next". Treat the URI as opaque:
+// numeric cursors are ours, and every outgoing URL is built from the repository.
+function hasNextPage(header: string) {
+  const link = /\s*<[^<>]*>((?:\s*;\s*[\w-]+\s*=\s*(?:"(?:\\.|[^"\\])*"|[^;,"\s]+))*)\s*(?:,|$)/gy;
+  for (;;) {
+    const entry=link.exec(header);
+    if (!entry) return false;
+    for (const param of entry[1].matchAll(/;\s*([\w-]+)\s*=\s*(?:"((?:\\.|[^"\\])*)"|([^;,"\s]+))/g)) {
+      if (param[1].toLowerCase()==='rel' && (param[2] ?? param[3]).toLowerCase().split(/\s+/).includes('next')) return true;
+    }
+  }
 }
 
 function excerpt(value: string, max: number) {
@@ -96,11 +118,11 @@ export function createReleaseSourceExtension(options: {fetch?: typeof fetch; tim
       context.defer(() => lifetime.abort());
       context.contribute('connectors', 'releases', {kind:'subscription-source', name:'GitHub 版本发布', resourceLabel:'仓库（owner/repo）', service});
       context.contribute('services', 'releases', {name:service, version:1, readOnly:true, async handler(input, request) {
-        const resource = repository(input);
+        const {resource,page,checkpoint} = releasePage(input);
         const signal = AbortSignal.any([request, lifetime.signal, AbortSignal.timeout(options.timeoutMs ?? 10_000)]);
         signal.throwIfAborted();
         try {
-          const response = await (options.fetch ?? fetch)('https://api.github.com/repos/' + resource + '/releases?per_page=30', {
+          const response = await (options.fetch ?? fetch)('https://api.github.com/repos/' + resource + '/releases?per_page=30' + (page === 1 ? '' : '&page=' + page), {
             method:'GET', headers:{accept:'application/vnd.github+json','user-agent':'super-mario-release-source'},
             credentials:'omit', redirect:'error', signal,
           });
@@ -112,7 +134,13 @@ export function createReleaseSourceExtension(options: {fetch?: typeof fetch; tim
             if (response.status === 403) error(403, 'GitHub 拒绝读取该仓库的版本。','forbidden');
             error(502, 'GitHub 读取版本失败，HTTP ' + response.status + '。');
           }
-          return await releaseItems(response, resource, signal);
+          const {items} = await releaseItems(response, resource, signal);
+          const frontier:Record<string,string> = page === 1 && items.length ? {checkpoint:items[0].id} : {};
+          const stop = checkpoint === undefined ? -1 : items.findIndex(item => item.id === checkpoint);
+          if (stop >= 0) return {items:items.slice(0,stop),...frontier};
+          if (!hasNextPage(response.headers.get('link') ?? '')) return {items,...frontier};
+          if (!Number.isSafeInteger(page + 1)) error(502,'GitHub 版本页码超出可读取范围。');
+          return {items,...frontier,nextCursor:String(page + 1)};
         } catch (cause) {
           if (signal.aborted) {
             if (signal.reason?.name === 'TimeoutError') error(504, '读取 GitHub 版本超时。');
