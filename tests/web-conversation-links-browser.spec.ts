@@ -87,10 +87,21 @@ test('独立对话搜索仅显示本线原文和引用，点击旧发言可精�
   for(let i=0;i<52;i++){
     const id=randomUUID();server.app.store.put('messages',id,{id,conversationId:'web:'+thread,projectId:project.id,role:'user',directWebInput:true,status:'done',text:'合成分页 '+i,createdAt:new Date().toISOString()});
   }
+  const search=await fetch(server.url+'/api/v1/conversation-message-search',{method:'POST',headers,
+    body:JSON.stringify({conversationId:'web:'+thread,projectId:project.id,query:source,category:'quoted'})});
+  assert.equal(search.status,200);
+  const citation=(await search.json()).hits.find((hit:{id:string})=>hit.id===target).webCitation;
+  const replyId=randomUUID();
+  server.app.store.put('messages',replyId,{id:replyId,conversationId:'web:'+thread,projectId:project.id,
+    role:'assistant',replyTo:target,status:'done',text:'历史发言见 '+citation,createdAt:new Date().toISOString()});
   const page=await browser.newPage();await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
   await page.goto(server.url+'/#chat?thread='+thread+'&token='+token);
   const region=page.getByLabel('独立对话内容');
   await expect(region.locator('[data-id="'+target+'"]')).toHaveCount(0);
+  await region.locator('[data-id="'+replyId+'"]').getByRole('link',{name:'查看原文'}).click();
+  await expect(region.locator('[data-id="'+target+'"]')).toBeFocused();
+  await page.goBack();
+  await expect(region.locator('[data-id="'+replyId+'"]')).toBeVisible();
   await region.getByRole('button',{name:'搜索本对话'}).click();
   const drawer=page.getByRole('dialog',{name:'搜索本对话'}),category=drawer.getByLabel('搜索内容');
   assert.deepEqual(await category.locator('option').allTextContents(),['全部','正文','引用','附件名']);
