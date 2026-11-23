@@ -23,6 +23,7 @@ interface Options {
   onDirectWebInput?(message:Message):void;
   onInternalQueued?(message:Message,sourceId:string):()=>void;
   inboxConversations?: () => import('../../protocol/src/inbox-conversations.ts').InboxConversation[];
+  reviewsForSource?:NonNullable<Parameters<typeof createAgentRuntime>[0]['reviewsForSource']>;
   reviewEvidence?: ReviewEvidenceReader;
   config: AppConfig; store: Store; events: EventBus; contributions: Contributions;
   /** Optional host validation (for example, whether this bot binding is still enabled). */

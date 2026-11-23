@@ -1,8 +1,8 @@
 import type { InboxConversation } from '../../protocol/src/inbox-conversations.ts';
 import { pendingDecisionHref } from './pending-decision-link.ts';
-import { actionTodoLink } from './todo-link.ts';
+import { actionTodoLink, ownerReviewLink } from './todo-link.ts';
 import { actionableInbox } from './attention.ts';
-import type { ReviewEvidenceReader } from './run-review.ts';
+import type { PendingOwnerReview, ReviewEvidenceReader } from './run-review.ts';
 import type { Approval, BotScope, ExecutorInfo, InboxItem, MachineInfo, MailboxEntry, Project, Run, Todo } from '../../protocol/src/index.ts';
 import type { ChannelContribution, Store } from '../../plugin-sdk/src/index.ts';
 import type { WaitingReplySnapshot } from '../../protocol/src/index.ts';
@@ -20,7 +20,7 @@ function conversationRelation(group: InboxConversation): Relation {
   return { projectId: group.projectId, todoId: group.todoIds.length === 1 ? group.todoIds[0] : undefined };
 }
 
-function pendingDecisions(store: WorkStore, visible: (relation: Relation) => boolean, conversations: InboxConversation[] = [], channels?: readonly ChannelContribution[]) {
+function pendingDecisions(store: WorkStore, visible: (relation: Relation) => boolean, conversations: InboxConversation[] = [], channels?: readonly ChannelContribution[], reviews:readonly PendingOwnerReview[] = []) {
   // Resolve ownership from linked facts, never just a model-provided project label.
   const ownership = (value: Relation): Relation => {
     const run = value.runId ? store.get<Run>('runs', value.runId) : undefined;
@@ -33,6 +33,12 @@ function pendingDecisions(store: WorkStore, visible: (relation: Relation) => boo
   const mailboxes = store.list<MailboxEntry>('event.mailboxes');
   const standalone = channels ? actionableInbox({ inbox: store.list<InboxItem>('inbox'), mailboxes, channels, inboxConversations: conversations }) : [];
   return [
+    ...reviews.filter(visible).map(review => {
+      const {todoId,projectId,runId,version,evidenceVersion,createdAt}=review;
+      const {href,label}=ownerReviewLink(review);
+      return {collection:'reviews' as const,id:todoId,todoId,...(projectId && {projectId}),runId,version,evidenceVersion,createdAt,
+        title:review.title.slice(0,180),doneWhen:review.doneWhen.slice(0,400),webCitation:`[${label}](${href})`};
+    }),
     ...store.list<Approval>('approvals').filter(a => a.status === 'pending').map(a => {
       const params = a.params ?? {};
       const ambiguous = (a.todoId !== undefined && params.todoId !== undefined && a.todoId !== params.todoId) ||
@@ -78,20 +84,20 @@ function pendingDecisions(store: WorkStore, visible: (relation: Relation) => boo
   ].filter(visible);
 }
 
-export function pendingDecisionPage(store: WorkStore, scope: BotScope, offset: number, conversations: InboxConversation[] = [], channels?: readonly ChannelContribution[]) {
+export function pendingDecisionPage(store: WorkStore, scope: BotScope, offset: number, conversations: InboxConversation[] = [], channels?: readonly ChannelContribution[], reviews:readonly PendingOwnerReview[] = []) {
   const decisions = pendingDecisions(store, row => scope.kind === 'global' ||
-    (scope.kind !== 'unmarked' && row.projectId === scope.projectId && (scope.kind !== 'task' || row.todoId === scope.todoId)), conversations, channels)
+    (scope.kind !== 'unmarked' && row.projectId === scope.projectId && (scope.kind !== 'task' || row.todoId === scope.todoId)), conversations, channels, reviews)
     .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '') || a.collection.localeCompare(b.collection) || a.id.localeCompare(b.id));
   const end = offset + 25;
   const items = decisions.slice(offset, end).map(row => ({
-    ...row, webCitation: row.collection === 'deferredQuestions' ? row.webCitation : `[查看待决定事项](${pendingDecisionHref(row.collection, row.id)})`,
+    ...row, webCitation: row.collection === 'deferredQuestions' || row.collection === 'reviews' ? row.webCitation : `[查看待决定事项](${pendingDecisionHref(row.collection, row.id)})`,
   }));
   return { total: decisions.length, items, nextOffset: end < decisions.length ? end : null };
 }
 
 /** Read shared facts at execution time, across channel histories. Never read private settings
  * or copy raw chats. Scope filtering precedes counts, selection and rendering. */
-export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: BotScope, projectId?: string, live?: { reviewEvidence?: ReviewEvidenceReader; executors?: ExecutorInfo[]; inboxConversations?: InboxConversation[]; channels?: readonly ChannelContribution[] }) {
+export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: BotScope, projectId?: string, live?: { reviews?:readonly PendingOwnerReview[]; reviewEvidence?: ReviewEvidenceReader; executors?: ExecutorInfo[]; inboxConversations?: InboxConversation[]; channels?: readonly ChannelContribution[] }) {
   if (scope?.kind === 'unmarked') return { scope: { kind: 'unmarked' }, unavailable: '未标记身份不提供工作事实，请先归类' };
   const project = scope?.kind === 'project' || scope?.kind === 'task' ? scope.projectId : projectId;
   const task = scope?.kind === 'task' ? scope.todoId : undefined;
@@ -112,7 +118,9 @@ export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: Bot
   const handlingVisible=(row:{conversationId:string})=>visible(handlingScopes.get(row.conversationId)??{});
   const handlingSuggestions=recent(store.list<InboxSuggestion>('inbox-handling.suggestions').filter(handlingVisible));
   const handlingRequests=recent(store.list<InboxHandlingRequest>('inbox-handling.requests').filter(handlingVisible));
-  const decisions = pendingDecisions(store, visible, live?.inboxConversations, live?.channels);
+  const decisions = pendingDecisions(store, visible, live?.inboxConversations, live?.channels, live?.reviews);
+  const blockedBy=(id:string)=>decisions.filter(row=>row.collection!=='reviews' && row.runId===id)
+    .map(({collection,id,title,version})=>({collection,id,title,version}));
   // Only visible runs contribute relationships and counts, even when executors share a machine.
   const executors = new Map((live?.executors ?? []).map(e => [e.id, e]));
   const visibleExecutorIds = new Set(runs.map(r => r.executorId).filter(Boolean));
@@ -137,7 +145,7 @@ export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: Bot
       todoIds: take([...new Set(ownRuns.flatMap(r => r.todoId ? [r.todoId] : []))]),
       runs: take(ownRuns.map(r => ({ id: r.id, projectId: r.projectId, todoId: r.todoId, status: r.status,
         updatedAt: r.updatedAt ?? r.createdAt, resultSource: r.resultSource, progress: executionProgress(r.progress),
-        blockedBy: decisions.filter(decision => decision.runId === r.id).map(({ collection, id, title, version }) => ({ collection, id, title, version })) }))),
+        blockedBy: blockedBy(r.id) }))),
       counts: Object.fromEntries(['queued', 'running', 'unknown', 'failed'].map(status =>
         [status, ownRuns.filter(r => r.status === status).length])),
       needsYou: take(recent(decisions.filter(d => d.runId !== undefined && runIds.has(d.runId)))),
@@ -160,7 +168,7 @@ export function buildWorkContext(store: Pick<Store, 'list' | 'get'>, scope?: Bot
       executorId: r.executorId, sessionId: r.sessionId, nativeSessionId: r.nativeSessionId, nativeResume: r.nativeResume, machineId: r.machineId ?? executors.get(r.executorId)?.machineId,
       machineIdSource: r.machineId ? 'run' : executors.get(r.executorId)?.machineId ? 'currentExecutor' : 'unknown',
       error: clip(r.error, 400), prompt: clip(r.prompt), output: clip(r.output, 400), doneWhen: clip(r.doneWhen), resultSource: r.resultSource, progress: executionProgress(r.progress),
-      blockedBy: decisions.filter(decision => decision.runId === r.id).map(({ collection, id, title, version }) => ({ collection, id, title, version })), updatedAt: r.updatedAt ?? r.createdAt })),
+      blockedBy: blockedBy(r.id), updatedAt: r.updatedAt ?? r.createdAt })),
       counts: Object.fromEntries(['queued', 'running', 'completed', 'failed', 'cancelled', 'unknown'].map(status => [status, runs.filter(r => r.status === status).length])) },
     externalAgents,
     inboxAssistant: take((live?.inboxConversations ?? []).filter(c => visible(conversationRelation(c))).map(c => ({

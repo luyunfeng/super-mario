@@ -2,6 +2,7 @@ import type { ChannelContribution } from '../../plugin-sdk/src/index.ts';
 import type { InboxConversation } from '../../protocol/src/inbox-conversations.ts';
 import { excludesPersonalGroupFromBrief } from '../../protocol/src/inbox-origin.ts';
 import type { Approval, QuestionItem, InboxItem, InboxOrigin, JsonObject, MailboxEntry, Project, FeishuBot } from '../../protocol/src/index.ts';
+import { ownerReviewLink } from './todo-link.ts';
 import type { PendingOwnerReview } from './run-review.ts';
 import type { Plan } from './plans.ts';
 
@@ -91,11 +92,9 @@ export function collectAttention({ reviews = [], inboxConversations = [], approv
   });
   for (const item of reviews) {
     const {todoId,runId,version,evidenceVersion}=item;
-    const query=new URLSearchParams({reviewRun:runId,reviewVersion:String(version),reviewEvidence:evidenceVersion});
     rows.push({id:'review:'+todoId,type:'review',todoId,runId,version,evidenceVersion,title:item.title,context:'交付待你验收',
       detail:'完成标准：'+item.doneWhen+'\n证据来源：'+item.resultSource,source:'执行交付',createdAt:item.createdAt,...project(item.projectId),
-      route:{href:'#projects/'+encodeURIComponent(item.projectId??'all')+'/todos/detail/'+encodeURIComponent(todoId)+'?'+query,
-        label:'查看待验收交付'},actions:[]});
+      route:ownerReviewLink(item),actions:[]});
   }
   for (const item of approvals) {
     if (item.status !== 'pending') continue;

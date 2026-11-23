@@ -631,13 +631,13 @@ export async function createWorkbench(config: AppConfig) {
   function todoHistory(id: string, before?: string) {
     return readTodoHistory(store, id, before, reviewEvidence);
   }
-  const agent = createAgentRuntime({ config, store, events, contributions, validateQueuedWebInput, canGenerateOffice, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
+  const agent = createAgentRuntime({ config, store, events, contributions, validateQueuedWebInput, canGenerateOffice, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), reviewEvidence, reviewsForSource, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
   const webConversationAllowed = (id:string, projectId?:string) => {
     const active = plugins.list().filter(plugin => plugin.status === 'active');
     return active.some(plugin => plugin.id === 'web-conversations') && webConversationMatches(store,id,projectId)
       && (active.some(plugin => plugin.id === 'assistant-profile') || !readWebThreadAssistant(store,id));
   };
-  const scopedAgents = createScopedAgents({ webThreadAssistant:id=>readWebThreadAssistant(store,id), webConversationAllowed, validateQueuedWebInput, canGenerateOffice, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, canOpenQuestion:source=>Boolean(questionFormAudience(source)), onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
+  const scopedAgents = createScopedAgents({ webThreadAssistant:id=>readWebThreadAssistant(store,id), webConversationAllowed, validateQueuedWebInput, canGenerateOffice, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, canOpenQuestion:source=>Boolean(questionFormAudience(source)), onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, reviewsForSource, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
   const webThreadCleanup = createWebThreadCleanup(store, async (id,filesPending) => {
     await scopedAgents.forgetDeletedWebThread(id);
     if(filesPending)sweepChatFiles(store,config.dataDir,true);
@@ -1816,6 +1816,10 @@ export async function createWorkbench(config: AppConfig) {
       && (!query || [item.title, item.text, item.origin?.chatName, item.origin?.senderName].some(text => text?.toLowerCase().includes(query))));
     return { items: items.slice(offset as number, (offset as number) + (limit as number)).map(withoutParent), total: items.length, offset, hasMore: (offset as number) + (limit as number) < items.length } as unknown as Json;
   }
+  function reviewsForSource(input?:Message) {
+    if (!input || !(directQuestionAudience(input) || (input.conversationId.startsWith('web:') && webThreadAttachmentAudience(input)))) return [];
+    return runReview.pendingForOwnerList().filter(item=>(!input.projectId || input.projectId===item.projectId) && (!input.todoId || input.todoId===item.todoId));
+  }
   function readPendingDecisions(input: Record<string, unknown>) {
     const actor = currentAgentInput() ?? agent.currentInput();
     if (!actor) throw new InputError('缺少当前会话范围', 403);
@@ -1829,7 +1833,7 @@ export async function createWorkbench(config: AppConfig) {
     if (todoId && (!todo || todo.projectId !== projectId)) throw new InputError('当前范围的待办不可用', 404);
     const offset = input.offset === undefined ? 0 : input.offset;
     if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) throw new InputError('查询位置无效');
-    return pendingDecisionPage(store, todoId ? { kind: 'task', todoId, projectId } : projectId ? { kind: 'project', projectId } : { kind: 'global' }, offset, inboxAssistant.list(), contributions.list('channels').map(entry => entry.value));
+    return pendingDecisionPage(store, todoId ? { kind: 'task', todoId, projectId } : projectId ? { kind: 'project', projectId } : { kind: 'global' }, offset, inboxAssistant.list(), contributions.list('channels').map(entry => entry.value), reviewsForSource(actor));
   }
   function readInboxHandlingFromAgent(input: Record<string,unknown>):Json {
     if(!['personal','mailbox'].includes(String(input.kind)))throw new InputError('请选择收件来源');

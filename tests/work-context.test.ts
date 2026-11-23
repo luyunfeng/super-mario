@@ -204,3 +204,17 @@ test('等我决定可定位超时转成的待办，其他项目和已结案的�
   store.put('todos',todo.id,{...todo, completedAt:'2026-01-02T00:00:00Z'});
   assert.deepEqual(get('A'),[]);
 });
+
+test('验收按项目与待办范围计数，已结束执行的验收不列为执行阻塞',async t=>{
+  const store=await fixture(t);
+  const reviews=['A','sibling','B'].map((id,index)=>({todoId:id,projectId:index===2?'B':'A',title:'验收 '+id,
+    runId:'delivery-'+id,doneWhen:'可核验标准',version:1,evidenceVersion:'synthetic-'+id,createdAt:'2031',resultSource:'real'}));
+  store.put('runs','delivery-A',{id:'delivery-A',todoId:'A',projectId:'A',executorId:'synthetic',status:'completed',createdAt:'2031',updatedAt:'2031'});
+  const own=pendingDecisionPage(store,{kind:'task',projectId:'A',todoId:'A'},0,[],[],reviews);
+  assert.equal(own.total,pendingDecisionPage(store,{kind:'task',projectId:'A',todoId:'A'},0).total+1);
+  assert.deepEqual(own.items.filter(item=>item.collection==='reviews').map(item=>item.id),['A']);
+  const scoped=buildWorkContext(store,{kind:'project',projectId:'A'},undefined,{reviews});
+  assert.equal(scoped.needsYou!.items.filter(item=>item.collection==='reviews').length,2);
+  assert.deepEqual(scoped.runs!.items.find(run=>run.id==='delivery-A')?.blockedBy,[]);
+  assert.deepEqual(scoped.externalAgents!.items.find(agent=>agent.id==='synthetic')?.runs.items[0].blockedBy,[]);
+});

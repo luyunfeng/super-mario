@@ -40,6 +40,12 @@ test('首页需要我和对话待验收卡定位原项目交付，打开只读�
   await page.goto(server.url+'/#chat');
   const card=page.locator('#attention [data-id="review:'+todo.id+'"]');
   await card.getByRole('link',{name:'查看待验收交付'}).click();await expect(drawer).toContainText('原始完成标准');
+  await drawer.getByRole('button',{name:'关闭',exact:true}).click();
+  server.app.store.put('messages','fixture-review-link',{id:'fixture-review-link',role:'assistant',conversationId:'main',
+    createdAt:new Date().toISOString(),status:'done',text:'[查看待验收交付]('+href+')'});
+  await page.goto(server.url+'/#chat');await page.reload();
+  await page.locator('.msg--assistant').getByRole('link',{name:'查看待验收交付'}).click();
+  await expect(drawer).toContainText('原始完成标准');
   assert.deepEqual(writes,[]);
   await page.goto(server.url+href.replace(review.evidenceVersion,'synthetic-stale'));
   await expect(drawer).toHaveCount(0);await expect(page.locator('#panel-todos')).toContainText('原交付或验收证据已变化');

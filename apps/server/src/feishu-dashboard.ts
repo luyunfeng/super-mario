@@ -265,7 +265,7 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
   ];
   const action = inbox.filter(item => item.tier === 'action');
   const metrics = [
-    ['进行中', String(working.length)], ['结束待验收', String(review.length)],
+    ['进行中', String(working.length)], ['结束待核对', String(review.length)],
     [people?'待你回复':'需要处理', String(action.length)], [people?'后台跟进':'知会即可', String(inbox.length - action.length)],
   ];
   elements.push({ tag: 'div', fields: metrics.map(([title, value]) => ({ is_short: true, text: { tag: 'lark_md', content: `${title}\n**${value}**` } })) });
@@ -282,12 +282,12 @@ export function buildFeishuDashboard(app: DashboardApp, webBase?: string, option
       value:{kind:'workbench.navigate',navigation:options.navigation,view:'questions',page:0}}]));
     if (waiting.length > 3) section('更多待决定', `还有 ${waiting.length - 3} 项，请打开主对话核对。`);
     if (app.agentSessions && options.navigation) elements.push(...cardButtons([{label:'查看 CLI 会话',value:{kind:'workbench.readSessions',navigation:options.navigation}}]));
-    section('此刻', `Agent 执行 · ${working.length} 项进行中 · ${review.length} 项执行结束待验收 · ${issues.length} 项失败或结果未知\n收件箱 · ${action.length} 条需处理 · ${inbox.length - action.length} 条知会\n电脑 · ${machines.filter(m => m.online).length} / ${machines.length} 台在线`);
+    section('此刻', `Agent 执行 · ${working.length} 项进行中 · ${review.length} 项执行结束待核对 · ${issues.length} 项失败或结果未知\n收件箱 · ${action.length} 条需处理 · ${inbox.length - action.length} 条知会\n电脑 · ${machines.filter(m => m.online).length} / ${machines.length} 台在线`);
   } else if (view === 'tasks') {
     const rows = [...working, ...issues, ...review]; total = rows.length;
     page = Math.min(Math.max(0, options.page ?? 0), Math.max(0, Math.ceil(total / pageSize) - 1));
-    const labels = { running: '执行中', queued: '排队中', completed: '执行结束，待验收', failed: '失败', unknown: '结果未知', cancelled: '已取消' };
-    if (!rows.length) section('任务进展', '没有进行中、待核对或待验收的执行。');
+    const labels = { running: '执行中', queued: '排队中', completed: '执行结束，待核对', failed: '失败', unknown: '结果未知', cancelled: '已取消' };
+    if (!rows.length) section('任务进展', '没有进行中或待核对的执行。');
     for (const run of rows.slice(page * pageSize, (page + 1) * pageSize)) {
       const project = run.projectId && projects.has(run.projectId) ? run.projectId : '';
       const title = label((run.todoId && tasks.get(run.todoId)?.title) || run.prompt);

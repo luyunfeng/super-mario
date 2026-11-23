@@ -1,3 +1,5 @@
+import { evidenceVersion, type RunReviewDecision, type PendingOwnerReview, type RunReview } from '../../../packages/core/src/run-review.ts';
+import { reviewLocation, runReviewCard } from './feishu-run-review-card.ts';
 import { cardAcceptsAnswer } from '../../../packages/core/src/question-deadline.ts';
 import { createDecisionNudges, type DecisionNudgeCard } from './feishu-decision-nudges.ts';
 import { decisionQuietNow } from '../../../packages/core/src/decision-quiet-hours.ts';
@@ -49,7 +51,10 @@ import type { BotScope, FeishuAgentInputTarget, FeishuBot, FeishuBotInput, Mailb
 
 export type FeishuMailboxInput = Pick<MailboxEntry, 'direction' | 'scope' | 'botId' | 'eventKey' | 'title' | 'text' | 'requiresConfirmation'>
   & Partial<Pick<MailboxEntry, 'target' | 'sourceMessageId' | 'replyTo' | 'origin'>>;
+type ReviewAnchor = {botId:string;binding:string;runId:string;todoId:string;platformId:string;evidence:string;attempted?:string;confirmed?:string};
+const reviewAnchors='feishu.private-run-review';
 export interface FeishuBotsApp {
+  taskClosure?: {review:{pendingForOwner(id:string):PendingOwnerReview|undefined;decide(input:RunReviewDecision):RunReview}};
   validRunQuestionSource?(card:Card):Message|undefined;
   store: Pick<Store, 'get' | 'put' | 'list' | 'transaction'> & Partial<Pick<Store, 'remove' | 'entries'>>;
   forgetPrivateConversation?(conversationId: string): void;
@@ -104,7 +109,7 @@ export interface FeishuBotAdapter {
   pinMessage?(messageId: string): Promise<void>;
   unpinMessage?(messageId: string): Promise<void>;
   recallMessage?(messageId: string): Promise<void>;
-  updateCard?(messageId: string, card: Record<string, unknown>): Promise<void>;
+  updateCard?(messageId: string, card: Record<string, unknown>, guard?:()=>void): Promise<void>;
   collect(): Promise<InboxThing[]>; status(): { connected: boolean; reason?: string };
 }
 export type FeishuBotFactory = (options: FeishuOptions) => FeishuBotAdapter;
@@ -121,7 +126,7 @@ type StatusSource = Pick<FeishuMessageSource, 'chatId' | 'parentId' | 'rootId'>;
 type StatusGrant = { source: StatusSource; fingerprint: string; binding?: ChatBinding };
 type GroupTaskOrigin = { chatId: string; messageId: string; binding: string; todoId: string };
 type TopicStamp = { todoId: string; grant: string; opening: boolean; sourceOpening?: true; authorityVersion?: string; externalSource?: { chatId: string; messageId: string } };
-type Envelope = { privateQuoteBinding?:string; privatePostImages?:true; privatePost?:true; privateForward?:true; threadSearchGrant?:string; privateFileBinding?:string; privateImageBinding?:string; topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
+type Envelope = { reviewRunId?:string; privateQuoteBinding?:string; privatePostImages?:true; privatePost?:true; privateForward?:true; threadSearchGrant?:string; privateFileBinding?:string; privateImageBinding?:string; topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
 type Routed = Route & Envelope & { envelopeId: string; replyReference?: ({ text: string; truncated: boolean } | { unavailable: true }) & {imageSourceId?:string;imagesUnavailable?:true;fileSourceId?:string;filesUnavailable?:true} };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
 type SentQuestion = DecisionNudgeCard & { questionId:string; version:number; inputId:string; navigation:string; closeAttempted?:true; webOnly?:true; contextFingerprint?:string };
@@ -1311,9 +1316,97 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     statusReads.set(eventKey, job);
     return job;
   }
+  function reviewSource(bot:FeishuBotSettings,paired:Owner,runId:string) {
+    const run=app.store.get<Run>('runs',runId);
+    if(!run?.sourceMessageId || !run.todoId || !app.taskClosure || !active(bot.id,runtime(bot.id).epoch,bot.revision))return;
+    const input=privateTurn(bot,paired,run.sourceMessageId);
+    const message=app.store.get<Message>('messages','run-result:'+run.id);
+    if(!input || input.replyTo || !message || message.role!=='assistant' || message.status!=='done' || message.origin!=='result'
+        || message.runResult?.runId!==run.id || message.runResult.source!==run.resultSource || message.runResult.status!=='completed'
+        || run.status!=='completed' || message.replyTo!==input.id || message.conversationId!==run.conversationId
+        || run.conversationId!==input.conversationId || run.projectId!==input.projectId || message.projectId!==run.projectId
+        || message.todoId!==run.todoId || (input.todoId!==undefined && input.todoId!==run.todoId))return;
+    try {
+      const route=sourceRoute(bot,input.id);
+      if(!route?.sourceMessageId || route.audienceGeneration!==audienceGeneration(bot.id) || route.topic || route.groupTaskOrigin ||
+          route.chatBinding?.agentTarget || groupTasks.recalled(bot.id,bot.appId,paired.chatId,route.sourceMessageId))return;
+      const original=app.store.get<Envelope>('feishu.bot.envelopes',route.envelopeId);
+      const envelope=app.mailboxes.list().find(e=>e.id===route.envelopeId);
+      if(original?.privateSenderId!==paired.senderId || envelope?.status!=='completed' || envelope.origin?.kind!=='direct' ||
+          envelope.sourceMessageId!==route.sourceMessageId ||
+          envelope.eventKey!=='feishu-in:'+JSON.stringify([bot.id,bot.appId,route.sourceMessageId]) || envelope.target!==paired.chatId)return;
+      return {run,message};
+    } catch { return; }
+  }
+  function pendingReview(anchor:ReviewAnchor,bot:FeishuBotSettings,paired:Owner) {
+    if(anchor.botId!==bot.id || anchor.binding!==groupReadBinding(bot,paired) ||
+        groupTasks.recalled(bot.id,bot.appId,paired.chatId,anchor.platformId))return;
+    const source=reviewSource(bot,paired,anchor.runId);
+    const item=source && app.taskClosure?.review.pendingForOwner(anchor.todoId);
+    if(!item || item.runId!==anchor.runId || item.todoId!==source.run.todoId || item.evidenceVersion!==anchor.evidence)return;
+    // Render the actual output covered by the grant, even when the earlier
+    // result message was saved before the execution evidence changed.
+    const evidenceText=['执行：'+source.run.prompt,'实际结果：'+source.run.output,'结果来源：'+item.resultSource].join('\n');
+    return {...source,item,evidenceText,grant:digest([anchor.binding,anchor.platformId,item.runId,item.version,item.evidenceVersion])};
+  }
+  async function refreshReview(bot:FeishuBotSettings,anchor:ReviewAnchor) {
+    const paired=owner(bot), state=runtime(bot.id), adapter=state.adapter, epoch=state.epoch;
+    if(!paired?.senderId || !adapter?.updateCard || !receiptReady(bot.id))return;
+    const live=pendingReview(anchor,bot,paired);
+    if(!live || anchor.attempted===live.grant)return;
+    const card=runReviewCard(live.item,live.evidenceText,live.grant,webBase);
+    if(!card)return;
+    const guard=()=>{
+      if(!active(bot.id,epoch,bot.revision) || state.adapter!==adapter || !owner(bot) ||
+          pendingReview(anchor,bot,owner(bot)!)?.grant!==live.grant)throw noDelivery('验收卡的来源或证据已变化。');
+    };
+    guard();
+    app.store.put(reviewAnchors,anchor.runId,{...anchor,attempted:live.grant});
+    let attempted=false,updated=false;
+    const patch=async()=>{
+      guard();
+      if(attempted)throw noDelivery('本轮验收卡已尝试更新。');
+      attempted=true;
+      await adapter.updateCard!(anchor.platformId,card,guard);
+      updated=true;
+      return null;
+    };
+    const hooks=app.plugins?.invocations;
+    if(hooks){
+      const payload={botId:bot.id,accountId:bot.appId,chatId:paired.chatId,target:paired.chatId,key:'run-review:'+live.grant,text:'更新原执行结果的验收入口'};
+      await hooks.invoke('channel.send',payload,async input=>{
+        if(!input || typeof input!=='object' || Array.isArray(input) || Object.entries(payload).some(([k,v])=>input[k]!==v))
+          throw noDelivery('验收卡更新目标已变化。');
+        return patch();
+      });
+    }else await patch();
+    if(!updated)return;
+    guard();
+    app.store.put(reviewAnchors,anchor.runId,{...anchor,attempted:live.grant,confirmed:live.grant});
+  }
   function cardAction(bot: FeishuBotSettings, epoch: number, input: FeishuCardAction): Record<string, unknown> {
     const fail = { toast: { type: 'info', content: '卡片已过期或配对已改变，请在主人私聊重新发送「工作台」' } };
     const value = input.value;
+    if(value.kind==='workbench.runReview'){
+      const paired=owner(bot);
+      if(!active(bot.id,epoch,bot.revision) || !paired?.senderId || paired.senderId!==input.operatorId || paired.chatId!==input.chatId ||
+          typeof value.runId!=='string' || !['accept','rework'].includes(String(value.action)))return fail;
+      const anchor=app.store.get<ReviewAnchor>(reviewAnchors,value.runId);
+      const live=anchor && anchor.platformId===input.messageId && pendingReview(anchor,bot,paired);
+      if(!live || live.grant!==value.grant || anchor?.confirmed!==live.grant)return {toast:{type:'info',content:'本轮验收卡已失效，请到工作台核对当前执行。'}};
+      const defects=input.formValue?.defects;
+      if(value.action==='rework' && (typeof defects!=='string' || !defects.trim() || [...defects].length>1000))
+        return {toast:{type:'error',content:'请填写具体缺陷（最多 1000 字）。'}};
+      try {
+        const {todoId,runId,version,evidenceVersion}=live.item;
+        const result=app.taskClosure!.review.decide({todoId,runId,version,evidenceVersion,action:value.action==='accept'?'accept':'rework',
+          ...(typeof defects==='string' && value.action==='rework' && {defects})});
+        const content=result.status==='accepted'?'已验收通过，待办已完成。':result.status==='pending'?'返工派发已受理，请核对新一轮执行。':'返工结果待核对，请在工作台查看回执。';
+        const summary=buildFeishuMessageCard(live.evidenceText+'\n'+content,{title:'验收处理结果',webBase,
+          route:'projects/'+encodeURIComponent(live.item.projectId || 'all')+'/todos/detail/'+encodeURIComponent(todoId)});
+        return {toast:{type:'info',content},...(summary && {card:{type:'raw',data:summary}})};
+      }catch{return {toast:{type:'error',content:'验收未确认，请核对本轮证据、返工缺陷和工作台状态。'}};}
+    }
     if (value.kind === 'workbench.stop') {
       const paired = owner(bot);
       if (!active(bot.id, epoch, bot.revision) || !paired?.senderId || input.operatorId !== paired.senderId
@@ -3057,6 +3150,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!active(id, epoch, bot.revision)) { if (state.adapter === adapter) state.adapter = undefined; await adapter.close(); }
       else {
         state.readyEpoch = epoch;
+        for(const anchor of app.store.list<ReviewAnchor>(reviewAnchors))if(anchor.botId===bot.id)
+          void track(bot.id,refreshReview(bot,anchor));
         await topicReceipts.retryReady();
         for (const run of app.store.list<Run>('runs')) {
           if (run.status === 'unknown' && run.sourceMessageId?.startsWith('feishu-start:')
@@ -3446,6 +3541,20 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
             { entryId: entry.id, text: body.slice(0, 4000), truncated: body.length > 4000 });
         };
       }
+      if (stamp?.reviewRunId && paired?.senderId && paired.chatId===target && entry.replyTo){
+        const source=reviewSource(bot,paired,stamp.reviewRunId);
+        if(source && source.run.sourceMessageId===entry.replyTo && entry.eventKey==='feishu-reply:'+JSON.stringify([bot.id,bot.appId,entry.replyTo,source.message.id])){
+          const previous=context.onSent, binding=groupReadBinding(bot,paired), evidence=evidenceVersion(source.run);
+          context.onSent=(id,type)=>{
+            previous?.(id,type);
+            if(type!=='interactive' || !id || !owner(bot) || groupReadBinding(bot,owner(bot)!)!==binding ||
+              app.store.get(reviewAnchors,source.run.id))return;
+            const anchor:ReviewAnchor={botId:bot.id,binding,platformId:id,runId:source.run.id,todoId:source.run.todoId!,evidence};
+            app.store.put(reviewAnchors,source.run.id,anchor);
+            void track(bot.id,refreshReview(bot,anchor));
+          };
+        }
+      }
       const replyThread = stamp?.conversationThreadId ?? stamp?.chatBinding?.conversationThreadId ?? stamp?.statusGrant?.binding?.conversationThreadId;
       if (replyThread && context.onSent) {
         const recordDelivery = context.onSent;
@@ -3486,7 +3595,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const run = async () => {
       try {
       if (app.plugins?.invocations) await app.plugins.invocations.invoke('channel.send', { botId, accountId: bot.appId, chatId: target, target, text, key }, async input => {
-        if ((stamp?.inboxReplySource || stamp?.dashboard || stamp?.questionId || stamp?.command || stamp?.progressMessageId) && (!input || typeof input !== 'object' || Array.isArray(input) || input.text !== text)) throw noDelivery('确认的回复正文不能被渠道钩子改写');
+        if ((stamp?.reviewRunId || stamp?.inboxReplySource || stamp?.dashboard || stamp?.questionId || stamp?.command || stamp?.progressMessageId) && (!input || typeof input !== 'object' || Array.isArray(input) || input.text !== text)) throw noDelivery('确认的回复正文不能被渠道钩子改写');
         if (!input || typeof input !== 'object' || Array.isArray(input) || input.botId !== botId || input.accountId !== bot.appId
           || input.chatId !== target || input.target !== target || input.key !== key || typeof input.text !== 'string' || !input.text.trim()) throw noDelivery('渠道钩子不能改变机器人、目标或动作标识');
         await deliver(input.text); return null;
@@ -3575,12 +3684,24 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const questionId = noticeId && app.store.get<{inputId?:string}>('interaction-origins',noticeId)?.inputId === message.replyTo ? noticeId : undefined;
     const withdrawn = questionId && app.store.get<Card>('interactions',questionId)?.withdrawnReason;
     if (withdrawn === 'user_spoke' || withdrawn === 'owner_mismatch') return;
+    const paired=owner(bot);
+    const reviewRunId=paired?.senderId && message.runResult?.runId && reviewSource(bot,paired,message.runResult.runId)?.message.id===message.id ? message.runResult.runId : undefined;
+    const pending=reviewRunId && message.todoId ? app.taskClosure?.review.pendingForOwner(message.todoId) : undefined;
+    const destination=reviewRunId && reviewLocation(message,webBase,pending?.runId===reviewRunId?pending:undefined);
+    const privateResult=message.runResult && message.todoId && !route.group && !route.relay && !route.command && !route.groupTaskOrigin && !route.resultRelayEntryId && route.target===paired?.chatId;
+    const resultText=privateResult ? message.text+'\n待办验收入口：'+(destination || '工作台 → 待办详情 → 执行验收') : message.text;
     const entry = await put(bot, { direction: 'outbox', eventKey: `feishu-reply:${JSON.stringify([bot.id, bot.appId, route.inputId, message.id])}`,
-      title: bot.name, text: message.text, target: route.target, replyTo: route.inputId, sourceMessageId: route.sourceMessageId, requiresConfirmation: false }, route.scope, { questionId, topic: route.topic, groupTaskOrigin: route.groupTaskOrigin, resultRelayEntryId: route.resultRelayEntryId, chatProject: route.chatProject, conversationThreadId: route.conversationThreadId, privateSenderId: route.privateSenderId, chatBinding: route.chatBinding, group: route.group, command: route.command, relay: route.relay, platformReplyTo: route.platformReplyTo ?? (questionId ? route.sourceMessageId : undefined), threadId: route.threadId });
+      title: bot.name, text: resultText, target: route.target, replyTo: route.inputId, sourceMessageId: route.sourceMessageId, requiresConfirmation: false }, route.scope, { reviewRunId, questionId, topic: route.topic, groupTaskOrigin: route.groupTaskOrigin, resultRelayEntryId: route.resultRelayEntryId, chatProject: route.chatProject, conversationThreadId: route.conversationThreadId, privateSenderId: route.privateSenderId, chatBinding: route.chatBinding, group: route.group, command: route.command, relay: route.relay, platformReplyTo: route.platformReplyTo ?? (questionId ? route.sourceMessageId : undefined), threadId: route.threadId });
     if (active(bot.id, epoch, bot.revision) && entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
   }
   const off = app.events.subscribe(event => {
     if (closed || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) return;
+    if(event.type==='run-review.changed' && typeof event.data.todoId==='string'){
+      const item=app.taskClosure?.review.pendingForOwner(event.data.todoId);
+      const anchor=item && app.store.get<ReviewAnchor>(reviewAnchors,item.runId);
+      const bot=anchor && settings.list().find(b=>b.id===anchor.botId);
+      if(bot && anchor) void track(bot.id,refreshReview(bot,anchor));
+    }
     if (event.type === 'notifications.message' && typeof event.data.messageId === 'string' && event.data.messageId.startsWith('interaction-notice:')) {
       const id = event.data.messageId.slice('interaction-notice:'.length);
       const notice = topicInteractionNotice(app.store, id);

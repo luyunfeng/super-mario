@@ -584,10 +584,11 @@ export function createFeishuIntegration(options: FeishuOptions) {
       removeId ? {} : { reaction_type: { emoji_type: emoji } }, bearer, signal, removeId ? 'DELETE' : 'POST', 'error');
     return string(object(data.data).reaction_id);
   }
-  async function updateCard(messageId: string, card: Record<string, unknown>) {
+  async function updateCard(messageId: string, card: Record<string, unknown>, guard?:()=>void) {
     if (!messageId.trim()) throw new Error('卡片更新缺少消息标识');
     const epoch = generation, signal = controller.signal, bearer = await getToken();
     if (closed || epoch !== generation) throw new Error('飞书卡片更新已取消');
+    guard?.();
     await request(`/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, { content: JSON.stringify(card) }, bearer, signal, 'PATCH');
     if (closed || epoch !== generation) throw new Error('飞书卡片更新已取消');
   }
