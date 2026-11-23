@@ -221,16 +221,20 @@ test('Chromium 用户返工只创建一个新 Run，重复 HTTP 决定不双发'
   await expect(link).toHaveAttribute('href', '#projects/' + f.project.id + '/runs/' + next.runId);
   const firstRound = history.locator('[data-round="1"]');
   await expect(firstRound).not.toContainText('决定时间未记录');
-  // Replay a historical response that retained only the dispatch receipt timestamp.
+  // Exercise older receipts and an unconfirmed dispatch in successive rounds.
   await f.page.route('**/todos/' + f.todo.id + '/history', async route => {
     const response = await route.fetch();
     const data = await response.json();
-    delete data.rounds.find((round: { number: number }) => round.number === 1).decisions[0].at;
+    const decisions = data.rounds.find((round: { number: number }) => round.number === 1).decisions;
+    delete decisions[0].at;
+    data.rounds.find((round: { number: number }) => round.number === 2).decisions.push({ action: 'rework',
+      dispatchStatus: 'unknown', receiptUpdatedAt: next.updatedAt, dispatchNote: '服务重启时仍在等待派发结果' });
     await route.fulfill({ response, json: data });
   });
   await history.getByRole('button', { name: '重新读取历史' }).click();
   await expect(firstRound).toContainText('决定时间未记录');
   await expect(firstRound).toContainText('回执更新于');
+  await expect(history.locator('[data-round="2"]')).toContainText('返工派发结果未知 · 服务重启时仍在等待派发结果');
   await link.click();
   await expect(history).toHaveCount(0);
   await expect(f.page).toHaveURL(new RegExp('/runs/' + next.runId + '$'));

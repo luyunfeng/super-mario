@@ -229,6 +229,7 @@ test('unknown dispatch and malformed receipts persist and never automatically re
   const result = f.review.decide(input);
   assert.equal(result.status, 'unknown');
   assert.match(result.error!, /不自动重试/);
+  assert.equal(result.unknownReason, 'dispatch');
   assert.deepEqual(f.review.decide(input), result);
   f.store.close();
   const store = createStore(f.path);
@@ -242,7 +243,7 @@ test('unknown dispatch and malformed receipts persist and never automatically re
   const bad = fixture(t);
   bad.setDispatch(() => ({ id: 'missing' } as Run));
   const badInput = decision(bad.review.attach({ todoId: 'todo', runId: 'original' }), 'rework');
-  assert.equal(bad.review.decide(badInput).status, 'unknown');
+  assert.equal(bad.review.decide(badInput).unknownReason, 'receipt');
   bad.review.decide(badInput);
   assert.equal(bad.calls.length, 1);
 });
@@ -264,6 +265,7 @@ test('crash after durable intent recovers dispatching as unknown without sending
     const restored = createRunReview({ ...f.options, store, events: createEventBus(store) });
     assert.equal(restored.get('todo').status, 'unknown');
     const recovered = store.get<typeof receipt>('run-review.intents', receipt.key)!;
+    assert.equal(recovered.result.unknownReason, 'restart');
     assert.equal(recovered.decidedAt, receipt.decidedAt);
     assert.equal(recovered.result.updatedAt, new Date().toISOString());
     assert.equal(restored.decide(input).status, 'unknown');

@@ -24,10 +24,11 @@ test('todo history pages real stored attempts and review decisions without writi
     store.put('run-review.intents', 'rework', { request: { todoId: 'task', runId: 'r21', action: 'rework', defects: '补充失败依据' }, result: { updatedAt: stamp } });
     for (const [requestRun, status, resultRun] of [
       ['r03', 'pending', 'r22'], ['r04', 'unknown', 'r22'], ['r05', 'dispatching', 'r05'],
-      ['r06', 'pending', 'foreign'], ['r07', 'pending', 'other-todo'], ['r08', 'pending', 'r08'],
+      ['r09', 'unknown', 'r09'], ['r06', 'pending', 'foreign'], ['r07', 'pending', 'other-todo'], ['r08', 'pending', 'r08'],
     ] as const) {
       store.put('run-review.intents', requestRun, { request: { todoId: 'task', runId: requestRun, action: 'rework' },
-        result: { todoId: 'task', updatedAt: stamp, status, runId: resultRun } });
+        result: { todoId: 'task', updatedAt: stamp, status, runId: resultRun,
+          ...(requestRun === 'r09' && { error: '服务重启，派发结果未知，不自动重试' }) } });
     }
     const card = { runId: 'r22', projectId: 'A', title: '核对答复', status: 'answered', answeredAt: stamp, kind: 'question' };
     for (const delivery of ['confirmed', 'failed', 'unknown']) store.put('interactions', delivery, { ...card, id: delivery, delivery });
@@ -50,6 +51,8 @@ test('todo history pages real stored attempts and review decisions without writi
     assert.equal(decision('r03').receiptUpdatedAt, stamp);
     assert.equal(decision('r05').at, stamp);
     assert.equal(decision('r04').dispatchStatus, 'unknown');
+    assert.equal(decision('r04').dispatchNote, undefined);
+    assert.equal(decision('r09').dispatchNote, '服务重启时仍在等待派发结果');
     assert.equal(decision('r05').dispatchStatus, 'dispatching');
     for (const id of ['r04', 'r05', 'r06', 'r07', 'r08', 'r21']) assert.equal(decision(id).reworkRunId, undefined);
     assert.doesNotMatch(JSON.stringify(first), /SECRET/);

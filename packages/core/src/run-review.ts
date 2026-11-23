@@ -4,6 +4,8 @@ import { reworkPrompt } from './prompts.ts';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
 import type { Message, Run, Todo } from '../../protocol/src/index.ts';
 
+export const reworkRestartError = '服务重启，派发结果未知，不自动重试';
+
 export class RunReviewError extends Error {
   readonly status: 400 | 404 | 409;
   constructor(message: string, status: 400 | 404 | 409 = 400) {
@@ -22,6 +24,7 @@ export interface RunReview {
   doneWhen: string;
   status: 'pending' | 'accepted' | 'dispatching' | 'unknown' | 'reopened';
   runIds: string[];
+  unknownReason?: 'restart' | 'dispatch' | 'receipt';
   error?: string;
   createdAt: string;
   updatedAt: string;
@@ -160,7 +163,7 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
   store.transaction(() => {
     for (const item of store.list<RunReview>(reviews)) {
       if (item.status !== 'dispatching') continue;
-      const next: RunReview = { ...item, status: 'unknown', error: '服务重启，派发结果未知，不自动重试', updatedAt: new Date().toISOString() };
+      const next: RunReview = { ...item, status: 'unknown', unknownReason: 'restart', error: reworkRestartError, updatedAt: new Date().toISOString() };
       store.put(reviews, item.todoId, next);
       for (const intent of store.list<Intent>(intents)) {
         if (intent.result.todoId === item.todoId && intent.result.status === 'dispatching') store.put(intents, intent.key, { ...intent, decidedAt: intent.decidedAt ?? intent.result.updatedAt, result: next });
@@ -278,8 +281,10 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
       }
       // Intent committed before calling arbitrary observers or dispatch code.
       let result = claim.receipt.result;
+      let unknownReason: 'dispatch' | 'receipt' = 'dispatch';
       try {
         const dispatched = dispatch(structuredClone(claim.receipt.input!), key);
+        unknownReason = 'receipt';
         if (!dispatched || typeof dispatched.id !== 'string' || !dispatched.id.trim() || result.runIds.includes(dispatched.id)) throw new Error('派发未返回新的有效Run');
         const actual = run(dispatched.id);
         binding(result.todoId, actual, result.doneWhen);
@@ -290,7 +295,7 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
         if (actual.nativeResume) throw new Error('返工不能使用nativeResume');
         result = { ...result, runId: actual.id, runIds: [...result.runIds, actual.id], evidenceVersion: evidenceVersion(actual), status: 'pending', updatedAt: new Date().toISOString() };
       } catch (error) {
-        result = { ...result, status: 'unknown', error: `派发结果未知，不自动重试：${error instanceof Error ? error.message : String(error)}`, updatedAt: new Date().toISOString() };
+        result = { ...result, status: 'unknown', unknownReason, error: `派发结果未知，不自动重试：${error instanceof Error ? error.message : String(error)}`, updatedAt: new Date().toISOString() };
       }
       store.transaction(() => {
         store.put(reviews, result.todoId, result);

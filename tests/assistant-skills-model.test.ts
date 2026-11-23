@@ -602,6 +602,11 @@ test('Web 和飞书项目助手查返工依据，可翻页，跨项目读取被�
       const rework = result.rounds.find((round: { run: { id: string } }) => round.run.id === 'review-1');
       assert.equal(rework.run.status, 'completed');
       assert.equal(rework.review.status, 'pending');
+      const unknown = result.rounds.find((round: { run: { id: string } }) => round.run.id === 'review-2').decisions[0];
+      assert.equal(unknown.dispatchStatus, 'unknown');
+      assert.equal(unknown.dispatchNote, '派发返回的执行回执未通过核验');
+      assert.doesNotMatch(raw, /内部错误详情样本/);
+      assert.match(req.system, /未知不能证明派发失败/);
       assert.match(req.system, /只有 continuationAccepted=true 才能报告原对话已接收后续输入/);
       assert.deepEqual(result.conversationReceipts.map((r: { title: string; continuationAccepted: boolean }) =>
         [r.title, r.continuationAccepted]), [['确认范围', false]]);
@@ -628,6 +633,9 @@ test('Web 和飞书项目助手查返工依据，可翻页，跨项目读取被�
         prompt: '核对合成数据', status: 'completed', output: '合成结果', createdAt: at, updatedAt: at };
       server.app.store.put('runs', run.id, run);
     }
+    server.app.store.put('run-review.intents', 'unknown-history', { request: { todoId, runId: 'review-2', action: 'rework' },
+      result: { todoId, runId: 'review-2', status: 'unknown', unknownReason: 'receipt',
+        error: '内部错误详情样本', updatedAt: new Date(2000).toISOString() } });
     server.app.store.put('run-review.intents', 'review-history', { request: { todoId, runId: 'review-0', action: 'rework', defects: '合计缺一行' },
       result: { todoId, runId: 'review-1', status: 'pending', updatedAt: new Date(1000).toISOString() } });
     server.app.store.put('run-reviews', todoId, { todoId, runId: 'review-1', status: 'pending', version: 2, updatedAt: new Date(1000).toISOString() });

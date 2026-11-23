@@ -48,7 +48,7 @@ export function openTodoHistory({ api, store, router, todo }) {
           `历史决定：${decision.action === 'accept' ? '用户已验收' : '用户要求返工'} · ${decision.at ? formatDate(decision.at, true) : '决定时间未记录'}${decision.defects ? ' · ' + decision.defects : ''}`,
           decision.receiptUpdatedAt && decision.receiptUpdatedAt !== decision.at &&
             h('span', null, '回执更新于 ' + formatDate(decision.receiptUpdatedAt, true)),
-          decision.dispatchStatus === 'unknown' && h('span', null, '返工派发结果未知'),
+          decision.dispatchStatus === 'unknown' && h('span', null, '返工派发结果未知 · ' + (decision.dispatchNote || '原因未记录')),
           decision.dispatchStatus === 'dispatching' && h('span', null, '正在派发返工'),
           decision.reworkRunId && runLink('打开本次返工执行', decision.reworkRunId, projectId))),
         runLink('打开执行记录', run.id, projectId)));

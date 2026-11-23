@@ -1,5 +1,5 @@
 import type { Card } from './interactions.ts';
-import type { ReviewEvidenceReader, RunReview, RunReviewDecision } from './run-review.ts';
+import { reworkRestartError, type ReviewEvidenceReader, type RunReview, type RunReviewDecision } from './run-review.ts';
 import type { Store } from '../../plugin-sdk/src/index.ts';
 import type { Message, Run, Todo } from '../../protocol/src/index.ts';
 import type { TodoExecutionRound, TodoHistory } from '../../protocol/src/todo-history.ts';
@@ -51,7 +51,14 @@ export function readTodoHistory(store: Pick<Store, 'get' | 'list'>, id: string, 
           const at = decidedAt ?? (request.action === 'accept' || result.status === 'dispatching' ? result.updatedAt : undefined);
           const decision = { action: request.action, defects: request.defects, at, receiptUpdatedAt: result.updatedAt };
           if (request.action !== 'rework') return decision;
-          if (result.status === 'dispatching' || result.status === 'unknown') return { ...decision, dispatchStatus: result.status };
+          if (result.status === 'dispatching') return { ...decision, dispatchStatus: result.status };
+          if (result.status === 'unknown') {
+            // External dispatch errors can contain private request details. Expose the recorded stage only.
+            const reasons = { restart: '服务重启时仍在等待派发结果', dispatch: '派发调用未正常返回', receipt: '派发返回的执行回执未通过核验' };
+            const reason = result.unknownReason ?? (result.error === reworkRestartError ? 'restart' : undefined);
+            const dispatchNote = result.todoId === id && reason ? reasons[reason] : undefined;
+            return { ...decision, dispatchStatus: result.status, dispatchNote };
+          }
           // Only a committed receipt identifies the successor, even when later rounds exist.
           if (result.status === 'pending' && result.todoId === id && result.runId !== run.id && scopedIds.has(result.runId)) {
             return { ...decision, reworkRunId: result.runId };
