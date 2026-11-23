@@ -44,6 +44,8 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   const main=await input('原有主人私聊锚点');
   await first.send('/new 核对独立方案', 'first');
   const independent=await input('核对独立方案');
+  await first.send('[合成资料甲](https://one.example.test/a) 和 [合成资料乙](https://two.example.test/b)', 'two-source-links');
+  await input('[合成资料甲](https://one.example.test/a) 和 [合成资料乙](https://two.example.test/b)');
   const base = '/api/v1/feishu/bots/';
   const get = (path: string) => fetch(server.url + path, { headers: { authorization: 'Bearer ' + token } });
   let thread = '';
@@ -78,6 +80,8 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   const drawer = page.getByRole('dialog', { name: '独立对话记录' });
   await drawer.getByRole('button', { name: /核对独立方案/ }).click();
   await expect(drawer.locator('section').first()).toContainText('核对独立方案');
+  await expect(drawer.getByRole('link',{name:'合成资料甲',exact:true}).first()).toHaveAttribute('href','https://one.example.test/a');
+  await expect(drawer.getByRole('link',{name:'合成资料乙',exact:true}).first()).toHaveAttribute('rel','noopener noreferrer');
   await expect(drawer).not.toContainText('其他机器人的讨论');
   assert.deepEqual(await selection(),prior);
   await first.send('只浏览详情后发送','peek-main');

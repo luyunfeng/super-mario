@@ -1,3 +1,4 @@
+import { renderFormattedText } from '../lib/markdown.js';
 import { copyMessageLinkButton } from '../lib/clipboard.js';
 import { messageFiles } from './message-files.js';
 import { messageImages } from './message-images.js';
@@ -473,7 +474,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       message.quotedFileMessageId && Button({ label:'查看引用文件', size:'sm', onClick:()=>showMessagePosition(message.quotedFileMessageId) }),
       message.quotedFilesUnavailable && h('span',{class:'small muted'},'引用文件不可用'),
       message.quotedImagesUnavailable && h('span',{class:'small muted'},'引用原图不可用'),
-      h('p', { style: 'white-space: pre-wrap' }, message.text), messageImages(api,store,message),messageFiles(api,store,message,[])));
+      h('div', { style: 'white-space: pre-wrap' }, renderFormattedText(message.text, undefined, { reply: message.role === 'assistant', streaming: message.status === 'pending' })), messageImages(api,store,message),messageFiles(api,store,message,[])));
     history.append(...entries(messages));
     const more = older => Button({ label: older ? '加载更早消息' : '加载后续消息', onClick: async (_, button) => {
       try {
