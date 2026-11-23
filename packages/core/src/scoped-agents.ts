@@ -30,7 +30,7 @@ interface Options {
   /** Optional host validation (for example, whether this bot binding is still enabled). */
   executors?: () => ExecutorInfo[];
   botContext?: (conversationId:string, scope?:BotScope, threadId?:string)=>Json;
-  mainSkillCatalog?: () => Promise<string>;
+  mainSkillCatalog?: (assistantId?: string) => Promise<string>;
   mainAssistantProfile?: () => Promise<MainAssistantProfile | undefined>;
   projectInstructions?: (projectId: string) => Promise<string>;
   projectContext?: (projectId:string)=>Json;
@@ -117,8 +117,8 @@ export function createScopedAgents(options: Options) {
     if(!entry){
       const scope:BotScope=projectId?{kind:'project',projectId}:{kind:'global'};
       const assistantId = options.webThreadAssistant?.(id)?.id;
-      const runtime=createAgentRuntime({...options,scope,conversationId,canUseScope:current,botContext:undefined,
-        ...(assistantId && {mainAssistantProfile:undefined, threadAssistantGuidance:() => {
+      const runtime=createAgentRuntime({...options,scope,conversationId,canUseScope:()=>current() && options.webThreadAssistant?.(id)?.id === assistantId,botContext:undefined,
+        ...(assistantId && {skillAssistantId:assistantId,mainAssistantProfile:undefined, threadAssistantGuidance:() => {
           const current = options.webThreadAssistant?.(id);
           if (current?.id !== assistantId) throw new Error('助理与当前对话的绑定已变化，请重新打开');
           return webThreadAssistantGuidance(current);

@@ -252,6 +252,62 @@ test('Web 与飞书项目助手核对计划当次简报的原文', async t => {
   } finally { await server.close(); }
 });
 
+test('独立助理与主助手分别读取自己安装的同名技能，项目会话沿用助理目录', async t => {
+  const skill = 'local-notes';
+  let forgedOwner: string | undefined;
+  const {server, api, ask, requests} = await fixture(t, request => {
+    if (request.lastRole === 'user') {
+      if (!request.tools.includes('assistant_skill_read')) return {role:'assistant', content:'没有技能读取工具'};
+      if (forgedOwner) return call('assistant_skill_read', {name:skill, path:'reference.md', assistantId:forgedOwner}, 'forged');
+      return call('assistant_skill_read', {name:skill, path:'reference.md'}, 'read');
+    }
+    if (request.callId === 'forged') return {role:'assistant', content:JSON.stringify(request.content)};
+    const raw = typeof request.content === 'string' ? request.content : (request.content as {text:string}[])[0].text;
+    return {role:'assistant', content:JSON.parse(raw).text};
+  });
+  try {
+    const project = await api('/projects', {name:'目录隔离'});
+    const profiles = await Promise.all(['甲', '乙'].map(name => api('/assistant-roster', {
+      action:'create', id:randomUUID(), name, instructions:'根据自己的目录工作',
+    })));
+    const urls = ['/assistant-skills', ...profiles.map(p => '/assistant-skills?assistantId=' + p.id)];
+    const labels = ['默认', '甲', '乙'];
+    for (const [index, url] of urls.entries()) {
+      const zip = new JSZip();
+      zip.file('SKILL.md', ['---', 'name: ' + skill, 'description: 目录标记' + labels[index], '---', '阅读 reference.md'].join('\n'));
+      zip.file('reference.md', '合成材料' + labels[index]);
+      const archive = await zip.generateAsync({type:'base64'});
+      const preview = await api(url, {action:'preview', archive});
+      await api(url, {action:'install', archive, digest:preview.digest, revision:0});
+    }
+    for (const [index, url] of urls.entries()) {
+      const item = (await api(url, {action:'list'})).skills[0];
+      assert.equal(item.description, '目录标记' + labels[index]);
+      const thread = index && await api('/assistant-roster', {action:'open', id:profiles[index - 1].id,
+        ...(index === 2 && {projectId:project.id})});
+      const question = '按 local-notes 读取合成材料。';
+      const before = requests.length;
+      assert.equal(await ask(question, thread ? '/web-conversations/' + thread.threadId + '/messages' : '/messages'), '合成材料' + labels[index]);
+      assert.ok(requests[before].tools.includes('assistant_skill_read'));
+      for (const label of labels) assert.equal(requests[before].system.includes('目录标记' + label), label === labels[index]);
+    }
+    assert.equal(await ask('核对这个项目工作会话能否读取技能', '/projects/' + project.id + '/messages'), '没有技能读取工具');
+    forgedOwner = profiles[1].id;
+    const rejected = await ask('测试伪造技能所有者');
+    assert.doesNotMatch(rejected, /合成材料乙/);
+    assert.match(rejected, /自选助理|assistantId: unknown field/i);
+    const remove = await fetch(server.url + '/api/v1' + urls[1], {method:'DELETE',
+      headers:{'content-type':'application/json'}, body:JSON.stringify({name:skill, revision:1})});
+    assert.equal(remove.status, 200);
+    assert.deepEqual((await api(urls[1], {action:'list'})).skills, []);
+    assert.equal((await api(urls[2], {action:'read', name:skill, path:'reference.md'})).text, '合成材料乙');
+    assert.equal((await api(urls[0], {action:'read', name:skill, path:'reference.md'})).text, '合成材料默认');
+    const missing = await fetch(server.url + '/api/v1/assistant-skills?assistantId=' + randomUUID(), {method:'POST',
+      headers:{'content-type':'application/json'}, body:JSON.stringify({action:'list'})});
+    assert.equal(missing.status, 404);
+  } finally { await server.close(); }
+});
+
 test('Web 主助手按目录读取技能及引用文件，停用后下一轮撤回工具与目录', { timeout: 30000 }, async t => {
   const name = 'fixture-check', reference = 'references/sample.md', fact = '合成结果 234';
   const instructions = '请读取 references/sample.md，再根据其中的证据作答。';

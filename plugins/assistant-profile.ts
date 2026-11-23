@@ -17,6 +17,11 @@ const bindings='assistant-profile.thread-bindings', owners='assistant-profile.th
 const uuid4=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const bindingKey=(assistantId:string,projectId?:string)=>JSON.stringify([assistantId,projectId??null]);
 
+export function requireRosterAssistant(store: Pick<Store, 'get'>, id: string): void {
+  if (!uuid4.test(id)) fail(400, '助理 ID 须为 UUID v4');
+  if (store.get<Assistant>(roster,id)?.id !== id) fail(404, '未找到助理');
+}
+
 export function readWebThreadAssistant(store: Pick<Store,'get'>, threadId:string):ReturnType<typeof assistantView>|undefined {
   const owner=store.get<Binding>(owners,threadId);
   if(!owner || owner.threadId!==threadId || store.get<Binding>(bindings,bindingKey(owner.assistantId,owner.projectId))?.threadId!==threadId) return;

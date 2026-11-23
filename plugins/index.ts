@@ -34,7 +34,7 @@ export { createMessageFavorites, messageFavorites } from './message-favorites.ts
 export { createAssistantSkills } from './assistant-skills.ts';
 export { officeWorkerGuide } from './office/guide.ts';
 export { createOfficeDocuments, officeDocuments } from './office/index.ts';
-export { assistantProfile, createAssistantProfile, readWebThreadAssistant } from './assistant-profile.ts';
+export { assistantProfile, createAssistantProfile, requireRosterAssistant, readWebThreadAssistant } from './assistant-profile.ts';
 export { projectInstructions } from './project-instructions.ts';
 export { createConversationSharing } from './conversation-sharing.ts';
 export { createWorkspaceBoard } from './workspace-board.ts';

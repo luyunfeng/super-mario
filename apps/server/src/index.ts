@@ -1358,10 +1358,16 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             throw new InputError('办公文件插件已停用', 503);
           return json(res, 200, await app.plugins.invocations.use('office-documents.manage', await body(req, 17 * 1024 * 1024) as JsonObject));
         }
-        if (path === '/api/v1/assistant-skills' && method === 'POST') {
+        if (path === '/api/v1/assistant-skills' && (method === 'POST' || method === 'DELETE')) {
           if (!app.plugins.list().some(plugin => plugin.id === 'assistant-skills' && plugin.status === 'active'))
             throw new InputError('主助手技能插件已停用', 503);
-          return json(res, 200, await app.plugins.invocations.use('assistant-skills.manage', await body(req, 6 * 1024 * 1024) as JsonObject));
+          const input = await body(req, 6 * 1024 * 1024) as JsonObject;
+          const owners = url.searchParams.getAll('assistantId');
+          if (owners.length > 1 || Object.hasOwn(input, 'assistantId')) throw new InputError('请在查询参数中指定一个助理 ID');
+          if (method === 'DELETE' && input.action !== undefined && input.action !== 'remove') throw new InputError('删除请求只支持移除技能');
+          return json(res, 200, await app.plugins.invocations.use('assistant-skills.manage', {
+            ...input, ...(method === 'DELETE' && {action:'remove'}), ...(owners.length && {assistantId:owners[0]!}),
+          }));
         }
         if (path === '/api/v1/start-page' && method === 'POST') {
           if (!app.plugins.list().some(p => p.id === 'start-page' && p.status === 'active')) throw new InputError('启动页插件已停用', 503);

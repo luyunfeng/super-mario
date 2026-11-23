@@ -120,8 +120,8 @@ async function inspect(raw: Json | undefined, signal: AbortSignal): Promise<Load
   }
 }
 
-function catalog(store: Store): Catalog {
-  return store.get<Catalog>('assistant-skills', 'catalog') ?? { skills: [], revision: 0 };
+function catalog(store: Store, collection: string): Catalog {
+  return store.get<Catalog>(collection, 'catalog') ?? { skills: [], revision: 0 };
 }
 
 // Builtins travel with the release. Only the user-installed catalog has a database revision.
@@ -129,7 +129,7 @@ function list(book: Catalog, guides: typeof workGuide[]) {
   return { ...book, builtinSkills: guides.map(({ name, description }) => ({ name, description })) };
 }
 
-function resource(store: Store, guides: typeof workGuide[], nameValue: Json | undefined, pathValue: Json | undefined) {
+function resource(store: Store, collection: string, guides: typeof workGuide[], nameValue: Json | undefined, pathValue: Json | undefined) {
   const path = filePath(pathValue === undefined ? 'SKILL.md' : pathValue);
   const builtin = guides.find(guide => guide.name === nameValue);
   if (builtin) {
@@ -138,7 +138,7 @@ function resource(store: Store, guides: typeof workGuide[], nameValue: Json | un
     return { name: builtin.name, path, text };
   }
   const name = skillName(nameValue);
-  const raw = store.get<string>('assistant-skills.files', name + '/' + path);
+  const raw = store.get<string>(collection + '.files', name + '/' + path);
   if (raw === undefined) fail(404, '技能文件不存在');
   const bytes = Buffer.from(raw, 'base64');
   let text: string;
@@ -154,19 +154,29 @@ function keys(input: JsonObject, allowed: readonly string[]) {
   if (Object.keys(input).some(key => !allowed.includes(key))) fail(400, '技能请求包含未知字段');
 }
 
-export function createAssistantSkills(getMachines: () => MachineClient | undefined = () => undefined): Extension {
+export function createAssistantSkills(getMachines: () => MachineClient | undefined = () => undefined,
+  requireAssistant?: (id: string) => void): Extension {
   return {
     id: 'assistant-skills', name: '助手技能', capabilities: ['assistant.skills'],
     permissions: ['service.provide:assistant-skills.manage', 'service.provide:assistant-skills.machine-catalog', 'contribute:tools', 'store.read', 'store.write'],
     activate(context) {
-      activateInstalledSkills(context);
+      activateInstalledSkills(context, requireAssistant);
       registerMachineSkillCatalog(context, getMachines);
     },
   };
 }
 
-function activateInstalledSkills(context: ExtensionContext) {
+function activateInstalledSkills(context: ExtensionContext, requireAssistant?: (id: string) => void) {
   const { store } = context;
+  // The default namespace is also the legacy catalog; an unknown owner never falls back to it.
+  function collectionFor(owner: Json | undefined): string {
+    if (owner === undefined) return 'assistant-skills';
+    if (typeof owner !== 'string' || !owner) fail(400, '助理 ID 无效');
+    if (!requireAssistant) fail(503, '助理名册不可用');
+    const id = owner.toLowerCase();
+    requireAssistant(id);
+    return 'assistant-skills.by-assistant.' + id;
+  }
   const guides = () => context.contributions.list('tools').some(item => item.value.name === 'office_create')
     ? [workGuide, officeGuide] : [workGuide];
   const lifetime = new AbortController();
@@ -175,9 +185,10 @@ function activateInstalledSkills(context: ExtensionContext) {
     if (!input || typeof input !== 'object' || Array.isArray(input) || typeof input.action !== 'string' || !Object.hasOwn(fields, input.action))
       fail(400, '技能操作无效');
     const action = input.action as keyof typeof fields;
-    keys(input, ['action', ...fields[action]]);
-    if (action === 'list') return list(catalog(store), guides());
-    if (action === 'read') return resource(store, guides(), input.name, input.path);
+    keys(input, ['action', 'assistantId', ...fields[action]]);
+    const collection = collectionFor(input.assistantId);
+    if (action === 'list') return list(catalog(store, collection), guides());
+    if (action === 'read') return resource(store, collection, guides(), input.name, input.path);
     const revision = input.revision;
     if (action !== 'preview' && (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0 || revision >= Number.MAX_SAFE_INTEGER))
       fail(400, '技能目录版本无效');
@@ -189,8 +200,9 @@ function activateInstalledSkills(context: ExtensionContext) {
       inspecting = true;
       try { loaded = await inspect(input.archive, signal); } finally { inspecting = false; }
       signal.throwIfAborted();
+      collectionFor(input.assistantId);
       if (action === 'preview') {
-        const book = catalog(store), name = loaded.info.name;
+        const book = catalog(store, collection), name = loaded.info.name;
         if (book.skills.some(skill => skill.name === name)) fail(409, '同名技能已安装');
         if (book.skills.length >= 32) fail(400, '最多可安装 32 个技能');
         return { ...loaded.info, files: [...loaded.files.keys()].sort(), digest: loaded.digest };
@@ -200,24 +212,24 @@ function activateInstalledSkills(context: ExtensionContext) {
     if (action === 'remove' && guides().some(guide => guide.name === input.name)) fail(409, '内置技能无法移除');
     const name = loaded ? loaded.info.name : skillName(input.name);
     return store.transaction(() => {
-      const book = catalog(store);
+      const book = catalog(store, collection);
       if (revision !== book.revision) fail(409, '技能目录已更新，请重新加载');
       const index = book.skills.findIndex(skill => skill.name === name);
       if (loaded) {
         if (index >= 0) fail(409, '同名技能已安装');
         if (book.skills.length >= 32) fail(400, '最多可安装 32 个技能');
-        for (const [path, data] of loaded.files) store.put('assistant-skills.files', name + '/' + path, data.toString('base64'));
-        store.put('assistant-skills.paths', name, [...loaded.files.keys()]);
+        for (const [path, data] of loaded.files) store.put(collection + '.files', name + '/' + path, data.toString('base64'));
+        store.put(collection + '.paths', name, [...loaded.files.keys()]);
         book.skills.push(loaded.info);
         book.skills.sort((a, b) => a.name.localeCompare(b.name));
       } else {
         if (index < 0) fail(404, '技能不存在');
-        for (const path of store.get<string[]>('assistant-skills.paths', name)!) store.remove('assistant-skills.files', name + '/' + path);
-        store.remove('assistant-skills.paths', name);
+        for (const path of store.get<string[]>(collection + '.paths', name)!) store.remove(collection + '.files', name + '/' + path);
+        store.remove(collection + '.paths', name);
         book.skills.splice(index, 1);
       }
       book.revision++;
-      store.put('assistant-skills', 'catalog', book);
+      store.put(collection, 'catalog', book);
       return list(book, guides());
     });
   });
@@ -227,10 +239,11 @@ function activateInstalledSkills(context: ExtensionContext) {
     async execute(args, signal) {
       signal.throwIfAborted();
       lifetime.signal.throwIfAborted();
-      keys(args, ['name', 'path', 'offset']);
+      keys(args, ['name', 'path', 'offset', 'assistantId']);
+      const collection = collectionFor(args.assistantId);
       const offset = args.offset === undefined ? 0 : args.offset;
       if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) fail(400, '阅读偏移须为非负整数');
-      const { name, path, text } = resource(store, guides(), args.name, args.path);
+      const { name, path, text } = resource(store, collection, guides(), args.name, args.path);
       const page: string[] = [];
       let position = 0;
       // Iterate Unicode code points without allocating an array for the entire resource.
