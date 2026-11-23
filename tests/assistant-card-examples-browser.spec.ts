@@ -13,7 +13,7 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await writeFile(join(extension,'super-mario.extension.json'),JSON.stringify({id:'review.local',version:'1.0.0',apiVersion:1,main:'index.mjs',navigation:[{id:'notes',label:'打开评审备注',route:'#agent/extensions/review.local/notes'}]}));
   await writeFile(join(extension,'index.mjs'),`export default {id:'review.local',name:'合成评审',capabilities:[],activate(ctx){
     ctx.contribute('web_extensions','patch',{slot:'advanced-interface',renderer:'diff',title:'变更摘录',patch:'-before\\n+<img src=x>\\n',fallback:'新增一行'});
-    ctx.contribute('web_extensions','chart',{slot:'advanced-interface',renderer:'chart',kind:'bar',title:'数量变化',points:[{label:'昨日',value:-3},{label:'今日',value:5}],fallback:'数量变化摘要'});
+    ctx.contribute('web_extensions','chart',{slot:'advanced-interface',renderer:'chart',kind:'bar',title:'数量变化',unit:'件',points:[{label:'昨日',value:-3},{label:'今日',value:5,display:'新增 5 件'}],fallback:'数量变化摘要'});
     ctx.contribute('web_extensions','line',{slot:'advanced-interface',renderer:'chart',kind:'line',title:'单点趋势',points:[{label:'当前',value:0}],fallback:'当前为零'});
     ctx.contribute('web_extensions','area',{slot:'advanced-interface',renderer:'chart',kind:'area',title:'跨零走势',points:[{label:'昨日',value:-1},{label:'今日',value:1}],fallback:'由负转正'});
     for (const kind of ['pie','donut']) ctx.contribute('web_extensions',kind,{slot:'advanced-interface',renderer:'chart',kind,title:'占比 '+kind,
@@ -92,20 +92,20 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await expect(patch.locator('img')).toHaveCount(0);
   await expect(page.getByRole('region',{name:'其他格式'})).toContainText('纯文字说明');
   const chart=page.getByRole('region',{name:'数量变化'});
-  await expect(chart.getByRole('cell')).toHaveText(['-3','5']);
+  await expect(chart.getByRole('cell')).toHaveText(['-3 件','新增 5 件']);
   await expect(chart.locator('svg rect')).toHaveCount(2);
   await expect(page.getByRole('region',{name:'单点趋势'}).locator('circle')).toHaveAttribute('cx','150');
   const point=chart.getByRole('slider',{name:'查看数据点'});
-  await expect(point).toHaveAttribute('aria-valuetext','昨日，数值 -3');
+  await expect(point).toHaveAttribute('aria-valuetext','昨日，数值 -3 件');
   await point.press('ArrowRight');
-  await expect(point).toHaveAttribute('aria-valuetext','今日，数值 5');
+  await expect(point).toHaveAttribute('aria-valuetext','今日，数值 新增 5 件');
   server.app.events.publish('review.progress',{text:'追加复核记录'});
   await expect(stream).toContainText('追加复核记录');
   await expect(point).toBeFocused();
-  await expect(point).toHaveAttribute('aria-valuetext','今日，数值 5');
+  await expect(point).toHaveAttribute('aria-valuetext','今日，数值 新增 5 件');
   await chart.getByRole('button',{name:'复制数据点'}).click();
   await expect(chart.getByRole('status')).toHaveText('已复制数据点');
-  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'数量变化\n今日，数值 5');
+  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'数量变化\n今日，数值 新增 5 件');
   const area=page.getByRole('region',{name:'跨零走势'});
   await expect(area.locator('polygon')).toHaveAttribute('points','75,50 75,96 225,4 225,50');
   await expect(area.locator('polyline')).toHaveAttribute('points','75,96 225,4');

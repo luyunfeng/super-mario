@@ -18,6 +18,11 @@ function extensionPatch(text) {
     h('div',{class:'row'},copy,status));
 }
 
+function pointReading(point, unit) {
+  if (typeof point.display === 'string' && point.display.trim()) return point.display;
+  return typeof unit === 'string' && unit.trim() ? point.value + ' ' + unit : String(point.value);
+}
+
 function shareChart(card) {
   const max = card.points.reduce((largest, point) => Math.max(largest, point.value), 0);
   const weights = card.points.map(point => max ? Math.max(point.value, 0) / max : 0);
@@ -34,7 +39,7 @@ function shareChart(card) {
     }
     const percent = share > 0 && share < 0.01 ? '<1%' : Math.round(share * 1000) / 10 + '%';
     return h('tr',{},h('th',{scope:'row'},h('span',{'aria-hidden':'true',style:{color}},'● '),point.label),
-      h('td',{},point.value),h('td',{},percent));
+      h('td',{},pointReading(point,card.unit)),h('td',{},percent));
   });
   const graph = h('div',{'aria-hidden':'true',style:{width:'120px',height:'120px',borderRadius:'50%',
     background:stops.length ? 'conic-gradient(' + stops.join(',') + ')' : 'var(--line)',
@@ -108,7 +113,7 @@ function chartBody(card) {
   graph.setAttribute('height','120');
   return h('div',{class:'stack'}, graph, h('table',{class:'table','aria-label':card.title},
     h('thead',{},h('tr',{},h('th',{scope:'col'},'项目'),h('th',{scope:'col'},'数值'))),
-    h('tbody',{},points.map(point => h('tr',{},h('th',{scope:'row'},point.label),h('td',{},point.value))))));
+    h('tbody',{},points.map(point => h('tr',{},h('th',{scope:'row'},point.label),h('td',{},pointReading(point,card.unit)))))));
 }
 
 function extensionChart(card) {
