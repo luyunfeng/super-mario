@@ -1915,6 +1915,8 @@ test('Web 与飞书仅更新选定待办的期限，保留提醒并拒绝并发�
         return call('todo_update', { id, notes: '补充事项', expectedNotes }, 'notes');
       }
       const old = JSON.parse(raw).todo.dueAt ?? '';
+      if (mode === 'all-day') return call('todo_update', {id, expectedDueAt:old, expectedDueDay:JSON.parse(raw).todo.dueDay ?? '',
+        dueDay:'2099-02-02', dueAt:'2099-02-02T23:59:59.999+08:00'}, 'edit');
       if (mode === 'race') server.app.updateTodo(id, { dueAt: newer });
       return call('todo_update', { id, dueAt: mode === 'set' ? due : '', expectedDueAt: old }, 'edit');
     }
@@ -1959,6 +1961,9 @@ test('Web 与飞书仅更新选定待办的期限，保留提醒并拒绝并发�
     await adapter.onMessage('修改本事项备注', { ...source, messageId: 'notes-race' });
     await t.waitFor(() => assert.ok(sent.includes('当前备注：来自另一入口。请确认是否改为补充事项。')));
     assert.equal(server.app.todos().find(row => row.id === id)?.notes, '来自另一入口');
+    mode = 'all-day';
+    await adapter.onMessage('把期限改到北京时间2099年2月2日全天', { ...source, messageId: 'all-day' });
+    await t.waitFor(() => assert.equal(server.app.todos().find(row => row.id === id)?.dueDay, '2099-02-02'));
     mode = 'clear';
     await adapter.onMessage('取消本事项期限', { ...source, messageId: 'clear' });
     await t.waitFor(() => assert.ok(sent.includes('已取消期限。')));
