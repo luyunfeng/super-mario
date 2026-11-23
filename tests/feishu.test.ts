@@ -665,3 +665,34 @@ test('总指挥群只扩展指定群的人类入口，保留未解析点名并�
   await assert.rejects(integration.send('oc_other', text, { mention }), /总指挥群/);
   assert.equal(http.calls.length, count);
 });
+
+test('会话清单只有在卡片明确被拒且主人仍有权读取时，才向原目标发送文本', async t => {
+  let status = 400, code = 230099, allowed = true;
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const { integration } = setup({ fetch: async (input, init) => {
+    const url = String(input);
+    if (url.includes('tenant_access_token')) return Response.json({ code: 0, tenant_access_token: 'fixture', expire: 7200 });
+    const body = JSON.parse(String(init?.body));
+    requests.push({ url, body });
+    return body.msg_type === 'interactive' ? Response.json({ code }, { status })
+      : Response.json({ code: 0, data: { message_id: 'om_text_receipt' } });
+  } });
+  t.after(() => integration.close());
+  const receipts: string[] = [];
+  const context = { card: { elements: [] }, replyTo: 'om_list', threadId: 'thread', onSent: (id: string) => receipts.push(id),
+    beforeTextFallback() { if (!allowed) throw new Error('主人已变更'); } };
+  await integration.send('oc_chat', '最近对话', context);
+  assert.deepEqual(requests.map(r => r.body.msg_type), ['interactive', 'text']);
+  assert.equal(requests[0]!.url, requests[1]!.url);
+  assert.deepEqual(requests[1]!.body, { msg_type: 'text', content: JSON.stringify({ text: '最近对话' }), reply_in_thread: true });
+  assert.deepEqual(receipts, ['om_text_receipt']);
+  allowed = false;
+  await assert.rejects(integration.send('oc_chat', '最近对话', context), { message: /主人已变更/, delivery: 'no' });
+  allowed = true;
+  status = 503;
+  await assert.rejects(integration.send('oc_chat', '最近对话', context), /HTTP 503/);
+  status = 400; code = 230028;
+  await assert.rejects(integration.send('oc_chat', '最近对话', context), /HTTP 400/);
+  assert.deepEqual(requests.slice(2).map(r => r.body.msg_type), ['interactive', 'interactive', 'interactive']);
+  assert.deepEqual(receipts, ['om_text_receipt']);
+});

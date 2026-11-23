@@ -1139,3 +1139,110 @@ test('/status 在固定项目和待办机器人使用各自绑定，未标记机
   }
   assert.equal(f.posts.length, 0);
 });
+
+test('飞书对话列表可分页选项目，主对话命令持久切换，旧事件与引用保留各自目标', async t => {
+  const f = fixture(t), bot = await f.add('SelectConversation');
+  await bot.pair();
+  const human = (id: string) => ({ ...source(id), senderType: 'user' as const });
+  const receive = bot.instance.options.onMessage;
+  const projectTexts: string[] = [];
+  f.app.projectWorkspace = { async post(projectId, text) {
+    projectTexts.push(text);
+    return { id: 'chosen-' + projectTexts.length, projectId, text, role: 'user',
+      createdAt: '', conversationId: 'project:' + projectId + ':work' };
+  } };
+  for (let index = 0; index < 7; index++) {
+    const id = 'pick-' + index;
+    f.store.put('projects', id, { id, name: '测试项目' + index });
+  }
+  f.store.put('projects', 'old', { id: 'old', name: '归档样例', archivedAt: '2026-01-01' });
+  type Choice = { value: Record<string, unknown>; text: { content: string } };
+  const choices = (card: unknown) => {
+    const content = card as { elements: Array<{ actions?: Choice[] }> };
+    assert.ok(Array.isArray(content?.elements));
+    return content.elements.flatMap(row => row.actions ?? []);
+  };
+  const click = (button: Choice, messageId: string) => bot.instance.options.onCardAction!({
+    value: button.value, messageId, chatId: 'owner', operatorId: 'human',
+  }) as { card?: { data: unknown }; toast?: { type: string } };
+
+  await Promise.all([receive('/list', human('list')), receive('/list', human('list'))]);
+  assert.equal(bot.instance.sent.length, 1);
+  const firstContext = bot.instance.contexts.at(-1);
+  assert.ok(firstContext?.onSent && firstContext.beforeTextFallback);
+  const firstPage = choices(firstContext.card);
+  const next = firstPage.find(action => action.text.content === '下一页');
+  assert.ok(next);
+  const secondPage = choices(click(next, 'choose-page').card?.data);
+  const projectButtons = [...firstPage, ...secondPage].filter(action => action.value.kind === 'workbench.chat' && action.value.projectId);
+  assert.deepEqual(projectButtons.map(button => button.value.projectId).sort(),
+    Array.from({ length: 7 }, (_, i) => 'pick-' + i));
+  assert.ok(firstPage.some(action => action.value.kind === 'workbench.chat' && action.value.projectId === ''));
+  const chosen = projectButtons.at(-1)!;
+  assert.equal(click(chosen, 'project-card').toast?.type, 'success');
+  firstContext.onSent('project-card');
+  await receive('/对话', human('list-again'));
+  await receive('列表保留当前选择', human('list-no-switch'));
+  assert.deepEqual(projectTexts, ['列表保留当前选择']);
+
+  await receive('/main', { ...human('main-command'), parentId: 'project-card' });
+  const acknowledge = bot.instance.contexts.at(-1)?.onSent;
+  assert.ok(acknowledge);
+  await receive('切回后的消息', human('default-main'));
+  assert.equal(f.posts.at(-1)?.text, '切回后的消息');
+  assert.equal(click(chosen, 'selected-again').toast?.type, 'success');
+  acknowledge('main-confirmation');
+  await receive('/main', { ...human('main-command'), parentId: 'project-card' });
+  await receive('重放后仍发项目', human('duplicate-does-not-switch'));
+  await receive('引用较早的主对话确认', { ...human('quote-main'), parentId: 'main-confirmation' });
+  assert.deepEqual(projectTexts, ['列表保留当前选择', '重放后仍发项目']);
+  assert.equal(f.posts.at(-1)?.text, '引用较早的主对话确认');
+  await receive('/主对话', human('return-main'));
+  await f.restart();
+  const restarted = f.instances.at(-1)!.options.onMessage;
+  await restarted('重启后的主对话', human('after-restart'));
+  assert.equal(f.posts.at(-1)?.text, '重启后的主对话');
+  await restarted('/list 里有什么', human('ordinary-with-command-prefix'));
+  assert.equal(f.posts.at(-1)?.text, '/list 里有什么');
+  await restarted('引用项目继续', { ...human('quote-project'), parentId: 'project-card' });
+  assert.equal(projectTexts.at(-1), '引用项目继续');
+  const currentList = 'archive-during-send';
+  await restarted('/list', human(currentList));
+  const lastContext = f.instances.at(-1)!.contexts.at(-1);
+  assert.ok(lastContext?.beforeTextFallback);
+  const displayed = choices(lastContext.card).find(action => action.value.projectId);
+  assert.ok(displayed);
+  const archived = String(displayed.value.projectId);
+  f.store.put('projects', archived, { id: archived, name: '刚归档', archivedAt: '2026-02-01' });
+  assert.throws(() => lastContext.beforeTextFallback!(), /项目/);
+  assert.equal(f.mailboxes.list().some(row => row.direction === 'inbox' && /^\/(main|主对话|list|对话)$/.test(row.text)), false);
+});
+
+test('飞书对话命令只允许已配对主人的全局私聊', async t => {
+  const f = fixture(t);
+  const bot = await f.add('SelectOwner');
+  const human = (id: string) => ({ ...source(id), senderType: 'user' as const });
+  for (const command of ['/list', '/main']) await bot.instance.options.onMessage(command, human('unpaired-' + command));
+  await bot.pair();
+  const before = f.mailboxes.list().length;
+  for (const command of ['/对话', '/主对话']) {
+    const origins = [{ senderId: 'other' }, { senderType: 'bot' as const }, { senderType: undefined },
+      { chatType: 'group' }, { chatId: 'other' }];
+    for (const [index, patch] of origins.entries()) await bot.instance.options.onMessage(command, { ...human(command + index), ...patch });
+  }
+  assert.equal(f.mailboxes.list().length, before);
+  assert.equal(bot.instance.sent.length, 0);
+  f.store.put('projects', 'fixed-scope', { id: 'fixed-scope', name: '固定作用域' });
+  f.store.put('todos', 'fixed-task', { id: 'fixed-task', projectId: 'fixed-scope', title: '固定事项' });
+  const scopes: BotScope[] = [{ kind: 'project', projectId: 'fixed-scope' },
+    { kind: 'task', todoId: 'fixed-task', projectId: 'fixed-scope' }, { kind: 'unmarked' }];
+  for (const scope of scopes) {
+    const scoped = await f.add('Select' + scope.kind, scope);
+    await scoped.pair();
+    const baseline = f.mailboxes.list().length;
+    for (const command of ['/list', '/main']) await scoped.instance.options.onMessage(command, human(command + scope.kind));
+    assert.equal(f.mailboxes.list().length, baseline);
+    assert.equal(scoped.instance.sent.length, 0);
+  }
+  assert.equal(f.posts.length, 0);
+});

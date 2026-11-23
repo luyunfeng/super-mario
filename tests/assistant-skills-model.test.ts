@@ -2873,6 +2873,8 @@ test('Web 的 conversation_status 只读取当前范围，排除本轮提问并�
     if (req.lastRole === 'user') {
       assert.ok(req.tools.includes('conversation_status'));
       assert.match(req.system, /conversation_status/);
+      assert.match(req.system, /已配对的全局机器人私聊发送 \/list/);
+      assert.match(req.system, /发送 \/main 可让后续未引用消息回到该机器人的主会话/);
       return call('conversation_status', { conversationId: forbiddenId }, 'forged-status');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;

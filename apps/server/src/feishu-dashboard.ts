@@ -17,6 +17,8 @@ export function dashboardCommand(text: string) {
     case '工作台': case '/dashboard': case '/home': case '/工作台': case '/主页': return 'home';
     case '/tasks': case '/进展': case '/总览': return 'tasks';
     case '/inbox': case '/收件箱': return 'inbox';
+    case '/main': case '/主对话': return 'main';
+    case '/list': case '/对话': return 'conversations';
     case '/status': case '/状态': return 'status';
     case '/today': case '/今日': case '/今天': return 'today';
     case '/help': case '/帮助': return 'help';
@@ -26,8 +28,53 @@ export function dashboardCommand(text: string) {
 export function dashboardHelp(sessions: boolean, scoped = false) {
   const status = '/status 或 /状态：查看当前会话状态';
   const text = scoped ? status : ['/home 或「工作台」：打开工作台', '/tasks 或 /进展：查看任务进展', '/inbox 或 /收件箱：查看收件',
-    status, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
+    '/list 或 /对话：列出可切换的对话', '/main 或 /主对话：切回主 Agent', status, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
   return { text, card: cardDocument('工作台命令', cardSection('在此私聊中发送', text)) };
+}
+
+export function conversationListDashboard(app: DashboardApp, bot: { conversationId: string; id: string; appId: string; revision: number; chatId: string },
+  navigation: string, webBase?: string, requestedPage = 0) {
+  type Row = { projectId: string; name: string; latest?: Message };
+  const main: Row = { projectId: '', name: '主对话' };
+  const rows = new Map<string, Row>([[bot.conversationId, main]]);
+  if (app.projectWorkspace) for (const project of app.store.list<Project>('projects')) {
+    if (!project.archivedAt) rows.set('project:' + project.id + ':work', { projectId: project.id, name: project.name });
+  }
+  for (const message of app.store.list<Message>('messages')) {
+    const row = rows.get(message.conversationId);
+    if (!row || message.readOnly || message.todoId || (message.projectId && message.projectId !== row.projectId)
+      || (message.origin && message.origin !== 'user') || !message.text.trim()
+      || (message.role !== 'user' && !(message.role === 'assistant' && (message.status === 'done' || message.status === 'failed')))) continue;
+    if (row === main) {
+      // Bot conversations may also receive groups and relays. Only preview this owner's private thread.
+      const input = message.role === 'user' ? message.id : message.replyTo;
+      const route = input && app.store.get<{ botId: string; accountId: string; revision: number; target: string; group?: unknown; relay?: unknown }>('message.routes', input);
+      if (!route || route.botId !== bot.id || route.accountId !== bot.appId || route.revision !== bot.revision
+        || route.target !== bot.chatId || route.group || route.relay) continue;
+    }
+    if (!row.latest || message.createdAt >= row.latest.createdAt) row.latest = message;
+  }
+  const entries = [...rows.values()].sort((a, b) => (b.latest?.createdAt ?? '').localeCompare(a.latest?.createdAt ?? ''));
+  const pages = Math.ceil(entries.length / 5), page = Math.min(requestedPage, pages - 1);
+  const elements: Record<string, unknown>[] = [], lines = ['最近对话'];
+  const visible = entries.slice(page * 5, page * 5 + 5);
+  for (const row of visible) {
+    const latest = row.latest;
+    const detail = [label(row.name, 60), latest?.createdAt, latest && publicText(latest.text, 100).replace(/\s+/g, ' ')].filter(Boolean).join(' · ');
+    lines.push(detail);
+    elements.push({ tag: 'div', text: cardPlain(detail) }, ...cardButtons([
+      { label: '在这里聊', value: { kind: 'workbench.chat', navigation, projectId: row.projectId } },
+      ...(row.projectId ? [{ label: '打开网页版', route: 'projects/' + encodeURIComponent(row.projectId) + '/workspace' }] : []),
+    ], cardWebBase(webBase)));
+  }
+  const pageButton = (label: string, page: number) => ({ label, value: { kind: 'workbench.navigate', navigation, view: 'conversations', page } });
+  const position = `${page + 1} / ${pages} 页 · 共 ${entries.length} 个对话`;
+  lines.push(position);
+  elements.push({ tag: 'note', elements: [cardPlain(position)] }, ...cardButtons([
+    ...(page > 0 ? [pageButton('上一页', page - 1)] : []),
+    ...(page + 1 < pages ? [pageButton('下一页', page + 1)] : []), pageButton('刷新当前页', page),
+  ]));
+  return { text: lines.join('\n'), card: cardDocument('最近对话', elements), projectIds: visible.map(row => row.projectId).filter(Boolean) };
 }
 
 export function statusDashboard(target: string, status: ConversationStatus | string) {

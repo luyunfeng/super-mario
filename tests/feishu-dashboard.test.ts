@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildFeishuDashboard } from '../apps/server/src/feishu-dashboard.ts';
+import { buildFeishuDashboard, conversationListDashboard } from '../apps/server/src/feishu-dashboard.ts';
 import type { FeishuBotsApp } from '../apps/server/src/feishu-bots.ts';
 
 test('workbench card shows real progress, omits unverified group data and uses credential-free navigation', () => {
@@ -56,4 +56,42 @@ test('merged owner inbox counts conversations once and keeps other connector mes
   assert.match(view.text,/其他连接器事项/);
   assert.doesNotMatch(view.text,/不得逐条重复/);
   assert.match(JSON.stringify(view.card),/待你回复/);
+});
+
+test('飞书对话列表按可公开的最近发言排序，并为项目工作对话提供 Web 链接', () => {
+  const bot = { conversationId: 'bot-private', id: 'fixture', appId: 'app', revision: 4, chatId: 'owner-chat' };
+  const projectId = 'a/b';
+  const projectConversation = 'project:' + projectId + ':work';
+  const message = (id: string, conversationId: string, day: string, extra = {}) => ({
+    id, conversationId, createdAt: '2026-01-' + day + 'T00:00:00Z', role: 'user', text: id, ...extra,
+  });
+  const routes = new Map([['owner', {}], ['group', { group: {} }], ['relay', { relay: {} }],
+    ['other-chat', { target: 'other' }], ['old', { revision: 2 }]]);
+  const rows: Record<string, unknown[]> = {
+    projects: [{ id: projectId, name: '近期项目' }, { id: 'archived', name: '归档项目', archivedAt: '2026-01-03' }],
+    messages: [
+      message('owner', bot.conversationId, '01'),
+      message('owner-reply', bot.conversationId, '02', { role: 'assistant', status: 'done', replyTo: 'owner', text: '本次私聊答复' }),
+      ...['group', 'relay', 'other-chat', 'old', 'unknown-route'].map(id => message(id, bot.conversationId, '24')),
+      message('project', projectConversation, '03', { text: '最近的问题 token=fixture-secret', projectId }),
+      message('task', projectConversation, '04', { todoId: 'fixture-task' }),
+      message('another-project', projectConversation, '05', { projectId: 'other' }),
+      message('internal', projectConversation, '06', { readOnly: true }),
+      message('notice', projectConversation, '07', { origin: 'notification' }),
+      message('partial-reply', projectConversation, '08', { role: 'assistant', status: 'pending' }),
+    ],
+  };
+  const store = { list: (key: string) => rows[key] ?? [], get: (key: string, id: string) => {
+    if (key !== 'message.routes' || !routes.has(id)) return;
+    return { botId: bot.id, accountId: bot.appId, revision: bot.revision, target: bot.chatId, ...routes.get(id) };
+  } } as FeishuBotsApp['store'];
+  const app = { store, projectWorkspace: { post: async () => { throw Error('unexpected post'); } } };
+  const { text, card } = conversationListDashboard(app, bot, 'grant', 'https://work.example');
+  assert.ok(text.includes('本次私聊答复') && text.includes('最近的问题'));
+  assert.ok(text.indexOf('近期项目') < text.indexOf('主对话'));
+  assert.match(text, /2026-01-03/);
+  assert.doesNotMatch(text, /fixture-secret|归档项目|group|relay|other-chat|unknown-route|old|task|another-project|internal|notice|partial-reply/);
+  assert.match(JSON.stringify(card), /https:\/\/work\.example\/#projects\/a%2Fb\/workspace/);
+  const local = conversationListDashboard(app, bot, 'grant', 'https://work.example/?token=private');
+  assert.doesNotMatch(JSON.stringify(local.card), /"url"|token=private/);
 });
