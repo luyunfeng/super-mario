@@ -41,7 +41,14 @@ export function createAdminNetwork({request,submit,csrf,current}){
     }},h('label',{class:'field'},'公开访问地址',input),
       h('p',{class:'small muted'},'留空时使用当前浏览器地址。此设置仅指定配对目的地，不会配置 TLS、修改监听地址或探测外网连通性。'),
       h('button',{type:'submit',class:'btn btn--sm'},'保存公开地址'),confirmation);
-    replace(body,h('p',{},'服务监听地址 '+data.listen),form);
+    const direct=data.endpoints.map(endpoint=>h('li',{},
+      endpoint.kind==='local'?'本机回环地址 ':'网络接口地址 ',h('code',{},endpoint.url)));
+    replace(body,h('dl',{class:'kv'},
+      h('dt',{},'服务监听地址'),h('dd',{},data.listen || '暂无监听信息'),
+      h('dt',{},'当前浏览器访问地址'),h('dd',{},location.origin),
+      h('dt',{},'浏览器连接协议'),h('dd',{},location.protocol==='https:'?'HTTPS':'HTTP')),
+      h('h4',{},'服务端直连地址'),direct.length?h('ul',{},direct):h('p',{},'暂无可列出的直连地址。'),
+      h('p',{class:'small muted'},'直连地址来自本机监听和网络接口。经反向代理访问时，浏览器使用的地址和协议可以与服务端不同。'),form);
   }
   return {el,close(){life.abort();replace(body);}};
 }

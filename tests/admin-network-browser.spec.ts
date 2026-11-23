@@ -23,6 +23,8 @@ test('管理员可取消、确认和清空配对公开地址',async t=>{
   const panel=page.getByRole('region',{name:'网络设置'});
   await panel.getByRole('button',{name:'查看网络设置'}).click();
   const input=panel.getByRole('textbox',{name:'公开访问地址'}),target='https://pair.example.test:8443';
+  await expect(panel.getByText('本机回环地址',{exact:false})).toContainText(server.url);
+  await expect(panel.getByText('HTTP',{exact:true})).toBeVisible();
   await expect(input).toHaveValue('');
   await input.fill(target);
   await panel.getByRole('button',{name:'保存公开地址',exact:true}).click();
