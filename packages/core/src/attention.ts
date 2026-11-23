@@ -118,6 +118,8 @@ export function collectAttention({ inboxConversations = [], approvals = [], inte
       actions: [{ ...action('interactions', item.id, 'answer', item.version, '回答'), requiresText: true, highRisk },
         ...(item.kind === 'question' && item.runId && item.decisionDeadlineAt && !item.contextRequestedAt ?
           [action('interactions', item.id, 'context', item.version, '先告诉我背景')] : []),
+        ...(item.kind === 'question' && item.runId && item.decisionDeadlineAt ?
+          [action('interactions', item.id, 'mismatch', item.version, '这不是我要的')] : []),
         ...(canAnswerLater ? [action('interactions', item.id, 'withdraw', item.version, '关闭提问')] : [])] });
   }
   // A proposed plan starts real work only after the owner confirms it; starting is the explicit decision.

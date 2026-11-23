@@ -40,7 +40,7 @@ export interface Card {
   decisionExplanation?: string;
   byDefault?: true;
   answers?: QuestionResponse[];
-  withdrawnReason?: 'user_spoke';
+  withdrawnReason?: 'user_spoke'|'owner_mismatch';
   answeredBy?: string;
   suggestion?: string;
   handler: Decision['handler'];
@@ -75,9 +75,11 @@ function text(value: unknown, name: string, empty = false): asserts value is str
 }
 
 /** Parent owns expireTick and must await close() before closing the store. No automatic replay. */
-export function createInteractions({ store, events, decide, answer: deliver, askAgent, publish, deadlineOutcome, questionContext }: {
+export function createInteractions({ store, events, decide, answer: deliver, askAgent, publish, deadlineOutcome, questionContext, holdMismatch, defaultHeld }: {
   store: Store;
   events: EventBus;
+  holdMismatch?: (card:Card)=>void;
+  defaultHeld?: (card:Card)=>boolean;
   questionContext?: (card:Card) => {facts:string; explain?:(signal:AbortSignal)=>Promise<string>};
   deadlineOutcome?: (card:Card) => 'eligible'|'spoke'|'unverified'|'initializing';
   publish?: (input: import('../../plugin-sdk/src/index.ts').EventInput) => unknown;
@@ -125,7 +127,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       const outcome=deadlineOutcome?.(card);
       if (outcome === 'initializing') return;
       if (card.wait===false && outcome==='spoke') return save(card,{status:'expired'});
-      if (outcome==='eligible' && card.reversible===true && card.questions?.length &&
+      if (outcome==='eligible' && !defaultHeld?.(card) && card.reversible===true && card.questions?.length &&
           card.questions.every(q=>q.recommend && q.options.some(o=>o.label===q.recommend))) {
         const response=readQuestionResponses(card.questions,card.questions.map(q=>({selected:[q.recommend]})));
         const next=save(card,{status:'answered',byDefault:true,answeredBy:'deadline_default',answers:response.answers,
@@ -149,6 +151,27 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
   }
   const explaining=new Map<string,Promise<Card>>();
   const contextStop=new AbortController();
+  function reportMismatch(id:string,version:number):Card {
+    active();
+    text(id,'id');
+    if (!Number.isSafeInteger(version) || version<1) throw new InteractionError('version必须为正整数');
+    const result=store.transaction(()=>{
+      const card=store.get<Card>(collection,id);
+      if (!card) throw new InteractionError('交互卡片不存在',404);
+      if (card.kind!=='question' || !card.runId || !card.decisionDeadlineAt || !card.questions?.length)
+        throw new InteractionError('仅原执行的截止提问支持报告偏题');
+      if (card.handler!=='user' || deadlineOutcome?.(card)!=='eligible' || !holdMismatch)
+        throw new InteractionError('原执行或授权已变化',409);
+      if (card.status==='withdrawn' && card.withdrawnReason==='owner_mismatch' && card.version===version+1)
+        return {card,changed:false};
+      if (card.version!==version || !cardAcceptsAnswer(card)) throw new InteractionError('提问版本或截止状态已变化',409);
+      const next=save(card,{status:'withdrawn',withdrawnReason:'owner_mismatch'});
+      holdMismatch(next);
+      return {card:next,changed:true};
+    });
+    if (result.changed) changed(id);
+    return result.card;
+  }
   async function requestContext(id:string,version:number):Promise<Card> {
     active();
     text(id,'id');
@@ -389,7 +412,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       if (card.stages && card.handler === 'user') events.publish('interactions.user_required', { id: card.id });
       return structuredClone(card);
     },
-    answer, requestContext,
+    answer, requestContext, reportMismatch,
     withdraw(id: string, version: number, reason?:'user_spoke'): Card {
       active();
       const now=Date.now();
@@ -427,7 +450,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       if (!attempted) {
         const state=deadlineOutcome?.(current);
         if (state==='initializing') return;
-        if (state!=='eligible') {
+        if (state!=='eligible' || defaultHeld?.(current)) {
           // No executor input was ever claimed. Leave the original choice for its owner.
           store.transaction(()=>{
             const row=store.get<Card>(collection,id);

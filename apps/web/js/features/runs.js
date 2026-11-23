@@ -54,6 +54,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       h('div', { class: 'row row--between row--wrap' }, h('strong', null, '等待你'),
         Button({ label: observationsError ? '重试读取' : '刷新执行观察', size: 'sm', disabled: !observations && !observationsError,
           onClick: () => loadObservations(true) })),
+      observations?.followupsHeld && h('p', { class: 'small', role: 'status' }, '你已指出执行偏离要求。自动跟进已暂停，等待督办核对。'),
       observationsError ? h('p', { class: 'small muted', role: 'status' }, observationsError)
         : !observations ? h('p', { class: 'small muted' }, '正在读取阻塞项…')
           : observations.blockedBy.length ? h('ul', null, observations.blockedBy.map(item => h('li', null,
@@ -75,6 +76,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
     if (!run) return;
     // 只在相关状态变化时读取，不以无关消息或终端 idle 触发轮询。
     const signature = JSON.stringify([run, snapshot.approvals, snapshot.interactions, snapshot.plans,
+      snapshot.signals?.filter(signal => signal.runId === runId && signal.kind === 'owner_mismatch'),
       snapshot.reviews, store.view.attention, api.token?.(), store.view.connection]);
     if (!refresh && signature === observationsSignature) return;
     observationsSignature = signature;

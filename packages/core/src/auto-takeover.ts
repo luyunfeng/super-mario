@@ -58,6 +58,7 @@ export function createAutoTakeover(options: {
   machines: () => MachineClient | undefined;
   openCard: (input: { kind: 'question' | 'permission'; title: string; body: string; projectId?: string; executorId?: string; cwd?: string }) => Card;
   withdrawCard?: (id: string) => void;
+  verifyAutomaticKeys?: (machineId:string,paneId:string)=>Promise<()=>boolean>;
 }) {
   const { store, events } = options;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -94,6 +95,10 @@ export function createAutoTakeover(options: {
     if (!rec) throw Object.assign(new Error('未找到对应的终端卡点记录'), { status: 404 });
     const hub = options.machines();
     if (!hub) throw Object.assign(new Error('执行机网关未就绪'), { status: 503 });
+    if (by==='auto' && options.verifyAutomaticKeys) {
+      const current=await options.verifyAutomaticKeys(rec.machineId,rec.paneId);
+      if (!current()) throw Object.assign(new Error('原执行的自动按键已暂停，请主人核对'),{status:409});
+    }
     const res = await hub.call(rec.machineId, 'terminal.live.answer_prompt', {
       paneId: rec.paneId,
       terminalId: rec.terminalId,

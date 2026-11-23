@@ -101,7 +101,7 @@ export interface SessionBinding { machineId?: string; agentInstanceId?: string; 
 export interface ExecutionResult { commitChanges?: CommitChanges; usage?: ExecutionUsage; progress?: ExecutionProgress; state: 'running' | 'completed' | 'failed' | 'unknown'; text: string; source: string; exitCode?: number; nativeSessionId?: string }
 export interface Approval { id: string; version: number; title: string; details: string; kind: 'dispatch' | 'input' | 'channel-reply' | 'feishu-reply' | `plugin:${string}.${string}`; params: JsonObject; todoId?: string; status: 'pending' | 'running' | 'completed' | 'rejected' | 'failed' | 'unknown'; result?: Json; error?: string; createdAt: string; updatedAt: string }
 export interface AutomationSettings { tickSeconds: number; stalledMinutes: number; stalledFactorOfEstimate?: number; needsYouMinutes: number; remindersEnabled: boolean }
-export interface SupervisionSignal { questionCardId?: string; questionVersion?: number; id: string; kind: 'review' | 'estimate_due' | 'stalled' | 'orphaned' | 'reminder' | 'waiting' | 'needs_you'; text: string; runId?: string; todoId?: string; createdAt: string; resolvedAt?: string }
+export interface SupervisionSignal { questionCardId?: string; questionVersion?: number; id: string; kind: 'review' | 'estimate_due' | 'stalled' | 'orphaned' | 'reminder' | 'waiting' | 'needs_you' | 'owner_mismatch'; text: string; runId?: string; todoId?: string; createdAt: string; resolvedAt?: string }
 
 /** Channel-specific credentials remain in the adapter; core copies only reply destinations. */
 export interface MessageRoute { channel: string; accountId: string; target: string; resumed?: boolean }

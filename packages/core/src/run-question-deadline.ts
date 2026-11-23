@@ -45,3 +45,48 @@ export function runQuestionReply(card:Card,text:string) {
   return '系统截止默认选择（未收到主人答复）。仅供原执行处理本轮提问，不代表主人授权其他操作。\n'+
     JSON.stringify(card.questions.map((q,i)=>({问题:q.question,已选:card.answers![i]!.selected})));
 }
+
+interface RunQuestionHold {
+  cardId:string;
+  cardVersion:number;
+  heldAt:string;
+}
+const holds='run.question-holds';
+
+/** Keep the owner's objection tied to the original run, scope, and executor session. */
+export function readRunQuestionHold(store:Pick<Store,'get'|'list'>,run:Run):RunQuestionHold|undefined {
+  const hold=store.get<RunQuestionHold>(holds,run.id);
+  if (!hold) return;
+  const card=store.get<Card>('interactions',hold.cardId);
+  if (!card || card.id!==hold.cardId || run.status!=='running' || card.runId!==run.id || card.status!=='withdrawn' || card.withdrawnReason!=='owner_mismatch' ||
+      card.version!==hold.cardVersion) return;
+  const target=readRunDeadlineTarget(store,card);
+  if (!target || target.machineId!==run.machineId || target.sessionId!==run.sessionId || target.executorId!==run.executorId ||
+      target.projectId!==run.projectId || target.todoId!==run.todoId) return;
+  return hold;
+}
+
+/** A restart marks previously running sessions unknown. That loss of positive
+ * evidence never authorizes an automatic write to the still-pinned session. */
+export function runQuestionInputHeld(store:Pick<Store,'get'>,run:Run):boolean {
+  const hold=store.get<RunQuestionHold>(holds,run.id);
+  if (!hold) return false;
+  const frozen=store.get<{runDeadline?:RunDeadlineTarget}>('interaction-origins',hold.cardId)?.runDeadline;
+  return !!frozen && frozen.runId===run.id && frozen.machineId===run.machineId && frozen.sessionId===run.sessionId &&
+    frozen.executorId===run.executorId && (run.status==='running' || run.status==='unknown');
+}
+
+/** Called in the same transaction that withdrew the exact card. */
+export function holdRunQuestion(store:Store,card:Card) {
+  const target=readRunDeadlineTarget(store,card);
+  if (!target || card.status!=='withdrawn' || card.withdrawnReason!=='owner_mismatch')
+    throw Object.assign(new Error('无法核实需暂停的原执行'),{status:409});
+  store.put(holds,target.runId,{cardId:card.id,cardVersion:card.version,heldAt:card.updatedAt} satisfies RunQuestionHold);
+}
+
+export function releaseRunQuestionHold(store:Store,run:Run,cardId:string,cardVersion:number):boolean {
+  return store.transaction(()=>{
+    const hold=readRunQuestionHold(store,run);
+    return hold?.cardId===cardId && hold.cardVersion===cardVersion && store.remove(holds,run.id);
+  });
+}

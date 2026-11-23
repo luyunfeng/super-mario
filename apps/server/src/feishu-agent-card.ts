@@ -1,6 +1,7 @@
 import type { Store } from '../../../packages/plugin-sdk/src/index.ts';
 import type { Project, Run, Todo } from '../../../packages/protocol/src/index.ts';
 import { executionProgress } from '../../../packages/core/src/execution-progress.ts';
+import { runQuestionInputHeld } from '../../../packages/core/src/run-question-deadline.ts';
 import { readRunBlockers } from '../../../packages/core/src/run-blockers.ts';
 import { publicText } from '../../../plugins/agent-progress-card.ts';
 import { deadlineInfo } from './feishu-dashboard.ts';
@@ -106,6 +107,7 @@ export function selectedAgentStatus(store: Pick<Store, 'get' | 'list'>, run: Run
   const observations = { starting: '启动', thinking: '分析', tool: '调用工具', responding: '输出', waiting: '等待后续事件' };
   const types: Record<string, string> = { question: '问题', permission: '权限', plan: '计划', review: '验收', approval: '审批' };
   const lines = ['执行会话 · ' + line(run.id, 120), '已登记执行状态 · ' + phases[run.status]];
+  if (runQuestionInputHeld(store,run)) lines.push('自动跟进已暂停，等待督办核对原目标。');
   if (run.prompt) lines.push('登记目标 · ' + line(run.prompt, 220));
   if (run.doneWhen) lines.push('验收条件 · ' + line(run.doneWhen, 180));
   const progress = executionProgress(run.progress);

@@ -216,7 +216,7 @@ export interface SystemActions {
   readRun?(id: string): Promise<Json>;
   readRunScope?(args: Record<string, unknown>): Json;
   reviseRunScope?(args: Record<string, unknown>): Json;
-  runObservations?(id: string): { progress: ExecutionProgress | null; blockedBy: RunBlocker[] };
+  runObservations?(id: string): { progress: ExecutionProgress | null; followupsHeld?: boolean; blockedBy: RunBlocker[] };
   todoDetail?(input: Record<string, unknown>): Json;
   todoHistory?(input: Record<string, unknown>): Json;
   inputRun?(id: string, text: string): Promise<Json>;
@@ -488,7 +488,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             if (id !== undefined) return runs.map(run => {
               // Resolve observations only after the project and todo filters admit this run.
               const observed = actions?.runObservations?.(run.id);
-              return { ...run, progress: observed?.progress ?? null, blockedBy: observed?.blockedBy ?? null, webCitation: runCitation(run) };
+              return { ...run, ...(observed?.followupsHeld && {followupsHeld:true}), progress: observed?.progress ?? null, blockedBy: observed?.blockedBy ?? null, webCitation: runCitation(run) };
             }) as unknown as Json;
             return runs as unknown as Json;
           }

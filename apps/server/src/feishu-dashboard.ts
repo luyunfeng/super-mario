@@ -362,7 +362,7 @@ export function deadlineInfo(question: Pick<Card,'decisionDeadlineAt'|'reversibl
 }
 const compactQuestion = (question: Card) => question.questions?.length === 1 && !question.questions[0].multiSelect && question.questions[0].options.length <= 4
   && question.questions[0].options.every(option => [...option.label].length <= 30);
-export function questionForm(question: Card, navigation: string, webBase?: string, allowContext = false) {
+export function questionForm(question: Card, navigation: string, webBase?: string, allowContext = false, allowMismatch = false) {
   const later = '这道题可稍后回答。你可以继续在原对话聊天；要回答这张卡时，请通过表单提交。';
   const deadline = question.decisionDeadlineAt && deadlineInfo(question);
   const submit = {kind:'workbench.answerQuestion',navigation,id:question.id,version:question.version};
@@ -378,10 +378,12 @@ export function questionForm(question: Card, navigation: string, webBase?: strin
   if ((question.questions?.length ?? 0) > 6 || question.questions?.some(q => q.options.length > 20)) return web();
   const elements: Record<string, unknown>[] = [question.title, question.body].filter(Boolean).map(text => ({tag:'div',text:cardPlain(text)}));
   if (question.wait === false) elements.push({tag:'div',text:cardPlain(later)});
-  if (question.contextRequestedAt && question.decisionExplanation)
-    elements.push({tag:'div',text:cardPlain(publicText(question.decisionExplanation,2400))});
+  const explanation = question.contextRequestedAt && question.decisionExplanation && cardPlain(publicText(question.decisionExplanation,2400));
+  if (explanation) elements.push({tag:'div',text:explanation});
   else if (allowContext && question.runId && question.decisionDeadlineAt && !question.contextRequestedAt)
     elements.push({tag:'button',text:cardPlain('先告诉我背景'),behaviors:callback({...submit,kind:'workbench.questionContext'})});
+  if (allowMismatch && question.runId && question.decisionDeadlineAt)
+    elements.push({tag:'button',text:cardPlain('这不是我要的'),behaviors:callback({...submit,kind:'workbench.questionMismatch'})});
   const fields: Record<string, unknown>[] = [];
   const input = (name: string, hint: string) => ({tag:'input',name,width:'fill',input_type:'multiline_text',rows:2,max_length:1000,placeholder:cardPlain(hint)});
   const compact = compactQuestion(question);
@@ -404,6 +406,19 @@ export function questionForm(question: Card, navigation: string, webBase?: strin
   fields.push({tag:'button',name:'submit_answer',form_action_type:'submit',type:'primary',text:cardPlain('发送回答'),behaviors:callback(submit)});
   elements.push({tag:'form',name:'answer_question',elements:fields});
   const card = build(elements);
+  // Keep a formerly valid form answerable when a long explanation approaches the platform payload limit.
+  if (explanation && Buffer.byteLength(JSON.stringify(card)) > 24000) {
+    const full = explanation.content;
+    explanation.content = '';
+    let remaining = 24000 - Buffer.byteLength(JSON.stringify(card)) - Buffer.byteLength('…');
+    for (const ch of full) {
+      const size = Buffer.byteLength(JSON.stringify(ch)) - 2;
+      if (size > remaining) break;
+      remaining -= size;
+      explanation.content += ch;
+    }
+    if (explanation.content !== full) explanation.content += '…';
+  }
   return Buffer.byteLength(JSON.stringify(card)) <= 24000 ? {card, acceptsAnswer:true} : web();
 }
 

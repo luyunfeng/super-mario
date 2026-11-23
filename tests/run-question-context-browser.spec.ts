@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import test from 'node:test';
+import test, {type TestContext} from 'node:test';
 import { chromium, expect } from '@playwright/test';
 import { startServer } from '../apps/server/src/index.ts';
 import type { Card } from '../packages/core/src/interactions.ts';
 import type { Json, JsonObject, Run } from '../packages/protocol/src/index.ts';
 
-test('原执行提问可先索要背景，刷新保留勾选及补充文字，并按最新版本手答', {timeout:40000},async t=>{
+async function openRunQuestion(t:TestContext) {
   const dataDir=await mkdtemp(join(tmpdir(),'run-question-context-web-'));
   const token='fixture-context';
   const server=await startServer({host:'127.0.0.1',port:0,demo:true,dataDir,token});
@@ -24,7 +24,8 @@ test('原执行提问可先索要背景，刷新保留勾选及补充文字，�
       assert.equal(method,'executor.input');writes.push(params);return {requested:true};
     },
   });
-  const run=app.dispatch({prompt:'准备草稿',cwd:dataDir,executionMode:'interactive',executorId:machineId+'/codex'});
+  const todo=app.createTodo({title:'核对草稿顺序'});
+  const run=app.dispatch({todoId:todo.id,prompt:'准备草稿',cwd:dataDir,executionMode:'interactive',executorId:machineId+'/codex'});
   await t.waitFor(()=>assert.ok(app.store.get<Run>('runs',run.id)?.sessionId));
   const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
   t.after(()=>browser.close());
@@ -37,6 +38,11 @@ test('原执行提问可先索要背景，刷新保留勾选及补充文字，�
   await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
   await page.goto(server.url+'/#chat?token='+token);
   const row=page.locator('[data-id="interaction:'+card.id+'"]');
+  return {app,page,row,card,writes};
+}
+
+test('原执行提问可先索要背景，刷新保留勾选及补充文字，并按最新版本手答', {timeout:40000},async t=>{
+  const {app,page,row,card,writes}=await openRunQuestion(t);
   const chosen=row.getByLabel('按部门',{exact:true});
   const note=row.getByLabel('文字回答');
   const ask=row.getByRole('button',{name:'先告诉我背景',exact:true});
@@ -80,4 +86,24 @@ test('原执行提问可先索要背景，刷新保留勾选及补充文字，�
     assert.equal(res.status(),200,await res.text());
     assert.deepEqual(res.request().postDataJSON(),{version:card.version});
   } finally { release(); }
+});
+
+test('主人从原卡退回要求偏差，反馈可见，已填的选项不会送入执行会话', {timeout:40000},async t=>{
+  const {app,page,row,card,writes}=await openRunQuestion(t);
+  const reject=row.getByRole('button',{name:'这不是我要的',exact:true});
+  await expect(reject).toHaveAttribute('title','退回原督办核对要求，暂停该执行的自动跟进');
+  await row.getByLabel('按部门',{exact:true}).check();
+  const path='/api/v1/interactions/'+card.id+'/mismatch';
+  const received=page.waitForResponse(response=>response.request().method()==='POST' && response.url().endsWith(path));
+  await reject.click();
+  const res=await received;
+  assert.equal(res.status(),200,await res.text());
+  assert.deepEqual(res.request().postDataJSON(),{version:card.version});
+  const result=await res.json();
+  assert.equal(result.status,'withdrawn');assert.equal(result.withdrawnReason,'owner_mismatch');
+  await expect(row).toHaveCount(0);
+  await expect(page.getByRole('status').filter({hasText:'已退回原督办核对要求，该执行的自动跟进已暂停。'})).toBeVisible();
+  app.interactions.expireTick(Date.parse(card.decisionDeadlineAt!)+1);
+  assert.equal(writes.length,0);
+  assert.equal(app.store.get<Run>('runs',card.runId!)?.status,'running');
 });

@@ -64,7 +64,7 @@ export interface FeishuBotsApp {
   dispatch?(input: Record<string, unknown>, key?: string, nativeApproved?: boolean, executionGuard?: () => void): Run;
   agentSessions?: { discover(input: Record<string, never>): Promise<SessionList>; proposeResume?(input: Record<string, unknown>): Promise<{id: string; status: string}> };
   approvals?: { propose(input: Pick<Approval, 'kind' | 'title' | 'details' | 'params' | 'todoId'>): Pick<Approval, 'id' | 'status'> };
-  interactions?: { requestContext?(id:string,version:number):Card|Promise<Card>; withdraw(id:string,version:number):Card; answer(id: string, version: number, text: string | QuestionResponse[], by: string): Promise<Card> };
+  interactions?: { reportMismatch?(id:string,version:number):Card|Promise<Card>; requestContext?(id:string,version:number):Card|Promise<Card>; withdraw(id:string,version:number):Card; answer(id: string, version: number, text: string | QuestionResponse[], by: string): Promise<Card> };
   projectWorkspace?: { post(id: string, text: string): Promise<Message> };
   postScoped(text: string, scope: BotScope, botId: string, threadId?: string, todoId?: string): Promise<Message>;
   /** Host injects readOnly result context; it must never dispatch a new request. */
@@ -1230,7 +1230,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       void track(bot.id, stopCommand(bot, epoch, paired, { chatId: paired.chatId, parentId: input.messageId }, input.messageId, true));
       return { toast: { type: 'info', content: '正在核对本轮中断请求。' } };
     }
-    if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || !['workbench.startForm','workbench.startSubmit','workbench.agents','workbench.agentSelect','workbench.today','workbench.navigate','workbench.chat','workbench.sessions','workbench.readSessions','workbench.resumeForm','workbench.resumeSubmit','workbench.questionForm','workbench.answerQuestion','workbench.closeQuestion','workbench.questionContext'].includes(String(value.kind))
+    if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || !['workbench.startForm','workbench.startSubmit','workbench.agents','workbench.agentSelect','workbench.today','workbench.navigate','workbench.chat','workbench.sessions','workbench.readSessions','workbench.resumeForm','workbench.resumeSubmit','workbench.questionForm','workbench.answerQuestion','workbench.closeQuestion','workbench.questionContext','workbench.questionMismatch'].includes(String(value.kind))
       || typeof value.navigation !== 'string'
       || !input.messageId) return fail;
     const paired = owner(bot);
@@ -1244,7 +1244,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     let cap = app.store.get<CardNavigation>('feishu.card.navigation', value.navigation);
     // A deadline may be much later than dashboard navigation expires. Only the original
     // confirmed platform message can still submit this specific question.
-    if ((!cap || cap.expiresAt <= Date.now()) && ['workbench.answerQuestion','workbench.closeQuestion','workbench.questionContext'].includes(String(value.kind))) {
+    if ((!cap || cap.expiresAt <= Date.now()) && ['workbench.answerQuestion','workbench.closeQuestion','workbench.questionContext','workbench.questionMismatch'].includes(String(value.kind))) {
       const receipt = app.store.get<SentQuestion>(sentQuestions,digest([bot.id,groupReadBinding(bot,paired),input.messageId]));
       const question = receipt && receipt.navigation === value.navigation && receipt.messageId === input.messageId &&
         receipt.questionId === value.id && receipt.version === value.version && liveQuestion(receipt,bot,paired);
@@ -1290,7 +1290,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       });
       return { toast: { type: 'success', content: '已选择执行会话。后续消息将为该会话申请输入审批，发送 /main 切回主对话。' } };
     }
-    if (value.kind === 'workbench.questionForm' || value.kind === 'workbench.answerQuestion' || value.kind === 'workbench.closeQuestion' || value.kind === 'workbench.questionContext') {
+    if (value.kind === 'workbench.questionForm' || value.kind === 'workbench.answerQuestion' || value.kind === 'workbench.closeQuestion' || value.kind === 'workbench.questionContext' || value.kind === 'workbench.questionMismatch') {
       const service = app.interactions;
       const question = typeof value.id === 'string' && app.store.get<Card>('interactions',value.id);
       if (!service || !question || !canViewQuestion(bot,paired,question) || question.kind !== 'question' || question.handler !== 'user' || question.version !== value.version ||
@@ -1318,12 +1318,22 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         if (!receipt || receipt.messageId !== input.messageId || receipt.navigation !== value.navigation ||
             receipt.questionId !== question.id || !liveQuestion(receipt,bot,paired)) return fail;
       }
-      if (value.kind === 'workbench.questionContext') {
+      if (value.kind === 'workbench.questionContext' || value.kind === 'workbench.questionMismatch') {
         const key = digest([bot.id,groupReadBinding(bot,paired),input.messageId]);
         const receipt = app.store.get<SentQuestion>(sentQuestions,key);
-        if (!service.requestContext || !runtime(bot.id).adapter?.updateCard || !question.runId || !question.decisionDeadlineAt ||
+        if (!runtime(bot.id).adapter?.updateCard || !question.runId || !question.decisionDeadlineAt ||
             !grant || grant.webOnly || !receipt || receipt.navigation !== value.navigation || receipt.questionId !== question.id ||
             !liveQuestion(receipt,bot,paired)) return fail;
+        if (value.kind === 'workbench.questionMismatch') {
+          if (!service.reportMismatch) return fail;
+          const report = async () => {
+            const closed = await service.reportMismatch!(question.id,question.version);
+            if (closed.status==='withdrawn' && closed.withdrawnReason==='owner_mismatch') closeWithdrawnForms(closed.id,[receipt]);
+          };
+          void track(bot.id,report());
+          return {toast:{type:'info',content:'正在提交督办复核，请查看原卡状态。'}};
+        }
+        if (!service.requestContext) return fail;
         const explain = async () => {
           const result = await service.requestContext!(question.id,question.version);
           refreshContextForms(result.id,[receipt]);
@@ -2285,7 +2295,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         const authorized=()=>active(bot.id,epoch,bot.revision) && state.adapter===adapter && state.readyEpoch===epoch && adapter.status().connected &&
           !!liveQuestion(updated,bot,paired) && owner(bot)?.senderId===paired.senderId && owner(bot)?.chatId===paired.chatId;
         if (!authorized()) return;
-        const {card,acceptsAnswer}=questionForm(question,receipt.navigation,webBase,true);
+        const {card,acceptsAnswer}=questionForm(question,receipt.navigation,webBase,true,!!app.interactions?.reportMismatch);
         const fingerprint=digest([question.version,question.decisionExplanation]);
         if (receipt.contextFingerprint===fingerprint) return;
         const payload={botId:bot.id,accountId:bot.appId,chatId:paired.chatId,target:paired.chatId,text:publicText(question.decisionExplanation,2400),key:'question-context:'+key+':'+fingerprint};
@@ -2311,29 +2321,31 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   }
   function closeWithdrawnForms(id:string, known?:SentQuestion[]) {
     const q=app.store.get<Card>('interactions',id);
-    if(q?.status!=='withdrawn' || q.withdrawnReason!=='user_spoke')return;
+    if(q?.status!=='withdrawn' || (q.withdrawnReason!=='user_spoke' && q.withdrawnReason!=='owner_mismatch'))return;
+    const mismatch=q.withdrawnReason==='owner_mismatch';
     for(const card of known ?? app.store.list<SentQuestion>(sentQuestions)){
       if(card.closeAttempted || card.questionId!==id)continue;
-      // Defer platform I/O until the accepting transaction has committed.
-      void track(card.botId,Promise.resolve().then(async ()=>{
+      // Send the closing edit after any pending explanation on this same platform card.
+      const key=digest([card.botId,card.binding,card.messageId]);
+      void track(card.botId,(contextUpdates.get(key)??Promise.resolve()).catch(()=>{}).then(async ()=>{
         const bot=current(card.botId),paired=owner(bot),{adapter,epoch}=runtime(bot.id);
         if(!paired || !adapter?.updateCard)return;
-        const key=digest([bot.id,card.binding,card.messageId]);
         const guard=()=>{
           if(!active(bot.id,epoch,bot.revision) || runtime(bot.id).adapter!==adapter || runtime(bot.id).readyEpoch!==epoch || !adapter.status().connected)return false;
           const live=current(bot.id),activeOwner=owner(live);
-          return app.store.get<Card>('interactions',id)?.withdrawnReason==='user_spoke' &&
+          const currentCard=app.store.get<Card>('interactions',id);
+          return currentCard?.status==='withdrawn' && currentCard.withdrawnReason===q.withdrawnReason &&
             !!activeOwner && groupReadBinding(live,activeOwner)===card.binding && !!privateTurn(live,activeOwner,card.inputId) &&
             !groupTasks.recalled(bot.id,bot.appId,paired.chatId,card.messageId) && runtime(bot.id).adapter===adapter;
         };
         const sent=app.store.get<SentQuestion>(sentQuestions,key);
         if(!sent || sent.closeAttempted || !guard())return;
         app.store.put(sentQuestions,key,{...sent,closeAttempted:true});
-        const payload={botId:bot.id,accountId:bot.appId,target:paired.chatId,chatId:paired.chatId,key:'question-withdrawn:'+key,text:'你已在此对话发送新消息，无需再回答。'};
+        const payload={botId:bot.id,accountId:bot.appId,target:paired.chatId,chatId:paired.chatId,key:'question-withdrawn:'+key,text:mismatch ? '已交督办复核，已暂停这次执行的自动跟进。本次报告没有中断执行。' : '你已在此对话发送新消息，无需再回答。'};
         const update=async (value:Json)=>{
           if(!guard() || !value || typeof value!=='object' || Array.isArray(value) || Object.entries(payload).some(([k,v])=>value[k]!==v))
             throw noDelivery('提问卡片的绑定已变化。');
-          await adapter.updateCard!(card.messageId,{schema:'2.0',header:{template:'grey',title:cardPlain('提问已撤回')},
+          await adapter.updateCard!(card.messageId,{schema:'2.0',header:{template:'grey',title:cardPlain(mismatch ? '已反馈任务方向不符' : '提问已撤回')},
             body:{elements:[{tag:'div',text:cardPlain(payload.text)}]}});
           return null;
         };
@@ -2367,7 +2379,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const cards=app.store.list<SentQuestion>(sentQuestions).filter(card=>{
       if(Date.parse(card.sentAt)>=oldest)return true;
       const question=app.store.get<Card>('interactions',card.questionId);
-      if (question?.decisionDeadlineAt && question.status==='open') return true;
+      if (question?.decisionDeadlineAt && (question.status==='open' || (question.withdrawnReason==='owner_mismatch' && !card.closeAttempted))) return true;
       app.store.remove?.(sentQuestions,digest([card.botId,card.binding,card.messageId]));
       return false;
     });
@@ -3032,8 +3044,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
             if (!paired || target !== paired.chatId || !canViewQuestion(bot,paired,question))
               throw noDelivery('这道提问已失去原私聊绑定。');
           }
-          if(question?.withdrawnReason==='user_spoke')
-            throw noDelivery('主人已在原对话发言，提问已撤回。');
+          if (question?.withdrawnReason==='user_spoke' || question?.withdrawnReason==='owner_mismatch')
+            throw noDelivery('主人已撤回原提问，停止发送旧卡。');
         };
         context.beforeSend();
       }
@@ -3054,7 +3066,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         const q = app.store.get<Card>('interactions',stamp.questionId);
         if (q?.kind === 'question' && canViewQuestion(bot,paired,q) && q.handler === 'user' && q.status === 'open' && cardAcceptsAnswer(q)) {
           const navigationId=navigation(bot,paired,entry.id)!;
-          const {card, acceptsAnswer} = questionForm(q, navigationId, webBase, !!app.interactions.requestContext && !!adapter.updateCard);
+          const {card, acceptsAnswer} = questionForm(q, navigationId, webBase, !!app.interactions.requestContext && !!adapter.updateCard, !!app.interactions.reportMismatch && !!adapter.updateCard);
           context.card = card;
           if (acceptsAnswer || q.wait === false || q.decisionDeadlineAt) {
             const previous = context.onSent;
@@ -3259,7 +3271,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const noticeId = message.origin === 'notification' && message.id.startsWith('interaction-notice:')
       ? message.id.slice('interaction-notice:'.length) : undefined;
     const questionId = noticeId && app.store.get<{inputId?:string}>('interaction-origins',noticeId)?.inputId === message.replyTo ? noticeId : undefined;
-    if (questionId && app.store.get<Card>('interactions',questionId)?.withdrawnReason === 'user_spoke') return;
+    const withdrawn = questionId && app.store.get<Card>('interactions',questionId)?.withdrawnReason;
+    if (withdrawn === 'user_spoke' || withdrawn === 'owner_mismatch') return;
     const entry = await put(bot, { direction: 'outbox', eventKey: `feishu-reply:${JSON.stringify([bot.id, bot.appId, route.inputId, message.id])}`,
       title: bot.name, text: message.text, target: route.target, replyTo: route.inputId, sourceMessageId: route.sourceMessageId, requiresConfirmation: false }, route.scope, { questionId, topic: route.topic, groupTaskOrigin: route.groupTaskOrigin, resultRelayEntryId: route.resultRelayEntryId, chatProject: route.chatProject, conversationThreadId: route.conversationThreadId, privateSenderId: route.privateSenderId, chatBinding: route.chatBinding, group: route.group, command: route.command, relay: route.relay, platformReplyTo: route.platformReplyTo ?? (questionId ? route.sourceMessageId : undefined), threadId: route.threadId });
     if (active(bot.id, epoch, bot.revision) && entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);

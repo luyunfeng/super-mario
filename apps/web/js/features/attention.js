@@ -3,7 +3,7 @@
 import { h, keyedList } from '../lib/dom.js';
 import { timeAgo } from '../lib/format.js';
 import { Button, Pill, Field, Input, TextArea, Banner } from '../ui/kit.js';
-import { confirmDialog, openDrawer } from '../ui/overlay.js';
+import { confirmDialog, openDrawer, toast } from '../ui/overlay.js';
 import { createQuestionAnswers, questionDeadlineText } from './question-answers.js';
 import { openInboxHandlingDrawer } from './inbox-handling.js';
 
@@ -76,6 +76,8 @@ export function createAttention({ api, store, task = false }) {
       if (result.delivery !== 'confirmed') return { text: '回答已记录，后续处理结果未知。请核对回执。', tone: 'danger' };
       return { text: '回答已记录。' };
     }
+    if (result?.status === 'withdrawn' && result.withdrawnReason === 'owner_mismatch')
+      return { text: '已退回原督办核对要求，该执行的自动跟进已暂停。', toast: true };
     if (result?.status === 'unknown' || result?.delivery === 'unknown') return { text: '结果未知，请先核对，不要重复提交。', tone: 'danger' };
     if (result?.status === 'failed' || result?.delivery === 'failed') return { text: '操作没有执行，内容已保留，可以重试。', tone: 'danger', retry: true };
     if (result?.status === 'withdrawn') return { text: '提问已关闭。' };
@@ -133,6 +135,7 @@ export function createAttention({ api, store, task = false }) {
       try {
         const result = await api(action.path, { method: action.method, body: { ...action.body, ...(answers ? { answers } : action.requiresText ? { text } : {}) } });
         const outcome = resultNote(result, action);
+        if (outcome.toast) toast(outcome.text);
         note.textContent = outcome.text;
         note.className = `small ${outcome.tone === 'danger' ? 'text-danger' : 'muted'}`;
         if (!outcome.retry) { done = true; actions.hidden = true; if (input) input.disabled = true; }
@@ -151,7 +154,9 @@ export function createAttention({ api, store, task = false }) {
       for (const [index, action] of item.actions.filter(entry => !entry.requiresText).entries()) {
         const requestsContext = action.path.endsWith('/context');
         if (requestsContext && requestedVersion === action.body.version) continue;
-        actions.append(Button({ label: action.label, kind: requestsContext || item.wait === false ? 'ghost' : index === 0 ? 'primary' : 'secondary', size: 'sm', onClick: () => submit(action), dataset: { action: action.label } }));
+        const mismatch = action.path.endsWith('/mismatch');
+        actions.append(Button({ label: action.label, title: mismatch ? '退回原督办核对要求，暂停该执行的自动跟进' : undefined,
+          kind: mismatch || requestsContext || item.wait === false ? 'ghost' : index === 0 ? 'primary' : 'secondary', size: 'sm', onClick: () => submit(action), dataset: { action: action.label } }));
       }
       if (item.type === 'approval' && item.editable !== false && item.id.startsWith('approval:')) actions.append(Button({ label: '改一下', kind: 'ghost', size: 'sm', onClick: () => openEdit(item), dataset: { action: '改一下' } }));
       actions.hidden = done || !actions.childElementCount;

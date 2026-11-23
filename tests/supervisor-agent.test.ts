@@ -7,6 +7,9 @@ import { createStore } from '../packages/core/src/store.ts';
 import { createEventBus } from '../packages/core/src/events.ts';
 import { createRunScopes } from '../packages/core/src/run-scope.ts';
 import { createRunReview } from '../packages/core/src/run-review.ts';
+import { runDeadlineTarget, holdRunQuestion, readRunQuestionHold } from '../packages/core/src/run-question-deadline.ts';
+import type { Card } from '../packages/core/src/interactions.ts';
+import { createSupervision } from '../packages/core/src/supervision.ts';
 import { createSupervisorAgent } from '../packages/core/src/supervisor-agent.ts';
 import type { Message, Run, SupervisionSignal } from '../packages/protocol/src/index.ts';
 
@@ -465,4 +468,41 @@ test('原问题没有新决策依据时仅记录一次静默核验',async t=>{
   assert.equal(f.calls.length,1);
   assert.equal(f.events.since(0).some(event=>event.type==='supervisor.review'),false);
   assert.deepEqual(f.store.get('interactions',f.card.id),f.card);
+});
+
+test('偏离要求只在原督办核对同一轮目标后解除暂停，旧回复和泛化建议无效', async t=>{
+  const f=fixture(t), now=new Date().toISOString();
+  const supervision=createSupervision({store:f.store,events:f.events});
+  t.after(()=>supervision.close());
+  const run:Run={id:'r',machineId:'node',sessionId:'s',executorId:'node/fixture',executionMode:'interactive',status:'running',
+    prompt:'按部门核对草稿',doneWhen:'列出每个部门',conversationId:'main',output:'',createdAt:now,updatedAt:now};
+  f.store.put('runs',run.id,run);
+  function object(id:string) {
+    const card:Card={id,kind:'question',runId:run.id,executorId:run.executorId,title:'按月排序？',body:'排序维度',layer:'task',handler:'user',
+      status:'withdrawn',withdrawnReason:'owner_mismatch',version:2,createdAt:now,updatedAt:now,expiresAt:now,decisionDeadlineAt:now};
+    f.store.put('interactions',id,card);
+    f.store.put('interaction-origins',id,{runDeadline:runDeadlineTarget(f.store,run)});
+    holdRunQuestion(f.store,card);supervision.tick();
+    return card;
+  }
+  const first=object('first');
+  const response=(id:string)=>({...answer(),text:JSON.stringify({cardId:id,version:2,comparison:'原目标按部门，原题却询问按月份。',nextStep:'先按部门核对清单。'})});
+  const firstReview=deferred<Message>(), started=deferred<void>();
+  f.respondWith(()=>{started.resolve();return firstReview.promise;});
+  const reading=f.service.flush();await started.promise;
+  const second=object('second');firstReview.resolve(response(first.id));
+  assert.equal(await reading,undefined);
+  assert.equal(readRunQuestionHold(f.store,run)?.cardId,second.id);
+  f.respondWith(async()=>answer());
+  await assert.rejects(f.service.flush(),/保持暂停/);
+  assert.equal(readRunQuestionHold(f.store,run)?.cardId,second.id);
+  f.respondWith(async()=>response(second.id));
+  const result=await f.service.resume();
+  assert.deepEqual(result?.runIds,[run.id]);assert.match(result!.text,/原目标按部门/);
+  assert.match(f.calls.at(-1)!.text,/不要回答旧卡/);
+  assert.equal(readRunQuestionHold(f.store,run),undefined);
+  assert.equal(f.store.get<Card>('interactions',second.id)?.status,'withdrawn');
+  assert.deepEqual(f.store.get('runs',run.id),run);
+  supervision.tick();
+  assert.ok(f.signals().filter(s=>s.kind==='owner_mismatch').every(s=>s.resolvedAt));
 });

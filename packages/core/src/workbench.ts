@@ -62,7 +62,7 @@ import { createPlans } from './plans.ts';
 import { createPolicies, validatePolicyPatch, type PolicyConfig } from './policies.ts';
 import { readRunQuestionChoice } from './run-question-choice.ts';
 import { cardAcceptsAnswer } from './question-deadline.ts';
-import { readRunDeadlineTarget, runDeadlineTarget, runQuestionReply, type RunDeadlineTarget } from './run-question-deadline.ts';
+import { runQuestionInputHeld, holdRunQuestion, readRunQuestionHold, readRunDeadlineTarget, runDeadlineTarget, runQuestionReply, type RunDeadlineTarget } from './run-question-deadline.ts';
 import { createInteractions, type Card } from './interactions.ts';
 import { createSupervisorAgent } from './supervisor-agent.ts';
 import { createEffects } from './effects.ts';
@@ -649,6 +649,24 @@ export async function createWorkbench(config: AppConfig) {
   });
   const autoTakeover = createAutoTakeover({
     store, events, machines: () => machines,
+    async verifyAutomaticKeys(machineId,paneId) {
+      const held=()=>store.list<Run>('runs').filter(run=>run.machineId===machineId && runQuestionInputHeld(store,run));
+      const before=held();
+      if (!before.length) return ()=>!held().length;
+      const machine=machines?.list().find(row=>row.id===machineId && row.online);
+      if (!machine?.capabilities.includes('executor.sessions')) return ()=>false;
+      const rows=await machines!.call(machineId,'executor.sessions',{});
+      if (!Array.isArray(rows)) return ()=>false;
+      // Host session IDs and terminal pane IDs have different namespaces. Only the
+      // executing node can confirm this mapping. Recheck holds immediately before keys are sent.
+      return ()=>machines?.list().some(row=>row.id===machineId && row.online && row.connectedAt===machine.connectedAt)===true &&
+        held().every(run=>{
+          const matches=rows.filter(row=>row && typeof row==='object' && !Array.isArray(row) && row.sessionId===run.sessionId);
+          const binding=matches.length===1 ? matches[0] : undefined;
+          return !!binding && typeof binding==='object' && !Array.isArray(binding) &&
+            typeof binding.paneId==='string' && !!binding.paneId && binding.paneId!==paneId;
+        });
+    },
     openCard: input => interactions.open(input),
     withdrawCard: id => { try { const card = store.get<{ version: number; status: string }>('interactions', id); if (card?.status === 'open') interactions.withdraw(id, card.version); } catch {} },
   });
@@ -683,6 +701,11 @@ export async function createWorkbench(config: AppConfig) {
   } });
   const answeredInCurrentTurn = new Set<string>();
   const interactionService = createInteractions({ store, events, publish: background.publish,
+    holdMismatch:card=>holdRunQuestion(store,card),
+    defaultHeld(card) {
+      const run=card.runId && store.get<Run>('runs',card.runId);
+      return !!run && !!readRunQuestionHold(store,run);
+    },
     questionContext(card) {
       const target=readRunDeadlineTarget(store,card);
       const run=target && store.get<Run>('runs',target.runId);
@@ -723,6 +746,7 @@ export async function createWorkbench(config: AppConfig) {
           const target=readRunDeadlineTarget(store,card);
           if (!target || closing || runQuestionState(card)!=='eligible')
             throw Object.assign(new Error('原执行或提问来源已变化，未发送选择'),{delivery:'no'});
+          if (card.byDefault) assertAutomaticInputAllowed(target.runId);
           const response=await machines!.call(target.machineId,'executor.input',{sessionId:target.sessionId,text:reply});
           const receipt=executorInputReceipt(response);
           if (receipt!=='sent') throw Object.assign(new Error(receipt==='unsent'?'执行者未接收选择':'执行者未确认送达选择'),
@@ -734,7 +758,7 @@ export async function createWorkbench(config: AppConfig) {
     }
     if (card.wait === false || card.byDefault) return laterQuestions.end(card.id);
     if (card.runId && ['question', 'permission'].includes(card.kind)) {
-      const receipt = executorInputReceipt(await inputRun(card.runId, text, `interaction:${card.id}`));
+      const receipt = executorInputReceipt(await inputRun(card.runId, text, `interaction:${card.id}`,undefined,['user','user_feishu','user_chat'].includes(card.answeredBy??'')));
       if (receipt !== 'sent') {
         throw Object.assign(new Error(receipt === 'unsent' ? '执行者未接收这条答复' : '执行者未确认收到这条答复'),
           {delivery:receipt === 'unsent' ? 'no' : 'unknown'});
@@ -858,7 +882,11 @@ export async function createWorkbench(config: AppConfig) {
     }
     return card;
   }
-  const interactions = {...interactionService, openFromWeb(input:Parameters<typeof interactionService.open>[0]) {
+  const interactions = {...interactionService, reportMismatch(id:string,version:number) {
+    const card=interactionService.reportMismatch(id,version);
+    supervision.tick();
+    return card;
+  }, openFromWeb(input:Parameters<typeof interactionService.open>[0]) {
     return input?.wait===false || input?.deadline!==undefined
       ? store.transaction(()=>openInteraction(input,undefined,true)) : openInteraction(input,undefined,true);
   }, open(input:Parameters<typeof interactionService.open>[0], source?:Message) {
@@ -1146,7 +1174,7 @@ export async function createWorkbench(config: AppConfig) {
         throw new InputError('审批已改变原执行目标，请重新选择会话', 409);
       if (target.topic && store.get<Message>('messages', target.topic.inputId)?.text !== approval.params.text)
         throw new InputError('审批输入已偏离话题原文，请从原话题重新提交', 409);
-      return inputRun(target.runId, requiredText(approval.params.text, '输入'), `approval:${approval.id}:${approval.version}`, target);
+      return inputRun(target.runId, requiredText(approval.params.text, '输入'), `approval:${approval.id}:${approval.version}`, target,true);
     }
     if (approval.kind === inboxHandlingApprovalKind || store.get('inbox-handling.approvals',approval.id)) return inboxHandling.executeApproved(approval);
     if (approval.params.outboxId) return await background.outbox.approve(approval) as unknown as Json;
@@ -1160,7 +1188,7 @@ export async function createWorkbench(config: AppConfig) {
       const run = dispatch(params, `approval:${approval.id}:${approval.version}`, true);
       return { accepted: true, runId: run.id };
     }
-    if (approval.kind === 'input') return inputRun(requiredText(approval.params.id, '执行记录'), requiredText(approval.params.text, '输入'), `approval:${approval.id}:${approval.version}`);
+    if (approval.kind === 'input') return inputRun(requiredText(approval.params.id, '执行记录'), requiredText(approval.params.text, '输入'), `approval:${approval.id}:${approval.version}`,undefined,true);
     if (!replyToFeishu) throw new InputError('飞书连接不可用', 503);
     await replyToFeishu(requiredText(approval.params.chatId, '目标会话'), requiredText(approval.params.text, '回复内容'), `approval:${approval.id}:${approval.version}`);
     return { accepted: true, identity: 'bot', todoCompleted: false };
@@ -2060,14 +2088,20 @@ export async function createWorkbench(config: AppConfig) {
   function runObservations(id: string, includeRecommendations = true) {
     const run = store.get<Run>('runs', id);
     if (!run) throw new InputError('执行记录不存在', 404);
-    return { runId: id, status: run.status, progress: executionProgress(run.progress) ?? null,
+    return { runId: id, status: run.status, ...(runQuestionInputHeld(store,run) && {followupsHeld:true}), progress: executionProgress(run.progress) ?? null,
       blockedBy: readRunBlockers(store, Date.now(), includeRecommendations)(run) };
   }
-  async function inputRun(id: string, text: string, key: string = randomUUID(), pinned?: FeishuAgentInputTarget): Promise<Json> {
+  function assertAutomaticInputAllowed(id:string) {
+    const run=store.get<Run>('runs',id);
+    if (run && runQuestionInputHeld(store,run))
+      throw Object.assign(new InputError('主人已指出执行偏题，自动输入暂停，等待复核',409),{delivery:'no'});
+  }
+  async function inputRun(id: string, text: string, key: string = randomUUID(), pinned?: FeishuAgentInputTarget, explicitOwner=false): Promise<Json> {
     if (closing) throw new InputError('服务正在关闭', 503);
     const run = remoteRun(id);
     if (run.executionMode === 'task') throw new InputError('任务模式不接受交互输入；请新建任务或选择交互模式', 409);
     return effects.perform({ key, kind: 'executor.input', target: run.id, summary: '发送会话输入', content: { text }, run: async () => {
+      if (!explicitOwner) assertAutomaticInputAllowed(id);
       if (pinned) {
         // effects.perform schedules I/O after claiming the key. Check live state at that boundary.
         const current = store.get<Run>('runs', id);

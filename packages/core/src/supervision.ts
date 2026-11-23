@@ -1,4 +1,4 @@
-import { readRunDeadlineTarget } from './run-question-deadline.ts';
+import { readRunDeadlineTarget, readRunQuestionHold } from './run-question-deadline.ts';
 import { cardAcceptsAnswer } from './question-deadline.ts';
 import type { Card } from './interactions.ts';
 import { planEstimateClock, runScopeClock } from './run-scope.ts';
@@ -124,6 +124,9 @@ export function createSupervision({ store, events, enabled = () => true, now = (
       desired.set(id, { id, kind, text, ...reference, createdAt: timestamp });
     }
     for (const run of store.list<Run>('runs')) {
+      const hold = readRunQuestionHold(store,run);
+      if (hold) add('owner_mismatch',['question',hold.cardId],hold.cardVersion,'主人指出执行偏离要求，自动跟进已暂停，等待督办核对。',
+        { runId:run.id, todoId:run.todoId, questionCardId:hold.cardId, questionVersion:hold.cardVersion });
       if (run.status === 'completed' || run.status === 'failed') {
         add('review', run.id, `${run.status}:terminal`, `执行${run.status === 'completed' ? '完成' : '失败'}，请复核：${run.id}`, { runId: run.id });
       }
