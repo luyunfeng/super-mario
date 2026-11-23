@@ -10,7 +10,7 @@ export function turnRetryActive(store) {
 export function createTurnRetry(api,store) {
   const attempts = new Map();
   let owner;
-  return function retryButton(reply, history, conversationId, receiptHref) {
+  return function retryButton(reply, history, conversationId, receiptHref, isCurrent = () => true) {
     if (!turnRetryActive(store) || reply.conversationId !== conversationId || reply.role !== 'assistant' || reply.status !== 'failed' ||
         reply.retryable !== true || reply.stoppedByUser || !reply.replyTo) return null;
     const source = history?.find(m => m.id === reply.replyTo);
@@ -36,7 +36,7 @@ export function createTurnRetry(api,store) {
     if (attempts.has(reply.id)) attempts.get(reply.id).paint=paint;
     paint();
     async function submit() {
-      if (!turnRetryActive(store) || store.view.snapshotOwner !== identity || api.draftOwner() !== identity || attempts.get(reply.id)?.busy || attempts.get(reply.id)?.accepted) return;
+      if (!isCurrent() || !turnRetryActive(store) || store.view.snapshotOwner !== identity || api.draftOwner() !== identity || attempts.get(reply.id)?.busy || attempts.get(reply.id)?.accepted) return;
       const state = {busy:true,text:'正在提交重试…',paint};
       attempts.set(reply.id,state);paint();
       try {

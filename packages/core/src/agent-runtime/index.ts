@@ -130,6 +130,12 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
   const basePrompt = options.contextMode === 'project-memory' ? PROJECT_MEMORY_SYSTEM_PROMPT : options.systemPrompt ?? MAIN_AGENT_SYSTEM_PROMPT;
   const { config, store, events, contributions } = options;
   const ownConversation = options.conversationId ?? 'main';
+  function retrySource(user: Message) {
+    if (!ownConversation.startsWith('web:')) return directWebSource(store,user);
+    return user.conversationId===ownConversation && user.role==='user' && !user.todoId &&
+      directWebInput(store,user) && options.canUseScope?.(user)===true;
+  }
+
   const audienceHistory = options.feishuBotId ? feishuAudienceHistory(store, options.feishuBotId, ownConversation) : undefined;
   let audience: FeishuAudience | undefined;
   const visibleTurn = (message: Message) => message.conversationId === ownConversation
@@ -852,7 +858,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
 
   function markToolStart(turn:PendingTurn) {
     if (!turn.assistant || turn.toolStarted) return;
-    if (directWebSource(store,turn.user)) store.put('message.tool-starts',turn.assistant.id,{inputId:turn.user.id});
+    if (retrySource(turn.user)) store.put('message.tool-starts',turn.assistant.id,{inputId:turn.user.id});
     turn.toolStarted = true;
   }
 
@@ -1195,7 +1201,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     }
     // Persistence/event failures escape to close(), instead of becoming unhandled rejections.
     store.transaction(() => {
-      if (confirmedFailure && assistant.status === 'failed' && !turn.stopped && !turn.toolStarted && !stopping && directWebSource(store,user) &&
+      if (confirmedFailure && assistant.status === 'failed' && !turn.stopped && !turn.toolStarted && !stopping && retrySource(user) &&
           !store.get('message.tool-starts',assistant.id)) {
         assistant.retryable = true;
         store.put('retryableFailures',assistant.id,{inputId:user.id});
@@ -1244,7 +1250,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       const source=store.get<Message>('messages',original.id), reply=store.get<Message>('messages',failed.id);
       if (!source || !reply || source.conversationId!==ownConversation || reply.conversationId!==ownConversation ||
           source.role!=='user' || !source.directWebInput || !!source.replyTo || (source.origin && source.origin!=='user') ||
-          store.get('message.routes',source.id) || reply.replyTo!==source.id || reply.role!=='assistant' ||
+          store.get('message.routes',source.id) || (ownConversation.startsWith('web:') && (source.todoId || store.get('message.routes',reply.id))) ||
+          reply.replyTo!==source.id || reply.role!=='assistant' ||
           reply.projectId!==source.projectId || reply.todoId!==source.todoId || source.status!=='failed' || reply.status!=='failed' ||
           !reply.retryable || source.stoppedByUser || reply.stoppedByUser || store.get('message.tool-starts',reply.id) ||
           store.get<{inputId:string}>('retryableFailures',reply.id)?.inputId!==source.id)

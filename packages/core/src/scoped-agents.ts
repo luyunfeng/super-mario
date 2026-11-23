@@ -106,32 +106,37 @@ export function createScopedAgents(options: Options) {
     deleting.set(id,job);
     return job;
   }
+  function webAgent(id:string,projectId?:string) {
+    if(closed||configuring)throw Object.assign(new Error('对话运行时正在关闭或应用配置'),{status:503});
+    const conversationId='web:'+id;
+    const current=()=>options.webConversationAllowed?.(id,projectId)===true;
+    if(!current())throw Object.assign(new Error('独立对话已停用或范围已变化'),{status:409});
+    let entry=agents.get(conversationId);
+    if(!entry){
+      const scope:BotScope=projectId?{kind:'project',projectId}:{kind:'global'};
+      const assistantId = options.webThreadAssistant?.(id)?.id;
+      const runtime=createAgentRuntime({...options,scope,conversationId,canUseScope:current,botContext:undefined,
+        ...(assistantId && {mainAssistantProfile:undefined, threadAssistantGuidance:() => {
+          const current = options.webThreadAssistant?.(id);
+          if (current?.id !== assistantId) throw new Error('助理与当前对话的绑定已变化，请重新打开');
+          return webThreadAssistantGuidance(current);
+        }}),
+        systemPrompt:(projectId?SCOPED_WORK_SYSTEM_PROMPT:MAIN_AGENT_SYSTEM_PROMPT)+'\n'+WEB_THREAD_GUIDANCE});
+      entry={botId:conversationId,scope,conversationId,runtime};agents.set(conversationId,entry);
+    }
+    return entry.runtime;
+  }
   return {
     retryFailedInput(original:Message,failed:Message) {
       const source = options.store.get<Message>('messages',original.id);
+      if (source?.conversationId.startsWith('web:'))
+        return webAgent(source.conversationId.slice(4),source.projectId).retryFailedInput(source,failed);
       if (!source?.projectId || source.conversationId !== 'project:' + source.projectId + ':work')
         throw Object.assign(new Error('仅可重试原项目工作会话的回复'),{status:403});
       return projectAgent(source.projectId).retryFailedInput(source,failed);
     },
     postWebConversation(id:string,projectId:string|undefined,text:string,context:Pick<ScopedPostContext,'requestId'|'files'|'images'>={}) {
-      if(closed||configuring)throw Object.assign(new Error('对话运行时正在关闭或应用配置'),{status:503});
-      const conversationId='web:'+id;
-      const current=()=>options.webConversationAllowed?.(id,projectId)===true;
-      if(!current())throw Object.assign(new Error('独立对话已停用或范围已变化'),{status:409});
-      let entry=agents.get(conversationId);
-      if(!entry){
-        const scope:BotScope=projectId?{kind:'project',projectId}:{kind:'global'};
-        const assistantId = options.webThreadAssistant?.(id)?.id;
-        const runtime=createAgentRuntime({...options,scope,conversationId,canUseScope:current,botContext:undefined,
-          ...(assistantId && {mainAssistantProfile:undefined, threadAssistantGuidance:() => {
-            const current = options.webThreadAssistant?.(id);
-            if (current?.id !== assistantId) throw new Error('助理与当前对话的绑定已变化，请重新打开');
-            return webThreadAssistantGuidance(current);
-          }}),
-          systemPrompt:(projectId?SCOPED_WORK_SYSTEM_PROMPT:MAIN_AGENT_SYSTEM_PROMPT)+'\n'+WEB_THREAD_GUIDANCE});
-        entry={botId:conversationId,scope,conversationId,runtime};agents.set(conversationId,entry);
-      }
-      return entry.runtime.post(text,conversationId,{requestId:context.requestId,files:context.files,images:context.images,directWebInput:true,projectId});
+      return webAgent(id,projectId).post(text,'web:'+id,{requestId:context.requestId,files:context.files,images:context.images,directWebInput:true,projectId});
     },
     postProject(projectId:string, text:string, context?:ScopedPostContext) {
       return projectAgent(projectId).post(text, undefined, context);

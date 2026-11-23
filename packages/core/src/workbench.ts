@@ -1235,14 +1235,23 @@ export async function createWorkbench(config: AppConfig) {
   async function retryFailedReply(id:string, conversationId:string) {
     if (!plugins.list().some(p=>p.id==='conversation-retry' && p.status==='active'))
       throw new InputError('重试失败答复插件已停用',503);
+    const thread = conversationId.startsWith('web:');
+    if (thread && !plugins.list().some(p=>p.id==='web-conversations' && p.status==='active'))
+      throw new InputError('独立 Web 对话插件已停用',503);
     const failed=store.get<Message>('messages',id);
     const source=failed?.replyTo && store.get<Message>('messages',failed.replyTo);
     if (!failed || failed.role!=='assistant' || failed.conversationId!==conversationId || !source ||
         source.role!=='user' || !source.directWebInput || source.replyTo ||
         (source.origin && source.origin!=='user') || store.get('message.routes',source.id) ||
         source.conversationId!==conversationId || source.projectId!==failed.projectId || source.todoId!==failed.todoId ||
-        !(conversationId==='main' || (source.projectId && conversationId===`project:${source.projectId}:work`)))
+        !(thread || conversationId==='main' || (source.projectId && conversationId===`project:${source.projectId}:work`)))
       throw new InputError('当前 Web 对话中没有这条答复',404);
+    if (thread) {
+      const threadId=conversationId.slice(4);
+      const row=requireWebConversationHistory(store,threadId,source.projectId);
+      if (!independentWebSource(store,failed,conversationId,row.projectId)) throw new InputError('当前独立对话中没有这条答复',404);
+      if (row.archived) throw new InputError('对话已归档，请恢复后再重试',409);
+    }
     if (source.projectId) {
       const project=store.get<Project>('projects',source.projectId);
       if (!project || project.archivedAt) throw new InputError('原项目已不可用',409);

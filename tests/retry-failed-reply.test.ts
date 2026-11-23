@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import {createServer,type ServerResponse} from 'node:http';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -7,7 +8,7 @@ import test from 'node:test';
 import {startServer} from '../apps/server/src/index.ts';
 import type {Message} from '../packages/protocol/src/index.ts';
 
-test('原主和项目对话可手动重试未执行工具的失败回复，原附件复用，并发只启动一轮', {timeout:45000},async t=>{
+test('主对话、项目与独立 Web 对话可重试工具前失败的回复，并发复用原附件仅启动一轮', {timeout:45000},async t=>{
   const dir=await mkdtemp(join(tmpdir(),'mario-retry-reply-')),headers={authorization:'Bearer fixture','content-type':'application/json'};
   const requests=new Map<string,string[]>(),retryPrompt=new Set<string>(),held=new Map<string,ServerResponse>();
   const model=createServer(async(req,res)=>{
@@ -19,12 +20,12 @@ test('原主和项目对话可手动重试未执行工具的失败回复，原�
     const attempts=requests.get(tag)??[];attempts.push(user);requests.set(tag,attempts);
     const event=(delta:object,finish_reason:string|null)=>'data: '+JSON.stringify({id:'fixture',object:'chat.completion.chunk',
       model:'fixture',choices:[{index:0,delta,finish_reason}]})+'\n\n';
-    if(tag==='CASE_TOOL' && last.role==='user'){
+    if(['CASE_TOOL','CASE_THREADTOOL'].includes(tag) && last.role==='user'){
       res.writeHead(200,{'content-type':'text/event-stream'});
       const tool={index:0,id:'synthetic',type:'function',function:{name:'todos_list',arguments:'{}'}};
       return res.end(event({role:'assistant',tool_calls:[tool]},null)+event({},'tool_calls')+'data: [DONE]\n\n');
     }
-    if(tag==='CASE_STOP' || (attempts.length===2 && ['CASE_MAIN','CASE_PROJECT'].includes(tag))){
+    if(tag==='CASE_STOP' || (attempts.length===2 && ['CASE_MAIN','CASE_PROJECT','CASE_THREAD'].includes(tag))){
       res.writeHead(200,{'content-type':'text/event-stream'});res.write(event({role:'assistant',content:'合成回复'},null));
       held.set(tag,res);return;
     }
@@ -44,8 +45,12 @@ test('原主和项目对话可手动重试未执行工具的失败回复，原�
   const retry=(a:Message,conversationId=a.conversationId)=>post('/messages/'+a.id+'/retry',{conversationId});
   const project=host.app.projects.create({name:'重试项目'}),projectPath='/projects/'+project.id+'/messages';
   const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jCc8AAAAASUVORK5CYII=';
-  for (const main of [true,false]) {
-    const tag=main?'CASE_MAIN':'CASE_PROJECT',conv=main?'main':'project:'+project.id+':work',path=main?'/messages':projectPath;
+  const threadId=randomUUID(),sibling=randomUUID(),threadPath='/web-conversations/'+threadId;
+  for(const id of [threadId,sibling])await response(await post('/web-conversations',{id,title:'合成重试线程',projectId:project.id}),201);
+  const threadState=(version:number,archived:boolean)=>fetch(host.url+'/api/v1'+threadPath,{method:'PATCH',headers,body:JSON.stringify({version,archived})});
+  for (const tag of ['CASE_MAIN','CASE_PROJECT','CASE_THREAD']) {
+    const main=tag==='CASE_MAIN',thread=tag==='CASE_THREAD';
+    const conv=main?'main':thread?'web:'+threadId:'project:'+project.id+':work',path=main?'/messages':thread?threadPath+'/messages':projectPath;
     const bytes='附件合成标记 '+tag,original=tag+' 请核对以下两项。\n保留第二行。';
     const upload=await response(await fetch(host.url+'/api/v1/chat-files/uploads?'+new URLSearchParams({
       conversationId:conv,name:'合成.txt',...(!main && {projectId:project.id})}),{
@@ -65,6 +70,22 @@ test('原主和项目对话可手动重试未执行工具的失败回复，原�
       assert.equal(requests.get(tag)?.length,1);
       await response(await post('/plugins/conversation-files',{enabled:true}),200);
     }
+    if(thread){
+      assert.equal((await retry(failed,'web:'+sibling)).status,404);
+      assert.equal((await retry(failed,'project:'+project.id+':work')).status,404);
+      assert.equal((await threadState(1,true)).status,200);
+      assert.equal((await retry(failed)).status,409);
+      assert.equal((await threadState(2,false)).status,200);
+      for(const plugin of ['conversation-images','conversation-files','conversation-retry','web-conversations']){
+        await host.app.plugins.setEnabled(plugin,false);
+        assert.ok([403,503].includes((await retry(failed)).status));
+        await host.app.plugins.setEnabled(plugin,true);
+      }
+      host.app.store.put('message.routes',failed.id,{channel:'feishu'});
+      assert.equal((await retry(failed)).status,404);
+      host.app.store.remove('message.routes',failed.id);
+      assert.equal(requests.get(tag)?.length,1);
+    }
     const [a,b]=await Promise.all([retry(failed),retry(failed)]);
     const one:Message=await response(a,202),two:Message=await response(b,202);
     assert.equal(one.id,two.id);assert.notEqual(one.id,input.id);assert.equal(one.retryOf,failed.id);
@@ -75,8 +96,19 @@ test('原主和项目对话可手动重试未执行工具的失败回复，原�
       choices:[{index:0,delta:{},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n');
     await answer(one,'done');assert.equal(requests.get(tag)?.length,2);
     assert.equal(requests.get(tag)![1],failedAttempt);assert.ok(retryPrompt.has(tag),'真实重试轮须收到授权边界提示');
-    assert.equal(host.app.store.get<Message>('messages',failed.id)?.status,'failed');
+    if(thread){
+      const del=await fetch(host.url+'/api/v1'+threadPath,{method:'DELETE',headers,body:JSON.stringify({version:3})});
+      assert.equal(del.status,200);
+      assert.equal((await retry(failed)).status,404);
+      assert.equal(requests.get(tag)?.length,2);
+    }
+    if(!thread)assert.equal(host.app.store.get<Message>('messages',failed.id)?.status,'failed');
   }
+  const unsafeInput:Message=await response(await post('/web-conversations/'+sibling+'/messages',{text:'CASE_THREADTOOL 请查看待办'}),202);
+  const unsafeReply=await answer(unsafeInput,'failed');
+  assert.ok(!unsafeReply.retryable);
+  assert.equal((await retry(unsafeReply)).status,409);
+  assert.equal(requests.get('CASE_THREADTOOL')?.length,2);
   const old:Message=await response(await post(projectPath,{text:'CASE_RETIRED 稍后归档项目'}),202);
   const retired=await answer(old,'failed');assert.equal(retired.retryable,true);
   const archive=await fetch(host.url+'/api/v1/projects/'+project.id,{method:'DELETE',headers});assert.equal(archive.status,200);

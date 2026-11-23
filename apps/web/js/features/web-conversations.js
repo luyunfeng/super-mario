@@ -1,3 +1,4 @@
+import {createTurnRetry,turnRetryActive} from './retry-turn.js';
 import {conversationImagesActive,createMessageImages,messageImages} from './message-images.js';
 import {createMessageFiles,messageFiles} from './message-files.js';
 import {createMessageCopyActions,conversationExportActive,openConversationExport} from './conversation-export.js';
@@ -21,6 +22,8 @@ const button=(label,onClick)=>h('button',{type:'button',class:'btn btn--sm',oncl
 const href=(id,at)=>'#chat?'+new URLSearchParams({thread:id,...(at && {at})});
 
 export function createWebConversations({api,store,scope,router}){
+  const retryTurn=createTurnRetry(api,store);
+  let retryEnabled=false;
   const drafts=createConversationDrafts({api,store});
   const search=conversationMessageSearch({api,store,router,allowedCategories:['text','quoted','file'],hitLink:(range,id)=>href(range.conversationId.slice(4),id)});
   const active=()=>store.view.snapshotOwner===drafts.owner() && !store.view.unauthorized &&
@@ -108,20 +111,21 @@ export function createWebConversations({api,store,scope,router}){
     const hidden=!readable || !conversationExportActive(store);
     if(hidden)exportDrawer?.close();
     const nextQuoteKey=readable && !meta.archived && store.view.snapshot.plugins.some(p=>p.id==='conversation-quotes' && p.status==='active') ? draftKey : null;
+    const nextRetry=!!writableKey && turnRetryActive(store);
     const nextEdit=!!readable && !meta.archived && store.view.snapshot.plugins.some(p=>p.id==='conversation-edit' && p.status==='active');
     const editChanged=editEnabled!==nextEdit;
     const quoteChanged=quoteKey!==nextQuoteKey;
     if(editChanged || quoteChanged){editEnabled=nextEdit;edit.reset();}
     if(quoteChanged){quoteKey=nextQuoteKey;quote.restore(quoteKey);epoch++;}
-    if(exportButton.hidden!==hidden || editChanged || quoteChanged || favoriteEpoch!==favorites.epoch || promptEpoch!==prompts.epoch){
-      promptEpoch=prompts.epoch;favoriteEpoch=favorites.epoch;
+    if(retryEnabled!==nextRetry || exportButton.hidden!==hidden || editChanged || quoteChanged || favoriteEpoch!==favorites.epoch || promptEpoch!==prompts.epoch){
+      retryEnabled=nextRetry;promptEpoch=prompts.epoch;favoriteEpoch=favorites.epoch;
       exportButton.hidden=hidden;
       if(readable && rows.length)display();
     }
   }
   function reset(){
     pictures.update(null,drafts.owner(),false,false);files.update(null,drafts.owner(),false);
-    editEnabled=false;edit.reset();prompts.changeScope();quoteKey=null;quote.restore(null);
+    retryEnabled=false;editEnabled=false;edit.reset();prompts.changeScope();quoteKey=null;quote.restore(null);
     exportButton.hidden=true;exportDrawer?.close();exportDrawer=null;search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
     favorites.update();input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
     submissions.update();switcher.update();
@@ -324,6 +328,8 @@ export function createWebConversations({api,store,scope,router}){
             messageImages(api,store,row,meta.archived ? undefined : pictures.editCopy.bind(null,draftKey),messages),messageFiles(api,store,row,rows,messages)),
           h('div',{class:'msg__meta row row--wrap'},copies.copyMessage(row,m=>m.text),
             row.origin!=='notification' && favorites.mark(row,meta.projectId,stamp.id,()=>valid(stamp) && meta?.id===stamp.id && rows.includes(row)),
+            retryEnabled && retryTurn(row,rows,'web:'+stamp.id,id=>href(stamp.id,id),
+              ()=>valid(stamp) && meta?.id===stamp.id && !meta.archived && rows.includes(row)),
             row.directWebInput && prompts.fromMessage(row),
             row.directWebInput && edit.action(row),
             quoteKey && row.origin!=='notification' && quote.action(row,row.role==='user'?'我':'助手'),
