@@ -16,6 +16,8 @@ export function openTokenStatistics({ api, store }) {
   let rows = [], days = options.defaultDays, agent = '', model = '', note = '', busy = false;
   const controls = h('div', { class: 'usage-controls' }), report = h('div');
   body.append(controls, report);
+  if(store.view.snapshot?.plugins.some(p=>p.id==='usage-sources' && p.status==='active'))
+    controls.before(h('a',{class:'btn btn--sm',href:'#agent?usageSources=1'},'管理账户用量来源'));
   function paint() {
     const cutoff = days ? new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0,10) : '';
     const selected = rows.filter(r => r.day >= cutoff && (!agent || r.agent === agent) && (!model || r.model === model));

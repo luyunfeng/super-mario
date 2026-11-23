@@ -147,6 +147,27 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       if (path.startsWith('/api/')) {
         if (!authorized(req, url)) throw new InputError('访问令牌无效', 401);
         const method = req.method;
+        if(path==='/api/v1/usage/windows' && method==='GET')return json(res,200,app.usageSources.windows());
+        const usage=path.match(/^\/api\/v1\/usage\/sources(?:\/([^/]+)(\/refresh)?)?$/);
+        if(usage){
+          const service=app.usageSources,part=usage[1];
+          if(method==='GET' && !part)return json(res,200,service.view());
+          if(['POST','PUT','DELETE'].includes(method??'')){
+            if(req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json')throw new InputError('用量来源管理需要 JSON 请求',415);
+            const input=await body(req,8192);
+            if(method==='PUT' && part==='settings' && !usage[2])return json(res,200,service.settings(input));
+            if(method==='POST' && !part)return json(res,201,service.add(input));
+            if(method==='POST' && part==='test' && !usage[2]){
+              const controller=new AbortController(),abort=()=>controller.abort();res.once('close',abort);
+              try{return json(res,200,await service.test(input,controller.signal));}
+              finally{res.off('close',abort);}
+            }
+            if(part && usage[2] && method==='POST')return json(res,200,await service.refresh(part));
+            if(part && !usage[2] && method==='PUT')return json(res,200,service.update(part,input));
+            if(part && !usage[2] && method==='DELETE')return json(res,200,service.remove(part,input));
+          }
+          throw new InputError('用量来源操作无效',405);
+        }
         if (path === '/api/v1/conversation-shares' && method === 'POST') {
           // In local mode a browser may have no bearer credential. Require JSON so a cross-origin form cannot publish.
           if (req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json')

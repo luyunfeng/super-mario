@@ -67,6 +67,7 @@ export function createStore(api) {
         scheduleRefresh();
         return;
       }
+      if(event?.type==='usage.sources.changed')set({usageSourcesChange:(view.usageSourcesChange ?? 0)+1});
       if (event?.type === 'source-subscriptions.changed') {
         set({ sourceSubscriptionsChange: {} });
         scheduleRefresh();

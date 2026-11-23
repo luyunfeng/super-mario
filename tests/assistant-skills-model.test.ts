@@ -4894,3 +4894,58 @@ test('Web 和飞书答复离线备份问题时区分校验与实际恢复', asyn
     await t.waitFor(()=>assert.ok(sent.includes(answer)));
   } finally { await server.close(); }
 });
+
+test('Web 与配对飞书私聊读取订阅额度缓存，项目没有账户池工具',async t=>{
+  let adapter!:FeishuOptions;
+  const sent:string[]=[];
+  const answer='合成账户的五小时窗口已用 73%。';
+  const {server,api,ask}=await fixture(t,req=>{
+    if(req.lastRole==='user'){
+      if(JSON.stringify(req.content).includes('项目查看')){
+        assert.ok(!req.tools.includes('usage_source_windows'));
+        return {role:'assistant',content:'项目未获得读取账户池的工具。'};
+      }
+      assert.ok(req.tools.includes('usage_source_windows'));
+      assert.match(req.system,/多个窗口不能相加/);
+      assert.match(req.system,/空列表、停用或缺少样本不能解释为零用量/);
+      return call('usage_source_windows',{provider:'sample'},'read-windows');
+    }
+    assert.equal(req.callId,'read-windows');
+    const text=typeof req.content==='string'?req.content:(req.content as {text:string}[])[0].text;
+    const result=JSON.parse(text);
+    assert.equal(result.enabled,true);
+    assert.equal(result.accounts.length,1);
+    assert.equal(result.accounts[0].windows[0].usedPercent,73);
+    assert.equal(result.accounts[0].sourceName,'合成网关');
+    assert.equal(result.coverage[0].state,'sampled');
+    assert.ok(!text.includes('unpublished') && !text.includes('sourceId'));
+    return {role:'assistant',content:answer};
+  },options=>{
+    adapter=options;
+    return {start:async()=>{},close:async()=>{},collect:async()=>[],status:()=>({connected:true}),send:async(_target,text)=>{sent.push(text);}};
+  });
+  try{
+    let reads=0;
+    const gateway=createServer((_req,res)=>{
+      reads++;
+      res.setHeader('content-type','application/json');
+      res.end(JSON.stringify({accounts:[{id:'unpublished',name:'合成账户',provider:'sample',
+        windows:[{label:'5h',window_minutes:300,used_percent:73}]}]}));
+    });
+    await new Promise<void>(done=>gateway.listen(0,'127.0.0.1',done));
+    t.after(()=>new Promise<void>(done=>{gateway.closeAllConnections();gateway.close(()=>done());}));
+    const address=gateway.address();assert.ok(address && typeof address==='object');
+    const config=await api('/usage/sources',{name:'合成网关',type:'generic',url:'http://127.0.0.1:'+address.port+'/windows'});
+    await api('/usage/sources/'+config.sources[0].id+'/refresh',{});
+    const readsBeforeQueries=reads;assert.ok(readsBeforeQueries>0);
+    assert.equal(await ask('合成订阅账户池的五小时额度用掉多少？'),answer);
+    const bot=await api('/feishu/bots',{name:'用量助手',appId:'cli_1111111111111111',appSecret:'fixture',scope:{kind:'global'},requireConfirmation:false});
+    const owner={chatId:'oc_usage',senderId:'ou_owner',senderType:'user',chatType:'p2p'} as const;
+    await adapter.onMessage(bot.pairingCode,{...owner,messageId:'usage-pair'});
+    await adapter.onMessage('查一下订阅额度缓存',{...owner,messageId:'usage-read'});
+    await t.waitFor(()=>assert.ok(sent.includes(answer)));
+    const project=await api('/projects',{name:'合成项目'});
+    assert.equal(await ask('项目查看账户池','/projects/'+project.id+'/messages'),'项目未获得读取账户池的工具。');
+    assert.equal(reads,readsBeforeQueries);
+  }finally{await server.close();}
+});

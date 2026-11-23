@@ -1,6 +1,7 @@
 import { openTopicChats } from '../features/feishu-topic-chats.js';
 import { openGroupReads } from '../features/feishu-group-reads.js';
 import { openPrivateThreads } from '../features/feishu-private-threads.js';
+import { openUsageSources } from '../features/usage-sources.js';
 import { openTokenStatistics } from '../features/token-statistics.js';
 // Agent：配置谁来干活。模型、执行者与电脑、CLI 会话、自动处理、自动跟进；其余收进“高级”。
 import { h, replace } from '../lib/dom.js';
@@ -182,9 +183,14 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
         h('div', { class: 'page__actions' }, Hint('nav.agent'))),
       h('div', { class: 'stack stack--lg' }, linkNotice, profile.el, skills.el, modelCard, botCard, commandGroup.el, computersCard, cliSessions.el, policy.el, followUp.el, scheduledWork.el, advanced.el)));
 
-  let pendingSection, pendingStatistics;
+  let pendingSection, pendingStatistics, pendingUsage;
   function showStatistics() {
-    if (!pendingStatistics || !store.view.snapshot || router.current.page !== 'agent') return;
+    if (!store.view.snapshot || router.current.page !== 'agent') return;
+    if(pendingUsage){
+      pendingUsage=false;
+      if(store.view.snapshot.plugins?.some(p=>p.id==='usage-sources' && p.status==='active'))openUsageSources({api,store});
+    }
+    if(!pendingStatistics)return;
     pendingStatistics = false;
     if (store.view.snapshot.plugins?.some(p => p.id === 'token-statistics' && p.status === 'active')) openTokenStatistics({ api, store });
   }
@@ -207,6 +213,7 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
           privateLink={route:route.canonical,botId,threadId,messageId,handled:false};
         else linkStatus('独立对话链接不完整，请重新获取链接。');
       }
+      pendingUsage=route.query.get('usageSources')==='1';
       pendingStatistics = route.query.get('tokenStats') === '1';
       showStatistics();
       scheduledWork.load(); loadModel(); loadFeishu(); policy.load(); followUp.load(); cliSessions.onShow();
