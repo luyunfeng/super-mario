@@ -21,6 +21,7 @@ async function fixture(t: TestContext, respond: (request: Request, turn: number)
   const requests: Request[] = [];
   const model = createServer(async (req, res) => {
     if (req.method === 'GET') { res.end('fixture'); return; }
+    req.setEncoding('utf8');
     let raw = '';
     for await (const chunk of req) raw += chunk;
     const payload = JSON.parse(raw);
@@ -1137,7 +1138,7 @@ test('Web 和飞书按已读版本调整知识重要级、相关度、标签和�
     const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
     await adapter.onMessage('清除验收记录的重要级和相关度并移除待核对标签和别名「旧名」', { ...source, messageId: 'remove-tag' });
-    await t.waitFor(() => assert.ok(sent.includes('已核对保存的重要级、相关度、标签和别名。')));
+    await t.waitFor(() => assert.ok(sent.includes('已核对保存的重要级、相关度、标签和别名。'), sent.at(-1)), { timeout: 10000 });
     const result = await server.app.knowledge().list({ query: '验收记录' });
     for (const item of result) {
       assert.equal(item.importance, undefined);
@@ -3007,6 +3008,36 @@ test('Web 和飞书按执行 ID 核对目标、最近观察与仍需用户决定
     assert.equal(store.get<{status:string}>('approvals', approval.id)?.status, 'pending');
     assert.equal(store.get<{status:string}>('interactions', '取数口径')?.status, 'open');
     assert.deepEqual(store.get('runs', run.id), run);
+  } finally { await server.close(); }
+});
+
+test('Web 和飞书询问怎样开工时提供表单说明并保留当前执行状态', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const reply = '在已配对的全局机器人私聊发送 /开工，核对执行者、目录和目标后提交。已有执行可用 /agents 查找。';
+  const { server, api, ask, requests } = await fixture(t, req => {
+    assert.equal(req.lastRole, 'user');
+    assert.match(req.system, /全局机器人私聊发送 \/start 目标 或 \/开工/);
+    assert.match(req.system, /只询问操作方法时不要派发/);
+    assert.match(req.system, /收到编号只说明已登记/);
+    assert.match(req.system, /结果未知时按原编号查询/);
+    return { role: 'assistant', content: reply };
+  }, options => {
+    adapter = options;
+    return { async start() {}, async close() {}, status: () => ({ connected: true }), async collect() { return []; },
+      async send(_target, text) { sent.push(text); } };
+  });
+  try {
+    const question = '怎样在飞书发起新的执行？我先了解操作步骤。';
+    assert.equal(await ask(question), reply);
+    const bot = await api('/feishu/bots', { name: '开工说明', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
+      scope: { kind: 'global' }, requireConfirmation: false });
+    const source = { chatId: 'owner-chat', senderId: 'owner', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(question, { ...source, messageId: 'how-to-start' });
+    await t.waitFor(() => assert.ok(sent.includes(reply)));
+    assert.equal(requests.length, 2);
+    assert.deepEqual(server.app.store.list('runs'), []);
   } finally { await server.close(); }
 });
 

@@ -1,3 +1,4 @@
+import { parseStartForm, startCard, startCardSnapshot, type StartCardSnapshot } from './feishu-start-card.ts';
 import { trimUnicodeSpace, privateThreadTags, normalizeThreadTags, searchPrivateThreads, readPrivateThreadHistory, readPrivateThreadMetadata, type PrivateThread } from './feishu-thread-history.ts';
 import { createPinnedWorkbench } from './feishu-pinned-workbench.ts';
 import { selectedAgentStatus, agentCard, agentCardSnapshot, type AgentCardSnapshot } from './feishu-agent-card.ts';
@@ -20,7 +21,7 @@ import type { FeishuMessageSource, FeishuSendContext, FeishuOptions } from '../.
 import { createFeishuBotConfig, sameBotScope } from '../../../plugins/feishu-bot-config.ts';
 import type { FeishuBotSettings } from '../../../plugins/feishu-bot-config.ts';
 import type { EventBus, Store } from '../../../packages/plugin-sdk/src/index.ts';
-import type { AppConfig, Approval, InboxThing, Json, MachineInfo, Message, Project, Run, Todo } from '../../../packages/protocol/src/index.ts';
+import type { AppConfig, Approval, ExecutorInfo, InboxThing, Json, MachineInfo, Message, Project, Run, Todo } from '../../../packages/protocol/src/index.ts';
 import type { BotScope, FeishuAgentInputTarget, FeishuBot, FeishuBotInput, MailboxEntry } from '../../../packages/protocol/src/bots.ts';
 
 export type FeishuMailboxInput = Pick<MailboxEntry, 'direction' | 'scope' | 'botId' | 'eventKey' | 'title' | 'text' | 'requiresConfirmation'>
@@ -33,6 +34,8 @@ export interface FeishuBotsApp {
     process(id: string, version: number): unknown | Promise<unknown>;
     list(): MailboxEntry[];
   };
+  listExecutors?(): ExecutorInfo[];
+  dispatch?(input: Record<string, unknown>, key?: string, nativeApproved?: boolean, executionGuard?: () => void): Run;
   agentSessions?: { discover(input: Record<string, never>): Promise<SessionList>; proposeResume?(input: Record<string, unknown>): Promise<{id: string; status: string}> };
   approvals?: { propose(input: Pick<Approval, 'kind' | 'title' | 'details' | 'params' | 'todoId'>): Pick<Approval, 'id' | 'status'> };
   interactions?: { answer(id: string, version: number, text: string, by: string): Promise<Card> };
@@ -64,10 +67,13 @@ export interface FeishuBotAdapter {
 }
 export type FeishuBotFactory = (options: FeishuOptions) => FeishuBotAdapter;
 type Owner = { chatId: string; senderId?: string };
-type CardNavigation = { threadIds?: string[]; homeMessageId?: string; agentSnapshot?: AgentCardSnapshot; sessionSnapshot?: SessionCardSnapshot; botId: string; appId: string; revision: number; owner: Owner; expiresAt: number };
+type StartForm = { snapshot: StartCardSnapshot; key: string; sourceId: string; threadId?: string; conversationThreadId?: string; computers: Record<string, string> };
+type StartReceipt = { signature: string; runId?: string; reason?: string; sessionId?: string; demo?: boolean;
+  selection?: { messageId: string; previous: string; binding: ChatBinding } };
+type CardNavigation = { start?: StartForm; threadIds?: string[]; homeMessageId?: string; agentSnapshot?: AgentCardSnapshot; sessionSnapshot?: SessionCardSnapshot; botId: string; appId: string; revision: number; owner: Owner; expiresAt: number };
 type Route = { channel: 'feishu'; accountId: string; botId: string; target: string; scope: BotScope; revision: number; inputId: string; sourceMessageId?: string };
 type Relay = { sourceMessageId?: string; sourceFingerprint?: string; sourceRouteFingerprint?: string; sourceBotId: string; sourceRevision: number; targetRevision: number; parentEntryId?: string; path: string[]; rootId: string; expiresAt: number; chatId?: string; fingerprint: string };
-type AgentTarget = { cwd?: string; runId: string; executorId: string; machineId: string; sessionId: string; nativeSessionId: string; projectId?: string; todoId?: string };
+type AgentTarget = { startedBy?: string; cwd?: string; runId: string; executorId: string; machineId: string; sessionId: string; nativeSessionId?: string; projectId?: string; todoId?: string };
 type ChatBinding = { conversationThreadId?: string; agentTarget?: AgentTarget; projectId: string; revision: number; senderId: string; expiresAt: number; selectionId?: string };
 type StatusSource = Pick<FeishuMessageSource, 'chatId' | 'parentId' | 'rootId'>;
 type StatusGrant = { source: StatusSource; fingerprint: string; binding?: ChatBinding };
@@ -302,12 +308,173 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     sessionReads.set(key, job);
     return job;
   }
+  function startOptions(bot: FeishuBotSettings) {
+    const machines = app.store.list<MachineInfo>('machines');
+    return { snapshot: startCardSnapshot(machines, app.listExecutors?.() ?? [], app.store.list<Project>('projects'), bot.executorId),
+      computers: Object.fromEntries(machines.filter(machine => machine.online).map(machine => [machine.id, JSON.stringify([machine.agentInstanceId, machine.connectedAt])])) };
+  }
+  function showStart(bot: FeishuBotSettings, epoch: number, paired: Owner, source: FeishuMessageSource, prompt: string) {
+    const key = 'feishu-dashboard:start:' + JSON.stringify([bot.id, bot.appId, source.messageId]);
+    const pending = sessionReads.get(key);
+    if (pending) return pending;
+    const job = (async () => {
+      const previous = app.mailboxes.list().find(row => row.botId === bot.id && row.direction === 'outbox' && row.eventKey === key);
+      if (previous) {
+        if (previous.status === 'ready') await app.mailboxes.process(previous.id, previous.version);
+        return;
+      }
+      const grant = navigation(bot, paired, key)!;
+      const cap = app.store.get<CardNavigation>('feishu.card.navigation', grant)!;
+      const binding = selectedChat(bot, source);
+      const options = startOptions(bot);
+      const form = startCard(options.snapshot, grant, prompt, binding?.projectId);
+      const draft: StartForm = { ...options, key, sourceId: source.messageId, threadId: source.threadId ?? source.rootId,
+        conversationThreadId: binding?.conversationThreadId };
+      if ('schema' in form.card && app.dispatch)
+        app.store.put('feishu.card.navigation', grant, { ...cap, start: draft });
+      const text = app.dispatch ? form.text : '派发服务不可用，请到 Web 检查执行者配置。';
+      const card = app.dispatch ? form.card : cardDocument('发起执行', [{ tag: 'div', text: cardPlain(text) }]);
+      const entry = await put(bot, { direction: 'outbox', eventKey: key, title: '发起执行', text, target: paired.chatId,
+        sourceMessageId: source.messageId, requiresConfirmation: false }, bot.scope, { dashboard: { card, owner: paired },
+        platformReplyTo: source.messageId, threadId: draft.threadId, conversationThreadId: draft.conversationThreadId, privateSenderId: paired.senderId });
+      if (active(bot.id, epoch, bot.revision) && entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
+    })().finally(() => sessionReads.delete(key));
+    sessionReads.set(key, job);
+    return job;
+  }
+  function submitStart(bot: FeishuBotSettings, epoch: number, paired: Owner & {senderId: string}, draft: StartForm,
+    navigation: string, expiresAt: number, input: FeishuCardAction) {
+    const toast = (type: string, content: string) => ({ toast: { type, content } });
+    const key = 'feishu-start:' + navigation;
+    try {
+      const form = structuredClone(input.formValue ?? {});
+      const selected = parseStartForm(draft.snapshot, form);
+      const signature = digest(selected);
+      const previous = app.store.get<StartReceipt>('feishu.start-submissions', key);
+      if (previous) {
+        if (previous.signature !== signature) return toast('error', '此表单已提交其他内容，请重新发送 /start。');
+        const id = previous.runId ?? app.store.get<string>('dispatch-keys', key);
+        const state = id && app.store.get<Run>('runs', id);
+        return toast('info', state ? '已有该次执行 ' + state.id + '，当前状态 ' + state.status + '。' : previous.reason ?? '提交结果尚未核实，请在 Web 查看执行记录。');
+      }
+      const executor = draft.snapshot.executors.find(item => item.id === selected.executorId)!;
+      const project = draft.snapshot.projects.find(item => item.id === selected.projectId);
+      const guard = () => {
+        if (!active(bot.id, epoch, bot.revision) || owner(bot)?.senderId !== paired.senderId || owner(bot)?.chatId !== paired.chatId
+          || !app.dispatch || (draft.conversationThreadId && !validThread(bot, paired, draft.conversationThreadId, true)))
+          throw noDelivery('配对或会话已变化，执行未启动。');
+        const live = startOptions(bot), current = live.snapshot.executors.find(item => item.id === executor.id);
+        const currentProject = live.snapshot.projects.find(item => item.id === selected.projectId);
+        if (!current || current.machineId !== executor.machineId || current.mode !== executor.mode || current.taskOnly !== executor.taskOnly
+          || (executor.mode === 'real' && (!terminalEnabled() || live.computers[executor.machineId] !== draft.computers[executor.machineId]))
+          || (project && (!currentProject || digest(project.workspace ?? null) !== digest(currentProject.workspace ?? null)))
+          || digest(parseStartForm(live.snapshot, form)) !== signature) throw noDelivery('工作目录、电脑或执行者已变化，请重新发送 /start。');
+      };
+      guard();
+      const envelope = app.mailboxes.list().find(row => row.botId === bot.id && row.eventKey === draft.key && row.direction === 'outbox');
+      if (!envelope || !['processing', 'completed'].includes(envelope.status)) throw noDelivery('表单缺少可核实的投递记录。');
+      const conversationThreadId = selected.projectId ? undefined : draft.conversationThreadId;
+      const conversationId = selected.projectId ? 'project:' + selected.projectId + ':work' : botConversationId(bot, conversationThreadId);
+      const sourceId = key, source: Message = { id: sourceId, conversationId, role: 'user', text: selected.prompt,
+        projectId: selected.projectId, status: 'done', createdAt: new Date().toISOString() };
+      const { machineId, ...params } = selected;
+      // Persist the user's form submission before dispatch. The mailbox source lets ordinary run results return to this card.
+      app.store.transaction(() => {
+        app.store.put('messages', sourceId, source);
+        app.store.put('message.routes', sourceId, { channel: 'feishu', accountId: bot.appId, botId: bot.id, target: paired.chatId,
+          scope: bot.scope, revision: bot.revision, inputId: sourceId, sourceMessageId: draft.sourceId, envelopeId: envelope.id,
+          platformReplyTo: input.messageId, threadId: draft.threadId, privateSenderId: paired.senderId,
+          conversationThreadId, chatProject: selected.projectId } satisfies Routed);
+        app.store.put('feishu.start-submissions', key, { signature } satisfies StartReceipt);
+      });
+      let run: Run;
+      try { run = app.dispatch!({ ...params, sourceMessageId: sourceId, conversationId }, key, false, guard); }
+      catch (error) {
+        const known = (error as { delivery?: string; status?: number }).delivery === 'no' || [400, 403, 404, 409, 503].includes((error as {status: number}).status);
+        const reason = (known ? '执行未启动 · ' : '启动结果未知 · ') + redact(error);
+        app.store.put('feishu.start-submissions', key, { signature, reason });
+        return toast('error', reason);
+      }
+      const binding: ChatBinding = { projectId: selected.projectId ?? '', revision: bot.revision, senderId: paired.senderId,
+        selectionId: navigation, expiresAt, agentTarget: { runId: run.id, startedBy: key, machineId, executorId: selected.executorId,
+          sessionId: run.sessionId ?? '', cwd: run.cwd, projectId: run.projectId } };
+      app.store.transaction(() => {
+        const defaultKey = digest([bot.id, paired.chatId, '']);
+        const previous = digest(app.store.get('feishu.chat-target', defaultKey) ?? null);
+        const selectOnStart = executor.mode === 'real' && run.executionMode === 'interactive';
+        if (selectOnStart) app.store.put('feishu.latest-start', defaultKey, key);
+        app.store.put('feishu.start-submissions', key, { signature, runId: run.id, demo: executor.mode === 'demo',
+          ...(selectOnStart && {
+            selection: { messageId: input.messageId, previous, binding } }) } satisfies StartReceipt);
+        // A reply to the form addresses this run immediately. The default changes only on a verified host session receipt.
+        app.store.put('feishu.chat-target', digest([bot.id, paired.chatId, input.messageId]), binding);
+        const route = app.store.get<Routed>('message.routes', sourceId)!;
+        app.store.put('message.routes', sourceId, { ...route, chatBinding: binding });
+      });
+      startStateChanged(run);
+      const text = (executor.mode === 'demo' ? '演示执行已登记 ' : '已登记执行 ') + run.id + '。引用本卡发送 /status 可查看该执行的进展。';
+      const buttons = cardButtons([{ label: '查看执行', route: 'projects/' + encodeURIComponent(run.projectId ?? 'all') + '/runs/' + encodeURIComponent(run.id) }], webBase && webBase + '/');
+      return { toast: { type: 'success', content: text }, card: { type: 'raw', data: cardDocument('执行已登记', [{ tag: 'div', text: cardPlain(text) }, ...buttons]) } };
+    } catch (error) { return toast('error', redact(error)); }
+  }
+  function startStateChanged(run: Run) {
+    const key = run.sourceMessageId;
+    if (!key?.startsWith('feishu-start:')) return;
+    const receipt = app.store.get<StartReceipt>('feishu.start-submissions', key);
+    const route = app.store.get<Routed>('message.routes', key);
+    if (!receipt || receipt.runId !== run.id || !route?.privateSenderId || !route.platformReplyTo || !route.chatBinding) return;
+    let bot;
+    try { bot = current(route.botId); } catch { return; }
+    const paired = owner(bot);
+    if (!paired?.senderId || paired.senderId !== route.privateSenderId || paired.chatId !== route.target || route.accountId !== bot.appId || route.revision !== bot.revision) return;
+    if (route.conversationThreadId && !validThread(bot, paired, route.conversationThreadId, true)) return;
+    const selection = receipt.selection;
+    if (run.projectId) {
+      const project = app.store.get<Project>('projects', run.projectId);
+      if (!project || project.archivedAt) return;
+    }
+    if (selection && selection.binding.expiresAt > Date.now() && selection.binding.agentTarget
+      && currentAgentRun(selection.binding.agentTarget, bot) && run.status === 'running' && run.executionMode === 'interactive' && run.machineId && run.sessionId
+      && run.executorId === selection.binding.agentTarget?.executorId && run.machineId === selection.binding.agentTarget.machineId) {
+      const binding: ChatBinding = { ...selection.binding, agentTarget: { ...selection.binding.agentTarget, sessionId: run.sessionId } };
+      app.store.transaction(() => {
+        app.store.put('feishu.start-submissions', key, { ...receipt, sessionId: run.sessionId, selection: undefined });
+        route.chatBinding = binding;
+        app.store.put('message.routes', key, route);
+        const defaultKey = digest([bot.id, paired.chatId, '']);
+        if (app.store.get('feishu.latest-start', defaultKey) === key && digest(app.store.get('feishu.chat-target', defaultKey) ?? null) === selection.previous)
+          app.store.put('feishu.chat-target', defaultKey, binding);
+        const cardKey = digest([bot.id, paired.chatId, selection.messageId]);
+        if (app.store.get<ChatBinding>('feishu.chat-target', cardKey)?.selectionId === binding.selectionId)
+          app.store.put('feishu.chat-target', cardKey, binding);
+      });
+    }
+    if (!['failed','unknown'].includes(run.status) && !(run.status === 'running' && run.sessionId)) return;
+    const eventKey = 'feishu-dashboard:start-state:' + run.id + ':' + run.status;
+    if (sessionReads.has(eventKey) || app.mailboxes.list().some(entry => entry.botId === bot.id && entry.eventKey === eventKey)) return;
+    const text = run.status === 'running' ? '执行机已返回会话标识，执行尚在进行。' : run.status === 'failed' ? '执行启动或运行失败。' : '执行结果未知，未自动重派。';
+    const detail = [text, '执行 ' + run.id, run.status !== 'running' && publicText(run.error, 240)].filter(Boolean).join('\n');
+    const card = cardDocument('执行回执', [{ tag: 'div', text: cardPlain(detail) }, ...cardButtons([{ label: '查看执行',
+      route: 'projects/' + encodeURIComponent(run.projectId ?? 'all') + '/runs/' + encodeURIComponent(run.id) }], webBase && webBase + '/')]);
+    const job = (async () => {
+      const entry = await put(bot, { direction: 'outbox', eventKey, title: '执行回执', text: detail, target: paired.chatId,
+        sourceMessageId: route.sourceMessageId, requiresConfirmation: false }, bot.scope, { dashboard: { owner: paired, card },
+        chatBinding: route.chatBinding, chatProject: route.chatProject, conversationThreadId: route.conversationThreadId,
+        platformReplyTo: route.platformReplyTo, threadId: route.threadId, privateSenderId: paired.senderId });
+      if (entry.status === 'ready') await app.mailboxes.process(entry.id, entry.version);
+    })().finally(() => sessionReads.delete(eventKey));
+    sessionReads.set(eventKey, job);
+    void track(bot.id, job);
+  }
   function currentAgentRun(target: Omit<AgentTarget, 'sessionId'> & { sessionId?: string }, bot: FeishuBotSettings) {
     const run = app.store.get<Run>('runs', target.runId);
-    if (!terminalEnabled() || !run || run.machineId !== target.machineId || run.executorId !== target.executorId
+    const start = target.startedBy ? app.store.get<StartReceipt>('feishu.start-submissions', target.startedBy) : undefined;
+    if (!run || (!start?.demo && (!terminalEnabled() || run.machineId !== target.machineId || !app.store.get<MachineInfo>('machines', target.machineId)?.online))
+      || (start?.sessionId && run.sessionId !== start.sessionId) || run.executorId !== target.executorId
       || (target.sessionId && run.sessionId !== target.sessionId) || (run.cwd && target.cwd && run.cwd !== target.cwd)
-      || (run.nativeSessionId ?? run.nativeResume?.nativeSessionId) !== target.nativeSessionId
-      || run.projectId !== target.projectId || run.todoId !== target.todoId || !app.store.get<MachineInfo>('machines', target.machineId)?.online
+      || (target.startedBy ? start?.runId !== run.id
+        : (run.nativeSessionId ?? run.nativeResume?.nativeSessionId) !== target.nativeSessionId)
+      || run.projectId !== target.projectId || run.todoId !== target.todoId
       || (bot.executorId && bot.executorId !== run.executorId)) return;
     if (target.projectId) {
       const project = app.store.get<Project>('projects', target.projectId);
@@ -318,7 +485,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!todo || todo.projectId !== target.projectId || todo.completedAt) return;
     }
     if (app.store.list<Run>('runs').some(other => other.id !== run.id && other.machineId === run.machineId && other.executorId === run.executorId
-      && (other.nativeSessionId ?? other.nativeResume?.nativeSessionId) === target.nativeSessionId && other.createdAt >= run.createdAt)) return;
+      && ((target.nativeSessionId && (other.nativeSessionId ?? other.nativeResume?.nativeSessionId) === target.nativeSessionId) || (run.sessionId && other.sessionId === run.sessionId)) && other.createdAt >= run.createdAt)) return;
     return run;
   }
   async function agentInput(bot: FeishuBotSettings, epoch: number, paired: Owner, source: FeishuMessageSource, text: string, binding: ChatBinding) {
@@ -330,12 +497,12 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const run = currentAgentRun(target, bot);
       let approvalId: string | undefined;
       let reply = '执行会话已变化或无法接受输入，请发送 /agents 重新选择，或发送 /main 返回主对话。';
-      if (run?.status === 'running' && run.executionMode === 'interactive' && app.approvals) {
+      if (run?.status === 'running' && run.sessionId && run.executionMode === 'interactive' && app.approvals) {
         const approval = app.approvals.propose({ kind: 'input', title: '向执行会话发送输入', details: '电脑 ' + target.machineId + ' · 执行 ' + target.runId,
-          params: { id: target.runId, machineId: target.machineId, sessionId: target.sessionId, executorId: target.executorId,
-            nativeSessionId: target.nativeSessionId, text, ...(target.projectId && { projectId: target.projectId }), ...(target.todoId && { todoId: target.todoId }) },
+          params: { id: target.runId, machineId: target.machineId, sessionId: run.sessionId, executorId: target.executorId,
+            ...(target.nativeSessionId && { nativeSessionId: target.nativeSessionId }), text, ...(target.projectId && { projectId: target.projectId }), ...(target.todoId && { todoId: target.todoId }) },
           ...(target.todoId && { todoId: target.todoId }) });
-        app.store.put('feishu.agent-input-targets', approval.id, { runId: target.runId, machineId: target.machineId, sessionId: target.sessionId,
+        app.store.put('feishu.agent-input-targets', approval.id, { runId: target.runId, machineId: target.machineId, sessionId: run.sessionId, cwd: target.cwd,
           nativeSessionId: target.nativeSessionId, executorId: target.executorId, projectId: target.projectId ?? '', todoId: target.todoId ?? '',
           botId: bot.id, appId: bot.appId, revision: bot.revision, owner: { chatId: paired.chatId, senderId: paired.senderId! } } satisfies FeishuAgentInputTarget);
         approvalId = approval.id;
@@ -877,7 +1044,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       void track(bot.id, stopCommand(bot, epoch, paired, { chatId: paired.chatId, parentId: input.messageId }, input.messageId, true));
       return { toast: { type: 'info', content: '正在核对本轮中断请求。' } };
     }
-    if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || !['workbench.agents','workbench.agentSelect','workbench.today','workbench.navigate','workbench.chat','workbench.sessions','workbench.readSessions','workbench.resumeForm','workbench.resumeSubmit','workbench.questionForm','workbench.answerQuestion'].includes(String(value.kind))
+    if (!active(bot.id, epoch, bot.revision) || bot.scope.kind !== 'global' || !['workbench.startForm','workbench.startSubmit','workbench.agents','workbench.agentSelect','workbench.today','workbench.navigate','workbench.chat','workbench.sessions','workbench.readSessions','workbench.resumeForm','workbench.resumeSubmit','workbench.questionForm','workbench.answerQuestion'].includes(String(value.kind))
       || typeof value.navigation !== 'string'
       || !input.messageId) return fail;
     const paired = owner(bot);
@@ -893,6 +1060,12 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (!cap || cap.expiresAt <= Date.now() || cap.botId !== bot.id || cap.appId !== bot.appId || cap.revision !== bot.revision
       || !cap.owner.senderId || cap.owner.senderId !== input.operatorId || cap.owner.chatId !== input.chatId
       || paired?.senderId !== input.operatorId || paired.chatId !== input.chatId) return fail;
+    if (value.kind === 'workbench.startForm') {
+      void track(bot.id, showStart(bot, epoch, paired, { chatId: input.chatId, messageId: input.messageId }, ''));
+      return { toast: { type: 'info', content: '正在打开执行表单。' } };
+    }
+    if (value.kind === 'workbench.startSubmit')
+      return cap.start ? submitStart(bot, epoch, { chatId: paired.chatId, senderId: input.operatorId }, cap.start, value.navigation, cap.expiresAt, input) : fail;
     const agents = cap.agentSnapshot;
     const agentRow = agents && Number.isSafeInteger(value.index) ? agents.rows[value.index as number] : undefined;
     const agentTarget = agentRow && { runId: agentRow.runId, machineId: agentRow.machineId, executorId: agentRow.machineId + '/' + agentRow.agent,
@@ -1109,6 +1282,9 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const stamp = app.store.get<Envelope>('feishu.bot.envelopes', entry.id);
     if (entry.botId !== bot.id || (bot.scope.kind !== 'unmarked' && !sameBotScope(entry.scope, bot.scope)) || (stamp && stamp.revision !== bot.revision)) throw noDelivery('机器人绑定已变化，旧邮箱条目不能执行');
     validateScope(entry.scope);
+    if (stamp?.privateSenderId && !stamp.group && !stamp.relay &&
+      (owner(bot)?.chatId !== entry.target || owner(bot)?.senderId !== stamp.privateSenderId))
+      throw noDelivery('主人私聊配对已改变。');
     if (stamp?.agentList && !terminalEnabled()) throw noDelivery('终端宿主插件已停用，请重新发送 /agents');
     if (stamp?.agentList || entry.eventKey.startsWith('feishu-dashboard:conversations:')) {
       const paired = owner(bot);
@@ -1198,7 +1374,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           || app.store.get<Envelope>('feishu.bot.envelopes', envelope.id)?.conversationThreadId !== route.conversationThreadId) return false;
         checkEnvelope(envelope, bot);
         const receipt = app.store.get<{ status: string; id?: string }>('feishu.bot.dispatch', `${botId}:${bot.appId}:${envelope.id}`);
-        if (receipt?.status !== 'completed' || receipt.id !== route.inputId) return false;
+        const start = envelope.direction === 'outbox' && envelope.botId === bot.id && envelope.eventKey.startsWith('feishu-dashboard:start:')
+          && route.inputId === stored.id && stored.id === 'feishu-start:' + createHash('sha256').update(envelope.eventKey).digest('hex')
+          && app.store.get<StartReceipt>('feishu.start-submissions', stored.id);
+        if (!start && (receipt?.status !== 'completed' || receipt.id !== route.inputId)) return false;
         if (route.resultRelayEntryId) {
           const delegated = app.mailboxes.list().find(entry => entry.id === route.resultRelayEntryId);
           if (!delegated) return false;
@@ -1486,6 +1665,13 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     if (!active(bot.id, epoch, bot.revision) || !['p2p', 'group'].includes(source.chatType ?? '') || !source.chatId || !source.messageId || !text.trim()) return;
     let paired = owner(bot);
     const group = source.chatType === 'group';
+    const start = /^[／/](?:start|开工)(?:\s+([\s\S]*))?$/iu.exec(text.trim());
+    if (start) {
+      if (!group && bot.scope.kind === 'global' && source.senderType === 'user' && paired?.senderId
+        && source.senderId === paired.senderId && source.chatId === paired.chatId)
+        await showStart(bot, epoch, paired, source, start[1]?.trim() ?? '');
+      return;
+    }
     const startChat = /^[／/](?:new|新对话)(?:\s+([\s\S]*))?$/iu.exec(text.trim());
     if (startChat && !group && bot.scope.kind === 'global' && source.senderType === 'user' && paired?.senderId
       && source.senderId === paired.senderId && source.chatId === paired.chatId) {
@@ -1688,6 +1874,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       try { await adapter.start(); }
       catch (error) { state.adapter = undefined; await adapter.close().catch(() => {}); throw error; }
       if (!active(id, epoch, bot.revision)) { if (state.adapter === adapter) state.adapter = undefined; await adapter.close(); }
+      else for (const run of app.store.list<Run>('runs')) {
+        if (run.status === 'unknown' && run.sourceMessageId?.startsWith('feishu-start:')
+          && app.store.get<Routed>('message.routes', run.sourceMessageId)?.botId === id) startStateChanged(run);
+      }
       if (!closed) app.events.publish('feishu.changed', { botId: id });
     });
     state.operations = job.catch(error => report(id, error));
@@ -1997,6 +2187,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   }
   const off = app.events.subscribe(event => {
     if (closed || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) return;
+    if (event.type === 'runs.changed' && typeof event.data.id === 'string') {
+      const run = app.store.get<Run>('runs', event.data.id);
+      if (run?.sourceMessageId?.startsWith('feishu-start:')) startStateChanged(run);
+    }
     if (['runs.changed', 'todos.changed', 'projects.changed', 'inbox.changed', 'interactions.changed',
       'approvals.changed', 'machines.changed', 'inbox-handling.changed'].includes(event.type)) pins.scheduleRefresh();
     if (event.type === 'plugins.changed' && event.data.id === 'conversation-search') {

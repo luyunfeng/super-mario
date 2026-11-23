@@ -1337,7 +1337,7 @@ export async function createWorkbench(config: AppConfig) {
           if (!prepared || typeof prepared !== 'object' || Array.isArray(prepared)) throw new PluginCallError('派活钩子必须返回对象');
           for (const field of Object.keys(original)) if (field !== 'prompt' && JSON.stringify(prepared[field]) !== JSON.stringify(original[field])) throw new PluginCallError('派活钩子只能改写 prompt，不能改变执行者、模式或工作范围');
           const effectivePrompt = requiredText(prepared.prompt, '钩子改写后的任务');
-          if (executionGuard && effectivePrompt !== prompt) throw Object.assign(new InputError('已确认的收件任务内容不能被钩子改写', 409), { delivery: 'no' });
+          if (executionGuard && effectivePrompt !== prompt) throw Object.assign(new InputError('已确认的执行目标不能被钩子改写', 409), { delivery: 'no' });
           if (effectivePrompt !== prompt) {
             if (key) store.put('dispatch-prompt-hashes', key, createHash('sha256').update(prompt).digest('hex'));
             update({ prompt: effectivePrompt });
@@ -1352,9 +1352,9 @@ export async function createWorkbench(config: AppConfig) {
             return todoDecisions.context(todoId);
           };
           // Exact approved payloads and existing native threads retain their original terms.
-          const guidance = projectId && !nativeApproved && !executionGuard ? await currentProjectInstructions(projectId, 'executor') : '';
+          const guidance = projectId && !nativeApproved ? await currentProjectInstructions(projectId, 'executor') : '';
           const decisions = currentDecisions();
-          const includeOfficeGuide = executor.mode === 'real' && executionMode === 'task' && !nativeApproved && !executionGuard
+          const includeOfficeGuide = executor.mode === 'real' && executionMode === 'task' && !nativeApproved
             && plugins.list().some(plugin => plugin.id === 'office-documents' && plugin.status === 'active')
             && machines?.list().some(machine => machine.id === executor.machineId && machine.online && machine.capabilities.includes('office.guide'));
           const checkWorktreeBinding = () => {
@@ -1394,7 +1394,7 @@ export async function createWorkbench(config: AppConfig) {
             update({ worktree: { source: workspace.cwd, branch: receipt.branch, base: receipt.base } });
           }
           const isolationGuide = worktreeRunId ? '本次在原执行工作树中开始新任务。先核对现有文件和未提交修改，保留已有工作。仅报告本次产生的结果和验证证据。' : isolated ? '本次使用独立 Git 工作树。所有项目改动在当前工作目录中完成，记录改动文件、提交和测试证据；合并和清理工作树由用户决定。' : '';
-          const acceptance = executionMode === 'task' && doneWhen && !nativeApproved && !executionGuard
+          const acceptance = executionMode === 'task' && doneWhen && !nativeApproved
             ? '本次任务的验收标准：' + JSON.stringify(doneWhen) + '\n交付时逐项给出实际核验结果和证据。未能验证的条件请说明原因。'
             : '';
           const finalPrompt = [effectivePrompt, acceptance, decisions, guidance, isolationGuide, includeOfficeGuide ? officeWorkerGuide : ''].filter(Boolean).join('\n\n');
@@ -1475,11 +1475,12 @@ export async function createWorkbench(config: AppConfig) {
         if (!validateAgentInputOwner(pinned) || !current || current.status !== 'running' || current.executionMode !== 'interactive'
           || current.machineId !== pinned.machineId || current.executorId !== pinned.executorId || current.sessionId !== pinned.sessionId
           || (pinned.cwd && current.cwd && current.cwd !== pinned.cwd)
-          || (current.nativeSessionId ?? current.nativeResume?.nativeSessionId) !== pinned.nativeSessionId
+          || (pinned.nativeSessionId && (current.nativeSessionId ?? current.nativeResume?.nativeSessionId) !== pinned.nativeSessionId)
           || (current.projectId ?? '') !== pinned.projectId || (current.todoId ?? '') !== pinned.todoId
           || (pinned.projectId && (!project || project.archivedAt)) || (pinned.todoId && (!todo || todo.completedAt || todo.projectId !== current.projectId))
           || store.list<Run>('runs').some(other => other.id !== current.id && other.machineId === pinned.machineId && other.executorId === pinned.executorId
-            && (other.nativeSessionId ?? other.nativeResume?.nativeSessionId) === pinned.nativeSessionId && other.createdAt >= current.createdAt)
+            && other.createdAt >= current.createdAt && (other.sessionId === pinned.sessionId || (pinned.nativeSessionId !== undefined
+              && (other.nativeSessionId ?? other.nativeResume?.nativeSessionId) === pinned.nativeSessionId)))
           || !machines?.list().some(machine => machine.id === pinned.machineId && machine.online))
           throw Object.assign(new InputError('执行会话或机器人授权已变化，请重新选择会话', 409), { delivery: 'no' });
       }

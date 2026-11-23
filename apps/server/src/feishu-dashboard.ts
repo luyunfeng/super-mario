@@ -26,9 +26,9 @@ export function dashboardCommand(text: string) {
 }
 
 // These common words and CLI commands are legal input even if they resemble a workbench command.
-const literalWords = new Set(['stats', 'man', 'min', 'task', 'session', 'hoe', 'hep', 'lit', 'gent']);
+const literalWords = new Set(['stats', 'star', 'stat', 'man', 'min', 'task', 'session', 'hoe', 'hep', 'lit', 'gent']);
 const scopedCommands = [...dashboardAliases].filter(([, view]) => view === 'status' || view === 'stop' || view === 'help').map(([name]) => name);
-const globalCommands = [...dashboardAliases.keys(), 'agent', 'agents', 'modelchange', 'new', '新对话'];
+const globalCommands = [...dashboardAliases.keys(), 'agent', 'agents', 'start', '开工', 'modelchange', 'new', '新对话'];
 
 function isCommandSlip(typed: string, command: string) {
   // Only a missing letter or a single adjacent transposition qualifies. Check ASCII names only.
@@ -57,7 +57,7 @@ export function dashboardHelp(sessions: boolean, scoped = false) {
   const status = '/status 或 /状态：查看当前会话状态';
   const stop = '/stop 或 /停止、/停：请求中断当前轮次';
   const text = scoped ? [status, stop].join('\n') : ['/home 或「工作台」：打开工作台', '/tasks 或 /进展：查看任务进展', '/inbox 或 /收件箱：查看收件',
-    '/agents [关键词] 或 /agent：查找执行会话', '/list 或 /对话：列出可切换的对话', '/new 或 /新对话：开启独立对话，可在命令后直接写第一条消息', '/main 或 /主对话：切回主 Agent', '/modellist：查看当前对话的模型目录', '/modelchange <模型 ID>：切换当前对话模型', status, stop, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
+    '/agents [关键词] 或 /agent：查找执行会话', '/start [目标] 或 /开工：填写并提交执行表单', '/list 或 /对话：列出可切换的对话', '/new 或 /新对话：开启独立对话，可在命令后直接写第一条消息', '/main 或 /主对话：切回主 Agent', '/modellist：查看当前对话的模型目录', '/modelchange <模型 ID>：切换当前对话模型', status, stop, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
   const help = text + '\n在工作台对话中发送命令原文可再加一个斜杠，例如 //status。';
   return { text: help, card: cardDocument('工作台命令', cardSection('在此私聊中发送', help)) };
 }

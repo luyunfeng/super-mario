@@ -94,7 +94,7 @@ export function agentCard(data: AgentCardSnapshot, navigation: string, webBase?:
   const pageButton = (label: string, page: number) => ({ label, value: { kind: 'workbench.agents', navigation, page } });
   elements.push(...cardButtons([
     ...(page > 0 ? [pageButton('上一页', page - 1)] : []), ...(page + 1 < pages ? [pageButton('下一页', page + 1)] : []),
-    { label: '发起执行', route: 'projects/all/runs/new' },
+    { label: '发起执行', value: { kind: 'workbench.startForm', navigation } },
   ], base));
   return { card: cardDocument('执行会话', elements), text: ['执行会话', ...lines].join('\n\n') };
 }

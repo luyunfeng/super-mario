@@ -11,7 +11,7 @@ export interface MailboxEntry { origin?: InboxOrigin; id: string; version: numbe
 
 /** Original recipient of a private bot input proposal. Persist separately from editable approval fields. */
 export interface FeishuAgentInputTarget {
-  runId: string; sessionId: string; machineId: string; nativeSessionId: string; executorId: string; cwd?: string;
+  runId: string; sessionId: string; machineId: string; nativeSessionId?: string; executorId: string; cwd?: string;
   projectId: string; todoId: string; botId: string; appId: string; revision: number;
   owner: { chatId: string; senderId: string };
 }
