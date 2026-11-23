@@ -31,6 +31,13 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   t.after(()=>browser.close());
   const page=await browser.newPage();
   await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  let disconnectEvents: (() => Promise<void>) | undefined;
+  let connections = 0;
+  await page.routeWebSocket('**/api/v1/events*', ws => {
+    const upstream = ws.connectToServer();
+    connections++;
+    disconnectEvents = async () => { await ws.close(); await upstream.close(); };
+  });
   await page.goto(server.url+'/#agent');
   await page.getByText('高级：插件与排查',{exact:true}).click();
   await page.getByText('界面',{exact:true}).click();
@@ -44,6 +51,15 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await page.getByText('高级：插件与排查',{exact:true}).click();
   await page.getByText('界面',{exact:true}).click();
   await expect(stream).toHaveText('已开始\n已处理首批');
+  const beforeDisconnect = connections;
+  assert.ok(disconnectEvents);
+  await disconnectEvents();
+  server.app.events.publish('review.progress',{text:'断线期间第二批'});
+  server.app.events.publish('review.progress',{text:'断线期间第三批'});
+  await expect.poll(()=>connections).toBeGreaterThan(beforeDisconnect);
+  await expect(stream).toHaveText('已开始\n已处理首批\n断线期间第二批\n断线期间第三批');
+  server.app.events.publish('review.progress',{text:'重连后完成'});
+  await expect(stream).toHaveText('已开始\n已处理首批\n断线期间第二批\n断线期间第三批\n重连后完成');
   const patch=page.getByRole('region',{name:'变更摘录'});
   const patchText='-before\n+<img src=x>\n';
   await expect(patch.locator('.diff-line--del')).toHaveText('-before');
