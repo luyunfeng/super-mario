@@ -59,7 +59,17 @@ console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:21,cached_
  assert.equal((await fetch(server.url+'/api/v1/agents/sessions')).status,401);
  const discovery=await api('/agents/sessions?projectId='+project.id);assert.equal(discovery.status,200);assert.equal(discovery.data.machines[0].sessions.length,1);assert.equal(discovery.data.machines[0].sessions[0].resumable,true);assert.equal(creates,0);await assert.rejects(access(capture));
  const page=await browser.newPage({viewport:{width:1440,height:1000}});const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto(server.url+'/#agent?token=offline-native-e2e');const card=page.locator('#agent-cli-sessions');await expect(card.locator('[data-cli-session]')).toHaveCount(1);await card.getByRole('button',{name:'申请恢复',exact:true}).click();
+ await page.goto(server.url+'/#agent?token=offline-native-e2e');const card=page.locator('#agent-cli-sessions');await expect(card.locator('[data-cli-session]')).toHaveCount(1);await card.getByRole('button', { name: '归档会话', exact: true }).click();
+ await expect(card.getByRole('button', { name: '取消归档' })).toBeVisible();
+ await page.reload();
+ const filter = card.getByLabel('CLI 会话归档筛选');
+ await filter.selectOption('archived');
+ await card.getByRole('button', { name: '取消归档' }).click();
+ await expect(card).toContainText('没有符合条件的历史记录');
+ await filter.selectOption('current');
+ await expect(card.getByRole('button', { name: '归档会话' })).toBeVisible();
+ assert.equal(creates, 0);
+ await card.getByRole('button',{name:'申请恢复',exact:true}).click();
  await page.getByLabel('关联项目（可选）').selectOption(project.id);await page.getByLabel('恢复后要做什么').fill('继续新目标，保留文字 $(not-a-command)\n不要重派旧工作');await page.getByLabel('完成标准').fill('返回原生线程结果证据\n不得自动完成待办');await page.getByLabel('预计用时（分钟）').fill('3');
  const submit=page.getByRole('button',{name:'提交恢复审批',exact:true});await expect(submit).toBeDisabled();await page.getByRole('checkbox',{name:'我已确认原终端已停止',exact:true}).check();await submit.click();await expect(page.getByRole('button',{name:'查看审批',exact:true})).toBeVisible();
  assert.equal(creates,0,'Creating the approval cannot launch a CLI');await assert.rejects(access(capture));
