@@ -154,11 +154,11 @@ export function createFollowUpCard({ api, store }) {
         brief.window.projects.map(p => {
           const sections = [['进展', [...p.progress, ...p.todoUpdates]], ['待办完成', p.completed],
             ['执行结束，待验收', p.ended], ['失败', p.failed], ['待决定', p.decisions]];
-          for (const [label, items] of [['执行结果未知', p.unknown], ['执行已取消', p.cancelled], ['等待执行', p.queued]]) {
+          for (const [label, items] of [['可稍后回答', p.deferredQuestions], ['执行结果未知', p.unknown], ['执行已取消', p.cancelled], ['等待执行', p.queued]]) {
             if (items?.length) sections.push([label, items]);
           }
           return h('section', { class: 'stack' }, h('h3', null, p.name), sections.map(([label, items]) =>
-            h('div', null, h('strong', null, `${label} ${items.length}`), items.map(i => h('p', null, i.title)))));
+            h('div', null, h('strong', null, `${label} ${items.length}`), items.map(i => h('p', null, label === '可稍后回答' ? h('a', { href: '#projects/all/todos/detail/' + encodeURIComponent(i.id) }, i.title) : i.title)))));
         })));
       for (const signal of brief.signals || []) blocks.push(h('p', null, signal.text));
       replace(content, blocks.length ? blocks : h('p', { class: 'muted' }, '当前没有需要跟进的内容。'));

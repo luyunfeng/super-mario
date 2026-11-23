@@ -1,3 +1,4 @@
+import { createDeferredQuestions } from './deferred-questions.ts';
 import { inboxAnalysisPrompt, inboxGroupingAuthority } from './agent-runtime/inbox-analysis-prompt.ts';
 import { createSubscriptionHost } from './subscription-host.ts';
 import { forgetPrivateConversation } from './private-conversation-deletion.ts';
@@ -141,7 +142,7 @@ export async function createWorkbench(config: AppConfig) {
   const agentSessions = createAgentSessions({ store, machines: () => machines, executors: executorInfo, propose: input => approvals.propose(input), pinExecutor });
   let channelBindingsReady = false;
   let botScopeAccess: (scope: BotScope, botId: string, input?: Message, threadId?: string) => boolean = () => true;
-  const workDecisions = createWorkDecisionService({ store, events, currentInput: () => currentAgentInput() ?? agent.currentInput(), assertCurrentInput: input => {
+  const workDecisions = createWorkDecisionService({ store, events, ownerDecision:(id,text)=>deferredQuestions.ownerDecision(id,text), currentInput: () => currentAgentInput() ?? agent.currentInput(), assertCurrentInput: input => {
     if (input.conversationId.startsWith('bot:') && !configuredBots().some(bot => input.conversationId.startsWith(`bot:${bot.id}:`))) throw new InputError('机器人来源已失效', 403);
     assertBotInput(input);
   } });
@@ -733,6 +734,62 @@ export async function createWorkbench(config: AppConfig) {
     }
     return card;
   } };
+  const deferredQuestions = createDeferredQuestions(store, {
+    source(card) {
+      if (card.kind !== 'question' || card.runId) return;
+      const origin = store.get<{inputId?:string}>('interaction-origins',card.id)?.inputId;
+      if (!origin || store.get<{cardId?:string}>('input-paused',origin)?.cardId !== card.id) return;
+      const input = store.get<Message>('messages',origin);
+      const audience = directQuestionAudience(questionSource(input));
+      if (!input || !audience || input.role !== 'user' || input.readOnly || input.replyTo ||
+          (input.origin && input.origin !== 'user') || input.projectId !== card.projectId) return;
+      if (input.projectId) {
+        const project = store.get<Project>('projects',input.projectId);
+        if (!project || project.archivedAt) return;
+      }
+      if (input.todoId) {
+        const todo = store.get<Todo>('todos',input.todoId);
+        if (!todo || todo.projectId !== input.projectId) return;
+      }
+      return {input,audience};
+    },
+    create(card, source) {
+      const todo = createTodo({title:card.title,notes:card.body,projectId:card.projectId},false,'system',{id:source.id,conversationId:source.conversationId});
+      const linked = {...todo,deferredQuestion:{cardId:card.id,askedAt:card.createdAt,title:card.title,body:card.body}};
+      store.put('todos',todo.id,linked);
+      if (sourceThread(source)) store.put('todo.origins',todo.id,{conversationId:source.conversationId,sourceMessageId:source.id});
+      return linked;
+    },
+    async post(source,text,requestId,closed,accepted) {
+      const route=store.get<MessageRoute & {botId?:string;scope?:BotScope}>('message.routes',source.id);
+      const onAccepted=(message:Message)=>{
+        if (route) store.put('message.routes',message.id,{...route,resumed:true});
+        const root=questionSource(source);
+        if (root) store.put('conversation.question-continuations',message.id,root.id);
+        accepted(message);
+      };
+      const context={projectId:source.projectId,todoId:source.todoId,requestId,onAccepted,rememberModel:false as const,...(closed && {readOnly:true,origin:'notification' as const})};
+      if (source.conversationId==='main') return agent.post(text,'main',context);
+      if (source.projectId && source.conversationId==='project:'+source.projectId+':work')
+        return scopedAgents.postProject(source.projectId,text,requestId,source.todoId,undefined,onAccepted,closed);
+      if (!route?.botId || !route.scope) throw new InputError('原提问机器人已失效',409);
+      assertBotInput(source);
+      return scopedAgents.post(text,validateBotScope(store,route.scope),route.botId,context,sourceThread(source));
+    },
+    complete:id=>{updateTodo(id,{completed:true});},
+    changed:id=>changed('todos.changed',{id}),
+  });
+  const offDeferredQuestions=events.subscribe(event=>{
+    if (event.type !== 'interactions.changed' || !event.data || typeof event.data !== 'object' || Array.isArray(event.data) || typeof event.data.id !== 'string') return;
+    const card=store.get<import('./interactions.ts').Card>('interactions',event.data.id);
+    if (card) deferredQuestions.materialize(card);
+  });
+  function recoverDeferredQuestions() {
+    for (const card of interactions.list()) deferredQuestions.materialize(card);
+    deferredQuestions.recover();
+  }
+  interactions.expireTick();
+  recoverDeferredQuestions();
   const supervisorAgent = createSupervisorAgent({ store, events, agent: supervisorRuntime, signals: supervision.signals, reviewEvidence, durable: true, publish: background.publish,
     enabled: () => plugins.list().some(plugin => plugin.id === 'daily-brief' && plugin.status === 'active') });
   supervisorAgent.start();
@@ -742,7 +799,7 @@ export async function createWorkbench(config: AppConfig) {
     }
   }, 30_000);
   triageTimer.unref();
-  const expireTimer = setInterval(() => interactions.expireTick(), 30_000); expireTimer.unref();
+  const expireTimer = setInterval(() => { interactions.expireTick(); deferredQuestions.recover(); }, 30_000); expireTimer.unref();
   const awayNotifications = createAwayNotifications({ store, events, background, presence, bots: () => notificationBots(), channel: bot => notificationChannel(bot) });
   const projectFollowUp = createProjectFollowUp({ store, events, conversations:()=>inboxAssistant.list(), schedules: background.schedules, settings: briefing.settings,
     enqueue(input) {
@@ -1279,6 +1336,7 @@ export async function createWorkbench(config: AppConfig) {
   }
 
   function newTodo(input: Record<string, unknown>): Todo {
+    if (Object.hasOwn(input,'deferredQuestion')) throw new InputError('提问来源由工作台登记');
     const now = new Date().toISOString();
     const projectId = optionalText(input.projectId, '项目');
     const parentTodoId = parentFor(input.parentTodoId, projectId);
@@ -1375,6 +1433,7 @@ export async function createWorkbench(config: AppConfig) {
   function updateTodo(id: string, patch: Record<string, unknown>, fromWeb = false): Todo {
     const todo = store.get<Todo>('todos', id);
     if (!todo) throw new InputError('待办不存在', 404);
+    if (Object.hasOwn(patch,'deferredQuestion')) throw new InputError('提问来源由工作台登记');
     if (['continuesTodoId','continuationRootId','continuationReason'].some(key => Object.hasOwn(patch,key))) throw new InputError('续办来源在新建时确定');
     if (patch.expectedAfterTodoIds !== undefined) {
       const expected = patch.expectedAfterTodoIds;
@@ -1399,6 +1458,8 @@ export async function createWorkbench(config: AppConfig) {
     if (patch.expectedDueAt !== undefined && dueDate(patch.expectedDueAt) !== todo.dueAt) {
       throw new InputError('截止时间已被修改，请核对最新时间后重新改期', 409);
     }
+    if (todo.deferredQuestion && todo.completedAt && patch.completed === false)
+      throw new InputError('已处理的原提问不能重新打开',409);
     if (patch.completed !== undefined && typeof patch.completed !== 'boolean') throw new InputError('completed必须为布尔值');
     const next = { ...todo, updatedAt: new Date().toISOString() };
     if (patch.groupTaskOutcome !== undefined) {
@@ -1415,6 +1476,7 @@ export async function createWorkbench(config: AppConfig) {
     if (patch.projectId !== undefined) next.projectId = optionalText(patch.projectId, '项目');
     if (patch.dueAt !== undefined) next.dueAt = dueDate(patch.dueAt);
     if (next.projectId !== todo.projectId) {
+      if (todo.deferredQuestion) throw new InputError('提问待办属于原对话项目，无法移动',409);
       // A published draft belongs to its original audience. A later move back must not publish a project's draft.
       if (patch.groupTaskOutcome === undefined) delete next.groupTaskOutcome;
       delete next.responsibleSession;
@@ -1467,6 +1529,7 @@ export async function createWorkbench(config: AppConfig) {
       if (patch.completed === true) { reporting.assertCanComplete(id); runReview.assertCanComplete(id); }
       if (todo.completedAt && patch.completed === false) { reporting.onReopen(id); runReview.onReopen(id); }
       if (cycleChanged) waitingReplies.invalidate(id);
+      if (!todo.completedAt && next.completedAt) deferredQuestions.closed(next);
       changed('todos.changed', { id });
     });
     return next;
@@ -2199,7 +2262,7 @@ export async function createWorkbench(config: AppConfig) {
     },
     readTopicTurnResult,
     runScopes: {read:runScopes.read,reviseWeb:(id:string,args:Record<string,unknown>)=>reviseScope(id,args,{kind:'web'})},
-    setScopeRequestValidator(check: typeof ownerScopeRequest) { ownerScopeRequest = check; },
+    setScopeRequestValidator(check: typeof ownerScopeRequest) { ownerScopeRequest = check; recoverDeferredQuestions(); },
     setAgentInputOwnerValidator(validate: typeof validateAgentInputOwner) { validateAgentInputOwner = validate; },
     setBotsStatus(status: () => Json) { botsStatus = status; },
     setGroupReadRecords(handler: NonNullable<typeof groupReadRecords>) { groupReadRecords = handler; },
@@ -2286,11 +2349,12 @@ export async function createWorkbench(config: AppConfig) {
       } : undefined;
     },
     forgetPrivateConversation: (id: string) => forgetPrivateConversation(store, id),
-    delegateTodo, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; }, listExecutors: executorInfo, snapshot, createFeishuTodo: (input: Record<string,unknown>, source: TodoOriginSource) => createTodo(input,true,'feishu',source), knowledgeRevision, confirmKnowledgeActions, knowledgeActionStatus, todos, createTodo, continueTodo, updateTodo, dispatch, cancel, knowledge,
+    delegateTodo, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; }, listExecutors: executorInfo, snapshot, createFeishuTodo: (input: Record<string,unknown>, source: TodoOriginSource) => createTodo(input,true,'feishu',source), knowledgeRevision, confirmKnowledgeActions, knowledgeActionStatus, todos, createTodo, continueTodo, updateTodo, answerDeferredQuestion:deferredQuestions.answer, dispatch, cancel, knowledge,
     async close() {
       if (closing) return;
       closing = true;
       clearInterval(triageTimer);
+      offDeferredQuestions(); await deferredQuestions.drain();
       await subscriptions.close();
       await stopWeb();
       commandRouter.cancel();

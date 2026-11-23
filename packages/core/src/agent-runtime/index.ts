@@ -46,7 +46,7 @@ interface PendingTurn {
 }
 
 type ReadOnlyAction = 'schedule_followup' | 'notify_user';
-type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' | 'replyTo' | 'requestId' | 'directWebInput'> & { readOnlyAction?: ReadOnlyAction; rememberModel?: false };
+type PostContext = Pick<Message, 'projectId' | 'todoId' | 'readOnly' | 'origin' | 'replyTo' | 'requestId' | 'directWebInput'> & { readOnlyAction?: ReadOnlyAction; rememberModel?: false; onAccepted?: (input:Message)=>void };
 
 /** The second argument is a narrow test seam; all pi imports stay in this directory. */
 export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK> = () => import('@earendil-works/pi-coding-agent')) {
@@ -941,9 +941,13 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
         ...(context?.readOnly || scope?.kind === 'unmarked' ? { readOnly: true } : {}),
         createdAt: new Date().toISOString(), status: 'pending',
       };
-      const existing = message.directWebInput && options.onDirectWebInput ? store.transaction(()=>{
-        const replay=acceptMessage(store,message);
-        if(!replay)options.onDirectWebInput!(message);
+      const notifyDirect = message.directWebInput && options.onDirectWebInput;
+      const existing = notifyDirect || context?.onAccepted ? store.transaction(() => {
+        const replay = acceptMessage(store, message);
+        if (!replay) {
+          if (notifyDirect) notifyDirect(message);
+          context?.onAccepted?.(message);
+        }
         return replay;
       }) : acceptMessage(store, message);
       if (existing) {

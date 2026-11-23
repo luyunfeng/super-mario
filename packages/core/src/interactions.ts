@@ -203,6 +203,8 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
     if (card.status !== 'open' || !card.stages) continue;
     const job = Promise.resolve().then(() => {
       if (closed) return;
+      const current = store.get<Card>(collection, card.id);
+      if (current?.status !== 'open' || current.version !== card.version || Date.parse(current.expiresAt) <= Date.now()) return;
       if (card.handler === 'user') events.publish('interactions.user_required', { id: card.id });
       else if (Date.parse(card.expiresAt) > Date.now() && (!card.stageDueAt || Date.parse(card.stageDueAt) > Date.now())) background(card);
     });

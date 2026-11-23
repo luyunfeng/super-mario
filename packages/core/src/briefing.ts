@@ -23,6 +23,11 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
   return { from, to, basis:'持久记录的最新状态；执行结束不代表待办验收完成。待决定包含此前积压。', projects:[...projects.map(p => ({id:p.id,name:p.name})),...(projectId === undefined ? [{id:'',name:'未归项目'}] : [])].map(project => {
     const scopedRuns = runs.filter(r => (r.projectId ?? '') === project.id);
     const scopedTodos = todos.filter(t => (t.projectId ?? '') === project.id);
+    // The briefing queue starts when the question becomes a todo. The todo outlives its seven days in briefings.
+    const deferredQuestions = scopedTodos.filter(todo => todo.deferredQuestion && !todo.completedAt
+      && beforeEnd(todo.createdAt) && cutoff - Date.parse(todo.createdAt) < 7 * 86400000)
+      .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id))
+      .map(todo => ({ id: todo.id, title: todo.title }));
     const overdue: { id: string; title: string; dueAt: string }[] = [];
     const dueToday: typeof overdue = [];
     if (localDate) {
@@ -40,7 +45,7 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
     }
     const updates = (status: Run['status']) => scopedRuns.filter(r => changed(r.updatedAt) && r.status === status)
       .map(r => ({ id: r.id, title: r.prompt, status: r.status }));
-    return { projectId:project.id, name:project.name,
+    return { projectId:project.id, name:project.name, deferredQuestions,
       ...(localDate ? { overdue, dueToday } : {}),
       ...(includeContinuingRuns ? { continuing: scopedRuns
         .filter(r => r.status === 'running' && Date.parse(r.updatedAt) <= Date.parse(from))
@@ -59,6 +64,19 @@ export function buildWindowBrief(store: Store, from: string, to: string, project
       }).map(p=>({id:p.id,title:p.title}))],
     };
   }) };
+}
+export function formatDeferredQuestions(brief: ReturnType<typeof buildWindowBrief>, name: string, alreadyShown = '') {
+  if (name !== 'morning' && name !== 'evening') return '';
+  const rows: string[] = [];
+  for (const project of brief.projects) {
+    const items = project.deferredQuestions;
+    if (!items?.length) continue;
+    const titles = items.slice(0, 20).map(item => item.title.slice(0, 200));
+    const label = project.name + ' · 可稍后回答';
+    if (alreadyShown.includes(label) && titles.every(title => alreadyShown.includes(title))) continue;
+    rows.push(label + ' ' + items.length + '：' + titles.join('；') + (items.length > 20 ? '；其余请在工作台查看' : ''));
+  }
+  return rows.join('\n');
 }
 export function formatWindowBrief(brief: ReturnType<typeof buildWindowBrief> & { overdue?: {id:string;title:string}[] }, name: string, timezone='Asia/Shanghai') {
   const date=new Intl.DateTimeFormat('zh-CN',{timeZone:timezone,month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
@@ -80,6 +98,8 @@ export function formatWindowBrief(brief: ReturnType<typeof buildWindowBrief> & {
     }
   }
   if(brief.overdue?.length){changed=true;rows.push(`\n逾期待办 ${brief.overdue.length}：`+brief.overdue.slice(0,20).map(t=>t.title.slice(0,200)).join('；'));}
+  const deferred = formatDeferredQuestions(brief, name);
+  if (deferred) { changed = true; rows.push('\n' + deferred); }
   if(!changed)rows.push('本期暂无新的工作变化，也没有待决定事项。');
   return rows.join('\n');
 }

@@ -1,4 +1,4 @@
-import { buildWindowBrief, createBriefingSettings, formatWindowBrief } from './briefing.ts';
+import { buildWindowBrief, createBriefingSettings, formatDeferredQuestions, formatWindowBrief } from './briefing.ts';
 import { buildBriefingPrompt } from './prompts.ts';
 import type { createAgentRuntime } from './agent-runtime/index.ts';
 import type { createApprovalService } from './approvals.ts';
@@ -188,7 +188,10 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
             }),
           ]);
           const summary = reply.status === 'done' ? reply.text?.trim() : '';
-          if (summary) briefText = `${fallbackText.split('\n')[0]}\n${summary}`;
+          if (summary) {
+            const pendingQuestions = formatDeferredQuestions(facts, data.name, summary);
+            briefText = [fallbackText.split('\n')[0], summary, pendingQuestions].filter(Boolean).join('\n');
+          }
         } catch {
           // Fall back to deterministic facts brief if model call fails or times out.
         }
@@ -314,7 +317,7 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
     void Promise.resolve().then(() => {
       if (isClosing()) return;
       const card = store.get<Card>('interactions', id);
-      if (!card || card.withdrawnReason === 'user_spoke' || card.userNotifiedAt) return;
+      if (!card || card.status === 'expired' || card.withdrawnReason === 'user_spoke' || card.userNotifiedAt) return;
       const origin = store.get<{ inputId?: string }>('interaction-origins', id);
       const now = new Date().toISOString();
       const messageId = `interaction-notice:${id}`;

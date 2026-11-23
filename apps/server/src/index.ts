@@ -700,6 +700,12 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res,200,conversationAction[2]==='answer'?app.inboxAssistant.answer(id,input.version as number,input.text as string):conversationAction[2]==='archive'?app.inboxAssistant.archive(id,input.version as number):app.inboxAssistant.retry(id,input.version as number));}
         if (path === '/api/v1/todos' && method === 'GET') return json(res, 200, url.searchParams.get('view') === 'sections' ? todoSections(app.todos(), new Date(), todoDecisionIds(app.store)) : app.todos());
         if (path === '/api/v1/todos' && method === 'POST') return json(res, 201, app.createTodo(await body(req),true,'web'));
+        const questionAnswer=path.match(/^\/api\/v1\/todos\/([^/]+)\/question-answer$/);
+        if (questionAnswer && method==='POST') {
+          const input=await body(req);
+          if (Object.keys(input).some(key=>key!=='text')) throw new InputError('回答仅接受文本');
+          return json(res,200,await app.answerDeferredQuestion(decodeURIComponent(questionAnswer[1]!),input.text));
+        }
         const todo = path.match(/^\/api\/v1\/todos\/([^/]+)$/);
         if (todo && method === 'PATCH') return json(res, 200, app.updateTodo(todo[1], await body(req), true));
         if (path === '/api/v1/projects' && method === 'GET') return json(res, 200, app.projects.list());

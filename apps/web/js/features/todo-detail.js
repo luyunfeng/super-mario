@@ -88,6 +88,55 @@ function groupTaskOutcome(api, store, todo) {
   return { panel, update };
 }
 
+function deferredQuestionSection(api, store, todo) {
+  const owner = api.draftOwner();
+  const askedAt = h('p', { class: 'small muted' });
+  const title = h('strong');
+  const question = h('p', { style: { whiteSpace: 'pre-wrap' } });
+  const state = h('p', { class: 'small', role: 'status' });
+  const input = TextArea({ rows: 3 });
+  let busy = false, saved = false;
+  const current = () => store.view.snapshot?.todos?.find(item => item.id === todo.id);
+  const submit = Button({ label: '提交回答', kind: 'primary', size: 'sm', onClick: async () => {
+    update(current());
+    if (submit.disabled || panel.hidden) return;
+    const text = input.value.trim();
+    if (Array.from(text).length > 4000) { feedback.textContent = '回答最多可填写 4000 个字。'; return; }
+    busy = true; update(current());
+    try {
+      const receipt = await api.post(todoPath(todo) + '/question-answer', { text });
+      if (receipt?.todoId !== todo.id || !receipt.messageId) throw new Error('缺少原会话受理回执');
+      saved = true; input.value = '';
+      feedback.textContent = '原会话已受理你的回答。';
+    } catch (error) {
+      feedback.textContent = error.status === 409 ? '提问状态已变更，请核对后再操作。' :
+        !error.status || error.status >= 500 ? '提交结果未知，请核对待办状态。' : error.message;
+    } finally {
+      await store.refresh();
+      busy = false; update(current());
+    }
+  } });
+  const feedback = h('p', { class: 'small', role: 'status' });
+  const controls = h('div', { class: 'stack' }, Field({ label: '回答原提问', control: input }), submit);
+  const panel = section('超时提问', askedAt, title, question, state, controls, feedback);
+  input.addEventListener('input', () => update(current()));
+  function update(row) {
+    panel.hidden = !row?.deferredQuestion || !matchesScope(store, todo) || owner !== api.draftOwner() ||
+      owner !== store.view.snapshotOwner || store.view.unauthorized;
+    if (panel.hidden) { input.value = ''; feedback.textContent = ''; return; }
+    askedAt.textContent = '提问时间 · ' + formatDate(row.deferredQuestion.askedAt, true);
+    const original = row.deferredQuestion;
+    const available = typeof original.title === 'string' && original.title.trim() && typeof original.body === 'string';
+    title.textContent = available ? original.title : '';
+    question.textContent = available ? original.body : '无法核对原提问。';
+    state.textContent = row.completedAt ? '待办已完成' : saved ? '回答已提交' : available ? '等待你的回答' : '';
+    controls.hidden = !available || !!row.completedAt || saved;
+    input.disabled = busy || controls.hidden;
+    submit.disabled = input.disabled || !input.value.trim();
+  }
+  return { panel, update };
+}
+
 function decisionSection(api, store, todo) {
   const path = todoPath(todo) + '/decisions';
   const owner = api.draftOwner();
@@ -276,22 +325,25 @@ export function openTodoDetail({ api, store, router, todo, openEdit }) {
 }
 
 export function createTodoDetail({ api, store, router, todo, openEdit, close }) {
+  const heading = h('h2');
   const summary = h('div', { class: 'stack' });
   const next = h('div', { class: 'stack' });
   const attention = createAttention({ api, store, task: true });
   const reminder = reminderRecord(api, store, todo);
   const history = conversationHistory({ api, store, router, todo, close });
   const outcome = groupTaskOutcome(api, store, todo);
+  const question = deferredQuestionSection(api, store, todo);
   const thread = createTodoThread({ api, store, todo, sameScope: () => matchesScope(store, todo) });
   const decisions = decisionSection(api, store, todo);
   const brief = createTodoBrief({ api, store, router, todo, close });
   const lineage = createTodoLineage({ api, store, router, todo, close });
-  const el = h('div', { class: 'stack' }, summary, brief.panel, lineage.panel, outcome.panel, thread.panel, attention.el, history.panel, reminder.panel, replyRecord(api, store, todo),
+  const el = h('div', { class: 'stack' }, heading, question.panel, summary, brief.panel, lineage.panel, outcome.panel, thread.panel, attention.el, history.panel, reminder.panel, replyRecord(api, store, todo),
     decisions.panel, next);
   function paint() {
     const snapshot = store.view.snapshot;
     const current = snapshot?.todos.find(item => item.id === todo.id);
     decisions.update();
+    question.update(current);
     if (!current || !matchesScope(store, todo)) { lineage.update([]); brief.update(); return; }
     outcome.update(current);
     thread.update();
@@ -317,7 +369,9 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
     const latest = runs[0];
     const context = { api, store, router, todo: current };
     const action = (label, fn) => Button({ label, size: 'sm', onClick: () => { close?.(); fn(); } });
-    replace(summary, h('h2', null, current.title), current.notes && h('p', null, current.notes),
+    heading.textContent = current.title;
+    replace(summary, current.notes && (current.deferredQuestion
+      ? section('待办备注', h('p', { style: { whiteSpace: 'pre-wrap' } }, current.notes)) : h('p', null, current.notes)),
       sources.length > 0 && section('来源', sources.map(item => h('p', null, [item.source, item.title || item.id].filter(Boolean).join(' · ')))),
       current.afterTodoIds?.length > 0 && section('前置子项', current.afterTodoIds.map(id => {
         const item = related.find(candidate => candidate.id === id && candidate.parentTodoId === current.parentTodoId);
@@ -339,7 +393,7 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
       snapshot.executors?.find(item => item.id === latest.executorId)?.name ?? latest.executorId) : '当前快照中没有关联执行',
       action('执行历史', () => openTodoHistory(context))),
       section('下一步', h('p', null, current.completedAt ? '待办已完成，可查看验收记录。' :
-        current.waitingOn ? '等待' + current.waitingOn : runs.some(isRunActive) ? '查看执行进展。' :
+        current.deferredQuestion ? '请在超时提问中回答原问题。' : current.waitingOn ? '等待' + current.waitingOn : runs.some(isRunActive) ? '查看执行进展。' :
         latest?.status === 'completed' ? '核对交付结果并验收。' : latest ? '查看执行历史，确认是否重新派单。' : '可补充决策或发起派单。'),
       h('div', { class: 'row row--wrap' }, action('编辑待办', () => openEdit(current)),
         (!current.projectId || project && !project.archivedAt) && action('创建续办', () => openTodoContinuation(context)),

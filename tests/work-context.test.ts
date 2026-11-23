@@ -190,3 +190,17 @@ test('独立收件仅计入当前渠道与归属范围，已合并和已归档�
   assert.doesNotMatch(JSON.stringify(inbox), /private-/);
   assert.equal(pendingDecisionPage(store, scope, 0, groups, []).items.some(row => row.collection === 'inbox'), false);
 });
+
+test('等我决定可定位超时转成的待办，其他项目和已结案的提问不入当前清单', async t => {
+  const store = await fixture(t);
+  const todo = {id:'deferred-1', projectId:'A', title:'选哪天发布？', notes:'私有原问题正文',
+    createdAt:'2026-01-01T00:00:00Z', deferredQuestion:{cardId:'question-1',askedAt:'2025-12-31T22:00:00Z'}};
+  store.put('todos',todo.id,todo);
+  const get = (projectId:string) => pendingDecisionPage(store,{kind:'project',projectId},0).items.filter(row => row.collection === 'deferredQuestions');
+  const rows = get('A');
+  assert.deepEqual(rows.map(row => row.webCitation),['[查看待办](#projects/A/todos/detail/deferred-1)']);
+  assert.doesNotMatch(JSON.stringify(rows),/私有原问题正文/);
+  assert.deepEqual(get('B'),[]);
+  store.put('todos',todo.id,{...todo, completedAt:'2026-01-02T00:00:00Z'});
+  assert.deepEqual(get('A'),[]);
+});

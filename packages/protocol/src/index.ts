@@ -30,6 +30,8 @@ export type KnowledgeImportance = 'P0' | 'P1' | 'P2' | 'P3';
 export type KnowledgeEditSource = 'workbench' | 'conversation' | 'feishu';
 export interface KnowledgeEntry { contentLocked?: boolean; factsEdit?: { source: KnowledgeEditSource; at: string }; confirmedFacts?: string; relevance?: number; importance?: KnowledgeImportance; aliases?: string[]; tags?: string[]; id: string; layer: KnowledgeLayer; title: string; content: string; projectId?: string; updatedAt: string }
 export interface Todo {
+  /** Set by the host when an unanswered assistant question expires. */
+  deferredQuestion?: { cardId: string; askedAt: string; title?: string; body?: string };
   /** Explicit predecessor of this work phase, independent of hierarchy and dependencies. */
   continuesTodoId?: string; continuationReason?: string; continuationRootId?: string;
  groupTask?: true; groupTaskOutcome?: string; afterTodoIds?: string[]; parentTodoId?: string; responsibleSession?: { runId: string; machineId: string; sessionId: string }; responsiblePerson?: string; priority?: 'high' | 'normal' | 'low'; id: string; title: string; notes: string; projectId?: string; dueAt?: string; waitingOn?: string; reminderAt?: string; /** Host-owned waiting/reminder generation; legacy records default to 1. */ reminderVersion?: number; remindedAt?: string; completedAt?: string; createdAt: string; updatedAt: string }

@@ -1,0 +1,28 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test from 'node:test';
+import { chromium, expect } from '@playwright/test';
+import { startServer } from '../apps/server/src/index.ts';
+
+test('主人从 Web 简报中的可稍后回答项目打开原待办', async t => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'mario-question-brief-browser-'));
+  const token = 'question-brief-fixture';
+  const server = await startServer({port:0, host:'127.0.0.1', demo:true, token, dataDir});
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  t.after(async () => { await browser?.close(); await server.close(); await rm(dataDir, {recursive:true, force:true}); });
+  const now = new Date(Date.now() - 86400000 * 2).toISOString();
+  const id = 'synthetic-question';
+  const title = '请选择合成验收方案';
+  server.app.store.put('todos', id, {id, title, notes:'合成选项说明', deferredQuestion:{cardId:'synthetic-card', askedAt:now}, createdAt:now, updatedAt:now});
+  browser = await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  const page = await browser.newPage();
+  await page.addInitScript(() => localStorage.setItem('sm.splash.seen','true'));
+  await page.goto(server.url + '/#agent?token=' + token);
+  await page.getByRole('button', {name:'查看简报', exact:true}).click();
+  const drawer = page.getByRole('dialog', {name:'简报与提醒'});
+  await expect(drawer).toContainText('可稍后回答 1');
+  await drawer.getByRole('link', {name:title}).click();
+  await expect(page).toHaveURL(new RegExp('/todos/detail/' + id + '$'));
+  await expect(page.locator('#panel-todos').getByRole('heading', {name:title})).toBeVisible();
+});

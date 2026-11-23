@@ -4328,3 +4328,34 @@ test('主对话的提问提示词和工具支持用户中途改目标，旧问�
     assert.equal(after.answer,undefined);
   } finally { await server.close(); }
 });
+
+test('待办回答回到最初发问的主对话，模型收到原目标、实际答案和继续处理的边界', async t => {
+  const original = '为合成发布准备一份排期，先请我选日期。';
+  const { server, api, ask } = await fixture(t, request => {
+    if (request.lastRole === 'tool') return {role:'assistant',content:'等你选好日期再排期。'};
+    const content = JSON.stringify(request.content);
+    if (content.includes('选择周四上午')) {
+      assert.ok(content.includes(original));
+      assert.ok(content.includes('周四还是周五？'));
+      assert.match(request.system, /关闭了待办，保持未作决定/);
+      return {role:'assistant',content:'已按周四上午继续准备排期。'};
+    }
+    return call('interaction_open',{kind:'question',title:'哪天排期？',body:'周四还是周五？'},'schedule-day');
+  });
+  try {
+    server.app.policies.write({}, {ladder:['user']});
+    await ask(original);
+    const [card] = server.app.interactions.list();
+    assert.ok(card);
+    server.app.interactions.expireTick(Date.parse(card.expiresAt)+1);
+    const todo = server.app.todos().find(item => item.deferredQuestion?.cardId === card.id);
+    assert.ok(todo);
+    const receipt = await api('/todos/'+todo.id+'/question-answer',{text:'选择周四上午'});
+    await t.waitFor(() => {
+      const reply = server.app.store.list<Message>('messages').find(m => m.replyTo === receipt.messageId && m.status === 'done');
+      assert.equal(reply?.conversationId,'main');
+      assert.equal(reply.text,'已按周四上午继续准备排期。');
+    });
+    assert.ok(server.app.todos().find(item => item.id === todo.id)?.completedAt);
+  } finally { await server.close(); }
+});

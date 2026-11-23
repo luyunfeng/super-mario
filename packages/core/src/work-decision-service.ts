@@ -11,6 +11,7 @@ function fail(text: string, status = 400): never { throw Object.assign(new Error
 export function createWorkDecisionService(options: {
   store: Store; events: EventBus; currentInput(): Message | undefined;
   assertCurrentInput(input: Message): void;
+  ownerDecision?(todoId:string,text:string):void;
 }) {
   const { store, events } = options;
   const ledger = createWorkDecisions({ store, events, authorize: (scope, source) => authorizeWorkDecisionSource(store, scope, source),
@@ -88,7 +89,9 @@ export function createWorkDecisionService(options: {
       return store.transaction(() => {
         const scope = target(input);
         const source = webSource(sourceId(['record', scope, input.key]), input.text as string, scope);
-        return ledger.record({ key: input.key as string, text: input.text as string, scope, sourceMessageId: source.id });
+        const fact = ledger.record({ key: input.key as string, text: input.text as string, scope, sourceMessageId: source.id });
+        if (scope.kind === 'task') options.ownerDecision?.(scope.todoId, fact.text);
+        return fact;
       });
     },
     changeFromWeb(input: Record<string, unknown>, withdraw = false) {

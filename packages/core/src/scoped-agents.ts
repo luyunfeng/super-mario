@@ -74,10 +74,10 @@ export function createScopedAgents(options: Options) {
     return entry.runtime;
   }
   return {
-    postProject(projectId:string,text:string,requestId?:string,todoId?:string,directWebInput?:true){return projectAgent(projectId).post(text,undefined,{requestId,todoId,directWebInput});},
+    postProject(projectId:string,text:string,requestId?:string,todoId?:string,directWebInput?:true,onAccepted?:(input:Message)=>void,closedNotice?:boolean){return projectAgent(projectId).post(text,undefined,{requestId,todoId,directWebInput,onAccepted,...(closedNotice && {readOnly:true,origin:'notification'})});},
     askMemory(projectId:string,text:string){return projectAgent(projectId,'memory').ask(text,{readOnly:true});},
     projectStatus(projectId:string){const id=`project:${projectId}:work`;return{conversationId:id,...(agents.get(id)?.runtime.status()??{available:options.config.demo||Boolean(options.config.model),reason:'项目 Agent 按需初始化'})};},
-    async post(text: string, scope: BotScope, botId: string, context?: { projectId?: string; todoId?: string; readOnly?: boolean; rememberModel?: false; origin?: Message['origin']; replyTo?: string }, threadId?: string): Promise<Message> {
+    async post(text: string, scope: BotScope, botId: string, context?: { requestId?:string; onAccepted?:(input:Message)=>void; projectId?: string; todoId?: string; readOnly?: boolean; rememberModel?: false; origin?: Message['origin']; replyTo?: string }, threadId?: string): Promise<Message> {
       if (closed) throw new Error('Bot 运行时已关闭');
       if (configuring) throw new Error('正在应用模型配置，请稍后发送消息');
       if (typeof text !== 'string' || !text.trim()) throw new Error('消息不能为空');

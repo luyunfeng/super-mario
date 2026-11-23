@@ -1,4 +1,5 @@
 import type { InboxConversation } from '../../protocol/src/inbox-conversations.ts';
+import { actionTodoLink } from './todo-link.ts';
 import { actionableInbox } from './attention.ts';
 import type { ReviewEvidenceReader } from './run-review.ts';
 import type { Approval, BotScope, ExecutorInfo, InboxItem, MachineInfo, MailboxEntry, Project, Run, Todo } from '../../protocol/src/index.ts';
@@ -43,6 +44,16 @@ function pendingDecisions(store: WorkStore, visible: (relation: Relation) => boo
     }),
     ...store.list<Card>('interactions').filter(c => c.status === 'open' && c.handler === 'user').map(c =>
       ({ collection: 'interactions' as const, id: c.id, title: (c.title ?? '').slice(0, 180), version: c.version, createdAt: c.createdAt, ...ownership(c) })),
+    ...store.list<Todo>('todos').filter(todo => {
+      if (!todo.deferredQuestion || todo.completedAt) return false;
+      if (!todo.projectId) return true;
+      const project = store.get<Project>('projects', todo.projectId);
+      return project && !project.archivedAt;
+    }).map(todo => ({
+      collection: 'deferredQuestions' as const, id: todo.id, title: todo.title.slice(0, 180),
+      createdAt: todo.createdAt, version: null, webCitation: actionTodoLink(todo).webCitation,
+      ...ownership({todoId: todo.id}),
+    })),
     ...mailboxes.filter(entry => entry.status === 'pending' && entry.requiresConfirmation
       && entry.scope.kind !== 'unmarked'
       // A task may move after a letter was queued. Respect its recorded scope as well as its current owner.
@@ -73,7 +84,7 @@ export function pendingDecisionPage(store: WorkStore, scope: BotScope, offset: n
   const end = offset + 25;
   const routes = { inbox: '#chat?inbox=', approvals: '#chat?approval=', interactions: '#chat?interaction=', plans: '#chat?plan=', mailboxes: '#chat?mailbox=', conversations: '#inbox?conversation=' };
   const items = decisions.slice(offset, end).map(row => ({
-    ...row, webCitation: `[查看待决定事项](${routes[row.collection]}${encodeURIComponent(row.id)})`,
+    ...row, webCitation: row.collection === 'deferredQuestions' ? row.webCitation : `[查看待决定事项](${routes[row.collection]}${encodeURIComponent(row.id)})`,
   }));
   return { total: decisions.length, items, nextOffset: end < decisions.length ? end : null };
 }
