@@ -4442,6 +4442,8 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
       if(JSON.stringify(req.content).includes('编辑历史')){
         assert.ok(req.tools.includes('inbox_edit_history'));
         assert.match(req.system,/不能据此断定从未编辑/);
+        assert.match(req.system,/最近一次改动，沿 nextOffset 读到末页/);
+        assert.match(req.system,/不要推断省略部分被删除/);
         return call('inbox_edit_history',{id:center},'edits');
       }
       assert.ok(req.tools.includes('inbox_tree'));
