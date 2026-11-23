@@ -34,15 +34,22 @@ export function createConversationExport({ api, store, getProjectId = () => unde
   const update = () => { button.hidden = !conversationExportActive(store); };
   store.subscribe(update);
   update();
-  function copyAction(message, label, write) {
-    const projectId = getProjectId(), owner = api.draftOwner();
+  const {copyMessage, renderMessage} = createMessageCopyActions({api,store,matches:message=>{
+    const projectId = getProjectId();
     const conversation = projectId ? `project:${projectId}:work` : 'main';
-    if (!conversationExportActive(store) || message.conversationId !== conversation ||
-        (projectId && message.projectId && message.projectId !== projectId) || message.origin === 'notification' ||
+    return message.conversationId === conversation && (!projectId || !message.projectId || message.projectId === projectId);
+  }});
+  return { button, copyMessage, renderMessage, get active() { return conversationExportActive(store); }, close: () => drawer?.close() };
+}
+
+export function createMessageCopyActions({api,store,matches}) {
+  function copyAction(message, label, write) {
+    const owner = api.draftOwner();
+    if (!conversationExportActive(store) || !matches(message) || message.origin === 'notification' ||
         !['user', 'assistant'].includes(message.role) || !message.text?.trim()) return null;
     return Button({ label, kind: 'ghost', size: 'sm', onClick: async (_, control) => {
       const current = () => control.isConnected && owner === api.draftOwner() && owner === store.view.snapshotOwner &&
-        projectId === getProjectId() && conversationExportActive(store);
+        matches(message) && conversationExportActive(store);
       if (!current()) return;
       try {
         await write();
@@ -53,13 +60,13 @@ export function createConversationExport({ api, store, getProjectId = () => unde
     } });
   }
   function copyMessage(message, getText) {
-    return copyAction(message, '复制正文', () => navigator.clipboard.writeText(getText(message)));
+    return copyAction(message, '复制正文', () => copyText(getText(message)));
   }
   function renderMessage(message, text) {
     return renderFormattedText(text, table => copyAction(message, '复制表格', () => writeTable(table)),
       { reply: message.role === 'assistant', streaming: message.status === 'pending' });
   }
-  return { button, copyMessage, renderMessage, get active() { return conversationExportActive(store); }, close: () => drawer?.close() };
+  return {copyMessage, renderMessage};
 }
 
 export function openConversationExport({ api, store, source, subtitle, isCurrent, onSourceError }) {

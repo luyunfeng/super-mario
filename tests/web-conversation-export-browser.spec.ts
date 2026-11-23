@@ -12,7 +12,7 @@ test('独立 Web 对话按原项目与会话导出归档历史，下载内容与
   const server=await startServer({dataDir:dir,host:'127.0.0.1',port:0,token,demo:true});
   const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
   t.after(async()=>{await browser.close();await server.close();await rm(dir,{recursive:true,force:true});});
-  const page=await browser.newPage(),project=server.app.projects.create({name:'导出验收项目'});
+  const page=await browser.newPage({permissions:['clipboard-read','clipboard-write']}),project=server.app.projects.create({name:'导出验收项目'});
   const headers={authorization:'Bearer '+token,'content-type':'application/json'};
   const make=async(title:string,text:string)=>{
     const id=randomUUID(),path=server.url+'/api/v1/web-conversations';
@@ -23,6 +23,10 @@ test('独立 Web 对话按原项目与会话导出归档历史，下载内容与
   };
   const mine='仅在甲线的合成核对意见',foreign='其他线专用的合成标记';
   const first=await make('合成导出线',mine),second=await make('对照导出线',foreign);
+  const raw='**合成审批表**\n\n| 字段 | 值 |\n| --- | --- |\n| 预算 | =2+3 |';
+  const replyId=randomUUID(),input=server.app.store.list<{id:string;text:string}>('messages').find(message=>message.text===foreign)!;
+  server.app.store.put('messages',replyId,{id:replyId,conversationId:'web:'+second,projectId:project.id,replyTo:input.id,
+    role:'assistant',status:'done',createdAt:new Date().toISOString(),text:raw});
   const path=server.url+'/api/v1/web-conversations/'+first;
   const original=await (await fetch(path,{headers})).json();
   const archived=await fetch(path,{method:'PATCH',headers,body:JSON.stringify({version:original.version,archived:true})});
@@ -47,6 +51,18 @@ test('独立 Web 对话按原项目与会话导出归档历史，下载内容与
   const removed=await fetch(path,{method:'DELETE',headers,body:JSON.stringify({version:firstMeta.version})});
   assert.equal(removed.status,200);await expect(drawer).toHaveCount(0);await expect(action).toHaveCount(0);
   await page.goto(server.url+'/#chat?thread='+second);await action.click();await expect(preview).toContainText(foreign);
+  await drawer.getByRole('button',{name:'关闭',exact:true}).click();
+  const reply=region.locator('article[data-id="'+replyId+'"]');
+  const copy=reply.getByRole('button',{name:'复制正文',exact:true}),table=reply.getByRole('button',{name:'复制表格',exact:true});
+  await copy.click();
+  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(raw);
+  await table.click();
+  await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe("字段\t值\n预算\t'=2+3");
+  const html=await page.evaluate(async()=> (await (await navigator.clipboard.read())[0]!.getType('text/html')).text());
+  assert.match(html,/<table/);assert.match(html,/'=2\+3/);
+  await action.click();
   const disabled=await fetch(server.url+'/api/v1/plugins/conversation-export',{method:'POST',headers,body:JSON.stringify({enabled:false})});
   assert.equal(disabled.status,200);await expect(drawer).toHaveCount(0);await expect(action).toHaveCount(0);
+  await expect(copy).toHaveCount(0);await expect(table).toHaveCount(0);
+  await expect(reply).toContainText('合成审批表');
 });

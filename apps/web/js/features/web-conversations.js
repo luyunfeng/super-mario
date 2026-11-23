@@ -1,11 +1,10 @@
-import {conversationExportActive,openConversationExport} from './conversation-export.js';
+import {createMessageCopyActions,conversationExportActive,openConversationExport} from './conversation-export.js';
 import {createAssistantSwitcher} from './assistant-roster.js';
 import {conversationMessageSearch} from './conversation-message-search.js';
 import {copyText} from '../lib/clipboard.js';
 import {icon} from '../ui/icons.js';
 import {h,replace} from '../lib/dom.js';
 import {uuid} from '../lib/format.js';
-import {renderFormattedText} from '../lib/markdown.js';
 import {createConversationDrafts} from '../lib/conversation-drafts.js';
 import {createMessageSubmissions} from '../lib/message-submissions.js';
 import {openDrawer} from '../ui/overlay.js';
@@ -62,6 +61,8 @@ export function createWebConversations({api,store,scope,router}){
       h('a',{class:'btn btn--sm',href:'#chat'},'返回主对话'))),controls,notice,latest,retry,cleanupRetry),scroller,form);
   let pending=false,epoch=0,draftKey=null,renameDrawer,deleteDrawer,listRefresh,lastMetaEvent,changing=false;
   const valid=stamp=>current===stamp && stamp && stamp.owner===drafts.owner() && routeId()===stamp.id && active();
+  const copies=createMessageCopyActions({api,store,matches:row=>valid(current) && meta &&
+    row.conversationId==='web:'+current.id && row.projectId===meta.projectId});
   function context(){
     return {key:meta && !meta.archived && valid(current)?draftKey:null,owner:current?.owner,epoch,draft:input.value,body:input.value.trim(),
       captured:'',conversation:'web:'+current?.id,projectId:meta?.projectId || undefined,url:path+'/'+current?.id+'/messages'};
@@ -80,8 +81,12 @@ export function createWebConversations({api,store,scope,router}){
   function syncSearch(){
     const readable=meta && valid(current);
     search.update(readable && {conversationId:'web:'+meta.id,projectId:meta.projectId});
-    exportButton.hidden=!readable || !conversationExportActive(store);
-    if(exportButton.hidden)exportDrawer?.close();
+    const hidden=!readable || !conversationExportActive(store);
+    if(hidden)exportDrawer?.close();
+    if(exportButton.hidden!==hidden){
+      exportButton.hidden=hidden;
+      if(rows.length)display();
+    }
   }
   function reset(){
     exportButton.hidden=true;exportDrawer?.close();exportDrawer=null;search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
@@ -280,10 +285,12 @@ export function createWebConversations({api,store,scope,router}){
       const selected=targetMessage===row.id;
       return h('article',{class:'msg msg--'+(row.role==='user'?'user':'assistant')+(selected?' is-search-hit':''),
         dataset:{id:row.id},tabIndex:selected?-1:undefined,'aria-current':selected?'true':undefined},
-        h('div',{class:'msg__bubble'},renderFormattedText(row.text,undefined,{reply:row.role==='assistant'})),
-        row.status==='pending' && h('small',{},'处理中…'),row.status==='failed' && h('small',{},'处理失败'),
-        h('button',{type:'button',class:'btn btn--ghost btn--icon btn--sm','aria-label':'复制消息链接',title:'复制消息链接',
-          onclick:()=>copyLink(stamp,row.id)},icon('copy')));
+        h('div',{class:'msg__col'},
+          h('div',{class:'msg__bubble'},copies.renderMessage(row,row.text)),
+          h('div',{class:'msg__meta row row--wrap'},copies.copyMessage(row,m=>m.text),
+            row.status==='pending' && h('small',{},'处理中…'),row.status==='failed' && h('small',{},'处理失败'),
+            h('button',{type:'button',class:'btn btn--ghost btn--icon btn--sm','aria-label':'复制消息链接',title:'复制消息链接',
+              onclick:()=>copyLink(stamp,row.id)},icon('copy')))));
     }));
     more.hidden=!nextBefore;later.hidden=!nextAfter;
   }
