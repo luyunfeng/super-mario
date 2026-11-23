@@ -447,7 +447,10 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       zoneField.hidden = !['daily', 'weekly', 'cron'].includes(frequency.value); dispatchFields.hidden = action.value !== 'dispatch';
       const selected = (snapshot().executors ?? []).find(e => e.id === executor.value);
       availability.textContent = selected ? `${selected.name}：${selected.available ? '当前可用；到期仍需派发审批' : selected.reason ?? '离线或不可用'}` : '没有选择执行者；不会创建虚拟执行者。';
-      try { preview.textContent = `提交预览（不会执行）：\n${JSON.stringify(body(), null, 2)}`; }
+      try {
+        const draft = body();
+        preview.textContent = `排期：${timingText(draft.schedule)}\n提交预览（不会执行）：\n${JSON.stringify(draft, null, 2)}`;
+      }
       catch (cause) { preview.textContent = `提交预览：${cause.message}`; }
     }
     let busy = false, submitted = false;
