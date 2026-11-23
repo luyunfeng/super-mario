@@ -83,6 +83,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     if (lastSnapshot !== store.view.snapshot) {
       lastSnapshot = store.view.snapshot;
       if (exportButton) exportButton.hidden = !conversationExportActive(store);
+      for (const control of body.querySelectorAll('[data-copy-thread-message]')) control.hidden = !conversationExportActive(store);
       setSearchEnabled(hasSearch());
     }
   });
@@ -454,6 +455,12 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
     const entries = items => items.map(message => h('section', { class: 'stack' },
       around && message.id === around && h('mark', { tabIndex: -1 }, query || target ? '命中消息' : '定位到的消息'),
       h('strong', null, historyMessageLabel(message)),
+      message.text?.trim() && h('button', { type:'button', class:'btn btn--ghost btn--sm',
+        dataset:{copyThreadMessage:''}, hidden:!conversationExportActive(store), onclick:async () => {
+          if (!current(id) || !conversationExportActive(store)) return;
+          try { await copyText(message.text); if (current(id)) feedback.textContent = '已复制正文。'; }
+          catch { if (current(id)) feedback.textContent = '复制失败，请选中消息正文复制。'; }
+        } }, '复制正文'),
       message.quotedImageMessageId && Button({ label:'查看引用原图', size:'sm', onClick:()=>openQuotedMessage(message.quotedImageMessageId) }),
       message.quotedFileMessageId && Button({ label:'查看引用文件', size:'sm', onClick:()=>openQuotedMessage(message.quotedFileMessageId) }),
       message.quotedFilesUnavailable && h('span',{class:'small muted'},'引用文件不可用'),

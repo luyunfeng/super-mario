@@ -49,6 +49,9 @@ test('Web 将飞书独立对话的完整历史复制并下载，临时错误可�
   const drawer = page.getByRole('dialog', { name: '独立对话记录' });
   await drawer.getByRole('button', { name: /独立导出甲/ }).click();
   await expect(drawer.getByText(history[0], { exact: true })).toHaveCount(0);
+  const lastMessage = drawer.locator('section').filter({has:page.getByText(history.at(-1)!, {exact:true})}).last();
+  await lastMessage.getByRole('button', {name:'复制正文'}).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(history.at(-1));
   await page.route('**/api/v1/conversation-export', route => route.fulfill({ status: 503,
     contentType: 'application/json', body: JSON.stringify({ error: '合成暂时错误' }) }), { times: 1 });
   await drawer.getByRole('button', { name: '导出对话', exact: true }).click();
