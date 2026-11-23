@@ -185,7 +185,7 @@ test('仓库快照只反映五项仓库设置，忽略分页链接和活动计�
   assert.deepEqual(await read(),{snapshot:{...expected.snapshot,text:'仓库：Sample/Project\n描述：未填写\n默认分支：next\n已归档：是\n已禁用：是'}});
   for (const invalid of [{...base,private:true},{...base,full_name:'sample/other'},{...base,disabled:null},{}]) {
     response=invalid;
-    await assert.rejects(read(),{status:502,sourceReadCode:'unavailable'});
+    await assert.rejects(read(),{status:502,sourceReadCode:'shape_changed'});
   }
 });
 

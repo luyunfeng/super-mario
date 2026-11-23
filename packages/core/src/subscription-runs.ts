@@ -4,7 +4,7 @@ import type { Store } from '../../plugin-sdk/src/index.ts';
 type Destination='inbox'|'knowledge';
 type Entry={title:string;delivered:Destination[];pending:Destination[]};
 export interface SubscriptionRun {
-  id:string; startedAt:string; finishedAt?:string; interruptionObservedAt?:string; durationMs?:number; trigger:'manual'|'schedule'; status:'running'|'completed'|'failed'|'interrupted';
+  id:string; startedAt:string; finishedAt?:string; interruptionObservedAt?:string; durationMs?:number; trigger:'manual'|'schedule'|'retry'; status:'running'|'completed'|'failed'|'interrupted';
   readCount:number|null; newCount:number; delivered:Record<Destination,number>; pending:Record<Destination,number>;
   page:number; error?:string; entries:Entry[]; totalEntries:number;
 }

@@ -3841,6 +3841,7 @@ test('订阅读取仅供 Web 主对话与飞书主人私聊，预览不投递也
     if(req.lastRole==='user'){
       if(JSON.stringify(req.content).includes('核对来源故障卡')){
         assert.match(req.system,/成功读取不代表积压已补投/);
+        assert.match(req.system,/retryKind=failures 表示连接器连续调用失败后的共享等待/);
         return call('source_subscriptions_read',{action:'health',subscriptionId:healthId},'health');
       }
       if(JSON.stringify(req.content).includes('检查运行记录')){
@@ -3876,10 +3877,13 @@ test('订阅读取仅供 Web 主对话与飞书主人私聊，预览不投递也
       if(releaseUnavailable){
         assert.ok(result.failingSince && result.failingSince===result.notice.since);
         assert.equal(result.notice.state,'open');
+        assert.equal(result.failureCount,3);assert.equal(result.retryKind,'failures');
+        assert.ok(Date.parse(result.nextRunAt)>=Date.parse(result.retryAt));
         return {role:'assistant',content:'已核实本轮来源故障卡已入箱。'};
       }
       assert.equal(result.failingSince,null);
       assert.equal(result.notice.state,'recovered');
+      assert.equal(result.failureCount,0);assert.equal(result.retryAt,null);
       assert.ok(result.notice.archivedAt);
       return {role:'assistant',content:'已核实来源成功读取，该轮提醒已关闭。'};
     }
@@ -3992,12 +3996,17 @@ test('订阅读取仅供 Web 主对话与飞书主人私聊，预览不投递也
     try { await assert.rejects(service.pull(healthId,healthSub.version)); }
     finally { t.mock.timers.reset(); }
     await service.tick();
+    assert.equal(service.runHistory(healthId).items[0]?.trigger,'retry');
+    await assert.rejects(service.pull(healthId,healthSub.version));
+    const retryAt=service.list().find(row=>row.id===healthId)!.retryAt!;
     const readsBeforeQuery=fetches;
     await adapter.onMessage('核对来源故障卡',{...owner,messageId:'source-health'});
     await t.waitFor(()=>assert.ok(sent.includes('已核实本轮来源故障卡已入箱。')));
     assert.equal(fetches,readsBeforeQuery);
     releaseUnavailable=false;
-    await service.pull(healthId,healthSub.version);
+    t.mock.timers.enable({apis:['Date'],now:Date.parse(retryAt)+1});
+    try {await service.pull(healthId,healthSub.version);}
+    finally {t.mock.timers.reset();}
     assert.equal(await ask('核对来源故障卡是否恢复'),'已核实来源成功读取，该轮提醒已关闭。');
 
   }finally{await server.close();}

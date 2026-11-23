@@ -39,18 +39,22 @@ export function createSubscriptionHost(options: {
         store:options.store,sources,timezone:options.timezone,onFailureNotice:options.syncFailureNotice,
         async read(sourceId,resource,signal,cursor?:string,checkpoint?:string) {
           const source=sources().find(source => source.id===sourceId);
-          if (!source) throw Object.assign(new Error('订阅来源不可用'),{status:503});
+          if (!source) throw Object.assign(new Error('订阅来源不可用'),{sourceReadCode:'not_connected'});
           const provider = options.contributions.list('services').find(s => s.value.name === sourceId)?.value;
-          const value = await options.use(sourceId,{resource,...(cursor && {cursor}),...(checkpoint && {checkpoint})},{signal,timeoutMs:30000});
-          if (!options.contributions.list('services').some(s => s.value === provider))
-            throw Object.assign(new Error('读取过程中来源插件已切换'),{sourceReadCode:'unavailable'});
-          if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('来源返回格式无效');
+          let value:Json;
+          try {
+            value=await options.use(sourceId,{resource,...(cursor && {cursor}),...(checkpoint && {checkpoint})},{signal,timeoutMs:30000});
+          } finally {
+            if (!options.contributions.list('services').some(s => s.value === provider))
+              throw Object.assign(new Error('读取过程中来源插件已切换'),{sourceReadCode:'not_connected'});
+          }
+          if (!value || typeof value !== 'object' || Array.isArray(value)) throw Object.assign(new Error('来源返回格式无效'),{sourceReadCode:'shape_changed'});
           if (source.mode==='snapshot') {
             if (!value.snapshot || typeof value.snapshot!=='object' || Array.isArray(value.snapshot) ||
-              value.items!==undefined || value.nextCursor!==undefined || value.checkpoint!==undefined) throw new Error('来源快照格式无效');
+              value.items!==undefined || value.nextCursor!==undefined || value.checkpoint!==undefined) throw Object.assign(new Error('来源快照格式无效'),{sourceReadCode:'shape_changed'});
             return {snapshot:value.snapshot as Omit<SourceItem,'id'>};
           }
-          if (!Array.isArray(value.items)) throw new Error('来源返回的条目无效');
+          if (!Array.isArray(value.items)) throw Object.assign(new Error('来源返回的条目无效'),{sourceReadCode:'shape_changed'});
           // The subscription service validates each item before either destination can receive it.
           const items = value.items as SourceItem[];
           if(value.nextCursor===undefined && value.checkpoint===undefined) return items;

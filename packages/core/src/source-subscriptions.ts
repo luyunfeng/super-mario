@@ -1,3 +1,4 @@
+import {createConnectorRetry,subscriptionConnectorId} from './subscription-connector-retry.ts';
 import {subscriptionInboxGroups,type HeldInboxItem,type SubscriptionInboxGroup} from './subscription-inbox-groups.ts';
 import {runTitle,subscriptionRuns,type SubscriptionRun} from './subscription-runs.ts';
 export type {SubscriptionRun} from './subscription-runs.ts';
@@ -11,7 +12,7 @@ type SubscriptionTriagePolicy = Omit<InboxSubscriptionPolicy,'due'>;
 export type SourceItem = {id:string; title:string; text:string; url?:string; dueAt?:string; thread?:string; occurredAt?:string};
 type SubscriptionInput = {sourceId:string; resource:string; name:string; destinations:Destination[]; intervalMinutes:number};
 export interface SourceSubscription extends SubscriptionInput, SubscriptionTriagePolicy {
-  failingSince?:string; failureReason?:string;
+  failingSince?:string; failureReason?:string; failureCount?:number; retryKind?:'rate_limit'|'failures';
   inboxGroup?:'thread'|'source'; mode?:'snapshot'; dailyAt?:string; id:string; version:number; enabled:boolean; nextRunAt:string; lastRunAt?:string; nextPageNumber?:number; retryAt?:string; error?:string;
 }
 type Options = {
@@ -59,6 +60,9 @@ class SubscriptionError extends Error {
   readonly status:number;
   constructor(message:string,status:number) { super(message);this.status=status; }
 }
+class ConnectorDisconnected extends SubscriptionError {
+  constructor() { super('来源插件已停用或不可用。',503); }
+}
 function failure(message:string,status:number):never {
   throw new SubscriptionError(message,status);
 }
@@ -71,6 +75,8 @@ function readerFailure(error:unknown):never {
     case 'invalid_resource': return failure('来源资源格式无效，请检查填写的资源标识。',400);
     case 'not_found': return failure('找不到来源资源，或资源未向当前连接开放。',404);
     case 'forbidden': return failure('当前连接没有读取来源资源的权限。',403);
+    case 'not_connected': throw new ConnectorDisconnected();
+    case 'shape_changed': return failure('来源返回的数据格式不符合预期。',502);
     case 'unavailable': return failure('来源服务暂不可用。',503);
     default: return failure('读取订阅来源失败，请检查来源连接与权限。',502);
   }
@@ -161,19 +167,13 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
   }
   // All anonymous reads from the same connector use the same upstream quota.
   const reads=new Map<string,Promise<void>>();
-  function connector(sourceId:string) {
-    const separator=sourceId.lastIndexOf('.');
-    return separator<0 ? sourceId : sourceId.slice(0,separator);
-  }
-  function retryTime(sourceId:string) {
-    const until=store.get<number>('source.connector-retry',connector(sourceId)) ?? 0;
-    return until>Date.now() ? until : 0;
-  }
-  function limited(until:number):never {
-    throw Object.assign(new SubscriptionError('来源服务已限流，请稍后再拉取。',429),{retryAt:new Date(until).toISOString()});
+  const retry=createConnectorRetry(store);
+  function limited(gate:{until:number;kind:'rate_limit'|'failures'}):never {
+    const message=gate.kind==='failures' ? '同一连接器读取连续失败，正在等待重试。' : '来源服务已限流，请稍后再拉取。';
+    throw Object.assign(new SubscriptionError(message,429),{retryAt:new Date(gate.until).toISOString(),retryKind:gate.kind});
   }
   async function readConnector(sourceId:string,resource:string,controller:AbortController,cursor?:string,checkpoint?:string,onRead?:()=>void) {
-    const key=connector(sourceId);
+    const key=subscriptionConnectorId(sourceId);
     // Recheck after every preceding read. Its response may have paused the whole connector.
     if(reads.has(key)) {
       const {signal}=controller;
@@ -186,23 +186,31 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
       } finally { signal.removeEventListener('abort',cancel); }
     }
     open(); controller.signal.throwIfAborted(); requireSource(sourceId);
-    const until=retryTime(sourceId);
-    if(until) limited(until);
+    const gate=retry.get(sourceId);
+    if(gate) limited(gate);
     let release!:()=>void;
     reads.set(key,new Promise<void>(resolve=>{release=resolve;}));
-    try { onRead?.();return await read(sourceId,resource,controller.signal,cursor,checkpoint); }
+    try {
+      onRead?.();
+      const result=await read(sourceId,resource,controller.signal,cursor,checkpoint);
+      open();controller.signal.throwIfAborted();requireSource(sourceId);
+      if(onRead) retry.succeeded(sourceId);
+      return result;
+    }
     catch(error) {
-      open(); controller.signal.throwIfAborted();
-      if(error && typeof error==='object' && 'sourceReadCode' in error && error.sourceReadCode==='rate_limited') {
+      open(); controller.signal.throwIfAborted();requireSource(sourceId);
+      const code=error && typeof error==='object' && 'sourceReadCode' in error ? error.sourceReadCode : undefined;
+      if(code==='rate_limited' && error && typeof error==='object') {
         const seconds='retryAfterSeconds' in error ? error.retryAfterSeconds : undefined;
         const delay=typeof seconds==='number' && Number.isFinite(seconds) && seconds>0 ? Math.ceil(seconds*1000) : 60000;
         const until=Date.now()+delay;
         const deadline=Number.isFinite(new Date(until).valueOf()) ? until : Date.now()+60000;
-        store.put('source.connector-retry',key,deadline);
+        retry.limited(sourceId,deadline);
         // A preview can encounter the limit before any subscription is polled.
         onChange?.(sourceId);
-        limited(deadline);
+        limited({until:deadline,kind:'rate_limit'});
       }
+      if(onRead && (code===undefined || code==='unavailable')) retry.failed(sourceId);
       readerFailure(error);
     } finally { reads.delete(key);release(); }
   }
@@ -239,10 +247,10 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
     open();
     return store.list<SourceSubscription>(rows).map(row=>{
       if(row.enabled && !available(row.sourceId)) return {...row,error:'来源插件已停用或不可用。'};
-      const until=retryTime(row.sourceId);
-      if(!until) return row;
-      const retryAt=new Date(until).toISOString();
-      return {...row,retryAt,nextRunAt:Date.parse(row.nextRunAt)<until ? retryAt : row.nextRunAt};
+      const gate=retry.get(row.sourceId);
+      if(!gate) return row;
+      const retryAt=new Date(gate.until).toISOString();
+      return {...row,retryAt,retryKind:gate.kind,nextRunAt:Date.parse(row.nextRunAt)<gate.until ? retryAt : row.nextRunAt};
     });
   }
   async function preview(input:Record<string,unknown>, signal?:AbortSignal) {
@@ -392,6 +400,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
   }
   function clearFailure(row:SourceSubscription,state:'recovered'|'paused') {
     notifyFailure(row,state);
+    delete row.failureCount;
     delete row.failingSince;
     delete row.failureReason;
   }
@@ -416,8 +425,8 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
     if(running.has(id)) failure('订阅正在拉取。',409);
     const sourceRules=requireSource(row.sourceId).triageRules;
     const rules=row.triageRules || sourceRules;
-    const until=retryTime(row.sourceId);
-    if(until && !store.get(pending,id) && !store.get(snapshotCatchups,id) && !store.get(catchupItems,id) && !store.get(inboxJobs,id)) limited(until);
+    const gate=retry.get(row.sourceId);
+    if(gate && !store.get(pending,id) && !store.get(snapshotCatchups,id) && !store.get(catchupItems,id) && !store.get(inboxJobs,id)) limited(gate);
     const audit=records.begin(id,trigger,row.nextPageNumber ?? 1);
     const controller=new AbortController();running.set(id,controller);
     const ownedReceipts=receipts+'.'+id;
@@ -431,7 +440,8 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
       requireSource(row.sourceId);
     }
     function finish(error?:string,retryAt?:string) {
-      const next={...get(id),lastRunAt:new Date().toISOString(),nextRunAt:retryAt ?? scheduled(row)};
+      const active=get(id);
+      const next={...active,lastRunAt:new Date().toISOString(),nextRunAt:active.failureCount ? active.nextRunAt : retryAt ?? scheduled(row)};
       const nextPosition=store.get<Position>(positions,id);
       if(nextPosition) {
         next.nextPageNumber=nextPosition.page;
@@ -599,9 +609,12 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
       reading=true;
       let readStartedAt:string|undefined;
       const page=await load(row.sourceId,row.resource,controller,position?.cursor,checkpoint,row.mode,()=>{readStartedAt=new Date().toISOString();}).catch(async error=>{
-        if(readStartedAt && !closed && !controller.signal.aborted && available(row.sourceId) && !(error instanceof SubscriptionError && error.status===429)) {
+        if(readStartedAt && !closed && !controller.signal.aborted && available(row.sourceId) && !(error instanceof ConnectorDisconnected) && !(error instanceof SubscriptionError && error.status===429)) {
           const active=current(id,version);
           active.failingSince ??=readStartedAt;
+          active.failureCount=(active.failureCount ?? 0)+1;
+          const minutes=Math.min(360,active.intervalMinutes*2**Math.min(10,active.failureCount));
+          active.nextRunAt=new Date(Date.parse(readStartedAt)+minutes*60000).toISOString();
           active.failureReason=error instanceof SubscriptionError || error instanceof PaginationError ? error.message : '读取订阅来源失败，请检查来源连接与权限。';
           store.put(rows,id,active);
         }
@@ -719,7 +732,7 @@ export function createSourceSubscriptions({store,sources,read,deliver,deliverInb
     }
     await Promise.allSettled(subscriptions.filter(row=>
       row.enabled && !running.has(row.id) && Date.parse(row.nextRunAt)<=now &&
-      (!retryTime(row.sourceId) || Boolean(store.get(pending,row.id) || store.get(snapshotCatchups,row.id) || store.get(catchupItems,row.id) || store.get(inboxJobs,row.id)))).map(row=>runPull(row.id,row.version,'schedule')));
+      (!retry.get(row.sourceId) || Boolean(store.get(pending,row.id) || store.get(snapshotCatchups,row.id) || store.get(catchupItems,row.id) || store.get(inboxJobs,row.id)))).map(row=>runPull(row.id,row.version,row.failureCount ? 'retry' : 'schedule')));
   }
   async function close() {
     if(!closed) {

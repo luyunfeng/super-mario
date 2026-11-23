@@ -94,7 +94,6 @@ test('慢读取的失败计时从出站开始；分页循环暂停已有故障�
   mode='slow';await assert.rejects(svc.pull(row.id,1),{status:502});
   assert.equal(svc.list()[0]!.failingSince,new Date(start).toISOString());
   mode='first';await svc.tick();
-  assert.deepEqual(states,['open']);
-  await assert.rejects(svc.pull(row.id,1),/重复返回分页标识/);
+  assert.equal(svc.runHistory(row.id).items[0]?.trigger,'retry');
   assert.deepEqual(states,['open','paused']);assert.equal(svc.list()[0]!.enabled,false);
 });

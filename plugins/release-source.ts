@@ -4,7 +4,7 @@ const service = 'release-source.releases';
 const repositoryService = 'release-source.repository';
 const bytesLimit = 2 * 1024 * 1024;
 
-type ReadCode = 'invalid_resource'|'not_found'|'rate_limited'|'forbidden'|'unavailable';
+type ReadCode = 'invalid_resource'|'not_found'|'rate_limited'|'forbidden'|'unavailable'|'shape_changed';
 function error(status: number, message: string, sourceReadCode: ReadCode = 'unavailable', retryAfterSeconds?: number): never {
   throw Object.assign(new Error(message), {status, sourceReadCode, ...(retryAfterSeconds !== undefined && {retryAfterSeconds})});
 }
@@ -69,10 +69,10 @@ function excerpt(value: string, max: number) {
 async function readJson(response: Response, signal: AbortSignal):Promise<unknown> {
   if (Number(response.headers.get('content-length')) > bytesLimit) {
     await response.body?.cancel();
-    error(502, 'GitHub 响应超过 2 MiB。');
+    error(502, 'GitHub 响应超过 2 MiB。','shape_changed');
   }
   const reader = response.body?.getReader();
-  if (!reader) return error(502, 'GitHub 未返回响应正文。');
+  if (!reader) return error(502, 'GitHub 未返回响应正文。','shape_changed');
   const chunks: Uint8Array[] = [];
   let length = 0;
   const cancel = () => { void reader.cancel().catch(() => {}); };
@@ -84,7 +84,7 @@ async function readJson(response: Response, signal: AbortSignal):Promise<unknown
       signal.throwIfAborted();
       if (done) break;
       length += value.byteLength;
-      if (length > bytesLimit) { await reader.cancel(); error(502, 'GitHub 响应超过 2 MiB。'); }
+      if (length > bytesLimit) { await reader.cancel(); error(502, 'GitHub 响应超过 2 MiB。','shape_changed'); }
       chunks.push(value);
     }
   } finally {
@@ -92,18 +92,18 @@ async function readJson(response: Response, signal: AbortSignal):Promise<unknown
     reader.releaseLock();
   }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-  catch { return error(502, 'GitHub 响应不是有效的 JSON。'); }
+  catch { return error(502, 'GitHub 响应不是有效的 JSON。','shape_changed'); }
 }
 
 function releaseItems(rows:unknown, resource:string) {
-  if (!Array.isArray(rows)) return error(502, 'GitHub 版本列表格式无效。');
-  if (rows.length > 30) return error(502, 'GitHub 版本列表超出本次请求的 30 项。');
+  if (!Array.isArray(rows)) return error(502, 'GitHub 版本列表格式无效。','shape_changed');
+  if (rows.length > 30) return error(502, 'GitHub 版本列表超出本次请求的 30 项。','shape_changed');
   const items = [];
   for (const row of rows) {
     if (row?.draft === true) continue;
     if (!row || !Number.isSafeInteger(row.id) || row.id <= 0 || typeof row.tag_name !== 'string' || !row.tag_name.trim() ||
       (row.name != null && typeof row.name !== 'string') || (row.body != null && typeof row.body !== 'string')) {
-      return error(502, 'GitHub 版本记录缺少有效的发布编号、标签或说明。');
+      return error(502, 'GitHub 版本记录缺少有效的发布编号、标签或说明。','shape_changed');
     }
     const title: string = row.name?.trim() || row.tag_name;
     // Construct the link from validated identity. Release notes and API-provided links are untrusted data.
@@ -159,7 +159,7 @@ export function createReleaseSourceExtension(options: {fetch?: typeof fetch; tim
         const stop = checkpoint === undefined ? -1 : items.findIndex(item => item.id === checkpoint);
         if (stop >= 0) return {items:items.slice(0,stop),...frontier};
         if (!hasNextPage(link)) return {items,...frontier};
-        if (!Number.isSafeInteger(page + 1)) error(502,'GitHub 版本页码超出可读取范围。');
+        if (!Number.isSafeInteger(page + 1)) error(502,'GitHub 版本页码超出可读取范围。','shape_changed');
         return {items,...frontier,nextCursor:String(page + 1)};
       }});
       context.contribute('services','repository',{name:repositoryService,version:1,readOnly:true,async handler(value,request) {
@@ -170,7 +170,7 @@ export function createReleaseSourceExtension(options: {fetch?: typeof fetch; tim
         if (!row || row.private===true || typeof row.full_name!=='string' || row.full_name.toLowerCase()!==resource.toLowerCase() ||
             (row.description!==null && typeof row.description!=='string') || typeof row.default_branch!=='string' || !row.default_branch.trim() ||
             typeof row.archived!=='boolean' || typeof row.disabled!=='boolean') {
-          error(502,'GitHub 未返回该公开仓库的完整状态。');
+          error(502,'GitHub 未返回该公开仓库的完整状态。','shape_changed');
         }
         // Only track repository settings; traffic counters and fetch time change on unrelated activity.
         const text=['仓库：'+row.full_name,'描述：'+(row.description===null?'未填写':JSON.stringify(row.description)),

@@ -2,14 +2,15 @@ import { h, replace } from '../lib/dom.js';
 import { Button } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 
+const triggers = {manual:'手动拉取',schedule:'定时拉取',retry:'自动重试'};
 const statuses = {running:'运行中',completed:'已完成',failed:'失败',interrupted:'已中断'};
 const destinations = {inbox:'收件箱',knowledge:'个人记忆'};
 const formatTime = value => h('time',{dateTime:value},new Date(value).toLocaleString('zh-CN'));
 
 function renderRun(run,expanded) {
   const entryLabels = values => values.map(id => destinations[id]).join('、');
-  return h('article',{class:'card card__body stack','aria-label':(run.trigger==='manual'?'手动拉取':'定时拉取')+' · '+statuses[run.status]},
-    h('div',{class:'row row--between'},h('strong',null,run.trigger==='manual'?'手动拉取':'定时拉取'),
+  return h('article',{class:'card card__body stack','aria-label':triggers[run.trigger]+' · '+statuses[run.status]},
+    h('div',{class:'row row--between'},h('strong',null,triggers[run.trigger]),
       h('span',null,statuses[run.status])),
     h('div',{class:'small muted'},'开始 · ',formatTime(run.startedAt),' · 第 '+run.page+' 页'),
     run.finishedAt && h('div',{class:'small muted'},'结束 · ',formatTime(run.finishedAt),

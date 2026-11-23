@@ -1026,8 +1026,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
       const retryAt = status===429 && error instanceof Error && 'retryAt' in error && typeof error.retryAt==='string'
         ? Date.parse(error.retryAt) : NaN;
       if (Number.isFinite(retryAt)) res.setHeader('Retry-After',String(Math.max(1,Math.ceil((retryAt-Date.now())/1000))));
+      const retryKind=error instanceof Error && 'retryKind' in error ? error.retryKind : undefined;
       json(res, status, { error: error instanceof Error ? error.message : '请求失败',
-        ...(Number.isFinite(retryAt) && {retryAt:new Date(retryAt).toISOString()}) });
+        ...(Number.isFinite(retryAt) && {retryAt:new Date(retryAt).toISOString(),
+          ...((retryKind==='failures' || retryKind==='rate_limit') && {retryKind})}) });
     }
   });
   server.on('upgrade', (req, socket, head) => {
