@@ -458,6 +458,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (!job) throw new InputError('分析记录不存在', 404);
           return json(res, 200, job);
         }
+        if (path === '/api/v1/agents/sessions/archive' && method === 'POST') return json(res, 200, await app.agentSessions.setArchive(await body(req)));
         if (path === '/api/v1/agents/sessions/resume' && method === 'POST') return json(res, 201, await app.agentSessions.proposeResume(await body(req)));
         if (path === '/api/v1/agents/sessions/resume-request' && method === 'GET') return json(res, 200, { approval: app.agentSessions.request(requiredText(url.searchParams.get('machineId'), '电脑'), requiredText(url.searchParams.get('key'), '请求标识')) });
         if (path === '/api/v1/feishu/web/login' && method === 'POST') return json(res, 200, await app.startFeishuWebLogin());

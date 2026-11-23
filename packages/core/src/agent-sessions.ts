@@ -68,6 +68,26 @@ export function createAgentSessions(options: {
     if (found.executorId !== spec.executorId || found.nativeSessionId !== spec.nativeSessionId) return fail('电脑返回了不同的原生线程', 502);
     return found;
   }
+  const archiveKey = (machineId: string, item: ObservedAgentSession) =>
+    JSON.stringify([machineId, item.executorId, item.nativeSessionId, item.cwd]);
+  function archiveState(machineId: string, item: ObservedAgentSession) {
+    const activity = item.fileModifiedAt ?? item.metadataTimestamp;
+    const saved = options.store.get<{ activity: string; archived: boolean }>('native-session.archives', archiveKey(machineId, item));
+    return saved && activity === saved.activity ? saved.archived : Boolean(item.archived);
+  }
+  async function setArchive(input: Record<string, unknown>) {
+    const spec = nativeResumeSpec({ executorId: input.executorId, nativeSessionId: input.nativeSessionId });
+    const machineId = text(input.machineId, '电脑'), cwd = text(input.cwd, '目录');
+    if (typeof input.archived !== 'boolean') return fail('归档状态无效');
+    machine(machineId, 'agents.session');
+    const raw = await options.machines()!.call(machineId, 'agents.session', { ...spec, cwd }, { timeoutMs: 30000 });
+    const found = session(raw);
+    const activity = found.fileModifiedAt ?? found.metadataTimestamp;
+    if (found.id !== spec.executorId + ':' + spec.nativeSessionId || found.cwd !== cwd || !activity || activity !== input.activity)
+      return fail('会话或活动时间已改变，请重新读取', 409);
+    options.store.put('native-session.archives', archiveKey(machineId, found), { archived: input.archived, activity });
+    return { archived: input.archived };
+  }
   async function discover(input: { machineId?: string; projectId?: string; todoId?: string } = {}) {
     const task = input.todoId ? options.store.get<Todo>('todos', text(input.todoId, '事项')) : undefined;
     if (input.todoId && !task) return fail('事项不存在', 404);
@@ -100,7 +120,7 @@ export function createAgentSessions(options: {
           const remoteExecutorId = `${m.id}/${s.executorId}`, executor = executors.find(e => e.id === remoteExecutorId);
           const resumable = m.capabilities.includes('executor.resume') && m.capabilities.includes('agents.session') && !!executor?.available && executor.mode === 'real' && nativeResultSources(executor).length > 0;
           const { parentNativeSessionId, ...value } = s;
-          return { ...value, ...(parentNativeSessionId && ids.has(`${s.executorId}:${parentNativeSessionId}`) ? { parentNativeSessionId } : {}), machineId: m.id, remoteExecutorId, resumable,
+          return { ...value, archived: archiveState(m.id, s), ...(parentNativeSessionId && ids.has(`${s.executorId}:${parentNativeSessionId}`) ? { parentNativeSessionId } : {}), machineId: m.id, remoteExecutorId, resumable,
             ...(!resumable ? { reason: !m.capabilities.includes('executor.resume') ? '代理不支持原生恢复，请升级' : executor?.reason || (executor?.available && !nativeResultSources(executor).length ? '该执行者尚未提供可验证的原生恢复能力' : '执行者不可用或插件未启用') } : {}),
             relatedRunIds: recordedRuns.filter(r => r.machineId === m.id && (r.nativeSessionId === s.nativeSessionId || r.nativeResume?.nativeSessionId === s.nativeSessionId) && r.executorId === remoteExecutorId && (!p || r.projectId === p.id)).map(r => r.id) };
         });
@@ -168,5 +188,5 @@ export function createAgentSessions(options: {
       options.store.put('native-resume.requests', id, { signature, approvalId: approval.id }); return approval;
     });
   }
-  return { discover, proposeResume, validateExecution, request };
+  return { discover, setArchive, proposeResume, validateExecution, request };
 }

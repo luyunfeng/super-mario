@@ -711,7 +711,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
       activate(context) {
         context.contribute('terminal_hosts', 'herdr', { id: 'terminal-host', name: '终端宿主' });
         context.contribute('tools', 'terminal_host_status', statusTool('terminal-host', '终端在执行机上运行；请查看执行机连接和控制台状态。', actions?.status ? () => actions.status!('terminal-host') : undefined));
-        if (actions?.agentSessions) context.contribute('tools', 'agent_sessions', tool('agent_sessions', '只读发现已接入电脑上的原生CLI历史。archived=true 表示在原生归档目录中找到的记录。结合电脑可用性和 truncated 判断查询范围。历史不能证明运行、空闲或登录状态。', args => actions.agentSessions!(args), { machineId: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' } }));
+        if (actions?.agentSessions) context.contribute('tools', 'agent_sessions', tool('agent_sessions', '只读发现已接入电脑上的原生CLI历史。archived=true 表示工作台当前列为已归档。结合电脑可用性和 truncated 判断查询范围。历史不能证明运行、空闲或登录状态。', args => actions.agentSessions!(args), { machineId: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' } }));
         if (actions?.resumeSession) context.contribute('tools', 'session_resume', tool('session_resume', '申请原生CLI恢复审批；不直接启动或批准，不用新线程回退。必须明确原生ID、电脑、目录和继续目标。', args => actions.resumeSession!(args), { machineId: { type: 'string' }, executorId: { type: 'string' }, nativeSessionId: { type: 'string' }, cwd: { type: 'string' }, projectId: { type: 'string' }, todoId: { type: 'string' }, prompt: { type: 'string' }, doneWhen: { type: 'string' }, expectMinutes: { type: 'number' }, key: { type: 'string' } }));
       },
     },

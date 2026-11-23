@@ -138,3 +138,21 @@ test('飞书会话输入审批只向选择时的交互执行发送，可修改�
   assert.deepEqual(calls.filter(call => call.method.startsWith('executor.') && call.method !== 'executor.result'),
     [{ method: 'executor.input', params: { sessionId: target.sessionId, text: '已核对的正文' } }]);
 });
+
+test('工作台归档可恢复，新活动使旧归档失效，过期请求无法重新归档', async t => {
+  const { app, metadata, calls } = await fixture(t);
+  const item = metadata[0];
+  item.fileModifiedAt = '2026-11-17T08:00:00Z';
+  const request = { machineId: 'm', executorId: item.executorId, nativeSessionId: item.nativeSessionId,
+    cwd: item.cwd, activity: item.fileModifiedAt };
+  const archived = async () => (await app.agentSessions.discover({ machineId: 'm' })).machines[0].sessions[0].archived;
+  await app.agentSessions.setArchive({ ...request, archived: true });
+  assert.equal(await archived(), true);
+  await app.agentSessions.setArchive({ ...request, archived: false });
+  assert.equal(await archived(), false);
+  await app.agentSessions.setArchive({ ...request, archived: true });
+  item.fileModifiedAt = '2026-11-17T09:00:00Z';
+  assert.equal(await archived(), false);
+  await assert.rejects(app.agentSessions.setArchive({ ...request, archived: true }), /已改变/);
+  assert.equal(calls.some(call => call.method.startsWith('executor.')), false);
+});

@@ -14,7 +14,7 @@ export function createCliSessions({ api, store, router }) {
   const cache = new Map();
   const machines = Select({ options: [['', '全部电脑']], 'aria-label': 'CLI 会话电脑' });
   const projects = Select({ options: [['', '全部项目']], 'aria-label': 'CLI 会话项目' });
-  const archiveFilter = Select({ options: [['', '全部历史'], ['archived', '仅已归档']], 'aria-label': 'CLI 会话归档筛选' });
+  const archiveFilter = Select({ options: [['', '全部历史'], ['current', '未归档'], ['archived', '仅已归档']], 'aria-label': 'CLI 会话归档筛选' });
   const keyword = Input({ type: 'search', placeholder: '会话 ID、目录或执行者', 'aria-label': 'CLI 会话关键词' });
   const list = h('div', { class: 'stack', style: { ...wrap, maxHeight: 'min(60vh, 640px)', overflowY: 'auto' } });
   const notice = h('div');
@@ -82,7 +82,7 @@ export function createCliSessions({ api, store, router }) {
     const query = keyword.value.trim().toLowerCase();
     const groups = (data?.machines ?? []).filter(m => !machines.value || machines.value === m.machineId);
     replace(list, groups.map(machine => {
-      const rows = machine.sessions.filter(s => (!archiveFilter.value || s.archived === true) && `${s.nativeSessionId} ${s.cwd} ${s.executorId}`.toLowerCase().includes(query));
+      const rows = machine.sessions.filter(s => (!archiveFilter.value || Boolean(s.archived) === (archiveFilter.value === 'archived')) && `${s.nativeSessionId} ${s.cwd} ${s.executorId}`.toLowerCase().includes(query));
       const current = store.view.snapshot?.machines?.find(m => m.id === machine.machineId);
       const online = machine.online && (current ? current.online : true);
       return h('section', { class: 'stack', style: wrap, dataset: { cliMachine: machine.machineId } },
@@ -96,6 +96,15 @@ export function createCliSessions({ api, store, router }) {
             h('div', { class: 'row row--wrap' }, Pill(session.archived ? '已归档' : '历史'), Pill('只读'), text(session.executorId)),
             text(`原生 ID：${session.nativeSessionId}`), text(`目录：${session.cwd}`),
             text(`观测时间：${session.observedAt}\n元数据时间：${session.metadataTimestamp ?? '未知'}\n文件记录更新：${session.fileModifiedAt ?? '未知'}\n来源：session-metadata`),
+            online && ready() && current?.capabilities?.includes('agents.session') && (session.fileModifiedAt || session.metadataTimestamp) &&
+              Button({ label: session.archived ? '取消归档' : '归档会话', size: 'sm', onClick: async () => {
+                const auth = context();
+                try {
+                  await api.post('/agents/sessions/archive', { machineId: machine.machineId, executorId: session.executorId,
+                    nativeSessionId: session.nativeSessionId, cwd: session.cwd, activity: session.fileModifiedAt ?? session.metadataTimestamp, archived: !session.archived });
+                  if (auth === context()) { cache.clear(); await load(true); }
+                } catch (cause) { if (auth === context() && visible()) { error = cause.message; paint(); } }
+              } }),
             session.parentNativeSessionId && text(`父会话：${session.parentNativeSessionId}`),
             session.relatedRunIds.length > 0 && h('div', { class: 'row row--wrap' }, session.relatedRunIds.map(id => Button({ label: `查看关联执行 ${id}`, size: 'sm', onClick: () => router.go(router.href('projects', 'all', 'runs', id)) }))),
             online && ready() && messageFavoritesActive(store) && current?.capabilities?.includes('agents.transcript') &&
