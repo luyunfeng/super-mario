@@ -17,7 +17,7 @@ const PAGE_SIZE = 50;
 const readable = text => String(text ?? '').replace(/^\[(?:om_|omt_)[^\]]*\]\s*/gm, '');
 
 /** Display the existing inbox and both delivery ledgers. Opening the page never sends a message. */
-export function createMailboxPage({ api, store, router, direction }) {
+export function createMailboxPage({ api, store, router, direction, scope }) {
   const incoming = direction === 'inbox';
   const name = incoming ? '收件箱' : '发件箱';
   let snapshot = store.view.snapshot;
@@ -41,16 +41,94 @@ export function createMailboxPage({ api, store, router, direction }) {
   const summary = h('p', { class: 'small muted', role: 'status' });
   const notice = h('div');
   const list = h('div', { class: 'stack', 'aria-label': `${name}消息列表` });
+  let multi=false, multiEpoch=0, bulkBusy=false, choices=[], bulkMessage='';
+  const picked=new Map();
+  const multiselect=Button({label:'多选',size:'sm',onClick:()=>{clearSelection(!multi);paint();}});
+  const selectAll=Button({label:'全选当前页',size:'sm',onClick:()=>{
+    if(bulkBusy) return;
+    if(picked.size && (picked.size===100 || choices.every(item=>picked.has(item.id)))) picked.clear();
+    else for(const item of choices) {
+      if(picked.size===100) break;
+      if(!picked.has(item.id)) picked.set(item.id,item.raw);
+    }
+    bulkMessage='';paint();
+  }});
+  const archiveSelected=Button({label:'归档待处理',onClick:()=>bulk('archive'),size:'sm'});
+  const reopenSelected=Button({label:'恢复已归档',onClick:()=>bulk('reopen'),size:'sm'});
+  const selectedCount=h('span',{class:'small',role:'status'});
+  const bulkStatus=h('p',{class:'small',role:'status',hidden:true});
+  const bulkBar=h('div',{class:'row row--wrap',hidden:true},selectedCount,selectAll,archiveSelected,reopenSelected);
+  function clearSelection(mode=false) {
+    multiEpoch++;multi=mode;bulkBusy=false;picked.clear();choices=[];bulkMessage='';
+  }
+  const bulkOwner=()=>Boolean(store.view.snapshot && store.view.snapshotOwner) && api.draftOwner()===store.view.snapshotOwner && !store.view.unauthorized;
+  function paintSelection(rows) {
+    choices=multi ? rows.filter(item=>item.kind==='personal' && Number.isSafeInteger(item.raw.version) && item.raw.version>0 && !pending.has(item.id) && !uncertain.has(item.id)) : [];
+    const currentIds=new Set(choices.map(item=>item.id));
+    for(const id of picked.keys()) if(!currentIds.has(id)) picked.delete(id);
+    multiselect.textContent=multi?'退出多选':'多选';
+    multiselect.disabled=!bulkOwner();
+    bulkBar.hidden=!multi;
+    const archived=[...picked.values()].filter(row=>row.archivedAt).length;
+    const open=picked.size-archived;
+    selectedCount.textContent='已选 '+picked.size+' 条（最多 100 条）';
+    const full=picked.size>0 && (picked.size===100 || picked.size===choices.length);
+    selectAll.textContent=full?'取消全选':choices.length>100?'选满 100 条':'全选当前页';
+    selectAll.disabled=bulkBusy || !choices.length;
+    archiveSelected.textContent='归档待处理（'+open+'）';archiveSelected.disabled=bulkBusy || !open;
+    reopenSelected.textContent='恢复已归档（'+archived+'）';reopenSelected.disabled=bulkBusy || !archived;
+    bulkStatus.textContent=bulkMessage;bulkStatus.hidden=!bulkMessage;
+  }
+  async function bulk(action) {
+    if(!multi || bulkBusy || !bulkOwner()) return;
+    const owner=api.draftOwner(),epoch=multiEpoch;
+    const current=()=>epoch===multiEpoch && owner===api.draftOwner() && bulkOwner() && router.current.page===direction;
+    const selected=[...picked.entries()].filter(([,row])=>!!row.archivedAt===(action==='reopen'));
+    if(!selected.length || selected.length>100) return;
+    const items=selected.map(([,row])=>({id:row.id,version:row.version}));
+    bulkBusy=true;bulkMessage='正在保存…';paint();
+    try {
+      const result=await api.post('/inbox/bulk',{action,items});
+      if(current()) {
+        if(result.updated!==items.length) throw Error('回执数量与请求不符');
+        for(const [id] of selected) picked.delete(id);
+        bulkMessage=(action==='archive'?'已归档 ':'已恢复 ')+result.updated+' 条收件。';
+      }
+    } catch(cause) {
+      if(current()) {
+        picked.clear();
+        bulkMessage=cause.status===409?'收件状态已变化，请核对最新记录后重新选择。':
+          cause.status && cause.status<500?'批量操作未完成：'+cause.message:'批量操作结果未确认，请核对最新记录。';
+      }
+    } finally {
+      if(owner===api.draftOwner() && bulkOwner()) {
+        try {
+          await store.refresh();
+          if(current() && store.view.loadError) bulkMessage+=' 最新记录读取失败。';
+        } catch {if(current()) bulkMessage+=' 最新记录读取失败。';}
+      }
+      if(current()) {snapshot=store.view.snapshot;bulkBusy=false;paint();}
+    }
+  }
+  if(incoming) {
+    document.addEventListener('keydown',event=>{
+      if(event.key==='Escape' && multi && router.current.page===direction && !document.querySelector('dialog[open]')) {
+        clearSelection();paint();multiselect.focus();
+      }
+    });
+    router.subscribe?.(()=>clearSelection());
+    scope?.subscribe(()=>{if(multi){clearSelection();paint();}});
+  }
   const more = Button({ label: '加载更多', onClick: () => { displayLimit += PAGE_SIZE; paint(); } });
   more.hidden = true;
   const el = h('section', { class: 'page', id: direction }, h('div', { class: 'page__inner' },
     h('header', { class: 'page__head' }, h('div', { class: 'page__title' }, h('h1', null, name), h('p', { class: 'page__sub' }, hintCopy(`nav.${direction}`).tag)),
-      h('div', { class: 'page__actions' }, h('a', { class: 'btn btn--sm', href: router.href(incoming ? 'outbox' : 'inbox') }, incoming ? '查看发件箱' : '查看收件箱'), Hint(`nav.${direction}`))),
+      h('div', { class: 'page__actions' }, incoming && multiselect, h('a', { class: 'btn btn--sm', href: router.href(incoming ? 'outbox' : 'inbox') }, incoming ? '查看发件箱' : '查看收件箱'), Hint(`nav.${direction}`))),
     h('div', { class: 'stack' },
       incoming && h('p', { class: 'small muted' }, '主 Agent 按联系人合并上下文并在后台跟进。需要你补充信息时会明确提问，原消息仍可追溯。'),
       h('div', { class: 'mailbox-toolbar stack' },
         incoming && sourceChips, incoming && stageChips,
-        h('div', { class: 'row row--wrap mailbox-filters' }, h('div', { class: 'grow', style: { minWidth: '180px' } }, query), incoming && projectFilter, filter)), summary, notice, list, more)));
+        h('div', { class: 'row row--wrap mailbox-filters' }, h('div', { class: 'grow', style: { minWidth: '180px' } }, query), incoming && projectFilter, filter)), incoming && bulkBar, incoming && bulkStatus, summary, notice, list, more)));
 
   const conversationsUI=createInboxConversationsUI({api,store,router,redraw:()=>paint(),openSource:id=>open(id)});
   function records() {
@@ -137,7 +215,7 @@ export function createMailboxPage({ api, store, router, direction }) {
     if(incoming&&router.current.query?.get('conversation'))location.hash=router.href('inbox');
     query.value = ''; filter.value = 'all'; projectFilter.value = 'all'; sourceFilter = 'all'; stageFilter = 'all'; resetWindow();
   }
-  function resetWindow() { displayLimit = PAGE_SIZE; paint(); }
+  function resetWindow() { clearSelection(multi); displayLimit = PAGE_SIZE; paint(); }
   function paintFilters(all) {
     function chips(el, options, dimension, active, change) {
       replace(el, options.map(([key, label]) => {
@@ -186,7 +264,11 @@ export function createMailboxPage({ api, store, router, direction }) {
       ? Button({ label: '处理与建议', size: 'sm', kind: 'secondary', onClick: () => openInboxHandlingDrawer({ api, store, source: { kind: item.kind, id: item.raw.id } }) })
       : null;
     return Card({ title: item.title, sub: `${item.source} · ${timeAgo(item.time)}`, className: `mailbox-card mailbox-card--${mod}`,
-      tools: h('div', { class: 'row row--wrap' }, incoming && stage(item) !== 'info' && Pill(STAGES.find(([key]) => key === stage(item))[1], stage(item) === 'human' ? 'warn' : ''), Pill(item.status, tone(item))), body: h('div', { class: 'stack' },
+      tools: h('div', { class: 'row row--wrap' }, multi && item.kind==='personal' && h('label',null,h('input',{type:'checkbox','aria-label':'选择 '+item.title,dataset:{pick:item.id},onChange:event=>{
+        if(!multi || bulkBusy || !bulkOwner()) return;
+        if(event.target.checked && picked.size<100) picked.set(item.id,item.raw); else picked.delete(item.id);
+        bulkMessage='';paint();
+      }}),'选择'), incoming && stage(item) !== 'info' && Pill(STAGES.find(([key]) => key === stage(item))[1], stage(item) === 'human' ? 'warn' : ''), Pill(item.status, tone(item))), body: h('div', { class: 'stack' },
         incoming && metadata(item),
         incoming && handlingState(item) && h('p',{class:'small muted'},handlingState(item).label),
         h('p', { class: 'mailbox-preview' }, item.text || '这条消息没有文本正文。'),
@@ -311,6 +393,7 @@ export function createMailboxPage({ api, store, router, direction }) {
     const owner = api.draftOwner();
     if (detailOwner !== owner || view.unauthorized || !view.snapshot || view.snapshotOwner !== owner) {
       detailOwner = owner;
+      clearSelection();
       drawer?.close();
       translation?.clear();
       mailbox = []; deliveries = []; updated.clear(); drafts.clear(); mailboxOwner = undefined;
@@ -385,14 +468,16 @@ export function createMailboxPage({ api, store, router, direction }) {
     if(incoming)replace(assistantHeader,conversationsUI.header(snapshot?.inboxAssistant),target&&h('a',{href:router.href('inbox'),onclick:clearFilters},'查看全部会话'));
     const all = records();
     if (incoming) paintFilters(all);
-    const visible = all.filter(item => receipt ? item.id === receipt : target ? item.conversation?.id===target : matches(item));
+    const visible = all.filter(item => receipt ? item.id === receipt : target ? item.conversation?.id===target && (!multi || matches(item)) : matches(item));
     if (incoming) visible.sort((a, b) => (stage(a) === 'human' ? 0 : 1) - (stage(b) === 'human' ? 0 : 1));
-    const rows = incoming ? groupedRows(all, visible) : visible;
+    const rows = multi ? visible.filter(item=>item.kind==='personal') : incoming ? groupedRows(all, visible) : visible;
     const window = rows.slice(0, displayLimit);
+    if(incoming) paintSelection(window);
     const grouped = rows.some(row => row.items);
     summary.textContent = `共 ${all.length} 条${incoming ? '收件' : '发件'}记录，显示 ${window.length} / 匹配 ${visible.length} 条`;
     if (receipt) summary.textContent = '匹配发件回执 ' + visible.length + ' 条';
     if (grouped) summary.textContent = `匹配 ${visible.length} 条消息，按联系人与会话合并后显示 ${window.length} / ${rows.length} 项`;
+    if(multi) summary.textContent='显示 '+window.length+' / '+rows.length+' 条原始个人收件';
     more.hidden = window.length >= rows.length;
     const linkedItem = incoming && router.current.query?.get('item');
     const missingLink = linkedItem && snapshot?.inbox && !all.some(record => record.kind === 'personal' && record.raw.id === linkedItem);
@@ -416,8 +501,8 @@ export function createMailboxPage({ api, store, router, direction }) {
           row,snapshot.projects,row.conversation&&conversationsUI.signature(row.conversation),expandedGroups.get(row.id),
           ...(row.items||[row]).filter(item=>item.raw).map(item=>[stage(item),pending.has(item.id),uncertain.has(item.id),handlingState(item)])
         ]));
-    } else if (visible.length) keyedList(list, window, item => item.id, card, item => JSON.stringify([
-      item, incoming && projectName(item),
+    } else if (window.length) keyedList(list, window, item => item.id, card, item => JSON.stringify([
+      item, multi, incoming && projectName(item),
       incoming && handlingState(item),
       Boolean(scopedTodo(item.raw)),
       pending.has(item.id), uncertain.has(item.id),
@@ -428,6 +513,13 @@ export function createMailboxPage({ api, store, router, direction }) {
       : Empty({ title: all.length ? '没有匹配的消息' : incoming ? '还没有收到消息' : '还没有发件记录',
         action: incoming && all.length ? Button({ label: '清除筛选', size: 'sm', onClick: clearFilters }) : undefined,
         text: all.length ? '试试其他关键词、来源、处理阶段或项目。' : incoming ? '开启飞书采集后，消息原文和分拣建议会出现在这里。' : '待确认的发送内容与实际发送结果会显示在这里。' }));
+    }
+    if(multi) {
+      const eligible=new Set(choices.map(item=>item.id));
+      for(const box of list.querySelectorAll('input[data-pick]')) {
+        box.checked=picked.has(box.dataset.pick);
+        box.disabled=bulkBusy || !eligible.has(box.dataset.pick) || (!box.checked && picked.size===100);
+      }
     }
     detail();
   }

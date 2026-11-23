@@ -80,6 +80,7 @@ export function createInboxService({ store, events, createTodo, triage }: {
   retryPending(): Promise<void>;
   confirm(id: string, version: number, details?: { title: string; notes: string }): { todoId: string };
   archive(id: string, version: number): void;
+  bulk(input: Record<string,unknown>): {updated:number};
   assignProject(id: string, version: number, projectId?: string): InboxItem;
   reopen(id: string): void;
   close(): Promise<void>;
@@ -144,6 +145,12 @@ export function createInboxService({ store, events, createTodo, triage }: {
     const item = get(id);
     if (item.version !== version || item.archivedAt) throw new InboxError('收件箱卡片已更新或已归档，请刷新', 409);
     return item;
+  }
+  function writeArchiveState(item:InboxItem,action:'archive'|'reopen',now:string) {
+    const {archivedAt,...rest}=item;
+    store.put(collection,item.id,{...rest,version:item.version+1,updatedAt:now,
+      ...(action==='archive' && {archivedAt:now}),
+      reason:item.reason+(action==='archive' ? '；用户已归档' : '；用户重新打开，保留原分拣结论和待办关联')});
   }
   function changed(id: string) { events.publish('inbox.changed', { id }); }
   async function classify(input:InboxTriageInput):Promise<{tier:InboxItem['tier'];reason:string}> {
@@ -377,19 +384,41 @@ export function createInboxService({ store, events, createTodo, triage }: {
       return result;
     },
     archive(id, version) {
-      const item = current(id, version);
-      const now = new Date().toISOString();
-      store.put(collection, id, { ...item, version:item.version+1, archivedAt: now, updatedAt: now, reason: `${item.reason}；用户已归档` });
+      store.transaction(()=>writeArchiveState(current(id,version),'archive',new Date().toISOString()));
       changed(id);
+    },
+    bulk(input) {
+      const {action,items}=input;
+      if (Object.keys(input).some(k=>k!=='action' && k!=='items') || (action!=='archive' && action!=='reopen') ||
+          !Array.isArray(items) || items.length<1 || items.length>100) throw new InboxError('请选择 1 至 100 条个人收件进行归档或恢复');
+      const ids=new Set<string>();
+      store.transaction(()=>{
+        const rows=items.map(target=>{
+          if (!target || typeof target!=='object' || Array.isArray(target) || Object.keys(target).some(k=>k!=='id' && k!=='version') ||
+              typeof target.id!=='string' || !target.id.trim() || !Number.isSafeInteger(target.version) || target.version<1)
+            throw new InboxError('每条收件需要有效的编号和当前版本');
+          if (ids.has(target.id)) throw new InboxError('同一条收件不能重复选择');
+          ids.add(target.id);
+          const row=get(target.id);
+          if (row.version!==target.version || !!row.archivedAt!==(action==='reopen'))
+            throw new InboxError('收件箱卡片状态已变化，请刷新后重试',409);
+          return row;
+        });
+        const now=new Date().toISOString();
+        for (const row of rows) writeArchiveState(row,action,now);
+      });
+      for (const id of ids) changed(id);
+      return {updated:ids.size};
     },
     async close() { closed = true; await queue; },
     reopen(id) {
-      const item = get(id);
-      if (!item.archivedAt) return;
-      const { archivedAt: _, ...rest } = item;
-      store.put(collection, id, { ...rest, version:item.version+1, updatedAt: new Date().toISOString(),
-        reason: `${item.reason}；用户重新打开，保留原分拣结论和待办关联` });
-      changed(id);
+      const updated=store.transaction(()=>{
+        const item=get(id);
+        if (!item.archivedAt) return false;
+        writeArchiveState(item,'reopen',new Date().toISOString());
+        return true;
+      });
+      if (updated) changed(id);
     },
   };
 }

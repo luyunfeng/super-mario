@@ -267,3 +267,49 @@ test('订阅等待模型分拣的消息已入箱，可单独筛选且不增加�
   await expect(cards(page)).toHaveCount(actionBefore);
   await expect(row).toHaveCount(0);
 });
+
+test('个人收件多选只归档和恢复当前筛选项，任一版本过期则整批保持原状',{timeout:40000},async t=>{
+  const f=await fixture(t);
+  const first=f.item('group-me'),stale=f.item('group-other'),outside=f.item('direct-fyi');
+  const formerArchived=f.item('direct-archived');
+  await f.api('/inbox/'+stale.id+'/project','PATCH',{version:stale.version,projectId:f.project.id});
+  const current=f.item('group-other');
+  await f.api('/inbox/bulk','POST',{action:'archive',items:[{id:first.id,version:first.version},{id:stale.id,version:stale.version}]},409);
+  assert.deepEqual(f.stored('inbox',first.id),first);
+  assert.deepEqual(f.stored('inbox',stale.id),current);
+
+  const page=await f.open(),inbox=page.locator('#inbox');
+  const button=(name:string|RegExp)=>inbox.getByRole('button',{name,exact:typeof name==='string'});
+  const search=inbox.getByLabel('搜索收件箱',{exact:true});
+  await button('多选').click();
+  await inbox.getByRole('checkbox',{name:'选择 '+outside.title,exact:true}).check();
+  await search.fill('核对离线报告');
+  await expect(cards(page)).toHaveCount(2);
+  await expect(inbox.getByRole('checkbox',{checked:true})).toHaveCount(0);
+  await button('全选当前页').click();
+  await expect(inbox.getByRole('checkbox',{checked:true})).toHaveCount(2);
+  const archived=await write(page,button(/^归档待处理.*2/),'/inbox/bulk','POST');
+  assert.deepEqual(archived.body,{updated:2});
+  assert.equal(archived.request.action,'archive');
+  const items=[first,current];
+  assert.deepEqual(archived.request.items.map((x:{id:string})=>x.id).sort(),items.map(x=>x.id).sort());
+  assert.deepEqual(f.stored('inbox',outside.id),outside);
+  assert.deepEqual(f.stored('inbox',formerArchived.id),formerArchived);
+  for(const entry of items){
+    const saved=f.stored<InboxItem>('inbox',entry.id)!;
+    assert.ok(saved.archivedAt);assert.equal(saved.version,entry.version+1);assert.equal(saved.text,entry.text);
+  }
+  await page.reload();
+  await page.getByLabel('收件箱状态',{exact:true}).selectOption('archived');
+  await search.fill('核对离线报告');await expect(cards(page)).toHaveCount(2);
+  await button('多选').click();await button('全选当前页').click();
+  const reopened=await write(page,button(/^恢复已归档.*2/),'/inbox/bulk','POST');
+  assert.deepEqual(reopened.body,{updated:2});assert.equal(reopened.request.action,'reopen');
+  await expect(cards(page)).toHaveCount(0);
+  for(const entry of items){
+    const saved=f.stored<InboxItem>('inbox',entry.id)!;
+    assert.equal(saved.archivedAt,undefined);assert.equal(saved.version,entry.version+2);
+    assert.equal(saved.projectId,entry.projectId);assert.equal(saved.text,entry.text);
+  }
+  assert.deepEqual(f.stored('inbox',formerArchived.id),formerArchived);
+});
