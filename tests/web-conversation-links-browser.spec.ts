@@ -28,6 +28,7 @@ test('独立消息链接定位早期原文、刷新与后翻页，复制不携�
       const id=randomUUID();
       ids.push(id);
       server.app.store.put('messages',id,{id,conversationId:'web:'+a,role:i%2?'assistant':'user',
+        ...(i===15 ? {origin:'result'} : i===17 ? {origin:'notification'} : {}),
         text:label(i),status:'done',createdAt:new Date(Date.UTC(2026,0,1)+i*1000).toISOString()});
     }
     server.app.store.put('messages',otherId,{id:otherId,conversationId:'web:'+b,role:'user',
@@ -46,6 +47,9 @@ test('独立消息链接定位早期原文、刷新与后翻页，复制不携�
   const target=region.locator('article[aria-current=true][data-id="'+ids[n]+'"]');
   await expect(target).toContainText(label(n));
   await expect(target.locator('time')).toHaveAttribute('datetime',new Date(Date.UTC(2026,0,1)+n*1000).toISOString());
+  for (const [index, source] of [[12,'我'],[13,'助手'],[15,'执行结果'],[17,'系统通知']] as const) {
+    await expect(region.locator('[data-id="'+ids[index]+'"] .msg__meta').getByText(source,{exact:true})).toBeVisible();
+  }
   await expect(target).toBeFocused();
   await expect(region.getByText(label(127),{exact:true})).toHaveCount(0);
   await target.getByRole('button',{name:'复制消息链接'}).click();

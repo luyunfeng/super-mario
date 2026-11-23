@@ -396,12 +396,14 @@ export function createWebConversations({api,store,scope,router}){
     replace(messages,rows.map(row=>{
       const text=h('div',{},copies.renderMessage(row,row.text));
       const selected=targetMessage===row.id;
+      const source = row.origin === 'notification' ? '系统通知' : row.origin === 'result' ? '执行结果' : row.role === 'user' ? '我' : '助手';
       return h('article',{class:'msg msg--'+(row.role==='user'?'user':'assistant')+(selected?' is-search-hit':''),
         dataset:{id:row.id},tabIndex:selected?-1:undefined,'aria-current':selected?'true':undefined},
         h('div',{class:'msg__col'},
           h('div',{class:'msg__bubble'},text,
             messageImages(api,store,row,meta.archived ? undefined : pictures.editCopy.bind(null,draftKey),messages),messageFiles(api,store,row,rows,messages)),
           h('div',{class:'msg__meta row row--wrap'},
+            h('span',{},source),
             h('time',{datetime:row.createdAt,title:new Date(row.createdAt).toLocaleString('zh-CN')},timeAgo(row.createdAt)),
             copies.copyMessage(row,translation.displayedText),translation.action(row,text,copies.renderMessage),
             canStop && webThreadStopButton(api,row,meta,()=>valid(stamp) && meta?.id===stamp.id && !meta.archived && rows.includes(row),queueEnabled),
@@ -411,7 +413,7 @@ export function createWebConversations({api,store,scope,router}){
               ()=>valid(stamp) && meta?.id===stamp.id && !meta.archived && rows.includes(row)),
             row.directWebInput && prompts.fromMessage(row),
             row.directWebInput && edit.action(row),
-            quoteKey && row.origin!=='notification' && quote.action(row,row.role==='user'?'我':'助手'),
+            quoteKey && row.origin!=='notification' && quote.action(row,source),
             row.status==='pending' && h('small',{},queueLabel(row,queueEnabled) || '处理中…'),row.status==='failed' && h('small',{},row.queueState==='cancelled'?'已取消排队':row.queueState==='withdrawn'?'已取回编辑':row.stoppedByUser?'已停止本轮':'处理失败'),
             h('button',{type:'button',class:'btn btn--ghost btn--icon btn--sm','aria-label':'复制消息链接',title:'复制消息链接',
               onclick:()=>copyLink(stamp,row.id)},icon('copy')))));
