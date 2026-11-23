@@ -5103,6 +5103,31 @@ test('工作区看板只在主人 Web 主对话和飞书配对私聊提供当前
   } finally { await server.close(); }
 });
 
+test('Web 和飞书询问插件图表时收到实际读数与示例的范围指引',async t=>{
+  let adapter!:FeishuOptions;
+  const sent:string[]=[];
+  const answer='请在插件图表的数据表中核对，并提供需要解读的那一行。';
+  const {server,api,ask}=await fixture(t,request=>{
+    assert.match(request.system,/插件自己的补丁或图表.*按卡片标题查找/);
+    assert.match(request.system,/提供相关行或补丁片段，勿引用内置示例数字作答/);
+    return {role:'assistant',content:answer};
+  },options=>{
+    adapter=options;
+    return {start:async()=>{},close:async()=>{},collect:async()=>[],status:()=>({connected:true}),
+      send:async(_target,text)=>{sent.push(text);}};
+  });
+  try {
+    const question='监测插件图里今天的数值是多少？';
+    assert.equal(await ask(question),answer);
+    const bot=await api('/feishu/bots',{name:'图表助手',appId:'cli_1111111111111111',appSecret:'fixture',
+      scope:{kind:'global'},requireConfirmation:false});
+    const owner={chatId:'oc_chart',senderId:'ou_owner',senderType:'user',chatType:'p2p'} as const;
+    await adapter.onMessage(bot.pairingCode,{...owner,messageId:'chart-pair'});
+    await adapter.onMessage(question,{...owner,messageId:'chart-guide'});
+    await t.waitFor(()=>assert.ok(sent.includes(answer)));
+  } finally {await server.close();}
+});
+
 test('Web 和飞书解释摘录分享的确认步骤及撤销范围', async t => {
   let adapter!: FeishuOptions;
   const sent:string[]=[];
