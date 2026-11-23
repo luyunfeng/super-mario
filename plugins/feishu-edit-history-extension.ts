@@ -9,18 +9,19 @@ export function feishuEditHistoryExtension(read:FeishuHistoryReader):Extension {
     dependencies:['feishu','inbox-triage'],permissions:['contribute:tools'],
     activate({contribute}) {
       contribute('tools','inbox_edit_history',{
-        name:'inbox_edit_history',description:'读取个人采集实际保存的飞书消息旧正文。id 是收件编号。版本按被替换时间从早到晚排列，按 nextOffset 续查。',
+        name:'inbox_edit_history',description:'读取个人采集实际保存的飞书消息旧正文。id 是收件编号。版本按被替换时间从早到晚排列，按 nextOffset 续查。只需最近一版时传 latest=true，省略 offset。',
         parameters:{type:'object',required:['id'],additionalProperties:false,properties:{
-          id:{type:'string',maxLength:256},offset:{type:'integer',minimum:0}}},
+          id:{type:'string',maxLength:256},offset:{type:'integer',minimum:0},latest:{type:'boolean'}}},
         async execute(input,signal) {
-          const {id,offset=0}=input;
-          if(Object.keys(input).some(key=>key!=='id' && key!=='offset') || typeof id!=='string' || !id || id.length>256 ||
-            typeof offset!=='number' || !Number.isSafeInteger(offset) || offset<0) throw new Error('请提供收件编号和有效的读取位置');
+          const {id,offset=0,latest=false}=input;
+          if(Object.keys(input).some(key=>key!=='id' && key!=='offset' && key!=='latest') || typeof id!=='string' || !id || id.length>256 ||
+            typeof latest!=='boolean' || (latest && input.offset!==undefined) || typeof offset!=='number' || !Number.isSafeInteger(offset) || offset<0) throw new Error('请提供收件编号和有效的读取位置');
           signal.throwIfAborted();
           const result=await read(id);
           signal.throwIfAborted();
-          const end=offset+5;
-          const versions=result.versions.slice(offset,end).map(({text,replacedAt})=>{
+          const start=latest ? Math.max(0,result.versions.length-1) : offset;
+          const end=start+5;
+          const versions=result.versions.slice(start,end).map(({text,replacedAt})=>{
             const chars=Array.from(text);
             return {text:chars.slice(0,2000).join(''),replacedAt,textTruncated:chars.length>2000};
           });

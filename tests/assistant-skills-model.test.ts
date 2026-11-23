@@ -4442,9 +4442,9 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
       if(JSON.stringify(req.content).includes('编辑历史')){
         assert.ok(req.tools.includes('inbox_edit_history'));
         assert.match(req.system,/不能据此断定从未编辑/);
-        assert.match(req.system,/最近一次改动，沿 nextOffset 读到末页/);
+        assert.match(req.system,/最近一次改动，传 latest=true/);
         assert.match(req.system,/不要推断省略部分被删除/);
-        return call('inbox_edit_history',{id:center},'edits');
+        return call('inbox_edit_history',{id:center,latest:true},'edits');
       }
       assert.ok(req.tools.includes('inbox_tree'));
       assert.match(req.system,/优先用 inbox_tree/);
@@ -4481,6 +4481,8 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
       return {role:'assistant',content:'置顶正文属于合成议题，另有一条回复已撤回。'};
     }
     if(req.callId==='edits'){
+      assert.equal(result.versions.length,1);
+      assert.equal(result.nextOffset,null);
       assert.equal(result.versions[0].text,'合成旧正文');
       assert.equal(result.versions[0].replacedAt,'2026-01-01T08:00:00Z');
       assert.equal(result.truncated,false);
@@ -4537,7 +4539,7 @@ test('Web 与配对私聊从真实收件编号查询父子关系，群与项目�
     await t.waitFor(()=>assert.ok(sent.includes(expected),sent.join(' / ')));
     server.app.setFeishuEditHistoryReader(id=>{
       assert.equal(id,center);
-      return {versions:[{text:'合成旧正文',replacedAt:'2026-01-01T08:00:00Z'}],truncated:false};
+      return {versions:[{text:'合成首版',replacedAt:'2026-01-01T07:00:00Z'},{text:'合成旧正文',replacedAt:'2026-01-01T08:00:00Z'}],truncated:false};
     });
     server.app.setFeishuPinReader(async(id,cursor,signal)=>{
       assert.equal(id,center);assert.equal(cursor,undefined);signal.throwIfAborted();
