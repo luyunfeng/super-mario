@@ -1,4 +1,5 @@
 import {createWebImageExport} from './web-conversation-image-export.js';
+import {webThreadStopButton} from './stop-turn.js';
 import {createTurnRetry,turnRetryActive} from './retry-turn.js';
 import {conversationImagesActive,createMessageImages,messageImages} from './message-images.js';
 import {createMessageFiles,messageFiles} from './message-files.js';
@@ -24,7 +25,7 @@ const href=(id,at)=>'#chat?'+new URLSearchParams({thread:id,...(at && {at})});
 
 export function createWebConversations({api,store,scope,router}){
   const retryTurn=createTurnRetry(api,store);
-  let retryEnabled=false;
+  let retryEnabled=false,canStop=false;
   const drafts=createConversationDrafts({api,store});
   const search=conversationMessageSearch({api,store,router,allowedCategories:['text','quoted','file'],hitLink:(range,id)=>href(range.conversationId.slice(4),id)});
   const active=()=>store.view.snapshotOwner===drafts.owner() && !store.view.unauthorized &&
@@ -121,15 +122,15 @@ export function createWebConversations({api,store,scope,router}){
     const quoteChanged=quoteKey!==nextQuoteKey;
     if(editChanged || quoteChanged){editEnabled=nextEdit;edit.reset();}
     if(quoteChanged){quoteKey=nextQuoteKey;quote.restore(quoteKey);epoch++;}
-    if(retryEnabled!==nextRetry || exportButton.hidden!==hidden || editChanged || quoteChanged || favoriteEpoch!==favorites.epoch || promptEpoch!==prompts.epoch){
-      retryEnabled=nextRetry;promptEpoch=prompts.epoch;favoriteEpoch=favorites.epoch;
+    if(canStop!==!!writableKey || retryEnabled!==nextRetry || exportButton.hidden!==hidden || editChanged || quoteChanged || favoriteEpoch!==favorites.epoch || promptEpoch!==prompts.epoch){
+      canStop=!!writableKey;retryEnabled=nextRetry;promptEpoch=prompts.epoch;favoriteEpoch=favorites.epoch;
       exportButton.hidden=hidden;
       if(readable && rows.length)display();
     }
   }
   function reset(){
     imageExport.reset();pictures.update(null,drafts.owner(),false,false);files.update(null,drafts.owner(),false);
-    retryEnabled=false;editEnabled=false;edit.reset();prompts.changeScope();quoteKey=null;quote.restore(null);
+    canStop=false;retryEnabled=false;editEnabled=false;edit.reset();prompts.changeScope();quoteKey=null;quote.restore(null);
     exportButton.hidden=true;exportDrawer?.close();exportDrawer=null;search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
     favorites.update();input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
     submissions.update();switcher.update();
@@ -331,6 +332,7 @@ export function createWebConversations({api,store,scope,router}){
           h('div',{class:'msg__bubble'},copies.renderMessage(row,row.text),
             messageImages(api,store,row,meta.archived ? undefined : pictures.editCopy.bind(null,draftKey),messages),messageFiles(api,store,row,rows,messages)),
           h('div',{class:'msg__meta row row--wrap'},copies.copyMessage(row,m=>m.text),
+            canStop && webThreadStopButton(api,row,meta,()=>valid(stamp) && meta?.id===stamp.id && !meta.archived && rows.includes(row)),
             imageExport.checkbox(row),
             row.origin!=='notification' && favorites.mark(row,meta.projectId,stamp.id,()=>valid(stamp) && meta?.id===stamp.id && rows.includes(row)),
             retryEnabled && retryTurn(row,rows,'web:'+stamp.id,id=>href(stamp.id,id),
@@ -338,7 +340,7 @@ export function createWebConversations({api,store,scope,router}){
             row.directWebInput && prompts.fromMessage(row),
             row.directWebInput && edit.action(row),
             quoteKey && row.origin!=='notification' && quote.action(row,row.role==='user'?'我':'助手'),
-            row.status==='pending' && h('small',{},'处理中…'),row.status==='failed' && h('small',{},'处理失败'),
+            row.status==='pending' && h('small',{},'处理中…'),row.status==='failed' && h('small',{},row.stoppedByUser?'已停止本轮':'处理失败'),
             h('button',{type:'button',class:'btn btn--ghost btn--icon btn--sm','aria-label':'复制消息链接',title:'复制消息链接',
               onclick:()=>copyLink(stamp,row.id)},icon('copy')))));
     }));
@@ -347,18 +349,23 @@ export function createWebConversations({api,store,scope,router}){
   async function loadMessages(direction='latest'){
     const stamp=current,at=targetMessage;
     if(!valid(stamp) || !meta || direction==='latest' && at!==null)return;
-    const cursor=direction==='before'?nextBefore:direction==='after'?nextAfter:at;
+    const refresh=direction==='refresh-pending';
+    const cursor=refresh?rows.find(row=>row.status==='pending')?.id:direction==='before'?nextBefore:direction==='after'?nextAfter:at;
     if(direction!=='latest' && !cursor){if(direction==='at')notice.textContent='消息链接缺少定位标识。';return;}
     const version=++readVersion;
     more.disabled=true;later.disabled=true;
     try{
-      const query=direction==='latest'?'':'?'+new URLSearchParams({[direction]:cursor});
+      const query=direction==='latest'?'':'?'+new URLSearchParams({[refresh?'at':direction]:cursor});
       const page=await api.get(path+'/'+stamp.id+'/messages'+query);
       if(!valid(stamp) || version!==readVersion || at!==router.current.query.get('at'))return;
       if(page.messages.some(m=>m.conversationId!=='web:'+stamp.id || (m.projectId || '')!==(meta.projectId || '')))throw Error('消息与当前对话不匹配。');
       if(direction==='at' && !page.messages.some(m=>m.id===at))throw Error('此对话中找不到链接中的消息。');
       const previousHeight=scroller.scrollHeight,nearEnd=previousHeight-scroller.scrollTop-scroller.clientHeight<100;
-      if(direction==='before'){rows=[...page.messages,...rows];nextBefore=page.nextBefore;}
+      if(refresh){
+        // Keep the located page and any manually loaded neighbors. Replace only rows already in view.
+        const latest=new Map(page.messages.map(row=>[row.id,row]));
+        rows=rows.map(row=>latest.get(row.id) || row);
+      }else if(direction==='before'){rows=[...page.messages,...rows];nextBefore=page.nextBefore;}
       else if(direction==='after'){rows=[...rows,...page.messages];nextAfter=page.nextAfter;}
       else{
         const overlap=direction==='latest'?rows.findIndex(row=>row.id===page.messages[0]?.id):-1;
@@ -439,8 +446,9 @@ export function createWebConversations({api,store,scope,router}){
     else if(meta && (changed && event.id===id || lastConnection!=='online' && store.view.connection==='online')){
       void refreshMeta(current);void loadMessages();
     }else if(meta && lastChanges!==store.view.messageQueueChanges && store.view.messageQueueChanges?.includes('web:'+id)){
-      if(targetMessage!==null && rows.length && !nextAfter){
-        nextAfter=rows.at(-1).id;later.hidden=false;
+      if(targetMessage!==null && rows.length){
+        if(!nextAfter){nextAfter=rows.at(-1).id;later.hidden=false;}
+        if(rows.some(row=>row.status==='pending') && !more.disabled)void loadMessages('refresh-pending');
       }else void loadMessages();
     }
     syncSearch();lastChanges=store.view.messageQueueChanges;lastConnection=store.view.connection;

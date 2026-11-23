@@ -23,10 +23,22 @@ export function stopTurnButton(api, message, projectId, queueEnabled=false) {
   if (queueState==='cancelled' || queueState==='withdrawn') return null;
   const cancel = queueState==='queued';
   const prefix = projectId ? '/projects/' + encodeURIComponent(projectId) : '';
+  return stopControl(api, prefix, message.id, cancel);
+}
+
+export function webThreadStopButton(api, message, thread, isCurrent) {
+  if (thread.archived || message.role!=='user' || message.status!=='pending' || !message.directWebInput || message.stoppedByUser ||
+      message.replyTo || (message.origin && message.origin!=='user') || message.todoId ||
+      message.projectId!==thread.projectId || message.conversationId!=='web:'+thread.id) return null;
+  return stopControl(api, '/web-conversations/'+encodeURIComponent(thread.id), message.id, false, isCurrent);
+}
+
+function stopControl(api, prefix, inputId, cancel, isCurrent = () => true) {
   const notice = h('span', { role: 'status' });
   const button = Button({ label: cancel ? '取消排队' : '停止本轮', kind: 'ghost', size: 'sm', onClick: async () => {
+    if (!isCurrent()) return;
     try {
-      const path = prefix + '/messages/' + encodeURIComponent(message.id);
+      const path = prefix + '/messages/' + encodeURIComponent(inputId);
       const result = await api.post(path + (cancel ? '/cancel-queued' : '/stop'), {});
       if (cancel) {
         const outcomes = {cancelled:'已取消排队。',started:'这条消息已开始处理，未取消排队。',idle:'这条消息已不在队列中。'};

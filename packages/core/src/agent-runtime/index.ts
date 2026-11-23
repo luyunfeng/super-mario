@@ -867,9 +867,9 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     turn.dequeue=undefined;
   }
 
-  function interruptTurn(inputId: string): { outcome: 'requested' | 'idle' } {
+  function interruptTurn(inputId: string, runningOnly = false): { outcome: 'requested' | 'idle' } {
     const turn = pendingTurns.get(inputId);
-    if (!turn || turn.stopped || (turn.assistant && turn.assistant.status !== 'pending')
+    if (!turn || turn.stopped || (runningOnly && !turn.assistant) || (turn.assistant && turn.assistant.status !== 'pending')
       || options.canUseScope?.(turn.user) === false) return { outcome: 'idle' };
     const input = store.get<Message>('messages', inputId);
     if (input?.status !== 'pending' || input.role !== 'user' || input.conversationId !== ownConversation) return { outcome: 'idle' };

@@ -188,6 +188,9 @@ export function createScopedAgents(options: Options) {
       if (runtime) return runtime.cancelQueuedTurn(inputId,beforeWithdraw);
       return {outcome:!beforeWithdraw && input.queueState==='cancelled' && input.status==='failed' && input.stoppedByUser ? 'cancelled' : 'idle'};
     },
+    interruptWebTurn(id:string,inputId:string) {
+      return agents.get('web:'+id)?.runtime.interruptTurn(inputId,true) ?? {outcome:'idle' as const};
+    },
     interruptTurn(conversationId: string, inputId: string) {
       const entry = agents.get(conversationId);
       if (!entry || !(conversationId.startsWith('bot:') || conversationId.endsWith(':work'))) return { outcome: 'idle' as const };

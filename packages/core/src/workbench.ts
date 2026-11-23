@@ -3108,6 +3108,14 @@ export async function createWorkbench(config: AppConfig) {
       }
       return {input:store.get<Message>('messages',inputId)!,...restored};
     },
+    stopWebConversation(id:string,projectId:string|undefined,inputId:string) {
+      const thread=requireWebConversationHistory(store,id,projectId);
+      if(thread.archived || !webConversationAllowed(id,projectId)) throw new InputError('对话已归档或作用域已变化',409);
+      const input=store.get<Message>('messages',inputId);
+      if(!input || input.role!=='user' || !independentWebSource(store,input,'web:'+id,projectId))
+        throw new InputError('当前独立对话中未找到这条输入',404);
+      return scopedAgents.interruptWebTurn(id,inputId);
+    },
     async interruptTurn(conversationId: string, inputId: string) {
       return conversationId === 'main' ? agent.interruptTurn(inputId) : scopedAgents.interruptTurn(conversationId, inputId);
     },
