@@ -33,6 +33,50 @@ export function initialRunCriteria(store: Store, run: Run) {
   return originalCriteria(run, history?.[0]);
 }
 
+function lines(text: string) {
+  return new Set(text.split(/\r?\n/u).map(line => line.trim()).filter(Boolean));
+}
+
+function verifiedHistory(store: Store, run: Run) {
+  const history = store.get<RunScopeEvent[]>(collection, run.id);
+  if (!history?.length || !run.todoId) return undefined;
+  const current = store.get<Run>('runs', run.id);
+  const todo = store.get<Todo>('todos', run.todoId);
+  if (!current || current.id !== run.id || current.todoId !== run.todoId || current.projectId !== run.projectId ||
+      !todo || todo.id !== current.todoId || todo.projectId !== current.projectId) return undefined;
+  const currentDoneWhen = current.doneWhen ?? '';
+  if (history.at(-1)?.after !== currentDoneWhen) return undefined;
+  return history;
+}
+
+export function runScopeClock(store: Store, run: Run) {
+  const latest = verifiedHistory(store, run)?.at(-1);
+  return latest && {version:latest.version, createdAt:latest.createdAt};
+}
+
+function droppedCriteria(history: RunScopeEvent[], currentDoneWhen: string) {
+  // The upstream brief keeps the earliest removal for each currently absent criterion.
+  const seen = lines(currentDoneWhen);
+  const dropped: {criterion: string; reason: string; version: number; createdAt: string}[] = [];
+  for (const event of history) {
+    const after = lines(event.after);
+    for (const criterion of lines(event.before)) {
+      if (after.has(criterion) || seen.has(criterion)) continue;
+      seen.add(criterion);
+      dropped.push({criterion, reason:event.reason, version:event.version, createdAt:event.createdAt});
+    }
+  }
+  return dropped;
+}
+
+/** A removed criterion remains evidence only if it is absent from the effective scope. */
+export function runScopeEvidence(store: Store, run: Run) {
+  const history = verifiedHistory(store, run);
+  if (!history) return undefined;
+  const currentDoneWhen = history[history.length-1]!.after;
+  return {version:history.length, initialDoneWhen:history[0]!.before, currentDoneWhen, dropped:droppedCriteria(history, currentDoneWhen)};
+}
+
 function fail(message: string, status: number): never {
   throw Object.assign(new Error(message), {status});
 }
@@ -46,9 +90,6 @@ export function createRunScopes(store: Store) {
     return {run, todo};
   }
 
-  function lines(text: string) {
-    return new Set(text.split(/\r?\n/u).map(line => line.trim()).filter(Boolean));
-  }
   function snapshot(run: Run, todo: Todo, history: RunScopeEvent[]) {
     const initial = originalCriteria(run, history[0]);
     return {
@@ -56,6 +97,7 @@ export function createRunScopes(store: Store) {
       initialDoneWhen: initial.doneWhen ?? '',
       initialExpectMinutes: initial.expectMinutes,
       doneWhen: run.doneWhen ?? '', expectMinutes: run.expectMinutes,
+      droppedCriteria: history.at(-1)?.after === run.doneWhen ? droppedCriteria(history, run.doneWhen ?? '') : [],
       history: history.map(event => {
         const before = lines(event.before), after = lines(event.after);
         return {...event, added:[...after].filter(line => !before.has(line)), dropped:[...before].filter(line => !after.has(line))};

@@ -246,7 +246,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           ] as const) if (action) context.contribute('tools', name, tool(name, description, async (args, signal) => { signal.throwIfAborted(); return action(args); }, properties));
 
           if (actions.readRunScope) context.contribute('tools','read_run_scope',tool('read_run_scope',
-            '按已核实的 runId 读取初始和当前验收标准、版本及历次修改理由。',
+            '按已核实的 runId 读取初始和当前验收标准、版本及历次修改理由。droppedCriteria 仅列当前仍被移除的条款 criterion、原因 reason、版本 version 和时间 createdAt；已恢复条款以当前 doneWhen 为准。',
             async (args, signal) => { signal.throwIfAborted(); return actions.readRunScope!(args); }, {runId:{type:'string'}}, ['runId']));
           if (actions.reviseRunScope) context.contribute('tools','revise_run_scope',tool('revise_run_scope',
             '主人在当前消息独立提交指定 runId 和完整标准的确认句后，按刚读到的版本和旧标准登记。该操作只更新工作台记录。',

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { createStore } from '../packages/core/src/store.ts';
 import { createEventBus } from '../packages/core/src/events.ts';
+import { createRunScopes } from '../packages/core/src/run-scope.ts';
 import { createRunReview } from '../packages/core/src/run-review.ts';
 import { createSupervisorAgent } from '../packages/core/src/supervisor-agent.ts';
 import type { Message, Run, SupervisionSignal } from '../packages/protocol/src/index.ts';
@@ -91,6 +92,67 @@ test('督办按当前执行核对验收依据，同待办的旧轮次不能借�
   assert.equal(runs.find((r: Run) => r.id === 'older').review, undefined);
   assert.match(prompt, /invalidated 表示原验收依据已变化/);
 });
+
+test('督办实际提示按执行提供变更依据，恢复的标准仍需核验', async t => {
+  const f = fixture(t);
+  const first: Run = { id: 'first', todoId: 'todo', conversationId: 'external', executorId: 'fixture',
+    prompt: '核对合成内容', doneWhen: '核对全部列', output: '', status: 'running',
+    createdAt: '2026-01-01', updatedAt: '2026-01-01' };
+  const sibling: Run = { ...first, id: 'sibling', doneWhen: '仅核对首列', status: 'unknown', error: '回执缺失' };
+  f.store.put('todos', 'todo', { id: 'todo', title: '核对记录' });
+  f.store.put('runs', first.id, first);
+  f.store.put('runs', sibling.id, sibling);
+  const scope = createRunScopes(f.store);
+  scope.revise(first.id, {expectedVersion:0,expectedDoneWhen:'核对全部列', doneWhen:'仅核对首列', reason:'先做小批核对'}, {kind:'web'});
+  const restored = scope.revise(first.id, {expectedVersion:1,expectedDoneWhen:'仅核对首列', doneWhen:'核对全部列', reason:'样例已齐，恢复全量核对'}, {kind:'web'});
+  f.store.put('runs', first.id, {...f.store.get<Run>('runs',first.id)!, status:'completed',resultSource:'real',output:'已匹配全部列'});
+  const binding = f.ledger.attach({todoId:'todo',runId:first.id});
+  f.ledger.decide({...binding,action:'accept'});
+  f.add({...signal('review'),runId:first.id,todoId:'todo'});
+  await f.service.flush();
+  const prompt = f.calls[0].text;
+  const { runs } = JSON.parse(prompt.split('\n').at(-1)!);
+  const checked = runs.find((run:Run) => run.id === first.id);
+  assert.deepEqual(checked.scopeEvidence, {version:2,initialDoneWhen:'核对全部列',currentDoneWhen:'核对全部列',
+    dropped:[{criterion:'仅核对首列',reason:'样例已齐，恢复全量核对',version:2,createdAt:restored.history[1].createdAt}]});
+  assert.equal(checked.review?.status,'accepted');
+  assert.deepEqual(runs.find((run:Run) => run.id === sibling.id),sibling);
+  assert.match(prompt,/重新恢复到当前标准的要求仍须取证/);
+  assert.match(prompt,/没有可核验的标准或交付证据时说明未知/);
+  assert.match(prompt,/不能证明交付或主人验收/);
+});
+
+for (const staleText of ['SILENT: 原标准没有异常', '按旧标准继续', '等待执行结果']) {
+  test(`督办丢弃模型处理中已失效的回执并保留信号：${staleText}`, async t => {
+    const f = fixture(t);
+    const run: Run = { id:'run', todoId:'todo', conversationId:'external', executorId:'fixture', prompt:'核对',
+      doneWhen:'检查两列', output:'', status:'running', createdAt:'2026-01-01', updatedAt:'2026-01-01' };
+    f.store.put('todos','todo',{id:'todo',title:'合成核对'});
+    f.store.put('runs',run.id,run);
+    f.add(signal('unreviewed'));
+    const reading = deferred<Message>(), started = deferred<void>();
+    f.respondWith(() => { started.resolve(); return reading.promise; });
+    const first = f.service.flush();
+    await started.promise;
+    const scopes = createRunScopes(f.store);
+    if (staleText === '等待执行结果') f.store.put('runs',run.id,{...run,status:'completed',output:'已提交产物',resultSource:'real'});
+    else {
+      scopes.revise(run.id,{expectedVersion:0,expectedDoneWhen:'检查两列',doneWhen:'检查首列',reason:'先核对首列'},{kind:'web'});
+      scopes.revise(run.id,{expectedVersion:1,expectedDoneWhen:'检查首列',doneWhen:'检查两列',reason:'恢复全部列'},{kind:'web'});
+    }
+    reading.resolve({...answer(),text:staleText});
+    assert.equal(await first,undefined);
+    assert.deepEqual(f.service.reviews(),[]);
+    assert.equal(f.store.get('supervisor.processed','unreviewed'),undefined);
+    assert.equal(f.events.since(0).some(event => event.type === 'supervisor.review'),false);
+    f.respondWith(async () => answer());
+    const current = await f.service.flush();
+    assert.deepEqual(current?.signalIds,['unreviewed']);
+    const latest = JSON.parse(f.calls[1].text.split('\n').at(-1)!).runs[0];
+    if (staleText === '等待执行结果') assert.equal(latest.output,'已提交产物');
+    else assert.equal(latest.scopeEvidence.version,2);
+  });
+}
 
 test('deduplication, settings, reviews and minGap persist across a real SQLite reopen', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-01-01T00:00:00Z') });

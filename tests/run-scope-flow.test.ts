@@ -45,11 +45,19 @@ test('Web 调整范围时原执行回执已在途，重试沿用一次派工；�
   await t.waitFor(()=>assert.equal(server.app.store.get<Run>('runs',run.id)?.sessionId,'local-session'));
   const pending=server.app.monitor.poll();
   await t.waitFor(()=>assert.ok(resultReads>0));
+  const running = server.app.store.get<Run>('runs',run.id)!;
+  server.app.store.put('runs',run.id,{...running,createdAt:new Date(Date.now()-3600_000).toISOString()});
+  server.app.supervision.tick();
+  const stalled = server.app.supervision.signals().find(signal => signal.runId === run.id && signal.kind === 'stalled');
+  assert.ok(stalled && !stalled.resolvedAt);
   const initial=await get();assert.equal(initial.version,0);assert.equal(initial.doneWhen,input.doneWhen);
   const change={expectedVersion:0,expectedDoneWhen:input.doneWhen,expectedProjectId:project.id,
     doneWhen:'调整后须通过回归测试',reason:'主人补充交付要求',expectMinutes:25};
   await api(path,'POST',{...change,expectedProjectId:null},409);
   const revised=await api<Scope>(path,'POST',change);
+  assert.ok(server.app.supervision.signals().find(signal => signal.id === stalled.id)?.resolvedAt);
+  server.app.supervision.tick();
+  assert.ok(!server.app.supervision.signals().some(signal => signal.runId === run.id && signal.kind === 'stalled' && !signal.resolvedAt));
   assert.deepEqual(revised.history.map(e=>[e.before,e.after,e.reason,e.source.kind]),[[input.doneWhen,change.doneWhen,change.reason,'web']]);
   assert.deepEqual(await api<Scope>(path,'POST',change),revised);
   await api(path,'POST',{...change,doneWhen:'另一条过期写入'},409);

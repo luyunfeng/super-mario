@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createStore } from '../packages/core/src/store.ts';
 import { createEventBus } from '../packages/core/src/events.ts';
+import { createRunScopes } from '../packages/core/src/run-scope.ts';
 import { createSupervision } from '../packages/core/src/supervision.ts';
 import type { Approval, Run, Todo } from '../packages/protocol/src/index.ts';
 
@@ -265,4 +266,32 @@ test('legacy SQLite settings gain the default factor and configured factor survi
     restarted.tick();
     assert.ok(restarted.signals()[0].resolvedAt);
   } finally { restarted.close(); store.close(); }
+});
+
+
+test('验收标准修订后从生效时间重新督办，同一版本的输出和重试不会延长预计时限', t => {
+  const f = fixture(t);
+  f.store.put('todos',f.todo.id,{...f.todo,reminderAt:undefined});
+  f.store.put('runs',f.run.id,{...f.run,todoId:f.todo.id,doneWhen:'核对甲列',expectMinutes:10});
+  f.service.tick();
+  const first = f.service.signals()[0]!;
+  assert.equal(first.kind,'stalled');
+  const scopes = createRunScopes(f.store);
+  const args = {expectedVersion:0,expectedDoneWhen:'核对甲列',doneWhen:'核对乙列',reason:'主人调整'};
+  const revised = scopes.revise(f.run.id,args,{kind:'web'});
+  const clock = revised.history[0]!.createdAt;
+  f.service.resolvePreviousStall(f.run.id,0,clock);
+  assert.equal(f.service.signals()[0]?.resolvedAt,clock);
+  f.advance(Date.parse(clock) - Date.parse('2026-01-01T12:00:00Z') + 19 * 60000);
+  f.service.tick();
+  assert.ok(f.service.signals().every(s => s.resolvedAt));
+  f.store.put('runs',f.run.id,{...f.store.get<Run>('runs',f.run.id)!,updatedAt:new Date(Date.parse(clock)+19*60000).toISOString()});
+  scopes.revise(f.run.id,args,{kind:'web'});
+  f.advance(60000);
+  f.service.tick();
+  const next = f.service.signals().filter(s => !s.resolvedAt);
+  assert.equal(next.length,1);
+  assert.notEqual(next[0]!.id,first.id);
+  f.service.tick();
+  assert.equal(f.events.since(0).filter(e => e.type === 'notifications.created').length,2);
 });

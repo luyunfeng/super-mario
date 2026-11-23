@@ -1,5 +1,6 @@
 import type { ExecutionReviewEvidence } from '../../protocol/src/todo-history.ts';
 import { createHash } from 'node:crypto';
+import { runScopeEvidence } from './run-scope.ts';
 import { reworkPrompt } from './prompts.ts';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
 import type { Message, Run, Todo } from '../../protocol/src/index.ts';
@@ -94,7 +95,9 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
     text(todoId, 'todoId');
     const value = store.get<RunReview>(reviews, todoId);
     if (!value) throw new RunReviewError('验收记录不存在', 404);
-    return { ...value, evidenceVersion: evidenceVersion(run(value.runId)),
+    const current = run(value.runId);
+    const scope = value.status === 'pending' && runScopeEvidence(store, current);
+    return { ...value, ...(scope && {doneWhen:scope.currentDoneWhen}), evidenceVersion: evidenceVersion(current),
       ...(currentStatus(value) === 'invalidated' && { evidenceInvalidated: true as const }) };
   }
   function binding(todoId: string, value: Run, expectedDoneWhen?: string, allowCompleted = false) {
@@ -206,7 +209,7 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
         const value = run(input.runId);
         if (previous?.status === 'reopened' && previous.runIds.includes(input.runId)) throw new RunReviewError('重开后必须关联从未验收过的新Run', 409);
         if (previous?.runId === input.runId) return get(input.todoId);
-        binding(input.todoId, value, previous?.doneWhen);
+        binding(input.todoId, value, previous?.status === 'pending' ? get(input.todoId).doneWhen : previous?.doneWhen);
         if (previous && (!['pending', 'reopened'].includes(previous.status) || previous.runIds.includes(input.runId))) throw new RunReviewError('不能覆盖已提交或历史轮次', 409);
         const now = new Date().toISOString();
         const item: RunReview = { todoId: input.todoId, version: version + 1, round: previous?.status === 'reopened' ? 0 : previous?.round ?? 0,
@@ -263,7 +266,12 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
         const result: RunReview = { ...item, version: item.version + 1, round: item.round + 1, status: 'dispatching', updatedAt: now };
         // Preserve provenance for the host's final scope guard, never an approved
         // flag or nativeResume. A rework always starts a new piece of work.
-        const params: Record<string, unknown> = { prompt: reworkPrompt(value, request.defects!, result.round, maxRounds),
+        const scope = runScopeEvidence(store, value);
+        const priorScopeChanged = !scope && item.runIds.slice(-(item.round + 1), -1).some(id => {
+          const prior = store.get<Run>('runs', id);
+          return prior?.todoId === item.todoId && prior.projectId === value.projectId && !!runScopeEvidence(store, prior);
+        });
+        const params: Record<string, unknown> = { prompt: reworkPrompt(value, request.defects!, result.round, maxRounds, scope, priorScopeChanged),
           executorId: value.executorId, conversationId: value.conversationId, todoId: item.todoId,
           doneWhen: item.doneWhen, expectMinutes: value.expectMinutes,
           ...(value.projectId !== undefined ? { projectId: value.projectId } : {}),

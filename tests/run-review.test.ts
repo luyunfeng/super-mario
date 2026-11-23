@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createStore } from '../packages/core/src/store.ts';
 import { createEventBus } from '../packages/core/src/events.ts';
+import { createRunScopes } from '../packages/core/src/run-scope.ts';
 import { createRunReview, RunReviewError, type RunReview, type RunReviewDecision } from '../packages/core/src/run-review.ts';
 import type { Message, Run, Todo } from '../packages/protocol/src/index.ts';
 
@@ -491,4 +492,45 @@ test('project memory gets only a matching review and detects changed acceptance 
   assert.equal(f.review.get('todo').evidenceInvalidated, true);
   f.review.onReopen(f.todo.id);
   assert.equal(read()?.status, 'reopened');
+});
+
+
+test('返工按当轮有效标准派发，已移除条款不因原提示、旧反馈或下一轮返工恢复', t => {
+  const f = fixture(t, () => 3);
+  const original = '保存清单\n逐条签名\n发送通知';
+  const revised = '保存清单\n逐条签名';
+  f.store.put('projects','project',{id:'project'});
+  f.patch({status:'running',prompt:'交付清单，必须逐条签名并发送通知。',doneWhen:original});
+  const scopes = createRunScopes(f.store);
+  const change = (id:string, expectedVersion:number, expectedDoneWhen:string, doneWhen:string, reason:string) =>
+    scopes.revise(id,{expectedVersion,expectedDoneWhen,doneWhen,reason},{kind:'web'});
+  const attached = f.review.attach({todoId:'todo',runId:'original'});
+  change('original',0,original,'保存清单','只需保存文件');
+  change('original',1,'保存清单',revised,'重新要求逐条签名');
+  f.patch({status:'completed'});
+  assert.throws(() => f.review.decide(decision(attached,'rework')),conflict);
+  const request = {...decision(f.review.get('todo'),'rework'),defects:'清单格式需修正，旧交接还提到发送通知'};
+  const next = f.review.decide(request);
+  const dispatched = f.calls[0].input;
+  assert.equal(dispatched.doneWhen,revised);
+  assert.match(String(dispatched.prompt),/^> 交付清单，必须逐条签名并发送通知。$/m);
+  assert.match(String(dispatched.prompt),/已移除的事项不再执行或验收/);
+  const facts = (value:unknown) => JSON.parse(String(value).split('\n').find(line => line.startsWith('{"previousRunId"'))!);
+  const first = facts(dispatched.prompt);
+  assert.equal(first.currentDoneWhen,revised);
+  assert.deepEqual(first.dropped.map((r:{criterion:string;reason:string}) => [r.criterion,r.reason]),[['发送通知','只需保存文件']]);
+
+  f.patch({status:'completed'},next.runId);
+  const third = f.review.decide(decision(f.review.get('todo'),'rework'));
+  const later = facts(f.calls[1].input.prompt);
+  assert.equal(later.currentDoneWhen,revised);
+  assert.equal(later.dropped,undefined);
+  assert.doesNotMatch(String(f.calls[1].input.prompt),/沿用原任务范围与验收标准/);
+  f.patch({status:'running'},third.runId);
+  change(third.runId,0,revised,'保存清单\n发送通知','现在恢复通知并取消签名');
+  f.patch({status:'completed'},third.runId);
+  f.review.decide(decision(f.review.get('todo'),'rework'));
+  const latest = facts(f.calls[2].input.prompt);
+  assert.equal(latest.currentDoneWhen,'保存清单\n发送通知');
+  assert.deepEqual(latest.dropped.map((r:{criterion:string}) => r.criterion),['逐条签名']);
 });

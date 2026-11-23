@@ -1,3 +1,4 @@
+import { runScopeClock } from './run-scope.ts';
 import { todoSections, todoDecisionIds } from './todo-sections.ts';
 import { buildWindowBrief } from './briefing.ts';
 import type { EventBus, Store } from '../../plugin-sdk/src/index.ts';
@@ -79,12 +80,13 @@ export function createSupervision({ store, events, enabled = () => true, now = (
       if (run.status === 'completed' || run.status === 'failed') {
         add('review', run.id, `${run.status}:terminal`, `执行${run.status === 'completed' ? '完成' : '失败'}，请复核：${run.id}`, { runId: run.id });
       }
-      // The estimate covers the whole run. Recent output must not reset its budget.
+      // Only an accepted scope revision restarts the clock. Output and heartbeat updates do not.
       const estimate = typeof run.expectMinutes === 'number' && Number.isFinite(run.expectMinutes) && run.expectMinutes > 0
         ? run.expectMinutes : 0;
       const stalledMinutes = Math.max(config.stalledMinutes, estimate * config.stalledFactorOfEstimate);
-      if (run.status === 'running' && aged(run.createdAt, stalledMinutes)) {
-        add('stalled', run.id, 'running', `执行已超过督办时限：${run.id}`, { runId: run.id });
+      const revision = run.status === 'running' && run.todoId ? runScopeClock(store,run) : undefined;
+      if (run.status === 'running' && aged(revision?.createdAt ?? run.createdAt, stalledMinutes)) {
+        add('stalled', run.id, revision?.version ?? 'running', `执行已超过督办时限：${run.id}`, { runId: run.id });
       }
       if (['queued', 'running', 'unknown'].includes(run.status) && run.machineId
         && store.get<MachineInfo>('machines', run.machineId)?.online === false) {
@@ -163,6 +165,11 @@ export function createSupervision({ store, events, enabled = () => true, now = (
       return next;
     },
     signals,
+    resolvePreviousStall(runId: string, version: number, resolvedAt: string) {
+      const id = JSON.stringify(['stalled',runId,version || 'running']);
+      const previous = store.get<SupervisionSignal>(signalsCollection,id);
+      if (previous && !previous.resolvedAt) store.put(signalsCollection,id,{...previous,resolvedAt});
+    },
     tick,
     start() { if (started || closed) return; started = true; schedule(); },
     close() { closed = true; started = false; if (timer) clearInterval(timer); timer = undefined; },

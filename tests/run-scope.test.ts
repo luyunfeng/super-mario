@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { todoBrief } from '../packages/core/src/todo-brief.ts';
-import { createRunScopes, initialRunCriteria } from '../packages/core/src/run-scope.ts';
+import { createRunScopes, initialRunCriteria, runScopeClock, runScopeEvidence } from '../packages/core/src/run-scope.ts';
 import { createStore } from '../packages/core/src/store.ts';
 import type { Run } from '../packages/protocol/src/index.ts';
 
@@ -95,4 +95,38 @@ test('交办依据保留首派内容；没有预设标准的执行首次修订�
   const standalone={...run,id:'standalone',todoId:undefined};
   store.put('runs',standalone.id,standalone);
   assert.deepEqual(initialRunCriteria(store,standalone),{doneWhen:'甲',expectMinutes:20});
+});
+
+test('有效移除证据按首次移除去重，恢复后不再列出；脱离待办或执行归属后隐藏',t=>{
+  const store=createStore(':memory:');t.after(()=>store.close());seed(store);
+  const original={...run,doneWhen:'甲\n乙\n丙'};
+  store.put('runs','r',original);
+  const service=createRunScopes(store);
+  const current=()=>store.get<Run>('runs','r')!;
+  assert.equal(runScopeEvidence(store,current()),undefined);
+  assert.deepEqual(service.read('r').droppedCriteria,[]);
+  function revise(doneWhen:string,reason:string){
+    const {version,doneWhen:expectedDoneWhen}=service.read('r');
+    return service.revise('r',{expectedVersion:version,expectedDoneWhen,doneWhen,reason},owner);
+  }
+  const first=revise('乙','先移除甲和丙');
+  revise('甲\n乙\n丙','恢复两项');
+  assert.deepEqual(runScopeEvidence(store,current())?.dropped,[]);
+  assert.deepEqual(service.read('r').droppedCriteria,[]);
+  revise('乙\n丙\n丁','再次移除甲，增加丁');
+  const last=revise('丙','去掉乙和丁');
+  assert.deepEqual(runScopeClock(store,current()),{version:4,createdAt:last.history[3]!.createdAt});
+  const evidence=runScopeEvidence(store,current());
+  assert.deepEqual(evidence,{version:4,initialDoneWhen:original.doneWhen,currentDoneWhen:'丙',dropped:[
+    {criterion:'甲',reason:'先移除甲和丙',version:1,createdAt:first.history[0]!.createdAt},
+    ...['乙','丁'].map(criterion=>({criterion,reason:'去掉乙和丁',version:4,createdAt:last.history[3]!.createdAt})),
+  ]});
+  assert.deepEqual(last.droppedCriteria,evidence?.dropped);
+  assert.deepEqual(service.read('r').droppedCriteria,last.droppedCriteria);
+  store.put('todos','t',{id:'t',projectId:'moved'});
+  assert.equal(runScopeEvidence(store,current()),undefined);
+  store.put('todos','t',{id:'t',projectId:'p'});const stale=current();
+  store.put('runs','r',{...stale,todoId:'different'});
+  assert.equal(runScopeEvidence(store,stale),undefined);
+  assert.equal(runScopeClock(store,stale),undefined);
 });

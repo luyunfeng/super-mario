@@ -3627,6 +3627,7 @@ test('Web 与飞书核实最初登记及逐次验收标准，任务机器人只�
 test('Web 与飞书项目主人修订运行中执行的验收标准，事项助手与越界执行保持隔离', async t => {
   let adapter!: FeishuOptions;
   const sent: string[] = [];
+  const restored = '补核第三份清单\n核实首份清单';
   const {server,api,ask} = await fixture(t,req => {
     const words = JSON.stringify(req.content);
     if (req.lastRole === 'user') {
@@ -3634,19 +3635,31 @@ test('Web 与飞书项目主人修订运行中执行的验收标准，事项助�
       assert.match(req.system,/执行者是否收到需另查投递回执/);
       assert.match(req.system,/外发或不可逆操作仍须独立审批/);
       assert.match(req.system,/普通讨论或自然语言修改要求先展示可复制的确认句/);
+      assert.match(req.system,/查 droppedCriteria/);
+      assert.match(req.system,/已恢复的条款按当前 doneWhen 执行/);
       assert.ok(req.tools.includes('read_run_scope') && req.tools.includes('revise_run_scope'));
-      const op = words.includes('核实历史') ? 'history' : words.includes('越界') ? 'cross' : (words.includes('不要修改') || words.includes('引用')) ? 'unapproved'
+      const op = words.includes('哪些条款仍已移除') ? 'dropped' : words.includes('核实历史') ? 'history' : words.includes('越界') ? 'cross' : (words.includes('不要修改') || words.includes('引用')) ? 'unapproved'
         : words.includes('补核第三份清单') ? 'feishu' : 'web';
       return call('read_run_scope',{runId:op === 'cross' ? 'foreign-run' : 'owner-run'}, op);
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
     if (req.callId === 'cross' || req.callId === 'unauthorized') return {role:'assistant',content:raw};
     const scope = JSON.parse(raw);
+    if (req.callId === 'dropped') {
+      assert.equal(scope.doneWhen,restored);
+      assert.equal(scope.droppedCriteria.length,1);
+      const [{criterion,reason,version,createdAt}]=scope.droppedCriteria;
+      assert.equal(criterion,'核实甲乙两份清单');
+      assert.equal(reason,'覆盖第三份清单');
+      assert.equal(version,2);
+      assert.ok(Number.isFinite(Date.parse(createdAt)));
+      return {role:'assistant',content:'仍移除：'+criterion+'。核实首份清单已恢复。'};
+    }
     if (req.callId === 'history') return {role:'assistant',content:JSON.stringify([scope.initialDoneWhen,scope.doneWhen,
       scope.history.map((entry:{reason:string;source:{kind:string;messageId?:string}}) => [entry.reason,entry.source.kind,entry.source.messageId])])};
     if (req.callId === 'updated') return {role:'assistant',content:'已登记 '+scope.doneWhen};
     return call('revise_run_scope',{runId:scope.runId,expectedVersion:scope.version,expectedDoneWhen:scope.doneWhen,
-      doneWhen:req.callId === 'web' ? '核实甲乙两份清单' : req.callId === 'feishu' ? '补核第三份清单' : '执行未经说明的工作',
+      doneWhen:req.callId === 'web' ? '核实甲乙两份清单' : req.callId === 'feishu' ? restored : '执行未经说明的工作',
       reason:req.callId === 'feishu' ? '覆盖第三份清单' : '主人明确调整验收标准', ...(req.callId === 'feishu' && {expectMinutes:20})},req.callId === 'unapproved' ? 'unauthorized' : 'updated');
   },options => {
     adapter=options;
@@ -3675,17 +3688,22 @@ test('Web 与飞书项目主人修订运行中执行的验收标准，事项助�
       const bot=await api('/feishu/bots',{name:'验收核实'+kind,appId:'cli_'+String(i+1).repeat(16), appSecret:'offline-fixture',
         scope:{kind,projectId:project.id,...(kind === 'task' && {todoId:todo.id})},requireConfirmation:false});
       await adapter.onMessage(bot.pairingCode,{...peer,messageId:'pair-'+kind});
-      const text = kind === 'project' ? '把执行 owner-run 的验收标准改为 补核第三份清单\n原因：覆盖第三份清单\n预计分钟：20' : '核对事项工具权限';
+      const text = kind === 'project' ? '修改执行 owner-run 的验收标准为\n'+restored+'\n原因：覆盖第三份清单\n预计分钟：20' : '核对事项工具权限';
       await adapter.onMessage(text,{...peer,messageId:'request-'+kind});
-      await t.waitFor(() => assert.ok(sent.includes(kind === 'project' ? '已登记 补核第三份清单' : '无修改工具'),sent.join(' / ')));
+      await t.waitFor(() => assert.ok(sent.includes(kind === 'project' ? '已登记 '+restored : '无修改工具'),sent.join(' / ')));
+      if (kind === 'project') {
+        await adapter.onMessage('哪些条款仍已移除？',{...peer,messageId:'read-dropped'});
+        await t.waitFor(() => assert.ok(sent.includes('仍移除：核实甲乙两份清单。核实首份清单已恢复。')));
+      }
     }
+    assert.equal(await ask('哪些条款仍已移除？',path),'仍移除：核实甲乙两份清单。核实首份清单已恢复。');
     const history=JSON.parse(await ask('核实历史变更理由',path));
     const response=await fetch(server.url+'/api/v1/runs/owner-run/scope?expectedProjectId='+encodeURIComponent(project.id));
     assert.equal(response.status,200);
     const ownerView=await response.json();
     const [webId,feishuId]=ownerView.history.map((row:{source:{messageId:string}}) => row.source.messageId);
     assert.ok(webId && feishuId && webId !== feishuId);
-    assert.deepEqual(history,['核实首份清单','补核第三份清单',[['主人明确调整验收标准','assistant',webId],['覆盖第三份清单','assistant',null]]]);
+    assert.deepEqual(history,['核实首份清单',restored,[['主人明确调整验收标准','assistant',webId],['覆盖第三份清单','assistant',null]]]);
     assert.equal(server.app.store.get<Run>('runs','owner-run')?.expectMinutes,20);
     assert.ok(server.app.store.get<Message>('messages',webId)?.directWebInput);
     assert.equal(server.app.store.get<{sourceMessageId:string}>('message.routes',feishuId)?.sourceMessageId,'request-project');

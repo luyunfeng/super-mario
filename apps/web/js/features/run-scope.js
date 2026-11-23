@@ -65,7 +65,13 @@ export function createRunScope({ api, runId, projectId, valid, canEdit, saved })
       uncertain = undefined;
       if (matched) { dirty = false; notice.textContent = '已核对变更记录，验收标准已保存。'; }
     }
+    const dropped = state.droppedCriteria;
     replace(history, h('p',null,'当前标准 · ' + state.doneWhen),
+      Array.isArray(dropped) && dropped.length > 0 && h('section', {class:'stack','aria-label':'已移出当前验收范围的标准'},
+        h('h4',null,'已移出当前验收范围的标准'),
+        h('ul',{class:'stack'},dropped.map(item => h('li',null,
+          h('strong',null,item.criterion),h('div',null,'移除原因 · ' + item.reason),
+          h('span',{class:'muted'},'版本 ' + item.version + ' · ' + new Date(item.createdAt).toLocaleString('zh-CN')))))),
       state.history.length ? h('ol',{class:'stack'},state.history.map(entry => h('li',null,
         h('div',null,'原标准 · ' + entry.before),h('div',null,'新标准 · ' + entry.after),h('div',null,'变更理由 · ' + entry.reason),
         !!entry.added?.length && h('div',null,'新增条目',h('ul',null,entry.added.map(text => h('li',null,text)))),

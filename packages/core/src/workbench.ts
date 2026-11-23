@@ -146,7 +146,12 @@ export async function createWorkbench(config: AppConfig) {
   const runScopes = createRunScopes(store);
   let ownerScopeRequest: (input:Message)=>boolean = () => false;
   function reviseScope(id:string, args: Record<string,unknown>, source:RunScopeSource) {
-    const scope = runScopes.revise(id,args as unknown as RunScopeChange,source);
+    const scope = store.transaction(() => {
+      const updated = runScopes.revise(id,args as unknown as RunScopeChange,source);
+      const last = updated.history.at(-1)!;
+      supervision.resolvePreviousStall(id,last.version - 1,last.createdAt);
+      return updated;
+    });
     changed('runs.changed',{id});
     return scope;
   }
