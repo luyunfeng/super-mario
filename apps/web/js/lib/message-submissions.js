@@ -19,7 +19,9 @@ export function createMessageSubmissions({ api, context, onConfirmed, onStatus, 
   const button = Button({ label: '核对发送回执', size: 'sm', onClick: check });
   button.hidden = true;
   const path = ctx => ctx.key && ctx.owner ? 'sm.message-submissions.' + JSON.stringify([ctx.owner, ctx.key]) : '';
-  const draftDigest = ctx => digest(JSON.stringify([ctx.draft, ctx.captured]));
+  const imageKey = images => images.map(({mime,bytes,sha256})=>[mime,bytes,sha256]);
+  const draftDigest = ctx => digest(JSON.stringify([ctx.draft, ctx.captured, ...(ctx.images?.length ? [imageKey(ctx.images)] : [])]));
+  const messageHash = (text, images) => digest(JSON.stringify(images?.length ? [text,imageKey(images)] : text));
 
   function entries(key) {
     if (!key) return [];
@@ -51,7 +53,7 @@ export function createMessageSubmissions({ api, context, onConfirmed, onStatus, 
       onStatus('发送组件未加载，请刷新后重试。草稿已保留。');
       return null;
     }
-    const key = path(ctx), rows = entries(key), hash = digest(JSON.stringify(ctx.body));
+    const key = path(ctx), rows = entries(key), hash = messageHash(ctx.body,ctx.images);
     let record = rows.find(row => row.hash === hash);
     if (!record) {
       record = { id: newId(), hash, draft: '', blocked: false };
@@ -80,7 +82,7 @@ export function createMessageSubmissions({ api, context, onConfirmed, onStatus, 
     if ((keyed || reply.conversationId !== undefined) && reply.conversationId !== ctx.conversation) return false;
     if ((keyed || reply.projectId !== undefined) && (reply.projectId ?? null) !== (ctx.projectId ?? null)) return false;
     if ((reply.todoId ?? null) !== (ctx.todoId ?? null)) return false;
-    if ((keyed || reply.text !== undefined) && (typeof reply.text !== 'string' || ticket.record.hash !== digest(JSON.stringify(reply.text)))) return false;
+    if ((keyed || reply.text !== undefined) && (typeof reply.text !== 'string' || ticket.record.hash !== messageHash(reply.text,reply.images))) return false;
     if (!['done', 'pending'].includes(reply.status) && !(keyed && reply.status === 'failed')) return false;
     save(ticket.key, entries(ticket.key).filter(row => row.id !== ticket.record.id));
     update();
@@ -106,7 +108,7 @@ export function createMessageSubmissions({ api, context, onConfirmed, onStatus, 
           result.push('回执未确认受理，请核对对话。');
         } else {
           const now = context();
-          if (record.draft === draftDigest(now) && record.hash === digest(JSON.stringify(now.body))) {
+          if (record.draft === draftDigest(now) && record.hash === messageHash(now.body,now.images)) {
             finishEdit();
             onConfirmed(now);
           }

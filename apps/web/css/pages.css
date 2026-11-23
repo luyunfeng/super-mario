@@ -351,3 +351,10 @@ body:has(.splash-background) #root { position: relative; }
 
 .run-comparison { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 12px; }
 .run-comparison > article { min-width: 0; overflow-wrap: anywhere; }
+
+.message-images { display: flex; flex-wrap: wrap; align-items: start; gap: .5rem; }
+.message-images:empty { display: none; }
+.message-image-draft { display: grid; justify-items: center; gap: .25rem; }
+.message-image-draft img, .message-image-thumb { object-fit: contain; border-radius: .4rem; max-width: 100%; }
+.message-image-draft img { width: 5rem; height: 4rem; }
+.message-image-thumb { max-height: 12rem; width: auto; }

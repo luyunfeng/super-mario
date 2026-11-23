@@ -55,6 +55,10 @@ export const replyReadAloud: Extension = {
 
 export { voiceInput } from './voice-input.ts';
 
+export const conversationImages: Extension = {
+  id: 'conversation-images', name: '对话图片', capabilities: ['conversation.images'], activate() {},
+};
+
 export const conversationQuotes: Extension = {
   id: 'conversation-quotes', name: '消息引用', capabilities: ['web.conversation.quotes'], activate() {},
 };

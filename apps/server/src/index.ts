@@ -1,6 +1,7 @@
 import { privateThreadPage, searchPrivateThreads } from './feishu-thread-history.ts';
 import { createSessionAnalysis } from './session-analysis.ts';
 import { nativeExportProgress } from '../../../packages/core/src/native-conversation-export.ts';
+import { chatImageRequestBytes } from '../../../packages/core/src/chat-images.ts';
 import { readMessageReceipt } from '../../../packages/core/src/message-receipts.ts';
 import { createProjectFolders } from '../../../packages/core/src/project-folders.ts';
 import { policyPresets, applyPolicyPreset, policyRuleHits } from '../../../packages/core/src/policy-presets.ts';
@@ -21,7 +22,7 @@ import { createMachineHub } from '../../../packages/core/src/machines.ts';
 import type { FeishuRegistrationInput } from './feishu-registration.ts';
 import { createFeishuGateway, type FeishuGatewayDependencies } from './feishu-gateway.ts';
 import { validateBotScope } from '../../../packages/core/src/bot-scopes.ts';
-import type { AppConfig, FeishuBotInput, JsonObject, KnowledgeImportance, Message, NodeMessage, QuestionResponse, Run, Todo } from '../../../packages/protocol/src/index.ts';
+import type { AppConfig, ChatImageInput, FeishuBotInput, JsonObject, KnowledgeImportance, Message, NodeMessage, QuestionResponse, Run, Todo } from '../../../packages/protocol/src/index.ts';
 
 async function body(req: IncomingMessage, maxBytes = 1024 * 1024): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []; let size = 0;
@@ -42,6 +43,16 @@ function answerInput(input: Record<string,unknown>, versioned = false): string |
   if (!Array.isArray(input.answers)) throw new InputError('逐题回答须为数组');
   // The core validates every answer against the persisted card.
   return input.answers as QuestionResponse[];
+}
+async function chatMessageBody(req:IncomingMessage):Promise<Record<string,unknown> & {text:string;images?:ChatImageInput[]}> {
+  const input = await body(req,chatImageRequestBytes);
+  const {images,...fields} = input;
+  if (Buffer.byteLength(JSON.stringify(fields)) > 1024*1024) throw new InputError('消息内容过大',413);
+  if (images !== undefined && !Array.isArray(images)) throw new InputError('图片列表格式无效');
+  const text = input.text === undefined ? '' : input.text;
+  if (typeof text !== 'string' || (!text.trim() && !images?.length)) throw new InputError('消息不能为空');
+  // The runtime validates media types, image bytes and counts before accepting or queuing the message.
+  return {...fields,text,images:images as ChatImageInput[]|undefined};
 }
 function messageRequestId(req: IncomingMessage) {
   const keys = req.headersDistinct['idempotency-key'];
@@ -756,9 +767,9 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             return json(res, 200, await app.projectWorkspace.view(id, cursors[0]));
           }
           if (projectWorkspace[2] === 'messages' && method === 'POST') {
-            const input = await body(req);
+            const input = await chatMessageBody(req);
             const todoId = input.todoId === undefined ? undefined : requiredText(input.todoId, '待办标识');
-            return json(res, 202, await app.projectWorkspace.post(id, requiredText(input.text, '目标'), messageRequestId(req), todoId, true));
+            return json(res, 202, await app.projectWorkspace.post(id, input.text, messageRequestId(req), todoId, true, input.images));
           }
           if(projectWorkspace[2]==='memory'&&method==='GET')return json(res,200,app.projectWorkspace.memoryConversation(id));
           if(projectWorkspace[2]==='memory'&&method==='POST')return json(res,202,app.projectWorkspace.request(id));
@@ -852,6 +863,13 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             throw new InputError('当前会话中未找到这条输入', 404);
           return json(res, 200, await app.interruptTurn(conversationId, message.id));
         }
+        const messageImage = path.match(/^\/api\/v1\/messages\/([^/]+)\/images\/(0|[1-9]\d*)$/);
+        if (messageImage && method === 'GET') {
+          const conversationId = requiredText(url.searchParams.get('conversationId'),'原会话');
+          const image = app.messageImage(decodeURIComponent(messageImage[1]!),conversationId,Number(messageImage[2]));
+          res.writeHead(200,{'content-type':image.mime,'cache-control':'private, no-store','x-content-type-options':'nosniff'});
+          return res.end(Buffer.from(image.data,'base64'));
+        }
         const messageReceipt = path.match(/^\/api\/v1(?:\/projects\/([^/]+))?\/messages\/receipts\/([^/]+)$/);
         if (messageReceipt && method === 'GET') {
           const projectId = messageReceipt[1] && decodeURIComponent(messageReceipt[1]);
@@ -862,9 +880,8 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return json(res, 200, receipt);
         }
         if (path === '/api/v1/messages' && method === 'POST') {
-          const input = await body(req);
-          if (typeof input.text !== 'string' || !input.text.trim()) throw new InputError('消息不能为空');
-          return json(res, 202, await app.agent.post(input.text, 'main', { directWebInput:true, requestId: messageRequestId(req), ...(typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : {}), ...(input.readOnly === true ? { readOnly: true } : {}) }));
+          const input = await chatMessageBody(req);
+          return json(res, 202, await app.agent.post(input.text, 'main', { directWebInput:true, images:input.images, requestId: messageRequestId(req), ...(typeof input.projectId === 'string' && input.projectId.trim() ? { projectId: input.projectId.trim() } : {}), ...(input.readOnly === true ? { readOnly: true } : {}) }));
         }
         if (path === '/api/v1/runs' && method === 'POST') return json(res, 202, app.dispatch(await body(req), typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : undefined));
         const completion = path.match(/^\/api\/v1\/runs\/([^/]+)\/completion$/);

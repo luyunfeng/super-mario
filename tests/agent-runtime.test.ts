@@ -130,6 +130,19 @@ test('demo acknowledges persistence before replying and drains on close without 
   await assert.rejects(runtime.post('late'), /关闭/);
 });
 
+test('图片在演示模式只确认接收，纯文本模型明确拒绝且不调用提供方', async t => {
+  const image = {mime:'image/gif', data:'R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='};
+  const demo = createAgentRuntime(await fixture(t), async () => { throw Error('演示不应加载 SDK'); });
+  const reply = await demo.ask('', {images:[image]});
+  assert.match(reply.text,/1 张图片，演示模式未识别内容/);
+  await demo.close();
+  const sdk = fakeSDK();
+  const runtime = createAgentRuntime(await fixture(t,false),sdk.load);
+  await assert.rejects(runtime.ask('这是什么？',{images:[image]}),/当前模型不支持图片输入/);
+  assert.deepEqual(sdk.prompts,[]);
+  await runtime.close();
+});
+
 test('invalid requests do not persist messages', async t => {
   const options = await fixture(t);
   const runtime = createAgentRuntime(options);

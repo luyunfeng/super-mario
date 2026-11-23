@@ -1,3 +1,4 @@
+import { removeChatImages } from './chat-images.ts';
 import type { Store, ScheduleInfo } from '../../plugin-sdk/src/index.ts';
 import type { AppEvent, Approval, Message, Run, Todo } from '../../protocol/src/index.ts';
 import type { ScheduledWorkRecord } from '../../protocol/src/scheduled-work.ts';
@@ -58,6 +59,7 @@ export function forgetPrivateConversation(store: Store, conversationId: string) 
     if (belongs(row.inputId)) store.remove('interaction.later-questions',row.id);
   }
   for (const m of messages) {
+    removeChatImages(store,m);
     store.remove('messages', m.id);
     store.remove('input-paused', m.id);
     store.remove('conversation.question-continuations', m.id);

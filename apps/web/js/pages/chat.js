@@ -1,3 +1,4 @@
+import { conversationImagesActive, createMessageImages, imagePayload, messageImages } from '../features/message-images.js';
 import { stopTurnButton } from '../features/stop-turn.js';
 import { createReplyReadAloud } from '../features/reply-read-aloud.js';
 import { createVoiceInput } from '../features/voice-input.js';
@@ -90,6 +91,7 @@ export function createChatPage({ api, store, scope, router }) {
 
   // —— 输入框 ——
   const input = h('textarea', { class: 'composer__input', id: 'message-text', rows: 1, placeholder: '说出目标，Enter 发送，Shift + Enter 换行', 'aria-label': '给 Agent 的消息', maxLength: 20000 });
+  const pictures = createMessageImages(input);
   const readAloud = createReplyReadAloud(router, () => voice.reset());
   const voice = createVoiceInput(input, readAloud.stop, api);
   const drafts = createConversationDrafts({ api, store });
@@ -103,7 +105,7 @@ export function createChatPage({ api, store, scope, router }) {
   const status = h('p', { class: 'small composer__status', role: 'status' });
   const form = h('form', { class: 'composer', id: 'message-form' },
     recent.el,
-    h('div', { class: 'composer__box' }, edit.notice, quote.bar, prompts.menu, mentions.menu, input, voice.caption, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, mentions.button, voice.button, voice.upload, h('span', { class: 'grow' }), send)), status);
+    h('div', { class: 'composer__box' }, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, input, voice.caption, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, mentions.button, pictures.button, voice.button, voice.upload, h('span', { class: 'grow' }), send)), status);
 
   const el = h('section', { class: 'page page--chat', id: 'chat' }, h('div', { class: 'chat-code-main' }, top, scroller, form), code.el);
 
@@ -116,10 +118,11 @@ export function createChatPage({ api, store, scope, router }) {
     const { key, owner } = composerContext();
     const draft = input.value, captured = quotesEnabled ? quote.capture() : '';
     const body = (captured ? quote.compose(captured, draft.trim()) : draft).trim();
-    return { key, owner, draft, captured, body, epoch, conversation: 'main', projectId: scope.get() || undefined, url: '/messages' };
+    return { key, owner, draft, captured, images:pictures.capture(), body, epoch, conversation: 'main', projectId: scope.get() || undefined, url: '/messages' };
   }
   function clearSubmittedDraft(ctx) {
     history.record(ctx);
+    pictures.accepted(ctx);
     const { key, draft, captured } = ctx;
     drafts.clearIf(key, draft);
     if (captured) quote.accepted(key, captured);
@@ -139,6 +142,7 @@ export function createChatPage({ api, store, scope, router }) {
   }
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
+    pictures.update(key,nextOwner,nextEnabled,conversationImagesActive(store));
     readAloud.update(key, nextOwner, store.view.snapshot);
     voice.update(router.current.page === 'chat' && key, nextOwner, store.view.snapshot, scope.get());
     const sameDraft = owner === nextOwner && enabled === nextEnabled && quotesEnabled === nextQuotes && draftKey === key;
@@ -216,7 +220,10 @@ export function createChatPage({ api, store, scope, router }) {
     event.preventDefault();
     syncDraft();
     const ctx = submissionContext(), { key, body: text, projectId } = ctx;
-    if (!key || !text || pending.has(key) || !store.view.snapshot?.agent.available) return;
+    if (!key || !pictures.ready() || (!text && !ctx.images.length) || pending.has(key) || !store.view.snapshot?.agent.available) return;
+    let payload;
+    try { payload=imagePayload(ctx,{text,...(projectId && {projectId})}); }
+    catch(error) { status.textContent=error.message;return; }
     voice.reset();
     const ticket = submissions.begin(ctx);
     if (!ticket) return;
@@ -225,7 +232,7 @@ export function createChatPage({ api, store, scope, router }) {
     const finishEdit = edit.onAccepted();
     pending.set(key, submission); send.disabled = true; status.textContent = ''; status.className = 'small composer__status muted';
     try {
-      const answer = await api.post(ctx.url, { text, ...(projectId ? { projectId } : {}) }, { 'Idempotency-Key': ticket.record.id });
+      const answer = await api.post(ctx.url, payload, { 'Idempotency-Key': ticket.record.id });
       syncDraft();
       if (stamp !== epoch) return;
       const confirmed = submissions.accepted(ticket, answer, ctx, true);
@@ -284,7 +291,7 @@ export function createChatPage({ api, store, scope, router }) {
     if (message.role === 'user') {
       const canEdit = editEnabled && message.conversationId === 'main' && (!scope.get() || scope.get() === message.projectId);
       return h('article', { class: 'msg msg--user', dataset: { id: message.id } },
-        h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text)),
+        h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text), messageImages(api,store,message)),
         h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.stoppedByUser ? ' · 已停止本轮' : message.status === 'failed' && ' · 处理失败', stopTurnButton(api, message), mark, transcript.copyMessage(message, translation.displayedText), canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
     }
     const personal = message.conversationId === 'main' && (!message.origin || message.origin === 'user');

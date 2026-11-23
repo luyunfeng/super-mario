@@ -1,3 +1,4 @@
+import { conversationImagesActive, createMessageImages, imagePayload, messageImages } from './message-images.js';
 import { stopTurnButton } from './stop-turn.js';
 import { createReplyReadAloud } from './reply-read-aloud.js';
 import { createVoiceInput } from './voice-input.js';
@@ -41,6 +42,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const progress = h('p', { class: 'muted small' });
   const messages = h('div', { class: 'project-conversation__messages', role: 'log', 'aria-label': '项目对话' });
   const text = TextArea({ rows: 3, placeholder: '告诉我这个文件夹里要做什么，我们持续推进。', 'aria-label': '项目目标' });
+  const pictures = createMessageImages(text);
   const readAloud = createReplyReadAloud(router, () => voice.reset());
   const voice = createVoiceInput(text, readAloud.stop, api);
   let visible = false;
@@ -63,7 +65,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const notice = h('div', { 'aria-live': 'polite' });
   const topic = h('p', { class: 'small', hidden: true });
   const selectedTodo = () => store.view.snapshot?.todos?.find(t => t.id === todoId && t.projectId === projectId);
-  const composer = h('div', { class: 'project-conversation__composer stack' }, topic, edit.notice, quote.bar, prompts.menu, mentions.menu, text, voice.caption, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, mentions.button, voice.button, voice.upload, send), notice);
+  const composer = h('div', { class: 'project-conversation__composer stack' }, topic, edit.notice, quote.bar, prompts.menu, mentions.menu, pictures.el, text, voice.caption, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, mentions.button, pictures.button, voice.button, voice.upload, send), notice);
   const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, statusButton, favorites.button, transcript.button, code.toggle)), status, locationNote, readNotice, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
   let draftKey, owner, enabled, quotesEnabled, editEnabled, epoch = 0;
@@ -74,10 +76,11 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     const { key, owner } = composerContext();
     const draft = text.value, captured = quotesEnabled ? quote.capture() : '';
     const body = (captured ? quote.compose(captured, draft.trim()) : draft).trim();
-    return { key, owner, draft, captured, body, epoch, conversation: `project:${projectId}:work`, projectId, todoId: todoId || undefined, url: `/projects/${encodeURIComponent(projectId)}/messages` };
+    return { key, owner, draft, captured, images:pictures.capture(), body, epoch, conversation: `project:${projectId}:work`, projectId, todoId: todoId || undefined, url: `/projects/${encodeURIComponent(projectId)}/messages` };
   }
   function clearSubmittedDraft(ctx) {
     history.record(ctx);
+    pictures.accepted(ctx);
     const { key, draft, captured } = ctx;
     drafts.clearIf(key, draft);
     if (captured) quote.accepted(key, captured);
@@ -96,6 +99,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   }
   function syncDraft() {
     const { key, owner: nextOwner, enabled: allowEdit, quotesEnabled: nextQuotes, draftsEnabled: nextEnabled } = composerContext();
+    pictures.update(key,nextOwner,nextEnabled,conversationImagesActive(store));
     readAloud.update(key, nextOwner, store.view.snapshot);
     voice.update(visible && router.current.page === 'projects' && key, nextOwner, store.view.snapshot, projectId);
     const sameDraft = owner === nextOwner && enabled === nextEnabled && quotesEnabled === nextQuotes && draftKey === key;
@@ -177,7 +181,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
           h('span', { class: 'msg__label' }, user ? '我' : '项目助手'),
           m.todoId && h('a', { class: 'small', href: router.href('projects', projectId, 'todos', 'detail', m.todoId) }, '查看关联待办'),
           agentProgress(m),
-          bubble,
+          bubble, user && messageImages(api,store,m),
           statusText && h('span', { class: 'msg__meta' }, statusText),
           h('span', null, stopTurnButton(api, m, projectId), favorites.mark(m, projectId), prompts.fromMessage(m), transcript.copyMessage(m, translation.displayedText), translation.action(m, bubble, transcript.renderMessage), m.conversationId === `project:${projectId}:work` && readAloud.action(m, translation.displayedText), canEdit && edit.action(m), canQuote && quote.action(m, user ? '我' : '项目助手'))));
     }, m => JSON.stringify([prompts.epoch, favorites.epoch, transcript.active, readAloud.active, translationEpoch, quotesEnabled, editEnabled, owner, projectId, todoId, anchor, m]));
@@ -206,7 +210,10 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   async function submit() {
     syncDraft();
     const ctx = submissionContext(), { key, projectId: id, body } = ctx, sender = epoch;
-    if (!key || send.disabled || !body) return;
+    if (!key || send.disabled || !pictures.ready() || (!body && !ctx.images.length)) return;
+    let payload;
+    try { payload=imagePayload(ctx,{text:body,todoId:ctx.todoId}); }
+    catch(error) { notices.set(key,error.message);paint();return; }
     voice.reset();
     const ticket = submissions.begin(ctx);
     if (!ticket) return;
@@ -215,7 +222,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     const finishEdit = edit.onAccepted();
     pending.set(key, submission); notices.delete(key); paint();
     try {
-      const answer = await api.post(ctx.url, { text: body, todoId: ctx.todoId }, { 'Idempotency-Key': ticket.record.id });
+      const answer = await api.post(ctx.url, payload, { 'Idempotency-Key': ticket.record.id });
       syncDraft();
       if (sender !== epoch) return;
       const confirmed = submissions.accepted(ticket, answer, ctx, true);

@@ -7,6 +7,7 @@ import type {
   KnowledgeBackend,
 } from "../../plugin-sdk/src/index.ts";
 import type {
+  ChatImageInput,
   Project,
   Message,
   Todo,
@@ -52,7 +53,7 @@ export function createProjectWorkspace(options: {
     available: boolean;
     reason?: string;
   };
-  post: (id: string, text: string, requestId?: string, todoId?: string, directWebInput?: true) => Promise<Message>;
+  post: (id: string, text: string, requestId?: string, todoId?: string, directWebInput?: true, images?: ChatImageInput[]) => Promise<Message>;
   reviewEvidence?: ReviewEvidenceReader;
   projectDecisions?: (id: string) => unknown;
   summarize: (id: string, text: string) => Promise<Message>;
@@ -402,12 +403,12 @@ export function createProjectWorkspace(options: {
         ).map(({ content, ...k }) => k),
       };
     },
-    post(id: string, text: string, requestId?: string, todoId?: string, directWebInput?: true) {
+    post(id: string, text: string, requestId?: string, todoId?: string, directWebInput?: true, images?: ChatImageInput[]) {
       if (project(id).archivedAt)
         throw Object.assign(Error("项目已归档"), { status: 409 });
       if (todoId !== undefined && store.get<Todo>("todos", todoId)?.projectId !== id)
         throw Object.assign(Error("待办不属于当前项目"), { status: 409 });
-      return options.post(id, text, requestId, todoId, directWebInput);
+      return options.post(id, text, requestId, todoId, directWebInput, images);
     },
     request(id: string) {
       if (project(id).archivedAt)

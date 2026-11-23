@@ -1,3 +1,5 @@
+import { readChatImage } from './chat-images.ts';
+import type { ChatImageInput } from '../../protocol/src/index.ts';
 import { executorInputReceipt } from '../../protocol/src/executor-input-receipt.ts';
 import { createQuestionRelease } from './question-release.ts';
 import { createLaterQuestions, type QuestionHost } from './later-questions.ts';
@@ -84,7 +86,7 @@ import { createContributions, PluginHost } from './plugin-host.ts';
 import { createAgentRuntime } from './agent-runtime/index.ts';
 import { currentAgentInput } from './agent-input.ts';
 import { exportNativeConversation, readNativeFavoritePage } from './native-conversation-export.ts';
-import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
+import { createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, createRunComparison, shortcutSettings, readingFonts, replyReadAloud, voiceInput, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, officeDocuments, createAssistantSkills, assistantProfile, projectInstructions, savedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
 import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, Message, MessageRoute, Project, Run, Snapshot, Todo } from '../../protocol/src/index.ts';
@@ -157,6 +159,7 @@ export async function createWorkbench(config: AppConfig) {
   } });
   const runScopes = createRunScopes(store);
   let ownerScopeReady = false;
+  let canReadPrivateImage: (input:Message)=>boolean = () => false;
   let ownerScopeRequest: (input:Message)=>boolean = () => false;
   function reviseScope(id:string, args: Record<string,unknown>, source:RunScopeSource) {
     const scope = store.transaction(() => {
@@ -456,6 +459,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(todoCalendar);
   plugins.register(conversationSearch(readWorkspaceCode, searchPrivateConversations));
   plugins.register(conversationDrafts);
+  plugins.register(conversationImages);
   plugins.register(createRunComparison(readRunCommitDiff, (id, offset, version) => runWorktreeStatus(id, true, offset, version), readRunWorktreeChange, runWorktreeHistory));
   plugins.register(shortcutSettings);
   plugins.register(readingFonts);
@@ -521,8 +525,8 @@ export async function createWorkbench(config: AppConfig) {
   function todoHistory(id: string, before?: string) {
     return readTodoHistory(store, id, before, reviewEvidence);
   }
-  const agent = createAgentRuntime({ config, store, events, contributions, onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
-  const scopedAgents = createScopedAgents({ canOpenQuestion:source=>Boolean(questionFormAudience(source)), onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
+  const agent = createAgentRuntime({ config, store, events, contributions, chatImagesEnabled, canReadChatImages, onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), reviewEvidence, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id) });
+  const scopedAgents = createScopedAgents({ chatImagesEnabled, canReadChatImages, canOpenQuestion:source=>Boolean(questionFormAudience(source)), onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed });
   const supervisorRuntime = createAgentRuntime({ config, store, events, contributions, conversationId: 'supervisor',
     allowedTools: ['knowledge_list', 'executors_list', 'todos_list', 'runs_list', 'work_read', 'brief_read', 'projects_list', 'workspace_code_list', 'workspace_code_read', 'workspace_git_diff'],
     systemPrompt: SUPERVISOR_SYSTEM_PROMPT });
@@ -602,7 +606,7 @@ export async function createWorkbench(config: AppConfig) {
     enqueueMeetingMemory(items, knowledgeCurator.addSource, knowledgeReaderSettings.read().trustedHosts);
     reconciledMeetingAccounts.add(source);
   }
-  const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,reviewEvidence,projectDecisions:id=>workDecisions.context({kind:"project",projectId:id}),onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text,requestId,todoId,directWebInput)=>scopedAgents.postProject(id,text,{requestId,todoId,directWebInput}),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
+  const projectWorkspace=createProjectWorkspace({store,events,demo:config.demo,knowledge,reviewEvidence,projectDecisions:id=>workDecisions.context({kind:"project",projectId:id}),onMemorySaved:()=>knowledgeCurator.rebuildIndex(),bots:()=>botsStatus() as unknown as import('../../protocol/src/index.ts').FeishuBot[],available:()=>agent.status().available,agentStatus:id=>scopedAgents.projectStatus(id),post:(id,text,requestId,todoId,directWebInput,images)=>scopedAgents.postProject(id,text,{requestId,todoId,directWebInput,images}),summarize:(id,text)=>scopedAgents.askMemory(id,text)});
   const controllers = new Map<string, AbortController>();
   const jobs = new Set<Promise<void>>();
   const commandRouter = createCommandProjectRouter(config, () => !closing && inboxClassifier.status().available);
@@ -1080,6 +1084,21 @@ export async function createWorkbench(config: AppConfig) {
     // Explicit start from the main Agent follows a current user request. Other plans await the Web action.
     return input.start === true && source && !plan.tasks.some(task => task.policy !== undefined) ? plans.start(plan.id, plan.version) : plan;
   }
+  function chatImagesEnabled() {
+    return plugins.list().some(p => p.id === 'conversation-images' && p.status === 'active');
+  }
+  function canReadChatImages(message:Message) {
+    if (!chatImagesEnabled()) return false;
+    if (message.role !== 'user' || message.replyTo || (message.origin && message.origin !== 'user')) return false;
+    if (message.projectId) {
+      const project = store.get<Project>('projects',message.projectId);
+      if (!project || project.archivedAt) return false;
+    }
+    if (message.directWebInput && !store.get('message.routes',message.id))
+      return message.conversationId === 'main' || (!!message.projectId && message.conversationId === `project:${message.projectId}:work`);
+    return canReadPrivateImage(message);
+  }
+
   function directQuestionAudience(message: Message | undefined) {
     if (!message || message.role !== 'user' || message.replyTo || message.readOnly || (message.origin && message.origin !== 'user')) return;
     const route = store.get<MessageRoute & {botId?: string; inputId?: string; revision?: number; privateSenderId?: string;
@@ -2501,8 +2520,15 @@ export async function createWorkbench(config: AppConfig) {
       const source=store.get<Message>('messages',inputId);
       if(source)conversationUserSpoke(source);
     },
-    postScoped(text: string, scope: BotScope, botId: string, threadId?: string, todoId?: string) {
-      return scopedAgents.post(text, validateBotScope(store, scope), botId, todoId ? { todoId } : undefined, threadId);
+    messageImage(id:string, conversationId:string, index:number) {
+      if (!chatImagesEnabled()) throw new InputError('对话图片插件已停用',503);
+      const message = store.get<Message>('messages',id);
+      if (!message || message.conversationId !== conversationId || !canReadChatImages(message))
+        throw new InputError('当前会话中未找到该图片',404);
+      return readChatImage(store,message,index);
+    },
+    postScoped(text: string, scope: BotScope, botId: string, threadId?: string, todoId?: string, images?: ChatImageInput[]) {
+      return scopedAgents.post(text, validateBotScope(store, scope), botId, {todoId,images}, threadId);
     },
     async postScopedResult(input: { text: string; scope: BotScope; botId: string; sourceMessageId?: string; threadId?: string }) {
       const scope = validateBotScope(store, input.scope);
@@ -2523,6 +2549,7 @@ export async function createWorkbench(config: AppConfig) {
     },
     readTopicTurnResult,
     runScopes: {read:runScopes.read,reviseWeb:(id:string,args:Record<string,unknown>)=>reviseScope(id,args,{kind:'web'})},
+    setPrivateImageValidator(check:typeof canReadPrivateImage) { canReadPrivateImage = check; },
     setScopeRequestValidator(check: typeof ownerScopeRequest) { ownerScopeRequest = check; ownerScopeReady = true; interactions.expireTick(); recoverDeferredQuestions(); },
     setAgentInputOwnerValidator(validate: typeof validateAgentInputOwner) { validateAgentInputOwner = validate; },
     setBotsStatus(status: () => Json) { botsStatus = status; },

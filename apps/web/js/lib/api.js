@@ -113,10 +113,11 @@ export function createApi() {
   if (shared !== null) credential = remember(shared, current());
   let onUnauthorized = () => {};
 
-  async function api(path, { method = 'GET', body, headers, signal, onProgress, keepalive = false } = {}) {
+  async function api(path, { method = 'GET', body, headers, signal, onProgress, blob = false, keepalive = false } = {}) {
     const { value: token, owner } = current();
     const init = {
       method,
+      ...(blob && {cache:'no-store',redirect:'error'}),
       keepalive,
       signal,
       headers: {
@@ -130,6 +131,7 @@ export function createApi() {
     let response;
     try { response = await fetch(`/api/v1${path}`, init); }
     catch { throw new ApiError('无法连接到服务，请检查网络', 0); }
+    if (response.ok && blob) return response.blob();
     if (response.ok && onProgress && response.headers.get('content-type')?.split(';')[0] === 'application/x-ndjson')
       return readProgress(response, onProgress);
     const data = response.status === 204 ? null : await response.json().catch(() => null);
@@ -140,6 +142,7 @@ export function createApi() {
     return data;
   }
 
+  api.blob = (path,signal) => api(path,{blob:true,signal});
   api.get = (path) => api(path);
   api.post = (path, body = {}, headers) => api(path, { method: 'POST', body, headers });
   api.put = (path, body) => api(path, { method: 'PUT', body });

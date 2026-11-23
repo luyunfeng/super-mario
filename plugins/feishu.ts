@@ -1,5 +1,6 @@
 import { groupTaskCommand, readGroupCommand, readGroupPost, topicGroupCommand } from './feishu-read-command.ts';
-import type { PersonalAiMessage } from '../packages/protocol/src/index.ts';
+import { imageSize } from 'image-size';
+import type { ChatImageInput, PersonalAiMessage } from '../packages/protocol/src/index.ts';
 import { allowedPersonalChats, scopedLanes, searchFilter, unmutedIds, validChatId, type SearchLane } from './feishu-personal-scope.ts';
 import { execFile } from 'node:child_process';
 import { EventDispatcher, WSClient } from '@larksuiteoapi/node-sdk';
@@ -9,7 +10,7 @@ import type { CollectedReplyEvidence } from '../packages/protocol/src/index.ts';
 /** Factory injection keeps tests offline while exercising the real SDK dispatcher. */
 export type FeishuWSFactory = (options: ConstructorParameters<typeof WSClient>[0]) => Pick<WSClient, 'start' | 'close' | 'getConnectionStatus'>;
 export interface FeishuMention { self?: true; key?: string; openId?: string; appId?: string; name?: string }
-export interface FeishuMessageSource { mentions?: FeishuMention[]; chatId: string; messageId: string; chatType?: string; chatName?: string; senderName?: string; senderId?: string; senderType?: 'user' | 'bot'; mentionedSelf?: boolean; parentId?: string; threadId?: string; rootId?: string }
+export interface FeishuMessageSource { privateImage?:true; mentions?: FeishuMention[]; chatId: string; messageId: string; chatType?: string; chatName?: string; senderName?: string; senderId?: string; senderType?: 'user' | 'bot'; mentionedSelf?: boolean; parentId?: string; threadId?: string; rootId?: string }
 /** Private resume data. The host commits it only after durable inbox ingestion. */
 export interface PersonalCheckpoint {
   version: 1;
@@ -72,6 +73,7 @@ export interface FeishuOptions {
   personalCollectionPageLimit?: number;
   /** Enable self-identity resolution for precise group mentions; default off. */
   groupMessages?: boolean;
+  privateImages?: boolean;
   groupChatIds?: string[];
   readGroup?: boolean;
   /** Forward explicitly addressed /ai requests. The host validates the paired owner. */
@@ -319,7 +321,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const { id, type } = await postMessage('/open-apis/im/v1/messages?receive_id_type=chat_id', { receive_id: chatId, ...payload, ...(context?.replyKey && { uuid: context.replyKey }) }, fallback, context?.beforeSend);
     if (id) context?.onSent?.(id, type);
   }
-  async function readVerifiedMessage(chatId: string, messageId: string, guard: () => void): Promise<Row | undefined> {
+  async function readVerifiedMessage(chatId: string, messageId: string, guard: () => void, openId=false): Promise<Row | undefined> {
     if (!chatId || !messageId || messageId.length > 200 || /[^\w-]/.test(messageId)) return;
     const epoch = generation, signal = controller.signal;
     const check = () => {
@@ -330,13 +332,55 @@ export function createFeishuIntegration(options: FeishuOptions) {
     try {
       const bearer = await getToken();
       check();
-      const data = await request('/open-apis/im/v1/messages/' + encodeURIComponent(messageId), {}, bearer, signal, 'GET', 'error');
+      const data = await request('/open-apis/im/v1/messages/' + encodeURIComponent(messageId)+(openId?'?user_id_type=open_id':''), {}, bearer, signal, 'GET', 'error');
       check();
       const items = object(data.data).items;
       if (!Array.isArray(items) || items.length !== 1) return;
       const message = object(items[0]);
       if (message.message_id === messageId && message.chat_id === chatId && message.deleted !== true) return message;
     } catch { check(); }
+  }
+  async function readPrivateImage(chatId:string,messageId:string,ownerId:string,guard:()=>void):Promise<ChatImageInput> {
+    const epoch=generation, signal=AbortSignal.any([controller.signal,AbortSignal.timeout(15000)]);
+    function check() {
+      guard();
+      signal.throwIfAborted();
+      if (!running || closed || epoch!==generation) throw new Error('图片来源的机器人连接已变化');
+    }
+    const message=await readVerifiedMessage(chatId,messageId,check,true);
+    const sender=object(message?.sender);
+    if (!message || message.updated===true || message.msg_type!=='image' || sender.sender_type!=='user' || sender.id_type!=='open_id' || sender.id!==ownerId)
+      throw new Error('无法核对原始私聊图片');
+    let key='';
+    try { key=string(object(JSON.parse(string(object(message.body).content))).image_key); } catch { /* invalid platform content */ }
+    if (!/^img_[\w-]{1,240}$/.test(key)) throw new Error('原消息缺少有效图片');
+    const bearer=await getToken();
+    check();
+    const response=await (options.fetch??fetch)(origin+'/open-apis/im/v1/messages/'+encodeURIComponent(messageId)+'/resources/'+encodeURIComponent(key)+'?type=image',
+      {headers:{Authorization:'Bearer '+bearer},redirect:'error',signal});
+    const limit=3_750_000;
+    if (!response.ok || !response.body || Number(response.headers.get('content-length'))>limit) {
+      await response.body?.cancel();
+      throw new Error('私聊图片下载失败或超过大小限制');
+    }
+    let size=0;
+    const chunks:Uint8Array[]=[];
+    const reader=response.body.getReader();
+    try {
+      for (;;) {
+        const part=await reader.read();
+        check();
+        if (part.done) break;
+        size+=part.value.length;
+        if (size>limit) throw new Error('私聊图片超过大小限制');
+        chunks.push(part.value);
+      }
+    } finally { await reader.cancel(); }
+    const bytes=Buffer.concat(chunks,size);
+    let type:string|undefined;
+    try { type=imageSize(bytes).type; } catch { /* generic user-visible failure */ }
+    if (!type || !['png','jpg','webp','gif'].includes(type)) throw new Error('私聊图片格式不受支持');
+    return {mime:type==='jpg'?'image/jpeg':'image/'+type,data:bytes.toString('base64')};
   }
   async function topicOfMessage(chatId: string, messageId: string, guard: () => void) {
     const message = await readVerifiedMessage(chatId, messageId, guard);
@@ -452,7 +496,8 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const topics = !!options.topicPolicy && group && !commandGroup;
     const threadId = string(message.thread_id);
     const post = group && message.message_type === 'post' && (options.readGroup || options.groupTasks || topics);
-    if (sender.sender_type !== 'user' || (message.message_type !== 'text' && !post)) return;
+    const image = options.privateImages && message.chat_type === 'p2p' && message.message_type === 'image';
+    if (sender.sender_type !== 'user' || (message.message_type !== 'text' && !post && !image)) return;
     if (group && !commandGroup && !topics && options.groupMessages && !botOpenId) return;
     if (group && !commandGroup && options.commandGroupChatId && !options.groupMessages && !groupCommands) return;
     // Preserve unknown entries too: an unresolved @ must not look like a message with no addressee.
@@ -466,7 +511,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     let text: string | undefined;
     try {
       const raw = object(JSON.parse(string(message.content)));
-      text = post ? readGroupPost(raw, mentions ?? [], { readGroup: options.readGroup, groupTasks: options.groupTasks,
+      text = image ? (/^img_[\w-]{1,240}$/.test(string(raw.image_key)) ? '[图片]' : undefined) : post ? readGroupPost(raw, mentions ?? [], { readGroup: options.readGroup, groupTasks: options.groupTasks,
         topicCommands: topics, topicBody: topics && !!threadId && (!!options.topicPolicy?.(chatId) || pendingSetting) }) : string(raw.text);
     } catch { operationReason = '收到无法解析的飞书消息'; return; }
     if (!text?.trim()) return;
@@ -488,7 +533,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     if (queue.length >= 100) { operationReason = '飞书消息队列已满，消息未处理'; return; }
     remember(messageId);
     const source: FeishuMessageSource = {
-      chatId, messageId, chatType: string(message.chat_type) || undefined,
+      ...(image && {privateImage:true}), chatId, messageId, chatType: string(message.chat_type) || undefined,
       senderId: string(object(sender.sender_id).open_id) || undefined, senderType: 'user',
       // EventDispatcher preserves the SDK's nested id; CLI-normalized mentions differ.
       mentionedSelf: !!botOpenId && !!mentions?.some(mention => mention.openId === botOpenId),
@@ -1000,7 +1045,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
     const detail = [channelReason, identityReason, operationReason].filter(Boolean).join('；');
     return { connected, ...(detail ? { reason: detail } : {}) };
   }
-  return { start, close, send, readTaskQuote, topicOfMessage, readReaction, updateCard, collect, collectBatch, status,
+  return { start, close, send, readPrivateImage, readTaskQuote, topicOfMessage, readReaction, updateCard, collect, collectBatch, status,
     pinMessage: (id: string) => changePlatformMessage('pin', id),
     unpinMessage: (id: string) => changePlatformMessage('unpin', id),
     recallMessage: (id: string) => changePlatformMessage('recall', id),

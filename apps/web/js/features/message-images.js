@@ -1,0 +1,212 @@
+import { h } from '../lib/dom.js';
+import { Button } from '../ui/kit.js';
+
+const byteLimit = 3750000;
+const requestLimit = 32 * 1024 * 1024;
+export function conversationImagesActive(store) {
+  return !store.view.unauthorized && store.view.snapshot?.plugins?.some(plugin=>plugin.id==='conversation-images' && plugin.status==='active');
+}
+const allowed = ['image/png','image/jpeg','image/webp','image/gif'];
+let database;
+function draftDatabase() {
+  return database ??= new Promise((resolve,reject) => {
+    const req = indexedDB.open('sm-message-image-drafts',1);
+    req.onupgradeneeded = () => req.result.createObjectStore('images');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function storedDraft(key, change) {
+  const db = await draftDatabase();
+  return new Promise((resolve,reject) => {
+    const tx = db.transaction('images',change ? 'readwrite' : 'readonly');
+    const rows = tx.objectStore('images');
+    const lookup = rows.get(key);
+    let next;
+    lookup.onsuccess = () => {
+      next = lookup.result || [];
+      if (change) {
+        next = change(next);
+        if (next.length) rows.put(next,key); else rows.delete(key);
+      }
+    };
+    tx.oncomplete = () => resolve(next);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
+async function prepare(file) {
+  if (!allowed.includes(file.type)) throw new Error('请选择 PNG、JPEG、WebP 或 GIF 图片。');
+  let blob = file;
+  if (file.size > byteLimit) {
+    if (file.type === 'image/gif') throw new Error('GIF 超过 3,750,000 字节，请缩小后再添加。');
+    const bitmap = await createImageBitmap(file);
+    try {
+      let ratio = Math.min(1, 4096 / Math.max(bitmap.width, bitmap.height), Math.sqrt(byteLimit / file.size));
+      do {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(bitmap.width * ratio));
+        canvas.height = Math.max(1, Math.round(bitmap.height * ratio));
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(bitmap,0,0,canvas.width,canvas.height);
+        blob = await new Promise(resolve => canvas.toBlob(resolve,'image/webp',0.9));
+        if (!blob) throw new Error('无法缩小这张图片。');
+        if (blob.size <= byteLimit) break;
+        ratio *= 0.75;
+      } while (ratio > 0.001);
+    } finally { bitmap.close(); }
+  }
+  if (!blob.size || blob.size > byteLimit) throw new Error('图片为空或超过单张大小限制。');
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const sha256 = Array.from(globalThis.sha256(bytes), x => x.toString(16).padStart(2,'0')).join('');
+  const reader = new FileReader();
+  const data = await new Promise((resolve,reject) => {
+    reader.onload = () => resolve(String(reader.result).split(',')[1]);
+    reader.onerror = () => reject(new Error('无法读取图片。'));
+    reader.readAsDataURL(blob);
+  });
+  const id = Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-');
+  return { id, name:file.name || '粘贴的图片', mime:blob.type, data, bytes:blob.size, sha256 };
+}
+
+export function imagePayload(ctx, fields) {
+  if (!ctx.images?.length) return fields;
+  const body = {...fields,images:ctx.images.map(({mime,data}) => ({mime,data}))};
+  if (new Blob([JSON.stringify(body)]).size > requestLimit) throw new Error('发送内容超过 32 MiB，请移除部分图片。');
+  return body;
+}
+
+export function createMessageImages(input) {
+  const memory = new Map();
+  let current, owner, persist, loading, busy = false, generation = 0;
+  const picker = h('input',{type:'file',accept:allowed.join(','),multiple:true,hidden:true,'aria-label':'选择图片'});
+  const button = Button({label:'添加图片',size:'sm',kind:'ghost',onClick:()=>picker.click()});
+  const tray = h('div',{class:'message-images'});
+  const note = h('p',{class:'small',role:'status',hidden:true});
+  const el = h('div',null,picker,tray,note);
+  function status(value) { note.textContent=value; note.hidden=!value; }
+  function paint() {
+    const rows = memory.get(current) || [];
+    button.disabled = !current || !!loading || busy;
+    tray.replaceChildren(...rows.map((row,index) => h('div',{class:'message-image-draft'},
+      h('img',{src:'data:'+row.mime+';base64,'+row.data,alt:row.name}),
+      Button({label:'移除',ariaLabel:'移除第 '+(index+1)+' 张图片',size:'sm',kind:'ghost',onClick:()=>remove(current,[row.id],persist)}))));
+  }
+  function mutate(key,change,durable) {
+    memory.set(key,change(memory.get(key) || []));
+    if (durable) void storedDraft(key,change).catch(()=>{if(current===key) status('浏览器未保存图片草稿，请在此页完成发送。');});
+    if (current===key) paint();
+  }
+  function remove(key,ids,durable) { mutate(key,rows=>rows.filter(row=>!ids.includes(row.id)),durable); }
+  async function add(files) {
+    if (!current || busy) return;
+    const stamp=generation,key=current;
+    busy=true;paint();
+    try {
+      await loading;
+      if (stamp!==generation) return;
+      const previous=memory.get(key) || [];
+      if (files.length+previous.length>20) throw new Error('一条消息最多可附 20 张图片。');
+      const rows=[];
+      for (const file of files) {
+        const row=await prepare(file);
+        if (stamp!==generation) return;
+        rows.push(row);
+        if ([...previous,...rows].reduce((sum,item)=>sum+item.data.length,0)>requestLimit)
+          throw new Error('图片合计超过 32 MiB，请分批发送。');
+      }
+      status('');
+      mutate(key,old=>[...old,...rows],persist);
+    } catch(error) { if(stamp===generation) status(error.message || '图片处理失败。'); }
+    finally { if(stamp===generation) { busy=false;paint(); } }
+  }
+  picker.onchange=()=>{const files=Array.from(picker.files);picker.value='';if(files.length) void add(files);};
+  input.addEventListener('dragover',event=>{
+    if(current && Array.from(event.dataTransfer?.items || []).some(item=>item.kind==='file' && item.type.startsWith('image/'))) event.preventDefault();
+  });
+  input.addEventListener('drop',event=>{
+    const files=Array.from(event.dataTransfer?.files || []).filter(file=>file.type.startsWith('image/'));
+    if(current && files.length) {event.preventDefault();void add(files);}
+  });
+  input.addEventListener('paste',event=>{
+    const files=Array.from(event.clipboardData?.files || []).filter(file=>file.type.startsWith('image/'));
+    if (current && files.length) {event.preventDefault();void add(files);}
+  });
+  return {el,button,
+    update(key,nextOwner,durable,active) {
+      button.hidden=el.hidden=!active;
+      picker.disabled=!active;
+      const next=active && key && nextOwner && JSON.stringify([nextOwner,key]);
+      if(next===current && owner===nextOwner && persist===durable) return;
+      if(owner!==nextOwner) memory.clear();
+      owner=nextOwner;current=next;persist=durable;
+      const stamp=++generation;
+      busy=false;loading=undefined;status('');
+      if(current && durable) {
+        loading=storedDraft(current).then(rows=>{if(stamp===generation) memory.set(next,rows);})
+          .catch(()=>{if(stamp===generation) status('图片草稿仅保留在当前页面。');})
+          .finally(()=>{if(stamp===generation){loading=undefined;paint();}});
+      }
+      paint();
+    },
+    capture:()=>memory.get(current) || [],
+    ready(){if(loading || busy){status('正在准备图片，请稍后发送。');return false;}return true;},
+    accepted(ctx) {
+      if(ctx.owner!==owner || !ctx.images?.length) return;
+      remove(JSON.stringify([ctx.owner,ctx.key]),ctx.images.map(i=>i.id),persist);
+    },
+  };
+}
+
+// Keyed message rows can be temporarily detached by the renderer. Keep a transfer
+// alive across that synchronous move, and cancel/revoke it when the row really leaves.
+class MessageImage extends HTMLElement {
+  connectedCallback() {
+    if(!this.source) return;
+    this.unsubscribe ??= this.source.store.subscribe(()=>this.refresh());
+    this.refresh();
+  }
+  refresh() {
+    if(!this.source) return;
+    const visible=conversationImagesActive(this.source.store) && this.source.owner===this.source.api.draftOwner() &&
+      this.source.owner===this.source.store.view.snapshotOwner;
+    this.hidden=!visible;
+    if(!visible) { if(this.job) this.clear(); return; }
+    if(this.job) return;
+    const {api,path,label,owner}=this.source;
+    if(api.draftOwner()!==owner) return;
+    const job=this.job=new AbortController();
+    const load=async()=>{
+      try {
+        const blob=await api.blob(path,job.signal);
+        if(this.job!==job || !this.isConnected || api.draftOwner()!==owner) return;
+        if(!allowed.includes(blob.type)) throw new Error('图片格式无效');
+        this.url=URL.createObjectURL(blob);
+        this.replaceChildren(h('a',{href:this.url,target:'_blank',rel:'noopener noreferrer'},
+          h('img',{src:this.url,alt:label,class:'message-image-thumb'})));
+      } catch {
+        if(this.job!==job || job.signal.aborted) return;
+        this.replaceChildren(Button({label:'重试读取'+label,size:'sm',kind:'ghost',onClick:()=>{this.job=undefined;this.refresh();}}));
+      }
+    };
+    void load();
+  }
+  disconnectedCallback() { queueMicrotask(()=>{
+    if(this.isConnected) return;
+    this.unsubscribe?.();this.unsubscribe=undefined;this.clear();
+  }); }
+  clear() {
+    this.job?.abort();this.job=undefined;
+    if(this.url) URL.revokeObjectURL(this.url);
+    this.url=undefined;this.replaceChildren();
+  }
+}
+customElements.define('sm-message-image',MessageImage);
+export function messageImages(api,store,message) {
+  if(!message.images?.length) return null;
+  return h('div',{class:'message-images'},message.images.map((_,index)=>{
+    const el=document.createElement('sm-message-image');
+    el.source={api,store,owner:api.draftOwner(),label:'消息图片 '+(index+1),path:'/messages/'+encodeURIComponent(message.id)+'/images/'+index+'?conversationId='+encodeURIComponent(message.conversationId)};
+    return el;
+  }));
+}
