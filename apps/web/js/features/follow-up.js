@@ -127,11 +127,11 @@ export function createFollowUpCard({ api, store }) {
           return { todo: '待办已完成', completed: '执行已结束', queued: '排队中', running: '执行中' }[item.kind];
         }
         const groups = [['待你决定', brief.decisions], ['待处理收件', brief.inbox], ['今日提及', brief.mentions], ['今日完成', brief.completed],
-          ['今日失败', brief.failed], ['当前执行', brief.running], ['今日日程', brief.calendar]];
-        replace(content, h('p', { class: 'small muted' }, brief.date + ' · ' + brief.timezone), groups.map(([title, group]) =>
+          ['今日更新的失败执行', brief.failed], ['当前执行', brief.running], ['今日日程', brief.calendar]];
+        replace(content, h('p', { class: 'small muted' }, brief.date + ' · ' + brief.timezone + ' · 生成于 ' + clock.format(Date.parse(brief.generatedAt))), groups.map(([title, group]) =>
           h('section', { class: 'stack' }, h('h3', null, title),
             group.available === false ? h('p', null, group.reason || '来源不可用') : [
-              h('p', { class: 'small muted' }, (group.available && group.truncated ? '已核实 ' : '') + group.total + ' 项' + (group.truncated ? ' · 当前仅显示部分记录' : '')),
+              h('p', { class: 'small muted' }, (group.totalIsLowerBound ? '至少 ' : '') + group.total + ' 项' + (group.truncated ? ' · 当前仅显示部分记录' : '')),
               group.items.map(item => h('p', null, [itemLabel(item), item.title, item.reason].filter(Boolean).join(' · '))),
             ])));
       } catch (error) {
