@@ -139,7 +139,13 @@ test('连续输入跟随新会话，状态与清单只展示本主人的会话�
   const buttons = elements.flatMap(el => el.actions ?? []).filter(button =>
     button.value.kind === 'workbench.chat' && button.value.conversationThreadId);
   assert.equal(buttons.length, 1);
-  await a.click(list.id, buttons[0].value);
+  const renamed = await fetch(f.url+'/api/v1/feishu/bots/'+a.row.id+'/threads/'+rows[0].threadId, {
+    method:'PATCH',headers:{authorization:'Bearer synthetic-thread-test','content-type':'application/json'},
+    body:JSON.stringify({version:(await (await f.threads(a.row.id,rows[0].threadId)).json()).version,title:'合成新标题'}),
+  });
+  assert.equal(renamed.status,200);
+  const selected = await a.click(list.id, buttons[0].value);
+  assert.match(JSON.stringify(selected),/已选中「合成新标题」。下一条未引用消息/);
   await a.receive('从清单恢复甲', 'from-list');
   assert.equal((await f.input('从清单恢复甲')).conversationId, alpha.conversationId);
   await f.restart();

@@ -1649,11 +1649,12 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         if (!validThread(bot, paired, thread, true))
           return {toast:{type:'info',content:'该对话已不在当前清单中。请发送 /list 查看可选对话。'}};
       }
+      const threadTitle = typeof thread === 'string' ? privateThreadMetadata(bot.id, thread).title : undefined;
       const binding = { ...(typeof thread === 'string' && { conversationThreadId: thread }), selectionId: randomUUID(), projectId: value.projectId, revision: bot.revision, senderId: paired.senderId, expiresAt: cap.expiresAt };
       app.store.transaction(() => {
         for (const messageId of ['', input.messageId]) app.store.put('feishu.chat-target', digest([bot.id, input.chatId, messageId]), binding);
       });
-      return { toast: { type: 'success', content: thread ? '已切回选中的独立对话。' : project ? '接下来与「' + project.name + '」项目 Agent 对话' : '已切回主 Agent' } };
+      return { toast: { type: 'success', content: threadTitle ? '已选中「' + threadTitle + '」。下一条未引用消息会进入这段对话。' : project ? '接下来与「' + project.name + '」项目 Agent 对话' : '已切回主 Agent' } };
     }
     if (!['home','tasks','inbox','projects','questions','conversations'].includes(String(value.view)) || !Number.isSafeInteger(value.page) || (value.page as number) < 0 || (value.page as number) > 100000) return fail;
     const dashboard = value.view === 'conversations' ? chatList(bot, paired, value.navigation, value.page as number, cap.threadSearch?.query)
