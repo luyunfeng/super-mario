@@ -203,7 +203,7 @@ export function createScheduledWork({ store, events, schedules, proposeApproval,
         store.remove(occurrences, key);
       } else if (!marked) {
         store.put<ScheduledWorkOccurrence>(occurrences, key, { key, workId: id, workVersion: version, scheduleId: schedule.id,
-          scheduleVersion, scheduledFor: at, status: 'skipped', ownerSkipToken: randomUUID() });
+          scheduleVersion, scheduledFor: at, actionKind: work.input.action.kind, status: 'skipped', ownerSkipToken: randomUUID() });
       } else if (!marked.ownerSkipToken) return fail('该次触发已有执行记录');
       events.publish('scheduled.work.changed', { id });
       return { id, at, skipped: undoToken === undefined };
@@ -251,7 +251,7 @@ export function createScheduledWork({ store, events, schedules, proposeApproval,
           || event.sourceId !== `schedule:${s.id}:v${s.version}:${d.scheduledFor}`) return undefined;
         const key = digest([s.id, s.version, d.scheduledFor]);
         if (store.get(occurrences, key)) return undefined;
-        const o: ScheduledWorkOccurrence = { key, workId: r.id, workVersion: r.version, scheduleId: s.id, scheduleVersion: s.version, scheduledFor: d.scheduledFor, handledAt: new Date(now()).toISOString(), status: 'claimed' };
+        const o: ScheduledWorkOccurrence = { key, workId: r.id, workVersion: r.version, scheduleId: s.id, scheduleVersion: s.version, scheduledFor: d.scheduledFor, actionKind: r.input.action.kind, handledAt: new Date(now()).toISOString(), status: 'claimed' };
         if (blocked(r)) { store.put(occurrences, key, { ...o, status: 'skipped' }); return undefined; }
         if (r.input.action.kind === 'dispatch') {
           const { kind: _, ...action } = r.input.action;

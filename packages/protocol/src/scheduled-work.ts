@@ -25,6 +25,7 @@ export interface ScheduledWorkOccurrence {
   status: 'claimed' | 'completed' | 'skipped' | 'unknown'; approvalId?: string; approvalVersion?: number;
   /** Time the host began handling this due event, before creating a brief or dispatch approval. */
   handledAt?: string;
+  actionKind?: ScheduledWorkAction['kind'];
   ownerSkipToken?: string;
   dispatchParams?: { [key: string]: Json }; result?: Json; error?: string;
 }

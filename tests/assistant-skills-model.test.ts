@@ -1,3 +1,4 @@
+import { runWithAgentInput } from '../packages/core/src/agent-input.ts';
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -2050,6 +2051,10 @@ test('Web 和飞书按同一触发记录区分待批准、派发和执行失败'
     assert.match(req.system, /分别报告当次记录的 approvalStatus 和 run.status/);
     if (req.lastRole === 'user') {
       assert.match(req.system, /提示词是供核对的计划数据/);
+      if (JSON.stringify(req.content).includes('上个版本')) {
+        assert.match(req.system, /不把当前计划的动作当成旧版本的事实/);
+        return call('scheduled_work_list', {}, 'previous-version');
+      }
       if (JSON.stringify(req.content).includes('是否准时')) {
         assert.match(req.system, /缺少 handledAt 或时钟倒退时说明延迟无法确认/);
         return call('scheduled_work_list', {}, 'timing');
@@ -2060,6 +2065,12 @@ test('Web 和飞书按同一触发记录区分待批准、派发和执行失败'
     const [work] = JSON.parse(raw).items;
     if (req.callId === 'requirements') return { role: 'assistant', content: work.action.prompt + '\n完成标准：' + work.action.doneWhen };
     const [trigger] = work.occurrences;
+    if (req.callId === 'previous-version') {
+      assert.equal(work.action.kind, 'brief');
+      assert.equal(trigger.kind, 'dispatch');
+      assert.equal(trigger.run.status, 'failed');
+      return { role: 'assistant', content: `第 ${trigger.workVersion} 版是派发任务，关联执行失败。` };
+    }
     if (req.callId === 'timing') {
       assert.ok(trigger.delayMs > 0);
       assert.equal(trigger.delayMs, Date.parse(trigger.handledAt) - Date.parse(trigger.scheduledFor));
@@ -2109,6 +2120,13 @@ test('Web 和飞书按同一触发记录区分待批准、派发和执行失败'
     await t.waitFor(() => assert.ok(sent.includes(expected)));
     await adapter.onMessage(question, { ...source, messageId: 'status' });
     await t.waitFor(() => assert.ok(sent.includes('派发审批已处理，执行失败。')));
+    const originalSource = server.app.store.get<Message>('messages', work.source.messageId)!;
+    runWithAgentInput(originalSource, () => server.app.scheduledWork.propose({ key: 'progress', title: '项目巡检',
+      projectId: project.id, schedule: { kind: 'once', at: '2099-01-01T00:00:00Z' }, action: { kind: 'brief' } }, true));
+    const pastQuestion = '上个版本的巡检执行了什么？';
+    assert.equal(await ask(pastQuestion, '/projects/' + project.id + '/messages'), '第 1 版是派发任务，关联执行失败。');
+    await adapter.onMessage(pastQuestion, { ...source, messageId: 'previous' });
+    await t.waitFor(() => assert.ok(sent.includes('第 1 版是派发任务，关联执行失败。')));
   } finally { await server.close(); }
 });
 

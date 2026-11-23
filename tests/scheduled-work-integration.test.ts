@@ -33,3 +33,34 @@ test('builtin tool pins real user provenance; readonly result turns cannot creat
  const input=work('tool');await assert.rejects(runWithAgentInput({...source,readOnly:true},()=>tool.execute(input as any,new AbortController().signal)),{status:403});const approval=await runWithAgentInput(source,()=>tool.execute(input as any,new AbortController().signal)) as unknown as Approval;
  f.server.app.store.put('messages',source.id,{...source,status:'done'});const accepted=await f.request('/approvals/'+approval.id+'/approve','POST',{version:1});assert.equal(accepted.data.status,'completed');const publicRows=(await f.request('/scheduled-work')).data;assert.ok(!JSON.stringify(publicRows).includes('PRIVATE_USER_TEXT'));
 });
+
+test('修订后的历史保留原动作，历史版本缺少证据时标为未知', async t => {
+  const f = await fixture(t);
+  const source: Message = { id: 'source-revision', role: 'user', text: '安排定时工作', conversationId: 'main',
+    status: 'done', createdAt: new Date().toISOString() };
+  f.server.app.store.put('messages', source.id, source);
+  const propose = (action: object) => runWithAgentInput(source, () =>
+    f.server.app.scheduledWork.propose(work('revision', action), true));
+  const first = propose({ kind: 'brief' });
+  await f.request('/approvals/' + first.id + '/approve', 'POST', { version: first.version });
+  await f.due();
+  const second = propose({ kind: 'dispatch', executorId: 'fixture', prompt: '核对', doneWhen: '交付记录', expectMinutes: 1 });
+  assert.notEqual(second.id, first.id);
+  const list = async () => (await f.request('/scheduled-work')).data.items[0];
+  const current = await list();
+  assert.equal(current.action.kind, 'dispatch');
+  const original = current.occurrences[0];
+  assert.equal(original.workVersion, 1);
+  assert.equal(original.kind, 'brief');
+  const store = f.server.app.store;
+  const saved = store.get<import('../packages/protocol/src/index.ts').ScheduledWorkOccurrence>('scheduled-work.occurrences', original.key)!;
+  assert.equal(saved.actionKind, 'brief');
+  const { actionKind, ...legacy } = saved;
+  store.put('scheduled-work.occurrences', original.key, legacy);
+  assert.equal((await list()).occurrences[0].kind, 'brief');
+  const { result, ...unconfirmed } = legacy;
+  store.put('scheduled-work.occurrences', original.key, unconfirmed);
+  await f.restart();
+  const history = await f.request('/scheduled-work/history', 'POST', { workId: current.id });
+  assert.equal(history.data.occurrences[0].kind, 'unknown');
+});

@@ -44,7 +44,8 @@ function occurrenceText(o) {
   if (o.status === 'skipped') return '本次已跳过';
   if (o.run) return `派发审批 · ${approvalText(o.approvalStatus)} · ${runStatus(o.run.status)}`;
   if (o.kind === 'dispatch') return `已生成派发审批 · ${approvalText(o.approvalStatus)}；任务最终完成情况未确认，请到对话查看执行记录`;
-  return '事实简报已生成（仅程序汇总已接入事实，不调用模型、不外发）';
+  if (o.kind === 'brief') return '事实简报已生成（仅程序汇总已接入事实，不调用模型、不外发）';
+  return '已处理，原动作类型未确认';
 }
 
 export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
@@ -187,6 +188,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
   }
   function renderOccurrence(item, o) {
     return h('div', null, line(`${timeText(o.scheduledFor)} · ${occurrenceText(o)}`),
+      o.workVersion && o.workVersion !== item.version && line(`计划版本 ${o.workVersion} · ${({ dispatch: '派发任务', brief: '生成简报' })[o.kind] ?? '原动作类型未确认'}`),
       o.handledAt && line(`开始处理：${timeText(o.handledAt)} · ${timingDelay(o.delayMs)}`),
       !o.handledAt && !o.ownerSkipped && !o.endedAt && line('开始处理时间未记录'),
       o.approvalId && line(`派发审批：${o.approvalId} · ${approvalText(o.approvalStatus)}`),

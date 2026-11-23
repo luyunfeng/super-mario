@@ -111,10 +111,11 @@ test('现有创建审批生效、单次已触发与到期派发审批 pending/co
     await expect(details).toContainText('开始处理时间未记录');
   }
   f.items = [work({ occurrences: [{ key: 'trigger', kind: 'dispatch', status: 'completed', scheduledFor: at,
-    handledAt: '2026-11-17T08:02:03Z', delayMs: 123000, approvalId: 'dispatch-one', approvalStatus: 'completed', run: { id: 'fixture-run', status: 'failed' } }] })];
+    workVersion: 1, handledAt: '2026-11-17T08:02:03Z', delayMs: 123000, approvalId: 'dispatch-one', approvalStatus: 'completed', run: { id: 'fixture-run', status: 'failed' } }] })];
   await emit(page);
   await expect(panel(page)).toContainText('执行失败');
   await panel(page).locator('summary').click();
+  await expect(panel(page).locator('details')).toContainText('计划版本 1 · 派发任务');
   await expect(panel(page).locator('details')).toContainText('晚 2 分钟');
   await expect(panel(page).getByRole('link', { name: '查看实际执行记录' })).toHaveAttribute('href', '#projects/a/runs/fixture-run');
 }));

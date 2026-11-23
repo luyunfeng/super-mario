@@ -66,6 +66,16 @@ export function createScheduledWorkService(options: {
       && run.sourceMessageId === work.sourceMessage.id;
     return { approvalStatus: approval.status, ...(matches ? { run: { id: run.id, status: run.status } } : {}) };
   }
+  function historicalKind(work: ScheduledWorkRecord, occurrence: ScheduledWorkOccurrence) {
+    if (occurrence.actionKind) return occurrence.actionKind;
+    // Older records lack the snapshot. Receipts identify the original action across plan revisions.
+    if (occurrence.approvalId || occurrence.dispatchParams) return 'dispatch';
+    const receipt = occurrence.result;
+    if (receipt && typeof receipt === 'object' && !Array.isArray(receipt)
+      && receipt.messageId === 'scheduled-brief:' + occurrence.key) return 'brief';
+    if (occurrence.workVersion === work.version) return work.input.action.kind;
+    return 'unknown';
+  }
   function historyPage(work: ScheduledWorkRecord, occurrences: ScheduledWorkOccurrence[], schedule?: ScheduleInfo, after?: string) {
     // The scheduler persists cutoff separately from delivered work. Include it in the same cursor order.
     const history: (ScheduledWorkOccurrence & { endedAt?: string })[] = occurrences.filter(o => !o.ownerSkipToken || Date.parse(o.scheduledFor) <= Date.now());
@@ -79,10 +89,10 @@ export function createScheduledWorkService(options: {
     const page = history.slice(start, start + 20);
     const more = start + page.length < history.length;
     return {
-      occurrences: page.map(o => ({ endedAt: o.endedAt, key: o.key, scheduledFor: o.scheduledFor, status: o.status, approvalId: o.approvalId,
+      occurrences: page.map(o => ({ endedAt: o.endedAt, workVersion: o.workVersion, key: o.key, scheduledFor: o.scheduledFor, status: o.status, approvalId: o.approvalId,
         ...(o.handledAt ? { handledAt: o.handledAt, delayMs: Date.parse(o.handledAt) - Date.parse(o.scheduledFor) } : {}),
         ...dispatchReceipt(work, o),
-        result: o.result, ...(o.ownerSkipToken ? { ownerSkipped: true } : {}), kind: work.input.action.kind, ...(o.error ? { error: '结果未知，请核对原记录' } : {}) })),
+        result: o.result, ...(o.ownerSkipToken ? { ownerSkipped: true } : {}), kind: historicalKind(work, o), ...(o.error ? { error: '结果未知，请核对原记录' } : {}) })),
       occurrenceTotal: history.length, occurrencesTruncated: more, nextOccurrenceKey: more ? page[page.length - 1].key : null,
     };
   }
