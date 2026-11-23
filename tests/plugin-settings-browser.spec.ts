@@ -24,6 +24,7 @@ test('从插件配置固定入口，刷新、停用与恢复，并从窄屏打�
   await dialog.getByRole('button', {name:'保存设置'}).click();
   await expect(dialog.getByRole('status')).toHaveText('设置已保存');
   await dialog.getByLabel('搜索插件').fill('feishu');
+  await expect(plugin.getByText(/直接依赖此插件/)).toContainText('飞书消息表情回应');
   await plugin.getByRole('checkbox').check();
   await dialog.getByRole('button', { name: '关闭' }).click();
   await pin.click();

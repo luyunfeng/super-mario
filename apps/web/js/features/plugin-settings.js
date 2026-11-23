@@ -129,6 +129,7 @@ export function createPluginSettings({ api, store, router }) {
     keyedList(menu,matches,p=>p.id,p=>h('button',{type:'button','aria-pressed':String(selected===p.id),onclick:()=>{selected=p.id;paint();}},
       h('strong',{},systemText(p.name)),h('small',{},status[p.status]?.[0] ?? p.status)),p=>JSON.stringify([selected===p.id,p.name,p.status]));
     if (!matches.length) { replace(list,h('p',{},'没有匹配的插件')); return; }
+    const dependents = plugins.filter(p => p.dependencies?.includes(selected)).map(p => systemText(p.name));
     keyedList(list, matches.filter(p=>p.id===selected), p => p.id, plugin => {
       const entries = features(plugin);
       return h('section', { class: 'plugin-section', 'aria-label': systemText(plugin.name) },
@@ -140,6 +141,7 @@ export function createPluginSettings({ api, store, router }) {
           } })),
         h('p',{},descriptions[plugin.id] ?? (entries.length ? '提供以下工作台功能：'+entries.map(e=>e.label).join('、') : '此插件由执行环境提供，已声明的能力见下方。')),
         h('code',{class:'small muted'},plugin.id),
+        dependents.length > 0 && h('p', { class: 'small' }, '直接依赖此插件：' + dependents.join('、')),
         preferenceEditor(plugin.id),
         plugin.id === 'reading-fonts' && plugin.status === 'active' && readingFontEditor(),
         plugin.id === 'shortcut-settings' && Button({ label: '快捷键设置', disabled: plugin.status !== 'active', onClick: () => openShortcutSettings(store) }),
@@ -156,7 +158,7 @@ export function createPluginSettings({ api, store, router }) {
             if (e.target.checked) pins.add(item.key); else pins.delete(item.key);
             writeLocal(key, [...pins]); paint();
           } }), ' 固定到侧边栏'))));
-    }, plugin => JSON.stringify([plugin, features(plugin).map(item => pins.has(item.key)), plugin.id === 'start-page' && [snapshot.startPage, startPages(plugins)]]));
+    }, plugin => JSON.stringify([plugin, dependents, features(plugin).map(item => pins.has(item.key)), plugin.id === 'start-page' && [snapshot.startPage, startPages(plugins)]]));
   }
   function open(pluginId) {
     if (typeof pluginId === 'string') { selected = pluginId; search.value = ''; }

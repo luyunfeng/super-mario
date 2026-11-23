@@ -125,7 +125,12 @@ export class PluginHost {
     });
   }
 
-  list(): PluginInfo[] { return [...this.entries.values()].map(entry => ({ ...entry.info, capabilities: [...entry.info.capabilities] })); }
+  list(): PluginInfo[] {
+    return [...this.entries.values()].map(({ info, extension, origin }) => {
+      const dependencies = origin?.failure ? origin.declaredDependencies : extension.dependencies;
+      return { ...info, capabilities: [...info.capabilities], ...(dependencies?.length && { dependencies: [...dependencies] }) };
+    });
+  }
 
   inspections(builtinVersion: string) {
     return [...this.entries.values()].map(({ extension, info, origin, failure }) => {
