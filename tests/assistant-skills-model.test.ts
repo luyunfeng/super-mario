@@ -1703,7 +1703,10 @@ test('Web 和飞书查询未完成、已完成和逾期待办，执行结束后�
         return call('todos_list', { status: 'open', hasDueDate: false, order: 'priority' }, 'undated');
       }
       if (question.includes('派过')) return call('todos_list', { status: 'open', hasExecution: !question.includes('没派过') }, question.includes('没派过') ? 'unassigned' : 'dispatched');
-      if (question.includes('逾期')) return call('todos_list', { query: '月报', status: 'open', overdue: true }, 'overdue');
+      if (question.includes('逾期')) {
+        assert.match(req.system, /范围包括以前到期的积压事项/);
+        return call('todos_list', { query: '月报', status: 'open', overdue: true }, 'overdue');
+      }
       if (question.includes('已经完成')) return call('todos_list', { query: '月报', status: 'done' }, 'done');
       return call('todos_list', { query: '月报', status: 'open' }, 'open');
     }
