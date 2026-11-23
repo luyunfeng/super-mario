@@ -8,7 +8,6 @@ import { createConversationDrafts } from '../lib/conversation-drafts.js';
 import { createMessageQuote } from '../lib/message-quote.js';
 import { createMessageEdit } from '../lib/message-edit.js';
 import { timeAgo } from '../lib/format.js';
-import { renderFormattedText } from '../lib/markdown.js';
 import { icon } from '../ui/icons.js';
 import { Button, Banner, Card, Pill } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
@@ -256,19 +255,19 @@ export function createChatPage({ api, store, scope, router }) {
     if (message.role === 'user') {
       const canEdit = editEnabled && message.conversationId === 'main' && (!scope.get() || scope.get() === message.projectId);
       return h('article', { class: 'msg msg--user', dataset: { id: message.id } },
-        h('div', { class: 'msg__bubble' }, renderFormattedText(text)),
+        h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text)),
         h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), message.status === 'failed' && ' · 处理失败', mark, transcript.copyMessage(message, translation.displayedText), canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
     }
     const personal = message.conversationId === 'main' && (!message.origin || message.origin === 'user');
     const label = personal ? assistantLabel : message.origin === 'result' ? '执行结果' : '主 Agent';
-    const bubble = h('div', { class: 'msg__bubble' }, renderFormattedText(text));
+    const bubble = h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text));
     return h('article', { class: 'msg msg--assistant', dataset: { id: message.id } },
       h('span', { class: 'msg__avatar', 'aria-hidden': 'true' }, 'M'),
       h('div', { class: 'msg__col' },
         h('span', { class: 'msg__label', dataset: personal ? { assistantName: 'true' } : undefined }, label),
         agentProgress(message, api),
         bubble,
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, transcript.copyMessage(message, translation.displayedText), translation.action(message, bubble), personal && readAloud.action(message, translation.displayedText), canQuote && message.role === 'assistant' && quote.action(message, label))));
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, transcript.copyMessage(message, translation.displayedText), translation.action(message, bubble, transcript.renderMessage), personal && readAloud.action(message, translation.displayedText), canQuote && message.role === 'assistant' && quote.action(message, label))));
   }
 
   function paintMessages(list) {

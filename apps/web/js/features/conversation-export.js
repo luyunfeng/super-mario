@@ -1,7 +1,50 @@
 // 预览、复制和下载共享同一次导出结果。每次切换选项时立即丢弃旧结果。
 import { h, replace } from '../lib/dom.js';
+import { renderFormattedText } from '../lib/markdown.js';
 import { Button, Banner } from '../ui/kit.js';
 import { openDrawer, toast } from '../ui/overlay.js';
+
+async function writeTable(table) {
+  // Build both formats from the visible cells. Clipboard HTML needs no workbench URLs.
+  const copy = table.cloneNode(true);
+  const rows = Array.from(copy.rows, row => Array.from(row.cells, cell => {
+    let value = cell.textContent;
+    if (/^[=+@-]/.test(value) && !/^-\d+(?:\.\d+)?$/.test(value)) value = "'" + value;
+    cell.textContent = value;
+    return /["\t\r\n]/.test(value) ? '"' + value.replaceAll('"', '""') + '"' : value;
+  }).join('\t'));
+  const text = rows.join('\n');
+  if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+    try {
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/plain': new Blob([text], { type: 'text/plain' }),
+        'text/html': new Blob([copy.outerHTML], { type: 'text/html' }),
+      })]);
+      return;
+    } catch { /* Try the text clipboard when rich content is unavailable. */ }
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Plain HTTP workbenches may have only the synchronous copy event.
+    const selection = h('textarea', { value: text, readOnly: true, style: { position: 'fixed', opacity: '0' } });
+    const previous = document.activeElement;
+    document.body.append(selection);
+    selection.select();
+    selection.addEventListener('copy', event => {
+      if (!event.clipboardData) return;
+      event.clipboardData.setData('text/plain', text);
+      event.clipboardData.setData('text/html', copy.outerHTML);
+      event.preventDefault();
+    });
+    try {
+      if (!document.execCommand('copy')) throw new Error('剪贴板不可用');
+    } finally {
+      selection.remove();
+      previous?.focus?.({ preventScroll: true });
+    }
+  }
+}
 
 export function conversationExportActive(store) {
   return !store.view.unauthorized && store.view.snapshot?.plugins?.some(
@@ -20,25 +63,31 @@ export function createConversationExport({ api, store, getProjectId = () => unde
   const update = () => { button.hidden = !conversationExportActive(store); };
   store.subscribe(update);
   update();
-  function copyMessage(message, getText) {
+  function copyAction(message, label, write) {
     const projectId = getProjectId(), owner = api.draftOwner();
     const conversation = projectId ? `project:${projectId}:work` : 'main';
     if (!conversationExportActive(store) || message.conversationId !== conversation ||
         (projectId && message.projectId && message.projectId !== projectId) || message.origin === 'notification' ||
         !['user', 'assistant'].includes(message.role) || !message.text?.trim()) return null;
-    return Button({ label: '复制正文', kind: 'ghost', size: 'sm', onClick: async (_, control) => {
+    return Button({ label, kind: 'ghost', size: 'sm', onClick: async (_, control) => {
       const current = () => control.isConnected && owner === api.draftOwner() && owner === store.view.snapshotOwner &&
         projectId === getProjectId() && conversationExportActive(store);
       if (!current()) return;
       try {
-        await navigator.clipboard.writeText(getText(message));
-        if (current()) toast('已复制正文。');
+        await write();
+        if (current()) toast(label === '复制表格' ? '已复制表格。' : '已复制正文。');
       } catch {
         if (current()) toast('无法写入剪贴板，请选中消息正文复制。', 'danger');
       }
     } });
   }
-  return { button, copyMessage, get active() { return conversationExportActive(store); }, close: () => drawer?.close() };
+  function copyMessage(message, getText) {
+    return copyAction(message, '复制正文', () => navigator.clipboard.writeText(getText(message)));
+  }
+  function renderMessage(message, text) {
+    return renderFormattedText(text, table => copyAction(message, '复制表格', () => writeTable(table)));
+  }
+  return { button, copyMessage, renderMessage, get active() { return conversationExportActive(store); }, close: () => drawer?.close() };
 }
 
 export function openConversationExport({ api, store, source, subtitle, isCurrent }) {

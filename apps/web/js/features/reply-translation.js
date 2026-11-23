@@ -1,5 +1,4 @@
 import { h, replace } from '../lib/dom.js';
-import { renderFormattedText } from '../lib/markdown.js';
 
 // Only the visible conversation holds translations. The saved message is always the source of truth.
 export function createReplyTranslation({ api, store, getScope, getConversationId }) {
@@ -52,7 +51,7 @@ export function createReplyTranslation({ api, store, getScope, getConversationId
     }
   });
 
-  function action(message, bubble) {
+  function action(message, bubble, renderMessage) {
     if (!eligible(message)) return null;
     const id = message.id;
     let entry = entries.get(id);
@@ -67,7 +66,7 @@ export function createReplyTranslation({ api, store, getScope, getConversationId
     entry.paint = () => {
       if (showing !== entry.show) {
         showing = entry.show;
-        replace(bubble, renderFormattedText(showing ? entry.text : entry.source));
+        replace(bubble, renderMessage(message, showing ? entry.text : entry.source));
       }
       controls.hidden = entries.get(id) !== entry;
       button.disabled = !!entry.pending;

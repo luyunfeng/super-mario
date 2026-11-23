@@ -56,8 +56,22 @@ export function splitLeadingQuote(text) {
   return { passage, body: text.slice(lead[0].length).replace(/^[ \t]*(?:\r\n|\r|\n)/, '') };
 }
 
+// Unescaped pipes separate cells. Outer pipes are optional.
+function tableCells(line) {
+  const chunks = line.trim().match(/(?:\\.|[^|\\]|\\$)+|\|/g) ?? [];
+  if (!chunks.includes('|')) return null;
+  if (chunks[0] === '|') chunks.shift();
+  if (chunks.at(-1) === '|') chunks.pop();
+  const cells = [''];
+  for (const part of chunks) {
+    if (part === '|') cells.push('');
+    else cells[cells.length - 1] += part.replace(/\\([|\\])/g, '$1');
+  }
+  return cells.map(cell => cell.trim());
+}
+
 /** 将纯文本安全渲染为紧凑纯文本或轻量富文本节点。 */
-export function renderFormattedText(raw) {
+export function renderFormattedText(raw, tableAction) {
   let text = String(raw ?? '');
   let quoted;
   const reference = splitLeadingQuote(text);
@@ -95,7 +109,9 @@ export function renderFormattedText(raw) {
     if (olItems.length) { blocks.push(h('ol', { class: 'md-list md-list--num' }, olItems)); olItems = []; }
   }
 
-  for (const line of text.split(/\r?\n/)) {
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
     if (inCode) {
       if (/^```\s*$/.test(line)) {
         blocks.push(makeCodeBlock(codeLang, codeLines.join('\n')));
@@ -122,6 +138,33 @@ export function renderFormattedText(raw) {
       flushPara();
       flushLists();
       continue;
+    }
+
+    if (line.includes('|') && /^\s*[:|-]/.test(lines[index + 1] ?? '')) {
+      const header = tableCells(line);
+      const divider = tableCells(lines[index + 1]);
+      if (header && divider?.length === header.length && divider.every(cell => /^:?-+:?$/.test(cell))) {
+        flushPara();
+        flushLists();
+        const row = (cells, tag) => h('tr', null, cells.map((cell, i) => {
+          const marker = divider[i];
+          const align = marker.endsWith(':') ? (marker.startsWith(':') ? 'center' : 'right') : 'left';
+          return h(tag, { style: { textAlign: align } }, renderInline(cell));
+        }));
+        const body = h('tbody');
+        index++;
+        while (index + 1 < lines.length) {
+          const next = lines[index + 1];
+          if (/^\s*```/.test(next)) break;
+          const cells = tableCells(next);
+          if (!cells) break;
+          body.append(row(cells.slice(0, header.length), 'td'));
+          index++;
+        }
+        const table = h('table', null, h('thead', null, row(header, 'th')), body);
+        blocks.push(h('div', { class: 'md-table' }, tableAction?.(table), table));
+        continue;
+      }
     }
 
     const ul = line.match(/^\s*[-*]\s+(.*)$/);

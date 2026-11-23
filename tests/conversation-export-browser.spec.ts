@@ -38,11 +38,15 @@ test('从主对话和项目工作区导出完整 Markdown，并通过插件配�
     server.app.store.put('messages', message.id, { createdAt, ...message });
 
   const mainText = '主对话的独立正文\n\n- 保留 Markdown 换行';
+  const tableText = '| **字段** | 值 |\n| --- | ---: |\n| A\\|B | =3+4 |\n| `标记` | "原文" |';
+  put({ id: 'table-reply', conversationId: 'main', role: 'assistant', projectId: project.id,
+    text: tableText + '\n\n```md\n' + tableText + '\n```' });
   put({ id: 'main-reply', conversationId: 'main', role: 'assistant', text: mainText, projectId: project.id,
     progress: { phase: 'responding', observedAt: createdAt, detail: '内部详情标记' } });
   const projectTexts = Array.from({ length: 64 }, (_, index) => '项目甲历史消息-' + String(index + 1).padStart(3, '0'));
+  const projectLast = projectTexts.at(-1)! + '\n\n' + tableText;
   for (const [index, text] of projectTexts.entries()) {
-    put({ id: 'project-' + index, conversationId: `project:${project.id}:work`, projectId: project.id, role: index % 2 ? 'assistant' : 'user', text });
+    put({ id: 'project-' + index, conversationId: `project:${project.id}:work`, projectId: project.id, role: index % 2 ? 'assistant' : 'user', text: index === projectTexts.length - 1 ? projectLast : text });
   }
   put({ id: 'other', conversationId: `project:${other.id}:work`, projectId: other.id, role: 'user', text: '其他项目隔离标记' });
   put({ id: 'memory', conversationId: `project:${project.id}:memory`, projectId: project.id, role: 'assistant', text: '项目记忆隔离标记' });
@@ -56,6 +60,15 @@ test('从主对话和项目工作区导出完整 Markdown，并通过插件配�
   const open = page.getByRole('button', { name: '导出对话', exact: true });
   const drawer = page.getByRole('dialog', { name: '导出对话', exact: true });
   const steps = drawer.getByRole('checkbox', { name: '包含公开工作步骤' });
+  const tableMessage = page.locator('#chat [data-id="table-reply"]');
+  await expect(tableMessage.getByRole('table')).toHaveCount(1);
+  await expect(tableMessage.getByRole('cell', { name: 'A|B', exact: true })).toBeVisible();
+  const copyTable = tableMessage.getByRole('button', { name: '复制表格' });
+  await copyTable.click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('字段\t值\nA|B\t\'=3+4\n标记\t"""原文"""');
+  const html = await page.evaluate(async () => (await (await navigator.clipboard.read())[0]!.getType('text/html')).text());
+  assert.match(html, /<table/);
+  assert.match(html, /'=3\+4/);
   await open.click();
   await expect(steps).not.toBeChecked();
   const plain = await downloadMarkdown(page, drawer);
@@ -79,7 +92,10 @@ test('从主对话和项目工作区导出完整 Markdown，并通过插件配�
   await expect(log).not.toContainText(projectTexts[0]);
   const projectCopy = log.locator('[data-id="project-63"]').getByRole('button', { name: '复制正文', exact: true });
   await projectCopy.click();
-  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), projectTexts.at(-1));
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), projectLast);
+  const projectTable = log.getByRole('button', { name: '复制表格' });
+  await projectTable.click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toMatch(/^字段\t值/);
   await open.click();
   const projectMarkdown = await downloadMarkdown(page, drawer);
   assert.deepEqual(projectMarkdown.match(/项目甲历史消息-\d+/g), projectTexts);
@@ -97,11 +113,22 @@ test('从主对话和项目工作区导出完整 Markdown，并通过插件配�
   }
   await togglePlugin('停用');
   await expect(projectCopy).toHaveCount(0);
+  await expect(projectTable).toHaveCount(0);
   await expect(open).toHaveCount(0);
   await page.goto(server.url + '/#chat');
   await expect(page.locator('#message-text')).toBeVisible();
   await expect(open).toHaveCount(0);
+  await expect(copyTable).toHaveCount(0);
+  await expect(tableMessage.getByRole('table')).toBeVisible();
   await togglePlugin('启用');
+  await expect(copyTable).toBeVisible();
+  await page.evaluate(async () => {
+    await navigator.clipboard.writeText('旧剪贴板');
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+  });
+  await copyTable.click();
+  await page.evaluate(() => Reflect.deleteProperty(navigator, 'clipboard'));
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toMatch(/^字段\t值/);
   await open.click();
   await expect(drawer.getByLabel('Markdown 预览')).toContainText('主对话的独立正文');
 });
