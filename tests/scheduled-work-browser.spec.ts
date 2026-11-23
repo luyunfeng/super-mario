@@ -204,9 +204,10 @@ test('创建失败/409 保留输入及 key；重复点击只有一个在途写�
   const { page } = f;
   await open(page); await drawer(page).getByRole('textbox', { name: '标题', exact: true }).fill('保留草稿');
   await drawer(page).getByLabel('频率', { exact: true }).selectOption('interval');
-  await drawer(page).getByLabel('间隔分钟', { exact: true }).fill('0.1'); await submit(page);
+  await drawer(page).getByLabel('重复间隔', { exact: true }).fill('0.1'); await submit(page);
   await expect(drawer(page)).toContainText('间隔至少为 10 秒'); assert.equal(f.writes.length, 0);
-  await drawer(page).getByLabel('间隔分钟', { exact: true }).fill('2');
+  await drawer(page).getByLabel('重复间隔', { exact: true }).fill('2');
+  await drawer(page).getByLabel('间隔单位').selectOption('3600');
   for (const [index,status] of [409, 503].entries()) {
     f.writeStatus = status; await submit(page);
     await expect.poll(()=>f.writes.length).toBe(index+1);
@@ -220,7 +221,7 @@ test('创建失败/409 保留输入及 key；重复点击只有一个在途写�
   await chat.close();
   await expect(drawer(page).getByRole('textbox', { name: '标题', exact: true })).toHaveValue('保留草稿');
   assert.deepEqual(f.writes[0].body, f.writes[1].body);
-  assert.equal(f.writes[0].body.schedule.everySec, 120);
+  assert.equal(f.writes[0].body.schedule.everySec, 7200);
   f.holdWrite = true;
   await submit(page); await expect.poll(() => f.held.length).toBe(1);
   await drawer(page).getByRole('button', { name: '提交创建审批' }).evaluate((el: HTMLButtonElement) => { el.click(); el.click(); });

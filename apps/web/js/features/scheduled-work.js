@@ -329,7 +329,8 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     const until = Input({ type: 'datetime-local', name: 'until' });
     const untilField = Field({ label: '结束时间（可选）', control: until, hint: '使用浏览器时区 ' + Intl.DateTimeFormat().resolvedOptions().timeZone + '。该时刻起停止触发。' });
     const daily = Input({ type: 'time', value: '09:00', name: 'dailyTime' });
-    const minutes = Input({ type: 'number', min: 1 / 6, step: 'any', value: 60, name: 'minutes' });
+    const intervalValue = Input({ type: 'number', min: 0, step: 'any', value: 60, name: 'intervalValue' });
+    const intervalUnit = Select({ options: [['60', '分钟'], ['3600', '小时'], ['86400', '天']] });
     const cron = Input({ name: 'cron', placeholder: '0 9 * * *' });
     const zone = Input({ name: 'tz', value: snapshot().workspaceTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai' });
     const action = Select({ name: 'action', options: [['brief', '事实简报'], ['dispatch', '派给执行者']] });
@@ -356,7 +357,8 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       h('div', { class: 'row row--wrap' },
         Button({ label: '周一至周五', size: 'sm', onClick: () => pickDays([1, 2, 3, 4, 5]) }),
         Button({ label: '周末', size: 'sm', onClick: () => pickDays([6, 0]) }))));
-    const intervalField = Field({ label: '间隔分钟', control: minutes, hint: '最少 10 秒（1/6 分钟）。' });
+    const intervalField = h('div', { class: 'row row--wrap' }, Field({ label: '重复间隔', control: intervalValue, hint: '最少 10 秒。' }),
+      Field({ label: '间隔单位', control: intervalUnit }));
     const cronExamples = [
       ['周一至周五 09:00', '0 9 * * 1-5'],
       ['周一至周五 09:00 至 18:30，每半小时', '*/30 9-18 * * 1-5'],
@@ -397,7 +399,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
         if (Date.parse(at) <= Date.now()) throw new Error('触发时间已过，请选择未来的时间。');
         schedule = { kind: 'once', at, tz: Intl.DateTimeFormat().resolvedOptions().timeZone };
       } else if (frequency.value === 'interval') {
-        const everySec = Number(minutes.value) * 60;
+        const everySec = Number(intervalValue.value) * Number(intervalUnit.value);
         if (!Number.isFinite(everySec) || everySec < 10) throw new Error('间隔至少为 10 秒。');
         schedule = { kind: 'interval', everySec };
       } else {
@@ -499,7 +501,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       doneWhen.value = template.doneWhen;
       if (template.everyMinutes) {
         frequency.value = 'interval';
-        minutes.value = String(template.everyMinutes);
+        intervalValue.value = String(template.everyMinutes);
       } else {
         frequency.value = 'weekly';
         weeklyTime.value = template.time;
