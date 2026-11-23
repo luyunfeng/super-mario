@@ -16,6 +16,8 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
     ctx.contribute('web_extensions','chart',{slot:'advanced-interface',renderer:'chart',kind:'bar',title:'数量变化',points:[{label:'昨日',value:-3},{label:'今日',value:5}],fallback:'数量变化摘要'});
     ctx.contribute('web_extensions','line',{slot:'advanced-interface',renderer:'chart',kind:'line',title:'单点趋势',points:[{label:'当前',value:0}],fallback:'当前为零'});
     ctx.contribute('web_extensions','area',{slot:'advanced-interface',renderer:'chart',kind:'area',title:'跨零走势',points:[{label:'昨日',value:-1},{label:'今日',value:1}],fallback:'由负转正'});
+    for (const kind of ['pie','donut']) ctx.contribute('web_extensions',kind,{slot:'advanced-interface',renderer:'chart',kind,title:'占比 '+kind,
+      points:[{label:'甲',value:Number.MAX_VALUE},{label:'乙',value:Number.MAX_VALUE},{label:'扣减',value:-2}],fallback:'两类各占一半'});
     ctx.contribute('web_extensions','future',{slot:'advanced-interface',renderer:'future',title:'其他格式',fallback:'纯文字说明'});
   }}`);
   const server=await startServer({host:'127.0.0.1',port:0,dataDir,demo:true});
@@ -40,6 +42,12 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   const area=page.getByRole('region',{name:'跨零走势'});
   await expect(area.locator('polygon')).toHaveAttribute('points','75,50 75,96 225,4 225,50');
   await expect(area.locator('polyline')).toHaveAttribute('points','75,96 225,4');
+  for (const kind of ['pie','donut']) {
+    const round=page.getByRole('region',{name:'占比 '+kind});
+    await expect(round.getByRole('cell',{name:'50%',exact:true})).toHaveCount(2);
+    await expect(round.getByRole('row',{name:/扣减/})).toContainText('0%');
+    await expect(round.locator('div[aria-hidden]')).toHaveCSS('background-image',/conic-gradient/);
+  }
   const stopped=await page.request.post(server.url+'/api/v1/plugins/review',{data:{enabled:false}});
   assert.equal(stopped.status(),200);
   await expect(patch).toHaveCount(0);

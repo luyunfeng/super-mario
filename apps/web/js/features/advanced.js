@@ -7,10 +7,36 @@ import { createAgentArtifactsUI } from '../legacy/agent-artifacts.js';
 import { createBackgroundPage } from '../legacy/background-page.js';
 const node = (tag, text, className) => { const value = document.createElement(tag); if (text !== undefined) value.textContent = text; if (className) value.className = className; return value; };
 
+function shareChart(card) {
+  const max = card.points.reduce((largest, point) => Math.max(largest, point.value), 0);
+  const weights = card.points.map(point => max ? Math.max(point.value, 0) / max : 0);
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  const stops = [];
+  let end = 0;
+  const rows = card.points.map((point, index) => {
+    const share = total ? weights[index] / total : 0;
+    const color = 'hsl(' + (index * 137.5 % 360) + ' 50% 46%)';
+    if (share > 0) {
+      const start = end;
+      end += share * 100;
+      stops.push(color + ' ' + start + '% ' + end + '%');
+    }
+    const percent = share > 0 && share < 0.01 ? '<1%' : Math.round(share * 1000) / 10 + '%';
+    return h('tr',{},h('th',{scope:'row'},h('span',{'aria-hidden':'true',style:{color}},'● '),point.label),
+      h('td',{},point.value),h('td',{},percent));
+  });
+  const graph = h('div',{'aria-hidden':'true',style:{width:'120px',height:'120px',borderRadius:'50%',
+    background:stops.length ? 'conic-gradient(' + stops.join(',') + ')' : 'var(--line)',
+    maskImage:card.kind === 'donut' ? 'radial-gradient(circle, transparent 38%, black 39%)' : 'none'}});
+  return h('div',{class:'stack'},graph,h('table',{class:'table','aria-label':card.title},
+    h('thead',{},h('tr',{},['项目','数值','占比'].map(label=>h('th',{scope:'col'},label)))),h('tbody',{},rows)));
+}
+
 function extensionChart(card) {
   const points = card.points;
-  if (!['bar','line','area'].includes(card.kind) || !Array.isArray(points) || !points.length ||
+  if (!['bar','line','area','pie','donut'].includes(card.kind) || !Array.isArray(points) || !points.length ||
       !points.every(point => typeof point?.label === 'string' && Number.isFinite(point.value))) return;
+  if (card.kind === 'pie' || card.kind === 'donut') return shareChart(card);
   const scale = points.reduce((max, point) => Math.max(max, Math.abs(point.value)), 0) || 1;
   const low = points.reduce((min, point) => Math.min(min, point.value / scale), 0);
   const high = points.reduce((max, point) => Math.max(max, point.value / scale), 0);
