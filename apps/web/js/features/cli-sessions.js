@@ -1,26 +1,17 @@
 // CLI 元数据只证明历史。发现是只读操作，恢复只能提出审批。
 import { h, replace } from '../lib/dom.js';
-import { Button, Card, Banner, Empty, Field, Input, TextArea, Select, Check, Pill } from '../ui/kit.js';
+import { Button, Card, Banner, Empty, Input, Select, Pill } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 import { messageFavoritesActive, openNativeMessages } from './message-favorites.js';
+import { openSessionResume } from './session-resume.js';
 import { createConversationSharing } from './conversation-sharing.js';
 import { conversationExportActive, openConversationExport } from './conversation-export.js';
 
 const wrap = { minWidth: '0', maxWidth: '100%', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' };
 const text = (value) => h('p', { class: 'small', style: wrap }, value);
-function requestKey() {
-  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
-  const hex = [...bytes].map(n => n.toString(16).padStart(2, '0')).join('');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
 export function createCliSessions({ api, store, router }) {
   let data = null, error = '', loading = false, seq = 0, signature = '', identity = '', painted = '';
   const cache = new Map();
-  // 保留未知请求，关闭抽屉或切页也不能使同一次申请获得新的 key。
-  const requests = new Map();
   const machines = Select({ options: [['', '全部电脑']], 'aria-label': 'CLI 会话电脑' });
   const projects = Select({ options: [['', '全部项目']], 'aria-label': 'CLI 会话项目' });
   const keyword = Input({ type: 'search', placeholder: '会话 ID、目录或执行者', 'aria-label': 'CLI 会话关键词' });
@@ -45,7 +36,7 @@ export function createCliSessions({ api, store, router }) {
   );
 
   function sharingActive() {
-    return visible() && !store.view.unauthorized && Boolean(api.draftOwner()) && api.draftOwner()===store.view.snapshotOwner &&
+    return visible() && !store.view.unauthorized && Boolean(api.draftOwner?.()) && api.draftOwner()===store.view.snapshotOwner &&
       store.view.snapshot?.plugins?.some(p=>p.id==='conversation-sharing' && p.status==='active');
   }
   function openSharing(machineId,{executorId,nativeSessionId,cwd}) {
@@ -114,7 +105,7 @@ export function createCliSessions({ api, store, router }) {
             online && canExport(machine.machineId) && Button({ label: '导出对话', size: 'sm', onClick: (_, button) => exportHistory(machine.machineId, session, button) }),
             online && current?.capabilities.includes('agents.usage') && Button({ label: '上下文与 Token 用量', size: 'sm', onClick: () => openUsage(machine, session) }),
             session.resumable && online && machine.available
-              ? Button({ label: '申请恢复', size: 'sm', onClick: () => openResume(machine, session) })
+              ? Button({ label: '申请恢复', size: 'sm', onClick: () => openSessionResume({ api, store, router, machine, session, projectId: projects.value }) })
               : text(session.reason || machine.reason || (!online ? '电脑离线，不能申请恢复。' : '此记录暂不支持恢复。'))))),
         !rows.length && Empty({ title: machine.available && online ? '没有符合条件的历史记录' : '暂时无法读取会话', text: machine.reason || (!online ? '电脑离线' : undefined) }));
     }));
@@ -179,95 +170,5 @@ export function createCliSessions({ api, store, router }) {
     } catch (error) { if (drawer.el.open && auth === context()) replace(body, text(error.message)); }
   }
 
-  function openResume(machine, session) {
-    const auth = api.token();
-    const id = JSON.stringify([auth, machine.machineId, session.executorId, session.nativeSessionId, session.cwd]);
-    let record = requests.get(id);
-    const project = Select({ options: [['', '不关联项目'], ...(store.view.snapshot?.projects ?? []).filter(p => !p.archivedAt).map(p => [p.id, p.name])], value: record?.payload.projectId ?? projects.value });
-    const mode = Select({ options: [['task', '单次任务'], ['interactive', '交互会话']], value: record?.payload.executionMode ?? 'task' });
-    const todo = Select({ options: [] });
-    function refreshTodos(selected) {
-      const rows = (store.view.snapshot?.todos ?? []).filter(row => !row.completedAt && (row.projectId ?? '') === project.value);
-      replace(todo, h('option', { value: '' }, '不关联待办'), rows.map(row => h('option', { value: row.id }, row.title)));
-      if (selected && record && !rows.some(row => row.id === selected)) todo.append(h('option', { value: selected }, selected));
-      todo.value = selected ?? '';
-    }
-    refreshTodos(record?.payload.todoId);
-    project.addEventListener('change', () => refreshTodos(''));
-    const prompt = TextArea({ rows: 4, required: true, value: record?.payload.prompt ?? '' });
-    const doneWhen = TextArea({ rows: 3, required: true, value: record?.payload.doneWhen ?? '' });
-    const minutes = Input({ type: 'number', min: 1, step: 'any', required: true, value: record?.payload.expectMinutes ?? '' });
-    const message = h('div', { style: wrap });
-    const mismatch = h('div');
-    const taskFields = h('div', { class: 'stack' }, Field({ label: '完成标准', control: doneWhen, required: true }),
-      Field({ label: '预计用时（分钟）', control: minutes, required: true }));
-    let confirmed = false;
-    const locked = () => Boolean(record);
-    const compatible = () => {
-      const chosen = store.view.snapshot?.projects?.find(p => p.id === project.value);
-      const root = chosen?.workspace?.cwd.replace(/\/+$/, '');
-      return !chosen?.workspace || (chosen.workspace.machineId === machine.machineId && (root === session.cwd || session.cwd.startsWith(root + '/')));
-    };
-    function sync() {
-      const task = mode.value === 'task';
-      taskFields.hidden = !task;
-      submit.disabled = locked() || !confirmed || !compatible() || !prompt.value.trim() || (task && (!doneWhen.value.trim() || !minutes.validity.valid || !(Number(minutes.value) > 0)));
-      replace(mismatch, !compatible() && Banner({ tone: 'warn', children: '项目 workspace 与此会话的电脑或目录不匹配。请换项目或不关联；不会更换会话电脑或目录。' }));
-      for (const control of [project, todo, mode, prompt, doneWhen, minutes]) control.disabled = locked();
-    }
-    for (const control of [project, todo, mode, prompt, doneWhen, minutes]) {
-      control.addEventListener('input', sync); control.addEventListener('change', sync);
-    }
-    const confirmation = Check({ label: '我已确认原终端已停止', onChange: value => { confirmed = value; sync(); } });
-    function approvalEntry(approval) {
-      replace(message, Banner({ tone: 'warn', children: `审批 ${approval.id} · ${approval.status}。${approval.status === 'pending' ? '申请只创建审批，尚未执行；需要在审批中确认。' : '审批已有处理结果，请查看关联执行；不能据此认定CLI工作完成。'}` }),
-        Button({ label: '查看审批', onClick: () => {
-          openDrawer({ title: '恢复申请审批', subtitle: `审批 ${approval.id} · ${approval.status}`,
-            body: [text('请到“等你处理”核对并确认审批。创建申请不表示恢复成功。'), text(approval.title ?? ''), text(JSON.stringify(approval.params, null, 2))],
-            footer: Button({ label: '去待处理审批', onClick: () => { document.querySelectorAll('dialog.drawer').forEach(el => el.close()); router.go(router.href('chat')); } }) });
-        } }));
-    }
-    const check = Button({ label: '只读核对申请', onClick: async () => {
-      if (api.token() !== auth || !record || record.status !== 'unknown') return;
-      try {
-        const result = await api.get(`/agents/sessions/resume-request?${new URLSearchParams({ machineId: record.payload.machineId, key: record.payload.key })}`);
-        if (api.token() !== auth) return;
-        if (result.approval) { record.status = 'pending'; record.approval = result.approval; approvalEntry(result.approval); }
-        else unknownNote('尚未查到审批。原请求仍保留且已锁定，不会自动重发。');
-      } catch (cause) { unknownNote(`核对失败：${cause.message}。原请求仍已锁定。`); }
-    } });
-    function unknownNote(note = '申请结果未知。已锁定重复提交，请只读核对。') {
-      replace(message, Banner({ tone: 'danger', children: note }), text(`请求 key：${record.payload.key}`), check);
-    }
-    const submit = Button({ label: '提交恢复审批', kind: 'primary', disabled: true, onClick: async () => {
-      sync(); if (submit.disabled) return;
-      if (api.token() !== auth || !ready()) { replace(message, Banner({ tone: 'danger', children: '连接或令牌已变化，请关闭后重新读取。' })); return; }
-      const current = store.view.snapshot?.machines?.find(m => m.id === machine.machineId);
-      if (current && !current.online) { replace(message, Banner({ tone: 'warn', children: '电脑已离线，请重新读取。' })); return; }
-      const payload = { machineId: machine.machineId, executorId: session.executorId, nativeSessionId: session.nativeSessionId, cwd: session.cwd,
-        ...(project.value ? { projectId: project.value } : {}), ...(todo.value && { todoId: todo.value }), prompt: prompt.value.trim(),
-        ...(mode.value === 'task' ? { doneWhen: doneWhen.value.trim(), expectMinutes: Number(minutes.value) } : { executionMode: 'interactive' }), key: requestKey() };
-      record = { payload, status: 'sending' }; requests.set(id, record); sync();
-      try {
-        const approval = await api.post('/agents/sessions/resume', payload);
-        if (!approval?.id || approval.kind !== 'dispatch') throw new Error('unknown：未收到有效审批');
-        record.status = 'pending'; record.approval = approval;
-        if (api.token() === auth) { approvalEntry(approval); store.refresh(); }
-      } catch (cause) {
-        if (!cause.status || cause.status >= 500 || /unknown/i.test(cause.message)) { record.status = 'unknown'; if (api.token() === auth) unknownNote(); }
-        else { requests.delete(id); record = null; replace(message, Banner({ tone: 'danger', children: `申请未创建：${cause.message}` })); }
-      }
-      sync();
-    } });
-    openDrawer({ title: '申请恢复 CLI 会话', body: [
-      Banner({ tone: 'warn', children: '审批通过后会新建 CLI 进程，续用历史会话。请确认原终端已停止。单次任务采集执行结果；交互会话可继续接收输入。' }),
-      text(`电脑：${machine.machineName}\n执行者：${session.executorId}\n原生 ID：${session.nativeSessionId}\n目录：${session.cwd}`),
-      Field({ label: '关联项目（可选）', control: project }), mismatch,
-      Field({ label: '关联待办（可选）', control: todo }), Field({ label: '恢复方式', control: mode }),
-      Field({ label: '恢复后要做什么', control: prompt, required: true }), taskFields, confirmation, message], footer: submit });
-    if (record?.approval) approvalEntry(record.approval);
-    else if (record?.status === 'unknown') unknownNote();
-    sync();
-  }
   return { el, onShow() { update(); if (!loading) load(); }, onState: update };
 }

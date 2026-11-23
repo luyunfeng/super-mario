@@ -3155,6 +3155,7 @@ test('Web 和飞书询问怎样开工时提供表单说明并保留当前执行�
     assert.match(req.system, /查看详情需要 Web 访问权限/);
     assert.match(req.system, /引用任务承接消息或预览发送 \/noreply 取消/);
     assert.match(req.system, /只询问操作方法时不要派发/);
+    assert.match(req.system, /创建恢复审批后只报告审批状态/);
     assert.match(req.system, /收到编号只说明已登记/);
     assert.match(req.system, /结果未知时按原编号查询/);
     return { role: 'assistant', content: reply };

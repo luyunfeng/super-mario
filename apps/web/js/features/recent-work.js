@@ -1,4 +1,5 @@
 import { h, replace } from '../lib/dom.js';
+import {createContinueRun} from './continue-run.js';
 import { recentWork } from '../lib/recent-work.js';
 import { formatDate } from '../lib/format.js';
 import { Button } from '../ui/kit.js';
@@ -6,6 +7,7 @@ import { openDrawer } from '../ui/overlay.js';
 import { openTodoHistory } from './todo-history.js';
 
 export function createRecentWork({ api, store, router, scope }) {
+  const continuation=createContinueRun({api,store,router,scope});
   let snapshot, drawer, body, drawSignature, limit = 20;
   const entry = Button({ label: '最近完成', size: 'sm', onClick: () => {
     if (drawer) return;
@@ -20,7 +22,8 @@ export function createRecentWork({ api, store, router, scope }) {
     el.hidden = !items.length && !drawer;
     entry.textContent = `最近完成 ${items.length}`;
     if (!body) return;
-    const signature = JSON.stringify([scope.get(), limit, items.map(item => [item.id, item.at, item.value.title, item.value.prompt]), snapshot?.projects]);
+    const targets=new Map(items.slice(0,limit).filter(item=>item.kind==='run').map(item=>[item.id,continuation.target(item.value.id)]));
+    const signature = JSON.stringify([scope.get(),store.view.snapshotOwner,Array.from(targets), limit, items.map(item => [item.id, item.at, item.value.title, item.value.prompt]), snapshot?.projects]);
     if (signature === drawSignature) return;
     drawSignature = signature;
     const todoCount = items.filter(item => item.kind === 'todo').length;
@@ -33,8 +36,10 @@ export function createRecentWork({ api, store, router, scope }) {
         const control = item.kind === 'todo'
           ? Button({ label: title, kind: 'ghost', onClick: () => { drawer.close(); openTodoHistory({ api, store, router, todo: value }); } })
           : h('a', { class: 'btn btn--ghost', href: router.href('projects', value.projectId || 'all', 'runs', value.id), onclick: () => drawer.close() }, title);
+        const openedDrawer=drawer;
         return h('div', { class: 'item', dataset: { recentId: item.id } }, h('div', { class: 'item__main' }, control,
-          h('span', { class: 'item__meta' }, `${name} · ${project} · ${formatDate(item.at, true)}`)));
+          h('span', { class: 'item__meta' }, `${name} · ${project} · ${formatDate(item.at, true)}`)),
+          continuation.button(targets.get(item.id),{visible:()=>drawer===openedDrawer && openedDrawer.el.open,beforeOpen:()=>openedDrawer.close()}));
       }), !items.length && h('p', { class: 'muted' }, '当前范围最近 24 小时没有完成记录。'),
       items.length > limit && Button({ label: `查看更多（剩余 ${items.length - limit}）`, onClick: () => { limit += 20; paint(); } }));
   }

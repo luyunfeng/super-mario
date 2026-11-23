@@ -1,4 +1,5 @@
 import { h, replace } from '../lib/dom.js';
+import {createContinueRun} from '../features/continue-run.js';
 import { personalGroupSize } from '../lib/group-size.js';
 import { Card } from '../ui/kit.js';
 import { Hint } from '../ui/hint.js';
@@ -62,6 +63,7 @@ function priorityCard(title, sub, rows, link, empty) {
 }
 
 export function createHomePage({ api, router, scope, store }) {
+  const continuation=createContinueRun({api,store,router,scope});
   const body = h('div', { class: 'stack stack--lg' });
   const el = h('section', { class: 'page', id: 'home' }, h('div', { class: 'page__inner' },
     h('header', { class: 'page__head' }, h('h1', null, '首页'), Hint('nav.home')), body));
@@ -149,7 +151,9 @@ export function createHomePage({ api, router, scope, store }) {
           items.slice(0, 2).flatMap((item, index) => {
             const path = tab === 'todos' ? ['todos', 'detail'] : ['runs'];
             const title = tab ? h('a', { href: router.href('projects', p.id || 'all', ...path, item.id) }, item.title) : item.title;
-            return index ? ['、', title] : [title];
+            const target=tab==='runs' && name==='执行结束' && continuation.target(item.id);
+            const action=target && (target.projectId || '')===p.id && continuation.button(target);
+            return [index ? '、' : '', title, action];
           }))),
         chats.length > 0 && muted('有群聊动态：' + chats.map(g => g.name).join('、')),
         window && !chats.length && !updates.some(([,items]) => items.length) && muted('最近 24 小时没有更新。'));
