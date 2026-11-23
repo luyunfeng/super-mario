@@ -51,7 +51,8 @@ export function readConversationStatus(store: Pick<Store, 'list' | 'get'>, input
     const owner = card.runId ? runIds.get(card.runId) : origin && inputs.get(origin);
     return owner && (!card.projectId || card.projectId === (owner.projectId ?? workProject));
   }).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || a.id.localeCompare(b.id));
-  const last = currentMessages.find(message => message.text.trim());
+  // A removed queue item still settles the turn, but its draft is no longer a conversation excerpt.
+  const last = currentMessages.find(message => message.queueState !== 'withdrawn' && message.queueState !== 'cancelled' && message.text.trim());
   const active = runs.filter(run => run.status === 'queued' || run.status === 'running');
   const lastRun = runs.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
   const latest = lastRun && (!currentMessages[0] || Date.parse(lastRun.updatedAt) >= Date.parse(currentMessages[0].createdAt)) ? lastRun : currentMessages[0];
