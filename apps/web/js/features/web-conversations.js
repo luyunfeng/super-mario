@@ -1,3 +1,4 @@
+import {attachSentHistory} from './sent-history.js';
 import {createMessageQueue} from './message-queue.js';
 import {createQueuedDraftEditor} from './edit-queued.js';
 import {turnQueueActive,queueLabel} from './stop-turn.js';
@@ -103,7 +104,12 @@ export function createWebConversations({api,store,scope,router}){
     isSending:()=>pending,persist:()=>store.view.snapshot?.plugins.some(p=>p.id==='conversation-drafts' && p.status==='active')});
   const queue=createMessageQueue(api,store,messages,id=>href(current.id,id),item=>queuedEdit.action(rows.find(row=>row.id===item.id) || item,true));
   form.prepend(queue.el);
+  const history=attachSentHistory({input,store,currentConversationOnly:true,context:()=>({
+    key:meta && !meta.archived && valid(current) ? draftKey : null,owner:drafts.owner(),
+    draftsEnabled:store.view.snapshot?.plugins.some(p=>p.id==='conversation-drafts' && p.status==='active')
+  })});
   function confirmed(ctx){
+    if(context().key===ctx.key)history.record(ctx);
     pictures.accepted(ctx);files.accepted(ctx);drafts.clearIf(ctx.key,ctx.draft);
     if(ctx.captured)quote.accepted(ctx.key,ctx.captured);
     if(context().key===ctx.key && input.value===ctx.draft)input.value=drafts.read(ctx.key);
@@ -144,7 +150,7 @@ export function createWebConversations({api,store,scope,router}){
     }
   }
   function reset(){
-    queue.update(null);queuedEdit.observe(null,drafts.owner(),false);queueEnabled=false;imageExport.reset();pictures.update(null,drafts.owner(),false,false);files.update(null,drafts.owner(),false);
+    history.reset();queue.update(null);queuedEdit.observe(null,drafts.owner(),false);queueEnabled=false;imageExport.reset();pictures.update(null,drafts.owner(),false,false);files.update(null,drafts.owner(),false);
     canStop=false;retryEnabled=false;editEnabled=false;edit.reset();prompts.changeScope();quoteKey=null;quote.restore(null);
     exportButton.hidden=true;exportDrawer?.close();exportDrawer=null;search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
     translation.update([]);favorites.update();input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
@@ -234,7 +240,7 @@ export function createWebConversations({api,store,scope,router}){
   function deleted(id,owner){
     if(owner!==drafts.owner())return;
     const key=JSON.stringify(['web',id]);
-    pictures.forget(owner,key);files.forget(owner,key);drafts.forget(key);drafts.forget(quoteDraftKey(key));submissions.forgetScope(owner,key);
+    history.forget(owner,key);pictures.forget(owner,key);files.forget(owner,key);drafts.forget(key);drafts.forget(quoteDraftKey(key));submissions.forgetScope(owner,key);
     if(routeId()!==id)return;
     reset();current={id,owner,deleted:true};notice.textContent='该独立对话已删除，原链接已失效。';
     if(unconfirmedDeletion?.id===id && unconfirmedDeletion.owner===owner){

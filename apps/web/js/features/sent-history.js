@@ -111,5 +111,7 @@ export function attachSentHistory({ input, store, context, currentConversationOn
     put(next);
     recalled = { key: scope.key, owner: scope.owner, text: next };
   });
-  return { record, reset() { recalled = undefined; searchDrawer?.close(); } };
+  return { record, forget(owner,key) {
+    try { localStorage.removeItem(prefix(owner)+key); } catch { /* Browser storage can be disabled. */ }
+  }, reset() { recalled = undefined; searchDrawer?.close(); } };
 }

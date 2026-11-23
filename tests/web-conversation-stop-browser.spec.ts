@@ -62,6 +62,15 @@ test('独立对话停止按钮只中断原线待处理的本人输入，归档�
   assert.deepEqual(edited.files,server.app.store.get<Message>('messages',waitingId)?.files);
   assert.equal(edited.files?.[0]?.name,'排队附件.txt');
   await region.locator('[data-id="'+edited.id+'"]').getByRole('button',{name:'取消排队'}).click();
+  const composer=region.locator('textarea');
+  await expect(composer).toHaveValue('');
+  await composer.press('ArrowUp');
+  await expect(composer).toHaveValue('取回后修改的消息');
+  await composer.fill('');
+  await composer.press('Control+r');
+  const recalled=page.getByRole('dialog').getByRole('button',{name:'取回后修改的消息'});
+  await recalled.click();
+  await expect(composer).toHaveValue('取回后修改的消息');
   const extra=await page.request.post(path+'/'+a+'/messages',{headers,data:{text:'合成取消排队'}});
   const extraId=(await extra.json()).id;
   const queuedRow=region.locator('[data-id="'+extraId+'"]');
@@ -70,6 +79,8 @@ test('独立对话停止按钮只中断原线待处理的本人输入，归档�
   assert.equal(server.app.store.get<Message>('messages',extraId)?.queueState,'cancelled');
   assert.equal(started,2);
   await page.goto(url(b)+'&at='+inputs[1]!.id);await expect(stop(inputs[0]!.id)).toHaveCount(0);
+  await composer.press('ArrowUp');
+  await expect(composer).toHaveValue('');
   await expect(region.getByRole('button',{name:'取消排队'})).toHaveCount(0);
   const endpoint=path+'/'+b+'/messages/'+inputs[1]!.id+'/stop';
   const requested=page.waitForResponse(r=>r.request().method()==='POST' && r.url()===endpoint);
