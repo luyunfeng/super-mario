@@ -414,7 +414,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const cap = app.store.get<CardNavigation>('feishu.card.navigation',grant);
       if (!cap || cap.expiresAt <= Date.now()) return;
       app.store.put('feishu.card.navigation',grant,{...cap,sessionSnapshot:snapshot});
-      const entry = await put(bot,{direction:'outbox',eventKey:key,title:'CLI 会话',text:'本次发现 '+snapshot.total+' 条原生会话记录。',target:paired.chatId,sourceMessageId:messageId,requiresConfirmation:false},bot.scope,{dashboard:{owner:paired,card:sessionCard(snapshot,grant)}});
+      const entry = await put(bot,{direction:'outbox',eventKey:key,title:'CLI 会话',text:'本次发现 '+snapshot.total+' 条原生会话记录。'+(snapshot.warnings.length?'部分电脑或记录未能完整读取。':''),target:paired.chatId,sourceMessageId:messageId,requiresConfirmation:false},bot.scope,{dashboard:{owner:paired,card:sessionCard(snapshot,grant)}});
       if (entry.status === 'ready') await app.mailboxes.process(entry.id,entry.version);
 
     })().finally(()=>sessionReads.delete(jobKey));

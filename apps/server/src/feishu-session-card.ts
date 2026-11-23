@@ -3,6 +3,7 @@ import { cardButtons, cardDocument, cardPlain, cardSection } from './feishu-card
 export type SessionList = { capturedAt: string; machines: Array<{ machineId?: string; machineName: string; online?: boolean; available?: boolean; warnings?: string[]; reason?: string; truncated: boolean; sessions: Array<{ executorId: string; nativeSessionId: string; parentNativeSessionId?: string; archived?: boolean; cwd: string; fileModifiedAt?: string; resumable: boolean }> }> };
 export function sessionCardSnapshot(result: SessionList) {
   const all = result.machines.flatMap(m => {
+    if (m.online === false || m.available === false) return [];
     const key = (executorId: string, id: string) => JSON.stringify([executorId, id]);
     const visible = new Set(m.sessions.map(s => key(s.executorId, s.nativeSessionId)));
     return m.sessions.map(s => ({
@@ -13,7 +14,11 @@ export function sessionCardSnapshot(result: SessionList) {
     }));
   }).sort((a,b) => b.time.localeCompare(a.time));
   return { capturedAt: result.capturedAt, total: all.length, rows: all.slice(0,100),
-    warnings: result.machines.flatMap(m => m.reason || m.truncated ? [m.machineName + '：' + (m.reason || '记录已截断')] : []).slice(0,5) };
+    warnings: result.machines.flatMap(m => {
+      const reason = m.reason || (m.online === false ? '电脑离线' : m.available === false ? '会话发现不可用' : '');
+      const notes = [reason, ...(m.warnings ?? []), m.truncated && '记录已截断'].filter(Boolean);
+      return notes.length ? [m.machineName.slice(0,100) + '：' + notes.join('；').slice(0,300)] : [];
+    }).slice(0,5) };
 }
 export type SessionCardSnapshot = ReturnType<typeof sessionCardSnapshot>;
 export function sessionCard(data: SessionCardSnapshot, navigation: string, requestedPage = 0) {
@@ -27,7 +32,7 @@ export function sessionCard(data: SessionCardSnapshot, navigation: string, reque
       kind:'workbench.resumeForm', navigation, index: page * 5 + offset,
     }}]));
   }
-  if (!data.rows.length) elements.push(...cardSection('CLI 会话','本次没有读到会话记录。'));
+  if (!data.rows.length) elements.push(...cardSection('CLI 会话',data.warnings.length ? '读取范围不完整，请核对下方的电脑状态后重新读取。' : '本次没有读到会话记录。'));
   const navigate = (p:number) => ({kind:'workbench.sessions', navigation, page:p});
   elements.push(...cardButtons([
     ...(page ? [{label:'上一页',value:navigate(page-1)}] : []),
