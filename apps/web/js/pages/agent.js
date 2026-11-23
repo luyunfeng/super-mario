@@ -59,13 +59,38 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
     body: botStatus,
   });
   const commandGroup = createCommandGroupCard({ api, store });
+  const linkNotice=h('p',{class:'small',role:'alert',hidden:true});
+  let privateLink;
+  function linkStatus(message) {linkNotice.textContent=message;linkNotice.hidden=!message;}
+  function openHistory(bot,link) {
+    const history=openPrivateThreads({api,bot,store,target:link,onClose(reason) {
+      if(privateHistory!==history) return;
+      privateHistory=undefined;
+      if(!link || privateLink!==link || router.current.canonical!==link.route) return;
+      if(reason) linkStatus(reason);
+      else router.replace(router.href('agent'));
+    }});
+    privateHistory=history;
+  }
+  function followLink(bots) {
+    const link=privateLink,view=store.view;
+    if(!link || link.handled || router.current.canonical!==link.route || !view.snapshot ||
+        view.unauthorized || api.draftOwner()!==view.snapshotOwner) return;
+    const bot=bots.find(bot=>bot.id===link.botId && bot.enabled && bot.paired);
+    link.handled=true;
+    if(!view.snapshot.plugins?.some(p=>p.id==='feishu' && p.status==='active')) {
+      linkStatus('飞书插件已停用，无法打开此链接。');return;
+    }
+    if(!bot) {linkStatus('链接中的机器人在当前配对下不可用。');return;}
+    linkStatus('');openHistory(bot,link);
+  }
   let botRequest = 0, botCredential, botSnapshot, privateHistory, readHistory, topicChats;
   store.subscribe?.(view => {
     if (botCredential !== api.token() || view.unauthorized) {
       botRequest++;
       botCredential = undefined;
       botSnapshot = undefined;
-      privateHistory?.close();
+      privateHistory?.close('当前认证已变化，请重新打开链接。');
       readHistory?.close();
       topicChats?.close();
     }
@@ -82,6 +107,7 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
       const bots = (await api.get('/feishu/bots')).filter(bot => bot.scope?.kind === 'global');
       if (stamp !== botRequest || credential !== api.token()) return;
       privateHistory?.verify(bots);
+      followLink(bots);
       readHistory?.verify(bots);
       topicChats?.verify(bots);
       profile.setBots(bots, credential);
@@ -94,7 +120,7 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
           bot.workbench.detail && ' · ' + bot.workbench.detail),
         bot.enabled && bot.paired && store.view.snapshot?.plugins?.some(p => p.id === 'feishu' && p.status === 'active') &&
           Button({ label: '独立对话记录', size: 'sm', onClick: () => {
-            privateHistory = openPrivateThreads({ api, bot, store, onClose: () => { privateHistory = undefined; } });
+            openHistory(bot);
           } }),
         bot.enabled && bot.paired && store.view.snapshot?.plugins?.some(p => p.id === 'feishu' && p.status === 'active') &&
           Button({ label: '读群记录', size: 'sm', onClick: () => {
@@ -109,7 +135,8 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
         : h('p', { class: 'muted small' }, '尚未绑定全局机器人。配置后，主 Agent 可用它在飞书中跟进各项目。'));
     } catch (cause) {
       if (stamp !== botRequest || credential !== api.token()) return;
-      privateHistory?.close();
+      if(privateLink && router.current.canonical===privateLink.route) linkStatus('无法核对机器人：'+cause.message);
+      privateHistory?.close('无法核对当前机器人配对，请重试。');
       topicChats?.close();
       if ([401, 403, 404].includes(cause.status)) readHistory?.close();
       else readHistory?.refresh();
@@ -153,7 +180,7 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, 'Agent'), h('p', { class: 'page__sub' }, hintCopy('nav.agent').tag)),
         h('div', { class: 'page__actions' }, Hint('nav.agent'))),
-      h('div', { class: 'stack stack--lg' }, profile.el, skills.el, modelCard, botCard, commandGroup.el, computersCard, cliSessions.el, policy.el, followUp.el, scheduledWork.el, advanced.el)));
+      h('div', { class: 'stack stack--lg' }, linkNotice, profile.el, skills.el, modelCard, botCard, commandGroup.el, computersCard, cliSessions.el, policy.el, followUp.el, scheduledWork.el, advanced.el)));
 
   let pendingSection, pendingStatistics;
   function showStatistics() {
@@ -173,6 +200,13 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
   return {
     el,
     onShow(route) {
+      privateLink=undefined;linkStatus('');
+      if(route.parts[0]==='private-thread') {
+        const [,botId,threadId,messageId]=route.parts;
+        if((route.parts.length===3 || route.parts.length===4) && botId && threadId)
+          privateLink={route:route.canonical,botId,threadId,messageId,handled:false};
+        else linkStatus('独立对话链接不完整，请重新获取链接。');
+      }
       pendingStatistics = route.query.get('tokenStats') === '1';
       showStatistics();
       scheduledWork.load(); loadModel(); loadFeishu(); policy.load(); followUp.load(); cliSessions.onShow();
@@ -185,7 +219,7 @@ export function createAgentPage({ api, store, router, consoleDrawer, scope, shel
       showStatistics();
       if (router.current.page === 'agent' && !store.view.unauthorized) {
         if (botCredential !== api.token()) loadFeishu();
-        else if (botSnapshot !== snapshot && snapshot.plugins?.some(p => ['assistant-profile', 'feishu'].includes(p.id) && p.status === 'active')) loadBots();
+        else if (botSnapshot !== snapshot && ((privateLink && !privateLink.handled) || snapshot.plugins?.some(p => ['assistant-profile', 'feishu'].includes(p.id) && p.status === 'active'))) loadBots();
       }
       showSection();
       scheduledWork.onState(); cliSessions.onState(); paintModel(); paintComputers(snapshot); policy.setProjects(snapshot.projects ?? []); advanced.update(snapshot);

@@ -113,12 +113,16 @@ function* matchingThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThrea
 }
 
 export function searchPrivateThreadList(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, order:string[] = []) {
-  const threads = [], snippets: Record<string,string> = Object.create(null);
+  const threads = [], snippets: Record<string,string> = Object.create(null), messageIds: Record<string,string> = Object.create(null);
   for (const { hits, titleMatch, ...thread } of matchingThreads(store, rows, query, false)) {
     threads.push(thread);
-    if (hits.length) snippets[thread.threadId] = hits[0].excerpt;
+    const first = hits[0];
+    if (first) {
+      snippets[thread.threadId] = first.excerpt;
+      messageIds[thread.threadId] = first.id;
+    }
   }
-  return {threads:inPreferredOrder(threads,order), snippets};
+  return {threads:inPreferredOrder(threads,order), snippets, messageIds};
 }
 
 export function searchPrivateThreads(store: Pick<Store, 'get' | 'list'>, rows: PrivateThread[], query: string, archived = false, before: string | null = null, tag?: string) {

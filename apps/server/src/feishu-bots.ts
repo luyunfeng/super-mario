@@ -968,8 +968,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   function buildChatList(bot:FeishuBotSettings,paired:Owner,grant:string,page:number,query?:string) {
     const identity={conversationId:botConversationId(bot),id:bot.id,appId:bot.appId,revision:bot.revision,chatId:paired.chatId};
     if (query) {
-      const {threads,snippets}=searchPrivateThreadList(app.store,privateThreads(bot.id),query,threadOrder(bot.id).order);
-      return conversationListDashboard(app,identity,grant,webBase,page,threads,{query,snippets});
+      const {threads,snippets,messageIds}=searchPrivateThreadList(app.store,privateThreads(bot.id),query,threadOrder(bot.id).order);
+      return conversationListDashboard(app,identity,grant,webBase,page,threads,{query,snippets,messageIds});
     }
     return conversationListDashboard(app,identity,grant,webBase,page,listPrivateHistory(bot.id));
   }

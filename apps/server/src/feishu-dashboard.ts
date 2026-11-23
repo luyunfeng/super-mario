@@ -65,7 +65,7 @@ export function dashboardHelp(sessions: boolean, scoped = false) {
 
 export function conversationListDashboard(app: DashboardApp, bot: { conversationId: string; id: string; appId: string; revision: number; chatId: string },
   navigation: string, webBase?: string, requestedPage = 0, history: { threadId: string; title: string; latestAt: string; tags?: string[] }[] = [],
-  search?: { query: string; snippets: Record<string, string> }) {
+  search?: { query: string; snippets: Record<string, string>; messageIds?: Record<string,string> }) {
   type Row = { projectId: string; name: string; tags?: string[]; latest?: Message; conversationThreadId?: string; latestAt?: string };
   const independent: Row[] = history.map(thread => ({ projectId: '', name: '独立对话 · ' + thread.title,
     conversationThreadId: thread.threadId, latestAt: thread.latestAt, tags: thread.tags }));
@@ -115,9 +115,14 @@ export function conversationListDashboard(app: DashboardApp, bot: { conversation
     const snippet = search && row.conversationThreadId && Object.hasOwn(search.snippets, row.conversationThreadId)
       ? publicText(search.snippets[row.conversationThreadId], 220) : '';
     const detail = search ? [publicText(row.name, 60), snippet].filter(Boolean).join('\n') : [publicText(row.name, 60), labels, latest?.createdAt ?? row.latestAt, latest && publicText(latest.text, 100).replace(/\s+/g, ' ')].filter(Boolean).join(' · ');
+    const threadId=row.conversationThreadId;
+    const messageId=threadId && search?.messageIds?.[threadId];
+    const link=search && threadId ? {label:messageId ? '查看原文' : '查看对话',
+      route:['agent','private-thread',bot.id,threadId,...(messageId ? [messageId] : [])].map(encodeURIComponent).join('/')} : undefined;
     lines.push(detail);
     elements.push({ tag: 'div', text: cardPlain(detail) }, ...cardButtons([
       { label: '在这里聊', value: { kind: 'workbench.chat', navigation, projectId: row.projectId, ...(row.conversationThreadId && { conversationThreadId: row.conversationThreadId }) } },
+      ...(link ? [link] : []),
       ...(row.projectId ? [{ label: '打开网页版', route: 'projects/' + encodeURIComponent(row.projectId) + '/workspace' }] : []),
     ], cardWebBase(webBase)));
   }

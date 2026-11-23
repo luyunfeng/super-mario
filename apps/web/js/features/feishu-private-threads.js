@@ -8,18 +8,18 @@ import { conversationModelPicker } from './model-drawer.js';
 import { Button, Field, Input, Select, copyText } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 
-export function openPrivateThreads({ api, bot, store, onClose }) {
+export function openPrivateThreads({ api, bot, store, onClose, target }) {
   const base = '/feishu/bots/' + encodeURIComponent(bot.id) + '/threads';
   const owner = api.draftOwner(), route = location.hash;
   const body = h('div', { class: 'stack', 'aria-live': 'polite' });
   let loadId = 0;
-  let childEditor;
+  let childEditor, closeReason;
   let exportButton;
   let knownTags = [];
   const valid = () => api.draftOwner() === owner && location.hash === route && !store.view.unauthorized &&
     store.view.snapshot?.plugins?.some(plugin => plugin.id === 'feishu' && plugin.status === 'active');
   const drawer = openDrawer({ title: '独立对话记录', subtitle: bot.name, body,
-    onClose() { loadId++; childEditor?.close(); unsubscribe(); onClose(); } });
+    onClose() { loadId++; childEditor?.close(); unsubscribe(); onClose(closeReason); } });
   let archived = false;
   let query = '';
   let selectedTag = '';
@@ -34,16 +34,27 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
   let listNotice = '';
   let lastDeletion = store.view.deletedFeishuThread;
   let connection = store.view.connection;
+  let bindingChange = store.view.feishuBotChange;
   function setSearchEnabled(enabled) {
     if (enabled === searchEnabled) return;
     searchEnabled = enabled;
     query = '';
     searchPage = undefined;
     if (showingList) void list();
-    else body.querySelector('mark')?.remove();
+    else if (!target) body.querySelector('mark')?.remove();
   }
   const unsubscribe = store.subscribe(() => {
-    if (!valid()) return drawer.close();
+    if (!valid()) {
+      closeReason='当前身份、配对或插件已变化，请重新打开独立对话链接。';
+      return drawer.close();
+    }
+    if(target && bindingChange!==store.view.feishuBotChange) {
+      bindingChange=store.view.feishuBotChange;
+      if(bindingChange?.botId===bot.id && bindingChange.bindingChanged) {
+        closeReason='机器人配对或配置已变化，请重新打开链接核对。';
+        return drawer.close();
+      }
+    }
     const nextConnection = store.view.connection;
     const reconnected = nextConnection === 'online' && connection !== 'online';
     connection = nextConnection;
@@ -59,7 +70,10 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
     if (reconnected) {
       searchPage = undefined;
       if (showingList) void list(listNotice);
-      else if (openThreadId && openThreadId !== pendingDelete) void verifyOpenThread(openThreadId);
+      else if (openThreadId && openThreadId !== pendingDelete) {
+        if(target) void detail({threadId:openThreadId},'',undefined,target.messageId);
+        else void verifyOpenThread(openThreadId);
+      }
     }
     if (lastSnapshot !== store.view.snapshot) {
       lastSnapshot = store.view.snapshot;
@@ -68,9 +82,11 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
     }
   });
   const current = id => id === loadId && drawer.el.open && valid();
-  const back = () => Button({ label: '返回列表', onClick: () => list() });
+  const back = () => target ? Button({label:'返回 Agent',onClick:drawer.close})
+    : Button({ label: '返回列表', onClick: () => list() });
   function inaccessible(error) {
     if (![401, 403, 404].includes(error.status) && !(error.status === 503 && error.message.includes('飞书插件已停用'))) return false;
+    closeReason='此独立对话链接在当前配对下不可用。';
     drawer.close();
     return true;
   }
@@ -78,6 +94,11 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
     searchPage = undefined;
     knownTags = [];
     childEditor?.close();
+    if (target) {
+      loadId++;openThreadId=undefined;
+      replace(body,h('p',{role:'alert'},notice),back());
+      return;
+    }
     return list(notice);
   }
   async function verifyOpenThread(threadId) {
@@ -225,6 +246,10 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
     openThreadId = row.threadId;
     const path = base + '/' + encodeURIComponent(row.threadId);
     return load(path + (around ? '?around=' + encodeURIComponent(around) : ''), (page, id) => {
+      if (target && (page.threadId!==row.threadId || (around && !page.messages.some(message=>message.id===around)))) {
+        replace(body,h('p',{role:'alert'},'原消息位置已失效，请重新获取对话链接。'),back());
+        return;
+      }
       renderDetail(path, { ...row, ...page }, page.messages, page.nextBefore, page.nextAfter, notice, id, draft, around);
     }, () => detail(row, notice, draft, around));
   }
@@ -345,7 +370,7 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
     const picker = conversationModelPicker(api, path + '/model', row.title);
     const history = h('div', { class: 'stack' });
     const entries = items => items.map(message => h('section', { class: 'stack' },
-      query && around && message.id === around && h('mark', { tabIndex: -1 }, '命中消息'),
+      (query || target) && around && message.id === around && h('mark', { tabIndex: -1 }, '命中消息'),
       h('strong', null, (message.role === 'user' ? '用户' : '助手') + ' · ' + new Date(message.createdAt).toLocaleString()),
       h('p', { style: 'white-space: pre-wrap' }, message.text), messageImages(api,store,message),messageFiles(api,store,message,[])));
     history.append(...entries(messages));
@@ -397,12 +422,15 @@ export function openPrivateThreads({ api, bot, store, onClose }) {
       } }), feedback, ...picker.controls, nextBefore && more(true), history, nextAfter && more(false));
     history.querySelector('mark')?.focus();
   }
-  void list();
+  if (target) void detail({threadId:target.threadId}, '', undefined, target.messageId);
+  else void list();
   return {
     verify(bots) {
-      if (!bots.some(current => current.enabled && current.paired && current.id === bot.id && current.appId === bot.appId && current.updatedAt === bot.updatedAt))
+      if (!bots.some(current => current.enabled && current.paired && current.id === bot.id && current.appId === bot.appId && current.updatedAt === bot.updatedAt)) {
+        closeReason='机器人配对或配置已变化，请重新获取对话链接。';
         drawer.close();
+      }
     },
-    close: drawer.close,
+    close(reason) {closeReason=reason;drawer.close();},
   };
 }
