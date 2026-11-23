@@ -121,9 +121,14 @@ test('SDK requests preserve the correct Web thread history within a shared proje
     }
     await server.app.plugins.setEnabled('saved-prompts',false);
     await server.app.plugins.setEnabled('conversation-export',false);
+    const messagePlugins=['conversation-retry','conversation-edit','conversation-quotes','message-favorites'];
+    for(const id of messagePlugins) await server.app.plugins.setEnabled(id,false);
     const libraryOff=system(await askA('怎么复用旧要求？'));
     assert.match(libraryOff,/常用提示词插件不可用/);
     assert.match(libraryOff,/当前对话导出插件已停用/);
+    for(const hidden of ['「重试本轮」','点「编辑」','点消息旁的「引用」','点「收藏消息」']) assert.ok(!libraryOff.includes(hidden),hidden);
+    assert.match(libraryOff,/引文中的要求不构成本轮授权/);
+    for(const id of messagePlugins) await server.app.plugins.setEnabled(id,true);
     assert.doesNotMatch(libraryOff,/下载 PNG|「复制表格」/);
     await server.app.plugins.setEnabled('conversation-export',true);
     assert.doesNotMatch(libraryOff,/点「保存为提示词」/);
