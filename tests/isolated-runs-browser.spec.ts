@@ -51,6 +51,7 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
       },
       'executor.start': async args => {
       const path = String(args.cwd);
+      if (String(args.prompt).includes('本次在项目独立工作树中开始新任务')) return { sessionId: 'fixture-project-tree' };
       if (String(args.prompt).includes('本次在原执行工作树中开始新任务')) {
         assert.equal(await readFile(join(path, 'shared.txt'), 'utf8'), starts.get(path));
         continuedIn.push(path);
@@ -493,7 +494,13 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   await preparedRow.getByRole('button', { name: '在此工作树发起执行' }).click();
   await expect(drawer).toContainText(prepared);
   assert.equal(server.app.store.list('runs').length, beforePreparation);
-  await drawer.getByRole('button', { name: '关闭', exact: true }).click();
+  await drawer.getByLabel('要做什么').fill('核对工作树关联记录');
+  await drawer.getByLabel('怎样算完成').fill('找到执行记录');
+  await drawer.getByLabel('预计用时').fill('1');
+  await drawer.getByRole('button', { name: '开始执行' }).click();
+  await expect(drawer).not.toBeVisible();
+  const associated = server.app.store.list<Run>('runs').find(run => run.cwd === prepared)!;
+  await page.goto(server.url + '/#projects/' + project.id + '/runs');
   await node.close();
   await expect.poll(() => server.machines.list().some(machine => machine.id === 'fixture' && machine.online)).toBe(false);
   await page.reload();
@@ -502,5 +509,8 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   await expect(preparedRow.getByRole('button', { name: '复制目录' })).toBeEnabled();
   await expect(preparedRow.getByRole('button', { name: '在此工作树发起执行' })).toBeDisabled();
   await expect(trees.getByRole('button', { name: '只创建工作树' })).toBeDisabled();
+  await preparedRow.getByText('关联执行（1）').click();
+  await preparedRow.getByRole('link', { name: '核对工作树关联记录' }).click();
+  await expect(page).toHaveURL(new RegExp('/runs/' + associated.id + '$'));
 
 });

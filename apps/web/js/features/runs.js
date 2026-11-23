@@ -151,6 +151,14 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       return drawer.el.open && projectId === id && api.token() === token &&
         next?.machineId === binding.machineId && next?.cwd === binding.cwd;
     };
+    function executionHistory(tree) {
+      const runs = (store.view.snapshot?.runs ?? []).filter(run => run.projectId === id &&
+        run.machineId === binding.machineId && run.cwd === tree.cwd).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      if (!runs.length) return null;
+      return h('details', null, h('summary', null, '关联执行（' + runs.length + '）'),
+        h('ul', null, runs.map(run => h('li', null,
+          h('a', { href: router.href('projects', id, 'runs', run.id) }, run.prompt)))));
+    }
     async function load() {
       const read = ++revision;
       try {
@@ -158,6 +166,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
         if (!current() || read !== revision) return;
         replace(rows, trees.length ? trees.map(tree => h('div', { class: 'item' },
           h('strong', null, tree.name), h('div', { class: 'folder-path' }, tree.cwd),
+          executionHistory(tree),
           Button({ label: '复制目录', size: 'sm', icon: 'copy', onClick: async () => {
             if (!current()) return;
             await copyText(tree.cwd);
