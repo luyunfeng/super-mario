@@ -990,6 +990,9 @@ test('飞书主人私聊 /today 和主页按钮读取今日简报，去重并报
   await receive('/帮助', human('brief-help-active'));
   assert.match(bot.instance.sent.at(-1)![1], /查看今日简报/);
   enabled = false;
+  const oldCardReply = click(refresh) as { toast: { content: string } };
+  assert.equal(oldCardReply.toast.content, '每日简报插件已停用。');
+  assert.equal(reads, 2);
   await receive('/帮助', human('brief-help-disabled'));
   assert.doesNotMatch(bot.instance.sent.at(-1)![1], /查看今日简报/);
   await receive('/home', human('brief-home-disabled'));

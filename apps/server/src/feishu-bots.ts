@@ -1584,6 +1584,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       return {toast:{type:'info',content:'正在提交，送达结果会发到当前私聊'}};
     }
     if (value.kind === 'workbench.today') {
+      if (!dailyBriefEnabled(app)) return { toast: { type: 'info', content: '每日简报插件已停用。' } };
       void track(bot.id, showToday(bot, epoch, paired, input.messageId)).catch(error => report(bot.id, error));
       return { toast: { type: 'info', content: '正在读取今日简报，结果会发到当前私聊' } };
     }
