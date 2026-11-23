@@ -38,7 +38,18 @@ export function displaySourceText(text, outline, content, citationLine) {
   outline.replaceChildren();
   if(targets.length) {
     const nav=h('nav',{'aria-label':'文档大纲',class:'stack'});
-    const menu=h('details',{},h('summary',{},'文档大纲'),nav);
+    const filter=h('input',{type:'search',class:'input',placeholder:'筛选标题','aria-label':'筛选文档标题'});
+    const empty=h('p',{role:'status',hidden:true},'没有匹配的标题');
+    filter.addEventListener('input',()=>{
+      const query=filter.value.trim().toLowerCase();
+      let matches=0;
+      for(const button of nav.children) {
+        button.hidden=!button.textContent.toLowerCase().includes(query);
+        if(!button.hidden) matches++;
+      }
+      empty.hidden=matches>0;
+    });
+    const menu=h('details',{},h('summary',{},'文档大纲'),filter,nav,empty);
     const top=targets.reduce((min,target)=>Math.min(min,target.level),6);
     for(const {anchor,title,level} of targets) {
       nav.append(h('button',{class:'btn btn--ghost btn--sm',type:'button',style:{justifySelf:'start',marginInlineStart:(Math.min(3,level-top)*0.8)+'rem'},

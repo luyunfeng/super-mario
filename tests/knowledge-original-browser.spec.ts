@@ -276,6 +276,11 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   await dialog.getByText('文档大纲',{exact:true}).click();
   const outline=dialog.getByRole('navigation',{name:'文档大纲'});
   await expect(outline.getByRole('button')).toHaveText(['计划','核对','核对']);
+  const headingSearch=dialog.getByRole('searchbox',{name:'筛选文档标题'});
+  await headingSearch.fill('不存在的章节');
+  await expect(dialog.getByText('没有匹配的标题',{exact:true})).toBeVisible();
+  await headingSearch.fill('核对');
+  await expect(outline.getByRole('button')).toHaveText(['核对','核对']);
   await page.emulateMedia({reducedMotion:'reduce'});
   await outline.getByRole('button',{name:'核对'}).last().click();
   await expect(dialog.getByRole('heading',{name:'### 核对',exact:true,level:3})).toBeFocused();
