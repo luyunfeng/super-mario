@@ -12,7 +12,7 @@ type Route = {
   inputId: string;
   target: string;
   threadId?: string;
-  topic?: { todoId: string; grant: string; opening?: boolean };
+  topic?: { todoId: string; grant: string; opening?: boolean; sourceOpening?: boolean };
 };
 
 /** Read after notifications.message. The host checks current opening permissions before delivery. */
@@ -83,7 +83,7 @@ export function topicInteractionNotice(
       !opening ||
       opening.inputId !== openingInputId ||
       opening.channel !== 'feishu' ||
-      !opening.topic?.opening ||
+      !(opening.topic?.opening || opening.topic?.sourceOpening) ||
       opening.topic.todoId !== todo.id ||
       !opening.botId ||
       !opening.accountId ||

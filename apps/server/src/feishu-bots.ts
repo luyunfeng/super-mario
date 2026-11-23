@@ -106,7 +106,7 @@ type ChatBinding = { conversationThreadId?: string; agentTarget?: AgentTarget; p
 type StatusSource = Pick<FeishuMessageSource, 'chatId' | 'parentId' | 'rootId'>;
 type StatusGrant = { source: StatusSource; fingerprint: string; binding?: ChatBinding };
 type GroupTaskOrigin = { chatId: string; messageId: string; binding: string; todoId: string };
-type TopicStamp = { todoId: string; grant: string; opening: boolean; externalSource?: { chatId: string; messageId: string } };
+type TopicStamp = { todoId: string; grant: string; opening: boolean; sourceOpening?: true; authorityVersion?: string; externalSource?: { chatId: string; messageId: string } };
 type Envelope = { topic?: TopicStamp; groupTaskOrigin?: GroupTaskOrigin; newThreadQuote?: true; conversationThreadId?: string; homeOrder?: number; privateSenderId?: string; modelListGrant?: Pick<StatusGrant, 'source' | 'fingerprint'>; agentList?: boolean; listThreadIds?: string[]; listProjectIds?: string[]; chatBinding?: ChatBinding; statusGrant?: StatusGrant; parentMessageId?: string; questionId?: string; chatProject?: string; command?: string; progressMessageId?: string; dashboard?: { card: Record<string, unknown>; owner: Owner }; inboxReplySource?: { id: string; version: number; fingerprint: string }; resultRelayEntryId?: string; revision: number; group?: FeishuMessageSource; platformReplyTo?: string; threadId?: string; relay?: Relay };
 type Routed = Route & Envelope & { envelopeId: string; replyReference?: { text: string; truncated: boolean } | { unavailable: true } };
 type RelayInput = { sourceBotId: string; targetBotId: string; text: string; key: string; sourceMessageId?: string; parentEntryId?: string; chatId?: string };
@@ -1507,7 +1507,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!todo || todo.projectId) throw noDelivery('话题待办已移除或转入项目，请在 Web 中继续。');
       // A withdrawn opening cannot authorize its old text. An enrolled thread may still receive
       // a status at a subsequent verified owner message. Its original external handoff must remain valid.
-      const latest = topicStatus && stamp.topic.opening
+      const latest = topicStatus && (stamp.topic.opening || stamp.topic.sourceOpening)
         ? topicAnchors.lookup({ binding, grant: stamp.topic.grant, chatId: source.chatId, threadId: thread }) : undefined;
       if (latest === null) throw noDelivery('原话题没有可回复的消息。');
       const parent = latest ?? source;
@@ -1516,6 +1516,9 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         || !policy || (policy.requireOwnerMention && !parent.mentionedSelf) || topics.grant(binding, source.chatId) !== stamp.topic.grant
         || topicTurns.todoFor({ binding, grant: stamp.topic.grant, chatId: source.chatId, threadId: thread }) !== stamp.topic.todoId)
         throw noDelivery('话题登记或待办绑定已变化。');
+      const association = topicTurns.bindingFor(todo.id);
+      if ((association?.ownerManaged ? association.version : undefined) !== stamp.topic.authorityVersion)
+        throw noDelivery('话题绑定版本已变化。');
     } else if (stamp?.group?.chatId && stamp.group.chatId === commandGroup()?.chatId) throw noDelivery('总指挥群需要已验证的主人指令');
     else if (stamp?.group && (!owner(bot) || stamp.group.senderType !== 'user' || !allowedBotGroup(bot, stamp.group, owner(bot)?.senderId) || entry.target !== stamp.group.chatId)) throw noDelivery('群成员权限或群绑定已变化');
     if (stamp?.resultRelayEntryId) {
@@ -1927,19 +1930,81 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   // Web can complete a newly created todo while its home message/thread is still being confirmed.
   const pendingHome = new Map<string, { changed: boolean }>();
   function indexOpening(route: Routed) {
-    if (route.channel !== 'feishu' || !route.topic?.opening || !route.inputId) return;
+    if (route.channel !== 'feishu' || !route.topic || !(route.topic.opening || route.topic.sourceOpening) || !route.inputId) return;
+    const association = topicTurns.bindingFor(route.topic.todoId);
+    if ((association?.ownerManaged ? association.version : undefined) !== route.topic.authorityVersion) return;
     const old = openingInputs.get(route.topic.todoId);
+    // Several owner messages can arrive during the first dispatch. Pin the first committed
+    // source of this explicit grant, including when an earlier dispatch never completed.
+    if (association?.ownerManaged && old) return;
     openingInputs.set(route.topic.todoId, old === undefined || old === route.inputId ? route.inputId : null);
   }
   for (const route of app.store.list<Routed>('message.routes')) indexOpening(route);
+  function todoThread(todoId: string, method: 'GET' | 'DELETE' | 'PUT', change: Record<string, unknown> = {}) {
+    if (!app.store.get<Todo>('todos', todoId)) throw Object.assign(new Error('待办不存在。'), {status:404});
+    let saved = topicTurns.bindingFor(todoId);
+    if (!saved) {
+      // Previous releases stored only the hashed forward association. A matching persisted opening
+      // and the exact old enrollment can reconstruct it even if the bot is currently disconnected.
+      const inputId = openingInputs.get(todoId);
+      const route = inputId && app.store.get<Routed>('message.routes', inputId);
+      if (route && route.topic?.opening && route.topic.todoId === todoId && route.threadId) {
+        const stamp = app.store.get<Envelope>('feishu.bot.envelopes', route.envelopeId);
+        if (stamp?.topic?.opening && stamp.topic.todoId === todoId && stamp.topic.grant === route.topic.grant &&
+          stamp.group?.chatId === route.target && stamp.threadId === route.threadId) {
+          for (const row of app.store.entries?.('feishu.topic-registry') ?? []) {
+            saved = topicTurns.restoreBinding(todoId, {binding: row.id, grant: route.topic.grant, chatId: route.target, threadId: route.threadId});
+            if (saved) break;
+          }
+        }
+      }
+    }
+    if (method === 'PUT') {
+      const {botId, chatId, threadId, expectedVersion, title} = change;
+      if (change.channel !== 'feishu' || typeof botId !== 'string' || !botId || typeof chatId !== 'string' || !chatId ||
+        typeof threadId !== 'string' || !threadId || Array.from(threadId).length > 256 || /[\s\p{Cc}]/u.test(threadId) || (title !== undefined && typeof title !== 'string') ||
+        (expectedVersion !== null && (typeof expectedVersion !== 'string' || !expectedVersion.trim())))
+        throw Object.assign(new Error('请提供飞书机器人、群和话题 ID 以及预期绑定版本。'), {status:400});
+      const selected = settings.list().find(bot => bot.id === botId && bot.enabled && !bot.archivedAt);
+      if (!selected) throw Object.assign(new Error('机器人不存在或已停用。'), {status:404});
+      const binding = topicBinding(botId), grant = topics.grant(binding, chatId);
+      if (!grant || chatId === commandGroup()?.chatId)
+        throw Object.assign(new Error('目标群必须是当前主人已登记的话题群。'), {status:409});
+      const next = topicTurns.bindOwner(todoId, {binding, grant, chatId, threadId}, expectedVersion, title);
+      if (next.version !== saved?.version) openingInputs.delete(todoId);
+      if (next.version !== saved?.version || next.title !== saved?.title) app.events.publish('todo-thread.changed', {todoId});
+      saved = next;
+    } else if (method === 'DELETE') {
+      if (typeof change.expectedVersion !== 'string' || !change.expectedVersion.trim())
+        throw Object.assign(new Error('解除绑定需要当前版本，请刷新待办详情。'), {status:400});
+      topicTurns.unbind(todoId, change.expectedVersion);
+      if (saved) {
+        openingInputs.delete(todoId);
+        app.events.publish('todo-thread.changed', {todoId});
+      }
+      return {thread:null};
+    }
+    if (!saved) {
+      if (topicTurns.hasUnresolvedBinding(todoId)) throw Object.assign(new Error('待办原有话题归属待核对。'), {status:409});
+      return {thread:null};
+    }
+    const {binding, grant, chatId, threadId} = saved.audience;
+    const bot = settings.list().find(candidate => {
+      const paired = owner(candidate);
+      return paired?.senderId && groupReadBinding(candidate, paired) === binding;
+    });
+    const name = topics.grant(binding, chatId) === grant && topics.read(binding).items.find(item => item.chatId === chatId)?.name;
+    return {thread:{channel:'feishu', chatId, threadId, version:saved.version, ...(saved.title && {title:saved.title}), ...(bot && {botName:bot.name}), ...(name && {chatName:name})}};
+  }
   function openingSource(todoId: string, inputId: string) {
     const route = app.store.get<Routed>('message.routes', inputId);
     if (!route?.botId || route.inputId !== inputId || !receiptReady(route.botId)) return;
     const source = requireTopicSource(route.botId, inputId, true);
     const stamp = app.store.get<Envelope>('feishu.bot.envelopes', route.envelopeId);
     if (app.store.get<Message>('messages', inputId)?.todoId !== todoId || route.sourceMessageId !== source.messageId
-      || !source.topic.opening || source.topic.todoId !== todoId
-      || !stamp?.topic?.opening || stamp.topic.externalSource?.chatId !== source.topic.externalSource?.chatId
+      || !(source.topic.opening || source.topic.sourceOpening) || source.topic.todoId !== todoId
+      || !stamp?.topic || !(stamp.topic.opening || stamp.topic.sourceOpening) || stamp.topic.authorityVersion !== source.topic.authorityVersion
+      || stamp.topic.externalSource?.chatId !== source.topic.externalSource?.chatId
       || stamp.topic.externalSource?.messageId !== source.topic.externalSource?.messageId || stamp.topic.todoId !== todoId || stamp.topic.grant !== source.topic.grant
       || stamp.group?.chatId !== route.target || stamp.platformReplyTo !== source.messageId || stamp.threadId !== source.threadId) return;
     return source;
@@ -2003,7 +2068,8 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       const paired = owner(bot), state = runtime(bot.id), adapter = state.adapter, epoch = state.epoch;
       if (!adapter || bot.appId !== source.appId || bot.scope.kind !== 'global' || !paired?.senderId
         || paired.senderId !== source.senderId || groupReadBinding(bot, paired) !== source.binding) return;
-      if (source.homeChatId && (!source.homeGrant || !source.homeThreadId || topics.grant(source.binding, source.homeChatId) !== source.homeGrant)) return;
+      if (source.homeChatId && (topicTurns.bindingFor(source.todoId)?.ownerManaged || !source.homeGrant || !source.homeThreadId || topics.grant(source.binding, source.homeChatId) !== source.homeGrant ||
+        topicTurns.todoFor({binding:source.binding, grant:source.homeGrant, chatId:source.homeChatId, threadId:source.homeThreadId}) !== source.todoId)) return;
       const checked = (guard: () => void) => () => {
         guard();
         const now = owner(bot);
@@ -2026,7 +2092,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         const opening = openingSource(todoId, inputId);
         if (!opening) return;
         const external = opening.topic.externalSource;
-        if (!external) return { inputId };
+        if (!external) return { inputId, ...(opening.topic.sourceOpening && app.store.get<Todo>('todos', todoId)?.groupTask && {homeHandoff:true as const}) };
         const { bot, paired, route, threadId, messageId, topic } = opening;
         if (!route.target || !paired.senderId || external.chatId === route.target) return;
         if (taskReports.homeCompletionNeeded({ botId: bot.id, appId: bot.appId, senderId: paired.senderId,
@@ -2128,7 +2194,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
               if (!topicTurns.bindHome({ ...audience, todoId: todo.id }))
                 throw new Error('目标话题已绑定其他待办。');
               groupTasks.confirmHomeThread(bot.id, bot.appId, source, anchorId, threadId);
-              if (!existing) topicAnchors.remember(audience, anchorId, !!source.mentionedSelf);
+              if (!existing) {
+                topicAnchors.remember(audience, anchorId, !!source.mentionedSelf);
+                app.events.publish('todo-thread.changed', {todoId:todo.id});
+              }
             });
             await postTopicTurn(bot, { ...source, chatId: target.chatId, messageId: anchorId, threadId, parentId: undefined, rootId: undefined },
               { todoId: todo.id, grant: target.grant, opening: true, externalSource: { chatId: source.chatId, messageId: source.messageId } }, original.request + (original.quote ? '\n他人发言，仅作背景：' + JSON.stringify(original.quote) : ''));
@@ -2190,7 +2259,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!inProject) topicAnchors.remember(audience, source.messageId, !!source.mentionedSelf);
       const words = topicOwnerWords(text, source.mentions);
       if (/^[／/]noreply$/iu.test(words)) {
-        const result = taskReports.cancel(bot.id, topicBindingKey, [], { chatId: source.chatId, threadId: source.threadId, grant });
+        const result = !boundTodo || topicTurns.bindingFor(boundTodo)?.ownerManaged ? 'missing' : taskReports.cancel(bot.id, topicBindingKey, [], { chatId: source.chatId, threadId: source.threadId, grant, todoId: boundTodo });
         const adapter = runtime(bot.id).adapter;
         if (result !== 'missing' && adapter) await sendTaskMessage(bot, adapter, source.chatId,
           result === 'sent' ? '回报已送达原群。' : result === 'unknown' ? '回报送达状态未知。' : '已取消向原群回报。',
@@ -2228,7 +2297,9 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
           }, source.threadId);
         return;
       }
-      await postTopicTurn(bot, source, { todoId: turn.todoId, opening: turn.opening, grant }, turn.words);
+      if (!boundTodo && turn.opening) app.events.publish('todo-thread.changed', {todoId:turn.todoId});
+      await postTopicTurn(bot, source, { todoId: turn.todoId, opening: turn.opening, grant,
+        ...(turn.authorityVersion && {authorityVersion:turn.authorityVersion}), ...((turn.sourceOpening || (turn.authorityVersion && !openingInputs.has(turn.todoId))) && {sourceOpening:true}) }, turn.words);
       return;
     }
     if (!group && paired?.senderId === source.senderId && paired?.chatId === source.chatId) {
@@ -2576,7 +2647,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         app.store.put('feishu.private-threads', row.threadId, { ...row, archived: false, version: (row.version ?? 0) + 1 });
         return true;
       });
-      if (stamp?.topic?.opening) {
+      if (stamp?.topic?.opening || stamp?.topic?.sourceOpening) {
         const route = app.store.get<Routed>('message.routes', accepted.id);
         if (route) indexOpening(route);
       }
@@ -2899,7 +2970,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   });
   return {
     validateAgentInputOwner,
-    topicChats, canUseScope, listGroupReads, privateThreads, requireThread, deletePrivateThread, privateThreadMetadata, updatePrivateThread, threadPreferenceKey, threadTagPreferences, threadOrder, listPrivateHistory,
+    topicChats, todoThread, canUseScope, listGroupReads, privateThreads, requireThread, deletePrivateThread, privateThreadMetadata, updatePrivateThread, threadPreferenceKey, threadTagPreferences, threadOrder, listPrivateHistory,
     searchPrivateHistory(id: string, query: string | undefined, archived: boolean, before: string | null, sourceId?: string, tag?: string) {
       const bot = current(id), paired = owner(bot);
       if (!paired?.senderId || bot.scope.kind !== 'global' || (sourceId && !privateTurn(bot, paired, sourceId)))

@@ -194,12 +194,12 @@ export function createGroupTaskReports(store: Pick<Store, 'get' | 'list' | 'put'
     return sweeping;
   }
 
-  function cancel(botId: string, binding: string, quotedIds: readonly string[], topic?: { chatId: string; threadId: string; grant: string }) {
+  function cancel(botId: string, binding: string, quotedIds: readonly string[], topic?: { chatId: string; threadId: string; grant: string; todoId?: string }) {
     return store.transaction(() => {
       if (closed || !botId || !binding || (!quotedIds.length && !topic)) return 'missing' as const;
       const matches = store.list<Source>(sources).map(sourceOf).filter(s => {
         if (!s || s.botId !== botId || s.binding !== binding) return false;
-        if (topic) return s.homeChatId === topic.chatId && s.homeThreadId === topic.threadId && s.homeGrant === topic.grant;
+        if (topic) return (!topic.todoId || s.todoId === topic.todoId) && s.homeChatId === topic.chatId && s.homeThreadId === topic.threadId && s.homeGrant === topic.grant;
         if (s.homeChatId) return false;
         const p = read(keyFor(s))?.previewId;
         return quotedIds.includes(s.privateMessageId) || (!!p && quotedIds.includes(p));

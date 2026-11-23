@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test, { type TestContext } from 'node:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -82,4 +83,113 @@ test('未绑定和已结待办回复用法；相同消息不重复提示，普�
   assert.equal(notice('opened', false), undefined);
   assert.match(notice('finished', true)!, /已完成/);
   assert.equal(store.list('todos').length, 1);
+});
+
+test('每个待办仅有一个反向绑定，版本跨连接稳定，解绑后旧主群和旧事件都不能复活', t => {
+  const {store,turns,other} = fixture(t);
+  store.put('todos','from-home',{id:'from-home'});
+  const home = {...a,todoId:'from-home'};
+  assert.ok(turns.bindHome(home));
+  const first = other.bindingFor('from-home')!;
+  assert.deepEqual(first.audience,a); assert.ok(first.version);
+  assert.equal(other.bindHome({...home,threadId:'competitor'}),false);
+  assert.ok(other.bindHome(home)); assert.deepEqual(turns.bindingFor('from-home'),first);
+  const follow = turns.accept(message)!; assert.equal(follow.todoId,'from-home');
+  assert.throws(()=>other.unbind('from-home','stale'),{status:409}); assert.equal(other.todoFor(a),'from-home');
+  assert.throws(()=>store.transaction(()=>{ turns.unbind('from-home',first.version); throw Error('rollback'); }));
+  assert.equal(other.todoFor(a),'from-home');
+  other.unbind('from-home',first.version); assert.equal(turns.bindingFor('from-home'),undefined); assert.equal(turns.todoFor(a),undefined);
+  other.unbind('from-home',first.version);
+  assert.equal(turns.accept({...message,root:true}),undefined); assert.equal(turns.bindHome(home),false);
+  assert.equal(turns.restoreBinding('from-home',a),undefined);
+  assert.equal(turns.accept({...message,messageId:'later-follow'}),undefined);
+  const fresh = turns.accept({...message,messageId:'new-command',command:true})!;
+  assert.notEqual(fresh.todoId,'from-home'); assert.notEqual(turns.bindingFor(fresh.todoId)?.version,first.version);
+  assert.throws(()=>other.unbind(fresh.todoId,first.version),{status:409});
+  assert.equal(turns.todoFor(a),fresh.todoId);
+});
+
+test('迁移只接受既有唯一 forward 的原始 audience，不能选择旧库中冲突的多个关联', t => {
+  const {store,turns,other} = fixture(t);
+  const hash = (audience: TopicAudience) => createHash('sha256')
+    .update(JSON.stringify([audience.binding,audience.grant,audience.chatId,audience.threadId])).digest('hex');
+  const second = {...a,threadId:'second'};
+  store.put('todos','legacy',{id:'legacy'}); store.put('feishu.topic-todos',hash(a),'legacy');
+  assert.equal(turns.bindingFor('legacy'),undefined);
+  assert.equal(turns.restoreBinding('legacy',second),undefined);
+  assert.equal(turns.bindHome({...second,todoId:'legacy'}),false);
+  store.put('feishu.topic-todos',hash(second),'legacy');
+  assert.equal(turns.restoreBinding('legacy',a),undefined); assert.equal(turns.todoFor(second),undefined);
+  assert.equal(turns.accept({...message,root:true}),undefined);
+  assert.throws(()=>turns.unbind('legacy','missing'),{status:409});
+  store.remove('feishu.topic-todos',hash(second));
+  const restored = other.restoreBinding('legacy',a);
+  assert.ok(restored); assert.deepEqual(restored.audience,a); assert.deepEqual(turns.bindingFor('legacy'),restored);
+  assert.deepEqual(turns.restoreBinding('legacy',a),restored);
+  other.unbind('legacy',restored.version);
+  assert.equal(turns.bindHome({...a,todoId:'legacy'}),false);
+});
+
+test('主人初绑/换绑维持双向唯一，失效版本不覆盖，事务回滚还原原绑定', t => {
+  const {store,turns,other} = fixture(t);
+  store.put('todos','manual',{id:'manual'}); store.put('todos','neighbor',{id:'neighbor'});
+  const b = {...a,threadId:'target-b'}, c = {...a,threadId:'target-c'};
+  const first = turns.bindOwner('manual',a,null);
+  assert.equal(first.ownerManaged,true);
+  assert.deepEqual(other.bindOwner('manual',a,null),first);
+  assert.deepEqual(other.bindOwner('manual',a,first.version),first);
+  other.bindOwner('neighbor',b,null);
+  assert.throws(()=>turns.bindOwner('manual',b,first.version),{status:409});
+  assert.throws(()=>turns.bindOwner('manual',c,null),{status:409});
+  assert.throws(()=>store.transaction(()=>{ turns.bindOwner('manual',c,first.version); throw Error('rollback'); }));
+  assert.deepEqual(other.bindingFor('manual'),first); assert.equal(other.todoFor(c),undefined);
+  const next = other.bindOwner('manual',c,first.version);
+  assert.notEqual(next.version,first.version); assert.deepEqual(next.audience,c);
+  assert.equal(turns.todoFor(a),undefined); assert.equal(turns.todoFor(c),'manual');
+  assert.throws(()=>turns.bindOwner('manual',c,first.version),{status:409});
+  assert.equal(turns.todoFor(b),'neighbor');
+});
+
+test('手工绑定首条真实决定成为锚点；同一待办与话题重新绑定后旧回执不能跨代', t => {
+  const {store,turns,other} = fixture(t);
+  const opened = turns.accept({...message,root:true})!;
+  const original = turns.bindingFor(opened.todoId)!;
+  assert.deepEqual(turns.bindOwner(opened.todoId,a,null),original);
+  const legacyEvent = createHash('sha256').update(JSON.stringify([a.binding,a.chatId,message.messageId])).digest('hex');
+  const old = store.get<{bindingVersion?:string}>('feishu.topic-turns',legacyEvent)!;
+  delete old.bindingVersion; store.put('feishu.topic-turns',legacyEvent,old);
+  assert.deepEqual(turns.accept({...message,root:true}),opened);
+  turns.unbind(opened.todoId,original.version);
+  const manual = turns.bindOwner(opened.todoId,a,null);
+  assert.equal(other.accept({...message,root:true}),undefined);
+  assert.equal(other.accept({...message,messageId:'empty',words:' [图片] '}),undefined);
+  assert.equal(other.bindHome({...a,todoId:opened.todoId}),false);
+  const input = {...message,messageId:'first-manual'};
+  const first = other.accept(input)!;
+  assert.deepEqual(first,{todoId:opened.todoId,opening:false,words:input.words,authorityVersion:manual.version,sourceOpening:true});
+  assert.deepEqual(turns.accept({...input,words:'尝试修改'}),first);
+  assert.deepEqual(turns.accept({...message,messageId:'second-manual'}),{todoId:opened.todoId,opening:false,words:message.words,authorityVersion:manual.version});
+  other.unbind(opened.todoId,manual.version); const rebound = turns.bindOwner(opened.todoId,a,null);
+  assert.notEqual(manual.version,rebound.version); assert.equal(turns.accept(input),undefined);
+  const fresh = other.accept({...message,messageId:'fresh'}); assert.equal(fresh?.sourceOpening,true); assert.equal(fresh?.authorityVersion,rebound.version);
+  assert.deepEqual(other.restoreBinding(opened.todoId,a),rebound);
+});
+
+test('绑定标题按 Unicode 码点裁剪，改名和清空不轮换授权，换绑不继承旧标题', t => {
+  const {store,turns,other} = fixture(t);
+  store.put('todos','title-task',{id:'title-task'});
+  const first = turns.bindOwner('title-task',a,null, '  项目群  ');
+  assert.equal(first.title,'项目群');
+  assert.deepEqual(other.bindOwner('title-task',a,first.version),first);
+  const label = '甲'.repeat(199) + '🙂';
+  const renamed = other.bindOwner('title-task',a,first.version,'  ' + label + '不保留  ');
+  assert.equal(renamed.title,label); assert.equal(renamed.version,first.version);
+  assert.equal(turns.accept(message)?.authorityVersion,first.version);
+  assert.throws(()=>turns.bindOwner('title-task',a,'old','误改'),{status:409});
+  assert.equal(turns.bindingFor('title-task')?.title,label);
+  const cleared = turns.bindOwner('title-task',a,first.version,'   ');
+  assert.equal(cleared.title,undefined); assert.equal(cleared.version,first.version);
+  turns.bindOwner('title-task',a,first.version,'旧标题');
+  const next = other.bindOwner('title-task',{...a,threadId:'new'},first.version);
+  assert.equal(next.title,undefined); assert.notEqual(next.version,first.version);
 });
