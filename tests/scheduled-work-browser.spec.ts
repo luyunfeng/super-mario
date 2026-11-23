@@ -257,3 +257,30 @@ test('定时工作按当前范围翻页，失败后重试同一页', async () =>
   await card.getByRole('button', { name: '上一页定时工作' }).click();
   await expect(card).toContainText('显示第 1 至 100 项');
 }));
+
+test('定时工作历史可重试并按触发记录继续翻页', async () => fixture(async f => {
+  const page: Page = f.page;
+  f.items = [work({ nextOccurrenceKey: 'recent', occurrencesTruncated: true, occurrenceTotal: 41 })];
+  await emit(page);
+  const cursors: string[] = [];
+  await page.route('**/scheduled-work/history', route => {
+    const { workId, projectId, after } = route.request().postDataJSON();
+    assert.equal(workId, 'work-one');
+    assert.equal(projectId, 'a');
+    cursors.push(after);
+    if (cursors.length === 1) return json(route, { error: '读取失败' }, 503);
+    return json(route, { occurrences: [{ key: after, scheduledFor: at, status: 'completed', kind: 'dispatch', approvalId: 'receipt-' + after }],
+      nextOccurrenceKey: after === 'recent' ? 'older' : null });
+  });
+  await expect(panel(page)).toContainText('共 41 条');
+  await panel(page).locator('summary').click();
+  await panel(page).getByRole('button', { name: '查看更早记录' }).click();
+  const history = page.getByRole('dialog', { name: '更早的触发记录' });
+  await history.getByRole('button', { name: '重试读取记录' }).click();
+  await expect(history).toContainText('receipt-recent');
+  await history.getByRole('button', { name: '继续查看更早记录' }).click();
+  await expect(history).toContainText('receipt-older');
+  await expect(history).toContainText('receipt-recent');
+  await expect(history).toContainText('已到最早记录');
+  assert.deepEqual(cursors, ['recent', 'recent', 'older']);
+}));

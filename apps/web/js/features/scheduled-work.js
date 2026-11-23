@@ -90,11 +90,9 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
         line(`来源消息：${item.source?.messageId ?? '未提供'} · ${timeText(item.source?.createdAt)}`),
         line(`创建审批：${item.approvalId} · ${approvalText(item.approvalStatus)}`),
         item.action.kind === 'dispatch' && line(`执行者：${item.action.executorId} · 工作目录：${item.action.cwd ?? '默认'}`),
-        history.map(o => h('div', null, line(`${timeText(o.scheduledFor)} · ${occurrenceText(o)}`),
-          o.approvalId && line(`派发审批：${o.approvalId} · ${approvalText(o.approvalStatus)}`),
-          o.result?.messageId && line(`结果消息：${o.result.messageId}`),
-          o.status === 'completed' && o.result?.messageId && Button({ label: '查看简报原文', size: 'sm', onClick: () => openBrief(item, o) }), o.error && line(o.error), o.approvalId && chatLink())),
-        item.occurrencesTruncated && line(`最近记录已截断：显示 ${history.length} 条，共 ${item.occurrenceTotal} 条。`)));
+        history.map(o => renderOccurrence(item, o)),
+        item.occurrencesTruncated && line(`最近记录已截断：显示 ${history.length} 条，共 ${item.occurrenceTotal} 条。`),
+        item.nextOccurrenceKey && Button({ label: '查看更早记录', size: 'sm', onClick: () => openHistory(item) })));
     return h('article', { class: 'stack', style: { minWidth: '0' }, dataset: { workId: item.id } },
       h('strong', { class: 'item__title' }, item.title),
       line(`范围：${item.projectId ? project?.name ?? item.projectId : '全局'}${item.todoId ? ` · 待办 ${item.todoId}` : ''}`),
@@ -125,6 +123,32 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     drawer.active = () => !closed && drawer.el.open && valid(stamp);
     editor = drawer;
     return drawer;
+  }
+  function renderOccurrence(item, o) {
+    return h('div', null, line(`${timeText(o.scheduledFor)} · ${occurrenceText(o)}`),
+      o.approvalId && line(`派发审批：${o.approvalId} · ${approvalText(o.approvalStatus)}`),
+      o.result?.messageId && line(`结果消息：${o.result.messageId}`),
+      o.status === 'completed' && o.result?.messageId && Button({ label: '查看简报原文', size: 'sm', onClick: () => openBrief(item, o) }), o.error && line(o.error), o.approvalId && chatLink());
+  }
+  function openHistory(item) {
+    if (syncIdentity()) { requestRead(); return; }
+    const rows = h('div', { class: 'stack' }), controls = h('div', { role: 'status' });
+    const drawer = managedDrawer({ title: '更早的触发记录', subtitle: item.title, body: h('div', { class: 'stack' }, rows, controls) });
+    async function read(after) {
+      replace(controls, line('正在读取触发记录…'));
+      try {
+        const page = await api.post('/scheduled-work/history', { workId: item.id, after, projectId: currentScope() || undefined });
+        if (!drawer.active()) return;
+        rows.append(...page.occurrences.map(o => renderOccurrence(item, o)));
+        replace(controls, page.nextOccurrenceKey
+          ? Button({ label: '继续查看更早记录', size: 'sm', onClick: () => read(page.nextOccurrenceKey) })
+          : line('已到最早记录'));
+      } catch (cause) {
+        if (drawer.active()) replace(controls, Banner({ tone: 'warn', children: cause.message }),
+          Button({ label: '重试读取记录', size: 'sm', onClick: () => read(after) }));
+      }
+    }
+    void read(item.nextOccurrenceKey);
   }
   function openBrief(item, occurrence) {
     if (syncIdentity()) { requestRead(); return; }

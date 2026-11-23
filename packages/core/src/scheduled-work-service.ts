@@ -56,6 +56,25 @@ export function createScheduledWorkService(options: {
       }
     }
   }
+  function historyPage(work: ScheduledWorkRecord, occurrences: ScheduledWorkOccurrence[], after?: string) {
+    const history = occurrences.slice().sort((a, b) => b.scheduledFor.localeCompare(a.scheduledFor) || b.key.localeCompare(a.key));
+    const start = after === undefined ? 0 : history.findIndex(o => o.key === after) + 1;
+    if (after !== undefined && !start) fail('当前计划找不到所选触发记录', 404);
+    const page = history.slice(start, start + 20);
+    const more = start + page.length < history.length;
+    return {
+      occurrences: page.map(o => ({ key: o.key, scheduledFor: o.scheduledFor, status: o.status, approvalId: o.approvalId,
+        approvalStatus: o.approvalId ? store.get<Approval>('approvals', o.approvalId)?.status : undefined,
+        result: o.result, kind: work.input.action.kind, ...(o.error ? { error: '结果未知，请核对原记录' } : {}) })),
+      occurrenceTotal: history.length, occurrencesTruncated: more, nextOccurrenceKey: more ? page[page.length - 1].key : null,
+    };
+  }
+  function readHistory(input: Record<string, unknown>) {
+    const work = scopedWork(input);
+    if (input.after !== undefined && typeof input.after !== 'string') fail('触发记录标识无效', 400);
+    const occurrences = store.list<ScheduledWorkOccurrence>('scheduled-work.occurrences').filter(o => o.workId === work.id);
+    return historyPage(work, occurrences, input.after);
+  }
   function publicRows(input:Record<string,unknown>={}) {
     const offset = input.offset === undefined ? 0 : input.offset;
     if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) fail('分页起点须为非负整数', 400);
@@ -72,24 +91,28 @@ export function createScheduledWorkService(options: {
     const page = selected.slice(offset, offset + limit);
     const nextOffset = offset + page.length < selected.length ? offset + page.length : null;
     return { items:page.map(row=>{
-      const schedule=row.scheduleId ? schedules.get(row.scheduleId) : undefined, history=[...row.occurrences].sort((a,b)=>b.scheduledFor.localeCompare(a.scheduledFor));
+      const schedule=row.scheduleId ? schedules.get(row.scheduleId) : undefined;
       return {id:row.id,version:row.version,title:row.input.title,status:row.status,projectId:row.input.projectId,todoId:row.input.todoId,schedule:row.input.schedule,action:row.input.action,
         approvalId:row.approvalId,approvalStatus:store.get<Approval>('approvals',row.approvalId)?.status,
         source:{messageId:row.sourceMessage.id,createdAt:row.sourceMessage.createdAt},
         nextAt:schedule?.nextAt,scheduleStatus:schedule?.status,scheduleVersion:schedule?.version,
-        occurrences:history.slice(0,20).map(o=>({key:o.key,scheduledFor:o.scheduledFor,status:o.status,approvalId:o.approvalId,
-          approvalStatus:o.approvalId?store.get<Approval>('approvals',o.approvalId)?.status:undefined,result:o.result,
-          kind:row.input.action.kind,...(o.error?{error:'结果未知，请核对原记录'}:{})})),occurrenceTotal:history.length,occurrencesTruncated:history.length>20};
+        ...historyPage(row, row.occurrences)};
     }),upcoming,total:selected.length,offset,nextOffset,truncated:nextOffset !== null,limit };
   }
-  function readBrief(input: Record<string, unknown>) {
+  function scopedWork(input: Record<string, unknown>) {
     const scope = scopeOf(input as { projectId?: string; todoId?: string });
-    if (typeof input.workId !== 'string' || typeof input.occurrenceKey !== 'string') fail('需要计划和触发记录标识', 400);
+    if (typeof input.workId !== 'string') fail('需要计划标识', 400);
     const work = store.get<ScheduledWorkRecord>('scheduled-work.requests', input.workId);
-    const occurrence = store.get<ScheduledWorkOccurrence>('scheduled-work.occurrences', input.occurrenceKey);
-    if (!work || !occurrence || occurrence.workId !== work.id || occurrence.key !== input.occurrenceKey
+    if (!work
       || scope.kind === 'unmarked' || (scope.kind !== 'global' && scope.projectId !== work.input.projectId)
       || (scope.kind === 'task' && scope.todoId !== work.input.todoId)) fail('当前范围找不到这次触发记录', 404);
+    return work;
+  }
+  function readBrief(input: Record<string, unknown>) {
+    const work = scopedWork(input);
+    if (typeof input.occurrenceKey !== 'string') fail('需要触发记录标识', 400);
+    const occurrence = store.get<ScheduledWorkOccurrence>('scheduled-work.occurrences', input.occurrenceKey);
+    if (!occurrence || occurrence.workId !== work.id || occurrence.key !== input.occurrenceKey) fail('当前范围找不到这次触发记录', 404);
     const id = 'scheduled-brief:' + occurrence.key;
     const result = occurrence.result;
     const message = store.get<Message>('messages', id);
@@ -136,7 +159,7 @@ export function createScheduledWorkService(options: {
     });
   }
   const off=events.subscribe(event=>{if(['projects.changed','todos.changed','plugins.changed','feishu.bots.changed','bots.changed'].includes(event.type)){manager.sync();cleanup();}});
-  return { list:publicRows,readBrief,propose,cancel,changeTiming,approveCreation:manager.approveCreation,assertDispatchCurrent:manager.assertDispatchCurrent,
+  return { list:publicRows,readHistory,readBrief,propose,cancel,changeTiming,approveCreation:manager.approveCreation,assertDispatchCurrent:manager.assertDispatchCurrent,
     sync(){manager.sync();cleanup();},async handle(event:Parameters<typeof manager.handle>[0]){
       if(!options.ready())return {status:'retry' as const,reason:'channel_bindings_initializing',afterSec:1,deferred:true};
       const result=await manager.handle(event);cleanup();return result;

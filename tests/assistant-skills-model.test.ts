@@ -144,10 +144,12 @@ test('Web 和飞书查询接下来三项定时工作，并在同一项目内翻�
 });
 
 test('Web 与飞书项目助手核对计划当次简报的原文', async t => {
+  let workId = '';
   let adapter!: FeishuOptions;
   const sent: string[] = [];
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
+      assert.match(req.system, /scheduled_work_history 传 workId 和 after=nextOccurrenceKey/);
       assert.match(req.system, /不用当前快照重构过去的内容/);
       return call('scheduled_work_list', {}, 'list');
     }
@@ -156,7 +158,14 @@ test('Web 与飞书项目助手核对计划当次简报的原文', async t => {
     if (req.callId === 'list') {
       assert.equal(result.items.length, 1);
       const work = result.items[0];
-      return call('scheduled_work_brief', { workId: work.id, occurrenceKey: work.occurrences[0].key }, 'brief');
+      assert.ok(work.nextOccurrenceKey);
+      workId = work.id;
+      return call('scheduled_work_history', { workId, after: work.nextOccurrenceKey }, 'history');
+    }
+    if (req.callId === 'history') {
+      assert.equal(result.nextOccurrenceKey, null);
+      assert.equal(result.occurrences.length, 1);
+      return call('scheduled_work_brief', { workId, occurrenceKey: result.occurrences[0].key }, 'brief');
     }
     assert.match(result.text, /开放待办：0/);
     return { role: 'assistant', content: result.text };
@@ -177,7 +186,14 @@ test('Web 与飞书项目助手核对计划当次简报的原文', async t => {
     const key = row.occurrences[0].key;
     const expected = server.app.store.get<Message>('messages', 'scheduled-brief:' + key)!.text;
     await api('/todos', { title: '简报生成后新增', projectId: project.id });
-    const question = '这个项目上次的定时简报写了什么？';
+    const occurrence = server.app.store.get<Record<string, any>>('scheduled-work.occurrences', key)!;
+    for (let day = 2; day <= 21; day++) {
+      const later = { ...occurrence, key: 'later-' + day, scheduledFor: new Date(Date.UTC(2001, 0, day)).toISOString(), status: 'skipped', result: undefined };
+      server.app.store.put('scheduled-work.occurrences', later.key, later);
+    }
+    assert.throws(() => server.app.scheduledWork.readHistory({ workId: row.id, projectId: other.id }), /当前范围找不到/);
+    assert.throws(() => server.app.scheduledWork.readHistory({ workId: row.id, after: 'other-occurrence' }), /找不到所选/);
+    const question = '这个项目 2001 年 1 月 1 日的定时简报写了什么？';
     assert.equal(await ask(question, '/projects/' + project.id + '/messages'), expected);
     const bot = await api('/feishu/bots', { name: '简报查询', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
