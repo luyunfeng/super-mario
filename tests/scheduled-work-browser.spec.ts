@@ -311,6 +311,13 @@ test('定时工作按当前范围翻页，失败后重试同一页', async () =>
   assert.equal(f.reads.at(-1), '?projectId=a&offset=100');
   await card.getByRole('button', { name: '上一页定时工作' }).click();
   await expect(card).toContainText('显示第 1 至 100 项');
+  await card.getByRole('button', { name: '下一页定时工作' }).click();
+  await expect(card).toContainText('分页任务 100');
+  f.items = f.items.slice(0, 2);
+  await emit(page);
+  await expect(card.locator('article')).toHaveCount(2);
+  await expect(card).toContainText('分页任务 0');
+  assert.equal(f.reads.at(-1), '?projectId=a');
 }));
 
 test('定时工作历史可重试并按触发记录继续翻页', async () => fixture(async f => {

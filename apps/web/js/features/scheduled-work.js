@@ -106,6 +106,11 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       const data = await api.get('/scheduled-work' + (query.size ? '?' + query : ''));
       if (!valid(stamp)) { queued = true; return; }
       if (!Array.isArray(data?.items)) throw new Error('返回数据格式无效');
+      if (offset > 0 && !data.items.length && Number.isSafeInteger(data.total) && data.total >= 0 &&
+          data.total <= offset && Number.isSafeInteger(data.limit) && data.limit > 0) {
+        turnPage(Math.floor(Math.max(0, data.total - 1) / data.limit) * data.limit);
+        return;
+      }
       items = data.items; result = data; error = ''; loaded = true;
     } catch (cause) {
       if (!valid(stamp)) { queued = true; return; }
