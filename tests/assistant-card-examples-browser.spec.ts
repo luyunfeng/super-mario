@@ -20,6 +20,9 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
       points:[{label:'甲',value:Number.MAX_VALUE},{label:'乙',value:Number.MAX_VALUE},{label:'扣减',value:-2}],fallback:'两类各占一半'});
     ctx.contribute('web_extensions','candles',{slot:'advanced-interface',renderer:'chart',kind:'candlestick',title:'价格记录',
       points:[{label:'首日',value:12,open:10,high:15,low:9,volume:24},{label:'次日',value:11,open:12,high:13,low:10}],fallback:'价格摘要'});
+    const stream={slot:'advanced-interface',renderer:'stream',title:'处理记录',lines:['已开始'],fallback:'等待记录'};
+    ctx.contribute('web_extensions','stream',stream);
+    ctx.onEvent(event=>{if(event.type==='review.progress')stream.lines.push(event.data.text);});
     ctx.contribute('web_extensions','future',{slot:'advanced-interface',renderer:'future',title:'其他格式',fallback:'纯文字说明'});
   }}`);
   const server=await startServer({host:'127.0.0.1',port:0,dataDir,demo:true});
@@ -33,6 +36,14 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await page.getByText('界面',{exact:true}).click();
   const entry=page.getByRole('button',{name:'助理卡片示例',exact:true});
   await expect(entry).toBeVisible();
+  const stream=page.getByRole('region',{name:'处理记录'}).locator('pre');
+  await expect(stream).toHaveText('已开始');
+  server.app.events.publish('review.progress',{text:'已处理首批'});
+  await expect(stream).toHaveText('已开始\n已处理首批');
+  await page.reload();
+  await page.getByText('高级：插件与排查',{exact:true}).click();
+  await page.getByText('界面',{exact:true}).click();
+  await expect(stream).toHaveText('已开始\n已处理首批');
   const patch=page.getByRole('region',{name:'变更摘录'});
   const patchText='-before\n+<img src=x>\n';
   await expect(patch.locator('.diff-line--del')).toHaveText('-before');
