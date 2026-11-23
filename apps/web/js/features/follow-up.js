@@ -1,5 +1,6 @@
 // 自动跟进：提醒与简报。展示当前节奏，细项在抽屉里调整。
 import { h, replace } from '../lib/dom.js';
+import { formatDate } from '../lib/format.js';
 import { Button, Card, Field, Input, Check, Banner } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 
@@ -51,7 +52,8 @@ export function createFollowUpCard({ api, store }) {
     const interval = Check({label:'启用间隔简报',checked:briefing.intervalEnabled});
     const away = Check({label:'离开页面后通知结果和待决定',checked:briefing.awayNotifications});
     const grading = Check({label:'低干扰：保留执行结果和项目对话通知',checked:briefing.lowDistraction === true});
-    const held = (presence?.notifications ?? []).filter(n => n.status === 'held');
+    const held = (presence?.notifications ?? []).filter(n => n.status === 'held')
+      .sort((a,b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
     const quiet = briefing.decisionQuietHours ?? { enabled:false, start:'22:00', end:'08:00' };
     const quietToggle = Check({label:'飞书待决定提醒免打扰',checked:quiet.enabled});
     const quietCheck = quietToggle.querySelector('input');
@@ -70,7 +72,7 @@ export function createFollowUpCard({ api, store }) {
       Field({label:'间隔（小时）',control:hours}),
       h('div',{class:'form-row'},Field({label:'时段开始',control:start}),Field({label:'时段结束',control:end})),away,
       grading, h('details',{},h('summary',{},'已保留的通知（'+held.length+'）'),
-        held.map(n=>h('p',{class:'small'},n.text))), quietToggle,quietTimes,
+        held.map(n=>h('article',{},n.createdAt && h('time',{class:'small muted',dateTime:n.createdAt},formatDate(n.createdAt,true)),h('p',{},n.text)))), quietToggle,quietTimes,
       h('p',{class:'small muted'},'免打扰按简报时区生效。时段结束后，仍待回答的飞书提问卡才会提醒。'),
       h('p',null,`待路由通知 ${backlog.length} 条`),backlog.map(n => h('p',{class:'small'},n.reason)),message],
       footer:Button({label:'保存简报设置',kind:'primary',onClick:async()=>{
@@ -163,7 +165,7 @@ export function createFollowUpCard({ api, store }) {
           brief.window.projects.map(p => {
             const sections = [['进展', [...p.progress, ...p.todoUpdates]], ['待办完成', p.completed],
               ['执行结束，待验收', p.ended], ['失败', p.failed], ['待决定', p.decisions]];
-            for (const [label, items] of [['可稍后回答', p.deferredQuestions], ['执行结果未知', p.unknown], ['执行已取消', p.cancelled], ['等待执行', p.queued]]) {
+            for (const [label, items] of [['低干扰保留通知', p.heldNotifications], ['可稍后回答', p.deferredQuestions], ['执行结果未知', p.unknown], ['执行已取消', p.cancelled], ['等待执行', p.queued]]) {
               if (items?.length) sections.push([label, items]);
             }
             return h('section', { class: 'stack' }, h('h3', null, p.name), sections.map(([label, items]) =>

@@ -53,3 +53,26 @@ test('隔离 Chromium：主/项目共用代码侧栏、Git diff、窄屏、多�
     await context.close();
   } finally {await browser.close();await node.close();await server.close();await rm(dir,{recursive:true,force:true});}
 });
+
+test('保留通知按最近时间展示，项目简报可查看同一通知',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'mario-held-notices-'));
+  const server=await startServer({host:'127.0.0.1',port:0,dataDir:dir,demo:true});
+  t.after(async()=>{await server.close();await rm(dir,{recursive:true,force:true});});
+  for(const [id,ago] of [['earlier',60000],['latest',10000]] as const){
+    server.app.store.put('notifications.away',id,{id,status:'held',createdAt:new Date(Date.now()-ago).toISOString(),text:'合成通知 '+id});
+  }
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(()=>browser.close());
+  const page=await browser.newPage();
+  await page.goto(server.url+'/#agent');
+  await page.getByRole('button',{name:'简报与离场通知设置'}).click();
+  const dialog=page.getByRole('dialog',{name:'简报与离场通知'});
+  await dialog.getByText('已保留的通知（2）').click();
+  await expect(dialog.locator('details article p')).toHaveText(['合成通知 latest','合成通知 earlier']);
+  await expect(dialog.locator('time').first()).toBeVisible();
+  await dialog.getByRole('button',{name:'关闭',exact:true}).click();
+  await page.getByRole('button',{name:'查看简报',exact:true}).click();
+  const brief=page.getByRole('dialog',{name:'简报与提醒'});
+  await expect(brief).toContainText('低干扰保留通知 2');
+  await expect(brief).toContainText('合成通知 latest');
+});
