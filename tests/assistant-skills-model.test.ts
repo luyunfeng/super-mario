@@ -3494,12 +3494,23 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
       assert.ok(req.tools.includes('private_conversation_search'));
       assert.match(req.system, /引用正文须写明会话标题和发言角色/);
       assert.match(req.system, /createdAt.*pending.*处理中.*failed.*处理失败.*对应执行记录/);
+      if (JSON.stringify(req.content).includes('验收这两个字出现在哪')) {
+        assert.match(req.system, /hits 为空时只说明匹配的标题或标签/);
+        return call('private_conversation_search', {query:'验收', ...(JSON.stringify(req.content).includes('从网页查') && {botId})}, 'tag-only');
+      }
       const web = JSON.stringify(req.content).includes('从网页查');
       webSearch=web;
       return web ? call('private_conversation_search', { query: '青瓷样本', botId, tag: '验收' }, 'find-source')
         : call('private_conversation_search', { query: '青瓷样本', botId: 'other-bot' }, 'wrong-account');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    if (req.callId === 'tag-only') {
+      const [row] = JSON.parse(raw).items;
+      assert.deepEqual(row.matchedTags,['验收']);
+      assert.deepEqual(row.hits,[]);
+      assert.equal(row.titleMatch,false);
+      return {role:'assistant', content:'验收是这段对话的标签。'};
+    }
     if (req.callId === 'list-ordered') {
       const page = JSON.parse(raw);
       assert.deepEqual(page.items.map((item: {title: string}) => item.title),
@@ -3552,6 +3563,9 @@ test('Web 与飞书主人主会话可查独立对话摘录，独立讨论隔离�
     const answer = '已从用户发言核对青瓷样本。';
     assert.equal(await ask('从网页查已指定机器人在验收标签下的青瓷样本记录'), answer);
     await send('/main', 'back');
+    assert.equal(await ask('从网页查指定机器人，验收这两个字出现在哪？'),'验收是这段对话的标签。');
+    await send('验收这两个字出现在哪？','tag-only');
+    await t.waitFor(() => assert.ok(sent.includes('验收是这段对话的标签。')));
     await send('按当前顺序列出独立对话', 'list-ordered');
     await t.waitFor(() => assert.ok(sent.includes(ordered), sent.at(-1)));
     await send('请查本机器人验收标签下的青瓷样本记录', 'find');
