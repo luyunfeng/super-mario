@@ -1,0 +1,47 @@
+import type { Store } from '../../plugin-sdk/src/index.ts';
+import type { Project, Run, Todo } from '../../protocol/src/index.ts';
+import type { Card } from './interactions.ts';
+
+export interface RunDeadlineTarget {
+  runId:string; machineId:string; executorId:string; sessionId:string; conversationId:string;
+  nativeSessionId?:string; cwd?:string; projectId?:string; todoId?:string; runSourceId?:string;
+  sourceId?:string; audience?:string; agentInstanceId?:string;
+}
+
+/** Only freeze a current interactive session. A later run can reuse the same machine-side identifier. */
+export function runDeadlineTarget(store:Pick<Store,'get'|'list'>,run:Run):RunDeadlineTarget|undefined {
+  if (run.status!=='running' || run.executionMode!=='interactive' || !run.machineId || !run.sessionId ||
+      !run.executorId || !Number.isFinite(Date.parse(run.createdAt))) return;
+  const project=run.projectId && store.get<Project>('projects',run.projectId);
+  if (run.projectId && (!project || project.id!==run.projectId || project.archivedAt)) return;
+  const todo=run.todoId && store.get<Todo>('todos',run.todoId);
+  if (run.todoId && (!todo || todo.id!==run.todoId || todo.projectId!==run.projectId || todo.completedAt)) return;
+  const native=run.nativeSessionId??run.nativeResume?.nativeSessionId;
+  if (store.list<Run>('runs').some(other=>other.id!==run.id && other.machineId===run.machineId &&
+      !(Date.parse(other.createdAt)<Date.parse(run.createdAt)) && (other.sessionId===run.sessionId ||
+        (native && other.executorId===run.executorId && (other.nativeSessionId??other.nativeResume?.nativeSessionId)===native)))) return;
+  return {runId:run.id,machineId:run.machineId,executorId:run.executorId,sessionId:run.sessionId,conversationId:run.conversationId,
+    nativeSessionId:native,cwd:run.cwd,projectId:run.projectId,todoId:run.todoId,runSourceId:run.sourceMessageId};
+}
+
+export function readRunDeadlineTarget(store:Pick<Store,'get'|'list'>,card:Card) {
+  if (!card.runId || !card.decisionDeadlineAt || card.kind!=='question') return;
+  const origin=store.get<{inputId?:string;runDeadline?:RunDeadlineTarget}>('interaction-origins',card.id);
+  const frozen=origin?.runDeadline;
+  if (!frozen || frozen.runId!==card.runId || frozen.sourceId!==origin?.inputId ||
+      frozen.projectId!==card.projectId || frozen.executorId!==card.executorId || frozen.cwd!==card.cwd) return;
+  const run=store.get<Run>('runs',card.runId);
+  const current=run && runDeadlineTarget(store,run);
+  if (!current || Object.entries(current).some(([key,value])=>frozen[key as keyof RunDeadlineTarget]!==value)) return;
+  return frozen;
+}
+
+export function runQuestionReply(card:Card,text:string) {
+  if (!card.byDefault) return text;
+  if (!card.reversible || !card.questions?.length || card.answers?.length!==card.questions.length ||
+      !card.questions.every((q,i)=>q.recommend && q.options.some(o=>o.label===q.recommend) &&
+        card.answers?.[i]?.selected.length===1 && card.answers[i]?.selected[0]===q.recommend && !card.answers[i]?.text))
+    throw Object.assign(new Error('无法核实截止卡的原始推荐选项'),{delivery:'no'});
+  return '系统截止默认选择（未收到主人答复）。仅供原执行处理本轮提问，不代表主人授权其他操作。\n'+
+    JSON.stringify(card.questions.map((q,i)=>({问题:q.question,已选:card.answers![i]!.selected})));
+}

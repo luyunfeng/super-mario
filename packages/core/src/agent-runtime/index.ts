@@ -12,7 +12,7 @@ import { subscriptionReadGuidance } from '../subscription-tools.ts';
 import { MAIN_AGENT_SYSTEM_PROMPT, PROJECT_MEMORY_SYSTEM_PROMPT } from '../prompts.ts';
 import { estimateTokens, boundTraceText, formatTraceRequest, saveTurnTrace, summarizeTrace, type AgentTraceContextItem, type AgentTraceRuntimeMeta, type AgentTurnTrace } from '../agent-traces.ts';
 import type { BotScope } from '../../../protocol/src/bots.ts';
-import type { AppConfig, MainAssistantProfile, ExecutorInfo, JsonObject, KnowledgeEntry, Message, Json } from '../../../protocol/src/index.ts';
+import type { AppConfig, MainAssistantProfile, ExecutorInfo, JsonObject, KnowledgeEntry, Message, Json, Run } from '../../../protocol/src/index.ts';
 import type { Contributions, EventBus, Store } from '../../../plugin-sdk/src/index.ts';
 import type { AgentSession, ExtensionFactory, ToolDefinition } from '@earendil-works/pi-coding-agent';
 
@@ -167,8 +167,13 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
       }
     };
     if (name === 'interaction_open') {
-      if (args.kind !== 'question' || args.runId !== undefined || args.cwd !== undefined || args.executorId !== undefined)
+      if (args.kind !== 'question' || args.cwd !== undefined || args.executorId !== undefined)
         throw new Error('项目或事项助手只能在当前对话提出普通问题');
+      if (args.runId !== undefined) {
+        const run = typeof args.runId === 'string' && store.get<Run>('runs', args.runId);
+        if (!args.deadline || !run || !inScope(run) || (activeInput?.todoId && activeInput.todoId !== run.todoId))
+          throw new Error('限时决定必须属于当前范围内的执行');
+      }
       pin(args);
       return args;
     }

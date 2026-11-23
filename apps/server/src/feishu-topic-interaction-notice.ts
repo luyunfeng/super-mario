@@ -1,3 +1,5 @@
+import { readRunDeadlineTarget } from '../../../packages/core/src/run-question-deadline.ts';
+import { cardAcceptsAnswer } from '../../../packages/core/src/question-deadline.ts';
 import { responsibleSessionTodos } from '../../../packages/core/src/responsible-session.ts';
 import { mailboxEntryId } from '../../../packages/core/src/event-mailboxes.ts';
 import type { Card } from '../../../packages/core/src/interactions.ts';
@@ -31,7 +33,8 @@ export function topicInteractionNotice(
     card.status !== 'open' ||
     card.handler !== 'user' ||
     !card.userNotifiedAt ||
-    !(Date.parse(card.expiresAt) > now)
+    !cardAcceptsAnswer(card,now) ||
+    (card.decisionDeadlineAt && !readRunDeadlineTarget(store,card))
   )
     return;
   const run = store.get<Run>('runs', card.runId);

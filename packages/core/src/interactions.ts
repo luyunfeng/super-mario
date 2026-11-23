@@ -152,11 +152,15 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       settleDeadline(id,now);
       current=get(id,version);
     }
+    if (current.decisionDeadlineAt && !cardAcceptsAnswer(current,now))
+      throw new InteractionError('正在核验截止选项，稍后再试',409);
     if (!cardAcceptsAnswer(current,now)) {
       claim(id, version, {status:'expired'});
       changed(id);
       throw new InteractionError('交互卡片已过期', 409);
     }
+    if (current.runId && current.decisionDeadlineAt && deadlineOutcome?.(current)!=='eligible')
+      throw new InteractionError('原执行或来源已不可核实，请核对后再回答',409);
     const response = current.questions ? readQuestionResponses(current.questions, input) : undefined;
     const value = response?.text ?? input;
     text(value, 'answer');
@@ -171,7 +175,9 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
     }
     return deliverAnswer(card,value);
   }
+  const delivering=new Set<string>();
   function deliverAnswer(card:Card,value:string) {
+    delivering.add(card.id);
     const id=card.id;
     const job = track(Promise.resolve().then(async () => {
       let patch: Partial<Card>;
@@ -193,6 +199,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       if (result.delivery !== 'confirmed') events.publish('interactions.user_required', { id });
       return result;
     }));
+    void job.then(()=>delivering.delete(id),()=>delivering.delete(id));
     changed(id);
     return job;
   }
@@ -274,7 +281,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
     track(job);
   }
   return {
-    open(input: Input, conversationQuestion = false): Card {
+    open(input: Input, conversationQuestion = false, boundRun = false): Card {
       active();
       if (!input || !['question', 'permission', 'plan', 'review'].includes(input.kind)) throw new InteractionError('无效的交互 kind');
       text(input.title, 'title');
@@ -295,7 +302,7 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
       const now = new Date().toISOString();
       const card: Card = { ...fields, id: randomUUID(), version: 1, status: 'open', handler: 'user', layer: 'default',
         expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(), createdAt: now, updatedAt: now };
-      Object.assign(card,questionDeadline({...fields,deadline:input.deadline,reversible:input.reversible},Date.parse(now)));
+      Object.assign(card,questionDeadline({...fields,deadline:input.deadline,reversible:input.reversible},Date.parse(now),boundRun));
       const policy = decide(structuredClone(card), conversationQuestion);
       const decision: Decision = card.wait === false || card.decisionDeadlineAt ? {...policy,handler:'user',mode:'suggest',answer:undefined,ruleId:undefined,
         ...(policy.stages && {stages:[{handler:'user',mode:'suggest'}]})} : policy;
@@ -361,6 +368,28 @@ export function createInteractions({ store, events, decide, answer: deliver, ask
         }
       }
       return [...expired, ...escalated];
+    },
+    recoverRunDefault(id:string, attempted:boolean) {
+      const current=store.get<Card>(collection,id);
+      if (closed || !current?.runId || current.status!=='answered' || !current.byDefault || !current.answer ||
+          current.delivery!=='unknown' || current.error || delivering.has(id)) return;
+      if (!attempted) {
+        const state=deadlineOutcome?.(current);
+        if (state==='initializing') return;
+        if (state!=='eligible') {
+          // No executor input was ever claimed. Leave the original choice for its owner.
+          store.transaction(()=>{
+            const row=store.get<Card>(collection,id);
+            if (!row || row.version!==current.version || store.get('effects','interaction:'+id)) return;
+            save(row,{status:'open',byDefault:undefined,answers:undefined,answer:undefined,answeredAt:undefined,
+              decisionVersion:undefined,answeredBy:undefined,delivery:undefined,deadlineRemindedAt:new Date().toISOString()});
+            events.publish('interactions.deadline_overdue',{id});
+          });
+          changed(id);
+          return;
+        }
+      }
+      void deliverAnswer(current,current.answer);
     },
     list(): Card[] { active(); return store.list<Card>(collection); },
     async close(): Promise<void> {

@@ -20,7 +20,7 @@ type AgentRow = {
 };
 const line = (value: string | undefined, limit = 100) => publicText(value, limit).replace(/\s+/g, ' ');
 
-export function agentCardSnapshot(discovery: SessionList, store: Pick<Store, 'list'>, query: string) {
+export function agentCardSnapshot(discovery: SessionList, store: Pick<Store, 'get' | 'list'>, query: string) {
   const projects = new Map(store.list<Project>('projects').map(item => [item.id, item]));
   const todos = new Map(store.list<Todo>('todos').map(item => [item.id, item]));
   const blockers = readRunBlockers(store, Date.now());
@@ -100,7 +100,7 @@ export function agentCard(data: AgentCardSnapshot, navigation: string, webBase?:
 }
 
 /** Render only the run the private owner selected. The same snapshot is used to check a queued delivery. */
-export function selectedAgentStatus(store: Pick<Store, 'list'>, run: Run, webBase?: string) {
+export function selectedAgentStatus(store: Pick<Store, 'get' | 'list'>, run: Run, webBase?: string) {
   const phases = { running: '运行中', queued: '排队中', completed: '执行结束', failed: '失败', cancelled: '已取消', unknown: '未知' };
   const observations = { starting: '启动', thinking: '分析', tool: '调用工具', responding: '输出', waiting: '等待后续事件' };
   const types: Record<string, string> = { question: '问题', permission: '权限', plan: '计划', review: '验收', approval: '审批' };

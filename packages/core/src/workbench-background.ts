@@ -29,6 +29,7 @@ export function reminderSourceId(todo: Todo) {
 export interface WorkbenchBackgroundDeps {
   demo?: boolean;
   deadlineWebSource: (card: Card) => Message | undefined;
+  validRunQuestionSource: (card:Card) => Message | undefined;
   consumePendingBriefNotices?: () => { title: string; text: string; createdAt: string }[];
   conversations?:()=>import('../../protocol/src/inbox-conversations.ts').InboxConversation[];
   store: ReturnType<typeof createStore>;
@@ -337,7 +338,11 @@ export function wireWorkbenchBackground(deps: WorkbenchBackgroundDeps): { close(
       const card = store.get<Card>('interactions', id);
       if (!card || card.status === 'expired' || card.withdrawnReason === 'user_spoke' || card.userNotifiedAt) return;
       const origin = store.get<{ inputId?: string }>('interaction-origins', id);
-      const source = card.kind === 'question' && !card.runId && origin?.inputId ? store.get<Message>('messages',origin.inputId) : undefined;
+      const runDeadline = card.runId && card.decisionDeadlineAt;
+      const source = runDeadline ? deps.validRunQuestionSource(card) :
+        card.kind === 'question' && !card.runId && origin?.inputId ? store.get<Message>('messages',origin.inputId) : undefined;
+      // A run created directly in Web can have a question card without a chat recipient.
+      if (runDeadline && (!source || source.id !== origin?.inputId)) return;
       const now = new Date().toISOString();
       const messageId = `interaction-notice:${id}`;
       store.transaction(() => {

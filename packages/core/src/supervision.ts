@@ -1,3 +1,5 @@
+import { readRunDeadlineTarget } from './run-question-deadline.ts';
+import { cardAcceptsAnswer } from './question-deadline.ts';
 import type { Card } from './interactions.ts';
 import { planEstimateClock, runScopeClock } from './run-scope.ts';
 import { todoSections, todoDecisionIds } from './todo-sections.ts';
@@ -45,11 +47,11 @@ export function estimateReviewDeadline(store: Store, run: Run) {
 }
 
 /** Re-read the owner question and its current scope before publishing or reviewing a signal. */
-export function waitingRunQuestion(store: Pick<Store,'get'>, cardId:string, now=Date.now()) {
+export function waitingRunQuestion(store: Pick<Store,'get'|'list'>, cardId:string, now=Date.now()) {
   const card=store.get<Card>('interactions',cardId);
   if (!card || card.id!==cardId || card.kind!=='question' || card.status!=='open' || card.handler!=='user' ||
       card.wait===false || !card.runId || !Number.isSafeInteger(card.version) || card.version<1 ||
-      !(Date.parse(card.expiresAt)>now)) return;
+      !cardAcceptsAnswer(card,now) || (card.decisionDeadlineAt && !readRunDeadlineTarget(store,card))) return;
   const run=store.get<Run>('runs',card.runId);
   if (!run || run.id!==card.runId || run.status!=='running' || run.executionMode==='task' || run.projectId!==card.projectId ||
       (card.executorId!==undefined && card.executorId!==run.executorId) || (card.cwd!==undefined && card.cwd!==run.cwd)) return;

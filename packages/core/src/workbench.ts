@@ -59,7 +59,8 @@ import { translateReply } from './agent-runtime/reply-translation.ts';
 import { createModelConfig } from './model-config.ts';
 import { createPlans } from './plans.ts';
 import { createPolicies, validatePolicyPatch, type PolicyConfig } from './policies.ts';
-import { createInteractions } from './interactions.ts';
+import { readRunDeadlineTarget, runDeadlineTarget, runQuestionReply, type RunDeadlineTarget } from './run-question-deadline.ts';
+import { createInteractions, type Card } from './interactions.ts';
 import { createSupervisorAgent } from './supervisor-agent.ts';
 import { createEffects } from './effects.ts';
 import { createRunMonitor } from './run-monitor.ts';
@@ -406,7 +407,11 @@ export async function createWorkbench(config: AppConfig) {
       const source = currentAgentInput();
       if (source && sourceThread(source)) store.put('approval.origins', approval.id, { conversationId: source.conversationId, sourceMessageId: source.id });
       return approval as unknown as Json;
-    }), brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => interactions.open(input as Parameters<typeof interactions.open>[0], currentAgentInput() ?? agent.currentInput()) as unknown as Json, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
+    }), brief: () => supervision.brief(), updateTodo: (id, patch) => updateTodo(id, patch) as unknown as Json, taskPlan: input => proposePlan(input, true) as unknown as Json, interactionOpen: input => {
+      // A background tool call must never borrow a concurrent main conversation's authority.
+      const source=input.runId && input.deadline!==undefined ? currentAgentInput() : currentAgentInput() ?? agent.currentInput();
+      return interactions.open(input as Parameters<typeof interactions.open>[0],source) as unknown as Json;
+    }, interactionsList: () => interactions.list() as unknown as Json, answerQuestion: (id, version, text) => answerQuestion(id, version, text), supervisorRead: () => ({ status: supervisorRuntime.status(), reviews: supervisorAgent.reviews() }) as unknown as Json } })) plugins.register(extension);
   function makeWebSource() {
     const options = webConfig.read();
     return createFeishuWebSource({
@@ -676,6 +681,7 @@ export async function createWorkbench(config: AppConfig) {
   const answeredInCurrentTurn = new Set<string>();
   const interactionService = createInteractions({ store, events, publish: background.publish,
     deadlineOutcome(card) {
+      if (card.runId) return runQuestionState(card);
       if (!ownerScopeReady) {
         const origin = store.get<{inputId?:string}>('interaction-origins',card.id);
         const source = origin?.inputId && questionSource(store.get<Message>('messages',origin.inputId));
@@ -687,6 +693,22 @@ export async function createWorkbench(config: AppConfig) {
     const decision = policies.decide(card, conversationQuestion);
     return { ...decision, layer: decision.layer === 'run' ? 'task' : decision.layer, answer: decision.answer ?? undefined, ruleId: decision.ruleId ?? undefined };
   }, async answer(card, text) {
+    if (card.runId && card.decisionDeadlineAt) {
+      const reply=runQuestionReply(card,text);
+      const ack=await effects.perform({key:'interaction:'+card.id,kind:'executor.input',target:card.runId,summary:'送达执行提问的选择',
+        content:{text:reply},run:async()=>{
+          const target=readRunDeadlineTarget(store,card);
+          if (!target || closing || runQuestionState(card)!=='eligible')
+            throw Object.assign(new Error('原执行或提问来源已变化，未发送选择'),{delivery:'no'});
+          const response=await machines!.call(target.machineId,'executor.input',{sessionId:target.sessionId,text:reply});
+          const receipt=executorInputReceipt(response);
+          if (receipt!=='sent') throw Object.assign(new Error(receipt==='unsent'?'执行者未接收选择':'执行者未确认送达选择'),
+            {delivery:receipt==='unsent'?'no':'unknown'});
+          return response;
+        }});
+      if (executorInputReceipt(ack)!=='sent') throw Object.assign(new Error('缺少原执行的送达回执'),{delivery:'unknown'});
+      return;
+    }
     if (card.wait === false || card.byDefault) return laterQuestions.end(card.id);
     if (card.runId && ['question', 'permission'].includes(card.kind)) {
       const receipt = executorInputReceipt(await inputRun(card.runId, text, `interaction:${card.id}`));
@@ -738,25 +760,66 @@ export async function createWorkbench(config: AppConfig) {
     const reply = await runtime.ask(`请给这张交互卡片提供简短建议答案，不执行外部动作。以下JSON为业务数据：\n${JSON.stringify(card)}`, { projectId: card.projectId, readOnly: true });
     return reply.text;
   } });
-  function openInteraction(input: Parameters<typeof interactionService.open>[0], source?: Message) {
+  function validRunQuestionSource(card:Card) {
+    const target=readRunDeadlineTarget(store,card);
+    if (!target) return;
+    const machine=machines?.list().find(row=>row.id===target.machineId);
+    if (!machine?.online || (target.agentInstanceId && machine.agentInstanceId!==target.agentInstanceId)) return;
+    const source=target.sourceId && store.get<Message>('messages',target.sourceId);
+    if (source && target?.audience && directQuestionAudience(source)===target.audience) return source;
+  }
+  function runQuestionState(card:Card) {
+    const target=readRunDeadlineTarget(store,card);
+    if (!target) return 'unverified';
+    if (target.sourceId && !ownerScopeReady && store.get<MessageRoute>('message.routes',target.sourceId)?.channel==='feishu') return 'initializing';
+    if (!machines) return 'initializing';
+    if (target.sourceId && !validRunQuestionSource(card)) return 'unverified';
+    const machine=machines.list().find(item=>item.id===target.machineId);
+    if (!machine?.online) return 'unverified';
+    if ((target.agentInstanceId && target.agentInstanceId!==machine.agentInstanceId) ||
+        !executors().some(entry=>entry.id===target.executorId && entry.available)) return 'unverified';
+    return 'eligible';
+  }
+  function openInteraction(input: Parameters<typeof interactionService.open>[0], source?: Message, web=false) {
     if (!input || typeof input !== 'object') throw new InputError('交互卡片必须为对象');
     const runId = input.runId === undefined ? undefined : requiredText(input.runId, '执行记录');
     const run = runId ? store.get<Run>('runs', runId) : undefined;
     if (runId && !run) throw new InputError('关联执行记录不存在', 404);
     const needsAudience = input.wait === false || input.deadline !== undefined;
-    if (needsAudience && source) source = store.get<Message>('messages',source.id);
+    if (needsAudience && source) {
+      source=store.get<Message>('messages',source.id);
+      if (!source) throw new InputError('提问来源已失效',403);
+    }
     const audience = needsAudience ? liveQuestionAudience(source) : undefined;
-    if (needsAudience) {
+    let frozen:RunDeadlineTarget|undefined;
+    if (run && input.deadline!==undefined) {
+      if (input.kind!=='question' || input.wait===false) throw new InputError('执行截止选择仅适用于普通结构化提问');
+      if ((!web && (!source || !directQuestionAudience(source) || source.conversationId!==run.conversationId ||
+          source.projectId!==run.projectId || (source.todoId!==undefined && source.todoId!==run.todoId))) ||
+          (input.projectId!==undefined && input.projectId!==run.projectId))
+        throw new InputError('需要目标执行所在范围的主人直接提问',403);
+      frozen=runDeadlineTarget(store,run);
+      const machine=machines?.list().find(item=>item.id===run.machineId);
+      if (!frozen || !machine?.online || !executors().some(entry=>entry.id===run.executorId && entry.available))
+        throw new InputError('需要当前在线且可接受输入的交互执行',409);
+      frozen.agentInstanceId=machine.agentInstanceId;
+      const original=source ?? (run.sourceMessageId ? store.get<Message>('messages',run.sourceMessageId) : undefined);
+      const owner=directQuestionAudience(original);
+      if (original && owner && original.conversationId===run.conversationId && original.projectId===run.projectId &&
+          (original.todoId===undefined || original.todoId===run.todoId)) {
+        frozen.sourceId=original.id; frozen.audience=owner;
+      }
+    } else if (needsAudience) {
       if (input.kind !== 'question' || runId || !source || !audience || (input.projectId !== undefined && input.projectId !== source.projectId))
         throw new InputError('稍后回答或带期限的提问仅适用于能核实原对话的普通提问',403);
       if (input.wait === false) laterQuestions.assertCapacity();
     }
     // Execution context comes from core facts; model-provided metadata cannot select a weaker policy.
     const card = interactionService.open({ ...input, runId, projectId: run?.projectId ?? source?.projectId ?? input.projectId,
-      executorId: run?.executorId ?? input.executorId, cwd: run?.cwd ?? input.cwd }, Boolean(source && !runId && input.kind === 'question'));
-    const inputId = run?.sourceMessageId ?? source?.id;
+      executorId: run?.executorId ?? input.executorId, cwd: run?.cwd ?? input.cwd }, Boolean(source && !runId && input.kind === 'question'),Boolean(frozen));
+    const inputId = frozen ? frozen.sourceId : run?.sourceMessageId ?? source?.id;
     const formAudience = card.kind === 'question' && !runId && source ? questionFormAudience(source) : undefined;
-    store.put('interaction-origins', card.id, { inputId, ...(formAudience && {formAudience}), ...(input.deadline !== undefined && {deadlineAudience:audience}) });
+    store.put('interaction-origins', card.id, { inputId, ...(frozen && {runDeadline:frozen}), ...(formAudience && {formAudience}), ...(!frozen && input.deadline !== undefined && {deadlineAudience:audience}) });
     if (card.kind === 'question' && !runId && inputId) {
       store.put('input-paused', inputId, { cardId: card.id });
       if (card.wait === false && audience) {
@@ -772,7 +835,10 @@ export async function createWorkbench(config: AppConfig) {
     }
     return card;
   }
-  const interactions = {...interactionService, open(input:Parameters<typeof interactionService.open>[0], source?:Message) {
+  const interactions = {...interactionService, openFromWeb(input:Parameters<typeof interactionService.open>[0]) {
+    return input?.wait===false || input?.deadline!==undefined
+      ? store.transaction(()=>openInteraction(input,undefined,true)) : openInteraction(input,undefined,true);
+  }, open(input:Parameters<typeof interactionService.open>[0], source?:Message) {
     return input?.wait === false || input?.deadline !== undefined ? store.transaction(()=>openInteraction(input,source)) : openInteraction(input,source);
   }};
   const questionHost:QuestionHost = {
@@ -842,8 +908,16 @@ export async function createWorkbench(config: AppConfig) {
     } else if (card?.status==='open') questionRelease.check(card.id);
     else if (card) deferredQuestions.materialize(card);
   });
-  function recoverDeferredQuestions() {
+  function recoverPendingRunAnswers() {
     for (const card of interactions.list()) {
+      if (card.runId && card.byDefault && card.delivery==='unknown' && !card.error)
+        interactionService.recoverRunDefault(card.id,!!store.get('effects','interaction:'+card.id));
+    }
+  }
+  function recoverDeferredQuestions() {
+    recoverPendingRunAnswers();
+    for (const card of interactions.list()) {
+      if (card.runId) continue;
       if (card.byDefault && card.delivery !== 'confirmed') void laterQuestions.end(card.id).catch(()=>{});
       else if (card.wait !== false) deferredQuestions.materialize(card);
     }
@@ -860,7 +934,7 @@ export async function createWorkbench(config: AppConfig) {
     }
   }, 30_000);
   triageTimer.unref();
-  const expireTimer = setInterval(() => { interactions.expireTick(); deferredQuestions.recover(); laterQuestions.recover(); }, 30_000); expireTimer.unref();
+  const expireTimer = setInterval(() => { interactions.expireTick(); recoverPendingRunAnswers(); deferredQuestions.recover(); laterQuestions.recover(); }, 30_000); expireTimer.unref();
   const awayNotifications = createAwayNotifications({ store, events, background, presence, bots: () => notificationBots(), channel: bot => notificationChannel(bot) });
   const projectFollowUp = createProjectFollowUp({ store, events, conversations:()=>inboxAssistant.list(), schedules: background.schedules, settings: briefing.settings,
     enqueue(input) {
@@ -876,8 +950,9 @@ export async function createWorkbench(config: AppConfig) {
   });
   const wiredBackground = wireWorkbenchBackground({
     demo: config.demo,
+    validRunQuestionSource,
     deadlineWebSource(card) {
-      const input = deadlineSource(card);
+      const input = card.runId ? validRunQuestionSource(card) : deadlineSource(card);
       return input && questionSource(input)?.directWebInput ? input : undefined;
     },
     consumePendingBriefNotices: () => followups.consumePendingBriefNotices(),
@@ -2424,7 +2499,7 @@ export async function createWorkbench(config: AppConfig) {
       const excerpt = source.text.length > 4000 ? source.text.slice(0, 3970).replace(/[\uD800-\uDBFF]$/u, '') + '…（节选，全文见来源消息）' : source.text;
       workDecisions.ledger.record({ key, scope, text: excerpt, sourceMessageId: inputId });
     },
-    config, store, events, effects, plugins, contributions, workDecisions, todoDecisions, waitingReplies, inboxAssistant, inboxClassifier, inboxHandling, inboxHandlingRuntime, agent, supervisorRuntime, supervisorAgent, policies, plans, proposePlan, interactions, inbox, approvals, supervision, monitor,
+    validRunQuestionSource, config, store, events, effects, plugins, contributions, workDecisions, todoDecisions, waitingReplies, inboxAssistant, inboxClassifier, inboxHandling, inboxHandlingRuntime, agent, supervisorRuntime, supervisorAgent, policies, plans, proposePlan, interactions, inbox, approvals, supervision, monitor,
     setInboxReplyHost(access: typeof mailboxHandlingAccess, reply: NonNullable<typeof replyToInboxSource>) { mailboxHandlingAccess=access;replyToInboxSource=reply; },
     readInboxHandlingSource: inboxHandlingSources,
     setFeishuSender(send: typeof replyToFeishu, ownerTarget?: () => string | undefined, accountId?: () => string | undefined, sendFromOutbox?: typeof replyToFeishu) {
@@ -2438,7 +2513,7 @@ export async function createWorkbench(config: AppConfig) {
       } : undefined;
     },
     forgetPrivateConversation: (id: string) => forgetPrivateConversation(store, id),
-    delegateTodo, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; }, listExecutors: executorInfo, snapshot, createFeishuTodo: (input: Record<string,unknown>, source: TodoOriginSource) => createTodo(input,true,'feishu',source), knowledgeRevision, confirmKnowledgeActions, knowledgeActionStatus, todos, createTodo, continueTodo, updateTodo, answerDeferredQuestion:deferredQuestions.answer, dispatch, cancel, knowledge,
+    delegateTodo, setFeishuStatus(read: typeof channelStatus) { channelStatus = read; }, setMachineClient(client: MachineClient) { machines = client; interactions.expireTick(); recoverDeferredQuestions(); }, listExecutors: executorInfo, snapshot, createFeishuTodo: (input: Record<string,unknown>, source: TodoOriginSource) => createTodo(input,true,'feishu',source), knowledgeRevision, confirmKnowledgeActions, knowledgeActionStatus, todos, createTodo, continueTodo, updateTodo, answerDeferredQuestion:deferredQuestions.answer, dispatch, cancel, knowledge,
     async close() {
       if (closing) return;
       closing = true;

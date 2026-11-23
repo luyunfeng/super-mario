@@ -22,9 +22,9 @@ function deadlineTime(value:string, now:number) {
   return now+duration;
 }
 
-export function questionDeadline(input:{kind:string;runId?:string;questions?:QuestionItem[];deadline?:string;reversible?:boolean},now:number) {
+export function questionDeadline(input:{kind:string;runId?:string;questions?:QuestionItem[];deadline?:string;reversible?:boolean},now:number, boundRun=false) {
   if (input.deadline===undefined && input.reversible===undefined) return {};
-  if (input.kind!=='question' || input.runId || !input.questions?.length) invalid('只有对话中的结构化普通问题支持截止设置');
+  if (input.kind!=='question' || (input.runId && !boundRun) || !input.questions?.length) invalid('只有对话中的结构化普通问题支持截止设置');
   if (input.reversible!==undefined && typeof input.reversible!=='boolean') invalid('reversible 须为布尔值');
   if (input.deadline===undefined || (typeof input.deadline==='string' && !input.deadline.trim())) return input.reversible===undefined ? {} : {reversible:input.reversible};
   if (typeof input.deadline!=='string' || input.deadline.length>128) invalid('deadline 须为带时区的截止时间或时长');

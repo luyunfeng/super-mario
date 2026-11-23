@@ -1,3 +1,6 @@
+import type { Card } from "./interactions.ts";
+import { cardAcceptsAnswer } from "./question-deadline.ts";
+import { readRunDeadlineTarget } from "./run-question-deadline.ts";
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 interface ExecutionScope {
@@ -104,10 +107,16 @@ export function referenceCurrent(
     status?: string;
     completedAt?: string;
     expiresAt?: string;
+    decisionDeadlineAt?: string;
     todoId?: string;
     runId?: string;
     params?: { todoId?: string };
   }>(collection, id);
+  if (kind === "interaction" && item?.decisionDeadlineAt) {
+    const card = store.get<Card>("interactions", id)!;
+    return card.id === id && card.version === stale.version && cardAcceptsAnswer(card, at) &&
+      (!card.runId || !!readRunDeadlineTarget(store, card));
+  }
   if (item && (kind === "approval" || kind === "interaction")) {
     const todoId = item.todoId || item.params?.todoId;
     if (

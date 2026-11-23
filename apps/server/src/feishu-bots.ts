@@ -50,6 +50,7 @@ import type { BotScope, FeishuAgentInputTarget, FeishuBot, FeishuBotInput, Mailb
 export type FeishuMailboxInput = Pick<MailboxEntry, 'direction' | 'scope' | 'botId' | 'eventKey' | 'title' | 'text' | 'requiresConfirmation'>
   & Partial<Pick<MailboxEntry, 'target' | 'sourceMessageId' | 'replyTo' | 'origin'>>;
 export interface FeishuBotsApp {
+  validRunQuestionSource?(card:Card):Message|undefined;
   store: Pick<Store, 'get' | 'put' | 'list' | 'transaction'> & Partial<Pick<Store, 'remove' | 'entries'>>;
   forgetPrivateConversation?(conversationId: string): void;
   scopedAgents?: { assertThreadIdle(botId: string, threadId: string): void; forgetDeletedThread(botId: string, threadId: string): Promise<void> };
@@ -196,6 +197,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   function canViewQuestion(bot: FeishuBotSettings, paired: Owner, card: Card) {
     const requiresOrigin = card.wait === false || !!card.decisionDeadlineAt;
     const origin = app.store.get<{inputId?:string}>('interaction-origins',card.id)?.inputId;
+    if (card.runId && card.decisionDeadlineAt) {
+      const source = app.validRunQuestionSource?.(card);
+      return !!origin && source?.id === origin && Boolean(privateTurn(bot,paired,origin));
+    }
     if (!origin || card.runId) return !requiresOrigin;
     const rootId = app.store.get<string>('conversation.question-continuations',origin) ?? origin;
     const root = app.store.get<Message>('messages',rootId);
@@ -2240,6 +2245,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
     const q=app.store.get<Card>('interactions',card.questionId);
     if(q?.kind!=='question' || q.status!=='open' || q.handler!=='user' || q.version!==card.version ||
       !cardAcceptsAnswer(q) || app.store.get<{inputId:string}>('interaction-origins',q.id)?.inputId!==card.inputId) return;
+    if (q.runId && q.decisionDeadlineAt && !canViewQuestion(bot,paired,q)) return;
     if (!q.decisionDeadlineAt) {
       const cap=app.store.get<CardNavigation>('feishu.card.navigation',card.navigation);
       if(!cap || cap.botId!==bot.id || cap.appId!==bot.appId || cap.revision!==bot.revision ||

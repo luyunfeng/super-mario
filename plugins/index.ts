@@ -286,7 +286,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           }, {
             kind: { type: 'string', enum: ['question', 'permission', 'plan', 'review'] }, title: { type: 'string' }, body: { type: 'string' },
             wait: { type: 'boolean', description: '默认 true。仅在主人或当前工作指令明确允许稍后回答的普通提问中设为 false。卡片保留，本轮结束，答案稍后回到原会话。' },
-            deadline: { type: 'string', description: '普通结构化问题的可选决定期限。用时长（如 90m、2h）或 RFC 3339 时间，范围为 1 分钟至 30 天。填写时必须明确 reversible，每题给出 recommend。' },
+            deadline: { type: 'string', description: '普通结构化问题的可选决定期限。针对原交互执行时同时指定核实过的 runId。用时长（如 90m、2h）或 RFC 3339 时间，范围为 1 分钟至 30 天。填写时必须明确 reversible，每题给出 recommend。' },
             reversible: { type: 'boolean', description: '整个决定可撤回才为 true。涉及删除、对外发送、花钱或生产变更时填 false，到期仍等主人。' },
             questions: { type: 'array', minItems: 1, maxItems: 4, description: '仅用于普通问题。题目不能重复。', items: {
               type: 'object', additionalProperties: false, required: ['question','options'], properties: {
