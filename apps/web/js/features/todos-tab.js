@@ -400,7 +400,7 @@ export function createTodosTab({ api, store, router }) {
     paint();
   }
 
-  const todoSignature = snapshot => JSON.stringify((snapshot?.todos ?? []).map(todo => [todo.id, todo.updatedAt]));
+  const todoSignature = snapshot => JSON.stringify((snapshot?.todos ?? []).map(todo => [todo.id, todo.updatedAt, todo.remindedAt]));
 
   const calendarActive = snapshot => snapshot?.plugins?.some(plugin =>
     plugin.id === 'todo-calendar' && plugin.enabled && plugin.status === 'active') === true;

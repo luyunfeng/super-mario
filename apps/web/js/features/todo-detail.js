@@ -180,7 +180,7 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
       section('负责方', current.responsibleSession ? '会话 ' + current.responsibleSession.machineId + ' / ' + current.responsibleSession.sessionId : current.responsiblePerson || '未登记'),
       section('优先级', todoPriorityLabels[current.priority ?? 'normal']),
       section('归属', project?.name ?? current.projectId ?? '不归类', current.completedAt && ' · 已完成'),
-      section('等待', current.waitingOn || '未设置等待对象', current.reminderAt && h('p', null, '提醒 ' + formatDate(current.reminderAt, true)),
+      section('等待', current.waitingOn || '未设置等待对象', current.reminderAt && h('p', null, '计划提醒 ' + formatDate(current.reminderAt, true) + (current.remindedAt ? ' · 本地触发于 ' + formatDate(current.remindedAt, true) : current.completedAt ? ' · 待办已完成' : ' · 尚无触发记录')),
         current.dueAt && h('p', null, '截止 ' + formatDate(current.dueAt, true))));
     replace(next, section('执行', latest ? h('p', null, '最近执行 · ', runStatus[latest.status]?.text ?? latest.status, ' · ',
       snapshot.executors?.find(item => item.id === latest.executorId)?.name ?? latest.executorId) : '当前快照中没有关联执行',

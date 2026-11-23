@@ -1585,6 +1585,11 @@ test('待办提醒拒绝过期创建，Web 登记未来提醒，飞书取消时�
     if (req.lastRole === 'user') {
       assert.match(req.system, /是否送达飞书另看投递回执/);
       const question = JSON.stringify(req.content);
+      if (question.includes('哪些提醒')) {
+        assert.match(req.system, /reminderStatus=pending/);
+        const status = question.includes('已经触发') ? 'triggered' : 'pending';
+        return call('todos_list', { reminderStatus: status }, status);
+      }
       if (question.includes('2000年')) return call('todo_create', { title: '跟进进度', reminderAt: '2000-01-01T08:00:00Z' }, 'past');
       if (question.includes('取消')) return call('todo_update', { id, reminderAt: '' }, 'clear');
       return call('todo_update', { id, reminderAt: reminder }, 'save');
@@ -1595,6 +1600,15 @@ test('待办提醒拒绝过期创建，Web 登记未来提醒，飞书取消时�
       return { role: 'assistant', content: '请给出未来的提醒时间。' };
     }
     const todo = JSON.parse(raw);
+    if (req.callId === 'triggered') {
+      assert.deepEqual(todo.map((row: {title: string}) => row.title), ['已触发样本']);
+      assert.ok(todo[0].remindedAt);
+      return { role: 'assistant', content: '已触发样本有本地触发记录。' };
+    }
+    if (req.callId === 'pending') {
+      assert.deepEqual(todo.map((row: {id: string}) => row.id), [id]);
+      return { role: 'assistant', content: '核对交付的提醒尚无本地触发记录。' };
+    }
     assert.equal(todo.dueAt, due);
     assert.equal(todo.remindedAt, undefined);
     assert.equal(todo.reminderAt, req.callId === 'clear' ? undefined : reminder);
@@ -1610,13 +1624,22 @@ test('待办提醒拒绝过期创建，Web 登记未来提醒，飞书取消时�
     const project = await api('/projects', { name: '提醒验证' });
     id = (await api('/todos', { title: '核对交付', projectId: project.id, dueAt: due })).id;
     assert.equal(await ask('2099年1月30日北京时间下午两点提醒我核对交付', '/projects/' + project.id + '/messages'), '已保存提醒。');
+    const triggered = await api('/todos', { title: '已触发样本', projectId: project.id, reminderAt: reminder });
+    server.app.store.put('todos', triggered.id, { ...triggered, remindedAt: new Date().toISOString() });
+    const closed = await api('/todos', { title: '已完成样本', projectId: project.id, reminderAt: reminder });
+    server.app.updateTodo(closed.id, { completed: true });
+    const question = '哪些提醒还没触发？';
+    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), '核对交付的提醒尚无本地触发记录。');
+    assert.equal(await ask('哪些提醒已经触发？', '/projects/' + project.id + '/messages'), '已触发样本有本地触发记录。');
     const bot = await api('/feishu/bots', { name: '交付提醒', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
       scope: { kind: 'task', todoId: id, projectId: project.id }, requireConfirmation: false });
     const source = { chatId: 'oc_fixture', senderId: 'ou_fixture', senderType: 'user', chatType: 'p2p' } as const;
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage(question, { ...source, messageId: 'reminder-status' });
+    await t.waitFor(() => assert.ok(sent.includes('核对交付的提醒尚无本地触发记录。')));
     await adapter.onMessage('取消这项提醒', { ...source, messageId: 'clear' });
     await t.waitFor(() => assert.ok(sent.includes('已取消这项提醒。')));
-    const stored = server.app.todos()[0]!;
+    const stored = server.app.todos().find(todo => todo.id === id)!;
     assert.equal(stored.reminderAt, undefined);
     assert.equal(stored.dueAt, due);
   } finally { await server.close(); }

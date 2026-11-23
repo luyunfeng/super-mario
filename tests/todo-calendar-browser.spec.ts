@@ -41,6 +41,10 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   await page.goto(base + '/month/2030-03-31');
   const entry = root.getByRole('button', { name: /本地三月末/ });
   await expect(root.locator('[data-day="2030-03-31"]')).toContainText(todo.title);
+  await expect(entry).toHaveAccessibleName(/有待触发提醒/);
+  server.app.store.put('todos', todo.id, { ...read(), remindedAt: reminderAt });
+  server.app.events.publish('todos.changed', { id: todo.id });
+  await expect(entry).not.toHaveAccessibleName(/有待触发提醒/);
   await expect(root.getByText('其他范围', { exact: false })).toHaveCount(0);
   await expect(root.getByText('完成的待办', { exact: false })).toHaveCount(0);
   await root.getByRole('checkbox', { name: '显示已完成' }).check();

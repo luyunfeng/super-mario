@@ -84,8 +84,9 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
     const time = localDate(todo.dueAt, true).slice(11);
     const overdue = !todo.completedAt && Date.parse(todo.dueAt) < Date.now();
     const status = todo.completedAt ? '已完成' : overdue ? '已逾期' : todo.waitingOn ? '等待中' : '待完成';
+    const reminding = todo.reminderAt && !todo.remindedAt && !todo.completedAt;
     const high = todo.priority === 'high';
-    const label = [time, todo.title, status, high && '高优先级', todo.reminderAt && '有提醒'].filter(Boolean).join(' · ');
+    const label = [time, todo.title, status, high && '高优先级', reminding && '有待触发提醒'].filter(Boolean).join(' · ');
     return h('button', { class: 'cal-entry', type: 'button', title: label, 'aria-label': label,
       dataset: { status }, draggable: true, onclick: () => open(todo),
       ondragstart: event => {
@@ -93,7 +94,7 @@ export function todoCalendar({ mode, anchor, todos, showDone, onShowDone, naviga
         event.dataTransfer.setData(dragType + '-due', todo.dueAt);
         event.dataTransfer.effectAllowed = 'move';
       } },
-      high && h('span', { 'aria-hidden': 'true' }, '⚑ '), h('span', null, time), ' ', todo.title, todo.reminderAt && ' ⏰');
+      high && h('span', { 'aria-hidden': 'true' }, '⚑ '), h('span', null, time), ' ', todo.title, reminding && ' ⏰');
   }
   function slotTime(cell, hour, y) {
     if (hour === undefined) return undefined;

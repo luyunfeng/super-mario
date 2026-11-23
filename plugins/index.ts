@@ -304,6 +304,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if (args.query !== undefined && typeof args.query !== 'string') throw new Error('待办关键词须为文本');
           if (args.status !== undefined && (typeof args.status !== 'string' || !['open', 'done', 'all'].includes(args.status))) throw new Error('待办状态无效');
           if (args.overdue !== undefined && typeof args.overdue !== 'boolean') throw new Error('逾期筛选须为布尔值');
+          if (args.reminderStatus !== undefined && args.reminderStatus !== 'pending' && args.reminderStatus !== 'triggered') throw new Error('提醒状态无效');
           if (args.hasDueDate !== undefined && typeof args.hasDueDate !== 'boolean') throw new Error('截止日期筛选须为布尔值');
           if (args.order !== undefined && !['recent', 'due', 'priority'].some(order => order === args.order)) throw new Error('待办排序无效');
           if (args.hasExecution !== undefined && typeof args.hasExecution !== 'boolean') throw new Error('执行记录筛选须为布尔值');
@@ -341,6 +342,8 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           if (args.hasDueDate === false && (bounded || dayFormat || args.overdue === true)) throw new Error('无截止日期不能与截止时段或逾期条件组合');
           const now = Date.now();
           const todos = candidates.filter(todo => {
+            if (args.reminderStatus === 'pending' && (!todo.reminderAt || todo.completedAt || todo.remindedAt)) return false;
+            if (args.reminderStatus === 'triggered' && (!todo.reminderAt || !todo.remindedAt)) return false;
             if (args.parentTodoId !== undefined && todo.parentTodoId !== args.parentTodoId) return false;
             if (args.responsibleMachineId !== undefined && todo.responsibleSession?.machineId !== args.responsibleMachineId) return false;
             if (args.responsibleSessionId !== undefined && todo.responsibleSession?.sessionId !== args.responsibleSessionId) return false;
@@ -379,6 +382,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           responsibleSessionId: { type: 'string', description: '完整匹配登记的负责会话 ID，可同时限定电脑' },
           responsiblePerson: { type: 'string', description: '按登记负责人姓名完整匹配' },
           waitingOn: { type: 'string', description: '只在登记的等待对象中查找这段文字，可与其他条件组合' },
+          reminderStatus: { type: 'string', enum: ['pending', 'triggered'], description: 'pending 查已设置且未完成、尚无触发记录的提醒；triggered 查已有本地触发记录的提醒。' },
           hasDueDate: { type: 'boolean', description: 'false 仅查未定截止日期的待办，true 仅查已定期限' },
           order: { type: 'string', enum: ['recent', 'due', 'priority'], description: '最近更新、最早到期或最高优先级在前' },
           priority: priorityParameter, hasExecution: { type: 'boolean', description: '是否存在同项目下关联该待办的执行记录，包含已结束的执行' },
