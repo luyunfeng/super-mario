@@ -158,12 +158,13 @@ test('lazy independent conversations, fixed schema, zero tools and filtered know
     assert.equal(replies[index].status, 'done');
     assert.equal(f.store.get<Message>('messages', replies[index].replyTo!)?.text, `DISCUSS_${s.id}`);
   }
-  const progress = { total: 1, recent: [{ id: 'proposal-a', version: 1, kind: 'todo' as const, status: 'submitted' as const, approvalStatus: 'rejected' as const }] };
+  const progress = { total: 1, linkedTodo: { status: 'unavailable' as const }, recent: [{ id: 'proposal-a', version: 1, kind: 'todo' as const, status: 'submitted' as const, approvalStatus: 'rejected' as const }] };
   await f.runtime.ask(sources[0], conversation('A'), 'FOLLOW_UP', progress);
   const session = f.sdk.sessions.find(record => JSON.parse(record.history[0]).userRequest === 'DISCUSS_A')!;
   assert.deepEqual(JSON.parse(session.history.at(-1)!).suggestionProgress, progress);
   assert.match(session.contexts[0], /仅查询进度时 suggestions 返回空数组/);
   assert.match(session.contexts[0], /不能据此说对方已读/);
+  assert.match(session.contexts[0], /按 suggestionProgress.linkedTodo 的 open 或 completed 状态回答/);
   const follow = JSON.parse(f.sdk.sessions.find(s => s.history.length === 2)!.history[1]);
   assert.deepEqual(follow.discussion, [], 'Live SDK already owns this conversation history');
   assert.equal(f.sdk.loads(), 3);

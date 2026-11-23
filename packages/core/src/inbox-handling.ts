@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { outboxItemId } from './outbox.ts';
+import { actionTodoLink } from './todo-link.ts';
 import { mailboxEntryId } from './event-mailboxes.ts';
 import type { EventBus, OutboxItem, Store } from '../../plugin-sdk/src/index.ts';
-import type { Approval, Json, MailboxEntry, Message } from '../../protocol/src/index.ts';
-import type { InboxHandlingAction, InboxHandlingRef, InboxHandlingRequest, InboxHandlingSource, InboxHandlingView, InboxSuggestion, InboxSuggestionProgress, InboxReplyDelivery } from '../../protocol/src/inbox-handling.ts';
+import type { Approval, Json, MailboxEntry, Message, Todo } from '../../protocol/src/index.ts';
+import type { InboxHandlingAction, InboxHandlingRef, InboxHandlingRequest, InboxHandlingSource, InboxHandlingView, InboxSuggestion, InboxSuggestionProgress, InboxReplyDelivery, InboxLinkedTodo } from '../../protocol/src/inbox-handling.ts';
 import type { InboxHandlingState } from '../../protocol/src/inbox-handling.ts';
 import type { Run } from '../../protocol/src/index.ts';
 import { digest, stableJson } from './eventbox.ts';
@@ -189,6 +190,24 @@ export function createInboxHandling(options: InboxHandlingOptions) {
       : item.status === 'failed' || item.status === 'rejected' ? 'failed' : 'pending';
     return { id: item.id, status, updatedAt: item.updatedAt };
   }
+  function linkedTodo(current: InboxHandlingSource): InboxLinkedTodo | undefined {
+    let id = current.todoId;
+    if (!id && current.kind === 'mailbox') {
+      // A resolved mailbox entry can also point to a reply or conclusion. Only a todo action establishes this link.
+      const entry = store.get<MailboxEntry>('event.mailboxes', current.id);
+      if (entry?.direction !== 'inbox' || entry.status !== 'completed' || !entry.resultId) return;
+      const matched = store.list<InboxSuggestion>(suggestions).some(row =>
+        row.source.kind === 'mailbox' && row.source.id === current.id && row.sourceVersion + 1 === entry.version &&
+        row.status === 'applied' && row.action.kind === 'todo' &&
+        row.result && typeof row.result === 'object' && !Array.isArray(row.result) && row.result.todoId === entry.resultId);
+      if (matched) id = entry.resultId;
+    }
+    if (!id) return;
+    const todo = store.get<Todo>('todos', id);
+    if (!todo || todo.projectId !== current.projectId) return { status: 'unavailable' };
+    return { id, title: todo.title, status: todo.completedAt ? 'completed' : 'open',
+      ...(todo.completedAt && { completedAt: todo.completedAt }), ...actionTodoLink(todo) };
+  }
   async function runThink(row: RequestRow, initial: ReturnType<typeof source>) {
     try {
       const own = store.list<InboxSuggestion>(suggestions).filter(item => item.conversationId === row.conversationId)
@@ -196,7 +215,8 @@ export function createInboxHandling(options: InboxHandlingOptions) {
       const recent = own.slice(0, 20).map(item => ({
         id: item.id, version: item.version, kind: item.action.kind, status: item.status, approvalStatus: boundApproval(item)?.status, ...(item.action.kind === 'reply' ? { delivery: replyDelivery(item) } : {}),
       }));
-      const result = await options.think(structuredClone(initial.value), row.conversationId, row.text, { total: own.length, recent });
+      const todo = linkedTodo(initial.value);
+      const result = await options.think(structuredClone(initial.value), row.conversationId, row.text, { total: own.length, recent, ...(todo && { linkedTodo: todo }) });
       if (!result || result.conversationId !== row.conversationId || result.role !== 'assistant' || result.status !== 'done' || typeof result.text !== 'string' || typeof result.id !== 'string' || !result.id.trim() || typeof result.createdAt !== 'string') fail('模型返回无效');
       // Validate the entire JSON envelope before writing any suggestions. Plain
       // prose and invalid JSON remain useful history, but never become actions.
@@ -263,7 +283,8 @@ export function createInboxHandling(options: InboxHandlingOptions) {
     read(ref: InboxHandlingRef): InboxHandlingView {
       open(); const current = source(ref), availability = options.available();
       const history=new Set(store.list<Conversation>(conversations).filter(row=>row.source.kind===ref.kind&&row.source.id===ref.id).map(row=>row.id));
-      return { source: current.value, conversationId: current.conversationId, available: availability.available && current.value.active && !invalid(current.conversationId),
+      const todo = linkedTodo(current.value);
+      return { source: current.value, ...(todo && { linkedTodo: todo }), conversationId: current.conversationId, available: availability.available && current.value.active && !invalid(current.conversationId),
         ...(!current.value.active || invalid(current.conversationId) ? { reason: '来源已失效，只能查看' } : availability.reason ? { reason: availability.reason } : {}),
         // Owner-facing audit history survives archive/reassignment. The model
         // runtime still sees only the current conversation and its own receipts.

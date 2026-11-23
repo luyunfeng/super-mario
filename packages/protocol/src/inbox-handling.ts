@@ -19,7 +19,11 @@ export interface InboxSuggestion {
   approvalId?: string; result?: Json; error?: string; createdAt: string; updatedAt: string;
 }
 export interface InboxReplyDelivery { id: string; status: 'sent' | 'failed' | 'unknown' | 'pending'; updatedAt: string }
+export type InboxLinkedTodo = { status: 'unavailable' } | {
+  status: 'open' | 'completed'; id: string; title: string; completedAt?: string; webPath: string; webCitation: string;
+};
 export interface InboxSuggestionProgress {
+  linkedTodo?: InboxLinkedTodo;
   total: number;
   recent: { id: string; version: number; kind: InboxHandlingAction['kind']; status: InboxSuggestion['status']; approvalStatus?: Approval['status']; delivery?: InboxReplyDelivery }[];
 }
@@ -28,6 +32,7 @@ export interface InboxHandlingRequest {
   error?: string; createdAt: string; updatedAt: string;
 }
 export interface InboxHandlingView {
+  linkedTodo?: InboxLinkedTodo;
   source: InboxHandlingSource; conversationId: string; available: boolean; reason?: string;
   messages: Message[]; suggestions: (InboxSuggestion & { approvalStatus?: Approval['status']; delivery?: InboxReplyDelivery })[]; requests: InboxHandlingRequest[];
 }

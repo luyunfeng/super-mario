@@ -159,7 +159,10 @@ export function openInboxHandlingDrawer({ api, store, source }) {
     }
   }
   function paint() {
-    replace(origin, h('strong', null, view.source.title), h('p', { class: 'small muted' }, sourceText()), h('pre', { class: 'mailbox-content' }, view.source.text));
+    replace(origin, h('strong', null, view.source.title), h('p', { class: 'small muted' }, sourceText()), h('pre', { class: 'mailbox-content' }, view.source.text),
+      view.linkedTodo && (view.linkedTodo.status === 'unavailable' ? h('p', null, '关联待办在当前范围不可用') :
+        h('p', null, '关联待办 · ' + (view.linkedTodo.status === 'completed' ? '已完成' : '待完成') + ' · ',
+          h('a', { href: view.linkedTodo.webPath, onClick: () => drawer.close() }, view.linkedTodo.title))));
     replace(model, !view.source.active && Banner({ tone: 'warn', children: view.source.reason || '来源不可处理' }), Banner({ children: view.available ? '主模型可用；只有显式发送指令才请求模型。' : `主模型不可用：${view.reason || '缺少模型配置'}。仍可手工写建议。` }));
     replace(conversation, view.messages.map(m => h('section', null, h('strong', null, m.role === 'user' ? '你' : '助手'), m.conversationId!==view.conversationId&&h('p',{class:'small muted'},'较早来源版本，仅作记录'), h('p', { style: { whiteSpace: 'pre-wrap' } }, assistantText(m)), prompts.fromMessage(m), m.status && h('span', { class: 'small muted' }, m.status === 'pending' ? '等待模型回复' : m.status === 'failed' ? '回复失败' : '对话已记录'))));
     replace(requests, view.requests.map(r => h('p', { class: 'small' }, `${r.id} · ${STATUS[r.status] || r.status}${r.error ? `：${r.error}` : ''}`)),

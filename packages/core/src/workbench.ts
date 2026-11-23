@@ -21,6 +21,7 @@ import { createAgentSessions, nativeResumeSpec, nativeResultSources } from './ag
 import { executionProgress } from './execution-progress.ts';
 import { createTodoDecisions } from './todo-decisions.ts';
 import { createTodoReporting } from './todo-reporting.ts';
+import { actionTodoLink } from './todo-link.ts';
 import { readTodoHistory } from './todo-history.ts';
 import { createRunReview } from './run-review.ts';
 import { createProjectFollowUp } from './project-follow-up.ts';
@@ -786,10 +787,6 @@ export async function createWorkbench(config: AppConfig) {
       .map(({ kind, title, body, suggestion }) => ({ kind, title, body, suggestion }));
     const reminderDeliveries = readReminderDeliveries(todo);
     return { todo, pendingRequests, replyTracking, reminderDeliveries, decisions: todoDecisions.list(id), ...actionTodoLink(todo) } as unknown as Json;
-  }
-  function actionTodoLink(todo: Todo) {
-    const webPath = '#projects/' + encodeURIComponent(todo.projectId ?? 'all') + '/todos/detail/' + encodeURIComponent(todo.id);
-    return { webPath, webCitation: '[查看待办](' + webPath + ')' };
   }
   async function knowledgeActionStatus(args: Record<string, unknown>, projectId?: string) {
     const { page, items } = await prepareKnowledgeActions(args, projectId);

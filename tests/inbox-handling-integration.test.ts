@@ -50,7 +50,20 @@ test('edited Todo crosses real HTTP approval once, keeps project and audit histo
   const todo=f.server.app.todos()[0]!;assert.equal(todo.title,'已编辑标题');assert.equal(todo.projectId,project.id);assert.match(todo.notes,/明确验收说明/);assert.equal(todo.completedAt,undefined);
   assert.equal((await f.approve(approval)).status,409);assert.equal(f.server.app.todos().length,1);
   let view=(await f.api(f.route)).data as InboxHandlingView;assert.equal(view.source.active,false);assert.equal(view.suggestions[0]?.status,'applied');
+  assert.equal(view.linkedTodo?.status, 'open');
   await f.restart();view=(await f.api(f.route)).data;assert.equal((view.suggestions[0]?.result as any)?.todoId,todo.id);assert.equal(f.server.app.todos().length,1);
+  const completedAt = new Date().toISOString();
+  f.server.app.store.put('todos', todo.id, { ...todo, completedAt });
+  const linked = (await f.api(f.route)).data.linkedTodo;
+  assert.equal(linked.status, 'completed'); assert.equal(linked.completedAt, completedAt);
+  assert.equal(linked.webPath, '#projects/' + project.id + '/todos/detail/' + todo.id);
+  const actor: Message = { id: 'fixture-query', role: 'user', conversationId: 'project:' + project.id + ':work', projectId: project.id,
+    text: '这条收件转出的待办完成了吗？', status: 'done', createdAt: completedAt };
+  const tool = f.server.app.contributions.list('tools').find(item => item.value.name === 'inbox_handling_read')!.value;
+  const output = await runWithAgentInput(actor, () => tool.execute({ kind: 'personal', id: f.item.id }, new AbortController().signal));
+  assert.deepEqual((output as JsonObject).linkedTodo, linked);
+  f.server.app.store.put('todos', todo.id, { ...todo, projectId: 'other', title: '另一个项目的私有标题' });
+  assert.deepEqual((await f.api(f.route)).data.linkedTodo, { status: 'unavailable' });
 });
 test('editing or tampering with a bound approval never reaches generic plugin acknowledgement',async t=>{
   const f=await fixture(t),first=await f.save({kind:'conclusion',text:'第一版'}),old=await f.confirm(first);
@@ -136,9 +149,17 @@ test('bot reply preserves original message; channel hook cannot replace the appr
   const sent=await f.approve(approval);assert.equal(sent.data.status,'completed',JSON.stringify(sent.data));assert.equal(adapter.sent.length,initial+1);assert.equal(adapter.sent.at(-1)?.text,'已确认机器人回复');assert.deepEqual(adapter.sent.at(-1)?.context,{replyTo:'original-bot-input'});
   assert.equal((await f.api(route)).data.suggestions[0].delivery.id, sent.data.result.outboxId);
   assert.equal((await f.api(route)).data.suggestions[0].delivery.status, 'sent');
+  await adapter.options.onMessage('请登记机器人待办', origin('bot-todo-input'));
+  const todoEntry = f.server.app.mailboxes.list({ direction: 'inbox', botId: bot.id }).find(entry => entry.sourceMessageId === 'bot-todo-input')!;
+  const todoRoute = '/inbox-handling/mailbox/' + todoEntry.id;
+  const draft = (await f.api(todoRoute + '/suggestions', 'POST', { sourceVersion: todoEntry.version, action: { kind: 'todo', title: '核对机器人待办', notes: '核对范围' } })).data;
+  const applied = await f.approve(await f.confirm(draft, todoRoute));
+  assert.equal(applied.data.status, 'completed');
+  assert.equal((await f.api(todoRoute)).data.linkedTodo.id, applied.data.result.todoId);
+  assert.equal((await f.api(route)).data.linkedTodo, undefined);
   f.server.app.plugins.register({id:'alter-reply',name:'Synthetic policy',capabilities:[],activate(c){c.hook('channel.send','before',value=>({action:'continue',value:{...(value as JsonObject),text:'未确认的替换正文'}}));}});await f.server.app.plugins.start();
   await adapter.options.onMessage('第二条机器人来源',origin('next-bot-input'));
-  const second=f.server.app.mailboxes.list({direction:'inbox',botId:bot.id}).find(item=>item.id!==incoming.id)!,secondRoute='/inbox-handling/mailbox/'+second.id;
+  const second=f.server.app.mailboxes.list({direction:'inbox',botId:bot.id}).find(item=>item.sourceMessageId==='next-bot-input')!,secondRoute='/inbox-handling/mailbox/'+second.id;
   const next=(await f.api(secondRoute+'/suggestions','POST',{sourceVersion:second.version,action:{kind:'reply',text:'第二份确认正文'}})).data,nextApproval=await f.confirm(next,secondRoute);
   const beforeDenied=adapter.sent.length; // The new incoming message has its own acknowledgement.
   assert.notEqual((await f.approve(nextApproval)).data.status,'completed');assert.equal(adapter.sent.length,beforeDenied);

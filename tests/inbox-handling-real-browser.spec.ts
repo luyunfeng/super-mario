@@ -49,5 +49,12 @@ test('actual Web/HTTP/SQLite: source drawer → chat approval → edit current s
   const todo=server.app.todos()[0]!;assert.equal(todo.title,'通过来源建议编辑的新标题');assert.equal(todo.projectId,project.id);assert.equal(todo.completedAt,undefined);assert.ok(server.app.inbox.list()[0]?.archivedAt);
   await page.goto(server.url+'/#memory?curator=1');await expect(page.getByRole('dialog',{name:'记忆整理 Agent',exact:true})).toBeVisible();
   await page.goto(server.url+'/#inbox');await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.locator('#inbox .mailbox-card').getByRole('button',{name:'查看原文与详情',exact:true}).click();
+  await page.getByRole('dialog',{name:'收件箱消息详情',exact:true}).getByRole('button',{name:'处理与建议',exact:true}).click();
+  await expect(handling).toContainText('关联待办 · 待完成');
+  await handling.getByRole('link',{name:todo.title,exact:true}).click();
+  await expect(page).toHaveURL(server.url + '/#projects/' + project.id + '/todos/detail/' + todo.id);
+  await expect(page.locator('#panel-todos')).toContainText(todo.title);
+  await expect(page.getByRole('link',{name:'返回待办列表',exact:true})).toBeVisible();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);
 });

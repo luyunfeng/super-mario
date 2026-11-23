@@ -181,11 +181,16 @@ export function createMailboxPage({ api, store, router, direction }) {
     catch { loadError = '操作后读取最新消息失败，请刷新核对。'; }
     finally { pending.delete(item.id); paint(); }
   }
+  function scopedTodo(raw) {
+    return raw.todoId && snapshot?.todos?.find(todo => todo.id === raw.todoId && todo.projectId === raw.projectId);
+  }
   function actions(item) {
     if (item.kind !== 'personal') return [];
     if (pending.has(item.id) || uncertain.has(item.id)) return [h('span', { class: 'small muted' }, pending.has(item.id) ? '正在保存…' : '操作结果未知，请刷新核对后再操作。')];
-    const todo = (snapshot?.todos ?? []).find(todo => todo.id === item.raw.todoId);
-    const todoLink = item.raw.todoId && h('a', { class: 'btn btn--sm', href: router.href('projects', todo?.projectId ?? 'all', 'todos', 'detail', item.raw.todoId), onclick: () => drawer?.close() }, '查看待办');
+    const todo = scopedTodo(item.raw);
+    const todoLink = item.raw.todoId && (todo
+      ? h('a', { class: 'btn btn--sm', href: router.href('projects', todo.projectId ?? 'all', 'todos', 'detail', todo.id), onclick: () => drawer?.close() }, '查看待办')
+      : h('span', { class: 'small muted' }, '关联待办在当前范围不可用'));
     // Confirming an inbox item also archives it. Keep its resulting todo accessible.
     if (item.raw.archivedAt) return [...(todoLink ? [todoLink] : []), Button({ label: '恢复到收件箱', size: 'sm', onClick: () => act(item, 'reopen') })];
     return [todoLink || Button({ label: '转为待办', kind: 'primary', size: 'sm', onClick: () => act(item, 'confirm') }),
@@ -196,7 +201,7 @@ export function createMailboxPage({ api, store, router, direction }) {
     const item = records().find(item => item.id === selected);
     if (!item) { translation?.clear(); detailTranslation = undefined; detailKey = undefined; replace(drawer.body, h('p', null, '这条记录已更新，请关闭后查看列表。')); replace(drawer.foot, Button({ label: '关闭', onClick: () => drawer.close() })); return; }
     const raw = item.raw;
-    const key = JSON.stringify([item, error, snapshot?.projects, drafts.get(item.id), pending.has(item.id), uncertain.has(item.id)]);
+    const key = JSON.stringify([item, error, snapshot?.projects, Boolean(scopedTodo(raw)), drafts.get(item.id), pending.has(item.id), uncertain.has(item.id)]);
     // Keep the translation controls and any in-flight request across unrelated detail updates.
     const translated = translation && (item.kind !== 'mailbox' || mailboxOwner === api.draftOwner()) ? translation.view(item) : null;
     if (!translated && translation) translation.clear();
@@ -379,7 +384,7 @@ export function createMailboxPage({ api, store, router, direction }) {
     } else if (visible.length) keyedList(list, window, item => item.id, card, item => JSON.stringify([
       item, incoming && projectName(item),
       incoming && handlingState(item),
-      (snapshot?.todos ?? []).find(todo => todo.id === item.raw.todoId)?.projectId,
+      Boolean(scopedTodo(item.raw)),
       pending.has(item.id), uncertain.has(item.id),
     ]));
     else {
