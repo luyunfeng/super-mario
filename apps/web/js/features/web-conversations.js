@@ -1,3 +1,4 @@
+import {createWebImageExport} from './web-conversation-image-export.js';
 import {createTurnRetry,turnRetryActive} from './retry-turn.js';
 import {conversationImagesActive,createMessageImages,messageImages} from './message-images.js';
 import {createMessageFiles,messageFiles} from './message-files.js';
@@ -49,6 +50,9 @@ export function createWebConversations({api,store,scope,router}){
         deleted(stamp.id,stamp.owner);return true;
       }});
   });
+  const imageExport=createWebImageExport({api,redraw:display,source:()=>meta && valid(current) && conversationExportActive(store)
+    ? {id:meta.id,projectId:meta.projectId,title:meta.title,owner:current.owner,imagesEnabled:conversationImagesActive(store),
+      filesEnabled:store.view.snapshot.plugins.some(p=>p.id==='conversation-files' && p.status==='active')} : null});
   const entry=button('独立对话',openList);
   const heading=h('h1',{},'独立对话'),notice=h('p',{role:'status',class:'small'});
   const messages=h('div',{class:'msgs','aria-live':'polite'});
@@ -76,8 +80,8 @@ export function createWebConversations({api,store,scope,router}){
   const stateLabel=h('span',{class:'small muted'});
   const controls=h('div',{class:'row row--wrap'},stateLabel,rename,archive,button('删除对话',openDelete));
   const el=h('div',{class:'chat-code-main',hidden:true,'aria-label':'独立对话内容'},
-    h('div',{class:'chat__top'},h('header',{class:'page__head'},heading,h('div',{class:'page__actions'},button('独立对话',openList),switcher.threadButton,search.button,favorites.button,exportButton,
-      h('a',{class:'btn btn--sm',href:'#chat'},'返回主对话'))),controls,notice,latest,retry,cleanupRetry),scroller,form);
+    h('div',{class:'chat__top'},h('header',{class:'page__head'},heading,h('div',{class:'page__actions'},button('独立对话',openList),switcher.threadButton,search.button,favorites.button,exportButton,imageExport.enter,
+      h('a',{class:'btn btn--sm',href:'#chat'},'返回主对话'))),controls,imageExport.controls,notice,latest,retry,cleanupRetry),scroller,form);
   let pending=false,epoch=0,draftKey=null,renameDrawer,deleteDrawer,listRefresh,lastMetaEvent,changing=false;
   const valid=stamp=>current===stamp && stamp && stamp.owner===drafts.owner() && routeId()===stamp.id && active();
   const copies=createMessageCopyActions({api,store,matches:row=>valid(current) && meta &&
@@ -106,7 +110,7 @@ export function createWebConversations({api,store,scope,router}){
     pictures.update(writableKey,drafts.owner(),persist,conversationImagesActive(store));
     files.update(writableKey,drafts.owner(),persist,
       readable ? {conversationId:'web:'+meta.id,...(meta.projectId && {projectId:meta.projectId})} : undefined);
-    favorites.update();
+    favorites.update();imageExport.update();
     search.update(readable && {conversationId:'web:'+meta.id,projectId:meta.projectId});
     const hidden=!readable || !conversationExportActive(store);
     if(hidden)exportDrawer?.close();
@@ -124,7 +128,7 @@ export function createWebConversations({api,store,scope,router}){
     }
   }
   function reset(){
-    pictures.update(null,drafts.owner(),false,false);files.update(null,drafts.owner(),false);
+    imageExport.reset();pictures.update(null,drafts.owner(),false,false);files.update(null,drafts.owner(),false);
     retryEnabled=false;editEnabled=false;edit.reset();prompts.changeScope();quoteKey=null;quote.restore(null);
     exportButton.hidden=true;exportDrawer?.close();exportDrawer=null;search.update(null);cleanupRetry.hidden=true;deleteDrawer?.close();renameDrawer?.close();changing=false;controls.hidden=true;current=null;meta=null;draftKey=null;rows=[];epoch++;readVersion++;pending=false;nextBefore=null;nextAfter=null;targetMessage=null;latest.hidden=true;later.hidden=true;
     favorites.update();input.value='';heading.textContent='独立对话';replace(messages);form.hidden=true;more.hidden=true;retry.hidden=true;notice.textContent='';
@@ -327,6 +331,7 @@ export function createWebConversations({api,store,scope,router}){
           h('div',{class:'msg__bubble'},copies.renderMessage(row,row.text),
             messageImages(api,store,row,meta.archived ? undefined : pictures.editCopy.bind(null,draftKey),messages),messageFiles(api,store,row,rows,messages)),
           h('div',{class:'msg__meta row row--wrap'},copies.copyMessage(row,m=>m.text),
+            imageExport.checkbox(row),
             row.origin!=='notification' && favorites.mark(row,meta.projectId,stamp.id,()=>valid(stamp) && meta?.id===stamp.id && rows.includes(row)),
             retryEnabled && retryTurn(row,rows,'web:'+stamp.id,id=>href(stamp.id,id),
               ()=>valid(stamp) && meta?.id===stamp.id && !meta.archived && rows.includes(row)),
