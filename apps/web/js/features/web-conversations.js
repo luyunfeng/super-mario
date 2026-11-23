@@ -187,19 +187,27 @@ export function createWebConversations({api,store,scope,router}){
       finally{if(ok()){submit.disabled=false;name.readOnly=false;}}
     }},h('label',{class:'field'},'对话标题',name),submit);
     const filter=h('select',{class:'input','aria-label':'对话状态'},h('option',{value:'active'},'进行中'),h('option',{value:'archived'},'已归档'));
-    const drawer=openDrawer({title:'独立对话',body:[draft,h('label',{class:'field'},'对话状态',filter),status,list],onClose:()=>{if(selector===drawer){selector=null;listRefresh=null;}}});
+    const searchTitle=h('input',{type:'search',class:'input','aria-label':'按标题查找',placeholder:'输入标题中的文字'});
+    const drawer=openDrawer({title:'独立对话',body:[draft,h('label',{class:'field'},'对话状态',filter),searchTitle,status,list],onClose:()=>{if(selector===drawer){selector=null;listRefresh=null;}}});
     selector=drawer;
     const ok=()=>selector===drawer && drawer.el.open && active() && drafts.owner()===owner && listProject()===projectId;
-    let request=0;
+    let request=0,items;
+    function drawList(){
+      if(!items || !ok())return;
+      const term=searchTitle.value.trim().toLowerCase();
+      const matches=items.filter(row=>row.title.toLowerCase().includes(term));
+      status.textContent=matches.length?'':items.length?'没有匹配的对话标题。':filter.value==='archived'?'当前范围没有已归档对话。':'当前范围还没有独立对话。';
+      replace(list,matches.map(row=>h('a',{class:'btn btn--ghost',href:href(row.id),onclick:()=>drawer.close()},row.title)));
+    }
+    searchTitle.oninput=drawList;
     listRefresh=async()=>{
       const seq=++request,query=new URLSearchParams({projectId});
       if(filter.value==='archived')query.set('archived','true');
-      replace(list);status.textContent='正在读取对话…';
+      items=undefined;replace(list);status.textContent='正在读取对话…';
       try{
         const result=await api.get(path+'?'+query);
         if(!ok() || seq!==request)return;
-        status.textContent=result.items.length?'':filter.value==='archived'?'当前范围没有已归档对话。':'当前范围还没有独立对话。';
-        replace(list,result.items.map(row=>h('a',{class:'btn btn--ghost',href:href(row.id),onclick:()=>drawer.close()},row.title)));
+        items=result.items;drawList();
       }catch(error){if(ok() && seq===request)status.textContent=error.message;}
     };
     filter.onchange=()=>listRefresh?.();void listRefresh();

@@ -88,6 +88,11 @@ test('两个标签页并发改名与归档时核对版本，归档深链只读�
   await expect(drawer).toContainText('当前范围还没有独立对话');
   await drawer.getByLabel('对话状态').selectOption('archived');
   await expect(drawer.getByRole('link',{name:'第二份草稿'})).toBeVisible();
+  await drawer.getByLabel('按标题查找').fill('无匹配标题');
+  await expect(drawer).toContainText('没有匹配的对话标题');
+  await expect(drawer.getByRole('link',{name:'第二份草稿'})).toHaveCount(0);
+  await drawer.getByLabel('按标题查找').fill('二份');
+  await expect(drawer.getByRole('link',{name:'第二份草稿'})).toBeVisible();
   await second.getByRole('button',{name:'恢复对话',exact:true}).click();
   await expect(drawer).toContainText('当前范围没有已归档对话');
   await drawer.getByLabel('对话状态').selectOption('active');
