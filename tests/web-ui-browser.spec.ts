@@ -82,7 +82,7 @@ test('全局搜索从历史正文定位主对话消息，并隔离其他会话�
     put('output', 'needle 输出', { origin: 'result' });
     for (let i = 0; i < 35; i++) put('later-' + i, '后续回复 ' + i, { progress: { phase: 'tool', detail: 'needle', updatedAt: new Date().toISOString() } });
 
-    for (let i = 0; i < 37; i++) put('archive-' + i, '历史批次 ' + i, i === 1 ? { createdAt: '2019-07-01T12:00:00Z' } : {});
+    for (let i = 0; i < 37; i++) put('archive-' + i, '历史批次 ' + i, i === 1 ? { createdAt: '2019-06-30T16:00:00Z' } : {});
     put('private-batch', '历史批次 隐藏消息', { conversationId: 'supervisor' });
     const { page, errors } = await open('#memory');
     const search = page.locator('#workspace-search');
@@ -91,7 +91,7 @@ test('全局搜索从历史正文定位主对话消息，并隔离其他会话�
     await page.getByRole('button', { name: '查看全部主对话消息' }).click();
     const matches = page.getByRole('dialog', { name: '主对话消息搜索结果' });
     await expect(matches.getByRole('link')).toHaveCount(25);
-    const dateFilter = matches.getByLabel(/发言日期/);
+    const dateFilter = matches.getByLabel(/发言日期（Asia\/Shanghai）/);
     await dateFilter.fill('2019-07-01');
     await expect(matches.getByRole('link')).toHaveCount(1);
     await expect(matches.getByRole('link')).toContainText('历史批次 1');

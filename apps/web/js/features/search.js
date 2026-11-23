@@ -108,9 +108,9 @@ export function createSearch({ shell, store, router, api, scope }) {
     return project && [project.id, project.workspace.machineId, project.workspace.cwd];
   });
 
-  function chatHits(query, messages, limit = 6, role = '', day = '') {
+  function chatHits(query, messages, limit = 6, role = '', day = '', timeZone) {
     const matches = [];
-    const dayFormat = day && new Intl.DateTimeFormat('sv-SE', { year: 'numeric', month: '2-digit', day: '2-digit' });
+    const dayFormat = day && new Intl.DateTimeFormat('sv-SE', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
     const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu');
     // 快照按消息插入顺序排列。只搜索主对话气泡的正文，不读取工具进展或通知详情。
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -175,7 +175,7 @@ export function createSearch({ shell, store, router, api, scope }) {
     const role = h('select', {}, h('option', { value: '' }, '全部'), h('option', { value: 'user' }, '用户'), h('option', { value: 'assistant' }, '助手'));
     const roleFilter = !isRun && !isMeeting && h('label', { class: 'row' }, '发言角色', role);
     const day = h('input', { type: 'date' });
-    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const timeZone = store.view.snapshot.workspaceTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
     const dayFilter = !isRun && !isMeeting && h('label', { class: 'row' }, '发言日期（' + timeZone + '）', day);
     const projectSelect = !fromSnapshot && h('select', {}, h('option', { value: '' }, isMeeting ? '全部项目及个人' : '全部项目'),
       store.view.snapshot.projects.filter(project => !project.archivedAt).map(project => h('option', { value: project.id }, project.name)));
@@ -195,7 +195,7 @@ export function createSearch({ shell, store, router, api, scope }) {
       const snapshot = store.view.snapshot;
       let links;
       if (fromSnapshot) {
-        links = isRun ? runLinks(query, snapshot) : chatHits(query, snapshot.messages ?? [], visibleLimit + 1, role.value, day.value);
+        links = isRun ? runLinks(query, snapshot) : chatHits(query, snapshot.messages ?? [], visibleLimit + 1, role.value, day.value, timeZone);
         more.hidden = links.length <= visibleLimit;
         links = links.slice(0, visibleLimit);
         status.textContent = '已显示 ' + links.length + (isRun ? ' 条执行记录' : ' 条消息');
