@@ -11,6 +11,7 @@ import { timeAgo } from '../lib/format.js';
 import { icon } from '../ui/icons.js';
 import { Button, Banner, Card, Pill } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
+import { attachFileMentions } from '../features/file-mentions.js';
 import { attachSavedPrompts } from '../features/saved-prompts.js';
 import { officeDocumentsButton } from '../features/office-documents.js';
 import { createReplyTranslation } from '../features/reply-translation.js';
@@ -78,13 +79,14 @@ export function createChatPage({ api, store, scope, router }) {
   const quote = createMessageQuote({ drafts, input, store, router, scope });
   const edit = createMessageEdit({ input, quote, context: composerContext });
   const prompts = attachSavedPrompts({ api, store, input, getScope: scope.get });
+  const mentions = attachFileMentions({ api, store, input, getProjectId: scope.get });
   const history = attachSentHistory({ input, store, context: composerContext });
   const scopeSelect = h('select', { class: 'composer__scope', 'aria-label': '项目范围' }, h('option', { value: '' }, '全部项目'));
   const send = h('button', { class: 'btn btn--primary btn--sm composer__send', type: 'submit', 'aria-label': '发送' }, icon('send'), '发送');
   const status = h('p', { class: 'small composer__status', role: 'status' });
   const form = h('form', { class: 'composer', id: 'message-form' },
     recent.el,
-    h('div', { class: 'composer__box' }, edit.notice, quote.bar, prompts.menu, input, voice.caption, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, voice.button, voice.upload, h('span', { class: 'grow' }), send)), status);
+    h('div', { class: 'composer__box' }, edit.notice, quote.bar, prompts.menu, mentions.menu, input, voice.caption, h('div', { class: 'composer__bar' }, scopeSelect, prompts.manage, mentions.button, voice.button, voice.upload, h('span', { class: 'grow' }), send)), status);
 
   const el = h('section', { class: 'page page--chat', id: 'chat' }, h('div', { class: 'chat-code-main' }, top, scroller, form), code.el);
 
@@ -189,7 +191,7 @@ export function createChatPage({ api, store, scope, router }) {
   });
   scopeSelect.addEventListener('change', () => scope.set(scopeSelect.value));
   scope.subscribe(value => {
-    syncDraft(); prompts.changeScope(); transcript.close(); scopeSelect.value = value; code.show(value);
+    syncDraft(); mentions.update(); prompts.changeScope(); transcript.close(); scopeSelect.value = value; code.show(value);
     if (store.view.snapshot) paintMessages(store.view.snapshot.messages ?? []);
   });
 
@@ -336,6 +338,7 @@ export function createChatPage({ api, store, scope, router }) {
       }
       quote.restore(quotesEnabled ? draftKey : null);
       prompts.reset();
+      mentions.reset();
       recent.refresh();
       const decisionType = Object.keys(decisionLabels).find(key => route.query.has(key));
       const decisionId = decisionType && route.query.get(decisionType);

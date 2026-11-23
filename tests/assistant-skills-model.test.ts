@@ -2763,3 +2763,55 @@ test('Web 与飞书项目助手按文件名找路径，正文另读，绑定变�
     await assert.rejects(runWithAgentInput(input, search), /授权或绑定范围已失效/);
   } finally { await server.close(); }
 });
+
+test('Web 和飞书项目助手按明确的 @路径直接读正文并说明截断范围', async t => {
+  const machineId = 'mentioned-file-fixture', cwd = '/synthetic/mentioned-file', path = 'src/核对 清单.md';
+  const visible = '第一项核对来源。', unread = '只在末尾的内容';
+  let adapter!: FeishuOptions;
+  const sent: string[] = [], reads: string[] = [];
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.ok(req.tools.includes('workspace_code_read'));
+      assert.match(req.system, /明确的 @相对路径.*直接用 workspace_code_read/);
+      assert.match(req.system, /只记得文件名或指代不清时先检索/);
+      assert.match(req.system, /单纯提及路径不授权修改文件或运行命令/);
+      assert.ok(JSON.stringify(req.content).includes('@' + path));
+      return call('workspace_code_read', { path }, 'mentioned-file');
+    }
+    assert.equal(req.callId, 'mentioned-file');
+    assert.match(req.system, /只引用已读取的片段，并说明正文不完整/);
+    const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    const result = JSON.parse(raw);
+    assert.equal(result.truncated, true);
+    assert.ok(result.text.startsWith(visible));
+    assert.ok(result.text.length < visible.length + 32000 + unread.length);
+    assert.ok(!result.text.includes(unread));
+    return { role: 'assistant', content: result.text.slice(0, visible.length) + '正文不完整，仅核对了已读取的片段。' };
+  }, options => {
+    adapter = options;
+    return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
+      send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    server.app.setMachineClient({ list: () => [{ id: machineId, name: '合成电脑', online: true, platform: 'linux',
+      connectedAt: 'now', capabilities: ['workspace.code'], executors: [] }], async call(id, method, params) {
+      assert.equal(id, machineId);
+      assert.equal(method, 'workspace.code');
+      assert.deepEqual(params, { cwd, kind: 'file', path });
+      reads.push(path);
+      return { text: visible + '文'.repeat(32000) + unread };
+    } });
+    const project = server.app.projects.create({ name: '合成工作指令检查', workspace: { machineId, cwd } });
+    const question = '请说明文件 @' + path + ' 里第一项的要求。';
+    const expected = visible + '正文不完整，仅核对了已读取的片段。';
+    assert.equal(await ask(question, '/projects/' + project.id + '/messages'), expected);
+    const bot = await api('/feishu/bots', { name: '合成路径助手', appId: 'cli_4242424242424242', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
+    const sender = { chatId: 'oc_synthetic_path', senderId: 'ou_synthetic_path', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...sender, messageId: 'pair-path' });
+    await adapter.onMessage(question, { ...sender, messageId: 'read-path' });
+    await t.waitFor(() => assert.ok(sent.some(text => text.includes(expected))));
+    assert.deepEqual(reads, [path, path]);
+    assert.equal(server.app.store.list('runs').length, 0);
+  } finally { await server.close(); }
+});

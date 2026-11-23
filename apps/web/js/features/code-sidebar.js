@@ -1,4 +1,5 @@
 import { h, replace } from '../lib/dom.js';
+import { makeFileDraggable } from './file-mention-drag.js';
 import { Button } from '../ui/kit.js';
 
 function diffLineClass(line) {
@@ -90,6 +91,7 @@ export function createCodeSidebar({ api, store }) {
               void read(e.directory ? 'tree' : 'file', e.path);
             },
           });
+          makeFileDraggable(btn, { api, store, projectId, path: e.path, directory: e.directory });
           btn.classList.add('code-tree__item', e.directory ? 'code-tree__item--dir' : 'code-tree__item--file');
           if (!e.directory && selected === e.path) btn.classList.add('is-active');
           return btn;

@@ -10,6 +10,7 @@ import { createMessageEdit } from '../lib/message-edit.js';
 import { agentProgress } from '../ui/agent-progress.js';
 import { Button, Banner, Empty, TextArea } from '../ui/kit.js';
 import { createCodeSidebar } from './code-sidebar.js';
+import { attachFileMentions } from './file-mentions.js';
 import { attachSavedPrompts } from './saved-prompts.js';
 import { createProjectInstructions } from './project-instructions.js';
 import { createReplyTranslation } from './reply-translation.js';
@@ -43,6 +44,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const quote = createMessageQuote({ drafts, input: text, store, router, scope });
   const edit = createMessageEdit({ input: text, quote, context: composerContext });
   const prompts = attachSavedPrompts({ api, store, input: text, getScope: () => projectId });
+  const mentions = attachFileMentions({ api, store, input: text, getProjectId: () => projectId });
   const history = attachSentHistory({ input: text, store, context: composerContext });
   text.addEventListener('input', () => {
     syncDraft();
@@ -58,7 +60,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   const notice = h('div', { 'aria-live': 'polite' });
   const topic = h('p', { class: 'small', hidden: true });
   const selectedTodo = () => store.view.snapshot?.todos?.find(t => t.id === todoId && t.projectId === projectId);
-  const composer = h('div', { class: 'project-conversation__composer stack' }, topic, edit.notice, quote.bar, prompts.menu, text, voice.caption, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, voice.button, voice.upload, send), notice);
+  const composer = h('div', { class: 'project-conversation__composer stack' }, topic, edit.notice, quote.bar, prompts.menu, mentions.menu, text, voice.caption, h('div', { class: 'row row--between row--wrap' }, h('span', { class: 'muted small' }, '项目工作会话持续保留上下文。'), prompts.manage, mentions.button, voice.button, voice.upload, send), notice);
   const el = h('div', { class: 'project-conversation code-conversation', id: 'panel-workspace', role: 'tabpanel' }, h('div', { class: 'stack code-conversation__main' }, h('div', { class: 'row row--between row--wrap' }, progress, h('div', { class: 'row row--wrap' }, instructions.button, favorites.button, transcript.button, code.toggle)), status, locationNote, readNotice, messages, composer), code.el);
   const project = () => store.view.snapshot?.projects?.find(p => p.id === projectId && !p.archivedAt);
   let draftKey, owner, enabled, quotesEnabled, editEnabled, epoch = 0;
@@ -241,7 +243,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   }
   return {
     el,
-    hide() { visible = false; syncDraft(); },
+    hide() { visible = false; mentions.reset(); syncDraft(); },
     show(id, query) {
       visible = true;
       requestedFile = query?.get('file') || '';
@@ -255,7 +257,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
         instructions.close();
         prompts.changeScope();
         transcript.close();
-        generation++; request++; projectId = id; workspace = undefined;
+        generation++; request++; projectId = id; mentions.update(); workspace = undefined;
       }
       syncDraft();
       const savedDraft = draftKey ? drafts.read(draftKey) : '';

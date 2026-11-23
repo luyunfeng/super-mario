@@ -77,6 +77,14 @@ test('顶栏按当前项目搜索文件，打开原文件，切换项目后丢�
   await expect(reply.locator('a[href^="https://example.invalid"]')).toHaveCount(0);
   await reference.click();
   await expect(code.locator('pre')).toHaveText(citedText);
+  await code.getByRole('button', { name: '所在目录' }).click();
+  const composer = page.getByRole('textbox', { name: '项目目标' });
+  const draggedFile = code.getByRole('button', { name: 'forecast-甲 #1.md', exact: true });
+  await composer.fill('请核对占位再汇报');
+  await composer.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(3, 5));
+  await draggedFile.dragTo(composer);
+  await expect(composer).toHaveValue('请核对 @' + alphaPath + ' 再汇报');
+  await composer.fill('');
 
   const matches = (projectId: string, query: string, url: string) => {
     const parsed = new URL(url);
