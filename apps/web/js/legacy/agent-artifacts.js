@@ -62,6 +62,18 @@ export function createAgentArtifactsUI({ api, element, onChanged }) {
         });
         card.append(button);
       }
+      if (record.status === 'unloaded') {
+        const restage = node('button', '重新暂存此版本', 'secondary');
+        restage.type = 'button';
+        const epoch = generation;
+        restage.addEventListener('click', () => {
+          if (epoch !== generation) return;
+          const body = { machineId: record.machineId, manifest: record.manifest, source: record.source };
+          void mutate(() => api('/agent-artifacts', { method: 'POST', body: JSON.stringify(body) }),
+            '已为此版本新建待确认记录。核对源码和 SHA256 后可确认加载。');
+        });
+        card.append(restage);
+      }
       list.append(card);
     }
     sync();
