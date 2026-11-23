@@ -139,6 +139,27 @@ test('现有创建审批生效、单次已触发与到期派发审批 pending/co
   await expect(panel(page)).toContainText('本次已跳过 · 先前派发的任务仍在执行');
 }));
 
+test('暂停和恢复按当前排期版本提交，重新读取后显示新状态', async () => fixture(async f => {
+  const page: Page = f.page;
+  f.items = [work({ status: 'active', scheduleStatus: 'active', scheduleVersion: 7 })];
+  await emit(page);
+  const operations: string[] = [];
+  await page.route('**/scheduled-work/work-one/{pause,resume}', async route => {
+    const operation = new URL(route.request().url()).pathname.split('/').pop()!;
+    const item = f.items[0];
+    assert.deepEqual(route.request().postDataJSON(), {version: item.version, scheduleVersion: item.scheduleVersion});
+    operations.push(operation);
+    item.scheduleVersion++;
+    item.scheduleStatus = operation === 'pause' ? 'paused' : 'active';
+    return json(route, item);
+  });
+  await panel(page).getByRole('button', {name:'暂停计划'}).click();
+  await expect(panel(page)).toContainText('调度状态：已暂停');
+  await panel(page).getByRole('button', {name:'恢复计划'}).click();
+  await expect(panel(page)).toContainText('调度状态：等待触发');
+  assert.deepEqual(operations, ['pause', 'resume']);
+}));
+
 test('取消须明确确认当前 version；409 不盲重试，核对新版本再取消', { timeout: 30000 }, async () => fixture(async f => {
   const { page } = f;
   f.cancelStatus = 409;
