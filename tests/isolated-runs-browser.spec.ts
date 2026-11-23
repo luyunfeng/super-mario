@@ -480,6 +480,8 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   const trees = page.getByRole('dialog', { name: '项目工作树' });
   await trees.getByLabel('起始分支').selectOption(branchStart);
   await trees.getByLabel('工作树名称').fill('待后续执行');
+  const note = '核对 <草稿>\n下一步由用户决定';
+  await trees.getByLabel('备注（可选）').fill(note);
   await trees.getByRole('button', { name: '只创建工作树' }).click();
   const receipt = trees.getByRole('status');
   await expect(receipt).toContainText('已创建 待后续执行');
@@ -491,6 +493,7 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   await page.getByRole('button', { name: '项目工作树' }).click();
   const preparedRow = trees.locator('.item').filter({ hasText: '待后续执行' });
   await expect(preparedRow).toContainText(prepared);
+  assert.ok((await preparedRow.innerText()).includes(note));
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: server.url });
   await preparedRow.getByRole('button', { name: '复制目录' }).click();
   await expect(receipt).toContainText('已复制工作树目录');
