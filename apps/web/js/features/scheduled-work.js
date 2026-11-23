@@ -25,7 +25,7 @@ function localInstant(value) {
 }
 
 function timingText(s) {
-  if (s.kind === 'once') return `一次 · ${timeText(s.at)}`;
+  if (s.kind === 'once') return `一次 · ${timeText(s.at, s.tz)}`;
   if (s.kind === 'interval') return `每 ${s.everySec / 60} 分钟${s.anchorAt ? ` · 起点 ${timeText(s.anchorAt)}` : ''}`;
   const fixed = /^(\d{1,2}) (\d{1,2}) \* \* (\*|1-5|[0-6](?:,[0-6])*)$/.exec(s.cron);
   if (!fixed) return `cron ${s.cron} · ${s.tz}`;
@@ -379,7 +379,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     function scheduleInput() {
       let schedule;
       if (frequency.value === 'once') {
-        schedule = { kind: 'once', at: localInstant(once.value) };
+        schedule = { kind: 'once', at: localInstant(once.value), tz: Intl.DateTimeFormat().resolvedOptions().timeZone };
       } else if (frequency.value === 'interval') {
         const everySec = Number(minutes.value) * 60;
         if (!Number.isFinite(everySec) || everySec < 10) throw new Error('间隔至少为 10 秒。');

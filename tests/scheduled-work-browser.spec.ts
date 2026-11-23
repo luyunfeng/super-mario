@@ -274,7 +274,7 @@ test('once 拒绝 DST 不存在的本地时间，并转换正常本地时间为 
   await expect(drawer(page)).toContainText('本地触发时间无效'); assert.equal(f.writes.length, 0);
   await drawer(page).getByLabel('本地触发时间', { exact: true }).fill('2027-03-14T03:30'); await submit(page);
   await expect(drawer(page)).toContainText('已提交创建审批');
-  assert.deepEqual(f.writes[0].body.schedule, { kind: 'once', at: '2027-03-14T10:30:00.000Z' });
+  assert.deepEqual(f.writes[0].body.schedule, { kind: 'once', at: '2027-03-14T10:30:00.000Z', tz: 'America/Los_Angeles' });
 }));
 
 test('旧 fixture 无 scope 兼容；GET 失败/404 保留旧数据、明确缺支持且其他 Agent 功能可用', { timeout: 30000 }, async () => fixture(async f => {
