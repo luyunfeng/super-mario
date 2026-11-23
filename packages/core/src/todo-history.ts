@@ -29,7 +29,7 @@ export function readTodoHistory(store: Pick<Store, 'get' | 'list'>, id: string, 
       continuationAccepted: !!continuation && continuation.conversationId === source.conversationId &&
         continuation.projectId === source.projectId && (!continuation.todoId || continuation.todoId === id) && continuation.role === 'user' }];
   }) : undefined;
-  const decisions = store.list<{ request: RunReviewDecision; result: RunReview }>('run-review.intents');
+  const decisions = store.list<{ decidedAt?: string; request: RunReviewDecision; result: RunReview }>('run-review.intents');
   return {
     todo: { id, title: todo.title, projectId: todo.projectId, completedAt: todo.completedAt }, total: runs.length,
     ...(conversationReceipts && { conversationReceipts }),
@@ -46,8 +46,10 @@ export function readTodoHistory(store: Pick<Store, 'get' | 'list'>, id: string, 
         delivery: card.delivery ?? 'unknown',
       })),
       decisions: decisions.filter(item => item.request.todoId === id && item.request.runId === run.id)
-        .map(({ request, result }) => {
-          const decision = { action: request.action, defects: request.defects, at: result.updatedAt };
+        .map(({ request, result, decidedAt }) => {
+          // Legacy finalized reworks only retained the dispatch receipt time.
+          const at = decidedAt ?? (request.action === 'accept' || result.status === 'dispatching' ? result.updatedAt : undefined);
+          const decision = { action: request.action, defects: request.defects, at, receiptUpdatedAt: result.updatedAt };
           if (request.action !== 'rework') return decision;
           if (result.status === 'dispatching' || result.status === 'unknown') return { ...decision, dispatchStatus: result.status };
           // Only a committed receipt identifies the successor, even when later rounds exist.

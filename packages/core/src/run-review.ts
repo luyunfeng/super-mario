@@ -36,6 +36,7 @@ export interface RunReviewDecision {
   defects?: string;
 }
 interface Intent {
+  decidedAt?: string;
   request: RunReviewDecision;
   key: string;
   input?: Record<string, unknown>;
@@ -162,7 +163,7 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
       const next: RunReview = { ...item, status: 'unknown', error: '服务重启，派发结果未知，不自动重试', updatedAt: new Date().toISOString() };
       store.put(reviews, item.todoId, next);
       for (const intent of store.list<Intent>(intents)) {
-        if (intent.result.todoId === item.todoId && intent.result.status === 'dispatching') store.put(intents, intent.key, { ...intent, result: next });
+        if (intent.result.todoId === item.todoId && intent.result.status === 'dispatching') store.put(intents, intent.key, { ...intent, decidedAt: intent.decidedAt ?? intent.result.updatedAt, result: next });
       }
     }
   });
@@ -243,7 +244,7 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
           completionEvidence(value);
           const result: RunReview = { ...item, version: item.version + 1, status: 'accepted', updatedAt: now };
           store.put(reviews, item.todoId, result);
-          const receipt: Intent = { request, key, result };
+          const receipt: Intent = { request, decidedAt: now, key, result };
           store.put(intents, key, receipt);
           const completed = completeTodo(item.todoId);
           if (completed != null && typeof (completed as { then?: unknown }).then === 'function') {
@@ -266,7 +267,7 @@ export function createRunReview({ store, events, dispatch, completeTodo, maxRewo
           ...(value.cwd !== undefined ? { cwd: value.cwd } : {}),
           ...(value.sourceMessageId !== undefined ? { sourceMessageId: value.sourceMessageId } : {}),
           executionMode: value.executionMode ?? 'task' };
-        const receipt: Intent = { request, key, input: params, result };
+        const receipt: Intent = { request, decidedAt: now, key, input: params, result };
         store.put(reviews, item.todoId, result);
         store.put(intents, key, receipt);
         return { receipt, replay: false, notify: false };

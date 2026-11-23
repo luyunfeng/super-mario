@@ -248,10 +248,13 @@ test('unknown dispatch and malformed receipts persist and never automatically re
 });
 
 test('crash after durable intent recovers dispatching as unknown without sending', t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-01-01T00:00:00Z') });
   const f = fixture(t);
   const input = decision(f.review.attach({ todoId: 'todo', runId: 'original' }), 'rework');
   f.review.decide(input);
-  const receipt = f.store.list<{ key: string; result: RunReview }>('run-review.intents')[0]!;
+  const receipt = f.store.list<{ key: string; decidedAt: string; result: RunReview }>('run-review.intents')[0]!;
+  assert.equal(receipt.decidedAt, new Date().toISOString());
+  t.mock.timers.tick(60000);
   const interrupted = { ...receipt.result, status: 'dispatching' as const };
   f.store.put('run-reviews', 'todo', interrupted);
   f.store.put('run-review.intents', receipt.key, { ...receipt, result: interrupted });
@@ -260,6 +263,9 @@ test('crash after durable intent recovers dispatching as unknown without sending
   try {
     const restored = createRunReview({ ...f.options, store, events: createEventBus(store) });
     assert.equal(restored.get('todo').status, 'unknown');
+    const recovered = store.get<typeof receipt>('run-review.intents', receipt.key)!;
+    assert.equal(recovered.decidedAt, receipt.decidedAt);
+    assert.equal(recovered.result.updatedAt, new Date().toISOString());
     assert.equal(restored.decide(input).status, 'unknown');
     assert.equal(f.calls.length, 1);
   } finally { store.close(); }

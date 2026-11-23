@@ -608,7 +608,11 @@ test('Web 和飞书项目助手查返工依据，可翻页，跨项目读取被�
       assert.ok(rework.answerReceipts.some((r: { target: string; delivery: string }) => r.target === 'executor' && r.delivery === 'failed'));
       return call('todo_history', { todoId, before: result.nextBefore }, 'older');
     }
-    return { role: 'assistant', content: '记录的返工原因是' + result.rounds[0].decisions[0].defects };
+    const decision = result.rounds[0].decisions[0];
+    assert.match(req.system, /缺少 at 就说明决定时间未记录/);
+    assert.equal(decision.at, undefined);
+    assert.equal(decision.receiptUpdatedAt, new Date(1000).toISOString());
+    return { role: 'assistant', content: '记录的返工原因是' + decision.defects + '，决定时间未记录' };
   }, options => {
     adapter = options;
     return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }), collect: async () => [],
@@ -634,8 +638,8 @@ test('Web 和飞书项目助手查返工依据，可翻页，跨项目读取被�
     server.app.store.put('interaction-origins', 'chat-answer', { inputId: 'older-question' });
     server.app.store.put('messages', 'older-question', { id: 'older-question', projectId: project.id, todoId,
       conversationId: 'main', text: '确认范围', role: 'user', status: 'done', createdAt: new Date(0).toISOString() });
-    const question = '复核汇总第一次为什么返工？';
-    assert.equal(await ask(question), '记录的返工原因是合计缺一行');
+    const question = '复核汇总第一次为什么返工？什么时候决定的？';
+    assert.equal(await ask(question), '记录的返工原因是合计缺一行，决定时间未记录');
     projectOnly = true;
     const bot = await api('/feishu/bots', { name: '返工查询', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });

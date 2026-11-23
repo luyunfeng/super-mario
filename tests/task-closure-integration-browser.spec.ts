@@ -219,6 +219,18 @@ test('Chromium 用户返工只创建一个新 Run，重复 HTTP 决定不双发'
   const history = f.page.getByRole('dialog', { name: '执行历史', exact: true });
   const link = history.locator('[data-round="1"]').getByRole('link', { name: '打开本次返工执行' });
   await expect(link).toHaveAttribute('href', '#projects/' + f.project.id + '/runs/' + next.runId);
+  const firstRound = history.locator('[data-round="1"]');
+  await expect(firstRound).not.toContainText('决定时间未记录');
+  // Replay a historical response that retained only the dispatch receipt timestamp.
+  await f.page.route('**/todos/' + f.todo.id + '/history', async route => {
+    const response = await route.fetch();
+    const data = await response.json();
+    delete data.rounds.find((round: { number: number }) => round.number === 1).decisions[0].at;
+    await route.fulfill({ response, json: data });
+  });
+  await history.getByRole('button', { name: '重新读取历史' }).click();
+  await expect(firstRound).toContainText('决定时间未记录');
+  await expect(firstRound).toContainText('回执更新于');
   await link.click();
   await expect(history).toHaveCount(0);
   await expect(f.page).toHaveURL(new RegExp('/runs/' + next.runId + '$'));

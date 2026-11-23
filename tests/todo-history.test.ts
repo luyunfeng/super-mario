@@ -46,6 +46,9 @@ test('todo history pages real stored attempts and review decisions without writi
     assert.equal(first.rounds[1]!.decisions[0]!.defects,'补充失败依据');
     const decision = (runId: string) => first.rounds.find(round => round.run.id === runId)!.decisions[0]!;
     assert.equal(decision('r03').reworkRunId, 'r22');
+    assert.equal(decision('r03').at, undefined);
+    assert.equal(decision('r03').receiptUpdatedAt, stamp);
+    assert.equal(decision('r05').at, stamp);
     assert.equal(decision('r04').dispatchStatus, 'unknown');
     assert.equal(decision('r05').dispatchStatus, 'dispatching');
     for (const id of ['r04', 'r05', 'r06', 'r07', 'r08', 'r21']) assert.equal(decision(id).reworkRunId, undefined);
