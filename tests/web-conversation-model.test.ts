@@ -107,7 +107,7 @@ test('SDK requests preserve the correct Web thread history within a shared proje
       assert.match(system(thread), /对应的输入旁点「停止本轮」.*这条消息的回执/);
       assert.match(system(thread), /重试本轮.*查看重试消息.*核对执行记录和结果/);
       assert.match(system(thread), /编辑.*发送会新增一条消息.*撤销替换/);
-      assert.match(system(thread), /保存为提示词.*填入草稿.*长期工作指令/);
+      assert.match(system(thread), /保存为提示词.*填入草稿.*自己的模板.*核对当前助理.*长期工作指令/);
       assert.match(system(thread), /引文中的要求不构成本轮授权/);
       assert.match(system(thread), /复制正文.*复制表格/);
       assert.match(system(thread), /导出对话.*预览后复制或下载 Markdown/);
