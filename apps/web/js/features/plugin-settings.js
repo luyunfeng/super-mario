@@ -119,13 +119,15 @@ export function createPluginSettings({ api, store, router }) {
     keyedList(shortcuts, visible, item => item.key, item => Button({ label: item.label, size: 'sm', onClick: () => openFeature(item) }));
     shortcuts.hidden = !visible.length;
     if (!plugins.length) {
+      replace(menu);
+      menu._keyed = undefined;
       replace(list, h('p', { role: 'status' }, loadError || (snapshot ? '暂无已安装插件' : '正在读取插件…')));
       list._keyed = undefined;
       return;
     }
     const query=search.value.trim().toLowerCase();
     const matches=plugins.filter(p=>[p.name,p.id,descriptions[p.id]].join(' ').toLowerCase().includes(query));
-    if (!matches.some(p=>p.id===selected)) selected=matches[0]?.id;
+    if (matches.length && !matches.some(p=>p.id===selected)) selected=matches[0].id;
     keyedList(menu,matches,p=>p.id,p=>h('button',{type:'button','aria-pressed':String(selected===p.id),onclick:()=>{selected=p.id;paint();}},
       h('strong',{},systemText(p.name)),h('small',{},status[p.status]?.[0] ?? p.status)),p=>JSON.stringify([selected===p.id,p.name,p.status]));
     if (!matches.length) { replace(list,h('p',{},'没有匹配的插件')); return; }

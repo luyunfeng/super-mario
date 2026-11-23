@@ -55,6 +55,10 @@ test('从插件配置固定入口，刷新、停用与恢复，并从窄屏打�
   await observer.close();
   await dialog.getByLabel('搜索插件').fill('feishu');
   await expect(plugin.getByText(/直接依赖此插件/)).toContainText('飞书消息表情回应');
+  await dialog.getByLabel('搜索插件').fill('fixture-no-match');
+  await expect(dialog).toContainText('没有匹配的插件');
+  await dialog.getByLabel('搜索插件').fill('');
+  await expect(plugin.getByRole('button', { name: '停用' })).toBeVisible();
   await plugin.getByRole('checkbox').check();
   await dialog.getByRole('button', { name: '关闭' }).click();
   await pin.click();
