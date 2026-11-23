@@ -31,7 +31,7 @@ function paragraphs(text, user) {
   for (const node of doc.children) {
     if (node.matches('.md-code')) add(node.querySelector('pre'), code, '', '#eef1f3');
     else if (node.matches('ol,ul')) Array.from(node.children).forEach((li, index) =>
-      add(li, normal, node.tagName === 'OL' ? (index + 1) + '. ' : '• '));
+      add(li, normal, node.tagName === 'OL' ? (node.start + index) + '. ' : '• '));
     else if (node.matches('.md-table')) {
       for (const row of node.querySelectorAll('tr')) {
         const spans = [];

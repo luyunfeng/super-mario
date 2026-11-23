@@ -54,7 +54,7 @@ test('PNG 导出在分页后保留原文末尾，并只从已鉴权入口绘制�
     const rgb = Array.from(ctx.getImageData(190,115,1,1).data);
     const first = draws.splice(0);
     const messages = [{id:'reply',role:'assistant', createdAt:source.createdAt, text:[
-      '## 验收结果', '> 摘录', '- **开始**', '```js', 'let n = 1', '```',
+      '## 验收结果', '> 摘录', '- **开始**', '7. 校验编号', '8. 复核结果', '```js', 'let n = 1', '```',
       ...Array.from({length:260}, (_,i) => 'line ' + i), 'END_OF_LAST_PAGE'
     ].join('\n'),files:[{name:'fixture.txt',bytes:123}]}];
     const pages = await renderConversationPNGs({...base,dates:false,messages});
@@ -76,6 +76,8 @@ test('PNG 导出在分页后保留原文末尾，并只从已鉴权入口绘制�
   assert.ok(report.sizes.length > 1);
   assert.ok(report.sizes.every(([w,h]:number[]) => w===780 && h<=4850));
   assert.ok(report.second.some(r=>r.text==='验收结果' && /600|bold/.test(r.font)));
+  assert.ok(report.second.some(r=>r.text.includes('7. 校验编号')));
+  assert.ok(report.second.some(r=>r.text.includes('8. 复核结果')));
   assert.ok(report.second.some(r=>r.text==='测试标题'));
   assert.ok(!report.second.some(r=>r.text.includes('2026')));
   assert.ok(report.second.some(r=>r.text==='END_OF_LAST_PAGE'));

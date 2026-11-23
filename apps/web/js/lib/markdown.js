@@ -173,6 +173,7 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
   let paraLines = [];
   let ulItems = [];
   let olItems = [];
+  let olStart = 1;
   let codeFence = '';
   let codeLang = '';
   let codeLines = [];
@@ -190,7 +191,7 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
 
   function flushLists() {
     if (ulItems.length) { blocks.push(h('ul', { class: 'md-list' }, ulItems)); ulItems = []; }
-    if (olItems.length) { blocks.push(h('ol', { class: 'md-list md-list--num' }, olItems)); olItems = []; }
+    if (olItems.length) { blocks.push(h('ol', { class: 'md-list md-list--num', start: olStart }, olItems)); olItems = []; }
   }
 
   const lines = text.split(/\r?\n/);
@@ -277,11 +278,12 @@ export function renderFormattedText(raw, tableAction, { reply = false, streaming
       continue;
     }
 
-    const ol = line.match(/^\s*\d+\.\s+(.*)$/);
+    const ol = line.match(/^\s*(\d{1,9})\.\s+(.*)$/);
     if (ol) {
       flushPara();
       if (ulItems.length) flushLists();
-      olItems.push(h('li', null, renderInline(ol[1])));
+      if (!olItems.length) olStart = Number(ol[1]);
+      olItems.push(h('li', null, renderInline(ol[2])));
       continue;
     }
 
