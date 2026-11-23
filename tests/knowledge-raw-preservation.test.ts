@@ -271,7 +271,20 @@ test('按网址反查实际整理结果，跨重启分页并排除失效的关�
   assert.equal((await f.curator.pagesFromUrl(url + '#other')).total, 0);
   await assert.rejects(f.curator.pagesFromUrl('file:///missing'), /HTTP\(S\)/);
   await assert.rejects(f.curator.pagesFromUrl(url, 'sample', -1), /查询位置/);
+  for (let i = 0; i < 25; i++) {
+    const id = 'pending-' + i;
+    f.store.put('knowledge.sources', id, { ...receipt, id, status: 'awaiting_approval', knowledgeIds: [] });
+  }
+  const progress = f.curator.sourceAttemptsFromUrl(url, 'sample');
+  assert.equal(progress.total, 26);
+  assert.equal(progress.nextOffset, 25);
+  assert.equal(progress.attempts[0]?.id, 'pending-24');
+  assert.equal(progress.attempts[0]?.status, 'awaiting_approval');
+  const oldest = f.curator.sourceAttemptsFromUrl(url, 'sample', progress.nextOffset);
+  assert.deepEqual(oldest.attempts.map(row => row.id), [receipt.id]);
+  assert.equal(oldest.nextOffset, null);
   f.archive();
+  assert.equal(f.curator.sourceAttemptsFromUrl(url).total, 0);
   assert.equal((await f.curator.pagesFromUrl(url)).total, 0);
   await assert.rejects(f.curator.pagesFromUrl(url, 'sample'), /项目不可用/);
 });

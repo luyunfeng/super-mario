@@ -490,8 +490,13 @@ test('会议日回顾按时区和项目分页，空结果区分未注日期，�
   await expect(recap.getByRole('listitem').filter({ hasText: '季度样本评审' })).toHaveCount(1);
   await recap.getByRole('list', { name: '上午' }).getByRole('link', { name: '查看原文 · 项目评审记录' }).click();
   await expect(page.getByRole('dialog', { name: '编辑记忆' }).locator('pre')).toHaveText(base.text);
-  await page.goto(server.url + '/#memory?curator=1');
+  server.app.store.put('messages', 'source-progress', { id: 'source-progress', conversationId: 'main', role: 'assistant',
+    status: 'done', createdAt: new Date().toISOString(), text: '[查看整理记录](#memory?curator=1&job=' + first.id + ')' });
+  await page.goto(server.url + '/#chat');
+  await page.reload();
+  await page.getByRole('link', { name: '查看整理记录' }).click();
   const queue = page.getByRole('region', { name: '整理队列' });
+  await expect(queue.locator('.is-search-hit')).toHaveAttribute('data-job-id', first.id);
   await queue.locator('[data-job-id]').filter({ hasText: '未填写日期' }).getByRole('button', { name: '修改标题' }).click();
   await editor.getByRole('textbox', { name: '会议标题' }).fill('未定日期的复核');
   await editor.getByRole('button', { name: '保存标题' }).click();

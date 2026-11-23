@@ -870,6 +870,10 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
       assert.match(req.system, /contentLocked=true 表示正文仅由用户手工编辑/);
       assert.match(req.system, /比较两版返回的 tags/);
       assert.match(req.system, /共用别名时不要据此合并知识页/);
+      if (JSON.stringify(req.content).includes('为什么失败，重试了吗')) {
+        assert.match(req.system, /按 retryOf 关联前次尝试/);
+        return call('knowledge_source_lookup', { url: sourceUrl, view: 'attempts' }, 'attempts');
+      }
       if (JSON.stringify(req.content).includes('整理成哪些知识页')) {
         assert.match(req.system, /按完整网址查导入回执/);
         assert.ok(req.tools.includes('knowledge_source_lookup'));
@@ -891,6 +895,17 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
       return call('knowledge_list', { query: '旧样本库', tag: '样本核对', importance: 'P1', minRelevance: 80 }, 'tagged');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[]).map(p => p.text).join('');
+    if (req.callId === 'attempts') {
+      const { attempts, total } = JSON.parse(raw);
+      assert.equal(total, 3);
+      const [retry, failed, prior] = attempts;
+      assert.equal(retry.retryOf, failed.id);
+      assert.equal(retry.status, 'queued');
+      assert.equal(failed.status, 'failed');
+      assert.equal(prior.status, 'completed');
+      assert.ok(retry.webCitation.endsWith('&job=' + retry.id + ')'));
+      return { role: 'assistant', content: failed.error + '；重试仍在排队。' };
+    }
     if (req.callId === 'by-url' || req.callId === 'no-receipt') {
       const { pages, total, nextOffset } = JSON.parse(raw);
       if (req.callId === 'no-receipt') {
@@ -962,6 +977,8 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
     pageId = (await api('/knowledge', { ...input, tags: ['待复核'], content: '测'.repeat(4000) + '样本甲' })).id;
     const sourceJob = server.app.knowledgeCurator.addSource({ title: '样本来源', url: sourceUrl, layer: 'project', projectId: project.id });
     server.app.store.put('knowledge.sources', sourceJob.id, { ...sourceJob, status: 'completed', knowledgeIds: [pageId] });
+    server.app.store.put('knowledge.sources', 'failed-import', { ...sourceJob, id: 'failed-import', status: 'failed', error: '未能读取文档', knowledgeIds: [] });
+    server.app.store.put('knowledge.sources', 'retry-import', { ...sourceJob, id: 'retry-import', status: 'queued', retryOf: 'failed-import', knowledgeIds: [] });
     await api('/knowledge', { ...input, id: pageId, tags: ['待复核'], content: '样本乙' });
     await api('/knowledge', { ...input, id: pageId, content: '样本乙' });
     foreignId = (await api('/knowledge', { ...input, projectId: other.id, content: '其他项目样本' })).id;
@@ -983,6 +1000,12 @@ test('Web 和飞书项目助手按修订核对知识变化，拒绝其他项目�
     assert.equal(await ask(sourceQuestion, '/projects/' + project.id + '/messages'), sourceAnswer);
     await adapter.onMessage(sourceQuestion, { ...source, messageId: 'original-url' });
     await t.waitFor(() => assert.ok(sent.includes(sourceAnswer)));
+    const statusQuestion = sourceUrl + ' 为什么失败，重试了吗？';
+    const beforeLookup = server.app.store.list('knowledge.sources');
+    assert.equal(await ask(statusQuestion, '/projects/' + project.id + '/messages'), '未能读取文档；重试仍在排队。');
+    await adapter.onMessage(statusQuestion, { ...source, messageId: 'attempt-history' });
+    await t.waitFor(() => assert.ok(sent.includes('未能读取文档；重试仍在排队。')));
+    assert.deepEqual(server.app.store.list('knowledge.sources'), beforeLookup);
     const reverse = sourceUrl + ' 整理成哪些知识页？';
     assert.equal(await ask(reverse, '/projects/' + project.id + '/messages'), '验收样本，知识页 ' + pageId);
     await adapter.onMessage(reverse, { ...source, messageId: 'find-by-url' });

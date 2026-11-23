@@ -111,6 +111,18 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
   function meetingTitles() {
     return new Map(store.list<{ id: string; title: string }>(titlesCollection).map(row => [row.id, row.title]));
   }
+  function sourceUrlMatches(value: unknown, projectId: string | undefined, offset: unknown) {
+    if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
+    if (projectId && !options.validProject(projectId)) throw new CuratorError('项目不可用', 404);
+    const url = typeof value === 'string' && value.length <= 4096 ? URL.parse(value) : null;
+    if (!url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password)
+      throw new CuratorError('请输入不含登录凭据的 HTTP(S) 来源网址');
+    if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0)
+      throw new CuratorError('来源查询位置无效');
+    const matches = jobs().filter(job => job.url && (!projectId || job.projectId === projectId) &&
+      URL.parse(job.url)?.href === url.href);
+    return { matches, start: offset, end: offset + 25 };
+  }
   function visibleMeetings(projectId?: string) {
     if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
     if (projectId && !options.validProject(projectId)) throw new CuratorError('项目不可用', 404);
@@ -522,15 +534,8 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
       return { date, timezone, total: dated.length, undated, meetings, nextOffset: offset + batch.length < dated.length ? offset + batch.length : null };
     },
     async pagesFromUrl(value: unknown, projectId?: string, offset: unknown = 0) {
-      if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
-      if (projectId && !options.validProject(projectId)) throw new CuratorError('项目不可用', 404);
-      const url = typeof value === 'string' && value.length <= 4096 ? URL.parse(value) : null;
-      if (!url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password)
-        throw new CuratorError('请输入不含登录凭据的 HTTP(S) 来源网址');
-      if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0)
-        throw new CuratorError('来源查询位置无效');
-      const receipts = jobs().filter(job => job.url && job.knowledgeIds.length &&
-        (!projectId || job.projectId === projectId) && URL.parse(job.url)?.href === url.href);
+      const { matches, start, end } = sourceUrlMatches(value, projectId, offset);
+      const receipts = matches.filter(job => job.knowledgeIds.length);
       const pages = new Map<string, { id: string; title: string; webCitation: string }>();
       if (receipts.length) {
         const entries = new Map((await options.knowledge().list({ projectId })).map(page => [page.id, page]));
@@ -543,8 +548,19 @@ export function createKnowledgeCurator(options: { store: Store; events: EventBus
           }
         }
       }
-      const end = offset + 25;
-      return { pages: [...pages.values()].slice(offset, end), total: pages.size, nextOffset: end < pages.size ? end : null };
+      return { pages: [...pages.values()].slice(start, end), total: pages.size, nextOffset: end < pages.size ? end : null };
+    },
+    sourceAttemptsFromUrl(value: unknown, projectId?: string, offset: unknown = 0) {
+      const { matches, start, end } = sourceUrlMatches(value, projectId, offset);
+      // Newest submissions first, independent of later changes to an older attempt.
+      const visible = matches.filter(job => !job.projectId || options.validProject(job.projectId)).reverse();
+      const attempts = visible.slice(start, end).map(job => ({
+        id: job.id, title: job.title, layer: job.layer, projectId: job.projectId ?? null,
+        status: job.status, createdAt: job.createdAt, updatedAt: job.updatedAt,
+        error: job.error ?? null, retryOf: job.retryOf ?? null,
+        webCitation: `[查看整理记录](#memory?curator=1&job=${encodeURIComponent(job.id)})`,
+      }));
+      return { attempts, total: visible.length, nextOffset: end < visible.length ? end : null };
     },
     async pageSources(pageId: string, sourceId?: string, projectId?: string, handoffExcerpt = false) {
       if (!options.enabled()) throw new CuratorError('知识插件已停用', 503);
