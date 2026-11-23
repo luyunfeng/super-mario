@@ -758,6 +758,13 @@ export async function createWorkbench(config: AppConfig) {
       return { ...card, todoId };
     });
   }
+  function readReminderDeliveries(todo: Todo) {
+    const reference = todo.reminderAt ? reminderReference(todo) : undefined;
+    return reference ? background.outbox.list().filter(item =>
+      item.owner === 'reminders' && item.channel === 'feishu.bot' && item.relatedTo?.kind === 'todo' && item.relatedTo.id === todo.id &&
+      item.staleIf?.ref === reference.ref && item.staleIf.version === reference.version
+    ).map(({ status, updatedAt }) => ({ status, updatedAt })) : [];
+  }
   function todoDetail(args: Record<string, unknown>): Json {
     const id = requiredText(args.todoId, '待办标识');
     const todo = store.get<Todo>('todos', id);
@@ -765,11 +772,7 @@ export async function createWorkbench(config: AppConfig) {
     const replyTracking = waitingReplies.summary(id);
     const pendingRequests = pendingUserCards().filter(card => card.todoId === id && card.projectId === todo.projectId)
       .map(({ kind, title, body, suggestion }) => ({ kind, title, body, suggestion }));
-    const reference = todo.reminderAt ? reminderReference(todo) : undefined;
-    const reminderDeliveries = reference ? background.outbox.list().filter(item =>
-      item.owner === 'reminders' && item.channel === 'feishu.bot' && item.relatedTo?.kind === 'todo' && item.relatedTo.id === id &&
-      item.staleIf?.ref === reference.ref && item.staleIf.version === reference.version
-    ).map(({ status, updatedAt }) => ({ status, updatedAt })) : [];
+    const reminderDeliveries = readReminderDeliveries(todo);
     return { todo, pendingRequests, replyTracking, reminderDeliveries, decisions: todoDecisions.list(id), ...actionTodoLink(todo) } as unknown as Json;
   }
   function actionTodoLink(todo: Todo) {
@@ -1616,6 +1619,11 @@ export async function createWorkbench(config: AppConfig) {
     projectFollowUp,
     taskClosure: {
       history: todoHistory,
+      reminderDeliveries(id: string) {
+        const todo = store.get<Todo>('todos', id);
+        if (!todo) throw new InputError('待办不存在', 404);
+        return { projectId: todo.projectId, reminderAt: todo.reminderAt, version: todo.reminderVersion ?? 1, records: readReminderDeliveries(todo) };
+      },
       reporting, review: runReview, settings: reviewSettings,
       state(id: string) {
         const state = reporting.get(id), todo = store.get<Todo>('todos', id)!;

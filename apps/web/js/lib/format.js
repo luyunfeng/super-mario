@@ -54,3 +54,5 @@ export function friendlyError(error) {
 export function uuid() {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
+
+export const deliveryLabels = { queued: '等待发送', needs_approval: '待确认', sending: '发送中', sent: '已发送', held: '暂缓发送', failed: '发送失败', unknown: '结果未知', expired: '已过期', cancelled: '已取消' };

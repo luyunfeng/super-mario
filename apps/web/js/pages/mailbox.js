@@ -2,13 +2,12 @@ import { createInboxTranslation } from '../features/inbox-translation.js';
 import { createInboxConversationsUI } from '../features/inbox-conversations.js';
 import { h, replace, keyedList } from '../lib/dom.js';
 import { personalGroupSize } from '../lib/group-size.js';
-import { timeAgo, formatDate } from '../lib/format.js';
+import { timeAgo, formatDate, deliveryLabels } from '../lib/format.js';
 import { Banner, Button, Card, Empty, Input, Pill, Select } from '../ui/kit.js';
 import { Hint, hintCopy } from '../ui/hint.js';
 import { openDrawer } from '../ui/overlay.js';
 import { openInboxHandlingDrawer } from '../features/inbox-handling.js';
 
-const DELIVERY = { queued: '等待发送', needs_approval: '待确认', sending: '发送中', sent: '已发送', held: '暂缓发送', failed: '发送失败', unknown: '结果未知', expired: '已过期', cancelled: '已取消' };
 const MAIL = { pending: '待确认', ready: '等待处理', processing: '处理中', rejected: '已拒绝', failed: '处理失败', unknown: '结果未知' };
 const ORIGINS = [['all', '全部'], ['direct', '私聊'], ['mentioned', '群@我'], ['group', '群聊'], ['agent', 'Agent协作'], ['unknown', '未识别']];
 const STAGES = [['human', '待人决策'], ['ai', '待AI执行'], ['processing', '处理中'], ['done', '已处理'], ['all', '全部']];
@@ -74,7 +73,7 @@ export function createMailboxPage({ api, store, router, direction }) {
       id: `delivery:${item.id}`, kind: 'delivery', raw: item,
       title: item.content?.text?.split('\n').find(line => line.trim())?.slice(0, 100) || '工作台通知',
       text: item.content?.text ?? '', source: item.channel?.startsWith('feishu.personal:') ? '飞书个人回复' : item.channel?.startsWith('feishu') ? '飞书通知' : item.channel || '工作台通知',
-      status: DELIVERY[item.status] ?? '待查看', time: item.updatedAt,
+      status: deliveryLabels[item.status] ?? '待查看', time: item.updatedAt,
     }));
     return [...personal, ...botMail, ...outgoing].sort((a, b) => String(b.time).localeCompare(String(a.time)));
   }

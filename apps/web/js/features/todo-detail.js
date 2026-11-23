@@ -1,5 +1,5 @@
 import { h, replace } from '../lib/dom.js';
-import { formatDate, todoPriorityLabels, isRunActive, runStatus } from '../lib/format.js';
+import { formatDate, deliveryLabels, todoPriorityLabels, isRunActive, runStatus } from '../lib/format.js';
 import { Button, Field, Input, Select, TextArea } from '../ui/kit.js';
 import { openDrawer, toast } from '../ui/overlay.js';
 import { createAttention } from './attention.js';
@@ -81,6 +81,38 @@ function replyRecord(api, store, todo) {
   return record;
 }
 
+function reminderRecord(api, store, todo) {
+  let generation, sequence = 0;
+  const body = h('div', { class: 'stack small', role: 'status' });
+  const panel = h('details', { ontoggle: () => { if (panel.open) load(); } },
+    h('summary', null, '飞书提醒投递记录'), body, Button({ label: '刷新投递记录', size: 'sm', onClick: load }));
+  async function load() {
+    const stamp = ++sequence, token = api.token();
+    const current = () => stamp === sequence && token === api.token() && panel.isConnected && matchesScope(store, todo);
+    body.textContent = '正在读取…';
+    try {
+      const result = await api.get(todoPath(todo) + '/reminder-deliveries');
+      if (!current()) return;
+      if (result.projectId !== todo.projectId || generation !== JSON.stringify([result.reminderAt, result.version])) {
+        body.textContent = '提醒已变更，请刷新后核对。';
+        return;
+      }
+      replace(body, result.records.length ? result.records.map(row =>
+        h('p', null, (deliveryLabels[row.status] ?? '未知状态') + ' · ' + formatDate(row.updatedAt, true))) : '未查到本次提醒的投递记录。');
+    } catch (error) { if (current()) body.textContent = '读取投递记录失败：' + error.message; }
+  }
+  return { panel, update(current) {
+    const next = JSON.stringify([current.reminderAt, current.reminderVersion ?? 1]);
+    if (generation === next) return;
+    generation = next;
+    sequence++;
+    body.replaceChildren();
+    panel.hidden = !current.reminderAt;
+    if (panel.hidden) panel.open = false;
+    else if (panel.open) load();
+  } };
+}
+
 function conversationHistory({ api, store, router, todo, close }) {
   const owner = store.view.snapshotOwner;
   const rows = h('div', { class: 'stack' });
@@ -146,13 +178,15 @@ export function createTodoDetail({ api, store, router, todo, openEdit, close }) 
   const summary = h('div', { class: 'stack' });
   const next = h('div', { class: 'stack' });
   const attention = createAttention({ api, store, task: true });
+  const reminder = reminderRecord(api, store, todo);
   const history = conversationHistory({ api, store, router, todo, close });
-  const el = h('div', { class: 'stack' }, summary, attention.el, history.panel, replyRecord(api, store, todo),
+  const el = h('div', { class: 'stack' }, summary, attention.el, history.panel, reminder.panel, replyRecord(api, store, todo),
     decisionSection(api, todo, () => el.isConnected && el.closest('dialog')?.open !== false && matchesScope(store, todo)), next);
   function paint() {
     const snapshot = store.view.snapshot;
     const current = snapshot?.todos.find(item => item.id === todo.id);
     if (!current || !matchesScope(store, todo)) return;
+    reminder.update(current);
     history.update();
     attention.update((store.view.attention ?? []).filter(item => item.type === 'interaction' && item.todoId === current.id && item.projectId === current.projectId));
     const project = snapshot.projects?.find(item => item.id === current.projectId);

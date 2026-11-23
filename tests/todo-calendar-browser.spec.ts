@@ -342,4 +342,20 @@ test('项目待办日历按本地日期展示，支持改期、按时段新增�
   assert.equal(server.app.store.get<Todo>('todos', created.id)?.completedAt, undefined);
   server.app.updateTodo(created.id, { projectId: '' });
   assert.equal(server.app.store.get<Todo>('todos', spring.id)?.parentTodoId, undefined);
+  const reminderTodo = server.app.createTodo({ title: '核对提醒投递', projectId: project.id, reminderAt: new Date(Date.now() - 1000).toISOString() });
+  server.app.supervision.tick();
+  await server.app.background.eventbox.drain();
+  await server.app.background.outbox.tick();
+  await page.goto(base + '/detail/' + reminderTodo.id);
+  const receipts = panel.locator('details').filter({ has: page.getByText('飞书提醒投递记录', { exact: true }) });
+  await page.route('**/reminder-deliveries', route => route.fulfill({ status: 503, contentType: 'application/json',
+    body: JSON.stringify({ error: '暂时无法读取回执' }) }), { times: 1 });
+  await receipts.locator('summary').click();
+  await expect(receipts).toContainText('读取投递记录失败');
+  await receipts.getByRole('button', { name: '刷新投递记录' }).click();
+  await expect(receipts).toContainText('待确认');
+  server.app.updateTodo(reminderTodo.id, { reminderAt: '2099-01-01T00:00:00Z' });
+  await expect(receipts).toContainText('未查到本次提醒的投递记录。');
+  await expect(receipts).not.toContainText('待确认');
+
 });

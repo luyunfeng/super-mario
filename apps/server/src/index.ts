@@ -475,6 +475,8 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             return json(res, 201, app.todoDecisions.add(todoId, input.text));
           }
         }
+        const reminderDeliveries = path.match(/^\/api\/v1\/todos\/([^/]+)\/reminder-deliveries$/);
+        if (reminderDeliveries && method === 'GET') return json(res, 200, app.taskClosure.reminderDeliveries(decodeURIComponent(reminderDeliveries[1]!)));
         const todoHistory = path.match(/^\/api\/v1\/todos\/([^/]+)\/history$/);
         if (todoHistory && method === 'GET') return json(res, 200, app.taskClosure.history(decodeURIComponent(todoHistory[1]!), url.searchParams.get('before') ?? undefined));
         const closure = path.match(/^\/api\/v1\/todos\/([^/]+)\/(closure|reporting|report|review|review\/decide)$/);
