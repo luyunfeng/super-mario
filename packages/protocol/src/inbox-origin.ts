@@ -4,6 +4,8 @@ export interface InboxOrigin {
   connector?: string;
   chatId?: string;
   chatName?: string;
+  /** Position from this message's connector-provided deep link. */
+  feishuLocation?: { host: 'applink.feishu.cn' | 'applink.larksuite.com'; position: string; threadId?: string };
   senderName?: string;
   /** Recognized Feishu meeting minutes bot, for read-only analysis priority. */
   meetingMinutes?: true;

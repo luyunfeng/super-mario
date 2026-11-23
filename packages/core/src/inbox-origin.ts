@@ -14,6 +14,13 @@ export function normalizeInboxOrigin(value: unknown): InboxOrigin | undefined {
     if (input[key].trim()) result[key] = input[key].trim();
   }
   if (result.connector === '飞书' && input.meetingMinutes === true) result.meetingMinutes = true;
+  if (result.connector === '飞书' && input.feishuLocation !== undefined) {
+    const location = input.feishuLocation as Record<string, unknown> | null;
+    if (!location || (location.host !== 'applink.feishu.cn' && location.host !== 'applink.larksuite.com') ||
+        typeof location.position !== 'string' || !/^\d{1,16}$/.test(location.position) ||
+        (location.threadId !== undefined && (typeof location.threadId !== 'string' || !/^omt_[\w-]+$/.test(location.threadId)))) return fail();
+    result.feishuLocation = {host:location.host, position:location.position, ...(typeof location.threadId === 'string' && {threadId:location.threadId})};
+  }
   if (input.mentionedMe !== undefined) {
     if (typeof input.mentionedMe !== 'boolean') return fail();
     if (result.kind === 'group') result.mentionedMe = input.mentionedMe;

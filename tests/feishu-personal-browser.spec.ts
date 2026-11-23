@@ -21,8 +21,8 @@ test('个人消息：点击授权→显示二维码→确认后自动连接→�
       reads++;
       const row = {chat_id:'oc_offline', chat_type:'p2p', create_time:String(Date.now()), sender:{id:'ou_sender',id_type:'open_id',name:'测试发送人'}};
       return { ok: true, identity: 'user', data: { has_more: false, messages: [
-        {...row,message_id:'om_reply',reply_to:'om_offline',content:'已收到测试事项'},
-        {...row,message_id:'om_offline',content:'请处理测试事项'},
+        {...row,thread_id:'omt_fixture',message_app_link:'https://applink.feishu.cn/client/thread/open?thread_position=8&open_thread_id=omt_fixture&open_chat_id=oc_offline',message_id:'om_reply',reply_to:'om_offline',content:'已收到测试事项'},
+        {...row,message_app_link:'https://applink.feishu.cn/client/chat/open?openChatId=oc_other&position=2',message_id:'om_offline',content:'请处理测试事项'},
       ] } };
     }
     throw new Error('unexpected command');
@@ -57,8 +57,10 @@ test('个人消息：点击授权→显示二维码→确认后自动连接→�
     const reply = server.app.inbox.list().find(item => item.last === 'om_reply')!;
     const original = server.app.inbox.list().find(item => item.last === 'om_offline')!;
     assert.equal(reply.parentInboxId, original.id);
+    assert.equal(original.origin?.feishuLocation,undefined);
     await page.goto(server.url + '/#inbox?item=' + encodeURIComponent(reply.id));
     const detail = page.getByRole('dialog', {name:'收件箱消息详情'});
+    await expect(detail.getByRole('link',{name:'打开原消息'})).toHaveAttribute('href','https://applink.feishu.cn/client/thread/open?open_chat_id=oc_offline&open_thread_id=omt_fixture&thread_position=8');
     await expect(detail.locator('pre')).toContainText('已收到测试事项');
     await expect(detail.getByRole('region', {name:'同一事项'})).toContainText('上级收件');
     assert.deepEqual(errors, []);

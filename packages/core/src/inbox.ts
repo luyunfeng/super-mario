@@ -282,7 +282,8 @@ export function createInboxService({ store, events, createTodo, triage }: {
             // A duplicate may add verified provenance, but cannot change user decisions.
             const addedCount = thing.origin?.personalGroupUserCount !== undefined && existing.origin?.personalGroupUserCount !== thing.origin.personalGroupUserCount;
             const observed = thing.origin?.personalGroupObserved && !existing.origin?.personalGroupObserved;
-            if (observed || addedCount || ((!existing.origin || existing.origin.kind === 'unknown') && thing.origin && thing.origin.kind !== 'unknown')) {
+            const addedLocation = thing.origin?.feishuLocation && !existing.origin?.feishuLocation;
+            if (addedLocation || observed || addedCount || ((!existing.origin || existing.origin.kind === 'unknown') && thing.origin && thing.origin.kind !== 'unknown')) {
               const origin = { ...existing.origin, ...thing.origin };
               store.put(collection, id, { ...existing, origin, version: existing.version + 1, updatedAt: new Date().toISOString() });
               changed(id);

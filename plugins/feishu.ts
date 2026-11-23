@@ -137,6 +137,21 @@ function botSender(hit: Row) {
   const type = string(sender.sender_type) || string(hit.sender_type) || string(sender.type);
   return type === 'app' || type === 'bot' || (!type && sender.id_type === 'app_id');
 }
+function personalMessageLocation(hit: Row, chat: string) {
+  const link = URL.parse(string(hit.message_app_link));
+  if (!link || link.protocol !== 'https:' || link.username || link.password ||
+      (link.host !== 'applink.feishu.cn' && link.host !== 'applink.larksuite.com')) return;
+  const host = link.host;
+  const topic = link.pathname === '/client/thread/open';
+  if (!topic && link.pathname !== '/client/chat/open') return;
+  const query = link.searchParams;
+  const position = query.get(topic ? 'thread_position' : 'position');
+  if (!position || !/^\d{1,16}$/.test(position) || query.get(topic ? 'open_chat_id' : 'openChatId') !== chat) return;
+  const threadId = string(hit.thread_id);
+  if (topic && (!/^omt_[\w-]+$/.test(threadId) || query.get('open_thread_id') !== threadId)) return;
+  return { host: host as 'applink.feishu.cn' | 'applink.larksuite.com', position, ...(topic && { threadId }) };
+}
+
 function meetingMinutes(hit: Row) {
   if (!botSender(hit)) return false;
   const name = string(hit.sender_name) || string(object(hit.sender).name);
@@ -1030,7 +1045,7 @@ export function createFeishuIntegration(options: FeishuOptions) {
       const mentionedMe = !!options.personalOpenId && Array.isArray(hit.mentions) && hit.mentions.some(mention =>
         string(object(mention).id) === options.personalOpenId || string(object(object(mention).id).open_id) === options.personalOpenId);
       things.push({
-        origin: { ...chatOrigin, connector: '飞书', chatId: chat, ...(string(hit.chat_name) ? { chatName: string(hit.chat_name) } : {}),
+        origin: { ...chatOrigin, connector: '飞书', chatId: chat, feishuLocation: personalMessageLocation(hit, chat), ...(string(hit.chat_name) ? { chatName: string(hit.chat_name) } : {}),
           senderName: sender, ...(meetingMinutes(hit) ? { meetingMinutes: true as const } : {}), ...(string(object(hit.sender).id) ? { senderId: string(object(hit.sender).id), senderIdType: string(object(hit.sender).id_type) || 'unknown' } : {}), ...(kind === 'group' ? { mentionedMe } : {}) },
         thread: `feishu:message:${JSON.stringify([chat, id])}`,
         last: `${id}${hit.update_time ? `:${String(hit.update_time)}` : ''}`,

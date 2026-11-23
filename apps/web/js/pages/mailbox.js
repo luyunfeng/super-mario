@@ -345,6 +345,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
         bulkMessage='';paint();
       }}),'选择'), incoming && stage(item) !== 'info' && Pill(STAGES.find(([key]) => key === stage(item))[1], stage(item) === 'human' ? 'warn' : ''), Pill(item.status, tone(item))), body: h('div', { class: 'stack' },
         incoming && metadata(item),
+      originalMessageLink(item),
         incoming && handlingState(item) && h('p',{class:'small muted'},handlingState(item).label),
         h('p', { class: 'mailbox-preview' }, item.text || '这条消息没有文本正文。'),
         item.raw.target && h('p', { class: 'small muted mailbox-meta' }, `发送目标：${item.raw.target}`),
@@ -380,6 +381,19 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     !item.raw.todoId && Button({ label: '设置期限并转为待办', size: 'sm', onClick: () => chooseDue(item) }),
     Button({ label: '归档', size: 'sm', onClick: () => act(item, 'archive') })];
   }
+  function originalMessageLink(item) {
+    const origin = item.raw.origin, location = origin?.feishuLocation;
+    if (!incoming || item.kind !== 'personal' || !location ||
+        !['applink.feishu.cn','applink.larksuite.com'].includes(location.host) ||
+        !/^oc_[\w-]+$/.test(origin.chatId) || !/^\d{1,16}$/.test(location.position)) return;
+    const topic = location.threadId;
+    if (topic && !/^omt_[\w-]+$/.test(topic)) return;
+    const url = new URL(topic ? '/client/thread/open' : '/client/chat/open', 'https://'+location.host);
+    url.search = new URLSearchParams(topic
+      ? {open_chat_id:origin.chatId,open_thread_id:topic,thread_position:location.position}
+      : {openChatId:origin.chatId,position:location.position}).toString();
+    return h('a',{class:'btn btn--sm',href:url.href,target:'_blank',rel:'noopener noreferrer'},'打开原消息');
+  }
   function detail() {
     if (!drawer) return;
     const item = records().find(item => item.id === selected);
@@ -412,6 +426,7 @@ export function createMailboxPage({ api, store, router, direction, scope }) {
     replace(drawer.body, h('h3', null, item.title),
       h('div', { class: 'row row--wrap' }, Pill(item.status, tone(item)), h('span', { class: 'small muted' }, item.source, ' · ', formatDate(item.time, true))),
       incoming && metadata(item),
+      originalMessageLink(item),
       !incoming && raw.sender && h('p', { class: 'small mailbox-meta' }, `最近发言人：${raw.sender}`),
       raw.target && h('p', { class: 'small mailbox-meta' }, `发送目标：${raw.target}`),
       raw.reason && h('p', { class: 'small muted' }, `分拣建议：${raw.reason.replace(/^注入分拣器：/, '')}`),
