@@ -115,15 +115,19 @@ export const webConversationsExtension: Extension = {
         const threads=new Set(rows.map(row=>'web:'+row.id));
         const query=input.query;
         if(query!==undefined && (typeof query!=='string' || !query.trim() || query.length>200))fail(400,'搜索词须为 1 至 200 个字符');
-        const hits=new Map<string,{id:string;text:string;at:string;role:Message['role']}>();
+        const literal=query && new RegExp(query.trim().replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'iu');
+        const hits=new Map<string,{id:string;text:string;at:string;role:Message['role'];start:number;end:number}>();
         const latest=new Map<string,Message>();
         if(threads.size)for(const message of store.list<Message>('messages')){
           if(!threads.has(message.conversationId) || (message.role!=='user' && !(query && message.role==='assistant' && message.status==='done')) || (message.role==='user' && !message.directWebInput) || typeof message.id!=='string' || typeof message.text!=='string' || typeof message.createdAt!=='string' || !independentWebSource(store,message,message.conversationId,projectId))continue;
-          if(query){
-            const offset=message.text.indexOf(query.trim());
-            if(offset>=0 && message.createdAt >= (hits.get(message.conversationId)?.at ?? '')){
-              const start=Math.max(0,offset-32),end=offset+query.trim().length+64;
-              hits.set(message.conversationId,{id:message.id,role:message.role,at:message.createdAt,text:(start?'…':'')+message.text.slice(start,end)+(end<message.text.length?'…':'')});
+          if(literal){
+            const found=literal.exec(message.text);
+            if(found && message.createdAt >= (hits.get(message.conversationId)?.at ?? '')){
+              let start=Math.max(0,found.index-32),end=found.index+found[0].length+64;
+              if(start && /[\uDC00-\uDFFF]/.test(message.text.charAt(start)))start--;
+              if(/[\uDC00-\uDFFF]/.test(message.text.charAt(end)))end++;
+              const matchStart=found.index-start+(start ? 1 : 0);
+              hits.set(message.conversationId,{id:message.id,role:message.role,at:message.createdAt,start:matchStart,end:matchStart+found[0].length,text:(start?'…':'')+message.text.slice(start,end)+(end<message.text.length?'…':'')});
             }
           }
           if(message.role==='user' && message.createdAt >= (latest.get(message.conversationId)?.createdAt ?? ''))latest.set(message.conversationId,message);

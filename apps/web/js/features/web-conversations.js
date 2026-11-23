@@ -207,7 +207,8 @@ export function createWebConversations({api,store,scope,router}){
           h('time',{datetime:row.match.at,title:new Date(row.match.at).toLocaleString('zh-CN')},timeAgo(row.match.at)))
         : h('small',{class:'muted'},timeAgo(row.lastInputAt || row.createdAt),row.lastInputId && [' · ',
           h('a',{href:href(row.id,row.lastInputId),onclick:()=>drawer.close()},row.lastInputText || '查看最近发言')]),
-        row.match && h('a',{href:href(row.id,row.match.id),onclick:()=>drawer.close()},row.match.text))));
+        row.match && h('a',{'aria-label':row.match.text,href:href(row.id,row.match.id),onclick:()=>drawer.close()},row.match.text.slice(0,row.match.start),
+          h('mark',{},row.match.text.slice(row.match.start,row.match.end)),row.match.text.slice(row.match.end)))));
     }
     lookup.onclick=()=>{if(canSearch() && searchTitle.value.trim()){bodyQuery=searchTitle.value.trim();void listRefresh();}};
     searchTitle.maxLength=200;
