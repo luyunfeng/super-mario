@@ -1,3 +1,4 @@
+import { documentHeadings } from '../../../packages/core/src/document-headings.ts';
 import {createMachineCredentials} from './machine-credentials.ts';
 import {createAdminOverview} from './admin-overview.ts';
 import {createAdminAuth} from './admin-auth.ts';
@@ -1032,8 +1033,11 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           return;
         }
         const pageSources = path.match(/^\/api\/v1\/knowledge\/([^/]+)\/sources(?:\/([^/]+))?$/);
-        if (pageSources && method === 'GET') return json(res, 200, await app.knowledgeCurator.pageSources(
-          decodeURIComponent(pageSources[1]!), pageSources[2] && decodeURIComponent(pageSources[2]), undefined, url.searchParams.get('view') === 'handoff'));
+        if (pageSources && method === 'GET') {
+          const source = await app.knowledgeCurator.pageSources(
+          decodeURIComponent(pageSources[1]!), pageSources[2] && decodeURIComponent(pageSources[2]), undefined, url.searchParams.get('view') === 'handoff');
+          return json(res, 200, url.searchParams.get('view') === 'outline' && typeof source.content === 'string' ? { ...source, headings: documentHeadings(source.content) } : source);
+        }
         const meetingTitle = path.match(/^\/api\/v1\/knowledge\/sources\/([^/]+)\/title$/);
         if (meetingTitle && method === 'PUT') return json(res, 200, app.knowledgeCurator.renameMeeting(
           decodeURIComponent(meetingTitle[1]!), await body(req)));

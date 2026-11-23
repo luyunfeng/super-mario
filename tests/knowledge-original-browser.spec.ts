@@ -34,13 +34,13 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   const project = await server.app.createProject({ name: '原文追问项目' });
   const projectEntry = await knowledge.put({ title: '项目记录', content: '项目摘要', layer: 'project', projectId: project.id });
   const projectUrl = 'https://synthetic.feishu.cn/docx/FixtureDoc';
-  const documentText = original+'\n# 计划\n## 核对\n~~~md\n## 示例标题\n~~~\n### 核对';
+  const documentText = original+'\n# 计划\n## 核对\n~~~md\n## 示例标题\n~~~\n### 核对\n\n后续工作\n--------';
   const projectJob = server.app.knowledgeCurator.addSource({ title: '项目来源', url: projectUrl, text: documentText, layer: 'project', projectId: project.id });
   server.app.store.put('knowledge.sources', projectJob.id, { ...projectJob, status: 'completed', knowledgeIds: [projectEntry.id] });
   await writeFile(join(rawDir, projectJob.id + '.md'), documentText);
   const originalTool = server.app.contributions.list('tools').find(entry => entry.value.name === 'knowledge_original')!.value;
   const result = await originalTool.execute({pageId:projectEntry.id, sourceId:projectJob.id, projectId:project.id, outline:true}, new AbortController().signal) as { headings: { title:string; line:number }[] };
-  assert.deepEqual(result.headings.map(({title,line})=>[title,line]), [['计划',4],['核对',5],['核对',9]]);
+  assert.deepEqual(result.headings.map(({title,line})=>[title,line]), [['计划',4],['核对',5],['核对',9],['后续工作',11]]);
   const browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE });
   t.after(() => browser.close());
   const page = await browser.newPage();
@@ -279,7 +279,7 @@ test('记忆详情按整理回执展示原文，正文中的伪造引用不能�
   expect(external).toEqual([]);
   await dialog.getByText('文档大纲',{exact:true}).click();
   const outline=dialog.getByRole('navigation',{name:'文档大纲'});
-  await expect(outline.getByRole('button')).toHaveText(['计划','核对','核对']);
+  await expect(outline.getByRole('button')).toHaveText(['计划','核对','核对','后续工作']);
   const headingSearch=dialog.getByRole('searchbox',{name:'筛选文档标题'});
   await headingSearch.fill('不存在的章节');
   await expect(dialog.getByText('没有匹配的标题',{exact:true})).toBeVisible();

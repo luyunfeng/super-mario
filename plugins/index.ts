@@ -1,5 +1,5 @@
 export {webConversationsExtension, webConversationMatches, independentWebSource, requireWebConversationHistory, readWebConversationExport, eraseWebConversationRegistration} from './web-conversations.ts';
-import MarkdownIt from 'markdown-it';
+import { documentHeadings } from '../packages/core/src/document-headings.ts';
 import { readTodayBrief, type TodayBriefSources } from './today-brief.ts';
 import { calendarDayFormatter, localDayFormatter, validateLocalDay } from './local-day.ts';
 import { scheduledWorkTemplates } from './scheduled-work-templates.ts';
@@ -653,15 +653,9 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             if (typeof sourceId !== 'string' || typeof result.content !== 'string' || typeof result.title !== 'string') throw new Error('来源正文不可用');
             const route = '#memory?entry=' + encodeURIComponent(pageId) + '&source=' + encodeURIComponent(sourceId);
             if (args.outline) {
-              const tokens = new MarkdownIt().parse(result.content, {});
-              const headings = tokens.flatMap((token, index) => {
-                const title = tokens[index + 1]?.content.trim();
-                if (token.type !== 'heading_open' || !token.map || !title) return [];
-                const line = token.map[0] + 1;
-                return [{ title, level: Number(token.tag.slice(1)), line, webCitation: `[查看原文](${route}&line=${line})` }];
-              });
+              const headings = documentHeadings(result.content);
               const end = offset + 25;
-              return { title: result.title, headings: headings.slice(offset, end), nextOffset: end < headings.length ? end : null } as Json;
+              return { title: result.title, headings: headings.slice(offset, end).map(item => ({ ...item, webCitation: `[查看原文](${route}&line=${item.line})` })), nextOffset: end < headings.length ? end : null } as Json;
             }
             if (handoffExcerpt) return { title: result.title, text: result.content, truncated: result.truncated, webCitation: `[查看原文](${route})` } as Json;
             if (typeof query === 'string') {

@@ -94,11 +94,11 @@ function originalSources(api, entry, selected, line, ask, handoff, canRead) {
           if (!detail.open) {text.replaceChildren();if(comments) comments.open=false;return;}
           text.textContent = '正在读取原文…';
           try {
-            const { content } = await api.get(path + '/' + encodeURIComponent(source.id));
+            const { content, headings } = await api.get(path + '/' + encodeURIComponent(source.id) + '?view=outline');
             if(stamp!==read || !detail.open || !detail.isConnected) return;
             original=content;action.hidden=!ask;
             const citationLine=selected===source.id && Number.isSafeInteger(line) && line>=1 ? line : undefined;
-            const mark=displaySourceText(text,outline,content,citationLine);
+            const mark=displaySourceText(text,outline,content,citationLine,headings);
             notice.hidden=!citationLine || Boolean(mark);
             if(mark && section.open) mark.scrollIntoView({block:'center'});
           } catch(error) {if(stamp===read && detail.open) text.textContent=error.message;}

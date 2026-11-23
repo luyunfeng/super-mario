@@ -2,27 +2,18 @@
 // source markup as HTML. Duplicate titles are identified by line, not by their text.
 import {h} from '../lib/dom.js';
 
-export function displaySourceText(text, outline, content, citationLine) {
+export function displaySourceText(text, outline, content, citationLine, headings = []) {
   const lines=content.split('\n');
   const targets=[], fragment=document.createDocumentFragment();
-  let fence='',start=0,citation;
+  const byLine=new Map(headings.map(heading=>[heading.line,heading]));
+  let start=0,citation;
   for(let i=0;i<lines.length;i++) {
-    const raw=lines[i],line=raw.replace(/\r$/,'');
-    let heading;
-    if (fence) {
-      const end=line.match(/^ {0,3}(`+|~+)[ \t]*$/)?.[1];
-      if (end?.startsWith(fence)) fence='';
-    } else {
-      const open=line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
-      if(open && !(open[1][0]==='`' && open[2].includes('`'))) fence=open[1];
-      else heading=line.match(/^ {0,3}(#{1,6})[ \t]+(.+)$/);
-    }
-    const title=heading?.[2].replace(/(?:^|[ \t]+)#+[ \t]*$/,'').trim();
+    const raw=lines[i],heading=byLine.get(i+1),title=heading?.title;
     if(!title && i+1!==citationLine) continue;
     if(start<i) fragment.append(lines.slice(start,i).join('\n')+'\n');
     const anchor=h(i+1===citationLine?'mark':'span',{},raw);
     if(title) {
-      const level=heading[1].length;
+      const level=heading.level;
       anchor.tabIndex=-1;
       anchor.setAttribute('role','heading');
       anchor.setAttribute('aria-level',String(level));
