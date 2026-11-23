@@ -80,6 +80,7 @@ export function createScheduledWorkService(options: {
     const more = start + page.length < history.length;
     return {
       occurrences: page.map(o => ({ endedAt: o.endedAt, key: o.key, scheduledFor: o.scheduledFor, status: o.status, approvalId: o.approvalId,
+        ...(o.handledAt ? { handledAt: o.handledAt, delayMs: Date.parse(o.handledAt) - Date.parse(o.scheduledFor) } : {}),
         ...dispatchReceipt(work, o),
         result: o.result, ...(o.ownerSkipToken ? { ownerSkipped: true } : {}), kind: work.input.action.kind, ...(o.error ? { error: '结果未知，请核对原记录' } : {}) })),
       occurrenceTotal: history.length, occurrencesTruncated: more, nextOccurrenceKey: more ? page[page.length - 1].key : null,

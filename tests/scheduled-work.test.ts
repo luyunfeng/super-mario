@@ -121,7 +121,10 @@ test('once fires only once; event replay and SQLite restart retain result/messag
   assert.equal((await f.work.handle(e)).status, 'skip');
   f.due('2026-01-02T00:00:00Z');
   assert.equal(f.briefCount, 1);
-  assert.deepEqual(f.store.list<ScheduledWorkOccurrence>('scheduled-work.occurrences')[0].result, { text: '只读程序事实', messageId: 'brief-ref' });
+  const [occurrence] = f.store.list<ScheduledWorkOccurrence>('scheduled-work.occurrences');
+  assert.equal(occurrence.scheduledFor, '2026-01-01T01:00:00.000Z');
+  assert.equal(occurrence.handledAt, '2026-01-01T02:00:00.000Z');
+  assert.deepEqual(occurrence.result, { text: '只读程序事实', messageId: 'brief-ref' });
 });
 
 test('cron timezone uses real coalesce: only latest missed occurrence is consumed', async t => {

@@ -251,7 +251,7 @@ export function createScheduledWork({ store, events, schedules, proposeApproval,
           || event.sourceId !== `schedule:${s.id}:v${s.version}:${d.scheduledFor}`) return undefined;
         const key = digest([s.id, s.version, d.scheduledFor]);
         if (store.get(occurrences, key)) return undefined;
-        const o: ScheduledWorkOccurrence = { key, workId: r.id, workVersion: r.version, scheduleId: s.id, scheduleVersion: s.version, scheduledFor: d.scheduledFor, status: 'claimed' };
+        const o: ScheduledWorkOccurrence = { key, workId: r.id, workVersion: r.version, scheduleId: s.id, scheduleVersion: s.version, scheduledFor: d.scheduledFor, handledAt: new Date(now()).toISOString(), status: 'claimed' };
         if (blocked(r)) { store.put(occurrences, key, { ...o, status: 'skipped' }); return undefined; }
         if (r.input.action.kind === 'dispatch') {
           const { kind: _, ...action } = r.input.action;

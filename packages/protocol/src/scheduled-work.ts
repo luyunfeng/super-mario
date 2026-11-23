@@ -23,6 +23,8 @@ export interface ScheduledWorkRecord {
 export interface ScheduledWorkOccurrence {
   key: string; workId: string; workVersion: number; scheduleId: string; scheduleVersion: number; scheduledFor: string;
   status: 'claimed' | 'completed' | 'skipped' | 'unknown'; approvalId?: string; approvalVersion?: number;
+  /** Time the host began handling this due event, before creating a brief or dispatch approval. */
+  handledAt?: string;
   ownerSkipToken?: string;
   dispatchParams?: { [key: string]: Json }; result?: Json; error?: string;
 }

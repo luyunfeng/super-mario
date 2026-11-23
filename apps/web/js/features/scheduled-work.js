@@ -28,6 +28,14 @@ function timingText(s) {
   const names = weekOrder.filter(day => days.includes(day)).map(day => weekdayNames[day]);
   return `${names.length === 7 ? '每天' : names.join('、')} ${fixed[2].padStart(2, '0')}:${fixed[1].padStart(2, '0')} · ${s.tz}`;
 }
+function timingDelay(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '时钟差异，延迟未确认';
+  if (ms < 5000) return '准时';
+  if (ms < 120000) return `晚 ${Math.round(ms / 1000)} 秒`;
+  if (ms < 7200000) return `晚 ${Math.floor(ms / 60000)} 分钟`;
+  return `晚 ${Math.floor(ms / 3600000)} 小时`;
+}
+
 function occurrenceText(o) {
   if (o.status === 'unknown') return '动作结果未知，停止堆积；请核对原记录';
   if (o.status === 'claimed') return '已认领，动作结果尚未确认';
@@ -179,6 +187,8 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
   }
   function renderOccurrence(item, o) {
     return h('div', null, line(`${timeText(o.scheduledFor)} · ${occurrenceText(o)}`),
+      o.handledAt && line(`开始处理：${timeText(o.handledAt)} · ${timingDelay(o.delayMs)}`),
+      !o.handledAt && !o.ownerSkipped && !o.endedAt && line('开始处理时间未记录'),
       o.approvalId && line(`派发审批：${o.approvalId} · ${approvalText(o.approvalStatus)}`),
       o.result?.messageId && line(`结果消息：${o.result.messageId}`),
       o.status === 'completed' && o.result?.messageId && Button({ label: '查看简报原文', size: 'sm', onClick: () => openBrief(item, o) }), o.error && line(o.error),
