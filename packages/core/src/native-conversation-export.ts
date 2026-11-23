@@ -24,7 +24,7 @@ function toolBlock(step: ToolStep) {
 async function readConversation(
   machines: MachineClient | undefined, source: NativeExportSource, signal: AbortSignal,
   message: (index: number, role: 'user' | 'assistant', parts: Part[], createdAt: string | null, raw: unknown) => void,
-  tool?: (step: ToolStep) => void,
+  tool?: (step: ToolStep, at: string | null) => void,
   progress?: ExportProgress,
 ) {
   const { machineId, executorId, nativeSessionId, cwd } = source;
@@ -60,13 +60,15 @@ async function readConversation(
     return machines.call(machineId, 'agents.transcript', { executorId, nativeSessionId, cwd, offset, ...(snapshot && { snapshot }) });
   }, raw => {
     const row = record(raw);
+    const time = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
+    const at = Number.isFinite(time) ? new Date(time).toISOString() : null;
     let role: unknown, content: unknown;
     if (executorId === 'codex') {
       if (row.type === 'session_meta' && record(row.payload).id !== nativeSessionId) throw new Error('会话标识已改变');
       if (row.type !== 'response_item') return;
       const payload = record(row.payload);
       if (tool && (payload.type === 'function_call' || payload.type === 'custom_tool_call') && publicToolName(payload.name)) {
-        tool(observeCall(payload.name, payload.type, payload.call_id));
+        tool(observeCall(payload.name, payload.type, payload.call_id), at);
       }
       if (tool && (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output')) {
         observeResult(payload.type.slice(0, -'_output'.length), payload.call_id);
@@ -96,20 +98,19 @@ async function readConversation(
       }
     }
     if (!hasMessage) {
-      for (const part of paragraphs) if (typeof part !== 'string') tool?.(part);
+      for (const part of paragraphs) if (typeof part !== 'string') tool?.(part, at);
       return;
     }
-    const at = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
-    message(count++, role, paragraphs, Number.isFinite(at) ? new Date(at).toISOString() : null, row);
+    message(count++, role, paragraphs, at, row);
   }, signal, (bytes, total) => { if (bytes < total) progress?.(bytes, total, count); });
-  return count;
+  return { count, machineName: machine.name };
 }
 
 export async function readNativeFavoritePage(
   machines: MachineClient | undefined, source: NativeExportSource, offset: number, signal: AbortSignal,
 ) {
   const items: NativeFavoriteMessage[] = [];
-  const total = await readConversation(machines, source, signal, (index, role, parts, createdAt, raw) => {
+  const { count: total } = await readConversation(machines, source, signal, (index, role, parts, createdAt, raw) => {
     if (index < offset || index - offset >= 25) return;
     // Bind positional records to their source and content. A replacement at
     // the same index must never inherit the original favorite's identity.
@@ -126,13 +127,25 @@ export async function exportNativeConversation(
 ) {
   const { machineId, executorId, nativeSessionId, cwd } = source;
   const lines: Part[] = [];
-  const count = await readConversation(machines, source, signal, (_, role, parts, at) => {
-    lines.push('## ' + (role === 'user' ? '用户' : 'Agent 回复') + (at ? ' · ' + at : ''), '');
+  const agentName = executorId === 'codex' ? 'Codex' : 'Claude Code';
+  let lastRole: 'user' | 'assistant' | undefined;
+  function heading(role: 'user' | 'assistant', at: string | null) {
+    // Native agents can emit several text and tool records within a single reply.
+    if (role === 'assistant' && lastRole === role) return;
+    lines.push('## ' + (role === 'user' ? '用户' : agentName) + (at ? ' · ' + at : ''), '');
+    lastRole = role;
+  }
+  const { count, machineName } = await readConversation(machines, source, signal, (_, role, parts, at) => {
+    heading(role, at);
     for (const part of parts) lines.push(part);
     lines.push('');
-  }, includeWork ? step => lines.push(step, '') : undefined, nativeExportProgress.getStore());
+  }, includeWork ? (step, at) => {
+    heading('assistant', at);
+    lines.push(step, '');
+  } : undefined, nativeExportProgress.getStore());
   const stem = Array.from(nativeSessionId.replace(/[^\p{L}\p{N}_-]+/gu, '-')).slice(0, 48).join('');
+  const label = machineName?.replace(/[\p{Cc}\p{Cf}\s]+/gu, ' ').trim().replace(/[\\`*_\[\]<>~&]/g, '\\$&');
   return { filename: `super-mario-${executorId}-${stem}.md`, count, hasContent: lines.length > 0, markdown: [
-    '# 原生会话 · ' + executorId, '', '会话：' + nativeSessionId, '电脑：' + machineId, '目录：' + cwd, '导出时间：' + new Date().toISOString(), '', `共 ${count} 条消息`, '', lines.map(part => typeof part === 'string' ? part : '\n' + toolBlock(part) + '\n').join('\n'),
+    '# 原生会话 · ' + executorId, '', '会话：' + nativeSessionId, '电脑：' + (label || machineId), '电脑 ID：' + machineId, '目录：' + cwd, '导出时间：' + new Date().toISOString(), '', `共 ${count} 条消息`, '', lines.map(part => typeof part === 'string' ? part : '\n' + toolBlock(part) + '\n').join('\n'),
   ].join('\n') };
 }

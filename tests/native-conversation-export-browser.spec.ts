@@ -29,7 +29,7 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
     { type: 'response_item', payload: { type: 'message', role: 'user', content: [
       { type: 'input_text', text: '合成 Codex 请求' }, { type: 'input_image', image_url: 'data:image/png;base64,' + image },
     ] } },
-    { type: 'response_item', payload: { type: 'function_call', name: 'fixture_lookup', call_id: 'private-call', arguments: '{"query":"参数标记"}' } },
+    { type: 'response_item', timestamp: '2026-01-10T12:30:00Z', payload: { type: 'function_call', name: 'fixture_lookup', call_id: 'private-call', arguments: '{"query":"参数标记"}' } },
     { type: 'response_item', payload: { type: 'custom_tool_call', name: 'fixture_custom', call_id: 'shared-id' } },
     { type: 'response_item', payload: { type: 'custom_tool_call', name: 'fixture_reused', call_id: 'shared-id' } },
     { type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'shared-id', output: '工具输出标记' } },
@@ -153,6 +153,12 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
     assert.ok(body.includes('合成 ' + source + ' 请求'));
     assert.ok(body.includes('图像附件'));
     assert.match(body, /<details><summary>公开工作步骤<\/summary>\s+> 工具调用：fixture_\w+ · (?:已返回结果|失败)\s+<\/details>/u);
+    assert.ok(body.includes('电脑：合成历史电脑\n电脑 ID：' + machineId));
+    const headings = body.split('\n').filter(line => line.startsWith('## '));
+    assert.deepEqual(headings, id === codexId
+      ? ['## 用户', '## 用户', '## Codex · 2026-01-10T12:30:00.000Z']
+      : ['## 用户', '## Claude Code']);
+    assert.ok(body.indexOf(headings.at(-1)!) < body.indexOf(tool));
     if (id === claudeId) {
       assert.match(body, /准备读取\s+<details>[^]*?fixture_read · 失败\s+<\/details>\s+读取结束/u);
       assert.match(body, /共 3 条消息/);
