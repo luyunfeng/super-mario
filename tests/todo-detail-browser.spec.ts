@@ -169,13 +169,13 @@ test('待办详情确认后解除指定版本的话题，冲突时显示当前�
   await expect(panel).toContainText('绑定已变化，请核对最新话题。');
   await expect(panel).toContainText('omt_new');
   await expect(panel).not.toContainText(first.threadId);
-  assert.deepEqual(writes, [{ expectedVersion: 'v1' }]);
+  assert.deepEqual(writes, [{ expectedProjectId: null, expectedVersion: 'v1' }]);
   await unbind.click();
   await expect(confirm).toContainText('omt_new');
   await confirm.getByRole('button', { name: '确认解除', exact: true }).click();
   await expect(panel).toContainText('未绑定飞书话题');
   await expect(unbind).toHaveCount(0);
-  assert.deepEqual(writes, [{ expectedVersion: 'v1' }, { expectedVersion: 'v2' }]);
+  assert.deepEqual(writes, [{ expectedProjectId: null, expectedVersion: 'v1' }, { expectedProjectId: null, expectedVersion: 'v2' }]);
   // A second window binds another thread while this detail remains open.
   thread = { ...first, threadId: 'omt_live', version: 'v3' };
   app.events.publish('todo-thread.changed', { todoId: todo.id });
@@ -186,5 +186,85 @@ test('待办详情确认后解除指定版本的话题，冲突时显示当前�
   await expect(panel).toContainText('omt_recent');
   await confirm.getByRole('button', { name: '确认解除', exact: true }).click();
   await expect(confirm).toHaveCount(0);
-  assert.deepEqual(writes, [{ expectedVersion: 'v1' }, { expectedVersion: 'v2' }]);
+  assert.deepEqual(writes, [{ expectedProjectId: null, expectedVersion: 'v1' }, { expectedProjectId: null, expectedVersion: 'v2' }]);
+});
+
+test('待办详情手工绑定、改标题与换绑按当前配对和版本保存', {timeout:40000}, async t => {
+  const { page, app, todo } = await fixture(t);
+  const path = '/api/v1/todos/' + todo.id + '/thread';
+  type Thread = {channel:string; botId:string; botName:string; chatId:string; threadId:string; title?:string; version:string};
+  let thread: Thread | null = null;
+  const writes: Record<string, unknown>[] = [];
+  let blocked = false;
+  await page.route('**/api/v1/feishu/bots', route => route.fulfill({json:[
+    {id:'owner',name:'合成机器人',enabled:!blocked,paired:true,scope:{kind:'global'}},
+    {id:'off',name:'停用机器人',enabled:false,paired:true,scope:{kind:'global'}},
+    {id:'project',name:'项目机器人',enabled:true,paired:true,scope:{kind:'project'}},
+    {id:'unpaired',name:'未配对机器人',enabled:true,paired:false,scope:{kind:'global'}},
+  ]}));
+  await page.route('**/api/v1/feishu/bots/owner/topic-chats', route => route.fulfill({json:{binding:'owner-generation',
+    version:8,items:[{chatId:'oc_team',name:'合成群'},{chatId:'oc_next',name:'另一个群'}]}}));
+  await page.route('**'+path, async route => {
+    if (route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON();
+      writes.push(body);
+      if (body.expectedVersion !== (thread?.version ?? null)) { await route.fulfill({status:409,json:{error:'冲突'}}); return; }
+      thread = { channel:'feishu', botId:body.botId, botName:'合成机器人', chatId:body.chatId, threadId:body.threadId,
+        title:body.title, version:thread && body.threadId === thread.threadId ? thread.version : 'v' + writes.length };
+    }
+    await route.fulfill({json:{thread}});
+  });
+  await page.goto(new URL('/#projects/'+todo.projectId+'/todos/detail/'+todo.id,page.url()).toString());
+  const panel = page.getByRole('region',{name:'飞书话题',exact:true});
+  await panel.getByRole('button',{name:'绑定飞书话题',exact:true}).click();
+  await expect(panel.getByLabel('飞书机器人').locator('option')).toHaveCount(2);
+  await panel.getByLabel('话题 ID').fill('omt_first');
+  await panel.getByLabel('话题标题（可选）').fill('初始标题');
+  const save = panel.getByRole('button',{name:'保存绑定',exact:true});
+  await save.click();
+  const confirm = page.getByRole('dialog',{name:'确认绑定飞书话题？'});
+  await confirm.getByRole('button',{name:'取消',exact:true}).click();
+  assert.equal(writes.length,0);
+  await expect(panel.getByLabel('话题 ID')).toHaveValue('omt_first');
+  await save.click();
+  await confirm.getByRole('button',{name:'确认绑定',exact:true}).click();
+  await expect(panel).toContainText('初始标题');
+  assert.deepEqual(writes[0],{channel:'feishu',botId:'owner',chatId:'oc_team',threadId:'omt_first',title:'初始标题',
+    expectedProjectId:todo.projectId,expectedVersion:null,expectedBotBinding:'owner-generation',expectedRegistryVersion:8});
+  await panel.getByRole('button',{name:'修改话题标题'}).click();
+  await expect(panel.getByLabel('已登记的话题群')).toBeDisabled();
+  await expect(panel.getByLabel('话题 ID')).toHaveAttribute('readonly','');
+  await panel.getByLabel('话题标题（可选）').fill('');
+  await panel.getByRole('button',{name:'保存标题'}).click();
+  await expect(panel).toContainText('已保存话题标题。');
+  assert.deepEqual(writes[1],{...writes[0],expectedVersion:'v1',titleOnly:true,expectedTitle:'初始标题',title:''});
+  await panel.getByRole('button',{name:'更换话题绑定'}).click();
+  await panel.getByLabel('已登记的话题群').selectOption('oc_next');
+  await panel.getByLabel('话题 ID').fill('omt_next');
+  await save.click();
+  const change = page.getByRole('dialog',{name:'确认更换飞书话题？'});
+  await expect(change).toContainText('oc_next');
+  thread = { channel:'feishu', botId:'owner', botName:'合成机器人', chatId:'oc_team', threadId:'omt_other', version:'concurrent' };
+  await change.getByRole('button',{name:'确认更换',exact:true}).click();
+  await expect(panel).toContainText('绑定或群登记已变化');
+  await expect(panel).toContainText('omt_other');
+  assert.equal(writes.length,3);
+  await panel.getByRole('button',{name:'更换话题绑定'}).click();
+  await panel.getByLabel('已登记的话题群').selectOption('oc_next');
+  await panel.getByLabel('话题 ID').fill('omt_next');
+  await save.click();
+  await change.getByRole('button',{name:'确认更换',exact:true}).click();
+  await expect(panel).toContainText('omt_next');
+  assert.equal(writes[3].expectedVersion,'concurrent');
+  await panel.getByRole('button',{name:'更换话题绑定'}).click();
+  await panel.getByLabel('话题 ID').fill('omt_obsolete');
+  await save.click();
+  app.events.publish('todo-thread.changed', { todoId: todo.id });
+  await expect(panel.getByRole('button',{name:'修改话题标题'})).toBeAttached();
+  await change.getByRole('button',{name:'确认更换',exact:true}).click();
+  assert.equal(writes.length,4, '详情刷新后旧确认不得写入');
+  blocked = true;
+  await panel.getByRole('button',{name:'修改话题标题'}).click();
+  await expect(panel).toContainText('原机器人已停用或配对已变化');
+  await expect(panel.getByRole('button',{name:'保存标题'})).toHaveCount(0);
 });
