@@ -155,12 +155,16 @@ export function openChatImageViewer({ index, count, load, valid, onEdit, onClose
   canvas.addEventListener('wheel', e => {
     e.preventDefault();
     const rect = canvas.getBoundingClientRect();
-    zoom(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX - rect.left - rect.width/2, e.clientY - rect.top - rect.height/2);
+    // Touchpads report many small pixel deltas; mouse wheels can report lines or pages.
+    const unit = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? rect.height : 1;
+    const factor = Math.exp(clamp(-e.deltaY * unit * (e.ctrlKey ? 0.01 : 0.002), -5, 5));
+    if (factor === 1) return;
+    zoom(factor, e.clientX - rect.left - rect.width/2, e.clientY - rect.top - rect.height/2);
   }, {passive:false});
   canvas.addEventListener('dblclick', e => {
     if (!fitting) { reset(true); return; }
     const rect = canvas.getBoundingClientRect();
-    zoom(2, e.clientX - rect.left - rect.width / 2, e.clientY - rect.top - rect.height / 2);
+    zoom(Math.max(2, 1 / scale), e.clientX - rect.left - rect.width / 2, e.clientY - rect.top - rect.height / 2);
   });
   canvas.addEventListener('pointerdown', e => {
     if (!permitted() || !shown || !e.isPrimary || e.button !== 0) return;
