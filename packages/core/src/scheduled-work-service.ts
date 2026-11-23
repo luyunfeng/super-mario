@@ -89,7 +89,7 @@ export function createScheduledWorkService(options: {
     const page = history.slice(start, start + 20);
     const more = start + page.length < history.length;
     return {
-      occurrences: page.map(o => ({ blockedBy: o.blockedBy, endedAt: o.endedAt, workVersion: o.workVersion, key: o.key, scheduledFor: o.scheduledFor, status: o.status, approvalId: o.approvalId,
+      occurrences: page.map(o => ({ blockedBy: o.blockedBy, endedAt: o.endedAt, workVersion: o.workVersion, key: o.key, scheduledFor: o.scheduledFor, timezone: o.timezone ?? (o.workVersion === work.version ? work.input.schedule.tz : 'UTC'), status: o.status, approvalId: o.approvalId,
         ...(o.handledAt ? { handledAt: o.handledAt, delayMs: Date.parse(o.handledAt) - Date.parse(o.scheduledFor) } : {}),
         ...dispatchReceipt(work, o),
         result: o.result, ...(o.ownerSkipToken ? { ownerSkipped: true } : {}), kind: historicalKind(work, o), ...(o.error ? { error: '结果未知，请核对原记录' } : {}) })),

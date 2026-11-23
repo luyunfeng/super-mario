@@ -171,7 +171,7 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       item.skipToken && item.nextActionAt && line('跳过后预计触发：' + timeText(item.nextActionAt, item.schedule.tz)),
       item.scheduleStatus === 'paused' && line('恢复前不会触发'),
       item.status === 'active' && item.scheduleStatus === 'active' && !item.skipToken && item.nextAt && line('下次触发：' + timeText(item.nextAt, item.schedule.tz)),
-      line(`最新实际结果：${latest ? occurrenceText(latest, item.schedule.tz) : '尚无到期动作记录'}`),
+      line(`最新实际结果：${latest ? occurrenceText(latest, latest.timezone ?? item.schedule.tz) : '尚无到期动作记录'}`),
       item.action.kind === 'brief' && line('事实简报仅程序汇总已接入事实，不自动调用模型或外发。'),
       line('上次动作结果未知或派发审批待批准时，暂停生成新动作。取消计划不会终止已派发的任务。'),
       h('div', { class: 'row row--wrap' }, item.approvalStatus === 'pending' && item.approvalId ? approvalLink(item.approvalId) : chatLink(),
@@ -214,16 +214,17 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
     return drawer;
   }
   function renderOccurrence(item, o) {
-    return h('div', null, line(`${timeText(o.scheduledFor, item.schedule.tz)} · ${occurrenceText(o, item.schedule.tz)}`),
+    const timezone = o.timezone ?? item.schedule.tz;
+    return h('div', null, line(`${timeText(o.scheduledFor, timezone)} · ${occurrenceText(o, timezone)}`),
       o.workVersion && o.workVersion !== item.version && line(`计划版本 ${o.workVersion} · ${({ dispatch: '派发任务', brief: '生成简报' })[o.kind] ?? '原动作类型未确认'}`),
-      o.handledAt && line(`开始处理：${timeText(o.handledAt, item.schedule.tz)} · ${timingDelay(o.delayMs)}`),
+      o.handledAt && line(`开始处理：${timeText(o.handledAt, timezone)} · ${timingDelay(o.delayMs)}`),
       !o.handledAt && !o.ownerSkipped && !o.endedAt && line('开始处理时间未记录'),
       o.approvalId && line(`派发审批：${o.approvalId} · ${approvalText(o.approvalStatus)}`),
       o.result?.messageId && line(`结果消息：${o.result.messageId}`),
       o.status === 'completed' && o.result?.messageId && Button({ label: '查看简报原文', size: 'sm', onClick: () => openBrief(item, o) }), o.error && line(o.error),
       o.approvalStatus === 'pending' && approvalLink(o.approvalId, () => editor?.close()),
       o.run?.executorId && line('本次执行者：' + o.run.executorId),
-      o.run?.updatedAt && line('执行记录更新时间：' + timeText(o.run.updatedAt, item.schedule.tz)),
+      o.run?.updatedAt && line('执行记录更新时间：' + timeText(o.run.updatedAt, timezone)),
       o.run && h('a', { href: `#projects/${encodeURIComponent(item.projectId || 'all')}/runs/${encodeURIComponent(o.run.id)}`, onClick: () => editor?.close() }, '查看实际执行记录'));
   }
   function openHistory(item) {
@@ -254,8 +255,8 @@ export function createScheduledWorkCard({ api, store, scope, onUpcoming }) {
       replace(content, line('正在读取简报…'));
       try {
         const result = await api.post('/scheduled-work/brief', { workId: item.id, occurrenceKey: occurrence.key, projectId: currentScope() || undefined });
-        if (drawer.active()) replace(content, line('计划时间：' + timeText(result.scheduledFor, item.schedule.tz)),
-          line('生成时间：' + timeText(result.createdAt, item.schedule.tz)), h('pre', { class: 'mailbox-content' }, result.text));
+        if (drawer.active()) replace(content, line('计划时间：' + timeText(result.scheduledFor, occurrence.timezone ?? item.schedule.tz)),
+          line('生成时间：' + timeText(result.createdAt, occurrence.timezone ?? item.schedule.tz)), h('pre', { class: 'mailbox-content' }, result.text));
       } catch (cause) {
         if (drawer.active()) replace(content, Banner({ tone: 'warn', children: cause.message }),
           Button({ label: '重新读取简报', size: 'sm', onClick: read }));

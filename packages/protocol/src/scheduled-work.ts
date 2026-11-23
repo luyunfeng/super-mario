@@ -25,6 +25,8 @@ export interface ScheduledWorkOccurrence {
   status: 'claimed' | 'completed' | 'skipped' | 'unknown'; approvalId?: string; approvalVersion?: number;
   /** Time the host began handling this due event, before creating a brief or dispatch approval. */
   handledAt?: string;
+  /** Timezone of the schedule when this occurrence was recorded. */
+  timezone?: string;
   actionKind?: ScheduledWorkAction['kind'];
   /** Snapshot of the earlier occurrence that prevented a new action at this trigger. */
   blockedBy?: { occurrenceKey: string; scheduledFor: string; reason: string };
