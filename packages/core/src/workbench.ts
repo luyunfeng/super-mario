@@ -582,7 +582,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(conversationDrafts);
   plugins.register(conversationImages);
   plugins.register(conversationFiles);
-  plugins.register(createRunComparison(readRunCommitDiff, (id, offset, version) => runWorktreeStatus(id, true, offset, version), readRunWorktreeChange, runWorktreeHistory, name => {
+  plugins.register(createRunComparison(readRunCommitDiff, (id, offset, version) => runWorktreeStatus(id, true, offset, version), readRunWorktreeChange, runWorktreeHistory, (name, before) => {
     const source = currentAgentInput();
     if (!source?.projectId || source.todoId || source.readOnly || source.role !== 'user' || source.origin && source.origin !== 'user')
       throw new InputError('请在项目对话中查询工作树', 403);
@@ -592,8 +592,11 @@ export async function createWorkbench(config: AppConfig) {
     if (!tree) throw new InputError('当前项目没有登记该名称的工作树', 404);
     const machineId = projectWorktreeBinding(source.projectId).machineId;
     const runs = store.list<Run>('runs').filter(run => run.projectId === source.projectId && run.machineId === machineId && run.cwd === tree.cwd)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    return { ...tree, total: runs.length, runs: runs.slice(0, 20).map(run => ({
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+    const start = before ? runs.findIndex(run => run.id === before) + 1 : 0;
+    if (before && !start) throw new InputError('分页位置已失效，请重新查询工作树', 409);
+    const page = runs.slice(start, start + 20);
+    return { ...tree, total: runs.length, nextBefore: start + page.length < runs.length ? page.at(-1)!.id : null, runs: page.map(run => ({
       id: run.id, status: run.status, createdAt: run.createdAt, promptExcerpt: run.prompt.slice(0, 240),
     })) };
   }));

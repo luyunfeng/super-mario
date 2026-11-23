@@ -76,4 +76,20 @@ test('项目只创建工作树时返回独立目录，不生成或派发执行',
   assert.ok(first && typeof first === 'object' && !Array.isArray(first));
   assert.equal(first.promptExcerpt, '检查独立目录');
   await assert.rejects(runWithAgentInput(message, () => query.execute({ name: '不存在' }, signal)), /没有登记/);
+  const original = server.app.store.list<import('../packages/protocol/src/index.ts').Run>('runs')[0]!;
+  for (let index = 0; index < 21; index++) {
+    const id = 'older-' + String(index).padStart(2, '0');
+    server.app.store.put('runs', id, { ...original, id, createdAt: '2020-01-01T00:00:00Z' });
+  }
+  const readPage = async (before?: string) => {
+    const value = await runWithAgentInput(message, () => query.execute({ name: result.name, ...(before && { before }) }, signal));
+    return value as { runs: { id: string }[]; nextBefore: string | null };
+  };
+  const latest = await readPage();
+  assert.equal(latest.runs.length, 20);
+  const older = await readPage(latest.nextBefore!);
+  assert.equal(older.runs.length, 2);
+  assert.equal(older.nextBefore, null);
+  assert.equal(new Set([...latest.runs, ...older.runs].map(run => run.id)).size, 22);
+  await assert.rejects(readPage('unrelated'), /分页位置已失效/);
 });
