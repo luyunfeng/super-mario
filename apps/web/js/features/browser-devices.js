@@ -1,6 +1,6 @@
 import {h,replace} from '../lib/dom.js';
 import {clearReplacement,disconnectBrowser,pendingReplacement,rememberDevice} from './disconnect-browser.js';
-import {copyText} from '../lib/clipboard.js';
+import {browserPairLink} from '../ui/browser-pair-link.js';
 import {Button} from '../ui/kit.js';
 import {confirmDialog,openDrawer} from '../ui/overlay.js';
 
@@ -25,15 +25,7 @@ export function openBrowserDevices({api,store}){
     try{
       const data=await api.post(path+'/pairings',{name:deviceName});
       if(!active())return;
-      // Never copy the workspace's current query, fragment, or owner credential into an invite.
-      const url=new URL('/',location.origin);url.hash='home?'+new URLSearchParams({browserPair:data.code});
-      const output=h('input',{class:'input',readOnly:true,value:url.href,'aria-label':'一次性配对链接'});
-      replace(pair,h('strong',{},deviceName+' 的一次性配对链接'),h('p',{},'请在要连接的浏览器中打开，仅可使用一次。'),
-        data.qrOrigin===location.origin && data.qrDataUrl?.startsWith('data:image/png;base64,') &&
-          h('img',{src:data.qrDataUrl,width:240,height:240,alt:'浏览器配对二维码'}),
-        output,h('small',{},'有效至 '+fmt(data.expiresAt)),Button({label:'复制配对链接',onClick:async()=>{
-          await copyText(output.value);if(active())status.textContent='已复制配对链接。';
-        }}));
+      replace(pair,browserPairLink(data,deviceName,()=>{if(active())status.textContent='已复制配对链接。';}));
       clearTimeout(expiry);expiry=setTimeout(()=>{replace(pair);if(active())status.textContent='配对链接已过期。';},Math.max(0,Date.parse(data.expiresAt)-Date.now()));
       status.textContent='';
     }catch(error){if(active())status.textContent=error.message;}

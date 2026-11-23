@@ -1,8 +1,9 @@
+import {createAdminDevices} from './admin-devices.js';
 import {h,replace} from './lib/dom.js';
 
 const view=document.getElementById('admin-view'),errorBox=document.getElementById('admin-error');
 const base='/api/v1/admin/';
-let state,timer,busy=false,generation=0;
+let devices,state,timer,busy=false,generation=0;
 const button=(text,action)=>h('button',{class:'btn',type:'button',onclick:action},text);
 const secret=(label,autocomplete)=>h('label',{class:'field'},label,h('input',{class:'input',type:'password',autocomplete,required:true}));
 const value=field=>field.querySelector('input').value;
@@ -18,8 +19,8 @@ function workspaceRoot(){
     if(record?.expiresAt>Date.now() && typeof record.value==='string' && record.value && !record.value.startsWith('smbd_'))return record.value;
   }catch{/* Manual code entry works without workspace storage. */}
 }
-async function request(endpoint,body,headers={}){
-  const res=await fetch(base+endpoint,{method:body===undefined?'GET':'POST',credentials:'same-origin',referrerPolicy:'no-referrer',
+async function request(endpoint,body,headers={},signal){
+  const res=await fetch(base+endpoint,{method:body===undefined?'GET':'POST',credentials:'same-origin',signal,referrerPolicy:'no-referrer',
     cache:'no-store',redirect:'error',headers:{...(body===undefined?{}:{'Content-Type':'application/json'}),...headers},
     ...(body===undefined?{}:{body:JSON.stringify(body)})});
   const reply=await res.json();
@@ -27,7 +28,7 @@ async function request(endpoint,body,headers={}){
   return reply;
 }
 function clear(){
-  clearTimeout(timer);state=undefined;generation++;
+  clearTimeout(timer);devices?.close();devices=undefined;state=undefined;generation++;
   for(const input of view.querySelectorAll('input'))input.value='';
   replace(view);
 }
@@ -37,7 +38,7 @@ async function refresh(){
     const next=await request('state');
     if(stamp!==generation)return;
     if(next.authenticated){
-      if(state?.authenticated && state.csrf===next.csrf && state.expiresAt===next.expiresAt)return;
+      if(state?.authenticated && state.csrf===next.csrf && state.expiresAt===next.expiresAt){await devices?.recheck();return;}
       const overview=await request('overview');
       if(stamp!==generation)return;
       clear();state=next;showSession(overview);
@@ -142,10 +143,11 @@ function showSession(overview){
       h('ul',{},result.checks.map(check=>h('li',{},h('strong',{},check.label+' · '+statusLabels[check.status]),
         h('p',{},check.detail)))));
   }));
+  devices=createAdminDevices({request,submit,csrf,current:()=>state===session});
   paint(overview);
   replace(view,h('h2',{},'管理员会话'),h('section',{class:'stack','aria-label':'服务概览'},h('h3',{},'服务概览'),info,endpoints,reload),
     saveName,feedback,h('section',{class:'stack','aria-label':'运行诊断'},h('h3',{},'运行诊断'),diagnose,report),
-    form('修改密码',[old,next,confirm],'保存新密码',async()=>{
+    devices.el,form('修改密码',[old,next,confirm],'保存新密码',async()=>{
       if(value(confirm)!==value(next))throw Error('两次输入的新密码不一致。');
       await request('password',{currentPassword:value(old),newPassword:value(next)},csrf);
       clear();await refresh();

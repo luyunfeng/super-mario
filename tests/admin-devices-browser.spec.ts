@@ -1,0 +1,61 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import QRCode from 'qrcode';
+import {chromium,expect} from '@playwright/test';
+import {startServer} from '../apps/server/src/index.ts';
+
+test('管理员在浏览器签发并核验配对，单独撤销一台设备；主令牌和缺少 CSRF 的请求不能管理设备',{timeout:50000},async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'admin-devices-browser-')),token='synthetic-admin-devices-owner';
+  const server=await startServer({host:'127.0.0.1',port:0,dataDir,token,demo:true});
+  t.after(async()=>{await server.close();await rm(dataDir,{recursive:true,force:true});});
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});t.after(()=>browser.close());
+  const admin=await browser.newContext(),owner=await admin.newPage();
+  const base=server.url+'/api/v1/admin';
+  const rootHeaders={Authorization:'Bearer '+token};
+  assert.equal((await fetch(base+'/devices',{headers:rootHeaders})).status,401);
+  const setup=await admin.request.post(base+'/setup-code',{headers:rootHeaders,data:{}});
+  assert.equal(setup.status(),200);
+  assert.equal((await admin.request.post(base+'/setup',{data:{code:(await setup.json()).code,password:'fixture-browser-management'}})).status(),200);
+  assert.equal((await admin.request.post(base+'/devices/pairings',{data:{name:'未授权签发'}})).status(),403);
+
+  await owner.goto(server.url+'/admin.html');
+  const panel=owner.getByRole('region',{name:'浏览器设备'});
+  await panel.getByRole('button',{name:'读取设备列表'}).click();
+  let previous='';
+  async function pair(name:string) {
+    await panel.getByRole('textbox',{name:'设备名称',exact:true}).fill(name);
+    const issued=owner.waitForResponse(r=>r.url()===base+'/devices/pairings' && r.request().method()==='POST');
+    await panel.getByRole('button',{name:'生成配对链接'}).click();assert.equal((await issued).status(),201);
+    const field=panel.getByRole('textbox',{name:'一次性配对链接'});
+    await expect(field).not.toHaveValue(previous);const link=await field.inputValue();previous=link;
+    assert.equal(new URL(link).origin,server.url);assert.match(new URL(link).hash,/^#home\?browserPair=[\w-]{32}$/);
+    await expect(panel.getByRole('img',{name:'浏览器配对二维码'})).toHaveAttribute('src',await QRCode.toDataURL(link,{width:240,margin:4,errorCorrectionLevel:'M'}));
+    const context=await browser.newContext();await context.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+    const page=await context.newPage();await page.goto(link);
+    const confirmation=page.getByRole('dialog',{name:'配对这台浏览器'});
+    const redeemed=page.waitForResponse(r=>r.url()===server.url+'/api/v1/public/browser-pair');
+    await confirmation.getByRole('button',{name:'确认连接这台浏览器'}).click();assert.equal((await redeemed).status(),201);
+    await expect(confirmation).toHaveCount(0);
+    await page.goto(server.url+'/#agent?browserDevices=1');
+    await expect(page.getByRole('dialog',{name:'浏览器设备'})).toContainText(name);
+    return page;
+  }
+  const first=await pair('合成一号设备'),second=await pair('合成二号设备');
+  await panel.getByRole('button',{name:'刷新设备'}).click();
+  const one=panel.getByRole('article',{name:'合成一号设备'}),two=panel.getByRole('article',{name:'合成二号设备'});
+  await expect(one).toBeVisible();await expect(two).toBeVisible();
+  const listing=await (await admin.request.get(base+'/devices')).json();
+  const id=listing.devices.find((item:{name:string})=>item.name==='合成一号设备').id;
+  assert.equal((await admin.request.post(base+'/devices/revoke',{data:{id}})).status(),403);
+  const confirm=owner.getByRole('dialog',{name:'撤销浏览器设备'});
+  await one.getByRole('button',{name:'撤销设备'}).click();
+  await confirm.getByRole('button',{name:'取消'}).click();await expect(one).toBeVisible();
+  await first.reload();await expect(first.getByRole('dialog',{name:'浏览器设备'})).toContainText('合成一号设备');
+  await one.getByRole('button',{name:'撤销设备'}).click();await confirm.getByRole('button',{name:'确认撤销'}).click();
+  await expect(one).toHaveCount(0);await expect(two).toBeVisible();
+  await first.reload();await expect(first.locator('#connection')).toContainText('需要令牌');
+  await second.reload();await expect(second.getByRole('dialog',{name:'浏览器设备'})).toContainText('合成二号设备');
+});

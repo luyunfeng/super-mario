@@ -2,6 +2,8 @@ import {timingSafeEqual} from 'node:crypto';
 import type {IncomingMessage,ServerResponse} from 'node:http';
 import {isIP} from 'node:net';
 import type {createAdminOverview} from './admin-overview.ts';
+import {pairingQR} from './browser-access.ts';
+import type {createBrowserDevices} from '../../../plugins/browser-devices.ts';
 import type {createAdminAuth} from './admin-auth.ts';
 
 const base='/api/v1/admin/',cookieName='sm_admin_session';
@@ -46,7 +48,8 @@ function cookie(req:IncomingMessage,res:ServerResponse,token:string,expiresAt:nu
 }
 export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootToken:string|undefined,
   readBody:(req:IncomingMessage,limit:number)=>Promise<Record<string,unknown>>,
-  json:(res:ServerResponse,status:number,value:unknown)=>void,overview:ReturnType<typeof createAdminOverview>) {
+  json:(res:ServerResponse,status:number,value:unknown)=>void,overview:ReturnType<typeof createAdminOverview>,
+  devices:Pick<ReturnType<typeof createBrowserDevices>,'list'|'issue'|'revoke'>,deviceRevision:()=>number) {
   // Reserve a slot before the password hash starts, so concurrent guesses count as well.
   const attempts=new Map<string,{count:number;until:number}>();
   async function limited<T>(req:IncomingMessage,res:ServerResponse,operation:()=>Promise<T>):Promise<T> {
@@ -68,12 +71,13 @@ export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootTo
     const action=path.slice(base.length),token=sessionToken(req),session=token?auth.session(token):undefined;
     if(req.method==='GET'){
       if(action==='state')return json(res,200,{configured:auth.configured(),authenticated:!!session,...(session && {csrf:session.csrf,expiresAt:session.expiresAt})});
-      if(action==='overview'||action==='doctor'){
+      if(action==='overview'||action==='doctor'||action==='devices'){
         if(!session)fail(401,'请先登录管理界面');
+        if(action==='devices')return json(res,200,{devices:devices.list()});
         return json(res,200,action==='overview'?overview.read():overview.doctor());
       }
     }
-    if(!['setup-code','setup','login','password','logout','name'].includes(action))fail(404,'管理接口不存在');
+    if(!['setup-code','setup','login','password','logout','name','devices/pairings','devices/revoke'].includes(action))fail(404,'管理接口不存在');
     if(req.method!=='POST')fail(405,'此管理操作需要 POST');
     sameOrigin(req);
     if(req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json')fail(415,'管理操作需要 JSON 请求');
@@ -82,14 +86,27 @@ export function createAdminRoutes(auth:ReturnType<typeof createAdminAuth>,rootTo
       if(!rootToken || !loopback(req.socket.remoteAddress??'') || !localHost(req.headers.host) || proxy || req.headersDistinct.authorization?.length!==1 ||
         !exact(req.headers.authorization,'Bearer '+rootToken))fail(403,'请在服务器本机使用工作台主令牌获取初始化码');
     }
-    const fields=action==='setup'?['code','password']:action==='login'?['password']:action==='password'?['currentPassword','newPassword']:action==='name'?['name']:[];
+    const fields=action==='setup'?['code','password']:action==='login'?['password']:action==='password'?['currentPassword','newPassword']:action==='name'||action==='devices/pairings'?['name']:action==='devices/revoke'?['id']:[];
     const input=await readBody(req,8192);
     if(Object.keys(input).some(k=>!fields.includes(k)) || fields.some(k=>typeof input[k]!=='string'))fail(400,'管理请求字段无效');
     if(action==='setup-code')return json(res,200,{code:auth.issueCode()});
-    if(action==='password'||action==='logout'||action==='name'){
+    if(action==='password'||action==='logout'||action==='name'||action.startsWith('devices/')){
       const current=auth.session(token);
       if(!current)fail(401,'请先登录管理界面');
       if(req.headersDistinct['x-csrf-token']?.length!==1||!exact(req.headers['x-csrf-token'] as string|undefined,current.csrf))fail(403,'管理请求的 CSRF 验证失败');
+      if(action==='devices/pairings'){
+        if(!rootToken)fail(403,'请先配置工作台访问令牌');
+        const generation=deviceRevision();
+        const invite=devices.issue(input.name as string);
+        const qr=await pairingQR(req.headers.origin,invite.code);
+        if(!auth.session(token))fail(401,'管理员会话已失效');
+        if(deviceRevision()!==generation)fail(409,'设备配对设置已变化，请重新签发配对码');
+        return json(res,201,{...invite,...qr});
+      }
+      if(action==='devices/revoke'){
+        if(!devices.revoke(input.id as string))fail(404,'设备不存在');
+        return json(res,200,{revoked:true});
+      }
       if(action==='name')return json(res,200,overview.rename(input.name));
       if(action==='logout'){
         auth.logout(token);cookie(req,res,'',0);return json(res,200,{configured:auth.configured(),authenticated:false});

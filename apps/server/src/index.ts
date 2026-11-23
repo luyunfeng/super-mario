@@ -107,6 +107,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
   app.setBrowserDeviceInvalidator(browserAccess.invalidate);
   function devicePlugin() {
     if(!app.plugins.list().some(p=>p.id==='browser-devices' && p.status==='active'))throw new InputError('浏览器设备插件已停用',503);
+    return app.store.get<{revision:number}>('core.plugin-settings','browser-devices')?.revision??1;
   }
   function requireDeviceJSON(req:IncomingMessage) {
     if(req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/json')throw new InputError('配对操作需要 JSON 请求',415);
@@ -1361,7 +1362,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
   });
   const overview=createAdminOverview({store:app.store,version,startedAt,demo:!!config.demo,address:()=>server.address(),
     machines:()=>machines.list(),plugins:()=>app.plugins.list(),devices:()=>app.browserDevices.list()});
-  const adminRoutes=createAdminRoutes(createAdminAuth(app.store),config.token,body,json,overview);
+  const adminRoutes=createAdminRoutes(createAdminAuth(app.store),config.token,body,json,overview,app.browserDevices,devicePlugin);
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const access=browserAccess.access(req,url);
