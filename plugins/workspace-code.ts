@@ -15,6 +15,119 @@ function inside(root: string, path: string) {
   if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error('路径越出项目根目录');
   if (sensitiveWorkspacePath(rel)) throw new Error('敏感文件不可浏览');
 }
+const searchSkip = new Set(['.git', '.hg', '.svn', 'node_modules', '__pycache__', '.cache', '.gradle',
+  '.tox', '.mypy_cache', '.pytest_cache', '.ruff_cache', '.next', '.nuxt', '.turbo', '.parcel-cache', '.venv', 'DerivedData', '.Trash']);
+const maxSearchEntries = 20000;
+const maxFileHits = 50;
+
+function searchScore(path: string, terms: string[]): number | undefined {
+  const lower = path.toLowerCase(), base = path.lastIndexOf('/') + 1, name = lower.slice(base);
+  let score = -path.length * 0.02;
+  for (const term of terms) {
+    // Discard non-matches cheaply before scoring alternative character alignments.
+    let cursor = -1;
+    for (const ch of term) {
+      cursor = lower.indexOf(ch, cursor + 1);
+      if (cursor === -1) return;
+    }
+    let previous = new Float64Array(lower.length).fill(-Infinity);
+    let current = new Float64Array(lower.length);
+    for (let i = 0; i < term.length; i++) {
+      let separated = -Infinity;
+      for (let j = 0; j < lower.length; j++) {
+        if (j >= 2) separated = Math.max(separated, previous[j - 2]!) - 1.2;
+        current[j] = -Infinity;
+        if (term[i] !== lower[j]) continue;
+        const prior = path[j - 1] ?? '';
+        const boundary = !j || prior === '/' ? 12 : /[. _-]/.test(prior) ? 10
+          : /[a-z]/.test(prior) && /[A-Z]/.test(path[j] ?? '') ? 9 : 0;
+        const alignment = i === 0 ? (j < base ? -0.15 * j : 0) : Math.max((previous[j - 1] ?? -Infinity) + 6, separated);
+        current[j] = alignment + boundary + (j >= base ? 3 : 0);
+      }
+      [previous, current] = [current, previous];
+    }
+    score += Math.max(...previous) + (name === term ? 30 : name.startsWith(term) ? 12 : 0);
+  }
+  return score;
+}
+
+async function searchFiles(root: string, query: unknown) {
+  if (typeof query !== 'string' || !query.trim() || query.length > 256 || /[\p{Cc}]/u.test(query)) throw new Error('文件检索词无效');
+  const terms = query.trim().toLowerCase().split(/\s+/u);
+  const hits: Array<{ path: string; score: number }> = [];
+  let truncated = false;
+  function consider(path: string) {
+    const score = searchScore(path, terms);
+    if (score !== undefined) hits.push({ path, score });
+  }
+
+  // Git handles repository ignore rules (including tracked files that now match an ignore).
+  // Pass no inherited Git variables, and disable repository-configured external fsmonitor commands.
+  let tracked: string | undefined;
+  try {
+    const result = await execute('git', ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
+      'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '.'], {
+      cwd: root, timeout: 5000, maxBuffer: 4 * 1024 * 1024,
+      env: { PATH: process.env.PATH, LANG: 'C', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0' },
+    });
+    tracked = result.stdout;
+  } catch (error) {
+    const failure = error as { code?: number | string; stdout?: string; stderr?: string };
+    if (failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' && typeof failure.stdout === 'string') {
+      tracked = failure.stdout.slice(0, failure.stdout.lastIndexOf('\0') + 1);
+      truncated = true;
+    } else if (failure.code !== 'ENOENT' && !failure.stderr?.includes('not a git repository')) {
+      throw new Error('无法读取 Git 工作区文件清单');
+    }
+  }
+  // Keep scans bounded even on a very deep tree or an unusually expensive fuzzy query.
+  const deadline = performance.now() + 5000;
+  if (tracked !== undefined) {
+    const names = tracked.split('\0');
+    if (names.length - 1 > maxSearchEntries) truncated = true;
+    for (const path of new Set(names.slice(0, maxSearchEntries))) {
+      if (performance.now() > deadline) { truncated = true; break; }
+      if (!path || path.length > 4096 || isAbsolute(path) || /[\p{Cc}]/u.test(path) || sensitiveWorkspacePath(path) ||
+          path.split('/').some(part => part === '..' || searchSkip.has(part))) continue;
+      consider(path);
+    }
+  } else {
+    const folders = [root];
+    let scanned = 0;
+    for (let i = 0; i < folders.length; i++) {
+      if (i === 300 || scanned >= maxSearchEntries || performance.now() > deadline) { truncated = true; break; }
+      const folder = folders[i]!;
+      try {
+        if (await realpath(folder) !== folder) { truncated = true; continue; }
+        const dir = await opendir(folder);
+        for await (const child of dir) {
+          if (++scanned > maxSearchEntries || performance.now() > deadline) { truncated = true; break; }
+          if (sensitiveWorkspacePath(child.name) || searchSkip.has(child.name) || /[\p{Cc}]/u.test(child.name)) continue;
+          const entry = resolve(folder, child.name);
+          if (child.isDirectory()) folders.push(entry);
+          if (child.isFile()) consider(relative(root, entry));
+        }
+      } catch (error) {
+        if (folder === root) throw error;
+        truncated = true;
+      }
+    }
+  }
+  hits.sort((a, b) => b.score - a.score || a.path.length - b.path.length || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const paths: string[] = [];
+  for (const hit of hits) {
+    if (performance.now() > deadline + 1000) { truncated = true; break; }
+    // Recheck actual files: Git also lists deleted entries, submodules and symlinks.
+    const full = resolve(root, hit.path);
+    try {
+      if (await realpath(full) !== full || !(await lstat(full)).isFile()) continue;
+    } catch { continue; }
+    if (paths.length === maxFileHits) { truncated = true; break; }
+    paths.push(hit.path);
+  }
+  return { paths, truncated };
+}
+
 export const workspaceCode: NodeHandler = async (params): Promise<Json> => {
   if (typeof params.cwd !== 'string' || !isAbsolute(params.cwd) || /[\0\r\n]/.test(params.cwd)) throw new Error('项目根目录无效');
   // The server supplies the saved binding, never a cwd from the browsing request.
@@ -22,6 +135,7 @@ export const workspaceCode: NodeHandler = async (params): Promise<Json> => {
   if (root !== resolve(params.cwd)) throw new Error('项目根目录已变化，请重新绑定');
   if (root === resolve('/')) throw new Error('不能浏览文件系统根目录');
   if (sensitiveWorkspacePath(root)) throw new Error('敏感项目目录不可浏览');
+  if (params.kind === 'search') return searchFiles(root, params.query);
   const path = params.path ?? '';
   if (typeof path !== 'string' || isAbsolute(path) || /[\0\r\n]/.test(path)) throw new Error('只接受项目内相对路径');
   const requested = resolve(root, path); inside(root, requested);

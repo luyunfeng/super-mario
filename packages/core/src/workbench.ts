@@ -286,7 +286,7 @@ export async function createWorkbench(config: AppConfig) {
       cwd: run.worktree?.source ?? (run.worktreeRunId && store.get<Run>('runs', run.worktreeRunId)?.worktree?.source) ?? run.cwd, range: run.commitChanges, ...(path !== undefined && { path }),
     });
   }
-  async function readWorkspaceCode(input: { projectId?: string; kind: 'tree' | 'file' | 'diff'; path?: string }): Promise<Json> {
+  async function readWorkspaceCode(input: { projectId?: string; kind: 'tree' | 'file' | 'diff'; path?: string } | { projectId: string; kind: 'search'; query: string }): Promise<Json> {
     const projectId = requiredText(input.projectId, 'projectId');
     const project = projects.list().find(p => p.id === projectId);
     if (!project || project.archivedAt) throw new InputError('项目不存在或已归档', 404);
@@ -295,7 +295,16 @@ export async function createWorkbench(config: AppConfig) {
     const machine = machines.list().find(m => m.id === project.workspace!.machineId);
     if (!machine?.online) throw new InputError('绑定电脑已离线', 503);
     if (!machine.capabilities.includes('workspace.code')) throw new InputError('绑定电脑代理不支持代码只读浏览', 409);
-    const raw = await machines.call(machine.id, 'workspace.code', { cwd: project.workspace.cwd, kind: input.kind, path: input.path ?? '' }) as Record<string, unknown>;
+    const source = currentAgentInput();
+    const { cwd } = project.workspace;
+    const raw = await machines.call(machine.id, 'workspace.code', { cwd, kind: input.kind,
+      ...(input.kind === 'search' ? { query: input.query } : { path: input.path ?? '' }) }) as Record<string, unknown>;
+    const latest = projects.list().find(item => item.id === projectId);
+    if (!latest || latest.archivedAt) throw new InputError('项目不存在或已归档', 404);
+    if (latest.workspace?.machineId !== machine.id || latest.workspace.cwd !== cwd)
+      throw new InputError('项目绑定已变化，请重新检索', 409);
+    assertBotInput(source);
+    if (input.kind === 'search') return raw as Json;
     if (typeof raw?.text === 'string' && raw.text.length > 32000) {
       return { ...raw, text: raw.text.slice(0, 32000), truncated: true } as unknown as Json;
     }
@@ -353,7 +362,7 @@ export async function createWorkbench(config: AppConfig) {
   plugins.register(createStartPage(() => plugins.list()));
   plugins.register(tokenStatistics);
   plugins.register(todoCalendar);
-  plugins.register(conversationSearch);
+  plugins.register(conversationSearch(readWorkspaceCode));
   plugins.register(conversationDrafts);
   plugins.register(createRunComparison(readRunCommitDiff, (id, offset, version) => runWorktreeStatus(id, true, offset, version), readRunWorktreeChange, runWorktreeHistory));
   plugins.register(shortcutSettings);

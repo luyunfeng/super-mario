@@ -1,3 +1,4 @@
+import { sensitiveWorkspacePath } from './workspace-code.ts';
 import { localDayFormatter } from './local-day.ts';
 import { messageVersion } from '../packages/plugin-sdk/src/index.ts';
 import { randomBytes } from 'node:crypto';
@@ -169,10 +170,45 @@ function projectMessages(store: Store, input: Json, excludeId?: string) {
   return { hits, nextBefore: null };
 }
 
-export const conversationSearch: Extension = {
+type ReadFiles = (input: { projectId: string; kind: 'search'; query: string }) => Promise<Json>;
+export const conversationSearch = (readFiles: ReadFiles): Extension => ({
   id: 'conversation-search', name: '对话历史搜索', capabilities: ['conversation.search'],
-  permissions: ['contribute:tools', 'service.provide:conversation-search.saved', 'service.provide:conversation-search.projects', 'store.read', 'store.write'],
+  permissions: ['contribute:tools', 'service.provide:conversation-search.saved', 'service.provide:conversation-search.projects', 'service.provide:conversation-search.files', 'store.read', 'store.write'],
   activate(context) {
+    let active = true;
+    context.defer(() => { active = false; });
+    async function searchFiles(input: Json, signal: AbortSignal) {
+      signal.throwIfAborted();
+      if (!input || typeof input !== 'object' || Array.isArray(input) || typeof input.projectId !== 'string' || !input.projectId.trim()
+          || Object.keys(input).some(key => key !== 'query' && key !== 'projectId')) fail(400, '文件检索参数无效');
+      if (typeof input.query !== 'string' || !input.query.trim() || input.query.length > 256 || /[\p{Cc}]/u.test(input.query))
+        fail(400, '文件检索只接受 1 至 256 字的查询词');
+      const result = await readFiles({ projectId: input.projectId, kind: 'search', query: input.query.trim() });
+      signal.throwIfAborted();
+      if (!active) fail(503, '对话搜索插件已停用');
+      if (!result || typeof result !== 'object' || Array.isArray(result) || typeof result.truncated !== 'boolean'
+          || !Array.isArray(result.paths) || result.paths.length > 50) fail(502, '文件检索回执无效');
+      const paths: string[] = [];
+      for (const path of result.paths) {
+        if (typeof path !== 'string' || path.length > 4096 || path.split('/').some(part => !part || part === '.' || part === '..')
+            || /[\p{Cc}]/u.test(path) || sensitiveWorkspacePath(path)) fail(502, '文件检索回执无效');
+        paths.push(path);
+      }
+      return { paths, truncated: result.truncated };
+    }
+    context.provide('conversation-search.files', searchFiles);
+    context.contribute('tools', 'project_file_search', {
+      name: 'project_file_search', description: '按相对路径模糊检索一个已绑定项目的文件名。返回命中路径和 Web 引用。truncated 表示仅覆盖了部分文件或匹配结果。',
+      parameters: { type: 'object', required: ['query'], additionalProperties: false, properties: {
+        projectId: { type: 'string' }, query: { type: 'string', minLength: 1, maxLength: 256 },
+      } },
+      async execute({ projectId, query }, signal) {
+        if (typeof projectId !== 'string') fail(400, '请选择要检索的项目');
+        const { paths, truncated } = await searchFiles({ projectId, query }, signal);
+        return { projectId, truncated, hits: paths.map(path => ({ path, webCitation: '[查看文件](#projects/' +
+          encodeURIComponent(projectId) + '/workspace?' + new URLSearchParams({ file: path }) + ')' })) };
+      },
+    });
     context.contribute('tools', 'project_message_search', {
       name: 'project_message_search',
       description: '从新到旧查找项目工作对话。默认按连续原文匹配；mode=keywords 要求同一条消息含全部关键词（空格分隔，最多 8 个，顺序不限）。按当地发言日期查时同传 sentDay（YYYY-MM-DD）和 timeZone，已限定项目可省略检索词。可传 role=user 或 assistant 限定发言角色；指定项目和角色后省略 query 可浏览该角色的最近发言。返回发言角色、消息状态、ID、正文版本和命中前后的摘录。传 projectId 和 todoId 可限定一项待办，省略 query 则列出该项最近消息。查询某个提问的回答时传 projectId 和 replyTo（原提问 ID），按 status 核对结果。可用 nextBefore 继续查更早的结果。',
@@ -212,4 +248,4 @@ export const conversationSearch: Extension = {
     context.provide('conversation-search.projects', input => projectMessages(context.store, input));
     context.provide('conversation-search.saved', input => savedSearches(context.store, input));
   },
-};
+});

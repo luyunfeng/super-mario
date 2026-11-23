@@ -102,5 +102,12 @@ export function createCodeSidebar({ api, store }) {
       }
     } catch (error) { if (stamp === sequence) status.textContent = `读取失败：${error.message}`; }
   }
-  return { el, toggle, show(id) { projectId = id || ''; sync(); }, update: sync };
+  function openFile(path) {
+    if (!project()?.workspace) return false;
+    opened = true; el.hidden = false; selected = path;
+    replace(tree, Button({ label: '所在目录', size: 'sm', onClick: () => read('tree', path.split('/').slice(0, -1).join('/')) }));
+    void read('file', path);
+    return true;
+  }
+  return { el, toggle, openFile, show(id) { projectId = id || ''; sync(); }, update: sync };
 }

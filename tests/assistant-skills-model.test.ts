@@ -11,7 +11,7 @@ import JSZip from 'jszip';
 import { startServer } from '../apps/server/src/index.ts';
 import type { FeishuOptions } from '../plugins/feishu.ts';
 import type { FeishuBotFactory } from '../apps/server/src/feishu-bots.ts';
-import type { Message, Run } from '../packages/protocol/src/index.ts';
+import type { Json, Message, Run } from '../packages/protocol/src/index.ts';
 
 type Request = { system: string; tools: string[]; lastRole: string; content: unknown; callId?: string };
 type Reply = { role: string; content?: string; tool_calls?: unknown[] };
@@ -2669,5 +2669,97 @@ test('Web 与飞书按指定当地日期回顾项目讨论，覆盖夏令时回�
     await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
     await adapter.onMessage(question, { ...source, messageId: 'day' });
     await t.waitFor(() => assert.ok(sent.includes(answer)));
+  } finally { await server.close(); }
+});
+
+test('Web 与飞书项目助手按文件名找路径，正文另读，绑定变化时丢弃旧结果', async t => {
+  const path = 'src/合成 + 文件.ts', body = '已核实的文件正文';
+  const machineId = 'file-query-fixture', cwd = '/synthetic/file-project';
+  let projectId = '', foreignId = '', feishu = false, rebind = false;
+  let checkReceipt: (() => Promise<Json>) | undefined;
+  let adapter!: FeishuOptions;
+  const sent: string[] = [], calls: string[] = [];
+  const { server, api, ask } = await fixture(t, req => {
+    if (req.lastRole === 'user') {
+      assert.ok(req.tools.includes('project_file_search'));
+      assert.match(req.system, /文件名命中不能证明正文内容/);
+      assert.match(req.system, /飞书用 @相对路径/);
+      return call('project_file_search', { projectId: foreignId, query: '合成' }, 'outside');
+    }
+    const raw = typeof req.content === 'string' ? req.content : (req.content as { text: string }[])[0].text;
+    if (req.callId === 'outside') {
+      assert.match(raw, /跨作用域 projectId/);
+      return call('project_file_search', { query: '合成' }, 'find');
+    }
+    if (req.callId === 'find') {
+      if (rebind) {
+        assert.match(raw, /项目绑定已变化/);
+        assert.ok(!raw.includes(path));
+        return { role: 'assistant', content: '项目绑定已变化。' };
+      }
+      const found = JSON.parse(raw);
+      assert.equal(found.projectId, projectId);
+      assert.equal(found.truncated, true);
+      assert.deepEqual(found.hits, [{ path, webCitation: '[查看文件](#projects/' + projectId + '/workspace?' + new URLSearchParams({ file: path }) + ')' }]);
+      assert.ok(!raw.includes(body));
+      if (feishu) return { role: 'assistant', content: '@' + found.hits[0].path + '，只查了部分文件。' };
+      return call('workspace_code_read', { path: found.hits[0].path }, 'read');
+    }
+    assert.equal(JSON.parse(raw).text, body);
+    return { role: 'assistant', content: body + ' [查看文件](#projects/' + projectId + '/workspace?' + new URLSearchParams({ file: path }) + ')' };
+  }, options => {
+    adapter = options;
+    return { start: async () => {}, close: async () => {}, status: () => ({ connected: true }),
+      collect: async () => [], send: async (_target, text) => { sent.push(text); } };
+  });
+  try {
+    server.app.setMachineClient({ list: () => [{ id: machineId, name: '合成电脑', online: true, platform: 'linux',
+      connectedAt: 'now', capabilities: ['workspace.code'], executors: [] }], async call(id, method, params): Promise<Json> {
+      assert.equal(id, machineId);
+      assert.equal(method, 'workspace.code');
+      assert.equal(params.cwd, cwd);
+      calls.push(String(params.kind));
+      if (params.kind === 'file') {
+        assert.equal(params.path, path);
+        return { text: body };
+      }
+      assert.deepEqual(params, { cwd, kind: 'search', query: '合成' });
+      if (checkReceipt) return checkReceipt();
+      if (rebind) server.app.projects.update(projectId, { workspace: { machineId, cwd: cwd + '-changed' } });
+      return { paths: [path], truncated: true };
+    } });
+    projectId = server.app.projects.create({ name: '文件查询项目', workspace: { machineId, cwd } }).id;
+    foreignId = server.app.projects.create({ name: '其他项目' }).id;
+    const endpoint = '/projects/' + projectId + '/messages';
+    assert.match(await ask('找合成文件，核对正文', endpoint), /已核实的文件正文 \[查看文件\]/);
+    feishu = true;
+    const bot = await api('/feishu/bots', { name: '合成文件助手', appId: 'cli_4141414141414141', appSecret: 'offline-fixture',
+      scope: { kind: 'project', projectId }, requireConfirmation: false });
+    const sender = { chatId: 'oc_synthetic_file', senderId: 'ou_synthetic_file', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...sender, messageId: 'pair-file' });
+    await adapter.onMessage('这个项目里有哪些合成文件？', { ...sender, messageId: 'find-file' });
+    await t.waitFor(() => assert.ok(sent.some(text => text.includes('@' + path))));
+    feishu = false; rebind = true;
+    assert.equal(await ask('再找一次合成文件', endpoint), '项目绑定已变化。');
+    assert.deepEqual(calls, ['search', 'file', 'search', 'search']);
+    server.app.projects.update(projectId, { workspace: { machineId, cwd } });
+    const search = () => server.app.plugins.invocations.use('conversation-search.files', { projectId, query: '合成' });
+    for (const candidate of ['../other.txt', '.ssh/config', 'nested/.env', '/external', 'a//b']) {
+      checkReceipt = async () => ({ paths: [candidate], truncated: false });
+      await assert.rejects(search(), /文件检索回执无效/);
+    }
+    checkReceipt = async () => {
+      await server.app.plugins.setEnabled('conversation-search', false);
+      await server.app.plugins.setEnabled('conversation-search', true);
+      return { paths: [path], truncated: false };
+    };
+    await assert.rejects(search(), /已停用|不可用|变化/);
+    const input = server.app.store.list<Message>('messages').find(m => m.role === 'user' && m.text === '这个项目里有哪些合成文件？');
+    assert.ok(input?.conversationId.startsWith('bot:'));
+    checkReceipt = async () => {
+      server.app.setBotScopeAccess(() => false);
+      return { paths: [path], truncated: false };
+    };
+    await assert.rejects(runWithAgentInput(input, search), /授权或绑定范围已失效/);
   } finally { await server.close(); }
 });

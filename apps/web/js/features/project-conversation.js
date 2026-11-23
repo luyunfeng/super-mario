@@ -18,7 +18,7 @@ import { createConversationExport } from './conversation-export.js';
 
 export function createProjectConversation({ api, store, router, scope, bindFolder }) {
   const code = createCodeSidebar({ api, store });
-  let projectId = '', todoId = '';
+  let projectId = '', todoId = '', requestedFile = '';
   const translation = createReplyTranslation({ api, store, getScope: () => projectId, getConversationId: () => `project:${projectId}:work` });
   const instructions = createProjectInstructions({ api, store, getProjectId: () => projectId });
   const favorites = createMessageFavorites({ api, store, router });
@@ -117,6 +117,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
   function paint() {
     instructions.update();
     code.show(projectId);
+    if (visible && requestedFile && code.openFile(requestedFile)) requestedFile = '';
     const p = project();
     const machine = store.view.snapshot?.machines?.find(m => m.id === p?.workspace?.machineId);
     const work = workspace?.agents?.work;
@@ -243,6 +244,7 @@ export function createProjectConversation({ api, store, router, scope, bindFolde
     hide() { visible = false; syncDraft(); },
     show(id, query) {
       visible = true;
+      requestedFile = query?.get('file') || '';
       todoId = query?.get('todo') || '';
       const kind = ['at', 'before', 'after'].find(key => query?.has(key));
       const next = kind ? '?' + kind + '=' + encodeURIComponent(query.get(kind)) : '';

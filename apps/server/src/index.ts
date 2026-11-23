@@ -546,13 +546,20 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         const projectWorkspace=path.match(/^\/api\/v1\/projects\/([^/]+)\/(workspace|messages|memory)$/);
         const code = path.match(/^\/api\/v1\/projects\/([^/]+)\/code$/);
         if (code && method === 'GET') {
+          const kind = url.searchParams.get('kind') ?? 'tree';
+          if (kind === 'search') {
+            if (!app.plugins.list().some(p => p.id === 'conversation-search' && p.status === 'active'))
+              throw new InputError('对话搜索插件已停用', 503);
+            const query = url.searchParams.get('query');
+            if (url.searchParams.size !== 2 || query === null) throw new InputError('文件检索只接受 kind 和 query');
+            return json(res, 200, await app.plugins.invocations.use('conversation-search.files', { projectId: decodeURIComponent(code[1]!), query }));
+          }
           const project = app.projects.list().find(p => p.id === decodeURIComponent(code[1]));
           if (!project || project.archivedAt) throw new InputError('项目不存在', 404);
           if (!project.workspace) throw new InputError('项目尚未绑定电脑目录', 409);
           const machine = machines.list().find(m => m.id === project.workspace!.machineId);
           if (!machine?.online) throw new InputError('绑定电脑已离线', 503);
           if (!machine.capabilities.includes('workspace.code')) throw new InputError('请升级绑定电脑的代理以浏览代码', 409);
-          const kind = url.searchParams.get('kind') ?? 'tree';
           if (!['tree','file','diff'].includes(kind)) throw new InputError('浏览类型无效');
           return json(res, 200, await machines.call(machine.id, 'workspace.code', { cwd: project.workspace.cwd, kind, path: url.searchParams.get('path') ?? '' }));
         }
