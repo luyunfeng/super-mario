@@ -194,6 +194,12 @@ test('配对主人按标题或正文搜索活动独立对话，点击结果后�
   assert.match(matches.text,/助手 · 2099-01-01T00:00:00.000Z\n助手摘录/);
   assert.deepEqual(buttons(matches.context?.card).map(b=>String(b.value.conversationThreadId)).sort(),wanted);
   assert.doesNotMatch(matches.text,/他人私聊|已归档|无关会话|无来源样例/);
+  for(const [status,label] of [['pending','处理中'],['failed','处理失败']] as const){
+    f.store.put('messages','matched-reply',{...body,id:'matched-reply',role:'assistant',replyTo:body.id,
+      createdAt:'2099-01-01T00:00:00.000Z',status,text:'助手摘录'+query});
+    const response=await invoke('/对话 '+query,'status-'+status);
+    assert.ok(response.text.includes('助手 · '+label+' · 2099-01-01T00:00:00.000Z'));
+  }
   const chinese=await invoke('/对话 '+query,'listed-chinese');
   const choices=buttons(chinese.context?.card);
   assert.deepEqual(choices.map(b=>String(b.value.conversationThreadId)).sort(),wanted);

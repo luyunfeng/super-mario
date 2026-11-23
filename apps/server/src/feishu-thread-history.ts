@@ -120,7 +120,8 @@ export function searchPrivateThreadList(store: Pick<Store, 'get' | 'list'>, rows
     const first = hits[0];
     if (first) {
       const speaker=first.role==='assistant'?'助手':'你';
-      snippets[thread.threadId] = speaker+' · '+first.createdAt+'\n'+first.excerpt;
+      const state=first.status==='pending'?'处理中':first.status==='failed'?'处理失败':'';
+      snippets[thread.threadId] = [speaker,state,first.createdAt].filter(Boolean).join(' · ')+'\n'+first.excerpt;
       messageIds[thread.threadId] = first.id;
     }
   }
