@@ -29,6 +29,7 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
       server.app.store.put('runs', id, { id, projectId, conversationId: 'main', executorId: 'fixture', status: 'completed',
         prompt: i === 0 ? '复核凭证明细' : '核对合成事项 ' + i, output: '已核对复核凭证', createdAt: now, updatedAt: now });
     }
+    const emptyProject = await server.app.createProject({ name: '空白样例' });
     const archived = await server.app.createProject({ name: '归档测试' });
     server.app.projects.archive(archived.id);
     const keyword = '合成[定位]';
@@ -213,6 +214,11 @@ test('顶部搜索可保存、套用和管理检索，关闭插件后收回入�
     await results.getByRole('button', { name: '重试项目对话检索' }).click();
     await results.getByRole('button', { name: '查看全部匹配消息' }).click();
     const messageDrawer = page.getByRole('dialog', { name: '消息搜索结果' });
+    const projectFilter = messageDrawer.getByLabel('对话所属项目');
+    await projectFilter.selectOption(emptyProject.id);
+    await expect(messageDrawer.getByRole('status')).toHaveText('已显示 0 条消息');
+    await projectFilter.selectOption(projectId);
+    await expect(messageDrawer.getByRole('link')).toHaveCount(25);
     const dateFilter = messageDrawer.getByLabel(/发言日期/);
     await dateFilter.fill('2019-07-01');
     await expect(messageDrawer.getByRole('status')).toHaveText('已显示 0 条消息');

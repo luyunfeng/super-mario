@@ -174,9 +174,9 @@ export function createSearch({ shell, store, router, api, scope }) {
     const day = h('input', { type: 'date' });
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const dayFilter = !isRun && !isMeeting && h('label', { class: 'row' }, '发言日期（' + timeZone + '）', day);
-    const meetingProject = isMeeting && h('select', {}, h('option', { value: '' }, '全部项目及个人'),
+    const projectSelect = !fromSnapshot && h('select', {}, h('option', { value: '' }, isMeeting ? '全部项目及个人' : '全部项目'),
       store.view.snapshot.projects.filter(project => !project.archivedAt).map(project => h('option', { value: project.id }, project.name)));
-    const projectFilter = isMeeting && h('label', { class: 'row' }, '会议所属项目', meetingProject);
+    const projectFilter = projectSelect && h('label', { class: 'row' }, isMeeting ? '会议所属项目' : '对话所属项目', projectSelect);
     const moreLabel = '查看更多' + kind;
     const owner = api.draftOwner();
     const current = () => drawer.el.open && api.draftOwner() === owner && store.view.snapshotOwner === owner &&
@@ -221,9 +221,10 @@ export function createSearch({ shell, store, router, api, scope }) {
       more.disabled = true;
       status.textContent = '正在读取' + kind + '…';
       try {
+        const projectScope = projectSelect.value ? { projectId: projectSelect.value } : {};
         const reply = isMeeting
-          ? await api.get('/knowledge/meeting-search?' + new URLSearchParams({ query, offset: String(cursor), ...(meetingProject.value && { projectId: meetingProject.value }) }))
-          : await api.post('/project-message-search', { query, before: cursor, limit: 25, ...(role.value && { role: role.value }), ...(day.value && { sentDay: day.value, timeZone }) });
+          ? await api.get('/knowledge/meeting-search?' + new URLSearchParams({ query, offset: String(cursor), ...projectScope }))
+          : await api.post('/project-message-search', { query, ...projectScope, before: cursor, limit: 25, ...(role.value && { role: role.value }), ...(day.value && { sentDay: day.value, timeZone }) });
         if (!current() || stamp !== generation) return;
         for (const row of (isMeeting ? reply.meetings : reply.hits)) rows.set(isMeeting ? row.sourceId : row.id, row);
         render();
@@ -247,7 +248,7 @@ export function createSearch({ shell, store, router, api, scope }) {
       render();
       if (!fromSnapshot) void load();
     }
-    if (isMeeting) meetingProject.addEventListener('change', changeFilter);
+    if (projectSelect) projectSelect.addEventListener('change', changeFilter);
     role.addEventListener('change', changeFilter);
     day.addEventListener('change', changeFilter);
     const drawer = openDrawer({ title: kind + '搜索结果', subtitle: query, body: [projectFilter, roleFilter, dayFilter, status, list, more], onClose: () => unsubscribe() });
