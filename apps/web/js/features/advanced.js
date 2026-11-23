@@ -20,11 +20,12 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
 
   const hintsToggle = Check({ label: '显示每个功能右上角的作用说明', checked: hintsEnabled(), onChange: setHintsEnabled });
   const setupList = h('div', { class: 'stack' });
+  const extensionCards = h('div', {class:'stack'});
   let examplesDrawer;
   const examplesButton=Button({label:'助理卡片示例',size:'sm',onClick:()=>{examplesDrawer=openAssistantCardExamples();}});
   examplesButton.hidden=true;
   const ui = Fold({ title: '界面', body: [hintsToggle,
-    examplesButton,
+    examplesButton, extensionCards,
     Button({ label: '预览开屏', size: 'sm', onClick: () => window.dispatchEvent(new CustomEvent('workspace:preview-splash')) }),
     Button({ label: '设置记忆整理 Agent', size: 'sm', onClick: () => router.go(`${router.href('memory')}?curator=1`) }),
     h('div', { class: 'stack' }, h('h3', null, '入门进度'), setupList)] });
@@ -39,6 +40,17 @@ export function createAdvanced({ api, store, router, openPluginSettings }) {
   function paint(snapshot) {
     examplesButton.hidden=!snapshot.webExtensions?.some(entry=>entry.value?.slot==='advanced-interface' && entry.value.renderer==='assistant-card-examples');
     if(examplesButton.hidden){examplesDrawer?.close();examplesDrawer=undefined;}
+    const cards = [];
+    for (const {value} of snapshot.webExtensions ?? []) {
+      if (value?.slot !== 'advanced-interface' || value.renderer === 'assistant-card-examples') continue;
+      const patch = value.renderer === 'diff' && typeof value.patch === 'string' && value.patch;
+      const fallback = typeof value.fallback === 'string' && value.fallback;
+      if (typeof value.title !== 'string' || !(patch || fallback)) continue;
+      cards.push(h('section', {class:'card card__body stack', 'aria-label':value.title},
+        h('h3', {}, value.title), patch ? h('pre', {}, h('code', {}, patch)) : h('p', {}, fallback)));
+    }
+    replace(extensionCards, cards);
+    extensionCards.hidden = !cards.length;
     const setup = snapshot.setup ?? {};
     replace(setupList, [['配置 Agent', setup.agent], ['新建项目', setup.project], ['添加记忆', setup.memory], ['连接飞书', setup.channel]].map(([name, value]) =>
       h('div', { class: 'row row--between' }, h('span', null, name), value === true || value === 'done' ? Pill('已完成', 'ok') : value === 'skipped' ? Pill('已跳过') : Pill('未完成', 'warn'))));

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
@@ -8,6 +8,13 @@ import {startServer} from '../apps/server/src/index.ts';
 
 test('高级界面的助理卡片示例支持六类本地预览，操作不写入工作台', {timeout:30000},async t=>{
   const dataDir=await mkdtemp(join(tmpdir(),'card-examples-'));
+  const extension = join(dataDir,'extensions','review');
+  await mkdir(extension,{recursive:true});
+  await writeFile(join(extension,'super-mario.extension.json'),JSON.stringify({id:'review',version:'1.0.0',apiVersion:1,main:'index.mjs'}));
+  await writeFile(join(extension,'index.mjs'),`export default {id:'review',name:'合成评审',capabilities:[],activate(ctx){
+    ctx.contribute('web_extensions','patch',{slot:'advanced-interface',renderer:'diff',title:'变更摘录',patch:'+<img src=x>',fallback:'新增一行'});
+    ctx.contribute('web_extensions','future',{slot:'advanced-interface',renderer:'future',title:'其他格式',fallback:'纯文字说明'});
+  }}`);
   const server=await startServer({host:'127.0.0.1',port:0,dataDir,demo:true});
   t.after(async()=>{await server.close();await rm(dataDir,{recursive:true,force:true});});
   const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
@@ -19,6 +26,14 @@ test('高级界面的助理卡片示例支持六类本地预览，操作不写�
   await page.getByText('界面',{exact:true}).click();
   const entry=page.getByRole('button',{name:'助理卡片示例',exact:true});
   await expect(entry).toBeVisible();
+  const patch=page.getByRole('region',{name:'变更摘录'});
+  await expect(patch.locator('code')).toHaveText('+<img src=x>');
+  await expect(patch.locator('img')).toHaveCount(0);
+  await expect(page.getByRole('region',{name:'其他格式'})).toContainText('纯文字说明');
+  const stopped=await page.request.post(server.url+'/api/v1/plugins/review',{data:{enabled:false}});
+  assert.equal(stopped.status(),200);
+  await expect(patch).toHaveCount(0);
+  await expect(page.getByRole('region',{name:'其他格式'})).toHaveCount(0);
   const writes:string[]=[],errors:string[]=[];
   page.on('pageerror',error=>errors.push(error.message));
   page.on('request',request=>{
