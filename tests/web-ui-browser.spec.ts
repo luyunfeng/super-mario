@@ -715,7 +715,7 @@ test('浏览器快捷键可改绑、处理冲突和恢复，输入与弹窗保�
       await plugins.getByRole('button', { name: '关闭', exact: true }).click();
     };
     const modifier = await page.evaluate(() => /Mac|iPhone|iPad/.test(navigator.platform) ? 'Meta' : 'Control');
-    const key = modifier + '+k';
+    const key = modifier + '+Shift+Digit4';
     const record = async (label: string) => {
       await settings.getByRole('region', { name: label, exact: true }).getByRole('button', { name: '更改按键' }).click();
     };
@@ -752,7 +752,7 @@ test('浏览器快捷键可改绑、处理冲突和恢复，输入与弹窗保�
     await expect(page.locator('#quick-todo')).not.toBeVisible();
     await openSettings();
     const todo = settings.getByRole('region', { name: '添加待办', exact: true });
-    await expect(todo.locator('kbd')).toContainText(/k$/);
+    await expect(todo.locator('kbd')).toContainText(/Shift\+4$/);
     await todo.getByRole('button', { name: '清除' }).click();
     await expect(todo.locator('kbd')).toHaveText('未绑定');
     await todo.getByRole('button', { name: '恢复默认' }).click();

@@ -18,6 +18,7 @@ const active = store => store.view.snapshot?.plugins?.some(p => p.id === 'shortc
 const reserved = new Set('a c v x z y t w n r l d p s o u f g h q m'.split(' '));
 const reservedShift = new Set('t n w r g i j c b f v z'.split(' '));
 function customChord(value) {
+  if (typeof value === 'string' && /^Mod\+Shift\+[0-9]$/.test(value)) return true;
   if (typeof value !== 'string' || !/^Mod\+(Shift\+)?[a-z]$/.test(value)) return false;
   const key = value.at(-1);
   return value.includes('Shift+') ? !reservedShift.has(key) : !reserved.has(key);
@@ -48,7 +49,8 @@ window.addEventListener('storage', event => {
 function eventChord(event) {
   if (event.altKey || event.getModifierState?.('AltGraph') || (mac ? event.ctrlKey : event.metaKey)) return '';
   if (!(mac ? event.metaKey : event.ctrlKey)) return event.key;
-  return 'Mod+' + (event.shiftKey ? 'Shift+' : '') + event.key.toLowerCase();
+  const digit = /^(?:Digit|Numpad)([0-9])$/.exec(event.code);
+  return 'Mod+' + (event.shiftKey ? 'Shift+' : '') + (digit?.[1] ?? event.key.toLowerCase());
 }
 const binding = (prefs, id, base) => prefs.bindings[id] ?? base;
 
@@ -75,7 +77,7 @@ export function openShortcutSettings(store) {
     const prefs = preferences;
     replace(body, h('label', { class: 'row' }, h('input', { type: 'checkbox', checked: prefs.on, onchange: e =>
       save({ ...preferences, on: e.target.checked }) }), '启用全局快捷键'),
-      h('p', { class: 'small muted' }, '设置保存在当前浏览器。更改按键时请按 ' + (mac ? '⌘' : 'Ctrl') + ' 加字母，可加 Shift。'),
+      h('p', { class: 'small muted' }, '设置保存在当前浏览器。更改按键时请按 ' + (mac ? '⌘' : 'Ctrl') + ' 加字母，可加 Shift；绑定数字时请同时按 Shift。'),
       commands.map(([id, label, base]) => {
         const chord = binding(prefs, id, base);
         const notice = h('span', { role: 'status', class: 'small' });
