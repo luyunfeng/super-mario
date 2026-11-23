@@ -21,6 +21,7 @@ import { createAgentSessions, nativeResumeSpec, nativeResultSources } from './ag
 import { executionProgress } from './execution-progress.ts';
 import { createTodoDecisions } from './todo-decisions.ts';
 import { createTodoReporting } from './todo-reporting.ts';
+import { readRunBlockers } from './run-blockers.ts';
 import { actionTodoLink } from './todo-link.ts';
 import { readTodoHistory } from './todo-history.ts';
 import { createRunReview } from './run-review.ts';
@@ -1385,11 +1386,8 @@ export async function createWorkbench(config: AppConfig) {
   function runObservations(id: string) {
     const run = store.get<Run>('runs', id);
     if (!run) throw new InputError('执行记录不存在', 404);
-    const cards = interactions.list().filter(card => card.runId === id && card.status === 'open' && card.handler === 'user');
-    const pending = approvals.list().filter(approval => approval.status === 'pending' && (approval.params.runId === id || (approval.kind === 'input' && approval.params.id === id)));
     return { runId: id, status: run.status, progress: executionProgress(run.progress) ?? null,
-      blockedBy: [...cards.map(card => ({ id: card.id, kind: card.kind, title: card.title, version: card.version, createdAt: card.createdAt, href: '#chat' })),
-        ...pending.map(approval => ({ id: approval.id, kind: 'approval', title: approval.title, version: approval.version, createdAt: approval.createdAt, href: '#chat' }))] };
+      blockedBy: readRunBlockers(store)(run) };
   }
   async function inputRun(id: string, text: string, key: string = randomUUID()): Promise<Json> {
     if (closing) throw new InputError('服务正在关闭', 503);

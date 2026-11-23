@@ -44,8 +44,13 @@ test('real observation HTTP is read-only and separates user blockers from native
  const first=server.app.interactions.open({kind:'permission',title:'Need directory approval',body:'fixture',runId:run.id});
  const second=server.app.interactions.open({kind:'permission',title:'Automatic stage',body:'fixture',runId:run.id});server.app.store.put('interactions',second.id,{...second,handler:'supervisor'});
  const approval=server.app.approvals.propose({kind:'input',title:'Confirm input',details:'fixture',params:{id:run.id,text:'continue'}});
+ const foreign = server.app.interactions.open({kind:'permission',title:'另一项目的问题',body:'fixture',runId:run.id});
+ server.app.store.put('interactions', foreign.id, { ...foreign, projectId: 'outside' });
+ server.app.approvals.propose({kind:'input',title:'无关待办的审批',details:'fixture',params:{id:run.id,todoId:'outside-task'}});
  assert.equal((await fetch(server.url+'/api/v1/runs/run/observations')).status,401);
  const response=await fetch(server.url+'/api/v1/runs/run/observations',{headers:{authorization:'Bearer fixture'}});assert.equal(response.status,200);const state=await response.json();assert.deepEqual(state.progress,progress);assert.deepEqual(state.blockedBy.map((item:any)=>item.id).sort(),[first.id,approval.id].sort());assert.equal(server.app.store.list('runs').length,1);assert.equal(server.app.todos().length,0);assert.equal(server.app.effects.list().length,0);
  server.app.interactions.withdraw(first.id,first.version);server.app.approvals.reject(approval.id,approval.version);
+ assert.equal(state.blockedBy.find((item:any)=>item.id===first.id).href, '#chat?interaction=' + first.id);
+ assert.equal(state.blockedBy.find((item:any)=>item.id===approval.id).href, '#chat?approval=' + approval.id);
  const updated=await(await fetch(server.url+'/api/v1/runs/run/observations',{headers:{authorization:'Bearer fixture'}})).json();assert.equal(updated.blockedBy.length,0);assert.equal(server.app.store.get<Run>('runs',run.id)!.status,'running');
 });

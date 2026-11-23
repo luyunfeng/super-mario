@@ -1,3 +1,4 @@
+import type { RunBlocker } from './execution-progress.ts';
 import type { Approval, Json, Message, Run } from './index.ts';
 
 /** Draft/confirmation evidence for existing Inbox/Todo/Approval records, not another task model. */
@@ -19,6 +20,7 @@ export interface InboxSuggestion {
   approvalId?: string; result?: Json; error?: string; createdAt: string; updatedAt: string;
 }
 export interface InboxDispatchRun {
+  blockedBy: RunBlocker[];
   id: string; status: Run['status']; updatedAt: string; webPath: string; webCitation: string;
 }
 export interface InboxReplyDelivery { id: string; status: 'sent' | 'failed' | 'unknown' | 'pending'; updatedAt: string }

@@ -86,7 +86,10 @@ test('派发建议随执行回执更新，失去对应记录后关闭详情入�
   await expect(drawer(page)).toContainText('派发执行 · 执行中');
   const link = drawer(page).getByRole('link', { name: '查看实际执行记录' });
   await expect(link).toHaveAttribute('href', '#projects/p1/runs/r1');
-  item.run.status = 'failed'; await emit(page);
+  item.run.blockedBy = [{ id: 'q1', title: '确认材料日期', href: '#chat?interaction=q1' }]; await emit(page);
+  await expect(drawer(page).getByRole('link', { name: '确认材料日期' })).toHaveAttribute('href', '#chat?interaction=q1');
+  item.run.blockedBy = []; item.run.status = 'failed'; await emit(page);
+  await expect(drawer(page).getByRole('link', { name: '确认材料日期' })).toHaveCount(0);
   await expect(drawer(page)).toContainText('派发执行 · 失败');
   delete item.run; await emit(page);
   await expect(drawer(page)).toContainText('当前无法核对这次派发');

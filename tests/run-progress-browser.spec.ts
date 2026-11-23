@@ -112,12 +112,12 @@ test('等待你仅列真实阻塞入口；waiting 不表示已批准；迟到切
   await setRuns(page, [run('one', { progress: progress('waiting', { detail: '模型说：已批准' }) }), run('two')]);
   await go(page, 'one');
   await reply(page, 'one', { progress: progress('waiting'), blockedBy: [
-    { id: 'question', kind: 'question', title: '请确认工作目录', version: 1, createdAt: observedAt, href: '#chat' },
+    { id: 'question', kind: 'question', title: '请确认工作目录', version: 1, createdAt: observedAt, href: '#chat?interaction=question' },
     { id: 'permission', kind: 'permission', title: '允许写入吗', version: 2, createdAt: observedAt, href: '#chat' },
   ] });
   const blockers = page.locator('[data-run-blockers="one"]');
   await expect(blockers.getByRole('link')).toHaveCount(2);
-  await expect(blockers.getByRole('link').first()).toHaveAttribute('href', '#chat');
+  await expect(blockers.getByRole('link').first()).toHaveAttribute('href', '#chat?interaction=question');
   await expect(blockers).not.toContainText('已批准');
   await page.evaluate(() => { const t = (window as any).progressTest; t.state.approvals = [{ id: 'new', status: 'pending' }]; t.update(); });
   await go(page, 'two');
@@ -143,7 +143,13 @@ test('读取失败如实显示；390px 长工具名和详情自然换行、不�
   await reply(page, 'one', { progress: long });
   await expect(page.locator('[data-run-progress="one"]:visible')).toContainText(long.detail);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-  await page.evaluate(() => { const t = (window as any).progressTest; t.state.runs[0].updatedAt = '2026-11-17T08:26:00Z'; t.update(); t.pending.shift().reject(new Error('网络中断')); });
+  await page.evaluate(() => {
+    const t = (window as any).progressTest;
+    t.state.runs[0].updatedAt = '2026-11-17T08:26:00Z'; t.update();
+    const index = t.pending.findIndex((request: {path:string}) => request.path === '/runs/one/observations');
+    if (index < 0) throw new Error('未发起执行观察请求');
+    t.pending.splice(index, 1)[0].reject(new Error('网络中断'));
+  });
   await expect(page.locator('[data-run-blockers="one"]')).toContainText('未能读取执行观察与阻塞项：网络中断。状态未确认');
   await expect(page.locator('[data-run-blockers="one"]')).not.toContainText('没有待你处理');
 }));

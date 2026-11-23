@@ -56,5 +56,12 @@ test('actual Web/HTTP/SQLite: source drawer → chat approval → edit current s
   await expect(page).toHaveURL(server.url + '/#projects/' + project.id + '/todos/detail/' + todo.id);
   await expect(page.locator('#panel-todos')).toContainText(todo.title);
   await expect(page.getByRole('link',{name:'返回待办列表',exact:true})).toBeVisible();
+  const question = server.app.interactions.open({kind:'permission', title:'确认合成材料', body:'核对版本'});
+  await page.goto(server.url + '/#chat?interaction=' + question.id);
+  await expect(page.locator('#attention [data-id="interaction:' + question.id + '"]')).toBeVisible();
+  assert.equal(server.app.interactions.list().find(item => item.id === question.id)?.status, 'open');
+  server.app.interactions.withdraw(question.id, question.version);
+  await page.reload();
+  await expect(page.getByText('当前待处理列表中没有这条交互请求。')).toBeVisible();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);
 });

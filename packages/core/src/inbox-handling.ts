@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { outboxItemId } from './outbox.ts';
+import { readRunBlockers } from './run-blockers.ts';
 import { actionTodoLink } from './todo-link.ts';
 import { mailboxEntryId } from './event-mailboxes.ts';
 import type { EventBus, OutboxItem, Store } from '../../plugin-sdk/src/index.ts';
@@ -169,7 +170,7 @@ export function createInboxHandling(options: InboxHandlingOptions) {
     if (approval && matching(approval, binding.approval)) return approval;
   }
   const executionKey = (row: InboxSuggestion) => `inbox-handling:${row.id}:${row.version}`;
-  function dispatchRun(row: InboxSuggestion): InboxDispatchRun | undefined {
+  function dispatchRun(row: InboxSuggestion, blockers: ReturnType<typeof readRunBlockers>): InboxDispatchRun | undefined {
     if (row.action.kind !== 'dispatch' || !row.approvalId) return;
     const id = store.get<string>('dispatch-keys', executionKey(row));
     if (!id) return;
@@ -180,7 +181,7 @@ export function createInboxHandling(options: InboxHandlingOptions) {
     if (!scope || scope.source.kind !== row.source.kind || scope.source.id !== row.source.id || !run ||
         run.projectId !== scope.projectId || run.todoId !== scope.todoId) return;
     const webPath = '#projects/' + encodeURIComponent(run.projectId ?? 'all') + '/runs/' + encodeURIComponent(id);
-    return { id, status: run.status, updatedAt: run.updatedAt, webPath, webCitation: '[查看执行](' + webPath + ')' };
+    return { id, status: run.status, updatedAt: run.updatedAt, blockedBy: blockers(run), webPath, webCitation: '[查看执行](' + webPath + ')' };
   }
   function replyDelivery(row: InboxSuggestion): InboxReplyDelivery | undefined {
     if (row.action.kind !== 'reply' || !row.approvalId) return;
@@ -225,9 +226,10 @@ export function createInboxHandling(options: InboxHandlingOptions) {
     try {
       const own = store.list<InboxSuggestion>(suggestions).filter(item => item.conversationId === row.conversationId)
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id));
+      const blockers = readRunBlockers(store);
       const recent = own.slice(0, 20).map(item => ({
         id: item.id, version: item.version, kind: item.action.kind, status: item.status, approvalStatus: boundApproval(item)?.status, ...(item.action.kind === 'reply' ? { delivery: replyDelivery(item) } : {}),
-        ...(item.action.kind === 'dispatch' ? { run: dispatchRun(item) } : {}),
+        ...(item.action.kind === 'dispatch' ? { run: dispatchRun(item, blockers) } : {}),
       }));
       const todo = linkedTodo(initial.value);
       const result = await options.think(structuredClone(initial.value), row.conversationId, row.text, { total: own.length, recent, ...(todo && { linkedTodo: todo }) });
@@ -268,19 +270,16 @@ export function createInboxHandling(options: InboxHandlingOptions) {
     /** A read-only UI projection of existing requests, approvals and Runs. */
     states():InboxHandlingState[] {
       const drafts=store.list<InboxSuggestion>(suggestions),turns=store.list<RequestRow>(requests),used=new Set([...drafts,...turns].map(row=>row.conversationId));
-      const blockedRuns=new Set(store.list<{runId?:string;handler?:string;status:string}>('interactions').filter(card=>card.status==='open'&&card.handler==='user').flatMap(card=>card.runId?[card.runId]:[]));
-      for(const approval of store.list<Approval>('approvals').filter(item=>item.status==='pending')){
-        const runId=approval.params.runId??(approval.kind==='input'?approval.params.id:undefined);if(typeof runId==='string')blockedRuns.add(runId);
-      }
+      const blockers = readRunBlockers(store);
       const result:InboxHandlingState[]=[];
       for(const conversation of store.list<Conversation>(conversations)){
         if(conversation.invalid||!used.has(conversation.id))continue;
         let latest:InboxHandlingSource;try{latest=synchronous(()=>options.readSource(conversation.source));}catch{continue;}
         if(!latest.active||conversationIdentity(latest)!==conversation.id)continue;
         const own=drafts.filter(row=>row.conversationId===conversation.id),pending=own.some(row=>row.status==='draft'||row.status==='submitted'&&boundApproval(row)?.status==='pending');
-        const runs = own.map(dispatchRun).filter((run): run is InboxDispatchRun => !!run);
+        const runs = own.map(row => dispatchRun(row, blockers)).filter((run): run is InboxDispatchRun => !!run);
         const active=runs.find(run=>['queued','running'].includes(run.status));
-        const blocked=runs.some(run=>blockedRuns.has(run.id));
+        const blocked=runs.some(run=>run.blockedBy.length);
         const lastTurn=turns.filter(row=>row.conversationId===conversation.id).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
         const uncertain=own.some(row=>row.status==='unknown')||runs.some(run=>['failed','unknown'].includes(run.status));
         let state:InboxHandlingState={source:conversation.source,stage:'human',label:'等待你处理建议'};
@@ -297,7 +296,7 @@ export function createInboxHandling(options: InboxHandlingOptions) {
     read(ref: InboxHandlingRef): InboxHandlingView {
       open(); const current = source(ref), availability = options.available();
       const history=new Set(store.list<Conversation>(conversations).filter(row=>row.source.kind===ref.kind&&row.source.id===ref.id).map(row=>row.id));
-      const todo = linkedTodo(current.value);
+      const todo = linkedTodo(current.value), blockers = readRunBlockers(store);
       return { source: current.value, ...(todo && { linkedTodo: todo }), conversationId: current.conversationId, available: availability.available && current.value.active && !invalid(current.conversationId),
         ...(!current.value.active || invalid(current.conversationId) ? { reason: '来源已失效，只能查看' } : availability.reason ? { reason: availability.reason } : {}),
         // Owner-facing audit history survives archive/reassignment. The model
@@ -305,7 +304,7 @@ export function createInboxHandling(options: InboxHandlingOptions) {
         messages: store.list<Message>('messages').filter(row => history.has(row.conversationId)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)),
         suggestions: store.list<InboxSuggestion>(suggestions).filter(row => row.source.kind===ref.kind&&row.source.id===ref.id).map(row => {
           const approval = boundApproval(row);
-          const delivery = replyDelivery(row), run = dispatchRun(row);
+          const delivery = replyDelivery(row), run = dispatchRun(row, blockers);
           return { ...row, ...(approval && { approvalStatus: approval.status }), ...(delivery && { delivery }), ...(run && { run }) };
         }),
         requests: store.list<RequestRow>(requests).filter(row => row.conversationId === current.conversationId).map(publicRequest) };

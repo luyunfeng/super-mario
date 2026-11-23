@@ -41,14 +41,14 @@ export function createChatPage({ api, store, scope, router }) {
   const code = createCodeSidebar({ api, store });
   const recent = createRecentWork({ api, store, router, scope });
   const banner = h('div', { id: 'chat-banner' });
-  const approvalNotice = h('div', { role: 'status', hidden: true });
-  let pendingApproval = '';
-  function revealApproval() {
-    if (!pendingApproval || router.current.page !== 'chat' || !store.view.snapshot) return;
-    const found = attention.reveal('approval:' + pendingApproval);
-    approvalNotice.hidden = found;
-    approvalNotice.textContent = found ? '' : '当前待处理列表中没有这条审批。';
-    if (found) pendingApproval = '';
+  const decisionNotice = h('div', { role: 'status', hidden: true });
+  let pendingDecision = '';
+  function revealDecision() {
+    if (!pendingDecision || router.current.page !== 'chat' || !store.view.snapshot) return;
+    const found = attention.reveal(pendingDecision);
+    decisionNotice.hidden = found;
+    decisionNotice.textContent = found ? '' : pendingDecision.startsWith('approval:') ? '当前待处理列表中没有这条审批。' : '当前待处理列表中没有这条交互请求。';
+    if (found) pendingDecision = '';
   }
   const setup = h('div', { id: 'onboarding' });
   const runStrip = h('div', { id: 'run-strip', hidden: true });
@@ -63,7 +63,7 @@ export function createChatPage({ api, store, scope, router }) {
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '对话'), h('p', { class: 'page__sub' }, hintCopy('nav.chat').tag)),
         h('div', { class: 'page__actions' }, favorites.button, transcript.button, officeDocumentsButton({ api, store }), code.toggle, Hint('nav.chat'))),
-      banner, approvalNotice, attention.el, setup, runStrip));
+      banner, decisionNotice, attention.el, setup, runStrip));
   const scroller = h('div', { class: 'chat__scroll', id: 'chat-scroll' }, h('div', { class: 'chat__inner' }, messages, hero));
 
   // —— 输入框 ——
@@ -327,9 +327,11 @@ export function createChatPage({ api, store, scope, router }) {
       quote.restore(quotesEnabled ? draftKey : null);
       prompts.reset();
       recent.refresh();
-      pendingApproval = route.query.get('approval') || '';
-      approvalNotice.hidden = true;
-      revealApproval();
+      const decisionType = route.query.has('approval') ? 'approval' : 'interaction';
+      const decisionId = route.query.get(decisionType);
+      pendingDecision = decisionId ? decisionType + ':' + decisionId : '';
+      decisionNotice.hidden = true;
+      revealDecision();
       pendingMessage = route.query.get('favorite') || route.query.get('at') || '';
       markedMessage?.classList.remove('is-search-hit');
       if (pendingMessage) revealMessage();
@@ -346,7 +348,7 @@ export function createChatPage({ api, store, scope, router }) {
       }
       code.show(scope.get());
       attention.update(items);
-      revealApproval();
+      revealDecision();
       renderBanner(state); renderSetup(state); renderRuns(state);
       recent.update(state);
       const list = state.messages ?? [];

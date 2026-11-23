@@ -7,3 +7,7 @@ export type ExecutionProgress = {
   recentSteps?: string[];
   observedAt: string;
 };
+
+export interface RunBlocker {
+  id: string; kind: string; title: string; version: number; createdAt: string; href: string;
+}

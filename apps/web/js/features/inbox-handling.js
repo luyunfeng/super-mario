@@ -179,6 +179,8 @@ export function openInboxHandlingDrawer({ api, store, source }) {
           item.status === 'submitted' && item.approvalStatus === 'pending' && h('a', { href: '#chat?approval=' + encodeURIComponent(item.approvalId), onClick: () => drawer.close() }, '去对话审批')),
         item.run && h('p', null, '派发执行 · ' + (runStatus[item.run.status]?.text || '状态未确认') + ' · ',
           h('a', { href: item.run.webPath, onClick: () => drawer.close() }, '查看实际执行记录')),
+        item.run?.blockedBy?.length > 0 && h('ul', { 'aria-label': '执行待处理事项' }, item.run.blockedBy.map(request =>
+          h('li', null, h('a', { href: request.href, onClick: () => drawer.close() }, request.title)))),
         item.result?.runId && !item.run && h('p', { class: 'small muted' }, '当前无法核对这次派发的执行记录。'),
         item.result?.todoId&&h('p',null,`已关联待办：${item.result.todoId}`),
         item.delivery && h('p', null, '回复投递 · ' + ({ sent: '已发送', pending: '等待确认', failed: '发送失败', unknown: '结果未知' }[item.delivery.status] || '未确认')),

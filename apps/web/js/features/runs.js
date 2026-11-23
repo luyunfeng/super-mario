@@ -49,7 +49,7 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       observationsError ? h('p', { class: 'small muted', role: 'status' }, observationsError)
         : !observations ? h('p', { class: 'small muted' }, '正在读取阻塞项…')
           : observations.blockedBy.length ? h('ul', null, observations.blockedBy.map(item => h('li', null,
-            h('a', { href: item.href === '#chat' ? item.href : '#chat' }, item.title),
+            h('a', { href: /^#chat\?(interaction|approval)=[A-Za-z0-9_-]+$/.test(item.href) ? item.href : '#chat' }, item.title),
             h('span', { class: 'small muted' }, ` · ${formatDate(item.createdAt, true)}`))))
             : h('p', { class: 'small muted' }, '没有待你处理的阻塞项。'));
   }

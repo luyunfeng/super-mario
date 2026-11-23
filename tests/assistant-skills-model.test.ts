@@ -2391,11 +2391,12 @@ test('Web 主对话绑定项目及飞书项目助手只查看该项目的整理�
 
 test('Web 与飞书项目对话读取原收件的失败派发，不重复执行', async t => {
   let adapter!: FeishuOptions, sourceId = '', executorCalls = 0;
-  const sent: string[] = [], summary = '这次派发已获批，执行失败。';
+  const sent: string[] = [], summary = '这次派发执行失败，仍有一项待处理：是否补充材料。';
   const { server, api, ask } = await fixture(t, req => {
     if (req.lastRole === 'user') {
       assert.ok(req.tools.includes('inbox_handling_read'));
       assert.match(req.system, /查对应建议版本的 run.status/);
+      assert.match(req.system, /按 run.blockedBy 列出仍开放的问题或审批标题/);
       return call('inbox_handling_read', { kind: 'personal', id: sourceId }, 'dispatch-status');
     }
     const raw = typeof req.content === 'string' ? req.content : (req.content as {text:string}[])[0].text;
@@ -2403,6 +2404,7 @@ test('Web 与飞书项目对话读取原收件的失败派发，不重复执行'
     assert.equal(suggestion.approvalStatus, 'completed');
     assert.equal(suggestion.run.status, 'failed');
     assert.equal(suggestion.run.id, suggestion.result.runId);
+    assert.deepEqual(suggestion.run.blockedBy.map((item: { title: string }) => item.title), ['是否补充材料']);
     return { role: 'assistant', content: summary };
   }, options => {
     adapter = options;
@@ -2422,7 +2424,9 @@ test('Web 与飞书项目对话读取原收件的失败派发，不重复执行'
     const approval = await api(route + '/' + suggestion.id + '/confirm', { version: suggestion.version, sourceVersion: source.version });
     const receipt = await api('/approvals/' + approval.id + '/approve', { version: approval.version });
     await t.waitFor(() => assert.equal(server.app.store.get<{status:string}>('runs', receipt.result.runId)?.status, 'failed'));
-    const question = '原收件派出去的工作进展如何？';
+    const followUp = server.app.approvals.propose({ kind: 'input', title: '是否补充材料', details: '待用户决定',
+      params: { id: receipt.result.runId, text: '补充材料' } });
+    const question = '原收件派出去的工作进展如何，有没有需要我处理的问题？';
     assert.equal(await ask(question, '/projects/' + project.id + '/messages'), summary);
     const bot = await api('/feishu/bots', { name: '派发核对', appId: 'cli_4444444444444444', appSecret: 'offline-fixture',
       scope: { kind: 'project', projectId: project.id }, requireConfirmation: false });
@@ -2430,6 +2434,7 @@ test('Web 与飞书项目对话读取原收件的失败派发，不重复执行'
     await adapter.onMessage(bot.pairingCode, { ...origin, messageId: 'pair' });
     await adapter.onMessage(question, { ...origin, messageId: 'status' });
     await t.waitFor(() => assert.ok(sent.includes(summary)));
+    assert.equal(server.app.approvals.list().find(a => a.id === followUp.id)?.status, 'pending');
     assert.equal(executorCalls, 1);
   } finally { await server.close(); }
 });
