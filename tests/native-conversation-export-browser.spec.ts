@@ -28,8 +28,11 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
     { type: 'response_item', payload: { type: 'message', role: 'user', content: [
       { type: 'input_text', text: '合成 Codex 请求' }, { type: 'input_image', image_url: 'data:image/png;base64,' + image },
     ] } },
-    { type: 'response_item', payload: { type: 'function_call', name: 'fixture_lookup', arguments: '{"query":"参数标记"}' } },
-    { type: 'response_item', payload: { type: 'function_call_output', output: '工具输出标记' } },
+    { type: 'response_item', payload: { type: 'function_call', name: 'fixture_lookup', call_id: 'private-call', arguments: '{"query":"参数标记"}' } },
+    { type: 'response_item', payload: { type: 'custom_tool_call', name: 'fixture_custom', call_id: 'shared-id' } },
+    { type: 'response_item', payload: { type: 'custom_tool_call', name: 'fixture_reused', call_id: 'shared-id' } },
+    { type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'shared-id', output: '工具输出标记' } },
+    { type: 'response_item', payload: { type: 'function_call_output', call_id: 'private-call', output: '工具输出标记' } },
     { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '合成 Codex 最终回复' }] } },
   ]);
   await writeJsonLines(join(home, '.claude/projects/beta', claudeId + '.jsonl'), [
@@ -38,11 +41,14 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
     ] } },
     { sessionId: claudeId, cwd: claudeCwd, type: 'assistant', message: { content: [
       { type: 'text', text: '准备读取' }, { type: 'thinking', thinking: '内部推理标记' },
-      { type: 'tool_use', name: 'fixture_read', input: { path: '参数标记' } }, { type: 'text', text: '读取结束' },
+      { type: 'tool_use', id: 'private-read', name: 'fixture_read', input: { path: '参数标记' } }, { type: 'text', text: '读取结束' },
     ] } },
+    { sessionId: claudeId, type: 'assistant', message: { content: [{ type: 'tool_use', id: 'done-id', name: 'fixture_done' }] } },
+    { sessionId: claudeId, isSidechain: true, type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'private-read', is_error: false }] } },
+    { sessionId: claudeId, type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'done-id', is_error: false }] } },
     { sessionId: 'foreign-session', type: 'assistant', message: { content: '其他会话标记' } },
     { sessionId: claudeId, isSidechain: true, type: 'assistant', message: { content: '子会话标记' } },
-    { sessionId: claudeId, type: 'user', message: { content: [{ type: 'tool_result', content: '工具输出标记' }] } },
+    { sessionId: claudeId, type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'private-read', is_error: true, content: '工具输出标记' }] } },
     { sessionId: claudeId, type: 'assistant', message: { content: '合成 Claude 最终回复' } },
   ]);
   const token = 'isolated-export-browser', machineId = 'history-fixture';
@@ -126,11 +132,17 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
     await expect(drawer.getByRole('status')).toContainText(bytes + ' 字节');
     assert.ok(body.includes('合成 ' + source + ' 请求'));
     assert.ok(body.includes('图像附件'));
-    assert.match(body, /<details><summary>公开工作步骤<\/summary>\s+> 工具调用：fixture_\w+\s+<\/details>/u);
+    assert.match(body, /<details><summary>公开工作步骤<\/summary>\s+> 工具调用：fixture_\w+ · (?:已返回结果|失败)\s+<\/details>/u);
     if (id === claudeId) {
-      assert.match(body, /准备读取\s+<details>[^]*?fixture_read\s+<\/details>\s+读取结束/u);
+      assert.match(body, /准备读取\s+<details>[^]*?fixture_read · 失败\s+<\/details>\s+读取结束/u);
       assert.match(body, /共 3 条消息/);
     }
+    if (id === codexId) {
+      assert.match(body, /fixture_lookup · 已返回结果/);
+      assert.match(body, /fixture_custom · 结果无法唯一对应/);
+      assert.match(body, /fixture_reused · 结果无法唯一对应/);
+    } else assert.match(body, /fixture_done · 成功/);
+    assert.doesNotMatch(body, /private-call|private-read/);
     assert.ok(!body.includes(image.slice(0, 40)));
     assert.ok(!body.includes('合成 ' + other));
     assert.doesNotMatch(body, /data:image|工具输出标记|参数标记|内部推理标记|其他会话标记|子会话标记/);
@@ -146,7 +158,7 @@ test('CLI 历史导出通过只读 RPC 读取选定会话，过滤内部数据�
   await rows.filter({ hasText: claudeId }).getByRole('button', { name: '导出对话', exact: true }).click();
   await expect(drawer.getByRole('status')).toHaveText('暂无可导出的消息');
   await drawer.getByRole('checkbox', { name: '包含公开工作步骤' }).check();
-  await expect(preview).toContainText('工具调用：only_public_step');
+  await expect(preview).toContainText('工具调用：only_public_step · 未记录结果');
   await expect(preview).not.toContainText('参数标记');
   await expect(drawer.getByRole('status')).toContainText('共 0 条消息');
   await expect(drawer.getByRole('button', { name: '下载 .md' })).toBeEnabled();

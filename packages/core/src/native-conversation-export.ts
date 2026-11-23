@@ -7,16 +7,19 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+type ToolStep = { name: string; result: '未记录结果' | '已返回结果' | '失败' | '成功' | '结果无法唯一对应' };
+type Part = string | ToolStep;
+
 // Tool names reach the export only after the public-name check below.
-function toolBlock(name: string) {
-  return '<details><summary>公开工作步骤</summary>\n\n> 工具调用：' + name + '\n\n</details>';
+function toolBlock(step: ToolStep) {
+  return '<details><summary>公开工作步骤</summary>\n\n> 工具调用：' + step.name + ' · ' + step.result + '\n\n</details>';
 }
 
 /** Read an already persisted session through the node's exact, read-only lookup. */
 async function readConversation(
   machines: MachineClient | undefined, source: NativeExportSource, signal: AbortSignal,
-  message: (index: number, role: 'user' | 'assistant', text: string, createdAt: string | null, raw: unknown) => void,
-  tool?: (name: string) => void,
+  message: (index: number, role: 'user' | 'assistant', parts: Part[], createdAt: string | null, raw: unknown) => void,
+  tool?: (step: ToolStep) => void,
 ) {
   const { machineId, executorId, nativeSessionId, cwd } = source;
   const machine = machines?.list().find(item => item.id === machineId && item.online);
@@ -25,6 +28,23 @@ async function readConversation(
   let count = 0;
   function publicToolName(value: unknown): value is string {
     return typeof value === 'string' && /^[\w.:-]{1,80}$/.test(value);
+  }
+  // Keep references to public steps so a later receipt can update the original position.
+  const calls = new Map<string, ToolStep>();
+  function observeCall(name: string, kind: string, id: unknown) {
+    const step: ToolStep = { name, result: '未记录结果' };
+    if (typeof id === 'string' && id) {
+      const key = kind + ':' + id, previous = calls.get(key);
+      if (previous) previous.result = step.result = '结果无法唯一对应';
+      calls.set(key, step);
+    }
+    return step;
+  }
+  function observeResult(kind: string, id: unknown, isError?: unknown) {
+    if (typeof id !== 'string' || !id) return;
+    const step = calls.get(kind + ':' + id);
+    if (step) step.result = step.result !== '未记录结果' ? '结果无法唯一对应'
+      : isError === true ? '失败' : isError === false ? '成功' : '已返回结果';
   }
   await readNativeRecords((offset, snapshot) => {
     const current = machines.list().find(item => item.id === machineId);
@@ -39,7 +59,12 @@ async function readConversation(
       if (row.type === 'session_meta' && record(row.payload).id !== nativeSessionId) throw new Error('会话标识已改变');
       if (row.type !== 'response_item') return;
       const payload = record(row.payload);
-      if ((payload.type === 'function_call' || payload.type === 'custom_tool_call') && publicToolName(payload.name)) tool?.(payload.name);
+      if (tool && (payload.type === 'function_call' || payload.type === 'custom_tool_call') && publicToolName(payload.name)) {
+        tool(observeCall(payload.name, payload.type, payload.call_id));
+      }
+      if (tool && (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output')) {
+        observeResult(payload.type.slice(0, -'_output'.length), payload.call_id);
+      }
       if (payload.type !== 'message') return;
       role = payload.role; content = payload.content;
     } else {
@@ -47,8 +72,7 @@ async function readConversation(
       role = row.type; content = record(row.message).content;
     }
     if (role !== 'user' && role !== 'assistant') return;
-    const paragraphs: string[] = [];
-    const steps: string[] = [];
+    const paragraphs: Part[] = [];
     let hasMessage = false;
     function appendText(text: string) {
       paragraphs.push(text);
@@ -59,18 +83,18 @@ async function readConversation(
       const block = record(item);
       if (['input_text', 'output_text', 'text'].includes(String(block.type)) && typeof block.text === 'string') appendText(block.text);
       if (['input_image', 'output_image', 'image'].includes(String(block.type))) appendText('[图像附件]');
+      if (tool && role === 'user' && block.type === 'tool_result') observeResult('tool_use', block.tool_use_id, block.is_error);
       if (tool && role === 'assistant' && block.type === 'tool_use' && publicToolName(block.name)) {
         // Mixed records retain their block order under a single message heading.
-        steps.push(block.name);
-        paragraphs.push('\n' + toolBlock(block.name) + '\n');
+        paragraphs.push(observeCall(block.name, 'tool_use', block.id));
       }
     }
     if (!hasMessage) {
-      for (const name of steps) tool?.(name);
+      for (const part of paragraphs) if (typeof part !== 'string') tool?.(part);
       return;
     }
     const at = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
-    message(count++, role, paragraphs.join('\n'), Number.isFinite(at) ? new Date(at).toISOString() : null, row);
+    message(count++, role, paragraphs, Number.isFinite(at) ? new Date(at).toISOString() : null, row);
   }, signal);
   return count;
 }
@@ -79,14 +103,14 @@ export async function readNativeFavoritePage(
   machines: MachineClient | undefined, source: NativeExportSource, offset: number, signal: AbortSignal,
 ) {
   const items: NativeFavoriteMessage[] = [];
-  const total = await readConversation(machines, source, signal, (index, role, text, createdAt, raw) => {
+  const total = await readConversation(machines, source, signal, (index, role, parts, createdAt, raw) => {
     if (index < offset || index - offset >= 25) return;
     // Bind positional records to their source and content. A replacement at
     // the same index must never inherit the original favorite's identity.
     const fingerprint = createHash('sha256').update(JSON.stringify([
       source.machineId, source.executorId, source.nativeSessionId, source.cwd, index, raw,
     ])).digest('hex');
-    items.push({ index, fingerprint, role, text, createdAt });
+    items.push({ index, fingerprint, role, text: parts.join('\n'), createdAt });
   });
   return { items, total };
 }
@@ -95,12 +119,14 @@ export async function exportNativeConversation(
   machines: MachineClient | undefined, source: NativeExportSource, includeWork: boolean, signal: AbortSignal,
 ) {
   const { machineId, executorId, nativeSessionId, cwd } = source;
-  const lines: string[] = [];
-  const count = await readConversation(machines, source, signal, (_, role, text, at) => {
-    lines.push('## ' + (role === 'user' ? '用户' : 'Agent 回复') + (at ? ' · ' + at : ''), '', text, '');
-  }, includeWork ? name => lines.push(toolBlock(name), '') : undefined);
+  const lines: Part[] = [];
+  const count = await readConversation(machines, source, signal, (_, role, parts, at) => {
+    lines.push('## ' + (role === 'user' ? '用户' : 'Agent 回复') + (at ? ' · ' + at : ''), '');
+    for (const part of parts) lines.push(part);
+    lines.push('');
+  }, includeWork ? step => lines.push(step, '') : undefined);
   const stem = Array.from(nativeSessionId.replace(/[^\p{L}\p{N}_-]+/gu, '-')).slice(0, 48).join('');
   return { filename: `super-mario-${executorId}-${stem}.md`, count, hasContent: lines.length > 0, markdown: [
-    '# 原生会话 · ' + executorId, '', '会话：' + nativeSessionId, '电脑：' + machineId, '目录：' + cwd, '导出时间：' + new Date().toISOString(), '', `共 ${count} 条消息`, '', ...lines,
+    '# 原生会话 · ' + executorId, '', '会话：' + nativeSessionId, '电脑：' + machineId, '目录：' + cwd, '导出时间：' + new Date().toISOString(), '', `共 ${count} 条消息`, '', lines.map(part => typeof part === 'string' ? part : '\n' + toolBlock(part) + '\n').join('\n'),
   ].join('\n') };
 }
