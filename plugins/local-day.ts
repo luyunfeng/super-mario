@@ -12,6 +12,10 @@ export function validateLocalDay(day: unknown, label: string): asserts day is st
 export function localDayFormatter(day: unknown, timeZone: unknown, label: string) {
   if (day === undefined && timeZone === undefined) return undefined;
   validateLocalDay(day, label);
+  return calendarDayFormatter(timeZone, label);
+}
+
+export function calendarDayFormatter(timeZone: unknown, label: string) {
   if (typeof timeZone !== 'string' || !timeZone.trim()) invalid('按当地日期查询须提供时区');
   try {
     return new Intl.DateTimeFormat('sv-SE', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });

@@ -126,6 +126,11 @@ test('todo agenda uses a half-open local date window and keeps undated todos in 
   assert.equal((await list.execute({ hasDueDate: true }, signal()) as unknown[]).length, 3);
   await assert.rejects(list.execute({ hasDueDate: false, overdue: true }, signal()), /无截止日期/);
   await assert.rejects(list.execute({ order: 'unknown' }, signal()), /排序/);
+  t.mock.timers.enable({apis:['Date'], now:new Date('2026-03-08T12:00Z')});
+  host.store.put('todos','all-day',{id:'all-day',projectId:'calendar',dueDay:'2026-03-08',dueAt:'2026-03-09T11:59:59.999Z'});
+  const overdue = {projectId:'calendar', overdue:true};
+  assert.equal((await list.execute({...overdue,timeZone:'Pacific/Kiritimati'}, signal()) as unknown[]).length, 1);
+  assert.deepEqual(await list.execute({...overdue,timeZone:'UTC'}, signal()), []);
   const early = { id: 'early', projectId: 'sorted', dueAt: '2026-03-08T06:00Z', updatedAt: '2026-03-07T20:00Z' };
   host.store.put('todos', early.id, early);
   host.store.put('todos', 'recent', { ...early, id: 'recent', dueAt: undefined, updatedAt: '2026-03-08T12:00Z' });

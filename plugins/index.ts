@@ -1,6 +1,6 @@
 export {webConversationsExtension, webConversationMatches, independentWebSource, requireWebConversationHistory, readWebConversationExport, eraseWebConversationRegistration} from './web-conversations.ts';
 import { readTodayBrief, type TodayBriefSources } from './today-brief.ts';
-import { localDayFormatter, validateLocalDay } from './local-day.ts';
+import { calendarDayFormatter, localDayFormatter, validateLocalDay } from './local-day.ts';
 import { scheduledWorkTemplates } from './scheduled-work-templates.ts';
 import { setTimeout } from 'node:timers/promises';
 import type { Executor, Extension, ExtensionContext, KnowledgeBackend, KnowledgeQuery, Tool } from '../packages/plugin-sdk/src/index.ts';
@@ -426,7 +426,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           const before = timeBoundary(args.dueBefore, Infinity);
           if (from >= before) throw new Error('待办查询起点必须早于终点');
           const bounded = args.dueFrom !== undefined || args.dueBefore !== undefined;
-          const dayFormat = localDayFormatter(args.dueDay, args.timeZone, '截止日期');
+          const dayFormat = localDayFormatter(args.dueDay, args.overdue && args.dueDay === undefined ? undefined : args.timeZone, '截止日期');
           const firstDay = typeof args.dueDay === 'string' ? args.dueDay : '';
           let lastDay = firstDay;
           if (args.dueThroughDay !== undefined) {
@@ -436,6 +436,8 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           }
           if (args.hasDueDate === false && (bounded || dayFormat || args.overdue === true)) throw new Error('无截止日期不能与截止时段或逾期条件组合');
           const now = Date.now();
+          const today = args.overdue ? (dayFormat ?? calendarDayFormatter(args.timeZone ??
+            context.store.get<{timezone?:string}>('briefing.settings', 'default')?.timezone ?? 'Asia/Shanghai', '逾期日期')).format(now) : '';
           const todos = candidates.filter(todo => {
             if (args.reminderStatus === 'pending' && (!todo.reminderAt || todo.completedAt || todo.remindedAt)) return false;
             if (args.reminderStatus === 'triggered' && (!todo.reminderAt || !todo.remindedAt)) return false;
@@ -458,7 +460,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
               const day = todo.dueDay ?? dayFormat.format(due).padStart(10, '0');
               if (day < firstDay || day > lastDay) return false;
             }
-            if (args.overdue && (todo.completedAt || !(due < now))) return false;
+            if (args.overdue && (todo.completedAt || !(todo.dueDay ? todo.dueDay < today : due < now))) return false;
             if (bounded && !(due >= from && due < before)) return false;
             if (pageSearch) {
               const session = todo.responsibleSession;
@@ -497,7 +499,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           status: { type: 'string', enum: ['open', 'done', 'all'] }, overdue: { type: 'boolean' },
           dueDay: { type: 'string', description: '按当地日期匹配截止时间，格式 YYYY-MM-DD，与 timeZone 同传' },
           dueThroughDay: { type: 'string', description: '选查多天时的最后一天，含当天，与起始日期 dueDay 和 timeZone 同传' },
-          timeZone: { type: 'string', description: 'dueDay 对应的 IANA 时区，如 Asia/Shanghai' },
+          timeZone: { type: 'string', description: '日期查询或全天逾期判断使用的 IANA 时区，如 Asia/Shanghai' },
           dueFrom: { type: 'string', description: '含起点，带时区的 ISO 时间' }, dueBefore: { type: 'string', description: '不含终点，带时区的 ISO 时间' } }));
         const runStates = ['queued', 'running', 'completed', 'failed', 'cancelled', 'unknown'];
         context.contribute('tools', 'runs_list', tool('runs_list', '查看已派发工作的状态和结果。query 按关键词检索目标、验收标准、输出、错误、分支和执行 ID，返回含出处的摘录，最近更新在前。updatedFrom 含起点，updatedBefore 不含终点，按记录更新时间筛选。用 id 单独读取完整执行记录、最近的公开进展与当前待决定事项 blockedBy。machineId、executorId 精确匹配执行记录登记的 ID。status 可限定登记状态。worktreeRunId 仅列出在指定工作树中另起的执行。', async ({ worktreeRunId, query, queryField, status, id, projectId, todoId, machineId, executorId, nativeSessionId, updatedFrom, updatedBefore }, signal) => {
