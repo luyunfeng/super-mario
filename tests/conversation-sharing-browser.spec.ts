@@ -7,13 +7,13 @@ import {chromium,expect} from '@playwright/test';
 import {startServer} from '../apps/server/src/index.ts';
 import type {Message} from '../packages/protocol/src/index.ts';
 
-test('工作台选择并预览摘录，匿名只读页仅展示所选正文，撤销后无法再读', {timeout:35000},async t=>{
+test('工作台预览并更新摘录，原匿名链接只显示已确认的版本，撤销后无法再读', {timeout:35000},async t=>{
   const dataDir=await mkdtemp(join(tmpdir(),'mario-share-browser-'));
   const token='synthetic-workbench-private';
   const server=await startServer({host:'127.0.0.1',port:0,dataDir,token,demo:true});
   t.after(async()=>{try{await server.close();}finally{await rm(dataDir,{recursive:true,force:true});}});
-  const shared='合成公开结论\n<img src="https://example.invalid/picture.png">',privateText='合成内部备注，不在本次公开范围';
-  for(const text of [shared,privateText]){
+  const shared='合成公开结论\n<img src="https://example.invalid/picture.png">',replacement='合成修订结论：延期至周五复核。',privateText='合成内部备注，不在本次公开范围';
+  for(const text of [shared,replacement,privateText]){
     const response=await fetch(server.url+'/api/v1/messages',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
       body:JSON.stringify({text})});
     assert.equal(response.status,202);const source=await response.json();
@@ -39,6 +39,7 @@ test('工作台选择并预览摘录，匿名只读页仅展示所选正文，�
   assert.equal(url.search,'');assert.match(url.hash,/^#[a-zA-Z0-9_-]{43}$/);
   const anonymous=await browser.newContext();
   const reader=await anonymous.newPage();
+  await reader.clock.install();
   const requests:{path:string;auth?:string;referrer?:string;cookie?:string;data:string|null}[]=[];
   await anonymous.route('**/*',async route=>{
     const req=route.request(),target=new URL(req.url()),headers=await req.allHeaders();
@@ -62,6 +63,40 @@ test('工作台选择并预览摘录，匿名只读页仅展示所选正文，�
   const publicRead=requests.filter(r=>r.path==='/api/v1/public/conversation-share');
   assert.equal(publicRead.length,1);assert.deepEqual(JSON.parse(publicRead[0].data!),{token:url.hash.slice(1)});
   assert.equal(publicRead[0].auth,undefined);assert.equal(publicRead[0].referrer,undefined);assert.equal(publicRead[0].cookie,undefined);
+  await manager.getByRole('button',{name:'关闭',exact:true}).click();
+  const open=owner.getByRole('button',{name:'分享对话摘录',exact:true});
+  await open.click();
+  await manager.getByRole('button',{name:'修改分享',exact:true}).click();
+  const originalChoice=manager.getByRole('checkbox',{name:/选择消息.*合成公开结论/}).first();
+  const replacementChoice=manager.getByRole('checkbox',{name:/选择消息.*合成修订结论/}).first();
+  await expect(originalChoice).toBeChecked();
+  await originalChoice.uncheck();await replacementChoice.check();
+  await manager.getByRole('button',{name:'预览公开内容',exact:true}).click();
+  await expect(preview.locator('pre')).toHaveCount(1);
+  await expect(preview.locator('pre')).toHaveText(replacement);
+  await expect(preview).not.toContainText(shared);await expect(preview).not.toContainText(privateText);
+  async function poll(){
+    const response=reader.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/public/conversation-share' && r.request().postDataJSON().knownRevision===1);
+    await reader.clock.fastForward(30000);
+    return (await response).json();
+  }
+  const unchanged=await poll();
+  assert.equal(unchanged.revision,1);assert.equal(unchanged.unchanged,true);assert.equal(unchanged.messages,undefined);
+  await expect(messages.locator('p')).toHaveText(shared);
+  const updated=owner.waitForResponse(r=>r.request().method()==='POST' && r.ok() &&
+    new URL(r.url()).pathname==='/api/v1/conversation-shares' && r.request().postDataJSON().action==='update');
+  await manager.getByRole('button',{name:'确认更新分享',exact:true}).click();
+  await updated;
+  const changed=await poll();assert.equal(changed.revision,2);
+  assert.deepEqual(changed.messages,[{role:'user',text:replacement}]);
+  await expect(reader).toHaveURL(url.href);
+  await expect(messages.getByRole('listitem')).toHaveCount(1);
+  await expect(messages.locator('p')).toHaveText(replacement);
+  await expect(reader.locator('body')).not.toContainText(shared);
+  await expect(reader.locator('body')).not.toContainText(privateText);
+  await manager.getByRole('button',{name:'关闭',exact:true}).click();
+  await open.click();
+  await expect(manager.getByRole('button',{name:'修改分享',exact:true})).toHaveCount(1);
   await manager.getByRole('button',{name:'撤销分享',exact:true}).click();
   const revoked=owner.waitForResponse(r=>r.request().method()==='POST' && r.ok() && r.request().postData()?.includes('revoke')===true);
   await owner.getByRole('button',{name:'确认撤销',exact:true}).click();
@@ -70,4 +105,5 @@ test('工作台选择并预览摘录，匿名只读页仅展示所选正文，�
   await expect(reader.getByRole('status')).toContainText('无法读取');
   await expect(messages.getByRole('listitem')).toHaveCount(0);
   await expect(reader.locator('body')).not.toContainText('合成公开结论');
+  await expect(reader.locator('body')).not.toContainText(replacement);
 });

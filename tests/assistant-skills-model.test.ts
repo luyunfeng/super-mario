@@ -4697,6 +4697,7 @@ test('Web 和飞书解释摘录分享的确认步骤及撤销范围', async t =>
   const answer='请在 Web 原对话勾选正文并核对预览，确认后再复制生成的链接。';
   const {server,api,ask}=await fixture(t,req=>{
     assert.match(req.system,/勾选消息，核对预览正文和有效期/);
+    assert.match(req.system,/读者继续使用原链接，默认沿用原到期时间/);
     assert.match(req.system,/已经读走的副本无法收回/);
     assert.match(req.system,/不代为生成、发送链接/);
     assert.ok(!req.tools.some(name=>name.startsWith('conversation_shar')));

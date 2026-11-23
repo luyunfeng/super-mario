@@ -108,10 +108,12 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         res.setHeader('referrer-policy','no-referrer');
         res.setHeader('x-content-type-options','nosniff');
         const input = await body(req,1024);
-        if (Object.keys(input).length !== 1 || typeof input.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(input.token)
+        if (Object.keys(input).some(k=>k!=='token' && k!=='knownRevision')
+            || (input.knownRevision!==undefined && (typeof input.knownRevision!=='number' || !Number.isSafeInteger(input.knownRevision) || input.knownRevision<1))
+            || typeof input.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(input.token)
             || !app.plugins.list().some(p => p.id === 'conversation-sharing' && p.status === 'active'))
           throw new InputError('分享不存在或已失效',404);
-        return json(res,200,await app.plugins.invocations.use('conversation-sharing.read',{token:input.token}));
+        return json(res,200,await app.plugins.invocations.use('conversation-sharing.read',input as JsonObject));
       }
       if (path === '/api/v1/worker-tools/todo-bind-thread' || path === '/api/v1/worker-tools/todo-decisions' || path === '/api/v1/worker-tools/todo-decision-add') {
         if (req.method !== 'POST') throw new InputError('此工具需要 POST', 405);
