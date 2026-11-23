@@ -243,6 +243,8 @@ export function compareRuns({ run, runs, projectId, router, executorName, api, s
         item.commitChanges.files > 0 && Button({ label: '查看文件差异', size: 'sm', onClick: () => openCommitDiff({ item, api, store, router }) }))
         : h('span', { class: 'muted small' }, '目录内已提交差异：未上报'),
       item.worktree?.name && h('div', null, '工作树：', item.worktree.name),
+      item.worktree?.branch && !item.worktree.removedAt && Button({ label: '检查此执行的工作树', size: 'sm',
+        onClick: () => openWorktreeStatus({ item, api, store, router }) }),
       item.worktree?.base && h('div', { class: 'small' }, '工作树起点：', h('code', { title: item.worktree.base }, item.worktree.base.slice(0, 10))),
       item.cwd && h('div', null, '工作目录：', item.cwd),
       item.doneWhen && h('div', null, '完成标准：', item.doneWhen),

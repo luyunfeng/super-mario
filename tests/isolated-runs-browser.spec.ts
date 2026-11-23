@@ -123,6 +123,12 @@ test('Web and HTTP launch overlapping tasks in separate Git branches from a dirt
   const peer = runs.find(run => run.id !== first.id)!;
   await page.getByLabel('选择对比执行').selectOption(peer.id);
   await expect(page.getByRole('region', { name: '执行对比' }).getByText('工作树：接口修订')).toBeVisible();
+  const peerCard = page.getByRole('region', {name:'执行对比'}).getByRole('article').last();
+  await peerCard.getByRole('button', {name:'检查此执行的工作树'}).click();
+  const peerTree = page.getByRole('dialog', {name:'工作树状态'});
+  await expect(peerTree).toContainText(peer.cwd!);
+  await peerTree.getByRole('button', {name:'关闭',exact:true}).click();
+  await expect(peerCard).toBeVisible();
   await page.getByRole('link', { name: '关闭对比' }).click();
   assert.equal((await rename('陈旧请求', '')).status, 409);
   assert.equal((await rename('   ', '接口修订')).status, 400);
