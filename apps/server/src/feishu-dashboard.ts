@@ -11,25 +11,54 @@ type DashboardApp = Pick<FeishuBotsApp, 'store' | 'projectWorkspace' | 'agentSes
 export type DashboardView = 'home' | 'tasks' | 'inbox' | 'projects' | 'questions';
 const label = (value: string, max = 100) => value.replace(/\s+/g, ' ').trim().slice(0, max);
 
+const dashboardAliases = new Map(Object.entries({
+  dashboard: 'home', home: 'home', 工作台: 'home', 主页: 'home',
+  tasks: 'tasks', 进展: 'tasks', 总览: 'tasks', inbox: 'inbox', 收件箱: 'inbox',
+  main: 'main', 主对话: 'main', list: 'conversations', 对话: 'conversations',
+  status: 'status', 状态: 'status', today: 'today', 今日: 'today', 今天: 'today', help: 'help', 帮助: 'help',
+} as const));
+
 // Match the whole message so commands embedded in a question stay in the conversation.
 export function dashboardCommand(text: string) {
-  switch (text.trim().replace(/^／/u, '/').toLowerCase()) {
-    case '工作台': case '/dashboard': case '/home': case '/工作台': case '/主页': return 'home';
-    case '/tasks': case '/进展': case '/总览': return 'tasks';
-    case '/inbox': case '/收件箱': return 'inbox';
-    case '/main': case '/主对话': return 'main';
-    case '/list': case '/对话': return 'conversations';
-    case '/status': case '/状态': return 'status';
-    case '/today': case '/今日': case '/今天': return 'today';
-    case '/help': case '/帮助': return 'help';
-  }
+  const value = text.trim().toLowerCase();
+  if (value === '工作台') return 'home';
+  if (/^[/／]/u.test(value)) return dashboardAliases.get(value.slice(1));
+}
+
+// These common words and CLI commands are legal input even if they resemble a workbench command.
+const literalWords = new Set(['stats', 'man', 'min', 'task', 'session', 'hoe', 'hep', 'lit', 'gent']);
+const scopedCommands = [...dashboardAliases].filter(([, view]) => view === 'status' || view === 'help').map(([name]) => name);
+const globalCommands = [...dashboardAliases.keys(), 'agent', 'agents'];
+
+function isCommandSlip(typed: string, command: string) {
+  // Only a missing letter or a single adjacent transposition qualifies. Check ASCII names only.
+  if (!/^[a-z]+$/.test(command) || Math.abs(typed.length - command.length) > 1) return false;
+  let i = 0;
+  while (i < typed.length && typed[i] === command[i]) i++;
+  if (typed.length === command.length - 1) return typed.slice(i) === command.slice(i + 1);
+  return typed.length === command.length && i + 1 < typed.length && typed[i] === command[i + 1]
+    && typed[i + 1] === command[i] && typed.slice(i + 2) === command.slice(i + 2);
+}
+
+export function privateCommandText(text: string, options: { global: boolean; sessions: boolean }): { text: string; suggestion?: string } {
+  const match = /^(\s*)([/／])([/／]?)([^\s/／]+)(?=\s|$)/u.exec(text);
+  if (!match) return { text };
+  const word = match[4].toLowerCase();
+  const commands = options.global ? (options.sessions ? [...globalCommands, 'sessions'] : globalCommands) : scopedCommands;
+  const known = commands.includes(word);
+  const slips = !known && !literalWords.has(word) ? commands.filter(name => isCommandSlip(word, name)) : [];
+  const suggestion = slips.length === 1 ? '/' + slips[0] : undefined;
+  if (match[3] && (known || suggestion)) return { text: match[1] + text.slice(match[1].length + 1) };
+  if (!match[3] && suggestion && !text.slice(match[0].length).trim()) return { text, suggestion };
+  return { text };
 }
 
 export function dashboardHelp(sessions: boolean, scoped = false) {
   const status = '/status 或 /状态：查看当前会话状态';
   const text = scoped ? status : ['/home 或「工作台」：打开工作台', '/tasks 或 /进展：查看任务进展', '/inbox 或 /收件箱：查看收件',
     '/agents [关键词] 或 /agent：查找执行会话', '/list 或 /对话：列出可切换的对话', '/main 或 /主对话：切回主 Agent', status, '/today 或 /今日、/今天：查看今日简报', ...(sessions ? ['/sessions：查看 CLI 会话'] : []), '/help 或 /帮助：查看命令'].join('\n');
-  return { text, card: cardDocument('工作台命令', cardSection('在此私聊中发送', text)) };
+  const help = text + '\n在工作台对话中发送命令原文可再加一个斜杠，例如 //status。';
+  return { text: help, card: cardDocument('工作台命令', cardSection('在此私聊中发送', help)) };
 }
 
 export function conversationListDashboard(app: DashboardApp, bot: { conversationId: string; id: string; appId: string; revision: number; chatId: string },

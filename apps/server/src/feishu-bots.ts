@@ -6,7 +6,7 @@ import { createHash, randomInt, randomUUID } from 'node:crypto';
 import type { AttentionItem } from '../../../packages/core/src/attention.ts';
 import { chooseCommandTarget, createCommandMentionEvidence, type CommandCandidate, type CommandClassifier, type CommandIdentity, type CommandRoute, type CommandTarget } from './feishu-command-routing.ts';
 import type { Card } from '../../../packages/core/src/interactions.ts';
-import { buildFeishuDashboard, conversationListDashboard, dashboardCommand, dashboardHelp, statusDashboard, todayDashboard, questionForm, type DashboardView } from './feishu-dashboard.ts';
+import { buildFeishuDashboard, conversationListDashboard, dashboardCommand, dashboardHelp, privateCommandText, statusDashboard, todayDashboard, questionForm, type DashboardView } from './feishu-dashboard.ts';
 import { createAgentProgressStream } from './agent-progress-stream.ts';
 import { buildAgentProgressCard } from '../../../plugins/agent-progress-card.ts';
 import { buildFeishuMessageCard, cardButtons, cardDocument, cardPlain } from './feishu-cards.ts';
@@ -636,6 +636,11 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         if (!project || project.archivedAt) throw noDelivery('对话清单中的项目已变化，请重新发送 /list');
       }
     }
+    if (entry.eventKey.startsWith('feishu-command-hint:')) {
+      const paired = owner(bot);
+      if (!paired?.senderId || paired.chatId !== entry.target || stamp?.dashboard?.owner.senderId !== paired.senderId
+        || stamp.dashboard.owner.chatId !== paired.chatId) throw noDelivery('命令提示的配对记录已变化');
+    }
     if (entry.eventKey.startsWith('feishu-status:')) {
       const grant = stamp?.statusGrant, paired = owner(bot);
       if (!grant || !paired?.senderId || paired.chatId !== entry.target || grant.source.chatId !== paired.chatId
@@ -1025,7 +1030,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
         await showToday(bot, epoch, paired, source.messageId);
       return;
     }
-    if (!group && paired?.senderId && source.senderId === paired.senderId && bot.scope.kind === 'global' && app.agentSessions && /^(CLI\s*会话|\/sessions)$/i.test(text.trim())) {
+    if (!group && paired?.senderId && source.senderId === paired.senderId && bot.scope.kind === 'global' && app.agentSessions && /^(CLI\s*会话|[／/]sessions)$/i.test(text.trim())) {
       await showSessionList(bot, epoch, paired, source.messageId);
       return;
     }
@@ -1042,6 +1047,42 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       return;
     }
     const inboxEventKey = 'feishu-in:' + JSON.stringify([bot.id, bot.appId, source.messageId]);
+    if (!group && paired?.senderId && source.senderId === paired.senderId && source.senderType === 'user') {
+      const parsed = privateCommandText(text, { global: bot.scope.kind === 'global', sessions: !!app.agentSessions });
+      if (parsed.suggestion || parsed.text !== text) {
+        const hintKey = 'feishu-command-hint:' + JSON.stringify([bot.id, bot.appId, source.messageId]);
+        const entries = app.mailboxes.list();
+        const previous = entries.find(item => item.botId === bot.id && item.direction === 'outbox' && item.eventKey === hintKey);
+        if (previous) {
+          if (previous.status === 'ready' && app.store.get('feishu.bot.envelopes', previous.id))
+            await app.mailboxes.process(previous.id, previous.version);
+          return;
+        }
+        const inbox = entries.find(item => item.botId === bot.id && item.direction === 'inbox' && item.eventKey === inboxEventKey);
+        // A replay follows the decision already made for this platform message.
+        const binding = bot.scope.kind === 'global'
+          ? app.store.get<ChatBinding>('feishu.chat-target', digest([bot.id, source.chatId, source.messageId])) ?? selectedChat(bot, source)
+          : undefined;
+        if (inbox) text = inbox.text;
+        else if (!binding?.agentTarget) {
+          if (parsed.suggestion) {
+            const literal = text.trim().replace(/^[／/]/u, '//');
+            const hint = '要使用 ' + parsed.suggestion + ' 吗？请重新发送该命令。要保留原拼写作为正文，请发送 ' + literal + '。';
+            const scope = bot.scope.kind === 'unmarked' ? { kind: 'global' as const } : bot.scope;
+            const card = cardDocument('命令拼写提示', [{ tag: 'div', text: cardPlain(hint) }]);
+            const entry = await put(bot, { direction: 'outbox', eventKey: hintKey, title: '命令拼写提示', text: hint,
+              target: paired.chatId, sourceMessageId: source.messageId, requiresConfirmation: false }, scope,
+              { dashboard: { owner: paired, card }, platformReplyTo: source.messageId, threadId: source.threadId ?? source.rootId,
+                chatBinding: bot.scope.kind === 'global' ? binding || { projectId: '', revision: bot.revision, senderId: paired.senderId,
+                  expiresAt: Date.now() + 7 * 86400000 } : undefined });
+            const latest = app.mailboxes.list().find(item => item.id === entry.id);
+            if (active(bot.id, epoch, bot.revision) && latest?.status === 'ready') await app.mailboxes.process(latest.id, latest.version);
+            return;
+          }
+          text = parsed.text;
+        }
+      }
+    }
     const threadId = source.threadId ?? source.rootId;
     const context: Omit<Envelope, 'revision'> = group || threadId ? {
       ...(group ? { group: structuredClone(source) } : {}), platformReplyTo: source.messageId, threadId,

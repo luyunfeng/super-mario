@@ -1320,6 +1320,7 @@ test('/agent 搜索按已发现的会话和同台执行记录匹配，待决定�
   const receive = bot.instance.options.onMessage;
   const human = (messageId: string) => ({ ...source(messageId), senderType: 'user' as const });
   await receive('原主对话消息', human('before-selection'));
+  await receive('/stauts', human('hint-before-selection'));
   await receive('/agent ATLAS', human('cwd'));
   const text = JSON.stringify(bot.instance.contexts.at(-1)?.card);
   assert.ok(text.includes('核对索引') && text.includes('等待确认索引'));
@@ -1341,6 +1342,7 @@ test('/agent 搜索按已发现的会话和同台执行记录匹配，待决定�
   assert.notEqual(click('stranger', select).toast?.type, 'success');
   assert.equal(click('human', { ...select, machineId: 'beta', runId: 'wrong' }).toast?.type, 'success');
   await receive('原主对话消息', human('before-selection'));
+  await receive('/stauts', human('hint-before-selection'));
   assert.equal(approvals.list().length, 0);
   await receive('/status', human('selected-status'));
   const status = bot.instance.sent.at(-1)![1];
@@ -1368,9 +1370,13 @@ test('/agent 搜索按已发现的会话和同台执行记录匹配，待决定�
   await receive('引用原执行', { ...human('quoted-input'), parentId: 'agent-status-card' });
   assert.equal(approvals.list().length, 2);
   assert.equal(approvals.list().find(row => row.params.text === '引用原执行')?.params.id, 'working');
+  for (const raw of ['/stauts', '//status']) {
+    await receive(raw, { ...human('agent-literal-' + raw), parentId: 'agent-status-card' });
+    assert.equal(approvals.list().find(row => row.params.text === raw)?.params.id, 'working');
+  }
   f.store.put('machines', 'alpha', { id: 'alpha', name: '电脑-alpha', online: false });
   await receive('电脑刚离线', { ...human('offline-follow'), parentId: 'agent-status-card' });
-  assert.equal(approvals.list().length, 2);
+  assert.equal(approvals.list().length, 4);
   await receive('/agents 不存在的工作', human('empty'));
   assert.doesNotMatch(JSON.stringify(bot.instance.contexts.at(-1)?.card), /核对索引|等待确认索引/);
   assert.deepEqual(f.posts.map(row => row.text), ['原主对话消息']);
@@ -1524,4 +1530,44 @@ test('/status 从所选执行读取公开进展、目标及待决定项，引用
   await assert.rejects(receive('/状态', { ...human('stale-before-send'), parentId: 'old-status' }), /状态回执/);
   assert.equal(bot.instance.sent.length, sentCount);
   assert.equal(f.posts.length, 0);
+});
+
+test('主人私聊只提示可用命令的拼写，双斜杠原文和普通 CLI 输入分别进入对应会话', async t => {
+  const f = fixture(t), bot = await f.add('SlashHints');
+  const receive = bot.instance.options.onMessage;
+  const human = (id: string) => ({ ...source(id), senderType: 'user' as const });
+  await receive('/stauts', human('unpaired'));
+  await bot.pair();
+  await receive('/stauts', { ...human('other'), senderId: 'stranger' });
+  await receive('/stauts', { ...human('group'), chatType: 'group' });
+  assert.deepEqual(bot.instance.sent, []);
+  await Promise.all([receive('/stauts', human('typo')), receive('/stauts', human('typo'))]);
+  assert.equal(bot.instance.sent.length, 1);
+  assert.match(bot.instance.sent[0][1], /\/status/);
+  assert.equal(f.mailboxes.list().some(entry => entry.direction === 'inbox' && entry.sourceMessageId === 'typo'), false);
+  assert.equal(f.posts.length, 0);
+
+  const examples = [
+    ['//status', '/status'], ['//StaTus  两个  参数\n第二行', '/StaTus  两个  参数\n第二行'],
+    ['//stauts', '/stauts'], ['//状态', '/状态'], ['/stauts 的含义', '/stauts 的含义'],
+    ['/stats', '/stats'], ['/man', '/man'], ['/lint', '/lint'], ['//example.com/path', '//example.com/path'],
+    ['// TODO', '// TODO'], ['文字中 /stauts', '文字中 /stauts'],
+  ];
+  for (const [i, [input, expected]] of examples.entries()) {
+    await receive(input, human('sample-' + i));
+    assert.equal(f.posts.at(-1)?.text, expected);
+  }
+  assert.equal(f.posts.length, examples.length);
+  await f.restart();
+  await f.instances.at(-1)!.options.onMessage('/stauts', human('typo'));
+  assert.equal(f.instances.at(-1)!.sent.length, 0);
+  assert.equal(f.posts.length, examples.length);
+
+  f.store.put('projects', 'scope', { id: 'scope', name: '命令范围' });
+  const scoped = await f.add('SlashScope', { kind: 'project', projectId: 'scope' });
+  await scoped.pair();
+  await scoped.instance.options.onMessage('/stauts', human('scoped-status'));
+  assert.match(scoped.instance.sent.at(-1)?.[1] ?? '', /\/status/);
+  await scoped.instance.options.onMessage('/lits', human('scoped-list'));
+  assert.equal(f.posts.at(-1)?.text, '/lits');
 });

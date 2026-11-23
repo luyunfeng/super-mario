@@ -3001,3 +3001,32 @@ test('Web 和飞书按执行 ID 核对目标、最近观察与仍需用户决定
     assert.deepEqual(store.get('runs', run.id), run);
   } finally { await server.close(); }
 });
+
+test('飞书拼写提示跳过模型，转义命令作为普通正文传给模型', async t => {
+  let adapter!: FeishuOptions;
+  const sent: string[] = [];
+  const answer = '收到讨论命令的正文。';
+  const { server, api, requests } = await fixture(t, () => ({ role: 'assistant', content: answer }), options => {
+    adapter = options;
+    return { async start() {}, async close() {}, status: () => ({ connected: true }), async collect() { return []; },
+      async send(_target, text) { sent.push(text); } };
+  });
+  try {
+    const bot = await api('/feishu/bots', { name: '命令示例', appId: 'cli_3333333333333333', appSecret: 'offline-fixture',
+      scope: { kind: 'global' }, requireConfirmation: false });
+    const source = { chatId: 'owner-chat', senderId: 'owner', senderType: 'user', chatType: 'p2p' } as const;
+    await adapter.onMessage(bot.pairingCode, { ...source, messageId: 'pair' });
+    await adapter.onMessage('/stauts', { ...source, messageId: 'typo' });
+    assert.match(sent.at(-1) ?? '', /\/status/);
+    assert.equal(requests.length, 0);
+    await adapter.onMessage('//status', { ...source, messageId: 'literal' });
+    await t.waitFor(() => assert.ok(sent.includes(answer)));
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].lastRole, 'user');
+    const content = JSON.stringify(requests[0].content);
+    assert.match(content, /\/status/);
+    assert.doesNotMatch(content, /\/\/status|\/stauts/);
+    assert.match(requests[0].system, /作为正文送达的命令拼写不是机器人已执行操作的回执/);
+    assert.deepEqual(server.app.store.list<Message>('messages').filter(message => message.role === 'user').map(message => message.text), ['/status']);
+  } finally { await server.close(); }
+});
