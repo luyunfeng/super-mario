@@ -54,7 +54,7 @@ export type FeishuMailboxInput = Pick<MailboxEntry, 'direction' | 'scope' | 'bot
 type ReviewAnchor = {botId:string;binding:string;runId:string;todoId:string;platformId:string;evidence:string;attempted?:string;confirmed?:string};
 const reviewAnchors='feishu.private-run-review';
 export interface FeishuBotsApp {
-  taskClosure?: {review:{pendingForOwner(id:string):PendingOwnerReview|undefined;decide(input:RunReviewDecision):RunReview}};
+  taskClosure?: {review:{pendingForOwner(id:string):PendingOwnerReview|undefined;pendingForOwnerList():PendingOwnerReview[];decide(input:RunReviewDecision):RunReview}};
   validRunQuestionSource?(card:Card):Message|undefined;
   store: Pick<Store, 'get' | 'put' | 'list' | 'transaction'> & Partial<Pick<Store, 'remove' | 'entries'>>;
   forgetPrivateConversation?(conversationId: string): void;
@@ -1387,6 +1387,7 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
   function cardAction(bot: FeishuBotSettings, epoch: number, input: FeishuCardAction): Record<string, unknown> {
     const fail = { toast: { type: 'info', content: '卡片已过期或配对已改变，请在主人私聊重新发送「工作台」' } };
     const value = input.value;
+    if(closed)return fail;
     if(value.kind==='workbench.runReview'){
       const paired=owner(bot);
       if(!active(bot.id,epoch,bot.revision) || !paired?.senderId || paired.senderId!==input.operatorId || paired.chatId!==input.chatId ||
@@ -3150,8 +3151,10 @@ export function createFeishuBotsController(app: FeishuBotsApp, config: AppConfig
       if (!active(id, epoch, bot.revision)) { if (state.adapter === adapter) state.adapter = undefined; await adapter.close(); }
       else {
         state.readyEpoch = epoch;
-        for(const anchor of app.store.list<ReviewAnchor>(reviewAnchors))if(anchor.botId===bot.id)
-          void track(bot.id,refreshReview(bot,anchor));
+        for(const item of app.taskClosure?.review.pendingForOwnerList() ?? []){
+          const anchor=app.store.get<ReviewAnchor>(reviewAnchors,item.runId);
+          if(anchor?.botId===bot.id)void track(bot.id,refreshReview(bot,anchor));
+        }
         await topicReceipts.retryReady();
         for (const run of app.store.list<Run>('runs')) {
           if (run.status === 'unknown' && run.sourceMessageId?.startsWith('feishu-start:')

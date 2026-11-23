@@ -16,12 +16,13 @@ test('原飞书私聊结果卡可在关联后验收或返工，仅接受当前�
   const previous=process.env.SUPER_MARIO_WEB_URL;
   process.env.SUPER_MARIO_WEB_URL='https://work.example.test';
   t.after(()=>{if(previous===undefined)delete process.env.SUPER_MARIO_WEB_URL;else process.env.SUPER_MARIO_WEB_URL=previous;});
-  const server=await startServer({dataDir,host:'127.0.0.1',port:0,demo:true},{botFactory:opts=>{
+  const start=()=>startServer({dataDir,host:'127.0.0.1',port:0,demo:true},{botFactory:opts=>{
     client=opts;
     return {async start(){},async close(){},async collect(){return [];},status:()=>({connected:true}),
       async send(_target,text,ctx){ctx?.beforeSend?.();const id=randomUUID();sent.push({id,text});ctx?.onSent?.(id,'interactive');},
       async updateCard(id,card,guard){guard?.();updates.push({id,card});}};
   }});
+  let server=await start();
   t.after(async()=>{await server.close();await rm(dataDir,{recursive:true,force:true});});
   const {store,events,taskClosure}=server.app;
   const bot=await server.bots.create({appId:'cli_1212121212121212',appSecret:'synthetic',name:'合成验收',scope:{kind:'global'},requireConfirmation:false});
@@ -81,7 +82,21 @@ test('原飞书私聊结果卡可在关联后验收或返工，仅接受当前�
   c.act(c.accept);
   assert.ok(!store.get<Todo>('todos',c.todo.id)?.completedAt);
   assert.equal(taskClosure.review.get(c.todo.id).round,1);
+  const durable=await finish(false);
   const detached=await finish(false);
+  const oldClient=client;
+  await server.close();
+  const sentBefore=sent.length, updatesBefore=updates.length;
+  server=await start();
+  const stale=oldClient.onCardAction!({operatorId,chatId,messageId:durable.platformId,value:durable.accept});
+  assert.match(JSON.stringify(stale),/卡片已过期/);
+  await t.waitFor(()=>assert.notEqual(client,oldClient));
+  durable.act(durable.accept);
+  assert.equal(server.app.taskClosure.review.get(durable.todo.id).status,'accepted');
+  a.act(a.accept);
+  assert.equal(server.app.taskClosure.review.get(a.todo.id).status,'pending');
+  assert.equal(sent.length,sentBefore);
+  assert.equal(updates.slice(updatesBefore).filter(x=>x.id===detached.platformId).length,0);
   await server.bots.update(bot.id,{enabled:false});
-  detached.act(detached.accept);assert.equal(taskClosure.review.get(detached.todo.id).status,'pending');
+  detached.act(detached.accept);assert.equal(server.app.taskClosure.review.get(detached.todo.id).status,'pending');
 });
