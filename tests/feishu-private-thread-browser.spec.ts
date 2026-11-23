@@ -202,6 +202,15 @@ test('Web 从当前机器人打开独立对话，核对其正文和机器人归�
   await expect(drawer).toContainText('较新的记录 21');
   await expect(marked).toHaveCount(1);
   await drawer.getByRole('button', { name: '返回列表' }).click();
+  await hitButton.click();
+  await drawer.getByRole('textbox', {name:'对话标题'}).fill('待核对的标题草稿');
+  await drawer.getByLabel('新标签', { exact: true }).fill('草稿标签');
+  await page.route('**/threads/*?after=*', route => route.fulfill({status:409, json:{error:'合成分页位置变更'}}), {times:1});
+  await drawer.getByRole('button', {name:'加载后续消息'}).click();
+  await expect(drawer).toContainText('消息位置已变化');
+  await expect(drawer.getByRole('textbox', {name:'对话标题'})).toHaveValue('待核对的标题草稿');
+  await expect(drawer.getByLabel('新标签', { exact: true })).toHaveValue('草稿标签');
+  await drawer.getByRole('button', { name: '返回列表' }).click();
   await expect(drawer.getByRole('textbox', { name: '搜索独立对话' })).toHaveValue(keyword);
   await expect(drawer.getByRole('combobox', { name: '筛选标签' })).toHaveValue('核对标签');
   await drawer.getByRole('button', { name: /核对独立方案/ }).click();

@@ -446,9 +446,9 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
         } })));
     const picker = conversationModelPicker(api, path + '/model', row.title);
     const history = h('div', { class: 'stack' });
-    function showMessagePosition(messageId) {
+    function showMessagePosition(messageId, notice = '') {
       if (!current(id) || edit.disabled) return;
-      void detail(row, '', {
+      return detail(row, notice, {
         title:title.value !== row.title ? title.value : undefined,
         tags:JSON.stringify(tags) !== JSON.stringify(savedTags) ? [...tags] : undefined,
         tagInput:tagInput.value,
@@ -488,7 +488,7 @@ export function openPrivateThreads({ api, bot, store, onClose, target }) {
       } catch (error) {
         if (!current(id) || inaccessible(error)) return;
         if (error.status === 410) return deleted();
-        if (error.status === 409) await detail(row, '消息位置已变化，已重新读取最新消息。');
+        if (error.status === 409) await showMessagePosition(undefined, '消息位置已变化，已重新读取最新消息。');
         else feedback.textContent = error.message;
       }
     } });
