@@ -1,4 +1,5 @@
 // 记忆条目：新增/编辑抽屉和列表行。记忆页和项目的“资料”标签共用。
+import { displaySourceText } from './source-outline.js';
 import { externalSourceLink } from '../lib/markdown.js';
 import { h, replace } from '../lib/dom.js';
 import { appendConversationQuestion, createConversationDrafts } from '../lib/conversation-drafts.js';
@@ -70,31 +71,29 @@ function originalSources(api, entry, selected, line, ask, handoff) {
       const { sources } = await api.get(path);
       replace(body, sources.length ? sources.map(source => {
         const text = h('pre', { class: 'small', style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } });
-        let original;
+        const outline=h('div');
+        let original,read=0;
         const action = h('button', { type: 'button', class: 'btn btn--ghost btn--sm', hidden: true,
           onclick: () => ask(source, original) }, '引用原文追问');
         const notice = h('span', { role: 'status', hidden: true }, '引用的行号超出原文范围。');
-        const detail = h('details', { open: source.id === selected }, h('summary', null, source.title, source.meetingStartedAt && ' · ' + source.meetingStartedAt), notice, text, action);
+        const detail = h('details', { open: source.id === selected }, h('summary', null, source.title, source.meetingStartedAt && ' · ' + source.meetingStartedAt), notice, outline, text, action);
         const sourceLink = source.sourceUrl && externalSourceLink(source.sourceUrl, '打开原始网址');
         if (sourceLink) detail.append(sourceLink);
         if (source.meeting && handoff) detail.append(Button({ label: '准备会议交接稿', size: 'sm', onClick: () => handoff(source) }));
         detail.addEventListener('toggle', async () => {
-          if (!detail.open) return;
-          action.hidden = true;
+          const stamp=++read;
+          outline.replaceChildren();notice.hidden=true;original=undefined;action.hidden=true;
+          if (!detail.open) {text.replaceChildren();return;}
           text.textContent = '正在读取原文…';
           try {
             const { content } = await api.get(path + '/' + encodeURIComponent(source.id));
-            text.textContent = content;
-            original = content; action.hidden = !ask;
-            if (selected !== source.id || !Number.isSafeInteger(line) || line < 1) return;
-            const lines = content.split('\n');
-            if (line > lines.length) { notice.hidden = false; return; }
-            const mark = h('mark', null, lines[line - 1]);
-            replace(text, lines.slice(0, line - 1).join('\n') + (line > 1 ? '\n' : ''), mark,
-              (line < lines.length ? '\n' : '') + lines.slice(line).join('\n'));
-            if (detail.open && section.open && mark.isConnected) mark.scrollIntoView({ block: 'center' });
-          }
-          catch (error) { text.textContent = error.message; }
+            if(stamp!==read || !detail.open || !detail.isConnected) return;
+            original=content;action.hidden=!ask;
+            const citationLine=selected===source.id && Number.isSafeInteger(line) && line>=1 ? line : undefined;
+            const mark=displaySourceText(text,outline,content,citationLine);
+            notice.hidden=!citationLine || Boolean(mark);
+            if(mark && section.open) mark.scrollIntoView({block:'center'});
+          } catch(error) {if(stamp===read && detail.open) text.textContent=error.message;}
         });
         return detail;
       }) : '这条记忆没有关联的整理来源。');
