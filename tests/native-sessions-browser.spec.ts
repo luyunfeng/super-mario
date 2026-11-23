@@ -62,6 +62,11 @@ test('CLI 历史全部展示、只读筛选、窄屏完整路径与页面缓存'
   await expect(card.locator('[data-cli-session]')).toHaveCount(1);
   await expect(card.locator('[data-cli-session]')).toContainText('已归档');
   assert.equal(reads.length, beforeFilter);
+  await card.getByRole('button', { name: '父会话：native-a-0' }).click();
+  await expect(card.locator('[data-cli-session="a-0"]')).toBeFocused();
+  await card.getByRole('button', { name: '子会话：native-a-12' }).click();
+  await expect(card.locator('[data-cli-session="a-12"]')).toBeFocused();
+  assert.equal(reads.length, beforeFilter);
   await archiveFilter.selectOption('');
   await expect(card.locator('[data-cli-session]')).toHaveCount(14);
   const search = page.getByLabel('CLI 会话关键词');

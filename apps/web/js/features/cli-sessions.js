@@ -83,6 +83,27 @@ export function createCliSessions({ api, store, router }) {
     const groups = (data?.machines ?? []).filter(m => !machines.value || machines.value === m.machineId);
     replace(list, groups.map(machine => {
       const rows = machine.sessions.filter(s => (!archiveFilter.value || Boolean(s.archived) === (archiveFilter.value === 'archived')) && `${s.nativeSessionId} ${s.parentNativeSessionId ?? ''} ${s.cwd} ${s.executorId} ${machine.machineName} ${machine.machineId}`.toLowerCase().includes(query));
+      const sessionKey = (executor, id) => JSON.stringify([executor, id]);
+      const byId = new Map(machine.sessions.map(s => [sessionKey(s.executorId, s.nativeSessionId), s]));
+      const children = new Map();
+      for (const child of machine.sessions) {
+        if (!child.parentNativeSessionId || child.nativeSessionId === child.parentNativeSessionId) continue;
+        const key = sessionKey(child.executorId, child.parentNativeSessionId);
+        if (!children.has(key)) children.set(key, []);
+        children.get(key).push(child);
+      }
+      function jump(target) {
+        if (!rows.includes(target)) {
+          keyword.value = '';
+          archiveFilter.value = '';
+          paint();
+        }
+        const group = list.querySelector('[data-cli-machine="' + CSS.escape(machine.machineId) + '"]');
+        group?.querySelector('[data-cli-session="' + CSS.escape(target.id) + '"]')?.focus();
+      }
+      function relation(label, target) {
+        return target && Button({ label: label + '：' + target.nativeSessionId, size: 'sm', onClick: () => jump(target) });
+      }
       const current = store.view.snapshot?.machines?.find(m => m.id === machine.machineId);
       const online = machine.online && (current ? current.online : true);
       return h('section', { class: 'stack', style: wrap, dataset: { cliMachine: machine.machineId } },
@@ -91,7 +112,7 @@ export function createCliSessions({ api, store, router }) {
         (machine.warnings.length > 0 || machine.truncated) && h('details', { class: 'small', style: wrap },
           h('summary', { style: { cursor: 'pointer' } }, machine.truncated ? '结果已截断，展开查看读取说明' : `${machine.warnings.length} 条读取说明`),
           h('ul', {}, machine.warnings.map(warning => h('li', {}, warning)), machine.truncated && h('li', {}, '这里只显示本次已返回的记录。'))),
-        ...rows.map(session => h('article', { class: 'card card--tight', style: wrap, dataset: { cliSession: session.id } },
+        ...rows.map(session => h('article', { class: 'card card--tight', style: wrap, tabindex: -1, dataset: { cliSession: session.id } },
           h('div', { class: 'card__body stack', style: wrap },
             h('div', { class: 'row row--wrap' }, Pill(session.archived ? '已归档' : '历史'), Pill('只读'), text(session.executorId)),
             text(`原生 ID：${session.nativeSessionId}`), text(`目录：${session.cwd}`),
@@ -105,7 +126,9 @@ export function createCliSessions({ api, store, router }) {
                   if (auth === context()) { cache.clear(); await load(true); }
                 } catch (cause) { if (auth === context() && visible()) { error = cause.message; paint(); } }
               } }),
-            session.parentNativeSessionId && text(`父会话：${session.parentNativeSessionId}`),
+            session.parentNativeSessionId && session.parentNativeSessionId !== session.nativeSessionId &&
+              relation('父会话', byId.get(sessionKey(session.executorId, session.parentNativeSessionId))),
+            (children.get(sessionKey(session.executorId, session.nativeSessionId)) ?? []).map(child => relation('子会话', child)),
             session.relatedRunIds.length > 0 && h('div', { class: 'row row--wrap' }, session.relatedRunIds.map(id => Button({ label: `查看关联执行 ${id}`, size: 'sm', onClick: () => router.go(router.href('projects', 'all', 'runs', id)) }))),
             online && ready() && messageFavoritesActive(store) && current?.capabilities?.includes('agents.transcript') &&
               Button({ label: '查看消息', size: 'sm', onClick: () => openNativeMessages({ api, store, native: {
