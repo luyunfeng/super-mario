@@ -62,6 +62,7 @@ import { createProjectFolders } from './project-folders.ts';
 import { createWebPresence } from './web-presence.ts';
 import { createBriefingSettings, heldNotificationRecords, readBriefingSettings } from './briefing.ts';
 import { PURPOSES, PURPOSE_INFO, readFallbacks, readRouting, resolvePurpose, validateRule, type Purpose } from './model-routing.ts';
+import { CHECK_EVERY_MS, createMachineAlerts } from './machine-alerts.ts';
 import { createAgentFollowups } from './followups.ts';
 import { createAutoTakeover } from './auto-takeover.ts';
 import { todoDelegationPrompt, formatProjectInstructions, INBOX_ASSISTANT_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT, PROJECT_LESSON_MODEL_SYSTEM_PROMPT } from './prompts.ts';
@@ -1827,6 +1828,16 @@ export async function createWorkbench(config: AppConfig) {
   const uploadCleanup = setInterval(cleanChatUploads,24*60*60*1000);
   uploadCleanup.unref();
   const expireTimer = setInterval(() => { interactions.expireTick(); recoverPendingRunAnswers(); deferredQuestions.recover(); laterQuestions.recover(); }, 30_000); expireTimer.unref();
+  // Each online computer is read every few minutes for what is worth telling the owner of
+  // before it stops working. A condition is told once, and again only after it went away.
+  const machineAlerts = createMachineAlerts({ store, machines: {
+    list: () => machines?.list() ?? [],
+    call: (id, method, params, options) => {
+      if (!machines) throw new InputError('执行机通道尚未连接', 503);
+      return machines.call(id, method, params, options);
+    },
+  }, notify: input => followups.notifyUser(input) as unknown as Json, enabled: () => readBriefingSettings(store).machineAlerts !== false });
+  const machineAlertTimer = setInterval(() => { void machineAlerts.check().catch(() => {}); }, CHECK_EVERY_MS); machineAlertTimer.unref();
   const awayNotifications = createAwayNotifications({ store, events, background, presence, bots: () => notificationBots(), channel: bot => notificationChannel(bot),
     push: () => plugins.list().some(plugin => plugin.id === 'browser-notifications' && plugin.status === 'active'),
     pushOptions: { ...(config.pushServices && { extraServices: config.pushServices.map(source => new RegExp(source)) }), ...(config.pushFetch && { fetchImpl: config.pushFetch }) } });
@@ -3811,7 +3822,7 @@ export async function createWorkbench(config: AppConfig) {
     setBrowserDeviceInvalidator(handler:(id?:string)=>void) { browserDeviceInvalidator=handler; },
     githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, readInboxMail, downloadInboxMail, setInboxMailFlags, searchMail, mailTool, takeMailAttachment, proposeMail, MAIL_SEND_APPROVAL, readSent,
     mailConnectorView, mailConnectorConfigure, mailPoll: async () => { await plugins.invocations.use(MAIL_POLL_SERVICE, {}); },
-    mailConnectorRetire: retireMail,    setMailOpen(open: OpenImap) { mailOpen = open; }, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, exportRunDiagnostics, modelRoutingStatus, configureModelRouting, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    mailConnectorRetire: retireMail,    setMailOpen(open: OpenImap) { mailOpen = open; }, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, exportRunDiagnostics, modelRoutingStatus, configureModelRouting, machineAlertsCheck: () => machineAlerts.check(), scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {
@@ -4057,7 +4068,7 @@ export async function createWorkbench(config: AppConfig) {
       await stopWeb();
       commandRouter.cancel();
       await wiredBackground.close(); projectFollowUp.close();
-      supervision.close(); plans.close(); clearInterval(expireTimer); clearInterval(uploadCleanup); await awayNotifications.close();
+      supervision.close(); plans.close(); clearInterval(expireTimer); clearInterval(uploadCleanup); clearInterval(machineAlertTimer); await awayNotifications.close();
       await knowledgeCurator.close();
       await monitor.close();
       await approvals.close();

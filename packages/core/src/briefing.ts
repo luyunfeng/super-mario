@@ -3,7 +3,7 @@ import type { Store } from '../../plugin-sdk/src/index.ts';
 import type { Project, Run, Todo, Approval, Message, AwayNotification, BriefingSettings } from '../../protocol/src/index.ts';
 import type { createSchedules } from './schedules.ts';
 
-const defaults: BriefingSettings = { alwaysNotifyRuns:false, lowDistraction:false, decisionQuietHours: { enabled:false, start:'22:00', end:'08:00' }, timezone:'Asia/Shanghai', morning:'09:00', evening:'18:00', intervalHours:4, intervalEnabled:false, activeStart:'09:00', activeEnd:'21:00', awayNotifications:true };
+const defaults: BriefingSettings = { alwaysNotifyRuns:false, lowDistraction:false, decisionQuietHours: { enabled:false, start:'22:00', end:'08:00' }, timezone:'Asia/Shanghai', morning:'09:00', evening:'18:00', intervalHours:4, intervalEnabled:false, activeStart:'09:00', activeEnd:'21:00', awayNotifications:true, machineAlerts:true };
 const clock = (s: unknown): s is string => typeof s === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(s);
 export function heldNotificationRecords(store:Store) {
   return store.list<AwayNotification>('notifications.away').filter(row=>row.status==='held').map(row=>{
@@ -145,7 +145,7 @@ export function createBriefingSettings(store: Store, schedules: ReturnType<typeo
     if (!quiet || typeof quiet.enabled !== 'boolean' || !clock(quiet.start) || !clock(quiet.end)
       || Object.keys(quiet).some(key => !['enabled','start','end'].includes(key))) throw new Error('请填写有效的飞书待决定提醒免打扰时段');
     if (![next.morning,next.evening,next.activeStart,next.activeEnd].every(clock) || next.activeStart >= next.activeEnd) throw new Error('请填写有效时段，开始必须早于结束');
-    if (!Number.isInteger(next.intervalHours) || next.intervalHours < 1 || next.intervalHours > 168 || typeof next.alwaysNotifyRuns !== 'boolean' || typeof next.lowDistraction !== 'boolean' || typeof next.intervalEnabled !== 'boolean' || typeof next.awayNotifications !== 'boolean') throw new Error('简报间隔必须为 1–168 小时，开关必须为布尔值');
+    if (!Number.isInteger(next.intervalHours) || next.intervalHours < 1 || next.intervalHours > 168 || typeof next.alwaysNotifyRuns !== 'boolean' || typeof next.lowDistraction !== 'boolean' || typeof next.intervalEnabled !== 'boolean' || typeof next.awayNotifications !== 'boolean' || (next.machineAlerts !== undefined && typeof next.machineAlerts !== 'boolean')) throw new Error('简报间隔必须为 1–168 小时，开关必须为布尔值');
     if (typeof next.timezone !== 'string') throw new Error('时区必须为 IANA 名称');
     new Intl.DateTimeFormat('en',{timeZone:next.timezone}).format();
     const api = schedules.forOwner('daily-brief');

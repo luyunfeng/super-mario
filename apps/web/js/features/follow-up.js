@@ -53,6 +53,8 @@ export function createFollowUpCard({ api, store }) {
     const away = Check({label:'离开页面后通知结果和待决定',checked:briefing.awayNotifications});
     const notifyRuns = Check({label:'使用 Web 时也接收飞书执行结果通知',checked:briefing.alwaysNotifyRuns === true});
     const grading = Check({label:'低干扰：保留执行结果和项目对话通知',checked:briefing.lowDistraction === true});
+    // Computers are read every few minutes; this says whether what they report is worth a message.
+    const machineAlerts = Check({label:'电脑快出问题时通知我：磁盘快满、内存快用完、处理器长时间满载',checked:briefing.machineAlerts !== false});
     const held = (presence?.notifications ?? []).filter(n => n.status === 'held')
       .sort((a,b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
     const heldSearch = Input({type:'search','aria-label':'搜索保留通知',placeholder:'搜索通知正文'});
@@ -83,13 +85,13 @@ export function createFollowUpCard({ api, store }) {
       h('div',{class:'form-row'},Field({label:'早间时间',control:morning}),Field({label:'晚间时间',control:evening})), interval,
       Field({label:'间隔（小时）',control:hours}),
       h('div',{class:'form-row'},Field({label:'时段开始',control:start}),Field({label:'时段结束',control:end})),away,
-      notifyRuns, grading, h('details',{},h('summary',{},'已保留的通知（'+held.length+'）'),
+      notifyRuns, grading, machineAlerts, h('details',{},h('summary',{},'已保留的通知（'+held.length+'）'),
         held.length > 0 && heldSearch,heldList), quietToggle,quietTimes,
       h('p',{class:'small muted'},'免打扰按简报时区生效。时段结束后，仍待回答的飞书提问卡才会提醒。'),
       h('p',null,`待路由通知 ${backlog.length} 条`),backlog.map(n => h('p',{class:'small'},n.reason)),message],
       footer:Button({label:'保存简报设置',kind:'primary',onClick:async()=>{
         if(quietCheck.checked && (!quietStart.reportValidity() || !quietEnd.reportValidity())) return;
-        try { briefing = await api.put('/briefing/settings',{timezone:zone.value,morning:morning.value,evening:evening.value,activeStart:start.value,activeEnd:end.value,intervalHours:Number(hours.value),intervalEnabled:interval.querySelector('input').checked,awayNotifications:away.querySelector('input').checked,alwaysNotifyRuns:notifyRuns.querySelector('input').checked,lowDistraction:grading.querySelector('input').checked,decisionQuietHours:{enabled:quietCheck.checked,start:quietStart.value || quiet.start,end:quietEnd.value || quiet.end}});drawer.close();await load(); }
+        try { briefing = await api.put('/briefing/settings',{timezone:zone.value,morning:morning.value,evening:evening.value,activeStart:start.value,activeEnd:end.value,intervalHours:Number(hours.value),intervalEnabled:interval.querySelector('input').checked,awayNotifications:away.querySelector('input').checked,alwaysNotifyRuns:notifyRuns.querySelector('input').checked,lowDistraction:grading.querySelector('input').checked,machineAlerts:machineAlerts.querySelector('input').checked,decisionQuietHours:{enabled:quietCheck.checked,start:quietStart.value || quiet.start,end:quietEnd.value || quiet.end}});drawer.close();await load(); }
         catch(error){replace(message,Banner({tone:'danger',children:`保存失败：${error.message}`}));}
       }})});
   }
