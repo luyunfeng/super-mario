@@ -11,9 +11,10 @@ test('渠道页可启用 GitHub 连接、选择电脑并立即检查，未读通
   const dir = await mkdtemp(join(tmpdir(), 'mario-github-browser-'));
   const server = await startServer({ host: '127.0.0.1', port: 0, dataDir: join(dir, 'data'), demo: true, token: 'test-github' });
   const node = startAgentNode({ url: server.url, token: 'test-github', machineId: 'dev-machine', name: '开发机', dataDir: join(dir, 'node'),
-    handlers: createGithubNode({ run: async args => {
+    handlers: createGithubNode({ dataDir: join(dir, 'node'), run: async args => {
       const path = args.at(-1)!;
       if (path === 'user') return JSON.stringify({ login: 'octocat', name: '' });
+      if (path.endsWith('/comments') && path === 'repos/octo/widgets/issues/42/comments') return JSON.stringify({ id: 77 });
       if (path.startsWith('notifications?')) return JSON.stringify([{ id: '501', reason: 'review_requested', updated_at: '2026-11-20T08:00:00Z',
         subject: { title: '加快首页', type: 'PullRequest', number: 42 }, repository: { full_name: 'octo/widgets' } }]);
       if (path === 'repos/octo/widgets/issues/42') return JSON.stringify({ title: '加快首页', body: '首页加载太慢，需要拆分。', state: 'open', user: { login: 'alice' }, comments: 2, html_url: 'https://evil.example/' });
@@ -64,5 +65,16 @@ test('渠道页可启用 GitHub 连接、选择电脑并立即检查，未读通
   await expect(drawer.getByText('由 alice 发起', { exact: false })).toBeVisible();
   // The API-provided address is not used anywhere in the page.
   expect(await drawer.innerHTML()).not.toContain('evil.example');
+
+  // Replying only proposes the comment. It is posted after the owner approves it.
+  const comment = drawer.getByRole('textbox', { name: '评论内容' });
+  await comment.fill('已看过，可以这样改。');
+  await drawer.getByRole('button', { name: '提交评论待确认' }).click();
+  await expect(drawer.getByText('这条评论等待你确认。')).toBeVisible();
+  await expect(drawer.getByRole('link', { name: '前往审批' })).toHaveAttribute('href', '#chat/approvals');
+  const approval = server.app.approvals.list().find(item => item.kind === 'plugin:github-connector.comment')!;
+  expect(approval.details).toBe('已看过，可以这样改。');
+  expect(approval.status).toBe('pending');
+  expect(server.app.store.list<{ kind: string }>('approvals').length).toBe(1);
   expect(pageErrors).toEqual([]);
 });

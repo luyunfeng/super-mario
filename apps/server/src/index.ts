@@ -512,6 +512,13 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (url.searchParams.size > (url.searchParams.has('page') ? 1 : 0)) throw new InputError('只接受 page 参数');
           return json(res, 200, await app.githubRead(decodeURIComponent(githubRead[1]!), page));
         }
+        if (path === '/api/v1/github/comments' && method === 'POST') {
+          const input = await body(req);
+          if (Object.keys(input).some(key => !['repository', 'number', 'body'].includes(key))) throw new InputError('评论参数无效');
+          return json(res, 201, app.githubProposeComment({
+            repository: requiredText(input.repository, '仓库'), number: input.number as number, body: requiredText(input.body, '评论'),
+          }));
+        }
         if (path === '/api/v1/feishu/bots' && method === 'GET') {
           return json(res, 200, bots.list().map(bot => bot.scope.kind === 'global' && bot.paired
             ? { ...bot, workbench: bots.workbenchStatus(bot.id) } : bot));

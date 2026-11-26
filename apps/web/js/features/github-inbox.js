@@ -1,6 +1,7 @@
 // 一条 GitHub 收件的正文：合并请求或议题的说明，加上评论。经所选电脑读取，令牌不经过工作台。
 import { h, replace } from '../lib/dom.js';
-import { Button } from '../ui/kit.js';
+import { Button, TextArea } from '../ui/kit.js';
+import { toastError } from '../ui/overlay.js';
 
 function safeUrl(value) {
   try {
@@ -57,6 +58,28 @@ export function githubInboxBody(api, row) {
           Button({ label: '下一页评论', size: 'sm', onClick: () => { page++; void load(); } })) : null,
       ]);
   }
+  // Replying posts a comment on GitHub. It becomes an approval, so nothing is sent until the
+  // owner confirms it in the approval list.
+  const reply = h('div', { class: 'stack', 'aria-label': '在 GitHub 回复' });
+  const draft = TextArea({ rows: 3, maxLength: '65536', 'aria-label': '评论内容', placeholder: '写下要发表在 GitHub 上的评论' });
+  const send = Button({ label: '提交评论待确认', kind: 'primary', size: 'sm', onClick: async () => {
+    const body = draft.value.trim();
+    if (!body) return;
+    try {
+      const approval = await api.post('/github/comments', { repository: target.repository, number: target.number, body });
+      draft.value = '';
+      status.textContent = '已提交，确认后才会发表。';
+      submitted(approval);
+    } catch (error) { status.textContent = '未能提交：' + error.message; }
+  } });
+  const status = h('p', { role: 'status', class: 'small' });
+  const submittedLink = h('a', { href: '#chat/approvals' }, '前往审批');
+  function submitted(approval) {
+    replace(reply, h('p', { class: 'small' }, '这条评论等待你确认。', ' ', submittedLink));
+  }
+  draft.addEventListener('input', () => { send.disabled = !draft.value.trim(); });
+  send.disabled = true;
+  root.append(reply, draft, h('div', { class: 'row row--wrap' }, send), status);
   void load();
   return { el: root };
 }

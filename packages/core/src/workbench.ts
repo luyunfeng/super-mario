@@ -691,6 +691,43 @@ export async function createWorkbench(config: AppConfig) {
     if (!reply.ok) throw new InputError(reply.message ?? '读取 GitHub 失败', 502);
     return reply.data;
   }
+  const GITHUB_COMMENT_APPROVAL = 'plugin:github-connector.comment';
+  /** A comment the assistant or the owner wants to post. Nothing is sent until the owner approves. */
+  function githubProposeComment(input: { repository: string; number: number; body: string }) {
+    const state = githubState();
+    if (!state.enabled || !state.machineId) throw new InputError('GitHub 连接未启用，可在渠道页启用', 409);
+    const machine = machines?.list().find(entry => entry.id === state.machineId);
+    if (!machine?.online) throw new InputError('读取 GitHub 的电脑不在线', 409);
+    if (!machine.capabilities.includes('github.comment')) throw new InputError('所选电脑的执行机版本不支持发表评论，请升级执行机', 409);
+    if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/.test(input.repository) || !Number.isSafeInteger(input.number) || input.number < 1)
+      throw new InputError('仓库或编号无效');
+    const body = input.body?.trim();
+    if (!body || Array.from(body).length > 65_536) throw new InputError('评论须为 1 至 65536 字');
+    // The account is part of what the owner approves. A change of account voids the approval.
+    return approvals.propose({ kind: GITHUB_COMMENT_APPROVAL as Approval['kind'], title: `在 ${input.repository} #${input.number} 发表评论`,
+      details: body, params: { repository: input.repository, number: input.number, account: state.login ?? '', machineId: state.machineId } });
+  }
+  /** Posts the comment the owner approved. The approval's id and version are the key, so the
+   *  same approval posts once even if it is carried out twice. */
+  async function githubExecuteComment(approval: Approval): Promise<Json> {
+    const params = approval.params as { repository: string; number: number; account: string; machineId: string };
+    const state = githubState();
+    if (state.machineId !== params.machineId || (state.login ?? '') !== params.account) {
+      throw new InputError('GitHub 账号或电脑已变化，这条评论没有发出。请核对后重新提交。', 409);
+    }
+    const machine = machines?.list().find(entry => entry.id === params.machineId);
+    if (!machine?.online) throw new InputError('读取 GitHub 的电脑不在线，这条评论没有发出', 409);
+    // What is posted is what the owner last approved. The owner may have rewritten the
+    // comment when reviewing the approval, so the text comes from the approval, not from a
+    // copy made when it was proposed.
+    const body = approval.details?.trim();
+    if (!body || Array.from(body).length > 65_536) throw new InputError('评论为空或过长，这条评论没有发出');
+    const reply = await githubMachines().call(machine.id, 'github.comment', {
+      repository: params.repository, number: params.number, body, key: `approval:${approval.id}:${approval.version}`,
+    }, { timeoutMs: 30_000 }) as { ok: boolean; data?: { state: string; url?: string }; message?: string };
+    if (!reply.ok) throw new InputError(reply.message ?? '发表评论失败', 502);
+    return { posted: reply.data!.state === 'sent' || reply.data!.state === 'already-sent', ...reply.data } as Json;
+  }
   plugins.register(workspaceSplash);
   function assertOwnerFeishuInbox(id:string) {
     ownerReadInput();
@@ -1026,7 +1063,7 @@ export async function createWorkbench(config: AppConfig) {
   await webThreadCleanup.recover();
   const jobs = new Set<Promise<void>>();
   const commandRouter = createCommandProjectRouter(config, () => !closing && inboxClassifier.status().available);
-  const approvals = createApprovalService({ store, events, execute: executeApproved, publish: background.publish, allowedKinds: () => contributions.list('channels').flatMap(entry => entry.value.approvalKinds ?? []) });
+  const approvals = createApprovalService({ store, events, execute: executeApproved, publish: background.publish, allowedKinds: () => [...contributions.list('channels').flatMap(entry => entry.value.approvalKinds ?? []), GITHUB_COMMENT_APPROVAL] });
   const inboxHandlingSources = createInboxHandlingSources({store,personalAccount:()=>knowledgeAccount(),mailboxAccess:entry=>mailboxHandlingAccess(entry)});
   const inboxHandling = createInboxHandling({store,events,
     readSource(ref) {
@@ -1807,6 +1844,7 @@ export async function createWorkbench(config: AppConfig) {
     if (approval.params.outboxId) return await background.outbox.approve(approval) as unknown as Json;
     if (approval.kind === knowledgeSourceApprovalKind) { knowledgeSourceApproval.approve(approval); return {jobId:approval.params.jobId,queued:true}; }
     if (approval.kind === scheduledWorkApprovalKind) return scheduledWork.approveCreation(approval);
+    if (approval.kind === GITHUB_COMMENT_APPROVAL) return githubExecuteComment(approval);
     if (approval.kind.startsWith('plugin:')) return {accepted:true,kind:approval.kind};
     if (approval.kind === 'dispatch') {
       const params: JsonObject = { ...approval.params, ...(approval.todoId ? { todoId: approval.todoId } : {}) };
@@ -3358,7 +3396,7 @@ export async function createWorkbench(config: AppConfig) {
   return {
     browserDevices, deleteWebConversation, postWebConversation:scopedAgents.postWebConversation,
     setBrowserDeviceInvalidator(handler:(id?:string)=>void) { browserDeviceInvalidator=handler; },
-    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {
