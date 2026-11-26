@@ -6,6 +6,7 @@ import { createExecutionServices } from '../../../plugins/executors.ts';
 import { createProjectDiscovery } from '../../../plugins/project-discovery.ts';
 import { createGithubNode } from '../../../plugins/github-node.ts';
 import { createMailAttachmentNode } from './mail-attachment.ts';
+import { createMachineStorageNode } from './machine-storage.ts';
 import { createTerminalHost } from '../../../plugins/terminal-host.ts';
 import { createLiveTerminalServices } from '../../../plugins/live-terminals.ts';
 import { createAgentArtifactLoader } from './agent-artifacts.ts';
@@ -145,5 +146,7 @@ export async function loadDefaultNodePlugins(options: DefaultNodePluginOptions):
       id: 'mail-attachment',
       handlers: createMailAttachmentNode({ dataDir, serverUrl: options.serverUrl, machineToken: options.machineToken }).handlers,
     }] : []),
+    // How full the disks of this machine are. One read of each mount; nothing is written.
+    { id: 'machine-storage', handlers: createMachineStorageNode().handlers },
   ]);
 }

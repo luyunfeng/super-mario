@@ -117,6 +117,12 @@
 .kv dt { color: var(--text-3); }
 .kv dd { overflow-wrap: anywhere; }
 
+/* How full one disk is. A thin track with a filled part; the colour says whether to look. */
+.storage-bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.storage-bar__fill { display: block; height: 100%; border-radius: 3px; background: var(--ok); }
+.storage-bar__fill--warn { background: var(--warn); }
+.storage-bar__fill--danger { background: var(--danger); }
+
 /* 空状态 */
 .empty {
   display: grid; justify-items: center; gap: 6px; padding: 34px 18px; text-align: center;

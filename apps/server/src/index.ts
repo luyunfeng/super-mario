@@ -467,6 +467,20 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           ...(url.searchParams.has('projectId') ? { projectId: requiredText(url.searchParams.get('projectId'), '项目') } : {}),
           ...(url.searchParams.has('todoId') ? { todoId: requiredText(url.searchParams.get('todoId'), '事项') } : {}),
         }));
+        // How full the disks of one computer are. One read of each mount on that computer;
+        // nothing is written there and nothing of the files is read.
+        if (path === '/api/v1/machines/storage' && method === 'GET') {
+          for (const key of url.searchParams.keys()) if (key !== 'machineId') throw new InputError('这条接口只接受 machineId');
+          // The computer must be named once. Named twice, it would be open which one was meant.
+          if (url.searchParams.getAll('machineId').length !== 1) throw new InputError('machineId 只能有一个');
+          const machine = machines.list().find(m => m.id === requiredText(url.searchParams.get('machineId'), '电脑'));
+          if (!machine?.online) throw new InputError('执行机离线', 503);
+          if (!machine.capabilities.includes('machine.storage')) throw new InputError('请升级执行机代理以查看存储', 409);
+          const report = await machines.call(machine.id, 'machine.storage', {}, { timeoutMs: 15_000 }) as Record<string, unknown>;
+          // The machine is named by the server, from the id it was asked by, and not by what
+          // the machine says of itself.
+          return json(res, 200, { ...report, machineId: machine.id });
+        }
         if (path === '/api/v1/agents/sessions/usage' && method === 'GET') {
           const machine = machines.list().find(m => m.id === url.searchParams.get('machineId'));
           if (!machine?.online) throw new InputError('执行机离线', 503);

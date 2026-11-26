@@ -4,6 +4,7 @@ import { Button, Pill, Empty, copyText } from '../ui/kit.js';
 import { openDrawer } from '../ui/overlay.js';
 import { createMachineSkills } from './machine-skills.js';
 import { agentDiagnostics, recoverySummary, recoveryUnavailable, legacyRecovery, unsupportedApi } from './agent-diagnostics.js';
+import { machineStorage } from './machine-storage.js';
 
 let currentComputer;
 
@@ -32,6 +33,12 @@ export function openComputer({ api, machine, state, consoleDrawer }) {
     return Boolean(drawer?.el.open && currentComputer === drawer);
   };
   const skills = createMachineSkills({ api, machineId: machine.id, state, active });
+  // The storage panel follows the computer's state, as the skills do, so that its button
+  // goes out as soon as the computer is offline and not only after a failed read.
+  const storage = machineStorage({ api, machine, active, online: () => {
+    const current = state()?.machines?.find(item => item.id === machine.id);
+    return current ? current.online === true : machine.online === true;
+  } });
   const connection = h('dd', null, machine.online ? '在线' : '离线');
   const recovery = h('p', { class: 'muted small', role: 'status' });
   const list = h('div', { class: 'stack' });
@@ -45,6 +52,7 @@ export function openComputer({ api, machine, state, consoleDrawer }) {
         : h('p', { class: 'muted small' }, '这台电脑还没有报告可用的执行者。')),
     skills.el,
     agentDiagnostics({ api, machine, active }),
+    storage.el,
     h('div', { class: 'stack' }, h('h3', null, '恢复状态'), recovery),
     h('div', { class: 'stack' }, h('h3', null, '终端'), list));
   drawer = openDrawer({ title: machine.name, subtitle: '电脑详情', body, onClose: () => { seq++; clearInterval(timer); } });
@@ -53,6 +61,7 @@ export function openComputer({ api, machine, state, consoleDrawer }) {
   timer = setInterval(() => {
     if (!active()) return;
     skills.update();
+    storage.update();
     const machines = state()?.machines;
     if (!machines) return;
     const online = machines.find(item => item.id === machine.id)?.online;
