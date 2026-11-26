@@ -7,6 +7,7 @@ import { toast } from '../ui/overlay.js';
 import { knowledgeRow, openKnowledgeDrawer } from '../features/knowledge.js';
 import { openSourceSubscriptions } from '../features/source-subscriptions.js';
 import { openMeetingDay } from '../features/meeting-day.js';
+import { openRecording } from '../features/recording.js';
 import { openCuratorDrawer, pendingJobs } from '../features/curator.js';
 import { createWorkDecisions } from '../features/work-decisions.js';
 
@@ -79,12 +80,14 @@ export function createMemoryPage({ api, store, router, scope }) {
   }
   const subscriptions = Button({label:'来源订阅',size:'sm',onClick:() => showSubscriptions()});
   const recap = Button({ label: '会议日回顾', size: 'sm', onClick: () => openMeetingDay({ api, store, scope, router }) });
+  const record = Button({ label: '录音转写', size: 'sm', onClick: () => openRecording({ api, store, scope }) });
   recap.hidden = true;
+  record.hidden = true;
   const el = h('section', { class: 'page', id: 'memory' },
     h('div', { class: 'page__inner' },
       h('header', { class: 'page__head' },
         h('div', { class: 'page__title' }, h('h1', null, '记忆'), h('p', { class: 'page__sub' }, hintCopy('nav.memory').tag)),
-        h('div', { class: 'page__actions' }, subscriptions, recap, Hint('nav.memory'))),
+        h('div', { class: 'page__actions' }, subscriptions, record, recap, Hint('nav.memory'))),
       h('div', { class: 'stack stack--lg' }, quick,
         h('div', { class: 'stack' }, h('div', { class: 'row row--between row--wrap' }, seg.el, importanceFilter, tagFilter, search), layerNote),
         list, curatorLine, decisions.el)));
@@ -94,6 +97,7 @@ export function createMemoryPage({ api, store, router, scope }) {
     subscriptions.hidden = !snapshot?.plugins?.some(p => p.id === 'source-subscriptions' && p.status === 'active');
     subscriptions.disabled = store.view.unauthorized || store.view.snapshotOwner !== api.draftOwner() || store.view.connection !== 'online';
     recap.hidden = store.view.unauthorized || !snapshot?.plugins?.some(p => p.id === 'knowledge-local' && p.status === 'active');
+    record.hidden = recap.hidden;
     if (!snapshot) return;
     const query = search.value.trim();
     const words = query.normalize('NFC').toLowerCase().split(/\s+/).filter(Boolean);

@@ -85,6 +85,9 @@ export function createTranscription({ store, engines, call }: { store: Store; en
     return {
       engines: installed,
       choice: chosen,
+        // The audio format and limits are told here, so a client records to them without
+        // keeping a copy of the constants that could drift from the server's.
+        audio: { ...TRANSCRIPTION_AUDIO, chunkBytes: TRANSCRIPTION_CHUNK_BYTES, maxSeconds: TRANSCRIPTION_MAX_SECONDS },
       // Ready only when the chosen engine is still offered. A disabled plugin leaves a choice
       // that names a service nobody provides, which is said plainly.
       ready: !!chosen && installed.some(engine => engine.service === chosen.service),
