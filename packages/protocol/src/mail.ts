@@ -49,3 +49,32 @@ export interface MailPreset {
   /** Where the owner makes the code that mail clients sign in with, when the account's own password does not work. */
   codeSite?: string;
 }
+
+/** A mail address as the owner reads it. */
+export interface MailAddress { name: string; email: string }
+
+/** A folder of one account, with its role and counters. */
+export interface Mailbox {
+  name: string;
+  /** The usual folders are named. Any other folder is "other", and is not read as the inbox. */
+  role: 'inbox' | 'sent' | 'drafts' | 'trash' | 'junk' | 'archive' | 'other';
+  unseen: number;
+  total: number;
+}
+
+/** One message in a list. The body is not part of it. */
+export interface MailSummary {
+  account: string;
+  mailbox: string;
+  uid: number;
+  messageId: string;
+  subject: string;
+  from: MailAddress;
+  to: MailAddress[];
+  /** An ISO instant, or empty when the date header could not be read. */
+  date: string;
+  hasAttachments: boolean;
+  seen: boolean;
+  answered: boolean;
+  flagged: boolean;
+}
