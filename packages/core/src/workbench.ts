@@ -52,7 +52,7 @@ import { createMailAccounts } from './mail-accounts.ts';
 import { createMailReader } from './mail-reader.ts';
 import { executeMailSend, MAIL_SEND_APPROVAL, proposeMailSend } from './mail-outbox.ts';
 import { classifyImapError, connectionOptions, ImapError, libraryOpen, type ImapClient, type OpenImap } from './mail-imap.ts';
-import { MessageError, readMessage } from './mail-message.ts';
+import { MessageError, readAttachment, readMessage } from './mail-message.ts';
 import { searchFolder } from './mail-search.ts';
 import { createProjectFollowUp } from './project-follow-up.ts';
 import { applyPolicyPreset } from './policy-presets.ts';
@@ -1216,6 +1216,25 @@ export async function createWorkbench(config: AppConfig) {
     // removed, so this is only reached from an old page.
     if (!mailAccounts.list().some(account => account.id === target.account)) throw new InputError('这封邮件所在的邮箱已移除', 404);
     return readMail(target.account, target.uid, target.mailbox, signal);
+  }
+  /** One attachment of the email an inbox item points at. The item names the message, and the
+   *  attachment is found again by its id inside that message. */
+  async function downloadInboxMail(id: string, attachmentId: string, signal: AbortSignal) {
+    const item = inbox.list().find(entry => entry.id === id);
+    const target = item?.origin?.mail;
+    if (!item || !target) throw new InputError('这条收件不是邮件', 404);
+    if (!mailAccounts.list().some(account => account.id === target.account)) throw new InputError('这封邮件所在的邮箱已移除', 404);
+    const account = mailAccounts.get(target.account);
+    const password = await mailAccounts.password(target.account);
+    if (password === undefined) throw new ImapError('authentication', '这个账号还没有密码，请重新填写。');
+    let client;
+    try {
+      client = await mailOpen(connectionOptions(account, password));
+      return await readAttachment(client, target, attachmentId, signal);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      throw error instanceof MessageError ? error : classifyImapError(error);
+    } finally { await client?.logout().catch(() => {}); }
   }
   function mailConnectorView() {
     const state = mailConnectorState();
@@ -3625,7 +3644,7 @@ export async function createWorkbench(config: AppConfig) {
   return {
     browserDevices, deleteWebConversation, postWebConversation:scopedAgents.postWebConversation,
     setBrowserDeviceInvalidator(handler:(id?:string)=>void) { browserDeviceInvalidator=handler; },
-    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, readInboxMail, searchMail, mailTool, proposeMail, MAIL_SEND_APPROVAL,
+    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, readInboxMail, downloadInboxMail, searchMail, mailTool, proposeMail, MAIL_SEND_APPROVAL,
     mailConnectorView, mailConnectorConfigure, mailPoll: async () => { await plugins.invocations.use(MAIL_POLL_SERVICE, {}); },
     mailConnectorRetire: retireMail,    setMailOpen(open: OpenImap) { mailOpen = open; }, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },

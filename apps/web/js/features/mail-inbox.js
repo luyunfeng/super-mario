@@ -22,6 +22,8 @@ export function mailInboxBody(api, row) {
   const target = row?.origin?.mail;
   if (!target) return { el: root };
   let loaded = null, busy = false, seq = 0, error = '', proposed = false, account = null;
+  let downloading = '';
+  const downloadNote = h('p', { class: 'small', role: 'status' });
   const body = h('div', { class: 'stack' });
   root.append(body);
   async function load() {
@@ -41,6 +43,32 @@ export function mailInboxBody(api, row) {
       error = cause.message;
     } finally { busy = false; if (stamp === seq) paint(); }
   }
+  /** The name a file is saved under: the name it came with, without anything that could
+   *  stand for a folder or a drive, because the name is the sender's and not the owner's. */
+  function saveName(name) {
+    const base = String(name ?? '').split(/[\\/]/).pop() ?? '';
+    const cleaned = base.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+    return cleaned && cleaned !== '.' && cleaned !== '..' ? cleaned.slice(0, 200) : 'attachment';
+  }
+
+  /** Takes one attachment out and offers it to be saved. The file comes back with the
+   *  token, as every other request does, so the token is never put in a link. */
+  async function download(file) {
+    if (downloading) return;
+    downloading = file.id; downloadNote.textContent = '正在下载…';
+    paint();
+    try {
+      const blob = await api.blob('/mail/inbox/' + encodeURIComponent(row.id) + '/attachments/' + encodeURIComponent(file.id));
+      const url = URL.createObjectURL(blob);
+      const link = h('a', { href: url, download: saveName(file.filename) });
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      downloadNote.textContent = '';
+    } catch (cause) {
+      downloadNote.textContent = '下载失败：' + cause.message;
+    } finally { downloading = ''; paint(); }
+  }
+
   function paint() {
     replace(body,
       busy && !loaded ? h('p', { class: 'small muted' }, '正在从邮箱读取…') : null,
@@ -59,7 +87,11 @@ export function mailInboxBody(api, row) {
         loaded.textTruncated && h('p', { class: 'small muted' }, '正文太长，这里只有开头部分。'),
         Array.isArray(loaded.attachments) && loaded.attachments.length
           ? h('div', { class: 'stack' }, h('strong', { class: 'small' }, '附件'),
-            loaded.attachments.map(file => h('li', { class: 'small' }, `${file.filename || '（没有文件名）'} · ${file.mimeType} · ${file.size} 字节`)),
+            loaded.attachments.map(file => h('li', { class: 'small row row--between row--wrap' },
+              h('span', null, `${file.filename || '（没有文件名）'} · ${file.mimeType} · ${file.size} 字节`),
+              Button({ label: '下载', size: 'sm', kind: 'ghost', ariaLabel: '下载附件 ' + (file.filename || ''), disabled: downloading === file.id,
+                onClick: () => { void download(file); } }))),
+            downloadNote,
             loaded.attachmentCount > loaded.attachments.length && h('p', { class: 'small muted' }, `共 ${loaded.attachmentCount} 个附件，这里只列出前 ${loaded.attachments.length} 个。`))
           : null,
         // Replying asks for the send. It is an approval, and the mail goes out after it.

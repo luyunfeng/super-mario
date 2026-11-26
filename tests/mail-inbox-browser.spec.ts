@@ -55,6 +55,18 @@ test('邮件进入收件箱：列表里能看到，点开后读到正文和附�
   await expect(body).toContainText('lisi@example.invalid');
   await expect(body).toContainText('请确认周四的评审时间。');
   await expect(body).toContainText('report.pdf');
+  // The attachment can be taken out. It comes as a file under its own name, with the token
+  // sent as a header and not in a link.
+  const downloads: string[] = [];
+  page.on('request', request => downloads.push(request.url()));
+  const waiting = page.waitForEvent('download');
+  await body.getByRole('button', { name: '下载附件 report.pdf' }).click();
+  const saved = await waiting;
+  expect(saved.suggestedFilename()).toBe('report.pdf');
+  const taken = downloads.find(url => url.includes('/attachments/'));
+  expect(taken).toBeDefined();
+  // The token is not in the address, so it does not end up in a history or a log.
+  expect(taken!).not.toContain('test-mail-inbox');
   // Nothing in the message is rendered as markup, and the password is nowhere on the page.
   expect(await page.content()).not.toContain('an-offline-code');
   // Reading left the message as it was: the folder was opened read-only and nothing was stored.

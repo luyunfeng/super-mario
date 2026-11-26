@@ -16,6 +16,31 @@ export class MessageError extends Error {
   constructor(failure: MessageFailure, message: string) { super(message); this.name = 'MessageError'; this.failure = failure; }
 }
 
+/** One attachment as it is saved: what it is called, what it is, and its bytes. */
+export interface AttachmentFile {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  content: Uint8Array;
+}
+
+/**
+ * Takes one attachment out of one message.
+ *
+ * The message is read again and the attachment is found by its id, which is worked out from
+ * where in the message it is and from its bytes. An id that was not listed for this message
+ * names nothing, so one cannot be made up to reach another message's file. Reading does not
+ * mark the message as read.
+ */
+export async function readAttachment(client: ImapClient, where: { account: string; mailbox: string; uid: number }, attachmentId: string, signal: AbortSignal): Promise<AttachmentFile> {
+  const read = await readMessage(client, where, signal);
+  const content = read.contents.get(attachmentId);
+  const listed = read.message.attachments.find(item => item.id === attachmentId);
+  if (!content || !listed) throw new MessageError('not-found', '这个附件不在这封邮件里，可能邮件已经变了。');
+  return { id: listed.id, filename: listed.filename, mimeType: listed.mimeType, size: listed.size, content };
+}
+
 const text = (value: unknown): string => typeof value === 'string' ? value : '';
 const cut = (value: string, most: number) => value.length > most ? value.slice(0, most) : value;
 

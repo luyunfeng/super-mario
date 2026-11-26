@@ -603,6 +603,30 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             throw new InputError(error instanceof Error ? error.message : '读取邮件失败', status);
           }
         }
+        // One attachment of the email an inbox item points at. It is sent as a file to be
+        // saved and never opened as a page: an attachment can be HTML or an image that
+        // carries a script, and what it says it is cannot be trusted.
+        const inboxAttachment = path.match(/^\/api\/v1\/mail\/inbox\/([^/]+)\/attachments\/([A-Za-z0-9_-]{1,64})$/);
+        if (inboxAttachment && method === 'GET') {
+          if (url.searchParams.size) throw new InputError('这条接口不接受参数');
+          const controller = new AbortController();
+          res.on('close', () => { if (!res.writableEnded) controller.abort(); });
+          let file;
+          try { file = await app.downloadInboxMail(decodeURIComponent(inboxAttachment[1]!), inboxAttachment[2]!, controller.signal); }
+          catch (error) {
+            if (controller.signal.aborted) return;
+            const kind = error && typeof error === 'object' && 'failure' in error ? String(error.failure) : '';
+            const status = kind === 'not-found' ? 404 : kind === 'too-large' || kind === 'unreadable' ? 422
+              : error && typeof error === 'object' && 'status' in error ? Number(error.status) : kind ? 502 : 500;
+            throw new InputError(error instanceof Error ? error.message : '读取附件失败', status);
+          }
+          // The name is sent the way a mail program sends a name with any characters in it.
+          const name = encodeURIComponent(file.filename || 'attachment').replace(/['()*]/g, char => '%' + char.charCodeAt(0).toString(16));
+          res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': file.size, 'cache-control': 'private, no-store',
+            'content-disposition': "attachment; filename*=UTF-8''" + name, 'x-content-type-options': 'nosniff', 'content-security-policy': 'sandbox' });
+          res.end(Buffer.from(file.content));
+          return;
+        }
         // An email the assistant or the page wants to send. This only asks for it: the
         // message goes out after the owner approves it.
         if (path === '/api/v1/mail/send' && method === 'POST') {
