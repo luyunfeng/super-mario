@@ -993,6 +993,13 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if(projectWorkspace[2]==='memory'&&method==='POST')return json(res,202,app.projectWorkspace.request(id));
           if(projectWorkspace[2]==='memory'&&method==='PUT')return json(res,200,app.projectWorkspace.configure(id,(await body(req)).enabled as boolean));
         }
+        const projectLessons = path.match(/^\/api\/v1\/projects\/([^/]+)\/lessons$/);
+        if (projectLessons && method === 'GET') return json(res, 200, app.projectLessons.list(decodeURIComponent(projectLessons[1]!)));
+        if (projectLessons && method === 'PUT') return json(res, 200, app.projectLessons.edit(decodeURIComponent(projectLessons[1]!), await body(req)));
+        if (projectLessons && method === 'DELETE') {
+          // The version travels in the body: a lesson is changed by its id, not its route.
+          return json(res, 200, app.projectLessons.remove(decodeURIComponent(projectLessons[1]!), await body(req)));
+        }
         const project = path.match(/^\/api\/v1\/projects\/([^/]+)$/);
         if (project && method === 'PATCH') return json(res, 200, app.updateProject(decodeURIComponent(project[1]), await projectFolders.prepare(await body(req))));
         if (project && method === 'DELETE') return json(res, 200, app.projects.archive(decodeURIComponent(project[1])));

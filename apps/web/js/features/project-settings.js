@@ -2,6 +2,7 @@
 import { h, replace } from '../lib/dom.js';
 import { Button, Card, Field, Input, TextArea, Select, Check, Pill } from '../ui/kit.js';
 import { memoryStatus, openProjectMemory } from './project-memory.js';
+import { openProjectLessons } from './project-lessons.js';
 import { confirmDialog, toast } from '../ui/overlay.js';
 
 const AUTOMATION = [['inherit', '沿用全局设置'], ['conservative', '保守：审批都交给我'], ['balanced', '平衡：普通提问自动回答'], ['quiet', '少打扰：受信目录内自动处理']];
@@ -82,12 +83,15 @@ export function createProjectSettings({ api, store, router, bindFolder }) {
       });
     }
 
+    const lessons = Card({ title: '项目经验', sub: '已验收任务留下的做法，交给这个项目的新 Agent',
+      tools: Button({ label: '查看项目经验', size: 'sm', onClick: () => openProjectLessons(api, editingId, project.name) }),
+      body: h('p', { class: 'small muted' }, '你验收任务后自动记录。可以改正措辞或删除。') });
     const bots = workspace?.bots ?? [];
     const channel = Card({ title: '飞书机器人', sub: '负责这个项目的机器人', tools: h('a', { class: 'btn btn--sm', href: router.href('channels', 'project-bot', editingId) }, '创建项目机器人'), body: bots.length
       ? bots.map(bot => h('div', { class: 'item' }, h('div', { class: 'item__main' }, h('span', { class: 'item__title' }, bot.name), h('span', { class: 'item__meta' }, bot.connected ? '已连接' : '未连接'))))
       : h('p', { class: 'muted' }, '还没有机器人负责这个项目。') });
     const folder = Card({ title: '工作区文件夹', body: [h('p', { class: 'folder-path' }, project.workspace ? `${(store.view.snapshot?.machines ?? []).find(m => m.id === project.workspace.machineId)?.name ?? project.workspace.machineId} · ${project.workspace.cwd}` : '尚未绑定文件夹，原有数据保留。'), Button({ label: project.workspace ? '更换绑定文件夹' : '绑定文件夹', onClick: () => bindFolder(project) })] });
-    replace(root, folder, info, follow, memory, channel);
+    replace(root, folder, info, follow, memory, lessons, channel);
   }
 
   async function load() {

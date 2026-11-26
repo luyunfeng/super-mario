@@ -757,6 +757,30 @@ export async function createWorkbench(config: AppConfig) {
     return { ...context, lessons: projectLessons.instructions(id) };
   }
   const runReview = createRunReview({ store, events, dispatch, completeTodo: id => updateTodo(id, { completed: true }), maxReworks: () => reviewSettings().maxReworks });
+  // Owner-facing view of the lessons. An archived project can still be read, but not changed,
+  // the same rule the project instructions follow.
+  function lessonProject(id: string, writing: boolean) {
+    const project = projects.list().find(item => item.id === id);
+    if (!project) throw new InputError('项目不存在', 404);
+    if (writing && project.archivedAt) throw new InputError('项目已归档，经验未修改', 409);
+  }
+  const projectLessonsApi = {
+    list: (id: string) => { lessonProject(id, false); return projectLessons.list(id); },
+    edit: (id: string, input: Record<string, unknown>) => {
+      lessonProject(id, true);
+      if (Object.keys(input).some(key => !['id', 'text', 'version'].includes(key))) throw new InputError('经验参数无效');
+      const version = input.version;
+      if (!Number.isSafeInteger(version) || (version as number) < 1) throw new InputError('版本号无效');
+      return projectLessons.edit(id, requiredText(input.id, '经验标识'), requiredText(input.text, '经验正文'), version as number);
+    },
+    remove: (id: string, input: Record<string, unknown>) => {
+      lessonProject(id, true);
+      if (Object.keys(input).some(key => !['id', 'version'].includes(key))) throw new InputError('经验参数无效');
+      const version = input.version;
+      if (!Number.isSafeInteger(version) || (version as number) < 1) throw new InputError('版本号无效');
+      return projectLessons.remove(id, requiredText(input.id, '经验标识'), version as number);
+    },
+  };
   const reviewEvidence = runReview.evidenceForRun;
   function todoHistory(id: string, before?: string) {
     return readTodoHistory(store, id, before, reviewEvidence);
@@ -3211,7 +3235,7 @@ export async function createWorkbench(config: AppConfig) {
   return {
     browserDevices, deleteWebConversation, postWebConversation:scopedAgents.postWebConversation,
     setBrowserDeviceInvalidator(handler:(id?:string)=>void) { browserDeviceInvalidator=handler; },
-    usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
+    projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },
     projectFollowUp,
     taskClosure: {
