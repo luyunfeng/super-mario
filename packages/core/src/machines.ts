@@ -6,12 +6,16 @@ import type { ExecutorInfo, Json, MachineInfo, NodeMessage, ServerMessage } from
 export class MachineError extends Error {
   readonly status: number;
   readonly delivery: 'no' | 'unknown';
+  /** The connection was lost while the request was waiting for an answer. The request itself
+   *  was sent, so this is neither "the machine answered with an error" nor "nothing was sent". */
+  readonly lost?: boolean;
 
-  constructor(message: string, status: number, delivery: 'no' | 'unknown') {
+  constructor(message: string, status: number, delivery: 'no' | 'unknown', lost = false) {
     super(message);
     this.name = 'MachineError';
     this.status = status;
     this.delivery = delivery;
+    if (lost) this.lost = true;
   }
 }
 
@@ -57,7 +61,7 @@ export function createMachineHub({ store, events }: { store: Store; events: Even
       if (request.ws !== ws) continue;
       pending.delete(id);
       clearTimeout(request.timer);
-      request.reject(new MachineError(reason, 502, 'unknown'));
+      request.reject(new MachineError(reason, 502, 'unknown', true));
     }
   }
 

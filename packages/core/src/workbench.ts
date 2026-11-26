@@ -106,12 +106,14 @@ import { exportNativeConversation, readNativeFavoritePage, readNativeShareMessag
 import { runCitation, eraseWebConversationRegistration, webConversationsExtension, webConversationMatches, independentWebSource, requireWebConversationHistory, readWebConversationExport, createBrowserDevices, createUsageSources, type UsageWindowCache, type UsageInventoryPage, type UsageInventoryReader, feishuMessageReactionsExtension, type FeishuReactionReader, feishuChatPinsExtension, type FeishuPinReader, type FeishuPinOriginalReader, type FeishuPinTopicReader, feishuEditHistoryExtension, type FeishuHistoryReader, createReleaseSourceExtension, createFeishuWebExtension, createFeishuWebLogin, createFeishuWebSource, tokenStatistics, todoCalendar, createReplyTranslation, conversationEdit, conversationOutbox, conversationQueue, conversationRetry, createRunComparison, shortcutSettings, browserNotifications, readingFonts, assistantCardExamples, conversationFiles, readChatFileText, readChatFilePreview, conversationImages, conversationQuotes, conversationDrafts, conversationSearch, officeWorkerGuide, createOfficeDocuments, createAssistantSkills, createAssistantProfile, requireRosterAssistant, readWebThreadAssistant, projectInstructions, createConversationSharing, createWorkspaceBoard, createSavedPrompts, createMessageFavorites, createConversationExport, createSystemExtensions, fetchCalendarAgenda, workspaceSplash, createStartPage, readStartPage, createKnowledgeSourceReader, createKnowledgeSourceReaderService, isProtectedKnowledgeURL, isKnowledgeDocumentCommentsURL, searchKnowledgeCommentPeople, verifyKnowledgeCommentActor, readKnowledgeDocumentComments, writeKnowledgeDocumentComment, type KnowledgeDocumentCommentAction, CommentWriteError, KnowledgeSourceReaderError } from '../../../plugins/index.ts';
 import { commitChanges, executionUsage, TRANSCRIPTION_AUDIO, TRANSCRIPTION_MAX_SECONDS } from '../../protocol/src/index.ts';
 import type { FeishuAgentInputTarget } from '../../protocol/src/bots.ts';
-import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, MailAccount, MailConnectorState, MailInboxRead, Message, MessageRoute, Project, Run, SearchRequest, Snapshot, Todo } from '../../protocol/src/index.ts';
+import type { AppConfig, Approval, BotScope, GroupReadPage, ExecutionResult, InboxFallbackPlan, InboxItem, InboxMatter, InboxThing, Json, JsonObject, KnowledgeEntry, MailAccount, MailConnectorState, MailInboxRead, Message, MessageRoute, Project, Run, RunBuild, RunFailure, SearchRequest, Snapshot, Todo } from '../../protocol/src/index.ts';
+import { buildInfo } from './build-info.ts';
+import { failureKind, failureStage } from './run-failure.ts';
 import type { Executor, MachineClient, KnowledgeBackend } from '../../plugin-sdk/src/index.ts';
 
 export class InputError extends Error {
   status: number;
-  constructor(message: string, status = 400) { super(message); this.status = status; }
+  constructor(message: string, status = 400) { super(message); this.name = 'InputError'; this.status = status; }
 }
 export function requiredText(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new InputError(`${name}不能为空`);
@@ -2212,7 +2214,9 @@ export async function createWorkbench(config: AppConfig) {
     const progress = run.nativeResultSources?.includes(result.source) ? executionProgress(result.progress) : undefined;
     const usage = run.nativeResultSources?.includes(result.source) && executionUsage(result.usage?.input, result.usage?.output);
     const changes = run.nativeResultSources?.includes(result.source) && commitChanges(result.commitChanges);
-    const next: Run = { ...run, ...(changes ? { commitChanges: changes } : {}), ...(usage ? { usage } : {}), ...(progress ? { progress } : {}), ...(typeof result.nativeSessionId === 'string' ? { nativeSessionId: result.nativeSessionId } : {}), status: result.state === 'completed' ? 'completed' : 'failed', output: result.text, resultSource: result.source, updatedAt: now };
+    // A result that says it failed is the executor's own report. It is recorded as that kind.
+    const failed = result.state === 'failed';
+    const next: Run = { ...run, ...(changes ? { commitChanges: changes } : {}), ...(usage ? { usage } : {}), ...(progress ? { progress } : {}), ...(typeof result.nativeSessionId === 'string' ? { nativeSessionId: result.nativeSessionId } : {}), status: failed ? 'failed' : 'completed', output: result.text, resultSource: result.source, ...(failed ? { failure: { kind: 'executor', at: now } } : {}), updatedAt: now };
     const message: Message = { id: messageId, runResult:{runId:run.id,status:result.state === 'completed' ? 'completed' : 'failed',source:result.source}, conversationId: run.conversationId, role: 'assistant', origin: 'result', replyTo: run.sourceMessageId, projectId: run.projectId, todoId: run.todoId,
       text: `执行${next.status === 'completed' ? '完成' : '失败'}：${run.prompt}\n${result.text || '执行端没有返回文字结果'}\n结果来源：${result.source}；关联待办需你验收后再完成。`, status: 'done', createdAt: now };
     store.transaction(() => { store.put('runs', run.id, next); store.put('messages', messageId, message); store.put('notifications.source-presence',`run:${run.id}`,{present:presence.status().present}); background.publish({type:'run.finished',typeVersion:1,sourceId:`run:${run.id}:finished`,data:{runId:run.id,messageId,status:next.status},subject:{kind:'run',id:run.id}}); });
@@ -2221,7 +2225,8 @@ export async function createWorkbench(config: AppConfig) {
   // A crash does not tell us whether an external action ran. Never replay it on startup.
   for (const run of store.list<Run>('runs')) {
     if (run.status === 'running' || run.status === 'queued') {
-      store.put('runs', run.id, { ...run, status: 'unknown', error: '服务重启，执行结果尚未确认', updatedAt: new Date().toISOString() });
+      // Nothing is in hand here that says what went wrong, so the kind is not known either.
+      store.put('runs', run.id, { ...run, status: 'unknown', error: '服务重启，执行结果尚未确认', failure: { kind: 'unknown', at: new Date().toISOString() }, updatedAt: new Date().toISOString() });
     }
   }
   function changed(type: string, data: unknown) { events.publish(type, data as Json); }
@@ -3016,6 +3021,10 @@ export async function createWorkbench(config: AppConfig) {
       cwd, workspace, copies, isolated, worktreeRunId, projectTree, parentRun, nativeResume, inputMessage, taskPolicy} = prepared;
     const now = new Date().toISOString();
     const proofSources = nativeResultSources(executor);
+    // What was running when the run was made. A failure is read against this, and not against
+    // whatever is running when someone comes to look at it.
+    const machineBuild = executor.mode === 'real' ? machines?.list().find(entry => entry.id === executor.machineId)?.build : undefined;
+    const build: RunBuild = { server: buildInfo(), ...(machineBuild ? { machine: { commit: machineBuild.commit, ...(machineBuild.dirty ? { dirty: true } : {}) } } : {}) };
     const ids = Array.from({ length: copies }, () => randomUUID());
     const runs = ids.map((id): Run => ({
       id, executorId, conversationId, prompt, ...(model && {model}), projectId, todoId, doneWhen, ...(planEstimate && {planEstimate}),
@@ -3026,6 +3035,7 @@ export async function createWorkbench(config: AppConfig) {
       ...(nativeResume && { nativeResume }),
       ...(proofSources.length && { nativeResultSources: proofSources }),
       ...(executor.mode === 'real' && { machineId: executor.machineId }),
+      build,
       cwd: isolated && workspace ? join(workspace.cwd + '-worktrees', id) : cwd,
       executionMode: executionMode as Run['executionMode'], sourceMessageId: optionalText(input.sourceMessageId, '来源消息'),
       expectMinutes: expectMinutes as number | undefined, status: 'queued', output: '', createdAt: now, updatedAt: now,
@@ -3055,8 +3065,14 @@ export async function createWorkbench(config: AppConfig) {
       changed('runs.changed', { id: run.id });
       // Launch asynchronously so a long-running executor never holds the HTTP request open.
       const job = Promise.resolve().then(async () => {
-        const update = (patch: Partial<Run>) => {
-          const next = { ...store.get<Run>('runs', run.id)!, ...patch, updatedAt: new Date().toISOString() };
+        const update = (patch: Partial<Run>, cause?: unknown) => {
+          const current = store.get<Run>('runs', run.id)!;
+          // A run that failed or was left uncertain says what kind of thing went wrong. It is
+          // worked out here, where the error that ended it is in hand. A cancelled run did not
+          // fail and says nothing.
+          const failure = cause !== undefined && (patch.status === 'failed' || patch.status === 'unknown')
+            ? { kind: failureKind(cause), at: new Date().toISOString() } : undefined;
+          const next = { ...current, ...patch, ...(failure ? { failure } : {}), updatedAt: new Date().toISOString() };
           store.put('runs', run.id, next); changed('runs.changed', { id: run.id });
         };
         update({ status: 'running' });
@@ -3169,18 +3185,25 @@ export async function createWorkbench(config: AppConfig) {
           const result = executor.mode === 'real'
             ? await effects.perform({ key: `run:${run.id}:start`, kind: nativeResume ? 'executor.resume' : 'executor.start', target: executor.machineId, summary: prompt, content: { executorId, prompt: finalPrompt, ...(nativeResume ? { nativeResume: { ...nativeResume } } : {}), ...(destination === undefined ? {} : { cwd: destination }), executionMode: String(executionMode) }, run: execute })
             : await execute();
-          if (nativeResume && !result.pending && !controller.signal.aborted) {
-            const proof = result.nativeResult;
-            if (!proof || !['completed', 'failed'].includes(proof.state) || typeof proof.text !== 'string'
-              || proof.nativeSessionId !== nativeResume.nativeSessionId || !run.nativeResultSources?.includes(proof.source)) {
-              update({ status: 'unknown', sessionId: result.sessionId, output: result.text, error: '原生恢复同步结果缺少匹配的线程证据；不会自动重试' });
-            } else finishRun({ ...store.get<Run>('runs', run.id)!, ...(result.sessionId ? { sessionId: result.sessionId } : {}) }, proof);
+          // What the run looks like now. The executor's answer is read against this, and the
+          // record that is finished is this one, so that the session and output it has gathered
+          // are kept.
+          const after = store.get<Run>('runs', run.id)!;
+          const proof = nativeResume && !result.pending && !controller.signal.aborted ? result.nativeResult : undefined;
+          if (nativeResume && !result.pending && !controller.signal.aborted && (!proof || !['completed', 'failed'].includes(proof.state) || typeof proof.text !== 'string'
+            || proof.nativeSessionId !== nativeResume.nativeSessionId || !run.nativeResultSources?.includes(proof.source))) {
+            update({ status: 'unknown', sessionId: result.sessionId, output: result.text, error: '原生恢复同步结果缺少匹配的线程证据；不会自动重试' });
+          } else if (proof) {
+            finishRun({ ...after, ...(result.sessionId ? { sessionId: result.sessionId } : {}) }, proof);
           } else {
             update({ status: controller.signal.aborted ? (executor.mode === 'demo' ? 'cancelled' : 'unknown') : (result.pending ? 'running' : 'completed'), sessionId: result.sessionId, output: result.text });
-            if (!result.pending && !controller.signal.aborted) finishRun(store.get<Run>('runs', run.id)!, { state: 'completed', text: result.text, source: executor.mode });
+            if (!result.pending && !controller.signal.aborted) finishRun(after, { state: 'completed', text: result.text, source: executor.mode });
           }
         } catch (error) {
-          update({ status: controller.signal.aborted ? (executor.mode === 'demo' ? 'cancelled' : 'unknown') : ((error as { delivery?: string }).delivery === 'unknown' ? 'unknown' : 'failed'), error: error instanceof Error ? error.message : String(error) });
+          // A run stopped by the user did not fail. A real one is left uncertain, because what
+          // the executor did with what it was already sent is not known, and no kind is claimed.
+          if (controller.signal.aborted) update({ status: executor.mode === 'demo' ? 'cancelled' : 'unknown', error: error instanceof Error ? error.message : String(error) });
+          else update({ status: (error as { delivery?: string }).delivery === 'unknown' ? 'unknown' : 'failed', error: error instanceof Error ? error.message : String(error) }, error);
         } finally { controllers.delete(run.id); }
       });
       jobs.add(job); void job.then(() => jobs.delete(job), error => { jobs.delete(job); console.error('执行记录保存失败：', error instanceof Error ? error.message : String(error)); });

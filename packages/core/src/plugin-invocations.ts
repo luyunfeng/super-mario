@@ -3,7 +3,7 @@ import type { Contributions, HookName, HookPhase, InvocationOptions, PluginHookH
 import type { Json } from '../../protocol/src/index.ts';
 export class PluginCallError extends Error {
   delivery: 'no' | 'unknown';
-  constructor(message: string, completed = false) { super(message); this.delivery = completed ? 'unknown' : 'no'; }
+  constructor(message: string, completed = false) { super(message); this.name = 'PluginCallError'; this.delivery = completed ? 'unknown' : 'no'; }
 }
 const names = new Set<HookName>(['work.dispatch', 'channel.send', 'knowledge.put']);
 export function validateInvocationOptions(options: InvocationOptions, maxTimeout = 30000) {

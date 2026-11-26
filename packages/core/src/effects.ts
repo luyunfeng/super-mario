@@ -9,7 +9,10 @@ export interface EffectRecord {
 export class EffectError extends Error {
   status = 409;
   delivery: 'no' | 'unknown';
-  constructor(message: string, delivery: 'no' | 'unknown') { super(message); this.delivery = delivery; }
+  /** The error that ended the action, when one did. It is kept so that the kind of a failure
+   *  can be read from it afterwards; the effect itself is still what the caller is told. */
+  readonly cause?: unknown;
+  constructor(message: string, delivery: 'no' | 'unknown', cause?: unknown) { super(message); this.name = 'EffectError'; this.delivery = delivery; this.cause = cause; }
 }
 /** Claim before I/O. Restarting or repeating an uncertain mutation never resends it. */
 export function createEffects({ store, events }: { store: Store; events: EventBus }) {
@@ -44,7 +47,7 @@ export function createEffects({ store, events }: { store: Store; events: EventBu
       }, error => {
         const definite = error && typeof error === 'object' && 'delivery' in error && error.delivery === 'no';
         save({ ...record, status: definite ? 'failed' : 'unknown', error: error instanceof Error ? error.message : String(error), updatedAt: new Date().toISOString() });
-        throw new EffectError(error instanceof Error ? error.message : String(error), definite ? 'no' : 'unknown');
+        throw new EffectError(error instanceof Error ? error.message : String(error), definite ? 'no' : 'unknown', error);
       }).finally(() => jobs.delete(input.key));
       jobs.set(input.key, job);
       return job;
