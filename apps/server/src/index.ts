@@ -48,6 +48,19 @@ async function body(req: IncomingMessage, maxBytes = 1024 * 1024): Promise<Recor
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new InputError('请求必须是JSON对象');
   return value as Record<string, unknown>;
 }
+/**
+ * A refusal of a mail account as the page gets it.
+ *
+ * The account store says whether it is the owner's input (400), a missing account (404) or a
+ * version that was replaced meanwhile (409). It carries that as a status, which becomes the
+ * status of the answer. Anything else is a failure of the workbench or of the mail server and
+ * is answered as one.
+ */
+function mailError(error: unknown): InputError {
+  if (error instanceof InputError) return error;
+  const status = error && typeof error === 'object' && 'status' in error && typeof error.status === 'number' ? error.status : undefined;
+  return new InputError(error instanceof Error ? error.message : '邮箱操作失败', status ?? 500);
+}
 function assistantScopedInput(url: URL, input: JsonObject): JsonObject {
   const owners = url.searchParams.getAll('assistantId');
   if (owners.length > 1 || Object.hasOwn(input, 'assistantId')) throw new InputError('请在查询参数中指定一个助理 ID');
@@ -496,6 +509,60 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (method === 'POST') return json(res,200,await gateway.commandGroup.sync(await body(req)));
         }
         if (path === '/api/v1/github/connector' && method === 'GET') return json(res, 200, app.githubView());
+        if (path === '/api/v1/mail/preset' && method === 'GET') {
+          const email = url.searchParams.get('email') ?? '';
+          if (url.searchParams.size > 1 || (url.searchParams.size === 1 && !url.searchParams.has('email'))) throw new InputError('只接受 email 参数');
+          return json(res, 200, { preset: app.mailAccounts.preset(email) ?? null });
+        }
+        if (path === '/api/v1/mail/accounts' && method === 'GET') return json(res, 200, app.mailReader.state());
+        if (path === '/api/v1/mail/accounts' && method === 'POST') {
+          try { return json(res, 201, await app.mailAccounts.add(await body(req))); }
+          catch (error) { throw mailError(error); }
+        }
+        const mailAccount = path.match(/^\/api\/v1\/mail\/accounts\/([^/]+)$/);
+        if (mailAccount && method === 'DELETE') {
+          const id = decodeURIComponent(mailAccount[1]!);
+          // The version can come as a query parameter or in the body, because some clients
+          // send no body with a DELETE.
+          const inQuery = url.searchParams.has('version');
+          if (url.searchParams.size > Number(inQuery)) throw new InputError('删除账号只接受 version 参数');
+          const input = await body(req);
+          // The version says which state of the account the owner saw. A change made from
+          // another window in between is refused rather than written over.
+          const version = inQuery ? Number(url.searchParams.get('version')) : input.version;
+          if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) throw new InputError('请带上账号的版本号');
+          if (!inQuery && Object.keys(input).some(key => key !== 'version')) throw new InputError('删除账号只接受 version 参数');
+          try { app.mailAccounts.remove(id, version); }
+          catch (error) { throw mailError(error); }
+          app.mailReader.forget(id);
+          return json(res, 200, { removed: id });
+        }
+        if (mailAccount && method === 'PUT') {
+          const id = decodeURIComponent(mailAccount[1]!);
+          const { version, ...change } = await body(req);
+          if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) throw new InputError('请带上账号的版本号');
+          try { return json(res, 200, await app.mailAccounts.update(id, change, version)); }
+          catch (error) { throw mailError(error); }
+        }
+        const mailRead = path.match(/^\/api\/v1\/mail\/accounts\/([^/]+)\/read$/);
+        if (mailRead && method === 'POST') {
+          // A read that the page stops waiting for is cancelled, so the connection is closed
+          // instead of being held for nobody.
+          const controller = new AbortController();
+          res.on('close', () => { if (!res.writableEnded) controller.abort(); });
+          try {
+            const state = await app.mailReader.read(decodeURIComponent(mailRead[1]!), controller.signal);
+            return json(res, 200, state);
+          } catch (error) {
+            if (controller.signal.aborted) return;
+            // An account that is missing, or a password that cannot be read, keeps the status
+            // the store gave it. A failure of the mail server carries none, and is not a bad
+            // request: its message already says what the owner can do about it.
+            const failure = error && typeof error === 'object' && 'failure' in error;
+            throw new InputError(error instanceof Error ? error.message : '读取邮箱失败',
+              failure ? 502 : error && typeof error === 'object' && 'status' in error ? Number(error.status) : 500);
+          }
+        }
         if (path === '/api/v1/transcription' && method === 'GET') return json(res, 200, app.transcription.status());
         if (path === '/api/v1/transcription/choice' && method === 'PUT') {
           const input = await body(req);
