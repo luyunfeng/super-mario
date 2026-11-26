@@ -237,6 +237,7 @@ export interface SystemActions {
   setKnowledgeRelevance?(args: Record<string, unknown>): Promise<Json>;
   setKnowledgeImportance?(args: Record<string, unknown>): Promise<Json>;
   changeKnowledgeAlias?(args: Record<string, unknown>): Promise<Json>;
+  changeKnowledgeRelation?(args: Record<string, unknown>): Promise<Json>;
   changeKnowledgeTag?(args: Record<string, unknown>): Promise<Json>;
   knowledgeRevision?(id: string, commit?: string, projectId?: string): ReturnType<NonNullable<KnowledgeBackend['revision']>>;
   lookupKnowledgeSource?(url: unknown, view: 'pages' | 'attempts', projectId?: string, offset?: unknown): Promise<Json>;
@@ -572,7 +573,16 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           signal.throwIfAborted();
           const backend = context.contributions.list('knowledge_backends').find(item => item.id === 'local');
           if (!backend) throw new Error('Local knowledge backend is unavailable');
-          return await backend.value.list(args as KnowledgeQuery) as unknown as Json;
+          const pages = await backend.value.list(args as KnowledgeQuery);
+          if (!pages.some(page => page.relatedIds?.length)) return pages as unknown as Json;
+          // Name a linked page only when it is itself in this result. The result has already
+          // been narrowed to what this conversation may read, so a link that now points
+          // outside that range stays an id and reveals no title.
+          const titles = new Map(pages.map(page => [page.id, page.title]));
+          return pages.map(page => ({ ...page, ...(page.relatedIds?.length ? { related: page.relatedIds.flatMap(id => {
+            const title = titles.get(id);
+            return title ? [{ id, title }] : [];
+          }) } : {}) })) as unknown as Json;
         }, { layer: { type: 'string', enum: ['personal', 'global', 'project'] }, projectId: { type: 'string' }, query: { type: 'string' }, tag: { type: 'string' }, minRelevance: { type: 'integer', minimum: 0, maximum: 100 }, importance: { type: 'string', enum: ['P0', 'P1', 'P2', 'P3'] } }));
       },
     },
@@ -612,6 +622,10 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
           '按用户明确要求给已定位的知识页添加或移除一个别名。传该页 id 和已读 updatedAt。',
           async (args, signal) => { signal.throwIfAborted(); return actions.changeKnowledgeAlias!(args); },
           { id: { type: 'string' }, updatedAt: { type: 'string' }, alias: { type: 'string' }, action: { type: 'string', enum: ['add', 'remove'] } }));
+        if (actions?.changeKnowledgeRelation) context.contribute('tools', 'knowledge_change_relation', tool('knowledge_change_relation',
+          '按用户明确要求关联或移除两个知识页。传本页 id、已读 updatedAt、目标页 relatedId 和 action。目标页须在当前范围可见；页面不能关联自己。',
+          async (args, signal) => { signal.throwIfAborted(); return actions.changeKnowledgeRelation!(args); },
+          { id: { type: 'string' }, updatedAt: { type: 'string' }, relatedId: { type: 'string' }, action: { type: 'string', enum: ['add', 'remove'] } }));
         if (actions?.changeKnowledgeTag) context.contribute('tools', 'knowledge_change_tag', tool('knowledge_change_tag',
           '按用户明确要求给指定知识页添加或移除一个标签。传入 knowledge_list 返回的 id 和 updatedAt；版本过期时重新核对。',
           async (args, signal) => { signal.throwIfAborted(); return actions.changeKnowledgeTag!(args); },

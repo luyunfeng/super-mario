@@ -28,7 +28,9 @@ export type JsonObject = { [key: string]: Json };
 export type KnowledgeLayer = 'personal' | 'global' | 'project';
 export type KnowledgeImportance = 'P0' | 'P1' | 'P2' | 'P3';
 export type KnowledgeEditSource = 'workbench' | 'conversation' | 'feishu';
-export interface KnowledgeEntry { contentLocked?: boolean; factsEdit?: { source: KnowledgeEditSource; at: string }; confirmedFacts?: string; relevance?: number; importance?: KnowledgeImportance; aliases?: string[]; tags?: string[]; id: string; layer: KnowledgeLayer; title: string; content: string; projectId?: string; updatedAt: string }
+export interface KnowledgeEntry { contentLocked?: boolean; factsEdit?: { source: KnowledgeEditSource; at: string }; confirmedFacts?: string; relevance?: number; importance?: KnowledgeImportance; aliases?: string[]; tags?: string[]; id: string; layer: KnowledgeLayer; title: string; content: string; projectId?: string; updatedAt: string;
+  /** Other knowledge pages the owner or an assistant linked to this one, by id. */
+  relatedIds?: string[]; }
 export interface QuestionItem {
   question: string;
   header?: string;

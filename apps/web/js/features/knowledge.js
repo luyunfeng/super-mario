@@ -138,6 +138,29 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   const importance = Select({ name: 'importance', value: entry?.importance ?? '', options: [['', '未设置'], ...['P0', 'P1', 'P2', 'P3'].map(level => [level, level])] });
   const aliases = TextArea({ name: 'aliases', value: (entry?.aliases ?? []).join('\n'), rows: 2, placeholder: '每行一个别名' });
   const tags = TextArea({ name: 'tags', value: (entry?.tags ?? []).join('\n'), rows: 2, placeholder: '每行一个标签' });
+  // Links to other pages are chosen from the pages this browser can see, not typed as ids.
+  // A link whose page has gone is kept and named as unavailable, so it can be removed.
+  const visiblePages = (store.view.snapshot?.knowledge ?? []).filter(page => page.id !== entry?.id);
+  const pageById = new Map(visiblePages.map(page => [page.id, page]));
+  let relatedIds = [...(entry?.relatedIds ?? [])];
+  const relatedList = h('div', { class: 'stack', 'aria-label': '已关联的知识页' });
+  const relatedPick = Select({ 'aria-label': '要关联的知识页', options: [['', '选择知识页…']] });
+  function paintRelated() {
+    replace(relatedList, relatedIds.length ? relatedIds.map(id => {
+      const page = pageById.get(id);
+      return h('div', { class: 'row row--between' },
+        page ? h('a', { href: router.href('memory') + '?entry=' + encodeURIComponent(id) }, page.title)
+          : h('span', { class: 'muted' }, '关联的知识页已不可用'),
+        Button({ label: '移除关联', size: 'sm', onClick: () => { relatedIds = relatedIds.filter(value => value !== id); paintRelated(); } }));
+    }) : h('p', { class: 'muted small' }, '还没有关联其他知识页。'));
+    replace(relatedPick, h('option', { value: '' }, '选择知识页…'), visiblePages.filter(page => !relatedIds.includes(page.id)).map(page => h('option', { value: page.id }, page.title)));
+  }
+  relatedPick.addEventListener('change', () => {
+    if (!relatedPick.value) return;
+    relatedIds = [...relatedIds, relatedPick.value];
+    paintRelated();
+  });
+  paintRelated();
   // Keep each field's last reviewed value, so accepting a concurrent change
   // cannot replace someone else's edits with untouched values from this form.
   const fields = [title, content, facts, tags, importance, relevance, aliases];
@@ -314,13 +337,16 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
       if (!title.value.trim() || !content.value.trim()) { note.textContent = '请填写标题和内容。'; return; }
       if (layer.value === 'project' && !project.value) { note.textContent = '请选择所属项目。'; return; }
       if (!relevance.validity.valid) { note.textContent = '相关度须为 0 至 100 的整数。'; return; }
-      const body = { aliases: aliases.value.split('\n').map(value => value.trim()).filter(Boolean), contentLocked: protection.value === 'locked', confirmedFacts: facts.value, relevance: relevance.value === '' ? null : relevance.valueAsNumber, ...(entry ? { expectedUpdatedAt: reviewed.updatedAt } : {}), importance: importance.value || null, tags: tags.value.split('\n').map(tag => tag.trim()).filter(Boolean), layer: layer.value, title: title.value.trim(), content: content.value.trim(), ...(layer.value === 'project' ? { projectId: project.value } : {}) };
+      const body = { relatedIds, aliases: aliases.value.split('\n').map(value => value.trim()).filter(Boolean), contentLocked: protection.value === 'locked', confirmedFacts: facts.value, relevance: relevance.value === '' ? null : relevance.valueAsNumber, ...(entry ? { expectedUpdatedAt: reviewed.updatedAt } : {}), importance: importance.value || null, tags: tags.value.split('\n').map(tag => tag.trim()).filter(Boolean), layer: layer.value, title: title.value.trim(), content: content.value.trim(), ...(layer.value === 'project' ? { projectId: project.value } : {}) };
       if (entry) {
         // A facts-only edit must also preserve the original bytes of untouched Markdown.
         for (const [i, field] of fields.entries()) {
           if (field.value === baseline[i]) delete body[field.name];
         }
         if (body.contentLocked === Boolean(reviewed.contentLocked)) delete body.contentLocked;
+        // Links are like the other fields: an unchanged list is left out, so saving
+        // without changes still sends nothing.
+        if (JSON.stringify(relatedIds) === JSON.stringify(entry.relatedIds ?? [])) delete body.relatedIds;
         if (!changedScope()) { delete body.layer; delete body.projectId; }
         if (Object.keys(body).length === 1) { drawer.close(); return; }
       }
@@ -372,7 +398,7 @@ export function openKnowledgeDrawer({ api, store, router, scope, entry, sourceId
   });
   const drawer = openDrawer({
     title: entry ? '编辑记忆' : '添加记忆', subtitle: entry ? `更新于 ${timeAgo(entry.updatedAt)}` : undefined,
-    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), actionTodos, actionStatus, actionTodos && todoReceipt, Field({ label: '正文维护方式', control: protection }), Field({ label: '已确认事实', control: facts }), factsNote, Field({ label: '别名', control: aliases }), Field({ label: '标签', control: tags }), Field({ label: '重要级', control: importance }), Field({ label: '相关度（0–100）', control: relevance }), entry && originalSources(api, entry, sourceId, line, endLine, mayQuote() ? ask : null, canReadEntry() ? handoff : null, canReadEntry), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
+    body: [Field({ label: '属于哪一层', control: layer, hint: undefined }), layerHint, projectField, Field({ label: '标题', control: title, required: true }), Field({ label: '内容', control: content, required: true }), actionTodos, actionStatus, actionTodos && todoReceipt, Field({ label: '正文维护方式', control: protection }), Field({ label: '已确认事实', control: facts }), factsNote, Field({ label: '别名', control: aliases }), Field({ label: '标签', control: tags }), h('div', { class: 'field' }, h('span', { class: 'field__label' }, '关联的知识页'), h('p', { class: 'field__hint' }, '表示两条知识互相参照。保存后生效。'), relatedList, relatedPick), Field({ label: '重要级', control: importance }), Field({ label: '相关度（0–100）', control: relevance }), entry && originalSources(api, entry, sourceId, line, endLine, mayQuote() ? ask : null, canReadEntry() ? handoff : null, canReadEntry), entry && revisionHistory(api, entry, loadDraft, selectedCommit), note, conflict],
     footer: [remove, h('span', { class: 'grow' }), Button({ label: '取消', onClick: () => drawer.close() }), save],
   });
   sync();
