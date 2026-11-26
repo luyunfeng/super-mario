@@ -51,3 +51,30 @@ test('抽屉支持键盘关闭并把焦点还给触发它的按钮，窄屏不�
   await page.goto(server.url+'/#inbox?item=missing-inbox');
   await expect(page.getByRole('status').filter({hasText:'当前工作台找不到这条收件'})).toBeVisible();
 });
+
+test('断网时顶栏显示离线，恢复后自动重连并拿到断线期间的新数据',{timeout:40000},async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'mario-reconnect-'));
+  const server=await startServer({host:'127.0.0.1',port:0,dataDir,demo:true});
+  t.after(async()=>{await server.close();await rm(dataDir,{recursive:true,force:true});});
+  const browser=await chromium.launch({executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  t.after(()=>browser.close());
+  const context=await browser.newContext();
+  const page=await context.newPage();
+  await page.addInitScript(()=>localStorage.setItem('sm.splash.seen','true'));
+  await page.goto(server.url+'/#memory');
+  await expect(page.locator('main')).toContainText('记忆');
+
+  // Offline is simulated by cutting the page's network, as a laptop losing Wi-Fi would.
+  await context.setOffline(true);
+  // While the page is offline the server keeps working: a memory entry is added.
+  await server.app.knowledge().put({title:'断线期间新增的记忆',content:'合成内容',layer:'personal'});
+  // The page is cut off, so it must not show the entry yet.
+  await page.waitForTimeout(2500);
+  await expect(page.locator('main')).not.toContainText('断线期间新增的记忆');
+  // The connection indicator in the top bar says so the whole time.
+  await expect(page.locator('#connection')).toContainText('重连中');
+  await context.setOffline(false);
+  // The page reconnects on its own. Nothing is reloaded by hand.
+  await expect(page.locator('main')).toContainText('断线期间新增的记忆',{timeout:20000});
+  await expect(page.locator('#connection')).toContainText('已连接');
+});
