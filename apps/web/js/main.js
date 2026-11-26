@@ -15,6 +15,7 @@ import { closeOverlays } from './ui/overlay.js';
 import { startPages } from './features/plugin-settings.js';
 import { createSearch } from './features/search.js';
 import { installShortcuts } from './features/shortcuts.js';
+import { installBrowserNotifications } from './features/browser-notifications.js';
 import { openQuickTodo } from './features/quick-todo.js';
 import { playSplash, stopSplash } from './features/splash.js';
 import { createConsole } from './legacy/terminal.js';
@@ -80,6 +81,7 @@ for (const page of Object.values(pages)) shell.view.append(page.el);
 
 createSearch({ shell, store, router, api, scope });
 installShortcuts({ shell, store, router, onQuickTodo: ctx.quickTodo });
+installBrowserNotifications({ api, store });
 
 function renderChrome(view) {
   const alerts = computeAlerts(view.snapshot, view.attention, { seenRunIds: readLocal('sm.seenRuns', []) });

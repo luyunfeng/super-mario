@@ -1,4 +1,5 @@
 import { readingFontEditor } from './reading-fonts.js';
+import { browserNotificationSettingsEditor } from './browser-notifications.js';
 import { openShortcutSettings } from './shortcuts.js';
 import { preferenceEditor } from './plugin-preferences.js';
 import { openSavedPrompts } from './saved-prompts.js';
@@ -14,6 +15,7 @@ const descriptions = {
   'run-comparison':'并排查看同一项目的两次执行。',
   'reading-fonts':'调整阅读字号，选择或输入本机安装的字体。留空使用工作台默认字体，选择保存在当前浏览器。',
   'shortcut-settings':'调整本浏览器的全局快捷键。',
+  'browser-notifications':'页面不在前台时用浏览器系统通知提醒需要你处理的事和执行结果。设置保存在当前浏览器。',
   'start-page':'选择直接打开工作台时显示的页面，设置在同一服务的浏览器之间共享。',
   'todo-calendar':'按日、周或月查看项目待办的截止时间。',
   'assistant-skills':'管理主助手技能包，供 Web 主对话和全局飞书机器人按需读取。',
@@ -161,6 +163,7 @@ export function createPluginSettings({ api, store, router }) {
           : h('p', { class: 'small' }, '缺少依赖插件：' + dep.id)),
         preferenceEditor(plugin.id),
         plugin.id === 'reading-fonts' && plugin.status === 'active' && readingFontEditor(),
+        plugin.id === 'browser-notifications' && plugin.status === 'active' && browserNotificationSettingsEditor(),
         plugin.id === 'shortcut-settings' && Button({ label: '快捷键设置', disabled: plugin.status !== 'active', onClick: () => openShortcutSettings(store) }),
         plugin.id === 'start-page' && startPageEditor({ api, store }, snapshot.startPage, startPages(plugins), openFeature),
         plugin.id === 'saved-prompts' && Button({ label: '管理常用提示词', size: 'sm', disabled: plugin.status !== 'active',

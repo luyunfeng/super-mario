@@ -68,6 +68,9 @@ export const assistantCardExamples: Extension = {
 export const readingFonts: Extension = {
   id: 'reading-fonts', name: '阅读字体', capabilities: ['web.appearance.fonts'], activate() {},
 };
+export const browserNotifications: Extension = {
+  id: 'browser-notifications', name: '浏览器系统通知', capabilities: ['web.notifications'], activate() {},
+};
 export const shortcutSettings: Extension = {
   id: 'shortcut-settings', name: '快捷键设置', capabilities: ['web.shortcuts'], activate() {},
 };

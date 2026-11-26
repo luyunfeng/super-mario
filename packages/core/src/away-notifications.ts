@@ -1,4 +1,5 @@
 import {readBriefingSettings} from './briefing.ts';
+import {pendingDecisionHref} from './pending-decision-link.ts';
 import type { Store, EventBus } from '../../plugin-sdk/src/index.ts';
 import type { FeishuBot, Project, Run, Message, Approval, Todo, AwayNotification as PendingNotice } from '../../protocol/src/index.ts';
 import type { createBackground } from './background.ts';
@@ -79,6 +80,26 @@ export function createAwayNotifications({ store, background, presence, bots, cha
     const runHeader = originRun ? `后台 Agent · ${originRun.machineId || originRun.executorId}${project ? ` · ${project.name}` : ''}` : '';
     const fallbackText = message?.text
       ?? (approval ? `等待审批：${approval.title}\n${approval.details}` : plan ? `等待确认计划：${plan.title}` : originRun ? `${runHeader}\n${originRun.error || originRun.output || '执行已结束'}` : '有工作结果或决定需要你查看');
+    // Feishu and browser system notifications are independent channels. A notice held
+    // by low-distraction mode is for the briefing, so it reaches neither channel.
+    if (!originalRoute?.channel && !skip && !held) {
+      const href = data.decisionKind ? pendingDecisionHref(data.decisionKind === 'approval' ? 'approvals' : 'plans', data.decisionId!)
+        : data.id ? pendingDecisionHref('interactions', data.id)
+        : message ? (message.conversationId === 'main' ? '#chat?at=' + encodeURIComponent(message.id)
+          : projectId ? '#projects/' + encodeURIComponent(projectId) + '/workspace?at=' + encodeURIComponent(message.id) : undefined)
+        : originRun ? '#projects/' + encodeURIComponent(originRun.projectId ?? 'all') + '/runs/' + encodeURIComponent(originRun.id) : undefined;
+      // How long the owner waited for this result; "long task only" is a browser setting.
+      const startedAt = message?.replyTo ? store.get<Message>('messages', message.replyTo)?.createdAt : run?.createdAt;
+      const durationMs = startedAt && Number.isFinite(Date.parse(startedAt)) ? Math.max(0, Date.parse(event.createdAt) - Date.parse(startedAt)) : undefined;
+      events?.publish('browser.notice', {
+        id, createdAt: event.createdAt,
+        kind: data.decisionKind || data.id ? 'needed' : 'done',
+        title: approval ? '等待审批' : plan ? '等待确认计划' : data.id ? '需要你回答'
+          : isRunFinish ? (originRun?.status === 'failed' ? '执行失败' : '执行已结束') : '工作台回复',
+        text: fallbackText.slice(0, 300),
+        ...(href && { href }), ...(durationMs !== undefined && { durationMs }),
+      });
+    }
     store.put('notifications.away',id,{ id,createdAt:event.createdAt,...(isRunFinish && run && {runId:run.id}),...(message && {messageId:message.id}),text:fallbackText,projectId,todoId,cardId:data.id,...(data.decisionKind?{decision:{kind:data.decisionKind,id:data.decisionId!,version:data.version!}}:{}),status:skip?'skipped':held?'held':'pending',...(held?{reason:'按低干扰设置保留'}:{}),...(skip?{reason:Boolean(originalRoute?.channel)?'沿用原路回复，避免重复通知':'用户在场或已关闭离场通知'}:{}) });
     flush(); return {status:'done'};
   } });

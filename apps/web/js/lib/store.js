@@ -71,6 +71,10 @@ export function createStore(api) {
         scheduleRefresh();
         return;
       }
+      if (event?.type === 'browser.notice' && typeof event.data?.id === 'string' && Number.isSafeInteger(event.id)) {
+        set({ browserNotice: event.data, browserNoticeChange: (view.browserNoticeChange ?? 0) + 1 });
+        return;
+      }
       if(event?.type==='usage.sources.changed')set({usageSourcesChange:(view.usageSourcesChange ?? 0)+1});
       if (event?.type === 'source-subscriptions.changed') {
         set({ sourceSubscriptionsChange: {} });
