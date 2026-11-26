@@ -51,7 +51,8 @@ export async function modelCompletion(config: Pick<AppConfig, 'dataDir' | 'model
   let apiKey = setting?.apiKey;
   if (setting?.provider === 'codex-cli') {
     const { registerCodexProvider } = await import('./codex-provider.ts');
-    registerCodexProvider(runtime, chosen!, { command: setting.cliCommand, configDir: setting.cliConfigDir });
+    // The spare is registered with the first, so that it can be had if the first is not there.
+    registerCodexProvider(runtime, [chosen!, ...(spare ? [spare] : [])], { command: setting.cliCommand, configDir: setting.cliConfigDir });
   } else if (setting) {
     const { provider, baseUrl } = setting;
     const id = chosen!;

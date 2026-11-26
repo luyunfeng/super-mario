@@ -437,8 +437,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     let usingFallback = false;
     if (config.model?.provider === 'codex-cli') {
       const { registerCodexProvider } = await import('./codex-provider.ts');
-      registerCodexProvider(modelRuntime, selectedId, { command: config.model.cliCommand, configDir: config.model.cliConfigDir });
-      if (fallbackId) registerCodexProvider(modelRuntime, fallbackId, { command: config.model.cliCommand, configDir: config.model.cliConfigDir });
+      // The fallback is registered with the first, so that it can be had if the first is not there.
+      registerCodexProvider(modelRuntime, [selectedId, ...(fallbackId ? [fallbackId] : [])], { command: config.model.cliCommand, configDir: config.model.cliConfigDir });
     }
     if (config.model && config.model.provider !== 'codex-cli') {
       const { provider, baseUrl, apiKey } = config.model;

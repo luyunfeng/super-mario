@@ -174,7 +174,10 @@ async function runCLI(command: string, modelId: string, prompt: string, options:
   } finally { await rm(directory, { recursive: true, force: true }); }
 }
 
-export function registerCodexProvider(runtime: ModelRuntime, modelId: string, options?: { command?: string; configDir?: string }) {
+/** `modelIds` are the models this one command is asked for. Registering the provider again
+ *  replaces it, so every model that may be asked for is given here at once. */
+export function registerCodexProvider(runtime: ModelRuntime, modelIds: string | string[], options?: { command?: string; configDir?: string }) {
+  const ids = typeof modelIds === 'string' ? [modelIds] : modelIds;
   const streamSimple: StreamFunction = (model, context, request) => {
     const stream = createAssistantMessageEventStream();
     const message: AssistantMessage = {
@@ -229,9 +232,9 @@ export function registerCodexProvider(runtime: ModelRuntime, modelId: string, op
   };
   runtime.registerProvider('codex-cli', {
     api: 'openai-completions', apiKey: 'local-cli', baseUrl: 'http://localhost',
-    models: [{ id: modelId, name: `Codex CLI (${modelId})`, input: ['text'], reasoning: false,
+    models: ids.map(modelId => ({ id: modelId, name: `Codex CLI (${modelId})`, input: ['text'] as const, reasoning: false,
       contextWindow: 128_000, maxTokens: 16_384,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } })),
     streamSimple,
   });
 }
