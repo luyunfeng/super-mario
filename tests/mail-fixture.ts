@@ -24,6 +24,9 @@ export type FakeServerOptions = {
   /** What list() answers, in place of the folders. */
   listAnswer?: Array<{ path: string; name: string; flags: Set<string>; specialUse?: string }>;
   fail?: { connect?: Error; list?: Error; open?: Error; fetch?: Error; download?: Error };
+  /** How the server answers a search for a word. "none" is a server that finds nothing
+   *  for any word, "refused" one that will not search, and "finds" one that searches. */
+  search?: 'finds' | 'none' | 'refused';
 };
 
 export type FakeServer = {
@@ -32,6 +35,8 @@ export type FakeServer = {
   opened: Array<{ path: string; readOnly: boolean }>;
   /** Every fetch, as the range and the query it was asked for. */
   fetched: Array<{ range: string; query: Record<string, unknown> }>;
+  /** Every search the server was asked for. */
+  searches: Array<{ query: Record<string, unknown>; uid: boolean }>;
   /** Every attachment download. */
   downloaded: Array<{ uid: number; part: string; maxBytes: number }>;
   /** Every message put into a folder, as the copy of one that was sent. */
@@ -42,6 +47,7 @@ export type FakeServer = {
 export function fakeMailServer(options: FakeServerOptions): FakeServer {
   const opened: FakeServer['opened'] = [];
   const fetched: FakeServer['fetched'] = [];
+  const searches: FakeServer['searches'] = [];
   const downloaded: FakeServer['downloaded'] = [];
   const appended: FakeServer['appended'] = [];
   let logouts = 0;
@@ -67,11 +73,10 @@ export function fakeMailServer(options: FakeServerOptions): FakeServer {
     fetch: async function * (range, query) {
       if (options.fail?.fetch) throw options.fail.fetch;
       fetched.push({ range, query });
+      // "*" in a set is the largest UID the folder has.
+      const largest = selected ? Math.max(0, ...selected.messages.map(item => item.uid)) : 0;
       for (const message of selected?.messages ?? []) {
-        // A range is "n", "n:*" or "n:m". A UID is in it when it is not below the start.
-        const start = Number(range.split(':')[0]);
-        const end = range.endsWith(':*') ? Infinity : Number(range.split(':')[1]);
-        if (message.uid < start || message.uid > end) continue;
+        if (!inSet(message.uid, range, largest)) continue;
         const answer: Record<string, unknown> = { uid: message.uid };
         if (query.envelope && message.envelope) answer.envelope = message.envelope;
         if (query.flags) answer.flags = message.flags ?? new Set<string>();
@@ -88,6 +93,16 @@ export function fakeMailServer(options: FakeServerOptions): FakeServer {
         }
         yield answer;
       }
+    },
+    async search(query, searchOptions) {
+      searches.push({ query, uid: searchOptions.uid });
+      if (options.search === 'refused') throw new Error('SEARCH failed');
+      // A server that finds nothing answers nothing for any word.
+      if (Object.keys(query).length && options.search !== 'finds') return [];
+      if (Object.keys(query).length === 0) return (selected?.messages ?? []).map(message => message.uid);
+      // A server that searches looks at the subject and the sender.
+      const word = String(query.text ?? '').toLowerCase();
+      return (selected?.messages ?? []).filter(message => JSON.stringify(message.envelope ?? {}).toLowerCase().includes(word)).map(message => message.uid);
     },
     async download(uid, part, downloadOptions) {
       downloaded.push({ uid, part, maxBytes: downloadOptions.maxBytes });
@@ -108,5 +123,20 @@ export function fakeMailServer(options: FakeServerOptions): FakeServer {
       return { path };
     },
   };
-  return { client, opened, fetched, downloaded, appended, logouts: () => logouts };
+  return { client, opened, fetched, searches, downloaded, appended, logouts: () => logouts };
 }
+
+/** Whether a UID is in a set as a mail server writes it: one number, a range "n:m", an open
+ *  end "n:*", or several of those with commas between. `largest` is what "*" stands for. */
+function inSet(uid: number, range: string, largest: number): boolean {
+  return range.split(',').some(part => {
+    const [from, to] = part.split(':');
+    const start = Number(from);
+    if (!Number.isSafeInteger(start)) return false;
+    if (to === undefined) return uid === start;
+    // "*" is the largest number there is.
+    const end = to === '*' ? largest : Number(to);
+    return uid >= Math.min(start, end) && uid <= Math.max(start, end);
+  });
+}
+

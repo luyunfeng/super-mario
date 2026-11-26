@@ -4,16 +4,20 @@ import type { ImapFlowOptions } from 'imapflow';
 /** How a connection is opened. Kept separate from the library so the read can be tested
  *  without a server, and so the options are built in one place. */
 export type OpenImap = (options: ImapFlowOptions) => Promise<ImapClient>;
+/** The connection the mail library makes, with everything a stand-in may leave out. */
+export type OpenFullImap = (options: ImapFlowOptions) => Promise<FullImapClient>;
 
 /** Opens a connection with the mail library. The password is used here and not kept. */
-export function libraryOpen(): OpenImap {
+export function libraryOpen(): OpenFullImap {
   return async options => {
     const { ImapFlow } = await import('imapflow');
     const client = new ImapFlow({ ...options, logger: false });
     // The library logs every command and response by default, which would put addresses and
     // server greetings in the workbench's output. That is turned off above.
     await client.connect();
-    return client as unknown as ImapClient;
+    // The library's client has every method above. The cast is here because its own types
+    // are written with more options than this uses.
+    return client as unknown as FullImapClient;
   };
 }
 
@@ -175,11 +179,33 @@ export interface ImapClient {
    *  not mark mail as read, and a read-only open keeps the server from letting it. */
   mailboxOpen(path: string, options?: { readOnly?: boolean }): Promise<{ path?: string; totalCount?: number; unseenCount?: number }>;
   fetch(range: string, query: Record<string, unknown>): AsyncIterable<Record<string, unknown>>;
+  /** Searches the open folder. Answers the UIDs of the messages that match, in no order.
+   *  A stand-in that is not asked to search need not have it. */
+  search?(query: Record<string, unknown>, options: { uid: boolean }): Promise<number[] | false | undefined>;
   /** Streams one part of one message, decoded. Resolves without content when there is none. */
-  download(uid: number, part: string, options: { uid: boolean; maxBytes: number }): Promise<{ content?: AsyncIterable<Uint8Array>; meta?: Record<string, unknown> }>;
+  download?(uid: number, part: string, options: { uid: boolean; maxBytes: number }): Promise<{ content?: AsyncIterable<Uint8Array>; meta?: Record<string, unknown> }>;
   /** Puts a message into a folder, as a mail program keeps a copy of what it sent. */
-  append(path: string, content: Uint8Array, options: { flags: string[]; date: Date }): Promise<unknown>;
+  append?(path: string, content: Uint8Array, options: { flags: string[]; date: Date }): Promise<unknown>;
   logout(): Promise<void>;
+}
+
+/** A connection made with the mail library, which can do everything above. A stand-in need
+ *  only do what the test asks of it. */
+export interface FullImapClient extends ImapClient {
+  search(query: Record<string, unknown>, options: { uid: boolean }): Promise<number[] | false | undefined>;
+  download(uid: number, part: string, options: { uid: boolean; maxBytes: number }): Promise<{ content?: AsyncIterable<Uint8Array>; meta?: Record<string, unknown> }>;
+  append(path: string, content: Uint8Array, options: { flags: string[]; date: Date }): Promise<unknown>;
+}
+
+/** The part of a connection that a search needs. A real connection always has it. */
+export function searchable(client: ImapClient): Required<Pick<ImapClient, 'search'>> {
+  if (!client.search) throw new Error('这个连接不能搜索。');
+  return { search: client.search.bind(client) };
+}
+/** The part of a connection that keeps a copy needs. */
+export function appends(client: ImapClient): Required<Pick<ImapClient, 'append'>> {
+  if (!client.append) throw new Error('这个连接不能保存邮件。');
+  return { append: client.append.bind(client) };
 }
 
 /** The most messages one read takes, from the end of the inbox. */

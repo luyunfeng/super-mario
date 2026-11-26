@@ -1,6 +1,6 @@
 import type { Approval, MailAccount } from '../../protocol/src/index.ts';
 import type { Json, JsonObject } from '../../plugin-sdk/src/index.ts';
-import { connectionOptions, libraryOpen, roleOf, type ImapClient, type OpenImap } from './mail-imap.ts';
+import { appends, connectionOptions, libraryOpen, roleOf, type ImapClient, type OpenImap } from './mail-imap.ts';
 import { newMessageId, renderSentCopy, SendRefused, sendMail, type SendOutcome, type SendRequest } from './mail-send.ts';
 import { validMailAddress } from './mail-presets.ts';
 
@@ -154,7 +154,7 @@ async function keepSentCopy(account: MailAccount, password: string, request: Sen
     // owner sees their sent mail.
     const sent = folders.find(box => roleOf(box.path, box.flags, box.specialUse) === 'sent');
     if (!sent) return false;
-    const kept = await client.append(sent.path, raw, { flags: [String.fromCharCode(92) + 'Seen'], date: new Date() });
+    const kept = await appends(client).append(sent.path, raw, { flags: [String.fromCharCode(92) + 'Seen'], date: new Date() });
     return kept !== false;
   } catch {
     return false;
