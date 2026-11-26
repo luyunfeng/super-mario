@@ -14,6 +14,8 @@ function readPushMessage(raw) {
   return {
     title: text('title'), body: text('body'), tag: text('tag'), url: text('url'),
     quiet: message.quiet === true,
+    // A push that takes back a notification already shown, because what it was about is dealt with.
+    withdraw: message.kind === 'withdraw',
   };
 }
 
@@ -28,6 +30,15 @@ self.addEventListener('push', (event) => {
   try { raw = event.data ? event.data.json() : undefined; } catch { raw = undefined; }
   const message = readPushMessage(raw);
   const scope = self.registration.scope;
+  if (message.withdraw) {
+    // Nothing new is shown. The push itself counts as what the browser was shown for this push.
+    event.waitUntil((async () => {
+      if (message.tag) {
+        for (const notification of await self.registration.getNotifications({ tag: message.tag })) notification.close();
+      }
+    })());
+    return;
+  }
   // Always one notification: a push the worker does not show costs the subscription, as browsers
   // revoke one that shows nothing. A push that carries nothing readable is still the app's name.
   const title = message.title || 'super-mario';

@@ -12,9 +12,20 @@ async function worker(scope: string) {
   const source = await readFile(new URL('../apps/web/sw.js', import.meta.url), 'utf8');
   const listeners = new Map<string, Listener>();
   const shown: { title: string; options: Record<string, unknown> }[] = [];
+  const closed: string[] = [];
+  // Notifications the browser is showing, by tag, and what the worker closes.
+  const onScreen = new Map<string, { tag: string; close(): void }>();
   let focused = '', opened = '';
   const self = {
-    registration: { scope, showNotification: async (title: string, options: Record<string, unknown>) => { shown.push({ title, options }); } },
+    registration: {
+      scope,
+      showNotification: async (title: string, options: Record<string, unknown>) => {
+        shown.push({ title, options });
+        const tag = String(options.tag ?? '');
+        onScreen.set(tag, { tag, close() { onScreen.delete(tag); closed.push(tag); } });
+      },
+      getNotifications: async (filter?: { tag?: string }) => [...onScreen.values()].filter(notification => !filter?.tag || notification.tag === filter.tag),
+    },
     addEventListener: (type: string, listener: Listener) => listeners.set(type, listener),
     clients: {
       matchAll: async () => [{ url: scope + '#home', focus: async () => { focused = 'page'; }, navigate: async (target: string) => { opened = target; } }],
@@ -28,7 +39,7 @@ async function worker(scope: string) {
   // Objects the worker made belong to the other context, with its own Object.prototype; they are
   // brought over as plain data before they are compared.
   const plain = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
-  return { shown, fire, read: () => ({ focused, opened }), listeners: [...listeners.keys()], plain };
+  return { shown, closed, fire, read: () => ({ focused, opened }), listeners: [...listeners.keys()], plain };
 }
 
 test('a push is shown as one notification, with a click going to the page it is about', async () => {
@@ -66,4 +77,19 @@ test('a click closes the notification and takes an open page to the notice; a pa
   // A click with no data still goes to the app.
   await other.fire('notificationclick', { notification: { close() {}, data: undefined } });
   assert.equal(other.read().opened, 'https://workbench.example/');
+});
+
+test('a withdraw push takes the notification with its tag off the screen, and shows nothing', async () => {
+  const w = await worker('https://workbench.example/');
+  const payload = { v: 1, title: '需要你决定', body: '合成的通知内容', tag: 'card:one#needs', url: '#chat', quiet: false };
+  await w.fire('push', { data: { json: () => payload } });
+  await w.fire('push', { data: { json: () => ({ ...payload, tag: 'card:two#needs' }) } });
+  assert.equal(w.shown.length, 2);
+  // The decision was made: the first notification is taken back, and the second stays.
+  await w.fire('push', { data: { json: () => ({ v: 1, kind: 'withdraw', title: '', body: '', tag: 'card:one#needs', url: '#home', quiet: true }) } });
+  assert.deepEqual(w.closed, ['card:one#needs']);
+  assert.equal(w.shown.length, 2, 'a withdraw shows nothing');
+  // A withdraw for a notification that is not on the screen does nothing.
+  await w.fire('push', { data: { json: () => ({ v: 1, kind: 'withdraw', title: '', body: '', tag: 'card:none#needs', url: '#home', quiet: true }) } });
+  assert.deepEqual(w.closed, ['card:one#needs']);
 });

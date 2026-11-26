@@ -176,3 +176,22 @@ test('a test push that the service says is gone tells the owner, and keeps the s
   // happened and turn it off themselves, or try again.
   assert.equal((await f.web<{ subscribed: boolean }>('push/web/web-1')).body.subscribed, true);
 });
+
+test('a decision that is made takes its pushed notification off the screen', { timeout: 30000 }, async t => {
+  const f = await fixture(t);
+  assert.equal((await f.web('push/web/web-away', 'PUT', await f.subscription('web-away'))).status, 200);
+  // An approval is something waiting on the owner: it is pushed at once.
+  const todo = await f.web<{ id: string }>('todos', 'POST', { title: '合成审批任务' });
+  const run = await f.web<{ id: string }>('runs', 'POST', { executorId: 'demo', prompt: '合成', todoId: todo.id });
+  const approval = await f.web<{ id: string; version: number }>('approvals', 'POST', { title: '合成的审批', details: '合成内容', kind: 'input', params: { id: run.body.id, text: '继续' } });
+  assert.equal(approval.status, 201, JSON.stringify(approval.body));
+  await t.waitFor(() => assert.ok(f.service.posts.length >= 1));
+  const first = f.service.posts.at(-1)!;
+  // Made: the owner rejected it. Its notification is taken back.
+  const decided = await f.web('approvals/' + approval.body.id + '/reject', 'POST', { version: approval.body.version });
+  assert.ok([200, 201, 409].includes(decided.status), JSON.stringify(decided.body));
+  await t.waitFor(() => assert.ok(f.service.posts.length >= 2));
+  // The withdraw carries no words: only the tag it takes back.
+  const withdraw = f.service.posts.at(-1)!;
+  assert.notEqual(withdraw.body, first.body);
+});

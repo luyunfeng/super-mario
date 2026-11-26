@@ -5,6 +5,7 @@ import type { FeishuBot, Project, Run, Message, Approval, Todo, AwayNotification
 import type { createBackground } from './background.ts';
 import type { createWebPresence } from './web-presence.ts';
 import { pushNotice, type PushOptions } from './web-push-subscriptions.ts';
+import { decisionQuietNow } from './decision-quiet-hours.ts';
 
 export function createAwayNotifications({ store, background, presence, bots, channel, events, push, pushOptions }: {
   store: Store; background: ReturnType<typeof createBackground>; presence: ReturnType<typeof createWebPresence>;
@@ -115,7 +116,10 @@ export function createAwayNotifications({ store, background, presence, bots, cha
     const pushable = awaySettings?.enabled !== false && !originalRoute?.channel && !held;
     if (pushable && href && push?.()) {
       // A failure to push is logged and not sent by another route; the notice is in the lists.
-      void pushNotice(store, { tag: id, title, body: fallbackText.slice(0, 300), url: href, urgent: Boolean(data.decisionKind || data.id), quiet: false },
+      // Something waiting on the user goes at once, as it does on the other channels. Inside the
+      // quiet hours it is shown without a sound: the same hours Feishu's decision reminders keep.
+      const waiting = Boolean(data.decisionKind || data.id);
+      void pushNotice(store, { tag: id, title, body: fallbackText.slice(0, 300), url: href, urgent: waiting, quiet: decisionQuietNow(store, new Date(event.createdAt)) },
         () => true, { ...pushOptions, openDevices: device => presence.devicePresent(device) })
         .then(() => {}, error => console.error('浏览器推送失败', error instanceof Error ? error.message : String(error)));
     }
@@ -133,7 +137,30 @@ export function createAwayNotifications({ store, background, presence, bots, cha
       store.transaction(()=>{background.publish({type:'web.notice',typeVersion:1,sourceId:key,data:{messageId:m.id,webPresent:presence.status().present}});store.put('notifications.decision-sources',key,{createdAt:new Date().toISOString()});});
     }
     if ((event.type === 'approvals.changed' || event.type === 'plans.changed') && data.id) decision(event.type === 'approvals.changed' ? 'approval':'plan',data.id);
+    // What was pushed and is now dealt with is taken off the screen. A decision that is no
+    // longer pending, and a question that was answered, each take back their own notification.
+    if (event.type === 'approvals.changed' || event.type === 'plans.changed') withdrawDecision(event.type === 'approvals.changed' ? 'approval' : 'plan', data.id!);
+    if (event.type === 'interactions.changed' && data.id) withdrawCard(data.id);
   });
+  /** Takes back the notification pushed for a decision, by the tag it was given: the event's id. */
+  function withdrawDecision(kind: 'approval' | 'plan', id: string) {
+    const item = store.get<{ status: string; version: number }>(kind === 'approval' ? 'approvals' : 'plans', id);
+    if (!item || item.status === 'pending') return;
+    // Every version of the decision had its own notice; each one's tag is taken back.
+    for (const notice of list().filter(row => row.decision?.kind === kind && row.decision.id === id)) {
+      if (push?.()) void pushNotice(store, { tag: notice.id, title: '', body: '', url: '#home', urgent: false, quiet: true, withdraw: true },
+        () => true, { ...pushOptions, forgetGone: true }).catch(() => {});
+    }
+  }
+  /** Takes back the notification pushed for a question that was answered or closed. */
+  function withdrawCard(id: string) {
+    const card = store.get<{ status: string }>('interactions', id);
+    if (!card || card.status === 'open') return;
+    for (const notice of list().filter(row => row.cardId === id && row.status !== 'skipped')) {
+      if (push?.()) void pushNotice(store, { tag: notice.id, title: '', body: '', url: '#home', urgent: false, quiet: true, withdraw: true },
+        () => true, { ...pushOptions, forgetGone: true }).catch(() => {});
+    }
+  }
   function decision(kind:'approval'|'plan',id:string) {
     const item = store.get<{status:string;version:number;params?:{outboxId?:string}}>(kind === 'approval'?'approvals':'plans',id);
     // Asking approval for this notification must never generate another notification.

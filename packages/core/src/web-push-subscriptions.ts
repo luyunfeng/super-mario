@@ -55,6 +55,8 @@ export interface Notice {
   urgent: boolean;
   /** Inside the quiet hours: shown without a sound. */
   quiet: boolean;
+  /** Takes back the notification with this tag instead of showing one: what it was about is dealt with. */
+  withdraw?: boolean;
 }
 
 /** Who is asking. The same three an HTTP request can be made as. */
@@ -185,6 +187,8 @@ export function forgetDevice(store: Store, deviceId: string) {
 /** What a browser is pushed, as the service worker reads it. */
 export interface PushPayload {
   v: 1;
+  /** `withdraw` takes back the notification with this tag; absent for one that is shown. */
+  kind?: 'withdraw';
   title: string;
   body: string;
   /** The tag the page gives the same event, so the notification is replaced and taken back. */
@@ -200,7 +204,7 @@ const WORDS_MAX = 600;
 /** The payload as it is sent, with its words shortened to fit one push. */
 function fit(notice: Notice): PushPayload {
   const clip = (text: string, limit: number) => Array.from(text).length > limit ? Array.from(text).slice(0, limit - 1).join('') + '…' : text;
-  return { v: 1, title: clip(notice.title, 200), body: clip(notice.body, WORDS_MAX), tag: notice.tag, url: notice.url, quiet: notice.quiet };
+  return { v: 1, ...(notice.withdraw && { kind: 'withdraw' as const }), title: clip(notice.title, 200), body: clip(notice.body, WORDS_MAX), tag: notice.tag, url: notice.url, quiet: notice.quiet };
 }
 
 /** How one push went. */
