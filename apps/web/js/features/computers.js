@@ -5,6 +5,8 @@ import { openDrawer } from '../ui/overlay.js';
 import { createMachineSkills } from './machine-skills.js';
 import { agentDiagnostics, recoverySummary, recoveryUnavailable, legacyRecovery, unsupportedApi } from './agent-diagnostics.js';
 import { machineStorage } from './machine-storage.js';
+import { machineResources } from './machine-resources.js';
+import { machineNetwork } from './machine-network.js';
 
 let currentComputer;
 
@@ -33,12 +35,15 @@ export function openComputer({ api, machine, state, consoleDrawer }) {
     return Boolean(drawer?.el.open && currentComputer === drawer);
   };
   const skills = createMachineSkills({ api, machineId: machine.id, state, active });
-  // The storage panel follows the computer's state, as the skills do, so that its button
-  // goes out as soon as the computer is offline and not only after a failed read.
-  const storage = machineStorage({ api, machine, active, online: () => {
+  // The panels follow the computer's state, as the skills do, so that their buttons go out as
+  // soon as the computer is offline and not only after a failed read.
+  const online = () => {
     const current = state()?.machines?.find(item => item.id === machine.id);
     return current ? current.online === true : machine.online === true;
-  } });
+  };
+  const storage = machineStorage({ api, machine, active, online });
+  const resources = machineResources({ api, machine, active, online });
+  const network = machineNetwork({ api, machine, active, online });
   const connection = h('dd', null, machine.online ? '在线' : '离线');
   const recovery = h('p', { class: 'muted small', role: 'status' });
   const list = h('div', { class: 'stack' });
@@ -52,7 +57,7 @@ export function openComputer({ api, machine, state, consoleDrawer }) {
         : h('p', { class: 'muted small' }, '这台电脑还没有报告可用的执行者。')),
     skills.el,
     agentDiagnostics({ api, machine, active }),
-    storage.el,
+    resources.el, storage.el, network.el,
     h('div', { class: 'stack' }, h('h3', null, '恢复状态'), recovery),
     h('div', { class: 'stack' }, h('h3', null, '终端'), list));
   drawer = openDrawer({ title: machine.name, subtitle: '电脑详情', body, onClose: () => { seq++; clearInterval(timer); } });
@@ -62,10 +67,12 @@ export function openComputer({ api, machine, state, consoleDrawer }) {
     if (!active()) return;
     skills.update();
     storage.update();
+    resources.update();
+    network.update();
     const machines = state()?.machines;
     if (!machines) return;
-    const online = machines.find(item => item.id === machine.id)?.online;
-    const label = typeof online === 'boolean' ? (online ? '在线' : '离线') : '未知';
+    const isOnline = machines.find(item => item.id === machine.id)?.online;
+    const label = typeof isOnline === 'boolean' ? (isOnline ? '在线' : '离线') : '未知';
     if (connection.textContent !== label) connection.textContent = label;
   }, 250);
   const recoveryRead = !machine.online ? Promise.resolve(null) : machine.capabilities?.includes('executor.recovery')

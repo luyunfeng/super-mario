@@ -494,6 +494,19 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           // the machine says of itself.
           return json(res, 200, { ...report, machineId: machine.id });
         }
+        // What else one computer says of itself, each by one read on that computer: how busy it
+        // is and the last minutes of that, and what it is connected to and listens for.
+        const machineRead = path.match(/^\/api\/v1\/machines\/(resources|network)$/);
+        if (machineRead && method === 'GET') {
+          const what = machineRead[1]!;
+          for (const key of url.searchParams.keys()) if (key !== 'machineId') throw new InputError('这条接口只接受 machineId');
+          if (url.searchParams.getAll('machineId').length !== 1) throw new InputError('machineId 只能有一个');
+          const machine = machines.list().find(m => m.id === requiredText(url.searchParams.get('machineId'), '电脑'));
+          if (!machine?.online) throw new InputError('执行机离线', 503);
+          if (!machine.capabilities.includes('machine.' + what)) throw new InputError('请升级执行机代理以查看' + (what === 'resources' ? '资源' : '网络'), 409);
+          const report = await machines.call(machine.id, 'machine.' + what, {}, { timeoutMs: 15_000 }) as Record<string, unknown>;
+          return json(res, 200, { ...report, machineId: machine.id });
+        }
         if (path === '/api/v1/agents/sessions/usage' && method === 'GET') {
           const machine = machines.list().find(m => m.id === url.searchParams.get('machineId'));
           if (!machine?.online) throw new InputError('执行机离线', 503);

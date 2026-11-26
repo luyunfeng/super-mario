@@ -122,6 +122,11 @@
 .storage-bar__fill { display: block; height: 100%; border-radius: 3px; background: var(--ok); }
 .storage-bar__fill--warn { background: var(--warn); }
 .storage-bar__fill--danger { background: var(--danger); }
+/* The last fifteen minutes of processor and memory, one line each over the area under it. */
+.resource-trend { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+.resource-trend svg { width: 100%; height: 28px; }
+.resource-trend__area { fill: var(--brand-soft); }
+.resource-trend__line { fill: none; stroke: var(--brand); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 
 /* 空状态 */
 .empty {
