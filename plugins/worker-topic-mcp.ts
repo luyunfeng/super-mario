@@ -100,6 +100,9 @@ function gateway() {
   }
 }
 const result = (text: string, failed = false) => ({ content: [{ type: 'text', text }], ...(failed && { isError: true }) });
+/** The id a request was given: a string or a whole number, as the protocol allows. */
+const requestId = (value: unknown): value is string | number =>
+  typeof value === 'string' || (typeof value === 'number' && Number.isSafeInteger(value));
 
 function decisionsResult(receipt: Row, key: string) {
   if (!Array.isArray(receipt.decisions)) return;
@@ -137,7 +140,10 @@ function decisionsResult(receipt: Row, key: string) {
   if (!text.includes(key)) return result(text);
 }
 
-async function callGateway(name: keyof typeof paths, args: Row) {
+/** How long one call waits for the gateway. */
+const CALL_TIMEOUT_MS = 15000;
+
+async function callGateway(name: keyof typeof paths, args: Row, signal?: AbortSignal) {
   const target = gateway();
   if (!target) return result('执行机会话网关配置无效。', true);
   const read = name === 'todo_decisions';
@@ -148,11 +154,12 @@ async function callGateway(name: keyof typeof paths, args: Row) {
       ? '未取得记录决定的有效回执，请先读取当前决定核对。'
       : '未收到可核验的绑定回执，请在 Web 核对。';
   const url = new URL(paths[name], target.url.origin);
+  const timeout = AbortSignal.timeout(CALL_TIMEOUT_MS);
   try {
     const response = await fetch(url, {
       method: 'POST',
       redirect: 'error',
-      signal: AbortSignal.timeout(15000),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
       headers: { authorization: 'Bearer ' + target.key, 'content-type': 'application/json' },
       body: JSON.stringify({ sessionId: target.sessionId, arguments: args }),
     });
@@ -193,6 +200,34 @@ async function serve() {
   const reply = (frame: Row) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...frame }) + '\n');
   const error = (id: unknown, code: number, message: string) => reply({ id, error: { code, message } });
   let phase: 'new' | 'initializing' | 'ready' = 'new';
+  // The calls that are waiting for the gateway, by the id the client gave them. Reading goes
+  // on while they wait, so that a slow call does not hold back a ping or a cancellation.
+  const running = new Map<string | number, AbortController>();
+  // The promises of the calls that were started, so that the process can wait for them when
+  // its input ends. A call that is still waiting would otherwise lose its answer.
+  const started = new Set<Promise<unknown>>();
+  /** Starts one tool call and returns at once. Its answer is written when the gateway answers. */
+  const start = (id: string | number, name: keyof typeof paths, args: Row) => {
+    // An id that is already waiting names one call. A second one under it is refused, so that
+    // a cancellation always stops the call it names and a write is not made twice.
+    if (running.has(id)) {
+      error(id, -32600, 'Invalid Request: a request with this id is already running');
+      return;
+    }
+    const controller = new AbortController();
+    running.set(id, controller);
+    const done = callGateway(name, args, controller.signal).then((value) => {
+      running.delete(id);
+      // A call the client cancelled is not answered: it asked for no answer.
+      if (!controller.signal.aborted) reply({ id, result: value });
+    }, () => {
+      running.delete(id);
+      // A failure of the call itself is reported as one, with nothing of the transport in it.
+      if (!controller.signal.aborted) error(id, -32603, 'Internal error');
+    });
+    started.add(done);
+    void done.finally(() => started.delete(done));
+  };
   for await (const line of input) {
     if (!line.trim()) continue;
     let frame: unknown;
@@ -209,9 +244,13 @@ async function serve() {
     const { id, method, params } = frame;
     if (id === undefined) {
       if (method === 'notifications/initialized' && phase === 'initializing') phase = 'ready';
+      // A call the client no longer wants is stopped. The gateway may already have run it, so
+      // nothing is claimed about what happened.
+      else if (method === 'notifications/cancelled' && row(params) && requestId(params.requestId))
+        running.get(params.requestId)?.abort();
       continue;
     }
-    if (typeof id !== 'string' && !(typeof id === 'number' && Number.isSafeInteger(id))) {
+    if (!requestId(id)) {
       error(null, -32600, 'Invalid Request');
       continue;
     }
@@ -234,17 +273,20 @@ async function serve() {
     else if (method === 'tools/list') reply({ id, result: { tools: [bindTool, decisionTool, addDecisionTool] } });
     else if (method === 'tools/call') {
       if (row(params) && params.name === 'todo_bind_thread' && validArguments(params.arguments)) {
-        reply({ id, result: await callGateway(params.name, params.arguments) });
+        start(id, params.name, params.arguments);
       } else if (
         row(params) &&
         params.name === 'todo_decisions' &&
         (params.arguments === undefined || (row(params.arguments) && Object.keys(params.arguments).length === 0))
       ) {
-        reply({ id, result: await callGateway(params.name, {}) });
+        start(id, params.name, {});
       } else if (row(params) && params.name === 'todo_decision_add' && validAdd(params.arguments)) {
-        reply({ id, result: await callGateway(params.name, params.arguments) });
+        start(id, params.name, params.arguments);
       } else error(id, -32602, 'Invalid tool or arguments');
     } else error(id, -32601, 'Method not found');
   }
+  // The input has ended. The calls that were started are waited for, each within its own
+  // limit, so that an answer that is on its way is written and not lost.
+  await Promise.allSettled(started);
 }
 if (import.meta.main) await serve();

@@ -48,7 +48,12 @@ async function worker(url: string, frames: object[], protocolVersion = '2025-06-
     .split('\n')
     .map((line) => JSON.parse(line));
   assert.equal(messages.length, frames.length + 2);
-  return messages;
+  // Answers are matched to requests by id, not by the order they arrive in: a call that
+  // waits for the gateway does not hold back the ones after it. They are put back in the
+  // order the requests were sent, so that each test reads the answer to the request it made.
+  const order = [0, 1, ...frames.map((frame: { id?: unknown }) => frame.id)];
+  for (const frame of messages) assert.ok(order.includes(frame.id), 'an answer to a request that was sent');
+  return order.map((id) => messages.find((frame: { id: unknown }) => frame.id === id)!);
 }
 
 test('stdio MCP 声明固定工具且只使用启动环境中的负责会话，HTTP 回执回到同一请求', async (t) => {
@@ -126,6 +131,100 @@ test('stdio MCP 声明固定工具且只使用启动环境中的负责会话，H
     assert.equal(frames.at(-1).result.isError, true);
   }
   assert.equal(seen.length, before);
+});
+
+/** A worker that is talked to one frame at a time, so that a call can be left waiting. */
+async function conversation(url: string, t: { after(fn: () => void): void }) {
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../plugins/worker-topic-mcp.ts', import.meta.url))], {
+    env: { SUPER_MARIO_WORKER_URL: url, SUPER_MARIO_WORKER_KEY: key, SUPER_MARIO_WORKER_SESSION: sessionId },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const exited = once(child, 'close');
+  t.after(async () => {
+    child.stdin.end();
+    child.kill();
+    await exited;
+  });
+  const waiting: Array<{ id: unknown; settle: (frame: Record<string, unknown>) => void }> = [];
+  const received: Array<Record<string, unknown>> = [];
+  let text = '';
+  child.stdout.setEncoding('utf8').on('data', (bytes) => {
+    text += bytes;
+    let cut;
+    while ((cut = text.indexOf('\n')) >= 0) {
+      const frame = JSON.parse(text.slice(0, cut)) as Record<string, unknown>;
+      text = text.slice(cut + 1);
+      received.push(frame);
+      const index = waiting.findIndex((item) => item.id === frame.id);
+      if (index >= 0) waiting.splice(index, 1)[0]!.settle(frame);
+    }
+  });
+  const send = (frame: object) => child.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...frame }) + '\n');
+  const answer = (id: number) => new Promise<Record<string, unknown>>((settle) => {
+    waiting.push({ id, settle });
+  });
+  /** Sends one request and gives its answer. The wait is set up before the request goes out,
+   *  so that an answer that comes back at once is not missed. */
+  const ask = (id: number, frame: object) => {
+    const reply = answer(id);
+    send(frame);
+    return reply;
+  };
+  await ask(0, { id: 0, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'fixture', version: '1' } } });
+  send({ method: 'notifications/initialized' });
+  return { send, ask, received };
+}
+
+test('一次调用等网关时不挡住后面的请求；客户端取消后不再等，也不回答成功', { timeout: 30000 }, async (t) => {
+  // The gateway holds the first call until the test lets it go, and answers a ping at once.
+  let release: (() => void) | undefined;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const calls: string[] = [];
+  const server = createServer(async (req, res) => {
+    for await (const chunk of req) void chunk;
+    calls.push(req.url!);
+    if (req.url!.endsWith('todo-bind-thread')) await held;
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ message: '已关联该话题。' }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(async () => {
+    release!();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const url = 'http://127.0.0.1:' + address.port + '/api/v1/worker-tools/todo-bind-thread';
+  const worker = await conversation(url, t);
+  // A call that the gateway holds, then a ping while it is held.
+  worker.send(tool(2));
+  // Wait until the gateway has the call, so that the ping is certainly sent after it.
+  for (let tries = 0; tries < 200 && !calls.length; tries++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(calls.length, 1);
+  const ping = await worker.ask(3, { id: 3, method: 'ping' });
+  assert.deepEqual(ping.result, {}, 'a ping is answered while a call is waiting');
+  assert.equal(worker.received.some((frame) => frame.id === 2), false, 'the call is still waiting');
+  // The same id while its call is waiting names that call. A second one under it is refused
+  // and not sent, so that the gateway is not asked twice and a cancel stops the one it names.
+  const again = await worker.ask(2, tool(2));
+  assert.equal((again.error as { code: number }).code, -32600);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(calls.length, 1, 'the second one under the same id was not sent');
+  // The client cancels the call. It is given no answer, even once the gateway lets it go.
+  worker.send({ method: 'notifications/cancelled', params: { requestId: 2 } });
+  worker.send({ method: 'notifications/cancelled', params: { requestId: 'not-a-call' } });
+  release!();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  // The only answer under id 2 is the refusal of the second request. The cancelled call
+  // itself was given none.
+  const underTwo = worker.received.filter((frame) => frame.id === 2);
+  assert.equal(underTwo.length, 1);
+  assert.equal((underTwo[0]!.error as { code: number }).code, -32600);
+  // A call that is not cancelled is answered as before.
+  const after = await worker.ask(4, tool(4));
+  assert.equal((after.result as { content: Array<{ text: string }> }).content[0]!.text, '已关联该话题。');
+  assert.equal(calls.length, 2);
 });
 
 test('执行会话可重读当前有效决定，逐字保留长正文和来源，拒绝跨待办、恶意回执和改投', async (t) => {
