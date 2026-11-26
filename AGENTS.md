@@ -17,7 +17,7 @@
 - 开发入口保持简单：`npm install`、`npm run dev`、`npm test`、`npm run typecheck`。
 - 必须提供不依赖 API Key、飞书账号、真实执行机的本地演示与验证路径。演示模式明确标注，不冒充模型或真实 CLI 执行。
 - 开发调试按需运行 `npm run dev`，默认地址为 `http://localhost:3001`。开发数据保存在 `$XDG_CACHE_HOME/super-mario/dev`，未设置 `XDG_CACHE_HOME` 时使用 `~/.cache/super-mario/dev`。需要一次性环境时可传 `--port 0 --data-dir <临时目录>`。调试结束即退出。日常调试和测试只操作开发实例。
-- 正式发布时，从已通过测试和类型检查的提交运行 `npm run build`。构建成功后，将构建产物放入 `~/.local/share/super-mario/releases/<SHA>/`，把 `~/.local/share/super-mario/current` 符号链接切换到 `releases/<SHA>`，再执行 `systemctl --user restart super-mario.service super-mario-agent.service`。
+- 正式发布时，从已通过测试和类型检查的提交运行 `npm run build`，再依次执行 `super-mario release install`、`super-mario release activate <SHA>` 和 `systemctl --user restart super-mario.service super-mario-agent.service`。新版本起不来时用 `super-mario release rollback` 切回上一个版本。重启正式服务前须有用户明确授权。详见 `docs/operations.md`「正式部署与更新」。
 - 正式服务端和代理从 `~/.super-mario/runtime.env` 读取同一稳定访问令牌，版本切换和重启沿用该令牌。发布后交付正式 Web 链接，格式为 `/?v=<部署提交>#chat?token=<访问令牌>`。页面自动连接后清理地址栏中的令牌。真实令牌不得写入代码、文档或提交。
 - 用户提供的测试凭证只用于独立测试配置，保存在仓库外。产品默认凭证留空，由使用者自行填写；不在代码、测试、文档或提交中保存真实密钥。
 - 缺少外部配置时页面仍能打开，相关能力显示缺少什么配置；不要用模拟成功掩盖缺失。

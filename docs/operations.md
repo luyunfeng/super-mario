@@ -88,15 +88,19 @@ dev_data_dir=$(mktemp -d) && npm run dev -- --demo --port 0 --data-dir "$dev_dat
 正式服务固定使用 `~/.super-mario/`，首次启动自动创建数据库。服务端使用唯一的正式 Web 端口 `48080`，浏览器和执行机代理连接同一地址。服务端和代理从 `~/.super-mario/runtime.env` 读取同一稳定的 `SUPER_MARIO_TOKEN`，升级和重启时沿用该值。
 
 1. 确定待发布的提交，在该提交上运行 `npm test` 和 `npm run typecheck`。
-2. 验证通过后，从该提交运行 `npm run build`。将产物放入 `~/.local/share/super-mario/releases/<SHA>/`，其中 `<SHA>` 为已验证的提交 SHA，构建期间正式服务继续运行原版本。
-3. 构建成功后，将符号链接 `~/.local/share/super-mario/current` 切换到 `releases/<SHA>`，再执行：
+2. 验证通过后，从该提交运行 `npm run build`，再执行 `super-mario release install`。产物被放入 `~/.local/share/super-mario/releases/<SHA>/`，目录名取自构建记录里的提交号，构建期间正式服务继续运行原版本。含未提交改动的构建不能安装。
+3. 执行 `super-mario release activate <SHA>`，它把 `current` 切换到 `releases/<SHA>` 并记住切换前的版本。切换是一次改名，`current` 不会出现缺失或写到一半的状态。然后执行：
 
    ```bash
    systemctl --user restart super-mario.service super-mario-agent.service
    systemctl --user is-active super-mario.service super-mario-agent.service
    ```
 
-4. 确认两个服务均为 `active`，打开原正式 Web 地址，核对执行机已重新上线。分享链接使用 `/?v=<部署提交>#chat?token=<访问令牌>`。
+4. 确认两个服务均为 `active`，打开原正式 Web 地址，核对执行机已重新上线。打开管理端的执行机管理，核对每台执行机报告的构建与服务端一致，不一致时会提示更新到同一版本。分享链接使用 `/?v=<部署提交>#chat?token=<访问令牌>`。
+
+新版本起不来时，执行 `super-mario release rollback` 切回上一个版本，再重启两个服务。数据目录在切换时不动，旧版本从同一份数据启动，升级前写入的记录都还在。回滚本身是一次切换，再回滚一次会回到刚离开的版本。
+
+`super-mario release list` 列出当前版本、上一个版本和所有已安装的版本。正在运行的版本不能被原地覆盖，要重装请先切换到别的版本。依赖不随版本复制，每个版本通过一个链接使用同一份已安装的依赖，默认是构建目录里的 `node_modules`，可用 `--dependencies` 指定。
 
 ## 安装命令行
 

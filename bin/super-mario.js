@@ -32,6 +32,12 @@ async function main() {
     console.log(typeof result === 'string' ? result : JSON.stringify(result));
     return;
   }
+  if (process.argv[2] === 'release') {
+    const { releaseCli } = await import(compiled ? '../dist/packages/core/src/release-cli.js' : '../packages/core/src/release-cli.ts');
+    const result = await releaseCli(process.argv.slice(3));
+    console.log(typeof result === 'string' ? result : JSON.stringify(result));
+    return;
+  }
   if (process.argv[2] === 'office') {
     const { officeCli } = await import(compiled ? '../dist/plugins/office/cli.js' : '../plugins/office/cli.ts');
     console.log(JSON.stringify(await officeCli(process.argv.slice(3))));
@@ -46,6 +52,7 @@ async function main() {
       super-mario office check <办公文件>
       super-mario admin setup-code [--port 端口]
       super-mario backup --help
+      super-mario release --help
   --demo                  本地演示，不调用模型或真实执行者
   --host <地址>           默认 127.0.0.1
   --port <端口>           默认 3000
@@ -72,4 +79,6 @@ Web 页面与 API 由同一服务提供。`);
   };
   process.once('SIGINT', stop); process.once('SIGTERM', stop);
 }
-main().catch(error => { console.error((process.argv[2] === 'admin' ? '管理员操作失败：' : process.argv[2] === 'backup' ? '备份操作失败：' : process.argv[2] === 'office' ? '办公文件处理失败：' : '启动失败：') + error.message); process.exitCode = 1; });
+// A failed subcommand says which kind of work failed, so the line makes sense on its own.
+const failureLabel = { admin: '管理员操作失败：', backup: '备份操作失败：', office: '办公文件处理失败：', release: '发布操作失败：' }[process.argv[2]] ?? '启动失败：';
+main().catch(error => { console.error(failureLabel + error.message); process.exitCode = 1; });
