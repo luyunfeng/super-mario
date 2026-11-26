@@ -1631,6 +1631,11 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         }
         const observations = path.match(/^\/api\/v1\/runs\/([^/]+)\/observations$/);
         if (observations && method === 'GET') return json(res, 200, app.runObservations(decodeURIComponent(observations[1]!)));
+        const diagnostics = path.match(/^\/api\/v1\/runs\/([^/]+)\/diagnostics$/);
+        if (diagnostics && method === 'GET') {
+          if (url.search) throw new InputError('诊断报告不接受查询参数');
+          return json(res, 200, app.exportRunDiagnostics(decodeURIComponent(diagnostics[1]!)));
+        }
         const cancel = path.match(/^\/api\/v1\/runs\/([^/]+)\/cancel$/);
         if (cancel && method === 'POST') return json(res, 202, await app.cancel(cancel[1]));
         // These services read conversation content and cancel work when the browser disconnects.

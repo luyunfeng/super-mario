@@ -350,10 +350,17 @@ export function createRunsTab({ api, store, router, consoleDrawer, markRunSeen }
       h('div', null, h('a', { class: 'btn btn--ghost btn--sm', href: router.href('projects', projectId, 'runs') }, icon('back'), '执行')),
       h('div', { class: 'row row--between row--wrap' },
         h('div', { class: 'stack' }, h('h2', { class: 'run__title' }, run.prompt), h('div', { class: 'row' }, Pill(status.text, status.tone), h('span', { class: 'muted small' }, `${executorName(run.executorId)}${run.model ? ` · 指定模型：${run.model}` : ''} · ${timeAgo(run.createdAt)}`))),
-        isRunActive(run) && Button({ label: '中断', kind: 'danger', size: 'sm', onClick: async () => {
-          const ok = await confirmDialog({ title: '中断这次执行？', message: '会请求执行者停止；已经产生的修改不会自动撤销。', confirmLabel: '请求中断', danger: true });
-          if (ok) { await api.post(`/runs/${encodeURIComponent(run.id)}/cancel`, {}); store.refresh(); }
-        } })),
+        h('div', { class: 'row' },
+          isRunActive(run) && Button({ label: '中断', kind: 'danger', size: 'sm', onClick: async () => {
+            const ok = await confirmDialog({ title: '中断这次执行？', message: '会请求执行者停止；已经产生的修改不会自动撤销。', confirmLabel: '请求中断', danger: true });
+            if (ok) { await api.post(`/runs/${encodeURIComponent(run.id)}/cancel`, {}); store.refresh(); }
+          } }),
+          Button({ label: '导出诊断报告', size: 'sm', title: '导出执行编号、执行者、电脑、构建版本、失败类别和阶段。不含提示词、输出和错误原文。', onClick: async () => {
+            const report = await api.get(`/runs/${encodeURIComponent(run.id)}/diagnostics`);
+            const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
+            h('a', { download: `run-${run.id}.diagnostics.json`, href: url }).click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          } }))),
       comparisonEnabled && run.handoffRunId && h('a', { href: router.href('projects', run.projectId ?? 'all', 'runs', run.handoffRunId) }, '查看交接来源执行'),
       handoffs.length > 0 && h('section', { class: 'stack', 'aria-label': '接手执行' },
         h('h3', null, '接手执行'), h('ul', { class: 'stack' }, handoffs.map(item =>

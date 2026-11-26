@@ -7,7 +7,7 @@ import { startAgentNode } from '../apps/agent-node/src/index.ts';
 import { startServer } from '../apps/server/src/index.ts';
 import { buildInfo } from '../packages/core/src/build-info.ts';
 import { MachineError } from '../packages/core/src/machines.ts';
-import { failureKind, failureStage } from '../packages/core/src/run-failure.ts';
+import { failureKind, failureStage, type RunDiagnostics } from '../packages/core/src/run-failure.ts';
 import type { NodeHandler, TerminalHost } from '../packages/plugin-sdk/src/index.ts';
 import type { Run } from '../packages/protocol/src/index.ts';
 import { createExecutionServices } from '../plugins/executors.ts';
@@ -148,4 +148,37 @@ test('执行机收到启动请求后断线：结果是未知，类别是网络�
   // The start is an effect. Its own record says the outcome is unknown, so nothing is resent.
   const effect = f.server.app.store.list<{ key: string; status: string }>('effects').find(row => row.key === 'run:' + run.id + ':start');
   assert.equal(effect?.status, 'unknown');
+});
+
+test('诊断报告有编号、电脑、构建、失败类别和阶段，没有提示词、输出和错误原文', { timeout: 30000 }, async t => {
+  const f = await fixture(t);
+  const todo = await f.web<{ id: string }>('todos', 'POST', { title: '合成执行任务' });
+  const prompt = '合成的诊断报告任务，内容不应出现在报告里';
+  const run = await f.web<Run>('runs', 'POST', { executorId: f.machineId + '/pi', executionMode: 'task', todoId: todo.id, doneWhen: '有明确的合成结果', expectMinutes: 5, prompt, cwd: tmpdir() });
+  await t.waitFor(async () => {
+    const row = await f.read(run.id);
+    assert.ok(row.status === 'failed' || row.status === 'unknown', row.status);
+  });
+  const done = await f.read(run.id);
+  const report = await f.web<RunDiagnostics>(`runs/${run.id}/diagnostics`);
+  assert.equal(report.format, 'super-mario.run-diagnostics');
+  assert.equal(report.version, 1);
+  assert.equal(Number.isNaN(Date.parse(report.exportedAt)), false);
+  assert.equal(report.run.id, run.id);
+  assert.equal(report.run.executorId, f.machineId + '/pi');
+  assert.equal(report.run.machineId, f.machineId);
+  assert.equal(report.run.status, done.status);
+  assert.equal(report.run.todoId, todo.id);
+  assert.equal(report.run.executionMode, 'task');
+  assert.equal(typeof report.run.durationMs, 'number');
+  assert.equal(report.run.build?.server.commit, buildInfo().commit);
+  // The prompt, the output and the error's words are the person's own content and stay out.
+  const text = JSON.stringify(report);
+  assert.equal(text.includes(prompt), false);
+  if (done.error) assert.equal(text.includes(done.error), false);
+  if (done.output) assert.equal(text.includes(done.output), false);
+  assert.equal('prompt' in report.run, false);
+  assert.equal('output' in report.run, false);
+  assert.equal('error' in report.run, false);
+  assert.equal(report.run.failure && typeof report.run.failure === 'object', true);
 });
