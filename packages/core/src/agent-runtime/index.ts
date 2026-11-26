@@ -967,6 +967,9 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     const { user } = turn;
     let modelFinished = false;
     let confirmedFailure = false;
+    // Which model answered, and what the exchange used. Kept for the message, which outlives the trace.
+    let answeredBy: Message['model'] | undefined;
+    let used: Message['usage'] | undefined;
     const assistant = turnReply(turn);
     let progressTimer: ReturnType<typeof setTimeout> | undefined;
     let lastProgressWrite = 0;
@@ -1151,6 +1154,7 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
           // Only the selected provider's final assistant message proves the request ran.
           modelFinished = message.provider === activeModelInfo.provider && message.model === activeModelInfo.model
             && (message.stopReason === 'stop' || message.stopReason === 'length');
+          answeredBy = { provider: message.provider, model: message.model };
           const textPart = message.content.filter(block => block.type === 'text').map(block => block.text).join('');
           replies.push(cleanOutput(textPart));
           if (activeTrace) {
@@ -1182,6 +1186,8 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
                   totalTokens: total,
                   estimated: false,
                 };
+                // Only what the model itself reported is kept for the message; an estimate is not a cost.
+                used = { input, output, cacheRead, cacheWrite, totalTokens: total };
               }
             }
             activeTrace.assistantText = boundTraceText(replies.filter(Boolean).join('\n\n')).text;
@@ -1284,6 +1290,10 @@ export function createAgentRuntime(options: Options, loadSDK: () => Promise<SDK>
     }
     // Persistence/event failures escape to close(), instead of becoming unhandled rejections.
     store.transaction(() => {
+      // A reply says which model gave it, so that a conversation with a model changed partway
+      // through can be read as it happened. A failed reply is not said to be anyone's answer.
+      if (answeredBy && assistant.status === 'done') assistant.model = answeredBy;
+      if (used && assistant.status === 'done') assistant.usage = used;
       if (confirmedFailure && assistant.status === 'failed' && !turn.stopped && !turn.toolStarted && !stopping && retrySource(user) &&
           !store.get('message.tool-starts',assistant.id)) {
         assistant.retryable = true;

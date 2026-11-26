@@ -8,6 +8,7 @@ import { createTurnRetry, turnRetryActive } from '../features/retry-turn.js';
 import { createMessageQueue } from '../features/message-queue.js';
 import { stopTurnButton, queueLabel, turnQueueActive } from '../features/stop-turn.js';
 import { attachSentHistory } from '../features/sent-history.js';
+import { provenance } from '../features/reply-provenance.js';
 // 对话：主页。顶部是“等你处理”，中间是消息流，输入框固定在底部。
 import { h, keyedList, replace } from '../lib/dom.js';
 import { createMessageSubmissions, messagePayload } from '../lib/message-submissions.js';
@@ -332,6 +333,11 @@ export function createChatPage({ api, store, scope, router }) {
         h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text), messageImages(api,store,message,imageDraft),messageFiles(api,store,message,store.view.snapshot?.messages,messages)),
         h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), stateLabel && ' · '+stateLabel, stopTurnButton(api,message,undefined,queueEnabled), queuedEdit.action(message), mark, link, transcript.copyMessage(message, translation.displayedText), canEdit && edit.action(message), canQuote && quote.action(message, '我'), message.conversationId === 'main' && prompts.fromMessage(message)));
     }
+    // The reply before this one in the conversation, as it says which model gave it. It is what
+    // tells whether the model changed here.
+    const before = (snapshot?.messages ?? []).filter(item => item.conversationId === message.conversationId && item.role === 'assistant'
+      && item.origin !== 'notification' && item.createdAt < message.createdAt).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    const source = provenance(message, before);
     const personal = message.conversationId === 'main' && (!message.origin || message.origin === 'user');
     const label = personal ? assistantLabel : message.origin === 'result' ? '执行结果' : '主 Agent';
     const bubble = h('div', { class: 'msg__bubble' }, transcript.renderMessage(message, text));
@@ -343,7 +349,8 @@ export function createChatPage({ api, store, scope, router }) {
         agentProgress(message, api),
         bubble, messageFiles(api,store,message,store.view.snapshot?.messages,messages),
         (!scope.get() || message.projectId === scope.get()) && retryTurn(message,store.view.snapshot?.messages,'main',id=>router.href('chat')+'?at='+encodeURIComponent(id)),
-        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), mark, link, transcript.copyMessage(message, translation.displayedText), translation.action(message, bubble, transcript.renderMessage), canQuote && message.role === 'assistant' && quote.action(message, label))));
+        source.changed && h('div', { class: 'msg__model', role: 'note', dataset: { modelSwitch: 'true' } }, source.model),
+        h('span', { class: 'msg__meta' }, timeAgo(message.createdAt), source.usage && ' · ' + source.usage, mark, link, transcript.copyMessage(message, translation.displayedText), translation.action(message, bubble, transcript.renderMessage), canQuote && message.role === 'assistant' && quote.action(message, label))));
   }
 
   function paintMessages(list) {
