@@ -92,10 +92,16 @@ export interface RunBuild { server: NodeBuild; machine?: NodeBuild }
 export interface RunFailure { kind: 'network' | 'machine' | 'executor' | 'server' | 'refused' | 'unknown'; at: string }
 export interface MachineInfo { agentInstanceId?: string; id: string; name: string; online: boolean; platform: string; connectedAt: string; capabilities: string[]; executors?: ExecutorInfo[]; build?: NodeBuild }
 export interface ModelConfig { provider: string; model: string; baseUrl?: string; apiKey?: string; cliCommand?: string; cliConfigDir?: string }
-export interface AppConfig { host: string; port: number; dataDir: string; token?: string; demo: boolean; model?: ModelConfig; feishuWeb?: { baseUrl: string; token?: string; pollIntervalMs?: number }; feishu?: { appId: string; appSecret: string; profile?: string; collectEnabled?: boolean; pollMs?: number } }
+export interface AppConfig { host: string; port: number; dataDir: string; token?: string; demo: boolean; model?: ModelConfig; feishuWeb?: { baseUrl: string; token?: string; pollIntervalMs?: number }; feishu?: { appId: string; appSecret: string; profile?: string; collectEnabled?: boolean; pollMs?: number };
+  /** Sources of push services a browser may also subscribe to, beyond the known ones, and the
+   *  function that posts to them. Tests use both for a service of their own; a deployment leaves
+   *  them out. */
+  pushServices?: string[]; pushFetch?: typeof fetch }
 /** A project is a durable workspace on one connected machine, not an execution attempt. */
 export interface ProjectWorkspaceBinding { machineId: string; cwd: string }
-export interface WebPresenceInput { tabId: string; visible: boolean; focused: boolean; sequence?: number }
+/** `device` is the browser's own id, kept in its local storage: the same one its Web Push
+ *  subscription is under, so that a browser with a page open is not also pushed. */
+export interface WebPresenceInput { tabId: string; visible: boolean; focused: boolean; sequence?: number; device?: string }
 export interface BriefingSettings { alwaysNotifyRuns?: boolean; lowDistraction?: boolean; decisionQuietHours: { enabled: boolean; start: string; end: string }; timezone: string; morning: string; evening: string; intervalHours: number; intervalEnabled: boolean; activeStart: string; activeEnd: string; awayNotifications: boolean }
 export type CodeBrowseKind = 'tree' | 'file' | 'diff';
 export interface AwayNotification { id: string; createdAt?: string; runId?: string; messageId?: string; text: string; todoId?: string; projectId?: string; cardId?: string; decision?: {kind:'approval'|'plan';id:string;version:number}; status: 'pending' | 'queued' | 'skipped' | 'held'; reason?: string; outboxId?: string }

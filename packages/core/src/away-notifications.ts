@@ -4,10 +4,13 @@ import type { Store, EventBus } from '../../plugin-sdk/src/index.ts';
 import type { FeishuBot, Project, Run, Message, Approval, Todo, AwayNotification as PendingNotice } from '../../protocol/src/index.ts';
 import type { createBackground } from './background.ts';
 import type { createWebPresence } from './web-presence.ts';
+import { pushNotice, type PushOptions } from './web-push-subscriptions.ts';
 
-export function createAwayNotifications({ store, background, presence, bots, channel, events }: {
+export function createAwayNotifications({ store, background, presence, bots, channel, events, push, pushOptions }: {
   store: Store; background: ReturnType<typeof createBackground>; presence: ReturnType<typeof createWebPresence>;
   bots: () => FeishuBot[]; channel: (bot: FeishuBot) => string; events?: EventBus;
+  /** Whether browsers may be pushed now: the plugin must be on. `pushOptions` are passed through. */
+  push?: () => boolean; pushOptions?: PushOptions;
 }) {
   const list = () => store.list<PendingNotice>('notifications.away');
   function flush() {
@@ -80,25 +83,41 @@ export function createAwayNotifications({ store, background, presence, bots, cha
     const runHeader = originRun ? `后台 Agent · ${originRun.machineId || originRun.executorId}${project ? ` · ${project.name}` : ''}` : '';
     const fallbackText = message?.text
       ?? (approval ? `等待审批：${approval.title}\n${approval.details}` : plan ? `等待确认计划：${plan.title}` : originRun ? `${runHeader}\n${originRun.error || originRun.output || '执行已结束'}` : '有工作结果或决定需要你查看');
+    // Where the owner goes to see it, and what the notice is called. The browser's system
+    // notification and Web Push are told the same.
+    const href = data.decisionKind ? pendingDecisionHref(data.decisionKind === 'approval' ? 'approvals' : 'plans', data.decisionId!)
+      : data.id ? pendingDecisionHref('interactions', data.id)
+      : message ? (message.conversationId === 'main' ? '#chat?at=' + encodeURIComponent(message.id)
+        : projectId ? '#projects/' + encodeURIComponent(projectId) + '/workspace?at=' + encodeURIComponent(message.id) : undefined)
+      : originRun ? '#projects/' + encodeURIComponent(originRun.projectId ?? 'all') + '/runs/' + encodeURIComponent(originRun.id) : undefined;
+    const title = approval ? '等待审批' : plan ? '等待确认计划' : data.id ? '需要你回答'
+      : isRunFinish ? (originRun?.status === 'failed' ? '执行失败' : '执行已结束') : '工作台回复';
     // Feishu and browser system notifications are independent channels. A notice held
     // by low-distraction mode is for the briefing, so it reaches neither channel.
     if (!originalRoute?.channel && !skip && !held) {
-      const href = data.decisionKind ? pendingDecisionHref(data.decisionKind === 'approval' ? 'approvals' : 'plans', data.decisionId!)
-        : data.id ? pendingDecisionHref('interactions', data.id)
-        : message ? (message.conversationId === 'main' ? '#chat?at=' + encodeURIComponent(message.id)
-          : projectId ? '#projects/' + encodeURIComponent(projectId) + '/workspace?at=' + encodeURIComponent(message.id) : undefined)
-        : originRun ? '#projects/' + encodeURIComponent(originRun.projectId ?? 'all') + '/runs/' + encodeURIComponent(originRun.id) : undefined;
       // How long the owner waited for this result; "long task only" is a browser setting.
       const startedAt = message?.replyTo ? store.get<Message>('messages', message.replyTo)?.createdAt : run?.createdAt;
       const durationMs = startedAt && Number.isFinite(Date.parse(startedAt)) ? Math.max(0, Date.parse(event.createdAt) - Date.parse(startedAt)) : undefined;
-      events?.publish('browser.notice', {
+      const notice = {
         id, createdAt: event.createdAt,
         kind: data.decisionKind || data.id ? 'needed' : 'done',
-        title: approval ? '等待审批' : plan ? '等待确认计划' : data.id ? '需要你回答'
-          : isRunFinish ? (originRun?.status === 'failed' ? '执行失败' : '执行已结束') : '工作台回复',
+        title,
         text: fallbackText.slice(0, 300),
         ...(href && { href }), ...(durationMs !== undefined && { durationMs }),
-      });
+      };
+      events?.publish('browser.notice', notice);
+    }
+    // The same event reaches browsers with no page open by Web Push. This is decided per
+    // browser, and not by whether some page is open: a browser with a page open is left alone,
+    // because the page notifies by itself, while another browser with none is pushed. What does
+    // hold it back is the same as for the other channels: a reply that goes back the way it came,
+    // notices turned off, and a notice the low-distraction setting keeps for the briefing.
+    const pushable = awaySettings?.enabled !== false && !originalRoute?.channel && !held;
+    if (pushable && href && push?.()) {
+      // A failure to push is logged and not sent by another route; the notice is in the lists.
+      void pushNotice(store, { tag: id, title, body: fallbackText.slice(0, 300), url: href, urgent: Boolean(data.decisionKind || data.id), quiet: false },
+        () => true, { ...pushOptions, openDevices: device => presence.devicePresent(device) })
+        .then(() => {}, error => console.error('浏览器推送失败', error instanceof Error ? error.message : String(error)));
     }
     store.put('notifications.away',id,{ id,createdAt:event.createdAt,...(isRunFinish && run && {runId:run.id}),...(message && {messageId:message.id}),text:fallbackText,projectId,todoId,cardId:data.id,...(data.decisionKind?{decision:{kind:data.decisionKind,id:data.decisionId!,version:data.version!}}:{}),status:skip?'skipped':held?'held':'pending',...(held?{reason:'按低干扰设置保留'}:{}),...(skip?{reason:Boolean(originalRoute?.channel)?'沿用原路回复，避免重复通知':'用户在场或已关闭离场通知'}:{}) });
     flush(); return {status:'done'};

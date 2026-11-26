@@ -1824,7 +1824,9 @@ export async function createWorkbench(config: AppConfig) {
   const uploadCleanup = setInterval(cleanChatUploads,24*60*60*1000);
   uploadCleanup.unref();
   const expireTimer = setInterval(() => { interactions.expireTick(); recoverPendingRunAnswers(); deferredQuestions.recover(); laterQuestions.recover(); }, 30_000); expireTimer.unref();
-  const awayNotifications = createAwayNotifications({ store, events, background, presence, bots: () => notificationBots(), channel: bot => notificationChannel(bot) });
+  const awayNotifications = createAwayNotifications({ store, events, background, presence, bots: () => notificationBots(), channel: bot => notificationChannel(bot),
+    push: () => plugins.list().some(plugin => plugin.id === 'browser-notifications' && plugin.status === 'active'),
+    pushOptions: { ...(config.pushServices && { extraServices: config.pushServices.map(source => new RegExp(source)) }), ...(config.pushFetch && { fetchImpl: config.pushFetch }) } });
   const projectFollowUp = createProjectFollowUp({ store, events, conversations:()=>inboxAssistant.list(), schedules: background.schedules, settings: briefing.settings,
     enqueue(input) {
       if (!projectFollowUp.isCurrent(input.projectId, input.key)) throw new InputError('项目跟进配置已变化', 409);

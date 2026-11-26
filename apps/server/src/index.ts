@@ -24,6 +24,7 @@ import { runCompletionTiming } from '../../../packages/core/src/run-completion-t
 import { todoBrief } from '../../../packages/core/src/todo-brief.ts';
 import { todoLineage } from '../../../packages/core/src/todo-lineage.ts';
 import { currentWorkerTodo } from './worker-session.ts';
+import { forgetDevice, listSubscriptions, pushNotice, subscribe, unsubscribe, vapidKeys } from '../../../packages/core/src/web-push-subscriptions.ts';
 import { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { readFile, stat } from 'node:fs/promises';
@@ -119,6 +120,8 @@ const conversationReaders = new Map<string, { id: string; disabled: string; serv
 export async function startServer(config: AppConfig, dependencies: FeishuGatewayDependencies = {}) {
   const startedAt=new Date().toISOString();
   const version='0.1.0';
+  // Compiled once: a pattern that is not one makes the server refuse to start, as a bad setting should.
+  const pushServices = (config.pushServices ?? []).map(source => new RegExp(source));
   const app = await createWorkbench(config);
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const machines = createMachineHub(app);
@@ -232,6 +235,8 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if(access.kind!=='device')throw new InputError('当前连接没有可自行撤销的配对设备',409);
           devicePlugin();
           if(!app.browserDevices.revoke(access.id))throw new InputError('当前设备凭证已失效',401);
+          // A revoked device's browser is pushed to no more.
+          forgetDevice(app.store, access.id);
           return json(res,200,{revoked:true});
         }
         if(access.kind==='device'){
@@ -259,6 +264,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           const single=/^\/api\/v1\/browser\/devices\/([^/]+)$/.exec(path);
           if(method==='DELETE' && single){
             if(!app.browserDevices.revoke(decodeURIComponent(single[1]!)))throw new InputError('设备不存在',404);
+            forgetDevice(app.store, decodeURIComponent(single[1]!));
             return json(res,200,{revoked:true});
           }
           throw new InputError('设备管理接口不存在',404);
@@ -1631,6 +1637,43 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         }
         const observations = path.match(/^\/api\/v1\/runs\/([^/]+)\/observations$/);
         if (observations && method === 'GET') return json(res, 200, app.runObservations(decodeURIComponent(observations[1]!)));
+        // A browser's Web Push (RFC 8030): the key it subscribes with, its subscription, and a test.
+        // It is part of the browser-notifications plugin, and is off when that plugin is off.
+        const webPushKey = path === '/api/v1/push/web' && method === 'GET';
+        const webPushOne = path.match(/^\/api\/v1\/push\/web\/([A-Za-z0-9._:-]{1,128})$/);
+        if (webPushKey || webPushOne) {
+          if (!app.plugins.list().some(plugin => plugin.id === 'browser-notifications' && plugin.status === 'active')) throw new InputError('浏览器通知插件已停用', 503);
+          const asker = access.kind === 'device' ? { kind: 'device' as const, id: access.id } : { kind: access.kind as 'root' | 'local' };
+          res.setHeader('cache-control', 'no-store');
+          if (!webPushOne) return json(res, 200, { key: vapidKeys(app.store).public });
+          const device = decodeURIComponent(webPushOne[1]!);
+          if (method === 'GET') return json(res, 200, { subscribed: listSubscriptions(app.store).some(row => row.device === device) });
+          if (method === 'PUT') {
+            const input = await body(req, 8 * 1024) as { endpoint?: unknown; keys?: unknown; key?: unknown; browser?: unknown };
+            const result = subscribe(app.store, asker, device, { endpoint: input.endpoint, keys: input.keys, key: input.key, browser: input.browser }, pushServices);
+            // A key the page no longer holds is not a refusal: the page is told the current one and subscribes again.
+            if (!result.ok && result.reason === 'key_changed') return json(res, 409, { error: '工作台的推送密钥已更换，请重新订阅', key: result.key });
+            if (!result.ok && result.reason !== 'key_changed') throw Object.assign(new InputError({
+              device: '浏览器编号无效', endpoint: '推送服务地址无效', keys: '浏览器推送密钥无效', owned: '这个浏览器的通知是另一台设备设置的',
+            }[result.reason] ?? '订阅被拒绝', result.reason === 'owned' ? 403 : 400));
+            return json(res, 200, { subscribed: true, key: result.key });
+          }
+          if (method === 'DELETE') {
+            const removed = unsubscribe(app.store, asker, device, url.searchParams.get('endpoint') ?? undefined);
+            return json(res, 200, { ok: true, removed });
+          }
+        }
+        const webPushTest = path.match(/^\/api\/v1\/push\/web\/([A-Za-z0-9._:-]{1,128})\/test$/);
+        if (webPushTest && method === 'POST') {
+          if (!app.plugins.list().some(plugin => plugin.id === 'browser-notifications' && plugin.status === 'active')) throw new InputError('浏览器通知插件已停用', 503);
+          const device = decodeURIComponent(webPushTest[1]!);
+          const outcomes = await pushNotice(app.store, { tag: 'webpush-test', title: '通知可以送达这个浏览器', body: '关掉所有页面后，这里也能收到提醒。', url: '#home', urgent: true, quiet: false },
+            row => row === device, { retryWaitsMs: [1000, 4000], extraServices: pushServices, fetchImpl: config.pushFetch });
+          const outcome = outcomes[0];
+          if (!outcome) throw new InputError('这个浏览器还没有打开「关掉页面也通知」', 404);
+          if (!outcome.ok) return json(res, 502, { error: '推送服务没有接收这条通知：' + outcome.detail, push_status: outcome.status, gone: outcome.gone });
+          return json(res, 200, { ok: true, push_status: outcome.status });
+        }
         const diagnostics = path.match(/^\/api\/v1\/runs\/([^/]+)\/diagnostics$/);
         if (diagnostics && method === 'GET') {
           if (url.search) throw new InputError('诊断报告不接受查询参数');
