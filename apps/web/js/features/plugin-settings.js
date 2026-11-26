@@ -181,7 +181,7 @@ export function createPluginSettings({ api, store, router }) {
           : h('p', { class: 'small' }, '缺少依赖插件：' + dep.id)),
         preferenceEditor(plugin.id),
         plugin.id === 'reading-fonts' && plugin.status === 'active' && readingFontEditor(),
-        plugin.id === 'browser-notifications' && plugin.status === 'active' && browserNotificationSettingsEditor(),
+        plugin.id === 'browser-notifications' && plugin.status === 'active' && browserNotificationSettingsEditor({ api }),
         plugin.id === 'shortcut-settings' && Button({ label: '快捷键设置', disabled: plugin.status !== 'active', onClick: () => openShortcutSettings(store) }),
         plugin.id === 'start-page' && startPageEditor({ api, store }, snapshot.startPage, startPages(plugins), openFeature),
         plugin.id === 'saved-prompts' && Button({ label: '管理常用提示词', size: 'sm', disabled: plugin.status !== 'active',

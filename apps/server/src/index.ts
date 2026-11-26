@@ -1659,7 +1659,10 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             return json(res, 200, { subscribed: true, key: result.key });
           }
           if (method === 'DELETE') {
-            const removed = unsubscribe(app.store, asker, device, url.searchParams.get('endpoint') ?? undefined);
+            // The endpoint, when the page still has it, proves the subscription is this browser's.
+            const input = await body(req, 4096) as { endpoint?: unknown };
+            if (Object.keys(input).some(key => key !== 'endpoint')) throw new InputError('只接受推送订阅地址');
+            const removed = unsubscribe(app.store, asker, device, typeof input.endpoint === 'string' ? input.endpoint : undefined);
             return json(res, 200, { ok: true, removed });
           }
         }
@@ -1668,7 +1671,7 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           if (!app.plugins.list().some(plugin => plugin.id === 'browser-notifications' && plugin.status === 'active')) throw new InputError('浏览器通知插件已停用', 503);
           const device = decodeURIComponent(webPushTest[1]!);
           const outcomes = await pushNotice(app.store, { tag: 'webpush-test', title: '通知可以送达这个浏览器', body: '关掉所有页面后，这里也能收到提醒。', url: '#home', urgent: true, quiet: false },
-            row => row === device, { retryWaitsMs: [1000, 4000], extraServices: pushServices, fetchImpl: config.pushFetch });
+            row => row === device, { retryWaitsMs: [1000, 4000], extraServices: pushServices, fetchImpl: config.pushFetch, forgetGone: false });
           const outcome = outcomes[0];
           if (!outcome) throw new InputError('这个浏览器还没有打开「关掉页面也通知」', 404);
           if (!outcome.ok) return json(res, 502, { error: '推送服务没有接收这条通知：' + outcome.detail, push_status: outcome.status, gone: outcome.gone });

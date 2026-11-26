@@ -2,6 +2,7 @@
 // Whether to show it is decided here, by this browser's settings and which tab is in front.
 import { h, readLocal, writeLocal } from '../lib/dom.js';
 import { Button, Check, Field, Input, Select } from '../ui/kit.js';
+import { readSubscription, subscribePush, testPush, unsubscribePush, webPushProblem } from './web-push.js';
 
 const storageKey = 'sm.browser-notifications';
 const seenKey = 'sm.browser-notifications.seen';
@@ -35,6 +36,56 @@ function inQuietHours(quiet, now) {
   const start = toMinutes(quiet.start), end = toMinutes(quiet.end);
   // A range that crosses midnight, such as 22:00–08:00, wraps.
   return start === end ? false : start < end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
+}
+
+// The part of the settings that turns Web Push on: what reaches this browser while no page is
+// open. It is its own permission and its own subscription, kept by the server per browser.
+function webPushSection(api) {
+  const problem = webPushProblem();
+  const usable = Boolean(api) && !problem;
+  const status = h('p', { role: 'status', class: 'small' });
+  const turn = Button({ label: '打开', size: 'sm', disabled: true, onClick: async (_event, button) => {
+    status.textContent = '';
+    const result = await subscribePush(api);
+    if (!result.ok) { status.textContent = result.message; await refresh(); return; }
+    button.lastChild.textContent = '已打开';
+    await refresh();
+  } });
+  const test = Button({ label: '发一条测试通知', size: 'sm', onClick: async () => {
+    status.textContent = '';
+    const answer = await testPush(api);
+    status.textContent = answer.ok ? '已交给推送服务。关掉所有页面，等几秒看是否收到。'
+      : String(answer.message || '推送服务没有接收这条通知');
+    await refresh();
+  } });
+  async function refresh() {
+    if (!usable) {
+      turn.disabled = true; off.disabled = true; test.disabled = true;
+      status.textContent = problem === 'insecure' ? '当前页面不是安全来源，浏览器不提供推送。用 https 或 localhost 打开工作台后可以用。'
+        : '这个浏览器不支持 Web Push。';
+      return;
+    }
+    if (Notification.permission === 'denied') { status.textContent = '浏览器不允许本站发通知。请在地址栏的网站设置里改成允许。'; }
+    const subscription = await readSubscription(api).catch(() => null);
+    const on = subscription?.subscribed === true;
+    turn.disabled = on;
+    off.disabled = !on;
+    turn.lastChild.textContent = on ? '已打开' : '打开';
+    test.disabled = !on;
+    if (on && !status.textContent) status.textContent = '已打开。没有页面开着时，需要你处理的事和执行结果会推到这里。';
+  }
+  const off = Button({ label: '关闭', size: 'sm', kind: 'danger', onClick: async () => {
+    status.textContent = '';
+    await unsubscribePush(api);
+    turn.lastChild.textContent = '打开';
+    await refresh();
+  } });
+  void refresh();
+  return h('section', { class: 'stack', 'aria-label': '关掉页面也通知' },
+    h('strong', null, '关掉页面也通知'),
+    h('p', { class: 'small muted' }, '页面都关着的时候，通知由浏览器自己的推送服务送到。内容加密，推送服务只看得到密文。'),
+    h('div', { class: 'row' }, turn, off, test),
+    status);
 }
 
 // Returns 'show', 'silent' (shown without a sound) or 'skip'.
@@ -114,7 +165,7 @@ export function installBrowserNotifications({ api, store, doneDelayMs = DONE_DEL
   return () => { unsubscribe(); cancelPending(); closeShown(); document.removeEventListener('visibilitychange', returned); window.removeEventListener('pagehide', closeShown); };
 }
 
-export function browserNotificationSettingsEditor() {
+export function browserNotificationSettingsEditor({ api } = {}) {
   const settings = notificationSettings();
   const status = h('p', { role: 'status', class: 'small' });
   const supported = 'Notification' in window;
@@ -130,6 +181,7 @@ export function browserNotificationSettingsEditor() {
     denied: '浏览器不允许本站发通知，请在地址栏的网站设置里改成允许。',
   };
   if (permission !== 'granted' && permission !== 'default') status.textContent = hints[permission];
+  const push = webPushSection(api);
   return h('div', { class: 'stack' },
     h('p', { class: 'small muted' }, '设置保存在当前浏览器。页面不在前台时提醒，点通知回到对应的消息或执行。开着多个标签页也只提醒一次。'),
     enabled, always,
@@ -138,7 +190,7 @@ export function browserNotificationSettingsEditor() {
     quiet,
     h('div', { class: 'form-row' }, Field({ label: '免打扰开始', control: start }), Field({ label: '免打扰结束', control: end })),
     h('p', { class: 'small muted' }, '按本机时间。这段时间里不提醒执行结果，需要你处理的事照常提醒但不响铃。'),
-    status,
+    status, push,
     Button({ label: '保存通知设置', kind: 'primary', onClick: async () => {
       if (enabled.querySelector('input').checked && supported && Notification.permission === 'default') await Notification.requestPermission();
       if (!start.reportValidity() || !end.reportValidity()) return;

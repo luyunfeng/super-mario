@@ -214,6 +214,10 @@ export interface PushOptions {
   openDevices?: (device: string) => boolean;
   /** How long to wait before another try, for a failure that may pass. */
   retryWaitsMs?: number[];
+  /** Whether a subscription the push service says is gone is dropped. A test push leaves it, so
+   *  that the owner is told what the service said and decides; a real one drops it, as a dead
+   *  subscription is of no use. */
+  forgetGone?: boolean;
   now?: () => Date;
 }
 
@@ -248,7 +252,7 @@ export async function pushNotice(store: Store, notice: Notice, wants: (device: s
     const detail = ok ? '' : (answer.networkError ?? answer.body.replace(/\s+/g, ' ').slice(0, 200)) || '推送服务没有接收';
     store.put('settings', DELIVERY_OF(subscription.device), { at: now().toISOString(), ok, detail });
     // The service says the subscription is no more. It is dropped while it is still that one.
-    if (gone) {
+    if (gone && options.forgetGone !== false) {
       const current = list(store).find(row => row.device === subscription.device);
       if (current?.endpoint === subscription.endpoint) unsubscribe(store, { kind: 'root' }, subscription.device);
     }

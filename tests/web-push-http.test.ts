@@ -24,18 +24,21 @@ async function certificate() {
 /** A push service of the test's own, over TLS as a browser's vendor's is. */
 async function pushService(tls: { key: Buffer; cert: Buffer }) {
   const posts: { device: string; authorization: string | undefined; ttl: string | undefined; urgency: string | undefined; topic: string | undefined; body: Buffer }[] = [];
+  // Set by a test to make the service say every subscription is gone.
+  const state = { gone: false };
   const service = createServer(tls, (req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', chunk => chunks.push(chunk as Buffer));
     req.on('end', () => {
       posts.push({ device: req.url!.split('/').at(-1)!, authorization: req.headers.authorization, ttl: req.headers.ttl as string | undefined,
         urgency: req.headers.urgency as string | undefined, topic: req.headers.topic as string | undefined, body: Buffer.concat(chunks) });
+      if (state.gone) { res.writeHead(410).end('gone'); return; }
       res.writeHead(201).end('created');
     });
   });
   await new Promise<void>(resolve => service.listen(0, '127.0.0.1', () => resolve()));
   const port = (service.address() as { port: number }).port;
-  return { posts, origin: 'https://127.0.0.1:' + port, close: () => new Promise<void>((resolve, reject) => service.close(error => error ? reject(error) : resolve())) };
+  return { posts, state, origin: 'https://127.0.0.1:' + port, close: () => new Promise<void>((resolve, reject) => service.close(error => error ? reject(error) : resolve())) };
 }
 
 /** What the workbench's fetch is for this test: a POST over TLS that trusts the run's certificate.
@@ -111,15 +114,15 @@ test('a browser subscribes, is listed, tests, and unsubscribes over HTTP; the pl
   assert.equal(f.service.posts[0]!.urgency, 'high');
   assert.ok(f.service.posts[0]!.body.length > 100);
   // Unsubscribing works once; a second time says nothing was removed.
-  assert.equal((await f.web<{ removed: boolean }>('push/web/web-1', 'DELETE')).body.removed, true);
-  assert.equal((await f.web<{ removed: boolean }>('push/web/web-1', 'DELETE')).body.removed, false);
+  assert.equal((await f.web<{ removed: boolean }>('push/web/web-1', 'DELETE', {})).body.removed, true);
+  assert.equal((await f.web<{ removed: boolean }>('push/web/web-1', 'DELETE', {})).body.removed, false);
   assert.equal((await f.web<{ subscribed: boolean }>('push/web/web-1')).body.subscribed, false);
   // With the plugin off, every route says so and nothing is pushed.
   await f.web('plugins/browser-notifications', 'POST', { enabled: false });
   assert.equal((await f.web('push/web')).status, 503);
   assert.equal((await f.web('push/web/web-1')).status, 503);
   assert.equal((await f.web('push/web/web-1', 'PUT', await f.subscription('web-1'))).status, 503);
-  assert.equal((await f.web('push/web/web-1', 'DELETE')).status, 503);
+  assert.equal((await f.web('push/web/web-1', 'DELETE', {})).status, 503);
   assert.equal((await f.web('push/web/web-1/test', 'POST', {})).status, 503);
   assert.equal(f.service.posts.length, 1);
 });
@@ -158,4 +161,18 @@ test('a notice for a browser with no page open is pushed; one with a page open i
   assert.deepEqual(f.service.posts.map(post => post.device), ['web-away']);
   const pushed = f.service.posts[0]!;
   assert.equal(pushed.urgency, 'normal', 'a finished run is not urgent');
+});
+
+test('a test push that the service says is gone tells the owner, and keeps the subscription', { timeout: 30000 }, async t => {
+  const f = await fixture(t);
+  assert.equal((await f.web('push/web/web-1', 'PUT', await f.subscription('web-1'))).status, 200);
+  // The service says this subscription is no more.
+  f.service.state.gone = true;
+  const answer = await f.web<{ error: string; gone: boolean }>('push/web/web-1/test', 'POST', {});
+  assert.equal(answer.status, 502);
+  assert.equal(answer.body.gone, true);
+  assert.match(answer.body.error, /推送服务/);
+  // It is the owner's to decide: the subscription is still there, so that they can read what
+  // happened and turn it off themselves, or try again.
+  assert.equal((await f.web<{ subscribed: boolean }>('push/web/web-1')).body.subscribed, true);
 });
