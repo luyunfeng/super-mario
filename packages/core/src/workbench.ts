@@ -42,6 +42,7 @@ import { responsibleSessionTodos } from './responsible-session.ts';
 import { actionTodoLink } from './todo-link.ts';
 import { readTodoHistory } from './todo-history.ts';
 import { createRunReview } from './run-review.ts';
+import { createProjectLessonLearner } from './project-lesson-learner.ts';
 import { createProjectFollowUp } from './project-follow-up.ts';
 import { applyPolicyPreset } from './policy-presets.ts';
 import { createProjectFolders } from './project-folders.ts';
@@ -49,7 +50,7 @@ import { createWebPresence } from './web-presence.ts';
 import { createBriefingSettings, heldNotificationRecords } from './briefing.ts';
 import { createAgentFollowups } from './followups.ts';
 import { createAutoTakeover } from './auto-takeover.ts';
-import { todoDelegationPrompt, formatProjectInstructions, INBOX_ASSISTANT_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT } from './prompts.ts';
+import { todoDelegationPrompt, formatProjectInstructions, INBOX_ASSISTANT_SYSTEM_PROMPT, SUPERVISOR_SYSTEM_PROMPT, PROJECT_LESSON_MODEL_SYSTEM_PROMPT } from './prompts.ts';
 import { reminderReference, reminderSourceId, wireWorkbenchBackground } from './workbench-background.ts';
 import { createAwayNotifications } from './away-notifications.ts';
 import { collectAttention } from './attention.ts';
@@ -741,6 +742,20 @@ export async function createWorkbench(config: AppConfig) {
     ].join('\n');
   }
   const reviewSettings = () => ({ maxReworks: store.get<{ maxReworks: number }>('workbench.settings', 'run-review')?.maxReworks ?? 2 });
+  // What an accepted task taught is learned beside acceptance, with no tools. The call is
+  // aborted when the host closes.
+  const projectLessons = createProjectLessonLearner({ store, events, demo: config.demo, ask: async (text, signal) => {
+    const complete = await abortable(() => modelCompletion(config, signal, PROJECT_LESSON_MODEL_SYSTEM_PROMPT, 2048), signal);
+    return abortable(() => complete(text, signal), signal);
+  } });
+  // Lessons are part of what the project's Agents are told. They are guidance from accepted
+  // work, and do not widen what a tool may do.
+  function projectContextWithLessons(id: string) {
+    const context = projectWorkspace.context(id) as Record<string, Json>;
+    const project = context?.project as { unavailable?: boolean } | undefined;
+    if (!context || project?.unavailable || context.lessons !== undefined) return context;
+    return { ...context, lessons: projectLessons.instructions(id) };
+  }
   const runReview = createRunReview({ store, events, dispatch, completeTodo: id => updateTodo(id, { completed: true }), maxReworks: () => reviewSettings().maxReworks });
   const reviewEvidence = runReview.evidenceForRun;
   function todoHistory(id: string, before?: string) {
@@ -751,13 +766,13 @@ export async function createWorkbench(config: AppConfig) {
     const config = policies.read(projectId ? { projectId } : {});
     return { rules: config.rules.map(({kind,handler,mode,cwdUnder,note,grantedAt,reversible}) => ({kind,handler,...(mode && {mode}),...(cwdUnder && {cwdUnder}),...(note && {note}),...(grantedAt && {grantedAt}),...(reversible !== undefined && {reversible})})) };
   }
-  const agent = createAgentRuntime({ config, store, events, contributions, validateQueuedWebInput, canGenerateOffice, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), reviewEvidence, reviewsForSource, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), automationPolicy: readAutomationPolicy });
+  const agent = createAgentRuntime({ config, store, events, contributions, validateQueuedWebInput, canGenerateOffice, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), reviewEvidence, reviewsForSource, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:projectContextWithLessons, automationPolicy: readAutomationPolicy });
   const webConversationAllowed = (id:string, projectId?:string) => {
     const active = plugins.list().filter(plugin => plugin.status === 'active');
     return active.some(plugin => plugin.id === 'web-conversations') && webConversationMatches(store,id,projectId)
       && (active.some(plugin => plugin.id === 'assistant-profile') || !readWebThreadAssistant(store,id));
   };
-  const scopedAgents = createScopedAgents({ webComposerPlugins:()=>new Set(plugins.list().filter(p=>p.status==='active').map(p=>p.id)), webThreadAssistant:id=>readWebThreadAssistant(store,id), webConversationAllowed, validateQueuedWebInput, canGenerateOffice, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, canOpenQuestion:source=>Boolean(questionFormAudience(source)), onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, reviewsForSource, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), validScope: scopedInputAllowed, automationPolicy: readAutomationPolicy });
+  const scopedAgents = createScopedAgents({ webComposerPlugins:()=>new Set(plugins.list().filter(p=>p.status==='active').map(p=>p.id)), webThreadAssistant:id=>readWebThreadAssistant(store,id), webConversationAllowed, validateQueuedWebInput, canGenerateOffice, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, canOpenQuestion:source=>Boolean(questionFormAudience(source)), onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), inboxConversations:()=>inboxAssistant.list(), config, store, events, contributions, reviewEvidence, reviewsForSource, executors: executorInfo, workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:projectContextWithLessons, validScope: scopedInputAllowed, automationPolicy: readAutomationPolicy });
   const webThreadCleanup = createWebThreadCleanup(store, async (id,filesPending) => {
     await scopedAgents.forgetDeletedWebThread(id);
     if(filesPending)sweepChatFiles(store,config.dataDir,true);
@@ -3448,7 +3463,7 @@ export async function createWorkbench(config: AppConfig) {
       await approvals.close();
       for (const controller of controllers.values()) controller.abort();
       try {
-        const stopped = await Promise.allSettled([inboxAssistant.close(), inboxAssistantRuntime.close(), inboxClassifier.close(), inboxHandlingRuntime.close(), projectWorkspace.close(), background.close(), interactions.close(), supervisorAgent.close(), agent.close({ abort: true }), supervisorRuntime.close({ abort: true }), scopedAgents.close({ abort: true })]);
+        const stopped = await Promise.allSettled([projectLessons.close(), inboxAssistant.close(), inboxAssistantRuntime.close(), inboxClassifier.close(), inboxHandlingRuntime.close(), projectWorkspace.close(), background.close(), interactions.close(), supervisorAgent.close(), agent.close({ abort: true }), supervisorRuntime.close({ abort: true }), scopedAgents.close({ abort: true })]);
         const failures = stopped.filter(item => item.status === 'rejected');
         if (failures.length) throw new AggregateError(failures.map(item => item.status === 'rejected' ? item.reason : undefined), 'Agent 运行时关闭失败');
       }
