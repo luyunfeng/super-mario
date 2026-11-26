@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -77,4 +78,72 @@ test('每条回复记下是哪个模型答的和这一轮的用量；对话中�
   // The first reply still says which model gave it.
   assert.equal(server.app.store.get<Message>('messages', first.id)?.model?.model, 'first-model');
   assert.deepEqual(asked, ['first-model', 'second-model']);
+});
+
+test('项目助理的工具清单、作用域和指令前后一致，主对话换模型不改变它', { timeout: 60000 }, async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'mario-provenance-scope-'));
+  // What the assistant was offered, in the order it was asked.
+  const offered: { model: string; tools: string[]; prompt: string }[] = [];
+  const model = createServer(async (req, res) => {
+    if (req.method === 'GET') { res.end('fixture'); return; }
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    const body = JSON.parse(raw);
+    const id = String(body.model ?? '');
+    offered.push({ model: id, tools: (body.tools ?? []).map((tool: { function: { name: string } }) => tool.function.name).sort(),
+      prompt: JSON.stringify(body.messages.filter((m: { role: string }) => m.role === 'system')) });
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    for (const [delta, finish_reason] of [[{ role: 'assistant', content: '由 ' + id + ' 回答' }, null], [{}, 'stop']] as const) {
+      res.write('data: ' + JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: id, choices: [{ index: 0, delta, finish_reason }] }) + '\n\n');
+    }
+    res.end('data: [DONE]\n\n');
+  });
+  await new Promise<void>(ok => model.listen(0, '127.0.0.1', ok));
+  const server = await startServer({ dataDir: dir, host: '127.0.0.1', port: 0, demo: false, model: {
+    provider: 'openai-compatible', model: 'first-model', apiKey: 'offline-model-fixture', baseUrl: 'http://127.0.0.1:' + (model.address() as { port: number }).port + '/v1',
+  } });
+  t.after(async () => { await server.close(); model.closeAllConnections(); await new Promise<void>(ok => model.close(() => ok())); await rm(dir, { recursive: true, force: true }); });
+  const post = async (path: string, body: object, method = 'POST') => {
+    const response = await fetch(server.url + '/api/v1' + path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    return { status: response.status, body: await response.json() as Record<string, unknown> };
+  };
+  const project = await post('/projects', { name: '合成权限项目' });
+  assert.equal(project.status, 201);
+  // A roster assistant of that project: its scope is the project, and its tools are the project's.
+  const assistantId = randomUUID();
+  const roster = await post('/assistant-roster', { action: 'create', id: assistantId, name: '项目合成助理', instructions: '只做本项目的事' });
+  assert.equal(roster.status, 200, JSON.stringify(roster.body));
+  // The assistant's own thread in the project: what it is given is that project's scope.
+  const opened = await post('/assistant-roster', { action: 'open', id: assistantId, projectId: project.body.id });
+  assert.equal(opened.status, 200, JSON.stringify(opened.body));
+  const threadId = String(opened.body.threadId);
+  const ask = async (text: string) => {
+    const sent = await post('/web-conversations/' + threadId + '/messages', { text });
+    assert.ok(sent.status < 300, JSON.stringify(sent.body));
+    const inputId = String(sent.body.id);
+    for (let i = 0; i < 500; i++) {
+      const reply = server.app.store.list<Message>('messages').find(m => m.replyTo === inputId && (m.status === 'done' || m.status === 'failed'));
+      if (reply) { assert.equal(reply.status, 'done', reply.text); return reply; }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    throw new Error('模型回合未结束: ' + JSON.stringify(sent.body));
+  };
+  const first = await ask('第一个问题');
+  assert.equal(first.model?.model, 'first-model');
+  // The main conversation's model is changed. The roster assistant has its own runtime, bound
+  // to the project, and the main conversation's pick is not its pick.
+  const picked = await post('/model/pick', { model: 'second-model', typed: true }, 'PUT');
+  assert.equal(picked.status, 200, JSON.stringify(picked.body));
+  const second = await ask('第二个问题');
+  // The assistant still answers with the configured model: the main conversation's pick is not its pick.
+  assert.equal(second.model?.model, 'first-model');
+  assert.equal(offered.length, 2);
+  // The same tools, in the same scope, both times: what the assistant may do did not change.
+  assert.ok(offered[0]!.tools.length > 0);
+  assert.deepEqual(offered[1]!.tools, offered[0]!.tools);
+  // The system prompt carries the project's scope both times, and the assistant's own instructions.
+  for (const request of offered) {
+    assert.ok(request.prompt.includes(project.body.id as string), 'the project is named in the prompt');
+    assert.ok(request.prompt.includes('只做本项目的事'), 'the assistant\'s own instructions are in the prompt');
+  }
 });
