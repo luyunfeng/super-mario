@@ -37,6 +37,12 @@ async function main() {
   workerToolUrl.password = '';
   if (workerToolUrl.protocol === 'ws:') workerToolUrl.protocol = 'http:';
   if (workerToolUrl.protocol === 'wss:') workerToolUrl.protocol = 'https:';
+  // The server's HTTP address, for taking the bytes of a mail attachment to save here.
+  const serverUrl = new URL('/', url);
+  serverUrl.username = '';
+  serverUrl.password = '';
+  if (serverUrl.protocol === 'ws:') serverUrl.protocol = 'http:';
+  if (serverUrl.protocol === 'wss:') serverUrl.protocol = 'https:';
   const nodePlugins = await loadDefaultNodePlugins({
     dataDir,
     machineId,
@@ -44,6 +50,10 @@ async function main() {
     launchers,
     workerToolUrl: workerToolUrl.href,
     terminalCommand: process.env.SUPER_MARIO_TERMINAL_COMMAND,
+    serverUrl: serverUrl.href,
+    // Saving a mail attachment needs the machine's own credential. A root token names no
+    // machine, so with one the save is not offered rather than proved by a weaker means.
+    machineToken: /^smmc_[A-Za-z0-9_-]{43}$/.test(token) ? token : undefined,
   });
   const agent = await startAgentNode({
     url, token, machineId, agentInstanceId, piCommand, name: values.name ?? hostname(), dataDir,

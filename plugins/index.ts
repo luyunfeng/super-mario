@@ -234,7 +234,7 @@ export interface SystemActions {
   /** One read for the assistant's GitHub tools. The input was checked by the tool. */
   githubTool?(method: 'search' | 'issue' | 'comments' | 'diff' | 'checks', input: JsonObject): Promise<unknown>;
   /** The assistant's mail reads and send requests. They go to the mailboxes the owner added. */
-  mailTool?(name: 'accounts' | 'search' | 'read' | 'send', input: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
+  mailTool?(name: 'accounts' | 'search' | 'read' | 'send' | 'save-attachment', input: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
   /** Reads the folders the owner wants in the inbox, of every mailbox. A mailbox that cannot
    *  be read is left out and named. */
   mailConnectorRead?(signal: AbortSignal): Promise<{ reads: MailInboxRead[]; failed: Array<{ id: string; name: string }> }>;
@@ -366,6 +366,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
               accounts: () => actions.mailTool!('accounts', {}, new AbortController().signal) as Promise<Json[]>,
               search: (input, signal) => actions.mailTool!('search', { ...input }, signal) as Promise<Json>,
               read: (input, signal) => actions.mailTool!('read', input, signal) as Promise<Json>,
+              saveAttachment: (input, signal) => actions.mailTool!('save-attachment', input, signal) as Promise<Json>,
               proposeSend: input => actions.mailTool!('send', input, new AbortController().signal) as Promise<Json>,
             });
             for (const item of mail) context.contribute('tools', item.name, item);

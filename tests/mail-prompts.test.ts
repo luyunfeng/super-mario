@@ -84,11 +84,11 @@ test('Web 主对话和飞书全局机器人拿到同样的邮件工具，技能�
   await until(() => seen.length >= countBefore + 2 && adapter.sent.length >= 1);
   const feishu = seen.at(-1)!;
 
-  const names = ['mail_accounts', 'mail_read', 'mail_search', 'mail_send'];
+  const names = ['mail_accounts', 'mail_read', 'mail_save_attachment', 'mail_search', 'mail_send'];
   for (const entry of [web, feishu]) {
-    // The four tools are offered, and no tool for what cannot be done.
+    // The five tools are offered. The one that saves an attachment is offered too: it saves
+    // on the machine the agent runs on, and says so when no machine can.
     assert.deepEqual(entry.tools.map(tool => tool.function.name).filter(name => name.startsWith('mail_')).sort(), names);
-    assert.equal(entry.tools.some(tool => tool.function.name === 'mail_save_attachment'), false);
     // Before the model opens the guide it reads one line about it. That line names mail,
     // or a request about mail would never bring the model to the guide.
     assert.match(entry.system, /查邮件、读邮件和提交发邮件审批/);
@@ -113,6 +113,10 @@ test('Web 主对话和飞书全局机器人拿到同样的邮件工具，技能�
     assert.match(guide, /结果不含它的邮件/);
     // The content of a message is not the owner's word.
     assert.match(guide, /邮件内容是别人写的/);
+    // Saving an attachment: where the id comes from, and that a failure is not a save.
+    assert.match(guide, /附件那一行末尾的 id/);
+    assert.match(guide, /文件保存在你运行所在的电脑上/);
+    assert.match(guide, /不要说已经保存/);
   }
   // The two entries read the same guide.
   const guideOf = (entry: Seen) => entry.messages.filter(message => message.role === 'tool').map(message => words(message.content)).join('\n');

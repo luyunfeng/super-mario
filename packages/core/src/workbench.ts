@@ -54,6 +54,7 @@ import { executeMailSend, MAIL_SEND_APPROVAL, proposeMailSend } from './mail-out
 import { classifyImapError, connectionOptions, ImapError, libraryOpen, setMessageFlags, type ImapClient, type MessageFlagChange, type OpenImap } from './mail-imap.ts';
 import { MessageError, readAttachment, readMessage } from './mail-message.ts';
 import { searchFolder } from './mail-search.ts';
+import { createAttachmentClaims } from './mail-attachment-claims.ts';
 import { createProjectFollowUp } from './project-follow-up.ts';
 import { applyPolicyPreset } from './policy-presets.ts';
 import { createProjectFolders } from './project-folders.ts';
@@ -638,9 +639,12 @@ export async function createWorkbench(config: AppConfig) {
   // they connect is kept here, so that both use the same.
   let mailOpen: OpenImap = libraryOpen();
   const mailReader = createMailReader({ accounts: mailAccounts, open: options => mailOpen(options) });
+  // The bytes of an attachment being saved on a machine are held here for the moment of the
+  // save. The machine channel carries small messages, so the machine takes them over HTTP.
+  const attachmentClaims = createAttachmentClaims();
   /** One call from the assistant's mail tools. Each goes to what does it, so the tool
    *  checks the input and the workbench does the reading or asks for the approval. */
-  async function mailTool(name: 'accounts' | 'search' | 'read' | 'send', input: Record<string, unknown>, signal: AbortSignal): Promise<Json> {
+  async function mailTool(name: 'accounts' | 'search' | 'read' | 'send' | 'save-attachment', input: Record<string, unknown>, signal: AbortSignal): Promise<Json> {
     // Every mailbox the owner added can be used from here, and none other.
     const own = (id: unknown) => {
       if (typeof id !== 'string' || !mailAccounts.list().some(account => account.id === id)) throw new InputError('邮箱账号不存在，请先用 mail_accounts 查看已添加的邮箱', 404);
@@ -658,9 +662,44 @@ export async function createWorkbench(config: AppConfig) {
       if (input.account !== undefined) own(input.account);
       return await searchMail(input as unknown as SearchRequest, signal) as unknown as Json;
     }
-    // As with a search: the tool checked the arguments. The account is looked at here.
-    own(input.account);
-    return await readMail(String(input.account), Number(input.uid), String(input.mailbox), signal) as unknown as Json;
+    if (name === 'save-attachment') {
+      // As with a read: the tool checked the arguments. The account is looked at here, and
+      // the message is read again so that the attachment is found by its id inside it.
+      const accountId = own(input.account);
+      if (!machines) throw new InputError('执行机客户端尚未就绪', 503);
+      // The file is saved on the computer the agent runs on. When the owner has one such
+      // computer it is that one; with several the owner is asked to name it.
+      const able = machines.list().filter(entry => entry.online && entry.capabilities.includes('mail.save-attachment'));
+      const machine = input.machineId === undefined
+        ? able.length === 1 ? able[0] : undefined
+        : able.find(entry => entry.id === input.machineId);
+      if (input.machineId !== undefined && (typeof input.machineId !== 'string' || !machine)) throw new InputError('指定的电脑不在线或不能保存邮件附件', 409);
+      if (!machine) {
+        if (!able.length) throw new InputError('没有能保存邮件附件的电脑，请连接或升级电脑代理', 503);
+        throw new InputError('有多台电脑可以保存，请指明保存到哪一台：' + able.map(entry => entry.name + '（' + entry.id + '）').join('、'), 409);
+      }
+      // The message is read again so that the attachment is found by its id inside it.
+      const file = await withMail(accountId, signal, (client, account) => readAttachment(client, { account: account.id, mailbox: String(input.mailbox), uid: Number(input.uid) }, String(input.attachmentId), signal));
+      const claim = attachmentClaims.put(file, machine.id);
+      let saved: { ok: boolean; path?: string; size?: number; reason?: string; message?: string };
+      try {
+        saved = await machines.call(machine.id, 'mail.save-attachment', { dir: input.dir, path: claim.path, token: claim.token, filename: claim.filename, mimeType: claim.mimeType, size: claim.size } as unknown as JsonObject, { timeoutMs: 60_000 }) as typeof saved;
+      } catch (error) {
+        // The machine may have gone before it took the bytes. They are dropped now and not
+        // held until the claim runs out.
+        attachmentClaims.drop(claim.id);
+        throw error;
+      }
+      attachmentClaims.drop(claim.id);
+      if (!saved.ok) throw new InputError(saved.message ?? '保存附件失败', 502);
+      return { path: saved.path, size: saved.size } as unknown as Json;
+    }
+    return readMail(String(input.account), Number(input.uid), String(input.mailbox), signal) as unknown as Json;
+  }
+  /** The bytes of a claim a machine is taking to save. A claim is good once, for the
+   *  machine it was made for, and for a short time. */
+  function takeMailAttachment(id: string, token: string, machineId: string) {
+    return attachmentClaims.take(id, token, machineId);
   }
   // An email the assistant asks to send is an approval. Nothing goes out until the owner
   // approves it, and what goes out is read back from the approval when they do.
@@ -3674,7 +3713,7 @@ export async function createWorkbench(config: AppConfig) {
   return {
     browserDevices, deleteWebConversation, postWebConversation:scopedAgents.postWebConversation,
     setBrowserDeviceInvalidator(handler:(id?:string)=>void) { browserDeviceInvalidator=handler; },
-    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, readInboxMail, downloadInboxMail, setInboxMailFlags, searchMail, mailTool, proposeMail, MAIL_SEND_APPROVAL,
+    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, readInboxMail, downloadInboxMail, setInboxMailFlags, searchMail, mailTool, takeMailAttachment, proposeMail, MAIL_SEND_APPROVAL,
     mailConnectorView, mailConnectorConfigure, mailPoll: async () => { await plugins.invocations.use(MAIL_POLL_SERVICE, {}); },
     mailConnectorRetire: retireMail,    setMailOpen(open: OpenImap) { mailOpen = open; }, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },
@@ -3939,6 +3978,7 @@ export async function createWorkbench(config: AppConfig) {
         scheduledWork.close(); followups.close(); autoTakeover.close(); offScheduledWork(); offFollowups(); offKnowledgeApprovals();
         waitingReplies.close();
         await inbox.close();
+        attachmentClaims.close();
         await mailboxes.close();
         try { await plugins.close(); } finally { store.close(); }
       }

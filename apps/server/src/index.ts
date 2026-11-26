@@ -176,6 +176,24 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           throw new InputError('分享不存在或已失效',404);
         return json(res,200,await app.plugins.invocations.use('conversation-sharing.read',input as JsonObject));
       }
+      // The bytes of one mail attachment a machine is saving. Only a machine may take them,
+      // under the one-time credential it was handed with the save and in its own right.
+      const mailClaim = path.match(/^\/api\/v1\/mail\/claims\/([A-Za-z0-9_-]{1,64})$/);
+      if (mailClaim && req.method === 'GET') {
+        res.setHeader('cache-control', 'no-store');
+        // Each header must come once. Two of either would leave it open which one was meant.
+        const claimToken = req.headersDistinct.authorization?.length === 1 ? /^Bearer ([A-Za-z0-9_-]{1,128})$/.exec(req.headersDistinct.authorization[0] ?? '')?.[1] : undefined;
+        const machineToken = req.headersDistinct['x-machine-credential']?.length === 1 ? /^Bearer (smmc_[A-Za-z0-9_-]{43})$/.exec(req.headersDistinct['x-machine-credential'][0] ?? '')?.[1] : undefined;
+        const machineId = machineToken && machineCredentials.resolve(machineToken);
+        if (!claimToken || !machineId) throw new InputError('附件认领无效', 401);
+        const file = app.takeMailAttachment(mailClaim[1]!, claimToken, machineId);
+        if (!file) throw new InputError('附件认领无效或已过期', 404);
+        // The type is not trusted: this is a file to be saved and never a page to be opened.
+        res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': file.size,
+          'content-disposition': 'attachment', 'x-content-type-options': 'nosniff', 'content-security-policy': 'sandbox' });
+        res.end(Buffer.from(file.content));
+        return;
+      }
       if (path === '/api/v1/worker-tools/todo-bind-thread' || path === '/api/v1/worker-tools/todo-decisions' || path === '/api/v1/worker-tools/todo-decision-add') {
         if (req.method !== 'POST') throw new InputError('此工具需要 POST', 405);
         const key = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.headers.authorization ?? '')?.[1];

@@ -5,6 +5,7 @@ import { createCliSessionDiscovery } from '../../../plugins/cli-session-discover
 import { createExecutionServices } from '../../../plugins/executors.ts';
 import { createProjectDiscovery } from '../../../plugins/project-discovery.ts';
 import { createGithubNode } from '../../../plugins/github-node.ts';
+import { createMailAttachmentNode } from './mail-attachment.ts';
 import { createTerminalHost } from '../../../plugins/terminal-host.ts';
 import { createLiveTerminalServices } from '../../../plugins/live-terminals.ts';
 import { createAgentArtifactLoader } from './agent-artifacts.ts';
@@ -79,6 +80,10 @@ export interface DefaultNodePluginOptions {
   launchers: NonNullable<Parameters<typeof createExecutionServices>[0]['launchers']>;
   terminalCommand?: string;
   workerToolUrl?: string;
+  /** The server the machine is connected to, for taking the bytes of a mail attachment. */
+  serverUrl?: string;
+  /** This machine's credential for the server. */
+  machineToken?: string;
 }
 
 /** Loads and composes the built-in agent-node plugins in their standard capability order. */
@@ -134,5 +139,11 @@ export async function loadDefaultNodePlugins(options: DefaultNodePluginOptions):
       id: 'github',
       handlers: createGithubNode({ dataDir }),
     },
+    // Saves a mail attachment as a file on this machine. The bytes are taken from the server
+    // over HTTP, because the machine channel carries small messages only.
+    ...(options.serverUrl && options.machineToken ? [{
+      id: 'mail-attachment',
+      handlers: createMailAttachmentNode({ dataDir, serverUrl: options.serverUrl, machineToken: options.machineToken }).handlers,
+    }] : []),
   ]);
 }

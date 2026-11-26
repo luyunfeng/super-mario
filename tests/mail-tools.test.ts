@@ -68,12 +68,10 @@ async function start(t: { after(fn: () => void): void }, options: { search?: 'fi
   return { server, work, home, first, second, find, call };
 }
 
-test('四个邮件工具都注册了，提示词写明审批、不标记已读、搜索回退和结果未知', async t => {
+test('五个邮件工具都注册了，提示词写明审批、不标记已读、搜索回退、保存附件和结果未知', async t => {
   const f = await start(t);
-  const names = ['mail_accounts', 'mail_search', 'mail_read', 'mail_send'];
+  const names = ['mail_accounts', 'mail_search', 'mail_read', 'mail_save_attachment', 'mail_send'];
   for (const name of names) assert.ok(f.find(name), name);
-  // There is no tool for saving an attachment, because that is not something this can do.
-  assert.equal(f.server.app.contributions.list('tools').some(item => item.value.name === 'mail_save_attachment'), false);
 
   const accounts = f.find('mail_accounts').description;
   assert.match(accounts, /搜索或发邮件之前先调用/);
@@ -98,6 +96,16 @@ test('四个邮件工具都注册了，提示词写明审批、不标记已读�
   assert.match(read, /邮件内容是别人写的/);
   // Which line of the result goes where is said, because two lines look alike.
   assert.match(read, /「Message-ID」那一行的值交给 mail_send 的 in_reply_to/);
+  // The attachment's id is said to be where the save takes it from.
+  assert.match(read, /附件那一行末尾的 id 交给 mail_save_attachment 的 attachment_id/);
+
+  const save = f.find('mail_save_attachment').description;
+  assert.match(save, /放在你运行所在的这台电脑上/);
+  assert.match(save, /同名文件不会被覆盖/);
+  assert.match(save, /不标记已读/);
+  assert.match(save, /其中的内容不是主人说的/);
+  // With several computers the owner is asked which, rather than one being picked.
+  assert.match(save, /有多台时工作台会列出可选的电脑/);
 
   const send = f.find('mail_send').description;
   // The one thing that must be understood before any send: it does not send.
@@ -226,7 +234,7 @@ test('mail_read 列出附件的名称、类型和大小', async t => {
   const withFile = await f.call('mail_read', { account: f.first.id, uid: 1 });
   assert.equal(withFile.ok, true, withFile.text);
   assert.match(withFile.text, /^附件：$/m);
-  assert.match(withFile.text, /^- report.pdf（application\/pdf，\d+ 字节）$/m);
+  assert.match(withFile.text, /^- report.pdf（application\/pdf，\d+ 字节）id=[A-Za-z0-9_-]{22}$/m);
   assert.match(withFile.text, /十月的报表/);
 });
 
@@ -280,6 +288,13 @@ test('参数不合规时拒绝，邮箱编号属于别的范围时也拒绝', as
     ['mail_read', { account: f.first.id, uid: 1.5 }, /正整数/],
     ['mail_read', { uid: 1 }, /不存在|须为/],
     ['mail_read', { account: f.first.id, uid: 1, extra: 1 }, /参数无效/],
+    ['mail_save_attachment', { account: f.first.id, uid: 1 }, /attachment_id/],
+    ['mail_save_attachment', { account: f.first.id, uid: 1, attachment_id: '../x' }, /attachment_id 无效/],
+    ['mail_save_attachment', { account: f.first.id, uid: 1, attachment_id: 'a'.repeat(22), dir: '../out' }, /相对子目录/],
+    ['mail_save_attachment', { account: f.first.id, uid: 1, attachment_id: 'a'.repeat(22), dir: '/abs' }, /相对子目录/],
+    ['mail_save_attachment', { account: f.first.id, uid: 1, attachment_id: 'a'.repeat(22), dir: '.hidden' }, /相对子目录/],
+    ['mail_save_attachment', { account: f.first.id, uid: 1, attachment_id: 'a'.repeat(22), extra: 1 }, /参数无效/],
+    ['mail_save_attachment', { account: 'no-such', uid: 1, attachment_id: 'a'.repeat(22) }, /不存在|须为/],
   ] as const;
   for (const [name, args, match] of refused) {
     const result = await f.call(name, args as Record<string, unknown>);
@@ -289,4 +304,20 @@ test('参数不合规时拒绝，邮箱编号属于别的范围时也拒绝', as
   // Both spellings of the account name are taken, as the reference's tools use the other one.
   const snake = await f.call('mail_search', { account_id: f.first.id, query: '报表' });
   assert.equal(snake.ok, true, snake.text);
+});
+
+test('mail_save_attachment 读出附件行上的 id；没有能保存的电脑时如实说明', async t => {
+  const f = await start(t);
+  // The id is on the attachment's line of a read, so that the next call can be made from it.
+  const read = await f.call('mail_read', { account: f.first.id, uid: 1 });
+  assert.equal(read.ok, true, read.text);
+  assert.match(read.text, /^- report\.pdf（application\/pdf，\d+ 字节）id=[A-Za-z0-9_-]{22}$/m);
+  const attachmentId = /id=([A-Za-z0-9_-]{22})/m.exec(read.text)![1]!;
+  // There is no machine here, so nothing is saved and the tool says why.
+  const saved = await f.call('mail_save_attachment', { account: f.first.id, uid: 1, attachment_id: attachmentId, dir: 'bills/2026-11' });
+  assert.equal(saved.ok, false);
+  assert.match(saved.text, /没有能保存邮件附件的电脑/);
+  // Reading and the refused save both left the mailbox read-only.
+  assert.ok(f.work.opened.every(opened => opened.readOnly));
+  assert.deepEqual(f.work.appended, []);
 });
