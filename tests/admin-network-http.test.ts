@@ -48,7 +48,22 @@ test('管理员公开地址跨重启保留，配对二维码与复制地址一�
     assert.ok(result.qrDataUrl===expectedImage,'二维码应编码和复制入口相同的完整配对链接');
   }
   await checkInvite(publicOrigin);
+  // A plain HTTP address outside the loopback is refused with the reason, and what was saved
+  // before stays as it was.
+  for (const refused of ['http://remote.invalid', 'https://user:secret@remote.invalid', 'https://remote.invalid/path', 'ftp://remote.invalid']) {
+    const rejected = await request('network', { publicOrigin: refused }, admin);
+    assert.equal(rejected.status, 400, refused);
+    assert.match(JSON.stringify(await rejected.json()), /HTTPS|回环/, refused);
+  }
+  assert.equal((await (await request('network', undefined, admin)).json()).publicOrigin, publicOrigin);
   const cleared=await request('network',{publicOrigin:''},admin);
   assert.equal(cleared.status,200);assert.equal((await cleared.json()).publicOrigin,'');
+  // Changing the address does not cut off the administrator who changed it: the same
+  // session goes on reading and writing.
+  const stillOpen = await request('network', { publicOrigin: 'https://later.invalid' }, admin);
+  assert.equal(stillOpen.status, 200, 'the session that changed the address stays signed in');
+  assert.equal((await stillOpen.json()).publicOrigin, 'https://later.invalid');
+  assert.equal((await (await request('network', undefined, admin)).json()).publicOrigin, 'https://later.invalid');
+  assert.equal((await request('network', { publicOrigin: '' }, admin)).status, 200);
   await checkInvite('');
 });
