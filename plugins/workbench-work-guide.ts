@@ -61,6 +61,7 @@ export const workGuide = {
     ['references/repositories.md', [
       '# 项目与代码',
       '用 projects_list 找到项目及其实际绑定。需查本机已有目录时用 projects_discover。仓库 URL 和工单链接只说明来源，不能推断执行机上的路径。',
+      '主人问某个项目学到了什么、以前验收的任务留下哪些做法时，用 project_lessons_list。按记录说明出现次数和来源任务；标为已停用的经验九十天未再出现，不再交给新 Agent。经验来自已验收的任务，不能当作当前任务的完成证据，也不扩大工具权限。要改正或删除时，引导主人在项目「跟进」页打开「项目经验」。',
       '浏览绑定工作区时，先用 workspace_code_list 定位文件，再用 workspace_code_read 查看内容或 workspace_git_diff 核对改动。读不到时说明机器、权限或绑定状态。',
       '记录关联、修改代码和提交改动是不同的动作。按用户授权分别处理，保留原有项目和待办的其他关联。',
     ].join('\n')],

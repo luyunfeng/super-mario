@@ -228,6 +228,7 @@ export interface SystemActions {
   mailboxesList?(input: Record<string, unknown>): Json;
   mailboxPropose?(input: Record<string, unknown>): Json;
   projectsList?(): Json;
+  projectLessonsList?(projectId: string): Json;
   projectCreate?(input: Record<string, unknown>): Json | Promise<Json>;
   projectsDiscover?(input: Record<string, unknown>): Promise<Json>;
   knowledgeSource?(input: Record<string, unknown>): Json;
@@ -346,6 +347,7 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
             signal.throwIfAborted(); return actions.answerQuestion!(String(args.id ?? ''), Number(args.version), String(args.text ?? ''));
           }, { id: { type: 'string' }, version: { type: 'integer' }, text: { type: 'string' } }, ['id', 'version']));
           if (actions.projectsList) context.contribute('tools', 'projects_list', tool('projects_list', '列出工作台项目及归档状态。', async (_args, signal) => { signal.throwIfAborted(); return actions.projectsList!(); }));
+          if (actions.projectLessonsList) context.contribute('tools', 'project_lessons_list', tool('project_lessons_list', '列出某个项目已验收任务留下的经验。只读。主人问某个项目学到了什么、有哪些要避免的做法时使用；需要改正或删除时，引导主人在项目的「跟进」页打开「项目经验」。', async (args, signal) => { signal.throwIfAborted(); return actions.projectLessonsList!(String(args.projectId)); }, { projectId: { type: 'string' } }, ['projectId']));
           if (actions.projectsDiscover) context.contribute('tools', 'projects_discover', tool('projects_discover', '只读发现已连接电脑上已有的项目文件夹。不会创建项目或执行工作；开发项目先发现目录，再绑定电脑和目录。', async (args, signal) => { signal.throwIfAborted(); return actions.projectsDiscover!(args); }, { machineId: { type: 'string' }, roots: { type: 'array', items: { type: 'string' } } }));
           if (actions.workspaceCode) {
             context.contribute('tools', 'workspace_code_list', tool('workspace_code_list', '只读浏览已绑定项目工作区的目录结构（受敏感文件与根目录边界保护）。', async (args, signal) => { signal.throwIfAborted(); return actions.workspaceCode!({ projectId: typeof args.projectId === 'string' ? args.projectId : undefined, kind: 'tree', path: typeof args.path === 'string' ? args.path : '' }); }, { projectId: { type: 'string', description: '已绑定目录的项目 ID。' }, path: { type: 'string', description: '可选，项目内相对目录路径。' } }));
