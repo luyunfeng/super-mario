@@ -916,6 +916,49 @@ export async function createWorkbench(config: AppConfig) {
     return reply.data;
   }
   const GITHUB_COMMENT_APPROVAL = 'plugin:github-connector.comment';
+  const GITHUB_PULL_APPROVAL = 'plugin:github-connector.pull';
+  /** A pull request the owner wants to open from a bound project: its branch is pushed and the
+   *  pull request opened. Nothing leaves the computer until the owner approves. */
+  function githubProposePull(input: { projectId: string; repository: string; branch: string; base: string; title: string; body?: string }) {
+    const state = githubState();
+    if (!state.enabled || !state.machineId) throw new InputError('GitHub 连接未启用，可在渠道页启用', 409);
+    const project = store.get<Project>('projects', requiredText(input.projectId, '项目'));
+    if (!project || project.archivedAt) throw new InputError('项目不存在或已归档', 404);
+    if (!project.workspace) throw new InputError('项目尚未绑定电脑目录', 409);
+    const machine = machines?.list().find(entry => entry.id === project.workspace!.machineId);
+    if (!machine?.online) throw new InputError('绑定电脑不在线', 409);
+    if (!machine.capabilities.includes('workspace.pullRequest')) throw new InputError('所选电脑的执行机版本不支持开出 PR，请升级执行机', 409);
+    if (!machine.capabilities.includes('github.comment')) throw new InputError('这台电脑的执行机不支持 GitHub 操作，请升级执行机', 409);
+    if (typeof input.branch !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._\/-]{0,200}$/.test(input.branch)) throw new InputError('分支名无效');
+    if (typeof input.base !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._\/-]{0,200}$/.test(input.base)) throw new InputError('目标分支名无效');
+    if (typeof input.repository !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/.test(input.repository)) throw new InputError('仓库须写成 所有者/仓库名');
+    const title = typeof input.title === 'string' ? input.title.trim() : '';
+    if (!title || title.length > 256) throw new InputError('标题须为 1 至 256 字');
+    const body = typeof input.body === 'string' ? input.body : '';
+    if (body.length > 65_536) throw new InputError('说明最长 65536 字');
+    // The owner is told what will be pushed and where, and approves that. The account and the
+    // computer are part of it: a change of either voids the approval.
+    return approvals.propose({ kind: GITHUB_PULL_APPROVAL as Approval['kind'], title: `把 ${project.name} 的分支 ${input.branch} 推到 GitHub 并开出 PR`,
+      details: [`仓库：${input.repository}`, `分支：${input.branch} → ${input.base}`, `标题：${title}`, '', body || '（没有填写说明）',
+      ].join('\n'),
+      params: { projectId: project.id, repository: input.repository, cwd: project.workspace.cwd, branch: input.branch, base: input.base, title, body, account: state.login ?? '', machineId: project.workspace.machineId } });
+  }
+  /** Pushes the branch and opens the pull request the owner approved. */
+  async function githubExecutePull(approval: Approval): Promise<Json> {
+    const params = approval.params as { projectId: string; repository: string; cwd: string; branch: string; base: string; title: string; body: string; account: string; machineId: string };
+    const state = githubState();
+    if (state.machineId !== params.machineId || (state.login ?? '') !== params.account) {
+      throw new InputError('GitHub 账号或电脑已变化，这次没有推送。请核对后重新提交。', 409);
+    }
+    const machine = machines?.list().find(entry => entry.id === params.machineId);
+    if (!machine?.online) throw new InputError('绑定电脑不在线，这次没有推送', 409);
+    const project = store.get<Project>('projects', params.projectId);
+    // The directory is read again: a project rebound since the approval is not pushed from.
+    if (!project?.workspace || project.workspace.cwd !== params.cwd || project.workspace.machineId !== params.machineId) throw new InputError('项目绑定已变化，这次没有推送', 409);
+    const reply = await machines!.call(machine.id, 'workspace.pullRequest', { cwd: params.cwd, branch: params.branch, base: params.base, title: params.title, body: params.body, repository: params.repository }, { timeoutMs: 90_000 }) as { state: string; url: string; pushed: string[] };
+    if (reply.state !== 'opened' || !reply.url) throw new InputError('GitHub 没有给出 PR 地址，请到 GitHub 核对分支是否已推送', 502);
+    return reply as unknown as Json;
+  }
   /** A comment the assistant or the owner wants to post. Nothing is sent until the owner approves. */
   function githubProposeComment(input: { repository: string; number: number; body: string }) {
     const state = githubState();
@@ -2205,6 +2248,7 @@ export async function createWorkbench(config: AppConfig) {
     if (approval.kind === knowledgeSourceApprovalKind) { knowledgeSourceApproval.approve(approval); return {jobId:approval.params.jobId,queued:true}; }
     if (approval.kind === scheduledWorkApprovalKind) return scheduledWork.approveCreation(approval);
     if (approval.kind === GITHUB_COMMENT_APPROVAL) return githubExecuteComment(approval);
+    if (approval.kind === GITHUB_PULL_APPROVAL) return githubExecutePull(approval);
     // Before the general plugin acknowledgement below: a mail approval carries a message
     // that is to be sent, and is not answered by an acknowledgement alone.
     // Nobody stops an approved send from outside: the owner approved it, and it ends by its
@@ -3820,7 +3864,7 @@ export async function createWorkbench(config: AppConfig) {
   return {
     browserDevices, deleteWebConversation, postWebConversation:scopedAgents.postWebConversation,
     setBrowserDeviceInvalidator(handler:(id?:string)=>void) { browserDeviceInvalidator=handler; },
-    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, GITHUB_COMMENT_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, readInboxMail, downloadInboxMail, setInboxMailFlags, searchMail, mailTool, takeMailAttachment, proposeMail, MAIL_SEND_APPROVAL, readSent,
+    githubPoll: () => githubConnector.poll(), githubView, githubConfigure, githubRead, githubTool, githubProposeComment, githubProposePull, GITHUB_COMMENT_APPROVAL, GITHUB_PULL_APPROVAL, transcription, transcribeUpload, mailAccounts, mailReader, readMail, readInboxMail, downloadInboxMail, setInboxMailFlags, searchMail, mailTool, takeMailAttachment, proposeMail, MAIL_SEND_APPROVAL, readSent,
     mailConnectorView, mailConnectorConfigure, mailPoll: async () => { await plugins.invocations.use(MAIL_POLL_SERVICE, {}); },
     mailConnectorRetire: retireMail,    setMailOpen(open: OpenImap) { mailOpen = open; }, projectLessons: projectLessonsApi, usageSources, subscriptions, collectMeetingMemory, routeCommandProject: commandRouter.route, modelStatus, modelCatalog: (botId?: string, threadId?: string) => botId === undefined && threadId === undefined ? agent.modelCatalog() : scopedAgents.modelCatalog(botId ?? '', threadId), agentSessions, readRunCommitDiff, cleanupRunWorktree, retainedRunBranch, listProjectWorktrees, listProjectWorktreeBases, createProjectWorktree, renameRunWorktree, runWorktreeStatus, readRunWorktreeChange, runWorktreeHistory, runObservations, exportRunDiagnostics, modelRoutingStatus, configureModelRouting, machineAlertsCheck: () => machineAlerts.check(), scheduledWork, followups, autoTakeover, knowledgeSources: { readComments:(page:string,source:string,signal:AbortSignal)=>sourceComments(page,source,signal), searchCommentPeople:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input,true), writeComment:(page:string,source:string,input:Record<string,unknown>,signal:AbortSignal)=>sourceComments(page,source,signal,input), status: knowledgeReaderView, configure: knowledgeReaderSettings.configure }, setKnowledgeSourceAccount(read: typeof knowledgeAccount, ready=()=>true) { knowledgeAccount = read; knowledgeAccountReady = ready; }, attention, skipChannel, createProject, updateProject, discoverProjects, projects, projectWorkspace, knowledgeCurator, mailboxes, scopedAgents, background, presence, awayNotifications,
     briefing: { ...briefing, configure(input: Parameters<typeof briefing.configure>[0]) { const result = briefing.configure(input); subscriptions.syncTimezone(); projectFollowUp.sync(); return result; } },

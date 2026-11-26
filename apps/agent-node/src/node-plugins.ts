@@ -9,6 +9,7 @@ import { createMailAttachmentNode } from './mail-attachment.ts';
 import { createMachineStorageNode } from './machine-storage.ts';
 import { createWorkspaceWrite } from '../../../plugins/workspace-write.ts';
 import { createWorkspaceGitWrite } from '../../../plugins/workspace-git-write.ts';
+import { createWorkspacePullRequestNode } from '../../../plugins/workspace-pull-request.ts';
 import { createMachineNetworkNode } from './machine-network.ts';
 import { createMachineResourcesNode } from './machine-resources.ts';
 import { createTerminalHost } from '../../../plugins/terminal-host.ts';
@@ -163,5 +164,8 @@ export async function loadDefaultNodePlugins(options: DefaultNodePluginOptions):
     // The Git writes the page makes in a bound project: stage, unstage, commit. Nothing is
     // forced, and pushing is not here.
     { id: 'workspace-git-write', handlers: createWorkspaceGitWrite().handlers },
+    // Opening a pull request from a bound project: the branch is pushed and the pull request is
+    // opened with the owner's own gh login. The owner approves it first.
+    { id: 'workspace-pull-request', handlers: createWorkspacePullRequestNode().handlers },
   ]);
 }

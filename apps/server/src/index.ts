@@ -781,6 +781,15 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
             repository: requiredText(input.repository, '仓库'), number: input.number as number, body: requiredText(input.body, '评论'),
           }));
         }
+        // A pull request from a bound project. Nothing is pushed until the owner approves it.
+        if (path === '/api/v1/github/pulls' && method === 'POST') {
+          const input = await body(req, 256 * 1024);
+          if (Object.keys(input).some(key => !['projectId', 'repository', 'branch', 'base', 'title', 'body'].includes(key))) throw new InputError('开出 PR 的参数无效');
+          return json(res, 201, app.githubProposePull({
+            projectId: requiredText(input.projectId, '项目'), repository: requiredText(input.repository, '仓库'), branch: requiredText(input.branch, '分支'),
+            base: requiredText(input.base, '目标分支'), title: requiredText(input.title, '标题'), ...(typeof input.body === 'string' ? { body: input.body } : {}),
+          }));
+        }
         if (path === '/api/v1/feishu/bots' && method === 'GET') {
           return json(res, 200, bots.list().map(bot => bot.scope.kind === 'global' && bot.paired
             ? { ...bot, workbench: bots.workbenchStatus(bot.id) } : bot));

@@ -1,7 +1,7 @@
 import { h, replace } from '../lib/dom.js';
 import { makeFileDraggable } from './file-mention-drag.js';
 import { Button } from '../ui/kit.js';
-import { TextArea } from '../ui/kit.js';
+import { TextArea, Input, Field } from '../ui/kit.js';
 import { confirmDialog } from '../ui/overlay.js';
 
 function diffLineClass(line) {
@@ -36,6 +36,8 @@ export function createCodeSidebar({ api, store }) {
   // Editing a file: what was read, and the editor for it. A file can be saved only as it was read.
   const editor = h('div', { class: 'stack code-sidebar__edit', 'aria-label': '编辑文件', hidden: true });
   let editing = null;
+  // The branch the project is on, as the Git panel last read it.
+  let gitBranch = '';
   // The Git state of the project: what is staged, what is not, and a commit of what is staged.
   const gitPanel = h('section', { class: 'stack code-sidebar__git', 'aria-label': 'Git' });
   // Announced as it changes, as a status is, without taking the status role the file's own
@@ -46,6 +48,30 @@ export function createCodeSidebar({ api, store }) {
   const gitCommit = Button({ label: '提交已暂存的改动', size: 'sm', kind: 'primary', onClick: () => commit() });
   const gitRefresh = Button({ label: '刷新 Git 状态', size: 'sm', onClick: () => readGit() });
   gitPanel.append(h('h3', null, 'Git'), h('div', { class: 'row' }, gitRefresh), gitStatus, gitList, gitMessage, gitCommit);
+  // Opening a pull request: the branch is pushed and the pull request opened, after the owner
+  // approves it in the approvals list. Nothing is pushed from here.
+  const pullPanel = h('details', { class: 'fold code-sidebar__git', 'aria-label': '开出 PR' });
+  const pullRepository = Input({ 'aria-label': '仓库', placeholder: '所有者/仓库名', maxlength: 140 });
+  const pullBase = Input({ 'aria-label': '合并到哪个分支', placeholder: 'main', maxlength: 200 });
+  const pullTitle = Input({ 'aria-label': 'PR 标题', maxlength: 256 });
+  const pullBody = TextArea({ 'aria-label': 'PR 说明', rows: 3, maxlength: 65536 });
+  const pullStatus = h('p', { class: 'small', 'aria-live': 'polite' });
+  const pullOpen = Button({ label: '提交审批', size: 'sm', kind: 'primary', onClick: async (event, button) => {
+    button.disabled = true; pullStatus.textContent = '';
+    try {
+      await api.post('/github/pulls', { projectId, repository: pullRepository.value.trim(), branch: gitBranch, base: pullBase.value.trim(),
+        title: pullTitle.value.trim(), ...(pullBody.value.trim() ? { body: pullBody.value } : {}) });
+      pullStatus.textContent = '已提交审批。到「等你处理」里核对仓库、分支和标题，同意后才会推送并开出 PR。';
+    } catch (error) {
+      pullStatus.textContent = `没有提交：${error.message}`;
+      button.disabled = false;
+    }
+  } });
+  pullOpen.disabled = true;
+  pullPanel.append(h('summary', null, '开出 PR'),
+    h('p', { class: 'small muted' }, '把当前分支推到 GitHub 并开出 PR。推送前会形成审批，同意后才推送。'),
+    Field({ label: '仓库', control: pullRepository }), Field({ label: '合并到哪个分支', control: pullBase }),
+    Field({ label: '标题', control: pullTitle }), Field({ label: '说明', control: pullBody }), pullOpen, pullStatus);
   const edit = Button({ label: '编辑', size: 'sm', onClick: () => { if (editing) showEditor(); } });
   const save = Button({ label: '保存到电脑', size: 'sm', kind: 'primary', onClick: () => saveFile() });
   const undo = Button({ label: '撤销上次保存', size: 'sm', onClick: () => undoFile() });
@@ -67,7 +93,7 @@ export function createCodeSidebar({ api, store }) {
   }
   const el = h('aside', { class: 'code-sidebar', 'aria-label': '项目代码', hidden: true },
     h('div', { class: 'row row--between' }, h('h2', null, '项目代码'), Button({ label: '关闭代码', size: 'sm', onClick: () => { el.hidden = true; opened = false; } })), title, body);
-  body.append(crumbs, tree, status, h('div', { class: 'row' }, fileBtn, diffBtn, edit), output, editor, gitPanel);
+  body.append(crumbs, tree, status, h('div', { class: 'row' }, fileBtn, diffBtn, edit), output, editor, gitPanel, pullPanel);
   const toggle = Button({ label: '查看代码', size: 'sm', onClick: () => { opened = !opened; el.hidden = !opened; if (opened) { void read('tree', ''); void readGit(); } } });
   syncModeButtons();
   function project() { return store.view.snapshot?.projects?.find(p => p.id === projectId); }
@@ -198,6 +224,8 @@ export function createCodeSidebar({ api, store }) {
   }
   function renderGit(value) {
     const staged = Array.isArray(value.staged) ? value.staged : [], unstaged = Array.isArray(value.unstaged) ? value.unstaged : [];
+    gitBranch = typeof value.branch === 'string' ? value.branch : '';
+    pullOpen.disabled = !gitBranch;
     gitStatus.textContent = value.branch ? `分支 ${value.branch} · 已暂存 ${staged.length} 个，未暂存 ${unstaged.length} 个` : '这个目录还没有提交，Git 状态未知。';
     const row = (change, isStaged) => h('li', { class: 'item' },
       h('div', { class: 'row row--between row--wrap' },
