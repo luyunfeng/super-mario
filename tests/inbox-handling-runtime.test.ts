@@ -186,6 +186,21 @@ test('configured read tools match the instructions actually delivered to the inb
   } finally { await runtime.close(); }
 });
 
+test('the inbox model is told to write back when a matter is settled, that new drafts replace old ones, and that later mail does not arrive here', async t => {
+  const f = await fixture(t);
+  try {
+    await f.runtime.ask(source('A'), conversation('A'), '就这么回吧。');
+    const prompt = f.sdk.sessions[0].contexts[0];
+    assert.match(prompt, /把事情谈定时，把谈定的回复或结论作为本轮建议完整给出/);
+    assert.match(prompt, /同一种类的新草稿会替换此前还没提交的同类草稿/);
+    assert.match(prompt, /已提交审批、执行中或已送达的不会被替换/);
+    assert.match(prompt, /这条收件之后的新消息不会转到这个讨论里/);
+    assert.match(prompt, /查不到就说明尚未核实，不凭之前的讨论推断/);
+    // Nothing is sent by the model itself, whatever the owner says in the discussion.
+    assert.match(prompt, /不得声称已经发送或送达/);
+  } finally { await f.runtime.close(); }
+});
+
 test('invalid ids, fake/inactive source and source rebinding cannot enter a conversation', async t => {
   const f = await fixture(t);
   for (const id of ['main', 'bot:one', 'inbox-handling:../main', 'inbox-handling:']) {

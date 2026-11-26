@@ -17,6 +17,8 @@ export type InboxHandlingAction =
 export interface InboxSuggestion {
   id: string; version: number; source: InboxHandlingRef; sourceVersion: number; conversationId: string;
   action: InboxHandlingAction; status: 'draft' | 'discarded' | 'submitted' | 'executing' | 'applied' | 'stale' | 'unknown';
+  /** Who wrote the draft. Only a model draft is replaced by a later model turn. Absent on rows saved before this was recorded. */
+  origin?: 'model' | 'owner';
   approvalId?: string; result?: Json; error?: string; createdAt: string; updatedAt: string;
 }
 export interface InboxDispatchRun {

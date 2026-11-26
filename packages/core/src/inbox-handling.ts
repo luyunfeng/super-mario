@@ -148,10 +148,25 @@ export function createInboxHandling(options: InboxHandlingOptions) {
     if (row.version !== expected || row.conversationId !== current.conversationId || row.sourceVersion !== current.value.version || !['draft', 'submitted'].includes(row.status)) fail('建议已变化或不可修改，请刷新', 409);
     return row;
   }
-  function draft(current: ReturnType<typeof source>, action: InboxHandlingAction): InboxSuggestion {
+  function newDraft(current: ReturnType<typeof source>, action: InboxHandlingAction, origin: 'model' | 'owner'): InboxSuggestion {
     const now = new Date().toISOString();
     return putSuggestion({ id: randomUUID(), version: 1, source: refValue({ kind: current.value.kind, id: current.value.id }), sourceVersion: current.value.version,
-      conversationId: current.conversationId, action, status: 'draft', createdAt: now, updatedAt: now });
+      conversationId: current.conversationId, action, status: 'draft', origin, createdAt: now, updatedAt: now });
+  }
+  // Write one model turn's drafts. A new draft of a kind replaces the drafts of that kind
+  // from earlier model turns: left alone, "make the reply friendlier" would pile up
+  // near-identical drafts. A draft that was handed in for approval, executed or delivered
+  // is left as it is, and so is one the owner wrote by hand. A row with no origin was saved
+  // before origins were recorded and is left alone too. Both model entry points (the
+  // discussion and the personal Feishu assistant) write here.
+  function draft(current: ReturnType<typeof source>, actions: InboxHandlingAction[]): InboxSuggestion[] {
+    const kinds = new Set(actions.map(action => action.kind));
+    for (const earlier of store.list<InboxSuggestion>(suggestions)) {
+      if (earlier.conversationId === current.conversationId && earlier.status === 'draft' && earlier.origin === 'model' && kinds.has(earlier.action.kind)) {
+        putSuggestion({ ...earlier, status: 'discarded', updatedAt: new Date().toISOString() });
+      }
+    }
+    return actions.map(action => newDraft(current, action, 'model'));
   }
   function approvalParams(row: InboxSuggestion): Approval['params'] {
     const scope=store.get<Conversation>(conversations,row.conversationId);
@@ -251,7 +266,7 @@ export function createInboxHandling(options: InboxHandlingOptions) {
         const previous = store.get<Message>('messages', result.id);
         if (previous && stableJson(previous) !== stableJson(result)) fail('模型消息冲突');
         store.put('messages', result.id, result);
-        if (current.value.active && !invalid(current.conversationId) && current.conversationId === row.conversationId) for (const action of actions) draft(current, action);
+        if (current.value.active && !invalid(current.conversationId) && current.conversationId === row.conversationId) draft(current, actions);
         putRequest({ ...saved, status: 'completed', updatedAt: new Date().toISOString() });
       });
     } catch {
@@ -342,7 +357,7 @@ export function createInboxHandling(options: InboxHandlingOptions) {
           return;
         }
         const now = new Date().toISOString();
-        for (const action of validated) draft(current, action);
+        draft(current, validated);
         putRequest({ id, source: refValue(ref), text: requestText, key, conversationId, status: 'completed', createdAt: now, updatedAt: now });
       });
     },
@@ -350,12 +365,14 @@ export function createInboxHandling(options: InboxHandlingOptions) {
       open(); fields(input, ['sourceVersion', 'action', 'id', 'version']);
       const current = source(ref); writable(current, input.sourceVersion); const action = actionValue(input.action);
       return store.transaction(() => {
-        if (input.id === undefined) { if (input.version !== undefined) fail('新建议不能指定版本'); return draft(current, action); }
+        if (input.id === undefined) { if (input.version !== undefined) fail('新建议不能指定版本'); return newDraft(current, action, 'owner'); }
         const row = suggestion(current, input.id, input.version!);
         if (row.version === Number.MAX_SAFE_INTEGER) fail('建议版本已达上限', 409);
         rejectOldApproval(row);
         const { approvalId: _, result: __, error: ___, ...rest } = row;
-        return putSuggestion({ ...rest, version: row.version + 1, action, status: 'draft', updatedAt: new Date().toISOString() });
+        // Once the owner edits a draft, it is the owner's. A later model turn must not
+        // discard what the owner just wrote.
+        return putSuggestion({ ...rest, version: row.version + 1, action, status: 'draft', origin: 'owner', updatedAt: new Date().toISOString() });
       });
     },
     discard(ref: InboxHandlingRef, input: { sourceVersion: number; id: string; version: number }): InboxSuggestion {
