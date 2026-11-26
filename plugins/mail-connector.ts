@@ -2,19 +2,16 @@
 // notifications there. Reading the mail is the workbench's; this decides what becomes an
 // item and what keeps replies together.
 import { createHash } from 'node:crypto';
-import type { InboxThing, Mailbox, MailSummary } from '../packages/protocol/src/index.ts';
-
-/** What one read of a mailbox found. */
-export interface MailInboxRead {
-  account: { id: string; name: string; email: string };
-  mailboxes: Mailbox[];
-  messages: MailSummary[];
-}
+import type { Extension, ExtensionContext } from '../packages/plugin-sdk/src/index.ts';
+import { MAIL_POLL_SERVICE, type InboxThing, type MailConnectorState, type MailInboxRead, type MailSummary } from '../packages/protocol/src/index.ts';
 
 /** What the connector may do. The workbench gives it these. */
 export interface MailConnectorActions {
-  /** Reads the mailboxes the owner added that are to go into the inbox. */
-  read(): Promise<MailInboxRead[]>;
+  /** Reads the mailboxes the owner added that are to go into the inbox. A mailbox that could
+   *  not be read is left out and named, so its mail is not taken for gone. */
+  /** Reads the mailboxes. The signal is triggered when the connector stops, so that a read
+   *  that is under way ends and does not keep the process alive. */
+  read(signal: AbortSignal): Promise<{ reads: MailInboxRead[]; failed: Array<{ id: string; name: string }> }>;
   /** Puts things into the inbox. It updates an item whose thread is the same. */
   ingest(things: InboxThing[]): Promise<void>;
   /** Retires the open items of an account, as when the owner removes it. */
@@ -24,14 +21,8 @@ export interface MailConnectorActions {
   save(state: MailConnectorState): void;
 }
 
-export interface MailConnectorState {
-  /** Whether mail goes into the inbox at all. */
-  enabled: boolean;
-  /** The mailboxes whose mail goes into the inbox. The inbox of every account when empty. */
-  folders?: string[];
-  lastRunAt?: string;
-  lastError?: string;
-}
+/** How often mail is read. Each read signs in to every mailbox, so it is not done often. */
+export const MAIL_POLL_MS = 3 * 60_000;
 
 /** What keeps replies in one item: the subject without the prefixes a reply or a forward
  *  adds, and without the name of a mailing list. */
@@ -83,13 +74,13 @@ export function mailThing(read: MailInboxRead, message: MailSummary, folders: Se
 }
 
 /** Reads the mailboxes once and puts what is new into the inbox. */
-export async function runMailConnector(actions: MailConnectorActions): Promise<void> {
+export async function runMailConnector(actions: MailConnectorActions, signal: AbortSignal = new AbortController().signal): Promise<void> {
   const before = actions.state();
   if (!before.enabled) return;
   const fail = (error: unknown) => actions.save({ ...actions.state(), lastRunAt: new Date().toISOString(),
     lastError: error instanceof Error ? error.message : '读取邮箱失败。' });
   try {
-    const reads = await actions.read();
+    const { reads, failed } = await actions.read(signal);
     // The state may have been switched off or narrowed while the mail was being read. What
     // was read is still put in under the folders that are wanted now.
     const after = actions.state();
@@ -112,20 +103,50 @@ export async function runMailConnector(actions: MailConnectorActions): Promise<v
       }
     }
     if (things.length) await actions.ingest(things);
-    actions.save({ ...actions.state(), lastRunAt: new Date().toISOString(), lastError: undefined });
-  } catch (error) { fail(error); }
+    actions.save({ ...actions.state(), lastRunAt: new Date().toISOString(), lastError: undefined, failed });
+  } catch (error) {
+    // A read that was stopped is not a failure of a mailbox, and says nothing about the mail.
+    if (signal.aborted) return;
+    fail(error);
+  }
 }
 
-/** What the owner changes on the page. */
-export function configureMailConnector(current: MailConnectorState, input: Record<string, unknown>): MailConnectorState {
-  const extra = Object.keys(input).find(key => !['enabled', 'folders'].includes(key));
-  if (extra) throw new Error('邮箱连接参数无效：' + extra);
-  if (typeof input.enabled !== 'boolean') throw new Error('请说明是否把邮件放进收件箱');
-  let folders: string[] | undefined;
-  if (input.folders !== undefined) {
-    if (!Array.isArray(input.folders) || input.folders.length > 30 || input.folders.some(name => typeof name !== 'string' || !name || name.length > 512 || /[\u0000-\u001f\u007f]/.test(name)))
-      throw new Error('文件夹名称无效');
-    folders = [...new Set(input.folders as string[])];
+/** The connector as a plugin. It reads on a timer and once when it starts, and offers one
+ *  service that reads now. The plugin host keeps the extension to itself, so a read asked
+ *  for from the page goes through that service and not through the extension. */
+export function createMailConnector(actions: MailConnectorActions, options: { pollMs?: number } = {}): Extension {
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let running: Promise<void> | undefined;
+  let stopped = false;
+  let lifetime = new AbortController();
+  function poll(): Promise<void> {
+    // One read at a time. A slow mailbox must not have reads stack up on it.
+    if (running) return running;
+    running = (async () => {
+      try { if (!stopped) await runMailConnector(actions, lifetime.signal); }
+      finally { running = undefined; }
+    })();
+    return running;
   }
-  return { ...current, enabled: input.enabled, ...(folders ? { folders } : {}) };
+  return Object.assign({
+    // A plugin may offer a service only when it says so here, by name.
+    id: 'mail-connector', name: '邮箱', capabilities: ['inbox.source'], permissions: ['service.provide:' + MAIL_POLL_SERVICE],
+    activate(context: ExtensionContext) {
+      stopped = false;
+      timer = setInterval(() => { if (!stopped) void poll(); }, options.pollMs ?? MAIL_POLL_MS);
+      void poll();
+      // Reading mail changes nothing that is the owner's, so the service is read-only.
+      context.contribute('services', MAIL_POLL_SERVICE, { name: MAIL_POLL_SERVICE, version: 1, readOnly: true, handler: async () => { await poll(); return { read: true }; } });
+      // Stopping ends a read that is under way and waits for it, so no connection is left
+      // open and nothing keeps the process alive after the plugin is stopped.
+      context.defer(() => {
+        stopped = true;
+        clearInterval(timer);
+        lifetime.abort();
+        // A read that was under way is waited for. It ends by the signal above, and that end
+        // is the stop itself and not a failure of the plugin, so it is not passed on.
+        return running?.catch(() => {});
+      });
+    },
+  });
 }

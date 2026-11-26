@@ -118,3 +118,28 @@ export interface MailMessage extends MailSummary {
   /** How many attachments the message has. More than are listed when there are very many. */
   attachmentCount: number;
 }
+
+/** Whether the mail of the owner's mailboxes goes into the inbox, and which folders. */
+export interface MailConnectorState {
+  enabled: boolean;
+  /** The folders whose mail goes into the inbox. The inbox of every account when empty. */
+  folders?: string[];
+  lastRunAt?: string;
+  lastError?: string;
+  /** Mailboxes that could not be read on the last run, so the owner knows the inbox is
+   *  behind for them. Their mail is not taken for gone. */
+  failed?: Array<{ id: string; name: string }>;
+}
+
+/** The service the mail connector offers that reads the mailboxes now. Named as a plugin's
+ *  service must be: the plugin's id, a dot, and the service's own name. */
+export const MAIL_POLL_SERVICE = 'mail-connector.poll';
+
+/** What one read of a mailbox found. */
+/** What one read of a mailbox found, for the inbox. */
+export interface MailInboxRead {
+  account: { id: string; name: string; email: string };
+  mailboxes: Mailbox[];
+  messages: MailSummary[];
+}
+

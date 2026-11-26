@@ -43,6 +43,15 @@ export function normalizeInboxOrigin(value: unknown): InboxOrigin | undefined {
         (ci.pull !== undefined && (typeof ci.pull !== 'number' || !Number.isSafeInteger(ci.pull) || ci.pull < 1))) return fail();
     result.githubCi = { repository: ci.repository, branch: ci.branch, workflow: ci.workflow, ...(typeof ci.pull === 'number' ? { pull: ci.pull } : {}) };
   }
+  // Where an email is in one of the owner's mailboxes. It is checked as strictly as the
+  // GitHub fields, because it is what a later read of the message is looked up by.
+  if (input.mail !== undefined) {
+    const mail = input.mail as Record<string, unknown> | null;
+    if (result.connector !== '邮箱' || !mail || typeof mail.account !== 'string' || !/^[0-9a-f-]{36}$/.test(mail.account) ||
+        typeof mail.mailbox !== 'string' || !mail.mailbox || mail.mailbox.length > 512 || /[\u0000-\u001f\u007f]/.test(mail.mailbox) ||
+        typeof mail.uid !== 'number' || !Number.isSafeInteger(mail.uid) || mail.uid < 1) return fail();
+    result.mail = { account: mail.account, mailbox: mail.mailbox, uid: mail.uid };
+  }
   if (result.kind === 'group' && result.connector === '飞书' && input.personalGroupUserCount !== undefined) {
     const count = input.personalGroupUserCount;
     if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) return fail();

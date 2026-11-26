@@ -1,12 +1,13 @@
 export {webConversationsExtension, webConversationMatches, independentWebSource, requireWebConversationHistory, readWebConversationExport, eraseWebConversationRegistration} from './web-conversations.ts';
 import { documentHeadings } from '../packages/core/src/document-headings.ts';
 import { mailTools } from './mail-tools.ts';
+import { createMailConnector } from './mail-connector.ts';
 import { readTodayBrief, type TodayBriefSources } from './today-brief.ts';
 import { calendarDayFormatter, localDayFormatter, validateLocalDay } from './local-day.ts';
 import { scheduledWorkTemplates } from './scheduled-work-templates.ts';
 import { setTimeout } from 'node:timers/promises';
 import type { Executor, Extension, ExtensionContext, KnowledgeBackend, KnowledgeQuery, Tool } from '../packages/plugin-sdk/src/index.ts';
-import type { ExecutionProgress, InboxTriageInput, Json, JsonObject, Run, RunBlocker, Todo } from '../packages/protocol/src/index.ts';
+import type { ExecutionProgress, InboxThing, InboxTriageInput, Json, JsonObject, MailConnectorState, MailInboxRead, Run, RunBlocker, Todo } from '../packages/protocol/src/index.ts';
 import { groupFeishuInbox } from './feishu-inbox-grouping.ts';
 import type { InboxFallbackInput } from '../packages/protocol/src/index.ts';
 import { createInboxTriage } from './inbox-triage.ts';
@@ -234,6 +235,13 @@ export interface SystemActions {
   githubTool?(method: 'search' | 'issue' | 'comments' | 'diff' | 'checks', input: JsonObject): Promise<unknown>;
   /** The assistant's mail reads and send requests. They go to the mailboxes the owner added. */
   mailTool?(name: 'accounts' | 'search' | 'read' | 'send', input: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
+  /** Reads the folders the owner wants in the inbox, of every mailbox. A mailbox that cannot
+   *  be read is left out and named. */
+  mailConnectorRead?(signal: AbortSignal): Promise<{ reads: MailInboxRead[]; failed: Array<{ id: string; name: string }> }>;
+  mailConnectorIngest?(things: InboxThing[]): Promise<void>;
+  mailConnectorRetire?(accountId: string): void;
+  mailConnectorState?(): MailConnectorState;
+  mailConnectorSave?(state: MailConnectorState): void;
   projectCreate?(input: Record<string, unknown>): Json | Promise<Json>;
   projectsDiscover?(input: Record<string, unknown>): Promise<Json>;
   knowledgeSource?(input: Record<string, unknown>): Json;
@@ -999,6 +1007,16 @@ export function createSystemExtensions(options: { demo: boolean; actions?: Syste
         if (actions?.scheduledWorkCancel) context.contribute('tools', 'scheduled_work_cancel', tool('scheduled_work_cancel', '按当前用户要求取消指定版本周期工作；停止未来安排，已经执行或结果未知的任务不自动撤销/重派。', async args => actions.scheduledWorkCancel!(args), { id: { type: 'string' }, version: { type: 'integer' } }));
       },
     },
+  // Mail goes into the inbox as GitHub notifications do. The workbench reads the mailboxes
+  // and keeps the setting; the connector decides what becomes an item and reads on a timer.
+  ...(actions?.mailConnectorRead && actions.mailConnectorIngest && actions.mailConnectorState && actions.mailConnectorSave
+    ? [createMailConnector({
+      read: signal => actions.mailConnectorRead!(signal),
+      ingest: things => actions.mailConnectorIngest!(things),
+      retire: account => actions.mailConnectorRetire?.(account),
+      state: () => actions.mailConnectorState!(),
+      save: state => actions.mailConnectorSave!(state),
+    })] : []),
   ];
 }
 

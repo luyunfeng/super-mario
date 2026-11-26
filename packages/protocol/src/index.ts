@@ -21,7 +21,8 @@ export { excludesPersonalGroupFromBrief } from './inbox-origin.ts';
 export type { InboxOrigin } from './inbox-origin.ts';
 export { TRANSCRIPTION_AUDIO, TRANSCRIPTION_CHUNK_BYTES, TRANSCRIPTION_MAX_SECONDS, TranscriptionError } from './transcription.ts';
 export type { TranscriptionChoice, TranscriptionEngine, TranscriptionGap, TranscriptionJob, TranscriptionProblem, TranscriptionResult, TranscriptionSegment } from './transcription.ts';
-export type { MailAccount, MailAccountInput, MailAddress, MailAttachment, Mailbox, MailMessage, MailPreset, MailSummary, SearchRequest } from './mail.ts';
+export type { MailAccount, MailAccountInput, MailAddress, MailAttachment, Mailbox, MailConnectorState, MailInboxRead, MailMessage, MailPreset, MailSummary, SearchRequest } from './mail.ts';
+export { MAIL_POLL_SERVICE } from './mail.ts';
 import type { InboxOrigin } from './inbox-origin.ts';
 import type { NativeResumeSpec } from './agent-sessions.ts';
 /** Wire values stay JSON-compatible so the web and execution node share one contract. */

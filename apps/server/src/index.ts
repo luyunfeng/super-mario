@@ -535,6 +535,8 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
           try { app.mailAccounts.remove(id, version); }
           catch (error) { throw mailError(error); }
           app.mailReader.forget(id);
+          // What came from this mailbox is closed with it. The owner's decisions stay.
+          app.mailConnectorRetire(id);
           return json(res, 200, { removed: id });
         }
         if (mailAccount && method === 'PUT') {
@@ -590,6 +592,21 @@ export async function startServer(config: AppConfig, dependencies: FeishuGateway
         if (path === '/api/v1/mail/send' && method === 'POST') {
           try { return json(res, 201, app.proposeMail(await body(req))); }
           catch (error) { throw mailError(error); }
+        }
+        // Whether mail goes into the inbox, and which folders. Saving turns it on and reads
+        // at once, so the owner sees right away whether it works.
+        if (path === '/api/v1/mail/connector' && method === 'GET') return json(res, 200, app.mailConnectorView());
+        if (path === '/api/v1/mail/connector' && method === 'PUT') {
+          let view;
+          try { view = app.mailConnectorConfigure(await body(req)); }
+          catch (error) { throw new InputError(error instanceof Error ? error.message : '邮箱连接设置无效'); }
+          if (view.enabled) await app.mailPoll();
+          return json(res, 200, app.mailConnectorView());
+        }
+        if (path === '/api/v1/mail/connector/poll' && method === 'POST') {
+          if (!app.mailConnectorView().enabled) throw new InputError('邮箱连接未启用', 409);
+          await app.mailPoll();
+          return json(res, 200, app.mailConnectorView());
         }
         if (path === '/api/v1/transcription' && method === 'GET') return json(res, 200, app.transcription.status());
         if (path === '/api/v1/transcription/choice' && method === 'PUT') {

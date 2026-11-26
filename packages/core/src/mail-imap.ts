@@ -247,24 +247,9 @@ export async function readMailboxes(account: MailAccount, signal: AbortSignal, o
         continue;
       }
       mailboxes.push({ name: opened.path ?? box.path, role, unseen: opened.unseenCount ?? 0, total: opened.totalCount ?? 0 });
-      // Only the inbox's messages are read. Reading every folder would be slow for no gain.
-      if (role === 'inbox' && (opened.totalCount ?? 0) > 0) {
-        const newest = Math.max(1, (opened.totalCount ?? 1) - (MESSAGES_PER_READ - 1));
-        for await (const message of client.fetch(newest + ':*', { uid: true, envelope: true, flags: true, internalDate: true, size: true, bodyStructure: true })) {
-          const envelope = message.envelope as Record<string, unknown> | undefined;
-          if (!envelope) continue;
-          const first = (value: unknown) => Array.isArray(value) ? value[0] : undefined;
-          messages.push({
-            account: account.id, mailbox: opened.path ?? box.path, uid: Number(message.uid),
-            messageId: typeof envelope.messageId === 'string' ? envelope.messageId.slice(0, 998) : '',
-            subject: subjectOf(envelope.subject),
-            from: address(first(envelope.from) ?? first(envelope.sender)),
-            to: addresses(envelope.to), date: mailDate(message.internalDate ?? envelope.date) ?? '',
-            hasAttachments: hasAttachments(message.bodyStructure),
-            ...flagsOf(message.flags),
-          });
-        }
-      }
+      // Only the inbox's messages are read here. Reading every folder would be slow for no
+      // gain. A folder the owner names for the inbox is read on its own.
+      if (role === 'inbox') messages.push(...await newestMessages(client, account.id, opened.path ?? box.path, opened.totalCount ?? 0));
     }
     return { mailboxes, messages };
   } catch (error) {
@@ -276,4 +261,26 @@ export async function readMailboxes(account: MailAccount, signal: AbortSignal, o
     // The connection is closed whether the read worked or not, so a failure leaves none open.
     await client?.logout().catch(() => {});
   }
+}
+
+/** The newest messages of one folder that is already open, at most one read takes. */
+export async function newestMessages(client: ImapClient, account: string, mailbox: string, total: number): Promise<MailSummary[]> {
+  const messages: MailSummary[] = [];
+  if (total <= 0) return messages;
+  const newest = Math.max(1, total - (MESSAGES_PER_READ - 1));
+  for await (const message of client.fetch(newest + ':*', { uid: true, envelope: true, flags: true, internalDate: true, size: true, bodyStructure: true })) {
+    const envelope = message.envelope as Record<string, unknown> | undefined;
+    if (!envelope) continue;
+    const first = (value: unknown) => Array.isArray(value) ? value[0] : undefined;
+    messages.push({
+      account, mailbox, uid: Number(message.uid),
+      messageId: typeof envelope.messageId === 'string' ? envelope.messageId.slice(0, 998) : '',
+      subject: subjectOf(envelope.subject),
+      from: address(first(envelope.from) ?? first(envelope.sender)),
+      to: addresses(envelope.to), date: mailDate(message.internalDate ?? envelope.date) ?? '',
+      hasAttachments: hasAttachments(message.bodyStructure),
+      ...flagsOf(message.flags),
+    });
+  }
+  return messages;
 }

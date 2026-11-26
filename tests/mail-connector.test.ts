@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { InboxThing, Mailbox, MailSummary } from '../packages/protocol/src/index.ts';
-import { configureMailConnector, mailThing, mailThread, runMailConnector, type MailConnectorActions, type MailConnectorState, type MailInboxRead } from '../plugins/mail-connector.ts';
+import type { InboxThing, Mailbox, MailConnectorState, MailInboxRead, MailSummary } from '../packages/protocol/src/index.ts';
+import { configureMailConnector } from '../packages/core/src/mail-connector-settings.ts';
+import { mailThing, mailThread, runMailConnector, type MailConnectorActions } from '../plugins/mail-connector.ts';
 
 function message(uid: number, subject: string, from = 'a@example.invalid', extra: Partial<MailSummary> = {}): MailSummary {
   return { account: 'acc', mailbox: 'INBOX', uid, messageId: '<m' + uid + '@x>', subject, from: { name: '', email: from }, to: [],
@@ -12,12 +13,12 @@ function makeRead(messages: MailSummary[], mailboxes: Mailbox[] = [{ name: 'INBO
   return { account: { id: 'acc', name: '工作邮箱', email: 'someone@qq.com' }, mailboxes, messages };
 }
 
-function fixture(options: { state?: Partial<MailConnectorState>; reads?: MailInboxRead[]; fail?: Error } = {}) {
+function fixture(options: { state?: Partial<MailConnectorState>; reads?: MailInboxRead[]; fail?: Error; failed?: Array<{ id: string; name: string }> } = {}) {
   let state: MailConnectorState = { enabled: true, ...options.state };
   const ingested: InboxThing[][] = [];
   const retired: string[] = [];
   const actions: MailConnectorActions = {
-    async read() { if (options.fail) throw options.fail; return options.reads ?? []; },
+    async read() { if (options.fail) throw options.fail; return { reads: options.reads ?? [], failed: options.failed ?? [] }; },
     async ingest(things) { ingested.push(things); },
     retire(account) { retired.push(account); },
     state: () => state,
@@ -88,6 +89,21 @@ test('一次读取：同一话题只出一条，取最新那封；最新那封�
   assert.equal(second.ingested.flat()[0]!.origin!.mail!.uid, 2);
 });
 
+test('一个邮箱读不到时，它已有的邮件不会被当成没有了，并记下是哪个', async () => {
+  const read = makeRead([message(1, '周报')]);
+  const f = fixture({ reads: [read], failed: [{ id: 'home', name: '个人的' }] });
+  await runMailConnector(f.actions);
+  // The mailbox that was read still has its mail put in.
+  assert.equal(f.ingested.flat().length, 1);
+  // The one that was not is named in the state, and it is not a failure of the whole run.
+  assert.deepEqual(f.state().failed, [{ id: 'home', name: '个人的' }]);
+  assert.equal(f.state().lastError, undefined);
+  // A later run that reads it clears the list.
+  const healed = fixture({ reads: [read] });
+  await runMailConnector(healed.actions);
+  assert.deepEqual(healed.state().failed, []);
+});
+
 test('只收指定文件夹的邮件；两个账号的同名话题是两条', async () => {
   const mailboxes = [{ name: 'INBOX', role: 'inbox' as const, unseen: 1, total: 1 }, { name: '工作', role: 'other' as const, unseen: 1, total: 1 }];
   const work = makeRead([message(1, '周报'), { ...message(2, '项目周报'), mailbox: '工作' }], mailboxes);
@@ -119,7 +135,7 @@ test('停用后不读邮箱；读取途中被停用则不写入；读取失败�
 
   let reads = 0;
   const switching: MailConnectorActions = {
-    async read() { reads++; return [makeRead([message(1, '周报')])]; },
+    async read() { reads++; return { reads: [makeRead([message(1, '周报')])], failed: [] }; },
     async ingest() { assert.fail('nothing is put in after the connector is switched off'); },
     retire() {}, state: () => ({ enabled: reads === 0 }), save() {},
   };
