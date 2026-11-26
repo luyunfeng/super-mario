@@ -70,12 +70,27 @@ test('议题与评论：仓库名严格校验，正文截断，链接由已校�
 test('节点处理器只接受已知参数，越界参数与错误类型被拒绝', async () => {
   const signal = new AbortController().signal;
   const node = createGithubNode({ run: async () => page([]) });
-  assert.deepEqual(await node['github.notifications']({}, signal), { items: [], hasNext: false });
+  assert.deepEqual(await node['github.notifications']({}, signal), { ok: true, data: { items: [], hasNext: false } });
+  const refused = (error: unknown) => {
+    const value = error as { ok: false; reason: string };
+    assert.equal(value.ok, false);
+    return value.reason === 'bad_response';
+  };
   for (const params of [{ page: 0 }, { page: '2' }, { page: 1, extra: 1 }, { all: 'yes' }, { since: 'yesterday' }]) {
-    await assert.rejects(node['github.notifications'](params, signal), isGhError('bad_response'));
+    assert.ok(refused(await node['github.notifications'](params, signal)));
   }
-  await assert.rejects(node['github.issue']({ repository: 'o/r', number: '7' }, signal), isGhError('bad_response'));
-  await assert.rejects(node['github.comments']({ repository: '../x', number: 1 }, signal), isGhError('bad_response'));
+  assert.ok(refused(await node['github.issue']({ repository: 'o/r', number: '7' }, signal)));
+  assert.ok(refused(await node['github.comments']({ repository: '../x', number: 1 }, signal)));
+});
+
+test('处理器把失败原因放进结果：机器通道只传消息和状态码，抛出会丢失原因', async () => {
+  const signal = new AbortController().signal;
+  const node = createGithubNode({ run: async () => { throw new GhError('not_signed_in'); } });
+  assert.deepEqual(await node['github.account']({}, signal), { ok: false, reason: 'not_signed_in', message: '这台电脑的 gh 尚未登录 GitHub。' });
+  // An unexpected failure from inside the handler is reported as a plain failure. Its own
+  // text could hold a path, an address or a token, so none of it leaves the machine.
+  const broken = createGithubNode({ run: async () => { throw new Error('secret ghp_abcdefghijklmnopqrstuvwxyz at /home/me'); } });
+  assert.deepEqual(await broken['github.account']({}, signal), { ok: false, reason: 'failed', message: '读取 GitHub 失败。' });
 });
 
 test('真实启动器按 gh 的输出归类失败原因，输出原文不回传', async t => {

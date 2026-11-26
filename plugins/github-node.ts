@@ -157,31 +157,57 @@ export function repositoryOf(value: string): string {
   return value;
 }
 
+export type GhReply<T> = { ok: true; data: T } | { ok: false; reason: GhError['kind']; message: string };
+
+/**
+ * The machine channel carries a message string and one status, so a reason typed on the
+ * machine would be lost by the time the server reads it. Each handler answers with the reason
+ * in its result instead of throwing, except for an aborted call, which the channel reports.
+ */
+async function reply<T>(read: () => Promise<T>): Promise<GhReply<T>> {
+  try { return { ok: true, data: await read() }; }
+  catch (error) {
+    if (error instanceof GhError) return { ok: false, reason: error.kind, message: error.message };
+    // Anything else is a bug or an unexpected failure. Its text is not the owner's to read.
+    return { ok: false, reason: 'failed', message: new GhError('failed').message };
+  }
+}
+function only(input: Row, allowed: string[]): void {
+  if (Object.keys(input).some(key => !allowed.includes(key))) throw new GhError('bad_response');
+}
+function pageOf(value: unknown): number {
+  if (value === undefined) return 1;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > 1000) throw new GhError('bad_response');
+  return value;
+}
+
 /** The handlers a machine offers for the GitHub connector. Every one is a read. */
 export function createGithubNode(options: { run?: GhRun } = {}) {
   const run = options.run ?? runGh;
   return {
-    'github.account': async (_params: unknown, signal: AbortSignal) => ghAccount(run, signal),
-    'github.notifications': async (params: unknown, signal: AbortSignal) => {
+    'github.account': async (params: unknown, signal: AbortSignal) => reply(async () => {
+      only(object(params) ?? {}, []);
+      return ghAccount(run, signal);
+    }),
+    'github.notifications': async (params: unknown, signal: AbortSignal) => reply(async () => {
       const input = object(params) ?? {};
-      if (Object.keys(input).some(key => !['all', 'page', 'since'].includes(key))) throw new GhError('bad_response');
-      const page = input.page === undefined ? 1 : input.page;
-      if (typeof page !== 'number' || !Number.isSafeInteger(page) || page < 1 || page > 1000) throw new GhError('bad_response');
+      only(input, ['all', 'page', 'since']);
+      const page = pageOf(input.page);
       if (input.all !== undefined && typeof input.all !== 'boolean') throw new GhError('bad_response');
       if (input.since !== undefined && (typeof input.since !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(input.since))) throw new GhError('bad_response');
       return ghNotifications(run, signal, { ...(input.all === true ? { all: true } : {}), page, ...(typeof input.since === 'string' ? { since: input.since } : {}) });
-    },
-    'github.issue': async (params: unknown, signal: AbortSignal) => {
+    }),
+    'github.issue': async (params: unknown, signal: AbortSignal) => reply(async () => {
       const input = object(params) ?? {};
-      if (Object.keys(input).some(key => !['repository', 'number'].includes(key))) throw new GhError('bad_response');
+      only(input, ['repository', 'number']);
       if (typeof input.repository !== 'string' || typeof input.number !== 'number') throw new GhError('bad_response');
       return ghIssue(run, signal, input.repository, input.number);
-    },
-    'github.comments': async (params: unknown, signal: AbortSignal) => {
+    }),
+    'github.comments': async (params: unknown, signal: AbortSignal) => reply(async () => {
       const input = object(params) ?? {};
-      if (Object.keys(input).some(key => !['repository', 'number', 'page'].includes(key))) throw new GhError('bad_response');
+      only(input, ['repository', 'number', 'page']);
       if (typeof input.repository !== 'string' || typeof input.number !== 'number') throw new GhError('bad_response');
-      return ghComments(run, signal, input.repository, input.number, typeof input.page === 'number' ? input.page : 1);
-    },
+      return ghComments(run, signal, input.repository, input.number, pageOf(input.page));
+    }),
   };
 }
