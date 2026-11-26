@@ -11,6 +11,11 @@ export type PolicyRule = {
   answer?: string;
   executorId?: string;
   cwdUnder?: string;
+  /** Why the owner allowed this, in their own words or a summary of it. */
+  note?: string;
+  grantedAt?: string;
+  /** Whether an action taken under this rule can be undone. */
+  reversible?: boolean;
 };
 export type PolicyConfig = { rules: PolicyRule[]; escalateAfterMinutes: number; ladder?: PolicyHandler[]; userDeadlineMinutes?: number; agentModes?: Partial<Record<'supervisor' | 'main_agent', 'auto' | 'suggest' | 'off'>> };
 export type PolicyScope = { projectId?: string; runId?: string };
@@ -63,7 +68,7 @@ export function validatePolicyPatch(patch: Partial<PolicyConfig>): void {
     if (!Array.isArray(patch.rules)) throw new TypeError('rules必须为数组');
     const ids = new Set<string>();
     for (const rule of patch.rules) {
-      object(rule, ['id', 'kind', 'handler', 'mode', 'answer', 'executorId', 'cwdUnder']);
+      object(rule, ['id', 'kind', 'handler', 'mode', 'answer', 'executorId', 'cwdUnder', 'note', 'grantedAt', 'reversible']);
       text(rule.id);
       if (ids.has(rule.id)) throw new TypeError('规则id必须唯一');
       ids.add(rule.id);
@@ -71,6 +76,15 @@ export function validatePolicyPatch(patch: Partial<PolicyConfig>): void {
         || ('mode' in rule && !['auto', 'suggest', 'off'].includes(rule.mode!))) throw new TypeError('无效规则枚举');
       for (const key of ['answer', 'executorId', 'cwdUnder'] as const) if (key in rule) text(rule[key]);
       if (rule.cwdUnder !== undefined && !isAbsolute(rule.cwdUnder)) throw new TypeError('cwdUnder必须为绝对路径');
+      for (const key of ['note', 'grantedAt'] as const) {
+        if (!(key in rule)) continue;
+        text(rule[key]);
+        if (rule[key]!.length > (key === 'note' ? 500 : 64)) throw new TypeError(key === 'note' ? '授权说明不能超过500字' : '授权时间格式无效');
+      }
+      if ('reversible' in rule && typeof rule.reversible !== 'boolean') throw new TypeError('reversible必须为布尔值');
+      if (rule.grantedAt !== undefined && !Number.isFinite(Date.parse(rule.grantedAt))) throw new TypeError('授权时间格式无效');
+      // A rule that hands an approval to an Agent must say why the owner allowed it.
+      if (rule.kind !== 'question' && rule.handler !== 'user' && rule.mode !== 'off' && !rule.note) throw new TypeError('放宽审批的规则必须填写授权说明');
       if (rule.handler === 'rules' && rule.mode === 'auto') text(rule.answer);
       if (rule.handler === 'user' && rule.mode === 'off') throw new TypeError('不能关闭最终用户处理阶段');
     }

@@ -749,7 +749,7 @@ export async function createWorkbench(config: AppConfig) {
   // Read when the model is about to speak, so construction order does not matter.
   function readAutomationPolicy(projectId?:string) {
     const config = policies.read(projectId ? { projectId } : {});
-    return { rules: config.rules.map(({kind,handler,mode,cwdUnder}) => ({kind,handler,...(mode && {mode}),...(cwdUnder && {cwdUnder})})) };
+    return { rules: config.rules.map(({kind,handler,mode,cwdUnder,note,grantedAt,reversible}) => ({kind,handler,...(mode && {mode}),...(cwdUnder && {cwdUnder}),...(note && {note}),...(grantedAt && {grantedAt}),...(reversible !== undefined && {reversible})})) };
   }
   const agent = createAgentRuntime({ config, store, events, contributions, validateQueuedWebInput, canGenerateOffice, chatImagesEnabled, canReadChatImages, chatFilesEnabled, canReadChatFiles, readChatFileText, onDirectWebInput:conversationUserSpoke, onInternalQueued:(m,id)=>questionRelease.queued(m,id), reviewEvidence, reviewsForSource, executors: executorInfo, inboxConversations:()=>inboxAssistant.list(), workDecisions: workDecisions.context, botContext, mainAssistantProfile: currentMainAssistant, mainSkillCatalog, projectInstructions: currentProjectInstructions, projectContext:id=>projectWorkspace.context(id), automationPolicy: readAutomationPolicy });
   const webConversationAllowed = (id:string, projectId?:string) => {

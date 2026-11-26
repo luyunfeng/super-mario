@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createStore } from '../packages/core/src/store.ts';
 import { createEventBus } from '../packages/core/src/events.ts';
-import { createPolicies } from '../packages/core/src/policies.ts';
+import { createPolicies, validatePolicyPatch } from '../packages/core/src/policies.ts';
 import { applyPolicyPreset, conservativePolicyConfig, policyPresets, policyRuleHits } from '../packages/core/src/policy-presets.ts';
 
 function fixture(t: { after(fn: () => void): void }) {
@@ -84,4 +84,29 @@ test('HTTP presets and follow-up settings use real policy storage and reject unc
     const followup = await settings.json();
     assert.equal(typeof followup.batchSeconds, 'number'); assert.equal(typeof followup.minGapMinutes, 'number');
   } finally { await server.close(); await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test('放宽审批的规则必须带授权说明；预设写明理由和时间，不替主人判断能否撤销', t => {
+  const store = createStore(':memory:'); t.after(() => store.close());
+  const policies = createPolicies({ store, events: createEventBus(store) });
+  const at = Date.parse('2030-01-01T00:00:00Z');
+  const relaxed = { id: 'custom', kind: 'permission' as const, handler: 'supervisor' as const, mode: 'auto' as const, cwdUnder: '/srv/fixture' };
+
+  assert.throws(() => policies.write({}, { rules: [relaxed] }), /放宽审批的规则必须填写授权说明/);
+  const saved = policies.write({}, { rules: [{ ...relaxed, note: '这个目录只放试验产物', reversible: true }] });
+  assert.equal(saved.rules[0]!.grantedAt, undefined, 'a handwritten rule is dated by the editor, not invented here');
+  assert.throws(() => policies.write({}, { rules: [{ ...relaxed, note: '', reversible: true }] }), /非空文本/);
+  assert.throws(() => policies.write({}, { rules: [{ ...relaxed, note: 'x'.repeat(501) }] }), /不能超过500字/);
+  assert.throws(() => policies.write({}, { rules: [{ ...relaxed, note: 'ok', reversible: 'yes' as unknown as boolean }] }), /reversible必须为布尔值/);
+  assert.throws(() => policies.write({}, { rules: [{ ...relaxed, note: 'ok', grantedAt: 'yesterday' }] }), /授权时间格式无效/);
+  // Rules saved before these fields existed still load and decide.
+  const legacy = policies.write({}, { rules: [{ id: 'old', kind: 'question', handler: 'user', mode: 'suggest' }] });
+  assert.equal(legacy.rules[0]!.note, undefined);
+
+  const applied = applyPolicyPreset(policies.read(), 'low-interruption', { trustedDirectories: ['/srv/fixture'], confirmed: true, now: at });
+  const rule = applied.rules.find(item => item.kind === 'permission')!;
+  assert.equal(rule.note, '主人选择“少打扰”预设，并指定此目录为受信目录');
+  assert.equal(rule.grantedAt, '2030-01-01T00:00:00.000Z');
+  assert.equal(rule.reversible, undefined, 'a preset does not claim that what it lets through can be undone');
+  assert.doesNotThrow(() => validatePolicyPatch(applied));
 });

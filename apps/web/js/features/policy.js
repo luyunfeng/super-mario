@@ -3,7 +3,7 @@
 import { h, replace } from '../lib/dom.js';
 import { Button, Card, Pill, Select, Input, Field, Banner } from '../ui/kit.js';
 import { confirmDialog, openDrawer } from '../ui/overlay.js';
-import { uuid as makeId } from '../lib/format.js';
+import { uuid as makeId, formatDate } from '../lib/format.js';
 
 const LABELS = {
   question: 'Agent 提问', permission: '权限审批', plan: '计划审批', review: '结果检查',
@@ -91,7 +91,9 @@ export function createPolicyCard({ api, store }) {
     if (!config.rules.length) { replace(rulesBox, h('p', { class: 'muted small' }, '没有自定义规则。')); return; }
     replace(rulesBox, config.rules.map(rule => h('div', { class: 'item' },
       h('div', { class: 'item__main' }, h('span', { class: 'item__title' }, ruleSentence(rule)),
-        h('span', { class: 'item__meta' }, hits === null ? '过去 7 天：暂无统计' : `过去 7 天处理了 ${hits[rule.id] ?? 0} 次`)),
+        h('span', { class: 'item__meta' }, [hits === null ? '过去 7 天：暂无统计' : `过去 7 天处理了 ${hits[rule.id] ?? 0} 次`,
+        ...(rule.grantedAt ? ['授权于 ' + formatDate(rule.grantedAt, true)] : []), ...(rule.reversible === undefined ? [] : [rule.reversible ? '放行的操作可撤销' : '放行的操作不能撤销'])].join(' · ')),
+      rule.note && h('span', { class: 'item__meta' }, '授权说明：' + rule.note)),
       isRisky(rule) && Pill('高风险', 'danger'))));
   }
 
@@ -143,15 +145,21 @@ export function createPolicyCard({ api, store }) {
       const executor = Select({ options: [['', '任何执行者'], ...executors.map(item => [item.id, item.name])], value: rule.executorId ?? '', 'aria-label': '来自执行者' });
       const cwd = Input({ value: rule.cwdUnder ?? '', placeholder: '工作目录前缀，可留空', 'aria-label': '工作目录' });
       const answer = Input({ value: rule.answer ?? '', placeholder: '固定回答的内容', 'aria-label': '固定回答' });
+      const note = Input({ value: rule.note ?? '', placeholder: '你为什么允许这样处理，例如：这个目录只是生成试验产物', 'aria-label': '授权说明', maxLength: 500 });
+      const reversible = Select({ options: [['', '未说明'], ['yes', '可以撤销'], ['no', '不能撤销']], value: rule.reversible === undefined ? '' : rule.reversible ? 'yes' : 'no', 'aria-label': '能否撤销' });
       const risk = h('p', { class: 'text-danger small' }, '高风险：这条规则会把审批交给 Agent，直接处理可能允许修改或删除文件。');
       const node = h('fieldset', { class: 'rule' },
         h('div', { class: 'form-row' }, Field({ label: '遇到', control: kind }), Field({ label: '由谁处理', control: handler }), Field({ label: '方式', control: mode })),
         h('div', { class: 'form-row' }, Field({ label: '来自', control: executor }), Field({ label: '目录范围', control: cwd })),
-        Field({ label: '固定回答', control: answer }), risk,
+        Field({ label: '固定回答', control: answer }),
+        Field({ label: '授权说明', control: note, hint: '放宽审批时必填。写清你为什么允许，助理之后能据此说明这次为什么没有请示。' }),
+        Field({ label: '按这条规则放行的操作能否撤销', control: reversible }), risk,
         Button({ label: '删除这条规则', kind: 'ghost', size: 'sm', onClick: () => { node.remove(); } }));
       node.read = () => ({ id: rule.id, kind: kind.value, handler: handler.value, mode: mode.value,
         ...(executor.value ? { executorId: executor.value } : {}), ...(cwd.value.trim() ? { cwdUnder: cwd.value.trim() } : {}),
-        ...(answer.value.trim() ? { answer: answer.value.trim() } : {}) });
+        ...(answer.value.trim() ? { answer: answer.value.trim() } : {}),
+        ...(note.value.trim() ? { note: note.value.trim() } : {}),
+        ...(reversible.value ? { reversible: reversible.value === 'yes' } : {}) });
       const sync = () => { const value = node.read(); answer.closest('.field').hidden = handler.value !== 'rules'; risk.hidden = !isRisky(value); node.classList.toggle('is-risk', isRisky(value)); };
       node.addEventListener('change', sync); sync();
       return node;
@@ -160,7 +168,12 @@ export function createPolicyCard({ api, store }) {
     const save = Button({
       label: '保存规则', kind: 'primary',
       onClick: async () => {
-        const next = { ...draft, rules: [...rows.children].map(node => node.read()), escalateAfterMinutes: Number(minutes.value), userDeadlineMinutes: Number(deadline.value) };
+        const next = { ...draft, rules: [...rows.children].map(node => node.read()).map(rule => {
+          // Date a grant when its wording is new or changed. An edited reason is a new decision.
+          const previous = draft.rules.find(item => item.id === rule.id);
+          const changed = !previous || previous.note !== rule.note || previous.handler !== rule.handler || previous.mode !== rule.mode || previous.cwdUnder !== rule.cwdUnder;
+          return { ...rule, ...(changed ? { grantedAt: new Date().toISOString() } : previous.grantedAt ? { grantedAt: previous.grantedAt } : {}) };
+        }), escalateAfterMinutes: Number(minutes.value), userDeadlineMinutes: Number(deadline.value) };
         if (next.rules.some(isRisky)) {
           const ok = await confirmDialog({ title: '保存高风险规则？', message: '标红的规则会把审批交给 Agent 自动处理，可能允许外部操作或修改文件。', confirmLabel: '确认保存', danger: true });
           if (!ok) return;

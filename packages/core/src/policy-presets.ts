@@ -2,7 +2,7 @@ import { isAbsolute, normalize, parse } from 'node:path';
 import { validatePolicyPatch, type PolicyConfig, type PolicyRule } from './policies.ts';
 
 export type PolicyPresetId = 'conservative' | 'balanced' | 'low-interruption';
-export interface PresetOptions { trustedDirectories?: string[]; confirmed?: boolean }
+export interface PresetOptions { trustedDirectories?: string[]; confirmed?: boolean; now?: number }
 export interface PolicyDiff { field: keyof PolicyConfig; before: unknown; after: unknown; description: string }
 export interface PolicyPreset { id: PolicyPresetId; name: string; description: string; config: PolicyConfig; diff: PolicyDiff[]; highRisk: boolean; available: boolean; unavailableReason?: string }
 
@@ -35,7 +35,11 @@ export function policyPresets(current: PolicyConfig, options: PresetOptions = {}
   balanced.rules = [{ id: 'preset-question', kind: 'question', handler: 'supervisor', mode: 'auto' }];
   const quieter = structuredClone(balanced);
   // Directory containment is enforced by policies.decide(). Never infer read-only permission from text.
-  quieter.rules.push(...directories.map((cwdUnder, index): PolicyRule => ({ id: `preset-trusted-${index + 1}`, kind: 'permission', handler: 'supervisor', mode: 'auto', cwdUnder })));
+  // Preset rules are written by the server. They still carry the owner's reason, so a
+  // later turn can say why an approval did not wait. Whether what a rule lets through can
+  // be undone is the owner's call. A preset does not make it, so the field stays unsaid.
+  const note = '主人选择“少打扰”预设，并指定此目录为受信目录';
+  quieter.rules.push(...directories.map((cwdUnder, index): PolicyRule => ({ id: `preset-trusted-${index + 1}`, kind: 'permission', handler: 'supervisor', mode: 'auto', cwdUnder, note })));
   return [
     { id: 'conservative' as const, name: '保守', description: '审批交给你，普通提问由 Agent 提供建议。', config: conservativePolicyConfig(), highRisk: false, available: true },
     { id: 'balanced' as const, name: '平衡', description: '自动回答普通提问；审批、计划与检查仍交给你。', config: balanced, highRisk: false, available: true },
@@ -50,7 +54,9 @@ export function applyPolicyPreset(current: PolicyConfig, preset: string, options
   if (!selected.available) throw new TypeError(selected.unavailableReason);
   if (selected.highRisk && options.confirmed !== true) throw new TypeError('放宽审批前必须明确确认');
   validatePolicyPatch(selected.config);
-  return structuredClone(selected.config);
+  // The grant is dated when the owner applies it, not when the list was computed.
+  const grantedAt = new Date(options.now ?? Date.now()).toISOString();
+  return structuredClone({ ...selected.config, rules: selected.config.rules.map(rule => ({ ...rule, note: rule.note ?? '主人应用自动处理预设', grantedAt })) });
 }
 
 export interface PolicyHitCard { id: string; projectId?: string; ruleId?: string; answeredAt?: string; routingHistory?: { at: string; outcome: string }[] }

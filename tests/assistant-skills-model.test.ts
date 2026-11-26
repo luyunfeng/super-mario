@@ -5470,7 +5470,8 @@ test('主对话和项目对话把当前范围的自动处理规则告诉模型',
     const marker = '当出现权限审批，仅当工作目录在 /srv/fixture-trusted 内时，由自动跟进 Agent直接处理';
     // The project allows one kind of approval in one directory. The global scope stays empty.
     server.app.policies.write({ projectId: project.id }, { rules: [
-      { id: 'fixture-rule', kind: 'permission', handler: 'supervisor', mode: 'auto', cwdUnder: '/srv/fixture-trusted' },
+      { id: 'fixture-rule', kind: 'permission', handler: 'supervisor', mode: 'auto', cwdUnder: '/srv/fixture-trusted',
+        note: '这个目录只放生成的试验产物', grantedAt: '2030-01-01T00:00:00.000Z', reversible: true },
     ] });
 
     // No rules at the global scope, so nothing is said about automation there.
@@ -5485,5 +5486,9 @@ test('主对话和项目对话把当前范围的自动处理规则告诉模型',
     assert.ok(projectLines[0].includes(marker), projectLines[0]);
     // The rule says who handles an approval. It must not read as a wider permission.
     assert.match(projectLines[0], /不扩大工具权限，也不授权对外发消息、删除或花钱/);
+    // When asked why an approval did not wait, the model can quote the owner's own reason.
+    for (const expected of ['授权说明：这个目录只放生成的试验产物', '授权于 2030-01-01T00:00:00.000Z', '放行的操作可撤销', '不要替主人补充理由']) {
+      assert.ok(projectLines[0].includes(expected), expected);
+    }
   } finally { await server.close(); }
 });

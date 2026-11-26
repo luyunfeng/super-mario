@@ -1424,15 +1424,23 @@ const AUTOMATION_HANDLERS:Record<string,string> = {user:'主人',main_agent:'主
 const AUTOMATION_MODES:Record<string,string> = {auto:'直接处理',suggest:'只给建议',off:'不处理'};
 
 export type AutomationPolicy = {
-  rules: { kind: string; handler: string; mode?: string; cwdUnder?: string }[];
+  rules: {
+    kind: string; handler: string; mode?: string; cwdUnder?: string;
+    note?: string; grantedAt?: string; reversible?: boolean;
+  }[];
 }
 
 /** The owner's automation rules in words, so the model knows which approvals wait for a person. */
 export function describeAutomation(policy:AutomationPolicy):string {
   const rules = policy.rules.map(rule => {
     const scope = rule.cwdUnder ? '，仅当工作目录在 '+rule.cwdUnder+' 内' : '';
-    return '当出现' + (AUTOMATION_KINDS[rule.kind] ?? rule.kind) + scope + '时，由' + (AUTOMATION_HANDLERS[rule.handler] ?? rule.handler)
-      + (rule.mode === 'off' ? '不处理' : (AUTOMATION_MODES[rule.mode ?? 'suggest'] ?? '只给建议'));
+    const handling = rule.mode === 'off' ? '不处理' : (AUTOMATION_MODES[rule.mode ?? 'suggest'] ?? '只给建议');
+    // The grant's words, date and reversibility are the evidence for "why did this not ask me".
+    const grant = rule.note ? '（授权说明：' + rule.note + (rule.grantedAt ? '；授权于 ' + rule.grantedAt : '')
+      + (rule.reversible === undefined ? '' : rule.reversible ? '；放行的操作可撤销' : '；放行的操作不能撤销') + '）' : '';
+    return '当出现' + (AUTOMATION_KINDS[rule.kind] ?? rule.kind) + scope + '时，由' + (AUTOMATION_HANDLERS[rule.handler] ?? rule.handler) + handling + grant;
   });
-  return '主人给当前范围设了自动处理规则，列出的事按下面的归属处理：' + rules.join('；') + '。没列出的事仍按默认边界交给主人。规则只决定谁来处理，不扩大工具权限，也不授权对外发消息、删除或花钱。';
+  return '主人给当前范围设了自动处理规则，列出的事按下面的归属处理：' + rules.join('；')
+    + '。没列出的事仍按默认边界交给主人。规则只决定谁来处理，不扩大工具权限，也不授权对外发消息、删除或花钱。'
+    + '主人问某次为什么没有请示时，按对应规则的授权说明、授权时间和能否撤销回答，不要替主人补充理由。';
 }
